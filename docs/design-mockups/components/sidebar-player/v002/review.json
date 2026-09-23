@@ -1,0 +1,22 @@
+{
+  "status": "owner-decisions-recorded; revised-artifact-review-pending",
+  "date": "2026-09-21",
+  "artifact": "mockup.html",
+  "source": "../v001/mockup.html",
+  "requirements": "requirements.md",
+  "theme": "theme.json",
+  "approvedDirection": [
+    "tree-wide dock replaces current application dock",
+    "all A/B/C selectable in Appearance",
+    "reassembly animations required",
+    "mock colors requested as additional theme"
+  ],
+  "requestedCorrections": [
+    "lower A play and hover controls",
+    "lower C play onto artbox lower-right corner",
+    "top sidebar toggle",
+    "preserve floating design; corner play and reassembly",
+    "independent floating edge color"
+  ],
+  "productionImplemented": false
+}

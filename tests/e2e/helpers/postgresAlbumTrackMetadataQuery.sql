@@ -8,7 +8,7 @@ select coalesce(
       'album', library.local_albums.title,
       'release_year', library.local_albums.release_year
       ,'scan_cache_stale', library.local_track_files.scan_cache_stale
-      ,'library_root_id', library.local_track_files.metadata ->> 'library_root_id'
+      ,'library_root_id', library.local_track_files.library_root_id
       ,'scan_cache_source', library.local_track_files.metadata #>> '{scan_cache,source}'
     )
     order by library.local_track_files.private_path

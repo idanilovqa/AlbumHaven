@@ -6,6 +6,83 @@ const vm = require('node:vm');
 
 const helperPath = path.join(__dirname, '..', '..', '..', 'music_app', 'static', 'js', 'runtime', 'gallery-refresh-and-status.js');
 const helperSource = fs.readFileSync(helperPath, 'utf8');
+const tagMutationSource = fs.readFileSync(path.join(path.dirname(helperPath), 'utility-list-builders.js'), 'utf8');
+
+test('a deferred gallery refresh cannot overwrite a newer optimistic tag mutation', async () => {
+  const { context, calls, pendingRequests } = createContext();
+  vm.runInContext(tagMutationSource, context);
+  const album = { key: 'artist::release', name: 'Release', album_artist: 'Artist', tracks: [] };
+  const staleRefresh = context.fetchAndRender('/view-data', false);
+  const navigationRevision = context.state.ui.viewStateRevision;
+  assert.equal(context.state.ui.pendingViewTransition, true);
+  context.claimTagEditViewMutation(album, ['owned-track.mp3'], {
+    'owned-track.mp3': { album: 'Release' },
+  });
+  const optimisticView = { artist_groups: [{ artist: 'Artist', albums: [{ ...album, track_count_preview: 16 }] }] };
+  context.state.view = optimisticView;
+  pendingRequests[0].resolveWith({ artist_groups: [{ artist: 'Artist', albums: [{ ...album, track_count_preview: 13 }] }] });
+  assert.equal(await staleRefresh, false);
+  assert.equal(context.state.view, optimisticView);
+  assert.equal(calls.applyViewPayload.length, 0);
+  assert.equal(context.state.busy, false);
+  assert.equal(context.state.ui.pendingViewTransition, false);
+  assert.equal(context.state.ui.activeViewRequestController, null);
+  assert.equal(context.state.ui.activeViewRequestUrl, '');
+  assert.equal(context.state.ui.viewStateRevision, navigationRevision);
+  const canonicalRefresh = context.fetchAndRender('/view-data', false, { preserveScroll: true });
+  pendingRequests[1].resolveWith(optimisticView);
+  assert.equal(await canonicalRefresh, true);
+  assert.equal(calls.applyViewPayload.length, 1);
+});
+
+test('opening a tag editor does not invalidate an in-flight gallery refresh', async () => {
+  const { context, calls, pendingRequests } = createContext();
+  vm.runInContext(tagMutationSource, context);
+  const refresh = context.fetchAndRender('/view-data', false, { preserveScroll: true });
+  context.claimTagEditViewMutation({ key: 'artist::release', tracks: [] });
+  pendingRequests[0].resolveWith({ artist_groups: [] });
+  assert.equal(await refresh, true);
+  assert.equal(calls.applyViewPayload.length, 1);
+});
+
+test('a canonical same-URL refresh replaces a request from before an optimistic edit', async () => {
+  const { context, calls, pendingRequests } = createContext();
+  vm.runInContext(tagMutationSource, context);
+  const staleRefresh = context.fetchAndRender('/view-data', false);
+  context.claimTagEditViewMutation({ key: 'artist::release', tracks: [] }, ['owned.mp3'], {
+    'owned.mp3': { album: 'Release' },
+  });
+  const canonicalRefresh = context.fetchAndRender('/view-data', false);
+  assert.equal(pendingRequests.length, 2);
+  assert.equal(pendingRequests[0].options.signal.aborted, true);
+  await staleRefresh;
+  assert.equal(context.state.busy, true);
+  assert.equal(context.state.ui.pendingViewTransition, true);
+  pendingRequests[1].resolveWith({ artist_groups: [], album_count: 16 });
+  assert.equal(await canonicalRefresh, true);
+  assert.equal(calls.applyViewPayload.length, 1);
+  assert.equal(context.state.busy, false);
+});
+
+test('a noninterrupting canonical same-URL refresh queues behind an obsolete mutation epoch', async () => {
+  const { context, calls, pendingRequests } = createContext();
+  vm.runInContext(tagMutationSource, context);
+  const staleRefresh = context.fetchAndRender('/view-data', false);
+  context.claimTagEditViewMutation({ key: 'artist::release', tracks: [] }, ['owned.mp3'], {
+    'owned.mp3': { album: 'Release' },
+  });
+  assert.equal(await context.fetchAndRender('/view-data', false, { interruptCurrent: false }), false);
+  assert.equal(pendingRequests[0].options.signal.aborted, false);
+  assert.equal(context.state.ui.pendingViewRequest.url, '/view-data');
+  pendingRequests[0].resolveWith({ artist_groups: [], album_count: 13 });
+  await staleRefresh;
+  assert.equal(pendingRequests.length, 2);
+  assert.equal(calls.applyViewPayload.length, 0);
+  pendingRequests[1].resolveWith({ artist_groups: [], album_count: 16 });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(calls.applyViewPayload.length, 1);
+  assert.equal(context.state.busy, false);
+});
 const responseStateHelperPath = path.join(__dirname, '..', '..', '..', 'music_app', 'static', 'js', 'runtime', 'response-state-helpers.js');
 const responseStateHelperSource = fs.readFileSync(responseStateHelperPath, 'utf8');
 const viewValueHelperPath = path.join(__dirname, '..', '..', '..', 'music_app', 'static', 'js', 'runtime', 'view-value-helpers.js');
@@ -3272,6 +3349,148 @@ test('pollStatus defers an inventory refresh while a tag edit owns gallery resou
   assert.equal(context.state.view.artist_groups[0].albums[0].key, 'optimistic-merge');
 });
 
+test('pollStatus preserves mutation-owned hydrated membership and reconciles it after settlement', async () => {
+  const { context, calls, pendingRequests } = createContext();
+  const albumKey = 'pending-split';
+  const preview = { key: albumKey, name: 'Split', album_artist: 'Artist', preview_only: true, track_count_preview: 18, tracks: [] };
+  const optimistic = { ...preview, preview_only: false, track_count_preview: 17, tracks: Array.from({ length: 17 }, (_, index) => ({ path: `track-${index + 2}` })) };
+  const claim = {};
+  let pending = true;
+  context.Map = Map;
+  context.getAlbumRequestKey = album => album?.key || '';
+  context.getAlbumIdentity = context.getAlbumRequestKey;
+  context.attachGalleryPlaybackContextToAlbum = album => album;
+  context.getTrackModalElements = () => ({});
+  context.state.gallery = { albumIndex: new Map([[albumKey, preview]]) };
+  context.getIndexedAlbum = key => context.state.gallery.albumIndex.get(key);
+  context.tagEditViewMutationStillOwnsResources = candidate => pending && candidate === claim;
+  context.hasPendingTagEditViewMutations = () => pending;
+  context.buildApiUrl = () => '/view-data?surface=albums';
+  context.state.view.artist_groups = [{ artist: 'Artist', albums: [optimistic] }];
+  const status = { scan_in_progress: false, relations_in_progress: false, covers_in_progress: false, inventory_mutation_revision: 12 };
+  context.state.status = { ...status };
+  const cachePath = path.join(path.dirname(helperPath), 'track-modal-lightbox-helpers.js');
+  vm.runInContext(fs.readFileSync(cachePath, 'utf8'), context, { filename: cachePath });
+  context.cacheHydratedTrackModalAlbum(albumKey, optimistic, { aliases: [albumKey], tagEditMutationClaim: claim });
+  context.cacheHydratedTrackModalAlbum('unclaimed', { key: 'unclaimed', tracks: [] });
+
+  const first = context.pollStatus();
+  pendingRequests[0].resolveWith({ ...status, inventory_mutation_revision: 13 });
+  await first;
+  assert.equal(context.getCachedHydratedTrackModalAlbum(albumKey), optimistic);
+  assert.equal(context.getIndexedAlbum(albumKey), optimistic);
+  assert.equal(context.getCachedHydratedTrackModalAlbum('unclaimed'), null);
+  assert.equal(context.state.ui.pendingInventoryMutationViewRefresh, true);
+  assert.equal(calls.fetchRequests.length, 1);
+
+  pending = false;
+  const second = context.pollStatus();
+  pendingRequests[1].resolveWith({ ...status, inventory_mutation_revision: 13 });
+  for (let attempt = 0; attempt < 10 && pendingRequests.length < 3; attempt += 1) await flushMicrotasks();
+  assert.equal(pendingRequests.length, 3);
+  const canonical = { ...optimistic, name: 'Canonical split' };
+  pendingRequests[2].resolveWith({ ...context.state.view, artist_groups: [{ artist: 'Artist', albums: [canonical] }] });
+  await second;
+  assert.deepEqual(calls.consoleErrors.map(args => args.map(value => String(value))), []);
+  assert.equal(context.state.ui.pendingInventoryMutationViewRefresh, false);
+  assert.equal(context.state.view.artist_groups[0].albums[0].name, 'Canonical split');
+  assert.equal(context.getCachedHydratedTrackModalAlbum(albumKey), null);
+});
+
+function watcherRefreshFixture() {
+  const fixture = createContext();
+  fixture.context.scheduleBrowserTimeout = () => {};
+  fixture.context.hasPendingTagEditViewMutations = () => true;
+  fixture.context.state.utility.loaded = true;
+  fixture.context.state.status = {
+    inventory_mutation_revision: 12,
+    watcher_health: { state: 'healthy', problems: [] },
+  };
+  fixture.refreshes = [];
+  fixture.context.loadProblematicFiles = async force => {
+    fixture.refreshes.push(force);
+    return [];
+  };
+  fixture.observe = async (health, inventoryRevision = 12) => {
+    const requestIndex = fixture.pendingRequests.length;
+    const pending = fixture.context.pollStatus();
+    fixture.pendingRequests[requestIndex].resolveWith({
+      inventory_mutation_revision: inventoryRevision,
+      watcher_health: health,
+    });
+    await pending;
+  };
+  return fixture;
+}
+
+function watcherWarning(root = 'root-1', actions = { 'library.refresh': true }) {
+  return { state: 'warning', problems: [{ root_key: root, state: 'overflow',
+    detected_at: '2026-09-10T00:00:00Z', message: 'Run a full scan.', allowed_actions: actions }] };
+}
+
+test('watcher warnings arrive and clear without inventory changes or redundant utility refreshes', async () => {
+  const fixture = watcherRefreshFixture();
+  const warning = watcherWarning();
+  await fixture.observe(warning);
+  assert.deepEqual(fixture.refreshes, [true]);
+  await fixture.observe(JSON.parse(JSON.stringify(warning)));
+  assert.deepEqual(fixture.refreshes, [true]);
+  await fixture.observe(watcherWarning('root-1', {}));
+  assert.deepEqual(fixture.refreshes, [true, true], 'refresh capability changes reach the loaded list');
+  await fixture.observe({ state: 'healthy', problems: [] });
+  await fixture.observe({ state: 'healthy', problems: [] });
+  assert.deepEqual(fixture.refreshes, [true, true, true]);
+  assert.equal(fixture.calls.hydratedAlbumDetailInvalidations, 0);
+  assert.equal(Boolean(fixture.context.state.ui.pendingInventoryMutationViewRefresh), false);
+});
+
+test('watcher health ordering is stable and simultaneous inventory changes refresh the utility once', async () => {
+  const fixture = watcherRefreshFixture();
+  const problems = [...watcherWarning('b').problems, ...watcherWarning('a').problems];
+  await fixture.observe({ state: 'warning', problems }, 13);
+  await fixture.observe({ state: 'warning', problems: [...problems].reverse() }, 13);
+  assert.deepEqual(fixture.refreshes, [true]);
+  assert.equal(fixture.calls.hydratedAlbumDetailInvalidations, 1);
+});
+
+test('watcher health changes do not load an unused utility', async () => {
+  const fixture = watcherRefreshFixture();
+  fixture.context.state.utility.loaded = false;
+  await fixture.observe(watcherWarning());
+  assert.deepEqual(fixture.refreshes, []);
+});
+
+test('an older in-flight utility response cannot swallow a watcher health change', async () => {
+  const fixture = watcherRefreshFixture();
+  const utility = fixture.context.state.utility;
+  utility.loading = true;
+  utility.loadPromise = Promise.resolve(['older summary']);
+  await fixture.observe(watcherWarning());
+  assert.deepEqual(fixture.refreshes, [], 'do not coalesce the new health into the older request');
+  await utility.loadPromise;
+  utility.loading = false;
+  utility.loadPromise = null;
+  await fixture.observe(watcherWarning());
+  await fixture.observe(watcherWarning());
+  assert.deepEqual(fixture.refreshes, [true], 'one fresh request follows the old response');
+});
+
+test('a failed health refresh remains pending even when the utility loader clears loaded state', async () => {
+  const fixture = watcherRefreshFixture();
+  let attempts = 0;
+  fixture.context.loadProblematicFiles = async () => {
+    attempts += 1;
+    fixture.context.state.utility.loaded = attempts !== 1;
+    return attempts === 1 ? null : [];
+  };
+  await fixture.observe(watcherWarning());
+  assert.equal(attempts, 1);
+  await fixture.observe(watcherWarning());
+  assert.equal(attempts, 2);
+  await fixture.observe(watcherWarning());
+  assert.equal(attempts, 2);
+});
+
 test('pollStatus treats the first inventory revision observation as a baseline', async () => {
   const { context, calls, pendingRequests } = createContext();
   context.scheduleBrowserTimeout = () => {};
@@ -5441,53 +5660,23 @@ test('pollStatus toasts each observed scan error once and resets deduplication a
   }
 
   await pollWithLastError(errorText, 7);
-  assert.equal(lastError.style.display, 'block');
-  assert.equal(lastError.textContent, `Last scan error: ${errorText}`);
+  assert.equal(lastError.style.display, 'none');
+  assert.equal(lastError.textContent, '');
 
   await pollWithLastError(errorText, 7);
-  assert.equal(lastError.style.display, 'block');
-  assert.equal(lastError.textContent, `Last scan error: ${errorText}`);
+  assert.equal(lastError.style.display, 'none');
+  assert.equal(lastError.textContent, '');
 
   await pollWithLastError(null, 7);
   assert.equal(lastError.style.display, 'none');
   assert.equal(lastError.textContent, '');
 
   await pollWithLastError(errorText, 8);
-  assert.equal(lastError.style.display, 'block');
-  assert.equal(lastError.textContent, `Last scan error: ${errorText}`);
+  assert.equal(lastError.style.display, 'none');
+  assert.equal(lastError.textContent, '');
 
   assert.deepEqual(toastCounts, [1, 1, 1, 2]);
-  assert.deepEqual(
-    calls.prependUtilityLogHistoryEntries.map((entry) => ({
-      id: entry.id,
-      action: entry.action,
-      level: entry.level,
-      error: entry.error,
-      scan_generation: entry.scan_generation,
-      scan_phase: entry.scan_phase,
-      scan_outcome: entry.scan_outcome,
-    })),
-    [
-      {
-        id: 'library-status-error:7',
-        action: 'Library status error',
-        level: 'error',
-        error: errorText,
-        scan_generation: 7,
-        scan_phase: 'idle',
-        scan_outcome: 'failed',
-      },
-      {
-        id: 'library-status-error:8',
-        action: 'Library status error',
-        level: 'error',
-        error: errorText,
-        scan_generation: 8,
-        scan_phase: 'idle',
-        scan_outcome: 'failed',
-      },
-    ],
-  );
+  assert.deepEqual(calls.prependUtilityLogHistoryEntries, []);
   assert.deepEqual(calls.showToast, [
     {
       message: `Last scan error: ${errorText}`,
@@ -5570,21 +5759,10 @@ test('pollStatus does not duplicate a prior error when a new scan generation is 
   });
   await runningStatusPromise;
 
-  assert.deepEqual(
-    calls.prependUtilityLogHistoryEntries.map((entry) => ({
-      id: entry.id,
-      scan_generation: entry.scan_generation,
-      scan_outcome: entry.scan_outcome,
-    })),
-    [{
-      id: 'library-status-error:7',
-      scan_generation: 7,
-      scan_outcome: 'failed',
-    }],
-  );
+  assert.deepEqual(calls.prependUtilityLogHistoryEntries, []);
 });
 
-test('pollStatus does not wait for browser history persistence before scheduling the next poll', async () => {
+test('pollStatus schedules its next poll without creating browser history', async () => {
   const { context, pendingRequests } = createContext();
   const scheduledTimeouts = [];
   context.scheduleBrowserTimeout = (callback, delayMs) => {
@@ -5608,10 +5786,9 @@ test('pollStatus does not wait for browser history persistence before scheduling
   });
 
   await statusPromise;
-  assert.equal(typeof releasePersistence, 'function');
+  assert.equal(typeof releasePersistence, 'undefined');
   assert.equal(scheduledTimeouts.length, 1);
   assert.equal(scheduledTimeouts[0].delayMs, 3000);
-  releasePersistence();
 });
 
 test('a finalization cancellation reconciles the authoritative gallery without showing scan success', async () => {

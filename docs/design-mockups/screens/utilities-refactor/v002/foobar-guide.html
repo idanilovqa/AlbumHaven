@@ -1,0 +1,97 @@
+<!doctype html><meta charset="utf-8"><style>body{font:14px/1.65 Arial;background:#121212;color:#eee;margin:20px}h1{font-size:20px}h2{font-size:16px;margin-top:25px}pre{padding:14px;background:#222;overflow:auto;white-space:pre-wrap}p{color:#bbb}a{color:#8cccab}</style>
+<h1>Foobar2000 Setup Help</h1>
+<h2>What Album Haven does not do</h2>
+<p>Album Haven does not configure Foobar2000 for you.</p>
+<p>- It does not launch Foobar2000.</p>
+<p>- It does not enable or disable Foobar components.</p>
+<p>- It does not paste or save Text Tools presets into Foobar.</p>
+<p>- It does not save Foobar configuration, register Windows scheduled tasks, or change backup settings.</p>
+<p>- It does not read or write Foobar profile databases automatically just because you opened the help modal or configured manual export files.</p>
+<p>- It does not keep Foobar exports automatically in sync after you keep listening in Foobar.</p>
+<p>- If you later enable `Continuous Foobar sync` in Album Haven, that authorizes Album Haven to re-read and incrementally update only the live custom DB source you selected for `History of plays` and `Favorite songs`. It does not authorize Foobar settings changes, preset rewrites, component toggles, or scheduled-task changes.</p>
+<p>If you change playback data in Foobar after making an export, export a fresh file and import that newer file later when Album Haven supports that manual import flow.</p>
+<h2>What Playback Statistics, Text Tools, and Enhanced Playback Statistics are</h2>
+<p>`Playback Statistics` / `foo_playcount` is the Foobar component that tracks fields such as play count, first played, last played, rating, and added time.</p>
+<p>`Text Tools` is Foobar&#39;s text-export utility. It lets you define a `Header`, `Body`, and `Footer` template and then export rows through `Legacy commands -&gt; Save Text...`. This is the recommended manual export bridge because it is readable, track-addressable, and easier to inspect than older hashed XML exports.</p>
+<p>`foo_enhanced_playcount` adds richer playback-history fields beyond the aggregate first-played/last-played view, including array-style fields such as `played_times_js`.</p>
+<p>If Album Haven later offers a Foobar custom-DB source, treat that source as separate from the manual XML and Text Tools export files. With `Continuous Foobar sync` off, it should behave as a one-time import. With it on, Album Haven may re-read and incrementally update only the selected live custom DB source.</p>
+<p>In v1, that outbound Foobar update path should be limited to new app play-history deltas and newly-loved tracks. It should not decrement play counts, clear favorites on later app un-love, or write ratings back.</p>
+<p>If you want to confirm which components are installed or which version you have, check Foobar directly under `File -&gt; Preferences -&gt; Components`.</p>
+<h2>Recommended standard Text Tools setup</h2>
+<p>Recommended baseline preset:</p>
+<pre>
+Header
+path$char(9)artist$char(9)album$char(9)date$char(9)discnumber$char(9)tracknumber$char(9)title$char(9)rating$char(9)play_count$char(9)first_played$char(9)last_played$char(9)added$crlf()
+
+Body
+%path%$char(9)%artist%$char(9)%album%$char(9)%date%$char(9)%discnumber%$char(9)%tracknumber%$char(9)%title%$char(9)%rating%$char(9)%play_count%$char(9)%first_played%$char(9)%last_played%$char(9)%added%$crlf()
+
+Footer
+&lt;leave empty&gt;
+</pre>
+<p>Set it up locally in Foobar:</p>
+<p>1. Open `File -&gt; Preferences -&gt; Tools -&gt; Text tools`.</p>
+<p>2. Paste the `Header` line into Foobar&#39;s `Header` field.</p>
+<p>3. Paste the `Body` line into Foobar&#39;s `Body` field.</p>
+<p>4. Leave Foobar&#39;s `Footer` field empty.</p>
+<p>5. Click `Apply`.</p>
+<p>6. Verify the preview looks correct before exporting anything.</p>
+
+<h2>Enhanced setup and when to use it</h2>
+<p>Use the enhanced preset only if you want richer playback-history arrays from `foo_enhanced_playcount`.</p>
+<p>Recommended enhanced preset:</p>
+<pre>
+Header
+path$char(9)artist$char(9)album$char(9)date$char(9)discnumber$char(9)tracknumber$char(9)title$char(9)rating$char(9)play_count$char(9)first_played$char(9)last_played$char(9)added$char(9)added_enhanced$char(9)first_played_enhanced$char(9)last_played_enhanced$char(9)played_times_js$char(9)lastfm_played_times_js$char(9)lastfm_play_count$crlf()
+
+Body
+%path%$char(9)%artist%$char(9)%album%$char(9)%date%$char(9)%discnumber%$char(9)%tracknumber%$char(9)%title%$char(9)%rating%$char(9)%play_count%$char(9)%first_played%$char(9)%last_played%$char(9)%added%$char(9)%added_enhanced%$char(9)%first_played_enhanced%$char(9)%last_played_enhanced%$char(9)%played_times_js%$char(9)%lastfm_played_times_js%$char(9)%lastfm_play_count%$crlf()
+
+Footer
+&lt;leave empty&gt;
+</pre>
+<p>Use the same setup steps as the standard preset, but replace the `Header` and `Body` text with the enhanced version.</p>
+
+<p>Recommended default:</p>
+<p>- Leave `lastfm_*` fields out unless you explicitly want them in your own export.</p>
+<p>- Keep the standard preset as the normal default and use the enhanced preset only when you need richer playback-history arrays.</p>
+<h2>How to export manually from Foobar</h2>
+<h3>Standard Text Tools export</h3>
+<p>1. Configure the standard preset in `File -&gt; Preferences -&gt; Tools -&gt; Text tools`.</p>
+<p>2. Select the tracks you want to export.</p>
+<p>3. Right-click the selection.</p>
+<p>4. Choose `Legacy commands -&gt; Save Text...`.</p>
+<p>5. Save the file somewhere you can find again.</p>
+<h3>Enhanced Text Tools export</h3>
+<p>1. Configure the enhanced preset in `File -&gt; Preferences -&gt; Tools -&gt; Text tools`.</p>
+<p>2. Select the tracks you want to export.</p>
+<p>3. Right-click the selection.</p>
+<p>4. Choose `Legacy commands -&gt; Save Text...`.</p>
+<p>5. Save the file somewhere you can find again.</p>
+<h3>Playback Statistics XML export</h3>
+<p>1. Open `Library -&gt; Playback Statistics -&gt; Export statistics to XML...`.</p>
+<p>2. Choose a save path.</p>
+<p>3. Save the XML file.</p>
+<h2>Playback Statistics XML notes and legacy hashed warning</h2>
+<p>Older `Playback Statistics` XML exports may contain only hashed IDs instead of clear track text.</p>
+<p>That matters because:</p>
+<p>- the export may not carry enough readable track identity for later import</p>
+<p>- the file can be harder to inspect manually</p>
+<p>- the app should not pretend those hashes are always reversible</p>
+<p>If you want the clearest manual export, prefer Text Tools.</p>
+<p>XML is still useful as a manual snapshot, but it is not a live sync channel. If Foobar data changes later, export a new XML file.</p>
+<h2>Portable profile and backup notes</h2>
+
+<p>Important notes from that observed setup:</p>
+<p>- the install used `portable_mode_enabled`</p>
+<p>- the live profile state lived beside `foobar2000.exe`</p>
+<p>- the observed `foo_jesus` autobackup config looked like a lightweight config backup, not a full restore snapshot</p>
+<p>- important state in that observed setup included `configuration/`, `config.sqlite`, `metadb.sqlite`, `library-v2.0/`, `playlists-v2.0/`, `index-data/`, `customdb_sqlite.db`, and `theme.fth`</p>
+<p>These notes are here to help you understand your own local setup. Album Haven does not repair or rewrite your Foobar backup configuration for you.</p>
+<p>If you later enable `Continuous Foobar sync` in Album Haven, leave it off unless you want Album Haven to keep the selected live Foobar DB updated with new app history and newly-loved tracks. If you leave it off, the DB import should behave as one-time only.</p>
+<h2>Optional external helper scripts</h2>
+
+<p>Album Haven does not execute these scripts for you and does not require them for the help surface.</p>
+
+
+<style id="mock-no-carets">html,body,body *,body *::before,body *::after{caret-color:transparent!important}</style>

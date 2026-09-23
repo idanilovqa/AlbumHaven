@@ -2388,7 +2388,10 @@ test('tests-complete cleanup stops the managed shell launch root after Python re
   assert.equal((await runPromise).exitCode, 0);
 });
 
-test('tests-complete without run-final fails on the short finalization deadline', async () => {
+for (const snapshotFailure of [false, true]) test(`tests-complete without run-final fails on the short finalization deadline (snapshotFailure=${snapshotFailure})`, async () => {
+  const lifecycleEvents = [];
+  let elapsedClock = 1000;
+  const snapshotOptions = [];
   const child = createFakeChildProcess(4242, { autoCloseOnExit: false });
   const timerHarness = createTimerHarness();
   const serviceOwner = { pid: 2468, creationIdentity: 'service-start' };
@@ -2401,16 +2404,24 @@ test('tests-complete without run-final fails on the short finalization deadline'
     600000,
     {
       spawnFn: () => child,
-      readProcessTreeIdentitiesFn: () => [
-        { pid: child.pid, creationIdentity: 'cli-start', parentPid: 0, depth: 0 },
-        { ...shellRoot, parentPid: child.pid, depth: 1 },
-        { ...serviceOwner, parentPid: shellRoot.pid, depth: 2 },
-      ],
+      nowFn: () => elapsedClock,
+      processObject: { pid: process.pid, exitCode: null },
+      readProcessTreeIdentitiesFn: (_pid, options) => {
+        snapshotOptions.push(options);
+        if (options && snapshotFailure) throw new Error('/private/snapshot --token=fixture-secret');
+        return [
+          { pid: child.pid, creationIdentity: 'cli-start', processName: 'node', parentPid: 0, depth: 0 },
+          { ...shellRoot, processName: '/private/custom-shell', commandLine: '--token=fixture-secret', parentPid: child.pid, depth: 1 },
+          { ...serviceOwner, processName: 'python', parentPid: shellRoot.pid, depth: 2 },
+        ].map(owner => options && owner.pid === serviceOwner.pid
+          ? { ...owner, creationIdentity: 'replacement-process' } : owner);
+      },
       readPortOwningProcessIdentitiesFn: () => [serviceOwner],
       readProcessCreationIdentityFn(pid) {
         return pid === shellRoot.pid ? shellRoot.creationIdentity : null;
       },
       stopProcessTreeFn(pid) {
+        lifecycleEvents.push({ type: 'stop', pid });
         stopped.push(pid);
       },
       reclaimPortFn: () => [],
@@ -2418,7 +2429,7 @@ test('tests-complete without run-final fails on the short finalization deadline'
       setTimeoutFn: timerHarness.setTimeoutFn,
       clearTimeoutFn: timerHarness.clearTimeoutFn,
       stdout: { write() {} },
-      stderr: { write(text) { stderrWrites.push(text); } },
+      stderr: { write(text) { lifecycleEvents.push({ type: 'stderr', text }); stderrWrites.push(text); } },
     },
   );
   const testsComplete = `[album-haven-playwright-result] {"version":1,"phase":"tests-complete","nonce":"${TEST_RESULT_NONCE}","status":"passed","total":1,"completed":1,"failed":0,"skipped":0,"errors":0}\n`;
@@ -2434,8 +2445,25 @@ test('tests-complete without run-final fails on the short finalization deadline'
   ));
   assert.ok(finalResultTimer, 'expected a short deadline instead of the 600-second run timeout');
 
+  elapsedClock = 31000;
   await finalResultTimer.fn();
   const result = await runPromise;
+  const diagnosticIndex = lifecycleEvents.findIndex(event => event.text?.startsWith('[playwright-wrapper-finalization-diagnostic] '));
+  const killIndex = lifecycleEvents.findIndex(event => event.type === 'stop' && event.pid === child.pid);
+  assert.ok(diagnosticIndex >= 0 && diagnosticIndex < killIndex, 'capture owned processes before terminating the Playwright child');
+  const diagnostic = JSON.parse(lifecycleEvents[diagnosticIndex].text.split('] ')[1]);
+  assert.equal(diagnostic.reason, 'missing-run-final');
+  assert.equal(diagnostic.phase, 'tests-complete');
+  assert.equal(diagnostic.elapsedMs, 30000);
+  assert.deepEqual(snapshotOptions.at(-1), { timeoutMs: 5000 });
+  assert.deepEqual(diagnostic.processes.find(owner => owner.pid === child.pid), {
+    pid: child.pid, parentPid: process.pid, executable: 'node', role: 'playwright-cli', liveness: snapshotFailure ? 'unknown' : 'alive',
+  });
+  assert.equal(diagnostic.processes.find(owner => owner.pid === serviceOwner.pid).liveness, snapshotFailure ? 'unknown' : 'identity-changed');
+  assert.equal(diagnostic.processes.find(owner => owner.pid === shellRoot.pid).executable, 'other');
+  assert.deepEqual(diagnostic.snapshotError, snapshotFailure ? { name: 'Error' } : null);
+  assert.doesNotMatch(lifecycleEvents[diagnosticIndex].text, /private|fixture-secret|commandLine|creationIdentity/);
+  assert.ok(result.combinedOutput.includes(lifecycleEvents[diagnosticIndex].text));
   assert.equal(result.exitCode, 1);
   assert.deepEqual(stopped, [shellRoot.pid, child.pid]);
   assert.match(stderrWrites.join(''), /\[playwright-wrapper-diagnostic\]/);
@@ -2884,6 +2912,10 @@ test('startManagedScanApp launches Python directly and waits for injected readin
       calls.push({ command, args, options });
       return child;
     },
+    readProcessCreationIdentityFn(pid) {
+      assert.equal(pid, 5151);
+      return 'scan-python-start';
+    },
     probeHttpStatusReadyFn: async (url) => {
       probes += 1;
       assert.equal(url, 'http://127.0.0.1:4317/health');
@@ -2900,6 +2932,7 @@ test('startManagedScanApp launches Python directly and waits for injected readin
   });
 
   assert.equal(started, child);
+  assert.equal(child.albumHavenCreationIdentity, 'scan-python-start');
   assert.equal(calls.length, 1);
   assert.equal(calls[0].command, 'python-test.exe');
   assert.deepEqual(calls[0].args, [
@@ -2929,6 +2962,9 @@ test('startManagedScanApp preserves an explicit performance-runner samples path'
     spawnFn(_command, _args, options) {
       spawnOptions = options;
       return child;
+    },
+    readProcessCreationIdentityFn() {
+      return 'scan-python-start';
     },
     probeHttpStatusReadyFn: async (url) => {
       assert.equal(url, 'http://127.0.0.1:4318/health');
@@ -2983,14 +3019,23 @@ test('waitForManagedScanAppReady ignores a listening port until the public healt
   assert.equal(portProbes, 0);
 });
 
-test('stopManagedScanApp uses injected process-tree teardown and waits for port reuse', async () => {
+test('stopManagedScanApp verifies the exact process exited before waiting for port reuse', async () => {
   const child = createFakeChildProcess(5353);
+  child.albumHavenCreationIdentity = 'scan-python-start';
   const stopped = [];
+  const processWaits = [];
   const waited = [];
 
   await _private.stopManagedScanApp(child, 4319, {
-    stopProcessTreeFn(pid) {
-      stopped.push(pid);
+    readProcessCreationIdentityFn(pid) {
+      assert.equal(pid, 5353);
+      return 'scan-python-start';
+    },
+    stopProcessTreeFn(pid, options) {
+      stopped.push({ pid, options });
+    },
+    waitForReclaimedProcessesExitedFn(processes, options) {
+      processWaits.push({ processes, options });
     },
     waitForPortReleasedFn: async (port, options) => {
       waited.push({ port, options });
@@ -2998,7 +3043,17 @@ test('stopManagedScanApp uses injected process-tree teardown and waits for port 
     },
   });
 
-  assert.deepEqual(stopped, [5353]);
+  assert.deepEqual(stopped, [{
+    pid: 5353,
+    options: { expectedCreationIdentity: 'scan-python-start' },
+  }]);
+  assert.deepEqual(processWaits, [{
+    processes: [{ pid: 5353, creationIdentity: 'scan-python-start' }],
+    options: {
+      timeoutMs: _private.RECLAIMED_PROCESS_EXIT_TIMEOUT_MS,
+      pollIntervalMs: 250,
+    },
+  }]);
   assert.equal(waited.length, 1);
   assert.equal(waited[0].port, 4319);
   assert.equal(waited[0].options.timeoutMs, _private.MANAGED_SUPPORT_APP_PORT_REUSE_TIMEOUT_MS);
@@ -3458,6 +3513,40 @@ test('stopManagedIsolatedApp uses bind-only port checks after verified process-t
   ]);
 });
 
+test('managed isolated stop request waits for shutdown without starting a replacement', async () => {
+  const ownedRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'album-haven-stop-request-'));
+  let finishStop;
+  const stopped = new Promise((resolve) => { finishStop = resolve; });
+  let starts = 0;
+  try {
+    const controller = _private.createManagedIsolatedAppRestartController({
+      childEnv: {}, ownedIsolatedTempRoot: ownedRoot,
+      initialChild: createFakeChildProcess(5660), ports: [4320, 4322],
+      stopManagedIsolatedAppFn: () => stopped,
+      startManagedIsolatedAppFn: async () => { starts += 1; return createFakeChildProcess(5661); },
+      autoStart: false,
+    });
+    const requestPath = path.join(controller.controlDirectory, 'restart-request.json');
+    const ackPath = path.join(controller.controlDirectory, 'restart-ack.json');
+    fs.writeFileSync(requestPath, JSON.stringify({ nonce: 'stop-1', action: 'stop' }));
+    const pending = controller.processPendingRequest();
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(fs.existsSync(ackPath), false);
+    finishStop();
+    await pending;
+    assert.equal(starts, 0);
+    assert.equal(controller.getCurrentChild(), null);
+    assert.deepEqual(JSON.parse(fs.readFileSync(ackPath)), { nonce: 'stop-1', status: 'stopped' });
+    fs.writeFileSync(requestPath, JSON.stringify({ nonce: 'resume-1' }));
+    await controller.processPendingRequest();
+    assert.equal(starts, 1);
+    assert.deepEqual(JSON.parse(fs.readFileSync(ackPath)), { nonce: 'resume-1', status: 'ready' });
+    await controller.close();
+  } finally {
+    fs.rmSync(ownedRoot, { recursive: true, force: true });
+  }
+});
+
 test('managed isolated restart controller keeps control files under the runner-owned temp root', async () => {
   const ownedRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'album-haven-restart-controller-'));
   const childEnv = {
@@ -3563,6 +3652,94 @@ test('managed isolated restart request stops the old child and acknowledges only
     fs.rmSync(ownedRoot, { recursive: true, force: true });
   }
 });
+
+test('managed watcher cleanup derives its only path from runner media ownership', async () => {
+  const ownedRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'album-haven-watcher-derived-'));
+  const calls = [];
+  try {
+    fs.mkdirSync(path.join(ownedRoot, 'media'));
+    const environment = { ALBUM_HAVEN_E2E_TEMP_ROOT: ownedRoot };
+    await _private.cleanupManagedWatcherFixture(environment, { runCommandFn(command, args, options) {
+      calls.push({ command, args, options });
+      return { status: 0, signal: null };
+    } });
+    assert.deepEqual(calls[0].args, ['-m', 'tests.e2e.support.watcherFixture', '--owned-root', path.join(ownedRoot, 'media', 'cases', 'watcher-reconciliation')]);
+    assert.equal(calls[0].options.env, environment);
+    assert.ok(calls[0].options.timeout > 0);
+    await assert.rejects(_private.cleanupManagedWatcherFixture(environment, { runCommandFn() {
+      return { status: 1, stderr: 'private database/path detail must not enter the error' };
+    } }), (error) => error.message === 'Runner-owned watcher inventory cleanup failed; evidence retained.');
+  } finally { fs.rmSync(ownedRoot, { recursive: true, force: true }); }
+});
+
+test('managed watcher cleanup rejects a request-supplied path before stopping or touching inventory', async () => {
+  const ownedRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'album-haven-watcher-request-'));
+  let controller;
+  try {
+    controller = _private.createManagedIsolatedAppRestartController({
+      childEnv: { ALBUM_HAVEN_E2E_TEMP_ROOT: ownedRoot }, ownedIsolatedTempRoot: ownedRoot,
+      initialChild: createFakeChildProcess(5564), ports: [4320, 4322], autoStart: false,
+      async stopManagedIsolatedAppFn() { assert.fail('invalid request must not stop the app'); },
+      async cleanupWatchedInventoryFn() { assert.fail('must not accept client-selected inventory'); },
+      async startManagedIsolatedAppFn() { assert.fail('must not restart for an invalid operation'); },
+    });
+    fs.writeFileSync(path.join(controller.controlDirectory, 'restart-request.json'), JSON.stringify({
+      nonce: 'untrusted-path', operation: 'watcher-cleanup', ownedRoot: path.join(ownedRoot, 'outside'),
+    }));
+    await assert.rejects(controller.processPendingRequest(), /fixed runner-owned operation/);
+    assert.equal(controller.getCurrentChild().pid, 5564);
+  } finally { await controller?.close(); fs.rmSync(ownedRoot, { recursive: true, force: true }); }
+});
+
+for (const cleanupFails of [false, true]) {
+  test(`managed watcher cleanup runs between stopped writers and replacement hydration (failure=${cleanupFails})`, async () => {
+    const ownedRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'album-haven-watcher-controller-'));
+    const events = [];
+    const cachedRows = ['owned fixture row'];
+    let releaseStop;
+    const stopped = new Promise((resolve) => { releaseStop = resolve; });
+    let controller;
+    try {
+      controller = _private.createManagedIsolatedAppRestartController({
+        childEnv: { ALBUM_HAVEN_E2E_TEMP_ROOT: ownedRoot }, ownedIsolatedTempRoot: ownedRoot,
+        initialChild: createFakeChildProcess(5562), ports: [4320, 4322], autoStart: false,
+        async stopManagedIsolatedAppFn() { events.push('stop'); await stopped; events.push('drained'); },
+        async cleanupWatchedInventoryFn(environment) {
+          assert.equal(environment.ALBUM_HAVEN_E2E_TEMP_ROOT, ownedRoot);
+          events.push('cleanup');
+          if (cleanupFails) throw new Error('scoped inventory cleanup failed');
+          cachedRows.length = 0;
+        },
+        async startManagedIsolatedAppFn(_environment, options) {
+          events.push('hydrate');
+          assert.deepEqual(cachedRows, [], 'replacement must never hydrate pre-cleanup fixture rows');
+          const replacement = createFakeChildProcess(5563);
+          options.onSpawnFn(replacement);
+          return replacement;
+        },
+      });
+      fs.writeFileSync(path.join(controller.controlDirectory, 'restart-request.json'), JSON.stringify({ nonce: 'watcher-cleanup-1', operation: 'watcher-cleanup' }));
+      const result = controller.processPendingRequest().catch((error) => error);
+      await new Promise((resolve) => setImmediate(resolve));
+      assert.deepEqual(events, ['stop']);
+      assert.equal(fs.existsSync(path.join(controller.controlDirectory, 'restart-ack.json')), false);
+      releaseStop();
+      const outcome = await result;
+      assert.deepEqual(events, cleanupFails ? ['stop', 'drained', 'cleanup'] : ['stop', 'drained', 'cleanup', 'hydrate']);
+      const ack = JSON.parse(fs.readFileSync(path.join(controller.controlDirectory, 'restart-ack.json'), 'utf8'));
+      assert.equal(ack.status, cleanupFails ? 'failed' : 'ready');
+      if (cleanupFails) {
+        assert.equal(outcome.exitCode, 2);
+        assert.equal(controller.getFailure(), outcome);
+        assert.deepEqual(cachedRows, ['owned fixture row']);
+      } else assert.equal(outcome, true);
+    } finally {
+      releaseStop?.();
+      await controller?.close();
+      fs.rmSync(ownedRoot, { recursive: true, force: true });
+    }
+  });
+}
 
 test('managed isolated restart failure is fail-closed and retains the spawned child for final cleanup', async () => {
   const ownedRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'album-haven-restart-failure-'));
@@ -4197,6 +4374,41 @@ test('managed isolated readiness failure still stops the spawned app before data
   ]);
 });
 
+test('preloaded managed attempts release only database ownership after proven shutdown', async () => {
+  const events = [];
+  const common = {
+    passthroughArgv: ['test'], childEnv: {}, runTimeoutMs: 1000,
+    managesScanApp: false, managesIsolatedApp: true, preservesPreloadedDatabase: true,
+    servesRealApp: false, supportAppPort: 4325, realAppPort: 5001, managedPorts: [],
+    ownedIsolatedTempRoot: '', isHeadless: true, browserName: 'chromium',
+    async startManagedIsolatedAppFn() { return createFakeChildProcess(5959); },
+    async runPlaywrightProcessFn() { return { exitCode: 0, lifecycle: {} }; },
+    async stopManagedIsolatedAppFn() { events.push('stopped'); },
+    cleanupIsolatedLibraryDatabaseFn(_env, options) { assert.equal(options.lockOnly, true); events.push('lock-only'); },
+    cleanupIsolatedE2ETempRootsFn() { events.push('temp'); return []; },
+    reportManagedPortOwnersFn() { return []; },
+  };
+  const result = await _private.runManagedPlaywrightAttempt(common);
+  assert.deepEqual(events, ['stopped', 'lock-only', 'temp']);
+  assert.equal(result.lifecycle.fakeDatabaseCleanup.mode, 'lock-only');
+  assert.equal(_private.buildAuthoritativePassFinalDecisionDiagnostic(result).fakeDatabaseCleanup.mode, 'lock-only');
+  events.length = 0;
+  await assert.rejects(_private.runManagedPlaywrightAttempt({ ...common,
+    async stopManagedIsolatedAppFn() { throw new Error('shutdown unproven'); },
+  }), /shutdown unproven/);
+  assert.deepEqual(events, []);
+});
+
+test('lock-only cleanup command retains the validated scoped database environment', () => {
+  let command;
+  _private.cleanupIsolatedLibraryDatabase({PLAYWRIGHT_PYTHON: 'python-for-test',
+    ALBUM_HAVEN_FAKE_E2E_SETUP_DATABASE_URL: 'postgresql://album_haven_migrator_job@localhost/album_haven_ci_job',
+    ALBUM_HAVEN_FAKE_E2E_DATABASE_URL: 'postgresql://album_haven_app_job@localhost/album_haven_ci_job',
+  }, {lockOnly:true, runCommandFn(_exe, args, options) {command={args,options};return {status:0};}});
+  assert.deepEqual(command.args, [_private.ISOLATED_LIBRARY_APP_PATH, '--cleanup-lock-only']);
+  assert.match(command.options.env.ALBUM_HAVEN_FAKE_E2E_SETUP_DATABASE_URL, /album_haven_ci_job$/);
+});
+
 test('managed isolated cleanup and database failures fail the attempt closed', async () => {
   const common = {
     passthroughArgv: ['test'], childEnv: {}, runTimeoutMs: 1000,
@@ -4227,6 +4439,44 @@ test('managed isolated cleanup and database failures fail the attempt closed', a
     assert.equal(error.lifecycle.exitReason, 'fake-database-cleanup-error');
     return true;
   });
+});
+
+test('managed database cleanup failure retains the owned fixture and original error', async () => {
+  const fixture = fs.mkdtempSync(path.join(os.tmpdir(), 'album-haven-test-dbcleanup-'));
+  const evidence = path.join(fixture, 'retained-evidence.txt');
+  fs.writeFileSync(evidence, 'fixture evidence');
+  const databaseError = new Error('database cleanup failed');
+  const child = createFakeChildProcess(5959);
+  const events = [];
+  try {
+    await assert.rejects(_private.runManagedPlaywrightAttempt({
+      passthroughArgv: ['test'], childEnv: {}, runTimeoutMs: 1000,
+      managesScanApp: false, managesIsolatedApp: true, servesRealApp: false,
+      supportAppPort: 4325, realAppPort: 5001, managedPorts: [],
+      ownedIsolatedTempRoot: fixture, isHeadless: true, browserName: 'chromium',
+      async startManagedIsolatedAppFn() { return child; },
+      createManagedIsolatedAppRestartControllerFn() {
+        return { async close() {}, getCurrentChild() { return child; } };
+      },
+      async runPlaywrightProcessFn() { return { exitCode: 0, lifecycle: {} }; },
+      async stopManagedIsolatedAppFn() { events.push('app-stopped'); },
+      cleanupIsolatedLibraryDatabaseFn() { events.push('database-failed'); throw databaseError; },
+      cleanupIsolatedE2ETempRootsFn() {
+        events.push('fixture-deleted');
+        fs.rmSync(fixture, { recursive: true, force: true });
+        return [fixture];
+      },
+      reportManagedPortOwnersFn() { return []; },
+    }), error => {
+      assert.equal(error, databaseError);
+      assert.equal(error.lifecycle.exitReason, 'fake-database-cleanup-error');
+      return true;
+    });
+    assert.deepEqual(events, ['app-stopped', 'database-failed']);
+    assert.equal(fs.readFileSync(evidence, 'utf8'), 'fixture evidence');
+  } finally {
+    fs.rmSync(fixture, { recursive: true, force: true });
+  }
 });
 
 test('runPlaywrightProcess prevents inherited report auto-open without changing headed mode', async () => {
@@ -5100,7 +5350,14 @@ test('runPlaywrightProcess terminates a never-closing child once when run-final 
   assert.ok(hardTimeoutTimer, 'expected the original bounded run timeout');
   hardTimeoutTimer.fn();
 
-  await assert.rejects(runPromise, /owned support cleanup failed/);
+  await assert.rejects(runPromise, (error) => {
+    assert.match(error.message, /owned support cleanup failed/);
+    assert.equal(_private.finalizeMainResult(
+      { exitCode: 1, lifecycle: error.lifecycle },
+      { processObject: { exitCode: null }, stderr: { write() {} } },
+    ), 2);
+    return true;
+  });
   assert.equal(ownerWaitCalls, 1);
   assert.equal(stopCalls, 1);
 });
@@ -5494,8 +5751,8 @@ test('owned scan teardown failure records all remaining cleanup evidence before 
       assert.deepEqual(error.lifecycle.managedAttempt.scanAppCleanup.error, {
         name: 'Error',
       });
-      assert.equal(error.lifecycle.managedAttempt.tempCleanup.status, 'completed');
-      assert.equal(error.lifecycle.managedAttempt.tempCleanup.removedCount, 1);
+      assert.equal(error.lifecycle.managedAttempt.tempCleanup.status, 'pending');
+      assert.equal(error.lifecycle.managedAttempt.tempCleanup.removedCount, 0);
       assert.deepEqual(
         error.lifecycle.managedAttempt.passivePortDiagnostics.map(({ port, status }) => ({ port, status })),
         [
@@ -5506,8 +5763,44 @@ test('owned scan teardown failure records all remaining cleanup evidence before 
       return true;
     },
   );
-  assert.equal(tempCleanupCalls, 1);
+  assert.equal(tempCleanupCalls, 0);
   assert.deepEqual(passivelyInspectedPorts, [4173, 4175]);
+});
+
+test('main final decision preserves the process cleanup failure exit code', () => {
+  const cases = [
+    { name: 'reserved result', resultCode: 2, expected: 2 },
+    { name: 'reserved prior exit', priorCode: 2, expected: 2 },
+    ...['scanAppCleanup', 'isolatedAppCleanup'].flatMap((stage) => (
+      ['failed', 'pending', 'running'].map((status) => ({
+        name: `${stage}:${status}`, stage, status, expected: 2,
+      }))
+    )),
+    { name: 'scan cleanup error', reason: 'managed-scan-cleanup-error', expected: 2 },
+    { name: 'isolated cleanup error', reason: 'managed-isolated-app-cleanup-error', expected: 2 },
+    { name: 'ordinary test failure after completed cleanup', expected: 1 },
+  ];
+  const actual = cases.map((testCase) => {
+    const processObject = { exitCode: testCase.priorCode ?? null };
+    const managedAttempt = {
+      scanAppCleanup: { status: 'completed' },
+      isolatedAppCleanup: { status: 'completed' },
+    };
+    if (testCase.stage) managedAttempt[testCase.stage].status = testCase.status;
+    const exitCode = _private.finalizeMainResult({
+      exitCode: testCase.resultCode ?? 1,
+      lifecycle: {
+        exitReason: testCase.reason ?? 'authoritative-fail',
+        authoritativeResult: {
+          phase: 'run-final', status: 'failed', total: 1, completed: 1,
+          failed: 1, skipped: 0, errors: 0,
+        },
+        managedAttempt,
+      },
+    }, { processObject, stderr: { write() {} } });
+    return [testCase.name, exitCode, processObject.exitCode];
+  });
+  assert.deepEqual(actual, cases.map(({ name, expected }) => [name, expected, expected]));
 });
 
 test('main final decision reports every post-pass lifecycle stage before returning nonzero', () => {
@@ -5543,8 +5836,8 @@ test('main final decision reports every post-pass lifecycle stage before returni
     },
   );
 
-  assert.equal(exitCode, 1);
-  assert.equal(processObject.exitCode, 1);
+  assert.equal(exitCode, 2);
+  assert.equal(processObject.exitCode, 2);
   assert.equal(writes.length, 1);
   assert.match(writes[0], /^\[playwright-wrapper-final-decision\] /);
   const payload = JSON.parse(writes[0].slice(writes[0].indexOf('{')));
@@ -5693,7 +5986,7 @@ test('final-decision marker rebuilds injected lifecycle data from a closed safe 
   );
   const payload = JSON.parse(writes[0].slice(writes[0].indexOf('{')));
   assert.deepEqual(payload, {
-    wrapperExitCode: 1,
+    wrapperExitCode: 2,
     attemptReturn: { exitCode: 0, exitReason: 'unknown' },
     fakeDatabaseCleanup: { status: 'unknown', error: null },
     scanAppCleanup: { status: 'unknown', error: null },
@@ -6163,4 +6456,173 @@ test('real runner entrypoint main rejection sets a nonzero OS status before Play
   } finally {
     fs.rmSync(tempRoot, { recursive: true, force: true });
   }
+});
+
+for (const failureStage of ['isolated-app', 'scan-app', 'restart-controller', 'owned-process', 'failure-signal']) {
+  test(`managed attempt retains its leased fixture when ${failureStage} cleanup is unproven`, async () => {
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'run-playwright-preserve-failed-cleanup-'));
+    const ownedRoot = _private.createOwnedIsolatedE2ETempRoot({
+      tempRoot,
+      readProcessCreationIdentityFn: () => TEST_PROCESS_CREATION_IDENTITY,
+    });
+    const sentinel = path.join(ownedRoot, 'fixture.txt');
+    fs.writeFileSync(sentinel, 'still owned by the live application');
+    let databaseCleanupCalls = 0;
+    let rootCleanupCalls = 0;
+    let result;
+    let failure;
+    try {
+      try {
+        result = await _private.runManagedPlaywrightAttempt({
+          passthroughArgv: ['test'], childEnv: {}, runTimeoutMs: 1000,
+          managesScanApp: failureStage === 'scan-app',
+          managesIsolatedApp: failureStage !== 'scan-app', servesRealApp: false,
+          supportAppPort: 4325, realAppPort: 5001, managedPorts: [],
+          ownedIsolatedTempRoot: ownedRoot, isHeadless: true, browserName: 'chromium',
+          async startManagedScanAppFn() { return createFakeChildProcess(7575); },
+          async startManagedIsolatedAppFn() { return createFakeChildProcess(7576); },
+          createManagedIsolatedAppRestartControllerFn() {
+            return {
+              async close() { if (failureStage === 'restart-controller') throw new Error('cleanup unproven'); },
+              getFailureSignal() {
+                return failureStage === 'failure-signal' ? Promise.resolve(new Error('primary restart failure')) : undefined;
+              },
+            };
+          },
+          async runPlaywrightProcessFn() {
+            if (failureStage === 'failure-signal') await new Promise((resolve) => setImmediate(resolve));
+            return ['owned-process', 'failure-signal'].includes(failureStage)
+              ? { exitCode: 2, lifecycle: { exitReason: 'owned-process-cleanup-error' } }
+              : { exitCode: 1, lifecycle: {} };
+          },
+          async stopManagedScanAppFn() { throw new Error('cleanup unproven'); },
+          async stopManagedIsolatedAppFn() { if (failureStage === 'isolated-app') throw new Error('cleanup unproven'); },
+          cleanupIsolatedLibraryDatabaseFn() { databaseCleanupCalls += 1; },
+          cleanupIsolatedE2ETempRootsFn(_base, roots) {
+            rootCleanupCalls += 1;
+            return _private.cleanupIsolatedE2ETempRoots(tempRoot, roots);
+          },
+          reportManagedPortOwnersFn() { return []; },
+        });
+      } catch (error) {
+        failure = error;
+      }
+      if (failureStage === 'failure-signal') {
+        assert.ok(failure, 'the primary restart failure must survive child settlement');
+        assert.match(failure.message, /primary restart failure/);
+      }
+      assert.equal(fs.existsSync(sentinel), true, 'the actual managed-attempt cleanup must retain the owned fixture');
+      assert.equal(rootCleanupCalls, 0);
+      assert.equal(databaseCleanupCalls, 0, 'unproven process cleanup must not reset its database');
+      assert.equal(_private.finalizeMainResult(result || { exitCode: 1, lifecycle: failure?.lifecycle }, {
+        processObject: { exitCode: null }, stderr: { write() {} },
+      }), 2);
+    } finally {
+      fs.rmSync(tempRoot, { recursive: true, force: true });
+    }
+  });
+}
+
+test('fixture cleanup channel aborts the managed attempt and retains its database and owned root', async () => {
+  const { pathToFileURL } = require('node:url');
+  const { createManagedAppLifecycle } = await import(pathToFileURL(path.resolve(__dirname, '../e2e/helpers/managedAppLifecycle.js')).href);
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'run-playwright-fixture-failure-'));
+  const ownedRoot = _private.createOwnedIsolatedE2ETempRoot({ tempRoot, readProcessCreationIdentityFn: () => TEST_PROCESS_CREATION_IDENTITY });
+  const sentinel = path.join(ownedRoot, 'fixture.txt');
+  fs.writeFileSync(sentinel, 'retained failed fixture');
+  let controller, reporting, failure, aborted = false;
+  let databaseCleanups = 0, tempCleanups = 0;
+  const childEnv = { PLAYWRIGHT_MANAGED_APP: '1', ALBUM_HAVEN_E2E_TEMP_ROOT: ownedRoot,
+    ALBUM_HAVEN_FAKE_E2E_DATABASE_URL: 'postgresql://album_haven_app@localhost:5432/album_haven_fake_e2e' };
+  try {
+    try {
+      await _private.runManagedPlaywrightAttempt({
+        passthroughArgv: ['test'], childEnv, runTimeoutMs: 1000, managesScanApp: false,
+        managesIsolatedApp: true, servesRealApp: false, supportAppPort: 4325, realAppPort: 5001,
+        managedPorts: [], ownedIsolatedTempRoot: ownedRoot, isHeadless: true, browserName: 'chromium',
+        async startManagedIsolatedAppFn() { return createFakeChildProcess(7579); },
+        async stopManagedIsolatedAppFn() {},
+        createManagedIsolatedAppRestartControllerFn(options) {
+          controller = _private.createManagedIsolatedAppRestartController({ ...options, autoStart: false });
+          return controller;
+        },
+        async runPlaywrightProcessFn(_argv, env, _timeout, { signal }) {
+          const lifecycle = createManagedAppLifecycle({ environment: env, timeoutMs: 100, pollIntervalMs: 1,
+            async sleep() {
+              try { await controller.processPendingRequest(); } catch (_error) {}
+              const ack = JSON.parse(fs.readFileSync(controller.ackPath, 'utf8'));
+              assert.equal(ack.status, 'failed');
+              assert.ok(controller.getFailure(), 'failure must be recorded before acknowledgment is visible');
+            },
+          });
+          assert.equal(typeof lifecycle.reportFailure, 'function');
+          const stopped = new Promise(resolve => signal.addEventListener('abort', () => {
+            aborted = true; resolve({ exitCode: 1, lifecycle: {} });
+          }, { once: true }));
+          reporting = lifecycle.reportFailure();
+          reporting.catch(() => {});
+          return stopped;
+        },
+        cleanupIsolatedLibraryDatabaseFn() { databaseCleanups += 1; },
+        cleanupIsolatedE2ETempRootsFn() { tempCleanups += 1; return []; },
+        reportManagedPortOwnersFn() { return []; },
+      });
+    } catch (error) { failure = error; }
+    await reporting;
+    assert.ok(aborted);
+    assert.equal(failure?.exitCode, 2);
+    assert.equal(failure?.lifecycle?.exitReason, 'fake-database-cleanup-error');
+    assert.equal(_private.finalizeMainResult({ exitCode: 1, lifecycle: failure.lifecycle }, { processObject: { exitCode: null }, stderr: { write() {} } }), 2);
+    assert.equal(databaseCleanups, 0);
+    assert.equal(tempCleanups, 0);
+    assert.equal(fs.existsSync(sentinel), true);
+  } finally {
+    await controller?.close();
+    fs.rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
+
+test('scan startup direct cleanup failure retains both readiness and cleanup errors', async () => {
+  const child = createFakeChildProcess(7851);
+  const readiness = new Error('scan readiness rejected'), cleanup = new Error('scan stop rejected');
+  await assert.rejects(_private.startManagedScanApp({}, {
+    spawnFn: () => child, readProcessCreationIdentityFn: () => 'owned-scan',
+    probeHttpStatusReadyFn: async () => { throw readiness; },
+    stopProcessTreeFn: () => { throw cleanup; }, stdout: { write() {} }, stderr: { write() {} },
+  }), error => {
+    assert.ok(error instanceof AggregateError);
+    assert.deepEqual(error.errors, [readiness, cleanup]);
+    assert.equal(_private.finalizeMainResult({ exitCode: 1, lifecycle: error.lifecycle }, { processObject: {}, stderr: { write() {} } }), 2);
+    return true;
+  });
+});
+
+test('scan startup hands child ownership to the attempt before readiness fails', async () => {
+  const child = createFakeChildProcess(7852);
+  const readiness = new Error('scan readiness rejected'), cleanup = new Error('scan stop rejected');
+  let outerStops = 0, rootCleanup = 0, browserRuns = 0;
+  await assert.rejects(_private.runManagedPlaywrightAttempt({
+    passthroughArgv: ['test'], childEnv: {}, runTimeoutMs: 1000,
+    managesScanApp: true, managesIsolatedApp: false, servesRealApp: false,
+    supportAppPort: 4325, realAppPort: 5001, managedPorts: [], ownedIsolatedTempRoot: '',
+    isHeadless: true, browserName: 'chromium',
+    async startManagedScanAppFn(env, options) {
+      return _private.startManagedScanApp(env, { ...options,
+        spawnFn: () => child, readProcessCreationIdentityFn: () => 'owned-scan',
+        probeHttpStatusReadyFn: async () => { throw readiness; },
+        stopProcessTreeFn: () => { throw cleanup; }, stdout: { write() {} }, stderr: { write() {} },
+      });
+    },
+    async stopManagedScanAppFn(owned) { assert.equal(owned, child); outerStops += 1; throw cleanup; },
+    async runPlaywrightProcessFn() { browserRuns += 1; },
+    cleanupIsolatedE2ETempRootsFn() { rootCleanup += 1; return []; },
+    reportManagedPortOwnersFn() { return []; },
+  }), error => {
+    assert.equal(outerStops, 1, 'the owning attempt must retain and stop the spawned child');
+    assert.equal(rootCleanup, 0); assert.equal(browserRuns, 0);
+    assert.ok(error instanceof AggregateError); assert.deepEqual(error.errors, [readiness, cleanup]);
+    assert.equal(error.lifecycle.exitReason, 'managed-scan-cleanup-error');
+    assert.equal(_private.finalizeMainResult({ exitCode: 1, lifecycle: error.lifecycle }, { processObject: {}, stderr: { write() {} } }), 2);
+    return true;
+  });
 });

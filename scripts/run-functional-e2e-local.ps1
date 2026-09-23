@@ -4,6 +4,7 @@ param(
     [Parameter(ParameterSetName = 'All')][switch]$All,
     [Parameter(ParameterSetName = 'Shard', Mandatory = $true)][string]$Shard,
     [Parameter(ParameterSetName = 'All')][Parameter(ParameterSetName = 'Shard')][string]$Case,
+    [Parameter(ParameterSetName = 'All')][Parameter(ParameterSetName = 'Shard')][string[]]$Cases,
     [string]$FixtureDistribution,
     [string]$PythonPath = $env:PLAYWRIGHT_PYTHON
 )
@@ -13,7 +14,7 @@ $ErrorActionPreference = 'Stop'
 [Console]::OutputEncoding = [Text.UTF8Encoding]::new($false)
 $OutputEncoding = [Console]::OutputEncoding
 
-$expectedRelease = 'fixtures-v1.0.21'
+$expectedRelease = 'fixtures-v1.0.24'
 $fixtureProfile = 'functional-core'
 $repositoryRoot = [IO.Path]::GetFullPath((Split-Path -Parent $PSScriptRoot))
 $contractPath = Join-Path $repositoryRoot 'tests\ci\functional-shards.json'
@@ -35,34 +36,62 @@ if ($List) {
 
 Import-Module Microsoft.PowerShell.Utility -ErrorAction Stop
 
-if ($All -and -not [string]::IsNullOrWhiteSpace($Case)) {
-    throw '-All cannot be combined with -Case. Omit -All to resolve the exact case automatically.'
-}
-
-$selectedShards = @()
-if (-not [string]::IsNullOrWhiteSpace($Case)) {
-    $caseMatches = @(
-        foreach ($ownedShard in $contract.shards) {
-            foreach ($ownedCase in (Get-OwnedCases $ownedShard)) {
-                if ([string]$ownedCase.case -ceq $Case) {
-                    [pscustomobject]@{ Shard = $ownedShard; Case = $ownedCase }
+function Resolve-FunctionalSelection {
+    param([object]$Contract, [string]$Case, [string[]]$Cases, [string]$Shard,
+        [switch]$All, [switch]$CaseSpecified, [switch]$CasesSpecified)
+    if (($CaseSpecified -and $CasesSpecified) -or ($All -and ($CaseSpecified -or $CasesSpecified))) {
+        throw '-Case, -Cases, and -All are mutually exclusive.'
+    }
+    $requestedCases = @()
+    if ($CaseSpecified) { $requestedCases = @($Case) }
+    if ($CasesSpecified) { $requestedCases = @($Cases) }
+    if (($CaseSpecified -or $CasesSpecified) -and ($requestedCases.Count -eq 0 -or
+        @($requestedCases | Where-Object { [string]::IsNullOrWhiteSpace($_) }).Count -gt 0)) {
+        throw 'Focused selection requires at least one nonempty exact approved title.'
+    }
+    $resolvedCases = @()
+    $resolvedShards = @()
+    foreach ($requestedCase in $requestedCases) {
+        if ($resolvedCases -ccontains $requestedCase) {
+            throw "Duplicate functional case: $requestedCase"
+        }
+        $caseMatches = @(
+            foreach ($ownedShard in $Contract.shards) {
+                foreach ($ownedCase in (Get-OwnedCases $ownedShard)) {
+                    if ([string]$ownedCase.case -ceq $requestedCase) {
+                        [pscustomobject]@{ Shard = $ownedShard; Case = $ownedCase }
+                    }
                 }
             }
+        )
+        if ($caseMatches.Count -ne 1) {
+            throw "Functional case must match one exact approved title; found $($caseMatches.Count): $requestedCase"
         }
-    )
-    if ($caseMatches.Count -ne 1) {
-        throw "Functional case must match one exact approved title; found $($caseMatches.Count): $Case"
+        $owner = $caseMatches[0].Shard
+        if (-not [string]::IsNullOrWhiteSpace($Shard) -and $owner.name -cne $Shard) {
+            throw "Functional case is owned by shard $($owner.name), not $Shard."
+        }
+        if ($resolvedShards.Count -gt 0 -and $resolvedShards[0].name -cne $owner.name) {
+            throw '-Cases must belong to one functional shard; run other shards separately.'
+        }
+        $resolvedCases += $requestedCase
+        $resolvedShards = @($owner)
     }
-    if (-not [string]::IsNullOrWhiteSpace($Shard) -and $caseMatches[0].Shard.name -cne $Shard) {
-        throw "Functional case is owned by shard $($caseMatches[0].Shard.name), not $Shard."
+    if ($resolvedCases.Count -eq 0) {
+        if (-not [string]::IsNullOrWhiteSpace($Shard)) {
+            $resolvedShards = @($Contract.shards | Where-Object { $_.name -ceq $Shard })
+            if ($resolvedShards.Count -ne 1) { throw "Unknown functional shard: $Shard" }
+        } else {
+            $resolvedShards = @($Contract.shards)
+        }
     }
-    $selectedShards = @($caseMatches[0].Shard)
-} elseif (-not [string]::IsNullOrWhiteSpace($Shard)) {
-    $selectedShards = @($contract.shards | Where-Object { $_.name -ceq $Shard })
-    if ($selectedShards.Count -ne 1) { throw "Unknown functional shard: $Shard" }
-} else {
-    $selectedShards = @($contract.shards)
+    return [pscustomobject]@{ Shards = @($resolvedShards); Cases = @($resolvedCases) }
 }
+
+$selection = Resolve-FunctionalSelection -Contract $contract -Case $Case -Cases $Cases -Shard $Shard -All:$All `
+    -CaseSpecified:($PSBoundParameters.ContainsKey('Case')) -CasesSpecified:($PSBoundParameters.ContainsKey('Cases'))
+$selectedShards = @($selection.Shards)
+$selectedCases = @($selection.Cases)
 
 function Resolve-Executable([string]$Requested, [string[]]$Fallbacks, [string]$Label) {
     if (-not [string]::IsNullOrWhiteSpace($Requested)) {
@@ -85,11 +114,26 @@ function Resolve-Executable([string]$Requested, [string[]]$Fallbacks, [string]$L
 function Get-FreePortBase {
     for ($attempt = 0; $attempt -lt 100; $attempt += 1) {
         $candidate = Get-Random -Minimum 20000 -Maximum 60000
-        $ports = @($candidate, $candidate + 2)
+        $ports = @($candidate, ($candidate + 2))
         $listeners = @(Get-NetTCPConnection -State Listen -ErrorAction SilentlyContinue | Where-Object {
             $_.LocalPort -in $ports
         })
-        if ($listeners.Count -eq 0) { return $candidate }
+        if ($listeners.Count -ne 0) { continue }
+        $portProbes = @()
+        try {
+            foreach ($port in $ports) {
+                $probe = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Loopback, $port)
+                $probe.Server.ExclusiveAddressUse = $true
+                $portProbes += $probe
+                $probe.Start()
+            }
+            return $candidate
+        } catch [System.Net.Sockets.SocketException] {
+            # An empty listener snapshot does not guarantee bindable ports.
+            continue
+        } finally {
+            foreach ($probe in $portProbes) { $probe.Stop() }
+        }
     }
     throw 'Unable to allocate an unused local E2E port base.'
 }
@@ -254,6 +298,9 @@ $environmentKeys = @(
 )
 
 $overallFailed = $false
+# Matches PROCESS_CLEANUP_FAILURE_EXIT_CODE in playwright-exit-codes.cjs.
+$processCleanupFailureExitCode = 2
+$processCleanupFailed = $false
 foreach ($selectedShard in $selectedShards) {
     $invocationId = [guid]::NewGuid().ToString('N').Substring(0, 12)
     $safeShard = ([string]$selectedShard.name).Replace('-', '_')
@@ -321,12 +368,17 @@ foreach ($selectedShard in $selectedShards) {
         if ($LASTEXITCODE -ne 0) { throw 'Functional fixture loading failed.' }
 
         $validatorArguments = @($validator, "--run-shard=$($selectedShard.name)")
-        if (-not [string]::IsNullOrWhiteSpace($Case)) {
-            $validatorArguments += "--run-case=$Case"
+        foreach ($selectedCase in $selectedCases) {
+            $validatorArguments += "--run-case=$selectedCase"
         }
         Write-Host "Running shard $($selectedShard.name) on ports $portBase/$($portBase + 2)..."
         & $node @validatorArguments
-        if ($LASTEXITCODE -ne 0) { throw "Functional shard failed: $($selectedShard.name)" }
+        $shardExitCode = $LASTEXITCODE
+        if ($shardExitCode -eq $processCleanupFailureExitCode) {
+            $processCleanupFailed = $true
+            throw "Process cleanup is unproven for shard $($selectedShard.name); stopping remaining shards."
+        }
+        if ($shardExitCode -ne 0) { throw "Functional shard failed: $($selectedShard.name)" }
     } catch {
         $runFailed = $true
         $overallFailed = $true
@@ -335,7 +387,7 @@ foreach ($selectedShard in $selectedShards) {
             Write-Host $_.ScriptStackTrace -ForegroundColor DarkGray
         }
     } finally {
-        if ($provisionAttempted -and (Test-Path -LiteralPath $statePath -PathType Leaf)) {
+        if (-not $processCleanupFailed -and $provisionAttempted -and (Test-Path -LiteralPath $statePath -PathType Leaf)) {
             try {
                 $env:POSTGRESQL_ADMIN_PASSWORD = $postgresAdminPassword
                 Invoke-PostgresBootstrap `
@@ -356,7 +408,9 @@ foreach ($selectedShard in $selectedShards) {
         }
 
         $ownedRoot = Assert-OwnedTempRoot $runnerTemp
-        if ($runFailed) {
+        if ($processCleanupFailed) {
+            Write-Host "Database, fixtures, and failure artifacts retained until process shutdown is verified: $ownedRoot"
+        } elseif ($runFailed) {
             $disposablePaths = @($immutableFixtureRoot, $fixtureWorkRoot)
             if (-not $teardownFailed) { $disposablePaths += @($githubEnv, $statePath) }
             foreach ($disposable in $disposablePaths) {
@@ -369,7 +423,9 @@ foreach ($selectedShard in $selectedShards) {
             Remove-Item -LiteralPath $ownedRoot -Recurse -Force
         }
     }
+    if ($processCleanupFailed) { break }
 }
 
+if ($processCleanupFailed) { exit $processCleanupFailureExitCode }
 if ($overallFailed) { exit 1 }
 exit 0

@@ -12,7 +12,7 @@ from typing import Any, Callable, Mapping
 from urllib.parse import quote, urlencode
 
 from aiosmtplib import SMTP
-from aiosmtplib.errors import SMTPRecipientRefused, SMTPRecipientsRefused
+from aiosmtplib.errors import SMTPRecipientRefused, SMTPRecipientsRefused, SMTPServerDisconnected
 
 from music_app.services.auth_config import normalize_email_address
 from music_app.services.auth_invitation_models import (
@@ -178,6 +178,9 @@ def _failure_result(exc: Exception, *, send_started: bool) -> DeliveryResult:
     if isinstance(exc, TimeoutError):
         reason = "unknown" if send_started else "timeout"
         return DeliveryResult(delivered=False, reason=reason)
+    if send_started and isinstance(exc, (SMTPServerDisconnected, ConnectionResetError)):
+        # send_message hides its DATA phase; a lost reply cannot prove rejection.
+        return DeliveryResult(delivered=False, reason="unknown")
     return DeliveryResult(delivered=False, reason="failed")
 
 
@@ -206,7 +209,7 @@ async def send_auth_email(
     }
     if security in {"tls", "starttls"}:
         smtp_kwargs["tls_context"] = ssl.create_default_context()
-    if security == "starttls":
+    if security in {"starttls", "plaintext"}:
         smtp_kwargs["start_tls"] = False
 
     try:

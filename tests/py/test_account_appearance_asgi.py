@@ -22,6 +22,10 @@ EXTENDED_DEFAULTS = {
     "player_override": None,
     "waveform_recent_colors": [],
     "compact_player_style": "docked",
+    "docked_compact_player_behavior": "follow_sidebar",
+    "docked_compact_player_regular_style": False,
+    "compact_player_motion": "normal",
+    "floating_player_edge": {"source": "player", "color": None},
     "album_details_layout": "classic_bar",
     "album_playing_row_animation": "enabled",
     "alert_family": "ember",
@@ -125,7 +129,7 @@ def test_ordinary_active_member_can_read_defaults_without_library_grants(deploym
 
     assert status == 200
     assert decode_json(body) == {
-        **DEFAULTS, **EXTENDED_DEFAULTS, "csrf_token": issue_session_csrf(SESSION, app.state.auth_policy_config),
+        **DEFAULTS, **EXTENDED_DEFAULTS, "loop_control_style": "capsule", "csrf_token": issue_session_csrf(SESSION, app.state.auth_policy_config),
     }
     assert "no-store" in headers["cache-control"]
     assert repository.reads == [41]
@@ -139,12 +143,12 @@ def test_save_normalizes_any_rgb_and_reset_is_scoped_to_the_authenticated_accoun
     status, headers, body = _request(app, "PUT", lower)
 
     assert status == 200
-    assert decode_json(body) == {**CUSTOM, **EXTENDED_DEFAULTS}
+    assert decode_json(body) == {**CUSTOM, **EXTENDED_DEFAULTS, "loop_control_style": "capsule"}
     assert "no-store" in headers["cache-control"]
     assert repository.rows == {41: CUSTOM}
     resolver.actor = _actor(52)
     assert decode_json(_request(app)[2]) == {
-        **DEFAULTS, **EXTENDED_DEFAULTS, "csrf_token": issue_session_csrf(SESSION, app.state.auth_policy_config),
+        **DEFAULTS, **EXTENDED_DEFAULTS, "loop_control_style": "capsule", "csrf_token": issue_session_csrf(SESSION, app.state.auth_policy_config),
     }
     black_white = {"main_surface_color": "#000000", "panel_background_color": "#FFFFFF"}
     assert _request(app, "PUT", black_white)[0] == 200
@@ -185,6 +189,28 @@ def test_invalid_or_overposting_save_is_rejected_before_either_color_changes(pay
 
     assert status == 400
     assert decode_json(body) == {"error": "invalid_appearance"}
+    assert repository.writes == []
+    assert repository.rows == {41: CUSTOM}
+
+
+@pytest.mark.parametrize("shape", ["nesting", "integer"])
+def test_deeply_nested_bounded_json_is_rejected_without_mutation(shape):
+    app, repository, _resolver = _app()
+    repository.rows[41] = CUSTOM
+    token = issue_session_csrf(SESSION, app.state.auth_policy_config)
+    body = (b'{"nested":' + b'[' * 2000 + b'0' + b']' * 2000 + b'}'
+            if shape == "nesting" else b'{"integer":' + b'9' * 5000 + b'}')
+    assert len(body) < 16_384
+    status, _headers, response = run_asgi_request(
+        app, "PUT", "/account/appearance", body=body,
+        headers={
+            "cookie": f"__Host-album_haven_session={SESSION}; __Host-album_haven_csrf={token}",
+            "origin": "http://testserver", "x-album-haven-csrf": token,
+            "content-type": "application/json",
+        },
+    )
+    assert status == 400
+    assert decode_json(response) == {"error": "invalid_appearance"}
     assert repository.writes == []
     assert repository.rows == {41: CUSTOM}
 
@@ -265,8 +291,8 @@ def test_shell_hydration_uses_each_requests_actor_and_does_not_reuse_another_the
     first = asyncio.run(load_appearance_context(_shell_request(app, _actor(41))))
     second = asyncio.run(load_appearance_context(_shell_request(app, _actor(52))))
 
-    assert first == {"appearance_preferences": {**CUSTOM, **EXTENDED_DEFAULTS}, "appearance_load_error": False}
-    assert second == {"appearance_preferences": {**DEFAULTS, **EXTENDED_DEFAULTS}, "appearance_load_error": False}
+    assert first == {"appearance_preferences": {**CUSTOM, **EXTENDED_DEFAULTS, "loop_control_style": "capsule"}, "appearance_load_error": False}
+    assert second == {"appearance_preferences": {**DEFAULTS, **EXTENDED_DEFAULTS, "loop_control_style": "capsule"}, "appearance_load_error": False}
     assert repository.reads == [41, 52]
 
 
@@ -279,7 +305,7 @@ def test_public_or_expired_session_hydration_returns_defaults_without_loading_ac
 
     context = asyncio.run(load_appearance_context(_shell_request(app, actor)))
 
-    assert context == {"appearance_preferences": {**DEFAULTS, **EXTENDED_DEFAULTS}, "appearance_load_error": False}
+    assert context == {"appearance_preferences": {**DEFAULTS, **EXTENDED_DEFAULTS, "loop_control_style": "capsule"}, "appearance_load_error": False}
     assert repository.reads == []
 
 
@@ -291,7 +317,7 @@ def test_shell_storage_failure_returns_explicit_retry_state_and_defaults():
 
     context = asyncio.run(load_appearance_context(_shell_request(app, _actor())))
 
-    assert context == {"appearance_preferences": {**DEFAULTS, **EXTENDED_DEFAULTS}, "appearance_load_error": True}
+    assert context == {"appearance_preferences": {**DEFAULTS, **EXTENDED_DEFAULTS, "loop_control_style": "capsule"}, "appearance_load_error": True}
 
 
 def test_direct_account_settings_embeds_its_authenticated_theme_before_body_rendering():
@@ -317,6 +343,7 @@ def test_direct_account_settings_embeds_its_authenticated_theme_before_body_rend
         **CUSTOM,
         **EXTENDED_DEFAULTS,
         "revision": 0,
+        "loop_control_style": "capsule",
         "interaction_overrides": {
             "item_hover": None,
             "item_selected": None,
@@ -327,6 +354,8 @@ def test_direct_account_settings_embeds_its_authenticated_theme_before_body_rend
         "selection_accent": {"enabled": True, "color": "#34CA78"},
         "player_style_override": None,
         "player_recent_sets": [],
+        "action_button_outlines": True,
+        "device_profiles": {},
         "load_error": False,
     }
     assert bootstrap.end() < html.index("<body")
@@ -334,13 +363,14 @@ def test_direct_account_settings_embeds_its_authenticated_theme_before_body_rend
     assert repository.reads == [41]
 
 
-def test_shell_bootstrap_embeds_the_current_aggregate_revision_before_the_editor_can_save():
+@pytest.mark.parametrize("style", ["capsule", "companion"])
+def test_shell_bootstrap_embeds_the_current_aggregate_revision_before_the_editor_can_save(style):
     from music_app.routes.account_asgi import router as account_router
     from music_app.services.auth_profile_password_postgres import ProfileAccountView
 
     app, repository, _resolver = _app()
     app.include_router(account_router)
-    repository.rows[41] = AGGREGATE_APPEARANCE
+    repository.rows[41] = {**AGGREGATE_APPEARANCE, "loop_control_style": style}
     app.state.profile_password_service = SimpleNamespace(load_profile=lambda **_kwargs: ProfileAccountView(
         username="appearance.member", administrator_set_suggestion=False, sessions=(),
     ))
@@ -353,7 +383,7 @@ def test_shell_bootstrap_embeds_the_current_aggregate_revision_before_the_editor
     html = body.decode("utf-8")
     bootstrap = re.search(r'<script\b[^>]*\bid="appearance-bootstrap"[^>]*>(.*?)</script>', html, re.S)
     assert bootstrap is not None
-    assert json.loads(bootstrap.group(1)) == {**AGGREGATE_APPEARANCE, "load_error": False}
+    assert json.loads(bootstrap.group(1)) == {**AGGREGATE_APPEARANCE, "loop_control_style": style, "action_button_outlines": True, "device_profiles": {}, "load_error": False}
 
 
 def test_get_returns_one_complete_revisioned_appearance_snapshot_and_csrf():
@@ -365,6 +395,7 @@ def test_get_returns_one_complete_revisioned_appearance_snapshot_and_csrf():
     assert status == 200
     assert decode_json(body) == {
         **AGGREGATE_APPEARANCE,
+        "loop_control_style": "capsule",
         "csrf_token": issue_session_csrf(SESSION, app.state.auth_policy_config),
     }
     assert "no-store" in headers["cache-control"]
@@ -391,7 +422,7 @@ def test_put_accepts_one_complete_snapshot_and_forwards_expected_revision_atomic
     status, headers, body = _request(app, "PUT", submitted)
 
     assert status == 200
-    assert decode_json(body) == saved
+    assert decode_json(body) == {**saved, "loop_control_style": "capsule"}
     assert "no-store" in headers["cache-control"]
     assert captured == [(41, "desktop", 7, {
         key: value for key, value in submitted.items() if key != "expected_revision"
@@ -418,7 +449,7 @@ def test_stale_put_returns_authoritative_snapshot_without_mutating_any_section()
     status, headers, body = _request(app, "PUT", submitted)
 
     assert status == 409
-    assert decode_json(body) == {"error": "appearance_conflict", "appearance": current}
+    assert decode_json(body) == {"error": "appearance_conflict", "appearance": {**current, "loop_control_style": "capsule"}}
     assert "no-store" in headers["cache-control"]
     assert repository.rows == {}
 
@@ -478,3 +509,142 @@ def test_production_app_registers_each_appearance_method_once():
         ("GET", "/account/appearance"),
         ("PUT", "/account/appearance"),
     ]
+
+
+def test_get_uses_atomic_device_profile_snapshot_when_repository_supports_it():
+    app, repository, _resolver = _app()
+    snapshot = {
+        **AGGREGATE_APPEARANCE,
+        "loop_control_style": "capsule",
+        "action_button_outlines": False,
+        "device_profiles": {"mobile": {"sections": {}}, "tv": {"sections": {}}},
+    }
+    reads = []
+    repository.load_device_profiles = lambda *, account_id: reads.append(account_id) or snapshot
+
+    status, _headers, body = _request(app)
+
+    assert status == 200
+    assert decode_json(body) == {
+        **snapshot,
+        "csrf_token": issue_session_csrf(SESSION, app.state.auth_policy_config),
+    }
+    assert reads == [41]
+    assert repository.reads == []
+
+
+def test_mobile_shell_hydration_resolves_the_saved_mobile_profile():
+    from music_app.routes.appearance_asgi import load_appearance_context
+
+    app, repository, _resolver = _app()
+    snapshot = {
+        **AGGREGATE_APPEARANCE,
+        "loop_control_style": "capsule",
+        "action_button_outlines": True,
+        "device_profiles": {
+            "mobile": {
+                "sections": {
+                    "main": {
+                        "mode": "custom",
+                        "values": {
+                            "main_surface_color": "#112233",
+                            "panel_background_color": "#445566",
+                        },
+                    },
+                    "interaction": {
+                        "mode": "custom",
+                        "values": {"action_button_outlines": False},
+                    },
+                },
+            },
+            "tv": {"sections": {}},
+        },
+    }
+    reads = []
+    repository.load_device_profiles = lambda *, account_id: reads.append(account_id) or snapshot
+    request = _shell_request(app, _actor())
+    request.state.policy_evaluation = SimpleNamespace(
+        audit=SimpleNamespace(client_surface_class="mobile"),
+    )
+
+    context = asyncio.run(load_appearance_context(request))
+
+    assert context["appearance_preferences"]["main_surface_color"] == "#112233"
+    assert context["appearance_preferences"]["panel_background_color"] == "#445566"
+    assert context["appearance_preferences"]["action_button_outlines"] is False
+    assert reads == [41]
+    assert repository.reads == []
+
+
+def test_put_forwards_device_profiles_and_outline_with_the_aggregate_atomically():
+    app, repository, _resolver = _app()
+    submitted = {
+        **{
+            key: value
+            for key, value in AGGREGATE_APPEARANCE.items()
+            if key not in {"revision", "player_recent_sets"}
+        },
+        "loop_control_style": "capsule",
+        "expected_revision": 7,
+        "applied_player_set": None,
+        "action_button_outlines": False,
+        "device_profiles": {},
+    }
+    saved = {
+        **AGGREGATE_APPEARANCE,
+        "loop_control_style": "capsule",
+        "revision": 8,
+        "action_button_outlines": False,
+        "device_profiles": {"mobile": {"sections": {}}, "tv": {"sections": {}}},
+    }
+    captured = []
+
+    def save_device_profiles(**kwargs):
+        captured.append(kwargs)
+        return saved
+
+    repository.save_device_profiles = save_device_profiles
+    status, _headers, body = _request(app, "PUT", submitted)
+
+    assert status == 200
+    assert decode_json(body) == saved
+    assert len(captured) == 1
+    assert captured[0]["account_id"] == 41
+    assert captured[0]["expected_revision"] == 7
+    assert captured[0]["device_profiles"] == {}
+    assert captured[0]["action_button_outlines"] is False
+    assert "device_profiles" not in captured[0]["preferences"]
+    assert "action_button_outlines" not in captured[0]["preferences"]
+    assert repository.writes == []
+
+def test_device_profile_conflict_returns_current_profiles_and_outline():
+    from music_app.services.appearance_preferences_postgres import AppearanceRevisionConflict
+
+    app, repository, _resolver = _app()
+    submitted = {
+        **{
+            key: value
+            for key, value in AGGREGATE_APPEARANCE.items()
+            if key not in {"revision", "player_recent_sets"}
+        },
+        "expected_revision": 7,
+        "applied_player_set": None,
+        "action_button_outlines": False,
+        "device_profiles": {},
+    }
+    current = {
+        **AGGREGATE_APPEARANCE,
+        "loop_control_style": "capsule",
+        "revision": 9,
+        "action_button_outlines": True,
+        "device_profiles": {"mobile": {"sections": {}}, "tv": {"sections": {}}},
+    }
+
+    def save_device_profiles(**_kwargs):
+        raise AppearanceRevisionConflict(current=current)
+
+    repository.save_device_profiles = save_device_profiles
+    status, _headers, body = _request(app, "PUT", submitted)
+
+    assert status == 409
+    assert decode_json(body) == {"error": "appearance_conflict", "appearance": current}

@@ -22,9 +22,17 @@ as $$
   ) bounded;
 $$;
 
+-- The legacy accent writer stored only account metadata, so an account may
+-- have a saved accent without any profile preference row.
+insert into app.user_appearance_preferences (account_id, client_profile)
+select id, 'desktop' from app.accounts
+where metadata ? 'appearance_selection_accent_v1'
+on conflict (account_id, client_profile) do nothing;
+
 update app.user_appearance_preferences as preference
 set selection_accent = coalesce(
-      account.metadata -> 'appearance_selection_accent_v1',
+      jsonb_set(account.metadata -> 'appearance_selection_accent_v1', '{color}',
+        to_jsonb(upper(account.metadata -> 'appearance_selection_accent_v1' ->> 'color'))),
       preference.selection_accent
     ),
     player_style_override = case

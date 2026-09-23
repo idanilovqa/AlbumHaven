@@ -19,7 +19,7 @@ const FORBIDDEN_HISTORY_VALUES = [
   '<lfm',
 ];
 
-test(`${CASE_ID} production UI connects and scrobbles through the signed Last.fm provider path`, async ({
+test(`${CASE_ID} production UI connects and scrobbles through the signed Last.fm provider path`, { tag: '@area:playback' }, async ({
   galleryActions,
   navigationPanelActions,
   playbackEvidence,
@@ -51,7 +51,7 @@ test(`${CASE_ID} production UI connects and scrobbles through the signed Last.fm
     expect(rejected.error).toContain('Invalid username or password');
   });
 
-  await stepLogger.step('Persist the credential-safe connection failure in this browser', async () => {
+  await stepLogger.step('Persist the credential-safe connection failure in authorized Log History', async () => {
     await utilityTabBarActions.openTab('log-history');
     await utilityLogHistoryActions.waitForReady();
     await utilityLogHistoryActions.waitForItemCount(initialHistoryCount + 1);
@@ -63,32 +63,30 @@ test(`${CASE_ID} production UI connects and scrobbles through the signed Last.fm
     expect(historyText).toContain('Last.fm connection failed');
     expect(historyText).toContain('Last.fm');
     expect(historyText).toContain('Invalid username or password.');
-    expect(historyText).toContain('This browser');
+    expect(historyText).not.toContain('This browser');
     for (const forbiddenValue of FORBIDDEN_HISTORY_VALUES) {
       expect(historyText).not.toContain(forbiddenValue);
     }
-    const stored = await utilityLogHistoryActions.readBrowserStoredEntry(failedConnectionHistoryId);
-    expect(stored.databaseVersion).toBe(1);
+    const stored = await utilityLogHistoryActions.readPersistedEntry(failedConnectionHistoryId);
+    expect(stored.snapshot).toBeTruthy();
     expect(stored.entry).toMatchObject({
       id: failedConnectionHistoryId,
       action: 'Last.fm connection failed',
-      source: 'this_browser',
-      source_label: 'This browser',
+      level: 'warning',
     });
   });
 
-  await stepLogger.step('Reload, reopen browser history, and export the retained entry', async () => {
+  await stepLogger.step('Reload, reopen authorized history, and export the retained entry', async () => {
     await utilityLogHistoryActions.reloadBrowserPage();
     await galleryActions.waitForGalleryReady();
-    const retainedBeforeReopen = await utilityLogHistoryActions.readBrowserStoredEntry(
+    const retainedBeforeReopen = await utilityLogHistoryActions.readPersistedEntry(
       failedConnectionHistoryId,
     );
-    expect(retainedBeforeReopen.databaseVersion).toBe(1);
+    expect(retainedBeforeReopen.snapshot).toBeTruthy();
     expect(retainedBeforeReopen.entry).toMatchObject({
       id: failedConnectionHistoryId,
       action: 'Last.fm connection failed',
-      source: 'this_browser',
-      source_label: 'This browser',
+      level: 'warning',
     });
 
     await settingsModalAppBarActions.openSettings();
@@ -96,21 +94,18 @@ test(`${CASE_ID} production UI connects and scrobbles through the signed Last.fm
     await utilityLogHistoryActions.waitForReady();
     await utilityLogHistoryActions.waitForItemCount(initialHistoryCount + 1);
     await utilityLogHistoryActions.selectEntryByAction('Last.fm connection failed');
-    expect(await utilityLogHistoryActions.readVisibleHistoryText()).toContain('This browser');
+    expect(await utilityLogHistoryActions.readVisibleHistoryText()).toContain('Last.fm connection failed');
 
     const exported = await utilityLogHistoryActions.exportLogs();
-    expect(exported.suggestedFilename).toMatch(/^album-haven-log-history-.+\.json$/);
-    expect(exported.document).toMatchObject({
-      schema: 'album-haven-log-history',
-      version: 1,
-      sources: [{ id: 'this_browser', label: 'This browser' }],
-    });
+    expect(exported.suggestedFilename).toMatch(/^album-haven-logs-.+\.json$/);
+    expect(exported.document.snapshot).toBeTruthy();
+    expect(exported.document.count).toBe(1);
+    expect(exported.document.items).toEqual([retainedBeforeReopen.entry]);
     expect(exported.document.items).toEqual(expect.arrayContaining([
       expect.objectContaining({
         id: failedConnectionHistoryId,
         action: 'Last.fm connection failed',
-        source: 'this_browser',
-        source_label: 'This browser',
+        level: 'warning',
       }),
     ]));
     for (const forbiddenValue of FORBIDDEN_HISTORY_VALUES) {
@@ -126,7 +121,11 @@ test(`${CASE_ID} production UI connects and scrobbles through the signed Last.fm
       username: LASTFM_USER,
       password: LASTFM_PASSWORD,
     });
-    await utilityIntegrationsActions.waitForScrobbledCount(0);
+    await utilityIntegrationsActions.waitForLastfmSummary({
+      scrobbled: 0,
+      pending: 0,
+      lastfmTotal: 12000,
+    });
     await settingsModalAppBarActions.closeSettings();
   });
 
@@ -137,7 +136,11 @@ test(`${CASE_ID} production UI connects and scrobbles through the signed Last.fm
     await utilityTabBarActions.openTab('integrations');
     await utilityIntegrationsActions.waitForReady();
     await utilityIntegrationsActions.waitForConnectedAs(LASTFM_USER);
-    await utilityIntegrationsActions.waitForScrobbledCount(0);
+    await utilityIntegrationsActions.waitForLastfmSummary({
+      scrobbled: 0,
+      pending: 0,
+      lastfmTotal: 12000,
+    });
     await settingsModalAppBarActions.closeSettings();
   });
 
@@ -171,7 +174,15 @@ test(`${CASE_ID} production UI connects and scrobbles through the signed Last.fm
     const evidence = await playbackEvidencePromise;
     expect(evidence.nonZeroSamples).toBeGreaterThan(0);
     expect(evidence.renderedFrameDelta).toBeGreaterThan(0);
-    expect(playbackJourney.scrobble.accepted).toBe(1);
+    // Measured scrobbles return the scoped ledger row, not the legacy provider envelope.
+    expect(playbackJourney.scrobble.entry).toMatchObject({
+      measurement_version: 'rendered-pcm-v1',
+      scrobble_submission_state: 'accepted',
+      scrobbled: true,
+      finalized: false,
+    });
+    expect(playbackJourney.completion.entry.id).toBe(playbackJourney.scrobble.entry.id);
+    expect(playbackJourney.completion.entry.finalized).toBe(true);
     expect(playbackJourney.completion.entry.scrobbled).toBe(true);
   });
 
@@ -180,7 +191,11 @@ test(`${CASE_ID} production UI connects and scrobbles through the signed Last.fm
     await settingsModalAppBarActions.openSettings();
     await utilityTabBarActions.openTab('integrations');
     await utilityIntegrationsActions.waitForReady();
-    await utilityIntegrationsActions.waitForScrobbledCount(1);
+    await utilityIntegrationsActions.waitForLastfmSummary({
+      scrobbled: 1,
+      pending: 0,
+      lastfmTotal: 12001,
+    });
   });
 
   await stepLogger.step('Verify the loopback provider received valid signed production requests', async () => {
@@ -215,7 +230,7 @@ test(`${CASE_ID} production UI connects and scrobbles through the signed Last.fm
   });
 });
 
-test('FTC-PLAYBACK-LASTFM-016 consecutive tracks each scrobble exactly once in order', async ({
+test('FTC-PLAYBACK-LASTFM-016 consecutive tracks each scrobble exactly once in order', { tag: '@area:playback' }, async ({
   galleryActions,
   navigationPanelActions,
   playbackEvidence,
@@ -305,5 +320,184 @@ test('FTC-PLAYBACK-LASTFM-016 consecutive tracks each scrobble exactly once in o
     expect(new Set(scrobbles.map((request) => request.timestamp)).size).toBe(
       LASTFM_CONSECUTIVE_PLAYBACK_TRACKS.length,
     );
+  });
+});
+
+test('FTC-PLAYBACK-LASTFM-017 pending scrobbles report failure in Logs and submit after recovery', { tag: '@area:playback' }, async ({
+  galleryActions,
+  lastfmProviderFixture,
+  navigationPanelActions,
+  settingsModalAppBarActions,
+  stepLogger,
+  trackModalActions,
+  utilityIntegrationsActions,
+  utilityLogHistoryActions,
+  utilityTabBarActions,
+}, testInfo) => {
+  let baseline;
+  let failureHistoryId = '';
+
+  await stepLogger.step('Connect the fixture account and read the scoped Last.fm summary', async () => {
+    await galleryActions.goto();
+    await galleryActions.waitForGalleryReady();
+    await settingsModalAppBarActions.openSettings();
+    await utilityTabBarActions.openTab('integrations');
+    await utilityIntegrationsActions.waitForReady();
+    await utilityIntegrationsActions.ensureLastfmConnected({
+      username: LASTFM_USER,
+      password: LASTFM_PASSWORD,
+    });
+    baseline = await utilityIntegrationsActions.readLastfmSummary();
+    expect(baseline.pending).toBe(0);
+    expect(baseline.lastfmTotal).toBe(12000);
+    expect(baseline.submitEnabled).toBe(false);
+    await settingsModalAppBarActions.closeSettings();
+  });
+
+  await stepLogger.step('Create one pending scrobble through real playback while the provider is retryable', async () => {
+    await lastfmProviderFixture.setScrobbleMode('retryable-error');
+    await navigationPanelActions.selectSidebarArtistByName(LASTFM_PLAYBACK_TARGET.artist);
+    await navigationPanelActions.waitForSidebarSelection(LASTFM_PLAYBACK_TARGET.artist);
+    await galleryActions.waitForAlbumVisibleUnderHeading(
+      LASTFM_PLAYBACK_TARGET.artist,
+      LASTFM_PLAYBACK_TARGET.album,
+    );
+    await galleryActions.clickAlbumDetailsByArtistAndAlbum(
+      LASTFM_PLAYBACK_TARGET.artist,
+      LASTFM_PLAYBACK_TARGET.album,
+    );
+    await trackModalActions.waitForInteractiveSummary();
+    const pendingJourney = await trackModalActions.playTrackAtAndWaitForPendingLastfmJourney(0, {
+      title: SCROBBLE_TRACK,
+    });
+    expect(pendingJourney.scrobble.scrobbled).toBe(false);
+    expect(pendingJourney.scrobble.entry.scrobble_retryable).toBe(true);
+    await trackModalActions.close();
+
+    await settingsModalAppBarActions.openSettings();
+    await utilityTabBarActions.openTab('integrations');
+    await utilityIntegrationsActions.waitForReady();
+    await utilityIntegrationsActions.waitForLastfmSummary({
+      scrobbled: baseline.scrobbled,
+      pending: 1,
+      lastfmTotal: 12000,
+    });
+    expect((await utilityIntegrationsActions.readLastfmSummary()).submitEnabled).toBe(true);
+  });
+
+  await stepLogger.step('Fail manual submission with a bottom-right error and persist the safe failure in Logs', async () => {
+    const failed = await utilityIntegrationsActions.submitPendingScrobbles();
+    expect(failed.response.status()).toBe(502);
+    expect(failed.payload).toMatchObject({
+      ok: false,
+      pending_before: 1,
+      attempted: 1,
+      succeeded: 0,
+      failed: 1,
+      pending_after: 1,
+      pending: 1,
+      scrobbled: baseline.scrobbled,
+      lastfm_total: 12000,
+      error: 'Some pending scrobbles could not be submitted to Last.fm.',
+    });
+    await utilityIntegrationsActions.waitForSubmitError(
+      'Some pending scrobbles could not be submitted to Last.fm.',
+    );
+    expect(await utilityIntegrationsActions.readSubmitAlertPlacement()).toEqual({
+      rightHalf: true,
+      bottomHalf: true,
+    });
+
+    await utilityTabBarActions.openTab('log-history');
+    await utilityLogHistoryActions.waitForReady();
+    failureHistoryId = await utilityLogHistoryActions.selectEntryByAction(
+      'Last.fm pending scrobble submission failed',
+    );
+    const historyText = await utilityLogHistoryActions.readVisibleHistoryText();
+    expect(historyText).toContain('Some pending scrobbles could not be submitted to Last.fm.');
+    for (const forbiddenValue of FORBIDDEN_HISTORY_VALUES) {
+      expect(historyText).not.toContain(forbiddenValue);
+    }
+    const persisted = await utilityLogHistoryActions.readPersistedEntry(failureHistoryId);
+    expect(persisted.snapshot).toBeTruthy();
+    expect(persisted.entry).toMatchObject({
+      id: failureHistoryId,
+      action: 'Last.fm pending scrobble submission failed',
+      level: 'error',
+      attempted: 1,
+      succeeded: 0,
+      failed: 1,
+      pending_before: 1,
+      pending_after: 1,
+    });
+    const persistedText = JSON.stringify(persisted.entry);
+    const persistedTextLower = persistedText.toLowerCase();
+    for (const forbiddenValue of [
+      ...FORBIDDEN_HISTORY_VALUES,
+      'session_key',
+      'api_signature',
+      'provider_body',
+      'response_body',
+      'canonical_match',
+      'source_payload',
+      'private_path',
+      SCROBBLE_TRACK,
+      LASTFM_PLAYBACK_TARGET.artist,
+      LASTFM_PLAYBACK_TARGET.album,
+    ]) {
+      expect(persistedText).not.toContain(forbiddenValue);
+    }
+    for (const forbiddenField of [
+      'username', 'password', 'credential', 'api_sig', 'signature', 'session_key',
+      'xml', 'provider_body', 'response_body', 'path', 'track_ref', 'artist',
+      'album', 'title', 'canonical_match', 'source_payload',
+    ]) {
+      expect(persistedTextLower).not.toContain(`"${forbiddenField}"`);
+    }
+  });
+
+  await stepLogger.step('Submit immediately after provider recovery and refresh every summary count', async () => {
+    await lastfmProviderFixture.setScrobbleMode('accept');
+    await utilityTabBarActions.openTab('integrations');
+    await utilityIntegrationsActions.waitForReady();
+    const submitted = await utilityIntegrationsActions.submitPendingScrobbles();
+    expect(submitted.response.ok()).toBe(true);
+    expect(submitted.payload).toMatchObject({
+      ok: true,
+      pending_before: 1,
+      attempted: 1,
+      succeeded: 1,
+      failed: 0,
+      pending_after: 0,
+      pending: 0,
+      scrobbled: baseline.scrobbled + 1,
+      lastfm_total: 12001,
+    });
+    await utilityIntegrationsActions.waitForLastfmSummary({
+      scrobbled: baseline.scrobbled + 1,
+      pending: 0,
+      lastfmTotal: 12001,
+    });
+    expect((await utilityIntegrationsActions.readLastfmSummary()).submitEnabled).toBe(false);
+  });
+
+  await stepLogger.step('Verify every manual attempt stayed on the signed loopback provider path', async () => {
+    const scrobbles = (await readLastfmProviderRequests(testInfo)).filter(
+      (request) => request.method === 'track.scrobble' && request.track === SCROBBLE_TRACK,
+    );
+    const modes = scrobbles.map((request) => request.fixture_scrobble_mode);
+    expect(modes.length).toBeGreaterThanOrEqual(3);
+    expect(modes.length).toBeLessThanOrEqual(4);
+    expect(modes.at(-1)).toBe('accept');
+    const retryableAttempts = modes.slice(0, -1);
+    expect(retryableAttempts.length).toBeGreaterThanOrEqual(2);
+    expect(retryableAttempts.length).toBeLessThanOrEqual(3);
+    expect(retryableAttempts.every((mode) => mode === 'retryable-error')).toBe(true);
+    expect(modes.filter((mode) => mode === 'accept')).toHaveLength(1);
+    expect(scrobbles.every((request) => (
+      request.signature_valid
+      && request.api_key_valid
+      && request.session_key_valid
+    ))).toBe(true);
   });
 });

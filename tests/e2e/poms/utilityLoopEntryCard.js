@@ -5,6 +5,10 @@ function escapeRegExp(value) {
 }
 
 export class UtilityLoopEntryCard extends BasePage {
+  controlStyleForEntry(entry) {
+    return entry.locator('[data-loop-control-style]');
+  }
+
   constructor(page, testInfo = null) {
     super(page, testInfo);
     this.entries = page.locator('[data-utility-loop-entry]');
@@ -15,12 +19,12 @@ export class UtilityLoopEntryCard extends BasePage {
     this.playButtons = page.locator('[data-loop-play]');
     this.repeatButtons = page.locator('[data-toggle-loop-repeat]');
     this.timelines = page.locator('[data-loop-timeline]');
-    this.deleteConfirmOverlay = page.locator('#loop-delete-confirm-modal');
+    this.deleteConfirmOverlay = page.locator('#repair-confirm-modal');
     this.deleteConfirmDialog = this.deleteConfirmOverlay.getByRole('dialog', {
-      name: 'Delete saved loop',
+      name: 'Delete saved loop?',
       exact: true,
     });
-    this.deleteConfirmText = this.deleteConfirmDialog.locator('#loop-delete-confirm-text');
+    this.deleteConfirmText = this.deleteConfirmDialog.locator('#repair-confirm-text');
     this.deleteConfirmNo = this.deleteConfirmDialog.getByRole('button', { name: 'No', exact: true });
     this.deleteConfirmYes = this.deleteConfirmDialog.getByRole('button', { name: 'Yes', exact: true });
   }
@@ -32,12 +36,77 @@ export class UtilityLoopEntryCard extends BasePage {
     });
   }
 
+  ordinaryWaveformForEntry(entry) {
+    return entry.locator('canvas[data-loop-stereo-waveform]');
+  }
+
+  async readOrdinaryWaveformMiddlePaint(entry) {
+    // parity-check: allow-read-only-measurement-evaluate -- count real waveform paint in the middle 80%, away from the paused left-edge playhead
+    return this.ordinaryWaveformForEntry(entry).evaluate(element => {
+      const pixels = element.getContext('2d').getImageData(0, 0, element.width, element.height).data;
+      let painted = 0;
+      for (let y = 0; y < element.height; y += 1) {
+        for (let x = Math.ceil(element.width * 0.1); x < element.width * 0.9; x += 1) {
+          if (pixels[(y * element.width + x) * 4 + 3] > 0) painted += 1;
+        }
+      }
+      return painted;
+    });
+  }
+
   playButtonForEntry(entry) {
     return entry.locator('[data-loop-play]');
   }
 
   audioForEntry(entry) {
     return entry.locator('[data-loop-audio]');
+  }
+
+  dragHandleForEntry(entry) {
+    return entry.locator('.utility-loop-drag-handle');
+  }
+
+  async readPanelOrder() {
+    // parity-check: allow-read-only-measurement-evaluate -- read rendered saved-loop membership and order
+    return this.detailEntries.evaluateAll(nodes => nodes.map(node => node.getAttribute('data-utility-loop-entry')));
+  }
+
+  async readInsertionCue(entry, position) {
+    // parity-check: allow-read-only-measurement-evaluate -- inspect the real insertion marker paint and clipping bounds during native drag
+    return entry.evaluate((node, side) => {
+      const marker = getComputedStyle(node, side === 'before' ? '::before' : '::after');
+      const bounds = node.getBoundingClientRect();
+      const height = parseFloat(marker.height);
+      const top = side === 'before' ? bounds.top + parseFloat(marker.top) : bounds.bottom - parseFloat(marker.bottom) - height;
+      let visibleTop = 0;
+      let visibleBottom = innerHeight;
+      for (let parent = node.parentElement; parent; parent = parent.parentElement) {
+        if (/(auto|scroll|hidden|clip)/.test(getComputedStyle(parent).overflowY)) {
+          const rect = parent.getBoundingClientRect();
+          visibleTop = Math.max(visibleTop, rect.top);
+          visibleBottom = Math.min(visibleBottom, rect.bottom);
+        }
+      }
+      return { painted: marker.content !== 'none' && height > 0 && marker.backgroundColor !== 'rgba(0, 0, 0, 0)', unclipped: top >= visibleTop && top + height <= visibleBottom };
+    }, position);
+  }
+
+  async readInsertionTarget(entry, position, offset) {
+    // parity-check: allow-read-only-measurement-evaluate -- locate the native drag point and its scroll viewport without changing the page
+    return entry.evaluate((node, { position, offset }) => {
+      const bounds = node.getBoundingClientRect();
+      let top = 0;
+      let bottom = innerHeight;
+      for (let parent = node.parentElement; parent; parent = parent.parentElement) {
+        if (/(auto|scroll|hidden|clip)/.test(getComputedStyle(parent).overflowY)) {
+          const rect = parent.getBoundingClientRect();
+          top = Math.max(top, rect.top);
+          bottom = Math.min(bottom, rect.bottom);
+        }
+      }
+      const y = (position === 'before' ? bounds.top : bounds.bottom) + offset;
+      return { x: bounds.left + Math.min(30, bounds.width / 2), y, visible: y > top + 3 && y < bottom - 3, scrollBy: y - (top + bottom) / 2, rowY: Math.max(top + 4, Math.min(bottom - 4, bounds.top + bounds.height / 2)) };
+    }, { position, offset });
   }
 
   repeatButtonForEntry(entry) {
@@ -59,7 +128,7 @@ export class UtilityLoopEntryCard extends BasePage {
   async readDeleteConfirmationStack() {
     // parity-check: allow-read-only-measurement-evaluate -- measure modal stacking and hit-testing only
     return this.deleteConfirmDialog.evaluate((dialog) => {
-      const overlay = document.getElementById('loop-delete-confirm-modal');
+      const overlay = document.getElementById('repair-confirm-modal');
       const utility = document.getElementById('utility-modal');
       const bounds = dialog.getBoundingClientRect();
       const centerX = bounds.left + (bounds.width / 2);
@@ -68,7 +137,7 @@ export class UtilityLoopEntryCard extends BasePage {
       return {
         deleteZIndex: Number(getComputedStyle(overlay).zIndex) || 0,
         utilityZIndex: Number(getComputedStyle(utility).zIndex) || 0,
-        deleteOwnsTopElement: Boolean(topElement?.closest?.('#loop-delete-confirm-modal')),
+        deleteOwnsTopElement: Boolean(topElement?.closest?.('#repair-confirm-modal')),
       };
     });
   }
@@ -328,7 +397,7 @@ export class UtilityLoopEntryCard extends BasePage {
   }
 
   async readCompactLayoutSnapshot(entry) {
-    const [entryBounds, playBounds, actionBounds, mainBounds, topRowBounds, pitchBounds, timelineBounds, timeBounds, repeatBounds, speedBounds, headerBounds] = await Promise.all([
+    const [entryBounds, playBounds, actionBounds, mainBounds, topRowBounds, pitchBounds, timelineBounds, timeBounds, repeatBounds, speedBounds, headerBounds, headingBounds, shellBounds] = await Promise.all([
       entry.boundingBox(),
       this.playButtonForEntry(entry).boundingBox(),
       this.loopActionForEntry(entry).boundingBox(),
@@ -340,12 +409,26 @@ export class UtilityLoopEntryCard extends BasePage {
       this.repeatButtonForEntry(entry).boundingBox(),
       this.speedControlForEntry(entry).boundingBox(),
       this.detailHeader.boundingBox(),
+      entry.locator('.utility-loop-heading').boundingBox(),
+      entry.locator('.utility-loop-shell').boundingBox(),
     ]);
-    if (!entryBounds || !playBounds || !actionBounds || !mainBounds || !topRowBounds || !timelineBounds || !timeBounds || !repeatBounds || !speedBounds || !headerBounds) {
+    if (!entryBounds || !playBounds || !actionBounds || !mainBounds || !topRowBounds || !timelineBounds || !timeBounds || !repeatBounds || !speedBounds || !headerBounds || !headingBounds || !shellBounds) {
       throw new Error('Expected rendered compact saved-loop controls and top row.');
     }
+    // parity-check: allow-read-only-measurement-evaluate -- read approved L03/L04 card insets independently of painted control bounds
+    const cardInsets = await entry.evaluate(element => {
+      const style = getComputedStyle(element);
+      return {
+        top: Number.parseFloat(style.paddingTop), right: Number.parseFloat(style.paddingRight),
+        bottom: Number.parseFloat(style.paddingBottom), left: Number.parseFloat(style.paddingLeft),
+        rowGap: Number.parseFloat(style.rowGap), border: Number.parseFloat(style.borderTopWidth),
+      };
+    });
     return {
       entryBounds,
+      headingBounds,
+      shellBounds,
+      cardInsets,
       playBounds,
       scissorsBounds: actionBounds,
       mainBounds,
@@ -459,6 +542,60 @@ export class UtilityLoopEntryCard extends BasePage {
       speed: Number(element.dataset.speed || 0),
       src: String(element.currentSrc || element.getAttribute('src') || ''),
     }));
+  }
+
+  async readPlayingAudioCount() {
+    // parity-check: allow-read-only-measurement-evaluate -- count connected native saved-loop players that remain unpaused
+    return this.page.locator('[data-loop-audio]').evaluateAll(elements => (
+      elements.filter(element => element.isConnected && !element.paused).length
+    ));
+  }
+
+  async readWaveformBrightnessBalance(entry) {
+    const waveform = this.ordinaryWaveformForEntry(entry);
+    const timeline = this.ordinaryTimelineForEntry(entry);
+    // parity-check: allow-read-only-measurement-evaluate -- read the semantic timeline progress used by the canvas
+    const progressRatio = await timeline.evaluate((element) => {
+      const maximum = Number(element.max || 0);
+      return maximum > 0 ? Number(element.value || 0) / maximum : 0;
+    });
+    // parity-check: allow-read-only-measurement-evaluate -- compare rendered canvas opacity on either side of the live playhead
+    return waveform.evaluate((element, progress) => {
+      const context = element.getContext('2d');
+      const pixels = context?.getImageData(0, 0, element.width, element.height).data || [];
+      const playheadX = Math.round(element.width * progress);
+      const margin = Math.max(4, Math.round(element.width * 0.02));
+      const measure = (startX, endX) => {
+        let alphaTotal = 0;
+        const paintedAlphas = [];
+        for (let y = 0; y < element.height; y += 1) {
+          for (let x = startX; x < endX; x += 1) {
+            const alpha = pixels[((y * element.width + x) * 4) + 3];
+            if (alpha <= 0) continue;
+            alphaTotal += alpha;
+            paintedAlphas.push(alpha);
+          }
+        }
+        paintedAlphas.sort((left, right) => left - right);
+        const paintedPixels = paintedAlphas.length;
+        return {
+          meanAlpha: paintedPixels ? alphaTotal / paintedPixels : 0,
+          paintedPixels,
+          strongAlpha: paintedPixels
+            ? paintedAlphas[Math.floor((paintedPixels - 1) * 0.9)]
+            : 0,
+        };
+      };
+      return {
+        played: measure(0, Math.max(0, playheadX - margin)),
+        unplayed: measure(Math.min(element.width, playheadX + margin), element.width),
+        progressRatio: progress,
+      };
+    }, progressRatio);
+  }
+
+  errorToastByText(message) {
+    return this.page.locator('#toast-layer .toast.is-error').filter({ hasText: message }).last();
   }
 
   async captureAudioHandle(loopId) {

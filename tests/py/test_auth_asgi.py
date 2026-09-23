@@ -188,21 +188,39 @@ def _app(auth_asgi, *, outcome=LoginOutcome.INVALID, origins=("https://music.tes
     return app, preauth, login
 
 
-async def _request_async(app, method, path="/login", *, form=None, headers=None, scheme="https", client="127.0.0.1", host="music.test", query=""):
+async def _request_async(
+    app,
+    method,
+    path="/login",
+    *,
+    form=None,
+    headers=None,
+    scheme="https",
+    client="127.0.0.1",
+    host="music.test",
+    query="",
+    include_content_length=True,
+    body_chunks=None,
+):
     body = urlencode(form or {}).encode("utf-8") if form is not None else b""
     raw_headers = [(b"host", host.encode("ascii"))]
     for key, value in (headers or {}).items():
         raw_headers.append((key.lower().encode("latin1"), value.encode("latin1")))
     if form is not None:
-        raw_headers.extend([(b"content-type", b"application/x-www-form-urlencoded"), (b"content-length", str(len(body)).encode())])
+        raw_headers.append((b"content-type", b"application/x-www-form-urlencoded"))
+        if include_content_length:
+            raw_headers.append((b"content-length", str(len(body)).encode()))
     messages = []
-    sent = False
+    pending_chunks = list(body_chunks if body_chunks is not None else (body,))
     async def receive():
-        nonlocal sent
-        if sent:
+        if not pending_chunks:
             return {"type": "http.disconnect"}
-        sent = True
-        return {"type": "http.request", "body": body, "more_body": False}
+        chunk = pending_chunks.pop(0)
+        return {
+            "type": "http.request",
+            "body": chunk,
+            "more_body": bool(pending_chunks),
+        }
     async def send(message):
         messages.append(message)
     await app({"type":"http","asgi":{"version":"3.0"},"http_version":"1.1","method":method,"scheme":scheme,"path":path,"raw_path":path.encode(),"query_string":query.encode("ascii"),"headers":raw_headers,"client":(client,50000),"server":(host,443 if scheme=="https" else 80)}, receive, send)
@@ -230,6 +248,43 @@ def _valid_headers(**overrides):
     payload = {"origin": "https://music.test", "cookie": f"{CSRF_COOKIE}={CSRF}", "user-agent": "Browser"}
     payload.update(overrides)
     return payload
+
+
+def test_login_accepts_bounded_chunked_form_without_content_length(auth_asgi):
+    app, preauth, login = _app(auth_asgi, outcome=LoginOutcome.SUCCESS)
+    form = _valid_form()
+    encoded = urlencode(form).encode("utf-8")
+
+    status, _headers, _body = _request(
+        app,
+        "POST",
+        form=form,
+        headers={**_valid_headers(), "transfer-encoding": "chunked"},
+        include_content_length=False,
+        body_chunks=(encoded[:17], encoded[17:]),
+    )
+
+    assert status == 303
+    assert preauth.consumed == [CSRF]
+    assert login.calls[0]["entered_username"] == "Rendref"
+
+
+def test_login_rejects_chunked_form_that_exceeds_the_body_limit(auth_asgi):
+    app, preauth, login = _app(auth_asgi)
+    oversized = b"username=Rendref&password=" + (b"x" * 8_192)
+
+    status, _headers, _body = _request(
+        app,
+        "POST",
+        form=_valid_form(),
+        headers={**_valid_headers(), "transfer-encoding": "chunked"},
+        include_content_length=False,
+        body_chunks=(oversized[:4096], oversized[4096:]),
+    )
+
+    assert status == 400
+    assert preauth.consumed == []
+    assert login.calls == []
 
 
 def test_get_login_mints_hidden_one_time_token_and_hardened_cookie(auth_asgi):
@@ -323,6 +378,77 @@ def test_forgot_password_submission_has_one_generic_response_without_request_del
     )
 
 
+@pytest.mark.parametrize("returns_awaitable", [False, True])
+def test_public_reset_delivery_callback_allows_event_loop_progress(auth_asgi, returns_awaitable):
+    from threading import Event
+
+    app, _, _ = _app(auth_asgi)
+    delivery = PasswordResetDelivery(81, 41, "member@example.test", "r" * 43)
+    calls = []
+
+    async def exercise():
+        loop = asyncio.get_running_loop()
+        entered, release, completed = Event(), Event(), Event()
+        heartbeat = asyncio.Event()
+        progress = []
+
+        async def finish_delivery():
+            assert asyncio.get_running_loop() is loop
+            calls.append("awaited")
+
+        def record_progress():
+            progress.append(entered.is_set() and not completed.is_set())
+            release.set()
+            heartbeat.set()
+
+        def callback(received):
+            calls.append(received)
+            entered.set()
+            loop.call_soon_threadsafe(record_progress)
+            try:
+                # Deadlock bound only: correctness depends on event order.
+                release.wait(timeout=1.0)
+            finally:
+                completed.set()
+            return finish_delivery() if returns_awaitable else None
+
+        app.state.password_reset_delivery = callback
+        task = asyncio.create_task(auth_asgi._deliver_password_reset(app, delivery))
+        try:
+            await asyncio.wait_for(heartbeat.wait(), timeout=5.0)
+            await asyncio.wait_for(task, timeout=5.0)
+            assert progress == [True]
+        finally:
+            release.set()
+            await asyncio.wait_for(asyncio.gather(task, return_exceptions=True), timeout=5.0)
+
+    asyncio.run(exercise())
+    assert calls == ([delivery, "awaited"] if returns_awaitable else [delivery])
+
+
+@pytest.mark.parametrize("failure", [False, True])
+def test_public_reset_delivery_awaits_async_callbacks_and_contains_failure(auth_asgi, failure):
+    app, _, _ = _app(auth_asgi)
+    calls = []
+    delivery = PasswordResetDelivery(81, 41, "member@example.test", "r" * 43)
+
+    async def exercise():
+        loop = asyncio.get_running_loop()
+
+        async def callback(received):
+            assert asyncio.get_running_loop() is loop
+            await asyncio.sleep(0)
+            calls.append(received)
+            if failure:
+                raise RuntimeError("private SMTP failure")
+
+        app.state.password_reset_delivery = callback
+        await auth_asgi._deliver_password_reset(app, delivery)
+
+    asyncio.run(exercise())
+    assert calls == [delivery]
+
+
 def test_public_recovery_padding_uses_one_minimum_duration_for_fast_paths(
     auth_asgi, monkeypatch
 ):
@@ -399,23 +525,75 @@ def test_reset_link_exchanges_to_httponly_clean_url_transaction(auth_asgi):
     assert lifecycle.exchanges[0][0] == CSRF
 
 
-def test_reset_link_rejects_duplicate_or_invalid_query_without_reflecting_token(auth_asgi):
-    app, _, _ = _app(auth_asgi)
-    lifecycle = FakeResetLifecycle()
-    app.state.password_reset_lifecycle_service = lifecycle
+@pytest.mark.parametrize("with_private_boundary", [False, True])
+@pytest.mark.parametrize("valid_transaction", [False, True], ids=["stale", "valid"])
+@pytest.mark.parametrize("query", [
+    "purpose=password-reset&token=" + CSRF + "&token=" + NEXT_CSRF,
+    "purpose=account-invitation&token=" + CSRF,
+    "token=" + CSRF,
+    "purpose=password-reset&token=",
+    "purpose=password-reset&token=" + CSRF + "&unexpected=1",
+    "invalid=1&unexpected=" + CSRF,
+], ids=["duplicate", "wrong-purpose", "missing-purpose", "empty-token", "extra-field", "invalid-with-extra"])
+def test_reset_link_scrubs_invalid_query_without_losing_valid_transaction(
+    auth_asgi, with_private_boundary, valid_transaction, query,
+):
+    validated = []
 
-    status, _, body = _request(
+    class RecordingLifecycle(FakeResetLifecycle):
+        def validate_transaction(self, raw):
+            validated.append(raw)
+            return super().validate_transaction(raw)
+
+    app, _, _ = _app(auth_asgi)
+    lifecycle = RecordingLifecycle()
+    lifecycle.valid = valid_transaction
+    app.state.password_reset_lifecycle_service = lifecycle
+    if with_private_boundary:
+        from music_app.services.private_route_boundary import install_private_route_boundary
+
+        install_private_route_boundary(app)
+    browser_cookie = f"__Host-album_haven_reset={RESET_TRANSACTION}"
+
+    status, headers, body = _request(
         app,
         "GET",
         path="/reset-password",
-        query=(
-            "purpose=password-reset&token=" + CSRF + "&token=" + NEXT_CSRF
-        ),
+        query=query,
+        headers={"cookie": browser_cookie},
     )
 
-    assert status == 400
+    assert status == 303 and body == b""
+    assert dict(headers)["location"] == "/reset-password?invalid=1"
+    assert dict(headers)["referrer-policy"] == "no-referrer"
+    assert "no-store" in dict(headers)["cache-control"]
     assert CSRF.encode() not in body and NEXT_CSRF.encode() not in body
     assert lifecycle.exchanges == []
+    assert validated == [RESET_TRANSACTION]
+    if valid_transaction:
+        assert not _set_cookies(headers)
+    else:
+        assert any(
+            value.startswith("__Host-album_haven_reset=") and "Max-Age=0" in value
+            for value in _set_cookies(headers)
+        )
+
+    invalid_status, invalid_headers, invalid_body = _request(
+        app, "GET", path="/reset-password", query="invalid=1",
+        headers={"cookie": browser_cookie} if valid_transaction else {},
+    )
+    assert invalid_status == 400
+    assert invalid_body == b"This password reset link is invalid or expired."
+    assert "location" not in dict(invalid_headers)
+    assert not _set_cookies(invalid_headers)
+    assert validated == [RESET_TRANSACTION]
+    if valid_transaction:
+        clean_status, _, clean_body = _request(
+            app, "GET", path="/reset-password", headers={"cookie": browser_cookie},
+        )
+        assert clean_status == 200
+        csrf = issue_reset_csrf(RESET_TRANSACTION, app.state.auth_policy_config)
+        assert f'value="{csrf}"'.encode() in clean_body
 
 
 def test_expired_reset_link_redirects_to_a_clean_invalid_url(auth_asgi):
@@ -429,11 +607,103 @@ def test_expired_reset_link_redirects_to_a_clean_invalid_url(auth_asgi):
         "GET",
         path="/reset-password",
         query="purpose=password-reset&token=" + CSRF,
+        headers={"cookie": f"__Host-album_haven_reset={RESET_TRANSACTION}"},
     )
 
     assert status == 303 and body == b""
     assert dict(headers)["location"] == "/reset-password?invalid=1"
     assert CSRF not in dict(headers)["location"]
+    assert dict(headers)["referrer-policy"] == "no-referrer"
+    assert any(
+        value.startswith("__Host-album_haven_reset=") and "Max-Age=0" in value
+        for value in _set_cookies(headers)
+    )
+
+
+@pytest.mark.parametrize("with_private_boundary", [False, True])
+@pytest.mark.parametrize("failed_token", [CSRF, NEXT_CSRF], ids=["replayed", "unrelated"])
+def test_unrelated_failed_reset_link_preserves_a_valid_transaction(
+    auth_asgi, with_private_boundary, failed_token
+):
+    class OneUseResetLifecycle(FakeResetLifecycle):
+        def exchange_reset_token(self, raw, *, request_ref):
+            if not self.exchanges and raw == CSRF:
+                return super().exchange_reset_token(raw, request_ref=request_ref)
+            self.exchanges.append((raw, request_ref))
+            return None
+
+    app, _, _ = _app(auth_asgi)
+    lifecycle = OneUseResetLifecycle()
+    app.state.password_reset_lifecycle_service = lifecycle
+    if with_private_boundary:
+        from music_app.services.private_route_boundary import install_private_route_boundary
+
+        install_private_route_boundary(app)
+
+    status, headers, _ = _request(
+        app, "GET", path="/reset-password", query="purpose=password-reset&token=" + CSRF
+    )
+    assert status == 303
+    cookie = SimpleCookie()
+    for value in _set_cookies(headers):
+        cookie.load(value)
+    assert cookie["__Host-album_haven_reset"].value == RESET_TRANSACTION
+    browser_cookie = f"__Host-album_haven_reset={RESET_TRANSACTION}"
+    csrf = issue_reset_csrf(RESET_TRANSACTION, app.state.auth_policy_config)
+
+    status, headers, body = _request(
+        app, "GET", path="/reset-password",
+        query="purpose=password-reset&token=" + failed_token,
+        headers={"cookie": browser_cookie},
+    )
+    assert status == 303 and body == b""
+    assert dict(headers)["location"] == "/reset-password?invalid=1"
+    assert dict(headers)["referrer-policy"] == "no-referrer"
+    assert not any(value.startswith("__Host-album_haven_reset=") for value in _set_cookies(headers))
+    invalid_status, _, invalid_body = _request(
+        app, "GET", path="/reset-password", query="invalid=1",
+        headers={"cookie": browser_cookie},
+    )
+    assert invalid_status == 400
+    assert invalid_body == b"This password reset link is invalid or expired."
+    assert csrf.encode() not in invalid_body
+    assert lifecycle.completions == []
+
+    status, headers, body = _request(
+        app, "POST", path="/reset-password",
+        form={"new_password": "a private replacement password",
+              "confirm_password": "a private replacement password", "csrf_token": csrf},
+        headers={"cookie": browser_cookie, "origin": "https://music.test"},
+    )
+    assert status == 200
+    assert b"Password changed" in body
+    assert lifecycle.completions[0][:2] == (RESET_TRANSACTION, "a private replacement password")
+    assert any(
+        value.startswith("__Host-album_haven_reset=") and "Max-Age=0" in value
+        for value in _set_cookies(headers)
+    )
+
+
+@pytest.mark.parametrize("with_private_boundary", [False, True])
+def test_invalid_reset_marker_never_renders_an_existing_valid_transaction(
+    auth_asgi, with_private_boundary
+):
+    app, _, _ = _app(auth_asgi)
+    lifecycle = FakeResetLifecycle()
+    app.state.password_reset_lifecycle_service = lifecycle
+    if with_private_boundary:
+        from music_app.services.private_route_boundary import install_private_route_boundary
+
+        install_private_route_boundary(app)
+    status, headers, body = _request(
+        app, "GET", path="/reset-password", query="invalid=1",
+        headers={"cookie": f"__Host-album_haven_reset={RESET_TRANSACTION}"},
+    )
+    assert status == 400
+    assert body == b"This password reset link is invalid or expired."
+    assert dict(headers)["referrer-policy"] == "no-referrer"
+    assert not _set_cookies(headers)
+    assert lifecycle.exchanges == [] and lifecycle.completions == []
 
 
 def test_clean_reset_page_uses_transaction_bound_csrf(auth_asgi):
@@ -567,7 +837,7 @@ def test_invitation_link_exchanges_to_strict_httponly_clean_url_transaction(
 
     response_headers = dict(headers)
     assert status == 303 and body == b""
-    assert response_headers["location"] == "/accept-invitation"
+    assert response_headers["location"] == "/accept-invitation/continue"
     assert response_headers["cache-control"] == "no-store, max-age=0"
     assert response_headers["referrer-policy"] == "no-referrer"
     invitation_cookies = [
@@ -637,6 +907,7 @@ def test_invalid_or_duplicate_invitation_query_redirects_clean_and_clears_stale_
 ):
     app, _, _ = _app(auth_asgi)
     lifecycle = FakeInvitationLifecycle()
+    lifecycle.valid = False
     app.state.invitation_lifecycle_service = lifecycle
 
     status, headers, body = _request(
@@ -691,6 +962,7 @@ def test_invitation_exchange_failure_redirects_clean_and_clears_stale_cookie(
 
     app, _, _ = _app(auth_asgi)
     lifecycle = FailingInvitationLifecycle()
+    lifecycle.valid = False
     app.state.invitation_lifecycle_service = lifecycle
 
     status, headers, body = _request(
@@ -712,6 +984,119 @@ def test_invitation_exchange_failure_redirects_clean_and_clears_stale_cookie(
         INVITATION_RAW not in key and INVITATION_RAW not in value
         for key, value in headers
     )
+
+
+@pytest.mark.parametrize("with_private_boundary", [False, True])
+@pytest.mark.parametrize("failure", ["replay", "unrelated", "invalid", "duplicate", "exchange_error"])
+def test_failed_invitation_link_preserves_valid_transaction_and_clean_completion(
+    auth_asgi, with_private_boundary, failure
+):
+    class OneUseInvitationLifecycle(FakeInvitationLifecycle):
+        def __init__(self):
+            super().__init__()
+            self.validations = []
+
+        def exchange_invitation_token(self, raw, *, request_ref):
+            if not self.exchanges:
+                return super().exchange_invitation_token(raw, request_ref=request_ref)
+            self.exchanges.append((raw, request_ref))
+            if failure == "exchange_error":
+                raise RuntimeError(f"private exchange detail {raw}")
+            return None
+
+        def validate_transaction(self, raw):
+            self.validations.append(raw)
+            return super().validate_transaction(raw)
+
+    app, _, _ = _app(auth_asgi)
+    lifecycle = OneUseInvitationLifecycle()
+    app.state.invitation_lifecycle_service = lifecycle
+    if with_private_boundary:
+        from music_app.services.private_route_boundary import install_private_route_boundary
+
+        install_private_route_boundary(app)
+    initial_query = "purpose=account-invitation&token=" + INVITATION_RAW
+    status, headers, _ = _request(app, "GET", path="/accept-invitation", query=initial_query)
+    assert status == 303
+    cookies = SimpleCookie()
+    for value in _set_cookies(headers):
+        cookies.load(value)
+    assert cookies[INVITATION_COOKIE].value == INVITATION_TRANSACTION
+    browser_cookie = f"{INVITATION_COOKIE}={INVITATION_TRANSACTION}"
+    failed_query = {
+        "replay": initial_query,
+        "unrelated": "purpose=account-invitation&token=" + NEXT_INVITATION_RAW,
+        "invalid": "purpose=wrong-purpose&token=" + NEXT_INVITATION_RAW,
+        "duplicate": initial_query + "&token=" + NEXT_INVITATION_RAW,
+        "exchange_error": initial_query,
+    }[failure]
+
+    status, headers, body = _request(
+        app, "GET", path="/accept-invitation", query=failed_query,
+        headers={"cookie": browser_cookie},
+    )
+    assert status == 303 and body == b""
+    assert dict(headers)["location"] == "/accept-invitation"
+    assert dict(headers)["referrer-policy"] == "no-referrer"
+    assert dict(headers)["cache-control"] == "no-store, max-age=0"
+    assert not any(value.startswith(INVITATION_COOKIE + "=") for value in _set_cookies(headers))
+    assert lifecycle.validations == [INVITATION_TRANSACTION]
+    assert len(lifecycle.exchanges) == (1 if failure in {"invalid", "duplicate"} else 2)
+    assert lifecycle.completions == []
+
+    status, _, body = _request(
+        app, "GET", path="/accept-invitation", headers={"cookie": browser_cookie},
+    )
+    csrf = issue_invitation_csrf(INVITATION_TRANSACTION, app.state.auth_policy_config)
+    assert status == 200 and f'value="{csrf}"'.encode() in body
+    assert INVITATION_TRANSACTION.encode() not in body
+    status, headers, _ = _request(
+        app, "POST", path="/accept-invitation",
+        headers={"cookie": browser_cookie, "origin": "https://music.test"},
+        form={"new_password": "Phase Seven Recipient Passphrase 2026!",
+              "confirm_password": "Phase Seven Recipient Passphrase 2026!", "csrf_token": csrf},
+    )
+    assert status == 200
+    assert len(lifecycle.completions) == 1
+    assert lifecycle.completions[0][0] == INVITATION_TRANSACTION
+    assert any(
+        value.startswith(INVITATION_COOKIE + "=") and "Max-Age=0" in value
+        for value in _set_cookies(headers)
+    )
+
+
+@pytest.mark.parametrize("with_private_boundary", [False, True])
+@pytest.mark.parametrize("invalid_query", [False, True])
+def test_failed_invitation_link_validation_unavailable_does_not_mutate_transaction(
+    auth_asgi, with_private_boundary, invalid_query
+):
+    class UnavailableValidation(FakeInvitationLifecycle):
+        def exchange_invitation_token(self, raw, *, request_ref):
+            self.exchanges.append((raw, request_ref))
+            return None
+
+        def validate_transaction(self, raw):
+            raise RuntimeError(f"private validation detail {raw}")
+
+    app, _, _ = _app(auth_asgi)
+    lifecycle = UnavailableValidation()
+    app.state.invitation_lifecycle_service = lifecycle
+    if with_private_boundary:
+        from music_app.services.private_route_boundary import install_private_route_boundary
+
+        install_private_route_boundary(app)
+    query = "purpose=wrong-purpose&token=" if invalid_query else "purpose=account-invitation&token="
+    status, headers, body = _request(
+        app, "GET", path="/accept-invitation", query=query + INVITATION_RAW,
+        headers={"cookie": f"{INVITATION_COOKIE}={INVITATION_TRANSACTION}"},
+    )
+    assert status == 503
+    assert body == b"Invitation is temporarily unavailable."
+    assert not _set_cookies(headers)
+    assert dict(headers)["referrer-policy"] == "no-referrer"
+    assert dict(headers)["cache-control"] == "no-store, max-age=0"
+    assert INVITATION_RAW.encode() not in body and INVITATION_TRANSACTION.encode() not in body
+    assert lifecycle.completions == []
 
 
 def test_clean_invitation_page_uses_transaction_bound_csrf_and_same_origin_referrer(auth_asgi):
@@ -914,6 +1299,36 @@ def test_invitation_completion_accepts_direct_loopback_http_same_origin(auth_asg
         and "Secure" in value
         for value in _set_cookies(headers)
     )
+
+
+def test_invitation_completion_accepts_direct_loopback_http_same_origin_referer(auth_asgi):
+    app, _, _ = _app(auth_asgi, origins=("https://music.test",))
+    lifecycle = FakeInvitationLifecycle()
+    app.state.invitation_lifecycle_service = lifecycle
+    csrf = issue_invitation_csrf(
+        INVITATION_TRANSACTION, app.state.auth_policy_config
+    )
+
+    status, _, _ = _request(
+        app,
+        "POST",
+        path="/accept-invitation",
+        scheme="http",
+        client="127.0.0.1",
+        host="localhost",
+        headers={
+            "referer": "http://localhost/accept-invitation",
+            "cookie": f"{INVITATION_COOKIE}={INVITATION_TRANSACTION}",
+        },
+        form={
+            "new_password": "Phase Seven Recipient Passphrase 2026!",
+            "confirm_password": "Phase Seven Recipient Passphrase 2026!",
+            "csrf_token": csrf,
+        },
+    )
+
+    assert status == 200
+    assert len(lifecycle.completions) == 1
 
 
 def test_login_preserves_only_safe_return_target_on_get_and_failed_retry(auth_asgi):
@@ -1242,3 +1657,35 @@ def test_trusted_proxy_selects_nearest_untrusted_forwarded_hop(auth_asgi):
     assert status == 303
     assert login.calls[0]["source_key"] == "198.51.100.7"
     assert login.calls[0]["source_class"] == "trusted_proxy"
+
+
+def test_invitation_handoff_is_static_token_free_and_does_not_resolve_authority(auth_asgi):
+    app, _, _ = _app(auth_asgi)
+
+    class UnusedLifecycle:
+        def __getattr__(self, _name):
+            raise AssertionError("The handoff must not call a lifecycle service")
+
+    app.state.invitation_lifecycle_service = UnusedLifecycle()
+    status, headers, body = _request(app, "GET", path="/accept-invitation/continue",
+        query="token=" + INVITATION_RAW,
+        headers={"cookie": f"{INVITATION_COOKIE}={INVITATION_TRANSACTION}"})
+    assert status == 200
+    assert dict(headers)["cache-control"] == "no-store, max-age=0"
+    assert dict(headers)["referrer-policy"] == "no-referrer"
+    assert _set_cookies(headers) == []
+    assert b'http-equiv="refresh" content="0;url=/accept-invitation"' in body
+    assert b'<a href="/accept-invitation">' in body
+    assert b"<script" not in body
+    assert INVITATION_RAW.encode() not in body and INVITATION_TRANSACTION.encode() not in body
+
+
+def test_invitation_handoff_without_cookie_terminates_at_normal_invalid_form(auth_asgi):
+    app, _, _ = _app(auth_asgi)
+    app.state.invitation_lifecycle_service = FakeInvitationLifecycle()
+    status, _, _ = _request(app, "GET", path="/accept-invitation/continue")
+    assert status == 200
+    status, headers, body = _request(app, "GET", path="/accept-invitation")
+    assert status == 400 and "location" not in dict(headers)
+    assert b'http-equiv="refresh"' not in body
+    assert b'name="new_password"' not in body

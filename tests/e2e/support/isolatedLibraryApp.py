@@ -436,6 +436,7 @@ LASTFM_FAKE_API_SECRET = "album-haven-e2e-api-secret"
 LASTFM_FAKE_USERNAME = "fixture_listener"
 LASTFM_FAKE_PASSWORD = "fixture-password"
 LASTFM_FAKE_SESSION_KEY = "album-haven-e2e-session-key"
+LASTFM_FAKE_TOTAL_SCROBBLES = 12_000
 LASTFM_SCROBBLE_ARTIST = "Album Haven Last.fm Fixture"
 LASTFM_SCROBBLE_ALBUM = "Signed Scrobble Journey"
 LASTFM_SCROBBLE_TRACK = "Fake Loop Source"
@@ -2568,6 +2569,9 @@ def configure_isolated_environment(
     library_root = temp_root / "media"
     session_dir = temp_root / "session"
     temp_dir = temp_root / "tmp"
+    settings_browse_base = temp_root / "settings-root-picker-fixture"
+    for name in ("Main additional", "Hoard additional", "Incoming additional"):
+        (settings_browse_base / name).mkdir(parents=True, exist_ok=True)
     for path in (app_data_dir, library_root, session_dir, temp_dir):
         path.mkdir(parents=True, exist_ok=True)
     environment = {
@@ -2581,6 +2585,7 @@ def configure_isolated_environment(
         "MUSIC_BULK_COVER_JOB_WORKERS": "4",
         "MUSIC_LIBRARY_ROOTS_PATH": str(app_data_dir / "inert-library-roots.json"),
         "ALBUM_HAVEN_APP_DATABASE_URL": runtime_database_url,
+        "ALBUM_HAVEN_LIBRARY_BROWSE_BASES": json.dumps([str(settings_browse_base)]),
         "ALBUM_HAVEN_PERSISTENCE_DEFAULT": "postgres",
         "ALBUM_HAVEN_COVER_PROVIDER_GROUPS": "music_services,manual_urls,discogs,cover_art_archive",
         "ALBUM_HAVEN_ENABLED_MUSIC_SERVICES": "apple",
@@ -4004,6 +4009,9 @@ class _ProviderFixtureServer(ThreadingHTTPServer):
         self.apple_artwork_payloads_lock = threading.Lock()
         self.lastfm_requests: list[dict[str, Any]] = []
         self.lastfm_requests_lock = threading.Lock()
+        self.lastfm_state_lock = threading.Lock()
+        self.lastfm_playcount = LASTFM_FAKE_TOTAL_SCROBBLES
+        self.lastfm_scrobble_mode = "accept"
         self.cover_lookup_later_provider_gate = threading.Event()
         self.cover_lookup_later_provider_gate.set()
         self.cover_lookup_candidate_image_gate = threading.Event()
@@ -4083,6 +4091,31 @@ class _ProviderFixtureServer(ThreadingHTTPServer):
     def snapshot_lastfm_requests(self) -> list[dict[str, Any]]:
         with self.lastfm_requests_lock:
             return [dict(request) for request in self.lastfm_requests]
+
+    def snapshot_lastfm_state(self) -> dict[str, object]:
+        with self.lastfm_state_lock:
+            return {
+                "playcount": self.lastfm_playcount,
+                "scrobble_mode": self.lastfm_scrobble_mode,
+            }
+
+    def reset_lastfm_fixture(self) -> None:
+        with self.lastfm_requests_lock:
+            self.lastfm_requests = []
+        with self.lastfm_state_lock:
+            self.lastfm_playcount = LASTFM_FAKE_TOTAL_SCROBBLES
+            self.lastfm_scrobble_mode = "accept"
+
+    def set_lastfm_scrobble_mode(self, mode: object) -> None:
+        normalized = str(mode or "").strip()
+        if normalized not in {"accept", "retryable-error"}:
+            raise ValueError("Unsupported Last.fm fixture scrobble mode.")
+        with self.lastfm_state_lock:
+            self.lastfm_scrobble_mode = normalized
+
+    def record_accepted_lastfm_scrobble(self) -> None:
+        with self.lastfm_state_lock:
+            self.lastfm_playcount += 1
 
     def hold_cover_lookup_later_provider(self) -> None:
         self.reset_cover_lookup_evidence()
@@ -4242,6 +4275,9 @@ class _ProviderFixtureHandler(BaseHTTPRequestHandler):
         if parsed.path.rstrip("/") == "/cover-lookup-fixture/control":
             self._serve_cover_lookup_control()
             return
+        if parsed.path.rstrip("/") == "/lastfm-fixture/control":
+            self._serve_lastfm_control()
+            return
         if parsed.path.rstrip("/") != "/lastfm":
             self.send_error(404)
             return
@@ -4254,6 +4290,12 @@ class _ProviderFixtureHandler(BaseHTTPRequestHandler):
         if parts == ["lastfm", "requests"]:
             self._send_json(
                 {"requests": self.server.snapshot_lastfm_requests()},
+                include_body=include_body,
+            )
+            return
+        if parts == ["lastfm-fixture", "state"]:
+            self._send_json(
+                self.server.snapshot_lastfm_state(),
                 include_body=include_body,
             )
             return
@@ -4361,6 +4403,27 @@ class _ProviderFixtureHandler(BaseHTTPRequestHandler):
             include_body=True,
         )
 
+    def _serve_lastfm_control(self) -> None:
+        try:
+            content_length = int(self.headers.get("Content-Length") or 0)
+            payload = json.loads(self.rfile.read(content_length).decode("utf-8"))
+        except (ValueError, json.JSONDecodeError):
+            self.send_error(400)
+            return
+        action = str(payload.get("action") or "") if isinstance(payload, dict) else ""
+        if action == "reset":
+            self.server.reset_lastfm_fixture()
+        elif action == "set-scrobble-mode":
+            try:
+                self.server.set_lastfm_scrobble_mode(payload.get("mode"))
+            except ValueError:
+                self.send_error(400)
+                return
+        else:
+            self.send_error(400)
+            return
+        self._send_json(self.server.snapshot_lastfm_state(), include_body=True)
+
     def _serve_lastfm_request(self) -> None:
         try:
             content_length = int(self.headers.get("Content-Length") or 0)
@@ -4395,6 +4458,9 @@ class _ProviderFixtureHandler(BaseHTTPRequestHandler):
             "timestamp": str(params.get("timestamp") or ""),
             "chosen_by_user": str(params.get("chosenByUser") or ""),
             "session_key_valid": params.get("sk") == LASTFM_FAKE_SESSION_KEY,
+            "fixture_scrobble_mode": self.server.snapshot_lastfm_state()[
+                "scrobble_mode"
+            ],
         }
         self.server.record_lastfm_request(request_record)
 
@@ -4422,6 +4488,21 @@ class _ProviderFixtureHandler(BaseHTTPRequestHandler):
                 '</session></lfm>'
             )
             return
+        if method == "user.getInfo":
+            if params.get("user") != LASTFM_FAKE_USERNAME:
+                self._send_lastfm_xml(
+                    '<lfm status="failed"><error code="6">User not found</error></lfm>',
+                    status=404,
+                )
+                return
+            playcount = self.server.snapshot_lastfm_state()["playcount"]
+            self._send_lastfm_xml(
+                '<lfm status="ok"><user>'
+                f'<name>{LASTFM_FAKE_USERNAME}</name>'
+                f'<playcount>{playcount}</playcount>'
+                '</user></lfm>'
+            )
+            return
         if params.get("sk") != LASTFM_FAKE_SESSION_KEY:
             self._send_lastfm_xml(
                 '<lfm status="failed"><error code="9">Invalid session key</error></lfm>',
@@ -4432,6 +4513,13 @@ class _ProviderFixtureHandler(BaseHTTPRequestHandler):
             self._send_lastfm_xml('<lfm status="ok"><nowplaying /></lfm>')
             return
         if method == "track.scrobble":
+            if self.server.snapshot_lastfm_state()["scrobble_mode"] == "retryable-error":
+                self._send_lastfm_xml(
+                    '<lfm status="failed"><error code="11">Service Offline</error></lfm>',
+                    status=503,
+                )
+                return
+            self.server.record_accepted_lastfm_scrobble()
             self._send_lastfm_xml(
                 '<lfm status="ok"><scrobbles accepted="1" ignored="0">'
                 '<scrobble><ignoredmessage code="0"></ignoredmessage></scrobble>'
@@ -5043,12 +5131,14 @@ def resolve_provider_port(cli_port: int | None, environment: dict[str, str] | No
     raise RuntimeError("PLAYWRIGHT_PROVIDER_BASE_URL or PLAYWRIGHT_PROVIDER_PORT is required.")
 
 
-def cleanup_isolated_database() -> None:
+def cleanup_isolated_database(*, lock_only: bool = False) -> None:
     setup_database_url, _runtime_database_url = resolve_isolated_database_urls()
-    database_lock = IsolatedDatabaseOwnershipLock()
+    database_lock = IsolatedDatabaseOwnershipLock(database_url=setup_database_url,
+        **({"wait_seconds": 0} if lock_only else {}))
     database_lock.acquire()
     try:
-        reset_application_tables(setup_database_url)
+        if not lock_only:
+            reset_application_tables(setup_database_url)
     finally:
         database_lock.release()
 
@@ -5058,10 +5148,14 @@ def main() -> None:
     parser.add_argument("--port", type=int, default=4173)
     parser.add_argument("--provider-port", type=int)
     parser.add_argument("--cleanup-only", action="store_true")
+    parser.add_argument("--cleanup-lock-only", action="store_true")
     parser.add_argument("--prepare-only", action="store_true")
     parser.add_argument("--seed-all-functional-cover-misses", action="store_true")
     args = parser.parse_args()
 
+    if args.cleanup_lock_only:
+        cleanup_isolated_database(lock_only=True)
+        return
     if args.cleanup_only:
         cleanup_isolated_database()
         return
@@ -5092,7 +5186,7 @@ def main() -> None:
     original_failure: BaseException | None = None
     cleanup_failure: Exception | None = None
     database_preparation_started = False
-    database_lock = IsolatedDatabaseOwnershipLock()
+    database_lock = IsolatedDatabaseOwnershipLock(database_url=setup_database_url)
     try:
         install_shutdown_handlers()
         library_root = configure_isolated_environment(

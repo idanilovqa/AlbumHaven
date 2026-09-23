@@ -8,7 +8,7 @@ import ssl
 from typing import Any
 
 import pytest
-from aiosmtplib.errors import SMTPRecipientRefused, SMTPRecipientsRefused
+from aiosmtplib.errors import SMTPDataError, SMTPRecipientRefused, SMTPRecipientsRefused, SMTPServerDisconnected
 
 from music_app.services.auth_invitation_models import InvitationDelivery
 
@@ -227,6 +227,68 @@ def _reset_fake(*, phase_errors: dict[str, BaseException] | None = None):
     FakeSMTP.phase_errors = phase_errors or {}
 
 
+def test_plaintext_loopback_does_not_auto_upgrade_when_relay_advertises_starttls(auth_mail):
+    async def scenario():
+        commands = []
+        clients = set()
+
+        async def relay(reader, writer):
+            task = asyncio.current_task()
+            clients.add(task)
+            try:
+                writer.write(b"220 local.test ESMTP\r\n")
+                await writer.drain()
+                while line := await reader.readline():
+                    command = line.decode("ascii").strip()
+                    commands.append(command)
+                    if command.startswith("EHLO"):
+                        writer.write(b"250-local.test\r\n250 STARTTLS\r\n")
+                    elif command == "STARTTLS":
+                        writer.write(b"454 TLS unavailable\r\n")
+                    elif command == "DATA":
+                        writer.write(b"354 End with dot\r\n")
+                        await writer.drain()
+                        while await reader.readline() not in (b".\r\n", b""):
+                            pass
+                        writer.write(b"250 queued\r\n")
+                    elif command == "QUIT":
+                        writer.write(b"221 bye\r\n")
+                        await writer.drain()
+                        break
+                    else:
+                        writer.write(b"250 ok\r\n")
+                    await writer.drain()
+            finally:
+                writer.close()
+                await writer.wait_closed()
+                clients.discard(task)
+
+        server = await asyncio.start_server(relay, "127.0.0.1", 0)
+        try:
+            config = _config(
+                security="plaintext", host="127.0.0.1",
+                port=server.sockets[0].getsockname()[1],
+                username=None, password=None,
+                connect_timeout_seconds=1, command_timeout_seconds=1,
+            )
+            result = await asyncio.wait_for(
+                auth_mail.send_auth_email(_welcome(auth_mail, config), config=config), 4,
+            )
+            assert result.delivered is True
+            assert "STARTTLS" not in commands
+            assert "DATA" in commands
+        finally:
+            server.close()
+            await server.wait_closed()
+            remaining = list(clients)
+            for task in remaining:
+                task.cancel()
+            await asyncio.gather(*remaining, return_exceptions=True)
+            assert not clients
+
+    asyncio.run(scenario())
+
+
 def _welcome(auth_mail, config: dict[str, Any]) -> EmailMessage:
     return auth_mail.compose_welcome_email(
         username="Rendref",
@@ -280,7 +342,7 @@ def test_send_uses_verified_tls_credentials_timeouts_and_clean_quit(auth_mail, s
 def test_send_returns_generic_failure_and_closes_after_refusal_or_timeout(
     auth_mail, failure, reason
 ):
-    FakeSMTP.instances.clear()
+    _reset_fake()
     FakeSMTP.send_error = failure
     config = _config()
 
@@ -340,6 +402,7 @@ def test_validated_plaintext_loopback_uses_no_tls_or_starttls(auth_mail):
         "hostname": "127.0.0.1",
         "port": 1025,
         "use_tls": False,
+        "start_tls": False,
         "timeout": 5,
     }
     assert "starttls" not in [name for name, _ in smtp.calls]
@@ -455,3 +518,76 @@ def test_cancellation_at_every_async_phase_propagates_and_closes(auth_mail, phas
         )
 
     assert FakeSMTP.instances[-1].calls[-1][0] == "close"
+
+
+@pytest.mark.parametrize("failure_type", [ConnectionResetError, SMTPServerDisconnected])
+@pytest.mark.parametrize("phase", ["connect", "starttls", "login", "send"])
+def test_transport_loss_is_ambiguous_only_during_submission(auth_mail, failure_type, phase):
+    from music_app.services.auth_mail_outbox_postgres import WelcomeClaim, _final_state
+
+    _reset_fake(phase_errors={phase: failure_type("smtp-secret")})
+    result = asyncio.run(auth_mail.send_auth_email(
+        _welcome(auth_mail, _config()), config=_config(), smtp_factory=FakeSMTP,
+    ))
+
+    assert result == auth_mail.DeliveryResult(False, "unknown" if phase == "send" else "failed")
+    assert FakeSMTP.instances[-1].calls[-1][0] == "close"
+    assert "smtp-secret" not in repr(result)
+    now = datetime(2026, 9, 8, tzinfo=timezone.utc)
+    state, _, next_attempt = _final_state(WelcomeClaim(91, 41, "owner", "owner@example.test", 1, now), result, now)
+    if phase == "send":
+        assert state == "unknown"
+        assert next_attempt is None
+    else:
+        assert state == "failed"
+        assert next_attempt is not None
+
+
+def test_lost_acceptance_after_real_smtp_data_write_is_not_retryable(auth_mail):
+    from aiosmtplib.protocol import SMTPProtocol
+
+    _reset_fake()
+    written = []
+
+    class SubmittedSMTP(FakeSMTP):
+        async def send_message(self, message, **kwargs):
+            protocol = SMTPProtocol()
+            loop = asyncio.get_running_loop()
+
+            class Transport(asyncio.Transport):
+                def get_extra_info(self, name, default=None):
+                    return default
+
+                def is_closing(self):
+                    return False
+
+                def write(self, payload):
+                    written.append(payload)
+                    if payload == b"DATA\r\n":
+                        loop.call_soon(protocol.data_received, b"354 Send data\r\n")
+                    else:
+                        loop.call_soon(protocol.connection_lost, None)
+
+            protocol.connection_made(Transport())
+            await protocol.execute_data_command(message.as_bytes(), timeout=1)
+
+    result = asyncio.run(auth_mail.send_auth_email(
+        _welcome(auth_mail, _config()), config=_config(), smtp_factory=SubmittedSMTP,
+    ))
+
+    assert len(written) == 2
+    assert written[0] == b"DATA\r\n"
+    assert written[1].endswith(b"\r\n.\r\n")
+    assert result == auth_mail.DeliveryResult(False, "unknown")
+    assert SubmittedSMTP.instances[-1].calls[-1][0] == "close"
+
+
+def test_explicit_smtp_data_rejection_remains_known_failure(auth_mail):
+    _reset_fake(phase_errors={"send": SMTPDataError(554, "smtp-secret rejected")})
+
+    result = asyncio.run(auth_mail.send_auth_email(
+        _welcome(auth_mail, _config()), config=_config(), smtp_factory=FakeSMTP,
+    ))
+
+    assert result == auth_mail.DeliveryResult(False, "failed")
+    assert "smtp-secret" not in repr(result)

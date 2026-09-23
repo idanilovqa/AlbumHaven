@@ -33,3 +33,30 @@ def configure_test_app_paths(tmp_path: Path, monkeypatch) -> dict[str, Path]:
         "cover_cache_path": cover_cache_path,
         "library_roots_path": library_roots_path,
     }
+
+
+def stub_targeted_reconciliation_repository(monkeypatch) -> None:
+    """Keep unrelated lifespan unit tests off persistence while retaining lifecycle code."""
+    from types import SimpleNamespace
+    from music_app.services import exception_overrides, library_roots, scan_cache_persistence
+
+    def owned_roots(config):
+        settings = library_roots.normalize_library_root_settings(
+            {}, fallback_main_root=Path(config["MUSIC_DIR"]).resolve(),
+        )
+        return [
+            {**root, "category": category}
+            for category, roots in settings.items()
+            if isinstance(roots, list)
+            for root in roots
+            if isinstance(root, dict)
+        ]
+
+    monkeypatch.setattr(library_roots, "get_library_roots", owned_roots)
+    monkeypatch.setattr(exception_overrides, "load_exception_overrides", lambda _config: {})
+
+    monkeypatch.setattr(
+        scan_cache_persistence,
+        "select_scan_cache_adapter",
+        lambda _config: SimpleNamespace(),
+    )

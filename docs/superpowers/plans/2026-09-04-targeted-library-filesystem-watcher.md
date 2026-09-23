@@ -12,7 +12,8 @@
 
 - Preserve unrelated dirty-tree edits and inspect every overlapping diff before patching.
 - Keep Postgres as the sole authority for app-owned inventory.
-- Start the watcher with the server and stop it during server shutdown.
+- Start supported native watchers with the server and stop them during server shutdown.
+- Per the owner's September 8, 2026 decision, leave the default Linux event source idle and log that Full Rescan is required after filesystem changes. Preserve initial import, manual-scan recovery, confirmed missing-album removal, and explicit test-source injection. Do not create a persistent root-health error for this platform limit.
 - Do not watch or reconcile changes made while the server is stopped.
 - Do not invoke a full scan for an ordinary event, queue overflow, missed event, or root disconnect.
 - Block stale and delete mutations for an unhealthy root.
@@ -21,6 +22,14 @@
 - Web is required. Tauri is product-required and deferred. Android, TV, and Apple are unsupported.
 - Run at most one pytest process and one Playwright process at a time.
 - Add functional and performance E2E only after owner manual acceptance.
+
+## Deferred Linux server work
+
+- [ ] When developing servers for Linux or moving existing servers to Linux,
+  revisit native filesystem watching. Before enabling it, cover native queue
+  overflow, reader/buffer/emitter failure propagation, bounded startup/shutdown,
+  and resource cleanup with the real Linux backend in CI. The current release
+  keeps Linux on manual scans.
 
 ---
 

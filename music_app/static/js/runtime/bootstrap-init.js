@@ -111,6 +111,7 @@ if (bootstrap.startupPayloadTiers?.hydration && typeof bootstrap.startupPayloadT
   bootstrap.startupPayloadTiers.hydration.embeddedViewPatch = null;
 }
 renderView();
+if (typeof initGalleryMain === 'function') initGalleryMain();
 startupMetrics.markInitialRender(state.view);
 const hasAuthoritativeServerRenderedInitialView = Boolean(
   !bootstrap.partialView
@@ -148,6 +149,7 @@ if (
   });
 }
 updateStatusIndicator({
+  allowed_actions: window.__ALBUM_HAVEN_PLAYBACK_ALLOWED_ACTIONS__ || {},
   scan_in_progress: Boolean(bootstrap.scanInProgress),
   scan_phase: String(bootstrap.scanPhase || 'idle'),
   scan_mode: String(bootstrap.scanMode || 'idle'),
@@ -232,7 +234,7 @@ document.addEventListener('contextmenu', (event) => {
   const indicator = event.target.closest('#scan-indicator');
   if (!indicator) return;
   event.preventDefault();
-  showStatusContextMenu(event.clientX, event.clientY);
+  showStatusContextMenu(indicator);
 });
 
 document.addEventListener('click', (event) => {
@@ -242,12 +244,18 @@ document.addEventListener('click', (event) => {
 });
 
 document.addEventListener('keydown', (event) => {
+  const statusAnchor = event.target.closest?.('#scan-indicator');
+  if (statusAnchor && (event.key === 'ContextMenu' || (event.shiftKey && event.key === 'F10'))) {
+    event.preventDefault();
+    showStatusContextMenu(statusAnchor);
+    return;
+  }
   if (typeof handleArtistsDrawerKeydown === 'function') {
     handleArtistsDrawerKeydown(event);
   }
   if (event.key === 'Escape') {
     hideVersionContextMenu();
-    hideStatusContextMenu();
+    hideStatusContextMenu(true);
   }
 });
 
@@ -360,4 +368,15 @@ window.addEventListener('scroll', () => {
 
 if (typeof syncArtistsDrawerVisibility === 'function') {
   syncArtistsDrawerVisibility();
+}
+
+const tagEditorFooter = document.getElementById('tag-editor-footer');
+if (tagEditorFooter) {
+  EditorPage.mountFooter(tagEditorFooter, {
+    showReset: false,
+    canSave: false,
+    leadingElement: document.getElementById('tag-editor-auto-number-controls'),
+    secondary: { label: 'Cancel', attributes: { 'data-close-tag-editor': '1' } },
+    primary: { label: 'Apply', attributes: { 'data-open-tag-edit-confirm': '1' } },
+  });
 }

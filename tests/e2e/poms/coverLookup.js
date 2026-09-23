@@ -47,6 +47,7 @@ export class CoverLookup extends BasePage {
       .filter({ hasText: 'Cover art lookup started.' })
       .last();
     this.toolbarRight = page.locator(this.toolbarRightSelector);
+    this.coverLookupStartedToastMessage = this.coverLookupStartedToast.locator('.on-page-alert__message');
   }
 
   get modalSelector() {
@@ -160,7 +161,7 @@ export class CoverLookup extends BasePage {
   }
 
   get taskStatusWithinCardSelector() {
-    return '.cover-lookup-task-status';
+    return '.cover-lookup-task-status-label';
   }
 
   get taskElapsedWithinCardSelector() {
@@ -184,7 +185,10 @@ export class CoverLookup extends BasePage {
     const timeout = options.timeout || 30000;
     await this.waitForPageCondition((selectors) => {
       const toast = Array.from(document.querySelectorAll(selectors.toastSelector))
-        .filter((candidate) => candidate.textContent?.trim() === selectors.toastText)
+        .filter((candidate) => (
+          candidate.querySelector('.on-page-alert__message')?.textContent?.trim()
+            === selectors.toastText
+        ))
         .at(-1);
       if (!(toast instanceof HTMLElement)) return false;
       const style = getComputedStyle(toast);
@@ -325,6 +329,18 @@ export class CoverLookup extends BasePage {
     return this.page.locator(this.taskCardSelector).filter({
       has: this.page.locator(this.taskTitleWithinCardSelector).filter({ hasText: taskTitle }),
     }).first();
+  }
+
+  taskInfoByTitle(taskTitle) {
+    return this.taskCardByTitle(taskTitle).locator('.cover-lookup-task-open');
+  }
+
+  async readTaskClearHoverStyle(taskTitle) {
+    // parity-check: allow-read-only-measurement-evaluate -- inspect the real sibling control's hover styles
+    return this.taskClearButtonByTitle(taskTitle).evaluate(element=>{
+      const style=getComputedStyle(element);
+      return {outline:style.outline,background:style.backgroundColor,cursor:style.cursor};
+    });
   }
 
   taskCancelButtonByTitle(taskTitle) {

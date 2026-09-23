@@ -701,6 +701,26 @@ test('single-artist split from Various Artists matches the authoritative album h
   );
 });
 
+test('compilation split preserves an explicitly edited destination album artist', () => {
+  const context = loadHelpers();
+  const trackPath = 'C:/Music/Compilation/01 Signal.flac';
+  const album = {
+    key: 'various artists::signals', name: 'Signals', album_artist: 'Various Artists',
+    tracks: [{ path: trackPath, album: 'Signals', artist: 'Solo Voice',
+      album_artist: 'Various Artists', title: 'Signal' }],
+    track_rows: [{ path: trackPath, title: 'Signal', secondary_artist: 'Solo Voice' }],
+  };
+  const [destination] = context.buildOptimisticUpdatedAlbumsFromEdits(album, {
+    [trackPath]: { album: 'Solo Collection', album_artist: 'Curated Ensemble' },
+  });
+  assert.equal(destination.album_artist, 'Curated Ensemble');
+  assert.equal(destination.key, 'curated ensemble::solo collection');
+  assert.equal(destination.tracks[0].artist, 'Solo Voice');
+  assert.equal(destination.tracks[0].album_artist, 'Curated Ensemble');
+  // Editing credit fields invalidates the previous server-rendered credit row.
+  assert.equal(destination.track_rows.length, 0);
+});
+
 test('optimistic album split normalizes legacy album rating into each preference', () => {
   const context = loadHelpers();
   const firstPath = 'C:\\Music\\Artist\\Legacy\\01 First.flac';

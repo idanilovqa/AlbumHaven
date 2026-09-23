@@ -27,7 +27,7 @@ const runtimeFlags = resolveRuntimeFlags(process.argv.slice(2), process.env);
 const isHeadless = runtimeFlags.headlessOverride ?? true;
 const selectedBrowser = runtimeFlags.browser;
 const browserProjectUse = resolveBrowserProjectUse(selectedBrowser);
-const isolatedFunctionalTitles = /FTC-COVERS-011|FTC-NON-ALBUM-013 keeps a strongly inferred blank-Album track in Other and Album Details$/;
+const isolatedFunctionalTitles = /FTC-COVERS-011|FTC-NON-ALBUM-013 keeps a strongly inferred blank-Album track in Other and Album Details/;
 const managedBrowserProjectUse = {
   ...browserProjectUse,
   launchOptions: {

@@ -19,6 +19,7 @@ const helperSource = fs.readFileSync(helperPath, 'utf8');
 
 function loadHelpers(overrides = {}) {
   const context = {
+    window: {},
     state: {
       utility: {
         localPlaylistImport: {
@@ -70,11 +71,12 @@ function loadHelpers(overrides = {}) {
   };
   Object.assign(context, overrides);
   vm.createContext(context);
+  vm.runInContext(fs.readFileSync(path.resolve(path.dirname(helperPath), '../button-component.js'), 'utf8'), context);
   vm.runInContext(helperSource, context, { filename: helperPath });
   return context;
 }
 
-test('buildUtilityIntegrationDetail renders the local playlist import analyze surface', () => {
+test('local playlist import exposes only the approved disabled shared Import button', () => {
   const context = loadHelpers();
 
   const html = context.buildUtilityIntegrationDetail({
@@ -102,17 +104,14 @@ test('buildUtilityIntegrationDetail renders the local playlist import analyze su
   });
 
   assert.match(html, /Import Local Playlist/);
-  assert.match(html, /Analyze\/preview contract ready/);
-  assert.match(html, /data-local-playlist-import-file/);
-  assert.match(html, /data-analyze-local-playlist="1"/);
-  assert.match(html, /Supports: \.fpl, \.m3u, \.m3u8, \.pls/);
-  assert.match(html, /Completion &amp; preview direction reserved/);
-  assert.doesNotMatch(html, /Completion &amp;amp; preview direction reserved/);
-  assert.match(html, /Phase 3 default target\./);
-  assert.match(html, /Blocked until later analyzer work\./);
+  assert.equal((html.match(/<button\b/g) || []).length, 1);
+  assert.match(html, /<button\b[^>]*data-local-playlist-import="1"[^>]*>/);
+  assert.match(html, /<button\b[^>]*\bdisabled(?:="[^"]*")?[^>]*>/);
+  assert.match(html, />Import</);
+  assert.doesNotMatch(html, /<input|data-analyze-local-playlist|data-local-playlist-import-file/);
 });
 
-test('buildUtilityIntegrationDetail renders returned local playlist preview status', () => {
+test('legacy preview state cannot expose an unsupported playlist workflow', () => {
   const context = loadHelpers({
     state: {
       utility: {
@@ -190,9 +189,7 @@ test('buildUtilityIntegrationDetail renders returned local playlist preview stat
     },
   });
 
-  assert.match(html, /2026\.fpl/);
-  assert.match(html, /foobar_fpl/);
-  assert.match(html, /binary_adapter_reserved/);
-  assert.match(html, /Recommended target: playlist/);
-  assert.match(html, /Album Top unavailable: Album-group matching and local-library completion analysis land in later phases\./);
+  assert.match(html, /<button\b[^>]*\bdisabled(?:="[^"]*")?[^>]*>/);
+  assert.match(html, /data-local-playlist-import="1"/);
+  assert.doesNotMatch(html, /2026\.fpl|foobar_fpl|Recommended target|Analyze|<input/);
 });

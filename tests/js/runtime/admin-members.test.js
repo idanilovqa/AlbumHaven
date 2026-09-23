@@ -8,12 +8,22 @@ const sourcePath = path.join(
   __dirname, '..', '..', '..', 'music_app', 'static', 'js', 'admin-members.js',
 );
 
+function alertElement() {
+  const message = { textContent: '' };
+  const alert = element({ hidden: true });
+  alert.querySelector = selector => selector === '.on-page-alert__message' ? message : null;
+  Object.defineProperty(alert, 'textContent', { get() { return message.textContent; } });
+  return alert;
+}
+
 function element(initial = {}) {
   const listeners = new Map();
   return {
     ...initial,
     listeners,
     attributes: { ...(initial.attributes || {}) },
+    style: {},
+    getBoundingClientRect() { return { left: 600, right: 790, top: 600, bottom: 642, width: 190, height: 130 }; },
     addEventListener(name, callback) { listeners.set(name, callback); },
     setAttribute(name, value) { this.attributes[name] = value; },
     getAttribute(name) { return this.attributes[name] ?? null; },
@@ -26,19 +36,22 @@ function element(initial = {}) {
   };
 }
 
-function loadRuntime({ mode = 'create', active = true, libraryAccess = true, navigate } = {}) {
+function loadRuntime({ mode = 'create', active = true, initialActive = true, libraryAccess = true, navigate, request, confirm = () => true } = {}) {
   const password = element({ type: 'password', focused: false });
   const toggle = element({ dataset: { passwordToggle: 'admin-new-password' }, textContent: 'Show' });
   const submit = element({ disabled: false, textContent: mode === 'create' ? 'Create user' : 'Save changes' });
-  const error = element({ hidden: true, textContent: '' });
-  const status = element({ hidden: true, textContent: '' });
+  const error = alertElement();
+  const reauth = { panel: element({ hidden: true }), password: element({ value: '' }), submit: element({ disabled: false }) };
+  const status = alertElement();
+  const activeControl = element({ checked: active });
+  const activeAction = element({ dataset: { adminAction: 'toggle-active' } });
   const reset = element({ dataset: { adminAction: 'reset' }, disabled: false });
   const welcome = element({ dataset: { adminAction: 'welcome' }, disabled: false });
   const revoke = element({ dataset: { adminAction: 'revoke' }, disabled: false, textContent: 'Revoke sessions' });
   const form = element({
     dataset: {
       mode,
-      initialActive: 'true',
+      initialActive: String(initialActive),
       initialLibraryAccess: 'true',
     },
     checkValidity: () => true,
@@ -50,11 +63,14 @@ function loadRuntime({ mode = 'create', active = true, libraryAccess = true, nav
     },
     querySelector: (selector) => {
       if (selector === 'button[type="submit"]') return submit;
-      if (selector === '[name="is_active"]') return { checked: active };
+      if (selector === '[name="is_active"]') return activeControl;
+      if (selector === '[data-reauth-panel]') return reauth.panel;
+      if (selector === '[data-reauth-password]') return reauth.password;
+      if (selector === '[data-reauth-submit]') return reauth.submit;
       return null;
     },
     querySelectorAll: (selector) => (
-      selector === '[data-admin-action]' && mode === 'edit' ? [reset, welcome, revoke] : []
+      selector === '[data-admin-action]' && mode === 'edit' ? [reset, welcome, revoke, activeAction] : []
     ),
     parentElement: {
       querySelector: (selector) => (
@@ -75,7 +91,7 @@ function loadRuntime({ mode = 'create', active = true, libraryAccess = true, nav
   const confirmations = [];
   let assigned = '';
   class FakeFormData {
-    get(key) { return values.get(key) || null; }
+    get(key) { return key === 'is_active' ? (activeControl.checked ? 'on' : null) : (values.get(key) || null); }
     getAll(key) {
       return key === 'capability_keys'
         ? (mode === 'create'
@@ -88,10 +104,11 @@ function loadRuntime({ mode = 'create', active = true, libraryAccess = true, nav
     FormData: FakeFormData,
     fetch: async (...args) => {
       fetches.push(args);
+      if (request) return request(...args);
       return { ok: true, json: async () => ({ account_id: 42 }) };
     },
     window: {
-      confirm: (message) => { confirmations.push(message); return true; },
+      confirm: (message) => { confirmations.push(message); return confirm(message); },
       location: { assign: (value) => { assigned = value; } },
     },
     document: {
@@ -104,10 +121,11 @@ function loadRuntime({ mode = 'create', active = true, libraryAccess = true, nav
       },
     },
   });
+  form.requestSubmit = () => { form.submission = form.listeners.get('submit')({ preventDefault() {} }); };
   vm.runInContext(fs.readFileSync(sourcePath, 'utf8'), context, { filename: sourcePath });
   if (navigate) context.window.AlbumHavenMountAdmin(context.document, { navigate });
   return {
-    password, toggle, submit, error, status, reset, welcome, revoke, form, fetches, confirmations,
+    password, toggle, submit, error, status, reset, welcome, revoke, activeAction, activeControl, form, fetches, confirmations, reauth,
     assigned: () => assigned,
   };
 }
@@ -116,6 +134,7 @@ function loadRosterRuntime({
   clipboardReject = false,
   reauthOnFirstCopy = false,
   copyResponse = null,
+  request = null,
 } = {}) {
   const menuButton = element({
     dataset: { memberMenuTrigger: '41' },
@@ -123,6 +142,7 @@ function loadRosterRuntime({
   });
   const copyInvite = element({ dataset: { copyInvitation: '41' } });
   const sendInvite = element({ dataset: { sendInvitation: '41' } });
+  const sendOtherInvite = element({ dataset: { sendInvitation: '42' } });
   const edit = element();
   const menu = element({
     dataset: { memberMenu: '41' },
@@ -130,8 +150,8 @@ function loadRosterRuntime({
     children: [copyInvite, sendInvite, edit],
   });
   menu.querySelector = (selector) => (selector === '[role="menuitem"]' ? copyInvite : null);
-  const status = element({ hidden: true, textContent: '' });
-  const error = element({ hidden: true, textContent: '' });
+  const status = alertElement();
+  const error = alertElement();
   const fallbackInput = element({ value: '', readOnly: true, focused: false, selected: false });
   const fallbackManual = element();
   const fallbackDismiss = element();
@@ -156,6 +176,7 @@ function loadRosterRuntime({
 
   const fetches = [];
   const documentListeners = new Map();
+  const windowListeners = new Map();
   let copyAttempts = 0;
   let successfulCopies = 0;
   const clipboard = {
@@ -170,6 +191,7 @@ function loadRosterRuntime({
     FormData: class {},
     fetch: async (url, options) => {
       fetches.push({ url, options });
+      if (request) return request(url, options);
       if (url.endsWith('/invitation/copy')) {
         copyAttempts += 1;
         if (reauthOnFirstCopy && copyAttempts === 1) {
@@ -194,20 +216,26 @@ function loadRosterRuntime({
     },
     navigator: { clipboard },
     URL,
-    window: { location: { origin: 'https://example.test', assign() {} } },
+    window: {
+      innerWidth: 800, innerHeight: 720,
+      location: { origin: 'https://example.test', assign() {} },
+      addEventListener(name, callback) { windowListeners.set(name, callback); },
+      removeEventListener(name) { windowListeners.delete(name); },
+    },
     document: {
       addEventListener(name, callback) { documentListeners.set(name, callback); },
       querySelectorAll(selector) {
         if (selector === '[data-password-toggle]') return [];
         if (selector === '[data-member-menu-trigger]') return [menuButton];
         if (selector === '[data-copy-invitation]') return [copyInvite];
-        if (selector === '[data-send-invitation]') return [sendInvite];
+        if (selector === '[data-send-invitation]') return [sendInvite, sendOtherInvite];
         if (selector === '[data-member-menu]:not([hidden])') {
           return menu.hidden ? [] : [menu];
         }
         return [];
       },
       querySelector(selector) {
+        if (selector === '[data-settings-host]') return {};
         if (selector === '[data-admin-roster]') return roster;
         if (selector === '[data-admin-account-form]') return null;
         if (selector === '[data-member-menu="41"]') return menu;
@@ -218,8 +246,9 @@ function loadRosterRuntime({
     },
   });
   vm.runInContext(fs.readFileSync(sourcePath, 'utf8'), context, { filename: sourcePath });
+  const cleanup = context.window.AlbumHavenMountAdmin(context.document);
   return {
-    row: { menuButton, menu, copyInvite, sendInvite },
+    row: { menuButton, menu, copyInvite, sendInvite, sendOtherInvite },
     status,
     error,
     fallback: { panel: fallback, input: fallbackInput, manual: fallbackManual, dismiss: fallbackDismiss },
@@ -227,8 +256,90 @@ function loadRosterRuntime({
     clipboard,
     fetches,
     documentListeners,
+    windowListeners, cleanup,
     outside: element(),
   };
+}
+
+test('detail Enter uses Continue and does not submit another stale account mutation', async () => {
+  let patches = 0;
+  const runtime = loadRuntime({ mode: 'edit', request: async (_url, options) => {
+    if (options.method === 'PATCH' && ++patches === 1) {
+      return { ok: false, status: 409, json: async () => ({ detail: 'Recent authentication is required.' }) };
+    }
+    return { ok: true, json: async () => ({}) };
+  } });
+  runtime.form.requestSubmit();
+  await runtime.form.submission;
+  assert.equal(runtime.reauth.panel.hidden, false);
+  runtime.reauth.password.value = 'owner password';
+  let prevented = false;
+  runtime.reauth.password.listeners.get('keydown')({ key: 'Enter', preventDefault() { prevented = true; } });
+  await new Promise(setImmediate);
+  assert.equal(prevented, true);
+  assert.deepEqual(runtime.fetches.map(([url, options]) => [url, options.method]), [
+    ['/admin/accounts/41', 'PATCH'], ['/admin/reauthenticate', 'POST'], ['/admin/accounts/41', 'PATCH'],
+  ]);
+  assert.equal(runtime.reauth.password.value, '');
+  assert.equal(runtime.reauth.panel.hidden, true);
+});
+
+test('detail Enter respects an in-flight Continue and leaves composing input alone', () => {
+  const runtime = loadRuntime({ mode: 'edit' });
+  runtime.reauth.password.value = 'owner password';
+  runtime.reauth.submit.disabled = true;
+  let prevented = 0;
+  const press = runtime.reauth.password.listeners.get('keydown');
+  press({ key: 'Enter', preventDefault() { prevented += 1; } });
+  press({ key: 'Enter', isComposing: true, preventDefault() { prevented += 1; } });
+  assert.equal(prevented, 1);
+  assert.equal(runtime.fetches.length, 0);
+  runtime.reauth.submit.disabled = false;
+  runtime.reauth.password.value = '';
+  press({ key: 'Enter', preventDefault() {} });
+  assert.equal(runtime.fetches.length, 0);
+  assert.equal(runtime.reauth.password.focused, true);
+});
+
+test('roster menu is clamped above its last-row trigger and closes on layout change or disposal', async () => {
+  const runtime = loadRosterRuntime();
+  const { menuButton, menu } = runtime.row;
+  await menuButton.click();
+  assert.equal(menu.style.left, '600px');
+  assert.equal(menu.style.top, '465px');
+  runtime.windowListeners.get('scroll')({ type: 'scroll', target: runtime.outside });
+  assert.equal(menu.hidden, true);
+  assert.equal(menuButton.getAttribute('aria-expanded'), 'false');
+  await menuButton.click();
+  runtime.windowListeners.get('resize')({ type: 'resize' });
+  assert.equal(menu.hidden, true);
+  await menuButton.click();
+  runtime.cleanup();
+  assert.equal(menu.hidden, true);
+  assert.equal(runtime.windowListeners.size, 0);
+});
+
+for (const outcome of ['same-account', 'other-account', 'failed-send']) {
+  test(`invitation fallback follows successful token rotation: ${outcome}`, async () => {
+    const invitationUrl = 'https://example.test/accept-invitation?purpose=account-invitation&token=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA';
+    const runtime = loadRosterRuntime({
+      clipboardReject: true,
+      request: async (url) => ({
+        ok: !(outcome === 'failed-send' && url.endsWith('/invitation/send')),
+        status: outcome === 'failed-send' && url.endsWith('/invitation/send') ? 503 : 200,
+        json: async () => ({ invitation_url: invitationUrl }),
+      }),
+    });
+    await runtime.row.copyInvite.click();
+    assert.equal(runtime.fallback.panel.hidden, false);
+    assert.equal(runtime.fallback.input.value, invitationUrl);
+
+    await (outcome === 'other-account' ? runtime.row.sendOtherInvite : runtime.row.sendInvite).click();
+
+    assert.equal(runtime.fallback.panel.hidden, outcome === 'same-account');
+    assert.equal(runtime.fallback.input.value, outcome === 'same-account' ? '' : invitationUrl);
+    if (outcome === 'failed-send') assert.equal(runtime.error.hidden, false);
+  });
 }
 
 test('admin add-user password toggle preserves accessible pressed state', () => {
@@ -410,6 +521,47 @@ test('admin roster copy and send invitation actions use distinct endpoints with 
   assert.match(runtime.status.textContent, /Invitation email queued/);
 });
 
+for (const secondAction of ['copyInvite', 'sendInvite']) {
+  for (const pendingStage of ['response', 'clipboard']) {
+    test(`roster invitation rotation excludes ${secondAction} during pending ${pendingStage}`, async t => {
+      let finish;
+      const pending = new Promise(resolve => { finish = resolve; });
+      const response = { ok: true, status: 200, json: async () => ({ invitation_url: `https://example.test/accept-invitation?purpose=account-invitation&token=${'A'.repeat(43)}` }) };
+      const runtime = loadRosterRuntime({ request: async () => pendingStage === 'response' ? pending : response });
+      if (pendingStage === 'clipboard') runtime.clipboard.writeText = async value => { await pending; runtime.clipboard.value = value; };
+      const first = runtime.row.copyInvite.click();
+      t.after(async () => { finish(response); await first; });
+      await new Promise(resolve => setImmediate(resolve));
+      const duplicate = runtime.row[secondAction].click();
+      t.after(async () => { finish(response); await duplicate; });
+      assert.equal(runtime.fetches.length, 1, 'a later rotation must not invalidate the pending copied token');
+      assert.equal(runtime.row.copyInvite.disabled, true);
+      assert.equal(runtime.row.sendInvite.disabled, true);
+      finish(response);
+      await Promise.all([first, duplicate]);
+      assert.match(runtime.clipboard.value, /token=A{43}$/);
+      assert.equal(runtime.row.copyInvite.disabled, false);
+      assert.equal(runtime.row.sendInvite.disabled, false);
+      await runtime.row[secondAction].click();
+      assert.equal(runtime.fetches.length, 2, 'normal actions resume after the prior result is exposed');
+    });
+  }
+}
+
+test('roster invitation rotation remains owned through reauthentication and releases on cancel', async () => {
+  const runtime = loadRosterRuntime({ reauthOnFirstCopy: true });
+  await runtime.row.copyInvite.click();
+  await runtime.row.sendInvite.click();
+  assert.equal(runtime.fetches.length, 1);
+  assert.equal(runtime.reauth.panel.hidden, false);
+  runtime.reauth.password.value = 'discard this cancelled password';
+  await runtime.reauth.cancel.click();
+  assert.equal(runtime.reauth.password.value, '');
+  assert.equal(runtime.row.copyInvite.disabled, false);
+  await runtime.row.sendInvite.click();
+  assert.equal(runtime.fetches.length, 2);
+});
+
 test('admin roster invitation actions close the menu and restore trigger focus', async () => {
   const runtime = loadRosterRuntime();
   const { row } = runtime;
@@ -467,6 +619,7 @@ test('admin roster invitation action performs one 409 reauthentication retry', a
     password: 'administrator private password',
   });
   assert.equal(runtime.reauth.panel.hidden, true);
+  assert.equal(runtime.reauth.password.value, '');
   assert.equal(
     runtime.clipboard.value,
     'https://example.test/accept-invitation?purpose=account-invitation&token=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA',
@@ -487,4 +640,32 @@ test('admin roster empty reauthentication stays local and returns focus with an 
   assert.equal(runtime.reauth.password.focused, true);
   assert.equal(runtime.error.hidden, false);
   assert.match(runtime.error.textContent, /password/i);
+});
+
+
+for (const initialActive of [true, false]) {
+  test(`labeled account action respects persisted state after edited checkbox: ${initialActive}`, async () => {
+    const runtime = loadRuntime({ mode: 'edit', initialActive, active: !initialActive });
+    await runtime.activeAction.click();
+    await runtime.form.submission;
+    assert.equal(runtime.fetches.length, 1);
+    const payload = JSON.parse(runtime.fetches[0][1].body);
+    assert.equal(payload.is_active, !initialActive);
+    assert.equal(payload.confirm_disable, initialActive);
+  });
+}
+
+test('labeled disable remains disable after cancelling its first confirmation', async () => {
+  let confirmations = 0;
+  const runtime = loadRuntime({ mode: 'edit', confirm: () => ++confirmations > 1 });
+  await runtime.activeAction.click();
+  await runtime.form.submission;
+  assert.equal(runtime.fetches.length, 0);
+  await runtime.activeAction.click();
+  await runtime.form.submission;
+  assert.equal(confirmations, 2);
+  assert.equal(runtime.fetches.length, 1);
+  const payload = JSON.parse(runtime.fetches[0][1].body);
+  assert.equal(payload.is_active, false);
+  assert.equal(payload.confirm_disable, true);
 });

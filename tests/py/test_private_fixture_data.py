@@ -8,6 +8,12 @@ import pytest
 from tests.e2e.support import privateFixtureData
 
 
+@pytest.fixture(autouse=True)
+def isolated_private_fixture_roots(monkeypatch):
+    monkeypatch.delenv(privateFixtureData.TEST_DATA_ROOT_ENV, raising=False)
+    monkeypatch.delenv("ALBUM_HAVEN_APPROVED_COVER_ROOT", raising=False)
+
+
 def test_private_fixture_root_requires_explicit_opt_in(monkeypatch):
     monkeypatch.delenv(privateFixtureData.TEST_DATA_ROOT_ENV, raising=False)
 

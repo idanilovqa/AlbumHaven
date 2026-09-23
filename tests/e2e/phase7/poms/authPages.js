@@ -97,6 +97,23 @@ export class MembersPage {
     this.ownerFullAccess = page.getByText(/^Owner\s*·\s*Full access$/);
     this.libraryAccess = page.getByRole('checkbox', { name: 'Current library access', exact: true });
     this.saveChanges = page.getByRole('button', { name: 'Save changes', exact: true });
+    this.adminForm = page.locator('[data-admin-account-form]');
+    this.reauthPassword = page.locator('[data-reauth-password]');
+    this.reauthPanel = page.locator('[data-reauth-panel]');
+    this.openActionMenus = page.locator('[data-member-menu]:not([hidden])');
+  }
+
+  async menuItemsAreHitTestable(menu) {
+    // parity-check: allow-read-only-measurement-evaluate -- inspect menu hit targets within the existing Settings outlet
+    return menu.evaluate((element) => {
+      const bounds = element.closest('.settings-outlet').getBoundingClientRect();
+      return [...element.querySelectorAll('[role="menuitem"]')].every((item) => {
+        const rect = item.getBoundingClientRect();
+        const hit = document.elementFromPoint((rect.left + rect.right) / 2, (rect.top + rect.bottom) / 2);
+        return rect.left >= bounds.left && rect.right <= bounds.right && rect.top >= bounds.top
+          && rect.bottom <= Math.min(bounds.bottom, innerHeight) && item.contains(hit);
+      });
+    });
   }
 
   capabilitySwitch(label) {

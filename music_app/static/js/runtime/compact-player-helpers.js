@@ -17,6 +17,64 @@ function normalizeCompactPlayerStyle(value) {
   return value === 'floating' ? 'floating' : 'docked';
 }
 
+function normalizeDockedCompactPlayerBehavior(value) {
+  return ['follow_sidebar', 'float_on_collapse', 'artbox', 'stay_docked'].includes(value) ? value : 'follow_sidebar';
+}
+
+function resolveCompactPlayerPresentation({ eligible, mode, style, behavior, artistTreeFolded } = {}) {
+  if (!eligible || mode !== 'compact') return 'expanded';
+  if (normalizeCompactPlayerStyle(style) === 'floating') return 'floating';
+  const dockBehavior = normalizeDockedCompactPlayerBehavior(behavior);
+  if (!artistTreeFolded || dockBehavior === 'stay_docked') return 'docked';
+  if (dockBehavior === 'float_on_collapse') return 'floating';
+  return dockBehavior === 'artbox' ? 'rail_artbox' : 'rail_play';
+}
+
+function resolveCompactPlayerMotion({ speed, reducedMotion } = {}) {
+  return reducedMotion ? { durationMs: 1, hoverDurationMs: 1 }
+    : { durationMs: speed === 'slow' ? 1400 : 420, hoverDurationMs: 300 };
+}
+
+function shouldDetachCompactPlayerForOverlay({ presentation, overlayActive } = {}) {
+  return Boolean(overlayActive) && ['docked', 'rail_play', 'rail_artbox'].includes(presentation);
+}
+
+function resolveCompactPlayerMetadataRevealDelay({ presentation, speed, reducedMotion } = {}) {
+  if (presentation === 'rail_artbox') return 700;
+  if (presentation !== 'rail_play') return null;
+  return resolveCompactPlayerMotion({ speed, reducedMotion }).durationMs + 700;
+}
+
+function buildCompactPlayerMetadataSummary(track) {
+  const artist = String(track?.artist || '').trim();
+  const title = String(track?.title || track?.name || '').trim();
+  const album = String(track?.album || '').trim();
+  const song = artist && title ? `${artist} - ${title}` : artist || title;
+  return song && album ? `${song} / ${album}` : song || album;
+}
+
+function resolveCompactPlayerMetadataRowMotion({ scrollWidth, clientWidth } = {}) {
+  const distance = Math.max(0, Math.ceil((Number(scrollWidth) || 0) - (Number(clientWidth) || 0)));
+  if (distance <= 1) return { overflowing: false, distance: 0, durationMs: 0 };
+  return {
+    overflowing: true,
+    distance,
+    durationMs: Math.max(3200, Math.round(distance * 24 + 1800)),
+  };
+}
+
+function useCompactPlayerRailMode({ style, behavior, artistTreeFolded } = {}) {
+  return normalizeCompactPlayerStyle(style) === 'docked'
+    && normalizeDockedCompactPlayerBehavior(behavior) === 'follow_sidebar'
+    && artistTreeFolded === true;
+}
+
+function canDragStayDockedCompactPlayer({ presentation, behavior, artistTreeFolded } = {}) {
+  return presentation === 'docked'
+    && normalizeDockedCompactPlayerBehavior(behavior) === 'stay_docked'
+    && artistTreeFolded === true;
+}
+
 function didCompactPlayerDrag({ startX, startY, currentX, currentY, threshold = 6 } = {}) {
   return Math.hypot(Number(currentX) - Number(startX), Number(currentY) - Number(startY)) >= Number(threshold);
 }
@@ -68,6 +126,15 @@ if (typeof module !== 'undefined' && module.exports) module.exports = {
   resolveCompactPlayerMode,
   persistCompactPlayerMode,
   normalizeCompactPlayerStyle,
+  normalizeDockedCompactPlayerBehavior,
+  canDragStayDockedCompactPlayer,
+  useCompactPlayerRailMode,
+  resolveCompactPlayerPresentation,
+  shouldDetachCompactPlayerForOverlay,
+  resolveCompactPlayerMotion,
+  resolveCompactPlayerMetadataRevealDelay,
+  buildCompactPlayerMetadataSummary,
+  resolveCompactPlayerMetadataRowMotion,
   didCompactPlayerDrag,
   clampCompactPlayerPosition,
   createCompactPlayerSessionPosition,

@@ -4,7 +4,7 @@ const { spawnSync } = require('node:child_process');
 
 const MINIMUM_PYTEST_CASES = 3037;
 const MINIMUM_PYTEST_MODULES = 147;
-const EXPECTED_COMPONENT_CASES = 15;
+const EXPECTED_COMPONENT_CASES = 82;
 
 function jobSource(workflow, jobName, nextJobName) {
   const start = workflow.indexOf(`  ${jobName}:`);
@@ -116,7 +116,7 @@ function validateWorkflowContract(workflow) {
   const errors = [];
   if (!/^on:\r?\n\s+pull_request:/m.test(workflow)
     || /^\s{2}(?:push|schedule|workflow_dispatch|pull_request_target):/m.test(workflow)) {
-    errors.push('foundation workflow must remain pull_request-only');
+    errors.push('foundation workflow must remain pull-request-only');
   }
   requirePatterns(workflow, [
     [/ExpectedMajorVersion\s+17/, 'PostgreSQL 17'],
@@ -132,7 +132,7 @@ function validateWorkflowContract(workflow) {
     phase7Auth: jobSource(workflow, 'e2e_phase7_auth', 'e2e_phase7_admin'),
     phase7Admin: jobSource(workflow, 'e2e_phase7_admin', 'e2e_functional'),
     functional: jobSource(workflow, 'e2e_functional', 'e2e_performance_ci'),
-    performance: jobSource(workflow, 'e2e_performance_ci', 'pr_agent_review'),
+    performance: jobSource(workflow, 'e2e_performance_ci', 'review_scope'),
   };
   if (!jobs.functional) errors.push('foundation workflow must preserve the functional job');
   if (!jobs.performance) errors.push('foundation workflow must preserve the performance job');
@@ -141,6 +141,14 @@ function validateWorkflowContract(workflow) {
     if (!source && !['functional', 'performance'].includes(name)) {
       errors.push(`foundation workflow is missing ${name} job`);
     }
+  }
+
+  for (const [name, source] of Object.entries(jobs)) {
+    if (!source) continue;
+    requirePatterns(source, [
+      [/^      - review_prerequisites\r?$/m, 'review_prerequisites dependency'],
+      [/^    if: \$\{\{ !cancelled\(\) && needs\.review_prerequisites\.result == 'success'/m, 'successful review prerequisite and cancellable job condition'],
+    ], `${name} job`, errors);
   }
 
   for (const [name, source] of [['portable', jobs.portable], ['production parity', jobs.parity]]) {
@@ -226,9 +234,9 @@ function validateWorkflowContract(workflow) {
     if (!/github\.event\.pull_request\.head\.repo\.full_name\s*==\s*github\.repository/.test(source)) {
       errors.push(`${name} job must be limited to a same-repository pull request`);
     }
-    for (const dependency of ['test_js', 'test_components', 'test_node_windows', 'test_python', 'e2e_production_parity']) {
+    for (const dependency of ['review_scope', 'pr_agent_review', 'codex_review']) {
       if (!new RegExp(`- ${dependency}(?:\\r?\\n|$)`).test(source)) {
-        errors.push(`${name} job is missing foundation dependency ${dependency}`);
+        errors.push(`${name} job is missing review dependency ${dependency}`);
       }
     }
     requirePatterns(source, [
@@ -245,9 +253,9 @@ function validateWorkflowContract(workflow) {
 
   for (const source of [jobs.functional, jobs.performance]) {
     if (!source) continue;
-    for (const dependency of ['test_js', 'test_components', 'test_node_windows', 'test_python', 'e2e_production_parity']) {
+    for (const dependency of ['review_scope', 'pr_agent_review', 'codex_review']) {
       if (!new RegExp(`- ${dependency}(?:\\r?\\n|$)`).test(source)) {
-        errors.push(`heavy browser job is missing foundation dependency ${dependency}`);
+        errors.push(`heavy browser job is missing review dependency ${dependency}`);
       }
     }
   }

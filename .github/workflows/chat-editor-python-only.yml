@@ -1,0 +1,20 @@
+name: Chat Editor Python Only
+on:
+  push:
+    branches: [2026-09-08-settings-refactor]
+    paths:
+      - .github/workflows/chat-editor-python-only.yml
+permissions:
+  contents: read
+jobs:
+  python:
+    runs-on: windows-2025
+    timeout-minutes: 30
+    defaults: {run: {shell: pwsh}}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.11', cache: pip, cache-dependency-path: requirements.txt}
+      - run: python -m pip install -r requirements.txt
+      - name: Focus current failures
+        run: python -m pytest -q --tb=short tests/py/test_api_read_asgi_routes.py tests/py/test_api_wave_a_asgi_routes.py tests/py/test_api_wave_b_asgi_routes.py tests/py/test_library_browse_postgres.py tests/py/test_settings_scrobble_status_counts.py

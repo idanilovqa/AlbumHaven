@@ -620,7 +620,11 @@ async function fetchAndRender(url, push = true, options = {}) {
     state.awaitingInitialDataRefresh = false;
   }
   if (state.busy) {
-    if (String(state.ui.activeViewRequestUrl || '') === apiUrl) {
+    if (
+      String(state.ui.activeViewRequestUrl || '') === apiUrl
+      && Number(state.ui.activeViewRequestTagEditMutationRevision || 0)
+        === Number(state.ui.tagEditOptimisticMutationRevision || 0)
+    ) {
       const activeController = state.ui.activeViewRequestController;
       if (
         restartIfSameUrl
@@ -668,8 +672,10 @@ async function fetchAndRender(url, push = true, options = {}) {
   let viewRendered = false;
   const requestId = Number(state.ui.activeViewRequestId || 0) + 1;
   const requestViewStateRevision = readViewStateRevision();
+  const requestTagEditMutationRevision = Number(state.ui.tagEditOptimisticMutationRevision || 0);
   const controller = typeof AbortController === 'function' ? new AbortController() : null;
   state.ui.activeViewRequestId = requestId;
+  state.ui.activeViewRequestTagEditMutationRevision = requestTagEditMutationRevision;
   state.ui.activeViewRequestUrl = apiUrl;
   state.ui.activeViewRequestPush = Boolean(push);
   state.ui.activeViewRequestStartupRefresh = Boolean(requestOptions.startupRefresh);
@@ -712,6 +718,10 @@ async function fetchAndRender(url, push = true, options = {}) {
       payloadTier: String(data?.payload_tier || ''),
     });
     if (!requestOwnsCurrentViewState(requestId, requestViewStateRevision)) {
+      return false;
+    }
+    // A response dispatched before a tag edit must not replace its optimistic view.
+    if (requestTagEditMutationRevision !== Number(state.ui.tagEditOptimisticMutationRevision || 0)) {
       return false;
     }
     if (
@@ -907,6 +917,7 @@ async function fetchAndRender(url, push = true, options = {}) {
     }
     if (state.ui.activeViewRequestId === requestId) {
       state.ui.activeViewRequestController = null;
+      state.ui.activeViewRequestTagEditMutationRevision = null;
       state.ui.activeViewRequestUrl = '';
       state.ui.activeViewRequestPush = false;
       state.ui.activeViewRequestStartupRefresh = false;
@@ -1096,6 +1107,7 @@ function abandonScanPageForNavigation(options = {}) {
   claimLocalViewStateNavigation();
   state.ui.scanPageReturnContext = null;
   state.ui.forceScanPageVisible = false;
+  if (typeof unmountLibraryStatusBar === 'function') unmountLibraryStatusBar();
   resumeScanPageGalleryCoverLoads();
   if (options.clearSelection === true) {
     state.view = {
@@ -1147,6 +1159,7 @@ function closeScanPage() {
   }
   state.ui.searchDraftQuery = String(returnContext.searchDraftQuery ?? state.view?.query ?? '');
   state.ui.scanPageReturnContext = null;
+  if (typeof unmountLibraryStatusBar === 'function') unmountLibraryStatusBar();
   const searchInput = document.getElementById('search-input');
   if (searchInput) searchInput.value = state.ui.searchDraftQuery;
   if (
@@ -1268,6 +1281,7 @@ async function browseScannedLibrarySnapshot() {
     });
     state.ui.scanPageReturnContext = null;
     state.ui.forceScanPageVisible = false;
+    if (typeof unmountLibraryStatusBar === 'function') unmountLibraryStatusBar();
     state.ui.searchDraftQuery = '';
     const searchInput = document.getElementById('search-input');
     if (searchInput) searchInput.value = '';
@@ -1333,6 +1347,7 @@ async function browseScannedLibrarySnapshot() {
     ) {
       state.ui.scanPageReturnContext = null;
       state.ui.forceScanPageVisible = false;
+      if (typeof unmountLibraryStatusBar === 'function') unmountLibraryStatusBar();
       state.ui.searchDraftQuery = '';
       const searchInput = document.getElementById('search-input');
       if (searchInput) searchInput.value = '';
@@ -1348,8 +1363,24 @@ async function browseScannedLibrarySnapshot() {
   }
 }
 
+function watcherHealthRefreshSignature(status) {
+  const health = status?.watcher_health || {};
+  const problems = Array.isArray(health.problems) ? health.problems : [];
+  return JSON.stringify([
+    String(health.state || ''),
+    problems.map(problem => [
+      String(problem?.root_key || ''),
+      String(problem?.state || ''),
+      String(problem?.detected_at || ''),
+      String(problem?.message || ''),
+      Object.entries(problem?.allowed_actions || {}).sort(([left], [right]) => left.localeCompare(right)),
+    ]).sort((left, right) => JSON.stringify(left).localeCompare(JSON.stringify(right))),
+  ]);
+}
+
 async function pollStatus() {
   const knownStatus = state.status || {};
+  const knownWatcherHealth = watcherHealthRefreshSignature(knownStatus);
   const hadKnownInventoryRevision = Object.prototype.hasOwnProperty.call(
     knownStatus,
     'inventory_mutation_revision',
@@ -1380,23 +1411,33 @@ async function pollStatus() {
     const currentInventoryRevision = Number(
       normalizedStatus.inventory_mutation_revision || 0,
     );
-    if (
-      hadKnownInventoryRevision
-      && currentInventoryRevision > knownInventoryRevision
-    ) {
+    const inventoryAdvanced = hadKnownInventoryRevision
+      && currentInventoryRevision > knownInventoryRevision;
+    if (inventoryAdvanced) {
       if (typeof invalidateAllHydratedTrackModalAlbumDetails === 'function') {
         invalidateAllHydratedTrackModalAlbumDetails();
       }
       state.ui.pendingInventoryMutationViewRefresh = true;
-      if (state.utility.loaded) {
-        try {
-          await loadProblematicFiles(true);
-        } catch (problematicFilesError) {
-          console.error(
-            '[AlbumHaven][Watcher] Failed to refresh Problematic Files after an inventory change.',
-            problematicFilesError,
-          );
+    }
+    const utility = state.utility;
+    const healthChanged = knownWatcherHealth !== watcherHealthRefreshSignature(normalizedStatus);
+    if ((utility.loaded || utility.loading) && (inventoryAdvanced || healthChanged)) {
+      utility.problematicStatusRefreshRevision = Number(utility.problematicStatusRefreshRevision || 0) + 1;
+    }
+    const requestedRefreshRevision = Number(utility.problematicStatusRefreshRevision || 0);
+    if (!utility.loading && requestedRefreshRevision > Number(utility.problematicStatusSyncedRevision || 0)) {
+      try {
+        // An earlier in-flight summary cannot satisfy a later status change.
+        // Failed/superseded loads return null; keep the change pending for the next poll.
+        const refreshedItems = await loadProblematicFiles(true);
+        if (state.utility === utility && Array.isArray(refreshedItems)) {
+          utility.problematicStatusSyncedRevision = requestedRefreshRevision;
         }
+      } catch (problematicFilesError) {
+        console.error(
+          '[AlbumHaven][Watcher] Failed to refresh Problematic Files after a status change.',
+          problematicFilesError,
+        );
       }
     }
     const statusObservationSequence = recordSuccessfulStatusObservation();
@@ -1429,47 +1470,10 @@ async function pollStatus() {
     const lastErrorText = scanOutcome === 'running'
       ? ''
       : String(normalizedStatus.last_error || '').trim();
-    const err = document.getElementById('last-error');
-    if (err) {
-      if (lastErrorText) {
-        err.style.display = 'block';
-        err.textContent = `Last scan error: ${lastErrorText}`;
-      } else {
-        err.style.display = 'none';
-        err.textContent = '';
-      }
-    }
     if (lastErrorText) {
       if (state.ui.lastStatusErrorToastIdentity !== lastErrorText) {
         state.ui.lastStatusErrorToastIdentity = lastErrorText;
-        showToast(`Last scan error: ${escapeHtml(lastErrorText)}`, 'error', 4800);
-      }
-      const scanGeneration = Number(normalizedStatus.scan_generation) || 0;
-      const historyIdentity = `${scanGeneration}:${lastErrorText}`;
-      if (state.ui.lastStatusErrorHistoryIdentity !== historyIdentity) {
-        state.ui.lastStatusErrorHistoryIdentity = historyIdentity;
-        try {
-          const historyPersistence = prependUtilityLogHistoryEntry({
-            id: `library-status-error:${scanGeneration}`,
-            action: 'Library status error',
-            level: 'error',
-            error: lastErrorText,
-            scan_generation: scanGeneration,
-            scan_phase: String(normalizedStatus.scan_phase || ''),
-            scan_outcome: scanOutcome,
-          });
-          Promise.resolve(historyPersistence).catch((historyError) => {
-            console.error(
-              '[AlbumHaven][History] Failed to persist a library status error.',
-              historyError,
-            );
-          });
-        } catch (historyError) {
-          console.error(
-            '[AlbumHaven][History] Failed to persist a library status error.',
-            historyError,
-          );
-        }
+      showToast(`Last scan error: ${lastErrorText}`, 'error', 4800);
       }
     } else {
       state.ui.lastStatusErrorToastIdentity = '';

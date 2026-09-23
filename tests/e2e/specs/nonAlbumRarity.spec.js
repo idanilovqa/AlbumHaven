@@ -26,7 +26,7 @@ const INFERRED_TRACK_FILENAME = '02 - Rename Track 2.mp3';
 const INFERRED_TRACK_TITLE = 'Rename Track 2';
 const INFERRED_TRACK_COUNT = 18;
 
-test('FTC-NON-ALBUM-013 keeps a strongly inferred blank-Album track in Other and Album Details', async ({
+test('FTC-NON-ALBUM-013 keeps a strongly inferred blank-Album track in Other and Album Details', { tag: '@area:album-details' }, async ({
   appBarActions,
   artistPageSettingsActions,
   galleryActions,
@@ -125,7 +125,7 @@ test('FTC-NON-ALBUM-013 keeps a strongly inferred blank-Album track in Other and
   }
 });
 
-test('FTC-TAGS-005 keeps a failed physical tag write visible and records it in Log History', async ({
+test('FTC-TAGS-005 keeps a failed physical tag write visible and records it in Log History', { tag: '@area:tag-edit' }, async ({
   appBarActions,
   galleryActions,
   searchToolbarActions,
@@ -179,25 +179,24 @@ test('FTC-TAGS-005 keeps a failed physical tag write visible and records it in L
       expect(presentation.whiteSpace).toBe('nowrap');
     });
 
-    await stepLogger.step('Open the exact Log History entry and retain the complete failure diagnostic', async () => {
-      await tagEditorActions.openLogHistoryFromFailure();
-      await utilityLogHistoryActions.waitForReady();
-      const entryId = await utilityLogHistoryActions.readSelectedEntryId();
-      expect(entryId).not.toBe('');
-      expect(await utilityLogHistoryActions.readVisibleHistoryText()).toContain(failure.payload.error);
-      const stored = await utilityLogHistoryActions.readBrowserStoredEntry(entryId);
-      expect(stored.entry).toMatchObject({
-        id: entryId,
-        action: 'Tag edit failed',
-        error: failure.payload.error,
-        file_count: 1,
-        source: 'this_browser',
-        source_label: 'This browser',
-      });
-      expect(stored.entry.files).toEqual(expect.arrayContaining([
-        expect.stringContaining(RARITY_TRACK_FILENAME),
-      ]));
+  await stepLogger.step('Open the exact durable Log History entry and retain its sanitized failure diagnostic', async () => {
+    await tagEditorActions.openLogHistoryFromFailure();
+    await utilityLogHistoryActions.waitForReady();
+    const entryId = await utilityLogHistoryActions.readSelectedEntryId();
+    expect(entryId).not.toBe('');
+    const stored = await utilityLogHistoryActions.readPersistedEntry(entryId);
+    expect(stored.entry).toMatchObject({
+      id: entryId,
+      action: 'Tag edit failed',
+      file_count: 1,
     });
+    expect(stored.entry.error).toBeTruthy();
+    expect(await utilityLogHistoryActions.readVisibleHistoryText()).toContain(stored.entry.error);
+    expect(stored.entry.error).not.toMatch(/[A-Za-z]:[\\/]|\\\\[^\\\s]+\\|\/Users\/|\/home\//u);
+    expect(stored.entry).not.toHaveProperty('files');
+    expect(stored.entry).not.toHaveProperty('path');
+    expect(stored.snapshot).toBeTruthy();
+  });
   } finally {
     await galleryActions.goto('/?surface=albums');
     await galleryActions.waitForGalleryReady();
@@ -205,7 +204,7 @@ test('FTC-TAGS-005 keeps a failed physical tag write visible and records it in L
   }
 });
 
-test('FTC-TAGS-023 failed tag saves preserve the source modal for a successful retry', async ({
+test('FTC-TAGS-023 failed tag saves preserve the source modal for a successful retry', { tag: '@area:tag-edit' }, async ({
   galleryActions,
   searchToolbarActions,
   stepLogger,
@@ -314,7 +313,7 @@ test('FTC-TAGS-023 failed tag saves preserve the source modal for a successful r
   }
 });
 
-test('FTC-NON-ALBUM-012 renders exception groups as the approved compact track table', async ({
+test('FTC-NON-ALBUM-012 renders exception groups as the approved compact track table', { tag: '@area:album-details' }, async ({
   artistPageSettingsActions,
   galleryActions,
   navigationPanelActions,
@@ -361,6 +360,13 @@ test('FTC-NON-ALBUM-012 renders exception groups as the approved compact track t
         await navigationPanelActions.selectSidebarArtistByName(RARITY_ARTIST);
       }
       await navigationPanelActions.waitForSidebarSelection(RARITY_ARTIST);
+      await page.reload();
+      await galleryActions.waitForGalleryReady();
+      await navigationPanelActions.waitForSidebarSelection(RARITY_ARTIST);
+      await galleryActions.waitForSelectedArtistGallery(RARITY_ARTIST);
+      await galleryActions.expectAlbumAbsentFromSettledGallery({
+        artist: RARITY_ARTIST, album: RARITY_ALBUM, query: '',
+      });
       await artistPageSettingsActions.openNonAlbumTracks(2);
       await artistPageSettingsActions.expectCompactGroupedNonAlbumTable({
         sections: ['Non-album rarity', 'Interviews'],
@@ -384,6 +390,10 @@ test('FTC-NON-ALBUM-012 renders exception groups as the approved compact track t
     await stepLogger.step('Restore both generated exceptions through the shared editor', async () => {
       await artistPageSettingsActions.openNonAlbumTracksInTagEditor();
       await tagEditorActions.waitForOpen({ expectedTrackCount: 2 });
+      await tagEditorActions.selectTrackByFilename(RARITY_TRACK_FILENAME);
+      expect((await tagEditorActions.readSummary()).exceptionType).toBe('Non-album rarity');
+      await tagEditorActions.selectTrackByFilename(SIBLING_TRACK_FILENAME);
+      expect((await tagEditorActions.readSummary()).exceptionType).toBe('Interview');
       await tagEditorActions.selectAllTracks();
       await tagEditorActions.clearException();
       await tagEditorActions.applyAndWaitForSavedFiles();
@@ -407,7 +417,7 @@ test('FTC-NON-ALBUM-012 renders exception groups as the approved compact track t
   }
 });
 
-test('FTC-NON-ALBUM-011 permits a nonempty Album rename from post-rarity Problematic Files', async ({
+test('FTC-NON-ALBUM-011 permits a nonempty Album rename from post-rarity Problematic Files', { tag: '@area:album-details' }, async ({
   artistPageSettingsActions,
   galleryActions,
   navigationPanelActions,
@@ -450,7 +460,7 @@ test('FTC-NON-ALBUM-011 permits a nonempty Album rename from post-rarity Problem
       await utilityProblematicFilesActions.waitForReady({ requirePopulated: true });
       const problematicItems = await utilityProblematicFilesActions.readVisibleListItems();
       const rarityAlbumIndex = problematicItems.findIndex((item) => (
-        item.meta === RARITY_ARTIST && item.title.startsWith(RARITY_ALBUM)
+        item.meta === `${RARITY_ARTIST} · ${RARITY_YEAR}` && item.title === RARITY_ALBUM
       ));
       expect(rarityAlbumIndex).toBeGreaterThanOrEqual(0);
       await utilityProblematicFilesActions.selectListItemByIndex(rarityAlbumIndex);
@@ -518,7 +528,7 @@ test('FTC-NON-ALBUM-011 permits a nonempty Album rename from post-rarity Problem
   }
 });
 
-test('FTC-NON-ALBUM-014 clears Album durably and refreshes Problematic Files', async ({
+test('FTC-NON-ALBUM-014 clears Album durably and refreshes Problematic Files', { tag: '@area:album-details' }, async ({
   artistPageSettingsActions,
   galleryActions,
   navigationPanelActions,
@@ -559,7 +569,7 @@ test('FTC-NON-ALBUM-014 clears Album durably and refreshes Problematic Files', a
       await utilityProblematicFilesActions.waitForReady({ requirePopulated: true });
       const sourceItems = await utilityProblematicFilesActions.readVisibleListItems();
       const sourceIndex = sourceItems.findIndex((item) => (
-        item.meta === RARITY_ARTIST && item.title.startsWith(RARITY_ALBUM)
+        item.meta === `${RARITY_ARTIST} · ${RARITY_YEAR}` && item.title === RARITY_ALBUM
       ));
       expect(sourceIndex).toBeGreaterThanOrEqual(0);
       await utilityProblematicFilesActions.selectListItemByIndex(sourceIndex);
@@ -638,7 +648,7 @@ test('FTC-NON-ALBUM-014 clears Album durably and refreshes Problematic Files', a
   }
 });
 
-test('FTC-TAGS-004 and FTC-NON-ALBUM-014 preserve rapid Album and Exception edits across gallery transitions', async ({
+test('FTC-TAGS-004 and FTC-NON-ALBUM-014 preserve rapid Album and Exception edits across gallery transitions', { tag: '@area:tag-edit' }, async ({
   artistPageSettingsActions,
   galleryActions,
   navigationPanelActions,
@@ -800,7 +810,7 @@ test('FTC-TAGS-004 and FTC-NON-ALBUM-014 preserve rapid Album and Exception edit
   }
 });
 
-test('FTC-NON-ALBUM-010 / FTC-NON-ALBUM-009 / FTC-NON-ALBUM-008 / FTC-NON-ALBUM-007 / FTC-NON-ALBUM-006 / FTC-TAGS-007 / FTC-NON-ALBUM-005 keeps rarity modal transitions and sibling album state canonical', async ({
+test('FTC-NON-ALBUM-010 / FTC-NON-ALBUM-009 / FTC-NON-ALBUM-008 / FTC-NON-ALBUM-007 / FTC-NON-ALBUM-006 / FTC-TAGS-007 / FTC-NON-ALBUM-005 keeps rarity modal transitions and sibling album state canonical', { tag: '@area:tag-edit' }, async ({
   artistPageSettingsActions,
   galleryActions,
   navigationPanelActions,
@@ -892,7 +902,7 @@ test('FTC-NON-ALBUM-010 / FTC-NON-ALBUM-009 / FTC-NON-ALBUM-008 / FTC-NON-ALBUM-
     await utilityProblematicFilesActions.waitForReady({ requirePopulated: true });
     const problematicItems = await utilityProblematicFilesActions.readVisibleListItems();
     const looseProblemIndex = problematicItems.findIndex((item) => (
-      item.meta === RARITY_ARTIST && item.title.startsWith(RARITY_ALBUM)
+      item.meta === `${RARITY_ARTIST} · ${RARITY_YEAR}` && item.title === RARITY_ALBUM
     ));
     expect(looseProblemIndex).toBeGreaterThanOrEqual(0);
     await utilityProblematicFilesActions.selectListItemByIndex(looseProblemIndex);
@@ -986,7 +996,7 @@ test('FTC-NON-ALBUM-010 / FTC-NON-ALBUM-009 / FTC-NON-ALBUM-008 / FTC-NON-ALBUM-
   });
 });
 
-test('FTC-TAGS-024 completes a verified Album and Exception intent during app restart', async ({
+test('FTC-TAGS-024 completes a verified Album and Exception intent during app restart', { tag: '@area:tag-edit' }, async ({
   artistPageSettingsActions,
   galleryActions,
   managedAppLifecycle,

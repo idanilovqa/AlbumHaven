@@ -11,6 +11,7 @@ from typing import Any, Iterator
 
 from music_app.services.admin_member_mutation_postgres import (
     RecentAuthenticationRequired,
+    lock_current_actor_session,
 )
 from music_app.services.auth_mail_jobs_postgres import (
     AcceptedAuthMailJob,
@@ -98,6 +99,7 @@ class PostgresAdminMailActionService:
         self,
         *,
         actor_account_id: object,
+        actor_session_id: object,
         actor_authenticated_at: object,
         library_id: object,
         target_account_id: object,
@@ -118,6 +120,8 @@ class PostgresAdminMailActionService:
                 target = self._lock_authority_and_target(
                     connection, actor_id, current_library_id, target_id
                 )
+                now = lock_current_actor_session(connection, actor_account_id=actor_id,
+                    actor_session_id=actor_session_id, clock=self._clock)
                 if (
                     target.get("target_account_kind") != "bootstrap_owner"
                     or not _eligible(target)
@@ -165,6 +169,7 @@ class PostgresAdminMailActionService:
         self,
         *,
         actor_account_id: object,
+        actor_session_id: object,
         actor_authenticated_at: object,
         library_id: object,
         target_account_id: object,
@@ -185,6 +190,8 @@ class PostgresAdminMailActionService:
                 target = self._lock_authority_and_target(
                     connection, actor_id, current_library_id, target_id
                 )
+                now = lock_current_actor_session(connection, actor_account_id=actor_id,
+                    actor_session_id=actor_session_id, clock=self._clock)
                 if not _eligible(target):
                     self._audit(connection, actor_id, target_id, "password_reset_ineligible", "invalid", reference, now)
                     return AdminMailActionResult()
@@ -298,7 +305,8 @@ class PostgresAdminMailActionService:
               bucket_kind, bucket_hash, key_version, window_started_at,
               window_expires_at, failure_count, updated_at
             ) values (%s, %s, %s, %s, %s, 0, %s)
-            on conflict (bucket_kind, key_version, bucket_hash) do nothing
+            on conflict (bucket_kind, key_version, bucket_hash)
+            do update set updated_at = app.auth_throttles.updated_at
             """,
             (kind, digest, self._hmac_key_version, now, expires_at, now),
         )

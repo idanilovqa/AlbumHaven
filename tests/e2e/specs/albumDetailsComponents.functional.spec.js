@@ -1,4 +1,12 @@
-import { expect, test } from '../support/baseFixtures.js';
+import { expect, test as base } from '../support/baseFixtures.js';
+import { PERFORMANCE_AUTH_USERNAME } from '../support/performanceAuthentication.js';
+import { withRestoredAppearanceFixture } from '../helpers/appearanceFixture.js';
+
+const test = base.extend({
+  appearanceBaseline: [async ({ context, managedAppLifecycle }, use) => {
+    await withRestoredAppearanceFixture({ username: PERFORMANCE_AUTH_USERNAME, context, managedAppLifecycle }, use);
+  }, { auto: true }],
+});
 
 const MULTI_DISC_ALBUM = 'Ordinary Numeric Disc Control';
 const PLAYBACK_ALBUM = 'Featured Signal Collection';
@@ -17,7 +25,8 @@ async function openAppearanceAlbumPage({
   await utilityAppearanceActions.openSection('album-page');
 }
 
-test('FTC-ALBUM-DETAILS-019 keeps all persisted layouts on the shared compact Album Details components', async ({
+test('FTC-ALBUM-DETAILS-019 keeps all persisted layouts on the shared compact Album Details components', { tag: '@area:album-details' }, async ({
+  appearancePreferenceIsolation,
   galleryActions,
   page,
   searchToolbarActions,
@@ -30,7 +39,10 @@ test('FTC-ALBUM-DETAILS-019 keeps all persisted layouts on the shared compact Al
   test.setTimeout(240000);
   await galleryActions.goto('/?surface=albums');
   await galleryActions.waitForGalleryReady();
-
+  await appearancePreferenceIsolation.capture();
+  const originalLayout = await utilityAppearanceActions.utilityAppearanceTab.documentRoot.getAttribute('data-album-details-layout') || 'classic_bar';
+  const originalViewport = page.viewportSize();
+  try {
   for (const layout of ['stacked_bar', 'editorial_canvas', 'classic_bar']) {
     await stepLogger.step(`Save and inspect the ${layout} Album Details layout`, async () => {
       await openAppearanceAlbumPage({
@@ -62,7 +74,7 @@ test('FTC-ALBUM-DETAILS-019 keeps all persisted layouts on the shared compact Al
       // parity-check: allow-read-only-measurement-evaluate -- compare the real ActionButton hover border and outline
       await expect.poll(async () => editAction.evaluate((button) => {
         const style = getComputedStyle(button);
-        return style.outlineWidth === '2px'
+        return style.outlineWidth === '1px'
           && style.outlineColor === style.borderColor
           && style.outlineColor !== 'rgba(0, 0, 0, 0)';
       })).toBe(true);
@@ -70,6 +82,24 @@ test('FTC-ALBUM-DETAILS-019 keeps all persisted layouts on the shared compact Al
       const artboxBounds = await artbox.boundingBox();
       expect(artboxBounds).not.toBeNull();
       expect(Math.abs(artboxBounds.width - artboxBounds.height)).toBeLessThanOrEqual(1);
+      await expect(trackModalActions.trackModal.artboxOverlay).toHaveCSS('opacity', '0');
+      await artbox.hover();
+      await expect(trackModalActions.trackModal.artboxOverlay).toHaveCSS('opacity', '1');
+      await expect(trackModalActions.trackModal.coverLookupButton).toBeVisible();
+      await expect(trackModalActions.trackModal.fastCoverFetchButton).toBeVisible();
+      await trackModalActions.trackModal.coverLookupButton.focus();
+      await expect(trackModalActions.trackModal.artboxOverlay).toHaveCSS('opacity', '1');
+      await expect(trackModalActions.trackModal.coverLightboxButton).toBeVisible();
+      const [bodyBounds, coverBounds, mainBounds] = await Promise.all([
+        trackModalActions.trackModal.body.boundingBox(),
+        trackModalActions.trackModal.cover.boundingBox(),
+        trackModalActions.trackModal.main.boundingBox(),
+      ]);
+      expect(bodyBounds).not.toBeNull();
+      expect(coverBounds).not.toBeNull();
+      expect(mainBounds).not.toBeNull();
+      expect(mainBounds.x + mainBounds.width).toBeGreaterThanOrEqual(bodyBounds.x + bodyBounds.width - 1);
+      expect(mainBounds.x).toBeGreaterThanOrEqual(coverBounds.x + coverBounds.width);
       await expect(trackModalActions.trackModal.albumTrackTable.root).toHaveAttribute('data-playing-animation', /^(enabled|disabled)$/);
       await expect(trackModalActions.trackModal.albumTrackTable.discHeadings).toHaveText(['CD 1', 'CD 2']);
       await expect(trackModalActions.trackModal.albumTrackTable.tables).toHaveCount(2);
@@ -91,6 +121,14 @@ test('FTC-ALBUM-DETAILS-019 keeps all persisted layouts on the shared compact Al
   }
 
   await stepLogger.step('Keep Editorial Canvas usable at a narrow web width', async () => {
+    await openAppearanceAlbumPage({
+      settingsModalAppBarActions,
+      utilityAppearanceActions,
+      utilityTabBarActions,
+    });
+    await utilityAppearanceActions.selectAlbumLayout('editorial_canvas');
+    await utilityAppearanceActions.save();
+    await settingsModalAppBarActions.closeSettings();
     await page.setViewportSize({ width: 390, height: 844 });
     await galleryActions.waitForAlbumVisible(MULTI_DISC_ALBUM);
     await galleryActions.clickAlbumDetailsByAlbumName(MULTI_DISC_ALBUM);
@@ -99,6 +137,9 @@ test('FTC-ALBUM-DETAILS-019 keeps all persisted layouts on the shared compact Al
     expect(dialogBounds).not.toBeNull();
     expect(dialogBounds.width).toBeLessThanOrEqual(390);
     await expect(trackModalActions.trackModal.albumTrackTable.rows.first()).toBeVisible();
+    await expect(trackModalActions.trackModal.artboxOverlay).toBeVisible();
+    await expect(trackModalActions.trackModal.coverLookupButton).toBeVisible();
+    await expect(trackModalActions.trackModal.fastCoverFetchButton).toBeVisible();
     await trackModalActions.close();
   });
 
@@ -124,9 +165,18 @@ test('FTC-ALBUM-DETAILS-019 keeps all persisted layouts on the shared compact Al
     expect(problemBounds.x + problemBounds.width).toBeLessThanOrEqual(durationBounds.x);
     await trackModalActions.close();
   });
+  } finally {
+    if (originalViewport) await page.setViewportSize(originalViewport);
+    if (await trackModalActions.trackModal.dialog.isVisible()) await trackModalActions.close();
+    await openAppearanceAlbumPage({ settingsModalAppBarActions, utilityAppearanceActions, utilityTabBarActions });
+    await utilityAppearanceActions.selectAlbumLayout(originalLayout);
+    await utilityAppearanceActions.save();
+    await settingsModalAppBarActions.closeSettings();
+  }
 });
 
-test('FTC-ALBUM-DETAILS-020 preserves search, hover, playback, and reduced-motion states', async ({
+test('FTC-ALBUM-DETAILS-020 preserves search, hover, playback, and reduced-motion states', { tag: '@area:album-details' }, async ({
+  appearancePreferenceIsolation,
   galleryActions,
   globalPlayerActions,
   page,
@@ -141,6 +191,17 @@ test('FTC-ALBUM-DETAILS-020 preserves search, hover, playback, and reduced-motio
   test.setTimeout(240000);
   await galleryActions.goto('/?surface=albums');
   await galleryActions.waitForGalleryReady();
+  await appearancePreferenceIsolation.capture();
+
+  await stepLogger.step('Enable persisted playing-row animation for this owned scenario', async () => {
+    await page.emulateMedia({ reducedMotion: 'no-preference' });
+    await openAppearanceAlbumPage({ settingsModalAppBarActions, utilityAppearanceActions, utilityTabBarActions });
+    if (await utilityAppearanceActions.utilityAppearanceTab.albumPlayingRowAnimationButton('enabled').getAttribute('aria-pressed') !== 'true') {
+      await utilityAppearanceActions.setAlbumPlayingRowAnimation(true);
+      await utilityAppearanceActions.save();
+    }
+    await settingsModalAppBarActions.closeSettings();
+  });
 
   await stepLogger.step('Open a track search match and keep its persistent accent through hover', async () => {
     await searchToolbarActions.search(PLAYBACK_TRACK, { submitWithEnter: true });
@@ -218,7 +279,6 @@ test('FTC-ALBUM-DETAILS-020 preserves search, hover, playback, and reduced-motio
     await utilityAppearanceActions.setAlbumPlayingRowAnimation(false);
     await utilityAppearanceActions.save();
     await settingsModalAppBarActions.closeSettings();
-    await page.emulateMedia({ reducedMotion: 'reduce' });
     await galleryActions.waitForAlbumVisible(PLAYBACK_ALBUM);
     await galleryActions.clickAlbumDetailsByAlbumName(PLAYBACK_ALBUM);
     await trackModalActions.waitForReady();
@@ -228,7 +288,37 @@ test('FTC-ALBUM-DETAILS-020 preserves search, hover, playback, and reduced-motio
     await expect(playingRow).not.toHaveClass(/album-track-table__row--animated/);
     await expect(playingRow).toHaveCSS('outline-style', 'solid');
     await expect(playingRow).toHaveCSS('outline-width', '1px');
+    // With ordinary OS motion, the saved preference alone must stop both spectra.
+    for (const spectrum of await trackModalActions.trackModal.albumTrackTable.readPlayingSpectra()) {
+      expect(spectrum.animation).toBe('none');
+      expect(spectrum.opacity).toBe('0');
+    }
+    expect(await trackModalActions.trackModal.albumTrackTable.readRunningAnimationCount()).toBe(0);
+    // Retain the original combined disabled-setting and reduced-motion check.
+    await page.emulateMedia({ reducedMotion: 'reduce' });
     // parity-check: allow-read-only-measurement-evaluate -- reduced motion must remove moving spectra while preserving the real row
     expect(await playingRow.evaluate((row) => getComputedStyle(row, '::before').display)).toBe('none');
+  });
+
+  await stepLogger.step('Honor OS reduced motion independently while the saved animation setting is enabled', async () => {
+    await trackModalActions.close();
+    await openAppearanceAlbumPage({ settingsModalAppBarActions, utilityAppearanceActions, utilityTabBarActions });
+    await utilityAppearanceActions.setAlbumPlayingRowAnimation(true);
+    await utilityAppearanceActions.save();
+    await settingsModalAppBarActions.closeSettings();
+    await galleryActions.waitForAlbumVisible(PLAYBACK_ALBUM);
+    await galleryActions.clickAlbumDetailsByAlbumName(PLAYBACK_ALBUM);
+    await trackModalActions.waitForReady();
+    const table = trackModalActions.trackModal.albumTrackTable;
+    const playingRow = table.rows.nth(0);
+    await expect(table.root).toHaveAttribute('data-playing-animation', 'enabled');
+    await expect(playingRow).toHaveClass(/album-track-table__row--playing/);
+    await expect(playingRow).toHaveClass(/album-track-table__row--animated/);
+    await expect(playingRow).toHaveCSS('outline-style', 'solid');
+    await expect(playingRow).toHaveCSS('outline-width', '1px');
+    for (const spectrum of await table.readPlayingSpectra()) {
+      expect(spectrum.display).toBe('none');
+    }
+    expect(await table.readRunningAnimationCount()).toBe(0);
   });
 });

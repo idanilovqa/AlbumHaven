@@ -87,6 +87,8 @@ class RecordingConnection:
             return Cursor(self.insert_rows)
         if statement.startswith("update app.auth_preflight_tokens"):
             return Cursor(self.consume_rows)
+        if statement.startswith("select id from app.auth_preflight_tokens"):
+            return Cursor(({"id": 71},))
         if statement.startswith("delete from app.auth_preflight_tokens"):
             return Cursor(self.cleanup_rows)
         raise AssertionError(f"unexpected SQL: {statement}")
@@ -176,10 +178,15 @@ def test_constructor_rejects_invalid_or_overlong_ttl(preauth, seconds):
         )
 
 
-def test_consume_is_one_conditional_single_use_update(preauth):
+def test_consume_locks_then_performs_one_conditional_single_use_update(preauth):
     connection = RecordingConnection()
     assert _service(preauth, connection).consume_login_token(RAW_TOKEN) is True
-    sql, params = connection.operations[0]
+    lock_sql, lock_params = connection.operations[0]
+    assert lock_sql.startswith("select id from app.auth_preflight_tokens")
+    assert "for update" in lock_sql
+    assert lock_params == ("login", hash_opaque_token(RAW_TOKEN))
+    assert len(connection.operations) == 2
+    sql, params = connection.operations[1]
     assert sql.startswith("update app.auth_preflight_tokens")
     assert "purpose =" in sql and "consumed_at is null" in sql and "expires_at >" in sql
     assert "returning id" in sql

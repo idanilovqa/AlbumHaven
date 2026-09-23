@@ -146,7 +146,7 @@ class PostgresPasswordResetRequestService:
                             )
                         )
                     buckets.sort(key=lambda item: item[0])
-                    blocked, account_throttle_id = self._charge_buckets(
+                    blocked, account_throttle_id, now = self._charge_buckets(
                         connection, buckets, now
                     )
                     if blocked:
@@ -262,7 +262,9 @@ class PostgresPasswordResetRequestService:
         connection: Any,
         buckets: list[tuple[str, bytes]],
         now: datetime,
-    ) -> tuple[bool, int | None]:
+    ) -> tuple[bool, int | None, datetime]:
+        # Retain each conflicting bucket against expiry cleanup without
+        # replacing its current window, count or cooldown.
         for kind, digest in buckets:
             connection.execute(
                 """
@@ -270,7 +272,8 @@ class PostgresPasswordResetRequestService:
                   bucket_kind, bucket_hash, key_version, window_started_at,
                   window_expires_at, failure_count, updated_at
                 ) values (%s, %s, %s, %s, %s, 0, %s)
-                on conflict (bucket_kind, key_version, bucket_hash) do nothing
+                on conflict (bucket_kind, key_version, bucket_hash)
+                do update set updated_at = app.auth_throttles.updated_at
                 """,
                 (
                     kind,
@@ -298,6 +301,8 @@ class PostgresPasswordResetRequestService:
         ).fetchall()
         if len(rows) != len(buckets):
             raise RuntimeError
+        # Every bucket is retained and locked before evaluating a shared budget time.
+        now = _aware_utc(self._clock())
         by_kind = dict(buckets)
         blocked = False
         account_throttle_id = None
@@ -350,7 +355,7 @@ class PostgresPasswordResetRequestService:
                     """,
                     (now, kind, self._hmac_key_version, digest),
                 )
-        return blocked, account_throttle_id
+        return blocked, account_throttle_id, now
 
     def _bucket(self, domain: str, value: str) -> bytes:
         return keyed_bucket_digest(

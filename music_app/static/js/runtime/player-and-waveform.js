@@ -30,6 +30,7 @@ function mountGlobalPlayerLoopControls() {
   if (els.loopRange && !els.loopRange._loopRangeController) {
     els.loopRange._loopRangeController = options.mountRange(els.loopRange);
   }
+  if (typeof syncSavedAppearanceLoopControlStyle === 'function') syncSavedAppearanceLoopControlStyle();
 }
 
 function formatTrackDuration(seconds) {
@@ -192,14 +193,35 @@ function clearWaveformCanvas() {
   ctx.clearRect(0, 0, canvas.width || 0, canvas.height || 0);
 }
 
+const playerTextTransitions = new WeakMap();
 function setPlayerSeekbarPresentation(isWaveform) {
   const mode = isWaveform ? 'waveform' : 'regular';
   const player = getPlayerElements().player;
+  const previousMode = player?.getAttribute('data-player-seekbar-presentation');
+  const animateText = previousMode && previousMode !== mode
+    && !(typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches);
+  const text = animateText ? Array.from(player.querySelectorAll('.player-meta, .player-time')).map(node => {
+    const rect = node.getBoundingClientRect();
+    playerTextTransitions.get(node)?.cancel();
+    return { node, rect };
+  }) : [];
   player?.setAttribute('data-player-seekbar-presentation', mode);
   document.documentElement?.classList.toggle('has-waveform-player', isWaveform);
+  text.forEach(({ node, rect }) => {
+    const next = node.getBoundingClientRect();
+    const origin = `translate(${rect.left - next.left}px, ${rect.top - next.top}px)`;
+    const animation = node.animate?.([
+      { transform: origin, opacity: 1, offset: 0 },
+      { transform: origin, opacity: 0, offset: .3 },
+      { transform: 'translate(0, 0)', opacity: 0, offset: .45 },
+      { transform: 'translate(0, 0)', opacity: 1, offset: 1 },
+    ], { duration: 320, easing: 'ease-in-out' });
+    if (animation) playerTextTransitions.set(node, animation);
+  });
 }
 
 async function updateWaveformAppearance(forceReload = false) {
+  if (typeof refreshUtilityLoopStereoWaveforms === 'function') refreshUtilityLoopStereoWaveforms();
   const els = getPlayerElements();
   const wrap = els.timeline?.parentElement;
   const playback = getPlayerPlaybackSnapshot();
@@ -208,10 +230,10 @@ async function updateWaveformAppearance(forceReload = false) {
   setPlayerSeekbarPresentation(isWaveform);
   wrap?.classList.toggle('is-waveform', isWaveform);
   if (els.waveformCanvas) {
-    els.waveformCanvas.hidden = !isWaveform;
+    els.waveformCanvas.hidden = false;
   }
   if (!isWaveform || !els.waveformCanvas || !path) {
-    clearWaveformCanvas();
+    if (!path) clearWaveformCanvas();
     return;
   }
   const renderToken = forceReload ? state.player.waveform.renderToken + 1 : state.player.waveform.renderToken;
@@ -262,42 +284,56 @@ function parseLoopTime(value) {
   return (hours * 3600) + (minutes * 60) + seconds;
 }
 
-function buildProblematicAlbumListItem(album, selected) {
+function getProblematicAlbumNavigationOptions(album, selected) {
   const showConverted = !album.has_encoding_repairs || !selected || state.utility.showRepairedDisplay;
   const displayName = getProblematicAlbumDisplayValue(album, 'album', showConverted) || 'Unknown Album';
   const displayArtist = getProblematicAlbumDisplayValue(album, 'album_artist', showConverted) || 'Unknown Artist';
   const displayYear = String(album.year || '').trim();
-  const displayTitle = displayYear ? `${displayName} / ${displayYear}` : displayName;
-  return `
-    <button class="utility-list-item ${selected ? 'is-active' : ''}" type="button" data-problematic-album-key="${escapeHtml(album.key)}">
-      <span class="utility-list-item-title">${escapeHtml(displayTitle)}</span>
-      <span class="utility-list-item-meta">${escapeHtml(displayArtist)}</span>
-      <span class="utility-list-item-issues">${escapeHtml(getProblematicAlbumIssueLabel(album))}</span>
-      ${album.has_encoding_repairs ? '<span class="utility-list-item-badge">Converted display</span>' : ''}
-    </button>
-  `;
+  const artworkSource = buildAlbumDisplayCoverUrl(album);
+  const artworkLabel = `Artwork for ${displayName}`;
+  const artworkHtml = buildUtilityAlbumArtbox(album, { label: artworkLabel, source: artworkSource });
+  return {
+      variant: 'wide', action: true, key: album.key, selected, label: displayName,
+      subtitle: displayArtist, year: displayYear, artworkHtml, artworkSource, artworkLabel,
+      count: album.track_count ?? (Array.isArray(album.tracks) ? album.tracks.length : null), countHidden: true,
+      attributes: { 'data-problematic-album-key': album.key },
+  };
+}
+
+function buildProblematicAlbumListItem(album, selected) {
+  return window.NavigationTree.renderItem(getProblematicAlbumNavigationOptions(album, selected));
 }
 
 function buildUtilityRuleListItem(rule, selected) {
-  return `
-    <button class="utility-list-item ${selected ? 'is-active' : ''}" type="button" data-utility-rule-key="${escapeHtml(rule.key || '')}">
-      <span class="utility-list-item-title">${escapeHtml(rule.title || 'Rule')}</span>
-      <span class="utility-list-item-meta">${escapeHtml(rule.description || '')}</span>
-      <span class="utility-list-item-issues">${Number(rule.count || 0)} applied</span>
-    </button>
-  `;
+  return window.NavigationTree.renderItem({
+    action: true, variant: 'panel', key: String(rule.key || ''), selected,
+    label: rule.title || 'Rule',
+    subtitle: rule.key === 'version-exceptions' ? 'Albums kept as separate releases'
+      : rule.key === 'problem-ignores' ? 'Selected album and track problems' : rule.description || '',
+    attributes: { 'data-utility-rule-key': String(rule.key || '') },
+  });
 }
 
 function buildUtilityLoopGroupKey(loop) {
-  const artist = String(loop?.artist || '').trim().toLowerCase();
-  const title = String(loop?.title || '').trim().toLowerCase();
-  const album = String(loop?.album || '').trim().toLowerCase();
-  if (artist || title || album) {
-    return `${artist}::${title}::${album}`;
-  }
-  const sourcePath = String(loop?.source_path || '').trim().toLowerCase();
-  if (sourcePath) return sourcePath;
-  return String(loop?.id || '');
+  const songKey = typeof loop?.song_key === 'string' ? loop.song_key : '';
+  if (songKey && loop?.song_identity_status === 'resolved') return songKey;
+  return loop?.id ? `unresolved:${String(loop.id)}` : '';
+}
+
+function canReorderUtilityLoop(loop) {
+  return state.utility.allowedActions?.['library.loops.reorder'] === true
+    && loop?.song_identity_status === 'resolved'
+    && typeof loop.song_key === 'string' && Boolean(loop.song_key)
+    && loop.can_reorder === true
+    && Number.isSafeInteger(loop.order_revision) && loop.order_revision >= 0;
+}
+
+function buildUtilityLoopTreeChild(loop, groupKey) {
+  return `<div class="utility-loop-tree-child" draggable="${canReorderUtilityLoop(loop)}" data-utility-loop-id="${escapeHtml(loop?.id || '')}" data-utility-loop-group-key="${escapeHtml(groupKey)}">
+    <span class="utility-loop-drag-handle" aria-hidden="true">⋮⋮</span>
+    <span class="utility-loop-tree-label">${escapeHtml(loop?.name || 'Saved loop')}</span>
+    <span class="utility-loop-tree-duration">${formatLoopTime(loop.duration_seconds || Number(loop.end_seconds) - Number(loop.start_seconds))}</span>
+  </div>`;
 }
 
 function groupUtilityLoops(loops) {
@@ -334,35 +370,25 @@ function buildUtilityLoopTree(group, selectedGroupKey, selectedLoopId) {
   const groupKey = String(group?.key || '');
   const collapsed = isUtilityLoopGroupCollapsed(groupKey);
   const groupSelected = groupKey && groupKey === String(selectedGroupKey || '');
+  const artworkHtml = buildUtilityAlbumArtbox(representative, { label: `Artwork for ${title}` });
   const loopsHtml = collapsed
     ? ''
     : `
-      <div class="utility-loop-tree-children">
-        ${(group?.loops || []).map((loop) => `
-          <button class="utility-loop-tree-child ${String(loop?.id || '') === String(selectedLoopId || '') && state.utility.selectedLoopDetailMode === 'loop' ? 'is-active' : ''}" type="button" draggable="true" data-utility-loop-id="${escapeHtml(loop?.id || '')}" data-utility-loop-group-key="${escapeHtml(groupKey)}">
-            <span class="utility-loop-drag-handle" aria-hidden="true">⋮⋮</span>
-            <span class="utility-loop-tree-icon" aria-hidden="true"></span>
-            <span class="utility-loop-tree-label">${escapeHtml(loop?.name || 'Saved loop')}</span>
-          </button>
-        `).join('')}
+      <div class="utility-loop-tree-children" data-loop-tree-song="${escapeHtml(groupKey)}">
+        ${(group?.loops || []).map(loop => buildUtilityLoopTreeChild(loop, groupKey)).join('')}
       </div>
     `;
   return `
     <div class="utility-loop-tree ${groupSelected ? 'is-group-selected' : ''} ${collapsed ? 'is-collapsed' : ''}" data-utility-loop-tree="${escapeHtml(groupKey)}">
-      <div class="utility-loop-group-row ${groupSelected && state.utility.selectedLoopDetailMode !== 'loop' ? 'is-active' : ''}">
-        <button class="utility-list-item utility-loop-group-list-item ${groupSelected && state.utility.selectedLoopDetailMode !== 'loop' ? 'is-active' : ''}" type="button" draggable="true" data-utility-loop-group-key="${escapeHtml(groupKey)}">
-          <span class="utility-loop-drag-handle" aria-hidden="true">⋮⋮</span>
-          <span class="utility-loop-tree-row-main">
-            <span class="utility-loop-tree-song-copy">
-              <span class="utility-list-item-title">${escapeHtml(title)}</span>
-              <span class="utility-list-item-meta">${escapeHtml(subtitle)}</span>
-              <span class="utility-loop-group-count">${escapeHtml(loopCount > 1 ? `${loopCount} loops` : '1 loop')}</span>
-            </span>
-          </span>
-          <span class="utility-loop-collapse-toggle-wrap">
-            <span class="utility-loop-collapse-toggle" data-utility-loop-collapse="${escapeHtml(groupKey)}" aria-label="${collapsed ? 'Expand song loops' : 'Collapse song loops'}" aria-expanded="${collapsed ? 'false' : 'true'}" role="button" tabindex="0">${collapsed ? '▸' : '▾'}</span>
-          </span>
-        </button>
+      <div class="utility-loop-group-row ${groupSelected ? 'is-active' : ''}">
+        ${window.NavigationTree.renderItem({
+          variant: 'wide', action: true, key: groupKey, draggable: false, className: 'utility-loop-group-list-item',
+          selected: groupSelected,
+          label: title, subtitle, year: representative?.year || '', artworkHtml,
+          count: loopCount, countHidden: true,
+          attributes: { 'data-utility-loop-group-key': groupKey },
+          trailingHtml: `<span class="utility-loop-collapse-toggle-wrap"><span class="utility-loop-collapse-toggle" data-utility-loop-collapse="${escapeHtml(groupKey)}" aria-label="${collapsed ? 'Expand song loops' : 'Collapse song loops'}" aria-expanded="${collapsed ? 'false' : 'true'}" role="button" tabindex="0"><svg viewBox="0 0 20 20" aria-hidden="true"><path d="m7 4 6 6-6 6"/></svg></span></span>`,
+        })}
       </div>
       ${loopsHtml}
     </div>
@@ -390,4 +416,3 @@ function formatLogHistoryTimestamp(value) {
     ...(timeZone ? { timeZone } : {}),
   });
 }
-

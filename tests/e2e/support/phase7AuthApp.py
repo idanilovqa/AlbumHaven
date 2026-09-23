@@ -9,9 +9,11 @@ import os
 from pathlib import Path
 import shutil
 import socketserver
+import sys
 import tempfile
 import threading
 from typing import Any, Callable
+from time import monotonic
 
 from isolatedLibraryApp import configure_isolated_environment
 from isolatedPostgres import (
@@ -28,6 +30,7 @@ from phase7PlaybackFixture import (
 
 
 OWNER_PASSWORD = "Phase Seven Owner Passphrase 2026!"
+CAPTURE_HANDLER_DRAIN_TIMEOUT_SECONDS = 10
 
 
 class CaptureState:
@@ -108,7 +111,50 @@ class _SMTPHandler(socketserver.StreamRequestHandler):
         self.wfile.flush()
 
 
-class _SMTPServer(socketserver.ThreadingTCPServer):
+class _CaptureRequestDrain:
+    """Count accepted work before scheduling, including daemon request threads."""
+
+    def __init__(self, *args, **kwargs):
+        self._requests = threading.Condition()
+        self._pending_requests = 0
+        self._closing = False
+        super().__init__(*args, **kwargs)
+
+    def process_request(self, request, client_address):
+        with self._requests:
+            admitted = not self._closing
+            if admitted:
+                self._pending_requests += 1
+        if not admitted:
+            self.shutdown_request(request)
+            return
+        try:
+            super().process_request(request, client_address)
+        except BaseException:
+            self._finish_request()
+            raise
+
+    def process_request_thread(self, request, client_address):
+        try:
+            super().process_request_thread(request, client_address)
+        finally:
+            self._finish_request()
+
+    def _finish_request(self):
+        with self._requests:
+            self._pending_requests -= 1
+            self._requests.notify_all()
+
+    def begin_shutdown(self):
+        with self._requests:
+            self._closing = True
+
+    def drain_requests(self, timeout):
+        with self._requests:
+            return self._requests.wait_for(lambda: self._pending_requests == 0, timeout=max(0, timeout))
+
+
+class _SMTPServer(_CaptureRequestDrain, socketserver.ThreadingTCPServer):
     allow_reuse_address = True
     daemon_threads = True
 
@@ -174,7 +220,7 @@ class _ControlHandler(BaseHTTPRequestHandler):
         return
 
 
-class _ControlServer(ThreadingHTTPServer):
+class _ControlServer(_CaptureRequestDrain, ThreadingHTTPServer):
     daemon_threads = True
 
     def __init__(self, address: tuple[str, int], state: CaptureState):
@@ -249,6 +295,11 @@ def _database_action(setup_database_url: str, action: str) -> None:
     import psycopg
 
     statements = {
+        "age-owner-authentication": """
+            update app.account_sessions set authenticated_at = now() - interval '1 day'
+            where account_id = (select id from app.accounts where username_normalized = 'rendref')
+              and revoked_at is null
+        """,
         "disable-owner": """
             update app.accounts set is_active = false, disabled_at = now(),
               disabled_reason = 'e2e_control' where username_normalized = 'rendref'
@@ -402,15 +453,20 @@ def main() -> None:
 
     setup_database_url, runtime_database_url = resolve_isolated_database_urls()
     temp_root = Path(tempfile.mkdtemp(prefix="album-haven-phase7-e2e-"))
-    database_lock = IsolatedDatabaseOwnershipLock()
+    database_lock = IsolatedDatabaseOwnershipLock(database_url=setup_database_url)
     state = CaptureState()
-    smtp_server = _SMTPServer(("127.0.0.1", args.smtp_port), state)
-    control_server = _ControlServer(("127.0.0.1", args.control_port), state)
+    database_owned = False
+    created_servers: list[Any] = []
     started_servers: list[Any] = []
     application_servers: list[tuple[Any, threading.Thread]] = []
     original_failure: BaseException | None = None
     try:
         database_lock.acquire()
+        database_owned = True
+        smtp_server = _SMTPServer(("127.0.0.1", args.smtp_port), state)
+        created_servers.append(smtp_server)
+        control_server = _ControlServer(("127.0.0.1", args.control_port), state)
+        created_servers.append(control_server)
         _configure_environment(
             temp_root,
             runtime_database_url,
@@ -485,21 +541,56 @@ def main() -> None:
         original_failure = exc
         raise
     finally:
+        application_shutdown_proven = True
+        capture_cleanup_failures: list[Exception] = []
+        capture_deadline = monotonic() + CAPTURE_HANDLER_DRAIN_TIMEOUT_SECONDS
+        for server in created_servers:
+            try:
+                server.begin_shutdown()
+            except Exception as exc:
+                capture_cleanup_failures.append(exc)
         for server, thread in reversed(application_servers):
             server.should_exit = True
             thread.join(timeout=10)
-        for server in reversed(started_servers):
+            if thread.is_alive():
+                application_shutdown_proven = False
+        for server in reversed(created_servers):
+            if server in started_servers:
+                try:
+                    server.shutdown()
+                except Exception as exc:
+                    capture_cleanup_failures.append(exc)
             try:
-                server.shutdown()
                 server.server_close()
-            except Exception:
-                if original_failure is not None:
-                    pass
+            except Exception as exc:
+                capture_cleanup_failures.append(exc)
+        for server in created_servers:
+            try:
+                if not server.drain_requests(capture_deadline - monotonic()):
+                    raise TimeoutError("Capture request handlers did not stop within the shutdown budget.")
+            except Exception as exc:
+                capture_cleanup_failures.append(exc)
+        if capture_cleanup_failures:
+            application_shutdown_proven = False
+        if not application_shutdown_proven:
+            message = "Application or capture-server shutdown is unproven; database, fixture, and ownership retained."
+            if capture_cleanup_failures:
+                message += " " + "; ".join(repr(failure) for failure in capture_cleanup_failures)
+            if original_failure is not None:
+                original_failure.cleanup_failures = tuple(capture_cleanup_failures)
+                print(message, file=sys.stderr, flush=True)
+            else:
+                cleanup_failure = RuntimeError(message)
+                cleanup_failure.cleanup_failures = tuple(capture_cleanup_failures)
+                raise cleanup_failure
         try:
-            reset_application_tables(setup_database_url)
+            if database_owned and application_shutdown_proven:
+                reset_application_tables(setup_database_url)
         finally:
-            database_lock.release()
-            shutil.rmtree(temp_root, ignore_errors=True)
+            if application_shutdown_proven:
+                if database_owned:
+                    database_lock.release()
+                shutil.rmtree(temp_root, ignore_errors=True)
 
 
 if __name__ == "__main__":

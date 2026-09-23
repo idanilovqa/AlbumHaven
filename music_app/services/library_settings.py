@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+import logging
 
 from music_app.services.library_roots import save_library_root_settings
 
@@ -29,6 +30,7 @@ def save_library_settings_and_start_refresh(
     raw_payload: object,
     *,
     library_state: dict[str, object],
+    library_id=None, media_host_library_id=None,
     start_background_refresh: RefreshStarter,
     build_status_payload: StatusPayloadBuilder,
     save_root_settings: RootSettingsSaver = save_library_root_settings,
@@ -40,15 +42,23 @@ def save_library_settings_and_start_refresh(
             status_code=409,
         )
 
-    normalized = save_root_settings(config, raw_payload)
+    scope = {"library_id": library_id, "media_host_library_id": media_host_library_id} if library_id is not None or media_host_library_id is not None else {}
+    normalized = save_root_settings(config, raw_payload, **scope)
     watched_roots = [
         {**root, "category": category}
         for category in _WATCHED_ROOT_SETTING_KEYS
         for root in list(normalized.get(category) or [])
         if isinstance(root, dict)
     ]
+    watcher_warning = None
     if replace_watch_roots is not None:
-        replace_watch_roots(watched_roots)
+        try:
+            replace_watch_roots(watched_roots)
+        except Exception as exc:
+            # Settings already committed. Continue their inventory refresh; the
+            # runtime replacement boundary records health for affected roots.
+            logging.getLogger(__name__).warning("Unable to attach updated library watchers (%s).", type(exc).__name__)
+            watcher_warning = "Automatic library updates are unavailable. Run Full Rescan after library changes."
     library_state["last_error"] = None
     library_state["pending_cover_refresh_after_scan"] = True
     library_state["pending_cover_refresh_force_search"] = False
@@ -57,4 +67,5 @@ def save_library_settings_and_start_refresh(
         "settings": normalized,
         "status": build_status_payload(),
         "refresh_started": True,
+        **({"watcher_warning": watcher_warning} if watcher_warning else {}),
     }

@@ -31,6 +31,7 @@ export class TagEditorActions {
   }
 
   async readSummary() {
+    const alertMessages = await this.tagEditor.repairAlertMessage.allTextContents();
     return {
       subtitle: String(await this.tagEditor.subtitle.textContent() || '').trim(),
       trackFilenames: (await this.tagEditor.trackTitles.allTextContents())
@@ -38,7 +39,7 @@ export class TagEditorActions {
         .filter(Boolean),
       activeTrackCount: await this.tagEditor.activeTrackButtons.count(),
       exceptionType: String(await this.tagEditor.exceptionSelect.inputValue() || ''),
-      alertText: String(await this.tagEditor.repairAlertMessage.textContent() || '').trim(),
+      alertText: String(alertMessages[0] || '').trim(),
     };
   }
 
@@ -131,7 +132,7 @@ export class TagEditorActions {
     await track.scrollIntoViewIfNeeded();
     await expect(track).toBeVisible();
     await track.click();
-    await expect(track).toHaveAttribute('aria-pressed', 'true');
+    await expect(this.tagEditor.selectionToggleByFilename(filename)).toHaveAttribute('aria-pressed', 'true');
   }
 
   async selectTracksByFilenames(filenames) {
@@ -158,15 +159,12 @@ export class TagEditorActions {
       throw new Error('A drag-selected track range requires at least two filenames.');
     }
     const firstTrack = this.tagEditor.trackButtonByFilename(expectedFilenames[0]);
-    const lastTrack = this.tagEditor.trackButtonByFilename(expectedFilenames.at(-1));
     await expect(firstTrack).toHaveCount(1);
-    await expect(lastTrack).toHaveCount(1);
     await firstTrack.scrollIntoViewIfNeeded();
-    await lastTrack.scrollIntoViewIfNeeded();
+    await expect(firstTrack).toBeVisible();
     const firstBox = await firstTrack.boundingBox();
-    const lastBox = await lastTrack.boundingBox();
-    if (!firstBox || !lastBox) {
-      throw new Error('The drag-selected track range must be visible.');
+    if (!firstBox) {
+      throw new Error('The first drag-selected track must be visible.');
     }
     await this.tagEditor.page.mouse.move(
       firstBox.x + firstBox.width / 2,
@@ -174,11 +172,13 @@ export class TagEditorActions {
     );
     await this.tagEditor.page.mouse.down();
     try {
-      await this.tagEditor.page.mouse.move(
-        lastBox.x + lastBox.width / 2,
-        lastBox.y + lastBox.height / 2,
-        { steps: 10 },
-      );
+      for (const filename of expectedFilenames.slice(1)) {
+        const track = this.tagEditor.trackButtonByFilename(filename);
+        await expect(track).toBeVisible();
+        const box = await track.boundingBox();
+        if (!box) throw new Error(`The drag-selected track must be visible: ${filename}`);
+        await this.tagEditor.page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+      }
     } finally {
       await this.tagEditor.page.mouse.up();
     }
@@ -190,6 +190,75 @@ export class TagEditorActions {
     return (await this.tagEditor.activeTrackTitles.allTextContents())
       .map((filename) => String(filename || '').trim())
       .filter(Boolean);
+  }
+
+  async selectTrackWithModifier(filename, modifier) {
+    const track = this.tagEditor.trackButtonByFilename(filename);
+    await expect(track).toHaveCount(1);
+    await track.click({ modifiers: [modifier] });
+  }
+
+  async expectSelectedTrackFilenames(filenames) {
+    await expect(this.tagEditor.activeTrackButtons).toHaveCount(filenames.length);
+    expect(await this.readSelectedTrackFilenames()).toEqual(filenames);
+  }
+
+  async dragReorderBefore(filename, beforeFilename) {
+    const grip = this.tagEditor.reorderGripByFilename(filename);
+    const target = this.tagEditor.trackButtonByFilename(beforeFilename);
+    await expect(grip).toBeVisible();
+    await expect(target).toBeVisible();
+    const targetBox = await target.boundingBox();
+    if (!targetBox) throw new Error('The reorder target must have visible bounds.');
+    await grip.dragTo(target, {
+      targetPosition: { x: targetBox.width / 2, y: 1 },
+    });
+  }
+
+  async dragReorderBelowList(filename) {
+    const grip = this.tagEditor.reorderGripByFilename(filename);
+    await expect(grip).toBeVisible();
+    await expect(this.tagEditor.trackList).toBeVisible();
+    const target = await this.tagEditor.trackList.boundingBox();
+    if (!target) throw new Error('The tag editor track list must have visible bounds.');
+    await grip.dragTo(this.tagEditor.trackList, {
+      targetPosition: { x: target.width / 2, y: target.height - 1 },
+    });
+  }
+
+  async reorderWithKeyboard(filename, key) {
+    const grip = this.tagEditor.reorderGripByFilename(filename);
+    await expect(grip).toBeVisible();
+    await grip.focus();
+    await grip.press(key);
+    await expect(grip).toBeFocused();
+  }
+
+  async cancelActiveReorder(filename, beforeFilename) {
+    const grip = this.tagEditor.reorderGripByFilename(filename);
+    const target = this.tagEditor.trackButtonByFilename(beforeFilename);
+    await expect(grip).toBeVisible();
+    await expect(target).toBeVisible();
+    const gripBox = await grip.boundingBox();
+    const targetBox = await target.boundingBox();
+    if (!gripBox || !targetBox) throw new Error('The reorder source and target must have visible bounds.');
+    await this.tagEditor.page.mouse.move(
+      gripBox.x + (gripBox.width / 2),
+      gripBox.y + (gripBox.height / 2),
+    );
+    await this.tagEditor.page.mouse.down();
+    try {
+      await this.tagEditor.page.mouse.move(
+        targetBox.x + (targetBox.width / 2),
+        targetBox.y + 1,
+        { steps: 5 },
+      );
+      await this.tagEditor.page.keyboard.press('Escape');
+      await expect(this.tagEditor.trackList).not.toHaveClass(/is-reorder-end/);
+      await expect(this.tagEditor.reorderCueRows).toHaveCount(0);
+    } finally {
+      await this.tagEditor.page.mouse.up();
+    }
   }
 
   async selectAllTracks() {
@@ -219,6 +288,11 @@ export class TagEditorActions {
     }
     await this.tagEditor.albumNameInput.fill(expectedAlbumName);
     await expect(this.tagEditor.albumNameInput).toHaveValue(expectedAlbumName);
+  }
+
+  async setArtist(artist) {
+    await this.tagEditor.artistInput.fill(String(artist));
+    await expect(this.tagEditor.artistInput).toHaveValue(String(artist));
   }
 
   async expectAlbumName(albumName) {
@@ -305,6 +379,7 @@ export class TagEditorActions {
     ]);
     await expect(this.tagEditor.footer).toContainText(
       /^\s*Start at\s*Auto-number\s*Cancel\s*Apply\s*$/u,
+      { useInnerText: true },
     );
     await expect(this.tagEditor.autoNumberControls).toContainText(
       /^\s*Start at\s*Auto-number\s*$/u,
@@ -370,20 +445,17 @@ export class TagEditorActions {
       await expect(this.tagEditor.applyButton).toBeEnabled();
       await expect(this.tagEditor.applyButton).toHaveCSS('cursor', 'pointer');
       await expect(this.tagEditor.applyButton).toHaveCSS('opacity', '1');
-      await expect(this.tagEditor.applyButton).toHaveCSS(
-        'background-color',
-        'rgba(239, 68, 68, 0.12)',
-      );
     } else {
       await expect(this.tagEditor.applyButton).toBeDisabled();
       await expect(this.tagEditor.applyButton).toHaveCSS('cursor', 'not-allowed');
+      // Ordinary Button consumers retain their approved disabled surface and ink.
       await expect(this.tagEditor.applyButton).toHaveCSS('opacity', '0.55');
-      await expect(this.tagEditor.applyButton).toHaveCSS(
-        'background-color',
-        'rgb(55, 65, 81)',
-      );
+      await expect(this.tagEditor.applyButton).toHaveCSS('background-color', 'rgb(55, 65, 81)');
       await expect(this.tagEditor.applyButton).toHaveCSS('color', 'rgb(148, 163, 184)');
+      await expect(this.tagEditor.applyButton).toHaveCSS('border-top-color', 'rgb(75, 85, 99)');
     }
+    await expect(this.tagEditor.applyButton).toHaveAttribute('data-ui-button-action', 'primary');
+    await expect(this.tagEditor.applyButton).toHaveAttribute('data-editor-footer-action', 'primary');
   }
 
   async readTrackNumberAndDiscByFilename(filename) {
@@ -419,7 +491,8 @@ export class TagEditorActions {
       await expect(this.tagEditor.nonAlbumRarityWarningText).toHaveText(
         'Applying non-album rarity exception to this track will remove it from the album. You sure?',
       );
-      await expect(this.tagEditor.nonAlbumRarityWarningIcon).toHaveText('!');
+      await expect(this.tagEditor.nonAlbumRarityWarningIconSvg).toBeVisible();
+      await expect(this.tagEditor.nonAlbumRarityWarning).toHaveAttribute('data-on-page-alert', 'warning');
       expect(editRequestCount).toBe(0);
       await this.tagEditor.confirmCancelButton.click();
       await expect(this.tagEditor.confirmOverlay).toBeHidden();
@@ -433,6 +506,12 @@ export class TagEditorActions {
     const timeout = options.timeout || 30000;
     await this.tagEditor.cancelButton.click();
     await expect(this.tagEditor.overlay).toBeHidden({ timeout });
+  }
+
+  async closeIfOpen(options = {}) {
+    if (await this.tagEditor.overlay.isVisible()) {
+      await this.close(options);
+    }
   }
 
   async dismissTopmostOverlayWithEscape() {
@@ -466,11 +545,8 @@ export class TagEditorActions {
         'Applying non-album rarity exception to this track will remove it from the album. You sure?',
         { timeout },
       );
-      await expect(this.tagEditor.nonAlbumRarityWarningIcon).toHaveText('!');
-      await expect(this.tagEditor.nonAlbumRarityWarningIcon).toHaveCSS(
-        'color',
-        'rgb(250, 204, 21)',
-      );
+      await expect(this.tagEditor.nonAlbumRarityWarningIconSvg).toBeVisible();
+      await expect(this.tagEditor.nonAlbumRarityWarning).toHaveAttribute('data-on-page-alert', 'warning');
     }
     await this.tagEditor.confirmButton.click();
     const response = await editResponsePromise;
@@ -666,11 +742,8 @@ export class TagEditorActions {
           'Applying non-album rarity exception to this track will remove it from the album. You sure?',
           { timeout },
         );
-        await expect(this.tagEditor.nonAlbumRarityWarningIcon).toHaveText('!');
-        await expect(this.tagEditor.nonAlbumRarityWarningIcon).toHaveCSS(
-          'color',
-          'rgb(250, 204, 21)',
-        );
+        await expect(this.tagEditor.nonAlbumRarityWarningIconSvg).toBeVisible();
+        await expect(this.tagEditor.nonAlbumRarityWarning).toHaveAttribute('data-on-page-alert', 'warning');
         if (editRequestCount !== 0) {
           throw new Error(
             `Expected the non-album rarity confirmation to send no edit request before acceptance; observed ${editRequestCount}.`,

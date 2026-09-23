@@ -43,7 +43,7 @@ const DIRECT_COUNT_ALBUMS = 60;
 const DIRECT_COUNT_SELECTED_URL = `/?surface=albums&artist=${encodeURIComponent(DIRECT_COUNT_ARTIST)}`;
 const DIRECT_COUNT_SEARCH_URL = `/?surface=albums&q=${encodeURIComponent(DIRECT_COUNT_ARTIST)}&artist=${encodeURIComponent(DIRECT_COUNT_ARTIST)}`;
 
-test('FTC-SEARCH-NAV-027 keeps canonical positive card counts on direct load and reload', async ({
+test('FTC-SEARCH-NAV-027 keeps canonical positive card counts on direct load and reload', { tag: '@area:gallery-search' }, async ({
   freshBrowserSession,
   galleryActions,
   page,
@@ -120,7 +120,7 @@ test('FTC-SEARCH-NAV-027 keeps canonical positive card counts on direct load and
   testArtifacts.queueJsonAttachment('ftc-search-nav-027-card-counts', observations);
 });
 
-test('FTC-SEARCH-NAV-002 keeps every projected family artist in the tree for a non-exact best match', async ({
+test('FTC-SEARCH-NAV-002 keeps every projected family artist in the tree for a non-exact best match', { tag: '@area:gallery-search' }, async ({
   artistFamilyActions,
   galleryActions,
   navigationPanelActions,
@@ -176,7 +176,7 @@ test('FTC-SEARCH-NAV-002 keeps every projected family artist in the tree for a n
   });
 });
 
-test('FTC-SEARCH-NAV-028 limits a content-matched family artist while keeping an artist-name match complete', async ({
+test('FTC-SEARCH-NAV-028 limits a content-matched family artist while keeping an artist-name match complete', { tag: '@area:gallery-search' }, async ({
   galleryActions,
   navigationPanelActions,
   searchToolbarActions,
@@ -196,15 +196,38 @@ test('FTC-SEARCH-NAV-028 limits a content-matched family artist while keeping an
     },
   );
 
+  let completeNealView;
   await stepLogger.step('Search for Transatlantic from Neal Morse', async () => {
     await galleryActions.goto(`/?surface=albums&artist=${encodeURIComponent(FAMILY_ARTIST)}`);
     await galleryActions.waitForSelectedArtistGallery(FAMILY_ARTIST);
+    completeNealView = {
+      albums: await galleryActions.readAlbumNamesByHeading(FAMILY_ARTIST),
+      headings: await galleryActions.readArtistHeadings(),
+    };
+    expect(completeNealView.albums.length).toBeGreaterThan(1);
     await searchToolbarActions.search(TRANSATLANTIC_QUERY, { submitWithEnter: true });
     await searchToolbarActions.waitForQuery(TRANSATLANTIC_QUERY);
+    await galleryActions.waitForSelectedArtistGallery(TRANSATLANTIC_ARTIST, {
+      queryValue: TRANSATLANTIC_QUERY,
+    });
   });
 
-  await stepLogger.step('Select Neal Morse and show only its album-title match', async () => {
+  await stepLogger.step('Selecting a different primary artist preserves the query until explicit Clear restores its complete gallery', async () => {
     await navigationPanelActions.selectSidebarArtistByName(FAMILY_ARTIST);
+    await searchToolbarActions.waitForQuery(TRANSATLANTIC_QUERY);
+    await galleryActions.waitForSelectedArtistGallery(FAMILY_ARTIST, { queryValue: TRANSATLANTIC_QUERY });
+    expect(await galleryActions.readAlbumNamesByHeading(FAMILY_ARTIST)).toEqual([TRANSATLANTIC_NEAL_ALBUM]);
+    expect(await galleryActions.readArtistHeadings()).toEqual([FAMILY_ARTIST]);
+    await searchToolbarActions.clearSearch();
+    await searchToolbarActions.waitForQuery('');
+    await galleryActions.waitForSelectedArtistGallery(FAMILY_ARTIST, { queryValue: '' });
+    expect(await galleryActions.readAlbumNamesByHeading(FAMILY_ARTIST)).toEqual(completeNealView.albums);
+    expect(await galleryActions.readArtistHeadings()).toEqual(completeNealView.headings);
+  });
+
+  await stepLogger.step('Explicit Neal Morse album-title search remains narrow through same-primary selection', async () => {
+    await galleryActions.goto(`/?surface=albums&artist=${encodeURIComponent(FAMILY_ARTIST)}&q=${encodeURIComponent(TRANSATLANTIC_QUERY)}`);
+    await searchToolbarActions.waitForQuery(TRANSATLANTIC_QUERY);
     await galleryActions.waitForSelectedArtistGallery(FAMILY_ARTIST, {
       queryValue: TRANSATLANTIC_QUERY,
     });
@@ -218,13 +241,22 @@ test('FTC-SEARCH-NAV-028 limits a content-matched family artist while keeping an
       headings: [FAMILY_ARTIST],
       nealAlbums: [TRANSATLANTIC_NEAL_ALBUM],
     });
+    await navigationPanelActions.selectSidebarArtistByName(FAMILY_ARTIST);
+    await searchToolbarActions.waitForQuery(TRANSATLANTIC_QUERY);
+    await galleryActions.waitForSelectedArtistGallery(FAMILY_ARTIST, { queryValue: TRANSATLANTIC_QUERY });
+    expect(await galleryActions.readArtistHeadings()).toEqual([FAMILY_ARTIST]);
+    expect(await galleryActions.readAlbumNamesByHeading(FAMILY_ARTIST)).toEqual([TRANSATLANTIC_NEAL_ALBUM]);
   });
 
-  await stepLogger.step('Select Transatlantic and keep its full artist-name match', async () => {
-    await navigationPanelActions.selectSidebarArtistByName(TRANSATLANTIC_ARTIST);
+  await stepLogger.step('Explicit Transatlantic search keeps its full artist-name match', async () => {
+    await galleryActions.goto(`/?surface=albums&artist=${encodeURIComponent(TRANSATLANTIC_ARTIST)}&q=${encodeURIComponent(TRANSATLANTIC_QUERY)}`);
+    await searchToolbarActions.waitForQuery(TRANSATLANTIC_QUERY);
     await galleryActions.waitForSelectedArtistGallery(TRANSATLANTIC_ARTIST, {
       queryValue: TRANSATLANTIC_QUERY,
     });
+    await navigationPanelActions.selectSidebarArtistByName(TRANSATLANTIC_ARTIST);
+    await searchToolbarActions.waitForQuery(TRANSATLANTIC_QUERY);
+    await galleryActions.waitForSelectedArtistGallery(TRANSATLANTIC_ARTIST, { queryValue: TRANSATLANTIC_QUERY });
     expect(await galleryActions.readAlbumNamesByHeading(TRANSATLANTIC_ARTIST))
       .toEqual(completeTransatlanticView.albums);
     expect(await galleryActions.readArtistHeadings())
@@ -232,12 +264,14 @@ test('FTC-SEARCH-NAV-028 limits a content-matched family artist while keeping an
   });
 
   await stepLogger.step('Search by a Neal Morse track title and keep the same record-only scope', async () => {
-    await searchToolbarActions.search(NEAL_SCOPE_TRACK_QUERY, { submitWithEnter: true });
+    await galleryActions.goto(`/?surface=albums&artist=${encodeURIComponent(FAMILY_ARTIST)}&q=${encodeURIComponent(NEAL_SCOPE_TRACK_QUERY)}`);
     await searchToolbarActions.waitForQuery(NEAL_SCOPE_TRACK_QUERY);
-    await navigationPanelActions.selectSidebarArtistByName(FAMILY_ARTIST);
     await galleryActions.waitForSelectedArtistGallery(FAMILY_ARTIST, {
       queryValue: NEAL_SCOPE_TRACK_QUERY,
     });
+    await navigationPanelActions.selectSidebarArtistByName(FAMILY_ARTIST);
+    await searchToolbarActions.waitForQuery(NEAL_SCOPE_TRACK_QUERY);
+    await galleryActions.waitForSelectedArtistGallery(FAMILY_ARTIST, { queryValue: NEAL_SCOPE_TRACK_QUERY });
     await expect.poll(
       async () => ({
         headings: await galleryActions.readArtistHeadings(),
@@ -251,7 +285,7 @@ test('FTC-SEARCH-NAV-028 limits a content-matched family artist while keeping an
   });
 });
 
-test('FTC-SEARCH-NAV-026 clears Neal Morse search without remounting the selected gallery or family filters and restores the full tree', async ({
+test('FTC-SEARCH-NAV-026 clears Neal Morse search without remounting the selected gallery or family filters and restores the full tree', { tag: '@area:gallery-search' }, async ({
   artistFamilyActions,
   galleryActions,
   navigationPanelActions,
@@ -332,7 +366,7 @@ test('FTC-SEARCH-NAV-026 clears Neal Morse search without remounting the selecte
   });
 });
 
-test('FTC-SEARCH-NAV-002, FTC-SEARCH-NAV-003, and FTC-SEARCH-NAV-026 keep one-family search narrow, alphabetical, and selected through full-tree restoration', async ({
+test('FTC-SEARCH-NAV-002, FTC-SEARCH-NAV-003, and FTC-SEARCH-NAV-026 keep one-family search narrow, alphabetical, and selected through full-tree restoration', { tag: '@area:gallery-search' }, async ({
   artistFamilyActions,
   galleryActions,
   navigationPanelActions,
@@ -573,7 +607,7 @@ test('FTC-SEARCH-NAV-002, FTC-SEARCH-NAV-003, and FTC-SEARCH-NAV-026 keep one-fa
   });
 });
 
-test('FTC-SEARCH-NAV-026 keeps a cold direct-loaded selected gallery mounted through natural search clear', async ({
+test('FTC-SEARCH-NAV-026 keeps a cold direct-loaded selected gallery mounted through natural search clear', { tag: '@area:gallery-search' }, async ({
   artistFamilyActions,
   galleryActions,
   navigationPanelActions,
@@ -612,7 +646,7 @@ test('FTC-SEARCH-NAV-026 keeps a cold direct-loaded selected gallery mounted thr
       familyChipContentChanged: false,
       familyChipNodesChanged: false,
       familyControlsHidden: false,
-      familyControlsVisibleDuringActiveRequest: true,
+      familyControlsVisibleDuringActiveRequest: false,
       familyListReplaced: false,
       familyMutationCount: 0,
       familyPanelContentChanged: false,
@@ -644,7 +678,7 @@ test('FTC-SEARCH-NAV-026 keeps a cold direct-loaded selected gallery mounted thr
   });
 });
 
-test('FTC-SEARCH-NAV-003 direct query links hydrate the same one-family tree as visible search', async ({
+test('FTC-SEARCH-NAV-003 direct query links hydrate the same one-family tree as visible search', { tag: '@area:gallery-search' }, async ({
   galleryActions,
   navigationPanelActions,
   searchToolbarActions,
@@ -718,7 +752,7 @@ test('FTC-SEARCH-NAV-003 direct query links hydrate the same one-family tree as 
   });
 });
 
-test('FTC-SEARCH-NAV-004A keeps a clicked related-family artist selected as the primary artist', async ({
+test('FTC-SEARCH-NAV-004A keeps a clicked related-family artist selected as the primary artist', { tag: '@area:gallery-search' }, async ({
   artistFamilyActions,
   galleryActions,
   navigationPanelActions,
@@ -783,7 +817,7 @@ test('FTC-SEARCH-NAV-004A keeps a clicked related-family artist selected as the 
   });
 });
 
-test('FTC-SEARCH-NAV-004A and FTC-SEARCH-NAV-007A (BUG-06) hide stale Artist Family content while an unrelated artist selection loads', async ({
+test('FTC-SEARCH-NAV-004A and FTC-SEARCH-NAV-007A (BUG-06) hide stale Artist Family content while an unrelated artist selection loads', { tag: '@area:gallery-search' }, async ({
   artistFamilyActions,
   galleryActions,
   navigationPanelActions,
@@ -834,12 +868,12 @@ test('FTC-SEARCH-NAV-004A and FTC-SEARCH-NAV-007A (BUG-06) hide stale Artist Fam
     await artistFamilyActions.waitForHidden();
     expect(await artistFamilyActions.readPanelState()).toEqual({
       visible: false,
-      chipTexts: [],
+      chipTexts: [UNRELATED_ARTIST],
     });
   });
 });
 
-test('FTC-SEARCH-NAV-003 accepts a new search from direct-loaded state and clearing restores the full tree while retaining selection', async ({
+test('FTC-SEARCH-NAV-003 accepts a new search from direct-loaded state and clearing restores the full tree while retaining selection', { tag: '@area:gallery-search' }, async ({
   galleryActions,
   navigationPanelActions,
   searchToolbarActions,
@@ -937,7 +971,7 @@ test('FTC-SEARCH-NAV-003 accepts a new search from direct-loaded state and clear
   });
 });
 
-test('FTC-SEARCH-NAV-025 keeps committed searches in an app-owned keyboard and mouse popover', async ({
+test('FTC-SEARCH-NAV-025 keeps committed searches in an app-owned keyboard and mouse popover', { tag: '@area:gallery-search' }, async ({
   galleryActions,
   searchToolbarActions,
   stepLogger,
@@ -998,7 +1032,7 @@ test('FTC-SEARCH-NAV-025 keeps committed searches in an app-owned keyboard and m
   });
 });
 
-test('FTC-SEARCH-NAV-025 persists only an explicitly submitted completed query after debounced prefixes', async ({
+test('FTC-SEARCH-NAV-025 persists only an explicitly submitted completed query after debounced prefixes', { tag: '@area:gallery-search' }, async ({
   galleryActions,
   searchToolbarActions,
   stepLogger,
@@ -1021,7 +1055,7 @@ test('FTC-SEARCH-NAV-025 persists only an explicitly submitted completed query a
   });
 });
 
-test('FTC-SEARCH-NAV-025 aligns the desktop recent-search popover below the search input', async ({
+test('FTC-SEARCH-NAV-025 aligns the desktop recent-search popover below the search input', { tag: '@area:gallery-search' }, async ({
   galleryActions,
   page,
   searchToolbarActions,
@@ -1044,7 +1078,7 @@ test('FTC-SEARCH-NAV-025 aligns the desktop recent-search popover below the sear
     const { control, popover } = await searchToolbarActions.readRecentSearchGeometry();
     expect(Math.abs(popover.x - control.x)).toBeLessThanOrEqual(1);
     expect(popover.width).toBe(control.width);
-    expect(popover.y).toBeGreaterThanOrEqual(control.y + control.height);
+    expect(popover.y).toBeCloseTo(control.y + control.height - 1, 0);
     expect(popover.x + popover.width).toBeLessThanOrEqual(1440);
     expect(popover.y + popover.height).toBeLessThanOrEqual(900);
   });

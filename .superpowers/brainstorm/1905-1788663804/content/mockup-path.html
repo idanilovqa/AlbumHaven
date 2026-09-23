@@ -1,0 +1,42 @@
+<h2>Choose the Gallery mockup path</h2>
+<p class="subtitle">The annotated screenshot remains current-state evidence only. Each final artifact will still require separate approval.</p>
+
+<div class="cards">
+  <div class="card" data-choice="local-html" onclick="toggleSelect(this)">
+    <div class="card-image">
+      <div class="mock-nav">AppBar</div>
+      <div style="display:grid;grid-template-columns:1fr auto;gap:12px;padding:12px;border-bottom:1px solid rgba(255,255,255,.2)">
+        <strong>Selected Artist</strong><span>Family · View · Settings</span>
+      </div>
+      <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;padding:12px">
+        <div class="placeholder" style="aspect-ratio:1"></div><div class="placeholder" style="aspect-ratio:1"></div><div class="placeholder" style="aspect-ratio:1"></div><div class="placeholder" style="aspect-ratio:1"></div>
+      </div>
+    </div>
+    <div class="card-body">
+      <h3>A. Local interactive HTML — recommended</h3>
+      <p>Fastest path for exact Gallery geometry, open-menu states, View expansion, overlay, and panel behavior. Artifacts can be stored beside the owner documentation.</p>
+    </div>
+  </div>
+
+  <div class="card" data-choice="figma" onclick="toggleSelect(this)">
+    <div class="card-image">
+      <div class="placeholder" style="height:180px;display:flex;align-items:center;justify-content:center">High-fidelity design canvas</div>
+    </div>
+    <div class="card-body">
+      <h3>B. Figma</h3>
+      <p>Best for long-lived design-system editing and handoff, but slower for this bounded current-stack exception and its many interaction states.</p>
+    </div>
+  </div>
+
+  <div class="card" data-choice="image-mockup" onclick="toggleSelect(this)">
+    <div class="card-image">
+      <div class="placeholder" style="height:180px;display:flex;align-items:center;justify-content:center">Static rendered concept</div>
+    </div>
+    <div class="card-body">
+      <h3>C. Generated static images</h3>
+      <p>Useful for broad visual direction, but weakest for approving anchored behavior, resizing, menu continuity, and exact component states.</p>
+    </div>
+  </div>
+</div>
+
+<p class="subtitle">Click one option, then confirm your choice in the Codex chat.</p>

@@ -4,13 +4,18 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 const appearanceCss = fs.readFileSync(path.join(__dirname, '../../../music_app/static/css/appearance-backgrounds.css'), 'utf8');
+const galleryCardCss = fs.readFileSync(path.join(__dirname, '../../../music_app/static/css/runtime/non-album-and-player.css'), 'utf8');
 
 const runtime = () => require(path.join(__dirname, '../../../music_app/static/js/appearance-backgrounds.js'));
 const defaults = () => ({
   main_surface_color: null, panel_background_color: null,
   palette_id: null, panel_index: 0, player_override: null, compact_player_style: 'docked',
+  docked_compact_player_behavior: 'follow_sidebar',
+  docked_compact_player_regular_style: false,
+  compact_player_motion: 'normal', floating_player_edge: { source: 'player', color: null },
   album_details_layout: 'classic_bar', album_playing_row_animation: 'enabled',
-  alert_family: 'ember',
+  alert_family: 'ember', loop_control_style: 'capsule',
+  action_button_outlines: true, device_profiles: {},
 });
 const green = () => ({ background: '#112820', fill: '#79B390', edge: '#DCEBE3' });
 const steel = () => ({ background: '#14283B', fill: '#8BAED1', edge: '#B9CADD' });
@@ -50,10 +55,12 @@ test('empty cover artwork follows the active main-elements palette', () => {
 
 test('Artist Family filters and gallery options follow the active palette interaction tokens', () => {
   assert.match(appearanceCss, /:root\[data-appearance-palette\][^{]*\.gallery-options-floating-button\s*\{[^}]*background:\s*var\(--appearance-control\)[^}]*color:\s*var\(--appearance-ink\)[^}]*border-color:\s*var\(--appearance-line\)/s);
-  assert.match(appearanceCss, /:root\[data-appearance-palette\][^{]*\.related-box\s*\{[^}]*background:\s*var\(--appearance-card\)[^}]*border-color:\s*var\(--appearance-line\)[^}]*color:\s*var\(--appearance-ink\)/s);
-  assert.match(appearanceCss, /:root\[data-appearance-palette\][^{]*\.related-chip\s*\{[^}]*background:\s*var\(--appearance-control\)[^}]*border-color:\s*var\(--appearance-line\)[^}]*color:\s*var\(--appearance-ink\)/s);
-  assert.match(appearanceCss, /:root\[data-appearance-palette\][^{]*\.related-chip:hover\s*\{[^}]*background:\s*var\(--appearance-item-hover,\s*var\(--appearance-hover\)\)[^}]*color:\s*var\(--appearance-ink\)/s);
-  assert.match(appearanceCss, /:root\[data-appearance-palette\][^{]*\.related-chip\.active\s*\{[^}]*background:\s*var\(--appearance-item-selected,\s*var\(--appearance-hover\)\)[^}]*color:\s*var\(--appearance-ink\)/s);
+  assert.match(appearanceCss, /:root\[data-appearance-palette\][^{]*:is\(\.related-box, \.artist-family-panel\)\s*\{[^}]*background:\s*var\(--appearance-card\)[^}]*border-color:\s*var\(--appearance-line\)[^}]*color:\s*var\(--appearance-ink\)/s);
+  assert.match(appearanceCss, /:root\[data-appearance-palette\][^{]*\.artist-family-panel__artist\s*\{[^}]*background:\s*var\(--appearance-card\)/s);
+  assert.match(appearanceCss, /:root:is\(\[data-appearance-palette\], \[data-appearance-item-hover\]\)[^{]*\.artist-family-panel__artist:hover\s*\{[^}]*background:\s*var\(--appearance-card\)/s);
+  assert.match(appearanceCss, /:root\[data-appearance-palette\] :is\(\.related-chip, \.artist-family-panel__artist\):hover\s*\{[^}]*color:\s*var\(--appearance-ink\)/s);
+  assert.match(appearanceCss, /:root:is\(\[data-appearance-palette\], \[data-appearance-item-selected\]\)[^{]*\.artist-family-panel__artist\.is-active\s*\{[^}]*background:\s*var\(--appearance-card\)/s);
+  assert.match(appearanceCss, /:root\[data-appearance-palette\] :is\(\.related-chip\.active, \.artist-family-panel__artist\.is-active\)\s*\{[^}]*color:\s*var\(--appearance-ink\)/s);
 });
 
 test('light palettes render the notification glyph with contrast-safe palette ink', () => {
@@ -61,10 +68,10 @@ test('light palettes render the notification glyph with contrast-safe palette in
   assert.match(appearanceCss, /:root\[data-appearance-mode='light'\] \.cover-lookup-drawer-glyph::before\s*\{[^}]*background:\s*var\(--appearance-ink\)[^}]*mask-image:\s*url\('\/static\/images\/cover-lookup-notification-icon-offwhite\.png'\)/s);
 });
 
-test('the approved eleven palettes expose three panel companions and coordinated player colors', () => {
+test('the approved palettes expose three panel companions and coordinated player colors', () => {
   assert.deepEqual(runtime().palettes.map(palette => palette.id), [
-    'steelblue', 'navy', 'powderblue', 'graphite', 'slate', 'midnight',
-    'black', 'blackgray', 'paper', 'silver', 'coollight',
+    'steelblue', 'navy', 'harbor-mint', 'powderblue', 'graphite', 'slate', 'midnight',
+    'black', 'blackgray', 'paper', 'silver', 'coollight', 'parchment-pine',
   ]);
   for (const palette of runtime().palettes) {
     assert.equal(palette.panels.length, 3);
@@ -85,6 +92,7 @@ test('every Main elements palette provides a coordinated selection accent', () =
   assert.deepEqual(Object.fromEntries(runtime().palettes.map(palette => [palette.id, palette.selectionAccent])), {
     steelblue: '#8BAED1',
     navy: '#91B4E3',
+    'harbor-mint': '#52D7AA',
     powderblue: '#4F7398',
     graphite: '#8A96A3',
     slate: '#7896B4',
@@ -94,6 +102,7 @@ test('every Main elements palette provides a coordinated selection accent', () =
     paper: '#596775',
     silver: '#596775',
     coollight: '#526E8B',
+    'parchment-pine': '#51B67D',
   });
 });
 
@@ -285,7 +294,7 @@ test('automatic, theme, player, and custom outline sources resolve against the e
     ...base,
     interaction_overrides: interactions('automatic'),
     player_style_override: customPlayer,
-  }, playerEffective), customPlayer.controls.border);
+  }, playerEffective), playerEffective.tokens['player-control-border']);
   assert.equal(api.resolveInteractionOutline({
     ...base,
     interaction_overrides: interactions('theme'),
@@ -295,7 +304,7 @@ test('automatic, theme, player, and custom outline sources resolve against the e
     ...base,
     interaction_overrides: interactions('player'),
     player_style_override: customPlayer,
-  }, playerEffective), customPlayer.controls.border);
+  }, playerEffective), playerEffective.tokens['player-control-border']);
   assert.equal(api.resolveInteractionOutline({
     ...base,
     interaction_overrides: interactions('custom'),
@@ -323,5 +332,151 @@ test('saved theme application publishes the resolved player-aware interaction ou
     player_style_override: customPlayer,
   }, root);
 
-  assert.equal(properties.get('--appearance-interaction-outline'), customPlayer.controls.border);
+  assert.equal(properties.get('--appearance-interaction-outline'), runtime().resolveAppearance({
+    ...defaults(), palette_id: 'steelblue', player_override: customPlayer,
+  }).tokens['player-control-border']);
+});
+
+test('Harbor Mint resolves the approved surfaces, mint controls and player for every companion', () => {
+  const api = runtime();
+  const palette = api.palettes.find(item => item.id === 'harbor-mint');
+  assert.ok(palette, 'Harbor Mint must be selectable');
+  assert.equal(palette.name, 'Harbor Mint');
+  const companions = ['#0E1B29', '#091522', '#1D3445'];
+  companions.forEach((panel, panel_index) => {
+    const effective = api.resolveAppearance({ ...defaults(), palette_id: 'harbor-mint', panel_index });
+    assert.equal(effective.main, '#111E2C');
+    assert.equal(effective.panel, panel);
+    for (const [role, color] of Object.entries({
+      ink: '#E6EDF5', muted: '#9AAFC2', control: '#203043',
+      accent: '#52D7AA', play: '#52D7AA', player: '#0E1B29',
+    })) assert.equal(effective.tokens[role], color, role);
+    assert.deepEqual(effective.player, { background: '#0E1B29', fill: '#52D7AA', edge: '#9AAFC2' });
+  });
+});
+
+test('Harbor Mint saves its companion while retaining custom player colors through reset', async () => {
+  const { controller, requests, applied } = setup({ initial: { ...defaults(), player_override: green() } });
+  controller.setPalette('harbor-mint');
+  controller.setPanelIndex(2);
+  const expected = { ...defaults(), palette_id: 'harbor-mint', panel_index: 2, player_override: green() };
+  assert.deepEqual(applied, []);
+  assert.deepEqual(runtime().resolveAppearance(controller.getState().draft).player, green());
+  assert.equal(await controller.save(), true);
+  assert.deepEqual(requests, [{ method: 'PUT', payload: expected }]);
+  assert.deepEqual(applied, [expected]);
+  controller.reset();
+  assert.deepEqual(controller.getState().draft, { ...defaults(), player_override: green() });
+  controller.cancel();
+  assert.deepEqual(controller.getState().draft, expected);
+  controller.setPlayerMode('palette');
+  assert.deepEqual(runtime().resolveAppearance(controller.getState().draft).player, {
+    background: '#0E1B29', fill: '#52D7AA', edge: '#9AAFC2',
+  });
+});
+
+test('light palettes use a black Gallery Artbox hover frame', () => {
+  assert.match(appearanceCss, /:root\[data-appearance-mode='light'\]\s*\{[^}]*--gallery-artbox-hover-frame:\s*#000;/s);
+  assert.match(galleryCardCss, /\.album-card:hover,[^}]*border-color:\s*var\(--gallery-artbox-hover-frame,/s);
+  assert.match(galleryCardCss, /\.album-card:hover \.cover::after,[^}]*border-color:\s*var\(--gallery-artbox-hover-frame,/s);
+});
+
+
+for (const paletteId of [null, ...runtime().palettes.map(palette => palette.id)]) {
+  test(`resolved player palette ${paletteId || 'default'} supplies every CSS player token`, () => {
+    const { tokens } = runtime().resolveAppearance({ ...defaults(), palette_id: paletteId });
+    for (const key of ['player', 'player-surface-start', 'player-surface-end', 'player-ink', 'play', 'play-ink', 'player-control-border', 'player-handle']) {
+      assert.match(tokens[key] || '', /^#[0-9A-F]{6}$/i, key);
+    }
+    assert.match(tokens['player-surface-angle'] || '', /^\d+(?:\.\d+)?deg$/);
+  });
+}
+
+for (const background of ['#101820', '#F0F4F8']) {
+  test(`legacy player control ink contrasts with the resolved ${background} control fill`, () => {
+    const api = runtime();
+    const { tokens } = api.resolveAppearance({ ...defaults(), player_override: { background, fill: '#4D8D70', edge: '#9DCEB2' } });
+    assert.ok(api.contrastRatio(tokens['play'], tokens['play-ink']) >= 4.5);
+  });
+}
+test('Parchment & Pine resolves its three dark companions on the approved light canvas', () => {
+  const api = runtime();
+  const palette = api.palettes.find(item => item.id === 'parchment-pine');
+  assert.ok(palette, 'Parchment & Pine must be selectable');
+  assert.equal(palette.name, 'Parchment & Pine');
+  assert.equal(palette.panels.length, 3);
+  ['#101512', '#11241D', '#15241B'].forEach((panel, panel_index) => {
+    const effective = api.resolveAppearance({ ...defaults(), palette_id: palette.id, panel_index });
+    assert.equal(effective.mode, 'light');
+    assert.equal(effective.main, '#E8E0CF');
+    assert.equal(effective.panel, panel);
+    for (const [role, color] of Object.entries({
+      ink: '#393C32', muted: '#777C6C', line: '#C7C4B4',
+      'panel-ink': '#E2F0E5', 'panel-muted': '#98A79B', 'panel-line': '#354237',
+    'panel-control': '#202422', 'floating-edge': '#101512',
+      player: '#10251E', 'player-ink': '#D7E4DA',
+      play: '#38B977', 'play-ink': '#083820', focus: '#81DFA9',
+    })) assert.equal(effective.tokens[role], color, role);
+  });
+});
+
+test('Parchment & Pine uses a dark default selection fill for every NavigationTree item', () => {
+  assert.match(
+    appearanceCss,
+    /data-appearance-palette='parchment-pine'\]:not\(\[data-appearance-item-selected\]\) \.navigation-tree-item\s*\{[^}]*--selection-body-background:\s*color-mix\(in srgb, var\(--appearance-panel-ink\) 18%, var\(--appearance-panel-background\)\);/,
+  );
+});
+
+test('Parchment & Pine keeps Artist Info on the light card color roles', () => {
+  const darkChromeRule = appearanceCss.match(
+    /:root\[data-appearance-palette='parchment-pine'\] :is\(([\s\S]*?)\)\s*\{[\s\S]*?--appearance-panel-ink/,
+  );
+  assert.ok(darkChromeRule);
+  assert.doesNotMatch(darkChromeRule[1], /\.artist-info-overlay/);
+});
+
+test('Parchment & Pine gives content cards and controls distinct beige surfaces', () => {
+  const palette = runtime().palettes.find(item => item.id === 'parchment-pine');
+  assert.equal(palette.tokens.card, '#FFF7E5');
+  assert.equal(palette.tokens.control, '#C8B58F');
+  assert.notEqual(palette.tokens.card, palette.main);
+  assert.notEqual(palette.tokens.control, palette.main);
+});
+
+test('Appearance settings use the selected panel companion instead of imitating the main canvas', () => {
+  assert.match(appearanceCss, /\.appearance-background-editor\s*\{[^}]*background:\s*var\(--appearance-panel-background\);/s);
+  assert.match(appearanceCss, /\.background-family\s*\{[^}]*background:\s*var\(--appearance-panel-background\);/s);
+  assert.doesNotMatch(appearanceCss, /data-appearance-palette='parchment-pine'\] \.appearance-background-editor/);
+});
+
+test('Parchment & Pine retains an explicit custom player group for every companion', () => {
+  const player_override = { background: '#123456', fill: '#ABCDEF', edge: '#987654' };
+  for (const panel_index of [0, 1, 2]) {
+    const effective = runtime().resolveAppearance({
+      ...defaults(), palette_id: 'parchment-pine', panel_index, player_override,
+    });
+    assert.deepEqual(effective.player, player_override);
+    assert.equal(effective.main, '#E8E0CF');
+  }
+});
+
+test('Parchment & Pine panel roles reset when returning to an existing palette', () => {
+  const properties = new Map();
+  const root = {
+    style: { setProperty: (key, value) => properties.set(key, value), removeProperty: key => properties.delete(key) },
+    setAttribute() {}, removeAttribute() {},
+  };
+  const api = runtime();
+  api.applyTheme({ ...defaults(), palette_id: 'parchment-pine' }, root);
+  assert.equal(properties.get('--appearance-panel-ink'), '#E2F0E5');
+  api.applyTheme({ ...defaults(), palette_id: 'paper' }, root);
+  const expected = api.resolveAppearance({ ...defaults(), palette_id: 'paper' }).tokens;
+  for (const role of ['ink', 'muted', 'line']) {
+    assert.equal(properties.get('--appearance-panel-' + role), expected[role], role);
+  }
+  api.applyTheme(defaults(), root);
+  for (const role of ['ink', 'muted', 'line', 'control', 'color-scheme']) {
+    assert.equal(properties.has('--appearance-panel-' + role), false, role);
+  }
+  assert.equal(properties.has('--appearance-floating-edge'), false);
 });

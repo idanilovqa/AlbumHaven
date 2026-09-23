@@ -10,20 +10,49 @@ from types import SimpleNamespace
 from typing import AsyncIterator
 
 
+class _BoundedExecutorAdmission:
+    """Bound queued and running work submitted to an owned executor."""
+
+    def __init__(self, executor, *, max_outstanding: int) -> None:
+        self._executor = executor
+        self._slots = threading.BoundedSemaphore(max(1, int(max_outstanding)))
+
+    def submit(self, function, *args):
+        if not self._slots.acquire(blocking=False):
+            return None
+        try:
+            future = self._executor.submit(function, *args)
+        except BaseException:
+            self._slots.release()
+            raise
+        future.add_done_callback(lambda _completed: self._slots.release())
+        return future
+
+    def shutdown(self, **kwargs) -> None:
+        self._executor.shutdown(**kwargs)
+
+
 def _stop_library_watch_runtime(
     *,
     watch_service,
     event_coordinator,
     targeted_executor=None,
+    targeted_reconciler=None,
 ) -> None:
     try:
-        watch_service.stop()
+        if watch_service is not None:
+            watch_service.stop()
     finally:
         try:
-            event_coordinator.stop()
+            if event_coordinator is not None:
+                event_coordinator.stop()
         finally:
-            if targeted_executor is not None:
-                targeted_executor.shutdown(wait=False, cancel_futures=True)
+            try:
+                if targeted_reconciler is not None:
+                    targeted_reconciler.stop()
+            finally:
+                if targeted_executor is not None:
+                    targeted_executor.shutdown(wait=False, cancel_futures=True)
 
 
 def _recover_library_watch_after_manual_scan(
@@ -49,7 +78,23 @@ def _recover_library_watch_after_manual_scan(
     normalized_roots = tuple(dict(root) for root in root_definitions)
     if targeted_reconciler is not None:
         targeted_reconciler.replace_roots(normalized_roots)
-    watch_service.replace_roots(normalized_roots)
+    try:
+        watch_service.replace_roots(normalized_roots)
+    except Exception:
+        from music_app.services.library_event_coordinator import CoordinatorProblem
+
+        for root in normalized_roots:
+            try:
+                health_service.record_problem(
+                    CoordinatorProblem("reconciliation_failed", str(root.get("id") or ""))
+                )
+            except Exception:
+                # record_problem retains pending health before persistence;
+                # continue protecting every root and preserve the replacement error.
+                logging.getLogger("music_app").exception(
+                    "Unable to persist library watcher recovery problem."
+                )
+        raise
     if clear_error is not None:
         raise clear_error
     return cleared
@@ -102,6 +147,9 @@ def _configure_asgi_app(app, runtime) -> None:
     from music_app.services.waveform_peak_cache_postgres import (
         PostgresWaveformPeakCacheRepository,
     )
+    from music_app.services.saved_loop_waveform_peak_cache_postgres import (
+        PostgresSavedLoopWaveformPeakCacheRepository,
+    )
     from music_app.services.waveform_peaks import WaveformPeaksRegistry
     from music_app.services.private_route_boundary import install_private_route_boundary
     from music_app.services.library_watch_health import (
@@ -118,6 +166,7 @@ def _configure_asgi_app(app, runtime) -> None:
     template_dir = package_root / "templates"
 
     app.state.config = runtime.config
+    app.state.media_host_library_id = None
     app.state.library_state = runtime.library_state
     app.state.logger = runtime.logger
     app.state.cold_scan_handoff_lock = runtime.cold_scan_handoff_lock
@@ -133,6 +182,11 @@ def _configure_asgi_app(app, runtime) -> None:
     )
     app.state.waveform_peaks_registry = WaveformPeaksRegistry(
         cache_repository=waveform_cache_repository
+    )
+    app.state.saved_loop_waveform_peak_cache_repository = (
+        PostgresSavedLoopWaveformPeakCacheRepository(runtime.config)
+        if str(runtime.config.get("ALBUM_HAVEN_APP_DATABASE_URL") or "").strip()
+        else None
     )
     app.state.templates = Jinja2Templates(directory=str(template_dir))
     app.state.runtime_asset_version = _runtime_asset_version()
@@ -190,7 +244,10 @@ def create_asgi_app():
         WatchdogLibraryEventSource,
     )
     from music_app.services.library_roots import get_library_roots
-    from music_app.services.library_event_coordinator import LibraryEventCoordinator
+    from music_app.services.library_event_coordinator import (
+        CoordinatorProblem,
+        LibraryEventCoordinator,
+    )
     from music_app.services.scan_jobs_postgres import PostgresScanJobRepository
     from music_app.services.cover_jobs_postgres import PostgresCoverJobRepository
     from music_app.services.runtime_shutdown import request_runtime_shutdown
@@ -205,6 +262,9 @@ def create_asgi_app():
     @asynccontextmanager
     async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
         hydrated = hydrate_runtime_library_state_on_startup(runtime)
+        from music_app.services.log_history import resolve_media_host_history_scope
+        host_scope = resolve_media_host_history_scope(runtime.config)
+        _app.state.media_host_library_id = host_scope.library_id if host_scope is not None else None
         ensure_runtime_relation_projection_ready(runtime)
         library_state = runtime.library_state
         if (
@@ -239,6 +299,38 @@ def create_asgi_app():
             if targeted_database_url
             else ()
         )
+        runtime.library_event_coordinator = None
+        runtime.library_watch_service = None
+
+        async def shutdown_resources() -> None:
+            runtime.config.pop("_LIBRARY_WATCH_MANUAL_RECOVERY_CALLBACK", None)
+            shutdown_errors: list[tuple[str, BaseException]] = []
+            shutdown_stages = (
+                (
+                    "library filesystem watcher",
+                    lambda: _stop_library_watch_runtime(
+                        watch_service=runtime.library_watch_service,
+                        event_coordinator=runtime.library_event_coordinator,
+                    ),
+                ),
+                ("waveform peaks", _app.state.waveform_peaks_registry.shutdown),
+                ("playback PCM", _app.state.playback_pcm_registry.shutdown),
+                ("runtime", lambda: request_runtime_shutdown(runtime)),
+            )
+            for stage, shutdown in shutdown_stages:
+                try:
+                    result = shutdown()
+                    if isawaitable(result):
+                        await result
+                except BaseException as exc:
+                    shutdown_errors.append((stage, exc))
+            if shutdown_errors:
+                details = "; ".join(
+                    f"{stage}: {error}" for stage, error in shutdown_errors
+                )
+                raise RuntimeError(
+                    f"application shutdown failed: {details}"
+                ) from shutdown_errors[0][1]
 
         scan_jobs = PostgresScanJobRepository(
             database_url=targeted_database_url
@@ -290,21 +382,30 @@ def create_asgi_app():
                     "Unable to persist library watcher health problem."
                 )
 
-        runtime.library_event_coordinator = LibraryEventCoordinator(
-            emit_request=create_targeted_reconciliation,
-            emit_health_event=persist_library_watch_health,
-            emit_problem=persist_library_watch_problem,
-            auto_schedule=True,
-        )
-        runtime.library_watch_service = LibraryWatchService(
-            WatchdogLibraryEventSource(targeted_roots),
-            runtime.library_event_coordinator.accept,
-        )
-        _app.state.library_watch_service = runtime.library_watch_service
+        try:
+            runtime.library_event_coordinator = LibraryEventCoordinator(
+                emit_request=create_targeted_reconciliation,
+                emit_health_event=persist_library_watch_health,
+                emit_problem=persist_library_watch_problem,
+                auto_schedule=True,
+            )
+            runtime.library_watch_service = LibraryWatchService(
+                WatchdogLibraryEventSource(targeted_roots),
+                runtime.library_event_coordinator.accept,
+            )
+            _app.state.library_watch_service = runtime.library_watch_service
+        except BaseException:
+            await shutdown_resources()
+            raise
 
         def replace_live_library_roots(roots) -> None:
             root_definitions = tuple(dict(root) for root in roots)
-            runtime.library_watch_service.replace_roots(root_definitions)
+            try:
+                runtime.library_watch_service.replace_roots(root_definitions)
+            except Exception:
+                for root in root_definitions:
+                    persist_library_watch_problem(CoordinatorProblem("reconciliation_failed", str(root.get("id") or "")))
+                raise
 
         runtime.replace_library_watch_roots = replace_live_library_roots
         _app.state.replace_library_watch_roots = replace_live_library_roots
@@ -328,44 +429,15 @@ def create_asgi_app():
         runtime.config["_LIBRARY_WATCH_MANUAL_RECOVERY_CALLBACK"] = (
             recover_library_watch_after_manual_scan
         )
-        runtime.library_watch_service.start()
-
-        def stop_library_watch() -> None:
-            _stop_library_watch_runtime(
-                watch_service=runtime.library_watch_service,
-                event_coordinator=runtime.library_event_coordinator,
-            )
+        try:
+            runtime.library_watch_service.start()
+        except BaseException:
+            await shutdown_resources()
+            raise
         try:
             yield
         finally:
-            runtime.config.pop(
-                "_LIBRARY_WATCH_MANUAL_RECOVERY_CALLBACK",
-                None,
-            )
-            shutdown_errors: list[tuple[str, BaseException]] = []
-            shutdown_stages = (
-                (
-                    "library filesystem watcher",
-                    stop_library_watch,
-                ),
-                ("waveform peaks", _app.state.waveform_peaks_registry.shutdown),
-                ("playback PCM", _app.state.playback_pcm_registry.shutdown),
-                ("runtime", lambda: request_runtime_shutdown(runtime)),
-            )
-            for stage, shutdown in shutdown_stages:
-                try:
-                    result = shutdown()
-                    if isawaitable(result):
-                        await result
-                except BaseException as exc:
-                    shutdown_errors.append((stage, exc))
-            if shutdown_errors:
-                details = "; ".join(
-                    f"{stage}: {error}" for stage, error in shutdown_errors
-                )
-                raise RuntimeError(
-                    f"application shutdown failed: {details}"
-                ) from shutdown_errors[0][1]
+            await shutdown_resources()
 
     app = FastAPI(
         title=APP_NAME,

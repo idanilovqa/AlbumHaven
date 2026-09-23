@@ -5,6 +5,22 @@ const path = require('node:path');
 
 const appearance = require('../../../music_app/static/js/appearance-backgrounds.js');
 
+test('seekbar mode stays in draft until successful Save and Cancel discards it', async () => {
+  const applied = [];
+  const controller = appearance.createController({ request: async () => initialAppearance(), initial: initialAppearance() });
+  controller.configureSeekbar('default', mode => applied.push(mode));
+  controller.setSeekbarMode('waveform');
+  assert.equal(controller.getState().canSave, true);
+  assert.deepEqual(applied, []);
+  controller.cancel();
+  assert.equal(controller.getState().seekbarMode, 'default');
+  assert.equal(controller.getState().dirty, false);
+  controller.setSeekbarMode('waveform');
+  assert.equal(await controller.save(), true);
+  assert.deepEqual(applied, ['waveform']);
+  assert.equal(controller.getState().dirty, false);
+});
+
 const classicGreen = () => ({
   surface: { mode: 'gradient', angle: 0, start: '#0A2F24', end: '#0A1422' },
   controls: { fill: '#24B86B', border: '#86EFAC' },
@@ -29,9 +45,12 @@ const initialAppearance = () => ({
   panel_index: 0,
   player_override: null,
   compact_player_style: 'docked',
+  docked_compact_player_behavior: 'follow_sidebar',
+  docked_compact_player_regular_style: false,
   album_details_layout: 'classic_bar',
   album_playing_row_animation: 'enabled',
   alert_family: 'ember',
+  loop_control_style: 'capsule',
   interaction_overrides: interactionOverrides(),
   selection_accent: { enabled: true, color: '#6E9BD0' },
   player_style_override: classicGreen(),
@@ -39,13 +58,79 @@ const initialAppearance = () => ({
 });
 
 const editableSnapshot = value => {
-  const { revision, player_recent_sets, csrf_token, ...draft } = value;
-  return draft;
+  const { revision, player_recent_sets, ...draft } = value;
+  return { action_button_outlines: true, device_profiles: {}, compact_player_motion: 'normal', floating_player_edge: { source: 'player', color: null }, ...draft };
 };
+
+test('a handle-only edit from native appearance preserves other components after save and reload', async () => {
+  const nativeInitial = { ...initialAppearance(), palette_id: null, player_override: null, player_style_override: null, player_recent_sets: [] };
+  const { controller } = setup({ initial: nativeInitial });
+  controller.setPlayerStyleColor('handles.color', '#123456');
+  assert.equal(controller.getState().draft.player_style_override.surface.mode, 'layered_gradient');
+  assert.equal(await controller.save(), true);
+  const reloaded = setup({ initial: controller.getState().saved }).controller;
+  const attributes = new Map(), properties = new Map();
+  appearance.applyTheme(reloaded.getState().saved, {
+    style: { setProperty: (key, value) => properties.set(key, value), removeProperty: key => properties.delete(key) },
+    setAttribute: (key, value) => attributes.set(key, value), removeAttribute: key => attributes.delete(key),
+  });
+  for (const component of ['surface', 'controls', 'waveform']) assert.equal(attributes.has(`data-appearance-native-${component}`), true);
+  assert.equal(attributes.has('data-appearance-native-handles'), false);
+  for (const token of ['player', 'play', 'waveform-fill', 'waveform-edge']) assert.equal(properties.has(`--appearance-${token}`), false);
+  assert.equal(properties.get('--appearance-player-handle'), '#123456');
+  assert.equal(properties.get('--appearance-interaction-outline'), appearance.resolveAppearance(nativeInitial).tokens.accent);
+  appearance.clearTheme({
+    style: { setProperty: (key, value) => properties.set(key, value), removeProperty: key => properties.delete(key) },
+    setAttribute: (key, value) => attributes.set(key, value), removeAttribute: key => attributes.delete(key),
+  });
+  assert.equal([...attributes.keys()].some(key => key.startsWith('data-appearance-native-')), false);
+});
+
+test('native waveform edits keep intentional control pairing while preserving the native surface', () => {
+  const { controller } = setup({ initial: { ...initialAppearance(), palette_id: null, player_override: null, player_style_override: null } });
+  controller.setWaveformColor('fill', '#123456');
+  const style = controller.getState().draft.player_style_override;
+  assert.equal(style.surface.mode, 'layered_gradient');
+  assert.equal(style.waveform.fill, '#123456');
+  assert.equal(style.controls.fill, appearance.derivePairedPlayerColor('waveform.fill', '#123456').color);
+  assert.deepEqual(style.native_components, ['surface', 'handles']);
+});
+
+test('old explicit player styles are never inferred native from matching colors', () => {
+  const { nativePlayerStyle } = require('../../../music_app/static/js/appearance-palettes.js');
+  const attributes = new Map();
+  appearance.applyTheme({ ...initialAppearance(), palette_id: null, player_style_override: structuredClone(nativePlayerStyle) }, {
+    style: { setProperty() {}, removeProperty() {} },
+    setAttribute: (key, value) => attributes.set(key, value), removeAttribute: key => attributes.delete(key),
+  });
+  assert.equal([...attributes.keys()].some(key => key.startsWith('data-appearance-native-')), false);
+});
+
+for (const native_components of [null, 'surface', ['surface', 'surface'], ['unknown'], [1], {}, ['surface', 'controls', 'waveform', 'handles', 'surface']]) {
+  test(`player style rejects invalid native component provenance ${JSON.stringify(native_components)}`, () => {
+    const { normalizePlayerOverride } = require('../../../music_app/static/js/appearance-palettes.js');
+    assert.throws(() => normalizePlayerOverride({ ...classicGreen(), native_components }), TypeError);
+  });
+}
 
 function requireMethod(controller, name) {
   assert.equal(typeof controller[name], 'function', `Appearance workspace must expose ${name}()`);
   return controller[name].bind(controller);
+}
+
+function openElementClassesAt(markup, offset) {
+  const stack = [];
+  const tags = /<\/?([a-z][\w-]*)(?:\s[^>]*)?>/gi;
+  let match;
+  while ((match = tags.exec(markup)) && match.index < offset) {
+    if (match[0].startsWith('</')) {
+      stack.pop();
+      continue;
+    }
+    if (match[0].endsWith('/>')) continue;
+    stack.push(match[0].match(/\bclass="([^"]*)"/)?.[1] || '');
+  }
+  return stack;
 }
 
 function setup(options = {}) {
@@ -71,6 +156,41 @@ function setup(options = {}) {
   });
   return { controller, requests, applied, initial };
 }
+
+for (const action of ['match', 'reset']) {
+  test(`migrated aggregate player ${action} clears legacy colors through save and reload`, async () => {
+    const initial = { ...initialAppearance(), player_style_override: null,
+      player_override: { background: '#123456', fill: '#345678', edge: '#567890' } };
+    const { controller, requests } = setup({ initial });
+    controller.setPalette('slate');
+    if (action === 'match') controller.setPlayerMode('palette');
+    else controller.resetSection('seekbar');
+    assert.equal(controller.getState().draft.player_override, null);
+    assert.equal(controller.getState().draft.player_style_override, null);
+    assert.equal(controller.getState().draft.palette_id, 'slate');
+    assert.equal(await controller.save(), true);
+    assert.equal(requests[0].payload.player_override, null);
+    const reloaded = setup({ initial: { ...controller.getState().saved, revision: 8, player_recent_sets: initial.player_recent_sets } }).controller;
+    assert.equal(reloaded.getState().draft.player_override, null);
+    assert.equal(reloaded.getState().draft.player_style_override, null);
+  });
+}
+
+test('solid player colors stay solid after a new Start selection and restored unequal endpoints', () => {
+  const { controller } = setup();
+  const style = classicGreen();
+  style.surface = { mode: 'solid', angle: 45, start: '#123456', end: '#ABCDEF' };
+  controller.setPlayerStyle(style);
+  const properties = new Map();
+  const root = { style: { setProperty: (name, value) => properties.set(name, value), removeProperty() {} }, setAttribute() {}, removeAttribute() {} };
+  appearance.applyTheme(controller.getState().draft, root);
+  assert.equal(properties.get('--appearance-player-surface-start'), '#123456');
+  assert.equal(properties.get('--appearance-player-surface-end'), '#123456');
+  appearance.setPlayerStylePath(controller, 'surface.start', '#345678');
+  assert.equal(controller.getState().draft.player_style_override.surface.end, '#345678');
+  appearance.applyTheme(controller.getState().draft, root);
+  assert.equal(properties.get('--appearance-player-surface-end'), '#345678');
+});
 
 test('one aggregate draft keeps Main elements, Player & Seekbar, and Selection accent edits while navigating', () => {
   const { controller, initial } = setup();
@@ -135,6 +255,14 @@ test('Alerts and Album page expose the approved live-preview contracts', () => {
   assert.match(alerts, /data-alert-live-preview/);
   assert.match(alerts, /data-alert-preview-small-compact/);
   assert.match(alerts, /data-alert-preview-small-expanded/);
+  assert.match(alerts, /data-alert-preview-toast/);
+  assert.match(alerts, /on-page-alert--compact/, 'notification preview uses the shared compact alert renderer');
+  assert.match(alerts, /class="appearance-alert-preview__page" aria-hidden="true"/, 'sample alerts must not announce real failures');
+  assert.match(alerts, /data-alert-preview-small-compact aria-hidden="true"/);
+  assert.match(alerts, /data-alert-preview-small-expanded aria-hidden="true"/);
+  assert.match(alerts, /data-on-page-alert="error"/, 'page preview uses the shared alert renderer');
+  assert.equal((alerts.match(/data-small-alert="error"/g) || []).length, 2, 'both artbox previews use the shared alert renderer');
+  assert.match(album, /data-on-page-alert="error"/, 'missing album preview uses the shared alert renderer');
 
   for (const layout of ['classic_bar', 'stacked_bar', 'editorial_canvas']) assert.match(album, new RegExp(`data-album-details-layout="${layout}"`));
   assert.match(album, /data-album-preview-state="present"/);
@@ -155,14 +283,22 @@ test('Alerts and Album page expose the approved live-preview contracts', () => {
 test('Main elements and Player & Seekbar keep their live previews visible while settings scroll', () => {
   const source = fs.readFileSync(path.join(__dirname, '../../../music_app/static/js/appearance-backgrounds.js'), 'utf8');
   const main = source.slice(source.indexOf('function editorMarkup()'), source.indexOf('function seekbarMarkup('));
-  const player = appearance.seekbarMarkup('waveform');
   const css = fs.readFileSync(path.join(__dirname, '../../../music_app/static/css/appearance-backgrounds.css'), 'utf8');
 
   assert.match(main, /class="background-choices"[\s\S]*class="background-player-section"[\s\S]*class="background-preview-column"/);
   assert.match(css, /\.background-preview-column\s*\{[^}]*position:\s*sticky[^}]*top:\s*0/s);
 
-  assert.match(player, /class="player-preview-dock"[\s\S]*data-player-live-preview[\s\S]*class="player-seekbar-mode"[\s\S]*class="player-editor-workspace"/);
-  assert.equal((player.match(/class="player-seekbar-mode"/g) || []).length, 1);
+  for (const mode of ['default', 'waveform']) {
+    const player = appearance.seekbarMarkup(mode);
+    const seekbarModeOffset = player.indexOf('<section class="player-seekbar-mode"');
+    const openClasses = openElementClassesAt(player, seekbarModeOffset);
+
+    assert.ok(seekbarModeOffset > 0);
+    assert.ok(player.indexOf('data-player-live-preview') < seekbarModeOffset);
+    assert.ok(seekbarModeOffset < player.indexOf('<div class="player-editor-workspace"'));
+    assert.ok(!openClasses.includes('player-preview-dock'), `${mode} selector must scroll outside the sticky preview`);
+    assert.equal((player.match(/class="player-seekbar-mode"/g) || []).length, 1);
+  }
   assert.match(css, /\.player-preview-dock\s*\{[^}]*position:\s*sticky[^}]*top:\s*0/s);
 });
 
@@ -203,6 +339,7 @@ test('one Save submits the complete aggregate draft with revision and one applie
   assert.equal(requests[0].method, 'PUT');
   assert.deepEqual(requests[0].payload, {
     ...submittedDraft,
+    device_profiles: Object.fromEntries(['mobile', 'tv'].map(profile => [profile, controller.getState().deviceProfiles[profile]])),
     expected_revision: 7,
     applied_player_set: player,
   });
@@ -258,9 +395,12 @@ test('Player and Seekbar restore, compact choice, Save, Cancel, and Reset share 
   assert.equal(state.canSave, true);
 
   controller.setCompactPlayerStyle('floating');
+  requireMethod(controller, 'setDockedCompactPlayerBehavior')('stay_docked');
   assert.equal(controller.getState().draft.compact_player_style, 'floating');
+  assert.equal(controller.getState().draft.docked_compact_player_behavior, 'stay_docked');
   assert.equal(await controller.save(), true);
   assert.equal(requests[0].payload.compact_player_style, 'floating');
+  assert.equal(requests[0].payload.docked_compact_player_behavior, 'stay_docked');
   assert.equal(requests[0].payload.applied_player_set.waveform.fill, '#005C20');
 
   controller.setCompactPlayerStyle('docked');
@@ -274,6 +414,7 @@ test('Player and Seekbar restore, compact choice, Save, Cancel, and Reset share 
   state = controller.getState();
   assert.equal(state.draft.player_style_override, null);
   assert.equal(state.draft.compact_player_style, 'docked');
+  assert.equal(state.draft.docked_compact_player_behavior, 'follow_sidebar');
   assert.deepEqual(state.waveformColorUpdates, []);
   assert.equal(state.canSave, true);
 });
@@ -330,6 +471,85 @@ test('a revision conflict advances the server revision while retaining the draft
   assert.equal(await controller.save(), true);
   assert.equal(controller.getState().revision, 9);
   assert.equal(controller.getState().dirty, false);
+});
+
+for (const action of ['cancel', 'retry']) {
+  test(`conflict baseline refresh preserves the server snapshot and explicit ${action}`, async () => {
+    const initial = initialAppearance();
+    const serverStyle = classicGreen();
+    serverStyle.surface.start = '#123456';
+    const server = { ...initial, revision: 8, palette_id: 'slate', panel_index: 1,
+      player_style_override: serverStyle, player_recent_sets: [serverStyle],
+      waveform_recent_colors: ['#ABCDEF', '#123456'] };
+    const requests = [];
+    const { controller, applied } = setup({ initial, request: async (_method, payload) => {
+      requests.push(payload);
+      if (requests.length === 1) throw Object.assign(new Error('appearance_conflict'), {
+        status: 409, data: { appearance: server },
+      });
+      const { expected_revision, applied_player_set, waveform_color_updates, ...draft } = payload;
+      return { ...draft, revision: expected_revision + 1, player_recent_sets: server.player_recent_sets };
+    } });
+    controller.setPalette('silver');
+    controller.restoreWaveformColors({ fill: '#345678', edge: '#56789A' });
+    const before = controller.getState();
+    assert.equal(await controller.save(), false);
+    const conflicted = controller.getState();
+    assert.deepEqual(conflicted.saved, editableSnapshot(server));
+    assert.equal(conflicted.revision, 8);
+    assert.deepEqual(conflicted.draft, before.draft, 'the entire draft remains available for explicit retry');
+    assert.deepEqual(conflicted.waveformColorUpdates, before.waveformColorUpdates);
+    assert.deepEqual(conflicted.playerRecentSets, server.player_recent_sets);
+    assert.deepEqual(conflicted.recentColors, server.waveform_recent_colors);
+    assert.deepEqual(applied, [editableSnapshot(server)], 'only confirmed server preferences recolor the live app');
+    if (action === 'cancel') {
+      controller.cancel();
+      assert.deepEqual(controller.getState().draft, editableSnapshot(server));
+      controller.setAlertFamily('quiet');
+    }
+    assert.equal(await controller.save(), true);
+    assert.equal(requests[1].expected_revision, 8);
+    if (action === 'cancel') {
+      assert.equal(requests[1].palette_id, 'slate');
+      assert.equal(requests[1].panel_index, 1);
+      assert.deepEqual(requests[1].player_style_override, serverStyle);
+      assert.equal(requests[1].alert_family, 'quiet');
+      assert.equal(requests[1].applied_player_set, null);
+      assert.equal(requests[1].waveform_color_updates, undefined);
+    } else {
+      assert.deepEqual(requests[1], { ...requests[0], expected_revision: 8 }, 'retry only advances the expected server revision');
+    }
+  });
+}
+
+for (const snapshot of [{ revision: 8 }, { ...initialAppearance(), revision: 8, player_recent_sets: ['invalid'] }]) {
+  test(`conflict baseline rejects an incomplete snapshot (${Object.keys(snapshot).length} fields) atomically`, async () => {
+    const { controller, applied } = setup({ request: async () => {
+      throw Object.assign(new Error('appearance_conflict'), { status: 409, data: { appearance: snapshot } });
+    } });
+    controller.setPalette('silver');
+    const before = controller.getState();
+    assert.equal(await controller.save(), false);
+    assert.equal(controller.getState().revision, before.revision);
+    assert.deepEqual(controller.getState().saved, before.saved);
+    assert.deepEqual(controller.getState().draft, before.draft);
+    assert.deepEqual(applied, []);
+  });
+}
+
+test('conflict baseline from a cleared account cannot restore prior state', async () => {
+  let reject;
+  const { controller, applied } = setup({ request: () => new Promise((_resolve, fail) => { reject = fail; }) });
+  controller.setPalette('silver');
+  const pending = controller.save();
+  controller.clear('Session ended');
+  const cleared = controller.getState();
+  reject(Object.assign(new Error('appearance_conflict'), {
+    status: 409, data: { appearance: { ...initialAppearance(), revision: 8 } },
+  }));
+  assert.equal(await pending, false);
+  assert.deepEqual(controller.getState(), cleared);
+  assert.deepEqual(applied, []);
 });
 
 test('EditorPage exposes one reusable global footer with contextual Reset, Cancel, and Save slots', () => {
@@ -412,7 +632,8 @@ test('interaction overrides use seven coordinated families and the former focus 
   assert.deepEqual(appearance.interactionColorFamilies.map(family => [family.id, family.label, roles.map(role => family.colors[role])]), expected);
   const markup = appearance.interactionControlsMarkup();
   for (const label of ['Navigation hover', 'Navigation selected', 'Item hover background', 'Item hover &amp; keyboard focus outline', 'Item pressed']) assert.match(markup, new RegExp(`>${label}<`));
-  assert.equal((markup.match(/class="appearance-interaction-row/g) || []).length, 5);
+  assert.equal((markup.match(/class="appearance-interaction-row/g) || []).length, 6);
+  assert.match(markup, /data-panel-outline-custom/);
   assert.doesNotMatch(markup, /data-interaction-clear=/);
   assert.match(markup, /data-interaction-color="item_hover" data-color="#31465D"/);
   assert.match(markup, /data-item-outline-color[^>]*data-color-family="blue"[^>]*style="--swatch:#86B7EF"/);
@@ -515,13 +736,12 @@ test('Item interaction tokens cover shared actionable controls without recolorin
   assert.match(css, /:not\(\.global-player \*\)/);
   assert.match(css, /:not\(:disabled\)/);
   assert.match(css, /:not\(\[aria-disabled=['"]true['"]\]\)/);
-  assert.match(css, /:is\(button, \.button, \[role='button'\], \[data-actionable\]\):not\(\.navigation-tree-item\):not\(\.global-player \*\):hover[^{}]*\{[^}]*border-color:\s*var\(--appearance-interaction-outline,/s);
-  assert.match(css, /:is\(button, \.button, \[role='button'\], \[data-actionable\]\):not\(\.navigation-tree-item\):not\(\.global-player \*\):hover[^{}]*\{[^}]*outline:\s*2px solid var\(--appearance-interaction-outline,[^;}]+;[^}]*outline-offset:\s*2px/s);
-  assert.match(css, /:is\(button, input, select, \[role='button'\], \[data-actionable\]\):not\(\.global-player \*\):focus-visible[^{}]*\{[^}]*outline:\s*2px solid var\(--appearance-interaction-outline,[^;}]+;[^}]*outline-offset:\s*2px/s);
-  assert.match(css, /:root\s+:is\(button, \.button, \[role='button'\], \[data-actionable\]\)[^{]*:hover[^{}]*\{[^}]*border-color:\s*var\(--appearance-interaction-outline,/s);
-  assert.match(css, /:root\s+:is\(button, input, select, \[role='button'\], \[data-actionable\]\):not\(\.global-player \*\):focus-visible[^{}]*\{[^}]*outline:\s*2px solid var\(--appearance-interaction-outline,/s);
+  assert.match(css, /:is\(button, \.button, \[role='button'\], \[data-actionable\]\)[^{]*:not\(\.navigation-tree-item\):not\(\.search-field-button\):not\(\.cover-lookup-task-open\):not\(\.global-player \*\):hover[^{}]*\{[^}]*border-color:\s*var\(--appearance-item-action-hover-border,/s);
+  assert.match(css, /:is\(button, input, select, \[role='button'\], \[data-actionable\]\)[^{]*:not\(\.global-player \*\)[^{]*:focus-visible[^{}]*\{[^}]*outline:\s*1px solid var\(--appearance-interaction-outline,[^;}]+;[^}]*outline-offset:\s*1px/s);
+  assert.match(css, /:root\s+:is\(button, \.button, \[role='button'\], \[data-actionable\]\)[^{]*:hover[^{}]*\{[^}]*border-color:\s*var\(--appearance-item-action-hover-border,/s);
+  assert.match(css, /:root\s+:is\(button, input, select, \[role='button'\], \[data-actionable\]\)[^{]*:not\(\.global-player \*\)[^{]*:focus-visible[^{}]*\{[^}]*outline:\s*1px solid var\(--appearance-interaction-outline,/s);
   assert.match(css, /:is\(input\[type='checkbox'\], input\[type='radio'\]\):not\(\.global-player \*\):hover:not\(:disabled\)[^{}]*\{[^}]*outline:\s*1px solid var\(--appearance-interaction-outline,/s);
-  assert.match(css, /:root\[data-appearance-palette\]\s+:is\(input\[type='checkbox'\], input\[type='radio'\]\)\s*\{[^}]*accent-color:\s*var\(--appearance-accent\)/s);
+  assert.match(css, /:root\[data-appearance-palette\]\s+:is\(input\[type='checkbox'\], input\[type='radio'\]\)\s*\{[^}]*accent-color:\s*var\(--appearance-control-selected\)/s);
   assert.doesNotMatch(css, /:root\[data-appearance-palette\][^{]*:focus-visible\s*\{[^}]*--appearance-interaction-outline/s);
 });
 
@@ -568,4 +788,214 @@ test('interaction normalization accepts only the current closed shape or the exa
     { ...interactionOverrides(), item_outline: itemOutline('player', '#86B7EF') },
     { ...interactionOverrides(), item_outline: itemOutline('custom') },
   ]) assert.throws(() => normalize(invalid), TypeError);
+});
+
+
+test('correcting surface start clears the background alias error and preserves unrelated errors', async () => {
+  const { controller, requests } = setup();
+  controller.setPlayerColor('background', '#BADHEX');
+  controller.setPlayerStyleColor('handles.color', '#INVALID');
+  assert.equal(controller.getState().canSave, false);
+  controller.setPlayerStyleColor('surface.start', '#345678');
+  const state = controller.getState();
+  assert.equal(state.errors.player_background, undefined);
+  assert.equal(state.inputValues.player_background, '#345678');
+  assert.equal(state.inputValues['player_style_surface.start'], '#345678');
+  assert.ok(state.errors['player_style_handles.color']);
+  assert.equal(state.inputValues['player_style_handles.color'], '#INVALID');
+  assert.equal(await controller.save(), false);
+  assert.equal(requests.length, 0);
+  controller.setPlayerStyleColor('handles.color', '#456789');
+  assert.equal(controller.getState().canSave, true);
+  assert.equal(await controller.save(), true);
+  assert.equal(requests[0].payload.player_style_override.surface.start, '#345678');
+});
+
+for (const mode of ['gradient', 'layered_gradient', 'solid']) {
+  test(`Main player background edit updates and saves the active ${mode} structured style`, async () => {
+    const initial = initialAppearance();
+    initial.player_style_override.surface.mode = mode;
+    if (mode === 'solid') initial.player_style_override.surface.end = initial.player_style_override.surface.start;
+    const { controller, requests } = setup({ initial });
+    controller.setPlayerColor('background', '#345678');
+    const expected = structuredClone(initial.player_style_override);
+    expected.surface.start = '#345678';
+    if (mode === 'solid') expected.surface.end = '#345678';
+    assert.deepEqual(controller.getState().draft.player_style_override, expected);
+    assert.equal(controller.getState().effective.player.background, '#345678');
+    assert.equal(await controller.save(), true);
+    assert.deepEqual(requests[0].payload.player_style_override, expected);
+    const reloaded = setup({ initial: { ...controller.getState().saved, revision: 8, player_recent_sets: [expected] } }).controller;
+    assert.deepEqual(reloaded.getState().draft.player_style_override, expected);
+  });
+}
+
+test('saving a custom Mobile section returns to a clean draft and sends no derived Web profile', async () => {
+  const { controller, requests } = setup();
+  controller.setDeviceProfile('mobile');
+  controller.setDeviceSectionMode('custom');
+  controller.setColor('main_surface_color', '#123456');
+
+  assert.equal(controller.getState().dirty, true);
+  assert.equal(await controller.save(), true);
+
+  assert.deepEqual(Object.keys(requests[0].payload.device_profiles).sort(), ['mobile', 'tv']);
+  assert.equal(controller.getState().saved.main_surface_color, null);
+  assert.equal(controller.getState().draft.main_surface_color, '#123456');
+  assert.equal(controller.getState().dirty, false);
+  assert.equal(controller.getState().canSave, false);
+});
+
+test('Mobile and TV profiles never expose or persist loop-control settings', async () => {
+  const initial = initialAppearance();
+  initial.device_profiles = {
+    mobile: { sections: { player: { mode: 'custom', values: { loop_control_style: 'companion' } } } },
+    tv: { sections: { player: { mode: 'custom', values: { loop_control_style: 'companion' } } } },
+  };
+  const { controller, requests } = setup({ initial, loopCreateAllowed: true });
+  controller.setActiveSection('seekbar');
+  controller.setDeviceProfile('mobile');
+  assert.equal(controller.getState().draft.loop_control_style, 'capsule');
+  assert.equal(Object.hasOwn(controller.getState().deviceProfiles.mobile.sections.player.values, 'loop_control_style'), false);
+  assert.equal(Object.hasOwn(controller.getState().deviceProfiles.tv.sections.player.values, 'loop_control_style'), false);
+  controller.setCompactPlayerStyle('floating');
+
+  assert.equal(await controller.save(), true);
+  assert.equal(Object.hasOwn(requests[0].payload.device_profiles.mobile.sections.player.values, 'loop_control_style'), false);
+  assert.equal(Object.hasOwn(requests[0].payload.device_profiles.tv.sections.player.values, 'loop_control_style'), false);
+});
+
+test('Player and Seekbar hides loop controls outside Web Desktop', () => {
+  const source = fs.readFileSync(path.join(__dirname, '../../../music_app/static/js/appearance-backgrounds.js'), 'utf8');
+  assert.match(source, /loopSetting\.hidden = state\.activeDeviceProfile !== 'web_desktop' \|\| !state\.canChangeLoopStyle/);
+});
+
+test('Appearance device selector disables unsupported clients without an outer pill', () => {
+  const source = fs.readFileSync(path.join(__dirname, '../../../music_app/static/js/appearance-backgrounds.js'), 'utf8');
+  const css = fs.readFileSync(path.join(__dirname, '../../../music_app/static/css/appearance-backgrounds.css'), 'utf8');
+  assert.match(source, /data-appearance-device="web_desktop"[^>]*class="[^"]*ui-button/);
+  assert.match(source, /data-appearance-device="mobile"[^>]*disabled/);
+  assert.match(source, /data-appearance-device="tv"[^>]*disabled/);
+  assert.doesNotMatch(source, /data-appearance-device-mode=/);
+  const controlsRule = css.match(/\.appearance-device-controls\s*\{[\s\S]*?\}/)?.[0] || '';
+  assert.match(controlsRule, /border:\s*0/);
+  assert.match(controlsRule, /border-radius:\s*0/);
+  assert.match(controlsRule, /background:\s*transparent/);
+  const selectedRule = css.match(/\.appearance-device-selector button\[aria-pressed='true'\][\s\S]*?\}/)?.[0] || '';
+  assert.match(selectedRule, /--appearance-line/);
+  assert.doesNotMatch(selectedRule, /--appearance-(?:accent|interaction-outline)/);
+});
+
+test('visiting an unchanged custom profile does not create an unsaved draft', () => {
+  const initial = initialAppearance();
+  initial.device_profiles = {
+    mobile: {
+      sections: {
+        main: {
+          mode: 'custom',
+          values: {
+            panel_index: 0,
+            palette_id: null,
+            panel_background_color: null,
+            main_surface_color: null,
+          },
+        },
+      },
+    },
+    tv: { sections: {} },
+  };
+  const { controller } = setup({ initial });
+
+  controller.setDeviceProfile('mobile');
+  controller.setDeviceProfile('web_desktop');
+
+  assert.equal(controller.getState().dirty, false);
+});
+
+
+test('sidebar behavior regular style motion and edge preview then cancel save reload and reset together', async () => {
+  const { controller, applied, requests } = setup();
+  const edge = { source: 'custom', color: '#123456' };
+  for (const behavior of ['follow_sidebar', 'float_on_collapse', 'artbox']) {
+    requireMethod(controller, 'setDockedCompactPlayerBehavior')(behavior);
+    assert.equal(controller.getState().draft.docked_compact_player_behavior, behavior);
+  }
+  requireMethod(controller, 'setCompactPlayerMotion')('slow');
+  requireMethod(controller, 'setDockedCompactPlayerRegularStyle')(true);
+  requireMethod(controller, 'setFloatingPlayerEdge')(edge);
+  assert.equal(controller.getState().draft.docked_compact_player_regular_style, true);
+  assert.equal(controller.getState().draft.compact_player_motion, 'slow');
+  assert.deepEqual(controller.getState().draft.floating_player_edge, edge);
+  assert.deepEqual(applied, [], 'unsaved sidebar preferences remain local to the editor draft');
+  controller.cancel();
+  assert.equal(controller.getState().draft.docked_compact_player_behavior, 'follow_sidebar');
+  assert.equal(controller.getState().draft.docked_compact_player_regular_style, false);
+  assert.equal(controller.getState().draft.compact_player_motion, 'normal');
+  assert.deepEqual(controller.getState().draft.floating_player_edge, { source: 'player', color: null });
+  requireMethod(controller, 'setDockedCompactPlayerBehavior')('artbox');
+  requireMethod(controller, 'setDockedCompactPlayerRegularStyle')(true);
+  requireMethod(controller, 'setCompactPlayerMotion')('slow');
+  requireMethod(controller, 'setFloatingPlayerEdge')(edge);
+  assert.equal(await controller.save(), true);
+  assert.equal(requests.at(-1).payload.compact_player_motion, 'slow');
+  assert.equal(requests.at(-1).payload.docked_compact_player_regular_style, true);
+  assert.deepEqual(requests.at(-1).payload.floating_player_edge, edge);
+  const reloaded = setup({ initial: controller.getState().saved }).controller;
+  assert.equal(reloaded.getState().draft.docked_compact_player_behavior, 'artbox');
+  assert.equal(reloaded.getState().draft.docked_compact_player_regular_style, true);
+  assert.equal(reloaded.getState().draft.compact_player_motion, 'slow');
+  assert.deepEqual(reloaded.getState().draft.floating_player_edge, edge);
+  reloaded.resetSection('seekbar');
+  assert.equal(reloaded.getState().draft.compact_player_motion, 'normal');
+  assert.deepEqual(reloaded.getState().draft.floating_player_edge, { source: 'player', color: null });
+  assert.equal(reloaded.getState().draft.docked_compact_player_behavior, 'follow_sidebar');
+  assert.equal(reloaded.getState().draft.docked_compact_player_regular_style, false);
+});
+
+test('regular docked style applies a canonical root attribute and defaults false when omitted', () => {
+  for (const [value, expected] of [[undefined, 'false'], [false, 'false'], [true, 'true']]) {
+    const attributes = new Map();
+    const preference = initialAppearance();
+    if (value === undefined) delete preference.docked_compact_player_regular_style;
+    else preference.docked_compact_player_regular_style = value;
+    appearance.applyTheme(preference, {
+      style: { setProperty() {}, removeProperty() {} },
+      setAttribute: (name, attributeValue) => attributes.set(name, attributeValue),
+      removeAttribute: name => attributes.delete(name),
+    });
+    assert.equal(attributes.get('data-docked-compact-player-regular-style'), expected);
+  }
+});
+
+test('regular docked style rejects malformed persisted values', () => {
+  assert.throws(
+    () => appearance.createController({
+      initial: { ...initialAppearance(), docked_compact_player_regular_style: 'true' },
+      request: async () => initialAppearance(),
+    }),
+    /Invalid docked compact player regular style/,
+  );
+});
+
+test('regular docked style CSS excludes sidebar rail presentations', () => {
+  const css = fs.readFileSync(path.join(__dirname, '../../../music_app/static/css/appearance-backgrounds.css'), 'utf8');
+  assert.match(css, /data-docked-compact-player-regular-style='true'[^{}]*\.global-player\.is-docked-compact:not\(\.is-rail-compact\)\s*\{[^}]*border-top:\s*1px solid rgba\(74, 222, 128, 0\.48\)/s);
+  assert.match(css, /data-appearance-player[^{}]*data-docked-compact-player-regular-style='true'[^{}]*\.global-player\.is-docked-compact:not\(\.is-rail-compact\)\s*\{[^}]*--appearance-player-surface-start/s);
+});
+
+test('failed sidebar preference save retains draft and authoritative saved values', async () => {
+  for (const status of [500, 409]) {
+    const { controller } = setup({ request: async () => {
+      const error = new Error('Save rejected'); error.status = status; throw error;
+    } });
+    const saved = controller.getState().saved;
+    requireMethod(controller, 'setDockedCompactPlayerBehavior')('float_on_collapse');
+    requireMethod(controller, 'setCompactPlayerMotion')('slow');
+    requireMethod(controller, 'setFloatingPlayerEdge')({ source: 'theme', color: null });
+    const draft = controller.getState().draft;
+    assert.equal(await controller.save(), false);
+    assert.deepEqual(controller.getState().draft, draft);
+    assert.deepEqual(controller.getState().saved, saved);
+    assert.equal(controller.getState().dirty, true);
+  }
 });

@@ -229,3 +229,47 @@ def test_claimed_session_scrobble_does_not_reload_process_global_settings(monkey
     assert result.succeeded is True
     assert calls[0][1] == "track.scrobble"
     assert calls[0][2]["sk"] == "claimed-session-secret"
+
+
+@pytest.mark.lastfm_loopback_transport(provider_fixture="fixture_owned_lastfm_provider")
+def test_user_info_returns_nonnegative_provider_playcount(
+    fixture_owned_lastfm_provider, allow_lastfm_loopback_transport
+):
+    fixture_owned_lastfm_provider["responses"].append(
+        (200, b'<lfm status="ok"><user><playcount>12345</playcount></user></lfm>')
+    )
+
+    total = lastfm.get_lastfm_total_scrobbles(
+        _config(allow_lastfm_loopback_transport),
+        session=LastfmSession("listener", "fixture-session", "now"),
+    )
+
+    assert total == 12345
+    request = fixture_owned_lastfm_provider["requests"][0]
+    assert request["method"] == ["user.getInfo"]
+    assert request["user"] == ["listener"]
+    assert "sk" not in request
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        b'<lfm status="ok"><user /></lfm>',
+        b'<lfm status="ok"><user><playcount>-1</playcount></user></lfm>',
+        b'<lfm status="ok"><user><playcount>many</playcount></user></lfm>',
+    ],
+)
+@pytest.mark.lastfm_loopback_transport(provider_fixture="fixture_owned_lastfm_provider")
+def test_user_info_rejects_invalid_provider_playcount(
+    fixture_owned_lastfm_provider, allow_lastfm_loopback_transport, body
+):
+    fixture_owned_lastfm_provider["responses"].append((200, body))
+
+    with pytest.raises(LastfmError) as caught:
+        lastfm.get_lastfm_total_scrobbles(
+            _config(allow_lastfm_loopback_transport),
+            session=LastfmSession("listener", "fixture-session", "now"),
+        )
+
+    assert caught.value.retryable is True
+    assert caught.value.error_kind == "malformed_response"

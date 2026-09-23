@@ -126,6 +126,9 @@ Account creation may issue and email the initial invitation without a separate
 recent-auth prompt because the already-authorized create operation is one
 atomic workflow. Copy and resend from the roster are sensitive mutations and
 reuse the existing administrator reauthentication mechanism.
+Creation still revalidates the admitted session after locking account and library
+authority: revoked, idle-expired, or absolute-expired sessions cannot create an
+account. A live session does not need a fresh ten-minute reauthentication.
 
 The copy endpoint returns the complete configured-public-base invitation URL
 only in its successful JSON response. It uses `Cache-Control: no-store` and
@@ -138,9 +141,14 @@ The email and copied URL use the same path, token format, and completion flow:
 
 1. `GET /accept-invitation?token=...&purpose=account-invitation` validates the
    token without consuming it.
-2. The server creates a short-lived, purpose-bound, `HttpOnly` invitation
-   transaction and redirects immediately to token-free
-   `/accept-invitation`.
+2. The server creates a short-lived, purpose-bound invitation transaction with
+   `Secure`, `HttpOnly`, and `SameSite=Strict`, then responds with `303` to
+   token-free `/accept-invitation/continue`. This static `200` page commits a
+   same-site document and immediately uses a meta refresh to `/accept-invitation`,
+   with a plain fallback link. It renders no token, cookie value, or query data,
+   invokes no authority or mutation, and uses no JavaScript. This lets emailed
+   links work without changing the Strict cookie policy. Missing or blocked
+   cookies terminate at the normal invalid form; the handoff never repeats.
 3. The acceptance page collects and confirms a new password using the existing
    Phase 7 password policy, breach checks, Argon2id configuration, one-time
    CSRF, and same-origin enforcement.
@@ -153,7 +161,12 @@ The email and copied URL use the same path, token format, and completion flow:
 
 Malformed, wrong-purpose, expired, revoked, consumed, concurrently consumed,
 already-accepted, and disabled-account links render the same safe invalid-link
-result. Successful acceptance and all failure pages are token-free and use
+result unless the browser already has an independently valid invitation
+transaction. A failed exchange with no cookie on the request uses the same
+token-free continuation before validating any Strict cookie withheld by the
+cross-site navigation. Present invalid cookies are cleared; a missing or blocked
+cookie still terminates at the invalid form without a loop.
+Successful acceptance and all failure pages are token-free and use
 `Cache-Control: no-store` plus `Referrer-Policy: no-referrer`.
 
 ## Administration UI

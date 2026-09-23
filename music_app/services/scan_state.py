@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from music_app.services.log_history import resolve_media_host_history_scope
+
 import time
 from collections.abc import Mapping
 from threading import Lock
@@ -326,6 +328,7 @@ def refresh_library_state(
     expected_inventory_mutation_revision: int | None = None,
     before_commit: Callable[[object], object] | None = None,
 ) -> None:
+    history_scope = resolve_media_host_history_scope(config)
     cfg = config
     log_app_event(cfg, logger, "Library indexing started", level="info", force=force)
 
@@ -425,7 +428,7 @@ def refresh_library_state(
             reason_code="scan_cache_load_failed",
             error=disk_error,
             scan_generation=scan_generation,
-        )
+         history_scope=history_scope)
 
     if file_cache and (not existing_cache or disk_last_scan > last_scan):
         rebuilt_albums = build_albums_from_file_cache(file_cache, set(scan_separate_release_keys or set()))
@@ -623,7 +626,7 @@ def refresh_library_state(
                     scan_generation=scan_generation,
                     scan_phase=str(library_state.get("scan_phase") or ""),
                     scan_outcome="failed",
-                )
+                 history_scope=history_scope)
                 library_state["last_error"] = str(exc)
                 library_state["scan_outcome"] = "failed"
     finally:

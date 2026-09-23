@@ -22,18 +22,30 @@
     return '';
   };
 
+  const fetchSameOriginRead = async (input, init) => {
+    try {
+      return await originalFetch(input, init);
+    } catch (error) {
+      if (error?.name !== 'TypeError') throw error;
+      return originalFetch(input, init);
+    }
+  };
+
   window.fetch = (input, init) => {
     const requestInit = init && typeof init === 'object' ? init : undefined;
     const method = String(requestInit?.method || input?.method || 'GET').toUpperCase();
     let url;
     try {
-      url = new URL(typeof input === 'string' ? input : input.url, window.location.href);
+      url = new URL(input?.url ?? input, window.location.href);
     } catch (_error) {
       return originalFetch(input, init);
     }
-    if (safeMethods.has(method) || url.origin !== window.location.origin) {
-      return originalFetch(input, init);
+    if (safeMethods.has(method)) {
+      return url.origin === window.location.origin
+        ? fetchSameOriginRead(input, init)
+        : originalFetch(input, init);
     }
+    if (url.origin !== window.location.origin) return originalFetch(input, init);
     const csrfToken = readCookie(csrfCookieName);
     if (!csrfToken) {
       return originalFetch(input, init);
@@ -42,7 +54,7 @@
     headers.set('X-Album-Haven-CSRF', csrfToken);
     return originalFetch(input, {
       ...(requestInit || {}),
-      credentials: requestInit?.credentials || 'same-origin',
+      credentials: requestInit?.credentials ?? input?.credentials ?? 'same-origin',
       headers,
     });
   };
@@ -1174,6 +1186,17 @@ function getReusableSelectedArtistBrowseView(view) {
     : null;
   const cachedView = cachedViews ? cachedViews[requestedSignature] : null;
   if (!cachedView) return null;
+  const requestedSource = String(view?.search_context?.selected_artist_source || '').trim();
+  const cachedSource = String(cachedView?.search_context?.selected_artist_source || '').trim();
+  const selectedArtist = String(view?.selected_artist || '').trim();
+  const cachedNameMatches = cachedView?.search_context?.artist_name_match_artists;
+  // Automatic search selection may include connected-family previews. An explicit
+  // content-only selection instead requires the server's narrow matching records.
+  if (requestedSource === 'requested_artist' && cachedSource === 'auto_top_match'
+    && !(Array.isArray(cachedNameMatches)
+      && cachedNameMatches.some(artist => String(artist || '').trim() === selectedArtist))) {
+    return null;
+  }
   return cloneRuntimeReusableSelectedArtistBrowseView(cachedView);
 }
 
@@ -1391,6 +1414,7 @@ function normalizeStatusPayload(payload, fallbackStatus = null) {
   return {
     ...base,
     ...source,
+    allowed_actions: isRuntimePlainObject(source.allowed_actions) ? { ...source.allowed_actions } : {},
     scan_in_progress: normalizeRuntimeBoolean(source.scan_in_progress, base.scan_in_progress),
     scan_processed: normalizeRuntimeNumber(source.scan_processed, base.scan_processed),
     scan_total: normalizeRuntimeNumber(source.scan_total, base.scan_total),
@@ -1649,6 +1673,34 @@ function applyViewPayload(payload, options = {}) {
   const nextView = (options.retainFullAlbums || viewShouldRetainFullRuntimeAlbums(normalizedNextView))
     ? normalizedNextView
     : compactRuntimeViewPayload(normalizedNextView);
+  // Sidebar counts retain the source scope of their own response when album-only
+  // hydration preserves the navigation tree.
+  const sidebarCategories = options.preserveSidebarState
+    ? previousView.sidebar_library_categories
+    : nextPayload?.sidebar_library_categories || nextPayload?.visible_library_categories;
+  nextView.sidebar_library_categories = Array.isArray(sidebarCategories)
+    ? [...sidebarCategories]
+    : null;
+  // Loaded album coverage follows the response, independently of the browse URL.
+  // Local merged patches carry this field forward; server replacements use their
+  // own categories instead of inheriting coverage from the previous albums.
+  nextView.loaded_library_categories = [...(
+    Array.isArray(nextPayload?.loaded_library_categories)
+      ? nextPayload.loaded_library_categories
+      : Array.isArray(nextPayload?.visible_library_categories)
+        ? normalizedNextView.visible_library_categories
+        : previousView.loaded_library_categories || normalizedNextView.visible_library_categories
+  )];
+  nextView.non_album_library_categories = [...(
+    nextPayload?.non_album_library_categories
+    || (Array.isArray(nextPayload?.non_album_tracks)
+      ? nextView.loaded_library_categories
+      : previousView.non_album_library_categories || nextView.loaded_library_categories)
+  )];
+  if (options.preserveGalleryBrowseLocationState === true) {
+    nextView.gallery_scope = previousView.gallery_scope;
+    nextView.visible_library_categories = [...previousView.visible_library_categories];
+  }
   const preserveMountedSelectedView = Boolean(
     options.preserveMountedGalleryChildren
     && String(mountedPreviousView.selected_artist || '').trim()
@@ -1657,6 +1709,7 @@ function applyViewPayload(payload, options = {}) {
     && !String(nextView.query || '').trim()
   );
   if (preserveMountedSelectedView) {
+    nextView.loaded_library_categories = [...(mountedPreviousView.loaded_library_categories || previousView.visible_library_categories)];
     nextView.artist_groups = mountedPreviousView.artist_groups;
     nextView.primary_artist_groups = mountedPreviousView.primary_artist_groups;
     nextView.family_artist_groups = mountedPreviousView.family_artist_groups;
@@ -1697,6 +1750,7 @@ function applyViewPayload(payload, options = {}) {
       : '';
   }
   state.view = nextView;
+  if (typeof syncGalleryMainStateFromView === 'function') syncGalleryMainStateFromView(previousView, nextView);
   if (options.completePageEntryBrowseContext) {
     state.ui.pageEntryBrowseContextPending = false;
   }
@@ -1756,6 +1810,8 @@ function mergeViewPayload(patch, options = {}) {
 function applyStatusPayload(payload, fallbackStatus = null) {
   const nextStatus = normalizeStatusPayload(payload, fallbackStatus || state.status);
   state.status = nextStatus;
+  state.loopCreateAllowed = nextStatus.allowed_actions?.['library.loops.create'] === true;
+  if (typeof syncLoopCreateCapability === 'function') syncLoopCreateCapability();
   return nextStatus;
 }
 
@@ -2056,7 +2112,12 @@ function parseCurrentBrowserUrlState() {
 }
 
 function pushBrowserViewState(view, stateSnapshot = view) {
-  window.history.pushState(stateSnapshot, '', buildUrl(view));
+  const settingsNavigation = window.AlbumHavenSettingsNavigation?.instance;
+  if (settingsNavigation?.pushLibraryHistory) {
+    settingsNavigation.pushLibraryHistory(buildUrl(view), stateSnapshot);
+  } else {
+    window.history.pushState(stateSnapshot, '', buildUrl(view));
+  }
 }
 
 // END js/runtime/browser-navigation-helpers.js
@@ -2155,6 +2216,97 @@ function getBrowserDialogTarget() {
   } catch (_error) {
     return null;
   }
+}
+
+let activeAppFormDialog = null;
+function showAppFormDialog(options = {}) {
+  if (activeAppFormDialog) return activeAppFormDialog.promise;
+  const get = name => document.getElementById(`app-form-${name}`);
+  const modal = get('modal'), title = get('title'), content = get('content'), error = get('error'), cancel = get('cancel'), submit = get('submit');
+  if (!modal || !title || !content || !error || !cancel || !submit) return Promise.resolve(null);
+  const previousFocus = document.activeElement;
+  const anchor = options.anchor;
+  const anchoredPanel = anchor ? modal.querySelector('.confirm-modal-dialog') : null;
+  const listeners = [];
+  let positionObserver = null;
+  const listen = (node, name, handler) => { node.addEventListener(name, handler); listeners.push([node, name, handler]); };
+  let resolve; const promise = new Promise(done => { resolve = done; });
+  const owner = { promise }; activeAppFormDialog = owner;
+  let submitEnabled = options.submitEnabled !== false, submitting = false;
+  const syncSubmit = () => { if (activeAppFormDialog === owner) submit.disabled = submitting || !submitEnabled; };
+  const controls = { setSubmitEnabled(value) {
+    if (activeAppFormDialog !== owner) return;
+    submitEnabled = Boolean(value); syncSubmit();
+  } };
+  const finish = value => {
+    if (activeAppFormDialog !== owner) return;
+    listeners.forEach(([node, name, handler]) => node.removeEventListener(name, handler));
+    positionObserver?.disconnect();
+    options.onClose?.(content);
+    if (anchoredPanel) { clearTriggerAnchor(anchoredPanel); anchoredPanel.removeAttribute('style'); anchoredPanel.setAttribute('aria-modal', 'true'); modal.classList.remove('app-form-anchored'); }
+    modal.classList?.remove('app-form-reading'); submit.hidden = false;
+    modal.hidden = true; content.innerHTML = ''; activeAppFormDialog = null;
+    resolve(value); previousFocus?.focus?.({ preventScroll: true });
+  };
+  const apply = async event => {
+    event?.preventDefault?.();
+    if (submit.disabled || options.mode === 'reading') return;
+    submitting = true; syncSubmit(); error.textContent = '';
+    try { const result = await options.onSubmit?.(content); if (activeAppFormDialog === owner) finish(result ?? true); }
+    catch (failure) { if (activeAppFormDialog === owner) error.textContent = failure.message || 'Unable to apply changes.'; }
+    finally { submitting = false; syncSubmit(); }
+  };
+  title.textContent = options.title || 'Settings'; content.innerHTML = options.contentHtml || ''; error.textContent = '';
+  submit.textContent = options.submitLabel || 'Apply'; syncSubmit(); cancel.textContent = options.cancelLabel || 'Cancel';
+  submit.hidden = options.mode === 'reading'; cancel.hidden = false;
+  if (options.mode === 'reading') { cancel.textContent = 'Close'; modal.classList?.add('app-form-reading'); }
+  modal.hidden = false; modal.style.zIndex = '125';
+  modal.querySelector?.('.confirm-modal-dialog')?.removeAttribute('hidden');
+  if (anchoredPanel) {
+    const boundaryElement = anchor.closest?.('.utility-modal-dialog');
+    const position = () => {
+      if (activeAppFormDialog !== owner || modal.hidden) return;
+      const rect = anchor.getBoundingClientRect();
+      const searchField = boundaryElement && anchor.closest?.('.search-field-control');
+      const searchRect = searchField?.getBoundingClientRect();
+      const joinedTop = searchRect ? searchRect.bottom - 1 : rect.bottom + 4;
+      const boundary = boundaryElement?.getBoundingClientRect();
+      const left = Math.max(8, Math.min(window.innerWidth - 16, Number(boundary?.left || 0) + 8));
+      const right = Math.max(left + 1, Math.min(window.innerWidth - 8, Number(boundary?.right || window.innerWidth) - 8));
+      const bottom = Math.max(9, Math.min(window.innerHeight - 8, Number(boundary?.bottom || window.innerHeight) - 8));
+      const width = Math.min(440, right - left);
+      const top = Math.max(8, Math.min(joinedTop, Math.max(8, bottom - 240)));
+      const panelLeft = searchRect
+        ? Math.max(left, Math.min(searchRect.left, right - width))
+        : Math.max(left, Math.min(rect.right - width, right - width));
+      anchoredPanel.style.position = 'fixed'; anchoredPanel.style.left = `${panelLeft}px`; anchoredPanel.style.top = `${top}px`;
+      anchoredPanel.style.width = `${width}px`; anchoredPanel.style.maxHeight = `${bottom - top}px`;
+      syncTriggerAnchor(anchoredPanel, anchor);
+    };
+    modal.classList.add('app-form-anchored'); anchoredPanel.setAttribute('aria-modal', 'false');
+    position();
+    if (typeof window.addEventListener === 'function') listen(window, 'resize', position);
+    if (window.visualViewport?.addEventListener) listen(window.visualViewport, 'resize', position);
+    if (typeof ResizeObserver === 'function') {
+      positionObserver = new ResizeObserver(position);
+      positionObserver.observe(anchor);
+      if (boundaryElement) positionObserver.observe(boundaryElement);
+    }
+  }
+  if (typeof bindOverlayPointerOrigin === 'function') bindOverlayPointerOrigin(modal);
+  listen(cancel, 'click', () => finish(null)); listen(submit, 'click', apply);
+  listen(modal, 'keydown', event => {
+    if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); finish(null); return; }
+    if (event.key !== 'Tab') return;
+    const controls = [...content.querySelectorAll('input, button, textarea, [tabindex="0"]'), cancel, submit].filter(node => !node.disabled && !node.hidden);
+    const first = controls[0], last = controls[controls.length - 1];
+    if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); }
+    else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
+  });
+  listen(modal, 'click', event => { if (typeof overlayClickStartedOnOverlay === 'function' && overlayClickStartedOnOverlay(modal, event)) finish(null); });
+  options.onMount?.(content, controls);
+  (content.querySelectorAll('input, button, textarea, [tabindex="0"]')[0] || cancel).focus();
+  return promise;
 }
 
 function showBrowserAlert(message) {
@@ -2875,9 +3027,18 @@ function ensureStatusContextMenu() {
   if (menu) return menu;
   menu = document.createElement('div');
   menu.id = 'status-context-menu';
-  menu.className = 'status-context-menu';
+  menu.className = 'gallery-anchored-menu';
   menu.hidden = true;
-  menu.innerHTML = '<button type="button" class="status-context-menu-item" data-status-role="scan-action" data-status-action="full-rescan">Full Rescan</button><button type="button" class="status-context-menu-item" data-status-role="cover-action" data-status-action="fetch-covers">Fetch Album Covers</button>';
+  menu.setAttribute('role', 'group');
+  menu.setAttribute('aria-label', 'Library actions');
+  menu.innerHTML = [
+    ['scan-action', 'full-rescan', 'Full Rescan'],
+    ['cover-action', 'fetch-covers', 'Fetch Album Covers'],
+    ['scan-page', 'go-to-scan-page', 'Open Library Status Page'],
+  ].map(([role, action, label]) => ButtonComponent.renderButton({
+    label, className: 'gallery-menu-action',
+    attributes: { 'data-status-role': role, 'data-status-action': action },
+  })).join('');
   document.body.appendChild(menu);
   return menu;
 }
@@ -2890,7 +3051,7 @@ function resolvePrimaryStatusContextAction(status = {}, options = {}) {
   if (anyBusy) {
     return {
       action: 'go-to-scan-page',
-      label: 'Go to Scan Page',
+      label: 'Go to Library Status Page',
       disabled: false,
     };
   }
@@ -2906,12 +3067,16 @@ function syncStatusContextButtonPresentation(button, presentation) {
   if (button.getAttribute('data-status-action') !== presentation.action) {
     button.setAttribute('data-status-action', presentation.action);
   }
-  if (button.textContent !== presentation.label) {
-    button.textContent = presentation.label;
+  const label = button.querySelector?.('.ui-button__content') || button;
+  if (label.textContent !== presentation.label) {
+    label.textContent = presentation.label;
   }
   const disabled = Boolean(presentation.disabled);
   if (button.disabled !== disabled) {
     button.disabled = disabled;
+  }
+  if (button.getAttribute('aria-disabled') !== String(disabled)) {
+    button.setAttribute('aria-disabled', String(disabled));
   }
 }
 
@@ -2924,6 +3089,8 @@ function syncStatusContextMenu() {
     const primaryAction = resolvePrimaryStatusContextAction(state.status || {}, { scanPageVisible });
     syncStatusContextButtonPresentation(primaryButton, primaryAction);
   }
+  const scanPageButton = menu.querySelector('[data-status-role="scan-page"]');
+  if (scanPageButton) scanPageButton.hidden = Boolean(state.status?.scan_in_progress || state.status?.relations_in_progress || state.status?.covers_in_progress);
   if (!fetchOrCancelButton) return menu;
   const scanBusy = Boolean(state.status?.scan_in_progress || state.status?.relations_in_progress);
   const coverBusy = Boolean(state.status?.covers_in_progress);
@@ -2957,20 +3124,20 @@ function syncStatusContextMenu() {
   return menu;
 }
 
-function hideStatusContextMenu() {
+function hideStatusContextMenu(restoreFocus = false) {
   const menu = document.getElementById('status-context-menu');
-  if (!menu) return;
-  menu.hidden = true;
+  if (typeof galleryMainSurfaceController !== 'undefined'
+    && galleryMainSurfaceController?.current()?.key === 'library-status') {
+    closeGalleryMainSurface(restoreFocus === true);
+  } else if (menu) {
+    menu.hidden = true;
+    if (typeof clearTriggerAnchor === 'function') clearTriggerAnchor(menu);
+  }
 }
 
-function showStatusContextMenu(x, y) {
+function showStatusContextMenu(anchor = document.getElementById('scan-indicator')) {
   const menu = syncStatusContextMenu();
-  menu.hidden = false;
-  const padding = 8;
-  const menuRect = menu.getBoundingClientRect();
-  const clamped = clampPositionToViewport(x, y, menuRect.width, menuRect.height, padding);
-  menu.style.left = `${clamped.left}px`;
-  menu.style.top = `${clamped.top}px`;
+  return openGalleryMainSurface('library-status', anchor, menu);
 }
 
 function startStatusIndicatorImmediately(overrides = {}) {
@@ -2992,6 +3159,7 @@ function startStatusIndicatorImmediately(overrides = {}) {
 
 function updateStatusIndicator(data) {
   const normalizedStatus = applyStatusPayload(data);
+  if (typeof syncLibraryWatcherWarning === 'function') syncLibraryWatcherWarning(data);
   syncStatusContextMenu();
   const indicator = document.getElementById('scan-indicator');
   if (!indicator) return;
@@ -3018,6 +3186,42 @@ function updateStatusIndicator(data) {
 
 // END js/runtime/status-ui-helpers.js
 
+// BEGIN js/runtime/library-warning-ui.js
+
+function libraryWarningPresentation(health = {}, dismissedToken = '') {
+  const warning = health.state === 'warning' || (Array.isArray(health.problems) && health.problems.length > 0);
+  const token = String(health.warning_token || '');
+  return { warning, token, dismissed: Boolean(health.dismissed || (token && token === dismissedToken)) };
+}
+
+function renderLibraryWarning(data = {}, options = {}) {
+  const health = data.watcher_health || {};
+  const model = libraryWarningPresentation(health, state.ui.dismissedLibraryWarningToken);
+  const scanNotice = document.getElementById('library-scan-warning');
+  if (!scanNotice) return;
+  const libraryHealth = document.getElementById('library-health');
+  const loader = document.getElementById('library-loader');
+  const scanPageVisible = options.scanPageVisible
+    ?? Boolean(loader?.classList?.contains('is-scan-page'));
+  const hidden = !model.warning || !model.dismissed || !scanPageVisible;
+  if (scanNotice.hidden !== hidden) scanNotice.hidden = hidden;
+  if (libraryHealth) libraryHealth.hidden = hidden;
+  loader?.classList?.toggle?.('has-library-health', !hidden);
+  if (hidden) return;
+  const problems = health.problems || [];
+  const unavailable = problems.some(problem => problem.state === 'root_unavailable');
+  const canRefresh = problems.some(problem => problem.allowed_actions?.['library.refresh'] === true);
+  const message = unavailable
+    ? `A watched library folder became unavailable. Reconnect it${canRefresh ? ', then run Full Rescan' : ''}.`
+    : `Some library changes may have been missed.${canRefresh ? ' Run Full Rescan to reconcile them.' : ''}`;
+  const notice = buildOnPageAlertHtml({severity:'warning',title:'',message,className:'on-page-alert--compact',
+    actionsHtml: canRefresh
+      ? ButtonComponent.renderButton({label:'Full Rescan',attributes:{'data-status-action':'full-rescan'}}) : ''});
+  if (scanNotice.innerHTML !== notice) scanNotice.innerHTML = notice;
+}
+
+// END js/runtime/library-warning-ui.js
+
 // BEGIN js/runtime/notification-ui-helpers.js
 
 function isNotificationErrorVariant(variant) {
@@ -3029,12 +3233,250 @@ function shouldAutoHideNotification(duration) {
 }
 
 const activeErrorToasts = new Map();
+const floatingNotifications = new Map();
+let floatingNotificationCleanup = null;
+let floatingNotificationFrame = null;
 
-function showToast(html, variant = 'success', duration = 3600, options = {}) {
+function findClearNotificationPosition(size, preferred, viewport, obstacles, gap = 8) {
+  const left = viewport.left + gap, top = viewport.top + gap;
+  const right = viewport.right - gap, bottom = viewport.bottom - gap;
+  if (size.width > right - left || size.height > bottom - top) return null;
+  const clamp = (value, min, max) => Math.max(min, Math.min(value, max));
+  const ys = new Set([clamp(preferred.top, top, bottom - size.height), top, bottom - size.height]);
+  obstacles.forEach(rect => {
+    ys.add(clamp(rect.top - gap - size.height, top, bottom - size.height));
+    ys.add(clamp(rect.bottom + gap, top, bottom - size.height));
+  });
+  let best = null, distance = Infinity;
+  for (const y of ys) {
+    const intervals = obstacles.filter(rect => y < rect.bottom + gap && y + size.height > rect.top - gap)
+      .map(rect => [Math.max(left, rect.left - gap), Math.min(right, rect.right + gap)])
+      .filter(([start, end]) => end > start).sort((a, b) => a[0] - b[0]);
+    let start = left;
+    const consider = end => {
+      if (end - start < size.width) return;
+      const x = clamp(preferred.left, start, end - size.width);
+      const nextDistance = (x - preferred.left) ** 2 + (y - preferred.top) ** 2;
+      if (nextDistance < distance) { distance = nextDistance; best = { left: x, top: y }; }
+    };
+    for (const [blockedStart, blockedEnd] of intervals) {
+      consider(blockedStart);
+      start = Math.max(start, blockedEnd);
+    }
+    consider(right);
+  }
+  return best;
+}
+
+function scheduleFloatingNotificationPlacement() {
+  if (!floatingNotifications.size || floatingNotificationFrame !== null) return;
+  floatingNotificationFrame = requestAnimationFrame(() => {
+    floatingNotificationFrame = null;
+    placeFloatingNotifications();
+  });
+}
+
+function placeFloatingNotifications() {
+  const visual = window.visualViewport;
+  const viewport = { left: visual?.offsetLeft || 0, top: visual?.offsetTop || 0 };
+  viewport.right = viewport.left + (visual?.width || window.innerWidth);
+  viewport.bottom = viewport.top + (visual?.height || window.innerHeight);
+  const isNotification = node => [...floatingNotifications.keys()].some(root => root === node || root.contains(node));
+  const selector = 'button, a[href], input:not([type="hidden"]), select, textarea, summary, [contenteditable="true"], [tabindex]:not([tabindex="-1"]), [data-loop-range-surface], [role="button"], [role="link"], [role="tab"], [role="menuitem"], [role="checkbox"], [role="radio"], [role="switch"], [role="slider"]';
+  const obstacles = [];
+  document.querySelectorAll(selector).forEach(node => {
+    if (isNotification(node) || node.matches(':disabled') || node.closest('[inert], [hidden], [aria-hidden="true"], [aria-disabled="true"]')) return;
+    const style = getComputedStyle(node), rect = node.getBoundingClientRect();
+    if (style.visibility !== 'visible' || Number(style.opacity) === 0 || !rect.width || !rect.height) return;
+    const left = Math.max(viewport.left, rect.left), right = Math.min(viewport.right, rect.right);
+    const top = Math.max(viewport.top, rect.top), bottom = Math.min(viewport.bottom, rect.bottom);
+    if (right <= left || bottom <= top) return;
+    const points = [[(left + right) / 2, (top + bottom) / 2], [left + 1, top + 1], [right - 1, top + 1], [left + 1, bottom - 1], [right - 1, bottom - 1]];
+    const visible = points.some(([x, y]) => {
+      const hit = document.elementsFromPoint(x, y).find(element => !isNotification(element));
+      return hit && (hit === node || node.contains(hit));
+    });
+    if (visible) obstacles.push({ left, right, top, bottom });
+  });
+  for (const [node, entry] of floatingNotifications) {
+    if (!node.isConnected || node.hidden) { unregisterFloatingNotification(node); continue; }
+    const availableWidth = `${Math.max(0, viewport.right - viewport.left - 16)}px`;
+    if (node.style.getPropertyValue('--notification-available-width') !== availableWidth) {
+      node.style.setProperty('--notification-available-width', availableWidth);
+    }
+    const size = { width: node.offsetWidth, height: node.offsetHeight };
+    const centered = entry.origin === 'top-center';
+    const bottom = entry.origin === 'bottom-right';
+    const playerHeight = entry.abovePlayer ? parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--player-height')) || 0 : 0;
+    const preferred = {
+      left: centered ? viewport.left + (viewport.right - viewport.left - size.width) / 2 : viewport.right - size.width - 16,
+      top: bottom ? viewport.bottom - size.height - playerHeight - 12 : viewport.top + 14,
+    };
+    const position = findClearNotificationPosition(size, preferred, viewport, obstacles);
+    if (!position) {
+      if (!entry.presented) node.setAttribute('data-notification-deferred', '');
+      continue;
+    }
+    for (const [key, value] of Object.entries(position)) {
+      const property = `--notification-${key}`, pixels = `${value}px`;
+      if (node.style.getPropertyValue(property) !== pixels) node.style.setProperty(property, pixels);
+    }
+    node.removeAttribute('data-notification-deferred');
+    obstacles.push({ ...position, right: position.left + size.width, bottom: position.top + size.height });
+    if (!entry.presented) { entry.presented = true; entry.onPlaced?.(); }
+  }
+}
+
+function registerFloatingNotification(node, options = {}) {
+  // Keep notification delivery available when the host has no geometry APIs.
+  if (!node?.getBoundingClientRect || !document.elementsFromPoint) { options.onPlaced?.(); return; }
+  floatingNotifications.set(node, { origin: 'top-right', ...options });
+  node.classList.add('floating-notification-positioned');
+  node.setAttribute('data-notification-deferred', '');
+  if (!floatingNotificationCleanup) {
+    const insideNotification = target => [...floatingNotifications.keys()].some(root => root === target || root.contains(target));
+    const mutation = new MutationObserver(records => {
+      if (records.some(record => !insideNotification(record.target))) scheduleFloatingNotificationPlacement();
+    });
+    mutation.observe(document.body, { subtree: true, childList: true, characterData: true, attributes: true, attributeFilter: ['class', 'style', 'hidden', 'open', 'disabled', 'aria-disabled', 'aria-hidden'] });
+    const resize = new ResizeObserver(scheduleFloatingNotificationPlacement);
+    floatingNotifications.forEach((_entry, root) => resize.observe(root));
+    const targets = [[window, 'resize'], [document, 'scroll'], [document, 'load'], [document.fonts, 'loadingdone'], [window.visualViewport, 'resize'], [window.visualViewport, 'scroll'], [document, 'transitionend'], [document, 'animationend']].filter(([target]) => target);
+    targets.forEach(([target, event]) => target.addEventListener(event, scheduleFloatingNotificationPlacement, true));
+    floatingNotificationCleanup = { resize, dispose() {
+      mutation.disconnect(); resize.disconnect();
+      targets.forEach(([target, event]) => target.removeEventListener(event, scheduleFloatingNotificationPlacement, true));
+      if (floatingNotificationFrame !== null) cancelAnimationFrame(floatingNotificationFrame);
+      floatingNotificationFrame = null;
+    } };
+  } else floatingNotificationCleanup.resize.observe(node);
+  scheduleFloatingNotificationPlacement();
+}
+
+function unregisterFloatingNotification(node) {
+  if (!floatingNotifications.has(node)) return;
+  floatingNotificationCleanup?.resize.unobserve(node);
+  floatingNotifications.delete(node);
+  node?.classList?.remove('floating-notification-positioned');
+  node?.removeAttribute?.('data-notification-deferred');
+  if (!floatingNotifications.size) { floatingNotificationCleanup?.dispose(); floatingNotificationCleanup = null; }
+  else scheduleFloatingNotificationPlacement();
+}
+
+let libraryWatcherWarning = null;
+let libraryWatcherHealth = null;
+let libraryWatcherDismissalInFlight = null;
+
+function cacheLibraryWatcherHealth(data) {
+  if (!Object.prototype.hasOwnProperty.call(data, 'watcher_health')) return;
+  const health = data.watcher_health || {};
+  if (health.state === 'healthy') state.ui.dismissedLibraryWarningToken = '';
+  // Only /status carries the event token and per-account acknowledgement.
+  if (health.warning_token || health.state === 'healthy') libraryWatcherHealth = health;
+}
+
+async function dismissLibraryWatcherWarning(button) {
+  const token = button?.getAttribute?.('data-warning-token')
+    || libraryWatcherWarning?.dataset?.warningToken || '';
+  if (!token) return false;
+  while (libraryWatcherDismissalInFlight) {
+    if (libraryWatcherDismissalInFlight.token === token) return libraryWatcherDismissalInFlight.promise;
+    await libraryWatcherDismissalInFlight.promise;
+  }
+  if (libraryWatcherHealth?.warning_token !== token
+    || libraryWatcherWarning?.dataset?.warningToken !== token) return false;
+  const operation = { token, promise: null };
+  libraryWatcherDismissalInFlight = operation;
+  if (button) button.disabled = true;
+  operation.promise = (async () => {
+    try {
+      const response = await fetch('/account/library-warning/dismiss', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ token }),
+      });
+      if (!response.ok) throw new Error(response.status === 409
+        ? 'The library warning changed. Please review the latest warning.'
+        : 'Unable to dismiss the warning. Please try again.');
+      state.ui.dismissedLibraryWarningToken = token;
+      if (libraryWatcherHealth?.warning_token === token) {
+        libraryWatcherHealth = { ...libraryWatcherHealth, dismissed: true };
+      }
+      syncLibraryWatcherWarning({});
+      return true;
+    } catch (error) {
+      showRepairAlert(error.message || 'Unable to dismiss the warning. Please try again.', 'error', null);
+      return false;
+    } finally {
+      if (button) button.disabled = false;
+      if (libraryWatcherDismissalInFlight === operation) libraryWatcherDismissalInFlight = null;
+    }
+  })();
+  return operation.promise;
+}
+
+function syncScanLibraryWatcherHealth(data = {}, scanPageVisible = Boolean(typeof state !== 'undefined' && state.ui?.scanPageReturnContext)) {
+  cacheLibraryWatcherHealth(data);
+  if (typeof renderLibraryWarning === 'function') {
+    renderLibraryWarning({ watcher_health: libraryWatcherHealth || {} }, { scanPageVisible });
+  }
+}
+
+function syncLibraryWatcherWarning(data = {}) {
+  cacheLibraryWatcherHealth(data);
+  syncScanLibraryWatcherHealth();
+  const health = libraryWatcherHealth || {};
+  const model = libraryWarningPresentation(health, state.ui.dismissedLibraryWarningToken);
+  if (!model.warning || model.dismissed || !model.token) {
+    unregisterFloatingNotification(libraryWatcherWarning);
+    libraryWatcherWarning?.remove();
+    libraryWatcherWarning = null;
+    return;
+  }
+  if (libraryWatcherWarning?.parentElement && libraryWatcherWarning.dataset.warningToken === model.token) return;
+  unregisterFloatingNotification(libraryWatcherWarning);
+  libraryWatcherWarning?.remove();
+  libraryWatcherWarning = null;
+  const layer = document.getElementById('toast-layer');
+  if (!layer) return;
+  libraryWatcherWarning = document.createElement('div');
+  libraryWatcherWarning.className = 'system-warning-notification';
+  libraryWatcherWarning.dataset.warningToken = model.token;
+  libraryWatcherWarning.innerHTML = buildOnPageAlertHtml({
+    severity: 'warning',
+    title: 'Library watcher needs attention',
+    message: 'Some library changes may have been missed. Check Library Status for recovery options.',
+    actionsHtml: window.ButtonComponent.renderButton({ label: 'Dismiss', className: 'on-page-alert__dismiss', attributes: { 'data-watcher-dismiss': '1', 'data-warning-token': model.token } })
+      + window.ButtonComponent.renderButton({ label: 'Go to Library page', variant: 'primary', attributes: { 'data-watcher-library': '1', 'data-warning-token': model.token } }),
+  });
+  libraryWatcherWarning.addEventListener('click', async event => {
+    const dismiss = event.target.closest('[data-watcher-dismiss]');
+    const openLibrary = event.target.closest('[data-watcher-library]');
+    const button = dismiss || openLibrary;
+    if (!button || button.disabled) return;
+    if (await dismissLibraryWatcherWarning(button) && openLibrary) {
+      closeUtilityModal();
+      openScanPage();
+      syncScanLibraryWatcherHealth();
+    }
+  });
+  layer.appendChild(libraryWatcherWarning);
+  registerFloatingNotification(libraryWatcherWarning, { origin: 'bottom-right' });
+}
+
+function buildFloatingNotificationAlertHtml(message, variant, actionsHtml = '', messageId = '', compact = false) {
+  const severity = normalizeAlertSeverity(variant);
+  return buildOnPageAlertHtml({
+    severity,
+    title: compact ? '' : severity === 'error' ? 'Error' : severity === 'warning' ? 'Warning' : 'Update',
+    message, actionsHtml, messageId, role: severity === 'info' ? 'status' : 'alert',
+    className: compact ? 'on-page-alert--compact' : '',
+  });
+}
+
+function showToast(message, variant = 'success', duration = 3600, options = {}) {
   const layer = document.getElementById('toast-layer');
   if (!layer) return;
   const errorKey = isNotificationErrorVariant(variant)
-    ? String(options.errorKey || html || '')
+    ? String(options.errorKey || message || '')
     : '';
   if (errorKey && activeErrorToasts.get(errorKey)?.parentElement) {
     return;
@@ -3045,26 +3487,35 @@ function showToast(html, variant = 'success', duration = 3600, options = {}) {
     isNotificationErrorVariant(variant) ? 'is-error' : '',
     options.placement === 'top-center' ? 'is-top-center' : '',
   ].filter(Boolean).join(' ');
-  toast.innerHTML = html;
+  toast.innerHTML = buildFloatingNotificationAlertHtml(message, variant, '', '', true);
   layer.appendChild(toast);
   if (errorKey) activeErrorToasts.set(errorKey, toast);
-  scheduleBrowserAnimationFrame(() => toast.classList.add('is-visible'));
-  scheduleBrowserTimeout(() => {
-    toast.classList.remove('is-visible');
+  registerFloatingNotification(toast, { origin: options.placement === 'top-center' ? 'top-center' : 'top-right', onPlaced() {
+    scheduleBrowserAnimationFrame(() => toast.classList.add('is-visible'));
     scheduleBrowserTimeout(() => {
-      toast.remove();
-      if (errorKey && activeErrorToasts.get(errorKey) === toast) {
-        activeErrorToasts.delete(errorKey);
-      }
-    }, 260);
-  }, duration);
+      toast.classList.remove('is-visible');
+      scheduleBrowserTimeout(() => {
+        unregisterFloatingNotification(toast);
+        toast.remove();
+        if (errorKey && activeErrorToasts.get(errorKey) === toast) activeErrorToasts.delete(errorKey);
+      }, 260);
+    }, duration);
+  } });
 }
 
 function showRepairAlert(message, variant = 'success', duration = 2000, options = {}) {
   const alert = document.getElementById('repair-alert');
+  if (!alert) return;
+  const actionsHtml = ButtonComponent.renderButton({
+    label: 'View details', attributes: { id: 'repair-alert-log-history', 'data-open-log-history-alert': '1', hidden: true },
+  }) + ButtonComponent.renderButton({
+    label: 'Dismiss', className: 'on-page-alert__dismiss',
+    attributes: { 'data-dismiss-repair-alert': '1', 'aria-label': 'Dismiss repair alert' },
+  });
+  alert.innerHTML = buildFloatingNotificationAlertHtml(options.html ? '' : message, variant, actionsHtml, 'repair-alert-message');
   const messageEl = document.getElementById('repair-alert-message');
   const logHistoryLink = document.getElementById('repair-alert-log-history');
-  if (!alert || !messageEl) return;
+  if (!messageEl) return;
   if (state.repairAlertTimer) {
     clearBrowserTimeout(state.repairAlertTimer);
     state.repairAlertTimer = null;
@@ -3089,13 +3540,13 @@ function showRepairAlert(message, variant = 'success', duration = 2000, options 
   alert.hidden = false;
   state.repairAlertPresentationVersion = Number(state.repairAlertPresentationVersion || 0) + 1;
   const presentationVersion = state.repairAlertPresentationVersion;
-  scheduleBrowserAnimationFrame(() => {
-    if (state.repairAlertPresentationVersion !== presentationVersion) return;
-    alert.classList.add('is-visible');
-    if (shouldAutoHideNotification(duration)) {
-      state.repairAlertTimer = scheduleBrowserTimeout(hideRepairAlert, duration);
-    }
-  });
+  registerFloatingNotification(alert, { origin: options.logHistoryLink === true ? 'top-center' : 'bottom-right', abovePlayer: options.logHistoryLink !== true, onPlaced() {
+    scheduleBrowserAnimationFrame(() => {
+      if (state.repairAlertPresentationVersion !== presentationVersion) return;
+      alert.classList.add('is-visible');
+      if (shouldAutoHideNotification(duration)) state.repairAlertTimer = scheduleBrowserTimeout(hideRepairAlert, duration);
+    });
+  } });
 }
 
 function hideRepairAlert() {
@@ -3113,6 +3564,7 @@ function hideRepairAlert() {
   alert.classList.remove('is-visible');
   state.repairAlertHideTimer = scheduleBrowserTimeout(() => {
     state.repairAlertHideTimer = null;
+    unregisterFloatingNotification(alert);
     alert.hidden = true;
     alert.classList.remove('is-error');
     alert.classList.remove('has-log-history-link');
@@ -3290,6 +3742,12 @@ function buildRelatedMarkup(view = {}) {
 
 // BEGIN js/runtime/alert-components.js
 
+function escapeAlertHtml(value) {
+  if (typeof escapeHtml === 'function') return escapeHtml(value);
+  return String(value ?? '').replaceAll('&', '&amp;').replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;').replaceAll('"', '&quot;').replaceAll("'", '&#39;');
+}
+
 function normalizeAlertSeverity(value) {
   const severity = String(value || '').trim().toLowerCase();
   return ['error', 'warning', 'info'].includes(severity) ? severity : 'info';
@@ -3307,15 +3765,54 @@ function buildSmallAlertHtml(config = {}) {
   const severity = normalizeAlertSeverity(config.severity);
   const message = String(config.message || '').trim();
   const className = String(config.className || '').trim();
-  return `<span class="small-alert small-alert--${severity}${className ? ` ${escapeHtml(className)}` : ''}" role="status" aria-label="${escapeHtml(message)}" data-small-alert="${severity}"><span class="small-alert__icon">${buildAlertIconHtml(severity)}</span><span class="small-alert__text">${escapeHtml(message)}</span></span>`;
+  return `<span class="small-alert small-alert--${severity}${className ? ` ${escapeAlertHtml(className)}` : ''}" role="status" aria-label="${escapeAlertHtml(message)}" data-small-alert="${severity}"><span class="small-alert__icon">${buildAlertIconHtml(severity)}</span><span class="small-alert__text">${escapeAlertHtml(message)}</span></span>`;
+}
+
+function buildAlertLabelAttributes(attributes = {}) {
+  if (!attributes || typeof attributes !== 'object') return '';
+  return Object.entries(attributes).map(([name, value]) => {
+    const allowed = /^(?:id|title|aria-label|data-album-problem-type|data-problem-suggestion-id|data-label-intent|data-problem-exclusion-(?:scope|row-key|reason|row-index))$/.test(name);
+    if (!allowed || value == null || value === false) return '';
+    return ` ${name}="${escapeAlertHtml(value)}"`;
+  }).join('');
+}
+
+function buildAlertLabelHtml(config = {}) {
+  const severity = normalizeAlertSeverity(config.severity);
+  const message = String(config.message || '').trim();
+  const interactive = Boolean(config.interactive);
+  const pressed = Boolean(config.pressed);
+  const disabled = Boolean(config.disabled);
+  const className = String(config.className || '').trim();
+  const classes = [
+    'alert-label',
+    `alert-label--${severity}`,
+    className,
+    interactive && pressed ? 'is-active' : '',
+  ].filter(Boolean).join(' ');
+  const attributes = buildAlertLabelAttributes(config.attributes);
+  if (!interactive) {
+    return `<span class="${escapeAlertHtml(classes)}" data-alert-label="${severity}"${attributes}>${escapeAlertHtml(message)}</span>`;
+  }
+  return `<button class="${escapeAlertHtml(classes)}" data-alert-label="${severity}" type="button"${attributes} aria-pressed="${pressed ? 'true' : 'false'}"${disabled ? ' aria-disabled="true" disabled' : ''}>${escapeAlertHtml(message)}</button>`;
 }
 
 function buildOnPageAlertHtml(config = {}) {
   const severity = normalizeAlertSeverity(config.severity);
   const title = String(config.title || '').trim();
   const message = String(config.message || '').trim();
+  const className = String(config.className || '').trim();
   const actionsHtml = String(config.actionsHtml || '');
-  return `<section class="on-page-alert on-page-alert--${severity}" role="alert" data-on-page-alert="${severity}"><span class="on-page-alert__icon">${buildAlertIconHtml(severity)}</span><div class="on-page-alert__content"><strong class="on-page-alert__title">${escapeHtml(title)}</strong><p class="on-page-alert__message">${escapeHtml(message)}</p>${actionsHtml ? `<div class="on-page-alert__actions">${actionsHtml}</div>` : ''}</div></section>`;
+  const role = config.role === 'status' ? 'status' : 'alert';
+  const messageId = config.messageId ? ` id="${escapeAlertHtml(String(config.messageId))}"` : '';
+  return `<section class="on-page-alert on-page-alert--${severity}${className ? ` ${escapeAlertHtml(className)}` : ''}" role="${role}" data-on-page-alert="${severity}"><span class="on-page-alert__icon">${buildAlertIconHtml(severity)}</span><div class="on-page-alert__content">${title ? `<strong class="on-page-alert__title">${escapeAlertHtml(title)}</strong>` : ''}<p class="on-page-alert__message"${messageId}>${escapeAlertHtml(message)}</p>${actionsHtml ? `<div class="on-page-alert__actions">${actionsHtml}</div>` : ''}</div></section>`;
+}
+
+if (typeof window !== 'undefined') {
+  window.AlertComponent = { normalizeAlertSeverity, buildSmallAlertHtml, buildAlertLabelHtml, buildOnPageAlertHtml };
+}
+if (typeof module !== 'undefined' && module.exports) {
+  module.exports = { normalizeAlertSeverity, buildSmallAlertHtml, buildAlertLabelHtml, buildOnPageAlertHtml };
 }
 
 // END js/runtime/alert-components.js
@@ -3342,44 +3839,401 @@ function buildAlbumArtboxHtml(config = {}) {
     : 'empty';
   const label = String(config.label || 'Album artwork').trim();
   const coverHtml = String(config.coverHtml || '');
+  const overlayHtml = String(config.overlayHtml || '');
   const actionHtml = String(config.actionHtml || '');
   const content = state === 'missing' || state === 'empty'
     ? buildMissingAlbumMarkHtml()
     : (coverHtml || `<span class="album-artbox__placeholder">${state === 'loading' ? 'Loading cover art' : 'No cover art'}</span>`);
-  return `<span class="album-artbox album-artbox--${state}" data-album-artbox-state="${state}" aria-label="${escapeHtml(label)}">${content}${actionHtml ? `<span class="album-artbox__action">${actionHtml}</span>` : ''}</span>`;
+  return `<span class="album-artbox album-artbox--${state}" data-album-artbox-state="${state}" aria-label="${escapeHtml(label)}">${content}${overlayHtml ? `<span class="album-artbox__overlay">${overlayHtml}</span>` : ''}${actionHtml ? `<span class="album-artbox__action">${actionHtml}</span>` : ''}</span>`;
+}
+
+function buildUtilityAlbumArtbox(album, {
+  label = 'Album artwork', interactive = false, source = '', deferPreview = false,
+} = {}) {
+  const preview = source || album?.cover_url || buildAlbumDisplayCoverUrl(album);
+  const fullSource = album?.cover_url || buildAlbumLightboxCoverUrl(album) || preview;
+  const previewSourceAttributes = deferPreview
+    ? `data-gallery-cover-src="${escapeHtml(preview)}" data-production-cover-src="${escapeHtml(preview)}"`
+    : `src="${escapeHtml(preview)}"`;
+  const artbox = buildAlbumArtboxHtml({
+    state: preview ? 'ready' : 'missing', label,
+    coverHtml: preview ? `<img class="utility-detail-cover-image" ${previewSourceAttributes} alt="${escapeHtml(label)}" loading="${interactive ? 'eager' : 'lazy'}" decoding="async" data-cover-path="${escapeHtml(album?.cover_path || '')}" data-remote-cover-url="${escapeHtml(album?.remote_cover_url || album?.remote_cover_thumbnail_url || '')}" onerror="handleUtilityAlbumArtboxError(this)">` : '',
+  });
+  return interactive && preview
+    ? `<button type="button" class="utility-artbox-trigger" data-open-lightbox="1" data-cover-src="${escapeHtml(fullSource)}" data-cover-alt="${escapeHtml(label)}" aria-label="${escapeHtml(`Enlarge ${label}`)}">${artbox}</button>`
+    : artbox;
+}
+
+function handleUtilityAlbumArtboxError(image) {
+  if (!image) return;
+  const fallback = String(image.getAttribute('data-remote-cover-url') || '').trim();
+  if (fallback && image.dataset.remoteCoverTried !== '1') {
+    image.dataset.remoteCoverTried = '1';
+    image.src = fallback;
+    const trigger = image.closest('[data-open-lightbox]');
+    trigger?.setAttribute('data-cover-src', fallback);
+    return;
+  }
+  const artbox = image.closest('.album-artbox');
+  if (!artbox) return;
+  const label = artbox.getAttribute('aria-label') || 'Album artwork';
+  const trigger = artbox.closest('.utility-artbox-trigger');
+  const target = trigger || artbox;
+  target.outerHTML = buildAlbumArtboxHtml({ state: 'missing', label });
 }
 
 // END js/runtime/album-artbox.js
 
+// BEGIN js/runtime/gallery-main-components.js
+
+function galleryMainPlural(count, singular) {
+  const value = Math.max(0, Number(count || 0));
+  return `${value} ${singular}${value === 1 ? '' : 's'}`;
+}
+
+function buildGallerySwitchHtml(config = {}) {
+  const checked = Boolean(config.checked);
+  return `<button class="gallery-switch" id="${escapeHtml(config.id || '')}" type="button" role="switch" aria-checked="${checked ? 'true' : 'false'}"${config.disabled ? ' disabled' : ''}${config.source ? ` data-gallery-source="${escapeHtml(config.source)}"` : ''}>
+    <span>${escapeHtml(config.label || '')}</span><span class="gallery-switch__track" aria-hidden="true"><span class="gallery-switch__knob"></span></span>
+  </button>`;
+}
+
+function buildGalleryInfoGlyphHtml() {
+  return '<span class="gallery-info-button__glyph" aria-hidden="true">i</span>';
+}
+
+function buildFilterPillHtml(config = {}) {
+  const label = String(config.label || '');
+  const selected = Boolean(config.selected);
+  const partClass = (part) => {
+    const extra = String(config.partClasses?.[part] || '').trim();
+    return `ui-filter-pill__${part}${extra ? ` ${escapeHtml(extra)}` : ''}`;
+  };
+  const dataAttributes = Object.entries(config.dataAttributes || {})
+    .filter(([name]) => /^[a-z][a-z0-9-]*$/u.test(name))
+    .map(([name, value]) => ` data-${name}="${escapeHtml(value)}"`)
+    .join('');
+  const artwork = String(config.artworkHtml || '');
+  const count = config.count === undefined || config.count === null
+    ? '' : `<span class="${partClass('count')}">${escapeHtml(config.count)}</span>`;
+  return `<button class="ui-filter-pill${config.className ? ` ${escapeHtml(config.className)}` : ''}${selected ? ' is-active' : ''}${config.modifierClassName ? ` ${escapeHtml(config.modifierClassName)}` : ''}" type="button" title="${escapeHtml(config.title || label)}" aria-label="${escapeHtml(config.ariaLabel || label)}" aria-pressed="${selected ? 'true' : 'false'}"${dataAttributes}${config.draggable === false ? ' draggable="false"' : ''}><span class="${partClass('marker')}" aria-hidden="true"></span>${artwork ? `<span class="${partClass('artwork')}" aria-hidden="true">${artwork}</span>` : ''}<span class="${partClass('label')}">${escapeHtml(label)}</span>${count}</button>`;
+}
+
+function buildGalleryBarHtml(config = {}) {
+  const isSingleArtist = config.contextKind === 'single-artist';
+  const isArtist = config.contextKind === 'artist' || isSingleArtist;
+  const isFamily = config.contextKind === 'family';
+  const title = isArtist ? config.artist : (isFamily ? `${config.primaryArtist} family` : 'Gallery');
+  const summary = isArtist
+    ? galleryMainPlural(config.albumCount, 'album')
+    : `${galleryMainPlural(config.artistCount, 'artist')} · ${galleryMainPlural(config.albumCount, 'album')}`;
+  const info = isArtist ? `<button class="gallery-info-button" type="button" data-artist-info-trigger="1" data-artist="${escapeHtml(config.artist || '')}" aria-label="Information about ${escapeHtml(config.artist || '')}" aria-expanded="false">${buildGalleryInfoGlyphHtml()}</button>` : '';
+  return `<div class="gallery-bar__context"><div class="gallery-bar__title"><span data-gallery-context-name>${escapeHtml(title)}</span>${info}<span class="gallery-bar__artist-divider gallery-divider__line" data-gallery-context-artist-divider hidden></span><span class="gallery-bar__artist-total" data-gallery-context-inline-total hidden></span></div><span class="gallery-bar__summary" data-gallery-context-summary>${escapeHtml(summary)}</span></div>
+    <div class="gallery-bar__actions">
+      <button class="gallery-action-button" type="button" data-gallery-bar-action="artist-family" aria-label="Artist Family" aria-controls="artist-family-panel" aria-expanded="false"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="8" cy="8" r="3"/><circle cx="17" cy="9" r="2.5"/><path d="M3 19c.5-3.5 2.2-5.2 5-5.2s4.5 1.7 5 5.2M14 14.5c3.5-.8 5.8.8 6.5 4.5"/></svg></button>
+      <div class="gallery-view-cluster unfolding-action-button" id="gallery-view-cluster-options" data-gallery-view-cluster><button class="gallery-view-choice action-button unfolding-action-button__action" type="button" tabindex="-1" data-gallery-view-choice="covers" aria-label="No info" title="No info"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="m5 17 5-5 3 3 2-2 4 4"/></svg></button><button class="gallery-view-choice action-button unfolding-action-button__action is-active" type="button" data-gallery-bar-action="view" data-gallery-view-choice="cards" aria-label="Cards" title="Cards" aria-controls="gallery-view-cluster-options" aria-expanded="false"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 15h18M7 18h6"/></svg></button></div>
+      <button class="gallery-action-button" type="button" data-gallery-bar-action="album-types" aria-label="Album types" aria-controls="gallery-album-types-menu" aria-expanded="false"><svg viewBox="0 0 24 24" aria-hidden="true" stroke-linecap="round" stroke-linejoin="round"><path d="M5 17H4a2 2 0 0 1-2-2V6a2 2 0 0 1 1.5-1.94l8-2A2 2 0 0 1 14 4v1"/><path d="M8 20H7a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2v1"/><rect x="8" y="8" width="14" height="14" rx="2"/><path fill="currentColor" fill-rule="evenodd" stroke="none" d="M19 15a4 4 0 1 1-8 0 4 4 0 0 1 8 0Zm-3 0a1 1 0 1 0-2 0 1 1 0 0 0 2 0Z"/></svg></button>
+    </div>`;
+}
+
+function buildArtistFamilyPanelHtml(config = {}) {
+  const combineSwitch = buildGallerySwitchHtml({
+    id: 'artist-family-combine-similar',
+    label: 'Combine similar artists',
+    checked: Boolean(config.combineSimilarArtists),
+  }).replace('<button ', '<button data-toggle-combine-similar-artists="1" ');
+  return `<aside class="artist-family-panel" data-artist-family-panel aria-label="${escapeHtml(config.title || 'Artist Family')}" aria-hidden="true" hidden><header><div class="artist-family-panel__heading"><div class="artist-family-panel__title-row"><h2 data-gallery-family-panel-title title="${escapeHtml(config.title || 'Artist Family')}">${escapeHtml(config.title || 'Artist Family')}</h2><span aria-hidden="true">•</span><span data-gallery-family-panel-total>${escapeHtml(config.albumTotal || '')}</span></div><p>Select or unselect an artist to update Gallery.</p></div></header><div class="artist-family-panel__combine-row">${combineSwitch}</div><div class="artist-family-panel__body gallery-scrollbar">${String(config.bodyHtml || '')}</div></aside>`;
+}
+
+function buildGalleryEmptySelectionHtml() {
+  return '<div class="gallery-empty-selection" data-gallery-empty-selection role="status">Select at least one artist in Artist Family.</div>';
+}
+
+function buildArtistInfoOverlayHtml(config = {}) {
+  const image = config.imageUrl ? `<img class="artist-info-overlay__image" src="${escapeHtml(config.imageUrl)}" alt="">` : '<div class="artist-info-overlay__image artist-info-overlay__image--empty" aria-hidden="true">♪</div>';
+  const readMore = config.readMoreUrl ? `<a href="${escapeHtml(config.readMoreUrl)}">Read more</a>` : '<button type="button" data-artist-info-read-more>Read more</button>';
+  const wikipedia = config.wikipediaUrl ? `<a href="${escapeHtml(config.wikipediaUrl)}" rel="noreferrer">Wikipedia</a>` : '';
+  return `<aside class="artist-info-overlay" data-artist-info-overlay role="dialog" aria-label="Information about ${escapeHtml(config.artist || '')}" hidden><header>${image}<div><span>Artist</span><h2>${escapeHtml(config.artist || '')}</h2></div></header><div class="artist-info-overlay__body gallery-scrollbar"><p>${escapeHtml(config.summary || '')}</p><div class="artist-info-overlay__links">${readMore}${wikipedia}</div></div></aside>`;
+}
+
+function buildGalleryDividerHtml(config = {}) {
+  return `<div class="gallery-divider"><span>${escapeHtml(config.label || 'Family')}</span><span class="gallery-divider__line"></span><span>${escapeHtml(galleryMainPlural(config.albumCount, 'album'))}</span></div>`;
+}
+
+function buildFamilyArtistHeaderHtml(config = {}) {
+  return `<div class="family-artist-header" data-scroll-artist="${escapeHtml(config.artist || '')}" data-gallery-album-count="${Math.max(0, Number(config.albumCount || 0))}"><h2 class="artist-name">${escapeHtml(config.artist || '')}</h2><button class="gallery-info-button" type="button" data-artist-info-trigger="1" data-artist="${escapeHtml(config.infoArtist || config.artist || '')}" aria-label="Information about ${escapeHtml(config.infoArtist || config.artist || '')}" aria-expanded="false">${buildGalleryInfoGlyphHtml()}</button><span class="gallery-divider__line"></span><span>${escapeHtml(galleryMainPlural(config.albumCount, 'album'))}</span></div>`;
+}
+
+function buildGalleryRatingHtml(config = {}) {
+  const maximum = Math.max(1, Number(config.maximum || 10));
+  const value = Math.max(0, Math.min(maximum, Number(config.value || 0)));
+  const points = Array.from({ length: maximum }, (_unused, index) => (index < value
+    ? '<span class="star filled">&#9733;</span>'
+    : '<span class="star">&#9734;</span>')).join('');
+  return `<div class="rating-row"><div class="stars" role="img" aria-label="${escapeHtml(config.label || `Rated ${value} out of ${maximum}`)}">${points}</div>${value ? `<div class="rating-text">${value}/${maximum}</div>` : ''}</div>`;
+}
+
+function buildGalleryCardInfoHtml(config = {}) {
+  const count = Math.max(0, Number(config.trackCount || 0));
+  const metadata = [config.artist, config.year].map(value => String(value ?? '').trim()).filter(Boolean).join(' · ');
+  const title = config.openAttributes
+    ? `<button class="album-open-trigger album-title-button" type="button" ${config.openAttributes}>${escapeHtml(config.title || '')}</button>`
+    : escapeHtml(config.title || '');
+  return `<div class="album-body gallery-card-info"><h3 class="album-title">${title}</h3><div class="album-meta-row"><div class="album-subtitle">${escapeHtml(metadata)}</div></div>${String(config.ratingHtml || '')}<div class="chip-row"><span class="track-count">${count} track${count === 1 ? '' : 's'}</span><span class="album-length">${escapeHtml(config.lengthDisplay || '')}</span></div></div>`;
+}
+
+// END js/runtime/gallery-main-components.js
+
+// BEGIN js/runtime/gallery-main-state.js
+
+const GALLERY_RELEASE_TYPES = ['studio', 'ep', 'live', 'demo', 'compilation', 'single'];
+const GALLERY_TRIAL_ARTIST_IMAGES = Object.freeze({
+  'Neal Morse': 'https://commons.wikimedia.org/wiki/Special:Redirect/file/Neal_Morse2.jpg?width=480',
+  'Devin Townsend': 'https://commons.wikimedia.org/wiki/Special:Redirect/file/Devin_Townsend_(cropped).jpg?width=480',
+  'Ария': 'https://commons.wikimedia.org/wiki/Special:Redirect/file/Aria_2013.jpg?width=640',
+  'The Flower Kings': 'https://commons.wikimedia.org/wiki/Special:Redirect/file/Flowerkings2004.jpg?width=640',
+});
+
+function createGalleryMainState(overrides = {}) {
+  const galleryState = {
+    sources: { main_library: true, new_arrivals: true, hoard: true, ...(overrides.sources || {}) },
+    albumTypes: Array.isArray(overrides.albumTypes) ? overrides.albumTypes.slice() : ['studio', 'ep'],
+    view: ['cards', 'covers'].includes(overrides.view) ? overrides.view : 'cards',
+    familyArtists: Array.isArray(overrides.familyArtists) ? overrides.familyArtists.slice() : [],
+  };
+  if (overrides.familySelectionExplicit === true) galleryState.familySelectionExplicit = true;
+  if (Array.isArray(overrides.familyArtistOrder)) galleryState.familyArtistOrder = overrides.familyArtistOrder.slice();
+  return galleryState;
+}
+
+function resetGalleryMainStateForPrimaryArtist(current = {}) {
+  return createGalleryMainState({ view: current.view });
+}
+
+function normalizeGalleryView(value) {
+  const normalized = String(value || '').trim().toLowerCase();
+  if (normalized === 'no info' || normalized === 'covers') return 'covers';
+  return 'cards';
+}
+
+function reduceGalleryMainState(current, action = {}) {
+  const next = createGalleryMainState(current || {});
+  if (action.type === 'toggle-source' && Object.hasOwn(next.sources, action.source)) {
+    next.sources[action.source] = !next.sources[action.source];
+  } else if (action.type === 'set-view') {
+    next.view = normalizeGalleryView(action.view);
+  } else if (action.type === 'toggle-family-artist') {
+    const artist = String(action.artist || '').trim();
+    const availableArtists = Array.isArray(action.availableArtists)
+      ? action.availableArtists.map((item) => String(item || '').trim()).filter((item, index, items) => item && items.indexOf(item) === index)
+      : [];
+    if (artist && availableArtists.length && next.familySelectionExplicit !== true && !next.familyArtists.length) {
+      next.familyArtists = availableArtists.filter((item) => item !== artist);
+      next.familySelectionExplicit = true;
+    } else if (artist) {
+      next.familyArtists = next.familyArtists.includes(artist)
+        ? next.familyArtists.filter((item) => item !== artist)
+        : [...next.familyArtists, artist];
+      if (availableArtists.length) {
+        next.familySelectionExplicit = true;
+        if (availableArtists.every((item) => next.familyArtists.includes(item))) {
+          next.familyArtists = [];
+          delete next.familySelectionExplicit;
+        }
+      }
+    }
+  } else if (action.type === 'reorder-family-artist') {
+    next.familyArtistOrder = reorderGalleryFamilyArtists(
+      action.availableArtists || next.familyArtistOrder || [],
+      action.artist,
+      action.beforeArtist,
+    );
+  }
+  return next;
+}
+
+function reorderGalleryFamilyArtists(artists = [], artist = '', beforeArtist = '') {
+  const unique = artists.map((item) => String(item || '').trim())
+    .filter((item, index, items) => item && items.indexOf(item) === index);
+  const dragged = String(artist || '').trim();
+  const target = String(beforeArtist || '').trim();
+  if (!dragged || !target || dragged === target || !unique.includes(dragged) || !unique.includes(target)) return unique;
+  const reordered = unique.filter((item) => item !== dragged);
+  reordered.splice(reordered.indexOf(target), 0, dragged);
+  return reordered;
+}
+
+function hasGalleryNonAlbumTracks(view = {}) {
+  return Array.isArray(view.non_album_tracks) && view.non_album_tracks.length > 0;
+}
+
+function classifyGalleryReleaseType(album = {}) {
+  const explicit = String(album.release_type || album.releaseType || '').trim().toLowerCase();
+  const normalized = explicit === 'compilations' ? 'compilation' : explicit;
+  if (album.is_compilation === true) return 'compilation';
+  if (normalized === 'compilation') return 'compilation';
+  return 'studio';
+}
+
+function resolveGalleryAlbumSources(album = {}) {
+  const allowed = new Set(['main_library', 'new_arrivals', 'hoard']);
+  const provenance = Array.isArray(album.root_provenance?.categories)
+    ? album.root_provenance.categories
+    : [];
+  const candidates = provenance.length
+    ? provenance
+    : [album.library_root_category || album.source || 'main_library'];
+  const sources = candidates
+    .map((value) => String(value || '').trim().toLowerCase())
+    .filter((value, index, values) => allowed.has(value) && values.indexOf(value) === index);
+  return sources.length ? sources : ['main_library'];
+}
+
+function filterGalleryModel({ groups = [], filterState = createGalleryMainState() } = {}) {
+  const selectedArtists = new Set(filterState.familyArtists || []);
+  const familySelectionExplicit = filterState.familySelectionExplicit === true || selectedArtists.size > 0;
+  const selectedTypes = new Set(filterState.albumTypes || []);
+  const filteredGroups = groups.flatMap((group) => {
+    const artist = String(group.artist_display || group.artist || '').trim();
+    if (familySelectionExplicit && !selectedArtists.has(artist)) return [];
+    const albums = (Array.isArray(group.albums) ? group.albums : []).filter((album) => (
+      resolveGalleryAlbumSources(album).some((source) => filterState.sources?.[source] !== false)
+      && selectedTypes.has(classifyGalleryReleaseType(album))
+    ));
+    return albums.length ? [{ ...group, albums }] : [];
+  });
+  return {
+    groups: filteredGroups,
+    totals: {
+      artistCount: filteredGroups.length,
+      albumCount: filteredGroups.reduce((total, group) => total + group.albums.length, 0),
+    },
+  };
+}
+
+function applyGalleryClientTransition({ state: current, action } = {}) {
+  return reduceGalleryMainState(current, action);
+}
+
+function activeGallerySourceCategories(mainState) {
+  return ['main_library', 'new_arrivals', 'hoard'].filter(source => mainState.sources?.[source] !== false);
+}
+
+function gallerySourceScopesEqual(left = [], right = []) {
+  return left.length === right.length && left.every(source => right.includes(source));
+}
+
+function withActiveGallerySources(view, mainState) {
+  return mainState ? { ...view, gallery_scope: 'all', visible_library_categories: activeGallerySourceCategories(mainState) } : view;
+}
+
+function resolveGallerySourceHydrationRequest({ currentCategories = [], nextState, action } = {}) {
+  if (action?.type !== 'toggle-source' || !nextState?.sources?.[action.source]) return null;
+  const available = new Set(Array.isArray(currentCategories) ? currentCategories : []);
+  if (available.has(action.source)) return null;
+  return ['main_library', 'new_arrivals', 'hoard'].filter((source) => nextState.sources[source] !== false);
+}
+
+function buildGallerySourceHydrationView({ currentView = {}, hydrationCategories = [] } = {}) {
+  return {
+    ...currentView,
+    gallery_scope: 'all',
+    visible_library_categories: Array.isArray(hydrationCategories) ? [...hydrationCategories] : [],
+  };
+}
+
+// Preview biography paraphrased from https://en.wikipedia.org/wiki/Neal_Morse (2026-09-08).
+const GALLERY_TRIAL_ARTIST_BIOGRAPHIES = Object.freeze({
+  'Neal Morse': "Neal Morse is an American singer, songwriter and multi-instrumentalist whose work spans progressive rock and Christian music. Raised in California, he began learning piano as a child and later took up guitar. He formed Spock's Beard with his brother Alan in 1992; their debut album, The Light, appeared in 1995.\n\nIn 1999, Morse joined Mike Portnoy, Roine Stolt and Pete Trewavas to form Transatlantic. After leaving Spock's Beard in 2002, he developed a solo career centred on ambitious concept albums, including Testimony, which explored his religious conversion.\n\nHis collaborations also include Flying Colors and the Neal Morse Band. Alongside lengthy progressive compositions, his recordings range from singer-songwriter material to cover albums and musical retellings of biblical stories. His Morsefest concerts bring musicians and listeners together for performances of complete albums and other substantial works.",
+});
+
+function resolveGalleryArtistInfo(group = {}, artist = '') {
+  const artistName = String(artist || '').trim() || 'This artist';
+  const albumCount = Array.isArray(group.albums) ? group.albums.length : 0;
+  const providedSummary = typeof group.artist_summary === 'string'
+    ? group.artist_summary.trim()
+    : (typeof group.summary === 'string' ? group.summary.trim() : '') || GALLERY_TRIAL_ARTIST_BIOGRAPHIES[artistName] || '';
+  const rawImageUrl = String(group.artist_image_url || group.image_url || GALLERY_TRIAL_ARTIST_IMAGES[artistName] || '').trim();
+  const rawWikipediaUrl = String(group.wikipedia_url || '').trim();
+  const imageUrl = (/^\/(?!\/)/.test(rawImageUrl) || /^https:\/\//i.test(rawImageUrl)) ? rawImageUrl : '';
+  const wikipediaUrl = /^https:\/\/(?:[a-z0-9-]+\.)*wikipedia\.org(?:\/|$)/i.test(rawWikipediaUrl)
+    ? rawWikipediaUrl
+    : '';
+  return {
+    summary: providedSummary || `${artistName} has ${albumCount} album${albumCount === 1 ? '' : 's'} in this Gallery view.`,
+    imageUrl,
+    wikipediaUrl,
+    canReadMore: providedSummary.length > 280,
+  };
+}
+
+function reconcileGalleryMain(config = {}) {
+  (config.changedGroupKeys || []).forEach((key) => config.replaceGroup?.(key));
+  config.updateCounts?.(config.totals || { artistCount: 0, albumCount: 0 });
+  return { galleryRoot: config.galleryRoot, activeSurface: config.activeSurface };
+}
+
+function resolveGalleryBarContext(config = {}) {
+  const summaryContext = config.primaryArtist
+    ? (config.hasFamily === false
+      ? { kind: 'single-artist', artist: config.primaryArtist, albumCount: config.albumCount }
+      : { kind: 'family', primaryArtist: config.primaryArtist, artistCount: config.artistCount, albumCount: config.albumCount })
+    : { kind: 'gallery', artistCount: config.artistCount, albumCount: config.albumCount };
+  if (summaryContext.kind === 'single-artist') return summaryContext;
+  if (Number(config.scrollTop || 0) <= 12) {
+    return summaryContext;
+  }
+  const threshold = Number(config.scrollTop || 0) + Number(config.galleryBarBottom || 0);
+  const current = (config.groups || []).filter((group) => Number(group.top || 0) <= threshold).at(-1);
+  return current
+    ? { kind: 'artist', artist: current.artist, albumCount: current.albumCount }
+    : summaryContext;
+}
+
+function resolveGallerySummaryTotals(view, mountedTotals, filterState, groups) {
+  if (view.selected_artist) return mountedTotals;
+  let rootTotals = mountedTotals;
+  if (Array.isArray(groups)) {
+    const keys = new Set();
+    let unkeyedCount = 0;
+    groups.forEach(group => (group.albums || []).forEach(album => {
+      const key = String(album.key || '').trim();
+      if (key) keys.add(key);
+      else unkeyedCount += 1;
+    }));
+    rootTotals = { ...mountedTotals, albumCount: keys.size + unkeyedCount };
+  }
+  if (view.query) return rootTotals;
+  if (filterState && (
+    filterState.familySelectionExplicit || filterState.familyArtists?.length
+    || filterState.albumTypes?.length !== 2
+    || !filterState.albumTypes.includes('studio') || !filterState.albumTypes.includes('ep')
+    || !gallerySourceScopesEqual(activeGallerySourceCategories(filterState),
+      view.loaded_library_categories || view.visible_library_categories || ['main_library', 'new_arrivals', 'hoard'])
+  )) return rootTotals;
+  return {
+    artistCount: Number.isFinite(Number(view.artist_count)) ? Number(view.artist_count) : rootTotals.artistCount,
+    albumCount: Number.isFinite(Number(view.album_count)) ? Number(view.album_count) : rootTotals.albumCount,
+  };
+}
+
+// END js/runtime/gallery-main-state.js
+
 // BEGIN js/runtime/gallery-card-component.js
 
 function buildGalleryCardHtml(config = {}) {
-  const trackCount = Math.max(0, Number(config.trackCount || 0));
-  const trackLabel = `${trackCount} track${trackCount === 1 ? '' : 's'}`;
-  const lengthHtml = config.lengthDisplay
-    ? `<div class="album-length">${escapeHtml(config.lengthDisplay)}</div>`
-    : '<div class="album-length"></div>';
-  const yearHtml = config.year
-    ? `<div class="album-year">${escapeHtml(config.year)}</div>`
-    : '<div class="album-year"></div>';
+  const displayMode = String(config.displayMode || 'cards') === 'covers' ? 'covers' : 'cards';
+  const releaseYear = displayMode === 'covers' ? String(config.year ?? '').trim() : '';
   const openAttributes = `data-open-tracklist="1" data-album-key="${escapeHtml(config.albumKey || '')}" data-album-version-key="${escapeHtml(config.albumVersionKey || '')}" data-album="${escapeHtml(config.albumFallback || '')}"`;
   return `
-    <section class="album-card" data-gallery-card-key="${escapeHtml(config.identity || '')}" data-gallery-card-render-key="${escapeHtml(config.renderKey || '')}">
+    <section class="album-card" data-gallery-display="${displayMode}"${releaseYear ? ` data-gallery-release-year="${escapeHtml(releaseYear)}"` : ''} data-gallery-card-key="${escapeHtml(config.identity || '')}" data-gallery-card-render-key="${escapeHtml(config.renderKey || '')}">
       <button class="album-card__artbox-trigger album-open-trigger cover" type="button" ${openAttributes} aria-label="${escapeHtml(config.openLabel || `Open ${config.title || 'album'} tracklist`)}">
         ${String(config.artboxHtml || '')}
       </button>
-      <div class="album-body">
-        <h3 class="album-title"><button class="album-open-trigger album-title-button" type="button" ${openAttributes}>${escapeHtml(config.title || '')}</button></h3>
-        <div class="album-meta-row">
-          <div class="album-subtitle">${escapeHtml(config.artist || '')}</div>
-          ${yearHtml}
-        </div>
-        ${String(config.ratingHtml || '')}
-        <div class="chip-row">
-          <span class="track-count">${trackLabel}</span>
-          ${lengthHtml}
-        </div>
-      </div>
+      ${releaseYear ? `<span class="gallery-card__hover-year" aria-hidden="true">${escapeHtml(releaseYear)}</span>` : ''}
+      ${displayMode === 'covers'
+        ? `<span class="gallery-card__focus-title">${escapeHtml(config.title || '')}</span>`
+        : buildGalleryCardInfoHtml({ ...config, openAttributes })}
     </section>
   `;
 }
@@ -3397,6 +4251,15 @@ function normalizeAlbumDetailsLayout(value) {
 
 function buildAlbumDetailsHeaderHtml(config = {}) {
   const layout = normalizeAlbumDetailsLayout(config.layout);
+  const variant = config.variant === 'copy' ? 'copy' : 'album';
+  const titleId = escapeHtml(config.titleId || 'track-modal-title');
+  const subtitleId = escapeHtml(config.subtitleId || 'track-modal-subtitle');
+  const actionHtml = String(config.actionsHtml || '');
+  if (variant === 'copy') {
+    const title = escapeHtml(config.title || '');
+    const subtitle = escapeHtml(config.subtitle || '');
+    return `<header class="album-details-header" data-album-details-layout="classic_bar" data-album-details-variant="copy"><div class="album-details-header__identity"><div class="album-details-header__copy"><h3 class="album-details-header__primary" id="${titleId}">${title}</h3><div class="album-details-header__secondary" id="${subtitleId}">${subtitle}</div></div></div>${actionHtml ? `<div class="album-details-header__actions">${actionHtml}</div>` : ''}</header>`;
+  }
   const artist = escapeHtml(config.artist || '');
   const album = escapeHtml(config.album || 'Album');
   const year = escapeHtml(config.year || '');
@@ -3408,7 +4271,6 @@ function buildAlbumDetailsHeaderHtml(config = {}) {
     return `<span class="album-details-header__tag${missingClass}">${escapeHtml(label)}</span>`;
   });
   const tagHtml = tagParts.join('');
-  const actionHtml = String(config.actionsHtml || '');
   const compactIdentity = [artist, album, year].filter(Boolean).join(' <span aria-hidden="true">•</span> ');
   const stackedPrimary = [artist, album].filter(Boolean).join(' <span aria-hidden="true">•</span> ');
   const secondaryValues = layout === 'editorial_canvas'
@@ -3419,7 +4281,7 @@ function buildAlbumDetailsHeaderHtml(config = {}) {
     .map((part) => `<span${part.releaseType ? ' class="album-details-header__release-type"' : ''}>${part.value}</span>`);
   const secondaryHtml = [...secondaryParts, ...tagParts].join('<span aria-hidden="true">•</span>');
   const primary = layout === 'classic_bar' ? compactIdentity : (layout === 'editorial_canvas' ? album : stackedPrimary);
-  return `<header class="album-details-header" data-album-details-layout="${layout}"><div class="album-details-header__identity"><h3 class="album-details-header__primary" id="track-modal-title">${primary}</h3>${layout === 'classic_bar' ? `<div class="album-details-header__tags">${releaseType ? `<span class="album-details-header__release-type">${releaseType}</span>` : ''}${tagHtml}</div>` : `<div class="album-details-header__secondary" id="track-modal-subtitle">${secondaryHtml}</div>`}</div>${actionHtml ? `<div class="album-details-header__actions">${actionHtml}</div>` : ''}${layout === 'classic_bar' ? '<div class="track-modal-subtitle" id="track-modal-subtitle"></div>' : ''}</header>`;
+  return `<header class="album-details-header" data-album-details-layout="${layout}"><div class="album-details-header__identity"><h3 class="album-details-header__primary" id="${titleId}">${primary}</h3>${layout === 'classic_bar' ? `<div class="album-details-header__tags">${releaseType ? `<span class="album-details-header__release-type">${releaseType}</span>` : ''}${tagHtml}</div>` : `<div class="album-details-header__secondary" id="${subtitleId}">${secondaryHtml}</div>`}</div>${actionHtml ? `<div class="album-details-header__actions">${actionHtml}</div>` : ''}${layout === 'classic_bar' ? `<div class="track-modal-subtitle" id="${subtitleId}"></div>` : ''}</header>`;
 }
 
 function buildAlbumDetailsHeaderActionsHtml(config = {}) {
@@ -3458,6 +4320,24 @@ function buildAlbumDetailsHeaderActionsHtml(config = {}) {
   ].join('');
 }
 
+function buildLooseTracksHeaderActionsHtml() {
+  return [
+    ButtonComponent.renderActionButton({
+      ariaLabel: 'Edit tags',
+      title: 'Edit tags',
+      className: 'track-modal-edit-tags album-details-header__action',
+      iconClass: 'album-details-header__action-icon album-details-header__action-icon--edit',
+      attributes: { id: 'non-album-modal-edit-tags', 'data-open-non-album-tag-editor': '1' },
+    }),
+    ButtonComponent.renderActionButton({
+      ariaLabel: 'Close loose tracks',
+      className: 'album-details-header__action',
+      iconClass: 'album-details-header__action-icon album-details-header__action-icon--close',
+      attributes: { id: 'non-album-modal-close', 'data-close-non-album-modal': '1' },
+    }),
+  ].join('');
+}
+
 function buildMissingAlbumDetailsHtml(config = {}) {
   const albumKey = escapeHtml(config.albumKey || '');
   const removeButton = config.canRemove
@@ -3489,6 +4369,7 @@ const state = {
   repairAlertHideTimer: null,
   awaitingInitialDataRefresh: false,
   status: {},
+  loopCreateAllowed: window.__ALBUM_HAVEN_PLAYBACK_ALLOWED_ACTIONS__?.['library.loops.create'] === true,
   coverRefreshTokens: {},
   coverFailures: {
     localDisplayPaths: {},
@@ -3554,6 +4435,7 @@ const state = {
     pendingSidebarSelectedArtist: '',
     pendingSidebarAllArtistsActive: false,
     artistsDrawerOpen: false,
+    artistTreeFolded: null,
     pendingAppRefocusSuppression: false,
     suppressNextViewportClick: false,
     suppressClickSequenceUntil: 0,
@@ -3664,6 +4546,11 @@ const state = {
     rulesLoading: false,
     rulesLoadPromise: null,
       loops: [],
+      loopsSearchQuery: '',
+      loopOrderPending: {},
+      loopViewGeneration: 0,
+      loopDataGeneration: 0,
+      loopMutationGeneration: 0,
       selectedLoopGroupKey: '',
       selectedLoopDetailMode: 'group',
       collapsedLoopGroups: {},
@@ -3705,6 +4592,13 @@ const state = {
     integrationsLoaded: false,
     integrationsLoading: false,
     integrationsLoadPromise: null,
+    lastfmScrobbles: {
+      summary: null,
+      loading: false,
+      submitting: false,
+      loadPromise: null,
+      requestGeneration: 0,
+    },
     localPlaylistImport: {
       selectedFile: null,
       selectedFileName: '',
@@ -3822,6 +4716,7 @@ const state = {
       remoteCover: null,
       localCovers: [],
       pastedImages: [],
+      manualImageAttachments: [],
       otherArt: [],
       pendingLocalPath: '',
       pendingPastedImageId: '',
@@ -4011,10 +4906,90 @@ function setDomPropertyIfChanged(element, property, value) {
   }
 }
 
+function resolveLibraryScanPhaseStates(data = {}) {
+  const stages = ['discover', 'metadata', 'covers', 'relations'];
+  const states = Object.fromEntries(stages.map(stage => [stage, 'future']));
+  const phase = String(data.scan_phase || '').trim().toLowerCase();
+  const outcome = String(data.scan_outcome || '').trim().toLowerCase();
+  let currentStage = '';
+  if (data.relations_in_progress || (data.scan_in_progress && phase === 'finalizing')) currentStage = 'relations';
+  else if (data.covers_in_progress) currentStage = 'covers';
+  else if (data.scan_in_progress && ['discovering', 'discovery', 'enumerating', 'preparing', 'idle'].includes(phase)) currentStage = 'discover';
+  else if (data.scan_in_progress) currentStage = 'metadata';
+
+  const currentIndex = stages.indexOf(currentStage);
+  if (currentIndex >= 0) {
+    stages.forEach((stage, index) => { states[stage] = index < currentIndex ? 'complete' : index === currentIndex ? 'current' : 'future'; });
+    return states;
+  }
+  if (outcome === 'completed') return Object.fromEntries(stages.map(stage => [stage, 'complete']));
+  if (['cancelled', 'failed'].includes(outcome)) {
+    if (Number(data.scan_total || 0) > 0 || Number(data.scan_processed || 0) > 0) states.discover = 'complete';
+    if (Number(data.scan_total || 0) > 0 && Number(data.scan_processed || 0) >= Number(data.scan_total || 0)) states.metadata = 'complete';
+    if (Number(data.covers_total || 0) > 0 && Number(data.covers_processed || 0) >= Number(data.covers_total || 0)) states.covers = 'complete';
+    if (Number(data.relations_total || 0) > 0 && Number(data.relations_processed || 0) >= Number(data.relations_total || 0)) states.relations = 'complete';
+  }
+  return states;
+}
+
+let detachedGalleryBar = null;
+let detachedGalleryBarParent = null;
+let detachedGalleryBarNextSibling = null;
+
+function buildLibraryStatusBarHtml() {
+  return `<section class="gallery-bar gallery-bar--scan" id="library-status-gallery-bar" data-gallery-bar data-gallery-bar-instance="library-status" aria-label="Library Status Page controls">
+    <div class="gallery-bar__context">
+      <button class="gallery-action-button library-loader-back-button" id="library-loader-back-button" type="button" data-close-scan-page="1" aria-label="Back to previous library view"><span class="library-loader-back-icon" aria-hidden="true">&#8592;</span></button>
+      <div class="library-scan-gallery-copy">
+        <div class="gallery-bar__title"><span>Library Status Page</span></div>
+        <span class="gallery-bar__summary" id="library-scan-gallery-summary" aria-live="polite">Preparing status...</span>
+      </div>
+    </div>
+    <div class="gallery-bar__actions library-loader-actions" id="library-loader-actions" hidden>
+      <button class="button ui-button ui-button--secondary ui-button--medium library-loader-browse-button" type="button" id="library-loader-browse-button" data-browse-scanned-library="1" hidden>Browse Library</button>
+      <button class="button ui-button ui-button--quiet ui-button--medium library-loader-cancel-button" type="button" id="library-loader-cancel-button" data-cancel-library-scan="1" hidden>Cancel Scan</button>
+    </div>
+  </section>`;
+}
+
+function mountLibraryStatusBar() {
+  const mounted = document.getElementById('library-status-gallery-bar');
+  if (mounted) return mounted;
+  const galleryBar = document.querySelector?.('[data-gallery-bar-instance="gallery"]');
+  if (!galleryBar?.parentNode || typeof document.createElement !== 'function') return null;
+  if (typeof closeGalleryMainSurface === 'function') closeGalleryMainSurface(false);
+  detachedGalleryBar = galleryBar;
+  detachedGalleryBarParent = galleryBar.parentNode;
+  detachedGalleryBarNextSibling = galleryBar.nextSibling;
+  const holder = document.createElement('div');
+  holder.innerHTML = buildLibraryStatusBarHtml();
+  const statusBar = holder.firstElementChild;
+  detachedGalleryBarParent.insertBefore(statusBar, galleryBar);
+  galleryBar.remove();
+  return statusBar;
+}
+
+function unmountLibraryStatusBar() {
+  document.getElementById('library-status-gallery-bar')?.remove?.();
+  if (detachedGalleryBar && detachedGalleryBarParent) {
+    const anchor = detachedGalleryBarNextSibling?.parentNode === detachedGalleryBarParent
+      ? detachedGalleryBarNextSibling : null;
+    detachedGalleryBarParent.insertBefore(detachedGalleryBar, anchor);
+  }
+  detachedGalleryBar = null;
+  detachedGalleryBarParent = null;
+  detachedGalleryBarNextSibling = null;
+}
+
 function renderLibraryLoader(data = {}, options = {}) {
+  const scanPageVisible = Boolean(options.scanPageVisible || state.ui.scanPageReturnContext);
+  if (scanPageVisible) mountLibraryStatusBar();
+  else unmountLibraryStatusBar();
   const loader = document.getElementById('library-loader');
+  const scanSummary = document.getElementById('library-scan-gallery-summary');
   const spinner = loader?.querySelector('.library-loader-spinner');
   const title = document.getElementById('library-loader-title');
+  const readyCheck = document.getElementById('library-loader-ready-check');
   const status = document.getElementById('library-loader-status');
   const progress = document.getElementById('library-loader-progress');
   const actions = document.getElementById('library-loader-actions');
@@ -4023,13 +4998,13 @@ function renderLibraryLoader(data = {}, options = {}) {
   const backButton = document.getElementById('library-loader-back-button');
   const phaseGuide = document.getElementById('library-loader-phase-guide');
   const scroll = document.getElementById('albums-scroll');
-  if (!loader || !title || !status || !progress || !scroll || !spinner || !browseButton) return;
+  if (!loader || !title || !status || !progress || !scroll || !spinner) return;
 
   const scanBusy = Boolean(data.scan_in_progress)
     && String(data.scan_phase || '').trim().toLowerCase() !== 'finalizing';
   const relBusy = Boolean(data.relations_in_progress);
   const coverBusy = Boolean(data.covers_in_progress);
-  const scanPageVisible = Boolean(options.scanPageVisible || state.ui.scanPageReturnContext);
+  if (typeof syncScanLibraryWatcherHealth === 'function') syncScanLibraryWatcherHealth(data, scanPageVisible);
   const forcedScanPageVisible = Boolean(state.ui.forceScanPageVisible) && (scanBusy || relBusy || state.awaitingInitialDataRefresh);
   const hasSearch = Boolean((state.view?.query || '').trim() || (state.view?.selected_artist || '').trim());
   const pendingViewTransition = Boolean(state.ui.pendingViewTransition);
@@ -4044,17 +5019,27 @@ function renderLibraryLoader(data = {}, options = {}) {
     && Boolean(data.scan_in_progress)
     && String(data.scan_phase || '').trim().toLowerCase() === 'finalizing'
     && Number(data.album_total || 0) > 0;
-  const canBrowseScanned = shouldShow
+  // The dedicated page hides, but deliberately retains, the previous gallery and
+  // query. Its Browse action must not wait for that retained view to become empty.
+  const retainedBrowseAvailable = scanPageVisible
+    && (scanBusy || relBusy || state.awaitingInitialDataRefresh)
+    && Number(state.view?.album_count || 0) > 0;
+  const canBrowseScanned = shouldShow && (scanPageVisible || !hasSearch)
     && !pendingViewTransition
     && (
       finalizingActiveScan
-      || shouldOfferBrowseScannedLibraryAction(state.view, data, state.awaitingInitialDataRefresh)
+      || retainedBrowseAvailable
+      || shouldOfferBrowseScannedLibraryAction(scanPageVisible ? {} : state.view, data, state.awaitingInitialDataRefresh)
     );
   const canCancelScan = shouldShow && scanPageVisible && Boolean(data.scan_in_progress);
   setDomPropertyIfChanged(loader, 'hidden', !shouldShow);
   loader.classList?.toggle('is-scan-page', scanPageVisible);
+  const galleryWasHidden = scroll.hidden;
   setDomPropertyIfChanged(scroll, 'hidden', shouldShow);
-  setDomPropertyIfChanged(backButton, 'hidden', !scanPageVisible);
+  if (galleryWasHidden && !shouldShow && scroll.clientWidth > 0 && typeof virtualGrid !== 'undefined') {
+    virtualGrid.onResize();
+  }
+  setDomPropertyIfChanged(backButton, 'hidden', false);
   setDomPropertyIfChanged(phaseGuide, 'hidden', !scanPageVisible);
   setDomPropertyIfChanged(browseButton, 'hidden', !canBrowseScanned);
   setDomPropertyIfChanged(
@@ -4081,27 +5066,44 @@ function renderLibraryLoader(data = {}, options = {}) {
   setDomPropertyIfChanged(
     actions,
     'hidden',
-    Boolean(browseButton.hidden && (!cancelButton || cancelButton.hidden)),
+    Boolean((!browseButton || browseButton.hidden) && (!cancelButton || cancelButton.hidden)),
   );
   if (!shouldShow) return;
 
-  if (hasSearch && !isLoadingState && !forcedScanPageVisible && !scanPageVisible) {
+  if (hasSearch && !pendingViewTransition && !scanPageVisible) {
     spinner.hidden = true;
     title.textContent = 'Nothing found';
     status.textContent = 'No artists, albums, or tracks matched your search.';
     progress.innerHTML = '';
-    browseButton.hidden = true;
-    if (actions) actions.hidden = Boolean(!cancelButton || cancelButton.hidden);
+    if (browseButton) browseButton.hidden = true;
+    if (cancelButton) cancelButton.hidden = true;
+    if (actions) actions.hidden = true;
     return;
   }
 
-  spinner.hidden = Boolean(scanPageVisible && !(scanBusy || relBusy || coverBusy));
+  const ready = scanPageVisible && !(Boolean(data.scan_in_progress) || relBusy || coverBusy || state.awaitingInitialDataRefresh || pendingViewTransition);
+  spinner.hidden = Boolean(scanPageVisible && ready);
+  setDomPropertyIfChanged(readyCheck, 'hidden', !ready);
   const lines = buildLoaderStatusLines(data, {
     scanPageVisible,
     pendingViewTransition: pendingViewTransition && !scanPageVisible,
   });
-  title.textContent = lines[0]?.title || 'Loading library';
+  title.textContent = ready
+    ? 'Your local library is ready.'
+    : (scanPageVisible && (Boolean(data.scan_in_progress) || relBusy || coverBusy)
+      ? 'Scanning the library'
+      : (lines[0]?.title || 'Loading library'));
   status.textContent = lines[0]?.detail || 'Preparing scan...';
+  if (scanSummary) scanSummary.textContent = status.textContent;
+  if (phaseGuide && scanPageVisible) {
+    const phaseStates = resolveLibraryScanPhaseStates(data);
+    phaseGuide.querySelectorAll?.('[data-scan-stage]').forEach((item) => {
+      const stateName = phaseStates[String(item.getAttribute('data-scan-stage') || '')] || 'future';
+      item.classList.toggle('is-current', stateName === 'current');
+      item.classList.toggle('is-complete', stateName === 'complete');
+      item.classList.toggle('is-future', stateName === 'future');
+    });
+  }
   progress.innerHTML = lines.slice(1).map((line) => `
     <div class="library-loader-progress-line">
       <span class="library-loader-progress-title">${escapeHtml(line.title)}</span>
@@ -4111,11 +5113,28 @@ function renderLibraryLoader(data = {}, options = {}) {
 }
 
 function renderRelated() {
+  if (typeof galleryMainSurfaceController !== 'undefined'
+      && galleryMainSurfaceController?.isOpen?.('artist-family')
+      && typeof closeGalleryMainSurface === 'function') {
+    closeGalleryMainSurface(false);
+  }
+  const galleryPanel = document.querySelector?.('[data-artist-family-panel]');
+  const galleryToggle = document.querySelector?.('[data-gallery-bar-action="artist-family"]');
+  const galleryBody = document.querySelector?.('[data-gallery-family-panel-body]');
+  if (galleryPanel) {
+    galleryPanel.hidden = true;
+    galleryPanel.classList.remove('is-open');
+    galleryPanel.setAttribute('aria-hidden', 'true');
+  }
+  if (galleryToggle) galleryToggle.setAttribute('aria-expanded', 'false');
+  if (galleryBody) {
+    galleryBody.innerHTML = '';
+    delete galleryBody.dataset.galleryRenderSignature;
+  }
   const box = document.getElementById('related-box');
   const toggle = document.getElementById('related-toggle');
   const wrap = document.getElementById('related-list-wrap');
   const list = document.getElementById('related-list');
-  const related = state.view.related_artists || [];
   if (!box || !toggle || !wrap || !list) return;
   const contextualPane = state.view?.shell_layout?.slots?.contextual_pane || {};
   if (Object.prototype.hasOwnProperty.call(contextualPane, 'is_visible')) {
@@ -4131,22 +5150,12 @@ function renderRelated() {
   if (Object.prototype.hasOwnProperty.call(localTree, 'active_submode')) {
     box.dataset.shellLocalTreeSubmode = String(localTree.active_submode || '');
   }
-  if (
-    state.ui.scanPageReturnContext
-    || (state.busy && !state.ui.activeViewPayloadReady)
-    || !state.view.selected_artist
-    || !related.length
-  ) {
-    box.style.display = 'none';
-    wrap.hidden = true;
-    list.innerHTML = '';
-    return;
-  }
-  box.style.display = 'block';
-  box.classList.toggle('is-collapsed', !state.relatedExpanded);
-  toggle.setAttribute('aria-expanded', state.relatedExpanded ? 'true' : 'false');
-  wrap.hidden = !state.relatedExpanded;
-  list.innerHTML = buildRelatedMarkup(state.view);
+  box.hidden = true;
+  box.style.display = 'none';
+  box.classList.add('is-collapsed');
+  toggle.setAttribute('aria-expanded', 'false');
+  wrap.hidden = true;
+  list.innerHTML = '';
 }
 
 function applyLocalRelatedArtistFilter(nextRelatedArtists, options = {}) {
@@ -4158,6 +5167,976 @@ function applyLocalRelatedArtistFilter(nextRelatedArtists, options = {}) {
 }
 
 // END js/runtime/core-state-and-helpers.js
+
+// BEGIN js/runtime/trigger-anchor.js
+
+function getTriggerAnchorGeometry(anchor, surface) {
+  const edge = surface.bottom <= anchor.top ? 'bottom' : 'top';
+  return {
+    edge,
+    side: Math.abs(anchor.left - surface.left) <= 2 ? 'left'
+      : Math.abs(surface.right - anchor.right) <= 2 ? 'right' : 'none',
+    left: Math.max(0, anchor.left - surface.left),
+    right: Math.max(0, surface.right - anchor.right),
+    width: anchor.width,
+    gap: Math.max(0, edge === 'top' ? surface.top - anchor.bottom : anchor.top - surface.bottom),
+  };
+}
+
+let activeTriggerSurface = null;
+function activateTriggerSurface(surface, close) {
+  for (let owner = activeTriggerSurface; owner; owner = owner.parent) {
+    if (owner.surface === surface) return;
+  }
+  while (activeTriggerSurface && !activeTriggerSurface.surface.contains?.(surface)) {
+    const previous = activeTriggerSurface;
+    activeTriggerSurface = previous.parent || null;
+    previous.close();
+  }
+  activeTriggerSurface = { surface, close, parent: activeTriggerSurface };
+}
+
+const triggerAnchorBindings = new WeakMap();
+function clearTriggerAnchor(surface) {
+  let owner = activeTriggerSurface;
+  while (owner && owner.surface !== surface) owner = owner.parent;
+  if (owner) {
+    while (activeTriggerSurface !== owner) {
+      const child = activeTriggerSurface;
+      activeTriggerSurface = child.parent;
+      child.close();
+    }
+    activeTriggerSurface = owner.parent || null;
+  }
+  const binding = triggerAnchorBindings.get(surface);
+  if (!binding) return;
+  binding.observer?.disconnect();
+ binding.resizeObserver?.disconnect();
+ binding.anchor.classList.remove('trigger-anchor-open');
+ surface.classList.remove('trigger-anchor-surface');
+ delete binding.anchor.dataset.triggerAnchorEdge;
+ delete binding.anchor.dataset.triggerAnchorContext;
+ delete surface.dataset.triggerAnchorContext;
+ delete surface.dataset.triggerAnchorEdge;
+  delete surface.dataset.triggerAnchorSide;
+  delete surface.dataset.triggerAnchorSearch;
+ binding.anchor.style.removeProperty?.('--trigger-anchor-background');
+ surface.style.removeProperty?.('--trigger-anchor-background');
+ triggerAnchorBindings.delete(surface);
+}
+
+function syncTriggerAnchor(surface, anchor) {
+  if (!surface?.getBoundingClientRect || !anchor?.getBoundingClientRect || surface.hidden) return;
+  const anchorContext = anchor.closest?.('.shell-main-surface, .settings-outlet') ? 'content' : 'chrome';
+  surface.dataset.triggerAnchorContext = anchorContext;
+  anchor.dataset.triggerAnchorContext = anchorContext;
+  activateTriggerSurface(surface, () => {
+    surface.hidden = true;
+    anchor.setAttribute?.('aria-expanded', 'false');
+    clearTriggerAnchor(surface);
+  });
+  const previous = triggerAnchorBindings.get(surface);
+  if (previous && previous.anchor !== anchor) clearTriggerAnchor(surface);
+  const geometry = getTriggerAnchorGeometry(anchor.getBoundingClientRect(), surface.getBoundingClientRect());
+  const surfaceStyle = globalThis.getComputedStyle?.(surface);
+  const renderedBackground = surfaceStyle?.backgroundColor?.trim();
+  const surfaceBackground = renderedBackground
+    && renderedBackground !== 'transparent'
+    && renderedBackground !== 'rgba(0, 0, 0, 0)'
+    // Connected surfaces must be opaque: otherwise the button's border paint
+    // and the page underneath the popup produce different visible colors.
+    ? renderedBackground.replace(/^(rgba\([\d.]+,\s*[\d.]+,\s*[\d.]+),\s*[\d.]+\)$/, '$1, 1)')
+    : surfaceStyle?.getPropertyValue?.('--trigger-anchor-background')?.trim();
+  if (surfaceBackground) {
+    surface.style.setProperty('--trigger-anchor-background', surfaceBackground);
+    anchor.style.setProperty('--trigger-anchor-background', surfaceBackground);
+  }
+  surface.classList.add('trigger-anchor-surface');
+  if (anchor.matches?.('.search-field-button')) surface.dataset.triggerAnchorSearch = 'true';
+  else delete surface.dataset.triggerAnchorSearch;
+  anchor.classList.add('trigger-anchor-open');
+ surface.dataset.triggerAnchorEdge = geometry.edge;
+  surface.dataset.triggerAnchorSide = geometry.side;
+  anchor.dataset.triggerAnchorEdge = geometry.edge;
+  for (const name of ['left', 'right', 'width', 'gap']) {
+    surface.style.setProperty(`--trigger-anchor-${name}`, `${geometry[name]}px`);
+  }
+  anchor.style.setProperty('--trigger-anchor-gap', `${geometry.gap}px`);
+  if (previous?.anchor === anchor) return;
+  const observer = typeof MutationObserver === 'function' ? new MutationObserver(() => {
+    if (surface.hidden || surface.getAttribute('aria-hidden') === 'true') clearTriggerAnchor(surface);
+  }) : null;
+  observer?.observe(surface, { attributes: true, attributeFilter: ['hidden', 'aria-hidden'] });
+  // A sibling's animated width moves this trigger without resizing the trigger itself.
+  // ResizeObserver runs after layout and before paint, keeping the join in that frame.
+  const resizeObserver = typeof ResizeObserver === 'function' ? new ResizeObserver(() => {
+    if (surface.hidden) { clearTriggerAnchor(surface); return; }
+    syncTriggerAnchor(surface, anchor);
+  }) : null;
+  triggerAnchorBindings.set(surface, { anchor, observer, resizeObserver });
+  if (resizeObserver) {
+    resizeObserver.observe(anchor);
+    resizeObserver.observe(surface);
+    if (anchor.parentElement) resizeObserver.observe(anchor.parentElement);
+  }
+}
+
+function syncActiveTriggerSurfaces() {
+  const owners = [];
+  for (let owner = activeTriggerSurface; owner; owner = owner.parent) owners.push(owner);
+  owners.reverse().forEach(({ surface }) => {
+    const binding = triggerAnchorBindings.get(surface);
+    if (binding && !surface.hidden) syncTriggerAnchor(surface, binding.anchor);
+  });
+}
+
+globalThis.addEventListener?.('resize', syncActiveTriggerSurfaces);
+globalThis.addEventListener?.('scroll', syncActiveTriggerSurfaces, true);
+function confinePanelTextSelection(selection, surface) {
+  if (!selection?.anchorNode || !selection.focusNode || !surface.contains(selection.anchorNode)
+      || surface.contains(selection.focusNode)) return;
+  const bounds = surface.ownerDocument.createRange();
+  bounds.selectNodeContents(surface);
+  const before = bounds.comparePoint(selection.focusNode, selection.focusOffset) < 0;
+  selection.setBaseAndExtent(selection.anchorNode, selection.anchorOffset,
+    before ? bounds.startContainer : bounds.endContainer,
+    before ? bounds.startOffset : bounds.endOffset);
+}
+
+let panelSelectionBoundaryInstalled = false;
+function installPanelSelectionBoundary() {
+  if (panelSelectionBoundaryInstalled) return;
+  panelSelectionBoundaryInstalled = true;
+  let origin = null;
+  let gestureOrigin = null;
+  const release = () => {
+    origin?.classList.remove('panel-selection-origin');
+    document.documentElement.classList.remove('panel-text-selection-active');
+    origin = null;
+  };
+  const confine = () => {
+    if (origin?.isConnected) confinePanelTextSelection(document.getSelection(), origin);
+  };
+  document.addEventListener('pointerdown', event => {
+    release();
+    gestureOrigin = event.button === 0 ? event.target.closest?.('.trigger-anchor-surface, .artist-info-overlay, [role="dialog"], [role="menu"]') : null;
+    origin = event.button === 0 ? event.target.closest?.('.artist-info-overlay, .trigger-anchor-surface, .album-track-table, [role=dialog]') : null;
+    if (origin) {
+      origin.classList.add('panel-selection-origin');
+      document.documentElement.classList.add('panel-text-selection-active');
+    }
+  }, true);
+  // A click generated by releasing a drag outside its starting surface is not
+  // an outside-click dismissal or an activation of the background underneath.
+  document.addEventListener('click', event => {
+    const startedInside = gestureOrigin;
+    gestureOrigin = null;
+    if (event.detail !== 0 && startedInside && !startedInside.contains(event.target)) {
+      event.preventDefault();
+      event.stopImmediatePropagation();
+    }
+  }, true);
+  document.addEventListener('selectionchange', confine);
+  document.addEventListener('selectstart', event => {
+    if (origin && !origin.contains(event.target)) event.preventDefault();
+  }, true);
+  document.addEventListener('pointerup', () => { confine(); release(); }, true);
+  document.addEventListener('pointercancel', () => { gestureOrigin = null; release(); }, true);
+  globalThis.addEventListener?.('blur', () => { gestureOrigin = null; release(); });
+}
+
+// END js/runtime/trigger-anchor.js
+
+// BEGIN js/runtime/search-input.js
+
+function updateSearchClearAction(input) {
+  const clear = input?.closest?.('.search-field-control')?.querySelector?.('[data-search-clear]');
+  if (clear) clear.hidden = !input.value || input.disabled || input.readOnly;
+}
+
+document.addEventListener('input', (event) => {
+  if (event.target?.matches?.('.search-field input[type="search"]')) {
+    updateSearchClearAction(event.target);
+  }
+});
+
+document.addEventListener('click', (event) => {
+  const clear = event.target?.closest?.('[data-search-clear]');
+  if (!clear) return;
+  const input = clear.closest('.search-field-control')?.querySelector('input[type="search"]');
+  if (!input) return;
+  input.value = '';
+  input.dispatchEvent(new Event('input', { bubbles: true }));
+  input.focus();
+});
+
+document.querySelectorAll('.search-field input[type="search"]').forEach(updateSearchClearAction);
+
+// END js/runtime/search-input.js
+
+// BEGIN js/runtime/gallery-main-interactions.js
+
+function createAnchoredSurfaceController() {
+  let active = null;
+  const close = (returnFocus = true) => {
+    if (!active) return false;
+    const previous = active;
+    active = null;
+    if (returnFocus) previous.anchor?.focus?.();
+    return true;
+  };
+  return {
+    activate(next) {
+      if (active?.key === next.key) { close(true); return 'closed'; }
+      close(false);
+      active = next;
+      return 'opened';
+    },
+    close,
+    current: () => active,
+    isOpen: (key) => active?.key === key,
+    handlePointerDown(event = {}) {
+      if (!active || active.surface?.contains?.(event.target)) return false;
+      return close(true);
+    },
+    handleKeyDown(event = {}) {
+      if (!active || event.key !== 'Escape') return false;
+      event.preventDefault?.();
+      return close(true);
+    },
+  };
+}
+
+function shouldDismissArtistInfoOverlay(config = {}) {
+  if (config.reason === 'scroll') return !config.scrollInsideOverlay;
+  return ['outside-pointer', 'escape', 'repeat-anchor'].includes(config.reason);
+}
+
+function observeArtistFamilyPanelBounds({ panel, player } = {}) {
+  if (!panel || !player) return { disconnect() {} };
+  const update = () => {
+    const playerBounds = player.getBoundingClientRect?.();
+    const panelBounds = panel.getBoundingClientRect?.();
+    const style = typeof getComputedStyle === 'function' ? getComputedStyle(player) : null;
+    const opacity = Number.parseFloat(style?.opacity);
+    const visible = !player.hidden
+      && style?.display !== 'none'
+      && style?.visibility !== 'hidden'
+      && style?.visibility !== 'collapse'
+      && (!Number.isFinite(opacity) || opacity > 0)
+      && Number(playerBounds?.width || 0) > 0
+      && Number(playerBounds?.height || 0) > 0;
+    const overlapsPanel = visible
+      && Number(playerBounds.right) > Number(panelBounds?.left || 0)
+      && Number(playerBounds.left) < Number(panelBounds?.right || 0);
+    const viewportHeight = Number(
+      (typeof window !== 'undefined' && window.innerHeight)
+      || (typeof document !== 'undefined' && document.documentElement?.clientHeight)
+      || playerBounds?.bottom
+      || 0,
+    );
+    const bottom = overlapsPanel ? Math.max(0, viewportHeight - Number(playerBounds.top || 0)) : 0;
+    panel.style.bottom = `${Math.round(bottom)}px`;
+  };
+  update();
+  if (typeof ResizeObserver !== 'function') return { disconnect() {}, refresh: update };
+  const observer = new ResizeObserver(update);
+  observer.observe(player);
+  return { disconnect: () => observer.disconnect(), refresh: update };
+}
+
+function positionGalleryAnchoredSurface(surface, anchor, align = 'right') {
+  if (!surface || !anchor?.getBoundingClientRect) return;
+  const rect = anchor.getBoundingClientRect();
+  surface.dataset.anchorEnvelope = align;
+  surface.style.setProperty?.('--gallery-anchor-width', `${Math.round(rect.width)}px`);
+  surface.style.setProperty?.('--gallery-anchor-height', `${Math.round(rect.height)}px`);
+  surface.style.top = `${Math.round(rect.bottom - 1)}px`;
+  if (align === 'left') {
+    const galleryLeft = document.querySelector('[data-gallery-bar]')?.getBoundingClientRect().left ?? rect.left;
+    const left = Math.max(12, Math.round(galleryLeft));
+    surface.style.maxWidth = `${Math.max(0, window.innerWidth - left - Math.min(left, 24))}px`;
+    surface.style.left = `${left}px`;
+    surface.style.right = 'auto';
+  } else {
+    surface.style.right = `${Math.max(12, Math.round(window.innerWidth - rect.right))}px`;
+    surface.style.left = 'auto';
+  }
+  if (typeof syncTriggerAnchor === 'function') syncTriggerAnchor(surface, anchor);
+}
+
+function positionArtistFamilyPanelEnvelope(panel, anchor) {
+  if (!panel || !anchor?.getBoundingClientRect) return;
+  const rect = anchor.getBoundingClientRect();
+  const bar = anchor.closest?.('.gallery-bar');
+  const panelTop = bar?.getBoundingClientRect?.().bottom;
+  if (Number.isFinite(panelTop)) panel.style.top = `${Math.round(panelTop)}px`;
+  const top = Number.isFinite(panelTop) ? panelTop : panel.getBoundingClientRect?.().top;
+  panel.style.setProperty?.('--gallery-anchor-gap', `${Math.max(0, Math.round((top || rect.bottom) - rect.bottom))}px`);
+  panel.dataset.anchorEnvelope = 'right';
+  panel.style.setProperty?.('--gallery-anchor-width', `${Math.round(rect.width)}px`);
+  panel.style.setProperty?.('--gallery-anchor-height', `${Math.round(rect.height)}px`);
+  panel.style.setProperty?.('--gallery-anchor-right', `${Math.max(0, Math.round(window.innerWidth - rect.right))}px`);
+  if (typeof syncTriggerAnchor === 'function') syncTriggerAnchor(panel, anchor);
+  galleryFamilyPanelObserver?.refresh?.();
+}
+
+function positionSearchSuggestionsSurface(surface) {
+  if (!surface?.style) return;
+  const input = document.getElementById('search-input');
+  if (!input?.getBoundingClientRect) return;
+  const control = input.closest?.('.search-field-control') || input;
+  const rect = control.getBoundingClientRect();
+  if (typeof getComputedStyle === 'function') {
+    const style = getComputedStyle(control);
+    surface.style.setProperty('--search-joined-focus', style.getPropertyValue('--search-field-focus').trim() || style.borderColor);
+    surface.style.setProperty('--search-joined-background', style.backgroundColor);
+  }
+  if (surface.parentElement !== document.body) document.body.appendChild(surface);
+  surface.style.position = 'fixed';
+  surface.style.top = `${Math.round(rect.bottom - 1)}px`;
+  surface.style.left = `${Math.round(rect.left)}px`;
+  surface.style.right = 'auto';
+  surface.style.width = `${Math.round(rect.width)}px`;
+}
+
+function focusGalleryMainSurface(surface) {
+  if (!surface) return null;
+  const target = surface.querySelector?.('button:not([disabled]), a[href], [tabindex]:not([tabindex="-1"])') || surface;
+  if (target === surface) surface.tabIndex = -1;
+  target.focus?.({ preventScroll: true });
+  return target;
+}
+
+function shouldFocusGalleryMainSurface(key) {
+  return key !== 'search-suggestions';
+}
+
+let galleryMainSurfaceController = null;
+let galleryMainScrollFrame = 0;
+let galleryFamilyPanelObserver = null;
+let galleryFamilyDragHandlersBound = false;
+
+function getGalleryMainGroups() {
+  const primary = Array.isArray(state.view.primary_artist_groups) ? state.view.primary_artist_groups : [];
+  const family = Array.isArray(state.view.family_artist_groups) ? state.view.family_artist_groups : [];
+  const fallback = Array.isArray(state.view.artist_groups) ? state.view.artist_groups : [];
+  return primary.length || family.length ? [...primary, ...family] : fallback;
+}
+
+function galleryMainGroupArtist(group = {}) {
+  return String(group.artist_display || group.artist || '').trim();
+}
+
+function getGalleryFamilyPanelGroups() {
+  const primaryArtist = String(state.view.selected_artist || '').trim();
+  if (!primaryArtist) return [];
+  const relatedArtists = Array.isArray(state.view.related_artists)
+    ? state.view.related_artists.map((artist) => String(artist || '').trim()).filter(Boolean)
+    : [];
+  const cacheState = typeof getRelatedFilterCacheState === 'function'
+    ? getRelatedFilterCacheState()
+    : state.gallery;
+  const cacheMatchesView = cacheState
+    && String(cacheState.relatedFilterBaseArtist || '') === primaryArtist
+    && String(cacheState.relatedFilterBaseQuery || '') === String(state.view.query || '');
+  const cachedGroups = cacheMatchesView
+    ? [
+      ...(Array.isArray(cacheState.relatedFilterBasePrimaryGroups) ? cacheState.relatedFilterBasePrimaryGroups : []),
+      ...(Array.isArray(cacheState.relatedFilterBaseFamilyGroups) ? cacheState.relatedFilterBaseFamilyGroups : []),
+      ...(Array.isArray(cacheState.relatedFilterDefaultPrimaryGroups) ? cacheState.relatedFilterDefaultPrimaryGroups : []),
+      ...(Array.isArray(cacheState.relatedFilterDefaultFamilyGroups) ? cacheState.relatedFilterDefaultFamilyGroups : []),
+    ]
+    : [];
+  const baseGroups = [
+    ...(state.view.related_filter_base_primary_groups || []),
+    ...(state.view.related_filter_base_family_groups || []),
+  ];
+  const candidates = baseGroups.length ? [...baseGroups, ...getGalleryMainGroups()] : [...cachedGroups, ...getGalleryMainGroups()];
+  const fallbackArtists = getGalleryMainGroups().map((group) => galleryMainGroupArtist(group)).filter(Boolean);
+  const familyArtists = relatedArtists.length ? relatedArtists : fallbackArtists;
+  const names = [primaryArtist, ...familyArtists.filter((artist) => artist !== primaryArtist)];
+  const resolvedGroups = names.map((artist) => {
+    const exactGroup = candidates.reduce((best, group) => {
+      if (galleryMainGroupArtist(group) !== artist || !(group.albums?.length > 0)) return best;
+      return !best || group.albums.length > (best.albums?.length || 0) ? group : best;
+    }, null);
+    if (exactGroup) return exactGroup;
+    const matchingArtist = new Set([artist]);
+    const aliasGroup = candidates.reduce((best, group) => {
+      const matches = galleryMainGroupArtist(group) === artist || (
+        typeof groupMatchesRelatedArtists === 'function'
+        && groupMatchesRelatedArtists(group, matchingArtist)
+      );
+      if (!matches) return best;
+      return !best || (group.albums?.length || 0) > (best.albums?.length || 0) ? group : best;
+    }, null);
+    return aliasGroup || { artist, artist_display: artist, albums: [] };
+  });
+  return resolvedGroups.filter((group, index) => (
+    resolvedGroups.findIndex((candidate) => galleryMainGroupArtist(candidate) === galleryMainGroupArtist(group)) === index
+  ));
+}
+
+function hasGalleryArtistFamily() {
+  const primaryArtist = String(state.view.selected_artist || '').trim();
+  return Boolean(primaryArtist && getGalleryFamilyPanelGroups().length > 1);
+}
+
+function getGalleryMainContextSections() {
+  const sections = typeof virtualGrid !== 'undefined' && Array.isArray(virtualGrid?.sections)
+    ? virtualGrid.sections
+    : [];
+  return sections.filter((section) => section?.kind === 'artist' || section?.group).map((section) => ({
+    artist: galleryMainGroupArtist(section.group),
+    albumCount: Array.isArray(section.group?.albums) ? section.group.albums.length : 0,
+    top: Number(section.top || 0),
+  })).filter((section) => section.artist);
+}
+
+function syncGalleryFamilySelection(mainState, view = {}) {
+  const related = (view.related_filter_artists || []).map(artist => String(artist).trim()).filter(Boolean);
+  const primary = String(view.selected_artist || '').trim();
+  mainState.familyArtists = [...new Set([
+    ...(view.primary_filter_active && primary ? [primary] : []), ...related,
+  ])];
+  if (mainState.familyArtists.length) mainState.familySelectionExplicit = true;
+  else delete mainState.familySelectionExplicit;
+}
+
+function ensureGalleryMainState() {
+  if (state.gallery.mainState) return state.gallery.mainState;
+  const visible = new Set(state.view.visible_library_categories || ['main_library', 'new_arrivals', 'hoard']);
+  state.gallery.mainState = createGalleryMainState({
+    sources: { main_library: visible.has('main_library'), new_arrivals: visible.has('new_arrivals'), hoard: visible.has('hoard') },
+    view: state.view.gallery_display_mode,
+  });
+  syncGalleryFamilySelection(state.gallery.mainState, state.view);
+  return state.gallery.mainState;
+}
+
+function syncGalleryMainStateFromView(previousView = {}, nextView = {}) {
+  const mainState = ensureGalleryMainState();
+  const selectionChanged = String(previousView.selected_artist || '') !== String(nextView.selected_artist || '');
+  if (selectionChanged) {
+    syncGalleryFamilySelection(mainState, nextView);
+  }
+  state.gallery.mainState = mainState;
+}
+
+function syncGalleryMainStateFromLocation() {
+  const url = new URL(window.location.href);
+  const categories = url.searchParams.getAll('category');
+  const visible = new Set(categories.length ? categories : ['main_library', 'new_arrivals', 'hoard']);
+  const mainState = ensureGalleryMainState();
+  mainState.sources = { main_library: visible.has('main_library'), new_arrivals: visible.has('new_arrivals'), hoard: visible.has('hoard') };
+  mainState.view = normalizeGalleryView(url.searchParams.get('gallery_display') || 'cards');
+  syncGalleryFamilySelection(mainState, {
+    selected_artist: url.searchParams.get('artist'),
+    related_filter_artists: url.searchParams.getAll('related_artist'),
+    primary_filter_active: url.searchParams.get('primary_filter') === '1',
+  });
+  state.gallery.mainState = mainState;
+}
+
+function getFilteredGalleryMainModel() {
+  const filterState = ensureGalleryMainState();
+  const filter = groups => filterGalleryModel({ groups: groups || [], filterState }).groups;
+  // Selection refers to original artist identities, never synthesized display names.
+  const selectedArtist = String(state.view.selected_artist || '').trim();
+  const panelSelection = selectedArtist && (filterState.familySelectionExplicit === true
+    || filterState.familyArtists?.length > 0 || state.view.related_filter_artists?.length > 0
+    || state.view.primary_filter_active);
+  // A primary-only server view may omit family albums already available to the panel.
+  const panelGroups = panelSelection ? getGalleryFamilyPanelGroups() : null;
+  const primary = filter(panelGroups
+    ? panelGroups.filter(group => galleryMainGroupArtist(group) === selectedArtist)
+    : state.view.primary_artist_groups);
+  const family = filter(panelGroups
+    ? panelGroups.filter(group => galleryMainGroupArtist(group) !== selectedArtist)
+    : state.view.family_artist_groups);
+  const display = typeof buildSelectedArtistDisplayGroups === 'function'
+    ? buildSelectedArtistDisplayGroups(primary, family, state.view.selected_artist)
+    : { primaryGroups: primary, familyGroups: family };
+  const fallbackGroups = filter(panelGroups || state.view.artist_groups);
+  const chronological = String(state.view.selected_artist_family_display_mode
+    ?? state.view.artist_page?.family_display_mode ?? 'grouped') === 'chronological';
+  const primaryGroups = chronological ? [] : display.primaryGroups;
+  const familyGroups = chronological ? [] : display.familyGroups;
+  const sourceGroups = primaryGroups.length || familyGroups.length
+    ? [...primaryGroups, ...familyGroups] : fallbackGroups;
+  const groups = typeof buildDisplayGroups === 'function' ? buildDisplayGroups(sourceGroups) : sourceGroups;
+  return {
+    primaryGroups, familyGroups, fallbackGroups, groups,
+    totals: {
+      artistCount: groups.length,
+      albumCount: groups.reduce((total, group) => total + group.albums.length, 0),
+    },
+  };
+}
+
+function getGalleryFamilyPanelModel() {
+  const mainState = ensureGalleryMainState();
+  return filterGalleryModel({
+    groups: getGalleryFamilyPanelGroups(),
+    filterState: {
+      ...mainState,
+      albumTypes: GALLERY_RELEASE_TYPES,
+      familyArtists: [],
+      familySelectionExplicit: false,
+    },
+  });
+}
+
+function closeGalleryMainSurface(returnFocus = true) {
+  const active = galleryMainSurfaceController?.current?.();
+  if (!active) return false;
+  const slidingPanel = active.surface.matches?.('.artist-family-panel') === true;
+  active.surface.classList?.remove?.('is-open');
+  active.surface.setAttribute?.('aria-hidden', 'true');
+  active.anchor?.setAttribute?.('aria-expanded', 'false');
+  if (typeof clearTriggerAnchor === 'function') clearTriggerAnchor(active.surface);
+  const closed = galleryMainSurfaceController.close(returnFocus);
+  if (!slidingPanel || window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) {
+    active.surface.hidden = true;
+  } else {
+    const finish = () => {
+      if (!active.surface.classList?.contains?.('is-open')) active.surface.hidden = true;
+    };
+    active.surface.addEventListener?.('transitionend', finish, { once: true });
+    window.setTimeout?.(finish, 260);
+  }
+  return closed;
+}
+
+function openGalleryMainSurface(key, anchor, surface, align = 'right') {
+  if (!anchor || !surface) return false;
+  if (surface.matches?.('.gallery-anchored-menu') && surface.parentElement !== document.body) {
+    document.body.appendChild(surface);
+  }
+  if (!galleryMainSurfaceController) galleryMainSurfaceController = createAnchoredSurfaceController();
+  const previous = galleryMainSurfaceController.current();
+  if (previous?.key === key) {
+    closeGalleryMainSurface(true);
+    return false;
+  }
+  if (previous) closeGalleryMainSurface(false);
+  if (typeof activateTriggerSurface === 'function') activateTriggerSurface(surface, () => {
+    if (galleryMainSurfaceController.current()?.surface === surface) closeGalleryMainSurface(false);
+  });
+  const scroll = key.startsWith('artist:') ? document.getElementById('albums-scroll') : null;
+  galleryMainSurfaceController.activate({ key, anchor, surface,
+    openingScrollPosition: scroll ? { top: scroll.scrollTop, left: scroll.scrollLeft } : null });
+  anchor.setAttribute('aria-expanded', 'true');
+  surface.hidden = false;
+  if (surface.matches?.('.artist-family-panel')) {
+    surface.classList?.remove?.('is-open');
+    void surface.offsetWidth;
+  }
+  surface.classList?.add?.('is-open');
+  surface.setAttribute?.('aria-hidden', 'false');
+  if (surface.matches?.('.gallery-anchored-menu, .artist-info-overlay')) positionGalleryAnchoredSurface(surface, anchor, align);
+  if (surface.matches?.('.artist-family-panel')) positionArtistFamilyPanelEnvelope(surface, anchor);
+  if (shouldFocusGalleryMainSurface(key)) focusGalleryMainSurface(surface);
+  return true;
+}
+
+function updateGalleryMainControls() {
+  const mainState = ensureGalleryMainState();
+  const hasSelectedArtist = Boolean(String(state.view.selected_artist || '').trim());
+  const familyTrigger = document.querySelector('[data-gallery-bar-action="artist-family"]');
+  if (familyTrigger) familyTrigger.hidden = !hasSelectedArtist;
+  if (!hasSelectedArtist && galleryMainSurfaceController?.current?.()?.key === 'artist-family') {
+    closeGalleryMainSurface(false);
+  }
+  document.querySelectorAll('[data-gallery-source]').forEach((button) => {
+    button.setAttribute('aria-checked', mainState.sources[button.dataset.gallerySource] === false ? 'false' : 'true');
+  });
+  document.querySelectorAll('[data-gallery-album-type]').forEach((button) => {
+    button.setAttribute('aria-pressed', mainState.albumTypes.includes(button.dataset.galleryAlbumType) ? 'true' : 'false');
+    button.disabled = true;
+    button.setAttribute('aria-disabled', 'true');
+  });
+  document.querySelectorAll('[data-gallery-view-choice]').forEach((button) => {
+    button.classList.toggle('is-active', button.dataset.galleryViewChoice === mainState.view);
+  });
+  const preferenceArtist = typeof getCurrentGalleryPreferenceArtist === 'function'
+    ? getCurrentGalleryPreferenceArtist()
+    : String(state.view.selected_artist || '').trim();
+  document.querySelectorAll('[data-toggle-combine-similar-artists="1"]').forEach((button) => {
+    const checked = Boolean(preferenceArtist)
+      && typeof getCombineSimilarArtistsPreference === 'function'
+      && getCombineSimilarArtistsPreference(preferenceArtist);
+    button.setAttribute('aria-checked', checked ? 'true' : 'false');
+    button.disabled = !preferenceArtist;
+  });
+  document.querySelectorAll('[data-open-non-album-tracks]').forEach((button) => {
+    const enabled = getVisibleNonAlbumTracks().length > 0;
+    button.disabled = !enabled;
+    button.setAttribute('aria-disabled', enabled ? 'false' : 'true');
+  });
+  const viewCluster = document.querySelector('[data-gallery-view-cluster]');
+  if (viewCluster) {
+    viewCluster.querySelectorAll('[data-gallery-view-choice]').forEach(button => {
+      button.dataset.actionValue = button.dataset.galleryViewChoice;
+      button.removeAttribute('data-gallery-bar-action');
+      button.removeAttribute('data-gallery-bar-action');
+    });
+    UnfoldingActionButton.mount(viewCluster, {
+      label: 'Gallery view',
+      onSelect: view => transitionGalleryMain({ type: 'set-view', view }),
+    }).select(mainState.view);
+  }
+}
+
+function buildGalleryFamilyPanelBody() {
+  const mainState = ensureGalleryMainState();
+  const panelModel = getGalleryFamilyPanelModel();
+  const albumCounts = new Map(panelModel.groups.map((group) => [
+    String(group.artist_display || group.artist || '').trim(),
+    Array.isArray(group.albums) ? group.albums.length : 0,
+  ]));
+  const primaryArtist = String(state.view.selected_artist || '').trim();
+  const allPanelGroups = getGalleryFamilyPanelGroups();
+  const primaryGroup = allPanelGroups.find((group) => galleryMainGroupArtist(group) === primaryArtist);
+  const relatedGroups = allPanelGroups.filter((group) => galleryMainGroupArtist(group) !== primaryArtist);
+  const relatedNames = relatedGroups.map((group) => galleryMainGroupArtist(group));
+  const rememberedOrder = Array.isArray(mainState.familyArtistOrder) ? mainState.familyArtistOrder : [];
+  const orderedNames = [
+    ...rememberedOrder.filter((artist) => relatedNames.includes(artist)),
+    ...relatedNames.filter((artist) => !rememberedOrder.includes(artist)),
+  ];
+  const groupsByArtist = new Map(relatedGroups.map((group) => [galleryMainGroupArtist(group), group]));
+  const panelGroups = [...(primaryGroup ? [primaryGroup] : []), ...orderedNames.map((artist) => groupsByArtist.get(artist)).filter(Boolean)];
+  return panelGroups.map((group, index) => {
+    const artist = String(group.artist_display || group.artist || 'Artist');
+    const count = albumCounts.get(artist) || 0;
+    const active = mainState.familySelectionExplicit !== true || mainState.familyArtists.includes(artist);
+    const primary = artist === primaryArtist;
+    const albums = Array.isArray(group.albums) ? group.albums : [];
+    const album = albums.find(albumHasDisplayCover) || albums[0];
+    const artwork = album
+      ? buildUtilityAlbumArtbox(album, { label: `${artist} album artwork`, deferPreview: true })
+      : buildAlbumArtboxHtml({ state: 'empty', label: `${artist} album artwork` });
+    const divider = primaryGroup && relatedGroups.length > 0 && index === 1
+      ? '<div class="artist-family-panel__primary-divider gallery-divider__line" role="separator" aria-label="Related artists"></div>'
+      : '';
+    return `${divider}${buildFilterPillHtml({
+      label: artist,
+      count,
+      selected: active,
+      className: 'artist-family-panel__artist',
+      modifierClassName: primary ? 'is-primary' : '',
+      partClasses: {
+        marker: 'artist-family-panel__marker',
+        artwork: 'artist-family-panel__artwork',
+        label: 'artist-family-panel__name',
+        count: 'artist-family-panel__count',
+      },
+      artworkHtml: artwork,
+      draggable: false,
+      dataAttributes: { 'gallery-family-artist': artist },
+    })}`;
+  }).join('');
+}
+
+function renderGalleryFamilyPanelBody(panelBody, html) {
+  const focused = document.activeElement;
+  const focusedArtist = panelBody.contains(focused) ? focused?.dataset?.galleryFamilyArtist : null;
+  const scrollTop = panelBody.scrollTop;
+  panelBody.innerHTML = html;
+  if (typeof virtualGrid !== 'undefined') virtualGrid.activateGalleryCoverImages(panelBody);
+  panelBody.scrollTop = scrollTop;
+  if (focusedArtist) {
+    const replacement = Array.from(panelBody.querySelectorAll('[data-gallery-family-artist]'))
+      .find(button => button.dataset.galleryFamilyArtist === focusedArtist);
+    replacement?.focus({ preventScroll: true });
+  }
+}
+
+function syncGalleryBarSearchVisibility() {
+  const bar = document.querySelector?.('[data-gallery-bar]');
+  if (!bar) return;
+  const draftQuery = String(state.ui?.searchDraftQuery || '').trim();
+  const committedQuery = String(state.view?.query || '').trim();
+  const selectedArtist = String(state.view?.selected_artist || '').trim();
+  bar.hidden = selectedArtist
+    ? draftQuery !== committedQuery
+    : Boolean(draftQuery || committedQuery);
+}
+
+function updateGalleryMainChrome() {
+  const bar = document.querySelector('[data-gallery-bar]');
+  const scroll = document.getElementById('albums-scroll');
+  if (!bar || !scroll) return;
+  syncGalleryBarSearchVisibility();
+  updateGalleryMainControls();
+  const model = getFilteredGalleryMainModel();
+  const primaryArtist = String(state.view.selected_artist || '').trim();
+  const sections = getGalleryMainContextSections();
+  const hasFamily = hasGalleryArtistFamily();
+  const summaryTotals = resolveGallerySummaryTotals(state.view, model.totals, state.gallery.mainState, model.groups);
+  const context = resolveGalleryBarContext({
+    scrollTop: scroll.scrollTop,
+    galleryBarBottom: bar.offsetHeight + 12,
+    primaryArtist,
+    artistCount: summaryTotals.artistCount,
+    albumCount: summaryTotals.albumCount,
+    groups: sections,
+    hasFamily,
+  });
+  const name = bar.querySelector('[data-gallery-context-name]');
+  const summary = bar.querySelector('[data-gallery-context-summary]');
+  const oldInfo = bar.querySelector('[data-artist-info-trigger]');
+  const inlineDivider = bar.querySelector('[data-gallery-context-artist-divider]');
+  const inlineTotal = bar.querySelector('[data-gallery-context-inline-total]');
+  if (bar.dataset) bar.dataset.galleryContextKind = context.kind;
+  summary.hidden = false;
+  if (inlineDivider) inlineDivider.hidden = true;
+  if (inlineTotal) {
+    inlineTotal.hidden = true;
+    inlineTotal.textContent = '';
+  }
+  if (context.kind === 'gallery' || context.kind === 'family') {
+    name.textContent = context.kind === 'gallery' ? 'Gallery' : `${context.primaryArtist} family`;
+    summary.textContent = `${galleryMainPlural(context.artistCount, 'artist')} · ${galleryMainPlural(context.albumCount, 'album')}`;
+    oldInfo?.remove();
+  } else {
+    name.textContent = context.artist;
+    summary.textContent = galleryMainPlural(context.albumCount, 'album');
+    if (!oldInfo) name.insertAdjacentHTML('afterend', `<button class="gallery-info-button" type="button" data-artist-info-trigger="1" data-artist="${escapeHtml(context.artist)}" aria-label="Information about ${escapeHtml(context.artist)}" aria-expanded="false">${buildGalleryInfoGlyphHtml()}</button>`);
+    else {
+      oldInfo.dataset.artist = context.artist;
+      oldInfo.setAttribute('aria-label', `Information about ${context.artist}`);
+    }
+  }
+  const panelBody = document.querySelector('[data-gallery-family-panel-body]');
+  if (panelBody) {
+    const panelSignature = JSON.stringify({
+      filters: ensureGalleryMainState(),
+      groups: getGalleryFamilyPanelGroups().map((group) => [group.artist_display || group.artist, group.albums?.length || 0]),
+    });
+    if (panelBody.dataset.galleryRenderSignature !== panelSignature) {
+      renderGalleryFamilyPanelBody(panelBody, buildGalleryFamilyPanelBody());
+      panelBody.dataset.galleryRenderSignature = panelSignature;
+    }
+  }
+  const panelTitle = document.querySelector('[data-gallery-family-panel-title]');
+  if (panelTitle) {
+    panelTitle.textContent = primaryArtist ? `${primaryArtist} Family` : 'Artist Family';
+    panelTitle.title = panelTitle.textContent;
+  }
+  const panelTotal = document.querySelector('[data-gallery-family-panel-total]');
+  if (panelTotal) panelTotal.textContent = galleryMainPlural(getGalleryFamilyPanelModel().totals.albumCount, 'album');
+  const panel = document.querySelector('[data-artist-family-panel]');
+  if (panel) {
+    panel.style.top = `${Math.round(bar.getBoundingClientRect().bottom)}px`;
+    const active = galleryMainSurfaceController?.current?.();
+    if (active?.surface === panel) positionArtistFamilyPanelEnvelope(panel, active.anchor);
+  }
+}
+
+function transitionGalleryMain(action) {
+  const previousView = ensureGalleryMainState().view;
+  const nextState = applyGalleryClientTransition({ state: state.gallery.mainState, action, location: window.location, history: window.history });
+  // Loose-track payloads have no per-track source provenance. Refresh their
+  // authoritative scope on both hide and show; scope mismatch blocks stale edits.
+  const hydrationCategories = action.type === 'toggle-source'
+    ? activeGallerySourceCategories(nextState) : null;
+  state.gallery.mainState = nextState;
+  if (previousView !== state.gallery.mainState.view && virtualGrid) virtualGrid.lastKey = '';
+  renderArtistGroups({ preserveScroll: true, preserveAbsoluteScroll: true });
+  if (hydrationCategories?.length && typeof buildApiUrl === 'function' && typeof fetchAndRender === 'function') {
+    const hydrationUrl = buildApiUrl(buildGallerySourceHydrationView({
+      currentView: state.view,
+      hydrationCategories,
+    }), { omitSidebar: true });
+    void fetchAndRender(hydrationUrl, false, {
+      preserveScroll: true,
+      preserveAbsoluteScroll: true,
+      preserveGalleryOptionsMenu: true,
+      preserveSidebarState: true,
+      preserveGalleryBrowseLocationState: true,
+      skipPendingViewTransition: true,
+    });
+  }
+}
+
+function openGalleryArtistInfo(anchor) {
+  const artist = String(anchor.dataset.artist || '').trim();
+  const group = getGalleryMainGroups().find((candidate) => String(candidate.artist_display || candidate.artist || '') === artist) || {};
+  const overlay = document.querySelector('[data-artist-info-overlay]');
+  if (!overlay) return;
+  const { summary, imageUrl, wikipediaUrl, canReadMore } = resolveGalleryArtistInfo(group, artist);
+  overlay.classList.remove('is-expanded');
+  overlay.setAttribute('aria-label', `Information about ${artist}`);
+  overlay.innerHTML = `<header>${imageUrl ? `<img class="artist-info-overlay__image" src="${escapeHtml(imageUrl)}" alt="" width="176" height="176" decoding="async" fetchpriority="high">` : '<div class="artist-info-overlay__image artist-info-overlay__image--empty" aria-hidden="true">♪</div>'}<div><span>Artist</span><h2>${escapeHtml(artist)}</h2></div></header><div class="artist-info-overlay__body gallery-scrollbar"><p data-artist-info-summary>${escapeHtml(summary)}</p><div class="artist-info-overlay__links">${canReadMore ? '<button type="button" data-artist-info-read-more aria-expanded="false">Read more</button>' : ''}<button type="button" data-artist-info-full-page aria-disabled="true" disabled title="Artist pages are not available yet">Full page</button></div>${artist === 'Neal Morse' ? '<p class="artist-info-overlay__source">Biography adapted from Wikipedia.</p>' : ''}</div>`;
+  openGalleryMainSurface(`artist:${artist}`, anchor, overlay, 'left');
+}
+
+function handleGalleryMainClick(event) {
+  const readMore = event.target.closest?.('[data-artist-info-read-more]');
+  if (readMore) {
+    event.preventDefault();
+    const expanded = readMore.getAttribute('aria-expanded') === 'true';
+    readMore.setAttribute('aria-expanded', expanded ? 'false' : 'true');
+    readMore.textContent = expanded ? 'Read more' : 'Read less';
+    const panel = readMore.closest('.artist-info-overlay');
+    panel?.classList.toggle('is-expanded', !expanded);
+    const active = galleryMainSurfaceController?.current?.();
+    if (active?.surface === panel) positionGalleryAnchoredSurface(panel, active.anchor, 'left');
+    readMore.closest('.artist-info-overlay')?.querySelector('[data-artist-info-summary]')?.classList.toggle('is-expanded', !expanded);
+    return true;
+  }
+  const source = event.target.closest?.('[data-gallery-source]');
+  if (source) { event.preventDefault(); transitionGalleryMain({ type: 'toggle-source', source: source.dataset.gallerySource }); return true; }
+  const type = event.target.closest?.('[data-gallery-album-type]');
+  if (type) { event.preventDefault(); return true; }
+  const familyArtist = event.target.closest?.('[data-gallery-family-artist]');
+  if (familyArtist) {
+    event.preventDefault();
+    transitionGalleryMain({
+      type: 'toggle-family-artist',
+      artist: familyArtist.dataset.galleryFamilyArtist,
+      availableArtists: getGalleryFamilyPanelGroups().map((group) => galleryMainGroupArtist(group)).filter(Boolean),
+    });
+    return true;
+  }
+  const info = event.target.closest?.('[data-artist-info-trigger]');
+  if (info) { event.preventDefault(); openGalleryArtistInfo(info); return true; }
+  const sourcesAnchor = event.target.closest?.('[data-gallery-sources-anchor]');
+  if (sourcesAnchor) { event.preventDefault(); openGalleryMainSurface('sources', sourcesAnchor, document.getElementById('gallery-sources-menu')); return true; }
+  const familyAnchor = event.target.closest?.('[data-gallery-bar-action="artist-family"]');
+  if (familyAnchor) { event.preventDefault(); openGalleryMainSurface('artist-family', familyAnchor, document.getElementById('artist-family-panel')); return true; }
+  const typeAnchor = event.target.closest?.('[data-gallery-bar-action="album-types"]');
+  if (typeAnchor) { event.preventDefault(); openGalleryMainSurface('album-types', typeAnchor, document.getElementById('gallery-album-types-menu')); return true; }
+  const nonAlbum = event.target.closest?.('[data-open-non-album-tracks]');
+  if (nonAlbum) {
+    event.preventDefault();
+    if (!nonAlbum.disabled && nonAlbum.getAttribute('aria-disabled') !== 'true') openNonAlbumModal();
+    return true;
+  }
+  if (event.target.closest?.('[data-gallery-customize-preview]')) { event.preventDefault(); return true; }
+  const active = galleryMainSurfaceController?.current?.();
+  if (active && !active.surface.contains(event.target) && !active.anchor.contains(event.target)) closeGalleryMainSurface(true);
+  return false;
+}
+
+function initGalleryMain() {
+  if (typeof installPanelSelectionBoundary === 'function') installPanelSelectionBoundary();
+  ensureGalleryMainState();
+  galleryMainSurfaceController = createAnchoredSurfaceController();
+  const panel = document.querySelector('[data-artist-family-panel]');
+  const player = document.querySelector('[data-shell-slot="bottom_player"]');
+  galleryFamilyPanelObserver?.disconnect?.();
+  galleryFamilyPanelObserver = observeArtistFamilyPanelBounds({ panel, player });
+  const scroll = document.getElementById('albums-scroll');
+  scroll?.addEventListener('scroll', () => {
+    const active = galleryMainSurfaceController?.current?.();
+    if (active?.key?.startsWith?.('artist:') && active.openingScrollPosition
+        && (scroll.scrollTop !== active.openingScrollPosition.top
+          || scroll.scrollLeft !== active.openingScrollPosition.left)) closeGalleryMainSurface(false);
+    if (galleryMainScrollFrame) return;
+    galleryMainScrollFrame = requestAnimationFrame(() => { galleryMainScrollFrame = 0; updateGalleryMainChrome(); });
+  }, { passive: true });
+  window.addEventListener('resize', () => {
+    updateGalleryMainChrome();
+    const active = galleryMainSurfaceController?.current?.();
+    if (active?.surface?.matches?.('.gallery-anchored-menu, .artist-info-overlay')) positionGalleryAnchoredSurface(active.surface, active.anchor, active.key.startsWith('artist:') ? 'left' : 'right');
+    if (active?.surface?.matches?.('.artist-family-panel')) positionArtistFamilyPanelEnvelope(active.surface, active.anchor);
+    if (active?.key === 'search-suggestions') positionSearchSuggestionsSurface(active.surface);
+  });
+  if (!galleryFamilyDragHandlersBound) {
+    galleryFamilyDragHandlersBound = true;
+    const prefetchedPortraits = new Set();
+    const prefetchPortrait = event => {
+      const anchor = event.target.closest?.('[data-artist-info-trigger]');
+      if (!anchor) return;
+      const artist = anchor.dataset.artist;
+      const group = getGalleryMainGroups().find(candidate => String(candidate.artist_display || candidate.artist || '') === artist) || {};
+      const { imageUrl } = resolveGalleryArtistInfo(group, artist);
+      if (!imageUrl || prefetchedPortraits.has(imageUrl)) return;
+      prefetchedPortraits.add(imageUrl);
+      const image = new Image();
+      image.decoding = 'async';
+      image.src = imageUrl;
+    };
+    document.addEventListener('pointerover', prefetchPortrait);
+    document.addEventListener('focusin', prefetchPortrait);
+
+    const paint = createGalleryFamilyPaintController((artist) => {
+      transitionGalleryMain({
+        type: 'toggle-family-artist', artist,
+        availableArtists: getGalleryFamilyPanelGroups().map(galleryMainGroupArtist).filter(Boolean),
+      });
+    });
+    let pointerId = null;
+    let suppressClick = false;
+    const pillAt = event => document.elementFromPoint(event.clientX, event.clientY)?.closest?.('[data-gallery-family-artist]');
+    const visit = pill => {
+      if (pill) paint.visit(pill.dataset.galleryFamilyArtist, pill.getAttribute('aria-pressed') === 'true');
+    };
+    document.addEventListener('pointerdown', event => {
+      suppressClick = false;
+      if (event.button !== 0 || event.pointerType !== 'mouse') return;
+      const pill = event.target.closest?.('[data-gallery-family-artist]');
+      if (!pill) return;
+      event.preventDefault();
+      pointerId = event.pointerId;
+      suppressClick = true;
+      pill.focus({ preventScroll: true });
+      paint.begin(pill.dataset.galleryFamilyArtist, pill.getAttribute('aria-pressed') === 'true');
+    });
+    document.addEventListener('pointermove', event => {
+      if (pointerId !== event.pointerId) return;
+      if (!(event.buttons & 1)) { pointerId = null; paint.end(); return; }
+      visit(pillAt(event));
+    });
+    const finish = event => {
+      if (pointerId !== event.pointerId) return;
+      if (event.type === 'pointerup') visit(pillAt(event));
+      pointerId = null;
+      paint.end();
+    };
+    document.addEventListener('pointerup', finish);
+    document.addEventListener('pointercancel', finish);
+    window.addEventListener('blur', () => { pointerId = null; paint.end(); });
+    document.addEventListener('click', event => {
+      if (!suppressClick || event.detail === 0) return;
+      suppressClick = false;
+      event.preventDefault();
+      event.stopImmediatePropagation();
+    }, true);
+  }
+  document.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape' && galleryMainSurfaceController?.current?.()) {
+      event.preventDefault();
+      closeGalleryMainSurface(true);
+    }
+  });
+  const recentSearch = document.getElementById('recent-search-popover');
+  if (recentSearch) recentSearch.dataset.anchoredSurface = 'search-suggestions';
+  updateGalleryMainChrome();
+}
+
+function createGalleryFamilyPaintController(toggle) {
+  let selected = null;
+  const visited = new Set();
+  function visit(artist, currentSelected) {
+    if (selected === null || !artist || visited.has(artist)) return;
+    visited.add(artist);
+    if (currentSelected !== selected) toggle(artist);
+  }
+  return {
+    begin(artist, currentSelected) {
+      visited.clear(); selected = !currentSelected; visit(artist, currentSelected);
+    },
+    visit,
+    end() { selected = null; visited.clear(); },
+  };
+}
+
+// END js/runtime/gallery-main-interactions.js
 
 // BEGIN js/runtime/compact-player-helpers.js
 
@@ -4178,6 +6157,64 @@ function persistCompactPlayerMode(storage, mode) {
 
 function normalizeCompactPlayerStyle(value) {
   return value === 'floating' ? 'floating' : 'docked';
+}
+
+function normalizeDockedCompactPlayerBehavior(value) {
+  return ['follow_sidebar', 'float_on_collapse', 'artbox', 'stay_docked'].includes(value) ? value : 'follow_sidebar';
+}
+
+function resolveCompactPlayerPresentation({ eligible, mode, style, behavior, artistTreeFolded } = {}) {
+  if (!eligible || mode !== 'compact') return 'expanded';
+  if (normalizeCompactPlayerStyle(style) === 'floating') return 'floating';
+  const dockBehavior = normalizeDockedCompactPlayerBehavior(behavior);
+  if (!artistTreeFolded || dockBehavior === 'stay_docked') return 'docked';
+  if (dockBehavior === 'float_on_collapse') return 'floating';
+  return dockBehavior === 'artbox' ? 'rail_artbox' : 'rail_play';
+}
+
+function resolveCompactPlayerMotion({ speed, reducedMotion } = {}) {
+  return reducedMotion ? { durationMs: 1, hoverDurationMs: 1 }
+    : { durationMs: speed === 'slow' ? 1400 : 420, hoverDurationMs: 300 };
+}
+
+function shouldDetachCompactPlayerForOverlay({ presentation, overlayActive } = {}) {
+  return Boolean(overlayActive) && ['docked', 'rail_play', 'rail_artbox'].includes(presentation);
+}
+
+function resolveCompactPlayerMetadataRevealDelay({ presentation, speed, reducedMotion } = {}) {
+  if (presentation === 'rail_artbox') return 700;
+  if (presentation !== 'rail_play') return null;
+  return resolveCompactPlayerMotion({ speed, reducedMotion }).durationMs + 700;
+}
+
+function buildCompactPlayerMetadataSummary(track) {
+  const artist = String(track?.artist || '').trim();
+  const title = String(track?.title || track?.name || '').trim();
+  const album = String(track?.album || '').trim();
+  const song = artist && title ? `${artist} - ${title}` : artist || title;
+  return song && album ? `${song} / ${album}` : song || album;
+}
+
+function resolveCompactPlayerMetadataRowMotion({ scrollWidth, clientWidth } = {}) {
+  const distance = Math.max(0, Math.ceil((Number(scrollWidth) || 0) - (Number(clientWidth) || 0)));
+  if (distance <= 1) return { overflowing: false, distance: 0, durationMs: 0 };
+  return {
+    overflowing: true,
+    distance,
+    durationMs: Math.max(3200, Math.round(distance * 24 + 1800)),
+  };
+}
+
+function useCompactPlayerRailMode({ style, behavior, artistTreeFolded } = {}) {
+  return normalizeCompactPlayerStyle(style) === 'docked'
+    && normalizeDockedCompactPlayerBehavior(behavior) === 'follow_sidebar'
+    && artistTreeFolded === true;
+}
+
+function canDragStayDockedCompactPlayer({ presentation, behavior, artistTreeFolded } = {}) {
+  return presentation === 'docked'
+    && normalizeDockedCompactPlayerBehavior(behavior) === 'stay_docked'
+    && artistTreeFolded === true;
 }
 
 function didCompactPlayerDrag({ startX, startY, currentX, currentY, threshold = 6 } = {}) {
@@ -4231,6 +6268,15 @@ if (typeof module !== 'undefined' && module.exports) module.exports = {
   resolveCompactPlayerMode,
   persistCompactPlayerMode,
   normalizeCompactPlayerStyle,
+  normalizeDockedCompactPlayerBehavior,
+  canDragStayDockedCompactPlayer,
+  useCompactPlayerRailMode,
+  resolveCompactPlayerPresentation,
+  shouldDetachCompactPlayerForOverlay,
+  resolveCompactPlayerMotion,
+  resolveCompactPlayerMetadataRevealDelay,
+  buildCompactPlayerMetadataSummary,
+  resolveCompactPlayerMetadataRowMotion,
   didCompactPlayerDrag,
   clampCompactPlayerPosition,
   createCompactPlayerSessionPosition,
@@ -4591,6 +6637,11 @@ function closeStreamingContinuityRole(reason, { releaseWorklet = true } = {}) {
         type: 'drop-continuity',
         generation: continuity.generation,
         streamId: continuity.streamId,
+      });
+      engine.node.port.postMessage({
+        type: 'expect-continuity',
+        generation: continuity.generation,
+        active: false,
       });
     } else {
       engine.node.port.postMessage({
@@ -5278,6 +7329,7 @@ function handleStreamingWorkletMessage(message) {
           outgoingTrackPath,
           incomingTrackPath,
           outgoingPlaybackSnapshot,
+          incomingListenSession: continuity.measuredListenSession || null,
           renderedFrame: message.renderedFrame,
           continuityKind: promotedLoop?.kind || 'queued-next',
         }), 'boundary-facade-error');
@@ -5326,6 +7378,16 @@ function handleStreamingWorkletMessage(message) {
         || !Number.isInteger(message.timelineFrame) || message.timelineFrame < 0
         || current.endedNotified) {
       engine.diagnostics.staleMessages += 1;
+      return;
+    }
+    const pendingReplacement = engine.pendingSeek;
+    if (pendingReplacement?.kind === 'replacement'
+        && pendingReplacement.generation === message.generation
+        && pendingReplacement.currentStreamId === current.streamId
+        && pendingReplacement.streamId === engine.roles.continuity?.streamId) {
+      if (!engine.snapshot.paused) {
+        engine.node.port.postMessage({ type: 'play', generation: engine.generation });
+      }
       return;
     }
     current.endedNotified = true;
@@ -5400,12 +7462,16 @@ function handleStreamingWorkletMessage(message) {
   }
   if (message.type === 'underrun') {
     engine.diagnostics.underruns += 1;
+    if (typeof breakMeasuredListenSegment === 'function') breakMeasuredListenSegment(roleState.measuredListenSession);
     return;
   }
   if (message.type === 'consumed' && streamingWireRoleAccepted(roleState, message.role)
       && Number.isInteger(message.frames) && message.frames >= 0
       && Number.isInteger(message.bufferedFrames) && message.bufferedFrames >= 0) {
     recordStreamingRenderedPcmEvidence(roleState, message);
+    if (typeof recordMeasuredStreamingFrames === 'function') {
+      recordMeasuredStreamingFrames(roleState, message, Number(engine.context?.sampleRate) || STREAMING_SAMPLE_RATE);
+    }
     const capacityFrames = streamingRoleCapacityFrames(roleState);
     const reconciledBufferedFrames = message.frames === 0
       ? message.bufferedFrames
@@ -6030,6 +8096,13 @@ async function scheduleStreamingContinuity(track, options = {}) {
   const startFrame = Math.round(normalized.startSeconds * STREAMING_SAMPLE_RATE);
   const continuity = openStreamingRole('continuity', track, startFrame, normalized);
   if (!continuity) return null;
+  if (normalized.kind === 'queued-next') {
+    engine.node.port.postMessage({
+      type: 'expect-continuity',
+      generation: engine.generation,
+      active: true,
+    });
+  }
   if (normalized.kind !== 'queued-next') {
     engine.loopContinuity = {
       ...normalized,
@@ -6252,6 +8325,8 @@ Object.defineProperty(window, '__ALBUM_HAVEN_STREAMING_DIAGNOSTICS__', {
 // BEGIN js/runtime/shell-navigation-drawer.js
 
 const MOBILE_ARTISTS_DRAWER_MEDIA_QUERY = '(max-width: 900px)';
+const ARTIST_TREE_SETTLED_EVENT = 'album-haven:artist-tree-settled';
+let cancelPendingArtistTreeResize = null;
 
 function isArtistsDrawerElement(value) {
   return Boolean(
@@ -6267,6 +8342,18 @@ function getArtistsDrawerElements() {
     button: document.getElementById('artists-drawer-button'),
     rail: document.getElementById('shell-navigation-rail'),
     backdrop: document.getElementById('shell-navigation-rail-backdrop'),
+  };
+}
+
+function getArtistTreeFoldElements() {
+  return {
+    shell: document.getElementById('app-shell'),
+    button: document.getElementById('artist-tree-fold-button'),
+    navigationButton: document.getElementById('artist-tree-navigation-button'),
+    expandedTree: document.getElementById('artist-tree-expanded'),
+    compactNavigation: document.getElementById('shell-navigation-compact'),
+    rail: document.getElementById('shell-navigation-rail'),
+    list: document.getElementById('sidebar-list'),
   };
 }
 
@@ -6313,6 +8400,113 @@ function syncArtistsDrawerVisibility() {
   }
 
   document.body?.classList?.toggle('artists-drawer-open', isOpen);
+  syncArtistTreeFoldVisibility();
+}
+
+function syncArtistTreeFoldVisibility(options = {}) {
+  const {
+    shell, button, navigationButton, expandedTree, compactNavigation, rail, list,
+  } = getArtistTreeFoldElements();
+  const canFold = !isArtistsDrawerMobileViewport() && canUseArtistsDrawerForCurrentView();
+  if (state.ui.artistTreeFolded === null || state.ui.artistTreeFolded === undefined) {
+    const savedFolded = state.ui.shellLayoutPreferences?.artistTreeFolded;
+    state.ui.artistTreeFolded = typeof savedFolded === 'boolean'
+      ? savedFolded
+      : rail?.dataset?.shellDefaultCollapsed === 'true';
+  }
+  const isFolded = Boolean(canFold && state.ui.artistTreeFolded);
+  const isTransitioning = Boolean(canFold && options.transitioning);
+  const isExpanding = Boolean(isTransitioning && !isFolded);
+  shell?.classList?.toggle('is-artist-tree-folded', isFolded);
+  rail?.classList?.toggle('is-folded', isFolded);
+  rail?.classList?.toggle('is-transitioning', isTransitioning);
+  rail?.classList?.toggle('is-expanding', isExpanding);
+  if (button) {
+    button.hidden = !canFold || isFolded;
+    button.setAttribute('aria-expanded', isFolded ? 'false' : 'true');
+    button.setAttribute('aria-label', 'Collapse Artist Tree');
+    button.setAttribute('title', 'Collapse Artist Tree');
+  }
+  if (navigationButton) {
+    navigationButton.hidden = !(isFolded || isExpanding);
+    navigationButton.setAttribute('aria-expanded', isFolded ? 'false' : 'true');
+  }
+  if (expandedTree) expandedTree.hidden = isFolded;
+  if (compactNavigation) compactNavigation.hidden = !(isFolded || isExpanding);
+  if (list) list.hidden = isFolded;
+  document.documentElement?.style?.setProperty('--compact-rail-width', isFolded ? '64px' : '240px');
+  if (typeof syncDockedCompactPresentation === 'function') syncDockedCompactPresentation();
+  return isFolded;
+}
+
+function parseCssTimeMs(value) {
+  const text = String(value || '').trim();
+  const amount = Number.parseFloat(text);
+  if (!Number.isFinite(amount)) return 0;
+  return text.endsWith('ms') ? amount : text.endsWith('s') ? amount * 1000 : 0;
+}
+
+function scheduleArtistTreeResizeAfterTransition(onSettled = null) {
+  cancelPendingArtistTreeResize?.();
+
+  const root = document.documentElement;
+  let fallbackTimer = null;
+  let settled = false;
+  const cleanup = () => {
+    root?.removeEventListener?.('transitionend', handleTransitionEnd);
+    if (fallbackTimer !== null) clearTimeout(fallbackTimer);
+    fallbackTimer = null;
+    if (cancelPendingArtistTreeResize === cleanup) cancelPendingArtistTreeResize = null;
+  };
+  const finish = () => {
+    if (settled) return;
+    settled = true;
+    cleanup();
+    onSettled?.();
+    window.dispatchEvent(new CustomEvent(ARTIST_TREE_SETTLED_EVENT, {
+      detail: { folded: Boolean(state.ui.artistTreeFolded) },
+    }));
+  };
+  const handleTransitionEnd = (event) => {
+    if (event.target === root && event.propertyName === '--compact-rail-width') finish();
+  };
+
+  root?.addEventListener?.('transitionend', handleTransitionEnd);
+  const styles = typeof window.getComputedStyle === 'function' ? window.getComputedStyle(root) : null;
+  const duration = parseCssTimeMs(styles?.getPropertyValue?.('--compact-motion-duration'));
+  fallbackTimer = setTimeout(finish, duration + 50);
+  cancelPendingArtistTreeResize = cleanup;
+}
+
+function toggleArtistTreeFold() {
+  if (isArtistsDrawerMobileViewport() || !canUseArtistsDrawerForCurrentView()) return false;
+  const activeGallerySurface = typeof galleryMainSurfaceController !== 'undefined'
+    ? galleryMainSurfaceController?.current?.()
+    : null;
+  if (activeGallerySurface?.key?.startsWith?.('artist:')
+    && typeof closeGalleryMainSurface === 'function') {
+    closeGalleryMainSurface(false);
+  }
+  const { button, navigationButton, rail } = getArtistTreeFoldElements();
+  const moveFocusWithinRail = Boolean(rail?.contains?.(document.activeElement));
+  const wasFolded = Boolean(state.ui.artistTreeFolded);
+  state.ui.artistTreeFolded = !wasFolded;
+  state.ui.shellLayoutPreferences = {
+    ...(state.ui.shellLayoutPreferences || {}),
+    artistTreeFolded: state.ui.artistTreeFolded,
+  };
+  if (typeof persistShellLayoutPreferences === 'function') persistShellLayoutPreferences();
+  const isFolded = syncArtistTreeFoldVisibility({ transitioning: true });
+  if (moveFocusWithinRail && isFolded) {
+    navigationButton?.focus?.();
+  }
+  const settleArtistTree = () => {
+    if (Boolean(state.ui.artistTreeFolded) !== isFolded) return;
+    syncArtistTreeFoldVisibility();
+    if (moveFocusWithinRail && !isFolded) button?.focus?.();
+  };
+  scheduleArtistTreeResizeAfterTransition(settleArtistTree);
+  return isFolded;
 }
 
 function openArtistsDrawer() {
@@ -6343,6 +8537,13 @@ function toggleArtistsDrawer() {
 }
 
 function handleArtistsDrawerClick(event) {
+  const foldButton = event.target.closest('[data-toggle-artist-tree-fold="1"]');
+  if (foldButton) {
+    event.preventDefault();
+    toggleArtistTreeFold();
+    return true;
+  }
+
   const toggleButton = event.target.closest('[data-toggle-artists-drawer="1"]');
   if (toggleButton) {
     event.preventDefault();
@@ -6392,22 +8593,28 @@ function attachAccountMenu(component) {
   const enabledItems = () => Array.from(menu.querySelectorAll('[role="menuitem"]')).filter((item) => !disabled(item));
   const close = (restoreFocus = false) => {
     menu.hidden = true;
+    if (typeof clearTriggerAnchor === 'function') clearTriggerAnchor(menu);
     trigger.setAttribute('aria-expanded', 'false');
     if (restoreFocus) trigger.focus();
   };
-  const open = (last = false) => {
+  const open = (last = false, focusItem = true) => {
+    if (typeof activateTriggerSurface === 'function') activateTriggerSurface(menu, () => close(false));
     menu.hidden = false;
     trigger.setAttribute('aria-expanded', 'true');
+    if (typeof syncTriggerAnchor === 'function') syncTriggerAnchor(menu, trigger);
     const items = enabledItems();
-    (last ? items[items.length - 1] : items[0])?.focus();
+    if (focusItem) (last ? items[items.length - 1] : items[0])?.focus();
   };
+  globalThis.addEventListener?.('resize', () => {
+    if (!menu.hidden && typeof syncTriggerAnchor === 'function') syncTriggerAnchor(menu, trigger);
+  });
   const reject = (event) => {
     event.preventDefault();
     event.stopImmediatePropagation();
   };
   trigger.addEventListener('click', (event) => {
     event.preventDefault();
-    if (menu.hidden) open();
+    if (menu.hidden) open(false, event.detail === 0);
     else close(true);
   });
   menu.addEventListener('click', (event) => {
@@ -6462,7 +8669,7 @@ function attachAccountMenu(component) {
 
 const VIEWPORT_REFOCUS_SUPPRESSION_GRACE_MS = 400;
 const VIEWPORT_REFOCUS_HOVER_UNLOCK_COUNT = 2;
-const VIEWPORT_REFOCUS_EXEMPT_SELECTOR = '.global-player, #track-modal, #utility-modal, #cover-lookup-modal, #cover-lookup-delete-confirm-modal, #repair-confirm-modal, #repair-progress-overlay, #tag-editor-modal, #tag-edit-confirm-modal, #loop-delete-confirm-modal, #image-lightbox, #non-album-modal, #version-picker-modal, #cover-lookup-drawer, #gallery-options-menu, #album-card-context-menu, #status-context-menu, #track-modal-version-context-menu, #recent-search-popover';
+const VIEWPORT_REFOCUS_EXEMPT_SELECTOR = '.gallery-anchored-menu, .artist-info-overlay, .artist-family-panel, .account-menu-component, .account-menu, .global-player, #track-modal, #utility-modal, #cover-lookup-modal, #cover-lookup-delete-confirm-modal, #repair-confirm-modal, #repair-progress-overlay, #tag-editor-modal, #tag-edit-confirm-modal, #loop-delete-confirm-modal, #image-lightbox, #non-album-modal, #version-picker-modal, #cover-lookup-drawer, #gallery-options-menu, #album-card-context-menu, #status-context-menu, #track-modal-version-context-menu, #recent-search-popover';
 const VIEWPORT_REFOCUS_INTENT_SELECTOR = '.album-card, [data-album-key], [data-track-path], [data-version-context-key], .artist-link, .album-title-button, .button, .icon-button, .play-track-button, .gallery-options-menu-item, .related-chip, a, button, input, select, textarea, label';
 const COVER_LOOKUP_REFOCUS_GUARDED_SELECTOR = '[data-select-local-cover], [data-select-pasted-cover], [data-select-remote-cover]';
 
@@ -6546,6 +8753,10 @@ function handleViewportRefocusVisibilityChange() {
 }
 
 function suppressRefocusViewportInteraction(event) {
+  if (isViewportRefocusExemptTarget(getViewportRefocusEventTarget(event))) {
+    clearViewportRefocusSuppression();
+    return false;
+  }
   const now = Date.now();
   if (!isViewportRefocusSuppressionActive(now)) {
     return false;
@@ -6560,6 +8771,10 @@ function suppressRefocusViewportInteraction(event) {
 }
 
 function suppressRefocusViewportClick(event) {
+  if (isViewportRefocusExemptTarget(getViewportRefocusEventTarget(event))) {
+    clearViewportRefocusSuppression();
+    return false;
+  }
   const now = Date.now();
   if (now > Number(state.ui.suppressClickSequenceUntil || 0)) {
     return false;
@@ -6641,6 +8856,7 @@ function getDefaultShellLayoutPreferences() {
   return {
     contextualPaneWidthPx: 320,
     infoDrawerWidthPx: 360,
+    artistTreeFolded: null,
   };
 }
 
@@ -6693,6 +8909,9 @@ function normalizeShellLayoutPreferences(input = {}) {
       source.infoDrawerWidthPx,
       defaults.infoDrawerWidthPx,
     ),
+    artistTreeFolded: typeof source.artistTreeFolded === 'boolean'
+      ? source.artistTreeFolded
+      : defaults.artistTreeFolded,
   };
 }
 
@@ -7578,7 +9797,7 @@ function ensureVersionPickerModal() {
         <div class="version-picker-list" data-version-picker-list></div>
       </div>
       <div class="confirm-modal-actions version-picker-actions">
-        <button type="button" class="button version-picker-cancel" data-close-version-picker="1">Cancel</button>
+        <button type="button" class="button ui-button ui-button--quiet ui-button--medium version-picker-cancel" data-close-version-picker="1">Cancel</button>
         <button type="button" class="button version-picker-save" data-save-version-picker="1">Save</button>
       </div>
     </div>
@@ -7677,9 +9896,17 @@ function closeVersionPickerModal() {
 
 function getVisibleNonAlbumTracks() {
   const view = state.view;
+  const mainState = state.gallery?.mainState;
+  if (mainState) {
+    const activeSources = activeGallerySourceCategories(mainState);
+    const payloadSources = view.non_album_library_categories
+      || view.loaded_library_categories || view.visible_library_categories
+      || ['main_library', 'new_arrivals', 'hoard'];
+    if (!activeSources.length || !gallerySourceScopesEqual(activeSources, payloadSources)) return [];
+  }
   const tracks = Array.isArray(view.non_album_tracks) ? view.non_album_tracks : [];
   const selectedArtist = String(view.selected_artist || '').trim();
-  if (!selectedArtist && !String(view.query || '').trim()) return tracks;
+  if (!selectedArtist) return tracks;
   const artistKey = (value) => String(value || '').trim().toLocaleLowerCase();
   const artists = new Set([
     selectedArtist,
@@ -7687,10 +9914,27 @@ function getVisibleNonAlbumTracks() {
     ...(Array.isArray(view.artist_groups) ? view.artist_groups : [])
       .flatMap((group) => [group.artist, group.artist_display]),
   ].map(artistKey).filter(Boolean));
+  // Family filters carry the server's canonical/alias identities. Expand only
+  // the currently displayed family, since a retained root response can still
+  // contain filters for unrelated artists during navigation.
+  for (const filter of Array.isArray(view.artist_family_filters) ? view.artist_family_filters : []) {
+    const names = [filter?.display_name,
+      ...(Array.isArray(filter?.variation_names) ? filter.variation_names : [])]
+      .map(artistKey).filter(Boolean);
+    if (names.some((name) => artists.has(name))) names.forEach((name) => artists.add(name));
+  }
+  // Folder matching uses the search punctuation/word rules rather than exact
+  // artist identity (for example, "Family_Alias" and "Family Alias").
+  const folderKey = (value) => artistKey(value)
+    .replace(/ß/g, 'ss').replace(/ς/g, 'σ')
+    .replace(/['’]/g, '').replace(/[^\p{L}\p{N}]+/gu, ' ').trim()
+    .split(/\s+/).map((word) => word.length > 3 && word.endsWith('s') ? word.slice(0, -1) : word)
+    .join(' ');
+  const artistFolders = new Set([...artists].map(folderKey).filter(Boolean));
   return tracks.filter((track) => (
     artists.has(artistKey(track.album_artist || track.artist))
     || String(track.display_path || '').split(/[\\/]/).slice(0, -1)
-      .some((part) => artists.has(artistKey(part)))
+      .some((part) => artistFolders.has(folderKey(part)))
   ));
 }
 
@@ -7701,16 +9945,12 @@ function getNonAlbumMenuLabel() {
 function buildNonAlbumTrackRowsMarkup(items, startingIndex) {
   return items.map((item, offset) => {
     const rowIndex = startingIndex + offset + 1;
-    const src = `/track?path=${encodeURIComponent(item.path || '')}`;
     const duration = formatTrackDuration(item.duration_seconds);
     const trackPath = String(item.path || '');
     const playback = getPlayerPlaybackSnapshot();
     const isCurrentTrack = String(state.player.current?.path || '') === trackPath;
     const isActivelyPlaying = isCurrentTrack && !playback.paused && !playback.ended;
     const problematicAlbum = getProblematicAlbumForTrackPath(trackPath);
-    const utilityJump = problematicAlbum
-      ? `<button class="track-problem-link" type="button" data-open-track-problematic="1" data-track-path="${escapeHtml(trackPath)}" title="Open this track in Problematic Files" aria-label="Open this track in Problematic Files">!</button>`
-      : '';
     const displayPath = String(item.display_path || '').trim();
     const metadataTitle = String(item.title || '').trim();
     const filename = String(item.filename || trackPath.split(/[\\/]/).pop() || '').trim();
@@ -7718,32 +9958,26 @@ function buildNonAlbumTrackRowsMarkup(items, startingIndex) {
       ? metadataTitle
       : filename || 'Unknown track';
     const metadataArtist = String(item.artist || '').trim();
-    const artistMarkup = metadataArtist && metadataArtist.toLocaleLowerCase() !== 'unknown artist'
-      ? `<small class="non-album-track-artist">${escapeHtml(metadataArtist)}</small>`
+    const secondaryArtist = metadataArtist && metadataArtist.toLocaleLowerCase() !== 'unknown artist'
+      ? metadataArtist
       : '';
     return {
-      key: trackPath || `${rowIndex}`,
-      dataAttributes: {
-        'track-row-path': trackPath,
-        'non-album-row-index': rowIndex,
-      },
-      cells: {
-        control: `
-          <div class="non-album-track-control">
-            <span class="track-number">${rowIndex}.</span>
-            <button class="play-track-button" data-src="${src}" data-track-path="${escapeHtml(trackPath)}" data-track-title="${escapeHtml(title)}" data-track-artist="${escapeHtml(item.artist || '')}" data-track-album="" data-track-cover="" data-track-duration-seconds="${Number(item.duration_seconds) || 0}" type="button" aria-label="${isActivelyPlaying ? `Pause ${escapeHtml(title)}` : `Play ${escapeHtml(title)}`}">${isActivelyPlaying ? '&#x23F8;' : '&#x25B6;'}</button>
-          </div>
-        `,
-        track: `
-          <div class="non-album-track-cell">
-            <strong class="track-title">${escapeHtml(title)}</strong>
-            ${artistMarkup}
-          </div>
-          ${utilityJump}
-        `,
-        path: `<span class="non-album-track-path">${escapeHtml(displayPath || trackPath)}</span>`,
-      },
-      ariaSelected: isCurrentTrack,
+      path: trackPath,
+      title,
+      playbackTitle: title,
+      artist: String(item.artist || ''),
+      albumArtist: String(item.album_artist || ''),
+      album: '',
+      coverPath: '',
+      durationSeconds: Number(item.duration_seconds) || 0,
+      duration,
+      originalDuration: duration,
+      trackNumber: rowIndex,
+      secondaryArtist,
+      displayPath: displayPath || trackPath,
+      isCurrent: isCurrentTrack,
+      isPlaying: isActivelyPlaying,
+      isProblematic: Boolean(problematicAlbum),
     };
   });
 }
@@ -7755,7 +9989,7 @@ function buildNonAlbumTrackSectionsMarkup(items) {
     { key: 'other', title: 'Other', exceptionType: '' },
   ];
   let runningIndex = 0;
-  return sectionDefinitions.map((section) => {
+  const groups = sectionDefinitions.map((section) => {
     const sectionItems = items.filter((item) => (
       String(
         Object.prototype.hasOwnProperty.call(item || {}, 'exception_type')
@@ -7763,31 +9997,21 @@ function buildNonAlbumTrackSectionsMarkup(items) {
           : item.reason_label || '',
       ).trim() === section.exceptionType
     ));
-    if (!sectionItems.length) return '';
-    const rows = buildNonAlbumTrackRowsMarkup(sectionItems, runningIndex);
+    if (!sectionItems.length) return null;
+    const tracks = buildNonAlbumTrackRowsMarkup(sectionItems, runningIndex);
     runningIndex += sectionItems.length;
-    return `
-      <section class="non-album-track-section" data-non-album-section="${escapeHtml(section.key)}">
-        <h4 class="non-album-track-section-title">${escapeHtml(section.title)}</h4>
-        ${buildCompactDataTable({
-          id: `non-album-${section.key}-table`,
-          ariaLabel: `${section.title} tracks`,
-          columns: '64px minmax(220px, 1fr) minmax(240px, 0.9fr)',
-          columnsConfig: [
-            { key: 'control', label: 'Play and number', header: 'absent' },
-            { key: 'track', label: 'Track' },
-            { key: 'path', label: 'File path' },
-          ],
-          headers: 'visible',
-          density: 'compact',
-          overflow: 'local',
-          mobile: 'preserve',
-          frame: 'outline',
-          rows,
-        })}
-      </section>
-    `;
-  }).join('');
+    return { discLabel: section.title, sectionKey: section.key, tracks };
+  }).filter(Boolean);
+  const totalSeconds = items.reduce((sum, item) => sum + (Number(item?.duration_seconds) || 0), 0);
+  return buildAlbumTrackTableHtml({
+    groups,
+    showPath: true,
+    forceGroupLabels: true,
+    ariaLabel: 'Loose tracks',
+    idPrefix: 'loose-track-table',
+    totalLength: formatAlbumDuration(totalSeconds),
+    playingAnimation: document.documentElement?.getAttribute('data-album-playing-row-animation') !== 'disabled',
+  });
 }
 
 const LIBRARY_CATEGORY_LABELS = Object.freeze({
@@ -7856,92 +10080,18 @@ function buildAlbumMoveConfirmMessage(album, actionConfig) {
   return `Move "${albumName}" to ${targetLabel}?`;
 }
 
-function ensureGalleryOptionsMenu() {
-  let menu = document.getElementById('gallery-options-menu');
-  if (menu) return menu;
-  menu = document.createElement('div');
-  menu.id = 'gallery-options-menu';
-  menu.className = 'gallery-options-menu';
-  document.body.appendChild(menu);
-  return menu;
-}
-
 function renderGalleryOptionsMenu() {
-  const menu = ensureGalleryOptionsMenu();
-  const looseCount = getVisibleNonAlbumTracks().length;
-  const nonAlbumLabel = getNonAlbumMenuLabel();
-  const preferenceArtist = getCurrentGalleryPreferenceArtist();
-  const combineEnabled = getCombineSimilarArtistsPreference(preferenceArtist);
-  const galleryScope = String(state.view?.gallery_scope || 'all');
-  const visibleCategories = typeof normalizeVisibleLibraryCategorySelection === 'function'
-    ? normalizeVisibleLibraryCategorySelection(state.view?.visible_library_categories)
-    : ['main_library', 'hoard', 'new_arrivals'];
-  const categoryButtons = galleryScope === 'new_arrivals'
-    ? ''
-    : Object.entries(LIBRARY_CATEGORY_LABELS).map(([category, label]) => {
-      const isActive = visibleCategories.includes(category);
-      const disableToggleOff = isActive && visibleCategories.length <= 1;
-      return `
-        <button
-          type="button"
-          class="gallery-options-menu-item"
-          data-gallery-category-toggle="${escapeHtml(category)}"
-          aria-pressed="${isActive ? 'true' : 'false'}"
-          ${disableToggleOff ? 'disabled' : ''}
-          title="${escapeHtml(isActive ? `Hide ${label}` : `Show ${label}`)}"
-        >
-          <span>${escapeHtml(label)}</span>
-          <span class="gallery-options-count">${isActive ? 'On' : 'Off'}</span>
-        </button>
-      `;
-    }).join('')
-    + `
-      <button type="button" class="gallery-options-menu-item" data-open-new-arrivals="1" title="Show only albums from New Arrivals roots">
-        <span>Open New Arrivals</span>
-        <span class="gallery-options-count">Page</span>
-      </button>
-    `;
-  menu.innerHTML = `
-    ${galleryScope === 'new_arrivals'
-      ? `
-        <button type="button" class="gallery-options-menu-item" data-open-main-gallery="1" title="Return to the main gallery and restore its category mix">
-          <span>Back to Main Gallery</span>
-          <span class="gallery-options-count">Page</span>
-        </button>
-      `
-      : categoryButtons}
-    <button
-      type="button"
-      class="gallery-options-menu-item"
-      data-toggle-combine-similar-artists="1"
-      ${preferenceArtist ? '' : 'disabled'}
-      title="${preferenceArtist ? `Combine collaboration-style aliases for ${escapeHtml(preferenceArtist)}` : 'Select a single artist to change this setting'}"
-    >
-      <span>Combine similar artists</span>
-      <span class="gallery-options-count">${preferenceArtist ? (combineEnabled ? 'On' : 'Off') : 'N/A'}</span>
-    </button>
-    <button type="button" class="gallery-options-menu-item" data-open-non-album-modal="1" ${looseCount ? '' : 'disabled'} title="${looseCount ? `Show ${escapeHtml(nonAlbumLabel.toLowerCase())} list` : `No ${escapeHtml(nonAlbumLabel.toLowerCase())} in this view`}">
-      <span>${escapeHtml(nonAlbumLabel)}</span>
-      <span class="gallery-options-count">${looseCount}</span>
-    </button>
-  `;
+  if (typeof updateGalleryMainControls === 'function') updateGalleryMainControls();
 }
 
 function showGalleryOptionsMenu(anchor) {
-  const menu = ensureGalleryOptionsMenu();
-  renderGalleryOptionsMenu();
-  const rect = anchor.getBoundingClientRect();
-  menu.style.left = `${Math.max(12, rect.right - 220)}px`;
-  menu.style.top = `${rect.bottom + 8}px`;
-  menu.hidden = false;
-  state.gallery.menuOpen = true;
+  const sources = document.getElementById('gallery-sources-menu');
+  if (sources && typeof openGalleryMainSurface === 'function') openGalleryMainSurface('sources', anchor, sources);
 }
 
 function hideGalleryOptionsMenu() {
-  const menu = document.getElementById('gallery-options-menu');
-  if (!menu) return;
-  menu.hidden = true;
   state.gallery.menuOpen = false;
+  if (typeof galleryMainSurfaceController !== 'undefined' && galleryMainSurfaceController?.isOpen?.('sources')) closeGalleryMainSurface(false);
 }
 
 function openNonAlbumModal() {
@@ -7949,10 +10099,18 @@ function openNonAlbumModal() {
   if (!els.overlay || !els.table) return;
   bindOverlayPointerOrigin(els.overlay);
   const looseTracks = getVisibleNonAlbumTracks();
-  if (els.subtitle) {
-    els.subtitle.textContent = state.view.selected_artist
-      ? `Non-album tracks found in ${state.view.selected_artist} and family artist folders.`
-      : 'Non-album tracks found in the artist folders currently displayed.';
+  const subtitle = state.view.selected_artist
+    ? `Non-album tracks found in ${state.view.selected_artist} and family artist folders.`
+    : 'Non-album tracks found in the artist folders currently displayed.';
+  if (els.header) {
+    els.header.innerHTML = buildAlbumDetailsHeaderHtml({
+      variant: 'copy',
+      title: 'Loose Tracks',
+      subtitle,
+      titleId: 'non-album-modal-title',
+      subtitleId: 'non-album-modal-subtitle',
+      actionsHtml: buildLooseTracksHeaderActionsHtml(),
+    });
   }
   els.table.innerHTML = looseTracks.length
     ? buildNonAlbumTrackSectionsMarkup(looseTracks)
@@ -8794,7 +10952,7 @@ function getTagEditorElements() {
 function getNonAlbumModalElements() {
   return {
     overlay: document.getElementById('non-album-modal'),
-    subtitle: document.getElementById('non-album-modal-subtitle'),
+    header: document.getElementById('non-album-modal-header'),
     table: document.getElementById('non-album-modal-table'),
     close: document.getElementById('non-album-modal-close'),
   };
@@ -9085,7 +11243,12 @@ function invalidateHydratedTrackModalAlbumDetails(albums) {
 }
 
 function invalidateAllHydratedTrackModalAlbumDetails() {
-  const cachedAlbums = Array.from(trackModalHydratedAlbumDetailsLru.keys());
+  const cachedAlbums = Array.from(trackModalHydratedAlbumDetailsLru.keys()).filter((album) => {
+    const claim = trackModalHydratedAlbumDetailsLru.get(album)?.tagEditMutationClaim;
+    return !(claim
+      && typeof tagEditViewMutationStillOwnsResources === 'function'
+      && tagEditViewMutationStillOwnsResources(claim));
+  });
   if (!cachedAlbums.length) return 0;
   return invalidateHydratedTrackModalAlbumDetails(cachedAlbums);
 }
@@ -9233,9 +11396,30 @@ function loadTrackModalAlbumDetails(albumKey, options = {}) {
     trackModalSpeculativePrewarmControllers.delete(speculativeController);
     return existingLoad;
   }
+  const requestInventoryRevision = Number(state?.status?.inventory_mutation_revision || 0);
   let load = null;
   load = fetchTrackModalAlbumDetails(normalizedAlbumKey, options)
     .then((album) => {
+      const currentAlbum = getCachedHydratedTrackModalAlbum(normalizedAlbumKey);
+      const currentClaim = trackModalHydratedAlbumDetailsLru.get(currentAlbum)?.tagEditMutationClaim;
+      if (currentClaim && typeof tagEditViewMutationStillOwnsResources === 'function'
+          && tagEditViewMutationStillOwnsResources(currentClaim)) {
+        // A response started before an edit cannot replace its pending membership,
+        // even before that edit advances the inventory revision.
+        return currentAlbum;
+      }
+      if (requestInventoryRevision !== Number(state?.status?.inventory_mutation_revision || 0)) {
+        // Release only this request's aliases before joining or starting a load
+        // under the current revision. Foreground callers never receive stale data.
+        trackModalAlbumDetailsLoads.forEach((mappedLoad, alias) => {
+          if (mappedLoad === load) trackModalAlbumDetailsLoads.delete(alias);
+        });
+        const promotedToForeground = options.speculative === true
+          && options.controller
+          && !trackModalSpeculativeAlbumDetailsLoadControllers.has(load);
+        return loadTrackModalAlbumDetails(normalizedAlbumKey,
+          promotedToForeground ? { ...options, speculative: false } : options);
+      }
       cacheHydratedTrackModalAlbum(normalizedAlbumKey, album);
       getTrackModalAlbumKeyAliases(normalizedAlbumKey, album).forEach((alias) => {
         trackModalAlbumDetailsLoads.set(alias, load);
@@ -9318,6 +11502,9 @@ function queueVisibleTrackModalAlbumDetailsPrewarm(containerEl, scrollEl, limit 
 function openTrackModal(album, options = {}) {
   const els = getTrackModalElements();
   if (!els.overlay || !album) return;
+  if (options.foreground && document.getElementById('utility-modal')?.hidden === false) {
+    els.overlay.classList.add('is-above-settings');
+  }
   state.ui.trackModalCoverLightboxGallery = options.coverLightboxGallery !== false;
   if (typeof clearPendingSelectedArtistReconcile === 'function') {
     clearPendingSelectedArtistReconcile();
@@ -9339,7 +11526,7 @@ function openTrackModal(album, options = {}) {
       if (loadToken !== state.ui.pendingTrackModalLoadToken) return;
       if (!resolvedAlbum || albumRequiresHydration(resolvedAlbum) || els.overlay.hidden) return;
       invalidatePendingTrackModalLoad();
-      openTrackModal(resolvedAlbum, options);
+      openTrackModal(resolvedAlbum, { ...options, foreground: false });
     }).catch((error) => {
       if (loadToken !== state.ui.pendingTrackModalLoadToken) return;
       console.error('[AlbumHaven][AlbumDetails] Failed to load full album details.', error);
@@ -9350,7 +11537,17 @@ function openTrackModal(album, options = {}) {
     return;
   }
   invalidatePendingTrackModalLoad();
-  const releaseSet = getAlbumReleaseSet(albumWithPlaybackContext);
+  // Edition hydration must not rebuild the tabs around a different base name.
+  const preserved = options.releaseSet;
+  const preservedAlbum = preserved?.releases?.[preserved.selectedIndex];
+  const releaseSet = preservedAlbum
+    && getAlbumRequestKey(preservedAlbum) === getAlbumRequestKey(albumWithPlaybackContext)
+    ? {
+      releases: preserved.releases.map((release, index) => index === preserved.selectedIndex
+        ? { ...albumWithPlaybackContext, tabLabel: release.tabLabel } : release),
+      selectedIndex: preserved.selectedIndex,
+    }
+    : getAlbumReleaseSet(albumWithPlaybackContext);
   state.modalReleases = releaseSet.releases;
   state.modalReleaseIndex = releaseSet.selectedIndex;
   hideVersionContextMenu();
@@ -9454,9 +11651,12 @@ function getTrackModalLightboxSourceAlbumKey(button) {
   return String(getAlbumIdentity(album) || album?.key || `${album?.name || ''}::${album?.album_artist || ''}`);
 }
 
+let imageLightboxReturnFocus = null;
+
 function openImageLightbox(src, alt, options = {}) {
   const els = getLightboxElements();
   if (!els.overlay || !els.image || !src) return;
+  if (els.overlay.hidden) imageLightboxReturnFocus = document.activeElement;
   bindOverlayPointerOrigin(els.overlay);
   state.lightbox.sourceAlbumKey = String(options.sourceAlbumKey || '');
   state.lightbox.items = Array.isArray(options.items) ? options.items.filter(Boolean) : [];
@@ -9486,7 +11686,11 @@ function openImageLightbox(src, alt, options = {}) {
     updateLightboxNavState();
   }
   els.overlay.hidden = false;
+  els.overlay.setAttribute?.('role', 'dialog');
+  els.overlay.setAttribute?.('aria-modal', 'true');
+  els.overlay.setAttribute?.('aria-label', 'Full-size album cover');
   document.body.classList.add('modal-open');
+  els.close?.focus?.();
 }
 
 function closeImageLightbox() {
@@ -9524,12 +11728,16 @@ function closeImageLightbox() {
   if (!trackModalOpen && !utilityModalOpen) {
     document.body.classList.remove('modal-open');
   }
+  const returnFocus = imageLightboxReturnFocus;
+  imageLightboxReturnFocus = null;
+  if (returnFocus?.isConnected) returnFocus.focus?.();
 }
 
 function closeTrackModal() {
   const els = getTrackModalElements();
   if (!els.overlay) return;
   els.overlay.hidden = true;
+  els.overlay.classList.remove('is-above-settings');
   invalidatePendingTrackModalLoad();
   resumeAllGalleryCoverLoadsAfterTrackModalActions();
   state.modalReleases = [];
@@ -9566,6 +11774,91 @@ function attachTrackButtons() {
   });
 }
 
+// Escape belongs to the visible foreground overlay, even when focus is behind it.
+function getTopmostOpenModal() {
+  const overlays = '.track-modal, .utility-modal, .confirm-modal, .tag-editor-modal, .cover-lookup-modal, .non-album-modal, .image-lightbox, .repair-progress-overlay';
+  const candidates = [...new Set(Array.from(document.querySelectorAll(
+    `${overlays}, [aria-modal="true"], #app-form-modal`,
+  )).map(node => node.closest(overlays) || node))];
+  const stack = node => {
+    const contexts = [];
+    for (let current = node; current; current = current.parentElement) {
+      const style = getComputedStyle(current);
+      if (style.zIndex !== 'auto' && style.zIndex !== ''
+          || ['fixed', 'sticky'].includes(style.position)
+          || Number(style.opacity) < 1
+          || style.transform && style.transform !== 'none'
+          || style.filter && style.filter !== 'none'
+          || style.isolation === 'isolate'
+          || /paint|layout|strict|content/.test(style.contain || '')) {
+        contexts.unshift({ node: current, z: Number(style.zIndex) || 0 });
+      }
+    }
+    return contexts;
+  };
+  const visible = candidates.filter(node => {
+    if (node.closest('[hidden], [inert]') || !node.getClientRects().length) return false;
+    const style = getComputedStyle(node);
+    return style.visibility !== 'hidden' && style.visibility !== 'collapse';
+  }).map(node => ({ node, stack: stack(node) }));
+  visible.sort((a, b) => {
+    let index = 0;
+    while (a.stack[index] && b.stack[index] && a.stack[index].node === b.stack[index].node) index += 1;
+    const left = a.stack[index];
+    const right = b.stack[index];
+    const order = (left?.z || 0) - (right?.z || 0);
+    if (order) return order;
+    return (left?.node || a.node).compareDocumentPosition(right?.node || b.node) & 4 ? -1 : 1;
+  });
+  return visible.at(-1)?.node || null;
+}
+
+function handleModalEscapeKeydown(event) {
+  if (event.key !== 'Escape') return;
+  const modal = getTopmostOpenModal();
+  if (!modal) return;
+  // Capture and stop immediately: closing one dialog must not expose another
+  // to this same keypress, including handlers attached directly to its controls.
+  event.stopImmediatePropagation?.();
+  if (event.defaultPrevented) return;
+  event.preventDefault?.();
+  if (event.repeat || event.isComposing) return;
+  if (modal.id === 'tag-editor-modal') {
+    if (state.tagEditor.reorder) {
+      clearTagEditorReorderCue();
+    } else if (getSelectedTagEditorPaths(state.tagEditor.tracks || []).length > 1) {
+      setTagEditorSelectedPaths([]);
+      state.tagEditor.anchorPath = '';
+      renderTagEditor({ preserveTrackList: true });
+    } else {
+      closeTagEditor();
+    }
+    return;
+  }
+  if (modal.id === 'utility-modal') {
+    if (typeof cancelActiveSavedLoopCreation === 'function' && cancelActiveSavedLoopCreation()) return;
+    const editor = typeof getBackgroundAppearanceEditor === 'function' ? getBackgroundAppearanceEditor() : null;
+    if (editor?.allowLeave(() => true) === false) return;
+    closeUtilityModal(true);
+    return;
+  }
+  const close = {
+    'track-modal': () => closeTrackModal(),
+    'image-lightbox': () => closeImageLightbox(),
+    'repair-confirm-modal': () => closeRepairConfirmModal(),
+    'tag-edit-confirm-modal': () => closeTagEditConfirmModal(),
+    'cover-lookup-modal': () => closeCoverLookupModal(),
+    'cover-lookup-delete-confirm-modal': () => closeCoverLookupDeleteConfirm(),
+    'non-album-modal': () => closeNonAlbumModal(),
+    'version-picker-modal': () => closeVersionPickerModal(),
+  }[modal.id];
+  if (close) close();
+  else {
+    // Promise-backed dialogs must settle through their own cancel actions.
+    modal.querySelector('#app-confirm-cancel, #app-form-cancel, #loop-name-cancel, #loop-delete-confirm-cancel')?.click();
+  }
+}
+
 function attachModalEvents() {
   const els = getTrackModalElements();
   if (!els.overlay || els.overlay.dataset.bound === '1') return;
@@ -9577,51 +11870,24 @@ function attachModalEvents() {
       closeTrackModal();
     }
   });
-  document.addEventListener('keydown', (event) => {
-    if (event.key !== 'Escape') return;
-    const lightboxEls = getLightboxElements();
-    if (lightboxEls.overlay && !lightboxEls.overlay.hidden) {
-      closeImageLightbox();
-      return;
-    }
-    const repairConfirmEls = getRepairConfirmElements();
-    if (repairConfirmEls.overlay && !repairConfirmEls.overlay.hidden) {
-      closeRepairConfirmModal();
-      return;
-    }
-    const coverLookupEls = getCoverLookupModalElements();
-    if (coverLookupEls.overlay && !coverLookupEls.overlay.hidden) {
-      closeCoverLookupModal();
-      return;
-    }
-    const coverLookupDeleteConfirmEls = getCoverLookupDeleteConfirmElements();
-    if (coverLookupDeleteConfirmEls.overlay && !coverLookupDeleteConfirmEls.overlay.hidden) {
-      closeCoverLookupDeleteConfirm();
-      return;
-    }
-    const utilityEls = getUtilityModalElements();
-    if (utilityEls.overlay && !utilityEls.overlay.hidden) {
-      if (event.defaultPrevented) return;
-      if (typeof cancelActiveSavedLoopCreation === 'function'
-          && cancelActiveSavedLoopCreation()) {
-        event.preventDefault();
-        return;
-      }
-      closeUtilityModal();
-      return;
-    }
-    const nonAlbumEls = getNonAlbumModalElements();
-    if (nonAlbumEls.overlay && !nonAlbumEls.overlay.hidden) {
-      closeNonAlbumModal();
-      return;
-    }
-    if (!els.overlay.hidden) {
-      closeTrackModal();
-    }
-  });
+  document.addEventListener('keydown', handleModalEscapeKeydown, true);
   document.addEventListener('keydown', (event) => {
     const lightboxEls = getLightboxElements();
     if (!lightboxEls.overlay || lightboxEls.overlay.hidden) return;
+    if (event.key === 'Tab' && !event.ctrlKey && !event.altKey && !event.metaKey) {
+      const controls = Array.from(lightboxEls.overlay.querySelectorAll?.('button, [href], input, select, textarea, [tabindex]') || [])
+        .filter(control => !control.hidden && !control.disabled && control.tabIndex >= 0
+          && !control.closest?.('[hidden], [inert]') && control.getClientRects().length > 0);
+      const first = controls[0];
+      const last = controls[controls.length - 1];
+      if (!first) return;
+      const outside = !lightboxEls.overlay.contains(document.activeElement);
+      if (outside || (event.shiftKey ? document.activeElement === first : document.activeElement === last)) {
+        event.preventDefault();
+        (event.shiftKey ? last : first).focus();
+      }
+      return;
+    }
     if (event.key === 'ArrowLeft') {
       event.preventDefault();
       stepLightbox(-1);
@@ -9641,7 +11907,6 @@ function attachModalEvents() {
 const PLAYER_WAVEFORM_PEAK_COUNT = 280;
 const PLAYER_WAVEFORM_DETAIL_PEAK_COUNT = 720;
 const PLAYER_WAVEFORM_BUSY_RETRY_DELAYS_MS = Object.freeze([50, 100, 200, 400, 800]);
-const SAVED_LOOP_WAVEFORM_CACHE_LIMIT = 4;
 const playerWaveformPeakCache = new Map();
 const playerWaveformPeakProbes = new Map();
 const savedLoopWaveformPeakCache = new Map();
@@ -9717,13 +11982,17 @@ async function resumePlayerWaveformPeakLoadsAfterForegroundView(suspension) {
   return peaks;
 }
 
-function trimSavedLoopWaveformPeakCache() {
-  while (savedLoopWaveformPeakCache.size > SAVED_LOOP_WAVEFORM_CACHE_LIMIT) {
-    const oldestIdentity = savedLoopWaveformPeakCache.keys().next().value;
-    const evicted = savedLoopWaveformPeakCache.get(oldestIdentity);
-    savedLoopWaveformPeakCache.delete(oldestIdentity);
-    evicted?.controller?.abort();
+function retainSavedLoopWaveformPeaks(loopIds) {
+  const retained = new Set(loopIds.map(String));
+  for (const [identity, entry] of savedLoopWaveformPeakCache) {
+    if (retained.has(identity)) continue;
+    savedLoopWaveformPeakCache.delete(identity);
+    entry.controller.abort();
   }
+}
+
+function getCachedSavedLoopWaveformPeaks(loopId) {
+  return savedLoopWaveformPeakCache.get(String(loopId || '').trim())?.peaks || null;
 }
 
 async function loadSavedLoopWaveformPeaks(loopId) {
@@ -9731,13 +12000,11 @@ async function loadSavedLoopWaveformPeaks(loopId) {
   if (!identity || identity.length > 256) return null;
   if (savedLoopWaveformPeakCache.has(identity)) {
     const cached = savedLoopWaveformPeakCache.get(identity);
-    savedLoopWaveformPeakCache.delete(identity);
-    savedLoopWaveformPeakCache.set(identity, cached);
     return cached.promise;
   }
 
   const controller = new AbortController();
-  const entry = { controller, promise: null };
+  const entry = { controller, promise: null, peaks: null };
   entry.promise = (async () => {
     let retained = false;
     try {
@@ -9762,6 +12029,7 @@ async function loadSavedLoopWaveformPeaks(loopId) {
           PLAYER_WAVEFORM_PEAK_COUNT,
         );
         retained = Boolean(peaks);
+        entry.peaks = peaks;
         return peaks;
       }
     } catch (_error) {
@@ -9773,7 +12041,6 @@ async function loadSavedLoopWaveformPeaks(loopId) {
     }
   })();
   savedLoopWaveformPeakCache.set(identity, entry);
-  trimSavedLoopWaveformPeakCache();
   return entry.promise;
 }
 
@@ -9977,51 +12244,80 @@ function buildLoopEditActionControl({
 }
 
 function mountLoopEditActionControl({
-  root,
-  enabled = true,
-  active = false,
-  busy = false,
-  disabledLabel = 'Start playing the track to edit the loop',
-  onEnter,
-  onCreate,
-  onCancel,
+  root, interactionRoot, contextKey = '', enabled = true, canCreate = true, active = false, busy = false,
+  disabledLabel = 'Start playing the track to edit the loop', onEnter, onCreate, onCancel,
 } = {}) {
   if (!root) return null;
+  const compound = interactionRoot || root.closest?.('[data-playback-control-cluster]') || root;
+  const ownerDocument = root.ownerDocument || (typeof document !== 'undefined' ? document : null);
   const enter = root.querySelector('[data-loop-action="enter"]');
   const create = root.querySelector('[data-loop-action="create"]');
   const cancel = root.querySelector('[data-loop-action="cancel"]');
   const expanded = root.querySelector?.('[data-loop-action-expanded]') || null;
   const listeners = [];
-  let currentEnabled = Boolean(enabled);
-  let currentActive = Boolean(active);
-  let currentBusy = Boolean(busy);
-  let currentEngaged = false;
-  let pointerWithin = false;
-  let focusWithin = false;
+  const touchQuery = typeof matchMedia === 'function' ? matchMedia('(hover: none), (pointer: coarse)') : null;
+  let currentEnabled = Boolean(enabled), currentCanCreate = Boolean(canCreate);
+  let currentActive = Boolean(active), currentBusy = Boolean(busy), currentEngaged = false;
+  let pointerWithin = false, focusWithin = false, keyboardInput = true, destroyed = false;
+  let revealTimer = null, foldTimer = null;
+  let currentContextKey = String(contextKey || '');
   const listen = (target, name, listener) => {
     target?.addEventListener?.(name, listener);
     listeners.push([target, name, listener]);
   };
-  const renderEngagement = () => {
-    currentEngaged = currentActive && (pointerWithin || focusWithin);
+  const clearTimers = () => {
+    if (revealTimer !== null) clearTimeout(revealTimer);
+    if (foldTimer !== null) clearTimeout(foldTimer);
+    revealTimer = foldTimer = null;
+  };
+  const renderEngagement = (engaged) => {
+    currentEngaged = Boolean(engaged && currentCanCreate && !destroyed);
     root.setAttribute?.('data-loop-action-engaged', String(currentEngaged));
+    compound.setAttribute?.('data-loop-action-engaged', String(currentEngaged));
+    [enter, create, cancel].forEach(button => button?.setAttribute?.('tabindex', currentEngaged ? '0' : '-1'));
+  };
+  const retained = () => Boolean(touchQuery?.matches || (keyboardInput && focusWithin));
+  const leave = () => {
+    clearTimers();
+    if (!currentCanCreate) return renderEngagement(false);
+    if (pointerWithin || retained()) return renderEngagement(true);
+    if (!currentActive) return renderEngagement(false);
+    foldTimer = setTimeout(() => {
+      foldTimer = null;
+      if (!pointerWithin && !retained()) renderEngagement(false);
+    }, 500);
+  };
+  const visit = () => {
+    clearTimers();
+    if (!currentCanCreate) return renderEngagement(false);
+    if (currentActive || retained()) return renderEngagement(true);
+    if (currentEngaged) return;
+    revealTimer = setTimeout(() => {
+      revealTimer = null;
+      if (pointerWithin) renderEngagement(true);
+    }, 300);
   };
   const update = (next = {}) => {
-    const activating = !currentActive
-      && Object.prototype.hasOwnProperty.call(next, 'active')
-      && Boolean(next.active);
-    if (activating) {
-      pointerWithin = pointerWithin || Boolean(root.matches?.(':hover'));
-      const ownerDocument = root.ownerDocument
-        || (typeof document !== 'undefined' ? document : null);
-      const activeElement = ownerDocument?.activeElement;
-      focusWithin = focusWithin || Boolean(activeElement && root.contains?.(activeElement));
-    }
+    if (destroyed) return;
+    const wasActive = currentActive;
+    const wasAllowed = currentCanCreate;
+    const contextChanged = Object.prototype.hasOwnProperty.call(next, 'contextKey') && String(next.contextKey || '') !== currentContextKey;
+    if (contextChanged) currentContextKey = String(next.contextKey || '');
     if (Object.prototype.hasOwnProperty.call(next, 'enabled')) currentEnabled = Boolean(next.enabled);
+    if (Object.prototype.hasOwnProperty.call(next, 'canCreate')) currentCanCreate = Boolean(next.canCreate);
     if (Object.prototype.hasOwnProperty.call(next, 'active')) currentActive = Boolean(next.active);
     if (Object.prototype.hasOwnProperty.call(next, 'busy')) currentBusy = Boolean(next.busy);
-    renderEngagement();
-    const unavailable = !currentEnabled;
+    if (next.reset || contextChanged || !currentCanCreate || (wasActive && !currentActive)) {
+      clearTimers();
+      renderEngagement(retained() && currentCanCreate);
+    } else if ((!wasActive && currentActive) || (!wasAllowed && currentCanCreate)) {
+      pointerWithin = pointerWithin || Boolean(compound.matches?.(':hover'));
+      focusWithin = focusWithin || Boolean(ownerDocument?.activeElement && compound.contains?.(ownerDocument.activeElement));
+      clearTimers();
+      renderEngagement(retained() || (currentActive && pointerWithin));
+    } else if (retained()) renderEngagement(true);
+    root.hidden = !currentCanCreate;
+    const unavailable = !currentEnabled || !currentCanCreate;
     const disabled = unavailable || currentBusy;
     if (enter) {
       enter.hidden = currentActive;
@@ -10031,48 +12327,49 @@ function mountLoopEditActionControl({
       enter.setAttribute('title', unavailable ? disabledLabel : enter.getAttribute('aria-label'));
     }
     if (expanded) expanded.hidden = !currentActive;
-    if (create) {
-      create.hidden = !currentActive;
-      create.disabled = disabled;
-      create.setAttribute('aria-disabled', String(disabled));
-    }
-    if (cancel) {
-      cancel.hidden = !currentActive;
-      cancel.disabled = disabled;
-      cancel.setAttribute('aria-disabled', String(disabled));
-    }
+    [create, cancel].forEach(button => {
+      if (!button) return;
+      button.hidden = !currentActive;
+      button.disabled = disabled;
+      button.setAttribute('aria-disabled', String(disabled));
+    });
     root.classList?.toggle('is-active', currentActive);
     root.classList?.toggle('is-busy', currentBusy);
     root.classList?.toggle('is-disabled', unavailable);
     root.setAttribute?.('aria-busy', String(currentBusy));
-    root.setAttribute?.('data-loop-action-engaged', String(currentEngaged));
     root.setAttribute?.('data-loop-action-state', unavailable ? 'disabled' : (currentActive ? 'editing' : 'idle'));
+    if (compound !== root) compound.setAttribute?.('data-loop-action-state', currentActive ? 'editing' : 'idle');
+    compound.setAttribute?.('data-loop-create-allowed', String(currentCanCreate));
   };
-  listen(enter, 'click', () => { if (currentEnabled && !currentBusy && !currentActive) onEnter?.(); });
-  listen(create, 'click', () => { if (currentEnabled && !currentBusy && currentActive) onCreate?.(); });
-  listen(cancel, 'click', () => { if (currentEnabled && !currentBusy && currentActive) onCancel?.(); });
-  listen(root, 'pointerenter', () => {
-    pointerWithin = true;
-    renderEngagement();
-  });
-  listen(root, 'pointerleave', () => {
-    pointerWithin = false;
-    renderEngagement();
-  });
-  listen(root, 'focusin', () => {
+  listen(enter, 'click', () => { if (currentCanCreate && currentEnabled && !currentBusy && !currentActive) onEnter?.(); });
+  listen(create, 'click', () => { if (currentCanCreate && currentEnabled && !currentBusy && currentActive) onCreate?.(); });
+  listen(cancel, 'click', () => { if (currentCanCreate && currentEnabled && !currentBusy && currentActive) onCancel?.(); });
+  listen(compound, 'pointerenter', () => { pointerWithin = true; visit(); });
+  listen(compound, 'pointerleave', () => { pointerWithin = false; leave(); });
+  listen(compound, 'pointerdown', () => { keyboardInput = false; focusWithin = false; });
+  const keyboard = () => { keyboardInput = true; };
+  listen(ownerDocument, 'keydown', keyboard);
+  listen(compound, 'keydown', keyboard);
+  listen(compound, 'focusin', () => {
     focusWithin = true;
-    renderEngagement();
+    if (keyboardInput) { clearTimers(); renderEngagement(true); }
   });
-  listen(root, 'focusout', (event) => {
-    focusWithin = Boolean(event?.relatedTarget && root.contains?.(event.relatedTarget));
-    renderEngagement();
+  listen(compound, 'focusout', event => {
+    focusWithin = Boolean(event?.relatedTarget && compound.contains?.(event.relatedTarget));
+    leave();
   });
-  update({ enabled, active, busy });
-  const destroy = () => {
-    listeners.forEach(([target, name, listener]) => target?.removeEventListener?.(name, listener));
-    listeners.length = 0;
+  listen(touchQuery, 'change', () => { if (retained()) visit(); else leave(); });
+  renderEngagement(Boolean(touchQuery?.matches));
+  update({ enabled, canCreate, active, busy });
+  return {
+    update,
+    destroy() {
+      clearTimers();
+      destroyed = true;
+      listeners.forEach(([target, name, listener]) => target?.removeEventListener?.(name, listener));
+      listeners.length = 0;
+    },
   };
-  return { update, destroy };
 }
 
 function normalizeLoopRange(range, duration) {
@@ -10126,6 +12423,11 @@ function createLoopRangeController({
   let queuedClientX = null;
   let frame = 0;
   let documentDragListenersAttached = false;
+  const elementListeners = [];
+  const listen = (element, name, handler) => {
+    element?.addEventListener?.(name, handler);
+    elementListeners.push([element, name, handler]);
+  };
 
   const render = (range = currentRange) => {
     const duration = Math.max(0, Number(getDuration?.()) || 0);
@@ -10254,7 +12556,7 @@ function createLoopRangeController({
   }
 
   Object.entries(handles).forEach(([role, handle]) => {
-    handle?.addEventListener('pointerdown', (event) => {
+    listen(handle, 'pointerdown', (event) => {
       event.preventDefault?.();
       onRangeInteractionStart?.(role);
       render(currentRange);
@@ -10264,7 +12566,7 @@ function createLoopRangeController({
       handle.setPointerCapture?.(event.pointerId);
       handle.focus?.();
     });
-    handle?.addEventListener('keydown', (event) => {
+    listen(handle, 'keydown', (event) => {
       if (event.key === 'Escape') {
         event.preventDefault?.();
         event.stopPropagation?.();
@@ -10289,7 +12591,7 @@ function createLoopRangeController({
       onRangeCommit?.({ ...currentRange });
     });
   });
-  surface?.addEventListener('pointerdown', (event) => {
+  listen(surface, 'pointerdown', (event) => {
     if (event.target?.closest?.('[data-loop-range-handle]')) return;
     event.preventDefault?.();
     render(currentRange);
@@ -10305,7 +12607,7 @@ function createLoopRangeController({
     attachDocumentDragListeners();
     surface.setPointerCapture?.(event.pointerId);
   });
-  root.addEventListener?.('keydown', (event) => {
+  listen(root, 'keydown', (event) => {
     if (event.key !== 'Escape') return;
     event.preventDefault?.();
     onCancel?.();
@@ -10316,7 +12618,20 @@ function createLoopRangeController({
       || currentRange.endSeconds !== Number(getRange?.()?.endSeconds)) {
     onRangePreview?.({ ...currentRange });
   }
-  return { render, getRange: () => ({ ...currentRange }) };
+  return {
+    render,
+    getRange: () => ({ ...currentRange }),
+    destroy() {
+      if (frame && typeof cancelAnimationFrame === 'function') cancelAnimationFrame(frame);
+      frame = 0;
+      queuedClientX = null;
+      drag = null;
+      pendingSurfaceGesture = null;
+      detachDocumentDragListeners();
+      elementListeners.forEach(([element, name, handler]) => element?.removeEventListener?.(name, handler));
+      elementListeners.length = 0;
+    },
+  };
 }
 
 function drawCombinedLoopWaveform(canvas, waveform, progressRatio = 0) {
@@ -10337,32 +12652,36 @@ function drawCombinedLoopWaveform(canvas, waveform, progressRatio = 0) {
   const savedColors = typeof getSavedAppearancePlayerColors === 'function' ? getSavedAppearancePlayerColors() : null;
   const fill = savedColors?.fill || (typeof state !== 'undefined' && state.player?.appearance?.waveformFillColor) || '#9be18a';
   const edge = savedColors?.edge || (typeof state !== 'undefined' && state.player?.appearance?.waveformEdgeColor) || '#86efac';
+  const drawBars = () => {
+    for (let index = 0; index < count; index += 1) {
+      const leftPeak = Math.abs(Number(left[index] ?? right[index] ?? 0));
+      const rightPeak = Math.abs(Number(right[index] ?? left[index] ?? 0));
+      const peak = Math.max(0.025, Math.min(1, (leftPeak + rightPeak) / 2));
+      const halfHeight = Math.min(maxHalfHeight, Math.max(1, Math.round(peak * height * 0.46)));
+      context.fillRect(
+        index * barWidth,
+        center - halfHeight,
+        Math.max(1, barWidth * 0.72),
+        (2 * halfHeight) + 1,
+      );
+    }
+  };
   context.fillStyle = fill;
-  context.globalAlpha = 0.42;
-  for (let index = 0; index < count; index += 1) {
-    const leftPeak = Math.abs(Number(left[index] ?? right[index] ?? 0));
-    const rightPeak = Math.abs(Number(right[index] ?? left[index] ?? 0));
-    const peak = Math.max(0.025, Math.min(1, (leftPeak + rightPeak) / 2));
-    const halfHeight = Math.min(maxHalfHeight, Math.max(1, Math.round(peak * height * 0.46)));
-    context.fillRect(
-      index * barWidth,
-      center - halfHeight,
-      Math.max(1, barWidth * 0.72),
-      (2 * halfHeight) + 1,
-    );
-  }
-  context.globalAlpha = 1;
+  context.globalAlpha = 0.6;
+  context.shadowBlur = 0;
+  drawBars();
 
   const clampedProgress = Math.max(0, Math.min(1, Number(progressRatio) || 0));
   const playheadX = width * clampedProgress;
   if (playheadX > 0) {
     context.save();
-    context.globalCompositeOperation = 'source-atop';
-    context.globalAlpha = 0.4;
-    context.fillStyle = fill;
     context.beginPath();
     context.rect(0, 0, playheadX, height);
-    context.fill();
+    context.clip();
+    context.globalAlpha = 0.95;
+    context.shadowColor = fill;
+    context.shadowBlur = 6;
+    drawBars();
     context.restore();
   }
 
@@ -10408,15 +12727,16 @@ function drawCombinedLoopWaveform(canvas, waveform, progressRatio = 0) {
     return '<svg class="compact-player-skip-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M6 6l6 6-6 6"></path><path d="M13 6l6 6-6 6"></path></svg>';
   }
 
-  function renderPlaybackControlCluster({ variant, ownerId = '', loopId = '' } = {}) {
+  function renderPlaybackControlCluster({ variant, ownerId = '', loopId = '', loopControlStyle = scope.AlbumHavenAppearance?.instance?.getSavedLoopControlStyle?.() || 'capsule' } = {}) {
     if (!PLAYBACK_CONTROL_VARIANTS.has(variant)) {
       throw new TypeError('Unknown PlaybackControlCluster variant.');
     }
+    const style = loopControlStyle === 'companion' ? 'companion' : 'capsule';
     if (variant === 'compact-player') {
       return `
         <div class="playback-control-cluster playback-control-cluster--compact compact-player-transport" data-playback-control-cluster data-playback-control-variant="compact-player">
           <button class="compact-player-skip" type="button" data-playback-control-action="previous" data-compact-player-previous aria-label="Previous track">${renderPreviousIcon()}</button>
-          <button class="compact-player-play" type="button" data-playback-control-action="play-pause" data-compact-player-play aria-label="Play">&#9654;</button>
+          <button class="compact-player-play" type="button" data-playback-control-action="play-pause" data-compact-player-play aria-label="Play"><svg class="compact-player-play-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M8 5v14l12-7z"></path></svg></button>
           <button class="compact-player-skip" type="button" data-playback-control-action="next" data-compact-player-next aria-label="Next track">${renderNextIcon()}</button>
         </div>
       `;
@@ -10424,7 +12744,7 @@ function drawCombinedLoopWaveform(canvas, waveform, progressRatio = 0) {
     if (variant === 'expanded-player') {
       const owner = escapePlaybackControlAttribute(ownerId || 'global-player');
       return `
-        <span class="playback-control-cluster playback-control-cluster--expanded loop-play-control-cluster player-play-cluster" data-playback-control-cluster data-playback-control-variant="expanded-player">
+        <span class="playback-control-cluster playback-control-cluster--expanded loop-play-control-cluster player-play-cluster" data-playback-control-cluster data-playback-control-variant="expanded-player" data-loop-control-style="${style}">
           <button class="loop-play-control-button player-play" type="button" id="player-play" data-playback-control-action="play-pause" aria-label="Play or pause">Play</button>
           <span class="loop-play-control-actions player-loop-actions" data-playback-control-loop-actions data-loop-action-mount="${owner}" data-loop-action-owner="${owner}"></span>
         </span>
@@ -10439,7 +12759,7 @@ function drawCombinedLoopWaveform(canvas, waveform, progressRatio = 0) {
       throw new TypeError('PlaybackControlCluster requires the loop action renderer.');
     }
     return `
-      <div class="playback-control-cluster playback-control-cluster--saved-loop loop-play-control-cluster utility-loop-play-cluster" data-playback-control-cluster data-playback-control-variant="saved-loop">
+      <div class="playback-control-cluster playback-control-cluster--saved-loop loop-play-control-cluster utility-loop-play-cluster" data-playback-control-cluster data-playback-control-variant="saved-loop" data-loop-control-style="${style}">
         <button class="loop-play-control-button utility-loop-play" type="button" data-playback-control-action="play-pause" data-loop-play="${id}" aria-label="Play or pause">&#9654;</button>
         <span class="loop-play-control-actions utility-loop-actions" data-playback-control-loop-actions>
           ${renderLoopActions({ ownerId: owner, enterLabel: 'Create another loop', createLabel: 'Create loop', cancelLabel: 'Cancel loop creation' })}
@@ -10638,6 +12958,7 @@ function mountGlobalPlayerLoopControls() {
   if (els.loopRange && !els.loopRange._loopRangeController) {
     els.loopRange._loopRangeController = options.mountRange(els.loopRange);
   }
+  if (typeof syncSavedAppearanceLoopControlStyle === 'function') syncSavedAppearanceLoopControlStyle();
 }
 
 function formatTrackDuration(seconds) {
@@ -10800,14 +13121,35 @@ function clearWaveformCanvas() {
   ctx.clearRect(0, 0, canvas.width || 0, canvas.height || 0);
 }
 
+const playerTextTransitions = new WeakMap();
 function setPlayerSeekbarPresentation(isWaveform) {
   const mode = isWaveform ? 'waveform' : 'regular';
   const player = getPlayerElements().player;
+  const previousMode = player?.getAttribute('data-player-seekbar-presentation');
+  const animateText = previousMode && previousMode !== mode
+    && !(typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches);
+  const text = animateText ? Array.from(player.querySelectorAll('.player-meta, .player-time')).map(node => {
+    const rect = node.getBoundingClientRect();
+    playerTextTransitions.get(node)?.cancel();
+    return { node, rect };
+  }) : [];
   player?.setAttribute('data-player-seekbar-presentation', mode);
   document.documentElement?.classList.toggle('has-waveform-player', isWaveform);
+  text.forEach(({ node, rect }) => {
+    const next = node.getBoundingClientRect();
+    const origin = `translate(${rect.left - next.left}px, ${rect.top - next.top}px)`;
+    const animation = node.animate?.([
+      { transform: origin, opacity: 1, offset: 0 },
+      { transform: origin, opacity: 0, offset: .3 },
+      { transform: 'translate(0, 0)', opacity: 0, offset: .45 },
+      { transform: 'translate(0, 0)', opacity: 1, offset: 1 },
+    ], { duration: 320, easing: 'ease-in-out' });
+    if (animation) playerTextTransitions.set(node, animation);
+  });
 }
 
 async function updateWaveformAppearance(forceReload = false) {
+  if (typeof refreshUtilityLoopStereoWaveforms === 'function') refreshUtilityLoopStereoWaveforms();
   const els = getPlayerElements();
   const wrap = els.timeline?.parentElement;
   const playback = getPlayerPlaybackSnapshot();
@@ -10816,10 +13158,10 @@ async function updateWaveformAppearance(forceReload = false) {
   setPlayerSeekbarPresentation(isWaveform);
   wrap?.classList.toggle('is-waveform', isWaveform);
   if (els.waveformCanvas) {
-    els.waveformCanvas.hidden = !isWaveform;
+    els.waveformCanvas.hidden = false;
   }
   if (!isWaveform || !els.waveformCanvas || !path) {
-    clearWaveformCanvas();
+    if (!path) clearWaveformCanvas();
     return;
   }
   const renderToken = forceReload ? state.player.waveform.renderToken + 1 : state.player.waveform.renderToken;
@@ -10870,42 +13212,56 @@ function parseLoopTime(value) {
   return (hours * 3600) + (minutes * 60) + seconds;
 }
 
-function buildProblematicAlbumListItem(album, selected) {
+function getProblematicAlbumNavigationOptions(album, selected) {
   const showConverted = !album.has_encoding_repairs || !selected || state.utility.showRepairedDisplay;
   const displayName = getProblematicAlbumDisplayValue(album, 'album', showConverted) || 'Unknown Album';
   const displayArtist = getProblematicAlbumDisplayValue(album, 'album_artist', showConverted) || 'Unknown Artist';
   const displayYear = String(album.year || '').trim();
-  const displayTitle = displayYear ? `${displayName} / ${displayYear}` : displayName;
-  return `
-    <button class="utility-list-item ${selected ? 'is-active' : ''}" type="button" data-problematic-album-key="${escapeHtml(album.key)}">
-      <span class="utility-list-item-title">${escapeHtml(displayTitle)}</span>
-      <span class="utility-list-item-meta">${escapeHtml(displayArtist)}</span>
-      <span class="utility-list-item-issues">${escapeHtml(getProblematicAlbumIssueLabel(album))}</span>
-      ${album.has_encoding_repairs ? '<span class="utility-list-item-badge">Converted display</span>' : ''}
-    </button>
-  `;
+  const artworkSource = buildAlbumDisplayCoverUrl(album);
+  const artworkLabel = `Artwork for ${displayName}`;
+  const artworkHtml = buildUtilityAlbumArtbox(album, { label: artworkLabel, source: artworkSource });
+  return {
+      variant: 'wide', action: true, key: album.key, selected, label: displayName,
+      subtitle: displayArtist, year: displayYear, artworkHtml, artworkSource, artworkLabel,
+      count: album.track_count ?? (Array.isArray(album.tracks) ? album.tracks.length : null), countHidden: true,
+      attributes: { 'data-problematic-album-key': album.key },
+  };
+}
+
+function buildProblematicAlbumListItem(album, selected) {
+  return window.NavigationTree.renderItem(getProblematicAlbumNavigationOptions(album, selected));
 }
 
 function buildUtilityRuleListItem(rule, selected) {
-  return `
-    <button class="utility-list-item ${selected ? 'is-active' : ''}" type="button" data-utility-rule-key="${escapeHtml(rule.key || '')}">
-      <span class="utility-list-item-title">${escapeHtml(rule.title || 'Rule')}</span>
-      <span class="utility-list-item-meta">${escapeHtml(rule.description || '')}</span>
-      <span class="utility-list-item-issues">${Number(rule.count || 0)} applied</span>
-    </button>
-  `;
+  return window.NavigationTree.renderItem({
+    action: true, variant: 'panel', key: String(rule.key || ''), selected,
+    label: rule.title || 'Rule',
+    subtitle: rule.key === 'version-exceptions' ? 'Albums kept as separate releases'
+      : rule.key === 'problem-ignores' ? 'Selected album and track problems' : rule.description || '',
+    attributes: { 'data-utility-rule-key': String(rule.key || '') },
+  });
 }
 
 function buildUtilityLoopGroupKey(loop) {
-  const artist = String(loop?.artist || '').trim().toLowerCase();
-  const title = String(loop?.title || '').trim().toLowerCase();
-  const album = String(loop?.album || '').trim().toLowerCase();
-  if (artist || title || album) {
-    return `${artist}::${title}::${album}`;
-  }
-  const sourcePath = String(loop?.source_path || '').trim().toLowerCase();
-  if (sourcePath) return sourcePath;
-  return String(loop?.id || '');
+  const songKey = typeof loop?.song_key === 'string' ? loop.song_key : '';
+  if (songKey && loop?.song_identity_status === 'resolved') return songKey;
+  return loop?.id ? `unresolved:${String(loop.id)}` : '';
+}
+
+function canReorderUtilityLoop(loop) {
+  return state.utility.allowedActions?.['library.loops.reorder'] === true
+    && loop?.song_identity_status === 'resolved'
+    && typeof loop.song_key === 'string' && Boolean(loop.song_key)
+    && loop.can_reorder === true
+    && Number.isSafeInteger(loop.order_revision) && loop.order_revision >= 0;
+}
+
+function buildUtilityLoopTreeChild(loop, groupKey) {
+  return `<div class="utility-loop-tree-child" draggable="${canReorderUtilityLoop(loop)}" data-utility-loop-id="${escapeHtml(loop?.id || '')}" data-utility-loop-group-key="${escapeHtml(groupKey)}">
+    <span class="utility-loop-drag-handle" aria-hidden="true">⋮⋮</span>
+    <span class="utility-loop-tree-label">${escapeHtml(loop?.name || 'Saved loop')}</span>
+    <span class="utility-loop-tree-duration">${formatLoopTime(loop.duration_seconds || Number(loop.end_seconds) - Number(loop.start_seconds))}</span>
+  </div>`;
 }
 
 function groupUtilityLoops(loops) {
@@ -10942,35 +13298,25 @@ function buildUtilityLoopTree(group, selectedGroupKey, selectedLoopId) {
   const groupKey = String(group?.key || '');
   const collapsed = isUtilityLoopGroupCollapsed(groupKey);
   const groupSelected = groupKey && groupKey === String(selectedGroupKey || '');
+  const artworkHtml = buildUtilityAlbumArtbox(representative, { label: `Artwork for ${title}` });
   const loopsHtml = collapsed
     ? ''
     : `
-      <div class="utility-loop-tree-children">
-        ${(group?.loops || []).map((loop) => `
-          <button class="utility-loop-tree-child ${String(loop?.id || '') === String(selectedLoopId || '') && state.utility.selectedLoopDetailMode === 'loop' ? 'is-active' : ''}" type="button" draggable="true" data-utility-loop-id="${escapeHtml(loop?.id || '')}" data-utility-loop-group-key="${escapeHtml(groupKey)}">
-            <span class="utility-loop-drag-handle" aria-hidden="true">⋮⋮</span>
-            <span class="utility-loop-tree-icon" aria-hidden="true"></span>
-            <span class="utility-loop-tree-label">${escapeHtml(loop?.name || 'Saved loop')}</span>
-          </button>
-        `).join('')}
+      <div class="utility-loop-tree-children" data-loop-tree-song="${escapeHtml(groupKey)}">
+        ${(group?.loops || []).map(loop => buildUtilityLoopTreeChild(loop, groupKey)).join('')}
       </div>
     `;
   return `
     <div class="utility-loop-tree ${groupSelected ? 'is-group-selected' : ''} ${collapsed ? 'is-collapsed' : ''}" data-utility-loop-tree="${escapeHtml(groupKey)}">
-      <div class="utility-loop-group-row ${groupSelected && state.utility.selectedLoopDetailMode !== 'loop' ? 'is-active' : ''}">
-        <button class="utility-list-item utility-loop-group-list-item ${groupSelected && state.utility.selectedLoopDetailMode !== 'loop' ? 'is-active' : ''}" type="button" draggable="true" data-utility-loop-group-key="${escapeHtml(groupKey)}">
-          <span class="utility-loop-drag-handle" aria-hidden="true">⋮⋮</span>
-          <span class="utility-loop-tree-row-main">
-            <span class="utility-loop-tree-song-copy">
-              <span class="utility-list-item-title">${escapeHtml(title)}</span>
-              <span class="utility-list-item-meta">${escapeHtml(subtitle)}</span>
-              <span class="utility-loop-group-count">${escapeHtml(loopCount > 1 ? `${loopCount} loops` : '1 loop')}</span>
-            </span>
-          </span>
-          <span class="utility-loop-collapse-toggle-wrap">
-            <span class="utility-loop-collapse-toggle" data-utility-loop-collapse="${escapeHtml(groupKey)}" aria-label="${collapsed ? 'Expand song loops' : 'Collapse song loops'}" aria-expanded="${collapsed ? 'false' : 'true'}" role="button" tabindex="0">${collapsed ? '▸' : '▾'}</span>
-          </span>
-        </button>
+      <div class="utility-loop-group-row ${groupSelected ? 'is-active' : ''}">
+        ${window.NavigationTree.renderItem({
+          variant: 'wide', action: true, key: groupKey, draggable: false, className: 'utility-loop-group-list-item',
+          selected: groupSelected,
+          label: title, subtitle, year: representative?.year || '', artworkHtml,
+          count: loopCount, countHidden: true,
+          attributes: { 'data-utility-loop-group-key': groupKey },
+          trailingHtml: `<span class="utility-loop-collapse-toggle-wrap"><span class="utility-loop-collapse-toggle" data-utility-loop-collapse="${escapeHtml(groupKey)}" aria-label="${collapsed ? 'Expand song loops' : 'Collapse song loops'}" aria-expanded="${collapsed ? 'false' : 'true'}" role="button" tabindex="0"><svg viewBox="0 0 20 20" aria-hidden="true"><path d="m7 4 6 6-6 6"/></svg></span></span>`,
+        })}
       </div>
       ${loopsHtml}
     </div>
@@ -11625,7 +13971,11 @@ async function fetchAndRender(url, push = true, options = {}) {
     state.awaitingInitialDataRefresh = false;
   }
   if (state.busy) {
-    if (String(state.ui.activeViewRequestUrl || '') === apiUrl) {
+    if (
+      String(state.ui.activeViewRequestUrl || '') === apiUrl
+      && Number(state.ui.activeViewRequestTagEditMutationRevision || 0)
+        === Number(state.ui.tagEditOptimisticMutationRevision || 0)
+    ) {
       const activeController = state.ui.activeViewRequestController;
       if (
         restartIfSameUrl
@@ -11673,8 +14023,10 @@ async function fetchAndRender(url, push = true, options = {}) {
   let viewRendered = false;
   const requestId = Number(state.ui.activeViewRequestId || 0) + 1;
   const requestViewStateRevision = readViewStateRevision();
+  const requestTagEditMutationRevision = Number(state.ui.tagEditOptimisticMutationRevision || 0);
   const controller = typeof AbortController === 'function' ? new AbortController() : null;
   state.ui.activeViewRequestId = requestId;
+  state.ui.activeViewRequestTagEditMutationRevision = requestTagEditMutationRevision;
   state.ui.activeViewRequestUrl = apiUrl;
   state.ui.activeViewRequestPush = Boolean(push);
   state.ui.activeViewRequestStartupRefresh = Boolean(requestOptions.startupRefresh);
@@ -11717,6 +14069,10 @@ async function fetchAndRender(url, push = true, options = {}) {
       payloadTier: String(data?.payload_tier || ''),
     });
     if (!requestOwnsCurrentViewState(requestId, requestViewStateRevision)) {
+      return false;
+    }
+    // A response dispatched before a tag edit must not replace its optimistic view.
+    if (requestTagEditMutationRevision !== Number(state.ui.tagEditOptimisticMutationRevision || 0)) {
       return false;
     }
     if (
@@ -11912,6 +14268,7 @@ async function fetchAndRender(url, push = true, options = {}) {
     }
     if (state.ui.activeViewRequestId === requestId) {
       state.ui.activeViewRequestController = null;
+      state.ui.activeViewRequestTagEditMutationRevision = null;
       state.ui.activeViewRequestUrl = '';
       state.ui.activeViewRequestPush = false;
       state.ui.activeViewRequestStartupRefresh = false;
@@ -12101,6 +14458,7 @@ function abandonScanPageForNavigation(options = {}) {
   claimLocalViewStateNavigation();
   state.ui.scanPageReturnContext = null;
   state.ui.forceScanPageVisible = false;
+  if (typeof unmountLibraryStatusBar === 'function') unmountLibraryStatusBar();
   resumeScanPageGalleryCoverLoads();
   if (options.clearSelection === true) {
     state.view = {
@@ -12152,6 +14510,7 @@ function closeScanPage() {
   }
   state.ui.searchDraftQuery = String(returnContext.searchDraftQuery ?? state.view?.query ?? '');
   state.ui.scanPageReturnContext = null;
+  if (typeof unmountLibraryStatusBar === 'function') unmountLibraryStatusBar();
   const searchInput = document.getElementById('search-input');
   if (searchInput) searchInput.value = state.ui.searchDraftQuery;
   if (
@@ -12273,6 +14632,7 @@ async function browseScannedLibrarySnapshot() {
     });
     state.ui.scanPageReturnContext = null;
     state.ui.forceScanPageVisible = false;
+    if (typeof unmountLibraryStatusBar === 'function') unmountLibraryStatusBar();
     state.ui.searchDraftQuery = '';
     const searchInput = document.getElementById('search-input');
     if (searchInput) searchInput.value = '';
@@ -12338,6 +14698,7 @@ async function browseScannedLibrarySnapshot() {
     ) {
       state.ui.scanPageReturnContext = null;
       state.ui.forceScanPageVisible = false;
+      if (typeof unmountLibraryStatusBar === 'function') unmountLibraryStatusBar();
       state.ui.searchDraftQuery = '';
       const searchInput = document.getElementById('search-input');
       if (searchInput) searchInput.value = '';
@@ -12353,8 +14714,24 @@ async function browseScannedLibrarySnapshot() {
   }
 }
 
+function watcherHealthRefreshSignature(status) {
+  const health = status?.watcher_health || {};
+  const problems = Array.isArray(health.problems) ? health.problems : [];
+  return JSON.stringify([
+    String(health.state || ''),
+    problems.map(problem => [
+      String(problem?.root_key || ''),
+      String(problem?.state || ''),
+      String(problem?.detected_at || ''),
+      String(problem?.message || ''),
+      Object.entries(problem?.allowed_actions || {}).sort(([left], [right]) => left.localeCompare(right)),
+    ]).sort((left, right) => JSON.stringify(left).localeCompare(JSON.stringify(right))),
+  ]);
+}
+
 async function pollStatus() {
   const knownStatus = state.status || {};
+  const knownWatcherHealth = watcherHealthRefreshSignature(knownStatus);
   const hadKnownInventoryRevision = Object.prototype.hasOwnProperty.call(
     knownStatus,
     'inventory_mutation_revision',
@@ -12385,23 +14762,33 @@ async function pollStatus() {
     const currentInventoryRevision = Number(
       normalizedStatus.inventory_mutation_revision || 0,
     );
-    if (
-      hadKnownInventoryRevision
-      && currentInventoryRevision > knownInventoryRevision
-    ) {
+    const inventoryAdvanced = hadKnownInventoryRevision
+      && currentInventoryRevision > knownInventoryRevision;
+    if (inventoryAdvanced) {
       if (typeof invalidateAllHydratedTrackModalAlbumDetails === 'function') {
         invalidateAllHydratedTrackModalAlbumDetails();
       }
       state.ui.pendingInventoryMutationViewRefresh = true;
-      if (state.utility.loaded) {
-        try {
-          await loadProblematicFiles(true);
-        } catch (problematicFilesError) {
-          console.error(
-            '[AlbumHaven][Watcher] Failed to refresh Problematic Files after an inventory change.',
-            problematicFilesError,
-          );
+    }
+    const utility = state.utility;
+    const healthChanged = knownWatcherHealth !== watcherHealthRefreshSignature(normalizedStatus);
+    if ((utility.loaded || utility.loading) && (inventoryAdvanced || healthChanged)) {
+      utility.problematicStatusRefreshRevision = Number(utility.problematicStatusRefreshRevision || 0) + 1;
+    }
+    const requestedRefreshRevision = Number(utility.problematicStatusRefreshRevision || 0);
+    if (!utility.loading && requestedRefreshRevision > Number(utility.problematicStatusSyncedRevision || 0)) {
+      try {
+        // An earlier in-flight summary cannot satisfy a later status change.
+        // Failed/superseded loads return null; keep the change pending for the next poll.
+        const refreshedItems = await loadProblematicFiles(true);
+        if (state.utility === utility && Array.isArray(refreshedItems)) {
+          utility.problematicStatusSyncedRevision = requestedRefreshRevision;
         }
+      } catch (problematicFilesError) {
+        console.error(
+          '[AlbumHaven][Watcher] Failed to refresh Problematic Files after a status change.',
+          problematicFilesError,
+        );
       }
     }
     const statusObservationSequence = recordSuccessfulStatusObservation();
@@ -12434,47 +14821,10 @@ async function pollStatus() {
     const lastErrorText = scanOutcome === 'running'
       ? ''
       : String(normalizedStatus.last_error || '').trim();
-    const err = document.getElementById('last-error');
-    if (err) {
-      if (lastErrorText) {
-        err.style.display = 'block';
-        err.textContent = `Last scan error: ${lastErrorText}`;
-      } else {
-        err.style.display = 'none';
-        err.textContent = '';
-      }
-    }
     if (lastErrorText) {
       if (state.ui.lastStatusErrorToastIdentity !== lastErrorText) {
         state.ui.lastStatusErrorToastIdentity = lastErrorText;
-        showToast(`Last scan error: ${escapeHtml(lastErrorText)}`, 'error', 4800);
-      }
-      const scanGeneration = Number(normalizedStatus.scan_generation) || 0;
-      const historyIdentity = `${scanGeneration}:${lastErrorText}`;
-      if (state.ui.lastStatusErrorHistoryIdentity !== historyIdentity) {
-        state.ui.lastStatusErrorHistoryIdentity = historyIdentity;
-        try {
-          const historyPersistence = prependUtilityLogHistoryEntry({
-            id: `library-status-error:${scanGeneration}`,
-            action: 'Library status error',
-            level: 'error',
-            error: lastErrorText,
-            scan_generation: scanGeneration,
-            scan_phase: String(normalizedStatus.scan_phase || ''),
-            scan_outcome: scanOutcome,
-          });
-          Promise.resolve(historyPersistence).catch((historyError) => {
-            console.error(
-              '[AlbumHaven][History] Failed to persist a library status error.',
-              historyError,
-            );
-          });
-        } catch (historyError) {
-          console.error(
-            '[AlbumHaven][History] Failed to persist a library status error.',
-            historyError,
-          );
-        }
+      showToast(`Last scan error: ${lastErrorText}`, 'error', 4800);
       }
     } else {
       state.ui.lastStatusErrorToastIdentity = '';
@@ -12975,6 +15325,433 @@ async function exportBrowserLogHistory() {
 
 // END js/runtime/browser-log-history-store.js
 
+// BEGIN js/runtime/utility-log-history-query.js
+
+function normalizeUtilityLogHistoryQuery(draft, { now = new Date(), timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone } = {}) {
+  const formatter = new Intl.DateTimeFormat('en-CA', { timeZone, year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23' });
+  const parts = value => Object.fromEntries(formatter.formatToParts(value).filter(part => part.type !== 'literal').map(part => [part.type, Number(part.value)]));
+  const parseDate = text => {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(String(text || ''))) throw new Error('Choose a valid date range.');
+    const [year, month, day] = text.split('-').map(Number);
+    const date = new Date(Date.UTC(year, month - 1, day));
+    if (date.getUTCFullYear() !== year || date.getUTCMonth() !== month - 1 || date.getUTCDate() !== day) throw new Error('Choose valid calendar dates.');
+    return date;
+  };
+  const local = parts(new Date(now));
+  let start, end;
+  if (draft?.preset === 'custom') {
+    start = parseDate(draft.fromDate); end = parseDate(draft.toDate);
+    if (start > end) throw new Error('The start date must precede the end date.');
+  } else {
+    const days = { today: 1, '7-days': 7, '30-days': 30 }[draft?.preset];
+    if (!days) throw new Error('Choose a date preset.');
+    end = new Date(Date.UTC(local.year, local.month - 1, local.day));
+    start = new Date(end.getTime() - (days - 1) * 86400000);
+  }
+  end = new Date(end.getTime() + 86400000);
+  const dayBoundaryUtc = date => {
+    const target = date.getTime();
+    const representedTime = value => {
+      const p = parts(new Date(value));
+      return Date.UTC(p.year, p.month - 1, p.day, p.hour, p.minute, p.second);
+    };
+    // Check both sides of offset changes so a repeated midnight uses its first occurrence.
+    const midnights = [];
+    for (let hours = -48; hours <= 48; hours += 6) {
+      const sample = target + hours * 3600000;
+      const candidate = target - (representedTime(sample) - sample);
+      if (representedTime(candidate) === target) midnights.push(candidate);
+    }
+    if (midnights.length) return new Date(Math.min(...midnights)).toISOString();
+    // Midnight can be skipped. Find the first valid instant reaching this calendar day.
+    let before = target / 1000 - 48 * 3600;
+    let after = target / 1000 + 48 * 3600;
+    while (after - before > 1) {
+      const middle = Math.floor((before + after) / 2);
+      const p = parts(new Date(middle * 1000));
+      if (Date.UTC(p.year, p.month - 1, p.day) < target) before = middle;
+      else after = middle;
+    }
+    return new Date(after * 1000).toISOString();
+  };
+  const list = value => Array.from(new Set((Array.isArray(value) ? value : []).map(item => String(item).trim()).filter(Boolean))).sort();
+  return { from_utc: dayBoundaryUtc(start), to_utc: dayBoundaryUtc(end), sources: list(draft.sources), event_types: list(draft.event_types), text: String(draft.text || '').trim(), event_ids: [] };
+}
+
+function createUtilityLogHistoryQueryController({ fetchPage, exportQuery, contextKey, now = () => new Date(), timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone, onChange = () => {}, onAccepted = () => {} }) {
+  let epoch = 0, navigationEpoch = 0, context = contextKey, previousSelection = '', temporarySerial = 0, periodCapture = null;
+  let state = { query: null, snapshot: null, items: [], selectedEventId: '', temporaryRowId: null, draft: null, stale: false, refreshRequired: false, error: '', loading: false, nextCursor: null, revision: '' };
+  const emit = () => onChange({ ...state });
+  const capture = async (query, selection, temporary, metadata = {}) => {
+    const token = ++epoch;
+    const baseToken = Object.keys(query).length === 0 ? ++navigationEpoch : null;
+    state.loading = true; state.error = ''; emit();
+    try {
+      const page = await fetchPage({ query, cursor: null, snapshot: null, page_size: 500 });
+      if (token !== epoch) return;
+      state = { ...state, query, snapshot: page.snapshot, items: page.items || [], nextCursor: page.next_cursor || null, revision: page.revision || '', selectedEventId: selection, temporaryRowId: temporary, ...metadata, draft: null, stale: false, refreshRequired: false, error: '' };
+      onAccepted({ query, items: state.items, page, publishNavigation: baseToken === navigationEpoch });
+      if (!selection && temporary) periodCapture = { ...state, loading: false };
+    } catch (error) {
+      if (token !== epoch) return;
+      state.error = error.message || String(error); throw error;
+    } finally { if (token === epoch) { state.loading = false; emit(); } }
+  };
+  return {
+    getState: () => ({ ...state }),
+    beginDraft(draft = { preset: 'today' }) { state.draft = { ...draft }; emit(); },
+    cancelDraft() { state.draft = null; emit(); },
+    async applyDraft() {
+      if (!state.draft) throw new Error('No query draft is open.');
+      const query = normalizeUtilityLogHistoryQuery(state.draft, { now: typeof now === 'function' ? now() : now, timeZone });
+      const dates = new Intl.DateTimeFormat(undefined, { timeZone, dateStyle: 'medium' });
+      const periodLabel = `${dates.format(new Date(query.from_utc))} – ${dates.format(new Date(new Date(query.to_utc).getTime() - 1))} · ${timeZone}`;
+      if (!state.temporaryRowId) previousSelection = state.selectedEventId;
+      const row = state.temporaryRowId || `log-query-${++temporarySerial}`;
+      return capture(query, '', row, { periodLabel });
+    },
+    clear() { ++epoch; periodCapture = null; state = { ...state, temporaryRowId: null, periodLabel: undefined, query: null, snapshot: null, items: [], selectedEventId: previousSelection, draft: null, nextCursor: null, loading: false, error: '', stale: false, refreshRequired: false }; emit(); },
+    selectEvent(id) { return capture({ event_ids: [String(id)] }, String(id), state.temporaryRowId); },
+    selectPeriod() { if (!periodCapture) return; ++epoch; state = { ...periodCapture, draft: null, loading: false }; emit(); },
+    refresh() { if (!state.query) return capture({}, '', null); return capture(state.query, state.selectedEventId, state.temporaryRowId); },
+    async refreshNavigation() {
+      const token = ++navigationEpoch, capturedContext = context;
+      const page = await fetchPage({ query: {}, cursor: null, snapshot: null, page_size: 500 });
+      if (token !== navigationEpoch || capturedContext !== context) return;
+      onAccepted({ query: {}, items: page.items || [], page, navigationOnly: true, publishNavigation: true });
+      emit();
+    },
+    async loadMore() {
+      if (!state.nextCursor || state.loading || state.refreshRequired) return;
+      const token = epoch;
+      const baseToken = Object.keys(state.query || {}).length === 0 ? ++navigationEpoch : null;
+      state.loading = true; state.error = ''; emit();
+      try {
+        const page = await fetchPage({ query: state.query, cursor: state.nextCursor, snapshot: state.snapshot, page_size: 500 });
+        if (token !== epoch) return;
+        if (page.snapshot !== state.snapshot) throw new Error('The log snapshot changed. Refresh to continue.');
+        const items = new Map(state.items.map(item => [item.id, item]));
+        (page.items || []).forEach(item => { if (!items.has(item.id)) items.set(item.id, item); });
+        state.items = Array.from(items.values()); state.nextCursor = page.next_cursor || null;
+        onAccepted({ query: state.query, items: state.items, page, publishNavigation: baseToken === navigationEpoch });
+        if (!state.selectedEventId && state.temporaryRowId) periodCapture = { ...state, loading: false };
+      } catch (error) { if (token !== epoch) return; state.error = error.message || String(error); if (error.status === 410) state.refreshRequired = true; throw error; }
+      finally { if (token === epoch) { state.loading = false; emit(); } }
+    },
+    markStale(revision) { if (periodCapture && String(revision || '') !== String(periodCapture.revision || '')) periodCapture.stale = true; if (state.snapshot && String(revision || '') !== String(state.revision || '')) { state.stale = true; emit(); } },
+    setContext(next) { if (next === context) return; context = next; ++epoch; ++navigationEpoch; previousSelection = ''; periodCapture = null; state = { query: null, snapshot: null, items: [], selectedEventId: '', temporaryRowId: null, draft: null, stale: false, refreshRequired: false, error: '', loading: false, nextCursor: null, revision: '' }; emit(); },
+    async exportCurrent() {
+      if (!state.query || !state.snapshot || (state.selectedEventId && !state.items.some(item => String(item.id) === state.selectedEventId))) throw new Error('Select an available log query before exporting.');
+      const token = epoch;
+      try {
+        const result = await exportQuery({ query: state.query, snapshot: state.snapshot });
+        if (token !== epoch) throw new Error('The log context changed before export completed.');
+        return result;
+      } catch (error) {
+        if (token === epoch) { state.error = error.message || String(error); if (error.status === 410) state.refreshRequired = true; emit(); }
+        throw error;
+      }
+    },
+  };
+}
+
+// END js/runtime/utility-log-history-query.js
+
+// BEGIN js/runtime/date-range-picker.js
+
+/* Shared themed calendar. Consumers own timezone conversion and submission. */
+function buildDateRangePicker({ fromDate = '', toDate = '' } = {}) {
+  return `<div class="date-range-picker" data-date-range-picker>
+    ${[['fromDate', 'From date', fromDate], ['toDate', 'To date', toDate]].map(([name, label, value]) => `<div class="date-range-picker__field"><span>${label}</span><div class="date-range-picker__control ui-input-action"><input type="text" name="${name}" aria-label="${label}" value="${escapeHtml(value)}" placeholder="mm/dd/yyyy" readonly required>${window.ButtonComponent.renderActionButton({ icon: 'calendar', ariaLabel: `Choose ${label.toLowerCase()}`, attributes: { 'data-calendar-trigger': name, 'aria-haspopup': 'dialog', 'aria-expanded': 'false' } })}</div></div>`).join('')}
+  </div>`;
+}
+
+function mountDateRangePicker(container) {
+  const root = container.querySelector('[data-date-range-picker]');
+  let popup, trigger, input, month;
+  const close = (restore = false) => {
+    if (!popup) return;
+    clearTriggerAnchor(popup); popup.remove(); popup = null;
+    trigger.setAttribute('aria-expanded', 'false');
+    if (restore) trigger.focus();
+  };
+  const limits = () => ({ min: input.name === 'toDate' ? root.querySelector('[name="fromDate"]').value : '', max: input.name === 'fromDate' ? root.querySelector('[name="toDate"]').value : '' });
+  const position = () => {
+    if (!popup) return;
+    const rect = trigger.getBoundingClientRect(), width = Math.min(292, window.innerWidth - 32);
+    popup.style.width = `${width}px`;
+    popup.style.left = `${Math.max(16, Math.min(rect.left, window.innerWidth - width - 16))}px`;
+    const height = popup.getBoundingClientRect().height;
+    popup.style.top = `${Math.max(16, rect.bottom + height + 20 <= window.innerHeight ? rect.bottom + 4 : rect.top - height - 4)}px`;
+    syncTriggerAnchor(popup, trigger);
+  };
+  const render = (key = input.value) => {
+    popup.innerHTML = `<div class="calendar-picker__content ui-scrollbar">${buildCalendarMonth({ year: month.getFullYear(), month: month.getMonth(), selected: input.value, ...limits() })}</div>`;
+    position();
+    (popup.querySelector(`[data-calendar-date="${key}"]:not(:disabled)`) || popup.querySelector('[data-calendar-date]:not(:disabled)') || popup.querySelector('button')).focus();
+  };
+  const click = event => {
+    const button = event.target.closest('[data-calendar-trigger]');
+    if (!button) return;
+    if (popup && trigger === button) { close(true); return; }
+    close(); trigger = button;
+    input = root.querySelector(`[name="${button.dataset.calendarTrigger}"]`);
+    month = input.value ? new Date(`${input.value}T12:00:00`) : new Date();
+    popup = document.createElement('div'); popup.className = 'calendar-picker ui-scrollbar';
+    popup.setAttribute('role', 'dialog'); popup.setAttribute('aria-label', button.getAttribute('aria-label'));
+    container.appendChild(popup); trigger.setAttribute('aria-expanded', 'true');
+    popup.addEventListener('click', e => {
+      const date = e.target.closest('[data-calendar-date]'), nav = e.target.closest('[data-calendar-month]');
+      if (date && !date.disabled) { input.value = date.dataset.calendarDate; input.dispatchEvent(new Event('input', { bubbles: true })); close(true); }
+      else if (nav) { month = new Date(month.getFullYear(), month.getMonth() + Number(nav.dataset.calendarMonth), 1); render(); }
+    });
+    popup.addEventListener('keydown', e => {
+      if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); close(true); return; }
+      const day = e.target.closest('[data-calendar-date]'), offset = { ArrowLeft: -1, ArrowRight: 1, ArrowUp: -7, ArrowDown: 7 }[e.key];
+      if (!day || !offset) return;
+      e.preventDefault();
+      const next = new Date(`${day.dataset.calendarDate}T12:00:00`); next.setDate(next.getDate() + offset);
+      const key = calendarDateKey(next), { min, max } = limits();
+      if ((min && key < min) || (max && key > max)) return;
+      month = next; render(key);
+    });
+    render();
+  };
+  const outside = e => { if (popup && !popup.contains(e.target) && !trigger.contains(e.target)) close(); };
+  root.addEventListener('click', click);
+  document.addEventListener('pointerdown', outside, true);
+  window.addEventListener('resize', position); window.addEventListener('scroll', position, true);
+  return () => {
+    close(); root.removeEventListener('click', click); document.removeEventListener('pointerdown', outside, true);
+    window.removeEventListener('resize', position); window.removeEventListener('scroll', position, true);
+  };
+}
+
+function calendarDateKey(date) {
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+}
+
+function buildCalendarMonth({ year, month, selected = '', min = '', max = '' }) {
+  const first = new Date(year, month, 1), today = calendarDateKey(new Date());
+  const days = Array.from({ length: first.getDay() }, () => '<span></span>');
+  for (let day = 1; day <= new Date(year, month + 1, 0).getDate(); day++) {
+    const date = new Date(year, month, day), key = calendarDateKey(date);
+    days.push(window.ButtonComponent.renderButton({ label: String(day), className: 'calendar-picker__day', ariaLabel: date.toLocaleDateString(undefined, { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' }), disabled: Boolean((min && key < min) || (max && key > max)), attributes: { 'data-calendar-date': key, 'aria-pressed': String(key === selected), 'aria-current': key === today ? 'date' : null } }));
+  }
+  return `<div class="calendar-picker__header">${window.ButtonComponent.renderActionButton({ icon: 'previous', ariaLabel: 'Previous month', attributes: { 'data-calendar-month': '-1' } })}<strong aria-live="polite">${escapeHtml(first.toLocaleDateString(undefined, { month: 'long', year: 'numeric' }))}</strong>${window.ButtonComponent.renderActionButton({ icon: 'next', ariaLabel: 'Next month', attributes: { 'data-calendar-month': '1' } })}</div><div class="calendar-picker__weekdays">${Array.from({ length: 7 }, (_, day) => `<span>${escapeHtml(new Date(2023, 0, day + 1).toLocaleDateString(undefined, { weekday: 'short' }))}</span>`).join('')}</div><div class="calendar-picker__days">${days.join('')}</div>`;
+}
+
+// END js/runtime/date-range-picker.js
+
+// BEGIN js/runtime/utility-log-history-ui.js
+
+function canExportUtilityLogHistory() {
+  return state.utility.allowedActions?.['library.logs.read'] === true && state.utility.allowedActions?.['library.logs.export'] === true;
+}
+
+function getUtilityLogHistoryController() {
+  const owner = state.utility;
+  if (owner.logHistoryController) return owner.logHistoryController;
+  let presentation = null;
+  owner.logHistoryController = createUtilityLogHistoryQueryController({
+    contextKey: owner,
+    fetchPage: async ({ query, cursor, snapshot, page_size }) => {
+      const params = new URLSearchParams({ page_size: String(page_size) });
+      Object.entries(query || {}).forEach(([key, value]) => {
+        if (Array.isArray(value)) value.forEach(item => params.append(key, item));
+        else if (value) params.set(key, value);
+      });
+      if (cursor) params.set('cursor', cursor);
+      if (snapshot) params.set('snapshot', snapshot);
+      const response = await fetch(`/utilities/log-history?${params}`, { cache: 'no-store', headers: { Accept: 'application/json' } });
+      const data = await response.json();
+      if (!response.ok || data.ok === false) throw Object.assign(new Error(data.error || 'Unable to load log history.'), { status: response.status });
+      if (state.utility !== owner) { owner.logHistoryController.setContext({}); return data; }
+      return data;
+    },
+    onAccepted: ({ query, items, page, navigationOnly, publishNavigation }) => {
+      if (state.utility !== owner) return;
+      if (!navigationOnly) owner.allowedActions = { ...(owner.allowedActions || {}),
+        'library.logs.read': page.allowed_actions?.['library.logs.read'] === true,
+        'library.logs.export': page.allowed_actions?.['library.logs.export'] === true };
+      if (publishNavigation && !Object.keys(query || {}).length) owner.logHistory = items;
+    },
+    exportQuery: async request => {
+      if (state.utility !== owner || !canExportUtilityLogHistory()) throw new Error('Log export is unavailable.');
+      const response = await fetch('/utilities/log-history/export', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(request) });
+      const data = await response.json();
+      if (!response.ok || data.ok === false) throw Object.assign(new Error(data.error || 'Unable to export logs.'), { status: response.status });
+      if (state.utility !== owner) throw new Error('The library changed.');
+      return data;
+    },
+    onChange: value => {
+      if (state.utility !== owner) return;
+      owner.logHistoryLoading = value.loading;
+      owner.logHistoryRevision = value.revision;
+      owner.selectedLogHistoryId = value.selectedEventId;
+      if (value.snapshot) owner.logHistoryLoaded = true;
+      const nextPresentation = [value.query, value.snapshot, value.items, value.selectedEventId, value.temporaryRowId, value.loading, value.error, value.stale, value.refreshRequired, value.periodLabel, owner.logHistory, owner.allowedActions];
+      if (presentation && presentation.every((item, index) => item === nextPresentation[index])) return;
+      presentation = nextPresentation;
+      const els = getUtilityModalElements();
+      if (owner.activeTab === 'log-history' && els.overlay && !els.overlay.hidden) renderUtilityLogHistory();
+    },
+  });
+  return owner.logHistoryController;
+}
+
+function formatConsoleLogEvent(item) {
+  const labels = { file_count: 'Files', processed: 'Processed', downloaded: 'Downloaded', not_touched: 'Not touched', skipped: 'Skipped', not_found: 'Not found', failed: 'Failed', updated: 'Updated', succeeded: 'Succeeded' };
+  const outcomes = Object.entries(labels).filter(([key]) => Number.isFinite(item[key])).map(([key, label]) => `${label}: ${item[key]}`);
+  return [item.timestamp, item.action, item.source, [item.artist, item.album, item.title].filter(Boolean).join(' · '), ...outcomes, item.message, item.error].filter(Boolean).join('  ');
+}
+
+function getConsoleLogText(items) {
+  return (items || []).slice().sort((a, b) => String(a.timestamp || '').localeCompare(String(b.timestamp || '')) || String(a.id).localeCompare(String(b.id))).map(formatConsoleLogEvent).join('\n');
+}
+
+function buildConsoleLog(items, { label = 'Console log' } = {}) {
+  const ordered = (items || []).slice().sort((a, b) => String(a.timestamp || '').localeCompare(String(b.timestamp || '')) || String(a.id).localeCompare(String(b.id)));
+  return `<section class="console-log" aria-label="${escapeHtml(label)}"><div class="console-log__heading"><span>${escapeHtml(label)} · ${ordered.length} events</span>${window.ButtonComponent.renderActionButton({ icon: 'copy', ariaLabel: 'Copy log', attributes: { 'data-log-history-action': 'copy' } })}</div><pre class="console-log__lines" tabindex="0">${ordered.length ? ordered.map(item => {
+    const success = item.level === 'success' || (!item.error && /succeeded|completed|saved/i.test(item.action || ''));
+    const text = formatConsoleLogEvent(item);
+    return `<span class="console-log__line${success ? ' console-log__line--success' : ''}">${escapeHtml(text)}</span>`;
+  }).join('\n') : 'No events in this snapshot.'}</pre></section>`;
+}
+
+function utilityLogButton(label, action, { disabled = false } = {}) {
+  return window.ButtonComponent.renderButton({ label, ariaLabel: label, disabled, attributes: { 'data-log-history-action': action } });
+}
+
+function buildUtilityLogHistoryConsole(value) {
+  const selected = value.items.find(item => String(item.id) === value.selectedEventId);
+  const title = selected ? escapeHtml(selected.action || 'Log entry') : value.temporaryRowId ? 'Logs for selected period' : 'Recent activity';
+  return `<div class="utility-log-console-detail"><div class="utility-log-toolbar"><h3>${title}</h3>${canExportUtilityLogHistory() ? utilityLogButton('Export all logs', 'export-draft') : ''}</div>
+    ${selected ? `<p>${escapeHtml([formatLogHistoryTimestamp(selected.timestamp), selected.source, selected.artist, selected.album, selected.title].filter(Boolean).join(' · '))}</p>` : value.temporaryRowId ? `<p>${escapeHtml(value.periodLabel || '')}</p>` : ''}
+    ${value.stale ? buildOnPageAlertHtml({ severity: 'info', role: 'status', message: 'New activity is available. Refresh to capture it.' }) : ''}
+    ${value.error ? buildOnPageAlertHtml({ severity: 'error', title: 'Log history unavailable', message: value.error }) : ''}
+    ${buildConsoleLog(value.items)}
+    <div class="utility-log-toolbar">${utilityLogButton(value.loading ? 'Loading…' : 'Refresh', 'refresh', { disabled: value.loading })}
+    ${value.nextCursor ? utilityLogButton('Load more', 'more', { disabled: value.loading || value.refreshRequired }) : ''}
+    ${value.temporaryRowId ? utilityLogButton('Clear period', 'clear') : ''}
+    ${canExportUtilityLogHistory() ? utilityLogButton('Export displayed logs', 'export-current', { disabled: !value.snapshot || value.loading }) : ''}</div></div>`;
+}
+
+function reconcileUtilityLogHistoryTree(els, value) {
+  if (els.list.dataset.utilityNavigationOwner !== 'log-history') {
+    els.list.replaceChildren();
+    els.list.dataset.utilityNavigationOwner = 'log-history';
+  }
+  const rows = (state.utility.logHistory || []).map(item => ({ id: String(item.id), item }));
+  if (value.temporaryRowId) rows.unshift({ id: value.temporaryRowId, temporary: true });
+  const existing = new Map(Array.from(els.list.querySelectorAll('[data-utility-log-history-id]'), node => [node.getAttribute('data-utility-log-history-id'), node]));
+  const wanted = new Set(rows.map(row => row.id));
+  for (const [id, node] of existing) if (!wanted.has(id)) node.remove();
+  let cursor = els.list.firstElementChild;
+  for (const row of rows) {
+    let node = existing.get(row.id);
+    if (!node) {
+      const host = document.createElement('div');
+      host.innerHTML = row.temporary ? window.NavigationTree.renderItem({ action: true, variant: 'panel', key: row.id, label: 'Selected period', subtitle: value.periodLabel || '', attributes: { 'data-utility-log-history-id': row.id, 'data-log-query-row': '1' } }) : buildUtilityLogHistoryListItem(row.item, false);
+      node = host.firstElementChild;
+    }
+    if (node !== cursor) els.list.insertBefore(node, cursor);
+    cursor = node.nextElementSibling;
+    if (row.temporary) window.NavigationTree.updateItem(node, { label: 'Selected period', subtitle: value.periodLabel || '' });
+    window.NavigationTree.setItemSelected(node, row.temporary ? Boolean(value.temporaryRowId && !value.selectedEventId) : row.id === value.selectedEventId);
+  }
+  els.count.textContent = String(rows.length);
+}
+
+async function selectUtilityLogHistoryEvent(id) {
+  const controller = getUtilityLogHistoryController();
+  if (id === controller.getState().temporaryRowId) return controller.selectPeriod();
+  if (id === controller.getState().selectedEventId) return;
+  await controller.selectEvent(id);
+}
+
+async function downloadUtilityLogHistory() {
+  const data = await getUtilityLogHistoryController().exportCurrent();
+  const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+  const url = URL.createObjectURL(blob); const anchor = document.createElement('a');
+  anchor.href = url; anchor.download = `album-haven-logs-${new Date().toISOString().slice(0, 10)}.json`;
+  anchor.click(); setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+function openUtilityLogHistoryQuery(exportAfter = false) {
+  if (exportAfter && !canExportUtilityLogHistory()) return;
+  const controller = getUtilityLogHistoryController();
+  const zone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+  if (!exportAfter) {
+    const now = new Date();
+    const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+    let dispose = () => {};
+    return showAppFormDialog({
+      title: 'Date range', anchor: getUtilityModalElements().problemFilterButton,
+      contentHtml: `${buildDateRangePicker({ fromDate: today, toDate: today })}<p class="utility-detail-meta">${escapeHtml(zone)}</p>`,
+      submitLabel: 'Apply',
+      onMount: content => { dispose = mountDateRangePicker(content); },
+      onClose: () => { dispose(); controller.cancelDraft(); },
+      onSubmit: async content => {
+        controller.beginDraft({ preset: 'custom', fromDate: content.querySelector('[name="fromDate"]').value,
+          toDate: content.querySelector('[name="toDate"]').value });
+        await controller.applyDraft();
+        return true;
+      },
+    });
+  }
+  let preset = 'today';
+  let disposeCalendar = () => {};
+  const types = Array.from(new Set(['Tags edited', 'Library status error', 'Local cover selection persisted', 'Cover art update completed', 'Library indexing failed', ...(state.utility.logHistory || []).map(item => item.action).filter(Boolean)]));
+  controller.beginDraft({ preset });
+  const contentHtml = `<div class="utility-log-query-form"><p>Timezone: ${escapeHtml(zone)}</p><h4>Date range</h4>
+    <div class="utility-log-presets">${[['today', 'Today'], ['7-days', '7 days'], ['30-days', '30 days'], ['custom', 'Custom']].map(([value, label]) => window.ButtonComponent.renderButton({ label, attributes: { 'data-log-preset': value, 'aria-pressed': String(value === preset) } })).join('')}</div>
+    <div data-log-custom-dates hidden>${buildDateRangePicker()}</div>
+    <h4>Log types</h4><div class="utility-log-type-options">${types.map(value => `<label><input type="checkbox" name="eventType" value="${escapeHtml(value)}" checked> ${escapeHtml(value)}</label>`).join('')}</div>
+    <label>Text<input name="text" placeholder="Filter event text"></label></div>`;
+  const mount = content => {
+    const dates = content.querySelector('[data-log-custom-dates]');
+    const syncCalendar = () => {
+      disposeCalendar();
+      dates.hidden = preset !== 'custom';
+      dates.querySelectorAll('input, button').forEach(control => { control.disabled = dates.hidden; });
+      disposeCalendar = dates.hidden ? () => {} : mountDateRangePicker(dates);
+    };
+    syncCalendar();
+    content.querySelectorAll('[data-log-preset]').forEach(button => button.addEventListener('click', () => {
+      preset = button.getAttribute('data-log-preset');
+      content.querySelectorAll('[data-log-preset]').forEach(item => item.setAttribute('aria-pressed', String(item === button)));
+      syncCalendar();
+    }));
+
+  };
+  return showAppFormDialog({ title: exportAfter ? 'Export all logs' : 'Filter log period', anchor: exportAfter ? null : getUtilityModalElements().problemFilterButton, contentHtml, submitLabel: exportAfter ? 'Export logs' : 'Apply', onMount: mount,
+    onClose: () => { disposeCalendar(); controller.cancelDraft(); },
+    onSubmit: async content => {
+      const selectedTypes = Array.from(content.querySelectorAll('[name="eventType"]')).filter(input => input.checked).map(input => input.value);
+      if (!selectedTypes.length) throw new Error('Choose at least one log type.');
+      controller.beginDraft({ preset, fromDate: content.querySelector('[name="fromDate"]').value, toDate: content.querySelector('[name="toDate"]').value, sources: [], event_types: selectedTypes.length === types.length ? [] : selectedTypes, text: content.querySelector('[name="text"]').value });
+      await controller.applyDraft(); if (exportAfter) await downloadUtilityLogHistory(); return true;
+    },
+  });
+}
+
+async function handleUtilityLogHistoryAction(action) {
+  const controller = getUtilityLogHistoryController();
+  if (action === 'copy') return navigator.clipboard.writeText(getConsoleLogText(controller.getState().items));
+  if (action === 'filter') return openUtilityLogHistoryQuery(false);
+  if (action === 'export-draft') return openUtilityLogHistoryQuery(true);
+  if (action === 'refresh') {
+    const hasSelectedQuery = Object.keys(controller.getState().query || {}).length > 0;
+    return Promise.all([controller.refresh(), ...(hasSelectedQuery ? [controller.refreshNavigation()] : [])]);
+  }
+  if (action === 'more') return controller.loadMore();
+  if (action === 'clear') { controller.clear(); const id = controller.getState().selectedEventId; return id ? controller.selectEvent(id) : controller.refresh(); }
+  if (action === 'export-current') return downloadUtilityLogHistory();
+}
+
+// END js/runtime/utility-log-history-ui.js
+
 // BEGIN js/runtime/compact-data-table.js
 
 function buildCompactDataTable(config = {}) {
@@ -13080,7 +15857,11 @@ function buildAlbumTrackPlayButtonHtml(track = {}) {
   const coverPath = String(track.coverPath || track.cover_path || '');
   const durationSeconds = Number(track.durationSeconds || track.duration_seconds || 0);
   const isPlaying = Boolean(track.isPlaying);
-  return `<button class="play-track-button album-track-table__play" data-src="/track?path=${encodeURIComponent(trackPath)}" data-track-path="${escapeHtml(trackPath)}" data-track-title="${escapeHtml(title)}" data-track-artist="${escapeHtml(artist)}" data-track-album-artist="${escapeHtml(albumArtist)}" data-track-album="${escapeHtml(album)}" data-track-cover="${escapeHtml(coverPath)}" data-track-duration-seconds="${durationSeconds}" type="button" aria-label="${isPlaying ? 'Pause track' : 'Play track'}">${isPlaying ? '&#x23F8;' : '&#x25B6;'}</button>`;
+  const iconName = isPlaying ? 'pause' : 'play';
+  const icon = ButtonComponent.renderIconSvg(iconName, {
+    className: `album-track-table__play-icon ui-icon--${iconName}`,
+  });
+  return `<button class="play-track-button album-track-table__play" data-src="/track?path=${encodeURIComponent(trackPath)}" data-track-path="${escapeHtml(trackPath)}" data-track-title="${escapeHtml(title)}" data-track-artist="${escapeHtml(artist)}" data-track-album-artist="${escapeHtml(albumArtist)}" data-track-album="${escapeHtml(album)}" data-track-cover="${escapeHtml(coverPath)}" data-track-duration-seconds="${durationSeconds}" type="button" aria-label="${isPlaying ? 'Pause track' : 'Play track'}">${icon}</button>`;
 }
 
 function buildAlbumTrackTableRow(track = {}, index = 0, config = {}) {
@@ -13095,6 +15876,7 @@ function buildAlbumTrackTableRow(track = {}, index = 0, config = {}) {
   const problemHtml = track.isProblematic
     ? `<button class="track-problem-link" type="button" data-open-track-problematic="1" data-track-path="${escapeHtml(trackPath)}" title="Open this track in Problematic Files" aria-label="Open this track in Problematic Files">!</button>`
     : '';
+  const displayPath = String(track.displayPath || track.display_path || trackPath).trim();
   return {
     key: trackPath || `${index + 1}`,
     className: classes.join(' '),
@@ -13104,9 +15886,9 @@ function buildAlbumTrackTableRow(track = {}, index = 0, config = {}) {
       'track-playing': track.isPlaying ? 'true' : '',
     },
     cells: {
-      play: { content: buildAlbumTrackPlayButtonHtml(track), ariaLabel: track.isPlaying ? 'Pause track' : 'Play track' },
-      number: { content: escapeHtml(track.trackNumber || track.track_number || index + 1) },
+      number: { content: `<span class="album-track-table__number-play"><span class="album-track-table__number">${escapeHtml(track.trackNumber || track.track_number || index + 1)}</span>${buildAlbumTrackPlayButtonHtml(track)}</span>` },
       title: { content: titleHtml },
+      path: { content: `<span class="album-track-table__path" title="${escapeHtml(displayPath)}">${escapeHtml(displayPath)}</span>` },
       problem: { content: problemHtml },
       duration: { content: `<span class="track-duration" data-track-duration-path="${escapeHtml(trackPath)}" data-original-duration="${escapeHtml(track.originalDuration || track.duration || '')}">${escapeHtml(track.duration || '')}</span>` },
     },
@@ -13115,24 +15897,34 @@ function buildAlbumTrackTableRow(track = {}, index = 0, config = {}) {
 
 function buildAlbumTrackTableHtml(config = {}) {
   const groups = Array.isArray(config.groups) ? config.groups : [];
+  const showPath = Boolean(config.showPath);
+  const forceGroupLabels = Boolean(config.forceGroupLabels);
+  const ariaLabel = String(config.ariaLabel || 'Album tracks').trim() || 'Album tracks';
+  const idPrefix = String(config.idPrefix || 'album-track-table').trim() || 'album-track-table';
   const multiDisc = Boolean(config.multiDisc) || groups.length > 1;
   const mainDiscCount = groups.filter((group) => !group?.isBonus).length;
   const tableSections = groups.map((group, groupIndex) => {
     const tracks = Array.isArray(group?.tracks) ? group.tracks : [];
     const label = String(group?.discLabel || (group?.discNumber ? `CD ${group.discNumber}` : '')).trim();
-    const showLabel = multiDisc && Boolean(label) && (Boolean(group?.isBonus) || mainDiscCount > 1);
+    const showLabel = Boolean(label) && (
+      forceGroupLabels
+      || (multiDisc && (Boolean(group?.isBonus) || mainDiscCount > 1))
+    );
+    const columnsConfig = [
+      { key: 'number', label: '#' },
+      { key: 'title', label: 'Track' },
+      ...(showPath ? [{ key: 'path', label: 'File path' }] : []),
+      { key: 'problem', label: 'Problem', header: 'absent', action: true },
+      { key: 'duration', label: 'Length', action: true },
+    ];
     const table = buildCompactDataTable({
-      id: `album-track-table-tracks-${groupIndex + 1}`,
-      ariaLabel: label ? `Album tracks — ${label}` : 'Album tracks',
+      id: `${idPrefix}-tracks-${groupIndex + 1}`,
+      ariaLabel: label ? `${ariaLabel} — ${label}` : ariaLabel,
       headers: groupIndex === 0 ? 'visible' : 'absent',
-      columns: '34px 36px minmax(0, 1fr) 20px minmax(54px, auto)',
-      columnsConfig: [
-        { key: 'play', label: 'Play', header: 'absent' },
-        { key: 'number', label: '#' },
-        { key: 'title', label: 'Track' },
-        { key: 'problem', label: 'Problem', header: 'absent', action: true },
-        { key: 'duration', label: 'Length', action: true },
-      ],
+      columns: showPath
+        ? '36px minmax(180px, 1fr) minmax(220px, .9fr) 20px minmax(54px, auto)'
+        : '36px minmax(0, 1fr) 20px minmax(54px, auto)',
+      columnsConfig,
       rows: tracks.map((track, index) => buildAlbumTrackTableRow(track, index, config)),
       density: 'compact',
       frame: 'outline',
@@ -13145,7 +15937,14 @@ function buildAlbumTrackTableHtml(config = {}) {
     return `<section class="album-track-table__disc">${heading}${table}</section>`;
   }).join('');
   const totalLength = String(config.totalLength || '').trim();
-  return `<div class="album-track-table" data-playing-animation="${config.playingAnimation === false ? 'disabled' : 'enabled'}"><div class="album-track-table__frame">${tableSections}${totalLength ? `<div class="album-track-table__total">Total Length: ${escapeHtml(totalLength)}</div>` : ''}</div></div>`;
+  const mainLength = String(config.mainLength || '').trim();
+  const bonusLength = String(config.bonusLength || '').trim();
+  const summaries = [
+    totalLength ? `<div class="album-track-table__aggregate-total">Total Length: ${escapeHtml(totalLength)}</div>` : '',
+    mainLength ? `<div class="album-track-table__main-total">Total Main Album Length: ${escapeHtml(mainLength)}</div>` : '',
+    bonusLength ? `<div class="album-track-table__bonus-total">Bonus Disc Length: ${escapeHtml(bonusLength)}</div>` : '',
+  ].join('');
+  return `<div class="album-track-table" data-playing-animation="${config.playingAnimation === false ? 'disabled' : 'enabled'}"><div class="album-track-table__frame">${tableSections}${summaries ? `<div class="album-track-table__total">${summaries}</div>` : ''}</div></div>`;
 }
 
 function triggerAlbumTrackPlayActivation(button) {
@@ -13158,68 +15957,31 @@ function triggerAlbumTrackPlayActivation(button) {
   }, { once: true });
 }
 
+function handleAlbumTrackRowDoubleClick(event) {
+  if (event.target.closest?.('button, a, input, textarea, select, [contenteditable=true]')) return;
+  const row = event.currentTarget;
+  event.preventDefault();
+  // Double-click is playback; ordinary drag selection remains native and copyable.
+  const selection = row.ownerDocument.getSelection();
+  if (selection && row.contains(selection.anchorNode) && row.contains(selection.focusNode)) {
+    selection.removeAllRanges();
+  }
+  if (row.dataset.trackPlaying === 'true') return;
+  row.querySelector('.play-track-button')?.click();
+}
+
 // END js/runtime/album-track-table.js
 
 // BEGIN js/runtime/utility-list-builders.js
 
-﻿function buildUtilityLogHistoryListItem(item, selected) {
-  const timestamp = formatLogHistoryTimestamp(item?.timestamp);
-  const count = Number(item?.file_count || 0);
-  const summary = [item.artist, item.album, item.title].filter(Boolean).join(' - ');
-  return `
-    <button class="utility-list-item ${selected ? 'is-active' : ''}" type="button" data-utility-log-history-id="${escapeHtml(item.id || '')}">
-      <span class="utility-list-item-title">${escapeHtml(item.action || 'Activity')}</span>
-      <span class="utility-list-item-meta">${escapeHtml(summary || 'Unknown album')}</span>
-      <span class="utility-list-item-issues">${escapeHtml(timestamp || `${count} files`)}</span>
-    </button>
-  `;
+function buildUtilityLogHistoryListItem(item, selected) {
+  return window.NavigationTree.renderItem({ action: true, variant: 'panel', key: String(item.id), selected,
+    label: item.action || 'Activity', subtitle: [item.artist, item.album, item.title].filter(Boolean).join(' · ') || item.source || '',
+    year: formatLogHistoryTimestamp(item.timestamp), attributes: { 'data-utility-log-history-id': String(item.id) } });
 }
 
 function buildUtilityLogHistoryDetail(item) {
-  if (!item) {
-    return `
-      <div class="utility-empty-state">Select a log entry to inspect the saved file changes.</div>
-      <div class="confirm-modal-actions">
-        <button class="button button-secondary" type="button" data-export-log-history="1">Export Logs</button>
-      </div>
-    `;
-  }
-  const files = Array.isArray(item.files) ? item.files : [];
-  const downloaded = Number(item.downloaded || 0);
-  const notTouched = Number(item.not_touched ?? item.skipped ?? 0);
-  const notFound = Number(item.not_found ?? item.failed ?? 0);
-  const processed = Number(item.processed || 0);
-  const summaryParts = [
-    item.artist || '',
-    item.album || '',
-    item.title || '',
-    item.file_count ? `${item.file_count} file${Number(item.file_count) === 1 ? '' : 's'}` : '',
-  ].filter(Boolean);
-  const coverSummaryParts = [];
-  if (processed || downloaded || notTouched || notFound) {
-    coverSummaryParts.push(`Checked: ${processed}`);
-    coverSummaryParts.push(`Downloaded: ${downloaded}`);
-    coverSummaryParts.push(`Not touched: ${notTouched}`);
-    coverSummaryParts.push(`Not found: ${notFound}`);
-  }
-  return `
-    <div class="utility-rule-detail">
-      <h3 class="utility-rule-title">${escapeHtml(item.action || 'Activity')}</h3>
-      <p class="utility-rule-description">${escapeHtml(formatLogHistoryTimestamp(item.timestamp) || '')}</p>
-      <p class="utility-rule-description">${escapeHtml(item.source_label || 'This browser')}</p>
-      <div class="utility-rule-album-list">
-        <div class="utility-rule-group-meta">${escapeHtml(summaryParts.join(' - '))}</div>
-        ${coverSummaryParts.length ? `<div class="utility-rule-album-meta">${escapeHtml(coverSummaryParts.join(' | '))}</div>` : ''}
-        ${item.error ? `<div class="utility-rule-album-meta">${escapeHtml(item.error)}</div>` : ''}
-        ${files.length
-          ? `<div class="utility-log-history-files">${files.map((path) => `<div class="utility-log-history-file">${escapeHtml(path)}</div>`).join('')}</div>`
-          : '<div class="utility-empty-state compact">No downloaded cover paths recorded.</div>'}
-      </div>
-      <div class="confirm-modal-actions">
-        <button class="button button-secondary" type="button" data-export-log-history="1">Export Logs</button>
-      </div>
-    </div>
-  `;
+  return buildConsoleLog(item ? [item] : []);
 }
 
 function getSelectedUtilityLoop() {
@@ -13238,17 +16000,33 @@ function getSelectedUtilityLoopGroup() {
   return groups.find((group) => String(group?.key || '') === selectedKey) || null;
 }
 
+function getFilteredUtilityLoops() {
+  const query = String(state.utility.loopsSearchQuery || '').trim().toLocaleLowerCase();
+  const loops = state.utility.loops || [];
+  return query ? loops.filter(loop => [loop.name, loop.title, loop.artist, loop.album]
+    .some(value => String(value || '').toLocaleLowerCase().includes(query))) : loops;
+}
+
+function buildUtilityLoopMoveActions(loop) {
+  if (!canReorderUtilityLoop(loop)) return '';
+  return `<span class="utility-loop-reorder-actions" role="group" aria-label="Reorder ${escapeHtml(loop.name || 'Saved loop')}">${['up', 'down'].map(direction => window.ButtonComponent.renderButton({
+    label: `Move ${direction}`, size: 'small', ariaLabel: `Move ${loop.name || 'Saved loop'} ${direction}`,
+    attributes: { 'data-move-utility-loop': loop.id, 'data-loop-move-direction': direction },
+  })).join('')}</span>`;
+}
+
 function buildUtilityLoopEntry(loop) {
   const mediaSrc = `/loops/media/${encodeURIComponent(loop.id || '')}`;
   const loopId = escapeHtml(loop.id || '');
   const repeatEnabled = Boolean(state.utility.loopRepeatEnabled) && String(state.utility.selectedLoopId || '') === String(loop.id || '');
   return `
-    <section class="utility-loop-entry ${repeatEnabled ? 'is-active' : ''}" data-utility-loop-entry="${escapeHtml(loop.id || '')}">
+    <section class="utility-loop-entry ${repeatEnabled ? 'is-active' : ''}" data-utility-loop-entry="${escapeHtml(loop.id || '')}" data-loop-song-key="${escapeHtml(buildUtilityLoopGroupKey(loop))}" draggable="${canReorderUtilityLoop(loop)}">
+      ${buildUtilityLoopMoveActions(loop)}
       <div class="utility-loop-heading">
-        <div>
-          <h3 class="utility-detail-title">${escapeHtml(loop.name || 'Saved loop')}</h3>
-        </div>
-        <button class="icon-button utility-loop-remove" type="button" data-delete-saved-loop="${escapeHtml(loop.id || '')}" aria-label="Remove loop" title="Remove loop">&#128465;</button>
+        <span class="utility-loop-drag-handle" aria-hidden="true">⋮⋮</span>
+        <h3 class="utility-detail-title">${escapeHtml(loop.name || 'Saved loop')}</h3>
+        <span class="utility-loop-original-times"><span>Original timestamps</span><strong>${loop.original_start_seconds != null && loop.original_end_seconds != null ? `${formatLoopTime(loop.original_start_seconds, true)} – ${formatLoopTime(loop.original_end_seconds, true)}` : 'Unavailable'}</strong></span>
+        ${state.utility.allowedActions?.['library.loops.delete'] === true ? window.ButtonComponent.renderActionButton({ icon: 'delete', semantic: 'destructive', ariaLabel: `Delete ${loop.name || 'Saved loop'}`, title: `Delete ${loop.name || 'Saved loop'}`, className: 'utility-loop-remove', attributes: { 'data-delete-saved-loop': loop.id || '' } }) : ''}
       </div>
       <div class="utility-loop-shell" data-utility-loop-shell="${escapeHtml(loop.id || '')}">
         <audio class="utility-loop-audio" data-loop-audio="${escapeHtml(loop.id || '')}" data-original-src="${mediaSrc}" src="${mediaSrc}" preload="none"></audio>
@@ -13267,6 +16045,7 @@ function buildUtilityLoopEntry(loop) {
             <div class="utility-loop-time" data-loop-time="${loopId}">0:00 / 0:00</div>
           </div>
           <div class="utility-loop-timeline-wrap">
+            <canvas class="utility-loop-stereo-waveform" data-loop-stereo-waveform="${loopId}" aria-hidden="true" hidden></canvas>
             <input class="utility-loop-timeline" type="range" data-loop-timeline="${escapeHtml(loop.id || '')}" min="0" max="100" step="0.01" value="0" aria-label="Playback position">
             <div class="loop-range-surface" data-loop-range-owner="saved-loop-${loopId}" data-loop-range-surface hidden>
               <canvas class="utility-saved-loop-waveform" data-loop-range-waveform aria-hidden="true"></canvas>
@@ -13303,10 +16082,10 @@ function buildUtilityLoopDetail(loopGroup, selectedLoop = null) {
     return '<div class="utility-empty-state">Select a saved song to inspect its loops.</div>';
   }
   const representative = group.representativeLoop || group.loops[0];
-  const coverHtml = representative.cover_path
-    ? `<img class="utility-detail-cover-image" src="/cover?path=${encodeURIComponent(representative.cover_path)}" alt="Artwork for ${escapeHtml(representative.title || representative.name || 'loop')}">`
-    : '<div class="utility-detail-cover-placeholder">No artwork</div>';
-  const loopsToRender = selectedLoop ? [selectedLoop] : group.loops;
+  const coverHtml = buildUtilityAlbumArtbox(representative, {
+    label: `Artwork for ${representative.title || representative.name || 'loop'}`, interactive: true,
+  });
+  const loopsToRender = group.loops;
   const headerTitle = representative.title || representative.name || 'Saved loops';
   const artistLine = representative.artist || '';
   const albumLine = representative.album || '';
@@ -13322,11 +16101,11 @@ function buildUtilityLoopDetail(loopGroup, selectedLoop = null) {
             <div class="utility-detail-meta">${escapeHtml(albumLine || 'Unknown album')}</div>
             ${yearLine ? `<div class="utility-detail-meta">${escapeHtml(yearLine)}</div>` : ''}
           </div>
-          <div class="utility-detail-meta">${escapeHtml(selectedLoop ? '1 loop selected' : `${group.loops.length} saved loop${group.loops.length === 1 ? '' : 's'}`)}</div>
+          <div class="utility-detail-meta">${escapeHtml(`${group.loops.length} saved loop${group.loops.length === 1 ? '' : 's'}`)}</div>
         </div>
       </div>
       <div class="utility-loop-group-main">
-        <div class="utility-loop-entry-list">${loopsToRender.map((loop) => buildUtilityLoopEntry(loop)).join('')}</div>
+        <div class="utility-loop-entry-list" data-loop-panel-song="${escapeHtml(group.key || '')}">${loopsToRender.map((loop) => buildUtilityLoopEntry(loop)).join('')}</div>
       </div>
     </div>
   `;
@@ -13350,16 +16129,11 @@ function buildUtilityAppearanceDetail() {
 }
 
 function buildUtilityIntegrationListItem(item, selected) {
-  const status = String(item?.status_label || '').trim() || (item?.connected
-    ? 'Connected'
-    : (item?.api_configured ? 'Not connected' : 'Server setup required'));
-  return `
-    <button class="utility-list-item ${selected ? 'is-active' : ''}" type="button" data-utility-integration-key="${escapeHtml(item?.key || '')}">
-      <span class="utility-list-item-title">${escapeHtml(item?.title || 'Integration')}</span>
-      <span class="utility-list-item-meta">${escapeHtml(item?.description || '')}</span>
-      <span class="utility-list-item-issues">${escapeHtml(status)}</span>
-    </button>
-  `;
+  return window.NavigationTree.renderItem({
+    action: true, variant: 'panel', key: String(item?.key || ''), selected,
+    label: item?.title || 'Integration',
+    attributes: { 'data-utility-integration-key': String(item?.key || '') },
+  });
 }
 
 function buildLastfmTimeZoneOptions(selectedTimeZone) {
@@ -13375,208 +16149,85 @@ function buildLastfmTimeZoneOptions(selectedTimeZone) {
 }
 
 function buildUtilityIntegrationDetail(item) {
-  if (item?.key === 'library') {
-    return buildUtilityLibrarySettingsDetail(item);
-  }
+  const button = options => window.ButtonComponent.renderButton(options);
+  if (item?.key === 'library') return buildUtilityLibrarySettingsDetail(item);
   if (item?.key === 'local_playlist_import') {
-    const importState = state.utility?.localPlaylistImport || {};
-    const supportedExtensions = Array.isArray(item.supported_extensions) ? item.supported_extensions : [];
-    const targetOptions = Array.isArray(item.target_options) ? item.target_options : [];
-    const lastAnalysis = importState.lastAnalysis && typeof importState.lastAnalysis === 'object' ? importState.lastAnalysis : null;
-    const blockedTargets = Array.isArray(lastAnalysis?.target_recommendation?.blocked_targets)
-      ? lastAnalysis.target_recommendation.blocked_targets
-      : [];
-    const targetRows = targetOptions.length
-      ? targetOptions.map((target) => `
-        <div class="utility-rule-album-row">
-          <div class="utility-rule-album-main">
-            <div class="utility-rule-album-title">${escapeHtml(target.title || target.key || 'Target')}</div>
-            <div class="utility-rule-album-meta">${escapeHtml(target.description || '')}</div>
-          </div>
-        </div>
-      `).join('')
-      : '<div class="utility-empty-state compact">Target rules will land here later.</div>';
-    const blockedRows = blockedTargets.length
-      ? blockedTargets.map((blocked) => `<div class="utility-rule-album-meta">Album Top unavailable: ${escapeHtml(blocked.reason || '')}</div>`).join('')
-      : '';
-    const analysisHtml = lastAnalysis ? `
-      <section class="utility-rule-album-list">
-        <div class="utility-rule-album-title">${escapeHtml(lastAnalysis.status?.label || 'Preview contract ready')}</div>
-        <div class="utility-rule-album-meta">${escapeHtml(lastAnalysis.status?.detail || '')}</div>
-        <div class="utility-rule-album-meta">${escapeHtml(lastAnalysis.source?.filename || '')}</div>
-        <div class="utility-rule-album-meta">${escapeHtml(lastAnalysis.source?.source_kind || '')}</div>
-        <div class="utility-rule-album-meta">${escapeHtml(lastAnalysis.source?.parser_mode || '')}</div>
-        <div class="utility-rule-album-meta">Recommended target: ${escapeHtml(lastAnalysis.target_recommendation?.recommended_target || 'playlist')}</div>
-        ${blockedRows}
-      </section>
-    ` : '<div class="utility-empty-state compact">Select a local playlist file to prepare the analyze/preview contract.</div>';
-    const completionPreview = lastAnalysis?.local_library_completion && typeof lastAnalysis.local_library_completion === 'object'
-      ? lastAnalysis.local_library_completion
-      : (item.local_library_completion && typeof item.local_library_completion === 'object' ? item.local_library_completion : {});
-    const importStatus = item.import_status && typeof item.import_status === 'object' ? item.import_status : {};
-    return `
-      <div class="utility-rule-detail">
-        <h3 class="utility-rule-title">${escapeHtml(item.title || 'Import Local Playlist')}</h3>
-        <p class="utility-rule-description">${escapeHtml(item.description || '')}</p>
-        <div class="utility-rule-album-meta">${escapeHtml(item.status_label || 'Analyze/preview contract ready')}</div>
-        <div class="utility-rule-album-meta">Supports: ${escapeHtml(supportedExtensions.join(', ') || 'No playlist formats configured yet.')}</div>
-        <div class="utility-loop-create-row">
-          <input type="file" data-local-playlist-import-file accept="${escapeHtml(supportedExtensions.join(','))}">
-          <button class="button" type="button" data-analyze-local-playlist="1" ${importState.analyzeBusy ? 'disabled' : ''}>${importState.analyzeBusy ? 'Analyzing...' : 'Analyze playlist'}</button>
-        </div>
-        <div class="utility-rule-album-meta">${escapeHtml(importState.selectedFileName || 'No file selected')}</div>
-        ${importState.error ? `<div class="utility-rule-album-meta">${escapeHtml(importState.error)}</div>` : ''}
-        ${analysisHtml}
-        ${buildUtilityCollapsibleSection('local-playlist-import-targets', 'Target direction', targetRows)}
-        ${buildUtilityCollapsibleSection('local-playlist-import-completion', completionPreview.label || 'Completion preview direction reserved', `<div class="utility-rule-album-meta">${escapeHtml(completionPreview.detail || '')}</div>`)}
-        ${buildUtilityCollapsibleSection('local-playlist-import-status', importStatus.label || 'Final import execution lands later', `<div class="utility-rule-album-meta">${escapeHtml(importStatus.detail || '')}</div>`)}
-      </div>
-    `;
+    return `<div class="utility-rule-detail"><h3 class="utility-rule-title">Import Local Playlist</h3><div class="settings-integration-actions">${button({ label: 'Import', disabled: true, attributes: { 'data-local-playlist-import': '1' } })}</div></div>`;
   }
   if (item?.key === 'foobar') {
-    const sourceFamilies = Array.isArray(item.source_families) ? item.source_families : [];
-    const referenceAssets = Array.isArray(item.reference_assets) ? item.reference_assets : [];
-    const writeBackScopes = Array.isArray(item.write_back_scopes) ? item.write_back_scopes : [];
-    const continuousSync = item.continuous_sync && typeof item.continuous_sync === 'object' ? item.continuous_sync : {};
-    const sourceFamilyRows = sourceFamilies.length
-      ? sourceFamilies.map((family) => `
-        <div class="utility-rule-album-row">
-          <div class="utility-rule-album-main">
-            <div class="utility-rule-album-title">${escapeHtml(family.title || 'Source family')}</div>
-            <div class="utility-rule-album-meta">${escapeHtml(family.description || '')}</div>
-          </div>
-        </div>
-      `).join('')
-      : '<div class="utility-empty-state compact">Source-family contract details will land here later.</div>';
-    const writeBackLabels = writeBackScopes.length
-      ? writeBackScopes.map((scope) => `<span class="utility-track-problem-chip utility-rule-problem-chip">${escapeHtml(scope)}</span>`).join('')
-      : '<span class="utility-rule-album-meta">No write-back scopes configured.</span>';
-    const assetRows = referenceAssets.length
-      ? referenceAssets.map((asset) => `
-        <div class="utility-rule-album-row">
-          <div class="utility-rule-album-main">
-            <div class="utility-rule-album-title">${escapeHtml(asset.title || asset.filename || 'Reference asset')}</div>
-            <div class="utility-rule-album-meta">${escapeHtml(asset.description || '')}</div>
-          </div>
-          <div class="confirm-modal-actions">
-            <a class="button button-secondary" href="${escapeHtml(asset.view_url || '#')}" target="_blank" rel="noreferrer">View</a>
-            <a class="button button-secondary" href="${escapeHtml(asset.download_url || '#')}" target="_blank" rel="noreferrer">Download</a>
-          </div>
-        </div>
-      `).join('')
-      : '<div class="utility-empty-state compact">No reference assets are available yet.</div>';
-    return `
-      <div class="utility-rule-detail">
-        <h3 class="utility-rule-title">${escapeHtml(item.title || 'Foobar2000')}</h3>
-        <p class="utility-rule-description">${escapeHtml(item.description || 'Help-first Foobar setup guidance.')}</p>
-        <div class="utility-rule-album-list">
-          <div class="utility-rule-album-meta">${escapeHtml(item.status_label || 'How To and reference assets ready')}</div>
-          <div class="utility-rule-album-meta">${escapeHtml(continuousSync.label || 'Continuous Foobar sync')}: ${escapeHtml(continuousSync.enabled ? 'Enabled' : (continuousSync.default_state || 'off'))}</div>
-          <div class="utility-rule-album-meta">When off: ${escapeHtml(continuousSync.disabled_behavior || 'One-time import only')}</div>
-          <div class="utility-rule-album-meta">When enabled later: ${escapeHtml(continuousSync.cadence_when_enabled || 'Once a week')}</div>
-          <div class="utility-rule-album-meta">Problems first surface in ${escapeHtml(item.problem_surface || 'Utilities > Problematic Files')}.</div>
-          ${item.help_route ? `<div class="utility-rule-album-meta">Foobar help contract: <a href="${escapeHtml(item.help_route)}" target="_blank" rel="noreferrer">${escapeHtml(item.help_route)}</a></div>` : ''}
-        </div>
-        <div class="utility-divider" aria-hidden="true"></div>
-        <div class="utility-rule-album-list">
-          <div class="utility-rule-album-meta">SOURCE FAMILIES</div>
-          ${sourceFamilyRows}
-        </div>
-        <div class="utility-divider" aria-hidden="true"></div>
-        <div class="utility-rule-album-list">
-          <div class="utility-rule-album-meta">V1 WRITE-BACK SCOPE</div>
-          <div class="utility-rule-problem-labels">${writeBackLabels}</div>
-        </div>
-        <div class="utility-divider" aria-hidden="true"></div>
-        <div class="utility-rule-album-list">
-          <div class="utility-rule-album-meta">REFERENCE ASSETS</div>
-          ${assetRows}
-        </div>
-      </div>
-    `;
+    const format = state.utility.foobarFormat || 'Playback Statistics XML';
+    return `<div class="utility-rule-detail"><h3 class="utility-rule-title">Foobar2000</h3>
+      <section class="library-settings-section"><label class="lastfm-inline-field"><span>SQLite database</span><input class="utility-search-input" type="text" placeholder="SQLite database path" disabled aria-describedby="foobar-unavailable"></label>
+      <div class="settings-integration-actions">${button({ label: 'Save', disabled: true })}</div></section>
+      <section class="library-settings-section"><h4>Import playback history</h4><div class="settings-integration-actions">
+      ${button({ label: format, attributes: { 'data-foobar-format-trigger': '1', 'aria-haspopup': 'menu', 'aria-expanded': 'false' } })}
+      ${button({ label: 'Import', disabled: true, attributes: { 'data-foobar-import': '1' } })}</div>
+      <p id="foobar-unavailable">Import is unavailable in this build. Setup instructions and export references are available.</p></section>
+      <div class="settings-integration-actions settings-instructions-action">${button({ label: 'Read setup instructions', attributes: { 'data-foobar-help': '1' } })}</div></div>`;
   }
-  if (!item || item.key !== 'lastfm') {
-    return '<div class="utility-empty-state">Select an integration.</div>';
-  }
-  const draft = state.utility.integrationDrafts?.lastfm || { username: '', password: '', timezone: '' };
-  const username = draft.username || item.username || '';
-  const historyCount = Number(item.listen_history_count || 0);
-  const pendingCount = Number(item.pending_scrobble_count || 0);
-  const connectedAt = item.connected_at ? (formatLogHistoryTimestamp(item.connected_at) || item.connected_at) : '';
-  const selectedTimeZone = String(draft.timezone || item.user_timezone || getDetectedBrowserTimeZone() || 'UTC');
-  const headerText = item.connected
-    ? `Last.FM · Connected as ${item.username || 'Connected'}${connectedAt ? ` (${connectedAt})` : ''}`
-    : 'Last.FM';
-  return `
-    <div class="utility-rule-detail">
-      <h3 class="utility-rule-title lastfm-header-title">${item.connected ? '<span class="lastfm-status-check" aria-hidden="true">&#10003;</span>' : ''}${escapeHtml(headerText)}</h3>
-      <p class="utility-rule-description">Connect your LastFM account to scrobble and import your listening history</p>
-      <div class="utility-rule-album-list">
-        <div class="utility-rule-album-meta">Scrobbled: ${escapeHtml(String(historyCount))}. Queued: ${escapeHtml(String(pendingCount))}</div>
-        ${item.api_configured
-          ? ''
-          : '<div class="utility-rule-album-meta">The server still needs `LASTFM_API_KEY` and `LASTFM_API_SECRET` configured before this integration can connect.</div>'}
-      </div>
-      <form class="lastfm-integration-form" data-lastfm-integration-form="1">
-        <div class="lastfm-credentials-grid">
-          <label class="lastfm-inline-field">
-            <span>Username</span>
-            <input type="text" value="${escapeHtml(username)}" data-lastfm-field="username" autocomplete="username" placeholder="Username or email" ${(item.api_configured && !item.connected) ? '' : 'disabled'}>
-          </label>
-          <label class="lastfm-inline-field">
-            <span>Password</span>
-            <input type="password" value="${escapeHtml(draft.password || '')}" data-lastfm-field="password" autocomplete="current-password" placeholder="${item.connected ? 'Disconnect to reconnect' : 'Password'}" ${(item.api_configured && !item.connected) ? '' : 'disabled'}>
-          </label>
-        </div>
-        <div class="confirm-modal-actions">
-          <button class="button" type="submit" data-save-lastfm-integration="1" ${(item.api_configured && !item.connected) ? '' : 'disabled'}>Connect Last.FM</button>
-          <button class="button button-secondary" type="button" data-disconnect-lastfm-integration="1" ${item.connected ? '' : 'disabled'}>Disconnect</button>
-        </div>
-      </form>
-      <div class="utility-divider" aria-hidden="true"></div>
-      <div class="utility-rule-album-list">
-        <div class="utility-rule-album-meta">TIMEZONE</div>
-      </div>
-      <div class="lastfm-credentials-grid">
-        <label class="lastfm-inline-field">
-          <span>Timezone</span>
-          <select data-lastfm-field="timezone">
-            ${buildLastfmTimeZoneOptions(selectedTimeZone)}
-          </select>
-        </label>
-      </div>
-      <div class="confirm-modal-actions">
-        <button class="button button-secondary" type="button" data-save-lastfm-timezone="1" ${selectedTimeZone ? '' : 'disabled'}>Save timezone</button>
-      </div>
-    </div>
-  `;
+  if (!item || item.key !== 'lastfm') return '<div class="utility-empty-state">Select an integration.</div>';
+  const draft = state.utility.integrationDrafts?.lastfm || {};
+  const enabled = item.api_configured && !item.connected;
+  const statistics = item.playback_statistics;
+  const plays = statistics && Number.isFinite(Number(statistics.local_playcount)) ? String(statistics.local_playcount) : 'Unavailable';
+  const seconds = statistics ? Number(statistics.total_listening_seconds) : NaN;
+  const minutes = Math.floor(seconds / 60), hours = Math.floor(minutes / 60);
+  const duration = Number.isFinite(seconds) && seconds >= 0
+    ? `${hours ? `${hours} ${hours === 1 ? 'hour' : 'hours'} ` : ''}${minutes % 60} ${minutes % 60 === 1 ? 'minute' : 'minutes'}` : 'Unavailable';
+  const scrobbleState = state.utility.lastfmScrobbles || {};
+  const summary = scrobbleState.summary;
+  const scrobbled = summary?.scrobbled ?? item.listen_history_count ?? 0;
+  const pending = summary?.pending ?? item.pending_scrobble_count ?? 0;
+  const lastfmTotal = scrobbleState.loading
+    ? 'Loading...'
+    : summary?.lastfm_total == null ? 'Unavailable' : String(summary.lastfm_total);
+  const scrobbleStatus = item.connected ? `<div class="lastfm-scrobble-status" aria-label="Last.fm scrobble status">
+      <p data-lastfm-scrobbled>Scrobbled: ${escapeHtml(String(scrobbled))}</p>
+      <p data-lastfm-total>LastFM Total: ${escapeHtml(lastfmTotal)}</p>
+      <p data-lastfm-pending>Pending: ${escapeHtml(String(pending))}</p>
+    </div>` : '';
+  const submitScrobbles = item.connected ? `<div class="settings-lastfm-submit-action">${button({
+    label: scrobbleState.submitting ? 'Submitting...' : 'Submit',
+    disabled: scrobbleState.submitting || Number(pending) <= 0 || summary?.can_submit !== true,
+    attributes: { 'data-submit-lastfm-scrobbles': '1' },
+  })}</div>` : '';
+  return `<div class="utility-rule-detail"><h3 class="utility-rule-title settings-scrobbling-heading">Last.FM
+      ${item.connected ? '<span class="settings-connected-status"><span aria-hidden="true">&#10003;</span><span>Connected</span></span>' : ''}</h3>
+    ${scrobbleStatus}
+    <form class="lastfm-integration-form" data-lastfm-integration-form="1"><div class="lastfm-credentials-grid">
+      <label class="lastfm-inline-field"><span>Username</span><input class="utility-search-input" type="text" value="${escapeHtml(draft.username || item.username || '')}" data-lastfm-field="username" autocomplete="username" placeholder="Username or email" ${enabled ? '' : 'disabled'}></label>
+      <label class="lastfm-inline-field"><span>Password</span><input class="utility-search-input" type="password" value="${escapeHtml(draft.password || '')}" data-lastfm-field="password" autocomplete="current-password" placeholder="${item.connected ? 'Disconnect to reconnect' : 'Password'}" ${enabled ? '' : 'disabled'}></label></div>
+      <div class="settings-integration-actions">${button({ label: 'Connect Last.FM', type: 'submit', disabled: !enabled, attributes: { 'data-save-lastfm-integration': '1' } })}
+      ${button({ label: 'Disconnect', disabled: !item.connected, attributes: { 'data-disconnect-lastfm-integration': '1' } })}</div></form>
+      ${!item.api_configured ? '<p class="utility-rule-album-meta">Last.FM connection is unavailable on this server.</p>' : ''}
+      <section class="library-settings-section settings-playback-statistics"><h4>Playback statistics</h4><dl><div><dt>Local playcount</dt><dd>${escapeHtml(plays)}</dd></div><div><dt>Total listening time</dt><dd>${escapeHtml(duration)}</dd></div></dl></section>
+      ${submitScrobbles}</div>`;
+}
+
+function matchesUtilityRuleSearch(item) {
+  const query = String(state.utility.rulesSearchQuery || '').trim().toLocaleLowerCase();
+  if (!query) return true;
+  return [item?.name, item?.artist, item?.album_artist, item?.album, item?.title,
+    item?.filename, item?.year, item?.edition, item?.problem_reason, item?.reason]
+    .filter(value => value !== null && value !== undefined)
+    .join(' ').toLocaleLowerCase().includes(query);
 }
 
 function buildVersionExceptionRuleDetail(rule) {
-  const albums = Array.isArray(rule?.albums) ? rule.albums : [];
-  const rows = albums.length
-    ? albums.map((album) => {
-      const title = [album.album_artist, album.name, album.year].filter(Boolean).join(' - ');
-      return `
-        <div class="utility-rule-album-row">
-          <div class="utility-rule-album-main">
-            <div class="utility-rule-album-title">${escapeHtml(title || album.key || 'Unknown album')}</div>
-            <div class="utility-rule-album-meta">${escapeHtml(album.edition ? `Edition: ${album.edition}` : 'Excluded from album version tabs')}</div>
-          </div>
-          <button class="button utility-rule-revert" type="button" data-revert-version-exception="${escapeHtml(album.key || '')}">Revert rule</button>
-        </div>
-      `;
-    }).join('')
-    : '<div class="utility-empty-state">No albums currently use this rule.</div>';
-  return `
-    <div class="utility-rule-detail">
-      <h3 class="utility-rule-title">${escapeHtml(rule?.title || 'Version exceptions')}</h3>
-      <p class="utility-rule-description">${escapeHtml(rule?.description || 'Albums listed here are not counted as versions of another album with the same title.')}</p>
-      <div class="utility-rule-album-list">${rows}</div>
-    </div>
-  `;
+  const albums = (Array.isArray(rule?.albums) ? rule.albums : []).filter(matchesUtilityRuleSearch);
+  const table = albums.length ? buildUtilityCompactTable({
+    id: 'version-exceptions', ariaLabel: 'Version exceptions',
+    columns: 'minmax(220px,1fr) minmax(180px,1fr) 110px',
+    columnsConfig: [{ key: 'target', label: 'Artist / Album' }, { key: 'effect', label: 'Rule' }, { key: 'action', label: 'Actions', header: 'screen-reader', action: true }],
+    headers: 'visible', density: 'compact', overflow: 'local', mobile: 'stack', frame: 'outline', actionTrackWidth: '110px',
+    rows: albums.map(album => ({ key: album.key, cells: {
+      target: `<span class="utility-rule-target">${buildUtilityAlbumArtbox(album, { label: `Artwork for ${album.name || 'album'}` })}<span><span class="utility-rule-album-title">${escapeHtml(album.name || album.key || 'Unknown album')}</span><span class="utility-rule-album-meta">${escapeHtml([album.album_artist, album.year].filter(Boolean).join(' · '))}</span></span></span>`,
+      effect: escapeHtml(album.edition ? `Edition: ${album.edition}` : 'Excluded from album version tabs'),
+      action: ButtonComponent.renderButton({ label: 'Revert rule', className: 'utility-rule-revert', attributes: { 'data-revert-version-exception': album.key || '' } }),
+    } })),
+  }) : `<p class="utility-detail-meta">${rule?.albums?.length ? 'No version exceptions match your search.' : 'No version exceptions yet.'}</p>`;
+  return `<div class="utility-rule-detail"><h3 class="utility-rule-title">${escapeHtml(rule?.title || 'Version exceptions')}</h3><p class="utility-rule-description">${escapeHtml(rule?.description || 'Albums listed here are not counted as versions of another album with the same title.')}</p>${table}</div>`;
 }
-
 function buildUtilityCompactTable(config) {
   if (typeof buildCompactDataTable !== 'function') {
     throw new Error('CompactDataTable is not registered.');
@@ -13585,9 +16236,9 @@ function buildUtilityCompactTable(config) {
 }
 
 function buildProblemIgnoresRuleDetail(rule) {
-  const albumItems = Array.isArray(rule?.album_items) ? rule.album_items : [];
-  const fileItems = Array.isArray(rule?.file_items) ? rule.file_items : [];
-  if (albumItems.length || fileItems.length) {
+  const albumItems = (Array.isArray(rule?.album_items) ? rule.album_items : []).filter(matchesUtilityRuleSearch);
+  const fileItems = (Array.isArray(rule?.file_items) ? rule.file_items : []).filter(matchesUtilityRuleSearch);
+  if (Array.isArray(rule?.album_items) || Array.isArray(rule?.file_items)) {
     const columns = 'minmax(220px,.42fr) minmax(180px,.58fr) 88px';
     const columnsConfig = (targetLabel) => [
       { key: 'target', label: targetLabel },
@@ -13627,18 +16278,18 @@ function buildProblemIgnoresRuleDetail(rule) {
       <div class="utility-rule-detail utility-problem-exclusions-detail">
         <h3 class="utility-rule-title">${escapeHtml(rule?.title || 'Problem exclusions')}</h3>
         <p class="utility-rule-description">${escapeHtml(rule?.description || 'Album or file problems excluded from Problematic Files.')}</p>
-        <section class="utility-problem-exclusion-group">
+        ${albumItems.length ? `<section class="utility-problem-exclusion-group">
           <h4 class="utility-detail-section-title">ALBUM EXCLUSIONS</h4>
-          ${albumItems.length ? table(albumItems, 'Artist / Album', 'Album exclusions', 'problem-exclusions-album', 'album') : '<div class="utility-empty-state compact">No album exclusions.</div>'}
-        </section>
-        <section class="utility-problem-exclusion-group">
+          ${table(albumItems, 'Artist / Album', 'Album exclusions', 'problem-exclusions-album', 'album')}
+        </section>` : ''}
+        ${fileItems.length ? `<section class="utility-problem-exclusion-group">
           <h4 class="utility-detail-section-title">FILE EXCLUSIONS</h4>
-          ${fileItems.length ? table(fileItems, 'Filename', 'File exclusions', 'problem-exclusions-file', 'file') : '<div class="utility-empty-state compact">No file exclusions.</div>'}
-        </section>
+          ${table(fileItems, 'Filename', 'File exclusions', 'problem-exclusions-file', 'file')}
+        </section>` : ''}
       </div>
     `;
   }
-  const items = Array.isArray(rule?.items) ? rule.items : [];
+  const items = (Array.isArray(rule?.items) ? rule.items : []).filter(matchesUtilityRuleSearch);
   const groups = groupProblemIgnoreItems(items);
   const rows = groups.length
     ? groups.map((group) => {
@@ -13721,7 +16372,7 @@ function buildDetectedProblemsHtml(album) {
       <div class="utility-album-problem-list">
         <div class="utility-problem-level-heading"><span>ALBUM-LEVEL PROBLEMS</span></div>
         <div class="utility-album-problem-content">
-          <span class="utility-track-problem-chip">Album not found</span>
+          ${buildAlertLabelHtml({ severity: 'error', message: 'Album not found' })}
         </div>
       </div>
       <div class="utility-detected-actions utility-missing-album-actions">
@@ -13731,94 +16382,89 @@ function buildDetectedProblemsHtml(album) {
       </div>
     `;
   }
-  const rows = Array.isArray(album?.track_problem_rows) ? album.track_problem_rows : [];
-  const albumRows = Array.isArray(album?.album_problem_rows)
-    ? album.album_problem_rows
-    : (Array.isArray(album?.problem_reasons) ? album.problem_reasons : []).map((reason) => ({
-      reason,
-      row_key: '',
-    }));
-  const separateCandidate = album?.separate_release_candidate || null;
-  const separateKey = String(separateCandidate?.key || '');
-  const separateSelected = Boolean(separateKey && state.utility.separateReleaseSelections[separateKey]);
-  const hasExclusionSelection = getIgnoredRepairRowKeys().length > 0;
-  const hasProblemRows = albumRows.length || rows.length;
-  const actionHtml = (albumRows.length || rows.length || separateKey) ? `
-    <div class="utility-detected-actions">
-      ${separateKey ? `
-        <label class="utility-separate-release-choice ${separateSelected ? 'is-active' : ''}">
-          <input type="checkbox" data-separate-release-key="${escapeHtml(separateKey)}" ${separateSelected ? 'checked' : ''}>
-          <span>Separate releases</span>
-          <small>${escapeHtml((separateCandidate.years || []).join(' / '))}</small>
-        </label>
-        <button class="button utility-detail-apply" type="button" data-open-separate-release-confirm="1" ${separateSelected ? '' : 'disabled'}>Apply separate releases</button>
-      ` : ''}
-      ${hasProblemRows ? `<button class="button utility-detail-apply" type="button" data-open-exclusion-confirm="1" ${hasExclusionSelection ? '' : 'disabled'}>Exclude the problem</button>` : ''}
-    </div>
-  ` : '';
-  const albumProblemMarkup = albumRows.map((item) => {
-    const rowKey = String(item?.row_key || '');
-    const selected = Boolean(rowKey && state.utility.problemExclusionSelections?.[rowKey]);
-    return `<button class="utility-track-problem-chip utility-problem-exclusion-pill ${selected ? 'is-active' : ''}" type="button" data-problem-exclusion-scope="album" data-problem-exclusion-row-key="${escapeHtml(rowKey)}" data-problem-exclusion-reason="${escapeHtml(item?.reason || '')}" aria-pressed="${selected ? 'true' : 'false'}" ${rowKey ? '' : 'disabled'}>${escapeHtml(item?.display_reason || item?.reason || '')}</button>`;
-  }).join('');
-  const trackTable = buildUtilityCompactTable({
-    id: 'problematic-track-problems',
-    ariaLabel: 'Track-level problems',
-    columns: 'minmax(220px,.42fr) minmax(300px,.58fr)',
-    columnsConfig: [
-      { key: 'filename', label: 'Filename' },
-      { key: 'reason', label: 'Reason' },
-    ],
-    headers: 'visible',
-    density: 'compact',
-    overflow: 'local',
-    mobile: 'preserve',
-    frame: 'inset',
-    rows: rows.map((row, rowIndex) => ({
-      key: String(row.path || ''),
-      dataAttributes: { 'problematic-track-path': String(row.path || '') },
-      cells: {
-        filename: `<span class="utility-track-problem-file" data-problematic-track-path="${escapeHtml(row.path || '')}" title="${escapeHtml(row.path || row.filename || '')}">${escapeHtml(row.filename || getFilenameFromPath(row.path) || 'Unknown file')}</span>`,
-        reason: `<span class="utility-track-problem-labels">${(Array.isArray(row.reasons) ? row.reasons : []).map((reason) => {
-          const match = (Array.isArray(row.ignorable_reasons) ? row.ignorable_reasons : []).find((item) => item.reason === reason);
-          const rowKey = String(match?.row_key || '');
-          const selected = Boolean(rowKey && state.utility.problemExclusionSelections?.[rowKey]);
-          return `<button class="utility-track-problem-chip utility-problem-exclusion-pill ${selected ? 'is-active' : ''}" type="button" data-problem-exclusion-scope="file" data-problem-exclusion-row-key="${escapeHtml(rowKey)}" data-problem-exclusion-reason="${escapeHtml(reason)}" data-problem-exclusion-row-index="${rowIndex}" aria-pressed="${selected ? 'true' : 'false'}" ${rowKey ? '' : 'disabled'}>${escapeHtml(reason)}</button>`;
-        }).join('')}</span>`,
-      },
-    })),
+  const rows = (Array.isArray(album?.track_problem_rows) ? album.track_problem_rows : []).map(row => ({ ...row }));
+  const proposals = getVisibleProblemSuggestions(album);
+  proposals.forEach(proposal => {
+    if (!rows.some(row => row.path === proposal.path)) rows.push({ path: proposal.path, filename: getFilenameFromPath(proposal.path), reasons: [], ignorable_reasons: [] });
   });
-  const trackProblemMarkup = rows.length ? `
-    <div class="utility-track-problem-table">
-      <div class="utility-problem-level-heading"><span>TRACK-LEVEL PROBLEMS</span><span class="utility-problem-count">${escapeHtml(rows.length)}</span></div>
-      ${trackTable}
-    </div>
-  ` : '';
-  return `
-    <div class="sr-only" data-problem-exclusion-status role="status" tabindex="-1">${albumRows.length || rows.length ? '' : 'No problems remain.'}</div>
-    <div class="utility-album-problem-list">
-      <div class="utility-problem-level-heading"><span>ALBUM-LEVEL PROBLEMS</span></div>
-      <div class="utility-album-problem-content">${albumProblemMarkup}</div>
-    </div>
-    ${trackProblemMarkup}
-    ${actionHtml}
-  `;
+  const selectedFilters = (state.utility.selectedProblemFilters || []).map(normalizeProblemFilterReason);
+  const visibleReason = reason => !selectedFilters.length || selectedFilters.includes(normalizeProblemFilterReason(reason));
+  const coverReasons = new Set(['Missing cover art', 'Poor art quality']);
+  const albumRows = Array.isArray(album?.album_problem_rows) ? album.album_problem_rows
+    : (album.problem_reasons || []).map(reason => ({ reason, row_key: '' }));
+  const albumProblems = albumRows.filter(item => visibleReason(item.reason)).map(item => {
+    const matching = getIgnorableProblemRows(album).filter(row => normalizeProblemFilterReason(row.reason) === normalizeProblemFilterReason(item.reason));
+    const keys = matching.map(row => String(row.row_key || '')).filter(Boolean);
+    return buildAlertLabelHtml({
+      severity: 'error', message: item.reason === 'Missing year' ? 'Missing year' : item.display_reason || item.reason, interactive: true,
+      pressed: keys.length > 0 && keys.every(key => state.utility.problemExclusionSelections?.[key]),
+      disabled: !keys.length,
+      className: 'utility-problem-exclusion-pill',
+      attributes: { 'data-album-problem-type': normalizeProblemFilterReason(item.reason), 'data-problem-exclusion-reason': item.reason },
+    });
+  }).join('');
+  const tableRows = rows.map((row, rowIndex) => {
+    const track = (album.tracks || []).find(item => item.path === row.path) || {};
+    const reasons = (row.reasons || []).filter(reason => !coverReasons.has(reason) && visibleReason(reason));
+    const suggestions = proposals.filter(proposal => proposal.path === row.path);
+    if (!reasons.length && !suggestions.length) return null;
+    return {
+      key: String(row.path || ''), dataAttributes: { 'problematic-track-path': String(row.path || '') },
+      cells: {
+        filename: `<span class="utility-track-problem-file" data-problematic-track-path="${escapeHtml(row.path || '')}">${escapeHtml(track.title || row.filename || getFilenameFromPath(row.path) || 'Unknown file')}</span><span class="utility-detail-meta">${escapeHtml([track.artist, row.file_type].filter(Boolean).join(' · '))}</span>`,
+        reason: `<span class="utility-track-problem-labels">${reasons.map(reason => {
+          const match = (row.ignorable_reasons || []).find(item => item.reason === reason);
+          const rowKey = String(match?.row_key || '');
+          return buildAlertLabelHtml({
+            severity: 'error', message: reason, interactive: true, pressed: Boolean(state.utility.problemExclusionSelections?.[rowKey]),
+            disabled: !rowKey, className: 'utility-problem-exclusion-pill',
+            attributes: { 'data-problem-exclusion-scope': 'file', 'data-problem-exclusion-row-key': rowKey,
+              'data-problem-exclusion-reason': normalizeProblemFilterReason(reason), 'data-problem-exclusion-row-index': rowIndex },
+          });
+        }).join('')}</span>`,
+        suggested: `<span class="utility-suggestion-labels">${suggestions.map(proposal => buildAlertLabelHtml({
+          severity: 'info', message: formatProblemSuggestionLabel(proposal), interactive: true,
+          pressed: Boolean(state.utility.proposalSelections?.[proposal.id]),
+          disabled: !album.allowed_actions?.['library.files.edit_tags'] || Boolean(state.utility.proposalApplyBusy),
+          className: 'utility-problem-suggestion', attributes: { 'data-problem-suggestion-id': proposal.id, 'data-label-intent': 'proposal' },
+        })).join('')}</span>`,
+      },
+    };
+  }).filter(Boolean);
+  const table = tableRows.length ? buildUtilityCompactTable({
+    id: 'problematic-track-problems', ariaLabel: 'Detected problems',
+    columns: 'minmax(180px,1fr) minmax(160px,1fr) minmax(180px,1.2fr)',
+    columnsConfig: [{ key: 'filename', label: 'Track / file' }, { key: 'reason', label: 'Problems' }, { key: 'suggested', label: 'Suggested edits' }],
+    headers: 'visible', density: 'compact', overflow: 'local', mobile: 'preserve', frame: 'outline', rows: tableRows,
+  }) : '';
+  const separateCandidate = album?.separate_release_candidate;
+  const separateKey = String(separateCandidate?.key || '');
+  const separateSelected = Boolean(separateKey && state.utility.separateReleaseSelections?.[separateKey]);
+  const separateActions = separateKey ? `<label class="utility-separate-release-choice ${separateSelected ? 'is-active' : ''}">
+      <input type="checkbox" data-separate-release-key="${escapeHtml(separateKey)}" ${separateSelected ? 'checked' : ''}>
+      <span>Separate releases</span><small>${escapeHtml((separateCandidate.years || []).join(' / '))}</small></label>
+    ${ButtonComponent.renderButton({ label: 'Apply separate releases', className: 'utility-detail-apply', disabled: !separateSelected || !album.allowed_actions?.['library.rules.manage'], attributes: { 'data-open-separate-release-confirm': '1' } })}` : '';
+  const selected = Object.values(state.utility.proposalSelections || {}).some(Boolean);
+  return `<div class="sr-only" data-problem-exclusion-status role="status" tabindex="-1"></div>
+    <div class="utility-album-problem-labels">${albumProblems}</div>
+    <h4 class="utility-detail-section-title">Detected problems</h4>
+    ${table ? `<div class="utility-detected-table">${table}</div>` : `<p class="utility-detail-meta">${selectedFilters.length ? 'No per-track problems match the selected filters.' : albumRows.length ? 'Only album-level problems found. No per-track problems.' : 'No per-track problems found.'}</p>`}
+    ${albumProblems || tableRows.length || separateActions || getIgnoredRepairRowKeys().length ? `<div class="utility-detected-actions">
+      ${separateActions}
+      ${ButtonComponent.renderButton({ label: 'Create Exception', className: 'utility-exception-action', disabled: !getIgnoredRepairRowKeys().length || !album.allowed_actions?.['library.rules.manage'], attributes: { 'data-open-exclusion-confirm': '1' } })}
+      ${tableRows.length ? ButtonComponent.renderButton({ label: selected ? 'Apply' : 'Apply All', className: 'utility-detail-apply', disabled: !album.allowed_actions?.['library.files.edit_tags'] || !getApplicableProblemSuggestions().length || Boolean(state.utility.proposalApplyBusy), attributes: { 'data-apply-problem-suggestions': '1' } }) : ''}
+    </div>` : ''}`;
 }
-
 function buildProblematicAlbumDetail(album) {
   if (!album) {
     return '<div class="utility-empty-state">Select an album to inspect its problematic tags.</div>';
   }
   const reasons = Array.isArray(album.problem_reasons) ? album.problem_reasons : [];
-  const repairRows = Array.isArray(album.repair_preview_rows) ? album.repair_preview_rows : [];
   const showRepairedDisplay = !album.has_encoding_repairs || state.utility.showRepairedDisplay;
   const displayName = getProblematicAlbumDisplayValue(album, 'album', showRepairedDisplay) || 'Unknown Album';
   const displayArtist = getProblematicAlbumDisplayValue(album, 'album_artist', showRepairedDisplay) || 'Unknown Artist';
   const fileTypes = getProblematicAlbumFileTypes(album);
   const fileTypeText = fileTypes.length ? fileTypes.join(', ') : 'Unknown';
-  const repairButtonLabel = getSelectedRepairFileCount() > 1
-    ? `Repair tags (${getSelectedRepairFileCount()} files)`
-    : 'Repair tags';
   const hasCoverProblemReason = reasons.includes('Missing cover art') || reasons.includes('Poor art quality');
   const coverSrc = buildAlbumDisplayCoverUrl(album);
   const moveActions = getAvailableAlbumMoveActions(album);
@@ -13841,9 +16487,7 @@ function buildProblematicAlbumDetail(album) {
       </div>
     `
     : '';
-  const cover = coverSrc
-    ? `<img class="utility-detail-cover-image" src="${coverSrc}" alt="Album cover for ${escapeHtml(displayName)}" data-cover-path="${escapeHtml(String(album?.cover_path || '').trim())}" data-remote-cover-url="${escapeHtml(String(album?.remote_cover_thumbnail_url || album?.remote_cover_url || '').trim())}" onerror="handleAlbumDisplayCoverImageError(this)">`
-    : '<div class="utility-detail-cover-placeholder">No cover art</div>';
+  const cover = buildUtilityAlbumArtbox(album, { label: `Album cover for ${displayName}`, interactive: true, source: coverSrc });
   return `
     <div class="utility-detail-header">
       <div class="utility-detail-cover">${cover}</div>
@@ -13852,55 +16496,23 @@ function buildProblematicAlbumDetail(album) {
         <div class="utility-detail-meta">${escapeHtml(displayArtist)}</div>
         <div class="utility-detail-meta">Year: ${escapeHtml(album.year ?? 'Unknown')}</div>
         <div class="utility-detail-meta">Tracks: ${Array.isArray(album.tracks) ? album.tracks.length : 0}</div>
+        ${album.edition ? `<div class="utility-detail-meta">Edition: ${escapeHtml(album.edition)}</div>` : ''}
+        <div class="utility-detail-meta">File types: ${escapeHtml(fileTypeText)}</div>
         ${album.has_encoding_repairs ? `
           <button class="utility-repair-toggle ${showRepairedDisplay ? 'is-active' : ''}" type="button" data-toggle-problematic-display-repair="1" aria-pressed="${showRepairedDisplay ? 'true' : 'false'}">
             ${showRepairedDisplay ? 'Converted tags' : 'Original tags'}
           </button>
         ` : ''}
-        <button class="button utility-detail-open" type="button" data-open-problematic-album-folder="1">Open In File Explorer</button>
-        ${hasCoverProblemReason ? '<button class="button utility-detail-fetch-cover" type="button" data-fetch-problematic-cover="1">Fetch cover</button>' : ''}
-        <button class="button utility-detail-edit-tags" type="button" data-open-tag-editor="1">Edit Tags</button>
-        <button class="button utility-detail-discogs" type="button" data-find-on-discogs="1">Find on Discogs</button>
       </div>
+        <div class="utility-detail-context-actions">
+          ${ButtonComponent.renderActionButton({ ariaLabel: 'Open In File Explorer', title: 'Open In File Explorer', iconClass: 'album-details-header__action-icon album-details-header__action-icon--folder', disabled: !album.allowed_actions?.['library.files.open_location'], attributes: { 'data-open-problematic-album-folder': '1' } })}
+          ${ButtonComponent.renderActionButton({ ariaLabel: 'Edit Tags', title: 'Edit Tags', icon: 'edit', disabled: !album.allowed_actions?.['library.files.edit_tags'], attributes: { 'data-open-tag-editor': '1' } })}
+          ${hasCoverProblemReason ? ButtonComponent.renderActionButton({ ariaLabel: 'Fetch cover', title: 'Fetch cover', icon: 'cover', disabled: !album.allowed_actions?.['library.covers.fetch'], attributes: { 'data-fetch-problematic-cover': '1' } }) : ''}
+          ${ButtonComponent.renderActionButton({ ariaLabel: 'Find on Discogs', title: 'Find on Discogs', icon: 'search', attributes: { 'data-find-on-discogs': '1' } })}
+        </div>
     </div>
     ${moveActionsHtml ? buildUtilityCollapsibleSection('moves', 'Move Album', moveActionsHtml) : ''}
-    ${buildUtilityCollapsibleSection('detected', 'Detected Problems', buildDetectedProblemsHtml(album))}
-    ${repairRows.length ? buildUtilityCollapsibleSection('suggested', 'Suggested Edits', `
-        <div class="utility-repair-preview-list">
-          ${repairRows.map((row) => {
-            const rowKey = String(row.row_key || '');
-            const selection = state.utility.repairSelections[rowKey] || 'repair';
-            const displayTrackTitle = getProblematicTrackDisplayTitle(album, row, showRepairedDisplay);
-            const fileType = getRepairRowFileType(row);
-            return `
-              <div class="utility-repair-preview-item">
-                <div class="utility-repair-preview-main">
-                  <span class="utility-repair-preview-track">${escapeHtml(displayTrackTitle)}</span>
-                  ${fileType ? `<span class="utility-repair-file-type">${escapeHtml(fileType)}</span>` : ''}
-                  <span class="utility-repair-preview-field">${escapeHtml(formatRepairFieldLabel(row.field))}</span>
-                  <span class="utility-repair-preview-original">${escapeHtml(row.original || '')}</span>
-                  <span class="utility-repair-preview-arrow">></span>
-                  <span class="utility-repair-preview-repaired">${escapeHtml(row.repaired || '')}</span>
-                </div>
-                <div class="utility-repair-choice-group">
-                  <button class="utility-repair-choice ${selection === 'ignore' ? 'is-active' : ''}" type="button" data-repair-choice="ignore" data-repair-row-key="${escapeHtml(rowKey)}">Ignore</button>
-                  <button class="utility-repair-choice ${selection === 'repair' ? 'is-active' : ''}" type="button" data-repair-choice="repair" data-repair-row-key="${escapeHtml(rowKey)}">Repair</button>
-                </div>
-              </div>
-            `;
-          }).join('')}
-        </div>
-        <button class="button utility-detail-repair" type="button" data-open-repair-confirm="1" data-repair-action="repair">${escapeHtml(repairButtonLabel)}</button>
-    `) : ''}
-    ${buildUtilityCollapsibleSection('details', 'Album Details', `
-      <div class="utility-detail-grid">
-        <div><span class="utility-detail-label">Album</span>${escapeHtml(displayName)}</div>
-        <div><span class="utility-detail-label">Artist</span>${escapeHtml(displayArtist)}</div>
-        <div><span class="utility-detail-label">Year</span>${escapeHtml(album.year ?? 'Unknown')}</div>
-        <div><span class="utility-detail-label">Edition</span>${escapeHtml(album.edition || 'N/A')}</div>
-        <div><span class="utility-detail-label">File types</span>${escapeHtml(fileTypeText)}</div>
-      </div>
-    `)}
+    ${buildDetectedProblemsHtml(album)}
   `;
 }
 
@@ -14162,6 +16774,14 @@ function hasActiveTagEditViewMutation() {
 }
 
 function claimTagEditViewMutation(album, editedTrackPaths = [], updates = {}) {
+  if (Object.values(updates || {}).some((edits) => (
+    edits && typeof edits === 'object' && Object.keys(edits).length > 0
+  ))) {
+    state.ui = state.ui || {};
+    state.ui.tagEditOptimisticMutationRevision = Number(
+      state.ui.tagEditOptimisticMutationRevision || 0,
+    ) + 1;
+  }
   tagEditViewMutationGeneration += 1;
   const generation = tagEditViewMutationGeneration;
   const resourceKeys = new Set();
@@ -15122,38 +17742,7 @@ function applyUpdatedAlbumsToCurrentView(updatedAlbums, options = {}) {
 
 async function prependUtilityLogHistoryEntry(entry) {
   if (!entry || typeof entry !== 'object') return;
-  let persistedResult = null;
-  try {
-    persistedResult = await persistBrowserLogHistoryEntries([entry]);
-  } catch (error) {
-    console.warn('[AlbumHaven][History] Could not persist an immediate history entry.', error);
-  }
-  const existing = Array.isArray(state.utility.logHistory) ? state.utility.logHistory : [];
-  const persistedItems = Array.isArray(persistedResult?.items) ? persistedResult.items : [];
-  const fallbackEntry = persistedItems.length
-    ? null
-    : (typeof normalizeBrowserLogHistoryEntry === 'function'
-      ? normalizeBrowserLogHistoryEntry(entry)
-      : entry);
-  state.utility.logHistory = persistedItems.length
-    ? persistedItems
-    : [
-      fallbackEntry,
-      ...existing.filter((item) => String(item?.id || '') !== String(fallbackEntry.id || '')),
-    ].slice(0, 250);
-  if (persistedResult?.status) {
-    state.utility.logHistoryStorageStatus = persistedResult.status;
-  }
-  state.utility.logHistoryLoaded = true;
-  if (!state.utility.selectedLogHistoryId) {
-    const persistedEntry = persistedItems.find(
-      (item) => String(item?.id || '') === String(entry.id || ''),
-    ) || persistedItems[0];
-    state.utility.selectedLogHistoryId = String(persistedEntry?.id || fallbackEntry?.id || '');
-  }
-  if (state.utility.activeTab === 'log-history') {
-    renderUtilityModalContent();
-  }
+  state.utility.logHistoryController?.markStale(String(entry.revision || 'new-activity'));
 }
 
 function applyExplicitFinalizedAlbumArtistEdits(finalizedAlbums, tagEdits) {
@@ -15217,6 +17806,7 @@ function claimProblematicSaveTaskMutation(taskId, originalAlbum, expectedAlbumKe
     albumKey: selectedKey,
     priorKeys: (state.utility.problematicFiles || []).map((album) => String(album?.key || '')).filter(Boolean),
     priorScrollTop: Number(list?.scrollTop || 0),
+    priorScrollHeight: Number(list?.scrollHeight || 0),
   };
   state.utility.problematicMutation = mutation;
   if (typeof renderUtilityModalContent === 'function') renderUtilityModalContent();
@@ -15257,16 +17847,24 @@ async function settleProblematicSaveTaskMutation(taskId, { reconcileSelection = 
     ? getUtilityModalElements()?.list
     : null;
   if (list && mutationOwnsView) {
-    const requiredScrollHeight = priorScrollTop + Number(list.clientHeight || 0);
-    const missingScrollHeight = Math.max(0, requiredScrollHeight - Number(list.scrollHeight || 0));
+    const targetScrollHeight = Math.max(
+      Number(mutation.priorScrollHeight || 0),
+      priorScrollTop + Number(list.clientHeight || 0),
+    );
     const ownerDocument = list.ownerDocument
       || (typeof document !== 'undefined' ? document : null);
-    if (missingScrollHeight > 0 && ownerDocument?.createElement && typeof list.appendChild === 'function') {
-      const retainedContent = ownerDocument.createElement('div');
+    const retainedContent = ownerDocument?.createElement && typeof list.appendChild === 'function'
+      ? ownerDocument.createElement('div')
+      : null;
+    let retainedContentHeight = Math.max(
+      0,
+      targetScrollHeight - Number(list.scrollHeight || 0),
+    );
+    if (retainedContent) {
       retainedContent.setAttribute('data-problematic-scroll-retainer', '');
       retainedContent.setAttribute('aria-hidden', 'true');
-      retainedContent.style.flex = `0 0 ${missingScrollHeight}px`;
-      retainedContent.style.height = `${missingScrollHeight}px`;
+      retainedContent.style.flex = `0 0 ${retainedContentHeight}px`;
+      retainedContent.style.height = `${retainedContentHeight}px`;
       retainedContent.style.pointerEvents = 'none';
       list.appendChild(retainedContent);
       const releaseRetainedGeometry = () => {
@@ -15280,11 +17878,24 @@ async function settleProblematicSaveTaskMutation(taskId, { reconcileSelection = 
       list.addEventListener?.('keydown', releaseRetainedGeometry);
     }
     const restoreOwnedScroll = () => {
+      if (retainedContent && !retainedContent.isConnected && 'isConnected' in retainedContent) return;
+      if (retainedContent) {
+        const naturalScrollHeight = Math.max(
+          0,
+          Number(list.scrollHeight || 0) - retainedContentHeight,
+        );
+        retainedContentHeight = Math.max(0, targetScrollHeight - naturalScrollHeight);
+        retainedContent.style.flex = `0 0 ${retainedContentHeight}px`;
+        retainedContent.style.height = `${retainedContentHeight}px`;
+      }
       list.scrollTop = priorScrollTop;
     };
     restoreOwnedScroll();
     if (typeof scheduleBrowserAnimationFrame === 'function') {
-      scheduleBrowserAnimationFrame(restoreOwnedScroll);
+      scheduleBrowserAnimationFrame(() => {
+        restoreOwnedScroll();
+        scheduleBrowserAnimationFrame(restoreOwnedScroll);
+      });
     }
   }
   return true;
@@ -15980,6 +18591,7 @@ function applyRepairResultToProblematicFiles(originalAlbum, updatedAlbum) {
 
 function normalizeProblemFilterReason(reason) {
   const normalized = String(reason || '').trim();
+  if (normalized === 'Inconsistent year' || normalized.startsWith('Year mismatch')) return 'Year mismatch';
   return normalized.startsWith('Incomplete track order:')
     ? 'Incomplete track order'
     : normalized;
@@ -16005,7 +18617,7 @@ function albumMatchesProblemFilters(album, selectedFilters = state.utility.selec
   const selected = Array.isArray(selectedFilters) ? selectedFilters : [];
   if (!selected.length) return true;
   const reasons = new Set(getAlbumProblemFilterReasons(album));
-  return selected.every((reason) => reasons.has(reason));
+  return selected.some((reason) => reasons.has(normalizeProblemFilterReason(reason)));
 }
 
 function getAlbumProblemFilterSortIndex(album) {
@@ -16023,7 +18635,8 @@ function renderProblemFilterControls(els) {
 
   if (els.problemFilterButton) {
     const countSuffix = selected.length ? ` (${selected.length})` : '';
-    els.problemFilterButton.textContent = `Problems${countSuffix}`;
+    els.problemFilterButton.setAttribute('aria-label', `Filters${countSuffix}`);
+    els.problemFilterButton.setAttribute('title', `Filter by problem type${countSuffix}`);
     els.problemFilterButton.classList.toggle('is-active', Boolean(selected.length));
     els.problemFilterButton.setAttribute('aria-expanded', state.utility.problemDropdownOpen ? 'true' : 'false');
     els.problemFilterButton.hidden = false;
@@ -16032,6 +18645,8 @@ function renderProblemFilterControls(els) {
 
   if (els.problemFilterMenu) {
     els.problemFilterMenu.hidden = !state.utility.problemDropdownOpen;
+    if (state.utility.problemDropdownOpen && typeof syncTriggerAnchor === 'function') syncTriggerAnchor(els.problemFilterMenu, els.problemFilterButton);
+    else if (typeof clearTriggerAnchor === 'function') clearTriggerAnchor(els.problemFilterMenu);
     els.problemFilterMenu.innerHTML = reasonTypes.length
       ? reasonTypes.map((reason) => `
           <button class="utility-problem-filter-option ${selectedSet.has(reason) ? 'is-selected' : ''}" type="button" data-problem-filter-value="${escapeHtml(reason)}" role="option" aria-selected="${selectedSet.has(reason) ? 'true' : 'false'}">
@@ -16237,12 +18852,13 @@ function selectProblemExclusion(rowKey, { toggle = true } = {}) {
   const alreadySelected = Boolean(
     normalizedKey && state.utility.problemExclusionSelections?.[normalizedKey],
   );
-  state.utility.problemExclusionSelections = normalizedKey && (!toggle || !alreadySelected)
-    ? { [normalizedKey]: true }
-    : {};
+  const selections = { ...(state.utility.problemExclusionSelections || {}) };
+  if (normalizedKey && (!toggle || !alreadySelected)) selections[normalizedKey] = true;
+  else delete selections[normalizedKey];
+  state.utility.problemExclusionSelections = selections;
 }
 
-function extendProblemExclusionRange(reason, startIndex, endIndex) {
+function extendProblemExclusionRange(reason, startIndex, endIndex, selected = true) {
   const album = getSelectedProblematicAlbum();
   const rows = Array.isArray(album?.track_problem_rows) ? album.track_problem_rows : [];
   const normalizedReason = String(reason || '');
@@ -16252,11 +18868,16 @@ function extendProblemExclusionRange(reason, startIndex, endIndex) {
   const keys = [];
   for (let index = from; index <= to; index += 1) {
     const match = (Array.isArray(rows[index]?.ignorable_reasons) ? rows[index].ignorable_reasons : [])
-      .find((item) => String(item?.reason || '') === normalizedReason && String(item?.row_key || ''));
+      .find((item) => normalizeProblemFilterReason(item?.reason) === normalizeProblemFilterReason(normalizedReason) && String(item?.row_key || ''));
     if (match) keys.push(String(match.row_key));
   }
   if (!keys.length) return false;
-  state.utility.problemExclusionSelections = Object.fromEntries(keys.map((key) => [key, true]));
+  const selections = { ...(state.utility.problemExclusionSelections || {}) };
+  keys.forEach(key => {
+    if (selected) selections[key] = true;
+    else delete selections[key];
+  });
+  state.utility.problemExclusionSelections = selections;
   return true;
 }
 
@@ -16334,17 +18955,79 @@ function getSelectedSeparateReleaseKeys() {
     .map(([key]) => key);
 }
 
-function buildLibraryWatchHealthProblemRow(problem = {}) {
-  const canRefresh = problem?.allowed_actions?.['library.refresh'] === true;
-  return `
-    <div class="utility-list-item utility-operational-problem" role="status">
-      <div class="utility-operational-problem-copy">
-        <strong>Library watcher needs attention</strong>
-        <span>${escapeHtml('Some library changes may have been missed.')}</span>
-      </div>
-      ${canRefresh ? '<button type="button" class="button utility-operational-problem-action" data-status-action="full-rescan">Full Rescan</button>' : ''}
-    </div>
-  `;
+function openRuleRevertConfirm(rule) {
+  state.utility.pendingRuleRevert = rule;
+  state.utility.pendingRepairAction = 'revert-rule';
+  openRepairConfirmModal();
+}
+function getVisibleProblemSuggestions(album = getSelectedProblematicAlbum()) {
+  const albumKey = String(album?.key || '');
+  if (state.utility.proposalAlbumKey && state.utility.proposalAlbumKey !== albumKey) state.utility.proposalSelections = {};
+  state.utility.proposalAlbumKey = albumKey;
+  const selected = (state.utility.selectedProblemFilters || []).map(normalizeProblemFilterReason);
+  const query = String(state.utility.searchQuery || '').trim().toLocaleLowerCase();
+  return (Array.isArray(album?.suggested_edits) ? album.suggested_edits : []).filter(proposal => {
+    if (!proposal?.id || proposal.eligible === false) return false;
+    if (selected.length && !selected.includes(normalizeProblemFilterReason(proposal.reason))) return false;
+    if (!query) return true;
+    const track = (album.tracks || []).find(item => item.path === proposal.path) || {};
+    return [album.name, album.album_artist, track.title, track.artist, proposal.original, proposal.corrected, proposal.path]
+      .some(value => String(value || '').toLocaleLowerCase().includes(query));
+  });
+}
+
+function getApplicableProblemSuggestions() {
+  const visible = getVisibleProblemSuggestions();
+  const selections = state.utility.proposalSelections || {};
+  return Object.values(selections).some(Boolean) ? visible.filter(proposal => selections[proposal.id]) : visible;
+}
+
+function toggleProblemSuggestion(id, { selected } = {}) {
+  const proposal = getVisibleProblemSuggestions().find(item => item.id === id);
+  if (!proposal) return false;
+  const selections = { ...(state.utility.proposalSelections || {}) };
+  const enabled = selected === undefined ? !selections[id] : Boolean(selected);
+  if (enabled) selections[id] = true;
+  else delete selections[id];
+  state.utility.proposalSelections = selections;
+  return true;
+}
+
+function extendProblemSuggestionRange(type, startIndex, endIndex, selected = true) {
+  const visible = getVisibleProblemSuggestions();
+  const from = Math.min(startIndex, endIndex), to = Math.max(startIndex, endIndex);
+  if (!Number.isInteger(from) || !Number.isInteger(to) || from < 0 || to >= visible.length) return false;
+  visible.slice(from, to + 1).filter(item => item.type === type).forEach(item => toggleProblemSuggestion(item.id, { selected }));
+  return true;
+}
+
+function formatProblemSuggestionLabel(proposal) {
+  const label = { album: 'Album', album_artist: 'Album artist', artist: 'Artist', title: 'Title', year: 'Year', track_number: 'Track', disc_number: 'Disc', album_disc_marker: 'Album / disc' }[proposal.field] || proposal.field;
+  const original = proposal.original === null || proposal.original === undefined || proposal.original === '' ? 'missing' : String(proposal.original);
+  return `${label}: ${original} → ${String(proposal.corrected ?? '')}`;
+}
+
+function syncProblemSuggestionSelection() {
+  document.querySelectorAll?.('[data-problem-suggestion-id]').forEach(button => {
+    button.setAttribute('aria-pressed', state.utility.proposalSelections?.[button.getAttribute('data-problem-suggestion-id')] ? 'true' : 'false');
+  });
+  const apply = document.querySelector?.('[data-apply-problem-suggestions]');
+  if (apply) {
+    const label = apply.querySelector?.('.ui-button__content') || apply;
+    label.textContent = Object.values(state.utility.proposalSelections || {}).some(Boolean) ? 'Apply' : 'Apply All';
+    ButtonComponent.setDisabled(apply, !getSelectedProblematicAlbum()?.allowed_actions?.['library.files.edit_tags'] || !getApplicableProblemSuggestions().length || Boolean(state.utility.proposalApplyBusy));
+  }
+}
+function syncProblemExclusionSelection() {
+  document.querySelectorAll?.('[data-problem-exclusion-row-key]').forEach(button => {
+    button.setAttribute('aria-pressed', state.utility.problemExclusionSelections?.[button.getAttribute('data-problem-exclusion-row-key')] ? 'true' : 'false');
+  });
+  document.querySelectorAll?.('[data-album-problem-type]').forEach(button => {
+    const keys = getIgnorableProblemRows(getSelectedProblematicAlbum()).filter(item => normalizeProblemFilterReason(item.reason) === button.getAttribute('data-album-problem-type')).map(item => item.row_key);
+    button.setAttribute('aria-pressed', keys.length && keys.every(key => state.utility.problemExclusionSelections?.[key]) ? 'true' : 'false');
+  });
+  const action = document.querySelector?.('[data-open-exclusion-confirm]');
+  if (action) ButtonComponent.setDisabled(action, !getIgnoredRepairRowKeys().length || !getSelectedProblematicAlbum()?.allowed_actions?.['library.rules.manage']);
 }
 
 // END js/runtime/utility-list-builders.js
@@ -16748,8 +19431,37 @@ function scheduleProblemExclusionRequest(operation, request) {
   return completion;
 }
 
-async function queueProblemExclusionCreate({ album, items }) {
+function effectiveProblemExclusionItems(album, items) {
   const selectedItems = (Array.isArray(items) ? items : []).filter(Boolean);
+  const albumRows = new Map((Array.isArray(album?.album_problem_rows) ? album.album_problem_rows : [])
+    .map(row => [String(row?.row_key || ''), row]));
+  const coveredReasons = new Set();
+  selectedItems.forEach(item => {
+    const row = albumRows.get(String(item.row_key || ''));
+    if (item.scope === 'album' && row
+      && item.album_key === String(row.album_key || album?.key || '')) {
+      const reason = problemExclusionReason(row);
+      if (reason) coveredReasons.add(reason);
+    }
+  });
+  const coveredFiles = new Map();
+  (Array.isArray(album?.track_problem_rows) ? album.track_problem_rows : []).forEach(row => {
+    (Array.isArray(row?.ignorable_reasons) ? row.ignorable_reasons : []).forEach(item => {
+      if (coveredReasons.has(problemExclusionReason(item))) {
+        coveredFiles.set(String(item.row_key || ''), String(row.path || ''));
+      }
+    });
+  });
+  // Album-label selection also highlights matching file pills. Persist the album
+  // rule once: duplicate child rules would survive a later album-rule revert.
+  // Independently selected reasons and unknown identities still reach validation.
+  return selectedItems.filter(item => item.scope !== 'file'
+    || !coveredFiles.has(String(item.row_key || ''))
+    || coveredFiles.get(String(item.row_key || '')) !== item.path);
+}
+
+async function queueProblemExclusionCreate({ album, items }) {
+  const selectedItems = effectiveProblemExclusionItems(album, items);
   const currentRules = state.utility.rules || [];
   const currentRule = currentRules.find((rule) => rule?.key === 'problem-ignores');
   const selectedKeys = new Set(selectedItems.map((item) => String(item?.row_key || '')));
@@ -16830,12 +19542,14 @@ async function queueProblemExclusionRevert(item) {
       ) + 1;
       state.utility.loaded = false;
       renderUtilityModalContent();
+      return true;
     } catch (error) {
       console.error('[AlbumHaven][Utilities] Failed to revert problem exclusion.', error);
       await waitForProblematicUtilityRenderFrame();
       rollbackProblemExclusionMutation(operation);
       renderUtilityModalContent();
       showToast('Failed to revert problem exclusion', 'error', 3200);
+      return false;
     }
   });
 }
@@ -16850,11 +19564,7 @@ const LIBRARY_SETTINGS_ROOT_CATEGORIES = Object.freeze([
   'new_arrivals_roots',
 ]);
 
-const LIBRARY_SETTINGS_LAYOUT_OPTIONS = Object.freeze([
-  { value: 'artist', label: 'Artist folders' },
-  { value: 'genre/artist', label: 'Genre / artist folders' },
-  { value: 'album-at-root', label: 'Albums at root' },
-]);
+const LIBRARY_SETTINGS_LAYOUT_MODES = Object.freeze(['artist', 'genre/artist', 'album-at-root']);
 
 function getDefaultLibrarySettingsState() {
   return {
@@ -16867,6 +19577,7 @@ function getDefaultLibrarySettingsState() {
     albumRatingImportBusy: false,
     albumRatingImportResult: null,
     error: '',
+    allowedActions: {},
   };
 }
 
@@ -16891,7 +19602,7 @@ function normalizeLibrarySettingsRootEntry(category, entry, index) {
   };
   if (category === 'main_library_roots') {
     const layoutMode = String(source.layout_mode || 'artist').trim();
-    normalized.layout_mode = LIBRARY_SETTINGS_LAYOUT_OPTIONS.some((option) => option.value === layoutMode)
+    normalized.layout_mode = LIBRARY_SETTINGS_LAYOUT_MODES.includes(layoutMode)
       ? layoutMode
       : 'artist';
   }
@@ -16924,6 +19635,21 @@ function cloneLibrarySettingsDraft(settings) {
   return normalizeLibrarySettingsPayload(cloneRuntimeJson(settings, {}));
 }
 
+function serializeLibrarySettingsDraft(draft) {
+  const payload = normalizeLibrarySettingsPayload(draft);
+  LIBRARY_SETTINGS_ROOT_CATEGORIES.forEach(category => {
+    const blankIds = new Set();
+    payload[category] = payload[category].filter(root => {
+      if (root.path.trim()) return true;
+      blankIds.add(root.id);
+      return false;
+    });
+    const policyKey = category === 'main_library_roots' ? 'preferred_main_write_root' : category === 'hoarding_library_roots' ? 'move_new_arrivals_to' : '';
+    if (policyKey && blankIds.has(payload.move_policy[policyKey])) payload.move_policy[policyKey] = '';
+  });
+  return payload;
+}
+
 function countConfiguredLibraryRoots(settings) {
   const normalized = normalizeLibrarySettingsPayload(settings);
   return LIBRARY_SETTINGS_ROOT_CATEGORIES.reduce(
@@ -16954,7 +19680,7 @@ function buildUtilityLibraryIntegrationItem() {
 function buildUtilityIntegrationItems() {
   return [
     buildUtilityLibraryIntegrationItem(),
-    ...(Array.isArray(state.utility.integrations) ? state.utility.integrations : []),
+    ...(Array.isArray(state.utility.integrations) ? state.utility.integrations : []).map(item => item.key === 'lastfm' ? {...item, title: 'Scrobbling'} : item),
   ];
 }
 
@@ -16962,7 +19688,6 @@ async function handleLibrarySettingsIntegrationSelection(integrationKey) {
   if (String(integrationKey || '') !== 'library') return false;
   state.utility.selectedIntegrationKey = 'library';
   await loadUtilityLibrarySettings(!state.utility.librarySettings?.loaded);
-  renderUtilityModalContent();
   return true;
 }
 
@@ -16971,13 +19696,17 @@ function getLibrarySettingsDraft() {
   if (!librarySettingsState.draft) {
     librarySettingsState.draft = cloneLibrarySettingsDraft(librarySettingsState.settings || {});
   }
+  LIBRARY_SETTINGS_ROOT_CATEGORIES.forEach(category => {
+    if (!librarySettingsState.draft[category]?.length) librarySettingsState.draft[category] = [normalizeLibrarySettingsRootEntry(category, {}, 0)];
+  });
   return librarySettingsState.draft;
 }
 
 function buildEmptyLibraryRootDraft(category) {
   const draft = getLibrarySettingsDraft();
   const roots = Array.isArray(draft[category]) ? draft[category] : [];
-  const nextIndex = roots.length + 1;
+  let nextIndex = roots.length + 1;
+  while (roots.some(root => root.id === `${category}-${nextIndex}`)) nextIndex += 1;
   return normalizeLibrarySettingsRootEntry(category, { id: `${category}-${nextIndex}` }, nextIndex - 1);
 }
 
@@ -16992,11 +19721,12 @@ function removeLibraryRootDraftEntry(category, index) {
   const roots = Array.isArray(draft[category]) ? draft[category] : [];
   const removed = roots[index];
   draft[category] = roots.filter((_, itemIndex) => itemIndex !== index);
+  if (!draft[category].length) draft[category].push(normalizeLibrarySettingsRootEntry(category, {}, 0));
   if (removed?.id) {
-    if (draft.move_policy.preferred_main_write_root === removed.id) {
+    if (category === 'main_library_roots' && draft.move_policy.preferred_main_write_root === removed.id) {
       draft.move_policy.preferred_main_write_root = '';
     }
-    if (draft.move_policy.move_new_arrivals_to === removed.id) {
+    if (category === 'hoarding_library_roots' && draft.move_policy.move_new_arrivals_to === removed.id) {
       draft.move_policy.move_new_arrivals_to = '';
     }
   }
@@ -17042,6 +19772,44 @@ function applyLibrarySettingsFieldTarget(target) {
 }
 
 function handleLibrarySettingsClick(event) {
+  const toggle = event.target.closest('[id^="library-auto-move-"]');
+  if (toggle) {
+    event.preventDefault();
+    const owner = ensureLibrarySettingsState();
+    if (owner.allowedActions?.['library.settings.manage'] !== true || toggle.disabled) return true;
+    const field = toggle.id === 'library-auto-move-main' ? 'preferred_main_write_root' : toggle.id === 'library-auto-move-hoard' ? 'move_new_arrivals_to' : '';
+    if (!field) return false;
+    owner.moveAutomationDraft ||= {};
+    owner.moveAutomationDraft[field] = !owner.moveAutomationDraft[field];
+    renderUtilityModalContent();
+    document.getElementById?.(toggle.id)?.focus({ preventScroll: true });
+    return true;
+  }
+  const policy = event.target.closest('[data-library-policy-trigger]');
+  if (policy) {
+    event.preventDefault();
+    if (ensureLibrarySettingsState().allowedActions?.['library.settings.manage'] !== true) return true;
+    const field = policy.getAttribute('data-library-policy-trigger');
+    const category = field === 'preferred_main_write_root' ? 'main_library_roots' : field === 'move_new_arrivals_to' ? 'hoarding_library_roots' : '';
+    if (!category) return true;
+    const draft = getLibrarySettingsDraft();
+    openUtilityChoiceDropdown(policy, {
+      matchTriggerWidth: true,
+      formats: buildLibrarySettingsRootOptions(draft[category]),
+      selected: draft.move_policy[field] || buildLibrarySettingsRootOptions(draft[category])[0]?.value, label: field === 'preferred_main_write_root' ? 'Library destination' : 'Move to Hoard',
+      onSelect: value => {
+        if (ensureLibrarySettingsState().allowedActions?.['library.settings.manage'] !== true) return false;
+        updateLibrarySettingsDraftField(field, value);
+      },
+    });
+    return true;
+  }
+  const browse = event.target.closest('[data-browse-library-root]');
+  if (browse) { event.preventDefault(); browseLibraryRootDraft(browse.getAttribute('data-browse-library-root'), Number(browse.getAttribute('data-library-root-index'))); return true; }
+  const foobarHelp = event.target.closest('[data-foobar-help]');
+  if (foobarHelp) { event.preventDefault(); openUtilityFoobarGuide(); return true; }
+  const foobarFormat = event.target.closest('[data-foobar-format-trigger]');
+  if (foobarFormat) { event.preventDefault(); openUtilityFoobarFormats(foobarFormat); return true; }
   const addLibraryRootButton = event.target.closest('[data-add-library-root]');
   if (addLibraryRootButton) {
     event.preventDefault();
@@ -17151,15 +19919,23 @@ function handleLibrarySettingsChange(event) {
 }
 
 async function loadUtilityLibrarySettings(force = false) {
+  const owner = state.utility;
   const librarySettingsState = ensureLibrarySettingsState();
-  if (librarySettingsState.loading) return librarySettingsState.loadPromise;
+  const ownsPresentation = () => state.utility === owner && owner.librarySettings === librarySettingsState
+    && owner.activeTab === 'integrations' && owner.selectedIntegrationKey === 'library'
+    && !getUtilityModalElements()?.overlay?.hidden;
+  const renderCurrent = () => { if (ownsPresentation()) renderUtilityModalContent(); };
+  if (librarySettingsState.loading) {
+    renderCurrent();
+    return librarySettingsState.loadPromise;
+  }
   if (librarySettingsState.loaded && !force) {
-    renderUtilityModalContent();
+    renderCurrent();
     return librarySettingsState.settings;
   }
   librarySettingsState.loading = true;
   librarySettingsState.error = '';
-  renderUtilityModalContent();
+  renderCurrent();
   librarySettingsState.loadPromise = (async () => {
     try {
       const response = await fetch('/library-settings', { headers: { Accept: 'application/json' } });
@@ -17167,6 +19943,7 @@ async function loadUtilityLibrarySettings(force = false) {
       if (!response.ok || !data.ok) {
         throw new Error(data.error || 'Unable to load library settings');
       }
+      librarySettingsState.allowedActions = data.allowed_actions || {};
       librarySettingsState.settings = normalizeLibrarySettingsPayload(data.settings);
       librarySettingsState.draft = cloneLibrarySettingsDraft(librarySettingsState.settings);
       librarySettingsState.loaded = true;
@@ -17174,105 +19951,104 @@ async function loadUtilityLibrarySettings(force = false) {
     } catch (error) {
       console.error('[AlbumHaven][LibrarySettings] Failed to load library settings.', error);
       librarySettingsState.error = error.message || 'Unable to load library settings.';
-      showToast(librarySettingsState.error, 'error', 3200);
+      if (ownsPresentation()) showToast(librarySettingsState.error, 'error', 3200);
       return null;
     } finally {
       librarySettingsState.loading = false;
       librarySettingsState.loadPromise = null;
-      renderUtilityModalContent();
+      renderCurrent();
     }
   })();
   return librarySettingsState.loadPromise;
 }
 
 async function saveUtilityLibrarySettings() {
+  const owner = state.utility;
   const librarySettingsState = ensureLibrarySettingsState();
-  if (librarySettingsState.saveBusy) return false;
+  const ownsContext = () => state.utility === owner && owner.librarySettings === librarySettingsState;
+  const ownsPresentation = () => ownsContext() && owner.activeTab === 'integrations'
+    && owner.selectedIntegrationKey === 'library' && !getUtilityModalElements()?.overlay?.hidden;
+  const renderCurrent = () => { if (ownsPresentation()) renderUtilityModalContent(); };
+  if (librarySettingsState.saveBusy || librarySettingsState.allowedActions?.['library.settings.manage'] !== true) return false;
   librarySettingsState.saveBusy = true;
   librarySettingsState.error = '';
-  renderUtilityModalContent();
+  renderCurrent();
   try {
     const response = await fetch('/library-settings', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        settings: cloneLibrarySettingsDraft(getLibrarySettingsDraft()),
-      }),
+      body: JSON.stringify({ settings: serializeLibrarySettingsDraft(getLibrarySettingsDraft()) }),
     });
     const data = await response.json().catch(() => ({}));
-    if (!response.ok || !data.ok) {
-      throw new Error(data.error || 'Unable to save library settings');
-    }
+    if (!response.ok || !data.ok) throw new Error(data.error || 'Unable to save library settings');
     librarySettingsState.settings = normalizeLibrarySettingsPayload(data.settings);
     librarySettingsState.draft = cloneLibrarySettingsDraft(librarySettingsState.settings);
     librarySettingsState.loaded = true;
-    state.utility.loaded = false;
-    state.utility.problematicFiles = [];
-    if (data.status) {
-      updateStatusIndicator(data.status);
-      state.wasPollingBusy = Boolean(data.status.scan_in_progress || data.status.relations_in_progress);
-      state.wasCoverPollingBusy = Boolean(data.status.covers_in_progress);
-      renderLibraryLoader(state.status);
+    owner.loaded = false;
+    owner.problematicFiles = [];
+    if (ownsContext()) {
+      if (data.status) {
+        updateStatusIndicator(data.status);
+        state.wasPollingBusy = Boolean(data.status.scan_in_progress || data.status.relations_in_progress);
+        state.wasCoverPollingBusy = Boolean(data.status.covers_in_progress);
+        renderLibraryLoader(state.status);
+      }
+      scheduleBrowserTimeout(pollStatus, 250);
     }
-    scheduleBrowserTimeout(pollStatus, 250);
-    showToast('Library settings saved. Scan started.', 'success', 3200);
-    renderUtilityModalContent();
+    if (ownsPresentation()) showToast('Library settings saved. Scan started.', 'success', 3200);
     return true;
   } catch (error) {
     console.error('[AlbumHaven][LibrarySettings] Failed to save library settings.', error);
     librarySettingsState.error = error.message || 'Unable to save library settings.';
-    showToast(librarySettingsState.error, 'error', 3600);
-    renderUtilityModalContent();
+    if (ownsPresentation()) showToast(librarySettingsState.error, 'error', 3600);
     return false;
   } finally {
     librarySettingsState.saveBusy = false;
-    renderUtilityModalContent();
+    renderCurrent();
   }
 }
 
-function buildLibrarySettingsRootOptions(roots, selectedId, placeholder) {
-  const items = Array.isArray(roots) ? roots : [];
-  const options = [`<option value="">${escapeHtml(placeholder)}</option>`];
-  items.forEach((root, index) => {
-    const rootId = String(root?.id || '');
-    const rootPath = String(root?.path || '').trim();
-    const label = rootPath || `Root ${index + 1}`;
-    options.push(
-      `<option value="${escapeHtml(rootId)}" ${rootId === selectedId ? 'selected' : ''}>${escapeHtml(label)}</option>`,
-    );
+function buildLibrarySettingsRootOptions(roots, placeholder) {
+  return [...(placeholder ? [{ value: '', label: placeholder }] : []), ...(Array.isArray(roots) ? roots : [])
+    .filter(root => String(root?.path || '').trim())
+    .map(root => ({ value: String(root.id), label: String(root.path).trim() }))];
+}
+
+function buildLibrarySettingsPolicyButton(field, roots, selectedId, label) {
+  const choices = buildLibrarySettingsRootOptions(roots);
+  if (choices.length <= 1) return `<span data-library-policy-value="${field}">${escapeHtml(choices[0]?.label || 'No library path configured')}</span>`;
+  const selectedLabel = choices.find(choice => choice.value === selectedId)?.label || choices[0]?.label;
+  return window.ButtonComponent.renderButton({
+    label: selectedLabel,
+    ariaLabel: label, disabled: ensureLibrarySettingsState().allowedActions?.['library.settings.manage'] !== true,
+    attributes: { 'data-library-policy-trigger': field, 'aria-haspopup': 'menu', 'aria-expanded': 'false' },
   });
-  return options.join('');
+}
+
+function buildLibraryMovePolicyRow(field, roots, selectedId, title, destinationLabel, key) {
+  const owner = ensureLibrarySettingsState();
+  const enabled = owner.moveAutomationDraft?.[field] === true;
+  const hasRoots = buildLibrarySettingsRootOptions(roots).length > 0;
+  return `<div class="library-settings-move-policy-row">
+    ${buildGallerySwitchHtml({ id: `library-auto-move-${key}`, label: title, checked: enabled, disabled: !hasRoots || owner.allowedActions?.['library.settings.manage'] !== true })}
+    ${enabled && hasRoots ? buildLibrarySettingsPolicyButton(field, roots, selectedId, destinationLabel) : ''}
+  </div>`;
 }
 
 function buildLibrarySettingsRootSection(category, title, description) {
   const draft = getLibrarySettingsDraft();
   const roots = Array.isArray(draft[category]) ? draft[category] : [];
-  const rows = roots.length
-    ? roots.map((root, index) => `
-        <div class="library-settings-root-row">
-          <input
-            type="text"
-            value="${escapeHtml(root.path || '')}"
-            placeholder="C:\\Music\\${escapeHtml(title.replaceAll(' ', ''))}"
-            data-library-root-field="path"
-            data-library-root-list="${escapeHtml(category)}"
-            data-library-root-index="${index}"
-          >
-          ${category === 'main_library_roots'
-            ? `<select
-                data-library-root-field="layout_mode"
-                data-library-root-list="${escapeHtml(category)}"
-                data-library-root-index="${index}"
-              >
-                ${LIBRARY_SETTINGS_LAYOUT_OPTIONS.map((option) => `
-                  <option value="${escapeHtml(option.value)}" ${option.value === root.layout_mode ? 'selected' : ''}>${escapeHtml(option.label)}</option>
-                `).join('')}
-              </select>`
-            : ''}
-          <button class="button button-secondary library-settings-root-remove" type="button" data-remove-library-root="${escapeHtml(category)}" data-library-root-index="${index}">Remove</button>
-        </div>
-      `).join('')
-    : '<div class="utility-empty-state compact">No roots added yet.</div>';
+  const canManage = ensureLibrarySettingsState().allowedActions?.['library.settings.manage'] === true;
+  const canBrowse = canManage && ensureLibrarySettingsState().allowedActions?.['library.filesystem.browse'] === true && ensureLibrarySettingsState().allowedActions?.['library.paths.read'] === true;
+  const rows = roots.map((root, index) => `<div class="library-settings-root-row">
+    <div class="library-settings-path-control ui-input-action"><input type="text" value="${escapeHtml(root.path || '')}"
+      aria-label="${escapeHtml(title)} path ${index + 1}" placeholder="${escapeHtml(title)} folder"
+      data-library-root-field="path" data-library-root-list="${escapeHtml(category)}" data-library-root-index="${index}" ${canManage ? '' : 'disabled'}>
+      ${window.ButtonComponent.renderActionButton({ariaLabel: `Choose ${title} folder ${index + 1}`, iconClass: 'album-details-header__action-icon album-details-header__action-icon--folder', disabled: !canBrowse,
+        attributes: {'data-browse-library-root': category, 'data-library-root-index': index}})}
+      ${window.ButtonComponent.renderActionButton({ariaLabel: `Remove ${title} path ${index + 1}`, icon: 'delete', semantic: 'destructive', disabled: !canManage,
+        attributes: {'data-remove-library-root': category, 'data-library-root-index': index}})}</div>
+    </div>`).join('');
 
   return `
     <section class="library-settings-section">
@@ -17281,7 +20057,7 @@ function buildLibrarySettingsRootSection(category, title, description) {
           <h4>${escapeHtml(title)}</h4>
           <p>${escapeHtml(description)}</p>
         </div>
-        <button class="button button-secondary" type="button" data-add-library-root="${escapeHtml(category)}">Add root</button>
+        ${window.ButtonComponent.renderButton({label: 'Add path', disabled: !canManage, attributes: {'data-add-library-root': category}})}
       </div>
       <div class="library-settings-root-list">${rows}</div>
     </section>
@@ -17290,17 +20066,15 @@ function buildLibrarySettingsRootSection(category, title, description) {
 
 function buildUtilityLibrarySettingsDetail() {
   const librarySettingsState = ensureLibrarySettingsState();
-  if (librarySettingsState.loading && !librarySettingsState.loaded) {
+  if (!librarySettingsState.loaded && !librarySettingsState.error) {
     return '<div class="utility-empty-state">Loading library settings...</div>';
   }
   if (!librarySettingsState.loaded && librarySettingsState.error) {
     return `
       <div class="utility-rule-detail">
         <h3 class="utility-rule-title">Library</h3>
-        <p class="utility-rule-description">${escapeHtml(librarySettingsState.error)}</p>
-        <div class="confirm-modal-actions">
-          <button class="button" type="button" data-reload-library-settings="1">Retry</button>
-        </div>
+        ${buildOnPageAlertHtml({ severity: 'error', title: 'Library settings unavailable', message: librarySettingsState.error,
+          actionsHtml: ButtonComponent.renderButton({ label: 'Retry', attributes: { 'data-reload-library-settings': '1' } }) })}
       </div>
     `;
   }
@@ -17311,31 +20085,20 @@ function buildUtilityLibrarySettingsDetail() {
   return `
     <div class="utility-rule-detail">
       <h3 class="utility-rule-title">Library</h3>
-      <p class="utility-rule-description">Save root settings for Main Library, Hoard, and New Arrivals. Saving starts a full rescan and queues the normal post-scan cover refresh.</p>
-      ${librarySettingsState.error ? `<div class="library-settings-error">${escapeHtml(librarySettingsState.error)}</div>` : ''}
-      ${buildLibrarySettingsRootSection('main_library_roots', 'Main Library', 'Roots used for primary browsing and library moves.')}
-      ${buildLibrarySettingsRootSection('hoarding_library_roots', 'Hoard', 'Roots used for long-term arrivals storage and hoard-only browsing.')}
-      ${buildLibrarySettingsRootSection('new_arrivals_roots', 'New Arrivals', 'Roots used for arrivals-only browsing and move planning.')}
+      ${librarySettingsState.error ? buildOnPageAlertHtml({ severity: 'error', title: 'Library settings could not be updated', message: librarySettingsState.error }) : ''}
+      ${buildLibrarySettingsRootSection('main_library_roots', 'Main Library', '')}
+      ${buildLibrarySettingsRootSection('hoarding_library_roots', 'Hoard', 'Unlistened music.')}
+      ${buildLibrarySettingsRootSection('new_arrivals_roots', 'New Arrivals', 'Folders watched for new music.')}
       <section class="library-settings-section">
         <div class="library-settings-section-heading">
           <div>
             <h4>Move policy</h4>
-            <p>Choose the preferred write targets that the server-owned move planner should use.</p>
+            <p>Choose where albums are moved into your libraries.</p>
           </div>
         </div>
-        <div class="lastfm-credentials-grid library-settings-policy-grid">
-          <label class="lastfm-inline-field library-settings-inline-field">
-            <span>Library writes</span>
-            <select data-library-settings-field="preferred_main_write_root">
-              ${buildLibrarySettingsRootOptions(draft.main_library_roots, movePolicy.preferred_main_write_root, 'Choose a Main Library root')}
-            </select>
-          </label>
-          <label class="lastfm-inline-field library-settings-inline-field">
-            <span>Move to Hoard</span>
-            <select data-library-settings-field="move_new_arrivals_to">
-              ${buildLibrarySettingsRootOptions(draft.hoarding_library_roots, movePolicy.move_new_arrivals_to, 'Choose a Hoard root')}
-            </select>
-          </label>
+        <div class="library-settings-policy-grid">
+          ${buildLibraryMovePolicyRow('preferred_main_write_root', draft.main_library_roots, movePolicy.preferred_main_write_root, 'Auto Move rated albums to Main library', 'Library destination', 'main')}
+          ${buildLibraryMovePolicyRow('move_new_arrivals_to', draft.hoarding_library_roots, movePolicy.move_new_arrivals_to, 'Move New Arrivals to Hoard', 'Move to Hoard', 'hoard')}
         </div>
       </section>
       <section class="library-settings-section">
@@ -17344,16 +20107,181 @@ function buildUtilityLibrarySettingsDetail() {
             <h4>Album ratings</h4>
             <p>Copy file-tag ratings into albums that do not already have an app rating. Existing app ratings remain unchanged.</p>
           </div>
-          <button class="button button-secondary" type="button" data-import-album-ratings="1" ${librarySettingsState.albumRatingImportBusy ? 'disabled' : ''}>${librarySettingsState.albumRatingImportBusy ? 'Importing ratings...' : 'Import ratings from file tags'}</button>
+          <button class="button button-secondary" type="button" data-import-album-ratings="1" ${librarySettingsState.albumRatingImportBusy ? 'disabled' : ''}>${librarySettingsState.albumRatingImportBusy ? 'Importing ratings...' : 'Import ratings'}</button>
         </div>
         ${importResult ? `<div class="library-settings-import-result" data-album-rating-import-result="1">Created: ${escapeHtml(importResult.created)} \u00b7 Authority skipped: ${escapeHtml(importResult.authority_skipped)} \u00b7 Failed: ${escapeHtml(importResult.failed)}</div>` : ''}
       </section>
       <div class="confirm-modal-actions">
         <button class="button button-secondary" type="button" data-reload-library-settings="1" ${librarySettingsState.saveBusy ? 'disabled' : ''}>Reload</button>
-        <button class="button" type="button" data-save-library-settings="1" ${librarySettingsState.saveBusy ? 'disabled' : ''}>${librarySettingsState.saveBusy ? 'Saving...' : 'Save library settings'}</button>
+        <button class="button" type="button" data-save-library-settings="1" ${librarySettingsState.saveBusy || librarySettingsState.allowedActions?.['library.settings.manage'] !== true ? 'disabled' : ''}>${librarySettingsState.saveBusy ? 'Saving...' : 'Save library settings'}</button>
       </div>
     </div>
   `;
+}
+
+
+async function browseLibraryRootDraft(category, index) {
+  const utility = state.utility, owner = ensureLibrarySettingsState();
+  const activeTab = utility.activeTab, selectedKey = utility.selectedIntegrationKey;
+  const current = () => state.utility === utility && utility.librarySettings === owner && utility.activeTab === activeTab && utility.selectedIntegrationKey === selectedKey && (typeof document === 'undefined' || !document.getElementById?.('utility-modal')?.hidden);
+  if (!LIBRARY_SETTINGS_ROOT_CATEGORIES.includes(category) || owner.allowedActions?.['library.settings.manage'] !== true
+      || owner.allowedActions?.['library.filesystem.browse'] !== true || owner.allowedActions?.['library.paths.read'] !== true) return false;
+  const root = getLibrarySettingsDraft()[category]?.[index];
+  if (!root) return false;
+  let selected = '', disposed = false, generation = 0, navigating = false;
+  const read = async path => {
+    const response = await fetch(`/library-settings/browse?path=${encodeURIComponent(path)}`, {headers: {Accept: 'application/json'}});
+    const data = await response.json();
+    if (!response.ok || !data.ok) throw new Error(data.error || 'Unable to browse folders.');
+    return data;
+  };
+  try {
+    const initial = await read('');
+    if (!current() || ensureLibrarySettingsState() !== owner) return false;
+    const render = data => `<p>${escapeHtml(data.path || 'Choose a configured location')}</p><div class="settings-folder-list">${data.parent_path ? window.ButtonComponent.renderButton({label: 'Parent folder', attributes: {'data-folder-path': data.parent_path}}) : ''}${(data.entries || []).map(entry => window.ButtonComponent.renderButton({label: entry.name, attributes: {'data-folder-path': entry.path}})).join('')}</div>`;
+    const result = await showAppFormDialog({ title: 'Choose library folder', contentHtml: render(initial), submitLabel: 'Choose folder', submitEnabled: false,
+      onMount: (content, dialog) => {
+        const syncNavigation = () => {
+          content.setAttribute?.('aria-busy', String(navigating));
+          dialog?.setSubmitEnabled(Boolean(selected) && !navigating);
+        };
+        const navigate = async event => {
+          const button = event.target.closest('[data-folder-path]'); if (!button) return;
+          event.preventDefault(); const requestGeneration = ++generation;
+          selected = ''; navigating = true; syncNavigation();
+          try { const data = await read(button.getAttribute('data-folder-path'));
+            if (disposed || requestGeneration !== generation || !current()) return;
+            selected = String(data.path || ''); content.innerHTML = render(data);
+          } catch (error) { if (!disposed && requestGeneration === generation && current()) showToast(error.message, 'error'); }
+          finally { if (!disposed && requestGeneration === generation && current()) { navigating = false; syncNavigation(); } }
+        };
+        content.addEventListener('click', navigate); owner.pickerCleanup = () => content.removeEventListener('click', navigate);
+      },
+      onClose: () => { disposed = true; owner.pickerCleanup?.(); delete owner.pickerCleanup; },
+      onSubmit: () => { if (navigating) throw new Error('Wait for the folder to finish loading.'); if (!selected) throw new Error('Choose a folder first.'); return selected; },
+    });
+    if (!result || !current() || ensureLibrarySettingsState() !== owner || getLibrarySettingsDraft()[category]?.[index] !== root) return false;
+    root.path = result; renderUtilityModalContent(); return true;
+  } catch (error) { if (current()) showToast(error.message || 'Folder picker unavailable.', 'error'); return false; }
+}
+
+
+async function openUtilityFoobarGuide() {
+  const utility = state.utility, activeTab = state.utility.activeTab, selectedKey = state.utility.selectedIntegrationKey;
+  try {
+    const response = await fetch('/utilities/integrations/foobar/help', {headers: {Accept: 'application/json'}});
+    const data = await response.json();
+    if (!response.ok || !data.ok) throw new Error(data.error || 'Unable to load setup instructions.');
+    if (state.utility !== utility || utility.activeTab !== activeTab || utility.selectedIntegrationKey !== selectedKey || (typeof document !== 'undefined' && document.getElementById?.('utility-modal')?.hidden)) return false;
+    const sections = (data.sections || []).map(section => `<section><h4>${escapeHtml(section.title)}</h4><div class="settings-guide-copy">${formatUtilityGuideMarkdown(section.body_markdown)}</div></section>`).join('');
+    const references = (data.reference_assets || []).filter(asset => String(asset.view_url || '').startsWith('/utilities/integrations/foobar/assets/'))
+      .map(asset => `<li><a href="${escapeHtml(asset.view_url)}" target="_blank" rel="noreferrer">${escapeHtml(asset.title)}</a></li>`).join('');
+    return await showAppFormDialog({title: 'Foobar2000 setup instructions', mode: 'reading',
+      contentHtml: `<article class="settings-reading-guide" tabindex="0" aria-label="Foobar2000 setup instructions">${sections}${references ? `<h4>Reference files</h4><ul>${references}</ul>` : ''}</article>`});
+  } catch (error) { if (state.utility === utility) showToast(error.message || 'Unable to load setup instructions.', 'error'); return false; }
+}
+
+let utilityFoobarFormatCleanup = null;
+let utilityChoiceTrigger = null;
+function openUtilityFoobarFormats(trigger) {
+  return openUtilityChoiceDropdown(trigger, {
+    formats: ['Playback Statistics XML', 'Text Tools — standard', 'Text Tools — enhanced'],
+    selected: state.utility.foobarFormat || 'Playback Statistics XML', label: 'Foobar export format',
+    onSelect: value => { state.utility.foobarFormat = value; },
+  });
+}
+function resolveUtilityChoiceDropdownVerticalPlacement(triggerRect, menuHeight, viewportBottom) {
+  const gap = 4;
+  const height = Math.max(80, Number(menuHeight) || 0);
+  const below = Math.max(80, Number(viewportBottom) - triggerRect.bottom - 12);
+  const above = Math.max(80, triggerRect.top - 12);
+  if (height > below && above > below) {
+    return { top: Math.max(8, triggerRect.top - gap - Math.min(height, above)), maxHeight: above };
+  }
+  return { top: triggerRect.bottom + gap, maxHeight: below };
+}
+
+function openUtilityChoiceDropdown(trigger, { formats, selected, label, onSelect, matchTriggerWidth = false }) {
+  if (utilityFoobarFormatCleanup) {
+    const sameTrigger = utilityChoiceTrigger === trigger;
+    utilityFoobarFormatCleanup();
+    if (sameTrigger) return;
+  }
+  const choices = formats.map(format => typeof format === 'string' ? { value: format, label: format } : format);
+  const menu = document.createElement('div');
+  menu.className = 'gallery-anchored-menu settings-foobar-format-menu'; menu.setAttribute('role', 'menu');
+  menu.setAttribute('aria-label', label);
+  menu.innerHTML = choices.map(choice => window.ButtonComponent.renderButton({label: choice.label, className: 'gallery-menu-action', attributes: {role: 'menuitemradio', 'aria-checked': String(choice.value === selected), 'data-foobar-format': choice.value}})).join('');
+  document.body.append(menu);
+  let closed = false;
+  const close = () => {
+    if (closed) return; closed = true;
+    clearTriggerAnchor(menu); menu.remove(); trigger.setAttribute('aria-expanded', 'false');
+    document.removeEventListener('pointerdown', outside, true); window.removeEventListener('resize', position);
+    observer?.disconnect(); utilityFoobarFormatCleanup = null; utilityChoiceTrigger = null;
+  };
+  const position = () => {
+    if (!trigger.isConnected) { close(); return; }
+    const rect = trigger.getBoundingClientRect(); menu.style.position = 'fixed'; menu.style.zIndex = '130';
+    const menuWidth = matchTriggerWidth ? Math.min(rect.width, window.innerWidth - 16) : Math.min(280, window.innerWidth - 16);
+    menu.style.width = `${Math.max(0, menuWidth)}px`;
+    menu.style.left = `${Math.max(8, Math.min(rect.left, window.innerWidth - menuWidth - 8))}px`;
+    const playerRect = document.querySelector?.('.global-player')?.getBoundingClientRect?.();
+    const viewportBottom = playerRect?.height > 0 && playerRect.top < window.innerHeight
+      ? Math.max(0, playerRect.top)
+      : window.innerHeight;
+    const vertical = resolveUtilityChoiceDropdownVerticalPlacement(rect, menu.scrollHeight, viewportBottom);
+    menu.style.top = `${vertical.top}px`; menu.style.maxHeight = `${vertical.maxHeight}px`;
+    syncTriggerAnchor(menu, trigger);
+  };
+  const outside = event => { if (!menu.contains(event.target) && !trigger.contains(event.target)) close(); };
+  const observer = typeof MutationObserver === 'function' ? new MutationObserver(() => { if (menu.hidden || !trigger.isConnected) close(); }) : null;
+  observer?.observe(document.body, {childList:true,subtree:true,attributes:true,attributeFilter:['hidden']});
+  utilityFoobarFormatCleanup = close; utilityChoiceTrigger = trigger; trigger.setAttribute('aria-expanded', 'true'); position();
+  document.addEventListener('pointerdown', outside, true); window.addEventListener('resize', position);
+  menu.addEventListener('click', event => {
+    const choice = event.target.closest('[data-foobar-format]'); if (!choice) return;
+    const value = choice.getAttribute('data-foobar-format');
+    const option = choices.find(item => item.value === value); if (!option) return;
+    if (onSelect(value) === false) { close(); return; }
+    const label = trigger.querySelector('.ui-button__content'); if (label) label.textContent = option.label;
+    close(); trigger.focus({preventScroll:true});
+  });
+  menu.addEventListener('keydown', event => {
+    const buttons = Array.from(menu.querySelectorAll('button')), index = buttons.indexOf(document.activeElement);
+    if (event.key === 'Escape' || event.key === 'Tab') { if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); } close(); trigger.focus({preventScroll:true}); }
+    if (['ArrowDown','ArrowUp','Home','End'].includes(event.key)) { event.preventDefault(); buttons[event.key === 'Home' ? 0 : event.key === 'End' ? buttons.length - 1 : (index + (event.key === 'ArrowDown' ? 1 : -1) + buttons.length) % buttons.length]?.focus(); }
+  });
+  menu.querySelector('button')?.focus();
+}
+
+
+function formatUtilityGuideMarkdown(value) {
+  const inline = text => escapeHtml(text).replace(/`([^`]+)`/g, '<code>$1</code>')
+    .replace(/\[([^\]]+)\]\(([^)]+)\)/g, (_match, label, url) =>
+      /^(?:https:\/\/|\/utilities\/integrations\/foobar\/assets\/)/.test(url)
+        ? `<a href="${url}" target="_blank" rel="noreferrer">${label}</a>` : label);
+  const lines = String(value || '').split(/\r?\n/), result = [];
+  let index = 0;
+  while (index < lines.length) {
+    if (!lines[index].trim()) { index++; continue; }
+    if (lines[index].startsWith('```')) {
+      const code = []; index++;
+      while (index < lines.length && !lines[index].startsWith('```')) code.push(lines[index++]);
+      index++; result.push(`<pre><code>${escapeHtml(code.join('\n'))}</code></pre>`); continue;
+    }
+    const ordered = /^\d+\.\s+/.test(lines[index]), unordered = /^[-*]\s+/.test(lines[index]);
+    if (ordered || unordered) {
+      const pattern = ordered ? /^\d+\.\s+/ : /^[-*]\s+/, items = [];
+      while (index < lines.length && pattern.test(lines[index])) items.push(`<li>${inline(lines[index++].replace(pattern, ''))}</li>`);
+      const tag = ordered ? 'ol' : 'ul'; result.push(`<${tag}>${items.join('')}</${tag}>`); continue;
+    }
+    if (/^#{1,6}\s+/.test(lines[index])) { result.push(`<h5>${inline(lines[index++].replace(/^#{1,6}\s+/, ''))}</h5>`); continue; }
+    const paragraph = [];
+    while (index < lines.length && lines[index].trim() && !/^(?:```|\d+\.\s+|[-*]\s+|#{1,6}\s+)/.test(lines[index])) paragraph.push(lines[index++]);
+    result.push(`<p>${inline(paragraph.join(' '))}</p>`);
+  }
+  return result.join('');
 }
 
 // END js/runtime/library-settings.js
@@ -17508,16 +20436,26 @@ function unmountAppearanceEditors() {
 function mountBackgroundAppearanceEditor(detail) {
   const editor = getBackgroundAppearanceEditor();
   if (editor) editor.mount(detail);
-  else detail.innerHTML = '<div class="utility-empty-state">Backgrounds could not be loaded. Reload this page to try again.</div>';
+  else detail.innerHTML = buildOnPageAlertHtml({ severity: 'error', title: 'Appearance unavailable', message: 'Backgrounds could not be loaded. Reload this page to try again.' });
 }
 
 // Live canvases consume only the account's applied state, never the editor draft.
 function getSavedAppearancePlayerColors() {
   return typeof window !== 'undefined' ? window.AlbumHavenAppearance?.getSavedPlayerColors?.() || null : null;
 }
+function getSavedAppearanceLoopControlStyle() {
+  return getBackgroundAppearanceEditor()?.getSavedLoopControlStyle?.() === 'companion' ? 'companion' : 'capsule';
+}
+function syncSavedAppearanceLoopControlStyle() {
+  const style = getSavedAppearanceLoopControlStyle();
+  document.querySelectorAll?.('[data-playback-control-cluster][data-loop-control-style]').forEach(node => {
+    node.setAttribute('data-loop-control-style', style);
+  });
+}
 if (typeof window !== 'undefined' && typeof window.addEventListener === 'function') {
   window.addEventListener('album-haven-appearance-change', () => {
     if (typeof updateWaveformAppearance === 'function') updateWaveformAppearance();
+    syncSavedAppearanceLoopControlStyle();
   });
 }
 
@@ -17542,39 +20480,231 @@ function mountSeekbarAppearanceEditor(detail) {
   if (editor?.mountSeekbar) editor.mountSeekbar(host, {
     getLegacyColors: getPreviousBrowserWaveformColors,
     getSeekbarMode: () => state.player.appearance?.seekbarMode || 'default',
+    applySeekbarMode: seekbarMode => {
+      state.player.appearance = normalizePlayerAppearance({ ...state.player.appearance, seekbarMode });
+      persistPlayerAppearance();
+      updateWaveformAppearance(true);
+    },
   });
-  else host.innerHTML = '<div class="utility-empty-state">Waveform colors could not be loaded. Reload this page to try again.</div>';
+  else host.innerHTML = buildOnPageAlertHtml({ severity: 'error', title: 'Appearance unavailable', message: 'Waveform colors could not be loaded. Reload this page to try again.' });
 }
 
 function mountAlbumPageAppearanceEditor(detail) {
   const editor = getBackgroundAppearanceEditor();
   if (editor?.mountAlbumPage) editor.mountAlbumPage(detail);
-  else detail.innerHTML = '<div class="utility-empty-state">Album page appearance could not be loaded. Reload this page to try again.</div>';
+  else detail.innerHTML = buildOnPageAlertHtml({ severity: 'error', title: 'Appearance unavailable', message: 'Album page appearance could not be loaded. Reload this page to try again.' });
 }
 
 function mountAlertsAppearanceEditor(detail) {
   const editor = getBackgroundAppearanceEditor();
   if (editor?.mountAlerts) editor.mountAlerts(detail);
-  else detail.innerHTML = '<div class="utility-empty-state">Alert appearance could not be loaded. Reload this page to try again.</div>';
+  else detail.innerHTML = buildOnPageAlertHtml({ severity: 'error', title: 'Appearance unavailable', message: 'Alert appearance could not be loaded. Reload this page to try again.' });
 }
 
 // END js/runtime/appearance-backgrounds-bridge.js
 
+// BEGIN js/runtime/problematic-files-virtual-list.js
+
+(function registerProblematicFilesVirtualList(global) {
+  const DEFAULT_ROW_STRIDE = 68;
+  const DEFAULT_OVERSCAN = 6;
+  const MOBILE_BREAKPOINT = '(max-width: 720px)';
+  const savedOffsets = new WeakMap();
+
+  function clamp(value, minimum, maximum) {
+    return Math.min(Math.max(value, minimum), maximum);
+  }
+
+  function calculateRange({ count, offset, viewport, stride, overscan }) {
+    if (!count) return { start: 0, end: 0 };
+    const visibleStart = Math.floor(Math.max(0, offset) / stride);
+    const visibleCount = Math.max(1, Math.ceil(Math.max(1, viewport) / stride));
+    return {
+      start: clamp(visibleStart - overscan, 0, count),
+      end: clamp(visibleStart + visibleCount + overscan, 0, count),
+    };
+  }
+
+  function create({
+    list,
+    renderRow,
+    rowStride = DEFAULT_ROW_STRIDE,
+    overscan = DEFAULT_OVERSCAN,
+  }) {
+    if (!list || typeof renderRow !== 'function') {
+      throw new TypeError('Problematic Files virtualization requires a list and row renderer.');
+    }
+
+    let items = [];
+    let selectedKey = '';
+    let frame = 0;
+    let disposed = false;
+    const savedOffset = savedOffsets.get(list) || { horizontal: 0, vertical: 0 };
+    list.scrollLeft = savedOffset.horizontal;
+    list.scrollTop = savedOffset.vertical;
+
+    const isHorizontal = () => Boolean(global.matchMedia?.(MOBILE_BREAKPOINT)?.matches);
+    const getStride = (horizontal) => (
+      horizontal ? Math.min(240, Math.max(1, Number(list.clientWidth) * 0.78)) + 8 : rowStride
+    );
+
+    const renderNow = () => {
+      frame = 0;
+      if (disposed) return;
+      const horizontal = isHorizontal();
+      const stride = getStride(horizontal);
+      const offset = horizontal ? Number(list.scrollLeft) : Number(list.scrollTop);
+      const viewport = horizontal ? Number(list.clientWidth) : Number(list.clientHeight);
+      const range = calculateRange({
+        count: items.length,
+        offset,
+        viewport,
+        stride,
+        overscan,
+      });
+      const beforeSize = range.start * stride;
+      const afterSize = (items.length - range.end) * stride;
+      const dimension = horizontal ? 'width' : 'height';
+      const rows = items.slice(range.start, range.end).map((item) => (
+        renderRow(item, String(item?.key || '') === selectedKey)
+      )).join('');
+
+      list.innerHTML = [
+        `<div class="problematic-virtual-spacer" data-problematic-virtual-spacer="before" style="${dimension}:${beforeSize}px" aria-hidden="true"></div>`,
+        rows,
+        `<div class="problematic-virtual-spacer" data-problematic-virtual-spacer="after" style="${dimension}:${afterSize}px" aria-hidden="true"></div>`,
+      ].join('');
+      list.dataset.problematicMountedCount = String(range.end - range.start);
+      list.dataset.problematicVirtualStart = String(range.start);
+      list.dataset.problematicVirtualEnd = String(range.end);
+      list.dataset.problematicVirtualAxis = horizontal ? 'horizontal' : 'vertical';
+    };
+
+    const schedule = () => {
+      if (disposed || frame) return;
+      frame = global.requestAnimationFrame(renderNow);
+    };
+
+    const reveal = (key) => {
+      const index = items.findIndex((item) => String(item?.key || '') === String(key || ''));
+      if (index < 0) return;
+      const horizontal = isHorizontal();
+      const stride = getStride(horizontal);
+      const viewport = horizontal ? Number(list.clientWidth) : Number(list.clientHeight);
+      const current = horizontal ? Number(list.scrollLeft) : Number(list.scrollTop);
+      const start = index * stride;
+      const end = start + stride;
+      let next = current;
+      if (start < current) next = start;
+      else if (end > current + viewport) next = Math.max(0, end - viewport);
+      if (next === current) return;
+      if (horizontal) list.scrollLeft = next;
+      else list.scrollTop = next;
+      schedule();
+    };
+
+    const render = (nextItems, nextSelectedKey) => {
+      const previousSelectedKey = selectedKey;
+      items = Array.isArray(nextItems) ? nextItems : [];
+      selectedKey = String(nextSelectedKey || '');
+      renderNow();
+      if (selectedKey !== previousSelectedKey) reveal(selectedKey);
+    };
+
+    const dispose = () => {
+      if (disposed) return;
+      disposed = true;
+      savedOffsets.set(list, {
+        horizontal: Number(list.scrollLeft) || 0,
+        vertical: Number(list.scrollTop) || 0,
+      });
+      list.removeEventListener('scroll', schedule);
+      global.removeEventListener?.('resize', schedule);
+      if (frame) global.cancelAnimationFrame(frame);
+      delete list.dataset.problematicMountedCount;
+      delete list.dataset.problematicVirtualStart;
+      delete list.dataset.problematicVirtualEnd;
+      delete list.dataset.problematicVirtualAxis;
+    };
+
+    list.addEventListener('scroll', schedule, { passive: true });
+    global.addEventListener?.('resize', schedule, { passive: true });
+    return { render, reveal, dispose };
+  }
+
+  global.ProblematicFilesVirtualList = { calculateRange, create };
+}(window));
+
+// END js/runtime/problematic-files-virtual-list.js
+
 // BEGIN js/runtime/utility-renderers-and-actions.js
 
-﻿function renderProblematicFiles() {
+﻿const problematicNavigationRowContent = new WeakMap();
+
+let problematicFilesVirtualList = null;
+
+function disposeProblematicFilesVirtualList() {
+  problematicFilesVirtualList?.dispose?.();
+  problematicFilesVirtualList = null;
+}
+
+function renderProblematicFiles({ preserveProblematicTree = false } = {}) {
   const els = getUtilityModalElements();
   if (!els.overlay || !els.list || !els.detail || !els.count) return;
+  bindProblematicFocusUserInput(els);
 
-  const items = getFilteredProblematicAlbums();
-  const operationalItems = Array.isArray(state.utility.libraryWatchHealthProblems)
-    ? state.utility.libraryWatchHealthProblems
-    : [];
-  const operationalHtml = operationalItems
-    .map((problem) => buildLibraryWatchHealthProblemRow(problem))
-    .join('');
+  const priorListScrollTop = Number(els.list.scrollTop);
+  const replaceListContents = (html) => {
+    disposeProblematicFilesVirtualList();
+    const retainedScrollGeometry = els.list.querySelector?.('[data-problematic-scroll-retainer]') || null;
+    els.list.innerHTML = html;
+    if (retainedScrollGeometry && typeof els.list.appendChild === 'function') {
+      els.list.appendChild(retainedScrollGeometry);
+    }
+    if (Number.isFinite(priorListScrollTop) && priorListScrollTop > 0) {
+      els.list.scrollTop = priorListScrollTop;
+    }
+  };
+
+  const virtualListApi = typeof window !== 'undefined'
+    ? window.ProblematicFilesVirtualList
+    : globalThis.ProblematicFilesVirtualList;
+  const mountedRows = preserveProblematicTree && !virtualListApi?.create
+    ? Array.from(els.list.querySelectorAll?.('[data-problematic-album-key]') || []) : [];
+  const albumsByKey = new Map((state.utility.problematicFiles || []).map(album => [String(album.key), album]));
+  const mountedItems = mountedRows.map(row => albumsByKey.get(row.getAttribute('data-problematic-album-key')));
+  const retainTree = mountedRows.length > 0 && mountedItems.every(Boolean);
+  const items = retainTree ? mountedItems : getFilteredProblematicAlbums();
+  const renderTree = selectedKey => {
+    if (!problematicFilesVirtualList && virtualListApi?.create) {
+      problematicFilesVirtualList = virtualListApi.create({
+        list: els.list,
+        renderRow: (album, selected) => buildProblematicAlbumListItem(album, selected),
+      });
+    }
+    if (problematicFilesVirtualList) {
+      problematicFilesVirtualList.render(items, selectedKey);
+    } else if (!retainTree) {
+      replaceListContents(items.map(album => buildProblematicAlbumListItem(album, album.key === selectedKey)).join(''));
+    }
+    Array.from(els.list.querySelectorAll?.('[data-problematic-album-key]') || []).forEach(row => {
+      const album = albumsByKey.get(row.getAttribute('data-problematic-album-key'));
+      if (!album) return;
+      const selected = album.key === selectedKey;
+      const content = getProblematicAlbumNavigationOptions(album, selected);
+      if (retainTree) {
+        const previous = problematicNavigationRowContent.get(row);
+        window.NavigationTree.updateItem(row, {
+          ...content,
+          artworkHtml: previous && previous.artworkSource === content.artworkSource ? undefined : content.artworkHtml,
+        });
+        window.NavigationTree.setItemSelected(row, selected);
+      }
+      problematicNavigationRowContent.set(row, content);
+    });
+  };
   if (els.sidebarLabel) els.sidebarLabel.textContent = 'Albums';
-  els.count.textContent = String(items.length + operationalItems.length);
+  els.count.textContent = String(items.length);
   if (els.search) {
     els.search.disabled = false;
     els.search.placeholder = 'Filter artist, album, or track';
@@ -17601,14 +20731,14 @@ function mountAlertsAppearanceEditor(detail) {
   els.detail.removeAttribute?.('aria-busy');
   els.detail.removeAttribute?.('inert');
 
-  if (state.utility.loading) {
-    els.list.innerHTML = `${operationalHtml}<div class="utility-empty-state compact">Loading...</div>`;
+  if (state.utility.loading && !state.utility.loaded) {
+    replaceListContents('<div class="utility-empty-state compact">Loading...</div>');
     els.detail.innerHTML = '<div class="utility-empty-state">Loading problematic albums...</div>';
     return;
   }
 
   if (!items.length) {
-    els.list.innerHTML = `${operationalHtml}<div class="utility-empty-state compact">No matching problematic albums found.</div>`;
+    replaceListContents('<div class="utility-empty-state compact">No matching problematic albums found.</div>');
     els.detail.innerHTML = '<div class="utility-empty-state">No matching problematic albums found.</div>';
     return;
   }
@@ -17616,7 +20746,7 @@ function mountAlertsAppearanceEditor(detail) {
   const selectedProblematicMissing = !state.utility.selectedProblematicKey
     || !items.some((item) => item.key === state.utility.selectedProblematicKey);
   if (selectedProblematicMissing && state.utility.deferProblematicAutoSelection && (state.utility.selectedProblemFilters || []).length) {
-    els.list.innerHTML = operationalHtml + items.map((album) => buildProblematicAlbumListItem(album, false)).join('');
+    renderTree('');
     els.detail.innerHTML = '<div class="utility-empty-state">Select an album to inspect its problematic tags.</div>';
     return;
   }
@@ -17643,9 +20773,9 @@ function mountAlertsAppearanceEditor(detail) {
   }
 
   const selectedAlbum = getSelectedProblematicAlbumFrom(items);
-  els.list.innerHTML = operationalHtml + items.map((album) => buildProblematicAlbumListItem(album, album.key === state.utility.selectedProblematicKey)).join('');
+  renderTree(state.utility.selectedProblematicKey);
   if (selectedAlbum?.detail_load_failed) {
-    els.detail.innerHTML = '<div class="utility-empty-state">Unable to load the selected problematic album.</div>';
+    els.detail.innerHTML = buildOnPageAlertHtml({ severity: 'error', title: 'Album details unavailable', message: 'Unable to load the selected problematic album.' });
     return;
   }
   if (!selectedAlbum?.detail_loaded) {
@@ -17698,9 +20828,7 @@ function mountAlertsAppearanceEditor(detail) {
     const finishFocusedNavigation = (remainingAttempts) => {
       if (String(state.utility.focusedTrackPath || '') !== focusedTrackPath) return;
       const result = scrollFocusedRowsIntoView();
-      if (result.layoutReady) {
-        state.utility.focusedTrackPath = '';
-      } else if (
+      if (!result.layoutReady &&
         result.focusedTrackRendered
         && remainingAttempts > 1
         && typeof scheduleBrowserAnimationFrame === 'function'
@@ -17710,9 +20838,35 @@ function mountAlertsAppearanceEditor(detail) {
     };
     if (initialFocusedNavigation.focusedTrackRendered && typeof scheduleBrowserAnimationFrame === 'function') {
       scheduleBrowserAnimationFrame(() => finishFocusedNavigation(3));
-    } else if (initialFocusedNavigation.layoutReady) {
-      state.utility.focusedTrackPath = '';
     }
+  }
+}
+
+const problematicFocusInputContainers = new WeakSet();
+
+function bindProblematicFocusUserInput(els) {
+  for (const container of [els.list, els.detail]) {
+    if (!container?.addEventListener || problematicFocusInputContainers.has(container)) continue;
+    problematicFocusInputContainers.add(container);
+    const relinquish = () => {
+      if (state.utility.activeTab === 'problematic-files') state.utility.focusedTrackPath = '';
+    };
+    container.addEventListener('wheel', event => {
+      if (!event.ctrlKey && (event.deltaY || event.deltaX)) relinquish();
+    }, { passive: true });
+    container.addEventListener('touchmove', relinquish, { passive: true });
+    container.addEventListener('pointerdown', event => {
+      // Scrollbar/background input belongs to the scroller; an ordinary row
+      // click must retain deferred track navigation until its own action runs.
+      if (event.target === container && event.button === 0) relinquish();
+    });
+    container.addEventListener('keydown', event => {
+      if (event.defaultPrevented || event.altKey || event.metaKey
+        || !['ArrowUp', 'ArrowDown', 'PageUp', 'PageDown', 'Home', 'End', ' '].includes(event.key)) return;
+      if (event.target?.closest?.('input, textarea, select, [contenteditable]:not([contenteditable="false"]), [role="textbox"], [role="slider"], [role="spinbutton"]')) return;
+      if (event.key === ' ' && event.target?.closest?.('button, a[href], [role="button"], [role="checkbox"], [role="switch"]')) return;
+      relinquish();
+    });
   }
 }
 
@@ -17761,6 +20915,33 @@ function mountProblematicMutationOverlay(detail) {
   detail.innerHTML += overlayMarkup;
 }
 
+function reconcileUtilitySectionRows(list, attribute, items, selectedKey, renderItem, trailingMarkup = '') {
+  const rows = Array.from(list.querySelectorAll(`[${attribute}]`));
+  const scrollTop = list.scrollTop;
+  if (!rows.length) {
+    list.innerHTML = items.map(item => renderItem(item, item.key === selectedKey)).join('') + trailingMarkup;
+  } else {
+    const byKey = new Map(rows.map(row => [row.getAttribute(attribute), row]));
+    const keys = new Set(items.map(item => item.key));
+    rows.forEach(row => { if (!keys.has(row.getAttribute(attribute))) row.remove(); });
+    let cursor = list.firstElementChild;
+    for (const item of items) {
+      let row = byKey.get(item.key);
+      if (!row) {
+        const holder = document.createElement('div');
+        holder.innerHTML = renderItem(item, item.key === selectedKey);
+        row = holder.firstElementChild;
+      }
+      if (row !== cursor) list.insertBefore(row, cursor);
+      cursor = row.nextElementSibling;
+    }
+  }
+  list.querySelectorAll(`[${attribute}]`).forEach(row => {
+    window.NavigationTree.setItemSelected(row, row.getAttribute(attribute) === selectedKey);
+  });
+  list.scrollTop = scrollTop;
+}
+
 function renderUtilityRules() {
   const els = getUtilityModalElements();
   if (!els.overlay || !els.list || !els.detail || !els.count) return;
@@ -17768,9 +20949,9 @@ function renderUtilityRules() {
   if (els.sidebarLabel) els.sidebarLabel.textContent = 'Rules';
   els.count.textContent = String(rules.length);
   if (els.search) {
-    els.search.value = '';
-    els.search.disabled = true;
-    els.search.placeholder = 'Rules';
+    els.search.value = state.utility.rulesSearchQuery || '';
+    els.search.disabled = false;
+    els.search.placeholder = 'Filter album, filename, or reason';
   }
   if (els.problemFilterButton) {
     els.problemFilterButton.disabled = true;
@@ -17795,7 +20976,20 @@ function renderUtilityRules() {
     state.utility.selectedRuleKey = rules[0].key || '';
   }
   const selectedRule = getSelectedUtilityRule();
-  els.list.innerHTML = rules.map((rule) => buildUtilityRuleListItem(rule, rule.key === state.utility.selectedRuleKey)).join('');
+  reconcileUtilitySectionRows(els.list, 'data-utility-rule-key', rules, state.utility.selectedRuleKey, buildUtilityRuleListItem);
+  const rulesByKey = new Map(rules.map(rule => [rule.key, rule]));
+  els.list.querySelectorAll('[data-utility-rule-key]').forEach(row => {
+    const rule = rulesByKey.get(row.getAttribute('data-utility-rule-key'));
+    row.classList.toggle('is-active', rule.key === state.utility.selectedRuleKey);
+    for (const [selector, value] of [
+      ['.utility-list-item-title', rule.title || 'Rule'],
+      ['.utility-list-item-meta', rule.description || ''],
+      ['.utility-list-item-issues', `${Number(rule.count || 0)} applied`],
+    ]) {
+      const field = row.querySelector?.(selector);
+      if (field && field.textContent !== value) field.textContent = value;
+    }
+  });
   els.detail.innerHTML = buildUtilityRuleDetail(selectedRule);
 }
 
@@ -17810,24 +21004,32 @@ function clearUtilityLoopDragState() {
 }
 
 function syncUtilityLoopDragUi() {
-  document.querySelectorAll('[data-utility-loop-group-key]').forEach((button) => {
-    const groupKey = String(button.getAttribute('data-utility-loop-group-key') || '');
-    const isGroupButton = button.hasAttribute('data-utility-loop-id') === false;
-    const isDragging = isGroupButton
-      ? state.utility.loopDragType === 'group' && groupKey && groupKey === String(state.utility.loopDragId || '')
-      : state.utility.loopDragType === 'loop' && String(button.getAttribute('data-utility-loop-id') || '') === String(state.utility.loopDragId || '');
-    const isDropTarget = isGroupButton
-      ? state.utility.loopDropType === 'group' && groupKey && groupKey === String(state.utility.loopDropTargetId || '')
-      : state.utility.loopDropType === 'loop' && String(button.getAttribute('data-utility-loop-id') || '') === String(state.utility.loopDropTargetId || '');
-    button.classList.toggle('is-dragging', isDragging);
-    button.classList.toggle(
-      'is-drop-before',
-      isDropTarget && state.utility.loopDropPosition === 'before',
-    );
-    button.classList.toggle(
-      'is-drop-after',
-      isDropTarget && state.utility.loopDropPosition === 'after',
-    );
+  document.querySelectorAll('[data-utility-loop-entry], [data-utility-loop-id]').forEach(node => {
+    const id = getUtilityLoopNodeId(node);
+    const dragging = id && id === state.utility.loopDragId;
+    const dropping = id && id === state.utility.loopDropTargetId;
+    node.classList.toggle('is-dragging', Boolean(dragging));
+    node.classList.toggle('is-drop-before', Boolean(dropping && state.utility.loopDropPosition === 'before'));
+    node.classList.toggle('is-drop-after', Boolean(dropping && state.utility.loopDropPosition === 'after'));
+  });
+}
+
+function getUtilityLoopNodeId(node) {
+  return String(node?.getAttribute('data-utility-loop-entry') || node?.getAttribute('data-utility-loop-id') || '');
+}
+
+function syncUtilityLoopMoveButtons() {
+  document.querySelectorAll('[data-move-utility-loop]').forEach(button => {
+    const id = button.getAttribute('data-move-utility-loop');
+    const loop = (state.utility.loops || []).find(item => String(item.id) === id);
+    const scope = loop && getUtilityLoopOrderScope(loop.song_key);
+    const index = scope?.loops.findIndex(item => String(item.id) === id) ?? -1;
+    const direction = button.getAttribute('data-loop-move-direction');
+    const unavailable = !scope || Boolean(state.utility.loopOrderPending?.[loop.song_key])
+      || (direction === 'up' ? index <= 0 : index >= scope.loops.length - 1);
+    button.setAttribute('aria-disabled', String(unavailable));
+    // Keep the focused control in the tab order across an optimistic boundary move.
+    button.dataset.moveUnavailable = String(unavailable);
   });
 }
 
@@ -17850,97 +21052,164 @@ function renderUtilityLoopList(els, loops) {
     group,
     state.utility.selectedLoopGroupKey || getSelectedUtilityLoopGroup()?.key || '',
     state.utility.selectedLoopId || '',
-  )).join('');
+  )).join('') || '<div class="utility-empty-state compact">No matching loops.</div>';
   bindUtilityLoopDragAndDrop();
   syncUtilityLoopDragUi();
 }
 
 function bindUtilityLoopDragAndDrop() {
-  document.querySelectorAll('[data-utility-loop-group-key]').forEach((button) => {
-    if (button.dataset.dragBound === '1') return;
-    button.dataset.dragBound = '1';
-    button.addEventListener('dragstart', (event) => {
-      const groupKey = String(button.getAttribute('data-utility-loop-group-key') || '');
-      const loopId = String(button.getAttribute('data-utility-loop-id') || '');
-      const dragType = loopId ? 'loop' : 'group';
-      const dragId = loopId || groupKey;
-      if (!groupKey || !dragId) {
-        event.preventDefault();
+  const clear = () => { clearUtilityLoopDragState(); syncUtilityLoopDragUi(); };
+  const payload = () => ({ type: state.utility.loopDragType, id: state.utility.loopDragId, groupKey: state.utility.loopDragGroupKey });
+  document.querySelectorAll('[data-loop-tree-song], [data-loop-panel-song]').forEach(container => {
+    if (container.dataset.edgeDragBound === '1') return;
+    container.dataset.edgeDragBound = '1';
+    const edgeTarget = event => {
+      if (event.target.closest('[data-utility-loop-id], [data-utility-loop-entry]')) return null;
+      const nodes = Array.from(container.querySelectorAll('[data-utility-loop-id], [data-utility-loop-entry]')).filter(node => !node.hidden);
+      if (!nodes.length) return null;
+      const next = nodes.find(node => event.clientY <= node.getBoundingClientRect().top);
+      const node = next || nodes[nodes.length - 1];
+      return { target: { type: 'loop', id: getUtilityLoopNodeId(node), groupKey: container.getAttribute('data-loop-tree-song') || container.getAttribute('data-loop-panel-song') }, position: next ? 'before' : 'after' };
+    };
+    container.addEventListener('dragover', event => {
+      const edge = edgeTarget(event);
+      if (!edge) {
+        if (!event.target.closest('[data-utility-loop-id], [data-utility-loop-entry]')) updateUtilityLoopDropState('', '', '');
         return;
       }
-      state.utility.loopDragType = dragType;
-      state.utility.loopDragId = dragId;
-      state.utility.loopDragGroupKey = groupKey;
-      state.utility.loopSuppressClick = false;
-      updateUtilityLoopDropState('', '', '');
-      syncUtilityLoopDragUi();
-      if (event.dataTransfer) {
-        event.dataTransfer.effectAllowed = 'move';
-        event.dataTransfer.setData('text/plain', JSON.stringify({ type: dragType, id: dragId, groupKey }));
-      }
-    });
-    button.addEventListener('dragover', (event) => {
-      const targetKey = String(button.getAttribute('data-utility-loop-group-key') || '');
-      const targetLoopId = String(button.getAttribute('data-utility-loop-id') || '');
-      let payload = { type: state.utility.loopDragType, id: state.utility.loopDragId, groupKey: state.utility.loopDragGroupKey };
-      const raw = String(event.dataTransfer?.getData('text/plain') || '');
-      if ((!payload.id || !payload.type) && raw) {
-        try { payload = JSON.parse(raw); } catch (_error) {}
-      }
-      if (!targetKey || !payload?.id || !payload?.type) return;
-      if (payload.type === 'loop' && payload.groupKey !== targetKey) return;
-      event.preventDefault();
-      if (event.dataTransfer) event.dataTransfer.dropEffect = 'move';
-      const targetType = targetLoopId ? 'loop' : 'group';
-      const targetId = targetLoopId || targetKey;
-      if (payload.id === targetId && payload.type === targetType) {
+      if (!buildReorderedUtilityLoops(state.utility.loops, payload(), edge.target, edge.position)) {
         updateUtilityLoopDropState('', '', '');
         return;
       }
-      updateUtilityLoopDropState(targetType, targetId, getUtilityLoopDropPosition(button, event.clientY), targetKey);
-    });
-    button.addEventListener('drop', async (event) => {
       event.preventDefault();
-      const targetKey = String(button.getAttribute('data-utility-loop-group-key') || '');
-      const targetLoopId = String(button.getAttribute('data-utility-loop-id') || '');
-      let payload = { type: state.utility.loopDragType, id: state.utility.loopDragId, groupKey: state.utility.loopDragGroupKey };
-      const raw = String(event.dataTransfer?.getData('text/plain') || '');
-      if ((!payload.id || !payload.type) && raw) {
-        try { payload = JSON.parse(raw); } catch (_error) {}
-      }
-      if (!payload?.id || !payload?.type || !targetKey) return;
-      if (payload.type === 'loop' && payload.groupKey !== targetKey) return;
-      const targetType = targetLoopId ? 'loop' : 'group';
-      const targetId = targetLoopId || targetKey;
-      const position = state.utility.loopDropTargetId === targetId && state.utility.loopDropPosition
-        ? state.utility.loopDropPosition
-        : getUtilityLoopDropPosition(button, event.clientY);
-      state.utility.loopSuppressClick = true;
-      clearUtilityLoopDragState();
-      syncUtilityLoopDragUi();
-      await reorderUtilityLoops(payload, { type: targetType, id: targetId, groupKey: targetKey }, position);
-      scheduleBrowserTimeout(() => {
-        state.utility.loopSuppressClick = false;
-      }, 0);
+      if (event.dataTransfer) event.dataTransfer.dropEffect = 'move';
+      updateUtilityLoopDropState('loop', edge.target.id, edge.position, edge.target.groupKey);
     });
-    button.addEventListener('dragend', () => {
-      clearUtilityLoopDragState();
-      syncUtilityLoopDragUi();
+    container.addEventListener('drop', async event => {
+      const edge = edgeTarget(event);
+      if (!edge) return;
+      event.preventDefault(); event.stopPropagation();
+      const source = payload(); clear();
+      await reorderUtilityLoops(source, edge.target, edge.position);
+    });
+    container.addEventListener('dragleave', event => {
+      if (!event.relatedTarget || !container.contains(event.relatedTarget)) updateUtilityLoopDropState('', '', '');
     });
   });
+  document.querySelectorAll('[data-utility-loop-entry], [data-utility-loop-id]').forEach(node => {
+    const currentLoop = () => (state.utility.loops || []).find(loop => String(loop.id) === getUtilityLoopNodeId(node));
+    node.setAttribute('draggable', String(canReorderUtilityLoop(currentLoop())));
+    if (node.dataset.dragBound === '1') return;
+    node.dataset.dragBound = '1';
+    const target = () => ({ type: 'loop', id: getUtilityLoopNodeId(node), groupKey: currentLoop()?.song_key });
+    node.addEventListener('dragstart', event => {
+      const loop = currentLoop();
+      if (!canReorderUtilityLoop(loop) || state.utility.loopOrderPending?.[loop.song_key]
+          || event.target?.closest?.('button, input, select, textarea, a, [data-loop-range-surface]')) {
+        event.preventDefault(); clear(); return;
+      }
+      state.utility.loopDragType = 'loop'; state.utility.loopDragId = String(loop.id);
+      state.utility.loopDragGroupKey = loop.song_key;
+      state.utility.loopSuppressClick = false;
+      updateUtilityLoopDropState('', '', '');
+      if (event.dataTransfer) {
+        event.dataTransfer.effectAllowed = 'move';
+        event.dataTransfer.setData('text/plain', JSON.stringify(payload()));
+      }
+    });
+    node.addEventListener('dragover', event => {
+      const position = getUtilityLoopDropPosition(node, event.clientY);
+      if (!buildReorderedUtilityLoops(state.utility.loops, payload(), target(), position)) {
+        updateUtilityLoopDropState('', '', ''); return;
+      }
+      event.preventDefault();
+      if (event.dataTransfer) event.dataTransfer.dropEffect = 'move';
+      updateUtilityLoopDropState('loop', getUtilityLoopNodeId(node), position, currentLoop().song_key);
+    });
+    node.addEventListener('dragleave', event => {
+      if (!event.relatedTarget || !node.contains(event.relatedTarget)) updateUtilityLoopDropState('', '', '');
+    });
+    node.addEventListener('drop', async event => {
+      event.preventDefault(); event.stopPropagation?.();
+      const source = payload(); const destination = target();
+      const position = getUtilityLoopDropPosition(node, event.clientY);
+      clear();
+      state.utility.loopSuppressClick = true;
+      try { return await reorderUtilityLoops(source, destination, position); }
+      finally { setTimeout(() => { state.utility.loopSuppressClick = false; }, 0); }
+    });
+    node.addEventListener('dragend', clear);
+  });
+  document.querySelectorAll('[data-move-utility-loop]').forEach(button => {
+    if (button.dataset.moveBound === '1') return;
+    button.dataset.moveBound = '1';
+    button.addEventListener('click', event => {
+      event.preventDefault(); event.stopPropagation?.();
+      if (button.getAttribute('aria-disabled') === 'true') return false;
+      return moveUtilityLoop(button.getAttribute('data-move-utility-loop'), button.getAttribute('data-loop-move-direction'));
+    });
+  });
+  if (!state.utility.loopDragDismissBound) {
+    state.utility.loopDragDismissBound = true;
+    document.addEventListener('keydown', event => { if (event.key === 'Escape') clear(); });
+    document.addEventListener('drop', clear);
+    document.addEventListener('dragend', clear);
+  }
+  syncUtilityLoopMoveButtons();
+}
+
+function syncUtilityLoopPanelVisibility() {
+  const visibleIds = new Set(getFilteredUtilityLoops().map(loop => String(loop.id)));
+  const els = getUtilityModalElements();
+  els.detail?.querySelectorAll('[data-utility-loop-entry]').forEach(panel => { panel.hidden = !visibleIds.has(getUtilityLoopNodeId(panel)); });
+  const empty = visibleIds.size === 0;
+  const groupDetail = els.detail?.querySelector('.utility-loop-group-detail');
+  const panelList = els.detail?.querySelector('.utility-loop-entry-list');
+  if (groupDetail) groupDetail.hidden = empty;
+  if (panelList) panelList.hidden = empty;
+  let message = els.detail?.querySelector('[data-loop-search-empty]');
+  if (empty && !message && els.detail) {
+    message = document.createElement('div');
+    message.setAttribute('data-loop-search-empty', '1');
+    message.setAttribute('class', 'utility-empty-state');
+    message.textContent = 'No matching loops.';
+    els.detail.appendChild(message);
+  }
+  if (message) message.hidden = !empty;
+}
+
+function filterUtilityLoopViews() {
+  if (state.utility.activeTab !== 'loops') return;
+  const els = getUtilityModalElements();
+  const filtered = getFilteredUtilityLoops();
+  if (els.count) els.count.textContent = String(filtered.length);
+  if (filtered.length && !filtered.some(loop => buildUtilityLoopGroupKey(loop) === state.utility.selectedLoopGroupKey)) {
+    state.utility.selectedLoopGroupKey = buildUtilityLoopGroupKey(filtered[0]);
+    state.utility.selectedLoopId = String(filtered[0].id);
+    renderUtilityLoops();
+    return;
+  }
+  const scroll = els.list?.scrollTop;
+  renderUtilityLoopList(els, filtered);
+  if (els.list && Number.isFinite(scroll)) els.list.scrollTop = scroll;
+  syncUtilityLoopPanelVisibility();
 }
 
 function renderUtilityLoops() {
   const els = getUtilityModalElements();
   if (!els.overlay || !els.list || !els.detail || !els.count) return;
+  state.utility.loopViewGeneration = Number(state.utility.loopViewGeneration || 0) + 1;
+  if (typeof disposeMountedLoopActions === 'function') disposeMountedLoopActions(els.detail);
+  if (els.overlay.hidden) return;
   els.detail.classList.add('is-loop-detail');
   const loops = state.utility.loops || [];
   if (els.sidebarLabel) els.sidebarLabel.textContent = 'Loops';
-  els.count.textContent = String(loops.length);
+  const filtered = getFilteredUtilityLoops();
+  els.count.textContent = String(filtered.length);
   if (els.search) {
-    els.search.value = '';
-    els.search.disabled = true;
-    els.search.placeholder = 'Saved loops';
+    els.search.value = state.utility.loopsSearchQuery || '';
+    els.search.disabled = false;
+    els.search.placeholder = 'Filter song, artist, album, or loop';
   }
   if (els.problemFilterButton) {
     els.problemFilterButton.disabled = true;
@@ -17955,6 +21224,11 @@ function renderUtilityLoops() {
     return;
   }
 
+  if (state.utility.loopsLoadError) {
+    els.list.innerHTML = '';
+    els.detail.innerHTML = buildOnPageAlertHtml({ severity: 'error', title: 'Saved loops unavailable', message: state.utility.loopsLoadError });
+    return;
+  }
   if (!loops.length) {
     clearUtilityLoopDragState();
     els.list.innerHTML = '<div class="utility-empty-state compact">No saved loops yet.</div>';
@@ -17962,7 +21236,7 @@ function renderUtilityLoops() {
     return;
   }
 
-  const groupedLoops = groupUtilityLoops(loops);
+  const groupedLoops = groupUtilityLoops(filtered.length ? filtered : loops);
   if (!state.utility.selectedLoopGroupKey || !groupedLoops.some((group) => String(group.key || '') === String(state.utility.selectedLoopGroupKey || ''))) {
     state.utility.selectedLoopGroupKey = String(groupedLoops[0]?.key || '');
   }
@@ -17971,11 +21245,27 @@ function renderUtilityLoops() {
     state.utility.selectedLoopId = String(defaultLoop?.id || '');
   }
   const selectedGroup = getSelectedUtilityLoopGroup();
-  const selectedLoop = state.utility.selectedLoopDetailMode === 'loop' ? getSelectedUtilityLoop() : null;
-  renderUtilityLoopList(els, loops);
-  els.detail.innerHTML = buildUtilityLoopDetail(selectedGroup, selectedLoop);
-  ((selectedLoop ? [selectedLoop] : selectedGroup?.loops) || []).forEach((loop) => initializeUtilityLoopPlayer(loop));
+  state.utility.selectedLoopDetailMode = 'group';
+  renderUtilityLoopList(els, getFilteredUtilityLoops());
+  els.detail.innerHTML = buildUtilityLoopDetail(selectedGroup);
+  (selectedGroup?.loops || []).forEach((loop) => initializeUtilityLoopPlayer(loop));
+  bindUtilityLoopDragAndDrop();
+  syncUtilityLoopPanelVisibility();
   updateUtilityLoopRepeatButton(String(state.utility.selectedLoopId || ''));
+}
+
+function filterUtilityAppearanceNavigation() {
+  const els = getUtilityModalElements();
+  const query = String(state.utility.appearanceSearchQuery || '').trim().toLocaleLowerCase();
+  let matches = 0;
+  els.list?.querySelectorAll('[data-utility-appearance-key]').forEach((row) => {
+    const keywords = row.getAttribute?.('data-utility-appearance-key') === 'seekbar' ? ' compact sidebar floating edge slow motion' : '';
+    row.hidden = !(String(row.textContent || '') + keywords).toLocaleLowerCase().includes(query);
+    if (!row.hidden) matches += 1;
+  });
+  const empty = els.list?.querySelector('[data-appearance-search-empty]');
+  if (empty) empty.hidden = matches !== 0;
+  if (els.count) els.count.textContent = String(matches);
 }
 
 function renderUtilityAppearance() {
@@ -17984,9 +21274,9 @@ function renderUtilityAppearance() {
   if (els.sidebarLabel) els.sidebarLabel.textContent = 'Appearance';
   els.count.textContent = '5';
   if (els.search) {
-    els.search.value = '';
-    els.search.disabled = true;
-    els.search.placeholder = 'Appearance';
+    els.search.value = state.utility.appearanceSearchQuery || '';
+    els.search.disabled = false;
+    els.search.placeholder = 'Search settings';
   }
   if (els.problemFilterButton) {
     els.problemFilterButton.disabled = true;
@@ -17999,16 +21289,19 @@ function renderUtilityAppearance() {
   const selectedKey = state.utility.appearanceKey;
   const navigationTree = typeof window !== 'undefined' ? window.NavigationTree : null;
   const labels = { backgrounds: 'Main elements', seekbar: 'Player & Seekbar', 'selection-accent': 'Selection & Hover', alerts: 'Alerts', 'album-page': 'Album page' };
-  els.list.innerHTML = appearanceKeys.map(key => navigationTree?.renderItem
-    ? navigationTree.renderItem({ key, label: labels[key], variant: 'panel', action: true, selected: selectedKey === key, attributes: { 'data-utility-appearance-key': key } })
-    : buildUtilityAppearanceListItem(key, labels[key], '', selectedKey === key)).join('');
+  reconcileUtilitySectionRows(els.list, 'data-utility-appearance-key', appearanceKeys.map(key => ({ key })), selectedKey,
+    (item, selected) => navigationTree?.renderItem
+      ? navigationTree.renderItem({ key: item.key, label: labels[item.key], variant: 'panel', action: true, selected, attributes: { 'data-utility-appearance-key': item.key } })
+      : buildUtilityAppearanceListItem(item.key, labels[item.key], '', selected),
+    '<div class="utility-empty-state compact" data-appearance-search-empty hidden>No matching settings.</div>');
+  filterUtilityAppearanceNavigation();
   if (selectedKey === 'backgrounds') {
     if (typeof window !== 'undefined') window.AlbumHavenSelectionAccent?.unmount?.();
     if (typeof mountBackgroundAppearanceEditor === 'function') mountBackgroundAppearanceEditor(els.detail);
   } else if (selectedKey === 'selection-accent') {
     const appearance = typeof window !== 'undefined' ? window.AlbumHavenAppearance?.instance : null;
     if (appearance?.mountSelectionAccent) appearance.mountSelectionAccent(els.detail);
-    else els.detail.innerHTML = '<div class="utility-empty-state">Selection &amp; Hover could not be loaded. Reload this page to try again.</div>';
+    else els.detail.innerHTML = buildOnPageAlertHtml({ severity: 'error', title: 'Appearance unavailable', message: 'Selection & Hover could not be loaded. Reload this page to try again.' });
   } else if (selectedKey === 'alerts') {
     if (typeof window !== 'undefined') window.AlbumHavenSelectionAccent?.unmount?.();
     if (typeof mountAlertsAppearanceEditor === 'function') mountAlertsAppearanceEditor(els.detail);
@@ -18022,6 +21315,23 @@ function renderUtilityAppearance() {
   }
 }
 
+function filterUtilityIntegrationNavigation() {
+  const els = getUtilityModalElements();
+  const query = String(state.utility.integrationsSearchQuery || '').trim().toLocaleLowerCase();
+  let matches = 0;
+  els.list?.querySelectorAll('[data-utility-integration-key]').forEach((row) => {
+    row.hidden = !String(row.textContent || '').toLocaleLowerCase().includes(query);
+    if (!row.hidden) matches += 1;
+  });
+  let empty = els.list?.querySelector?.('[data-integration-search-empty]');
+  if (!empty && matches === 0 && els.list?.insertAdjacentHTML) {
+    els.list.insertAdjacentHTML('beforeend', '<div class="utility-empty-state compact" data-integration-search-empty>No matching integrations.</div>');
+    empty = els.list.querySelector('[data-integration-search-empty]');
+  }
+  if (empty) empty.hidden = matches !== 0;
+  if (els.count) els.count.textContent = String(matches);
+}
+
 function getSelectedUtilityIntegration() {
   return buildUtilityIntegrationItems().find((item) => String(item.key || '') === String(state.utility.selectedIntegrationKey || '')) || null;
 }
@@ -18033,9 +21343,9 @@ function renderUtilityIntegrations() {
   if (els.sidebarLabel) els.sidebarLabel.textContent = 'Integrations';
   els.count.textContent = String(integrations.length);
   if (els.search) {
-    els.search.value = '';
-    els.search.disabled = true;
-    els.search.placeholder = 'Integrations';
+    els.search.value = state.utility.integrationsSearchQuery || '';
+    els.search.disabled = false;
+    els.search.placeholder = 'Search integrations';
   }
   if (els.problemFilterButton) {
     els.problemFilterButton.disabled = true;
@@ -18053,7 +21363,30 @@ function renderUtilityIntegrations() {
     state.utility.selectedIntegrationKey = String(integrations[0].key || '');
   }
   const selected = getSelectedUtilityIntegration();
-  els.list.innerHTML = integrations.map((item) => buildUtilityIntegrationListItem(item, String(item.key || '') === String(state.utility.selectedIntegrationKey || ''))).join('');
+  const scrollTop = els.list.scrollTop;
+  const existingRows = Array.from(els.list.querySelectorAll('[data-utility-integration-key]'));
+  const rowsByKey = new Map(existingRows.map((row) => [row.getAttribute('data-utility-integration-key'), row]));
+  if (!existingRows.length) els.list.replaceChildren();
+  const keys = new Set(integrations.map((item) => String(item.key || '')));
+  existingRows.forEach((row) => {
+    if (!keys.has(row.getAttribute('data-utility-integration-key'))) row.remove();
+  });
+  let cursor = els.list.firstElementChild;
+  integrations.forEach((item) => {
+    const key = String(item.key || '');
+    const isSelected = key === String(state.utility.selectedIntegrationKey || '');
+    let row = rowsByKey.get(key);
+    if (!row) {
+      const holder = document.createElement('div');
+      holder.innerHTML = buildUtilityIntegrationListItem(item, isSelected);
+      row = holder.firstElementChild;
+    }
+    if (row !== cursor) els.list.insertBefore(row, cursor);
+    window.NavigationTree.setItemSelected(row, isSelected);
+    cursor = row.nextElementSibling;
+  });
+  els.list.scrollTop = scrollTop;
+  filterUtilityIntegrationNavigation();
   els.detail.innerHTML = buildUtilityIntegrationDetail(selected);
 }
 
@@ -18063,57 +21396,27 @@ function getSelectedUtilityLogHistoryItem() {
 
 function renderUtilityLogHistory() {
   const els = getUtilityModalElements();
-  if (!els.overlay || !els.list || !els.detail || !els.count) return;
-  const items = state.utility.logHistory || [];
+  if (!els.overlay || els.overlay.hidden || !els.list || !els.detail || !els.count || state.utility.activeTab !== 'log-history') return;
   if (els.sidebarLabel) els.sidebarLabel.textContent = 'History';
-  els.count.textContent = String(items.length);
-  if (els.search) {
-    els.search.value = '';
-    els.search.disabled = true;
-    els.search.placeholder = 'Log history';
-  }
-  if (els.problemFilterButton) {
-    els.problemFilterButton.disabled = true;
-    els.problemFilterButton.hidden = true;
-  }
+  const value = getUtilityLogHistoryController().getState();
+  if (els.search) { els.search.disabled = false; els.search.readOnly = true; els.search.value = value.temporaryRowId ? value.periodLabel || '' : ''; els.search.placeholder = 'Choose a log period'; }
+  if (els.problemFilterButton) { els.problemFilterButton.hidden = false; els.problemFilterButton.disabled = false; els.problemFilterButton.setAttribute('aria-label', 'Period'); els.problemFilterButton.setAttribute('title', 'Choose a log period'); els.problemFilterButton.setAttribute('aria-haspopup', 'dialog'); els.problemFilterButton.setAttribute('aria-controls', 'app-form-modal'); }
   if (els.problemFilterMenu) els.problemFilterMenu.hidden = true;
   if (els.problemFilterChips) els.problemFilterChips.innerHTML = '';
-  const storageStatus = state.utility.logHistoryStorageStatus || {};
-  const storageMessage = String(storageStatus.message || '');
-  const safeStorageMessage = typeof escapeHtml === 'function'
-    ? escapeHtml(storageMessage)
-    : storageMessage;
-  const storageWarning = storageStatus.persistent === false
-    ? `<div class="utility-empty-state compact">${safeStorageMessage || 'History is session-only and will be lost on reload.'}</div>`
-    : '';
-
-  if (state.utility.logHistoryLoading) {
-    els.list.innerHTML = '<div class="utility-empty-state compact">Loading history...</div>';
-    els.detail.innerHTML = '<div class="utility-empty-state">Loading history...</div>';
-    return;
-  }
-  if (!items.length) {
-    els.list.innerHTML = '<div class="utility-empty-state compact">No history yet.</div>';
-    els.detail.innerHTML = `
-      <div class="utility-empty-state">Important scan, file, edit, and repair activity—including errors—will appear here.</div>
-      ${storageWarning}
-      <div class="confirm-modal-actions">
-        <button class="button button-secondary" type="button" data-export-log-history="1">Export Logs</button>
-      </div>
-    `;
-    return;
-  }
-  if (!state.utility.selectedLogHistoryId || !items.some((item) => String(item.id || '') === String(state.utility.selectedLogHistoryId))) {
-    state.utility.selectedLogHistoryId = String(items[0].id || '');
-  }
-  const selectedItem = getSelectedUtilityLogHistoryItem();
-  els.list.innerHTML = items.map((item) => buildUtilityLogHistoryListItem(item, String(item.id || '') === String(state.utility.selectedLogHistoryId))).join('');
-  els.detail.innerHTML = `${storageWarning}${buildUtilityLogHistoryDetail(selectedItem)}`;
+  const scroll = els.list.scrollTop;
+  reconcileUtilityLogHistoryTree(els, value);
+  els.list.scrollTop = scroll;
+  els.detail.innerHTML = buildUtilityLogHistoryConsole(value);
 }
 
-function renderUtilityModalContent() {
+function renderUtilityModalContent(options = {}) {
   const els = getUtilityModalElements();
+  if (els.search) els.search.readOnly = false;
+  if (els.problemFilterButton) { els.problemFilterButton.setAttribute('aria-label', 'Filters'); els.problemFilterButton.setAttribute('title', 'Filter by problem type'); els.problemFilterButton.setAttribute('aria-haspopup', 'listbox'); els.problemFilterButton.setAttribute('aria-controls', 'utility-problem-filter-menu'); }
   const activeTab = state.utility.activeTab || 'problematic-files';
+  if (activeTab !== 'problematic-files') disposeProblematicFilesVirtualList();
+  if (activeTab !== 'log-history' && els.list?.dataset) els.list.dataset.utilityNavigationOwner = activeTab;
+  if (activeTab !== 'loops' && typeof disposeMountedLoopActions === 'function') disposeMountedLoopActions(els.detail);
   if (activeTab !== 'appearance' && typeof unmountAppearanceEditors === 'function') unmountAppearanceEditors();
   els.overlay?.setAttribute('data-active-tab', activeTab);
   els.detail?.classList.remove('is-loop-detail');
@@ -18121,7 +21424,16 @@ function renderUtilityModalContent() {
     const selected = tab.getAttribute('data-utility-tab') === activeTab;
     tab.classList.toggle('is-active', selected);
     tab.setAttribute('aria-selected', selected ? 'true' : 'false');
+    tab.setAttribute('role', 'tab');
+    tab.setAttribute('tabindex', selected ? '0' : '-1');
+    tab.setAttribute('aria-controls', 'utility-problematic-detail');
   });
+  const selectedTab = els.tabs.find(tab => tab.getAttribute('data-utility-tab') === activeTab);
+  if (selectedTab?.id) {
+    els.detail?.setAttribute('role', 'tabpanel');
+    els.detail?.setAttribute('aria-labelledby', selectedTab.id);
+  }
+  syncUtilityTabAlignment(els);
   if (activeTab === 'rules') {
     renderUtilityRules();
   } else if (activeTab === 'loops') {
@@ -18133,14 +21445,105 @@ function renderUtilityModalContent() {
   } else if (activeTab === 'appearance') {
     renderUtilityAppearance();
   } else {
-    renderProblematicFiles();
+    renderProblematicFiles(options);
   }
+  if (typeof updateSearchClearAction === 'function') updateSearchClearAction(els.search);
+}
+
+const utilityTabAlignmentObservers = new WeakMap();
+function syncUtilityTabAlignment(els = getUtilityModalElements()) {
+  const strip = els.overlay?.querySelector?.('.utility-modal-tabs');
+  const header = els.overlay?.querySelector?.('.utility-modal-header');
+  if (!strip || !header) return;
+  const update = () => {
+    const active = strip.querySelector('[aria-selected="true"]');
+    if (!active || els.overlay.hidden) return;
+    const outer = header.getBoundingClientRect();
+    const rect = active.getBoundingClientRect();
+    header.style.setProperty('--active-tab-left', `${Math.max(0, rect.left - outer.left)}px`);
+    header.style.setProperty('--active-tab-right', `${Math.min(outer.width, rect.right - outer.left)}px`);
+  };
+  const revealAndUpdate = () => {
+    const active = strip.querySelector('[aria-selected="true"]');
+    if (active && !els.overlay.hidden && strip.getBoundingClientRect) {
+      const visible = strip.getBoundingClientRect();
+      const rect = active.getBoundingClientRect();
+      const availableWidth = visible.right - visible.left;
+      const delta = rect.right - rect.left > availableWidth || rect.left < visible.left
+        ? rect.left - visible.left : rect.right > visible.right ? rect.right - visible.right : 0;
+      if (delta) strip.scrollLeft += delta;
+    }
+    update();
+  };
+  revealAndUpdate();
+  if (!utilityTabAlignmentObservers.has(strip)) {
+    const observer = typeof ResizeObserver === 'function' ? new ResizeObserver(revealAndUpdate) : null;
+    observer?.observe(header);
+    observer?.observe(strip);
+    els.tabs.forEach(tab => observer?.observe(tab));
+    strip.addEventListener('scroll', update, { passive: true });
+    utilityTabAlignmentObservers.set(strip, { observer, update });
+  }
+}
+
+function disposeUtilityTabAlignment(els = getUtilityModalElements()) {
+  const strip = els.overlay?.querySelector?.('.utility-modal-tabs');
+  if (!strip) return;
+  const binding = utilityTabAlignmentObservers.get(strip);
+  if (!binding) return;
+  binding.observer?.disconnect();
+  strip.removeEventListener('scroll', binding.update);
+  utilityTabAlignmentObservers.delete(strip);
 }
 
 // END js/runtime/utility-renderers-and-actions.js
 
 // BEGIN js/runtime/utility-loop-playback.js
 
+const utilityLoopStereoLoads = new WeakMap();
+
+function updateUtilityLoopStereoWaveform(loopId, audio) {
+  const canvas = document.querySelector(`[data-loop-stereo-waveform="${cssEscape(loopId)}"]`);
+  if (!canvas || !audio) return;
+  const enabled = state.player.appearance?.seekbarMode === 'waveform';
+  const editing = Boolean(state.utility.loopEditors?.[loopId]?.active);
+  const cached = utilityLoopStereoLoads.get(canvas);
+  const peaks = getCachedSavedLoopWaveformPeaks(loopId) || cached?.peaks;
+  const coolingDown = cached && !cached.loading && !peaks && Date.now() < cached.retryAt;
+  const presented = canvas.isConnected && enabled && !editing && !coolingDown;
+  canvas.hidden = !presented;
+  canvas.parentElement?.classList.toggle('is-stereo-waveform', presented);
+  if (!presented) return;
+  if (peaks) {
+    const duration = Number(audio.duration) || 0;
+    drawCombinedLoopWaveform(canvas, peaks, duration > 0 ? (Number(audio.currentTime) || 0) / duration : 0);
+    return;
+  }
+  if (cached?.loading) return;
+  const entry = { peaks: null, loading: true, retryAt: 0 };
+  utilityLoopStereoLoads.set(canvas, entry);
+  Promise.resolve(loadSavedLoopWaveformPeaks(loopId)).catch(() => null).then(peaks => {
+    entry.loading = false;
+    entry.peaks = peaks;
+    entry.retryAt = Date.now() + 5000;
+    if (canvas.isConnected
+        && document.querySelector(`[data-loop-stereo-waveform="${cssEscape(loopId)}"]`) === canvas) {
+      updateUtilityLoopStereoWaveform(loopId, audio);
+    } else {
+      canvas.hidden = true;
+      canvas.parentElement?.classList.toggle('is-stereo-waveform', false);
+    }
+  });
+}
+
+function refreshUtilityLoopStereoWaveforms() {
+  if (state.utility.loopsLoaded && Array.isArray(state.utility.loops)) {
+    retainSavedLoopWaveformPeaks(state.utility.loops.map(loop => loop.id));
+  }
+  document.querySelectorAll('[data-loop-audio]').forEach(audio => {
+    updateUtilityLoopStereoWaveform(audio.getAttribute('data-loop-audio'), audio);
+  });
+}
 function isUtilityLoopTextEntry(element) {
   if (!(element instanceof HTMLElement)) return false;
   const tagName = String(element.tagName || '').toUpperCase();
@@ -18187,6 +21590,7 @@ function setUtilityActiveTab(nextTab, skipAppearanceGuard = false) {
     if (typeof renderUtilityModalContent === 'function') renderUtilityModalContent();
   })) return state.utility.activeTab;
   if (state.utility.activeTab === 'loops' && normalizedTab !== 'loops') {
+    if (typeof disposeMountedLoopActions === 'function') disposeMountedLoopActions(getUtilityModalElements()?.detail);
     clearUtilityLoopSpaceOwner();
   }
   if (state.utility.activeTab !== 'loops' && normalizedTab === 'loops') {
@@ -18226,17 +21630,34 @@ function seekUtilityLoopPlayback(loopId, deltaSeconds) {
   return true;
 }
 
+function pauseOtherUtilityLoopPlayback(activeAudio) {
+  document.querySelectorAll('[data-loop-audio]').forEach(otherAudio => {
+    if (otherAudio === activeAudio || otherAudio.paused) return;
+    otherAudio.pause();
+    const otherLoopId = String(otherAudio.getAttribute?.('data-loop-audio') || '');
+    if (otherLoopId) updateUtilityLoopPlayerUi(otherLoopId);
+  });
+}
+
 function toggleUtilityLoopPlayback(loopId, options = {}) {
   const focusTimelineOnResume = options.focusTimelineOnResume !== false;
   const audio = document.querySelector(`[data-loop-audio="${cssEscape(loopId || '')}"]`);
   if (!audio) return false;
   if (audio.paused || audio.ended) {
+    pauseOtherUtilityLoopPlayback(audio);
     if (audio.ended) audio.currentTime = 0;
     const globalPlayback = typeof getPlayerPlaybackSnapshot === 'function'
       ? getPlayerPlaybackSnapshot()
       : null;
     const finishLoopPlaybackStart = () => {
       if (focusTimelineOnResume) focusUtilityLoopTimeline(loopId);
+    };
+    const reportPlaybackFailure = error => {
+      if (audio.isConnected === false) return;
+      const code = String(error?.name || 'PlaybackError');
+      console.warn('[AlbumHaven][Loops] Playback start failed.', { code, mediaErrorCode: audio.error?.code || null });
+      showToast('Unable to start loop playback. Please try again.', 'error', 6000);
+      updateUtilityLoopPlayerUi(loopId);
     };
     if (
       globalPlayback
@@ -18252,13 +21673,13 @@ function toggleUtilityLoopPlayback(loopId, options = {}) {
           audio.muted = priorMuted;
           finishLoopPlaybackStart();
         })
-        .catch(() => {
+        .catch(error => {
           audio.pause();
           audio.muted = priorMuted;
-          updateUtilityLoopPlayerUi(loopId);
+          reportPlaybackFailure(error);
         });
     } else {
-      audio.play().then(finishLoopPlaybackStart).catch(() => {});
+      audio.play().then(finishLoopPlaybackStart).catch(reportPlaybackFailure);
     }
   } else {
     audio.pause();
@@ -18301,7 +21722,11 @@ function initializeUtilityLoopPlayer(loop) {
   if (!loop) return;
   const loopId = String(loop.id || '');
   const audio = document.querySelector(`[data-loop-audio="${cssEscape(loopId)}"]`);
-  if (!audio || audio.dataset.bound === '1') return;
+  if (!audio) return;
+  if (audio.dataset.bound === '1') {
+    mountSavedLoopControls(loopId);
+    return;
+  }
   const playButton = document.querySelector(`[data-loop-play="${cssEscape(loopId)}"]`);
   const timeline = document.querySelector(`[data-loop-timeline="${cssEscape(loopId)}"]`);
   const loopEntry = playButton?.closest?.('[data-utility-loop-entry]')
@@ -18346,6 +21771,7 @@ function initializeUtilityLoopPlayer(loop) {
     }
     updateUtilityLoopPlayerUi(loopId);
   });
+  mountSavedLoopControls(loopId);
   updateUtilityLoopRepeatButton(loopId);
   updateUtilityLoopPlayerUi(loopId);
   if (!state.utility.loopKeyboardSeekBound) {
@@ -18404,18 +21830,24 @@ function positionUtilityLoopSpeedMenu(loopId) {
 
   const triggerRect = trigger.getBoundingClientRect();
   const menuRect = menu.getBoundingClientRect();
-  const activeRect = activeOption.getBoundingClientRect();
-  const activeOffset = activeOption.offsetTop + (activeRect.height / 2);
+
+
 
   let left = triggerRect.left + (triggerRect.width / 2) - (menuRect.width / 2);
-  let top = triggerRect.top + (triggerRect.height / 2) - activeOffset;
+  const below = window.innerHeight - triggerRect.bottom - 8;
+  const above = triggerRect.top - 8;
+  const opensBelow = below >= menuRect.height || below >= above;
+  menu.style.maxHeight = `${Math.max(0, (opensBelow ? below : above) - 6)}px`;
+  const popupHeight = Math.min(menuRect.height, Math.max(0, (opensBelow ? below : above) - 6));
+  let top = opensBelow ? triggerRect.bottom + 6 : triggerRect.top - popupHeight - 6;
 
   const padding = 8;
-  const clamped = clampPositionToViewport(left, top, menuRect.width, menuRect.height, padding);
+  const clamped = clampPositionToViewport(left, top, menuRect.width, popupHeight, padding);
 
   menu.style.left = `${clamped.left}px`;
   menu.style.top = `${clamped.top}px`;
   menu.style.visibility = '';
+  if (typeof syncTriggerAnchor === 'function') syncTriggerAnchor(menu, trigger);
 }
 
 function updateUtilityLoopPlayerUi(loopId) {
@@ -18432,6 +21864,7 @@ function updateUtilityLoopPlayerUi(loopId) {
     timeline.max = String(Math.max(duration, 0.1));
     timeline.value = String(Math.min(current, duration || current));
   }
+  updateUtilityLoopStereoWaveform(id, audio);
   const waveform = state.utility.savedLoopWaveforms?.[id];
   if (elements.canvas && waveform && state.utility.loopEditors?.[id]?.active) {
     drawCombinedLoopWaveform(elements.canvas, waveform, duration > 0 ? current / duration : 0);
@@ -18440,7 +21873,8 @@ function updateUtilityLoopPlayerUi(loopId) {
     time.textContent = `${formatLoopTime(current)} / ${formatLoopTime(duration)}`;
   }
   if (playButton) {
-    playButton.textContent = audio.paused ? '\u25B6' : '\u23F8';
+    const icon = audio.paused ? '\u25B6' : '\u23F8';
+    if (playButton.textContent !== icon) playButton.textContent = icon;
     playButton.setAttribute('aria-label', audio.paused ? 'Play' : 'Pause');
   }
 }
@@ -18552,8 +21986,11 @@ function noteSavedLoopWholeRangePlaybackProgress(loopId, audio) {
 function getSavedLoopRangeDuration(loopId, elements = getSavedLoopRangeElements(loopId)) {
   const loop = (state.utility.loops || []).find((item) => String(item.id || '') === String(loopId || ''));
   const audioDuration = Number(elements.audio?.duration);
-  if (Number.isFinite(audioDuration) && audioDuration > 0) return audioDuration;
-  return Math.max(0, Number(loop?.duration_seconds) || 0);
+  const sourceDuration = Number(loop?.duration_seconds);
+  if (Number.isFinite(audioDuration) && audioDuration > 0) {
+    return Number.isFinite(sourceDuration) && sourceDuration > 0 ? Math.min(audioDuration, sourceDuration) : audioDuration;
+  }
+  return Number.isFinite(sourceDuration) ? Math.max(0, sourceDuration) : 0;
 }
 
 function getSavedLoopEditDuration(loopId, elements = getSavedLoopRangeElements(loopId)) {
@@ -18574,7 +22011,7 @@ function setSavedLoopEditorBusy(loopId, busy) {
   else delete state.utility.savedLoopEditorBusy[id];
   const actionRoot = getSavedLoopRangeElements(id).actionRoot;
   actionRoot?._loopActionController?.update({
-    enabled: true, active: Boolean(state.utility.loopEditors?.[id]?.active), busy: Boolean(busy),
+    enabled: true, canCreate: state.loopCreateAllowed === true, active: Boolean(state.utility.loopEditors?.[id]?.active), busy: Boolean(busy),
   });
   actionRoot?.setAttribute('aria-busy', busy ? 'true' : 'false');
 }
@@ -18652,6 +22089,7 @@ function setSavedLoopEditMode(loopId, active) {
   if (elements.boundaryTimes) elements.boundaryTimes.hidden = true;
   elements.actionRoot?._loopActionController?.update({
     enabled: true,
+    canCreate: state.loopCreateAllowed === true,
     active: editor.active,
     busy: Boolean(state.utility.savedLoopEditorBusy?.[id]),
   });
@@ -18699,6 +22137,11 @@ function handleSavedLoopEditKeydown(event) {
   const target = event.target instanceof HTMLElement ? event.target : null;
   const tagName = String(target?.tagName || '').toUpperCase();
   const inputType = String(target?.getAttribute?.('type') || target?.type || '').toLowerCase();
+  const rangeHandle = target?.getAttribute?.('data-loop-range-handle');
+  const nativeAction = ['BUTTON', 'A', 'SELECT'].includes(tagName)
+    || (tagName === 'INPUT' && inputType !== 'range')
+    || Boolean(target?.closest?.('button:not([data-loop-range-handle]), a, select, [role="button"], [role="menuitem"]'));
+  if (nativeAction && !rangeHandle) return false;
   const isTextEntry = tagName === 'TEXTAREA'
     || Boolean(target?.isContentEditable)
     || (tagName === 'INPUT'
@@ -18719,6 +22162,7 @@ function mountSavedLoopControls(loopId) {
     elements.actionRoot._loopActionController = mountLoopEditActionControl({
       root: elements.actionRoot,
       enabled: true,
+      canCreate: state.loopCreateAllowed === true,
       active: Boolean(state.utility.loopEditors?.[id]?.active),
       busy: Boolean(state.utility.savedLoopEditorBusy?.[id]),
       onEnter: () => openSavedLoopCreation(id),
@@ -18762,6 +22206,7 @@ function mountSavedLoopControls(loopId) {
 }
 
 async function openSavedLoopCreation(loopId) {
+  if (state.loopCreateAllowed === false) return;
   const id = String(loopId || '');
   const loop = (state.utility.loops || []).find((item) => String(item.id || '') === id);
   if (!loop || state.utility.savedLoopEditorBusy?.[id]) return false;
@@ -18779,9 +22224,13 @@ async function openSavedLoopCreation(loopId) {
   try {
     elements = mountSavedLoopControls(id);
     syncSavedLoopRange(id, { startSeconds: 0, endSeconds: sessionDurationSeconds });
+    const mountedActionController = elements.actionRoot?._loopActionController;
     const waveform = await loadSavedLoopWaveformPeaks(id);
+    if (elements.actionRoot?._loopActionController !== mountedActionController) return false;
     if (!waveform) throw new Error('Failed to load saved loop waveform.');
-    if (state.utility.savedLoopOpenEpoch[id] !== openEpoch) return false;
+    if (state.utility.savedLoopOpenEpoch[id] !== openEpoch
+        || (typeof getUtilityModalElements === 'function' && getUtilityModalElements()?.overlay?.hidden)
+        || (state.utility.activeTab && state.utility.activeTab !== 'loops')) return false;
     const currentElements = getSavedLoopRangeElements(id);
     if (currentElements.root !== elements.root) {
       elements = mountSavedLoopControls(id);
@@ -18798,7 +22247,9 @@ async function openSavedLoopCreation(loopId) {
     startSavedLoopExpirySession(id);
     return true;
   } catch (error) {
-    if (state.utility.savedLoopOpenEpoch[id] !== openEpoch) return false;
+    if (state.utility.savedLoopOpenEpoch[id] !== openEpoch
+        || (typeof getUtilityModalElements === 'function' && getUtilityModalElements()?.overlay?.hidden)
+        || (state.utility.activeTab && state.utility.activeTab !== 'loops')) return false;
     setSavedLoopEditMode(id, false);
     console.error('[AlbumHaven][Loops] Failed to open saved-loop editor.', error);
     showToast(error.message || 'Failed to open loop editor.', 'error', 4200);
@@ -18809,6 +22260,7 @@ async function openSavedLoopCreation(loopId) {
 }
 
 async function createLoopFromSavedLoop(loopId) {
+  if (state.loopCreateAllowed === false) return;
   const loop = (state.utility.loops || []).find((item) => String(item.id || '') === String(loopId || ''));
   if (!loop) return;
   const id = String(loopId || '');
@@ -18849,11 +22301,13 @@ async function createLoopFromSavedLoop(loopId) {
     });
     const data = await response.json().catch(() => ({}));
     if (!response.ok || !data.ok) throw new Error(data.error || 'Failed to save loop');
+    state.utility.loopMutationGeneration = Number(state.utility.loopMutationGeneration || 0) + 1;
     state.utility.loops = Array.isArray(data.loops) ? data.loops : state.utility.loops;
     state.utility.selectedLoopId = String(data.loop?.id || state.utility.selectedLoopId || '');
     state.utility.selectedLoopGroupKey = data.loop ? buildUtilityLoopGroupKey(data.loop) : state.utility.selectedLoopGroupKey;
     state.utility.selectedLoopDetailMode = 'group';
     state.utility.loopsLoaded = true;
+    setSavedLoopEditMode(id, false);
     loopEditSessionExpiryController.stop(getSavedLoopExpiryOwnerId(id));
     renderUtilityModalContent();
     showToast('Loop saved.', 'success', 2600);
@@ -18865,13 +22319,14 @@ async function createLoopFromSavedLoop(loopId) {
   }
 }
 
-async function deleteSavedLoop(loopId) {
+async function deleteSavedLoop(loopId, { confirmed = false } = {}) {
   const id = String(loopId || '');
-  if (!id) return;
+  if (!id || state.utility.allowedActions?.['library.loops.delete'] === false) return false;
   const loop = (state.utility.loops || []).find((item) => String(item.id || '') === id);
+  if (!loop) return false;
   const deletedGroupKey = loop ? buildUtilityLoopGroupKey(loop) : '';
   const name = loop?.name || 'this loop';
-  if (!await showLoopDeleteConfirmDialog(name)) return;
+  if (!confirmed && !await showLoopDeleteConfirmDialog(name)) return false;
   const audio = document.querySelector(`[data-loop-audio="${cssEscape(id)}"]`);
   audio?.pause();
   try {
@@ -18883,6 +22338,7 @@ async function deleteSavedLoop(loopId) {
     const data = await response.json().catch(() => ({}));
     if (!response.ok || !data.ok) throw new Error(data.error || 'Failed to remove loop');
     loopEditSessionExpiryController.stop(getSavedLoopExpiryOwnerId(id));
+    state.utility.loopMutationGeneration = Number(state.utility.loopMutationGeneration || 0) + 1;
     state.utility.loops = Array.isArray(data.loops) ? data.loops : (state.utility.loops || []).filter((item) => String(item.id || '') !== id);
     state.utility.loopsLoaded = true;
     const replacementInGroup = deletedGroupKey
@@ -18893,95 +22349,240 @@ async function deleteSavedLoop(loopId) {
     state.utility.selectedLoopDetailMode = 'group';
     renderUtilityModalContent();
     showToast('Loop removed.', 'success', 2400);
+    return true;
   } catch (error) {
     console.error('[AlbumHaven][Loops] Failed to remove loop.', error);
     showToast(error.message || 'Failed to remove loop.', 'error', 4200);
+    return false;
   }
+}
+
+function getUtilityLoopOrderScope(songKey, loops = state.utility.loops || []) {
+  const members = loops.filter(loop => loop.song_key === songKey);
+  const revision = members[0]?.order_revision;
+  if (!members.length || !members.every(loop => canReorderUtilityLoop(loop) && loop.order_revision === revision)) return null;
+  return { songKey, revision, loops: members };
+}
+
+function replaceUtilityLoopSong(loops, songKey, members) {
+  const next = [];
+  let inserted = false;
+  for (const loop of loops) {
+    if (loop.song_key !== songKey) next.push(loop);
+    else if (!inserted) { next.push(...members); inserted = true; }
+  }
+  if (!inserted) next.push(...members);
+  return next;
 }
 
 function buildReorderedUtilityLoops(loops, draggedItem, targetItem, position) {
-  const dragType = String(draggedItem?.type || '');
-  const fromId = String(draggedItem?.id || '');
-  const fromGroupKey = String(draggedItem?.groupKey || '');
-  const targetType = String(targetItem?.type || '');
-  const toId = String(targetItem?.id || '');
-  const toGroupKey = String(targetItem?.groupKey || '');
-  const insertPosition = position === 'before' ? 'before' : 'after';
-  if (!fromId || !toId || (fromId === toId && dragType === targetType) || !Array.isArray(loops) || loops.length < 2) return null;
-  const groups = groupUtilityLoops(loops);
-  if (dragType === 'group' && targetType === 'group') {
-    const fromIndex = groups.findIndex((group) => String(group?.key || '') === fromId);
-    const targetIndex = groups.findIndex((group) => String(group?.key || '') === toId);
-    if (fromIndex < 0 || targetIndex < 0) return null;
-    const nextGroups = groups.slice();
-    const [draggedGroup] = nextGroups.splice(fromIndex, 1);
-    if (!draggedGroup) return null;
-    const nextTargetIndex = nextGroups.findIndex((group) => String(group?.key || '') === toId);
-    if (nextTargetIndex < 0) return null;
-    nextGroups.splice(insertPosition === 'before' ? nextTargetIndex : nextTargetIndex + 1, 0, draggedGroup);
-    return nextGroups.flatMap((group) => group.loops || []);
-  }
-  if (dragType === 'loop' && targetType === 'loop' && fromGroupKey && fromGroupKey === toGroupKey) {
-    const nextGroups = groups.map((group) => ({
-      ...group,
-      loops: Array.isArray(group.loops) ? group.loops.slice() : [],
-    }));
-    const targetGroup = nextGroups.find((group) => String(group?.key || '') === fromGroupKey);
-    if (!targetGroup || !Array.isArray(targetGroup.loops)) return null;
-    const fromIndex = targetGroup.loops.findIndex((loop) => String(loop?.id || '') === fromId);
-    const targetIndex = targetGroup.loops.findIndex((loop) => String(loop?.id || '') === toId);
-    if (fromIndex < 0 || targetIndex < 0) return null;
-    const [draggedLoop] = targetGroup.loops.splice(fromIndex, 1);
-    if (!draggedLoop) return null;
-    const nextTargetIndex = targetGroup.loops.findIndex((loop) => String(loop?.id || '') === toId);
-    if (nextTargetIndex < 0) return null;
-    targetGroup.loops.splice(insertPosition === 'before' ? nextTargetIndex : nextTargetIndex + 1, 0, draggedLoop);
-    return nextGroups.flatMap((group) => group.loops || []);
-  }
-  return null;
+  if (!['before', 'after'].includes(position) || draggedItem?.type !== 'loop' || targetItem?.type !== 'loop') return null;
+  const songKey = String(draggedItem.groupKey || '');
+  if (!songKey || songKey !== targetItem.groupKey || draggedItem.id === targetItem.id) return null;
+  const scope = getUtilityLoopOrderScope(songKey, loops);
+  if (!scope) return null;
+  const members = scope.loops.slice();
+  const from = members.findIndex(loop => String(loop.id) === String(draggedItem.id));
+  if (from < 0 || !members.some(loop => String(loop.id) === String(targetItem.id))) return null;
+  const [moving] = members.splice(from, 1);
+  const to = members.findIndex(loop => String(loop.id) === String(targetItem.id));
+  members.splice(to + (position === 'after' ? 1 : 0), 0, moving);
+  if (members.every((loop, index) => loop.id === scope.loops[index].id)) return null;
+  return replaceUtilityLoopSong(loops, songKey, members);
 }
 
-function rerenderUtilityLoopListOnly() {
-  if (state.utility.activeTab !== 'loops') return;
+function captureUtilityLoopOrderView(songKey) {
   const els = getUtilityModalElements();
-  if (!els.overlay || els.overlay.hidden) return;
-  renderUtilityModalContent();
+  return { songKey, panel: els.detail?.querySelector('.utility-loop-entry-list'), detail: els.detail,
+    generation: Number(state.utility.loopViewGeneration || 0) };
+}
+
+function isUtilityLoopOrderViewCurrent(view) {
+  const els = getUtilityModalElements();
+  return state.utility.activeTab === 'loops' && !els.overlay?.hidden
+    && String(state.utility.selectedLoopGroupKey || '') === view.songKey
+    && Number(state.utility.loopViewGeneration || 0) === view.generation
+    && view.panel && els.detail === view.detail
+    && els.detail?.querySelector('.utility-loop-entry-list') === view.panel;
+}
+
+function createUtilityLoopMarkupNode(html) {
+  const host = document.createElement('div');
+  host.innerHTML = html;
+  return host.firstElementChild;
+}
+
+function moveUtilityLoopNode(parent, node, before = null) {
+  if (node === before || (node.parentNode === parent && node.nextElementSibling === before)) return;
+  if (typeof parent.moveBefore === 'function' && node.parentNode === parent) {
+    parent.moveBefore(node, before);
+    return;
+  }
+  // Native media retains playback across this synchronous move; do not seek or restart it.
+  parent.insertBefore(node, before);
+}
+
+function reconcileUtilityLoopOrderView(view, members) {
+  if (!isUtilityLoopOrderViewCurrent(view)) return;
+  const els = getUtilityModalElements();
+  const focused = document.activeElement;
+  const scrolls = [els.list, els.detail].filter(Boolean).map(node => [node, node.scrollTop]);
+  const before = new Map(Array.from(view.panel.children, node => [node, node.getBoundingClientRect().top]));
+  const ids = new Set(members.map(loop => String(loop.id)));
+  const panels = new Map(Array.from(view.panel.querySelectorAll('[data-utility-loop-entry]'), node => [node.getAttribute('data-utility-loop-entry'), node]));
+  for (const [id, node] of panels) {
+    if (ids.has(id)) continue;
+    if (typeof disposeMountedLoopActions === 'function') disposeMountedLoopActions(node);
+    if (typeof loopEditSessionExpiryController !== 'undefined') loopEditSessionExpiryController.stop(`saved-loop-${id}`);
+    node.querySelector('[data-loop-audio]')?.pause();
+    node.remove();
+    delete state.utility.loopEditors?.[id];
+  }
+  let panelCursor = view.panel.firstElementChild;
+  for (const loop of members) {
+    const id = String(loop.id);
+    const node = panels.get(id) || createUtilityLoopMarkupNode(buildUtilityLoopEntry(loop));
+    if (!node) continue;
+    moveUtilityLoopNode(view.panel, node, panelCursor);
+    panelCursor = node.nextElementSibling;
+    if (!panels.has(id)) initializeUtilityLoopPlayer(loop);
+  }
+  const treeChildren = Array.from(els.list?.querySelectorAll('[data-utility-loop-id]') || [])
+    .filter(node => node.getAttribute('data-utility-loop-group-key') === view.songKey);
+  const treeParent = treeChildren[0]?.parentNode || Array.from(els.list?.querySelectorAll('[data-loop-tree-song]') || [])
+    .find(node => node.getAttribute('data-loop-tree-song') === view.songKey);
+  if (treeParent) {
+    const existing = new Map(treeChildren.map(node => [node.getAttribute('data-utility-loop-id'), node]));
+    const visibleIds = new Set(getFilteredUtilityLoops().map(loop => String(loop.id)));
+    for (const [id, node] of existing) if (!ids.has(id) || !visibleIds.has(id)) node.remove();
+    let treeCursor = treeParent.firstElementChild;
+    for (const loop of members) {
+      if (!visibleIds.has(String(loop.id))) continue;
+      const node = existing.get(String(loop.id)) || createUtilityLoopMarkupNode(buildUtilityLoopTreeChild(loop, view.songKey));
+      if (node) {
+        moveUtilityLoopNode(treeParent, node, treeCursor);
+        treeCursor = node.nextElementSibling;
+      }
+    }
+  }
+  if (!(typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches)) {
+    for (const node of Array.from(view.panel.children)) {
+      const delta = before.has(node) ? before.get(node) - node.getBoundingClientRect().top : 0;
+      if (delta) node.animate?.([{ transform: `translateY(${delta}px)` }, { transform: 'translateY(0)' }], { duration: 220, easing: 'ease-out' });
+    }
+  }
+  if (focused && document.activeElement !== focused && els.overlay?.contains?.(focused)) focused.focus?.({ preventScroll: true });
+  scrolls.forEach(([node, scrollTop]) => { node.scrollTop = scrollTop; });
+  syncUtilityLoopPanelVisibility();
+  bindUtilityLoopDragAndDrop();
+  syncUtilityLoopMoveButtons();
+}
+
+function normalizeUtilityLoopOrderResponse(data, songKey) {
+  if (data?.song_key !== songKey || !Number.isSafeInteger(data.order_revision) || data.order_revision < 0
+      || !Array.isArray(data.ordered_ids) || !Array.isArray(data.loops)) return null;
+  const ids = data.ordered_ids;
+  if (ids.some(id => typeof id !== 'string' || !id) || new Set(ids).size !== ids.length || data.loops.length !== ids.length) return null;
+  const byId = new Map(data.loops.map(loop => [String(loop?.id || ''), loop]));
+  if (byId.size !== ids.length || ids.some(id => !byId.has(id) || byId.get(id).song_key !== songKey)) return null;
+  return ids.map(id => ({ ...byId.get(id), order_revision: data.order_revision }));
+}
+
+async function moveUtilityLoop(loopId, direction) {
+  if (!['up', 'down'].includes(direction)) return false;
+  const loop = (state.utility.loops || []).find(item => String(item.id) === String(loopId));
+  const scope = loop && getUtilityLoopOrderScope(loop.song_key);
+  if (!scope) return false;
+  const index = scope.loops.findIndex(item => item.id === loop.id);
+  const target = scope.loops[index + (direction === 'up' ? -1 : 1)];
+  if (!target) return false;
+  return reorderUtilityLoops({ type: 'loop', id: loop.id, groupKey: scope.songKey },
+    { type: 'loop', id: target.id, groupKey: scope.songKey }, direction === 'up' ? 'before' : 'after');
 }
 
 async function reorderUtilityLoops(draggedItem, targetItem, position) {
-  const previousLoops = Array.isArray(state.utility.loops) ? state.utility.loops.slice() : [];
+  const previousLoops = (state.utility.loops || []).slice();
   const nextLoops = buildReorderedUtilityLoops(previousLoops, draggedItem, targetItem, position);
   if (!nextLoops) return false;
-
+  const songKey = String(draggedItem.groupKey);
+  const scope = getUtilityLoopOrderScope(songKey, previousLoops);
+  state.utility.loopOrderPending ||= {};
+  if (state.utility.loopOrderPending[songKey]) return false;
+  const utilityOwner = state.utility;
+  const dataGeneration = Number(utilityOwner.loopDataGeneration || 0);
+  utilityOwner.loopMutationGeneration = Number(utilityOwner.loopMutationGeneration || 0) + 1;
+  const ownsCache = () => state.utility === utilityOwner && Number(state.utility.loopDataGeneration || 0) === dataGeneration;
+  const token = {};
+  state.utility.loopOrderPending[songKey] = token;
+  const view = captureUtilityLoopOrderView(songKey);
+  const ordered = nextLoops.filter(loop => loop.song_key === songKey);
   state.utility.loops = nextLoops;
-  state.utility.loopsLoaded = true;
-  rerenderUtilityLoopListOnly();
-
+  reconcileUtilityLoopOrderView(view, ordered);
   try {
     const response = await fetch('/loops/reorder', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        ordered_ids: nextLoops.map((item) => String(item?.id || '')).filter(Boolean),
+        song_key: songKey, expected_revision: scope.revision,
+        ordered_ids: ordered.map(loop => String(loop.id)),
       }),
     });
     const data = await response.json().catch(() => ({}));
-    if (!response.ok || !data.ok) throw new Error(data.error || 'Failed to reorder loops');
-    state.utility.loops = Array.isArray(data.loops) ? data.loops : nextLoops;
-    state.utility.loopsLoaded = true;
-    rerenderUtilityLoopListOnly();
-    return true;
+    const authoritative = normalizeUtilityLoopOrderResponse(data, songKey);
+    if ((!response.ok || !data.ok) && response.status !== 409) throw new Error(data.error || 'Failed to reorder loops');
+    if (!authoritative) throw new Error('Unable to reconcile saved loop order. Reload Loops and try again.');
+    const currentRevision = (state.utility.loops || []).find(loop => loop.song_key === songKey)?.order_revision;
+    if (ownsCache() && Number.isSafeInteger(currentRevision) && data.order_revision >= currentRevision) {
+      state.utility.loops = replaceUtilityLoopSong(state.utility.loops || [], songKey, authoritative);
+      reconcileUtilityLoopOrderView(view, authoritative);
+    }
+    if (response.status === 409) showToast('Loop order changed. The latest order is shown; try your move again.', 'error', 4200);
+    return response.ok && data.ok === true;
   } catch (error) {
-    console.error('[AlbumHaven][Loops] Failed to reorder loops.', error);
-    state.utility.loops = previousLoops;
-    state.utility.loopsLoaded = true;
-    rerenderUtilityLoopListOnly();
+    const current = (state.utility.loops || []).filter(loop => loop.song_key === songKey);
+    if (ownsCache() && current.length && current.every(loop => loop.order_revision === scope.revision)) {
+      state.utility.loops = replaceUtilityLoopSong(state.utility.loops || [], songKey, scope.loops);
+      reconcileUtilityLoopOrderView(view, scope.loops);
+    }
     showToast(error.message || 'Failed to reorder loops.', 'error', 4200);
     return false;
+  } finally {
+    if (utilityOwner.loopOrderPending[songKey] === token) delete utilityOwner.loopOrderPending[songKey];
+    syncUtilityLoopMoveButtons();
+    clearUtilityLoopDragState();
+    syncUtilityLoopDragUi();
   }
 }
 
 // END js/runtime/utility-loop-playback.js
+
+// BEGIN js/runtime/tag-editor-reorder.js
+
+function getTagEditorReorderInsertionBefore(rows, draggedPath, clientY) {
+  const dragged = String(draggedPath || '');
+  const pointerY = Number(clientY);
+  return (Array.isArray(rows) ? rows : [])
+    .filter((row) => String(row?.path || '') !== dragged)
+    .find((row) => pointerY < Number(row?.top || 0) + (Number(row?.height || 0) / 2))
+    ?.path || null;
+}
+
+function reorderTagEditorTracksByPath(tracks, draggedPath, beforePath = null) {
+  const current = Array.isArray(tracks) ? tracks : [];
+  const dragged = String(draggedPath || '');
+  const sourceIndex = current.findIndex((track) => String(track?.path || '') === dragged);
+  if (sourceIndex < 0) return current.slice();
+  const next = current.slice();
+  const [moved] = next.splice(sourceIndex, 1);
+  const target = String(beforePath || '');
+  const targetIndex = target
+    ? next.findIndex((track) => String(track?.path || '') === target)
+    : next.length;
+  next.splice(targetIndex < 0 ? next.length : targetIndex, 0, moved);
+  return next;
+}
+
+// END js/runtime/tag-editor-reorder.js
 
 // BEGIN js/runtime/utility-loaders-and-cover-lookup.js
 
@@ -19173,7 +22774,7 @@ async function loadProblematicAlbumDetail(albumKey, force = false, options = {})
         && String(state.utility.selectedProblematicKey || '') === normalizedKey
       ) {
         const renderStartedAt = getProblematicUtilityNow();
-        renderUtilityModalContent();
+        renderUtilityModalContent({ preserveProblematicTree: true });
         await waitForProblematicUtilityRenderFrame();
         renderMs = roundProblematicUtilityMs(getProblematicUtilityNow() - renderStartedAt);
       }
@@ -19617,35 +23218,59 @@ async function loadUtilityRules(force = false) {
 }
 
 async function loadUtilityLoops(force = false) {
-  if (state.utility.loopsLoading) return state.utility.loopsLoadPromise;
-  if (state.utility.loopsLoaded && !force) {
+  const utility = state.utility;
+  if (utility.loopsLoading) return utility.loopsLoadPromise;
+  if (utility.loopsLoaded && utility.loopsActionProjectionLoaded === true && !force) {
     renderUtilityModalContent();
     return;
   }
-  state.utility.loopsLoading = true;
+  const generation = Number(utility.loopDataGeneration || 0) + 1;
+  utility.loopDataGeneration = generation;
+  const mutationGeneration = Number(utility.loopMutationGeneration || 0);
+  const isCurrent = () => state.utility === utility
+    && Number(utility.loopDataGeneration || 0) === generation
+    && Number(utility.loopMutationGeneration || 0) === mutationGeneration;
+  utility.loopsLoading = true;
+  utility.loopsLoadError = '';
   renderUtilityModalContent();
-  state.utility.loopsLoadPromise = (async () => {
+  const loadPromise = (async () => {
     try {
       const response = await fetch('/utilities/loops', { headers: { Accept: 'application/json' } });
       const data = await response.json();
-      state.utility.loops = Array.isArray(data.loops) ? data.loops : [];
-      state.utility.loopsLoaded = true;
-      const groupedLoops = groupUtilityLoops(state.utility.loops || []);
+      if (!isCurrent()) return;
+      if (!response.ok || !data.ok) throw new Error(data.error || 'Unable to load saved loops');
+      utility.allowedActions = { ...(utility.allowedActions || {}) };
+      for (const action of ['library.loops.read', 'library.loops.create', 'library.loops.delete', 'library.loops.reorder']) {
+        utility.allowedActions[action] = data.allowed_actions?.[action] === true;
+      }
+      utility.loopsActionProjectionLoaded = true;
+      state.loopCreateAllowed = utility.allowedActions['library.loops.create'] === true;
+      if (typeof syncLoopCreateCapability === 'function') syncLoopCreateCapability();
+      utility.loops = Array.isArray(data.loops) ? data.loops : [];
+      utility.loopsLoaded = true;
+      const groupedLoops = groupUtilityLoops(utility.loops || []);
       collapseAllUtilityLoopGroups();
-      state.utility.selectedLoopGroupKey = String(groupedLoops[0]?.key || '');
-      state.utility.selectedLoopId = String(groupedLoops[0]?.loops?.[0]?.id || '');
-      state.utility.selectedLoopDetailMode = 'group';
+      const selectedGroup = groupedLoops.find(group => String(group.key || '') === String(utility.selectedLoopGroupKey || '')) || groupedLoops[0];
+      utility.selectedLoopGroupKey = String(selectedGroup?.key || '');
+      if (!(selectedGroup?.loops || []).some(loop => String(loop.id || '') === String(utility.selectedLoopId || ''))) {
+        utility.selectedLoopId = String(selectedGroup?.loops?.[0]?.id || '');
+      }
+      utility.selectedLoopDetailMode = 'group';
     } catch (error) {
+      if (!isCurrent()) return;
       console.error('[AlbumHaven][Loops] Failed to load loops.', error);
-      state.utility.loops = [];
+      utility.loopsLoadError = 'Unable to load saved loops. Reopen the Loops tab to retry.';
       showToast('Unable to load saved loops.', 'error', 3200);
     } finally {
-      state.utility.loopsLoading = false;
-      state.utility.loopsLoadPromise = null;
-      renderUtilityModalContent();
+      if (utility.loopsLoadPromise === loadPromise) {
+        utility.loopsLoading = false;
+        utility.loopsLoadPromise = null;
+      }
+      if (isCurrent() && utility.activeTab === 'loops') renderUtilityModalContent();
     }
   })();
-  return state.utility.loopsLoadPromise;
+  utility.loopsLoadPromise = loadPromise;
+  return loadPromise;
 }
 
 function normalizeUtilityLogHistoryRevision(value) {
@@ -19653,121 +23278,109 @@ function normalizeUtilityLogHistoryRevision(value) {
 }
 
 async function loadUtilityLogHistory(force = false) {
-  if (state.utility.logHistoryLoading) return state.utility.logHistoryLoadPromise;
-  if (state.utility.logHistoryLoaded && !force) {
-    if (state.utility.activeTab === 'log-history') renderUtilityModalContent();
-    return {
-      revision: normalizeUtilityLogHistoryRevision(state.utility.logHistoryRevision),
-    };
-  }
-  state.utility.logHistoryLoading = true;
-  if (state.utility.activeTab === 'log-history') renderUtilityModalContent();
-  state.utility.logHistoryLoadPromise = (async () => {
-    try {
-      await requestBrowserLogHistoryPersistentStorage();
-    } catch (_error) {
-      // The browser may deny or omit persistent-storage requests; IndexedDB still remains usable.
-    }
-    try {
-      const response = await fetch('/utilities/log-history', {
-        cache: 'no-store',
-        headers: { Accept: 'application/json' },
-      });
-      const data = await response.json();
-      if (!response.ok || data.ok === false) {
-        throw new Error(data.error || 'Unable to load transient log history.');
-      }
-      const stored = await persistBrowserLogHistoryEntries(
-        Array.isArray(data.items) ? data.items : [],
-      );
-      const revision = normalizeUtilityLogHistoryRevision(data.revision);
-      state.utility.logHistory = Array.isArray(stored?.items) ? stored.items : [];
-      state.utility.logHistoryRevision = revision;
-      if (!state.utility.logHistorySyncPromise) {
-        state.utility.logHistoryTargetRevision = revision;
-      }
-      if (stored?.status) state.utility.logHistoryStorageStatus = stored.status;
-      state.utility.logHistoryLoaded = true;
-      return { revision };
-    } catch (error) {
-      console.error('[AlbumHaven][History] Failed to load the transient history snapshot.', error);
-      try {
-        const stored = await readBrowserLogHistoryEntries();
-        state.utility.logHistory = Array.isArray(stored?.items)
-          ? stored.items
-          : (Array.isArray(state.utility.logHistory) ? state.utility.logHistory : []);
-        if (stored?.status) state.utility.logHistoryStorageStatus = stored.status;
-        state.utility.logHistoryLoaded = true;
-      } catch (storageError) {
-        console.error('[AlbumHaven][History] Failed to read browser-owned history.', storageError);
-        state.utility.logHistory = Array.isArray(state.utility.logHistory) ? state.utility.logHistory : [];
-        state.utility.logHistoryLoaded = true;
-        state.utility.logHistoryStorageStatus = {
-          persistent: false,
-          storage: 'session',
-          message: 'History is available for this session and will be lost on reload.',
-        };
-      }
-      return null;
-    } finally {
-      state.utility.logHistoryLoading = false;
-      state.utility.logHistoryLoadPromise = null;
-      if (state.utility.activeTab === 'log-history') renderUtilityModalContent();
-    }
-  })();
-  return state.utility.logHistoryLoadPromise;
+  const controller = getUtilityLogHistoryController();
+  if (state.utility.logHistoryLoaded && !force) { renderUtilityLogHistory(); return { revision: controller.getState().revision }; }
+  if (controller.getState().loading) return state.utility.logHistoryLoadPromise;
+  const owner = state.utility;
+  owner.logHistoryLoadPromise = controller.refresh().then(() => ({ revision: controller.getState().revision })).catch(() => null).finally(() => { owner.logHistoryLoadPromise = null; });
+  return owner.logHistoryLoadPromise;
 }
 
 async function syncUtilityLogHistoryRevision(revision) {
-  const targetRevision = normalizeUtilityLogHistoryRevision(revision);
-  if (!targetRevision) return null;
-  state.utility.logHistoryTargetRevision = targetRevision;
-  if (
-    normalizeUtilityLogHistoryRevision(state.utility.logHistoryRevision) === targetRevision
-    && !state.utility.logHistorySyncPromise
-  ) {
-    return { revision: targetRevision };
-  }
-  if (state.utility.logHistorySyncPromise) {
-    return state.utility.logHistorySyncPromise;
-  }
+  state.utility.logHistoryTargetRevision = normalizeUtilityLogHistoryRevision(revision);
+  state.utility.logHistoryController?.markStale(revision);
+  return { revision: state.utility.logHistoryRevision };
+}
 
-  const syncPromise = (async () => {
-    while (
-      normalizeUtilityLogHistoryRevision(state.utility.logHistoryRevision)
-      !== normalizeUtilityLogHistoryRevision(state.utility.logHistoryTargetRevision)
-    ) {
-      const requestedRevision = normalizeUtilityLogHistoryRevision(
-        state.utility.logHistoryTargetRevision,
-      );
-      const result = await loadUtilityLogHistory(true);
-      if (!result) break;
-      const loadedRevision = normalizeUtilityLogHistoryRevision(result.revision);
+function ensureLastfmScrobbleState() {
+  state.utility.lastfmScrobbles = state.utility.lastfmScrobbles || {
+    summary: null, loading: false, submitting: false, loadPromise: null, requestGeneration: 0,
+  };
+  state.utility.lastfmScrobbles.requestGeneration = Number(state.utility.lastfmScrobbles.requestGeneration || 0);
+  return state.utility.lastfmScrobbles;
+}
+
+function invalidateLastfmScrobbleSummary() {
+  const owner = ensureLastfmScrobbleState();
+  owner.requestGeneration += 1;
+  owner.summary = null;
+  owner.loading = false;
+  owner.loadPromise = null;
+  return owner;
+}
+
+function normalizeLastfmScrobbleSummary(payload, fallback = {}) {
+  const nonnegativeInteger = (value, defaultValue = 0) => {
+    const parsed = Number(value);
+    return Number.isInteger(parsed) && parsed >= 0 ? parsed : defaultValue;
+  };
+  const hasProviderTotal = Object.prototype.hasOwnProperty.call(payload || {}, 'lastfm_total');
+  const providerTotal = hasProviderTotal ? payload.lastfm_total : fallback.lastfm_total;
+  const hasPending = Object.prototype.hasOwnProperty.call(payload || {}, 'pending');
+  const pending = hasPending ? payload.pending : payload?.pending_after;
+  return {
+    scrobbled: nonnegativeInteger(
+      payload?.scrobbled,
+      nonnegativeInteger(fallback.scrobbled, nonnegativeInteger(fallback.listen_history_count)),
+    ),
+    lastfm_total: providerTotal == null ? null : nonnegativeInteger(providerTotal, null),
+    pending: nonnegativeInteger(
+      pending,
+      nonnegativeInteger(fallback.pending, nonnegativeInteger(fallback.pending_scrobble_count)),
+    ),
+    can_submit: typeof payload?.can_submit === 'boolean'
+      ? payload.can_submit
+      : fallback.can_submit === true,
+  };
+}
+
+async function loadLastfmScrobbleSummary(lastfm, { replace = false, preserveOnError = false } = {}) {
+  const owner = ensureLastfmScrobbleState();
+  if (!lastfm?.connected) {
+    invalidateLastfmScrobbleSummary();
+    return null;
+  }
+  if (owner.loading && !replace) return owner.loadPromise;
+  const requestGeneration = ++owner.requestGeneration;
+  owner.loading = true;
+  renderUtilityModalContent();
+  const loadPromise = (async () => {
+    try {
+      const response = await fetch('/utilities/integrations/lastfm/scrobbles', { headers: { Accept: 'application/json' } });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok || !data.ok) throw new Error(data.error || 'Failed to load Last.fm scrobble status');
+      if (state.utility.lastfmScrobbles === owner && owner.requestGeneration === requestGeneration) {
+        owner.summary = normalizeLastfmScrobbleSummary(data, lastfm);
+      }
+      return owner.summary;
+    } catch (error) {
+      console.error('[AlbumHaven][Integrations] Failed to load Last.fm scrobble status.', error);
       if (
-        normalizeUtilityLogHistoryRevision(state.utility.logHistoryTargetRevision)
-          === requestedRevision
-        && loadedRevision !== requestedRevision
+        state.utility.lastfmScrobbles === owner
+        && owner.requestGeneration === requestGeneration
+        && !(preserveOnError && owner.summary)
       ) {
-        state.utility.logHistoryTargetRevision = loadedRevision;
+        owner.summary = normalizeLastfmScrobbleSummary({}, lastfm);
+      }
+      return owner.summary;
+    } finally {
+      if (state.utility.lastfmScrobbles === owner && owner.requestGeneration === requestGeneration) {
+        owner.loading = false;
+        owner.loadPromise = null;
+        renderUtilityModalContent();
       }
     }
-    return {
-      revision: normalizeUtilityLogHistoryRevision(state.utility.logHistoryRevision),
-    };
   })();
-  state.utility.logHistorySyncPromise = syncPromise;
-  try {
-    return await syncPromise;
-  } finally {
-    if (state.utility.logHistorySyncPromise === syncPromise) {
-      state.utility.logHistorySyncPromise = null;
-    }
-  }
+  owner.loadPromise = loadPromise;
+  return loadPromise;
 }
+
 async function loadUtilityIntegrations(force = false) {
   if (state.utility.integrationsLoading) return state.utility.integrationsLoadPromise;
   if (state.utility.integrationsLoaded && !force) {
     renderUtilityModalContent();
+    const lastfm = state.utility.integrations.find((item) => String(item?.key || '') === 'lastfm');
+    void loadLastfmScrobbleSummary(lastfm, { replace: true, preserveOnError: true });
     return;
   }
   state.utility.integrationsLoading = true;
@@ -19783,6 +23396,9 @@ async function loadUtilityIntegrations(force = false) {
         state.utility.integrationDrafts.lastfm.username = String(lastfm.username || '');
       }
       await reconcileLastfmTimeZoneDraft(lastfm);
+      state.utility.integrationsLoading = false;
+      renderUtilityModalContent();
+      void loadLastfmScrobbleSummary(lastfm);
     } catch (error) {
       console.error('[AlbumHaven][Integrations] Failed to load integrations.', error);
       state.utility.integrations = [];
@@ -20074,6 +23690,7 @@ let utilityCoverLoadSuspensionToken = 0;
 function openUtilityModal({ resetSearch = true, resetSelection = true, forceLoad = true } = {}) {
   const els = getUtilityModalElements();
   if (!els.overlay) return;
+  document.getElementById('track-modal')?.classList.remove('is-above-settings');
   if (
     !utilityCoverLoadSuspensionToken
     && typeof virtualGrid !== 'undefined'
@@ -20091,6 +23708,8 @@ function openUtilityModal({ resetSearch = true, resetSelection = true, forceLoad
   if (resetSelection) {
     state.utility.selectedProblematicKey = '';
     state.utility.pendingRepairKey = '';
+  state.utility.pendingProblemSuggestions = null;
+  state.utility.pendingRuleRevert = null;
     state.utility.pendingRepairAction = '';
     state.utility.focusedTrackPath = '';
     state.utility.showRepairedDisplay = true;
@@ -20118,9 +23737,22 @@ function openUtilityModal({ resetSearch = true, resetSelection = true, forceLoad
   }
 }
 
-function openUtilityLogHistoryTab() {
-  setUtilityActiveTab('log-history');
-  openUtilityModal({ resetSearch: false, resetSelection: false, forceLoad: true });
+function openUtilityLogHistoryTab(entryId = '') {
+  const owner = state.utility;
+  const open = () => {
+    if (state.utility !== owner) return;
+    setUtilityActiveTab('log-history', true);
+    openUtilityModal({ resetSearch: false, resetSelection: false, forceLoad: !entryId });
+    if (!entryId) return;
+    const controller = getUtilityLogHistoryController();
+    // Base navigation has its own ownership generation; it cannot replace this
+    // explicitly requested event's console/export capture.
+    if (!owner.logHistory?.length) controller.refreshNavigation().catch(() => {});
+    return controller.selectEvent(entryId).catch(() => null);
+  };
+  if (owner.activeTab !== 'log-history' && typeof confirmBackgroundAppearanceLeave === 'function'
+      && !confirmBackgroundAppearanceLeave(open)) return;
+  return open();
 }
 
 async function saveLastfmIntegration() {
@@ -20150,7 +23782,7 @@ async function saveLastfmIntegration() {
       timezone: String(data.integration?.user_timezone || draft.timezone || getDetectedBrowserTimeZone() || 'UTC'),
     };
     markLastfmTimeZoneDraftSaved(state.utility.integrationDrafts.lastfm.timezone);
-    renderUtilityModalContent();
+    await loadLastfmScrobbleSummary(data.integration, { replace: true });
     showToast('Last.fm connected.', 'success', 2600);
   } catch (error) {
     console.error('[AlbumHaven][Integrations] Failed to connect Last.fm.', error);
@@ -20218,6 +23850,7 @@ async function disconnectLastfmIntegration() {
       timezone: String(data.integration?.user_timezone || state.utility.integrationDrafts?.lastfm?.timezone || getDetectedBrowserTimeZone() || 'UTC'),
     };
     markLastfmTimeZoneDraftSaved(state.utility.integrationDrafts.lastfm.timezone);
+    invalidateLastfmScrobbleSummary();
     renderUtilityModalContent();
     showToast('Last.fm disconnected.', 'success', 2600);
   } catch (error) {
@@ -20226,11 +23859,62 @@ async function disconnectLastfmIntegration() {
   }
 }
 
+async function submitPendingLastfmScrobbles() {
+  const owner = ensureLastfmScrobbleState();
+  const lastfm = (state.utility.integrations || []).find((item) => String(item?.key || '') === 'lastfm');
+  if (owner.submitting || !lastfm?.connected || Number(owner.summary?.pending) <= 0 || owner.summary?.can_submit !== true) return false;
+  const submitGeneration = ++owner.requestGeneration;
+  owner.loading = false;
+  owner.loadPromise = null;
+  owner.submitting = true;
+  renderUtilityModalContent();
+  try {
+    const response = await fetch('/utilities/integrations/lastfm/scrobbles/submit', {
+      method: 'POST',
+      headers: { Accept: 'application/json' },
+    });
+    const data = await response.json().catch(() => ({}));
+    if (state.utility.lastfmScrobbles === owner && owner.requestGeneration === submitGeneration) {
+      owner.summary = normalizeLastfmScrobbleSummary(data, owner.summary || lastfm);
+      renderUtilityModalContent();
+      await loadLastfmScrobbleSummary(lastfm, { replace: true, preserveOnError: true });
+    }
+    if (!response.ok || !data.ok) {
+      state.utility.logHistoryLoaded = false;
+      showRepairAlert(data.error || 'Album Haven could not submit pending Last.fm scrobbles.', 'error', null);
+      return false;
+    }
+    showToast('Pending Last.fm scrobbles submitted.', 'success', 2600);
+    return true;
+  } catch (error) {
+    console.error('[AlbumHaven][Integrations] Failed to submit pending Last.fm scrobbles.', error);
+    state.utility.logHistoryLoaded = false;
+    if (state.utility.lastfmScrobbles === owner && owner.requestGeneration === submitGeneration) {
+      await loadLastfmScrobbleSummary(lastfm, { replace: true, preserveOnError: true });
+    }
+    showRepairAlert(error.message || 'Album Haven could not submit pending Last.fm scrobbles.', 'error', null);
+    return false;
+  } finally {
+    if (state.utility.lastfmScrobbles === owner) {
+      owner.submitting = false;
+      renderUtilityModalContent();
+    }
+  }
+}
+
 function closeUtilityModal(skipAppearanceGuard = false) {
-  if (!skipAppearanceGuard && typeof confirmBackgroundAppearanceLeave === 'function' && !confirmBackgroundAppearanceLeave(() => closeUtilityModal(true))) return;
+  if (skipAppearanceGuard !== true && typeof confirmBackgroundAppearanceLeave === 'function' && !confirmBackgroundAppearanceLeave(() => closeUtilityModal(true))) return;
   if (typeof unmountAppearanceEditors === 'function') unmountAppearanceEditors();
+  if (typeof disposeMountedLoopActions === 'function') disposeMountedLoopActions(getUtilityModalElements()?.detail);
   const els = getUtilityModalElements();
   if (!els.overlay) return;
+  if (typeof disposeUtilityTabAlignment === 'function') disposeUtilityTabAlignment(els);
+  state.utility.problemDropdownOpen = false;
+  if (els.problemFilterMenu) {
+    els.problemFilterMenu.hidden = true;
+    if (typeof clearTriggerAnchor === 'function') clearTriggerAnchor(els.problemFilterMenu);
+  }
+  els.problemFilterButton?.setAttribute?.('aria-expanded', 'false');
   state.utility.problematicNavigationToken = Number(state.utility.problematicNavigationToken || 0) + 1;
   state.utility.problematicNavigationActiveToken = 0;
   if (typeof clearUtilityLoopSpaceOwner === 'function') {
@@ -20260,10 +23944,69 @@ function closeUtilityModal(skipAppearanceGuard = false) {
 
 let repairConfirmReturnFocus = null;
 
+function openSavedLoopDeleteConfirm(loopId) {
+  const loop = (state.utility.loops || []).find(item => String(item.id || '') === String(loopId || ''));
+  if (!loop || state.utility.allowedActions?.['library.loops.delete'] !== true) return false;
+  const els = getRepairConfirmElements();
+  if (!els.overlay) return false;
+  state.utility.pendingSavedLoopDeleteId = String(loop.id);
+  state.utility.pendingRepairAction = 'saved-loop-delete';
+  els.overlay.removeAttribute?.('data-confirm-mode');
+  els.dialog?.setAttribute?.('aria-labelledby', 'repair-confirm-title');
+  els.dialog?.setAttribute?.('aria-describedby', 'repair-confirm-text');
+  if (els.title) { els.title.hidden = false; els.title.textContent = 'Delete saved loop?'; }
+  if (els.text) els.text.textContent = `Delete “${loop.name || 'Saved loop'}”? The saved loop will be removed.`;
+  if (els.cancel) { els.cancel.textContent = 'No'; els.cancel.disabled = false; }
+  if (els.accept) { els.accept.textContent = 'Yes'; els.accept.disabled = false; }
+  repairConfirmReturnFocus = document.activeElement?.focus ? document.activeElement : null;
+  els.overlay.hidden = false;
+  document.body.classList.add('modal-open');
+  els.cancel?.focus?.();
+  return true;
+}
+
 function openRepairConfirmModal() {
   const els = getRepairConfirmElements();
   if (!els.overlay) return;
   const action = state.utility.pendingRepairAction || 'repair';
+  if (action === 'suggestions') {
+    const pending = state.utility.pendingProblemSuggestions;
+    if (!pending?.proposals?.length) return;
+    els.overlay.removeAttribute?.('data-confirm-mode');
+    els.dialog?.setAttribute?.('aria-labelledby', 'repair-confirm-title');
+    els.dialog?.setAttribute?.('aria-describedby', 'repair-confirm-text');
+    if (els.title) { els.title.hidden = false; els.title.textContent = 'Apply suggested edits?'; }
+    if (els.text) els.text.textContent = pending.proposals.map(proposal => {
+      const track = (getSelectedProblematicAlbum()?.tracks || []).find(item => item.path === proposal.path);
+      return `${track?.title || getFilenameFromPath(proposal.path)} — ${formatProblemSuggestionLabel(proposal)}`;
+    }).join('\n');
+    if (els.cancel) { els.cancel.textContent = 'Cancel'; els.cancel.disabled = false; }
+    if (els.accept) { els.accept.textContent = 'Apply'; els.accept.disabled = false; }
+    repairConfirmReturnFocus = document.activeElement?.focus ? document.activeElement : null;
+    els.overlay.hidden = false;
+    document.body.classList.add('modal-open');
+    els.cancel?.focus?.();
+    return;
+  }
+  if (action === 'revert-rule') {
+    const pending = state.utility.pendingRuleRevert;
+    if (!pending) return;
+    const rule = (state.utility.rules || []).find(item => item.key === 'version-exceptions');
+    const target = pending.item || (rule?.albums || []).find(item => item.key === pending.key) || {};
+    const label = target.target_label || target.filename || target.album || target.name || pending.key;
+    els.overlay.removeAttribute?.('data-confirm-mode');
+    els.dialog?.setAttribute?.('aria-labelledby', 'repair-confirm-title');
+    els.dialog?.setAttribute?.('aria-describedby', 'repair-confirm-text');
+    if (els.title) { els.title.hidden = false; els.title.textContent = 'Revert rule?'; }
+    if (els.text) els.text.textContent = `Revert the rule for ${label}? ${pending.kind === 'problem-exclusion' ? 'This problem can appear again in Problems.' : 'This album can appear in version groups again.'}`;
+    if (els.cancel) els.cancel.textContent = 'No';
+    if (els.accept) { els.accept.textContent = 'Yes'; els.accept.disabled = false; }
+    repairConfirmReturnFocus = document.activeElement?.focus ? document.activeElement : null;
+    els.overlay.hidden = false;
+    document.body.classList.add('modal-open');
+    els.cancel?.focus?.();
+    return;
+  }
   const selectedRows = action === 'repair' ? getSelectedRepairRowKeys() : [];
   const ignoredRows = action === 'detected' ? getIgnoredRepairRowKeys() : [];
   const separateRows = action === 'separate-release' ? getSelectedSeparateReleaseKeys() : [];
@@ -20297,8 +24040,13 @@ function openRepairConfirmModal() {
       els.text.textContent = 'This will treat the selected year mismatch as separate releases and rebuild the album list. Are you sure?';
       if (els.accept) els.accept.textContent = 'Yes, apply';
     } else if (isExclusionConfirmation) {
-      els.text.textContent = 'Are you sure? This will create an exclusion rule';
-      if (els.accept) els.accept.textContent = 'Exclude';
+      const album = getSelectedProblematicAlbum();
+      const selected = new Set(ignoredRows);
+      const targets = [];
+      (album?.album_problem_rows || []).filter(item => selected.has(item.row_key)).forEach(item => targets.push(`${album.name || 'Album'} — ${item.display_reason || item.reason}`));
+      (album?.track_problem_rows || []).forEach(row => (row.ignorable_reasons || []).filter(item => selected.has(item.row_key)).forEach(item => targets.push(`${row.filename || getFilenameFromPath(row.path)} — ${item.reason}`)));
+      els.text.textContent = `Create an exclusion rule for ${targets.join('; ')}? These problems will be hidden. You can revert this rule in Rules.`;
+      if (els.accept) els.accept.textContent = 'Create Exception';
     } else {
       els.text.textContent = 'No problem exclusions are selected.';
       if (els.accept) els.accept.textContent = 'Yes, apply';
@@ -20315,7 +24063,10 @@ function closeRepairConfirmModal() {
   const els = getRepairConfirmElements();
   if (!els.overlay) return;
   els.overlay.hidden = true;
+  state.utility.pendingSavedLoopDeleteId = '';
   state.utility.pendingRepairKey = '';
+  state.utility.pendingProblemSuggestions = null;
+  state.utility.pendingRuleRevert = null;
   state.utility.pendingRepairAction = '';
   const trackModalOpen = !document.getElementById('track-modal')?.hidden;
   const lightboxOpen = !document.getElementById('image-lightbox')?.hidden;
@@ -20747,9 +24498,9 @@ function buildOptimisticUpdatedAlbumsFromEdits(album, updates) {
         const key = artist.toLocaleLowerCase();
         if (artist && !distinctTrackArtists.has(key)) distinctTrackArtists.set(key, artist);
       });
-      const sourceAlbumArtistKey = String(album?.album_artist || '').trim().toLocaleLowerCase();
+      const destinationAlbumArtistKey = String(bucket.album_artist || '').trim().toLocaleLowerCase();
       const promotesSoleCompilationArtist = (
-        ['va', 'v.a.', 'various artists', 'various artist', 'various'].includes(sourceAlbumArtistKey)
+        ['va', 'v.a.', 'various artists', 'various artist', 'various'].includes(destinationAlbumArtistKey)
         && distinctTrackArtists.size === 1
       );
       const promotedAlbumArtist = promotesSoleCompilationArtist
@@ -20791,10 +24542,10 @@ function getSelectedTagEditorPaths(tracks) {
   let selectedPaths = Array.isArray(state.tagEditor.selectedPaths)
     ? state.tagEditor.selectedPaths.map((path) => String(path || '')).filter((path) => validPaths.has(path))
     : [];
-  if (!selectedPaths.length && state.tagEditor.selectedPath && validPaths.has(String(state.tagEditor.selectedPath))) {
+  if (!Array.isArray(state.tagEditor.selectedPaths) && state.tagEditor.selectedPath && validPaths.has(String(state.tagEditor.selectedPath))) {
     selectedPaths = [String(state.tagEditor.selectedPath)];
   }
-  if (!selectedPaths.length && tracks.length) {
+  if (!Array.isArray(state.tagEditor.selectedPaths) && !selectedPaths.length && tracks.length) {
     selectedPaths = [String(tracks[0].path || '')].filter(Boolean);
   }
   state.tagEditor.selectedPaths = selectedPaths;
@@ -20831,7 +24582,7 @@ function setTagEditorSelectedPaths(paths, anchorPath = '') {
   const selectedPaths = (paths || [])
     .map((path) => String(path || ''))
     .filter((path) => path && validPaths.has(path) && !seen.has(path) && seen.add(path));
-  state.tagEditor.selectedPaths = selectedPaths.length ? selectedPaths : [getTagEditorTrackPathAt(0)].filter(Boolean);
+  state.tagEditor.selectedPaths = selectedPaths;
   state.tagEditor.selectedPath = state.tagEditor.selectedPaths[0] || '';
   state.tagEditor.anchorPath = anchorPath || state.tagEditor.anchorPath || state.tagEditor.selectedPath;
   state.tagEditor.autoNumberStatus = '';
@@ -20879,6 +24630,54 @@ function renderTagEditorArtwork(selectedPaths) {
     : '<div class="tag-editor-artwork-placeholder">No artwork</div>';
 }
 
+function stageTagEditorTrackOrder(tracks) {
+  const orderedTracks = Array.isArray(tracks) ? tracks : [];
+  orderedTracks.forEach((track, index) => {
+    const path = String(track?.path || '');
+    if (!path) return;
+    state.tagEditor.values[path] = {
+      ...(state.tagEditor.values[path] || {}),
+      track_number: String(index + 1),
+    };
+  });
+  state.tagEditor.autoNumberActive = false;
+  state.tagEditor.autoNumberAppliedSelectionSignature = '';
+  state.tagEditor.autoNumberTrackNumberSnapshots = {};
+}
+
+function applyTagEditorTrackReorder(draggedPath, beforePath = null) {
+  const previous = Array.isArray(state.tagEditor.tracks) ? state.tagEditor.tracks : [];
+  const reordered = reorderTagEditorTracksByPath(previous, draggedPath, beforePath);
+  if (reordered.every((track, index) => track === previous[index])) return false;
+  state.tagEditor.tracks = reordered;
+  stageTagEditorTrackOrder(reordered);
+  renderTagEditor();
+  syncTagEditorAutoNumberControls();
+  return true;
+}
+
+function clearTagEditorReorderCue() {
+  const list = getTagEditorElements().list;
+  list?.classList?.remove('is-reorder-end');
+  list?.querySelectorAll?.('[data-tag-editor-track]').forEach((row) => {
+    row.classList?.remove('is-reorder-before', 'is-reorder-dragged');
+  });
+  state.tagEditor.reorder = null;
+}
+
+function showTagEditorReorderCue(beforePath = null) {
+  const list = getTagEditorElements().list;
+  if (!list) return;
+  list.classList.remove('is-reorder-end');
+  list.querySelectorAll('[data-tag-editor-track]').forEach((row) => {
+    const path = String(row.getAttribute('data-tag-editor-track') || '');
+    row.classList.toggle('is-reorder-before', Boolean(beforePath) && path === String(beforePath));
+    row.classList.toggle('is-reorder-dragged', path === String(state.tagEditor.reorder?.draggedPath || ''));
+  });
+  if (!beforePath) list.classList.add('is-reorder-end');
+  if (state.tagEditor.reorder) state.tagEditor.reorder.beforePath = beforePath || null;
+}
+
 function renderTagEditor(options = {}) {
   const els = getTagEditorElements();
   if (!els.overlay || !els.list || !els.form) return;
@@ -20913,25 +24712,34 @@ function renderTagEditor(options = {}) {
       const path = String(button.getAttribute('data-tag-editor-track') || '');
       const isSelected = selectedPathSet.has(path);
       button.classList.toggle('is-active', isSelected);
-      button.setAttribute('aria-pressed', isSelected ? 'true' : 'false');
+      button.querySelector?.('.tag-editor-track-select')
+        ?.setAttribute?.('aria-pressed', isSelected ? 'true' : 'false');
     });
   } else {
-    els.list.innerHTML = tracks.map((track) => {
+    const rows = tracks.map((track) => {
       const path = String(track.path || '');
       const fileType = getFileTypeFromPath(path);
       const filename = getFilenameFromPath(path) || track.title || path;
       return `
-        <button class="tag-editor-track ${selectedPathSet.has(path) ? 'is-active' : ''}" type="button" data-tag-editor-track="${escapeHtml(path)}" aria-pressed="${selectedPathSet.has(path) ? 'true' : 'false'}" title="${escapeHtml(path)}">
-          <span class="tag-editor-track-title">${escapeHtml(filename)}</span>
-          ${fileType ? `<span class="utility-repair-file-type">${escapeHtml(fileType)}</span>` : ''}
-        </button>
+        <div class="tag-editor-track ${selectedPathSet.has(path) ? 'is-active' : ''}" role="listitem" data-tag-editor-track="${escapeHtml(path)}" title="${escapeHtml(path)}">
+          <span class="tag-editor-track-accent" aria-hidden="true"></span>
+          <button class="tag-editor-reorder-grip" type="button" draggable="true" data-tag-editor-reorder-grip="${escapeHtml(path)}" aria-label="Reorder ${escapeHtml(filename)}; use Arrow Up or Arrow Down"><span aria-hidden="true">⋮⋮</span></button>
+          <button class="tag-editor-track-select" type="button" aria-pressed="${selectedPathSet.has(path) ? 'true' : 'false'}">
+            <span class="tag-editor-track-title">${escapeHtml(filename)}</span>
+            ${fileType ? `<span class="utility-repair-file-type">${escapeHtml(fileType)}</span>` : ''}
+          </button>
+        </div>
       `;
-    }).join('');
+    });
+    els.list.setAttribute('role', 'list');
+    els.list.setAttribute('aria-label', 'Files to edit');
+    els.list.innerHTML = rows.join('');
   }
 
   els.form.querySelectorAll('[data-tag-field]').forEach((input) => {
     const field = input.getAttribute('data-tag-field') || '';
     const displayValue = getTagEditorFieldDisplayValue(field, selectedPaths);
+    input.disabled = selectedPaths.length === 0;
     input.value = displayValue.value;
     input.placeholder = displayValue.mixed ? 'Mixed values' : '';
   });
@@ -20954,8 +24762,14 @@ function renderTagEditor(options = {}) {
   };
 }
 
+const MAX_COVER_LOOKUP_STAGED_IMAGES = 8;
+const MAX_COVER_LOOKUP_IMAGE_BYTES = 10 * 1024 * 1024;
+
 function revokeCoverLookupPastedImageUrls() {
-  const items = Array.isArray(state.coverLookup.modal.pastedImages) ? state.coverLookup.modal.pastedImages : [];
+  const items = [
+    ...(Array.isArray(state.coverLookup.modal.pastedImages) ? state.coverLookup.modal.pastedImages : []),
+    ...(Array.isArray(state.coverLookup.modal.manualImageAttachments) ? state.coverLookup.modal.manualImageAttachments : []),
+  ];
   items.forEach((item) => {
     const objectUrl = String(item?.object_url || '').trim();
     if (objectUrl.startsWith('blob:')) {
@@ -20983,7 +24797,17 @@ function fileToDataUrl(file) {
 
 async function addPastedImageToCoverLookup(file) {
   if (!(file instanceof Blob) || !String(file.type || '').startsWith('image/')) {
-    return false;
+    throw new Error('Choose an image file.');
+  }
+  if (Number(file.size || 0) > MAX_COVER_LOOKUP_IMAGE_BYTES) {
+    throw new Error('Images must be 10 MB or smaller.');
+  }
+  const stagedCount = (Array.isArray(state.coverLookup.modal.pastedImages)
+    ? state.coverLookup.modal.pastedImages.length : 0)
+    + (Array.isArray(state.coverLookup.modal.manualImageAttachments)
+      ? state.coverLookup.modal.manualImageAttachments.length : 0);
+  if (stagedCount >= MAX_COVER_LOOKUP_STAGED_IMAGES) {
+    throw new Error(`You can stage up to ${MAX_COVER_LOOKUP_STAGED_IMAGES} images.`);
   }
   const dataUrl = await fileToDataUrl(file);
   if (!dataUrl) {
@@ -21002,18 +24826,69 @@ async function addPastedImageToCoverLookup(file) {
     mime_type: String(file.type || 'image/png').trim() || 'image/png',
     size_bytes: Number(file.size || 0) || 0,
   };
-  state.coverLookup.modal.pastedImages = [
+  state.coverLookup.modal.manualImageAttachments = [
+    ...(Array.isArray(state.coverLookup.modal.manualImageAttachments)
+      ? state.coverLookup.modal.manualImageAttachments : []),
     nextItem,
-    ...(Array.isArray(state.coverLookup.modal.pastedImages) ? state.coverLookup.modal.pastedImages : []),
   ];
-  state.coverLookup.modal.pendingLocalPath = '';
-  state.coverLookup.modal.selectedRemoteId = '';
-  state.coverLookup.modal.pendingPastedImageId = nextItem.id;
-  state.coverLookup.modal.statusText = 'Clipboard image added.';
+  state.coverLookup.modal.statusText = 'Image ready to extract.';
   state.coverLookup.modal.statusTone = 'neutral';
   renderCoverLookupModal();
-  syncCoverLookupSelectionUi();
   return true;
+}
+
+async function addCoverLookupFiles(files) {
+  const candidates = Array.from(files || []);
+  let added = 0;
+  for (const file of candidates) {
+    await addPastedImageToCoverLookup(file);
+    added += 1;
+  }
+  return added;
+}
+
+function removePastedImageFromCoverLookup(imageId) {
+  const id = String(imageId || '').trim();
+  const items = Array.isArray(state.coverLookup.modal.pastedImages)
+    ? state.coverLookup.modal.pastedImages : [];
+  const removed = items.find(item => String(item?.id || '') === id);
+  if (!removed) return false;
+  const objectUrl = String(removed.object_url || '').trim();
+  if (objectUrl.startsWith('blob:')) URL.revokeObjectURL(objectUrl);
+  state.coverLookup.modal.pastedImages = items.filter(item => String(item?.id || '') !== id);
+  if (String(state.coverLookup.modal.pendingPastedImageId || '') === id) {
+    state.coverLookup.modal.pendingPastedImageId = '';
+  }
+  renderCoverLookupModal();
+  return true;
+}
+
+function removeCoverLookupPendingAttachment(imageId) {
+  const id = String(imageId || '').trim();
+  const items = Array.isArray(state.coverLookup.modal.manualImageAttachments)
+    ? state.coverLookup.modal.manualImageAttachments : [];
+  const removed = items.find(item => String(item?.id || '') === id);
+  if (!removed) return false;
+  const objectUrl = String(removed.object_url || '').trim();
+  if (objectUrl.startsWith('blob:')) URL.revokeObjectURL(objectUrl);
+  state.coverLookup.modal.manualImageAttachments = items.filter(
+    item => String(item?.id || '') !== id,
+  );
+  renderCoverLookupModal();
+  return true;
+}
+
+function extractCoverLookupPendingAttachments() {
+  const attachments = Array.isArray(state.coverLookup.modal.manualImageAttachments)
+    ? state.coverLookup.modal.manualImageAttachments : [];
+  if (!attachments.length) return 0;
+  state.coverLookup.modal.pastedImages = [
+    ...attachments,
+    ...(Array.isArray(state.coverLookup.modal.pastedImages)
+      ? state.coverLookup.modal.pastedImages : []),
+  ];
+  state.coverLookup.modal.manualImageAttachments = [];
+  return attachments.length;
 }
 
 async function handleCoverLookupClipboardPaste(clipboardData) {
@@ -21397,11 +25272,28 @@ function buildAppleMusicGlyph() {
 }
 
 function buildDeezerGlyph() {
+  // The compact Deezer treatment uses the approved purple heart.
   return `
     <svg viewBox="0 0 24 24" focusable="false" aria-hidden="true">
-      <path d="M4 14h2.2v6H4zm3.4-3h2.2v9H7.4zm3.4-2h2.2v11h-2.2zm3.4-3h2.2v14h-2.2zm3.4 5H20v9h-2.2z" fill="currentColor"></path>
+      <path d="M12 20.2 4.8 13A4.7 4.7 0 0 1 11.4 6.3l.6.7.6-.7A4.7 4.7 0 0 1 19.2 13Z" fill="currentColor"></path>
     </svg>
   `;
+}
+
+function buildCaaGlyph() {
+  return '<span aria-hidden="true">CAA</span>';
+}
+
+function getRemoteCoverSourceLabel(source, fallback = '') {
+  return ({
+    apple: 'Apple',
+    spotify: 'Spotify',
+    deezer: 'Deezer',
+    bandcamp: 'Bandcamp',
+    discogs: 'Discogs',
+    cover_art_archive: 'CAA',
+    youtube_music: 'YouTube Music',
+  })[String(source || '').trim().toLowerCase()] || String(fallback || source || '').trim();
 }
 
 function buildYouTubeMusicGlyph() {
@@ -21453,6 +25345,9 @@ function buildRemoteCoverSourceBadge(source, className = 'cover-lookup-art-sourc
   if (normalizedSource === 'discogs') {
     return `<span class="${className} is-discogs" aria-hidden="true">${buildDiscogsGlyph()}</span>`;
   }
+  if (normalizedSource === 'cover_art_archive') {
+    return `<span class="${className} is-caa" aria-hidden="true">${buildCaaGlyph()}</span>`;
+  }
   return '';
 }
 
@@ -21475,6 +25370,12 @@ function coverLookupHasManualLinks() {
   return collectManualCoverLookupUrls().length > 0;
 }
 
+function coverLookupHasManualInput() {
+  const attachments = Array.isArray(state.coverLookup.modal.manualImageAttachments)
+    ? state.coverLookup.modal.manualImageAttachments : [];
+  return attachments.length > 0 || Boolean(String(state.coverLookup.modal.manualUrlText || '').trim());
+}
+
 function syncCoverLookupManualControlsUi() {
   const input = document.getElementById('cover-lookup-pasted-urls');
   const submitButton = document.querySelector('[data-add-cover-lookup-remote="1"]');
@@ -21485,7 +25386,7 @@ function syncCoverLookupManualControlsUi() {
     input.disabled = searchControlsDisabled;
   }
   if (submitButton instanceof HTMLButtonElement) {
-    submitButton.disabled = searchControlsDisabled || !String(state.coverLookup.modal.manualUrlText || '').trim();
+    submitButton.disabled = searchControlsDisabled || !coverLookupHasManualInput();
   }
   if (findBetterButton instanceof HTMLButtonElement) {
     findBetterButton.disabled = searchControlsDisabled;
@@ -21572,7 +25473,10 @@ function syncCoverLookupSelectionUi() {
     }
   });
   modal.querySelectorAll('[data-cover-lookup-saved-remote]').forEach((card) => {
-    const isActive = !selectedRemoteId && !pendingLocalPath && !pendingPastedImageId;
+    const isActive = !selectedRemoteId
+      && !pendingLocalPath
+      && !pendingPastedImageId
+      && !String(state.coverLookup.modal.activeLocalSelectionPath || '');
     card.classList.toggle('is-active', isActive);
     let check = card.querySelector('.cover-lookup-art-check');
     if (isActive && !check) {
@@ -21992,6 +25896,14 @@ function hasActiveCoverLookupDrawerTextSelection(body) {
   );
 }
 
+function hasActiveCoverLookupDrawerAction(body) {
+  if (!body || typeof body.contains !== 'function') return false;
+  const activeElement = typeof document !== 'undefined' ? document.activeElement : null;
+  if (activeElement && body.contains(activeElement)
+    && activeElement.closest?.('.cover-lookup-task-actions')) return true;
+  return Boolean(body.querySelector?.('.cover-lookup-task-actions :hover'));
+}
+
 function findCoverLookupTaskOpenForSelectionNode(node) {
   const element = typeof node?.closest === 'function' ? node : node?.parentElement;
   return element?.closest?.('.cover-lookup-task-open') || null;
@@ -22016,6 +25928,7 @@ function renderCoverLookupDrawer() {
   const badge = document.getElementById('cover-lookup-drawer-badge');
   const button = document.getElementById('cover-lookup-drawer-button');
   const clearButton = document.getElementById('cover-lookup-drawer-clear');
+  const summary = document.getElementById('cover-lookup-drawer-summary');
   if (!drawer || !body || !button || !badge) return;
   const tasks = Array.isArray(state.coverLookup.tasks) ? state.coverLookup.tasks : [];
   drawer.hidden = !state.coverLookup.drawerOpen;
@@ -22024,13 +25937,22 @@ function renderCoverLookupDrawer() {
   const pendingNotificationCount = tasks.filter((task) => isCompletedCoverLookupTask(task) && !Boolean(task?.notification_action_taken)).length;
   const terminalCount = tasks.filter((task) => isCompletedCoverLookupTask(task)).length;
   const badgeCount = activeCount + pendingNotificationCount;
+  if (summary) {
+    summary.textContent = [
+      activeCount ? `${activeCount} active` : '',
+      terminalCount ? `${terminalCount} finished` : '',
+    ].filter(Boolean).join(' · ') || 'No activity';
+  }
   badge.hidden = badgeCount <= 0;
   badge.textContent = String(badgeCount || '');
   button.classList.toggle('has-active-lookups', badgeCount > 0);
   if (clearButton) {
-    clearButton.hidden = terminalCount <= 0;
+    clearButton.hidden = false;
+    clearButton.disabled = terminalCount <= 0;
+    clearButton.setAttribute?.('aria-disabled', String(terminalCount <= 0));
   }
-  const preserveSelectedNotificationText = hasActiveCoverLookupDrawerTextSelection(body);
+  const preserveSelectedNotificationText = hasActiveCoverLookupDrawerTextSelection(body)
+    || hasActiveCoverLookupDrawerAction(body);
   if (!tasks.length) {
     if (!preserveSelectedNotificationText) {
       body.innerHTML = '<div class="cover-lookup-drawer-empty">You\'re not looking for anything at the moment. Search for specific album art to see notifications.</div>';
@@ -22043,39 +25965,76 @@ function renderCoverLookupDrawer() {
     const status = String(task?.status || '');
     const isCompleted = isCompletedCoverLookupTask(task);
     const isNoResult = status === 'completed' && String(task?.result_kind || '') === 'no-results';
-    const statusLabel = isNoResult
-      ? 'Completed — no result'
+    const foundCount = Array.isArray(task?.possible_matches) ? task.possible_matches.length : 0;
+    const statusLabel = status === 'failed'
+      ? 'Lookup failed'
+      : isNoResult
+      ? 'No covers found'
       : isCompleted && task?.notification_action_taken
       ? 'Art chosen'
       : status === 'completed'
-        ? 'Completed'
-      : (task?.progress_label || status || 'Queued');
+        ? `${foundCount ? `${foundCount} ` : ''}covers found`
+      : status === 'pending'
+          ? 'Queued'
+          : 'Searching';
+    const taskStateClass = status === 'failed'
+      ? 'is-failed'
+      : ['pending', 'running'].includes(status)
+        ? 'is-running'
+        : 'is-completed';
     const elapsedStateClass = status === 'failed'
       ? 'is-failed'
       : isCompleted
         ? 'is-completed'
         : 'is-active';
     const elapsedLabel = getCoverLookupTaskElapsedLabel(task, Date.now());
-    const line = [task?.artist || '', task?.album || '', task?.year || ''].filter(Boolean).join(' - ');
+    const albumTitle = String(task?.album || '').trim() || 'Unknown album';
+    const albumByline = [task?.artist || '', task?.year || ''].filter(Boolean).join(' · ');
+    const openLabel = `Open Cover Look Up: ${albumTitle}${albumByline ? ` — ${albumByline}` : ''}`;
+    const coverUrl = typeof buildAlbumDisplayCoverUrl === 'function'
+      ? String(buildAlbumDisplayCoverUrl(task?.album_payload || {}) || '').trim()
+      : '';
+    const coverMarkup = coverUrl
+      ? `<img class="cover-lookup-task-cover" src="${escapeHtml(coverUrl)}" alt="">`
+      : '<span class="cover-lookup-task-cover is-placeholder" aria-hidden="true"></span>';
     return `
-      <div class="cover-lookup-task-card">
-        <div class="cover-lookup-task-open" role="button" tabindex="0" data-open-cover-lookup-task="${escapeHtml(task.id || '')}">
-          <div class="cover-lookup-task-type">COVER ART LOOK UP</div>
-          <div class="cover-lookup-task-title">${escapeHtml(line || 'Unknown album')}</div>
-          <div class="cover-lookup-task-status">${escapeHtml(statusLabel)}</div>
-          <div class="cover-lookup-task-elapsed ${elapsedStateClass}" data-cover-lookup-task-elapsed="${escapeHtml(task.id || '')}" ${elapsedLabel ? '' : 'hidden'}>${escapeHtml(elapsedLabel)}</div>
-          <div class="cover-lookup-task-progress"><span style="width:${progress}%"></span></div>
+      <div class="cover-lookup-task-card navigation-tree-item ${taskStateClass}">
+        <div class="cover-lookup-task-open" role="button" tabindex="0" aria-label="${escapeHtml(openLabel)}" data-open-cover-lookup-task="${escapeHtml(task.id || '')}">
+          ${coverMarkup}
+          <span class="cover-lookup-task-copy">
+            <span class="cover-lookup-task-title">${escapeHtml(albumTitle)}</span>
+            <span class="cover-lookup-task-byline">${escapeHtml(albumByline)}</span>
+            <span class="cover-lookup-task-meta">
+              <span class="cover-lookup-task-status-label ${taskStateClass}">${escapeHtml(statusLabel)}</span>
+              <span class="cover-lookup-task-elapsed ${elapsedStateClass}" data-cover-lookup-task-elapsed="${escapeHtml(task.id || '')}" ${elapsedLabel ? '' : 'hidden'}>${escapeHtml(elapsedLabel)}</span>
+            </span>
+          </span>
         </div>
+      <div class="cover-lookup-task-actions">
+        ${status === 'failed' && task?.album_payload
+          ? `<button class="button ui-button ui-button--secondary ui-button--small ui-button--icon cover-lookup-task-retry" type="button" data-retry-cover-lookup-task="${escapeHtml(task.id || '')}" aria-label="Retry lookup" title="Retry lookup"><svg class="ui-icon" viewBox="0 0 20 20" aria-hidden="true"><path d="M15.5 7A6 6 0 1 0 16 12M15.5 7V3.5M15.5 7H12"/></svg></button>`
+          : ''}
         ${['pending', 'running'].includes(status)
-          ? `<button class="cover-lookup-task-cancel" type="button" data-cancel-cover-lookup-task="${escapeHtml(task.id || '')}" aria-label="Stop lookup">✕</button>`
+          ? ButtonComponent.renderActionButton({
+            icon: 'close',
+            semantic: 'destructive',
+            ariaLabel: 'Stop lookup',
+            title: 'Stop lookup',
+            className: 'cover-lookup-task-cancel',
+            attributes: { 'data-cancel-cover-lookup-task': task.id || '' },
+          })
           : isCompleted
-            ? `<button class="cover-lookup-task-clear" type="button" data-clear-cover-lookup-task="${escapeHtml(task.id || '')}" aria-label="Clear notification" title="Clear notification">
-                <span class="cover-lookup-drawer-clear-glyph cover-lookup-task-clear-glyph" aria-hidden="true">
-                  <img class="cover-lookup-drawer-clear-glyph-default" src="/static/images/clear-notifications-icon-offwhite.png" alt="">
-                  <img class="cover-lookup-drawer-clear-glyph-hover" src="/static/images/clear-notifications-icon.png" alt="">
-                </span>
-              </button>`
+            ? ButtonComponent.renderActionButton({
+              icon: 'delete',
+              semantic: 'destructive',
+              ariaLabel: 'Delete notification',
+              title: 'Delete notification',
+              className: 'cover-lookup-task-clear',
+              attributes: { 'data-clear-cover-lookup-task': task.id || '' },
+            })
             : ''}
+      </div>
+      <div class="cover-lookup-task-progress" aria-hidden="true"><span style="width:${progress}%"></span></div>
       </div>
     `;
   }).join('');
@@ -22092,7 +26051,6 @@ async function clearCompletedCoverLookupTasks() {
     .map((task) => String(task?.id || '').trim())
     .filter(Boolean);
   if (!terminalTaskIds.length) {
-    showToast('There were no finished cover lookups to clear.', 'success', 2200);
     return;
   }
   const terminalTaskIdSet = new Set(terminalTaskIds);
@@ -22117,7 +26075,6 @@ async function clearCompletedCoverLookupTasks() {
     state.coverLookup.tasks = mergeCoverLookupTasksWithNotifications(Array.isArray(data.tasks) ? data.tasks : []);
     renderCoverLookupDrawer();
     stopCoverLookupPollingIfIdle();
-    showToast(Number(data.removed_count || 0) > 0 ? 'Finished cover lookups cleared.' : 'There were no finished cover lookups to clear.', 'success', 2200);
   } catch (error) {
     state.coverLookup.tasks = previousTasks;
     console.error('[AlbumHaven][CoverLookup] Failed to clear completed tasks.', error);
@@ -22169,13 +26126,10 @@ function buildCoverLookupCard(item, kind = 'local') {
   const resolution = item?.resolution || ((item?.width && item?.height) ? `${item.width}x${item.height}` : 'Unknown');
   const isRemoteKind = kind === 'remote' || kind === 'saved-remote';
   const isPastedKind = kind === 'pasted';
-  const isSpotify = String(item?.source || '').trim() === 'spotify';
   const isOtherRemoteArt = isRemoteKind && String(item?.art_kind || 'cover') !== 'cover';
   const previewFallbackImageUrl = '/static/images/remote-preview-unavailable.png';
   const sourceBadge = buildRemoteCoverSourceBadge(item?.source);
-  const remoteSourceLabel = isSpotify
-    ? 'SPOTIFY'
-    : String(item?.source_label || item?.source || '').trim();
+  const remoteSourceLabel = getRemoteCoverSourceLabel(item?.source, item?.source_label);
   const imageUrl = kind === 'remote'
     ? buildRemoteCoverLookupDisplayUrl(item, item?.thumbnail_url || item?.url || '', item?.id || item?.url || '')
     : kind === 'saved-remote'
@@ -22197,7 +26151,8 @@ function buildCoverLookupCard(item, kind = 'local') {
     ? (!state.coverLookup.modal.selectedRemoteId && (
       String(state.coverLookup.modal.pendingLocalPath || '')
         ? String(state.coverLookup.modal.pendingLocalPath || '') === String(item?.path || '')
-        : String(item?.path || '') === getCoverLookupActiveLocalPath()
+        : !String(state.coverLookup.modal.pendingPastedImageId || '')
+          && String(item?.path || '') === getCoverLookupActiveLocalPath()
     ))
     : kind === 'pasted'
       ? (!String(state.coverLookup.modal.selectedRemoteId || '') && !String(state.coverLookup.modal.pendingLocalPath || '') && state.coverLookup.modal.pendingPastedImageId === String(item?.id || ''))
@@ -22258,6 +26213,7 @@ function buildCoverLookupCard(item, kind = 'local') {
           </button>
           ${isActive ? '<span class="cover-lookup-art-check">&#10003;</span>' : ''}
           ${kind === 'local' ? `<button class="cover-lookup-art-delete" type="button" data-delete-local-cover="${escapeHtml(item.path || '')}" aria-label="Delete local cover art">&#128465;</button>` : ''}
+          ${isPastedKind ? `<button class="cover-lookup-art-delete" type="button" data-remove-pasted-cover="${escapeHtml(item.id || '')}" aria-label="Remove staged image">&#10005;</button>` : ''}
         </span>
         <span class="cover-lookup-art-meta">
           <span class="cover-lookup-art-name">${escapeHtml(item.relative_path || item.filename || item.album || (isPastedKind ? 'Pasted image' : 'Cover art'))}</span>
@@ -22315,6 +26271,11 @@ function restoreCoverLookupModalScrollAnchor(body, snapshot) {
   );
 }
 
+function formatCoverLookupImageCount(count) {
+  const safeCount = Math.max(0, Number(count || 0) || 0);
+  return `${safeCount} ${safeCount === 1 ? 'image' : 'images'}`;
+}
+
 function renderCoverLookupModal() {
   const els = getCoverLookupModalElements();
   if (!els.overlay || !els.body) return;
@@ -22328,6 +26289,8 @@ function renderCoverLookupModal() {
   }
   const localCovers = Array.isArray(modalState.localCovers) ? modalState.localCovers : [];
   const pastedImages = Array.isArray(modalState.pastedImages) ? modalState.pastedImages : [];
+  const manualImageAttachments = Array.isArray(modalState.manualImageAttachments)
+    ? modalState.manualImageAttachments : [];
   const otherArt = Array.isArray(modalState.otherArt) ? modalState.otherArt : [];
   const remoteCover = modalState.remoteCover && typeof modalState.remoteCover === 'object' ? modalState.remoteCover : null;
   const possibleMatches = Array.isArray(modalState.possibleMatches) ? modalState.possibleMatches : [];
@@ -22383,14 +26346,19 @@ function renderCoverLookupModal() {
   const showCaaEmptyNotice = Boolean(task?.caa_empty_notice) && !archiveMatches.length;
   const taskRunning = Boolean(task && ['pending', 'running'].includes(String(task.status || '')));
   if (els.status) {
-    els.status.textContent = taskRunning ? '' : (modalState.statusText || '');
-    els.status.classList.toggle('is-error', !taskRunning && String(modalState.statusTone || '') === 'error');
+    const statusText = taskRunning ? '' : (modalState.statusText || '');
+    if (statusText && String(modalState.statusTone || '') === 'error') {
+      els.status.innerHTML = buildOnPageAlertHtml({ severity: 'error', title: 'Cover lookup failed', message: statusText });
+    } else {
+      els.status.textContent = statusText;
+    }
   }
   const searchControlsDisabled = Boolean(taskRunning || modalState.manualBusy);
   const searchControlsDisabledAttr = searchControlsDisabled ? 'disabled' : '';
   const manualInputDisabled = searchControlsDisabled;
   const manualInputDisabledAttr = manualInputDisabled ? 'disabled' : '';
-  const manualSearchDisabled = searchControlsDisabled || !String(modalState.manualUrlText || '').trim();
+  const manualSearchDisabled = searchControlsDisabled
+    || (!String(modalState.manualUrlText || '').trim() && !manualImageAttachments.length);
   const manualSearchDisabledAttr = manualSearchDisabled ? 'disabled' : '';
   const googleSearchUrl = buildCoverLookupImageSearchUrl('google', album);
   const yandexSearchUrl = buildCoverLookupImageSearchUrl('yandex', album);
@@ -22414,7 +26382,7 @@ function renderCoverLookupModal() {
         ${remoteOtherArtMatches.length ? `<div class="cover-lookup-subsection-title">OTHER COVER ART</div><div class="cover-lookup-gallery">${remoteOtherArtMatches.map((item) => buildCoverLookupCard(item, 'remote')).join('')}</div>` : ''}
         ${showCaaEmptyNotice ? `<div class="cover-lookup-subsection-title">Cover Art Archive</div><div class="cover-lookup-empty">We cannot guarantee Cover Art Archive results. Its API is flaky, you can try doing the same search later and might see good matches here</div>` : ''}
       `
-    : (taskRunning ? '' : '<div class="cover-lookup-empty">No remote matches yet.</div>');
+    : '';
   if (modalState.loading) {
     els.body.innerHTML = '<div class="cover-lookup-empty">Loading cover art gallery...</div>';
     els.body.scrollTop = 0;
@@ -22426,32 +26394,42 @@ function renderCoverLookupModal() {
   }
   els.body.innerHTML = `
     <section class="cover-lookup-section">
-      <h4 class="cover-lookup-section-title">Local Covers</h4>
+      <h4 class="cover-lookup-section-title">LOCAL · ${formatCoverLookupImageCount(localCovers.length)}</h4>
       <div class="cover-lookup-gallery">${localCovers.length ? localCovers.map((item) => buildCoverLookupCard(item, 'local')).join('') : '<div class="cover-lookup-empty">No local cover art found in this album folder.</div>'}</div>
       ${pastedImages.length ? `<div class="cover-lookup-subsection-title">PASTED IMAGES</div><div class="cover-lookup-gallery">${pastedImages.map((item) => buildCoverLookupCard(item, 'pasted')).join('')}</div>` : ''}
       ${otherArt.length ? `<div class="cover-lookup-subsection-title">Other art</div><div class="cover-lookup-gallery">${otherArt.map((item) => buildCoverLookupCard(item, 'local')).join('')}</div>` : ''}
     </section>
-    <section class="cover-lookup-section">
-      <h4 class="cover-lookup-section-title">Remote Cover Art</h4>
-      <div class="cover-lookup-gallery">${remoteCover ? buildCoverLookupCard(remoteCover, 'saved-remote') : '<div class="cover-lookup-empty">No remote cover is currently selected.</div>'}</div>
-    </section>
+    ${remoteCover ? `<section class="cover-lookup-section">
+      <h4 class="cover-lookup-section-title">REMOTE · ${formatCoverLookupImageCount(1)}</h4>
+      <div class="cover-lookup-gallery">${buildCoverLookupCard(remoteCover, 'saved-remote')}</div>
+    </section>` : ''}
     <section class="cover-lookup-section">
       <div class="cover-lookup-section-heading">
-        <h4 class="cover-lookup-section-title">Possible Matches</h4>
+        <h4 class="cover-lookup-section-title">${possibleMatches.length || taskRunning || showCaaEmptyNotice ? `POSSIBLE MATCHES · ${formatCoverLookupImageCount(possibleMatches.length)}` : 'ADD COVER ART'}</h4>
       </div>
       ${progressMarkup}
       ${possibleMatchesMarkup}
         <div class="cover-lookup-manual-add" data-cover-lookup-scroll-key="manual-add">
-        <div class="cover-lookup-manual-copy">
-          <div class="cover-lookup-manual-description">Search on the internet or manually add album links to improve cover results.</div>
-          <div class="cover-lookup-manual-note">Find Better Art will also use anything pasted here.</div>
-        </div>
+        <div class="cover-lookup-manual-divider" aria-hidden="true"></div>
+        <div class="cover-lookup-subsection-title">MANUAL SEARCH</div>
         <div class="cover-lookup-search-shortcuts">
-          <a class="cover-lookup-search-chip is-google" href="${googleSearchUrl}" target="_blank" rel="noreferrer"><span class="cover-lookup-search-chip-logo">G</span><span>Google</span></a>
-          <a class="cover-lookup-search-chip is-yandex" href="${yandexSearchUrl}" target="_blank" rel="noreferrer"><span class="cover-lookup-search-chip-logo">Y</span><span>Yandex</span></a>
+          <a class="cover-lookup-search-chip is-google" href="${googleSearchUrl}" target="_blank" rel="noreferrer"><img class="cover-lookup-search-chip-logo" src="/static/images/google.ico" alt=""><span>Google</span><span class="cover-lookup-external-marker" aria-hidden="true">↗</span></a>
+          <a class="cover-lookup-search-chip is-yandex" href="${yandexSearchUrl}" target="_blank" rel="noreferrer"><img class="cover-lookup-search-chip-logo" src="/static/images/yandex.ico" alt=""><span>Yandex</span><span class="cover-lookup-external-marker" aria-hidden="true">↗</span></a>
         </div>
-        <div class="cover-lookup-manual-row">
-          <textarea class="cover-lookup-manual-input" id="cover-lookup-pasted-urls" rows="4" placeholder="You can paste your image or direct link to the album page or jpg here" ${manualInputDisabledAttr}>${escapeHtml(modalState.manualUrlText || '')}</textarea>
+        <div class="cover-lookup-manual-row" data-cover-lookup-drop-zone="1">
+          <div class="cover-lookup-manual-content">
+            <div class="cover-lookup-manual-attachments" ${manualImageAttachments.length ? '' : 'hidden'}>
+              ${manualImageAttachments.map((item) => `
+                <span class="cover-lookup-manual-attachment" data-cover-lookup-pending-attachment="${escapeHtml(item.id || '')}" title="${escapeHtml(item.filename || 'Image')}">
+                  <img src="${escapeHtml(item.object_url || item.data_url || '')}" alt="">
+                  <button type="button" data-remove-cover-lookup-pending-attachment="${escapeHtml(item.id || '')}" aria-label="Remove ${escapeHtml(item.filename || 'image')}">×</button>
+                </span>
+              `).join('')}
+            </div>
+            <textarea class="cover-lookup-manual-input" id="cover-lookup-pasted-urls" rows="1" placeholder="Paste an image or a direct image or album link" ${manualInputDisabledAttr}>${escapeHtml(modalState.manualUrlText || '')}</textarea>
+          </div>
+          <input type="file" accept="image/*" multiple data-cover-lookup-file-input hidden ${manualInputDisabledAttr}>
+          <button class="cover-lookup-manual-open" type="button" data-choose-cover-lookup-files="1" aria-label="Add image" ${manualInputDisabledAttr}><span aria-hidden="true">+</span><span>Add image</span></button>
         </div>
         <div class="cover-lookup-manual-actions">
           <button class="button cover-lookup-manual-submit" type="button" data-add-cover-lookup-remote="1" ${manualSearchDisabledAttr}>Extract images</button>
@@ -22626,6 +26604,7 @@ async function openCoverLookupModal(album, options = {}) {
   state.coverLookup.modal.localCovers = [];
   revokeCoverLookupPastedImageUrls();
   state.coverLookup.modal.pastedImages = [];
+  state.coverLookup.modal.manualImageAttachments = [];
   state.coverLookup.modal.otherArt = [];
   state.coverLookup.modal.pendingLocalPath = '';
   state.coverLookup.modal.pendingPastedImageId = '';
@@ -22668,6 +26647,7 @@ function closeCoverLookupModal() {
   state.coverLookup.modal.activeLocalSelectionPath = '';
   revokeCoverLookupPastedImageUrls();
   state.coverLookup.modal.pastedImages = [];
+  state.coverLookup.modal.manualImageAttachments = [];
   state.coverLookup.modal.manualBusy = false;
   if (els.saveRemote instanceof HTMLButtonElement) {
     els.saveRemote.hidden = false;
@@ -22985,7 +26965,18 @@ async function addRemoteCoverLinksFromLookup() {
   const album = state.coverLookup.modal.album;
   const input = document.getElementById('cover-lookup-pasted-urls');
   const urls = collectManualCoverLookupUrls();
-  if (!album || !urls.length) return;
+  const attachmentCount = Array.isArray(state.coverLookup.modal.manualImageAttachments)
+    ? state.coverLookup.modal.manualImageAttachments.length : 0;
+  if (!album || (!urls.length && !attachmentCount)) return;
+  const extractedImageCount = extractCoverLookupPendingAttachments();
+  if (!urls.length) {
+    state.coverLookup.modal.statusText = extractedImageCount === 1
+      ? 'Image extracted.'
+      : `${extractedImageCount} images extracted.`;
+    state.coverLookup.modal.statusTone = 'neutral';
+    renderCoverLookupModal();
+    return;
+  }
   try {
     state.coverLookup.modal.manualBusy = true;
     renderCoverLookupModal();
@@ -23017,7 +27008,13 @@ async function addRemoteCoverLinksFromLookup() {
     }
     await loadCoverLookupTasks({ toast: false });
     renderCoverLookupModal();
-    showToast('Remote cover links added.', 'success', 2200);
+    showToast(
+      extractedImageCount
+        ? `Extracted ${extractedImageCount} image${extractedImageCount === 1 ? '' : 's'} and added remote links.`
+        : 'Remote cover links added.',
+      'success',
+      2200,
+    );
   } catch (error) {
     state.coverLookup.modal.statusText = String(error?.message || 'Nothing was found in the pasted links.');
     state.coverLookup.modal.statusTone = 'error';
@@ -23096,7 +27093,7 @@ async function saveCoverFromLookup() {
 
 // BEGIN js/runtime/tag-editor-and-optimistic-updates.js
 
-﻿const albumTrackCollator = new Intl.Collator(undefined, {
+const albumTrackCollator = new Intl.Collator(undefined, {
   numeric: true,
   sensitivity: 'base',
 });
@@ -23348,6 +27345,7 @@ function openTagEditor(album, options = {}) {
     anchorPath: String(tracks[0].path || ''),
     dragSelecting: false,
     dragAnchorPath: '',
+    reorder: null,
     values,
     sessionMutationClaim: claimTagEditViewMutation(album),
     autoNumberStartValue: '',
@@ -23413,6 +27411,7 @@ function autoNumberSelectedTagEditorTracks() {
 }
 
 function closeTagEditor() {
+  if (typeof clearTagEditorReorderCue === 'function') clearTagEditorReorderCue();
   const els = getTagEditorElements();
   if (!els.overlay) return;
   settleTagEditorSessionMutationClaim();
@@ -23484,6 +27483,38 @@ function tagEditOriginStillOwnsView(originatingViewStateRevision) {
 }
 
 async function confirmRepairSelectedAlbum() {
+  if (state.utility.pendingRepairAction === 'saved-loop-delete') {
+    const id = state.utility.pendingSavedLoopDeleteId;
+    if (!id || state.utility.savedLoopDeleteBusy || state.utility.allowedActions?.['library.loops.delete'] !== true) return;
+    state.utility.savedLoopDeleteBusy = true;
+    const confirm = getRepairConfirmElements();
+    if (confirm.accept) confirm.accept.disabled = true;
+    try {
+      if (await deleteSavedLoop(id, { confirmed: true }) === true) closeRepairConfirmModal();
+    } finally {
+      state.utility.savedLoopDeleteBusy = false;
+      if (confirm.accept) confirm.accept.disabled = false;
+    }
+    return;
+  }
+  if (state.utility.pendingRepairAction === 'suggestions') return confirmProblemSuggestions();
+  if (state.utility.pendingRepairAction === 'revert-rule') {
+    const pending = state.utility.pendingRuleRevert;
+    if (!pending || state.utility.ruleRevertBusy) return;
+    state.utility.ruleRevertBusy = true;
+    const confirm = getRepairConfirmElements();
+    if (confirm.accept) confirm.accept.disabled = true;
+    try {
+      const succeeded = pending.kind === 'version-exception'
+        ? await revertVersionException(pending.key)
+        : await queueProblemExclusionRevert(pending.item);
+      if (succeeded === true) { closeRepairConfirmModal(); state.utility.pendingRuleRevert = null; }
+    } finally {
+      state.utility.ruleRevertBusy = false;
+      if (confirm.accept) confirm.accept.disabled = false;
+    }
+    return;
+  }
   const album = (state.utility.problematicFiles || []).find((item) => item.key === state.utility.pendingRepairKey) || getSelectedProblematicAlbum();
   if (!album) {
     showToast('No album selected for repair.', 'error', 3200);
@@ -24486,9 +28517,11 @@ async function revertVersionException(albumKey) {
     renderUtilityModalContent();
     await fetchAndRender(buildApiUrl(state.view), false);
     showToast('Rule reverted.', 'success', 2400);
+    return true;
   } catch (error) {
     console.error('[AlbumHaven][Utilities] Failed to revert rule.', error);
     showToast(error.message || 'Failed to revert rule.', 'error', 3200);
+    return false;
   }
 }
 
@@ -24562,24 +28595,6 @@ function hideVersionContextMenu() {
   };
   const menu = document.getElementById('track-modal-version-context-menu');
   if (menu) menu.hidden = true;
-}
-
-function buildCoverLookupButtonIcon() {
-  return `
-    <span class="track-modal-cover-tool-icon track-modal-cover-tool-icon-lookup" aria-hidden="true">
-      <img class="track-modal-cover-tool-icon-default" src="/static/images/cover-lookup-gallery-icon-offwhite.png" alt="">
-      <img class="track-modal-cover-tool-icon-hover" src="/static/images/cover-lookup-gallery-icon.png" alt="">
-    </span>
-  `;
-}
-
-function buildFastCoverFetchButtonIcon() {
-  return `
-    <span class="track-modal-cover-tool-icon track-modal-cover-tool-icon-fast-fetch" aria-hidden="true">
-      <img class="track-modal-cover-tool-icon-default" src="/static/images/quick-search-icon-offwhite.png" alt="">
-      <img class="track-modal-cover-tool-icon-hover" src="/static/images/quick-search-icon.png" alt="">
-    </span>
-  `;
 }
 
 function buildTrackModalCoverVisualHtml({
@@ -24668,58 +28683,25 @@ const applyMissingAlbumRemovalToViewDefault = function applyMissingAlbumRemovalT
   const normalizedKey = String(albumKey || '').trim();
   if (!normalizedKey || !state?.view) return false;
   const groupFields = ['artist_groups', 'primary_artist_groups', 'family_artist_groups'];
-  const removedArtists = new Set();
-  const previousSidebarCount = Array.isArray(state.view.artists_sidebar)
-    ? state.view.artists_sidebar.length
-    : 0;
   groupFields.forEach((field) => {
     const groups = Array.isArray(state.view[field]) ? state.view[field] : [];
     state.view[field] = groups.flatMap((group) => {
       const albums = Array.isArray(group?.albums) ? group.albums : [];
       const retainedAlbums = albums.filter((album) => {
         const matches = String(getTrackModalAlbumRequestKey(album) || album?.key || '').trim() === normalizedKey;
-        if (matches) removedArtists.add(String(group?.artist || album?.album_artist || '').trim());
         return !matches;
       });
       return retainedAlbums.length ? [{ ...group, albums: retainedAlbums }] : [];
     });
   });
 
-  const remainingArtists = new Set(groupFields.flatMap((field) => (
-    (Array.isArray(state.view[field]) ? state.view[field] : [])
-      .map((group) => String(group?.artist || '').trim())
-      .filter(Boolean)
-  )));
-  if (Array.isArray(state.view.artists_sidebar)) {
-    state.view.artists_sidebar = state.view.artists_sidebar.filter((item) => {
-      const artist = String(item?.artist || item?.name || '').trim();
-      return !removedArtists.has(artist) || remainingArtists.has(artist);
-    });
-  }
+  // Mounted groups can be filtered or partial. The canonical view refresh owns
+  // whole-library sidebar membership and counts.
   if (Number.isFinite(Number(payload.album_count))) {
     state.view.album_count = Number(payload.album_count);
-  } else if (Number.isFinite(Number(state.view.album_count))) {
-    state.view.album_count = Math.max(0, Number(state.view.album_count) - 1);
-  } else {
-    state.view.album_count = (state.view.artist_groups || []).reduce(
-      (count, group) => count + (Array.isArray(group?.albums) ? group.albums.length : 0),
-      0,
-    );
   }
   if (Number.isFinite(Number(payload.artist_count))) {
     state.view.artist_count = Number(payload.artist_count);
-  } else if (Number.isFinite(Number(state.view.artist_count))) {
-    const currentSidebarCount = Array.isArray(state.view.artists_sidebar)
-      ? state.view.artists_sidebar.length
-      : previousSidebarCount;
-    state.view.artist_count = Math.max(
-      0,
-      Number(state.view.artist_count) - Math.max(0, previousSidebarCount - currentSidebarCount),
-    );
-  } else {
-    state.view.artist_count = Array.isArray(state.view.artists_sidebar)
-      ? state.view.artists_sidebar.length
-      : (state.view.artist_groups || []).length;
   }
   if (state.gallery) {
     if (typeof rebuildAlbumIndex === 'function') rebuildAlbumIndex(state.view.artist_groups || []);
@@ -24768,15 +28750,45 @@ async function confirmMissingAlbumRemoval(album, options = {}) {
     } catch (_error) {
       payload = {};
     }
+    const pendingRefreshRequest = state.ui?.pendingViewRequest || (
+      state.busy && state.ui?.activeViewRequestUrl
+        ? { url: state.ui.activeViewRequestUrl, push: state.ui.activeViewRequestPush }
+        : null
+    );
     if (response.status === 409) {
       if (typeof fetchAndRender === 'function' && typeof buildUrl === 'function') {
         const refreshOptions = typeof album?.constructor === 'function'
           ? new album.constructor()
           : {};
         refreshOptions.preserveScroll = true;
-        await fetchAndRender(buildUrl(state.view), false, refreshOptions);
+        if (pendingRefreshRequest) {
+          Object.assign(refreshOptions, pendingRefreshRequest.options, {
+            preserveScroll: pendingRefreshRequest.options?.preserveScroll ?? true,
+            interruptCurrent: true,
+            restartIfSameUrl: true,
+          });
+          if (typeof claimLocalViewStateNavigation === 'function') claimLocalViewStateNavigation();
+        }
+        await fetchAndRender(
+          pendingRefreshRequest?.url || buildUrl(state.view),
+          Boolean(pendingRefreshRequest?.push),
+          refreshOptions,
+        );
       }
       if (typeof loadProblematicFiles === 'function') await loadProblematicFiles(true);
+      const modal = typeof getTrackModalElements === 'function' ? getTrackModalElements() : null;
+      const currentAlbum = typeof getCurrentTrackModalAlbum === 'function' ? getCurrentTrackModalAlbum() : null;
+      if (modal?.overlay && !modal.overlay.hidden
+        && getTrackModalAlbumRequestKey(currentAlbum) === albumKey) {
+        invalidateHydratedTrackModalAlbumDetails([currentAlbum]);
+        const loadToken = invalidatePendingTrackModalLoad();
+        const refreshedAlbum = await loadTrackModalAlbumDetails(albumKey);
+        if (refreshedAlbum && !modal.overlay.hidden
+          && loadToken === state.ui.pendingTrackModalLoadToken
+          && getTrackModalAlbumRequestKey(getCurrentTrackModalAlbum()) === albumKey) {
+          openTrackModal(refreshedAlbum, { coverLightboxGallery: state.ui.trackModalCoverLightboxGallery });
+        }
+      }
       const conflictMessage = String(
         payload.error || payload.detail || 'Album Haven found this album again.'
       ).trim() || 'Album Haven found this album again.';
@@ -24786,8 +28798,24 @@ async function confirmMissingAlbumRemoval(album, options = {}) {
     if (!response.ok) {
       throw new Error(payload.detail || payload.error || 'Unable to remove album from Album Haven.');
     }
+    const refreshRequest = pendingRefreshRequest || {
+      url: typeof buildUrl === 'function' ? buildUrl(state.view) : '', push: false,
+    };
+    if (typeof claimLocalViewStateNavigation === 'function') claimLocalViewStateNavigation();
     applyMissingAlbumRemovalToView(albumKey, payload);
-    if (typeof closeTrackModal === 'function') closeTrackModal();
+    const modal = typeof getTrackModalElements === 'function' ? getTrackModalElements() : null;
+    const currentAlbum = typeof getCurrentTrackModalAlbum === 'function' ? getCurrentTrackModalAlbum() : null;
+    if (modal?.overlay && !modal.overlay.hidden
+      && getTrackModalAlbumRequestKey(currentAlbum) === albumKey
+      && typeof closeTrackModal === 'function') closeTrackModal();
+    if (refreshRequest.url && typeof fetchAndRender === 'function') {
+      await fetchAndRender(refreshRequest.url, Boolean(refreshRequest.push), {
+        ...refreshRequest.options,
+        preserveScroll: refreshRequest.options?.preserveScroll ?? true,
+        interruptCurrent: true,
+        restartIfSameUrl: true,
+      });
+    }
     if (typeof loadProblematicFiles === 'function') await loadProblematicFiles(true);
     if (typeof showToast === 'function') showToast('Album removed from Album Haven.', 'success', 3200);
     return true;
@@ -24823,8 +28851,28 @@ function renderTrackModalRelease(album) {
   const coverLookupLabel = hasUnseenAutomaticImprovement
     ? 'Open cover art look up gallery; new automatic cover candidate available'
     : 'Open cover art look up gallery';
-  const coverLookupIcon = buildCoverLookupButtonIcon();
-  const fastCoverFetchIcon = buildFastCoverFetchButtonIcon();
+  const coverToolsHtml = `
+    ${ButtonComponent.renderActionButton({
+      icon: 'search',
+      ariaLabel: coverLookupLabel,
+      title: 'Cover Art Look Up',
+      className: coverLookupClass,
+      attributes: {
+        'data-open-track-modal-cover-lookup': '1',
+        'data-album-key': albumKey,
+      },
+    })}
+    ${ButtonComponent.renderActionButton({
+      icon: 'bolt',
+      ariaLabel: 'Fetch cover art now',
+      title: 'Fast Cover Fetch',
+      className: 'track-modal-cover-tool is-fast-fetch',
+      attributes: {
+        'data-track-modal-fast-cover-fetch': '1',
+        'data-album-key': albumKey,
+      },
+    })}
+  `;
   const coverSourceBadge = typeof buildTrackModalCoverSourceBadge === 'function'
     ? buildTrackModalCoverSourceBadge(album?.remote_cover_source || '')
     : '';
@@ -24896,20 +28944,13 @@ function renderTrackModalRelease(album) {
       : ' data-lightbox-gallery="visible"';
     els.cover.innerHTML = `
       <div class="track-modal-cover-shell">
-        ${renderAlbumArtbox({
-          state: 'ready',
-          label: `Album cover for ${album.name}`,
-          coverHtml: `<button class="track-modal-cover-button" type="button" data-open-lightbox="1" data-cover-src="${escapeHtml(lightboxSrc)}" data-cover-preview-src="${escapeHtml(coverSrc)}" data-cover-alt="${escapeHtml(`Album cover for ${album.name}`)}" data-album-key="${albumKey}"${lightboxGalleryAttribute}><span class="track-modal-cover-image-slot"></span></button>`,
-        })}
-        ${coverSourceBadge}
-        <div class="track-modal-cover-tools">
-          <button class="${coverLookupClass}" type="button" data-open-track-modal-cover-lookup="1" data-album-key="${albumKey}" aria-label="${coverLookupLabel}" title="Cover Art Look Up">
-            ${coverLookupIcon}
-          </button>
-          <button class="track-modal-cover-tool is-fast-fetch" type="button" data-track-modal-fast-cover-fetch="1" data-album-key="${albumKey}" aria-label="Fetch cover art now" title="Fast Cover Fetch">
-            ${fastCoverFetchIcon}
-          </button>
-        </div>
+      ${renderAlbumArtbox({
+        state: 'ready',
+        label: `Album cover for ${album.name}`,
+        coverHtml: `<button class="track-modal-cover-button" type="button" data-open-lightbox="1" data-cover-src="${escapeHtml(lightboxSrc)}" data-cover-preview-src="${escapeHtml(coverSrc)}" data-cover-alt="${escapeHtml(`Album cover for ${album.name}`)}" data-album-key="${albumKey}"${lightboxGalleryAttribute}><span class="track-modal-cover-image-slot"></span></button>`,
+        overlayHtml: coverToolsHtml,
+      })}
+      ${coverSourceBadge}
       </div>
     `;
     const coverImageSlot = typeof els.cover?.querySelector === 'function'
@@ -24969,15 +29010,11 @@ function renderTrackModalRelease(album) {
   } else {
     els.cover.innerHTML = `
       <div class="track-modal-cover-shell">
-        ${renderAlbumArtbox({ state: 'empty', label: `${album.name || 'Album'} has no cover art` })}
-        <div class="track-modal-cover-tools">
-          <button class="${coverLookupClass}" type="button" data-open-track-modal-cover-lookup="1" data-album-key="${albumKey}" aria-label="${coverLookupLabel}" title="Cover Art Look Up">
-            ${coverLookupIcon}
-          </button>
-          <button class="track-modal-cover-tool is-fast-fetch" type="button" data-track-modal-fast-cover-fetch="1" data-album-key="${albumKey}" aria-label="Fetch cover art now" title="Fast Cover Fetch">
-            ${fastCoverFetchIcon}
-          </button>
-        </div>
+      ${renderAlbumArtbox({
+        state: 'empty',
+        label: `${album.name || 'Album'} has no cover art`,
+        overlayHtml: coverToolsHtml,
+      })}
       </div>
     `;
   }
@@ -24993,32 +29030,25 @@ function renderTrackModalRelease(album) {
   const mainSeconds = mainGroups.reduce((sum, group) => sum + group.tracks.reduce((inner, track) => inner + (Number(track.duration_seconds) || 0), 0), 0);
   const bonusSeconds = bonusGroups.reduce((sum, group) => sum + group.tracks.reduce((inner, track) => inner + (Number(track.duration_seconds) || 0), 0), 0);
   const totalLength = activeDuplicateSource?.total_duration_display || album.total_duration_display || formatAlbumDuration(album.total_duration_seconds);
-  const mainLength = formatAlbumDuration(mainSeconds) || (mainGroups.length ? totalLength : '');
-  const bonusLength = formatAlbumDuration(bonusSeconds);
+  const mainLength = mainSeconds > 0 ? (formatTrackDuration(mainSeconds) || formatAlbumDuration(mainSeconds)) : '';
+  const bonusLength = bonusSeconds > 0 ? (formatTrackDuration(bonusSeconds) || formatAlbumDuration(bonusSeconds)) : '';
   if (els.duplicateWarning && els.duplicateTabs) {
     if (duplicateSources.length > 1) {
       els.duplicateWarning.hidden = false;
-      els.duplicateWarning.innerHTML = `
-        <span>Album seems to have duplicate files:</span>
-        <span class="track-modal-duplicate-warning-icons">
-          ${duplicateSources.map((source, index) => {
-            const isActive = index === duplicateSourceIndex;
-            const folderTitle = escapeHtml(String(source.folder_path || source.folder_name || `Folder ${index + 1}`));
-            return `
-              <button
-                type="button"
-                class="track-modal-duplicate-folder-button ${isActive ? 'is-active' : ''}"
-                data-open-track-modal-duplicate-folder="1"
-                data-album-key="${albumKey}"
-                data-duplicate-source-index="${index}"
-                title="${folderTitle}">
-                <span class="track-modal-duplicate-folder-icon" aria-hidden="true">📁</span>
-                <span class="track-modal-duplicate-folder-badge">${index + 1}</span>
-              </button>
-            `;
-          }).join('')}
-        </span>
-      `;
+      els.duplicateWarning.innerHTML = buildOnPageAlertHtml({
+        severity: 'warning', title: 'Duplicate album files', message: 'Album seems to have duplicate files:',
+        actionsHtml: duplicateSources.map((source, index) => ButtonComponent.renderButton({
+          label: `Folder ${index + 1}`,
+          variant: index === duplicateSourceIndex ? 'primary' : 'secondary',
+          title: String(source.folder_path || source.folder_name || `Folder ${index + 1}`),
+          attributes: {
+            'data-open-track-modal-duplicate-folder': '1',
+            'data-album-key': resolvedAlbumKey,
+            'data-duplicate-source-index': String(index),
+            'aria-pressed': String(index === duplicateSourceIndex),
+          },
+        })).join(''),
+      });
       els.duplicateTabs.hidden = false;
       els.duplicateTabs.innerHTML = duplicateSources.map((source, index) => {
         const isActive = index === duplicateSourceIndex;
@@ -25040,7 +29070,7 @@ function renderTrackModalRelease(album) {
       els.duplicateTabs.innerHTML = '';
     }
   }
-  els.list.innerHTML = albumMissing ? '' : buildTrackListHtml(tracks, album);
+  els.list.innerHTML = albumMissing ? '' : buildTrackListHtml(tracks, album, totalLength);
   if (els.footer) {
     els.footer.textContent = '';
     els.footer.hidden = true;
@@ -25160,7 +29190,7 @@ function groupAlbumTracks(tracks) {
 }
 
 
-function buildTrackListHtml(tracks, album = null) {
+function buildTrackListHtml(tracks, album = null, totalLength = null) {
   const grouped = groupAlbumTracks(tracks);
   const playback = getPlayerPlaybackSnapshot();
   const currentTrackPath = String(state.player.current?.path || '');
@@ -25228,13 +29258,22 @@ function buildTrackListHtml(tracks, album = null) {
   });
   if (typeof buildAlbumTrackTableHtml !== 'function') {
     return componentGroups.flatMap((group) => group.tracks).map((track) => (
-      `<div data-track-row-path="${escapeHtml(track.path)}"><button class="play-track-button" data-src="/track?path=${encodeURIComponent(track.path)}" data-track-path="${escapeHtml(track.path)}" data-track-title="${escapeHtml(track.playbackTitle || track.title)}" data-track-artist="${escapeHtml(track.artist)}" data-track-album-artist="${escapeHtml(track.albumArtist)}" data-track-album="${escapeHtml(track.album)}" data-track-cover="${escapeHtml(track.coverPath)}" data-track-duration-seconds="${track.durationSeconds}" type="button">${track.isPlaying ? '&#x23F8;' : '&#x25B6;'}</button><span class="track-title">${escapeHtml(track.title)}${track.secondaryArtist ? `<span class="track-artist-name">${escapeHtml(track.secondaryArtist)}</span>` : ''}</span></div>`
+      `<div data-track-row-path="${escapeHtml(track.path)}"><button class="play-track-button" data-src="/track?path=${encodeURIComponent(track.path)}" data-track-path="${escapeHtml(track.path)}" data-track-title="${escapeHtml(track.playbackTitle || track.title)}" data-track-artist="${escapeHtml(track.artist)}" data-track-album-artist="${escapeHtml(track.albumArtist)}" data-track-album="${escapeHtml(track.album)}" data-track-cover="${escapeHtml(track.coverPath)}" data-track-duration-seconds="${track.durationSeconds}" type="button">${ButtonComponent.renderIconSvg(track.isPlaying ? 'pause' : 'play', { className: `album-track-table__play-icon ui-icon--${track.isPlaying ? 'pause' : 'play'}` })}</button><span class="track-title">${escapeHtml(track.title)}${track.secondaryArtist ? `<span class="track-artist-name">${escapeHtml(track.secondaryArtist)}</span>` : ''}</span></div>`
     )).join('');
   }
+  const hasBonusDisc = componentGroups.some((group) => group.isBonus);
+  const durationForGroups = (isBonus) => componentGroups
+    .filter((group) => group.isBonus === isBonus)
+    .reduce((total, group) => total + group.tracks.reduce((seconds, track) => (
+      seconds + (Number.isFinite(track.durationSeconds) ? Math.max(0, track.durationSeconds) : 0)
+    ), 0), 0);
   return buildAlbumTrackTableHtml({
     groups: componentGroups,
+
     multiDisc: grouped.multiDisc,
-    totalLength: album?.total_duration_display || formatAlbumDuration(album?.total_duration_seconds),
+    totalLength: totalLength ?? (album?.total_duration_display || formatAlbumDuration(album?.total_duration_seconds)),
+    mainLength: hasBonusDisc && durationForGroups(false) > 0 ? (formatTrackDuration(durationForGroups(false)) || formatAlbumDuration(durationForGroups(false))) : '',
+    bonusLength: hasBonusDisc && durationForGroups(true) > 0 ? (formatTrackDuration(durationForGroups(true)) || formatAlbumDuration(durationForGroups(true))) : '',
     playingAnimation: document.documentElement?.getAttribute('data-album-playing-row-animation') !== 'disabled',
   });
 }
@@ -25432,8 +29471,14 @@ function refreshTrackModalPlaybackState() {
 
     const button = row.querySelector('.play-track-button');
     if (button) {
-      button.innerHTML = isActivelyPlaying ? '&#x23F8;' : '&#x25B6;';
-      button.setAttribute('aria-label', isActivelyPlaying ? 'Pause track' : 'Play track');
+      const iconName = isActivelyPlaying ? 'pause' : 'play';
+      const label = isActivelyPlaying ? 'Pause track' : 'Play track';
+      if (button.getAttribute('aria-label') !== label) {
+        button.innerHTML = ButtonComponent.renderIconSvg(iconName, {
+          className: `album-track-table__play-icon ui-icon--${iconName}`,
+        });
+        button.setAttribute('aria-label', label);
+      }
     }
 
     const durationEl = row.querySelector('[data-track-duration-path]');
@@ -25459,22 +29504,113 @@ function refreshNonAlbumModalPlaybackState() {
     const isActivelyPlaying = isCurrentTrack && !playback.paused && !playback.ended;
     row.classList.toggle('is-current', isCurrentTrack);
     row.classList.toggle('is-playing', isActivelyPlaying);
+    row.classList.toggle('album-track-table__row--current', isCurrentTrack);
+    row.classList.toggle('album-track-table__row--playing', isActivelyPlaying);
+    row.classList.toggle(
+      'album-track-table__row--animated',
+      Boolean(isActivelyPlaying && document.documentElement?.getAttribute('data-album-playing-row-animation') !== 'disabled'),
+    );
+    if (row.dataset) row.dataset.trackPlaying = isActivelyPlaying ? 'true' : '';
 
     const button = row.querySelector('.play-track-button');
     if (button) {
-      button.innerHTML = isActivelyPlaying ? '&#x23F8;' : '&#x25B6;';
-      button.setAttribute('aria-label', isActivelyPlaying ? 'Pause track' : 'Play track');
+      const iconName = isActivelyPlaying ? 'pause' : 'play';
+      const label = isActivelyPlaying ? 'Pause track' : 'Play track';
+      if (button.getAttribute('aria-label') !== label) {
+        button.innerHTML = ButtonComponent.renderIconSvg(iconName, {
+          className: `album-track-table__play-icon ui-icon--${iconName}`,
+        });
+        button.setAttribute('aria-label', label);
+      }
     }
 
     const durationEl = row.querySelector('[data-track-duration-path]');
     if (durationEl) {
       const originalDuration = durationEl.dataset.originalDuration || '';
       const displayedTime = isCurrentTrack ? `${activeCurrent} / ${activeDuration || originalDuration || '0:00'}` : originalDuration;
-      durationEl.innerHTML = displayedTime
-        ? `<span class="sep">&#8226;</span> ${escapeHtml(displayedTime)}`
-        : '';
+      durationEl.innerHTML = displayedTime ? escapeHtml(displayedTime) : '';
     }
   });
+}
+
+
+function openProblemSuggestionsConfirm() {
+  const album = getSelectedProblematicAlbum();
+  const proposals = getApplicableProblemSuggestions();
+  if (!album?.allowed_actions?.['library.files.edit_tags'] || !proposals.length || state.utility.proposalApplyBusy) return;
+  state.utility.pendingProblemSuggestions = { albumKey: album.key, ids: proposals.map(item => item.id), proposals: proposals.map(item => ({ ...item })) };
+  state.utility.pendingRepairKey = album.key;
+  state.utility.pendingRepairAction = 'suggestions';
+  openRepairConfirmModal();
+}
+
+async function confirmProblemSuggestions() {
+  const pending = state.utility.pendingProblemSuggestions;
+  const album = getSelectedProblematicAlbum();
+  if (!pending || state.utility.proposalApplyBusy) return;
+  const visible = getVisibleProblemSuggestions();
+  const proposals = pending.ids.map(id => visible.find(item => item.id === id));
+  if (!album?.allowed_actions?.['library.files.edit_tags'] || album.key !== pending.albumKey || proposals.some(item => !item)) {
+    showToast('These edits are no longer available. Review the current suggestions.', 'error', 3200);
+    return;
+  }
+  const updates = {};
+  for (const proposal of proposals) {
+    const target = updates[proposal.path] ||= {};
+    for (const [field, value] of Object.entries(proposal.updates || {})) {
+      if (Object.prototype.hasOwnProperty.call(target, field) && target[field] !== value) {
+        showToast('Selected edits conflict. Review the current suggestions.', 'error', 3200);
+        return;
+      }
+      target[field] = value;
+    }
+  }
+  const originatingViewStateRevision = readTagEditOriginViewStateRevision();
+  state.utility.proposalApplyBusy = true;
+  const modal = getRepairConfirmElements();
+  if (modal.accept) modal.accept.disabled = true;
+  if (modal.cancel) modal.cancel.disabled = true;
+  try {
+    const response = await fetch('/utilities/edit-tags', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ confirmed: true, album, proposal_ids: pending.ids, updates, problematic_files_origin: true }),
+    });
+    const data = await response.json().catch(() => ({}));
+    state.utility.proposalOutcomes = Array.isArray(data.proposal_outcomes) ? data.proposal_outcomes : [];
+    const committedIds = new Set(state.utility.proposalOutcomes.filter(item => item.status === 'committed').map(item => item.id));
+    if (!response.ok || !data.ok || pending.ids.some(id => !committedIds.has(id)) || (data.save_task_id && data.save_task_status !== 'completed')) {
+      pending.ids.forEach(id => { (state.utility.proposalSelections ||= {})[id] = true; });
+      throw new Error(data.error || 'Suggested edits were not committed.');
+    }
+    closeRepairConfirmModal();
+    const mutation = data.save_task_id ? claimProblematicSaveTaskMutation(data.save_task_id, album, pending.albumKey) : null;
+    const previousItems = state.utility.problematicFiles;
+    const refreshed = await loadProblematicFiles(true, { render: false });
+    if (!refreshed) {
+      state.utility.problematicFiles = previousItems;
+      if (mutation) await settleProblematicSaveTaskMutation(data.save_task_id);
+      throw new Error('Edits were saved, but Problems could not refresh. Reload before retrying.');
+    }
+    pending.ids.forEach(id => { if (state.utility.proposalSelections) delete state.utility.proposalSelections[id]; });
+    if (mutation) await settleProblematicSaveTaskMutation(data.save_task_id, { reconcileSelection: true });
+    else {
+      const selectedKey = state.utility.selectedProblematicKey;
+      if ((state.utility.problematicFiles || []).some(item => item.key === selectedKey)) await loadProblematicAlbumDetail(selectedKey, true, { render: false });
+      renderUtilityModalContent();
+    }
+    if (tagEditOriginStillOwnsView(originatingViewStateRevision) && Array.isArray(data.updated_albums) && data.updated_albums.length) {
+      updateOpenTrackModalAfterTagEdit(album, applyUpdatedAlbumsToCurrentView(data.updated_albums, { originalAlbum: album, preserveScroll: true }));
+    }
+    showToast('Suggested edits applied.', 'success', 2400);
+  } catch (error) {
+    console.error('[AlbumHaven][Utilities] Suggested edits failed.', error);
+    showToast(error.message || 'Unable to apply suggested edits.', 'error', 4000);
+  } finally {
+    state.utility.proposalApplyBusy = false;
+    if (modal.accept) modal.accept.disabled = false;
+    if (modal.cancel) modal.cancel.disabled = false;
+    syncProblemSuggestionSelection();
+  }
 }
 
 // END js/runtime/tag-editor-and-optimistic-updates.js
@@ -25825,6 +29961,63 @@ function restorePlayerState() {
 
 const MIN_RECORDED_LISTEN_SECONDS = 10;
 const LISTEN_SESSION_LONG_PAUSE_MS = 60 * 60 * 1000;
+let measuredPlaybackDeviceId = '';
+
+function newMeasuredPlaybackId() {
+  if (typeof crypto === 'undefined') return '';
+  if (typeof crypto.randomUUID === 'function') return crypto.randomUUID();
+  if (typeof crypto.getRandomValues !== 'function') return '';
+  const bytes = crypto.getRandomValues(new Uint8Array(16));
+  bytes[6] = (bytes[6] & 15) | 64; bytes[8] = (bytes[8] & 63) | 128;
+  const hex = [...bytes].map(value => value.toString(16).padStart(2, '0')).join('');
+  return `${hex.slice(0,8)}-${hex.slice(8,12)}-${hex.slice(12,16)}-${hex.slice(16,20)}-${hex.slice(20)}`;
+}
+
+function getMeasuredPlaybackDeviceId() {
+  if (measuredPlaybackDeviceId) return measuredPlaybackDeviceId;
+  const key = 'album-haven-playback-device-id';
+  const stored = typeof getLocalStorageItem === 'function' ? getLocalStorageItem(key) : '';
+  measuredPlaybackDeviceId = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(stored || '')
+    ? stored : newMeasuredPlaybackId();
+  if (measuredPlaybackDeviceId && typeof setLocalStorageItem === 'function') setLocalStorageItem(key, measuredPlaybackDeviceId);
+  return measuredPlaybackDeviceId;
+}
+
+function breakMeasuredListenSegment(session) {
+  if (session?.measurement) session.measurement.contiguous = 0;
+}
+
+function recordMeasuredStreamingFrames(roleState, message, sampleRate) {
+  if (!roleState || !Number.isInteger(message?.frames) || message.frames <= 0
+      || !Number.isFinite(sampleRate) || sampleRate <= 0) return;
+  if (!roleState.measuredListenSession) {
+    if (roleState.role === 'continuity' && roleState.continuityOptions?.kind === 'queued-next') {
+      roleState.measuredListenSession = createListenSession(roleState.track);
+    } else {
+      const current = state.player.listenSession || ensureListenSession();
+      if (!current || String(current.track?.path || '') !== String(roleState.track?.path || '')) return;
+      roleState.measuredListenSession = current;
+    }
+  }
+  const session = roleState.measuredListenSession;
+  if (!session?.measurement || ['pending', 'done', 'failed'].includes(session.completionState)) return;
+  const elapsed = message.frames / sampleRate;
+  session.measurement.total += elapsed;
+  session.measurement.contiguous += elapsed;
+  session.measurement.longest = Math.max(session.measurement.longest, session.measurement.contiguous);
+}
+
+function buildMeasuredCompletionFields(session, { advance = false, finalized = false } = {}) {
+  const measurement = session?.measurement;
+  if (!measurement?.deviceId || !measurement.sessionId) return {};
+  if (advance) measurement.sequence = (Number(measurement.sequence) || 0) + 1;
+  return {
+    measurement_version: 'rendered-pcm-v1', device_id: measurement.deviceId,
+    session_id: measurement.sessionId, sequence: Number(measurement.sequence) || 0, finalized,
+    measured_listened_seconds: Math.round(measurement.total * 1000) / 1000,
+    max_measured_contiguous_seconds: Math.round(measurement.longest * 1000) / 1000,
+  };
+}
 
 function getListenSessionDuration(session) {
   const duration = Number(session?.duration_seconds || 0);
@@ -25853,7 +30046,7 @@ function longestListenedSegmentSeconds(session) {
 }
 
 function shouldPersistListenSession(session) {
-  return Math.max(totalListenedSeconds(session), longestListenedSegmentSeconds(session)) > MIN_RECORDED_LISTEN_SECONDS;
+  return Math.max(totalListenedSeconds(session), longestListenedSegmentSeconds(session), Number(session?.measurement?.total) || 0) > MIN_RECORDED_LISTEN_SECONDS;
 }
 
 function clearListenPauseMarker(session) {
@@ -25866,6 +30059,7 @@ function clearListenPauseMarker(session) {
 function markListenSessionPaused(currentTime = null) {
   const session = state.player.listenSession;
   if (!session) return;
+  breakMeasuredListenSegment(session);
   session.paused_at = isoNow();
   session.paused_at_unix_ms = Date.now();
   session.pause_offset_seconds = Math.max(0, Number(currentTime == null ? getPlayerPlaybackSnapshot().currentTime : currentTime) || 0);
@@ -25890,6 +30084,7 @@ function buildNowPlayingPayload(track, session = null) {
   if (!track) return null;
   const activeSession = session || state.player.listenSession;
   return {
+    ...buildMeasuredCompletionFields(activeSession),
     path: String(track.path || ''),
     title: String(track.title || ''),
     artist: String(track.artist || ''),
@@ -25956,9 +30151,15 @@ async function maybeSplitListenSessionAfterLongPause(track = null) {
 }
 
 async function resumeListenSessionPlayback(track = null, currentTime = null) {
-  await maybeSplitListenSessionAfterLongPause(track);
+  const split = await maybeSplitListenSessionAfterLongPause(track);
   const session = ensureListenSession(track);
   if (!session) return null;
+  if (split) {
+    for (const role of Object.values(state.player.streaming?.roles || {})) {
+      if (role && (role.role === 'current' || role.continuityOptions?.kind !== 'queued-next')
+          && String(role.track?.path || '') === String(session.track?.path || '')) role.measuredListenSession = session;
+    }
+  }
   clearListenPauseMarker(session);
   beginListenSegment(currentTime);
   return session;
@@ -25973,6 +30174,7 @@ function beginListenSegment(currentTime = null) {
 }
 
 function closeListenSegment(currentTime = null, session = state.player.listenSession) {
+  breakMeasuredListenSegment(session);
   if (!session || !session.segmentActive) return;
   const endSeconds = Math.max(0, Number(currentTime == null ? getPlayerPlaybackSnapshot().currentTime : currentTime) || 0);
   const startSeconds = Math.max(0, Number(session.activeSegmentStartSeconds || 0));
@@ -26015,9 +30217,15 @@ async function maybeScrobbleListenSession(session) {
   if (session.scrobblePending) return false;
   if (typeof canEmitPlaybackSessionSideEffects === 'function' && !canEmitPlaybackSessionSideEffects()) return false;
   session.scrobblePending = true;
+  session.scrobblePayload ||= {
+    ...buildNowPlayingPayload(session.track, session),
+    ...buildMeasuredCompletionFields(session, { advance: true }),
+    total_listened_seconds: Math.round(totalListenedSeconds(session) * 1000) / 1000,
+    max_contiguous_seconds: Math.round(longestListenedSegmentSeconds(session) * 1000) / 1000,
+  };
   const scrobblePromise = postPlaybackSession(
     '/playback/session/scrobble',
-    buildNowPlayingPayload(session.track, session),
+    session.scrobblePayload,
   ).then(() => {
     session.scrobbled = true;
     return true;
@@ -26035,11 +30243,13 @@ async function maybeScrobbleListenSession(session) {
 }
 
 function startListenSession(track) {
-  if (!track) {
-    state.player.listenSession = null;
-    return;
-  }
-  state.player.listenSession = {
+  state.player.listenSession = createListenSession(track);
+}
+
+function createListenSession(track) {
+  if (!track) return null;
+  return {
+    measurement: { deviceId: getMeasuredPlaybackDeviceId(), sessionId: newMeasuredPlaybackId(), total: 0, contiguous: 0, longest: 0 },
     track: {
       path: String(track.path || ''),
       title: String(track.title || ''),
@@ -26102,8 +30312,9 @@ async function finalizeListenSession(reason, options = {}) {
   if (scrobbleEligible && !session.scrobbled) {
     await maybeScrobbleListenSession(session);
   }
-  const payload = {
+  const payload = session.completionPayload || {
     ...buildNowPlayingPayload(session.track, session),
+    ...buildMeasuredCompletionFields(session, { advance: true, finalized: true }),
     ended_at: session.ended_at,
     duration_seconds: session.duration_seconds,
     total_listened_seconds: totalListened,
@@ -26118,6 +30329,7 @@ async function finalizeListenSession(reason, options = {}) {
       end_seconds: Number(segment.end_seconds || 0),
     })),
   };
+  session.completionPayload = payload;
   try {
     await postPlaybackSession('/playback/session/complete', payload);
     session.completionState = 'done';
@@ -26156,6 +30368,7 @@ function flushListenSessionOnUnload(reason = 'unload') {
   session.completionState = 'pending';
   const payload = {
     ...buildNowPlayingPayload(session.track, session),
+    ...buildMeasuredCompletionFields(session, { advance: true, finalized: true }),
     ended_at: session.ended_at,
     duration_seconds: session.duration_seconds,
     total_listened_seconds: Math.round(totalListenedSeconds(session) * 1000) / 1000,
@@ -26174,7 +30387,7 @@ function flushListenSessionOnUnload(reason = 'unload') {
     if (navigator?.sendBeacon) {
       const body = new Blob([JSON.stringify(payload)], { type: 'application/json' });
       navigator.sendBeacon('/playback/session/complete', body);
-      if (payload.scrobble_eligible && !payload.scrobbled) {
+      if (!payload.measurement_version && payload.scrobble_eligible && !payload.scrobbled) {
         navigator.sendBeacon('/playback/session/scrobble', new Blob([JSON.stringify(buildNowPlayingPayload(session.track, session))], { type: 'application/json' }));
       }
     }
@@ -27616,11 +31829,11 @@ function albumCardHtml(album, options = {}) {
   const albumMissing = String(album?.inventory_status || '').trim().toLowerCase() === 'missing';
   const summary = getAlbumCardSummary(album);
   const rating = getAlbumCardRating(album);
-  const ratingMarkup = `
-        <div class="rating-row">
-          <div class="stars" role="img" aria-label="${rating === null ? 'Album unrated' : `Album rating ${rating}/10`}">${renderStars(rating)}</div>
-          ${rating === null ? '' : `<div class="rating-text">${rating}/10</div>`}
-        </div>`;
+  const ratingMarkup = buildGalleryRatingHtml({
+    value: rating || 0,
+    maximum: 10,
+    label: rating === null ? 'Album unrated' : `Album rating ${rating}/10`,
+  });
   const albumKey = getAlbumRequestKey(album);
   const albumVersionKey = getAlbumCardVersionKey(album);
   const albumFallback = JSON.stringify({
@@ -27679,6 +31892,7 @@ function albumCardHtml(album, options = {}) {
     trackCount: summary.trackCount,
     lengthDisplay: summary.lengthDisplay,
     artboxHtml,
+    displayMode: options.displayMode || state?.gallery?.mainState?.view || state?.view?.gallery_display_mode,
   });
 }
 
@@ -27703,6 +31917,7 @@ function getAlbumCardRenderKey(album) {
     String(album?.remote_cover_thumbnail_url || album?.remote_cover_url || '').trim(),
     String(album?.inventory_status || ''),
     String(album?.missing_since || ''),
+    String(state?.gallery?.mainState?.view || state?.view?.gallery_display_mode || 'cards'),
   ]);
 }
 
@@ -27858,7 +32073,7 @@ function resolveGalleryCardWidth(layoutConfig = CARD_GALLERY_LAYOUT_CONFIG) {
 
 function buildAlbumRowGridTemplate(columns, cardTrackWidth) {
   const safeColumns = Math.max(1, Math.floor(Number(columns) || 1));
-  const safeTrackWidth = Math.max(1, Math.round(Number(cardTrackWidth) || 1));
+  const safeTrackWidth = Math.max(1, Math.floor((Number(cardTrackWidth) || 1) * 1000) / 1000);
   return `repeat(${safeColumns}, minmax(0, ${safeTrackWidth}px))`;
 }
 
@@ -27866,6 +32081,7 @@ const MAX_PRIORITY_VISIBLE_COVER_IMAGES = 4;
 const MAX_RETAINED_ALBUM_CARD_NODES = 48;
 const MAX_VIRTUAL_GRID_DIAGNOSTIC_EVENTS = 24;
 const VIRTUAL_GRID_SCROLL_RENDER_FALLBACK_MS = 100;
+const MIN_SETTLED_GALLERY_CARD_WIDTH_RATIO = 0.94;
 
 class VirtualArtistGrid {
   constructor() {
@@ -27877,6 +32093,7 @@ class VirtualArtistGrid {
     this.columnGap = 14;
     this.rowGap = 14;
     this.sectionHeaderHeight = 54;
+    this.showArtistSectionHeaders = true;
     this.sectionMarginBottom = 28;
     this.labelHeight = 40;
     this.subsectionLabelHeight = 26;
@@ -27930,6 +32147,7 @@ class VirtualArtistGrid {
     this.onScroll = this.onScroll.bind(this);
     this.onUserScrollIntent = this.onUserScrollIntent.bind(this);
     this.onResize = this.onResize.bind(this);
+    this.onArtistTreeSettled = this.onArtistTreeSettled.bind(this);
     this.onPointerDown = this.onPointerDown.bind(this);
     this.onAlbumCardPointerGestureEnd = this.onAlbumCardPointerGestureEnd.bind(this);
     this.scrollEl.addEventListener('scroll', this.onScroll, { passive: true });
@@ -27944,6 +32162,7 @@ class VirtualArtistGrid {
       document.addEventListener('pointercancel', this.onAlbumCardPointerGestureEnd, { capture: true });
     }
     window.addEventListener('resize', this.onResize);
+    window.addEventListener('album-haven:artist-tree-settled', this.onArtistTreeSettled);
   }
 
   recordDiagnosticEvent(type, details = {}) {
@@ -27991,6 +32210,7 @@ class VirtualArtistGrid {
       document.removeEventListener('pointercancel', this.onAlbumCardPointerGestureEnd, { capture: true });
     }
     window.removeEventListener('resize', this.onResize);
+    window.removeEventListener('album-haven:artist-tree-settled', this.onArtistTreeSettled);
     if (this._scrollRestoreRaf) {
       cancelBrowserAnimationFrame(this._scrollRestoreRaf);
       this._scrollRestoreRaf = null;
@@ -28029,7 +32249,7 @@ class VirtualArtistGrid {
   onPointerDown(event) {
     const target = event?.target;
     const closest = typeof target?.closest === 'function'
-      ? target.closest('[data-open-tracklist="1"][data-album-key], .album-card')
+      ? target.closest('[data-open-tracklist="1"][data-album-key], .album-card, .family-artist-header [data-artist-info-trigger]')
       : null;
     if (!closest) return;
     if (this._albumCardPointerReleaseRaf) {
@@ -28112,7 +32332,9 @@ class VirtualArtistGrid {
     const scrollRect = typeof this.scrollEl.getBoundingClientRect === 'function'
       ? this.scrollEl.getBoundingClientRect()
       : null;
-    if (!scrollRect) {
+    // Scan Page keeps this gallery mounted while hidden. Its zero-size cards
+    // have no usable viewport offsets; retain the absolute position instead.
+    if (!scrollRect || scrollRect.width === 0 || scrollRect.height === 0) {
       return { scrollLeft, scrollTop };
     }
     const cardTriggers = Array.from(this.containerEl.querySelectorAll('[data-open-tracklist="1"][data-album-key]'));
@@ -28375,6 +32597,12 @@ class VirtualArtistGrid {
     const renderedFamilyGroups = buildDisplayGroups(familyGroups);
     const renderedFallbackGroups = buildDisplayGroups(fallbackGroups || state.view.artist_groups || []);
     const selectedFamilyCoverOwner = String(state?.view?.selected_artist || '').trim();
+    const renderedArtistGroupCount = renderedPrimaryGroups.length || renderedFamilyGroups.length
+      ? renderedPrimaryGroups.length + renderedFamilyGroups.length
+      : renderedFallbackGroups.length;
+    this.showArtistSectionHeaders = typeof options.showArtistSectionHeaders === 'boolean'
+      ? options.showArtistSectionHeaders
+      : (!selectedFamilyCoverOwner || renderedArtistGroupCount > 1);
     if (selectedFamilyCoverOwner) {
       const selectedFamilyFilterActive = Boolean(state?.view?.primary_filter_active)
         || (Array.isArray(state?.view?.related_filter_artists)
@@ -28396,12 +32624,9 @@ class VirtualArtistGrid {
       this._selectedFamilyCoverUrls.clear();
       this._selectedFamilyCoverOwner = '';
     }
-    if (renderedPrimaryGroups.length) {
-      sections.push({ kind: 'label', title: 'Primary Artist' });
-      renderedPrimaryGroups.forEach((group) => sections.push({ kind: 'artist', group, sectionType: 'primary', sectionKey: '' }));
-    }
+    if (renderedPrimaryGroups.length) renderedPrimaryGroups.forEach((group) => sections.push({ kind: 'artist', group, sectionType: 'primary', sectionKey: '' }));
     if (renderedFamilyGroups.length) {
-      sections.push({ kind: 'label', title: 'Family' });
+      sections.push({ kind: 'label', title: 'Family', albumCount: renderedFamilyGroups.reduce((total, group) => total + group.albums.length, 0) });
       renderedFamilyGroups.forEach((group) => sections.push({ kind: 'artist', group, sectionType: 'family', sectionKey: '' }));
     }
     if (!renderedPrimaryGroups.length && !renderedFamilyGroups.length) {
@@ -28426,6 +32651,7 @@ class VirtualArtistGrid {
       )}:${measurementOccurrence}`;
       const previousSection = previousSectionsByMeasurementKey.get(section.measurementKey);
       if (!previousSection) return;
+      section.rowGeometryKey = previousSection.rowGeometryKey;
       section.blockHeights = Array.isArray(previousSection.blockHeights)
         ? previousSection.blockHeights.slice()
         : [];
@@ -28548,12 +32774,42 @@ class VirtualArtistGrid {
     return `row:${this.columns}:${albumKey}`;
   }
 
-  recalculate() {
+  recalculate(options = {}) {
+    this.sectionHeaderHeight = this.showArtistSectionHeaders ? 54 : 0;
     const layoutConfig = this.getLayoutConfig();
     const selectedCardWidth = resolveGalleryCardWidth(layoutConfig);
-    const width = Math.max(1, this.scrollEl.clientWidth - 8);
-    this.cardTrackWidth = Math.min(selectedCardWidth, width);
-    this.columns = Math.max(1, Math.floor((width + this.columnGap) / (selectedCardWidth + this.columnGap)));
+    const width = Math.max(1, this.scrollEl.clientWidth - 4);
+    const previousCardTrackWidth = Number(this.cardTrackWidth);
+    const preserveCardTrackWidth = Boolean(
+      options.preserveCardTrackWidth && Number.isFinite(previousCardTrackWidth) && previousCardTrackWidth > 0,
+    );
+    const targetCardTrackWidth = preserveCardTrackWidth
+      ? Math.min(previousCardTrackWidth, width)
+      : selectedCardWidth;
+    const preservedColumns = Math.max(
+      1,
+      Math.floor((width + this.columnGap) / (targetCardTrackWidth + this.columnGap)),
+    );
+    const largestArtistAlbumCount = this.sections.reduce((largest, section) => Math.max(
+      largest,
+      Array.isArray(section?.group?.albums) ? section.group.albums.length : 0,
+    ), 0);
+    const shouldFillSettledRow = preserveCardTrackWidth
+      && largestArtistAlbumCount > Math.max(1, Number(this.columns) || 1);
+    const minimumSettledCardWidth = selectedCardWidth * MIN_SETTLED_GALLERY_CARD_WIDTH_RATIO;
+    const settledColumns = Math.min(
+      largestArtistAlbumCount,
+      Math.max(1, Math.floor(
+        (width + this.columnGap) / (minimumSettledCardWidth + this.columnGap),
+      )),
+    );
+    this.columns = shouldFillSettledRow ? settledColumns : preservedColumns;
+    this.cardTrackWidth = shouldFillSettledRow || !preserveCardTrackWidth
+      ? (width - (this.columns - 1) * this.columnGap) / this.columns
+      : targetCardTrackWidth;
+    const displayMode = resolveGalleryRendererMode(state?.gallery?.mainState?.view || state?.view?.gallery_display_mode);
+    const rowGeometryKey = `${displayMode}:${this.columns}:${this.cardTrackWidth}`;
+    const estimatedRowHeight = displayMode === 'covers' ? this.cardTrackWidth : this.collapsedRowHeight;
     let offsetTop = 0;
     this.sectionByKey = new Map();
     this.sections.forEach((section) => {
@@ -28565,6 +32821,14 @@ class VirtualArtistGrid {
         return;
       }
 
+      // Measurements only survive while the card geometry stays the same.
+      // In particular, picture-only rows are square from their first render.
+      if (section.rowGeometryKey !== rowGeometryKey) {
+        section.blockHeights = [];
+        section.blockMeasureKeys = [];
+        section.measuredBlockKeys = [];
+      }
+      section.rowGeometryKey = rowGeometryKey;
       const blocks = this.getBlocksForSection(section);
       const previousMeasureKeys = Array.isArray(section.blockMeasureKeys) ? section.blockMeasureKeys : [];
       const previousMeasuredKeys = Array.isArray(section.measuredBlockKeys) ? section.measuredBlockKeys : [];
@@ -28577,13 +32841,13 @@ class VirtualArtistGrid {
         section.blockHeights = blocks.map((block, index) => {
           if (block.kind === 'subheading') return this.subsectionLabelHeight;
           const previousHeight = Number(previousBlockHeights[index] || 0);
-          return previousHeight > 0 ? previousHeight : this.collapsedRowHeight;
+          return previousHeight > 0 ? previousHeight : estimatedRowHeight;
         });
       } else {
         section.blockHeights = blocks.map((block, index) => (
           block.kind === 'subheading'
             ? this.subsectionLabelHeight
-            : (section.blockHeights[index] || this.collapsedRowHeight)
+            : (section.blockHeights[index] || estimatedRowHeight)
         ));
       }
       section.blockMeasureKeys = nextMeasureKeys;
@@ -28682,13 +32946,21 @@ class VirtualArtistGrid {
     this.updateScrollDiagnostic(renderRafOwner);
   }
 
-  onUserScrollIntent() {
+  onUserScrollIntent(event) {
+    if (event?.type === 'pointerdown' && event.target !== this.scrollEl) return;
     this.invalidateScrollStabilization();
   }
 
-  onResize() {
+  onArtistTreeSettled() {
+    this.onResize({ preserveCardTrackWidth: true });
+  }
+
+  onResize(options = {}) {
+    const artistTreeTransitioning = document.getElementById('shell-navigation-rail')
+      ?.classList?.contains?.('is-transitioning');
+    if (artistTreeTransitioning && !options.preserveCardTrackWidth) return;
     this.lastKey = '';
-    this.recalculate();
+    this.recalculate(options);
     this.render(true);
     this.scheduleMeasureRows(true);
   }
@@ -29422,9 +33694,7 @@ class VirtualArtistGrid {
     const renderAlbumHtml = typeof layoutConfig.renderAlbumHtml === 'function'
       ? layoutConfig.renderAlbumHtml
       : albumCardHtml;
-    if (section.kind === 'label') {
-      return `<div class="section-split-label">${escapeHtml(section.title)}</div>`;
-    }
+    if (section.kind === 'label') return buildGalleryDividerHtml(section);
     const group = section.group;
     const blocks = Array.isArray(section.blocksData) ? section.blocksData : [];
     const visibleRange = this.getVisibleBlockRange(section, start, end);
@@ -29450,7 +33720,7 @@ class VirtualArtistGrid {
       return `
         <div class="album-row" data-section-key="${escapeHtml(section.sectionKey)}" data-block-index="${blockIndex}" style="grid-template-columns:${buildAlbumRowGridTemplate(this.columns, this.cardTrackWidth)};justify-content:start;">
           ${Array.isArray(block.albums) ? block.albums.map((album) => (
-            renderAlbumHtml(album, { coverPriority })
+            renderAlbumHtml(album, { coverPriority, displayMode: state?.gallery?.mainState?.view })
           )).join('') : ''}
         </div>
       `;
@@ -29458,10 +33728,7 @@ class VirtualArtistGrid {
 
     return `
       <section class="artist-section ${section.sectionType}">
-        <div class="artist-header">
-          <h2 class="artist-name">${escapeHtml(group.artist_display || group.artist)}</h2>
-          <div class="artist-meta">${group.albums.length} ${group.albums.length === 1 ? 'album' : 'albums'}</div>
-        </div>
+        ${this.sectionHeaderHeight > 0 ? buildFamilyArtistHeaderHtml({ artist: group.artist_display || group.artist, infoArtist: group.artist, albumCount: group.albums.length }) : ''}
         <div class="artist-rows">${topSpacer}${rowBlocks}${bottomSpacer}</div>
       </section>
     `;
@@ -29504,12 +33771,10 @@ function buildArtistSectionHtml(
 ) {
   const safeGroup = group && typeof group === 'object' ? group : {};
   const albums = Array.isArray(safeGroup.albums) ? safeGroup.albums : [];
+  const showHeader = virtualGrid.showArtistSectionHeaders;
   return `
     <section class="artist-section ${sectionType}">
-      <div class="artist-header">
-        <h2 class="artist-name">${escapeHtml(safeGroup.artist_display || safeGroup.artist || 'Artist')}</h2>
-        <div class="artist-meta">${albums.length} ${albums.length === 1 ? 'album' : 'albums'}</div>
-      </div>
+      ${showHeader ? buildFamilyArtistHeaderHtml({ artist: safeGroup.artist_display || safeGroup.artist || 'Artist', infoArtist: safeGroup.artist, albumCount: albums.length }) : ''}
       <div class="artist-rows">${buildArtistSectionRowsHtml(albums, columns, layoutConfig, cardTrackWidth)}</div>
     </section>
   `;
@@ -29537,9 +33802,8 @@ function renderArtistGroupsMarkupFallback(
     virtualGrid.bottomSpacerEl.style.height = '0px';
   }
   return [
-    ...(renderedPrimaryGroups.length ? ['<div class="section-split-label">Primary Artist</div>'] : []),
     ...renderedPrimaryGroups.map((group) => buildArtistSectionHtml(group, 'primary', columns, layoutConfig, cardTrackWidth)),
-    ...(renderedFamilyGroups.length ? ['<div class="section-split-label">Family</div>'] : []),
+    ...(renderedFamilyGroups.length ? [buildGalleryDividerHtml({ label: 'Family', albumCount: renderedFamilyGroups.reduce((total, group) => total + group.albums.length, 0) })] : []),
     ...renderedFamilyGroups.map((group) => buildArtistSectionHtml(group, 'family', columns, layoutConfig, cardTrackWidth)),
     ...(!renderedPrimaryGroups.length && !renderedFamilyGroups.length
       ? renderedFallbackGroups.map((group) => buildArtistSectionHtml(group, 'all', columns, layoutConfig, cardTrackWidth))
@@ -29614,31 +33878,27 @@ function getGalleryModeRenderer(mode) {
 }
 
 function renderArtistGroups(options = {}) {
-  const selectedArtist = String(state.view.selected_artist || '').trim();
-  const selectedArtistFamilyDisplayMode = String(
-    state.view.selected_artist_family_display_mode
-      ?? state.view.artist_page?.family_display_mode
-      ?? 'grouped',
-  ).trim().toLowerCase();
-  const displayGroupState = typeof buildSelectedArtistDisplayGroups === 'function'
-    ? buildSelectedArtistDisplayGroups(
-      state.view.primary_artist_groups || [],
-      state.view.family_artist_groups || [],
-      selectedArtist,
-    )
-    : {
-      primaryGroups: state.view.primary_artist_groups || [],
-      familyGroups: state.view.family_artist_groups || [],
-    };
-  const fallbackGroups = state.view.artist_groups || [];
-  const renderState = selectedArtist && selectedArtistFamilyDisplayMode === 'chronological'
-    ? {
-      primaryGroups: [],
-      familyGroups: [],
-    }
-    : displayGroupState;
-  const modeConfig = getGalleryModeConfig(state.view.gallery_display_mode);
-  modeConfig.renderer(renderState, fallbackGroups, options, modeConfig.layoutConfig);
+  const model = getFilteredGalleryMainModel();
+  const modeConfig = getGalleryModeConfig(state.gallery.mainState.view);
+  const renderOptions = {
+    ...options,
+    showArtistSectionHeaders: !String(state.view.selected_artist || '').trim() || hasGalleryArtistFamily(),
+  };
+  modeConfig.renderer(
+    { primaryGroups: model.primaryGroups, familyGroups: model.familyGroups },
+    model.fallbackGroups,
+    renderOptions,
+    modeConfig.layoutConfig,
+  );
+  if (
+    state.gallery.mainState.familySelectionExplicit === true
+    && state.gallery.mainState.familyArtists.length === 0
+    && virtualGrid.containerEl
+  ) {
+    rebuildAlbumIndex([]);
+    virtualGrid.containerEl.innerHTML = buildGalleryEmptySelectionHtml();
+  }
+  if (typeof updateGalleryMainChrome === 'function' && typeof document?.querySelector === 'function') updateGalleryMainChrome();
 }
 
 // END js/runtime/virtual-artist-grid.js
@@ -29720,9 +33980,11 @@ function updatePlayerUi() {
   if (els.timeline) {
     els.timeline.max = String(Math.max(duration, 0.1));
     els.timeline.value = String(Math.min(current, duration || current));
+    els.timeline.style?.setProperty('--player-seek-progress', `${duration > 0 ? Math.max(0, Math.min(100, current / duration * 100)) : 0}%`);
     els.timeline.disabled = !hasTrack || lockedByAnotherTab;
   }
   if (els.time) {
+    els.time.hidden = !hasTrack;
     els.time.textContent = state.player.loopActive
       ? `${formatLoopTime(state.player.loopStart, true)} - ${formatLoopTime(state.player.loopEnd, true)}`
       : lockedByAnotherTab
@@ -29731,11 +33993,13 @@ function updatePlayerUi() {
   }
   els.loopActions?._loopActionController?.update({
     enabled: Boolean(getPlayerPlaybackSnapshot().src || state.player.current?.src),
+    canCreate: state.loopCreateAllowed === true,
+    contextKey: state.player.current?.path || state.player.current?.src || '',
     active: state.player.loopActive,
     busy: state.player.saveBusy || lockedByAnotherTab,
   });
   if (els.play) {
-    els.play.textContent = lockedByAnotherTab ? 'Locked' : (playback.paused ? '\u25B6' : '\u23F8');
+    els.play.textContent = playback.paused ? '\u25B6' : '\u23F8';
     els.play.setAttribute('aria-label', lockedByAnotherTab ? 'Playback locked in another tab' : (playback.paused ? 'Play' : 'Pause'));
     els.play.disabled = lockedByAnotherTab || !hasTrack;
   }
@@ -29785,6 +34049,10 @@ function setCurrentPlayerTrack(track, options = {}) {
       currentTime: Number(previousPlaybackSnapshot?.currentTime) || undefined,
       duration: Number(previousPlaybackSnapshot?.duration) || undefined,
     });
+  }
+  if (track && !String(track.coverPath || '').trim() && typeof resolveAlbumForPlayerTrack === 'function') {
+    const resolvedCoverPath = String(resolveAlbumForPlayerTrack(track)?.cover_path || '').trim();
+    if (resolvedCoverPath) track = { ...track, coverPath: resolvedCoverPath };
   }
   state.player.current = track;
   if (typeof probeCachedWaveformPeaks === 'function') {
@@ -30056,6 +34324,7 @@ async function handleStreamingPlaybackBoundary(event = {}) {
     }
   }
   setCurrentPlayerTrack(promotedTrack, { previousPlaybackSnapshot });
+  if (event.incomingListenSession) state.player.listenSession = event.incomingListenSession;
   if (typeof resumeListenSessionPlayback === 'function') {
     const incomingSessionStart = Promise.resolve(resumeListenSessionPlayback(promotedTrack, 0)).then((incomingSession) => (
       typeof maybeSendNowPlaying === 'function'
@@ -30129,6 +34398,8 @@ function startPlayerLoopExpirySession() {
 function getGlobalPlayerLoopControlOptions() {
   const action = {
       enabled: Boolean(getPlayerPlaybackSnapshot().src || state.player.current?.src),
+      canCreate: state.loopCreateAllowed === true,
+    contextKey: state.player.current?.path || state.player.current?.src || '',
       active: state.player.loopActive,
       busy: state.player.saveBusy,
       disabledLabel: 'Start playing the track to edit the loop',
@@ -30168,6 +34439,8 @@ function getGlobalPlayerLoopControlOptions() {
     mountAction: (root) => mountLoopEditActionControl({
       root,
       enabled: action.enabled,
+      canCreate: action.canCreate,
+      contextKey: action.contextKey,
       active: action.active,
       busy: action.busy,
       disabledLabel: action.disabledLabel,
@@ -30204,6 +34477,7 @@ function scheduleActiveStreamingLoop() {
 }
 
 function setLoopActive(active) {
+  if (active && state.loopCreateAllowed === false) return;
   const playback = getPlayerPlaybackSnapshot();
   if (active && (!state.player.current || !(playback.src || state.player.current?.src))) {
     showToast('Play a track before selecting a loop.', 'error', 2600);
@@ -30413,6 +34687,16 @@ function pausePlayerPlaybackForHandoff(playback = getPlayerPlaybackSnapshot()) {
   return trackedPause;
 }
 
+function isPlayerNativeKeyboardAction(target) {
+  if (!target || target.getAttribute?.('data-loop-range-handle')) return false;
+  const tag = String(target.tagName || '').toUpperCase();
+  const type = String(target.getAttribute?.('type') || target.type || '').toLowerCase();
+  const role = String(target.getAttribute?.('role') || '').toLowerCase();
+  return ['BUTTON', 'A', 'SELECT'].includes(tag)
+    || (tag === 'INPUT' && type !== 'range')
+    || ['button', 'menuitem', 'checkbox', 'radio', 'switch', 'tab'].includes(role)
+    || Boolean(target.closest?.('button:not([data-loop-range-handle]), a, select, [role="button"], [role="menuitem"]'));
+}
 function handlePlayerKeyboardPlayback(event) {
   if (
     !event
@@ -30426,7 +34710,7 @@ function handlePlayerKeyboardPlayback(event) {
   ) return false;
   if (event.key !== ' ' && event.key !== 'Spacebar' && event.code !== 'Space') return false;
   const target = event.target instanceof HTMLElement ? event.target : null;
-  if (isTextEntryElement(target)) return false;
+  if (isTextEntryElement(target) || isPlayerNativeKeyboardAction(target)) return false;
   if (
     typeof handleUtilityLoopSpacePlayback === 'function'
     && handleUtilityLoopSpacePlayback(event)
@@ -30445,6 +34729,7 @@ function handlePlayerKeyboardPlayback(event) {
 }
 
 async function saveCurrentLoop() {
+  if (state.loopCreateAllowed === false) return;
   if (state.player.saveBusy) return;
   const current = state.player.current;
   if (!current || !state.player.loopActive) return;
@@ -30470,6 +34755,7 @@ async function saveCurrentLoop() {
     if (!response.ok || !data.ok) {
       throw new Error(data.error || 'Failed to save loop');
     }
+    state.utility.loopMutationGeneration = Number(state.utility.loopMutationGeneration || 0) + 1;
     state.utility.loops = Array.isArray(data.loops) ? data.loops : [data.loop, ...(state.utility.loops || [])].filter(Boolean);
     state.utility.loopsLoaded = true;
     state.utility.selectedLoopId = String(data.loop?.id || state.utility.selectedLoopId || '');
@@ -30504,7 +34790,7 @@ function handlePlayerLoopEditKeydown(event) {
     || event.shiftKey
   ) return false;
   const target = event.target instanceof HTMLElement ? event.target : null;
-  if (isTextEntryElement(target) || target?.closest?.('[role="dialog"], dialog, [aria-modal="true"]')) {
+  if (isTextEntryElement(target) || isPlayerNativeKeyboardAction(target) || target?.closest?.('[role="dialog"], dialog, [aria-modal="true"]')) {
     return false;
   }
   event.preventDefault();
@@ -30517,7 +34803,13 @@ function attachSharedPlayer() {
   document.querySelectorAll('.play-track-button').forEach((btn) => {
     if (btn.dataset.bound === '1') return;
     btn.dataset.bound = '1';
-    btn.addEventListener('click', () => {
+    const trackRow = btn.closest?.('.album-track-table__row');
+    if (trackRow && trackRow.dataset.doubleClickBound !== '1') {
+      trackRow.dataset.doubleClickBound = '1';
+      trackRow.addEventListener('dblclick', handleAlbumTrackRowDoubleClick);
+    }
+    btn.addEventListener('click', (event) => {
+      const focusTimeline = event?.isTrusted !== false;
       const src = btn.getAttribute('data-src');
       if (!src) return;
       if (typeof triggerAlbumTrackPlayActivation === 'function' && btn.classList?.contains('album-track-table__play')) {
@@ -30528,7 +34820,7 @@ function attachSharedPlayer() {
       const playback = getPlayerPlaybackSnapshot();
       const isLoadedCurrentTrack = isCurrentTrack && String(playback.src || '') === String(src);
       if (isLoadedCurrentTrack) {
-        togglePlayerPlayback();
+        togglePlayerPlayback({ focusTimelineOnResume: focusTimeline });
         updatePlayerUi();
         return;
       }
@@ -30557,7 +34849,7 @@ function attachSharedPlayer() {
           console.warn('[AlbumHaven][Playback] Track selection failed.', error);
         });
       }
-      focusPlayerTimeline();
+      if (focusTimeline) focusPlayerTimeline();
     });
   });
 }
@@ -30582,7 +34874,7 @@ function attachPlayerEvents() {
   });
   els.coverButton?.addEventListener('click', () => {
     const album = resolveAlbumForPlayerTrack(state.player.current);
-    if (album) openTrackModal(album, { coverLightboxGallery: false });
+    if (album) openTrackModal(album, { coverLightboxGallery: false, foreground: true });
   });
   els.timeline?.addEventListener('keydown', handlePlayerTimelineKeydown);
   els.timeline?.addEventListener('input', () => {
@@ -30636,16 +34928,55 @@ function attachPlayerEvents() {
   restorePlayerState();
 }
 
+function syncLoopCreateCapability() {
+  const canCreate = state.loopCreateAllowed === true;
+  if (typeof window !== 'undefined') window.AlbumHavenAppearance?.instance?.setLoopCreateAllowed?.(canCreate);
+  if (state.utility) {
+    state.utility.allowedActions = { ...(state.utility.allowedActions || {}), 'library.loops.create': canCreate };
+  }
+  document.querySelectorAll?.('[data-loop-action-owner]').forEach(root => {
+    root._loopActionController?.update({ canCreate });
+  });
+}
+
+function disposeMountedLoopActions(container) {
+  container?.querySelectorAll?.('[data-loop-range-owner]').forEach(root => {
+    root._loopRangeController?.destroy?.();
+    delete root._loopRangeController;
+  });
+  container?.querySelectorAll?.('[data-loop-action-owner]').forEach(root => {
+    const owner = root.getAttribute?.('data-loop-action-owner') || '';
+    if (owner.startsWith('saved-loop-')) {
+      const id = owner.slice('saved-loop-'.length);
+      state.utility.savedLoopOpenEpoch ||= {};
+      state.utility.savedLoopOpenEpoch[id] = (Number(state.utility.savedLoopOpenEpoch[id]) || 0) + 1;
+    }
+    root._loopActionController?.destroy();
+    delete root._loopActionController;
+    if (root.dataset) delete root.dataset.loopActionsBound;
+  });
+}
+
 // END js/runtime/player-loop-playback.js
 
 // BEGIN js/runtime/compact-player-controller.js
 
 let compactPlayerMode = 'expanded';
 let compactPlayerStyle = 'docked';
+let dockedCompactPlayerBehavior = 'follow_sidebar';
+let compactPlayerPresentation = 'expanded';
+let compactPlayerArtClickTimer = null;
+let compactPlayerMetadataRevealTimer = null;
+let compactPlayerMetadataMeasureFrame = null;
+let compactPlayerTrackKey = null;
 let compactPlayerDrag = null;
 let compactPlayerPosition = null;
+let stayDockedPlayerPosition = null;
+let stayDockedPlayerOrigin = null;
+let stayDockedPlayerWasFolded = false;
 let compactPlayerSuppressClick = false;
-const FLOATING_COMPACT_PLAYER_MARGIN = 4;
+let compactPlayerPendingSelection = null;
+const FLOATING_COMPACT_PLAYER_MARGIN = 8;
 const FLOATING_COMPACT_PLAYER_LEFT_MARGIN = 12;
 
 function compactPlayerElements() {
@@ -30661,6 +34992,14 @@ function compactPlayerElements() {
     collapse: expanded?.querySelector("[data-ui-button-action='player-collapse']"),
     expand: compact?.querySelector("[data-ui-button-action='player-expand']"),
     cover: player?.querySelector('[data-compact-player-cover]'),
+    hoverBubble: compact?.querySelector('[data-compact-player-hover-bubble]'),
+    summary: compact?.querySelector('[data-compact-player-summary]'),
+    albumSeparator: compact?.querySelector('[data-compact-player-album-separator]'),
+    albumLink: compact?.querySelector('[data-compact-player-album]'),
+    titleRow: compact?.querySelector('[data-compact-player-title]'),
+    titleText: compact?.querySelector('[data-compact-player-title-text]'),
+    artistRow: compact?.querySelector('[data-compact-player-artist]'),
+    artistText: compact?.querySelector('[data-compact-player-artist-text]'),
     play: compactControls.playPause,
     previous: compactControls.previous,
     next: compactControls.next,
@@ -30679,28 +35018,195 @@ function getCompactPlayerStyle() {
   catch (_error) { return 'docked'; }
 }
 
-function syncDockedCompactGeometry() {
-  const els = compactPlayerElements();
-  const tree = document.getElementById('shell-navigation-rail');
-  if (!els.player || !tree) return;
-  const geometry = resolveDockedCompactGeometry(tree.getBoundingClientRect());
-  els.player.style.setProperty('--compact-docked-left', `${geometry.left}px`);
-  els.player.style.setProperty('--compact-docked-width', `${geometry.width}px`);
+function getDockedCompactPlayerBehavior() {
+  const applied = document.documentElement.getAttribute('data-docked-compact-player-behavior');
+  if (applied) return normalizeDockedCompactPlayerBehavior(applied);
+  const bootstrap = document.getElementById('appearance-bootstrap');
+  try { return normalizeDockedCompactPlayerBehavior(JSON.parse(bootstrap?.textContent || '{}').docked_compact_player_behavior); }
+  catch (_error) { return 'follow_sidebar'; }
 }
 
-function applyCompactPlayerMode(mode, { persist = true } = {}) {
+function clearCompactPlayerArtClick() {
+  window.clearTimeout(compactPlayerArtClickTimer);
+  compactPlayerArtClickTimer = null;
+}
+
+function hideCompactPlayerMetadata(els = compactPlayerElements()) {
+  window.clearTimeout(compactPlayerMetadataRevealTimer);
+  compactPlayerMetadataRevealTimer = null;
+  els.player?.classList.remove('is-compact-metadata-visible');
+  if (els.hoverBubble) {
+    els.hoverBubble.setAttribute('aria-hidden', 'true');
+    els.hoverBubble.inert = true;
+  }
+}
+
+function scheduleCompactPlayerMetadata(els = compactPlayerElements()) {
+  hideCompactPlayerMetadata(els);
+  const delay = resolveCompactPlayerMetadataRevealDelay({
+    presentation: compactPlayerPresentation,
+    speed: document.documentElement.getAttribute('data-compact-player-motion'),
+    reducedMotion: window.matchMedia?.('(prefers-reduced-motion: reduce)').matches,
+  });
+  if (delay === null || !els.summary?.textContent || els.play?.disabled) return;
+  compactPlayerMetadataRevealTimer = window.setTimeout(() => {
+    compactPlayerMetadataRevealTimer = null;
+    if (!['rail_play', 'rail_artbox'].includes(compactPlayerPresentation)) return;
+    els.player?.classList.add('is-compact-metadata-visible');
+    if (els.hoverBubble) {
+      els.hoverBubble.setAttribute('aria-hidden', 'false');
+      els.hoverBubble.inert = false;
+    }
+  }, delay);
+}
+
+function refreshCompactPlayerMetadataRows(els = compactPlayerElements()) {
+  const reducedMotion = Boolean(window.matchMedia?.('(prefers-reduced-motion: reduce)').matches);
+  for (const [row, text] of [[els.titleRow, els.titleText], [els.artistRow, els.artistText]]) {
+    if (!row || !text) continue;
+    const motion = compactPlayerPresentation === 'docked' && !reducedMotion
+      ? resolveCompactPlayerMetadataRowMotion({ scrollWidth: text.scrollWidth, clientWidth: row.clientWidth })
+      : { overflowing: false, distance: 0, durationMs: 0 };
+    row.classList.toggle('is-overflowing', motion.overflowing);
+    row.style.setProperty('--compact-player-row-pan-distance', `${motion.distance}px`);
+    row.style.setProperty('--compact-player-row-pan-duration', `${motion.durationMs}ms`);
+  }
+}
+
+function scheduleCompactPlayerMetadataRowRefresh(els = compactPlayerElements()) {
+  if (compactPlayerMetadataMeasureFrame !== null) {
+    window.cancelAnimationFrame?.(compactPlayerMetadataMeasureFrame);
+  }
+  if (typeof window.requestAnimationFrame !== 'function') {
+    refreshCompactPlayerMetadataRows(els);
+    return;
+  }
+  compactPlayerMetadataMeasureFrame = window.requestAnimationFrame(() => {
+    compactPlayerMetadataMeasureFrame = null;
+    refreshCompactPlayerMetadataRows(els);
+  });
+}
+
+function resetStayDockedPlayerPosition(els = compactPlayerElements()) {
+  stayDockedPlayerPosition = null;
+  stayDockedPlayerOrigin = null;
+  els.player?.style.setProperty('--stay-docked-drag-x', '0px');
+  els.player?.style.setProperty('--stay-docked-drag-y', '0px');
+}
+
+function cancelCompactPlayerDrag(els = compactPlayerElements()) {
+  const captureTarget = compactPlayerDrag?.captureTarget;
+  const pointerId = compactPlayerDrag?.pointerId;
+  try {
+    if (captureTarget?.hasPointerCapture?.(pointerId)) captureTarget.releasePointerCapture(pointerId);
+  } catch (_error) {}
+  compactPlayerDrag = null;
+  els.player?.classList.remove('is-compact-player-dragging');
+}
+
+function syncDockedCompactGeometry() {
+  const { player } = compactPlayerElements();
+  const tree = document.getElementById('shell-navigation-rail');
+  if (!player || !tree) return;
+  const geometry = tree.getBoundingClientRect();
+  if (geometry.width <= 0) return;
+  player.style.setProperty('--compact-docked-left', `${geometry.left}px`);
+}
+
+function syncCompactPlayerOverlayDetachment(els = compactPlayerElements()) {
+  els.player?.classList.toggle('is-overlay-detached', shouldDetachCompactPlayerForOverlay({
+    presentation: compactPlayerPresentation,
+    overlayActive: document.body?.classList?.contains('modal-open'),
+  }));
+}
+
+function syncDockedCompactPresentation(els = compactPlayerElements()) {
+  const artistTreeFolded = Boolean(document.getElementById('app-shell')?.classList?.contains('is-artist-tree-folded'));
+  const dockBehavior = getDockedCompactPlayerBehavior();
+  const basePresentation = resolveCompactPlayerPresentation({
+    eligible: compactPlayerEligible(), mode: compactPlayerMode, style: compactPlayerStyle,
+    behavior: dockBehavior, artistTreeFolded,
+  });
+  const next = document.body?.classList?.contains('modal-open') && basePresentation === 'rail_artbox'
+    ? 'rail_play'
+    : basePresentation;
+  const stayDockedFolded = canDragStayDockedCompactPlayer({
+    presentation: next, behavior: dockBehavior, artistTreeFolded,
+  });
+  const changed = next !== compactPlayerPresentation;
+  if (changed || (stayDockedPlayerWasFolded && !stayDockedFolded)) {
+    clearCompactPlayerArtClick();
+    hideCompactPlayerMetadata(els);
+    els.player?.classList.remove('is-compact-art-revealed');
+    cancelCompactPlayerDrag(els);
+  }
+  if (stayDockedPlayerWasFolded && !stayDockedFolded) resetStayDockedPlayerPosition(els);
+  stayDockedPlayerWasFolded = stayDockedFolded;
+  compactPlayerPresentation = next;
+  syncCompactPlayerOverlayDetachment(els);
+  const compact = next !== 'expanded';
+  const floating = next === 'floating';
+  const rail = next === 'rail_play' || next === 'rail_artbox';
+  document.documentElement.classList.toggle('has-follow-sidebar-compact-player', rail);
+  document.documentElement.classList.toggle('has-docked-compact-player', compact && !floating);
+  document.documentElement.classList.toggle('has-floating-compact-player', floating);
+  els.player?.classList.toggle('is-rail-compact', rail);
+  els.player?.classList.toggle('is-floating-compact', floating);
+  els.player?.classList.toggle('is-docked-compact', compact && !floating);
+  els.player?.classList.toggle('is-stay-docked-draggable', stayDockedFolded);
+  if (els.player) {
+    els.player.dataset.compactPresentation = next;
+  }
+  if (els.expand) els.expand.hidden = !floating;
+  if (els.cover) {
+    const artHidden = next === 'rail_play' && !els.player?.classList.contains('is-compact-art-revealed');
+    els.cover.inert = artHidden;
+    els.cover.tabIndex = artHidden ? -1 : 0;
+    if (changed && ((document.activeElement === els.cover && artHidden)
+      || (document.activeElement === els.expand && els.expand?.hidden))) {
+      (els.play?.disabled ? document.getElementById('artist-tree-navigation-button') : els.play)?.focus?.({ preventScroll: true });
+    }
+  }
+  document.documentElement.style.setProperty('--compact-player-width',
+    floating ? '96px' : rail ? '64px' : '240px');
+  syncDockedCompactGeometry();
+  if (floating) {
+    if (!compactPlayerPosition) resetCompactPlayerPosition();
+    else positionFloatingCompactPlayer();
+  }
+  syncCompactPlayerUi();
+}
+
+function positionFloatingCompactPlayer() {
+  if (!compactPlayerPosition) return;
+  compactPlayerPosition = clampCompactPlayerPosition({ ...compactPlayerPosition,
+    playerWidth: 105, playerHeight: 105, viewportWidth: window.innerWidth,
+    viewportHeight: window.innerHeight, margin: FLOATING_COMPACT_PLAYER_MARGIN,
+    leftMargin: FLOATING_COMPACT_PLAYER_LEFT_MARGIN });
+  const { player } = compactPlayerElements();
+  player?.style.setProperty('--compact-player-x', `${compactPlayerPosition.x}px`);
+  player?.style.setProperty('--compact-player-y', `${compactPlayerPosition.y}px`);
+}
+
+function applyCompactPlayerMode(mode, { persist = true, transferFocus = true } = {}) {
   const els = compactPlayerElements();
   const next = resolveCompactPlayerMode({ eligible: compactPlayerEligible(), persistedMode: mode });
-  const previousStyle = compactPlayerStyle;
   compactPlayerMode = next;
   compactPlayerStyle = getCompactPlayerStyle();
+  dockedCompactPlayerBehavior = getDockedCompactPlayerBehavior();
   const compact = next === 'compact';
+  const outgoing = compact ? els.expanded : els.compact;
+  const outgoingFocus = outgoing?.contains?.(document.activeElement) ? document.activeElement : null;
+  // Pointer activation should not leave a focus highlight on the new mode.
+  // Keyboard and responsive changes still rescue focus from the inert shell.
+  if (outgoingFocus && !transferFocus) outgoingFocus.blur();
   document.documentElement.classList.toggle('has-compact-player', compact);
   document.documentElement.classList.toggle('has-docked-compact-player', compact && compactPlayerStyle === 'docked');
   document.documentElement.classList.toggle('has-floating-compact-player', compact && compactPlayerStyle === 'floating');
   els.player?.classList.toggle('is-compact', compact);
   els.player?.classList.toggle('is-floating-compact', compact && compactPlayerStyle === 'floating');
   els.player?.classList.toggle('is-docked-compact', compact && compactPlayerStyle === 'docked');
+  syncDockedCompactPresentation(els, compact);
   if (els.expanded) {
     els.expanded.hidden = false;
     els.expanded.inert = compact;
@@ -30712,27 +35218,33 @@ function applyCompactPlayerMode(mode, { persist = true } = {}) {
     els.compact.setAttribute('aria-hidden', String(!compact));
   }
   if (els.collapse) els.collapse.hidden = !compactPlayerEligible();
-  if (els.expand) els.expand.hidden = !compactPlayerEligible();
-  if (compact && compactPlayerStyle === 'docked') syncDockedCompactGeometry();
-  if (compact && compactPlayerStyle === 'floating') {
-    if (!compactPlayerPosition || previousStyle !== 'floating') resetCompactPlayerPosition();
-    else {
-      compactPlayerPosition = clampCompactPlayerPosition({ ...compactPlayerPosition, playerWidth: 96, playerHeight: 96,
-        viewportWidth: window.innerWidth, viewportHeight: window.innerHeight, margin: FLOATING_COMPACT_PLAYER_MARGIN,
-        leftMargin: FLOATING_COMPACT_PLAYER_LEFT_MARGIN });
-      els.player.style.setProperty('--compact-player-x', `${compactPlayerPosition.x}px`);
-      els.player.style.setProperty('--compact-player-y', `${compactPlayerPosition.y}px`);
+  if (els.expand) els.expand.hidden = compactPlayerPresentation !== 'floating';
+  if (persist) {
+    try {
+      persistCompactPlayerMode(window.localStorage, next);
+    } catch (_error) {
+      // Browser policy may deny access to the storage object itself.
     }
   }
-  if (persist) persistCompactPlayerMode(window.localStorage, next);
-  syncCompactPlayerUi();
+  if (outgoingFocus && transferFocus) {
+    const incoming = compact ? els.compact : els.expanded;
+    const modeControl = compact ? els.expand : els.collapse;
+    const focusTarget = modeControl && !modeControl.hidden && !modeControl.disabled
+      ? modeControl : incoming?.querySelector('[data-playback-control-action="play-pause"]');
+    if (focusTarget && !focusTarget.hidden && !focusTarget.disabled) {
+      focusTarget.focus({ preventScroll: true });
+    } else if (incoming) {
+      incoming.setAttribute('tabindex', '-1');
+      incoming.focus({ preventScroll: true });
+    }
+  }
 }
 
 function resetCompactPlayerPosition() {
   const els = compactPlayerElements();
   if (!els.player) return;
   compactPlayerPosition = createCompactPlayerSessionPosition({
-    playerWidth: 96, playerHeight: 96,
+    playerWidth: 105, playerHeight: 105,
     viewportWidth: window.innerWidth, viewportHeight: window.innerHeight, margin: FLOATING_COMPACT_PLAYER_MARGIN,
     leftMargin: FLOATING_COMPACT_PLAYER_LEFT_MARGIN,
   });
@@ -30740,22 +35252,62 @@ function resetCompactPlayerPosition() {
   els.player.style.setProperty('--compact-player-y', `${compactPlayerPosition.y}px`);
 }
 
+function isCurrentCompactQueueSelection(selection) {
+  const queue = state.player.playbackQueue;
+  return Boolean(selection && compactPlayerPendingSelection === selection
+    && selection.queue === queue && queue.currentIndex === selection.index
+    && String(queue.tracks?.[selection.index]?.path || '') === selection.path);
+}
+
 function currentQueueIndex() {
   const queue = state.player.playbackQueue;
+  if (isCurrentCompactQueueSelection(compactPlayerPendingSelection)) {
+    return compactPlayerPendingSelection.index;
+  }
+  compactPlayerPendingSelection = null;
   if (!queue?.tracks?.length) return -1;
   const path = String(state.player.current?.path || '');
   const found = queue.tracks.findIndex(track => String(track?.path || '') === path);
   return found >= 0 ? found : Number(queue.currentIndex) || 0;
 }
 
-function playCompactQueueOffset(offset) {
+async function playCompactQueueOffset(offset) {
   const queue = state.player.playbackQueue;
   const index = currentQueueIndex();
   if (!queue?.tracks?.length || index < 0) return;
   const targetIndex = index + offset;
   if (targetIndex < 0 || targetIndex >= queue.tracks.length) return;
+  const track = queue.tracks[targetIndex];
+  const selection = { queue, index: targetIndex, path: String(track?.path || '') };
+  compactPlayerPendingSelection = selection;
   queue.currentIndex = targetIndex;
-  void playTrackFromPayload(queue.tracks[targetIndex]);
+  let started = false;
+  try {
+    const playbackStart = playTrackFromPayload(track);
+    syncCompactPlayerUi();
+    started = await playbackStart;
+    return started;
+  } catch (error) {
+    if (isCurrentCompactQueueSelection(selection)) {
+      if (typeof observeStreamingFacadeCallback === 'function') {
+        observeStreamingFacadeCallback(Promise.reject(error), 'compact-track-selection-start-error');
+      } else {
+        console.warn('[AlbumHaven][Playback] Compact track selection failed.', error);
+      }
+    }
+    return false;
+  } finally {
+    if (compactPlayerPendingSelection === selection) {
+      const ownsQueueCursor = isCurrentCompactQueueSelection(selection);
+      compactPlayerPendingSelection = null;
+      if (!started && ownsQueueCursor) {
+        const playingPath = String(state.player.current?.path || '');
+        const playingIndex = queue.tracks.findIndex(item => String(item?.path || '') === playingPath);
+        queue.currentIndex = playingIndex >= 0 ? playingIndex : index;
+      }
+      syncCompactPlayerUi();
+    }
+  }
 }
 
 function syncCompactPlayerUi(snapshot = {}) {
@@ -30765,18 +35317,34 @@ function syncCompactPlayerUi(snapshot = {}) {
   const track = snapshot.displayTrack || state.player.current;
   const hasTrack = snapshot.hasTrack ?? Boolean(track && (playback.src || track.src));
   const locked = snapshot.lockedByAnotherTab ?? (typeof isPlaybackLockedByAnotherTab === 'function' && isPlaybackLockedByAnotherTab());
+  const trackKey = track?.path || null;
+  if (trackKey !== compactPlayerTrackKey) {
+    clearCompactPlayerArtClick();
+    hideCompactPlayerMetadata(els);
+  }
+  compactPlayerTrackKey = trackKey;
+  if (els.titleText) els.titleText.textContent = track?.title || track?.name || 'Nothing playing';
+  if (els.artistText) els.artistText.textContent = track?.artist || '';
+  const summary = buildCompactPlayerMetadataSummary(track ? { ...track, album: '' } : null);
+  const album = String(track?.album || '').trim();
+  if (els.summary) els.summary.textContent = summary;
+  if (els.albumSeparator) els.albumSeparator.hidden = !summary || !album;
+  if (els.albumLink) {
+    els.albumLink.textContent = album;
+    els.albumLink.hidden = !album;
+  }
+  scheduleCompactPlayerMetadataRowRefresh(els);
   if (els.cover) {
     els.cover.style.backgroundImage = track?.coverPath
-      ? `url('/cover?path=${encodeURIComponent(track.coverPath)}')`
+      ? `url("/cover?path=${encodeURIComponent(track.coverPath)}")`
       : '';
     els.cover.classList.toggle('is-idle-placeholder', !track);
-    els.cover.disabled = !track;
-    const openLabel = compactPlayerStyle === 'floating' ? 'Double-click to open album details' : 'Open album details';
+    els.cover.disabled = !track && !['docked', 'rail_artbox'].includes(compactPlayerPresentation);
+    const openLabel = compactPlayerPresentation === 'floating' ? 'Double-click to open album details' : 'Expand player; double-click or Arrow Up for album details';
     els.cover.setAttribute('aria-label', openLabel);
-    els.cover.title = openLabel;
   }
   if (els.play) {
-    els.play.textContent = playback.paused ? '▶' : '⏸';
+    els.play.querySelector('.compact-player-play-icon path')?.setAttribute('d', playback.paused ? 'M8 5v14l12-7z' : 'M6 5h4v14H6zM14 5h4v14h-4z');
     els.play.setAttribute('aria-label', playback.paused ? 'Play' : 'Pause');
     els.play.disabled = !hasTrack || locked;
   }
@@ -30793,45 +35361,147 @@ function initCompactPlayer() {
   let saved = 'expanded';
   try { saved = window.localStorage.getItem(COMPACT_PLAYER_MODE_STORAGE_KEY) || 'expanded'; } catch (_error) {}
   applyCompactPlayerMode(saved, { persist: false });
-  els.collapse?.addEventListener('click', () => applyCompactPlayerMode('compact'));
-  els.expand?.addEventListener('click', () => applyCompactPlayerMode('expanded'));
+  if (typeof MutationObserver === 'function' && document.body) {
+    new MutationObserver(() => syncDockedCompactPresentation(els))
+      .observe(document.body, { attributes: true, attributeFilter: ['class'] });
+  }
+  if (typeof ResizeObserver === 'function') {
+    const metadataResizeObserver = new ResizeObserver(() => scheduleCompactPlayerMetadataRowRefresh(els));
+    for (const row of [els.titleRow, els.artistRow]) if (row) metadataResizeObserver.observe(row);
+  }
+  const reducedMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)');
+  reducedMotion?.addEventListener?.('change', () => scheduleCompactPlayerMetadataRowRefresh(els));
+  els.collapse?.addEventListener('click', (event) => applyCompactPlayerMode('compact', { transferFocus: !(event.detail > 0) }));
+  els.expand?.addEventListener('click', (event) => applyCompactPlayerMode('expanded', { transferFocus: !(event.detail > 0) }));
   els.play?.addEventListener('click', () => togglePlayerPlayback());
   els.previous?.addEventListener('click', () => playCompactQueueOffset(-1));
   els.next?.addEventListener('click', () => playCompactQueueOffset(1));
   const openCurrentAlbumDetails = () => {
     const album = resolveAlbumForPlayerTrack(state.player.current);
-    if (album) openTrackModal(album, { coverLightboxGallery: false });
+    if (album) openTrackModal(album, { coverLightboxGallery: false, foreground: true });
   };
+  els.albumLink?.addEventListener('click', openCurrentAlbumDetails);
   els.cover?.addEventListener('click', event => {
     if (compactPlayerSuppressClick) { event.preventDefault(); compactPlayerSuppressClick = false; return; }
-    if (!shouldOpenCompactPlayerAlbum({ style: compactPlayerStyle, eventType: event.type, detail: event.detail })) return;
+    if (compactPlayerPresentation !== 'floating') {
+      clearCompactPlayerArtClick();
+      if (event.detail === 0) applyCompactPlayerMode('expanded');
+      else if (event.detail === 1) compactPlayerArtClickTimer = window.setTimeout(() => {
+        compactPlayerArtClickTimer = null;
+        applyCompactPlayerMode('expanded', { transferFocus: false });
+      }, 300);
+      return;
+    }
+    if (!shouldOpenCompactPlayerAlbum({ style: compactPlayerPresentation, eventType: event.type, detail: event.detail })) return;
     openCurrentAlbumDetails();
   });
   els.cover?.addEventListener('dblclick', event => {
-    if (!shouldOpenCompactPlayerAlbum({ style: compactPlayerStyle, eventType: event.type, detail: event.detail })) return;
+    clearCompactPlayerArtClick();
     event.preventDefault();
     openCurrentAlbumDetails();
   });
+  els.cover?.addEventListener('keydown', event => {
+    if (['docked', 'rail_artbox'].includes(compactPlayerPresentation) && event.key === 'ArrowUp') {
+      event.preventDefault();
+      clearCompactPlayerArtClick();
+      openCurrentAlbumDetails();
+    }
+  });
+  const revealArt = visible => {
+    if (compactPlayerPresentation !== 'rail_play' || !els.cover) return;
+    els.player.classList.toggle('is-compact-art-revealed', visible);
+    if (!visible && document.activeElement === els.cover) els.play?.focus?.({ preventScroll: true });
+    els.cover.inert = !visible;
+    els.cover.tabIndex = visible ? 0 : -1;
+  };
+  els.play?.addEventListener('pointerenter', () => {
+    revealArt(true);
+    scheduleCompactPlayerMetadata(els);
+  });
+  els.compact?.addEventListener('pointerleave', () => {
+    hideCompactPlayerMetadata(els);
+    revealArt(els.compact.contains(document.activeElement) && document.activeElement?.matches?.(':focus-visible'));
+  });
+  els.compact?.addEventListener('focusin', event => {
+    if (event.target.matches?.(':focus-visible')) {
+      revealArt(true);
+      if (event.target === els.play) scheduleCompactPlayerMetadata(els);
+    }
+  });
+  els.compact?.addEventListener('focusout', event => {
+    if (!els.compact.contains(event.relatedTarget)) {
+      hideCompactPlayerMetadata(els);
+      revealArt(false);
+    }
+  });
+  window.addEventListener('pagehide', () => {
+    clearCompactPlayerArtClick();
+    hideCompactPlayerMetadata(els);
+    if (compactPlayerMetadataMeasureFrame !== null) window.cancelAnimationFrame?.(compactPlayerMetadataMeasureFrame);
+    compactPlayerMetadataMeasureFrame = null;
+  });
+  els.compact?.addEventListener('pointerdown', event => {
+    if (!els.player.classList.contains('is-stay-docked-draggable') || event.button !== 0) return;
+    if (event.target.closest?.('button, a, input, select, textarea, [role="button"], [data-compact-player-cover]')) return;
+    event.preventDefault();
+    const rect = els.player.getBoundingClientRect();
+    if (!stayDockedPlayerOrigin) stayDockedPlayerOrigin = { x: rect.x, y: rect.y };
+    const position = stayDockedPlayerPosition || { x: rect.x, y: rect.y };
+    compactPlayerDrag = {
+      kind: 'stay_docked', pointerId: event.pointerId, captureTarget: els.compact,
+      startX: event.clientX, startY: event.clientY, originX: position.x, originY: position.y,
+      playerWidth: rect.width, playerHeight: rect.height, didDrag: false,
+    };
+    els.compact.setPointerCapture?.(event.pointerId);
+  });
+  els.compact?.addEventListener('pointermove', event => {
+    if (compactPlayerDrag?.kind !== 'stay_docked' || compactPlayerDrag.pointerId !== event.pointerId) return;
+    if (!compactPlayerDrag.didDrag) {
+      compactPlayerDrag.didDrag = didCompactPlayerDrag({
+        ...compactPlayerDrag, currentX: event.clientX, currentY: event.clientY,
+      });
+      if (compactPlayerDrag.didDrag) els.player.classList.add('is-compact-player-dragging');
+    }
+    if (!compactPlayerDrag.didDrag) return;
+    event.preventDefault();
+    stayDockedPlayerPosition = clampCompactPlayerPosition({
+      x: compactPlayerDrag.originX + event.clientX - compactPlayerDrag.startX,
+      y: compactPlayerDrag.originY + event.clientY - compactPlayerDrag.startY,
+      playerWidth: compactPlayerDrag.playerWidth, playerHeight: compactPlayerDrag.playerHeight,
+      viewportWidth: window.innerWidth, viewportHeight: window.innerHeight,
+      margin: FLOATING_COMPACT_PLAYER_MARGIN,
+    });
+    els.player.style.setProperty('--stay-docked-drag-x', `${stayDockedPlayerPosition.x - stayDockedPlayerOrigin.x}px`);
+    els.player.style.setProperty('--stay-docked-drag-y', `${stayDockedPlayerPosition.y - stayDockedPlayerOrigin.y}px`);
+  });
+  const finishStayDockedDrag = event => {
+    if (compactPlayerDrag?.kind !== 'stay_docked' || compactPlayerDrag.pointerId !== event.pointerId) return;
+    cancelCompactPlayerDrag(els);
+  };
+  els.compact?.addEventListener('pointerup', finishStayDockedDrag);
+  els.compact?.addEventListener('pointercancel', finishStayDockedDrag);
   els.cover?.addEventListener('pointerdown', event => {
-    if (compactPlayerStyle !== 'floating') return;
+    if (compactPlayerPresentation !== 'floating' || event.button !== 0) return;
     compactPlayerDrag = { pointerId: event.pointerId, startX: event.clientX, startY: event.clientY,
+      kind: 'floating', captureTarget: els.cover,
       originX: compactPlayerPosition?.x || 0, originY: compactPlayerPosition?.y || 0, didDrag: false };
     els.player.classList.add('is-compact-player-dragging');
     els.cover.setPointerCapture?.(event.pointerId);
   });
   els.cover?.addEventListener('pointermove', event => {
-    if (!compactPlayerDrag || compactPlayerDrag.pointerId !== event.pointerId) return;
+    if (compactPlayerDrag?.kind !== 'floating' || compactPlayerDrag.pointerId !== event.pointerId) return;
     if (!compactPlayerDrag.didDrag) compactPlayerDrag.didDrag = didCompactPlayerDrag({ ...compactPlayerDrag, currentX: event.clientX, currentY: event.clientY });
     if (!compactPlayerDrag.didDrag) return;
     compactPlayerPosition = clampCompactPlayerPosition({ x: compactPlayerDrag.originX + event.clientX - compactPlayerDrag.startX,
-      y: compactPlayerDrag.originY + event.clientY - compactPlayerDrag.startY, playerWidth: 96, playerHeight: 96,
+      y: compactPlayerDrag.originY + event.clientY - compactPlayerDrag.startY, playerWidth: 105, playerHeight: 105,
       viewportWidth: window.innerWidth, viewportHeight: window.innerHeight, margin: FLOATING_COMPACT_PLAYER_MARGIN,
       leftMargin: FLOATING_COMPACT_PLAYER_LEFT_MARGIN });
     els.player.style.setProperty('--compact-player-x', `${compactPlayerPosition.x}px`);
     els.player.style.setProperty('--compact-player-y', `${compactPlayerPosition.y}px`);
   });
   const finishDrag = event => {
-    const completedDrag = event.type === 'pointerup' && Boolean(compactPlayerDrag?.didDrag);
+    if (compactPlayerDrag?.kind !== 'floating' || compactPlayerDrag.pointerId !== event.pointerId) return;
+    const completedDrag = event.type === 'pointerup' && Boolean(compactPlayerDrag.didDrag);
     try {
       if (compactPlayerDrag?.pointerId === event.pointerId && els.cover.hasPointerCapture?.(event.pointerId)) {
         els.cover.releasePointerCapture?.(event.pointerId);
@@ -30849,15 +35519,15 @@ function initCompactPlayer() {
     else if (compactPlayerMode === 'expanded') {
       let savedMode = 'expanded';
       try { savedMode = window.localStorage.getItem(COMPACT_PLAYER_MODE_STORAGE_KEY) || 'expanded'; } catch (_error) {}
-      if (savedMode === 'compact') applyCompactPlayerMode(savedMode, { persist: false });
-    } else if (compactPlayerStyle === 'floating' && compactPlayerPosition) {
-      compactPlayerPosition = clampCompactPlayerPosition({ ...compactPlayerPosition, playerWidth: 96, playerHeight: 96,
+      applyCompactPlayerMode(savedMode, { persist: false });
+    } else if (compactPlayerPresentation === 'floating' && compactPlayerPosition) {
+      compactPlayerPosition = clampCompactPlayerPosition({ ...compactPlayerPosition, playerWidth: 105, playerHeight: 105,
         viewportWidth: window.innerWidth, viewportHeight: window.innerHeight, margin: FLOATING_COMPACT_PLAYER_MARGIN,
         leftMargin: FLOATING_COMPACT_PLAYER_LEFT_MARGIN });
       els.player.style.setProperty('--compact-player-x', `${compactPlayerPosition.x}px`);
       els.player.style.setProperty('--compact-player-y', `${compactPlayerPosition.y}px`);
     } else if (compactPlayerStyle === 'docked') {
-      syncDockedCompactGeometry();
+      syncDockedCompactPresentation();
     }
   });
   window.addEventListener('album-haven-appearance-change', () => {
@@ -30899,15 +35569,57 @@ function attachUtilityModalEvents() {
   els.overlay.dataset.bound = '1';
   bindOverlayPointerOrigin(els.overlay);
   els.close?.addEventListener('click', closeUtilityModal);
+  let searchRenderTimer = null;
+  const scheduleSearchRender = () => {
+    clearTimeout(searchRenderTimer);
+    const owner = state.utility;
+    const tab = owner.activeTab;
+    searchRenderTimer = setTimeout(() => {
+      searchRenderTimer = null;
+      if (state.utility === owner && owner.activeTab === tab && !els.overlay.hidden) renderUtilityModalContent();
+    }, 80);
+  };
   els.search?.addEventListener('input', () => {
-    if (state.utility.activeTab !== 'problematic-files') return;
-    state.utility.searchQuery = els.search.value || '';
-    renderUtilityModalContent();
+    if (state.utility.activeTab === 'integrations') {
+      state.utility.integrationsSearchQuery = els.search.value || '';
+      filterUtilityIntegrationNavigation();
+      return;
+    }
+    if (state.utility.activeTab === 'appearance') {
+      state.utility.appearanceSearchQuery = els.search.value || '';
+      filterUtilityAppearanceNavigation();
+      return;
+    }
+    if (state.utility.activeTab === 'loops') {
+      state.utility.loopsSearchQuery = els.search.value || '';
+      filterUtilityLoopViews();
+      return;
+    }
+    if (state.utility.activeTab === 'rules') state.utility.rulesSearchQuery = els.search.value || '';
+    else if (state.utility.activeTab === 'problematic-files') state.utility.searchQuery = els.search.value || '';
+    else return;
+    scheduleSearchRender();
   });
   els.search?.addEventListener('search', () => {
-    if (state.utility.activeTab !== 'problematic-files') return;
-    state.utility.searchQuery = els.search.value || '';
-    renderUtilityModalContent();
+    if (state.utility.activeTab === 'integrations') {
+      state.utility.integrationsSearchQuery = els.search.value || '';
+      filterUtilityIntegrationNavigation();
+      return;
+    }
+    if (state.utility.activeTab === 'appearance') {
+      state.utility.appearanceSearchQuery = els.search.value || '';
+      filterUtilityAppearanceNavigation();
+      return;
+    }
+    if (state.utility.activeTab === 'loops') {
+      state.utility.loopsSearchQuery = els.search.value || '';
+      filterUtilityLoopViews();
+      return;
+    }
+    if (state.utility.activeTab === 'rules') state.utility.rulesSearchQuery = els.search.value || '';
+    else if (state.utility.activeTab === 'problematic-files') state.utility.searchQuery = els.search.value || '';
+    else return;
+    scheduleSearchRender();
   });
   els.overlay.addEventListener('click', (event) => {
     if (overlayClickStartedOnOverlay(els.overlay, event) || event.target.closest('[data-close-utility-modal="1"]')) {
@@ -30932,7 +35644,7 @@ function attachRepairConfirmEvents() {
 
 // BEGIN js/runtime/bootstrap-utility-event-handlers.js
 
-﻿async function handleUtilityBootstrapClick(event) {
+async function handleUtilityBootstrapClick(event) {
   const removeMissingAlbumButton = event.target.closest('#utility-modal [data-remove-missing-album="1"]');
   if (removeMissingAlbumButton) {
     event.preventDefault();
@@ -30953,11 +35665,8 @@ function attachRepairConfirmEvents() {
   if (openLogHistoryAlertButton) {
     event.preventDefault();
     const selectedLogHistoryId = openLogHistoryAlertButton.getAttribute('data-log-history-entry-id') || '';
-    if (selectedLogHistoryId) {
-      state.utility.selectedLogHistoryId = selectedLogHistoryId;
-    }
     hideRepairAlert();
-    openUtilityLogHistoryTab();
+    openUtilityLogHistoryTab(selectedLogHistoryId);
     return;
   }
   if (!event.target.closest('.utility-loop-speed-control')) {
@@ -30966,9 +35675,9 @@ function attachRepairConfirmEvents() {
     });
   }
 
-  if (!event.target.closest('.utility-problem-filter, .utility-problem-filter-chips') && state.utility.problemDropdownOpen) {
+  if (!event.target.closest('.utility-problem-filter-button, .utility-problem-filter-menu, .utility-problem-filter-chips') && state.utility.problemDropdownOpen) {
     state.utility.problemDropdownOpen = false;
-    renderUtilityModalContent();
+    renderProblemFilterControls(getUtilityModalElements());
   }
   if (
     !event.target.closest('#cover-lookup-drawer, [data-toggle-cover-lookup-drawer="1"], #cover-lookup-modal, #cover-lookup-delete-confirm-modal, #image-lightbox')
@@ -30989,7 +35698,9 @@ function attachRepairConfirmEvents() {
   if (utilityTabButton) {
     event.preventDefault();
     const nextUtilityTab = utilityTabButton.getAttribute('data-utility-tab') || 'problematic-files';
+    if (nextUtilityTab === state.utility.activeTab) return;
     setUtilityActiveTab(nextUtilityTab);
+    if (state.utility.activeTab !== nextUtilityTab) return;
     if (state.utility.activeTab === 'rules') {
       loadUtilityRules(!state.utility.rulesLoaded);
     } else if (state.utility.activeTab === 'loops') {
@@ -30998,44 +35709,39 @@ function attachRepairConfirmEvents() {
       loadUtilityLogHistory(!state.utility.logHistoryLoaded);
     } else if (state.utility.activeTab === 'integrations') {
       loadUtilityIntegrations(!state.utility.integrationsLoaded);
-    } else if (state.utility.activeTab === 'appearance') {
-      renderUtilityModalContent();
-    } else {
-      loadProblematicFiles(!state.utility.loaded);
+      if (!state.utility.selectedIntegrationKey || state.utility.selectedIntegrationKey === 'library') {
+        loadUtilityLibrarySettings(!state.utility.librarySettings?.loaded);
+      }
+    } else if (state.utility.activeTab !== 'appearance') {
+      const navigationToken = {};
+      state.utility.problematicNavigationActiveToken = navigationToken;
+      try {
+        await loadProblematicFiles(!state.utility.loaded, { render: false });
+      } finally {
+        if (state.utility.problematicNavigationActiveToken === navigationToken) {
+          state.utility.problematicNavigationActiveToken = null;
+        }
+      }
+      if (state.utility.activeTab !== nextUtilityTab) return;
     }
     renderUtilityModalContent();
     return;
   }
 
   const utilityLogHistoryButton = event.target.closest('[data-utility-log-history-id]');
-  if (utilityLogHistoryButton) {
-    event.preventDefault();
-    state.utility.selectedLogHistoryId = utilityLogHistoryButton.getAttribute('data-utility-log-history-id') || '';
-    renderUtilityModalContent();
-    return;
-  }
-
-  const exportLogHistoryButton = event.target.closest('[data-export-log-history="1"]');
-  if (exportLogHistoryButton) {
+  const logAction = event.target.closest('[data-log-history-action]');
+  if (utilityLogHistoryButton || logAction) {
     event.preventDefault();
     try {
-      await exportBrowserLogHistory();
-    } catch (error) {
-      console.error('[AlbumHaven][History] Failed to export browser log history.', error);
-      showToast('Unable to export log history.', 'error', 3200);
-    }
+      if (utilityLogHistoryButton) await selectUtilityLogHistoryEvent(utilityLogHistoryButton.getAttribute('data-utility-log-history-id'));
+      else await handleUtilityLogHistoryAction(logAction.getAttribute('data-log-history-action'));
+    } catch (error) { showToast(error.message || 'Unable to load log history.', 'error', 3200); }
     return;
   }
 
   const appearanceModeRadio = event.target.closest('[data-appearance-seekbar-mode]');
   if (appearanceModeRadio) {
-    state.player.appearance = normalizePlayerAppearance({
-      ...state.player.appearance,
-      seekbarMode: appearanceModeRadio.getAttribute('data-appearance-seekbar-mode') || 'default',
-    });
-    persistPlayerAppearance();
-    updateWaveformAppearance(true);
-    renderUtilityModalContent();
+    // The Appearance editor owns the draft and applies this only after Save.
     return;
   }
 
@@ -31054,6 +35760,7 @@ function attachRepairConfirmEvents() {
   const problemFilterToggle = event.target.closest('[data-toggle-problem-filter="1"]');
   if (problemFilterToggle) {
     event.preventDefault();
+    if (state.utility.activeTab === 'log-history') { openUtilityLogHistoryQuery(false); return; }
     state.utility.problemDropdownOpen = !state.utility.problemDropdownOpen;
     renderUtilityModalContent();
     return;
@@ -31074,6 +35781,7 @@ function attachRepairConfirmEvents() {
       state.utility.problemDropdownOpen = false;
       state.utility.showRepairedDisplay = true;
       renderUtilityModalContent();
+      if (event.detail === 0) getUtilityModalElements().problemFilterButton?.focus();
     }
     return;
   }
@@ -31095,7 +35803,12 @@ function attachRepairConfirmEvents() {
   const problematicAlbumButton = event.target.closest('[data-problematic-album-key]');
   if (problematicAlbumButton) {
     event.preventDefault();
-    state.utility.selectedProblematicKey = problematicAlbumButton.getAttribute('data-problematic-album-key') || '';
+    const selectedKey = problematicAlbumButton.getAttribute('data-problematic-album-key') || '';
+    if (state.utility.selectedProblematicKey === selectedKey && getSelectedProblematicAlbum()?.detail_loaded
+        && !state.utility.focusedTrackPath && state.utility.showRepairedDisplay) return;
+    state.utility.selectedProblematicKey = selectedKey;
+    state.utility.focusedTrackPath = '';
+    state.utility.proposalSelections = {};
     state.utility.deferProblematicAutoSelection = false;
     state.utility.showRepairedDisplay = true;
     state.utility.repairSelections = {};
@@ -31103,17 +35816,19 @@ function attachRepairConfirmEvents() {
     state.utility.separateReleaseSelections = {};
     const selectedAlbum = getSelectedProblematicAlbum();
     if (selectedAlbum && !selectedAlbum.detail_loaded) {
+      selectedAlbum.detail_load_failed = false;
       void loadProblematicAlbumDetail(state.utility.selectedProblematicKey, true);
-      return;
     }
-    renderUtilityModalContent();
+    renderUtilityModalContent({ preserveProblematicTree: true });
     return;
   }
 
   const utilityRuleButton = event.target.closest('[data-utility-rule-key]');
   if (utilityRuleButton) {
     event.preventDefault();
-    state.utility.selectedRuleKey = utilityRuleButton.getAttribute('data-utility-rule-key') || '';
+    const nextRuleKey = utilityRuleButton.getAttribute('data-utility-rule-key') || '';
+    if (state.utility.selectedRuleKey === nextRuleKey) return;
+    state.utility.selectedRuleKey = nextRuleKey;
     renderUtilityModalContent();
     return;
   }
@@ -31122,6 +35837,7 @@ function attachRepairConfirmEvents() {
   if (utilityAppearanceButton) {
     event.preventDefault();
     const nextAppearanceKey = utilityAppearanceButton.getAttribute('data-utility-appearance-key') || 'seekbar';
+    if (nextAppearanceKey === state.utility.appearanceKey) return;
     const sharedAppearanceKeys = ['backgrounds', 'seekbar', 'selection-accent', 'alerts', 'album-page'];
     const sharedAppearanceDraft = sharedAppearanceKeys.includes(state.utility.appearanceKey) && sharedAppearanceKeys.includes(nextAppearanceKey);
     if (nextAppearanceKey !== state.utility.appearanceKey && !sharedAppearanceDraft && typeof confirmBackgroundAppearanceLeave === 'function' && !confirmBackgroundAppearanceLeave(() => {
@@ -31137,6 +35853,7 @@ function attachRepairConfirmEvents() {
   if (utilityIntegrationButton) {
     event.preventDefault();
     const integrationKey = utilityIntegrationButton.getAttribute('data-utility-integration-key') || 'lastfm';
+    if (state.utility.selectedIntegrationKey === integrationKey) return;
     const integrationHandled = handleLibrarySettingsIntegrationSelection(integrationKey);
     if (integrationHandled && typeof integrationHandled.then === 'function') {
       integrationHandled.then((handled) => {
@@ -31186,6 +35903,13 @@ function attachRepairConfirmEvents() {
     return;
   }
 
+  const submitLastfmScrobblesButton = event.target.closest('[data-submit-lastfm-scrobbles="1"]');
+  if (submitLastfmScrobblesButton) {
+    event.preventDefault();
+    await submitPendingLastfmScrobbles();
+    return;
+  }
+
   const utilityLoopCollapseButton = event.target.closest('[data-utility-loop-collapse]');
   if (utilityLoopCollapseButton) {
     event.preventDefault();
@@ -31198,14 +35922,7 @@ function attachRepairConfirmEvents() {
   const utilityLoopItemButton = event.target.closest('[data-utility-loop-id]');
   if (utilityLoopItemButton) {
     event.preventDefault();
-    if (state.utility.loopSuppressClick) {
-      state.utility.loopSuppressClick = false;
-      return;
-    }
-    state.utility.selectedLoopGroupKey = utilityLoopItemButton.getAttribute('data-utility-loop-group-key') || '';
-    state.utility.selectedLoopId = utilityLoopItemButton.getAttribute('data-utility-loop-id') || '';
-    state.utility.selectedLoopDetailMode = 'loop';
-    renderUtilityModalContent();
+    state.utility.loopSuppressClick = false;
     return;
   }
 
@@ -31217,6 +35934,7 @@ function attachRepairConfirmEvents() {
       return;
     }
     const groupKey = utilityLoopButton.getAttribute('data-utility-loop-group-key') || '';
+    const sameGroup = groupKey === String(state.utility.selectedLoopGroupKey || '');
     const now = Date.now();
     const isDoubleClickCandidate = String(state.utility.lastLoopGroupClickKey || '') === String(groupKey)
       && (now - Number(state.utility.lastLoopGroupClickAt || 0)) <= 350;
@@ -31224,7 +35942,7 @@ function attachRepairConfirmEvents() {
     state.utility.lastLoopGroupClickAt = now;
     state.utility.selectedLoopGroupKey = groupKey;
     const selectedGroup = getSelectedUtilityLoopGroup();
-    state.utility.selectedLoopId = selectedGroup?.loops?.[0]?.id || state.utility.selectedLoopId || '';
+    if (!sameGroup) state.utility.selectedLoopId = selectedGroup?.loops?.[0]?.id || state.utility.selectedLoopId || '';
     state.utility.selectedLoopDetailMode = 'group';
     if (isDoubleClickCandidate) {
       state.utility.lastLoopGroupClickKey = '';
@@ -31232,7 +35950,7 @@ function attachRepairConfirmEvents() {
       toggleUtilityLoopGroupCollapse(groupKey);
       return;
     }
-    renderUtilityModalContent();
+    if (!sameGroup) renderUtilityModalContent();
     return;
   }
 
@@ -31330,14 +36048,14 @@ function attachRepairConfirmEvents() {
   const deleteSavedLoopButton = event.target.closest('[data-delete-saved-loop]');
   if (deleteSavedLoopButton) {
     event.preventDefault();
-    deleteSavedLoop(deleteSavedLoopButton.getAttribute('data-delete-saved-loop') || '');
+    openSavedLoopDeleteConfirm(deleteSavedLoopButton.getAttribute('data-delete-saved-loop') || '');
     return;
   }
 
   const revertVersionExceptionButton = event.target.closest('[data-revert-version-exception]');
   if (revertVersionExceptionButton) {
     event.preventDefault();
-    revertVersionException(revertVersionExceptionButton.getAttribute('data-revert-version-exception') || '');
+    openRuleRevertConfirm({ kind: 'version-exception', key: revertVersionExceptionButton.getAttribute('data-revert-version-exception') || '' });
     return;
   }
 
@@ -31351,7 +36069,7 @@ function attachRepairConfirmEvents() {
       ...(Array.isArray(problemRule?.album_items) ? problemRule.album_items : []),
       ...(Array.isArray(problemRule?.file_items) ? problemRule.file_items : []),
     ].find((item) => String(item?.row_key || '') === rowKey);
-    if (ruleItem && !ruleItem.pending) queueProblemExclusionRevert(ruleItem);
+    if (ruleItem && !ruleItem.pending) openRuleRevertConfirm({ kind: 'problem-exclusion', key: rowKey, item: ruleItem });
     return;
   }
 
@@ -31395,6 +36113,7 @@ function attachRepairConfirmEvents() {
 
   const tagEditorTrackButton = event.target.closest('[data-tag-editor-track]');
   if (tagEditorTrackButton) {
+    if (event.target.closest('[data-tag-editor-reorder-grip]')) return;
     event.preventDefault();
     return;
   }
@@ -31468,6 +36187,27 @@ function attachRepairConfirmEvents() {
     return;
   }
 
+  const albumProblem = event.target.closest('[data-album-problem-type]');
+  if (albumProblem) {
+    event.preventDefault();
+    if (albumProblem.disabled) return;
+    const type = albumProblem.getAttribute('data-album-problem-type');
+    const keys = getIgnorableProblemRows(getSelectedProblematicAlbum()).filter(item => normalizeProblemFilterReason(item.reason) === type).map(item => item.row_key);
+    const enabled = !keys.every(key => state.utility.problemExclusionSelections?.[key]);
+    const selected = { ...(state.utility.problemExclusionSelections || {}) };
+    keys.forEach(key => { if (enabled) selected[key] = true; else delete selected[key]; });
+    state.utility.problemExclusionSelections = selected;
+    syncProblemExclusionSelection();
+    return;
+  }
+  const suggestion = event.target.closest('[data-problem-suggestion-id]');
+  if (suggestion) {
+    event.preventDefault();
+    if (state.utility.proposalSuppressClick) { state.utility.proposalSuppressClick = false; return; }
+    if (!suggestion.disabled) toggleProblemSuggestion(suggestion.getAttribute('data-problem-suggestion-id'));
+    syncProblemSuggestionSelection();
+    return;
+  }
   const repairChoiceButton = event.target.closest('[data-repair-choice]');
   if (repairChoiceButton) {
     event.preventDefault();
@@ -31516,6 +36256,9 @@ function attachRepairConfirmEvents() {
     }
     return;
   }
+
+  const applySuggestions = event.target.closest('[data-apply-problem-suggestions]');
+  if (applySuggestions) { event.preventDefault(); if (!applySuggestions.disabled) openProblemSuggestionsConfirm(); return; }
 
   const repairOpenButton = event.target.closest('[data-open-repair-confirm="1"]');
   if (repairOpenButton) {
@@ -31606,6 +36349,16 @@ function attachRepairConfirmEvents() {
     return;
   }
 
+  const retryCoverLookupTaskButton = event.target.closest('[data-retry-cover-lookup-task]');
+  if (retryCoverLookupTaskButton) {
+    event.preventDefault();
+    event.stopPropagation();
+    const taskId = retryCoverLookupTaskButton.getAttribute('data-retry-cover-lookup-task') || '';
+    const task = (state.coverLookup.tasks || []).find((item) => String(item?.id || '') === String(taskId));
+    if (task?.album_payload) startCoverLookupForAlbum(task.album_payload, { backgroundOnly: true });
+    return;
+  }
+
   const openCoverLookupTaskButton = event.target.closest('[data-open-cover-lookup-task]');
   if (openCoverLookupTaskButton) {
     const taskId = openCoverLookupTaskButton.getAttribute('data-open-cover-lookup-task') || '';
@@ -31668,6 +36421,30 @@ function attachRepairConfirmEvents() {
   if (event.target.closest('[data-add-cover-lookup-remote="1"]')) {
     event.preventDefault();
     addRemoteCoverLinksFromLookup();
+    return;
+  }
+
+  if (event.target.closest('[data-choose-cover-lookup-files="1"]')) {
+    event.preventDefault();
+    document.querySelector('[data-cover-lookup-file-input]')?.click?.();
+    return;
+  }
+
+  const removePendingCoverAttachment = event.target.closest('[data-remove-cover-lookup-pending-attachment]');
+  if (removePendingCoverAttachment) {
+    event.preventDefault();
+    event.stopPropagation();
+    removeCoverLookupPendingAttachment(
+      removePendingCoverAttachment.getAttribute('data-remove-cover-lookup-pending-attachment'),
+    );
+    return;
+  }
+
+  const removePastedCoverButton = event.target.closest('[data-remove-pasted-cover]');
+  if (removePastedCoverButton) {
+    event.preventDefault();
+    event.stopPropagation();
+    removePastedImageFromCoverLookup(removePastedCoverButton.getAttribute('data-remove-pasted-cover'));
     return;
   }
 
@@ -31746,7 +36523,7 @@ function attachRepairConfirmEvents() {
 
 function renderUtilityModalContentAndRestoreProblemExclusionFocus(rowKey) {
   const normalizedRowKey = String(rowKey || '');
-  renderUtilityModalContent();
+  syncProblemExclusionSelection();
   if (!normalizedRowKey || typeof document === 'undefined') return;
   const matchingPill = Array.from(
     document.querySelectorAll?.('[data-problem-exclusion-row-key]') || [],
@@ -31835,7 +36612,7 @@ async function handleUtilityBootstrapPaste(event) {
     return;
   }
   const target = event.target instanceof Element ? event.target : null;
-  if (!target?.closest('#cover-lookup-modal')) {
+  if (!target?.closest('[data-cover-lookup-drop-zone="1"]')) {
     return;
   }
   try {
@@ -31854,7 +36631,90 @@ async function handleUtilityBootstrapPaste(event) {
   }
 }
 
+function handleUtilityBootstrapDragStart(event) {
+  const grip = event.target?.closest?.('[data-tag-editor-reorder-grip]');
+  if (!grip) return false;
+  const draggedPath = String(grip.getAttribute('data-tag-editor-reorder-grip') || '');
+  if (!draggedPath) return false;
+  state.tagEditor.reorder = { draggedPath, beforePath: draggedPath };
+  event.dataTransfer?.setData?.('text/plain', draggedPath);
+  if (event.dataTransfer) event.dataTransfer.effectAllowed = 'move';
+  showTagEditorReorderCue(draggedPath);
+  return true;
+}
+
+function getTagEditorReorderRows(list) {
+  return Array.from(list?.querySelectorAll?.('[data-tag-editor-track]') || []).map((row) => {
+    const bounds = row.getBoundingClientRect();
+    return {
+      path: String(row.getAttribute('data-tag-editor-track') || ''),
+      top: bounds.top,
+      height: bounds.height,
+    };
+  });
+}
+
+function handleUtilityBootstrapDragOver(event) {
+  const reorder = state.tagEditor.reorder;
+  const list = event.target?.closest?.('#tag-editor-track-list');
+  if (reorder?.draggedPath && list) {
+    event.preventDefault();
+    if (event.dataTransfer) event.dataTransfer.dropEffect = 'move';
+    const beforePath = getTagEditorReorderInsertionBefore(
+      getTagEditorReorderRows(list),
+      reorder.draggedPath,
+      event.clientY,
+    );
+    showTagEditorReorderCue(beforePath);
+    return true;
+  }
+  if (!event.target?.closest?.('[data-cover-lookup-drop-zone]')) return false;
+  event.preventDefault();
+  if (event.dataTransfer) event.dataTransfer.dropEffect = 'copy';
+  return true;
+}
+
+async function handleUtilityBootstrapDrop(event) {
+  const reorder = state.tagEditor.reorder;
+  const list = event.target?.closest?.('#tag-editor-track-list');
+  if (reorder?.draggedPath) {
+    if (list) {
+      event.preventDefault();
+      applyTagEditorTrackReorder(reorder.draggedPath, reorder.beforePath);
+    }
+    clearTagEditorReorderCue();
+    return Boolean(list);
+  }
+  if (!event.target?.closest?.('[data-cover-lookup-drop-zone]')) return false;
+  event.preventDefault();
+  try {
+    await addCoverLookupFiles(event.dataTransfer?.files || []);
+  } catch (error) {
+    state.coverLookup.modal.statusText = String(error?.message || 'Unable to stage image.');
+    state.coverLookup.modal.statusTone = 'error';
+    renderCoverLookupModal();
+  }
+  return true;
+}
+
+function handleUtilityBootstrapDragEnd() {
+  if (!state.tagEditor.reorder) return false;
+  clearTagEditorReorderCue();
+  return true;
+}
+
 function handleUtilityBootstrapChange(event) {
+  const coverLookupFiles = event.target.closest('[data-cover-lookup-file-input]');
+  if (coverLookupFiles) {
+    addCoverLookupFiles(coverLookupFiles.files || [])
+      .catch((error) => {
+        state.coverLookup.modal.statusText = String(error?.message || 'Unable to stage image.');
+        state.coverLookup.modal.statusTone = 'error';
+        renderCoverLookupModal();
+      })
+      .finally(() => { coverLookupFiles.value = ''; });
+    return;
+  }
   if (handleLibrarySettingsChange(event)) {
     return;
   }
@@ -31897,6 +36757,21 @@ function coverLookupSelectionChanged(before, after) {
 }
 
 function handleUtilityBootstrapMouseDown(event) {
+  const suggestion = event.target.closest('[data-problem-suggestion-id]');
+  if (suggestion && event.button === 0 && !suggestion.disabled) {
+    event.preventDefault();
+    const id = suggestion.getAttribute('data-problem-suggestion-id');
+    const visible = getVisibleProblemSuggestions();
+    const index = visible.findIndex(item => item.id === id);
+    if (index < 0) return;
+    const selected = !state.utility.proposalSelections?.[id];
+    state.utility.proposalDrag = { type: visible[index].type, startIndex: index, selected };
+    state.utility.proposalSuppressClick = true;
+    toggleProblemSuggestion(id, { selected });
+    suggestion.focus?.();
+    syncProblemSuggestionSelection();
+    return;
+  }
   const coverLookupTaskButton = event.target.closest('[data-open-cover-lookup-task]');
   state.coverLookup.taskOpenSelectionGesture = coverLookupTaskButton && event.button === 0
     ? {
@@ -31941,7 +36816,7 @@ function handleUtilityBootstrapMouseDown(event) {
       selectProblemExclusion(rowKey, { toggle: false });
     }
     state.utility.problemExclusionDrag = scope === 'file' && Number.isInteger(rowIndex)
-      ? { reason, startIndex: rowIndex, lastIndex: rowIndex }
+      ? { reason, startIndex: rowIndex, lastIndex: rowIndex, selected: !alreadySelected }
       : null;
     state.utility.problemExclusionSuppressClick = true;
     if (!alreadySelected) {
@@ -31951,6 +36826,7 @@ function handleUtilityBootstrapMouseDown(event) {
   }
 
   const trackButton = event.target.closest('[data-tag-editor-track]');
+  if (event.target.closest('[data-tag-editor-reorder-grip]')) return;
   if (!trackButton || event.button !== 0) return;
   event.preventDefault();
   const path = trackButton.getAttribute('data-tag-editor-track') || '';
@@ -31973,6 +36849,77 @@ function handleUtilityBootstrapKeyDown(event) {
   ) {
     return false;
   }
+  const reorderGrip = event.target?.closest?.('[data-tag-editor-reorder-grip]');
+  if (reorderGrip && ['ArrowUp', 'ArrowDown'].includes(event.key)) {
+    const path = String(reorderGrip.getAttribute('data-tag-editor-reorder-grip') || '');
+    const tracks = state.tagEditor.tracks || [];
+    const index = tracks.findIndex((track) => String(track?.path || '') === path);
+    const destination = event.key === 'ArrowUp' ? index - 1 : index + 1;
+    if (index >= 0 && destination >= 0 && destination < tracks.length) {
+      event.preventDefault();
+      const beforePath = event.key === 'ArrowUp'
+        ? String(tracks[destination]?.path || '')
+        : String(tracks[destination + 1]?.path || '') || null;
+      applyTagEditorTrackReorder(path, beforePath);
+      Array.from(document.querySelectorAll?.('[data-tag-editor-reorder-grip]') || [])
+        .find((grip) => String(grip.getAttribute('data-tag-editor-reorder-grip') || '') === path)
+        ?.focus?.();
+    }
+    return true;
+  }
+  if (event.key === 'Escape' && state.tagEditor.reorder) {
+    event.preventDefault();
+    clearTagEditorReorderCue();
+    return true;
+  }
+  const collapse = event.target?.closest?.('[data-utility-loop-collapse]');
+  if (collapse && ['Enter', ' '].includes(event.key)) {
+    event.preventDefault();
+    event.stopPropagation?.();
+    return toggleUtilityLoopGroupCollapse(collapse.getAttribute('data-utility-loop-collapse'));
+  }
+  const tab = event.target?.closest?.('[data-utility-tab]');
+  if (tab && ['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) {
+    const tabs = getUtilityModalElements().tabs.filter(item => !item.disabled && !item.hidden);
+    const current = tabs.indexOf(tab);
+    if (current < 0 || !tabs.length) return false;
+    const next = event.key === 'Home' ? 0 : event.key === 'End' ? tabs.length - 1
+      : (current + (event.key === 'ArrowRight' ? 1 : -1) + tabs.length) % tabs.length;
+    event.preventDefault();
+    tabs[next].focus();
+    tabs[next].click();
+    tabs[next].scrollIntoView?.({ block: 'nearest', inline: 'nearest' });
+    return true;
+  }
+  const filterTarget = event.target?.closest?.('#utility-problem-filter-button, #utility-problem-filter-menu');
+  const filterInput = event.target?.matches?.('input, textarea, [contenteditable="true"]');
+  if (state.utility.activeTab === 'problematic-files' && filterTarget && !filterInput) {
+    const els = getUtilityModalElements();
+    if (event.key === 'Escape' && state.utility.problemDropdownOpen) {
+      event.preventDefault();
+      event.stopPropagation?.();
+      state.utility.problemDropdownOpen = false;
+      els.problemFilterMenu.hidden = true;
+      els.problemFilterButton.setAttribute('aria-expanded', 'false');
+      if (typeof clearTriggerAnchor === 'function') clearTriggerAnchor(els.problemFilterMenu);
+      els.problemFilterButton.focus();
+      return true;
+    }
+    if (['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key) && !els.problemFilterButton.disabled) {
+      event.preventDefault();
+      if (!state.utility.problemDropdownOpen) {
+        state.utility.problemDropdownOpen = true;
+        renderProblemFilterControls(els);
+      }
+      const options = Array.from(els.problemFilterMenu.querySelectorAll?.('[data-problem-filter-value]') || []);
+      const current = options.indexOf(event.target);
+      const next = event.key === 'Home' ? 0 : event.key === 'End' ? options.length - 1
+        : current < 0 ? (event.key === 'ArrowUp' ? options.length - 1 : 0)
+          : (current + (event.key === 'ArrowDown' ? 1 : -1) + options.length) % options.length;
+      options[next]?.focus();
+      return true;
+    }
+  }
   if (typeof handleSavedLoopEditKeydown === 'function' && handleSavedLoopEditKeydown(event)) {
     return true;
   }
@@ -31989,6 +36936,17 @@ function handleUtilityBootstrapKeyDown(event) {
 }
 
 function handleUtilityBootstrapMouseOver(event) {
+  if (state.utility.proposalDrag) {
+    const suggestion = event.target.closest('[data-problem-suggestion-id]');
+    const drag = state.utility.proposalDrag;
+    const visible = getVisibleProblemSuggestions();
+    const index = visible.findIndex(item => item.id === suggestion?.getAttribute('data-problem-suggestion-id'));
+    if (index >= 0 && visible[index].type === drag.type) {
+      extendProblemSuggestionRange(drag.type, drag.startIndex, index, drag.selected);
+      syncProblemSuggestionSelection();
+    }
+    return;
+  }
   if (state.utility.problemExclusionDrag) {
     const pill = event.target.closest('[data-problem-exclusion-scope="file"]');
     if (!pill) return true;
@@ -31998,11 +36956,11 @@ function handleUtilityBootstrapMouseOver(event) {
     if (Number.isInteger(rowIndex) && rowIndex !== drag.lastIndex) {
       state.utility.problemExclusionClearOnClick = false;
     }
-    if (reason !== drag.reason || !Number.isInteger(rowIndex)) return true;
+    if (normalizeProblemFilterReason(reason) !== normalizeProblemFilterReason(drag.reason) || !Number.isInteger(rowIndex)) return true;
     if (rowIndex === drag.lastIndex) return true;
-    if (extendProblemExclusionRange(reason, drag.startIndex, rowIndex)) {
+    if (extendProblemExclusionRange(reason, drag.startIndex, rowIndex, drag.selected)) {
       drag.lastIndex = rowIndex;
-      renderUtilityModalContent();
+      syncProblemExclusionSelection();
     }
     return true;
   }
@@ -32031,6 +36989,8 @@ function handleUtilityBootstrapMouseOver(event) {
 }
 
 function handleUtilityBootstrapMouseUp(event) {
+  state.utility.proposalDrag = null;
+  if (state.utility.proposalSuppressClick) setTimeout(() => { state.utility.proposalSuppressClick = false; }, 0);
   const selectionGesture = state.coverLookup.taskOpenSelectionGesture;
   state.coverLookup.taskOpenSelectionGesture = null;
   state.coverLookup.suppressOpenTaskId = '';
@@ -32091,8 +37051,21 @@ function handleUtilityBootstrapMouseUp(event) {
 function toggleUtilityLoopGroupCollapse(groupKey) {
   const normalizedGroupKey = String(groupKey || '');
   if (!normalizedGroupKey) return false;
+  state.utility.collapsedLoopGroups ||= {};
   state.utility.collapsedLoopGroups[normalizedGroupKey] = !Boolean(state.utility.collapsedLoopGroups[normalizedGroupKey]);
-  renderUtilityModalContent();
+  if (typeof renderUtilityLoopList === 'function') {
+    const els = getUtilityModalElements();
+    const scroll = els.list?.scrollTop;
+    const focusedToggle = document.activeElement?.closest?.('[data-utility-loop-collapse]');
+    const restoreFocus = focusedToggle?.getAttribute('data-utility-loop-collapse') === normalizedGroupKey;
+    renderUtilityLoopList(els, getFilteredUtilityLoops());
+    if (restoreFocus) {
+      const replacement = Array.from(els.list?.querySelectorAll?.('[data-utility-loop-collapse]') || [])
+        .find(toggle => toggle.getAttribute('data-utility-loop-collapse') === normalizedGroupKey);
+      replacement?.focus({ preventScroll: true });
+    }
+    if (els.list && Number.isFinite(scroll)) els.list.scrollTop = scroll;
+  } else renderUtilityModalContent();
   return true;
 }
 
@@ -32100,7 +37073,8 @@ function toggleUtilityLoopGroupCollapse(groupKey) {
 
 // BEGIN js/runtime/bootstrap-gallery-event-handlers.js
 
-﻿function handleGalleryBootstrapClick(event) {
+function handleGalleryBootstrapClick(event) {
+  if (typeof handleGalleryMainClick === 'function' && handleGalleryMainClick(event)) return;
   const removeMissingAlbumButton = event.target.closest('[data-remove-missing-album="1"]');
   if (removeMissingAlbumButton) {
     event.preventDefault();
@@ -32121,17 +37095,6 @@ function toggleUtilityLoopGroupCollapse(groupKey) {
   if (!event.target.closest('#track-modal-version-context-menu')) {
     hideVersionContextMenu();
   }
-  if (!event.target.closest('#gallery-options-menu, [data-open-gallery-options="1"]') && state.gallery.menuOpen) {
-    hideGalleryOptionsMenu();
-  }
-  const galleryOptionsButton = event.target.closest('[data-open-gallery-options="1"]');
-  if (galleryOptionsButton) {
-    event.preventDefault();
-    if (state.gallery.menuOpen) hideGalleryOptionsMenu();
-    else showGalleryOptionsMenu(galleryOptionsButton);
-    return;
-  }
-
   const toggleCombineSimilarArtistsButton = event.target.closest('[data-toggle-combine-similar-artists="1"]');
   if (toggleCombineSimilarArtistsButton && !toggleCombineSimilarArtistsButton.disabled) {
     event.preventDefault();
@@ -32143,60 +37106,9 @@ function toggleUtilityLoopGroupCollapse(groupKey) {
     }
     return;
   }
-
-  const galleryCategoryToggle = event.target.closest('[data-gallery-category-toggle]');
-  if (galleryCategoryToggle && !galleryCategoryToggle.disabled) {
-    event.preventDefault();
-    const category = String(galleryCategoryToggle.getAttribute('data-gallery-category-toggle') || '').trim();
-    const currentCategories = typeof resolveMainGalleryCategorySelection === 'function'
-      ? resolveMainGalleryCategorySelection(state.view?.visible_library_categories)
-      : ['main_library', 'hoard', 'new_arrivals'];
-    const nextCategories = currentCategories.includes(category)
-      ? currentCategories.filter((item) => item !== category)
-      : [...currentCategories, category];
-    fetchAndRender(buildUrl({
-      ...state.view,
-      gallery_scope: 'all',
-      visible_library_categories: nextCategories,
-      related_filter_artists: [],
-      primary_filter_active: false,
-    }), true);
-    return;
-  }
-
-  const openNewArrivalsButton = event.target.closest('[data-open-new-arrivals="1"]');
-  if (openNewArrivalsButton) {
-    event.preventDefault();
-    fetchAndRender(buildUrl({
-      ...state.view,
-      gallery_scope: 'new_arrivals',
-      visible_library_categories: ['new_arrivals'],
-      related_filter_artists: [],
-      primary_filter_active: false,
-    }), true);
-    return;
-  }
-
-  const openMainGalleryButton = event.target.closest('[data-open-main-gallery="1"]');
-  if (openMainGalleryButton) {
-    event.preventDefault();
-    const restoredCategories = typeof resolveMainGalleryCategorySelection === 'function'
-      ? resolveMainGalleryCategorySelection(state.view?.visible_library_categories)
-      : ['main_library', 'hoard', 'new_arrivals'];
-    fetchAndRender(buildUrl({
-      ...state.view,
-      gallery_scope: 'all',
-      visible_library_categories: restoredCategories,
-      related_filter_artists: [],
-      primary_filter_active: false,
-    }), true);
-    return;
-  }
-
   const openNonAlbumModalButton = event.target.closest('[data-open-non-album-modal="1"]');
   if (openNonAlbumModalButton) {
     event.preventDefault();
-    hideGalleryOptionsMenu();
     openNonAlbumModal();
     return;
   }
@@ -32365,7 +37277,10 @@ function toggleUtilityLoopGroupCollapse(groupKey) {
     if (Number.isInteger(index) && state.modalReleases[index]) {
       state.modalReleaseIndex = index;
       hideVersionContextMenu();
-      renderTrackModalRelease(state.modalReleases[index]);
+      openTrackModal(state.modalReleases[index], {
+        coverLightboxGallery: state.ui.trackModalCoverLightboxGallery !== false,
+        releaseSet: { releases: state.modalReleases.slice(), selectedIndex: index },
+      });
     }
     return;
   }
@@ -32627,13 +37542,46 @@ function handleSidebarArtistSelectionClick(event) {
   }
   state.ui.pendingSidebarSelectedArtist = artist;
   state.ui.pendingSidebarAllArtistsActive = false;
+  const currentSelectedArtist = String(state.view?.selected_artist || '').trim();
+  const primaryArtistChanged = String(artist || '').trim() !== currentSelectedArtist;
   const activeSearchQuery = String(state.view?.query || '').trim();
+  const previousGalleryMainState = state.gallery.mainState;
+  const previousAlbumTypes = new Set(previousGalleryMainState?.albumTypes || ['studio', 'ep']);
+  const galleryFiltersWereCustomized = Boolean(previousGalleryMainState && (
+    Object.values(previousGalleryMainState.sources || {}).some((enabled) => enabled === false)
+    || previousAlbumTypes.size !== 2
+    || !previousAlbumTypes.has('studio')
+    || !previousAlbumTypes.has('ep')
+    || previousGalleryMainState.familySelectionExplicit === true
+    || (previousGalleryMainState.familyArtists || []).length
+  ));
+  if (primaryArtistChanged) {
+    clearPendingSelectedArtistReconcile();
+    clearPendingGallerySearchCommit();
+    updateGallerySearchDraftQuery(activeSearchQuery);
+    state.ui.pendingSearchClearOnBlur = false;
+    const searchInput = document.getElementById('search-input');
+    if (searchInput) searchInput.value = activeSearchQuery;
+    closeRecentSearchPopover();
+    releaseAlbumDetailPrewarmSearchSuspension(
+      Number(state.ui.albumDetailPrewarmSearchGeneration || 0),
+    );
+    releasePendingSearchWaveformPeakLoadSuspension();
+    state.gallery.mainState = resetGalleryMainStateForPrimaryArtist(
+      state.gallery.mainState || {},
+    );
+  }
   const nextView = {
     ...state.view,
+    query: state.view.query,
     selected_artist: artist,
     all_artists_active: false,
+    visible_library_categories: primaryArtistChanged
+      ? ['main_library', 'new_arrivals', 'hoard']
+      : state.view.visible_library_categories,
     related_filter_artists: [],
     primary_filter_active: false,
+    search_context: state.view.search_context,
     ...(activeSearchQuery ? {
       search_context: {
         ...(state.view?.search_context && typeof state.view.search_context === 'object'
@@ -32645,7 +37593,6 @@ function handleSidebarArtistSelectionClick(event) {
     } : {}),
   };
   const sidebarSelectionUpdated = applyImmediateSidebarArtistSelection(sidebarArtistLink, artist);
-  const currentSelectedArtist = String(state.view?.selected_artist || '').trim();
   const currentRelatedArtists = Array.isArray(state.view?.related_artists)
     ? state.view.related_artists
     : [];
@@ -32668,7 +37615,9 @@ function handleSidebarArtistSelectionClick(event) {
     hasCurrentFamilyContext
     && !currentFamilyArtistNames.has(String(artist || '').trim())
   );
-  if (!isUnrelatedFamilyTransition && tryRenderOptimisticSidebarArtistSelection(nextView)) {
+  if (!isUnrelatedFamilyTransition && tryRenderOptimisticSidebarArtistSelection(nextView, {
+    forceFetch: primaryArtistChanged && galleryFiltersWereCustomized,
+  })) {
     return true;
   }
   if (isUnrelatedFamilyTransition) {
@@ -32874,6 +37823,13 @@ function openRecentSearchPopover() {
   ui.recentSearchPopoverOpen = true;
   ui.recentSearchActiveIndex = -1;
   renderRecentSearchPopover();
+  const { input, popover } = getRecentSearchElements();
+  if (typeof openGalleryMainSurface === 'function' && input && popover) {
+    positionSearchSuggestionsSurface(popover);
+    if (typeof galleryMainSurfaceController === 'undefined' || !galleryMainSurfaceController?.isOpen?.('search-suggestions')) {
+      openGalleryMainSurface('search-suggestions', input, popover, 'left');
+    }
+  }
   return true;
 }
 
@@ -32883,6 +37839,9 @@ function closeRecentSearchPopover() {
   ui.recentSearchPopoverOpen = false;
   ui.recentSearchActiveIndex = -1;
   renderRecentSearchPopover();
+  if (typeof galleryMainSurfaceController !== 'undefined' && galleryMainSurfaceController?.isOpen?.('search-suggestions')) {
+    galleryMainSurfaceController.close(false);
+  }
 }
 
 function selectRecentSearchQuery(query) {
@@ -32956,10 +37915,7 @@ function handleGalleryBootstrapSearchKeyDown(event) {
   if (!['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) return false;
   if (!queries.length) return false;
   event.preventDefault();
-  if (!open) {
-    ui.recentSearchPopoverOpen = true;
-    ui.recentSearchActiveIndex = -1;
-  }
+  if (!open) openRecentSearchPopover();
   if (event.key === 'Home') ui.recentSearchActiveIndex = 0;
   else if (event.key === 'End') ui.recentSearchActiveIndex = queries.length - 1;
   else if (event.key === 'ArrowDown') {
@@ -32985,6 +37941,9 @@ function updateGallerySearchDraftQuery(nextQuery) {
   const normalizedQuery = String(nextQuery || '');
   if (state.ui && typeof state.ui === 'object') {
     state.ui.searchDraftQuery = normalizedQuery;
+  }
+  if (typeof syncGalleryBarSearchVisibility === 'function') {
+    syncGalleryBarSearchVisibility();
   }
   return normalizedQuery;
 }
@@ -33111,6 +38070,8 @@ function handleGalleryBootstrapSearchInput(nextQuery) {
   const ui = ensureRecentSearchState();
   if (ui && !String(normalizedQuery || '').trim()) {
     closeRecentSearchPopover();
+  } else if (ui && !ui.recentSearchPopoverOpen) {
+    openRecentSearchPopover();
   }
   if (ui && ui.recentSearchActiveIndex >= 0) {
     ui.recentSearchActiveIndex = -1;
@@ -33122,7 +38083,7 @@ function handleGalleryBootstrapSearchInput(nextQuery) {
     releasePendingSearchWaveformPeakLoadSuspension();
     return;
   }
-  scheduleGallerySearchCommit(normalizedQuery);
+  scheduleGallerySearchCommit(normalizedQuery, { immediate: !normalizedQuery.trim() });
 }
 
 function commitGallerySearchQuery(nextQuery, options = {}) {
@@ -33161,6 +38122,9 @@ function commitGallerySearchQuery(nextQuery, options = {}) {
       ? deepCloneJson(state.view.artists_sidebar)
       : null;
     state.ui.preSearchView = {
+      ...(Array.isArray(state.view.sidebar_library_categories)
+        ? { sidebar_library_categories: [...state.view.sidebar_library_categories] }
+        : {}),
       selected_artist: String(state.view.selected_artist || ''),
       related_filter_artists: [...(Array.isArray(state.view.related_filter_artists) ? state.view.related_filter_artists : [])],
       primary_filter_active: Boolean(state.view.primary_filter_active),
@@ -33180,17 +38144,22 @@ function commitGallerySearchQuery(nextQuery, options = {}) {
     ) ? 'canonical_root' : 'interactive';
   }
   if (!String(normalizedQuery || '').trim() && String(state.view.query || '').trim()) {
-    const next = buildClearedSearchView();
+    const next = withActiveGallerySources(buildClearedSearchView(), state.gallery.mainState);
     const reusableRootBrowseView = readReusableRootBrowseViewForClearedSearch(next);
     const retainsSelectedArtist = Boolean(String(next?.selected_artist || '').trim());
     const mountedSelectedGalleryComplete = Boolean(
       retainsSelectedArtist
       && isMountedSelectedGalleryComplete(next.selected_artist, reusableRootBrowseView)
     );
-    const canRestoreCachedClear = Boolean(
-      !retainsSelectedArtist
-      || mountedSelectedGalleryComplete
+    const clearSourceView = reusableRootBrowseView || state.view;
+    const clearScopeMatches = !state.gallery.mainState || gallerySourceScopesEqual(
+      activeGallerySourceCategories(state.gallery.mainState),
+      clearSourceView.non_album_library_categories || clearSourceView.loaded_library_categories
+        || clearSourceView.visible_library_categories || ['main_library', 'new_arrivals', 'hoard'],
     );
+    const canRestoreCachedClear = Boolean(clearScopeMatches && (
+      !retainsSelectedArtist || mountedSelectedGalleryComplete
+    ));
     if (
       canRestoreCachedClear
       && tryRestoreClearedSearchView(next, { reusableRootBrowseView })
@@ -33223,6 +38192,7 @@ function commitGallerySearchQuery(nextQuery, options = {}) {
       const retainMountedSelectedArtist = Boolean(
         retainsSelectedArtist
         && mountedSelectedGalleryComplete
+        && clearScopeMatches
       );
       if (retainMountedSelectedArtist) {
         fetchAndRender(buildApiUrl({
@@ -33243,7 +38213,7 @@ function commitGallerySearchQuery(nextQuery, options = {}) {
     return;
   }
   const next = {
-    ...state.view,
+    ...withActiveGallerySources(state.view, state.gallery.mainState),
     query: normalizedQuery,
     selected_artist: '',
     all_artists_active: false,
@@ -33584,7 +38554,7 @@ function isCompleteReusableSelectedArtistBrowseView(view, selectedArtist) {
     && albums.every((album) => !Boolean(album?.preview_only));
 }
 
-function tryRenderOptimisticSidebarArtistSelection(nextView) {
+function tryRenderOptimisticSidebarArtistSelection(nextView, options = {}) {
   const query = String(state.view?.query || '').trim();
   const optimisticGroups = buildOptimisticSidebarArtistSelectionGroups(nextView.selected_artist);
   const reusableSelectedArtistBrowseView = query
@@ -33596,6 +38566,12 @@ function tryRenderOptimisticSidebarArtistSelection(nextView) {
     state.ui.viewStateRevision = Number(state.ui.viewStateRevision || 0) + 1;
     applyViewPayload({
       ...reusableSelectedArtistBrowseView,
+      query: nextView.query,
+      selected_artist: nextView.selected_artist,
+      all_artists_active: nextView.all_artists_active,
+      visible_library_categories: nextView.visible_library_categories,
+      related_filter_artists: nextView.related_filter_artists,
+      primary_filter_active: nextView.primary_filter_active,
       search_context: nextView.search_context,
     }, {
       trackSidebarReveal: false,
@@ -33605,7 +38581,7 @@ function tryRenderOptimisticSidebarArtistSelection(nextView) {
       resetScrollForUserArtistSelection: true,
     });
     pushBrowserViewState(nextView);
-    if (!isCompleteReusableSelectedArtistBrowseView(
+    if (options.forceFetch || !isCompleteReusableSelectedArtistBrowseView(
       reusableSelectedArtistBrowseView,
       nextView.selected_artist,
     )) {
@@ -33621,7 +38597,7 @@ function tryRenderOptimisticSidebarArtistSelection(nextView) {
   const optimisticRelatedArtists = Array.isArray(optimisticGroups.relatedArtists)
     ? optimisticGroups.relatedArtists
     : [];
-  const shouldSkipFetch = Boolean(optimisticGroups.skipFetch);
+  const shouldSkipFetch = Boolean(optimisticGroups.skipFetch) && options.forceFetch !== true;
   const optimisticArtistGroups = typeof buildSelectedArtistRuntimeArtistGroups === 'function'
     ? buildSelectedArtistRuntimeArtistGroups(nextView, optimisticPrimaryGroups, optimisticFamilyGroups)
     : [...optimisticPrimaryGroups, ...optimisticFamilyGroups];
@@ -33665,6 +38641,8 @@ function tryRenderOptimisticSidebarArtistSelection(nextView) {
 function readReusableRootBrowseViewForClearedSearch(nextView) {
   return typeof getReusableRootBrowseView === 'function'
     ? getReusableRootBrowseView({
+      ...(nextView.gallery_display_mode ? { gallery_display_mode: nextView.gallery_display_mode } : {}),
+      ...(nextView.gallery_scale_percent != null ? { gallery_scale_percent: nextView.gallery_scale_percent } : {}),
       query: '',
       selected_artist: '',
       all_artists_active: true,
@@ -33744,9 +38722,21 @@ function isMountedSelectedGalleryComplete(selectedArtist, reusableRootBrowseView
   const currentSidebarAlbumCount = currentSidebarCanCertifyCompleteness
     ? readSidebarAlbumCount(state.view?.artists_sidebar, normalizedSelectedArtist)
     : null;
+  const capturedSidebarMatchesSources = Array.isArray(
+    capturedPreSearchView?.sidebar_library_categories,
+  ) && gallerySourceScopesEqual(
+    capturedPreSearchView.sidebar_library_categories,
+    state.gallery.mainState
+      ? activeGallerySourceCategories(state.gallery.mainState)
+      : state.view.visible_library_categories || [],
+  );
+  const capturedSidebarAlbumCount = capturedSidebarMatchesSources
+    ? readSidebarAlbumCount(capturedPreSearchView.artists_sidebar, normalizedSelectedArtist)
+    : null;
   const expectedAlbumCount = [
     completionDenominator,
     canonicalRootAlbumCount,
+    capturedSidebarAlbumCount,
     currentSidebarAlbumCount,
   ].reduce(
     (largestCount, count) => (
@@ -33992,6 +38982,7 @@ function syncSearchClear() {
 }
 
 function handleGalleryBootstrapPopState() {
+  if (typeof syncGalleryMainStateFromLocation === 'function') syncGalleryMainStateFromLocation();
   fetchAndRender(getBrowserLocationHref(), false);
 }
 
@@ -34103,6 +39094,22 @@ document.addEventListener('input', (event) => {
 
 document.addEventListener('paste', async (event) => {
   await handleUtilityBootstrapPaste(event);
+});
+
+document.addEventListener('dragstart', (event) => {
+  handleUtilityBootstrapDragStart(event);
+});
+
+document.addEventListener('dragover', (event) => {
+  handleUtilityBootstrapDragOver(event);
+});
+
+document.addEventListener('drop', async (event) => {
+  await handleUtilityBootstrapDrop(event);
+});
+
+document.addEventListener('dragend', () => {
+  handleUtilityBootstrapDragEnd();
 });
 
 document.addEventListener('copy', (event) => {
@@ -34243,6 +39250,7 @@ if (bootstrap.startupPayloadTiers?.hydration && typeof bootstrap.startupPayloadT
   bootstrap.startupPayloadTiers.hydration.embeddedViewPatch = null;
 }
 renderView();
+if (typeof initGalleryMain === 'function') initGalleryMain();
 startupMetrics.markInitialRender(state.view);
 const hasAuthoritativeServerRenderedInitialView = Boolean(
   !bootstrap.partialView
@@ -34280,6 +39288,7 @@ if (
   });
 }
 updateStatusIndicator({
+  allowed_actions: window.__ALBUM_HAVEN_PLAYBACK_ALLOWED_ACTIONS__ || {},
   scan_in_progress: Boolean(bootstrap.scanInProgress),
   scan_phase: String(bootstrap.scanPhase || 'idle'),
   scan_mode: String(bootstrap.scanMode || 'idle'),
@@ -34364,7 +39373,7 @@ document.addEventListener('contextmenu', (event) => {
   const indicator = event.target.closest('#scan-indicator');
   if (!indicator) return;
   event.preventDefault();
-  showStatusContextMenu(event.clientX, event.clientY);
+  showStatusContextMenu(indicator);
 });
 
 document.addEventListener('click', (event) => {
@@ -34374,12 +39383,18 @@ document.addEventListener('click', (event) => {
 });
 
 document.addEventListener('keydown', (event) => {
+  const statusAnchor = event.target.closest?.('#scan-indicator');
+  if (statusAnchor && (event.key === 'ContextMenu' || (event.shiftKey && event.key === 'F10'))) {
+    event.preventDefault();
+    showStatusContextMenu(statusAnchor);
+    return;
+  }
   if (typeof handleArtistsDrawerKeydown === 'function') {
     handleArtistsDrawerKeydown(event);
   }
   if (event.key === 'Escape') {
     hideVersionContextMenu();
-    hideStatusContextMenu();
+    hideStatusContextMenu(true);
   }
 });
 
@@ -34492,6 +39507,17 @@ window.addEventListener('scroll', () => {
 
 if (typeof syncArtistsDrawerVisibility === 'function') {
   syncArtistsDrawerVisibility();
+}
+
+const tagEditorFooter = document.getElementById('tag-editor-footer');
+if (tagEditorFooter) {
+  EditorPage.mountFooter(tagEditorFooter, {
+    showReset: false,
+    canSave: false,
+    leadingElement: document.getElementById('tag-editor-auto-number-controls'),
+    secondary: { label: 'Cancel', attributes: { 'data-close-tag-editor': '1' } },
+    primary: { label: 'Apply', attributes: { 'data-open-tag-edit-confirm': '1' } },
+  });
 }
 
 // END js/runtime/bootstrap-init.js

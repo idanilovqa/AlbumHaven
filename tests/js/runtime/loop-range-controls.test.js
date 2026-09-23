@@ -40,6 +40,8 @@ class FakeElement {
     this.listeners.set(name, listeners);
   }
 
+  removeEventListener(name, listener) { this.listeners.set(name, (this.listeners.get(name) || []).filter(item => item !== listener)); }
+
   dispatch(name, event = {}) {
     if (name === 'pointerenter') this.hovered = true;
     if (name === 'pointerleave') this.hovered = false;
@@ -59,22 +61,27 @@ class FakeElement {
 function loadSharedControls() {
   const documentListeners = new Map();
   const animationFrames = [];
+  const timers = new Map();
+  let now = 0;
+  let timerId = 0;
   const context = {
     console,
+    setTimeout(callback, delay) { const id = ++timerId; timers.set(id, { callback, at: now + delay }); return id; },
+    clearTimeout(id) { timers.delete(id); },
     document: {
       addEventListener(name, listener) {
         const listeners = documentListeners.get(name) || [];
         listeners.push(listener);
         documentListeners.set(name, listeners);
       },
-      removeEventListener() {},
+      removeEventListener(name, listener) { documentListeners.set(name, (documentListeners.get(name) || []).filter(item => item !== listener)); },
     },
     formatLoopTime(value) { return `T${Number(value).toFixed(3)}`; },
     requestAnimationFrame(callback) {
       animationFrames.push(callback);
       return animationFrames.length;
     },
-    cancelAnimationFrame() {},
+    cancelAnimationFrame(id) { animationFrames[id - 1] = null; },
   };
   vm.createContext(context);
   if (fs.existsSync(runtimePath)) {
@@ -82,12 +89,22 @@ function loadSharedControls() {
   }
   return {
     context,
+    tick(elapsed) {
+      const end = now + elapsed;
+      while (true) {
+        const due = [...timers.entries()].filter(([, item]) => item.at <= end).sort((a, b) => a[1].at - b[1].at)[0];
+        if (!due) break;
+        now = due[1].at; timers.delete(due[0]); due[1].callback();
+      }
+      now = end;
+    },
+    documentListenerCount: () => [...documentListeners.values()].reduce((sum, listeners) => sum + listeners.length, 0),
     dispatchDocument(name, event = {}) {
       for (const listener of documentListeners.get(name) || []) listener(event);
     },
     flushAnimationFrame() {
       const callbacks = animationFrames.splice(0);
-      callbacks.forEach((callback) => callback(16));
+      callbacks.forEach((callback) => callback?.(16));
     },
   };
 }
@@ -198,7 +215,7 @@ test('shared scissors uses one persistent pod with stable create divider and can
 });
 
 test('shared scissors exposes disabled semantics and equivalent pointer and focus engagement', () => {
-  const { context } = loadSharedControls();
+  const { context, tick } = loadSharedControls();
   const root = createActionRoot();
   const calls = [];
   const controller = context.mountLoopEditActionControl({
@@ -224,10 +241,12 @@ test('shared scissors exposes disabled semantics and equivalent pointer and focu
   root.dispatch('pointerenter');
   assert.equal(root.getAttribute('data-loop-action-engaged'), 'true');
   root.dispatch('pointerleave');
+  tick(500);
   assert.equal(root.getAttribute('data-loop-action-engaged'), 'false');
   root.dispatch('focusin');
   assert.equal(root.getAttribute('data-loop-action-engaged'), 'true');
   root.dispatch('focusout', { relatedTarget: null });
+  tick(500);
   assert.equal(root.getAttribute('data-loop-action-engaged'), 'false');
 
   root.create.dispatch('click');
@@ -236,7 +255,7 @@ test('shared scissors exposes disabled semantics and equivalent pointer and focu
 });
 
 test('shared scissors remembers idle pointer entry through the synchronous active child swap', () => {
-  const { context } = loadSharedControls();
+  const { context, tick } = loadSharedControls();
   const root = createActionRoot();
   const calls = [];
   const hoverDuringActivation = [];
@@ -277,6 +296,7 @@ test('shared scissors remembers idle pointer entry through the synchronous activ
     'hiding the clicked enter button can drop focus, but the pod stays engaged until pointerleave',
   );
   root.dispatch('pointerleave');
+  tick(500);
   assert.equal(root.getAttribute('data-loop-action-engaged'), 'false');
 
   root.dispatch('focusin');
@@ -289,6 +309,7 @@ test('shared scissors remembers idle pointer entry through the synchronous activ
     'focus inside the active pod keeps it engaged after the pointer leaves',
   );
   root.dispatch('focusout', { relatedTarget: null });
+  tick(500);
   assert.equal(root.getAttribute('data-loop-action-engaged'), 'false');
 
   const awayRoot = createActionRoot();
@@ -304,7 +325,7 @@ test('shared scissors remembers idle pointer entry through the synchronous activ
 });
 
 test('shared scissors reconciles async activation from live hover and focus ownership', () => {
-  const { context } = loadSharedControls();
+  const { context, tick } = loadSharedControls();
   const awayRoot = createActionRoot();
   const awayController = context.mountLoopEditActionControl({
     root: awayRoot,
@@ -335,6 +356,7 @@ test('shared scissors reconciles async activation from live hover and focus owne
     'a later active update must reconcile stale pointer memory with the live root hover state',
   );
   hoveredRoot.dispatch('pointerleave');
+  tick(500);
   assert.equal(hoveredRoot.getAttribute('data-loop-action-engaged'), 'false');
 
   const focusedRoot = createActionRoot();
@@ -355,6 +377,9 @@ test('shared scissors reconciles async activation from live hover and focus owne
   );
   focusedRoot.ownerDocument.activeElement = null;
   focusedRoot.dispatch('focusout', { relatedTarget: null });
+  tick(499);
+  assert.equal(focusedRoot.getAttribute('data-loop-action-engaged'), 'true');
+  tick(1);
   assert.equal(focusedRoot.getAttribute('data-loop-action-engaged'), 'false');
 });
 
@@ -363,226 +388,106 @@ test('shared scissors CSS overlays an attached pod and never uses a waiting curs
     __dirname, '..', '..', '..', 'music_app', 'static', 'css', 'runtime', 'non-album-and-player.css',
   ), 'utf8');
   assert.match(css, /\.loop-edit-action-pod\s*\{[^}]*position:\s*relative/s);
-  assert.match(css, /\.loop-edit-actions\.is-active[^,{]*\[data-loop-action-engaged="true"\][^{]*\.loop-edit-action-pod\s*\{[^}]*position:\s*absolute/s);
+  assert.match(css, /\.loop-play-control-actions\s*\{[^}]*position:\s*absolute/s);
   assert.match(css, /\.loop-edit-action-divider\s*\{[^}]*(?:width:\s*1px|border-left:)/s);
-  assert.match(css, /\.loop-edit-actions\.is-active\[data-loop-action-engaged="false"\]/);
-  assert.match(css, /\.loop-edit-action-create:(?:hover|focus-visible)[^{]*\{[^}]*(?:rgba?\([^}]*74,\s*222,\s*128|#4ade80)/s);
-  assert.match(css, /\.loop-edit-action-cancel:(?:hover|focus-visible)[^{]*\{[^}]*(?:#ef4444|239,\s*68,\s*68)/s);
+  assert.match(css, /\.loop-edit-actions\s*\{[^}]*opacity:\s*0/s);
+  assert.match(css, /\.loop-edit-action-create:(?:hover|focus-visible)[^{]*\{[^}]*var\(--loop-action-save-color\)/s);
+  assert.match(css, /\.loop-edit-action-cancel:(?:hover|focus-visible)[^{]*\{[^}]*var\(--loop-action-cancel-color\)/s);
   assert.match(css, /\.loop-edit-action:disabled\s*\{[^}]*cursor:\s*not-allowed/s);
   assert.doesNotMatch(css, /\.loop-edit-action:disabled\s*\{[^}]*cursor:\s*(?:wait|progress)/s);
   assert.match(css, /@media\s*\(prefers-reduced-motion:\s*reduce\)[^]*\.loop-edit-action-pod/s);
 });
 
-test('shared scissors matches the owner-approved compact pod proportions and interaction colors', () => {
-  const css = fs.readFileSync(path.join(
-    __dirname, '..', '..', '..', 'music_app', 'static', 'css', 'runtime', 'non-album-and-player.css',
-  ), 'utf8');
-  const playerPlayRule = css.match(/\.loop-play-control-button\s*\{([^}]*)\}/s)?.[1] || '';
-  const playerActionMountRule = css.match(/\.loop-play-control-actions\s*\{([^}]*)\}/s)?.[1] || '';
-  const actionRootRule = css.match(/\.loop-edit-actions\s*\{([^}]*)\}/s)?.[1] || '';
-  const activeActionRootRule = css.match(
-    /\.loop-edit-actions\.is-active\[data-loop-action-engaged="true"\]\s*\{([^}]*)\}/s,
-  )?.[1] || '';
-  const podRule = css.match(/\.loop-edit-action-pod\s*\{([^}]*)\}/s)?.[1] || '';
-  const activePodRule = css.match(
-    /\.loop-edit-actions\.is-active\[data-loop-action-engaged="true"\]\s+\.loop-edit-action-pod\s*\{([^}]*)\}/s,
-  )?.[1] || '';
-  const iconRule = css.match(/\.loop-edit-action-icon\s*\{([^}]*)\}/s)?.[1] || '';
-  const savedActionRule = css.match(
-    /\.utility-loop-play-cluster\s+\.loop-edit-action\s*\{([^}]*)\}/s,
-  )?.[1] || '';
+function loopStyleRules(style, predicate = () => true) {
+  const css = fs.readFileSync(path.join(__dirname, '../../../music_app/static/css/runtime/non-album-and-player.css'), 'utf8');
+  return Array.from(css.matchAll(/([^{}]+)\{([^{}]*)\}/g))
+    .filter(match => (match[1].includes(`data-loop-control-style="${style}"`) || (style === 'capsule' && !match[1].includes('data-loop-control-style=') && /loop-play-control|loop-edit-action/.test(match[1]))) && predicate(match[1]))
+    .map(match => match[2]).join('\n');
+}
 
-  assert.match(playerPlayRule, /width:\s*var\(--loop-play-control-size\)/);
-  assert.match(playerPlayRule, /height:\s*var\(--loop-play-control-size\)/);
-  assert.match(
-    playerActionMountRule,
-    /width:\s*39px/,
-    'the player mount must reserve only the collapsed one-button footprint',
-  );
-  assert.doesNotMatch(
-    playerActionMountRule,
-    /margin-inline-end:\s*-15px/,
-    'the player mount must not reserve and compensate the expanded two-button width',
-  );
-  assert.match(
-    playerActionMountRule,
-    /position:\s*absolute/,
-    'the main pod must stay out of the player grid flow',
-  );
-  assert.match(playerActionMountRule, /left:\s*60\.4166667cqw/);
-  assert.match(playerActionMountRule, /top:\s*58\.3333333cqw/);
-  assert.match(actionRootRule, /width:\s*39px/);
-  assert.match(actionRootRule, /height:\s*18px/);
-  assert.match(
-    activeActionRootRule,
-    /width:\s*55px/,
-    'the engaged root must cover the full active pod so Cancel remains hoverable',
-  );
-  assert.doesNotMatch(
-    activeActionRootRule,
-    /margin-inline-end:\s*-15px/,
-    'the absolutely positioned wider hit region needs no layout compensation',
-  );
-  assert.match(podRule, /width:\s*39px/);
-  assert.match(podRule, /height:\s*18px/);
-  assert.match(activePodRule, /width:\s*55px/);
-  assert.match(activePodRule, /height:\s*18px/);
-  assert.match(iconRule, /width:\s*12px/);
-  assert.match(iconRule, /height:\s*11px/);
-  assert.doesNotMatch(
-    savedActionRule,
-    /(?:width|height|min-width|min-height)\s*:/,
-    'saved-loop controls must reuse the shared compact sizing instead of overriding it',
-  );
-
-  assert.match(
-    css,
-    /\.loop-edit-actions(?=[^{]*:not\(\.is-disabled\))(?=[^{]*:hover)[^{]*\.loop-edit-action-pod\s*\{[^}]*(?=[^}]*border-color:)(?=[^}]*box-shadow:)[^}]*\}/s,
-    'idle hover needs a visible pod-edge and glow change, not only an icon tint',
-  );
-  const neutralCreateIndex = css.indexOf(
-    '.loop-edit-actions.is-active[data-loop-action-engaged="true"] .loop-edit-action-create {',
-  );
-  const hoveredCreateIndex = css.lastIndexOf(
-    '.loop-edit-actions.is-active[data-loop-action-engaged="true"] .loop-edit-action-create:hover',
-  );
-  assert.ok(neutralCreateIndex >= 0, 'active create must have a neutral baseline');
-  assert.ok(
-    hoveredCreateIndex > neutralCreateIndex,
-    'the bright-green create hover rule must follow and override the active neutral rule',
-  );
-  assert.match(
-    css.slice(hoveredCreateIndex),
-    /\.loop-edit-actions\.is-active\[data-loop-action-engaged="true"\][^}]*\.loop-edit-action-create:hover[^}]*\{[^}]*(?:#4ade80|74,\s*222,\s*128)[^}]*text-shadow:/s,
-  );
-  assert.match(css, /\.loop-edit-action-cancel:hover[^}]*\{[^}]*(?:#ef4444|239,\s*68,\s*68)/s);
-  assert.match(css, /\.loop-edit-action:disabled\s*\{[^}]*cursor:\s*not-allowed[^}]*color:\s*#9ca3af/s);
-  assert.match(css, /\.loop-edit-actions\.is-disabled\s+\.loop-edit-action-pod\s*\{[^}]*border-color:\s*rgba\(156,\s*163,\s*175/s);
+// B01/B02 replace the superseded 39/55px component geometry with the approved
+// Settings variants. Behavioral timer tests above and browser layout checks
+// independently cover the component's interaction and computed positioning.
+test('capsule uses a 56px stationary shell with 48px Play and 90/123px revealed outlines', () => {
+  const css = loopStyleRules('capsule');
+  assert.match(css, /(?:width|--[\w-]*(?:shell|cluster)[\w-]*):\s*56px/);
+  assert.match(css, /(?:--loop-play-control-size|--[\w-]*play[\w-]*|width):\s*48px/);
+  assert.match(css, /width:\s*90px/);
+  assert.match(css, /width:\s*123px/);
+  const reveal = loopStyleRules('capsule', selector => /engaged|revealed/.test(selector));
+  assert.match(reveal, /width:\s*90px/);
+  assert.match(reveal, /width:\s*123px/);
 });
 
-test('shared scissors matches the owner-reference hover intensity and neutral icon states', () => {
-  const css = fs.readFileSync(path.join(
-    __dirname, '..', '..', '..', 'music_app', 'static', 'css', 'runtime', 'non-album-and-player.css',
-  ), 'utf8');
-  const idleHoverPodRule = css.match(
-    /\.loop-edit-actions:not\(\.is-disabled\):hover\s+\.loop-edit-action-pod\s*\{([^}]*)\}/s,
-  )?.[1] || '';
-  const createHoverIconRule = css.match(
-    /\.loop-edit-actions\.is-active\[data-loop-action-engaged="true"\]\s+\.loop-edit-action-create:hover\s+\.loop-edit-action-icon,[^{]*\{([^}]*)\}/s,
-  )?.[1] || '';
-  const neutralCreateRule = css.match(
-    /\.loop-edit-actions\.is-active\[data-loop-action-engaged="true"\]\s+\.loop-edit-action-create\s*\{([^}]*)\}/s,
-  )?.[1] || '';
-  const neutralCancelRule = css.match(/\.loop-edit-action-cancel\s*\{([^}]*)\}/s)?.[1] || '';
-
-  assert.match(neutralCreateRule, /color:\s*#9ca3af/);
-  assert.match(neutralCancelRule, /color:\s*#9ca3af/);
-  assert.match(
-    idleHoverPodRule,
-    /0\s+0\s+7px\s+rgba\(74,\s*222,\s*128,\s*0\.48\)/,
-    'the owner reference uses a compact halo rather than a full-control-height bloom',
-  );
-  assert.match(
-    createHoverIconRule,
-    /drop-shadow\(0\s+0\s+5px\s+rgba\(74,\s*222,\s*128,\s*1\)\)/,
-    'active Create hover needs the stronger focused scissors glow from the reference',
-  );
+test('companion uses 52px Play and a 26px-high pod at 26px with 58/88px widths', () => {
+  const css = loopStyleRules('companion');
+  assert.match(css, /(?:--loop-play-control-size|--[\w-]*play[\w-]*|width):\s*52px/);
+  const mount = loopStyleRules('companion', selector => /\.loop-play-control-actions\s*$/.test(selector.trim()));
+  assert.match(mount, /left:\s*26px/);
+  assert.match(mount, /top:\s*26px/);
+  const pod = loopStyleRules('companion', selector => /\.loop-edit-action-pod(?:\s|:|$)/.test(selector));
+  assert.match(pod, /height:\s*26px/);
+  assert.match(pod, /width:\s*58px/);
+  assert.match(pod, /width:\s*88px/);
 });
 
-test('shared scissors keeps owner-measured glyph centers inside the compact idle and active pods', () => {
-  const css = fs.readFileSync(path.join(
-    __dirname, '..', '..', '..', 'music_app', 'static', 'css', 'runtime', 'non-album-and-player.css',
-  ), 'utf8');
-  const scissorsMaskRule = css.match(/\.loop-edit-action-icon\.is-scissors\s*\{([^}]*)\}/s)?.[1] || '';
-  const idleScissorsRule = css.match(
-    /\.loop-edit-action-enter\s+\.loop-edit-action-icon\.is-scissors\s*\{([^}]*)\}/s,
-  )?.[1] || '';
-  const activeCreateRule = css.match(
-    /\.loop-edit-actions\.is-active\[data-loop-action-engaged="true"\]\s+\.loop-edit-action-create\s*\{([^}]*)\}/s,
-  )?.[1] || '';
-  const activeScissorsRule = css.match(
-    /\.loop-edit-actions\.is-active\[data-loop-action-engaged="true"\]\s+\.loop-edit-action-create\s+\.loop-edit-action-icon\.is-scissors\s*\{([^}]*)\}/s,
-  )?.[1] || '';
-  const dividerRule = css.match(/\.loop-edit-action-divider\s*\{([^}]*)\}/s)?.[1] || '';
-  const cancelRule = css.match(/\.loop-edit-action-cancel\s*\{([^}]*)\}/s)?.[1] || '';
-  const cancelIconRule = css.match(
-    /\.loop-edit-action-cancel\s+\.loop-edit-action-icon\.is-cancel\s*\{([^}]*)\}/s,
-  )?.[1] || '';
-
-  assert.match(scissorsMaskRule, /(?:-webkit-)?mask-size:\s*135%/);
-  assert.match(
-    idleScissorsRule,
-    /transform:\s*translateX\(5px\)/,
-    'the idle visible scissors center must sit about 24px from the fitted pod start',
-  );
-  assert.match(activeCreateRule, /width:\s*33px/);
-  assert.match(activeCreateRule, /min-width:\s*33px/);
-  assert.match(
-    activeScissorsRule,
-    /transform:\s*translateX\(7px\)/,
-    'the active scissors center must remain about 24px from the pod start after Play overlap',
-  );
-  assert.match(dividerRule, /margin-block:\s*2px/);
-  assert.match(cancelRule, /width:\s*19px/);
-  assert.match(cancelRule, /min-width:\s*19px/);
-  assert.match(cancelIconRule, /width:\s*9px/);
-  assert.match(cancelIconRule, /height:\s*9px/);
-  assert.match(cancelIconRule, /(?:-webkit-)?mask-size:\s*120%/);
-  assert.match(cancelIconRule, /transform:\s*translateX\(-2px\)/);
-  assert.doesNotMatch(
-    css,
-    /\.utility-loop-play-cluster\s+\.(?:loop-edit-action-create|loop-edit-action-cancel|loop-edit-action-icon\.is-scissors)\s*\{[^}]*(?:width|transform)\s*:/s,
-    'saved loops must inherit the same reusable internal placement instead of overriding it',
-  );
+test('both styles center full-size glyphs in shared action slots', () => {
+  const capsule = loopStyleRules('capsule', selector => /\.loop-edit-action(?:\s|$)/.test(selector));
+  const capsuleIcons = loopStyleRules('capsule', selector => selector.includes('.loop-edit-action-icon'));
+  const companionIcons = loopStyleRules('companion', selector => selector.includes('.loop-edit-action-icon'));
+  assert.match(capsule, /width:\s*32px/);
+  assert.match(capsuleIcons, /width:\s*26px/);
+  assert.match(capsuleIcons, /height:\s*26px/);
+  assert.match(companionIcons, /width:\s*22px/);
+  assert.match(companionIcons, /height:\s*22px/);
+  const cancel = loopStyleRules('companion', selector => /is-cancel|loop-edit-action-cancel/.test(selector));
+  assert.match(cancel, /width:\s*18px/);
+  assert.match(cancel, /height:\s*18px/);
+  const css = fs.readFileSync(path.join(__dirname, '../../../music_app/static/css/runtime/non-album-and-player.css'), 'utf8');
+  assert.match(css, /\.loop-edit-action\s*\{[^}]*place-items:\s*center/s);
+  assert.match(css, /\.loop-edit-action-icon\s*\{[^}]*mask-size:\s*contain/s);
+  assert.doesNotMatch(loopStyleRules('capsule') + loopStyleRules('companion'), /transform:\s*translateX\((?:5|7|-2)px\)/);
 });
 
-test('shared scissors keeps a small main-player gap and the fitted saved-player silhouette', () => {
-  const css = fs.readFileSync(path.join(
-    __dirname, '..', '..', '..', 'music_app', 'static', 'css', 'runtime', 'non-album-and-player.css',
-  ), 'utf8');
-  const playerPlayRule = css.match(/\.loop-play-control-button\s*\{([^}]*)\}/s)?.[1] || '';
-  const playerMountRule = css.match(/\.loop-play-control-actions\s*\{([^}]*)\}/s)?.[1] || '';
-  const rootRule = css.match(/\.loop-edit-actions\s*\{([^}]*)\}/s)?.[1] || '';
-  const podRule = css.match(/\.loop-edit-action-pod\s*\{([^}]*)\}/s)?.[1] || '';
-  const activeRootRule = css.match(
-    /\.loop-edit-actions\.is-active\[data-loop-action-engaged="true"\]\s*\{([^}]*)\}/s,
-  )?.[1] || '';
-  const activePodRule = css.match(
-    /\.loop-edit-actions\.is-active\[data-loop-action-engaged="true"\]\s+\.loop-edit-action-pod\s*\{([^}]*)\}/s,
-  )?.[1] || '';
-  const hoverPodRule = css.match(
-    /\.loop-edit-actions:not\(\.is-disabled\):hover\s+\.loop-edit-action-pod\s*\{([^}]*)\}/s,
-  )?.[1] || '';
-  const borderAlpha = (rule) => Number(
-    rule.match(/border(?:-color)?:[^;]*rgba\(74,\s*222,\s*128,\s*([\d.]+)\)/)?.[1],
-  );
+test('active hover uses semantic glyph color and soft outward glow without filled action surfaces', () => {
+  const css = fs.readFileSync(path.join(__dirname, '../../../music_app/static/css/runtime/non-album-and-player.css'), 'utf8');
+  assert.match(css, /--loop-action-save-color:\s*var\(/);
+  assert.match(css, /--loop-action-cancel-color:\s*(?:var\(|#ff3030)/i);
+  for (const semantic of ['save', 'cancel']) {
+    assert.match(css, new RegExp(`color:\\s*var\\(--loop-action-${semantic}-color\\)`));
+    const glowRules = Array.from(css.matchAll(/([^{}]+)\{([^{}]*)\}/g))
+      .filter(match => /:hover|:focus-visible/.test(match[1]) && match[1].includes('loop-edit-action') && match[2].includes(`--loop-action-${semantic}-glow`))
+      .map(match => match[2]).join('\n');
+    for (const blur of [2, 5, 10, 16]) assert.match(glowRules, new RegExp(`drop-shadow\\(0\\s+0\\s+${blur}px`));
+  }
+  const active = Array.from(css.matchAll(/([^{}]+)\{([^{}]*)\}/g))
+    .filter(match => match[1].includes('.is-active') && /:hover|:focus-visible/.test(match[1]) && !match[1].includes('icon'))
+    .map(match => match[2]).join('\n');
+  assert.match(active, /background:\s*transparent/);
+  assert.match(active, /box-shadow:\s*none/);
+});
 
-  assert.match(rootRule, /width:\s*39px/);
-  assert.match(rootRule, /height:\s*18px/);
-  assert.match(rootRule, /flex:\s*0\s+0\s+39px/);
-  assert.match(podRule, /width:\s*39px/);
-  assert.match(podRule, /height:\s*18px/);
-  assert.ok(borderAlpha(podRule) >= 0.75, 'idle fitted pod needs a hard green outline');
-  assert.match(activeRootRule, /width:\s*55px/);
-  assert.doesNotMatch(activeRootRule, /margin-inline-end/);
-  assert.match(activePodRule, /width:\s*55px/);
-  assert.match(activePodRule, /height:\s*18px/);
-  assert.ok(borderAlpha(activePodRule) >= 0.9, 'engaged fitted pod needs a hard green outline');
-  assert.ok(borderAlpha(hoverPodRule) >= 0.9, 'hovered fitted pod needs a hard green outline');
+test('cancel is neutral at rest and active glyph halos remain unclipped', () => {
+  const css = fs.readFileSync(path.join(__dirname, '../../../music_app/static/css/runtime/non-album-and-player.css'), 'utf8');
+  const baseline = Array.from(css.matchAll(/([^{}]+)\{([^{}]*)\}/g))
+    .filter(match => /\.loop-edit-action(?:-cancel)?\s*$/.test(match[1].trim()) && !/:hover|:focus|:active/.test(match[1]))
+    .map(match => match[2]).join('\n');
+  assert.match(baseline, /color:\s*var\(/);
+  assert.doesNotMatch(baseline, /color:\s*var\(--loop-action-cancel-color\)|color:\s*#(?:ff3030|ef4444)/i);
+  const activePod = Array.from(css.matchAll(/([^{}]+)\{([^{}]*)\}/g))
+    .filter(match => /\.loop-edit-action-pod\s*$/.test(match[1].trim()))
+    .map(match => match[2]).join('\n');
+  assert.match(activePod, /overflow:\s*visible/);
+  const companionPod = loopStyleRules('companion', selector => selector.includes('.is-active') && /\.loop-edit-action-pod\s*$/.test(selector.trim()));
+  assert.doesNotMatch(companionPod, /clip-path:\s*(?!none)[^;]+/);
+});
 
-  assert.match(playerMountRule, /width:\s*39px/);
-  assert.doesNotMatch(playerMountRule, /margin-inline-end:\s*-15px/);
-  assert.match(playerMountRule, /position:\s*absolute/);
-  assert.match(playerMountRule, /left:\s*60\.4166667cqw/);
-  assert.match(playerMountRule, /z-index:\s*4/);
-  assert.match(playerPlayRule, /z-index:\s*5/);
-  assert.match(
-    css,
-    /\.loop-play-control-actions\s+\.loop-edit-action-pod::before,[^]*\.loop-play-control-actions\s+\.loop-edit-action-pod::after\s*\{[^}]*display:\s*none/s,
-    'the shared pod must remove the painted rings that made its circular edge look ragged',
-  );
-  assert.doesNotMatch(css, /\.utility-loop-play-cluster\s+\.loop-edit-actions\s*\{/);
-  assert.doesNotMatch(css, /\.utility-loop-play\s*\{[^}]*(?:width|height)\s*:/s);
+test('companion idle hover fills the full curved pod while active contour leaves glyph overflow free', () => {
+  const idlePod = loopStyleRules('companion', selector => selector.includes('.loop-edit-action-pod') && /:has|:hover|:focus-visible/.test(selector) && /:not\(\.is-active\)/.test(selector));
+  assert.match(idlePod, /background:\s*(?:var\(|color-mix\()/);
+  const contour = loopStyleRules('companion', selector => /\.loop-edit-action-pod(?:::before|::after)?/.test(selector));
+  assert.match(contour, /(?:clip-path:\s*path\(|mask:\s*radial-gradient\()/);
+  assert.match(contour, /border-radius:/);
 });
 
 test('opaque Play surfaces retain pointer ownership at the loop-control edge', () => {
@@ -598,153 +503,109 @@ test('opaque Play surfaces retain pointer ownership at the loop-control edge', (
     /background:[^;]*(?:rgba\(|rgb\([^)]*\/\s*(?:0|\.)|#[0-9a-f]{8}\b)/i,
     'the shared Play surface must be fully opaque so the attached pod cannot show through it',
   );
-  assert.match(playRule, /border-color:\s*#[0-9a-f]{6}\b/i);
+  assert.match(playRule, /border:\s*1px solid var\(--loop-control-border\)/);
   assert.match(playRule, /pointer-events:\s*auto/);
   assert.match(playRule, /z-index:\s*5/);
   assert.match(mountRule, /z-index:\s*4/);
 });
 
-test('expanded loop edit controls overlay the waveform without reserving their two-button width', () => {
-  const css = fs.readFileSync(path.join(
+test('saved-loop Play hover preserves its surface and uses only a subtle one-pixel outline', () => {
+  const playerCss = fs.readFileSync(path.join(
     __dirname, '..', '..', '..', 'music_app', 'static', 'css', 'runtime', 'non-album-and-player.css',
   ), 'utf8');
-  const playerMountRule = css.match(/\.loop-play-control-actions\s*\{([^}]*)\}/s)?.[1] || '';
-  const activeRootRule = css.match(
-    /\.loop-edit-actions\.is-active\[data-loop-action-engaged="true"\]\s*\{([^}]*)\}/s,
+  const appearanceCss = fs.readFileSync(path.join(
+    __dirname, '..', '..', '..', 'music_app', 'static', 'css', 'appearance-backgrounds.css',
+  ), 'utf8');
+  const playRule = playerCss.match(/\.loop-play-control-button\s*\{([^}]*)\}/s)?.[1] || '';
+  const baseRule = appearanceCss.match(/:root \.utility-loop-play\s*\{([^}]*)\}/s)?.[1] || '';
+  const interactionRule = appearanceCss.match(
+    /:root \.utility-loop-play:is\(:hover,\s*:active,\s*:focus-visible\):not\(:disabled\):not\(\[aria-disabled='true'\]\)\s*\{([^}]*)\}/s,
   )?.[1] || '';
-  const activePodRule = css.match(
-    /\.loop-edit-actions\.is-active\[data-loop-action-engaged="true"\]\s+\.loop-edit-action-pod\s*\{([^}]*)\}/s,
+  const restingSurface = playRule.match(/background:\s*([^;]+);/)?.[1]?.trim() || '';
+  const restingBorder = (playRule.match(/border-color:\s*([^;]+);/)
+    || playRule.match(/border:\s*1px solid\s+([^;]+);/))?.[1]?.trim() || '';
+  assert.ok(restingBorder, 'the shared Play control must declare its resting border color');
+  assert.ok(baseRule.includes(`background: var(--appearance-play, ${restingSurface}) !important;`));
+  assert.ok(baseRule.includes(`border-color: var(--appearance-player-control-border, ${restingBorder}) !important;`));
+  assert.match(baseRule, /outline:\s*none\s*!important/);
+  assert.doesNotMatch(interactionRule, /(?:background|border-color):/, 'interaction keeps the same theme-linked surface and border');
+  assert.match(interactionRule, /outline:\s*1px solid color-mix\([^;]+transparent\)\s*!important/);
+  assert.match(interactionRule, /outline-offset:\s*1px\s*!important/);
+});
+test('saved-loop green controls use a thin subdued hover outline below pressed intensity', () => {
+  const css = fs.readFileSync(path.join(
+    __dirname, '..', '..', '..', 'music_app', 'static', 'css', 'appearance-backgrounds.css',
+  ), 'utf8');
+  const genericHoverRule = css.match(
+    /:root :is\(button,[^{]+:hover:not\(:disabled\):not\(\[aria-disabled='true'\]\)\s*\{([^}]*)\}/s,
+  )?.[0] || '';
+  const loopHoverRule = css.match(
+    /:root :is\(\.utility-loop-pitch-control button, \.utility-loop-repeat, \.utility-loop-speed-step, \.utility-loop-speed-value\):hover:not\(:disabled\)\s*\{([^}]*)\}/s,
   )?.[1] || '';
-  const sharedClusterRule = css.match(/\.loop-play-control-cluster\s*\{([^}]*)\}/s)?.[1] || '';
 
-  assert.match(playerMountRule, /width:\s*39px/);
-  assert.match(playerMountRule, /min-width:\s*39px/);
-  assert.match(playerMountRule, /max-width:\s*39px/);
-  assert.match(playerMountRule, /overflow:\s*visible/);
-  assert.doesNotMatch(
-    playerMountRule,
-    /width:\s*55px|margin-inline-end:\s*-15px/,
-    'the main grid must reserve only the collapsed one-button footprint',
-  );
-  assert.match(activeRootRule, /width:\s*55px/);
-  assert.match(activePodRule, /position:\s*absolute/);
-  assert.match(activePodRule, /width:\s*55px/);
-
-  assert.match(sharedClusterRule, /width:\s*var\(--loop-play-control-size\)/);
-  assert.match(sharedClusterRule, /position:\s*relative/);
-  assert.doesNotMatch(
-    playerMountRule,
-    /width:\s*55px/,
-    'expansion must overflow the fixed shared Play cluster rather than widening it',
-  );
+  assert.match(genericHoverRule, /:not\(\.utility-loop-control button\)/);
+  assert.match(genericHoverRule, /:not\(\.utility-loop-repeat\)/);
+  assert.match(genericHoverRule, /:not\(\.utility-loop-speed-step\)/);
+  assert.match(genericHoverRule, /:not\(\.utility-loop-speed-value\)/);
+  assert.match(loopHoverRule, /outline:\s*1px solid rgba\(110,\s*231,\s*183,\s*0\.18\)/);
+  assert.match(loopHoverRule, /outline-offset:\s*1px/);
 });
 
-test('shared loop edit pod uses a clean transparent cutout aligned to the Play circle', () => {
-  const css = fs.readFileSync(path.join(
-    __dirname, '..', '..', '..', 'music_app', 'static', 'css', 'runtime', 'non-album-and-player.css',
-  ), 'utf8');
-  const clusterRule = css.match(/\.loop-play-control-cluster\s*\{([^}]*)\}/s)?.[1] || '';
-  const mountRule = css.match(/\.loop-play-control-actions\s*\{([^}]*)\}/s)?.[1] || '';
-  const actionRule = css.match(/\.loop-edit-action\s*\{([^}]*)\}/s)?.[1] || '';
-  const fittedPodRule = css.match(
-    /\.loop-play-control-actions\s+\.loop-edit-action-pod\s*\{([^}]*)\}/s,
-  )?.[1] || '';
+test('expanded loop controls overlay the waveform from a fixed-size Play compound', () => {
+  const css = fs.readFileSync(path.join(__dirname, '../../../music_app/static/css/runtime/non-album-and-player.css'), 'utf8');
+  const mount = css.match(/\.loop-play-control-actions\s*\{([^}]*)\}/s)?.[1] || '';
+  const cluster = css.match(/\.loop-play-control-cluster\s*\{([^}]*)\}/s)?.[1] || '';
+  assert.match(mount, /position:\s*absolute/);
+  assert.match(mount, /overflow:\s*visible/);
+  assert.match(cluster, /position:\s*relative/);
+  assert.match(cluster, /(?:width|--[\w-]*(?:shell|cluster)[\w-]*):\s*(?:var\(|56px)/);
+  for (const style of ['capsule', 'companion']) {
+    const activeCluster = loopStyleRules(style, selector => /engaged|revealed|is-editing/.test(selector) && !/::before|loop-play-control-actions|loop-edit-action/.test(selector));
+    assert.doesNotMatch(activeCluster, /(?:width|flex-basis):\s*(?:90|123|58|88)px/, 'reveal must never widen the in-flow compound');
+  }
+});
 
-  assert.match(clusterRule, /--loop-play-control-size:\s*48px/);
-  assert.match(clusterRule, /container-type:\s*inline-size/);
-  assert.match(mountRule, /left:\s*60\.4166667cqw/);
-  assert.match(mountRule, /top:\s*58\.3333333cqw/);
-  assert.match(actionRule, /position:\s*relative/);
-  assert.match(actionRule, /z-index:\s*2/);
-  assert.match(fittedPodRule, /-webkit-mask:\s*radial-gradient\(circle\s+calc\(50cqw\s*\+\s*0\.5px\)\s+at\s+-10\.4166667cqw\s+-11\.4583333cqw,\s*transparent\s+calc\(50cqw\s*\+\s*0\.5px\),\s*#000\s+calc\(50cqw\s*\+\s*1px\)\)/);
-  assert.match(fittedPodRule, /mask:\s*radial-gradient\(circle\s+calc\(50cqw\s*\+\s*0\.5px\)\s+at\s+-10\.4166667cqw\s+-11\.4583333cqw,\s*transparent\s+calc\(50cqw\s*\+\s*0\.5px\),\s*#000\s+calc\(50cqw\s*\+\s*1px\)\)/);
-  assert.match(
-    css,
-    /\.loop-play-control-actions\s+\.loop-edit-action-pod::before,[^]*\.loop-play-control-actions\s+\.loop-edit-action-pod::after\s*\{[^}]*display:\s*none/s,
-    'neither player seam may contain leftover painted attachment rings',
-  );
-  assert.doesNotMatch(css, /\.player-loop-actions\s*\{/);
+test('both reusable variants hide folded actions without introducing a second consumer geometry', () => {
+  const css = fs.readFileSync(path.join(__dirname, '../../../music_app/static/css/runtime/non-album-and-player.css'), 'utf8');
+  const mounted = Array.from(css.matchAll(/([^{}]+)\{([^{}]*)\}/g))
+    .filter(match => /\.(?:loop-play-control-actions|loop-edit-actions)(?:\[data-loop-action-engaged="true"\])?\s*$/.test(match[1].trim())).map(match => match[2]).join('\n');
+  assert.match(mounted, /opacity:\s*0/);
+  assert.match(mounted, /pointer-events:\s*none/);
+  const revealed = Array.from(css.matchAll(/([^{}]+)\{([^{}]*)\}/g))
+    .filter(match => /revealed|engaged/.test(match[1]) && /\.(?:loop-play-control-actions|loop-edit-actions)(?:\[data-loop-action-engaged="true"\])?\s*$/.test(match[1].trim()))
+    .map(match => match[2]).join('\n');
+  assert.match(revealed, /opacity:\s*1/);
+  assert.match(revealed, /pointer-events:\s*auto/);
   assert.doesNotMatch(css, /\.utility-loop-play-cluster\s+\.loop-edit-actions\s*\{/);
+  assert.doesNotMatch(css, /\.player-loop-actions\s*\{/);
 });
 
-test('persistent and saved-loop players share one relational Play control cluster contract', () => {
-  const css = fs.readFileSync(path.join(
-    __dirname, '..', '..', '..', 'music_app', 'static', 'css', 'runtime', 'non-album-and-player.css',
-  ), 'utf8');
-  const template = fs.readFileSync(path.join(
-    __dirname, '..', '..', '..', 'music_app', 'templates', 'index.html',
-  ), 'utf8');
-  const playbackControlMacro = fs.readFileSync(path.join(
-    __dirname, '..', '..', '..', 'music_app', 'templates', 'partials', 'playback-control-cluster.html',
-  ), 'utf8');
-  const clusterRule = css.match(/\.loop-play-control-cluster\s*\{([^}]*)\}/s)?.[1] || '';
-  const buttonRule = css.match(/\.loop-play-control-button\s*\{([^}]*)\}/s)?.[1] || '';
-  const actionRule = css.match(/\.loop-play-control-actions\s*\{([^}]*)\}/s)?.[1] || '';
-  const fittedPodRule = css.match(
-    /\.loop-play-control-actions\s+\.loop-edit-action-pod\s*\{([^}]*)\}/s,
-  )?.[1] || '';
-
-  assert.match(
-    `${template}\n${playbackControlMacro}`,
-    /class="[^"]*playback-control-cluster[^"]*player-play-cluster"[^]*class="loop-play-control-button player-play"[^]*class="loop-play-control-actions player-loop-actions"/s,
-    'the persistent player must render the shared Play/edit-control cluster hierarchy',
-  );
-  assert.match(clusterRule, /--loop-play-control-size:\s*48px/);
-  assert.match(clusterRule, /container-type:\s*inline-size/);
-  assert.match(clusterRule, /width:\s*var\(--loop-play-control-size\)/);
-  assert.match(clusterRule, /height:\s*var\(--loop-play-control-size\)/);
-  assert.match(buttonRule, /width:\s*var\(--loop-play-control-size\)/);
-  assert.match(buttonRule, /height:\s*var\(--loop-play-control-size\)/);
-  assert.match(buttonRule, /z-index:\s*5/);
-  assert.match(actionRule, /left:\s*60\.4166667cqw/);
-  assert.match(actionRule, /top:\s*58\.3333333cqw/);
-  assert.match(actionRule, /z-index:\s*4/);
-  assert.match(fittedPodRule, /radial-gradient\(circle\s+calc\(50cqw\s*\+\s*0\.5px\)\s+at\s+-10\.4166667cqw\s+-11\.4583333cqw/);
-  assert.match(
-    css,
-    /\.loop-play-control-actions\s+\.loop-edit-action-pod::before,[^]*\.loop-play-control-actions\s+\.loop-edit-action-pod::after\s*\{[^}]*display:\s*none/s,
-  );
-  assert.doesNotMatch(css, /\.utility-loop-play\s*\{[^}]*(?:width|height|min-width|min-height):/s);
-  assert.doesNotMatch(css, /\.utility-loop-play-cluster\s+\.loop-edit-actions\s*\{/s);
-  assert.doesNotMatch(css, /\.player-loop-actions\s*\{/s);
+test('persistent and saved-loop players share the same styled Play action compound', () => {
+  const macro = fs.readFileSync(path.join(__dirname, '../../../music_app/templates/partials/playback-control-cluster.html'), 'utf8');
+  const renderer = fs.readFileSync(path.join(__dirname, '../../../music_app/static/js/runtime/playback-control-cluster.js'), 'utf8');
+  for (const source of [macro, renderer]) {
+    assert.match(source, /data-playback-control-cluster/);
+    assert.match(source, /data-loop-control-style/);
+    assert.match(source, /loop-play-control-button/);
+    assert.match(source, /loop-play-control-actions/);
+  }
+  assert.match(renderer, /saved-loop/);
+  assert.match(renderer, /expanded-player/);
 });
 
-test('active-away scissors keeps the idle one-button geometry with subdued styling', () => {
-  const css = fs.readFileSync(path.join(
-    __dirname, '..', '..', '..', 'music_app', 'static', 'css', 'runtime', 'non-album-and-player.css',
-  ), 'utf8');
-  const collapsedPodRule = css.match(
-    /\.loop-edit-actions\.is-active\[data-loop-action-engaged="false"\]\s+\.loop-edit-action-pod\s*\{([^}]*)\}/s,
-  )?.[1] || '';
-  const collapsedCreateIconRule = css.match(
-    /\.loop-edit-actions\.is-active\[data-loop-action-engaged="false"\]\s+\.loop-edit-action-create\s+\.loop-edit-action-icon\.is-scissors\s*\{([^}]*)\}/s,
-  )?.[1] || '';
-  const collapsedCreateRule = css.match(
-    /\.loop-edit-actions\.is-active\[data-loop-action-engaged="false"\]\s+\.loop-edit-action-create\s*\{([^}]*)\}/s,
-  )?.[1] || '';
-  const sharedMountRule = css.match(/\.loop-play-control-actions\s*\{([^}]*)\}/s)?.[1] || '';
+test('saved-loop panels reserve padding for the full border and overhanging controls', () => {
+  const css = fs.readFileSync(path.join(__dirname, '../../../music_app/static/css/runtime/non-album-and-player.css'), 'utf8');
+  const entry = Array.from(css.matchAll(/\.utility-loop-entry\s*\{([^}]*)\}/g), match => match[1]).join('\n');
+  const first = Array.from(css.matchAll(/\.utility-loop-entry:first-child\s*\{([^}]*)\}/g), match => match[1]).join('\n');
+  assert.match(entry, /padding:\s*(?!0(?:px)?[;\s])/);
+  assert.match(entry, /border:\s*1px\s+solid/);
+  assert.doesNotMatch(first, /padding-bottom:\s*0|border(?:-top)?:\s*(?:0|none)/);
+});
 
-  assert.match(collapsedPodRule, /width:\s*39px/);
-  assert.match(collapsedPodRule, /opacity:\s*1/);
-  assert.match(collapsedPodRule, /transform:\s*none/);
-  assert.match(collapsedPodRule, /border-color:\s*rgba\(74,\s*222,\s*128,\s*0\.58\)/);
-  assert.match(collapsedCreateRule, /width:\s*39px/);
-  assert.match(collapsedCreateRule, /min-width:\s*39px/);
-  assert.match(collapsedCreateRule, /color:\s*#4fa46f/);
-  assert.match(
-    collapsedCreateIconRule,
-    /transform:\s*translateX\(5px\)/,
-    'the active-away scissors must keep the regular idle icon position',
-  );
-  assert.match(sharedMountRule, /left:\s*60\.4166667cqw/);
-  assert.match(sharedMountRule, /top:\s*58\.3333333cqw/);
-  assert.match(sharedMountRule, /z-index:\s*4/);
-  assert.doesNotMatch(sharedMountRule, /right:\s*-\d|bottom:\s*\d/);
-  assert.doesNotMatch(
-    css,
-    /\.utility-loop-play-cluster\s+\.loop-edit-actions\.is-active\[data-loop-action-engaged="false"\][^{]*(?:\.loop-edit-action-pod|\.loop-edit-action-create)[^{]*\{[^}]*(?:transform|width|opacity)\s*:/s,
-    'saved players must inherit the same active-away geometry',
-  );
+test('reduced motion disables reveal geometry transitions while keeping hidden semantics', () => {
+  const css = fs.readFileSync(path.join(__dirname, '../../../music_app/static/css/runtime/non-album-and-player.css'), 'utf8');
+  assert.match(css, /@media\s*\(prefers-reduced-motion:\s*reduce\)[^]*loop-play-control-cluster[^]*transition:\s*none/);
+  assert.match(css, /\.loop-edit-action\[hidden\]\s*\{[^}]*display:\s*none/s);
 });
 
 test('shared loop actions keep hidden state authoritative over their author display style', () => {
@@ -1025,13 +886,14 @@ test('combined waveform averages L and R peaks into discrete pixel-symmetric mon
   const { context } = loadSharedControls();
   assert.equal(typeof context.drawCombinedLoopWaveform, 'function', 'combined waveform renderer must exist');
   const rects = [];
+  const paints = [];
   const strokes = [];
   const dots = [];
   let currentPath = [];
   const canvas = {
     width: 100, height: 32, clientWidth: 100, clientHeight: 32,
     getContext: () => ({
-      clearRect() {}, fillRect(...args) { rects.push(args); },
+      clearRect() {}, fillRect(...args) { rects.push(args); paints.push({ alpha: this.globalAlpha, blur: this.blur || 0 }); },
       save() {}, restore() {}, clip() {}, fill() {},
       beginPath() { currentPath = []; },
       rect(...args) { currentPath.push(['rect', ...args]); },
@@ -1051,17 +913,20 @@ test('combined waveform averages L and R peaks into discrete pixel-symmetric mon
     right: [0.08, 0.02, 0.4],
   }, 0.25);
 
-  assert.equal(rects.length, 3, 'one averaged mono bar is rendered per stereo bin');
+  assert.equal(rects.length, 6, 'unplayed and clipped played passes retain one averaged mono bar per stereo bin');
   assert.equal(rects[0][3], rects[1][3], 'equal 0.05 channel averages produce equal bar heights');
   assert.ok(rects[2][3] > rects[0][3], 'the larger 0.3 channel average produces a taller bar');
+  assert.deepEqual(rects.slice(3), rects.slice(0, 3), 'played pass must preserve saved-loop bar geometry');
   assert.ok(rects.every(([, , , height]) => height <= 32), 'combined mono bars stay within the canvas height');
-  for (const [, y, , height] of rects) {
+  for (const [, y, , height] of rects.slice(0, 3)) {
     assert.ok(Number.isInteger(y), 'each bar starts on a discrete pixel row');
     assert.ok(Number.isInteger(height), 'each bar covers a discrete number of pixel rows');
     assert.equal(height % 2, 1, 'each bar has an odd height so it can share the center pixel');
     assert.equal(y + Math.floor(height / 2), 16, 'each bar is exactly centered on the 32px canvas');
     assert.equal(16 - y, (y + height - 1) - 16, 'each bar covers equal rows above and below center');
   }
+  assert.ok(paints.slice(0, 3).every(({ alpha, blur }) => alpha === 0.6 && blur === 0));
+  assert.ok(paints.slice(3).every(({ alpha, blur }) => alpha === 0.95 && blur > 0));
   assert.deepEqual(strokes.at(-1), [['moveTo', 25, 0], ['lineTo', 25, 32]]);
   assert.deepEqual(dots.at(-1)?.slice(0, 3), [25, 16, 3.2]);
 });
@@ -1128,6 +993,32 @@ test('main and Utility editors share the same selection and edge-safe handle pri
   assert.match(css, /\.loop-range-handle\.is-end/);
 });
 
+function readGenericInteractionSelectors() {
+  const css = fs.readFileSync(path.join(
+    __dirname, '..', '..', '..', 'music_app', 'static', 'css', 'appearance-backgrounds.css',
+  ), 'utf8');
+  const selectors = [...css.matchAll(/([^{}]+)\{[^}]*\}/g)]
+    .map(match => match[1].trim())
+    .filter(selector => selector.startsWith(':root')
+      && selector.includes(':is(button,')
+      && /:(hover|active|focus-visible)/.test(selector));
+  assert.equal(selectors.length, 5, 'all generic hover, pressed, and keyboard-focus rules must be checked');
+  return selectors;
+}
+
+test('shared loop range handles are excluded from generic button interaction painting', () => {
+  for (const selector of readGenericInteractionSelectors()) {
+    assert.ok(selector.includes(':not(.loop-range-handle)'), `${selector} must exclude range handles`);
+    assert.ok(selector.includes(':not(.global-player *)'), `${selector} must exclude the global player`);
+  }
+});
+
+test('saved-loop action children do not paint a moving outline beside the fixed divider', () => {
+  for (const selector of readGenericInteractionSelectors()) {
+    assert.ok(selector.includes(':not(.loop-edit-action)'), `${selector} must exclude saved-loop action children`);
+  }
+});
+
 test('player and Utility adapters persist the controller range returned after duration correction', () => {
   const player = fs.readFileSync(path.join(
     __dirname, '..', '..', '..', 'music_app', 'static', 'js', 'runtime', 'player-loop-playback.js',
@@ -1139,4 +1030,55 @@ test('player and Utility adapters persist the controller range returned after du
   assert.match(player, /state\.player\.loopStart\s*=\s*reconciledRange\.startSeconds/);
   assert.match(utility, /const reconciledRange\s*=\s*elements\.root\?\._loopRangeController\?\.render/);
   assert.match(utility, /syncSavedLoopRange\(id, reconciledRange\)/);
+});
+
+test('themed player delegates action painting to the shared variant tokens', () => {
+  const css = fs.readFileSync(path.join(__dirname, '../../../music_app/static/css/appearance-backgrounds.css'), 'utf8');
+  const legacyPainting = Array.from(css.matchAll(/([^{}]+)\{([^{}]*)\}/g))
+    .filter(match => match[1].includes('.global-player') && match[1].includes('.loop-edit-action') && !match[1].includes(':not(.loop-edit-action)'))
+    .filter(match => /(?:^|[;\n])\s*(?:background|border-color|box-shadow|filter|text-shadow|color)\s*:/.test(match[2]));
+  assert.deepEqual(legacyPainting.map(match => match[1].trim()), [],
+    'higher-specificity legacy painting must not replace the component active contour, neutral cancel or soft glyph falloff');
+});
+
+test('destroying a range controller mid-drag removes owned listeners and queued work without committing', () => {
+  const harness = loadSharedControls();
+  const root = createRangeRoot();
+  const effects = [];
+  const controller = harness.context.createLoopRangeController({
+    root, getDuration: () => 20, getRange: () => ({ startSeconds: 2, endSeconds: 16 }),
+    onRangePreview: () => effects.push('preview'), onRangeCommit: () => effects.push('commit'),
+    onCancel: () => effects.push('cancel'), onSeek: () => effects.push('seek'),
+  });
+  root.start.dispatch('pointerdown', { clientX: 120 });
+  harness.dispatchDocument('pointermove', { clientX: 160, pointerId: 1 });
+  assert.equal(harness.documentListenerCount(), 3);
+  assert.equal(typeof controller.destroy, 'function');
+  controller.destroy();
+  controller.destroy();
+  assert.equal(harness.documentListenerCount(), 0);
+  harness.flushAnimationFrame();
+  harness.dispatchDocument('pointerup', { clientX: 180, pointerId: 1 });
+  root.start.dispatch('keydown', { key: 'ArrowRight' });
+  root.surface.dispatch('pointerdown', { clientX: 150 });
+  assert.equal(harness.documentListenerCount(), 0);
+  assert.deepEqual(effects, []);
+  assert.equal(controller.getRange().startSeconds, 2);
+  assert.equal(controller.getRange().endSeconds, 16);
+});
+
+test('saved compound control stacks above timeline and foreground range handles for pointer activation', () => {
+  const css = fs.readFileSync(path.join(path.dirname(runtimePath), '../../css/runtime/non-album-and-player.css'), 'utf8');
+  const rules = selector => Array.from(css.matchAll(/([^{}]+)\{([^{}]*)\}/g)).filter(match => match[1].trim() === selector).map(match => match[2]).join('\n');
+  const layer = selector => Number(Array.from(rules(selector).matchAll(/z-index:\s*(\d+)/g)).at(-1)?.[1] || 0);
+  assert.ok(layer('.utility-loop-play-cluster') > layer('.utility-loop-timeline'), 'the isolated compound parent must clear the timeline layer');
+  assert.ok(layer('.utility-loop-play-cluster') > layer('[data-loop-range-front="end"] .loop-range-handle.is-end'), 'the compound parent must clear foreground range handles');
+});
+
+test('main compound control stacks above timeline and foreground range handles for pointer activation', () => {
+  const css = fs.readFileSync(path.join(path.dirname(runtimePath), '../../css/runtime/non-album-and-player.css'), 'utf8');
+  const rules = selector => Array.from(css.matchAll(/([^{}]+)\{([^{}]*)\}/g)).filter(match => match[1].trim() === selector).map(match => match[2]).join('\n');
+  const layer = selector => Number(Array.from(rules(selector).matchAll(/z-index:\s*(\d+)/g)).at(-1)?.[1] || 0);
+  assert.ok(layer('.player-play-cluster') > layer('.player-timeline-wrap.is-waveform .player-timeline'), 'main compound must clear its sibling timeline');
+  assert.ok(layer('.player-play-cluster') > layer('[data-loop-range-front="end"] .loop-range-handle.is-end'), 'main compound must clear foreground range handles');
 });

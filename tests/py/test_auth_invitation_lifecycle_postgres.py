@@ -107,6 +107,10 @@ class Connection:
             "from app.account_invitation_tokens invitation" in statement
             and "token_hash" in statement
         ):
+            if "for update" in statement:
+                return Cursor(() if invalid else ({
+                    "id": 51, "expires_at": context["invitation_expires_at"],
+                },))
             return Cursor(() if invalid else (context,))
         if "from app.accounts" in statement and "for update" in statement:
             return Cursor(({
@@ -517,3 +521,79 @@ def test_concurrent_completion_has_exactly_one_successful_credential_winner():
 
     assert results.count(InvitationCompletionOutcome.SUCCESS) == 1
     assert results.count(InvitationCompletionOutcome.INVALID) == 1
+
+
+@pytest.mark.parametrize("expiry_phase", ["hash", "final_lock"])
+def test_invitation_completion_rechecks_expiry_after_password_work_and_final_lock(expiry_phase):
+    clock = [NOW]
+
+    class ExpiringConnection(Connection):
+        def execute(self, sql, params=()):
+            result = super().execute(sql, params)
+            if expiry_phase == "final_lock" and "from app.account_sessions" in sql:
+                clock[0] = NOW + timedelta(days=2)
+            return result
+
+    connection = ExpiringConnection()
+
+    def hasher(*_args, **_kwargs):
+        assert connection.transaction_depth == 0
+        if expiry_phase == "hash":
+            clock[0] = NOW + timedelta(days=2)
+        return PasswordCredential("$argon2id$invited", 4)
+
+    service = PostgresInvitationLifecycleService(
+        _config(), connect=lambda _url: connection, clock=lambda: clock[0],
+        password_hasher=hasher, breached_checker=lambda _password: False,
+        audit_repository=Audit(),
+    )
+    result = service.complete_invitation(
+        TRANSACTION_RAW, new_password=PASSWORD, request_ref="expired-during-work",
+    )
+
+    assert result is InvitationCompletionOutcome.INVALID
+    assert not any(sql.startswith(("insert ", "update ", "delete ")) for sql in _statements(connection))
+
+
+@pytest.mark.parametrize("operation", ["validate", "complete"])
+@pytest.mark.parametrize("expired_field", ["invitation_expires_at", "transaction_expires_at"])
+def test_invitation_context_rechecks_expiry_after_delayed_query(operation, expired_field):
+    clock = [NOW]
+    hasher_calls = []
+
+    class DelayedContextConnection(Connection):
+        def execute(self, sql, params=()):
+            cursor = super().execute(sql, params)
+            if "from app.account_invitation_transactions transaction" in sql and "for update" not in sql:
+                rows = cursor.fetchall()
+                rows[0][expired_field] = NOW + timedelta(seconds=1)
+                clock[0] = NOW + timedelta(seconds=2)
+                return Cursor(rows)
+            if "for update" in sql:
+                table = ("app.account_invitation_tokens" if expired_field == "invitation_expires_at"
+                         else "app.account_invitation_transactions")
+                if f"from {table}" in sql:
+                    rows = cursor.fetchall()
+                    rows[0]["expires_at"] = NOW + timedelta(seconds=1)
+                    return Cursor(rows)
+            return cursor
+
+    connection = DelayedContextConnection()
+
+    def hasher(*_args, **_kwargs):
+        hasher_calls.append(True)
+        return PasswordCredential("$argon2id$invited", 4)
+
+    service = PostgresInvitationLifecycleService(
+        _config(), connect=lambda _url: connection, clock=lambda: clock[0],
+        password_hasher=hasher, breached_checker=lambda _password: False,
+        audit_repository=Audit(),
+    )
+    if operation == "validate":
+        assert service.validate_transaction(TRANSACTION_RAW) is False
+    else:
+        assert service.complete_invitation(
+            TRANSACTION_RAW, new_password=PASSWORD, request_ref="delayed-context",
+        ) is InvitationCompletionOutcome.INVALID
+    assert hasher_calls == []
+    assert not any(sql.startswith(("insert ", "update ", "delete ")) for sql in _statements(connection))

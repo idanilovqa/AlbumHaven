@@ -1,6 +1,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const childProcess = require('node:child_process');
+const { PROCESS_CLEANUP_FAILURE_EXIT_CODE } = require('./playwright-exit-codes.cjs');
 const crypto = require('node:crypto');
 const {
   _private: terminalSummary,
@@ -1758,6 +1759,11 @@ function runPerformanceAttempt(
   if (result.stderr) {
     process.stderr.write(result.stderr);
   }
+  if (result.status === PROCESS_CLEANUP_FAILURE_EXIT_CODE) {
+    const error = new Error('Performance child process cleanup is unproven; stopping remaining runs.');
+    error.exitCode = PROCESS_CLEANUP_FAILURE_EXIT_CODE;
+    throw error;
+  }
   const combinedOutput = `${result.stdout || ''}${result.stderr || ''}`;
   assertNoLiveCoverProviderDomains(combinedOutput, verificationGroup?.label);
   const structuredLastRun = readPlaywrightLastRun(lastRunPath);
@@ -2001,6 +2007,7 @@ function runSinglePerformanceAttempt(target, options, verificationGroup, attempt
   const artifactRoot = options.useLegacyArtifacts
     ? null
     : resolvePerformanceTargetArtifactRoot(target);
+  let processCleanupFailed = false;
   try {
     const result = runPerformanceAttempt(
       target,
@@ -2025,8 +2032,11 @@ function runSinglePerformanceAttempt(target, options, verificationGroup, attempt
       terminalSummary.parsePlaywrightListResults(result.combinedOutput),
       result,
     );
+  } catch (error) {
+    processCleanupFailed = error?.exitCode === PROCESS_CLEANUP_FAILURE_EXIT_CODE;
+    throw error;
   } finally {
-    cleanupManagedScanStatusSamples(managedScanStatusEnv);
+    if (!processCleanupFailed) cleanupManagedScanStatusSamples(managedScanStatusEnv);
   }
 }
 
@@ -2074,6 +2084,7 @@ function runBatchPerformanceAttempt(targets, options, verificationGroup, attempt
       buildSyntheticFixtureIsolationEnv(firstTarget),
     ),
   );
+  let processCleanupFailed = false;
   try {
     const result = runPerformanceAttempt(
       firstTarget,
@@ -2102,8 +2113,11 @@ function runBatchPerformanceAttempt(targets, options, verificationGroup, attempt
         result,
       );
     });
+  } catch (error) {
+    processCleanupFailed = error?.exitCode === PROCESS_CLEANUP_FAILURE_EXIT_CODE;
+    throw error;
   } finally {
-    cleanupManagedScanStatusSamples(managedScanStatusEnv);
+    if (!processCleanupFailed) cleanupManagedScanStatusSamples(managedScanStatusEnv);
   }
 }
 
@@ -2487,6 +2501,8 @@ if (require.main === module) {
   } catch (error) {
     console.error(error?.message || error);
     printUsage();
-    process.exit(1);
+    process.exit(error?.exitCode === PROCESS_CLEANUP_FAILURE_EXIT_CODE
+      ? PROCESS_CLEANUP_FAILURE_EXIT_CODE
+      : 1);
   }
 }

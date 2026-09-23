@@ -23,8 +23,12 @@
   <link rel="stylesheet" href="/static/css/admin-members.css">
   <link rel="stylesheet" href="/static/css/account.css">
   <link rel="stylesheet" href="/static/css/settings-navigation.css">
-  <link rel="stylesheet" href="/static/css/app-chrome.css">
+  <link rel="stylesheet" href="/static/css/app-chrome.css?v={{ runtime_asset_version }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/gallery-main.css') }}?v={{ runtime_asset_version }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/runtime/trigger-anchor.css') }}?v={{ runtime_asset_version }}">
   <link rel="stylesheet" href="{{ url_for('static', filename='css/search-input.css') }}?v={{ runtime_asset_version }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/scrollbar.css') }}?v={{ runtime_asset_version }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/date-range-picker.css') }}?v={{ runtime_asset_version }}">
   {% include "partials/navigation-tree-assets.html" %}
   <script src="/static/js/account.js" defer></script>
   <script src="/static/js/admin-members.js" defer></script>
@@ -33,6 +37,15 @@
   <script src="{{ url_for('static', filename='app.js') }}?v={{ runtime_asset_version }}" defer></script>
   {% if bootstrap_payload %}<script src="{{ url_for('static', filename='js/runtime-bundle.js') }}?v={{ runtime_asset_version }}" defer></script>{% endif %}
   {% include "partials/appearance-bootstrap.html" %}
+  <style>
+    html[data-client-layout-pending="true"] body { visibility: hidden; }
+    html[data-client-layout-pending="true"],
+    html[data-client-layout-pending="true"] *,
+    html[data-client-layout-pending="true"] *::before,
+    html[data-client-layout-pending="true"] *::after { transition: none !important; animation: none !important; }
+  </style>
+  <script src="{{ url_for('static', filename='js/client-layout-bootstrap.js') }}?v={{ runtime_asset_version }}"></script>
+  <script>AlbumHavenClientLayoutBootstrap.capture();</script>
 </head>
 <body>
   {% set shell_layout = bootstrap_payload.initial_view.shell_layout if bootstrap_payload and bootstrap_payload.initial_view and bootstrap_payload.initial_view.shell_layout else {} %}
@@ -53,7 +66,7 @@
   {% from "partials/playback-control-cluster.html" import playback_control_cluster %}
   <div class="layout shell-layout" id="app-shell" data-shell-kind="{{ shell_layout.kind or 'shared_media_shell' }}">
     {% call app_bar("library") %}
-        <form class="toolbar-left" id="search-form" method="get" action="/">
+        <form class="toolbar-left" id="search-form" method="get" action="/" data-shell-horizontal-align="gallery-body">
           {{ search_input("search-input", value=query, suggestions_id="recent-search-popover") }}
           {% if effective_selected_artist %}<input type="hidden" name="artist" value="{{ effective_selected_artist }}">{% endif %}
           {% if bootstrap_payload.initial_view.gallery_scope %}<input type="hidden" name="gallery_scope" value="{{ bootstrap_payload.initial_view.gallery_scope }}">{% endif %}
@@ -70,30 +83,43 @@
             </span>
             <span class="cover-lookup-drawer-badge" id="cover-lookup-drawer-badge" hidden></span>
           {% endcall %}
-          {% call action_button('Library status', class_name='status-indicator is-idle', id='scan-indicator', title='Library ready') %}
+          {% call action_button('Library status', class_name='status-indicator is-idle', id='scan-indicator', title='Library ready', attributes={'aria-controls': 'status-context-menu', 'aria-expanded': 'false'}) %}
             <span class="status-spinner" aria-hidden="true"></span>
             <span class="status-check" aria-hidden="true">&#10003;</span>
             <span class="status-refresh" aria-hidden="true">&#10227;</span>
             <span class="status-progress" id="scan-indicator-progress" aria-hidden="true" style="display:none"></span>
           {% endcall %}
+          {% call action_button('Sources', id='gallery-sources-button', title='Sources', attributes={'data-gallery-sources-anchor': '1', 'aria-controls': 'gallery-sources-menu', 'aria-expanded': 'false'}) %}<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h10M18 7h2M4 17h2M10 17h10M14 4v6M6 14v6"/></svg>{% endcall %}
+          <div class="gallery-anchored-menu" id="gallery-sources-menu" data-anchored-surface="sources" data-trigger-anchor-context="chrome" role="group" aria-label="Sources" hidden>
+            <span class="gallery-menu-title">Sources</span>
+            <button class="gallery-switch" type="button" role="switch" aria-checked="true" data-gallery-source="main_library"><span>Main Library</span><span class="gallery-switch__track"><span class="gallery-switch__knob"></span></span></button>
+            <button class="gallery-switch" type="button" role="switch" aria-checked="true" data-gallery-source="new_arrivals"><span>New Arrivals</span><span class="gallery-switch__track"><span class="gallery-switch__knob"></span></span></button>
+            <button class="gallery-switch" type="button" role="switch" aria-checked="true" data-gallery-source="hoard"><span>Hoard</span><span class="gallery-switch__track"><span class="gallery-switch__knob"></span></span></button>
+          </div>
           {% include 'partials/account-menu.html' %}
         </div>
     {% endcall %}
     <aside class="sidebar shell-navigation-rail" id="shell-navigation-rail" data-shell-slot="navigation_rail" data-shell-content-kind="{{ shell_rail.content_kind or 'artists_sidebar' }}" data-shell-default-collapsed="{{ 'true' if shell_rail.default_collapsed else 'false' }}" aria-hidden="false">
-      <div class="sidebar-top shell-navigation-rail-header">
-        <h2>Artists</h2>
+      <div id="artist-tree-expanded">
+        <div class="sidebar-top shell-navigation-rail-header">
+          {% call action_button('Collapse Artist Tree', class_name='shell-navigation-rail-toggle', id='artist-tree-fold-button', title='Collapse Artist Tree', attributes={'data-toggle-artist-tree-fold': '1', 'aria-controls': 'sidebar-list', 'aria-expanded': 'true'}, presentation='bare') %}
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m14 6-6 6 6 6"></path></svg>
+          {% endcall %}
+          <h2>Artists</h2>
+        </div>
+        <div class="artist-list navigation-tree" data-navigation-tree="artists" id="sidebar-list" data-startup-preview-mode="{{ startup_preview.mode }}">{{ startup_preview.sidebar_html|safe }}</div>
       </div>
-      <div class="artist-list navigation-tree" data-navigation-tree="artists" id="sidebar-list" data-startup-preview-mode="{{ startup_preview.mode }}">{{ startup_preview.sidebar_html|safe }}</div>
+      <nav class="shell-navigation-compact" id="shell-navigation-compact" aria-label="Library navigation" hidden>
+        {% call action_button('Artist Tree', class_name='shell-navigation-compact-action', id='artist-tree-navigation-button', title='Artist Tree', attributes={'data-toggle-artist-tree-fold': '1', 'aria-controls': 'sidebar-list', 'aria-expanded': 'false'}, presentation='bare') %}
+          <svg viewBox="0 0 24 24" aria-hidden="true"><g stroke-width="1.25"><path d="M12 20V5M12 8 9 5V2M9 5 6 3M12 6l3-3V1.5M15 3l3-1M12 12 7 9 5 6M7 9H3l-1-2M5 6V3.5M12 10l5-3 2-3M17 7h4l1-2M19 4V2.5M12 16l-5-3-3-1-2-2M7 13v-2M12 15l5-3 3-1 2-3M17 12V9.5M12 19l-3 3M12 19l3 3M12 20v2M9 22H7M15 22h2"></path></g></svg>
+        {% endcall %}
+      </nav>
     </aside>
     <button class="shell-navigation-rail-backdrop" type="button" id="shell-navigation-rail-backdrop" data-close-artists-drawer="1" aria-label="Close artists drawer" hidden></button>
 
     <main class="main shell-main-surface" id="shell-main-surface" data-shell-slot="main_content" data-shell-content-kind="{{ shell_main.content_kind or 'gallery' }}" data-shell-surface-ref="{{ shell_main.surface_ref or 'albums' }}">
 
-      {% if last_error %}
-      <div class="error" id="last-error">Last scan error: {{ last_error }}</div>
-      {% else %}
-      <div class="error" id="last-error" style="display:none"></div>
-      {% endif %}
+
 
       {% if shell_main.content_kind == 'discovery_center_page' and discovery_center_page %}
       <section class="discovery-center-page" id="discovery-center-page" data-discovery-center-page-kind="{{ discovery_center_page.page_kind or 'discovery_center' }}" data-discovery-center-active-tab="{{ discovery_center_page.active_tab or 'inbox' }}" data-discovery-center-active-source="{{ discovery_center_page.active_source or 'all' }}">
@@ -125,49 +151,65 @@
       {% else %}
       <div class="gallery-top-row">
         <button class="button artists-drawer-button" type="button" id="artists-drawer-button" data-toggle-artists-drawer="1" aria-controls="shell-navigation-rail" aria-expanded="false" hidden>Artists</button>
-        <section class="related-box shell-contextual-pane {% if not startup_preview.related_expanded %}is-collapsed{% endif %}" id="related-box" data-shell-slot="contextual_pane" data-shell-content-kind="{{ shell_contextual.content_kind or 'contextual_navigation' }}" data-shell-is-visible="{{ 'true' if shell_contextual.is_visible else 'false' }}" data-shell-active-pane="{{ shell_contextual.active_pane or '' }}" data-shell-supported-panes="{{ (shell_contextual.supported_panes or [])|join(',') }}" data-shell-local-tree-submode="{{ shell_contextual.local_tree.active_submode if shell_contextual.local_tree else '' }}" data-shell-local-tree-submodes="{{ (shell_contextual.local_tree.supported_submodes if shell_contextual.local_tree else [])|join(',') }}" data-shell-splitter-desktop-only="{{ 'true' if shell_contextual.splitter and shell_contextual.splitter.desktop_only else 'false' }}" data-shell-splitter-placement="{{ shell_contextual.splitter.placement if shell_contextual.splitter else '' }}" data-shell-mobile-fallback="{{ shell_contextual.splitter.mobile_fallback if shell_contextual.splitter else '' }}" data-shell-splitter-state-scope="{{ shell_contextual.splitter.state_scope if shell_contextual.splitter else '' }}" {% if startup_preview.has_related %}style="display:block"{% else %}style="display:none"{% endif %}>
-          <button class="related-toggle" id="related-toggle" type="button" aria-expanded="{% if startup_preview.related_expanded %}true{% else %}false{% endif %}" aria-controls="related-list-wrap">
-            <span class="related-title">Artist Family</span>
-            <span class="related-toggle-icon" id="related-toggle-icon" aria-hidden="true">&#9662;</span>
-          </button>
-          <div class="related-list-wrap" id="related-list-wrap" {% if not startup_preview.related_expanded %}hidden{% endif %}>
-            <div class="related-list" id="related-list">{{ startup_preview.related_html|safe }}</div>
+      </div>
+
+      <section class="gallery-bar" data-gallery-bar data-gallery-bar-instance="gallery" aria-label="Gallery controls"{% if query and not effective_selected_artist %} hidden{% endif %}>
+          <div class="gallery-bar__context"><div class="gallery-bar__title"><span data-gallery-context-name>Gallery</span><span class="gallery-bar__artist-divider gallery-divider__line" data-gallery-context-artist-divider hidden></span><span class="gallery-bar__artist-total" data-gallery-context-inline-total hidden></span></div><span class="gallery-bar__summary" data-gallery-context-summary>{{ bootstrap_payload.initial_view.artist_count | default(0) }} artists · {{ bootstrap_payload.initial_view.album_count | default(0) }} albums</span></div>
+        <div class="gallery-bar__actions">
+          <button class="gallery-action-button" type="button" data-gallery-bar-action="artist-family"{% if not effective_selected_artist %} hidden{% endif %} aria-label="Artist Family" aria-controls="artist-family-panel" aria-expanded="false"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="8" cy="8" r="3"/><circle cx="17" cy="9" r="2.5"/><path d="M3 19c.5-3.5 2.2-5.2 5-5.2s4.5 1.7 5 5.2M14 14.5c3.5-.8 5.8.8 6.5 4.5"/></svg></button>
+          <div class="gallery-view-cluster unfolding-action-button" id="gallery-view-cluster-options" data-gallery-view-cluster>
+            <button class="gallery-view-choice action-button unfolding-action-button__action" type="button" tabindex="-1" data-gallery-view-choice="covers" aria-label="No info" title="No info"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="m5 17 5-5 3 3 2-2 4 4"/></svg></button>
+            <button class="gallery-view-choice action-button unfolding-action-button__action is-active" type="button" data-gallery-bar-action="view" data-gallery-view-choice="cards" aria-label="Cards" title="Cards" aria-controls="gallery-view-cluster-options" aria-expanded="false"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 15h18M7 18h6"/></svg></button>
           </div>
-        </section>
-        <button class="icon-button gallery-options-floating-button" type="button" id="gallery-options-button" data-open-gallery-options="1" title="Gallery options" aria-label="Gallery options">&#8942;</button>
+          <button class="gallery-action-button" type="button" data-gallery-bar-action="album-types" aria-label="Album types" aria-controls="gallery-album-types-menu" aria-expanded="false"><svg viewBox="0 0 24 24" aria-hidden="true" stroke-linecap="round" stroke-linejoin="round"><path d="M5 17H4a2 2 0 0 1-2-2V6a2 2 0 0 1 1.5-1.94l8-2A2 2 0 0 1 14 4v1"/><path d="M8 20H7a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2v1"/><rect x="8" y="8" width="14" height="14" rx="2"/><path fill="currentColor" fill-rule="evenodd" stroke="none" d="M19 15a4 4 0 1 1-8 0 4 4 0 0 1 8 0Zm-3 0a1 1 0 1 0-2 0 1 1 0 0 0 2 0Z"/></svg></button>
+        </div>
+      </section>
+
+      <div class="gallery-anchored-menu" id="gallery-album-types-menu" data-anchored-surface="album-types" data-trigger-anchor-context="content" role="group" aria-label="Album types" hidden>
+        <span class="gallery-menu-title">Album types</span>
+        {% for value, label in [('studio', 'Studio'), ('ep', 'EP'), ('live', 'Live'), ('demo', 'Demo'), ('compilation', 'Compilation'), ('single', 'Single')] %}
+        <button class="gallery-type-choice" type="button" data-gallery-album-type="{{ value }}" aria-pressed="{{ 'true' if value in ['studio', 'ep'] else 'false' }}" disabled aria-disabled="true"><span aria-hidden="true">✓</span>{{ label }}</button>
+        {% endfor %}
+        <div class="gallery-menu-divider"></div>
+        <button class="gallery-menu-action" type="button" data-open-non-album-tracks="1" disabled aria-disabled="true">Non-album tracks</button>
+        <button class="gallery-menu-action" type="button" data-gallery-customize-preview="1" aria-disabled="true">Customize</button>
       </div>
 
       {% set show_initial_library_loader = startup_preview.mode == 'empty_shell' %}
-      <section class="library-loader" id="library-loader" {% if not show_initial_library_loader %}hidden{% endif %} aria-live="polite">
-        <button class="library-loader-back-button" id="library-loader-back-button" type="button" data-close-scan-page="1" aria-label="Back to previous library view" hidden>
-          <span class="library-loader-back-icon" aria-hidden="true">&#8592;</span>
-          <span>Back</span>
-        </button>
-        <div class="library-loader-spinner" aria-hidden="true"></div>
-        <h2 class="library-loader-title" id="library-loader-title">Loading library</h2>
-        <div class="library-loader-status" id="library-loader-status">
-          {% if show_initial_library_loader and not query and not selected_artist %}
-          Waiting for the first albums to become available...
-          {% else %}
-          Preparing scan...
-          {% endif %}
-        </div>
-        <div class="library-loader-progress" id="library-loader-progress"></div>
-        <ol class="library-loader-phase-guide" id="library-loader-phase-guide" aria-label="Scan phases" hidden>
-          <li><strong>Discovering music files</strong><span>Enumerates candidate files in your local library.</span></li>
-          <li><strong>Scanning music files</strong><span>Reads tags and metadata, then calculates file and folder progress.</span></li>
-          <li><strong>Updating cover art</strong><span>Refreshes artwork changes after scanning.</span></li>
-          <li><strong>Refreshing artist relations</strong><span>Updates artist-family links.</span></li>
-        </ol>
-        <div class="library-loader-actions" id="library-loader-actions" hidden>
-          <button class="button library-loader-cancel-button" type="button" id="library-loader-cancel-button" data-cancel-library-scan="1" hidden>Cancel Scan</button>
-          <button class="button library-loader-browse-button" type="button" id="library-loader-browse-button" data-browse-scanned-library="1" hidden>Browse Library</button>
+      <section class="library-loader full-page" id="library-loader" data-full-page="library-status" {% if not show_initial_library_loader %}hidden{% endif %} aria-live="polite">
+        <div class="library-status-workspace">
+          <section class="library-status-state" aria-labelledby="library-state-title">
+            <h2 class="library-status-section-title" id="library-state-title">Library State</h2>
+            <div class="library-loader-state-heading">
+              <span class="library-loader-ready-check" id="library-loader-ready-check" hidden aria-hidden="true">&#10003;</span>
+              <div class="library-loader-spinner" aria-hidden="true"></div>
+              <h2 class="library-loader-title" id="library-loader-title">Loading library</h2>
+            </div>
+            <div class="library-loader-status" id="library-loader-status">
+              {% if show_initial_library_loader and not query and not selected_artist %}
+              Waiting for the first albums to become available...
+              {% else %}
+              Preparing scan...
+              {% endif %}
+            </div>
+            <div class="library-loader-progress" id="library-loader-progress"></div>
+            <ol class="library-loader-phase-guide" id="library-loader-phase-guide" aria-label="Scan phases" hidden>
+              <li data-scan-stage="discover"><strong>Discover files</strong></li>
+              <li data-scan-stage="metadata"><strong>Read tags &amp; metadata</strong></li>
+              <li data-scan-stage="covers"><strong>Update cover art</strong></li>
+              <li data-scan-stage="relations"><strong>Refresh artist relations</strong></li>
+            </ol>
+          </section>
+          <section class="library-health" id="library-health" hidden aria-labelledby="library-health-title">
+            <h2 class="library-status-section-title" id="library-health-title">Library Health</h2>
+            <div id="library-scan-warning" hidden></div>
+          </section>
         </div>
       </section>
 
 
       <div class="albums-scroll" id="albums-scroll" {% if show_initial_library_loader %}hidden{% endif %}>
-        <div class="albums-viewport" id="albums-viewport">
+        <div class="albums-viewport" id="albums-viewport" data-shell-horizontal-align="gallery-body">
           <div class="gallery-focus-glow" id="gallery-focus-glow" hidden aria-hidden="true"></div>
           <div id="albums-spacer-top"></div>
           <div id="artist-groups" data-startup-preview-mode="{{ startup_preview.mode }}">{{ startup_preview.gallery_html|safe }}</div>
@@ -178,7 +220,24 @@
     </main>
   </div>
 
-  <p class="settings-navigation-error" data-settings-navigation-error role="alert" hidden></p>
+  <aside class="artist-family-panel" id="artist-family-panel" data-artist-family-panel aria-label="Artist Family" aria-hidden="true" hidden>
+    <header>
+      <div class="artist-family-panel__heading">
+        <div class="artist-family-panel__title-row"><h2 data-gallery-family-panel-title>Artist Family</h2><span aria-hidden="true">•</span><span data-gallery-family-panel-total></span></div>
+        <p>Select or unselect an artist to update Gallery.</p>
+      </div>
+    </header>
+    <div class="artist-family-panel__combine-row">
+      <button class="gallery-switch" id="artist-family-combine-similar" type="button" role="switch" aria-checked="false" data-toggle-combine-similar-artists="1">
+        <span>Combine similar artists</span><span class="gallery-switch__track" aria-hidden="true"><span class="gallery-switch__knob"></span></span>
+      </button>
+    </div>
+    <div class="artist-family-panel__body gallery-scrollbar" data-gallery-family-panel-body></div>
+  </aside>
+  <aside class="artist-info-overlay" data-artist-info-overlay role="dialog" aria-label="Artist information" hidden></aside>
+
+  {% from 'components/on-page-alert.html' import on_page_alert %}
+  {{ on_page_alert('This page could not be loaded. Please try again.', severity='error', hidden=true, class_name='settings-navigation-error', attributes={'data-settings-navigation-error': ''}) }}
   <main class="settings-host settings-shell" data-settings-host hidden>
     {{ app_bar() }}
     {% with allowed_actions = account_menu_allowed_actions, csrf_token = account_menu_csrf_token %}
@@ -198,7 +257,7 @@
           <div class="player-title" id="player-title"></div>
           <button class="player-album-link" type="button" id="player-album-link" hidden></button>
         </div>
-        <div class="player-time" id="player-time">0:00 / 0:00</div>
+        <div class="player-time" id="player-time" hidden>0:00 / 0:00</div>
         <div class="player-timeline-wrap" data-loop-range-owner="global-player">
           <canvas class="player-waveform-canvas" id="player-waveform-canvas" data-loop-range-waveform aria-hidden="true" hidden></canvas>
           <input class="player-timeline" type="range" id="player-timeline" min="0" max="100" step="0.01" value="0" aria-label="Playback position">
@@ -213,31 +272,32 @@
     <div class="compact-player-shell" aria-label="Compact player" hidden>
       {% call ui_button(variant='icon', size='small', action='player-expand', class_name='compact-player-expand', aria_label='Expand player', title='Expand player') %}›{% endcall %}
       <button class="compact-player-cover" type="button" data-compact-player-cover aria-label="Open album details"></button>
+      <div class="compact-player-metadata">
+        <span class="compact-player-metadata-row" data-compact-player-title><span data-compact-player-title-text>Nothing playing</span></span>
+        <span class="compact-player-metadata-row" data-compact-player-artist><span data-compact-player-artist-text></span></span>
+      </div>
+      <div class="compact-player-hover-bubble" data-compact-player-hover-bubble aria-hidden="true" inert><span data-compact-player-summary></span><span data-compact-player-album-separator aria-hidden="true" hidden>/</span><button class="player-album-link compact-player-hover-album" type="button" data-compact-player-album hidden></button></div>
       {{ playback_control_cluster('compact-player') }}
     </div>
   </div>
 
-  <div class="toast-layer" id="toast-layer" aria-live="polite" aria-atomic="true"></div>
-  <div class="repair-alert" id="repair-alert" role="status" aria-live="polite" hidden>
-    <span class="repair-alert-message" id="repair-alert-message"></span>
-    <button class="repair-alert-inline-link" id="repair-alert-log-history" type="button" data-open-log-history-alert="1" hidden>View details</button>
-    <button class="repair-alert-close" type="button" data-dismiss-repair-alert="1" aria-label="Dismiss repair alert">x</button>
-  </div>
+  <div class="toast-layer" id="toast-layer"></div>
+  <div class="repair-alert" id="repair-alert" hidden></div>
 
   <aside class="cover-lookup-drawer shell-info-drawer" id="cover-lookup-drawer" data-shell-slot="info_drawer" data-shell-component-kind="{{ shell_drawer.component_kind or 'notification_drawer' }}" data-shell-content-kind="{{ shell_drawer.content_kind or 'cover_lookup_drawer' }}" data-shell-default-content-kind="{{ shell_drawer.default_content_kind or shell_drawer.content_kind or 'cover_lookup_drawer' }}" data-shell-supported-content-kinds="{{ (shell_drawer.supported_content_kinds or [shell_drawer.content_kind or 'cover_lookup_drawer'])|join(',') }}" data-shell-surface-family="{{ shell_drawer.surface_family or 'notifications' }}" data-shell-default-surface-family="{{ shell_drawer.default_surface_family or shell_drawer.surface_family or 'notifications' }}" data-shell-placement="{{ shell_drawer.placement or 'right' }}" data-shell-splitter-desktop-only="{{ 'true' if shell_drawer.splitter and shell_drawer.splitter.desktop_only else 'false' }}" data-shell-mobile-fallback="{{ shell_drawer.splitter.mobile_fallback if shell_drawer.splitter else '' }}" data-shell-splitter-state-scope="{{ shell_drawer.splitter.state_scope if shell_drawer.splitter else '' }}" hidden>
     <div class="cover-lookup-drawer-header">
       <div>
-        <h3 class="cover-lookup-drawer-title">Cover Art Look Ups</h3>
-        <div class="cover-lookup-drawer-subtitle">Track long-running manual cover searches here.</div>
+        <h3 class="cover-lookup-drawer-title">Cover lookups</h3>
+        <div class="cover-lookup-drawer-subtitle" id="cover-lookup-drawer-summary">No activity</div>
       </div>
       <div class="cover-lookup-drawer-actions">
-        <button class="icon-button cover-lookup-drawer-clear" type="button" id="cover-lookup-drawer-clear" data-clear-cover-lookup-completed="1" aria-label="Clear completed cover art lookups" title="Clear completed lookups" hidden>
+        {% call action_button('Clear completed cover art lookups', class_name='cover-lookup-drawer-clear', id='cover-lookup-drawer-clear', title='Clear completed lookups', disabled=true, attributes={'data-clear-cover-lookup-completed': '1'}, presentation='bare') %}
           <span class="cover-lookup-drawer-clear-glyph" aria-hidden="true">
             <img class="cover-lookup-drawer-clear-glyph-default" src="{{ url_for('static', filename='images/clear-notifications-icon-offwhite.png') }}" alt="">
             <img class="cover-lookup-drawer-clear-glyph-hover" src="{{ url_for('static', filename='images/clear-notifications-icon.png') }}" alt="">
           </span>
-        </button>
-        <button class="icon-button" type="button" data-close-cover-lookup-drawer="1" aria-label="Close cover art lookups">✕</button>
+        {% endcall %}
+        {% call action_button('Close cover art lookups', class_name='cover-lookup-drawer-close', attributes={'data-close-cover-lookup-drawer': '1'}, presentation='bare') %}<svg class="ui-icon action-button__icon" viewBox="0 0 20 20" aria-hidden="true"><path d="m5 5 10 10M15 5 5 15"/></svg>{% endcall %}
       </div>
     </div>
     <div class="cover-lookup-drawer-body" id="cover-lookup-drawer-body"></div>
@@ -249,6 +309,8 @@
 
   <script>
     window.__ALBUM_HAVEN_BOOTSTRAP_PAYLOAD__ = {{ bootstrap_payload | tojson }};
-  </script>
+window.__ALBUM_HAVEN_PLAYBACK_ALLOWED_ACTIONS__ = {{ playback_allowed_actions.as_payload() | tojson }};
+</script>
+<script>AlbumHavenClientLayoutBootstrap.finalize();</script>
 </body>
 </html>

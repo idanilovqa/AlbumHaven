@@ -11,7 +11,7 @@ to the same functional-shard runner used by CI, and removes its state afterward.
   `postgresql-x64-18` service is available.
 - Python resolves from `PLAYWRIGHT_PYTHON` or `PATH` and has the application test
   dependencies installed.
-- The expanded `fixtures-v1.0.20` distribution is available at
+- The expanded `fixtures-v1.0.24` distribution is available at
   `..\album-haven-test-data\dist`. Its `profiles\functional-core` directory must
   contain `database`, `media`, and `loopback`.
 - PostgreSQL passwordless automation is configured in `PGPASSFILE`. When that
@@ -36,6 +36,42 @@ Run one exact case. The command resolves its owning shard automatically:
 ```powershell
 npm run test:e2e:functional:local -- -Case "FTC-MOBILE-WEB-007 keeps ratings on one line while narrower galleries preserve selected card scale"
 ```
+
+Run several exact cases from one shard in the same isolated setup. Use a
+PowerShell array directly so each complete title remains one argument:
+
+```powershell
+$cases = @(
+  'FTC-ALBUM-DETAILS-017 orders missing track numbers by natural filename'
+  'FTC-ALBUM-DETAILS-006 preserves mixed credits through an optimistic album-only split'
+)
+& ./scripts/run-functional-e2e-local.ps1 -Cases $cases
+```
+
+`-Case`, `-Cases`, and `-All` are mutually exclusive. Batch titles must be exact,
+unique, and owned by one shard. The existing runner retains each case's isolated
+application requirements, mutation ordering, one worker, and cleanup checks.
+
+During release repair work, reproduce and verify the failing exact case locally,
+then run the complete review-first CI pipeline. Use focused hosted runs only for
+an unusually difficult or CI-specific failure that needs repeated hosted
+feedback; after that focused run passes, return to the complete pipeline.
+Preserve native `@area:<name>` tags for diagnosis and reporting. Do not substitute
+a complete local shard for exact local reproduction, or treat a shard as a
+product area.
+
+The pipeline runs PR Agent Review and Codex PR Review independently and holds
+test jobs until both applicable reviews succeed. Intentional review skips must match the classified
+scope and pull-request context. Collect all review results before fixing their
+findings; once reviews pass, collect the complete test failure inventory. If a
+validated review finding requires a new commit, preserve its evidence and cancel
+the superseded run. Verify its jobs have stopped, fix and verify locally, then
+push to a new complete native pull-request pipeline. Held or cancelled runs do
+not record review coverage or authorize publication. Final full CI must pass.
+
+GitHub may withhold downloadable job logs until the job finishes. For live case
+progress, use the signed-in Actions job page. An unchanged test-execution step
+alone does not prove a hang.
 
 Run one complete shard:
 
@@ -71,11 +107,22 @@ PostgreSQL projection, clears owner runtime paths from the child environment,
 and invokes `scripts/ci/validate-functional-shards.cjs` with the approved shard
 and exact case title.
 
+Read-only cases share an invocation. Each mutating case runs in its own app
+invocation, with the captured PostgreSQL and media baseline restored before the
+next invocation. An ordinary test failure is retained in the final result while
+the remaining cases continue from that baseline.
+
 Successful runs remove their temporary fixture, reports, database, and roles.
-Failed runs still tear down PostgreSQL and remove the large fixture copies, but
-retain Playwright output and blob reports at the printed
-`album-haven-functional-local-*` path for diagnosis. The command never targets
-the owner's application process, database, music library, or media paths.
+After ordinary test failures, the runner tears down PostgreSQL and removes the
+large fixture copies, retaining Playwright output and blob reports at the
+printed `album-haven-functional-local-*` path for diagnosis.
+
+Exit code 2 means the runner could not verify an owned process had stopped. It
+stops the remaining cases and shards, preserves the database, fixture, and
+failure evidence, and prints their temporary root. Verify the recorded owned
+process tree and scoped ports are clear before cleaning up those exact resources
+or starting another test wave. The command never targets the owner's
+application process, database, music library, or media paths.
 
 ## Avoid the low-level runner
 

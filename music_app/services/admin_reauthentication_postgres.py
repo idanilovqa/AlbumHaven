@@ -16,6 +16,7 @@ from music_app.services.auth_audit_postgres import (
     SecurityAuditOutcome,
 )
 from music_app.services.auth_passwords import PasswordVerification, verify_password
+from music_app.services.auth_credential_attempts_postgres import PostgresCredentialAttempts, shared_verification_capacity
 
 try:  # pragma: no cover - exercised with the optional runtime driver.
     import psycopg
@@ -36,6 +37,7 @@ class AdminReauthenticationOutcome(str, Enum):
 
 @dataclass(frozen=True, repr=False, slots=True)
 class _Snapshot:
+    username: str
     encoded_hash: str
     hash_policy_version: int
     credential_version: int
@@ -50,6 +52,8 @@ class PostgresAdminReauthenticationService:
         clock: Callable[[], datetime] | None = None,
         verifier: Callable[..., PasswordVerification] = verify_password,
         audit_repository: Any,
+        attempt_guard: Any = None,
+        verification_semaphore: Any = None,
     ) -> None:
         payload = config if isinstance(config, Mapping) else {}
         self._database_url = str(
@@ -71,6 +75,9 @@ class PostgresAdminReauthenticationService:
         self._clock = clock or (lambda: datetime.now(timezone.utc))
         self._verifier = verifier
         self._audit = audit_repository
+        self._attempts = attempt_guard if attempt_guard is not None else PostgresCredentialAttempts(
+            payload, connect=self._connect, clock=self._clock)
+        self._semaphore = verification_semaphore or shared_verification_capacity(payload)
 
     def reauthenticate(
         self,
@@ -89,13 +96,26 @@ class PostgresAdminReauthenticationService:
         snapshot = self._snapshot(account)
         if snapshot is None:
             return AdminReauthenticationOutcome.STALE
-        verification = self._verifier(
-            password,
-            snapshot.encoded_hash,
-            stored_policy_version=snapshot.hash_policy_version,
-            argon2=self._argon2,
-            current_policy_version=self._policy_version,
-        )
+        reservation = self._attempts.reserve(snapshot.username)
+        if reservation is None:
+            return AdminReauthenticationOutcome.INVALID
+        if not self._semaphore.acquire(blocking=False):
+            self._attempts.finalize(reservation, successful=False)
+            return AdminReauthenticationOutcome.INVALID
+        try:
+            try:
+                verification = self._verifier(
+                    password, snapshot.encoded_hash,
+                    stored_policy_version=snapshot.hash_policy_version,
+                    argon2=self._argon2, current_policy_version=self._policy_version,
+                )
+            except BaseException:
+                self._attempts.finalize(reservation, successful=False)
+                raise
+            self._attempts.finalize(reservation,
+                successful=isinstance(verification, PasswordVerification) and bool(verification.valid))
+        finally:
+            self._semaphore.release()
         if not isinstance(verification, PasswordVerification) or not verification.valid:
             with self._operation() as connection:
                 self._append_audit(
@@ -114,7 +134,8 @@ class PostgresAdminReauthenticationService:
                     select account.id as account_id, account.is_active,
                            account.disabled_at, credential.encoded_hash,
                            credential.credential_version,
-                           session.id as session_id
+                           session.id as session_id, session.idle_expires_at,
+                           session.absolute_expires_at
                     from app.accounts account
                     join app.account_credentials credential
                       on credential.account_id = account.id
@@ -131,12 +152,15 @@ class PostgresAdminReauthenticationService:
                 if len(locked) != 1 or not isinstance(locked[0], Mapping):
                     return AdminReauthenticationOutcome.STALE
                 row = locked[0]
+                now = _aware_utc(self._clock())
                 if not (
                     row.get("is_active") is True
                     and row.get("disabled_at") is None
                     and row.get("encoded_hash") == snapshot.encoded_hash
                     and row.get("credential_version") == snapshot.credential_version
                     and row.get("session_id") == session
+                    and _aware_utc(row.get("idle_expires_at")) > now
+                    and _aware_utc(row.get("absolute_expires_at")) > now
                 ):
                     return AdminReauthenticationOutcome.STALE
                 connection.execute(
@@ -163,7 +187,7 @@ class PostgresAdminReauthenticationService:
         with self._operation() as connection:
             rows = connection.execute(
                 """
-                select account.id as account_id, account.is_active,
+                select account.id as account_id, account.username_normalized, account.is_active,
                        account.disabled_at, credential.encoded_hash,
                        credential.hash_policy_version,
                        credential.credential_version
@@ -183,6 +207,7 @@ class PostgresAdminReauthenticationService:
         if not isinstance(encoded_hash, str) or not encoded_hash:
             raise RuntimeError
         return _Snapshot(
+            username=str(row.get("username_normalized") or ""),
             encoded_hash=encoded_hash,
             hash_policy_version=_positive_id(row.get("hash_policy_version")),
             credential_version=_positive_id(row.get("credential_version")),

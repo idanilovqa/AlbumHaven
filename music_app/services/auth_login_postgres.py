@@ -10,7 +10,6 @@ from enum import Enum
 import hashlib
 import hmac
 import re
-import threading
 from typing import Any
 import unicodedata
 
@@ -24,6 +23,7 @@ from music_app.services.auth_passwords import (
     rehash_verified_password,
     verify_password,
 )
+from music_app.services.auth_credential_attempts_postgres import shared_verification_capacity
 from music_app.services.auth_audit_postgres import (
     LoginAuditReason,
     SecurityAuditCategory,
@@ -105,6 +105,7 @@ class _ReservedBucket:
     kind: str
     digest: bytes
     window_started_at: datetime
+    window_expires_at: datetime
 
     def __repr__(self) -> str:
         return f"{type(self).__name__}(kind={self.kind!r}, digest=<redacted>, window_started_at=<redacted>)"
@@ -187,11 +188,7 @@ class PostgresLoginAuthService:
         self._connect = connect or _connect
         self._verifier = verifier
         self._rehasher = rehasher or rehash_verified_password
-        self._semaphore = verification_semaphore or threading.BoundedSemaphore(
-            _positive_integer(
-                payload.get("verification_semaphore"), "verification capacity"
-            )
-        )
+        self._semaphore = verification_semaphore or shared_verification_capacity(payload)
         self._clock = clock or (lambda: datetime.now(timezone.utc))
         if not callable(getattr(session_service, "prepare_session", None)) or not callable(
             getattr(session_service, "persist_prepared_for_locked_account", None)
@@ -256,6 +253,8 @@ class PostgresLoginAuthService:
         used_real_credential = False
         verification_failure = False
         operation_failure = False
+        replacement: PasswordCredential | None = None
+        post_verification_failure = False
         try:
             if lookup_allowed:
                 try:
@@ -294,6 +293,16 @@ class PostgresLoginAuthService:
                         verification_failure = True
                 except Exception:
                     verification_failure = True
+                if used_real_credential and verification.valid and verification.needs_rehash:
+                    try:
+                        replacement = self._rehasher(
+                            verification_password,
+                            argon2=self._argon2,
+                            policy_version=self._argon2_policy_version,
+                        )
+                    except Exception:
+                        replacement = None
+                    post_verification_failure = not isinstance(replacement, PasswordCredential)
         finally:
             try:
                 self._semaphore.release()
@@ -318,27 +327,15 @@ class PostgresLoginAuthService:
             and credential is not None
             and _account_is_active(account)
             and verification.valid
+            and not post_verification_failure
         )
-        replacement: PasswordCredential | None = None
-        post_verification_failure = False
-        if succeeded and verification.needs_rehash:
-            try:
-                replacement = self._rehasher(
-                    verification_password,
-                    argon2=self._argon2,
-                    policy_version=self._argon2_policy_version,
-                )
-            except Exception:
-                replacement = None
-            if not isinstance(replacement, PasswordCredential):
-                succeeded = False
-                post_verification_failure = True
 
         if succeeded:
             # Token generation and validation deliberately happen before the final
             # persistence transaction; the prepared token is not usable unless that
             # transaction commits its session row.
             try:
+                now = _aware_now(self._clock)
                 prepared = self._session_service.prepare_session(
                     _positive_integer(account.get("id"), "account id"),
                     user_agent=user_agent,
@@ -397,6 +394,7 @@ class PostgresLoginAuthService:
     def _verification_password(self, value: object) -> tuple[str, bool]:
         if not isinstance(value, str):
             return "invalid-login-password", False
+        value = unicodedata.normalize("NFC", value)
         try:
             encoded = value.encode("utf-8")
         except UnicodeEncodeError:
@@ -437,6 +435,8 @@ class PostgresLoginAuthService:
         source_class: str | None,
     ) -> tuple[_ReservedBucket, ...] | None:
         with self._operation() as connection:
+            # Even an existing bucket must stay locked against expiry cleanup
+            # until the reservation has read and incremented its current window.
             for kind, digest in buckets:
                 _execute(
                     connection,
@@ -445,7 +445,8 @@ class PostgresLoginAuthService:
                       bucket_kind, bucket_hash, key_version,
                       window_started_at, window_expires_at, failure_count
                     ) values (%s, %s, %s, %s, %s, 0)
-                    on conflict (bucket_kind, key_version, bucket_hash) do nothing
+                    on conflict (bucket_kind, key_version, bucket_hash)
+                    do update set updated_at = app.auth_throttles.updated_at
                     """,
                     (
                         kind,
@@ -510,6 +511,7 @@ class PostgresLoginAuthService:
                 if now >= expires:
                     count = 0
                     window_started_at = now
+                    expires = now + timedelta(seconds=self._windows[kind])
                     _execute(
                         connection,
                         """
@@ -520,7 +522,7 @@ class PostgresLoginAuthService:
                         """,
                         (
                             now,
-                            now + timedelta(seconds=self._windows[kind]),
+                            expires,
                             now,
                             kind,
                             self._hmac_key_version,
@@ -534,6 +536,7 @@ class PostgresLoginAuthService:
                         kind=kind,
                         digest=dict(buckets)[kind],
                         window_started_at=window_started_at,
+                        window_expires_at=expires,
                     )
                 )
             for kind, digest in buckets:
@@ -559,6 +562,14 @@ class PostgresLoginAuthService:
         target_account_id: int | None = None,
     ) -> None:
         with self._operation() as connection:
+            # The audit's target-account FK also locks this account. Acquire it
+            # before throttles, matching successful login's lock order.
+            if target_account_id is not None:
+                accounts = _fetchall(connection,
+                    "select id from app.accounts where id = %s for update",
+                    (target_account_id,))
+                if len(accounts) != 1:
+                    raise RuntimeError("Login account state is unavailable.")
             self._finalize_failure_in_transaction(connection, reservation, now)
             self._append_audit(
                 connection,
@@ -714,10 +725,18 @@ class PostgresLoginAuthService:
         now: datetime,
     ) -> None:
         rows = self._lock_reserved_throttles(connection, reservation)
+        now = _aware_now(self._clock)
         for raw_row, reserved in zip(rows, reservation, strict=True):
+            if raw_row is None:
+                continue
             row = _row(raw_row, _THROTTLE_COLUMNS)
+            if _timestamp(row.get("window_started_at")) != reserved.window_started_at:
+                continue
             count = _nonnegative_integer(row.get("failure_count"), "failure count")
             if count >= self._limits[reserved.kind]:
+                blocked_until = now + timedelta(seconds=self._cooldown_seconds)
+                if row.get("blocked_until") is not None:
+                    blocked_until = max(blocked_until, _timestamp(row["blocked_until"]))
                 cursor = _execute(
                     connection,
                     """
@@ -727,7 +746,7 @@ class PostgresLoginAuthService:
                       and bucket_hash = %s and window_started_at = %s
                     """,
                     (
-                        now + timedelta(seconds=self._cooldown_seconds),
+                        blocked_until,
                         now,
                         reserved.kind,
                         self._hmac_key_version,
@@ -743,8 +762,14 @@ class PostgresLoginAuthService:
         reservation: tuple[_ReservedBucket, ...],
         now: datetime,
     ) -> None:
-        self._lock_reserved_throttles(connection, reservation)
-        for reserved in reservation:
+        rows = self._lock_reserved_throttles(connection, reservation)
+        now = _aware_now(self._clock)
+        for raw_row, reserved in zip(rows, reservation, strict=True):
+            if raw_row is None:
+                continue
+            row = _row(raw_row, _THROTTLE_COLUMNS)
+            if _timestamp(row.get("window_started_at")) != reserved.window_started_at:
+                continue
             cursor = _execute(
                 connection,
                 """
@@ -827,9 +852,24 @@ class PostgresLoginAuthService:
                 reservation[1].digest,
             ),
         )
-        if len(rows) != len(reservation):
-            raise RuntimeError("Login throttle state is unavailable.")
-        return rows
+        now = _aware_now(self._clock)
+        by_kind: dict[str, Mapping[str, object]] = {}
+        expected = {reserved.kind for reserved in reservation}
+        for raw_row in rows:
+            row = _row(raw_row, _THROTTLE_COLUMNS)
+            kind = str(row.get("bucket_kind") or "")
+            if kind not in expected or kind in by_kind:
+                raise RuntimeError("Login throttle state is unavailable.")
+            by_kind[kind] = row
+        ordered: list[object] = []
+        for reserved in reservation:
+            row = by_kind.get(reserved.kind)
+            # Cleanup can retire each bucket independently after its captured
+            # expiry. Preserve the other bucket and any newer generation.
+            if row is None and now < reserved.window_expires_at:
+                raise RuntimeError("Login throttle state is unavailable.")
+            ordered.append(row)
+        return ordered
 
     @contextmanager
     def _operation(self) -> Iterator[Any]:

@@ -6,6 +6,24 @@ const path = require('node:path');
 const repoRoot = path.join(__dirname, '..', '..', '..');
 const componentPath = path.join(repoRoot, 'music_app', 'static', 'js', 'button-component.js');
 
+test('shared icon renderer emits normalized decorative SVGs from a fixed registry', () => {
+  const button = require(componentPath);
+  for (const name of ['play', 'pause', 'edit', 'close', 'more', 'delete', 'previous', 'next', 'bolt']) {
+    const html = button.renderIconSvg(name, { className: `ui-icon--${name}` });
+    assert.match(html, /^<svg class="ui-icon ui-icon--/);
+    assert.match(html, /viewBox="0 0 24 24"/);
+    assert.match(html, /aria-hidden="true"/);
+    assert.match(html, /focusable="false"/);
+    assert.match(html, /<path d="[^"]+"\/>/);
+  }
+  assert.match(button.renderIconSvg('bolt'), /<path d="m13 2-9 12h7l-1 8 10-13h-7z"\/>/);
+  assert.throws(() => button.renderIconSvg('invented'), /Unknown icon/);
+  assert.throws(
+    () => button.renderIconSvg('play', { className: 'safe\" onclick=\"alert' }),
+    /Invalid icon class/,
+  );
+});
+
 test('shared Button renderer centers safe text and exposes canonical variants and actions', () => {
   const button = require(componentPath);
   const html = button.renderButton({
@@ -33,12 +51,13 @@ test('shared Button CSS centers content on both axes and EditorFooter composes t
   const bootstrap = fs.readFileSync(path.join(repoRoot, 'music_app', 'templates', 'partials', 'appearance-bootstrap.html'), 'utf8');
   assert.match(css, /\.ui-button\s*\{[^}]*display:\s*inline-flex[^}]*align-items:\s*center[^}]*justify-content:\s*center[^}]*line-height:\s*1/s);
   assert.match(css, /\.ui-button\[hidden\]\s*\{[^}]*display:\s*none\s*!important/s);
-  assert.match(css, /\.ui-button\s*\{[^}]*outline:\s*2px solid transparent[^}]*outline-offset:\s*2px[^}]*transition:[^;}]*outline-color 150ms ease/s);
-  assert.match(css, /\.ui-button:hover:not\(:disabled\):not\(\[aria-disabled='true'\]\)\s*\{[^}]*border-color:\s*var\(--appearance-interaction-outline,[^}]*outline-color:\s*var\(--appearance-interaction-outline,/s);
+  assert.match(css, /\.ui-button\s*\{[^}]*outline:\s*1px solid transparent[^}]*outline-offset:\s*-1px[^}]*transition:[^;}]*outline-color 150ms ease/s);
+  assert.match(css, /\.ui-button:hover:not\(:disabled\):not\(\[aria-disabled='true'\]\)\s*\{[^}]*border-color:\s*var\(--appearance-item-action-hover-border,[^}]*background:\s*var\(--appearance-item-action-hover-background,/s);
   assert.match(css, /\.ui-button:active:not\(:disabled\):not\(\[aria-disabled='true'\]\)\s*\{[^}]*background:\s*var\(--appearance-item-action-pressed,/s);
   assert.match(css, /\.ui-button:focus-visible\s*\{[^}]*outline-color:\s*var\(--appearance-interaction-outline,/s);
-  assert.match(css, /\.ui-button--quiet:hover:not\(:disabled\):not\(\[aria-disabled='true'\]\)\s*\{[^}]*background:\s*color-mix\(in srgb, currentColor 6%, transparent\)/s);
-  assert.match(css, /\.ui-button--quiet:active:not\(:disabled\):not\(\[aria-disabled='true'\]\)\s*\{[^}]*background:\s*color-mix\(in srgb, currentColor 10%, transparent\)/s);
+  assert.match(css, /:root \.ui-button\.ui-button--quiet\s*\{[^}]*border-color:\s*var\(--appearance-line,[^}]*background:\s*transparent/s);
+  assert.match(css, /:root \.ui-button\.ui-button--quiet:hover:not\(:disabled\):not\(\[aria-disabled='true'\]\)\s*\{[^}]*background:\s*transparent/s);
+  assert.match(css, /:root \.ui-button\.ui-button--quiet:active:not\(:disabled\):not\(\[aria-disabled='true'\]\)\s*\{[^}]*background:\s*transparent/s);
   assert.match(editor, /ButtonComponent\.renderButton/);
   assert.match(editor, /label:\s*secondary\.label \|\| 'Cancel'[\s\S]*quiet:\s*true/);
   assert.doesNotMatch(editor, /<button/);
@@ -92,23 +111,74 @@ test('ActionButton exposes native disabled state and rejects unsafe icon classes
   );
 });
 
+test('ActionButton supports shared round and destructive specializations with a centered SVG', () => {
+  const button = require(componentPath);
+  const html = button.renderActionButton({
+    ariaLabel: 'Remove loop',
+    icon: 'delete',
+    shape: 'round',
+    semantic: 'destructive',
+  });
+
+  assert.match(html, /action-button action-button--round action-button--destructive/);
+  assert.match(html, /<svg class="ui-icon action-button__icon ui-icon--delete"/);
+  assert.match(html, /aria-hidden="true" focusable="false"/);
+  assert.throws(
+    () => button.renderActionButton({ ariaLabel: 'Wrong shape', shape: 'triangle' }),
+    /Unknown ActionButton shape/,
+  );
+  assert.throws(
+    () => button.renderActionButton({ ariaLabel: 'Wrong semantic', semantic: 'celebratory' }),
+    /Unknown ActionButton semantic/,
+  );
+});
+
+test('ActionButton accepts the shared bare presentation and rejects unknown presentations', () => {
+  const button = require(componentPath);
+  const html = button.renderActionButton({ ariaLabel: 'Fold artists', icon: 'previous', presentation: 'bare' });
+  assert.match(html, /action-button action-button--bare/);
+  assert.throws(
+    () => button.renderActionButton({ ariaLabel: 'Wrong presentation', presentation: 'floating' }),
+    /Unknown ActionButton presentation/,
+  );
+});
+
 test('ActionButton CSS owns one 34px theme-aware surface and inert disabled treatment', () => {
   const css = fs.readFileSync(path.join(repoRoot, 'music_app', 'static', 'css', 'button-component.css'), 'utf8');
   assert.match(css, /\.action-button\s*\{[^}]*width:\s*34px[^}]*height:\s*34px[^}]*min-width:\s*34px[^}]*min-height:\s*34px/s);
-  assert.match(css, /\.action-button\s*\{[^}]*border-radius:\s*8px[^}]*background:\s*var\(--appearance-control,/s);
-  assert.match(css, /\.action-button:hover:not\(:disabled\):not\(\[aria-disabled='true'\]\)\s*\{[^}]*border-color:\s*var\(--appearance-interaction-outline,/s);
-  assert.match(css, /\.action-button\s*\{[^}]*outline:\s*2px solid transparent[^}]*outline-offset:\s*2px[^}]*transition:[^;}]*outline-color 150ms ease/s);
-  assert.match(css, /\.action-button:hover:not\(:disabled\):not\(\[aria-disabled='true'\]\)\s*\{[^}]*outline-color:\s*var\(--appearance-interaction-outline,/s);
+  assert.match(css, /\.action-button\s*\{[^}]*border-radius:\s*8px[^}]*background:\s*var\(--appearance-neutral-button-background,\s*var\(--appearance-control,/s);
+  assert.match(css, /\.action-button:hover:not\(:disabled\):not\(\[aria-disabled='true'\]\)\s*\{[^}]*border-color:\s*var\(--appearance-item-action-hover-border,/s);
+  assert.match(css, /\.action-button\s*\{[^}]*outline:\s*1px solid transparent[^}]*outline-offset:\s*1px[^}]*transition:[^;}]*outline-color 150ms ease/s);
+  assert.doesNotMatch(css, /\.action-button:hover:not\(:disabled\):not\(\[aria-disabled='true'\]\)\s*\{[^}]*outline-color:/s);
   assert.match(css, /\.action-button:focus-visible\s*\{[^}]*outline-color:\s*var\(--appearance-interaction-outline,/s);
   assert.match(css, /\.action-button:disabled,[^{]*\.action-button\[aria-disabled='true'\]\s*\{[^}]*opacity:[^;}]+;[^}]*cursor:\s*not-allowed/s);
+  assert.match(css, /\.action-button--round\s*\{[^}]*border-radius:\s*50%/s);
+  assert.match(css, /\.action-button__icon\.ui-icon\s*\{[^}]*display:\s*block[^}]*stroke:\s*currentColor[^}]*fill:\s*none/s);
+  assert.match(css, /\.action-button--destructive:hover:not\(:disabled\):not\(\[aria-disabled='true'\]\)[^{]*\{[^}]*border-color:\s*var\(--alert-error-edge[^}]*outline-color:\s*var\(--alert-error-focus/s);
+  assert.match(css, /\.action-button--destructive:focus-visible\s*\{[^}]*outline-color:\s*var\(--alert-error-focus/s);
 });
 
 test('Jinja ActionButton macro shares the JavaScript contract and accepts structured attributes', () => {
   const macro = fs.readFileSync(path.join(repoRoot, 'music_app', 'templates', 'partials', 'button.html'), 'utf8');
-  assert.match(macro, /macro action_button\(/);
+  assert.match(macro, /macro action_button\([^)]*shape='default'[^)]*semantic='default'/);
   assert.match(macro, /ui-button--icon ui-button--medium action-button/);
+  assert.match(macro, /action-button--\{\{ shape \}\}/);
+  assert.match(macro, /action-button--\{\{ semantic \}\}/);
   assert.match(macro, /aria-label="\{\{ aria_label \}\}"/);
   assert.match(macro, /for attribute_name, attribute_value in attributes\.items\(\)/);
   assert.match(macro, /action-button__content/);
   assert.match(macro, /caller\(\)/);
+});
+
+test('shared Button state changes update both native and accessible disabled state', () => {
+  const { setDisabled } = require(componentPath);
+  const attributes = new Map([['aria-disabled', 'true']]);
+  const element = { disabled: true, setAttribute(name, value) { attributes.set(name, value); } };
+  assert.equal(typeof setDisabled, 'function');
+  setDisabled(element, false);
+  assert.equal(element.disabled, false);
+  assert.equal(attributes.get('aria-disabled'), 'false');
+  setDisabled(element, true);
+  assert.equal(element.disabled, true);
+  assert.equal(attributes.get('aria-disabled'), 'true');
 });

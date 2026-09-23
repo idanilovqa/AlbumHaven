@@ -57,8 +57,11 @@ test('loading saved loops collapses every returned group before selecting the fi
     },
     async fetch() {
       return {
+        ok: true,
         async json() {
           return {
+            ok: true,
+            allowed_actions: {},
             loops: [
               { id: 'loop-1', artist: 'Artist', title: 'Song' },
               { id: 'loop-2', artist: 'Artist', title: 'Other Song' },
@@ -113,7 +116,7 @@ test('opening Settings on Loops re-collapses groups before rendering the modal',
     },
     document: {
       body: { classList: { add() {}, remove() {} } },
-      getElementById() { return { hidden: true }; },
+      getElementById() { return { hidden: true, classList: { remove() {} } }; },
       querySelectorAll() { return []; },
     },
     getUtilityModalElements() { return { overlay }; },
@@ -303,7 +306,7 @@ test('closing Utility cancels an in-flight track navigation before it can reopen
     },
     document: {
       body: { classList: { add() {}, remove() {} } },
-      getElementById() { return { hidden: true }; },
+      getElementById() { return { hidden: true, classList: { remove() {} } }; },
       querySelectorAll() { return []; },
     },
     getUtilityModalElements() { return { overlay }; },
@@ -525,7 +528,7 @@ test('Settings defers an active full startup view request until the modal closes
     },
     document: {
       body: { classList: { add() {}, remove() {} } },
-      getElementById() { return { hidden: true }; },
+      getElementById() { return { hidden: true, classList: { remove() {} } }; },
       querySelectorAll() { return []; },
     },
     getUtilityModalElements() {
@@ -589,7 +592,7 @@ test('utility modal suspends gallery work synchronously before rendering or load
   const { context } = loadHelper({
     document: {
       body: { classList: { add() {}, remove() {} } },
-      getElementById() { return { hidden: true }; },
+      getElementById() { return { hidden: true, classList: { remove() {} } }; },
       querySelectorAll() { return []; },
     },
     virtualGrid: {
@@ -665,7 +668,7 @@ for (const utilityReleasesFirst of [true, false]) {
       virtualGrid,
       document: {
         body: { classList: { add() {}, remove() {} } },
-        getElementById() { return { hidden: true }; },
+        getElementById() { return { hidden: true, classList: { remove() {} } }; },
         querySelectorAll() { return []; },
       },
       getUtilityModalElements() { return { overlay }; },

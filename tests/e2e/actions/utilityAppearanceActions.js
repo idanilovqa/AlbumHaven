@@ -36,15 +36,17 @@ export class UtilityAppearanceActions {
     }
     const input = this.utilityAppearanceTab.seekbarModeInput(normalized);
     await input.check();
-    await this.utilityAppearanceTab.waitForPageCondition((expected) => {
-      const selected = document.querySelector(expected.selector);
-      return selected instanceof HTMLInputElement
-        && selected.checked
-        && state.player?.appearance?.seekbarMode === expected.mode;
-    }, { timeout: 60000 }, {
-      mode: normalized,
-      selector: this.utilityAppearanceTab.seekbarModeSelectorFor(normalized),
-    });
+    await expect(input).toBeChecked();
+  }
+
+  async saveSeekbarMode(mode) {
+    const normalized = mode === 'waveform' ? 'waveform' : 'default';
+    await this.selectSeekbarMode(normalized);
+    // Selection is a draft; playback changes only through the shared Save action.
+    if (await this.utilityAppearanceTab.editorFooter.primary.root.isEnabled()) await this.save();
+    await expect(this.utilityAppearanceTab.globalPlayer).toHaveAttribute(
+      'data-player-seekbar-presentation', normalized === 'waveform' ? 'waveform' : 'regular',
+    );
   }
 
   async saveCompactPlayerStyle(style) {
@@ -66,6 +68,24 @@ export class UtilityAppearanceActions {
     await this.utilityAppearanceTab.editorFooter.primary.root.click();
     await expect(this.utilityAppearanceTab.editorFooter.status).toHaveText('Saved to your account', { timeout: 60000 });
     await expect(this.utilityAppearanceTab.documentRoot).toHaveAttribute('data-compact-player-style', normalized);
+  }
+
+  async saveDockedCompactPlayerBehavior(behavior) {
+    const normalized = behavior === 'stay_docked' ? 'stay_docked' : 'follow_sidebar';
+    await this.saveCompactPlayerStyle('docked');
+    const button = this.utilityAppearanceTab.dockedCompactPlayerBehaviorButton(normalized);
+    await expect(button).toBeVisible({ timeout: 60000 });
+    const alreadySaved = await this.utilityAppearanceTab.documentRoot
+      .getAttribute('data-docked-compact-player-behavior') === normalized;
+    if (alreadySaved) {
+      await expect(button).toHaveAttribute('aria-pressed', 'true');
+      return;
+    }
+    await button.click();
+    await expect(button).toHaveAttribute('aria-pressed', 'true');
+    await this.save();
+    await expect(this.utilityAppearanceTab.documentRoot)
+      .toHaveAttribute('data-docked-compact-player-behavior', normalized);
   }
 
   async openSection(key) {

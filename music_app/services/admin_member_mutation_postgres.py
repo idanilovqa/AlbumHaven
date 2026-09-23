@@ -31,6 +31,40 @@ class DestructiveConfirmationRequired(ValueError):
     pass
 
 
+def lock_current_actor_session(connection: Any, *, actor_account_id: int,
+                               actor_session_id: object,
+                               clock: Callable[[], datetime],
+                               require_recent_auth: bool = True) -> datetime:
+    """Revalidate the admitted session after its account authority lock."""
+    try:
+        session_id = _positive_id(actor_session_id)
+    except ValueError:
+        raise RecentAuthenticationRequired("Recent authentication is required.") from None
+    rows = connection.execute(
+        """
+        select id, account_id, authenticated_at, idle_expires_at,
+               absolute_expires_at, revoked_at
+        from app.account_sessions
+        where id = %s and account_id = %s
+        for update
+        """, (session_id, actor_account_id),
+    ).fetchall()
+    now = _aware_utc(clock())
+    if len(rows) != 1 or not isinstance(rows[0], Mapping):
+        raise RecentAuthenticationRequired("Recent authentication is required.")
+    row = rows[0]
+    if (row.get("id") != session_id or row.get("account_id") != actor_account_id
+            or row.get("revoked_at") is not None
+            or _aware_utc(row.get("idle_expires_at")) <= now
+            or _aware_utc(row.get("absolute_expires_at")) <= now):
+        raise RecentAuthenticationRequired("Recent authentication is required.")
+    authenticated = _aware_utc(row.get("authenticated_at"))
+    if (authenticated > now + _FUTURE_SKEW
+            or (require_recent_auth and now - authenticated > _RECENT_AUTH_WINDOW)):
+        raise RecentAuthenticationRequired("Recent authentication is required.")
+    return now
+
+
 class PostgresAdminMemberMutationService:
     def __init__(
         self,
@@ -52,6 +86,7 @@ class PostgresAdminMemberMutationService:
         self,
         *,
         actor_account_id: object,
+        actor_session_id: object,
         actor_authenticated_at: object,
         library_id: object,
         target_account_id: object,
@@ -69,13 +104,9 @@ class PostgresAdminMemberMutationService:
         access = _boolean(current_library_access)
         disable_confirmed = _boolean(confirm_disable)
         removal_confirmed = _boolean(confirm_remove_access)
-        capabilities = _capabilities(capability_keys)
+        capabilities = _capabilities(capability_keys, allow_empty=not access)
         reference = _request_ref(request_ref)
         now = self._recent_now(actor_authenticated_at)
-        if not active and not disable_confirmed:
-            raise DestructiveConfirmationRequired("Account disable confirmation is required.")
-        if not access and not removal_confirmed:
-            raise DestructiveConfirmationRequired("Library removal confirmation is required.")
 
         try:
             with self._operation() as connection:
@@ -85,12 +116,22 @@ class PostgresAdminMemberMutationService:
                     library_id=current_library_id,
                     target_account_id=target_id,
                 )
+                now = lock_current_actor_session(connection, actor_account_id=actor_id,
+                    actor_session_id=actor_session_id, clock=self._clock)
                 if locked.get("target_is_bootstrap_owner") is True:
                     if not active or not access:
                         raise PermissionError("The bootstrap owner is protected.")
                     # Owner capabilities are inherited; saving their displayed
                     # values must not replace the owner membership or grants.
                     return
+                if locked.get("target_is_active") is True and not active and not disable_confirmed:
+                    raise DestructiveConfirmationRequired("Account disable confirmation is required.")
+                if (
+                    locked.get("target_has_library_access") is True
+                    and not access
+                    and not removal_confirmed
+                ):
+                    raise DestructiveConfirmationRequired("Library removal confirmation is required.")
                 connection.execute(
                     """
                     update app.accounts
@@ -205,6 +246,7 @@ class PostgresAdminMemberMutationService:
         self,
         *,
         actor_account_id: object,
+        actor_session_id: object,
         actor_authenticated_at: object,
         library_id: object,
         target_account_id: object,
@@ -226,6 +268,8 @@ class PostgresAdminMemberMutationService:
                     library_id=current_library_id,
                     target_account_id=target_id,
                 )
+                now = lock_current_actor_session(connection, actor_account_id=actor_id,
+                    actor_session_id=actor_session_id, clock=self._clock)
                 connection.execute(
                     """
                     update app.account_sessions
@@ -268,7 +312,7 @@ class PostgresAdminMemberMutationService:
         rows = connection.execute(
             """
             with locked_accounts as (
-              select id, is_active, disabled_at
+              select id, account_kind, is_active, disabled_at
               from app.accounts
               where id in (%s, %s)
               order by id for update
@@ -298,6 +342,21 @@ class PostgresAdminMemberMutationService:
             join locked_accounts target on target.id = %s
             where actor.id = %s and actor.is_active is true
               and actor.disabled_at is null
+              and target.account_kind in ('bootstrap_owner', 'managed_user')
+              and (
+                target.id = locked_library.owner_account_id
+                or exists (
+                  select 1 from library.library_memberships scoped_membership
+                  where scoped_membership.library_id = locked_library.id
+                    and scoped_membership.account_id = target.id
+                )
+                or exists (
+                  select 1 from app.capabilities prior_access
+                  where prior_access.account_id = target.id
+                    and prior_access.scope_kind = 'library'
+                    and prior_access.scope_id = locked_library.id
+                )
+              )
             """,
             (
                 actor_account_id,
@@ -333,13 +392,13 @@ def _boolean(value: object) -> bool:
     return value
 
 
-def _capabilities(values: Iterable[object]) -> tuple[str, ...]:
+def _capabilities(values: Iterable[object], *, allow_empty: bool = False) -> tuple[str, ...]:
     try:
         received = tuple(values)
     except TypeError:
         raise ValueError("Account management capabilities are invalid.") from None
     if (
-        not received
+        (not received and not allow_empty)
         or any(not isinstance(item, str) for item in received)
         or len(set(received)) != len(received)
         or any(item not in MANAGED_CAPABILITY_KEYS for item in received)

@@ -1,5 +1,10 @@
 from __future__ import annotations
 
+import asyncio
+from music_app.services.media_host_roots import root_request_scope, bounded_directories
+
+from music_app.services.log_history import history_scope_for_request
+
 import inspect
 import logging
 from collections.abc import Mapping
@@ -85,6 +90,7 @@ from music_app.services.repair_previews import (
 )
 from music_app.services.state import (
     hydrate_library_state_for_config,
+    invalidate_targeted_library_projections,
     run_runtime_state_mutation_for_state,
     start_background_refresh_for_state,
 )
@@ -117,8 +123,14 @@ async def confirm_missing_album_removal(request: Request, album_key: str) -> JSO
     if not normalized_key:
         return JSONResponse({"ok": False, "error": "Invalid album key"}, status_code=400)
     try:
+        health_service = getattr(request.app.state, "library_watch_health_service", None)
+        root_health_check = getattr(health_service, "root_allows_destructive_reconciliation", None)
+        if not callable(root_health_check):
+            raise MissingAlbumRootUnavailable()
         result = await run_in_threadpool(
-            PostgresMissingAlbumRemovalService(_app_config(request)).confirm_removal,
+            PostgresMissingAlbumRemovalService(
+                _app_config(request), root_health_check=root_health_check,
+            ).confirm_removal,
             normalized_key,
         )
     except MissingAlbumReappeared:
@@ -145,23 +157,29 @@ async def confirm_missing_album_removal(request: Request, album_key: str) -> JSO
             status_code=404,
         )
     library_state = _library_state(request)
-    albums = library_state.get("albums")
-    if isinstance(albums, list):
-        library_state["albums"] = [
-            album
-            for album in albums
-            if str(
-                album.get("key") if isinstance(album, Mapping) else getattr(album, "key", "")
-            ).strip()
-            != normalized_key
-        ]
-    from music_app.services.problematic_albums import (
-        invalidate_problematic_albums_payload_cache,
-    )
-    from music_app.services.utility_rules import invalidate_utility_rules_payload_cache
 
-    invalidate_problematic_albums_payload_cache(library_state)
-    invalidate_utility_rules_payload_cache(library_state)
+    def remove_from_runtime_albums():
+        albums = library_state.get("albums")
+        if isinstance(albums, list):
+            library_state["albums"] = [
+                album
+                for album in albums
+                if str(
+                    album.get("key") if isinstance(album, Mapping) else getattr(album, "key", "")
+                ).strip()
+                != normalized_key
+            ]
+
+    def update_runtime_after_removal():
+        run_runtime_state_mutation_for_state(remove_from_runtime_albums)
+        invalidate_targeted_library_projections(
+            library_state,
+            _app_config(request),
+            revision=int(result["library_revision"]),
+            affected_album_keys=(normalized_key,),
+        )
+
+    await run_in_threadpool(update_runtime_after_removal)
     return JSONResponse({"ok": True, **result})
 
 _EDIT_WRITE_WORKERS = 2
@@ -331,6 +349,8 @@ def _default_albums_by_track_paths_finder(get_state_provider):
 
 
 def _bridge_queue_finalize_save_task(**kwargs: Any) -> None:
+    append_history = kwargs.pop('append_log_history', append_log_history)
+    log_event = kwargs.pop('log_app_event', log_app_event)
     find_albums_by_track_paths = kwargs.pop("find_albums_by_track_paths", None)
     find_problematic_album_by_track_paths = kwargs.pop("find_problematic_album_by_track_paths", None)
     structural_edit_fields = kwargs.pop("structural_edit_fields", set(_STRUCTURAL_EDIT_FIELDS))
@@ -455,8 +475,8 @@ def _bridge_queue_finalize_save_task(**kwargs: Any) -> None:
             rebuild_relation_projection=rebuild_relation_projection,
             **save_options,
         ),
-        append_log_history=lambda config, entry: append_log_history(config, entry),
-        log_app_event=lambda config, logger, message, **extra: log_app_event(config, logger, message, **extra),
+        append_log_history=append_history,
+        log_app_event=log_event,
         find_albums_by_track_paths=find_albums_by_track_paths,
         find_problematic_album_by_track_paths=find_problematic_album_by_track_paths,
         structural_edit_fields=set(structural_edit_fields),
@@ -469,12 +489,27 @@ def _bridge_queue_finalize_save_task(**kwargs: Any) -> None:
 
 @router.get("/library-settings")
 async def library_settings_read(request: Request) -> JSONResponse:
+    from music_app.services.policy_asgi import allowed_actions_for_request
+    scope = await root_request_scope(request)
     return JSONResponse(
         {
             "ok": True,
-            "settings": load_library_root_settings(_app_config(request)),
+            "allowed_actions": allowed_actions_for_request(request, ("library.settings.manage", "library.filesystem.browse", "library.paths.read")).as_payload(),
+            "settings": await run_in_threadpool(load_library_root_settings, _app_config(request), **scope),
         }
     )
+
+
+@router.get("/library-settings/browse")
+async def library_settings_browse(request: Request, path: str = "") -> JSONResponse:
+    from music_app.services.policy_asgi import allowed_actions_for_request
+    await root_request_scope(request)
+    config = _app_config(request)
+    actions = allowed_actions_for_request(request, ("library.filesystem.browse", "library.paths.read")).as_payload()
+    if config.get("ALBUM_HAVEN_DEPLOYMENT_MODE") != "self_hosted" or not all(actions.get(key) is True for key in ("library.filesystem.browse", "library.paths.read")):
+        from fastapi import HTTPException
+        raise HTTPException(403, "Directory browsing is unavailable")
+    return JSONResponse({"ok": True, **await run_in_threadpool(bounded_directories, config, path)})
 
 
 @router.post("/library-settings/import-album-ratings")
@@ -492,6 +527,7 @@ async def library_settings_import_album_ratings(request: Request) -> JSONRespons
 
 @router.post("/library-settings")
 async def library_settings_write(request: Request) -> JSONResponse:
+    scope = await root_request_scope(request)
     payload = await _json_payload(request)
     if payload is None:
         return _json_response(_invalid_payload_response())
@@ -508,18 +544,25 @@ async def library_settings_write(request: Request) -> JSONResponse:
             "replace_library_watch_roots",
             None,
         )
-        result = save_library_settings_and_start_refresh(
-            _app_config(request),
-            settings_payload,
-            library_state=_library_state(request),
-            start_background_refresh=_start_background_refresh_for_asgi_request(request),
-            build_status_payload=lambda: _build_status_payload_from_state(_library_state(request)),
-            replace_watch_roots=(
-                replace_live_watch_roots
-                if callable(replace_live_watch_roots)
-                else (lambda _roots: None)
-            ),
-        )
+        write_lock = getattr(request.app.state, "library_settings_write_lock", None)
+        if write_lock is None:
+            write_lock = asyncio.Lock()
+            request.app.state.library_settings_write_lock = write_lock
+        async with write_lock:
+            result = await run_in_threadpool(
+                save_library_settings_and_start_refresh,
+                _app_config(request),
+                settings_payload,
+                **scope,
+                library_state=_library_state(request),
+                start_background_refresh=_start_background_refresh_for_asgi_request(request),
+                build_status_payload=lambda: _build_status_payload_from_state(_library_state(request)),
+                replace_watch_roots=(
+                    replace_live_watch_roots
+                    if callable(replace_live_watch_roots)
+                    else (lambda _roots: None)
+                ),
+            )
     except ValueError as exc:
         return _json_response(({"ok": False, "error": str(exc)}, 400))
     except LibrarySettingsWorkflowError as exc:
@@ -855,18 +898,23 @@ def _asgi_bridge_queue_finalize_save_task_builder(
     request: Request,
     *,
     wait_for_completion: bool = False,
+    history_scope=None,
 ):
+    history_scope = history_scope or getattr(request.state, 'history_scope', None)
     def queue_finalize_with_asgi_state(**kwargs: Any) -> None:
         _bridge_queue_finalize_save_task(
             get_state=lambda: _library_state(request),
             wait_for_completion=wait_for_completion,
+            append_log_history=lambda config, entry: append_log_history(config, entry, scope=history_scope),
+            log_app_event=lambda config, logger, message, **extra: log_app_event(config, logger, message, history_scope=history_scope, **extra),
             **kwargs,
         )
 
     return queue_finalize_with_asgi_state
 
 
-def _asgi_selected_postgres_media_write_queue_finalize_save_task_builder(request: Request):
+def _asgi_selected_postgres_media_write_queue_finalize_save_task_builder(request: Request, *, history_scope=None):
+    history_scope = history_scope or getattr(request.state, 'history_scope', None)
     def compensate_media_write(
         *,
         changed_paths: set[str],
@@ -931,6 +979,8 @@ def _asgi_selected_postgres_media_write_queue_finalize_save_task_builder(request
             get_state=lambda: _library_state(request),
             wait_for_completion=True,
             compensate_save_task=compensate_media_write,
+            append_log_history=lambda config, entry: append_log_history(config, entry, scope=history_scope),
+            log_app_event=lambda config, logger, message, **extra: log_app_event(config, logger, message, history_scope=history_scope, **extra),
             **kwargs,
         )
 
@@ -939,7 +989,9 @@ def _asgi_selected_postgres_media_write_queue_finalize_save_task_builder(request
 
 def _asgi_selected_postgres_structural_tag_edit_queue_finalize_save_task_builder(
     request: Request,
+    *, history_scope=None,
 ):
+    history_scope = history_scope or getattr(request.state, 'history_scope', None)
     def compensate_structural_tag_edit(
         *,
         changed_paths: set[str],
@@ -1044,11 +1096,13 @@ def _asgi_selected_postgres_structural_tag_edit_queue_finalize_save_task_builder
             append_log_history=lambda app_config, entry: append_log_history(
                 app_config,
                 entry,
+                scope=history_scope,
             ),
             log_app_event=lambda app_config, logger, message, **extra: log_app_event(
                 app_config,
                 logger,
                 message,
+                history_scope=history_scope,
                 **extra,
             ),
             find_albums_by_track_paths=_postgres_album_finder_for_track_paths(request),
@@ -1216,6 +1270,25 @@ def _edit_tags_queue_finalize_save_task_builder(
     return queue_finalize_with_postgres_album_finder
 
 
+def _with_problem_suggestion_outcomes(result: ResponseValue, proposal_ids: list[str]) -> ResponseValue:
+    """Project the existing batch result only after authoritative finalization."""
+    original = result[0] if isinstance(result, tuple) else result
+    response = dict(original)
+    if response.get("ok") and response.get("save_task_status") == "completed":
+        outcome = "committed"
+    elif response.get("proposal_status") == "stale":
+        outcome = "stale"
+    elif (response.get("save_task_id") or response.get("save_task_status")) and response.get("save_task_status") != "completed":
+        outcome = "recovery_pending"
+    elif response.get("edit_outcome") in {"failed_rolled_back", "recovery_pending"}:
+        outcome = response["edit_outcome"]
+    else:
+        outcome = "rejected"
+    response["proposal_outcomes"] = [{"id": identifier, "status": outcome}
+                                     for identifier in dict.fromkeys(value for value in proposal_ids if isinstance(value, str))]
+    return (response, result[1]) if isinstance(result, tuple) else response
+
+
 def _authoritative_edit_tags_response(
     result: ResponseValue,
     *,
@@ -1290,6 +1363,7 @@ async def revert_version_exception(request: Request) -> JSONResponse:
 
 @router.post("/utilities/rules/problem-ignores/revert")
 async def revert_problem_ignore(request: Request) -> JSONResponse:
+    history_scope = await history_scope_for_request(request, required=False)
     payload = await _json_payload(request)
     if payload is None:
         return _json_response(_invalid_payload_response())
@@ -1305,12 +1379,13 @@ async def revert_problem_ignore(request: Request) -> JSONResponse:
         level="info",
         history=True,
         row_key=row_key,
-    )
+     history_scope=history_scope)
     return JSONResponse({"ok": True, "reverted_row_key": row_key})
 
 
 @router.post("/utilities/rules/problem-ignores")
 async def create_problem_ignores(request: Request) -> JSONResponse:
+    history_scope = await history_scope_for_request(request, required=False)
     payload = await _json_payload(request)
     if payload is None:
         return _json_response(_invalid_payload_response())
@@ -1332,7 +1407,7 @@ async def create_problem_ignores(request: Request) -> JSONResponse:
         history=True,
         row_keys=[str(item.get("row_key") or "") for item in result.applied_items],
         migrated_legacy_row_keys=list(result.removed_legacy_row_keys),
-    )
+     history_scope=history_scope)
     return JSONResponse({
         "ok": True,
         "applied_items": result.applied_items,
@@ -1342,6 +1417,7 @@ async def create_problem_ignores(request: Request) -> JSONResponse:
 
 @router.post("/versions/ignore")
 async def ignore_album_version(request: Request) -> JSONResponse:
+    history_scope = await history_scope_for_request(request, required=False)
     payload = await _json_payload(request)
     if payload is None:
         return _json_response(_invalid_payload_response())
@@ -1362,12 +1438,13 @@ async def ignore_album_version(request: Request) -> JSONResponse:
         "Version exception created",
         level="info",
         album_key=album_key,
-    )
+     history_scope=history_scope)
     return JSONResponse({"ok": True, "ignored_version_keys": sorted(ignored)})
 
 
 @router.post("/versions/mark")
 async def mark_album_version(request: Request) -> JSONResponse:
+    history_scope = await history_scope_for_request(request, required=False)
     payload = await _json_payload(request)
     if payload is None:
         return _json_response(_invalid_payload_response())
@@ -1419,12 +1496,13 @@ async def mark_album_version(request: Request) -> JSONResponse:
         level="info",
         album_key=album_key,
         parent_album_key=parent_album_key,
-    )
+     history_scope=history_scope)
     return JSONResponse({"ok": True, "manual_version_links": manual_version_links})
 
 
 @router.post("/versions/unmark")
 async def unmark_album_version(request: Request) -> JSONResponse:
+    history_scope = await history_scope_for_request(request, required=False)
     payload = await _json_payload(request)
     if payload is None:
         return _json_response(_invalid_payload_response())
@@ -1446,7 +1524,7 @@ async def unmark_album_version(request: Request) -> JSONResponse:
         "Manual version link removed",
         level="info",
         album_key=album_key,
-    )
+     history_scope=history_scope)
     return JSONResponse({"ok": True, "manual_version_links": manual_version_links})
 
 
@@ -1500,6 +1578,7 @@ async def utilities_save_task(task_id: str) -> JSONResponse:
 
 @router.post("/utilities/repair-album")
 async def utilities_repair_album(request: Request) -> JSONResponse:
+    history_scope = await history_scope_for_request(request, required=False)
     payload = await _json_payload(request)
     if payload is None or not payload.get("confirmed"):
         return _json_response(({"ok": False, "error": "Repair was not confirmed"}, 400))
@@ -1537,8 +1616,8 @@ async def utilities_repair_album(request: Request) -> JSONResponse:
         save_ignored_repair_keys=save_ignored_repair_keys,
         load_separate_release_keys=load_separate_release_keys,
         save_separate_release_keys=save_separate_release_keys,
-        append_log_history=append_log_history,
-        log_app_event=log_app_event,
+        append_log_history=lambda config, entry: append_log_history(config, entry, scope=history_scope),
+        log_app_event=lambda config, logger, message, **extra: log_app_event(config, logger, message, history_scope=history_scope, **extra),
         structural_edit_fields=set(_STRUCTURAL_EDIT_FIELDS),
         edit_write_workers=_EDIT_WRITE_WORKERS,
     )
@@ -1549,6 +1628,7 @@ async def utilities_repair_album(request: Request) -> JSONResponse:
 
 @router.post("/utilities/edit-tags")
 async def utilities_edit_tags(request: Request) -> JSONResponse:
+    history_scope = await history_scope_for_request(request, required=False)
     request_started = perf_counter()
     payload = await _json_payload(request)
     if payload is None or not payload.get("confirmed"):
@@ -1607,8 +1687,8 @@ async def utilities_edit_tags(request: Request) -> JSONResponse:
         "build_affected_album_dicts": build_affected_album_dicts,
         "load_separate_release_keys": load_separate_release_keys,
         "normalize_exception_value": normalize_exception_value,
-        "append_log_history": append_log_history,
-        "log_app_event": log_app_event,
+        "append_log_history": lambda config, entry: append_log_history(config, entry, scope=history_scope),
+        "log_app_event": lambda config, logger, message, **extra: log_app_event(config, logger, message, history_scope=history_scope, **extra),
         "structural_edit_fields": set(_STRUCTURAL_EDIT_FIELDS),
         "edit_write_workers": _EDIT_WRITE_WORKERS,
         "save_track_exception_override": set_track_exception_override,
@@ -1637,6 +1717,56 @@ async def utilities_edit_tags(request: Request) -> JSONResponse:
             )
         ),
     }
+    if "proposal_ids" in payload:
+        from pathlib import Path
+        from music_app.services.metadata import read_editable_tag_values
+        from music_app.services.problem_suggestions import validate_problem_suggestions, _FIELDS
+
+        def validate_proposals(st, submitted_updates):
+            paths = {str(path) for path in submitted_updates}
+            if _is_selected_postgres_library_browse_request(request):
+                repository = PostgresLibraryBrowseRepository(config)
+                entries = repository.build_problem_suggestion_entries_by_paths(paths)
+                aliases = repository._load_relation_alias_maps().get("alias_to_canonical", {})
+            else:
+                entries = {path: st.get("file_cache", {}).get(path) for path in paths}
+                aliases = (st.get("relation_views") or {}).get("alias_to_canonical", {})
+
+            def read_physical(path):
+                source = Path(path)
+                before = source.stat()
+                tags = read_editable_tag_values(source, set(_FIELDS))
+                after = source.stat()
+                if (before.st_mtime_ns, before.st_size) != (after.st_mtime_ns, after.st_size):
+                    raise ValueError("Source changed while reading")
+                return {**tags, "mtime": after.st_mtime, "size": after.st_size}
+
+            verified = validate_problem_suggestions(payload.get("proposal_ids"), entries,
+                alias_to_canonical=aliases, read_metadata=read_physical)
+            if set(verified) != paths:
+                raise ValueError("Suggestion targets changed")
+            # The submitted fields determine reservation resources; they must exactly
+            # describe the recomputed batch, never add an unreserved structural edit.
+            normalized = lambda values: {path: {field: str(value) for field, value in fields.items()} for path, fields in values.items()}
+            if normalized(verified) != normalized(submitted_updates):
+                raise ValueError("Suggestion updates changed")
+            album_key = str(album.get("key") or album.get("album_ref") or "")
+            if _is_selected_postgres_library_browse_request(request):
+                detail = repository.build_problematic_file_detail_payload(album_key)
+            else:
+                from music_app.services.repair_previews import build_problematic_album_detail_payload
+                detail = build_problematic_album_detail_payload(album_key, config=config, library_state=st, logger=logger)
+            eligible_ids = {row["id"] for row in (detail or {}).get("suggested_edits", [])}
+            if not set(payload["proposal_ids"]).issubset(eligible_ids):
+                raise ValueError("Suggestions are no longer eligible")
+            previous_entries = st.get("file_cache") or {}
+            st["file_cache"] = {**previous_entries, **{
+                path: {**(previous_entries.get(path) or {}), **entry}
+                for path, entry in entries.items()
+            }}
+            return verified
+
+        handler_options["validate_proposals"] = validate_proposals
     structural_tag_edit_reservation = (
         await acquire_structural_tag_edit_reservation_async(
             reservation_resource_keys
@@ -1654,4 +1784,6 @@ async def utilities_edit_tags(request: Request) -> JSONResponse:
     )
     if _is_selected_postgres_library_browse_request(request) and _has_edit_tags_media_write_fields(payload):
         result = _selected_postgres_media_write_response(result)
+    if isinstance(payload.get("proposal_ids"), list):
+        result = _with_problem_suggestion_outcomes(result, payload["proposal_ids"])
     return _json_response(result)

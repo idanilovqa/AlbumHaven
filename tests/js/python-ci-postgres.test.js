@@ -21,10 +21,8 @@ function jobSource(jobName, nextJobName) {
 test('Python CI provisions and tears down an exact disposable PostgreSQL 17 database', () => {
   const job = jobSource('test_python', 'e2e_production_parity');
   assert.match(job, /runs-on:\s*windows-2025/);
-  assert.match(
-    job,
-    /if:\s*\$\{\{\s*github\.event\.pull_request\.head\.repo\.full_name\s*==\s*github\.repository\s*\}\}/,
-  );
+  assert.match(job, /needs:\s*[\s\S]*?- review_scope[\s\S]*?- review_prerequisites[\s\S]*?- pr_agent_review[\s\S]*?- codex_review/);
+  assert.match(job, /if:\s*\$\{\{[^\r\n]*!cancelled\(\) && needs\.review_prerequisites\.result == 'success'[^\r\n]*pipeline_mode == 'full'[^\r\n]*github\.event\.pull_request\.head\.repo\.full_name == github\.repository[^\r\n]*\}\}/);
   assert.doesNotMatch(job, /ALBUM_HAVEN_FIXTURES_TOKEN/);
   assert.match(job, /-Mode\s+Provision/);
   assert.match(job, /-Mode\s+Teardown/);
@@ -32,7 +30,7 @@ test('Python CI provisions and tears down an exact disposable PostgreSQL 17 data
   assert.match(job, /-DatabaseSuffix\s+["']py_\$\{\{\s*github\.run_id\s*\}\}_\$\{\{\s*github\.run_attempt\s*\}\}["']/);
   assert.match(job, /-ExpectedMajorVersion\s+17/);
   assert.match(job, /-Pgbin\s+\$env:PGBIN/);
-  assert.equal((job.match(/-HostName\s+127\.0\.0\.1/g) || []).length, 2);
+  assert.equal((job.match(/-HostName\s+127\.0\.0\.1/g) || []).length, 4);
   assert.match(job, /-SkipFixtureLoad/);
   assert.match(job, /if:\s*\$\{\{\s*always\(\)\s*\}\}/);
   assert.ok(job.indexOf('-Mode Provision') < job.indexOf('python -m pytest -q'));

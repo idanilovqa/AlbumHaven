@@ -31,16 +31,22 @@ const SUFFIXES = [2, 3, 4, 5];
 const albumDetailsTitle = (album) => `${ARTIST} • ${album} • ${YEAR}`;
 
 test.beforeEach(async ({ managedAppLifecycle }) => {
-  await restoreDdtStudioRecordsFixture();
-  // Load the exact canonical fixture, including its intentionally mixed raw
-  // track years, into the replacement application's runtime state.
-  await managedAppLifecycle.restart();
+  await managedAppLifecycle.stop();
+  try {
+    await restoreDdtStudioRecordsFixture();
+  } finally {
+    // Load the canonical mixed-year fixture after all previous writers exit.
+    await managedAppLifecycle.restart();
+  }
 });
 
 test.afterEach(async ({ managedAppLifecycle }) => {
-  await restoreDdtStudioRecordsFixture();
-  // Keep the following spec on the same canonical runtime projection.
-  await managedAppLifecycle.restart();
+  await managedAppLifecycle.stop();
+  try {
+    await restoreDdtStudioRecordsFixture();
+  } finally {
+    await managedAppLifecycle.restart();
+  }
 });
 
 function expectedNames(initialNames, suffixes) {
@@ -57,7 +63,7 @@ function expectedNames(initialNames, suffixes) {
   ];
 }
 
-test('FTC-TAGS-020 keeps the 60-album DDT gallery stable through Studio Records splits and restores', async ({
+test('FTC-TAGS-020 keeps the 60-album DDT gallery stable through Studio Records splits and restores', { tag: '@area:tag-edit' }, async ({
   freshBrowserSession,
   galleryActions,
   page,

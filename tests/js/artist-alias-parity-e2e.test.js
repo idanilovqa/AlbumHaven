@@ -42,7 +42,8 @@ test('FTC-SEARCH-NAV-022 keeps startup, collapsed search, and family browsing in
     'readAlbumYearByName(WHITESPACE_ALBUM)',
     'waitForViewReady(WHITESPACE_DISPLAY_ARTIST',
     'readChipTexts()',
-    'clickChipByName(WHITESPACE_RELATED_ARTIST)',
+    'waitForAllChipsActive(familyChips)',
+    'selectOnlyChipByName(WHITESPACE_RELATED_ARTIST)',
     'waitForOnlyArtistHeadings([WHITESPACE_RELATED_ARTIST])',
     'readArtistHeadings()).not.toContain(WHITESPACE_DISPLAY_ARTIST)',
     'waitForAlbumVisibleUnderHeading(',
@@ -107,13 +108,9 @@ test('gallery action shapes production status telemetry and reads exact card cre
       };
     },
     albumCard: {
-      subtitleByAlbumName(albumName) {
+      async readVisibleMetadataByAlbumName(albumName) {
         assert.equal(albumName, 'Cover 2 Cover');
-        return { async textContent() { return 'Morse, Portnoy & George · 2012'; } };
-      },
-      yearByAlbumName(albumName) {
-        assert.equal(albumName, 'Cover 2 Cover');
-        return { async textContent() { return '2012'; } };
+        return { artist: 'Morse, Portnoy & George', year: '2012' };
       },
     },
   });
@@ -126,7 +123,7 @@ test('gallery action shapes production status telemetry and reads exact card cre
   });
   assert.equal(
     await actions.readAlbumCreditByName('Cover 2 Cover'),
-    'Morse, Portnoy & George · 2012',
+    'Morse, Portnoy & George',
   );
   assert.equal(await actions.readAlbumYearByName('Cover 2 Cover'), '2012');
   assert.deepEqual(await actions.readBrowseTelemetry(), {
@@ -179,11 +176,10 @@ test('album-card POM owns the exact subtitle selector used by the action layer',
   assert.match(source, /cardByAlbumName\(albumName\)\.locator\(this\.subtitleWithinCardSelector\)/);
   assert.match(source, /yearByAlbumName\(albumName\)/);
   assert.match(source, /cardByAlbumName\(albumName\)\.locator\(this\.yearWithinCardSelector\)/);
-  const actionSelectorMethods = source.slice(
-    source.indexOf('subtitleByAlbumName(albumName)'),
-    source.indexOf('ratingRowByArtistAndAlbum('),
-  );
-  assert.doesNotMatch(actionSelectorMethods, /\.evaluate(?:All)?\s*\(/);
+  const subtitleReader = source.match(/subtitleByAlbumName\(albumName\) \{[\s\S]*?\n  \}/)?.[0] || '';
+  const yearReader = source.match(/yearByAlbumName\(albumName\) \{[\s\S]*?\n  \}/)?.[0] || '';
+  assert.doesNotMatch(subtitleReader, /\.evaluate(?:All)?\s*\(/);
+  assert.doesNotMatch(yearReader, /\.evaluate(?:All)?\s*\(/);
 });
 
 test('alias parity spec stays scenario-only and avoids browser-side mutation shortcuts', () => {
@@ -207,7 +203,8 @@ test('FTC-SEARCH-NAV-020 preserves the approved family-chip transition sequence'
     .split("stepLogger.step('Exercise the existing Artist Family chip semantics", 2)[1]
     .split("stepLogger.step('Keep both source credits under the canonical root grouping'", 1)[0];
   const checkpoints = [
-    "clickChipByName('Neal Morse')",
+    'waitForAllChipsActive(familyChips)',
+    "selectOnlyChipByName('Neal Morse')",
     "waitForOnlyArtistHeadings(['Neal Morse'])",
     'waitForAlbumHidden(fixture.album)',
     'clickPrimaryChip()',
@@ -217,6 +214,9 @@ test('FTC-SEARCH-NAV-020 preserves the approved family-chip transition sequence'
     "clickChipByName('Neal Morse')",
     "waitForChipActive('Neal Morse', false)",
     'waitForOnlyArtistHeadings([MORSE_CANONICAL_ARTIST])',
+    'clickPrimaryChip()',
+    'waitForOnlyArtistHeadings([])',
+    'waitForEmptyFamilySelection()',
   ];
   let cursor = -1;
   for (const checkpoint of checkpoints) {
@@ -241,14 +241,14 @@ test('FTC-SEARCH-NAV-020 resets a real deep gallery viewport through family-tree
     'searchToolbarActions.waitForQuery(MORSE_CANONICAL_ARTIST)',
     'artistFamilyActions.waitForViewReady(MORSE_CANONICAL_ARTIST, {',
     "selectSidebarArtistByName('Neal Morse')",
-    "artistFamilyActions.waitForViewReady('Neal Morse', {",
+    "artistFamilyActions.waitForViewReady('Neal Morse', { queryValue: MORSE_CANONICAL_ARTIST })",
     'waitForAlbumVisibleUnderHeading(',
     'selectSidebarArtistByName(MORSE_CANONICAL_ARTIST)',
-    'artistFamilyActions.waitForViewReady(MORSE_CANONICAL_ARTIST, {',
+    'artistFamilyActions.waitForViewReady(MORSE_CANONICAL_ARTIST, { queryValue: MORSE_CANONICAL_ARTIST })',
     'jumpGalleryToMiddle()',
     "selectSidebarArtistByName('Neal Morse')",
     "waitForSidebarSelection('Neal Morse')",
-    "artistFamilyActions.waitForViewReady('Neal Morse', {",
+    "artistFamilyActions.waitForViewReady('Neal Morse', { queryValue: MORSE_CANONICAL_ARTIST })",
     'waitForGalleryScrollAtStart()',
     'readArtistSelectionGalleryViewportState(',
     'expectNealMorseScrollResetViewport(expect, viewport)',
@@ -336,9 +336,8 @@ test('FTC-SEARCH-NAV-020 verifies root aggregation before real sidebar regroupin
   const rootStep = source
     .split("stepLogger.step('Keep both source credits under the canonical root grouping'", 2)[1];
   const checkpoints = [
-    'searchToolbarActions.clearSearch({ submitWithEnter: true })',
+    "galleryActions.goto('/?surface=albums')",
     "searchToolbarActions.waitForQuery('')",
-    'clickAllArtists({ expectArtistQueryCleared: true })',
     'waitForInitialAllArtistsSections({ minimumHeadingCount: 4 })',
     'readSidebarArtistNameCount(MORSE_CANONICAL_ARTIST)',
     'readSidebarArtistAlbumCount(MORSE_CANONICAL_ARTIST)',
@@ -423,8 +422,12 @@ test('alias parity support reads production responses and DOM locators without e
   assert.doesNotMatch(aliasActionMethods, /\.evaluate(?:All)?\s*\(/);
   assert.doesNotMatch(telemetryMethod, /\.evaluate(?:All)?\s*\(/);
   assert.doesNotMatch(responseMethod, /\.evaluate(?:All)?\s*\(/);
-  assert.match(pomSource, /new ProductionViewObserver\(page\)/);
-  assert.match(observerSource, /page\.on\('response'/);
+  assert.match(pomSource, /this\.productionViewObserver = getProductionViewObserver\(page\)/);
+  assert.match(observerSource, /const observersByPage = new WeakMap\(\)/);
+  assert.match(observerSource, /if \(!observersByPage\.has\(page\)\) observersByPage\.set\(page, new ProductionViewObserver\(page\)\)/);
+  assert.match(observerSource, /return observersByPage\.get\(page\)/);
+  assert.match(observerSource, /events = new CDPDocumentEvents\(page\)/);
+  assert.match(observerSource, /events\.on\('response'/);
   assert.match(observerSource, /\['\/view-data', '\/home-data'\]/);
   assert.match(observerSource, /latestFullRequestSequence/);
   assert.match(telemetryMethod, /readLatestProductionViewPayload/);
@@ -447,4 +450,15 @@ test('Morse helper requires exactly two titles, exact years, and exact raw subti
     async readAlbumCreditByName(album) { return observed[album].credit; },
     async readAlbumYearByName(album) { return observed[album].year; },
   });
+});
+
+
+test('visible album metadata separates the final year while preserving exact artist identities', async () => {
+  const { parseVisibleAlbumMetadata } = await import(moduleUrl('tests/e2e/helpers/visibleAlbumMetadata.js'));
+  assert.deepEqual(parseVisibleAlbumMetadata('Signal  Family Lead · 2011'), { artist: 'Signal  Family Lead', year: '2011' });
+  assert.deepEqual(parseVisibleAlbumMetadata('Artist · Guest · 2004'), { artist: 'Artist · Guest', year: '2004' });
+  assert.deepEqual(parseVisibleAlbumMetadata('東京事変', '2007'), { artist: '東京事変', year: '2007' });
+  assert.deepEqual(parseVisibleAlbumMetadata('Earth · Wind'), { artist: 'Earth · Wind', year: '' });
+  assert.deepEqual(parseVisibleAlbumMetadata('Ancient Artist · 99'), { artist: 'Ancient Artist', year: '99' });
+  assert.deepEqual(parseVisibleAlbumMetadata('Undated Artist'), { artist: 'Undated Artist', year: '' });
 });

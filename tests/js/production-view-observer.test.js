@@ -14,7 +14,10 @@ const observerUrl = pathToFileURL(path.join(
 class FakePage {
   constructor() {
     this.listeners = new Map();
+    this.frame = {};
   }
+
+  mainFrame() { return this.frame; }
 
   emit(event, value) {
     for (const listener of this.listeners.get(event) || []) listener(value);
@@ -139,7 +142,7 @@ test('DOM evidence stability rejects attachment and applied-artist changes durin
 test('production view observer ignores sidebar payloads and retains the latest full request payload', async () => {
   const { ProductionViewObserver } = await import(observerUrl);
   const page = new FakePage();
-  const observer = new ProductionViewObserver(page);
+  const observer = new ProductionViewObserver(page, page);
   const sidebarRequest = request('http://127.0.0.1/view-data?payload_tier=sidebar');
   const fullRequest = request('http://127.0.0.1/view-data?surface=albums&q=Neal');
 
@@ -159,7 +162,7 @@ test('production view observer ignores sidebar payloads and retains the latest f
 test('production view observer exposes the in-flight latest full payload read for POM synchronization', async () => {
   const { ProductionViewObserver } = await import(observerUrl);
   const page = new FakePage();
-  const observer = new ProductionViewObserver(page);
+  const observer = new ProductionViewObserver(page, page);
   const fullRequest = request('http://127.0.0.1/view-data?surface=albums&q=Neal');
   let resolvePayload;
   const payload = new Promise((resolve) => {
@@ -182,7 +185,7 @@ test('production view observer exposes the in-flight latest full payload read fo
 test('production view observer cannot let an older out-of-order response replace the newest payload', async () => {
   const { ProductionViewObserver } = await import(observerUrl);
   const page = new FakePage();
-  const observer = new ProductionViewObserver(page);
+  const observer = new ProductionViewObserver(page, page);
   const olderRequest = request('http://127.0.0.1/view-data?surface=albums&q=Neal');
   const newerRequest = request('http://127.0.0.1/view-data?surface=albums&q=Devin');
 
@@ -201,7 +204,7 @@ test('production view observer cannot let an older out-of-order response replace
 test('production view observer settles against the newest payload when an older body remains pending', async () => {
   const { ProductionViewObserver } = await import(observerUrl);
   const page = new FakePage();
-  const observer = new ProductionViewObserver(page);
+  const observer = new ProductionViewObserver(page, page);
   const olderRequest = request('http://127.0.0.1/view-data?surface=albums&q=Neal');
   const newerRequest = request('http://127.0.0.1/view-data?surface=albums&q=Devin');
   let resolveOlderPayload;
@@ -228,7 +231,7 @@ test('production view observer settles against the newest payload when an older 
 test('production view observer never falls back to an older payload after the newest request fails', async () => {
   const { ProductionViewObserver } = await import(observerUrl);
   const page = new FakePage();
-  const observer = new ProductionViewObserver(page);
+  const observer = new ProductionViewObserver(page, page);
   const olderRequest = request('http://127.0.0.1/view-data?surface=albums&q=Neal');
   const newerRequest = request('http://127.0.0.1/view-data?surface=albums&q=Devin');
 
@@ -249,7 +252,7 @@ test('production view observer never falls back to an older payload after the ne
 test('production view observer surfaces a latest transport failure instead of using bootstrap fallback', async () => {
   const { ProductionViewObserver } = await import(observerUrl);
   const page = new FakePage();
-  const observer = new ProductionViewObserver(page);
+  const observer = new ProductionViewObserver(page, page);
   const failedRequest = request('http://127.0.0.1/view-data?surface=albums&q=Neal');
 
   page.emit('request', failedRequest);
@@ -259,10 +262,10 @@ test('production view observer surfaces a latest transport failure instead of us
   assert.match(observer.read().latestFullPayloadError, /Request failed/);
 });
 
-test('production view observer clears AJAX authority when a new document navigation starts', async () => {
+test('production view observer clears AJAX authority when a replacement document commit arrives', async () => {
   const { ProductionViewObserver } = await import(observerUrl);
   const page = new FakePage();
-  const observer = new ProductionViewObserver(page);
+  const observer = new ProductionViewObserver(page, page);
   const viewRequest = request('http://127.0.0.1/view-data?surface=albums&q=Neal');
 
   page.emit('request', viewRequest);
@@ -271,7 +274,10 @@ test('production view observer clears AJAX authority when a new document navigat
   await flushPromises();
   assert.equal(observer.read().latestFullPayload.query, 'Neal');
 
-  page.emit('request', documentRequest('http://127.0.0.1/?surface=albums'));
+  const navigation = documentRequest('http://127.0.0.1/?surface=albums');
+  page.emit('request', navigation);
+  page.emit('response', response(navigation, null));
+  page.emit('documentcommitted');
 
   assert.equal(observer.read().latestFullPayload, null);
   assert.equal(observer.read().latestFullRequestUrl, '');
@@ -280,7 +286,7 @@ test('production view observer clears AJAX authority when a new document navigat
 test('production view observer promotes the canonical home endpoint after search clear', async () => {
   const { ProductionViewObserver } = await import(observerUrl);
   const page = new FakePage();
-  const observer = new ProductionViewObserver(page);
+  const observer = new ProductionViewObserver(page, page);
   const searchRequest = request('http://127.0.0.1/view-data?surface=albums&q=Neal');
   const homeRequest = request('http://127.0.0.1/home-data');
 
@@ -300,7 +306,7 @@ test('production view observer promotes the canonical home endpoint after search
 test('production view observer retains a completed save-task terminal payload as canonical mutation evidence', async () => {
   const { ProductionViewObserver } = await import(observerUrl);
   const page = new FakePage();
-  const observer = new ProductionViewObserver(page);
+  const observer = new ProductionViewObserver(page, page);
   const saveTaskRequest = request(
     'http://127.0.0.1/utilities/save-task/selected-track-split',
   );
@@ -367,7 +373,7 @@ test('canonical album target evidence accepts a matching completed save-task ado
 test('production view observer retains both canonical destinations across consecutive completed save tasks', async () => {
   const { ProductionViewObserver, readCanonicalAlbumTargetEvidence } = await import(observerUrl);
   const page = new FakePage();
-  const observer = new ProductionViewObserver(page);
+  const observer = new ProductionViewObserver(page, page);
   const firstRequest = request('http://127.0.0.1/utilities/save-task/terminal-1');
   const secondRequest = request('http://127.0.0.1/utilities/save-task/terminal-2');
   const firstPayload = completedSaveTaskPayload({
@@ -411,7 +417,7 @@ test('production view observer retains both canonical destinations across consec
 test('a newer completed payload replaces prior metadata for the same canonical album identity', async () => {
   const { ProductionViewObserver, readCanonicalAlbumTargetEvidence } = await import(observerUrl);
   const page = new FakePage();
-  const observer = new ProductionViewObserver(page);
+  const observer = new ProductionViewObserver(page, page);
   const firstRequest = request('http://127.0.0.1/utilities/save-task/same-album-before');
   const secondRequest = request('http://127.0.0.1/utilities/save-task/same-album-after');
   const canonicalKey = 'rarity artist::same canonical release';
@@ -513,7 +519,7 @@ test('completed payload parsing atomically rejects malformed or duplicate canoni
 
   for (const invalidCase of cases) {
     const page = new FakePage();
-    const observer = new ProductionViewObserver(page);
+    const observer = new ProductionViewObserver(page, page);
     const saveRequest = request(
       `http://127.0.0.1/utilities/save-task/${encodeURIComponent(invalidCase.name)}`,
     );
@@ -538,7 +544,7 @@ test('completed payload parsing atomically rejects malformed or duplicate canoni
 test('a full-view request supersedes a save task whose response resolves afterward', async () => {
   const { ProductionViewObserver, readCanonicalAlbumTargetEvidence } = await import(observerUrl);
   const page = new FakePage();
-  const observer = new ProductionViewObserver(page);
+  const observer = new ProductionViewObserver(page, page);
   const saveRequest = request('http://127.0.0.1/utilities/save-task/older-save');
   const fullRequest = request('http://127.0.0.1/view-data?surface=albums&q=Newer');
   const stalePayload = completedSaveTaskPayload({
@@ -561,7 +567,7 @@ test('a full-view request supersedes a save task whose response resolves afterwa
 test('document navigation supersedes a save task whose response resolves afterward', async () => {
   const { ProductionViewObserver, readCanonicalAlbumTargetEvidence } = await import(observerUrl);
   const page = new FakePage();
-  const observer = new ProductionViewObserver(page);
+  const observer = new ProductionViewObserver(page, page);
   const saveRequest = request('http://127.0.0.1/utilities/save-task/older-save');
   const stalePayload = completedSaveTaskPayload({
     key: 'rarity artist::stale destination',
@@ -569,7 +575,10 @@ test('document navigation supersedes a save task whose response resolves afterwa
   });
 
   page.emit('request', saveRequest);
-  page.emit('request', documentRequest('http://127.0.0.1/?surface=albums'));
+  const navigation = documentRequest('http://127.0.0.1/?surface=albums');
+  page.emit('request', navigation);
+  page.emit('response', response(navigation, null));
+  page.emit('documentcommitted');
   page.emit('response', response(saveRequest, stalePayload));
   await flushPromises();
 
@@ -583,7 +592,7 @@ test('document navigation supersedes a save task whose response resolves afterwa
 test('an older save response cannot replace a newer save response that completed first', async () => {
   const { ProductionViewObserver, readCanonicalAlbumTargetEvidence } = await import(observerUrl);
   const page = new FakePage();
-  const observer = new ProductionViewObserver(page);
+  const observer = new ProductionViewObserver(page, page);
   const olderRequest = request('http://127.0.0.1/utilities/save-task/older-save');
   const newerRequest = request('http://127.0.0.1/utilities/save-task/newer-save');
   const olderPayload = completedSaveTaskPayload({
@@ -634,7 +643,7 @@ test('pending, failed, malformed, and non-2xx save-task responses never become c
 
   for (const invalidCase of cases) {
     const page = new FakePage();
-    const observer = new ProductionViewObserver(page);
+    const observer = new ProductionViewObserver(page, page);
     const saveRequest = request(`http://127.0.0.1/utilities/save-task/${encodeURIComponent(invalidCase.name)}`);
     page.emit('request', saveRequest);
     page.emit('response', response(saveRequest, invalidCase.payload, invalidCase.options));
@@ -649,7 +658,7 @@ test('pending, failed, malformed, and non-2xx save-task responses never become c
 test('a completed payload with ok false cannot become canonical mutation evidence', async () => {
   const { ProductionViewObserver, readCanonicalAlbumTargetEvidence } = await import(observerUrl);
   const page = new FakePage();
-  const observer = new ProductionViewObserver(page);
+  const observer = new ProductionViewObserver(page, page);
   const saveRequest = request('http://127.0.0.1/utilities/save-task/logical-failure');
   const payload = {
     ...completedSaveTaskPayload({
@@ -672,7 +681,7 @@ test('a completed payload with ok false cannot become canonical mutation evidenc
 test('a completed album without a canonical identity field cannot become mutation evidence', async () => {
   const { ProductionViewObserver, readCanonicalAlbumTargetEvidence } = await import(observerUrl);
   const page = new FakePage();
-  const observer = new ProductionViewObserver(page);
+  const observer = new ProductionViewObserver(page, page);
   const saveRequest = request('http://127.0.0.1/utilities/save-task/missing-identity');
   const payload = {
     ok: true,
@@ -696,7 +705,7 @@ test('a completed album without a canonical identity field cannot become mutatio
 test('a new full view clears accumulated completed mutation evidence', async () => {
   const { ProductionViewObserver, readCanonicalAlbumTargetEvidence } = await import(observerUrl);
   const page = new FakePage();
-  const observer = new ProductionViewObserver(page);
+  const observer = new ProductionViewObserver(page, page);
   const saveRequest = request('http://127.0.0.1/utilities/save-task/completed-save');
   const fullRequest = request('http://127.0.0.1/view-data?surface=albums&q=Newer');
   const payload = completedSaveTaskPayload({
@@ -719,7 +728,7 @@ test('a new full view clears accumulated completed mutation evidence', async () 
 test('document navigation clears accumulated completed mutation evidence', async () => {
   const { ProductionViewObserver, readCanonicalAlbumTargetEvidence } = await import(observerUrl);
   const page = new FakePage();
-  const observer = new ProductionViewObserver(page);
+  const observer = new ProductionViewObserver(page, page);
   const saveRequest = request('http://127.0.0.1/utilities/save-task/completed-save');
   const payload = completedSaveTaskPayload({
     key: 'rarity artist::completed destination',
@@ -729,7 +738,10 @@ test('document navigation clears accumulated completed mutation evidence', async
   page.emit('request', saveRequest);
   page.emit('response', response(saveRequest, payload));
   await flushPromises();
-  page.emit('request', documentRequest('http://127.0.0.1/?surface=albums'));
+  const navigation = documentRequest('http://127.0.0.1/?surface=albums');
+  page.emit('request', navigation);
+  page.emit('response', response(navigation, null));
+  page.emit('documentcommitted');
 
   assert.equal(readCanonicalAlbumTargetEvidence(observer.read(), {
     album: 'Completed Destination',
@@ -741,7 +753,7 @@ test('document navigation clears accumulated completed mutation evidence', async
 test('production view observer revision exposes a transition that starts and finishes during a DOM sample', async () => {
   const { ProductionViewObserver } = await import(observerUrl);
   const page = new FakePage();
-  const observer = new ProductionViewObserver(page);
+  const observer = new ProductionViewObserver(page, page);
   const initialRevision = observer.read().stateRevision;
   const viewRequest = request('http://127.0.0.1/view-data?surface=albums&q=Neal');
 
@@ -755,3 +767,146 @@ test('production view observer revision exposes a transition that starts and fin
   assert.equal(settled.pendingPayloadReadCount, 0);
   assert.equal(settled.stateRevision > initialRevision, true);
 });
+
+
+test('replacement document commit discards refreshes started by the outgoing document after navigation began', async () => {
+  const { ProductionViewObserver } = await import(observerUrl);
+  const page = new FakePage();
+  const observer = new ProductionViewObserver(page, page);
+  const navigation = documentRequest('http://127.0.0.1/?q=Signal');
+  page.emit('request', navigation);
+  const outgoingRefresh = request('http://127.0.0.1/view-data?q=Signal');
+  page.emit('request', outgoingRefresh);
+  page.emit('response', response(navigation, null));
+  page.emit('documentcommitted');
+  page.emit('requestfailed', outgoingRefresh);
+  assert.equal(observer.read().activeRequestCount, 0);
+  assert.equal(observer.read().latestFullPayloadError, null);
+  const currentRefresh = request('http://127.0.0.1/view-data?q=Signal');
+  page.emit('request', currentRefresh);
+  page.emit('requestfailed', currentRefresh);
+  assert.match(observer.read().latestFullPayloadError, /Request failed/);
+});
+
+test('same-document and child-frame navigation retain current request failures', async () => {
+  const { ProductionViewObserver } = await import(observerUrl);
+  const page = new FakePage();
+  const observer = new ProductionViewObserver(page, page);
+  const currentRefresh = request('http://127.0.0.1/view-data?q=Signal');
+  page.emit('request', currentRefresh);
+  page.emit('framenavigated', page.mainFrame());
+  page.emit('framenavigated', {});
+  page.emit('requestfailed', currentRefresh);
+  assert.match(observer.read().latestFullPayloadError, /Request failed/);
+});
+
+test('replacement document commit rejects late outgoing save payload parsing errors', async () => {
+  const { ProductionViewObserver } = await import(observerUrl);
+  const page = new FakePage();
+  const observer = new ProductionViewObserver(page, page);
+  const navigation = documentRequest('http://127.0.0.1/?q=Signal');
+  page.emit('request', navigation);
+  const outgoingSave = request('http://127.0.0.1/utilities/save-task/task-one');
+  let rejectRead;
+  page.emit('request', outgoingSave);
+  page.emit('response', response(outgoingSave, null, { json: () => new Promise((resolve, reject) => { rejectRead = reject; }) }));
+  page.emit('response', response(navigation, null));
+  page.emit('documentcommitted');
+  assert.equal(typeof rejectRead, 'function');
+  rejectRead(new Error('outgoing body aborted'));
+  await flushPromises();
+  assert.equal(observer.read().latestFullPayloadError, null);
+});
+
+
+test('pending same-document navigation and canceled document requests do not clear current failures', async () => {
+  const { ProductionViewObserver } = await import(observerUrl);
+  const page = new FakePage();
+  const observer = new ProductionViewObserver(page, page);
+  const navigation = documentRequest('http://127.0.0.1/?q=Signal');
+  const outgoingRefresh = request('http://127.0.0.1/view-data?q=Signal');
+  page.emit('request', outgoingRefresh);
+  page.emit('requestfailed', outgoingRefresh);
+  page.emit('request', navigation);
+  assert.match(observer.read().latestFullPayloadError, /Request failed/);
+  page.emit('framenavigated', page.mainFrame());
+  assert.match(observer.read().latestFullPayloadError, /Request failed/);
+  page.emit('requestfailed', navigation);
+  page.emit('framenavigated', page.mainFrame());
+  assert.match(observer.read().latestFullPayloadError, /Request failed/);
+  const currentRefresh = request('http://127.0.0.1/view-data?q=Signal');
+  page.emit('request', currentRefresh);
+  page.emit('requestfailed', currentRefresh);
+  assert.match(observer.read().latestFullPayloadError, /Request failed/);
+});
+
+
+test('child document responses cannot discard main-document request failures', async () => {
+  const { ProductionViewObserver } = await import(observerUrl);
+  const page = new FakePage();
+  const observer = new ProductionViewObserver(page, page);
+  const currentRefresh = request('http://127.0.0.1/view-data?q=Signal');
+  page.emit('request', currentRefresh);
+  const childNavigation = { ...documentRequest('http://127.0.0.1/child'), frame: () => ({}) };
+  page.emit('request', childNavigation);
+  page.emit('response', response(childNavigation, null));
+  page.emit('requestfailed', currentRefresh);
+  assert.match(observer.read().latestFullPayloadError, /Request failed/);
+});
+
+test('current document save parsing failures remain visible after replacement', async () => {
+  const { ProductionViewObserver } = await import(observerUrl);
+  const page = new FakePage();
+  const observer = new ProductionViewObserver(page, page);
+  const navigation = documentRequest('http://127.0.0.1/?q=Signal');
+  page.emit('request', navigation);
+  page.emit('response', response(navigation, null));
+  page.emit('documentcommitted');
+  const currentSave = request('http://127.0.0.1/utilities/save-task/task-two');
+  page.emit('request', currentSave);
+  page.emit('response', response(currentSave, null, { json: async () => { throw new Error('current body malformed'); } }));
+  await flushPromises();
+  assert.equal(observer.read().latestFullPayloadError, 'current body malformed');
+});
+
+
+test('redirect chains replace document authority only at the final commit', async () => {
+  const { ProductionViewObserver } = await import(observerUrl);
+  const page = new FakePage();
+  const observer = new ProductionViewObserver(page, page);
+  const outgoing = request('http://127.0.0.1/view-data?q=Signal');
+  page.emit('request', outgoing);
+  page.emit('requestfailed', outgoing);
+  const redirect = documentRequest('http://127.0.0.1/redirect');
+  page.emit('request', redirect);
+  page.emit('response', response(redirect, null, { status: 302, ok: false }));
+  assert.match(observer.read().latestFullPayloadError, /Request failed/);
+  const destination = documentRequest('http://127.0.0.1/?q=Signal');
+  page.emit('request', destination);
+  const lateOutgoing = request('http://127.0.0.1/view-data?q=Signal');
+  page.emit('request', lateOutgoing);
+  page.emit('response', response(destination, null));
+  page.emit('documentcommitted');
+  page.emit('requestfailed', lateOutgoing);
+  assert.equal(observer.read().latestFullPayloadError, null);
+  const current = request('http://127.0.0.1/view-data?q=Signal');
+  page.emit('request', current);
+  page.emit('requestfailed', current);
+  assert.match(observer.read().latestFullPayloadError, /Request failed/);
+});
+
+for (const status of [204, 205]) {
+  test(`document response ${status} keeps current-page evidence because no document replaces it`, async () => {
+    const { ProductionViewObserver } = await import(observerUrl);
+    const page = new FakePage();
+    const observer = new ProductionViewObserver(page, page);
+    const current = request('http://127.0.0.1/view-data?q=Signal');
+    page.emit('request', current);
+    page.emit('requestfailed', current);
+    const navigation = documentRequest('http://127.0.0.1/no-content');
+    page.emit('request', navigation);
+    page.emit('response', response(navigation, null, { status }));
+    page.emit('framenavigated', page.mainFrame());
+    assert.match(observer.read().latestFullPayloadError, /Request failed/);
+  });
+}

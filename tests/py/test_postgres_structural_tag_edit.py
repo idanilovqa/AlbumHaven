@@ -417,11 +417,22 @@ def test_album_edit_restores_display_date_when_watcher_precreates_destination():
     assert "not %(updates_release_year)s::boolean" in normalized_sql
     assert "has_display_year_override" in normalized_sql
     assert "#>> '{scan_cache,file_entry,year}'" in normalized_sql
-    assert "then validated_source_album.release_year" in normalized_sql
+    destination_sql = normalized_sql.split("normalized_existing_destination_album as (", 1)[1].split(
+        "updated_album_ratings as (", 1
+    )[0]
+    assert (
+        "when not %(updates_release_year)s::boolean "
+        "and validated_source_album.has_display_year_override "
+        "and nullif(btrim(library.local_albums.metadata ->> 'release_date'), '') is null "
+        "then validated_source_album.release_year else library.local_albums.release_year"
+    ) in destination_sql
     assert (
         "jsonb_set( coalesce(library.local_albums.metadata, '{}'::jsonb), "
-        "'{release_date}', to_jsonb(validated_source_album.release_year::text), true )"
-    ) in normalized_sql
+        "'{release_date}', to_jsonb(coalesce( "
+        "nullif(btrim(library.local_albums.metadata ->> 'release_date'), ''), "
+        "nullif(btrim(validated_source_album.metadata ->> 'release_date'), ''), "
+        "validated_source_album.release_year::text )), true )"
+    ) in destination_sql
     assert "marked_partial_source_album as" in normalized_sql
     assert "from normalized_existing_destination_album" in normalized_sql
 
@@ -831,6 +842,105 @@ def _live_restore_rows(connection, *, track_ids, track_file_ids):
         (list(track_file_ids),),
     ).fetchall()
     return tracks, track_files
+
+
+def test_live_postgres_explicit_separate_release_consolidates_same_year_identity():
+    database_url = _isolated_runtime_database_url_or_skip()
+    if not _ISOLATED_SETUP_DATABASE_URL:
+        pytest.skip("Isolated setup is required for the live identity contract.")
+    isolatedPostgres.prepare_isolated_database(_ISOLATED_SETUP_DATABASE_URL, database_url)
+    from music_app.services.scan_cache_persistence import PostgresScanCacheAdapter
+
+    token = uuid4().hex
+    artist = f"Merge Artist {token}"
+    title = f"Merge Release {token}"
+    base_key = f"{artist.lower()}::{title.lower()}"
+    connection = psycopg.connect(database_url)
+    try:
+        library_id = connection.execute(
+            """select libraries.id from app.bootstrap_owners owners
+               join library.libraries libraries on libraries.owner_account_id=owners.account_id
+               where owners.owner_key='local-bootstrap-owner'
+                 and libraries.name='Local Library' and libraries.library_kind='local'"""
+        ).fetchone()[0]
+        artist_id = connection.execute(
+            """insert into library.local_artists(library_id,artist_key,name,metadata)
+               values(%s,%s,%s,'{}'::jsonb) returning id""",
+            (library_id, artist.lower(), artist),
+        ).fetchone()[0]
+        connection.execute(
+            "insert into library.separate_releases(library_id,release_key) values(%s,%s)",
+            (library_id, base_key),
+        )
+        album_ids = []
+        for key, year, edition in (
+            (base_key, 1988, ""),
+            (f"{base_key}::year::1988", 1988, ""),
+            (f"{base_key}::year::1999", 1999, ""),
+            (f"{base_key}::deluxe::year::1988", 1988, "Deluxe"),
+            (f"{base_key} merge candidate", 1988, ""),
+        ):
+            album_ids.append(connection.execute(
+                """insert into library.local_albums
+                   (library_id,artist_id,album_key,title,release_year,metadata)
+                   values(%s,%s,%s,%s,%s,%s::jsonb) returning id""",
+                (library_id, artist_id, key, title + (" merge candidate" if key.endswith(" merge candidate") else ""), year,
+                 json.dumps({"album_artist": artist, "edition": edition})),
+            ).fetchone()[0])
+        original_track_ids = []
+        previous = {}
+        for index in range(18):
+            album_id = album_ids[0 if index < 13 else 4 if index < 16 else index - 14]
+            original_track_ids.append(connection.execute(
+                """insert into library.local_tracks
+                   (library_id,album_id,artist_id,track_key,title,metadata)
+                   values(%s,%s,%s,%s,%s,'{}'::jsonb) returning id""",
+                (library_id, album_id, artist_id, f"merge-{token}-{index}", f"Track {index}"),
+            ).fetchone()[0])
+            if 13 <= index < 16:
+                path = f"C:/__codex_identity__/{token}/{index}.mp3"
+                entry = {"path": path, "album_artist": artist, "artist": artist,
+                         "album": title + " merge candidate", "year": 1988,
+                         "title": f"Track {index}", "track_number": str(index + 1),
+                         "disc_number": "1", "mtime": 1.0, "size": 100}
+                previous[path] = entry
+                connection.execute(
+                    """insert into library.local_track_files(track_id,private_path,metadata)
+                       values(%s,%s,jsonb_build_object('scan_cache',
+                         jsonb_build_object('source','scan_cache','stale',false,'file_entry',%s::jsonb)))""",
+                    (original_track_ids[-1], path, json.dumps(entry)),
+                )
+
+        adapter = PostgresScanCacheAdapter(
+            {"ALBUM_HAVEN_APP_DATABASE_URL": database_url},
+            connect=lambda _url: _CommitSuppressingConnection(connection),
+        )
+        adapter.persist_structural_tag_edit(
+            changed_paths=set(previous), previous_file_entries=previous,
+            updated_file_entries={path: {**entry, "album": title, "mtime": 2.0} for path, entry in previous.items()},
+            changed_field_names={"album"}, commit_guard=lambda _commit: None,
+        )
+        rows = connection.execute(
+            """select albums.release_year, coalesce(albums.metadata->>'edition',''), count(tracks.id)
+               from library.local_albums albums
+               left join library.local_tracks tracks on tracks.album_id=albums.id
+               where albums.library_id=%s and albums.artist_id=%s and albums.title=%s
+               group by albums.id order by albums.release_year, coalesce(albums.metadata->>'edition','')""",
+            (library_id, artist_id, title),
+        ).fetchall()
+        assert rows == [(1988, "", 16), (1988, "Deluxe", 1), (1999, "", 1)]
+        assert connection.execute(
+            "select id from library.local_tracks where id=any(%s) order by id",
+            (original_track_ids,),
+        ).fetchall() == [(track_id,) for track_id in original_track_ids]
+        assert connection.execute(
+            "select release_key from library.separate_releases where library_id=%s and release_key=%s",
+            (library_id, base_key),
+        ).fetchone() == (base_key,)
+    finally:
+        connection.rollback()
+        connection.close()
+        isolatedPostgres.reset_application_tables(_ISOLATED_SETUP_DATABASE_URL)
 
 
 def test_live_postgres_blank_album_restore_preserves_mixed_track_identity_and_atomicity():
@@ -1467,6 +1577,20 @@ def test_semantic_album_reconciliation_identity_preserves_release_distinctions()
     assert "library.local_albums.artist_id is not null" in normalized_sql
 
 
+def test_explicit_release_consolidation_rejects_missing_target_identity():
+    from music_app.services.scan_cache_persistence import (
+        _execute_semantic_local_album_reconciliation,
+        _reconcile_semantic_local_albums_sql,
+    )
+
+    with pytest.raises(ValueError, match="requires a targeted album identity"):
+        _reconcile_semantic_local_albums_sql(allow_same_year_separate_release_merge=True)
+    with pytest.raises(ValueError, match="requires a targeted album identity"):
+        _execute_semantic_local_album_reconciliation(
+            object(), allow_same_year_separate_release_merge=True,
+        )
+
+
 def test_semantic_album_reconciliation_preserves_one_best_evidence_bundle():
     from music_app.services.scan_cache_persistence import (
         _reconcile_semantic_local_albums_sql,
@@ -1662,7 +1786,8 @@ def test_structural_album_tag_save_runs_reconciliation_before_transaction_exit(m
         "select 'semantic-album-reconciliation-finish'",
     )
 
-    def fake_reconciliation_sql(*, target_album_ids=None):
+    def fake_reconciliation_sql(*, target_album_ids=None, allow_same_year_separate_release_merge=False):
+        assert allow_same_year_separate_release_merge is True
         reconciliation_calls.append(target_album_ids)
         return reconciliation_sql
 
@@ -1932,9 +2057,13 @@ def test_selected_postgres_mixed_structural_edit_does_not_use_targeted_finalizer
 
 
 def test_selected_postgres_structural_finalizer_uses_authoritative_album_finder(monkeypatch):
+    from types import SimpleNamespace
     from music_app.routes import api_wave_a_asgi_routes as routes
+    from music_app.services.log_history import HistoryScope
 
-    request = object()
+    request = SimpleNamespace(state=SimpleNamespace(
+        history_scope=HistoryScope(account_id=7, library_id=9, origin_kind="request"),
+    ))
     authoritative_finder = object()
     captured: dict[str, object] = {}
 
@@ -1962,6 +2091,7 @@ def test_selected_postgres_structural_finalizer_uses_authoritative_album_finder(
 
 
 def test_selected_postgres_year_compensation_restores_exact_release_date(monkeypatch):
+    from types import SimpleNamespace
     from music_app.routes import api_wave_a_asgi_routes as routes
 
     track_path = "C:/Music/Artist/Old Album/01 First.flac"
@@ -1980,7 +2110,7 @@ def test_selected_postgres_year_compensation_restores_exact_release_date(monkeyp
 
     queue_finalize = (
         routes._asgi_selected_postgres_structural_tag_edit_queue_finalize_save_task_builder(
-            object()
+            SimpleNamespace(state=SimpleNamespace())
         )
     )
     queue_finalize(config={})
@@ -2001,6 +2131,7 @@ def test_selected_postgres_year_compensation_restores_exact_release_date(monkeyp
 def test_selected_postgres_compensation_restores_only_fields_changed_per_path(
     monkeypatch,
 ):
+    from types import SimpleNamespace
     from music_app.routes import api_wave_a_asgi_routes as routes
 
     first_path = "C:/Music/Artist/Album/01 First.flac"
@@ -2020,7 +2151,7 @@ def test_selected_postgres_compensation_restores_only_fields_changed_per_path(
 
     queue_finalize = (
         routes._asgi_selected_postgres_structural_tag_edit_queue_finalize_save_task_builder(
-            object()
+            SimpleNamespace(state=SimpleNamespace())
         )
     )
     queue_finalize(config={})

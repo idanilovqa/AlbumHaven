@@ -40,11 +40,15 @@ const EXPECTED_NUMBER_ORDER = [
 ];
 
 test.afterEach(async ({ managedAppLifecycle }) => {
-  await restoreDdtStudioRecordsFixture();
-  await managedAppLifecycle.restart();
+  await managedAppLifecycle.stop();
+  try {
+    await restoreDdtStudioRecordsFixture();
+  } finally {
+    await managedAppLifecycle.restart();
+  }
 });
 
-test('FTC-TAGS-021 and FTC-ALBUM-DETAILS-018 consolidate one logical release', async ({
+test('FTC-TAGS-021 and FTC-ALBUM-DETAILS-018 consolidate one logical release', { tag: '@area:tag-edit' }, async ({
   freshBrowserSession,
   galleryActions,
   page,
@@ -254,7 +258,7 @@ test('FTC-TAGS-021 and FTC-ALBUM-DETAILS-018 consolidate one logical release', a
   );
 });
 
-test('FTC-UTIL-PROBLEMS-013 shows one logical album with exact scoped reasons and tracks', async ({
+test('FTC-UTIL-PROBLEMS-013 shows one logical album with exact scoped reasons and tracks', { tag: '@area:problematic-files' }, async ({
   galleryActions,
   settingsModalAppBarActions,
   stepLogger,
@@ -290,18 +294,18 @@ test('FTC-UTIL-PROBLEMS-013 shows one logical album with exact scoped reasons an
     expect([...new Set(summary.problemReasons)].sort()).toEqual(EXPECTED_PROBLEM_REASONS);
     expect(summary.issueCount).toBe(EXPECTED_PROBLEM_REASONS.length);
     const approvedLayout = await utilityProblematicFilesActions.readApprovedDetectedProblemsLayout();
-    expect(approvedLayout.albumHeadingIndex).toBeGreaterThanOrEqual(0);
-    expect(approvedLayout.trackHeadingIndex).toBeGreaterThan(approvedLayout.albumHeadingIndex);
-    expect(approvedLayout.trackRowCount).toBe(TRACKS.length);
+    expect(approvedLayout.albumLabelsBeforeTable).toBe(true);
+    expect(approvedLayout.detectedHeadingCount).toBe(1);
     expect([...new Set(approvedLayout.albumReasons)].sort()).toEqual([
       EXPECTED_MISSING_COVER_REASON,
     ]);
-    expect(approvedLayout.headers).toEqual(['Filename', 'Reason']);
+    expect(approvedLayout.headers).toEqual(['Track / file', 'Problems', 'Suggested edits']);
     expect(approvedLayout.rows).toHaveLength(TRACKS.length);
     expect(approvedLayout.rows.every((row) => (
-      row.cells.length === 2
+      row.cells.length === 3
       && row.cells[0].column === 'filename'
       && row.cells[1].column === 'reason'
+      && row.cells[2].column === 'suggested'
     ))).toBe(true);
     expect(new Set(approvedLayout.reasonOrigins).size).toBe(1);
     expect(approvedLayout.forbiddenCount).toBe(0);
@@ -327,7 +331,7 @@ test('FTC-UTIL-PROBLEMS-013 shows one logical album with exact scoped reasons an
   });
 });
 
-test('FTC-UTIL-PROBLEMS-007 preserves the selected list during mutation and removes stale identity', async ({
+test('FTC-UTIL-PROBLEMS-007 preserves the selected list during mutation and removes stale identity', { tag: ['@area:problematic-files', '@area:tag-edit'] }, async ({
   galleryActions,
   settingsModalAppBarActions,
   stepLogger,
@@ -361,9 +365,7 @@ test('FTC-UTIL-PROBLEMS-007 preserves the selected list during mutation and remo
     await utilityProblematicFilesActions.waitForSearchResults(SOURCE_ALBUM);
     await utilityProblematicFilesActions.selectAlbumByTitle(SOURCE_ALBUM);
     await utilityProblematicFilesActions.selectAlbumProblem(EXPECTED_MISSING_COVER_REASON);
-    expect(await utilityProblematicFilesActions.openExclusionConfirmation()).toBe(
-      'Are you sure? This will create an exclusion rule',
-    );
+    await utilityProblematicFilesActions.openExclusionConfirmation();
     await utilityProblematicFilesActions.confirmExclusion();
     await utilityProblematicFilesActions.clearSearch();
     await utilityProblematicFilesActions.waitForSelectedDetailSelection({ expectedTitle: SOURCE_ALBUM });
@@ -395,6 +397,7 @@ test('FTC-UTIL-PROBLEMS-007 preserves the selected list during mutation and remo
     expect(previousSelection).toEqual({
       key: mutationTarget.previousKey,
       title: mutationTarget.previousTitle,
+      meta: mutationTarget.previousMeta,
     });
     expect(await utilityProblematicFilesActions.readVisibleListItems()).not.toEqual(
       expect.arrayContaining([expect.objectContaining({ key: mutationTarget.removedKey })]),

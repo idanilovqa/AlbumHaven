@@ -100,7 +100,6 @@ input[type='search'] {
 .toolbar-right { flex: 0 0 auto; margin-left: auto; }
 .album-open-trigger { cursor: pointer; }
 .album-title-button { appearance: none; border: 0; background: transparent; padding: 0; margin: 0; width: 100%; text-align: left; color: inherit; font: inherit; }
-.album-title-button:hover { color: #93c5fd; }
 .button:hover, .icon-button:hover, .play-track-button:hover { border-color: var(--accent); }
 .gallery-options-menu {
   position: fixed;

@@ -4,6 +4,7 @@ import re
 from urllib.parse import urlencode
 
 from fastapi import FastAPI
+import pytest
 
 from music_app.services.auth_profile_password_postgres import (
     ProfileAccountView,
@@ -75,14 +76,14 @@ def _session():
     return issue_opaque_token(random_bytes=lambda count: bytes(range(count))).raw
 
 
-async def _request_async(app, method, path, *, session, data=None):
+async def _request_async(app, method, path, *, session, data=None, origin="https://music.test"):
     body = urlencode(data or {}).encode("utf-8")
     headers = [(b"host", b"music.test"), (b"cookie", f"__Host-album_haven_session={session}".encode("ascii"))]
     if method == "POST":
         headers.extend((
             (b"content-type", b"application/x-www-form-urlencoded"),
             (b"content-length", str(len(body)).encode("ascii")),
-            (b"origin", b"https://music.test"),
+            (b"origin", origin.encode("ascii")),
         ))
     messages = []
     sent = False
@@ -125,8 +126,8 @@ async def _request_async(app, method, path, *, session, data=None):
     return start["status"], response_headers, response_body.decode("utf-8")
 
 
-def _request(app, method, path, *, session, data=None):
-    return asyncio.run(_request_async(app, method, path, session=session, data=data))
+def _request(app, method, path, *, session, data=None, origin="https://music.test"):
+    return asyncio.run(_request_async(app, method, path, session=session, data=data, origin=origin))
 
 
 def test_account_page_renders_approved_security_profile_without_cacheable_secrets():
@@ -229,3 +230,41 @@ def test_account_suggestion_dismissal_is_a_separate_csrf_protected_action():
     assert status == 303
     assert headers["location"] == "/account"
     assert service.dismiss_calls[0]["account_id"] == 41
+
+
+@pytest.mark.parametrize("path", ["/account/password", "/account/password-suggestion/dismiss"])
+@pytest.mark.parametrize("failure", ["missing", "invalid", "other-session", "foreign-origin"])
+def test_account_forms_reject_invalid_csrf_or_origin_without_mutation(path, failure):
+    app, service = _app()
+    session = _session()
+    token = issue_session_csrf(session, app.state.auth_policy_config)
+    if failure == "invalid":
+        token = "invalid"
+    elif failure == "other-session":
+        other_session = issue_opaque_token(random_bytes=lambda count: bytes([7]) * count).raw
+        token = issue_session_csrf(other_session, app.state.auth_policy_config)
+    payload = {"csrf_token": token}
+    if path == "/account/password":
+        payload.update(current_password="current secret", new_password="new private passphrase",
+                       confirm_password="new private passphrase")
+    if failure == "missing":
+        payload.pop("csrf_token")
+    status, _headers, _body = _request(
+        app, "POST", path, session=session, data=payload,
+        origin="https://external.test" if failure == "foreign-origin" else "https://music.test",
+    )
+    assert status == 400
+    assert service.password_calls == []
+    assert service.dismiss_calls == []
+
+
+def test_account_password_confirmation_mismatch_never_reaches_mutation():
+    app, service = _app()
+    session = _session()
+    status, _headers, _body = _request(app, "POST", "/account/password", session=session, data={
+        "csrf_token": issue_session_csrf(session, app.state.auth_policy_config),
+        "current_password": "current secret", "new_password": "new private passphrase",
+        "confirm_password": "different private passphrase",
+    })
+    assert status == 400
+    assert service.password_calls == []

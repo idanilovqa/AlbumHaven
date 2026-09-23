@@ -5,8 +5,10 @@ from __future__ import annotations
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
 from enum import Enum
+import logging
 from pathlib import Path
-from threading import Lock
+import sys
+from threading import Event, Lock
 from typing import Protocol
 
 
@@ -84,8 +86,6 @@ def normalize_library_event(
     source_path = Path(path).resolve(strict=False)
     root_definitions = _resolved_roots(roots)
     source_root = _root_for_path(source_path, root_definitions)
-    if source_root is None:
-        return None
     destination_path = (
         Path(destination).resolve(strict=False)
         if destination is not None
@@ -95,10 +95,19 @@ def normalize_library_event(
         if destination_path is None:
             return None
         destination_root = _root_for_path(destination_path, root_definitions)
-        if destination_root is None:
+        if source_root is None and destination_root is None:
             return None
+        if source_root is None:
+            normalized_kind = LibraryEventKind.CREATED
+            source_path, source_root = destination_path, destination_root
+            destination_path = destination_root = None
+        elif destination_root is None:
+            normalized_kind = LibraryEventKind.DELETED
+            destination_path = None
     else:
         destination_root = None
+    if source_root is None:
+        return None
     return LibraryEvent(
         normalized_kind,
         source_root[0],
@@ -132,7 +141,7 @@ def publish_watchdog_event(
     root_definitions = tuple(dict(root) for root in roots)
     observed_at = clock()
     source_path = Path(getattr(event, "src_path", "")).resolve(strict=False)
-    if bool(getattr(event, "is_directory", False)) and kind in {
+    if kind in {
         LibraryEventKind.DELETED,
         LibraryEventKind.MOVED,
     }:
@@ -184,14 +193,79 @@ class WatchdogLibraryEventSource:
         self._observer_factory = observer_factory
         self._clock = clock
         self._observer: object | None = None
+        self._emitters: tuple[object, ...] = ()
+        self._stopping = Event()
 
     @property
     def is_alive(self) -> bool:
-        return bool(self._observer is not None and self._observer.is_alive())
+        return bool(
+            self._observer is not None
+            and self._observer.is_alive()
+            and all(emitter.is_alive() for emitter in self._emitters)
+        )
+
+    def _instrument_emitter(self, emitter, *, publish, clock) -> None:
+        """Bridge failures before Watchdog discards their native evidence."""
+        import os
+
+        watch_path = Path(emitter.watch.path).resolve(strict=False)
+        watched_roots = tuple(
+            (root_id, root_path)
+            for root_id, root_path in _resolved_roots(self._roots)
+            if root_path == watch_path
+        )
+
+        def report(kind):
+            if self._stopping.is_set():
+                return
+            observed_at = clock()
+            for root_id, root_path in watched_roots:
+                publish(LibraryEvent(
+                    kind, root_id, root_path,
+                    observed_at=observed_at, is_directory=True,
+                ))
+
+        run = emitter.run
+
+        def run_with_health():
+            try:
+                run()
+            finally:
+                # The dispatcher can outlive a failed or self-stopped producer.
+                report(LibraryEventKind.ROOT_UNAVAILABLE)
+
+        emitter.run = run_with_health
+        if os.name == "nt":
+            from watchdog.observers.read_directory_changes import WindowsApiEmitter
+
+            if isinstance(emitter, WindowsApiEmitter):
+                read_events = emitter._read_events
+
+                def read_events_with_health():
+                    try:
+                        events = read_events()
+                    except OSError as exc:
+                        if getattr(exc, "winerror", None) != 1022:  # ERROR_NOTIFY_ENUM_DIR
+                            raise
+                        events = []
+                    if not events:
+                        # Watchdog 4–6 converts the native zero-byte overflow
+                        # indication to []. Source shutdown also returns [],
+                        # but report() excludes that intentional cancellation.
+                        report(LibraryEventKind.OVERFLOW)
+                    return events
+
+                emitter._read_events = read_events_with_health
 
     def start(self, publish: Callable[[LibraryEvent], None]) -> None:
         if self._observer is not None:
             raise RuntimeError("Library event source is already started")
+        if sys.platform.startswith("linux") and self._observer_factory is None:
+            logging.getLogger(__name__).info(
+                "Automatic library updates are disabled on Linux for this release. "
+                "Run Full Rescan after library changes."
+            )
+            return
         from time import monotonic
         from watchdog.events import FileSystemEventHandler
         from watchdog.observers import Observer
@@ -199,41 +273,108 @@ class WatchdogLibraryEventSource:
         observer = self._observer_factory() if self._observer_factory else Observer()
         clock = self._clock or monotonic
         roots = self._roots
+        self._stopping.clear()
+        stopping = self._stopping
+        resolved_roots = ()
 
         class Handler(FileSystemEventHandler):
             def on_any_event(self, event) -> None:
-                publish_watchdog_event(
-                    event,
-                    roots=roots,
-                    publish=publish,
-                    clock=clock,
-                )
+                if stopping.is_set():
+                    return
+                try:
+                    publish_watchdog_event(
+                        event, roots=roots, publish=publish, clock=clock,
+                    )
+                except Exception:
+                    # Normalization can fail before a root can be attributed.
+                    # Use the validated startup identities, not the failed path,
+                    # and keep the dispatcher alive for subsequent events.
+                    for root_id, root_path in resolved_roots:
+                        try:
+                            publish(LibraryEvent(
+                                LibraryEventKind.ROOT_UNAVAILABLE,
+                                root_id, root_path, observed_at=clock(), is_directory=True,
+                            ))
+                        except Exception:
+                            # Failed health writes are retained by the health
+                            # service; do not leave another root unprotected.
+                            continue
 
         handler = Handler()
-        for root_id, root_path in _resolved_roots(roots):
-            if not root_path.is_dir():
-                publish(
-                    LibraryEvent(
-                        LibraryEventKind.ROOT_UNAVAILABLE,
-                        root_id,
-                        root_path,
-                        observed_at=clock(),
-                    )
-                )
-                continue
-            observer.schedule(handler, str(root_path), recursive=True)
         self._observer = observer
-        observer.start()
+        try:
+            resolved_roots = _resolved_roots(roots)
+            for root_id, root_path in resolved_roots:
+                if not root_path.is_dir():
+                    publish(
+                        LibraryEvent(
+                            LibraryEventKind.ROOT_UNAVAILABLE,
+                            root_id,
+                            root_path,
+                            observed_at=clock(),
+                        )
+                    )
+                    continue
+                observer.schedule(handler, str(root_path), recursive=True)
+            self._emitters = tuple(getattr(observer, "emitters", ()))
+            for emitter in self._emitters:
+                self._instrument_emitter(emitter, publish=publish, clock=clock)
+            observer.start()
+        except Exception:
+            # on_thread_start runs before run(), so its failures cannot reach
+            # the producer's finally bridge. The whole aborted source is lost.
+            self._stopping.set()
+            try:
+                for root_id, root_path in _resolved_roots(roots):
+                    try:
+                        publish(LibraryEvent(
+                            LibraryEventKind.ROOT_UNAVAILABLE,
+                            root_id, root_path, observed_at=clock(), is_directory=True,
+                        ))
+                    except Exception:
+                        # The health service retains failed writes in memory;
+                        # continue blocking the remaining affected roots too.
+                        continue
+            finally:
+                self.stop(timeout=5.0)
+            raise
 
     def stop(self, *, timeout: float) -> None:
         observer = self._observer
         if observer is None:
             return
-        observer.stop()
-        observer.join(timeout)
-        if observer.is_alive():
+        from queue import Full
+        from time import monotonic
+        from watchdog.observers.api import BaseObserver, EventDispatcher
+
+        deadline = monotonic() + max(0.0, timeout)
+        self._stopping.set()
+        if isinstance(observer, BaseObserver):
+            # BaseObserver.stop() synchronously takes its dispatch lock and
+            # joins every producer without a timeout. Signal the same public
+            # stop events directly, preserving native emitter cancellation,
+            # then account for every owned thread under one deadline.
+            self._emitters = tuple(dict.fromkeys((*self._emitters, *observer.emitters)))
+            observer.stopped_event.set()
+            try:
+                observer.event_queue.put_nowait(EventDispatcher.stop_event)
+            except Full:
+                pass  # A queued event also wakes the stopped dispatcher.
+            for emitter in self._emitters:
+                if not emitter.stopped_event.is_set():
+                    emitter.stop()
+            for thread in (observer, *self._emitters):
+                if thread.ident is not None:
+                    thread.join(max(0.0, deadline - monotonic()))
+        else:
+            # Explicitly injected sources retain their stop/join interface.
+            observer.stop()
+            if getattr(observer, "ident", None) is not None or observer.is_alive():
+                observer.join(max(0.0, deadline - monotonic()))
+        if observer.is_alive() or any(emitter.is_alive() for emitter in self._emitters):
             raise RuntimeError("Library event source did not stop before the deadline")
         self._observer = None
+        self._emitters = ()
 
     def replace_roots(self, roots: Iterable[Mapping[str, object]]) -> None:
         if self._observer is not None:
@@ -254,6 +395,7 @@ class LibraryWatchService:
         self._stop_timeout = float(stop_timeout)
         self._lock = Lock()
         self._started = False
+        self._start_requested = False
 
     @property
     def is_alive(self) -> bool:
@@ -261,6 +403,7 @@ class LibraryWatchService:
 
     def start(self) -> bool:
         with self._lock:
+            self._start_requested = True
             if self._started:
                 return False
             self._event_source.start(self._on_event)
@@ -269,23 +412,24 @@ class LibraryWatchService:
 
     def stop(self) -> bool:
         with self._lock:
+            self._start_requested = False
             if not self._started:
                 return False
+            self._event_source.stop(timeout=self._stop_timeout)
             self._started = False
-        self._event_source.stop(timeout=self._stop_timeout)
         return True
 
     def replace_roots(self, roots: Iterable[Mapping[str, object]]) -> bool:
         with self._lock:
-            was_started = self._started
-        if was_started:
-            self.stop()
-        replace_roots = getattr(self._event_source, "replace_roots", None)
-        if not callable(replace_roots):
-            if was_started:
-                self.start()
-            return False
-        replace_roots(roots)
-        if was_started:
-            self.start()
-        return True
+            if self._started:
+                self._event_source.stop(timeout=self._stop_timeout)
+                self._started = False
+            replace_roots = getattr(self._event_source, "replace_roots", None)
+            if callable(replace_roots):
+                replace_roots(roots)
+            # Failed attachment must not cancel recovery intent. Only an
+            # explicit stop cancels it; subsequent root recovery retries start.
+            if self._start_requested:
+                self._event_source.start(self._on_event)
+                self._started = True
+            return callable(replace_roots)

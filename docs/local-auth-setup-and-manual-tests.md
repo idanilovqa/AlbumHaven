@@ -95,6 +95,15 @@ switching hosts changes the browser origin and cookie scope.
 
 ### Session lifetime
 
+Password checks at sign-in, administrator reauthentication, and Profile password
+change share the existing durable per-account guess budget: five attempts in
+15 minutes, with a 15-minute cooldown when exhausted. Sign-in also retains its
+separate source-address budget. Successful checks release only their own
+reservation; they do not clear another request's attempts or a newer window.
+Password verification, rehashing, and invitation/reset password hashing share
+the configured process-wide CPU capacity (at most two concurrent operations).
+Token-authorized invitation and reset flows retain their existing attempt rules.
+
 New logins have a **30-day idle timeout** and a **90-day absolute lifetime**.
 Authenticated activity renews the idle window, but it cannot extend the session
 beyond 90 days from login. Background authenticated requests can count as activity.
@@ -204,6 +213,15 @@ Album Haven after changing `.env`, create a pending test user with **Send
 invitation email** selected, and confirm the message arrives. Check the spam
 folder and the provider's delivery log if it does not. Keep SMTP credentials
 out of Git, terminal transcripts, screenshots, and support bundles.
+
+Welcome delivery is separately controlled by
+`ALBUM_HAVEN_WELCOME_EMAIL_ENABLED` and is disabled by default. When enabled,
+the running application processes queued welcome messages in bounded batches
+and retries eligible failures, up to five total attempts per message. Enabling
+it can deliver previously queued messages. An uncertain delivery is recorded
+as `unknown` and is not automatically resent; check the provider's delivery
+record before deciding whether another message is needed. This background
+worker does not retry password-reset or invitation messages.
 
 ## Create managed users
 

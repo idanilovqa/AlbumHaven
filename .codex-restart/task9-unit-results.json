@@ -1,0 +1,14 @@
+[
+  {
+    "suite": "js",
+    "exit_code": 1,
+    "seconds": 208.6,
+    "log": ".codex-restart\\task9-full-js.log"
+  },
+  {
+    "suite": "python",
+    "exit_code": 1,
+    "seconds": 506.07,
+    "log": ".codex-restart\\task9-full-python.log"
+  }
+]

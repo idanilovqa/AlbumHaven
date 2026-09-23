@@ -4,7 +4,7 @@ const CASE_ID = 'FTC-PLAYER-015';
 const PLAYING_ALBUM = 'Length And Repetition';
 const PLAYING_TRACK_ARTIST = 'Playback Start Signals';
 
-test(`${CASE_ID} allowed Chrome policy automatically continues playback after reload`, async ({
+test(`${CASE_ID} allowed Chrome policy automatically continues playback after reload`, { tag: '@area:playback' }, async ({
   galleryActions,
   globalPlayerActions,
   playbackEvidence,

@@ -132,6 +132,7 @@ def log_app_event(
     *,
     level: str = "info",
     history: bool = False,
+    history_scope=None,
     **fields,
 ) -> None:
     payload = {"action": action}
@@ -145,7 +146,7 @@ def log_app_event(
 
     if history:
         try:
-            append_log_history(config, payload)
+            append_log_history(config, {**payload, "level": level_name.lower()}, scope=history_scope)
         except Exception as exc:
             logging.getLogger(__name__).warning(
                 "Log history write failed action=%r error_type=%s error=%s; "

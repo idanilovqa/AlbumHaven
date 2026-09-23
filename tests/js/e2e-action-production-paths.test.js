@@ -28,6 +28,16 @@ test('runtime failure attachments redact private media and view query strings', 
   assert.doesNotMatch(sanitized, /Rendref|Private|path=/u);
 });
 
+test('warning regression clears search before navigating to visible All artists root', () => {
+  const source = read('tests/e2e/specs/galleryInteractionRegressions.spec.js');
+  const clear = source.indexOf("await searchToolbarActions.clearSearch({ submitWithEnter: true });");
+  const visible = source.indexOf('await expect(ui.rootSidebar).toBeVisible();', clear);
+  const navigate = source.indexOf('await ui.rootSidebar.click();', visible);
+  assert.ok(clear >= 0, 'scenario must clear the narrowing search');
+  assert.ok(visible > clear, 'scenario must prove the All artists root is actionable after clearing search');
+  assert.ok(navigate > visible, 'scenario must navigate through All artists to activate the deferred warning');
+});
+
 test('FTC-COVERS-016 keeps the 7500px local cover active when matching remote art is not an improvement', () => {
   const spec = read('tests/e2e/specs/coverLookupMatching.spec.js');
   const allowedResolutionSet = spec.match(
@@ -768,27 +778,27 @@ test('Space playback E2E requires a foreground player and POM-owned focused-cont
   );
   assert.match(
     coverLookupActions,
-    /pressSpaceOnFocusedDrawerOpener\([\s\S]*openDrawer\([\s\S]*drawerButton\.focus\(\)[\s\S]*toBeFocused\(\)[\s\S]*drawerButton\.press\('Space'\)[\s\S]*waitForDrawerState\(true/,
+    /pressSpaceOnFocusedDrawerOpener\([\s\S]*closeDrawer\([\s\S]*drawerButton\.focus\(\)[\s\S]*toBeFocused\(\)[\s\S]*drawerButton\.press\('Space'\)[\s\S]*waitForDrawerState\(true/,
   );
   assert.match(
     coverLookupActions,
-    /pressSpaceOnFocusedDrawerClose\([\s\S]*drawerCloseButton\.focus\(\)[\s\S]*toBeFocused\(\)[\s\S]*drawerCloseButton\.press\('Space'\)[\s\S]*waitForDrawerState\(true/,
+    /pressSpaceOnFocusedDrawerClose\([\s\S]*drawerCloseButton\.focus\(\)[\s\S]*toBeFocused\(\)[\s\S]*drawerCloseButton\.press\('Space'\)[\s\S]*waitForDrawerState\(false/,
   );
   assert.match(
     settingsActions,
-    /pressSpaceOnFocusedSettingsOpener\([\s\S]*openSettings\([\s\S]*settingsButton\.focus\(\)[\s\S]*toBeFocused\(\)[\s\S]*settingsButton\.press\('Space'\)[\s\S]*waitForOpen/,
+    /pressSpaceOnFocusedSettingsOpener\([\s\S]*waitForClosed\([\s\S]*settingsButton\.focus\(\)[\s\S]*toBeFocused\(\)[\s\S]*settingsButton\.press\('Space'\)[\s\S]*accountMenu\)\.toBeVisible[\s\S]*settingsMenuItem\)\.toBeFocused[\s\S]*settingsMenuItem\.press\('Space'\)[\s\S]*waitForOpen/,
   );
   assert.match(
     settingsActions,
-    /pressSpaceOnFocusedSettingsClose\([\s\S]*closeButton\.focus\(\)[\s\S]*toBeFocused\(\)[\s\S]*closeButton\.press\('Space'\)[\s\S]*waitForOpen/,
+    /pressSpaceOnFocusedSettingsClose\([\s\S]*closeButton\.focus\(\)[\s\S]*toBeFocused\(\)[\s\S]*closeButton\.press\('Space'\)[\s\S]*waitForClosed/,
   );
   assert.match(
     trackModalActions,
-    /pressSpaceOnFocusedCloseControl\([\s\S]*closeButton\.focus\(\)[\s\S]*toBeFocused\(\)[\s\S]*closeButton\.press\('Space'\)[\s\S]*waitForLoadedSummary/,
+    /pressSpaceOnFocusedCloseControl\([\s\S]*closeButton\.focus\(\)[\s\S]*toBeFocused\(\)[\s\S]*closeButton\.press\('Space'\)[\s\S]*waitForClosed/,
   );
   assert.match(
     spec,
-    /openCoverLightbox\(\)[\s\S]*expectFullCoverAbovePlayer\(\)[\s\S]*pressSpaceOnFocusedLightboxClose\([\s\S]*closeCoverLightbox\(\)/,
+    /openCoverLightbox\(\)[\s\S]*expectFullCoverAbovePlayer\(\)[\s\S]*pressSpaceOnFocusedLightboxClose\([\s\S]*expectedPlayback\(false\)/,
   );
   assert.match(
     trackModal,
@@ -800,8 +810,9 @@ test('Space playback E2E requires a foreground player and POM-owned focused-cont
   );
   assert.match(
     trackModalActions,
-    /pressSpaceOnFocusedLightboxClose\([\s\S]*lightboxCloseButton\.focus\(\)[\s\S]*toBeFocused\(\)[\s\S]*lightboxCloseButton\.press\('Space'\)[\s\S]*afterSpace[\s\S]*lightbox\)\.toBeVisible[\s\S]*lightboxCloseButton\)\.toBeFocused/,
+    /pressSpaceOnFocusedLightboxClose\([\s\S]*lightboxCloseButton\.focus\(\)[\s\S]*toBeFocused\(\)[\s\S]*lightboxCloseButton\.press\('Space'\)[\s\S]*lightbox\)\.toBeHidden[\s\S]*afterSpace/,
   );
+  assert.match(globalPlayerActions, /timeline\.focus\(\)[\s\S]*timeline\)\.toBeFocused\(\)[\s\S]*timeline\.press\('Space'\)/);
   assert.doesNotMatch(spec, /\.locator\s*\(|\.evaluate\s*\(|page\.keyboard|\.press\(['"]Space['"]\)/);
 });
 
@@ -2121,7 +2132,7 @@ test('sparse optimistic POM observation atomically reads visible section count a
   assert.equal(
     typeof parseArtistAlbumCount,
     'function',
-    'Expected a visible artist-meta count reader that does not depend on the mounted virtual window.',
+    'Expected a visible artist-header count reader that does not depend on the mounted virtual window.',
   );
   assert.equal(parseArtistAlbumCount('14 albums'), 14);
   assert.equal(parseArtistAlbumCount('1 album'), 1);
@@ -2132,7 +2143,7 @@ test('sparse optimistic POM observation atomically reads visible section count a
   )?.[0] || '';
   assert.match(
     observationMethod,
-    /sectionByArtistHeading\(artistName\)[\s\S]*await section\.evaluate[\s\S]*artistMetaText[\s\S]*\.artist-meta[\s\S]*renderedIdentities[\s\S]*albumCount:\s*parseArtistAlbumCount\(observation\.artistMetaText\)/,
+    /sectionByArtistHeading\(artistName\)[\s\S]*await section\.evaluate[\s\S]*artistMetaText[\s\S]*\.family-artist-header > span:last-child[\s\S]*renderedIdentities[\s\S]*albumCount:\s*parseArtistAlbumCount\(observation\.artistMetaText\)/,
   );
   assert.doesNotMatch(
     observationMethod,
@@ -2546,6 +2557,28 @@ test('terminal tag-edit failure waits for the failure notification before readin
 
   assert.ok(events.includes('to.have.text'));
   assert.equal(result.alertText, 'Failed to edit tags.');
+});
+
+test('tag-editor summary treats an absent transient repair alert as empty', async () => {
+  const moduleUrl = pathToFileURL(
+    path.join(repoRoot, 'tests/e2e/actions/tagEditorActions.js'),
+  ).href;
+  const { TagEditorActions } = await import(moduleUrl);
+  const text = value => ({ textContent: async () => value });
+  const actions = new TagEditorActions({
+    subtitle: text('Edit tracks'),
+    trackTitles: { allTextContents: async () => ['01 - Track.mp3'] },
+    activeTrackButtons: { count: async () => 1 },
+    exceptionSelect: { inputValue: async () => '' },
+    repairAlertMessage: { allTextContents: async () => [] },
+  });
+  assert.deepEqual(await actions.readSummary(), {
+    subtitle: 'Edit tracks',
+    trackFilenames: ['01 - Track.mp3'],
+    activeTrackCount: 1,
+    exceptionType: '',
+    alertText: '',
+  });
 });
 
 test('FTC-OPS-003C proves the enabled cover cancel action is rendered only while production cover work is active', async () => {
@@ -4384,7 +4417,10 @@ test('cover lookup hashes only decoded visible currentSrc response evidence', ()
   assert.match(coverLookup, /hasAttribute\('data-cover-visual-state'\)/);
   assert.match(coverLookup, /visualState[\s\S]*=== 'ready'/);
   assert.match(coverLookup, /imageResponseEvidence\.get\(src\)/);
-  assert.doesNotMatch(coverLookup, /\bfetch\s*\(/);
+  assert.match(coverLookup, /sourceUrl\.protocol !== 'blob:'/);
+  assert.match(coverLookup, /sourceUrl\.origin !== location\.origin/);
+  assert.match(coverLookup, /fetch\(expected\.currentSrc, \{ mode: 'same-origin' \}\)/);
+  assert.doesNotMatch(coverLookup, /fetch\((?:src|displayedSource|productionSrc)/);
 });
 
 test('cover lookup rejects a pending gallery blob transition before hashing response evidence', async () => {
@@ -4623,7 +4659,7 @@ test('loop functional coverage proves progress, repeat, and both live control or
   assert.match(spec, /FTC-UTIL-LOOPS-021 \/ FTC-UTIL-LOOPS-023 \/ FTC-UTIL-LOOPS-024/);
   assert.match(
     spec,
-    /openTab\('appearance'\)[\s\S]*utilityAppearanceActions\.waitForReady\(\)[\s\S]*utilityAppearanceActions\.selectSeekbarMode\('waveform'\)[\s\S]*settingsModalAppBarActions\.closeSettings\(\)[\s\S]*waitForRenderedWaveform/,
+    /openTab\('appearance'\)[\s\S]*utilityAppearanceActions\.waitForReady\(\)[\s\S]*utilityAppearanceActions\.saveSeekbarMode\('waveform'\)[\s\S]*settingsModalAppBarActions\.closeSettings\(\)[\s\S]*waitForRenderedWaveform/,
   );
   assert.match(
     spec,
@@ -4651,6 +4687,9 @@ test('loop functional coverage proves progress, repeat, and both live control or
   assert.match(actions, /return \{ requested, restored, progressed \}/);
   assert.match(actions, /readRepeatPressedByName\(name\)/);
   assert.match(actions, /readLoopContinuity\(previousHandle, loopId\)/);
+  const loopsTab = read('tests/e2e/poms/utilityLoopsTab.js');
+  assert.match(loopsTab, /this\.neutralKeyboardTarget = page\.locator\('body'\)/);
+  assert.match(actions, /detailTitle\.click\(\)[\s\S]*neutralControl = this\.utilityLoopsTab\.neutralKeyboardTarget/);
   assert.match(actions, /pressSpaceBeforeLoopOwnership\(groupTitle[\s\S]*neutralControl\.focus\(\)[\s\S]*neutralControl\.press\('Space'\)/);
   assert.match(actions, /pressSpaceForOwnedLoopByName\(name, expected[\s\S]*playButton\.focus\(\)[\s\S]*playButton\.press\('Space'\)[\s\S]*waitForLoopPlaybackState/);
   assert.match(actions, /pressNeutralSpaceForOwnedLoop\(groupTitle, loopId, expected[\s\S]*neutralControl\.press\('Space'\)[\s\S]*waitForLoopPlaybackState/);
@@ -4747,10 +4786,12 @@ test('loop hover evidence moves the real mouse to target geometry without locato
   assert.ok(savedHelperStart >= 0 && savedHelperEnd > savedHelperStart, 'Expected the saved-loop hover action helper.');
   const savedHelper = savedActions.slice(savedHelperStart, savedHelperEnd);
   assert.match(savedHelper, /page\.mouse\.move\(/);
+  assert.match(savedHelper, /controlStyleForEntry\(entry\)\.getAttribute\('data-loop-control-style'\)/);
+  assert.match(savedHelper, /getAttribute\('data-loop-action-state'\) === 'editing'/);
   assert.match(
     savedHelper,
-    /toHaveAttribute\('data-loop-action-engaged', 'true'\)[\s\S]*toHaveCSS\('width', '55px'\)[\s\S]*readLoopActionVisualSnapshot/,
-    'saved-loop hover must settle the production expansion before measuring its geometry',
+    /toHaveAttribute\('data-loop-action-engaged', 'true'\)[\s\S]*toHaveCSS\('width', `\$\{style === 'companion' \? \(editing \? 88 : 58\) : \(editing \? 65 : 34\)\}px`\)[\s\S]*readLoopActionVisualSnapshot/,
+    'saved-loop hover must settle the approved style and edit-state pod width before measuring geometry',
   );
   assert.doesNotMatch(savedHelper, /waitForTimeout|timeout\s*:/);
 });
@@ -4937,6 +4978,60 @@ test('Problematic Files readiness uses one POM-owned condition over the real ren
   }
 });
 
+test('Problematic Files mutation completion ignores matching identities outside its sidebar list', async () => {
+  const moduleUrl = pathToFileURL(path.join(repoRoot, 'tests/e2e/actions/utilityProblematicFilesActions.js')).href;
+  const { UtilityProblematicFilesActions } = await import(moduleUrl);
+    let disposed = false;
+    let delegated = null;
+    const activeListItem = {
+      async getAttribute() { return 'album-previous'; },
+    };
+    const actions = new UtilityProblematicFilesActions({
+      activeListItem,
+      titleForListItem(item) {
+        assert.equal(item, activeListItem);
+        return { async textContent() { return 'Album Previous'; } };
+      },
+      metaForListItem(item) {
+        assert.equal(item, activeListItem);
+        return { async textContent() { return 'Artist · 2009'; } };
+      },
+      async waitForMutationRemovalAndPreviousSelection(expected, options) {
+        delegated = { expected, options };
+      },
+    });
+    actions.mutationObservation = {
+      async dispose() { disposed = true; },
+    };
+
+    assert.deepEqual(await actions.waitForMutationRemovalAndPreviousSelection({
+      removedKey: 'album-removed',
+      previousKey: 'album-previous',
+      scrollTop: 237,
+    }, { timeout: 4321 }), {
+      key: 'album-previous',
+      title: 'Album Previous',
+      meta: 'Artist · 2009',
+    });
+    assert.deepEqual(delegated, {
+      expected: {
+        removedKey: 'album-removed',
+        previousKey: 'album-previous',
+        scrollTop: 237,
+      },
+      options: { timeout: 4321 },
+    });
+    assert.equal(disposed, true);
+
+  const pom = read('tests/e2e/poms/utilityProblematicFilesTab.js');
+  const helper = pom
+    .split('async waitForMutationRemovalAndPreviousSelection', 2)[1]
+    .split('\n  get ', 1)[0];
+  assert.match(helper, /const list = document\.querySelector\(value\.listSelector\)/);
+  assert.match(helper, /list\.querySelectorAll\(value\.itemSelector\)/);
+  assert.match(helper, /list\.querySelector\(value\.activeSelector\)/);
+});
+
 test('Settings measurement prepares the real button action and observes the modal in one POM condition', async () => {
   const moduleUrl = pathToFileURL(path.join(repoRoot, 'tests/e2e/actions/settingsModalAppBarActions.js')).href;
   const { SettingsModalAppBarActions } = await import(moduleUrl);
@@ -4945,7 +5040,7 @@ test('Settings measurement prepares the real button action and observes the moda
     const visibleElement = { offsetWidth: 1, offsetHeight: 0, getClientRects: () => [] };
     global.document = {
       querySelector(selector) {
-        return ['#utility-modal', '#utility-modal-title', '.utility-modal-body'].includes(selector)
+        return ['#utility-modal', '#utility-modal [role="dialog"][aria-label="Settings"]', '#utility-modal [role="tablist"][aria-label="Settings sections"]', '.utility-modal-body'].includes(selector)
           ? visibleElement
           : null;
       },
@@ -5116,7 +5211,7 @@ test('loop range E2E coverage measures rendered geometry and preserves in-drag s
   assert.match(spec, /cursors\.surface\)\.toBe\('default'\)/);
   assert.match(
     spec,
-    /Math\.abs\(opened\.playerHeight - 92\)\)\.toBeLessThanOrEqual\(1\)/,
+    /Math\.abs\(opened\.playerHeight - 100\)\)\.toBeLessThanOrEqual\(1\)/,
   );
   assert.match(spec, /opened\.waveformHeight\)\.toBe\(56\)/);
   assert.doesNotMatch(spec, /opened\.playerHeight\)\.toBe\(78\)/);
@@ -5128,8 +5223,8 @@ test('loop range E2E coverage measures rendered geometry and preserves in-drag s
   );
   assert.match(
     spec,
-    /unavailable\.visual\.coverCenterY\)\.not\.toBeNull\(\)[\s\S]*unavailable\.visual\.coverCenterY - unavailable\.visual\.playCenterY[\s\S]*toBeLessThanOrEqual\(1\)[\s\S]*unavailable\.visual\.timelineCenterY - unavailable\.visual\.playCenterY[\s\S]*toBeLessThanOrEqual\(1\)[\s\S]*unavailable\.visual\.mainLeftGapFromPlay - 8[\s\S]*toBeLessThanOrEqual\(1\)/,
-    'the no-track placeholder keeps its cover, controls, and timeline centered',
+    /unavailable\.visual\.coverCenterY\)\.not\.toBeNull\(\)[\s\S]*unavailable\.visual\.coverCenterY - unavailable\.visual\.playCenterY[\s\S]*toBeLessThanOrEqual\(1\)[\s\S]*unavailable\.visual\.timelineCenterY - unavailable\.visual\.playCenterY\)[\s\S]*toBeLessThanOrEqual\(1\)[\s\S]*expectApprovedCapsuleSpacing\(unavailable\.visual\)/,
+    'the no-track placeholder keeps controls and timeline on their shared centerline',
   );
   assert.match(
     spec,
@@ -5143,7 +5238,13 @@ test('loop range E2E coverage measures rendered geometry and preserves in-drag s
     spec,
     /idle\.mainAreaBounds\.x - playingPlayerLayout\.mainAreaBounds\.x[\s\S]*toBeLessThanOrEqual\(1\)/,
   );
-  assert.match(spec, /mainLeftGapFromPlay - 8\)\)\.toBeLessThanOrEqual\(1\)/);
+  assert.match(spec, /approvedCapsulePlayGap = 8 \+ \(\(56 - 48\) \/ 2\)/);
+  assert.match(spec, /visual\.playBounds\.width - 48\)\)\.toBeLessThanOrEqual\(1\)/);
+  assert.match(spec, /visual\.clusterBounds\.width - 56\)\)\.toBeLessThanOrEqual\(1\)/);
+  assert.match(spec, /timelineLeftGapFromPlay - approvedCapsulePlayGap\)\)\.toBeLessThanOrEqual\(1\)/);
+  assert.match(spec, /expectApprovedCapsuleSpacing\(playingPlayerLayout\)/);
+  assert.match(spec, /expectApprovedCapsuleSpacing\(idle\)/);
+  assert.match(actionVisualHelper, /this\.expandedPlaybackControls\.root\.boundingBox\(\)/);
   assert.match(spec, /cursors\.startHandle\)\.toBe\('grab'\)/);
   assert.match(spec, /dragSnapshot\.cursors\.startHandle\)\.toBe\('grabbing'\)/);
   assert.match(spec, /pitchVisible\)\.toBe\(false\)/);
@@ -5228,3 +5329,62 @@ test('compact-player Appearance helper enters the owning Player and Seekbar page
     'an already-saved compact-player style must remain an idempotent action',
   );
 });
+
+
+test('cover lookup observes exact displayed blob bytes without a network response', async () => {
+  const { readDisplayedBlobBytes } = await import(pathToFileURL(path.join(repoRoot, 'tests/e2e/actions/coverLookupActions.js')).href);
+  const vm = require('node:vm');
+  class Image {}
+  const element = Object.assign(new Image(), {
+    currentSrc: 'blob:http://127.0.0.1:4173/exact-displayed', complete: true, naturalWidth: 480,
+    isConnected: true, getBoundingClientRect: () => ({ width: 240, height: 240 }),
+    getAttribute: () => '/cover?path=fixture&v=upgraded', hasAttribute: () => false,
+  });
+  const expected = { currentSrc: element.currentSrc, productionSrc: element.getAttribute(), hasVisualState: false };
+  const requests = [];
+  const observe = vm.runInNewContext(`(${readDisplayedBlobBytes.toString()})`, {
+    HTMLImageElement: Image, URL, location: { origin: 'http://127.0.0.1:4173' }, Uint8Array,
+    fetch: async (url, options) => {
+      requests.push({ url, mode: options.mode });
+      return { ok: true, arrayBuffer: async () => Uint8Array.from([11, 23, 47, 255]).buffer };
+    },
+  });
+  assert.deepEqual(Array.from(await observe(element, expected)), [11, 23, 47, 255]);
+  assert.deepEqual(requests, [{ url: expected.currentSrc, mode: 'same-origin' }]);
+});
+
+for (const failure of ['network-url', 'foreign-blob', 'source-before', 'source-after', 'revision-after', 'decode-after', 'detached-after', 'hidden-after', 'read-error']) {
+  test(`cover lookup displayed blob observation rejects ${failure}`, async () => {
+    const { readDisplayedBlobBytes } = await import(pathToFileURL(path.join(repoRoot, 'tests/e2e/actions/coverLookupActions.js')).href);
+    const vm = require('node:vm');
+    class Image {}
+    let productionSrc = '/cover?path=fixture&v=upgraded';
+    const element = Object.assign(new Image(), {
+      currentSrc: 'blob:http://127.0.0.1:4173/exact-displayed', complete: true, naturalWidth: 480,
+    isConnected: true, getBoundingClientRect: () => ({ width: 240, height: 240 }),
+      getAttribute: () => productionSrc, hasAttribute: () => false,
+    });
+    if (failure === 'network-url') element.currentSrc = 'http://127.0.0.1:4173/cover?path=fixture';
+    if (failure === 'foreign-blob') element.currentSrc = 'blob:https://foreign.invalid/id';
+    const expected = { currentSrc: element.currentSrc, productionSrc, hasVisualState: false };
+    if (failure === 'source-before') element.currentSrc += '-changed';
+    let reads = 0;
+    const observe = vm.runInNewContext(`(${readDisplayedBlobBytes.toString()})`, {
+      HTMLImageElement: Image, URL, location: { origin: 'http://127.0.0.1:4173' }, Uint8Array,
+      fetch: async () => {
+        reads += 1;
+        if (failure === 'read-error') throw new Error('blob read failed');
+        return { ok: true, arrayBuffer: async () => {
+          if (failure === 'source-after') element.currentSrc += '-changed';
+          if (failure === 'revision-after') productionSrc += '-changed';
+          if (failure === 'decode-after') element.complete = false;
+          if (failure === 'detached-after') element.isConnected = false;
+          if (failure === 'hidden-after') element.getBoundingClientRect = () => ({ width: 0, height: 0 });
+          return Uint8Array.from([11, 23]).buffer;
+        } };
+      },
+    });
+    await assert.rejects(observe(element, expected), /blob|changed/i);
+    assert.equal(reads, ['network-url', 'foreign-blob', 'source-before'].includes(failure) ? 0 : 1);
+  });
+}

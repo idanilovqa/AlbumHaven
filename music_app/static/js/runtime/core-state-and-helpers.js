@@ -8,6 +8,7 @@ const state = {
   repairAlertHideTimer: null,
   awaitingInitialDataRefresh: false,
   status: {},
+  loopCreateAllowed: window.__ALBUM_HAVEN_PLAYBACK_ALLOWED_ACTIONS__?.['library.loops.create'] === true,
   coverRefreshTokens: {},
   coverFailures: {
     localDisplayPaths: {},
@@ -73,6 +74,7 @@ const state = {
     pendingSidebarSelectedArtist: '',
     pendingSidebarAllArtistsActive: false,
     artistsDrawerOpen: false,
+    artistTreeFolded: null,
     pendingAppRefocusSuppression: false,
     suppressNextViewportClick: false,
     suppressClickSequenceUntil: 0,
@@ -183,6 +185,11 @@ const state = {
     rulesLoading: false,
     rulesLoadPromise: null,
       loops: [],
+      loopsSearchQuery: '',
+      loopOrderPending: {},
+      loopViewGeneration: 0,
+      loopDataGeneration: 0,
+      loopMutationGeneration: 0,
       selectedLoopGroupKey: '',
       selectedLoopDetailMode: 'group',
       collapsedLoopGroups: {},
@@ -224,6 +231,13 @@ const state = {
     integrationsLoaded: false,
     integrationsLoading: false,
     integrationsLoadPromise: null,
+    lastfmScrobbles: {
+      summary: null,
+      loading: false,
+      submitting: false,
+      loadPromise: null,
+      requestGeneration: 0,
+    },
     localPlaylistImport: {
       selectedFile: null,
       selectedFileName: '',
@@ -341,6 +355,7 @@ const state = {
       remoteCover: null,
       localCovers: [],
       pastedImages: [],
+      manualImageAttachments: [],
       otherArt: [],
       pendingLocalPath: '',
       pendingPastedImageId: '',
@@ -530,10 +545,90 @@ function setDomPropertyIfChanged(element, property, value) {
   }
 }
 
+function resolveLibraryScanPhaseStates(data = {}) {
+  const stages = ['discover', 'metadata', 'covers', 'relations'];
+  const states = Object.fromEntries(stages.map(stage => [stage, 'future']));
+  const phase = String(data.scan_phase || '').trim().toLowerCase();
+  const outcome = String(data.scan_outcome || '').trim().toLowerCase();
+  let currentStage = '';
+  if (data.relations_in_progress || (data.scan_in_progress && phase === 'finalizing')) currentStage = 'relations';
+  else if (data.covers_in_progress) currentStage = 'covers';
+  else if (data.scan_in_progress && ['discovering', 'discovery', 'enumerating', 'preparing', 'idle'].includes(phase)) currentStage = 'discover';
+  else if (data.scan_in_progress) currentStage = 'metadata';
+
+  const currentIndex = stages.indexOf(currentStage);
+  if (currentIndex >= 0) {
+    stages.forEach((stage, index) => { states[stage] = index < currentIndex ? 'complete' : index === currentIndex ? 'current' : 'future'; });
+    return states;
+  }
+  if (outcome === 'completed') return Object.fromEntries(stages.map(stage => [stage, 'complete']));
+  if (['cancelled', 'failed'].includes(outcome)) {
+    if (Number(data.scan_total || 0) > 0 || Number(data.scan_processed || 0) > 0) states.discover = 'complete';
+    if (Number(data.scan_total || 0) > 0 && Number(data.scan_processed || 0) >= Number(data.scan_total || 0)) states.metadata = 'complete';
+    if (Number(data.covers_total || 0) > 0 && Number(data.covers_processed || 0) >= Number(data.covers_total || 0)) states.covers = 'complete';
+    if (Number(data.relations_total || 0) > 0 && Number(data.relations_processed || 0) >= Number(data.relations_total || 0)) states.relations = 'complete';
+  }
+  return states;
+}
+
+let detachedGalleryBar = null;
+let detachedGalleryBarParent = null;
+let detachedGalleryBarNextSibling = null;
+
+function buildLibraryStatusBarHtml() {
+  return `<section class="gallery-bar gallery-bar--scan" id="library-status-gallery-bar" data-gallery-bar data-gallery-bar-instance="library-status" aria-label="Library Status Page controls">
+    <div class="gallery-bar__context">
+      <button class="gallery-action-button library-loader-back-button" id="library-loader-back-button" type="button" data-close-scan-page="1" aria-label="Back to previous library view"><span class="library-loader-back-icon" aria-hidden="true">&#8592;</span></button>
+      <div class="library-scan-gallery-copy">
+        <div class="gallery-bar__title"><span>Library Status Page</span></div>
+        <span class="gallery-bar__summary" id="library-scan-gallery-summary" aria-live="polite">Preparing status...</span>
+      </div>
+    </div>
+    <div class="gallery-bar__actions library-loader-actions" id="library-loader-actions" hidden>
+      <button class="button ui-button ui-button--secondary ui-button--medium library-loader-browse-button" type="button" id="library-loader-browse-button" data-browse-scanned-library="1" hidden>Browse Library</button>
+      <button class="button ui-button ui-button--quiet ui-button--medium library-loader-cancel-button" type="button" id="library-loader-cancel-button" data-cancel-library-scan="1" hidden>Cancel Scan</button>
+    </div>
+  </section>`;
+}
+
+function mountLibraryStatusBar() {
+  const mounted = document.getElementById('library-status-gallery-bar');
+  if (mounted) return mounted;
+  const galleryBar = document.querySelector?.('[data-gallery-bar-instance="gallery"]');
+  if (!galleryBar?.parentNode || typeof document.createElement !== 'function') return null;
+  if (typeof closeGalleryMainSurface === 'function') closeGalleryMainSurface(false);
+  detachedGalleryBar = galleryBar;
+  detachedGalleryBarParent = galleryBar.parentNode;
+  detachedGalleryBarNextSibling = galleryBar.nextSibling;
+  const holder = document.createElement('div');
+  holder.innerHTML = buildLibraryStatusBarHtml();
+  const statusBar = holder.firstElementChild;
+  detachedGalleryBarParent.insertBefore(statusBar, galleryBar);
+  galleryBar.remove();
+  return statusBar;
+}
+
+function unmountLibraryStatusBar() {
+  document.getElementById('library-status-gallery-bar')?.remove?.();
+  if (detachedGalleryBar && detachedGalleryBarParent) {
+    const anchor = detachedGalleryBarNextSibling?.parentNode === detachedGalleryBarParent
+      ? detachedGalleryBarNextSibling : null;
+    detachedGalleryBarParent.insertBefore(detachedGalleryBar, anchor);
+  }
+  detachedGalleryBar = null;
+  detachedGalleryBarParent = null;
+  detachedGalleryBarNextSibling = null;
+}
+
 function renderLibraryLoader(data = {}, options = {}) {
+  const scanPageVisible = Boolean(options.scanPageVisible || state.ui.scanPageReturnContext);
+  if (scanPageVisible) mountLibraryStatusBar();
+  else unmountLibraryStatusBar();
   const loader = document.getElementById('library-loader');
+  const scanSummary = document.getElementById('library-scan-gallery-summary');
   const spinner = loader?.querySelector('.library-loader-spinner');
   const title = document.getElementById('library-loader-title');
+  const readyCheck = document.getElementById('library-loader-ready-check');
   const status = document.getElementById('library-loader-status');
   const progress = document.getElementById('library-loader-progress');
   const actions = document.getElementById('library-loader-actions');
@@ -542,13 +637,13 @@ function renderLibraryLoader(data = {}, options = {}) {
   const backButton = document.getElementById('library-loader-back-button');
   const phaseGuide = document.getElementById('library-loader-phase-guide');
   const scroll = document.getElementById('albums-scroll');
-  if (!loader || !title || !status || !progress || !scroll || !spinner || !browseButton) return;
+  if (!loader || !title || !status || !progress || !scroll || !spinner) return;
 
   const scanBusy = Boolean(data.scan_in_progress)
     && String(data.scan_phase || '').trim().toLowerCase() !== 'finalizing';
   const relBusy = Boolean(data.relations_in_progress);
   const coverBusy = Boolean(data.covers_in_progress);
-  const scanPageVisible = Boolean(options.scanPageVisible || state.ui.scanPageReturnContext);
+  if (typeof syncScanLibraryWatcherHealth === 'function') syncScanLibraryWatcherHealth(data, scanPageVisible);
   const forcedScanPageVisible = Boolean(state.ui.forceScanPageVisible) && (scanBusy || relBusy || state.awaitingInitialDataRefresh);
   const hasSearch = Boolean((state.view?.query || '').trim() || (state.view?.selected_artist || '').trim());
   const pendingViewTransition = Boolean(state.ui.pendingViewTransition);
@@ -563,17 +658,27 @@ function renderLibraryLoader(data = {}, options = {}) {
     && Boolean(data.scan_in_progress)
     && String(data.scan_phase || '').trim().toLowerCase() === 'finalizing'
     && Number(data.album_total || 0) > 0;
-  const canBrowseScanned = shouldShow
+  // The dedicated page hides, but deliberately retains, the previous gallery and
+  // query. Its Browse action must not wait for that retained view to become empty.
+  const retainedBrowseAvailable = scanPageVisible
+    && (scanBusy || relBusy || state.awaitingInitialDataRefresh)
+    && Number(state.view?.album_count || 0) > 0;
+  const canBrowseScanned = shouldShow && (scanPageVisible || !hasSearch)
     && !pendingViewTransition
     && (
       finalizingActiveScan
-      || shouldOfferBrowseScannedLibraryAction(state.view, data, state.awaitingInitialDataRefresh)
+      || retainedBrowseAvailable
+      || shouldOfferBrowseScannedLibraryAction(scanPageVisible ? {} : state.view, data, state.awaitingInitialDataRefresh)
     );
   const canCancelScan = shouldShow && scanPageVisible && Boolean(data.scan_in_progress);
   setDomPropertyIfChanged(loader, 'hidden', !shouldShow);
   loader.classList?.toggle('is-scan-page', scanPageVisible);
+  const galleryWasHidden = scroll.hidden;
   setDomPropertyIfChanged(scroll, 'hidden', shouldShow);
-  setDomPropertyIfChanged(backButton, 'hidden', !scanPageVisible);
+  if (galleryWasHidden && !shouldShow && scroll.clientWidth > 0 && typeof virtualGrid !== 'undefined') {
+    virtualGrid.onResize();
+  }
+  setDomPropertyIfChanged(backButton, 'hidden', false);
   setDomPropertyIfChanged(phaseGuide, 'hidden', !scanPageVisible);
   setDomPropertyIfChanged(browseButton, 'hidden', !canBrowseScanned);
   setDomPropertyIfChanged(
@@ -600,27 +705,44 @@ function renderLibraryLoader(data = {}, options = {}) {
   setDomPropertyIfChanged(
     actions,
     'hidden',
-    Boolean(browseButton.hidden && (!cancelButton || cancelButton.hidden)),
+    Boolean((!browseButton || browseButton.hidden) && (!cancelButton || cancelButton.hidden)),
   );
   if (!shouldShow) return;
 
-  if (hasSearch && !isLoadingState && !forcedScanPageVisible && !scanPageVisible) {
+  if (hasSearch && !pendingViewTransition && !scanPageVisible) {
     spinner.hidden = true;
     title.textContent = 'Nothing found';
     status.textContent = 'No artists, albums, or tracks matched your search.';
     progress.innerHTML = '';
-    browseButton.hidden = true;
-    if (actions) actions.hidden = Boolean(!cancelButton || cancelButton.hidden);
+    if (browseButton) browseButton.hidden = true;
+    if (cancelButton) cancelButton.hidden = true;
+    if (actions) actions.hidden = true;
     return;
   }
 
-  spinner.hidden = Boolean(scanPageVisible && !(scanBusy || relBusy || coverBusy));
+  const ready = scanPageVisible && !(Boolean(data.scan_in_progress) || relBusy || coverBusy || state.awaitingInitialDataRefresh || pendingViewTransition);
+  spinner.hidden = Boolean(scanPageVisible && ready);
+  setDomPropertyIfChanged(readyCheck, 'hidden', !ready);
   const lines = buildLoaderStatusLines(data, {
     scanPageVisible,
     pendingViewTransition: pendingViewTransition && !scanPageVisible,
   });
-  title.textContent = lines[0]?.title || 'Loading library';
+  title.textContent = ready
+    ? 'Your local library is ready.'
+    : (scanPageVisible && (Boolean(data.scan_in_progress) || relBusy || coverBusy)
+      ? 'Scanning the library'
+      : (lines[0]?.title || 'Loading library'));
   status.textContent = lines[0]?.detail || 'Preparing scan...';
+  if (scanSummary) scanSummary.textContent = status.textContent;
+  if (phaseGuide && scanPageVisible) {
+    const phaseStates = resolveLibraryScanPhaseStates(data);
+    phaseGuide.querySelectorAll?.('[data-scan-stage]').forEach((item) => {
+      const stateName = phaseStates[String(item.getAttribute('data-scan-stage') || '')] || 'future';
+      item.classList.toggle('is-current', stateName === 'current');
+      item.classList.toggle('is-complete', stateName === 'complete');
+      item.classList.toggle('is-future', stateName === 'future');
+    });
+  }
   progress.innerHTML = lines.slice(1).map((line) => `
     <div class="library-loader-progress-line">
       <span class="library-loader-progress-title">${escapeHtml(line.title)}</span>
@@ -630,11 +752,28 @@ function renderLibraryLoader(data = {}, options = {}) {
 }
 
 function renderRelated() {
+  if (typeof galleryMainSurfaceController !== 'undefined'
+      && galleryMainSurfaceController?.isOpen?.('artist-family')
+      && typeof closeGalleryMainSurface === 'function') {
+    closeGalleryMainSurface(false);
+  }
+  const galleryPanel = document.querySelector?.('[data-artist-family-panel]');
+  const galleryToggle = document.querySelector?.('[data-gallery-bar-action="artist-family"]');
+  const galleryBody = document.querySelector?.('[data-gallery-family-panel-body]');
+  if (galleryPanel) {
+    galleryPanel.hidden = true;
+    galleryPanel.classList.remove('is-open');
+    galleryPanel.setAttribute('aria-hidden', 'true');
+  }
+  if (galleryToggle) galleryToggle.setAttribute('aria-expanded', 'false');
+  if (galleryBody) {
+    galleryBody.innerHTML = '';
+    delete galleryBody.dataset.galleryRenderSignature;
+  }
   const box = document.getElementById('related-box');
   const toggle = document.getElementById('related-toggle');
   const wrap = document.getElementById('related-list-wrap');
   const list = document.getElementById('related-list');
-  const related = state.view.related_artists || [];
   if (!box || !toggle || !wrap || !list) return;
   const contextualPane = state.view?.shell_layout?.slots?.contextual_pane || {};
   if (Object.prototype.hasOwnProperty.call(contextualPane, 'is_visible')) {
@@ -650,22 +789,12 @@ function renderRelated() {
   if (Object.prototype.hasOwnProperty.call(localTree, 'active_submode')) {
     box.dataset.shellLocalTreeSubmode = String(localTree.active_submode || '');
   }
-  if (
-    state.ui.scanPageReturnContext
-    || (state.busy && !state.ui.activeViewPayloadReady)
-    || !state.view.selected_artist
-    || !related.length
-  ) {
-    box.style.display = 'none';
-    wrap.hidden = true;
-    list.innerHTML = '';
-    return;
-  }
-  box.style.display = 'block';
-  box.classList.toggle('is-collapsed', !state.relatedExpanded);
-  toggle.setAttribute('aria-expanded', state.relatedExpanded ? 'true' : 'false');
-  wrap.hidden = !state.relatedExpanded;
-  list.innerHTML = buildRelatedMarkup(state.view);
+  box.hidden = true;
+  box.style.display = 'none';
+  box.classList.add('is-collapsed');
+  toggle.setAttribute('aria-expanded', 'false');
+  wrap.hidden = true;
+  list.innerHTML = '';
 }
 
 function applyLocalRelatedArtistFilter(nextRelatedArtists, options = {}) {

@@ -1,26 +1,31 @@
-import { expect, test } from '../support/baseFixtures.js';
+import { expect, test as base } from '../support/baseFixtures.js';
+import { PERFORMANCE_AUTH_USERNAME } from '../support/performanceAuthentication.js';
+import { withRestoredAppearanceFixture } from '../helpers/appearanceFixture.js';
+import { InteractionSurfaces, expectPartialCoverRow } from '../poms/interactionSurfaces.js';
 import {
   captureResponsiveGalleryScreenshot,
-  expectCardsWithinSelectedScale,
+  expectCardsFillGalleryWidth,
   expectResponsiveRatingSingleLine,
-  resolveSelectedScaleCardCeiling,
   waitForResponsiveGalleryLayout,
 } from '../helpers/responsiveGalleryHelpers.js';
+
+const test = base.extend({
+  appearanceBaseline: [async ({ context, managedAppLifecycle }, use) => {
+    await withRestoredAppearanceFixture({
+      username: PERFORMANCE_AUTH_USERNAME, context, managedAppLifecycle,
+    }, use);
+  }, { auto: true }],
+});
 
 const ARTIST = 'Album Rating Contract';
 const RATED_ALBUM = 'Rating Numeric Authority';
 const COVERLESS_ARTIST = 'ДДТ';
 const COVERLESS_ALBUM = 'Студийные записи';
 const GALLERY_SCALE_PERCENT = 125;
-const BASE_CARD_WIDTH_PX = 240;
-const SELECTED_SCALE_CARD_CEILING_PX = resolveSelectedScaleCardCeiling(
-  BASE_CARD_WIDTH_PX,
-  GALLERY_SCALE_PERCENT,
-);
 const WIDE_VIEWPORT = Object.freeze({ width: 1440, height: 960 });
 const NARROW_VIEWPORT = Object.freeze({ width: 1024, height: 960 });
 
-test('FTC-MOBILE-WEB-007 keeps ratings on one line while narrower galleries preserve selected card scale', async ({
+test('FTC-MOBILE-WEB-007 keeps ratings on one line while narrower galleries preserve selected card scale', { tag: '@area:responsive-visual' }, async ({
   galleryActions,
   page,
   searchToolbarActions,
@@ -54,6 +59,7 @@ test('FTC-MOBILE-WEB-007 keeps ratings on one line while narrower galleries pres
   });
 
   await stepLogger.step('Record the wide gallery density, rating geometry, and visible screenshot', async () => {
+    await galleryActions.galleryPage.lastCardInFirstAlbumRow.hover();
     wideLayout = await waitForResponsiveGalleryLayout(galleryActions.galleryPage, {
       artistName: ARTIST,
       ratedAlbumName: RATED_ALBUM,
@@ -69,6 +75,10 @@ test('FTC-MOBILE-WEB-007 keeps ratings on one line while narrower galleries pres
   await stepLogger.step('Narrow the same production view and record its settled layout and screenshot', async () => {
     await page.setViewportSize(NARROW_VIEWPORT);
     await galleryActions.scrollToAlbumUnderHeading(ARTIST, RATED_ALBUM);
+    await galleryActions.galleryPage.albumCard
+      .cardsByArtistAndAlbum(ARTIST, RATED_ALBUM)
+      .first()
+      .hover();
     narrowLayout = await waitForResponsiveGalleryLayout(galleryActions.galleryPage, {
       artistName: ARTIST,
       ratedAlbumName: RATED_ALBUM,
@@ -81,12 +91,12 @@ test('FTC-MOBILE-WEB-007 keeps ratings on one line while narrower galleries pres
     );
   });
 
-  await stepLogger.step('Reduce columns without stretching cards or wrapping the rating', async () => {
+  await stepLogger.step('Distribute available width evenly without wrapping ratings', async () => {
     expect(wideLayout.columnCount).toBeGreaterThanOrEqual(3);
     expect(narrowLayout.columnCount).toBeLessThan(wideLayout.columnCount);
-    expectCardsWithinSelectedScale(expect, wideLayout, SELECTED_SCALE_CARD_CEILING_PX);
-    expectCardsWithinSelectedScale(expect, narrowLayout, SELECTED_SCALE_CARD_CEILING_PX);
-    expect(narrowLayout.maxCardWidth).toBeLessThanOrEqual(wideLayout.maxCardWidth + 1);
+    expectCardsFillGalleryWidth(expect, wideLayout);
+    expectCardsFillGalleryWidth(expect, narrowLayout);
+
     expectResponsiveRatingSingleLine(expect, wideLayout);
     expectResponsiveRatingSingleLine(expect, narrowLayout);
   });
@@ -108,4 +118,11 @@ test('FTC-MOBILE-WEB-007 keeps ratings on one line while narrower galleries pres
     expect(Math.abs(artbox.width - artbox.height)).toBeLessThanOrEqual(1);
     expect(artbox.missingMarkVisible).toBe(true);
   });
+  await stepLogger.step('Render the partly visible next row in cover-only view', async () => {
+    await page.setViewportSize({ width: 1440, height: 830 });
+    await galleryActions.goto('/?surface=albums&artist=Neal%20Morse&gallery_display=covers');
+    await galleryActions.waitForGalleryReady();
+    await expectPartialCoverRow(page, new InteractionSurfaces(page));
+  });
+
 });

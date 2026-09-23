@@ -4,9 +4,35 @@
   const variants = new Set(['primary', 'secondary', 'icon']);
   const sizes = new Set(['medium', 'small']);
   const types = new Set(['button', 'submit', 'reset']);
+  const actionButtonShapes = new Set(['default', 'round']);
+  const actionButtonSemantics = new Set(['default', 'destructive']);
+  const actionButtonPresentations = new Set(['outlined', 'bare']);
+  const iconPaths = Object.freeze({
+    calendar: 'M4 5h16v15H4V5ZM8 3v4M16 3v4M4 10h16',
+    copy: 'M8 8h12v12H8V8ZM4 16H3V3h13v1M8 4H4v4',
+    cover: 'M5 5h14v14H5V5Zm0 10 4-4 4 4 2-2 4 4M14.5 8.5h.01',
+    search: 'M16 16l4 4M17 10a7 7 0 1 1-14 0 7 7 0 0 1 14 0Z',
+    play: 'M9 6.4v11.2l9-5.6-9-5.6Z',
+    pause: 'M7.5 6.5h3.25v11H7.5v-11Zm5.75 0h3.25v11h-3.25v-11Z',
+    edit: 'm6.5 16.6.55-3.15L15.9 4.6a1.65 1.65 0 0 1 2.35 0l1.15 1.15a1.65 1.65 0 0 1 0 2.35l-8.85 8.85-3.15.55-.9-.9Zm8.3-9.9 2.5 2.5',
+    close: 'm7 7 10 10M17 7 7 17',
+    more: 'M6.5 12h.01M12 12h.01M17.5 12h.01',
+    delete: 'M8 8.5v9M12 8.5v9M16 8.5v9M5.5 6h13M9 6V4.5h6V6M7 6l.75 14h8.5L17 6',
+    previous: 'm15 6-6 6 6 6',
+    next: 'm9 6 6 6-6 6',
+    bolt: 'm13 2-9 12h7l-1 8 10-13h-7z',
+  });
   const escape = value => String(value ?? '').replace(/[&<>"']/g, character => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[character]));
   const validAttribute = name => /^[a-zA-Z][a-zA-Z0-9_.:-]*$/.test(name);
   const validClassList = value => !value || String(value).trim().split(/\s+/).every(token => /^[a-zA-Z_][a-zA-Z0-9_-]*$/.test(token));
+
+  function renderIconSvg(name, options = {}) {
+    const path = iconPaths[name];
+    if (!path) throw new TypeError('Unknown icon.');
+    if (!validClassList(options.className)) throw new TypeError('Invalid icon class.');
+    const classes = ['ui-icon', options.className || ''].filter(Boolean).join(' ');
+    return `<svg class="${escape(classes)}" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="${path}"/></svg>`;
+  }
 
   function renderButtonMarkup(options, contentHtml) {
     const variant = options.variant || 'secondary';
@@ -44,23 +70,42 @@
 
   function renderActionButton(options = {}) {
     const ariaLabel = String(options.ariaLabel || '').trim();
+    const shape = options.shape || 'default';
+    const semantic = options.semantic || 'default';
+    const presentation = options.presentation || 'outlined';
     if (!ariaLabel) throw new TypeError('ActionButton requires an accessible label.');
+    if (!actionButtonShapes.has(shape)) throw new TypeError('Unknown ActionButton shape.');
+    if (!actionButtonSemantics.has(semantic)) throw new TypeError('Unknown ActionButton semantic.');
+    if (!actionButtonPresentations.has(presentation)) throw new TypeError('Unknown ActionButton presentation.');
     if (!validClassList(options.iconClass)) throw new TypeError('Invalid ActionButton icon class.');
+    const specializationClasses = [
+      shape === 'default' ? '' : `action-button--${shape}`,
+      semantic === 'default' ? '' : `action-button--${semantic}`,
+      presentation === 'outlined' ? '' : `action-button--${presentation}`,
+    ].filter(Boolean);
     const actionOptions = {
       ...options,
       ariaLabel,
       variant: 'icon',
       size: 'medium',
-      className: ['action-button', options.className || ''].filter(Boolean).join(' '),
+      className: ['action-button', ...specializationClasses, options.className || ''].filter(Boolean).join(' '),
     };
     const iconClasses = ['action-button__icon', options.iconClass || ''].filter(Boolean).join(' ');
+    const iconMarkup = options.icon
+      ? renderIconSvg(options.icon, { className: `${iconClasses} ui-icon--${options.icon}` })
+      : `<span class="${escape(iconClasses)}" aria-hidden="true"></span>`;
     return renderButtonMarkup(
       actionOptions,
-      `<span class="ui-button__content action-button__content"><span class="${escape(iconClasses)}" aria-hidden="true"></span></span>`,
+      `<span class="ui-button__content action-button__content">${iconMarkup}</span>`,
     );
   }
 
-  const api = { renderButton, renderActionButton };
+  function setDisabled(element, disabled) {
+    element.disabled = Boolean(disabled);
+    element.setAttribute('aria-disabled', String(element.disabled));
+  }
+
+  const api = { renderButton, renderActionButton, renderIconSvg, setDisabled };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   if (scope) scope.ButtonComponent = api;
 })(typeof window !== 'undefined' ? window : null);

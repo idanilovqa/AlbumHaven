@@ -16,10 +16,10 @@ from music_app.services.current_actor_postgres import PostgresCurrentActorResolv
 _SESSION_COOKIE = "__Host-album_haven_session"
 
 
-async def current_actor_from_request(request: Request) -> CurrentActor:
-    """Resolve once and attach the exact actor object to this request."""
+async def current_actor_from_request(request: Request, *, refresh: bool = False) -> CurrentActor:
+    """Resolve and cache the actor, bypassing request state when refresh is required."""
 
-    if hasattr(request.state, "current_actor"):
+    if not refresh and hasattr(request.state, "current_actor"):
         cached = request.state.current_actor
         if not isinstance(cached, CurrentActor):
             raise RuntimeError("Current actor request cache is invalid.")

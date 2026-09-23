@@ -1,4 +1,6 @@
 const MOBILE_ARTISTS_DRAWER_MEDIA_QUERY = '(max-width: 900px)';
+const ARTIST_TREE_SETTLED_EVENT = 'album-haven:artist-tree-settled';
+let cancelPendingArtistTreeResize = null;
 
 function isArtistsDrawerElement(value) {
   return Boolean(
@@ -14,6 +16,18 @@ function getArtistsDrawerElements() {
     button: document.getElementById('artists-drawer-button'),
     rail: document.getElementById('shell-navigation-rail'),
     backdrop: document.getElementById('shell-navigation-rail-backdrop'),
+  };
+}
+
+function getArtistTreeFoldElements() {
+  return {
+    shell: document.getElementById('app-shell'),
+    button: document.getElementById('artist-tree-fold-button'),
+    navigationButton: document.getElementById('artist-tree-navigation-button'),
+    expandedTree: document.getElementById('artist-tree-expanded'),
+    compactNavigation: document.getElementById('shell-navigation-compact'),
+    rail: document.getElementById('shell-navigation-rail'),
+    list: document.getElementById('sidebar-list'),
   };
 }
 
@@ -60,6 +74,113 @@ function syncArtistsDrawerVisibility() {
   }
 
   document.body?.classList?.toggle('artists-drawer-open', isOpen);
+  syncArtistTreeFoldVisibility();
+}
+
+function syncArtistTreeFoldVisibility(options = {}) {
+  const {
+    shell, button, navigationButton, expandedTree, compactNavigation, rail, list,
+  } = getArtistTreeFoldElements();
+  const canFold = !isArtistsDrawerMobileViewport() && canUseArtistsDrawerForCurrentView();
+  if (state.ui.artistTreeFolded === null || state.ui.artistTreeFolded === undefined) {
+    const savedFolded = state.ui.shellLayoutPreferences?.artistTreeFolded;
+    state.ui.artistTreeFolded = typeof savedFolded === 'boolean'
+      ? savedFolded
+      : rail?.dataset?.shellDefaultCollapsed === 'true';
+  }
+  const isFolded = Boolean(canFold && state.ui.artistTreeFolded);
+  const isTransitioning = Boolean(canFold && options.transitioning);
+  const isExpanding = Boolean(isTransitioning && !isFolded);
+  shell?.classList?.toggle('is-artist-tree-folded', isFolded);
+  rail?.classList?.toggle('is-folded', isFolded);
+  rail?.classList?.toggle('is-transitioning', isTransitioning);
+  rail?.classList?.toggle('is-expanding', isExpanding);
+  if (button) {
+    button.hidden = !canFold || isFolded;
+    button.setAttribute('aria-expanded', isFolded ? 'false' : 'true');
+    button.setAttribute('aria-label', 'Collapse Artist Tree');
+    button.setAttribute('title', 'Collapse Artist Tree');
+  }
+  if (navigationButton) {
+    navigationButton.hidden = !(isFolded || isExpanding);
+    navigationButton.setAttribute('aria-expanded', isFolded ? 'false' : 'true');
+  }
+  if (expandedTree) expandedTree.hidden = isFolded;
+  if (compactNavigation) compactNavigation.hidden = !(isFolded || isExpanding);
+  if (list) list.hidden = isFolded;
+  document.documentElement?.style?.setProperty('--compact-rail-width', isFolded ? '64px' : '240px');
+  if (typeof syncDockedCompactPresentation === 'function') syncDockedCompactPresentation();
+  return isFolded;
+}
+
+function parseCssTimeMs(value) {
+  const text = String(value || '').trim();
+  const amount = Number.parseFloat(text);
+  if (!Number.isFinite(amount)) return 0;
+  return text.endsWith('ms') ? amount : text.endsWith('s') ? amount * 1000 : 0;
+}
+
+function scheduleArtistTreeResizeAfterTransition(onSettled = null) {
+  cancelPendingArtistTreeResize?.();
+
+  const root = document.documentElement;
+  let fallbackTimer = null;
+  let settled = false;
+  const cleanup = () => {
+    root?.removeEventListener?.('transitionend', handleTransitionEnd);
+    if (fallbackTimer !== null) clearTimeout(fallbackTimer);
+    fallbackTimer = null;
+    if (cancelPendingArtistTreeResize === cleanup) cancelPendingArtistTreeResize = null;
+  };
+  const finish = () => {
+    if (settled) return;
+    settled = true;
+    cleanup();
+    onSettled?.();
+    window.dispatchEvent(new CustomEvent(ARTIST_TREE_SETTLED_EVENT, {
+      detail: { folded: Boolean(state.ui.artistTreeFolded) },
+    }));
+  };
+  const handleTransitionEnd = (event) => {
+    if (event.target === root && event.propertyName === '--compact-rail-width') finish();
+  };
+
+  root?.addEventListener?.('transitionend', handleTransitionEnd);
+  const styles = typeof window.getComputedStyle === 'function' ? window.getComputedStyle(root) : null;
+  const duration = parseCssTimeMs(styles?.getPropertyValue?.('--compact-motion-duration'));
+  fallbackTimer = setTimeout(finish, duration + 50);
+  cancelPendingArtistTreeResize = cleanup;
+}
+
+function toggleArtistTreeFold() {
+  if (isArtistsDrawerMobileViewport() || !canUseArtistsDrawerForCurrentView()) return false;
+  const activeGallerySurface = typeof galleryMainSurfaceController !== 'undefined'
+    ? galleryMainSurfaceController?.current?.()
+    : null;
+  if (activeGallerySurface?.key?.startsWith?.('artist:')
+    && typeof closeGalleryMainSurface === 'function') {
+    closeGalleryMainSurface(false);
+  }
+  const { button, navigationButton, rail } = getArtistTreeFoldElements();
+  const moveFocusWithinRail = Boolean(rail?.contains?.(document.activeElement));
+  const wasFolded = Boolean(state.ui.artistTreeFolded);
+  state.ui.artistTreeFolded = !wasFolded;
+  state.ui.shellLayoutPreferences = {
+    ...(state.ui.shellLayoutPreferences || {}),
+    artistTreeFolded: state.ui.artistTreeFolded,
+  };
+  if (typeof persistShellLayoutPreferences === 'function') persistShellLayoutPreferences();
+  const isFolded = syncArtistTreeFoldVisibility({ transitioning: true });
+  if (moveFocusWithinRail && isFolded) {
+    navigationButton?.focus?.();
+  }
+  const settleArtistTree = () => {
+    if (Boolean(state.ui.artistTreeFolded) !== isFolded) return;
+    syncArtistTreeFoldVisibility();
+    if (moveFocusWithinRail && !isFolded) button?.focus?.();
+  };
+  scheduleArtistTreeResizeAfterTransition(settleArtistTree);
+  return isFolded;
 }
 
 function openArtistsDrawer() {
@@ -90,6 +211,13 @@ function toggleArtistsDrawer() {
 }
 
 function handleArtistsDrawerClick(event) {
+  const foldButton = event.target.closest('[data-toggle-artist-tree-fold="1"]');
+  if (foldButton) {
+    event.preventDefault();
+    toggleArtistTreeFold();
+    return true;
+  }
+
   const toggleButton = event.target.closest('[data-toggle-artists-drawer="1"]');
   if (toggleButton) {
     event.preventDefault();

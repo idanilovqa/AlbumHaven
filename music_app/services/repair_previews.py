@@ -18,6 +18,7 @@ from music_app.services.problematic_albums import (
     find_problematic_album_by_track_paths as _service_find_problematic_album_by_track_paths,
 )
 from music_app.services.utils import title_case_tag_value
+from music_app.services.problem_suggestions import build_problem_suggestions
 
 _ALBUM_DISC_MARKER_RE = re.compile(
     r"(?<![A-Za-z0-9])(?:cd|disc|disk)\s*[-_.]?\s*(?P<number>\d{1,2})(?![A-Za-z0-9])",
@@ -478,6 +479,14 @@ def _build_encoding_repair_preview(
         "raw_name": raw_album_name or getattr(album, "name", ""),
         "raw_album_artist": raw_album_artist or getattr(album, "album_artist", ""),
         "preview_rows": preview_rows,
+        "suggested_edits": [
+            proposal
+            for track in (getattr(album, "tracks", []) or [])
+            for path in [str(getattr(track, "path", ""))]
+            if isinstance(file_cache.get(path), dict)
+            for proposal in build_problem_suggestions(path, file_cache[path], alias_to_canonical=alias_to_canonical)
+            if f"{path}::{proposal['field']}" not in ignored_row_keys
+        ] if include_preview_rows else [],
     }
 
 

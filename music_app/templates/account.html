@@ -1,3 +1,5 @@
+{% from "components/on-page-alert.html" import on_page_alert %}
+{% from "partials/button.html" import ui_button %}
 <!doctype html>
 <html lang="en">
 <head>
@@ -6,6 +8,7 @@
   <title>Password &amp; security — Album Haven</title>
   <link rel="stylesheet" href="/static/css/account.css">
   <link rel="stylesheet" href="/static/css/admin-members.css">
+  <link rel="stylesheet" href="/static/css/scrollbar.css">
   <link rel="stylesheet" href="/static/css/settings-navigation.css">
   <link rel="stylesheet" href="/static/css/app-chrome.css">
   {% include "partials/navigation-tree-assets.html" %}
@@ -13,9 +16,10 @@
   <script src="/static/js/admin-members.js" defer></script>
   <script src="/static/js/settings-navigation.js" defer></script>
   {% include "partials/appearance-bootstrap.html" %}
+  <link rel="stylesheet" href="/static/css/runtime/alert-components.css">
 </head>
 <body>
-  <p class="settings-navigation-error" data-settings-navigation-error role="alert" hidden></p>
+  {{ on_page_alert('This page could not be loaded. Please try again.', severity='error', hidden=true, class_name='settings-navigation-error', attributes={'data-settings-navigation-error': ''}) }}
   <main class="settings-host settings-shell" data-settings-host>
     {% from "partials/app-bar.html" import app_bar with context %}
     {{ app_bar() }}
@@ -32,30 +36,27 @@
       </header>
 
       {% if changed %}
-      <p class="account-notice is-success" role="status">Your password was changed. Other sessions have been signed out.</p>
+      {{ on_page_alert('Your password was changed. Other sessions have been signed out.', role='status', class_name='account-notice') }}
       {% endif %}
 
       {% if error %}
-      <p class="account-notice is-error" role="alert">
+      {% set account_error %}
         {% if error == "current_password" %}The current password was not accepted.
         {% elif error == "password_policy" %}Choose a long, unique password that is not breached or based on your account details.
         {% elif error == "stale" %}Your account changed during this request. Refresh and try again.
         {% elif error == "unavailable" %}Account settings are temporarily unavailable. Try again shortly.
         {% else %}The request could not be completed. Refresh and try again.{% endif %}
-      </p>
+      {% endset %}
+      {{ on_page_alert(account_error, severity='error', class_name='account-notice') }}
       {% endif %}
 
       {% if profile.administrator_set_suggestion %}
-      <aside class="security-callout" aria-label="Password suggestion">
-        <div>
-          <strong>Make this password your own when it’s convenient.</strong>
-          <span>An administrator created the current password. You can keep using it.</span>
-        </div>
+      {% call on_page_alert('An administrator created the current password. You can keep using it.', title='Make this password your own when it’s convenient.', role='status', class_name='security-callout', attributes={'aria-label': 'Password suggestion'}) %}
         <form method="post" action="/account/password-suggestion/dismiss">
           <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-          <button class="button is-small is-ghost" type="submit">Dismiss</button>
+          {{ ui_button('Dismiss', type='submit', variant='secondary', size='small') }}
         </form>
-      </aside>
+      {% endcall %}
       {% endif %}
 
       <section class="account-section" aria-labelledby="change-password-title">
@@ -66,7 +67,7 @@
           <div class="form-grid">
             <label class="field field-current" for="current-password">
               <span>Current password</span>
-              <span class="password-control">
+              <span class="password-control ui-input-action">
                 <input id="current-password" name="current_password" type="password" autocomplete="current-password" required>
                 <button type="button" data-password-toggle="current-password" aria-pressed="false">Show</button>
               </span>
@@ -74,7 +75,7 @@
             <span class="form-spacer" aria-hidden="true"></span>
             <label class="field" for="new-password">
               <span>New password</span>
-              <span class="password-control">
+              <span class="password-control ui-input-action">
                 <input id="new-password" name="new_password" type="password" autocomplete="new-password" minlength="{{ password_minlength }}" maxlength="{{ password_maxlength }}" required>
                 <button type="button" data-password-toggle="new-password" aria-pressed="false">Show</button>
               </span>
@@ -82,7 +83,7 @@
             </label>
             <label class="field" for="confirm-password">
               <span>Confirm new password</span>
-              <span class="password-control">
+              <span class="password-control ui-input-action">
                 <input id="confirm-password" name="confirm_password" type="password" autocomplete="new-password" minlength="{{ password_minlength }}" maxlength="{{ password_maxlength }}" required>
                 <button type="button" data-password-toggle="confirm-password" aria-pressed="false">Show</button>
               </span>

@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from importlib import import_module, util
+from threading import BoundedSemaphore, Event, Thread
 from typing import Any
 
 import pytest
@@ -592,6 +593,9 @@ def test_finalization_is_scoped_to_the_reserved_window_generation(login):
                 self.throttle_reads += 1
                 started_at = reserved_start if self.throttle_reads == 1 else newer_start
                 return Cursor(_throttle_rows(started_at=started_at))
+            if statement.startswith("update app.auth_throttles") and "greatest(failure_count - 1, 0)" in statement:
+                self.operations.append((statement, params))
+                return Cursor(rowcount=0 if params[-1] != newer_start else 1)
             return super().execute(sql, params)
 
     connection = WindowRolloverConnection()
@@ -606,10 +610,73 @@ def test_finalization_is_scoped_to_the_reserved_window_generation(login):
         if statement.startswith("update app.auth_throttles")
         and "greatest(failure_count - 1, 0)" in statement
     ]
-    assert len(final_updates) == 2
-    assert all("window_started_at = %s" in statement for statement, _ in final_updates)
-    assert all(reserved_start in params for _, params in final_updates)
-    assert all(newer_start not in params for _, params in final_updates)
+    assert final_updates == []  # Both locked buckets belong to a newer generation.
+
+
+def test_slow_login_uses_fresh_prepared_session_reference(login):
+    delayed = NOW + timedelta(seconds=8)
+    clock = [NOW]
+    sessions = RecordingSessionService()
+    sessions.prepared = replace(sessions.prepared, authenticated_at=delayed,
+        idle_expires_at=delayed + timedelta(hours=12), absolute_expires_at=delayed + timedelta(days=7))
+    sessions.issued = replace(sessions.issued, authenticated_at=delayed,
+        idle_expires_at=delayed + timedelta(hours=12), absolute_expires_at=delayed + timedelta(days=7))
+
+    def verify(*_args, **_kwargs):
+        clock[0] = delayed
+        return PasswordVerification(valid=True, needs_rehash=False)
+
+    service, _ = _service(login, RecordingConnection(), verifier=verify, session_service=sessions)
+    service._clock = lambda: clock[0]
+    assert _authenticate(service).outcome is login.LoginOutcome.SUCCESS
+    assert [name for name, _ in sessions.calls] == ["prepare", "persist"]
+
+
+def test_login_bounds_match_password_creation_nfc_normalization(login):
+    observed = []
+    service, _ = _service(login, RecordingConnection(), verifier=lambda raw, *_args, **_kwargs:
+        observed.append(raw) or PasswordVerification(valid=True, needs_rehash=False))
+    # Each decomposed pair is one codepoint and two UTF-8 bytes after NFC.
+    raw = "e\u0301" * 40
+    assert len(raw) > service._password_max_codepoints
+    assert _authenticate(service, password=raw).outcome is login.LoginOutcome.SUCCESS
+    assert observed == ["\u00e9" * 40]
+
+
+def test_login_rehash_retains_verification_capacity_until_hashing_finishes(login):
+    entered, release = Event(), Event()
+    results, failures = [], []
+
+    def rehash(*_args, **_kwargs):
+        if entered.is_set():
+            return PasswordCredential(ENCODED_HASH, 3)
+        entered.set()
+        assert release.wait(3), "bounded rehash cleanup was not released"
+        return PasswordCredential(ENCODED_HASH, 3)
+
+    service, _ = _service(login, RecordingConnection(), semaphore=BoundedSemaphore(1),
+        verifier=lambda *_args, **_kwargs: PasswordVerification(valid=True, needs_rehash=True),
+        rehasher=rehash)
+
+    def run():
+        try:
+            results.append(_authenticate(service))
+        except BaseException as exc:
+            failures.append(exc)
+
+    worker = Thread(target=run)
+    worker.start()
+    try:
+        assert entered.wait(2)
+        # The second request must return capacity exhaustion without entering rehash.
+        result = _authenticate(service)
+        assert result.outcome is login.LoginOutcome.THROTTLED
+    finally:
+        release.set()
+        worker.join(4)
+        assert not worker.is_alive()
+    assert failures == []
+    assert len(results) == 1 and results[0].outcome is login.LoginOutcome.SUCCESS
 
 
 def test_verification_semaphore_is_nonblocking_and_capacity_is_generic(login):

@@ -14,12 +14,13 @@ const sourcePath = path.join(
   'session-csrf-fetch.js',
 );
 
-function load(cookie = '__Host-album_haven_csrf=csrf-value') {
+function load(cookie = '__Host-album_haven_csrf=csrf-value', fetchImpl = null) {
   const calls = [];
   const window = {
     location: { href: 'https://music.test/albums', origin: 'https://music.test' },
     fetch: async (...args) => {
       calls.push(args);
+      if (fetchImpl) return fetchImpl(...args);
       return { ok: true };
     },
   };
@@ -28,6 +29,31 @@ function load(cookie = '__Host-album_haven_csrf=csrf-value') {
   vm.runInContext(fs.readFileSync(sourcePath, 'utf8'), context, { filename: sourcePath });
   return { window, calls };
 }
+
+test('same-origin reads retry once after a transient network failure', async () => {
+  let attempts = 0;
+  const { window, calls } = load(undefined, async () => {
+    attempts += 1;
+    if (attempts === 1) throw new TypeError('Failed to fetch');
+    return { ok: true };
+  });
+
+  const response = await window.fetch('/library-settings', { headers: { Accept: 'application/json' } });
+
+  assert.equal(response.ok, true);
+  assert.equal(calls.length, 2);
+  assert.equal(calls[0][0], '/library-settings');
+  assert.equal(calls[1][0], '/library-settings');
+});
+
+test('same-origin reads do not retry cancellations', async () => {
+  const cancelled = new Error('cancelled');
+  cancelled.name = 'AbortError';
+  const { window, calls } = load(undefined, async () => { throw cancelled; });
+
+  await assert.rejects(window.fetch('/utilities/integrations'), { name: 'AbortError' });
+  assert.equal(calls.length, 1);
+});
 
 test('same-origin unsafe fetch receives the readable session CSRF cookie as a header', async () => {
   const { window, calls } = load();
@@ -59,4 +85,39 @@ test('missing CSRF cookie does not synthesize a credential', async () => {
   await window.fetch('/refresh-api', { method: 'POST' });
 
   assert.equal(calls[0][1].headers, undefined);
+});
+
+test('URL object mutation inputs never disclose CSRF across origins', async () => {
+  const { window, calls } = load();
+  const external = new URL('https://external.test/write');
+  const local = new URL('https://music.test/write');
+  await window.fetch(external, { method: 'POST' });
+  await window.fetch(local, { method: 'POST' });
+  assert.equal(calls[0][0], external);
+  assert.equal(calls[0][1].headers, undefined);
+  assert.equal(calls[1][1].headers.get('X-Album-Haven-CSRF'), 'csrf-value');
+});
+
+for (const credentials of ['omit', 'include', 'same-origin']) {
+  test(`Request mutation retains its ${credentials} credentials policy`, async () => {
+    const { window, calls } = load();
+    const request = new Request('https://music.test/write', { method: 'POST', credentials });
+    await window.fetch(request);
+    assert.equal(calls[0][0], request);
+    assert.equal(calls[0][1].credentials, credentials);
+    assert.equal(calls[0][1].headers.get('X-Album-Haven-CSRF'), 'csrf-value');
+    await window.fetch(request, { credentials: 'omit' });
+    assert.equal(calls[1][1].credentials, 'omit');
+  });
+}
+
+test('external Request preserves all original credentials and headers', async () => {
+  const { window, calls } = load();
+  const request = new Request('https://external.test/write', {
+    method: 'POST', credentials: 'omit', headers: { 'X-Caller': 'value' },
+  });
+  await window.fetch(request);
+  assert.equal(calls[0][0], request);
+  assert.equal(calls[0][1], undefined);
+  assert.equal(request.headers.has('X-Album-Haven-CSRF'), false);
 });

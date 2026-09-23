@@ -5,12 +5,23 @@ export class AlbumTrackTable {
     this.rows = this.root.locator('.album-track-table__row');
     this.discHeadings = this.root.locator('.album-track-table__disc-heading');
     this.total = this.root.locator('.album-track-table__total');
+    this.aggregateTotal = this.total.locator('.album-track-table__aggregate-total');
+    this.mainTotal = this.total.locator('.album-track-table__main-total');
+    this.bonusTotal = this.total.locator('.album-track-table__bonus-total');
     this.playButtons = this.root.locator('.album-track-table__play');
     this.problemHeaders = this.tables.locator('.compact-data-table-header [data-cdt-column="problem"][aria-hidden="true"]');
     this.problemCells = this.rows.locator('[data-cdt-column="problem"]');
     this.durationCells = this.rows.locator('[data-cdt-column="duration"]');
     this.secondTableHeaders = this.tables.nth(1).locator('[role="columnheader"]');
     this.discHeadingsInsideTables = this.tables.locator('.album-track-table__disc-heading');
+  }
+
+  async readPlayingSpectra(rowIndex = 0) {
+    // parity-check: allow-read-only-measurement-evaluate -- inspect both rendered spectra without changing playback or preferences
+    return this.rows.nth(rowIndex).evaluate((row) => ['::before', '::after'].map((pseudo) => {
+      const style = getComputedStyle(row, pseudo);
+      return { animation: style.animationName, display: style.display, opacity: style.opacity };
+    }));
   }
 
   async readFinalEdgeHandoff() {
@@ -29,5 +40,11 @@ export class AlbumTrackTable {
         footerCornerLayer: getComputedStyle(total, '::after').content,
       };
     });
+  }
+
+  async readRunningAnimationCount(rowIndex = 0) {
+    // parity-check: allow-read-only-measurement-evaluate -- measure running animations on the real playing row and its pseudo-elements
+    return this.rows.nth(rowIndex).evaluate((row) => row.getAnimations({ subtree: true })
+      .filter((animation) => animation.playState === 'running').length);
   }
 }

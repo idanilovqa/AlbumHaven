@@ -36,7 +36,7 @@ test('FTC-PLAYER-016 production playback crosses a sample-exact stable-stream bo
       await settingsModalAppBarActions.openSettings();
       await utilityTabBarActions.openTab('appearance');
       await utilityAppearanceActions.waitForReady();
-      await utilityAppearanceActions.selectSeekbarMode('waveform');
+      await utilityAppearanceActions.saveSeekbarMode('waveform');
       await settingsModalAppBarActions.closeSettings();
       await searchToolbarActions.search(gaplessPlaybackFixture.album, { submitWithEnter: true });
       await searchToolbarActions.waitForQuery(gaplessPlaybackFixture.album);

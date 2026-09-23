@@ -4,6 +4,7 @@ import pytest
 
 from fastapi import FastAPI
 
+from music_app.services.auth_config import build_auth_config
 from music_app.services.current_actor import (
     ActorState,
     CapabilityGrant,
@@ -127,12 +128,20 @@ def test_bootstrap_owner_is_allowed_and_actor_is_resolved_once():
     assert resolver.calls == ["opaque-session"]
 
 
-def test_authenticated_constraint_denial_is_403_and_origin_key_is_minimized():
+@pytest.mark.parametrize("secret", ["0123456789abcdef0123456789abcdef", "é" * 16])
+def test_authenticated_constraint_denial_is_403_and_origin_key_is_minimized(secret):
     captured = []
     app, _ = _app(
         _actor(bootstrap=True),
         constraints=PolicyEvaluationConstraints(client_surface_allowed=False),
     )
+    app.state.auth_policy_config = build_auth_config({
+        "ALBUM_HAVEN_AUTH_HMAC_SECRET": secret,
+        "ALBUM_HAVEN_AUTH_HMAC_KEY_VERSION": "7",
+        "ALBUM_HAVEN_BOOTSTRAP_USERNAME": "Rendref",
+        "ALBUM_HAVEN_BOOTSTRAP_EMAIL": "rendref@example.test",
+        "ALBUM_HAVEN_PUBLIC_BASE_URL": "https://music.test",
+    })
     app.state.policy_constraint_resolver = lambda context: (
         captured.append(context) or PolicyEvaluationConstraints(client_surface_allowed=False)
     )
@@ -142,6 +151,7 @@ def test_authenticated_constraint_denial_is_403_and_origin_key_is_minimized():
     assert status == 403
     assert captured[0].client_surface_class == "private_web"
     assert captured[0].request_origin.origin_type == "network"
+    assert captured[0].request_origin.origin_key.startswith("hmac:v7:")
     assert captured[0].request_origin.origin_key != "198.51.100.44"
     assert "198.51.100.44" not in repr(captured[0].request_origin)
 

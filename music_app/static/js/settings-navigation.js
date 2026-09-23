@@ -5,6 +5,9 @@
     || /^\/admin\/accounts\/(?:new|[0-9]+)$/.test(path);
   const isAccountPost = (path) => path === '/account/password'
     || path === '/account/password-suggestion/dismiss';
+  const historyPositionKey = 'albumHavenNavigationPosition';
+  const historyPosition = (state) => Number.isSafeInteger(state?.[historyPositionKey])
+    ? state[historyPositionKey] : null;
 
   function create({ document, window, fetch, DOMParser }) {
     const host = document.querySelector('[data-settings-host]');
@@ -14,7 +17,12 @@
     const library = document.querySelector('#app-shell');
     const error = document.querySelector('[data-settings-navigation-error]');
     let currentUrl = window.location.href;
+    let currentPosition = historyPosition(window.history.state) ?? 0;
+    window.history.replaceState({ ...window.history.state, [historyPositionKey]: currentPosition }, '', currentUrl);
+    let currentHistoryState = window.history.state;
+    let restoringPosition = null;
     let libraryUrl = library ? currentUrl : null;
+    let libraryHistoryState = currentHistoryState;
     let libraryTitle = document.title;
     let sequence = 0;
     let pending = null;
@@ -29,14 +37,33 @@
     };
     const reportError = () => {
       if (error) {
-        error.textContent = 'This page could not be loaded. Please try again.';
+        error.querySelector('.on-page-alert__message').textContent = 'This page could not be loaded. Please try again.';
+        const content = host.hidden && library
+          ? library.querySelector('#shell-main-surface') : outlet;
+        content?.prepend(error);
+        if (content) content.scrollTop = 0;
         error.hidden = false;
       }
     };
-    const updateHistory = (url, mode) => {
-      if (mode === 'push') window.history.pushState(null, '', url);
-      else if (mode === 'replace') window.history.replaceState(null, '', url);
+    const updateHistory = (url, mode, stateSnapshot = null) => {
+      const position = historyPosition(window.history.state) ?? currentPosition;
+      if (mode === 'push') window.history.pushState({ ...stateSnapshot, [historyPositionKey]: position + 1 }, '', url);
+      else if (mode === 'replace') window.history.replaceState({ ...window.history.state, [historyPositionKey]: position }, '', url);
+      currentPosition = historyPosition(window.history.state) ?? position;
+      currentHistoryState = window.history.state;
       currentUrl = url;
+    };
+    const restoreHistory = () => {
+      const position = historyPosition(window.history.state);
+      if (position !== null && position !== currentPosition) {
+        restoringPosition = currentPosition;
+        window.history.go(currentPosition - position);
+      } else {
+        // Legacy entries lack a position; retain the existing URL fallback and
+        // the displayed view's snapshot instead of replacing its state with null.
+        restoringPosition = null;
+        window.history.replaceState(currentHistoryState, '', currentUrl);
+      }
     };
     const mountContent = () => {
       const cleanups = [];
@@ -69,15 +96,19 @@
       window.NavigationTree.setSelection(nav, url.pathname === '/account' ? 'account' : 'users');
     };
 
-    async function navigate(value, { historyMode = 'push', method = 'GET', body } = {}) {
+    async function navigate(value, { historyMode = 'push', method = 'GET', body, leaveConfirmed = false } = {}) {
       const url = urlFor(value);
       const posting = method === 'POST' && url && isAccountPost(url.pathname);
       const returning = library && url && (url.href === libraryUrl || url.pathname === '/');
-      if (destroyed || !url || (!isSettingsPath(url.pathname) && !posting && !returning)) return false;
-      if (window.AlbumHavenAppearance?.instance?.allowLeave() === false) return false;
+      if (destroyed || restoringPosition !== null || !url || (!isSettingsPath(url.pathname) && !posting && !returning)) return false;
       const ownSequence = ++sequence;
-      navigationPending = true;
       pending?.abort();
+      navigationPending = false;
+      if (!leaveConfirmed && window.AlbumHavenAppearance?.instance?.allowLeave() === false) {
+        if (historyMode === 'none') restoreHistory();
+        return false;
+      }
+      navigationPending = true;
       pending = new AbortController();
       if (error) error.hidden = true;
       if (returning && !posting) {
@@ -86,7 +117,7 @@
         host.hidden = true;
         library.hidden = false;
         document.title = libraryTitle;
-        updateHistory(libraryUrl, historyMode);
+        updateHistory(libraryUrl, historyMode, libraryHistoryState);
         navigationPending = false;
         return true;
       }
@@ -117,6 +148,7 @@
         const displayedUrl = posting && !response.ok ? new URL('/account', url.origin) : destination;
         if (library && host.hidden && historyMode !== 'none') {
           libraryUrl = currentUrl = window.location.href;
+          libraryHistoryState = window.history.state;
           libraryTitle = document.title;
         }
         disposeContent();
@@ -134,7 +166,7 @@
         return true;
       } catch (failure) {
         if (ownSequence !== sequence || destroyed || failure.name === 'AbortError') return false;
-        if (historyMode === 'none') window.history.replaceState(null, '', currentUrl);
+        if (historyMode === 'none') restoreHistory();
         reportError();
         return false;
       } finally {
@@ -164,11 +196,27 @@
     const onPopState = (event) => {
       const url = urlFor(window.location.href);
       if (!url) return;
+      if (restoringPosition !== null) {
+        event.stopImmediatePropagation();
+        if (historyPosition(window.history.state) === restoringPosition) {
+          restoringPosition = null;
+          updateHistory(url.href, 'none');
+          if (library && host.hidden) libraryUrl = url.href;
+        } else restoreHistory();
+        return;
+      }
+      // A pop changes the address before prompting. Invalidate an older fetch
+      // even when this navigation is cancelled and its entry is restored.
+      ++sequence;
+      navigationPending = false;
+      pending?.abort();
+      if (window.AlbumHavenAppearance?.instance?.allowLeave() === false) {
+        event.stopImmediatePropagation();
+        restoreHistory();
+        return;
+      }
       if (!isSettingsPath(url.pathname)) {
         if (library) {
-          ++sequence;
-          navigationPending = false;
-          pending?.abort();
           if (!host.hidden) {
             disposeContent();
             outlet.replaceChildren();
@@ -177,13 +225,15 @@
             document.title = libraryTitle;
             if (url.href === libraryUrl) event.stopImmediatePropagation();
           }
-          libraryUrl = currentUrl = url.href;
+          updateHistory(url.href, 'none');
+          libraryUrl = url.href;
+          libraryHistoryState = window.history.state;
         }
         return;
       }
       // This capture listener runs before the gallery's existing bubble listener.
       event.stopImmediatePropagation();
-      void navigate(url.href, { historyMode: 'none' });
+      void navigate(url.href, { historyMode: 'none', leaveConfirmed: true });
     };
     document.addEventListener('click', onClick);
     document.addEventListener('submit', onSubmit);
@@ -191,6 +241,18 @@
     if (!host.hidden) mountContent();
     return {
       navigate,
+      pushLibraryHistory(url, stateSnapshot) {
+        // A cached library selection can commit without starting another fetch.
+        // Its history entry still supersedes any older Settings response/body.
+        ++sequence;
+        navigationPending = false;
+        pending?.abort();
+        pending = null;
+        updateHistory(new URL(url, window.location.href).href, 'push', stateSnapshot);
+        libraryUrl = currentUrl;
+        libraryHistoryState = currentHistoryState;
+        libraryTitle = document.title;
+      },
       destroy() {
         destroyed = true;
         ++sequence;

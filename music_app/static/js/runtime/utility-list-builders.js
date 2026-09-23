@@ -1,61 +1,11 @@
-﻿function buildUtilityLogHistoryListItem(item, selected) {
-  const timestamp = formatLogHistoryTimestamp(item?.timestamp);
-  const count = Number(item?.file_count || 0);
-  const summary = [item.artist, item.album, item.title].filter(Boolean).join(' - ');
-  return `
-    <button class="utility-list-item ${selected ? 'is-active' : ''}" type="button" data-utility-log-history-id="${escapeHtml(item.id || '')}">
-      <span class="utility-list-item-title">${escapeHtml(item.action || 'Activity')}</span>
-      <span class="utility-list-item-meta">${escapeHtml(summary || 'Unknown album')}</span>
-      <span class="utility-list-item-issues">${escapeHtml(timestamp || `${count} files`)}</span>
-    </button>
-  `;
+function buildUtilityLogHistoryListItem(item, selected) {
+  return window.NavigationTree.renderItem({ action: true, variant: 'panel', key: String(item.id), selected,
+    label: item.action || 'Activity', subtitle: [item.artist, item.album, item.title].filter(Boolean).join(' · ') || item.source || '',
+    year: formatLogHistoryTimestamp(item.timestamp), attributes: { 'data-utility-log-history-id': String(item.id) } });
 }
 
 function buildUtilityLogHistoryDetail(item) {
-  if (!item) {
-    return `
-      <div class="utility-empty-state">Select a log entry to inspect the saved file changes.</div>
-      <div class="confirm-modal-actions">
-        <button class="button button-secondary" type="button" data-export-log-history="1">Export Logs</button>
-      </div>
-    `;
-  }
-  const files = Array.isArray(item.files) ? item.files : [];
-  const downloaded = Number(item.downloaded || 0);
-  const notTouched = Number(item.not_touched ?? item.skipped ?? 0);
-  const notFound = Number(item.not_found ?? item.failed ?? 0);
-  const processed = Number(item.processed || 0);
-  const summaryParts = [
-    item.artist || '',
-    item.album || '',
-    item.title || '',
-    item.file_count ? `${item.file_count} file${Number(item.file_count) === 1 ? '' : 's'}` : '',
-  ].filter(Boolean);
-  const coverSummaryParts = [];
-  if (processed || downloaded || notTouched || notFound) {
-    coverSummaryParts.push(`Checked: ${processed}`);
-    coverSummaryParts.push(`Downloaded: ${downloaded}`);
-    coverSummaryParts.push(`Not touched: ${notTouched}`);
-    coverSummaryParts.push(`Not found: ${notFound}`);
-  }
-  return `
-    <div class="utility-rule-detail">
-      <h3 class="utility-rule-title">${escapeHtml(item.action || 'Activity')}</h3>
-      <p class="utility-rule-description">${escapeHtml(formatLogHistoryTimestamp(item.timestamp) || '')}</p>
-      <p class="utility-rule-description">${escapeHtml(item.source_label || 'This browser')}</p>
-      <div class="utility-rule-album-list">
-        <div class="utility-rule-group-meta">${escapeHtml(summaryParts.join(' - '))}</div>
-        ${coverSummaryParts.length ? `<div class="utility-rule-album-meta">${escapeHtml(coverSummaryParts.join(' | '))}</div>` : ''}
-        ${item.error ? `<div class="utility-rule-album-meta">${escapeHtml(item.error)}</div>` : ''}
-        ${files.length
-          ? `<div class="utility-log-history-files">${files.map((path) => `<div class="utility-log-history-file">${escapeHtml(path)}</div>`).join('')}</div>`
-          : '<div class="utility-empty-state compact">No downloaded cover paths recorded.</div>'}
-      </div>
-      <div class="confirm-modal-actions">
-        <button class="button button-secondary" type="button" data-export-log-history="1">Export Logs</button>
-      </div>
-    </div>
-  `;
+  return buildConsoleLog(item ? [item] : []);
 }
 
 function getSelectedUtilityLoop() {
@@ -74,17 +24,33 @@ function getSelectedUtilityLoopGroup() {
   return groups.find((group) => String(group?.key || '') === selectedKey) || null;
 }
 
+function getFilteredUtilityLoops() {
+  const query = String(state.utility.loopsSearchQuery || '').trim().toLocaleLowerCase();
+  const loops = state.utility.loops || [];
+  return query ? loops.filter(loop => [loop.name, loop.title, loop.artist, loop.album]
+    .some(value => String(value || '').toLocaleLowerCase().includes(query))) : loops;
+}
+
+function buildUtilityLoopMoveActions(loop) {
+  if (!canReorderUtilityLoop(loop)) return '';
+  return `<span class="utility-loop-reorder-actions" role="group" aria-label="Reorder ${escapeHtml(loop.name || 'Saved loop')}">${['up', 'down'].map(direction => window.ButtonComponent.renderButton({
+    label: `Move ${direction}`, size: 'small', ariaLabel: `Move ${loop.name || 'Saved loop'} ${direction}`,
+    attributes: { 'data-move-utility-loop': loop.id, 'data-loop-move-direction': direction },
+  })).join('')}</span>`;
+}
+
 function buildUtilityLoopEntry(loop) {
   const mediaSrc = `/loops/media/${encodeURIComponent(loop.id || '')}`;
   const loopId = escapeHtml(loop.id || '');
   const repeatEnabled = Boolean(state.utility.loopRepeatEnabled) && String(state.utility.selectedLoopId || '') === String(loop.id || '');
   return `
-    <section class="utility-loop-entry ${repeatEnabled ? 'is-active' : ''}" data-utility-loop-entry="${escapeHtml(loop.id || '')}">
+    <section class="utility-loop-entry ${repeatEnabled ? 'is-active' : ''}" data-utility-loop-entry="${escapeHtml(loop.id || '')}" data-loop-song-key="${escapeHtml(buildUtilityLoopGroupKey(loop))}" draggable="${canReorderUtilityLoop(loop)}">
+      ${buildUtilityLoopMoveActions(loop)}
       <div class="utility-loop-heading">
-        <div>
-          <h3 class="utility-detail-title">${escapeHtml(loop.name || 'Saved loop')}</h3>
-        </div>
-        <button class="icon-button utility-loop-remove" type="button" data-delete-saved-loop="${escapeHtml(loop.id || '')}" aria-label="Remove loop" title="Remove loop">&#128465;</button>
+        <span class="utility-loop-drag-handle" aria-hidden="true">⋮⋮</span>
+        <h3 class="utility-detail-title">${escapeHtml(loop.name || 'Saved loop')}</h3>
+        <span class="utility-loop-original-times"><span>Original timestamps</span><strong>${loop.original_start_seconds != null && loop.original_end_seconds != null ? `${formatLoopTime(loop.original_start_seconds, true)} – ${formatLoopTime(loop.original_end_seconds, true)}` : 'Unavailable'}</strong></span>
+        ${state.utility.allowedActions?.['library.loops.delete'] === true ? window.ButtonComponent.renderActionButton({ icon: 'delete', semantic: 'destructive', ariaLabel: `Delete ${loop.name || 'Saved loop'}`, title: `Delete ${loop.name || 'Saved loop'}`, className: 'utility-loop-remove', attributes: { 'data-delete-saved-loop': loop.id || '' } }) : ''}
       </div>
       <div class="utility-loop-shell" data-utility-loop-shell="${escapeHtml(loop.id || '')}">
         <audio class="utility-loop-audio" data-loop-audio="${escapeHtml(loop.id || '')}" data-original-src="${mediaSrc}" src="${mediaSrc}" preload="none"></audio>
@@ -103,6 +69,7 @@ function buildUtilityLoopEntry(loop) {
             <div class="utility-loop-time" data-loop-time="${loopId}">0:00 / 0:00</div>
           </div>
           <div class="utility-loop-timeline-wrap">
+            <canvas class="utility-loop-stereo-waveform" data-loop-stereo-waveform="${loopId}" aria-hidden="true" hidden></canvas>
             <input class="utility-loop-timeline" type="range" data-loop-timeline="${escapeHtml(loop.id || '')}" min="0" max="100" step="0.01" value="0" aria-label="Playback position">
             <div class="loop-range-surface" data-loop-range-owner="saved-loop-${loopId}" data-loop-range-surface hidden>
               <canvas class="utility-saved-loop-waveform" data-loop-range-waveform aria-hidden="true"></canvas>
@@ -139,10 +106,10 @@ function buildUtilityLoopDetail(loopGroup, selectedLoop = null) {
     return '<div class="utility-empty-state">Select a saved song to inspect its loops.</div>';
   }
   const representative = group.representativeLoop || group.loops[0];
-  const coverHtml = representative.cover_path
-    ? `<img class="utility-detail-cover-image" src="/cover?path=${encodeURIComponent(representative.cover_path)}" alt="Artwork for ${escapeHtml(representative.title || representative.name || 'loop')}">`
-    : '<div class="utility-detail-cover-placeholder">No artwork</div>';
-  const loopsToRender = selectedLoop ? [selectedLoop] : group.loops;
+  const coverHtml = buildUtilityAlbumArtbox(representative, {
+    label: `Artwork for ${representative.title || representative.name || 'loop'}`, interactive: true,
+  });
+  const loopsToRender = group.loops;
   const headerTitle = representative.title || representative.name || 'Saved loops';
   const artistLine = representative.artist || '';
   const albumLine = representative.album || '';
@@ -158,11 +125,11 @@ function buildUtilityLoopDetail(loopGroup, selectedLoop = null) {
             <div class="utility-detail-meta">${escapeHtml(albumLine || 'Unknown album')}</div>
             ${yearLine ? `<div class="utility-detail-meta">${escapeHtml(yearLine)}</div>` : ''}
           </div>
-          <div class="utility-detail-meta">${escapeHtml(selectedLoop ? '1 loop selected' : `${group.loops.length} saved loop${group.loops.length === 1 ? '' : 's'}`)}</div>
+          <div class="utility-detail-meta">${escapeHtml(`${group.loops.length} saved loop${group.loops.length === 1 ? '' : 's'}`)}</div>
         </div>
       </div>
       <div class="utility-loop-group-main">
-        <div class="utility-loop-entry-list">${loopsToRender.map((loop) => buildUtilityLoopEntry(loop)).join('')}</div>
+        <div class="utility-loop-entry-list" data-loop-panel-song="${escapeHtml(group.key || '')}">${loopsToRender.map((loop) => buildUtilityLoopEntry(loop)).join('')}</div>
       </div>
     </div>
   `;
@@ -186,16 +153,11 @@ function buildUtilityAppearanceDetail() {
 }
 
 function buildUtilityIntegrationListItem(item, selected) {
-  const status = String(item?.status_label || '').trim() || (item?.connected
-    ? 'Connected'
-    : (item?.api_configured ? 'Not connected' : 'Server setup required'));
-  return `
-    <button class="utility-list-item ${selected ? 'is-active' : ''}" type="button" data-utility-integration-key="${escapeHtml(item?.key || '')}">
-      <span class="utility-list-item-title">${escapeHtml(item?.title || 'Integration')}</span>
-      <span class="utility-list-item-meta">${escapeHtml(item?.description || '')}</span>
-      <span class="utility-list-item-issues">${escapeHtml(status)}</span>
-    </button>
-  `;
+  return window.NavigationTree.renderItem({
+    action: true, variant: 'panel', key: String(item?.key || ''), selected,
+    label: item?.title || 'Integration',
+    attributes: { 'data-utility-integration-key': String(item?.key || '') },
+  });
 }
 
 function buildLastfmTimeZoneOptions(selectedTimeZone) {
@@ -211,208 +173,85 @@ function buildLastfmTimeZoneOptions(selectedTimeZone) {
 }
 
 function buildUtilityIntegrationDetail(item) {
-  if (item?.key === 'library') {
-    return buildUtilityLibrarySettingsDetail(item);
-  }
+  const button = options => window.ButtonComponent.renderButton(options);
+  if (item?.key === 'library') return buildUtilityLibrarySettingsDetail(item);
   if (item?.key === 'local_playlist_import') {
-    const importState = state.utility?.localPlaylistImport || {};
-    const supportedExtensions = Array.isArray(item.supported_extensions) ? item.supported_extensions : [];
-    const targetOptions = Array.isArray(item.target_options) ? item.target_options : [];
-    const lastAnalysis = importState.lastAnalysis && typeof importState.lastAnalysis === 'object' ? importState.lastAnalysis : null;
-    const blockedTargets = Array.isArray(lastAnalysis?.target_recommendation?.blocked_targets)
-      ? lastAnalysis.target_recommendation.blocked_targets
-      : [];
-    const targetRows = targetOptions.length
-      ? targetOptions.map((target) => `
-        <div class="utility-rule-album-row">
-          <div class="utility-rule-album-main">
-            <div class="utility-rule-album-title">${escapeHtml(target.title || target.key || 'Target')}</div>
-            <div class="utility-rule-album-meta">${escapeHtml(target.description || '')}</div>
-          </div>
-        </div>
-      `).join('')
-      : '<div class="utility-empty-state compact">Target rules will land here later.</div>';
-    const blockedRows = blockedTargets.length
-      ? blockedTargets.map((blocked) => `<div class="utility-rule-album-meta">Album Top unavailable: ${escapeHtml(blocked.reason || '')}</div>`).join('')
-      : '';
-    const analysisHtml = lastAnalysis ? `
-      <section class="utility-rule-album-list">
-        <div class="utility-rule-album-title">${escapeHtml(lastAnalysis.status?.label || 'Preview contract ready')}</div>
-        <div class="utility-rule-album-meta">${escapeHtml(lastAnalysis.status?.detail || '')}</div>
-        <div class="utility-rule-album-meta">${escapeHtml(lastAnalysis.source?.filename || '')}</div>
-        <div class="utility-rule-album-meta">${escapeHtml(lastAnalysis.source?.source_kind || '')}</div>
-        <div class="utility-rule-album-meta">${escapeHtml(lastAnalysis.source?.parser_mode || '')}</div>
-        <div class="utility-rule-album-meta">Recommended target: ${escapeHtml(lastAnalysis.target_recommendation?.recommended_target || 'playlist')}</div>
-        ${blockedRows}
-      </section>
-    ` : '<div class="utility-empty-state compact">Select a local playlist file to prepare the analyze/preview contract.</div>';
-    const completionPreview = lastAnalysis?.local_library_completion && typeof lastAnalysis.local_library_completion === 'object'
-      ? lastAnalysis.local_library_completion
-      : (item.local_library_completion && typeof item.local_library_completion === 'object' ? item.local_library_completion : {});
-    const importStatus = item.import_status && typeof item.import_status === 'object' ? item.import_status : {};
-    return `
-      <div class="utility-rule-detail">
-        <h3 class="utility-rule-title">${escapeHtml(item.title || 'Import Local Playlist')}</h3>
-        <p class="utility-rule-description">${escapeHtml(item.description || '')}</p>
-        <div class="utility-rule-album-meta">${escapeHtml(item.status_label || 'Analyze/preview contract ready')}</div>
-        <div class="utility-rule-album-meta">Supports: ${escapeHtml(supportedExtensions.join(', ') || 'No playlist formats configured yet.')}</div>
-        <div class="utility-loop-create-row">
-          <input type="file" data-local-playlist-import-file accept="${escapeHtml(supportedExtensions.join(','))}">
-          <button class="button" type="button" data-analyze-local-playlist="1" ${importState.analyzeBusy ? 'disabled' : ''}>${importState.analyzeBusy ? 'Analyzing...' : 'Analyze playlist'}</button>
-        </div>
-        <div class="utility-rule-album-meta">${escapeHtml(importState.selectedFileName || 'No file selected')}</div>
-        ${importState.error ? `<div class="utility-rule-album-meta">${escapeHtml(importState.error)}</div>` : ''}
-        ${analysisHtml}
-        ${buildUtilityCollapsibleSection('local-playlist-import-targets', 'Target direction', targetRows)}
-        ${buildUtilityCollapsibleSection('local-playlist-import-completion', completionPreview.label || 'Completion preview direction reserved', `<div class="utility-rule-album-meta">${escapeHtml(completionPreview.detail || '')}</div>`)}
-        ${buildUtilityCollapsibleSection('local-playlist-import-status', importStatus.label || 'Final import execution lands later', `<div class="utility-rule-album-meta">${escapeHtml(importStatus.detail || '')}</div>`)}
-      </div>
-    `;
+    return `<div class="utility-rule-detail"><h3 class="utility-rule-title">Import Local Playlist</h3><div class="settings-integration-actions">${button({ label: 'Import', disabled: true, attributes: { 'data-local-playlist-import': '1' } })}</div></div>`;
   }
   if (item?.key === 'foobar') {
-    const sourceFamilies = Array.isArray(item.source_families) ? item.source_families : [];
-    const referenceAssets = Array.isArray(item.reference_assets) ? item.reference_assets : [];
-    const writeBackScopes = Array.isArray(item.write_back_scopes) ? item.write_back_scopes : [];
-    const continuousSync = item.continuous_sync && typeof item.continuous_sync === 'object' ? item.continuous_sync : {};
-    const sourceFamilyRows = sourceFamilies.length
-      ? sourceFamilies.map((family) => `
-        <div class="utility-rule-album-row">
-          <div class="utility-rule-album-main">
-            <div class="utility-rule-album-title">${escapeHtml(family.title || 'Source family')}</div>
-            <div class="utility-rule-album-meta">${escapeHtml(family.description || '')}</div>
-          </div>
-        </div>
-      `).join('')
-      : '<div class="utility-empty-state compact">Source-family contract details will land here later.</div>';
-    const writeBackLabels = writeBackScopes.length
-      ? writeBackScopes.map((scope) => `<span class="utility-track-problem-chip utility-rule-problem-chip">${escapeHtml(scope)}</span>`).join('')
-      : '<span class="utility-rule-album-meta">No write-back scopes configured.</span>';
-    const assetRows = referenceAssets.length
-      ? referenceAssets.map((asset) => `
-        <div class="utility-rule-album-row">
-          <div class="utility-rule-album-main">
-            <div class="utility-rule-album-title">${escapeHtml(asset.title || asset.filename || 'Reference asset')}</div>
-            <div class="utility-rule-album-meta">${escapeHtml(asset.description || '')}</div>
-          </div>
-          <div class="confirm-modal-actions">
-            <a class="button button-secondary" href="${escapeHtml(asset.view_url || '#')}" target="_blank" rel="noreferrer">View</a>
-            <a class="button button-secondary" href="${escapeHtml(asset.download_url || '#')}" target="_blank" rel="noreferrer">Download</a>
-          </div>
-        </div>
-      `).join('')
-      : '<div class="utility-empty-state compact">No reference assets are available yet.</div>';
-    return `
-      <div class="utility-rule-detail">
-        <h3 class="utility-rule-title">${escapeHtml(item.title || 'Foobar2000')}</h3>
-        <p class="utility-rule-description">${escapeHtml(item.description || 'Help-first Foobar setup guidance.')}</p>
-        <div class="utility-rule-album-list">
-          <div class="utility-rule-album-meta">${escapeHtml(item.status_label || 'How To and reference assets ready')}</div>
-          <div class="utility-rule-album-meta">${escapeHtml(continuousSync.label || 'Continuous Foobar sync')}: ${escapeHtml(continuousSync.enabled ? 'Enabled' : (continuousSync.default_state || 'off'))}</div>
-          <div class="utility-rule-album-meta">When off: ${escapeHtml(continuousSync.disabled_behavior || 'One-time import only')}</div>
-          <div class="utility-rule-album-meta">When enabled later: ${escapeHtml(continuousSync.cadence_when_enabled || 'Once a week')}</div>
-          <div class="utility-rule-album-meta">Problems first surface in ${escapeHtml(item.problem_surface || 'Utilities > Problematic Files')}.</div>
-          ${item.help_route ? `<div class="utility-rule-album-meta">Foobar help contract: <a href="${escapeHtml(item.help_route)}" target="_blank" rel="noreferrer">${escapeHtml(item.help_route)}</a></div>` : ''}
-        </div>
-        <div class="utility-divider" aria-hidden="true"></div>
-        <div class="utility-rule-album-list">
-          <div class="utility-rule-album-meta">SOURCE FAMILIES</div>
-          ${sourceFamilyRows}
-        </div>
-        <div class="utility-divider" aria-hidden="true"></div>
-        <div class="utility-rule-album-list">
-          <div class="utility-rule-album-meta">V1 WRITE-BACK SCOPE</div>
-          <div class="utility-rule-problem-labels">${writeBackLabels}</div>
-        </div>
-        <div class="utility-divider" aria-hidden="true"></div>
-        <div class="utility-rule-album-list">
-          <div class="utility-rule-album-meta">REFERENCE ASSETS</div>
-          ${assetRows}
-        </div>
-      </div>
-    `;
+    const format = state.utility.foobarFormat || 'Playback Statistics XML';
+    return `<div class="utility-rule-detail"><h3 class="utility-rule-title">Foobar2000</h3>
+      <section class="library-settings-section"><label class="lastfm-inline-field"><span>SQLite database</span><input class="utility-search-input" type="text" placeholder="SQLite database path" disabled aria-describedby="foobar-unavailable"></label>
+      <div class="settings-integration-actions">${button({ label: 'Save', disabled: true })}</div></section>
+      <section class="library-settings-section"><h4>Import playback history</h4><div class="settings-integration-actions">
+      ${button({ label: format, attributes: { 'data-foobar-format-trigger': '1', 'aria-haspopup': 'menu', 'aria-expanded': 'false' } })}
+      ${button({ label: 'Import', disabled: true, attributes: { 'data-foobar-import': '1' } })}</div>
+      <p id="foobar-unavailable">Import is unavailable in this build. Setup instructions and export references are available.</p></section>
+      <div class="settings-integration-actions settings-instructions-action">${button({ label: 'Read setup instructions', attributes: { 'data-foobar-help': '1' } })}</div></div>`;
   }
-  if (!item || item.key !== 'lastfm') {
-    return '<div class="utility-empty-state">Select an integration.</div>';
-  }
-  const draft = state.utility.integrationDrafts?.lastfm || { username: '', password: '', timezone: '' };
-  const username = draft.username || item.username || '';
-  const historyCount = Number(item.listen_history_count || 0);
-  const pendingCount = Number(item.pending_scrobble_count || 0);
-  const connectedAt = item.connected_at ? (formatLogHistoryTimestamp(item.connected_at) || item.connected_at) : '';
-  const selectedTimeZone = String(draft.timezone || item.user_timezone || getDetectedBrowserTimeZone() || 'UTC');
-  const headerText = item.connected
-    ? `Last.FM · Connected as ${item.username || 'Connected'}${connectedAt ? ` (${connectedAt})` : ''}`
-    : 'Last.FM';
-  return `
-    <div class="utility-rule-detail">
-      <h3 class="utility-rule-title lastfm-header-title">${item.connected ? '<span class="lastfm-status-check" aria-hidden="true">&#10003;</span>' : ''}${escapeHtml(headerText)}</h3>
-      <p class="utility-rule-description">Connect your LastFM account to scrobble and import your listening history</p>
-      <div class="utility-rule-album-list">
-        <div class="utility-rule-album-meta">Scrobbled: ${escapeHtml(String(historyCount))}. Queued: ${escapeHtml(String(pendingCount))}</div>
-        ${item.api_configured
-          ? ''
-          : '<div class="utility-rule-album-meta">The server still needs `LASTFM_API_KEY` and `LASTFM_API_SECRET` configured before this integration can connect.</div>'}
-      </div>
-      <form class="lastfm-integration-form" data-lastfm-integration-form="1">
-        <div class="lastfm-credentials-grid">
-          <label class="lastfm-inline-field">
-            <span>Username</span>
-            <input type="text" value="${escapeHtml(username)}" data-lastfm-field="username" autocomplete="username" placeholder="Username or email" ${(item.api_configured && !item.connected) ? '' : 'disabled'}>
-          </label>
-          <label class="lastfm-inline-field">
-            <span>Password</span>
-            <input type="password" value="${escapeHtml(draft.password || '')}" data-lastfm-field="password" autocomplete="current-password" placeholder="${item.connected ? 'Disconnect to reconnect' : 'Password'}" ${(item.api_configured && !item.connected) ? '' : 'disabled'}>
-          </label>
-        </div>
-        <div class="confirm-modal-actions">
-          <button class="button" type="submit" data-save-lastfm-integration="1" ${(item.api_configured && !item.connected) ? '' : 'disabled'}>Connect Last.FM</button>
-          <button class="button button-secondary" type="button" data-disconnect-lastfm-integration="1" ${item.connected ? '' : 'disabled'}>Disconnect</button>
-        </div>
-      </form>
-      <div class="utility-divider" aria-hidden="true"></div>
-      <div class="utility-rule-album-list">
-        <div class="utility-rule-album-meta">TIMEZONE</div>
-      </div>
-      <div class="lastfm-credentials-grid">
-        <label class="lastfm-inline-field">
-          <span>Timezone</span>
-          <select data-lastfm-field="timezone">
-            ${buildLastfmTimeZoneOptions(selectedTimeZone)}
-          </select>
-        </label>
-      </div>
-      <div class="confirm-modal-actions">
-        <button class="button button-secondary" type="button" data-save-lastfm-timezone="1" ${selectedTimeZone ? '' : 'disabled'}>Save timezone</button>
-      </div>
-    </div>
-  `;
+  if (!item || item.key !== 'lastfm') return '<div class="utility-empty-state">Select an integration.</div>';
+  const draft = state.utility.integrationDrafts?.lastfm || {};
+  const enabled = item.api_configured && !item.connected;
+  const statistics = item.playback_statistics;
+  const plays = statistics && Number.isFinite(Number(statistics.local_playcount)) ? String(statistics.local_playcount) : 'Unavailable';
+  const seconds = statistics ? Number(statistics.total_listening_seconds) : NaN;
+  const minutes = Math.floor(seconds / 60), hours = Math.floor(minutes / 60);
+  const duration = Number.isFinite(seconds) && seconds >= 0
+    ? `${hours ? `${hours} ${hours === 1 ? 'hour' : 'hours'} ` : ''}${minutes % 60} ${minutes % 60 === 1 ? 'minute' : 'minutes'}` : 'Unavailable';
+  const scrobbleState = state.utility.lastfmScrobbles || {};
+  const summary = scrobbleState.summary;
+  const scrobbled = summary?.scrobbled ?? item.listen_history_count ?? 0;
+  const pending = summary?.pending ?? item.pending_scrobble_count ?? 0;
+  const lastfmTotal = scrobbleState.loading
+    ? 'Loading...'
+    : summary?.lastfm_total == null ? 'Unavailable' : String(summary.lastfm_total);
+  const scrobbleStatus = item.connected ? `<div class="lastfm-scrobble-status" aria-label="Last.fm scrobble status">
+      <p data-lastfm-scrobbled>Scrobbled: ${escapeHtml(String(scrobbled))}</p>
+      <p data-lastfm-total>LastFM Total: ${escapeHtml(lastfmTotal)}</p>
+      <p data-lastfm-pending>Pending: ${escapeHtml(String(pending))}</p>
+    </div>` : '';
+  const submitScrobbles = item.connected ? `<div class="settings-lastfm-submit-action">${button({
+    label: scrobbleState.submitting ? 'Submitting...' : 'Submit',
+    disabled: scrobbleState.submitting || Number(pending) <= 0 || summary?.can_submit !== true,
+    attributes: { 'data-submit-lastfm-scrobbles': '1' },
+  })}</div>` : '';
+  return `<div class="utility-rule-detail"><h3 class="utility-rule-title settings-scrobbling-heading">Last.FM
+      ${item.connected ? '<span class="settings-connected-status"><span aria-hidden="true">&#10003;</span><span>Connected</span></span>' : ''}</h3>
+    ${scrobbleStatus}
+    <form class="lastfm-integration-form" data-lastfm-integration-form="1"><div class="lastfm-credentials-grid">
+      <label class="lastfm-inline-field"><span>Username</span><input class="utility-search-input" type="text" value="${escapeHtml(draft.username || item.username || '')}" data-lastfm-field="username" autocomplete="username" placeholder="Username or email" ${enabled ? '' : 'disabled'}></label>
+      <label class="lastfm-inline-field"><span>Password</span><input class="utility-search-input" type="password" value="${escapeHtml(draft.password || '')}" data-lastfm-field="password" autocomplete="current-password" placeholder="${item.connected ? 'Disconnect to reconnect' : 'Password'}" ${enabled ? '' : 'disabled'}></label></div>
+      <div class="settings-integration-actions">${button({ label: 'Connect Last.FM', type: 'submit', disabled: !enabled, attributes: { 'data-save-lastfm-integration': '1' } })}
+      ${button({ label: 'Disconnect', disabled: !item.connected, attributes: { 'data-disconnect-lastfm-integration': '1' } })}</div></form>
+      ${!item.api_configured ? '<p class="utility-rule-album-meta">Last.FM connection is unavailable on this server.</p>' : ''}
+      <section class="library-settings-section settings-playback-statistics"><h4>Playback statistics</h4><dl><div><dt>Local playcount</dt><dd>${escapeHtml(plays)}</dd></div><div><dt>Total listening time</dt><dd>${escapeHtml(duration)}</dd></div></dl></section>
+      ${submitScrobbles}</div>`;
+}
+
+function matchesUtilityRuleSearch(item) {
+  const query = String(state.utility.rulesSearchQuery || '').trim().toLocaleLowerCase();
+  if (!query) return true;
+  return [item?.name, item?.artist, item?.album_artist, item?.album, item?.title,
+    item?.filename, item?.year, item?.edition, item?.problem_reason, item?.reason]
+    .filter(value => value !== null && value !== undefined)
+    .join(' ').toLocaleLowerCase().includes(query);
 }
 
 function buildVersionExceptionRuleDetail(rule) {
-  const albums = Array.isArray(rule?.albums) ? rule.albums : [];
-  const rows = albums.length
-    ? albums.map((album) => {
-      const title = [album.album_artist, album.name, album.year].filter(Boolean).join(' - ');
-      return `
-        <div class="utility-rule-album-row">
-          <div class="utility-rule-album-main">
-            <div class="utility-rule-album-title">${escapeHtml(title || album.key || 'Unknown album')}</div>
-            <div class="utility-rule-album-meta">${escapeHtml(album.edition ? `Edition: ${album.edition}` : 'Excluded from album version tabs')}</div>
-          </div>
-          <button class="button utility-rule-revert" type="button" data-revert-version-exception="${escapeHtml(album.key || '')}">Revert rule</button>
-        </div>
-      `;
-    }).join('')
-    : '<div class="utility-empty-state">No albums currently use this rule.</div>';
-  return `
-    <div class="utility-rule-detail">
-      <h3 class="utility-rule-title">${escapeHtml(rule?.title || 'Version exceptions')}</h3>
-      <p class="utility-rule-description">${escapeHtml(rule?.description || 'Albums listed here are not counted as versions of another album with the same title.')}</p>
-      <div class="utility-rule-album-list">${rows}</div>
-    </div>
-  `;
+  const albums = (Array.isArray(rule?.albums) ? rule.albums : []).filter(matchesUtilityRuleSearch);
+  const table = albums.length ? buildUtilityCompactTable({
+    id: 'version-exceptions', ariaLabel: 'Version exceptions',
+    columns: 'minmax(220px,1fr) minmax(180px,1fr) 110px',
+    columnsConfig: [{ key: 'target', label: 'Artist / Album' }, { key: 'effect', label: 'Rule' }, { key: 'action', label: 'Actions', header: 'screen-reader', action: true }],
+    headers: 'visible', density: 'compact', overflow: 'local', mobile: 'stack', frame: 'outline', actionTrackWidth: '110px',
+    rows: albums.map(album => ({ key: album.key, cells: {
+      target: `<span class="utility-rule-target">${buildUtilityAlbumArtbox(album, { label: `Artwork for ${album.name || 'album'}` })}<span><span class="utility-rule-album-title">${escapeHtml(album.name || album.key || 'Unknown album')}</span><span class="utility-rule-album-meta">${escapeHtml([album.album_artist, album.year].filter(Boolean).join(' · '))}</span></span></span>`,
+      effect: escapeHtml(album.edition ? `Edition: ${album.edition}` : 'Excluded from album version tabs'),
+      action: ButtonComponent.renderButton({ label: 'Revert rule', className: 'utility-rule-revert', attributes: { 'data-revert-version-exception': album.key || '' } }),
+    } })),
+  }) : `<p class="utility-detail-meta">${rule?.albums?.length ? 'No version exceptions match your search.' : 'No version exceptions yet.'}</p>`;
+  return `<div class="utility-rule-detail"><h3 class="utility-rule-title">${escapeHtml(rule?.title || 'Version exceptions')}</h3><p class="utility-rule-description">${escapeHtml(rule?.description || 'Albums listed here are not counted as versions of another album with the same title.')}</p>${table}</div>`;
 }
-
 function buildUtilityCompactTable(config) {
   if (typeof buildCompactDataTable !== 'function') {
     throw new Error('CompactDataTable is not registered.');
@@ -421,9 +260,9 @@ function buildUtilityCompactTable(config) {
 }
 
 function buildProblemIgnoresRuleDetail(rule) {
-  const albumItems = Array.isArray(rule?.album_items) ? rule.album_items : [];
-  const fileItems = Array.isArray(rule?.file_items) ? rule.file_items : [];
-  if (albumItems.length || fileItems.length) {
+  const albumItems = (Array.isArray(rule?.album_items) ? rule.album_items : []).filter(matchesUtilityRuleSearch);
+  const fileItems = (Array.isArray(rule?.file_items) ? rule.file_items : []).filter(matchesUtilityRuleSearch);
+  if (Array.isArray(rule?.album_items) || Array.isArray(rule?.file_items)) {
     const columns = 'minmax(220px,.42fr) minmax(180px,.58fr) 88px';
     const columnsConfig = (targetLabel) => [
       { key: 'target', label: targetLabel },
@@ -463,18 +302,18 @@ function buildProblemIgnoresRuleDetail(rule) {
       <div class="utility-rule-detail utility-problem-exclusions-detail">
         <h3 class="utility-rule-title">${escapeHtml(rule?.title || 'Problem exclusions')}</h3>
         <p class="utility-rule-description">${escapeHtml(rule?.description || 'Album or file problems excluded from Problematic Files.')}</p>
-        <section class="utility-problem-exclusion-group">
+        ${albumItems.length ? `<section class="utility-problem-exclusion-group">
           <h4 class="utility-detail-section-title">ALBUM EXCLUSIONS</h4>
-          ${albumItems.length ? table(albumItems, 'Artist / Album', 'Album exclusions', 'problem-exclusions-album', 'album') : '<div class="utility-empty-state compact">No album exclusions.</div>'}
-        </section>
-        <section class="utility-problem-exclusion-group">
+          ${table(albumItems, 'Artist / Album', 'Album exclusions', 'problem-exclusions-album', 'album')}
+        </section>` : ''}
+        ${fileItems.length ? `<section class="utility-problem-exclusion-group">
           <h4 class="utility-detail-section-title">FILE EXCLUSIONS</h4>
-          ${fileItems.length ? table(fileItems, 'Filename', 'File exclusions', 'problem-exclusions-file', 'file') : '<div class="utility-empty-state compact">No file exclusions.</div>'}
-        </section>
+          ${table(fileItems, 'Filename', 'File exclusions', 'problem-exclusions-file', 'file')}
+        </section>` : ''}
       </div>
     `;
   }
-  const items = Array.isArray(rule?.items) ? rule.items : [];
+  const items = (Array.isArray(rule?.items) ? rule.items : []).filter(matchesUtilityRuleSearch);
   const groups = groupProblemIgnoreItems(items);
   const rows = groups.length
     ? groups.map((group) => {
@@ -557,7 +396,7 @@ function buildDetectedProblemsHtml(album) {
       <div class="utility-album-problem-list">
         <div class="utility-problem-level-heading"><span>ALBUM-LEVEL PROBLEMS</span></div>
         <div class="utility-album-problem-content">
-          <span class="utility-track-problem-chip">Album not found</span>
+          ${buildAlertLabelHtml({ severity: 'error', message: 'Album not found' })}
         </div>
       </div>
       <div class="utility-detected-actions utility-missing-album-actions">
@@ -567,94 +406,89 @@ function buildDetectedProblemsHtml(album) {
       </div>
     `;
   }
-  const rows = Array.isArray(album?.track_problem_rows) ? album.track_problem_rows : [];
-  const albumRows = Array.isArray(album?.album_problem_rows)
-    ? album.album_problem_rows
-    : (Array.isArray(album?.problem_reasons) ? album.problem_reasons : []).map((reason) => ({
-      reason,
-      row_key: '',
-    }));
-  const separateCandidate = album?.separate_release_candidate || null;
-  const separateKey = String(separateCandidate?.key || '');
-  const separateSelected = Boolean(separateKey && state.utility.separateReleaseSelections[separateKey]);
-  const hasExclusionSelection = getIgnoredRepairRowKeys().length > 0;
-  const hasProblemRows = albumRows.length || rows.length;
-  const actionHtml = (albumRows.length || rows.length || separateKey) ? `
-    <div class="utility-detected-actions">
-      ${separateKey ? `
-        <label class="utility-separate-release-choice ${separateSelected ? 'is-active' : ''}">
-          <input type="checkbox" data-separate-release-key="${escapeHtml(separateKey)}" ${separateSelected ? 'checked' : ''}>
-          <span>Separate releases</span>
-          <small>${escapeHtml((separateCandidate.years || []).join(' / '))}</small>
-        </label>
-        <button class="button utility-detail-apply" type="button" data-open-separate-release-confirm="1" ${separateSelected ? '' : 'disabled'}>Apply separate releases</button>
-      ` : ''}
-      ${hasProblemRows ? `<button class="button utility-detail-apply" type="button" data-open-exclusion-confirm="1" ${hasExclusionSelection ? '' : 'disabled'}>Exclude the problem</button>` : ''}
-    </div>
-  ` : '';
-  const albumProblemMarkup = albumRows.map((item) => {
-    const rowKey = String(item?.row_key || '');
-    const selected = Boolean(rowKey && state.utility.problemExclusionSelections?.[rowKey]);
-    return `<button class="utility-track-problem-chip utility-problem-exclusion-pill ${selected ? 'is-active' : ''}" type="button" data-problem-exclusion-scope="album" data-problem-exclusion-row-key="${escapeHtml(rowKey)}" data-problem-exclusion-reason="${escapeHtml(item?.reason || '')}" aria-pressed="${selected ? 'true' : 'false'}" ${rowKey ? '' : 'disabled'}>${escapeHtml(item?.display_reason || item?.reason || '')}</button>`;
-  }).join('');
-  const trackTable = buildUtilityCompactTable({
-    id: 'problematic-track-problems',
-    ariaLabel: 'Track-level problems',
-    columns: 'minmax(220px,.42fr) minmax(300px,.58fr)',
-    columnsConfig: [
-      { key: 'filename', label: 'Filename' },
-      { key: 'reason', label: 'Reason' },
-    ],
-    headers: 'visible',
-    density: 'compact',
-    overflow: 'local',
-    mobile: 'preserve',
-    frame: 'inset',
-    rows: rows.map((row, rowIndex) => ({
-      key: String(row.path || ''),
-      dataAttributes: { 'problematic-track-path': String(row.path || '') },
-      cells: {
-        filename: `<span class="utility-track-problem-file" data-problematic-track-path="${escapeHtml(row.path || '')}" title="${escapeHtml(row.path || row.filename || '')}">${escapeHtml(row.filename || getFilenameFromPath(row.path) || 'Unknown file')}</span>`,
-        reason: `<span class="utility-track-problem-labels">${(Array.isArray(row.reasons) ? row.reasons : []).map((reason) => {
-          const match = (Array.isArray(row.ignorable_reasons) ? row.ignorable_reasons : []).find((item) => item.reason === reason);
-          const rowKey = String(match?.row_key || '');
-          const selected = Boolean(rowKey && state.utility.problemExclusionSelections?.[rowKey]);
-          return `<button class="utility-track-problem-chip utility-problem-exclusion-pill ${selected ? 'is-active' : ''}" type="button" data-problem-exclusion-scope="file" data-problem-exclusion-row-key="${escapeHtml(rowKey)}" data-problem-exclusion-reason="${escapeHtml(reason)}" data-problem-exclusion-row-index="${rowIndex}" aria-pressed="${selected ? 'true' : 'false'}" ${rowKey ? '' : 'disabled'}>${escapeHtml(reason)}</button>`;
-        }).join('')}</span>`,
-      },
-    })),
+  const rows = (Array.isArray(album?.track_problem_rows) ? album.track_problem_rows : []).map(row => ({ ...row }));
+  const proposals = getVisibleProblemSuggestions(album);
+  proposals.forEach(proposal => {
+    if (!rows.some(row => row.path === proposal.path)) rows.push({ path: proposal.path, filename: getFilenameFromPath(proposal.path), reasons: [], ignorable_reasons: [] });
   });
-  const trackProblemMarkup = rows.length ? `
-    <div class="utility-track-problem-table">
-      <div class="utility-problem-level-heading"><span>TRACK-LEVEL PROBLEMS</span><span class="utility-problem-count">${escapeHtml(rows.length)}</span></div>
-      ${trackTable}
-    </div>
-  ` : '';
-  return `
-    <div class="sr-only" data-problem-exclusion-status role="status" tabindex="-1">${albumRows.length || rows.length ? '' : 'No problems remain.'}</div>
-    <div class="utility-album-problem-list">
-      <div class="utility-problem-level-heading"><span>ALBUM-LEVEL PROBLEMS</span></div>
-      <div class="utility-album-problem-content">${albumProblemMarkup}</div>
-    </div>
-    ${trackProblemMarkup}
-    ${actionHtml}
-  `;
+  const selectedFilters = (state.utility.selectedProblemFilters || []).map(normalizeProblemFilterReason);
+  const visibleReason = reason => !selectedFilters.length || selectedFilters.includes(normalizeProblemFilterReason(reason));
+  const coverReasons = new Set(['Missing cover art', 'Poor art quality']);
+  const albumRows = Array.isArray(album?.album_problem_rows) ? album.album_problem_rows
+    : (album.problem_reasons || []).map(reason => ({ reason, row_key: '' }));
+  const albumProblems = albumRows.filter(item => visibleReason(item.reason)).map(item => {
+    const matching = getIgnorableProblemRows(album).filter(row => normalizeProblemFilterReason(row.reason) === normalizeProblemFilterReason(item.reason));
+    const keys = matching.map(row => String(row.row_key || '')).filter(Boolean);
+    return buildAlertLabelHtml({
+      severity: 'error', message: item.reason === 'Missing year' ? 'Missing year' : item.display_reason || item.reason, interactive: true,
+      pressed: keys.length > 0 && keys.every(key => state.utility.problemExclusionSelections?.[key]),
+      disabled: !keys.length,
+      className: 'utility-problem-exclusion-pill',
+      attributes: { 'data-album-problem-type': normalizeProblemFilterReason(item.reason), 'data-problem-exclusion-reason': item.reason },
+    });
+  }).join('');
+  const tableRows = rows.map((row, rowIndex) => {
+    const track = (album.tracks || []).find(item => item.path === row.path) || {};
+    const reasons = (row.reasons || []).filter(reason => !coverReasons.has(reason) && visibleReason(reason));
+    const suggestions = proposals.filter(proposal => proposal.path === row.path);
+    if (!reasons.length && !suggestions.length) return null;
+    return {
+      key: String(row.path || ''), dataAttributes: { 'problematic-track-path': String(row.path || '') },
+      cells: {
+        filename: `<span class="utility-track-problem-file" data-problematic-track-path="${escapeHtml(row.path || '')}">${escapeHtml(track.title || row.filename || getFilenameFromPath(row.path) || 'Unknown file')}</span><span class="utility-detail-meta">${escapeHtml([track.artist, row.file_type].filter(Boolean).join(' · '))}</span>`,
+        reason: `<span class="utility-track-problem-labels">${reasons.map(reason => {
+          const match = (row.ignorable_reasons || []).find(item => item.reason === reason);
+          const rowKey = String(match?.row_key || '');
+          return buildAlertLabelHtml({
+            severity: 'error', message: reason, interactive: true, pressed: Boolean(state.utility.problemExclusionSelections?.[rowKey]),
+            disabled: !rowKey, className: 'utility-problem-exclusion-pill',
+            attributes: { 'data-problem-exclusion-scope': 'file', 'data-problem-exclusion-row-key': rowKey,
+              'data-problem-exclusion-reason': normalizeProblemFilterReason(reason), 'data-problem-exclusion-row-index': rowIndex },
+          });
+        }).join('')}</span>`,
+        suggested: `<span class="utility-suggestion-labels">${suggestions.map(proposal => buildAlertLabelHtml({
+          severity: 'info', message: formatProblemSuggestionLabel(proposal), interactive: true,
+          pressed: Boolean(state.utility.proposalSelections?.[proposal.id]),
+          disabled: !album.allowed_actions?.['library.files.edit_tags'] || Boolean(state.utility.proposalApplyBusy),
+          className: 'utility-problem-suggestion', attributes: { 'data-problem-suggestion-id': proposal.id, 'data-label-intent': 'proposal' },
+        })).join('')}</span>`,
+      },
+    };
+  }).filter(Boolean);
+  const table = tableRows.length ? buildUtilityCompactTable({
+    id: 'problematic-track-problems', ariaLabel: 'Detected problems',
+    columns: 'minmax(180px,1fr) minmax(160px,1fr) minmax(180px,1.2fr)',
+    columnsConfig: [{ key: 'filename', label: 'Track / file' }, { key: 'reason', label: 'Problems' }, { key: 'suggested', label: 'Suggested edits' }],
+    headers: 'visible', density: 'compact', overflow: 'local', mobile: 'preserve', frame: 'outline', rows: tableRows,
+  }) : '';
+  const separateCandidate = album?.separate_release_candidate;
+  const separateKey = String(separateCandidate?.key || '');
+  const separateSelected = Boolean(separateKey && state.utility.separateReleaseSelections?.[separateKey]);
+  const separateActions = separateKey ? `<label class="utility-separate-release-choice ${separateSelected ? 'is-active' : ''}">
+      <input type="checkbox" data-separate-release-key="${escapeHtml(separateKey)}" ${separateSelected ? 'checked' : ''}>
+      <span>Separate releases</span><small>${escapeHtml((separateCandidate.years || []).join(' / '))}</small></label>
+    ${ButtonComponent.renderButton({ label: 'Apply separate releases', className: 'utility-detail-apply', disabled: !separateSelected || !album.allowed_actions?.['library.rules.manage'], attributes: { 'data-open-separate-release-confirm': '1' } })}` : '';
+  const selected = Object.values(state.utility.proposalSelections || {}).some(Boolean);
+  return `<div class="sr-only" data-problem-exclusion-status role="status" tabindex="-1"></div>
+    <div class="utility-album-problem-labels">${albumProblems}</div>
+    <h4 class="utility-detail-section-title">Detected problems</h4>
+    ${table ? `<div class="utility-detected-table">${table}</div>` : `<p class="utility-detail-meta">${selectedFilters.length ? 'No per-track problems match the selected filters.' : albumRows.length ? 'Only album-level problems found. No per-track problems.' : 'No per-track problems found.'}</p>`}
+    ${albumProblems || tableRows.length || separateActions || getIgnoredRepairRowKeys().length ? `<div class="utility-detected-actions">
+      ${separateActions}
+      ${ButtonComponent.renderButton({ label: 'Create Exception', className: 'utility-exception-action', disabled: !getIgnoredRepairRowKeys().length || !album.allowed_actions?.['library.rules.manage'], attributes: { 'data-open-exclusion-confirm': '1' } })}
+      ${tableRows.length ? ButtonComponent.renderButton({ label: selected ? 'Apply' : 'Apply All', className: 'utility-detail-apply', disabled: !album.allowed_actions?.['library.files.edit_tags'] || !getApplicableProblemSuggestions().length || Boolean(state.utility.proposalApplyBusy), attributes: { 'data-apply-problem-suggestions': '1' } }) : ''}
+    </div>` : ''}`;
 }
-
 function buildProblematicAlbumDetail(album) {
   if (!album) {
     return '<div class="utility-empty-state">Select an album to inspect its problematic tags.</div>';
   }
   const reasons = Array.isArray(album.problem_reasons) ? album.problem_reasons : [];
-  const repairRows = Array.isArray(album.repair_preview_rows) ? album.repair_preview_rows : [];
   const showRepairedDisplay = !album.has_encoding_repairs || state.utility.showRepairedDisplay;
   const displayName = getProblematicAlbumDisplayValue(album, 'album', showRepairedDisplay) || 'Unknown Album';
   const displayArtist = getProblematicAlbumDisplayValue(album, 'album_artist', showRepairedDisplay) || 'Unknown Artist';
   const fileTypes = getProblematicAlbumFileTypes(album);
   const fileTypeText = fileTypes.length ? fileTypes.join(', ') : 'Unknown';
-  const repairButtonLabel = getSelectedRepairFileCount() > 1
-    ? `Repair tags (${getSelectedRepairFileCount()} files)`
-    : 'Repair tags';
   const hasCoverProblemReason = reasons.includes('Missing cover art') || reasons.includes('Poor art quality');
   const coverSrc = buildAlbumDisplayCoverUrl(album);
   const moveActions = getAvailableAlbumMoveActions(album);
@@ -677,9 +511,7 @@ function buildProblematicAlbumDetail(album) {
       </div>
     `
     : '';
-  const cover = coverSrc
-    ? `<img class="utility-detail-cover-image" src="${coverSrc}" alt="Album cover for ${escapeHtml(displayName)}" data-cover-path="${escapeHtml(String(album?.cover_path || '').trim())}" data-remote-cover-url="${escapeHtml(String(album?.remote_cover_thumbnail_url || album?.remote_cover_url || '').trim())}" onerror="handleAlbumDisplayCoverImageError(this)">`
-    : '<div class="utility-detail-cover-placeholder">No cover art</div>';
+  const cover = buildUtilityAlbumArtbox(album, { label: `Album cover for ${displayName}`, interactive: true, source: coverSrc });
   return `
     <div class="utility-detail-header">
       <div class="utility-detail-cover">${cover}</div>
@@ -688,55 +520,23 @@ function buildProblematicAlbumDetail(album) {
         <div class="utility-detail-meta">${escapeHtml(displayArtist)}</div>
         <div class="utility-detail-meta">Year: ${escapeHtml(album.year ?? 'Unknown')}</div>
         <div class="utility-detail-meta">Tracks: ${Array.isArray(album.tracks) ? album.tracks.length : 0}</div>
+        ${album.edition ? `<div class="utility-detail-meta">Edition: ${escapeHtml(album.edition)}</div>` : ''}
+        <div class="utility-detail-meta">File types: ${escapeHtml(fileTypeText)}</div>
         ${album.has_encoding_repairs ? `
           <button class="utility-repair-toggle ${showRepairedDisplay ? 'is-active' : ''}" type="button" data-toggle-problematic-display-repair="1" aria-pressed="${showRepairedDisplay ? 'true' : 'false'}">
             ${showRepairedDisplay ? 'Converted tags' : 'Original tags'}
           </button>
         ` : ''}
-        <button class="button utility-detail-open" type="button" data-open-problematic-album-folder="1">Open In File Explorer</button>
-        ${hasCoverProblemReason ? '<button class="button utility-detail-fetch-cover" type="button" data-fetch-problematic-cover="1">Fetch cover</button>' : ''}
-        <button class="button utility-detail-edit-tags" type="button" data-open-tag-editor="1">Edit Tags</button>
-        <button class="button utility-detail-discogs" type="button" data-find-on-discogs="1">Find on Discogs</button>
       </div>
+        <div class="utility-detail-context-actions">
+          ${ButtonComponent.renderActionButton({ ariaLabel: 'Open In File Explorer', title: 'Open In File Explorer', iconClass: 'album-details-header__action-icon album-details-header__action-icon--folder', disabled: !album.allowed_actions?.['library.files.open_location'], attributes: { 'data-open-problematic-album-folder': '1' } })}
+          ${ButtonComponent.renderActionButton({ ariaLabel: 'Edit Tags', title: 'Edit Tags', icon: 'edit', disabled: !album.allowed_actions?.['library.files.edit_tags'], attributes: { 'data-open-tag-editor': '1' } })}
+          ${hasCoverProblemReason ? ButtonComponent.renderActionButton({ ariaLabel: 'Fetch cover', title: 'Fetch cover', icon: 'cover', disabled: !album.allowed_actions?.['library.covers.fetch'], attributes: { 'data-fetch-problematic-cover': '1' } }) : ''}
+          ${ButtonComponent.renderActionButton({ ariaLabel: 'Find on Discogs', title: 'Find on Discogs', icon: 'search', attributes: { 'data-find-on-discogs': '1' } })}
+        </div>
     </div>
     ${moveActionsHtml ? buildUtilityCollapsibleSection('moves', 'Move Album', moveActionsHtml) : ''}
-    ${buildUtilityCollapsibleSection('detected', 'Detected Problems', buildDetectedProblemsHtml(album))}
-    ${repairRows.length ? buildUtilityCollapsibleSection('suggested', 'Suggested Edits', `
-        <div class="utility-repair-preview-list">
-          ${repairRows.map((row) => {
-            const rowKey = String(row.row_key || '');
-            const selection = state.utility.repairSelections[rowKey] || 'repair';
-            const displayTrackTitle = getProblematicTrackDisplayTitle(album, row, showRepairedDisplay);
-            const fileType = getRepairRowFileType(row);
-            return `
-              <div class="utility-repair-preview-item">
-                <div class="utility-repair-preview-main">
-                  <span class="utility-repair-preview-track">${escapeHtml(displayTrackTitle)}</span>
-                  ${fileType ? `<span class="utility-repair-file-type">${escapeHtml(fileType)}</span>` : ''}
-                  <span class="utility-repair-preview-field">${escapeHtml(formatRepairFieldLabel(row.field))}</span>
-                  <span class="utility-repair-preview-original">${escapeHtml(row.original || '')}</span>
-                  <span class="utility-repair-preview-arrow">></span>
-                  <span class="utility-repair-preview-repaired">${escapeHtml(row.repaired || '')}</span>
-                </div>
-                <div class="utility-repair-choice-group">
-                  <button class="utility-repair-choice ${selection === 'ignore' ? 'is-active' : ''}" type="button" data-repair-choice="ignore" data-repair-row-key="${escapeHtml(rowKey)}">Ignore</button>
-                  <button class="utility-repair-choice ${selection === 'repair' ? 'is-active' : ''}" type="button" data-repair-choice="repair" data-repair-row-key="${escapeHtml(rowKey)}">Repair</button>
-                </div>
-              </div>
-            `;
-          }).join('')}
-        </div>
-        <button class="button utility-detail-repair" type="button" data-open-repair-confirm="1" data-repair-action="repair">${escapeHtml(repairButtonLabel)}</button>
-    `) : ''}
-    ${buildUtilityCollapsibleSection('details', 'Album Details', `
-      <div class="utility-detail-grid">
-        <div><span class="utility-detail-label">Album</span>${escapeHtml(displayName)}</div>
-        <div><span class="utility-detail-label">Artist</span>${escapeHtml(displayArtist)}</div>
-        <div><span class="utility-detail-label">Year</span>${escapeHtml(album.year ?? 'Unknown')}</div>
-        <div><span class="utility-detail-label">Edition</span>${escapeHtml(album.edition || 'N/A')}</div>
-        <div><span class="utility-detail-label">File types</span>${escapeHtml(fileTypeText)}</div>
-      </div>
-    `)}
+    ${buildDetectedProblemsHtml(album)}
   `;
 }
 
@@ -998,6 +798,14 @@ function hasActiveTagEditViewMutation() {
 }
 
 function claimTagEditViewMutation(album, editedTrackPaths = [], updates = {}) {
+  if (Object.values(updates || {}).some((edits) => (
+    edits && typeof edits === 'object' && Object.keys(edits).length > 0
+  ))) {
+    state.ui = state.ui || {};
+    state.ui.tagEditOptimisticMutationRevision = Number(
+      state.ui.tagEditOptimisticMutationRevision || 0,
+    ) + 1;
+  }
   tagEditViewMutationGeneration += 1;
   const generation = tagEditViewMutationGeneration;
   const resourceKeys = new Set();
@@ -1958,38 +1766,7 @@ function applyUpdatedAlbumsToCurrentView(updatedAlbums, options = {}) {
 
 async function prependUtilityLogHistoryEntry(entry) {
   if (!entry || typeof entry !== 'object') return;
-  let persistedResult = null;
-  try {
-    persistedResult = await persistBrowserLogHistoryEntries([entry]);
-  } catch (error) {
-    console.warn('[AlbumHaven][History] Could not persist an immediate history entry.', error);
-  }
-  const existing = Array.isArray(state.utility.logHistory) ? state.utility.logHistory : [];
-  const persistedItems = Array.isArray(persistedResult?.items) ? persistedResult.items : [];
-  const fallbackEntry = persistedItems.length
-    ? null
-    : (typeof normalizeBrowserLogHistoryEntry === 'function'
-      ? normalizeBrowserLogHistoryEntry(entry)
-      : entry);
-  state.utility.logHistory = persistedItems.length
-    ? persistedItems
-    : [
-      fallbackEntry,
-      ...existing.filter((item) => String(item?.id || '') !== String(fallbackEntry.id || '')),
-    ].slice(0, 250);
-  if (persistedResult?.status) {
-    state.utility.logHistoryStorageStatus = persistedResult.status;
-  }
-  state.utility.logHistoryLoaded = true;
-  if (!state.utility.selectedLogHistoryId) {
-    const persistedEntry = persistedItems.find(
-      (item) => String(item?.id || '') === String(entry.id || ''),
-    ) || persistedItems[0];
-    state.utility.selectedLogHistoryId = String(persistedEntry?.id || fallbackEntry?.id || '');
-  }
-  if (state.utility.activeTab === 'log-history') {
-    renderUtilityModalContent();
-  }
+  state.utility.logHistoryController?.markStale(String(entry.revision || 'new-activity'));
 }
 
 function applyExplicitFinalizedAlbumArtistEdits(finalizedAlbums, tagEdits) {
@@ -2053,6 +1830,7 @@ function claimProblematicSaveTaskMutation(taskId, originalAlbum, expectedAlbumKe
     albumKey: selectedKey,
     priorKeys: (state.utility.problematicFiles || []).map((album) => String(album?.key || '')).filter(Boolean),
     priorScrollTop: Number(list?.scrollTop || 0),
+    priorScrollHeight: Number(list?.scrollHeight || 0),
   };
   state.utility.problematicMutation = mutation;
   if (typeof renderUtilityModalContent === 'function') renderUtilityModalContent();
@@ -2093,16 +1871,24 @@ async function settleProblematicSaveTaskMutation(taskId, { reconcileSelection = 
     ? getUtilityModalElements()?.list
     : null;
   if (list && mutationOwnsView) {
-    const requiredScrollHeight = priorScrollTop + Number(list.clientHeight || 0);
-    const missingScrollHeight = Math.max(0, requiredScrollHeight - Number(list.scrollHeight || 0));
+    const targetScrollHeight = Math.max(
+      Number(mutation.priorScrollHeight || 0),
+      priorScrollTop + Number(list.clientHeight || 0),
+    );
     const ownerDocument = list.ownerDocument
       || (typeof document !== 'undefined' ? document : null);
-    if (missingScrollHeight > 0 && ownerDocument?.createElement && typeof list.appendChild === 'function') {
-      const retainedContent = ownerDocument.createElement('div');
+    const retainedContent = ownerDocument?.createElement && typeof list.appendChild === 'function'
+      ? ownerDocument.createElement('div')
+      : null;
+    let retainedContentHeight = Math.max(
+      0,
+      targetScrollHeight - Number(list.scrollHeight || 0),
+    );
+    if (retainedContent) {
       retainedContent.setAttribute('data-problematic-scroll-retainer', '');
       retainedContent.setAttribute('aria-hidden', 'true');
-      retainedContent.style.flex = `0 0 ${missingScrollHeight}px`;
-      retainedContent.style.height = `${missingScrollHeight}px`;
+      retainedContent.style.flex = `0 0 ${retainedContentHeight}px`;
+      retainedContent.style.height = `${retainedContentHeight}px`;
       retainedContent.style.pointerEvents = 'none';
       list.appendChild(retainedContent);
       const releaseRetainedGeometry = () => {
@@ -2116,11 +1902,24 @@ async function settleProblematicSaveTaskMutation(taskId, { reconcileSelection = 
       list.addEventListener?.('keydown', releaseRetainedGeometry);
     }
     const restoreOwnedScroll = () => {
+      if (retainedContent && !retainedContent.isConnected && 'isConnected' in retainedContent) return;
+      if (retainedContent) {
+        const naturalScrollHeight = Math.max(
+          0,
+          Number(list.scrollHeight || 0) - retainedContentHeight,
+        );
+        retainedContentHeight = Math.max(0, targetScrollHeight - naturalScrollHeight);
+        retainedContent.style.flex = `0 0 ${retainedContentHeight}px`;
+        retainedContent.style.height = `${retainedContentHeight}px`;
+      }
       list.scrollTop = priorScrollTop;
     };
     restoreOwnedScroll();
     if (typeof scheduleBrowserAnimationFrame === 'function') {
-      scheduleBrowserAnimationFrame(restoreOwnedScroll);
+      scheduleBrowserAnimationFrame(() => {
+        restoreOwnedScroll();
+        scheduleBrowserAnimationFrame(restoreOwnedScroll);
+      });
     }
   }
   return true;
@@ -2816,6 +2615,7 @@ function applyRepairResultToProblematicFiles(originalAlbum, updatedAlbum) {
 
 function normalizeProblemFilterReason(reason) {
   const normalized = String(reason || '').trim();
+  if (normalized === 'Inconsistent year' || normalized.startsWith('Year mismatch')) return 'Year mismatch';
   return normalized.startsWith('Incomplete track order:')
     ? 'Incomplete track order'
     : normalized;
@@ -2841,7 +2641,7 @@ function albumMatchesProblemFilters(album, selectedFilters = state.utility.selec
   const selected = Array.isArray(selectedFilters) ? selectedFilters : [];
   if (!selected.length) return true;
   const reasons = new Set(getAlbumProblemFilterReasons(album));
-  return selected.every((reason) => reasons.has(reason));
+  return selected.some((reason) => reasons.has(normalizeProblemFilterReason(reason)));
 }
 
 function getAlbumProblemFilterSortIndex(album) {
@@ -2859,7 +2659,8 @@ function renderProblemFilterControls(els) {
 
   if (els.problemFilterButton) {
     const countSuffix = selected.length ? ` (${selected.length})` : '';
-    els.problemFilterButton.textContent = `Problems${countSuffix}`;
+    els.problemFilterButton.setAttribute('aria-label', `Filters${countSuffix}`);
+    els.problemFilterButton.setAttribute('title', `Filter by problem type${countSuffix}`);
     els.problemFilterButton.classList.toggle('is-active', Boolean(selected.length));
     els.problemFilterButton.setAttribute('aria-expanded', state.utility.problemDropdownOpen ? 'true' : 'false');
     els.problemFilterButton.hidden = false;
@@ -2868,6 +2669,8 @@ function renderProblemFilterControls(els) {
 
   if (els.problemFilterMenu) {
     els.problemFilterMenu.hidden = !state.utility.problemDropdownOpen;
+    if (state.utility.problemDropdownOpen && typeof syncTriggerAnchor === 'function') syncTriggerAnchor(els.problemFilterMenu, els.problemFilterButton);
+    else if (typeof clearTriggerAnchor === 'function') clearTriggerAnchor(els.problemFilterMenu);
     els.problemFilterMenu.innerHTML = reasonTypes.length
       ? reasonTypes.map((reason) => `
           <button class="utility-problem-filter-option ${selectedSet.has(reason) ? 'is-selected' : ''}" type="button" data-problem-filter-value="${escapeHtml(reason)}" role="option" aria-selected="${selectedSet.has(reason) ? 'true' : 'false'}">
@@ -3073,12 +2876,13 @@ function selectProblemExclusion(rowKey, { toggle = true } = {}) {
   const alreadySelected = Boolean(
     normalizedKey && state.utility.problemExclusionSelections?.[normalizedKey],
   );
-  state.utility.problemExclusionSelections = normalizedKey && (!toggle || !alreadySelected)
-    ? { [normalizedKey]: true }
-    : {};
+  const selections = { ...(state.utility.problemExclusionSelections || {}) };
+  if (normalizedKey && (!toggle || !alreadySelected)) selections[normalizedKey] = true;
+  else delete selections[normalizedKey];
+  state.utility.problemExclusionSelections = selections;
 }
 
-function extendProblemExclusionRange(reason, startIndex, endIndex) {
+function extendProblemExclusionRange(reason, startIndex, endIndex, selected = true) {
   const album = getSelectedProblematicAlbum();
   const rows = Array.isArray(album?.track_problem_rows) ? album.track_problem_rows : [];
   const normalizedReason = String(reason || '');
@@ -3088,11 +2892,16 @@ function extendProblemExclusionRange(reason, startIndex, endIndex) {
   const keys = [];
   for (let index = from; index <= to; index += 1) {
     const match = (Array.isArray(rows[index]?.ignorable_reasons) ? rows[index].ignorable_reasons : [])
-      .find((item) => String(item?.reason || '') === normalizedReason && String(item?.row_key || ''));
+      .find((item) => normalizeProblemFilterReason(item?.reason) === normalizeProblemFilterReason(normalizedReason) && String(item?.row_key || ''));
     if (match) keys.push(String(match.row_key));
   }
   if (!keys.length) return false;
-  state.utility.problemExclusionSelections = Object.fromEntries(keys.map((key) => [key, true]));
+  const selections = { ...(state.utility.problemExclusionSelections || {}) };
+  keys.forEach(key => {
+    if (selected) selections[key] = true;
+    else delete selections[key];
+  });
+  state.utility.problemExclusionSelections = selections;
   return true;
 }
 
@@ -3170,15 +2979,77 @@ function getSelectedSeparateReleaseKeys() {
     .map(([key]) => key);
 }
 
-function buildLibraryWatchHealthProblemRow(problem = {}) {
-  const canRefresh = problem?.allowed_actions?.['library.refresh'] === true;
-  return `
-    <div class="utility-list-item utility-operational-problem" role="status">
-      <div class="utility-operational-problem-copy">
-        <strong>Library watcher needs attention</strong>
-        <span>${escapeHtml('Some library changes may have been missed.')}</span>
-      </div>
-      ${canRefresh ? '<button type="button" class="button utility-operational-problem-action" data-status-action="full-rescan">Full Rescan</button>' : ''}
-    </div>
-  `;
+function openRuleRevertConfirm(rule) {
+  state.utility.pendingRuleRevert = rule;
+  state.utility.pendingRepairAction = 'revert-rule';
+  openRepairConfirmModal();
+}
+function getVisibleProblemSuggestions(album = getSelectedProblematicAlbum()) {
+  const albumKey = String(album?.key || '');
+  if (state.utility.proposalAlbumKey && state.utility.proposalAlbumKey !== albumKey) state.utility.proposalSelections = {};
+  state.utility.proposalAlbumKey = albumKey;
+  const selected = (state.utility.selectedProblemFilters || []).map(normalizeProblemFilterReason);
+  const query = String(state.utility.searchQuery || '').trim().toLocaleLowerCase();
+  return (Array.isArray(album?.suggested_edits) ? album.suggested_edits : []).filter(proposal => {
+    if (!proposal?.id || proposal.eligible === false) return false;
+    if (selected.length && !selected.includes(normalizeProblemFilterReason(proposal.reason))) return false;
+    if (!query) return true;
+    const track = (album.tracks || []).find(item => item.path === proposal.path) || {};
+    return [album.name, album.album_artist, track.title, track.artist, proposal.original, proposal.corrected, proposal.path]
+      .some(value => String(value || '').toLocaleLowerCase().includes(query));
+  });
+}
+
+function getApplicableProblemSuggestions() {
+  const visible = getVisibleProblemSuggestions();
+  const selections = state.utility.proposalSelections || {};
+  return Object.values(selections).some(Boolean) ? visible.filter(proposal => selections[proposal.id]) : visible;
+}
+
+function toggleProblemSuggestion(id, { selected } = {}) {
+  const proposal = getVisibleProblemSuggestions().find(item => item.id === id);
+  if (!proposal) return false;
+  const selections = { ...(state.utility.proposalSelections || {}) };
+  const enabled = selected === undefined ? !selections[id] : Boolean(selected);
+  if (enabled) selections[id] = true;
+  else delete selections[id];
+  state.utility.proposalSelections = selections;
+  return true;
+}
+
+function extendProblemSuggestionRange(type, startIndex, endIndex, selected = true) {
+  const visible = getVisibleProblemSuggestions();
+  const from = Math.min(startIndex, endIndex), to = Math.max(startIndex, endIndex);
+  if (!Number.isInteger(from) || !Number.isInteger(to) || from < 0 || to >= visible.length) return false;
+  visible.slice(from, to + 1).filter(item => item.type === type).forEach(item => toggleProblemSuggestion(item.id, { selected }));
+  return true;
+}
+
+function formatProblemSuggestionLabel(proposal) {
+  const label = { album: 'Album', album_artist: 'Album artist', artist: 'Artist', title: 'Title', year: 'Year', track_number: 'Track', disc_number: 'Disc', album_disc_marker: 'Album / disc' }[proposal.field] || proposal.field;
+  const original = proposal.original === null || proposal.original === undefined || proposal.original === '' ? 'missing' : String(proposal.original);
+  return `${label}: ${original} → ${String(proposal.corrected ?? '')}`;
+}
+
+function syncProblemSuggestionSelection() {
+  document.querySelectorAll?.('[data-problem-suggestion-id]').forEach(button => {
+    button.setAttribute('aria-pressed', state.utility.proposalSelections?.[button.getAttribute('data-problem-suggestion-id')] ? 'true' : 'false');
+  });
+  const apply = document.querySelector?.('[data-apply-problem-suggestions]');
+  if (apply) {
+    const label = apply.querySelector?.('.ui-button__content') || apply;
+    label.textContent = Object.values(state.utility.proposalSelections || {}).some(Boolean) ? 'Apply' : 'Apply All';
+    ButtonComponent.setDisabled(apply, !getSelectedProblematicAlbum()?.allowed_actions?.['library.files.edit_tags'] || !getApplicableProblemSuggestions().length || Boolean(state.utility.proposalApplyBusy));
+  }
+}
+function syncProblemExclusionSelection() {
+  document.querySelectorAll?.('[data-problem-exclusion-row-key]').forEach(button => {
+    button.setAttribute('aria-pressed', state.utility.problemExclusionSelections?.[button.getAttribute('data-problem-exclusion-row-key')] ? 'true' : 'false');
+  });
+  document.querySelectorAll?.('[data-album-problem-type]').forEach(button => {
+    const keys = getIgnorableProblemRows(getSelectedProblematicAlbum()).filter(item => normalizeProblemFilterReason(item.reason) === button.getAttribute('data-album-problem-type')).map(item => item.row_key);
+    button.setAttribute('aria-pressed', keys.length && keys.every(key => state.utility.problemExclusionSelections?.[key]) ? 'true' : 'false');
+  });
+  const action = document.querySelector?.('[data-open-exclusion-confirm]');
+  if (action) ButtonComponent.setDisabled(action, !getIgnoredRepairRowKeys().length || !getSelectedProblematicAlbum()?.allowed_actions?.['library.rules.manage']);
 }

@@ -1,4 +1,18 @@
 /* Shared current-web Button primitive. Consumer variants own colors and dimensions. */
+:root :is(.button, .ui-button),
+:root .ui-button__content {
+  white-space: nowrap;
+}
+.ui-icon {
+  width: 1em;
+  height: 1em;
+  display: block;
+}
+.ui-icon--play,
+.ui-icon--pause {
+  fill: currentColor;
+  stroke: none;
+}
 .ui-button {
   display: inline-flex;
   align-items: center;
@@ -7,19 +21,39 @@
   text-align: center;
   vertical-align: middle;
   cursor: pointer;
-  outline: 2px solid transparent;
-  outline-offset: 2px;
+  outline: 1px solid transparent;
+  outline-offset: -1px;
   transition: background 150ms ease, border-color 150ms ease, color 150ms ease, outline-color 150ms ease;
 }
 .ui-button[hidden] { display: none !important; }
 .ui-button__content { display: inline-flex; align-items: center; justify-content: center; line-height: 1; }
 .ui-button--medium { min-height: 34px; }
 .ui-button--small { min-height: 26px; }
+.ui-button--primary {
+  border-color: var(--appearance-primary-button, var(--accent));
+  background: var(--appearance-primary-button, var(--accent));
+  color: var(--appearance-primary-button-ink, #fff);
+  font-weight: 700;
+}
+.ui-button--secondary {
+  border-color: var(--appearance-line, var(--border));
+  background: var(--appearance-neutral-button-background, var(--appearance-control, var(--panel)));
+  color: var(--appearance-ink, var(--text));
+}
+:root .ui-button.ui-button--quiet {
+  border-color: var(--appearance-line, var(--border));
+  background: transparent;
+  color: var(--appearance-ink, var(--text));
+}
 .ui-button--icon { padding: 0; aspect-ratio: 1; }
 .ui-button:hover:not(:disabled):not([aria-disabled='true']) {
-  border-color: var(--appearance-interaction-outline, var(--appearance-accent, #72baff));
-  outline-color: var(--appearance-interaction-outline, var(--appearance-accent, #72baff));
+  border-color: var(--appearance-item-action-hover-border, var(--appearance-line, #526173));
   background: var(--appearance-item-action-hover-background, var(--appearance-hover, #293a50));
+}
+.ui-button--primary:hover:not(:disabled):not([aria-disabled='true']) {
+  border-color: color-mix(in srgb, var(--appearance-primary-button, var(--accent)) 80%, white);
+  background: color-mix(in srgb, var(--appearance-primary-button, var(--accent)) 88%, white);
+  color: var(--appearance-primary-button-ink, #fff);
 }
 .ui-button:active:not(:disabled):not([aria-disabled='true']) {
   background: var(--appearance-item-action-pressed, var(--appearance-item-action-hover-background, var(--appearance-hover, #293a50)));
@@ -27,13 +61,27 @@
 .ui-button:focus-visible {
   outline-color: var(--appearance-interaction-outline, var(--appearance-accent, #72baff));
 }
-.ui-button--quiet:hover:not(:disabled):not([aria-disabled='true']) {
-  background: color-mix(in srgb, currentColor 6%, transparent);
+:root .ui-button.ui-button--quiet:hover:not(:disabled):not([aria-disabled='true']) {
+  border-color: var(--appearance-item-action-hover-border, var(--appearance-line, var(--border)));
+  background: transparent;
 }
-.ui-button--quiet:active:not(:disabled):not([aria-disabled='true']) {
-  background: color-mix(in srgb, currentColor 10%, transparent);
+:root .ui-button.ui-button--quiet:active:not(:disabled):not([aria-disabled='true']) {
+  background: transparent;
 }
-.ui-button:disabled, .ui-button[aria-disabled='true'] { cursor: default; }
+.ui-button:disabled, .ui-button[aria-disabled='true'] { cursor: not-allowed; }
+
+/* Reusable selection pill. Consumers own dimensions, colors, and optional artwork. */
+.ui-filter-pill {
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  width: 100%;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  user-select: none;
+}
+.ui-filter-pill__label { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 /* Shared app-bar-style specialization for compact icon actions. */
 .action-button {
@@ -46,9 +94,9 @@
   padding: 0;
   border: 1px solid var(--appearance-line, #ffffff04);
   border-radius: 8px;
-  outline: 2px solid transparent;
-  outline-offset: 2px;
-  background: var(--appearance-control, var(--app-control, var(--panel, #1e2c3e)));
+  outline: 1px solid transparent;
+  outline-offset: 1px;
+  background: var(--appearance-neutral-button-background, var(--appearance-control, var(--app-control, var(--panel, #1e2c3e))));
   color: var(--appearance-ink, var(--app-ink, var(--text, #f3f6fa)));
   font: inherit;
   transition: background 150ms ease, border-color 150ms ease, color 150ms ease, outline-color 150ms ease;
@@ -60,9 +108,22 @@
 }
 .action-button__content { display: grid; place-items: center; }
 .action-button__icon { display: block; }
+.action-button__icon.ui-icon {
+  display: block;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  fill: none;
+}
+.action-button__icon.ui-icon--play,
+.action-button__icon.ui-icon--pause {
+  stroke: none;
+  fill: currentColor;
+}
+.action-button--round { border-radius: 50%; }
 .action-button:hover:not(:disabled):not([aria-disabled='true']) {
-  border-color: var(--appearance-interaction-outline, var(--appearance-accent, #72baff));
-  outline-color: var(--appearance-interaction-outline, var(--appearance-accent, #72baff));
+  border-color: var(--appearance-item-action-hover-border, var(--appearance-line, #526173));
   background: var(--appearance-item-action-hover-background, var(--appearance-hover, #293a50));
 }
 .action-button:active:not(:disabled):not([aria-disabled='true']) {
@@ -70,6 +131,40 @@
 }
 .action-button:focus-visible {
   outline-color: var(--appearance-interaction-outline, var(--appearance-accent, #72baff));
+}
+.action-button--bare:not(.trigger-anchor-open):not(.global-player *),
+:root[data-action-button-outlines='off'] .action-button:not(.trigger-anchor-open):not(.global-player *):not(.action-button--destructive) {
+  border-color: transparent;
+  background: transparent;
+  box-shadow: none;
+}
+.action-button--bare:not(.trigger-anchor-open):not(.global-player *):hover:not(:disabled):not([aria-disabled='true']),
+:root[data-action-button-outlines='off'] .action-button:not(.trigger-anchor-open):not(.global-player *):not(.action-button--destructive):hover:not(:disabled):not([aria-disabled='true']) {
+  border-color: transparent;
+  background: color-mix(in srgb, var(--appearance-item-action-hover-background, var(--appearance-hover, #293a50)) 45%, transparent);
+}
+.action-button--destructive {
+  --appearance-interaction-outline: var(--appearance-error, #ef5350);
+  color: var(--alert-error-ink, color-mix(in srgb, var(--appearance-error, #ef5350) 72%, white 28%));
+  border-color: var(--alert-error-edge, color-mix(in srgb, var(--appearance-error, #ef5350) 72%, transparent));
+}
+.action-button--destructive:hover:not(:disabled):not([aria-disabled='true']) {
+  border-color: var(--alert-error-edge, var(--appearance-error, #ef5350)) !important;
+  outline-color: var(--alert-error-focus, color-mix(in srgb, var(--appearance-error, #ef5350) 72%, transparent)) !important;
+  background: var(--alert-error-tint, color-mix(in srgb, var(--appearance-error, #ef5350) 15%, transparent)) !important;
+}
+.action-button--destructive:active:not(:disabled):not([aria-disabled='true']) {
+  border-color: var(--alert-error-edge, var(--appearance-error, #ef5350)) !important;
+  background: var(--alert-error-pressed, color-mix(in srgb, var(--appearance-error, #ef5350) 22%, transparent)) !important;
+}
+.action-button--destructive:focus-visible {
+  outline-color: var(--alert-error-focus, color-mix(in srgb, var(--appearance-error, #ef5350) 72%, transparent)) !important;
+}
+:root :is(.action-button--destructive, .on-page-alert__dismiss):is(:hover, :active, :focus-visible):not(:disabled):not([aria-disabled='true']) {
+  border-color: var(--appearance-error, #df8f96) !important;
+  outline: 1px solid var(--appearance-error, #df8f96) !important;
+  outline-offset: -1px !important;
+  box-shadow: none;
 }
 .action-button:disabled,
 .action-button[aria-disabled='true'] {
@@ -80,4 +175,26 @@
 
 @media (prefers-reduced-motion: reduce) {
   .ui-button, .action-button { transition: none; }
+}
+
+/* Explicit compound fields share focus ownership; embedded actions own their own focus. */
+:root .ui-input-action:has(> input:focus):not(:has(button:active, .trigger-anchor-open, > input[aria-expanded="true"])) {
+  outline: var(--ui-input-action-focus-outline, 1px solid var(--muted, var(--appearance-muted, #9ca3af))) !important;
+  outline-offset: var(--ui-input-action-focus-offset, -1px) !important;
+  border-color: var(--ui-input-action-focus-border, var(--muted, var(--appearance-muted, #9ca3af))) !important;
+  box-shadow: var(--ui-input-action-focus-shadow, none) !important;
+}
+:root .ui-input-action button:focus-visible:not(.trigger-anchor-open) {
+  outline: 2px solid var(--ui-input-action-button-focus, var(--focus-ring, var(--accent))) !important;
+  outline-offset: -3px !important;
+}
+
+:root .ui-input-action > input:focus { outline: none !important; box-shadow: none !important; }
+
+/* Text-entry controls share the calendar's muted inset focus edge. */
+:root :is(input, textarea, select):not([type="checkbox"], [type="radio"], [type="range"], [type="color"], [type="button"], [type="submit"], [type="reset"], [type="image"], [type="file"], [type="hidden"]):not(.ui-input-action > input):focus {
+  outline: 1px solid var(--muted, var(--appearance-muted, #9ca3af)) !important;
+  outline-offset: -1px !important;
+  border-color: var(--muted, var(--appearance-muted, #9ca3af)) !important;
+  box-shadow: none !important;
 }

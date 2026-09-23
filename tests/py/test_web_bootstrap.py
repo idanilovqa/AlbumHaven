@@ -178,7 +178,7 @@ def test_missing_runtime_digest_never_makes_app_javascript_immutable(asgi_app):
     assert headers["cache-control"] == "no-store, max-age=0"
 
 
-def test_runtime_asset_version_is_computed_once_per_asgi_app_and_reused_by_templates(
+def test_runtime_asset_version_is_refreshed_for_each_html_response(
     tmp_path,
     monkeypatch,
 ):
@@ -188,7 +188,7 @@ def test_runtime_asset_version_is_computed_once_per_asgi_app_and_reused_by_templ
 
     def fake_runtime_asset_version(asset_paths=None):
         digest_calls.append(asset_paths)
-        return "startup-runtime-digest"
+        return f"runtime-digest-{len(digest_calls)}"
 
     monkeypatch.setattr(web_asgi, "_runtime_asset_version", fake_runtime_asset_version)
     asgi_app = create_test_asgi_app(tmp_path / "runtime-digest-app", monkeypatch)
@@ -211,10 +211,10 @@ def test_runtime_asset_version_is_computed_once_per_asgi_app_and_reused_by_templ
     first_context = web_asgi._template_response(request, {})
     second_context = web_asgi._template_response(request, {})
 
-    assert digest_calls == [None]
-    assert asgi_app.state.runtime_asset_version == "startup-runtime-digest"
-    assert first_context["runtime_asset_version"] == "startup-runtime-digest"
-    assert second_context["runtime_asset_version"] == "startup-runtime-digest"
+    assert digest_calls == [None, None, None]
+    assert asgi_app.state.runtime_asset_version == "runtime-digest-3"
+    assert first_context["runtime_asset_version"] == "runtime-digest-2"
+    assert second_context["runtime_asset_version"] == "runtime-digest-3"
     assert captured_contexts == [first_context, second_context]
 
 
@@ -375,6 +375,7 @@ def test_index_renders_shell_without_legacy_flask_route_module(asgi_app, monkeyp
     assert headers["pragma"] == "no-cache"
     assert headers["expires"] == "0"
     assert b"<!doctype html>" in body
+    assert 'data-gallery-context-summary>2 artists \u00b7 2 albums<' in body.decode("utf-8")
     assert b"Album Haven" in body
     runtime_asset_version = asgi_app.state.runtime_asset_version
     encoded_runtime_asset_version = runtime_asset_version.encode("ascii")
@@ -1519,6 +1520,10 @@ def test_asgi_track_and_loop_media_routes_preserve_private_file_policy(app, asgi
         def load_loops(self):
             return list(persisted_loops)
 
+        def load_scoped_loops(self, **scope):
+            assert scope == {"account_id": 1, "library_id": 1}
+            return list(persisted_loops)
+
         def save_loops(self, loops):
             persisted_loops[:] = [dict(item) for item in loops]
 
@@ -1531,11 +1536,11 @@ def test_asgi_track_and_loop_media_routes_preserve_private_file_policy(app, asgi
     track_path.parent.mkdir(parents=True, exist_ok=True)
     track_path.write_bytes(b"track-bytes")
 
-    loop_path = (loops_dir(app.config) / "loop-1.mp3").resolve()
+    loop_path = (loops_dir(app.config, account_id=1, library_id=1) / "loop-1.mp3").resolve()
     loop_path.write_bytes(b"loop-bytes")
     save_loops(app.config, [{"id": "loop-1", "path": str(loop_path)}])
 
-    preview_path = (loop_previews_dir(app.config) / "loop-1_pplus1.mp3").resolve()
+    preview_path = (loop_previews_dir(app.config, account_id=1, library_id=1) / "loop-1_pplus1.mp3").resolve()
     preview_path.write_bytes(b"preview-bytes")
 
     track_status, _track_headers, track_body = run_asgi_request(
@@ -1609,4 +1614,5 @@ def test_app_js_loads_generated_runtime_bundle_after_bootstrap_payload_setup():
         "settings-navigation.js",
         "navigation-tree.js",
         "selection-accent.js",
+        "unfolding-action-button.js",
     }

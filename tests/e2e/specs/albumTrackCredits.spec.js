@@ -75,7 +75,7 @@ const BONUS_DURATION_NUMERIC_MULTIDISC_ALBUM = 'Ordinary Numeric Disc Control';
 const OPTIMISTIC_SPLIT_ALBUM = `${ALBUM} Split Credit`;
 const FIRST_TRACK_FILENAME = '01 - Credit Signal 1.mp3';
 
-test('FTC-ALBUM-TRACK-CREDITS-001 shows clean titles and per-track credits on a Various Artists release', async ({
+test('FTC-ALBUM-TRACK-CREDITS-001 shows clean titles and per-track credits on a Various Artists release', { tag: '@area:album-details' }, async ({
   artistFamilyActions,
   galleryActions,
   navigationPanelActions,
@@ -129,7 +129,7 @@ test('FTC-ALBUM-TRACK-CREDITS-001 shows clean titles and per-track credits on a 
   });
 });
 
-test('FTC-ALBUM-DETAILS-006 preserves mixed credits through an optimistic album-only split', async ({
+test('FTC-ALBUM-DETAILS-006 preserves mixed credits through an optimistic album-only split', { tag: '@area:album-details' }, async ({
   galleryActions,
   page,
   searchToolbarActions,
@@ -216,7 +216,7 @@ test('FTC-ALBUM-DETAILS-006 preserves mixed credits through an optimistic album-
   }
 });
 
-test('FTC-PLAYER-012 reopens a Various Artists album from player artwork after playing a credited track', async ({
+test('FTC-PLAYER-012 reopens a Various Artists album from player artwork after playing a credited track', { tag: '@area:playback' }, async ({
   galleryActions,
   globalPlayerActions,
   playbackEvidence,
@@ -266,7 +266,7 @@ test('FTC-PLAYER-012 reopens a Various Artists album from player artwork after p
   });
 });
 
-test('FTC-ALBUM-TRACK-CREDITS-002 shows each normalized album-header artist once', async ({
+test('FTC-ALBUM-TRACK-CREDITS-002 shows each normalized album-header artist once', { tag: '@area:album-details' }, async ({
   galleryActions,
   searchToolbarActions,
   stepLogger,
@@ -295,7 +295,7 @@ test('FTC-ALBUM-TRACK-CREDITS-002 shows each normalized album-header artist once
   });
 });
 
-test('FTC-ALBUM-DETAILS-017 orders missing track numbers by natural filename', async ({
+test('FTC-ALBUM-DETAILS-017 orders missing track numbers by natural filename', { tag: '@area:album-details' }, async ({
   galleryActions,
   searchToolbarActions,
   stepLogger,
@@ -324,7 +324,7 @@ test('FTC-ALBUM-DETAILS-017 orders missing track numbers by natural filename', a
   });
 });
 
-test('FTC-ALBUM-DETAILS-005 shows bonus duration only for an explicit bonus-disc label', async ({
+test('FTC-ALBUM-DETAILS-005 shows bonus duration only for an explicit bonus-disc label', { tag: '@area:album-details' }, async ({
   galleryActions,
   searchToolbarActions,
   stepLogger,
@@ -343,14 +343,20 @@ test('FTC-ALBUM-DETAILS-005 shows bonus duration only for an explicit bonus-disc
   await stepLogger.step('Show the exact main-album and bonus-disc durations', async () => {
     const groups = await trackModalActions.readDiscGroupPresentation();
     expect(groups.headers).toEqual(['Bonus Disc']);
-    expect(groups.totals).toEqual([]);
+    expect(groups.totals).toEqual([
+      'Total Length: 25m 30s',
+      'Total Main Album Length: 3:00',
+      'Bonus Disc Length: 22:30',
+    ]);
     expect(await trackModalActions.trackModal.readAlbumTrackTableTotal())
       .toBe('Total Length: 25m 30s');
+    await expect(trackModalActions.trackModal.albumTrackTable.mainTotal).toHaveText('Total Main Album Length: 3:00');
+    await expect(trackModalActions.trackModal.albumTrackTable.bonusTotal).toHaveText('Bonus Disc Length: 22:30');
     expect(await trackModalActions.readFooterLines()).toEqual([]);
   });
 });
 
-test('FTC-ALBUM-DETAILS-005 ignores bonus-like album and path words', async ({
+test('FTC-ALBUM-DETAILS-005 ignores bonus-like album and path words', { tag: '@area:album-details' }, async ({
   galleryActions,
   searchToolbarActions,
   stepLogger,
@@ -369,7 +375,7 @@ test('FTC-ALBUM-DETAILS-005 ignores bonus-like album and path words', async ({
   await stepLogger.step('Show only the ordinary album total', async () => {
     expect(await trackModalActions.readDiscGroupPresentation()).toEqual({
       headers: [],
-      totals: [],
+      totals: ['Total Length: 18m 00s'],
     });
     expect(await trackModalActions.trackModal.readAlbumTrackTableTotal())
       .toBe('Total Length: 18m 00s');
@@ -377,7 +383,7 @@ test('FTC-ALBUM-DETAILS-005 ignores bonus-like album and path words', async ({
   });
 });
 
-test('FTC-ALBUM-DETAILS-005 infers CD1 beside an ordinary numeric CD2', async ({
+test('FTC-ALBUM-DETAILS-005 infers CD1 beside an ordinary numeric CD2', { tag: '@area:album-details' }, async ({
   galleryActions,
   searchToolbarActions,
   stepLogger,
@@ -399,7 +405,7 @@ test('FTC-ALBUM-DETAILS-005 infers CD1 beside an ordinary numeric CD2', async ({
   await stepLogger.step('Render inferred CD1 and numeric CD2 without bonus semantics', async () => {
     expect(await trackModalActions.readDiscGroupPresentation()).toEqual({
       headers: ['CD 1', 'CD 2'],
-      totals: [],
+      totals: ['Total Length: 18m 00s'],
     });
     expect(await trackModalActions.trackModal.readAlbumTrackTableTotal())
       .toBe('Total Length: 18m 00s');

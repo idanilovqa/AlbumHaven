@@ -1,4 +1,7 @@
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
+
+import pytest
 
 from music_app.services.auth_passwords import PasswordVerification
 
@@ -47,6 +50,7 @@ class Connection:
         if "join app.account_credentials" in statement and "for update" not in statement:
             return Cursor(({
                 "account_id": 7,
+                "username_normalized": "owner",
                 "is_active": True,
                 "disabled_at": None,
                 "encoded_hash": "$argon2id$current",
@@ -61,6 +65,8 @@ class Connection:
                 "encoded_hash": "$argon2id$current",
                 "credential_version": 7,
                 "session_id": 11,
+                "idle_expires_at": NOW + timedelta(hours=1),
+                "absolute_expires_at": NOW + timedelta(days=1),
             },) if self.current else ())
         return Cursor()
 
@@ -89,6 +95,8 @@ def _service(connection, audit, *, valid=True):
         clock=lambda: NOW,
         verifier=lambda *_args, **_kwargs: PasswordVerification(valid, False),
         audit_repository=audit,
+        attempt_guard=SimpleNamespace(reserve=lambda _username: object(),
+            finalize=lambda _reservation, **_kwargs: None),
     )
 
 
@@ -141,3 +149,26 @@ def test_admin_reauthentication_fails_stale_if_session_or_credential_changed():
 
     assert result.value == "stale"
     assert not any("update app.account_sessions" in sql for sql, _ in connection.operations)
+
+
+@pytest.mark.parametrize("expiry", ["idle_expires_at", "absolute_expires_at"])
+def test_admin_reauthentication_rejects_expiry_during_final_lock(expiry):
+    clock = [NOW]
+
+    class ExpiringSession(Connection):
+        def execute(self, sql, params=()):
+            result = super().execute(sql, params)
+            if "app.account_sessions" in sql and "for update" in sql:
+                for row in result.rows:
+                    row[expiry] = NOW + timedelta(seconds=1)
+                clock[0] = NOW + timedelta(seconds=2)
+            return result
+
+    connection, audit = ExpiringSession(), Audit()
+    service = _service(connection, audit)
+    service._clock = lambda: clock[0]
+    outcome = service.reauthenticate(account_id=7, session_id=11,
+        password="administrator private password", request_ref="reauth-lock-expiry")
+    assert outcome.value == "stale"
+    assert not any(sql.startswith("update ") for sql, _ in connection.operations)
+    assert not any(event["outcome"].value == "success" for event in audit.calls)

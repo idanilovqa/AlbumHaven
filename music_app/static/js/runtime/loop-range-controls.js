@@ -27,51 +27,80 @@ function buildLoopEditActionControl({
 }
 
 function mountLoopEditActionControl({
-  root,
-  enabled = true,
-  active = false,
-  busy = false,
-  disabledLabel = 'Start playing the track to edit the loop',
-  onEnter,
-  onCreate,
-  onCancel,
+  root, interactionRoot, contextKey = '', enabled = true, canCreate = true, active = false, busy = false,
+  disabledLabel = 'Start playing the track to edit the loop', onEnter, onCreate, onCancel,
 } = {}) {
   if (!root) return null;
+  const compound = interactionRoot || root.closest?.('[data-playback-control-cluster]') || root;
+  const ownerDocument = root.ownerDocument || (typeof document !== 'undefined' ? document : null);
   const enter = root.querySelector('[data-loop-action="enter"]');
   const create = root.querySelector('[data-loop-action="create"]');
   const cancel = root.querySelector('[data-loop-action="cancel"]');
   const expanded = root.querySelector?.('[data-loop-action-expanded]') || null;
   const listeners = [];
-  let currentEnabled = Boolean(enabled);
-  let currentActive = Boolean(active);
-  let currentBusy = Boolean(busy);
-  let currentEngaged = false;
-  let pointerWithin = false;
-  let focusWithin = false;
+  const touchQuery = typeof matchMedia === 'function' ? matchMedia('(hover: none), (pointer: coarse)') : null;
+  let currentEnabled = Boolean(enabled), currentCanCreate = Boolean(canCreate);
+  let currentActive = Boolean(active), currentBusy = Boolean(busy), currentEngaged = false;
+  let pointerWithin = false, focusWithin = false, keyboardInput = true, destroyed = false;
+  let revealTimer = null, foldTimer = null;
+  let currentContextKey = String(contextKey || '');
   const listen = (target, name, listener) => {
     target?.addEventListener?.(name, listener);
     listeners.push([target, name, listener]);
   };
-  const renderEngagement = () => {
-    currentEngaged = currentActive && (pointerWithin || focusWithin);
+  const clearTimers = () => {
+    if (revealTimer !== null) clearTimeout(revealTimer);
+    if (foldTimer !== null) clearTimeout(foldTimer);
+    revealTimer = foldTimer = null;
+  };
+  const renderEngagement = (engaged) => {
+    currentEngaged = Boolean(engaged && currentCanCreate && !destroyed);
     root.setAttribute?.('data-loop-action-engaged', String(currentEngaged));
+    compound.setAttribute?.('data-loop-action-engaged', String(currentEngaged));
+    [enter, create, cancel].forEach(button => button?.setAttribute?.('tabindex', currentEngaged ? '0' : '-1'));
+  };
+  const retained = () => Boolean(touchQuery?.matches || (keyboardInput && focusWithin));
+  const leave = () => {
+    clearTimers();
+    if (!currentCanCreate) return renderEngagement(false);
+    if (pointerWithin || retained()) return renderEngagement(true);
+    if (!currentActive) return renderEngagement(false);
+    foldTimer = setTimeout(() => {
+      foldTimer = null;
+      if (!pointerWithin && !retained()) renderEngagement(false);
+    }, 500);
+  };
+  const visit = () => {
+    clearTimers();
+    if (!currentCanCreate) return renderEngagement(false);
+    if (currentActive || retained()) return renderEngagement(true);
+    if (currentEngaged) return;
+    revealTimer = setTimeout(() => {
+      revealTimer = null;
+      if (pointerWithin) renderEngagement(true);
+    }, 300);
   };
   const update = (next = {}) => {
-    const activating = !currentActive
-      && Object.prototype.hasOwnProperty.call(next, 'active')
-      && Boolean(next.active);
-    if (activating) {
-      pointerWithin = pointerWithin || Boolean(root.matches?.(':hover'));
-      const ownerDocument = root.ownerDocument
-        || (typeof document !== 'undefined' ? document : null);
-      const activeElement = ownerDocument?.activeElement;
-      focusWithin = focusWithin || Boolean(activeElement && root.contains?.(activeElement));
-    }
+    if (destroyed) return;
+    const wasActive = currentActive;
+    const wasAllowed = currentCanCreate;
+    const contextChanged = Object.prototype.hasOwnProperty.call(next, 'contextKey') && String(next.contextKey || '') !== currentContextKey;
+    if (contextChanged) currentContextKey = String(next.contextKey || '');
     if (Object.prototype.hasOwnProperty.call(next, 'enabled')) currentEnabled = Boolean(next.enabled);
+    if (Object.prototype.hasOwnProperty.call(next, 'canCreate')) currentCanCreate = Boolean(next.canCreate);
     if (Object.prototype.hasOwnProperty.call(next, 'active')) currentActive = Boolean(next.active);
     if (Object.prototype.hasOwnProperty.call(next, 'busy')) currentBusy = Boolean(next.busy);
-    renderEngagement();
-    const unavailable = !currentEnabled;
+    if (next.reset || contextChanged || !currentCanCreate || (wasActive && !currentActive)) {
+      clearTimers();
+      renderEngagement(retained() && currentCanCreate);
+    } else if ((!wasActive && currentActive) || (!wasAllowed && currentCanCreate)) {
+      pointerWithin = pointerWithin || Boolean(compound.matches?.(':hover'));
+      focusWithin = focusWithin || Boolean(ownerDocument?.activeElement && compound.contains?.(ownerDocument.activeElement));
+      clearTimers();
+      renderEngagement(retained() || (currentActive && pointerWithin));
+    } else if (retained()) renderEngagement(true);
+    root.hidden = !currentCanCreate;
+    const unavailable = !currentEnabled || !currentCanCreate;
     const disabled = unavailable || currentBusy;
     if (enter) {
       enter.hidden = currentActive;
@@ -81,48 +110,49 @@ function mountLoopEditActionControl({
       enter.setAttribute('title', unavailable ? disabledLabel : enter.getAttribute('aria-label'));
     }
     if (expanded) expanded.hidden = !currentActive;
-    if (create) {
-      create.hidden = !currentActive;
-      create.disabled = disabled;
-      create.setAttribute('aria-disabled', String(disabled));
-    }
-    if (cancel) {
-      cancel.hidden = !currentActive;
-      cancel.disabled = disabled;
-      cancel.setAttribute('aria-disabled', String(disabled));
-    }
+    [create, cancel].forEach(button => {
+      if (!button) return;
+      button.hidden = !currentActive;
+      button.disabled = disabled;
+      button.setAttribute('aria-disabled', String(disabled));
+    });
     root.classList?.toggle('is-active', currentActive);
     root.classList?.toggle('is-busy', currentBusy);
     root.classList?.toggle('is-disabled', unavailable);
     root.setAttribute?.('aria-busy', String(currentBusy));
-    root.setAttribute?.('data-loop-action-engaged', String(currentEngaged));
     root.setAttribute?.('data-loop-action-state', unavailable ? 'disabled' : (currentActive ? 'editing' : 'idle'));
+    if (compound !== root) compound.setAttribute?.('data-loop-action-state', currentActive ? 'editing' : 'idle');
+    compound.setAttribute?.('data-loop-create-allowed', String(currentCanCreate));
   };
-  listen(enter, 'click', () => { if (currentEnabled && !currentBusy && !currentActive) onEnter?.(); });
-  listen(create, 'click', () => { if (currentEnabled && !currentBusy && currentActive) onCreate?.(); });
-  listen(cancel, 'click', () => { if (currentEnabled && !currentBusy && currentActive) onCancel?.(); });
-  listen(root, 'pointerenter', () => {
-    pointerWithin = true;
-    renderEngagement();
-  });
-  listen(root, 'pointerleave', () => {
-    pointerWithin = false;
-    renderEngagement();
-  });
-  listen(root, 'focusin', () => {
+  listen(enter, 'click', () => { if (currentCanCreate && currentEnabled && !currentBusy && !currentActive) onEnter?.(); });
+  listen(create, 'click', () => { if (currentCanCreate && currentEnabled && !currentBusy && currentActive) onCreate?.(); });
+  listen(cancel, 'click', () => { if (currentCanCreate && currentEnabled && !currentBusy && currentActive) onCancel?.(); });
+  listen(compound, 'pointerenter', () => { pointerWithin = true; visit(); });
+  listen(compound, 'pointerleave', () => { pointerWithin = false; leave(); });
+  listen(compound, 'pointerdown', () => { keyboardInput = false; focusWithin = false; });
+  const keyboard = () => { keyboardInput = true; };
+  listen(ownerDocument, 'keydown', keyboard);
+  listen(compound, 'keydown', keyboard);
+  listen(compound, 'focusin', () => {
     focusWithin = true;
-    renderEngagement();
+    if (keyboardInput) { clearTimers(); renderEngagement(true); }
   });
-  listen(root, 'focusout', (event) => {
-    focusWithin = Boolean(event?.relatedTarget && root.contains?.(event.relatedTarget));
-    renderEngagement();
+  listen(compound, 'focusout', event => {
+    focusWithin = Boolean(event?.relatedTarget && compound.contains?.(event.relatedTarget));
+    leave();
   });
-  update({ enabled, active, busy });
-  const destroy = () => {
-    listeners.forEach(([target, name, listener]) => target?.removeEventListener?.(name, listener));
-    listeners.length = 0;
+  listen(touchQuery, 'change', () => { if (retained()) visit(); else leave(); });
+  renderEngagement(Boolean(touchQuery?.matches));
+  update({ enabled, canCreate, active, busy });
+  return {
+    update,
+    destroy() {
+      clearTimers();
+      destroyed = true;
+      listeners.forEach(([target, name, listener]) => target?.removeEventListener?.(name, listener));
+      listeners.length = 0;
+    },
   };
-  return { update, destroy };
 }
 
 function normalizeLoopRange(range, duration) {
@@ -176,6 +206,11 @@ function createLoopRangeController({
   let queuedClientX = null;
   let frame = 0;
   let documentDragListenersAttached = false;
+  const elementListeners = [];
+  const listen = (element, name, handler) => {
+    element?.addEventListener?.(name, handler);
+    elementListeners.push([element, name, handler]);
+  };
 
   const render = (range = currentRange) => {
     const duration = Math.max(0, Number(getDuration?.()) || 0);
@@ -304,7 +339,7 @@ function createLoopRangeController({
   }
 
   Object.entries(handles).forEach(([role, handle]) => {
-    handle?.addEventListener('pointerdown', (event) => {
+    listen(handle, 'pointerdown', (event) => {
       event.preventDefault?.();
       onRangeInteractionStart?.(role);
       render(currentRange);
@@ -314,7 +349,7 @@ function createLoopRangeController({
       handle.setPointerCapture?.(event.pointerId);
       handle.focus?.();
     });
-    handle?.addEventListener('keydown', (event) => {
+    listen(handle, 'keydown', (event) => {
       if (event.key === 'Escape') {
         event.preventDefault?.();
         event.stopPropagation?.();
@@ -339,7 +374,7 @@ function createLoopRangeController({
       onRangeCommit?.({ ...currentRange });
     });
   });
-  surface?.addEventListener('pointerdown', (event) => {
+  listen(surface, 'pointerdown', (event) => {
     if (event.target?.closest?.('[data-loop-range-handle]')) return;
     event.preventDefault?.();
     render(currentRange);
@@ -355,7 +390,7 @@ function createLoopRangeController({
     attachDocumentDragListeners();
     surface.setPointerCapture?.(event.pointerId);
   });
-  root.addEventListener?.('keydown', (event) => {
+  listen(root, 'keydown', (event) => {
     if (event.key !== 'Escape') return;
     event.preventDefault?.();
     onCancel?.();
@@ -366,7 +401,20 @@ function createLoopRangeController({
       || currentRange.endSeconds !== Number(getRange?.()?.endSeconds)) {
     onRangePreview?.({ ...currentRange });
   }
-  return { render, getRange: () => ({ ...currentRange }) };
+  return {
+    render,
+    getRange: () => ({ ...currentRange }),
+    destroy() {
+      if (frame && typeof cancelAnimationFrame === 'function') cancelAnimationFrame(frame);
+      frame = 0;
+      queuedClientX = null;
+      drag = null;
+      pendingSurfaceGesture = null;
+      detachDocumentDragListeners();
+      elementListeners.forEach(([element, name, handler]) => element?.removeEventListener?.(name, handler));
+      elementListeners.length = 0;
+    },
+  };
 }
 
 function drawCombinedLoopWaveform(canvas, waveform, progressRatio = 0) {
@@ -387,32 +435,36 @@ function drawCombinedLoopWaveform(canvas, waveform, progressRatio = 0) {
   const savedColors = typeof getSavedAppearancePlayerColors === 'function' ? getSavedAppearancePlayerColors() : null;
   const fill = savedColors?.fill || (typeof state !== 'undefined' && state.player?.appearance?.waveformFillColor) || '#9be18a';
   const edge = savedColors?.edge || (typeof state !== 'undefined' && state.player?.appearance?.waveformEdgeColor) || '#86efac';
+  const drawBars = () => {
+    for (let index = 0; index < count; index += 1) {
+      const leftPeak = Math.abs(Number(left[index] ?? right[index] ?? 0));
+      const rightPeak = Math.abs(Number(right[index] ?? left[index] ?? 0));
+      const peak = Math.max(0.025, Math.min(1, (leftPeak + rightPeak) / 2));
+      const halfHeight = Math.min(maxHalfHeight, Math.max(1, Math.round(peak * height * 0.46)));
+      context.fillRect(
+        index * barWidth,
+        center - halfHeight,
+        Math.max(1, barWidth * 0.72),
+        (2 * halfHeight) + 1,
+      );
+    }
+  };
   context.fillStyle = fill;
-  context.globalAlpha = 0.42;
-  for (let index = 0; index < count; index += 1) {
-    const leftPeak = Math.abs(Number(left[index] ?? right[index] ?? 0));
-    const rightPeak = Math.abs(Number(right[index] ?? left[index] ?? 0));
-    const peak = Math.max(0.025, Math.min(1, (leftPeak + rightPeak) / 2));
-    const halfHeight = Math.min(maxHalfHeight, Math.max(1, Math.round(peak * height * 0.46)));
-    context.fillRect(
-      index * barWidth,
-      center - halfHeight,
-      Math.max(1, barWidth * 0.72),
-      (2 * halfHeight) + 1,
-    );
-  }
-  context.globalAlpha = 1;
+  context.globalAlpha = 0.6;
+  context.shadowBlur = 0;
+  drawBars();
 
   const clampedProgress = Math.max(0, Math.min(1, Number(progressRatio) || 0));
   const playheadX = width * clampedProgress;
   if (playheadX > 0) {
     context.save();
-    context.globalCompositeOperation = 'source-atop';
-    context.globalAlpha = 0.4;
-    context.fillStyle = fill;
     context.beginPath();
     context.rect(0, 0, playheadX, height);
-    context.fill();
+    context.clip();
+    context.globalAlpha = 0.95;
+    context.shadowColor = fill;
+    context.shadowBlur = 6;
+    drawBars();
     context.restore();
   }
 

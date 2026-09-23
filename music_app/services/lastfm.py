@@ -65,6 +65,8 @@ class LastfmSubmissionOutcome:
     outcome: str = "not_sent"
     ignored_code: int | None = None
     message: str = ""
+    attempted: bool | None = None
+    reauthentication_required: bool = False
 
     @property
     def succeeded(self) -> bool:
@@ -76,12 +78,12 @@ _REAUTHENTICATION_ERROR_CODES = frozenset({9})
 _RETRYABLE_HTTP_STATUSES = frozenset({408, 425, 429, 500, 502, 503, 504})
 
 
-def load_lastfm_settings(config: dict[str, Any]) -> dict[str, Any]:
-    return _lastfm_settings_adapter(config).load_settings()
+def load_lastfm_settings(config: dict[str, Any], *, account_id=None) -> dict[str, Any]:
+    return _lastfm_settings_adapter(config).load_settings(**({"account_id": account_id} if account_id is not None else {}))
 
 
-def save_lastfm_settings(config: dict[str, Any], settings: dict[str, Any]) -> dict[str, Any]:
-    return _lastfm_settings_adapter(config).save_settings(settings)
+def save_lastfm_settings(config: dict[str, Any], settings: dict[str, Any], *, account_id=None) -> dict[str, Any]:
+    return _lastfm_settings_adapter(config).save_settings(settings, **({"account_id": account_id} if account_id is not None else {}))
 
 
 def _lastfm_settings_adapter(config: dict[str, Any]) -> LastfmPostgresAdapter:
@@ -108,21 +110,21 @@ def normalize_lastfm_user_timezone(value: object) -> str:
     return normalized
 
 
-def clear_lastfm_settings(config: dict[str, Any]) -> None:
-    settings = load_lastfm_settings(config)
+def clear_lastfm_settings(config: dict[str, Any], *, account_id=None) -> None:
+    settings = load_lastfm_settings(config, account_id=account_id)
     timezone_name = str(settings.get("user_timezone") or "").strip()
     next_settings: dict[str, Any] = {}
     if timezone_name:
         next_settings["user_timezone"] = timezone_name
-    save_lastfm_settings(config, next_settings)
+    save_lastfm_settings(config, next_settings, account_id=account_id)
 
 
 def lastfm_api_enabled(config: dict[str, Any]) -> bool:
     return bool(config.get("LASTFM_API_ENABLED"))
 
 
-def get_saved_lastfm_session(config: dict[str, Any]) -> LastfmSession | None:
-    settings = load_lastfm_settings(config)
+def get_saved_lastfm_session(config: dict[str, Any], *, account_id=None) -> LastfmSession | None:
+    settings = load_lastfm_settings(config, account_id=account_id)
     username = str(settings.get("username") or "").strip()
     session_key = str(settings.get("session_key") or "").strip()
     connected_at = str(settings.get("connected_at") or "").strip()
@@ -131,25 +133,25 @@ def get_saved_lastfm_session(config: dict[str, Any]) -> LastfmSession | None:
     return LastfmSession(username=username, session_key=session_key, connected_at=connected_at)
 
 
-def get_lastfm_user_timezone(config: dict[str, Any]) -> str:
-    settings = load_lastfm_settings(config)
+def get_lastfm_user_timezone(config: dict[str, Any], *, account_id=None) -> str:
+    settings = load_lastfm_settings(config, account_id=account_id)
     try:
         return normalize_lastfm_user_timezone(settings.get("user_timezone"))
     except LastfmError:
         return ""
 
 
-def save_lastfm_user_timezone(config: dict[str, Any], timezone_name: object) -> dict[str, Any]:
+def save_lastfm_user_timezone(config: dict[str, Any], timezone_name: object, *, account_id=None) -> dict[str, Any]:
     normalized_timezone = normalize_lastfm_user_timezone(timezone_name)
-    settings = load_lastfm_settings(config)
+    settings = load_lastfm_settings(config, account_id=account_id)
     next_settings = dict(settings)
     next_settings["user_timezone"] = normalized_timezone
-    save_lastfm_settings(config, next_settings)
-    return build_lastfm_status(config)
+    save_lastfm_settings(config, next_settings, account_id=account_id)
+    return build_lastfm_status(config, account_id=account_id)
 
 
-def build_lastfm_status(config: dict[str, Any]) -> dict[str, Any]:
-    settings = load_lastfm_settings(config)
+def build_lastfm_status(config: dict[str, Any], *, account_id=None) -> dict[str, Any]:
+    settings = load_lastfm_settings(config, account_id=account_id)
     username = str(settings.get("username") or "").strip()
     session_key = str(settings.get("session_key") or "").strip()
     connected = bool(username and session_key)
@@ -283,6 +285,7 @@ def authenticate_lastfm(
     *,
     connected_at: str,
     user_timezone: str = "",
+    account_id=None,
 ) -> dict[str, Any]:
     normalized_username = str(username or "").strip()
     normalized_password = str(password or "")
@@ -308,15 +311,19 @@ def authenticate_lastfm(
         "session_key": session_key,
         "connected_at": connected_at,
     }
-    normalized_timezone = normalize_lastfm_user_timezone(user_timezone) if str(user_timezone or "").strip() else get_lastfm_user_timezone(config)
+    normalized_timezone = normalize_lastfm_user_timezone(user_timezone) if str(user_timezone or "").strip() else get_lastfm_user_timezone(config, account_id=account_id)
     if normalized_timezone:
         settings["user_timezone"] = normalized_timezone
-    save_lastfm_settings(config, settings)
-    return build_lastfm_status(config)
+    save_lastfm_settings(config, settings, account_id=account_id)
+    return build_lastfm_status(config, account_id=account_id)
 
 
-def update_now_playing(config: dict[str, Any], payload: dict[str, Any]) -> LastfmSubmissionOutcome:
-    session = get_saved_lastfm_session(config)
+_UNSET_SESSION = object()
+
+
+def update_now_playing(config: dict[str, Any], payload: dict[str, Any], *, session=_UNSET_SESSION) -> LastfmSubmissionOutcome:
+    if session is _UNSET_SESSION:
+        session = get_saved_lastfm_session(config)
     if session is None:
         return LastfmSubmissionOutcome(sent=False, outcome="not_connected", message="Last.fm account is not connected.")
     artist = str(payload.get("artist") or "").strip()
@@ -339,8 +346,9 @@ def update_now_playing(config: dict[str, Any], payload: dict[str, Any]) -> Lastf
     return LastfmSubmissionOutcome(sent=True, accepted=1, outcome="accepted")
 
 
-def scrobble_track(config: dict[str, Any], payload: dict[str, Any]) -> LastfmSubmissionOutcome:
-    session = get_saved_lastfm_session(config)
+def scrobble_track(config: dict[str, Any], payload: dict[str, Any], *, session=_UNSET_SESSION) -> LastfmSubmissionOutcome:
+    if session is _UNSET_SESSION:
+        session = get_saved_lastfm_session(config)
     if session is None:
         return LastfmSubmissionOutcome(sent=False, outcome="not_connected", message="Last.fm account is not connected.")
     return scrobble_track_with_session(config, payload, session.session_key)
@@ -419,3 +427,25 @@ def scrobble_track_with_session(
         ignored_code=ignored_code,
         message=message,
     )
+
+
+def get_lastfm_total_scrobbles(
+    config: dict[str, Any], *, session: LastfmSession,
+) -> int:
+    root = _post_lastfm(config, "user.getInfo", {"user": session.username})
+    raw_playcount = root.findtext("./user/playcount")
+    try:
+        playcount = int(str(raw_playcount or "").strip())
+    except (TypeError, ValueError) as exc:
+        raise LastfmError(
+            "Last.fm user response contained an invalid playcount.",
+            retryable=True,
+            error_kind="malformed_response",
+        ) from exc
+    if playcount < 0:
+        raise LastfmError(
+            "Last.fm user response contained an invalid playcount.",
+            retryable=True,
+            error_kind="malformed_response",
+        )
+    return playcount

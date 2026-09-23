@@ -159,22 +159,31 @@ test.describe(`${CASE_ID} synthetic-large selected-artist browse`, () => {
     artistFamilyActions,
     galleryActions,
     navigationPanelActions,
+    page,
+    searchToolbarActions,
     stepLogger,
   }) => {
     requirePostgresRuntimeEnv('the Devin Townsend split-release family guard');
 
-    await stepLogger.step('Open Devin Townsend through the production sidebar and family projection', async () => {
+    await stepLogger.step('Open Devin Townsend through search and the production family projection', async () => {
       await galleryActions.goto('/?surface=albums');
       await galleryActions.waitForGalleryReady();
-      await navigationPanelActions.selectSidebarArtistByName('Devin Townsend');
+      await searchToolbarActions.search('Devin Townsend');
       await navigationPanelActions.waitForSidebarSelection('Devin Townsend', { timeout: 120000 });
-      await artistFamilyActions.waitForViewReady('Devin Townsend', { timeout: 120000 });
+      await artistFamilyActions.waitForViewReady('Devin Townsend', {
+        timeout: 120000,
+        queryValue: 'Devin Townsend',
+      });
     });
 
-    await stepLogger.step('Label the split-release family tag with its combined artist credit', async () => {
+    await stepLogger.step('Hydrate the complete known family with every member selected by default', async () => {
+      const runtimeView = await readRuntimeView(page);
+      expect(runtimeView.related_artists).toEqual(['IR8']);
+      await artistFamilyActions.expand();
       const familyTags = await artistFamilyActions.readChipTexts();
-      expect(familyTags).toContain('IR8 / Sexoturica');
-      expect(familyTags).not.toContain('IR8');
+      expect(familyTags).toEqual(['Devin Townsend', 'IR8 / Sexoturica']);
+      expect(await artistFamilyActions.readChipCountByName('IR8 / Sexoturica')).toBeGreaterThan(0);
+      await artistFamilyActions.waitForAllChipsActive(familyTags);
     });
 
     await stepLogger.step('Keep the split release visible under its combined artist heading', async () => {

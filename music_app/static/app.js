@@ -260,8 +260,11 @@
     if (container.querySelector('[data-startup-preview-card="1"]')) {
       return;
     }
-    const width = Math.max(Number(scrollEl.clientWidth || 0) - 8, 240);
-    const columns = Math.max(1, Math.floor((width + 14) / (240 + 14)));
+    const width = Math.max(Number(scrollEl.clientWidth || 0) - 4, 240);
+    const galleryScalePercent = Number(window.__ALBUM_HAVEN_CLIENT_LAYOUT__?.galleryScalePercent) || 100;
+    const startupCardWidth = Math.round(240 * (galleryScalePercent / 100));
+    const columns = Math.max(1, Math.floor((width + 14) / (startupCardWidth + 14)));
+    const startupCardTrackWidth = (width - (columns - 1) * 14) / columns;
     let eagerRemaining = STARTUP_EAGER_COVER_LIMIT;
     const buildGroups = (groups) => Array.isArray(groups) ? groups.filter((group) => isObject(group)) : [];
     const buildSectionHtml = (group, sectionType) => {
@@ -271,7 +274,7 @@
         rows.push(albums.slice(start, start + columns));
       }
       const rowHtml = rows.map((rowAlbums) => `
-        <div class="album-row" style="grid-template-columns:repeat(${columns}, minmax(0, 1fr));">
+        <div class="album-row" style="grid-template-columns:repeat(${columns}, minmax(0, ${startupCardTrackWidth}px));justify-content:start;">
           ${rowAlbums.map((album) => {
             const eagerCover = eagerRemaining > 0;
             if (eagerCover) {
@@ -368,7 +371,7 @@
       const script = document.createElement('script');
       script.text = `\n//# sourceURL=${scriptUrl}\n${source}\n`;
       document.head.appendChild(script);
-      pushStartupMark('runtime_bundle_ready', { scriptCount: 1, bundledScriptCount: 53 });
+      pushStartupMark('runtime_bundle_ready', { scriptCount: 1, bundledScriptCount: 74 });
     } catch (error) {
       console.error('[AlbumHaven] Failed to load runtime bundle.', error);
       pushStartupMark('runtime_bundle_failed');

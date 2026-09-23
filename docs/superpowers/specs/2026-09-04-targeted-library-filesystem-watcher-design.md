@@ -57,8 +57,16 @@ problems but never permits removal or a protected scan action.
 - TV: unsupported.
 - Apple: unsupported.
 
-Self-hosted private web and Album Haven Node deployments support the watcher.
-Hosted web without an attached private-media node cannot watch local roots.
+Self-hosted private web and Album Haven Node deployments use supported native
+watchers. Hosted web without an attached private-media node cannot watch local
+roots.
+
+On September 8, 2026, the owner excluded Linux native watching from this release.
+Linux servers log the manual-scan-only mode and leave the default event source
+idle. Users run Full Rescan after filesystem changes; initial import and
+confirmed missing-album removal retain their existing behavior. This deliberate
+platform limit does not create a persistent root-health error. Windows native
+watching and injected event sources retain the contracts below.
 
 ## Architecture
 

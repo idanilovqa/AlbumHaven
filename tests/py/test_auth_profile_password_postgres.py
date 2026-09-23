@@ -1,4 +1,5 @@
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
 
 import pytest
 
@@ -77,7 +78,8 @@ class Connection:
                 "administrator_set": True,
             },) if self.current else ())
         if "from app.account_sessions" in statement and "for update" in statement:
-            return Cursor(({"id": 11}, {"id": 12}, {"id": 13}) if self.current else ())
+            return Cursor(tuple({"id": identity, "idle_expires_at": NOW + timedelta(hours=1),
+                "absolute_expires_at": NOW + timedelta(days=1)} for identity in (11, 12, 13)) if self.current else ())
         if "from app.account_sessions" in statement and "last_seen_at" in statement:
             return Cursor((
                 {"id": 11, "user_agent": "Current browser", "last_seen_at": NOW},
@@ -118,6 +120,8 @@ def _service(connection, audit, *, current_valid=True, password_hasher=None):
         or (lambda *_args, **_kwargs: PasswordCredential("$argon2id$new", 4)),
         breached_checker=lambda _password: False,
         audit_repository=audit,
+        attempt_guard=SimpleNamespace(reserve=lambda _username: object(),
+            finalize=lambda _reservation, **_kwargs: None),
     )
 
 
@@ -248,3 +252,73 @@ def test_dismiss_suggestion_is_idempotent_and_never_changes_password_hash():
         for sql, _ in connection.operations
     )
     assert audit.calls[-1]["reason"].value == "suggestion_dismissed"
+
+
+def _change(service):
+    return service.change_password(account_id=41, current_session_id=11,
+        current_password="current private password", new_password="new sufficiently private password",
+        request_ref="profile-failure-boundary")
+
+
+@pytest.mark.parametrize("expiry", ["idle_expires_at", "absolute_expires_at"])
+def test_password_change_rejects_session_expired_during_final_lock(expiry):
+    clock = [NOW]
+
+    class ExpiringSession(Connection):
+        def execute(self, sql, params=()):
+            result = super().execute(sql, params)
+            statement = " ".join(sql.casefold().split())
+            if "from app.account_sessions" in statement and "for update" in statement:
+                for row in result.rows:
+                    row[expiry] = NOW + timedelta(seconds=1)
+                clock[0] = NOW + timedelta(seconds=2)
+            return result
+
+    connection, audit = ExpiringSession(), Audit()
+    service = _service(connection, audit)
+    service._clock = lambda: clock[0]
+    assert _change(service).value == "stale"
+    assert not any(sql.startswith("update ") for sql, _ in connection.operations)
+    assert not any(event["outcome"].value == "success" for event in audit.calls)
+
+
+@pytest.mark.parametrize("failure", ["credential_changed", "session_revoked", "lost_update", "audit", "commit"])
+def test_password_change_never_reports_success_after_stale_or_failed_transaction(failure):
+    class FailingTransaction(Transaction):
+        def __exit__(self, exc_type, exc, tb):
+            wrote = any(sql.startswith("update app.account_credentials") for sql, _ in self.connection.operations)
+            if failure == "commit" and wrote and exc_type is None:
+                self.connection.events.append("rollback")
+                raise RuntimeError("commit failed")
+            return super().__exit__(exc_type, exc, tb)
+
+    class FailureConnection(Connection):
+        def transaction(self):
+            return FailingTransaction(self)
+
+        def execute(self, sql, params=()):
+            result = super().execute(sql, params)
+            statement = " ".join(sql.casefold().split())
+            if failure == "credential_changed" and "from app.account_credentials" in statement and "for update" in statement:
+                result.rows[0]["credential_version"] += 1
+            if failure == "session_revoked" and "from app.account_sessions" in statement and "for update" in statement:
+                result.rows = [row for row in result.rows if row["id"] != 11]
+            if failure == "lost_update" and statement.startswith("update app.account_credentials"):
+                result.rowcount = 0
+            return result
+
+    class FailingAudit(Audit):
+        def append_in_transaction(self, connection, **kwargs):
+            if failure == "audit":
+                assert any(sql.startswith("update app.account_credentials") for sql, _ in connection.operations)
+                raise RuntimeError("audit failed")
+            return super().append_in_transaction(connection, **kwargs)
+
+    connection, audit = FailureConnection(), FailingAudit()
+    if failure in {"credential_changed", "session_revoked"}:
+        assert _change(_service(connection, audit)).value == "stale"
+        assert not any(sql.startswith("update ") for sql, _ in connection.operations)
+    else:
+        with pytest.raises(RuntimeError):
+            _change(_service(connection, audit))
+        assert connection.events[-1] == "rollback"

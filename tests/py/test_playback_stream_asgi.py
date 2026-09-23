@@ -7,6 +7,7 @@ import json
 import math
 from pathlib import Path
 import struct
+from types import SimpleNamespace
 
 import pytest
 
@@ -90,6 +91,9 @@ class DecoderFactoryDouble:
 
 @pytest.fixture
 def playback_app(tmp_path, monkeypatch):
+    from tests.py.runtime_testing import stub_targeted_reconciliation_repository
+
+    stub_targeted_reconciliation_repository(monkeypatch)
     class FakePostgresLibraryRootSettingsStore:
         def __init__(self, config):
             self._config = config
@@ -167,6 +171,12 @@ def open_command(media_path: Path, **changes) -> dict[str, object]:
     return command
 
 
+def configure_authenticated_request_double(websocket: object) -> None:
+    websocket.cookies = {}
+    websocket.state = SimpleNamespace()
+    websocket.client = SimpleNamespace(host="testclient")
+
+
 def test_pcm_socket_rejects_missing_authentication_before_admission(playback_app):
     from music_app.services.current_actor import CurrentActor
 
@@ -182,6 +192,109 @@ def test_pcm_socket_rejects_missing_authentication_before_admission(playback_app
             assert socket.close_code == 4401
 
     asyncio.run(scenario())
+
+
+@pytest.mark.parametrize(
+    ("capability_keys", "accepted"),
+    [
+        (("library.media.read",), True),
+        ((), False),
+    ],
+    ids=["admin-assigned-playback-grant", "missing-playback-grant"],
+)
+def test_pcm_socket_uses_managed_account_playback_permission(
+    playback_app,
+    capability_keys,
+    accepted,
+):
+    from music_app.services.admin_account_creation import MANAGED_CAPABILITY_KEYS
+    from music_app.services.current_actor import (
+        ActorState,
+        CapabilityGrant,
+        CurrentActor,
+        LibraryRelationship,
+    )
+
+    assert "library.media.read" in MANAGED_CAPABILITY_KEYS
+
+    class ManagedAccountResolver:
+        def resolve(self, _token):
+            return CurrentActor(
+                state=ActorState.ACTIVE,
+                account_id=41,
+                session_id=73,
+                username_display="Listener",
+                current_library_id=23,
+                library_relationships=(LibraryRelationship(23, "member", False),),
+                capability_grants=tuple(
+                    CapabilityGrant(key, "library", 23) for key in capability_keys
+                ),
+            )
+
+    playback_app.state.current_actor_resolver = ManagedAccountResolver()
+
+    async def scenario():
+        async with websocket_session(playback_app, "/playback/pcm") as socket:
+            assert socket.accepted is accepted
+            if not accepted:
+                assert socket.close_code == 4403
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize(
+    ("revoked_actor", "expected_close_code"),
+    [
+        ("anonymous", 4401),
+        ("missing-capability", 4403),
+    ],
+)
+def test_pcm_socket_revalidates_durable_authority_before_each_open(
+    playback_app,
+    media_path,
+    decoder_factory,
+    revoked_actor,
+    expected_close_code,
+):
+    from music_app.services.current_actor import (
+        ActorState,
+        CapabilityGrant,
+        CurrentActor,
+        LibraryRelationship,
+    )
+
+    class RevocableResolver:
+        revoked = False
+
+        def resolve(self, _token):
+            if self.revoked and revoked_actor == "anonymous":
+                return CurrentActor.anonymous()
+            return CurrentActor(
+                state=ActorState.ACTIVE,
+                account_id=41,
+                session_id=73,
+                username_display="Listener",
+                current_library_id=23,
+                library_relationships=(LibraryRelationship(23, "member", False),),
+                capability_grants=(
+                    ()
+                    if self.revoked
+                    else (CapabilityGrant("library.media.read", "library", 23),)
+                ),
+            )
+
+    resolver = RevocableResolver()
+    playback_app.state.current_actor_resolver = resolver
+
+    async def scenario():
+        async with websocket_session(playback_app, "/playback/pcm") as socket:
+            assert socket.accepted is True
+            resolver.revoked = True
+            await socket.send_json(open_command(media_path))
+            assert await socket.receive_close() == expected_close_code
+
+    asyncio.run(scenario())
+    assert decoder_factory.instances == []
 
 
 def test_waveform_route_resolves_configured_media_path_and_returns_compact_fixed_bins(
@@ -263,6 +376,7 @@ def test_waveform_route_resolves_saved_loop_id_through_media_authority_and_bound
     tmp_path,
     monkeypatch,
 ):
+    _authorize_loop_fixture(monkeypatch)
     from music_app.services.waveform_peaks import WaveformPeaks
 
     saved_loop_path = (tmp_path / "loops" / "saved-loop.wav").resolve()
@@ -270,7 +384,7 @@ def test_waveform_route_resolves_saved_loop_id_through_media_authority_and_bound
     saved_loop_path.write_bytes(b"saved-loop-waveform-fixture")
     resolved_ids: list[str] = []
 
-    def resolve_saved_loop(_config, loop_id: str):
+    def resolve_saved_loop(_config, loop_id: str, **scope):
         resolved_ids.append(loop_id)
         return saved_loop_path if loop_id == "saved-loop-42" else None
 
@@ -308,6 +422,262 @@ def test_waveform_route_resolves_saved_loop_id_through_media_authority_and_bound
     assert decode_json(body) == {
         "left": [0.25] * 280,
         "right": [0.5] * 280,
+        "sampleCount": 280,
+    }
+
+
+def test_waveform_route_returns_scoped_saved_loop_cache_hit_without_rebuilding(
+    playback_app,
+    tmp_path,
+    monkeypatch,
+):
+    _authorize_loop_fixture(monkeypatch)
+    from music_app.services.waveform_peaks import WaveformPeaks
+
+    saved_loop_path = (tmp_path / "loops" / "cached-loop.wav").resolve()
+    saved_loop_path.parent.mkdir(parents=True, exist_ok=True)
+    saved_loop_path.write_bytes(b"cached-saved-loop-waveform")
+    cached = WaveformPeaks(left=(0.2,) * 280, right=(0.4,) * 280, sample_count=280)
+
+    class CacheDouble:
+        def __init__(self):
+            self.calls = []
+
+        def get_for_loop(self, **identity):
+            self.calls.append(identity)
+            return cached
+
+        def put_for_loop(self, **_kwargs):
+            raise AssertionError("cache hit must not be rewritten")
+
+    class RegistryDouble:
+        async def run(self, *_args, **_kwargs):
+            raise AssertionError("cache hit must not rebuild peaks")
+
+    cache = CacheDouble()
+    playback_app.state.saved_loop_waveform_peak_cache_repository = cache
+    playback_app.state.waveform_peaks_registry = RegistryDouble()
+    monkeypatch.setattr(
+        playback_stream_asgi,
+        "resolve_loop_media_path",
+        lambda *_args, **_kwargs: saved_loop_path,
+    )
+
+    status, _headers, body = run_asgi_request(
+        playback_app,
+        "GET",
+        "/playback/waveform",
+        query={"loop_id": "cached-loop", "cachedOnly": "1"},
+    )
+
+    assert status == 200
+    assert decode_json(body)["left"] == [0.2] * 280
+    assert cache.calls == [
+        {
+            "account_id": 7,
+            "library_id": 9,
+            "loop_id": "cached-loop",
+            "file_size_bytes": saved_loop_path.stat().st_size,
+            "modified_at_ns": saved_loop_path.stat().st_mtime_ns,
+            "sample_count": 280,
+            "analyzer_version": "waveform-peaks-v2",
+        }
+    ]
+
+
+def test_waveform_route_persists_generated_saved_loop_peaks_when_file_is_unchanged(
+    playback_app,
+    tmp_path,
+    monkeypatch,
+):
+    _authorize_loop_fixture(monkeypatch)
+    from music_app.services.waveform_peaks import WaveformPeaks
+
+    saved_loop_path = (tmp_path / "loops" / "uncached-loop.wav").resolve()
+    saved_loop_path.parent.mkdir(parents=True, exist_ok=True)
+    saved_loop_path.write_bytes(b"uncached-saved-loop-waveform")
+    generated = WaveformPeaks(left=(0.3,) * 280, right=(0.6,) * 280, sample_count=280)
+
+    class CacheDouble:
+        def __init__(self):
+            self.get_calls = []
+            self.put_calls = []
+
+        def get_for_loop(self, **identity):
+            self.get_calls.append(identity)
+            return None
+
+        def put_for_loop(self, **payload):
+            self.put_calls.append(payload)
+            return True
+
+    class RegistryDouble:
+        async def run(self, path, *, bins):
+            assert path == saved_loop_path and bins == 280
+            return generated
+
+    cache = CacheDouble()
+    playback_app.state.saved_loop_waveform_peak_cache_repository = cache
+    playback_app.state.waveform_peaks_registry = RegistryDouble()
+    monkeypatch.setattr(
+        playback_stream_asgi,
+        "resolve_loop_media_path",
+        lambda *_args, **_kwargs: saved_loop_path,
+    )
+
+    status, _headers, body = run_asgi_request(
+        playback_app,
+        "GET",
+        "/playback/waveform",
+        query={"loop_id": "uncached-loop"},
+    )
+
+    assert status == 200
+    assert decode_json(body)["right"] == [0.6] * 280
+    assert len(cache.get_calls) == 1
+    assert cache.put_calls == [{**cache.get_calls[0], "peaks": generated}]
+
+
+def test_waveform_route_treats_saved_loop_cache_failure_as_rebuildable(
+    playback_app,
+    tmp_path,
+    monkeypatch,
+):
+    _authorize_loop_fixture(monkeypatch)
+    from music_app.services.waveform_peaks import WaveformPeaks
+
+    saved_loop_path = (tmp_path / "loops" / "cache-error-loop.wav").resolve()
+    saved_loop_path.parent.mkdir(parents=True, exist_ok=True)
+    saved_loop_path.write_bytes(b"saved-loop-cache-error")
+
+    class CacheDouble:
+        def get_for_loop(self, **_identity):
+            raise RuntimeError("cache read unavailable")
+
+        def put_for_loop(self, **_payload):
+            raise RuntimeError("cache write unavailable")
+
+    class RegistryDouble:
+        async def run(self, path, *, bins):
+            assert path == saved_loop_path and bins == 280
+            return WaveformPeaks(left=(0.1,) * bins, right=(0.2,) * bins, sample_count=bins)
+
+    playback_app.state.saved_loop_waveform_peak_cache_repository = CacheDouble()
+    playback_app.state.waveform_peaks_registry = RegistryDouble()
+    monkeypatch.setattr(
+        playback_stream_asgi,
+        "resolve_loop_media_path",
+        lambda *_args, **_kwargs: saved_loop_path,
+    )
+
+    status, _headers, body = run_asgi_request(
+        playback_app,
+        "GET",
+        "/playback/waveform",
+        query={"loop_id": "cache-error-loop"},
+    )
+
+    assert status == 200
+    assert decode_json(body)["sampleCount"] == 280
+
+
+def test_waveform_route_returns_not_found_when_saved_loop_disappears_before_cache_lookup(
+    playback_app, tmp_path, monkeypatch,
+):
+    _authorize_loop_fixture(monkeypatch)
+    saved_loop_path = (tmp_path / "loops" / "vanished-loop.wav").resolve()
+    saved_loop_path.parent.mkdir(parents=True, exist_ok=True)
+    saved_loop_path.write_bytes(b"saved-loop-waveform")
+
+    class CacheDouble:
+        def get_for_loop(self, **_identity):
+            raise AssertionError("a vanished file must not probe the waveform cache")
+
+    original_stat = type(saved_loop_path).stat
+
+    def disappearing_stat(path, *args, **kwargs):
+        if path == saved_loop_path:
+            raise FileNotFoundError(path)
+        return original_stat(path, *args, **kwargs)
+
+    playback_app.state.saved_loop_waveform_peak_cache_repository = CacheDouble()
+    monkeypatch.setattr(type(saved_loop_path), "stat", disappearing_stat)
+    monkeypatch.setattr(
+        playback_stream_asgi,
+        "resolve_loop_media_path",
+        lambda *_args, **_kwargs: saved_loop_path,
+    )
+
+    status, _headers, body = run_asgi_request(
+        playback_app,
+        "GET",
+        "/playback/waveform",
+        query={"loop_id": "vanished-loop"},
+    )
+
+    assert status == 404
+    assert decode_json(body) == {"error": "Media file not found"}
+
+
+def test_waveform_route_skips_cache_write_when_saved_loop_disappears_after_build(
+    playback_app, tmp_path, monkeypatch,
+):
+    _authorize_loop_fixture(monkeypatch)
+    from music_app.services.waveform_peaks import WaveformPeaks
+
+    saved_loop_path = (tmp_path / "loops" / "vanishing-loop.wav").resolve()
+    saved_loop_path.parent.mkdir(parents=True, exist_ok=True)
+    saved_loop_path.write_bytes(b"saved-loop-waveform")
+
+    class CacheDouble:
+        def get_for_loop(self, **_identity):
+            return None
+
+        def put_for_loop(self, **_payload):
+            raise AssertionError("a vanished file must not be cached")
+
+    class RegistryDouble:
+        async def get_cached(self, *_args, **_kwargs):
+            return None
+
+        async def run(self, _path, *, bins):
+            return WaveformPeaks(
+                left=(0.2,) * bins,
+                right=(0.4,) * bins,
+                sample_count=bins,
+            )
+
+    original_stat = type(saved_loop_path).stat
+    saved_loop_stat_calls = 0
+
+    def disappearing_stat(path, *args, **kwargs):
+        nonlocal saved_loop_stat_calls
+        if path == saved_loop_path:
+            saved_loop_stat_calls += 1
+            if saved_loop_stat_calls > 1:
+                raise FileNotFoundError(path)
+        return original_stat(path, *args, **kwargs)
+
+    playback_app.state.saved_loop_waveform_peak_cache_repository = CacheDouble()
+    playback_app.state.waveform_peaks_registry = RegistryDouble()
+    monkeypatch.setattr(type(saved_loop_path), "stat", disappearing_stat)
+    monkeypatch.setattr(
+        playback_stream_asgi,
+        "resolve_loop_media_path",
+        lambda *_args, **_kwargs: saved_loop_path,
+    )
+
+    status, _headers, body = run_asgi_request(
+        playback_app,
+        "GET",
+        "/playback/waveform",
+        query={"loop_id": "vanishing-loop"},
+    )
+
+    assert status == 200
+    assert decode_json(body) == {
+        "left": [0.2] * 280,
+        "right": [0.4] * 280,
         "sampleCount": 280,
     }
 
@@ -360,6 +730,7 @@ def test_waveform_route_rejects_missing_or_invalid_saved_loop_id_without_startin
     monkeypatch,
     loop_id,
 ):
+    _authorize_loop_fixture(monkeypatch)
     class RegistryDouble:
         def __init__(self) -> None:
             self.run_calls = 0
@@ -370,7 +741,7 @@ def test_waveform_route_rejects_missing_or_invalid_saved_loop_id_without_startin
 
     resolved_ids: list[str] = []
 
-    def reject_saved_loop(_config, requested_id: str):
+    def reject_saved_loop(_config, requested_id: str, **scope):
         resolved_ids.append(requested_id)
         return None
 
@@ -2163,6 +2534,7 @@ def test_disconnect_while_decoder_open_is_pending_does_not_raise_on_metadata_sen
             self.app = playback_app
             self.client_closed = False
             self.receive_calls = 0
+            configure_authenticated_request_double(self)
 
         async def accept(self) -> None:
             pass
@@ -2199,7 +2571,7 @@ def test_disconnect_while_decoder_open_is_pending_does_not_raise_on_metadata_sen
         assert connection is not None
 
         run_task = asyncio.create_task(connection.run())
-        await start_entered.wait()
+        await asyncio.wait_for(start_entered.wait(), timeout=1)
         websocket.client_closed = True
         allow_start.set()
 
@@ -2221,6 +2593,7 @@ def test_unrelated_metadata_send_runtime_error_still_propagates(
     class FailingMetadataWebSocketDouble:
         def __init__(self) -> None:
             self.app = playback_app
+            configure_authenticated_request_double(self)
 
         async def accept(self) -> None:
             pass
@@ -2276,6 +2649,7 @@ def test_disconnect_during_stream_send_does_not_emit_decoder_error_and_releases_
                 {"type": "credit", "generation": 1, "streamId": 1, "frames": 1},
             ]
             self.decoder_error_send_calls = 0
+            configure_authenticated_request_double(self)
 
         async def accept(self) -> None:
             pass
@@ -2337,7 +2711,12 @@ def test_lifespan_shutdown_closes_live_socket_with_1001_and_leaves_zero_decoders
     playback_app,
     media_path,
     decoder_factory,
+    monkeypatch,
 ):
+    from tests.py.runtime_testing import stub_targeted_reconciliation_repository
+
+    stub_targeted_reconciliation_repository(monkeypatch)
+
     async def scenario() -> None:
         manager = websocket_session(playback_app, "/playback/pcm")
         socket = await manager.__aenter__()
@@ -2378,6 +2757,7 @@ def test_decoder_start_that_finishes_after_shutdown_is_cancelled_without_registr
         def __init__(self) -> None:
             self.app = playback_app
             self.events: list[dict[str, object]] = []
+            configure_authenticated_request_double(self)
 
         async def send_json(self, event: dict[str, object]) -> None:
             self.events.append(event)
@@ -2649,3 +3029,11 @@ def test_registry_shutdown_reports_cancelled_connection_shutdown_task():
         assert shutdown_calls == 1
 
     asyncio.run(scenario())
+
+def _authorize_loop_fixture(monkeypatch):
+    from music_app.services import current_actor_asgi
+    from types import SimpleNamespace
+    actor = SimpleNamespace(account_id=7, current_library_id=9, is_authenticated=True,
+        library_relationships=(SimpleNamespace(library_id=9, membership_role="owner", is_primary_owner=True),))
+    async def resolve_actor(_request): return actor
+    monkeypatch.setattr(current_actor_asgi, "current_actor_from_request", resolve_actor)

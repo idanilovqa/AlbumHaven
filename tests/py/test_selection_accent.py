@@ -82,7 +82,7 @@ def test_store_save_projects_through_revisioned_appearance_without_updating_acco
         connect=lambda *args, **kwargs: connection,
     )
     assert store.save(41, PREFERENCE) == PREFERENCE
-    updates = [(sql, params) for sql, params in connection.operations if "update " in sql.lower()]
+    updates = [(sql, params) for sql, params in connection.operations if "update " in " ".join(sql.lower().split())]
     assert len(updates) == 1
     sql, params = updates[0]
     assert 41 in params
@@ -90,7 +90,8 @@ def test_store_save_projects_through_revisioned_appearance_without_updating_acco
     assert "selection_accent" in sql
     assert "revision" in sql.lower()
     assert "revision + 1" in sql.lower() or "revision+1" in sql.lower()
-    assert "app.accounts" not in sql.lower()
+    assert "update app.accounts" not in sql.lower()
+    assert "set metadata" not in sql.lower()
     assert "appearance_selection_accent_v1" not in sql
 
 
@@ -260,3 +261,15 @@ def test_shared_admin_navigation_keeps_post_logout_and_settings_links():
     assert 'method="post"' in html
     assert 'href="/account"' in html
     assert 'href="/admin/members"' not in html
+
+
+def test_compatibility_accent_stores_uppercase_json_without_changing_lowercase_wire_shape():
+    connection = Connection()
+    store = service_module().PostgresSelectionAccentStore(
+        {"ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://unused/test"},
+        connect=lambda *_args: connection,
+    )
+    assert store.save(41, {"enabled": False, "color": "#aB09Fe"}) == {"enabled": False, "color": "#ab09fe"}
+    parameters = connection.operations[-1][1]
+    stored = next(value.obj if hasattr(value, "obj") else value for value in parameters if isinstance(value, dict) or hasattr(value, "obj"))
+    assert stored == {"enabled": False, "color": "#AB09FE"}

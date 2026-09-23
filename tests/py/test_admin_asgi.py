@@ -1,6 +1,7 @@
 import asyncio
 import json
 from datetime import datetime, timezone
+from threading import Event, Thread
 
 from fastapi import FastAPI
 import pytest
@@ -143,6 +144,27 @@ def _request(app, payload, **kwargs):
     return asyncio.run(_request_async(app, payload, **kwargs))
 
 
+@pytest.mark.parametrize("parser_name", ["_json_payload", "_bounded_json_object"])
+def test_admin_json_parsers_stop_receiving_when_stream_exceeds_limit(parser_name):
+    from starlette.requests import Request
+    from music_app.routes import admin_asgi
+
+    chunks = [b" " * 8192, b" " * 8193, b"must not be received"]
+    received = []
+
+    async def receive():
+        index = len(received)
+        received.append(index)
+        return {"type": "http.request", "body": chunks[index],
+                "more_body": index < len(chunks) - 1}
+
+    request = Request({"type": "http", "headers": [
+        (b"content-type", b"application/json"), (b"content-length", b"2"),
+    ]}, receive)
+    assert asyncio.run(getattr(admin_asgi, parser_name)(request)) is None
+    assert received == [0, 1]
+
+
 def test_admin_account_route_creates_pending_account_without_password():
     app, service, deliveries = _app()
     payload = {
@@ -162,6 +184,18 @@ def test_admin_account_route_creates_pending_account_without_password():
     assert "password" not in service.calls[0]
     assert b"password" not in body.lower()
     assert deliveries == []
+
+
+def test_creation_rejects_requested_invitation_when_mail_is_disabled_before_persistence():
+    app, service, deliveries = _app(DELIVERY, invitation_enabled=False)
+    status, body = _request(app, {
+        "username": "member.one", "contact_email": "member+one@example.test",
+        "capability_keys": [], "send_invitation": True,
+    })
+    assert status == 409
+    assert service.calls == []
+    assert deliveries == []
+    assert b"invitation_queued" not in body
 
 
 def test_admin_invitation_actions_are_exposed_to_the_roster_policy_projection():
@@ -228,6 +262,7 @@ def test_copy_invitation_route_returns_exact_token_response_and_security_headers
     assert received_headers["referrer-policy"] == "no-referrer"
     assert invitation_service.copy_calls == [{
         "actor_account_id": 7,
+        "actor_session_id": 11,
         "actor_authenticated_at": datetime(2026, 9, 1, 12, 25, tzinfo=timezone.utc),
         "library_id": 9,
         "target_account_id": 41,
@@ -352,3 +387,52 @@ def test_send_invitation_route_maps_failures_without_leaking_details(
     assert json.loads(body) == {"detail": expected_detail}
     assert b"private" not in body
     assert deliveries == []
+
+
+@pytest.mark.parametrize(
+    ("state_attribute", "helper_name", "argument"),
+    [
+        ("welcome_delivery", "_deliver_pending_welcome", 51),
+        ("invitation_delivery", "_deliver_pending_invitation", DELIVERY),
+        ("password_reset_delivery", "_deliver_pending_password_reset", DELIVERY),
+    ],
+)
+def test_sync_delivery_callbacks_do_not_block_the_event_loop(
+    state_attribute, helper_name, argument
+):
+    from music_app.routes import admin_asgi
+
+    app = FastAPI()
+    callback_started = Event()
+    heartbeat_ran = Event()
+    release_callback = Event()
+    observed = {}
+
+    def callback(_argument):
+        callback_started.set()
+        assert release_callback.wait(timeout=3.0)
+
+    setattr(app.state, state_attribute, callback)
+
+    def observe_heartbeat_then_release():
+        assert callback_started.wait(timeout=3.0)
+        observed["heartbeat_before_release"] = heartbeat_ran.wait(timeout=0.5)
+        release_callback.set()
+
+    controller = Thread(target=observe_heartbeat_then_release, daemon=True)
+    controller.start()
+
+    async def exercise():
+        delivery_task = asyncio.create_task(getattr(admin_asgi, helper_name)(app, argument))
+        await asyncio.sleep(0)
+        heartbeat_ran.set()
+        await delivery_task
+
+    try:
+        asyncio.run(exercise())
+    finally:
+        release_callback.set()
+        controller.join(timeout=3.0)
+
+    assert not controller.is_alive()
+    assert observed == {"heartbeat_before_release": True}

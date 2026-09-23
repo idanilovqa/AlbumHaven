@@ -9,6 +9,7 @@
   z-index: 108;
 }
 .track-modal[hidden] { display: none; }
+.track-modal.is-above-settings { z-index: 113; }
 .track-modal-dialog {
   width: min(860px, calc(100vw - 32px));
   max-height: min(88vh, 900px);
@@ -118,7 +119,7 @@
 
 .track-modal-body {
   display: grid;
-  grid-template-columns: minmax(274px, 334px) minmax(0, 1fr);
+  grid-template-columns: minmax(228px, 288px) minmax(0, 1fr);
   gap: 8px;
   padding: 16px;
 }
@@ -128,58 +129,10 @@
   flex-direction: column;
 }
 .track-modal-duplicate-warning {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 10px;
   margin: 0 0 10px;
-  padding: 10px 12px;
-  border: 1px solid rgba(239, 68, 68, 0.4);
-  border-radius: 12px;
-  background: rgba(127, 29, 29, 0.2);
-  color: #fca5a5;
-  font-size: 0.78rem;
-  font-weight: 700;
 }
 .track-modal-duplicate-warning[hidden] {
   display: none;
-}
-.track-modal-duplicate-warning-icons {
-  display: inline-flex;
-  flex-wrap: wrap;
-  gap: 8px;
-}
-.track-modal-duplicate-folder-button {
-  position: relative;
-  width: 34px;
-  height: 34px;
-  border: 1px solid rgba(239, 68, 68, 0.4);
-  border-radius: 10px;
-  background: rgba(15, 23, 42, 0.44);
-  color: #fecaca;
-  cursor: pointer;
-}
-.track-modal-duplicate-folder-button.is-active {
-  border-color: rgba(248, 113, 113, 0.9);
-  box-shadow: 0 0 0 1px rgba(239, 68, 68, 0.22);
-}
-.track-modal-duplicate-folder-icon {
-  font-size: 1rem;
-  line-height: 1;
-}
-.track-modal-duplicate-folder-badge {
-  position: absolute;
-  right: -5px;
-  top: -5px;
-  min-width: 17px;
-  height: 17px;
-  border-radius: 999px;
-  padding: 0 4px;
-  background: #ef4444;
-  color: #fff5f5;
-  font-size: 0.66rem;
-  font-weight: 800;
-  line-height: 17px;
 }
 .track-modal-duplicate-tabs {
   display: flex;
@@ -212,8 +165,7 @@
 }
 .track-modal-cover-shell {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 38px;
-  gap: 8px;
+  grid-template-columns: minmax(0, 1fr);
   align-items: start;
   position: relative;
 }
@@ -309,24 +261,8 @@
   object-fit: cover;
   display: block;
 }
-.track-modal-cover-tools {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  align-self: start;
-}
 .track-modal-cover-tool {
   position: relative;
-  width: 34px;
-  height: 34px;
-  padding: 0;
-  border-radius: 11px;
-  border: 1px solid rgba(156,163,175,0.2);
-  background: rgba(148,163,184,0.08);
-  color: rgba(226,232,240,0.72);
-  box-shadow: inset 0 1px 0 rgba(255,255,255,0.04);
-  cursor: pointer;
-  transition: border-color 180ms ease, box-shadow 220ms ease, color 180ms ease, transform 180ms ease, background 180ms ease;
 }
 .track-modal-cover-tool.is-lookup.has-unseen-automatic-improvement::after {
   content: '';
@@ -339,45 +275,6 @@
   border-radius: 50%;
   background: #ef4444;
   box-shadow: 0 0 8px rgba(239, 68, 68, 0.75);
-}
-.track-modal-cover-tool:hover {
-  color: #dbeafe;
-  border-color: rgba(96,165,250,0.7);
-  background: rgba(96,165,250,0.16);
-  box-shadow: 0 0 0 1px rgba(96,165,250,0.2), 0 0 18px rgba(96,165,250,0.3);
-  transform: translateY(-1px);
-}
-.track-modal-cover-tool svg {
-  width: 18px;
-  height: 18px;
-}
-.track-modal-cover-tool-icon {
-  position: relative;
-  width: 32px;
-  height: 32px;
-  display: grid;
-  place-items: center;
-  margin: 0 auto;
-}
-.track-modal-cover-tool img {
-  position: absolute;
-  inset: 0;
-  width: 32px;
-  height: 32px;
-  object-fit: contain;
-  display: block;
-  transition: opacity 180ms ease, transform 180ms ease;
-}
-.track-modal-cover-tool-icon-hover {
-  opacity: 0;
-}
-.track-modal-cover-tool:hover .track-modal-cover-tool-icon-default,
-.track-modal-cover-tool:focus-visible .track-modal-cover-tool-icon-default {
-  opacity: 0;
-}
-.track-modal-cover-tool:hover .track-modal-cover-tool-icon-hover,
-.track-modal-cover-tool:focus-visible .track-modal-cover-tool-icon-hover {
-  opacity: 1;
 }
 .track-modal-list {
   margin: 0;
@@ -498,29 +395,11 @@
   display: none;
 }
 @media (max-width: 720px) {
-  .track-modal-dialog:has(> .track-modal-header > .album-details-header[data-album-details-layout="editorial_canvas"]) {
-    display: block;
-    padding: 0;
-  }
-  .track-modal-dialog:has(> .track-modal-header > .album-details-header[data-album-details-layout="editorial_canvas"]) > .track-modal-header {
-    padding: 14px 16px 10px;
-  }
-  .track-modal-dialog:has(> .track-modal-header > .album-details-header[data-album-details-layout="editorial_canvas"]) > .track-modal-body {
-    display: grid;
-  }
-  .track-modal-dialog:has(> .track-modal-header > .album-details-header[data-album-details-layout="editorial_canvas"]) .track-modal-cover,
-  .track-modal-dialog:has(> .track-modal-header > .album-details-header[data-album-details-layout="editorial_canvas"]) .track-modal-main {
-    grid-column: auto;
-    grid-row: auto;
-  }
   .track-modal-body {
     grid-template-columns: 1fr;
   }
   .track-modal-cover-shell {
     grid-template-columns: 1fr;
-  }
-  .track-modal-cover-tools {
-    flex-direction: row;
   }
   .cover-lookup-modal-actions {
     flex-wrap: wrap;
@@ -560,6 +439,9 @@
   position: fixed;
   inset: 0;
   z-index: 160;
+  --lightbox-control-ink: #f8fafc;
+  --lightbox-control-border: #94a3b8;
+  --lightbox-control-accent: #55c7ff;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -629,14 +511,14 @@
   width: 40px;
   height: 40px;
   border-radius: 999px;
-  border: 1px solid var(--border);
+  border: 1px solid var(--lightbox-control-border);
   background: rgba(17, 24, 39, 0.9);
-  color: var(--text);
+  color: var(--lightbox-control-ink);
   cursor: pointer;
   font-size: 1rem;
 }
 .image-lightbox-close:hover {
-  border-color: var(--accent);
+  border-color: var(--lightbox-control-accent);
 }
 .image-lightbox-nav {
   position: absolute;
@@ -645,9 +527,9 @@
   width: 52px;
   height: 52px;
   border-radius: 999px;
-  border: 1px solid var(--border);
+  border: 1px solid var(--lightbox-control-border);
   background: rgba(17, 24, 39, 0.88);
-  color: var(--text);
+  color: var(--lightbox-control-ink);
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -657,7 +539,17 @@
   z-index: 2;
 }
 .image-lightbox-nav:hover {
-  border-color: var(--accent);
+  border-color: var(--lightbox-control-accent);
+}
+.image-lightbox-nav svg {
+  display: block;
+  width: 24px;
+  height: 24px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2.4;
+  stroke-linecap: round;
+  stroke-linejoin: round;
 }
 .image-lightbox-nav[hidden] {
   display: none;
@@ -679,7 +571,7 @@
 }
 .track-modal-dialog:has(> .track-modal-header > .album-details-header[data-album-details-layout="editorial_canvas"]) {
   display: grid;
-  grid-template-columns: minmax(274px, 334px) minmax(0, 1fr);
+  grid-template-columns: minmax(228px, 288px) minmax(0, 1fr);
   column-gap: 16px;
   padding: 16px;
 }
@@ -707,6 +599,23 @@
 .track-modal-dialog:has(> .track-modal-header > .album-details-header[data-album-details-layout="editorial_canvas"]) .track-modal-list {
   padding-left: 0;
 }
+@media (max-width: 720px) {
+  .track-modal-dialog:has(> .track-modal-header > .album-details-header[data-album-details-layout="editorial_canvas"]) {
+    display: block;
+    padding: 0;
+  }
+  .track-modal-dialog:has(> .track-modal-header > .album-details-header[data-album-details-layout="editorial_canvas"]) > .track-modal-header {
+    padding: 14px 16px 10px;
+  }
+  .track-modal-dialog:has(> .track-modal-header > .album-details-header[data-album-details-layout="editorial_canvas"]) > .track-modal-body {
+    display: grid;
+  }
+  .track-modal-dialog:has(> .track-modal-header > .album-details-header[data-album-details-layout="editorial_canvas"]) .track-modal-cover,
+  .track-modal-dialog:has(> .track-modal-header > .album-details-header[data-album-details-layout="editorial_canvas"]) .track-modal-main {
+    grid-column: auto;
+    grid-row: auto;
+  }
+}
 .track-modal-cover-shell:has(> .album-artbox:only-child) {
   grid-template-columns: minmax(0, 1fr);
 }
@@ -714,3 +623,48 @@
 .track-modal-missing-warning-copy { display: grid; gap: 4px; }
 .track-modal-missing-warning-copy span,
 .track-modal-missing-warning p { margin: 0; color: #fecaca; font-size: .84rem; }
+
+/* Album identity stays visible; only the track pane owns vertical scrolling. */
+.track-modal-dialog {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.track-modal-header, .track-modal-tabs { flex: 0 0 auto; }
+.track-modal-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  grid-template-rows: minmax(0, 1fr);
+  overflow: hidden;
+}
+.track-modal-cover { align-self: start; min-height: 0; }
+@media (min-width: 721px) {
+  .track-modal-cover {
+    align-self: stretch;
+    container-type: size;
+    contain-intrinsic-size: 334px 334px;
+  }
+  /* Keep the action overlay on the square artwork, including short windows. */
+  .track-modal-cover-shell {
+    width: auto;
+    height: min(100%, 100cqw);
+    max-width: 100%;
+    aspect-ratio: 1;
+    justify-self: start;
+  }
+}
+.track-modal-main { min-height: 0; overflow: hidden; }
+.track-modal-list { min-height: 0; overflow-y: auto; overscroll-behavior: contain; scrollbar-gutter: stable; }
+.track-modal-dialog:has(> .track-modal-header > .album-details-header[data-album-details-layout="editorial_canvas"]) {
+  grid-template-rows: auto auto minmax(0, 1fr);
+}
+.track-modal-dialog:has(> .track-modal-header > .album-details-header[data-album-details-layout="editorial_canvas"]) > .track-modal-tabs { grid-column: 2; grid-row: 2; }
+.track-modal-dialog:has(> .track-modal-header > .album-details-header[data-album-details-layout="editorial_canvas"]) .track-modal-cover { grid-row: 1 / span 3; }
+.track-modal-dialog:has(> .track-modal-header > .album-details-header[data-album-details-layout="editorial_canvas"]) .track-modal-main { grid-row: 3; }
+@media (max-width: 720px) {
+  .track-modal-dialog:has(> .track-modal-header > .album-details-header[data-album-details-layout="editorial_canvas"]) { display: flex; }
+  .track-modal-body { grid-template-rows: auto minmax(0, 1fr); }
+  .track-modal-cover { width: min(100%, 22vh); }
+  .track-modal-dialog:has(> .track-modal-header > .album-details-header[data-album-details-layout="editorial_canvas"]) .track-modal-cover,
+  .track-modal-dialog:has(> .track-modal-header > .album-details-header[data-album-details-layout="editorial_canvas"]) .track-modal-main { grid-row: auto; }
+}

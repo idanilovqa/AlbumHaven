@@ -79,6 +79,34 @@
     ]
   },
   {
+    "id": "harbor-mint",
+    "name": "Harbor Mint",
+    "desc": "Deep blue surfaces with a fresh mint accent",
+    "main": "#111E2C",
+    "mode": "dark",
+    "tokens": {
+      "ink": "#E6EDF5",
+      "muted": "#9AAFC2",
+      "card": "#1D3445",
+      "control": "#203043",
+      "line": "#FFFFFF12",
+      "hover": "#FFFFFF10",
+      "accent": "#52D7AA",
+      "player": "#0E1B29",
+      "player-ink": "#9AAFC2",
+      "play": "#52D7AA",
+      "play-ink": "#0E1B29",
+      "waveform-fill": "#52D7AA",
+      "waveform-edge": "#9AAFC2",
+      "stars": "#CEB97B"
+    },
+    "panels": [
+      ["Blue frame", "#0E1B29", "The original mockup companion"],
+      ["Deep harbor", "#091522", "An almost-black blue frame"],
+      ["Lifted slate", "#1D3445", "Lighter blue panels"]
+    ]
+  },
+  {
     "id": "powderblue",
     "name": "Powder Blue",
     "desc": "Soft blue · airy surfaces with dark blue text",
@@ -377,6 +405,54 @@
         "A softer tonal pairing"
       ]
     ]
+  },
+  {
+    "id": "parchment-pine",
+    "name": "Parchment & Pine",
+    "desc": "Warm parchment with deep pine panels",
+    "main": "#E8E0CF",
+    "mode": "light",
+    "tokens": {
+      "ink": "#393C32",
+      "muted": "#777C6C",
+      "card": "#FFF7E5",
+      "control": "#C8B58F",
+      "line": "#C7C4B4",
+      "hover": "#393C3210",
+      "accent": "#51B67D",
+      "player": "#10251E",
+      "player-ink": "#D7E4DA",
+      "player-muted": "#8DA796",
+      "play": "#38B977",
+      "play-ink": "#083820",
+      "focus": "#81DFA9",
+      "panel-ink": "#E2F0E5",
+      "panel-muted": "#98A79B",
+      "panel-line": "#354237",
+      "panel-control": "#202422",
+      "panel-color-scheme": "dark",
+      "floating-edge": "#101512",
+      "waveform-fill": "#53BF80",
+      "waveform-edge": "#8DA796",
+      "stars": "#806019"
+    },
+    "panels": [
+      [
+        "Pine",
+        "#101512",
+        "The approved dark pine frame"
+      ],
+      [
+        "Deep Pine",
+        "#11241D",
+        "A deep green companion"
+      ],
+      [
+        "Lifted Pine",
+        "#15241B",
+        "Gently lifted pine panels"
+      ]
+    ]
   }
 ];
   const playerDefaults = {
@@ -385,8 +461,9 @@
     midnight: { player: '#131C31', 'player-ink': '#BDCBE4', play: '#B0C2E8', 'play-ink': '#131C31', 'player-accent': '#A0B6DE' },
   };
   const selectionAccents = {
+    'parchment-pine': '#51B67D',
     steelblue: '#8BAED1',
-    navy: '#91B4E3',
+    navy: '#91B4E3', 'harbor-mint': '#52D7AA',
     powderblue: '#4F7398',
     graphite: '#8A96A3',
     slate: '#7896B4',
@@ -419,7 +496,8 @@
     if (keys.length === 3 && ['background', 'fill', 'edge'].every(key => Object.hasOwn(value, key))) {
       return { background: hex(value.background), fill: hex(value.fill), edge: hex(value.edge) };
     }
-    if (keys.length !== 4 || !['surface', 'controls', 'waveform', 'handles'].every(key => Object.hasOwn(value, key))) throw new TypeError('Player colors are incomplete.');
+    if (!['surface', 'controls', 'waveform', 'handles'].every(key => Object.hasOwn(value, key)) || keys.some(key => !['surface', 'controls', 'waveform', 'handles', 'native_components'].includes(key))) throw new TypeError('Player colors are incomplete.');
+    if (Object.hasOwn(value, 'native_components') && (!Array.isArray(value.native_components) || value.native_components.length > 4 || new Set(value.native_components).size !== value.native_components.length || value.native_components.some(part => !['surface', 'controls', 'waveform', 'handles'].includes(part)))) throw new TypeError('Invalid native player components.');
     const { surface, controls, waveform, handles } = value;
     if (!surface || !controls || !waveform || !handles || [surface, controls, waveform, handles].some(part => typeof part !== 'object' || Array.isArray(part))) throw new TypeError('Player colors are incomplete.');
     if (!['gradient', 'layered_gradient', 'solid'].includes(surface.mode) || !Number.isFinite(surface.angle) || surface.angle < 0 || surface.angle > 360) throw new TypeError('Player surface is invalid.');
@@ -429,6 +507,7 @@
       controls: { fill: hex(controls.fill), border: hex(controls.border) },
       waveform: { fill: hex(waveform.fill), edge: hex(waveform.edge) },
       handles: { color: hex(handles.color) },
+      ...(Object.hasOwn(value, 'native_components') ? { native_components: [...value.native_components] } : {}),
     };
   }
   function contrastingInk(background) {
@@ -453,17 +532,31 @@
       fill: source['waveform-fill'] || source['player-accent'] || source.accent || '#79B390',
       edge: source['waveform-edge'] || source['player-ink'] || '#DCEBE3',
     };
-    const tokens = { ...baseTokens, ...source, 'waveform-fill': player.fill, 'waveform-edge': player.edge };
+    const tokens = { ...baseTokens, ...source, 'waveform-fill': player.fill, 'waveform-edge': player.edge,
+      'player-surface-start': player.background, 'player-surface-end': player.background,
+      'player-surface-angle': '0deg', 'player-control-border': player.edge, 'player-handle': player.edge };
+    Object.assign(tokens, {
+      'panel-ink': source['panel-ink'] || tokens.ink,
+      'panel-muted': source['panel-muted'] || tokens.muted,
+      'panel-line': source['panel-line'] || tokens.line,
+      'panel-control': source['panel-control'] || tokens.control,
+      'panel-color-scheme': source['panel-color-scheme'] || palette?.mode || 'dark',
+      'floating-edge': source['floating-edge'] || tokens.play,
+      focus: source.focus || tokens.accent,
+      'player-muted': source['player-muted'] || tokens['player-ink'],
+    });
     if (override) {
       const style = player.style;
+      const controlFill = style?.controls.fill || contrastingInk(player.background);
       Object.assign(tokens, {
         player: player.background,
         'player-surface-start': style?.surface.start || player.background,
-        'player-surface-end': style?.surface.end || player.background,
+        'player-surface-end': (style?.surface.mode === 'solid' ? style.surface.start : style?.surface.end) || player.background,
         'player-surface-angle': style ? `${style.surface.angle}deg` : '0deg',
         'player-ink': contrastingInk(player.background),
-        play: style?.controls.fill || contrastingInk(player.background),
-        'play-ink': contrastingInk(style?.controls.fill || player.background),
+        'player-muted': contrastingInk(player.background),
+        play: controlFill,
+        'play-ink': contrastingInk(controlFill),
         'player-control-border': style?.controls.border || player.edge,
         'player-accent': player.fill,
         'player-handle': style?.handles.color || player.edge,
@@ -473,7 +566,20 @@
       panel: palette ? palette.panels[index][1] : (value.panel_background_color == null ? '#0E1B2B' : hex(value.panel_background_color)),
       tokens, player: { ...player }, mode: palette?.mode || 'dark' };
   }
-  const api = { palettes, resolveAppearance, normalizePlayerOverride, contrastingInk };
+  // Representative editor colors for native CSS treatments. Only explicit
+  // native_components provenance retains gradients, alpha and local waveform colors.
+  const nativePlayerStyle = Object.freeze({
+    surface: Object.freeze({ mode: 'layered_gradient', angle: 135, start: '#061816', end: '#0F172A' }),
+    controls: Object.freeze({ fill: '#0FA66F', border: '#7CBAA4' }),
+    waveform: Object.freeze({ fill: '#DADDE2', edge: '#494950' }),
+    handles: Object.freeze({ color: '#BBF7D0' }),
+  });
+  function nativePlayerComponents(value) {
+    const style = value.player_style_override;
+    if (!style?.surface) return {};
+    return Object.fromEntries((style.native_components || []).map(component => [component, true]));
+  }
+  const api = { palettes, resolveAppearance, normalizePlayerOverride, contrastingInk, nativePlayerStyle, nativePlayerComponents };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   if (scope) scope.AlbumHavenAppearancePalettes = api;
 })(typeof window !== 'undefined' ? window : null);

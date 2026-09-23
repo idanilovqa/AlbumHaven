@@ -27,7 +27,7 @@ const UNRATED_SURFACE = {
   emptyColor: EMPTY_STAR_COLOR,
 };
 
-test('FTC-ALBUM-TASTE-013 keeps app ratings authoritative while import and scan seed missing ratings', async ({
+test('FTC-ALBUM-TASTE-013 keeps app ratings authoritative while import and scan seed missing ratings', { tag: '@area:album-details' }, async ({
   appBarActions,
   galleryActions,
   librarySettingsActions,

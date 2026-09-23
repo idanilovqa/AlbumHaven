@@ -12,6 +12,41 @@ function parseLoopTimeLabel(label) {
 }
 
 export class UtilityLoopsActions {
+  async expectPausedLoopWaveformPainted(entry, loopId) {
+    const card = this.utilityLoopsTab.loopEntryCard;
+    await expect(entry).toBeAttached();
+    const audio = card.audioByLoopId(loopId);
+    await expect(audio).toHaveJSProperty('paused', true);
+    await expect(card.ordinaryWaveformForEntry(entry)).toBeVisible();
+    await expect.poll(() => card.readOrdinaryWaveformMiddlePaint(entry)).toBeGreaterThan(0);
+    await expect(audio).toHaveJSProperty('paused', true);
+  }
+
+  async observeGroupWaveformLoad(title, expectedNames) {
+    const frames = this.utilityLoopsTab.observeWaveformPresentationFrames(expectedNames);
+    await this.selectGroupByTitle(title);
+    return frames;
+  }
+
+  async startLoopAndExpectExclusive(previousLoopId, next) {
+    const card = this.utilityLoopsTab.loopEntryCard;
+    await card.playButtonForEntry(next.entry).click();
+    await this.waitForLoopPlayback(next.loopId);
+    await expect(card.audioByLoopId(previousLoopId)).toHaveJSProperty('paused', true);
+    await expect(card.audioByLoopId(next.loopId)).toHaveJSProperty('paused', false);
+    const previousPaused = await this.readLoopPlaybackSnapshot(previousLoopId);
+    const nextStarted = await this.readLoopPlaybackSnapshot(next.loopId);
+    const nextProgressed = await this.waitForLoopProgress(next.loopId, {
+      afterCurrentTime: nextStarted.currentTime,
+      allowWrap: false,
+    });
+    const previousAfterNextProgress = await this.readLoopPlaybackSnapshot(previousLoopId);
+    expect(previousAfterNextProgress.currentTime).toBeCloseTo(previousPaused.currentTime, 3);
+    expect(nextProgressed.currentTime).toBeGreaterThan(nextStarted.currentTime);
+    expect(await card.readPlayingAudioCount()).toBe(1);
+    return { previousPaused, previousAfterNextProgress, nextStarted, nextProgressed };
+  }
+
   constructor(utilityLoopsTab) {
     this.utilityLoopsTab = utilityLoopsTab;
   }
@@ -96,10 +131,13 @@ export class UtilityLoopsActions {
 
   async readGroupSummaryByTitle(title) {
     const button = this.utilityLoopsTab.loopTree.groupButtonByTitle(title);
+    const count = this.utilityLoopsTab.loopTree.countForGroup(button);
+    await expect(count).toHaveCount(1);
+    await expect(count).toHaveAttribute('hidden', '');
     return {
       title: ((await this.utilityLoopsTab.loopTree.titleForGroup(button).textContent()) || '').trim(),
       meta: ((await this.utilityLoopsTab.loopTree.metaForGroup(button).textContent()) || '').trim(),
-      countText: ((await this.utilityLoopsTab.loopTree.countForGroup(button).textContent()) || '').trim(),
+      count: Number((await count.textContent()).trim()),
     };
   }
 
@@ -134,7 +172,11 @@ export class UtilityLoopsActions {
   }
 
   async pressSpaceBeforeLoopOwnership(groupTitle, options = {}) {
-    const neutralControl = this.utilityLoopsTab.loopTree.groupButtonByTitle(groupTitle);
+    await expect(this.utilityLoopsTab.loopEntryCard.detailTitle).toHaveText(groupTitle);
+    // A NavigationTree button owns native Space activation. Click noninteractive
+    // heading text, then use the body shortcut without claiming a saved loop.
+    await this.utilityLoopsTab.loopEntryCard.detailTitle.click();
+    const neutralControl = this.utilityLoopsTab.neutralKeyboardTarget;
     await neutralControl.focus();
     await expect(neutralControl).toBeFocused();
     await neutralControl.press('Space');
@@ -154,7 +196,11 @@ export class UtilityLoopsActions {
   }
 
   async pressNeutralSpaceForOwnedLoop(groupTitle, loopId, expected, options = {}) {
-    const neutralControl = this.utilityLoopsTab.loopTree.groupButtonByTitle(groupTitle);
+    await expect(this.utilityLoopsTab.loopEntryCard.detailTitle).toHaveText(groupTitle);
+    // A NavigationTree button owns native Space activation. Click noninteractive
+    // heading text, then use the body shortcut without claiming a saved loop.
+    await this.utilityLoopsTab.loopEntryCard.detailTitle.click();
+    const neutralControl = this.utilityLoopsTab.neutralKeyboardTarget;
     await neutralControl.focus();
     await expect(neutralControl).toBeFocused();
     await neutralControl.press('Space');
@@ -164,7 +210,11 @@ export class UtilityLoopsActions {
   }
 
   async pressNeutralSpaceAfterGlobalReclaim(groupTitle, loopId, expectedLoop, options = {}) {
-    const neutralControl = this.utilityLoopsTab.loopTree.groupButtonByTitle(groupTitle);
+    await expect(this.utilityLoopsTab.loopEntryCard.detailTitle).toHaveText(groupTitle);
+    // A NavigationTree button owns native Space activation. Click noninteractive
+    // heading text, then use the body shortcut without claiming a saved loop.
+    await this.utilityLoopsTab.loopEntryCard.detailTitle.click();
+    const neutralControl = this.utilityLoopsTab.neutralKeyboardTarget;
     await neutralControl.focus();
     await expect(neutralControl).toBeFocused();
     await neutralControl.press('Space');
@@ -175,7 +225,11 @@ export class UtilityLoopsActions {
   }
 
   async pressSpaceAfterLoopOwnershipReset(groupTitle, options = {}) {
-    const neutralControl = this.utilityLoopsTab.loopTree.groupButtonByTitle(groupTitle);
+    await expect(this.utilityLoopsTab.loopEntryCard.detailTitle).toHaveText(groupTitle);
+    // A NavigationTree button owns native Space activation. Click noninteractive
+    // heading text, then use the body shortcut without claiming a saved loop.
+    await this.utilityLoopsTab.loopEntryCard.detailTitle.click();
+    const neutralControl = this.utilityLoopsTab.neutralKeyboardTarget;
     await neutralControl.focus();
     await expect(neutralControl).toBeFocused();
     await neutralControl.press('Space');
@@ -202,6 +256,81 @@ export class UtilityLoopsActions {
 
   async captureLoopAudioHandle(loopId) {
     return this.utilityLoopsTab.loopEntryCard.captureAudioHandle(loopId);
+  }
+
+  async dragLoopAfterByName(sourceName, targetName) {
+    const card = this.utilityLoopsTab.loopEntryCard;
+    const { entry: source } = await this.resolveLoopEntryByName(sourceName);
+    const { entry: target } = await this.resolveLoopEntryByName(targetName);
+    const bounds = await target.boundingBox();
+    if (!bounds) throw new Error('Expected a visible reorder target.');
+    const [response] = await Promise.all([
+      this.utilityLoopsTab.page.waitForResponse(response =>
+        response.request().method() === 'POST' && new URL(response.url()).pathname === '/loops/reorder'),
+      card.dragHandleForEntry(source).dragTo(target, {
+        targetPosition: { x: Math.min(30, bounds.width / 2), y: bounds.height - 12 },
+      }),
+    ]);
+    expect(response.status()).toBe(200);
+    const result = await response.json();
+    await expect.poll(() => card.readPanelOrder()).toEqual(result.ordered_ids);
+    return result;
+  }
+
+  async verifyLoopInsertionCues() {
+    const page = this.utilityLoopsTab.page;
+    const card = this.utilityLoopsTab.loopEntryCard;
+    const originalOrder = await card.readPanelOrder();
+    expect(originalOrder.length).toBeGreaterThanOrEqual(3);
+    for (const [sourceIndex, targetIndex, position, offset] of [
+      [originalOrder.length - 1, 0, 'before', -5],
+      [originalOrder.length - 1, 1, 'before', -6],
+      [0, originalOrder.length - 1, 'after', 5],
+    ]) {
+      const source = card.detailEntries.nth(sourceIndex);
+      const target = card.detailEntries.nth(targetIndex);
+      await card.dragHandleForEntry(source).hover();
+      await page.mouse.down();
+      try {
+        const handle = await card.dragHandleForEntry(source).boundingBox();
+        expect(handle).not.toBeNull();
+        await page.mouse.move(handle.x + handle.width / 2 + 12, handle.y + handle.height / 2, { steps: 4 });
+        await target.scrollIntoViewIfNeeded();
+        let point = await card.readInsertionTarget(target, position, offset);
+        if (!point.visible) {
+          await page.mouse.move(point.x, point.rowY);
+          await page.mouse.wheel(0, point.scrollBy);
+          await expect.poll(async () => (await card.readInsertionTarget(target, position, offset)).visible).toBe(true);
+          point = await card.readInsertionTarget(target, position, offset);
+        }
+        const { x, y } = point;
+        await page.mouse.move(x, y, { steps: 8 });
+        await page.mouse.move(x, y);
+        await expect(target).toHaveClass(new RegExp(`\\bis-drop-${position}\\b`));
+        expect(await card.readInsertionCue(target, position)).toEqual({ painted: true, unclipped: true });
+      } finally {
+        await page.keyboard.press('Escape');
+        await page.mouse.up();
+      }
+      await expect(target).not.toHaveClass(/\bis-drop-(before|after)\b/);
+      expect(await card.readPanelOrder()).toEqual(originalOrder);
+    }
+  }
+
+  async verifySongArtworkAndYear(title, expectedYear) {
+    const tab = this.utilityLoopsTab;
+    const song = tab.loopTree.groupButtonByTitle(title);
+    await expect(tab.loopTree.metaForGroup(song)).toContainText(String(expectedYear));
+    await expect(tab.headerArtbox).toHaveAttribute('data-album-artbox-state', 'ready');
+    const retained = await song.elementHandle();
+    try {
+      await tab.headerArtworkTrigger.click();
+      await expect(tab.lightbox).toBeVisible();
+      await expect(tab.lightboxImage).toBeVisible();
+      await tab.lightboxClose.click();
+      await expect(tab.lightbox).toBeHidden();
+      expect(await tab.loopTree.isRetainedSelectedSong(retained)).toBe(true);
+    } finally { await retained.dispose(); }
   }
 
   async readLoopContinuity(previousHandle, loopId) {
@@ -257,6 +386,8 @@ export class UtilityLoopsActions {
   async hoverLoopActionByName(name, target = 'enter') {
     const { entry } = await this.resolveLoopEntryByName(name);
     const entryCard = this.utilityLoopsTab.loopEntryCard;
+    await entryCard.playButtonForEntry(entry).hover();
+    await expect(entryCard.loopActionForEntry(entry)).toHaveAttribute('data-loop-action-engaged', 'true');
     const locator = target === 'create'
       ? entryCard.loopCreateButtonForEntry(entry)
       : target === 'cancel'
@@ -270,7 +401,9 @@ export class UtilityLoopsActions {
     );
     await expect(entryCard.loopActionForEntry(entry))
       .toHaveAttribute('data-loop-action-engaged', 'true');
-    await expect(entryCard.loopPodForEntry(entry)).toHaveCSS('width', '55px');
+    const style = await entryCard.controlStyleForEntry(entry).getAttribute('data-loop-control-style');
+    const editing = await entryCard.loopActionForEntry(entry).getAttribute('data-loop-action-state') === 'editing';
+    await expect(entryCard.loopPodForEntry(entry)).toHaveCSS('width', `${style === 'companion' ? (editing ? 88 : 58) : (editing ? 65 : 34)}px`);
     return entryCard.readLoopActionVisualSnapshot(entry);
   }
 
@@ -279,7 +412,7 @@ export class UtilityLoopsActions {
     await this.utilityLoopsTab.page.mouse.move(2, 2);
     await expect(this.utilityLoopsTab.loopEntryCard.loopActionForEntry(entry))
       .toHaveAttribute('data-loop-action-engaged', 'false');
-    await expect(this.utilityLoopsTab.loopEntryCard.loopPodForEntry(entry)).toHaveCSS('width', '39px');
+    await expect(this.utilityLoopsTab.loopEntryCard.loopActionForEntry(entry)).toHaveCSS('opacity', '0');
     return this.utilityLoopsTab.loopEntryCard.readLoopActionVisualSnapshot(entry);
   }
 
@@ -290,6 +423,7 @@ export class UtilityLoopsActions {
 
   async activateCreateAnotherLoopByName(name) {
     const { entry, loopId } = await this.resolveLoopEntryByName(name);
+    await this.hoverLoopActionByName(name, 'create');
     await this.utilityLoopsTab.loopEntryCard.loopCreateButtonForEntry(entry).click();
     return loopId;
   }
@@ -318,6 +452,7 @@ export class UtilityLoopsActions {
 
   async revealCreateAnotherLoopEditorByName(name, options = {}) {
     const { entry, loopId } = await this.resolveLoopEntryByName(name);
+    await this.hoverLoopActionByName(name, 'enter');
     await this.utilityLoopsTab.loopEntryCard.loopScissorsButtonForEntry(entry).click();
     const entryCard = this.utilityLoopsTab.loopEntryCard;
     await expect(entryCard.savedLoopEditRangeForEntry(entry, loopId)).toBeVisible({
@@ -347,6 +482,7 @@ export class UtilityLoopsActions {
     this.utilityLoopsTab.page.on('request', observe);
     const entryCard = this.utilityLoopsTab.loopEntryCard;
     try {
+      await this.hoverLoopActionByName(name, 'cancel');
       await entryCard.loopCancelButtonForEntry(entry).click();
       await expect(entryCard.loopActionForEntry(entry)).toHaveAttribute('data-loop-action-state', 'idle');
       await expect(entryCard.savedLoopMainSurfaceForEntry(entry)).toBeVisible({ timeout: options.timeout || 60000 });
@@ -419,6 +555,10 @@ export class UtilityLoopsActions {
     const fraction = Math.min(0.95, Math.max(0.05, Number(targetFraction)));
     const { entry, loopId } = await this.resolveLoopEntryByName(name);
     const entryCard = this.utilityLoopsTab.loopEntryCard;
+    // The expanded edit controls intentionally paint above the start handle.
+    // Leave the compound control so its normal hover lifecycle exposes the handle.
+    await entryCard.detailTitle.hover();
+    await expect(entryCard.loopActionForEntry(entry)).toHaveAttribute('data-loop-action-engaged', 'false');
     const waveform = entryCard.savedLoopWaveformForEntry(entry, loopId);
     const handle = entryCard.savedLoopBoundaryHandleForEntry(entry, normalizedBoundary, loopId);
     const waveformBox = await waveform.boundingBox();
@@ -439,6 +579,14 @@ export class UtilityLoopsActions {
       ...await this.readLoopEditorStateByName(name),
       dragSnapshot,
     };
+  }
+
+  async adjustLoopBoundaryWithKeyboard(name, boundary, key) {
+    const { entry, loopId } = await this.resolveLoopEntryByName(name);
+    const handle = this.utilityLoopsTab.loopEntryCard.savedLoopBoundaryHandleForEntry(entry, boundary, loopId);
+    await handle.focus();
+    await handle.press(key);
+    return Number(await handle.getAttribute('aria-valuenow'));
   }
 
   async expectCreateAnotherLoopEditorActiveByName(name, options = {}) {

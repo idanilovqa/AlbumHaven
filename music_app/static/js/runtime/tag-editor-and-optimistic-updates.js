@@ -1,4 +1,4 @@
-﻿const albumTrackCollator = new Intl.Collator(undefined, {
+const albumTrackCollator = new Intl.Collator(undefined, {
   numeric: true,
   sensitivity: 'base',
 });
@@ -250,6 +250,7 @@ function openTagEditor(album, options = {}) {
     anchorPath: String(tracks[0].path || ''),
     dragSelecting: false,
     dragAnchorPath: '',
+    reorder: null,
     values,
     sessionMutationClaim: claimTagEditViewMutation(album),
     autoNumberStartValue: '',
@@ -315,6 +316,7 @@ function autoNumberSelectedTagEditorTracks() {
 }
 
 function closeTagEditor() {
+  if (typeof clearTagEditorReorderCue === 'function') clearTagEditorReorderCue();
   const els = getTagEditorElements();
   if (!els.overlay) return;
   settleTagEditorSessionMutationClaim();
@@ -386,6 +388,38 @@ function tagEditOriginStillOwnsView(originatingViewStateRevision) {
 }
 
 async function confirmRepairSelectedAlbum() {
+  if (state.utility.pendingRepairAction === 'saved-loop-delete') {
+    const id = state.utility.pendingSavedLoopDeleteId;
+    if (!id || state.utility.savedLoopDeleteBusy || state.utility.allowedActions?.['library.loops.delete'] !== true) return;
+    state.utility.savedLoopDeleteBusy = true;
+    const confirm = getRepairConfirmElements();
+    if (confirm.accept) confirm.accept.disabled = true;
+    try {
+      if (await deleteSavedLoop(id, { confirmed: true }) === true) closeRepairConfirmModal();
+    } finally {
+      state.utility.savedLoopDeleteBusy = false;
+      if (confirm.accept) confirm.accept.disabled = false;
+    }
+    return;
+  }
+  if (state.utility.pendingRepairAction === 'suggestions') return confirmProblemSuggestions();
+  if (state.utility.pendingRepairAction === 'revert-rule') {
+    const pending = state.utility.pendingRuleRevert;
+    if (!pending || state.utility.ruleRevertBusy) return;
+    state.utility.ruleRevertBusy = true;
+    const confirm = getRepairConfirmElements();
+    if (confirm.accept) confirm.accept.disabled = true;
+    try {
+      const succeeded = pending.kind === 'version-exception'
+        ? await revertVersionException(pending.key)
+        : await queueProblemExclusionRevert(pending.item);
+      if (succeeded === true) { closeRepairConfirmModal(); state.utility.pendingRuleRevert = null; }
+    } finally {
+      state.utility.ruleRevertBusy = false;
+      if (confirm.accept) confirm.accept.disabled = false;
+    }
+    return;
+  }
   const album = (state.utility.problematicFiles || []).find((item) => item.key === state.utility.pendingRepairKey) || getSelectedProblematicAlbum();
   if (!album) {
     showToast('No album selected for repair.', 'error', 3200);
@@ -1388,9 +1422,11 @@ async function revertVersionException(albumKey) {
     renderUtilityModalContent();
     await fetchAndRender(buildApiUrl(state.view), false);
     showToast('Rule reverted.', 'success', 2400);
+    return true;
   } catch (error) {
     console.error('[AlbumHaven][Utilities] Failed to revert rule.', error);
     showToast(error.message || 'Failed to revert rule.', 'error', 3200);
+    return false;
   }
 }
 
@@ -1464,24 +1500,6 @@ function hideVersionContextMenu() {
   };
   const menu = document.getElementById('track-modal-version-context-menu');
   if (menu) menu.hidden = true;
-}
-
-function buildCoverLookupButtonIcon() {
-  return `
-    <span class="track-modal-cover-tool-icon track-modal-cover-tool-icon-lookup" aria-hidden="true">
-      <img class="track-modal-cover-tool-icon-default" src="/static/images/cover-lookup-gallery-icon-offwhite.png" alt="">
-      <img class="track-modal-cover-tool-icon-hover" src="/static/images/cover-lookup-gallery-icon.png" alt="">
-    </span>
-  `;
-}
-
-function buildFastCoverFetchButtonIcon() {
-  return `
-    <span class="track-modal-cover-tool-icon track-modal-cover-tool-icon-fast-fetch" aria-hidden="true">
-      <img class="track-modal-cover-tool-icon-default" src="/static/images/quick-search-icon-offwhite.png" alt="">
-      <img class="track-modal-cover-tool-icon-hover" src="/static/images/quick-search-icon.png" alt="">
-    </span>
-  `;
 }
 
 function buildTrackModalCoverVisualHtml({
@@ -1570,58 +1588,25 @@ const applyMissingAlbumRemovalToViewDefault = function applyMissingAlbumRemovalT
   const normalizedKey = String(albumKey || '').trim();
   if (!normalizedKey || !state?.view) return false;
   const groupFields = ['artist_groups', 'primary_artist_groups', 'family_artist_groups'];
-  const removedArtists = new Set();
-  const previousSidebarCount = Array.isArray(state.view.artists_sidebar)
-    ? state.view.artists_sidebar.length
-    : 0;
   groupFields.forEach((field) => {
     const groups = Array.isArray(state.view[field]) ? state.view[field] : [];
     state.view[field] = groups.flatMap((group) => {
       const albums = Array.isArray(group?.albums) ? group.albums : [];
       const retainedAlbums = albums.filter((album) => {
         const matches = String(getTrackModalAlbumRequestKey(album) || album?.key || '').trim() === normalizedKey;
-        if (matches) removedArtists.add(String(group?.artist || album?.album_artist || '').trim());
         return !matches;
       });
       return retainedAlbums.length ? [{ ...group, albums: retainedAlbums }] : [];
     });
   });
 
-  const remainingArtists = new Set(groupFields.flatMap((field) => (
-    (Array.isArray(state.view[field]) ? state.view[field] : [])
-      .map((group) => String(group?.artist || '').trim())
-      .filter(Boolean)
-  )));
-  if (Array.isArray(state.view.artists_sidebar)) {
-    state.view.artists_sidebar = state.view.artists_sidebar.filter((item) => {
-      const artist = String(item?.artist || item?.name || '').trim();
-      return !removedArtists.has(artist) || remainingArtists.has(artist);
-    });
-  }
+  // Mounted groups can be filtered or partial. The canonical view refresh owns
+  // whole-library sidebar membership and counts.
   if (Number.isFinite(Number(payload.album_count))) {
     state.view.album_count = Number(payload.album_count);
-  } else if (Number.isFinite(Number(state.view.album_count))) {
-    state.view.album_count = Math.max(0, Number(state.view.album_count) - 1);
-  } else {
-    state.view.album_count = (state.view.artist_groups || []).reduce(
-      (count, group) => count + (Array.isArray(group?.albums) ? group.albums.length : 0),
-      0,
-    );
   }
   if (Number.isFinite(Number(payload.artist_count))) {
     state.view.artist_count = Number(payload.artist_count);
-  } else if (Number.isFinite(Number(state.view.artist_count))) {
-    const currentSidebarCount = Array.isArray(state.view.artists_sidebar)
-      ? state.view.artists_sidebar.length
-      : previousSidebarCount;
-    state.view.artist_count = Math.max(
-      0,
-      Number(state.view.artist_count) - Math.max(0, previousSidebarCount - currentSidebarCount),
-    );
-  } else {
-    state.view.artist_count = Array.isArray(state.view.artists_sidebar)
-      ? state.view.artists_sidebar.length
-      : (state.view.artist_groups || []).length;
   }
   if (state.gallery) {
     if (typeof rebuildAlbumIndex === 'function') rebuildAlbumIndex(state.view.artist_groups || []);
@@ -1670,15 +1655,45 @@ async function confirmMissingAlbumRemoval(album, options = {}) {
     } catch (_error) {
       payload = {};
     }
+    const pendingRefreshRequest = state.ui?.pendingViewRequest || (
+      state.busy && state.ui?.activeViewRequestUrl
+        ? { url: state.ui.activeViewRequestUrl, push: state.ui.activeViewRequestPush }
+        : null
+    );
     if (response.status === 409) {
       if (typeof fetchAndRender === 'function' && typeof buildUrl === 'function') {
         const refreshOptions = typeof album?.constructor === 'function'
           ? new album.constructor()
           : {};
         refreshOptions.preserveScroll = true;
-        await fetchAndRender(buildUrl(state.view), false, refreshOptions);
+        if (pendingRefreshRequest) {
+          Object.assign(refreshOptions, pendingRefreshRequest.options, {
+            preserveScroll: pendingRefreshRequest.options?.preserveScroll ?? true,
+            interruptCurrent: true,
+            restartIfSameUrl: true,
+          });
+          if (typeof claimLocalViewStateNavigation === 'function') claimLocalViewStateNavigation();
+        }
+        await fetchAndRender(
+          pendingRefreshRequest?.url || buildUrl(state.view),
+          Boolean(pendingRefreshRequest?.push),
+          refreshOptions,
+        );
       }
       if (typeof loadProblematicFiles === 'function') await loadProblematicFiles(true);
+      const modal = typeof getTrackModalElements === 'function' ? getTrackModalElements() : null;
+      const currentAlbum = typeof getCurrentTrackModalAlbum === 'function' ? getCurrentTrackModalAlbum() : null;
+      if (modal?.overlay && !modal.overlay.hidden
+        && getTrackModalAlbumRequestKey(currentAlbum) === albumKey) {
+        invalidateHydratedTrackModalAlbumDetails([currentAlbum]);
+        const loadToken = invalidatePendingTrackModalLoad();
+        const refreshedAlbum = await loadTrackModalAlbumDetails(albumKey);
+        if (refreshedAlbum && !modal.overlay.hidden
+          && loadToken === state.ui.pendingTrackModalLoadToken
+          && getTrackModalAlbumRequestKey(getCurrentTrackModalAlbum()) === albumKey) {
+          openTrackModal(refreshedAlbum, { coverLightboxGallery: state.ui.trackModalCoverLightboxGallery });
+        }
+      }
       const conflictMessage = String(
         payload.error || payload.detail || 'Album Haven found this album again.'
       ).trim() || 'Album Haven found this album again.';
@@ -1688,8 +1703,24 @@ async function confirmMissingAlbumRemoval(album, options = {}) {
     if (!response.ok) {
       throw new Error(payload.detail || payload.error || 'Unable to remove album from Album Haven.');
     }
+    const refreshRequest = pendingRefreshRequest || {
+      url: typeof buildUrl === 'function' ? buildUrl(state.view) : '', push: false,
+    };
+    if (typeof claimLocalViewStateNavigation === 'function') claimLocalViewStateNavigation();
     applyMissingAlbumRemovalToView(albumKey, payload);
-    if (typeof closeTrackModal === 'function') closeTrackModal();
+    const modal = typeof getTrackModalElements === 'function' ? getTrackModalElements() : null;
+    const currentAlbum = typeof getCurrentTrackModalAlbum === 'function' ? getCurrentTrackModalAlbum() : null;
+    if (modal?.overlay && !modal.overlay.hidden
+      && getTrackModalAlbumRequestKey(currentAlbum) === albumKey
+      && typeof closeTrackModal === 'function') closeTrackModal();
+    if (refreshRequest.url && typeof fetchAndRender === 'function') {
+      await fetchAndRender(refreshRequest.url, Boolean(refreshRequest.push), {
+        ...refreshRequest.options,
+        preserveScroll: refreshRequest.options?.preserveScroll ?? true,
+        interruptCurrent: true,
+        restartIfSameUrl: true,
+      });
+    }
     if (typeof loadProblematicFiles === 'function') await loadProblematicFiles(true);
     if (typeof showToast === 'function') showToast('Album removed from Album Haven.', 'success', 3200);
     return true;
@@ -1725,8 +1756,28 @@ function renderTrackModalRelease(album) {
   const coverLookupLabel = hasUnseenAutomaticImprovement
     ? 'Open cover art look up gallery; new automatic cover candidate available'
     : 'Open cover art look up gallery';
-  const coverLookupIcon = buildCoverLookupButtonIcon();
-  const fastCoverFetchIcon = buildFastCoverFetchButtonIcon();
+  const coverToolsHtml = `
+    ${ButtonComponent.renderActionButton({
+      icon: 'search',
+      ariaLabel: coverLookupLabel,
+      title: 'Cover Art Look Up',
+      className: coverLookupClass,
+      attributes: {
+        'data-open-track-modal-cover-lookup': '1',
+        'data-album-key': albumKey,
+      },
+    })}
+    ${ButtonComponent.renderActionButton({
+      icon: 'bolt',
+      ariaLabel: 'Fetch cover art now',
+      title: 'Fast Cover Fetch',
+      className: 'track-modal-cover-tool is-fast-fetch',
+      attributes: {
+        'data-track-modal-fast-cover-fetch': '1',
+        'data-album-key': albumKey,
+      },
+    })}
+  `;
   const coverSourceBadge = typeof buildTrackModalCoverSourceBadge === 'function'
     ? buildTrackModalCoverSourceBadge(album?.remote_cover_source || '')
     : '';
@@ -1798,20 +1849,13 @@ function renderTrackModalRelease(album) {
       : ' data-lightbox-gallery="visible"';
     els.cover.innerHTML = `
       <div class="track-modal-cover-shell">
-        ${renderAlbumArtbox({
-          state: 'ready',
-          label: `Album cover for ${album.name}`,
-          coverHtml: `<button class="track-modal-cover-button" type="button" data-open-lightbox="1" data-cover-src="${escapeHtml(lightboxSrc)}" data-cover-preview-src="${escapeHtml(coverSrc)}" data-cover-alt="${escapeHtml(`Album cover for ${album.name}`)}" data-album-key="${albumKey}"${lightboxGalleryAttribute}><span class="track-modal-cover-image-slot"></span></button>`,
-        })}
-        ${coverSourceBadge}
-        <div class="track-modal-cover-tools">
-          <button class="${coverLookupClass}" type="button" data-open-track-modal-cover-lookup="1" data-album-key="${albumKey}" aria-label="${coverLookupLabel}" title="Cover Art Look Up">
-            ${coverLookupIcon}
-          </button>
-          <button class="track-modal-cover-tool is-fast-fetch" type="button" data-track-modal-fast-cover-fetch="1" data-album-key="${albumKey}" aria-label="Fetch cover art now" title="Fast Cover Fetch">
-            ${fastCoverFetchIcon}
-          </button>
-        </div>
+      ${renderAlbumArtbox({
+        state: 'ready',
+        label: `Album cover for ${album.name}`,
+        coverHtml: `<button class="track-modal-cover-button" type="button" data-open-lightbox="1" data-cover-src="${escapeHtml(lightboxSrc)}" data-cover-preview-src="${escapeHtml(coverSrc)}" data-cover-alt="${escapeHtml(`Album cover for ${album.name}`)}" data-album-key="${albumKey}"${lightboxGalleryAttribute}><span class="track-modal-cover-image-slot"></span></button>`,
+        overlayHtml: coverToolsHtml,
+      })}
+      ${coverSourceBadge}
       </div>
     `;
     const coverImageSlot = typeof els.cover?.querySelector === 'function'
@@ -1871,15 +1915,11 @@ function renderTrackModalRelease(album) {
   } else {
     els.cover.innerHTML = `
       <div class="track-modal-cover-shell">
-        ${renderAlbumArtbox({ state: 'empty', label: `${album.name || 'Album'} has no cover art` })}
-        <div class="track-modal-cover-tools">
-          <button class="${coverLookupClass}" type="button" data-open-track-modal-cover-lookup="1" data-album-key="${albumKey}" aria-label="${coverLookupLabel}" title="Cover Art Look Up">
-            ${coverLookupIcon}
-          </button>
-          <button class="track-modal-cover-tool is-fast-fetch" type="button" data-track-modal-fast-cover-fetch="1" data-album-key="${albumKey}" aria-label="Fetch cover art now" title="Fast Cover Fetch">
-            ${fastCoverFetchIcon}
-          </button>
-        </div>
+      ${renderAlbumArtbox({
+        state: 'empty',
+        label: `${album.name || 'Album'} has no cover art`,
+        overlayHtml: coverToolsHtml,
+      })}
       </div>
     `;
   }
@@ -1895,32 +1935,25 @@ function renderTrackModalRelease(album) {
   const mainSeconds = mainGroups.reduce((sum, group) => sum + group.tracks.reduce((inner, track) => inner + (Number(track.duration_seconds) || 0), 0), 0);
   const bonusSeconds = bonusGroups.reduce((sum, group) => sum + group.tracks.reduce((inner, track) => inner + (Number(track.duration_seconds) || 0), 0), 0);
   const totalLength = activeDuplicateSource?.total_duration_display || album.total_duration_display || formatAlbumDuration(album.total_duration_seconds);
-  const mainLength = formatAlbumDuration(mainSeconds) || (mainGroups.length ? totalLength : '');
-  const bonusLength = formatAlbumDuration(bonusSeconds);
+  const mainLength = mainSeconds > 0 ? (formatTrackDuration(mainSeconds) || formatAlbumDuration(mainSeconds)) : '';
+  const bonusLength = bonusSeconds > 0 ? (formatTrackDuration(bonusSeconds) || formatAlbumDuration(bonusSeconds)) : '';
   if (els.duplicateWarning && els.duplicateTabs) {
     if (duplicateSources.length > 1) {
       els.duplicateWarning.hidden = false;
-      els.duplicateWarning.innerHTML = `
-        <span>Album seems to have duplicate files:</span>
-        <span class="track-modal-duplicate-warning-icons">
-          ${duplicateSources.map((source, index) => {
-            const isActive = index === duplicateSourceIndex;
-            const folderTitle = escapeHtml(String(source.folder_path || source.folder_name || `Folder ${index + 1}`));
-            return `
-              <button
-                type="button"
-                class="track-modal-duplicate-folder-button ${isActive ? 'is-active' : ''}"
-                data-open-track-modal-duplicate-folder="1"
-                data-album-key="${albumKey}"
-                data-duplicate-source-index="${index}"
-                title="${folderTitle}">
-                <span class="track-modal-duplicate-folder-icon" aria-hidden="true">📁</span>
-                <span class="track-modal-duplicate-folder-badge">${index + 1}</span>
-              </button>
-            `;
-          }).join('')}
-        </span>
-      `;
+      els.duplicateWarning.innerHTML = buildOnPageAlertHtml({
+        severity: 'warning', title: 'Duplicate album files', message: 'Album seems to have duplicate files:',
+        actionsHtml: duplicateSources.map((source, index) => ButtonComponent.renderButton({
+          label: `Folder ${index + 1}`,
+          variant: index === duplicateSourceIndex ? 'primary' : 'secondary',
+          title: String(source.folder_path || source.folder_name || `Folder ${index + 1}`),
+          attributes: {
+            'data-open-track-modal-duplicate-folder': '1',
+            'data-album-key': resolvedAlbumKey,
+            'data-duplicate-source-index': String(index),
+            'aria-pressed': String(index === duplicateSourceIndex),
+          },
+        })).join(''),
+      });
       els.duplicateTabs.hidden = false;
       els.duplicateTabs.innerHTML = duplicateSources.map((source, index) => {
         const isActive = index === duplicateSourceIndex;
@@ -1942,7 +1975,7 @@ function renderTrackModalRelease(album) {
       els.duplicateTabs.innerHTML = '';
     }
   }
-  els.list.innerHTML = albumMissing ? '' : buildTrackListHtml(tracks, album);
+  els.list.innerHTML = albumMissing ? '' : buildTrackListHtml(tracks, album, totalLength);
   if (els.footer) {
     els.footer.textContent = '';
     els.footer.hidden = true;
@@ -2062,7 +2095,7 @@ function groupAlbumTracks(tracks) {
 }
 
 
-function buildTrackListHtml(tracks, album = null) {
+function buildTrackListHtml(tracks, album = null, totalLength = null) {
   const grouped = groupAlbumTracks(tracks);
   const playback = getPlayerPlaybackSnapshot();
   const currentTrackPath = String(state.player.current?.path || '');
@@ -2130,13 +2163,22 @@ function buildTrackListHtml(tracks, album = null) {
   });
   if (typeof buildAlbumTrackTableHtml !== 'function') {
     return componentGroups.flatMap((group) => group.tracks).map((track) => (
-      `<div data-track-row-path="${escapeHtml(track.path)}"><button class="play-track-button" data-src="/track?path=${encodeURIComponent(track.path)}" data-track-path="${escapeHtml(track.path)}" data-track-title="${escapeHtml(track.playbackTitle || track.title)}" data-track-artist="${escapeHtml(track.artist)}" data-track-album-artist="${escapeHtml(track.albumArtist)}" data-track-album="${escapeHtml(track.album)}" data-track-cover="${escapeHtml(track.coverPath)}" data-track-duration-seconds="${track.durationSeconds}" type="button">${track.isPlaying ? '&#x23F8;' : '&#x25B6;'}</button><span class="track-title">${escapeHtml(track.title)}${track.secondaryArtist ? `<span class="track-artist-name">${escapeHtml(track.secondaryArtist)}</span>` : ''}</span></div>`
+      `<div data-track-row-path="${escapeHtml(track.path)}"><button class="play-track-button" data-src="/track?path=${encodeURIComponent(track.path)}" data-track-path="${escapeHtml(track.path)}" data-track-title="${escapeHtml(track.playbackTitle || track.title)}" data-track-artist="${escapeHtml(track.artist)}" data-track-album-artist="${escapeHtml(track.albumArtist)}" data-track-album="${escapeHtml(track.album)}" data-track-cover="${escapeHtml(track.coverPath)}" data-track-duration-seconds="${track.durationSeconds}" type="button">${ButtonComponent.renderIconSvg(track.isPlaying ? 'pause' : 'play', { className: `album-track-table__play-icon ui-icon--${track.isPlaying ? 'pause' : 'play'}` })}</button><span class="track-title">${escapeHtml(track.title)}${track.secondaryArtist ? `<span class="track-artist-name">${escapeHtml(track.secondaryArtist)}</span>` : ''}</span></div>`
     )).join('');
   }
+  const hasBonusDisc = componentGroups.some((group) => group.isBonus);
+  const durationForGroups = (isBonus) => componentGroups
+    .filter((group) => group.isBonus === isBonus)
+    .reduce((total, group) => total + group.tracks.reduce((seconds, track) => (
+      seconds + (Number.isFinite(track.durationSeconds) ? Math.max(0, track.durationSeconds) : 0)
+    ), 0), 0);
   return buildAlbumTrackTableHtml({
     groups: componentGroups,
+
     multiDisc: grouped.multiDisc,
-    totalLength: album?.total_duration_display || formatAlbumDuration(album?.total_duration_seconds),
+    totalLength: totalLength ?? (album?.total_duration_display || formatAlbumDuration(album?.total_duration_seconds)),
+    mainLength: hasBonusDisc && durationForGroups(false) > 0 ? (formatTrackDuration(durationForGroups(false)) || formatAlbumDuration(durationForGroups(false))) : '',
+    bonusLength: hasBonusDisc && durationForGroups(true) > 0 ? (formatTrackDuration(durationForGroups(true)) || formatAlbumDuration(durationForGroups(true))) : '',
     playingAnimation: document.documentElement?.getAttribute('data-album-playing-row-animation') !== 'disabled',
   });
 }
@@ -2334,8 +2376,14 @@ function refreshTrackModalPlaybackState() {
 
     const button = row.querySelector('.play-track-button');
     if (button) {
-      button.innerHTML = isActivelyPlaying ? '&#x23F8;' : '&#x25B6;';
-      button.setAttribute('aria-label', isActivelyPlaying ? 'Pause track' : 'Play track');
+      const iconName = isActivelyPlaying ? 'pause' : 'play';
+      const label = isActivelyPlaying ? 'Pause track' : 'Play track';
+      if (button.getAttribute('aria-label') !== label) {
+        button.innerHTML = ButtonComponent.renderIconSvg(iconName, {
+          className: `album-track-table__play-icon ui-icon--${iconName}`,
+        });
+        button.setAttribute('aria-label', label);
+      }
     }
 
     const durationEl = row.querySelector('[data-track-duration-path]');
@@ -2361,21 +2409,111 @@ function refreshNonAlbumModalPlaybackState() {
     const isActivelyPlaying = isCurrentTrack && !playback.paused && !playback.ended;
     row.classList.toggle('is-current', isCurrentTrack);
     row.classList.toggle('is-playing', isActivelyPlaying);
+    row.classList.toggle('album-track-table__row--current', isCurrentTrack);
+    row.classList.toggle('album-track-table__row--playing', isActivelyPlaying);
+    row.classList.toggle(
+      'album-track-table__row--animated',
+      Boolean(isActivelyPlaying && document.documentElement?.getAttribute('data-album-playing-row-animation') !== 'disabled'),
+    );
+    if (row.dataset) row.dataset.trackPlaying = isActivelyPlaying ? 'true' : '';
 
     const button = row.querySelector('.play-track-button');
     if (button) {
-      button.innerHTML = isActivelyPlaying ? '&#x23F8;' : '&#x25B6;';
-      button.setAttribute('aria-label', isActivelyPlaying ? 'Pause track' : 'Play track');
+      const iconName = isActivelyPlaying ? 'pause' : 'play';
+      const label = isActivelyPlaying ? 'Pause track' : 'Play track';
+      if (button.getAttribute('aria-label') !== label) {
+        button.innerHTML = ButtonComponent.renderIconSvg(iconName, {
+          className: `album-track-table__play-icon ui-icon--${iconName}`,
+        });
+        button.setAttribute('aria-label', label);
+      }
     }
 
     const durationEl = row.querySelector('[data-track-duration-path]');
     if (durationEl) {
       const originalDuration = durationEl.dataset.originalDuration || '';
       const displayedTime = isCurrentTrack ? `${activeCurrent} / ${activeDuration || originalDuration || '0:00'}` : originalDuration;
-      durationEl.innerHTML = displayedTime
-        ? `<span class="sep">&#8226;</span> ${escapeHtml(displayedTime)}`
-        : '';
+      durationEl.innerHTML = displayedTime ? escapeHtml(displayedTime) : '';
     }
   });
 }
 
+
+function openProblemSuggestionsConfirm() {
+  const album = getSelectedProblematicAlbum();
+  const proposals = getApplicableProblemSuggestions();
+  if (!album?.allowed_actions?.['library.files.edit_tags'] || !proposals.length || state.utility.proposalApplyBusy) return;
+  state.utility.pendingProblemSuggestions = { albumKey: album.key, ids: proposals.map(item => item.id), proposals: proposals.map(item => ({ ...item })) };
+  state.utility.pendingRepairKey = album.key;
+  state.utility.pendingRepairAction = 'suggestions';
+  openRepairConfirmModal();
+}
+
+async function confirmProblemSuggestions() {
+  const pending = state.utility.pendingProblemSuggestions;
+  const album = getSelectedProblematicAlbum();
+  if (!pending || state.utility.proposalApplyBusy) return;
+  const visible = getVisibleProblemSuggestions();
+  const proposals = pending.ids.map(id => visible.find(item => item.id === id));
+  if (!album?.allowed_actions?.['library.files.edit_tags'] || album.key !== pending.albumKey || proposals.some(item => !item)) {
+    showToast('These edits are no longer available. Review the current suggestions.', 'error', 3200);
+    return;
+  }
+  const updates = {};
+  for (const proposal of proposals) {
+    const target = updates[proposal.path] ||= {};
+    for (const [field, value] of Object.entries(proposal.updates || {})) {
+      if (Object.prototype.hasOwnProperty.call(target, field) && target[field] !== value) {
+        showToast('Selected edits conflict. Review the current suggestions.', 'error', 3200);
+        return;
+      }
+      target[field] = value;
+    }
+  }
+  const originatingViewStateRevision = readTagEditOriginViewStateRevision();
+  state.utility.proposalApplyBusy = true;
+  const modal = getRepairConfirmElements();
+  if (modal.accept) modal.accept.disabled = true;
+  if (modal.cancel) modal.cancel.disabled = true;
+  try {
+    const response = await fetch('/utilities/edit-tags', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ confirmed: true, album, proposal_ids: pending.ids, updates, problematic_files_origin: true }),
+    });
+    const data = await response.json().catch(() => ({}));
+    state.utility.proposalOutcomes = Array.isArray(data.proposal_outcomes) ? data.proposal_outcomes : [];
+    const committedIds = new Set(state.utility.proposalOutcomes.filter(item => item.status === 'committed').map(item => item.id));
+    if (!response.ok || !data.ok || pending.ids.some(id => !committedIds.has(id)) || (data.save_task_id && data.save_task_status !== 'completed')) {
+      pending.ids.forEach(id => { (state.utility.proposalSelections ||= {})[id] = true; });
+      throw new Error(data.error || 'Suggested edits were not committed.');
+    }
+    closeRepairConfirmModal();
+    const mutation = data.save_task_id ? claimProblematicSaveTaskMutation(data.save_task_id, album, pending.albumKey) : null;
+    const previousItems = state.utility.problematicFiles;
+    const refreshed = await loadProblematicFiles(true, { render: false });
+    if (!refreshed) {
+      state.utility.problematicFiles = previousItems;
+      if (mutation) await settleProblematicSaveTaskMutation(data.save_task_id);
+      throw new Error('Edits were saved, but Problems could not refresh. Reload before retrying.');
+    }
+    pending.ids.forEach(id => { if (state.utility.proposalSelections) delete state.utility.proposalSelections[id]; });
+    if (mutation) await settleProblematicSaveTaskMutation(data.save_task_id, { reconcileSelection: true });
+    else {
+      const selectedKey = state.utility.selectedProblematicKey;
+      if ((state.utility.problematicFiles || []).some(item => item.key === selectedKey)) await loadProblematicAlbumDetail(selectedKey, true, { render: false });
+      renderUtilityModalContent();
+    }
+    if (tagEditOriginStillOwnsView(originatingViewStateRevision) && Array.isArray(data.updated_albums) && data.updated_albums.length) {
+      updateOpenTrackModalAfterTagEdit(album, applyUpdatedAlbumsToCurrentView(data.updated_albums, { originalAlbum: album, preserveScroll: true }));
+    }
+    showToast('Suggested edits applied.', 'success', 2400);
+  } catch (error) {
+    console.error('[AlbumHaven][Utilities] Suggested edits failed.', error);
+    showToast(error.message || 'Unable to apply suggested edits.', 'error', 4000);
+  } finally {
+    state.utility.proposalApplyBusy = false;
+    if (modal.accept) modal.accept.disabled = false;
+    if (modal.cancel) modal.cancel.disabled = false;
+    syncProblemSuggestionSelection();
+  }
+}

@@ -1,4 +1,5 @@
 import asyncio
+from dataclasses import replace
 from datetime import datetime, timezone
 from html.parser import HTMLParser
 import json
@@ -208,6 +209,30 @@ def _get(app, path):
     return asyncio.run(_get_async(app, path, session))
 
 
+@pytest.mark.parametrize("path", ["/admin/members", "/admin/accounts/41"])
+@pytest.mark.parametrize("change", ["same", "removed", "added"])
+def test_listener_customization_badge_compares_capabilities_without_order(monkeypatch, path, change):
+    from music_app.routes import admin_asgi
+
+    defaults = tuple(sorted(admin_asgi._LISTENER_DEFAULTS))
+    # Iteration order is not part of a capability set's meaning.
+    monkeypatch.setattr(admin_asgi, "_LISTENER_DEFAULTS", tuple(reversed(defaults)))
+    capabilities = defaults
+    if change == "removed":
+        capabilities = defaults[:-1]
+    elif change == "added":
+        capabilities = defaults + ("library.inventory.manage",)
+    app, service = _app()
+    roster = service.load_roster()
+    member = replace(roster.members[1], capability_keys=capabilities)
+    service.load_roster = lambda **_kwargs: replace(roster, members=(member,))
+
+    status, _headers, body = _get(app, path)
+
+    assert status == 200
+    assert ("Customized" in body) is (change != "same")
+
+
 async def _json_request_async(app, method, path, session, payload):
     body = json.dumps(payload).encode("utf-8")
     messages = []
@@ -301,6 +326,8 @@ def test_members_add_and_edit_are_in_place_pages_with_back_navigation():
 
 
 def test_owner_role_projects_all_inherited_permissions_and_submittable_values():
+    from music_app.services.admin_account_creation import MANAGED_CAPABILITY_KEYS
+
     app, service = _app()
 
     status, _headers, body = _get(app, "/admin/accounts/7")
@@ -314,14 +341,7 @@ def test_owner_role_projects_all_inherited_permissions_and_submittable_values():
     inputs = FormInputs(body, "capability_keys").inputs
     switches = [item for item in inputs if item.get("type") == "checkbox"]
     inherited_values = [item for item in inputs if item.get("type") == "hidden"]
-    expected_keys = {
-        "library.browse.read", "library.media.read", "library.problems.read",
-        "library.inventory.manage",
-        "library.resources.read", "library.playlists.create", "library.playlists.manage",
-        "library.playlists.items.manage", "library.track_preferences.manage",
-        "library.discovery.read", "library.rules.read", "library.logs.read",
-        "library.virtual_discography.read",
-    }
+    expected_keys = set(MANAGED_CAPABILITY_KEYS)
     assert len(switches) == len(expected_keys)
     assert {item["value"] for item in switches} == expected_keys
     assert all("checked" in item and "disabled" in item for item in switches)
@@ -354,6 +374,8 @@ def test_owner_role_projects_all_inherited_permissions_and_submittable_values():
     ],
 )
 def test_nonowner_role_remains_listener_with_editable_explicit_permissions(path, selected_keys):
+    from music_app.services.admin_account_creation import MANAGED_CAPABILITY_KEYS
+
     app, _service = _app()
 
     status, _headers, body = _get(app, path)
@@ -363,7 +385,8 @@ def test_nonowner_role_remains_listener_with_editable_explicit_permissions(path,
     assert '<option value="owner"' not in body
     assert "Individual permissions below override" in body
     inputs = FormInputs(body, "capability_keys").inputs
-    assert len(inputs) == 13
+    assert len(inputs) == len(MANAGED_CAPABILITY_KEYS)
+    assert {item["value"] for item in inputs} == set(MANAGED_CAPABILITY_KEYS)
     assert all(item["type"] == "checkbox" and "disabled" not in item for item in inputs)
     assert {item["value"] for item in inputs if "checked" in item} == selected_keys
 
@@ -558,3 +581,36 @@ def test_admin_mail_routes_return_ambiguous_secret_free_responses():
     assert service.welcome_calls[0]["actor_account_id"] == 7
     assert service.welcome_calls[0]["target_account_id"] == 41
     assert service.reset_calls[0]["target_account_id"] == 41
+
+
+@pytest.mark.parametrize("action", ["welcome", "password-reset"])
+@pytest.mark.parametrize("failure", [RuntimeError, ValueError])
+def test_admin_mail_initialization_errors_are_service_unavailable(monkeypatch, action, failure):
+    from music_app.routes import admin_asgi
+
+    app, service = _app()
+    del app.state.admin_mail_action_service
+
+    def unavailable(_config):
+        raise failure("private mail configuration detail")
+
+    monkeypatch.setattr(admin_asgi, "PostgresAdminMailActionService", unavailable)
+    status, body = _json_request(app, "POST", f"/admin/accounts/41/{action}", {})
+
+    assert status == 503
+    assert body == b'{"detail":"Mail action is temporarily unavailable."}'
+    assert service.welcome_calls == service.reset_calls == []
+    assert not hasattr(app.state, "admin_mail_action_service")
+
+
+@pytest.mark.parametrize("action,method", [("welcome", "queue_welcome"), ("password-reset", "queue_password_reset")])
+def test_admin_mail_action_validation_still_returns_client_error(action, method):
+    app, service = _app()
+
+    def invalid(**_kwargs):
+        raise ValueError("private validation detail")
+
+    setattr(service, method, invalid)
+    status, body = _json_request(app, "POST", f"/admin/accounts/41/{action}", {})
+    assert status == 400
+    assert body == b'{"detail":"Mail action was invalid."}'

@@ -7,6 +7,15 @@ function normalizeAlbumDetailsLayout(value) {
 
 function buildAlbumDetailsHeaderHtml(config = {}) {
   const layout = normalizeAlbumDetailsLayout(config.layout);
+  const variant = config.variant === 'copy' ? 'copy' : 'album';
+  const titleId = escapeHtml(config.titleId || 'track-modal-title');
+  const subtitleId = escapeHtml(config.subtitleId || 'track-modal-subtitle');
+  const actionHtml = String(config.actionsHtml || '');
+  if (variant === 'copy') {
+    const title = escapeHtml(config.title || '');
+    const subtitle = escapeHtml(config.subtitle || '');
+    return `<header class="album-details-header" data-album-details-layout="classic_bar" data-album-details-variant="copy"><div class="album-details-header__identity"><div class="album-details-header__copy"><h3 class="album-details-header__primary" id="${titleId}">${title}</h3><div class="album-details-header__secondary" id="${subtitleId}">${subtitle}</div></div></div>${actionHtml ? `<div class="album-details-header__actions">${actionHtml}</div>` : ''}</header>`;
+  }
   const artist = escapeHtml(config.artist || '');
   const album = escapeHtml(config.album || 'Album');
   const year = escapeHtml(config.year || '');
@@ -18,7 +27,6 @@ function buildAlbumDetailsHeaderHtml(config = {}) {
     return `<span class="album-details-header__tag${missingClass}">${escapeHtml(label)}</span>`;
   });
   const tagHtml = tagParts.join('');
-  const actionHtml = String(config.actionsHtml || '');
   const compactIdentity = [artist, album, year].filter(Boolean).join(' <span aria-hidden="true">•</span> ');
   const stackedPrimary = [artist, album].filter(Boolean).join(' <span aria-hidden="true">•</span> ');
   const secondaryValues = layout === 'editorial_canvas'
@@ -29,7 +37,7 @@ function buildAlbumDetailsHeaderHtml(config = {}) {
     .map((part) => `<span${part.releaseType ? ' class="album-details-header__release-type"' : ''}>${part.value}</span>`);
   const secondaryHtml = [...secondaryParts, ...tagParts].join('<span aria-hidden="true">•</span>');
   const primary = layout === 'classic_bar' ? compactIdentity : (layout === 'editorial_canvas' ? album : stackedPrimary);
-  return `<header class="album-details-header" data-album-details-layout="${layout}"><div class="album-details-header__identity"><h3 class="album-details-header__primary" id="track-modal-title">${primary}</h3>${layout === 'classic_bar' ? `<div class="album-details-header__tags">${releaseType ? `<span class="album-details-header__release-type">${releaseType}</span>` : ''}${tagHtml}</div>` : `<div class="album-details-header__secondary" id="track-modal-subtitle">${secondaryHtml}</div>`}</div>${actionHtml ? `<div class="album-details-header__actions">${actionHtml}</div>` : ''}${layout === 'classic_bar' ? '<div class="track-modal-subtitle" id="track-modal-subtitle"></div>' : ''}</header>`;
+  return `<header class="album-details-header" data-album-details-layout="${layout}"><div class="album-details-header__identity"><h3 class="album-details-header__primary" id="${titleId}">${primary}</h3>${layout === 'classic_bar' ? `<div class="album-details-header__tags">${releaseType ? `<span class="album-details-header__release-type">${releaseType}</span>` : ''}${tagHtml}</div>` : `<div class="album-details-header__secondary" id="${subtitleId}">${secondaryHtml}</div>`}</div>${actionHtml ? `<div class="album-details-header__actions">${actionHtml}</div>` : ''}${layout === 'classic_bar' ? `<div class="track-modal-subtitle" id="${subtitleId}"></div>` : ''}</header>`;
 }
 
 function buildAlbumDetailsHeaderActionsHtml(config = {}) {
@@ -64,6 +72,24 @@ function buildAlbumDetailsHeaderActionsHtml(config = {}) {
       className: 'track-modal-close album-details-header__action',
       iconClass: 'album-details-header__action-icon album-details-header__action-icon--close',
       attributes: { id: 'track-modal-close', 'data-close-track-modal': '1' },
+    }),
+  ].join('');
+}
+
+function buildLooseTracksHeaderActionsHtml() {
+  return [
+    ButtonComponent.renderActionButton({
+      ariaLabel: 'Edit tags',
+      title: 'Edit tags',
+      className: 'track-modal-edit-tags album-details-header__action',
+      iconClass: 'album-details-header__action-icon album-details-header__action-icon--edit',
+      attributes: { id: 'non-album-modal-edit-tags', 'data-open-non-album-tag-editor': '1' },
+    }),
+    ButtonComponent.renderActionButton({
+      ariaLabel: 'Close loose tracks',
+      className: 'album-details-header__action',
+      iconClass: 'album-details-header__action-icon album-details-header__action-icon--close',
+      attributes: { id: 'non-album-modal-close', 'data-close-non-album-modal': '1' },
     }),
   ].join('');
 }

@@ -1,3 +1,4 @@
+import { InteractionSurfaces, expectAlbumPauseFirstClick, expectSlowActivationLights, expectStableButtonHover } from '../poms/interactionSurfaces.js';
 import { expect, test } from '../support/baseFixtures.js';
 
 const CASE_ID = 'FTC-PLAYER-019 / FTC-PLAYER-020 / FTC-PLAYER-021 / FTC-PLAYER-022';
@@ -6,7 +7,80 @@ const ALBUM = {
   album: 'Signed Scrobble Journey',
   year: '2026',
 };
-test(`${CASE_ID} switches expanded, docked, and floating player views without sharing runner state`, async ({
+const REFLOW_ARTIST = 'ДДТ';
+
+test('FTC-ARTIST-TREE-001 folding reflows the virtual gallery without losing browse or player state', { tag: ['@area:playback', '@area:gallery-search'] }, async ({
+  galleryActions,
+  globalPlayerActions,
+  navigationPanelActions,
+  page,
+  searchToolbarActions,
+  stepLogger,
+  trackModalActions,
+}) => {
+  let playbackIdentity;
+  let persistentPlayer;
+
+  await stepLogger.step('Start playback and browse a scrolled selected-artist search', async () => {
+    await page.setViewportSize({ width: 1400, height: 760 });
+    await galleryActions.goto();
+    await galleryActions.waitForGalleryReady();
+    await galleryActions.selectAlbumDetailsByIdentity(ALBUM);
+    await trackModalActions.waitForLoadedSummary();
+    const selectedTrack = await trackModalActions.playTrackAt(0);
+    await globalPlayerActions.waitForCurrentTrack({ path: selectedTrack.path, trackTitle: selectedTrack.title });
+    playbackIdentity = await globalPlayerActions.readCurrentPlaybackSummary();
+    persistentPlayer = await globalPlayerActions.globalPlayer.player.elementHandle();
+    await trackModalActions.close();
+
+    await searchToolbarActions.search(REFLOW_ARTIST, { submitWithEnter: true });
+    await searchToolbarActions.waitForQuery(REFLOW_ARTIST);
+    await navigationPanelActions.waitForSidebarSelection(REFLOW_ARTIST);
+    await galleryActions.waitForSelectedArtistGallery(REFLOW_ARTIST, { queryValue: REFLOW_ARTIST });
+    await galleryActions.jumpGalleryToMiddle();
+  });
+
+  await stepLogger.step('Gain one column at 1400px and preserve the visible anchor and state', async () => {
+    const before = await galleryActions.galleryPage.readArtistTreeReflowCheckpoint();
+    expect(before.scrollTop).toBeGreaterThan(0);
+    expect(before.anchorKey).not.toBe('');
+    await navigationPanelActions.setArtistTreeFolded(true);
+    await expect.poll(async () => (await galleryActions.galleryPage.readArtistTreeReflowCheckpoint()).columns)
+      .toBe(before.columns + 1);
+    const after = await galleryActions.galleryPage.readArtistTreeReflowCheckpoint();
+    expect(after.anchorKey).toBe(before.anchorKey);
+    expect(after.query).toBe(REFLOW_ARTIST);
+    expect(after.selectedArtist).toBe(REFLOW_ARTIST);
+    const playbackAfter = await globalPlayerActions.readCurrentPlaybackSummary();
+    expect(playbackAfter.title).toBe(playbackIdentity.title);
+    expect(await globalPlayerActions.globalPlayer.isConnected(persistentPlayer)).toBe(true);
+  });
+
+  await stepLogger.step('Repeat the fold at a width that does not gain a column', async () => {
+    await navigationPanelActions.setArtistTreeFolded(false);
+    await page.setViewportSize({ width: 1280, height: 760 });
+    const before = await galleryActions.galleryPage.readArtistTreeReflowCheckpoint();
+    await navigationPanelActions.setArtistTreeFolded(true);
+    await expect.poll(async () => (await galleryActions.galleryPage.readArtistTreeReflowCheckpoint()).columns)
+      .toBe(before.columns);
+    const after = await galleryActions.galleryPage.readArtistTreeReflowCheckpoint();
+    expect(after.anchorKey).toBe(before.anchorKey);
+    expect(after.query).toBe(REFLOW_ARTIST);
+    expect(after.selectedArtist).toBe(REFLOW_ARTIST);
+  });
+
+  await stepLogger.step('Honor reduced motion across another expand and fold cycle', async () => {
+    await page.emulateMedia({ reducedMotion: 'reduce' });
+    await navigationPanelActions.setArtistTreeFolded(false);
+    await navigationPanelActions.setArtistTreeFolded(true);
+    const motion = await navigationPanelActions.navigationPanel.readReducedMotionState();
+    expect(motion.duration).toBe('1ms');
+    expect(motion.transition).toBe('none');
+  });
+});
+
+test(`${CASE_ID} switches expanded, docked, and floating player views without sharing runner state`, { tag: '@area:playback' }, async ({
+  appearancePreferenceIsolation,
   galleryActions,
   globalPlayerActions,
   page,
@@ -17,6 +91,8 @@ test(`${CASE_ID} switches expanded, docked, and floating player views without sh
   utilityAppearanceActions,
   utilityTabBarActions,
 }) => {
+  await appearancePreferenceIsolation.capture();
+  const surfaces = new InteractionSurfaces(page);
   let selectedTrack;
 
   await stepLogger.step('Start generated playback through the production album flow', async () => {
@@ -37,6 +113,16 @@ test(`${CASE_ID} switches expanded, docked, and floating player views without sh
     });
     expect(evidence.nonZeroSamples).toBeGreaterThan(0);
     expect(evidence.renderedFrameDelta).toBeGreaterThan(0);
+    await expect(surfaces.playingRow).not.toHaveCSS('box-shadow', 'none');
+    await expect(surfaces.playingRow).not.toHaveCSS('background-color', 'rgba(0, 0, 0, 0)');
+    await expectStableButtonHover(page, surfaces.albumArt);
+    await expect(surfaces.albumArt).toHaveCSS('outline-style', 'none');
+    await expectSlowActivationLights(trackModalActions.trackModal.playButtons.first());
+    await globalPlayerActions.waitForPlaybackState({ paused: true });
+    await trackModalActions.trackModal.playButtons.first().click();
+    await globalPlayerActions.waitForPlaybackState({ paused: false });
+    await expectAlbumPauseFirstClick(page, globalPlayerActions);
+    await expect(surfaces.playerTitle).not.toHaveCSS('text-shadow', 'none');
     await trackModalActions.close();
   });
 
@@ -47,14 +133,14 @@ test(`${CASE_ID} switches expanded, docked, and floating player views without sh
     await utilityTabBarActions.openTab('appearance');
     await utilityAppearanceActions.waitForReady();
     await utilityAppearanceActions.saveCompactPlayerStyle('docked');
-    await utilityAppearanceActions.selectSeekbarMode('default');
+    await utilityAppearanceActions.saveSeekbarMode('default');
     await settingsModalAppBarActions.closeSettings();
     await globalPlayerActions.expectExpandedGeometry('regular');
 
     await settingsModalAppBarActions.openSettings();
     await utilityTabBarActions.openTab('appearance');
     await utilityAppearanceActions.waitForReady();
-    await utilityAppearanceActions.selectSeekbarMode('waveform');
+    await utilityAppearanceActions.saveSeekbarMode('waveform');
     await settingsModalAppBarActions.closeSettings();
     await globalPlayerActions.expectExpandedGeometry('waveform');
 
@@ -67,7 +153,7 @@ test(`${CASE_ID} switches expanded, docked, and floating player views without sh
     await settingsModalAppBarActions.openSettings();
     await utilityTabBarActions.openTab('appearance');
     await utilityAppearanceActions.waitForReady();
-    await utilityAppearanceActions.selectSeekbarMode('default');
+    await utilityAppearanceActions.saveSeekbarMode('default');
     await settingsModalAppBarActions.closeSettings();
     await globalPlayerActions.expectExpandedGeometry('regular');
 
@@ -103,6 +189,41 @@ test(`${CASE_ID} switches expanded, docked, and floating player views without sh
     expect(after.paused).toBe(before.paused);
   });
 
+  await stepLogger.step('Folded Artist Tree follows the saved docked compact-player behavior', async () => {
+    await settingsModalAppBarActions.openSettings();
+    await utilityTabBarActions.openTab('appearance');
+    await utilityAppearanceActions.waitForReady();
+    await utilityAppearanceActions.openSection('seekbar');
+    await utilityAppearanceActions.saveDockedCompactPlayerBehavior('follow_sidebar');
+    await settingsModalAppBarActions.closeSettings();
+
+    await navigationPanelActions.navigationPanel.artistTreeFoldButton.click();
+    const followed = await globalPlayerActions.collapsePlayer('docked');
+    expect(followed.player.width).toBeCloseTo(56, 0);
+    await expect(globalPlayerActions.globalPlayer.player).toHaveClass(/\bis-rail-compact\b/);
+    await expect(globalPlayerActions.globalPlayer.compactPlayer.coverButton).toBeHidden();
+    await expect(globalPlayerActions.globalPlayer.compactPlayer.controls.previousButton).toBeHidden();
+    await expect(globalPlayerActions.globalPlayer.compactPlayer.controls.nextButton).toBeHidden();
+    await expect(globalPlayerActions.globalPlayer.compactPlayer.controls.playPauseButton).toBeVisible();
+    await expect(globalPlayerActions.globalPlayer.compactPlayer.expand.root).toBeVisible();
+    await globalPlayerActions.expandPlayer();
+
+    await settingsModalAppBarActions.openSettings();
+    await utilityTabBarActions.openTab('appearance');
+    await utilityAppearanceActions.waitForReady();
+    await utilityAppearanceActions.openSection('seekbar');
+    await utilityAppearanceActions.saveDockedCompactPlayerBehavior('stay_docked');
+    await settingsModalAppBarActions.closeSettings();
+
+    const stayed = await globalPlayerActions.collapsePlayer('docked');
+    expect(stayed.player.width).toBeGreaterThan(200);
+    await expect(globalPlayerActions.globalPlayer.player).not.toHaveClass(/\bis-rail-compact\b/);
+    await expect(globalPlayerActions.globalPlayer.compactPlayer.coverButton).toBeVisible();
+    await expect(globalPlayerActions.globalPlayer.compactPlayer.controls.nextButton).toBeVisible();
+    await globalPlayerActions.expandPlayer();
+    await navigationPanelActions.navigationPanel.artistTreeNavigationButton.click();
+  });
+
   await stepLogger.step('Save Floating in Appearance and collapse into its overlay layout', async () => {
     await settingsModalAppBarActions.openSettings();
     await utilityTabBarActions.openTab('appearance');
@@ -123,7 +244,12 @@ test(`${CASE_ID} switches expanded, docked, and floating player views without sh
     await expect(globalPlayerActions.globalPlayer.compactPlayer.coverButton)
       .toHaveAttribute('aria-label', 'Double-click to open album details');
 
-    const idleAppearance = floating.floatingAppearance;
+    await expectStableButtonHover(page, globalPlayerActions.globalPlayer.compactPlayer.expand.root);
+    await expect(globalPlayerActions.globalPlayer.compactPlayer.expand.root).toHaveCSS('border-top-width', '1px');
+    await page.mouse.move(page.viewportSize().width / 2, page.viewportSize().height / 2);
+    await surfaces.search.focus();
+    await expect(globalPlayerActions.globalPlayer.player).toHaveCSS('--compact-floating-edge-strength', '12%');
+    const idleAppearance = (await globalPlayerActions.readViewCheckpoint()).floatingAppearance;
     await globalPlayerActions.globalPlayer.player.hover();
     const hoverAppearance = (await globalPlayerActions.readViewCheckpoint()).floatingAppearance;
     expect(hoverAppearance.borderColor).not.toBe(idleAppearance.borderColor);
@@ -137,6 +263,7 @@ test(`${CASE_ID} switches expanded, docked, and floating player views without sh
   });
 
   await stepLogger.step('Distinguish Floating artwork activation from a bounded drag', async () => {
+    await settingsModalAppBarActions.openSettings();
     await globalPlayerActions.globalPlayer.compactPlayer.coverButton.click();
     await expect(trackModalActions.trackModal.dialog).toBeHidden();
     await globalPlayerActions.globalPlayer.compactPlayer.coverButton.dblclick();
@@ -144,6 +271,8 @@ test(`${CASE_ID} switches expanded, docked, and floating player views without sh
     expect(opened.title).toContain(ALBUM.album);
     await trackModalActions.close();
 
+    await settingsModalAppBarActions.waitForOpen();
+    await settingsModalAppBarActions.closeSettings();
     const drag = await globalPlayerActions.dragFloatingPlayerTo('top-right');
     expect(drag.after.player.x).toBeGreaterThan(drag.before.player.x);
     expect(drag.after.player.x + drag.after.player.width).toBeLessThanOrEqual(drag.viewport.width - 3);
@@ -167,4 +296,19 @@ test(`${CASE_ID} switches expanded, docked, and floating player views without sh
     expect((await globalPlayerActions.readViewCheckpoint()).style).toBe('floating');
     await globalPlayerActions.expandPlayer();
   });
+  await stepLogger.step('A second tab shows a disabled play icon rather than a Locked label', async () => {
+    await galleryActions.selectAlbumDetailsByIdentity(ALBUM);
+    await trackModalActions.waitForLoadedSummary();
+    await trackModalActions.trackModal.trackTitleAt(0).dblclick();
+    await globalPlayerActions.waitForPlaybackState({ paused: false });
+    const peer = await page.context().newPage();
+    try {
+      await peer.goto(page.url());
+      const peerSurfaces = new InteractionSurfaces(peer);
+      await expect(peerSurfaces.play).toBeDisabled();
+      await expect(peerSurfaces.play).not.toContainText('Locked');
+      await expect(peerSurfaces.play).toHaveAttribute('aria-label', 'Playback locked in another tab');
+    } finally { await peer.close(); }
+  });
+
 });

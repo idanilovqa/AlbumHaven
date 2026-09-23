@@ -55,7 +55,7 @@ const EXPECTED_PROVIDER_ROLES = [
   'false-artist-identity-project',
 ];
 
-test(`${CASE_ID} lookup matching rejects larger false Metallica releases before provider autoselection`, async ({
+test(`${CASE_ID} lookup matching rejects larger false Metallica releases before provider autoselection`, { tag: '@area:cover-providers' }, async ({
   coverLookupActions,
   galleryActions,
   stepLogger,

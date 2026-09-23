@@ -153,6 +153,11 @@ async function mountAlbumDetailsComponents(page) {
   await page.addScriptTag({
     content: `function escapeHtml(value) { return String(value ?? '').replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;').replaceAll('"', '&quot;'); }`,
   });
+  await page.addScriptTag({ path: path.join(repositoryRoot, 'music_app', 'static', 'js', 'button-component.js') });
+  await page.addScriptTag({ path: path.join(repositoryRoot, 'music_app', 'static', 'js', 'runtime', 'album-details-components.js') });
+  await page.locator('.album-details-header__actions').evaluate(host => {
+    host.innerHTML = buildAlbumDetailsHeaderActionsHtml();
+  });
   await page.addScriptTag({ path: path.join(repositoryRoot, 'music_app', 'static', 'js', 'runtime', 'compact-data-table.js') });
   await page.addScriptTag({ path: path.join(repositoryRoot, 'music_app', 'static', 'js', 'runtime', 'album-track-table.js') });
   await page.locator('#table-host').evaluate((host) => {
@@ -168,6 +173,136 @@ async function mountAlbumDetailsComponents(page) {
     });
   });
 }
+
+for (const width of [960, 390]) {
+  test(`explicit bonus duration summaries remain visible in the shared frame at ${width}px`, async ({ page }, testInfo) => {
+    await mountAlbumDetailsComponents(page);
+    await page.setViewportSize({ width, height: 844 });
+    await page.locator('#table-host').evaluate((host) => {
+      host.innerHTML = buildAlbumTrackTableHtml({
+        groups: [
+          { discNumber: 1, discLabel: 'CD 1', isBonus: false, tracks: [{ path: 'main', title: 'Main track', duration: '3:00' }] },
+          { discNumber: 2, discLabel: 'Bonus Disc', isBonus: true, tracks: [{ path: 'bonus', title: 'Bonus track', duration: '22:30' }] },
+        ],
+        totalLength: '25m 30s', mainLength: '3:00', bonusLength: '22:30',
+      });
+    });
+    const frame = page.locator('.album-track-table__frame');
+    for (const text of ['Total Length: 25m 30s', 'Total Main Album Length: 3:00', 'Bonus Disc Length: 22:30']) {
+      const summary = frame.getByText(text, { exact: true });
+      await expect(summary).toBeVisible();
+      const bounds = await summary.evaluate(element => {
+        const range = document.createRange();
+        range.selectNodeContents(element);
+        const textBox = range.getBoundingClientRect();
+        const frameBox = element.closest('.album-track-table__frame').getBoundingClientRect();
+        return { left: textBox.left, right: textBox.right, frameLeft: frameBox.left, frameRight: frameBox.right };
+      });
+      expect(bounds.left).toBeGreaterThanOrEqual(bounds.frameLeft);
+      expect(bounds.right).toBeLessThanOrEqual(bounds.frameRight);
+      const masks = await summary.evaluate(element => {
+        const values = [];
+        for (let ancestor = element; ancestor; ancestor = ancestor.parentElement) {
+          values.push(getComputedStyle(ancestor).maskImage);
+          if (ancestor.classList.contains('album-track-table__frame')) break;
+        }
+        return values;
+      });
+      expect(masks.every(mask => mask === 'none')).toBe(true);
+    }
+    const decoration = await frame.locator('.album-track-table__total').evaluate(element => {
+      const style = getComputedStyle(element, '::before');
+      return { mask: style.maskImage, pointerEvents: style.pointerEvents };
+    });
+    expect(decoration.mask).toContain('linear-gradient');
+    expect(decoration.pointerEvents).toBe('none');
+    await expect(frame.getByRole('table')).toHaveCount(2);
+    await expect(frame.locator('.compact-data-table-header')).toHaveCount(1);
+    await expect(frame.getByRole('heading')).toHaveText(['Bonus Disc']);
+    await frame.screenshot({ path: testInfo.outputPath('duration-summaries.png') });
+  });
+}
+
+for (const scenario of [
+  { setting: false, motion: 'no-preference' },
+  { setting: true, motion: 'reduce' },
+  { setting: false, motion: 'reduce' },
+  { setting: true, motion: 'no-preference' },
+]) {
+  test(`playing motion independently honors setting ${scenario.setting} and OS ${scenario.motion}`, async ({ page }) => {
+    await mountAlbumDetailsComponents(page);
+    await page.emulateMedia({ reducedMotion: scenario.motion });
+    await page.locator('#table-host').evaluate((host, setting) => {
+      host.innerHTML = buildAlbumTrackTableHtml({
+        groups: [{ tracks: [{ path: 'playing', title: 'Playing track', isCurrent: true, isPlaying: true }] }],
+        playingAnimation: setting,
+      });
+    }, scenario.setting);
+    const row = page.locator('.album-track-table__row');
+    await expect(row).toHaveClass(/album-track-table__row--playing/);
+    await expect(row).toHaveCSS('outline-style', 'solid');
+    await expect(row).toHaveCSS('outline-width', '1px');
+    const spectra = await row.evaluate(element => ['::before', '::after'].map(pseudo => {
+      const style = getComputedStyle(element, pseudo);
+      return { animation: style.animationName, display: style.display, opacity: style.opacity };
+    }));
+    for (const spectrum of spectra) {
+      if (scenario.setting && scenario.motion === 'no-preference') {
+        expect(spectrum.animation).toContain('album-track-perimeter-spectrum');
+      } else {
+        if (scenario.motion === 'reduce') expect(spectrum.display).toBe('none');
+        else {
+          expect(spectrum.animation).toBe('none');
+          expect(spectrum.opacity).toBe('0');
+        }
+      }
+    }
+    if (!scenario.setting || scenario.motion === 'reduce') {
+      expect(await row.evaluate(element => element.getAnimations({ subtree: true })
+        .filter(animation => animation.playState === 'running').length)).toBe(0);
+    }
+  });
+}
+
+test('long album track titles preserve all four usable columns with combined number and Play inside a narrow dialog', async ({ page }) => {
+  await mountAlbumDetailsComponents(page);
+  await page.setViewportSize({ width: 390, height: 844 });
+  const row = page.locator('[data-track-row-path="two.flac"]');
+  await row.locator('.album-track-table__title').evaluate(element => { element.textContent = 'A very long album track title that must yield to the duration and problem controls '.repeat(4); });
+  const table = page.getByRole('table', { name: /Album tracks/ });
+  const dialog = page.locator('.track-modal-dialog');
+  const [tableBox, dialogBox, rowBox] = await Promise.all([table.boundingBox(), dialog.boundingBox(), row.boundingBox()]);
+  expect(rowBox.x + rowBox.width).toBeLessThanOrEqual(tableBox.x + tableBox.width + 1);
+  expect(rowBox.x + rowBox.width).toBeLessThanOrEqual(dialogBox.x + dialogBox.width + 1);
+  await expect(row.locator('[role="cell"]')).toHaveCount(4);
+  for (const name of ['Play track', 'Open this track in Problematic Files']) {
+    const button = row.getByRole('button', { name, exact: true });
+    await expect(button).toBeVisible();
+    const box = await button.boundingBox();
+    expect(box.x + box.width).toBeLessThanOrEqual(tableBox.x + tableBox.width + 1);
+    await button.click();
+  }
+  const duration = await row.locator('[data-cdt-column="duration"]').boundingBox();
+  expect(duration.x + duration.width).toBeLessThanOrEqual(tableBox.x + tableBox.width + 1);
+  const title = row.locator('.album-track-table__title');
+  await expect(title).toHaveCSS('text-overflow', 'ellipsis');
+  expect(await title.evaluate(element => element.scrollWidth > element.clientWidth)).toBe(true);
+});
+
+test('search-match hover retains its accent treatment through the table cascade', async ({ page }) => {
+  await mountAlbumDetailsComponents(page);
+  const row = page.locator('[data-track-row-path="two.flac"]');
+  await row.evaluate(element => {
+    element.classList.add('album-track-table__row--search-match');
+    const expected = document.createElement('div');
+    expected.id = 'expected-match-hover';
+    expected.style.background = 'color-mix(in srgb, var(--album-track-accent) 15%, transparent)';
+    element.parentElement.appendChild(expected);
+  });
+  const expected = await page.locator('#expected-match-hover').evaluate(element => getComputedStyle(element).backgroundColor);
+  await row.hover();
+  await expect(row).toHaveCSS('background-color', expected);
+});
 
 test('per-track Play hover uses the player Play color without shifting layout', async ({ page }) => {
   await mountAlbumTrackTable(page);
@@ -190,7 +325,7 @@ test('per-track Play hover uses the player Play color without shifting layout', 
   expect(afterHoverBox).toEqual(beforeHoverBox);
 });
 
-test('ActionButton hover and keyboard focus share the same outline without shifting layout', async ({ page }) => {
+test('ActionButton hover uses semantic edge while keyboard focus keeps its outline without shifting layout', async ({ page }) => {
   await mountAlbumDetailsComponents(page);
 
   const action = page.getByRole('button', { name: 'Edit album tags', exact: true });
@@ -198,16 +333,16 @@ test('ActionButton hover and keyboard focus share the same outline without shift
   expect(restingBox).not.toBeNull();
 
   await action.hover();
-  await expect(action).toHaveCSS('outline-width', '2px');
-  await expect(action).toHaveCSS('outline-color', 'rgb(114, 186, 255)');
-  const hoverOutline = await action.evaluate((element) => getComputedStyle(element).outlineColor);
+  await expect(action).toHaveCSS('outline-width', '1px');
+  await expect(action).toHaveCSS('outline-color', 'rgba(0, 0, 0, 0)');
+  await expect(action).toHaveCSS('border-color', 'rgb(82, 97, 114)');
   expect(await action.boundingBox()).toEqual(restingBox);
 
   await page.mouse.move(0, 0);
   await page.keyboard.press('Tab');
   await expect(action).toBeFocused();
-  await expect(action).toHaveCSS('outline-width', '2px');
-  await expect(action).toHaveCSS('outline-color', hoverOutline);
+  await expect(action).toHaveCSS('outline-width', '1px');
+  await expect(action).toHaveCSS('outline-color', 'rgb(114, 186, 255)');
   expect(await action.boundingBox()).toEqual(restingBox);
 });
 
@@ -263,4 +398,67 @@ test('Editorial table aligns left while its final 1px outline fades into the ori
   expect(edge.backgroundImage).toContain('/ 0.75)');
   await expect(total).toHaveCSS('border-right-width', '1px');
   expect(await total.evaluate((element) => getComputedStyle(element, '::after').content)).toBe('none');
+});
+
+
+test('decoded Album Details artwork stays square and visible while only tracks scroll at short desktop heights', async ({ page }) => {
+  const art = 'data:image/svg+xml,' + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="480" height="480"><rect width="480" height="480" fill="teal"/></svg>');
+  for (const { height, trackCount } of [{ height: 960, trackCount: 5 }, { height: 400, trackCount: 30 }]) {
+    await page.setViewportSize({ width: 1440, height });
+    await page.route('http://album-track-table-component.test/artwork', route => route.fulfill({
+      contentType: 'text/html',
+      body: `<!doctype html><html><head><style>:root{--panel:#101a29;--border:#526172;--text:#f3f6fa;--muted:#9aa9bc}*{box-sizing:border-box}body{margin:0}</style></head><body>
+        <div id="track-modal" class="track-modal"><div class="track-modal-dialog">
+          <header class="track-modal-header"><div class="album-details-header"><h2>Natural Filename Order Fixture</h2></div></header>
+          <div class="track-modal-body"><div id="track-modal-cover" class="track-modal-cover">
+          <div class="track-modal-cover-shell"><div class="album-artbox album-artbox--ready" data-album-artbox-state="ready">
+            <button class="track-modal-cover-button" data-open-lightbox="1"><span class="track-modal-cover-visual"><img alt="Album cover" src="${art}"></span></button>
+            <span class="album-artbox__overlay"><button class="action-button" aria-label="Cover Look Up"></button><button class="action-button" aria-label="Fast fetch cover"></button></span>
+          </div></div>
+          </div><main class="track-modal-main"><div class="track-modal-list" id="table-host"></div></main></div>
+        </div></div></body></html>`,
+    }));
+    await page.goto('http://album-track-table-component.test/artwork');
+    for (const cssPath of [baseLayoutCssPath, buttonComponentCssPath, compactDataTableCssPath, albumTrackTableCssPath, albumDetailsComponentsCssPath, trackModalCssPath,
+      path.join(repositoryRoot, 'music_app/static/css/runtime/album-artbox-and-gallery-card.css')]) await page.addStyleTag({ path: cssPath });
+    await page.addScriptTag({ content: `function escapeHtml(value) { return String(value ?? '').replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;').replaceAll('"', '&quot;'); }` });
+    for (const file of ['button-component.js', 'runtime/compact-data-table.js', 'runtime/album-track-table.js']) await page.addScriptTag({ path: path.join(repositoryRoot, 'music_app/static/js', file) });
+    await page.locator('#table-host').evaluate((host, count) => {
+      host.innerHTML = buildAlbumTrackTableHtml({ groups: [{ tracks: Array.from({ length: count }, (_, i) => ({ path: `track-${i}`, title: `Track ${i + 1}`, trackNumber: i + 1, duration: '3:00' })) }], totalLength: '15m' });
+    }, trackCount);
+    const image = page.locator('#track-modal-cover .track-modal-cover-visual > img');
+    await expect(image).toHaveCount(1);
+    await expect(image).toBeVisible();
+    const geometry = await image.evaluate(img => {
+      const rect = img.getBoundingClientRect(), cover = img.closest('.track-modal-cover').getBoundingClientRect();
+      const list = document.querySelector('.track-modal-list'), dialog = document.querySelector('.track-modal-dialog');
+      return { width: rect.width, height: rect.height, coverHeight: cover.height, complete: img.complete, naturalWidth: img.naturalWidth,
+        listScroll: list.scrollHeight > list.clientHeight, listOverflow: getComputedStyle(list).overflowY,
+        dialogOverflow: getComputedStyle(dialog).overflowY, dialogBottom: dialog.getBoundingClientRect().bottom };
+    });
+    expect(geometry.complete).toBe(true);
+    expect(geometry.naturalWidth).toBe(480);
+    expect(geometry.width).toBeGreaterThan(0);
+    expect(geometry.width).toBeCloseTo(geometry.height, 0);
+    expect(geometry.height).toBeLessThanOrEqual(geometry.coverHeight);
+    const overlayGeometry = await page.locator('.album-artbox').evaluate((artbox) => {
+      const artboxRect = artbox.getBoundingClientRect();
+      const imageRect = artbox.querySelector('img').getBoundingClientRect();
+      const overlayRect = artbox.querySelector('.album-artbox__overlay').getBoundingClientRect();
+      return {
+        artboxIsSquare: Math.abs(artboxRect.width - artboxRect.height) < 1,
+        overlayInsideImage: overlayRect.right <= imageRect.right + 1
+          && overlayRect.bottom <= imageRect.bottom + 1,
+      };
+    });
+    expect(overlayGeometry.artboxIsSquare).toBe(true);
+    expect(overlayGeometry.overlayInsideImage).toBe(true);
+    expect(geometry.dialogBottom).toBeLessThanOrEqual(height);
+    expect(geometry.dialogOverflow).toBe('hidden');
+    if (height === 400) {
+      expect(geometry.listScroll).toBe(true);
+      expect(geometry.listOverflow).toBe('auto');
+    }
+    await page.unroute('http://album-track-table-component.test/artwork');
+  }
 });

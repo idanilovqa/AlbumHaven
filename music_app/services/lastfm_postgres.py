@@ -37,7 +37,10 @@ class LastfmPostgresAdapter:
         self._database_url = str(config.get(_APP_DATABASE_URL_KEY) or "").strip()
         self._connect = connect or _connect
 
-    def load_settings(self) -> dict[str, object]:
+    def load_settings(self, *, account_id=None) -> dict[str, object]:
+        if account_id is not None:
+            from music_app.services.lastfm_account_settings import load_account_settings
+            return load_account_settings(self, account_id)
         with self._connect_to_database() as connection:
             _ensure_bootstrap_account_context(connection)
             row = _first_row(connection.execute(_load_lastfm_settings_sql()))
@@ -45,7 +48,10 @@ class LastfmPostgresAdapter:
             return {}
         return _settings_from_row(row)
 
-    def save_settings(self, settings: dict[str, object]) -> dict[str, object]:
+    def save_settings(self, settings: dict[str, object], *, account_id=None) -> dict[str, object]:
+        if account_id is not None:
+            from music_app.services.lastfm_account_settings import save_account_settings
+            return save_account_settings(self, settings, account_id)
         normalized = dict(settings)
         username = _text(normalized.get("username")) or None
         session_key = _text(normalized.get("session_key")) or None

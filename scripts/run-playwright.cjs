@@ -5,6 +5,7 @@ const net = require('node:net');
 const http = require('node:http');
 const { randomBytes } = require('node:crypto');
 const { spawn, spawnSync } = require('node:child_process');
+const { PROCESS_CLEANUP_FAILURE_EXIT_CODE } = require('./playwright-exit-codes.cjs');
 const { resolveRuntimeFlags } = require('./playwright-runtime-flags.cjs');
 const {
   DEFAULT_PLAYWRIGHT_PYTHON,
@@ -131,6 +132,7 @@ const SAFE_LIFECYCLE_EXIT_REASONS = new Set([
   'fake-database-cleanup-error',
   'managed-scan-cleanup-error',
   'managed-isolated-app-cleanup-error',
+  'owned-process-cleanup-error',
   'owned-temp-cleanup-error',
   'unknown',
 ]);
@@ -172,6 +174,7 @@ function safeLifecycleStage(stage, extraFields = []) {
     status: safeClosedValue(stage.status, SAFE_LIFECYCLE_STAGE_STATUSES),
     error: safeErrorSummary(stage.error),
   };
+  if (stage.mode === 'lock-only') safeStage.mode = 'lock-only';
   for (const field of extraFields) {
     safeStage[field] = safeNonnegativeInteger(stage[field]);
   }
@@ -246,7 +249,23 @@ function finalizeMainResult(result, options = {}) {
   const stderr = options.stderr || process.stderr;
   const requestedExitCode = hasCompletedAuthoritativePassLifecycle(result) ? 0 : 1;
   const priorExitCode = Number(processObject.exitCode || 0);
-  const exitCode = requestedExitCode === 0 && priorExitCode === 0 ? 0 : 1;
+  const lifecycle = result?.lifecycle || {};
+  const managedAttempt = lifecycle.managedAttempt || {};
+  const processCleanupUnproven = [
+    managedAttempt.scanAppCleanup,
+    managedAttempt.isolatedAppCleanup,
+  ].some((stage) => stage && !['completed', 'not-required'].includes(stage.status))
+    || [
+      'managed-scan-cleanup-error',
+      'managed-isolated-app-cleanup-error',
+      'owned-process-cleanup-error',
+      'fake-database-cleanup-error',
+    ].includes(lifecycle.exitReason);
+  const exitCode = processCleanupUnproven
+    || result?.exitCode === PROCESS_CLEANUP_FAILURE_EXIT_CODE
+    || priorExitCode === PROCESS_CLEANUP_FAILURE_EXIT_CODE
+    ? PROCESS_CLEANUP_FAILURE_EXIT_CODE
+    : requestedExitCode === 0 && priorExitCode === 0 ? 0 : 1;
   const diagnostic = buildAuthoritativePassFinalDecisionDiagnostic({
     ...result,
     exitCode,
@@ -734,7 +753,7 @@ function cleanupIsolatedLibraryDatabase(childEnv = {}, options = {}) {
   const timeoutMs = Number(options.timeoutMs || ISOLATED_LIBRARY_CLEANUP_TIMEOUT_MS);
   const result = runCommandFn(
     resolvePlaywrightPython(childEnv),
-    [ISOLATED_LIBRARY_APP_PATH, '--cleanup-only'],
+    [ISOLATED_LIBRARY_APP_PATH, options.lockOnly ? '--cleanup-lock-only' : '--cleanup-only'],
     {
       cwd: repoRoot,
       env: buildIsolatedLibraryCleanupEnv(childEnv),
@@ -857,6 +876,7 @@ async function waitForManagedScanAppReady(child, port, options = {}) {
 
 async function startManagedScanApp(childEnv, options = {}) {
   const spawnFn = options.spawnFn || spawn;
+  const readProcessCreationIdentityFn = options.readProcessCreationIdentityFn || readProcessCreationIdentity;
   const port = Number(options.port || childEnv.PLAYWRIGHT_PORT || 4174);
   const stdout = options.stdout || process.stdout;
   const stderr = options.stderr || process.stderr;
@@ -883,20 +903,26 @@ async function startManagedScanApp(childEnv, options = {}) {
   child.once('error', (error) => {
     launchError = error;
   });
+  let spawnHandedOff = false;
   try {
+    if (options.onSpawnFn) { options.onSpawnFn(child); spawnHandedOff = true; }
+    child.albumHavenCreationIdentity = readProcessCreationIdentityFn(child.pid);
+    if (!child.albumHavenCreationIdentity) {
+      throw new Error('Managed scan app process had no creation identity after launch.');
+    }
     await waitForManagedScanAppReady(child, port, {
       ...options,
       getLaunchErrorFn: () => launchError,
     });
     return child;
   } catch (error) {
-    try {
-      (options.stopProcessTreeFn || stopProcessTree)(child.pid);
-    } catch (_cleanupError) {
+    if (!spawnHandedOff) {
       try {
-        child.kill();
-      } catch (_killError) {
-        // Preserve the startup error after best-effort cleanup.
+        await stopManagedScanApp(child, port, options);
+      } catch (cleanupError) {
+        const failure = new AggregateError([error, cleanupError], 'Managed scan startup failed and shutdown was not proven.');
+        failure.lifecycle = { exitReason: 'managed-scan-cleanup-error' };
+        throw failure;
       }
     }
     throw error;
@@ -904,15 +930,34 @@ async function startManagedScanApp(childEnv, options = {}) {
 }
 
 async function stopManagedScanApp(child, port, options = {}) {
-  if (!child || (child.exitCode !== null && child.exitCode !== undefined)) {
-    return;
-  }
+  if (!child) return;
+  const expectedCreationIdentity = String(child.albumHavenCreationIdentity || '');
+  const readProcessCreationIdentityFn = options.readProcessCreationIdentityFn || readProcessCreationIdentity;
   const stopProcessTreeFn = options.stopProcessTreeFn || stopProcessTree;
+  const waitForReclaimedProcessesExitedFn = options.waitForReclaimedProcessesExitedFn
+    || waitForReclaimedProcessesExited;
   const waitForPortReleasedFn = options.waitForPortReleasedFn || waitForPortReleased;
-  stopProcessTreeFn(child.pid);
+  if (!expectedCreationIdentity) {
+    await (options.abortManagedIsolatedAppStartupFn || abortManagedIsolatedAppStartup)(child, options);
+  } else {
+    const currentIdentity = readProcessCreationIdentityFn(child.pid);
+    if (currentIdentity && currentIdentity !== expectedCreationIdentity) {
+      throw new Error(`Managed scan app PID ${child.pid} changed creation identity before teardown.`);
+    }
+    if (currentIdentity === expectedCreationIdentity) {
+      stopProcessTreeFn(child.pid, { expectedCreationIdentity });
+      await waitForReclaimedProcessesExitedFn([
+        { pid: child.pid, creationIdentity: expectedCreationIdentity },
+      ], {
+        timeoutMs: RECLAIMED_PROCESS_EXIT_TIMEOUT_MS,
+        pollIntervalMs: 250,
+      });
+    }
+  }
   const released = await waitForPortReleasedFn(port, {
     timeoutMs: Number(options.timeoutMs || MANAGED_SUPPORT_APP_PORT_REUSE_TIMEOUT_MS),
     pollIntervalMs: Number(options.pollIntervalMs || 250),
+    readPortOwningProcessesFn: () => [],
   });
   if (!released) {
     throw new Error(`Managed scan app port ${port} was not reusable after teardown.`);
@@ -1401,6 +1446,18 @@ function writeJsonAtomically(targetPath, value) {
   }
 }
 
+async function cleanupManagedWatcherFixture(childEnv, options = {}) {
+  const { resolveWritableFixtureMediaRoot } = await import('../tests/e2e/helpers/fixtureMediaRoot.js');
+  const mediaRoot = resolveWritableFixtureMediaRoot(childEnv);
+  const ownedRoot = path.join(mediaRoot, 'cases', 'watcher-reconciliation');
+  const result = (options.runCommandFn || runCommand)(resolvePlaywrightPython(childEnv), [
+    '-m', 'tests.e2e.support.watcherFixture', '--owned-root', ownedRoot,
+  ], { cwd: repoRoot, env: childEnv, timeout: ISOLATED_LIBRARY_CLEANUP_TIMEOUT_MS });
+  if (result.error || result.signal || result.status !== 0) {
+    throw new Error('Runner-owned watcher inventory cleanup failed; evidence retained.');
+  }
+}
+
 function createManagedIsolatedAppRestartController(options = {}) {
   const {
     childEnv,
@@ -1427,6 +1484,7 @@ function createManagedIsolatedAppRestartController(options = {}) {
   const ackPath = path.join(controlDirectory, MANAGED_ISOLATED_RESTART_ACK_FILE);
   const startManagedIsolatedAppFn = options.startManagedIsolatedAppFn || startManagedIsolatedApp;
   const stopManagedIsolatedAppFn = options.stopManagedIsolatedAppFn || stopManagedIsolatedApp;
+  const cleanupWatchedInventoryFn = options.cleanupWatchedInventoryFn || cleanupManagedWatcherFixture;
   const onCurrentChildChanged = options.onCurrentChildChanged || (() => {});
   const resolvedAppPort = Number(options.port || ports[0] || childEnv.PLAYWRIGHT_PORT || 4173);
   const resolvedProviderPort = Number(
@@ -1529,7 +1587,12 @@ function createManagedIsolatedAppRestartController(options = {}) {
     if (!nonce || nonce.length > 256) {
       throw new Error('Managed isolated restart request requires a valid nonce.');
     }
-    return { nonce };
+    const operation = request.operation ?? request.action ?? 'restart';
+    if (!['restart', 'stop', 'report-failure', 'watcher-cleanup'].includes(operation)) throw new Error('Unknown managed app lifecycle operation.');
+    if (operation === 'watcher-cleanup' && Object.keys(request).some((key) => !['nonce', 'operation'].includes(key))) {
+      throw new Error('Watcher cleanup accepts only its fixed runner-owned operation.');
+    }
+    return { nonce, operation };
   };
 
   const processPendingRequest = async () => {
@@ -1545,12 +1608,38 @@ function createManagedIsolatedAppRestartController(options = {}) {
         lastProcessedNonce = request.nonce;
         fs.rmSync(ackPath, { force: true });
 
+        if (request.operation === 'report-failure') {
+          phase = 'fixture-cleanup';
+          const error = new Error('Managed fixture cleanup failed; database and fixture evidence retained.');
+          error.exitCode = PROCESS_CLEANUP_FAILURE_EXIT_CODE;
+          error.lifecycle = { exitReason: 'fake-database-cleanup-error',
+            fakeDatabaseCleanup: { status: 'failed', error: safeErrorSummary(error) } };
+          // The catch records the terminal failure before publishing its acknowledgment.
+          throw error;
+        }
+
         if (currentChild) {
           phase = 'stop-current';
           const childToStop = currentChild;
           markCurrentChildStopIntentional(phase);
           await stopManagedIsolatedAppFn(childToStop, managedPorts);
           if (currentChild === childToStop) updateCurrentChild(null);
+        }
+
+        if (request.operation === 'watcher-cleanup') {
+          phase = 'fixture-cleanup';
+          try {
+            await cleanupWatchedInventoryFn(childEnv);
+          } catch (error) {
+            error.exitCode = PROCESS_CLEANUP_FAILURE_EXIT_CODE;
+            error.lifecycle = { exitReason: 'fake-database-cleanup-error',
+              fakeDatabaseCleanup: { status: 'failed', error: safeErrorSummary(error) } };
+            throw error;
+          }
+        }
+        if (request.operation === 'stop') {
+          writeJsonAtomically(ackPath, { nonce: request.nonce, status: 'stopped' });
+          return true;
         }
 
         phase = 'start-replacement';
@@ -1679,6 +1768,7 @@ function runPlaywrightProcess(passthroughArgv, childEnv, runTimeoutMs, options =
       || (options.spawnFn ? (() => []) : readProcessTreeIdentities);
     const setTimeoutFn = options.setTimeoutFn || setTimeout;
     const clearTimeoutFn = options.clearTimeoutFn || clearTimeout;
+    const nowFn = options.nowFn || Date.now;
     const cleanupIsolatedLibraryDatabaseFn = options.cleanupIsolatedLibraryDatabaseFn
       || (options.spawnFn ? null : cleanupIsolatedLibraryDatabase);
     const stdout = options.stdout || process.stdout;
@@ -1739,6 +1829,7 @@ function runPlaywrightProcess(passthroughArgv, childEnv, runTimeoutMs, options =
     let processFailureLatchWritten = false;
     let terminalCollectionFailureObserved = false;
     let testsCompleteObserved = false;
+    let completionPhaseStartedAt = null;
     let authoritativeFinalObserved = false;
     let hardTimeoutExpired = false;
     let mismatchDiagnosticWritten = false;
@@ -1875,6 +1966,60 @@ function runPlaywrightProcess(passthroughArgv, childEnv, runTimeoutMs, options =
       stderr.write(diagnostic);
     };
 
+    const emitFinalizationTimeoutDiagnostic = () => {
+      let currentOwners = [];
+      let snapshotError = null;
+      try {
+        currentOwners = readProcessTreeIdentitiesFn(child.pid, { timeoutMs: 5000 });
+      } catch (error) {
+        snapshotError = safeErrorSummary(error);
+      }
+      const priorOwners = new Map(managedRunProcessOwners.map(owner => [owner.pid, owner]));
+      const currentByPid = new Map(currentOwners.map(owner => [owner.pid, owner]));
+      const root = priorOwners.get(child.pid);
+      const currentRoot = currentByPid.get(child.pid);
+      const rootMatches = root && currentRoot?.creationIdentity === root.creationIdentity;
+      const owned = new Map(priorOwners);
+      if (rootMatches) {
+        for (const owner of currentOwners) {
+          if (!owned.has(owner.pid)) owned.set(owner.pid, owner);
+        }
+      }
+      if (!owned.has(child.pid)) {
+        owned.set(child.pid, { pid: child.pid, parentPid: processObject.pid });
+      }
+      const processes = [...owned.values()].slice(0, WINDOWS_PROCESS_TREE_MAX_PROCESSES).map(owner => {
+        const current = currentByPid.get(owner.pid);
+        const executable = String(owner.processName || '').toLowerCase().replace(/\.exe$/, '');
+        const safeExecutable = ['node', 'python', 'pythonw', 'chrome', 'chromium', 'msedge', 'firefox', 'pwsh', 'powershell', 'cmd'].includes(executable)
+          ? executable : 'other';
+        return {
+          pid: owner.pid,
+          parentPid: owner.pid === child.pid ? processObject.pid : owner.parentPid,
+          executable: owner.pid === child.pid ? 'node' : safeExecutable,
+          role: owner.pid === child.pid ? 'playwright-cli'
+            : ['chrome', 'chromium', 'msedge', 'firefox'].includes(safeExecutable) ? 'browser'
+              : safeExecutable === 'node' ? 'node-descendant'
+                : ['python', 'pythonw'].includes(safeExecutable) ? 'python-descendant'
+                  : ['pwsh', 'powershell', 'cmd'].includes(safeExecutable) ? 'shell' : 'other',
+          liveness: snapshotError ? 'unknown'
+            : !current ? 'not-observed'
+              : current.creationIdentity === owner.creationIdentity && owner.creationIdentity ? 'alive' : 'identity-changed',
+        };
+      });
+      const diagnostic = `[playwright-wrapper-finalization-diagnostic] ${JSON.stringify({
+        reason: authoritativeFinalObserved ? 'child-not-closed' : testsCompleteObserved ? 'missing-run-final' : 'collection-finalization-incomplete',
+        phase: authoritativeFinalObserved ? 'run-final' : testsCompleteObserved ? 'tests-complete' : 'collection-failure',
+        elapsedMs: completionPhaseStartedAt === null ? null : Math.max(0, nowFn() - completionPhaseStartedAt),
+        childClosed,
+        childExitCode: childExitRawCode,
+        snapshotError,
+        processes,
+      })}\n`;
+      combinedOutput += diagnostic;
+      stderr.write(diagnostic);
+    };
+
     const completeReporterRun = async (exitCode) => {
       if (reporterFinalizing || settlementState === 'settled') {
         return;
@@ -1888,10 +2033,10 @@ function runPlaywrightProcess(passthroughArgv, childEnv, runTimeoutMs, options =
         && cleanupIsolatedLibraryDatabaseFn
       ) {
         if (portReclaimErrors.length > 0) {
-          throw new Error(
+          throw attachLifecycle(new Error(
             'Could not safely snapshot and reclaim all isolated Playwright port owners: '
             + portReclaimErrors.map((error) => String(error?.message || error)).join('; '),
-          );
+          ), 'owned-process-cleanup-error');
         }
         lifecycle.fakeDatabaseCleanup.status = 'running';
         try {
@@ -1977,6 +2122,7 @@ function runPlaywrightProcess(passthroughArgv, childEnv, runTimeoutMs, options =
                   ? 'Playwright did not produce an authoritative final result after tests completed.'
                   : 'Playwright did not close naturally after a terminal collection failure.',
             );
+          emitFinalizationTimeoutDiagnostic();
           stopChildProcess('finalization-timeout');
           if (!portCleanupCompleted) {
             settlementState = 'reporter-grace';
@@ -2044,6 +2190,9 @@ function runPlaywrightProcess(passthroughArgv, childEnv, runTimeoutMs, options =
         }
       } catch (error) {
         cleanupOutcome = 'failed';
+        if (!portCleanupCompleted) {
+          throw attachLifecycle(error, 'owned-process-cleanup-error');
+        }
         throw error;
       }
     };
@@ -2204,6 +2353,14 @@ function runPlaywrightProcess(passthroughArgv, childEnv, runTimeoutMs, options =
       })) {
         return;
       }
+      // Output chunks replay the last authenticated signal. Enumerate process
+      // owners and arm deadlines only for a new phase, not for every late
+      // provider log (Windows process snapshots synchronously block this loop).
+      const completionAlreadyObserved = completionSignal.phase === 'run-final'
+        ? authoritativeFinalObserved
+        : testsCompleteObserved || authoritativeFinalObserved;
+      if (completionAlreadyObserved) return;
+      completionPhaseStartedAt = nowFn();
       snapshotManagedRunProcessOwners();
       if (completionSignal.phase === 'tests-complete' && !testsCompleteObserved) {
         testsCompleteObserved = true;
@@ -2493,6 +2650,7 @@ function parseProcessTreeIdentityRecords(stdout) {
       creationIdentity: String(record?.creationIdentity || '').trim(),
       depth: Number(record?.depth),
       parentPid: Number(record?.parentPid),
+      ...(record?.processName ? { processName: String(record.processName) } : {}),
     }))
     .filter((record) => (
       Number.isInteger(record.pid)
@@ -2664,6 +2822,7 @@ function readProcessTreeIdentities(rootPid, options = {}) {
     '$records += [PSCustomObject]@{',
     'pid = [int]$current.pid;',
     'parentPid = [int]$current.parentPid;',
+    'processName = [string]$currentProcess.ProcessName;',
     'creationIdentity = $startTime.ToUniversalTime().Ticks.ToString();',
     'depth = [int]$current.depth',
     '};',
@@ -2687,7 +2846,7 @@ function readProcessTreeIdentities(rootPid, options = {}) {
   const result = runCommandFn(
     'C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe',
     ['-Command', powershellCommand],
-    { stdio: 'pipe', windowsHide: true },
+    { stdio: 'pipe', windowsHide: true, ...(options.timeoutMs ? { timeout: options.timeoutMs } : {}) },
   );
   if (result.error) {
     throw result.error;
@@ -2949,6 +3108,7 @@ async function runManagedPlaywrightAttempt(options = {}) {
     if (managesScanApp) {
       managedScanChild = await startManagedScanAppFn(childEnv, {
         port: supportAppPort,
+        onSpawnFn: child => { managedScanChild = child; },
       });
     }
     if (managesIsolatedApp) {
@@ -3025,20 +3185,46 @@ async function runManagedPlaywrightAttempt(options = {}) {
     );
     const managedIsolatedAppFailureSignal = managedIsolatedRestartController
       ?.getFailureSignal?.();
-    result = managedIsolatedAppFailureSignal
-      ? await Promise.race([
-        playwrightRunPromise,
-        managedIsolatedAppFailureSignal.then(async (failureError) => {
-          playwrightAbortController.abort(failureError);
-          try {
-            await playwrightRunPromise;
-          } catch (_error) {
-            // The managed-app failure remains authoritative after the owned runner settles.
-          }
-          throw failureError;
-        }),
-      ])
-      : await playwrightRunPromise;
+    let managedAppFailure = null;
+    const preserveManagedAppFailure = (runnerOutcome) => {
+      if (runnerOutcome?.exitCode === PROCESS_CLEANUP_FAILURE_EXIT_CODE
+        || runnerOutcome?.lifecycle?.exitReason === 'owned-process-cleanup-error') {
+        managedAppFailure.exitCode = PROCESS_CLEANUP_FAILURE_EXIT_CODE;
+        managedAppFailure.lifecycle = {
+          ...(managedAppFailure.lifecycle || {}),
+          ...(runnerOutcome.lifecycle || {}),
+          exitReason: 'owned-process-cleanup-error',
+        };
+      }
+      if (runnerOutcome instanceof Error && runnerOutcome !== managedAppFailure) {
+        managedAppFailure.cause = runnerOutcome;
+      }
+      return managedAppFailure;
+    };
+    try {
+      result = managedIsolatedAppFailureSignal
+        ? await Promise.race([
+          playwrightRunPromise,
+          managedIsolatedAppFailureSignal.then(async (failureError) => {
+            managedAppFailure = failureError;
+            playwrightAbortController.abort(failureError);
+            let runnerOutcome;
+            try {
+              runnerOutcome = await playwrightRunPromise;
+            } catch (error) {
+              runnerOutcome = error;
+            }
+            throw preserveManagedAppFailure(runnerOutcome);
+          }),
+        ])
+        : await playwrightRunPromise;
+    } catch (error) {
+      if (managedAppFailure) throw preserveManagedAppFailure(error);
+      throw error;
+    }
+    // Both race branches await the same child. Its settlement may win after the
+    // failure signal; retain the primary app failure and the child's cleanup proof.
+    if (managedAppFailure) throw preserveManagedAppFailure(result);
     if (managedIsolatedRestartController) {
       await managedIsolatedRestartController.close();
       const restartFailure = managedIsolatedRestartController.getFailure?.();
@@ -3102,37 +3288,49 @@ async function runManagedPlaywrightAttempt(options = {}) {
     if (managedIsolatedAppStarted && !managedIsolatedChild && !isolatedCleanupError) {
       managedAttempt.isolatedAppCleanup.status = 'completed';
     }
-    if (managedIsolatedAppStarted && !isolatedCleanupError && !preservesPreloadedDatabase) {
-      const lifecycle = result?.lifecycle || attemptError?.lifecycle || {};
-      try {
-        cleanupIsolatedLibraryDatabaseFn(childEnv);
-        lifecycle.fakeDatabaseCleanup = { status: 'completed', error: null };
-      } catch (error) {
-        lifecycle.fakeDatabaseCleanup = { status: 'failed', error: safeErrorSummary(error) };
-        databaseCleanupError = error instanceof Error ? error : new Error(String(error));
-      }
-    }
     if (restartControllerCleanupError && !isolatedCleanupError) {
       managedAttempt.isolatedAppCleanup.status = 'failed';
       managedAttempt.isolatedAppCleanup.error = safeErrorSummary(restartControllerCleanupError);
       isolatedCleanupError = restartControllerCleanupError;
     }
-    try {
-      const removedRoots = cleanupIsolatedE2ETempRootsFn(
-        os.tmpdir(),
-        ownedIsolatedTempRoot ? [ownedIsolatedTempRoot] : [],
-      );
-      managedAttempt.tempCleanup.status = 'completed';
-      managedAttempt.tempCleanup.removedCount = Array.isArray(removedRoots) ? removedRoots.length : 0;
-    } catch (error) {
-      managedAttempt.tempCleanup.status = 'failed';
-      managedAttempt.tempCleanup.error = safeErrorSummary(error);
-      if (ownedIsolatedTempRoot) {
-        const lifecycle = result?.lifecycle || attemptError?.lifecycle || {};
-        lifecycle.exitReason = 'owned-temp-cleanup-error';
-        if (result) {
-          result.exitCode = 1;
-          result.lifecycle = lifecycle;
+    const processCleanupUnproven = Boolean(
+      scanCleanupError || isolatedCleanupError
+      || result?.exitCode === PROCESS_CLEANUP_FAILURE_EXIT_CODE
+      || attemptError?.exitCode === PROCESS_CLEANUP_FAILURE_EXIT_CODE
+      || (result?.lifecycle || attemptError?.lifecycle)?.exitReason === 'owned-process-cleanup-error',
+    );
+    if (managedIsolatedAppStarted && !processCleanupUnproven) {
+      const lifecycle = result?.lifecycle || attemptError?.lifecycle || {};
+      const cleanupMode = preservesPreloadedDatabase ? { mode: 'lock-only' } : {};
+      try {
+        if (preservesPreloadedDatabase) cleanupIsolatedLibraryDatabaseFn(childEnv, { lockOnly: true });
+        else cleanupIsolatedLibraryDatabaseFn(childEnv);
+        lifecycle.fakeDatabaseCleanup = { status: 'completed', error: null, ...cleanupMode };
+      } catch (error) {
+        lifecycle.fakeDatabaseCleanup = { status: 'failed', error: safeErrorSummary(error), ...cleanupMode };
+        databaseCleanupError = error instanceof Error ? error : new Error(String(error));
+      }
+    }
+    // No retained/skipped lifecycle status exists: pending means intentionally
+    // unperformed here, with the cleanup exit reason preserving the cause.
+    if (!processCleanupUnproven && !databaseCleanupError) {
+      try {
+        const removedRoots = cleanupIsolatedE2ETempRootsFn(
+          os.tmpdir(),
+          ownedIsolatedTempRoot ? [ownedIsolatedTempRoot] : [],
+        );
+        managedAttempt.tempCleanup.status = 'completed';
+        managedAttempt.tempCleanup.removedCount = Array.isArray(removedRoots) ? removedRoots.length : 0;
+      } catch (error) {
+        managedAttempt.tempCleanup.status = 'failed';
+        managedAttempt.tempCleanup.error = safeErrorSummary(error);
+        if (ownedIsolatedTempRoot) {
+          const lifecycle = result?.lifecycle || attemptError?.lifecycle || {};
+          lifecycle.exitReason = 'owned-temp-cleanup-error';
+          if (result) {
+            result.exitCode = 1;
+            result.lifecycle = lifecycle;
+          }
         }
       }
     }
@@ -3157,8 +3355,11 @@ async function runManagedPlaywrightAttempt(options = {}) {
       const lifecycle = result?.lifecycle || attemptError?.lifecycle || {};
       lifecycle.managedAttempt = managedAttempt;
       lifecycle.exitReason = 'managed-scan-cleanup-error';
-      scanCleanupError.lifecycle = lifecycle;
-      throw scanCleanupError;
+      const failure = attemptError && attemptError !== scanCleanupError
+        ? new AggregateError([attemptError, scanCleanupError], 'Managed scan attempt failed and shutdown was not proven.')
+        : scanCleanupError;
+      failure.lifecycle = lifecycle;
+      throw failure;
     }
     if (isolatedCleanupError) {
       const lifecycle = result?.lifecycle || attemptError?.lifecycle || {};
@@ -3338,6 +3539,7 @@ module.exports = {
     assertManagedRealDataDatabaseEnv,
     buildIsolatedLibraryCleanupEnv,
     cleanupIsolatedLibraryDatabase,
+    cleanupManagedWatcherFixture,
     DEFAULT_FAKE_E2E_RUNTIME_DATABASE_URL,
     DEFAULT_FAKE_E2E_SETUP_DATABASE_URL,
     DEFAULT_PLAYWRIGHT_PYTHON,

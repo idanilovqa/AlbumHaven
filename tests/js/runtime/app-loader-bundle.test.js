@@ -50,13 +50,19 @@ const expectedRuntimeOrder = [
   'markup-format-helpers.js',
   'loader-status-helpers.js',
   'status-ui-helpers.js',
+  'library-warning-ui.js',
   'notification-ui-helpers.js',
   'render-markup-helpers.js',
   'alert-components.js',
   'album-artbox.js',
+  'gallery-main-components.js',
+  'gallery-main-state.js',
   'gallery-card-component.js',
   'album-details-components.js',
   'core-state-and-helpers.js',
+  'trigger-anchor.js',
+  'search-input.js',
+  'gallery-main-interactions.js',
   'compact-player-helpers.js',
   'player-streaming-engine.js',
   'shell-navigation-drawer.js',
@@ -75,6 +81,9 @@ const expectedRuntimeOrder = [
   'gallery-refresh-and-status.js',
   'problematic-album-helpers.js',
   'browser-log-history-store.js',
+  'utility-log-history-query.js',
+  'date-range-picker.js',
+  'utility-log-history-ui.js',
   'compact-data-table.js',
   'album-track-table.js',
   'utility-list-builders.js',
@@ -82,8 +91,10 @@ const expectedRuntimeOrder = [
   'library-settings.js',
   'cover-lookup-notification-helpers.js',
   'appearance-backgrounds-bridge.js',
+  'problematic-files-virtual-list.js',
   'utility-renderers-and-actions.js',
   'utility-loop-playback.js',
+  'tag-editor-reorder.js',
   'utility-loaders-and-cover-lookup.js',
   'cover-lookup-modal-and-drawer.js',
   'tag-editor-and-optimistic-updates.js',
@@ -110,11 +121,13 @@ test('app loader fetches one generated runtime bundle instead of individual runt
     expectedRuntimeOrder.map((fileName) => `js/runtime/${fileName}`),
   );
   assert.equal(normalizeNewlines(bundleJs), normalizeNewlines(buildRuntimeBundle()));
+  assert.doesNotMatch(buildRuntimeBundle(), /\r/, 'generated runtime bundle must use LF line endings');
   assert.match(appJs, /const runtimeAssetVersion = encodeURIComponent\(/);
   assert.match(appJs, /const runtimeBundlePath = `js\/runtime-bundle\.js\$\{runtimeAssetVersion/);
   assert.doesNotMatch(appJs, /const scriptPaths = \[/);
   assert.doesNotMatch(appJs, /Promise\.all\(scriptPaths\.map/);
   assert.equal((appJs.match(/window\.fetch\(/g) || []).length, 2);
+  assert.equal(Number(appJs.match(/bundledScriptCount: (\d+)/)?.[1]), RUNTIME_SCRIPT_PATHS.length);
 
   let previousIndex = -1;
   for (const fileName of expectedRuntimeOrder) {

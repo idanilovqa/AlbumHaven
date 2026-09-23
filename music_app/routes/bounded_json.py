@@ -35,13 +35,13 @@ async def read_bounded_json_object(
 
     body = bytearray()
     async for chunk in request.stream():
-        body.extend(chunk)
-        if len(body) > max_bytes:
+        if len(chunk) > max_bytes - len(body):
             raise JSONBodyTooLarge
+        body.extend(chunk)
     if declared_length is not None and len(body) != declared_length:
         return None
     try:
         payload = json.loads(body)
-    except (UnicodeDecodeError, json.JSONDecodeError):
+    except (UnicodeDecodeError, json.JSONDecodeError, RecursionError):
         return None
     return payload if isinstance(payload, dict) else None

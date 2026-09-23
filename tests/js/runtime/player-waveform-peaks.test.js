@@ -90,6 +90,22 @@ test('loadSavedLoopWaveformPeaks requests bounded server peaks by loop id withou
   assert.ok(requests[0].options.signal instanceof AbortSignal);
 });
 
+test('saved-loop waveform retries a repaired media reference after a 404', async () => {
+  let requests = 0;
+  const context = loadPeaksRuntime(async () => {
+    requests += 1;
+    if (requests === 1) return { ok: false, status: 404 };
+    return { ok: true, status: 200, json: async () => peakPayload(0.4) };
+  });
+
+  assert.equal(await context.loadSavedLoopWaveformPeaks('repaired-loop'), null);
+  const recovered = await context.loadSavedLoopWaveformPeaks('repaired-loop');
+  assert.equal(recovered.left[0], 0.4);
+  assert.equal(recovered.right[0], 0.2);
+  assert.strictEqual(await context.loadSavedLoopWaveformPeaks('repaired-loop'), recovered);
+  assert.equal(requests, 2, 'failed media lookup must not poison the saved-loop cache');
+});
+
 test('saved-loop peaks use the bounded busy schedule and cache a successful loop identity', async () => {
   const attempts = new Map();
   const delays = [];
@@ -118,6 +134,26 @@ test('saved-loop peaks use the bounded busy schedule and cache a successful loop
   assert.strictEqual(repeated, first, 'the retained small identity cache reuses the peak payload');
   assert.equal(attempts.get('eventually-cached'), 3, 'a cache hit must not issue another fetch');
   assert.deepEqual(delays, [50, 100, 200, 400, 800, 50, 100]);
+});
+
+test('saved-loop peaks persist beyond four entries and deleted identities are released', async () => {
+  let requests = 0;
+  const context = loadPeaksRuntime(async () => {
+    requests += 1;
+    return { ok: true, json: async () => peakPayload(0.4) };
+  });
+  const ids = Array.from({ length: 12 }, (_, index) => `loop-${index}`);
+  const first = await Promise.all(ids.map(id => context.loadSavedLoopWaveformPeaks(id)));
+  for (const [index, id] of ids.entries()) {
+    assert.strictEqual(context.getCachedSavedLoopWaveformPeaks(id), first[index]);
+    assert.strictEqual(await context.loadSavedLoopWaveformPeaks(id), first[index]);
+  }
+  assert.equal(requests, ids.length);
+  context.retainSavedLoopWaveformPeaks(ids.slice(1));
+  assert.equal(context.getCachedSavedLoopWaveformPeaks(ids[0]), null);
+  assert.strictEqual(context.getCachedSavedLoopWaveformPeaks(ids[1]), first[1]);
+  context.retainSavedLoopWaveformPeaks([]);
+  assert.equal(vm.runInContext('savedLoopWaveformPeakCache.size', context), 0);
 });
 
 test('a newer generation aborts and suppresses a stale peak result', async () => {

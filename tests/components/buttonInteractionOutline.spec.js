@@ -40,6 +40,7 @@ const editorPageRuntimePath = path.join(
 );
 const componentUrl = 'http://button-interaction-component.test/editor-footer';
 const outlineColor = 'rgb(255, 90, 117)';
+const hoverEdgeColor = 'rgb(107, 123, 112)';
 
 async function mountEditorFooter(page) {
   await page.route(componentUrl, (route) => route.fulfill({
@@ -54,11 +55,15 @@ async function mountEditorFooter(page) {
               --appearance-line: #4b5563;
               --appearance-control: #1f2937;
               --appearance-item-action-hover-background: #293a50;
+              --appearance-item-action-hover-border: #6b7b70;
               --appearance-ink: #f3f6fa;
               --appearance-muted: #aeb9c7;
               --appearance-panel-background: #111827;
               --appearance-primary-button: #2563eb;
               --appearance-primary-button-ink: #ffffff;
+              --appearance-error: #ef5350;
+              --alert-error-edge: #ef5350;
+              --alert-error-focus: #ff7b79;
             }
             body { margin: 40px; background: #111827; color: #f3f6fa; }
           </style>
@@ -90,7 +95,7 @@ async function mountEditorFooter(page) {
     document.getElementById('preview-host').innerHTML = `<div class="background-preview-actions">
       <span><strong>Buttons</strong><small>Hover, press, or use Tab to preview interactions.</small></span>
       <div>${ButtonComponent.renderButton({ label: 'Cancel', variant: 'secondary', size: 'small', quiet: true, attributes: { 'data-background-preview-cancel': true } })}${ButtonComponent.renderButton({ label: 'Save', variant: 'primary', size: 'small', attributes: { 'data-background-preview-save': true } })}</div>
-    </div>`;
+    </div>${ButtonComponent.renderActionButton({ ariaLabel: 'Bare action', icon: 'search', presentation: 'bare', attributes: { 'data-bare-action': true } })}${ButtonComponent.renderActionButton({ ariaLabel: 'Remove loop', icon: 'delete', shape: 'round', semantic: 'destructive', attributes: { 'data-round-destructive': true } })}`;
   });
 }
 
@@ -111,31 +116,30 @@ test('shared footer buttons render themed hover and keyboard-focus outlines whil
   await expect(save).toBeDisabled();
   await reset.hover();
   await expect(reset).toHaveCSS('outline-style', 'solid');
-  await expect(reset).toHaveCSS('outline-width', '2px');
-  await expect(reset).toHaveCSS('outline-offset', '2px');
-  await expect(reset).toHaveCSS('outline-color', outlineColor);
-  await expect(reset).toHaveCSS('border-color', outlineColor);
+  await expect(reset).toHaveCSS('outline-width', '1px');
+  await expect(reset).toHaveCSS('outline-offset', '-1px');
+  await expect(reset).toHaveCSS('outline-color', 'rgba(0, 0, 0, 0)');
+  await expect(reset).toHaveCSS('border-color', hoverEdgeColor);
 
   await page.mouse.move(0, 0);
   await page.keyboard.press('Tab');
   await expect(reset).toBeFocused();
   await expect(reset).toHaveCSS('outline-style', 'solid');
-  await expect(reset).toHaveCSS('outline-width', '2px');
+  await expect(reset).toHaveCSS('outline-width', '1px');
   await expect(reset).toHaveCSS('outline-color', outlineColor);
 
   await cancel.hover();
   await expect(cancel).toHaveClass(/ui-button--quiet/);
   await expect(cancel).toHaveCSS('outline-style', 'solid');
-  await expect(cancel).toHaveCSS('outline-color', outlineColor);
-  await expect(cancel).toHaveCSS('border-color', outlineColor);
+  await expect(cancel).toHaveCSS('outline-color', 'rgba(0, 0, 0, 0)');
+  await expect(cancel).toHaveCSS('border-color', hoverEdgeColor);
   const quietHoverBackground = await cancel.evaluate((element) => getComputedStyle(element).backgroundColor);
   expect(quietHoverBackground).not.toBe('rgb(41, 58, 80)');
 
   const bounds = await cancel.boundingBox();
   await page.mouse.move(bounds.x + bounds.width / 2, bounds.y + bounds.height / 2);
   await page.mouse.down();
-  const quietPressedBackground = await cancel.evaluate((element) => getComputedStyle(element).backgroundColor);
-  expect(quietPressedBackground).not.toBe(quietHoverBackground);
+  await expect(cancel).not.toHaveCSS('background-color', quietHoverBackground);
   await page.mouse.up();
 
   await page.locator('body').click({ position: { x: 1, y: 1 } });
@@ -153,7 +157,7 @@ test('shared footer buttons render themed hover and keyboard-focus outlines whil
   await expect(playerAction).toHaveCSS('outline-style', 'none');
 
   await previewCancel.hover();
-  await expect(previewCancel).toHaveCSS('outline-color', outlineColor);
+  await expect(previewCancel).toHaveCSS('outline-color', 'rgba(0, 0, 0, 0)');
   const previewQuietHover = await previewCancel.evaluate((element) => getComputedStyle(element).backgroundColor);
   expect(previewQuietHover).not.toBe('rgb(41, 58, 80)');
 
@@ -161,4 +165,61 @@ test('shared footer buttons render themed hover and keyboard-focus outlines whil
   await page.keyboard.press('Tab');
   await expect(previewSave).toBeFocused();
   await expect(previewSave).toHaveCSS('outline-color', outlineColor);
+});
+
+test('non-green player surfaces derive computed action hover colors and bare chrome keeps focus', async ({ page }) => {
+  await mountEditorFooter(page);
+  const action = page.locator('[data-bare-action]');
+  await expect(action).toHaveCSS('background-color', 'rgba(0, 0, 0, 0)');
+  await expect(action).toHaveCSS('border-color', 'rgba(0, 0, 0, 0)');
+
+  const samples = [];
+  for (const player of ['#112233', '#5c183e']) {
+    await page.locator('html').evaluate((root, value) => {
+      root.style.setProperty('--appearance-player', value);
+      root.style.setProperty('--appearance-item-action-hover-background', `color-mix(in srgb, ${value} 14%, color-mix(in srgb, #303c36 85%, #eeeeee))`);
+      root.style.setProperty('--appearance-item-action-hover-border', `color-mix(in srgb, ${value} 22%, #858985)`);
+    }, player);
+    await action.hover();
+    samples.push(await action.evaluate((element) => ({
+      background: getComputedStyle(element).backgroundColor,
+      border: getComputedStyle(element).borderColor,
+    })));
+    await page.mouse.move(0, 0);
+  }
+  expect(samples[0].background).not.toBe(samples[1].background);
+  expect(samples[0].background).not.toContain('29, 185, 84');
+
+  await action.focus();
+  await expect(action).toHaveCSS('outline-color', outlineColor);
+  await expect(page.getByRole('button', { name: 'Player action', exact: true })).toHaveCSS('outline-style', 'none');
+});
+
+test('round destructive ActionButton centers its SVG and keeps error-family interaction feedback', async ({ page }) => {
+  await mountEditorFooter(page);
+  const action = page.locator('[data-round-destructive]');
+  const icon = action.locator('svg');
+
+  await expect(action).toHaveCSS('border-radius', '50%');
+  const centers = await action.evaluate((button) => {
+    const buttonRect = button.getBoundingClientRect();
+    const iconRect = button.querySelector('svg').getBoundingClientRect();
+    return {
+      buttonX: buttonRect.left + buttonRect.width / 2,
+      buttonY: buttonRect.top + buttonRect.height / 2,
+      iconX: iconRect.left + iconRect.width / 2,
+      iconY: iconRect.top + iconRect.height / 2,
+    };
+  });
+  expect(Math.abs(centers.buttonX - centers.iconX)).toBeLessThan(0.5);
+  expect(Math.abs(centers.buttonY - centers.iconY)).toBeLessThan(0.5);
+  await expect(icon).toHaveAttribute('aria-hidden', 'true');
+
+  await action.hover();
+  await expect(action).toHaveCSS('border-color', 'rgb(239, 83, 80)');
+  await expect(action).toHaveCSS('outline-color', 'rgb(239, 83, 80)');
+  await expect(action).toHaveCSS('outline-offset', '-1px');
+  await action.focus();
+  await expect(action).toHaveCSS('outline-color', 'rgb(239, 83, 80)');
+  await expect(action).toHaveCSS('outline-offset', '-1px');
 });

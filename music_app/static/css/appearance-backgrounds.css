@@ -3,6 +3,21 @@
   --app-chrome: var(--appearance-panel-background, #0e1b2b);
   --app-surface: var(--appearance-main-surface, #111c2c);
 }
+/* Resolve table colors in their owning surface, not only at the page root. */
+:root, .compact-data-table {
+  --appearance-table-surface: color-mix(
+    in srgb,
+    var(--appearance-card, var(--panel, #101a29)) 94%,
+    var(--appearance-ink, var(--text, #f3f6fa))
+  );
+}
+/* Dark table bodies and headers share the owning panel's exact surface. */
+:root[data-appearance-mode='dark'] :is(.compact-data-table, .compact-data-table-header),
+:root[data-appearance-palette='parchment-pine'] :is(.utility-modal-dialog, .confirm-modal-dialog, .non-album-modal-dialog, .cover-lookup-modal-dialog) :is(.compact-data-table, .compact-data-table-header) {
+  --appearance-table-surface: var(--appearance-panel-background, var(--panel, #101a29));
+  --appearance-table-header-tint: 0%;
+  background: var(--appearance-table-surface);
+}
 html .track-modal-dialog,
 html .utility-modal-dialog,
 html .utility-modal-body,
@@ -10,6 +25,48 @@ html .utility-tab.is-active,
 html .confirm-modal-dialog,
 html .tag-editor-dialog,
 html .cover-lookup-modal-dialog { background: var(--appearance-panel-background, var(--panel)); }
+:root[data-appearance-mode='light'] .track-modal-dialog {
+  --panel: var(--appearance-card);
+  --panel-2: var(--appearance-control);
+  --appearance-neutral-button-background: var(--appearance-card);
+  --text: var(--appearance-ink);
+  --muted: var(--appearance-muted);
+  --border: var(--appearance-line);
+  background: var(--appearance-card);
+  color: var(--appearance-ink);
+  color-scheme: light;
+}
+:root[data-appearance-mode='light'] .track-modal-dialog :is(.track-modal-header, .track-modal-body) {
+  background: var(--appearance-card);
+}
+:root[data-appearance-mode='light'] .tag-editor-dialog {
+  --panel: var(--appearance-card);
+  --panel-2: var(--appearance-control);
+  --appearance-neutral-button-background: var(--appearance-card);
+  --text: var(--appearance-ink);
+  --muted: var(--appearance-muted);
+  --border: var(--appearance-line);
+  background: var(--appearance-card);
+  color: var(--appearance-ink);
+  color-scheme: light;
+}
+:root[data-appearance-mode='light'] .tag-editor-dialog :is(
+  .tag-editor-header, .tag-editor-body, .tag-editor-track-list,
+  .tag-editor-form, .tag-editor-actions, .editor-footer
+) {
+  background: var(--appearance-card);
+}
+:root[data-appearance-mode='light'] .tag-editor-dialog .tag-editor-form :is(input, select) {
+  background: var(--appearance-control);
+  color: var(--appearance-ink);
+  border-color: var(--appearance-line);
+}
+:root[data-appearance-mode='light'] :is(.shell-main-surface, .settings-main) {
+  --appearance-neutral-button-background: var(--appearance-main-surface);
+}
+:root[data-appearance-mode='light'] .artist-info-overlay {
+  --appearance-neutral-button-background: var(--appearance-card);
+}
 html .account-menu { background: var(--appearance-panel-background, #0d1b2b); }
 html .settings-host .member-actions-menu { background: var(--appearance-panel-background, var(--surface-2)); }
 html .recent-search-popover { background: var(--appearance-panel-background, var(--panel-2)); }
@@ -26,14 +83,25 @@ html .non-album-modal-dialog {
 html .cover-lookup-drawer {
   background: linear-gradient(180deg, rgba(var(--appearance-panel-background-rgb, 8, 15, 27), 0.98), rgba(var(--appearance-panel-background-rgb, 17, 24, 39), 0.98));
 }
-/* Each editor follows its own draft; document surfaces keep the saved theme. */
+/* Default-account controls resolve catalog tokens locally. Saved palettes still
+   inherit from the app; unsaved colors remain confined to the preview. */
+:root:not([data-appearance-palette]) :where(.appearance-background-editor, .editor-footer) {
+  --appearance-ink: #EDF0F4;
+  --appearance-muted: #ABB6C5;
+  --appearance-card: #202938;
+  --appearance-control: #202938;
+  --appearance-line: #526173;
+  --appearance-primary-button: #202938;
+  --appearance-primary-button-ink: #EDF0F4;
+}
+/* The editor follows the selected panel companion; previews resolve their own draft. */
 .appearance-background-editor {
   --text: var(--appearance-ink); --muted: var(--appearance-muted);
   --panel: var(--appearance-card); --panel-2: var(--appearance-control);
-  --border: var(--appearance-line); --accent: var(--appearance-accent);
+  --border: var(--appearance-line); --accent: var(--appearance-waveform-fill, var(--appearance-accent));
   --appearance-editor-error: color-mix(in srgb, #ef4444 70%, var(--appearance-ink));
   color: var(--appearance-ink);
-  background: var(--appearance-main-surface);
+  background: var(--appearance-panel-background);
   border-radius: 10px;
   padding: 4px 6px 8px;
   min-width: 0;
@@ -71,8 +139,7 @@ html .cover-lookup-drawer {
 .background-preview-floating { position: absolute; right: 12px; top: 51px; width: 140px; padding: 12px; border: 1px solid var(--appearance-line); border-radius: 8px; background: var(--preview-floating); box-shadow: 0 12px 20px #0003; font-size: 11px; }
 .background-preview-floating span { display: block; margin-top: 9px; }
 .background-preview-player { background: var(--appearance-player); padding: 9px 13px; color: var(--appearance-muted); font-size: 10px; }
-.background-warning { margin: 14px 0 0; padding: 10px 12px; border: 1px solid var(--appearance-stars); border-radius: 8px; color: var(--appearance-ink); background: color-mix(in srgb, var(--appearance-stars) 15%, var(--appearance-panel-background)); font-size: 12px; line-height: 1.5; }
-.background-request-error { color: var(--appearance-editor-error); font-size: 12px; }
+.background-warning, .background-request-error { margin: 14px 0 0; }
 .background-actions { display: flex; align-items: center; gap: 9px; flex-wrap: wrap; margin-top: 16px; padding-top: 16px; border-top: 1px solid var(--appearance-line); }
 .background-actions .button { height: 37px; padding: 0 15px; border: 1px solid var(--appearance-line); border-radius: 8px; color: var(--appearance-ink); background: var(--appearance-control); font: inherit; }
 .background-actions .background-reset { margin-right: auto; background: transparent; color: var(--appearance-muted); }
@@ -85,8 +152,20 @@ html .cover-lookup-drawer {
 .editor-footer-reset { background: transparent !important; color: var(--appearance-muted) !important; }
 .editor-footer-status { min-width: 0; margin: 0; color: var(--appearance-muted); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .editor-footer-actions { display: flex; align-items: center; gap: 8px; margin-left: auto; }
+.editor-footer .button { display: inline-flex; align-items: center; justify-content: center; box-sizing: border-box; min-height: 34px; line-height: 1; }
+.editor-footer .ui-button__content { display: inline-flex; align-items: center; line-height: 1; }
+.editor-footer-status { display: flex; align-items: center; min-height: 34px; line-height: 1; }
 .utility-modal-footer[hidden], .editor-footer [hidden] { display: none; }
-.appearance-background-editor :is(button, input):focus-visible { outline: 2px solid var(--appearance-interaction-outline, var(--appearance-accent)); outline-offset: 3px; }
+:root :is(.editor-footer, .background-actions) :is([data-background-cancel], [data-background-save]):not(:disabled) { cursor: pointer; }
+:root :is(.editor-footer, .background-actions) [data-background-save]:disabled {
+  opacity: .38;
+  cursor: default;
+  box-shadow: none;
+}
+@media (max-width: 760px) {
+  .editor-footer { flex-wrap: wrap; padding: 10px 0; }
+}
+.appearance-background-editor :is(button, input):focus-visible { outline: 1px solid var(--appearance-interaction-outline, var(--appearance-focus-outline, var(--appearance-play, var(--appearance-accent)))); outline-offset: 3px; }
 .appearance-background-editor :is(button, input):disabled { opacity: .42; filter: grayscale(1); cursor: default; }
 .appearance-background-editor [hidden] { display: none; }
 @media (max-width: 650px) {
@@ -103,15 +182,112 @@ html .cover-lookup-drawer {
 :root[data-appearance-palette] {
   --bg: var(--appearance-main-surface); --text: var(--appearance-ink); --muted: var(--appearance-muted);
   --panel: var(--appearance-card); --panel-2: var(--appearance-control); --border: var(--appearance-line);
-  --accent: var(--appearance-accent); --star-on: var(--appearance-stars);
+  --accent: var(--appearance-waveform-fill, var(--appearance-accent)); --star-on: var(--appearance-stars);
   --app-ink: var(--appearance-ink); --app-muted: var(--appearance-muted);
-  --app-control: var(--appearance-control); --app-active: var(--appearance-hover);
+  --app-control: var(--appearance-control); --app-active: var(--appearance-item-selected);
 }
 
 @media (min-width: 651px) and (max-width: 900px) {
   .compact-player-style-section { display: none; }
 }
 :root[data-appearance-mode='light'], :root[data-appearance-mode='light'] .settings-host { color-scheme: light; }
+:root[data-appearance-mode='light'] {
+  --gallery-artbox-hover-frame: #000;
+  --gallery-artbox-hover-inner: color-mix(in srgb, var(--appearance-ink) 42%, transparent);
+  --gallery-artbox-hover-glow: color-mix(in srgb, var(--appearance-ink) 18%, transparent);
+}
+:root .utility-loop-entry {
+  background: var(--appearance-panel-background, var(--panel));
+  border-color: color-mix(in srgb, var(--appearance-play, #4bc173) 48%, var(--appearance-line, var(--border)));
+  /* A short edge glow leaves the center of the existing 12px row gap unlit. */
+  box-shadow: 0 0 3px color-mix(in srgb, var(--appearance-play, #4bc173) 90%, transparent);
+}
+:root .utility-loop-entry :is(.utility-loop-repeat, .utility-loop-speed-step, .utility-loop-speed-value) {
+  background: color-mix(in srgb, var(--appearance-play, #4bc173) 14%, transparent);
+  border-color: color-mix(in srgb, var(--appearance-play, #4bc173) 45%, transparent);
+  color: var(--appearance-ink, var(--text));
+}
+:root .utility-loop-entry .utility-loop-pitch-control button {
+  background: transparent;
+  border: 0;
+  color: var(--appearance-ink, var(--text));
+}
+:root .utility-loop-entry .utility-loop-repeat.is-active {
+  background: color-mix(in srgb, var(--appearance-play, #4bc173) 26%, transparent);
+  border-color: var(--appearance-play, #4bc173);
+}
+:root .utility-loop-entry .loop-play-control-cluster {
+  --loop-control-surface: transparent;
+  --loop-control-border: color-mix(in srgb, var(--appearance-play, #4bc173) 45%, var(--appearance-line, var(--border)));
+}
+:root[data-appearance-mode='dark'] .utility-loop-entry .loop-play-control-cluster {
+  --loop-control-surface: var(--appearance-player, var(--appearance-panel-background, var(--panel)));
+  --loop-control-border: var(--appearance-waveform-edge, var(--border));
+  --loop-control-ink: var(--appearance-player-ink, var(--appearance-ink, var(--text)));
+  --loop-action-save-color: var(--appearance-play);
+  --loop-action-save-glow: var(--appearance-play);
+}
+:root .utility-loop-entry .loop-play-control-button {
+  box-shadow: none;
+}
+:root .utility-loop-entry .utility-loop-remove.action-button--destructive {
+  background: var(--alert-error-tint, color-mix(in srgb, var(--appearance-error, #ef5350) 18%, transparent));
+  border-color: var(--appearance-error, #ef5350);
+  color: var(--appearance-error, #ef5350);
+}
+:root[data-appearance-mode='light'] .utility-loop-entry {
+  background: color-mix(in srgb, var(--appearance-ink) 6%, var(--appearance-card));
+  border-color: color-mix(in srgb, var(--appearance-play) 12%, var(--appearance-line));
+  color: var(--appearance-ink);
+  box-shadow: 0 2px 4px color-mix(in srgb, var(--appearance-ink) 18%, transparent);
+}
+:root[data-appearance-mode='light'] .utility-loop-entry :is(
+  .utility-detail-title,
+  .utility-loop-original-times strong,
+  .utility-loop-time,
+  .utility-loop-pitch-control span
+) {
+  color: var(--appearance-ink);
+}
+:root[data-appearance-mode='light'] .utility-loop-entry :is(
+  .utility-loop-drag-handle,
+  .utility-loop-original-times
+) {
+  color: var(--appearance-muted);
+}
+:root[data-appearance-mode='light'] .utility-loop-entry .utility-loop-timeline-wrap {
+  border: 0;
+  border-radius: 8px;
+  background: var(--appearance-control);
+  box-shadow: none;
+}
+:root[data-appearance-mode='light'] .utility-loop-entry :is(
+  .utility-loop-repeat,
+  .utility-loop-speed-step,
+  .utility-loop-speed-value
+) {
+  border-color: var(--appearance-line);
+  background: var(--appearance-control);
+  color: var(--appearance-ink);
+}
+:root[data-appearance-mode='light'] .utility-loop-entry :is(
+  .utility-loop-repeat,
+  .utility-loop-speed-step,
+  .utility-loop-speed-value
+):hover:not(:disabled) {
+  border-color: var(--appearance-play);
+  background: color-mix(in srgb, var(--appearance-play) 12%, var(--appearance-control));
+  color: var(--appearance-ink);
+}
+:root[data-appearance-mode='light'] .utility-loop-entry .utility-loop-repeat.is-active {
+  border-color: var(--appearance-play, #4bc173);
+  background: color-mix(in srgb, var(--appearance-play) 12%, var(--appearance-control));
+  color: var(--appearance-play-ink, #10201a);
+}
+:root[data-appearance-mode] .utility-loop-entry .utility-loop-repeat,
+:root[data-appearance-mode] .utility-loop-entry .utility-loop-repeat:is(:hover, :active, .is-active) {
+  color: var(--appearance-play, #4bc173);
+}
 :root[data-appearance-mode='dark'] { color-scheme: dark; }
 :root[data-appearance-mode='light'] .cover-lookup-drawer-glyph img { opacity: 0; }
 :root[data-appearance-mode='light'] .cover-lookup-drawer-glyph::before {
@@ -134,35 +310,55 @@ html .cover-lookup-drawer {
   --ink: var(--appearance-ink); --muted: var(--appearance-muted); --blue: var(--appearance-accent);
 }
 :root[data-appearance-palette] :is(.account-menu-item, .account-menu-icon, .utility-modal-title, .utility-tab, .utility-list-item, .track-modal-title, .gallery-options-menu, .status-context-menu, .album-card-context-menu, .recent-search-popover) { color: var(--appearance-ink); }
-:root[data-appearance-palette] :is(.account-menu-item:hover, .utility-list-item:hover, .app-bar .button:hover:not(:disabled), .app-bar .icon-button:hover:not(:disabled)) { background: var(--appearance-item-hover, var(--appearance-hover)); color: var(--appearance-ink); }
-:root[data-appearance-palette] :is(.utility-list-item.is-active, .navigation-tree-item.is-selected) { background: var(--appearance-item-selected, var(--appearance-hover)); color: var(--appearance-ink); }
-:root :is(button, .button, [role='button'], [data-actionable]):not(.navigation-tree-item):not(.global-player *):hover:not(:disabled):not([aria-disabled='true']) {
-  border-color: var(--appearance-interaction-outline, var(--appearance-accent));
-  outline: 2px solid var(--appearance-interaction-outline, var(--appearance-accent));
-  outline-offset: 2px;
+:root[data-appearance-palette] :is(.account-menu-item:hover, .utility-list-item:hover, .app-bar .button:hover:not(:disabled), .app-bar .icon-button:hover:not(:disabled)) { color: var(--appearance-ink); }
+:root:is([data-appearance-palette], [data-appearance-item-hover]) :is(.account-menu-item, .utility-list-item):hover:where(:not(:disabled):not([aria-disabled='true'])) { background: var(--appearance-item-hover, var(--appearance-hover)); }
+:root[data-appearance-palette] :is(.utility-list-item.is-active, .navigation-tree-item.is-selected) { color: var(--appearance-ink); }
+:root:is([data-appearance-palette], [data-appearance-item-selected]) :is(.utility-list-item.is-active, .navigation-tree-item.is-selected) { background: var(--appearance-item-selected, var(--appearance-hover)); }
+.shell-navigation-rail .artist-link.navigation-tree-item:hover { background: var(--appearance-item-hover, var(--appearance-hover, #ffffff07)); }
+.shell-navigation-rail .artist-link.navigation-tree-item.is-selected { background: var(--appearance-item-selected, var(--appearance-hover, var(--app-active))); }
+:root :is(button, .button, [role='button'], [data-actionable]):not(.utility-loop-control button):not(.utility-loop-repeat):not(.utility-loop-speed-step):not(.utility-loop-speed-value):not(.loop-edit-action):not(.loop-range-handle):not(.gallery-switch):not(.gallery-type-choice):not(.gallery-menu-action):not(.album-card *):not(.tag-editor-track):not(.tag-editor-track *):not(.track-modal-cover-button):not(.gallery-info-button):not(.navigation-tree-item):not(.search-field-button):not(.cover-lookup-task-open):not(.global-player *):hover:not(:disabled):not([aria-disabled='true']) {
+  border-color: var(--appearance-item-action-hover-border, var(--appearance-line));
 }
-:root[data-appearance-palette] :is(button, .button, [role='button'], [data-actionable]):not(.navigation-tree-item):not(.ui-button--quiet):not(.global-player *):hover:not(:disabled):not([aria-disabled='true']) {
+:root:is([data-appearance-palette], [data-appearance-item-action-hover-background]) :is(button, .button, [role='button'], [data-actionable]):not(.appearance-muted-spectrum button):not(.artist-family-panel__artist):not(.navigation-tree-item):not(.track-modal-cover-button):not(.tag-editor-track):not(.tag-editor-track *):not(.utility-list-item):not(.account-menu-item):not(.ui-button--quiet):not(.loop-edit-action):not(.loop-range-handle):not(.album-card *):not(.global-player *):hover:not(:disabled):not([aria-disabled='true']) {
   background: var(--appearance-item-action-hover-background, var(--appearance-control));
 }
-:root :is(button, .button, [role='button'], [data-actionable]):not(.navigation-tree-item):not(.global-player *):active:not(:disabled):not([aria-disabled='true']) {
+:root :is(button, .button, [role='button'], [data-actionable]):not(.navigation-tree-item):not(.tag-editor-track):not(.tag-editor-track *):not(.track-modal-cover-button):not(.loop-edit-action):not(.loop-range-handle):not(.global-player *):active:not(:disabled):not([aria-disabled='true']) {
   border-color: var(--appearance-interaction-outline, var(--appearance-accent));
 }
-:root[data-appearance-palette] :is(button, .button, [role='button'], [data-actionable]):not(.navigation-tree-item):not(.ui-button--quiet):not(.global-player *):active:not(:disabled):not([aria-disabled='true']) {
+:root:is([data-appearance-palette], [data-appearance-item-action-pressed]) :is(button, .button, [role='button'], [data-actionable]):not(.appearance-muted-spectrum button):not(.artist-family-panel__artist):not(.utility-list-item):not(.account-menu-item):not(.navigation-tree-item):not(.tag-editor-track):not(.tag-editor-track *):not(.track-modal-cover-button):not(.ui-button--quiet):not(.loop-edit-action):not(.loop-range-handle):not(.global-player *):active:not(:disabled):not([aria-disabled='true']) {
   background: var(--appearance-item-action-pressed, var(--appearance-item-action-hover-background, var(--appearance-control)));
 }
-:root[data-appearance-palette] :is(input[type='checkbox'], input[type='radio']) { accent-color: var(--appearance-accent); }
-:root :is(input[type='checkbox'], input[type='radio']):not(.global-player *):hover:not(:disabled) { outline: 1px solid var(--appearance-interaction-outline, var(--appearance-accent)); outline-offset: 2px; }
-:root[data-appearance-palette] :is(input[type='checkbox'], input[type='radio']):not(.global-player *):active:not(:disabled) { accent-color: var(--appearance-item-action-pressed, var(--appearance-accent)); }
-:root :is(button, input, select, [role='button'], [data-actionable]):not(.global-player *):focus-visible {
-  outline: 2px solid var(--appearance-interaction-outline, var(--appearance-accent));
-  outline-offset: 2px;
+:root {
+  --appearance-control-selected: color-mix(in srgb, var(--appearance-ink, var(--text, #eeeeee)) 45%, var(--appearance-control, var(--panel, #171717)));
+}
+:root[data-appearance-palette] :is(input[type='checkbox'], input[type='radio']) { accent-color: var(--appearance-control-selected); }
+:root :is(input[type='checkbox'], input[type='radio']):not(.global-player *):hover:not(:disabled) { outline: 1px solid var(--appearance-interaction-outline, var(--appearance-accent)); outline-offset: 1px; }
+:root:is([data-appearance-palette], [data-appearance-item-action-pressed]) :is(input[type='checkbox'], input[type='radio']):not(.global-player *):active:not(:disabled) { accent-color: var(--appearance-item-action-pressed, var(--appearance-accent)); }
+:root :is(button, input, select, [role='button'], [data-actionable]):not(.loop-edit-action):not(.loop-range-handle):not(.global-player *):not(.search-field *):not(.ui-input-action *):not(.gallery-info-button):focus-visible {
+  outline: 1px solid var(--appearance-interaction-outline, var(--appearance-focus-outline, var(--appearance-play, var(--appearance-accent))));
+  outline-offset: 1px;
+}
+:root .utility-loop-play {
+  background: var(--appearance-play, linear-gradient(135deg, #0fa66f, #1f995c)) !important;
+  color: var(--appearance-play-ink, #022c22) !important;
+  border-color: var(--appearance-player-control-border, var(--loop-control-border)) !important;
+  outline: none !important;
+}
+:root .utility-loop-play:is(:hover, :active, :focus-visible):not(:disabled):not([aria-disabled='true']) {
+  outline: 1px solid color-mix(in srgb, var(--appearance-interaction-outline, var(--appearance-accent, #72baff)) 46%, transparent) !important;
+  outline-offset: 1px !important;
+}
+
+:root :is(.utility-loop-pitch-control button, .utility-loop-repeat, .utility-loop-speed-step, .utility-loop-speed-value):hover:not(:disabled) {
+  outline: 1px solid rgba(110, 231, 183, 0.18);
+  outline-offset: 1px;
 }
 :root[data-appearance-palette] .gallery-options-floating-button {
   background: var(--appearance-control);
   color: var(--appearance-ink);
   border-color: var(--appearance-line);
 }
-:root[data-appearance-palette] .related-box {
+:root[data-appearance-palette] :is(.related-box, .artist-family-panel) {
   background: var(--appearance-card);
   border-color: var(--appearance-line);
   color: var(--appearance-ink);
@@ -178,16 +374,44 @@ html .cover-lookup-drawer {
   border-color: var(--appearance-line);
   color: var(--appearance-ink);
 }
-:root[data-appearance-palette] .related-chip:hover {
-  background: var(--appearance-item-hover, var(--appearance-hover));
+:root[data-appearance-palette] .artist-family-panel__artist {
+  background: var(--appearance-card);
+  border-color: var(--appearance-line);
+  color: var(--appearance-ink);
+}
+:root:is([data-appearance-palette], [data-appearance-item-hover]) .related-chip:hover { background: var(--appearance-item-hover, var(--appearance-hover)); }
+:root:is([data-appearance-palette], [data-appearance-item-hover]) .artist-family-panel__artist:hover { background: var(--appearance-card); }
+:root[data-appearance-palette] :is(.related-chip, .artist-family-panel__artist):hover {
   border-color: var(--appearance-accent);
   color: var(--appearance-ink);
 }
-:root[data-appearance-palette] .related-chip.active {
-  background: var(--appearance-item-selected, var(--appearance-hover));
+:root:is([data-appearance-palette], [data-appearance-item-selected]) .related-chip.active { background: var(--appearance-item-selected, var(--appearance-hover)); }
+:root:is([data-appearance-palette], [data-appearance-item-selected]) .artist-family-panel__artist.is-active { background: var(--appearance-card); }
+:root[data-appearance-palette] :is(.related-chip.active, .artist-family-panel__artist.is-active) {
   border-color: var(--appearance-accent);
   color: var(--appearance-ink);
   box-shadow: 0 0 0 1px color-mix(in srgb, var(--appearance-accent) 30%, transparent);
+}
+:root[data-appearance-palette] .artist-family-panel__artist.is-active {
+  border-color: var(--appearance-play);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--appearance-play) 30%, transparent);
+}
+:root[data-appearance-mode='light'] .artist-family-panel__artist:hover,
+:root[data-appearance-mode='light'] .artist-family-panel__artist.is-active {
+  box-shadow:
+    inset 0 0 18px color-mix(in srgb, var(--appearance-play) 18%, transparent),
+    0 0 0 1px color-mix(in srgb, var(--appearance-play) 30%, transparent);
+}
+:root[data-appearance-mode='light'] .artist-family-panel__artist.is-active {
+  background: color-mix(in srgb, #4bc173 20%, transparent);
+  border-color: #4bc173;
+  color: var(--appearance-play-ink, #10201a);
+}
+:root[data-appearance-mode='light']
+  .artist-family-panel__artist.is-active
+  .artist-family-panel__count {
+  background: color-mix(in srgb, var(--appearance-card, #fff) 82%, var(--appearance-play, #4bc173));
+  color: var(--appearance-play-ink, #10201a);
 }
 :root[data-appearance-palette] :is(.utility-modal-header, .track-modal-header, .utility-tabs, .utility-tab) { background: var(--appearance-panel-background); border-color: var(--appearance-line); }
 :root[data-appearance-palette] :is(.utility-list-item-meta, .utility-list-item-issues, .utility-rule-description, .utility-section-subtitle) { color: var(--appearance-muted); }
@@ -198,27 +422,40 @@ html .cover-lookup-drawer {
 }
 :root[data-appearance-palette] .settings-host :is(.settings-nav-item, .settings-nav-item span, .members-row, .member-identity small, .member-access small, .detail-person small, .detail-field small, .field small, .session-status, .account-header p strong) { color: var(--appearance-muted); border-color: var(--appearance-line); }
 :root[data-appearance-palette] .settings-host :is(.settings-nav-item.is-active, .settings-nav-item:hover, .member-actions-menu button:hover, .member-actions-menu a:hover) { background: var(--appearance-hover); color: var(--appearance-ink); }
-:root[data-appearance-palette] .settings-host :is(.field > span, .security-callout, .security-callout strong, .invitation-copy-fallback p) { color: var(--appearance-ink); }
+:root[data-appearance-palette] .settings-host :is(.field > span, .invitation-copy-fallback p) { color: var(--appearance-ink); }
 :root[data-appearance-palette] .settings-host :is(.password-control, .password-control input, .detail-field > input, .detail-field > select, .invitation-copy-fallback, .invitation-copy-fallback input, .account-button:not(.is-primary), .member-avatar) { color: var(--appearance-ink); background: var(--appearance-control); border-color: var(--appearance-line); }
 :root[data-appearance-palette] .settings-host .password-control button { color: var(--appearance-accent); }
 /* Player preferences are one saved group, independent of seekbar display mode. */
-:root[data-appearance-player] .global-player { background: linear-gradient(var(--appearance-player-surface-angle, 0deg), var(--appearance-player-surface-start, var(--appearance-player)), var(--appearance-player-surface-end, var(--appearance-player))); color: var(--appearance-player-ink); }
-:root[data-appearance-player] .global-player:not(.is-floating-compact) { border-color: var(--appearance-player-ink); }
-:root[data-appearance-player] :is(.player-title, .player-album-link, .player-album-link:hover, .player-time, .player-timeline-wrap.is-idle::after) { color: var(--appearance-player-ink); }
-:root[data-appearance-player] :is(.player-play, .player-loop-button, .player-save-loop) { color: var(--appearance-play-ink); background: var(--appearance-play); border-color: var(--appearance-player-control-border, var(--appearance-waveform-edge)); box-shadow: none; }
-:root[data-appearance-player] .player-loop-handle::after { width: 5px; background: var(--appearance-player-handle); border-color: var(--appearance-player-handle); }
-:root[data-appearance-player] .loop-range-handle::after { width: 5px; background: var(--appearance-player-handle); border-color: var(--appearance-player-handle); }
-:root[data-appearance-player] .player-loop-button.is-active { outline: 2px solid var(--appearance-waveform-edge); outline-offset: 2px; }
-:root[data-appearance-player] .player-timeline { accent-color: var(--appearance-waveform-fill); }
-:root[data-appearance-player] .player-loop-region { background: color-mix(in srgb, var(--appearance-waveform-fill) 28%, transparent); box-shadow: inset 0 0 0 1px var(--appearance-waveform-edge); }
-:root[data-appearance-player] .player-loop-region.loop-range-selection {
+:root[data-appearance-player]:not([data-appearance-native-surface]) .global-player:not(.is-docked-compact) { background: linear-gradient(var(--appearance-player-surface-angle, 0deg), var(--appearance-player-surface-start, var(--appearance-player)), var(--appearance-player-surface-end, var(--appearance-player))); color: var(--appearance-player-ink); }
+:root .global-player.is-docked-compact {
+  background:
+    radial-gradient(
+      circle 46px at calc(100% - 36px) calc(100% - 36px),
+      color-mix(in srgb, var(--appearance-play, #4ade80) 30%, transparent) 0,
+      color-mix(in srgb, var(--appearance-play, #4ade80) 12%, transparent) 46%,
+      transparent 80%
+    ),
+    var(--appearance-panel-background, var(--app-chrome));
+  color: var(--appearance-panel-ink, var(--appearance-ink, #25302a));
+  box-shadow: none;
+  backdrop-filter: none;
+}
+:root[data-appearance-player]:not([data-appearance-native-surface]) .global-player:not(.is-floating-compact) { border-color: var(--appearance-player-ink); }
+:root[data-appearance-player]:not([data-appearance-native-surface]) :is(.player-title, .player-album-link, .player-album-link:hover, .player-time, .player-timeline-wrap.is-idle::after) { color: var(--appearance-player-ink); }
+:root[data-appearance-player]:not([data-appearance-native-controls]) :is(.player-play, .player-loop-button, .player-save-loop) { color: var(--appearance-play-ink); background: var(--appearance-play); border-color: var(--appearance-player-control-border, var(--appearance-waveform-edge)); box-shadow: none; }
+:root[data-appearance-player]:not([data-appearance-native-handles]) .player-loop-handle::after { width: 5px; background: var(--appearance-player-handle); border-color: var(--appearance-player-handle); }
+:root[data-appearance-player]:not([data-appearance-native-handles]) .loop-range-handle::after { width: 5px; background: var(--appearance-player-handle); border-color: var(--appearance-player-handle); }
+:root[data-appearance-player]:not([data-appearance-native-controls]) .player-loop-button.is-active { outline: 2px solid var(--appearance-waveform-edge); outline-offset: 1px; }
+:root[data-appearance-player]:not([data-appearance-native-waveform]) .player-timeline { accent-color: var(--appearance-waveform-fill); }
+:root[data-appearance-player]:not([data-appearance-native-waveform]) .player-loop-region { background: color-mix(in srgb, var(--appearance-waveform-fill) 28%, transparent); box-shadow: inset 0 0 0 1px var(--appearance-waveform-edge); }
+:root[data-appearance-player]:not([data-appearance-native-handles]) .player-loop-region.loop-range-selection {
   border-inline-color: var(--appearance-player-handle);
   background: color-mix(in srgb, var(--appearance-player-handle) 10%, transparent);
   box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--appearance-player-handle) 82%, transparent);
 }
-:root[data-appearance-player] .player-timeline-wrap.is-idle::before { background: var(--appearance-player); box-shadow: inset 0 0 0 1px var(--appearance-waveform-edge); }
-:root[data-appearance-player] .player-cover-button { border-color: var(--appearance-waveform-edge); }
-:root[data-appearance-player] .player-cover-button.is-idle-placeholder { background-color: var(--appearance-player); color: var(--appearance-player-ink); box-shadow: none; }
+:root[data-appearance-player]:not([data-appearance-native-waveform]) .player-timeline-wrap.is-idle::before { background: var(--appearance-player); box-shadow: inset 0 0 0 1px var(--appearance-waveform-edge); }
+:root[data-appearance-player]:not([data-appearance-native-waveform]) .player-cover-button { border-color: var(--appearance-waveform-edge); }
+:root[data-appearance-player]:not([data-appearance-native-surface]) .player-cover-button.is-idle-placeholder { background-color: var(--appearance-player); color: var(--appearance-player-ink); box-shadow: none; }
 
 /* Palette choices and supporting controls use the editor-scoped draft tokens. */
 .appearance-palette-editor { padding: 20px; }
@@ -295,7 +532,7 @@ html .cover-lookup-drawer {
 .appearance-interaction-row > strong { font-size: 11px; }
 .appearance-muted-spectrum { display: flex; gap: 7px; flex-wrap: wrap; }
 .appearance-muted-spectrum button { width: 28px; height: 28px; padding: 0; border: 1px solid var(--appearance-line); border-radius: 6px; background: var(--swatch); }
-.appearance-muted-spectrum button[aria-pressed='true'] { outline: 2px solid var(--appearance-ink); outline-offset: 2px; }
+.appearance-muted-spectrum button[aria-pressed='true'] { outline: 2px solid var(--appearance-ink); outline-offset: 1px; }
 .appearance-spectrum-picker {
   position: relative;
   display: block;
@@ -310,14 +547,14 @@ html .cover-lookup-drawer {
 }
 .appearance-spectrum-picker::after { content: ''; position: absolute; inset: 8px; border: 1px solid #fff9; border-radius: 50%; background: var(--appearance-panel-background); pointer-events: none; }
 .appearance-spectrum-picker input { position: absolute; inset: 0; width: 100%; height: 100%; padding: 0; border: 0; opacity: 0; cursor: pointer; }
-.appearance-spectrum-picker[data-selected='true'] { outline: 2px solid var(--appearance-ink); outline-offset: 2px; }
+.appearance-spectrum-picker[data-selected='true'] { outline: 2px solid var(--appearance-ink); outline-offset: 1px; }
 .player-preview-dock {
   position: sticky;
   top: 0;
   z-index: 3;
   margin: 14px 0 18px;
   padding: 1px 0 10px;
-  background: var(--appearance-main-surface);
+  background: var(--appearance-panel-background, var(--panel));
 }
 .player-live-preview {
   display: grid; grid-template-columns: 50px 48px minmax(0,1fr); grid-template-rows: 52px; align-items: center; gap: 8px;
@@ -411,6 +648,16 @@ html .cover-lookup-drawer {
 .appearance-interaction-options { display: flex; align-items: center; gap: 9px; min-width: 0; }
 .appearance-outline-source { flex: 0 0 auto; min-height: 28px; padding: 0 9px; font-size: 9px; }
 .selection-hover-workspace { display: grid; grid-template-columns: minmax(0,3fr) minmax(220px,2fr); gap: 18px; align-items: start; }
+.appearance-action-outline-preference { display:flex; align-items:center; justify-content:space-between; gap:18px; margin:18px 0; padding:14px 16px; border:1px solid var(--appearance-line,var(--border)); border-radius:12px; background:color-mix(in srgb,var(--appearance-control,var(--panel-2)) 76%,transparent); }
+.appearance-action-outline-preference h4 { margin:0 0 4px; }
+.appearance-device-controls { display:flex; align-items:center; justify-content:flex-start; gap:14px; margin:0 0 18px; padding:0; border:0; border-radius:0; background:transparent; }
+.appearance-device-selector { display:flex; align-items:center; gap:0; }
+.appearance-device-selector button { min-height:34px; padding:6px 11px; border:1px solid var(--appearance-line,var(--border)); border-radius:0; background:transparent; color:var(--appearance-muted,var(--muted)); font:inherit; font-weight:700; }
+.appearance-device-selector button:first-child { border-radius:8px 0 0 8px; }
+.appearance-device-selector button:last-child { border-radius:0 8px 8px 0; }
+.appearance-device-selector button + button { margin-left:-1px; }
+.appearance-device-selector button[aria-pressed='true'] { position:relative; border-color:var(--appearance-line,var(--border)); background:color-mix(in srgb,var(--appearance-ink,var(--text)) 12%,var(--appearance-control,var(--panel-2))); color:var(--appearance-ink,var(--text)); }
+@media (max-width:700px) { .appearance-device-selector { width:100%; } .appearance-device-selector button { flex:1 1 0; } }
 .selection-hover-controls { min-width: 0; }
 .selection-hover-preview { position: sticky; top: 0; min-width: 0; padding: 12px; border: 1px solid var(--appearance-line); border-radius: 9px; background: var(--appearance-panel-background); }
 .selection-hover-preview-heading { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; margin-bottom: 9px; }
@@ -422,7 +669,7 @@ html .cover-lookup-drawer {
 .selection-preview-example.is-navigation-hover { background: var(--appearance-item-hover, var(--appearance-hover)); }
 .selection-preview-example.is-navigation-selected { border-left: var(--navigation-tree-selection-accent-width,3px) solid var(--navigation-tree-selection-accent-color,#34CA78); background: var(--appearance-item-selected, var(--appearance-hover)); }
 .selection-preview-example.is-item-hover-background { background: var(--appearance-item-action-hover-background, var(--appearance-control)); }
-.selection-preview-example.is-item-outline { border-color: var(--appearance-interaction-outline, var(--appearance-accent)); outline: 2px solid var(--appearance-interaction-outline, var(--appearance-accent)); outline-offset: 1px; }
+.selection-preview-example.is-item-outline { border-color: var(--appearance-interaction-outline, var(--appearance-accent)); outline: 1px solid var(--appearance-interaction-outline, var(--appearance-focus-outline, var(--appearance-play, var(--appearance-accent)))); outline-offset: 1px; }
 .selection-preview-example.is-item-pressed { background: var(--appearance-item-action-pressed, var(--appearance-control)); }
 .selection-hover-revert { display: flex; justify-content: flex-start; margin-top: 14px; padding-top: 13px; border-top: 1px solid var(--appearance-line); }
 @media (max-width: 1050px) { .background-editor-columns { grid-template-columns: minmax(0,1fr); } }
@@ -446,15 +693,25 @@ html .cover-lookup-drawer {
 :root[data-appearance-palette] .repair-alert.is-error { background: color-mix(in srgb, #ef4444 12%, var(--appearance-panel-background) 88%); }
 :root[data-appearance-palette] .repair-alert-inline-link:hover { color: var(--appearance-accent); }
 :root[data-appearance-palette] :is(.cover-lookup-task-type, .cover-lookup-task-status, .cover-lookup-task-elapsed) { background: var(--appearance-control); color: var(--appearance-ink); border-color: var(--appearance-line); }
-:root[data-appearance-player] .global-player .loop-edit-action-pod { background: var(--appearance-player); border-color: var(--appearance-waveform-edge); box-shadow: none; }
-:root[data-appearance-player] .global-player .loop-edit-action-pod::before { background: var(--appearance-waveform-edge); }
-:root[data-appearance-player] .global-player .loop-edit-action-pod::after { background: var(--appearance-player); }
-:root[data-appearance-player] .global-player :is(.loop-edit-action-enter, .loop-edit-action-create):not(:disabled) { color: var(--appearance-player-ink); text-shadow: none; }
-:root[data-appearance-player] .global-player :is(.loop-edit-action-enter, .loop-edit-action-create):not(:disabled) .loop-edit-action-icon { filter: none; }
-:root[data-appearance-player] .global-player .loop-edit-actions:not(.is-disabled):hover .loop-edit-action-pod { border-color: var(--appearance-waveform-fill); box-shadow: 0 0 0 1px var(--appearance-waveform-fill); }
-:root[data-appearance-player] .global-player .loop-edit-actions.is-disabled .loop-edit-action-pod { border-color: color-mix(in srgb, var(--appearance-player-ink) 48%, transparent); }
+:root[data-appearance-player]:not([data-appearance-native-controls]) .global-player .loop-play-control-cluster {
+  --loop-control-surface: var(--appearance-player);
+  --loop-control-border: var(--appearance-waveform-edge);
+  --loop-control-ink: var(--appearance-player-ink);
+  --loop-action-save-color: var(--appearance-play);
+  --loop-action-save-glow: var(--appearance-play);
+}
 
 /* Shared account draft: backgrounds own the player surface; Seekbar owns its waveform. */
+/* Custom controls still need opaque pod/idle surfaces when the player surface
+   inherits native CSS. Keep these fallbacks local, without theming the player. */
+:root[data-appearance-native-surface] .global-player :is(.loop-play-control-cluster, .loop-edit-actions, .player-timeline-wrap.is-idle) {
+  --appearance-player: #071827;
+  --appearance-player-ink: #dcebe3;
+}
+:root[data-appearance-native-waveform] .global-player :is(.loop-edit-actions, .player-loop-button.is-active) {
+  --appearance-waveform-fill: #dadde2;
+  --appearance-waveform-edge: #494950;
+}
 .appearance-background-editor .background-editor-link, .waveform-recovery .button { border: 1px solid var(--appearance-line); border-radius: 7px; padding: 9px 12px; background: var(--appearance-control); color: var(--appearance-ink); font: inherit; font-size: 12px; cursor: pointer; }
 .appearance-background-editor .background-editor-link { margin-top: 12px; }
 .appearance-seekbar-editor { padding: 20px; margin-top: 20px; }
@@ -465,7 +722,7 @@ html .cover-lookup-drawer {
 .waveform-color-fields .background-color-inputs { margin-top: 10px; }
 .waveform-recents { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 5px; min-height: 27px; }
 .waveform-recent-swatch { width: 28px; height: 28px; border: 1px solid var(--appearance-line); border-radius: 6px; cursor: pointer; box-shadow: inset 0 0 0 2px #0002; }
-.waveform-recent-swatch:hover { outline: 2px solid var(--appearance-accent); outline-offset: 2px; }
+.waveform-recent-swatch:hover { outline: 2px solid var(--appearance-accent); outline-offset: 1px; }
 .waveform-recovery { margin-top: 20px; padding-top: 17px; border-top: 1px solid var(--appearance-line); }
 .appearance-seekbar-editor .background-actions { justify-content: flex-end; }
 @media (max-width:650px) {
@@ -574,11 +831,28 @@ html .cover-lookup-drawer {
 .appearance-alert-family-card[data-alert-family="quiet"] .appearance-alert-family-card__chord b { color: var(--appearance-muted); background: color-mix(in srgb, var(--appearance-line) 18%, transparent); }
 .appearance-alert-live-preview { margin-top: 14px; }
 .appearance-alert-preview-grid { display: grid; grid-template-columns: minmax(0, 1.65fr) minmax(190px, .75fr); gap: 14px; margin-top: 14px; }
+.appearance-alert-preview__toast {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  min-width: 0;
+  padding: 10px 12px;
+  border: 1px solid color-mix(in srgb, var(--appearance-line) 66%, transparent);
+  border-radius: 13px;
+  background: color-mix(in srgb, var(--appearance-main-surface) 78%, transparent);
+}
+.appearance-alert-preview__toast > div { display: grid; gap: 3px; }
+.appearance-alert-preview__toast small { color: var(--appearance-muted); font-size: 10px; }
+.appearance-alert-preview__toast [data-alert-preview-toast] { min-width: 0; }
 .appearance-alert-preview__page { align-self: stretch; }
+.appearance-alert-preview__page > .on-page-alert { height: 100%; box-sizing: border-box; }
 .appearance-alert-preview__small {
   display: grid;
-  align-content: space-between;
-  gap: 20px;
+  align-content: start;
+  align-self: start;
+  gap: 12px;
   min-width: 0;
   padding: 14px;
   border: 1px solid color-mix(in srgb, var(--appearance-line) 66%, transparent);
@@ -587,15 +861,23 @@ html .cover-lookup-drawer {
 }
 .appearance-alert-preview__small > div:first-child { display: grid; gap: 3px; }
 .appearance-alert-preview__small small { color: var(--appearance-muted); font-size: 10px; }
-.appearance-alert-preview__small-pair { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; }
+.appearance-alert-preview__small-pair { display: grid; justify-items: start; gap: 8px; }
+.appearance-alert-preview__small-pair .small-alert {
+  pointer-events: none;
+  transition: none;
+}
 .appearance-alert-preview__small-expanded { width: auto; max-width: 168px; }
 
 /* Album page choices and preview. */
+.appearance-album-page { container: appearance-album-page / inline-size; }
 .appearance-album-page__workspace {
   display: grid;
   grid-template-columns: minmax(250px, .78fr) minmax(410px, 1.4fr);
   gap: 14px;
   margin-top: 18px;
+}
+@container appearance-album-page (max-width: 673px) {
+  .appearance-album-page__workspace { grid-template-columns: minmax(0, 1fr); }
 }
 .appearance-album-page__controls {
   min-width: 0;
@@ -623,6 +905,7 @@ html .cover-lookup-drawer {
 .appearance-album-layout-card:hover:not(:disabled) { transform: translateY(-1px); border-color: color-mix(in srgb, var(--appearance-accent) 62%, var(--appearance-line)); }
 .appearance-album-layout-card[aria-pressed="true"] { border-color: var(--appearance-accent); background: color-mix(in srgb, var(--appearance-accent) 10%, var(--appearance-control)); box-shadow: 0 0 0 1px color-mix(in srgb, var(--appearance-accent) 32%, transparent); }
 .appearance-album-layout-card > strong { align-self: end; }
+.appearance-album-layout-card > :is(strong, small) { min-width: 0; white-space: normal; overflow-wrap: anywhere; line-height: 1.4; }
 .appearance-album-layout-card > small { grid-column: 2 / -1; align-self: start; color: var(--appearance-muted); font-size: 10px; }
 .appearance-album-layout-card__diagram {
   grid-row: 1 / span 2;
@@ -746,9 +1029,10 @@ html .cover-lookup-drawer {
   .appearance-album-page__workspace { grid-template-columns: minmax(0, 1fr); }
   .appearance-album-preview__body { grid-template-columns: 104px minmax(0, 1fr); }
   .appearance-preview-heading { align-items: stretch; flex-direction: column; }
+  .appearance-alert-preview__toast { align-items: flex-start; flex-direction: column; }
   .appearance-segmented { align-self: flex-start; }
   .background-preview-column,
-  .player-preview-dock { position: static; }
+  .player-preview-dock { position: relative; top: auto; }
 }
 @media (max-width: 520px) {
   .appearance-alert-family-grid { grid-template-columns: minmax(0, 1fr); }
@@ -761,4 +1045,193 @@ html .cover-lookup-drawer {
   .appearance-alert-family-card,
   .appearance-album-layout-card { transition: none; }
   .appearance-album-preview__track.is-playing::after { display: none; }
+}
+
+/* Shared interaction defaults follow the active player color roles. */
+:root {
+  --appearance-item-hover: color-mix(in srgb, var(--appearance-waveform-fill, #387f68) 14%, var(--panel, #171717));
+  --appearance-item-selected: color-mix(in srgb, var(--appearance-waveform-fill, #387f68) 28%, var(--panel, #171717));
+  --appearance-item-action-hover-background: var(--appearance-item-hover);
+  --appearance-item-action-pressed: var(--appearance-item-selected);
+}
+
+/* File rows use the navigation tree's neutral hover fill. */
+:root .tag-editor-track:not(.is-active):hover {
+  outline: none !important;
+  box-shadow: none !important;
+  background: color-mix(in srgb, var(--text, #eee) 7%, var(--panel, #171717)) !important;
+}
+:root #tag-editor-track-list :is(.tag-editor-track-select, .tag-editor-reorder-grip, .utility-repair-file-type) {
+  border-color: transparent !important;
+  background: transparent !important;
+  box-shadow: none !important;
+}
+:root #tag-editor-track-list :is(.tag-editor-track-select, .tag-editor-reorder-grip):hover:not(:focus-visible) {
+  outline: none !important;
+}
+
+/* Selection fill belongs to the file list, including its pressed/focused row. */
+:root .tag-editor-track.is-active,
+:root .tag-editor-track.is-active:is(:hover, :active, :focus-visible) {
+  background: var(--tag-editor-selection-fill) !important;
+  box-shadow: none !important;
+}
+/* File selection is immediate, including deselection of the previous row. */
+:root .tag-editor-track { transition: none !important; }
+
+/* Shared neutral selection body; the configured color belongs only to the edge. */
+:root {
+  --selection-body-background: color-mix(in srgb, var(--text, #eee) 10%, var(--panel, #171717));
+}
+:root .navigation-tree-item.is-selected,
+:root .navigation-tree-item.is-selected:is(:hover, :focus, :active),
+:root .selection-preview-example.is-navigation-selected {
+  background: var(--selection-body-background) !important;
+}
+/* Cover the full sticky preview area, including the editor's surrounding gutter. */
+.player-preview-dock {
+  z-index: 10;
+  isolation: isolate;
+  pointer-events: auto;
+}
+.player-preview-dock::before {
+  content: '';
+  position: absolute;
+  inset: -20px -20px 0;
+  z-index: -1;
+  background-color: var(--appearance-panel-background, var(--panel, #0b1929));
+  background-image: linear-gradient(var(--appearance-panel-background, var(--panel, #0b1929)), var(--appearance-panel-background, var(--panel, #0b1929)));
+  pointer-events: auto;
+}
+@media (max-width: 760px) {
+  .player-preview-dock::before { display: none; }
+}
+
+/* Search suggestions use neutral interaction colors, independent of accent. */
+:root .recent-search-option:is(:hover, :focus, [aria-selected="true"], .is-active):not(:disabled) {
+  color: var(--appearance-ink, var(--text)) !important;
+  background: color-mix(in srgb, var(--appearance-ink, var(--text)) 8%, var(--panel)) !important;
+  border-color: transparent !important;
+  outline: none !important;
+  box-shadow: none !important;
+}
+
+/* Mixed palettes keep the content canvas light and panel controls dark. */
+:root[data-appearance-palette='parchment-pine'] {
+  --appearance-focus-outline: var(--appearance-ink);
+  --appearance-content-action-hover-background: var(--appearance-item-action-hover-background);
+  --appearance-content-action-pressed: var(--appearance-item-action-pressed);
+  --appearance-content-ink: var(--appearance-ink);
+  --appearance-content-card: var(--appearance-card);
+  --appearance-content-control: var(--appearance-control);
+  --appearance-content-line: var(--appearance-line);
+}
+:root[data-appearance-palette='parchment-pine'] :is(
+  .app-bar, .shell-navigation-rail, .settings-nav,
+  .utility-modal-dialog, .confirm-modal-dialog,
+  .cover-lookup-modal-dialog, .non-album-modal-dialog,
+  .cover-lookup-drawer, .account-menu, .member-actions-menu,
+  .gallery-options-menu, .status-context-menu, .album-card-context-menu,
+  .recent-search-popover, .utility-problem-filter-menu,
+  .track-modal-version-context-menu, .repair-progress-card, .utility-loop-speed-menu
+) {
+  --appearance-focus-outline: var(--appearance-focus);
+  --appearance-interaction-outline: var(--appearance-panel-interaction-outline);
+  --appearance-item-action-hover-background: var(--appearance-panel-action-hover-background);
+  --appearance-item-action-pressed: var(--appearance-panel-action-pressed);
+  --appearance-ink: var(--appearance-panel-ink);
+  --appearance-muted: var(--appearance-panel-muted);
+  --appearance-line: var(--appearance-panel-line);
+  --appearance-control: var(--appearance-panel-control);
+  --appearance-card: var(--appearance-panel-control);
+  --appearance-primary-button: var(--appearance-panel-control);
+  --appearance-primary-button-ink: var(--appearance-panel-ink);
+  --text: var(--appearance-panel-ink);
+  --ink: var(--appearance-panel-ink);
+  --muted: var(--appearance-panel-muted);
+  --border: var(--appearance-panel-line);
+  --line: var(--appearance-panel-line);
+  --panel: var(--appearance-panel-background);
+  --panel-2: var(--appearance-panel-control);
+  --surface: var(--appearance-panel-background);
+  --surface-2: var(--appearance-panel-control);
+  --app-ink: var(--appearance-panel-ink);
+  --app-muted: var(--appearance-panel-muted);
+  --app-control: var(--appearance-panel-control);
+  color: var(--appearance-panel-ink);
+  color-scheme: var(--appearance-panel-color-scheme);
+}
+:root[data-appearance-palette='parchment-pine']:not([data-appearance-item-selected]) .navigation-tree-item {
+  --selection-body-background: color-mix(in srgb, var(--appearance-panel-ink) 18%, var(--appearance-panel-background));
+}
+/* Use content ink for readable text while retaining the approved muted palette token. */
+:root[data-appearance-palette='parchment-pine'] :is(.shell-main-surface, .settings-main) {
+  --appearance-muted: var(--appearance-content-ink);
+  --muted: var(--appearance-content-ink);
+  --app-muted: var(--appearance-content-ink);
+}
+:root[data-appearance-palette='parchment-pine'] .global-player {
+  color-scheme: dark;
+}
+:root[data-appearance-palette='parchment-pine'] .app-bar-brand-art {
+  filter: none;
+}
+/* Preview regions resolve the draft's panel roles, independent of the saved theme. */
+.appearance-palette-editor .background-preview :is(
+  .background-preview-bar, .background-preview-tree,
+  .background-preview-floating, .background-preview-actions
+) {
+  --appearance-interaction-outline: var(--appearance-panel-interaction-outline);
+  --appearance-item-action-hover-background: var(--appearance-panel-action-hover-background);
+  --appearance-item-action-pressed: var(--appearance-panel-action-pressed);
+  --preview-ink: var(--preview-panel-ink);
+  --preview-muted: var(--preview-panel-muted);
+  --preview-line: var(--preview-panel-line);
+  --preview-control: var(--preview-panel-control);
+  --appearance-primary-button: var(--preview-panel-control);
+  --appearance-primary-button-ink: var(--preview-panel-ink);
+  color: var(--preview-panel-ink);
+  border-color: var(--preview-panel-line);
+  color-scheme: var(--preview-panel-color-scheme);
+}
+.background-preview[data-appearance-palette='parchment-pine'] .background-preview-content {
+  --preview-muted: var(--preview-ink);
+}
+
+.player-compact-setting .compact-player-setting-label { margin-top: 18px; }
+.player-compact-setting .background-player-modes { flex-wrap: wrap; }
+.compact-player-regular-style-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 12px;
+}
+:root[data-docked-compact-player-regular-style='true']
+  .global-player.is-docked-compact:not(.is-rail-compact) {
+  background:
+    radial-gradient(circle at 18% 0%, rgba(52, 211, 153, 0.22), transparent 34%),
+    linear-gradient(135deg, rgba(6, 24, 22, 0.98), rgba(15, 23, 42, 0.98));
+  color: var(--appearance-player-ink, #dcebe3);
+  border-top: 1px solid rgba(74, 222, 128, 0.24);
+  box-shadow: 0 -18px 50px rgba(0, 0, 0, 0.28);
+  backdrop-filter: blur(12px);
+}
+:root[data-appearance-player]:not([data-appearance-native-surface])[data-docked-compact-player-regular-style='true']
+  .global-player.is-docked-compact:not(.is-rail-compact) {
+  background: linear-gradient(
+    var(--appearance-player-surface-angle, 0deg),
+    var(--appearance-player-surface-start, var(--appearance-player)),
+    var(--appearance-player-surface-end, var(--appearance-player))
+  );
+  border-top-color: var(--appearance-player-ink);
+}
+:root[data-appearance-mode='light'][data-docked-compact-player-regular-style='true']
+  .global-player.is-compact.is-docked-compact:not(.is-rail-compact) {
+  border-top: 1px solid #4bc173;
+  box-shadow: 0 -1px 5px rgba(75, 193, 115, 0.3), 0 -12px 24px rgba(0, 0, 0, 0.28);
+}
+:root[data-appearance-mode='light'][data-docked-compact-player-regular-style='true']
+  .global-player.is-compact.is-docked-compact.is-overlay-detached:not(.is-rail-compact) {
+  border-top: 0;
+  box-shadow: 0 14px 30px #0009;
 }

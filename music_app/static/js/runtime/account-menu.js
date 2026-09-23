@@ -7,22 +7,28 @@ function attachAccountMenu(component) {
   const enabledItems = () => Array.from(menu.querySelectorAll('[role="menuitem"]')).filter((item) => !disabled(item));
   const close = (restoreFocus = false) => {
     menu.hidden = true;
+    if (typeof clearTriggerAnchor === 'function') clearTriggerAnchor(menu);
     trigger.setAttribute('aria-expanded', 'false');
     if (restoreFocus) trigger.focus();
   };
-  const open = (last = false) => {
+  const open = (last = false, focusItem = true) => {
+    if (typeof activateTriggerSurface === 'function') activateTriggerSurface(menu, () => close(false));
     menu.hidden = false;
     trigger.setAttribute('aria-expanded', 'true');
+    if (typeof syncTriggerAnchor === 'function') syncTriggerAnchor(menu, trigger);
     const items = enabledItems();
-    (last ? items[items.length - 1] : items[0])?.focus();
+    if (focusItem) (last ? items[items.length - 1] : items[0])?.focus();
   };
+  globalThis.addEventListener?.('resize', () => {
+    if (!menu.hidden && typeof syncTriggerAnchor === 'function') syncTriggerAnchor(menu, trigger);
+  });
   const reject = (event) => {
     event.preventDefault();
     event.stopImmediatePropagation();
   };
   trigger.addEventListener('click', (event) => {
     event.preventDefault();
-    if (menu.hidden) open();
+    if (menu.hidden) open(false, event.detail === 0);
     else close(true);
   });
   menu.addEventListener('click', (event) => {

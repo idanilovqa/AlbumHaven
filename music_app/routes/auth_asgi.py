@@ -591,12 +591,16 @@ async def get_reset_password(request: Request) -> Response:
     stored_valid = getattr(request.state, "password_reset_link_query_valid", None)
     query_pairs = list(request.query_params.multi_items())
     if stored_valid is not None:
+        query_present = True
         supplied_token = stored_token
         supplied_purpose = stored_purpose
         query_valid = stored_valid is True
+        invalid_marker = getattr(request.state, "password_reset_link_invalid_marker", False) is True
     else:
+        query_present = bool(query_pairs)
         supplied_token = request.query_params.get("token")
         supplied_purpose = request.query_params.get("purpose")
+        invalid_marker = query_pairs == [("invalid", "1")]
         query_valid = (
             not query_pairs
             or (
@@ -605,25 +609,38 @@ async def get_reset_password(request: Request) -> Response:
                 and sum(key == "token" for key, _value in query_pairs) == 1
             )
         )
-    if supplied_token is not None or supplied_purpose is not None:
-        if (
-            not query_valid
-            or supplied_purpose != "password-reset"
-            or not supplied_token
-        ):
-            return _generic_reset_invalid()
+    if invalid_marker:
+        return _generic_reset_invalid()
+    if query_present:
+        issued = None
         try:
-            issued = await run_in_threadpool(
-                service.exchange_reset_token,
-                supplied_token,
-                request_ref=uuid4().hex,
-            )
+            if query_valid and supplied_purpose == "password-reset" and supplied_token:
+                issued = await run_in_threadpool(
+                    service.exchange_reset_token,
+                    supplied_token,
+                    request_ref=uuid4().hex,
+                )
+            preserve_transaction = False
+            if issued is None:
+                existing_transaction = request.cookies.get(_RESET_TRANSACTION_COOKIE)
+                if existing_transaction:
+                    preserve_transaction = await run_in_threadpool(
+                        service.validate_transaction, existing_transaction
+                    )
         except Exception:
             return _generic_reset_unavailable()
         if issued is None:
-            return _no_store(
-                RedirectResponse("/reset-password?invalid=1", status_code=303)
-            )
+            response = RedirectResponse("/reset-password?invalid=1", status_code=303)
+            response.headers["Referrer-Policy"] = "no-referrer"
+            if not preserve_transaction:
+                response.delete_cookie(
+                    _RESET_TRANSACTION_COOKIE,
+                    path="/",
+                    secure=secure,
+                    httponly=True,
+                    samesite="lax",
+                )
+            return _no_store(response)
         response = RedirectResponse("/reset-password", status_code=303)
         response.set_cookie(
             _RESET_TRANSACTION_COOKIE,
@@ -726,6 +743,18 @@ def _generic_reset_unavailable() -> HTMLResponse:
     return _no_store(response)
 
 
+@router.get("/accept-invitation/continue", response_class=HTMLResponse)
+async def accept_invitation_continue() -> Response:
+    # A committed same-site document lets the next navigation send the Strict
+    # lifecycle cookie after an invitation was opened on an external site.
+    return _invitation_headers(HTMLResponse(
+        '<!doctype html><html lang="en"><head><meta charset="utf-8">'
+        '<meta http-equiv="refresh" content="0;url=/accept-invitation">'
+        '<title>Continue invitation</title></head><body>'
+        '<a href="/accept-invitation">Continue invitation</a></body></html>'
+    ))
+
+
 @router.get("/accept-invitation", response_class=HTMLResponse)
 async def accept_invitation_get(request: Request) -> Response:
     try:
@@ -775,18 +804,33 @@ async def accept_invitation_get(request: Request) -> Response:
                 )
             except Exception:
                 issued = None
+        preserve_transaction = False
+        existing_transaction = request.cookies.get(INVITATION_COOKIE)
+        # A cross-site navigation can withhold an existing Strict cookie. Let
+        # the token-free same-site continuation validate it before changing it.
+        defer_validation = issued is None and existing_transaction is None
+        if issued is None:
+            if existing_transaction is not None:
+                try:
+                    preserve_transaction = await run_in_threadpool(
+                        _invitation_lifecycle(request).validate_transaction,
+                        existing_transaction,
+                    )
+                except Exception:
+                    return _generic_invitation_unavailable()
         response = RedirectResponse(
-            "/accept-invitation",
+            "/accept-invitation/continue" if issued is not None or defer_validation else "/accept-invitation",
             status_code=303,
             headers=INVITATION_HEADERS,
         )
-        response.delete_cookie(
-            INVITATION_COOKIE,
-            path="/",
-            secure=secure,
-            httponly=True,
-            samesite="strict",
-        )
+        if not preserve_transaction and not defer_validation:
+            response.delete_cookie(
+                INVITATION_COOKIE,
+                path="/",
+                secure=secure,
+                httponly=True,
+                samesite="strict",
+            )
         if issued is not None:
             response.set_cookie(
                 INVITATION_COOKIE,
@@ -987,14 +1031,24 @@ async def _form_payload(
     content_type = request.headers.get("content-type", "").split(";", 1)[0].strip().casefold()
     if content_type != _FORM_CONTENT_TYPE:
         return None
-    try:
-        content_length = int(request.headers.get("content-length", "0"))
-    except ValueError:
-        return None
-    if content_length < 1 or content_length > _MAXIMUM_BODY_BYTES:
-        return None
-    body = await request.body()
-    if len(body) != content_length or len(body) > _MAXIMUM_BODY_BYTES:
+    raw_content_length = request.headers.get("content-length")
+    content_length: int | None = None
+    if raw_content_length is not None:
+        try:
+            content_length = int(raw_content_length)
+        except ValueError:
+            return None
+        if content_length < 1 or content_length > _MAXIMUM_BODY_BYTES:
+            return None
+    chunks: list[bytes] = []
+    body_length = 0
+    async for chunk in request.stream():
+        body_length += len(chunk)
+        if body_length > _MAXIMUM_BODY_BYTES:
+            return None
+        chunks.append(chunk)
+    body = b"".join(chunks)
+    if not body or (content_length is not None and body_length != content_length):
         return None
     try:
         pairs = parse_qsl(
@@ -1022,23 +1076,34 @@ def _same_origin(request: Request, config: Mapping[str, object]) -> bool:
     if origin is not None:
         if origin in origins:
             return True
-        peer = _ip_address(request.client.host if request.client else None)
-        return bool(
-            request.url.scheme == "http"
-            and peer is not None
-            and peer.is_loopback
-            and not _peer_is_trusted_proxy(peer, config)
-            and _host_is_loopback(request.url.hostname)
-            and origin == f"http://{request.url.netloc}"
-        )
+        return _direct_loopback_same_origin(request, config, origin)
     referer = request.headers.get("referer")
     if not referer:
         return False
     try:
         parsed = urlsplit(referer)
-        return f"{parsed.scheme}://{parsed.netloc}" in origins
+        referer_origin = f"{parsed.scheme}://{parsed.netloc}"
+        return referer_origin in origins or _direct_loopback_same_origin(
+            request, config, referer_origin
+        )
     except Exception:
         return False
+
+
+def _direct_loopback_same_origin(
+    request: Request,
+    config: Mapping[str, object],
+    candidate_origin: str,
+) -> bool:
+    peer = _ip_address(request.client.host if request.client else None)
+    return bool(
+        request.url.scheme == "http"
+        and peer is not None
+        and peer.is_loopback
+        and not _peer_is_trusted_proxy(peer, config)
+        and _host_is_loopback(request.url.hostname)
+        and candidate_origin == f"http://{request.url.netloc}"
+    )
 
 
 def _request_source(request: Request, config: Mapping[str, object]) -> tuple[str, str]:

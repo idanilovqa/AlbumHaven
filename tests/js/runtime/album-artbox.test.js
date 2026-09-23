@@ -6,6 +6,30 @@ const vm = require('node:vm');
 
 const repoRoot = path.join(__dirname, '..', '..', '..');
 
+test('loop artwork uses the scoped public cover URL for preview and enlargement without path fallbacks', () => {
+  const context = loadAlbumArtbox();
+  context.buildAlbumDisplayCoverUrl = () => '';
+  context.buildAlbumLightboxCoverUrl = () => '';
+  const html = context.buildUtilityAlbumArtbox({ id: 'owned-loop', cover_url: '/cover?loop_id=owned-loop' }, { interactive: true });
+  assert.match(html, /src="\/cover\?loop_id=owned-loop"/);
+  assert.match(html, /data-cover-src="\/cover\?loop_id=owned-loop"/);
+});
+
+test('utility album artbox can defer its preview to the shared gallery cover loader', () => {
+  const context = loadAlbumArtbox();
+  context.buildAlbumDisplayCoverUrl = () => '/cover?path=family-preview';
+  context.buildAlbumLightboxCoverUrl = () => '/cover?path=family-full';
+
+  const html = context.buildUtilityAlbumArtbox(
+    { cover_path: 'family-preview' },
+    { label: 'Family artwork', deferPreview: true },
+  );
+
+  assert.match(html, /data-gallery-cover-src="\/cover\?path=family-preview"/);
+  assert.match(html, /data-production-cover-src="\/cover\?path=family-preview"/);
+  assert.doesNotMatch(html, /<img[^>]+\ssrc=/);
+});
+
 function loadAlbumArtbox() {
   const context = {
     escapeHtml: (value) => String(value ?? '').replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;').replaceAll('"', '&quot;'),
@@ -68,6 +92,20 @@ test('AlbumArtbox preserves supplied cover markup for present albums', () => {
   assert.doesNotMatch(html, /album-artbox__missing-mark/);
 });
 
+test('AlbumArtbox owns an independent interactive overlay slot', () => {
+  const context = loadAlbumArtbox();
+  const html = context.buildAlbumArtboxHtml({
+    state: 'ready',
+    label: 'Album cover for SMPTe',
+    coverHtml: '<img src="/cover/smpte" alt="SMPTe">',
+    overlayHtml: '<button type="button" data-cover-action>Search</button>',
+    actionHtml: '<span class="small-alert">Album found</span>',
+  });
+
+  assert.match(html, /<span class="album-artbox__overlay"><button[^>]*data-cover-action>Search<\/button><\/span>/);
+  assert.match(html, /<span class="album-artbox__action"><span class="small-alert">Album found<\/span><\/span>/);
+});
+
 test('AlbumArtbox CSS makes every state square', () => {
   const css = fs.readFileSync(
     path.join(repoRoot, 'music_app', 'static', 'css', 'runtime', 'album-artbox-and-gallery-card.css'),
@@ -83,4 +121,37 @@ test('AlbumArtbox action rail preserves expansion room without making the artbox
   );
   assert.match(css, /\.album-artbox__action\s*\{[^}]*width:\s*calc\(100% - 20px\)[^}]*pointer-events:\s*none/s);
   assert.match(css, /\.album-artbox__action \.small-alert\s*\{[^}]*pointer-events:\s*auto/s);
+});
+
+test('AlbumArtbox CSS owns overlay placement and reveal behavior', () => {
+  const css = fs.readFileSync(
+    path.join(repoRoot, 'music_app', 'static', 'css', 'runtime', 'album-artbox-and-gallery-card.css'),
+    'utf8',
+  );
+
+  assert.match(css, /\.album-artbox__overlay\s*\{[^}]*position:\s*absolute[^}]*right:\s*12px[^}]*bottom:\s*12px[^}]*opacity:\s*0[^}]*pointer-events:\s*none/s);
+  assert.match(css, /\.album-artbox:hover \.album-artbox__overlay,[\s\S]*\.album-artbox:focus-within \.album-artbox__overlay\s*\{[^}]*opacity:\s*1[^}]*pointer-events:\s*auto/s);
+  assert.match(css, /@media\s*\(hover:\s*none\)[\s\S]*\.album-artbox__overlay\s*\{[^}]*opacity:\s*1[^}]*pointer-events:\s*auto/s);
+});
+
+test('gallery card text and descendants do not gain separate hover colors', () => {
+  const runtimeBaseCss = fs.readFileSync(
+    path.join(repoRoot, 'music_app', 'static', 'css', 'runtime', 'base-layout.css'),
+    'utf8',
+  );
+  const legacyBaseCss = fs.readFileSync(
+    path.join(repoRoot, 'music_app', 'static', 'css', 'base.css'),
+    'utf8',
+  );
+  const appearanceCss = fs.readFileSync(
+    path.join(repoRoot, 'music_app', 'static', 'css', 'appearance-backgrounds.css'),
+    'utf8',
+  );
+
+  assert.doesNotMatch(runtimeBaseCss, /\.album-title-button:hover/);
+  assert.doesNotMatch(legacyBaseCss, /\.album-title-button:hover/);
+  assert.match(
+    appearanceCss,
+    /:not\(\.album-card \*\)[^{]*:hover:not\(:disabled\):not\(\[aria-disabled='true'\]\)\s*\{[^}]*background:/s,
+  );
 });

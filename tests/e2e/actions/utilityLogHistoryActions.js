@@ -1,25 +1,19 @@
+import { expect } from '@playwright/test';
+
 export class UtilityLogHistoryActions {
   constructor(utilityLogHistoryTab) {
     this.utilityLogHistoryTab = utilityLogHistoryTab;
   }
 
   async waitForReady(options = {}) {
-    await this.utilityLogHistoryTab.waitForPageCondition((selectors) => {
-      if (typeof state === 'undefined' || state.utility?.activeTab !== 'log-history') return false;
-      if (state.utility?.logHistoryLoading) return false;
-      return Boolean(document.querySelector(selectors.listItemSelector))
-        || Boolean(document.querySelector(selectors.emptyStateSelector));
-    }, {
-      timeout: options.timeout || 60000,
-    }, {
-      listItemSelector: this.utilityLogHistoryTab.listItemSelector,
-      emptyStateSelector: this.utilityLogHistoryTab.mainBody.emptyStateSelector,
-    });
+    await expect(this.utilityLogHistoryTab.console).toBeVisible({ timeout: options.timeout || 60000 });
+    await expect(this.utilityLogHistoryTab.refresh).toBeEnabled({ timeout: options.timeout || 60000 });
+    await expect(this.utilityLogHistoryTab.refresh).toHaveAccessibleName('Refresh');
   }
 
   async readSummary() {
-    const detailTitle = this.utilityLogHistoryTab.mainBody.ruleTitle;
-    const emptyState = this.utilityLogHistoryTab.mainBody.emptyState;
+    const detailTitle = this.utilityLogHistoryTab.detailTitle;
+    const emptyState = this.utilityLogHistoryTab.emptySnapshot;
     return {
       itemCount: await this.utilityLogHistoryTab.listItems.count(),
       detailTitle: await detailTitle.count() ? String(await detailTitle.textContent() || '').trim() : '',
@@ -74,47 +68,48 @@ export class UtilityLogHistoryActions {
       .trim();
   }
 
-  async readBrowserStoredEntry(entryId) {
-    // parity-check: allow-read-only-measurement-evaluate -- inspect the existing browser-owned IndexedDB entry
-    return this.utilityLogHistoryTab.page.evaluate(async ({ databaseName, storeName, id }) => {
-      if (typeof indexedDB.databases !== 'function') {
-        throw new Error('Browser database discovery is unavailable.');
-      }
-      const databases = await indexedDB.databases();
-      if (!databases.some((database) => database.name === databaseName)) {
-        throw new Error('Browser log history database is missing.');
-      }
-      return new Promise((resolve, reject) => {
-        const openRequest = indexedDB.open(databaseName);
-        openRequest.addEventListener('error', () => reject(
-          openRequest.error || new Error('Unable to open browser log history.'),
-        ), { once: true });
-        openRequest.addEventListener('success', () => {
-          const database = openRequest.result;
-          if (!database.objectStoreNames.contains(storeName)) {
-            reject(new Error('Browser log history object store is missing.'));
-            return;
-          }
-          const databaseVersion = database.version;
-          const transaction = database.transaction(storeName, 'readonly');
-          const getRequest = transaction.objectStore(storeName).get(id);
-          getRequest.addEventListener('error', () => reject(
-            getRequest.error || new Error('Unable to read browser log history entry.'),
-          ), { once: true });
-          getRequest.addEventListener('success', () => {
-            resolve({ databaseVersion, entry: getRequest.result || null });
-          }, { once: true });
-        }, { once: true });
-      });
-    }, {
-      databaseName: 'album-haven-client-diagnostics',
-      storeName: 'log-history',
-      id: String(entryId),
-    });
+  async readPersistedEntry(entryId) {
+    return this.utilityLogHistoryTab.readPersistedEntry(String(entryId));
   }
 
   async reloadBrowserPage() {
     await this.utilityLogHistoryTab.page.reload({ waitUntil: 'domcontentloaded' });
+  }
+
+  async selectPeriodDay(date) {
+    const history = this.utilityLogHistoryTab;
+    const [targetYear, targetMonth] = date.split('-').map(Number);
+    const choose = async (field, input) => {
+      const [year, month] = (await input.inputValue()).split('-').map(Number);
+      const monthDelta = (targetYear - year) * 12 + targetMonth - month;
+      await history.periodDateButton(field).click();
+      const calendar = history.periodCalendar(field);
+      await expect(calendar).toBeVisible();
+      const direction = monthDelta < 0 ? 'Previous month' : 'Next month';
+      for (let index = 0; index < Math.abs(monthDelta); index += 1) {
+        await calendar.getByRole('button', { name: direction, exact: true }).click();
+      }
+      await history.periodCalendarDay(field, date).click();
+      await expect(calendar).toBeHidden();
+      await expect(input).toHaveValue(date);
+    };
+    // Move the unconstrained endpoint first so every day remains selectable.
+    if (date < await history.periodFrom.inputValue()) {
+      await choose('from', history.periodFrom);
+      await choose('to', history.periodTo);
+    } else {
+      await choose('to', history.periodTo);
+      await choose('from', history.periodFrom);
+    }
+  }
+
+  async selectCurrentExportDate(field) {
+    const history = this.utilityLogHistoryTab;
+    const calendar = history.exportCalendar(field);
+    await history.exportCurrentDay(field).click();
+    await expect(calendar).toBeHidden();
+    const input = field === 'from' ? history.exportFrom : history.exportTo;
+    await expect(input).toHaveValue(/^\d{4}-\d{2}-\d{2}$/u);
   }
 
   async exportLogs(options = {}) {

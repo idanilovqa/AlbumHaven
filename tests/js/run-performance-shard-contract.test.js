@@ -1,11 +1,61 @@
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
+const { spawnSync } = require('node:child_process');
 const test = require('node:test');
 
 const repoRoot = path.resolve(__dirname, '..', '..');
 const runnerPath = path.join(repoRoot, 'scripts', 'ci', 'run-performance-shard.ps1');
 const targetRunnerPath = path.join(repoRoot, 'scripts', 'run-performance-playwright.cjs');
+
+test('performance shard stops on process cleanup failure even when target ports are clear', () => {
+  const source = fs.readFileSync(runnerPath, 'utf8');
+  const tailStart = source.indexOf('$statePath = Join-Path $stateRoot');
+  assert.ok(tailStart >= 0);
+  const powerShell = process.platform === 'win32'
+    ? path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe')
+    : 'pwsh';
+  const result = spawnSync(powerShell, ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', `
+$ErrorActionPreference = 'Stop'
+$targetNames = @('first', 'second')
+$failedTargets = [System.Collections.Generic.List[string]]::new()
+$targetIndex = 0
+$stateRoot = $foundationRoot = $profileSessionRoot = [IO.Path]::GetTempPath()
+$ShardName = 'unit'
+$bootstrap = 'Invoke-TestBootstrap'
+$nodePath = 'Invoke-TestNode'
+$foundationWriter = 'foundation'
+$performanceRunner = 'performance'
+$FixtureMode = 'preloaded-release'
+$FixtureProfile = $PythonPath = $Pgbin = $DatabaseSuffixBase = 'unused'
+$RepositoryRoot = $RunnerTemp = $GithubEnv = $postgresServiceName = 'unused'
+$ExpectedPostgresMajor = '17'
+$PostgresPort = 5432
+$Browser = 'chrome'
+$PerformanceContract = 'ci'
+function Write-CiJob {}
+function Set-ClearedRuntimeSelectors {}
+function Prepare-PerformanceFixture {}
+function Get-SafeTargetPort { return 5200 }
+function Wait-TargetPortsClear { Write-Output 'PORTS_CLEAR' }
+function Test-Path { return $true }
+function Remove-Item { Write-Output 'FIXTURE_DELETED' }
+function Invoke-TestBootstrap { param($Mode) Write-Output "BOOTSTRAP:$Mode" }
+function Invoke-TestNode {
+  param($Script)
+  $global:LASTEXITCODE = 0
+  if ($Script -eq 'performance') {
+    Write-Output 'TARGET_LAUNCHED'
+    $global:LASTEXITCODE = 2
+  }
+}
+${source.slice(tailStart)}
+`], { cwd: repoRoot, encoding: 'utf8', windowsHide: true });
+
+  assert.equal(result.status, 2, result.stderr || result.stdout);
+  assert.equal((result.stdout.match(/TARGET_LAUNCHED/g) || []).length, 1);
+  assert.doesNotMatch(result.stdout, /BOOTSTRAP:Teardown|FIXTURE_DELETED/);
+});
 
 test('performance profile runner prepares one isolated fixture before compatible sequential targets', () => {
   assert.equal(fs.existsSync(runnerPath), true, 'missing run-performance-shard.ps1');

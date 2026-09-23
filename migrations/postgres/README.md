@@ -2,6 +2,28 @@
 
 This directory contains repo-owned Postgres SQL migrations for Album Haven.
 
+Migration `0065_native_player_component_provenance.sql` permits an optional
+`native_components` array in structured player styles and recent sets. Its unique
+values are `surface`, `controls`, `waveform`, and `handles`. An omitted or empty
+array means every component is explicitly customized, preserving older saved
+styles. Named components retain the native player treatment until edited; their
+stored color groups remain complete editor values. The account Appearance API
+validates and round-trips this field with the existing revisioned preferences.
+The migration replaces the existing JSON validator without changing columns,
+saved rows, capabilities, or function privileges.
+
+Migration `0066_allow_appearance_panel_outline.sql` permits an optional
+`panel_outline` RGB color or JSON null in interaction overrides. Omitted values
+retain the default outline. It replaces only the aggregate shape constraint,
+preserving existing rows, other validation, and function privileges.
+
+Migration `0067_add_scanned_exception_candidate_index.sql` adds a partial index
+for active files tagged Interview or Non-album rarity, including the accepted
+non-hyphenated alias. The Loose Tracks query uses a separate candidate branch
+with the matching predicate, preserving the album-name index from `0045`.
+Final classification still honors explicit exception overrides, including clears.
+The migration changes no saved rows or privileges.
+
 Use lowercase, zero-padded filenames and apply them in lexical order:
 
 ```text
@@ -67,6 +89,23 @@ Use lowercase, zero-padded filenames and apply them in lexical order:
 0060_player_aware_interaction_outline.sql
 0061_create_missing_album_removal_function.sql
 0062_narrow_readonly_account_privileges.sql
+0063_replace_missing_album_removal_lock_snapshot.sql
+0064_grant_library_membership_delete.sql
+0065_native_player_component_provenance.sql
+0066_allow_appearance_panel_outline.sql
+0067_add_scanned_exception_candidate_index.sql
+0068_scoped_saved_loop_orders.sql
+0069_scoped_operational_log_versions.sql
+0070_appearance_loop_control_style.sql
+0071_allow_harbor_mint_appearance_palette.sql
+0072_measured_local_listen_sessions.sql
+0073_preserve_measured_listen_history.sql
+0074_create_saved_loop_waveform_peaks.sql
+0075_appearance_device_sections.sql
+0076_docked_compact_player_behavior.sql
+0077_allow_parchment_pine_appearance_palette.sql
+0078_add_compact_player_motion_and_floating_edge.sql
+0079_docked_compact_player_regular_style.sql
 0063_create_durable_job_foundation.sql
 0064_request_durable_job_cancellation.sql
 0065_harden_durable_job_boundaries.sql
@@ -146,6 +185,10 @@ Section 3 owns the first baseline schema migration. Do not add future-feature re
 `0061_create_missing_album_removal_function.sql` moves confirmed missing-album deletion behind a bounded security-definer function. The application role can execute the function without receiving direct delete privileges on library inventory tables.
 
 `0062_narrow_readonly_account_privileges.sql` removes table-wide readonly access to account identity data and restores only the non-private operational columns needed for approved verification. The sanitized security-audit table remains readable under the deployment's operator-access policy.
+
+`0063_replace_missing_album_removal_lock_snapshot.sql` acquires the inventory publication lock in a separate statement before the volatile missing-album removal function reads inventory. A removal that waits for a publisher sees its committed active files before deciding whether deletion is allowed. The function retains its original guards, result shape, security-definer scope, and execution grants.
+
+`0064_grant_library_membership_delete.sql` grants the application role `DELETE` only on `library.library_memberships` so the existing authorized access-removal transaction can complete. Other runtime and readonly privileges are unchanged.
 
 `0063_create_durable_job_foundation.sql` adds the private shared job ledger, transition history, and worker heartbeat tables. It closes the initial job-kind and state sets, enforces bounded JSON and coherent lease/terminal state, and adds claim, status, retry, and retention indexes. The application can enqueue and request cancellation, the dedicated worker can claim and transition work, and neither the worker nor readonly role receives deletion access; retention remains migrator-owned.
 

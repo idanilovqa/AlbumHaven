@@ -25,11 +25,12 @@ def require_action(
     library_id: int | None = None,
     target_account_id: int | None = None,
     resource: ResourceScope | None = None,
+    refresh_actor: bool = False,
 ) -> Callable[[Request], object]:
     """Build an endpoint dependency with stable authentication semantics."""
 
     async def dependency(request: Request) -> PolicyEvaluationResult:
-        actor = await current_actor_from_request(request)
+        actor = await current_actor_from_request(request, refresh=refresh_actor)
         context = PolicyContext.build(
             actor=actor,
             action=action,
@@ -188,7 +189,7 @@ def _request_origin(request: Request) -> RequestOrigin:
     hmac_config = config.get("hmac") if isinstance(config, Mapping) else None
     secret = hmac_config.get("secret") if isinstance(hmac_config, Mapping) else None
     version = hmac_config.get("key_version") if isinstance(hmac_config, Mapping) else None
-    if not isinstance(secret, str) or len(secret) < 32:
+    if not isinstance(secret, str) or len(secret.encode("utf-8")) < 32:
         raise RuntimeError("Policy request-origin key configuration is invalid.")
     digest = hmac.new(
         secret.encode("utf-8"),

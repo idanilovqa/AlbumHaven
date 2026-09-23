@@ -17,6 +17,29 @@ const windowsPowerShell = path.join(
   'powershell.exe',
 );
 const powerShellExecutable = process.platform === 'win32' ? windowsPowerShell : 'pwsh';
+const testPortPairHelpers = `
+function Open-TestListener([int]$Port) {
+  $socket = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Loopback, $Port)
+  $socket.Server.ExclusiveAddressUse = $true
+  try { $socket.Start(); return $socket } catch { $socket.Stop(); throw }
+}
+function Open-TestPair {
+  for ($attempt = 0; $attempt -lt 100; $attempt += 1) {
+    $first = $second = $null
+    try {
+      $first = Open-TestListener 0
+      $base = $first.LocalEndpoint.Port
+      if ($base -gt 65533) { $first.Stop(); continue }
+      $second = Open-TestListener ($base + 2)
+      return @{ Base = $base; First = $first; Second = $second }
+    } catch {
+      if ($first) { $first.Stop() }
+      if ($second) { $second.Stop() }
+    }
+  }
+  throw 'Unable to establish the test-owned TCP pair.'
+}
+`;
 
 function readJson(filePath) {
   return JSON.parse(fs.readFileSync(filePath, 'utf8'));
@@ -47,7 +70,7 @@ test('local functional runner owns safe setup, exact delegation, and teardown', 
   assert.equal(fs.existsSync(runnerPath), true, 'Missing scripts/run-functional-e2e-local.ps1');
   const source = fs.readFileSync(runnerPath, 'utf8');
 
-  assert.match(source, /fixtures-v1\.0\.21/);
+  assert.match(source, /fixtures-v1\.0\.24/);
   assert.match(source, /functional-core/);
   assert.match(source, /manifest\.json/);
   assert.match(source, /Import-Module\s+Microsoft\.PowerShell\.Utility/);
@@ -84,6 +107,50 @@ test('local functional runner owns safe setup, exact delegation, and teardown', 
   }
 });
 
+test('local functional runner preserves fixtures and stops all shards after process cleanup failure', () => {
+  const source = fs.readFileSync(runnerPath, 'utf8');
+  const loopStart = source.indexOf('$overallFailed = $false');
+  assert.ok(loopStart >= 0);
+  const result = spawnSync(powerShellExecutable, [
+    '-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', `
+$ErrorActionPreference = 'Stop'
+$selectedShards = @(@{ name = 'first' }, @{ name = 'second' })
+$environmentKeys = @()
+$expectedRelease = 'test-release'
+$fixtureProfile = 'functional-core'
+$profileRoot = $manifestPath = $configuredPgpass = $postgresAdminPassword = 'unused'
+$Case = ''
+$python = 'Invoke-TestPython'
+$node = 'Invoke-TestNode'
+$loader = $validator = 'unused'
+function Assert-OwnedTempRoot { param($Root) return $Root }
+function Get-FreePortBase { return 5200 }
+function Copy-FixtureProfile {}
+function Import-EnvironmentFile {}
+function New-Item {}
+function Test-Path { return $true }
+function Remove-Item {
+  if ($args -contains '-LiteralPath') { Write-Output 'FIXTURE_DELETED' }
+}
+function Invoke-PostgresBootstrap {
+  param($Mode)
+  Write-Output "BOOTSTRAP:$Mode"
+}
+function Invoke-TestPython { $global:LASTEXITCODE = 0 }
+function Invoke-TestNode {
+  Write-Output 'SHARD_EXECUTED'
+  $global:LASTEXITCODE = 2
+}
+${source.slice(loopStart)}
+`,
+  ], { cwd: repoRoot, encoding: 'utf8', windowsHide: true });
+
+  assert.equal(result.status, 2, result.stderr || result.stdout);
+  assert.equal((result.stdout.match(/SHARD_EXECUTED/g) || []).length, 1);
+  assert.equal((result.stdout.match(/BOOTSTRAP:Provision/g) || []).length, 1);
+  assert.doesNotMatch(result.stdout, /BOOTSTRAP:Teardown|FIXTURE_DELETED/);
+});
+
 test('npm aliases and local guide expose only the supported runner', () => {
   const packageJson = readJson(packagePath);
   assert.equal(
@@ -102,6 +169,151 @@ test('npm aliases and local guide expose only the supported runner', () => {
   assert.match(guide, /npm run test:e2e:functional:local -- -All/);
   assert.match(guide, /localhost/);
   assert.match(guide, /PGPASSFILE/);
-  assert.match(guide, /fixtures-v1\.0\.20/);
+  assert.match(guide, /fixtures-v1\.0\.24/);
   assert.match(guide, /Do not[^.]*run-playwright\.cjs/is);
+});
+
+test('port allocation rejects a candidate whose provider port alone is occupied', () => {
+  const source = fs.readFileSync(runnerPath, 'utf8');
+  const start = source.indexOf('function Get-FreePortBase {');
+  const end = source.indexOf('\nfunction ', start + 1);
+  assert.ok(start >= 0 && end > start);
+  const result = spawnSync(powerShellExecutable, ['-NoProfile', '-NonInteractive', '-Command', `
+$ErrorActionPreference = 'Stop'
+${testPortPairHelpers}
+$blocked = $available = $null
+try {
+  $blocked = Open-TestPair
+  $available = Open-TestPair
+  # Snapshot rejection must work even after these test sockets are released.
+  foreach ($pair in @($blocked, $available)) { $pair.First.Stop(); $pair.Second.Stop() }
+  $script:candidates = @($blocked.Base, $available.Base)
+  $script:requests = 0
+  function Get-Random {
+    param($Minimum, $Maximum)
+    $value = $script:candidates[[Math]::Min($script:requests, 1)]
+    $script:requests += 1
+    return $value
+  }
+  function Get-NetTCPConnection {
+    param($State, $ErrorAction)
+    [pscustomobject]@{ LocalPort = ($blocked.Base + 2) }
+  }
+  ${source.slice(start, end)}
+  $selected = Get-FreePortBase
+  @{ Selected = $selected; Expected = $available.Base; Requests = $script:requests } | ConvertTo-Json -Compress
+} finally {
+  foreach ($pair in @($blocked, $available)) {
+    if ($pair) { $pair.First.Stop(); $pair.Second.Stop() }
+  }
+}
+`], { cwd: repoRoot, encoding: 'utf8', windowsHide: true });
+  assert.equal(result.status, 0, result.stderr);
+  const observed = JSON.parse(result.stdout.trim());
+  assert.equal(observed.Selected, observed.Expected);
+  assert.equal(observed.Requests, 2, 'a provider-only listener must reject the first candidate');
+});
+
+test('port allocation bind-checks both ports despite an empty listener snapshot', () => {
+  const source = fs.readFileSync(runnerPath, 'utf8');
+  const start = source.indexOf('function Get-FreePortBase {');
+  const end = source.indexOf('\nfunction ', start + 1);
+  assert.ok(start >= 0 && end > start);
+  const result = spawnSync(powerShellExecutable, ['-NoProfile', '-NonInteractive', '-Command', `
+$ErrorActionPreference = 'Stop'
+${testPortPairHelpers}
+$blocked = $available = $null
+$rebound = @()
+try {
+  $blocked = Open-TestPair
+  $available = Open-TestPair
+  # Leave only the first candidate's second port occupied by a real socket.
+  $blocked.First.Stop()
+  $available.First.Stop()
+  $available.Second.Stop()
+  $script:candidates = @($blocked.Base, $available.Base)
+  $script:requests = 0
+  function Get-Random {
+    param($Minimum, $Maximum)
+    $value = $script:candidates[[Math]::Min($script:requests, 1)]
+    $script:requests += 1
+    return $value
+  }
+  function Get-NetTCPConnection { param($State, $ErrorAction) return @() }
+  ${source.slice(start, end)}
+  $selected = Get-FreePortBase
+  if ($selected -eq $available.Base) {
+    # A rejected partial pair and both accepted probes must be released.
+    foreach ($port in @($blocked.Base, $available.Base, ($available.Base + 2))) {
+      $rebound += Open-TestListener $port
+    }
+  }
+  @{ Selected = $selected; Expected = $available.Base; Requests = $script:requests; Rebound = $rebound.Count } | ConvertTo-Json -Compress
+} finally {
+  foreach ($listener in $rebound) { $listener.Stop() }
+  foreach ($pair in @($blocked, $available)) {
+    if ($pair) { $pair.First.Stop(); $pair.Second.Stop() }
+  }
+}
+`], { cwd: repoRoot, encoding: 'utf8', windowsHide: true });
+  assert.equal(result.status, 0, result.stderr || result.stdout);
+  const observed = JSON.parse(result.stdout.trim());
+  assert.equal(observed.Selected, observed.Expected, 'an occupied provider port must reject the entire pair');
+  assert.equal(observed.Requests, 2);
+  assert.equal(observed.Rebound, 3, 'both accepted probes and the rejected partial probe must be disposed');
+});
+
+
+test('focused batch selection resolves exact same-shard titles and rejects ambiguous or conflicting requests', () => {
+  const source = fs.readFileSync(runnerPath, 'utf8');
+  const helpers = source.slice(source.indexOf('function Get-OwnedCases'), source.indexOf('if ($List)'))
+    + source.slice(source.indexOf('function Resolve-FunctionalSelection'), source.indexOf('$selection = Resolve-FunctionalSelection'));
+  const script = `
+$ErrorActionPreference = 'Stop'
+${helpers}
+$contract = [pscustomobject]@{ shards = @(
+  [pscustomobject]@{ name = 'gallery'; invocations = @([pscustomobject]@{ cases = @(
+    [pscustomobject]@{ case = 'FTC-A exact alpha' }, [pscustomobject]@{ case = 'FTC-B exact beta' }
+  ) }) },
+  [pscustomobject]@{ name = 'playback'; invocations = @([pscustomobject]@{ cases = @(
+    [pscustomobject]@{ case = 'FTC-C exact gamma' }
+  ) }) }
+) }
+$requests = @(
+  @{ Cases = @('FTC-A exact alpha', 'FTC-B exact beta'); CasesSpecified = $true },
+  @{ Case = 'FTC-A exact alpha'; CaseSpecified = $true },
+  @{ Cases = @('FTC-A exact alpha'); CasesSpecified = $true; Shard = 'gallery' },
+  @{ Cases = @('FTC-A exact alpha', 'FTC-C exact gamma'); CasesSpecified = $true },
+  @{ Cases = @('FTC-A exact alpha'); CasesSpecified = $true; Shard = 'playback' },
+  @{ Cases = @('FTC-A'); CasesSpecified = $true },
+  @{ Cases = @('FTC-A exact alpha', 'FTC-A exact alpha'); CasesSpecified = $true },
+  @{ Cases = @(''); CasesSpecified = $true },
+  @{ Cases = @(); CasesSpecified = $true },
+  @{ Case = ''; CaseSpecified = $true },
+  @{ Case = 'FTC-A exact alpha'; CaseSpecified = $true; Cases = @('FTC-B exact beta'); CasesSpecified = $true },
+  @{ Cases = @('FTC-A exact alpha'); CasesSpecified = $true; All = $true },
+  @{ Case = 'FTC-A exact alpha'; CaseSpecified = $true; All = $true },
+  @{ All = $true }
+)
+$results = foreach ($request in $requests) {
+  try {
+    $result = Resolve-FunctionalSelection -Contract $contract @request
+    [pscustomobject]@{ ok = $true; cases = @($result.Cases); shards = @($result.Shards | ForEach-Object { $_.name }) }
+  } catch { [pscustomobject]@{ ok = $false; error = $_.Exception.Message } }
+}
+ConvertTo-Json -InputObject @($results) -Depth 6 -Compress
+`;
+  const result = spawnSync(powerShellExecutable, ['-NoProfile', '-NonInteractive', '-EncodedCommand',
+    Buffer.from(script, 'utf16le').toString('base64')], { encoding: 'utf8' });
+  assert.equal(result.status, 0, result.stderr);
+  const results = JSON.parse(result.stdout.trim());
+  assert.deepEqual(results[0], { ok: true, cases: ['FTC-A exact alpha', 'FTC-B exact beta'], shards: ['gallery'] });
+  assert.deepEqual(results[1], { ok: true, cases: ['FTC-A exact alpha'], shards: ['gallery'] });
+  assert.equal(results[2].ok, true);
+  assert.equal(results.length, 14);
+  for (let index = 3; index <= 12; index += 1) {
+    assert.equal(results[index].ok, false, `request ${index} must reject before setup`);
+  }
+  assert.deepEqual(results[13], { ok: true, cases: [], shards: ['gallery', 'playback'] });
+  assert.match(source, /foreach \(\$selectedCase in \$selectedCases\)\s*\{\s*\$validatorArguments \+= "--run-case=\$selectedCase"/);
 });

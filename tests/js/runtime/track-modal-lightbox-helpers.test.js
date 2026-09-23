@@ -67,9 +67,16 @@ class FakeClassList {
     this.dispatchEvent('click', event);
   }
 
-    closest() {
-      return null;
+    closest(selector) {
+      if (selector.includes('[hidden]')) return this.hidden ? this : null;
+      return this;
     }
+
+    getClientRects() {
+      return this.hidden ? [] : [{}];
+    }
+
+    compareDocumentPosition() { return 4; }
 
     getAttribute(name) {
       if (name === 'src') return this.src;
@@ -178,6 +185,12 @@ function loadHelper(options = {}) {
     Array,
     Map,
     HTMLElement: FakeHtmlElement,
+    getComputedStyle(element) {
+      const zIndex = element.id === 'image-lightbox' ? 4600
+        : element.id === 'utility-modal' ? 112
+          : element.classList.contains('is-above-settings') ? 114 : 100;
+      return { zIndex: String(zIndex), position: 'fixed', opacity: '1', visibility: 'visible' };
+    },
     document: {
       body: {
         classList: new FakeClassList(),
@@ -186,6 +199,7 @@ function loadHelper(options = {}) {
         return elementsById[id] || null;
       },
       querySelectorAll(selector) {
+        if (selector.includes('.track-modal')) return [trackModal, utilityModal, lightboxOverlay];
         if (selector === '[data-open-tracklist="1"]') {
           return [openButton];
         }
@@ -426,6 +440,119 @@ async function flushMicrotasks() {
   await new Promise((resolve) => setImmediate(resolve));
 }
 
+test('player Album Details takes foreground without closing Settings or its draft', () => {
+  const { context, trackModal, utilityModal, documentListeners } = loadHelper({ utilityLoaded: true });
+  const draft = { title: 'Unsaved appearance' };
+  context.state.utility.appearanceDraft = draft;
+  utilityModal.hidden = false;
+  context.attachModalEvents();
+  context.openTrackModal({ key: 'alpha', name: 'Album Alpha', tracks: [] }, {
+    coverLightboxGallery: false, foreground: true,
+  });
+  assert.equal(trackModal.hidden, false);
+  assert.equal(trackModal.classList.contains('is-above-settings'), true);
+  assert.equal(utilityModal.hidden, false);
+  assert.equal(context.state.utility.appearanceDraft, draft);
+  const keydown = documentListeners.get('keydown')[0];
+  keydown({ key: 'Escape', defaultPrevented: true });
+  assert.equal(trackModal.hidden, false, 'a consumed Escape leaves the foreground dialog open');
+  keydown({ key: 'Escape' });
+  assert.equal(trackModal.hidden, true);
+  assert.equal(trackModal.classList.contains('is-above-settings'), false);
+  assert.equal(context.closeUtilityModalCalls, 0);
+  assert.equal(utilityModal.hidden, false);
+  assert.equal(context.state.utility.appearanceDraft, draft);
+  assert.equal(context.document.body.classList.contains('modal-open'), true);
+  context.openTrackModal({ key: 'alpha', name: 'Album Alpha', tracks: [] });
+  assert.equal(trackModal.classList.contains('is-above-settings'), false);
+  assert.equal(context.state.ui.trackModalCoverLightboxGallery, true);
+});
+
+test('Settings reopening stays above a player details request that hydrates later', async () => {
+  let resolveDetails;
+  const preview = { key: 'alpha', name: 'Album Alpha', preview_only: true, tracks: [] };
+  const { context, trackModal, utilityModal } = loadHelper({
+    initialAlbums: [preview], utilityLoaded: true,
+    onFetchAlbumDetails: () => new Promise(resolve => { resolveDetails = resolve; }),
+  });
+  utilityModal.hidden = false;
+  context.openTrackModal(preview, { coverLightboxGallery: false, foreground: true });
+  assert.equal(trackModal.classList.contains('is-above-settings'), true);
+  const utilityPath = path.join(path.dirname(helperPath), 'utility-loaders-and-cover-lookup.js');
+  vm.runInContext(fs.readFileSync(utilityPath, 'utf8'), context, { filename: utilityPath });
+  context.deferActiveStartupViewForUtilityModal = () => {};
+  context.renderUtilityModalContent = () => {};
+  context.openUtilityModal({ resetSearch: false, resetSelection: false, forceLoad: false });
+  assert.equal(trackModal.classList.contains('is-above-settings'), false);
+  resolveDetails({ ok: true, status: 200, json: async () => ({
+    ok: true, album: { ...preview, preview_only: false, tracks: [{ path: 'track.flac' }] },
+  }) });
+  await flushMicrotasks();
+  assert.equal(trackModal.hidden, false);
+  assert.equal(trackModal.classList.contains('is-above-settings'), false,
+    'late detail hydration cannot take foreground back from Settings');
+  assert.equal(utilityModal.hidden, false);
+  assert.equal(context.state.ui.trackModalCoverLightboxGallery, false);
+});
+
+function lightboxFocusHarness() {
+  const result = loadHelper();
+  const { context, lightboxOverlay } = result;
+  const close = new FakeHtmlElement('image-lightbox-close');
+  const next = new FakeHtmlElement('image-lightbox-next');
+  const trigger = new FakeHtmlElement('settings-artwork');
+  for (const element of [close, next, trigger]) {
+    element.hidden = false;
+    element.disabled = false;
+    element.isConnected = true;
+    element.tabIndex = 0;
+    element.focus = () => { context.document.activeElement = element; };
+    element.getClientRects = () => [{}];
+  }
+  context.document.activeElement = trigger;
+  context.document.removeEventListener = (type, listener) => {
+    result.documentListeners.set(type, (result.documentListeners.get(type) || []).filter(item => item !== listener));
+  };
+  const getLightboxElements = context.getLightboxElements;
+  context.getLightboxElements = () => ({ ...getLightboxElements(), close, next });
+  lightboxOverlay.querySelectorAll = () => [next, close];
+  lightboxOverlay.contains = (element) => [close, next].includes(element);
+  context.attachModalEvents();
+  const keydown = (properties) => {
+    let prevented = false;
+    const event = { target: context.document.activeElement, ...properties, preventDefault() { prevented = true; }, stopPropagation() {} };
+    for (const listener of result.documentListeners.get('keydown') || []) listener(event);
+    return prevented;
+  };
+  return { ...result, close, next, trigger, keydown };
+}
+
+test('S05 opening artwork focuses lightbox Close and closing restores its original trigger', () => {
+  const { context, close, trigger } = lightboxFocusHarness();
+  context.openImageLightbox('/cover.png', 'Test artwork');
+  assert.equal(context.document.activeElement, close);
+  context.closeImageLightbox();
+  assert.equal(context.document.activeElement, trigger);
+});
+
+test('S05 lightbox wraps Tab and Shift+Tab inside its enabled controls', () => {
+  const { context, close, next, keydown } = lightboxFocusHarness();
+  context.openImageLightbox('/cover.png', 'Test artwork');
+  close.focus();
+  assert.equal(keydown({ key: 'Tab' }), true);
+  assert.equal(context.document.activeElement, next);
+  assert.equal(keydown({ key: 'Tab', shiftKey: true }), true);
+  assert.equal(context.document.activeElement, close);
+});
+
+test('S05 closing artwork never restores focus to a detached trigger', () => {
+  const { context, trigger } = lightboxFocusHarness();
+  context.openImageLightbox('/cover.png', 'Test artwork');
+  trigger.isConnected = false;
+  trigger.focus = () => { assert.fail('detached artwork trigger cannot receive focus'); };
+  assert.doesNotThrow(() => context.closeImageLightbox());
+});
+
 async function flushAlbumDetailsHydration() {
   await Promise.resolve();
   await Promise.resolve();
@@ -464,6 +591,129 @@ function createCoverSuspensionHarness(initialTokens = []) {
   };
 }
 
+for (const speculative of [false, true]) {
+  test(`in-flight ${speculative ? 'speculative' : 'foreground'} details cannot publish across inventory revisions`, async () => {
+    const preview = { key: 'revision-album', request_key: 'revision-album', name: 'Revision Album', preview_only: true, tracks: [] };
+    const stale = { ...preview, preview_only: false, tracks: [{ path: 'one', title: 'Old title' }] };
+    const fresh = { ...stale, tracks: [{ path: 'one', title: 'Fresh title' }] };
+    const responses = [];
+    const { context } = loadHelper({
+      initialAlbums: [preview], inventoryMutationRevision: 7,
+      onFetchAlbumDetails: () => new Promise(resolve => responses.push(resolve)),
+    });
+    const pending = context.loadTrackModalAlbumDetails(preview.key, { speculative });
+    context.state.status.inventory_mutation_revision = 8;
+    context.invalidateAllHydratedTrackModalAlbumDetails();
+    responses[0]({ ok: true, status: 200, json: async () => ({ ok: true, album: stale }) });
+    await flushMicrotasks();
+    assert.notEqual(context.state.gallery.albumIndex.get(preview.key), stale);
+    assert.equal(context.getCachedHydratedTrackModalAlbum(preview.key), null);
+    const freshLoad = context.loadTrackModalAlbumDetails(preview.key);
+    assert.equal(responses.length, 2, 'a request captured under the new revision must run');
+    responses[1]({ ok: true, status: 200, json: async () => ({ ok: true, album: fresh }) });
+    assert.equal(await freshLoad, fresh);
+    assert.equal(await pending, fresh, 'the original caller also receives current details');
+    assert.equal(context.getCachedHydratedTrackModalAlbum(preview.key), fresh);
+    assert.equal(context.state.gallery.albumIndex.get(preview.key), fresh);
+  });
+}
+
+test('in-flight details preserve an optimistic owner across inventory revisions until settlement', async () => {
+  const preview = { key: 'owned-album', name: 'Owned Album', preview_only: true, tracks: [] };
+  const stale = { ...preview, preview_only: false, tracks: [{ path: 'removed' }, { path: 'retained' }] };
+  const optimistic = { ...stale, tracks: [{ path: 'retained' }] };
+  const claim = { generation: 1 };
+  const responses = [];
+  const { context } = loadHelper({ initialAlbums: [preview], inventoryMutationRevision: 7,
+    activeTagEditMutationClaim: claim,
+    onFetchAlbumDetails: () => new Promise(resolve => responses.push(resolve)),
+  });
+  const pending = context.loadTrackModalAlbumDetails(preview.key);
+  context.cacheHydratedTrackModalAlbum(preview.key, optimistic, { tagEditMutationClaim: claim });
+  context.state.status.inventory_mutation_revision = 8;
+  context.invalidateAllHydratedTrackModalAlbumDetails();
+  responses[0]({ ok: true, status: 200, json: async () => ({ ok: true, album: stale }) });
+  assert.equal(await pending, optimistic);
+  assert.equal(context.state.gallery.albumIndex.get(preview.key), optimistic);
+  assert.equal(responses.length, 1, 'an active mutation owns its membership');
+  context.activeTagEditMutationClaim = null;
+  assert.equal(context.getCachedHydratedTrackModalAlbum(preview.key), null);
+  const settledLoad = context.loadTrackModalAlbumDetails(preview.key);
+  const canonical = { ...optimistic, name: 'Canonical Album' };
+  responses[1]({ ok: true, status: 200, json: async () => ({ ok: true, album: canonical }) });
+  assert.equal(await settledLoad, canonical);
+});
+
+for (const speculative of [false, true]) {
+  test(`same-revision ${speculative ? 'speculative' : 'foreground'} hydration retains optimistic ownership until settlement`, async () => {
+    const preview = { key: 'same-revision-owned', name: 'Owned Album', preview_only: true, tracks: [] };
+    const stale = { ...preview, preview_only: false, tracks: [{ path: 'removed' }, { path: 'retained' }] };
+    const optimistic = { ...stale, tracks: [{ path: 'retained' }] };
+    const claim = { generation: 1 };
+    const responses = [];
+    const { context } = loadHelper({ initialAlbums: [preview], inventoryMutationRevision: 7,
+      activeTagEditMutationClaim: claim,
+      onFetchAlbumDetails: () => new Promise(resolve => responses.push(resolve)),
+    });
+    const pending = context.loadTrackModalAlbumDetails(preview.key, { speculative });
+    context.cacheHydratedTrackModalAlbum(preview.key, optimistic, { tagEditMutationClaim: claim });
+    responses[0]({ ok: true, status: 200, json: async () => ({ ok: true, album: stale }) });
+    assert.equal(await pending, optimistic, 'the waiting view must not render the pre-edit response');
+    assert.equal(context.getCachedHydratedTrackModalAlbum(preview.key), optimistic);
+    assert.equal(context.state.gallery.albumIndex.get(preview.key), optimistic);
+    assert.equal(responses.length, 1);
+    context.state.status.inventory_mutation_revision = 8;
+    context.invalidateAllHydratedTrackModalAlbumDetails();
+    assert.equal(context.getCachedHydratedTrackModalAlbum(preview.key), optimistic, 'the original claim remains attached');
+    context.activeTagEditMutationClaim = null;
+    assert.equal(context.getCachedHydratedTrackModalAlbum(preview.key), null);
+    const settled = context.loadTrackModalAlbumDetails(preview.key);
+    const canonical = { ...optimistic, name: 'Canonical Album' };
+    responses[1]({ ok: true, status: 200, json: async () => ({ ok: true, album: canonical }) });
+    assert.equal(await settled, canonical);
+    assert.equal(context.state.gallery.albumIndex.get(preview.key), canonical);
+  });
+}
+
+test('same-revision hydration may replace a settled optimistic owner', async () => {
+  const preview = { key: 'settled-owner', name: 'Album', preview_only: true, tracks: [] };
+  const optimistic = { ...preview, preview_only: false, tracks: [{ path: 'retained' }] };
+  const canonical = { ...optimistic, name: 'Authoritative album' };
+  const claim = { generation: 1 };
+  let respond;
+  const { context } = loadHelper({ initialAlbums: [preview], inventoryMutationRevision: 7,
+    activeTagEditMutationClaim: claim,
+    onFetchAlbumDetails: () => new Promise(resolve => { respond = resolve; }),
+  });
+  const pending = context.loadTrackModalAlbumDetails(preview.key);
+  context.cacheHydratedTrackModalAlbum(preview.key, optimistic, { tagEditMutationClaim: claim });
+  context.activeTagEditMutationClaim = null;
+  respond({ ok: true, status: 200, json: async () => ({ ok: true, album: canonical }) });
+  assert.equal(await pending, canonical);
+  assert.equal(context.getCachedHydratedTrackModalAlbum(preview.key), canonical);
+});
+
+test('revision reload preserves a speculative detail request promoted to foreground', async () => {
+  const preview = { key: 'promoted-album', name: 'Promoted Album', preview_only: true, tracks: [] };
+  const album = { ...preview, preview_only: false, tracks: [{ path: 'track' }] };
+  const responses = [];
+  const { context } = loadHelper({ initialAlbums: [preview], inventoryMutationRevision: 7,
+    onFetchAlbumDetails: ({ requestOptions }) => new Promise(resolve => responses.push({ requestOptions, resolve })),
+  });
+  context.queueTrackModalAlbumDetailsPrewarm(preview.key);
+  assert.equal(responses[0].requestOptions.priority, 'low');
+  const foreground = context.loadTrackModalAlbumDetails(preview.key);
+  context.state.status.inventory_mutation_revision = 8;
+  responses[0].resolve({ ok: true, status: 200, json: async () => ({ ok: true, album }) });
+  await flushMicrotasks();
+  assert.equal(responses.length, 2);
+  assert.equal(responses[1].requestOptions.priority, 'high');
+  context.cancelTrackModalAlbumDetailsPrewarms();
+  assert.equal(responses[1].requestOptions.signal.aborted, false);
+  responses[1].resolve({ ok: true, status: 200, json: async () => ({ ok: true, album }) });
+  assert.equal(await foreground, album);
+});
+
 async function run() {
   {
     const { context, trackModal } = loadHelper();
@@ -493,7 +743,9 @@ async function run() {
       fetchedAlbum: hydratedAlbum,
     });
 
-    context.openTrackModal(previewAlbum, { coverLightboxGallery: false });
+    context.document.getElementById('utility-modal').hidden = false;
+    context.openTrackModal(previewAlbum, { coverLightboxGallery: false, foreground: true });
+    assert.equal(context.document.getElementById('track-modal').classList.contains('is-above-settings'), true);
     assert.equal(
       context.state.ui.trackModalCoverLightboxGallery,
       false,
@@ -507,6 +759,8 @@ async function run() {
       false,
       'detail hydration must preserve the player-origin single-cover mode',
     );
+    assert.equal(context.document.getElementById('track-modal').classList.contains('is-above-settings'), true,
+      'normal detail hydration retains the player-requested foreground order');
 
     context.openTrackModal({ key: 'beta', name: 'Album Beta', tracks: [] });
     assert.equal(
@@ -2108,4 +2362,19 @@ async function run() {
 run().catch((error) => {
   console.error(error);
   process.exitCode = 1;
+});
+
+
+test('switching a preview edition hydrates tracks without reordering or relabeling the open release tabs', async () => {
+  const original = {key:'original', name:'Original album', tabLabel:'Original - 1998', tracks:[{path:'original-track'}]};
+  const preview = {key:'edition', name:'Different edition name', preview_only:true, tracks:[], tabLabel:'Anniversary - 2018'};
+  const hydrated = {...preview, preview_only:false, tracks:[{path:'edition-track'}]};
+  const {context} = loadHelper({initialAlbums:[original, preview], fetchedAlbum:hydrated});
+  context.state.modalReleases = [original, preview];
+  context.openTrackModal(preview, {releaseSet:{releases:[original, preview], selectedIndex:1}});
+  await flushMicrotasks();
+  assert.deepEqual(Array.from(context.state.modalReleases, release=>release.key), ['original','edition']);
+  assert.deepEqual(Array.from(context.state.modalReleases, release=>release.tabLabel), ['Original - 1998','Anniversary - 2018']);
+  assert.equal(context.state.modalReleaseIndex, 1);
+  assert.equal(context.renderTrackModalReleaseAlbums.at(-1).tracks[0].path, 'edition-track');
 });

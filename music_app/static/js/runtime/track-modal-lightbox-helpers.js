@@ -272,7 +272,12 @@ function invalidateHydratedTrackModalAlbumDetails(albums) {
 }
 
 function invalidateAllHydratedTrackModalAlbumDetails() {
-  const cachedAlbums = Array.from(trackModalHydratedAlbumDetailsLru.keys());
+  const cachedAlbums = Array.from(trackModalHydratedAlbumDetailsLru.keys()).filter((album) => {
+    const claim = trackModalHydratedAlbumDetailsLru.get(album)?.tagEditMutationClaim;
+    return !(claim
+      && typeof tagEditViewMutationStillOwnsResources === 'function'
+      && tagEditViewMutationStillOwnsResources(claim));
+  });
   if (!cachedAlbums.length) return 0;
   return invalidateHydratedTrackModalAlbumDetails(cachedAlbums);
 }
@@ -420,9 +425,30 @@ function loadTrackModalAlbumDetails(albumKey, options = {}) {
     trackModalSpeculativePrewarmControllers.delete(speculativeController);
     return existingLoad;
   }
+  const requestInventoryRevision = Number(state?.status?.inventory_mutation_revision || 0);
   let load = null;
   load = fetchTrackModalAlbumDetails(normalizedAlbumKey, options)
     .then((album) => {
+      const currentAlbum = getCachedHydratedTrackModalAlbum(normalizedAlbumKey);
+      const currentClaim = trackModalHydratedAlbumDetailsLru.get(currentAlbum)?.tagEditMutationClaim;
+      if (currentClaim && typeof tagEditViewMutationStillOwnsResources === 'function'
+          && tagEditViewMutationStillOwnsResources(currentClaim)) {
+        // A response started before an edit cannot replace its pending membership,
+        // even before that edit advances the inventory revision.
+        return currentAlbum;
+      }
+      if (requestInventoryRevision !== Number(state?.status?.inventory_mutation_revision || 0)) {
+        // Release only this request's aliases before joining or starting a load
+        // under the current revision. Foreground callers never receive stale data.
+        trackModalAlbumDetailsLoads.forEach((mappedLoad, alias) => {
+          if (mappedLoad === load) trackModalAlbumDetailsLoads.delete(alias);
+        });
+        const promotedToForeground = options.speculative === true
+          && options.controller
+          && !trackModalSpeculativeAlbumDetailsLoadControllers.has(load);
+        return loadTrackModalAlbumDetails(normalizedAlbumKey,
+          promotedToForeground ? { ...options, speculative: false } : options);
+      }
       cacheHydratedTrackModalAlbum(normalizedAlbumKey, album);
       getTrackModalAlbumKeyAliases(normalizedAlbumKey, album).forEach((alias) => {
         trackModalAlbumDetailsLoads.set(alias, load);
@@ -505,6 +531,9 @@ function queueVisibleTrackModalAlbumDetailsPrewarm(containerEl, scrollEl, limit 
 function openTrackModal(album, options = {}) {
   const els = getTrackModalElements();
   if (!els.overlay || !album) return;
+  if (options.foreground && document.getElementById('utility-modal')?.hidden === false) {
+    els.overlay.classList.add('is-above-settings');
+  }
   state.ui.trackModalCoverLightboxGallery = options.coverLightboxGallery !== false;
   if (typeof clearPendingSelectedArtistReconcile === 'function') {
     clearPendingSelectedArtistReconcile();
@@ -526,7 +555,7 @@ function openTrackModal(album, options = {}) {
       if (loadToken !== state.ui.pendingTrackModalLoadToken) return;
       if (!resolvedAlbum || albumRequiresHydration(resolvedAlbum) || els.overlay.hidden) return;
       invalidatePendingTrackModalLoad();
-      openTrackModal(resolvedAlbum, options);
+      openTrackModal(resolvedAlbum, { ...options, foreground: false });
     }).catch((error) => {
       if (loadToken !== state.ui.pendingTrackModalLoadToken) return;
       console.error('[AlbumHaven][AlbumDetails] Failed to load full album details.', error);
@@ -537,7 +566,17 @@ function openTrackModal(album, options = {}) {
     return;
   }
   invalidatePendingTrackModalLoad();
-  const releaseSet = getAlbumReleaseSet(albumWithPlaybackContext);
+  // Edition hydration must not rebuild the tabs around a different base name.
+  const preserved = options.releaseSet;
+  const preservedAlbum = preserved?.releases?.[preserved.selectedIndex];
+  const releaseSet = preservedAlbum
+    && getAlbumRequestKey(preservedAlbum) === getAlbumRequestKey(albumWithPlaybackContext)
+    ? {
+      releases: preserved.releases.map((release, index) => index === preserved.selectedIndex
+        ? { ...albumWithPlaybackContext, tabLabel: release.tabLabel } : release),
+      selectedIndex: preserved.selectedIndex,
+    }
+    : getAlbumReleaseSet(albumWithPlaybackContext);
   state.modalReleases = releaseSet.releases;
   state.modalReleaseIndex = releaseSet.selectedIndex;
   hideVersionContextMenu();
@@ -641,9 +680,12 @@ function getTrackModalLightboxSourceAlbumKey(button) {
   return String(getAlbumIdentity(album) || album?.key || `${album?.name || ''}::${album?.album_artist || ''}`);
 }
 
+let imageLightboxReturnFocus = null;
+
 function openImageLightbox(src, alt, options = {}) {
   const els = getLightboxElements();
   if (!els.overlay || !els.image || !src) return;
+  if (els.overlay.hidden) imageLightboxReturnFocus = document.activeElement;
   bindOverlayPointerOrigin(els.overlay);
   state.lightbox.sourceAlbumKey = String(options.sourceAlbumKey || '');
   state.lightbox.items = Array.isArray(options.items) ? options.items.filter(Boolean) : [];
@@ -673,7 +715,11 @@ function openImageLightbox(src, alt, options = {}) {
     updateLightboxNavState();
   }
   els.overlay.hidden = false;
+  els.overlay.setAttribute?.('role', 'dialog');
+  els.overlay.setAttribute?.('aria-modal', 'true');
+  els.overlay.setAttribute?.('aria-label', 'Full-size album cover');
   document.body.classList.add('modal-open');
+  els.close?.focus?.();
 }
 
 function closeImageLightbox() {
@@ -711,12 +757,16 @@ function closeImageLightbox() {
   if (!trackModalOpen && !utilityModalOpen) {
     document.body.classList.remove('modal-open');
   }
+  const returnFocus = imageLightboxReturnFocus;
+  imageLightboxReturnFocus = null;
+  if (returnFocus?.isConnected) returnFocus.focus?.();
 }
 
 function closeTrackModal() {
   const els = getTrackModalElements();
   if (!els.overlay) return;
   els.overlay.hidden = true;
+  els.overlay.classList.remove('is-above-settings');
   invalidatePendingTrackModalLoad();
   resumeAllGalleryCoverLoadsAfterTrackModalActions();
   state.modalReleases = [];
@@ -753,6 +803,91 @@ function attachTrackButtons() {
   });
 }
 
+// Escape belongs to the visible foreground overlay, even when focus is behind it.
+function getTopmostOpenModal() {
+  const overlays = '.track-modal, .utility-modal, .confirm-modal, .tag-editor-modal, .cover-lookup-modal, .non-album-modal, .image-lightbox, .repair-progress-overlay';
+  const candidates = [...new Set(Array.from(document.querySelectorAll(
+    `${overlays}, [aria-modal="true"], #app-form-modal`,
+  )).map(node => node.closest(overlays) || node))];
+  const stack = node => {
+    const contexts = [];
+    for (let current = node; current; current = current.parentElement) {
+      const style = getComputedStyle(current);
+      if (style.zIndex !== 'auto' && style.zIndex !== ''
+          || ['fixed', 'sticky'].includes(style.position)
+          || Number(style.opacity) < 1
+          || style.transform && style.transform !== 'none'
+          || style.filter && style.filter !== 'none'
+          || style.isolation === 'isolate'
+          || /paint|layout|strict|content/.test(style.contain || '')) {
+        contexts.unshift({ node: current, z: Number(style.zIndex) || 0 });
+      }
+    }
+    return contexts;
+  };
+  const visible = candidates.filter(node => {
+    if (node.closest('[hidden], [inert]') || !node.getClientRects().length) return false;
+    const style = getComputedStyle(node);
+    return style.visibility !== 'hidden' && style.visibility !== 'collapse';
+  }).map(node => ({ node, stack: stack(node) }));
+  visible.sort((a, b) => {
+    let index = 0;
+    while (a.stack[index] && b.stack[index] && a.stack[index].node === b.stack[index].node) index += 1;
+    const left = a.stack[index];
+    const right = b.stack[index];
+    const order = (left?.z || 0) - (right?.z || 0);
+    if (order) return order;
+    return (left?.node || a.node).compareDocumentPosition(right?.node || b.node) & 4 ? -1 : 1;
+  });
+  return visible.at(-1)?.node || null;
+}
+
+function handleModalEscapeKeydown(event) {
+  if (event.key !== 'Escape') return;
+  const modal = getTopmostOpenModal();
+  if (!modal) return;
+  // Capture and stop immediately: closing one dialog must not expose another
+  // to this same keypress, including handlers attached directly to its controls.
+  event.stopImmediatePropagation?.();
+  if (event.defaultPrevented) return;
+  event.preventDefault?.();
+  if (event.repeat || event.isComposing) return;
+  if (modal.id === 'tag-editor-modal') {
+    if (state.tagEditor.reorder) {
+      clearTagEditorReorderCue();
+    } else if (getSelectedTagEditorPaths(state.tagEditor.tracks || []).length > 1) {
+      setTagEditorSelectedPaths([]);
+      state.tagEditor.anchorPath = '';
+      renderTagEditor({ preserveTrackList: true });
+    } else {
+      closeTagEditor();
+    }
+    return;
+  }
+  if (modal.id === 'utility-modal') {
+    if (typeof cancelActiveSavedLoopCreation === 'function' && cancelActiveSavedLoopCreation()) return;
+    const editor = typeof getBackgroundAppearanceEditor === 'function' ? getBackgroundAppearanceEditor() : null;
+    if (editor?.allowLeave(() => true) === false) return;
+    closeUtilityModal(true);
+    return;
+  }
+  const close = {
+    'track-modal': () => closeTrackModal(),
+    'image-lightbox': () => closeImageLightbox(),
+    'repair-confirm-modal': () => closeRepairConfirmModal(),
+    'tag-edit-confirm-modal': () => closeTagEditConfirmModal(),
+    'cover-lookup-modal': () => closeCoverLookupModal(),
+    'cover-lookup-delete-confirm-modal': () => closeCoverLookupDeleteConfirm(),
+    'non-album-modal': () => closeNonAlbumModal(),
+    'version-picker-modal': () => closeVersionPickerModal(),
+  }[modal.id];
+  if (close) close();
+  else {
+    // Promise-backed dialogs must settle through their own cancel actions.
+    modal.querySelector('#app-confirm-cancel, #app-form-cancel, #loop-name-cancel, #loop-delete-confirm-cancel')?.click();
+  }
+}
+
 function attachModalEvents() {
   const els = getTrackModalElements();
   if (!els.overlay || els.overlay.dataset.bound === '1') return;
@@ -764,51 +899,24 @@ function attachModalEvents() {
       closeTrackModal();
     }
   });
-  document.addEventListener('keydown', (event) => {
-    if (event.key !== 'Escape') return;
-    const lightboxEls = getLightboxElements();
-    if (lightboxEls.overlay && !lightboxEls.overlay.hidden) {
-      closeImageLightbox();
-      return;
-    }
-    const repairConfirmEls = getRepairConfirmElements();
-    if (repairConfirmEls.overlay && !repairConfirmEls.overlay.hidden) {
-      closeRepairConfirmModal();
-      return;
-    }
-    const coverLookupEls = getCoverLookupModalElements();
-    if (coverLookupEls.overlay && !coverLookupEls.overlay.hidden) {
-      closeCoverLookupModal();
-      return;
-    }
-    const coverLookupDeleteConfirmEls = getCoverLookupDeleteConfirmElements();
-    if (coverLookupDeleteConfirmEls.overlay && !coverLookupDeleteConfirmEls.overlay.hidden) {
-      closeCoverLookupDeleteConfirm();
-      return;
-    }
-    const utilityEls = getUtilityModalElements();
-    if (utilityEls.overlay && !utilityEls.overlay.hidden) {
-      if (event.defaultPrevented) return;
-      if (typeof cancelActiveSavedLoopCreation === 'function'
-          && cancelActiveSavedLoopCreation()) {
-        event.preventDefault();
-        return;
-      }
-      closeUtilityModal();
-      return;
-    }
-    const nonAlbumEls = getNonAlbumModalElements();
-    if (nonAlbumEls.overlay && !nonAlbumEls.overlay.hidden) {
-      closeNonAlbumModal();
-      return;
-    }
-    if (!els.overlay.hidden) {
-      closeTrackModal();
-    }
-  });
+  document.addEventListener('keydown', handleModalEscapeKeydown, true);
   document.addEventListener('keydown', (event) => {
     const lightboxEls = getLightboxElements();
     if (!lightboxEls.overlay || lightboxEls.overlay.hidden) return;
+    if (event.key === 'Tab' && !event.ctrlKey && !event.altKey && !event.metaKey) {
+      const controls = Array.from(lightboxEls.overlay.querySelectorAll?.('button, [href], input, select, textarea, [tabindex]') || [])
+        .filter(control => !control.hidden && !control.disabled && control.tabIndex >= 0
+          && !control.closest?.('[hidden], [inert]') && control.getClientRects().length > 0);
+      const first = controls[0];
+      const last = controls[controls.length - 1];
+      if (!first) return;
+      const outside = !lightboxEls.overlay.contains(document.activeElement);
+      if (outside || (event.shiftKey ? document.activeElement === first : document.activeElement === last)) {
+        event.preventDefault();
+        (event.shiftKey ? last : first).focus();
+      }
+      return;
+    }
     if (event.key === 'ArrowLeft') {
       event.preventDefault();
       stepLightbox(-1);

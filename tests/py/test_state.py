@@ -1123,7 +1123,8 @@ def test_hydration_file_errors_use_bounded_structured_history(
         "action": "Additional library hydration file errors omitted",
         "level": "error",
         "history": True,
-        "id": "library-hydration-file-errors-omitted:9",
+        "id": "library-hydration-file-errors-omitted:unattributed:9",
+        "history_scope": None,
         "scan_generation": 9,
         "detail_limit": 50,
     }
@@ -1190,7 +1191,8 @@ def test_scan_music_incremental_bounds_structured_file_error_history(
         "action": "Additional library file errors omitted",
         "level": "error",
         "history": True,
-        "id": "library-file-errors-omitted:14",
+        "id": "library-file-errors-omitted:unattributed:14",
+        "history_scope": None,
         "scan_generation": 14,
         "detail_limit": 50,
     }
@@ -2681,3 +2683,24 @@ def test_run_cover_jobs_aborts_when_cover_generation_changes(config, logger, lib
     assert result["changed"] is False
     assert result["processed"] == 0
     assert library_state["covers_in_progress"] is False
+
+def test_scan_relation_callback_forwards_inventory_revision_to_publication(config, logger, library_state, monkeypatch):
+    published = []
+    monkeypatch.setattr(state_module, "library_root_cache_identity", lambda _config: "test-root")
+    monkeypatch.setattr(state_module, 'refresh_relation_views_in_state', lambda *_args: {})
+    monkeypatch.setattr(state_module, 'save_cache_to_disk_for_config',
+                        lambda *_args, **kwargs: published.append(kwargs) or {'relation_views': {}})
+
+    def finish_scan(current_state, **kwargs):
+        kwargs['refresh_relation_views'](
+            expected_scan_generation=7,
+            expected_cover_mutation_revision=3,
+            expected_inventory_mutation_revision=0,
+            publication_state=dict(current_state),
+        )
+
+    monkeypatch.setattr(state_module, 'refresh_library_state', finish_scan)
+    state_module.refresh_library_for_state(library_state, config, logger)
+    assert len(published) == 1
+    assert published[0]['expected_inventory_mutation_revision'] == 0
+    assert published[0]['expected_cover_mutation_revision'] == 3

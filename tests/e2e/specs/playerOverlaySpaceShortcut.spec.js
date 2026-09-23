@@ -16,7 +16,7 @@ function expectedPlayback(paused) {
   };
 }
 
-test(`${CASE_ID} Space controls background playback across Album Details, notifications, and Settings`, async ({
+test(`${CASE_ID} Space preserves native overlay actions and range playback across Album Details, notifications, and Settings`, { tag: '@area:playback' }, async ({
   coverLookupActions,
   galleryActions,
   globalPlayerActions,
@@ -56,29 +56,48 @@ test(`${CASE_ID} Space controls background playback across Album Details, notifi
     expect(evidence.renderedFrameDelta).toBeGreaterThan(0);
   });
 
-  await stepLogger.step('Let full cover occlude the player lane while Space remains global playback', async () => {
-    await trackModalActions.openCoverLightbox();
-    await trackModalActions.expectFullCoverAbovePlayer();
-    await trackModalActions.pressSpaceOnFocusedLightboxClose({
-      afterSpace: () => globalPlayerActions.waitForPlaybackState({ paused: true }),
-    });
-    expect(await globalPlayerActions.readCurrentPlaybackSummary()).toEqual(expectedPlayback(true));
-    await trackModalActions.closeCoverLightbox();
+  // Task 4 explicitly preserves native button activation; range Space remains a playback shortcut.
+  // Keep real PCM evidence so the shortcut cannot pass on a label-only state change.
+  async function resumeWithRangeSpace() {
     const playbackMark = await playbackEvidence.playbackMark();
     expect(await globalPlayerActions.togglePlaybackWithSpace({ paused: false }))
       .toEqual(expectedPlayback(false));
+    const evidence = await playbackEvidence.waitForTrackPlaybackEvidence({
+      after: playbackMark,
+      path: playbackPath,
+    });
+    expect(evidence.nonZeroSamples).toBeGreaterThan(0);
+    expect(evidence.renderedFrameDelta).toBeGreaterThan(0);
+  }
+
+  await stepLogger.step('Let full cover occlude the player while its native Space close preserves playback', async () => {
+    await trackModalActions.openCoverLightbox();
+    await trackModalActions.expectFullCoverAbovePlayer();
+    const playbackMark = await playbackEvidence.playbackMark();
+    await trackModalActions.pressSpaceOnFocusedLightboxClose({
+      afterSpace: () => globalPlayerActions.waitForPlaybackState({ paused: false }),
+    });
+    expect(await globalPlayerActions.readCurrentPlaybackSummary()).toEqual(expectedPlayback(false));
     expect((await playbackEvidence.waitForTrackPlaybackEvidence({
       after: playbackMark,
       path: playbackPath,
     })).renderedFrameDelta).toBeGreaterThan(0);
   });
 
-  await stepLogger.step('Keep the player foregrounded and intercept Album Details close-control Space', async () => {
+  await stepLogger.step('Keep the player foregrounded and close Album Details with native Space without resuming', async () => {
     await globalPlayerActions.expectForegroundPlayerAndToggle('albumDetails', { paused: true });
     await globalPlayerActions.waitForPlaybackState({ paused: true });
     expect(await globalPlayerActions.readCurrentPlaybackSummary()).toEqual(expectedPlayback(true));
-    const playbackMark = await playbackEvidence.playbackMark();
     await trackModalActions.pressSpaceOnFocusedCloseControl({
+      afterSpace: () => globalPlayerActions.waitForPlaybackState({ paused: true }),
+    });
+    expect(await globalPlayerActions.readCurrentPlaybackSummary()).toEqual(expectedPlayback(true));
+    await resumeWithRangeSpace();
+  });
+
+  await stepLogger.step('Activate the focused Notifications opener with Space without pausing playback', async () => {
+    const playbackMark = await playbackEvidence.playbackMark();
+    await coverLookupActions.pressSpaceOnFocusedDrawerOpener({
       afterSpace: () => globalPlayerActions.waitForPlaybackState({ paused: false }),
     });
     expect(await globalPlayerActions.readCurrentPlaybackSummary()).toEqual(expectedPlayback(false));
@@ -86,33 +105,20 @@ test(`${CASE_ID} Space controls background playback across Album Details, notifi
       after: playbackMark,
       path: playbackPath,
     })).nonZeroSamples).toBeGreaterThan(0);
-    await trackModalActions.close();
   });
 
-  await stepLogger.step('Intercept the focused Notifications opener before native activation', async () => {
-    await coverLookupActions.pressSpaceOnFocusedDrawerOpener({
-      afterSpace: () => globalPlayerActions.waitForPlaybackState({ paused: true }),
-    });
+  await stepLogger.step('Keep the player foregrounded and close Notifications with Space without resuming', async () => {
+    await globalPlayerActions.expectForegroundPlayerAndToggle('notifications', { paused: true });
+    await globalPlayerActions.waitForPlaybackState({ paused: true });
     expect(await globalPlayerActions.readCurrentPlaybackSummary()).toEqual(expectedPlayback(true));
-  });
-
-  await stepLogger.step('Keep the player foregrounded and intercept Notifications close-control Space', async () => {
-    const playbackMark = await playbackEvidence.playbackMark();
-    await globalPlayerActions.expectForegroundPlayerAndToggle('notifications', { paused: false });
-    await globalPlayerActions.waitForPlaybackState({ paused: false });
-    expect(await globalPlayerActions.readCurrentPlaybackSummary()).toEqual(expectedPlayback(false));
-    expect((await playbackEvidence.waitForTrackPlaybackEvidence({
-      after: playbackMark,
-      path: playbackPath,
-    })).renderedFrameDelta).toBeGreaterThan(0);
     await coverLookupActions.pressSpaceOnFocusedDrawerClose({
       afterSpace: () => globalPlayerActions.waitForPlaybackState({ paused: true }),
     });
     expect(await globalPlayerActions.readCurrentPlaybackSummary()).toEqual(expectedPlayback(true));
-    await coverLookupActions.closeDrawer();
+    await resumeWithRangeSpace();
   });
 
-  await stepLogger.step('Intercept the focused Settings opener before native activation', async () => {
+  await stepLogger.step('Open the account menu and Settings with native Space without pausing playback', async () => {
     const playbackMark = await playbackEvidence.playbackMark();
     await settingsModalAppBarActions.pressSpaceOnFocusedSettingsOpener({
       afterSpace: () => globalPlayerActions.waitForPlaybackState({ paused: false }),
@@ -124,19 +130,14 @@ test(`${CASE_ID} Space controls background playback across Album Details, notifi
     })).nonZeroSamples).toBeGreaterThan(0);
   });
 
-  await stepLogger.step('Keep the player foregrounded and intercept Settings close-control Space', async () => {
+  await stepLogger.step('Keep the player foregrounded and close Settings with Space without resuming', async () => {
     await globalPlayerActions.expectForegroundPlayerAndToggle('settings', { paused: true });
     expect(await globalPlayerActions.readCurrentPlaybackSummary()).toEqual(expectedPlayback(true));
-    const playbackMark = await playbackEvidence.playbackMark();
     await settingsModalAppBarActions.pressSpaceOnFocusedSettingsClose({
-      afterSpace: () => globalPlayerActions.waitForPlaybackState({ paused: false }),
+      afterSpace: () => globalPlayerActions.waitForPlaybackState({ paused: true }),
     });
-    expect(await globalPlayerActions.readCurrentPlaybackSummary()).toEqual(expectedPlayback(false));
-    expect((await playbackEvidence.waitForTrackPlaybackEvidence({
-      after: playbackMark,
-      path: playbackPath,
-    })).renderedFrameDelta).toBeGreaterThan(0);
-    await settingsModalAppBarActions.closeSettings();
+    expect(await globalPlayerActions.readCurrentPlaybackSummary()).toEqual(expectedPlayback(true));
+    await resumeWithRangeSpace();
   });
 
   await stepLogger.step('Preserve literal Space in editable search text', async () => {

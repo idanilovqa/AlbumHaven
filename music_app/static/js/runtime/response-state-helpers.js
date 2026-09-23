@@ -847,6 +847,17 @@ function getReusableSelectedArtistBrowseView(view) {
     : null;
   const cachedView = cachedViews ? cachedViews[requestedSignature] : null;
   if (!cachedView) return null;
+  const requestedSource = String(view?.search_context?.selected_artist_source || '').trim();
+  const cachedSource = String(cachedView?.search_context?.selected_artist_source || '').trim();
+  const selectedArtist = String(view?.selected_artist || '').trim();
+  const cachedNameMatches = cachedView?.search_context?.artist_name_match_artists;
+  // Automatic search selection may include connected-family previews. An explicit
+  // content-only selection instead requires the server's narrow matching records.
+  if (requestedSource === 'requested_artist' && cachedSource === 'auto_top_match'
+    && !(Array.isArray(cachedNameMatches)
+      && cachedNameMatches.some(artist => String(artist || '').trim() === selectedArtist))) {
+    return null;
+  }
   return cloneRuntimeReusableSelectedArtistBrowseView(cachedView);
 }
 
@@ -1064,6 +1075,7 @@ function normalizeStatusPayload(payload, fallbackStatus = null) {
   return {
     ...base,
     ...source,
+    allowed_actions: isRuntimePlainObject(source.allowed_actions) ? { ...source.allowed_actions } : {},
     scan_in_progress: normalizeRuntimeBoolean(source.scan_in_progress, base.scan_in_progress),
     scan_processed: normalizeRuntimeNumber(source.scan_processed, base.scan_processed),
     scan_total: normalizeRuntimeNumber(source.scan_total, base.scan_total),
@@ -1322,6 +1334,34 @@ function applyViewPayload(payload, options = {}) {
   const nextView = (options.retainFullAlbums || viewShouldRetainFullRuntimeAlbums(normalizedNextView))
     ? normalizedNextView
     : compactRuntimeViewPayload(normalizedNextView);
+  // Sidebar counts retain the source scope of their own response when album-only
+  // hydration preserves the navigation tree.
+  const sidebarCategories = options.preserveSidebarState
+    ? previousView.sidebar_library_categories
+    : nextPayload?.sidebar_library_categories || nextPayload?.visible_library_categories;
+  nextView.sidebar_library_categories = Array.isArray(sidebarCategories)
+    ? [...sidebarCategories]
+    : null;
+  // Loaded album coverage follows the response, independently of the browse URL.
+  // Local merged patches carry this field forward; server replacements use their
+  // own categories instead of inheriting coverage from the previous albums.
+  nextView.loaded_library_categories = [...(
+    Array.isArray(nextPayload?.loaded_library_categories)
+      ? nextPayload.loaded_library_categories
+      : Array.isArray(nextPayload?.visible_library_categories)
+        ? normalizedNextView.visible_library_categories
+        : previousView.loaded_library_categories || normalizedNextView.visible_library_categories
+  )];
+  nextView.non_album_library_categories = [...(
+    nextPayload?.non_album_library_categories
+    || (Array.isArray(nextPayload?.non_album_tracks)
+      ? nextView.loaded_library_categories
+      : previousView.non_album_library_categories || nextView.loaded_library_categories)
+  )];
+  if (options.preserveGalleryBrowseLocationState === true) {
+    nextView.gallery_scope = previousView.gallery_scope;
+    nextView.visible_library_categories = [...previousView.visible_library_categories];
+  }
   const preserveMountedSelectedView = Boolean(
     options.preserveMountedGalleryChildren
     && String(mountedPreviousView.selected_artist || '').trim()
@@ -1330,6 +1370,7 @@ function applyViewPayload(payload, options = {}) {
     && !String(nextView.query || '').trim()
   );
   if (preserveMountedSelectedView) {
+    nextView.loaded_library_categories = [...(mountedPreviousView.loaded_library_categories || previousView.visible_library_categories)];
     nextView.artist_groups = mountedPreviousView.artist_groups;
     nextView.primary_artist_groups = mountedPreviousView.primary_artist_groups;
     nextView.family_artist_groups = mountedPreviousView.family_artist_groups;
@@ -1370,6 +1411,7 @@ function applyViewPayload(payload, options = {}) {
       : '';
   }
   state.view = nextView;
+  if (typeof syncGalleryMainStateFromView === 'function') syncGalleryMainStateFromView(previousView, nextView);
   if (options.completePageEntryBrowseContext) {
     state.ui.pageEntryBrowseContextPending = false;
   }
@@ -1429,6 +1471,8 @@ function mergeViewPayload(patch, options = {}) {
 function applyStatusPayload(payload, fallbackStatus = null) {
   const nextStatus = normalizeStatusPayload(payload, fallbackStatus || state.status);
   state.status = nextStatus;
+  state.loopCreateAllowed = nextStatus.allowed_actions?.['library.loops.create'] === true;
+  if (typeof syncLoopCreateCapability === 'function') syncLoopCreateCapability();
   return nextStatus;
 }
 

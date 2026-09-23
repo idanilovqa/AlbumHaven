@@ -22,8 +22,8 @@ function sampleInput() {
       { id: 'performance:idle-memory', conclusion: 'success', passed: 2, failed: 0, skipped: 0 },
     ],
     fixture: {
-      release: 'fixtures-v1.0.21',
-      manifestSha256: '094b8412fcf7e738e8ced3e54ccbe0d537319c82b7f24008e3c7ffb032087b0f',
+      release: 'fixtures-v1.0.22',
+      manifestSha256: 'f9f357744464acec5b6bfa2f3b7dc69476d1c6df497ab3318399756cd5b9aa75',
       profiles: ['functional-core', 'synthetic-large-library'],
     },
     environment: {
@@ -184,8 +184,10 @@ test('retained public index keeps at most 20 runs and no entry older than 14 day
 test('public run index links retained prior runs to authenticated Actions evidence', () => {
   const { buildCloudTestReport } = require(builderPath);
   const input = sampleInput();
+  const now = Date.now();
+  input.run.generatedAt = new Date(now).toISOString();
   input.previousRunIndex = [{
-    runId: '32837430000', runAttempt: '1', generatedAt: '2026-08-24T19:00:00.000Z', overallConclusion: 'success',
+    runId: '32837430000', runAttempt: '1', generatedAt: new Date(now - 86400000).toISOString(), overallConclusion: 'success',
   }];
   const report = buildCloudTestReport(input);
   assert.match(report.pagesFiles['index.html'], /actions\/runs\/32837430000/);

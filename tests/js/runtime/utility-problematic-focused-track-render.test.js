@@ -122,11 +122,20 @@ test('problematic-file render scrolls the focused track row into view determinis
   };
   const elements = {
     overlay: {},
-    list: { innerHTML: '' },
+    list: {
+      innerHTML: '',
+      scrollTop: 0,
+      getBoundingClientRect() { return { top: 0, bottom: 200 }; },
+      querySelector(selector) {
+        return selector === '.utility-list-item.is-active'
+          ? { getBoundingClientRect() { return { top: 20, bottom: 60 }; } }
+          : null;
+      },
+    },
     detail,
     count: { textContent: '' },
     search: { disabled: false, placeholder: '', value: '' },
-    problemFilterButton: { disabled: false, hidden: false },
+    problemFilterButton: { disabled: false, hidden: false, setAttribute() {} },
     tabs: [],
   };
   const context = {
@@ -173,6 +182,15 @@ test('problematic-file render scrolls the focused track row into view determinis
   assert.deepEqual(cssEscapeCalls, [trackPath]);
   assert.deepEqual(selectorCalls, [`[data-problematic-track-path="${escapedTrackPath}"]`]);
   assert.equal(detail.scrollTop, 88);
+
+  detail.scrollTop = 0;
+  context.renderProblematicFiles();
+
+  assert.equal(
+    detail.scrollTop,
+    76,
+    'a late summary/detail rerender must keep the requested track row in view',
+  );
 });
 
 test('rerender leaves a failed problematic album detail in its terminal state', () => {
@@ -210,7 +228,9 @@ test('rerender leaves a failed problematic album detail in its terminal state', 
     buildProblematicAlbumListItem() { return '<button>Album Alpha</button>'; },
     loadProblematicAlbumDetail(albumKey) { loadCalls.push(albumKey); },
   };
+  context.escapeHtml = value => String(value || '');
   vm.createContext(context);
+  vm.runInContext(fs.readFileSync(path.join(path.dirname(rendererPath), 'alert-components.js'), 'utf8'), context);
   vm.runInContext(rendererSource, context, { filename: rendererPath });
 
   context.renderProblematicFiles();
@@ -218,6 +238,7 @@ test('rerender leaves a failed problematic album detail in its terminal state', 
 
   assert.deepEqual(loadCalls, []);
   assert.match(elements.detail.innerHTML, /unable to load/i);
+  assert.match(elements.detail.innerHTML, /data-on-page-alert="error"/);
 });
 
 test('focused-track navigation keeps the matching album selected during a summary refresh', () => {
@@ -407,7 +428,7 @@ test('removed mutation owner keeps its scrim until the nearest previous survivor
     footer: { innerHTML: '<button>Edit Tags</button>' },
     count: { textContent: '' },
     search: { disabled: false, placeholder: '', value: '' },
-    problemFilterButton: { disabled: false, hidden: false },
+    problemFilterButton: { disabled: false, hidden: false, setAttribute() {} },
     tabs: [],
   };
   const context = {
@@ -541,6 +562,7 @@ function renderFocusedAlbumWithGeometry({
   initialLayoutReady = true,
   listBottom,
   quantizeScrollTop = false,
+  resetScrollOnInnerHTML = false,
   rowBottom,
   trackBottom,
 }) {
@@ -563,9 +585,17 @@ function renderFocusedAlbumWithGeometry({
   let currentScrollTop = initialScrollTop;
   let currentDetailScrollTop = initialDetailScrollTop;
   let layoutReady = initialLayoutReady;
+  let listInnerHTML = '';
   const scheduledAnimationFrames = [];
+  const inputListeners = new Map();
   const list = {
-    innerHTML: '',
+    get innerHTML() {
+      return listInnerHTML;
+    },
+    set innerHTML(value) {
+      listInnerHTML = value;
+      if (resetScrollOnInnerHTML) currentScrollTop = 0;
+    },
     get scrollTop() {
       return currentScrollTop;
     },
@@ -616,6 +646,14 @@ function renderFocusedAlbumWithGeometry({
         : null;
     },
   };
+  for (const container of [list, detail]) {
+    const listeners = new Map();
+    inputListeners.set(container, listeners);
+    container.addEventListener = (type, listener) => {
+      if (!listeners.has(type)) listeners.set(type, []);
+      listeners.get(type).push(listener);
+    };
+  }
   const elements = {
     overlay: {},
     list,
@@ -676,6 +714,12 @@ function renderFocusedAlbumWithGeometry({
   return {
     context,
     detail,
+    input(containerName, type, properties = {}) {
+      const container = containerName === 'list' ? list : detail;
+      for (const listener of inputListeners.get(container).get(type) || []) {
+        listener({ type, target: container, ...properties });
+      }
+    },
     flushAnimationFrame({ makeLayoutReady = true } = {}) {
       if (makeLayoutReady) layoutReady = true;
       scheduledAnimationFrames.shift()?.();
@@ -683,6 +727,50 @@ function renderFocusedAlbumWithGeometry({
     list,
     scrollCalls,
   };
+}
+
+for (const [container, type, properties] of [
+  ['list', 'wheel', { deltaY: 50 }], ['detail', 'wheel', { deltaY: -50 }],
+  ['detail', 'touchmove', {}], ['detail', 'pointerdown', { button: 0 }],
+  ['detail', 'keydown', { key: 'PageDown' }], ['list', 'keydown', { key: 'Home' }],
+]) {
+  test(`focused problematic navigation yields to user ${container} ${type} across queued layout and rerenders`, () => {
+    const rendered = renderFocusedAlbumWithGeometry({ detailBottom: 240, listBottom: 300,
+      initialDetailScrollTop: 0, initialScrollTop: 0, initialLayoutReady: false,
+      rowBottom: 320, trackBottom: 260 });
+    const requested = rendered.context.state.utility.focusedTrackPath;
+    rendered.input(container, type, properties);
+    assert.equal(rendered.context.state.utility.focusedTrackPath, '');
+    rendered.list.scrollTop = 180; rendered.detail.scrollTop = 250;
+    const attempts = rendered.scrollCalls.length;
+    rendered.flushAnimationFrame();
+    rendered.context.renderProblematicFiles();
+    assert.equal(rendered.scrollCalls.length, attempts, 'old request must not pull either viewport back');
+    assert.equal(rendered.list.scrollTop, 180);
+    assert.equal(rendered.detail.scrollTop, 250);
+    rendered.context.state.utility.focusedTrackPath = requested;
+    rendered.context.renderProblematicFiles();
+    assert.ok(rendered.scrollCalls.length > attempts, 'a later explicit navigation owns a new request');
+  });
+}
+
+for (const [type, properties] of [
+  ['scroll', {}], ['pointerdown', { button: 0, target: { closest: () => null } }],
+  ['keydown', { key: 'PageDown', target: { closest: () => ({ tagName: 'INPUT' }) } }],
+  ['keydown', { key: ' ', target: { closest: () => ({ tagName: 'BUTTON' }) } }],
+  ['keydown', { key: 'Tab' }], ['wheel', { deltaY: 0, deltaX: 0 }],
+]) {
+  test(`focused problematic navigation retains deferred ownership for non-scroll input ${type} ${properties.key || ''}`, () => {
+    const rendered = renderFocusedAlbumWithGeometry({ detailBottom: 240, listBottom: 300,
+      initialDetailScrollTop: 0, initialScrollTop: 0, initialLayoutReady: false,
+      rowBottom: 320, trackBottom: 260 });
+    const requested = rendered.context.state.utility.focusedTrackPath;
+    rendered.input('detail', type, properties);
+    assert.equal(rendered.context.state.utility.focusedTrackPath, requested);
+    rendered.flushAnimationFrame();
+    assert.equal(rendered.detail.scrollTop, 20);
+    assert.equal(rendered.list.scrollTop, 20);
+  });
 }
 
 function assertNearestAlbumScrollCall(scrollCalls) {
@@ -722,7 +810,7 @@ test('problematic-file render rounds a fractional focused-album clip up to one s
   assert.equal(detail.scrollTop, 38);
 });
 
-test('problematic-file render corrects focused navigation after the opened modal receives layout', () => {
+test('problematic-file render corrects focused navigation after layout and retains it for late rerenders', () => {
   const rendered = renderFocusedAlbumWithGeometry({
     deferAnimationFrame: true,
     detailBottom: 240,
@@ -746,17 +834,130 @@ test('problematic-file render corrects focused navigation after the opened modal
 
   assert.equal(rendered.list.scrollTop, 20);
   assert.equal(rendered.detail.scrollTop, 20);
-  assert.equal(rendered.context.state.utility.focusedTrackPath, '');
+  assert.notEqual(rendered.context.state.utility.focusedTrackPath, '');
 });
 
-test('empty log history visibly explains session-only storage and keeps export explicit', () => {
+test('problematic-file render preserves the selected album viewport across a late rerender', () => {
+  const rendered = renderFocusedAlbumWithGeometry({
+    detailBottom: 240,
+    initialDetailScrollTop: 0,
+    initialScrollTop: 0,
+    listBottom: 300,
+    resetScrollOnInnerHTML: true,
+    rowBottom: 280,
+    trackBottom: 220,
+  });
+
+  rendered.context.state.utility.focusedTrackPath = '';
+  rendered.list.scrollTop = 182;
+
+  rendered.context.renderProblematicFiles();
+
+  assert.equal(rendered.list.scrollTop, 182);
+});
+
+for (const withLoadingRefresh of [false, true]) {
+test(`problematic-file render preserves owned mutation scroll geometry across a late ${withLoadingRefresh ? 'loading refresh' : 'rerender'}`, () => {
+  const selectedAlbum = {
+    key: 'album-previous',
+    name: 'Album Previous',
+    detail_loaded: true,
+  };
+  let currentScrollTop = 1335;
+  let listHtml = '<button>Album Previous</button>';
+  let naturalContentHeight = 1456;
+  let retainedNode = {
+    style: { height: '79px' },
+    matches(selector) {
+      return selector === '[data-problematic-scroll-retainer]';
+    },
+  };
+  const originalRetainedNode = retainedNode;
+  const clampScrollTop = (value) => Math.min(
+    Number(value),
+    Math.max(0, naturalContentHeight + (retainedNode ? 79 : 0) - 200),
+  );
+  const list = {
+    get innerHTML() {
+      return listHtml;
+    },
+    set innerHTML(value) {
+      listHtml = value;
+      naturalContentHeight = value.includes('Loading...') ? 40 : 1456;
+      retainedNode = null;
+      currentScrollTop = clampScrollTop(currentScrollTop);
+    },
+    get scrollTop() {
+      return currentScrollTop;
+    },
+    set scrollTop(value) {
+      currentScrollTop = clampScrollTop(value);
+    },
+    querySelector(selector) {
+      return retainedNode?.matches(selector) ? retainedNode : null;
+    },
+    appendChild(node) {
+      retainedNode = node;
+      return node;
+    },
+  };
   const elements = {
     overlay: {},
-    list: { innerHTML: '' },
-    detail: { innerHTML: '' },
+    list,
+    detail: {
+      innerHTML: '',
+      removeAttribute() {},
+    },
     count: { textContent: '' },
     search: { disabled: false, placeholder: '', value: '' },
     problemFilterButton: { disabled: false, hidden: false },
+    tabs: [],
+  };
+  const context = {
+    state: {
+      utility: {
+        activeTab: 'problematic-files',
+        focusedTrackPath: '',
+        loaded: true,
+        loading: false,
+        problematicFiles: [selectedAlbum],
+        searchQuery: '',
+        selectedProblematicKey: selectedAlbum.key,
+        selectedProblemFilters: [],
+      },
+    },
+    getUtilityModalElements() { return elements; },
+    getFilteredProblematicAlbums() { return [selectedAlbum]; },
+    renderProblemFilterControls() {},
+    getSelectedProblematicAlbumFrom() { return selectedAlbum; },
+    buildProblematicAlbumListItem() { return '<button>Album Previous</button>'; },
+    initializeRepairSelections() {},
+    buildProblematicAlbumDetail() { return '<h2>Album Previous</h2>'; },
+    async loadProblematicAlbumDetail() {},
+  };
+  vm.createContext(context);
+  vm.runInContext(rendererSource, context, { filename: rendererPath });
+
+  if (withLoadingRefresh) {
+    context.state.utility.loading = true;
+    context.renderProblematicFiles();
+    context.state.utility.loading = false;
+  }
+  context.renderProblematicFiles();
+
+  assert.equal(retainedNode, originalRetainedNode, 'the owned scroll geometry must survive list replacement');
+  assert.equal(list.scrollTop, 1335, 'the late render must restore the mutation-owned scroll position');
+});
+}
+
+test('empty scoped log history renders its captured console and keeps export explicit', () => {
+  const elements = {
+    overlay: {},
+    list: { innerHTML: '', dataset: {}, replaceChildren() {}, querySelectorAll: () => [] },
+    detail: { innerHTML: '' },
+    count: { textContent: '' },
+    search: { disabled: false, placeholder: '', value: '' },
+    problemFilterButton: { disabled: false, hidden: false, setAttribute() {} },
     problemFilterMenu: { hidden: false },
     problemFilterChips: { innerHTML: 'old chips' },
     sidebarLabel: { textContent: '' },
@@ -768,11 +969,7 @@ test('empty log history visibly explains session-only storage and keeps export e
         activeTab: 'log-history',
         logHistory: [],
         logHistoryLoading: false,
-        logHistoryStorageStatus: {
-          persistent: false,
-          storage: 'session',
-          message: 'History is available for this session and will be lost on reload.',
-        },
+        allowedActions: { 'library.logs.read': true, 'library.logs.export': true },
         selectedLogHistoryId: '',
       },
     },
@@ -787,17 +984,25 @@ test('empty log history visibly explains session-only storage and keeps export e
     },
   };
   vm.createContext(context);
+  context.window = {};
+  context.URLSearchParams = URLSearchParams;
+  context.escapeHtml = value => String(value ?? '').replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('"', '&quot;');
+  vm.runInContext(fs.readFileSync(path.resolve(path.dirname(rendererPath), '../button-component.js'), 'utf8'), context);
+  for (const file of ['utility-log-history-query.js', 'utility-log-history-ui.js']) {
+    vm.runInContext(fs.readFileSync(path.join(path.dirname(rendererPath), file), 'utf8'), context);
+  }
   vm.runInContext(rendererSource, context, { filename: rendererPath });
   context.renderUtilityLogHistory();
-  assert.match(elements.detail.innerHTML, /lost on reload/i);
-  assert.match(elements.detail.innerHTML, /scan/i);
-  assert.match(elements.detail.innerHTML, /file/i);
-  assert.match(elements.detail.innerHTML, /edit/i);
-  assert.match(elements.detail.innerHTML, /error/i);
+  assert.match(elements.detail.innerHTML, /No events in this snapshot/);
+  assert.match(elements.detail.innerHTML, /Recent activity/);
+  assert.equal(elements.count.textContent, '0');
   assert.doesNotMatch(
     elements.detail.innerHTML,
-    /Completed tag edits and repairs will appear here/i,
+    /session-only|lost on reload/i,
   );
-  assert.match(elements.detail.innerHTML, /data-export-log-history="1"/);
-  assert.match(elements.detail.innerHTML, />Export Logs</);
+  assert.match(elements.detail.innerHTML, /data-log-history-action="export-draft"/);
+  assert.match(elements.detail.innerHTML, />Export all logs</);
+  const exportCurrent = elements.detail.innerHTML.match(/<button[^>]*data-log-history-action="export-current"[^>]*>/)?.[0];
+  assert.ok(exportCurrent);
+  assert.match(exportCurrent, /\bdisabled(?:="[^"]*")?(?:\s|>)/);
 });

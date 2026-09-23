@@ -1,4 +1,6 @@
 import os
+import json
+import logging
 import sys
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -282,7 +284,22 @@ def get_default_data_dir() -> Path:
         return Path(xdg_data_home) / APP_NAME.lower()
     return Path.home() / ".local" / "share" / APP_NAME.lower()
 
+def _library_browse_bases():
+    try:
+        value = json.loads(os.environ.get("ALBUM_HAVEN_LIBRARY_BROWSE_BASES", "[]"))
+        if isinstance(value, list) and all(isinstance(path, str) and path.strip() for path in value):
+            return value
+    except (TypeError, ValueError):
+        pass
+    logging.getLogger(__name__).warning(
+        "ALBUM_HAVEN_LIBRARY_BROWSE_BASES is invalid; library browsing is disabled."
+    )
+    return []
+
+
 class Config:
+    ALBUM_HAVEN_DEPLOYMENT_MODE = os.environ.get("ALBUM_HAVEN_DEPLOYMENT_MODE", "self_hosted")
+    ALBUM_HAVEN_LIBRARY_BROWSE_BASES = _library_browse_bases()
     _configured_music_dir = str(os.environ.get("MUSIC_DIR") or "").strip()
     MUSIC_DIR = _resolved_path(Path(_configured_music_dir)) if _configured_music_dir else None
     DATA_DIR = _resolve_data_dir(Path(os.environ.get("MUSIC_APP_DATA_DIR", str(get_default_data_dir()))))

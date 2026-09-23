@@ -1,14 +1,9 @@
 {% from "partials/button.html" import action_button %}
+{% from "partials/search-input.html" import search_input, search_filter_icon %}
   <div class="utility-modal" id="utility-modal" hidden>
-    <div class="utility-modal-dialog" role="dialog" aria-modal="true" aria-labelledby="utility-modal-title">
+    <div class="utility-modal-dialog" role="dialog" aria-modal="true" aria-label="Settings">
       <div class="utility-modal-header">
-        <div>
-          <h2 class="utility-modal-title" id="utility-modal-title">Utilities</h2>
-          <div class="utility-modal-subtitle">Review fixes, loops, integrations, and library settings.</div>
-        </div>
-        <button class="icon-button utility-modal-close" type="button" id="utility-modal-close" data-close-utility-modal="1" aria-label="Close utilities">✕</button>
-      </div>
-      <div class="utility-modal-tabs">
+      <div class="utility-modal-tabs" role="tablist" aria-label="Settings sections">
         <button class="utility-tab is-active" type="button" id="utility-problematic-tab" data-utility-tab="problematic-files" aria-selected="true">Problematic files</button>
         <button class="utility-tab" type="button" id="utility-rules-tab" data-utility-tab="rules" aria-selected="false">Rules</button>
         <button class="utility-tab" type="button" id="utility-loops-tab" data-utility-tab="loops" aria-selected="false">Loops</button>
@@ -16,19 +11,22 @@
         <button class="utility-tab" type="button" id="utility-integrations-tab" data-utility-tab="integrations" aria-selected="false">Integrations</button>
         <button class="utility-tab" type="button" id="utility-appearance-tab" data-utility-tab="appearance" aria-selected="false">Appearance</button>
       </div>
+        {% call action_button('Close utilities', class_name='utility-modal-close', id='utility-modal-close', attributes={'data-close-utility-modal': '1'}) %}✕{% endcall %}
+      </div>
       <div class="utility-modal-body">
         <aside class="utility-sidebar">
-          <div class="utility-sidebar-title">
+          <div hidden>
             <span id="utility-sidebar-label">Albums</span>
             <span class="utility-count" id="utility-problematic-count">0</span>
           </div>
           <div class="utility-sidebar-search">
-            <div class="utility-search-row">
-              <input class="utility-search-input" type="search" id="utility-problematic-search" placeholder="Filter artist, album, or track">
-              <div class="utility-problem-filter">
-                <button class="utility-problem-filter-button" type="button" id="utility-problem-filter-button" data-toggle-problem-filter="1" aria-haspopup="listbox" aria-expanded="false" title="Filter by problem type">Problems</button>
+            <div class="utility-search-row utility-problem-filter">
+              {% call(action_class) search_input('utility-problematic-search', placeholder='Filter artist, album, or track', label='Search settings items') %}
+                <button class="{{ action_class }} utility-problem-filter-button" type="button" id="utility-problem-filter-button" data-toggle-problem-filter="1" aria-label="Filters" aria-haspopup="listbox" aria-controls="utility-problem-filter-menu" aria-expanded="false" title="Filter by problem type">
+                  {{ search_filter_icon() }}
+                </button>
+              {% endcall %}
                 <div class="utility-problem-filter-menu" id="utility-problem-filter-menu" role="listbox" aria-multiselectable="true" hidden></div>
-              </div>
             </div>
             <div class="utility-problem-filter-chips" id="utility-problem-filter-chips"></div>
           </div>
@@ -72,7 +70,7 @@
           <label>Album Rating<input type="text" data-tag-field="album_rating"></label>
         </form>
       </div>
-      <div class="tag-editor-actions">
+      <div class="tag-editor-actions utility-modal-footer" id="tag-editor-footer">
         <div class="tag-editor-auto-number-controls" id="tag-editor-auto-number-controls" hidden>
           <label for="tag-editor-auto-number-start">Start at</label>
           <input id="tag-editor-auto-number-start" type="number" min="1" step="1" inputmode="numeric">
@@ -84,8 +82,8 @@
             data-auto-number-selected="1"
           >Auto-number</button>
         </div>
-        <button class="button" type="button" data-close-tag-editor="1">Cancel</button>
-        <button class="button confirm-modal-danger" type="button" data-open-tag-edit-confirm="1" disabled>Apply</button>
+        <button class="button ui-button ui-button--quiet ui-button--medium" type="button" data-close-tag-editor="1">Cancel</button>
+        <button class="button ui-button ui-button--primary ui-button--medium" type="button" data-open-tag-edit-confirm="1" disabled>Apply</button>
       </div>
     </div>
   </div>
@@ -128,12 +126,13 @@
       </div>
       <div class="cover-lookup-modal-body" id="cover-lookup-modal-body"></div>
       <div class="cover-lookup-modal-actions">
-        <div class="cover-lookup-modal-actions-left">
-          <button class="button" type="button" id="cover-lookup-find-better-button" data-start-cover-lookup="1">Find Better Art</button>
+        <div class="cover-lookup-search-action">
+          <button class="button ui-button ui-button--primary ui-button--medium" type="button" id="cover-lookup-find-better-button" data-start-cover-lookup="1" aria-describedby="cover-lookup-search-hint">Find Better Art</button>
+          <span id="cover-lookup-search-hint">Runs a full cover art search</span>
         </div>
         <div class="cover-lookup-modal-status" id="cover-lookup-modal-status"></div>
         <div class="cover-lookup-modal-actions-right">
-          <button class="button button-secondary" type="button" data-close-cover-lookup-modal="1">Cancel</button>
+          <button class="button ui-button ui-button--quiet ui-button--medium" type="button" data-close-cover-lookup-modal="1">Cancel</button>
           <button class="button" type="button" id="cover-lookup-save-remote-button" data-save-cover-lookup-remote="1" hidden>Save</button>
         </div>
       </div>
@@ -142,16 +141,7 @@
 
   <div class="non-album-modal" id="non-album-modal" hidden>
     <div class="non-album-modal-dialog" role="dialog" aria-modal="true" aria-labelledby="non-album-modal-title">
-      <div class="non-album-modal-header">
-        <div>
-          <h3 id="non-album-modal-title">Loose Non-Album Tracks</h3>
-          <div class="non-album-modal-subtitle" id="non-album-modal-subtitle">Tracks that are marked as non-album and cannot be grouped under any album tag.</div>
-        </div>
-        <div class="track-modal-actions">
-          <button class="icon-button track-modal-edit-tags" type="button" id="non-album-modal-edit-tags" data-open-non-album-tag-editor="1" aria-label="Edit album tags" title="Edit album tags">&#9998;</button>
-          <button class="icon-button" type="button" id="non-album-modal-close" data-close-non-album-modal="1" aria-label="Close loose non-album tracks">✕</button>
-        </div>
-      </div>
+      <div class="non-album-modal-header" id="non-album-modal-header"></div>
       <div class="non-album-modal-table-wrap">
         <div class="non-album-modal-table" id="non-album-modal-table"></div>
       </div>

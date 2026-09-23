@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
@@ -210,3 +210,42 @@ def test_public_job_enqueue_failure_rolls_back_outbox_throttles_and_audit():
         )
     assert connection.events == ["begin", "rollback"]
     assert audit.calls == []
+
+
+def test_reset_acceptance_refreshes_clock_after_throttle_locks():
+    from music_app.services.auth_password_reset_request_postgres import (
+        PostgresPasswordResetRequestService,
+    )
+
+    refreshed = NOW + timedelta(seconds=1801)
+    clock_values = iter((NOW, refreshed))
+    connection = Connection(account={
+        "id": 41,
+        "is_active": True,
+        "disabled_at": None,
+        "contact_email": "member@example.test",
+        "credential_version": 3,
+    })
+    audit = Audit()
+
+    result = PostgresPasswordResetRequestService(
+        _config(),
+        connect=lambda _url: connection,
+        clock=lambda: next(clock_values),
+        audit_repository=audit,
+        job_repository=Jobs(),
+    ).request_reset(
+        candidate="member",
+        source_key="203.0.113.9",
+        request_ref="delayed-throttle-lock",
+    )
+
+    assert result.accepted_job is not None
+    outbox_params = next(
+        params
+        for sql, params in connection.operations
+        if "insert into app.mail_outbox" in sql
+    )
+    assert outbox_params[1] == refreshed
+    assert outbox_params[3] == refreshed + timedelta(seconds=1800)
+    assert audit.calls[0]["occurred_at"] == refreshed

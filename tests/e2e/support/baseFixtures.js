@@ -1,3 +1,4 @@
+import { getProductionViewObserver } from '../helpers/productionViewObserver.js';
 import { expect, test as base } from '@playwright/test';
 import {
   readAuthenticatedStartupRelationProjectionReadiness,
@@ -53,7 +54,9 @@ import { installContextRequestInterceptionGuard } from './requestInterceptionGua
 import { createManagedAppLifecycle } from '../helpers/managedAppLifecycle.js';
 import { observeNonLoopbackHttpRequests } from '../helpers/thirdPartyRequestEvidence.js';
 import { observePlaybackPcmTraffic } from '../helpers/gaplessPlaybackHelpers.js';
+import { controlLastfmProvider, readLastfmProviderState } from '../helpers/lastfmProviderHelpers.js';
 import { createWorkerAuthentication } from '../../../scripts/playwright-worker-authentication.mjs';
+import { createAppearancePreferenceIsolation } from '../helpers/appearancePreferenceIsolation.js';
 
 const ANSI = {
   cyan: '\u001b[36m',
@@ -333,6 +336,10 @@ const functionalBrowserWarmupFixtures = (
 );
 
 export const test = base.extend({
+  appearancePreferenceIsolation: async ({ page }, use) => {
+    const isolation = createAppearancePreferenceIsolation(page);
+    try { await use(isolation); } finally { await isolation.restore(); }
+  },
   // Login/alternate-user suites opt out at file scope with test.use().
   reuseAuthentication: [true, { scope: 'worker', option: true }],
   authenticateFreshBrowserSession: [true, { option: true }],
@@ -375,14 +382,18 @@ export const test = base.extend({
             storageState: authenticateFreshBrowserSession ? storageState : { cookies: [], origins: [] },
           });
           const restoreInterceptionGuard = installContextRequestInterceptionGuard(context);
+          let productionViewObserver = null;
           try {
             const page = await context.newPage();
+            productionViewObserver = getProductionViewObserver(page);
+            await productionViewObserver.initialize();
             const configuredOrigin = configuredBaseUrl ? new URL(configuredBaseUrl).origin : '';
             const runtimeLogObserver = observePageRuntimeLogs(page, configuredOrigin);
             session = {
               context,
               page,
               runtimeLogObserver,
+              productionViewObserver,
               restoreInterceptionGuard,
               galleryActions: new GalleryActions(new GalleryPage(page, testInfo)),
               coverLookupActions: new CoverLookupActions(new CoverLookup(page, testInfo)),
@@ -393,9 +404,10 @@ export const test = base.extend({
             return session;
           } catch (error) {
             try {
-              restoreInterceptionGuard();
+              await productionViewObserver?.dispose();
             } finally {
-              await context.close();
+              try { restoreInterceptionGuard(); }
+              finally { await context.close(); }
             }
             throw error;
           }
@@ -424,9 +436,10 @@ export const test = base.extend({
           }
         }
         try {
-          session.restoreInterceptionGuard();
+          await session.productionViewObserver.dispose();
         } finally {
-          await session.context.close();
+          try { session.restoreInterceptionGuard(); }
+          finally { await session.context.close(); }
         }
       }
     }
@@ -447,6 +460,16 @@ export const test = base.extend({
   }, { scope: 'worker', auto: true }],
 
   ...functionalBrowserWarmupFixtures,
+
+  productionViewObservation: [async ({ page }, use) => {
+    const observer = getProductionViewObserver(page);
+    try {
+      await observer.initialize();
+      await use(observer);
+    } finally {
+      await observer.dispose();
+    }
+  }, { auto: true }],
 
   requestInterceptionGuard: [async ({ page, context }, use) => {
     const restoreInterceptionGuard = installContextRequestInterceptionGuard(context);
@@ -472,6 +495,31 @@ export const test = base.extend({
       await use(observer);
     } finally {
       observer.stop();
+    }
+  },
+
+  lastfmProviderFixture: async ({}, use, testInfo) => {
+    await controlLastfmProvider(testInfo, 'reset');
+    try {
+      await use({
+        readState: () => readLastfmProviderState(testInfo),
+        reset: () => controlLastfmProvider(testInfo, 'reset'),
+        setScrobbleMode: (mode) => controlLastfmProvider(
+          testInfo,
+          'set-scrobble-mode',
+          { mode: String(mode) },
+        ),
+      });
+    } finally {
+      try {
+        await controlLastfmProvider(testInfo, 'reset');
+      } catch (error) {
+        if (!didTestFail(testInfo)) throw error;
+        await testInfo.attach('lastfm-provider-cleanup-error.txt', {
+          body: Buffer.from(error?.stack || error?.message || String(error)),
+          contentType: 'text/plain',
+        });
+      }
     }
   },
 

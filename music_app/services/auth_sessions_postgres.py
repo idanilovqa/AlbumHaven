@@ -291,6 +291,7 @@ class PostgresAuthSessionService:
             locked = _discover_and_lock_session(connection, digest)
             if locked is None:
                 return None
+            now = _aware_now(self._clock)
             payload, account = locked
             if (
                 not _account_is_active(account)

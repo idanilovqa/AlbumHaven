@@ -292,7 +292,7 @@ def test_candidate_query_keeps_reused_active_file_cte_key_only_and_rejoins_heavy
     assert "active_track_files.id\n        limit %(limit)s" in sql
 
 
-def test_candidate_query_prefilters_active_files_through_three_indexed_eligibility_paths():
+def test_candidate_query_prefilters_active_files_through_four_indexed_eligibility_paths():
     sql = inventory_module._non_album_candidates_sql().lower()
     assert "eligible_track_file_ids as (" in sql
     eligible_cte = sql.split("eligible_track_file_ids as (", 1)[1].split(
@@ -301,12 +301,15 @@ def test_candidate_query_prefilters_active_files_through_three_indexed_eligibili
     )[0]
     eligibility_paths = eligible_cte.split("\n\n          union\n\n")
 
-    assert len(eligibility_paths) == 3
+    assert len(eligibility_paths) == 4
     assert "union all" not in eligible_cte
     assert "override_payload" not in eligible_cte
-    assert "exception_type" not in eligible_cte
 
-    loose_track_path, private_path_override_path, track_id_override_path = eligibility_paths
+    loose_track_path, scanned_exception_path, private_path_override_path, track_id_override_path = eligibility_paths
+    assert "scan_cache_stale is false" in scanned_exception_path
+    assert "bootstrap_context.library_id = library.local_tracks.library_id" in scanned_exception_path
+    assert "{scan_cache,file_entry,exception_type}" in scanned_exception_path
+    assert "in ('interview', 'non album rarity', 'non-album rarity')" in scanned_exception_path
     assert "select library.local_track_files.id as track_file_id" in loose_track_path
     assert "from library.local_tracks" in loose_track_path
     assert "bootstrap_context.library_id = library.local_tracks.library_id" in loose_track_path

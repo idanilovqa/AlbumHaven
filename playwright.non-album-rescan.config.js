@@ -7,7 +7,7 @@ module.exports = {
     {
       name: 'non-album-rescan',
       testMatch: /nonAlbumRarity\.spec\.js$/,
-      grep: /FTC-NON-ALBUM-013 keeps a strongly inferred blank-Album track in Other and Album Details$/,
+      grep: /FTC-NON-ALBUM-013 keeps a strongly inferred blank-Album track in Other and Album Details/,
       use: baseConfig.projects[0].use,
     },
   ],

@@ -21,6 +21,7 @@ from music_app.services.auth_passwords import (
     hash_password,
     verify_password,
 )
+from music_app.services.auth_credential_attempts_postgres import PostgresCredentialAttempts, shared_verification_capacity
 
 try:  # pragma: no cover - exercised when the optional runtime driver is present.
     import psycopg
@@ -96,6 +97,8 @@ class PostgresProfilePasswordService:
         password_hasher: Callable[..., PasswordCredential] = hash_password,
         breached_checker: Callable[[str], bool],
         audit_repository: Any,
+        attempt_guard: Any = None,
+        verification_semaphore: Any = None,
     ) -> None:
         payload = config if isinstance(config, Mapping) else {}
         self._database_url = str(payload.get(_DATABASE_URL_KEY) or "").strip()
@@ -124,6 +127,9 @@ class PostgresProfilePasswordService:
         self._password_hasher = password_hasher
         self._breached_checker = breached_checker
         self._audit = audit_repository
+        self._attempts = attempt_guard if attempt_guard is not None else PostgresCredentialAttempts(
+            payload, connect=self._connect, clock=self._clock)
+        self._semaphore = verification_semaphore or shared_verification_capacity(payload)
 
     def load_profile(
         self,
@@ -211,15 +217,36 @@ class PostgresProfilePasswordService:
         snapshot = self._load_snapshot(account_id)
         if snapshot is None:
             return ProfilePasswordOutcome.STALE
-        verification = self._verifier(
-            current_password,
-            snapshot.encoded_hash,
-            stored_policy_version=snapshot.hash_policy_version,
-            argon2=self._argon2,
-            current_policy_version=self._policy_version,
-            password_policy=self._password_policy,
-        )
-        if not isinstance(verification, PasswordVerification) or not verification.valid:
+        reservation = self._attempts.reserve(snapshot.username)
+        if reservation is None:
+            return ProfilePasswordOutcome.CURRENT_PASSWORD_INVALID
+        if not self._semaphore.acquire(blocking=False):
+            self._attempts.finalize(reservation, successful=False)
+            return ProfilePasswordOutcome.CURRENT_PASSWORD_INVALID
+        try:
+            try:
+                verification = self._verifier(
+                    current_password, snapshot.encoded_hash,
+                    stored_policy_version=snapshot.hash_policy_version,
+                    argon2=self._argon2, current_policy_version=self._policy_version,
+                    password_policy=self._password_policy,
+                )
+            except BaseException:
+                self._attempts.finalize(reservation, successful=False)
+                raise
+            valid = isinstance(verification, PasswordVerification) and bool(verification.valid)
+            self._attempts.finalize(reservation, successful=valid)
+            if valid:
+                credential = self._password_hasher(
+                    new_password, username=snapshot.username, email=snapshot.email,
+                    breached_checker=self._breached_checker, argon2=self._argon2,
+                    policy_version=self._policy_version, password_policy=self._password_policy,
+                )
+                if not isinstance(credential, PasswordCredential):
+                    raise RuntimeError("Profile password hashing failed.")
+        finally:
+            self._semaphore.release()
+        if not valid:
             with self._operation() as connection:
                 self._append_audit(
                     connection,
@@ -230,17 +257,6 @@ class PostgresProfilePasswordService:
                     now=now,
                 )
             return ProfilePasswordOutcome.CURRENT_PASSWORD_INVALID
-        credential = self._password_hasher(
-            new_password,
-            username=snapshot.username,
-            email=snapshot.email,
-            breached_checker=self._breached_checker,
-            argon2=self._argon2,
-            policy_version=self._policy_version,
-            password_policy=self._password_policy,
-        )
-        if not isinstance(credential, PasswordCredential):
-            raise RuntimeError("Profile password hashing failed.")
 
         try:
             with self._operation() as connection:
@@ -250,6 +266,7 @@ class PostgresProfilePasswordService:
                     current_session_id,
                 ):
                     return ProfilePasswordOutcome.STALE
+                now = _aware_utc(self._clock())
                 update = connection.execute(
                     """
                     update app.account_credentials
@@ -428,7 +445,7 @@ class PostgresProfilePasswordService:
         ).fetchall()
         sessions = connection.execute(
             """
-            select id from app.account_sessions
+            select id, idle_expires_at, absolute_expires_at from app.account_sessions
             where account_id = %s and revoked_at is null
             order by created_at, id for update
             """,
@@ -447,16 +464,20 @@ class PostgresProfilePasswordService:
                 "administrator_set",
             ),
         )
-        session_ids = {
-            _positive_integer(_row(item, ("id",)).get("id"), "session id")
+        now = _aware_utc(self._clock())
+        current_sessions = [
+            _row(item, ("id", "idle_expires_at", "absolute_expires_at"))
             for item in sessions
-        }
+            if _row(item, ("id", "idle_expires_at", "absolute_expires_at")).get("id") == current_session_id
+        ]
         return bool(
             account.get("is_active") is True
             and account.get("disabled_at") is None
             and credential.get("encoded_hash") == snapshot.encoded_hash
             and credential.get("credential_version") == snapshot.credential_version
-            and current_session_id in session_ids
+            and len(current_sessions) == 1
+            and _aware_utc(current_sessions[0].get("idle_expires_at")) > now
+            and _aware_utc(current_sessions[0].get("absolute_expires_at")) > now
         )
 
     def _append_audit(

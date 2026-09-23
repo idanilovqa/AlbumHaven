@@ -3,6 +3,16 @@ const fs = require('node:fs');
 const path = require('node:path');
 const test = require('node:test');
 const vm = require('node:vm');
+const ButtonComponent = require(path.join(
+  __dirname,
+  '..',
+  '..',
+  '..',
+  'music_app',
+  'static',
+  'js',
+  'button-component.js',
+));
 
 const helperPath = path.join(
   __dirname,
@@ -50,6 +60,7 @@ const primaryModalsTemplate = fs.readFileSync(path.join(
 function loadHelper(albums, overrides = {}) {
   const context = {
     console,
+    ButtonComponent,
     claimTagEditViewMutation(album, editedPaths, updates) {
       return { album, editedPaths, updates };
     },
@@ -180,12 +191,79 @@ test('track modal playback refresh preserves generic Play track and Pause track 
 
   context.refreshTrackModalPlaybackState();
   assert.equal(attributes.get('aria-label'), 'Pause track');
+  assert.match(button.innerHTML, /^<svg class="ui-icon album-track-table__play-icon ui-icon--pause"/);
+  assert.doesNotMatch(button.innerHTML, /&#x23F8;|⏸/);
   assert.equal(durationEl.innerHTML, '0:00 / 0:00');
   assert.doesNotMatch(durationEl.innerHTML, /sep|8226|•/);
 
+  let iconWrites = 0;
+  let iconMarkup = button.innerHTML;
+  Object.defineProperty(button, 'innerHTML', {
+    get() { return iconMarkup; },
+    set(value) { iconWrites += 1; iconMarkup = value; },
+  });
+  playback.currentTime = 1;
+  context.refreshTrackModalPlaybackState();
+  assert.equal(iconWrites, 0, 'time updates must preserve the icon targeted by an in-progress click');
+
   playback.paused = true;
   context.refreshTrackModalPlaybackState();
+  assert.equal(iconWrites, 1, 'a playback state change updates the icon once');
   assert.equal(attributes.get('aria-label'), 'Play track');
+  assert.match(button.innerHTML, /^<svg class="ui-icon album-track-table__play-icon ui-icon--play"/);
+  assert.doesNotMatch(button.innerHTML, /&#x25B6;|▶/);
+});
+
+test('Loose Tracks playback refresh applies the AlbumTrackTable current and animation contract', () => {
+  const trackPath = 'C:\\Music\\Loose Track.flac';
+  const attributes = new Map([['data-track-row-path', trackPath]]);
+  const classes = new Map();
+  const buttonAttributes = new Map();
+  const button = {
+    innerHTML: '',
+    getAttribute(name) { return buttonAttributes.get(name) || ''; },
+    setAttribute(name, value) { buttonAttributes.set(name, String(value)); },
+  };
+  const durationEl = { dataset: { originalDuration: '3:00' }, innerHTML: '' };
+  const row = {
+    dataset: {},
+    classList: { toggle(name, active) { classes.set(name, Boolean(active)); } },
+    getAttribute(name) { return attributes.get(name) || ''; },
+    querySelector(selector) {
+      if (selector === '.play-track-button') return button;
+      if (selector === '[data-track-duration-path]') return durationEl;
+      return null;
+    },
+  };
+  const rootAttributes = new Map();
+  const context = loadHelper([], {
+    state: { player: { current: { path: trackPath } } },
+    document: {
+      documentElement: { getAttribute(name) { return rootAttributes.get(name) || ''; } },
+      getElementById(id) { return id === 'non-album-modal' ? { hidden: false } : null; },
+      querySelectorAll(selector) {
+        return selector === '#non-album-modal [data-track-row-path]' ? [row] : [];
+      },
+    },
+    formatTrackDuration(value) { return Number(value) === 42 ? '0:42' : '3:00'; },
+    getPlayerPlaybackSnapshot: () => ({ currentTime: 42, duration: 180, ended: false, paused: false }),
+    escapeHtml: (value) => String(value ?? ''),
+  });
+
+  context.refreshNonAlbumModalPlaybackState();
+  assert.equal(classes.get('album-track-table__row--current'), true);
+  assert.equal(classes.get('album-track-table__row--playing'), true);
+  assert.equal(classes.get('album-track-table__row--animated'), true);
+  assert.equal(row.dataset.trackPlaying, 'true');
+  assert.equal(buttonAttributes.get('aria-label'), 'Pause track');
+  assert.match(button.innerHTML, /^<svg class="ui-icon album-track-table__play-icon ui-icon--pause"/);
+  assert.doesNotMatch(button.innerHTML, /&#x23F8;|⏸/);
+  assert.equal(durationEl.innerHTML, '0:42 / 3:00');
+  assert.doesNotMatch(durationEl.innerHTML, /sep|8226|•/);
+
+  rootAttributes.set('data-album-playing-row-animation', 'disabled');
+  context.refreshNonAlbumModalPlaybackState();
+  assert.equal(classes.get('album-track-table__row--animated'), false);
 });
 
 test('track modal cover transition hides pending image chrome over a blank placeholder', () => {
@@ -692,6 +770,30 @@ test('Album Details passes main and bonus group semantics into AlbumTrackTable',
     ],
   );
 });
+
+for (const scenario of [
+  { name: 'explicit bonus', discs: [['1', 180], ['Bonus Disc', 1350]], expected: ['180', '1350'] },
+  { name: 'multiple main and bonus discs', discs: [['1', 100], ['2', 80], ['Bonus Disc', 1000], ['Extras', 350]], expected: ['180', '1350'] },
+  { name: 'ordinary numbered discs', discs: [['1', 180], ['2', 1350]], expected: ['', ''] },
+  { name: 'bonus-only album', discs: [['Bonus Disc', 1350]], expected: ['', '1350'] },
+]) {
+  test(`Album Details supplies classified duration summaries for ${scenario.name}`, () => {
+    let renderedConfig;
+    const context = loadHelper([], {
+      state: { player: { current: null }, view: { query: '' } },
+      document: { documentElement: { getAttribute: () => null } },
+      getPlayerPlaybackSnapshot: () => ({ paused: true, ended: false }),
+      formatTrackDuration: (seconds) => seconds > 0 ? String(seconds) : '',
+      buildAlbumTrackTableHtml(config) { renderedConfig = config; return '<div>table</div>'; },
+    });
+    context.buildTrackListHtml(scenario.discs.map(([label, seconds], index) => ({
+      path: `Bonus title/Extras folder/track-${index}.flac`, title: 'Bonus title',
+      disc_number: index + 1, disc_number_raw: label, track_number: 1, duration_seconds: seconds,
+    })), null, '25m 30s');
+    assert.deepEqual([renderedConfig.mainLength, renderedConfig.bonusLength], scenario.expected);
+    assert.equal(renderedConfig.totalLength, '25m 30s');
+  });
+}
 
 test('Album Details displays the physical track number, then filename number, before row position', () => {
   const context = loadHelper([]);
@@ -2685,6 +2787,7 @@ function createTrackModalCoverContext(options = {}) {
   const directFetchCalls = [];
   const documentBody = new TrackModalTestElement('body');
   const context = {
+    ButtonComponent,
     console,
     Promise,
     URL,
@@ -2902,7 +3005,7 @@ test('missing album removal confirmation uses the approved destructive copy', ()
   );
 });
 
-test('confirmed missing album removal immediately updates gallery counts and removes an empty artist', () => {
+test('confirmed missing album removal drops the card and preserves authoritative sidebar membership until refresh', () => {
   const missingAlbum = {
     key: 'transatlantic-roine-stolt-mixes',
     name: 'SMPTe - The Roine Stolt Mixes',
@@ -2958,7 +3061,7 @@ test('confirmed missing album removal immediately updates gallery counts and rem
   );
   assert.deepEqual(
     Array.from(context.state.view.artists_sidebar, (artist) => artist.artist),
-    ['King Crimson'],
+    ['Transatlantic', 'King Crimson'],
   );
   assert.equal(context.state.view.album_count, 1);
   assert.equal(context.state.view.artist_count, 1);
@@ -2967,6 +3070,149 @@ test('confirmed missing album removal immediately updates gallery counts and rem
   assert.equal(context.state.utility.selectedProblematicKey, '');
   assert.deepEqual(renders, [{ preserveScroll: true }]);
 });
+
+for (const [name, libraryAlbumCount, mountedAlbumCount] of [
+  ['filtered one of many', 7, 1], ['multiple mounted', 3, 3], ['last album', 1, 1],
+]) {
+  test(`confirmed missing removal reconciles ${name} sidebar membership from the server`, async () => {
+    const album = { key: 'missing', name: 'Missing', album_artist: 'Owner', inventory_status: 'missing', allowed_actions: { 'library.inventory.manage': true } };
+    const mounted = [album, ...Array.from({ length: mountedAlbumCount - 1 }, (_, index) => ({ key: `other-${index}`, album_artist: 'Owner' }))];
+    const sidebar = [{ artist: 'Owner', count: libraryAlbumCount }];
+    const canonicalSidebar = libraryAlbumCount > 1 ? [{ artist: 'Owner', count: libraryAlbumCount - 1 }] : [];
+    let refreshes = 0;
+    const context = loadHelper(mounted, {
+      state: { view: { selected_artist: 'Owner', artist_groups: [{ artist: 'Owner', albums: mounted }], artists_sidebar: sidebar, album_count: libraryAlbumCount, artist_count: 1 }, ui: {} },
+      async showAppConfirmDialog() { return true; },
+      async fetch() { return { ok: true, status: 200, json: async () => ({ removed_album_key: 'missing', library_revision: 9 }) }; },
+      buildUrl: () => '/?artist=Owner',
+      async fetchAndRender() {
+        refreshes += 1;
+        assert.deepEqual(Array.from(context.state.view.artists_sidebar), sidebar, 'a filtered gallery cannot decide whole-library membership');
+        context.state.view.artists_sidebar = canonicalSidebar;
+        context.state.view.album_count = libraryAlbumCount - 1;
+        context.state.view.artist_count = canonicalSidebar.length;
+        return true;
+      },
+      closeTrackModal() {}, async loadProblematicFiles() {}, showToast() {}, renderView() {},
+    });
+    assert.equal(await context.confirmMissingAlbumRemoval(album), true);
+    assert.equal(refreshes, 1);
+    assert.deepEqual(Array.from(context.state.view.artists_sidebar), canonicalSidebar);
+    assert.equal(context.state.view.album_count, libraryAlbumCount - 1);
+    assert.equal(context.state.view.artist_count, canonicalSidebar.length);
+  });
+}
+
+for (const queued of [false, true]) {
+test(`confirmed removal fences old view responses and restarts the latest ${queued ? 'queued' : 'active'} navigation target`, async () => {
+  const album = { key: 'missing', name: 'Missing', album_artist: 'Owner', inventory_status: 'missing', allowed_actions: { 'library.inventory.manage': true } };
+  let resolveRemoval;
+  const refreshes = [];
+  let aborts = 0;
+  const context = loadHelper([album], {
+    state: { view: { selected_artist: 'Owner', artist_groups: [{ artist: 'Owner', albums: [album] }], artists_sidebar: [{ artist: 'Owner', count: 3 }], album_count: 3 },
+      ui: { viewStateRevision: 4, activeViewRequestId: 8, activeViewRequestUrl: '/view-data?artist=Later', activeViewRequestPush: true, activeViewRequestController: { abort() { aborts += 1; } } }, busy: true },
+    async showAppConfirmDialog() { return true; },
+    fetch: () => new Promise(resolve => { resolveRemoval = resolve; }),
+    buildUrl: view => `/?artist=${view.selected_artist}`,
+    closeTrackModal() {}, async loadProblematicFiles() {}, showToast() {}, renderView() {},
+  });
+  vm.runInContext(fs.readFileSync(path.join(path.dirname(helperPath), 'gallery-refresh-and-status.js'), 'utf8'), context);
+  context.renderView = () => {};
+  context.fetchAndRender = async (url, push, options) => {
+    assert.equal(context.state.view.artist_groups.length, 0, 'the removed card disappears before canonical refresh');
+    refreshes.push({ url, push, options });
+    context.state.view = { selected_artist: 'Later', artist_groups: [], artists_sidebar: [{ artist: 'Owner', count: 2 }], album_count: 2 };
+    return true;
+  };
+  const removing = context.confirmMissingAlbumRemoval(album);
+  await new Promise(resolve => setImmediate(resolve));
+  if (queued) context.state.ui.pendingViewRequest = { url: '/?artist=Later', push: true, options: { preserveScroll: false } };
+  resolveRemoval({ ok: true, status: 200, json: async () => ({ removed_album_key: 'missing', library_revision: 9 }) });
+  assert.equal(await removing, true);
+  if (context.requestOwnsCurrentViewState(8, 4)) {
+    context.state.view = { selected_artist: 'Owner', artist_groups: [{ artist: 'Owner', albums: [album] }], album_count: 3 };
+  }
+  assert.equal(context.state.view.selected_artist, 'Later');
+  assert.equal(context.state.view.album_count, 2);
+  assert.equal(aborts, 1);
+  assert.equal(refreshes.length, 1);
+  assert.equal(refreshes[0].url, queued ? '/?artist=Later' : '/view-data?artist=Later');
+  assert.equal(refreshes[0].push, true);
+  assert.equal(refreshes[0].options.preserveScroll, !queued);
+  assert.equal(refreshes[0].options.restartIfSameUrl, true);
+  // A later user navigation still becomes the current owner normally.
+  context.claimLocalViewStateNavigation();
+  context.state.ui.activeViewRequestId = 9;
+  assert.equal(context.requestOwnsCurrentViewState(9, context.readViewStateRevision()), true);
+});
+}
+
+for (const queued of [false, true]) {
+  test(`removal conflict preserves the latest ${queued ? 'queued' : 'active'} navigation`, async () => {
+    const album = { key: 'missing', inventory_status: 'missing', allowed_actions: { 'library.inventory.manage': true } };
+    let resolveRemoval;
+    const refreshes = [];
+    let aborts = 0;
+    const context = loadHelper([album], {
+      state: { view: { selected_artist: 'Owner', artist_groups: [{ artist: 'Owner', albums: [album] }] },
+        ui: { viewStateRevision: 4, activeViewRequestId: 8, activeViewRequestUrl: '/view-data?artist=Later',
+          activeViewRequestPush: true, activeViewRequestController: { abort() { aborts += 1; } } }, busy: true },
+      showAppConfirmDialog: async () => true,
+      fetch: () => new Promise(resolve => { resolveRemoval = resolve; }),
+      buildUrl: view => `/?artist=${view.selected_artist}`,
+      loadProblematicFiles: async () => {}, showToast() {},
+    });
+    vm.runInContext(fs.readFileSync(path.join(path.dirname(helperPath), 'gallery-refresh-and-status.js'), 'utf8'), context);
+    context.fetchAndRender = async (url, push, options) => {
+      assert.equal(context.state.view.artist_groups[0].albums[0], album, 'conflict must retain the card');
+      refreshes.push({ url, push, options });
+      context.state.view.selected_artist = 'Later';
+    };
+    const removing = context.confirmMissingAlbumRemoval(album);
+    await new Promise(resolve => setImmediate(resolve));
+    if (queued) context.state.ui.pendingViewRequest = { url: '/?artist=Latest', push: true, options: { preserveScroll: false } };
+    resolveRemoval({ ok: false, status: 409, json: async () => ({}) });
+    assert.equal(await removing, false);
+    assert.equal(refreshes.length, 1);
+    assert.equal(refreshes[0].url, queued ? '/?artist=Latest' : '/view-data?artist=Later');
+    assert.equal(refreshes[0].push, true);
+    assert.equal(refreshes[0].options.preserveScroll, !queued);
+    assert.equal(refreshes[0].options.restartIfSameUrl, true);
+    assert.equal(context.requestOwnsCurrentViewState(8, 4), false);
+    assert.equal(aborts, 1);
+  });
+}
+
+for (const destination of ['original', 'other', 'closed']) {
+  test(`successful delayed removal respects ${destination} modal ownership`, async () => {
+    const album = { key: 'missing', inventory_status: 'missing', allowed_actions: { 'library.inventory.manage': true } };
+    const other = { key: 'other' };
+    let current = album;
+    let resolveRemoval;
+    let closed = 0;
+    const overlay = { hidden: false };
+    const context = loadHelper([album], {
+      showAppConfirmDialog: async () => true,
+      fetch: () => new Promise(resolve => { resolveRemoval = resolve; }),
+      getCurrentTrackModalAlbum: () => current,
+      getTrackModalElements: () => ({ overlay }),
+      closeTrackModal() { closed += 1; current = null; overlay.hidden = true; },
+      applyMissingAlbumRemovalToView() {}, loadProblematicFiles: async () => {}, showToast() {},
+    });
+    const removing = context.confirmMissingAlbumRemoval(album);
+    await new Promise(resolve => setImmediate(resolve));
+    if (destination === 'other') current = other;
+    if (destination === 'closed') { current = null; overlay.hidden = true; }
+    resolveRemoval({ ok: true, status: 200, json: async () => ({}) });
+    assert.equal(await removing, true);
+    assert.equal(closed, destination === 'original' ? 1 : 0);
+    if (destination === 'other') {
+      assert.equal(current, other);
+      assert.equal(overlay.hidden, false);
+    }
+  });
+}
 
 test('missing album conflict keeps the card and refreshes both server-owned surfaces', async () => {
   const album = {
@@ -3034,6 +3280,47 @@ test('missing album conflict keeps the card and refreshes both server-owned surf
   ]]);
 });
 
+for (const navigation of ['stay', 'closed', 'other-album', 'changed-during-load']) {
+  test(`removal conflict refreshes only the still-owned album details (${navigation})`, async () => {
+    const missing = { key: 'artist::returned', name: 'Returned', album_artist: 'Artist',
+      inventory_status: 'missing', allowed_actions: { 'library.inventory.manage': true } };
+    const active = { ...missing, inventory_status: 'active', tracks: [{ path: 'owned.flac' }] };
+    const other = { key: 'other::album' };
+    let current = navigation === 'other-album' ? other : missing;
+    const overlay = { hidden: navigation === 'closed' };
+    const loaded = [], invalidated = [], rendered = [];
+    const context = loadHelper([missing], {
+      showAppConfirmDialog: async () => true,
+      fetch: async () => ({ ok: false, status: 409, json: async () => ({}) }),
+      buildUrl: () => '/view-data', fetchAndRender: async () => {},
+      loadProblematicFiles: async () => {}, showToast() {},
+      getTrackModalElements: () => ({ overlay }),
+      getCurrentTrackModalAlbum: () => current,
+      invalidateHydratedTrackModalAlbumDetails: albums => invalidated.push(albums),
+      invalidatePendingTrackModalLoad: () => ++context.state.ui.pendingTrackModalLoadToken,
+      loadTrackModalAlbumDetails: async key => {
+        loaded.push(key);
+        if (navigation === 'changed-during-load') {
+          current = other;
+          ++context.state.ui.pendingTrackModalLoadToken;
+        }
+        return active;
+      },
+      openTrackModal: album => { current = album; rendered.push(album); },
+    });
+    context.state.ui = { pendingTrackModalLoadToken: 0, trackModalCoverLightboxGallery: false };
+    assert.equal(await context.confirmMissingAlbumRemoval(missing), false);
+    if (navigation === 'stay' || navigation === 'changed-during-load') {
+      assert.deepEqual(loaded, [missing.key]);
+      assert.equal(invalidated[0][0], missing);
+    } else assert.deepEqual(loaded, []);
+    if (navigation === 'stay') {
+      assert.equal(current.inventory_status, 'active');
+      assert.deepEqual(rendered, [active]);
+    } else assert.deepEqual(rendered, []);
+  });
+}
+
 test('successful missing album confirmation closes details and refreshes Problematic Files', async () => {
   const album = {
     key: 'transatlantic-roine-stolt-mixes',
@@ -3044,6 +3331,8 @@ test('successful missing album confirmation closes details and refreshes Problem
   };
   const calls = { applied: [], closed: 0, problematicRefreshes: [] };
   const context = loadHelper([album], {
+    getCurrentTrackModalAlbum: () => album,
+    getTrackModalElements: () => ({ overlay: { hidden: false } }),
     async showAppConfirmDialog() { return true; },
     async fetch() {
       return {
@@ -3542,6 +3831,7 @@ test('Various Artists modal playback preserves album artist in markup and queue 
   const folder = { dataset: {} };
   const editTags = { dataset: {} };
   const context = {
+    ButtonComponent,
     console,
     document: {
       getElementById() {
@@ -3635,15 +3925,18 @@ test('Various Artists modal playback preserves album artist in markup and queue 
     duplicate_sources: [
       {
         folder_name: 'Folder A',
+        total_duration_display: '40:00',
         tracks: [{ path: 'C:\\Music\\Artist Alpha\\Album Alpha\\01 Track.flac' }],
       },
       {
         folder_name: 'Folder B',
+        total_duration_display: '40:01',
         tracks: [{ path: 'D:\\Mirror\\Artist Alpha\\Album Alpha\\01 Track.flac' }],
       },
     ],
   };
   const context = {
+    ButtonComponent,
     console,
     document: {
       getElementById() {
@@ -3717,13 +4010,22 @@ test('Various Artists modal playback preserves album artist in markup and queue 
   context.getTrackModalElements = () => baseElements;
   vm.createContext(context);
   vm.runInContext(helperSource, context, { filename: helperPath });
+  album.total_duration_display = '1:20:01';
+  for (const component of albumUiComponentSources) vm.runInContext(component.source, context, { filename: component.filename });
 
   context.renderTrackModalRelease(album);
 
   assert.match(duplicateWarning.innerHTML, /data-album-key="alpha"/);
   assert.match(duplicateWarning.innerHTML, /data-duplicate-source-index="0"/);
   assert.match(duplicateWarning.innerHTML, /data-duplicate-source-index="1"/);
+  assert.match(duplicateWarning.innerHTML, /data-on-page-alert="warning"/);
+  assert.match(duplicateWarning.innerHTML, /ui-button__content/);
   assert.doesNotMatch(duplicateWarning.innerHTML, /data-duplicate-folder-album=/);
+  assert.match(baseElements.list.innerHTML, /Total Length: 40:00/);
+  context.state.modalDuplicateSourceIndices.alpha = 1;
+  context.renderTrackModalRelease(album);
+  assert.match(baseElements.list.innerHTML, /Total Length: 40:01/);
+  assert.doesNotMatch(baseElements.list.innerHTML, /Total Length: 1:20:01/);
 }
 
 {
@@ -3816,6 +4118,7 @@ test('Various Artists modal playback preserves album artist in markup and queue 
     editTags: { dataset: {} },
   };
   const context = {
+    ButtonComponent,
     console,
     document: {
       getElementById() {
@@ -3988,3 +4291,26 @@ test('Various Artists modal playback preserves album artist in markup and queue 
     ['Original - 2000', 'Special Edition - 2000'],
   );
 }
+
+
+test('Album Details passes exact explicit bonus and main durations to final summary', () => {
+  let config;
+  const context = loadHelper([], {
+    state: { player: { current: null }, view: { query: '' } },
+    document: { documentElement: { getAttribute: () => null } },
+    formatAlbumDuration: (seconds) => `${seconds}s`,
+    formatTrackDuration: () => '',
+    getPlayerPlaybackSnapshot: () => ({ paused: true, ended: false }),
+    buildAlbumTrackTableHtml(value) { config = value; return 'table'; },
+  });
+  context.buildTrackListHtml([
+    { path: 'main.flac', title: 'Main', disc_number: 1, duration_seconds: 180 },
+    { path: 'bonus.flac', title: 'Bonus', disc_number: 2, disc_number_raw: 'Bonus Disc', duration_seconds: 1350 },
+  ], { total_duration_seconds: 1530 });
+  assert.equal(config.mainLength, '180s');
+  assert.equal(config.bonusLength, '1350s');
+  context.buildTrackListHtml([
+    { path: 'bonus-title.flac', title: 'Bonus', duration_seconds: 180 },
+  ], { total_duration_seconds: 180 });
+  assert.equal(config.bonusLength, '');
+});

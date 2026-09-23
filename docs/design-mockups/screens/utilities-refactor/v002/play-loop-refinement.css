@@ -1,0 +1,112 @@
+/* Refinement: expandable controls overlay the waveform without changing layout. */
+.player-row{align-items:flex-start;padding:32px 14px 20px;overflow:visible}
+.player-row>.cluster{width:56px;flex:0 0 56px;height:56px;z-index:4}
+.player-row>.companion{width:52px;flex-basis:52px;height:52px}
+.track{position:relative;margin-top:11px}
+.track-head{position:absolute;left:0;right:0;bottom:calc(100% + 7px)}
+.wave{margin-top:0}
+[data-variant=companion] .track{margin-top:9px}
+.option .editbar{display:none!important}
+.cluster .loop-edit-actions{position:absolute;z-index:0}
+.cluster .loop-edit-action-pod{position:relative;display:flex;align-items:center;overflow:hidden;background:#173c2c;border:1px solid #427b57;transition:width 150ms ease}
+.cluster .loop-edit-action-expanded{display:flex;align-items:center;height:100%}
+.cluster .loop-edit-action-expanded[hidden],.cluster .loop-edit-action[hidden]{display:none}
+.cluster .loop-edit-action{display:grid;place-items:center;padding:0;position:relative;background:transparent;color:#c8e4d4;border:0;border-radius:0;flex-shrink:0}
+.cluster .loop-edit-action-icon{display:block;width:18px;height:18px;background:currentColor;mask-size:contain;mask-position:center;mask-repeat:no-repeat;transform:none!important}
+.cluster .is-scissors{mask-image:url('components/loop-scissors-mask.png')}
+.cluster .is-cancel{mask-image:url('components/loop-cancel-mask.png')}
+.cluster .loop-edit-action-divider{width:1px;height:16px;background:#ffffff20;flex-shrink:0}
+.cluster .loop-edit-action:hover,.cluster .loop-edit-action:focus-visible{color:#75E8A7;background:#235038}
+.cluster .loop-edit-action:hover .is-scissors,.cluster .loop-edit-action:focus-visible .is-scissors{filter:drop-shadow(0 0 5px #42DB89)}
+.cluster .loop-edit-action-cancel:hover,.cluster .loop-edit-action-cancel:focus-visible{color:#FF9CA7;background:#4A252D}
+.cluster .loop-edit-action-cancel:hover .is-cancel,.cluster .loop-edit-action-cancel:focus-visible .is-cancel{filter:drop-shadow(0 0 5px #F36579)}
+.cluster .loop-edit-action:focus-visible{outline:1px solid currentColor;outline-offset:-2px}
+.capsule{width:56px;height:56px;padding:4px;display:block;border:0;background:transparent;isolation:isolate}
+.capsule::before{content:"";position:absolute;left:0;top:0;width:56px;height:56px;border:1px solid #346448;border-radius:30px;background:#10291d;z-index:-1;transition:width 150ms ease;box-sizing:border-box}
+.capsule.is-pointer-revealed::before,.capsule:has(:focus-visible)::before{width:90px}
+.capsule.is-editing.is-pointer-revealed::before,.capsule.is-editing:has(:focus-visible)::before{width:123px}
+.capsule .play{position:relative;z-index:2}
+.capsule .loop-edit-actions{left:52px;top:5px;height:46px;width:34px;opacity:0;pointer-events:none}
+.capsule.is-pointer-revealed .loop-edit-actions,.capsule:has(:focus-visible) .loop-edit-actions{opacity:1;pointer-events:auto}
+.capsule .loop-edit-action-pod{height:46px;width:34px;padding:0;border:0;border-radius:0 24px 24px 0;background:transparent}
+.capsule.is-editing .loop-edit-action-pod{width:65px}
+.capsule .loop-edit-action{width:32px;min-width:32px;height:44px;min-height:44px}
+.companion{height:52px;width:52px}
+.companion .loop-edit-actions{left:26px;top:26px;height:26px;width:58px}
+.companion .loop-edit-action-pod{height:26px;width:58px;padding-left:24px;border-radius:0 14px 14px 0;clip-path:path('M26 0 H120 V26 H0 A26 26 0 0 0 26 0 Z')}
+.companion .loop-edit-action-pod::before{width:26px;height:26px;background:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 26 26'%3E%3Cpath d='M26 0A26 26 0 0 1 0 26' fill='none' stroke='%23427b57'/%3E%3C/svg%3E")}
+.companion .loop-edit-actions.is-active .loop-edit-action-pod,.companion .loop-edit-actions[data-loop-action-engaged=true] .loop-edit-action-pod{width:88px}
+.companion .loop-edit-action,.companion .loop-edit-actions[data-loop-action-engaged=true] .loop-edit-action{width:31px;min-width:31px;height:24px;min-height:24px}
+.companion .loop-edit-actions[data-loop-action-engaged=false] .loop-edit-action-cancel,.companion .loop-edit-actions[data-loop-action-engaged=false] .loop-edit-action-divider{visibility:visible}
+.companion .loop-edit-action-cancel:hover,.companion .loop-edit-action-cancel:focus-visible{color:#FF9CA7;background:#4A252D}
+.option .range-handle{position:absolute;top:-3px;height:40px;width:8px;min-width:8px;padding:0;border:0;border-radius:3px;background:#a1d1e9;transform:translateX(-50%);cursor:ew-resize;z-index:2}
+.option:not(.editing) .range-handle{display:none}
+.option.editing .wave::after{left:var(--loop-range-start);right:calc(100% - var(--loop-range-end))}
+@media(prefers-reduced-motion:reduce){.capsule::before,.cluster .loop-edit-action-pod{transition:none}}
+/* Editing actions glow at the glyph; preserve idle scissors shade. */
+.cluster .loop-edit-actions.is-active .loop-edit-action:hover,
+.cluster .loop-edit-actions.is-active .loop-edit-action:focus-visible,
+.cluster .loop-edit-actions.is-active .loop-edit-action:active {background:transparent}
+.cluster .loop-edit-actions.is-active .loop-edit-action:hover .is-scissors,
+.cluster .loop-edit-actions.is-active .loop-edit-action:focus-visible .is-scissors {filter:drop-shadow(0 0 3px #42DB89) drop-shadow(0 0 7px #42DB8999)}
+.cluster .loop-edit-actions.is-active .loop-edit-action-cancel:hover .is-cancel,
+.cluster .loop-edit-actions.is-active .loop-edit-action-cancel:focus-visible .is-cancel {filter:drop-shadow(0 0 3px #F36579) drop-shadow(0 0 7px #F3657999)}
+
+/* Explicitly cover both expanded variants, including inherited button hover rules. */
+.cluster .loop-edit-action-expanded .loop-edit-action:hover,
+.cluster .loop-edit-action-expanded .loop-edit-action:focus-visible,
+.cluster .loop-edit-action-expanded .loop-edit-action:active {
+  background:transparent!important;background-image:none!important;box-shadow:none!important;
+}
+
+/* Fill each capsule with larger, centered action glyphs. */
+.capsule .loop-edit-action-icon{width:26px;height:26px}
+.companion .loop-edit-action-icon{width:22px;height:22px}
+
+.companion .loop-edit-action-icon.is-cancel{width:18px;height:18px}
+
+/* Brighter cancel glyph and glow on hover. */
+.cluster .loop-edit-actions.is-active .loop-edit-action-cancel:hover{color:#FFADB7}
+.cluster .loop-edit-actions.is-active .loop-edit-action-cancel:hover .is-cancel{filter:drop-shadow(0 0 3px #FF7C90) drop-shadow(0 0 7px #FF7C9099)}
+
+/* Companion uses the same reveal-on-hover flow, preserving edit state. */
+.companion .loop-edit-actions{opacity:0;pointer-events:none}
+.companion.is-pointer-revealed .loop-edit-actions,.companion:has(:focus-visible) .loop-edit-actions{opacity:1;pointer-events:auto}
+
+/* Idle hover fills the entire companion contour, including its curved join. */
+.companion .loop-edit-actions:not(.is-active) .loop-edit-action-pod:has(.loop-edit-action-enter:hover),
+.companion .loop-edit-actions:not(.is-active) .loop-edit-action-pod:has(.loop-edit-action-enter:focus-visible){background:#235038}
+
+/* Stronger red cancel glyph with a bright core and wider halo. */
+.cluster .loop-edit-actions.is-active .loop-edit-action-cancel:hover,
+.cluster .loop-edit-actions.is-active .loop-edit-action-cancel:focus-visible{color:#FFB8C0}
+.cluster .loop-edit-actions.is-active .loop-edit-action-cancel:hover .is-cancel,
+.cluster .loop-edit-actions.is-active .loop-edit-action-cancel:focus-visible .is-cancel{filter:drop-shadow(0 0 2px #FF536D) drop-shadow(0 0 5px #FF365A) drop-shadow(0 0 9px #FF365ACC)}
+
+/* Preserve reveal during the pointer-exit grace period. */
+.capsule.is-pointer-revealed::before{width:90px}
+.capsule.is-editing.is-pointer-revealed::before{width:123px}
+.capsule.is-pointer-revealed .loop-edit-actions,.companion.is-pointer-revealed .loop-edit-actions{opacity:1;pointer-events:auto}
+
+/* Saturated red cancel action, with a vivid red hover glow. */
+.cluster .loop-edit-actions .loop-edit-action-cancel{color:#c8e4d4}
+.cluster .loop-edit-actions .loop-edit-action-cancel:hover,
+.cluster .loop-edit-actions .loop-edit-action-cancel:focus-visible{color:#FF3030}
+.cluster .loop-edit-actions .loop-edit-action-cancel:hover .is-cancel,
+.cluster .loop-edit-actions .loop-edit-action-cancel:focus-visible .is-cancel{filter:drop-shadow(0 0 2px #FF2020) drop-shadow(0 0 5px #FF2020) drop-shadow(0 0 9px #FF2020CC)}
+.cluster .loop-edit-actions.is-active .loop-edit-action-cancel:hover,
+.cluster .loop-edit-actions.is-active .loop-edit-action-cancel:focus-visible{color:#FF3030}
+.cluster .loop-edit-actions.is-active .loop-edit-action-cancel:hover .is-cancel,
+.cluster .loop-edit-actions.is-active .loop-edit-action-cancel:focus-visible .is-cancel{filter:drop-shadow(0 0 2px #FF2020) drop-shadow(0 0 5px #FF2020) drop-shadow(0 0 9px #FF2020CC)}
+
+/* Soft outward falloff around the hovered glyphs. */
+.cluster .loop-edit-actions .loop-edit-action:hover .is-scissors,
+.cluster .loop-edit-actions.is-active .loop-edit-action:hover .is-scissors,
+.cluster .loop-edit-actions.is-active .loop-edit-action:focus-visible .is-scissors{filter:drop-shadow(0 0 2px #42DB89) drop-shadow(0 0 5px #42DB89B3) drop-shadow(0 0 10px #42DB8966) drop-shadow(0 0 16px #42DB8933)}
+.cluster .loop-edit-actions .loop-edit-action-cancel:hover .is-cancel,
+.cluster .loop-edit-actions.is-active .loop-edit-action-cancel:hover .is-cancel,
+.cluster .loop-edit-actions.is-active .loop-edit-action-cancel:focus-visible .is-cancel{filter:drop-shadow(0 0 2px #FF2020) drop-shadow(0 0 5px #FF2020B3) drop-shadow(0 0 10px #FF202066) drop-shadow(0 0 16px #FF202033)}
+.cluster .loop-edit-actions.is-active .loop-edit-action-pod{overflow:visible}
+.companion .loop-edit-actions.is-active .loop-edit-action-pod{clip-path:none;background:transparent;border-color:transparent}
+.companion .loop-edit-actions.is-active .loop-edit-action-pod::after{content:'';position:absolute;inset:-1px;background:#173c2c;border:1px solid #427b57;border-radius:0 14px 14px 0;clip-path:path('M26 0 H120 V26 H0 A26 26 0 0 0 26 0 Z');z-index:-1}
+.companion .loop-edit-actions.is-active .loop-edit-action-pod{isolation:isolate}

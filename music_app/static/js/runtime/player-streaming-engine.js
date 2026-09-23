@@ -347,6 +347,11 @@ function closeStreamingContinuityRole(reason, { releaseWorklet = true } = {}) {
         generation: continuity.generation,
         streamId: continuity.streamId,
       });
+      engine.node.port.postMessage({
+        type: 'expect-continuity',
+        generation: continuity.generation,
+        active: false,
+      });
     } else {
       engine.node.port.postMessage({
         type: 'set-loop',
@@ -1033,6 +1038,7 @@ function handleStreamingWorkletMessage(message) {
           outgoingTrackPath,
           incomingTrackPath,
           outgoingPlaybackSnapshot,
+          incomingListenSession: continuity.measuredListenSession || null,
           renderedFrame: message.renderedFrame,
           continuityKind: promotedLoop?.kind || 'queued-next',
         }), 'boundary-facade-error');
@@ -1081,6 +1087,16 @@ function handleStreamingWorkletMessage(message) {
         || !Number.isInteger(message.timelineFrame) || message.timelineFrame < 0
         || current.endedNotified) {
       engine.diagnostics.staleMessages += 1;
+      return;
+    }
+    const pendingReplacement = engine.pendingSeek;
+    if (pendingReplacement?.kind === 'replacement'
+        && pendingReplacement.generation === message.generation
+        && pendingReplacement.currentStreamId === current.streamId
+        && pendingReplacement.streamId === engine.roles.continuity?.streamId) {
+      if (!engine.snapshot.paused) {
+        engine.node.port.postMessage({ type: 'play', generation: engine.generation });
+      }
       return;
     }
     current.endedNotified = true;
@@ -1155,12 +1171,16 @@ function handleStreamingWorkletMessage(message) {
   }
   if (message.type === 'underrun') {
     engine.diagnostics.underruns += 1;
+    if (typeof breakMeasuredListenSegment === 'function') breakMeasuredListenSegment(roleState.measuredListenSession);
     return;
   }
   if (message.type === 'consumed' && streamingWireRoleAccepted(roleState, message.role)
       && Number.isInteger(message.frames) && message.frames >= 0
       && Number.isInteger(message.bufferedFrames) && message.bufferedFrames >= 0) {
     recordStreamingRenderedPcmEvidence(roleState, message);
+    if (typeof recordMeasuredStreamingFrames === 'function') {
+      recordMeasuredStreamingFrames(roleState, message, Number(engine.context?.sampleRate) || STREAMING_SAMPLE_RATE);
+    }
     const capacityFrames = streamingRoleCapacityFrames(roleState);
     const reconciledBufferedFrames = message.frames === 0
       ? message.bufferedFrames
@@ -1785,6 +1805,13 @@ async function scheduleStreamingContinuity(track, options = {}) {
   const startFrame = Math.round(normalized.startSeconds * STREAMING_SAMPLE_RATE);
   const continuity = openStreamingRole('continuity', track, startFrame, normalized);
   if (!continuity) return null;
+  if (normalized.kind === 'queued-next') {
+    engine.node.port.postMessage({
+      type: 'expect-continuity',
+      generation: engine.generation,
+      active: true,
+    });
+  }
   if (normalized.kind !== 'queued-next') {
     engine.loopContinuity = {
       ...normalized,

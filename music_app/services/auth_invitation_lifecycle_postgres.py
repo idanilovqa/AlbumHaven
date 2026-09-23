@@ -21,6 +21,7 @@ from music_app.services.auth_invitation_models import (
     validated_issued_invitation_token,
 )
 from music_app.services.auth_passwords import PasswordCredential, hash_password
+from music_app.services.auth_credential_attempts_postgres import shared_verification_capacity
 from music_app.services.auth_tokens import hash_opaque_token, issue_opaque_token
 
 try:  # pragma: no cover - exercised when the optional runtime driver is present.
@@ -60,6 +61,7 @@ class PostgresInvitationLifecycleService:
         password_hasher: Callable[..., PasswordCredential] = hash_password,
         breached_checker: Callable[[str], bool],
         audit_repository: Any,
+        verification_semaphore: Any = None,
     ) -> None:
         payload = config if isinstance(config, Mapping) else {}
         self._database_url = str(payload.get(_DATABASE_URL_KEY) or "").strip()
@@ -90,6 +92,7 @@ class PostgresInvitationLifecycleService:
         self._password_hasher = password_hasher
         self._breached_checker = breached_checker
         self._audit = audit_repository
+        self._semaphore = verification_semaphore or shared_verification_capacity(payload)
 
     def exchange_invitation_token(
         self,
@@ -101,7 +104,6 @@ class PostgresInvitationLifecycleService:
         digest = _digest(raw_invitation_token)
         if digest is None:
             return None
-        now = _aware_utc(self._clock())
         try:
             with self._operation() as connection:
                 candidates = connection.execute(
@@ -156,7 +158,7 @@ class PostgresInvitationLifecycleService:
                     return None
                 invitations = connection.execute(
                     """
-                    select invitation.id
+                    select invitation.id, invitation.expires_at
                     from app.account_invitation_tokens invitation
                     where invitation.id = %s
                       and invitation.account_id = %s
@@ -164,7 +166,6 @@ class PostgresInvitationLifecycleService:
                       and invitation.token_hash = %s
                       and invitation.consumed_at is null
                       and invitation.revoked_at is null
-                      and invitation.expires_at > %s
                     for update of invitation
                     """,
                     (
@@ -172,10 +173,13 @@ class PostgresInvitationLifecycleService:
                         account_id,
                         INVITATION_DB_PURPOSE,
                         digest,
-                        now,
                     ),
                 ).fetchall()
                 if len(invitations) != 1:
+                    return None
+                invitation = _row(invitations[0], ("id", "expires_at"))
+                now = _aware_utc(self._clock())
+                if _timestamp(invitation.get("expires_at")) <= now:
                     return None
                 issued = validated_issued_invitation_token(self._token_issuer)
                 expires_at = now + timedelta(
@@ -237,15 +241,20 @@ class PostgresInvitationLifecycleService:
             transaction_id = _positive_integer(
                 snapshot.get("transaction_id"), "transaction id"
             )
-            credential = self._password_hasher(
-                new_password,
-                username=_required_text(snapshot.get("username_display"), "username"),
-                email=_required_text(snapshot.get("contact_email"), "contact email"),
-                breached_checker=self._breached_checker,
-                argon2=self._argon2,
-                policy_version=self._policy_version,
-                password_policy=self._password_policy,
-            )
+            if not self._semaphore.acquire(blocking=False):
+                raise RuntimeError("Password verification capacity is unavailable.")
+            try:
+                credential = self._password_hasher(
+                    new_password,
+                    username=_required_text(snapshot.get("username_display"), "username"),
+                    email=_required_text(snapshot.get("contact_email"), "contact email"),
+                    breached_checker=self._breached_checker,
+                    argon2=self._argon2,
+                    policy_version=self._policy_version,
+                    password_policy=self._password_policy,
+                )
+            finally:
+                self._semaphore.release()
             if not isinstance(credential, PasswordCredential):
                 raise RuntimeError
 
@@ -296,6 +305,7 @@ class PostgresInvitationLifecycleService:
                     (account_id,),
                 ).fetchall()
 
+                now = _aware_utc(self._clock())
                 if not (
                     len(accounts) == len(invitations) == len(transactions) == 1
                 ):
@@ -449,7 +459,16 @@ class PostgresInvitationLifecycleService:
             return None
         if len(rows) != 1:
             raise RuntimeError
-        return _row(rows[0], _CONTEXT_COLUMNS)
+        context = _row(rows[0], _CONTEXT_COLUMNS)
+        # Connection acquisition and the SELECT can outlive either lifetime.
+        # Recheck the returned expiry values before rendering or password work.
+        observed_at = _aware_utc(self._clock())
+        if (
+            _timestamp(context.get("invitation_expires_at")) <= observed_at
+            or _timestamp(context.get("transaction_expires_at")) <= observed_at
+        ):
+            return None
+        return context
 
     @contextmanager
     def _operation(self) -> Iterator[Any]:

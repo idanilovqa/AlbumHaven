@@ -12,7 +12,7 @@ function visiblePlayerTitle(trackTitle) {
   return `${LOOP_ALBUM_TARGET.artist} - ${trackTitle} /`;
 }
 
-test(`${CASE_ID} loop creation expires through the shared production session controller`, async ({
+test(`${CASE_ID} loop creation expires through the shared production session controller`, { tag: '@area:loops' }, async ({
   galleryActions,
   globalPlayerActions,
   playbackEvidence,
@@ -100,7 +100,7 @@ test(`${CASE_ID} loop creation expires through the shared production session con
   });
 });
 
-test(`${CASE_ID} page reload exits bottom-player loop edit mode`, async ({
+test(`${CASE_ID} page reload exits bottom-player loop edit mode`, { tag: '@area:loops' }, async ({
   galleryActions,
   globalPlayerActions,
   playbackEvidence,
@@ -144,7 +144,7 @@ test(`${CASE_ID} page reload exits bottom-player loop edit mode`, async ({
   });
 });
 
-test(`${CASE_ID} returning to a suspended tab reconciles an overdue loop edit lease`, async ({
+test(`${CASE_ID} returning to a suspended tab reconciles an overdue loop edit lease`, { tag: '@area:loops' }, async ({
   galleryActions,
   globalPlayerActions,
   stepLogger,

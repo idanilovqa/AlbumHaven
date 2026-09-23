@@ -24,6 +24,9 @@ PLAYER_AWARE_OUTLINE_MIGRATION = (
 MISSING_ALBUM_REMOVAL_FUNCTION_MIGRATION = (
     MIGRATIONS_DIR / "0061_create_missing_album_removal_function.sql"
 )
+MISSING_ALBUM_REMOVAL_SNAPSHOT_MIGRATION = (
+    MIGRATIONS_DIR / "0063_replace_missing_album_removal_lock_snapshot.sql"
+)
 READONLY_ACCOUNT_PRIVILEGES_MIGRATION = (
     MIGRATIONS_DIR / "0062_narrow_readonly_account_privileges.sql"
 )
@@ -441,6 +444,9 @@ PROBLEMATIC_REQUIRED_TEXT_CANDIDATE_MIGRATION = (
 WAVEFORM_PEAK_CACHE_MIGRATION = (
     MIGRATIONS_DIR / "0043_create_local_track_waveform_peaks.sql"
 )
+SAVED_LOOP_WAVEFORM_PEAK_CACHE_MIGRATION = (
+    MIGRATIONS_DIR / "0074_create_saved_loop_waveform_peaks.sql"
+)
 TAG_EDIT_INTENTS_MIGRATION = (
     MIGRATIONS_DIR / "0044_create_tag_edit_intents.sql"
 )
@@ -748,7 +754,8 @@ def test_postgres_migration_filenames_are_zero_padded_sql_and_lexically_ordered(
 
     assert all(re.fullmatch(r"\d{4}_[a-z0-9_]+\.sql", name) for name in migration_names)
     assert migration_numbers == list(range(1, len(migration_numbers) + 1))
-    assert migration_names[-42:] == [
+    assert migration_names[-60:] == [
+        "0040_repair_ignored_repairs_delete_grant.sql",
         "0041_create_local_album_cover_candidate_snapshots.sql",
         "0042_track_distinct_cover_improvement_alerts.sql",
         "0043_create_local_track_waveform_peaks.sql",
@@ -772,22 +779,39 @@ def test_postgres_migration_filenames_are_zero_padded_sql_and_lexically_ordered(
         "0061_create_missing_album_removal_function.sql",
         "0062_narrow_readonly_account_privileges.sql",
         "0063_create_durable_job_foundation.sql",
+        "0063_replace_missing_album_removal_lock_snapshot.sql",
+        "0064_grant_library_membership_delete.sql",
         "0064_request_durable_job_cancellation.sql",
         "0065_harden_durable_job_boundaries.sql",
+        "0065_native_player_component_provenance.sql",
+        "0066_allow_appearance_panel_outline.sql",
         "0066_grant_worker_authorization_reads.sql",
         "0067_add_job_transition_retention_index.sql",
+        "0067_add_scanned_exception_candidate_index.sql",
         "0068_create_scan_job_intents.sql",
+        "0068_scoped_saved_loop_orders.sql",
         "0069_grant_worker_targeted_reconciliation.sql",
+        "0069_scoped_operational_log_versions.sql",
+        "0070_appearance_loop_control_style.sql",
         "0070_authorize_full_scan_lifecycle.sql",
+        "0071_allow_harbor_mint_appearance_palette.sql",
         "0071_grant_worker_full_scan_execution.sql",
         "0072_create_durable_cover_job_state.sql",
+        "0072_measured_local_listen_sessions.sql",
         "0073_grant_worker_cover_lookup.sql",
+        "0073_preserve_measured_listen_history.sql",
+        "0074_create_saved_loop_waveform_peaks.sql",
         "0074_grant_worker_cover_refresh.sql",
+        "0075_appearance_device_sections.sql",
         "0075_create_remote_cover_save_checkpoints.sql",
         "0076_complete_durable_scan_status_projection.sql",
+        "0076_docked_compact_player_behavior.sql",
+        "0077_allow_parchment_pine_appearance_palette.sql",
         "0077_create_lastfm_retry_job_state.sql",
+        "0078_add_compact_player_motion_and_floating_edge.sql",
         "0078_grant_worker_lastfm_retry.sql",
         "0079_create_auth_mail_job_state.sql",
+        "0079_docked_compact_player_regular_style.sql",
         "0080_grant_worker_auth_mail.sql",
         "0081_validate_durable_worker_startup.sql",
         "0082_retire_vacated_structural_album.sql",
@@ -864,6 +888,14 @@ def test_remote_cover_save_migration_has_private_checkpoints_and_claim_fences():
     assert "job.lease_token = requested_lease_token" in sql
     assert "job.lease_expires_at > observed_at" in sql
     assert "grant select on library.local_track_files" not in sql
+def test_docked_compact_player_regular_style_migration_is_additive_and_default_off():
+    sql = _normalized_sql(
+        (MIGRATIONS_DIR / "0079_docked_compact_player_regular_style.sql").read_text(
+            encoding="utf-8"
+        )
+    )
+
+    assert "add column docked_compact_player_regular_style boolean not null default false" in sql
 
 
 def test_readonly_account_privilege_migration_is_upgrade_safe_and_identity_private():
@@ -1052,10 +1084,14 @@ def test_player_aware_outline_migration_validates_every_nested_appearance_value(
         assert f"interaction_overrides->'{field}'" in sql
 
 
-def test_missing_album_removal_uses_a_bounded_security_definer_capability():
-    assert MISSING_ALBUM_REMOVAL_FUNCTION_MIGRATION.exists()
+@pytest.mark.parametrize("migration_path", [
+    MISSING_ALBUM_REMOVAL_FUNCTION_MIGRATION,
+    MISSING_ALBUM_REMOVAL_SNAPSHOT_MIGRATION,
+])
+def test_missing_album_removal_uses_a_bounded_security_definer_capability(migration_path):
+    assert migration_path.exists()
     sql = _normalized_sql(
-        MISSING_ALBUM_REMOVAL_FUNCTION_MIGRATION.read_text(encoding="utf-8")
+        migration_path.read_text(encoding="utf-8")
     )
 
     assert "create or replace function library.confirm_missing_album_removal(target_album_key text)" in sql
@@ -1077,15 +1113,34 @@ def test_missing_album_removal_uses_a_bounded_security_definer_capability():
     assert "on all tables" not in sql
 
 
-def test_missing_album_removal_fails_closed_for_watcher_health_and_stales_relations():
+@pytest.mark.parametrize("migration_path", [
+    MISSING_ALBUM_REMOVAL_FUNCTION_MIGRATION,
+    MISSING_ALBUM_REMOVAL_SNAPSHOT_MIGRATION,
+])
+def test_missing_album_removal_fails_closed_for_watcher_health_and_stales_relations(migration_path):
+    assert migration_path.exists()
     sql = _normalized_sql(
-        MISSING_ALBUM_REMOVAL_FUNCTION_MIGRATION.read_text(encoding="utf-8")
+        migration_path.read_text(encoding="utf-8")
     )
 
     assert "library_watch_health" in sql
     assert "root_id" in sql
     assert "'{scan_cache,relation_projection,status}'" in sql
     assert "to_jsonb('stale'::text)" in sql
+
+
+def test_missing_album_removal_takes_a_fresh_snapshot_after_publication_lock():
+    assert MISSING_ALBUM_REMOVAL_SNAPSHOT_MIGRATION.exists()
+    sql = _normalized_sql(MISSING_ALBUM_REMOVAL_SNAPSHOT_MIGRATION.read_text(encoding="utf-8"))
+    assert "language sql volatile security definer" in sql
+    body = sql.split("as $function$", 1)[1].split("$function$", 1)[0].strip()
+    lock_statement, inventory_statement = body.split(";", 1)
+    assert lock_statement == (
+        "select pg_catalog.pg_advisory_xact_lock( "
+        "pg_catalog.hashtext('album-haven:local-inventory-publication') )"
+    )
+    assert inventory_statement.strip().startswith("with bootstrap_context as (")
+    assert "inventory_lock" not in inventory_statement
 
 
 def test_aggregate_appearance_migration_adds_revisioned_bounded_workspace_state():
@@ -3235,6 +3290,34 @@ def test_waveform_peak_cache_has_bounded_payload_identity_and_least_privilege_gr
     assert "grant select on table" in sql
     assert "to album_haven_readonly" in sql
     assert "grant delete" not in sql
+    assert "grant all" not in sql
+
+
+def test_saved_loop_waveform_peak_cache_is_scoped_rebuildable_and_cascade_owned():
+    sql = _normalized_sql(
+        SAVED_LOOP_WAVEFORM_PEAK_CACHE_MIGRATION.read_text(encoding="utf-8")
+    )
+
+    assert "create table if not exists app.saved_loop_waveform_peaks" in sql
+    assert (
+        "saved_loop_id bigint not null references app.saved_loops(id) on delete cascade"
+        in sql
+    )
+    assert "primary key (saved_loop_id, sample_count)" in sql
+    assert "sample_count integer not null" in sql
+    assert "analyzer_version text not null" in sql
+    assert "file_size_bytes bigint not null" in sql
+    assert "modified_at_ns bigint not null" in sql
+    assert "left_peaks real[] not null" in sql
+    assert "right_peaks real[] not null" in sql
+    assert "sample_count > 0" in sql
+    assert "cardinality(left_peaks) = sample_count" in sql
+    assert "cardinality(right_peaks) = sample_count" in sql
+    assert "grant select, insert, update, delete on table" in sql
+    assert "to album_haven_app" in sql
+    assert "to album_haven_migrator" in sql
+    assert "grant select on table" in sql
+    assert "to album_haven_readonly" in sql
     assert "grant all" not in sql
 
 

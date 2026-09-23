@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from music_app.services.log_history import history_scope_for_request
+
 from collections.abc import Mapping
 from datetime import datetime, timezone
 import logging
@@ -487,6 +489,7 @@ async def utilities_cover_lookup_gallery_mark_seen(request: Request) -> JSONResp
 
 @router.post("/utilities/cover-lookup/start")
 async def utilities_cover_lookup_start(request: Request) -> JSONResponse:
+    history_scope = await history_scope_for_request(request, required=False)
     config = _app_config(request)
     logger = _app_logger(request)
     payload = await _json_payload(request)
@@ -575,7 +578,7 @@ async def utilities_cover_lookup_start(request: Request) -> JSONResponse:
         album=str((album or {}).get("name") or (album or {}).get("album") or ""),
         year=(album or {}).get("year"),
         edition=str((album or {}).get("edition") or ""),
-    )
+     history_scope=history_scope)
     return JSONResponse(
         {
             "ok": True,
@@ -617,6 +620,7 @@ async def utilities_cover_lookup_cancel(request: Request, task_id: str) -> JSONR
 
 @router.post("/utilities/cover-lookup/local-select")
 async def utilities_cover_lookup_local_select(request: Request) -> JSONResponse:
+    history_scope = await history_scope_for_request(request, required=False)
     config = _app_config(request)
     logger = _app_logger(request)
     library_state = _library_state(request)
@@ -721,7 +725,7 @@ async def utilities_cover_lookup_local_select(request: Request) -> JSONResponse:
                 year=(album or {}).get("year"),
                 target_filename=authoritative_cover.name,
                 error_kind=type(exc).__name__,
-            )
+             history_scope=history_scope)
             return _json_response(
                 (
                     {
@@ -747,7 +751,7 @@ async def utilities_cover_lookup_local_select(request: Request) -> JSONResponse:
                 year=(album or {}).get("year"),
                 target_filename=authoritative_cover.name,
                 error_kind=type(rollback_exc).__name__,
-            )
+             history_scope=history_scope)
         _log_local_cover_persistence_event(
             config,
             logger,
@@ -758,7 +762,7 @@ async def utilities_cover_lookup_local_select(request: Request) -> JSONResponse:
             year=(album or {}).get("year"),
             target_filename=authoritative_cover.name,
             error_kind=type(exc).__name__,
-        )
+         history_scope=history_scope)
         return _json_response(
             ({"ok": False, "error": "Selected cover art could not be persisted."}, 500)
         )
@@ -791,7 +795,7 @@ async def utilities_cover_lookup_local_select(request: Request) -> JSONResponse:
             year=(album or {}).get("year"),
             target_filename=authoritative_cover.name,
             error_kind=type(runtime_refresh_error).__name__,
-        )
+         history_scope=history_scope)
     interrupted_scan_mode = (
         state_service.take_cover_selection_interrupted_scan_mode_for_state(
             library_state
@@ -816,7 +820,7 @@ async def utilities_cover_lookup_local_select(request: Request) -> JSONResponse:
             year=(album or {}).get("year"),
             target_filename=authoritative_cover.name,
             error_kind=type(runtime_fallback_error).__name__,
-        )
+         history_scope=history_scope)
         return _json_response(
             (
                 {
@@ -840,7 +844,7 @@ async def utilities_cover_lookup_local_select(request: Request) -> JSONResponse:
         target_filename=authoritative_cover.name,
         album_rows_updated=int(persistence_result.get("album_rows_updated") or 0),
         track_file_rows_updated=int(persistence_result.get("track_file_rows_updated") or 0),
-    )
+     history_scope=history_scope)
     return JSONResponse(
         {
             "ok": True,
@@ -1189,6 +1193,7 @@ async def utilities_cover_lookup_save_remote(request: Request) -> JSONResponse:
 
 @router.post("/utilities/cover-lookup/add-remote")
 async def utilities_cover_lookup_add_remote(request: Request) -> JSONResponse:
+    history_scope = await history_scope_for_request(request, required=False)
     config = _app_config(request)
     logger = _app_logger(request)
     payload = await _json_payload(request)
@@ -1214,7 +1219,7 @@ async def utilities_cover_lookup_add_remote(request: Request) -> JSONResponse:
         task_id=task_id,
         url_count=len(cleaned_urls),
         urls=cleaned_urls,
-    )
+     history_scope=history_scope)
     album_context = resolve_album_context(config, album or {})
     if album_context is None:
         return _json_response(({"ok": False, "error": "Album root could not be resolved"}, 400))
@@ -1236,7 +1241,7 @@ async def utilities_cover_lookup_add_remote(request: Request) -> JSONResponse:
         task_id=task_id,
         url_count=len(cleaned_urls),
         match_count=len(matches),
-    )
+     history_scope=history_scope)
     if not matches:
         return _json_response(({"ok": False, "error": "No usable cover art could be extracted from those links"}, 400))
     if not task_id:
@@ -1290,6 +1295,7 @@ async def utilities_cover_lookup_remote_image(request: Request) -> Response:
 
 @router.post("/utilities/fetch-cover")
 async def utilities_fetch_cover(request: Request) -> JSONResponse:
+    history_scope = await history_scope_for_request(request, required=False)
     config = _app_config(request)
     logger = _app_logger(request)
     library_state = _library_state(request)
@@ -1321,7 +1327,7 @@ async def utilities_fetch_cover(request: Request) -> JSONResponse:
             album=str((album or {}).get("name") or (album or {}).get("album") or ""),
             error=str(exc),
             mode="manual",
-        )
+         history_scope=history_scope)
         return _json_response(({"ok": False, "error": str(exc)}, 500))
     updated_albums = find_albums_by_track_paths_in_state(
         library_state.get("albums", []) if isinstance(library_state, dict) else [],
@@ -1354,6 +1360,7 @@ async def utilities_fetch_cover(request: Request) -> JSONResponse:
 
 @router.post("/utilities/fetch-covers-unsuccessful")
 async def utilities_fetch_covers_unsuccessful(request: Request) -> JSONResponse:
+    history_scope = await history_scope_for_request(request, required=False)
     config = _app_config(request)
     logger = _app_logger(request)
     library_state = _library_state(request)
@@ -1421,7 +1428,7 @@ async def utilities_fetch_covers_unsuccessful(request: Request) -> JSONResponse:
             history=True,
             error=str(exc),
             mode="manual-bulk",
-        )
+         history_scope=history_scope)
         return _json_response(({"ok": False, "error": str(exc)}, 500))
     return JSONResponse(
         {

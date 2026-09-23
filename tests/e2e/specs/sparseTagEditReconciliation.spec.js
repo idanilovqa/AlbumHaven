@@ -1,7 +1,7 @@
 import { test } from '../support/baseFixtures.js';
 import { runSparseTagEditScenario } from '../helpers/sparseTagEditScenario.js';
 
-test('FTC-TAGS-010 keeps an album-only edit sparse and retains its optimistic split', async ({
+test('FTC-TAGS-010 keeps an album-only edit sparse and retains its optimistic split', { tag: '@area:tag-edit' }, async ({
   freshBrowserSession,
   galleryActions,
   stepLogger,
@@ -38,7 +38,7 @@ test('FTC-TAGS-010 keeps an album-only edit sparse and retains its optimistic sp
   });
 });
 
-test('FTC-TAGS-011 keeps a track-name-only edit on one retained album card', async ({
+test('FTC-TAGS-011 keeps a track-name-only edit on one retained album card', { tag: '@area:tag-edit' }, async ({
   freshBrowserSession,
   galleryActions,
   stepLogger,
@@ -73,7 +73,7 @@ test('FTC-TAGS-011 keeps a track-name-only edit on one retained album card', asy
   });
 });
 
-test('FTC-TAGS-012 carries Genre through selected Postgres payloads and edits only TCON', async ({
+test('FTC-TAGS-012 carries Genre through selected Postgres payloads and edits only TCON', { tag: '@area:tag-edit' }, async ({
   freshBrowserSession,
   galleryActions,
   stepLogger,
@@ -107,7 +107,7 @@ test('FTC-TAGS-012 carries Genre through selected Postgres payloads and edits on
   });
 });
 
-test('FTC-TAGS-013 keeps a year-only edit sparse and retains its optimistic split', async ({
+test('FTC-TAGS-013 keeps a year-only edit sparse and retains its optimistic split', { tag: '@area:tag-edit' }, async ({
   appBarActions,
   freshBrowserSession,
   galleryActions,

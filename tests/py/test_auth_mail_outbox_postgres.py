@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 from datetime import datetime, timedelta, timezone
 from importlib import import_module, util
+from threading import Event
 from types import SimpleNamespace
 
 import pytest
@@ -183,6 +184,102 @@ def _claim_row(**overrides):
     }
     row.update(overrides)
     return row
+
+
+@pytest.mark.parametrize("category", ["welcome", "password_reset", "invitation"])
+@pytest.mark.parametrize("blocked_stage", ["claim", "finalize"])
+def test_mail_delivery_keeps_event_loop_responsive_during_database_work(
+    outbox, category, blocked_stage,
+):
+    invitation = _invitation_delivery()
+    delivery = {
+        "welcome": invitation.outbox_id,
+        "password_reset": SimpleNamespace(
+            outbox_id=invitation.outbox_id,
+            account_id=invitation.account_id,
+            recipient=invitation.recipient,
+            raw_token=invitation.raw_token,
+        ),
+        "invitation": invitation,
+    }[category]
+    claim = SimpleNamespace(
+        outbox_id=invitation.outbox_id,
+        invitation_token_id=invitation.invitation_token_id,
+        account_id=invitation.account_id,
+        username=invitation.username,
+        recipient=invitation.recipient,
+        expires_at=invitation.expires_at,
+    )
+    sent = outbox.DeliveryResult(True, "delivered")
+    calls = []
+
+    async def scenario():
+        loop = asyncio.get_running_loop()
+        heartbeat = asyncio.Event()
+        entered = Event()
+        release = Event()
+        completed = Event()
+        progress_while_blocked = []
+
+        def record_progress():
+            progress_while_blocked.append(entered.is_set() and not completed.is_set())
+            release.set()
+            heartbeat.set()
+
+        def block_database_work():
+            entered.set()
+            loop.call_soon_threadsafe(record_progress)
+            try:
+                # Only a deadlock guard; the assertion checks event ordering, not elapsed time.
+                release.wait(5.0)
+            finally:
+                completed.set()
+
+        def claim_delivery(received):
+            assert received is delivery
+            calls.append("claim")
+            if blocked_stage == "claim":
+                block_database_work()
+            return claim
+
+        def finalize_delivery(received, result):
+            assert received is claim
+            assert result is sent
+            calls.append("finalize")
+            if blocked_stage == "finalize":
+                block_database_work()
+
+        def composer(**_kwargs):
+            calls.append("compose")
+            return "message"
+
+        async def sender(message, *, config):
+            assert asyncio.get_running_loop() is loop
+            assert message == "message"
+            calls.append("send")
+            return sent
+
+        repository = SimpleNamespace(**{
+            f"claim_{category}": claim_delivery,
+            f"finalize_{category}": finalize_delivery,
+        })
+        task = asyncio.create_task(getattr(outbox, f"deliver_{category}")(
+            delivery,
+            config={"public_base_url": "https://music.example.test"},
+            repository=repository,
+            composer=composer,
+            sender=sender,
+        ))
+        try:
+            await asyncio.wait_for(heartbeat.wait(), timeout=10.0)
+            assert await asyncio.wait_for(task, timeout=5.0) is sent
+            assert progress_while_blocked == [True]
+        finally:
+            release.set()
+            await asyncio.wait_for(asyncio.gather(task, return_exceptions=True), timeout=5.0)
+
+    asyncio.run(scenario())
+    assert calls == ["claim", "compose", "send", "finalize"]
 
 
 def test_claim_is_short_locked_eligible_welcome_only_and_secret_free(outbox):
@@ -431,7 +528,11 @@ def test_password_reset_delivery_claims_matching_active_token_and_finalizes_once
 
 
 def test_password_reset_repository_claim_requires_matching_active_digest_and_is_not_retryable(outbox):
-    connection = Connection(claim_rows=(_claim_row(id=81, username_display="member.one"),))
+    connection = Connection(claim_rows=(_claim_row(
+        id=81,
+        username_display="member.one",
+        expires_at=NOW + timedelta(minutes=15),
+    ),))
     delivery = SimpleNamespace(
         outbox_id=81, account_id=41,
         recipient="Rendref+owner@example.test", raw_token="s" * 43,
@@ -466,13 +567,31 @@ def test_password_reset_repository_claim_requires_matching_active_digest_and_is_
     assert not any(value is not None for value in update_params[1:2])
 
 
-def test_password_reset_claim_reconciles_expired_sending_lease_as_unknown(outbox):
-    from music_app.services.auth_password_reset_request_postgres import (
-        PasswordResetDelivery,
+def test_password_reset_claim_locks_account_before_reading_token_eligibility(outbox):
+    connection = Connection(claim_rows=(_claim_row(id=81,
+        expires_at=NOW + timedelta(minutes=15)),))
+    delivery = SimpleNamespace(
+        outbox_id=81,
+        account_id=41,
+        recipient="Rendref+owner@example.test",
+        raw_token="s" * 43,
     )
+    assert _reset_service(outbox, connection).claim_password_reset(delivery) is not None
+    statements = [sql for sql, _params in connection.operations]
+    account_lock = next(i for i, sql in enumerate(statements)
+        if "from app.accounts account" in sql and "for update of account" in sql)
+    token_check = next(i for i, sql in enumerate(statements) if "join app.password_reset_tokens" in sql)
+    assert account_lock < token_check
 
+
+def test_password_reset_claim_reconciles_expired_sending_lease_as_unknown(outbox):
     raw_token = "A" * 43
-    delivery = PasswordResetDelivery(81, 41, "member@example.test", raw_token)
+    delivery = SimpleNamespace(
+        outbox_id=81,
+        account_id=41,
+        recipient="member@example.test",
+        raw_token=raw_token,
+    )
     connection = Connection(stale_rows=({"id": 81},))
 
     outcome = _reset_service(outbox, connection).claim_password_reset(delivery)
@@ -495,12 +614,13 @@ def test_password_reset_claim_reconciles_expired_sending_lease_as_unknown(outbox
 
 
 def test_password_reset_delivery_does_not_retry_reconciled_sending_claim(outbox):
-    from music_app.services.auth_password_reset_request_postgres import (
-        PasswordResetDelivery,
-    )
-
     raw_token = "A" * 43
-    delivery = PasswordResetDelivery(81, 41, "member@example.test", raw_token)
+    delivery = SimpleNamespace(
+        outbox_id=81,
+        account_id=41,
+        recipient="member@example.test",
+        raw_token=raw_token,
+    )
     connection = Connection(stale_rows=({"id": 81},))
 
     result = asyncio.run(

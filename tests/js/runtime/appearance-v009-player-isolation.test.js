@@ -123,7 +123,7 @@ test('Player & Seekbar preserves independent player and waveform tabs when the u
     installBrowser.indexOf('return { controller, mount, mountSeekbar'),
   );
 
-  assert.match(installBrowser, /let activePlayerTab = 'surface', activeWaveformTab = 'waveform';/);
+  assert.match(installBrowser, /let activePlayerTab = 'surface', activeWaveformTab = 'waveform'[,;]/);
   assert.doesNotMatch(mountSeekbar, /let activePlayerTab = 'surface'|let activeWaveformTab = 'waveform'/);
   assert.match(
     mountSeekbar,
@@ -239,11 +239,11 @@ test('changing only player colors cannot change Main-elements interaction tokens
 test('themed player boundaries preserve floating hover and focus strength', () => {
   const basePlayerRule = cssRule(
     appearanceCss,
-    ':root\\[data-appearance-player\\] \\.global-player(?!:)\\b',
+    ':root\\[data-appearance-player\\]:not\\(\\[data-appearance-native-surface\\]\\) \\.global-player(?!:)\\b',
   );
   const nonFloatingBoundaryRule = cssRule(
     appearanceCss,
-    ':root\\[data-appearance-player\\] \\.global-player:not\\(\\.is-floating-compact\\)',
+    ':root\\[data-appearance-player\\]:not\\(\\[data-appearance-native-surface\\]\\) \\.global-player:not\\(\\.is-floating-compact\\)',
   );
 
   assert.doesNotMatch(
@@ -273,7 +273,7 @@ test('NavigationTree, editor tabs, and Save use non-player Appearance tokens', (
     );
   }
 
-  const saveRule = relevantRules.find(([_, selector]) => /background-save|editor-footer/.test(selector))?.[2] || '';
+  const saveRule = relevantRules.find(([_, selector]) => /\.editor-footer \.background-save\s*$/.test(selector))?.[2] || '';
   assert.match(
     saveRule,
     /var\(--appearance-(?:primary-button|button-background)\)/,

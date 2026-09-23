@@ -25,11 +25,24 @@ export class UtilityLoopTree extends BasePage {
   }
 
   countForGroup(groupButton) {
-    return groupButton.locator('.utility-loop-group-count');
+    return groupButton.locator('.navigation-tree-count');
   }
 
   collapseToggleForGroup(groupButton) {
     return groupButton.locator('[data-utility-loop-collapse]');
+  }
+
+  async isRetainedSelectedSong(handle) {
+    // parity-check: allow-read-only-measurement-evaluate -- artwork must retain the selected mounted song node
+    return handle.evaluate(node => node.isConnected && node.getAttribute('aria-current') === 'true');
+  }
+
+  async readSongChildOrder(songKey) {
+    // parity-check: allow-read-only-measurement-evaluate -- read the rendered song tree order only
+    return this.trees.evaluateAll((trees, key) => {
+      const tree = trees.find(node => node.getAttribute('data-utility-loop-tree') === key);
+      return Array.from(tree?.querySelectorAll('[data-utility-loop-id]') || [], node => node.getAttribute('data-utility-loop-id'));
+    }, songKey);
   }
 
   get treeSelector() {

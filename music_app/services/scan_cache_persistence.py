@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from contextlib import ExitStack
 from datetime import datetime, timezone
 from pathlib import Path
 import re
@@ -25,6 +26,7 @@ from music_app.services.library import (
     safe_int,
 )
 from music_app.services.library_inventory_postgres import local_inventory_identity_key
+from music_app.services.library_roots import build_root_provenance_payload, summarize_root_provenance_payloads
 from music_app.services.metadata import normalize_exception_value
 from music_app.services.non_album_view_payloads import infer_blank_album_membership
 from music_app.services.persistence_selection import select_runtime_persistence_adapter
@@ -54,6 +56,13 @@ _APP_DATABASE_URL_KEY = "ALBUM_HAVEN_APP_DATABASE_URL"
 _SOURCE = "runtime_scan_cache"
 _PIPELINE_BATCH_SIZE = 1_000
 _MISSING_STRUCTURAL_VALUE = object()
+_ALBUM_COVER_AUTHORITY_FIELDS = (
+    "cover_selection_origin", "local_cover_width", "local_cover_height",
+    "remote_cover_url", "remote_cover_thumbnail_url", "remote_cover_source",
+    "remote_cover_source_label", "remote_cover_album_url",
+    "remote_cover_width", "remote_cover_height",
+)
+_ALBUM_COVER_METADATA_FIELDS = ("cover_revision", *_ALBUM_COVER_AUTHORITY_FIELDS)
 _TARGETED_STRUCTURAL_EDIT_FIELD_SETS = {
     frozenset({"album"}),
     frozenset({"exception_type"}),
@@ -118,7 +127,7 @@ class ScanCacheAdapter(Protocol):
         deleted_paths: tuple[str, ...] = (),
         deleted_subtrees: tuple[str, ...] = (),
         moves: tuple[dict[str, object], ...] = (),
-        publication_guard: Callable[[Any, Callable[[], object]], object] | None = None,
+        publication_guard: Callable | None = None,
     ) -> dict[str, object]:
         ...
 
@@ -222,6 +231,24 @@ class PostgresScanCacheAdapter:
             "track_files": _jsonb_compatible(files),
         }
 
+    def load_targeted_subtree_track_paths(
+        self, subtrees_by_root: dict[str, set[str]],
+    ) -> tuple[str, ...]:
+        """Resolve source reservation keys, including retained stale members."""
+        subtrees = [
+            {"root_id": root_id, "path": path}
+            for root_id, paths in subtrees_by_root.items()
+            for path in sorted(paths)
+        ]
+        if not subtrees:
+            return ()
+        with self._connect_to_database() as connection:
+            rows = connection.execute(
+                _load_targeted_subtree_track_paths_sql(),
+                {"subtrees": _jsonb(subtrees), "source": _SOURCE},
+            ).fetchall()
+        return tuple(str(_row_mapping(row)["private_path"]) for row in rows)
+
     def persist_targeted_inventory_mutation(
         self,
         *,
@@ -230,7 +257,7 @@ class PostgresScanCacheAdapter:
         deleted_paths: tuple[str, ...] = (),
         deleted_subtrees: tuple[str, ...] = (),
         moves: tuple[dict[str, object], ...] = (),
-        publication_guard: Callable[[Any, Callable[[], object]], object] | None = None,
+        publication_guard: Callable | None = None,
     ) -> dict[str, object]:
         normalized_root_id = str(root_id or "").strip()
         if not normalized_root_id:
@@ -248,6 +275,12 @@ class PostgresScanCacheAdapter:
                 },
             }
         }
+        active_paths_by_root: dict[str, set[str]] = {}
+        for path, entry in file_cache.items():
+            active_root_id = str(
+                entry.get("library_root_id") or normalized_root_id
+            ).strip()
+            active_paths_by_root.setdefault(active_root_id, set()).add(path)
         for move in moves:
             source_root_id = str(
                 move.get("source_root_id") or normalized_root_id
@@ -263,30 +296,30 @@ class PostgresScanCacheAdapter:
                 source_path
             )
 
-        durable_publisher = getattr(publication_guard, "publish_prepared", None)
-        if callable(durable_publisher):
-            return durable_publisher(
-                inventory={
-                    "artists": _jsonb_compatible(artist_rows),
-                    "albums": _jsonb_compatible(album_rows),
-                    "featured_artists": _jsonb_compatible(featured_artist_rows),
-                    "tracks": _jsonb_compatible(track_rows),
-                    "track_files": _jsonb_compatible(track_file_rows),
-                },
-                stale_scopes=[
-                    {
-                        "root_id": stale_root_id,
-                        "paths": sorted(stale_targets["paths"]),
-                        "subtrees": sorted(stale_targets["subtrees"]),
-                    }
-                    for stale_root_id, stale_targets in sorted(stale_by_root.items())
-                    if stale_targets["paths"] or stale_targets["subtrees"]
-                ],
-            )
-
-        with self._connect_to_database() as connection:
+        durable_publication_guard = (
+            publication_guard
+            if callable(getattr(publication_guard, "publish_prepared", None))
+            else None
+        )
+        with self._connect_to_database() as connection, ExitStack() as publication_stack:
             connection.execute(_inventory_publication_advisory_lock_sql())
             _ensure_bootstrap_context(connection)
+            if any(target["paths"] or target["subtrees"] for target in stale_by_root.values()):
+                from music_app.services.library_watch_health import guard_destructive_library_publication
+
+                affected_roots = set(stale_by_root) | set(active_paths_by_root)
+                affected_roots.update(
+                    str(move.get("destination_root_id") or normalized_root_id)
+                    for move in moves
+                )
+                health_guard = (
+                    guard_destructive_library_publication
+                    if durable_publication_guard is not None
+                    else publication_guard or guard_destructive_library_publication
+                )
+                publication_stack.enter_context(
+                    health_guard(connection, sorted(affected_roots))
+                )
             separate_release_keys = _load_separate_release_keys(connection)
             existing_memberships = [
                 _row_mapping(row)
@@ -311,10 +344,11 @@ class PostgresScanCacheAdapter:
                 featured_artist_rows=featured_artist_rows,
                 track_rows=track_rows,
                 existing_memberships=existing_memberships,
+                separate_release_keys=separate_release_keys,
             )
             affected_album_keys = {
                 str(row.get("album_key") or "").strip()
-                for row in album_rows
+                for row in (*album_rows, *existing_memberships)
                 if str(row.get("album_key") or "").strip()
             }
             _execute_pipeline_batches(connection, _upsert_local_artist_sql(), artist_rows)
@@ -345,6 +379,9 @@ class PostgresScanCacheAdapter:
                         "root_id": stale_root_id,
                         "deleted_paths": paths,
                         "deleted_subtrees": subtrees,
+                        "active_paths": sorted(
+                            active_paths_by_root.get(stale_root_id, ())
+                        ),
                         "source": _SOURCE,
                     },
                 ).fetchall()
@@ -355,6 +392,103 @@ class PostgresScanCacheAdapter:
                         _row_mapping(row).get("affected_album_key") or ""
                     ).strip()
                 )
+            # A logical album can span different containers and configured
+            # roots. Replace scan-owned credits using all its retained active
+            # members, not just the paths selected by this watcher event.
+            synchronized_featured_album_keys = []
+            if affected_album_keys:
+                complete_rows = connection.execute(
+                    _load_file_entries_sql(targeted_albums=True),
+                    {"source": _SOURCE, "album_keys": sorted(affected_album_keys)},
+                ).fetchall()
+                files_by_album: dict[str, dict[str, dict[str, object]]] = {}
+                owner_keys: dict[str, str] = {}
+                for raw_row in complete_rows:
+                    row = _row_mapping(raw_row)
+                    file_entry = _fallback_file_entry(row)
+                    if file_entry is None:
+                        continue
+                    persisted_entry = row.get("file_entry")
+                    if isinstance(persisted_entry, dict):
+                        # An album cover is not evidence that this surviving
+                        # file supplies it after another member is removed.
+                        file_entry.pop("cover_path", None)
+                        file_entry.update(persisted_entry)
+                    if file_entry.get("cover_path") and not file_entry.get("cover_selection_origin"):
+                        # File serialization keeps the cover path/revision; the
+                        # owning album retains the selection's origin.
+                        file_entry["cover_selection_origin"] = row.get("cover_selection_origin")
+                    files_by_album.setdefault(str(row["album_key"]), {})[str(row["private_path"])] = file_entry
+                    owner_keys[str(row["album_key"])] = str(row.get("album_owner_key") or "")
+                # Entirely missing albums retain their historical credits.
+                # A deletion that leaves active members reconciles those members.
+                synchronized_featured_album_keys = sorted(files_by_album)
+                featured_artist_rows = []
+                aggregate_rows = []
+                for album_key, complete_cache in files_by_album.items():
+                    complete_albums = self._build_albums(
+                        _file_cache_with_inferred_blank_album_memberships(complete_cache), separate_release_keys,
+                    )
+                    complete_artists, complete_album_rows, complete_featured, _, _ = _inventory_rows_from_albums(complete_cache, complete_albums)
+                    _execute_pipeline_batches(connection, _upsert_local_artist_sql(), complete_artists)
+                    member_names = _deduped_artist_names([
+                        name for album in complete_albums
+                        for name in (getattr(album, "artists", []) or [])
+                    ])
+                    artist_names = {row["artist_key"]: row["name"] for row in complete_artists}
+                    featured_names = _deduped_artist_names([
+                        artist_names[row["artist_key"]]
+                        for row in complete_featured
+                        if row["artist_key"] != owner_keys[album_key]
+                        and row["artist_key"] in artist_names
+                    ])
+                    cover_row = next(
+                        (row for row in complete_album_rows if row["cover_path"]),
+                        complete_album_rows[0] if complete_album_rows else {},
+                    )
+                    cover_metadata = _jsonb_compatible(cover_row.get("metadata") or {})
+                    aggregate_rows.append({
+                        "album_key": album_key,
+                        "release_year": next((row["release_year"] for row in complete_album_rows if row.get("release_year") is not None), None),
+                        "cover_path": cover_row.get("cover_path"),
+                        "cover_metadata": _jsonb({
+                            field: cover_metadata.get(field)
+                            for field in _ALBUM_COVER_METADATA_FIELDS
+                        }),
+                        "metadata": _jsonb({
+                            "artists": member_names,
+                            "featured_artists": featured_names,
+                            "is_compilation": any(bool(getattr(album, "is_compilation", False)) for album in complete_albums),
+                            "root_provenance": summarize_root_provenance_payloads([
+                                build_root_provenance_payload(entry.get("library_root_id"), entry.get("library_root_category"))
+                                for entry in complete_cache.values()
+                            ]),
+                        }),
+                    })
+                    for featured_row in complete_featured:
+                        featured_row["album_key"] = album_key
+                        if featured_row["featured_kind"] == "owner" and owner_keys[album_key]:
+                            featured_row["artist_key"] = owner_keys[album_key]
+                    featured_artist_rows.extend(complete_featured)
+                _execute_pipeline_batches(connection, _update_targeted_album_aggregate_sql(), aggregate_rows)
+                _execute_pipeline_batches(connection, _upsert_local_album_featured_artist_sql(), featured_artist_rows)
+            connection.execute(
+                _synchronize_targeted_local_album_featured_artists_sql(),
+                {
+                    "affected_album_keys": synchronized_featured_album_keys,
+                    "current_featured_rows": _jsonb(
+                        [
+                            {
+                                "album_key": row["album_key"],
+                                "artist_key": row["artist_key"],
+                                "featured_kind": row["featured_kind"],
+                            }
+                            for row in featured_artist_rows
+                        ]
+                    ),
+                    "source": _SOURCE,
+                },
+            )
             revision_row = _first_row(
                 connection.execute(_increment_inventory_mutation_revision_sql())
             )
@@ -365,12 +499,12 @@ class PostgresScanCacheAdapter:
                 "inventory_mutation_revision": revision,
                 "affected_album_keys": sorted(affected_album_keys),
             }
-            if publication_guard is None:
-                connection.commit()
-            else:
-                published = publication_guard(connection, connection.commit)
+            if durable_publication_guard is not None:
+                published = durable_publication_guard(connection, connection.commit)
                 if not published:
                     return {}
+            else:
+                connection.commit()
         return result
 
     def load_snapshot_strict(self, cache_path: Path, root_identity: object) -> ScanCacheSnapshot:
@@ -1106,6 +1240,9 @@ class PostgresScanCacheAdapter:
             _execute_semantic_local_album_reconciliation(
                 connection,
                 target_album_ids=(destination_album_id,),
+                allow_same_year_separate_release_merge=(
+                    normalized_changed_fields == frozenset({"album"})
+                ),
             )
             if retirement_disposition == "preserved_track_tombstone":
                 _retire_vacated_structural_album(
@@ -2162,21 +2299,9 @@ def _raw_tag_album_rating_from_file_entries(
 
 
 def _album_cover_authority_metadata(album: object) -> dict[str, object]:
-    fields = (
-        "cover_selection_origin",
-        "local_cover_width",
-        "local_cover_height",
-        "remote_cover_url",
-        "remote_cover_thumbnail_url",
-        "remote_cover_source",
-        "remote_cover_source_label",
-        "remote_cover_album_url",
-        "remote_cover_width",
-        "remote_cover_height",
-    )
     return {
         field: value
-        for field in fields
+        for field in _ALBUM_COVER_AUTHORITY_FIELDS
         if (value := getattr(album, field, None)) is not None
     }
 
@@ -2187,6 +2312,7 @@ def _remap_targeted_album_identity_rows(
     featured_artist_rows: list[dict[str, object]],
     track_rows: list[dict[str, object]],
     existing_memberships: list[dict[str, object]],
+    separate_release_keys: set[str] | None = None,
 ) -> None:
     """Keep established album keys when watcher context still names that album."""
     albums_by_key = {
@@ -2212,9 +2338,27 @@ def _remap_targeted_album_identity_rows(
         existing_title = str(existing.get("album_title") or "").strip()
         if not generated_title or generated_title.casefold() != existing_title.casefold():
             continue
+        generated_artist_key = str(album_row.get("artist_key") or "").strip()
         existing_key = str(existing.get("album_key") or "").strip()
         existing_artist_key = str(existing.get("artist_key") or "").strip()
-        if existing_key and existing_artist_key:
+        generated_metadata = _jsonb_compatible(album_row.get("metadata") or {})
+        generated_edition = str(generated_metadata.get("edition") or "").strip()
+        existing_edition = str(existing.get("edition") or "").strip()
+        if generated_edition.lower() != existing_edition.lower():
+            continue
+        release_key = album_separate_release_key(
+            generated_artist_key, generated_title, generated_edition,
+        )
+        if release_key in (separate_release_keys or ()) and (
+            safe_int(album_row.get("release_year")) != safe_int(existing.get("release_year"))
+        ):
+            continue
+        if (
+            generated_artist_key
+            and existing_artist_key
+            and generated_artist_key.casefold() == existing_artist_key.casefold()
+            and existing_key
+        ):
             candidates_by_generated_key.setdefault(generated_key, set()).add(
                 (existing_key, existing_artist_key, existing_title)
             )
@@ -2727,6 +2871,7 @@ def _increment_inventory_mutation_revision_sql() -> str:
 def _reconcile_semantic_local_albums_sql(
     *,
     target_album_ids: tuple[int, ...] | None = None,
+    allow_same_year_separate_release_merge: bool = False,
 ) -> tuple[str, ...]:
     scoped_target_ids = tuple(
         sorted(
@@ -2737,6 +2882,8 @@ def _reconcile_semantic_local_albums_sql(
             }
         )
     )
+    if allow_same_year_separate_release_merge and not scoped_target_ids:
+        raise ValueError("Explicit release consolidation requires a targeted album identity.")
     target_identity_cte_sql = (
         """
         semantic_album_target_identities as materialized (
@@ -2887,7 +3034,11 @@ def _reconcile_semantic_local_albums_sql(
                  library.local_albums.library_id
             where nullif(btrim(library.local_albums.title), '') is not null
               and library.local_albums.artist_id is not null
-              and not exists (
+              and (
+        """
+        + ("true" if allow_same_year_separate_release_merge else "false")
+        + """
+                or not exists (
                 select 1
                 from library.separate_releases
                 where library.separate_releases.library_id =
@@ -2922,6 +3073,7 @@ def _reconcile_semantic_local_albums_sql(
                         ''
                       )
                       )
+                )
               )
           ) as ranked
           where ranked.album_id <> ranked.canonical_album_id
@@ -3374,6 +3526,7 @@ def _execute_semantic_local_album_reconciliation(
     connection: Any,
     *,
     target_album_ids: tuple[int, ...] | None = None,
+    allow_same_year_separate_release_merge: bool = False,
 ) -> None:
     scoped_target_ids = tuple(
         sorted(
@@ -3384,12 +3537,15 @@ def _execute_semantic_local_album_reconciliation(
             }
         )
     )
+    if allow_same_year_separate_release_merge and not scoped_target_ids:
+        raise ValueError("Explicit release consolidation requires a targeted album identity.")
     if not scoped_target_ids:
         for statement in _reconcile_semantic_local_albums_sql():
             connection.execute(statement)
         return
     for statement in _reconcile_semantic_local_albums_sql(
         target_album_ids=scoped_target_ids,
+        allow_same_year_separate_release_merge=allow_same_year_separate_release_merge,
     ):
         if "%(target_album_ids)s" in statement:
             connection.execute(
@@ -3977,7 +4133,10 @@ def _persist_structural_album_tag_edit_sql(
                   then jsonb_set(
                          coalesce(library.local_albums.metadata, '{}'::jsonb),
                          '{release_date}',
-                         to_jsonb(validated_source_album.release_year::text),
+                         to_jsonb(coalesce(
+                           nullif(btrim(library.local_albums.metadata ->> 'release_date'), ''),
+                           validated_source_album.release_year::text
+                         )),
                          true
                        )
                   else library.local_albums.metadata
@@ -3989,7 +4148,10 @@ def _persist_structural_album_tag_edit_sql(
               then jsonb_set(
                      coalesce(validated_source_album.metadata, '{}'::jsonb),
                      '{release_date}',
-                     to_jsonb(validated_source_album.release_year::text),
+                     to_jsonb(coalesce(
+                       nullif(btrim(validated_source_album.metadata ->> 'release_date'), ''),
+                       validated_source_album.release_year::text
+                     )),
                      true
                    )
               else validated_source_album.metadata
@@ -4225,7 +4387,10 @@ def _persist_structural_album_tag_edit_sql(
           set metadata = jsonb_set(
                 coalesce(library.local_albums.metadata, '{}'::jsonb),
                 '{release_date}',
-                to_jsonb(validated_source_album.release_year::text),
+                to_jsonb(coalesce(
+                  nullif(btrim(library.local_albums.metadata ->> 'release_date'), ''),
+                  validated_source_album.release_year::text
+                )),
                 true
               )
           from validated_source_album
@@ -4241,6 +4406,7 @@ def _persist_structural_album_tag_edit_sql(
           set release_year = case
                 when not %(updates_release_year)s::boolean
                  and validated_source_album.has_display_year_override
+                 and nullif(btrim(library.local_albums.metadata ->> 'release_date'), '') is null
                 then validated_source_album.release_year
                 else library.local_albums.release_year
               end,
@@ -4250,7 +4416,11 @@ def _persist_structural_album_tag_edit_sql(
                 then jsonb_set(
                        coalesce(library.local_albums.metadata, '{}'::jsonb),
                        '{release_date}',
-                       to_jsonb(validated_source_album.release_year::text),
+                       to_jsonb(coalesce(
+                         nullif(btrim(library.local_albums.metadata ->> 'release_date'), ''),
+                         nullif(btrim(validated_source_album.metadata ->> 'release_date'), ''),
+                         validated_source_album.release_year::text
+                       )),
                        true
                      )
                 else library.local_albums.metadata
@@ -5065,6 +5235,8 @@ def _load_targeted_album_memberships_sql() -> str:
           library.local_track_files.private_path,
           library.local_albums.album_key,
           library.local_albums.title as album_title,
+          library.local_albums.release_year,
+          library.local_albums.metadata ->> 'edition' as edition,
           library.local_artists.artist_key
         from bootstrap_context
         join library.local_track_files
@@ -5082,7 +5254,8 @@ def _load_targeted_album_memberships_sql() -> str:
     """
 
 
-def _load_file_entries_sql() -> str:
+def _load_file_entries_sql(*, targeted_albums: bool = False) -> str:
+    album_filter = "and library.local_albums.album_key = any(%(album_keys)s::text[])" if targeted_albums else ""
     return """
         with bootstrap_context as (
           select library.libraries.id as library_id
@@ -5097,6 +5270,8 @@ def _load_file_entries_sql() -> str:
         select
           library.local_track_files.private_path,
           library.local_albums.id as album_id,
+          library.local_albums.album_key,
+          album_owner.artist_key as album_owner_key,
           library.local_track_files.file_size_bytes,
           extract(epoch from library.local_track_files.modified_at) as modified_at_epoch,
           library.local_track_files.metadata #> '{scan_cache,file_entry}' as file_entry,
@@ -5135,11 +5310,13 @@ def _load_file_entries_sql() -> str:
          and library.library_roots.library_id = library.local_tracks.library_id
          and library.library_roots.is_active is true
         left join library.local_albums on library.local_albums.id = library.local_tracks.album_id
+        left join library.local_artists album_owner on album_owner.id = library.local_albums.artist_id
         left join library.local_artists track_artists on track_artists.id = library.local_tracks.artist_id
         where library.local_track_files.metadata #>> '{scan_cache,source}' = %(source)s
           and coalesce((library.local_track_files.metadata #>> '{scan_cache,stale}')::boolean, false) is false
+          __TARGETED_ALBUM_FILTER__
         order by library.local_track_files.private_path;
-    """
+    """.replace("__TARGETED_ALBUM_FILTER__", album_filter)
 
 
 def _save_scan_snapshot_sql() -> str:
@@ -5198,9 +5375,9 @@ def _upsert_local_album_sql(
         else "excluded.cover_path"
     )
     metadata_update = (
-        """library.local_albums.metadata || case
+        f"""library.local_albums.metadata || case
                 when library.local_albums.metadata ->> 'cover_selection_origin' = 'user'
-                then excluded.metadata - array['cover_revision', 'cover_selection_origin']
+                then excluded.metadata - array[{', '.join(repr(field) for field in _ALBUM_COVER_METADATA_FIELDS)}]
                 else excluded.metadata
               end"""
         if preserve_existing_cover_authority
@@ -5247,6 +5424,54 @@ def _upsert_local_album_sql(
               cover_path = {cover_path_update},
               last_seen_at = now(),
               metadata = {metadata_update};
+    """
+
+
+def _update_targeted_album_aggregate_sql() -> str:
+    return """
+        update library.local_albums as album
+        set release_year = case
+              when nullif(album.metadata ->> 'release_date', '') is not null
+              then album.release_year else %(release_year)s end,
+            cover_path = case
+              when album.metadata ->> 'cover_selection_origin' = 'user'
+              then album.cover_path else %(cover_path)s end,
+            metadata = album.metadata || %(metadata)s || case
+              when album.metadata ->> 'cover_selection_origin' = 'user'
+              then '{}'::jsonb else %(cover_metadata)s::jsonb end
+        from library.libraries as owned_library, app.bootstrap_owners as owner
+        where album.library_id = owned_library.id
+          and owned_library.owner_account_id = owner.account_id
+          and owned_library.name = 'Local Library'
+          and owned_library.library_kind = 'local'
+          and owner.owner_key = 'local-bootstrap-owner'
+          and album.album_key = %(album_key)s;
+    """
+
+
+def _load_targeted_subtree_track_paths_sql() -> str:
+    return """
+        select distinct file.private_path
+        from library.local_track_files as file
+        join library.local_tracks as track on track.id = file.track_id
+        join library.library_roots as root
+          on root.id = file.library_root_id and root.library_id = track.library_id
+        join library.libraries as owned_library on owned_library.id = track.library_id
+        join app.bootstrap_owners as owner on owner.account_id = owned_library.owner_account_id
+        where owner.owner_key = 'local-bootstrap-owner'
+          and owned_library.name = 'Local Library'
+          and owned_library.library_kind = 'local'
+          and file.metadata #>> '{scan_cache,source}' = %(source)s
+          and exists (
+            select 1
+            from jsonb_to_recordset(%(subtrees)s::jsonb) as subtree(root_id text, path text)
+            where subtree.root_id = coalesce(nullif(root.metadata ->> 'root_id', ''), file.metadata ->> 'library_root_id')
+              and starts_with(
+                replace(file.private_path, E'\\\\', '/'),
+                rtrim(replace(subtree.path, E'\\\\', '/'), '/') || '/'
+              )
+          )
+        order by file.private_path;
     """
 
 
@@ -5532,6 +5757,54 @@ def _mark_stale_track_files_sql() -> str:
     """
 
 
+def _synchronize_targeted_local_album_featured_artists_sql() -> str:
+    return """
+        with bootstrap_context as (
+          select library.libraries.id as library_id
+          from app.bootstrap_owners
+          join library.libraries
+            on library.libraries.owner_account_id = app.bootstrap_owners.account_id
+           and library.libraries.name = 'Local Library'
+           and library.libraries.library_kind = 'local'
+          where app.bootstrap_owners.owner_key = 'local-bootstrap-owner'
+          limit 1
+        ),
+        affected_albums as (
+          select library.local_albums.id as album_id
+          from unnest(%(affected_album_keys)s::text[]) as affected(album_key)
+          join bootstrap_context on true
+          join library.local_albums
+            on library.local_albums.library_id = bootstrap_context.library_id
+           and library.local_albums.album_key = affected.album_key
+        ),
+        current_featured_rows as (
+          select library.local_albums.id as album_id,
+                 library.local_artists.id as artist_id,
+                 incoming.featured_kind
+          from jsonb_to_recordset(%(current_featured_rows)s::jsonb)
+            as incoming(album_key text, artist_key text, featured_kind text)
+          join bootstrap_context on true
+          join library.local_albums
+            on library.local_albums.library_id = bootstrap_context.library_id
+           and library.local_albums.album_key = incoming.album_key
+          join library.local_artists
+            on library.local_artists.library_id = bootstrap_context.library_id
+           and library.local_artists.artist_key = incoming.artist_key
+        )
+        delete from library.local_album_featured_artists
+        using bootstrap_context, affected_albums
+        where library.local_album_featured_artists.library_id = bootstrap_context.library_id
+          and library.local_album_featured_artists.album_id = affected_albums.album_id
+          and library.local_album_featured_artists.metadata ->> 'source' = %(source)s
+          and not exists (
+            select 1 from current_featured_rows
+            where current_featured_rows.album_id = library.local_album_featured_artists.album_id
+              and current_featured_rows.artist_id = library.local_album_featured_artists.artist_id
+              and current_featured_rows.featured_kind = library.local_album_featured_artists.featured_kind
+          );
+    """
+
+
 def _mark_targeted_track_files_stale_sql() -> str:
     return r"""
         with bootstrap_context as (
@@ -5560,6 +5833,8 @@ def _mark_targeted_track_files_stale_sql() -> str:
                 ) = %(root_id)s
             and library.local_track_files.metadata #>> '{scan_cache,source}' = %(source)s
             and library.local_track_files.scan_cache_stale is false
+            and library.local_track_files.private_path
+              <> all(%(active_paths)s::text[])
             and (
               library.local_track_files.private_path = any(%(deleted_paths)s::text[])
               or exists (

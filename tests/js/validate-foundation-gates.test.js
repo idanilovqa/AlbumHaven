@@ -118,7 +118,7 @@ test('foundation validator enforces the approved portable and Windows gate contr
     '  [chromium] › loopRangeControls.spec.js:68:1 › second component case',
     'Total: 2 tests in 2 files',
   ].join('\n')).length, 2);
-  assert.equal(validator.discoverComponentCases(repoRoot).length, 15);
+  assert.equal(validator.discoverComponentCases(repoRoot).length, 82);
 
   assert.deepEqual(
     validator.validatePytestCollection(
@@ -203,7 +203,10 @@ test('foundation validator enforces the approved portable and Windows gate contr
   );
 
   const triggerDrift = workflow.replace(/^on:\r?\n\s+pull_request:/m, 'on:\n  push:\n  pull_request:');
-  assert.match(validator.validateWorkflowContract(triggerDrift).join('\n'), /pull_request-only/i);
+  assert.match(validator.validateWorkflowContract(triggerDrift).join('\n'), /pull-request-only/i);
+
+  const dispatchDrift = workflow.replace(/^on:\r?\n/m, 'on:\n  workflow_dispatch:\n');
+  assert.match(validator.validateWorkflowContract(dispatchDrift).join('\n'), /pull-request-only/i);
 
   const unguardedWindows = workflow.replace(
     /if:\s*\$\{\{[^\n]*github\.event\.pull_request\.head\.repo\.full_name\s*==\s*github\.repository[^\n]*\}\}/,
@@ -289,4 +292,24 @@ test('foundation validator enforces the approved portable and Windows gate contr
     validator.validateDependencyContract(unpinnedFfmpeg).join('\n'),
     /imageio-ffmpeg 0\.6\.0/i,
   );
+});
+
+
+test('foundation validator rejects every test family losing its review-success dependency or condition', () => {
+  const validator = require(validatorPath);
+  const workflow = fs.readFileSync(workflowPath, 'utf8');
+  for (const job of [
+    'test_js', 'test_components', 'test_node_windows', 'test_python', 'e2e_production_parity',
+    'e2e_phase7_auth', 'e2e_phase7_admin', 'e2e_functional', 'e2e_performance_ci',
+  ]) {
+    assertWorkflowDrift(validator, workflow,
+      replaceInJob(workflow, job, /      - review_prerequisites\r?\n/, ''),
+      /review_prerequisites dependency/);
+    assertWorkflowDrift(validator, workflow,
+      replaceInJob(workflow, job, /needs\.review_prerequisites\.result == 'success'/, "needs.review_prerequisites.result != 'cancelled'"),
+      /successful review prerequisite/);
+    assertWorkflowDrift(validator, workflow,
+      replaceInJob(workflow, job, /!cancelled\(\)/, 'always()'),
+      /cancellable job condition/);
+  }
 });

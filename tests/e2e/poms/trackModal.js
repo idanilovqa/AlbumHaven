@@ -8,9 +8,14 @@ function exactNormalizedText(value) {
 }
 
 export class TrackModal extends BasePage {
+  async pressEscape() {
+    await this.page.keyboard.press('Escape');
+  }
+
   constructor(page, testInfo = null) {
     super(page, testInfo);
     this.dialog = page.locator(this.dialogSelector);
+    this.albumTrackTable = new AlbumTrackTable(this.dialog);
     this.loadingRow = page.locator(this.loadingRowSelector);
     this.trackRows = page.locator(this.trackRowSelector);
     this.closeButton = page.locator(this.closeButtonSelector);
@@ -22,6 +27,7 @@ export class TrackModal extends BasePage {
     this.coverImage = page.locator(this.coverImageSelector);
     this.detailedCoverImage = page.locator(this.detailedCoverImageSelector);
     this.coverPlaceholder = page.locator(this.coverPlaceholderSelector);
+    this.missingArtbox = page.locator(this.missingArtboxSelector);
     this.playButtons = page.locator(this.playButtonSelector);
     this.problemButtons = this.dialog.getByRole('button', {
       name: 'Open this track in Problematic Files',
@@ -38,12 +44,15 @@ export class TrackModal extends BasePage {
     this.lightboxCloseButton = page.locator(this.lightboxCloseButtonSelector);
     this.lightboxPreviousButton = page.locator('#image-lightbox-prev');
     this.lightboxNextButton = page.locator('#image-lightbox-next');
-    this.albumTrackTable = new AlbumTrackTable(this.dialog);
     this.header = this.dialog.locator('.album-details-header');
     this.headerActions = this.dialog.locator('.album-details-header__actions .action-button');
     this.missingAlert = this.dialog.locator('[data-on-page-alert="error"]');
     this.removeMissingAlbumButton = this.dialog.locator('[data-remove-missing-album="1"]');
     this.artbox = this.dialog.locator('#track-modal-cover .album-artbox');
+    this.artboxOverlay = this.artbox.locator('.album-artbox__overlay');
+    this.body = this.dialog.locator('.track-modal-body');
+    this.cover = this.dialog.locator('.track-modal-cover');
+    this.main = this.dialog.locator('.track-modal-main');
     this.missingEditButton = this.dialog.getByRole('button', { name: 'Edit album tags unavailable while album is missing' });
     this.missingFolderButton = this.dialog.getByRole('button', { name: 'Open album folder unavailable while album is missing' });
     this.appConfirmDialog = new AppConfirmDialog(page);
@@ -69,6 +78,18 @@ export class TrackModal extends BasePage {
     return '#track-modal-title';
   }
 
+  async readCanonicalAlbumIdentity() {
+    // parity-check: allow-read-only-measurement-evaluate -- read semantic album identity across the approved header layouts
+    return this.header.evaluate(header => {
+      const primary = header.querySelector('.album-details-header__primary')?.textContent.trim() || '';
+      const values = Array.from(header.querySelectorAll('.album-details-header__secondary > span:not([aria-hidden]):not([class])'), node => node.textContent.trim());
+      const layout = header.getAttribute('data-album-details-layout');
+      if (layout === 'editorial_canvas') return [values[0], primary, values[1]].filter(Boolean).join(' • ');
+      if (layout === 'stacked_bar') return [primary, values[0]].filter(Boolean).join(' • ');
+      return primary;
+    });
+  }
+
   get subtitleSelector() {
     return '#track-modal-subtitle';
   }
@@ -78,15 +99,19 @@ export class TrackModal extends BasePage {
   }
 
   get coverImageSelector() {
-    return '#track-modal-cover img';
+    return '#track-modal-cover .track-modal-cover-visual > img';
   }
 
   get detailedCoverImageSelector() {
-    return '#track-modal-cover .track-modal-cover-visual img';
+    return this.coverImageSelector;
   }
 
   get coverPlaceholderSelector() {
     return '#track-modal-cover .album-artbox[data-album-artbox-state="empty"]';
+  }
+
+  get missingArtboxSelector() {
+    return '#track-modal-cover [data-album-artbox-state="empty"], #track-modal-cover [data-album-artbox-state="missing"]';
   }
 
   get playButtonSelector() {
@@ -198,7 +223,7 @@ export class TrackModal extends BasePage {
       .filter(Boolean);
     return {
       headers: normalize(await this.discHeaders.allTextContents()),
-      totals: normalize(await this.discTotals.allTextContents()),
+      totals: normalize(await this.albumTrackTable.total.locator(':scope > *').allTextContents()),
     };
   }
 
@@ -228,7 +253,7 @@ export class TrackModal extends BasePage {
   }
 
   async readAlbumTrackTableTotal() {
-    return String(await this.albumTrackTable.total.textContent() || '').trim();
+    return String(await this.albumTrackTable.aggregateTotal.textContent() || '').trim();
   }
 
   problemButtonByTrackTitle(trackTitle) {

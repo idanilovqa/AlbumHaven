@@ -1,0 +1,25 @@
+{
+  "status": "approved",
+  "screen": "utilities-refactor",
+  "version": "v002",
+  "approvals": [
+    {
+      "date": "2026-09-09",
+      "source": "Owner: All mocks approved",
+      "scope": "All current Utilities and player mockups, including navigation v003, both player styles, capability-gated style preference, playback statistics, loop reordering and latest hover timing."
+    }
+  ],
+  "requests": [],
+  "history": [
+    {
+      "date": "2026-09-09",
+      "event": "revision",
+      "note": "Apply the owner's 14 corrections using live current-stack component references. Exact approval pending."
+    },
+    {
+      "date": "2026-09-09",
+      "event": "approval",
+      "note": "Owner approved all current mockups. Visual approval recorded; this does not assert production implementation or manual acceptance."
+    }
+  ]
+}

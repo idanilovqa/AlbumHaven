@@ -68,7 +68,7 @@ test('rarity-edit scenario keeps selectors and interactions in POMs and actions'
   assert.match(pomExports, /export \{ TagEditor \} from '\.\/tagEditor\.js'/);
   assert.match(actionExports, /export \{ TagEditorActions \} from '\.\/tagEditorActions\.js'/);
   assert.match(fixtures, /tagEditorActions: async[\s\S]*new TagEditorActions\(new TagEditor\(page, testInfo\)\)/);
-  assert.match(settingsPom, /nonAlbumTracksButtonSelector[\s\S]*data-open-non-album-modal/);
+  assert.match(settingsPom, /nonAlbumTracksButtonSelector[\s\S]*data-open-non-album-tracks/);
   assert.match(
     settingsActions,
     /openNonAlbumTracks\(expectedCount[\s\S]*readNonAlbumTrackTitles\(\)/,

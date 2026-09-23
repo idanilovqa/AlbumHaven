@@ -19,13 +19,19 @@ const RUNTIME_SCRIPT_PATHS = [
   'js/runtime/markup-format-helpers.js',
   'js/runtime/loader-status-helpers.js',
   'js/runtime/status-ui-helpers.js',
+  'js/runtime/library-warning-ui.js',
   'js/runtime/notification-ui-helpers.js',
   'js/runtime/render-markup-helpers.js',
   'js/runtime/alert-components.js',
   'js/runtime/album-artbox.js',
+  'js/runtime/gallery-main-components.js',
+  'js/runtime/gallery-main-state.js',
   'js/runtime/gallery-card-component.js',
   'js/runtime/album-details-components.js',
   'js/runtime/core-state-and-helpers.js',
+  'js/runtime/trigger-anchor.js',
+  'js/runtime/search-input.js',
+  'js/runtime/gallery-main-interactions.js',
   'js/runtime/compact-player-helpers.js',
   'js/runtime/player-streaming-engine.js',
   'js/runtime/shell-navigation-drawer.js',
@@ -44,6 +50,9 @@ const RUNTIME_SCRIPT_PATHS = [
   'js/runtime/gallery-refresh-and-status.js',
   'js/runtime/problematic-album-helpers.js',
   'js/runtime/browser-log-history-store.js',
+  'js/runtime/utility-log-history-query.js',
+  'js/runtime/date-range-picker.js',
+  'js/runtime/utility-log-history-ui.js',
   'js/runtime/compact-data-table.js',
   'js/runtime/album-track-table.js',
   'js/runtime/utility-list-builders.js',
@@ -51,8 +60,10 @@ const RUNTIME_SCRIPT_PATHS = [
   'js/runtime/library-settings.js',
   'js/runtime/cover-lookup-notification-helpers.js',
   'js/runtime/appearance-backgrounds-bridge.js',
+  'js/runtime/problematic-files-virtual-list.js',
   'js/runtime/utility-renderers-and-actions.js',
   'js/runtime/utility-loop-playback.js',
+  'js/runtime/tag-editor-reorder.js',
   'js/runtime/utility-loaders-and-cover-lookup.js',
   'js/runtime/cover-lookup-modal-and-drawer.js',
   'js/runtime/tag-editor-and-optimistic-updates.js',
@@ -76,7 +87,9 @@ function buildRuntimeBundle() {
   ];
   for (const scriptPath of RUNTIME_SCRIPT_PATHS) {
     const absolutePath = path.join(repoRoot, 'music_app', 'static', scriptPath);
-    const source = fs.readFileSync(absolutePath, 'utf8').replace(/\s+$/u, '');
+    const source = fs.readFileSync(absolutePath, 'utf8')
+      .replace(/\r\n?/gu, '\n')
+      .replace(/\s+$/u, '');
     chunks.push(`// BEGIN ${scriptPath}`);
     chunks.push(source);
     chunks.push(`// END ${scriptPath}`);

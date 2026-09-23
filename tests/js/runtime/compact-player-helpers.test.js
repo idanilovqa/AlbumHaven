@@ -32,6 +32,182 @@ function loadHelper() {
 
 const plain = value => JSON.parse(JSON.stringify(value));
 
+function loadQueueController(t, initialIndex = 0) {
+  const tracks = ['A', 'B', 'C', 'D'].map(name => ({ path: `${name}.flac`, src: `/track/${name}` }));
+  const starts = [];
+  const results = [];
+  const errors = [];
+  const controls = {
+    player: {
+      classList: { add() {}, remove() {}, toggle() {}, contains() { return false; } },
+      dataset: {},
+      style: { setProperty() {} },
+    },
+    previous: {},
+    next: {},
+  };
+  const context = {
+    window: { setTimeout, clearTimeout },
+    state: { player: { current: tracks[initialIndex], playbackQueue: { tracks, currentIndex: initialIndex } } },
+    canStartPlaybackInThisTab: () => true,
+    startStreamingTrack: track => new Promise((resolve, reject) => starts.push({ track, resolve, reject })),
+    observeStreamingFacadeCallback: result => result.catch(error => errors.push(error)),
+  };
+  context.getPlayerPlaybackSnapshot = () => ({ src: context.state.player.current?.src, paused: false });
+  vm.createContext(context);
+  vm.runInContext(fs.readFileSync(helperPath, 'utf8'), context, { filename: helperPath });
+  const playbackPath = path.join(path.dirname(controllerPath), 'player-loop-playback.js');
+  vm.runInContext(fs.readFileSync(playbackPath, 'utf8'), context, { filename: playbackPath });
+  vm.runInContext(fs.readFileSync(controllerPath, 'utf8'), context, { filename: controllerPath });
+  context.setCurrentPlayerTrack = track => { context.state.player.current = track; };
+  context.compactPlayerElements = () => controls;
+  context.updatePlayerUi = () => context.syncCompactPlayerUi();
+  const playTrack = context.playTrackFromPayload;
+  context.playTrackFromPayload = (...args) => {
+    const result = playTrack(...args);
+    results.push(result);
+    // Keep expected RED rejections owned by this harness; production reporting is asserted separately.
+    result.catch(() => {});
+    return result;
+  };
+  const settle = async (index, error) => {
+    if (error) starts[index].reject(error);
+    else starts[index].resolve({ track: starts[index].track });
+    await new Promise(resolve => setImmediate(resolve));
+  };
+  t.after(async () => {
+    starts.forEach(start => start.resolve({ track: start.track }));
+    await Promise.allSettled(results);
+    await new Promise(resolve => setImmediate(resolve));
+  });
+  return { context, tracks, starts, controls, errors, settle };
+}
+
+for (const savedMode of [null, 'expanded', 'compact']) {
+  test(`desktop return restores compact-player controls with ${savedMode || 'absent'} saved mode`, t => {
+    const { context, controls } = loadQueueController(t);
+    const events = new Map();
+    const element = () => ({ dataset: {}, hidden: false, style: { setProperty() {} }, classList: { toggle() {}, add() {}, remove() {} }, setAttribute() {}, addEventListener() {}, querySelector() { return null; } });
+    Object.assign(controls, { player: element(), expanded: element(), compact: element(), collapse: element(), expand: element() });
+    controls.previous.addEventListener = () => {};
+    controls.next.addEventListener = () => {};
+    const writes = [];
+    context.document = { documentElement: { ...element(), getAttribute: () => 'docked' }, getElementById: () => null };
+    context.window = { setTimeout, clearTimeout, innerWidth: 600, innerHeight: 800, localStorage: { getItem: () => savedMode, setItem: (...args) => writes.push(args) }, addEventListener: (name, callback) => events.set(name, callback) };
+    context.initCompactPlayer();
+    assert.equal(controls.collapse.hidden, true);
+    context.window.innerWidth = 1200;
+    events.get('resize')();
+    assert.equal(controls.collapse.hidden, false);
+    assert.equal(controls.expand.hidden, true, "docked presentation has no expand chevron");
+    assert.equal(controls.expanded.inert, savedMode === 'compact');
+    assert.deepEqual(writes, [], 'responsive changes do not overwrite the saved preference');
+  });
+}
+
+for (const [name, initialIndex, offsets, expected] of [
+  ['next', 0, [1, 1], ['B.flac', 'C.flac']],
+  ['previous', 3, [-1, -1], ['C.flac', 'B.flac']],
+  ['mixed', 1, [1, -1, 1, 1], ['C.flac', 'B.flac', 'C.flac', 'D.flac']],
+]) {
+  test(`compact pending ${name} navigation advances before streaming startup completes`, async t => {
+    const { context, starts, tracks, settle } = loadQueueController(t, initialIndex);
+    offsets.forEach(offset => context.playCompactQueueOffset(offset));
+    assert.deepEqual(starts.map(start => start.track.path), expected);
+    assert.equal(context.state.player.current, tracks[initialIndex]);
+    await settle(starts.length - 1);
+    assert.equal(context.state.player.current.path, expected.at(-1));
+    assert.equal(context.currentQueueIndex(), tracks.findIndex(track => track.path === expected.at(-1)));
+  });
+}
+
+test('compact pending navigation refreshes button bounds and cannot step past the queue', t => {
+  const { context, starts, controls } = loadQueueController(t);
+  [-1, 1, 1, 1, 1].forEach(offset => context.playCompactQueueOffset(offset));
+  assert.deepEqual(starts.map(start => start.track.path), ['B.flac', 'C.flac', 'D.flac']);
+  assert.equal(controls.next.disabled, true);
+  assert.equal(controls.previous.disabled, false);
+});
+
+for (const outcome of ['success', 'rejection']) {
+  test(`compact older ${outcome} cannot clear a newer pending selection`, async t => {
+    const { context, starts, controls, errors, settle } = loadQueueController(t);
+    context.playCompactQueueOffset(1);
+    context.playCompactQueueOffset(1);
+    await settle(0, outcome === 'rejection' ? new Error('older startup failed') : null);
+    assert.equal(context.currentQueueIndex(), 2);
+    context.playCompactQueueOffset(1);
+    assert.deepEqual(starts.map(start => start.track.path), ['B.flac', 'C.flac', 'D.flac']);
+    assert.equal(controls.next.disabled, true);
+    assert.deepEqual(errors, []);
+  });
+}
+
+for (const outcome of ['false', 'rejection']) {
+  test(`compact latest ${outcome} restores the playing cursor and controls`, async t => {
+    const { context, starts, controls, errors, settle } = loadQueueController(t);
+    if (outcome === 'false') context.canStartPlaybackInThisTab = () => false;
+    context.playCompactQueueOffset(1);
+    if (outcome === 'rejection') await settle(0, new Error('startup failed'));
+    else await new Promise(resolve => setImmediate(resolve));
+    assert.equal(context.state.player.playbackQueue.currentIndex, 0);
+    assert.equal(context.currentQueueIndex(), 0);
+    assert.equal(controls.previous.disabled, true);
+    assert.equal(controls.next.disabled, false);
+    assert.equal(errors.length, outcome === 'rejection' ? 1 : 0);
+    context.canStartPlaybackInThisTab = () => true;
+    context.playCompactQueueOffset(1);
+    assert.equal(starts.at(-1).track.path, 'B.flac');
+  });
+}
+
+test('compact latest failure followed by older completion cannot restore the abandoned selection', async t => {
+  const { context, starts, settle } = loadQueueController(t);
+  context.playCompactQueueOffset(1);
+  context.playCompactQueueOffset(1);
+  await settle(1, new Error('newer startup failed'));
+  await settle(0);
+  assert.equal(context.state.player.current.path, 'A.flac');
+  assert.equal(context.state.player.playbackQueue.currentIndex, 0);
+  context.playCompactQueueOffset(1);
+  assert.equal(starts.at(-1).track.path, 'B.flac');
+});
+
+test('compact pending navigation preserves cursor through queue metadata refresh', t => {
+  const { context, starts } = loadQueueController(t);
+  context.playCompactQueueOffset(1);
+  context.state.player.playbackQueue.tracks = context.state.player.playbackQueue.tracks.map(track => ({ ...track, artist: 'Updated' }));
+  context.playCompactQueueOffset(1);
+  assert.deepEqual(starts.map(start => start.track.path), ['B.flac', 'C.flac']);
+});
+
+for (const replacement of ['queue', 'tracks', 'index', 'clear']) {
+  test(`compact pending navigation discards its cursor after ${replacement} replacement`, async t => {
+    const { context, tracks, starts, settle } = loadQueueController(t);
+    context.playCompactQueueOffset(1);
+    const originalQueue = context.state.player.playbackQueue;
+    if (replacement === 'queue') context.state.player.playbackQueue = { tracks: [tracks[3], tracks[0], tracks[2]], currentIndex: 0 };
+    if (replacement === 'tracks') originalQueue.tracks = [tracks[3], tracks[0], tracks[2]];
+    if (replacement === 'index') {
+      originalQueue.currentIndex = 3;
+      context.state.player.current = tracks[2];
+    }
+    if (replacement === 'clear') context.state.player.playbackQueue = null;
+    const replacementQueue = context.state.player.playbackQueue;
+    const expectedIndex = replacement === 'clear' ? -1 : replacement === 'index' ? 2 : 1;
+    assert.equal(context.currentQueueIndex(), expectedIndex);
+    context.playCompactQueueOffset(1);
+    assert.equal(starts.length, replacement === 'clear' ? 1 : 2);
+    if (replacement !== 'clear') {
+      assert.equal(starts[1].track.path, replacement === 'index' ? 'D.flac' : 'C.flac');
+      await settle(1);
+    }
+    await settle(0, new Error('superseded compact startup failed'));
+    assert.equal(context.state.player.playbackQueue, replacementQueue);
+    if (replacementQueue) assert.equal(replacementQueue.currentIndex, replacement === 'index' ? 3 : 2);
+  });
+}
+
 test('compact player is eligible only above the desktop shell breakpoint', () => {
   const helper = loadHelper();
 
@@ -69,6 +245,69 @@ test('docked is the default compact style and invalid stored values normalize sa
   assert.equal(helper.normalizeCompactPlayerStyle('docked'), 'docked');
   assert.equal(helper.normalizeCompactPlayerStyle('floating'), 'floating');
   assert.equal(helper.normalizeCompactPlayerStyle('bottom-left'), 'docked');
+});
+
+test('docked compact behavior follows the folded artist tree by default and accepts stay docked', () => {
+  const helper = loadHelper();
+
+  assert.equal(helper.normalizeDockedCompactPlayerBehavior(), 'follow_sidebar');
+  assert.equal(helper.normalizeDockedCompactPlayerBehavior('follow_sidebar'), 'follow_sidebar');
+  assert.equal(helper.normalizeDockedCompactPlayerBehavior('stay_docked'), 'stay_docked');
+  assert.equal(helper.normalizeDockedCompactPlayerBehavior('unknown'), 'follow_sidebar');
+  assert.equal(helper.useCompactPlayerRailMode({
+    style: 'docked', behavior: 'follow_sidebar', artistTreeFolded: true,
+  }), true);
+  assert.equal(helper.useCompactPlayerRailMode({
+    style: 'docked', behavior: 'stay_docked', artistTreeFolded: true,
+  }), false);
+  assert.equal(helper.useCompactPlayerRailMode({
+    style: 'floating', behavior: 'follow_sidebar', artistTreeFolded: true,
+  }), false);
+  assert.equal(helper.useCompactPlayerRailMode({
+    style: 'docked', behavior: 'follow_sidebar', artistTreeFolded: false,
+  }), false);
+});
+
+test('compact controller reduces a folded follow-sidebar player to the rail controls', () => {
+  const classes = value => ({
+    values: new Set(value ? [value] : []),
+    toggle(name, enabled) { if (enabled) this.values.add(name); else this.values.delete(name); },
+    add(name) { this.values.add(name); },
+    remove(name) { this.values.delete(name); },
+    contains(name) { return this.values.has(name); },
+  });
+  const element = () => ({
+    hidden: false, inert: false, classList: classes(), dataset: {},
+    style: { setProperty() {} }, setAttribute() {}, querySelector() { return null; },
+  });
+  const player = element(), expanded = element(), compact = element(), root = element();
+  const collapse = element(), expand = element(), shell = element(), tree = element();
+  shell.classList.add('is-artist-tree-folded');
+  tree.getBoundingClientRect = () => ({ left: 0, width: 56 });
+  let behavior = 'follow_sidebar';
+  root.getAttribute = name => name === 'data-compact-player-style' ? 'docked'
+    : name === 'data-docked-compact-player-behavior' ? behavior : null;
+  const context = loadHelper();
+  Object.assign(context, {
+    state: { player: { current: null, playbackQueue: null } },
+    getPlayerPlaybackSnapshot: () => ({ paused: true, src: '' }),
+    document: {
+      documentElement: root, activeElement: null,
+      getElementById: id => id === 'app-shell' ? shell : id === 'shell-navigation-rail' ? tree : null,
+    },
+    window: { setTimeout, clearTimeout, innerWidth: 1200, innerHeight: 800, localStorage: {}, addEventListener() {} },
+  });
+  vm.runInContext(fs.readFileSync(controllerPath, 'utf8'), context, { filename: controllerPath });
+  context.compactPlayerElements = () => ({ player, expanded, compact, collapse, expand });
+
+  context.applyCompactPlayerMode('compact', { persist: false });
+  assert.equal(player.classList.contains('is-rail-compact'), true);
+  assert.equal(root.classList.contains('has-follow-sidebar-compact-player'), true);
+
+  behavior = 'stay_docked';
+  context.applyCompactPlayerMode('compact', { persist: false });
+  assert.equal(player.classList.contains('is-rail-compact'), false);
+  assert.equal(root.classList.contains('has-follow-sidebar-compact-player'), false);
 });
 
 test('floating pointer movement becomes a drag only after crossing the threshold', () => {
@@ -158,9 +397,9 @@ test('floating default uses the viewport bottom while the navigation rail is sti
 test('floating controller keeps the player within the practical viewport edge', () => {
   const controller = fs.readFileSync(controllerPath, 'utf8');
 
-  assert.match(controller, /const FLOATING_COMPACT_PLAYER_MARGIN = 4/);
+  assert.match(controller, /const FLOATING_COMPACT_PLAYER_MARGIN = 8/);
   assert.match(controller, /const FLOATING_COMPACT_PLAYER_LEFT_MARGIN = 12/);
-  assert.equal((controller.match(/margin: FLOATING_COMPACT_PLAYER_MARGIN/g) || []).length, 4);
+  assert.equal((controller.match(/margin: FLOATING_COMPACT_PLAYER_MARGIN/g) || []).length, 5);
   assert.equal((controller.match(/leftMargin: FLOATING_COMPACT_PLAYER_LEFT_MARGIN/g) || []).length, 4);
 });
 
@@ -194,6 +433,22 @@ test('docked player geometry follows the rendered artist-tree panel', () => {
   });
 });
 
+test('docked geometry preserves its last visible left edge while Settings hides the library rail', () => {
+  const context = loadHelper();
+  const properties = new Map();
+  let rect = { left: 8, width: 264 };
+  context.document = { getElementById: () => ({ getBoundingClientRect: () => rect }) };
+  vm.runInContext(fs.readFileSync(controllerPath, 'utf8'), context, { filename: controllerPath });
+  context.compactPlayerElements = () => ({ player: { style: { setProperty: (key, value) => properties.set(key, value) } } });
+  context.syncDockedCompactGeometry();
+  rect = { left: 0, width: 0 };
+  context.syncDockedCompactGeometry();
+  assert.equal(properties.get('--compact-docked-left'), '8px');
+  rect = { left: 12, width: 290 };
+  context.syncDockedCompactGeometry();
+  assert.equal(properties.get('--compact-docked-left'), '12px');
+});
+
 test('floating album details require a pointer double-click while keyboard and docked activation stay direct', () => {
   const helper = loadHelper();
 
@@ -204,64 +459,131 @@ test('floating album details require a pointer double-click while keyboard and d
   assert.equal(helper.shouldOpenCompactPlayerAlbum({ style: 'docked', eventType: 'dblclick', detail: 2 }), false);
 });
 
-test('compact markup and layout expose only approved transport controls and reserve docked tree space', () => {
+test('compact cover keeps its accessible label without a native hover tooltip', () => {
+  const controller = fs.readFileSync(controllerPath, 'utf8');
+  assert.match(controller, /els\.cover\.setAttribute\('aria-label', openLabel\)/);
+  assert.doesNotMatch(controller, /els\.cover\.title\s*=\s*openLabel/);
+});
+
+test('compact player keeps stable cover, metadata, and shared playback controls', () => {
   const template = fs.readFileSync(templatePath, 'utf8');
   const compact = template.match(/<div class="compact-player-shell"[\s\S]*?<\/div>\s*<\/div>/)?.[0] || '';
-  const compactComponent = fs.readFileSync(playbackControlMacroPath, 'utf8');
-  const compactContract = `${compact}\n${compactComponent}`;
-  const css = fs.readFileSync(stylePath, 'utf8');
-  const appChromeCss = fs.readFileSync(appChromeStylePath, 'utf8');
+  const component = fs.readFileSync(playbackControlMacroPath, 'utf8');
+  for (const name of ['data-compact-player-cover', 'data-compact-player-title', 'data-compact-player-artist',
+    'data-compact-player-title-text', 'data-compact-player-artist-text',
+    'data-compact-player-hover-bubble', 'data-compact-player-summary']) assert.ok(compact.includes(name));
+  assert.ok(compact.includes("playback_control_cluster('compact-player')"));
+  assert.match(component, /data-compact-player-play[^>]*aria-label="Play"/);
+  assert.doesNotMatch(compact, /waveform|seekbar/);
+});
+
+test('rail metadata bubble retains pointer interaction and opens Album Details from its album name', () => {
+  const template = fs.readFileSync(templatePath, 'utf8');
   const controller = fs.readFileSync(controllerPath, 'utf8');
-  for (const name of ['Open album details', 'Previous track', 'Play', 'Next track']) {
-    assert.match(compactContract, new RegExp(`aria-label="${name}"`));
+  const css = fs.readFileSync(stylePath, 'utf8');
+
+  assert.match(template, /data-compact-player-hover-bubble[^>]*aria-hidden="true"[^>]*inert/);
+  assert.match(template, /data-compact-player-hover-bubble[^]*?<button[^>]*class="player-album-link compact-player-hover-album"[^>]*data-compact-player-album/);
+  assert.match(controller, /albumLink:\s*compact\?\.querySelector\('\[data-compact-player-album\]'\)/);
+  assert.match(controller, /els\.hoverBubble\.inert = true/);
+  assert.match(controller, /els\.hoverBubble\.inert = false/);
+  assert.match(controller, /els\.albumLink\?\.addEventListener\('click',\s*openCurrentAlbumDetails\)/);
+  assert.match(css, /\.global-player\.is-compact-metadata-visible \.compact-player-hover-bubble\s*\{[^}]*pointer-events:\s*auto;/s);
+});
+
+test('sidebar presentation preserves always-floating and stay-docked compatibility', () => {
+  const h = loadHelper();
+  assert.equal(typeof h.resolveCompactPlayerPresentation, 'function');
+  for (const style of ['docked', 'floating']) {
+    for (const behavior of ['follow_sidebar', 'float_on_collapse', 'artbox', 'stay_docked']) {
+      for (const artistTreeFolded of [false, true]) {
+        const input = { eligible: true, mode: 'compact', style, behavior, artistTreeFolded };
+        const expected = style === 'floating' ? 'floating'
+          : !artistTreeFolded || behavior === 'stay_docked' ? 'docked'
+          : { follow_sidebar: 'rail_play', float_on_collapse: 'floating', artbox: 'rail_artbox' }[behavior];
+        assert.equal(h.resolveCompactPlayerPresentation(input), expected, JSON.stringify(input));
+        assert.equal(h.resolveCompactPlayerPresentation({ ...input, eligible: false }), 'expanded');
+        assert.equal(h.resolveCompactPlayerPresentation({ ...input, mode: 'expanded' }), 'expanded');
+      }
+    }
   }
-  for (const attribute of ['data-compact-player-previous', 'data-compact-player-next']) {
-    const skipButton = compactComponent.match(new RegExp(`<button[^>]+${attribute}[^>]*>[\\s\\S]*?<\\/button>`))?.[0] || '';
-    assert.match(skipButton, /<svg[^>]+aria-hidden="true"/);
-    assert.equal((skipButton.match(/<path /g) || []).length, 2);
-    assert.doesNotMatch(skipButton, /[◀▶]/);
+  assert.equal(h.resolveCompactPlayerPresentation({
+    eligible: true, mode: 'compact', style: 'invalid', behavior: 'invalid', artistTreeFolded: true,
+  }), 'rail_play');
+});
+
+test('background overlays detach only sidebar-integrated compact presentations', () => {
+  const h = loadHelper();
+  for (const presentation of ['docked', 'rail_play', 'rail_artbox']) {
+    assert.equal(h.shouldDetachCompactPlayerForOverlay({ presentation, overlayActive: true }), true);
+    assert.equal(h.shouldDetachCompactPlayerForOverlay({ presentation, overlayActive: false }), false);
   }
-  assert.doesNotMatch(template, /data-player-toggle|player-mode-toggle/);
-  assert.match(template, /<div class="player-shell">\s*<div class="player-controls">\s*\{% call ui_button\([^%]+action='player-collapse'[^%]+class_name='player-collapse-button'/);
-  assert.match(compact, /\{% call ui_button\([^%]+action='player-expand'[^%]+class_name='compact-player-expand'/);
-  assert.match(template, /class_name='player-collapse-button'[^%]*%\}‹\{% endcall %\}/);
-  assert.match(compact, /class_name='compact-player-expand'[^%]*%\}›\{% endcall %\}/);
-  for (const hiddenFeature of ['waveform', 'seekbar', 'player-title', 'player-artist']) {
-    assert.doesNotMatch(compactContract, new RegExp(hiddenFeature, 'i'));
+  for (const presentation of ['expanded', 'floating', undefined]) {
+    assert.equal(h.shouldDetachCompactPlayerForOverlay({ presentation, overlayActive: true }), false);
   }
-  assert.match(css, /:root\.has-docked-compact-player #shell-navigation-rail\s*\{[^}]*height:\s*calc\(100% - 76px\)/);
-  assert.match(css, /:root\.has-floating-compact-player #shell-navigation-rail\s*\{[^}]*height:\s*100%/);
-  assert.doesNotMatch(css, /:root\.has-docked-compact-player #shell-navigation-rail\s*\{[^}]*padding-bottom:\s*88px/);
-  assert.match(appChromeCss, /\.shell-layout\s*\{[^}]*height:\s*calc\(100dvh - var\(--player-height\)\)/);
-  assert.match(css, /:root\.has-compact-player\s*\{\s*--player-height:\s*0px/);
-  assert.match(css, /width:\s*var\(--compact-docked-width/);
-  assert.match(css, /\.global-player:not\(\.is-compact\)\s*\{[^}]*padding-left:\s*28px/);
-  assert.match(css, /:root \.global-player \.player-collapse-button,\s*:root \.global-player \.compact-player-expand\s*\{[^}]*border:\s*0[^}]*background:\s*transparent[^}]*box-shadow:\s*none/s);
-  assert.match(css, /\.player-collapse-button\s*\{[^}]*left:\s*-28px[^}]*top:\s*0[^}]*height:\s*var\(--player-controls-size\)[^}]*transform:\s*none/s);
-  assert.match(css, /\.global-player\.is-docked-compact \.compact-player-expand\s*\{[^}]*left:\s*-30px[^}]*top:\s*50%[^}]*translateY\(-50%\)/s);
-  assert.match(css, /:root \.global-player\.is-docked-compact \.compact-player-expand\.button\.ui-button\s*\{[^}]*position:\s*relative[^}]*left:\s*auto[^}]*top:\s*auto[^}]*border:\s*0[^}]*border-radius:\s*0[^}]*background:\s*transparent[^}]*box-shadow:\s*none[^}]*transform:\s*none/s);
-  assert.match(css, /\.global-player\.is-docked-compact \.compact-player-expand \.ui-button__content::before\s*\{[^}]*content:\s*['"]›['"]/s);
-  assert.match(css, /\.global-player\.is-docked-compact \.compact-player-shell\s*\{[^}]*justify-content:\s*space-between[^}]*gap:\s*12px/s);
-  assert.match(compactComponent, /data-compact-player-next[\s\S]*?<path class="compact-player-skip-arrow is-inner"/);
-  assert.match(css, /\.global-player\.is-docked-compact \[data-compact-player-next\] \.compact-player-skip-arrow\.is-inner\s*\{[^}]*scale\(\.72\)/s);
-  assert.match(css, /\.compact-player-transport \.compact-player-play:hover,[\s\S]*?\.compact-player-play:focus-visible\s*\{[^}]*outline:\s*2px solid var\(--appearance-player-control-border,\s*var\(--appearance-waveform-edge,\s*var\(--appearance-player-ink,/s);
-  assert.match(css, /\.compact-player-transport \.compact-player-play:hover,[\s\S]*?outline-offset:\s*2px/s);
-  assert.match(css, /:root \.global-player\.is-floating-compact \.compact-player-expand\s*\{[^}]*left:\s*-19px[^}]*top:\s*-19px[^}]*border-radius:\s*9px[^}]*background:[^}]*box-shadow:/s);
-  assert.match(css, /prefers-reduced-motion:\s*reduce/);
-  assert.match(css, /@property --player-height/);
-  assert.match(css, /\.is-compact-player-dragging\s*\{[^}]*transition:[^}]*height[^}]*opacity/);
-  assert.match(controller, /previousStyle !== 'floating'/);
-  assert.match(controller, /collapse:\s*expanded\?\.querySelector\("\[data-ui-button-action='player-collapse'\]"\)/);
-  assert.match(controller, /expand:\s*compact\?\.querySelector\("\[data-ui-button-action='player-expand'\]"\)/);
-  assert.match(controller, /els\.collapse\?\.addEventListener\('click'/);
-  assert.match(controller, /els\.expand\?\.addEventListener\('click'/);
-  assert.match(controller, /getElementById\('shell-navigation-rail'\)/);
-  assert.match(controller, /addEventListener\('pointercancel', finishDrag\)/);
-  assert.match(controller, /hasPointerCapture\?\./);
-  assert.match(controller, /compactPlayerDrag = null/);
-  assert.match(controller, /addEventListener\('dblclick'/);
-  assert.match(controller, /shouldOpenCompactPlayerAlbum\(\{ style: compactPlayerStyle, eventType: event\.type, detail: event\.detail \}\)/);
-  assert.match(css, /--compact-floating-edge-strength:\s*12%/);
-  assert.match(css, /--compact-floating-glow-strength:\s*24%/);
-  assert.match(css, /\.global-player\.is-floating-compact:is\(:hover,:focus-within\)\s*\{[^}]*--compact-floating-edge-strength:\s*30%[^}]*--compact-floating-glow-strength:\s*38%/s);
+});
+
+test('stay-docked drag is available only while the Artist Tree is collapsed', () => {
+  const h = loadHelper();
+  assert.equal(h.canDragStayDockedCompactPlayer({
+    presentation: 'docked', behavior: 'stay_docked', artistTreeFolded: true,
+  }), true);
+  for (const options of [
+    { presentation: 'docked', behavior: 'stay_docked', artistTreeFolded: false },
+    { presentation: 'docked', behavior: 'follow_sidebar', artistTreeFolded: true },
+    { presentation: 'floating', behavior: 'stay_docked', artistTreeFolded: true },
+  ]) assert.equal(h.canDragStayDockedCompactPlayer(options), false);
+});
+
+test('sidebar motion uses approved timing and reduced motion overrides slow', () => {
+  const h = loadHelper();
+  assert.equal(typeof h.resolveCompactPlayerMotion, 'function');
+  assert.deepEqual(plain(h.resolveCompactPlayerMotion()), { durationMs: 420, hoverDurationMs: 300 });
+  assert.deepEqual(plain(h.resolveCompactPlayerMotion({ speed: 'slow' })), { durationMs: 1400, hoverDurationMs: 300 });
+  for (const speed of ['normal', 'slow']) {
+    assert.deepEqual(plain(h.resolveCompactPlayerMotion({ speed, reducedMotion: true })), {
+      durationMs: 1, hoverDurationMs: 1,
+    });
+  }
+});
+
+test('rail metadata waits for artwork motion plus the approved hover delay', () => {
+  const h = loadHelper();
+  assert.equal(h.resolveCompactPlayerMetadataRevealDelay({
+    presentation: 'rail_play', speed: 'normal', reducedMotion: false,
+  }), 1120);
+  assert.equal(h.resolveCompactPlayerMetadataRevealDelay({
+    presentation: 'rail_play', speed: 'slow', reducedMotion: false,
+  }), 2100);
+  assert.equal(h.resolveCompactPlayerMetadataRevealDelay({
+    presentation: 'rail_play', speed: 'slow', reducedMotion: true,
+  }), 701);
+  assert.equal(h.resolveCompactPlayerMetadataRevealDelay({
+    presentation: 'rail_artbox', speed: 'slow', reducedMotion: false,
+  }), 700);
+  assert.equal(h.resolveCompactPlayerMetadataRevealDelay({
+    presentation: 'docked', speed: 'normal', reducedMotion: false,
+  }), null);
+});
+
+test('compact metadata summary omits missing separators', () => {
+  const h = loadHelper();
+  assert.equal(h.buildCompactPlayerMetadataSummary({
+    artist: 'Fixture artist', title: 'Fixture song', album: 'Fixture album',
+  }), 'Fixture artist - Fixture song / Fixture album');
+  assert.equal(h.buildCompactPlayerMetadataSummary({ title: 'Fixture song' }), 'Fixture song');
+  assert.equal(h.buildCompactPlayerMetadataSummary(null), '');
+});
+
+test('compact metadata row motion ignores rounding and scales with real overflow', () => {
+  const h = loadHelper();
+  assert.deepEqual(plain(h.resolveCompactPlayerMetadataRowMotion()), {
+    overflowing: false, distance: 0, durationMs: 0,
+  });
+  assert.deepEqual(plain(h.resolveCompactPlayerMetadataRowMotion({
+    scrollWidth: 101, clientWidth: 100,
+  })), { overflowing: false, distance: 0, durationMs: 0 });
+  assert.deepEqual(plain(h.resolveCompactPlayerMetadataRowMotion({
+    scrollWidth: 200, clientWidth: 100,
+  })), { overflowing: true, distance: 100, durationMs: 4200 });
 });

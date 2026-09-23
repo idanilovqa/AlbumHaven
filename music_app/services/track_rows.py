@@ -107,17 +107,31 @@ def _track_row_display_values(track: object, *, album: object = None) -> tuple[o
         (_field(album, "album_artist", "") if album is not None else _field(track, "album_artist", ""))
         or ""
     ).strip()
+    album_owner_keys = {
+        _normalize_artist_key(member)
+        for member in _stable_artist_credit_members(album_artist)
+    }
+    track_members = _stable_artist_credit_members(track_artist)
+    track_primary_keys = {
+        _normalize_artist_key(_extract_terminal_featured_credit(member)[0])
+        for member in track_members
+    }
+    has_complete_album_ownership = bool(album_owner_keys) and album_owner_keys <= track_primary_keys
     artist_credits: list[object] = []
     featured_artist_keys: set[str] = set()
     corroborating_artist_credits: list[object] = []
     if track_artist and _normalize_artist_key(track_artist) != _normalize_artist_key(album_artist):
-        for track_artist_member in _stable_artist_credit_members(track_artist):
+        for track_artist_member in track_members:
             primary_track_artist, track_featured_artist = _extract_terminal_featured_credit(
                 track_artist_member,
             )
             corroborating_artist_credits.append(primary_track_artist)
-            if _normalize_artist_key(primary_track_artist) != _normalize_artist_key(album_artist):
+            primary_key = _normalize_artist_key(primary_track_artist)
+            is_album_owner = has_complete_album_ownership and primary_key in album_owner_keys
+            if not is_album_owner and primary_key != _normalize_artist_key(album_artist):
                 artist_credits.append(primary_track_artist)
+                if has_complete_album_ownership:
+                    featured_artist_keys.add(primary_key)
             if track_featured_artist:
                 corroborating_artist_credits.append(track_featured_artist)
                 artist_credits.append(track_featured_artist)

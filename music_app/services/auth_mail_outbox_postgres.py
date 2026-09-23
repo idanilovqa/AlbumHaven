@@ -7,6 +7,8 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any, Awaitable
 
+from starlette.concurrency import run_in_threadpool
+
 from music_app.services.auth_mail import (
     DeliveryResult,
     compose_invitation_email,
@@ -120,6 +122,30 @@ class PostgresWelcomeOutboxService:
         self._database_url = str(config.get(_DATABASE_URL_KEY) or "").strip()
         self._connect = connect or _connect
         self._now = now or (lambda: datetime.now(timezone.utc))
+
+    def list_due_welcome_ids(self, *, limit: int) -> list[int]:
+        """Read a bounded candidate set; the existing claim remains authoritative."""
+        if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 100:
+            raise ValueError("Welcome batch size must be between 1 and 100.")
+        now = _aware_utc(self._now())
+        with self._connect(self._database_url) as connection:
+            rows = connection.execute(
+                """
+                select id from app.mail_outbox
+                where message_category = 'welcome'
+                  and (
+                    (attempt_count < %s and (
+                        delivery_status = 'pending'
+                        or (delivery_status = 'failed' and next_attempt_at <= %s)
+                    ))
+                    or (delivery_status = 'sending' and claimed_at <= %s)
+                  )
+                order by coalesce(next_attempt_at, claimed_at, created_at), id
+                limit %s
+                """,
+                (_MAX_ATTEMPTS, now, now - _CLAIM_LEASE, limit),
+            ).fetchall()
+        return [_positive_integer(_row_mapping(row, ("id",)).get("id"), "outbox id") for row in rows]
 
     def claim_welcome(
         self, outbox_id: int
@@ -324,12 +350,25 @@ class PostgresPasswordResetOutboxService:
                     raise RuntimeError("Password reset stale-claim context is invalid.")
                 if stale_rows:
                     return AmbiguousPasswordResetClaim(outbox_id=outbox_id)
+                # Account mutations and reset issuance lock this account before
+                # changing credentials or tokens. Wait here, then use a fresh
+                # statement snapshot for every eligibility predicate below.
+                accounts = connection.execute(
+                    """
+                    select account.id from app.accounts account
+                    where account.id = %s
+                    for update of account
+                    """,
+                    (account_id,),
+                ).fetchall()
+                if len(accounts) != 1:
+                    return None
                 rows = connection.execute(
                     """
                     select outbox.id, outbox.account_id,
                            account.username_display,
                            account.contact_email,
-                           outbox.attempt_count
+                           outbox.attempt_count, reset_token.expires_at
                     from app.mail_outbox outbox
                     join app.password_reset_tokens reset_token
                       on reset_token.id = outbox.reset_token_id
@@ -361,8 +400,11 @@ class PostgresPasswordResetOutboxService:
                     raise RuntimeError("Password reset outbox claim context is invalid.")
                 payload = _row_mapping(
                     rows[0],
-                    ("id", "account_id", "username_display", "contact_email", "attempt_count"),
+                    ("id", "account_id", "username_display", "contact_email", "attempt_count", "expires_at"),
                 )
+                now = _aware_utc(self._now())
+                if _aware_utc(payload.get("expires_at")) <= now:
+                    return None
                 claimed_at = now
                 connection.execute(
                     """
@@ -695,6 +737,9 @@ class PostgresInvitationOutboxService:
                     == invitation_token_id
                 ):
                     return None
+                now = _aware_utc(self._now())
+                if expires_at <= now:
+                    return None
                 claimed_at = now
                 claimed = connection.execute(
                     """
@@ -777,10 +822,11 @@ async def deliver_welcome(
     repository: PostgresWelcomeOutboxService,
     composer: Callable[..., Any] = compose_welcome_email,
     sender: Callable[..., Awaitable[DeliveryResult]] = send_auth_email,
+    run_repository: Callable[..., Awaitable[Any]] = run_in_threadpool,
 ) -> DeliveryResult:
     """Attempt one claimed welcome without changing account readiness."""
 
-    claim = repository.claim_welcome(outbox_id)
+    claim = await run_repository(repository.claim_welcome, outbox_id)
     if claim is None:
         return DeliveryResult(delivered=False, reason="not_eligible")
     if isinstance(claim, AmbiguousWelcomeClaim):
@@ -796,7 +842,7 @@ async def deliver_welcome(
             result = DeliveryResult(delivered=False, reason="failed")
     except Exception:
         result = DeliveryResult(delivered=False, reason="failed")
-    repository.finalize_welcome(claim, result)
+    await run_repository(repository.finalize_welcome, claim, result)
     return result
 
 
@@ -815,7 +861,7 @@ async def deliver_password_reset(
         repository = PostgresPasswordResetOutboxService(
             {_DATABASE_URL_KEY: str(database_url or "").strip()}
         )
-    claim = repository.claim_password_reset(delivery)
+    claim = await run_in_threadpool(repository.claim_password_reset, delivery)
     if isinstance(claim, AmbiguousPasswordResetClaim):
         return DeliveryResult(delivered=False, reason="unknown")
     if claim is None:
@@ -832,7 +878,7 @@ async def deliver_password_reset(
             result = DeliveryResult(delivered=False, reason="failed")
     except Exception:
         result = DeliveryResult(delivered=False, reason="failed")
-    repository.finalize_password_reset(claim, result)
+    await run_in_threadpool(repository.finalize_password_reset, claim, result)
     return result
 
 
@@ -846,7 +892,7 @@ async def deliver_invitation(
 ) -> DeliveryResult:
     """Attempt one committed invitation without persisting its bearer token."""
 
-    claim = repository.claim_invitation(delivery)
+    claim = await run_in_threadpool(repository.claim_invitation, delivery)
     if isinstance(claim, AmbiguousInvitationClaim):
         return DeliveryResult(delivered=False, reason="unknown")
     if claim is None:
@@ -867,7 +913,7 @@ async def deliver_invitation(
             result = DeliveryResult(delivered=False, reason="failed")
     except Exception:
         result = DeliveryResult(delivered=False, reason="failed")
-    repository.finalize_invitation(claim, result)
+    await run_in_threadpool(repository.finalize_invitation, claim, result)
     return result
 
 

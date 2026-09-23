@@ -62,12 +62,14 @@ function loadHelpers(overrides = {}) {
     showRepairAlert() {},
   };
   Object.assign(context, overrides);
+  context.window = context;
   vm.createContext(context);
+  vm.runInContext(fs.readFileSync(path.join(path.dirname(helperPath), '../button-component.js'), 'utf8'), context);
   vm.runInContext(helperSource, context, { filename: helperPath });
   return context;
 }
 
-test('buildUtilityIntegrationDetail renders the Foobar help-first detail contract', () => {
+test('buildUtilityIntegrationDetail shows supported Foobar guidance and unavailable import', () => {
   const context = loadHelpers();
 
   const html = context.buildUtilityIntegrationDetail({
@@ -116,14 +118,11 @@ test('buildUtilityIntegrationDetail renders the Foobar help-first detail contrac
   });
 
   assert.match(html, /Foobar2000/);
-  assert.match(html, /How To and reference assets ready/);
-  assert.match(html, /Continuous Foobar sync/);
-  assert.match(html, /One-time import only/);
-  assert.match(html, /History of plays/);
-  assert.match(html, /Favorite songs/);
-  assert.match(html, /Utilities &gt; Problematic Files/);
-  assert.match(html, /Manual snapshot exports/);
-  assert.match(html, /Live custom DB source/);
-  assert.match(html, /href="\/utilities\/integrations\/foobar\/assets\/how-to-modal-copy"/);
-  assert.match(html, /href="\/utilities\/integrations\/foobar\/assets\/text-tools-standard-preset\?download=1"/);
+  assert.match(html, /Read setup instructions/);
+  assert.match(html, /data-foobar-format-trigger/);
+  assert.match(html, /Playback Statistics XML/);
+  assert.match(html, /Import is unavailable in this build/);
+  assert.match(html, /data-foobar-import/);
+  assert.doesNotMatch(html, /Continuous Foobar sync|One-time import only/);
+
 });

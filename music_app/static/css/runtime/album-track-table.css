@@ -2,6 +2,7 @@
   --album-track-accent: var(--appearance-waveform-edge, var(--appearance-accent, var(--accent, #55c7ff)));
   --album-track-play-hover: var(--appearance-play, var(--appearance-player-accent, var(--album-track-accent)));
   --album-track-playing-period: 3.6s;
+  --cdt-mobile-min-width: 0;
   min-width: 0;
 }
 
@@ -9,11 +10,12 @@
 .album-track-table__disc { min-width: 0; }
 .album-track-table__disc + .album-track-table__disc { margin-top: 14px; }
 .album-track-table__disc-heading { display: block; margin: 0 0 7px; color: var(--album-track-accent); font-size: 0.86rem; font-weight: 750; }
-.album-track-table .compact-data-table {
+.album-track-table .compact-data-table,
+:root[data-appearance-mode='light'] :is(.utility-detected-table, .utility-track-problem-table) .compact-data-table {
   border-color: color-mix(in srgb, var(--appearance-line, var(--border)) 72%, transparent);
   border-radius: 9px;
   overflow: visible;
-  background: color-mix(in srgb, var(--appearance-card, var(--panel, #101a29)) 72%, transparent);
+  background: var(--appearance-table-surface, color-mix(in srgb, var(--appearance-card, var(--panel, #101a29)) 94%, var(--appearance-ink, var(--text, #f3f6fa))));
   color: var(--appearance-ink, var(--text));
 }
 .album-track-table__frame:has(.album-track-table__total) .album-track-table__disc:last-of-type .compact-data-table {
@@ -31,15 +33,18 @@
   height: min(108px, 50%);
   background: linear-gradient(to bottom, transparent 0%, color-mix(in srgb, var(--album-track-accent) 10%, transparent) 36%, color-mix(in srgb, var(--album-track-accent) 38%, transparent) 70%, color-mix(in srgb, var(--album-track-accent) 75%, transparent) 100%);
 }
-.album-track-table .compact-data-table-header { border-radius: 8px 8px 0 0; background: color-mix(in srgb, var(--appearance-card, var(--panel, #101a29)) 88%, transparent); }
-.album-track-table [role="columnheader"] { color: var(--appearance-muted, var(--muted)); }
+.album-track-table .compact-data-table-header,
+:root[data-appearance-mode='light'] :is(.utility-detected-table, .utility-track-problem-table) .compact-data-table-header { border-radius: 8px 8px 0 0; background: color-mix(in srgb, var(--appearance-table-surface), var(--appearance-ink, var(--text)) var(--appearance-table-header-tint, 8%)); }
+.album-track-table [role="columnheader"],
+:root[data-appearance-mode='light'] :is(.utility-detected-table, .utility-track-problem-table) [role="columnheader"] { color: var(--appearance-muted, var(--muted)); }
 .album-track-table .compact-data-table-row { position: relative; isolation: isolate; }
-.album-track-table .compact-data-table-row:hover { background: color-mix(in srgb, var(--appearance-ink, white) 5%, transparent); }
+.album-track-table .compact-data-table-row:hover,
+:root[data-appearance-mode='light'] :is(.utility-detected-table, .utility-track-problem-table) .compact-data-table-row:hover { background: color-mix(in srgb, var(--appearance-ink, white) 5%, transparent); }
 .album-track-table__row--search-match {
   background: color-mix(in srgb, var(--album-track-accent) 11%, transparent);
   box-shadow: inset 3px 0 0 var(--album-track-accent), inset 12px 0 18px -16px var(--album-track-accent);
 }
-.album-track-table__row--search-match:hover { background: color-mix(in srgb, var(--album-track-accent) 15%, transparent); }
+.album-track-table .album-track-table__row--search-match:hover { background: color-mix(in srgb, var(--album-track-accent) 15%, transparent); }
 .album-track-table__row--playing {
   border-radius: 8px;
   outline: 1px solid color-mix(in srgb, var(--album-track-accent) 86%, transparent);
@@ -100,30 +105,45 @@
 }
 .album-track-table__play::after { --album-track-play-offset: 0.5turn; }
 .album-track-table__play--activating::before,
-.album-track-table__play--activating::after { animation: album-track-play-activation 680ms ease-out 1; }
+.album-track-table__play--activating::after { animation: album-track-play-activation 950ms ease-out 1; }
 @keyframes album-track-play-activation {
-  0% { opacity: 0; transform: rotate(0turn) scale(.9); }
+  0% { opacity: 0; transform: rotate(0turn) scale(.9); filter: brightness(1); }
   16% { opacity: 1; }
-  74% { opacity: .9; }
-  100% { opacity: 0; transform: rotate(1turn) scale(1); }
+  68% { opacity: .9; filter: brightness(1); }
+  80% { opacity: 1; filter: brightness(1.8) drop-shadow(0 0 3px var(--album-track-accent)); }
+  88% { opacity: .8; filter: brightness(1.2) drop-shadow(0 0 2px var(--album-track-accent)); }
+  100% { opacity: 0; transform: rotate(1turn) scale(1); filter: brightness(1); }
 }
 .album-track-table__title { display: block; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .album-track-table__secondary { display: block; color: var(--appearance-muted, var(--muted)); font-size: 0.7rem; line-height: 1.15; }
+.album-track-table__path { display: block; min-width: 0; overflow: hidden; color: var(--appearance-muted, var(--muted)); font-size: 0.72rem; text-overflow: ellipsis; white-space: nowrap; }
 .album-track-table .track-duration { margin-left: 0; color: var(--appearance-ink, var(--text)); }
 .album-track-table [data-cdt-column="duration"] { text-align: right; font-variant-numeric: tabular-nums; }
 .album-track-table__total {
+  position: relative;
+  isolation: isolate;
   width: min(54%, 390px);
   margin: -1px 0 0 auto;
   padding: 12px 12px 10px 28px;
-  border-right: 1px solid color-mix(in srgb, var(--album-track-accent) 75%, transparent);
-  border-bottom: 1px solid color-mix(in srgb, var(--album-track-accent) 75%, transparent);
+  border-right: 1px solid transparent;
+  border-bottom: 1px solid transparent;
   border-left: 0;
   border-top: 0;
   border-radius: 0 0 9px 0;
-  background: linear-gradient(to left, color-mix(in srgb, var(--album-track-accent) 10%, var(--panel, #101a29)) 0%, color-mix(in srgb, var(--album-track-accent) 5%, transparent) 34%, transparent 72%);
   color: var(--appearance-ink, var(--text));
   text-align: right;
   font-weight: 700;
+}
+.album-track-table__total::before {
+  content: '';
+  position: absolute;
+  inset: 0 -1px -1px 0;
+  z-index: -1;
+  pointer-events: none;
+  border-right: 1px solid color-mix(in srgb, var(--album-track-accent) 75%, transparent);
+  border-bottom: 1px solid color-mix(in srgb, var(--album-track-accent) 75%, transparent);
+  border-radius: inherit;
+  background: linear-gradient(to left, color-mix(in srgb, var(--album-track-accent) 10%, var(--panel, #101a29)) 0%, color-mix(in srgb, var(--album-track-accent) 5%, transparent) 34%, transparent 72%);
   -webkit-mask-image: linear-gradient(to left, #000 0%, #000 44%, transparent 100%);
   mask-image: linear-gradient(to left, #000 0%, #000 44%, transparent 100%);
 }
@@ -134,3 +154,25 @@
   .album-track-table__play--activating::before,
   .album-track-table__play--activating::after { display: none; animation: none; }
 }
+
+/* Keep pointer activation on the stable button when playback changes its icon. */
+.album-track-table__play svg,
+.album-track-table__play svg * { pointer-events: none; }
+
+/* A steady accent wash makes the actively playing album track easy to find. */
+#track-modal .album-track-table .album-track-table__row--playing,
+#track-modal .album-track-table .album-track-table__row--playing:hover {
+  background: color-mix(in srgb, var(--album-track-accent) 16%, transparent);
+  box-shadow: inset 0 0 26px color-mix(in srgb, var(--album-track-accent) 18%, transparent),
+    0 0 18px color-mix(in srgb, var(--album-track-accent) 28%, transparent);
+}
+
+.album-track-table__number-play { position: relative; display: grid; place-items: center; width: 28px; height: 28px; }
+.album-track-table__number-play > .album-track-table__play { position: absolute; inset: 0; opacity: 0; }
+.album-track-table__number { font-variant-numeric: tabular-nums; }
+.album-track-table__row:is(:hover, :focus-within, .album-track-table__row--playing) .album-track-table__number { visibility: hidden; }
+.album-track-table__row:is(:hover, :focus-within, .album-track-table__row--playing) .album-track-table__play { opacity: 1; }
+.album-track-table__title, .album-track-table__path { user-select: text; }
+.album-track-table__row, .album-track-table__title, .album-track-table__path { cursor: pointer; }
+
+.album-track-table [role="columnheader"][data-cdt-column="number"] { width: 28px; text-align: center; }

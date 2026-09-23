@@ -289,6 +289,54 @@ test('an appearance 403 clears the old theme and blocks its draft from saving un
   assert.equal(requests.length, 2);
 });
 
+test('loop style permission denial preserves the session, saved theme and retryable appearance draft', async () => {
+  let denied=true;const requests=[];
+  const {instance,styles}=browser(async(_url,options)=>{
+    requests.push(options);
+    if(options.method==='GET')return response({...custom(),csrf_token:'token-A'});
+    return denied?response({error:'loop_style_forbidden'},403):response(JSON.parse(options.body));
+  });
+  await instance.load();instance.controller.setColor('main_surface_color','#123456');
+  assert.equal(await instance.controller.save(),false);
+  assert.equal(instance.controller.getState().draft.main_surface_color,'#123456');
+  assert.equal(instance.controller.getState().saved.main_surface_color,custom().main_surface_color);
+  assert.equal(instance.controller.getState().loadFailed,false);
+  assert.equal(styles.get('--appearance-main-surface'),custom().main_surface_color);
+  denied=false;assert.equal(await instance.controller.save(),true);
+  assert.equal(requests.at(-1).headers['X-Album-Haven-CSRF'],'token-A');
+});
+
+test('browser editor consumes live loop capability and exposes only the saved style to playback',async()=>{
+  const initial={...custom(),palette_id:null,panel_index:0,player_override:null,loop_control_style:'capsule'};
+  const {instance}=browser(async(_url,options)=>response(options.method==='GET'?{...initial,csrf_token:'own'}:JSON.parse(options.body)),initial);
+  await instance.load();
+  assert.equal(typeof instance.setLoopCreateAllowed,'function');
+  let updates=0;const unsubscribe=instance.controller.subscribe(()=>{updates++;});
+  instance.setLoopCreateAllowed(true);instance.setLoopCreateAllowed(true);
+  assert.equal(updates,1,'unchanged status projections must not rerender the Appearance editor');
+  unsubscribe();instance.controller.setLoopControlStyle('companion');
+  assert.equal(instance.getSavedLoopControlStyle(),'capsule');
+  assert.equal(instance.controller.getState().canChangeLoopStyle,true);
+  assert.equal(await instance.controller.save(),true);
+  assert.equal(instance.getSavedLoopControlStyle(),'companion');
+  instance.setLoopCreateAllowed(false);instance.controller.setLoopControlStyle('capsule');
+  assert.equal(instance.controller.getState().canChangeLoopStyle,false);
+  assert.equal(instance.controller.getState().draft.loop_control_style,'companion');
+});
+
+test('a stale failing appearance response cannot clear a newly loaded session while its body resolves',async()=>{
+  const started=deferred(),body=deferred();
+  const {instance,styles}=browser(async(_url,options)=>options.method==='GET'
+    ? response({...custom(),csrf_token:'current'})
+    : {ok:false,status:403,redirected:false,json:()=>{started.resolve();return body.promise;}});
+  await instance.load();instance.controller.setColor('main_surface_color','#123456');
+  const pending=instance.controller.save();await started.promise;
+  instance.clearSession();await instance.load();
+  body.resolve({detail:'CSRF validation failed.'});await pending;
+  assert.equal(instance.controller.getState().loadFailed,false);
+  assert.equal(styles.get('--appearance-main-surface'),custom().main_surface_color);
+});
+
 for (const stage of ['response', 'body']) {
   test(`a saved response arriving after session cleanup cannot restore the prior theme (${stage})`, async () => {
     const pending = deferred();
@@ -317,3 +365,74 @@ for (const stage of ['response', 'body']) {
     assert.equal(styles.size, 0);
   });
 }
+
+
+test('automatic application outlines use the theme accent while player and custom choices remain authoritative', () => {
+  const appearance = runtime();
+  const effective = { tokens: { play: '#24B86B', 'waveform-fill': '#387F68', 'player-control-border': '#86EFAC', accent: '#AAAAAA' } };
+  const preference = source => ({ interaction_overrides: { item_outline: { source, color: '#123456' } } });
+  assert.equal(appearance.resolveInteractionOutline(preference('automatic'), effective), '#AAAAAA');
+  assert.equal(appearance.resolveInteractionOutline(preference('player'), effective), '#86EFAC');
+  assert.equal(appearance.resolveInteractionOutline(preference('custom'), effective), '#123456');
+  assert.equal(appearance.resolveInteractionOutline(preference('theme'), effective), '#AAAAAA');
+});
+
+test('explicit selected fill overrides neutral default and reset removes the override', () => {
+  const values = new Map();
+  const root = { style: { setProperty: (key, value) => values.set(key, value), removeProperty: key => values.delete(key) } };
+  const interaction_overrides = { item_hover: null, item_selected: '#823C68', button_hover_background: null, button_pressed: null, item_outline: { source: 'automatic', color: null } };
+  const preference = { ...defaults(), palette_id: null, panel_index: 0, player_override: null, selection_accent: { enabled: true, color: '#24B86B' }, interaction_overrides };
+  runtime().applyTheme(preference, root);
+  assert.equal(values.get('--selection-body-background'), '#823C68');
+  runtime().applyTheme({ ...preference, interaction_overrides: { ...interaction_overrides, item_selected: null } }, root);
+  assert.equal(values.has('--selection-body-background'), false);
+  runtime().applyTheme(preference, root);
+  runtime().clearTheme(root);
+  assert.equal(values.has('--selection-body-background'), false);
+});
+
+ test('panel outline leaves theme defaults to CSS unless explicitly overridden', () => {
+  const values = new Map();
+  const root = { style: { setProperty: (k,v) => values.set(k,v), removeProperty: k => values.delete(k) } };
+  const appearance = runtime();
+  const preference = { ...defaults(), palette_id: null, panel_index: 0, player_override: null, selection_accent: { enabled: true, color: '#24B86B' }, interaction_overrides: { item_hover: null, item_selected: null, button_hover_background: null, button_pressed: null, item_outline: { source: 'automatic', color: null }, panel_outline: null } };
+  for (const palette of appearance.palettes) {
+    const themed = { ...preference, palette_id: palette.id };
+    appearance.applyTheme(themed, root);
+    assert.equal(values.has('--appearance-selected-accent'), false, 'use the shared theme-aware CSS default');
+    appearance.applyTheme({ ...themed, interaction_overrides: { ...preference.interaction_overrides, panel_outline: '#AABBCC' } }, root);
+    assert.equal(values.get('--appearance-selected-accent'), '#AABBCC');
+  }
+  appearance.applyTheme(preference, root);
+  assert.equal(values.has('--appearance-selected-accent'), false);
+  assert.throws(() => appearance.normalizeInteractionOverrides({ ...preference.interaction_overrides, panel_outline: 'invalid' }), TypeError);
+});
+
+test('Artist Family panel and artist states retain Appearance palette and interaction tokens', () => {
+  const css = require('node:fs').readFileSync(path.join(__dirname, '..', '..', '..', 'music_app', 'static', 'css', 'appearance-backgrounds.css'), 'utf8');
+  const rules = Array.from(css.matchAll(/([^{}]+)\{([^{}]+)\}/g), ([, selector, declarations]) => ({ selector, declarations }));
+  function hasMapping(selector, declaration) {
+    assert.ok(rules.some(rule => rule.selector.includes(selector) && rule.declarations.includes(declaration)), `${selector} must map ${declaration}`);
+  }
+  hasMapping('.artist-family-panel)', 'background: var(--appearance-card)');
+  hasMapping('.artist-family-panel)', 'border-color: var(--appearance-line)');
+  hasMapping('.artist-family-panel__artist', 'background: var(--appearance-card)');
+  hasMapping('.artist-family-panel__artist:hover', 'background: var(--appearance-card)');
+  hasMapping('.artist-family-panel__artist.is-active', 'background: var(--appearance-card)');
+  hasMapping('.artist-family-panel__artist.is-active)', 'color: var(--appearance-ink)');
+  hasMapping('.artist-family-panel__artist.is-active', 'border-color: var(--appearance-play)');
+  hasMapping('.artist-family-panel__artist.is-active', 'box-shadow: 0 0 0 1px color-mix(in srgb, var(--appearance-play) 30%, transparent)');
+  hasMapping(":root[data-appearance-mode='light'] .artist-family-panel__artist:hover", 'inset 0 0 18px color-mix(in srgb, var(--appearance-play) 18%, transparent)');
+  hasMapping(":root[data-appearance-mode='light'] .artist-family-panel__artist.is-active", 'inset 0 0 18px color-mix(in srgb, var(--appearance-play) 18%, transparent)');
+  const lightActiveRules = rules.filter(rule => rule.selector.includes("[data-appearance-mode='light']") && rule.selector.includes('.artist-family-panel__artist.is-active'));
+  assert.ok(lightActiveRules.some(rule => rule.declarations.includes('background: var(--appearance-play, #4bc173)')));
+  assert.ok(lightActiveRules.some(rule => rule.declarations.includes('color: var(--appearance-play-ink, #10201a)')));
+  const lightCountRule = lightActiveRules.find(rule => rule.selector.includes('.artist-family-panel__count'));
+  assert.ok(lightCountRule?.declarations.includes('background: var(--appearance-play-ink, #10201a)'));
+  assert.ok(lightCountRule?.declarations.includes('color: var(--appearance-play, #4bc173)'));
+  for (const token of ['--appearance-item-action-hover-background', '--appearance-item-action-pressed']) {
+    const actionRules = rules.filter(rule => rule.selector.includes(":is(button, .button, [role='button'], [data-actionable])") && rule.declarations.includes(`background: var(${token}`));
+    assert.ok(actionRules.length > 0);
+    assert.ok(actionRules.every(rule => rule.selector.includes(':not(.artist-family-panel__artist)')), 'Artist Family navigation rows must not inherit generic action fills');
+  }
+});

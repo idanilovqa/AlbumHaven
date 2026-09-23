@@ -52,6 +52,35 @@ test('OnPageAlert supports semantic variants and shared action slots', () => {
   assert.match(html, /Keep as missing/);
 });
 
+test('AlertLabel renders static and interactive semantic problem pills', () => {
+  const context = loadAlertComponents();
+  const staticHtml = context.buildAlertLabelHtml({
+    severity: 'error',
+    message: 'Missing cover art',
+  });
+  const interactiveHtml = context.buildAlertLabelHtml({
+    severity: 'error',
+    message: 'Missing year',
+    interactive: true,
+    pressed: true,
+    disabled: true,
+    className: 'utility-problem-exclusion-pill',
+    attributes: {
+      'data-problem-exclusion-row-key': 'album:&1',
+      'data-ignored-attribute': '<unsafe>',
+    },
+  });
+
+  assert.match(staticHtml, /^<span class="alert-label alert-label--error" data-alert-label="error">Missing cover art<\/span>$/);
+  assert.match(interactiveHtml, /^<button class="alert-label alert-label--error utility-problem-exclusion-pill is-active"/);
+  assert.match(interactiveHtml, /type="button"/);
+  assert.match(interactiveHtml, /data-problem-exclusion-row-key="album:&amp;1"/);
+  assert.doesNotMatch(interactiveHtml, /data-ignored-attribute/);
+  assert.match(interactiveHtml, /aria-pressed="true"/);
+  assert.match(interactiveHtml, /aria-disabled="true"/);
+  assert.match(interactiveHtml, / disabled/);
+});
+
 test('shared alert CSS uses the same tinted surface family and honors reduced motion', () => {
   const css = fs.readFileSync(
     path.join(repoRoot, 'music_app', 'static', 'css', 'runtime', 'alert-components.css'),
@@ -68,4 +97,46 @@ test('shared alert CSS uses the same tinted surface family and honors reduced mo
   assert.match(css, /\.on-page-alert__actions \.ui-button--primary\s*\{[^}]*background:\s*var\(--alert-edge\)/s);
   assert.match(css, /\.on-page-alert__actions \.ui-button--secondary\s*\{[^}]*border-color:\s*color-mix\([^;]*var\(--alert-edge\)/s);
   assert.match(css, /@media\s*\(prefers-reduced-motion:\s*reduce\)/);
+});
+
+test('AlertLabel interaction states retain the gallery alert severity color family', () => {
+  const css = fs.readFileSync(
+    path.join(repoRoot, 'music_app', 'static', 'css', 'runtime', 'alert-components.css'),
+    'utf8',
+  );
+
+  assert.match(css, /\.small-alert,\s*\.alert-label,\s*\.on-page-alert\s*\{[^}]*--alert-edge:[^}]*--alert-tint:[^}]*--alert-ink:/s);
+  assert.match(css, /\.alert-label\s*\{[^}]*border:[^;]*var\(--alert-edge\)[^}]*background:\s*var\(--alert-tint\)[^}]*color:\s*var\(--alert-ink\)/s);
+  assert.match(css, /button\.alert-label:is\(:hover,\s*:focus-visible[^}]*outline:\s*1px solid color-mix\(in srgb, var\(--alert-edge\)/s);
+  assert.match(css, /button\.alert-label:is\(\.is-active,\s*\[aria-pressed="true"\]\)/s);
+  assert.match(css, /button\.alert-label:is\(:hover,[^}]*outline-offset:\s*-1px/s);
+  const labelRules = css.match(/[^{}]*\.alert-label[^{}]*\{[^}]*\}/g)?.join('\n') || '';
+  assert.doesNotMatch(labelRules, /--appearance-interaction-outline/);
+});
+
+test('standalone alert exports escape text and attribute values without runtime globals', () => {
+  const css = fs.readFileSync(path.join(repoRoot, 'music_app/static/css/runtime/alert-components.css'), 'utf8');
+  assert.match(css, /\.on-page-alert\[hidden\]\s*\{\s*display:\s*none;/);
+  assert.match(css, /color:\s*var\(--text,\s*var\(--appearance-ink,\s*#edf4fb\)\)/);
+  assert.match(css, /color:\s*var\(--muted,\s*var\(--appearance-muted,\s*#b8c7d6\)\)/);
+  const alerts = require('../../../music_app/static/js/runtime/alert-components.js');
+  const html = alerts.buildOnPageAlertHtml({
+    severity: 'warning', title: '<Error>', message: '<script>alert("x")</script>',
+    messageId: '" onmouseover="bad', role: 'status',
+  });
+  assert.match(html, /on-page-alert--warning" role="status"/);
+  assert.match(html, /&lt;script&gt;alert\(&quot;x&quot;\)&lt;\/script&gt;/);
+  assert.match(html, /id="&quot; onmouseover=&quot;bad"/);
+  assert.doesNotMatch(html, /<script| id="" onmouseover=/);
+  assert.match(alerts.buildOnPageAlertHtml({ role: 'presentation' }), /role="alert"/);
+});
+
+test('alert browser exports tolerate standalone and bundled loading in the same window', () => {
+  const context = { window: {} };
+  vm.createContext(context);
+  const source = fs.readFileSync(path.join(repoRoot, 'music_app/static/js/runtime/alert-components.js'), 'utf8');
+  vm.runInContext(source, context);
+  vm.runInContext(source, context);
+  assert.equal(context.window.AlertComponent.buildOnPageAlertHtml, context.buildOnPageAlertHtml);
+  assert.match(context.window.AlertComponent.buildSmallAlertHtml({ message: '<missing>' }), /&lt;missing&gt;/);
 });

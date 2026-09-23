@@ -14,6 +14,7 @@ from fastapi.templating import Jinja2Templates
 from starlette.concurrency import run_in_threadpool
 
 from music_app.routes.appearance_asgi import load_appearance_context
+from music_app.routes.bounded_json import read_bounded_json_object
 from music_app.services.admin_account_creation import AdminAccountCreationService
 from music_app.services.admin_account_creation_postgres import (
     ManagedAccountIdentityConflict,
@@ -72,6 +73,10 @@ _CAPABILITY_GROUPS = (
             ("library.playlists.items.manage", "Manage playlist items"),
             ("library.track_preferences.manage", "Track preferences"),
             ("library.discovery.read", "Discovery and listening views"),
+            ("library.loops.read", "View saved loops"),
+            ("library.loops.media.read", "Play saved loop media"),
+            ("library.opinions.read", "View album opinions"),
+            ("integration.lastfm.scrobbles.submit", "Submit pending Last.fm scrobbles"),
         ),
     ),
     (
@@ -79,6 +84,7 @@ _CAPABILITY_GROUPS = (
         (
             ("library.rules.read", "View library rules"),
             ("library.logs.read", "View operational logs"),
+            ("library.logs.export", "Export operational logs"),
             ("library.virtual_discography.read", "View virtual discography"),
         ),
     ),
@@ -182,6 +188,7 @@ async def update_managed_account(request: Request, account_id: int) -> Response:
         await run_in_threadpool(
             _mutation_service(request).update_account,
             actor_account_id=actor.account_id,
+            actor_session_id=actor.session_id,
             actor_authenticated_at=actor.authenticated_at,
             library_id=actor.current_library_id,
             target_account_id=account_id,
@@ -217,6 +224,7 @@ async def revoke_managed_account_sessions(request: Request, account_id: int) -> 
         await run_in_threadpool(
             _mutation_service(request).revoke_sessions,
             actor_account_id=actor.account_id,
+            actor_session_id=actor.session_id,
             actor_authenticated_at=actor.authenticated_at,
             library_id=actor.current_library_id,
             target_account_id=account_id,
@@ -268,6 +276,7 @@ async def copy_managed_account_invitation(
         copied = await run_in_threadpool(
             _invitation_service(request).issue_copy,
             actor_account_id=request.state.current_actor.account_id,
+            actor_session_id=request.state.current_actor.session_id,
             actor_authenticated_at=request.state.current_actor.authenticated_at,
             library_id=request.state.current_actor.current_library_id,
             target_account_id=account_id,
@@ -316,6 +325,7 @@ async def send_managed_account_invitation(
         await run_in_threadpool(
             _invitation_service(request).queue_email,
             actor_account_id=request.state.current_actor.account_id,
+            actor_session_id=request.state.current_actor.session_id,
             actor_authenticated_at=request.state.current_actor.authenticated_at,
             library_id=request.state.current_actor.current_library_id,
             target_account_id=account_id,
@@ -366,6 +376,17 @@ async def create_managed_account(request: Request):
     payload = await _json_payload(request)
     if payload is None:
         return _invalid()
+    if payload["send_invitation"]:
+        try:
+            invitation_enabled = _mail_config(request.app).get("invitation_enabled")
+        except Exception:
+            return JSONResponse(
+                {"detail": "Invitation email is temporarily unavailable."}, status_code=503
+            )
+        if invitation_enabled is not True:
+            return JSONResponse(
+                {"detail": "Invitation email is not configured."}, status_code=409
+            )
     try:
         service = _service(request)
         result = await run_in_threadpool(
@@ -403,21 +424,7 @@ async def create_managed_account(request: Request):
 
 
 async def _json_payload(request: Request) -> dict[str, object] | None:
-    if request.headers.get("content-type", "").split(";", 1)[0].strip().casefold() != "application/json":
-        return None
-    try:
-        length = int(request.headers.get("content-length", "0"))
-    except ValueError:
-        return None
-    if length < 2 or length > _MAX_BODY_BYTES:
-        return None
-    body = await request.body()
-    if len(body) != length:
-        return None
-    try:
-        payload = json.loads(body)
-    except (UnicodeDecodeError, json.JSONDecodeError):
-        return None
+    payload = await _bounded_json_object(request)
     if not isinstance(payload, dict) or set(payload) != _FIELDS:
         return None
     if not all(isinstance(payload[key], str) for key in ("username", "contact_email")):
@@ -484,15 +491,18 @@ async def _queue_mail_action(request: Request, account_id: int, action: str):
     actor = request.state.current_actor
     if actor.account_id is None or actor.current_library_id is None:
         return JSONResponse({"detail": "Action not permitted."}, status_code=403)
-    method = (
-        _mail_action_service(request).queue_welcome
-        if action == "welcome"
-        else _mail_action_service(request).queue_password_reset
-    )
     try:
+        service = _mail_action_service(request)
+    except Exception:
+        return JSONResponse(
+            {"detail": "Mail action is temporarily unavailable."}, status_code=503
+        )
+    try:
+        method = service.queue_welcome if action == "welcome" else service.queue_password_reset
         return await run_in_threadpool(
             method,
             actor_account_id=actor.account_id,
+            actor_session_id=actor.session_id,
             actor_authenticated_at=actor.authenticated_at,
             library_id=actor.current_library_id,
             target_account_id=account_id,
@@ -538,12 +548,9 @@ async def _bounded_json_object(request: Request) -> dict[str, object] | None:
         return None
     if length < 2 or length > _MAX_BODY_BYTES:
         return None
-    body = await request.body()
-    if len(body) != length:
-        return None
     try:
-        payload = json.loads(body)
-    except (UnicodeDecodeError, json.JSONDecodeError):
+        payload = await read_bounded_json_object(request, max_bytes=_MAX_BODY_BYTES)
+    except (ValueError, RecursionError):
         return None
     return payload if isinstance(payload, dict) else None
 

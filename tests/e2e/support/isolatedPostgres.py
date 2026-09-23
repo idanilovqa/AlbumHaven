@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import ctypes
 from ctypes import wintypes
+from hashlib import sha256
+import hashlib
 import json
 import os
 import re
@@ -40,6 +42,7 @@ _RUNTIME_DELETE_TABLES = (
     ("integration", "scrobble_retry_state"),
     ("integration", "listen_history"),
     ("library", "move_policy_settings"),
+    ("library", "library_memberships"),
     ("library", "ignored_versions"),
     ("library", "ignored_repairs"),
     ("library", "manual_versions"),
@@ -176,10 +179,18 @@ def _process_identity(process_id: int) -> _ProcessIdentityResult:
 class IsolatedDatabaseOwnershipLock:
     def __init__(
         self,
-        lock_path: Path = _DATABASE_LOCK_PATH,
+        lock_path: Path | None = None,
         wait_seconds: float = _DATABASE_LOCK_WAIT_SECONDS,
         database_label: str = DATABASE_NAME,
+        *,
+        database_url: str | None = None,
     ) -> None:
+        if database_url is not None:
+            if lock_path is not None:
+                raise ValueError("Specify a lock database or an explicit lock path, not both.")
+            lock_path, database_label = _database_ownership_lock_identity(database_url)
+        elif lock_path is None:
+            lock_path = _DATABASE_LOCK_PATH
         self.lock_path = lock_path
         self.wait_seconds = wait_seconds
         self.database_label = database_label
@@ -325,6 +336,29 @@ class IsolatedDatabaseOwnershipLock:
             self._acquired = False
 
 
+def _database_ownership_lock_identity(database_url: str) -> tuple[Path, str]:
+    # Callers retain their own setup/runtime role validation. This shared lock
+    # boundary accepts only their existing loopback, fixture-owned databases.
+    parsed = urlparse(database_url)
+    name = _database_name(database_url)
+    try:
+        port = 5432 if parsed.port is None else parsed.port
+    except ValueError:
+        raise ValueError("Invalid isolated lock database port.") from None
+    if (parsed.scheme not in {"postgres", "postgresql"}
+        or parsed.hostname not in {"localhost", "127.0.0.1", "::1"}
+        or parsed.password is not None or parsed.query or parsed.params or parsed.fragment
+        or parsed.path != f"/{name}" or not 1 <= port <= 65535
+        or not (_is_owned_isolated_database_name(name) or name == "album_haven_scan_e2e")):
+        raise ValueError("Invalid isolated lock database identity.")
+    if name == DATABASE_NAME and port == 5432:
+        return _DATABASE_LOCK_PATH, name
+    # Loopback aliases and equivalent PostgreSQL URL schemes refer to the same
+    # local authority; credentials must never create independent ownership locks.
+    digest = sha256(f"{port}/{name}".encode("utf-8")).hexdigest()[:16]
+    return Path(tempfile.gettempdir()) / f"album-haven-isolated-db-{digest}.lock", name
+
+
 def _database_identity(database_url: str) -> tuple[str, str, int | None, str]:
     parsed = urlparse(database_url)
     return (
@@ -452,8 +486,33 @@ def apply_all_migrations(setup_database_url: str) -> None:
         raise RuntimeError(f"No Postgres migrations found under {migrations_root}.")
     with _connect(setup_database_url) as connection:
         _assert_connected_role(connection, SETUP_ROLE)
+        ledger = connection.execute(
+            "select to_regclass('ops.schema_migrations') as migration_table"
+        ).fetchone()
+        if not ledger["migration_table"]:
+            bootstrap = migration_paths[0]
+            connection.execute(bootstrap.read_text(encoding="utf-8"))
+            connection.execute(
+                "insert into ops.schema_migrations (migration_name, checksum) values (%s, %s)",
+                (bootstrap.name, hashlib.sha256(bootstrap.read_bytes()).hexdigest()),
+            )
+        applied = {
+            row["migration_name"]: row["checksum"]
+            for row in connection.execute(
+                "select migration_name, checksum from ops.schema_migrations"
+            ).fetchall()
+        }
         for migration_path in migration_paths:
+            checksum = hashlib.sha256(migration_path.read_bytes()).hexdigest()
+            if migration_path.name in applied:
+                if applied[migration_path.name] != checksum:
+                    raise RuntimeError(f"Migration checksum mismatch: {migration_path.name}")
+                continue
             connection.execute(migration_path.read_text(encoding="utf-8"))
+            connection.execute(
+                "insert into ops.schema_migrations (migration_name, checksum) values (%s, %s)",
+                (migration_path.name, checksum),
+            )
 
 
 def grant_runtime_role_privileges(

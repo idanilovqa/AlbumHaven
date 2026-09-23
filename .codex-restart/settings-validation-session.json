@@ -1,0 +1,13 @@
+{
+    "runRoot":  "C:\\Users\\Rendref\\AppData\\Local\\Temp\\album-haven-functional-local-settings-003bf4a0ba",
+    "fixtureRoot":  "C:\\Users\\Rendref\\AppData\\Local\\Temp\\album-haven-functional-local-settings-003bf4a0ba\\fixture",
+    "providerPort":  5415,
+    "databaseSuffix":  "local_settings_003bf4a0ba",
+    "statePath":  "C:\\Users\\Rendref\\AppData\\Local\\Temp\\album-haven-functional-local-settings-003bf4a0ba\\postgres.state.json",
+    "python":  "C:\\Users\\Rendref\\Miniconda3\\python.exe",
+    "serverPid":  50084,
+    "port":  5002,
+    "envPath":  "C:\\Users\\Rendref\\AppData\\Local\\Temp\\album-haven-functional-local-settings-003bf4a0ba\\postgres.env",
+    "stdout":  "C:\\Users\\Rendref\\AppData\\Local\\Temp\\album-haven-functional-local-settings-003bf4a0ba\\server-20260912-152045.stdout.log",
+    "stderr":  "C:\\Users\\Rendref\\AppData\\Local\\Temp\\album-haven-functional-local-settings-003bf4a0ba\\server-20260912-152045.stderr.log"
+}

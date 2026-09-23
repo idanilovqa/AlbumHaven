@@ -72,7 +72,8 @@ class PostgresAdminMembersService:
                     """
                     with authority as (
                       select library.libraries.id as library_id,
-                             library.libraries.name as library_name
+                             library.libraries.name as library_name,
+                             actor.id as owner_account_id
                       from app.bootstrap_owners
                       join app.accounts actor
                         on actor.id = app.bootstrap_owners.account_id
@@ -101,6 +102,22 @@ class PostgresAdminMembersService:
                     from authority
                     join app.accounts account
                       on account.account_kind in ('bootstrap_owner', 'managed_user')
+                     and (
+                       account.id = authority.owner_account_id
+                       or exists (
+                         select 1
+                         from library.library_memberships scoped_membership
+                         where scoped_membership.library_id = authority.library_id
+                           and scoped_membership.account_id = account.id
+                       )
+                       or exists (
+                         select 1
+                         from app.capabilities prior_access
+                         where prior_access.account_id = account.id
+                           and prior_access.scope_kind = 'library'
+                           and prior_access.scope_id = authority.library_id
+                       )
+                     )
                     left join app.bootstrap_owners owner
                       on owner.account_id = account.id
                      and owner.owner_key = 'local-bootstrap-owner'

@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+from music_app.services.log_history import resolve_media_host_history_scope
+
 import threading
 import time
 from collections.abc import Callable, Mapping
+from os.path import normcase
 from pathlib import Path
 
 from music_app.services.app_logging import log_app_event
@@ -82,11 +85,15 @@ def invalidate_targeted_library_projections(
     affected_album_keys: tuple[str, ...],
 ) -> None:
     """Invalidate only live projections affected by a committed watcher event."""
-    browse_cache = library_state.get("_view_payload_root_browse_cache")
-    if isinstance(browse_cache, dict):
-        browse_cache.clear()
-    library_state["inventory_mutation_revision"] = max(0, int(revision or 0))
-    library_state["targeted_inventory_album_keys"] = tuple(affected_album_keys)
+    with _CACHE_LOCK:
+        browse_cache = library_state.get("_view_payload_root_browse_cache")
+        if isinstance(browse_cache, dict):
+            browse_cache.clear()
+        library_state["inventory_mutation_revision"] = max(
+            0, int(revision or 0),
+            int(library_state.get("inventory_mutation_revision") or 0),
+        )
+        library_state["targeted_inventory_album_keys"] = tuple(affected_album_keys)
     invalidate_problematic_albums_payload_cache(library_state)
     invalidate_utility_rules_payload_cache(library_state)
     invalidate_postgres_utility_projection_cache(
@@ -132,9 +139,14 @@ def _bounded_file_error_history_recorder(
     summary_action: str = "Additional library file errors omitted",
     summary_id_prefix: str = "library-file-errors-omitted",
     counter_state: dict[str, int] | None = None,
+    history_scope=None,
 ) -> Callable[..., None]:
     counters = counter_state if counter_state is not None else {}
-    counter_key = f"{summary_id_prefix}:{scan_generation}"
+    counter_key = (
+        f"{summary_id_prefix}:"
+        f"{getattr(history_scope, 'library_id', 'unattributed')}:"
+        f"{scan_generation}"
+    )
     durable_reason_codes = {
         "Library cover file inspection failed": "cover_file_inspection_failed",
         "Library cover image decode failed": "cover_image_decode_failed",
@@ -155,6 +167,7 @@ def _bounded_file_error_history_recorder(
                     "Durable library file error",
                     level="error",
                     history=True,
+                    history_scope=history_scope,
                     scan_generation=scan_generation,
                     reason_code=durable_reason_codes.get(action, "scan_file_error"),
                 )
@@ -165,6 +178,7 @@ def _bounded_file_error_history_recorder(
                 action,
                 level="error",
                 history=True,
+                history_scope=history_scope,
                 scan_generation=scan_generation,
                 **fields,
             )
@@ -175,6 +189,7 @@ def _bounded_file_error_history_recorder(
                 summary_action,
                 level="error",
                 history=True,
+                history_scope=history_scope,
                 id=counter_key,
                 scan_generation=scan_generation,
                 detail_limit=_SCAN_FILE_ERROR_HISTORY_LIMIT,
@@ -195,6 +210,7 @@ def _call_hydrate_library_state_from_disk(
     strict_scan_cache_load: bool = False,
     logger=None,
 ):
+    history_scope = resolve_media_host_history_scope(config)
     hydrate_kwargs = {
         "ensure_relations": ensure_relations,
         "validate_cache": validate_cache,
@@ -219,7 +235,7 @@ def _call_hydrate_library_state_from_disk(
             summary_action="Additional library hydration file errors omitted",
             summary_id_prefix="library-hydration-file-errors-omitted",
             counter_state=counter_state,
-        )
+         history_scope=history_scope)
     return hydrate_library_state_from_disk(
         library_state,
         config,
@@ -621,6 +637,7 @@ def scan_music_incremental(
     should_cancel: Callable[[], bool] | None = None,
     exception_overrides: dict[str, object] | None = None,
 ) -> tuple[dict[str, dict[str, object]], float]:
+    history_scope = resolve_media_host_history_scope(config)
     cfg = config
     selected_root_definitions = (
         list(root_definitions) if root_definitions is not None else get_library_roots(cfg)
@@ -641,7 +658,7 @@ def scan_music_incremental(
         )
     root_definitions = selected_root_definitions
     available_paths = {
-        str(Path(root).resolve(strict=False)).casefold()
+        normcase(str(Path(root).resolve(strict=False)))
         for root in scan_roots
     }
     observed_roots = {
@@ -650,7 +667,7 @@ def scan_music_incremental(
         )
         for root in root_definitions
         if str(root.get("id") or "").strip()
-        and str(Path(str(root.get("path") or "")).resolve(strict=False)).casefold()
+        and normcase(str(Path(str(root.get("path") or "")).resolve(strict=False)))
         in available_paths
     }
     if publication_state is not None:
@@ -664,13 +681,14 @@ def scan_music_incremental(
         logger,
         scan_generation=int(expected_scan_generation or 0),
         counter_state=counter_state,
-    )
+     history_scope=history_scope)
     traversal_failed_root_ids: set[str] = set()
 
     def record_file_error(action: str, **fields: object) -> None:
         if action in {
             "Library directory read failed",
             "Library directory entry inspection failed",
+            "Library candidate file stat failed",
         }:
             failed_path = Path(str(fields.get("path") or "")).resolve(strict=False)
             for root_id, root_path in observed_roots.items():

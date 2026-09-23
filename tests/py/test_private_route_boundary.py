@@ -1,10 +1,12 @@
 import asyncio
 import base64
 from pathlib import Path
+from urllib.parse import quote
 
 import pytest
 from fastapi import FastAPI, Request
 
+from music_app.services.auth_config import build_auth_config
 from music_app.services.current_actor import CurrentActor
 from music_app.services.private_route_boundary import (
     _redact_lifecycle_link_query,
@@ -41,6 +43,7 @@ def test_private_routes_have_explicit_action_classification():
                 "/forgot-password",
                 "/reset-password",
                 "/accept-invitation",
+                "/accept-invitation/continue",
                 "/favicon.ico",
                 "/static",
             }:
@@ -74,6 +77,12 @@ def test_private_routes_have_explicit_action_classification():
         ("POST", "/cancel-refresh-api", "library.refresh.cancel"),
         ("POST", "/utilities/edit-tags", "library.files.edit_tags"),
         ("POST", "/playback/session/scrobble", "integration.lastfm.scrobble"),
+        ("GET", "/utilities/integrations/lastfm/scrobbles", "integration.settings.read"),
+        (
+            "POST",
+            "/utilities/integrations/lastfm/scrobbles/submit",
+            "integration.lastfm.scrobbles.submit",
+        ),
         ("POST", "/loops/delete", "library.loops.delete"),
         ("POST", "/playlists/{playlist_ref}/items", "library.playlists.items.manage"),
         ("POST", "/logout", "auth.session.logout"),
@@ -103,7 +112,7 @@ def test_write_inventory_classifies_header_and_route_owned_csrf():
     assert csrf_mode_for_route("POST", "/account/password") == "route_form"
     assert csrf_mode_for_route("GET", "/status") == "none"
     assert csrf_mode_for_route("WEBSOCKET", "/playback/pcm") == "none"
-    assert private_action_for_route("WEBSOCKET", "/playback/pcm") == "library.media.stream"
+    assert private_action_for_route("WEBSOCKET", "/playback/pcm") == "library.media.read"
 
 
 class Resolver:
@@ -192,7 +201,7 @@ async def _request_async(app, path, *, method="GET", cookie=None, query="", head
             "method": method,
             "scheme": "https",
             "path": path,
-            "raw_path": path.encode("ascii"),
+            "raw_path": quote(path).encode("ascii"),
             "query_string": query.encode("ascii"),
             "headers": request_headers,
             "client": ("127.0.0.1", 50000),
@@ -397,6 +406,72 @@ def test_invitation_redaction_clears_cached_query_views_on_the_same_request():
     assert request.state.account_invitation_link_token == raw
 
 
+@pytest.mark.parametrize("path", ["/reset-password", "/accept-invitation"])
+@pytest.mark.parametrize("method", ["HEAD", "POST", "OPTIONS", "DELETE"])
+def test_non_get_lifecycle_queries_are_redacted_without_exchange_state(path, method):
+    request = Request({"type": "http", "http_version": "1.1", "method": method,
+        "scheme": "https", "path": path, "raw_path": path.encode("ascii"),
+        "query_string": b"purpose=password-reset&token=private-link-token",
+        "headers": [(b"host", b"music.test")]})
+    assert request.url.query and request.query_params.get("token") == "private-link-token"
+
+    _redact_lifecycle_link_query(request)
+
+    assert request.scope["query_string"] == b""
+    assert request.url.query == ""
+    assert tuple(request.query_params.multi_items()) == ()
+    assert request.scope.get("state", {}) == {}
+
+
+@pytest.mark.parametrize("path", ["/reset-password", "/accept-invitation"])
+def test_head_lifecycle_query_is_redacted_before_downstream_405(path):
+    app = FastAPI()
+    observed = {}
+
+    @app.get(path)
+    async def lifecycle_get():
+        pytest.fail("HEAD must not exchange a lifecycle token")
+
+    @app.middleware("http")
+    async def observe_downstream(request, call_next):
+        observed.update(query=request.scope["query_string"], url_query=request.url.query,
+            params=tuple(request.query_params.multi_items()), state=dict(request.scope.get("state", {})))
+        return await call_next(request)
+
+    install_private_route_boundary(app)
+    status, body = _request(app, path, method="HEAD", query="purpose=password-reset&token=private-link-token")
+
+    assert status == 405
+    assert b"private-link-token" not in body
+    assert observed == {"query": b"", "url_query": "", "params": (), "state": {}}
+
+
+@pytest.mark.parametrize("query, invalid_marker", [
+    ("invalid=1", True),
+    ("invalid=1&token=private-token", False),
+    ("invalid=1&invalid=1", False),
+    ("invalid=0", False),
+    ("purpose=password-reset&token=private-token", False),
+])
+def test_reset_redaction_retains_only_an_exact_invalid_marker(query, invalid_marker):
+    request = Request({
+        "type": "http", "http_version": "1.1", "method": "GET",
+        "scheme": "https", "path": "/reset-password", "raw_path": b"/reset-password",
+        "query_string": query.encode("ascii"),
+        "headers": [(b"host", b"music.test")],
+        "client": ("127.0.0.1", 50000), "server": ("music.test", 443),
+    })
+    assert request.url.query == query
+    assert request.query_params
+
+    _redact_lifecycle_link_query(request)
+
+    assert request.state.password_reset_link_invalid_marker is invalid_marker
+    assert request.scope["query_string"] == b""
+    assert request.url.query == ""
+    assert tuple(request.query_params.multi_items()) == ()
+
+
 def test_status_and_every_nonpublic_path_require_authentication():
     app, resolver = _app(CurrentActor.anonymous())
 
@@ -442,7 +517,8 @@ def test_authenticated_bootstrap_owner_reaches_private_route():
     assert resolver.calls == ["opaque-session"]
 
 
-def test_media_resource_is_privacy_minimized_before_policy_and_resolved_after_auth():
+@pytest.mark.parametrize("secret", ["0123456789abcdef0123456789abcdef", "é" * 16])
+def test_media_resource_is_privacy_minimized_before_policy_and_resolved_after_auth(secret):
     actor = CurrentActor(
         state=__import__("music_app.services.current_actor", fromlist=["ActorState"]).ActorState.ACTIVE,
         account_id=7,
@@ -451,6 +527,13 @@ def test_media_resource_is_privacy_minimized_before_policy_and_resolved_after_au
         is_bootstrap_owner=True,
     )
     app, _ = _app(actor)
+    app.state.auth_policy_config = build_auth_config({
+        "ALBUM_HAVEN_AUTH_HMAC_SECRET": secret,
+        "ALBUM_HAVEN_AUTH_HMAC_KEY_VERSION": "7",
+        "ALBUM_HAVEN_BOOTSTRAP_USERNAME": "Rendref",
+        "ALBUM_HAVEN_BOOTSTRAP_EMAIL": "rendref@example.test",
+        "ALBUM_HAVEN_PUBLIC_BASE_URL": "https://music.test",
+    })
     contexts = []
     app.state.policy_constraint_resolver = lambda context: (
         contexts.append(context)
@@ -583,3 +666,91 @@ def test_authenticated_get_refreshes_stale_session_csrf_cookie_after_key_rotatio
     assert status == 200
     assert any(cookie.startswith(f"__Host-album_haven_csrf={expected}") for cookie in cookies)
     assert all(stale not in cookie for cookie in cookies)
+
+@pytest.mark.parametrize("authenticated", [False, True])
+@pytest.mark.parametrize("path, query", [
+    ("/track", "path=C%3A%5CMusic%5Cprivate.mp3"),
+    ("/utilities/cover-lookup/remote-image", "url=https%3A%2F%2Fprivate.test%2Fcover.jpg"),
+])
+def test_cold_private_resource_initializes_auth_before_hashing(monkeypatch, authenticated, path, query):
+    from music_app.services import current_actor_asgi
+    from music_app.services.current_actor import ActorState
+    from music_app.services.policy_evaluator import PolicyEvaluationConstraints
+
+    actor = CurrentActor(
+        state=ActorState.ACTIVE, account_id=7, session_id=11,
+        username_display="Rendref", is_bootstrap_owner=True,
+    ) if authenticated else CurrentActor.anonymous()
+    app, resolver = _app(actor)
+    del app.state.auth_policy_config
+    del app.state.current_actor_resolver
+    app.add_api_route("/utilities/cover-lookup/remote-image", lambda: {"cover": True})
+    for key, value in {
+        "ALBUM_HAVEN_AUTH_HMAC_SECRET": "a" * 32,
+        "ALBUM_HAVEN_BOOTSTRAP_USERNAME": "Rendref",
+        "ALBUM_HAVEN_BOOTSTRAP_EMAIL": "owner@example.test",
+        "ALBUM_HAVEN_PUBLIC_BASE_URL": "https://music.test",
+    }.items():
+        monkeypatch.setenv(key, value)
+    created = []
+    monkeypatch.setattr(current_actor_asgi, "PostgresAuthSessionService", lambda config: object())
+
+    def create_resolver(config, *, session_service):
+        created.append(config)
+        return resolver
+
+    monkeypatch.setattr(current_actor_asgi, "PostgresCurrentActorResolver", create_resolver)
+    contexts = []
+    app.state.policy_constraint_resolver = lambda context: (
+        contexts.append(context) or PolicyEvaluationConstraints()
+    )
+
+    status, _ = _request(app, path, query=query)
+
+    assert status == (200 if authenticated else 401)
+    assert len(created) == 1
+    assert resolver.calls == [None]
+    assert contexts[0].resource.resource_ref.startswith("hmac:v")
+    assert "private" not in contexts[0].resource.resource_ref
+
+
+@pytest.mark.parametrize("reference", ["é", "_", "valid-loop:1"])
+@pytest.mark.parametrize("route", ["query", "path"])
+def test_loop_resource_reference_uses_policy_grammar(reference, route):
+    from urllib.parse import quote
+    from music_app.services.current_actor import ActorState
+    from music_app.services.policy_evaluator import PolicyEvaluationConstraints
+
+    app, _ = _app(CurrentActor(
+        state=ActorState.ACTIVE, account_id=7, session_id=11,
+        username_display="Rendref", is_bootstrap_owner=True,
+    ))
+    app.add_api_route("/loops/media/{loop_id}", lambda loop_id: {"loop": True})
+    contexts = []
+    app.state.policy_constraint_resolver = lambda context: (
+        contexts.append(context) or PolicyEvaluationConstraints()
+    )
+    path = "/track" if route == "query" else f"/loops/media/{reference}"
+    query = f"loop_id={quote(reference)}" if route == "query" else ""
+
+    status, _ = _request(app, path, query=query)
+
+    assert status == 200
+    scope = contexts[0].resource
+    assert scope.resource_kind == "loop"
+    if reference == "valid-loop:1":
+        assert scope.resource_ref == reference
+    else:
+        assert scope.resource_ref.startswith("hmac:v7:")
+        assert reference not in scope.resource_ref
+
+
+@pytest.mark.parametrize("method, path, allowed", [
+    ("GET", "/accept-invitation/continue", True),
+    ("HEAD", "/accept-invitation/continue", True),
+    ("POST", "/accept-invitation/continue", False),
+    ("GET", "/accept-invitation/continue/extra", False),
+])
+def test_only_exact_readonly_invitation_handoff_is_public(method, path, allowed):
+    from music_app.services.private_route_boundary import _is_public
+    assert _is_public(method, path) is allowed

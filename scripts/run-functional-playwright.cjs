@@ -1,5 +1,6 @@
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
+const { PROCESS_CLEANUP_FAILURE_EXIT_CODE } = require('./playwright-exit-codes.cjs');
 
 const runnerPath = path.join(__dirname, 'run-playwright.cjs');
 const suites = [
@@ -29,6 +30,9 @@ function isNoTestsResult(result) {
 
 function childResult(result, failed = false) {
   if (result?.signal) return { exitCode: 1, signal: result.signal };
+  if (result?.status === PROCESS_CLEANUP_FAILURE_EXIT_CODE) {
+    return { exitCode: PROCESS_CLEANUP_FAILURE_EXIT_CODE, signal: null };
+  }
   return {
     exitCode: failed || result?.error || result?.status !== 0 ? 1 : 0,
     signal: null,
@@ -61,6 +65,11 @@ function runFunctionalSuites(argv, options = {}) {
         },
       );
       if (discovery.signal) return childResult(discovery, true);
+      if (discovery.status === PROCESS_CLEANUP_FAILURE_EXIT_CODE) {
+        if (discovery.stdout) stdout.write(discovery.stdout);
+        if (discovery.stderr) stderr.write(discovery.stderr);
+        return childResult(discovery, true);
+      }
       if (isNoTestsResult(discovery)) continue;
       if (discovery.error || discovery.status !== 0) {
         if (discovery.stdout) stdout.write(discovery.stdout);
@@ -82,6 +91,7 @@ function runFunctionalSuites(argv, options = {}) {
       },
     );
     if (result.signal) return childResult(result, true);
+    if (result.status === PROCESS_CLEANUP_FAILURE_EXIT_CODE) return childResult(result, true);
     if (result.error || result.status !== 0) {
       failed = true;
     }

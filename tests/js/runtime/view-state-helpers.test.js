@@ -2,6 +2,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
+const ButtonComponent = require('../../../music_app/static/js/button-component.js');
 
 const navigationItemTemplate = fs.readFileSync(path.join(__dirname, '../../../music_app/templates/components/navigation-tree-item.html'), 'utf8');
 const helperPaths = [
@@ -40,6 +41,81 @@ function loadHelpers(origin = 'http://localhost:5000') {
     vm.runInContext(source, context, { filename: helperPath });
   });
   return context;
+}
+
+{
+    const context = loadHelpers();
+    const attributes = {};
+    const menu = { setAttribute(name, value) { attributes[name] = value; } };
+    const appended = [];
+    context.ButtonComponent = ButtonComponent;
+    context.document.createElement = () => menu;
+    context.document.body = { appendChild(element) { appended.push(element); } };
+    assert.equal(context.ensureStatusContextMenu(), menu);
+    assert.equal(menu.className, 'gallery-anchored-menu');
+    assert.equal(menu.hidden, true);
+    assert.equal(attributes.role, 'group');
+    assert.equal(attributes['aria-label'], 'Library actions');
+    assert.deepEqual(appended, [menu]);
+    for (const action of ['full-rescan', 'fetch-covers', 'go-to-scan-page']) {
+        assert.ok(menu.innerHTML.includes(`data-status-action="${action}"`));
+    }
+    assert.equal((menu.innerHTML.match(/ui-button__content/g) || []).length, 3);
+    context.document.getElementById = () => menu;
+    assert.equal(context.ensureStatusContextMenu(), menu);
+    assert.equal(appended.length, 1);
+}
+
+{
+    const context = loadHelpers();
+    const label = { textContent: 'Fetch Album Covers' };
+    const attributes = {};
+    const button = {
+        disabled: false,
+        querySelector(selector) { assert.equal(selector, '.ui-button__content'); return label; },
+        getAttribute(name) { return attributes[name]; },
+        setAttribute(name, value) { attributes[name] = value; },
+        set textContent(value) { assert.fail('Status updates must preserve shared button markup'); },
+    };
+    context.syncStatusContextButtonPresentation(button, {
+        action: 'fetch-covers-queued', label: 'Fetching Covers Is Queued', disabled: true,
+    });
+    assert.equal(label.textContent, 'Fetching Covers Is Queued');
+    assert.equal(button.disabled, true);
+    assert.equal(attributes['aria-disabled'], 'true');
+    context.syncStatusContextButtonPresentation(button, {
+        action: 'cancel-cover-scan', label: 'Cancel Album Cover Scan', disabled: false,
+    });
+    assert.equal(label.textContent, 'Cancel Album Cover Scan');
+    assert.equal(button.disabled, false);
+    assert.equal(attributes['aria-disabled'], 'false');
+    assert.equal(attributes['data-status-action'], 'cancel-cover-scan');
+}
+
+{
+    const context = loadHelpers();
+    const anchor = {};
+    const menu = { hidden: false };
+    const opened = [];
+    const closed = [];
+    const cleared = [];
+    let currentKey = 'library-status';
+    context.document.getElementById = id => id === 'scan-indicator' ? anchor : menu;
+    context.syncStatusContextMenu = () => menu;
+    context.openGalleryMainSurface = (...args) => opened.push(args);
+    context.closeGalleryMainSurface = returnFocus => closed.push(returnFocus);
+    context.clearTriggerAnchor = surface => cleared.push(surface);
+    context.galleryMainSurfaceController = { current: () => ({ key: currentKey }) };
+    context.showStatusContextMenu();
+    assert.deepEqual(opened, [['library-status', anchor, menu]]);
+    context.hideStatusContextMenu(true);
+    context.hideStatusContextMenu({ type: 'blur' });
+    assert.deepEqual(closed, [true, false]);
+    currentKey = 'sources';
+    context.hideStatusContextMenu(true);
+    assert.deepEqual(closed, [true, false], 'Status cleanup must not close another surface');
+    assert.equal(menu.hidden, true);
+    assert.deepEqual(cleared, [menu]);
 }
 
 {
@@ -813,7 +889,7 @@ function loadHelpers(origin = 'http://localhost:5000') {
     scan_mode: 'manual_full_rescan',
   }))), {
     action: 'go-to-scan-page',
-    label: 'Go to Scan Page',
+    label: 'Go to Library Status Page',
     disabled: false,
   });
   assert.deepEqual(JSON.parse(JSON.stringify(resolvePrimaryStatusContextAction({
@@ -823,7 +899,7 @@ function loadHelpers(origin = 'http://localhost:5000') {
     scanPageVisible: true,
   }))), {
     action: 'go-to-scan-page',
-    label: 'Go to Scan Page',
+    label: 'Go to Library Status Page',
     disabled: false,
   });
   assert.deepEqual(JSON.parse(JSON.stringify(resolvePrimaryStatusContextAction({
@@ -831,14 +907,14 @@ function loadHelpers(origin = 'http://localhost:5000') {
     scan_mode: 'background',
   }))), {
     action: 'go-to-scan-page',
-    label: 'Go to Scan Page',
+    label: 'Go to Library Status Page',
     disabled: false,
   });
   assert.deepEqual(JSON.parse(JSON.stringify(resolvePrimaryStatusContextAction({
     covers_in_progress: true,
   }))), {
     action: 'go-to-scan-page',
-    label: 'Go to Scan Page',
+    label: 'Go to Library Status Page',
     disabled: false,
   });
   assert.deepEqual(JSON.parse(JSON.stringify(resolvePrimaryStatusContextAction({}))), {
@@ -882,7 +958,7 @@ function loadHelpers(origin = 'http://localhost:5000') {
   };
   context.ensureStatusContextMenu = () => menu;
   context.syncStatusContextMenu();
-  assert.equal(menu.primaryButton.textContent, 'Go to Scan Page');
+  assert.equal(menu.primaryButton.textContent, 'Go to Library Status Page');
   assert.equal(menu.primaryButton.disabled, false);
   assert.equal(menu.primaryButton.attrs['data-status-action'], 'go-to-scan-page');
   assert.equal(menu.coverButton.textContent, 'Cancel Album Cover Scan');
@@ -1322,4 +1398,22 @@ function loadHelpers(origin = 'http://localhost:5000') {
     selectedArtistOverride: '',
   });
   assert.equal(html.includes('artist-link active'), false);
+}
+
+// Dismissed health warnings must remain reachable from the idle Library menu.
+{
+  const context = loadHelpers();
+  const scanPage = {hidden: true};
+  const menu = {querySelector: selector => selector === '[data-status-role="scan-page"]' ? scanPage : null};
+  context.ensureStatusContextMenu = () => menu;
+  for (const status of [{}, {watcher_health: {state: 'warning', dismissed: true}}]) {
+    context.state.status = status;
+    context.syncStatusContextMenu();
+    assert.equal(scanPage.hidden, false);
+  }
+  for (const busy of ['scan_in_progress', 'relations_in_progress', 'covers_in_progress']) {
+    context.state.status = {[busy]: true};
+    context.syncStatusContextMenu();
+    assert.equal(scanPage.hidden, true);
+  }
 }

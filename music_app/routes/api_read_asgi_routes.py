@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+from music_app.services.loop_request_scope import saved_loop_scope
+from music_app.services.log_history import history_scope_for_request, normalize_log_history_query, export_log_history, LogHistoryQueryError
+from music_app.services.loops import project_loop_for_client, project_loop_order_for_client
+
 import logging
 import time
 from collections.abc import Iterable, Mapping
@@ -36,6 +40,8 @@ from music_app.services.album_details import build_album_detail_payload
 from music_app.services.album_ratings_postgres import PostgresAlbumRatingsService
 from music_app.services.library_browse_postgres import PostgresLibraryBrowseRepository
 from music_app.services.library_watch_health import LibraryWatchHealthService
+from music_app.services.library_warning_dismissals import PostgresLibraryWarningDismissals, warning_token
+from music_app.routes.bounded_json import read_bounded_json_object, JSONBodyTooLarge
 from music_app.services.policy_asgi import allowed_actions_for_request
 from music_app.services.private_route_boundary import (
     _job_status_service,
@@ -69,11 +75,13 @@ def _project_missing_album_actions_for_request(
 ) -> object:
     allowed_actions = allowed_actions_for_request(
         request,
-        ("library.inventory.manage",),
+        ("library.inventory.manage", "library.files.edit_tags", "library.rules.manage", "library.files.open_location", "library.covers.fetch"),
     )
 
     def visit(value: object) -> None:
         if isinstance(value, dict):
+            if "suggested_edits" in value:
+                value["allowed_actions"] = allowed_actions.as_payload()
             if value.get("inventory_status") == "missing":
                 value.update(project_missing_album_actions(value, allowed_actions))
             for nested in tuple(value.values()):
@@ -349,6 +357,31 @@ def _client_surface_class_from_asgi(request: Request) -> str:
     return resolve_client_surface_class(requested_value)
 
 
+def _warning_dismissals(request):
+    return getattr(request.app.state, "library_warning_dismissals", None) or PostgresLibraryWarningDismissals(_app_config(request))
+
+
+@router.post("/account/library-warning/dismiss")
+async def dismiss_library_warning(request: Request) -> JSONResponse:
+    headers = {"Cache-Control": "no-store"}
+    try:
+        body = await read_bounded_json_object(request)
+        token = (body or {}).get("token")
+        if not isinstance(token, str) or len(token) != 64 or any(c not in "0123456789abcdef" for c in token):
+            return JSONResponse({"error": "invalid_warning_token"}, status_code=400, headers=headers)
+    except (ValueError, UnicodeDecodeError, JSONBodyTooLarge):
+        return JSONResponse({"error": "invalid_warning_token"}, status_code=400, headers=headers)
+    health = await run_in_threadpool(_project_library_watch_health_for_request, request)
+    # A stale alert cannot acknowledge a warning that arrived while it was open.
+    if token != warning_token(health):
+        return JSONResponse({"error": "warning_changed"}, status_code=409, headers=headers)
+    try:
+        await run_in_threadpool(_warning_dismissals(request).save, request.state.current_actor.account_id, token)
+    except Exception:
+        return JSONResponse({"error": "dismissal_unavailable"}, status_code=503, headers=headers)
+    return JSONResponse({"dismissed_token": token}, headers=headers)
+
+
 @router.get("/status")
 async def status(request: Request) -> JSONResponse:
     library_state = _library_state(request)
@@ -384,20 +417,54 @@ async def status(request: Request) -> JSONResponse:
     # Status is observational: API-only clients see pending discovery, but only
     # the root response handoff or an explicit manual refresh starts the scan.
     with request.app.state.cold_scan_handoff_lock:
-        payload = _build_status_payload_from_state(library_state)
+        payload = dict(_build_status_payload_from_state(library_state))
         if durable_status is not None:
             payload.update(project_durable_full_scan_status(durable_status))
         if isinstance(durable_cover_status, Mapping):
             payload.update(durable_cover_status)
-        payload["log_history_revision"] = load_log_history_revision(_app_config(request))
         handoff_status = str(library_state.get("cold_scan_handoff_status") or "idle")
         if library_state.get("cold_scan_pending") or handoff_status == "claimed":
             payload["scan_in_progress"] = True
             payload["scan_phase"] = "discovering"
             payload["scan_mode"] = "background"
-        payload["watcher_health"] = _project_library_watch_health_for_request(
-            request
-        )
+
+    payload["watcher_health"] = await run_in_threadpool(
+        _project_library_watch_health_for_request,
+        request,
+    )
+    health = payload["watcher_health"]
+    health["warning_token"] = warning_token(health)
+    health["dismissed"] = False
+    actor = getattr(request.state, "current_actor", None)
+    if health["warning_token"] and getattr(actor, "account_id", None) is not None:
+        try:
+            dismissed = await run_in_threadpool(
+                _warning_dismissals(request).load,
+                actor.account_id,
+            )
+            health["dismissed"] = dismissed == health["warning_token"]
+        except Exception:
+            # A failed preference read must not hide a health warning.
+            pass
+
+    scope = await history_scope_for_request(request, required=False)
+    payload["log_history_revision"] = ""
+    if scope is not None:
+        try:
+            payload["log_history_revision"] = await run_in_threadpool(
+                load_log_history_revision,
+                _app_config(request),
+                scope=scope,
+            )
+        except Exception:
+            logging.getLogger(__name__).warning(
+                "Operational history revision is unavailable"
+            )
+    payload["allowed_actions"] = allowed_actions_for_request(
+        request,
+        ("library.loops.create",),
+    ).as_payload()
+
     service = _job_status_service(request.app)
     operator_allowed = allowed_actions_for_request(
         request,
@@ -1131,16 +1198,51 @@ def _is_postgres_utility_projection_request(request: Request) -> bool:
 
 @router.get("/utilities/loops")
 async def utilities_loops(request: Request) -> JSONResponse:
-    return JSONResponse({"ok": True, "loops": load_loops(_app_config(request))})
+    actions = allowed_actions_for_request(request, (
+        "library.loops.read", "library.loops.create", "library.loops.delete", "library.loops.reorder",
+    ))
+    return JSONResponse({"ok": True, "loops": [project_loop_for_client(item) for item in load_loops(_app_config(request), **(await saved_loop_scope(request)))], "allowed_actions": actions.as_payload()})
 
 
 @router.get("/utilities/log-history")
 async def utilities_log_history(request: Request) -> JSONResponse:
-    snapshot = load_log_history_snapshot(_app_config(request))
-    return JSONResponse(
-        {"ok": True, **snapshot},
-        headers={"Cache-Control": "no-store"},
-    )
+    scope = await history_scope_for_request(request)
+    try:
+        fields = {key: request.query_params.get(key) for key in ('from_utc', 'to_utc', 'text') if key in request.query_params}
+        fields.update({key: request.query_params.getlist(key) for key in ('sources', 'event_types', 'event_ids')})
+        snapshot = await run_in_threadpool(
+            load_log_history_snapshot, _app_config(request), scope=scope, query=normalize_log_history_query(fields),
+            cursor=request.query_params.get('cursor'), snapshot=request.query_params.get('snapshot'),
+            page_size=int(request.query_params.get('page_size', '500')),
+        )
+    except LogHistoryQueryError as error:
+        return JSONResponse(error.payload, status_code=error.status_code)
+    except ValueError:
+        return JSONResponse({'ok': False, 'error': 'Invalid history request'}, status_code=400)
+    except Exception:
+        logging.getLogger(__name__).warning('Operational history is unavailable')
+        return JSONResponse({'ok': False, 'error': 'Operational history is unavailable'}, status_code=503)
+    actions = allowed_actions_for_request(request, ('library.logs.read', 'library.logs.export'))
+    return JSONResponse({'ok': True, **snapshot, 'allowed_actions': actions.as_payload()}, headers={'Cache-Control': 'no-store'})
+
+
+@router.post('/utilities/log-history/export')
+async def utilities_log_history_export(request: Request) -> JSONResponse:
+    scope = await history_scope_for_request(request)
+    try:
+        payload = await request.json()
+        if not isinstance(payload, dict):
+            raise LogHistoryQueryError('Invalid history export request')
+        result = await run_in_threadpool(export_log_history, _app_config(request), scope=scope,
+            query=normalize_log_history_query(payload.get('query')), snapshot=payload.get('snapshot'))
+    except LogHistoryQueryError as error:
+        return JSONResponse(error.payload, status_code=error.status_code)
+    except ValueError:
+        return JSONResponse({'ok': False, 'error': 'Invalid history request'}, status_code=400)
+    except Exception:
+        logging.getLogger(__name__).warning('Operational history is unavailable')
+        return JSONResponse({'ok': False, 'error': 'Operational history is unavailable'}, status_code=503)
+    return JSONResponse({'ok': True, **result}, headers={'Cache-Control': 'no-store'})
 
 
 @router.post("/album-notes")

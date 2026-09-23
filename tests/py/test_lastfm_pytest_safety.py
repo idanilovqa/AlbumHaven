@@ -186,6 +186,9 @@ def test_dotenv_loading_cannot_rehydrate_owner_lastfm_or_database_values(tmp_pat
 
 
 def test_app_lifespan_receives_only_safe_lastfm_and_database_config(monkeypatch):
+    from tests.py.runtime_testing import stub_targeted_reconciliation_repository
+
+    stub_targeted_reconciliation_repository(monkeypatch)
     from music_app import create_asgi_app
     from music_app.services import (
         exception_overrides,

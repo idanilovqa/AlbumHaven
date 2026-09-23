@@ -15,7 +15,7 @@ test('every shared millisecond benchmark declares a 200-400 ms grace without rep
     benchmark.expectations.filter((expectation) => expectation.units === 'ms')
   ));
 
-  assert.equal(timingExpectations.length, 52);
+  assert.equal(timingExpectations.length, 55);
   for (const expectation of timingExpectations) {
     assert.ok(Number.isFinite(expectation.targetMaximum), `${expectation.key} target`);
     assert.ok(expectation.graceMs >= 200 && expectation.graceMs <= 400, `${expectation.key} grace`);
@@ -120,7 +120,7 @@ test('shared benchmark terminal lines report target, grace, hard ceiling, and cl
   ];
   const lines = evaluations.flatMap(benchmarks.formatBenchmarkTimingResults);
 
-  assert.equal(lines.length, 52);
+  assert.equal(lines.length, 55);
   for (const line of lines) {
     assert.match(line, /^\[performance-budget\] \S+: (TARGET MET|GRACE USED|HARD FAIL):/);
     assert.match(line, /target/);
@@ -452,6 +452,10 @@ test('utility problematic-files benchmark guards the cold API, payload size, vis
     coldProblematicApiMs: 1200,
     problematicResponseBytes: 409600,
     problematicReadyMs: 1200,
+    problematicCachedEnterMs: 1000,
+    problematicCachedExitMs: 1000,
+    problematicCachedReenterMs: 1000,
+    problematicMountedRowCount: 20,
     searchReadyMs: 350,
     longestProblemFilterMs: 3300,
     problematicIdleMemory: { peakBytes: 50331648 },
@@ -461,6 +465,10 @@ test('utility problematic-files benchmark guards the cold API, payload size, vis
     coldProblematicApiMs: 1000,
     problematicResponseBytes: 409600,
     problematicReadyMs: 1000,
+    problematicCachedEnterMs: 1000,
+    problematicCachedExitMs: 1000,
+    problematicCachedReenterMs: 1000,
+    problematicMountedRowCount: 20,
     searchReadyMs: 350,
     longestProblemFilterMs: 3701,
     problematicIdleMemory: { peakBytes: 50331648 },
@@ -470,6 +478,10 @@ test('utility problematic-files benchmark guards the cold API, payload size, vis
     coldProblematicApiMs: 1000,
     problematicResponseBytes: 409600,
     problematicReadyMs: 1201,
+    problematicCachedEnterMs: 1000,
+    problematicCachedExitMs: 1000,
+    problematicCachedReenterMs: 1000,
+    problematicMountedRowCount: 20,
     searchReadyMs: 350,
     longestProblemFilterMs: 3300,
     problematicIdleMemory: { peakBytes: 50331648 },
@@ -479,6 +491,10 @@ test('utility problematic-files benchmark guards the cold API, payload size, vis
     coldProblematicApiMs: 1201,
     problematicResponseBytes: 409600,
     problematicReadyMs: 1000,
+    problematicCachedEnterMs: 1000,
+    problematicCachedExitMs: 1000,
+    problematicCachedReenterMs: 1000,
+    problematicMountedRowCount: 20,
     searchReadyMs: 350,
     longestProblemFilterMs: 3300,
     problematicIdleMemory: { peakBytes: 50331648 },
@@ -488,6 +504,10 @@ test('utility problematic-files benchmark guards the cold API, payload size, vis
     coldProblematicApiMs: 1000,
     problematicResponseBytes: 409601,
     problematicReadyMs: 1000,
+    problematicCachedEnterMs: 1000,
+    problematicCachedExitMs: 1000,
+    problematicCachedReenterMs: 1000,
+    problematicMountedRowCount: 20,
     searchReadyMs: 350,
     longestProblemFilterMs: 3300,
     problematicIdleMemory: { peakBytes: 50331648 },
@@ -504,7 +524,7 @@ test('utility problematic-files benchmark guards the cold API, payload size, vis
   assert.notEqual(passingEvaluation.benchmark.datasetContract.problematicItemCount, 177);
   assert.equal(
     passingEvaluation.benchmark.version,
-    '2026-08-08-isolated-postgres-problematic-files-v5',
+    '2026-09-23-isolated-postgres-problematic-files-v6',
   );
   assert.equal(
     passingEvaluation.benchmark.datasetContract.mode,
@@ -514,7 +534,7 @@ test('utility problematic-files benchmark guards the cold API, payload size, vis
     Number.isInteger(passingEvaluation.benchmark.datasetContract.problematicItemCount)
       && passingEvaluation.benchmark.datasetContract.problematicItemCount > 0,
   );
-  assert.equal(passingEvaluation.benchmark.datasetContract.problematicItemCount, 18);
+  assert.equal(passingEvaluation.benchmark.datasetContract.problematicItemCount, 706);
   assert.deepEqual(
     passingEvaluation.benchmark.datasetContract.expectedProblemTypes,
     [
@@ -599,7 +619,7 @@ test('utility problematic-files benchmark guards the cold API, payload size, vis
   assert.notEqual(
     validationPayload.sampleWindow.datasetItemCount,
     passingEvaluation.benchmark.datasetContract.problematicItemCount,
-    'The July 31 sample describes the historical 15-item dataset, not the current 18-item contract.',
+    'The July 31 sample describes the historical 15-item dataset, not the current 706-item contract.',
   );
   assert.match(validationPayload.sampleWindow.label, /five sequential final-source fresh-app runs/);
   assert.equal(validationPayload.sampleWindow.browser, 'chromium');
@@ -625,6 +645,18 @@ test('utility problematic-files benchmark guards the cold API, payload size, vis
       problematicReadyMs: {
         observedBaseline: 384,
         observedRange: { min: 346, max: 440 },
+      },
+      problematicCachedEnterMs: {
+        observedBaseline: null,
+        observedRange: { min: null, max: null },
+      },
+      problematicCachedExitMs: {
+        observedBaseline: null,
+        observedRange: { min: null, max: null },
+      },
+      problematicCachedReenterMs: {
+        observedBaseline: null,
+        observedRange: { min: null, max: null },
       },
       searchReadyMs: {
         observedBaseline: 62,
@@ -676,6 +708,10 @@ test('utility benchmark fails closed when a required metric is absent or non-fin
     coldProblematicApiMs: 1000,
     problematicResponseBytes: 409600,
     problematicReadyMs: 1000,
+    problematicCachedEnterMs: 1000,
+    problematicCachedExitMs: 1000,
+    problematicCachedReenterMs: 1000,
+    problematicMountedRowCount: 20,
     searchReadyMs: 350,
     longestProblemFilterMs: 500,
     problematicIdleMemory: { peakBytes: 50331648 },

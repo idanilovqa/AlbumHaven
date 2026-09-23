@@ -5,10 +5,11 @@
   const document = root;
   let active = true;
   let removePointerListener = () => {};
+  let removePlacementListeners = () => {};
   const requests = typeof AbortController === 'undefined' ? null : new AbortController();
   const nativeFetch = globalThis.fetch;
   const fetch = (url, init) => nativeFetch(url, { ...init, ...(requests ? { signal: requests.signal } : {}) });
-  const cleanup = () => { active = false; requests?.abort(); removePointerListener(); };
+  const cleanup = () => { active = false; requests?.abort(); removePointerListener(); removePlacementListeners(); };
   const navigate = (url) => {
     if (!active) return Promise.resolve(false);
     return options.navigate ? options.navigate(url) : window.location.assign(url);
@@ -36,26 +37,56 @@
   const rosterReauthPanel = roster?.querySelector('[data-roster-reauth-panel]');
   const rosterReauthPassword = roster?.querySelector('[data-roster-reauth-password]');
   let rosterRetry = null;
+  let rosterRetryAccountId = null;
+  let fallbackAccountId = null;
+  const pendingInvitationAccounts = new Set();
+
+  const setInvitationBusy = (accountId, busy) => {
+    if (busy) pendingInvitationAccounts.add(accountId);
+    else pendingInvitationAccounts.delete(accountId);
+    for (const [selector, key] of [['[data-copy-invitation]', 'copyInvitation'], ['[data-send-invitation]', 'sendInvitation']]) {
+      for (const button of document.querySelectorAll(selector)) {
+        if (button.dataset[key] === accountId) button.disabled = busy;
+      }
+    }
+  };
+
+  const finishInvitationAction = async (accountId, action) => {
+    let awaitingReauthentication = false;
+    try {
+      awaitingReauthentication = await action() === false;
+    } finally {
+      if (!awaitingReauthentication) setInvitationBusy(accountId, false);
+    }
+  };
+
+  const runInvitationAction = (accountId, action) => {
+    if (!active || pendingInvitationAccounts.has(accountId)) return Promise.resolve();
+    setInvitationBusy(accountId, true);
+    return finishInvitationAction(accountId, action);
+  };
 
   const announceRoster = (message) => {
     if (!rosterStatus) return;
-    rosterStatus.textContent = message;
+    rosterStatus.querySelector('.on-page-alert__message').textContent = message;
     rosterStatus.hidden = false;
   };
 
   const showRosterError = (message) => {
     if (!rosterError) return;
-    rosterError.textContent = message;
+    rosterError.querySelector('.on-page-alert__message').textContent = message;
     rosterError.hidden = false;
   };
 
   const clearInvitationFallback = () => {
+    fallbackAccountId = null;
     if (fallbackValue) fallbackValue.value = '';
     if (fallback) fallback.hidden = true;
   };
 
-  const showInvitationFallback = (url) => {
+  const showInvitationFallback = (url, accountId) => {
     if (!fallback || !fallbackValue) return;
+    fallbackAccountId = accountId;
     fallbackValue.value = url;
     fallback.hidden = false;
     fallbackValue.focus();
@@ -72,7 +103,9 @@
     body: JSON.stringify(payload),
   });
 
-  const reauthenticateRosterThen = (retry) => {
+  const reauthenticateRosterThen = (retry, accountId) => {
+    if (rosterRetryAccountId && rosterRetryAccountId !== accountId) setInvitationBusy(rosterRetryAccountId, false);
+    rosterRetryAccountId = accountId;
     rosterRetry = retry;
     if (rosterReauthPanel) rosterReauthPanel.hidden = false;
     if (rosterReauthPassword) {
@@ -84,6 +117,25 @@
   const closeMenu = (trigger, menu) => {
     menu.hidden = true;
     trigger.setAttribute('aria-expanded', 'false');
+  };
+
+  const positionMenu = (trigger, menu) => {
+    const anchor = trigger.getBoundingClientRect();
+    const host = trigger.closest?.('.settings-outlet') || trigger.closest?.('[data-settings-host]');
+    const bounds = host?.getBoundingClientRect() || {
+      left: 0, top: 0, right: window.innerWidth, bottom: window.innerHeight,
+    };
+    const left = Math.max(8, bounds.left + 8);
+    const top = Math.max(8, bounds.top + 8);
+    const right = Math.min(window.innerWidth - 8, bounds.right - 8);
+    const bottom = Math.min(window.innerHeight - 8, bounds.bottom - 8);
+    menu.style.maxWidth = `${Math.max(0, right - left)}px`;
+    menu.style.maxHeight = `${Math.max(0, bottom - top)}px`;
+    const rect = menu.getBoundingClientRect();
+    menu.style.left = `${Math.max(left, Math.min(anchor.right - rect.width, right - rect.width))}px`;
+    const preferredTop = anchor.bottom + 5 + rect.height <= bottom
+      ? anchor.bottom + 5 : anchor.top - rect.height - 5;
+    menu.style.top = `${Math.max(top, Math.min(preferredTop, bottom - rect.height))}px`;
   };
 
   const closeMenuForAction = (accountId) => {
@@ -140,7 +192,10 @@
       const opening = menu.hidden;
       menu.hidden = !opening;
       trigger.setAttribute('aria-expanded', String(opening));
-      if (opening) menu.querySelector('[role="menuitem"]')?.focus();
+      if (opening) {
+        positionMenu(trigger, menu);
+        menu.querySelector('[role="menuitem"]')?.focus({ preventScroll: true });
+      }
     });
     menu.addEventListener('keydown', (event) => {
       if (event.key === 'Escape') {
@@ -170,14 +225,28 @@
   };
   document.addEventListener?.('pointerdown', onPointerDown);
   removePointerListener = () => document.removeEventListener?.('pointerdown', onPointerDown);
+  const closeOnLayoutChange = (event) => {
+    for (const menu of document.querySelectorAll('[data-member-menu]:not([hidden])')) {
+      if (event?.type === 'scroll' && menu.contains(event.target)) continue;
+      const trigger = document.querySelector(`[data-member-menu-trigger="${menu.dataset.memberMenu}"]`);
+      if (trigger) closeMenu(trigger, menu);
+    }
+  };
+  window.addEventListener?.('scroll', closeOnLayoutChange, true);
+  window.addEventListener?.('resize', closeOnLayoutChange);
+  removePlacementListeners = () => {
+    closeOnLayoutChange();
+    window.removeEventListener?.('scroll', closeOnLayoutChange, true);
+    window.removeEventListener?.('resize', closeOnLayoutChange);
+  };
 
   const copyInvitation = async (accountId, allowReauthentication = true) => {
     const response = await rosterRequest(
       `/admin/accounts/${encodeURIComponent(accountId)}/invitation/copy`,
     );
     if (response.status === 409 && allowReauthentication) {
-      reauthenticateRosterThen(() => copyInvitation(accountId, false));
-      return;
+      reauthenticateRosterThen(() => finishInvitationAction(accountId, () => copyInvitation(accountId, false)), accountId);
+      return false;
     }
     if (!response.ok) throw new Error('Invitation link could not be created.');
     const result = await response.json().catch(() => null);
@@ -187,7 +256,7 @@
       await navigator.clipboard.writeText(invitationUrl);
       announceRoster('Invitation link copied. Older links no longer work.');
     } catch {
-      showInvitationFallback(invitationUrl);
+      showInvitationFallback(invitationUrl, accountId);
     }
   };
 
@@ -196,10 +265,11 @@
       `/admin/accounts/${encodeURIComponent(accountId)}/invitation/send`,
     );
     if (response.status === 409 && allowReauthentication) {
-      reauthenticateRosterThen(() => sendInvitation(accountId, false));
-      return;
+      reauthenticateRosterThen(() => finishInvitationAction(accountId, () => sendInvitation(accountId, false)), accountId);
+      return false;
     }
     if (!response.ok) throw new Error('Invitation email could not be queued.');
+    if (fallbackAccountId === accountId) clearInvitationFallback();
     announceRoster('Invitation email queued. Older invitation links no longer work.');
   };
 
@@ -208,7 +278,7 @@
     if (!accountId) continue;
     button.addEventListener('click', () => {
       closeMenuForAction(accountId);
-      return copyInvitation(accountId).catch(
+      return runInvitationAction(accountId, () => copyInvitation(accountId)).catch(
         (error) => showRosterError(error.message),
       );
     });
@@ -218,7 +288,7 @@
     if (!accountId) continue;
     button.addEventListener('click', () => {
       closeMenuForAction(accountId);
-      return sendInvitation(accountId).catch(
+      return runInvitationAction(accountId, () => sendInvitation(accountId)).catch(
         (error) => showRosterError(error.message),
       );
     });
@@ -241,7 +311,10 @@
   );
   roster?.querySelector('[data-roster-reauth-cancel]')?.addEventListener(
     'click', () => {
+      if (rosterRetryAccountId) setInvitationBusy(rosterRetryAccountId, false);
+      rosterRetryAccountId = null;
       rosterRetry = null;
+      if (rosterReauthPassword) rosterReauthPassword.value = '';
       if (rosterReauthPanel) rosterReauthPanel.hidden = true;
     },
   );
@@ -259,8 +332,10 @@
           password,
         });
         if (!response.ok) throw new Error('Reauthentication failed.');
+        if (rosterReauthPassword) rosterReauthPassword.value = '';
         if (rosterReauthPanel) rosterReauthPanel.hidden = true;
         const retry = rosterRetry;
+        rosterRetryAccountId = null;
         rosterRetry = null;
         await retry?.();
       } catch (error) {
@@ -282,13 +357,13 @@
   const showError = (message) => {
     if (!error) return;
     error.hidden = false;
-    error.textContent = message || 'Account management is temporarily unavailable.';
+    error.querySelector('.on-page-alert__message').textContent = message || 'Account management is temporarily unavailable.';
   };
 
   const showStatus = (message) => {
     if (!status) return;
     status.hidden = false;
-    status.textContent = message;
+    status.querySelector('.on-page-alert__message').textContent = message;
   };
 
   const navigateAfterMutation = async (destination, button) => {
@@ -405,7 +480,7 @@
       const action = button.dataset.adminAction;
       if (action === 'toggle-active') {
         const checkbox = form.querySelector('[name="is_active"]');
-        if (checkbox) checkbox.checked = !checkbox.checked;
+        if (checkbox) checkbox.checked = form.dataset.initialActive !== 'true';
         form.requestSubmit();
         return;
       }
@@ -468,7 +543,13 @@
     if (reauthPanel) reauthPanel.hidden = true;
   });
 
-  form.querySelector('[data-reauth-submit]')?.addEventListener('click', async (event) => {
+  const reauthSubmit = form.querySelector('[data-reauth-submit]');
+  reauthPassword?.addEventListener('keydown', (event) => {
+    if (event.key !== 'Enter' || event.isComposing) return;
+    event.preventDefault();
+    if (!reauthSubmit?.disabled) reauthSubmit?.click();
+  });
+  reauthSubmit?.addEventListener('click', async (event) => {
     const button = event.currentTarget;
     const password = reauthPassword?.value || '';
     if (!password) {

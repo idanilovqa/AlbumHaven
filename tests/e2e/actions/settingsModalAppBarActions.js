@@ -31,13 +31,16 @@ export class SettingsModalAppBarActions {
   }
 
   async pressSpaceOnFocusedSettingsOpener(options = {}) {
-    await this.openSettings();
+    await this.waitForClosed(options);
     await this.settingsModalAppBar.settingsButton.focus();
     await expect(this.settingsModalAppBar.settingsButton).toBeFocused();
     await this.settingsModalAppBar.settingsButton.press('Space');
+    await expect(this.settingsModalAppBar.accountMenu).toBeVisible();
+    await expect(this.settingsModalAppBar.settingsMenuItem).toBeFocused();
+    await this.settingsModalAppBar.settingsMenuItem.press('Space');
     await this.waitForOpen(options);
+    await expect(this.settingsModalAppBar.accountMenu).toBeHidden();
     await options.afterSpace?.();
-    await expect(this.settingsModalAppBar.settingsButton).toBeFocused();
   }
 
   async closeSettings(options = {}) {
@@ -50,9 +53,8 @@ export class SettingsModalAppBarActions {
     await this.settingsModalAppBar.closeButton.focus();
     await expect(this.settingsModalAppBar.closeButton).toBeFocused();
     await this.settingsModalAppBar.closeButton.press('Space');
-    await this.waitForOpen(options);
+    await this.waitForClosed(options);
     await options.afterSpace?.();
-    await expect(this.settingsModalAppBar.closeButton).toBeFocused();
   }
 
   async waitForOpen(options = {}) {
@@ -63,11 +65,13 @@ export class SettingsModalAppBarActions {
         || element.getClientRects().length
       ));
       return isVisible(document.querySelector(selectors.modal))
-        && isVisible(document.querySelector(selectors.title))
+        && isVisible(document.querySelector(selectors.dialog))
+        && isVisible(document.querySelector(selectors.tabs))
         && isVisible(document.querySelector(selectors.body));
     }, { timeout: options.timeout || 60000 }, {
       modal: this.settingsModalAppBar.modalSelector,
-      title: this.settingsModalAppBar.titleSelector,
+      dialog: '#utility-modal [role="dialog"][aria-label="Settings"]',
+      tabs: '#utility-modal [role="tablist"][aria-label="Settings sections"]',
       body: this.settingsModalAppBar.modalBodySelector,
     });
   }

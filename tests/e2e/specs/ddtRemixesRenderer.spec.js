@@ -27,7 +27,7 @@ const MOVE_ORDER = [
 ];
 const albumDetailsTitle = (album) => `${ARTIST} • ${album} • ${YEAR}`;
 
-test('FTC-TAGS-015 preserves the surrounding DDT gallery through five Ремиксы rerenders', async ({
+test('FTC-TAGS-015 preserves the surrounding DDT gallery through five Ремиксы rerenders', { tag: '@area:tag-edit' }, async ({
   freshBrowserSession,
   galleryActions,
   page,

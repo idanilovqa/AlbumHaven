@@ -14,6 +14,7 @@ from starlette.concurrency import run_in_threadpool
 from starlette.responses import Response
 from starlette.routing import Match
 
+from music_app.services.current_actor_asgi import current_actor_from_request
 from music_app.services.policy_asgi import require_action
 from music_app.services.policy import ResourceScope
 from music_app.services.auth_session_csrf import issue_session_csrf, matches_session_csrf
@@ -27,7 +28,7 @@ _SESSION_COOKIE = "__Host-album_haven_session"
 _SESSION_CSRF_COOKIE = "__Host-album_haven_csrf"
 _SESSION_CSRF_HEADER = "x-album-haven-csrf"
 _PRIVATE_ROUTE_ACTIONS = {
-    ("WEBSOCKET", "/playback/pcm"): "library.media.stream",
+    ("WEBSOCKET", "/playback/pcm"): "library.media.read",
     ("POST", "/logout"): "auth.session.logout",
     ("POST", "/admin/accounts"): "accounts.create",
     ("GET", "/admin/members"): "accounts.read",
@@ -51,6 +52,7 @@ _PRIVATE_ROUTE_ACTIONS = {
     ("GET", "/news"): "app.shell.read",
     ("GET", "/bootstrap-data"): "app.bootstrap.read",
     ("GET", "/status"): "app.status.read",
+    ("POST", "/account/library-warning/dismiss"): "account.self.library_warning.dismiss",
     ("GET", "/view-data"): "library.browse.read",
     ("GET", "/home-data"): "library.browse.read",
     ("GET", "/album-details"): "library.browse.read",
@@ -59,8 +61,10 @@ _PRIVATE_ROUTE_ACTIONS = {
     ("GET", "/utilities/problematic-files/{album_key:path}"): "library.problems.read",
     ("GET", "/utilities/rules"): "library.rules.read",
     ("GET", "/utilities/log-history"): "library.logs.read",
+    ("POST", "/utilities/log-history/export"): "library.logs.export",
     ("GET", "/utilities/loops"): "library.loops.read",
     ("GET", "/utilities/integrations"): "integration.settings.read",
+    ("GET", "/utilities/integrations/lastfm/scrobbles"): "integration.settings.read",
     ("GET", "/utilities/integrations/foobar/help"): "integration.foobar.read",
     ("GET", "/utilities/integrations/foobar/assets/{asset_key}"): "integration.foobar.read",
     ("GET", "/album-opinions/{album_ref}/crowd"): "library.opinions.read",
@@ -92,6 +96,7 @@ _PRIVATE_ROUTE_ACTIONS = {
     ("POST", "/cancel-refresh-api"): "library.refresh.cancel",
     ("GET", "/refresh"): "library.refresh",
     ("GET", "/library-settings"): "library.settings.read",
+    ("GET", "/library-settings/browse"): "library.filesystem.browse",
     ("POST", "/library-settings"): "library.settings.manage",
     ("POST", "/library-settings/import-album-ratings"): "library.ratings.import",
     ("POST", "/utilities/rules/version-exceptions/revert"): "library.rules.manage",
@@ -124,6 +129,7 @@ _PRIVATE_ROUTE_ACTIONS = {
     ("POST", "/utilities/imports/local-playlists/analyze"): "integration.local_playlists.analyze",
     ("POST", "/utilities/imports/local-playlists/import"): "integration.local_playlists.import",
     ("POST", "/utilities/integrations/lastfm"): "integration.lastfm.manage",
+    ("POST", "/utilities/integrations/lastfm/scrobbles/submit"): "integration.lastfm.scrobbles.submit",
     ("POST", "/playback/session/now-playing"): "integration.lastfm.now_playing",
     ("POST", "/playback/session/scrobble"): "integration.lastfm.scrobble",
     ("POST", "/playback/session/complete"): "integration.lastfm.complete",
@@ -198,9 +204,12 @@ def install_private_route_boundary(app: FastAPI) -> None:
             {"Cache-Control": "no-store, max-age=0"}
             if route_path in {"/account/appearance", "/api/account/appearance/selection-accent"} else {}
         )
+        await current_actor_from_request(request)
         resource = _private_resource(request, route_path)
         try:
             await require_action(action, resource=resource)(request)
+            if route_path == '/utilities/log-history/export':
+                await require_action('library.logs.read', resource=resource)(request)
         except HTTPException as exc:
             if (
                 exc.status_code == 401
@@ -289,24 +298,27 @@ def _redact_lifecycle_link_query(request: Request) -> None:
     }
     scope = request.scope
     prefix = prefixes.get(scope.get("path"))
-    if str(scope.get("method") or "").upper() != "GET" or prefix is None:
+    if prefix is None:
         return
     raw_query = scope.get("query_string", b"")
     if not raw_query:
         return
-    query_params = QueryParams(raw_query.decode("latin-1"))
-    pairs = list(query_params.multi_items())
-    setattr(
-        request.state,
-        f"{prefix}_query_valid",
-        (
-            len(pairs) == 2
-            and sum(key == "purpose" for key, _value in pairs) == 1
-            and sum(key == "token" for key, _value in pairs) == 1
-        ),
-    )
-    setattr(request.state, f"{prefix}_purpose", query_params.get("purpose"))
-    setattr(request.state, f"{prefix}_token", query_params.get("token"))
+    if str(scope.get("method") or "").upper() == "GET":
+        query_params = QueryParams(raw_query.decode("latin-1"))
+        pairs = list(query_params.multi_items())
+        if prefix == "password_reset_link":
+            request.state.password_reset_link_invalid_marker = pairs == [("invalid", "1")]
+        setattr(
+            request.state,
+            f"{prefix}_query_valid",
+            (
+                len(pairs) == 2
+                and sum(key == "purpose" for key, _value in pairs) == 1
+                and sum(key == "token" for key, _value in pairs) == 1
+            ),
+        )
+        setattr(request.state, f"{prefix}_purpose", query_params.get("purpose"))
+        setattr(request.state, f"{prefix}_token", query_params.get("token"))
     scope["query_string"] = b""
     request.__dict__.pop("_url", None)
     request.__dict__.pop("_query_params", None)
@@ -314,6 +326,8 @@ def _redact_lifecycle_link_query(request: Request) -> None:
 
 def _is_public(method: str, path: str) -> bool:
     normalized_method = method.upper()
+    if path == "/accept-invitation/continue":
+        return normalized_method in {"GET", "HEAD"}
     if path in _PUBLIC_AUTH_PATHS:
         return normalized_method in {"GET", "HEAD", "POST"}
     if path in {"/health", "/favicon.ico"}:
@@ -373,9 +387,10 @@ def _private_resource(request: Request, route_path: str) -> ResourceScope | None
 
 
 def _safe_reference(value: str, request: Request) -> str:
-    if value and all(character.isalnum() or character in "-_.:" for character in value):
-        return value[:256]
-    return _privacy_reference(value, request)
+    try:
+        return ResourceScope("loop", value).resource_ref
+    except ValueError:
+        return _privacy_reference(value, request)
 
 
 def _privacy_reference(value: str, request: Request) -> str:
@@ -383,7 +398,7 @@ def _privacy_reference(value: str, request: Request) -> str:
     hmac_config = config.get("hmac") if isinstance(config, Mapping) else None
     secret = hmac_config.get("secret") if isinstance(hmac_config, Mapping) else None
     version = hmac_config.get("key_version") if isinstance(hmac_config, Mapping) else None
-    if not isinstance(secret, str) or len(secret) < 32:
+    if not isinstance(secret, str) or len(secret.encode("utf-8")) < 32:
         raise RuntimeError("Policy resource-key configuration is invalid.")
     digest = hmac.new(
         secret.encode("utf-8"),

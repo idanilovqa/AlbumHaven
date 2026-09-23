@@ -68,6 +68,31 @@ def test_save_library_settings_replaces_live_watcher_roots_before_refresh():
     ]
 
 
+def test_saved_settings_still_refresh_when_watcher_attachment_fails(caplog):
+    sequence = []
+    state = {}
+    normalized = {"main_library_roots": [{"id": "new", "path": "C:/Music"}]}
+
+    def replace(_roots):
+        sequence.append("attach")
+        raise OSError("private native watch path")
+
+    result = save_library_settings_and_start_refresh(
+        {}, normalized, library_state=state,
+        save_root_settings=lambda *_args: sequence.append("persist") or normalized,
+        replace_watch_roots=replace,
+        start_background_refresh=lambda **_kwargs: sequence.append("refresh"),
+        build_status_payload=lambda: {"scan_in_progress": True},
+    )
+    assert sequence == ["persist", "attach", "refresh"]
+    assert result["settings"] == normalized
+    assert result["refresh_started"] is True
+    assert result["watcher_warning"] == "Automatic library updates are unavailable. Run Full Rescan after library changes."
+    assert "private native" not in str(result)
+    assert "private native" not in caplog.text
+    assert "OSError" in caplog.text
+
+
 def test_save_library_settings_workflow_rejects_running_scan_before_write():
     seen = []
 

@@ -15,3 +15,5 @@ The public copies use explicit parameters and placeholders. They contain no cont
 - `register_foobar_db_task.ps1`: parameterized Windows scheduled-task helper
 
 Review a script before running it. Supply paths that belong to your own installation. Album Haven neither validates nor manages the resulting backups or tasks.
+
+Keep Foobar2000 closed until the backup finishes. The backup helper rejects a running Foobar process or non-empty SQLite WAL files before creating a backup. It never stops Foobar or checkpoints its databases. Scheduled backups obey the same checks.

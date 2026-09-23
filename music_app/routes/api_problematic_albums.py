@@ -131,6 +131,7 @@ def _build_problematic_album_detail_payload(
     album_payload["raw_name"] = repair_preview["raw_name"]
     album_payload["raw_album_artist"] = repair_preview["raw_album_artist"]
     album_payload["repair_preview_rows"] = repair_preview["preview_rows"]
+    album_payload["suggested_edits"] = repair_preview.get("suggested_edits", [])
     album_payload["track_problem_rows"] = track_problem_rows
     album_payload["problematic_track_paths"] = [str(row.get("path") or "") for row in track_problem_rows]
     album_payload["separate_release_candidate"] = separate_release_candidate

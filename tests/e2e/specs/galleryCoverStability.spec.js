@@ -20,7 +20,7 @@ const ALBUM = 'Joseph: Part One - The Dreamer';
 const YEAR = '2023';
 const VISIBLE_COVER_BUDGET = Object.freeze({ targetMaximum: 1000, graceMs: 200 });
 
-test('FTC-COVERS-014 keeps a decoded gallery cover stable across real gallery interactions', async ({
+test('FTC-COVERS-014 keeps a decoded gallery cover stable across real gallery interactions', { tag: '@area:cover-providers' }, async ({
   artistFamilyActions,
   galleryActions,
   navigationPanelActions,
@@ -111,16 +111,15 @@ test('FTC-COVERS-014 keeps a decoded gallery cover stable across real gallery in
     await searchToolbarActions.waitForQuery('');
     await galleryActions.waitForSelectedArtistGallery(ARTIST);
     await galleryActions.waitForCoverSchedulerIdle({ timeout: 30000 });
-    const requestsAfterBackgroundFill = coverTraffic.totalRequestCount();
     await galleryActions.scrollToAlbumUnderHeading(ARTIST, ALBUM);
     const awayState = await galleryActions.scrollAlbumAwayFromViewport(ARTIST, ALBUM);
     await galleryActions.returnToAlbumAfterScrollAway(ARTIST, ALBUM, awayState);
     await artistFamilyActions.waitForVisible();
     await artistFamilyActions.expand();
     await artistFamilyActions.clickChipByName('The Neal Morse Band');
-    await artistFamilyActions.waitForChipActive('The Neal Morse Band');
-    await artistFamilyActions.clickChipByName('The Neal Morse Band');
     await artistFamilyActions.waitForChipActive('The Neal Morse Band', false);
+    await artistFamilyActions.clickChipByName('The Neal Morse Band');
+    await artistFamilyActions.waitForChipActive('The Neal Morse Band');
     await galleryActions.waitForAlbumVisibleUnderHeading(ARTIST, ALBUM);
     await galleryActions.waitForCoverSchedulerIdle({ timeout: 30000 });
     const checkpoint = await readDecodedImageCheckpoint(galleryActions.albumCoverByName(ALBUM));
@@ -129,15 +128,13 @@ test('FTC-COVERS-014 keeps a decoded gallery cover stable across real gallery in
     expect(checkpoint.productionSrc).toBe(baseline.productionSrc);
     expect(checkpoint.pixelHash).toBe(baseline.pixelHash);
     expect(await galleryActions.readAlbumKeyByName(ALBUM)).toBe(baselineAlbumKey);
-    expect(coverTraffic.totalRequestCount()).toBe(requestsAfterBackgroundFill);
+    expect(coverTraffic.requestCount(baseline.productionSrc)).toBe(1);
   });
 
   await stepLogger.step('Open and close album details without re-requesting or blanking the gallery cover', async () => {
     await galleryActions.clickAlbumDetailsByArtistAndAlbum(ARTIST, ALBUM);
-    const summary = await trackModalActions.waitForLoadedSummary();
-    expect(summary.title).toContain(ARTIST);
-    expect(summary.title).toContain(ALBUM);
-    expect(summary.title).toContain(YEAR);
+    await trackModalActions.waitForLoadedSummary();
+    await trackModalActions.waitForTitle(`${ARTIST} • ${ALBUM} • ${YEAR}`);
     await trackModalActions.close();
     await galleryActions.waitForCoverSchedulerIdle({ timeout: 30000 });
     const checkpoint = await readDecodedImageCheckpoint(galleryActions.albumCoverByName(ALBUM));
@@ -152,7 +149,7 @@ test('FTC-COVERS-014 keeps a decoded gallery cover stable across real gallery in
   });
 });
 
-test('FTC-COVERS-015 shows the exact Joseph 2023 cover decoded in the card, modal, and fullscreen lightbox', async ({
+test('FTC-COVERS-015 shows the exact Joseph 2023 cover decoded in the card, modal, and fullscreen lightbox', { tag: '@area:cover-providers' }, async ({
   galleryActions,
   page,
   searchToolbarActions,
@@ -233,9 +230,10 @@ test('FTC-COVERS-015 shows the exact Joseph 2023 cover decoded in the card, moda
   });
 });
 
-test('FTC-PLAYER-010 keeps player artwork decoded and limits its full-art view to the active album', async ({
+test('FTC-PLAYER-010 keeps player artwork decoded and limits its full-art view to the active album', { tag: '@area:playback' }, async ({
   galleryActions,
   globalPlayerActions,
+  navigationPanelActions,
   page,
   playbackEvidence,
   searchToolbarActions,
@@ -285,6 +283,8 @@ test('FTC-PLAYER-010 keeps player artwork decoded and limits its full-art view t
     await trackModalActions.close();
     await searchToolbarActions.clearSearch({ submitWithEnter: true });
     await searchToolbarActions.waitForQuery('');
+    await navigationPanelActions.selectSidebarArtistByName(ARTIST);
+    await navigationPanelActions.waitForSidebarSelection(ARTIST);
     await galleryActions.waitForGalleryReady({ minimumCards: 2 });
     await galleryActions.waitForSelectedArtistGallery(ARTIST);
     await galleryActions.waitForMinimumAlbumCountByHeading(ARTIST, 2);

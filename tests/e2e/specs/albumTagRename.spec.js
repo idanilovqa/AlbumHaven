@@ -41,7 +41,7 @@ const EXPECTED_SPLIT_TRACK_TITLES = Array.from(
   (_, index) => `Split Track ${index + 1}`,
 );
 
-test('FTC-TAGS-008 completes an album rename before reporting the save task complete', async ({
+test('FTC-TAGS-008 completes an album rename before reporting the save task complete', { tag: '@area:tag-edit' }, async ({
   freshBrowserSession,
   galleryActions,
   page,
@@ -60,7 +60,7 @@ test('FTC-TAGS-008 completes an album rename before reporting the save task comp
       year: FIXTURE_YEAR,
     });
     const summary = await trackModalActions.waitForInteractiveSummary();
-    expect(summary.title).toBe(albumDetailsTitle(ORIGINAL_ALBUM));
+    await trackModalActions.waitForTitle(albumDetailsTitle(ORIGINAL_ALBUM));
     expect(summary.trackRows).toBe(FIXTURE_TRACK_COUNT);
   });
 
@@ -109,7 +109,7 @@ test('FTC-TAGS-008 completes an album rename before reporting the save task comp
       year: RENAMED_YEAR,
     });
     const summary = await trackModalActions.waitForInteractiveSummary();
-    expect(summary.title).toBe(albumDetailsTitle(RENAMED_ALBUM, RENAMED_YEAR));
+    await trackModalActions.waitForTitle(albumDetailsTitle(RENAMED_ALBUM, RENAMED_YEAR));
     expect(summary.trackRows).toBe(FIXTURE_TRACK_COUNT);
     await trackModalActions.close();
     expect(await galleryActions.readAlbumIdentityCardCount({
@@ -143,7 +143,7 @@ test('FTC-TAGS-008 completes an album rename before reporting the save task comp
       year: RENAMED_YEAR,
     });
     const summary = await freshSession.trackModalActions.waitForInteractiveSummary();
-    expect(summary.title).toBe(albumDetailsTitle(RENAMED_ALBUM, RENAMED_YEAR));
+    await freshSession.trackModalActions.waitForTitle(albumDetailsTitle(RENAMED_ALBUM, RENAMED_YEAR));
     expect(summary.trackRows).toBe(FIXTURE_TRACK_COUNT);
   });
 
@@ -224,7 +224,7 @@ test('FTC-TAGS-008 completes an album rename before reporting the save task comp
   });
 });
 
-test('FTC-TAGS-008 returns one terminal saved response after optimistic rename persistence', async ({
+test('FTC-TAGS-008 returns one terminal saved response after optimistic rename persistence', { tag: '@area:tag-edit' }, async ({
   galleryActions,
   page,
   stepLogger,
@@ -294,7 +294,7 @@ test('FTC-TAGS-008 returns one terminal saved response after optimistic rename p
         year: FIXTURE_YEAR,
       });
       const summary = await trackModalActions.waitForInteractiveSummary();
-      expect(summary.title).toBe(albumDetailsTitle(POLL_WINDOW_ALBUM));
+      await trackModalActions.waitForTitle(albumDetailsTitle(POLL_WINDOW_ALBUM));
       expect(summary.trackRows).toBe(FIXTURE_TRACK_COUNT);
     });
   } finally {
@@ -332,7 +332,7 @@ test('FTC-TAGS-008 returns one terminal saved response after optimistic rename p
   }
 });
 
-test('FTC-TAGS-008 keeps an accepted terminal failure readable without false success', async ({
+test('FTC-TAGS-008 keeps an accepted terminal failure readable without false success', { tag: '@area:tag-edit' }, async ({
   galleryActions,
   page,
   settingsModalAppBarActions,
@@ -408,7 +408,7 @@ test('FTC-TAGS-008 keeps an accepted terminal failure readable without false suc
   });
 });
 
-test('FTC-TAGS-009 restores tracks from distinct temporary albums without duplicate cards', async ({
+test('FTC-TAGS-009 restores tracks from distinct temporary albums without duplicate cards', { tag: '@area:tag-edit' }, async ({
   freshBrowserSession,
   galleryActions,
   page,
@@ -445,7 +445,7 @@ test('FTC-TAGS-009 restores tracks from distinct temporary albums without duplic
       year: FIXTURE_YEAR,
     });
     const summary = await trackModalActions.waitForInteractiveSummary();
-    expect(summary.title).toBe(albumDetailsTitle(SPLIT_ORIGINAL_ALBUM));
+    await trackModalActions.waitForTitle(albumDetailsTitle(SPLIT_ORIGINAL_ALBUM));
     expect(summary.trackRows).toBe(FIXTURE_TRACK_COUNT);
   });
 
@@ -841,7 +841,7 @@ test('FTC-TAGS-009 restores tracks from distinct temporary albums without duplic
   });
 });
 
-test('FTC-TAGS-015 / FTC-UTIL-PROBLEMS-012 keeps one stable destination through five selected-track moves and restores', async ({
+test('FTC-TAGS-015 / FTC-UTIL-PROBLEMS-012 keeps one stable destination through five selected-track moves and restores', { tag: '@area:problematic-files' }, async ({
   freshBrowserSession,
   galleryActions,
   page,

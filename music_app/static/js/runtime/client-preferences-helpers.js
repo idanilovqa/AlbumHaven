@@ -64,6 +64,7 @@ function getDefaultShellLayoutPreferences() {
   return {
     contextualPaneWidthPx: 320,
     infoDrawerWidthPx: 360,
+    artistTreeFolded: null,
   };
 }
 
@@ -116,6 +117,9 @@ function normalizeShellLayoutPreferences(input = {}) {
       source.infoDrawerWidthPx,
       defaults.infoDrawerWidthPx,
     ),
+    artistTreeFolded: typeof source.artistTreeFolded === 'boolean'
+      ? source.artistTreeFolded
+      : defaults.artistTreeFolded,
   };
 }
 

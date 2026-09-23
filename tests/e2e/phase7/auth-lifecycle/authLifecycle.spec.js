@@ -85,7 +85,7 @@ test('FTC-PERMISSIONS-004 keeps failures generic and throttles durably', async (
   );
 });
 
-test('FTC-PERMISSIONS-006 completes a token-free, single-use reset and revokes prior sessions', async ({ page, freshBrowserSession }) => {
+test('FTC-PERMISSIONS-006 completes a token-free, single-use reset and revokes prior sessions', async ({ page, request, freshBrowserSession }) => {
   await signIn(page);
   const firstSession = (await page.context().cookies()).find(
     (cookie) => cookie.name === '__Host-album_haven_session',
@@ -112,7 +112,7 @@ test('FTC-PERMISSIONS-006 completes a token-free, single-use reset and revokes p
   await page.goto(resetPath);
   await expect(page).toHaveURL(/\/reset-password$/);
   expect(page.url()).not.toContain('token=');
-  const linkReplay = await page.request.get(resetPath, { maxRedirects: 0 });
+  const linkReplay = await request.get(resetPath, { maxRedirects: 0 });
   expect(linkReplay.status()).toBe(303);
   expect(linkReplay.headers().location).toBe('/reset-password?invalid=1');
   const newPassword = 'Phase Seven Replacement Passphrase 2026!';

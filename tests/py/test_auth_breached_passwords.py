@@ -1,7 +1,12 @@
 from __future__ import annotations
 
 import hashlib
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from importlib import import_module, util
+import threading
+import subprocess
+import time
+import urllib.request
 
 import pytest
 
@@ -92,6 +97,55 @@ def test_checker_returns_false_for_a_strict_valid_nonmatch(breached_passwords):
     opener = RecordingOpener(f"{'A' * 35}:12\n{'B' * 35}:0\n".encode("ascii"))
 
     assert _checker(breached_passwords, opener)(PASSWORD) is False
+
+
+def test_default_transport_rejects_redirect_before_disclosing_prefix(breached_passwords, monkeypatch):
+    paths = []
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_GET(self):
+            paths.append(self.path)
+            if self.path.startswith("/range/"):
+                self.send_response(302)
+                self.send_header("Location", f"/unapproved/{PREFIX}")
+                self.end_headers()
+            else:
+                self.send_response(200)
+                self.end_headers()
+                self.wfile.write(f"{'A' * 35}:0\n".encode("ascii"))
+
+        def log_message(self, *_args):
+            pass
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    worker = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.01})
+    worker.start()
+    try:
+        # The global fixture blocks urlopen before this module's default argument
+        # is bound. Import a private copy with a real, proxy-free loopback opener.
+        opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+        expected_url = f"http://127.0.0.1:{server.server_port}/range/{PREFIX}"
+
+        def owned_urlopen(request, **kwargs):
+            assert request.full_url == expected_url
+            return opener.open(request, **kwargs)
+
+        monkeypatch.setattr(urllib.request, "urlopen", owned_urlopen)
+        spec = util.spec_from_file_location("_owned_hibp_transport", breached_passwords.__file__)
+        transport = util.module_from_spec(spec)
+        spec.loader.exec_module(transport)
+        checker = transport.HibpRangePasswordChecker(
+            range_url_template=f"http://127.0.0.1:{server.server_port}/range/{{}}",
+            timeout_seconds=1,
+        )
+        with pytest.raises(transport.BreachedPasswordCheckError):
+            checker(PASSWORD)
+        assert paths == [f"/range/{PREFIX}"]
+    finally:
+        server.shutdown()
+        server.server_close()
+        worker.join(timeout=2)
+        assert not worker.is_alive()
 
 
 def test_checker_accepts_large_valid_padded_official_response(breached_passwords):
@@ -231,3 +285,170 @@ def test_invalid_password_input_fails_before_network(breached_passwords, passwor
         _checker(breached_passwords, opener)(password)
 
     assert opener.calls == []
+
+
+@pytest.mark.parametrize("framing", [
+    "truncated-length", "truncated-chunked", "length", "chunked", "close",
+])
+def test_default_transport_rejects_truncated_framing_and_accepts_complete_bodies(
+    breached_passwords, monkeypatch, framing
+):
+    children = []
+    paths = []
+    real_popen = subprocess.Popen
+
+    def record_child(*args, **kwargs):
+        child = real_popen(*args, **kwargs)
+        children.append(child)
+        return child
+
+    monkeypatch.setattr(subprocess, "Popen", record_child)
+    prefix_body = f"{'A' * 35}:0\r\n".encode("ascii")
+    complete_body = prefix_body + f"{SUFFIX}:1\r\n".encode("ascii")
+
+    class Handler(BaseHTTPRequestHandler):
+        protocol_version = "HTTP/1.1"
+
+        def do_GET(self):
+            paths.append(self.path)
+            mode = "length" if self.path.startswith("/complete/") else framing
+            self.send_response(200)
+            self.send_header("Connection", "close")
+            if "length" in mode:
+                self.send_header("Content-Length", str(len(complete_body)))
+            elif "chunked" in mode:
+                self.send_header("Transfer-Encoding", "chunked")
+            self.end_headers()
+            if mode == "truncated-length":
+                # A syntactically valid nonmatching line must not disguise an
+                # incomplete transport body whose omitted suffix is breached.
+                self.wfile.write(prefix_body)
+            elif "chunked" in mode:
+                body = prefix_body if mode.startswith("truncated") else complete_body
+                self.wfile.write(f"{len(body):x}\r\n".encode("ascii") + body + b"\r\n")
+                if mode == "chunked":
+                    self.wfile.write(b"0\r\n\r\n")
+            else:
+                self.wfile.write(complete_body)
+            self.wfile.flush()
+            self.close_connection = True
+
+        def log_message(self, *_args):
+            pass
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    server.daemon_threads = False
+    worker = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.01})
+    worker.start()
+    try:
+        spec = util.spec_from_file_location("_framing_hibp_transport", breached_passwords.__file__)
+        transport = util.module_from_spec(spec)
+        spec.loader.exec_module(transport)
+        checker = transport.HibpRangePasswordChecker(
+            range_url_template=f"http://127.0.0.1:{server.server_port}/framing/{{}}",
+            timeout_seconds=2,
+        )
+        if framing.startswith("truncated"):
+            with pytest.raises(transport.BreachedPasswordCheckError, match="screening unavailable"):
+                checker(PASSWORD)
+        else:
+            assert checker(PASSWORD) is True
+        assert children and all(child.poll() is not None for child in children)
+        next_checker = transport.HibpRangePasswordChecker(
+            range_url_template=f"http://127.0.0.1:{server.server_port}/complete/{{}}",
+            timeout_seconds=2,
+        )
+        assert next_checker(PASSWORD) is True
+        assert paths == [f"/framing/{PREFIX}", f"/complete/{PREFIX}"]
+    finally:
+        server.shutdown()
+        server.server_close()
+        worker.join(timeout=2)
+        assert not worker.is_alive()
+        assert all(child.poll() is not None for child in children)
+        assert all(child.stdout is None or child.stdout.closed for child in children)
+
+
+@pytest.mark.parametrize("slow_phase", ["headers", "body"])
+def test_default_transport_deadline_reaps_slow_stream_and_allows_next_check(
+    breached_passwords, monkeypatch, slow_phase
+):
+    requested = threading.Event()
+    stop = threading.Event()
+    paths = []
+    children = []
+    real_popen = subprocess.Popen
+
+    def record_child(*args, **kwargs):
+        child = real_popen(*args, **kwargs)
+        children.append(child)
+        return child
+
+    monkeypatch.setattr(subprocess, "Popen", record_child)
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_GET(self):
+            paths.append(self.path)
+            requested.set()
+            payload = f"{SUFFIX}:1\n".encode("ascii")
+            if self.path.startswith("/fast/"):
+                self.send_response(200)
+                self.send_header("Content-Length", str(len(payload)))
+                self.end_headers()
+                self.wfile.write(payload)
+                return
+            try:
+                if slow_phase == "headers":
+                    self.wfile.write(b"HTTP/1.0 200 OK\r\nX-Slow: ")
+                else:
+                    self.send_response(200)
+                    self.send_header("Content-Length", "10000")
+                    self.end_headers()
+                # Each byte arrives well inside the socket timeout, but the
+                # stream as a whole outlives the permitted transport budget.
+                for _ in range(40):
+                    self.wfile.write(b"A")
+                    self.wfile.flush()
+                    if stop.wait(0.1):
+                        break
+            except (BrokenPipeError, ConnectionResetError, OSError):
+                pass
+
+        def log_message(self, *_args):
+            pass
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    server.daemon_threads = False
+    worker = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.01})
+    worker.start()
+    try:
+        # Load the production default transport without the suite's network
+        # replacement. Only an owned loopback server is contacted.
+        spec = util.spec_from_file_location("_deadline_hibp_transport", breached_passwords.__file__)
+        transport = util.module_from_spec(spec)
+        spec.loader.exec_module(transport)
+        checker = transport.HibpRangePasswordChecker(
+            range_url_template=f"http://127.0.0.1:{server.server_port}/slow/{{}}",
+            timeout_seconds=0.8,
+        )
+        started = time.monotonic()
+        with pytest.raises(transport.BreachedPasswordCheckError, match="screening unavailable"):
+            checker(PASSWORD)
+        elapsed = time.monotonic() - started
+        assert requested.is_set(), "the regression must exercise the slow response"
+        assert elapsed < 2.5, f"socket trickle exceeded the total deadline: {elapsed}"
+        assert children and all(child.poll() is not None for child in children)
+        assert all(child.stdout is None or child.stdout.closed for child in children)
+        fast_checker = transport.HibpRangePasswordChecker(
+            range_url_template=f"http://127.0.0.1:{server.server_port}/fast/{{}}",
+            timeout_seconds=2,
+        )
+        assert fast_checker(PASSWORD) is True
+        assert paths == [f"/slow/{PREFIX}", f"/fast/{PREFIX}"]
+        assert all(child.poll() is not None for child in children)
+    finally:
+        stop.set()
+        server.shutdown()
+        server.server_close()
+        worker.join(timeout=2)
+        assert not worker.is_alive()

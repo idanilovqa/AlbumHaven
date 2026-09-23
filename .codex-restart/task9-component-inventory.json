@@ -1,0 +1,146 @@
+{
+  "summary": {
+    "total": 16,
+    "passed": 8,
+    "failed": 8,
+    "skipped": 0
+  },
+  "cases": [
+    {
+      "status": "passed",
+      "file": "tests/components/albumTrackTable.spec.js",
+      "line": 172,
+      "title": "per-track Play hover uses the player Play color without shifting layout",
+      "duration": "554ms"
+    },
+    {
+      "status": "failed",
+      "file": "tests/components/albumTrackTable.spec.js",
+      "line": 193,
+      "title": "ActionButton hover and keyboard focus share the same outline without shifting layout",
+      "duration": "540ms",
+      "error": "  1) tests\\components\\albumTrackTable.spec.js:193:1 › ActionButton hover and keyboard focus share the same outline without shifting layout \n    Error: locator.evaluate: ReferenceError: ButtonComponent is not defined\n       at ..\\..\\music_app\\static\\js\\runtime\\album-track-table.js:11\n       9 |   const isPlaying = Boolean(track.isPlaying);\n      10 |   const iconName = isPlaying ? 'pause' : 'play';\n    > 11 |   const icon = ButtonComponent.renderIconSvg(iconName, {\n         |                ^\n      12 |     className: `album-track-table__play-icon ui-icon--${iconName}`,\n      13 |   });\n      14 |   return `<button class=\"play-track-button album-track-table__play\" data-src=\"/track?path=${encodeURIComponent(trackPath)}\" data-track-path=\"${escapeHtml(trackPath)}\" data-track-title=\"${escapeHtml(title)}\" data-track-artist=\"${escapeHtml(artist)}\" data-track-album-artist=\"${escapeHtml(albumArtist)}\" data-track-album=\"${escapeHtml(album)}\" data-track-cover=\"${escapeHtml(coverPath)}\" data-track-duration-seconds=\"${durationSeconds}\" type=\"button\" aria-label=\"${isPlaying ? 'Pause track' : 'Play track'}\">${icon}</button>`;\n        at buildAlbumTrackPlayButtonHtml (C:\\Users\\Rendref\\.codex\\worktrees\\b14c\\album-haven-app\\music_app\\static\\js\\runtime\\album-track-table.js:11:16)\n        at buildAlbumTrackTableRow (C:\\Users\\Rendref\\.codex\\worktrees\\b14c\\album-haven-app\\music_app\\static\\js\\runtime\\album-track-table.js:39:24)\n        at C:\\Users\\Rendref\\.codex\\worktrees\\b14c\\album-haven-app\\music_app\\static\\js\\runtime\\album-track-table.js:80:42\n        at Array.map (<anonymous>)\n        at C:\\Users\\Rendref\\.codex\\worktrees\\b14c\\album-haven-app\\music_app\\static\\js\\runtime\\album-track-table.js:80:20\n        at Array.map (<anonymous>)\n        at buildAlbumTrackTableHtml (C:\\Users\\Rendref\\.codex\\worktrees\\b14c\\album-haven-app\\music_app\\static\\js\\runtime\\album-track-table.js:57:32)\n        at eval (eval at evaluate (:303:30), <anonymous>:2:22)\n        at UtilityScript.evaluate (<anonymous>:305:16)\n        at UtilityScript.<anonymous> (<anonymous>:1:44)\n        at buildAlbumTrackPlayButtonHtml (C:\\Users\\Rendref\\.codex\\worktrees\\b14c\\album-haven-app\\music_app\\static\\js\\runtime\\album-track-table.js:11:16)\n        at buildAlbumTrackTableRow (C:\\Users\\Rendref\\.codex\\worktrees\\b14c\\album-haven-app\\music_app\\static\\js\\runtime\\album-track-table.js:39:24)\n        at C:\\Users\\Rendref\\.codex\\worktrees\\b14c\\album-haven-app\\music_app\\static\\js\\runtime\\album-track-table.js:80:42\n        at C:\\Users\\Rendref\\.codex\\worktrees\\b14c\\album-haven-app\\music_app\\static\\js\\runtime\\album-track-table.js:80:20\n        at buildAlbumTrackTableHtml (C:\\Users\\Rendref\\.codex\\worktrees\\b14c\\album-haven-app\\music_app\\static\\js\\runtime\\album-track-table.js:57:32)\n        at eval (eval at evaluate (:303:30), <anonymous>:2:22)\n        at UtilityScript.evaluate (<anonymous>:305:16)\n        at UtilityScript.<anonymous> (<anonymous>:1:44)",
+      "errorContext": "test-results\\playwright-artifacts\\components\\settings-task9-initial\\albumTrackTable-ActionButt-f6088-ine-without-shifting-layout\\error-context.md",
+      "trace": "test-results\\playwright-artifacts\\components\\settings-task9-initial\\albumTrackTable-ActionButt-f6088-ine-without-shifting-layout\\trace.zip"
+    },
+    {
+      "status": "failed",
+      "file": "tests/components/albumTrackTable.spec.js",
+      "line": 214,
+      "title": "problem status uses a hidden header track immediately before Length",
+      "duration": "875ms",
+      "error": "  2) tests\\components\\albumTrackTable.spec.js:214:1 › problem status uses a hidden header track immediately before Length \n    Error: locator.evaluate: ReferenceError: ButtonComponent is not defined\n       at ..\\..\\music_app\\static\\js\\runtime\\album-track-table.js:11\n       9 |   const isPlaying = Boolean(track.isPlaying);\n      10 |   const iconName = isPlaying ? 'pause' : 'play';\n    > 11 |   const icon = ButtonComponent.renderIconSvg(iconName, {\n         |                ^\n      12 |     className: `album-track-table__play-icon ui-icon--${iconName}`,\n      13 |   });\n      14 |   return `<button class=\"play-track-button album-track-table__play\" data-src=\"/track?path=${encodeURIComponent(trackPath)}\" data-track-path=\"${escapeHtml(trackPath)}\" data-track-title=\"${escapeHtml(title)}\" data-track-artist=\"${escapeHtml(artist)}\" data-track-album-artist=\"${escapeHtml(albumArtist)}\" data-track-album=\"${escapeHtml(album)}\" data-track-cover=\"${escapeHtml(coverPath)}\" data-track-duration-seconds=\"${durationSeconds}\" type=\"button\" aria-label=\"${isPlaying ? 'Pause track' : 'Play track'}\">${icon}</button>`;\n        at buildAlbumTrackPlayButtonHtml (C:\\Users\\Rendref\\.codex\\worktrees\\b14c\\album-haven-app\\music_app\\static\\js\\runtime\\album-track-table.js:11:16)\n        at buildAlbumTrackTableRow (C:\\Users\\Rendref\\.codex\\worktrees\\b14c\\album-haven-app\\music_app\\static\\js\\runtime\\album-track-table.js:39:24)\n        at C:\\Users\\Rendref\\.codex\\worktrees\\b14c\\album-haven-app\\music_app\\static\\js\\runtime\\album-track-table.js:80:42\n        at Array.map (<anonymous>)\n        at C:\\Users\\Rendref\\.codex\\worktrees\\b14c\\album-haven-app\\music_app\\static\\js\\runtime\\album-track-table.js:80:20\n        at Array.map (<anonymous>)\n        at buildAlbumTrackTableHtml (C:\\Users\\Rendref\\.codex\\worktrees\\b14c\\album-haven-app\\music_app\\static\\js\\runtime\\album-track-table.js:57:32)\n        at eval (eval at evaluate (:303:30), <anonymous>:2:22)\n        at UtilityScript.evaluate (<anonymous>:305:16)\n        at UtilityScript.<anonymous> (<anonymous>:1:44)\n        at buildAlbumTrackPlayButtonHtml (C:\\Users\\Rendref\\.codex\\worktrees\\b14c\\album-haven-app\\music_app\\static\\js\\runtime\\album-track-table.js:11:16)\n        at buildAlbumTrackTableRow (C:\\Users\\Rendref\\.codex\\worktrees\\b14c\\album-haven-app\\music_app\\static\\js\\runtime\\album-track-table.js:39:24)\n        at C:\\Users\\Rendref\\.codex\\worktrees\\b14c\\album-haven-app\\music_app\\static\\js\\runtime\\album-track-table.js:80:42\n        at C:\\Users\\Rendref\\.codex\\worktrees\\b14c\\album-haven-app\\music_app\\static\\js\\runtime\\album-track-table.js:80:20\n        at buildAlbumTrackTableHtml (C:\\Users\\Rendref\\.codex\\worktrees\\b14c\\album-haven-app\\music_app\\static\\js\\runtime\\album-track-table.js:57:32)\n        at eval (eval at evaluate (:303:30), <anonymous>:2:22)\n        at UtilityScript.evaluate (<anonymous>:305:16)\n        at UtilityScript.<anonymous> (<anonymous>:1:44)",
+      "errorContext": "test-results\\playwright-artifacts\\components\\settings-task9-initial\\albumTrackTable-problem-st-54959-k-immediately-before-Length\\error-context.md",
+      "trace": "test-results\\playwright-artifacts\\components\\settings-task9-initial\\albumTrackTable-problem-st-54959-k-immediately-before-Length\\trace.zip"
+    },
+    {
+      "status": "failed",
+      "file": "tests/components/albumTrackTable.spec.js",
+      "line": 241,
+      "title": "Editorial table aligns left while its final 1px outline fades into the original footer",
+      "duration": "730ms",
+      "error": "  3) tests\\components\\albumTrackTable.spec.js:241:1 › Editorial table aligns left while its final 1px outline fades into the original footer \n    Error: locator.evaluate: ReferenceError: ButtonComponent is not defined\n       at ..\\..\\music_app\\static\\js\\runtime\\album-track-table.js:11\n       9 |   const isPlaying = Boolean(track.isPlaying);\n      10 |   const iconName = isPlaying ? 'pause' : 'play';\n    > 11 |   const icon = ButtonComponent.renderIconSvg(iconName, {\n         |                ^\n      12 |     className: `album-track-table__play-icon ui-icon--${iconName}`,\n      13 |   });\n      14 |   return `<button class=\"play-track-button album-track-table__play\" data-src=\"/track?path=${encodeURIComponent(trackPath)}\" data-track-path=\"${escapeHtml(trackPath)}\" data-track-title=\"${escapeHtml(title)}\" data-track-artist=\"${escapeHtml(artist)}\" data-track-album-artist=\"${escapeHtml(albumArtist)}\" data-track-album=\"${escapeHtml(album)}\" data-track-cover=\"${escapeHtml(coverPath)}\" data-track-duration-seconds=\"${durationSeconds}\" type=\"button\" aria-label=\"${isPlaying ? 'Pause track' : 'Play track'}\">${icon}</button>`;\n        at buildAlbumTrackPlayButtonHtml (C:\\Users\\Rendref\\.codex\\worktrees\\b14c\\album-haven-app\\music_app\\static\\js\\runtime\\album-track-table.js:11:16)\n        at buildAlbumTrackTableRow (C:\\Users\\Rendref\\.codex\\worktrees\\b14c\\album-haven-app\\music_app\\static\\js\\runtime\\album-track-table.js:39:24)\n        at C:\\Users\\Rendref\\.codex\\worktrees\\b14c\\album-haven-app\\music_app\\static\\js\\runtime\\album-track-table.js:80:42\n        at Array.map (<anonymous>)\n        at C:\\Users\\Rendref\\.codex\\worktrees\\b14c\\album-haven-app\\music_app\\static\\js\\runtime\\album-track-table.js:80:20\n        at Array.map (<anonymous>)\n        at buildAlbumTrackTableHtml (C:\\Users\\Rendref\\.codex\\worktrees\\b14c\\album-haven-app\\music_app\\static\\js\\runtime\\album-track-table.js:57:32)\n        at eval (eval at evaluate (:303:30), <anonymous>:2:22)\n        at UtilityScript.evaluate (<anonymous>:305:16)\n        at UtilityScript.<anonymous> (<anonymous>:1:44)\n        at buildAlbumTrackPlayButtonHtml (C:\\Users\\Rendref\\.codex\\worktrees\\b14c\\album-haven-app\\music_app\\static\\js\\runtime\\album-track-table.js:11:16)\n        at buildAlbumTrackTableRow (C:\\Users\\Rendref\\.codex\\worktrees\\b14c\\album-haven-app\\music_app\\static\\js\\runtime\\album-track-table.js:39:24)\n        at C:\\Users\\Rendref\\.codex\\worktrees\\b14c\\album-haven-app\\music_app\\static\\js\\runtime\\album-track-table.js:80:42\n        at C:\\Users\\Rendref\\.codex\\worktrees\\b14c\\album-haven-app\\music_app\\static\\js\\runtime\\album-track-table.js:80:20\n        at buildAlbumTrackTableHtml (C:\\Users\\Rendref\\.codex\\worktrees\\b14c\\album-haven-app\\music_app\\static\\js\\runtime\\album-track-table.js:57:32)\n        at eval (eval at evaluate (:303:30), <anonymous>:2:22)\n        at UtilityScript.evaluate (<anonymous>:305:16)\n        at UtilityScript.<anonymous> (<anonymous>:1:44)",
+      "errorContext": "test-results\\playwright-artifacts\\components\\settings-task9-initial\\albumTrackTable-Editorial--33286-es-into-the-original-footer\\error-context.md",
+      "trace": "test-results\\playwright-artifacts\\components\\settings-task9-initial\\albumTrackTable-Editorial--33286-es-into-the-original-footer\\trace.zip"
+    },
+    {
+      "status": "failed",
+      "file": "tests/components/buttonInteractionOutline.spec.js",
+      "line": 100,
+      "title": "shared footer buttons render themed hover and keyboard-focus outlines while excluded controls stay inert",
+      "duration": "5.6s",
+      "error": "  4) tests\\components\\buttonInteractionOutline.spec.js:100:1 › shared footer buttons render themed hover and keyboard-focus outlines while excluded controls stay inert \n    Error: expect(locator).toHaveCSS(expected) failed\n    Locator:  locator('#footer-host').getByRole('button', { name: 'Reset Appearance', exact: true })\n    Expected: \"2px\"\n    Received: \"1px\"\n    Timeout:  5000ms\n    Call log:\n      - Expect \"toHaveCSS\" with timeout 5000ms\n      - waiting for locator('#footer-host').getByRole('button', { name: 'Reset Appearance', exact: true })\n        14 × locator resolved to <button type=\"button\" data-background-reset=\"\" data-ui-button-action=\"reset\" data-editor-footer-action=\"reset\" class=\"button ui-button ui-button--secondary ui-button--medium button-secondary editor-footer-reset background-reset\">…</button>\n           - unexpected value \"1px\"\n      115 |   await reset.hover();\n      116 |   await expect(reset).toHaveCSS('outline-style', 'solid');\n    > 117 |   await expect(reset).toHaveCSS('outline-width', '2px');\n          |                       ^\n      118 |   await expect(reset).toHaveCSS('outline-offset', '2px');\n      119 |   await expect(reset).toHaveCSS('outline-color', outlineColor);\n      120 |   await expect(reset).toHaveCSS('border-color', outlineColor);\n        at C:\\Users\\Rendref\\.codex\\worktrees\\b14c\\album-haven-app\\tests\\components\\buttonInteractionOutline.spec.js:117:23\n    attachment #1: screenshot (image/png) ──────────────────────────────────────────────────────────\n    test-results\\playwright-artifacts\\components\\settings-task9-initial\\buttonInteractionOutline-s-64ee1-xcluded-controls-stay-inert\\test-failed-1.png\n    ────────────────────────────────────────────────────────────────────────────────────────────────\n    Error Context: test-results\\playwright-artifacts\\components\\settings-task9-initial\\buttonInteractionOutline-s-64ee1-xcluded-controls-stay-inert\\error-context.md\n    attachment #3: trace (application/zip) ─────────────────────────────────────────────────────────\n    test-results\\playwright-artifacts\\components\\settings-task9-initial\\buttonInteractionOutline-s-64ee1-xcluded-controls-stay-inert\\trace.zip\n    Usage:\n        npx playwright show-trace test-results\\playwright-artifacts\\components\\settings-task9-initial\\buttonInteractionOutline-s-64ee1-xcluded-controls-stay-inert\\trace.zip\n    ────────────────────────────────────────────────────────────────────────────────────────────────",
+      "errorContext": "test-results\\playwright-artifacts\\components\\settings-task9-initial\\buttonInteractionOutline-s-64ee1-xcluded-controls-stay-inert\\error-context.md",
+      "trace": "test-results\\playwright-artifacts\\components\\settings-task9-initial\\buttonInteractionOutline-s-64ee1-xcluded-controls-stay-inert\\trace.zip"
+    },
+    {
+      "status": "passed",
+      "file": "tests/components/buttonInteractionOutline.spec.js",
+      "line": 169,
+      "title": "round destructive ActionButton centers its SVG and keeps error-family interaction feedback",
+      "duration": "810ms"
+    },
+    {
+      "status": "passed",
+      "file": "tests/components/coverLookupTaskCard.spec.js",
+      "line": 30,
+      "title": "cover lookup task card text can be selected and copied without activating the card",
+      "duration": "623ms"
+    },
+    {
+      "status": "passed",
+      "file": "tests/components/loopRangeControls.spec.js",
+      "line": 68,
+      "title": "shared loop action preserves disabled, busy, focus, and callback contracts",
+      "duration": "554ms"
+    },
+    {
+      "status": "passed",
+      "file": "tests/components/loopRangeControls.spec.js",
+      "line": 134,
+      "title": "range control separates surface seeking from dragging and supports handle crossing",
+      "duration": "570ms"
+    },
+    {
+      "status": "passed",
+      "file": "tests/components/loopRangeControls.spec.js",
+      "line": 232,
+      "title": "range keyboard controls commit precise steps, cancel once, and expose formatted values",
+      "duration": "415ms"
+    },
+    {
+      "status": "passed",
+      "file": "tests/components/loopRangeControls.spec.js",
+      "line": 264,
+      "title": "combined waveform paints both channels and a full-height progress marker",
+      "duration": "326ms"
+    },
+    {
+      "status": "failed",
+      "file": "tests/components/playerViews.spec.js",
+      "line": 95,
+      "title": "expanded waveform player uses the approved centerline and player-edge metadata anchor",
+      "duration": "509ms",
+      "error": "  5) tests\\components\\playerViews.spec.js:95:1 › expanded waveform player uses the approved centerline and player-edge metadata anchor \n    Error: expect(received).toBeLessThanOrEqual(expected)\n    Expected: <= 1\n    Received:    8\n      114 |     expect.soft(Math.abs(centerY(box) - expectedCenterline), `${name} centerline offset`).toBeLessThanOrEqual(1);\n      115 |   }\n    > 116 |   expect(Math.abs(metadataBox.x - (playerBox.x + paddingLeft))).toBeLessThanOrEqual(1);\n          |                                                                 ^\n      117 |   await expect(player).toHaveScreenshot('expanded-waveform-player.png', { animations: 'disabled' });\n      118 | });\n      119 |\n        at C:\\Users\\Rendref\\.codex\\worktrees\\b14c\\album-haven-app\\tests\\components\\playerViews.spec.js:116:65\n    attachment #1: screenshot (image/png) ──────────────────────────────────────────────────────────\n    test-results\\playwright-artifacts\\components\\settings-task9-initial\\playerViews-expanded-wavef-7a9a1-player-edge-metadata-anchor\\test-failed-1.png\n    ────────────────────────────────────────────────────────────────────────────────────────────────\n    Error Context: test-results\\playwright-artifacts\\components\\settings-task9-initial\\playerViews-expanded-wavef-7a9a1-player-edge-metadata-anchor\\error-context.md\n    attachment #3: trace (application/zip) ─────────────────────────────────────────────────────────\n    test-results\\playwright-artifacts\\components\\settings-task9-initial\\playerViews-expanded-wavef-7a9a1-player-edge-metadata-anchor\\trace.zip\n    Usage:\n        npx playwright show-trace test-results\\playwright-artifacts\\components\\settings-task9-initial\\playerViews-expanded-wavef-7a9a1-player-edge-metadata-anchor\\trace.zip\n    ────────────────────────────────────────────────────────────────────────────────────────────────",
+      "errorContext": "test-results\\playwright-artifacts\\components\\settings-task9-initial\\playerViews-expanded-wavef-7a9a1-player-edge-metadata-anchor\\error-context.md",
+      "trace": "test-results\\playwright-artifacts\\components\\settings-task9-initial\\playerViews-expanded-wavef-7a9a1-player-edge-metadata-anchor\\trace.zip"
+    },
+    {
+      "status": "failed",
+      "file": "tests/components/playerViews.spec.js",
+      "line": 120,
+      "title": "expanded regular player uses the approved centerline and seekbar-edge text anchors",
+      "duration": "875ms",
+      "error": "  6) tests\\components\\playerViews.spec.js:120:1 › expanded regular player uses the approved centerline and seekbar-edge text anchors \n    Error: expect(locator).toHaveScreenshot(expected) failed\n    Locator: locator('[data-player-view=\"regular\"]')\n      3419 pixels (ratio 0.04 of all image pixels) are different.\n      Snapshot: expanded-regular-player.png\n    Call log:\n      - Expect \"toHaveScreenshot(expanded-regular-player.png)\" with timeout 5000ms\n        - verifying given screenshot expectation\n      - waiting for locator('[data-player-view=\"regular\"]')\n        - locator resolved to <div data-player-view=\"regular\" class=\"global-player shell-bottom-player \" data-player-seekbar-presentation=\"regular\">…</div>\n      - taking element screenshot\n        - disabled all CSS animations\n      - waiting for fonts to load...\n      - fonts loaded\n      - attempting scroll into view action\n        - waiting for element to be stable\n      - 3419 pixels (ratio 0.04 of all image pixels) are different.\n      - waiting 100ms before taking screenshot\n      - waiting for locator('[data-player-view=\"regular\"]')\n        - locator resolved to <div data-player-view=\"regular\" class=\"global-player shell-bottom-player \" data-player-seekbar-presentation=\"regular\">…</div>\n      - taking element screenshot\n        - disabled all CSS animations\n      - waiting for fonts to load...\n      - fonts loaded\n      - attempting scroll into view action\n        - waiting for element to be stable\n      - captured a stable screenshot\n      - 3419 pixels (ratio 0.04 of all image pixels) are different.",
+      "errorContext": "test-results\\playwright-artifacts\\components\\settings-task9-initial\\playerViews-expanded-regul-fe274-d-seekbar-edge-text-anchors\\error-context.md",
+      "trace": "test-results\\playwright-artifacts\\components\\settings-task9-initial\\playerViews-expanded-regul-fe274-d-seekbar-edge-text-anchors\\trace.zip"
+    },
+    {
+      "status": "failed",
+      "file": "tests/components/playerViews.spec.js",
+      "line": 148,
+      "title": "docked compact player balances expand, artwork, and transport without exposing expanded content",
+      "duration": "967ms",
+      "error": "  7) tests\\components\\playerViews.spec.js:148:1 › docked compact player balances expand, artwork, and transport without exposing expanded content \n    Error: expect(locator).toHaveScreenshot(expected) failed\n    Locator: locator('[data-player-view=\"docked\"]')\n      66 pixels (ratio 0.01 of all image pixels) are different.\n      Snapshot: docked-compact-player.png\n    Call log:\n      - Expect \"toHaveScreenshot(docked-compact-player.png)\" with timeout 5000ms\n        - verifying given screenshot expectation\n      - waiting for locator('[data-player-view=\"docked\"]')\n        - locator resolved to <div data-player-view=\"docked\" class=\"global-player shell-bottom-player is-compact is-docked-compact\">…</div>\n      - taking element screenshot\n        - disabled all CSS animations\n      - waiting for fonts to load...\n      - fonts loaded\n      - attempting scroll into view action\n        - waiting for element to be stable\n      - 66 pixels (ratio 0.01 of all image pixels) are different.\n      - waiting 100ms before taking screenshot\n      - waiting for locator('[data-player-view=\"docked\"]')\n        - locator resolved to <div data-player-view=\"docked\" class=\"global-player shell-bottom-player is-compact is-docked-compact\">…</div>\n      - taking element screenshot\n        - disabled all CSS animations\n      - waiting for fonts to load...\n      - fonts loaded\n      - attempting scroll into view action\n        - waiting for element to be stable\n      - captured a stable screenshot\n      - 66 pixels (ratio 0.01 of all image pixels) are different.",
+      "errorContext": "test-results\\playwright-artifacts\\components\\settings-task9-initial\\playerViews-docked-compact-16708-t-exposing-expanded-content\\error-context.md",
+      "trace": "test-results\\playwright-artifacts\\components\\settings-task9-initial\\playerViews-docked-compact-16708-t-exposing-expanded-content\\trace.zip"
+    },
+    {
+      "status": "failed",
+      "file": "tests/components/playerViews.spec.js",
+      "line": 172,
+      "title": "floating compact player retains its overlap, glow, and compact-only controls",
+      "duration": "858ms",
+      "error": "  8) tests\\components\\playerViews.spec.js:172:1 › floating compact player retains its overlap, glow, and compact-only controls \n    Error: expect(locator).toHaveScreenshot(expected) failed\n    Locator: locator('[data-player-view=\"floating\"]')\n      19 pixels (ratio 0.01 of all image pixels) are different.\n      Snapshot: floating-compact-player.png\n    Call log:\n      - Expect \"toHaveScreenshot(floating-compact-player.png)\" with timeout 5000ms\n        - verifying given screenshot expectation\n      - waiting for locator('[data-player-view=\"floating\"]')\n        - locator resolved to <div data-player-view=\"floating\" class=\"global-player shell-bottom-player is-compact is-floating-compact\">…</div>\n      - taking element screenshot\n        - disabled all CSS animations\n      - waiting for fonts to load...\n      - fonts loaded\n      - attempting scroll into view action\n        - waiting for element to be stable\n      - 19 pixels (ratio 0.01 of all image pixels) are different.\n      - waiting 100ms before taking screenshot\n      - waiting for locator('[data-player-view=\"floating\"]')\n        - locator resolved to <div data-player-view=\"floating\" class=\"global-player shell-bottom-player is-compact is-floating-compact\">…</div>\n      - taking element screenshot\n        - disabled all CSS animations\n      - waiting for fonts to load...\n      - fonts loaded\n      - attempting scroll into view action\n        - waiting for element to be stable\n      - captured a stable screenshot\n      - 19 pixels (ratio 0.01 of all image pixels) are different.",
+      "errorContext": "test-results\\playwright-artifacts\\components\\settings-task9-initial\\playerViews-floating-compa-e4c3f-w-and-compact-only-controls\\error-context.md",
+      "trace": "test-results\\playwright-artifacts\\components\\settings-task9-initial\\playerViews-floating-compa-e4c3f-w-and-compact-only-controls\\trace.zip"
+    },
+    {
+      "status": "passed",
+      "file": "tests/components/searchInput.spec.js",
+      "line": 72,
+      "title": "focused search input uses one outline around the shared field boundary",
+      "duration": "513ms"
+    }
+  ]
+}

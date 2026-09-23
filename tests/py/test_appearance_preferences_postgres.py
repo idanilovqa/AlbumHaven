@@ -1,5 +1,7 @@
 """Validation and SQL ownership contracts for per-account appearance preferences."""
 
+import re
+
 import pytest
 
 from tests.py.test_account_appearance_asgi import (
@@ -18,9 +20,14 @@ EXTENDED_DEFAULTS = {
     "player_override": None,
     "waveform_recent_colors": [],
     "compact_player_style": "docked",
+    "docked_compact_player_behavior": "follow_sidebar",
+    "docked_compact_player_regular_style": False,
+    "compact_player_motion": "normal",
+    "floating_player_edge": {"source": "player", "color": None},
     "album_details_layout": "classic_bar",
     "album_playing_row_animation": "enabled",
     "alert_family": "ember",
+    "loop_control_style": "capsule",
 }
 AGGREGATE_DEFAULTS = {
     "revision": 0,
@@ -35,6 +42,25 @@ AGGREGATE_DEFAULTS = {
     "player_style_override": None,
     "player_recent_sets": [],
 }
+
+
+@pytest.mark.parametrize("native_components", [[], ["surface", "controls", "waveform"], ["handles"]])
+def test_player_style_preserves_explicit_native_components(native_components):
+    from music_app.services.appearance_preferences_postgres import normalize_appearance_preferences
+    style = {**CLASSIC_GREEN_PLAYER_STYLE, "native_components": native_components}
+    normalized = normalize_appearance_preferences(aggregate_write(player_style_override=style, applied_player_set=style))
+    assert normalized["player_style_override"] == style
+    assert normalized["applied_player_set"] == style
+    old = normalize_appearance_preferences(aggregate_write(player_style_override=CLASSIC_GREEN_PLAYER_STYLE))
+    assert "native_components" not in old["player_style_override"]
+
+
+@pytest.mark.parametrize("native_components", [None, "surface", ["surface", "surface"], ["unknown"], [1], {}, ["surface", "controls", "waveform", "handles", "surface"]])
+@pytest.mark.parametrize("field", ["player_style_override", "applied_player_set"])
+def test_player_style_rejects_malformed_native_components(native_components, field):
+    from music_app.services.appearance_preferences_postgres import normalize_appearance_preferences
+    with pytest.raises(ValueError):
+        normalize_appearance_preferences(aggregate_write(**{field: {**CLASSIC_GREEN_PLAYER_STYLE, "native_components": native_components}}))
 
 
 class Connection:
@@ -206,6 +232,43 @@ def test_normalizer_accepts_only_the_complete_closed_aggregate_snapshot():
     assert normalize_appearance_preferences(payload) == payload
 
 
+@pytest.mark.parametrize("behavior", ["follow_sidebar", "stay_docked"])
+def test_normalizer_accepts_closed_docked_compact_player_behavior(behavior):
+    from music_app.services.appearance_preferences_postgres import normalize_appearance_preferences
+
+    payload = aggregate_write(docked_compact_player_behavior=behavior)
+
+    assert normalize_appearance_preferences(payload)["docked_compact_player_behavior"] == behavior
+
+
+@pytest.mark.parametrize("behavior", [None, "", "follow", "stay-docked", 1])
+def test_normalizer_rejects_unknown_docked_compact_player_behavior(behavior):
+    from music_app.services.appearance_preferences_postgres import normalize_appearance_preferences
+
+    with pytest.raises(ValueError, match="docked compact player behavior"):
+        normalize_appearance_preferences(aggregate_write(docked_compact_player_behavior=behavior))
+
+
+def test_normalizer_accepts_boolean_docked_compact_player_regular_style():
+    from music_app.services.appearance_preferences_postgres import normalize_appearance_preferences
+
+    for enabled in (False, True):
+        normalized = normalize_appearance_preferences(
+            aggregate_write(docked_compact_player_regular_style=enabled)
+        )
+        assert normalized["docked_compact_player_regular_style"] is enabled
+
+
+@pytest.mark.parametrize("value", [None, 0, 1, "false", "true", [], {}])
+def test_normalizer_rejects_non_boolean_docked_compact_player_regular_style(value):
+    from music_app.services.appearance_preferences_postgres import normalize_appearance_preferences
+
+    with pytest.raises(ValueError, match="Docked compact player regular style"):
+        normalize_appearance_preferences(
+            aggregate_write(docked_compact_player_regular_style=value)
+        )
+
+
 @pytest.mark.parametrize("source", ["automatic", "theme", "player"])
 def test_normalizer_accepts_linked_outline_sources(source):
     from music_app.services.appearance_preferences_postgres import normalize_appearance_preferences
@@ -336,7 +399,7 @@ def test_repository_load_returns_the_complete_authoritative_snapshot_for_one_own
 
     result = _repository(connection).load_preferences(account_id=41, client_profile="desktop")
 
-    assert result == AGGREGATE_APPEARANCE
+    assert result == {**AGGREGATE_APPEARANCE, "loop_control_style": "capsule"}
     assert len(connection.operations) == 1
     sql, params = connection.operations[0]
     for column in (
@@ -363,9 +426,10 @@ def test_repository_conditionally_saves_every_section_and_increments_revision_in
         expected_revision=7,
     )
 
-    assert result == saved
+    assert result == {**saved, "loop_control_style": "capsule"}
     assert len(connection.operations) == 1
     sql, params = connection.operations[0]
+    assert sql.count("%s") == len(params)
     assert "app.user_appearance_preferences" in sql
     assert "revision" in sql
     assert "revision + 1" in sql or "revision+1" in sql
@@ -388,6 +452,30 @@ def test_repository_conditionally_saves_every_section_and_increments_revision_in
     assert connection.closed
 
 
+@pytest.mark.parametrize("legacy", [None, {"background": "#123456", "fill": "#345678", "edge": "#567890"}])
+def test_aggregate_save_persists_explicit_legacy_player_values_and_clears_null(legacy):
+    connection = Connection({**AGGREGATE_APPEARANCE, "revision": 8})
+    _repository(connection).save_preferences(
+        account_id=41, preferences=aggregate_write(player_override=legacy, player_style_override=None),
+        expected_revision=7,
+    )
+    sql, params = connection.operations[0]
+    incoming = sql.split("), updated as (")[0]
+    updated = sql.split("), updated as (")[1].split("returning")[0]
+    for field, target_column in (
+        ("background", "player_background_color"),
+        ("fill", "player_waveform_fill_color"),
+        ("edge", "player_waveform_edge_color"),
+    ):
+        column = f"player_{field}"
+        match = re.search(r"%s::text " + column + r"\b", incoming)
+        assert match, f"the aggregate snapshot must carry {column}, including explicit null"
+        assert params[incoming[:match.start()].count("%s")] == (legacy[field] if legacy else None)
+        assert f"{target_column} = incoming.{column}" in updated
+    assert "saved.revision = incoming.expected_revision" in updated
+    assert len(connection.operations) == 1
+
+
 def test_repository_validates_expected_revision_before_opening_database():
     from music_app.services.appearance_preferences_postgres import PostgresAppearancePreferencesRepository
 
@@ -407,3 +495,36 @@ def test_repository_validates_expected_revision_before_opening_database():
             )
 
     assert opened == []
+
+
+@pytest.mark.parametrize("include_alert", [False, True])
+def test_compatibility_palette_save_binds_requested_album_and_alert_fields(include_alert):
+    requested = {
+        **DEFAULTS, "palette_id": "steelblue", "panel_index": 0,
+        "player_override": None, "compact_player_style": "floating",
+        "album_details_layout": "editorial_canvas", "album_playing_row_animation": "disabled",
+    }
+    if include_alert:
+        requested["alert_family"] = "quiet"
+    connection = Connection({**AGGREGATE_APPEARANCE, **requested})
+    _repository(connection).save_preferences(account_id=41, preferences=requested)
+    sql, params = connection.operations[0]
+    assert "editorial_canvas" in params
+    assert "disabled" in params
+    if include_alert:
+        assert "quiet" in params
+    for field in ("album_details_layout", "album_playing_row_animation", "alert_family"):
+        assert f"{field} = coalesce" in sql
+
+
+@pytest.mark.parametrize("color", [None, "#AABBCC"])
+def test_panel_outline_override_roundtrips(color):
+    from music_app.services.appearance_preferences_postgres import normalize_appearance_preferences
+    payload = aggregate_write(interaction_overrides={**INTERACTION_OVERRIDES, "panel_outline": color})
+    assert normalize_appearance_preferences(payload) == payload
+
+
+def test_panel_outline_rejects_invalid_color():
+    from music_app.services.appearance_preferences_postgres import normalize_appearance_preferences
+    with pytest.raises(ValueError):
+        normalize_appearance_preferences(aggregate_write(interaction_overrides={**INTERACTION_OVERRIDES, "panel_outline": "red;"}))

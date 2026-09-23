@@ -15,7 +15,7 @@ import threading
 import time
 from types import SimpleNamespace
 import tempfile
-from urllib.parse import quote, urlparse
+from urllib.parse import quote, urlencode, urlparse
 
 import pytest
 
@@ -977,6 +977,7 @@ def test_runtime_grant_verification_accepts_only_required_table_privileges(monke
     ("failed_check", "message"),
     [
         (("integration", "pending_scrobbles", "DELETE"), "integration.pending_scrobbles DELETE"),
+        (("library", "library_memberships", "DELETE"), "library.library_memberships DELETE"),
         (("library", "manual_versions", "TRUNCATE"), "library.manual_versions TRUNCATE denied"),
         ("ops_schema_create_denied", "ops schema CREATE denied"),
         ("sequence_update_denied", "cover lookup sequence UPDATE denied"),
@@ -1399,7 +1400,7 @@ def test_cleanup_only_reaps_stale_owner_resets_tables_and_releases_without_start
     monkeypatch.setattr(
         isolatedLibraryApp,
         "IsolatedDatabaseOwnershipLock",
-        lambda: isolatedPostgres.IsolatedDatabaseOwnershipLock(lock_path=lock_path, wait_seconds=0),
+        lambda *, database_url: isolatedPostgres.IsolatedDatabaseOwnershipLock(lock_path=lock_path, wait_seconds=0),
     )
 
     def reset(database_url):
@@ -1511,6 +1512,9 @@ def test_isolated_launcher_holds_database_lock_through_startup_and_teardown_clea
     temp_root.mkdir()
 
     class RecordingLock:
+        def __init__(self, *, database_url):
+            assert database_url == "setup"
+
         def acquire(self):
             events.append("lock.acquire")
 
@@ -1710,6 +1714,9 @@ def test_isolated_launcher_preserves_and_reuses_runner_owned_restart_state(
     ).hexdigest()
 
     class RecordingLock:
+        def __init__(self, *, database_url):
+            assert database_url == "setup"
+
         def acquire(self):
             events.append("lock.acquire")
 
@@ -4751,6 +4758,116 @@ def test_fixture_seeds_saved_timezone_by_default_and_blanks_only_for_auto_detect
         response = connection.getresponse()
         assert response.status == 404
         response.read()
+    finally:
+        if connection is not None:
+            connection.close()
+        service.stop()
+
+
+def test_lastfm_provider_fixture_controls_retryable_scrobble_failures_and_total(tmp_path):
+    cover_path = tmp_path / "fixture.jpg"
+    cover_path.write_bytes(b"fixture-image")
+    other_art_path = tmp_path / "fixture-other-art.jpg"
+    other_art_path.write_bytes(b"fixture-other-art-image")
+    service = isolatedLibraryApp.ProviderFixtureService(0, [{
+        "cover_id": "fixture",
+        "staged_path": str(cover_path),
+        "other_art_staged_path": str(other_art_path),
+        "artist": "Fixture Artist",
+        "album": "Fixture Album",
+        "year": 2024,
+        "width": 1200,
+        "height": 1200,
+    }])
+    connection = None
+    service.start()
+    port = service._server.server_address[1]
+
+    def signed_body(method, **params):
+        payload = {
+            "method": method,
+            "api_key": isolatedLibraryApp.LASTFM_FAKE_API_KEY,
+            **params,
+        }
+        signature_base = "".join(
+            f"{key}{value}" for key, value in sorted(payload.items())
+        ) + isolatedLibraryApp.LASTFM_FAKE_API_SECRET
+        payload["api_sig"] = hashlib.md5(signature_base.encode("utf-8")).hexdigest()
+        return urlencode(payload)
+
+    def post_control(action, **payload):
+        connection.request(
+            "POST",
+            "/lastfm-fixture/control",
+            body=json.dumps({"action": action, **payload}),
+            headers={"Content-Type": "application/json"},
+        )
+        response = connection.getresponse()
+        body = response.read()
+        return response.status, json.loads(body) if body else None
+
+    try:
+        connection = http.client.HTTPConnection("127.0.0.1", port, timeout=2)
+        status, state = post_control("reset")
+        assert status == 200
+        assert state == {
+            "playcount": isolatedLibraryApp.LASTFM_FAKE_TOTAL_SCROBBLES,
+            "scrobble_mode": "accept",
+        }
+
+        connection.request(
+            "POST",
+            "/lastfm",
+            body=signed_body("user.getInfo", user=isolatedLibraryApp.LASTFM_FAKE_USERNAME),
+            headers={"Content-Type": "application/x-www-form-urlencoded"},
+        )
+        response = connection.getresponse()
+        assert response.status == 200
+        assert (
+            f"<playcount>{isolatedLibraryApp.LASTFM_FAKE_TOTAL_SCROBBLES}</playcount>"
+            in response.read().decode("utf-8")
+        )
+
+        status, state = post_control("set-scrobble-mode", mode="retryable-error")
+        assert status == 200
+        assert state["scrobble_mode"] == "retryable-error"
+        scrobble_body = signed_body(
+            "track.scrobble",
+            sk=isolatedLibraryApp.LASTFM_FAKE_SESSION_KEY,
+            artist="Fixture Artist",
+            track="Fixture Track",
+            timestamp=1_800_000_000,
+        )
+        connection.request(
+            "POST",
+            "/lastfm",
+            body=scrobble_body,
+            headers={"Content-Type": "application/x-www-form-urlencoded"},
+        )
+        response = connection.getresponse()
+        assert response.status == 503
+        assert '<error code="11">Service Offline</error>' in response.read().decode("utf-8")
+
+        status, state = post_control("set-scrobble-mode", mode="accept")
+        assert status == 200
+        assert state["playcount"] == isolatedLibraryApp.LASTFM_FAKE_TOTAL_SCROBBLES
+        connection.request(
+            "POST",
+            "/lastfm",
+            body=scrobble_body,
+            headers={"Content-Type": "application/x-www-form-urlencoded"},
+        )
+        response = connection.getresponse()
+        assert response.status == 200
+        assert 'scrobbles accepted="1" ignored="0"' in response.read().decode("utf-8")
+
+        connection.request("GET", "/lastfm-fixture/state")
+        response = connection.getresponse()
+        assert response.status == 200
+        assert json.loads(response.read()) == {
+            "playcount": isolatedLibraryApp.LASTFM_FAKE_TOTAL_SCROBBLES + 1,
+            "scrobble_mode": "accept",
+        }
     finally:
         if connection is not None:
             connection.close()

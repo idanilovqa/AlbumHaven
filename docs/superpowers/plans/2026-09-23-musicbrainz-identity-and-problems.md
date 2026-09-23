@@ -48,6 +48,40 @@ surface.
   smallest implementation.
 - Do not run local full release suites. Use focused local tests and the complete
   review-first CI pipeline at each publication checkpoint.
+- Every numbered task is a separate delivery unit. Finish its focused tests,
+  required local review, commit, pull request, complete review-first CI, merge,
+  publication, and local-main synchronization before starting the next task.
+- Start each later task from the newly published main in a fresh task branch or
+  worktree. Do not accumulate multiple numbered tasks into one pull request.
+- An early foundation task may publish while still unreachable from user flows only
+  when its additive contract is independently tested, disabled by default or has no
+  runtime caller, and preserves all existing behavior. Never publish a partially
+  exposed or broken journey.
+
+## Per-Task Publication Protocol
+
+The final checkbox of every numbered task means all of the following, even when its
+short label says `Commit`:
+
+1. Run the task's focused tests and `git diff --check`.
+2. Review the complete task diff twice with the repository's adversarial local
+   review standard; fix validated findings and repeat a whole-diff pass after any
+   substantive fix.
+3. Commit only that task's listed files and documentation.
+4. Push a dedicated task branch and open one task-scoped pull request whose title,
+   description, acceptance evidence, compatibility contract, and rollback describe
+   only that task.
+5. Wait for all applicable hosted reviewers, then the complete authoritative CI
+   pipeline. Reproduce genuine failures locally with the narrowest focused test,
+   fix them, and rerun the complete pipeline.
+6. Obtain any owner/manual/visual approval explicitly assigned to that task.
+7. Merge and publish the task, synchronize local main, remove or archive its task
+   branch/worktree, and create the next task branch from updated main.
+
+No task may use an earlier task's successful CI run as its publication evidence.
+Documentation-only tasks may use the repository's documented review/test
+classification, but they still receive their own pull request, merge, publication,
+and synchronization checkpoint.
 
 ## Delivery Units
 
@@ -63,8 +97,8 @@ surface.
   compatible.
 - **Rollback:** disable enrichment, stop the worker, and leave additive tables and
   accepted decisions intact.
-- **Checkpoint:** two complete local review passes, complete CI, owner acceptance,
-  merge/publish, then synchronize from updated main before Delivery B.
+- **Checkpoint:** Tasks 1–7 each complete the Per-Task Publication Protocol. Task 7
+  records MI-01 aggregate acceptance after Tasks 1–6 are already published.
 
 ### Delivery B — MI-02 Explainable Problems
 
@@ -79,9 +113,9 @@ surface.
   history; capabilities and library isolation are enforced.
 - **Rollback:** disable diagnostic projection and mutation routes while retaining
   rows for later recovery.
-- **Checkpoint:** focused verification, owner manual acceptance, approved
-  functional E2E, two complete local review passes, complete CI, merge/publish,
-  and local main synchronization.
+- **Checkpoint:** Tasks 8–11 each complete the Per-Task Publication Protocol. Owner
+  visual approval gates Task 8; manual acceptance gates Task 10. Task 11 records
+  MI-02 aggregate evidence after Tasks 8–10 are already published.
 
 ---
 

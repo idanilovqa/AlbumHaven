@@ -9343,6 +9343,70 @@ def test_final_file_scope_ignore_removes_reason_from_summary_without_hiding_albu
     assert detail["track_problem_rows"] == []
 
 
+@pytest.mark.parametrize("case", ["complete", "incomplete", "multi_disc", "missing_number", "missing_text", "year_mismatch", "encoding"])
+@pytest.mark.parametrize("ignore_scope", [None, "album", "file", "legacy"])
+def test_problematic_summary_reason_rows_match_full_repair_rows(case, ignore_scope):
+    from music_app.services import library_browse_postgres as browse
+
+    numbers = [1, 3, 4] if case == "incomplete" else [1, 2, 3]
+    discs = [1, 2, 2] if case == "multi_disc" else None
+    if case == "missing_number":
+        numbers = [1, None, 3]
+    rows = _healthy_problematic_order_rows(
+        numbers, disc_numbers=discs,
+        filename_numbers=[1, 2, 3] if case == "missing_number" else None,
+    )
+    rows[-1]["file_entry"]["year"] = None
+    if case == "missing_text":
+        rows[0]["file_entry"]["title"] = ""
+    elif case == "year_mismatch":
+        rows[0]["file_entry"]["year"] = "1999"
+    elif case == "encoding":
+        rows[0]["file_entry"]["title"] = "Caf\u00c3\u00a9"
+    album = browse._problematic_album_projection_payloads(rows)[0]
+    path = rows[-1]["file_private_path"]
+    if ignore_scope == "legacy":
+        album["_ignored_repair_keys"] = {f"{path}::year"}
+    elif ignore_scope:
+        owner = album["album_ref"] if ignore_scope == "album" else path
+        album["_ignored_repair_keys"] = {
+            browse._problem_identity_row_key(owner, "Missing year", scope=ignore_scope)
+        }
+    full_rows = browse._problematic_track_problem_rows(album)
+    compact_rows = browse._problematic_track_problem_rows(album, include_repair_metadata=False)
+    assert compact_rows == [
+        {key: row[key] for key in ("path", "filename", "reasons")}
+        for row in full_rows
+    ]
+    assert browse._problematic_album_summary_payload(album) == browse._problematic_album_summary_payload(
+        album, track_problem_rows=full_rows,
+    )
+
+
+def test_problematic_summary_omits_unused_repair_identity_materialization(monkeypatch):
+    from music_app.services import library_browse_postgres as browse
+
+    rows = _healthy_problematic_order_rows([1, 2, 3])
+    for row in rows:
+        row["file_entry"]["year"] = None
+    album = browse._problematic_album_projection_payloads(rows)[0]
+    calls = []
+    original = browse._problem_identity_row_key
+
+    def record_identity(*args, **kwargs):
+        calls.append((args, kwargs))
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(browse, "_problem_identity_row_key", record_identity)
+    full_rows = browse._problematic_track_problem_rows(album)
+    full_count = len(calls)
+    calls.clear()
+    compact_rows = browse._problematic_track_problem_rows(album, include_repair_metadata=False)
+    assert len(calls) == full_count - sum(len(row["reasons"]) for row in full_rows)
+    assert all("ignorable_reasons" not in row and "file_type" not in row for row in compact_rows)
+    assert all("ignorable_reasons" in row and "file_type" in row for row in full_rows)
+
+
 def test_problematic_summary_search_text_includes_track_titles_without_heavy_detail_arrays():
     from music_app.services.library_browse_postgres import (
         _problematic_album_projection_payloads,
@@ -10043,6 +10107,67 @@ def test_postgres_library_browse_builds_utility_rules_projection_from_rows():
         delimiter_aware_parser in sql
         for delimiter_aware_parser in ("regexp_match(", "regexp_replace(", "substring(", "reverse(")
     ), "album exclusion SQL must identify the problem-album suffix from the right"
+
+
+def test_known_problem_reason_identity_does_not_encode_unused_fallback(monkeypatch):
+    from music_app.services import library_browse_postgres as module
+
+    def reject_encoding(_reason):
+        raise AssertionError("Known reason identities must not encode an unused fallback.")
+
+    monkeypatch.setattr(module, "_encoded_problem_reason_identity", reject_encoding)
+    for reason, code in module._PROBLEM_REASON_IDENTITY_CODES.items():
+        assert module._problem_reason_identity_code(f"  {reason}  ") == code
+
+
+def test_unknown_problem_reason_identity_encodes_normalized_reason_once(monkeypatch):
+    from music_app.services import library_browse_postgres as module
+
+    reason = "Unexpected embedded cuesheet marker"
+    original = module._encoded_problem_reason_identity
+    expected = original(reason)
+    calls = []
+
+    def record_encoding(value):
+        calls.append(value)
+        return original(value)
+
+    monkeypatch.setattr(module, "_encoded_problem_reason_identity", record_encoding)
+    assert module._problem_reason_identity_code(f"  {reason}  ") == expected
+    assert module._decoded_problem_reason_identity(expected) == reason
+    assert calls == [reason]
+
+
+@pytest.mark.parametrize("scope", ["album", "file"])
+def test_empty_problem_ignore_set_does_not_build_identity(monkeypatch, scope):
+    from music_app.services import library_browse_postgres as module
+
+    def reject_identity(*_args, **_kwargs):
+        raise AssertionError("An empty ignore set cannot contain any reason identity.")
+
+    monkeypatch.setattr(module, "_problem_identity_row_key", reject_identity)
+    assert module._problem_reason_is_ignored(
+        set(), "fixture-track.flac", "Missing year", scope=scope, legacy_field="year"
+    ) is False
+
+
+@pytest.mark.parametrize("scope", ["album", "file"])
+@pytest.mark.parametrize("reason", ["Missing year", "Unexpected embedded cuesheet marker"])
+def test_nonempty_problem_ignore_set_preserves_exact_and_legacy_matching(scope, reason):
+    from music_app.services import library_browse_postgres as module
+
+    path = "fixture-track.flac"
+    identity = module._problem_identity_row_key(path, reason, scope=scope)
+    assert module._problem_reason_is_ignored({identity}, path, reason, scope=scope)
+    assert module._problem_reason_is_ignored(
+        {f"{path}::year"}, path, reason, scope=scope, legacy_field="year"
+    )
+    assert not module._problem_reason_is_ignored(
+        {f"{path}::year"}, path, reason, scope=scope
+    )
+    assert not module._problem_reason_is_ignored(
+        {identity}, "different-track.flac", reason, scope=scope, legacy_field="year"
+    )
 
 
 def test_problem_exclusion_identity_round_trips_exact_visible_reasons_into_rules():

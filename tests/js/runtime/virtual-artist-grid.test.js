@@ -861,6 +861,36 @@ function extractFirstGridTemplate(markup) {
   );
 }
 
+for (const scenario of ['visible title', 'visible artwork', 'renamed key', 'removed occurrence']) {
+test(`scroll anchoring restores the captured trigger for ${scenario}`, () => {
+  const { context, scrollEl } = createRuntimeContext();
+  const virtualGrid = vm.runInContext('virtualGrid', context);
+  const sectionKey = 'artist:all:Anchor Artist:0';
+  const artboxVisible = scenario === 'visible artwork';
+  const artbox = context.createAlbumTitleButton('same-album', artboxVisible ? { top: 20, bottom: 300 } : { top: -300, bottom: -20 }, sectionKey, 'Same Album', '2026');
+  const title = context.createAlbumTitleButton('same-album', artboxVisible ? { top: 320, bottom: 342 } : { top: 20, bottom: 42 }, sectionKey, 'Same Album', '2026');
+  artbox.matches = (selector) => selector === '.album-card__artbox-trigger';
+  title.matches = (selector) => selector === '.album-title-button';
+  context.__albumTitleButtons = [artbox, title];
+  scrollEl.scrollTop = 1000;
+  const anchor = virtualGrid.captureScrollAnchor();
+  assert.equal(anchor.offsetTop, 20, 'Capture must choose the first visible trigger');
+  assert.equal(anchor.triggerKind, artboxVisible ? 'artbox' : 'title');
+  if (scenario === 'renamed key') {
+    artbox.albumKey = 'new-request-key';
+    title.albumKey = 'new-request-key';
+  } else if (scenario === 'removed occurrence') {
+    artbox.sectionOccurrenceKey = 'artist:all:Other Artist:1';
+    title.sectionOccurrenceKey = 'artist:all:Other Artist:1';
+    virtualGrid.sections = [];
+  }
+
+  virtualGrid.restoreScrollAnchor(anchor);
+
+  assert.equal(scrollEl.scrollTop, 1000, 'Restoring unchanged DOM must preserve the same trigger and viewport offset');
+});
+}
+
 test('scroll anchoring follows the same visible album when a scan changes its request key', () => {
   const { context, scrollEl } = createRuntimeContext();
   const virtualGrid = vm.runInContext('virtualGrid', context);
@@ -3948,6 +3978,87 @@ test('Artist Tree settlement adds a column and fills the row when a multi-row ga
       + virtualGrid.columnGap * (virtualGrid.columns - 1),
     1844,
   );
+});
+
+test('row height reconciliation retains both ordinary and Artist Tree settled column geometry', () => {
+  for (const settled of [false, true]) {
+    const { scrollEl, section, virtualGrid } = createResponsiveGalleryScenario(100, 1104, 60);
+    scrollEl.clientWidth = 1240;
+    virtualGrid.recalculate(settled ? { preserveCardTrackWidth: true } : {});
+    assert.equal(virtualGrid.columns, settled ? 5 : 4);
+    const trackWidth = virtualGrid.cardTrackWidth;
+    const geometryKey = section.rowGeometryKey;
+    const measuredHeight = 351;
+    const row = createMeasuredRow(section.sectionKey, 0, { rowHeight: measuredHeight });
+    const originalQuery = virtualGrid.containerEl.querySelectorAll.bind(virtualGrid.containerEl);
+    virtualGrid.containerEl.querySelectorAll = (selector) => (
+      selector === '.album-row[data-section-key][data-block-index]' ? [row] : originalQuery(selector)
+    );
+    virtualGrid.render = () => {};
+    virtualGrid.measureRenderedRows();
+    assert.equal(virtualGrid.columns, settled ? 5 : 4, 'Measuring height must not choose new columns');
+    assert.equal(virtualGrid.cardTrackWidth, trackWidth);
+    assert.equal(section.rowGeometryKey, geometryKey);
+    assert.equal(section.blockHeights[0], measuredHeight, 'Measured height must survive reconciliation');
+  }
+});
+
+test('Artist Tree settlement restores the same visible album after reflow virtualizes its old row', () => {
+  const { context, scrollEl, section, virtualGrid } = createResponsiveGalleryScenario(100, 1104, 60);
+  const anchorIndex = 28;
+  const album = section.group.albums[anchorIndex];
+  const sectionKey = virtualGrid.getRenderedSectionKey(section);
+  const anchorTop = () => section.top + virtualGrid.sectionHeaderHeight
+    + section.blockOffsets[Math.floor(anchorIndex / virtualGrid.columns)] - scrollEl.scrollTop;
+  const renderVisibleAnchor = () => {
+    const top = anchorTop();
+    context.__albumTitleButtons = top + 200 > 0 && top < scrollEl.clientHeight
+      ? [context.createAlbumTitleButton('reflow-anchor', { top, bottom: top + 200 },
+        sectionKey, album.name, String(album.year || ''))]
+      : [];
+    for (const trigger of context.__albumTitleButtons) {
+      trigger.getBoundingClientRect = () => ({ top: anchorTop(), bottom: anchorTop() + 200 });
+    }
+  };
+  scrollEl.scrollTop = section.top + virtualGrid.sectionHeaderHeight + section.blockOffsets[7] - 40;
+  renderVisibleAnchor();
+  const beforeScroll = scrollEl.scrollTop;
+  assert.equal(virtualGrid.columns, 4);
+  assert.equal(virtualGrid.captureScrollAnchor().offsetTop, 40);
+  virtualGrid.render = renderVisibleAnchor;
+  virtualGrid.primeVisibleCoverImages = () => {};
+  virtualGrid.scheduleMeasureRows = () => {};
+  virtualGrid._resetScrollAfterMeasure = false;
+  scrollEl.clientWidth = 1280;
+
+  virtualGrid.onArtistTreeSettled();
+
+  assert.equal(virtualGrid.columns, 5);
+  assert.equal(context.__albumTitleButtons.length, 1, 'The original anchor must be mounted again');
+  assert.equal(context.__albumTitleButtons[0].getBoundingClientRect().top, 40);
+  assert.notEqual(scrollEl.scrollTop, beforeScroll, 'Reflow must adjust scroll rather than keep obsolete row coordinates');
+});
+
+test('Artist Tree settlement preserves absolute restoration and pending scroll resets', () => {
+  const { scrollEl, virtualGrid } = createResponsiveGalleryScenario(100, 1104, 60);
+  virtualGrid.captureScrollAnchor = () => ({ scrollTop: 300, offsetTop: 40 });
+  virtualGrid.restoreScrollAnchor = () => { throw new Error('Absolute restoration must own scroll'); };
+  virtualGrid.render = () => {};
+  virtualGrid.primeVisibleCoverImages = () => {};
+  virtualGrid.scheduleMeasureRows = () => {};
+  virtualGrid._resetScrollAfterMeasure = false;
+  virtualGrid._absoluteScrollRestore = {
+    renderGeneration: virtualGrid._renderGeneration,
+    scrollLeft: 12,
+    scrollTop: 450,
+  };
+  scrollEl.clientWidth = 1280;
+  virtualGrid.onArtistTreeSettled();
+  assert.equal(scrollEl.scrollTop, 450);
+  assert.equal(scrollEl.scrollLeft, 12);
+  virtualGrid._resetScrollAfterMeasure = true;
+  virtualGrid.onArtistTreeSettled();
+  assert.equal(virtualGrid._resetScrollAfterMeasure, true, 'The scheduled measurement must retain reset ownership');
 });
 
 test('Artist Tree settlement leaves card sizing alone when every artist has only one incomplete row', () => {

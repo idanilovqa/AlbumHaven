@@ -69,7 +69,7 @@ _NO_WINDOW_CREATION_FLAGS = (
     if os.name == "nt"
     else 0
 )
-_SCAN_SCENARIOS = frozenset({"cold", "cached", "add-album", "metadata"})
+_SCAN_SCENARIOS = frozenset({"cold", "cached", "add-album", "metadata", "health-warning"})
 _CACHED_LAST_SCAN_MARKER = 1_609_459_200.0
 _INCREMENTAL_CACHE_MAX_AGE_SECONDS = 3600
 _RUNTIME_PATH_KEYS = (
@@ -301,7 +301,9 @@ def initialize_scan_performance_database(database_url: str) -> None:
         connection.execute(_seed_bootstrap_local_library_sql())
 
 
-def persist_scan_performance_library_root(setup_database_url: str, music_dir: Path) -> dict[str, object]:
+def persist_scan_performance_library_root(
+    setup_database_url: str, music_dir: Path, *, unavailable_root: Path | None = None
+) -> dict[str, object]:
     from config import PERSISTENCE_BACKEND_POSTGRES
     from music_app.services.library_roots import save_library_root_settings
 
@@ -322,7 +324,11 @@ def persist_scan_performance_library_root(setup_database_url: str, music_dir: Pa
                     "path": str(resolved_music_dir),
                     "layout_mode": "artist",
                 }
-            ]
+            ] + ([{
+                "id": "scan-performance-unavailable-root",
+                "path": str(unavailable_root),
+                "layout_mode": "artist",
+            }] if unavailable_root is not None else [])
         },
     )
 
@@ -624,7 +630,13 @@ def configure_environment(scenario: str = "cold") -> Path:
     os.environ["ALBUM_HAVEN_APP_DATABASE_URL"] = runtime_database_url
     os.environ["ALBUM_HAVEN_PERSISTENCE_SCAN_CACHE"] = "postgres"
     initialize_scan_performance_database(setup_database_url)
-    persist_scan_performance_library_root(setup_database_url, music_dir)
+    unavailable_root = None
+    if scenario == "health-warning":
+        unavailable_root = Path(tempfile.mkdtemp(prefix="unavailable-library-", dir=session_temp))
+    persist_scan_performance_library_root(setup_database_url, music_dir, unavailable_root=unavailable_root)
+    if unavailable_root is not None:
+        # Remove only this owned empty directory before the real watcher starts.
+        unavailable_root.rmdir()
     app_port = int(str(os.environ.get("PLAYWRIGHT_PORT") or "4174").strip())
     configure_performance_auth_environment(app_port)
     provision_performance_auth_owner(runtime_database_url)

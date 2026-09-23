@@ -13,15 +13,37 @@ function loadActions(filename, name, supplied = {}) {
   return { Actions: context.Actions, context };
 }
 
+function loadProblematicActions(supplied) {
+  const loaded = loadActions('utilityProblematicFilesActions.js', 'UtilityProblematicFilesActions', supplied);
+  const { context } = loaded;
+  context.BasePage = class {};
+  const source = fs.readFileSync(path.resolve(__dirname, '../e2e/poms/utilityProblematicFilesTab.js'), 'utf8')
+    .replace(/^import[\s\S]*?;\r?\n/gm, '').replace('export class ', 'class ');
+  vm.runInContext(source + ';globalThis.ProblematicTab = UtilityProblematicFilesTab;', context);
+  context.document.querySelector = selector => selector === '#utility-problematic-count'
+    ? { textContent: String(context.getFilteredProblematicAlbums().length) }
+    : {
+      dataset: {
+        problematicVirtualStart: '0',
+        problematicVirtualEnd: String(context.getFilteredProblematicAlbums().length),
+        problematicMountedCount: String(context.getFilteredProblematicAlbums().length),
+      },
+      querySelectorAll: context.document.querySelectorAll,
+    };
+  return loaded;
+}
+
 for (const staleKeys of [['old'], ['other']]) {
   test(`Problems search readiness rejects a stale rendered tree (${staleKeys})`, async () => {
     let renderedKeys = staleKeys;
-    const { Actions } = loadActions('utilityProblematicFilesActions.js', 'UtilityProblematicFilesActions', {
+    const { Actions, context } = loadProblematicActions({
       state: { utility: { searchQuery: 'target' } },
       getFilteredProblematicAlbums: () => [{ key: 'target' }],
       document: { querySelectorAll: () => renderedKeys.map(key => ({ getAttribute: () => key })) },
     });
     const pom = {
+      sidebarListSelector: '#utility-problematic-list',
+      waitForSearchProjection: context.ProblematicTab.prototype.waitForSearchProjection,
       listItemSelector: '#utility-problematic-list [data-problematic-album-key]',
       async waitForPageCondition(predicate, _options, arg) {
         assert.equal(predicate(arg), false, 'query state updates before the debounced DOM commit');
@@ -35,12 +57,14 @@ for (const staleKeys of [['old'], ['other']]) {
 
 test('clearing Problems search waits for the complete restored tree', async () => {
   let renderedKeys = ['one'];
-  const { Actions } = loadActions('utilityProblematicFilesActions.js', 'UtilityProblematicFilesActions', {
+  const { Actions, context } = loadProblematicActions({
     state: { utility: { searchQuery: '' } },
     getFilteredProblematicAlbums: () => [{ key: 'one' }, { key: 'two' }],
     document: { querySelectorAll: () => renderedKeys.map(key => ({ getAttribute: () => key })) },
   });
   await new Actions({
+    sidebarListSelector: '#utility-problematic-list',
+    waitForSearchProjection: context.ProblematicTab.prototype.waitForSearchProjection,
     listItemSelector: '#utility-problematic-list [data-problematic-album-key]',
     searchSection: { searchInput: { fill: async () => {} } },
     async waitForPageCondition(predicate, _options, arg) {

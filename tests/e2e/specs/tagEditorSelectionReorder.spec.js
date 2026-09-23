@@ -31,11 +31,16 @@ test('FTC-TAGS-025 preserves selection and reorder semantics through cancel and 
       await openEditor();
       expect((await tagEditorActions.readSummary()).trackFilenames).toEqual(tracks);
 
+      await tagEditorActions.dragTrackWithoutGrip(tracks[0], tracks[4]);
+      expect((await tagEditorActions.readSummary()).trackFilenames).toEqual(tracks);
       await tagEditorActions.dragSelectTracksByFilenames(tracks.slice(1, 5));
       await tagEditorActions.selectTrackWithModifier(tracks[7], 'Control');
       await tagEditorActions.expectSelectedTrackFilenames([...tracks.slice(1, 5), tracks[7]]);
       await tagEditorActions.selectTrackByFilename(tracks[10]);
       await tagEditorActions.selectTrackWithModifier(tracks[13], 'Shift');
+      await tagEditorActions.expectSelectedTrackFilenames(tracks.slice(10, 14));
+      await tagEditorActions.dropReorderOutsideList(tracks[0]);
+      expect((await tagEditorActions.readSummary()).trackFilenames).toEqual(tracks);
       await tagEditorActions.expectSelectedTrackFilenames(tracks.slice(10, 14));
     });
 
@@ -43,21 +48,27 @@ test('FTC-TAGS-025 preserves selection and reorder semantics through cancel and 
       await tagEditorActions.dragReorderBefore(tracks[0], tracks[4]);
       expect((await tagEditorActions.readSummary()).trackFilenames.slice(0, 5))
         .toEqual([tracks[1], tracks[2], tracks[3], tracks[0], tracks[4]]);
+      await tagEditorActions.expectSelectedTrackFilenames(tracks.slice(10, 14));
 
       await tagEditorActions.dragReorderBefore(tracks[10], tracks[1]);
       expect((await tagEditorActions.readSummary()).trackFilenames[0]).toBe(tracks[10]);
+      await tagEditorActions.expectSelectedTrackFilenames(tracks.slice(10, 14));
 
       await tagEditorActions.dragReorderBefore(tracks.at(-1), tracks[10]);
       expect((await tagEditorActions.readSummary()).trackFilenames[0]).toBe(tracks.at(-1));
+      await tagEditorActions.expectSelectedTrackFilenames(tracks.slice(10, 14));
 
       await tagEditorActions.dragReorderBelowList(tracks[2]);
       expect((await tagEditorActions.readSummary()).trackFilenames.at(-1)).toBe(tracks[2]);
+      await tagEditorActions.expectSelectedTrackFilenames(tracks.slice(10, 14));
 
       await tagEditorActions.reorderWithKeyboard(tracks[2], 'ArrowUp');
       expect((await tagEditorActions.readSummary()).trackFilenames.at(-2)).toBe(tracks[2]);
+      await tagEditorActions.expectSelectedTrackFilenames(tracks.slice(10, 14));
       const beforeEscape = (await tagEditorActions.readSummary()).trackFilenames;
       await tagEditorActions.cancelActiveReorder(tracks[5], tracks[8]);
       expect((await tagEditorActions.readSummary()).trackFilenames).toEqual(beforeEscape);
+      await tagEditorActions.expectSelectedTrackFilenames(tracks.slice(10, 14));
     });
 
     await stepLogger.step('Cancel rolls staged order back when the editor is reopened', async () => {

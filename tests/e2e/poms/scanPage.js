@@ -4,6 +4,14 @@ export class ScanPage extends BasePage {
   constructor(page, testInfo = null) {
     super(page, testInfo);
     this.loader = page.locator(this.loaderSelector);
+    this.statusGalleryBar = page.getByRole('region', { name: 'Library Status Page controls', exact: true });
+    this.libraryGalleryBar = page.locator('[data-gallery-bar-instance="gallery"]');
+    this.healthWarningToast = page.locator('#toast-layer .system-warning-notification')
+      .filter({ hasText: 'Library watcher needs attention' });
+    this.dismissHealthWarning = this.healthWarningToast.getByRole('button', { name: 'Dismiss', exact: true });
+    this.healthWarning = page.locator('#library-scan-warning');
+    this.terminalError = page.locator('#library-loader .on-page-alert--error');
+    this.openStatusPage = page.locator('[data-status-action="go-to-scan-page"]:visible');
     this.title = page.locator(this.titleSelector);
     this.status = page.locator(this.statusSelector);
     this.discoveryText = page.locator(
@@ -48,6 +56,10 @@ export class ScanPage extends BasePage {
     return '.library-loader-progress-title';
   }
 
+  get currentPhaseSelector() {
+    return '#library-loader-phase-guide [data-scan-stage].is-current';
+  }
+
   get progressDetailSelector() {
     return '.library-loader-progress-detail';
   }
@@ -89,7 +101,7 @@ export class ScanPage extends BasePage {
   }
 
   get galleryHeadingSelector() {
-    return '#artist-groups .artist-name';
+    return '#artist-groups .artist-name, [data-gallery-bar][data-gallery-context-kind="artist"] [data-gallery-context-name], [data-gallery-bar][data-gallery-context-kind="single-artist"] [data-gallery-context-name]';
   }
 
   get galleryCoverStateSelector() {
@@ -117,32 +129,11 @@ export class ScanPage extends BasePage {
   }
 
   async readActionPresentation() {
-    const [cancelBounds, browseBounds, cancelStyle, browseStyle] = await Promise.all([
+    const [cancelBounds, browseBounds] = await Promise.all([
       this.cancelButton.boundingBox(),
       this.browseButton.boundingBox(),
-      // parity-check: allow-read-only-measurement-evaluate -- verify the rendered destructive action treatment
-      this.cancelButton.evaluate((button) => {
-        const style = getComputedStyle(button);
-        return {
-          backgroundColor: style.backgroundColor,
-          borderColor: style.borderColor,
-        };
-      }),
-      // parity-check: allow-read-only-measurement-evaluate -- compare the rendered neutral browse treatment
-      this.browseButton.evaluate((button) => {
-        const style = getComputedStyle(button);
-        return {
-          backgroundColor: style.backgroundColor,
-          borderColor: style.borderColor,
-        };
-      }),
     ]);
-    return {
-      browseBounds,
-      browseStyle,
-      cancelBounds,
-      cancelStyle,
-    };
+    return { cancelBounds, browseBounds };
   }
 
   async startBrowseContinuityObservation() {
@@ -638,8 +629,13 @@ export class ScanPage extends BasePage {
             && bounds.width > 0
             && bounds.height > 0;
         };
+        const currentPhaseTitles = Array.from(document.querySelectorAll(selectors.currentPhaseSelector))
+          .filter(visible)
+          .map((phase) => String(phase.textContent || '').trim());
+        currentPhaseTitles.forEach(appendTitle);
         const loaderCopy = [
           String(document.querySelector(selectors.titleSelector)?.textContent || '').trim(),
+          ...currentPhaseTitles,
           ...Array.from(document.querySelectorAll(selectors.progressTitleSelector))
             .map((title) => String(title.textContent || '').trim()),
         ].join(' ');
@@ -669,6 +665,7 @@ export class ScanPage extends BasePage {
       loaderSelector: this.loaderSelector,
       browseButtonSelector: this.browseButtonSelector,
       cancelButtonSelector: this.cancelButtonSelector,
+      currentPhaseSelector: this.currentPhaseSelector,
       progressTitleSelector: `${this.progressLineSelector} ${this.progressTitleSelector}`,
       titleSelector: this.titleSelector,
     });

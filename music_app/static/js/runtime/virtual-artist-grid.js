@@ -545,6 +545,7 @@ class VirtualArtistGrid {
         albumKey: String(anchorCardTrigger.getAttribute('data-album-key') || ''),
         albumName,
         albumYear,
+        triggerKind: anchorCardTrigger.matches?.('.album-card__artbox-trigger') ? 'artbox' : 'title',
         sectionOccurrenceKey: this.getRenderedSectionOccurrenceKey(anchorCardTrigger, this.containerEl),
         offsetTop: anchorRect.top - scrollRect.top,
       };
@@ -573,8 +574,11 @@ class VirtualArtistGrid {
       const albumTriggers = Array.from(
         this.containerEl.querySelectorAll('[data-open-tracklist="1"][data-album-key]'),
       );
+      const matchesCapturedTrigger = (element) => !anchor.triggerKind
+        || (element.matches?.('.album-card__artbox-trigger') ? 'artbox' : 'title') === anchor.triggerKind;
       const matchingAlbumTriggers = albumTriggers.filter((element) => (
         String(element.getAttribute('data-album-key') || '') === albumKey
+        && matchesCapturedTrigger(element)
       ));
       const anchorAlbumName = String(anchor.albumName || '');
       const anchorAlbumYear = String(anchor.albumYear ?? '');
@@ -604,6 +608,7 @@ class VirtualArtistGrid {
         : null;
       const renamedKeyTrigger = !anchorCardTrigger && anchorAlbumName
         ? albumTriggers.find((element) => {
+          if (!matchesCapturedTrigger(element)) return false;
           if (this.getRenderedSectionOccurrenceKey(element, this.containerEl) !== sectionOccurrenceKey) {
             return false;
           }
@@ -991,10 +996,12 @@ class VirtualArtistGrid {
         (width + this.columnGap) / (minimumSettledCardWidth + this.columnGap),
       )),
     );
-    this.columns = shouldFillSettledRow ? settledColumns : preservedColumns;
-    this.cardTrackWidth = shouldFillSettledRow || !preserveCardTrackWidth
-      ? (width - (this.columns - 1) * this.columnGap) / this.columns
-      : targetCardTrackWidth;
+    if (!options.preserveColumnGeometry) {
+      this.columns = shouldFillSettledRow ? settledColumns : preservedColumns;
+      this.cardTrackWidth = shouldFillSettledRow || !preserveCardTrackWidth
+        ? (width - (this.columns - 1) * this.columnGap) / this.columns
+        : targetCardTrackWidth;
+    }
     const displayMode = resolveGalleryRendererMode(state?.gallery?.mainState?.view || state?.view?.gallery_display_mode);
     const rowGeometryKey = `${displayMode}:${this.columns}:${this.cardTrackWidth}`;
     const estimatedRowHeight = displayMode === 'covers' ? this.cardTrackWidth : this.collapsedRowHeight;
@@ -1140,7 +1147,15 @@ class VirtualArtistGrid {
   }
 
   onArtistTreeSettled() {
+    const anchor = this.captureScrollAnchor();
     this.onResize({ preserveCardTrackWidth: true });
+    if (anchor && !this._resetScrollAfterMeasure) {
+      this.stabilizeScrollAfterMeasurement(anchor);
+      // Reflow can virtualize the old anchor. Mount its restored row before
+      // reconciling the exact trigger offset against the new card geometry.
+      this.render(true);
+      this.stabilizeScrollAfterMeasurement(anchor);
+    }
   }
 
   onResize(options = {}) {
@@ -1807,7 +1822,8 @@ class VirtualArtistGrid {
       });
     }
     this.lastKey = '';
-    this.recalculate();
+    // Height reconciliation must retain the layout that produced these measurements.
+    this.recalculate({ preserveColumnGeometry: true });
     const latestScroll = this.diagnostics.latestScroll;
     const measurementRenderRafOwner = (
       Number(latestScroll?.renderGeneration || 0) === Number(this._renderGeneration || 0)

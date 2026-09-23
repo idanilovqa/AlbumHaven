@@ -3121,10 +3121,10 @@ def _decoded_problem_reason_identity(reason_code: str) -> str:
 
 def _problem_reason_identity_code(reason: object) -> str:
     normalized_reason = str(reason or "").strip()
-    return _PROBLEM_REASON_IDENTITY_CODES.get(
-        normalized_reason,
-        _encoded_problem_reason_identity(normalized_reason),
-    )
+    code = _PROBLEM_REASON_IDENTITY_CODES.get(normalized_reason)
+    if code is not None:
+        return code
+    return _encoded_problem_reason_identity(normalized_reason)
 
 
 def _problem_identity_row_key(
@@ -3150,6 +3150,8 @@ def _problem_reason_is_ignored(
     scope: str,
     legacy_field: str | None = None,
 ) -> bool:
+    if not ignored_repair_keys:
+        return False
     if _problem_identity_row_key(path, reason, scope=scope) in ignored_repair_keys:
         return True
     return bool(
@@ -3577,7 +3579,9 @@ def _problematic_encoding_repair_preview(
     return result if include_preview_rows else {**result, "preview_rows": []}
 
 
-def _problematic_track_problem_rows(album: Mapping[str, object]) -> list[dict[str, object]]:
+def _problematic_track_problem_rows(
+    album: Mapping[str, object], *, include_repair_metadata: bool = True,
+) -> list[dict[str, object]]:
     rows: list[dict[str, object]] = []
     ignored_repair_keys = set(album.get("_ignored_repair_keys") or set())
     album_problem_identity = str(album.get("album_ref") or album.get("key") or "")
@@ -3675,12 +3679,11 @@ def _problematic_track_problem_rows(album: Mapping[str, object]) -> list[dict[st
                 add(_track_order_issue_reason(issue), "track_number")
         if not reasons and not include_complete_repair_scope:
             continue
-        rows.append(
-            {
-                "path": path,
-                "filename": Path(path).name,
-                "file_type": Path(path).suffix.lstrip(".").upper(),
-                "reasons": reasons,
+        file_path = Path(path)
+        row = {"path": path, "filename": file_path.name, "reasons": reasons}
+        if include_repair_metadata:
+            row.update({
+                "file_type": file_path.suffix.lstrip(".").upper(),
                 "ignorable_reasons": [
                     {
                         "reason": reason,
@@ -3694,8 +3697,8 @@ def _problematic_track_problem_rows(album: Mapping[str, object]) -> list[dict[st
                     }
                     for reason in reasons
                 ],
-            }
-        )
+            })
+        rows.append(row)
     if include_complete_repair_scope:
         return rows
     return sorted(rows, key=lambda row: str(row.get("filename") or "").casefold())
@@ -3738,7 +3741,7 @@ def _problematic_surviving_reasons(
     for row in (
         track_problem_rows
         if track_problem_rows is not None
-        else _problematic_track_problem_rows(album)
+        else _problematic_track_problem_rows(album, include_repair_metadata=False)
     ):
         for reason in row.get("reasons") or []:
             add(reason)

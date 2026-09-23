@@ -8,6 +8,142 @@ const { pathToFileURL } = require('node:url');
 
 const repoRoot = path.join(__dirname, '..', '..');
 
+test('Artist Tree folding waits for the shell transition to settle', async () => {
+  const { NavigationPanelActions } = await import(pathToFileURL(path.join(repoRoot, 'tests/e2e/actions/navigationPanelActions.js')).href);
+  let reads = 0;
+  let clicks = 0;
+  const actions = new NavigationPanelActions({
+    async readArtistTreeFoldState() {
+      reads += 1;
+      return { folded: reads > 1, transitioning: reads < 4 };
+    },
+    artistTreeFoldButton: { async click() { clicks += 1; } },
+  });
+  const result = await actions.setArtistTreeFolded(true);
+  assert.equal(clicks, 1);
+  assert.equal(result.transitioning, false);
+});
+
+test('cover toast entrance observation is cancelled when native search fails', async () => {
+  const { CoverLookupActions } = await import(pathToFileURL(path.join(repoRoot, 'tests/e2e/actions/coverLookupActions.js')).href);
+  const calls = [];
+  const action = new CoverLookupActions({
+    page: new EventEmitter(),
+    observeStartedToastEntrance: async () => ({
+      evaluate: async (callback) => callback({ cancel: () => calls.push('cancel') }),
+      dispose: async () => calls.push('dispose'),
+    }),
+  });
+  action.startSearch = async () => { throw new Error('Native click failed'); };
+  await assert.rejects(action.startSearchAndReadToastPlacement(), /Native click failed/);
+  assert.deepEqual(calls, ['cancel', 'dispose']);
+});
+
+test('notification hover evidence waits for finite owned transitions before reading styles', async () => {
+  const { CoverLookup } = await import(pathToFileURL(path.join(repoRoot, 'tests/e2e/poms/coverLookup.js')).href);
+  let finishTransition;
+  let styleReads = 0;
+  const finished = new Promise((resolve) => { finishTransition = resolve; });
+  const element = { getAnimations: () => [
+    { effect: { getComputedTiming: () => ({ endTime: 150 }) }, finished },
+    {
+      effect: { getComputedTiming: () => ({ endTime: Infinity }) },
+      get finished() { throw new Error('Must not await an infinite decorative animation'); },
+    },
+  ] };
+  const reading = CoverLookup.prototype.readTaskClearHoverStyle.call({
+    taskClearButtonByTitle: () => ({
+      evaluate: (callback) => require('node:vm').runInNewContext(`(${callback})`, {
+        getComputedStyle: () => { styleReads += 1; return { outline: 'solid', backgroundColor: 'red', cursor: 'pointer' }; },
+      })(element),
+    }),
+  }, 'Test album');
+  assert.equal(styleReads, 0);
+  finishTransition();
+  assert.deepEqual(JSON.parse(JSON.stringify(await reading)), { outline: 'solid', background: 'red', cursor: 'pointer' });
+  assert.equal(styleReads, 1);
+});
+
+test('cover toast entrance observer detects movement and owns bounded cleanup', async (t) => {
+  const { CoverLookup } = await import(pathToFileURL(path.join(repoRoot, 'tests/e2e/poms/coverLookup.js')).href);
+  const vm = require('node:vm');
+  for (const scenario of ['stable', 'translation', 'resize', 'already-settled', 'timeout', 'cancel']) {
+    await t.test(scenario, async () => {
+      const frames = new Map();
+      const timers = new Map();
+      let nextId = 0;
+      let settled = scenario === 'already-settled';
+      let progressVisible = false;
+      let rectangle = { x: 100, y: 50, width: 800, height: 700 };
+      const toast = {
+        querySelector: () => ({ textContent: 'Cover art lookup started.' }),
+        classList: { contains: () => settled },
+        getAnimations: () => settled ? [] : [{ playState: 'running' }],
+      };
+      const modal = {
+        querySelector: () => ({ getBoundingClientRect: () => ({ height: progressVisible ? 80 : 0 }) }),
+        getBoundingClientRect: () => ({ ...rectangle }),
+      };
+      const context = {
+        document: { querySelector: () => modal, querySelectorAll: () => [toast] },
+        getComputedStyle: () => ({ opacity: settled ? '1' : '0.5' }),
+        requestAnimationFrame: (callback) => { frames.set(++nextId, callback); return nextId; },
+        cancelAnimationFrame: (id) => frames.delete(id),
+        setTimeout: (callback) => { timers.set(++nextId, callback); return nextId; },
+        clearTimeout: (id) => timers.delete(id),
+      };
+      const measurement = await CoverLookup.prototype.observeStartedToastEntrance.call({
+        modalDialogSelector: '.dialog',
+        toastSelector: '.toast',
+        page: { evaluateHandle: (callback, args) => vm.runInNewContext(`(${callback})`, context)(args) },
+      }, { timeout: 100 });
+      const paint = () => {
+        const [id, callback] = frames.entries().next().value;
+        frames.delete(id);
+        callback();
+      };
+      paint();
+      assert.equal(frames.size, 1, 'no baseline until running progress is rendered');
+      if (scenario === 'timeout') {
+        [...timers.values()][0]();
+      } else if (scenario === 'cancel') {
+        measurement.cancel();
+      } else {
+        progressVisible = true;
+        paint();
+        if (scenario !== 'already-settled') {
+          if (scenario === 'translation') rectangle = { ...rectangle, x: 104, y: 48 };
+          if (scenario === 'resize') rectangle = { ...rectangle, height: 710, width: 802 };
+          paint();
+          // A transient movement must remain detectable after the rectangle recovers.
+          rectangle = { x: 100, y: 50, width: 800, height: 700 };
+          settled = true;
+          paint();
+          paint();
+        }
+      }
+      const result = await measurement.result;
+      if (scenario === 'already-settled') assert.match(result.error, /already settled/);
+      else if (scenario === 'timeout') assert.match(result.error, /Timed out/);
+      else if (scenario === 'cancel') assert.match(result.error, /cancelled/);
+      else {
+        assert.equal(result.baselineUnsettled, true);
+        assert.equal(result.sampledFrames, 4);
+        assert.deepEqual(JSON.parse(JSON.stringify(result.delta)), {
+          height: scenario === 'resize' ? 10 : 0,
+          width: scenario === 'resize' ? 2 : 0,
+          x: scenario === 'translation' ? 4 : 0,
+          y: scenario === 'translation' ? 2 : 0,
+        });
+      }
+      assert.equal(frames.size, 0);
+      assert.equal(timers.size, 0);
+      measurement.cancel();
+      assert.equal(frames.size, 0, 'cleanup remains safe after completion');
+    });
+  }
+});
+
 function read(relativePath) {
   return fs.readFileSync(path.join(repoRoot, relativePath), 'utf8').replace(/\r\n?/gu, '\n');
 }
@@ -448,6 +584,123 @@ test('stable search clearing establishes user focus before observing network act
   );
 });
 
+test('Scan Page phase observation reads visible current phase cards, not static future labels', async () => {
+  const vm = require('node:vm');
+  const { ScanPage } = await import(pathToFileURL(path.join(repoRoot, 'tests/e2e/poms/scanPage.js')).href);
+  const { ScanPageActions } = await import(pathToFileURL(path.join(repoRoot, 'tests/e2e/actions/scanPageActions.js')).href);
+  class Element {
+    constructor(textContent = '') { this.textContent = textContent; this.hidden = false; }
+    getBoundingClientRect() { return { width: this.hidden ? 0 : 100, height: this.hidden ? 0 : 30 }; }
+  }
+  const loader = new Element();
+  const title = new Element('Scanning the library');
+  const cancel = new Element();
+  const browse = new Element();
+  const stages = ['Discover files', 'Read tags & metadata', 'Update cover art', 'Refresh artist relations'].map((label) => new Element(label));
+  let currentStage = stages[0];
+  let inspect;
+  let disconnected = false;
+  const scanPage = Object.create(ScanPage.prototype);
+  scanPage.page = {
+    async evaluateHandle(callback, selectors) {
+      const observation = vm.runInNewContext(`(${callback.toString()})(selectors)`, {
+        selectors, HTMLElement: Element,
+        getComputedStyle: () => ({ display: 'block', visibility: 'visible' }),
+        document: {
+          documentElement: {},
+          querySelector: (selector) => ({
+            [scanPage.loaderSelector]: loader, [scanPage.titleSelector]: title,
+            [scanPage.cancelButtonSelector]: cancel, [scanPage.browseButtonSelector]: browse,
+          }[selector] || null),
+          querySelectorAll: (selector) => selector === '#library-loader-phase-guide [data-scan-stage].is-current'
+            ? [currentStage] : [],
+        },
+        MutationObserver: class {
+          constructor(callback) { inspect = callback; }
+          observe() {}
+          disconnect() { disconnected = true; }
+        },
+      });
+      return { evaluate: async (read) => read(observation), dispose: async () => {} };
+    },
+  };
+  const observation = await scanPage.startPhaseObservation();
+  for (const stage of stages.slice(1)) { currentStage = stage; inspect(); }
+  title.textContent = 'Your local library is ready.';
+  currentStage = new Element('Hidden future phase');
+  currentStage.hidden = true;
+  inspect();
+  const result = await observation.finish();
+  assert.ok(disconnected);
+  for (const stage of stages) assert.ok(result.titles.includes(stage.textContent), `Missing active phase: ${stage.textContent}`);
+  assert.ok(!result.titles.includes('Hidden future phase'));
+  assert.ok(result.relationActionSamples.length > 0);
+  const actions = new ScanPageActions(scanPage);
+  actions.expectPhaseObservation(result);
+  assert.throws(() => actions.expectPhaseObservation({ ...result, relationActionSamples: [{ cancelVisible: false, browseVisible: true }] }));
+  let screenshots = 0;
+  scanPage.page.screenshot = async () => { screenshots += 1; };
+  scanPage.waitForPageCondition = async (predicate, options, selectors) => {
+    assert.equal(options.timeout, 120000);
+    assert.equal(vm.runInNewContext(`(${predicate.toString()})(selectors)`, {
+      selectors, HTMLElement: Element,
+      getComputedStyle: () => ({ display: 'block', visibility: 'visible' }),
+      document: {
+        querySelector: (selector) => ({
+          [scanPage.titleSelector]: new Element('Scanning the library'),
+          [scanPage.cancelButtonSelector]: cancel, [scanPage.browseButtonSelector]: browse,
+        }[selector] || null),
+        querySelectorAll: (selector) => selector === '#library-loader-phase-guide [data-scan-stage].is-current'
+          ? [stages[3]] : [],
+      },
+    }), true);
+  };
+  await actions.captureRelationshipRefreshActions('unused-unit-test-path');
+  assert.equal(screenshots, 1);
+  stages[3].hidden = true;
+  await assert.rejects(() => actions.captureRelationshipRefreshActions('unused-unit-test-path'));
+  assert.equal(screenshots, 1, 'hidden relation labels cannot satisfy a screenshot prerequisite');
+});
+
+test('dedicated scan action acceptance follows the current secondary Browse and quiet Cancel GalleryBar', async () => {
+  const source = read('tests/e2e/actions/scanPageActions.js').replace(/^import .*;\r?$/gm, '').replace('export class ', 'class ');
+  const Actions = require('node:vm').runInNewContext(`${source}\nScanPageActions`, {
+    URL,
+    expect: (value) => ({
+      toBeVisible: () => assert.equal(value.visible, true),
+      toBeHidden: () => assert.equal(value.visible, false),
+      toBe: (expected) => assert.equal(value, expected),
+      toHaveText: (text) => assert.equal(value.text, text),
+      toHaveClass: (pattern) => assert.match(value.className, pattern),
+      toBeLessThanOrEqual: (right) => assert.ok(value <= right, `${value} exceeds ${right}`),
+      not: { toBeNull: () => assert.notEqual(value, null) },
+    }),
+  });
+  const page = {
+    actions: { visible: true },
+    browseButton: { visible: true, text: 'Browse Library', className: 'ui-button ui-button--secondary' },
+    cancelButton: { visible: true, text: 'Cancel Scan', className: 'ui-button ui-button--quiet' },
+    readActionPresentation: async () => ({ browseBounds: { x: 100, width: 100 }, cancelBounds: { x: 210, width: 90 } }),
+  };
+  const actions = new Actions(page);
+  await actions.expectDedicatedScanActions('Cancel Scan');
+  page.cancelButton.text = 'Cancel Full Rescan';
+  await actions.expectDedicatedScanActions('Cancel Full Rescan');
+  page.cancelButton.className = 'ui-button ui-button--secondary';
+  await assert.rejects(() => actions.expectDedicatedScanActions('Cancel Full Rescan'));
+  let observeRequest;
+  const request = { method: () => 'POST', url: () => 'http://127.0.0.1/cancel-refresh-api' };
+  const response = { request: () => request, url: request.url, ok: () => true, json: async () => ({ ok: true, cancelled: true }) };
+  page.page = {
+    on: (event, listener) => { assert.equal(event, 'request'); observeRequest = listener; },
+    off: (event, listener) => { assert.equal(event, 'request'); assert.equal(listener, observeRequest); },
+    waitForResponse: async (predicate) => { assert.ok(predicate(response)); return response; },
+  };
+  page.cancelButton.click = async () => { observeRequest(request); page.cancelButton.visible = false; };
+  actions.waitForPhaseTitle = async (title) => assert.equal(title, 'Your local library is ready.');
+  await actions.cancelActiveScan('Cancel Full Rescan');
+});
+
 test('Scan Page exit readiness checks every hidden control in one browser condition', () => {
   const actions = read('tests/e2e/actions/scanPageActions.js');
   const method = actions.match(
@@ -856,7 +1109,7 @@ test('cover lookup and loop journeys select exact seeded albums before feature a
   assert.match(coverLookupFixtureData, /notificationActioned[\s\S]*notificationFailed[\s\S]*cancelClear[\s\S]*notificationActive/);
   assert.match(
     coverLookup,
-    /waitForTaskStatus\(actionedTaskTitle, 'Completed'\)[\s\S]*waitForTaskStatus\(noResultTaskTitle, 'Completed — no result'\)[\s\S]*waitForTaskStatus\(failedTaskTitle, 'Failed'\)[\s\S]*clearFinishedTasksAndPreserveActive\([\s\S]*\[actionedTaskTitle, noResultTaskTitle, failedTaskTitle\],[\s\S]*activeTaskTitle[\s\S]*reloadAndOpenDrawer\(\)[\s\S]*waitForTaskActive\(activeTaskTitle\)[\s\S]*expectTaskHiddenImmediately\(actionedTaskTitle\)[\s\S]*expectTaskHiddenImmediately\(noResultTaskTitle\)[\s\S]*expectTaskHiddenImmediately\(failedTaskTitle\)/,
+    /waitForTaskStatus\(actionedTaskTitle, \/\^\(\?:\\d\+ \)\?covers found\$\/u\)[\s\S]*waitForTaskStatus\(noResultTaskTitle, 'No covers found'\)[\s\S]*waitForTaskStatus\(failedTaskTitle, 'Lookup failed'\)[\s\S]*clearFinishedTasksAndPreserveActive\([\s\S]*\[actionedTaskTitle, noResultTaskTitle, failedTaskTitle\],[\s\S]*activeTaskTitle[\s\S]*reloadAndOpenDrawer\(\)[\s\S]*waitForTaskActive\(activeTaskTitle\)[\s\S]*expectTaskHiddenImmediately\(actionedTaskTitle\)[\s\S]*expectTaskHiddenImmediately\(noResultTaskTitle\)[\s\S]*expectTaskHiddenImmediately\(failedTaskTitle\)/,
   );
   assert.match(
     coverLookupActions,
@@ -925,7 +1178,7 @@ test('FTC-COVERS-007 alert-placement scenario cleans its completed lookup state'
 
   assert.match(
     scenario,
-    /let taskTitle = '';[\s\S]*taskTitle = await coverLookupActions\.readModalSubtitle\(\);[\s\S]*expect\(taskTitle\)\.not\.toEqual\(''\);[\s\S]*startSearchAndReadToastPlacement\(\)[\s\S]*waitForTaskStatus\(taskTitle, 'Completed'\)[\s\S]*clearTaskAndExpectImmediateRemoval\(taskTitle\)[\s\S]*waitForDrawerEmpty\(\)[\s\S]*setProviderFixtureMode\('normal'\)/u,
+    /let taskTitle = '';[\s\S]*selectAlbumDetailsByIdentity\(NOTIFICATION_ACTIONED_TARGET\)[\s\S]*taskTitle = NOTIFICATION_ACTIONED_TARGET\.album;[\s\S]*expect\(taskTitle\)\.not\.toEqual\(''\);[\s\S]*startSearchAndReadToastPlacement\(\)[\s\S]*waitForTaskStatus\(taskTitle, \/\^\[1-9\]\\d\* covers\? found\$\/\)[\s\S]*clearTaskAndExpectImmediateRemoval\(taskTitle\)[\s\S]*waitForDrawerEmpty\(\)[\s\S]*setProviderFixtureMode\('normal'\)/u,
   );
 });
 
@@ -4402,7 +4655,11 @@ test('cover notification text selection retries only the atomic connected-node g
 
   assert.match(selectionAction, /expect\.poll\(async \(\) =>/);
   assert.match(selectionAction, /if \(!element\.isConnected\) return \[\]/);
-  assert.match(selectionAction, /range\.selectNodeContents\(element\)/);
+  assert.match(selectionAction, /createTreeWalker\(element, NodeFilter\.SHOW_TEXT\)/);
+  assert.match(selectionAction, /firstCharacterRange\.setStart\(textNode, firstTextStart\)/);
+  assert.match(selectionAction, /firstCharacterRange\.getBoundingClientRect\(\)/);
+  assert.match(selectionAction, /return \[firstCharacterRect, lastCharacterRect\]/);
+  assert.doesNotMatch(selectionAction, /selectNodeContents\(element\)/);
   assert.match(selectionAction, /page\.mouse\.down\(\)/);
   assert.match(selectionAction, /page\.mouse\.up\(\)/);
   assert.doesNotMatch(selectionAction, /element\.click\(|dispatchEvent|selection\.addRange/);

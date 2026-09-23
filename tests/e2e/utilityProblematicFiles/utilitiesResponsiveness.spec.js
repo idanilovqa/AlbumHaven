@@ -11,6 +11,7 @@ import {
   expectPostgresLibraryBrowseTelemetry,
   measureActionTime,
   measureProblematicFilesSettingsOpenWithNetworkEvidence,
+  readCompletedResponseDurationMs,
   measureUtilityTabSwitch,
   summarizeProblematicFilesDiagnostics,
   UTILITY_PROBLEMATIC_FILES_LOCAL_BENCHMARK,
@@ -37,17 +38,23 @@ test.describe(`${PROBLEMATIC_CASE_ID} utility-problematic-files responsiveness`,
   }) => {
     requirePostgresRuntimeEnv('the Problematic Files benchmark');
 
+    await galleryActions.goto();
+
     const {
       coldProblematicApiMs,
       problematicResponseBytes,
-    } = await stepLogger.step('Measure the cold Problematic Files API response before app navigation', async () => {
-      const coldRequestStartedAt = performance.now();
-      const coldResponse = await page.goto(PROBLEMATIC_FILES_PATHNAME, {
-        waitUntil: 'commit',
-      });
-      expect(coldResponse, 'Expected the cold Problematic Files navigation to return a response.').toBeTruthy();
+    } = await stepLogger.step('Measure the cold native Problematic Files API response', async () => {
+      const networkEvidence = await measureProblematicFilesSettingsOpenWithNetworkEvidence(
+        page,
+        settingsModalAppBarActions,
+        utilityProblematicFilesActions,
+        { summaryPathname: PROBLEMATIC_FILES_PATHNAME, detailPathname: PROBLEMATIC_FILE_DETAIL_PATHNAME },
+      );
+      const coldResponse = networkEvidence.summaryResponse;
+      expect(coldResponse.request().resourceType()).toBe('fetch');
+      expect(coldResponse.request().method()).toBe('GET');
+      const requestDurationMs = await readCompletedResponseDurationMs(coldResponse);
       const coldResponseBody = await coldResponse.text();
-      const requestDurationMs = performance.now() - coldRequestStartedAt;
       const responseBytes = new TextEncoder().encode(coldResponseBody).byteLength;
 
       expect(
@@ -77,10 +84,11 @@ test.describe(`${PROBLEMATIC_CASE_ID} utility-problematic-files responsiveness`,
 
       await utilityProblematicFilesLocalReport.recordTimingCheckpoint({
         key: 'problematic-files-cold-api',
-        label: 'Cold Problematic Files API response ready before app navigation',
+        label: 'Cold native Problematic Files API response fully received',
         timingMs: requestDurationMs,
         details: {
-          phase: 'cold_problematic_files_api',
+          phase: 'cold_problematic_files_native_fetch',
+          measurement: 'browser-request-start-to-response-end',
           responseBytes,
         },
       });
@@ -95,6 +103,8 @@ test.describe(`${PROBLEMATIC_CASE_ID} utility-problematic-files responsiveness`,
       };
     });
 
+    // Reset frontend state after the cold fetch; the following first open retains
+    // the historical warm-server contract without reusing the loaded UI data.
     await galleryActions.goto();
 
     let problematicFilesPayload = null;

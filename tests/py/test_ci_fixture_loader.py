@@ -689,9 +689,17 @@ def _synthetic_v102_problematic_files_assertion() -> dict[str, object]:
         }
         for index in range(1, 11)
     )
+    albums.extend(
+        {
+            "artist": f"Utility Fixture Artist {index % 40:02d}",
+            "album": f"Utility Fixture Album {index:03d}",
+            "problemReasons": ["Missing year"] + (["Missing cover art"] if index < 65 else []),
+        }
+        for index in range(688)
+    )
     return {
         "problematicItemCount": 706,
-        "candidateTrackFileCount": 125,
+        "candidateTrackFileCount": 7200,
         "expectedProblemTypes": [
             "Encoding problem",
             "Incomplete track order",
@@ -914,6 +922,26 @@ def test_loader_accepts_top_level_dedicated_problematic_files_contract() -> None
     assert contract == _synthetic_v102_problematic_files_assertion()
 
 
+@pytest.mark.parametrize("defect", ["named-only", "candidate-count", "unknown-reason", "missing-cover-count"])
+def test_loader_rejects_inconsistent_full_problematic_inventory(defect: str) -> None:
+    loader = _load_fixture_loader_module()
+    assertion = _synthetic_v102_problematic_files_assertion()
+    if defect == "named-only":
+        assertion["expectedProblematicAlbums"] = assertion["expectedProblematicAlbums"][:18]
+    elif defect == "candidate-count":
+        assertion["candidateTrackFileCount"] = 125
+    elif defect == "unknown-reason":
+        assertion["expectedProblematicAlbums"][-1]["problemReasons"] = ["Unknown problem"]
+    else:
+        assertion["expectedProblematicAlbums"][-1]["problemReasons"].append("Missing cover art")
+    with pytest.raises(ValueError, match="problematic-files-filtering"):
+        loader._problematic_files_filtering_contract(
+            UTILITY_PROBLEMATIC_PROFILE,
+            UTILITY_PROBLEMATIC_COUNTS,
+            {"problematic-files-filtering": assertion},
+        )
+
+
 @pytest.mark.parametrize(
     "mutation",
     [
@@ -983,8 +1011,9 @@ def test_loader_staged_problematic_files_validation_covers_required_row_shapes()
     assert "Synthetic Problem Control Artist" in serialized_parameters
     assert "Missing Cover Control 10" in serialized_parameters
     assert "Incomplete track order: Disc 2 missing 1, 2, 3" in serialized_parameters
-    for expected in (40, 706, 7200, 627, 125, 706, 14):
-        assert str(expected) in serialized_parameters
+    assert "album_count<>10" not in normalized_sql
+    assert "album_count not between" in normalized_sql
+    assert statements[0][1][1:13] == (40, 706, 7200, 7200, 627, 7200, 706, 7200, 706, 79, 17, 18)
     assertion = _synthetic_v102_problematic_files_assertion()
     for album in assertion["expectedProblematicAlbums"]:
         assert album["artist"] in serialized_parameters
@@ -1090,8 +1119,9 @@ def test_loader_projected_problematic_files_validation_uses_normal_profile_rows(
         [parameters for _statement, parameters in statements], ensure_ascii=False
     )
     assert UTILITY_PROBLEMATIC_PROFILE in serialized_parameters
-    for expected in (40, 706, 7200, 627, 125, 706, 14):
-        assert str(expected) in serialized_parameters
+    assert "album_count<>10" not in normalized_sql
+    assert "album_count not between" in normalized_sql
+    assert statements[0][1][2:14] == (40, 706, 7200, 7200, 627, 7200, 706, 7200, 706, 79, 17, 18)
     for album in _synthetic_v102_problematic_files_assertion()[
         "expectedProblematicAlbums"
     ]:

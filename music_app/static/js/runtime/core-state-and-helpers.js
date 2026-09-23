@@ -749,6 +749,14 @@ function renderLibraryLoader(data = {}, options = {}) {
       <span class="library-loader-progress-detail">${escapeHtml(line.detail)}</span>
     </div>
   `).join('');
+  if (scanPageVisible && !data.scan_in_progress && !coverBusy && !relBusy
+    && data.scan_outcome === 'failed' && String(data.last_error || '').trim()) {
+    progress.innerHTML += buildOnPageAlertHtml({
+      severity: 'error',
+      title: 'Last scan error',
+      message: data.last_error,
+    });
+  }
 }
 
 function renderRelated() {

@@ -438,10 +438,11 @@ test('resolveRequestedTargets defaults to the approved performance suite when no
       'scan-cached',
       'scan-add-album',
       'scan-metadata',
-      'scan-page',
+    'scan-page',
+    'scan-health', 'scan-error',
     ]
   );
-  assert.equal(targets.length, 19);
+  assert.equal(targets.length, 21);
 });
 test('resolveRequestedTargets rejects an unknown performance group', () => {
   assert.throws(() => _private.resolveRequestedTargets({
@@ -466,9 +467,9 @@ test('resolveRequestedTargets can limit the run to the scan group', () => {
 
   assert.deepEqual(
     targets.map((target) => target.aliasNames[0]),
-    ['scan-cold', 'scan-cached', 'scan-add-album', 'scan-metadata', 'scan-page']
+    ['scan-cold', 'scan-cached', 'scan-add-album', 'scan-metadata', 'scan-page', 'scan-health', 'scan-error']
   );
-  assert.equal(targets.length, 5);
+  assert.equal(targets.length, 7);
 });
 
 test('resolveRequestedTargets rejects the removed scanner-index-cache group alias', () => {
@@ -2271,6 +2272,16 @@ test('buildRunnerArgs maps scan-page to both isolated Scan Page contracts', () =
   });
 });
 
+test('scan-health selects only the natural unavailable-root contract without measurement budgets', () => {
+  const target = performanceRunner.PERFORMANCE_TARGETS['scan-health'];
+  assert.equal(target.fixtureProfile, 'scan-library');
+  assert.equal(target.measurementExpected, false);
+  assert.equal(target.env.ALBUM_HAVEN_SCAN_PERFORMANCE_SCENARIO, 'health-warning');
+  assert.equal(target.env.ALBUM_HAVEN_COVER_PROVIDER_GROUPS, 'offline');
+  assert.deepEqual(target.casePatterns, ['FTC-OPS-003F']);
+  assert.equal(target.grep, 'FTC-OPS-003F');
+});
+
 test('coverage-only targets accept a completed Playwright JSON report as reporter finalization', () => {
   assert.equal(_private.isFinalizedPlaywrightJsonReport({
     suites: [{}],
@@ -2673,7 +2684,7 @@ test('runSequentialPerformanceSuite executes the default approved performance ta
   });
 
   assert.equal(exitCode, 0);
-  assert.equal(calls.length, 19);
+  assert.equal(calls.length, 21);
   assert.equal(calls.every((call) => call.options.windowsHide === true), true);
   assert.equal(
     calls.every((call) => call.options.maxBuffer >= 64 * 1024 * 1024),
@@ -2685,7 +2696,7 @@ test('runSequentialPerformanceSuite executes the default approved performance ta
   );
   assert.deepEqual(
     calls.map((call) => call.args[1]),
-    new Array(19).fill('test'),
+    new Array(21).fill('test'),
   );
   assert.equal(calls[3].args.includes('--real-app-port=5001'), true);
   assert.equal(calls[4].args.includes('--real-app-port=5011'), true);
@@ -2718,15 +2729,18 @@ test('runSequentialPerformanceSuite executes the default approved performance ta
   assert.equal(calls[16].options.env.ALBUM_HAVEN_SCAN_PERFORMANCE_SCENARIO, 'add-album');
   assert.equal(calls[17].options.env.ALBUM_HAVEN_SCAN_PERFORMANCE_SCENARIO, 'metadata');
   assert.equal(calls[18].options.env.ALBUM_HAVEN_SCAN_PERFORMANCE_SCENARIO, 'add-album');
-  const scanSamplePaths = calls.slice(14, 19).map(
+  const scanSamplePaths = calls.slice(14, 21).map(
     (call) => call.options.env.ALBUM_HAVEN_SCAN_STATUS_SAMPLES_PATH,
   );
-  assert.equal(new Set(scanSamplePaths).size, 5);
+  assert.equal(new Set(scanSamplePaths).size, 7);
   assert.match(scanSamplePaths[0], /scan-cold-port-4174-attempt-1-[0-9a-f-]{36}\.jsonl$/);
   assert.match(scanSamplePaths[1], /scan-cached-port-4175-attempt-1-[0-9a-f-]{36}\.jsonl$/);
   assert.match(scanSamplePaths[2], /scan-add-album-port-4176-attempt-1-[0-9a-f-]{36}\.jsonl$/);
   assert.match(scanSamplePaths[3], /scan-metadata-port-4177-attempt-1-[0-9a-f-]{36}\.jsonl$/);
   assert.match(scanSamplePaths[4], /scan-page-port-4178-attempt-1-[0-9a-f-]{36}\.jsonl$/);
+  assert.match(scanSamplePaths[6], /scan-error-port-4180-attempt-1-[0-9a-f-]{36}\.jsonl$/);
+  assert.equal(calls[20].options.env.ALBUM_HAVEN_SCAN_PERFORMANCE_SCENARIO, 'cached');
+  assert.equal(calls[20].args.includes('--grep=FTC-OPS-003G'), true);
   for (const samplesPath of scanSamplePaths) assert.equal(fs.existsSync(samplesPath), false);
   for (const call of calls) {
     assert.equal(call.args.some((arg) => String(arg).startsWith('--run-timeout-ms=')), false);
@@ -2927,7 +2941,7 @@ test('runSequentialPerformanceSuite keeps fixed per-invocation timeouts even aft
   });
 
   assert.equal(exitCode, 0);
-  assert.equal(calls.length, 19);
+  assert.equal(calls.length, 21);
   for (const call of calls) {
     assert.equal(call.args.some((arg) => String(arg).startsWith('--run-timeout-ms=')), false);
   }

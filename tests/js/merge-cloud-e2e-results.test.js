@@ -126,8 +126,8 @@ function performanceArtifact(row, index) {
       fingerprint: fingerprint(),
       ...(coverageOnly ? {
         measurementAvailable: false, coverageOnly: true, attemptCount: 1,
-        attempts: [], series: [], testCount: 2,
-        cases: ['FTC-OPS-003C', 'FTC-OPS-003E'].map((testId, caseIndex) => ({
+        attempts: [], series: [], testCount: row.target === 'scan-page' ? 2 : 1,
+        cases: (row.target === 'scan-error' ? ['FTC-OPS-003G'] : row.target === 'scan-health' ? ['FTC-OPS-003F'] : ['FTC-OPS-003C', 'FTC-OPS-003E']).map((testId, caseIndex) => ({
           testId, name: `${testId} scan-page coverage`, status: 'passed', durationMs: 100 + caseIndex,
           steps: [{ title: 'Exercise Scan Page contract', status: 'passed', durationMs: 20 }],
           stackSummary: '', finalScreenshot: null,
@@ -266,7 +266,7 @@ test('cloud E2E merger module exists', () => {
   assert.equal(mergerExists, true, 'Missing scripts/ci/merge-cloud-e2e-results.cjs');
 });
 
-mergerTest('expected child inventory is exactly four functional shards and 19 performance targets', () => {
+mergerTest('expected child inventory is exactly four functional shards and 21 performance targets', () => {
   const { buildExpectedCloudE2EInventory } = require(mergerPath);
   const expected = exactInventory();
   const actual = buildExpectedCloudE2EInventory({
@@ -276,19 +276,19 @@ mergerTest('expected child inventory is exactly four functional shards and 19 pe
   });
 
   assert.equal(actual.functional.length, 4);
-  assert.equal(actual.performance.length, 19);
+  assert.equal(actual.performance.length, 21);
   assert.deepEqual(actual, expected);
   assert.equal(new Set([
     ...actual.functional.map((row) => row.childId),
     ...actual.performance.map((row) => row.childId),
-  ]).size, 23);
-  assert.deepEqual(actual.performance.filter((row) => !row.measurementExpected).map((row) => row.target), ['scan-page']);
+  ]).size, 25);
+  assert.deepEqual(actual.performance.filter((row) => !row.measurementExpected).map((row) => row.target), ['scan-page', 'scan-health', 'scan-error']);
 
   const driftedContract = clone(performanceContract);
   driftedContract.targets.find((target) => target.name === 'idle-memory').measurementExpected = false;
   assert.throws(() => buildExpectedCloudE2EInventory({
     functionalContract, performanceContract: driftedContract, runAttempt: RUN_ATTEMPT,
-  }), /only scan-page as coverage-only/i);
+  }), /only scan-page, scan-health, and scan-error as coverage-only/i);
 });
 
 mergerTest('Playwright JSON materialization keeps steps and only the final failed PNG', () => {
@@ -861,7 +861,7 @@ mergerTest('public merger output drops raw reporter internals and validates as a
   assert.equal(retainedHistory.length, 18);
   assert.equal(retainedHistory.every((entry) => entry.attempts[0].attempt === 1), true);
   assert.deepEqual(validateCloudTestReport(report), []);
-  assert.equal(report.verificationEvidence.children.length, 23);
+  assert.equal(report.verificationEvidence.children.length, 25);
   assert.equal(report.verificationEvidence.children.every((child) => (
     child.kind === 'functional' || child.kind === 'performance'
   )), true);
@@ -878,12 +878,12 @@ mergerTest('authenticated inventory retains structured E2E results for 14 days a
   const report = mergeCloudE2EResults(sampleInput());
   const inventory = report.authenticatedInventory;
 
-  assert.equal(inventory.structuredReports.length, 23);
+  assert.equal(inventory.structuredReports.length, 25);
   assert.equal(inventory.debugArtifacts.length, 2);
   assert.equal(inventory.structuredReports.every((entry) => entry.retentionDays === 14), true);
   assert.equal(inventory.debugArtifacts.every((entry) => entry.retentionDays === 7), true);
   assert.equal(new Set([
     ...inventory.structuredReports.map((entry) => entry.name),
     ...inventory.debugArtifacts.map((entry) => entry.name),
-  ]).size, 25);
+  ]).size, 27);
 });

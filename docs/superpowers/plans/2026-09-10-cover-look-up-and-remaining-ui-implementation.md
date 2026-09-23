@@ -12,6 +12,8 @@
 
 ## Approval and precedence
 
+September 23, 2026 completion precedence: the owner accepts the current implementation, including departures from the original designs. Historical v001 hash mismatches are not a completion gate. Mobile and TV must remain visibly disabled and unusable from the Appearance UI for now; retain their existing Follow/Customize client/API behavior, database columns and saved values. Do not implement the earlier editable Mobile/TV itinerary. The later completion request authorizes push, a new PR and CI iteration after verification and three full local review passes, but not merge or publication. Tasks 2–10 below now distinguish accepted, verified implementation from outstanding bundled verification. A checked implementation step is not a passing full suite, a completed task family, or permission to publish.
+
 The owner approved all mocks and requested this plan on September 10. The subsequent correction explicitly limits the full-page mock: **preserve the overall look of the real main app page despite implementing the compact bar**. Its approval covers fold/reflow behavior only, not invented app chrome, card presentation, spacing or omission of the player. Capture the actual app before implementation and compare against that baseline.
 
 Final explicit review corrections take precedence over mock simplifications and earlier proposals. Visual approval is not production acceptance or approval of unspecified backend permissions. The three button finishes demonstrate theme-dependent treatments, not three new product themes or a mandate to hardcode one palette. Review controls, placeholder albums, simulation selectors and toast-only actions do not ship.
@@ -43,9 +45,9 @@ Freeze v001 approved visuals. Further material visual revisions require a new ve
 
 ## Technical decisions and required gates
 
-### Appearance contract (proposal for technical approval)
+### Appearance contract (current UI restriction and retained compatibility)
 
-Web / Desktop is the base; Mobile and TV have Follow Web / Desktop or Customize on every Appearance tab. Follow defaults for new device sections, hides details and dynamically inherits future saved base changes. Customize exposes the unchanged editor and overrides only that device/section. Switching sections/profiles preserves staged drafts. Save/Cancel retain the current aggregate workflow.
+Web / Desktop remains the editable base. Mobile and TV selectors are visible but disabled, and the UI exposes no Follow/Customize mode controls. Save/Cancel retain the current aggregate Web/Desktop workflow. The existing nonbase Follow/Customize resolver, client/API behavior, dormant custom values and database representation remain compatibility state; this delivery does not make those profiles editable or remove them.
 
 Proposed profile keys: `web_desktop`, `mobile`, `tv`. Section keys: `main`, `player`, `interaction`, `alerts`, `album`. Each nonbase section has `mode: follow | customize` and validated existing-section values. Base cannot follow another profile. Action outlines belongs to interaction. Proposed dormant-value rule: retain custom values while following; first Customize copies effective base values, later Customize restores the draft/custom values. Confirm this rule and schema before implementation.
 
@@ -97,7 +99,7 @@ Each unit is independently reviewable and publishable only after its own focused
 | Album Details, Cover Look Up and notifications | Shared album/art/card/header/footer/lightbox composition with preserved jobs, persistence and authorization; ART01–ART04, COV01–COV13, NTF01–NTF06, DLG01–DLG05 | Shared controls/menus and existing cover services | Tasks 5–6 focused JS/Python checks and manual lookup/failure review |
 | Edit Tags | Existing layout and fields gain shared controls plus stable selection/reorder behavior; TAG01–TAG09 | Shared controls/menus and current tag-save contract | Task 7 focused tests and owner data-safe manual script |
 | Library Status Page | A Library Status Page `GalleryBar` instance owns Back/title/status/actions above a `FullPage` scan body; SCN01–SCN11 | Shared controls/menus and current scan state/actions | Task 8 focused state/geometry tests and active-scan manual review |
-| Appearance profiles | Atomic per-account `web_desktop` base plus per-section Mobile/TV Follow/Customize and retained overrides; AP01–AP11 | Shared outline plumbing; allocate migration from current head | Task 9 JS/Python/Postgres checks and cross-session manual review |
+| Appearance profiles | Atomic per-account `web_desktop` editing with visibly disabled Mobile/TV selectors and retained nonbase compatibility data/behavior; applicable AP01–AP11 | Shared outline plumbing; preserve current schema and saved preferences | Task 9 JS/Python/Postgres checks and Web/Desktop cross-session verification; no editable Mobile/TV UI |
 | Remaining consumers and audit | Registered families reach remaining Settings/main/admin/login consumers without changing approved layouts; GOV01–GOV05 | Prior units | Task 10 two-pass local review, focused regression, port-5001 acceptance, then approved functional E2E and full CI |
 
 ### Task 1 — Approval, ownership and technical checkpoint
@@ -105,7 +107,7 @@ Each unit is independently reviewable and publishable only after its own focused
 **Files:** this plan/case matrix, mock approval metadata; private component/permission/case registries and migration tracker.
 **Cases:** GOV01–GOV05.
 
-- [x] Verify approved asset hashes. Read complete applicable Settings/convergence/component plans, not only summaries.
+- [x] Reconcile design approval and applicable Settings/convergence/component plans. Twelve historical v001 artifacts do not match their recorded hashes; original bytes were unavailable. The owner's September 23 approval of the current implementation supersedes comparison/recovery as a completion gate. Do not rewrite the historical manifest or claim the hashes matched.
 - [x] Capture the real main page, expanded tree, Appearance and Edit Tags baseline. Record viewport/theme. Explicitly exclude the full-page mock's invented app chrome/cards from adoption.
 - [x] Inventory every remaining family as reuse, extension or migration with exact owner, artifact and tests. Reconcile completed checklist items; no duplicated implementation.
 - [x] Present the concrete technical gate above, including renderer ownership. If React, approve the build/mount adapter and migrate complete touched boundaries while preserving persistent shell/player nodes. Do not silently reuse a Settings-only exception.
@@ -119,10 +121,10 @@ Each unit is independently reviewable and publishable only after its own focused
 **Cases:** UI01–UI12, AP07.
 
 - [ ] Add resolver/style cases for non-green player themes, neutral dropdowns, red destructive/error controls, outline on/off and playback exclusions. Include computed browser styles, not only CSS string assertions.
-- [ ] Implement semantic automatic hover from effective player background plus neutrals. Approved dark examples start near 14% tint for fill and 22% for edge; do not freeze hex colors or override explicit user customizations accidentally.
+- [x] Implement semantic automatic hover from effective player background plus neutrals. Approved dark examples start near 14% tint for fill and 22% for edge; do not freeze hex colors or override explicit user customizations accidentally.
 - [ ] Remove superseded broad hardcoded hover rules. Apply shared behavior to all consumers, including Renumber, Browse Library, notifications and gallery/header actions. Existing ID styles cannot hide hover.
-- [ ] Extend ActionButton with effective outlined/bare presentation while retaining hit targets, disabled state and keyboard focus. Wire saved preference in Task 9; playback is excluded.
-- [ ] Adopt subdued checkbox/radio selected states; noneditable caret policy; correct search/filter/clear ordering and centered SVG chevron.
+- [x] Extend ActionButton with effective outlined/bare presentation while retaining hit targets, disabled state and keyboard focus. Wire saved preference in Task 9; playback is excluded.
+- [x] Adopt subdued checkbox/radio selected states; noneditable caret policy; correct search/filter/clear ordering and centered SVG chevron.
 - [ ] Run `node --test tests/js/runtime/button-component.test.js tests/js/runtime/remaining-ui-interactions.test.js`, build, and inspect dark/black/light/custom-player themes.
 
 ### Task 3 — Menus, touching tabs and scrollbar convergence
@@ -131,8 +133,8 @@ Each unit is independently reviewable and publishable only after its own focused
 **Cases:** DD01–DD06, TB01–TB03, UI05–UI10.
 
 - [ ] Test search clear/filter ownership, menu arrows/Home/End/Escape/outside click, and geometry after resize/scroll/above-below flip.
-- [ ] Reuse final settings branch TabBar with zero gap, joined active contour and no content remount. Older copied 6px gap is superseded.
-- [ ] Keep select-input menus plainly framed/neutral. Context dropdowns retain established connected fade with valid border tokens. Measure split edge geometry: matching 1px divider row, opening below trigger, no crossing/double line. No green menu-item hover.
+- [x] Reuse final settings branch TabBar with zero gap, joined active contour and no content remount. Older copied 6px gap is superseded.
+- [x] Keep select-input menus plainly framed/neutral. Context dropdowns retain established connected fade with valid border tokens. Measure split edge geometry: matching 1px divider row, opening below trigger, no crossing/double line. No green menu-item hover.
 - [ ] Inventory all scrolling surfaces, including admin/login and nested dialogs; apply shared Artist Tree scrollbar styling without breaking overflow or forced-colors support.
 - [ ] Run new shell tests and configured search component tests. Manually check 100/125/150% zoom, narrow layout, focus and popup flipping.
 
@@ -142,10 +144,10 @@ Each unit is independently reviewable and publishable only after its own focused
 **Cases:** NAV01–NAV08.
 
 - [ ] Test fold state, focus transfer, selected artist/search/scroll preservation, grid measurement and player node identity.
-- [ ] Preserve current expanded rows; put collapse before Artists. Fold to one tree action with the approved many-branched glyph. Respect outline preference; no Settings shortcuts or green rail redesign.
-- [ ] Reclaim real layout width, not a visual transform over an unchanged column. Preserve actual app bar, gallery bars/cards/typography/spacing and player; only reflow within the freed space.
-- [ ] Recalculate existing grid/virtualization using current card-size settings. Mock 240px-to-56px and 4-to-5 columns are demonstration geometry, not fixed production counts. Preserve visible album anchor and observer cleanup.
-- [ ] Run tree tests, then toggle at a width that gains a column and a width that does not. Repeat with active search and playback. Compare screenshots to real baseline, not mock artwork.
+- [x] Preserve current expanded rows; put collapse before Artists. Fold to one tree action with the approved many-branched glyph. Respect outline preference; no Settings shortcuts or green rail redesign.
+- [x] Reclaim real layout width, not a visual transform over an unchanged column. Preserve actual app bar, gallery bars/cards/typography/spacing and player; only reflow within the freed space.
+- [x] Recalculate existing grid/virtualization using current card-size settings. Mock 240px-to-56px and 4-to-5 columns are demonstration geometry, not fixed production counts. Preserve visible album anchor and observer cleanup.
+- [x] Run tree tests, then toggle at a width that gains a column and a width that does not. Repeat with active search and playback. Compare screenshots to real baseline, not mock artwork.
 
 ### Task 5 — Album Details, Cover Look Up and source entry
 
@@ -153,12 +155,12 @@ Each unit is independently reviewable and publishable only after its own focused
 **Cases:** ART01–ART04, COV01–COV13.
 
 - [ ] Test stable album identity, card selection versus enlargement, counts and zero/empty/local-only states.
-- [ ] Preserve actual modal/table/total-strip dimensions. Componentize information. Artwork click opens full size; only lookup/fast-fetch remain in its action overlay with keyboard/touch access.
-- [ ] Compose shared Header/Section/compact GalleryCard/Artbox/EditorFooter. Default one Find Better Art above results; Cancel/Save and selection in footer. Do not ship review placement switches.
-- [ ] Local section always remains with N images and appropriate zero message. Hide empty remote/possible sections. Remove Current source. Keep uppercase section labels and aligned provider rows despite title wrapping.
+- [x] Preserve actual modal/table/total-strip dimensions. Componentize information. Artwork click opens full size; only lookup/fast-fetch remain in its action overlay with keyboard/touch access.
+- [x] Compose shared Header/Section/compact GalleryCard/Artbox/EditorFooter. Default one Find Better Art above results; Cancel/Save and selection in footer. Do not ship review placement switches.
+- [x] Local section always remains with N images and appropriate zero message. Hide empty remote/possible sections. Remove Current source. Keep uppercase section labels and aligned provider rows despite title wrapping.
 - [ ] Adopt readable provider names/logos: Apple, Spotify, Deezer purple heart, Bandcamp, Discogs, CAA and YouTube Music. Validate asset provenance/licensing before shipping.
-- [ ] Google/Yandex derive encoded query from active album artist/title/year; no separate query field. Trailing logos/external marker indicate navigation. Respect existing external-link handling.
-- [ ] Implement compact growing paste/drop/picker input with removable previews, staged direct-image/album links and bounded validation through current services. Remove redundant helper line. Preserve valid staged items after error; revoke object URLs; save only through authorized actions.
+- [x] Google/Yandex derive encoded query from active album artist/title/year; no separate query field. Trailing logos/external marker indicate navigation. Respect existing external-link handling.
+- [x] Implement compact growing paste/drop/picker input with removable previews, staged direct-image/album links and bounded validation through current services. Remove redundant helper line. Preserve valid staged items after error; revoke object URLs; save only through authorized actions.
 - [ ] Preserve actual backend jobs, image validation and save/conflict/retry semantics. Run named JS tests and sequentially `python -m pytest tests/py/test_api_cover_helpers.py tests/py/test_cover_lookup_tasks.py` with configured Postgres fixtures.
 
 ### Task 6 — Notification panel, full-size artwork and confirmations
@@ -166,10 +168,10 @@ Each unit is independently reviewable and publishable only after its own focused
 **Files:** notification/lightbox/alert owners; extend `tests/js/runtime/cover-lookup-notification-helpers.test.js`; new `tests/js/runtime/remaining-ui-dialogs.test.js`; existing `tests/components/coverLookupTaskCard.spec.js`.
 **Cases:** NTF01–NTF06, DLG01–DLG05.
 
-- [ ] Test card activation for its own authorized album and separate Retry/Clear propagation.
-- [ ] Shared panel/header/cards show live progress/elapsed/status and empty states. Closing panel does not cancel jobs; subscriptions clean up. Stale/removed/unauthorized targets fail honestly.
-- [ ] Reuse ImageLightbox with loading/missing/failure, Close/Escape and focus return. Closing child lightbox cannot discard parent state.
-- [ ] Content-sized alerts keep adjacent actions and wrap responsively. Compact confirmation has no internal dividers; Keep editing preserves drafts and Discard stays red. Do not globally remove section dividers.
+- [x] Test card activation for its own authorized album and separate Retry/Clear propagation.
+- [x] Shared panel/header/cards show live progress/elapsed/status and empty states. Closing panel does not cancel jobs; subscriptions clean up. Stale/removed/unauthorized targets fail honestly.
+- [x] Reuse ImageLightbox with loading/missing/failure, Close/Escape and focus return. Closing child lightbox cannot discard parent state.
+- [x] Content-sized alerts keep adjacent actions and wrap responsively. Compact confirmation has no internal dividers; Keep editing preserves drafts and Discard stays red. Do not globally remove section dividers.
 - [ ] Run named tests; inspect keyboard, overflow and reduced motion. No new task persistence is introduced.
 
 ### Task 7 — Edit Tags conversion without redesign
@@ -178,10 +180,10 @@ Each unit is independently reviewable and publishable only after its own focused
 **Cases:** TAG01–TAG09.
 
 - [ ] Inventory every current field, mixed-value rule, validation, footer action and selection behavior from real UI before conversion. Preserve exact layout; mock sample fields are not exhaustive.
-- [ ] Use shared form elements and current compact filename list with trailing format badge. No extra table header, index column, second format line or redesigned tag form.
-- [ ] Preserve filename sweep selection and Ctrl/Cmd/Shift semantics; reorder only from grip. Accent belongs at row's far left before the grip. No grip hover outline; accessible reorder equivalent remains available.
+- [x] Use shared form elements and current compact filename list with trailing format badge. No extra table header, index column, second format line or redesigned tag form.
+- [x] Preserve filename sweep selection and Ctrl/Cmd/Shift semantics; reorder only from grip. Accent belongs at row's far left before the grip. No grip hover outline; accessible reorder equivalent remains available.
 - [ ] Add failing first/middle/last/below-list/same-place/outside/Escape/failed-save cases. Exclude dragged row in midpoint lookup; no next row means append. Indicator shows actual boundary, including below last row; cleanup always removes drag state.
-- [ ] Preserve selected identities, mixed values, Renumber and transaction/optimistic rollback. Reorder does not silently write tags outside the current Save workflow.
+- [x] Preserve selected identities, mixed values, Renumber and transaction/optimistic rollback. Reorder does not silently write tags outside the current Save workflow.
 - [ ] Run all named tests. Manually move first to last and back; select multiple filenames, reorder, renumber, Save and Cancel with uniquely owned data.
 
 ### Task 8 — Library Status Page FullPage and status menu
@@ -189,12 +191,12 @@ Each unit is independently reviewable and publishable only after its own focused
 **Files:** scan owners/template main slot; new `tests/js/runtime/library-scan-full-page.test.js`; extend `tests/js/runtime/library-loader-visibility.test.js`, `tests/js/runtime/gallery-refresh-and-status.test.js`.
 **Cases:** SCN01–SCN11, DD04–DD06.
 
-- [ ] Test backend-to-view mapping for initial loading, discovery, scanning, cover updates, artist relations, full rescan, cancelling, cancelled, idle/completed, no music and error.
-- [ ] Reusable FullPage body mounts below a Library Status Page instance of the shared abstract GalleryBar in the gallery/main slot, preserving outer tree/app bar/player. The GalleryBar owns the simple back arrow immediately before Library Status Page, without a title divider. No nested app shell, modal, state tabs, duplicate search/revert bar or simulation widgets.
-- [ ] Active copy is Scanning the library. Use approved animated spinner, actual counts/current filename/elapsed and ETA only when available; no fake progress or noisy per-tick announcements.
-- [ ] Compact phase map shows Discover files, Read tags & metadata, Update cover art, Refresh artist relations. Reached/completed stages stay bright, current is distinct, future dim. Failure/cancellation cannot paint uncompleted work as done; handle modes that omit phases honestly.
-- [ ] Browse Library and back preserve ongoing work; quiet Cancel calls current authorized cancellation and waits for terminal status. No empty checkbox/status placeholder. Ensure Browse Library shared hover is visible.
-- [ ] Status ActionButton/menu derives Full Rescan/Go to Scan Page and Fetch/Cancel Covers from actual state/capabilities; all neighboring action chrome follows preference. Preserve shared anchor geometry.
+- [x] Test backend-to-view mapping for initial loading, discovery, scanning, cover updates, artist relations, full rescan, cancelling, cancelled, idle/completed, no music and error.
+- [x] Reusable FullPage body mounts below a Library Status Page instance of the shared abstract GalleryBar in the gallery/main slot, preserving outer tree/app bar/player. The GalleryBar owns the simple back arrow immediately before Library Status Page, without a title divider. No nested app shell, modal, state tabs, duplicate search/revert bar or simulation widgets.
+- [x] Active copy is Scanning the library. Use approved animated spinner, actual counts/current filename/elapsed and ETA only when available; no fake progress or noisy per-tick announcements.
+- [x] Compact phase map shows Discover files, Read tags & metadata, Update cover art, Refresh artist relations. Reached/completed stages stay bright, current is distinct, future dim. Failure/cancellation cannot paint uncompleted work as done; handle modes that omit phases honestly.
+- [x] Browse Library and back preserve ongoing work; quiet Cancel calls current authorized cancellation and waits for terminal status. No empty checkbox/status placeholder. Ensure Browse Library shared hover is visible.
+- [x] Status ActionButton/menu derives Full Rescan/Go to Library Status Page and Fetch/Cancel Covers from actual state/capabilities; all neighboring action chrome follows preference. Preserve shared anchor geometry.
 - [ ] Run new scan and existing two runtime tests. Exercise real active scan with nonempty Postgres-backed test library; empty scans alone cannot validate intermediate states. Browse/play during scan and verify failure/cancel recovery.
 
 ### Task 9 — Persistent device Appearance
@@ -203,23 +205,45 @@ Each unit is independently reviewable and publishable only after its own focused
 **Cases:** AP01–AP11.
 
 - [ ] After technical approval, add failing profile normalization, section resolution, revision conflict, migration preservation and account-isolation tests. Do not silently change API contracts.
-- [ ] Implement Postgres-backed base/per-device/per-section values using validated existing field schemas. No migration number is reserved in this plan because the settings branch is still moving.
-- [ ] Keep exact Appearance navigation/layout. Neutral device selector and per-tab Follow/Customize affect visibility and draft scope; no obsolete apply-to checkboxes. Save/Cancel preserve aggregate behavior.
-- [ ] Add action-outline preference in the existing interaction editor without rearranging its other contents. Preview must not alter actual playback UI beyond already-owned preview behavior.
+- [x] Implement Postgres-backed base/per-device/per-section values using validated existing field schemas. No migration number is reserved in this plan because the settings branch is still moving.
+- [x] Keep exact Appearance navigation/layout and aggregate Save/Cancel behavior. Web/Desktop remains editable; Mobile/TV stay visibly and natively disabled, with no editable Follow/Customize controls. Preserve their existing client/API implementation and saved overrides. Current implementation manually accepted; A01 browser verification passed on September 23, including disabled profiles through navigation, Cancel, Save, and reload.
+- [x] Add action-outline preference in the existing interaction editor without rearranging its other contents. Preview must not alter actual playback UI beyond already-owned preview behavior.
 - [ ] Run new JS tests and sequentially `python -m pytest tests/py/test_appearance_preferences_postgres.py tests/py/test_account_appearance_asgi.py`. Verify migration, inheritance, dormant overrides, stale writes and authorization.
-- [ ] Manually verify same-account/same-type restore across sessions, cross-account isolation, per-tab custom settings and later base changes. Validate supported web profiles without claiming native TV/mobile apps.
+- [ ] Verify Web/Desktop restore across sessions, cross-account isolation, Save/Cancel and retained player preferences. Verify Mobile/TV remain disabled after navigation, Cancel, Save and reload; retain nonbase inheritance/dormant-value tests at their existing service seams without claiming editable or native TV/mobile clients.
 
 ### Task 10 — Remaining consumer adoption and real acceptance
 
 **Files:** remaining consumers from Task 1; Settings owners; private registries/cases/tracker; this checklist.
 **Cases:** GOV01–GOV05 and every applicable matrix case.
 
+Completion intake: the September 23 completion plan now classifies consumers across main, Settings, account, admin, login, dialogs, notifications and recovery/invitation. Native controls are not automatically duplicate components; the inventory retains specialized form-submit, password-toggle, playback and image controls where conversion would change accepted semantics or geometry. Remaining rendered adoption checks and the small unused-account-style candidate are still open. The family-level source map alone does not prove adoption; current visual acceptance is not permission to redesign these surfaces.
+
 - [ ] Adopt shared art/info/sections/table-label variants in Problems/Loops and wide rows across six Settings areas without replacing their independently approved layouts or functionality. Convert remaining main/admin/login inputs, bars, footers, alerts, modal bodies and scrollbars.
 - [ ] Audit every action by role, theme, semantic color, outline preference, pointer/keyboard/disabled states. Remove superseded runtime paths only after checking boot/build references; never ship old/new live owners together.
 - [ ] Run focused checks per slice; then complete JS/Python regression inventory. Collect every genuine full-suite failure before fixing; preserve evidence and do not weaken tests to hide it.
 - [ ] Assess measurable risks: gallery reflow/virtualization/cover scheduling, scan subscriptions and profile repaint. Preserve existing budgets. Add performance E2E only for uncovered measurable risk, not every visual change.
-- [ ] Give owner the manual itinerary below on a real build and record acceptance separately. Only then add approved independent functional E2E using existing POMs and real Postgres fixtures.
-- [ ] Reconcile registry adoption/checklist counts, inspect full diff and complete required review. No merge/push/release is authorized by this plan request.
+- [x] Give owner the manual itinerary below on a real build and record acceptance separately. The owner accepted the current implementation, including deviations from initial mockups, and authorized the remaining functional/visual E2E work. Focused verification results are tracked in the September 23 completion plan; acceptance does not imply unrun tests passed.
+- [ ] Reconcile registry adoption/checklist counts, inspect the full diff and complete required review. The September 23 owner request supersedes the earlier push/PR restriction: finish E2E, complete three full local review passes, commit/push, open a new PR, and iterate the complete review-first CI pipeline until green. Application merge and release remain outside this authorization.
+
+## September 23 granular evidence reconciliation
+
+This checkpoint uses owner acceptance plus retained behavioral results, not source-string assertions as browser proof. The [completion plan](2026-09-23-cover-branch-completion.md) owns the evolving run chronology and artifacts. Historical failures remain history when superseded by an exact passing rerun; they are not additional passes. No test was rerun just to edit this checklist.
+
+Verified checkbox counts: Task 2 **3/6**, Task 3 **2/5**, Task 4 **4/5**, Task 5 **5/8**, Task 6 **4/5**, Task 7 **3/6**, Task 8 **6/7**, Task 9 **3/6**, Task 10 **1/6**: **31/54** steps checked across Tasks 2–10, **23** still open. Task 1 remains **5/5** with its historical hash claim corrected to the explicit owner waiver; total plan **36/59**. Counts measure these compound checklist steps, not test cases or whole-task completion.
+
+| Task | Closed evidence and accepted implementation | What the remaining unchecked steps still require |
+| --- | --- | --- |
+| 2 | Current shared ActionButton/outline, theme-derived hover, caret and search/control treatments are manually accepted; A01 and Settings S06 exercise real persistence/search behavior. | Complete computed-style palette/role matrix and named theme verification; broad all-consumer hover retirement audit is not established by focused passes. |
+| 3 | Accepted touching tabs and connected neutral menus; 49 unchanged-baseline visual/component cases cover player/anchor geometry, plus the native nested-scroll/resize/edge/close/reopen anchor case passed in 1.3s. | Full combined keyboard/search-clear matrix, all scrolling surfaces/forced colors, and explicit 100/125/150% zoom checks remain unclaimed. |
+| 4 | FTC-ARTIST-TREE-001 passed 14.8s: actual virtual gallery gains a column at 1400px and retains three at 1060px; exact visible anchor/trigger within one pixel, query, selected artist and persistent player retained; repeated reduced-motion folding passed. Real grid regressions passed 49/49. | The first bundled test step retains its explicit focus-transfer verification requirement; this browser result does not itself prove it. No mock geometry comparison is required. |
+| 5 | Album019 passed its real artwork/layout flow; touch022 passed 46.2s without hover. Composer024 passed 37.6s, including native clipboard image, picker/drop, extensionless extraction, failure retention, exclusive selection and narrow layout. Shared modal/footer and source-entry implementation is accepted. | The complete empty/local-only/count matrix and all originally named commands are not newly certified here. Source provenance is recorded, but provider/favicons licensing review remains open; visual approval is not a redistribution license. |
+| 6 | Actual bulk007 passed 1.6m: native selection/copy, Enter/Space exact-album activation, save, frozen elapsed time, no-result/failure, bulk clear preserving active jobs, reload, cancel and deletion. Dedicated toast geometry/Delete separately passed. Focused backend selections passed 15 and 88 tests with overlap, covering authorization/stale identity/snapshot-save seams. Lightbox and confirmation composition is owner-accepted. | The full named keyboard/overflow/reduced-motion verification bundle remains distinct from these focused cases. Backend selections are not 103 unique tests or a complete Python suite. |
+| 7 | TAGS025 passed 48.4s: native sweep/modifiers, grip-only reorder, first/middle/last and append, selected identities, keyboard/Escape, non-grip/outside no-op, Cancel and persisted Apply. Existing form and optimistic transaction behavior remain accepted. | Do not invent a pre-conversion field inventory or claim every originally requested RED vector and named test ran from this one browser pass. Failed-save rollback remains separately owned by unit/integration coverage. |
+| 8 | Canonical scan-page C+E passed 36.7s/5.8s (45.1s total), preserving phases, single cancellation requests, browsing, GalleryBar and player. Health003F passed9.0s. Component error/cancellation passed2/2. Full-app003G now passed1/1 in2.4m, authoritative-pass exit0: genuine INSERT denial, durable terminal alert, retained gallery/header/player, restored privileges and native recovery73.6s; processes/ports40118/40120/database/three roles clear. | The full-app error gap is closed; component evidence remains distinct. The last compound step stays unchecked only because this reconciliation does not establish that every originally named runtime command and simultaneous Browse/play check ran. Do not mark the whole Task8 complete solely from003G. |
+| 9 | Existing Postgres profile representation and action-outline editor are implemented; A01 passed Save/Cancel/reload with disabled Mobile/TV. Combined player019–022 passed 57.9s with audio, regular/waveform/Loop, docked/rail/floating, drag, reload/narrow and second-tab disabled-play ownership. | Broader cross-account/profile/conflict/migration matrix remains separate. Read-only schema checks found required columns/constraints and unchanged preference revision, but absent historical 0075/0076/0079 ledger entries are unresolved evidence gaps, not permission to replay migrations or manufacture history. |
+| 10 | Owner manual acceptance is complete; focused Settings S06 and nonperformance scenarios above pass. Consumer classification exists and preserves approved specialized controls. | All-action/consumer verification, complete authoritative CI inventory, final registry reconciliation and three full senior local review passes remain open. No final review, PR or CI pass is claimed by these focused results. |
+
+Current blockers: canonical native706 completed24.4s with all functional checks and approved2MiB payload guard passing (1,787,328bytes), but cold latency1846.22ms exceeds1200ms. Other timings612/115/110/137/128/361ms meet budgets. Complete utility706native-failure and utility706native logs are retained; PID40756/tree, ports33778/33780, database/three roles cleared. Actual-worker profiling is diagnostic. Historical2942ms used the old JSON-document measurement and is not directly comparable. Fixture publication/pin remains unapproved: v1.0.24 pin-only rollback cannot satisfy strict706; use paired consumer-contract/pin rollback or an approved corrected immutable successor. No version change is authorized. Reviews remain0/3; no completion push/PR/CI. Merge/publication remain outside this plan's authority.
 
 ## Proposed behavior contracts and focused assertions
 
@@ -247,7 +271,7 @@ Test vectors (actual automation must exercise component/service behavior, not me
 | Input/action | Assertion |
 | --- | --- |
 | Base interaction changes while Mobile follows | Mobile effective values change; TV custom interaction stays unchanged |
-| Customize Alerts on Mobile then navigate Main and back | Alerts remains custom; Main still follows; unsaved draft retained |
+| Resolve retained Mobile custom Alerts and followed Main at the compatibility service seam | Existing custom values and inheritance remain intact; Mobile/TV UI stays disabled and cannot enter Customize |
 | Old saved account has player override and no device keys | Migration preserves override in base; new devices inherit it |
 | Rows A/B/C, drag A below C | Result B/C/A; selected stable IDs unchanged |
 | Drag C above A | C/A/B; cancel restores pre-drag order |
@@ -284,10 +308,10 @@ Each case records build/commit, owned fixture, expected/actual result, automated
 4. Start lookup and close panel; reopen, activate another album's notification, Retry failure, clear completed and inspect empty state.
 5. Edit Tags: compare all real fields to baseline, sweep/toggle/range select, drag first to last below list, back to first, cancel drag, renumber and exercise save/discard.
 6. Scan a nonempty test library; inspect reached phases, browse while running, return, cancel; verify no music/error/completion. Open context menu near top/bottom and resize.
-7. Mobile follows every tab and hides details. Customize one tab, switch away/back, save/reload. Change base and verify only following sections update; test TV and second account separately.
+7. Confirm Web/Desktop remains editable while Mobile and TV are visibly disabled and expose no Follow/Customize controls. Change a Web/Desktop preference, navigate between sections, Cancel, then Save and reload; verify preference persistence and the same disabled profiles. Keep existing nonbase saved values and compatibility behavior intact; do not try to enable their UI.
 8. Inspect touching Settings tabs, scrollbars in main/admin/login/dialogs, compact confirmation, checkbox/radio, search order, chevron center, keyboard focus and reduced motion.
 
-Completion requires all applicable cases passing, original layout/player contracts preserved, shared components used by all scoped consumers, migrations/authorization verified, owner real-build acceptance and required regression/review. Mock approval alone is not completion.
+Completion requires all applicable cases passing, owner-accepted current layout/player contracts preserved, shared components used by all scoped consumers, migrations/authorization verified, owner real-build acceptance and required regression/review. Historical mock approval alone is not completion; current implementation approval supersedes obsolete mock-specific geometry.
 
 
 ## Sidebar player owner follow-up — September 21, 2026
@@ -302,4 +326,4 @@ Latest owner direction supersedes the earlier sidebar/A/C mock: only one sidebar
 
 ## Approved sidebar player implementation plan — September 21, 2026
 
-Owner approved A/B/C and tree-wide reassembly, authorized C 3px higher and requested Slow motion in Appearance. [Detailed plan](2026-09-21-sidebar-player-appearance.md) governs the bounded work; [approved v004](../../design-mockups/components/sidebar-player/v004/review.json) supersedes earlier pending-design statements. Two cohesive units: Parchment & Pine; complete player/Appearance update. Production implementation/manual acceptance remain pending.
+Owner approved A/B/C and tree-wide reassembly, authorized C 3px higher and requested Slow motion in Appearance. [Detailed plan](2026-09-21-sidebar-player-appearance.md) governs the bounded work; [approved v004](../../design-mockups/components/sidebar-player/v004/review.json) supersedes earlier pending-design statements. Two cohesive units: Parchment & Pine; complete player/Appearance update. September 23 supersedes the historical pending statements above: production implementation is manually accepted; focused visual/component verification and combined player browser verification passed as recorded in the reconciliation. Broader matrix, final reviews and CI gates remain separate.

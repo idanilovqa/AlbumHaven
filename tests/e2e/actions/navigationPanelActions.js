@@ -15,9 +15,9 @@ export class NavigationPanelActions {
       await control.click();
     }
     await expect.poll(
-      async () => (await this.navigationPanel.readArtistTreeFoldState()).folded,
+      async () => this.navigationPanel.readArtistTreeFoldState(),
       { timeout: 5000 },
-    ).toBe(expectedFolded);
+    ).toMatchObject({ folded: expectedFolded, transitioning: false });
     return this.navigationPanel.readArtistTreeFoldState();
   }
 

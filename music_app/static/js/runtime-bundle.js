@@ -5110,6 +5110,14 @@ function renderLibraryLoader(data = {}, options = {}) {
       <span class="library-loader-progress-detail">${escapeHtml(line.detail)}</span>
     </div>
   `).join('');
+  if (scanPageVisible && !data.scan_in_progress && !coverBusy && !relBusy
+    && data.scan_outcome === 'failed' && String(data.last_error || '').trim()) {
+    progress.innerHTML += buildOnPageAlertHtml({
+      severity: 'error',
+      title: 'Last scan error',
+      message: data.last_error,
+    });
+  }
 }
 
 function renderRelated() {
@@ -25899,9 +25907,18 @@ function hasActiveCoverLookupDrawerTextSelection(body) {
 function hasActiveCoverLookupDrawerAction(body) {
   if (!body || typeof body.contains !== 'function') return false;
   const activeElement = typeof document !== 'undefined' ? document.activeElement : null;
-  if (activeElement && body.contains(activeElement)
-    && activeElement.closest?.('.cover-lookup-task-actions')) return true;
-  return Boolean(body.querySelector?.('.cover-lookup-task-actions :hover'));
+  const focusedAction = activeElement && body.contains(activeElement) && activeElement.closest?.('.cover-lookup-task-actions')
+    ? activeElement
+    : null;
+  const hoveredAction = body.querySelector?.('.cover-lookup-task-actions :hover');
+  return [focusedAction, hoveredAction].some((action) => {
+    if (!action) return false;
+    const cancelButton = action.closest?.('[data-cancel-cover-lookup-task]');
+    if (!cancelButton) return true;
+    const taskId = cancelButton.getAttribute('data-cancel-cover-lookup-task');
+    const task = (state.coverLookup.tasks || []).find((candidate) => String(candidate?.id || '') === taskId);
+    return ['pending', 'running'].includes(String(task?.status || ''));
+  });
 }
 
 function findCoverLookupTaskOpenForSelectionNode(node) {
@@ -25922,7 +25939,7 @@ function handleCoverLookupTaskOpenCopy(event) {
   return true;
 }
 
-function renderCoverLookupDrawer() {
+function renderCoverLookupDrawer({ preserveInteraction = true } = {}) {
   const drawer = document.getElementById('cover-lookup-drawer');
   const body = document.getElementById('cover-lookup-drawer-body');
   const badge = document.getElementById('cover-lookup-drawer-badge');
@@ -25951,8 +25968,8 @@ function renderCoverLookupDrawer() {
     clearButton.disabled = terminalCount <= 0;
     clearButton.setAttribute?.('aria-disabled', String(terminalCount <= 0));
   }
-  const preserveSelectedNotificationText = hasActiveCoverLookupDrawerTextSelection(body)
-    || hasActiveCoverLookupDrawerAction(body);
+  const preserveSelectedNotificationText = preserveInteraction
+    && (hasActiveCoverLookupDrawerTextSelection(body) || hasActiveCoverLookupDrawerAction(body));
   if (!tasks.length) {
     if (!preserveSelectedNotificationText) {
       body.innerHTML = '<div class="cover-lookup-drawer-empty">You\'re not looking for anything at the moment. Search for specific album art to see notifications.</div>';
@@ -25968,6 +25985,8 @@ function renderCoverLookupDrawer() {
     const foundCount = Array.isArray(task?.possible_matches) ? task.possible_matches.length : 0;
     const statusLabel = status === 'failed'
       ? 'Lookup failed'
+      : status === 'canceled'
+      ? 'Canceled'
       : isNoResult
       ? 'No covers found'
       : isCompleted && task?.notification_action_taken
@@ -26057,7 +26076,7 @@ async function clearCompletedCoverLookupTasks() {
   state.coverLookup.tasks = previousTasks.filter(
     (task) => !terminalTaskIdSet.has(String(task?.id || '').trim()),
   );
-  renderCoverLookupDrawer();
+  renderCoverLookupDrawer({ preserveInteraction: false });
   stopCoverLookupPollingIfIdle();
   try {
     const response = await fetch('/utilities/cover-lookup/tasks/clear-completed', {
@@ -26078,7 +26097,7 @@ async function clearCompletedCoverLookupTasks() {
   } catch (error) {
     state.coverLookup.tasks = previousTasks;
     console.error('[AlbumHaven][CoverLookup] Failed to clear completed tasks.', error);
-    renderCoverLookupDrawer();
+    renderCoverLookupDrawer({ preserveInteraction: false });
     stopCoverLookupPollingIfIdle();
     showToast(error.message || 'Failed to clear completed cover lookups.', 'error', 2800);
   }
@@ -26094,7 +26113,7 @@ async function clearCoverLookupTaskNotification(taskId) {
   if (String(state.coverLookup.modal.taskId || '') === normalizedTaskId) {
     state.coverLookup.modal.taskId = '';
   }
-  renderCoverLookupDrawer();
+  renderCoverLookupDrawer({ preserveInteraction: false });
   stopCoverLookupPollingIfIdle();
   try {
     const response = await fetch(`/utilities/cover-lookup/task/${encodeURIComponent(normalizedTaskId)}/clear`, {
@@ -26116,7 +26135,7 @@ async function clearCoverLookupTaskNotification(taskId) {
   } catch (error) {
     state.coverLookup.tasks = previousTasks;
     console.error('[AlbumHaven][CoverLookup] Failed to clear notification.', error);
-    renderCoverLookupDrawer();
+    renderCoverLookupDrawer({ preserveInteraction: false });
     stopCoverLookupPollingIfIdle();
     showToast(error.message || 'Failed to clear notification.', 'error', 2800);
   }
@@ -26160,6 +26179,7 @@ function buildCoverLookupCard(item, kind = 'local') {
       ? (
         !String(state.coverLookup.modal.selectedRemoteId || '')
         && !String(state.coverLookup.modal.pendingLocalPath || '')
+        && !String(state.coverLookup.modal.pendingPastedImageId || '')
         && !String(state.coverLookup.modal.activeLocalSelectionPath || '')
       )
       : (!isOtherRemoteArt && state.coverLookup.modal.selectedRemoteId === String(item?.id || ''));
@@ -32357,6 +32377,7 @@ class VirtualArtistGrid {
         albumKey: String(anchorCardTrigger.getAttribute('data-album-key') || ''),
         albumName,
         albumYear,
+        triggerKind: anchorCardTrigger.matches?.('.album-card__artbox-trigger') ? 'artbox' : 'title',
         sectionOccurrenceKey: this.getRenderedSectionOccurrenceKey(anchorCardTrigger, this.containerEl),
         offsetTop: anchorRect.top - scrollRect.top,
       };
@@ -32385,8 +32406,11 @@ class VirtualArtistGrid {
       const albumTriggers = Array.from(
         this.containerEl.querySelectorAll('[data-open-tracklist="1"][data-album-key]'),
       );
+      const matchesCapturedTrigger = (element) => !anchor.triggerKind
+        || (element.matches?.('.album-card__artbox-trigger') ? 'artbox' : 'title') === anchor.triggerKind;
       const matchingAlbumTriggers = albumTriggers.filter((element) => (
         String(element.getAttribute('data-album-key') || '') === albumKey
+        && matchesCapturedTrigger(element)
       ));
       const anchorAlbumName = String(anchor.albumName || '');
       const anchorAlbumYear = String(anchor.albumYear ?? '');
@@ -32416,6 +32440,7 @@ class VirtualArtistGrid {
         : null;
       const renamedKeyTrigger = !anchorCardTrigger && anchorAlbumName
         ? albumTriggers.find((element) => {
+          if (!matchesCapturedTrigger(element)) return false;
           if (this.getRenderedSectionOccurrenceKey(element, this.containerEl) !== sectionOccurrenceKey) {
             return false;
           }
@@ -32803,10 +32828,12 @@ class VirtualArtistGrid {
         (width + this.columnGap) / (minimumSettledCardWidth + this.columnGap),
       )),
     );
-    this.columns = shouldFillSettledRow ? settledColumns : preservedColumns;
-    this.cardTrackWidth = shouldFillSettledRow || !preserveCardTrackWidth
-      ? (width - (this.columns - 1) * this.columnGap) / this.columns
-      : targetCardTrackWidth;
+    if (!options.preserveColumnGeometry) {
+      this.columns = shouldFillSettledRow ? settledColumns : preservedColumns;
+      this.cardTrackWidth = shouldFillSettledRow || !preserveCardTrackWidth
+        ? (width - (this.columns - 1) * this.columnGap) / this.columns
+        : targetCardTrackWidth;
+    }
     const displayMode = resolveGalleryRendererMode(state?.gallery?.mainState?.view || state?.view?.gallery_display_mode);
     const rowGeometryKey = `${displayMode}:${this.columns}:${this.cardTrackWidth}`;
     const estimatedRowHeight = displayMode === 'covers' ? this.cardTrackWidth : this.collapsedRowHeight;
@@ -32952,7 +32979,15 @@ class VirtualArtistGrid {
   }
 
   onArtistTreeSettled() {
+    const anchor = this.captureScrollAnchor();
     this.onResize({ preserveCardTrackWidth: true });
+    if (anchor && !this._resetScrollAfterMeasure) {
+      this.stabilizeScrollAfterMeasurement(anchor);
+      // Reflow can virtualize the old anchor. Mount its restored row before
+      // reconciling the exact trigger offset against the new card geometry.
+      this.render(true);
+      this.stabilizeScrollAfterMeasurement(anchor);
+    }
   }
 
   onResize(options = {}) {
@@ -33619,7 +33654,8 @@ class VirtualArtistGrid {
       });
     }
     this.lastKey = '';
-    this.recalculate();
+    // Height reconciliation must retain the layout that produced these measurements.
+    this.recalculate({ preserveColumnGeometry: true });
     const latestScroll = this.diagnostics.latestScroll;
     const measurementRenderRafOwner = (
       Number(latestScroll?.renderGeneration || 0) === Number(this._renderGeneration || 0)

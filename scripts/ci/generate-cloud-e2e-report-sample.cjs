@@ -53,8 +53,8 @@ const resultArtifacts = [
         }],
       } : {
         measurementAvailable: false, coverageOnly: true, attemptCount: 1,
-        attempts: [], series: [], testCount: 2,
-        cases: ['FTC-OPS-003C', 'FTC-OPS-003E'].map((testId, caseIndex) => ({
+        attempts: [], series: [], testCount: row.target === 'scan-health' ? 1 : 2,
+        cases: (row.target === 'scan-health' ? ['FTC-OPS-003F'] : ['FTC-OPS-003C', 'FTC-OPS-003E']).map((testId, caseIndex) => ({
           testId, name: `${testId} scan-page coverage`, status: 'passed', durationMs: 100 + caseIndex,
           steps: [{ title: 'Exercise Scan Page contract', status: 'passed', durationMs: 20 }],
           stackSummary: '', finalScreenshot: null,

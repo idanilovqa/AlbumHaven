@@ -34,6 +34,7 @@ export class NavigationPanel extends BasePage {
       const main = document.getElementById('shell-main-surface');
       return {
         folded: shell.classList.contains('is-artist-tree-folded'),
+        transitioning: Boolean(rail?.classList.contains('is-transitioning')),
         mainWidth: main?.getBoundingClientRect().width || 0,
         railWidth: rail?.getBoundingClientRect().width || 0,
       };

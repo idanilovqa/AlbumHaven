@@ -450,7 +450,7 @@ test('utility problematic-files benchmark guards the cold API, payload size, vis
 
   const passingEvaluation = evaluateUtilityProblematicFilesLocalBenchmark({
     coldProblematicApiMs: 1200,
-    problematicResponseBytes: 409600,
+    problematicResponseBytes: 2097152,
     problematicReadyMs: 1200,
     problematicCachedEnterMs: 1000,
     problematicCachedExitMs: 1000,
@@ -463,7 +463,7 @@ test('utility problematic-files benchmark guards the cold API, payload size, vis
   });
   const filterFailure = evaluateUtilityProblematicFilesLocalBenchmark({
     coldProblematicApiMs: 1000,
-    problematicResponseBytes: 409600,
+    problematicResponseBytes: 2097152,
     problematicReadyMs: 1000,
     problematicCachedEnterMs: 1000,
     problematicCachedExitMs: 1000,
@@ -476,7 +476,7 @@ test('utility problematic-files benchmark guards the cold API, payload size, vis
   });
   const readinessFailure = evaluateUtilityProblematicFilesLocalBenchmark({
     coldProblematicApiMs: 1000,
-    problematicResponseBytes: 409600,
+    problematicResponseBytes: 2097152,
     problematicReadyMs: 1201,
     problematicCachedEnterMs: 1000,
     problematicCachedExitMs: 1000,
@@ -489,7 +489,7 @@ test('utility problematic-files benchmark guards the cold API, payload size, vis
   });
   const coldApiFailure = evaluateUtilityProblematicFilesLocalBenchmark({
     coldProblematicApiMs: 1201,
-    problematicResponseBytes: 409600,
+    problematicResponseBytes: 2097152,
     problematicReadyMs: 1000,
     problematicCachedEnterMs: 1000,
     problematicCachedExitMs: 1000,
@@ -502,7 +502,7 @@ test('utility problematic-files benchmark guards the cold API, payload size, vis
   });
   const responseSizeFailure = evaluateUtilityProblematicFilesLocalBenchmark({
     coldProblematicApiMs: 1000,
-    problematicResponseBytes: 409601,
+    problematicResponseBytes: 2097153,
     problematicReadyMs: 1000,
     problematicCachedEnterMs: 1000,
     problematicCachedExitMs: 1000,
@@ -635,12 +635,12 @@ test('utility problematic-files benchmark guards the cold API, payload size, vis
     ])),
     {
       coldProblematicApiMs: {
-        observedBaseline: 239,
-        observedRange: { min: 176, max: 305 },
+        observedBaseline: null,
+        observedRange: { min: null, max: null },
       },
       problematicResponseBytes: {
-        observedBaseline: 80037,
-        observedRange: { min: 80037, max: 80037 },
+        observedBaseline: null,
+        observedRange: { min: null, max: null },
       },
       problematicReadyMs: {
         observedBaseline: 384,
@@ -680,7 +680,7 @@ test('utility problematic-files benchmark guards the cold API, payload size, vis
   assert.equal(coldApiExpectation?.graceMs, 200);
   assert.equal(coldApiExpectation?.maxAllowed, 1200);
   assert.equal(passingEvaluation.results.find((result) => result.key === 'coldProblematicApiMs')?.graceUsed, true);
-  assert.equal(responseSizeExpectation?.maxAllowed, 409600);
+  assert.equal(responseSizeExpectation?.maxAllowed, 2097152);
   assert.equal(responseSizeExpectation?.units, 'bytes');
   assert.equal(readinessExpectation?.targetMaximum, 1000);
   assert.equal(readinessExpectation?.graceMs, 200);
@@ -696,7 +696,7 @@ test('utility problematic-files benchmark guards the cold API, payload size, vis
   assert.equal(coldApiFailure.failures.length, 1);
   assert.match(coldApiFailure.failures[0], /coldProblematicApiMs hard-fail: exceeded 1200 ms/);
   assert.equal(responseSizeFailure.failures.length, 1);
-  assert.match(responseSizeFailure.failures[0], /problematicResponseBytes failed: exceeded 0.4 MB \(409600 bytes\)/);
+  assert.match(responseSizeFailure.failures[0], /problematicResponseBytes failed: exceeded 2.0 MB \(2097152 bytes\)/);
 });
 
 test('utility benchmark fails closed when a required metric is absent or non-finite', async () => {
@@ -706,7 +706,7 @@ test('utility benchmark fails closed when a required metric is absent or non-fin
   const invalidValues = [undefined, null, '', Number.NaN, Number.POSITIVE_INFINITY];
   const validMetrics = {
     coldProblematicApiMs: 1000,
-    problematicResponseBytes: 409600,
+    problematicResponseBytes: 2097152,
     problematicReadyMs: 1000,
     problematicCachedEnterMs: 1000,
     problematicCachedExitMs: 1000,

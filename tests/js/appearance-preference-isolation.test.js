@@ -40,6 +40,17 @@ test('Appearance cleanup is a no-op without a test-owned saved change', async ()
   assert.equal(buildAppearanceRestorePayload(original, original, { ...original, revision: 4, csrf_token: 'token' }), null);
 });
 
+test('Appearance cleanup excludes server-owned player history from writable preferences', async () => {
+  const { buildAppearanceRestorePayload } = await import(moduleUrl);
+  const original = { palette_id: null, player_recent_sets: [] };
+  const owned = { ...original, palette_id: 'harbor-mint' };
+  const current = { ...owned, revision: 3, csrf_token: 'fresh-token' };
+  const payload = buildAppearanceRestorePayload(original, owned, current);
+  assert.equal(payload.palette_id, null);
+  assert.equal(Object.hasOwn(payload, 'player_recent_sets'), false);
+  assert.equal(payload.expected_revision, 3);
+});
+
 test('Appearance cleanup rejects overlapping later changes and missing CAS or CSRF', async () => {
   const { buildAppearanceRestorePayload } = await import(moduleUrl);
   const original = { palette_id: 'navy' }, owned = { palette_id: 'harbor-mint' };

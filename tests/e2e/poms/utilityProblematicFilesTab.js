@@ -84,6 +84,30 @@ export class UtilityProblematicFilesTab extends BasePage {
     return '[data-problematic-album-key]';
   }
 
+  async waitForSearchProjection(term, options = {}) {
+    // Read-only: query state can change before the debounced DOM projection commits.
+    await this.waitForPageCondition((expected) => {
+      if (typeof state === 'undefined' || (state.utility?.searchQuery || '') !== expected.term) return false;
+      if (typeof getFilteredProblematicAlbums !== 'function') return false;
+      const keys = getFilteredProblematicAlbums().map(item => String(item.key));
+      const list = document.querySelector(expected.listSelector);
+      const count = document.querySelector('#utility-problematic-count');
+      if (!list || !count || !keys.length || Number(count.textContent) !== keys.length) return false;
+      const start = Number(list.dataset.problematicVirtualStart);
+      const end = Number(list.dataset.problematicVirtualEnd);
+      const mountedCount = Number(list.dataset.problematicMountedCount);
+      if (!Number.isInteger(start) || !Number.isInteger(end)
+        || start < 0 || end <= start || end > keys.length || mountedCount !== end - start) return false;
+      const items = Array.from(list.querySelectorAll(expected.listItemSelector));
+      return items.length === mountedCount
+        && items.every((item, index) => item.getAttribute('data-problematic-album-key') === keys[start + index]);
+    }, { timeout: options.timeout || 60000 }, {
+      term,
+      listSelector: this.sidebarListSelector,
+      listItemSelector: this.listItemSelector,
+    });
+  }
+
   get sidebarListSelector() {
     return '#utility-problematic-list';
   }

@@ -1,6 +1,7 @@
 import { expect } from '@playwright/test';
 import { createHash } from 'node:crypto';
 import { authenticatedPageGet } from '../helpers/authenticatedPageRequest.js';
+import { observeNonLoopbackHttpRequests } from '../helpers/thirdPartyRequestEvidence.js';
 import {
   isCoverLookupCancellationSettledBeforeArchiveWork,
   readCoverLookupProviderEvidence,
@@ -164,11 +165,23 @@ export class CoverLookupActions {
 
   async startSearchAndReadToastPlacement(options = {}) {
     const timeout = options.timeout || 30000;
-    const modalDialogBeforeToast = await this.coverLookup.modalDialog.boundingBox();
-    if (!modalDialogBeforeToast) {
-      throw new Error('Expected visible modal geometry before starting the cover lookup.');
+    const observation = await this.coverLookup.observeStartedToastEntrance({ timeout });
+    let entrance;
+    try {
+      await this.startSearch({ timeout });
+      // parity-check: allow-read-only-measurement-evaluate -- retrieve the prearmed frame measurement result
+      entrance = await observation.evaluate((measurement) => measurement.result);
+      if (entrance.error) throw new Error(entrance.error);
+      expect(entrance.baselineUnsettled).toBe(true);
+      expect(entrance.sampledFrames).toBeGreaterThanOrEqual(3);
+    } finally {
+      try {
+        // parity-check: allow-read-only-measurement-evaluate -- cancel only this measurement's frame and timer, including native action failure
+        await observation.evaluate((measurement) => measurement.cancel());
+      } finally {
+        await observation.dispose();
+      }
     }
-    await this.startSearch();
     const finalVisualState = await this.coverLookup
       .waitForCoverLookupStartedToastFinalState({ timeout });
     await expect(this.coverLookup.coverLookupStartedToast).toBeVisible({ timeout });
@@ -207,6 +220,9 @@ export class CoverLookupActions {
         return highestZIndex;
       };
       const toastLayerStyle = getComputedStyle(toastLayer);
+      if (toastLayerStyle.position !== 'fixed') {
+        throw new Error('Expected the toast layer out of document flow with fixed positioning.');
+      }
       const toastLayerZIndex = Number.parseInt(toastLayerStyle.zIndex, 10) || 0;
       const underlyingStackingZIndex = readHighestStackingZIndex(
         underlyingCenterElement,
@@ -236,20 +252,12 @@ export class CoverLookupActions {
     const overlaps = Object.fromEntries(targetEntries.map(
       ([name], index) => [name, rectanglesIntersect(toastBox, targetBoxes[index])],
     ));
-    const modalDialogAfterToast = targetBoxes[targetEntries.findIndex(([name]) => (
-      name === 'modalDialog'
-    ))];
     return {
       finalVisualState,
       horizontalCenterDelta: Math.abs(
         (toastBox.x + (toastBox.width / 2)) - (viewport.width / 2),
       ),
-      modalGeometryDelta: {
-        height: Math.abs(modalDialogAfterToast.height - modalDialogBeforeToast.height),
-        width: Math.abs(modalDialogAfterToast.width - modalDialogBeforeToast.width),
-        x: Math.abs(modalDialogAfterToast.x - modalDialogBeforeToast.x),
-        y: Math.abs(modalDialogAfterToast.y - modalDialogBeforeToast.y),
-      },
+      modalGeometryDelta: entrance.delta,
       overlaps,
       ...stackingEvidence,
     };
@@ -638,6 +646,118 @@ export class CoverLookupActions {
     await expect(this.coverLookup.manualUrlInput).toHaveValue(value);
   }
 
+  async chooseComposerImages(files) {
+    const chooserPromise = this.coverLookup.page.waitForEvent('filechooser');
+    await this.coverLookup.addImageButton.click();
+    await (await chooserPromise).setFiles(files);
+  }
+
+  async dropComposerImage(filePath) {
+    await this.coverLookup.manualDropZone.hover();
+    const bounds = await this.coverLookup.manualDropZone.boundingBox();
+    expect(bounds).not.toBeNull();
+    // Chromium's native input path supplies an OS-style file drag, without
+    // dispatching DOM events or changing application state from JavaScript.
+    const session = await this.coverLookup.page.context().newCDPSession(this.coverLookup.page);
+    try {
+      const input = {
+        x: bounds.x + bounds.width / 2,
+        y: bounds.y + bounds.height / 2,
+        data: { items: [], files: [filePath], dragOperationsMask: 1 },
+      };
+      await session.send('Input.dispatchDragEvent', { type: 'dragEnter', ...input });
+      await session.send('Input.dispatchDragEvent', { type: 'dragOver', ...input });
+      await session.send('Input.dispatchDragEvent', { type: 'drop', ...input });
+    } finally {
+      await session.detach();
+    }
+  }
+
+  async pasteComposerImageFromProvider(assetId) {
+    const page = this.coverLookup.page;
+    expect(this.coverLookup.testInfo?.project?.use?.headless,
+      'Image clipboard coverage requires headless Chrome to leave the OS clipboard untouched').toBe(true);
+    const providerBaseURL = this.coverLookup.testInfo?.config?.metadata?.providerBaseURL;
+    expect(providerBaseURL, 'Clipboard source must be the isolated external provider').toBeTruthy();
+    const sourceUrl = new URL(`/manual/${encodeURIComponent(assetId)}`, providerBaseURL);
+    expect(['127.0.0.1', 'localhost']).toContain(sourceUrl.hostname);
+    const source = await page.context().newPage();
+    const sourceRequests = observeNonLoopbackHttpRequests(source);
+    try {
+      const response = await source.goto(sourceUrl.href);
+      expect(response, 'External clipboard source must return a document response').not.toBeNull();
+      expect(response.status(), 'External clipboard source must exist in the loaded fixture').toBe(200);
+      expect(response.headers()['content-type']).toContain('text/html');
+      await source.getByRole('button', { name: 'Copy image', exact: true }).click();
+      await expect(source.getByRole('status')).toHaveText('Image copied');
+      expect(sourceRequests.snapshot()).toEqual([]);
+    } finally {
+      sourceRequests.stop();
+      await source.close();
+      await page.bringToFront();
+    }
+    // The external page owns copying; the app receives the actual browser paste.
+    // In pinned headless Chrome this clipboard is browser-owned, not the OS clipboard.
+    await this.coverLookup.manualUrlInput.press('ControlOrMeta+V');
+  }
+
+  async pasteManualUrl(url) {
+    // Seed the platform clipboard through a real editable control and copy
+    // shortcut, then exercise the production paste handler and input event.
+    await this.coverLookup.manualUrlInput.fill(url);
+    await this.coverLookup.manualUrlInput.press('ControlOrMeta+A');
+    await this.coverLookup.manualUrlInput.press('ControlOrMeta+C');
+    await this.coverLookup.manualUrlInput.press('Backspace');
+    await expect(this.coverLookup.manualUrlInput).toHaveValue('');
+    await this.coverLookup.manualUrlInput.press('ControlOrMeta+V');
+    await expect(this.coverLookup.manualUrlInput).toHaveValue(url);
+  }
+
+  async removePendingComposerImage(name) {
+    const attachment = this.coverLookup.pendingAttachmentByName(name);
+    await attachment.getByRole('button', { name: `Remove ${name}`, exact: true }).click();
+    await expect(attachment).toHaveCount(0);
+  }
+
+  async removeExtractedComposerImage(name) {
+    const card = this.coverLookup.stagedCoverCardByName(name);
+    await card.getByRole('button', { name: 'Remove staged image', exact: true }).click();
+    await expect(card).toHaveCount(0);
+  }
+
+  async extractComposerLinks() {
+    const responsePromise = this.coverLookup.page.waitForResponse((response) => (
+      response.request().method() === 'POST'
+      && new URL(response.url()).pathname === '/utilities/cover-lookup/add-remote'
+    ));
+    await this.coverLookup.manualExtractButton.click();
+    const response = await responsePromise;
+    return { status: response.status(), payload: await response.json() };
+  }
+
+  async selectOnlyCover(card) {
+    await this.coverLookup.localCoverActionWithin(card).click();
+    await expect(card).toHaveClass(/\bis-active\b/);
+    await expect(this.coverLookup.selectedCoverCards).toHaveCount(1);
+    await expect(this.coverLookup.saveRemoteButton).toBeEnabled();
+  }
+
+  async expectComposerFitsViewport() {
+    await expect(this.coverLookup.manualUrlInput).toBeVisible();
+    await expect(this.coverLookup.addImageButton).toBeVisible();
+    await expect(this.coverLookup.manualExtractButton).toBeVisible();
+    // parity-check: allow-read-only-measurement-evaluate -- measure real narrow-layout overflow, without changing styles or DOM
+    const overflow = await this.coverLookup.modalDialog.evaluate((dialog) => ({
+      left: dialog.getBoundingClientRect().left,
+      right: dialog.getBoundingClientRect().right,
+      viewport: window.innerWidth,
+      horizontal: dialog.scrollWidth - dialog.clientWidth,
+    }));
+    expect(overflow.left).toBeGreaterThanOrEqual(0);
+    expect(overflow.right).toBeLessThanOrEqual(overflow.viewport);
+    expect(overflow.horizontal).toBeLessThanOrEqual(1);
+  }
+
   async closeModal() {
     await this.coverLookup.closeModalButton.click();
     await this.coverLookup.waitForHidden(this.coverLookup.modal, { timeout: 30000 });
@@ -722,36 +842,32 @@ export class CoverLookupActions {
         // parity-check: allow-read-only-measurement-evaluate -- atomically measure the currently connected card text before a real mouse selection gesture
         textRects = await taskOpenButton.evaluate((element) => {
           if (!element.isConnected) return [];
-          const range = document.createRange();
-          range.selectNodeContents(element);
-          const rectangles = [...range.getClientRects()]
-            .filter((rect) => rect.width >= 4 && rect.height >= 2);
-          if (!rectangles.length) return [];
           const textWalker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT);
-          let lastTextNode = null;
-          let lastTextEnd = 0;
+          let firstCharacterRect = null;
           let lastCharacterRect = null;
           while (textWalker.nextNode()) {
             const textNode = textWalker.currentNode;
-            const finalNonWhitespace = String(textNode.textContent || '').match(/\S(?=\s*$)/u);
+            const text = String(textNode.textContent || '');
+            const finalNonWhitespace = text.match(/\S(?=\s*$)/u);
             if (!finalNonWhitespace) continue;
+            if (!firstCharacterRect) {
+              const firstTextStart = text.search(/\S/u);
+              const firstCharacterRange = document.createRange();
+              firstCharacterRange.setStart(textNode, firstTextStart);
+              firstCharacterRange.setEnd(textNode, firstTextStart + 1);
+              const firstRect = firstCharacterRange.getBoundingClientRect();
+              if (firstRect.width >= 1 && firstRect.height >= 2) firstCharacterRect = firstRect;
+            }
             const candidateTextEnd = Number(finalNonWhitespace.index) + 1;
             const candidateRange = document.createRange();
             candidateRange.setStart(textNode, candidateTextEnd - 1);
             candidateRange.setEnd(textNode, candidateTextEnd);
             const candidateRect = candidateRange.getBoundingClientRect();
             if (candidateRect.width < 1 || candidateRect.height < 2) continue;
-            lastTextNode = textNode;
-            lastTextEnd = candidateTextEnd;
             lastCharacterRect = candidateRect;
           }
-          if (!lastTextNode || !lastCharacterRect) return [];
-          const lastCharacterRange = document.createRange();
-          lastCharacterRange.setStart(lastTextNode, lastTextEnd - 1);
-          lastCharacterRange.setEnd(lastTextNode, lastTextEnd);
-          const endRect = lastCharacterRange.getBoundingClientRect();
-          const startRect = rectangles[0];
-          return [startRect, endRect].map((rect) => ({
+          if (!firstCharacterRect || !lastCharacterRect) return [];
+          return [firstCharacterRect, lastCharacterRect].map((rect) => ({
             bottom: rect.bottom,
             left: rect.left,
             right: rect.right,
@@ -769,7 +885,7 @@ export class CoverLookupActions {
     const startRect = textRects[0];
     const endRect = textRects[textRects.length - 1];
     await this.coverLookup.page.mouse.move(
-      startRect.left + 2,
+      startRect.left + (startRect.right - startRect.left) * 0.25,
       startRect.top + (startRect.bottom - startRect.top) / 2,
     );
     await this.coverLookup.page.mouse.down();

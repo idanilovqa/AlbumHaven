@@ -216,7 +216,7 @@ test('every checked-in timing metric declares explicit local and CI contracts', 
   const requiredMetricIds = listRequiredPerformanceTimingMetricIds();
 
   assert.ok(Object.keys(contract).length > 6, 'the authority must cover all timing metrics, not only overrides');
-  assert.ok(requiredMetricIds.length > 19, 'the required inventory must cover timing metrics across the 19 targets');
+  assert.ok(requiredMetricIds.length > 19, 'the required inventory must cover timing metrics across the 21 targets');
   assert.equal(new Set(requiredMetricIds).size, requiredMetricIds.length, 'required timing metric ids must be unique');
   assert.deepEqual(
     Object.keys(contract).sort(),

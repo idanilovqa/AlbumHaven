@@ -9383,6 +9383,79 @@ def test_problematic_summary_reason_rows_match_full_repair_rows(case, ignore_sco
     )
 
 
+@pytest.mark.parametrize(
+    ("override", "persisted", "scanned", "expected"),
+    [
+        (True, None, "Non-album rarity", ""),
+        (True, "Non-album rarity", None, "Non-album rarity"),
+        (False, "Non-album rarity", None, ""),
+        (False, None, "Non-album rarity", "Non-album rarity"),
+        (None, None, "Non-album rarity", "Non-album rarity"),
+        (None, "Non-album rarity", None, "Non-album rarity"),
+    ],
+)
+def test_problematic_projection_resolves_each_file_exception_once(
+    monkeypatch, override, persisted, scanned, expected,
+):
+    from music_app.services import library_browse_postgres as browse
+
+    rows = _healthy_problematic_order_rows([1, 2, 3])
+    for row in rows:
+        row["exception_override_present"] = override
+        row["exception_type"] = persisted
+        row["file_entry"]["exception_type"] = scanned
+    original = browse._effective_row_exception_type
+    calls = []
+
+    def observed(row):
+        calls.append(row["file_private_path"])
+        return original(row)
+
+    monkeypatch.setattr(browse, "_effective_row_exception_type", observed)
+    album = browse._problematic_album_projection_payloads(rows)[0]
+    assert [track["exception_type"] for track in album["tracks"]] == [expected] * 3
+    assert [entry["exception_type"] for entry in album["_file_entries"]] == [expected] * 3
+    assert calls == [row["file_private_path"] for row in rows]
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "z/track.flac", r"C:\Music\track.flac", "C:track.flac",
+        "z/track.flac/", "z/track.flac/.", "z/..", ".", "/",
+        "C:\\", "C:", r"\\server\share", "\\\\server\\share\\",
+        r"\\server\share\track.flac", "z/.hidden", "z/track.",
+    ],
+)
+def test_problematic_compact_filenames_preserve_native_paths_and_reason_order(monkeypatch, path):
+    from os.path import basename
+    from music_app.services import library_browse_postgres as browse
+
+    rows = _healthy_problematic_order_rows([1, 2, 3])
+    paths = [path, "a/Other.flac", "m/third.flac"]
+    for row, track_path in zip(rows, paths, strict=True):
+        row["file_private_path"] = track_path
+        row["file_entry"]["path"] = track_path
+    rows[0]["file_entry"]["title"] = ""
+    rows[1]["file_entry"]["year"] = None
+    rows[2]["file_entry"]["artist"] = ""
+    album = browse._problematic_album_projection_payloads(rows)[0]
+    full = browse._problematic_track_problem_rows(album)
+    original_path = browse.Path
+    assert all(row["filename"] == original_path(row["path"]).name for row in full)
+    path_calls = []
+
+    def observed_path(value):
+        path_calls.append(value)
+        return original_path(value)
+
+    monkeypatch.setattr(browse, "Path", observed_path)
+    compact = browse._problematic_track_problem_rows(album, include_repair_metadata=False)
+    assert all(row["filename"] == original_path(row["path"]).name for row in compact)
+    assert compact == [{key: row[key] for key in ("path", "filename", "reasons")} for row in full]
+    assert path_calls == [value for value in paths if basename(value) in ("", ".")]
+
+
 def test_problematic_summary_omits_unused_repair_identity_materialization(monkeypatch):
     from music_app.services import library_browse_postgres as browse
 

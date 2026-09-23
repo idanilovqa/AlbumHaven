@@ -159,3 +159,8 @@ Section 3 owns the first baseline schema migration. Do not add future-feature re
 `0064_grant_library_membership_delete.sql` grants the application role `DELETE` only on `library.library_memberships` so the existing authorized access-removal transaction can complete. Other runtime and readonly privileges are unchanged.
 
 Set `PGPASSFILE` when passwordless local automation is required. Keep migration SQL idempotent and review query plans for index-sensitive changes.
+
+`0081_grant_move_policy_settings_delete.sql` grants the application role `DELETE`
+only on `library.move_policy_settings`. Root-setting saves replace move-policy
+rows transactionally; upgraded databases that omitted the broader `0020` grant
+need this narrow permission. Readonly privileges remain unchanged.

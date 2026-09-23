@@ -822,6 +822,38 @@ test('fetchAndRender cannot overwrite a newer locally filtered artist-family vie
   assert.equal(context.state.busy, false);
 });
 
+test('fetchAndRender rejects an unqualified background response while a tag edit owns visible resources', async () => {
+  const { context, calls, pendingRequests } = createContext();
+  const originalView = {
+    ...context.state.view,
+    selected_artist: 'Current Artist',
+    artist_groups: [{
+      artist: 'Current Artist',
+      albums: [{ key: 'current-album', name: 'Current Album', track_count_preview: 16 }],
+    }],
+  };
+  context.state.view = originalView;
+  context.hasActiveTagEditViewMutation = () => true;
+
+  const request = context.fetchAndRender(
+    '/view-data?surface=albums&artist=Current%20Artist',
+    false,
+    { preserveScroll: true },
+  );
+  assert.equal(pendingRequests.length, 1);
+  pendingRequests[0].resolveWith({
+    selected_artist: 'Current Artist',
+    artist_groups: [{
+      artist: 'Current Artist',
+      albums: [{ key: 'current-album', name: 'Current Album', track_count_preview: 13 }],
+    }],
+  });
+
+  assert.equal(await request, false);
+  assert.deepEqual(calls.applyViewPayload, []);
+  assert.deepEqual(context.state.view, originalView);
+});
+
 test('fetchAndRender does not apply a deferred response after shouldApplyResponse becomes false', async () => {
   const { context, calls, pendingRequests } = createContext();
   const originalView = {

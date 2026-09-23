@@ -1342,8 +1342,19 @@ test('terminal tag edit refresh skips stale response fragments before canonical 
     requires_view_refresh: true,
     updated_albums: [staleResponseAlbum],
   };
+  const reconciledOptimisticAlbums = optimisticAlbums;
+  const existingOptimisticProjection = {
+    ...optimisticAlbums[0],
+    key: 'stable-destination',
+    tracks: [{ path: 'C:\\Music\\Artist\\Destination\\00 - Existing.flac', album: 'Destination' }],
+  };
+  const completeOptimisticViewAlbums = [
+    existingOptimisticProjection,
+    ...reconciledOptimisticAlbums,
+  ];
   const applyCalls = [];
   const watchedTasks = [];
+  const localViewClaims = [];
   const closedModal = { hidden: true };
   const context = loadHelper([album], {
     document: {
@@ -1357,9 +1368,28 @@ test('terminal tag edit refresh skips stale response fragments before canonical 
     },
     buildOptimisticUpdatedAlbumsFromEdits() { return optimisticAlbums; },
     deepCloneJson(value) { return JSON.parse(JSON.stringify(value)); },
+    claimLocalViewStateNavigation() {
+      localViewClaims.push('claim');
+      context.state.ui.viewStateRevision += 1;
+      context.state.ui.pendingViewRequest = null;
+      context.state.ui.activeViewRequestController.abort();
+    },
     applyUpdatedAlbumsToCurrentView(albums, options) {
+      localViewClaims.push('optimistic-apply');
       applyCalls.push({ albums, options });
-      return albums;
+      return reconciledOptimisticAlbums;
+    },
+    collectVisibleAlbumsUnique() {
+      return [album, existingOptimisticProjection];
+    },
+    getAlbumTrackPaths(candidate) {
+      return new Set((candidate?.tracks || []).map((track) => track.path));
+    },
+    albumsShareTrackPath(candidate, paths) {
+      return (candidate?.tracks || []).some((track) => paths.has(track.path));
+    },
+    albumsShareRuntimeIdentityAlias(left, right) {
+      return left?.key === right?.key;
     },
     updateOpenTrackModalAfterTagEdit() {},
     renderView() {},
@@ -1374,6 +1404,14 @@ test('terminal tag edit refresh skips stale response fragments before canonical 
       };
     },
   });
+  let activeRequestAborted = false;
+  context.state.ui = {
+    viewStateRevision: 7,
+    pendingViewRequest: { url: '/view-data?surface=albums&artist=Artist' },
+    activeViewRequestController: {
+      abort() { activeRequestAborted = true; },
+    },
+  };
   context.state.tagEditor = { album, tracks: album.tracks, values: {} };
 
   await context.confirmManualTagEdit();
@@ -1387,6 +1425,15 @@ test('terminal tag edit refresh skips stale response fragments before canonical 
   assert.equal(watchedTasks.length, 1);
   assert.equal(watchedTasks[0].taskId, terminalPayload.save_task_id);
   assert.strictEqual(watchedTasks[0].options.terminalPayload, terminalPayload);
+  assert.deepEqual(localViewClaims, ['claim', 'optimistic-apply']);
+  assert.equal(activeRequestAborted, true);
+  assert.equal(context.state.ui.pendingViewRequest, null);
+  assert.equal(watchedTasks[0].options.originatingViewStateRevision, 8);
+  assert.deepEqual(
+    JSON.parse(JSON.stringify(watchedTasks[0].options.optimisticAlbums)),
+    completeOptimisticViewAlbums,
+    'canonical readiness must cover the complete optimistic view after merging an existing destination',
+  );
 });
 
 test('queued tag edit retains its initial optimistic render until the save-task watcher reconciles differing response albums', async () => {

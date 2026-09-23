@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import logging
+from types import SimpleNamespace
+
 import pytest
 
 from music_app.services import cover_refresh_runtime
@@ -311,7 +314,7 @@ def test_refresh_cover_artwork_request_runs_background_jobs_with_runtime_context
         "scan_generation": 12,
     }
 
-    cover_refresh_runtime.refresh_cover_artwork_request(
+    result = cover_refresh_runtime.refresh_cover_artwork_request(
         get_state=lambda: library_state,
         cache_lock=object(),
         config=runtime_config,
@@ -352,6 +355,72 @@ def test_refresh_cover_artwork_request_runs_background_jobs_with_runtime_context
     assert library_state["covers_in_progress"] is False
     assert len(logged) == 1
     assert logged[0]["mode"] == "background"
+    assert result == {
+        "changed": False,
+        "processed": 1,
+        "downloaded": 0,
+        "skipped": 1,
+        "failed": 0,
+        "downloaded_paths": [],
+        "job_results": [],
+    }
+
+
+def test_claimed_cover_refresh_runs_nonempty_plan_with_safe_logger_plumbing(
+    runtime_config, monkeypatch
+):
+    from music_app.jobs.safe_logging import DurablePipelineLogger
+    from music_app.services import app_logging, state as state_service
+
+    executions = []
+    monkeypatch.setattr(
+        state_service,
+        "select_background_cover_refresh_jobs",
+        lambda **_kwargs: [{"folder": "opaque-folder", "track_paths": []}],
+    )
+    monkeypatch.setattr(
+        state_service,
+        "run_cover_jobs",
+        lambda **kwargs: (
+            kwargs["logger"].verbose("private candidate %s", "private-url"),
+            app_logging.flush_log_handlers_debounced(
+                kwargs["logger"], min_interval_seconds=0.1
+            ),
+            executions.append(kwargs),
+            {
+                "changed": False,
+                "processed": 1,
+                "downloaded": 0,
+                "skipped": 1,
+                "failed": 0,
+                "downloaded_paths": [],
+                "job_results": [],
+            },
+        )[-1],
+    )
+    monkeypatch.setattr(
+        state_service, "log_cover_refresh_completion", lambda **_kwargs: None
+    )
+    logger = DurablePipelineLogger(
+        logging.getLogger("test.cover.claimed.nonempty"), domain="cover"
+    )
+
+    result = cover_refresh_runtime.run_claimed_cover_refresh(
+        scope=SimpleNamespace(
+            file_cache={},
+            progress_total=1,
+            mode="post_scan",
+            force_search=False,
+        ),
+        config=runtime_config,
+        logger=logger,
+        should_cancel=lambda: False,
+        progress=lambda **_kwargs: True,
+    )
+
+    assert result["processed"] == 1
+    assert len(executions) == 1
+    assert executions[0]["logger"] is logger
 
 
 def test_refresh_cover_artwork_for_track_paths_request_logs_no_jobs_found(runtime_config, logger):

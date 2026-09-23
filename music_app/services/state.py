@@ -102,6 +102,35 @@ def invalidate_targeted_library_projections(
     )
 
 
+def sync_durable_inventory_revision(
+    library_state: dict[str, object],
+    config: dict[str, object],
+) -> int:
+    """Observe worker commits and invalidate this web process once per revision."""
+
+    current_revision = max(
+        0, int(library_state.get("inventory_mutation_revision") or 0)
+    )
+    try:
+        adapter = select_scan_cache_adapter(config)
+        load_revision = getattr(adapter, "load_inventory_mutation_revision", None)
+        if not callable(load_revision):
+            return current_revision
+        durable_revision = max(0, int(load_revision() or 0))
+    except Exception:
+        return current_revision
+    if durable_revision <= current_revision:
+        return current_revision
+    invalidate_targeted_library_projections(
+        library_state,
+        config,
+        revision=durable_revision,
+        affected_album_keys=(),
+    )
+    library_state["relation_projection_ready"] = False
+    return durable_revision
+
+
 def _bounded_file_error_history_recorder(
     config: dict[str, object],
     logger: object,
@@ -113,12 +142,36 @@ def _bounded_file_error_history_recorder(
     history_scope=None,
 ) -> Callable[..., None]:
     counters = counter_state if counter_state is not None else {}
-    counter_key = f"{summary_id_prefix}:{getattr(history_scope, 'library_id', 'unattributed')}:{scan_generation}"
+    counter_key = (
+        f"{summary_id_prefix}:"
+        f"{getattr(history_scope, 'library_id', 'unattributed')}:"
+        f"{scan_generation}"
+    )
+    durable_reason_codes = {
+        "Library cover file inspection failed": "cover_file_inspection_failed",
+        "Library cover image decode failed": "cover_image_decode_failed",
+        "Library metadata read failed": "metadata_read_failed",
+        "Library directory read failed": "directory_read_failed",
+        "Library directory entry inspection failed": "directory_entry_inspection_failed",
+        "Library candidate file stat failed": "candidate_file_stat_failed",
+    }
 
     def record_file_error(action: str, **fields: object) -> None:
         recorded_file_errors = int(counters.get(counter_key) or 0) + 1
         counters[counter_key] = recorded_file_errors
         if recorded_file_errors <= _SCAN_FILE_ERROR_HISTORY_LIMIT:
+            if config.get("DURABLE_WORKER_SAFE_LOGGING") is True:
+                log_app_event(
+                    config,
+                    logger,
+                    "Durable library file error",
+                    level="error",
+                    history=True,
+                    history_scope=history_scope,
+                    scan_generation=scan_generation,
+                    reason_code=durable_reason_codes.get(action, "scan_file_error"),
+                )
+                return
             log_app_event(
                 config,
                 logger,
@@ -218,6 +271,8 @@ def init_state(app) -> None:
         "cold_scan_handoff_error": "",
         "cold_scan_claim_token": 0,
         "cold_scan_claimed_at": 0.0,
+        "cold_scan_force": False,
+        "cold_scan_is_cold_start": True,
         "rescan_ignore_existing_cache": False,
         "scan_metadata_repair_required": False,
         "relation_views": empty_relation_views(),
@@ -419,6 +474,7 @@ def refresh_relation_views_for_state(
     expected_scan_generation: int | None = None,
     expected_cover_mutation_revision: int | None = None,
     expected_inventory_mutation_revision: int | None = None,
+    before_commit: Callable[[object], object] | None = None,
     publication_state: dict[str, object] | None = None,
 ) -> None:
     guarded_live_repair = (
@@ -463,6 +519,8 @@ def refresh_relation_views_for_state(
         snapshot_options["expected_inventory_mutation_revision"] = (
             expected_inventory_mutation_revision
         )
+    if before_commit is not None:
+        snapshot_options["before_commit"] = before_commit
     if seed_missing_album_ratings:
         if expected_scan_generation is None:
             raise ValueError(
@@ -576,17 +634,31 @@ def scan_music_incremental(
     expected_scan_generation: int | None = None,
     publication_state: dict[str, object] | None = None,
     publish_partial_snapshot: Callable[[], None] | None = None,
+    root_definitions: list[dict[str, object]] | None = None,
+    progress_callback: Callable[..., None] | None = None,
+    should_cancel: Callable[[], bool] | None = None,
+    exception_overrides: dict[str, object] | None = None,
 ) -> tuple[dict[str, dict[str, object]], float]:
     history_scope = resolve_media_host_history_scope(config)
     cfg = config
-    configured_roots = iter_library_root_paths(cfg)
+    selected_root_definitions = (
+        list(root_definitions) if root_definitions is not None else get_library_roots(cfg)
+    )
+    configured_roots = (
+        [
+            Path(str(root.get("path") or "")).resolve(strict=False)
+            for root in selected_root_definitions
+        ]
+        if root_definitions is not None
+        else [Path(root).resolve(strict=False) for root in iter_library_root_paths(cfg)]
+    )
     scan_roots = [root for root in configured_roots if root.exists()]
     if not scan_roots:
         raise FileNotFoundError(
             "No configured library roots are currently available: "
             + ", ".join([str(root) for root in configured_roots] or [str(cfg["MUSIC_DIR"])])
         )
-    root_definitions = get_library_roots(cfg)
+    root_definitions = selected_root_definitions
     available_paths = {
         normcase(str(Path(root).resolve(strict=False)))
         for root in scan_roots
@@ -639,13 +711,19 @@ def scan_music_incremental(
         roots=scan_roots,
         supported_extensions=cfg["SUPPORTED_EXTENSIONS"],
         image_extensions=cfg["IMAGE_EXTENSIONS"],
-        exception_overrides=load_exception_overrides(cfg),
+        exception_overrides=(
+            dict(exception_overrides)
+            if exception_overrides is not None
+            else load_exception_overrides(cfg)
+        ),
         use_existing_cache=use_existing_cache,
         expected_scan_generation=expected_scan_generation,
         root_definitions=root_definitions,
         publication_state=publication_state,
         publish_partial_snapshot=publish_partial_snapshot,
         record_file_error=record_file_error,
+        progress_callback=progress_callback,
+        should_cancel=should_cancel,
     )
     if publication_state is not None and traversal_failed_root_ids:
         observed_root_ids = publication_state.get("observed_library_root_ids")
@@ -779,6 +857,11 @@ def refresh_library_for_state(
     logger: object,
     *,
     force: bool = False,
+    root_definitions: list[dict[str, object]] | None = None,
+    progress_callback: Callable[..., None] | None = None,
+    should_cancel: Callable[[], bool] | None = None,
+    expected_inventory_mutation_revision: int | None = None,
+    before_commit: Callable[[object], object] | None = None,
 ) -> None:
     def refresh_relation_views(
         *,
@@ -786,6 +869,7 @@ def refresh_library_for_state(
         expected_scan_generation: int | None = None,
         expected_cover_mutation_revision: int | None = None,
         expected_inventory_mutation_revision: int | None = None,
+        before_commit: Callable[[object], object] | None = None,
         publication_state: dict[str, object] | None = None,
     ) -> None:
         options: dict[str, object] = {}
@@ -799,6 +883,8 @@ def refresh_library_for_state(
             options["expected_inventory_mutation_revision"] = (
                 expected_inventory_mutation_revision
             )
+        if before_commit is not None:
+            options["before_commit"] = before_commit
         if publication_state is not None:
             options["publication_state"] = publication_state
         refresh_relation_views_for_state(
@@ -817,6 +903,9 @@ def refresh_library_for_state(
             config=config,
             logger=logger,
             library_state=library_state,
+            root_definitions=root_definitions,
+            progress_callback=progress_callback,
+            should_cancel=should_cancel,
             **kwargs,
         ),
         refresh_relation_views=refresh_relation_views,
@@ -884,6 +973,8 @@ def refresh_library_for_state(
         recover_library_watch_health=config.get(
             "_LIBRARY_WATCH_MANUAL_RECOVERY_CALLBACK"
         ),
+        expected_inventory_mutation_revision=expected_inventory_mutation_revision,
+        before_commit=before_commit,
     )
 
 

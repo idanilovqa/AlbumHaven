@@ -724,6 +724,14 @@ async function fetchAndRender(url, push = true, options = {}) {
     if (requestTagEditMutationRevision !== Number(state.ui.tagEditOptimisticMutationRevision || 0)) {
       return false;
     }
+    if (
+      !push
+      && typeof requestOptions.shouldApplyResponse !== 'function'
+      && typeof hasActiveTagEditViewMutation === 'function'
+      && hasActiveTagEditViewMutation()
+    ) {
+      return false;
+    }
     if (typeof requestOptions.shouldApplyResponse === 'function') {
       let shouldApplyResponse = false;
       try {

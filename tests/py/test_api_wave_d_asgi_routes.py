@@ -11,6 +11,7 @@ import importlib
 from pathlib import Path
 from threading import Event, Timer
 from types import SimpleNamespace
+import uuid
 
 from fastapi import FastAPI
 import pytest
@@ -338,6 +339,129 @@ def test_asgi_cover_lookup_task_list_mark_clear_and_cancel(app):
     assert canceled["id"] == cancel_id
     assert canceled["status"] == "canceled"
     assert canceled["cancel_requested"] is True
+
+
+def test_asgi_durable_cover_lookup_tasks_reload_mark_and_clear_with_policy_scope(
+    app, monkeypatch
+):
+    from music_app.routes import api_wave_d_asgi_routes as routes
+
+    class DurableCoverTasks:
+        def __init__(self):
+            self.tasks = {
+                "durable-lookup-1": {
+                    "id": "durable-lookup-1",
+                    "status": "completed",
+                    "artist": "Scoped Artist",
+                    "notification_action_taken": False,
+                    "notification_completed_at": "2026-09-23T12:00:00+00:00",
+                    "notification_expires_at": "",
+                },
+                "durable-lookup-2": {
+                    "id": "durable-lookup-2",
+                    "status": "completed",
+                    "artist": "Second Scoped Artist",
+                    "notification_action_taken": False,
+                    "notification_completed_at": "2026-09-23T12:01:00+00:00",
+                    "notification_expires_at": "",
+                },
+            }
+            self.remote_save_checkpoints = {
+                "durable-lookup-1": "publication_completed"
+            }
+            self.scopes = []
+
+        def list_candidate_lookup_tasks(self, *, actor_account_id, library_id):
+            self.scopes.append(("list", actor_account_id, library_id))
+            return [
+                dict(task)
+                for task in self.tasks.values()
+                if not task.get("notification_cleared")
+            ]
+
+        def mark_candidate_lookup_notification_action_taken(
+            self, *, actor_account_id, library_id, task_key
+        ):
+            self.scopes.append(("mark", actor_account_id, library_id))
+            task = self.tasks.get(task_key)
+            if task is None or task.get("notification_cleared"):
+                return None
+            task["notification_action_taken"] = True
+            return dict(task)
+
+        def clear_completed_candidate_lookup_tasks(
+            self, *, actor_account_id, library_id, task_keys
+        ):
+            self.scopes.append(("clear", actor_account_id, library_id))
+            selected = set(task_keys or self.tasks)
+            removed = {
+                task_key
+                for task_key, task in list(self.tasks.items())
+                if task_key in selected
+                and task["status"] in {"completed", "failed", "canceled"}
+                and not task.get("notification_cleared")
+            }
+            for task_key in removed:
+                self.tasks[task_key]["notification_cleared"] = True
+            return removed
+
+    repository = DurableCoverTasks()
+    audit = SimpleNamespace(account_id=1, library_id=1)
+    monkeypatch.setattr(
+        routes,
+        "_durable_cover_request_context",
+        lambda _request: (repository, audit),
+    )
+    first_app = _make_wave_d_app(app)
+    first_app.state.cover_job_repository = repository
+
+    list_status, _headers, list_body = _run_asgi_request(
+        first_app, "GET", "/utilities/cover-lookup/tasks"
+    )
+    single_clear_status, _headers, single_clear_body = _run_asgi_request(
+        first_app,
+        "POST",
+        "/utilities/cover-lookup/task/durable-lookup-1/clear",
+        json_body={},
+    )
+
+    reloaded_app = _make_wave_d_app(app)
+    reloaded_app.state.cover_job_repository = repository
+    reload_status, _headers, reload_body = _run_asgi_request(
+        reloaded_app, "GET", "/utilities/cover-lookup/tasks"
+    )
+    mark_status, _headers, mark_body = _run_asgi_request(
+        reloaded_app,
+        "POST",
+        "/utilities/cover-lookup/task/durable-lookup-2/mark-action-taken",
+        json_body={},
+    )
+    clear_status, _headers, clear_body = _run_asgi_request(
+        reloaded_app,
+        "POST",
+        "/utilities/cover-lookup/tasks/clear-completed",
+        json_body={},
+    )
+
+    assert list_status == single_clear_status == mark_status == reload_status == clear_status == 200
+    assert {task["id"] for task in _decode_json(list_body)["tasks"]} == {
+        "durable-lookup-1",
+        "durable-lookup-2",
+    }
+    assert _decode_json(single_clear_body)["removed_count"] == 1
+    assert "durable-lookup-1" in repository.tasks
+    assert repository.remote_save_checkpoints == {
+        "durable-lookup-1": "publication_completed"
+    }
+    assert [task["id"] for task in _decode_json(reload_body)["tasks"]] == [
+        "durable-lookup-2"
+    ]
+    assert _decode_json(mark_body)["task"]["notification_action_taken"] is True
+    assert _decode_json(clear_body) == {"ok": True, "removed_count": 1, "tasks": []}
+    assert set(repository.tasks) == {"durable-lookup-1", "durable-lookup-2"}
+    assert all(task["notification_cleared"] for task in repository.tasks.values())
+    assert repository.scopes
+    assert {(account_id, library_id) for _, account_id, library_id in repository.scopes} == {(1, 1)}
 
 
 def test_asgi_cover_lookup_notification_routes_use_asgi_config_without_flask_bridge(app):
@@ -2011,6 +2135,7 @@ def test_asgi_cover_lookup_add_remote_merges_existing_candidates_and_remote_imag
         "Manual cover link extraction requested",
         "Manual cover link extraction completed",
     ]
+    assert all("urls" not in call for call in log_calls)
     assert all(call["config"] is app.config for call in log_calls)
     assert all(call["logger"] is asgi_app.state.logger for call in log_calls)
     assert update_calls[0]["config"] is app.config
@@ -2173,6 +2298,284 @@ def test_asgi_cover_lookup_save_remote_queues_selected_candidate(app, monkeypatc
     assert queued_calls[0]["kwargs"]["library_state"] is asgi_app.state.library_state
     assert queued_calls[0]["kwargs"]["user_agent"] == app.config["MUSICBRAINZ_USER_AGENT"]
     assert queued_calls[0]["kwargs"]["cover_selection_origin"] == "user"
+
+
+def test_asgi_cover_lookup_save_remote_uses_atomic_durable_acceptance(app, monkeypatch):
+    from music_app.routes import api_wave_d_asgi_routes as asgi_routes
+
+    track_path = (app.config["MUSIC_DIR"] / "Artist" / "Album" / "song.mp3").resolve()
+    track_path.parent.mkdir(parents=True, exist_ok=True)
+    track_path.write_bytes(b"track")
+    task_id = "11111111-1111-4111-8111-111111111111"
+    candidate = {
+        "id": "candidate-1",
+        "art_kind": "cover",
+        "url": "https://images.example/cover.jpg",
+        "thumbnail_url": "https://images.example/thumb.jpg",
+        "source": "manual",
+        "source_label": "Manual URL",
+        "width": 1000,
+        "height": 1000,
+    }
+
+    class Repository:
+        def __init__(self):
+            self.accepted = []
+            self.status = "completed"
+
+        def get_task(self, **_kwargs):
+            return {
+                "candidate_generation": task_id,
+                "resource_revision": 0,
+                "local_album_id": 1,
+                "status": self.status,
+                "provider_payload": {
+                    "id": task_id,
+                    "status": self.status,
+                    "possible_matches": [candidate],
+                    "selected_candidate_id": (
+                        "candidate-1" if self.status == "running" else ""
+                    ),
+                },
+            }
+
+        def accept_remote_save(self, **kwargs):
+            self.accepted.append(kwargs)
+            self.status = "running"
+            return SimpleNamespace(job_id=91)
+
+    repository = Repository()
+    queued = []
+    monkeypatch.setattr(
+        asgi_routes,
+        "_durable_cover_request_context",
+        lambda _request: (
+            repository,
+            SimpleNamespace(
+                library_id=1,
+                account_id=2,
+                deployment_mode="self_hosted_private_web",
+                client_surface_class="private_web",
+            ),
+        ),
+    )
+    monkeypatch.setattr(
+        asgi_routes,
+        "queue_cover_lookup_save_remote_task",
+        lambda *_args, **_kwargs: queued.append(True),
+    )
+    monkeypatch.setattr(
+        asgi_routes,
+        "_task_matches_album_context",
+        lambda *_args, **_kwargs: True,
+    )
+    monkeypatch.setattr(
+        asgi_routes,
+        "request_origin_ref_for_request",
+        lambda _request: "browser:test-origin",
+    )
+    asgi_app = _make_wave_d_app(app)
+    asgi_app.state.flask_app = _FatalFlaskBridge()
+    asgi_app.state.cover_job_repository = repository
+
+    status, _headers, body = _run_asgi_request(
+        asgi_app,
+        "POST",
+        "/utilities/cover-lookup/save-remote",
+        json_body={
+            "album": _album_payload(track_path),
+            "task_id": task_id,
+            "candidate_id": "candidate-1",
+        },
+    )
+
+    assert status == 200
+    payload = _decode_json(body)
+    assert payload["task"]["status"] == "running"
+    assert repository.accepted[0]["candidate_id"] == "candidate-1"
+    assert repository.accepted[0]["candidate_generation"] == uuid.UUID(task_id)
+    assert queued == []
+
+
+def test_asgi_snapshot_only_save_materializes_durable_candidate_authority_before_acceptance(
+    app, monkeypatch
+):
+    from music_app.routes import api_wave_d_asgi_routes as asgi_routes
+
+    track_path = (app.config["MUSIC_DIR"] / "Artist" / "Snapshot" / "song.mp3").resolve()
+    track_path.parent.mkdir(parents=True, exist_ok=True)
+    track_path.write_bytes(b"track")
+    generation = "7fd1c5cc-6e48-41a1-8174-65bcb75d094e"
+    candidate = {
+        "id": "saved-candidate",
+        "art_kind": "cover",
+        "url": "https://images.example/saved.jpg",
+        "thumbnail_url": "https://images.example/saved-thumb.jpg",
+    }
+
+    class SnapshotRepository:
+        def get_for_album_context(self, *, album_id):
+            assert album_id == 41
+            return {
+                "search_generation": generation,
+                "candidates": [candidate],
+                "best_candidate_id": "saved-candidate",
+            }
+
+    class DurableRepository:
+        def __init__(self):
+            self.task = None
+            self.events = []
+
+        def get_task(self, **_kwargs):
+            return self.task
+
+        def current_inventory_revision(self, **_kwargs):
+            return 5
+
+        def persist_candidate_authority(self, **kwargs):
+            self.events.append(("persist", kwargs))
+            self.task = {
+                "candidate_generation": kwargs["candidate_generation"],
+                "resource_revision": kwargs["resource_revision"],
+                "local_album_id": 41,
+                "status": "completed",
+                "provider_payload": dict(kwargs["task_payload"]),
+            }
+            return {"task_id": 73, "row_revision": 1}
+
+        def accept_remote_save(self, **kwargs):
+            self.events.append(("accept", kwargs))
+            self.task["status"] = "running"
+            return SimpleNamespace(job_id=91)
+
+    durable_repository = DurableRepository()
+    audit = SimpleNamespace(
+        library_id=1,
+        account_id=2,
+        deployment_mode="self_hosted_private_web",
+        client_surface_class="private_web",
+    )
+    monkeypatch.setattr(
+        asgi_routes,
+        "_durable_cover_request_context",
+        lambda _request: (durable_repository, audit),
+    )
+    monkeypatch.setattr(
+        asgi_routes,
+        "_resolved_snapshot_album_context",
+        lambda *_args, **_kwargs: (SnapshotRepository(), 41, None),
+    )
+    monkeypatch.setattr(
+        asgi_routes,
+        "request_origin_ref_for_request",
+        lambda _request: "browser:test-origin",
+    )
+    monkeypatch.setattr(
+        asgi_routes,
+        "queue_cover_lookup_save_remote_task",
+        lambda *_args, **_kwargs: pytest.fail("durable save must not use process-local queue"),
+    )
+    asgi_app = _make_wave_d_app(app)
+    asgi_app.state.flask_app = _FatalFlaskBridge()
+
+    status, _headers, body = _run_asgi_request(
+        asgi_app,
+        "POST",
+        "/utilities/cover-lookup/save-remote",
+        json_body={
+            "album": {**_album_payload(track_path), "key": "snapshot-album"},
+            "snapshot_generation": generation,
+            "candidate_id": "saved-candidate",
+        },
+    )
+
+    assert status == 200, _decode_json(body)
+    assert [event[0] for event in durable_repository.events] == ["persist", "accept"]
+    assert durable_repository.events[0][1]["candidates"] == [candidate]
+    assert durable_repository.events[1][1]["candidate_generation"] == uuid.UUID(
+        generation
+    )
+
+
+def test_asgi_manual_link_candidates_are_persisted_as_durable_authority(
+    app, monkeypatch
+):
+    from music_app.routes import api_wave_d_asgi_routes as asgi_routes
+
+    track_path = (app.config["MUSIC_DIR"] / "Artist" / "Manual" / "song.mp3").resolve()
+    track_path.parent.mkdir(parents=True, exist_ok=True)
+    track_path.write_bytes(b"track")
+    candidate = {
+        "id": "manual-candidate",
+        "art_kind": "cover",
+        "url": "https://images.example/manual.jpg",
+    }
+
+    class DurableRepository:
+        def __init__(self):
+            self.persisted = []
+            self.task = None
+
+        def get_task(self, **_kwargs):
+            return self.task
+
+        def current_inventory_revision(self, **_kwargs):
+            return 5
+
+        def persist_candidate_authority(self, **kwargs):
+            self.persisted.append(kwargs)
+            self.task = {
+                "candidate_generation": kwargs["candidate_generation"],
+                "resource_revision": 5,
+                "local_album_id": 41,
+                "status": "completed",
+                "provider_payload": dict(kwargs["task_payload"]),
+            }
+            return {"task_id": 73, "row_revision": 1}
+
+    durable_repository = DurableRepository()
+    monkeypatch.setattr(
+        asgi_routes,
+        "_durable_cover_request_context",
+        lambda _request: (
+            durable_repository,
+            SimpleNamespace(
+                library_id=1,
+                account_id=2,
+                deployment_mode="self_hosted_private_web",
+                client_surface_class="private_web",
+            ),
+        ),
+    )
+    monkeypatch.setattr(
+        asgi_routes,
+        "request_origin_ref_for_request",
+        lambda _request: "browser:test-origin",
+    )
+    monkeypatch.setattr(
+        asgi_routes,
+        "add_manual_cover_candidates_from_urls",
+        lambda *_args, **_kwargs: [candidate],
+    )
+    asgi_app = _make_wave_d_app(app)
+    asgi_app.state.flask_app = _FatalFlaskBridge()
+
+    status, _headers, body = _run_asgi_request(
+        asgi_app,
+        "POST",
+        "/utilities/cover-lookup/add-remote",
+        json_body={
+            "album": {**_album_payload(track_path), "key": "manual-album"},
+            "urls": ["https://manual.example/cover"],
+        },
+    )
+
+    assert status == 200, _decode_json(body)
+    assert durable_repository.persisted[0]["candidates"] == [candidate]
+    payload = _decode_json(body)
+    assert payload["task"]["possible_matches"] == [candidate]
+    assert payload["task"]["id"] == durable_repository.persisted[0]["task_key"]
 
 
 @pytest.mark.parametrize(

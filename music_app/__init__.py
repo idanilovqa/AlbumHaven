@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
+from datetime import datetime, timezone
 from inspect import isawaitable
 import logging
 import threading
@@ -35,7 +36,7 @@ def _stop_library_watch_runtime(
     *,
     watch_service,
     event_coordinator,
-    targeted_executor,
+    targeted_executor=None,
     targeted_reconciler=None,
 ) -> None:
     try:
@@ -75,7 +76,8 @@ def _recover_library_watch_after_manual_scan(
     except Exception as exc:
         clear_error = exc
     normalized_roots = tuple(dict(root) for root in root_definitions)
-    targeted_reconciler.replace_roots(normalized_roots)
+    if targeted_reconciler is not None:
+        targeted_reconciler.replace_roots(normalized_roots)
     try:
         watch_service.replace_roots(normalized_roots)
     except Exception:
@@ -237,8 +239,6 @@ def create_asgi_app():
     from fastapi import FastAPI
 
     from config import APP_NAME, APP_VERSION
-    from music_app.services.lastfm_retry import start_lastfm_retry_worker, stop_lastfm_retry_worker
-    from music_app.services.auth_welcome_worker import start_welcome_retry_worker
     from music_app.services.library_reconciliation import (
         LibraryWatchService,
         WatchdogLibraryEventSource,
@@ -248,19 +248,12 @@ def create_asgi_app():
         CoordinatorProblem,
         LibraryEventCoordinator,
     )
-    from music_app.services.exception_overrides import load_exception_overrides
-    from music_app.services.runtime_shutdown import create_daemon_executor
-    from music_app.services.scan_cache_persistence import select_scan_cache_adapter
-    from music_app.services.save_tasks import acquire_structural_tag_edit_reservation
-    from music_app.services.targeted_library_reconciliation import (
-        TargetedLibraryReconciler,
-    )
+    from music_app.services.scan_jobs_postgres import PostgresScanJobRepository
+    from music_app.services.cover_jobs_postgres import PostgresCoverJobRepository
     from music_app.services.runtime_shutdown import request_runtime_shutdown
     from music_app.services.state import (
         ensure_runtime_relation_projection_ready,
         hydrate_runtime_library_state_on_startup,
-        invalidate_targeted_library_projections,
-        start_background_refresh_for_state,
     )
 
     runtime = _create_asgi_runtime_state()
@@ -278,13 +271,12 @@ def create_asgi_app():
             and library_state.get("scan_metadata_repair_required")
             and not library_state.get("scan_in_progress")
         ):
-            start_background_refresh_for_state(
-                library_state,
-                runtime.config,
-                runtime.logger,
-                force=True,
-                scan_mode="background",
-            )
+            with runtime.cold_scan_handoff_lock:
+                library_state["cold_scan_pending"] = True
+                library_state["cold_scan_handoff_status"] = "pending"
+                library_state["cold_scan_handoff_error"] = ""
+                library_state["cold_scan_force"] = True
+                library_state["cold_scan_is_cold_start"] = False
         if (
             not hydrated
             and not library_state.get("last_error")
@@ -297,10 +289,16 @@ def create_asgi_app():
                 library_state["cold_scan_pending"] = True
                 library_state["cold_scan_handoff_status"] = "pending"
                 library_state["cold_scan_handoff_error"] = ""
-        lastfm_started = False
-        welcome_worker = None
-        targeted_executor = None
-        targeted_reconciler = None
+                library_state["cold_scan_force"] = False
+                library_state["cold_scan_is_cold_start"] = True
+        targeted_database_url = str(
+            runtime.config.get("ALBUM_HAVEN_APP_DATABASE_URL") or ""
+        ).strip()
+        targeted_roots = (
+            tuple(get_library_roots(runtime.config))
+            if targeted_database_url
+            else ()
+        )
         runtime.library_event_coordinator = None
         runtime.library_watch_service = None
 
@@ -309,23 +307,11 @@ def create_asgi_app():
             shutdown_errors: list[tuple[str, BaseException]] = []
             shutdown_stages = (
                 (
-                    "welcome mail retry worker",
-                    lambda: welcome_worker.stop() if welcome_worker is not None else None,
-                ),
-                (
                     "library filesystem watcher",
                     lambda: _stop_library_watch_runtime(
                         watch_service=runtime.library_watch_service,
                         event_coordinator=runtime.library_event_coordinator,
-                        targeted_executor=targeted_executor,
-                        targeted_reconciler=targeted_reconciler,
                     ),
-                ),
-                (
-                    "Last.fm retry worker",
-                    lambda: stop_lastfm_retry_worker(runtime)
-                    if lastfm_started
-                    else None,
                 ),
                 ("waveform peaks", _app.state.waveform_peaks_registry.shutdown),
                 ("playback PCM", _app.state.playback_pcm_registry.shutdown),
@@ -346,89 +332,39 @@ def create_asgi_app():
                     f"application shutdown failed: {details}"
                 ) from shutdown_errors[0][1]
 
-        lastfm_started = True
-        try:
-            start_lastfm_retry_worker(runtime)
-            welcome_worker = start_welcome_retry_worker(_app)
-            targeted_executor = _BoundedExecutorAdmission(
-                create_daemon_executor(
-                    max_workers=1,
-                    thread_name_prefix="albumhaven-targeted-reconciliation",
-                ),
-                max_outstanding=256,
-            )
-            targeted_reconciler = TargetedLibraryReconciler(
-                runtime.config,
-                repository=select_scan_cache_adapter(runtime.config),
-                root_definitions=get_library_roots(runtime.config),
-                exception_overrides_provider=lambda: load_exception_overrides(
-                    runtime.config
-                ),
-                after_commit=lambda result: invalidate_targeted_library_projections(
-                    runtime.library_state,
-                    runtime.config,
-                    revision=result.revision,
-                    affected_album_keys=result.affected_album_keys,
-                ),
-                reservation_acquirer=acquire_structural_tag_edit_reservation,
-                publication_guard=runtime.library_watch_health_service.publication_guard,
-            )
-        except BaseException:
-            await shutdown_resources()
-            raise
+        scan_jobs = PostgresScanJobRepository(
+            database_url=targeted_database_url
+        )
+        _app.state.scan_job_repository = scan_jobs
+        _app.state.cover_job_repository = (
+            PostgresCoverJobRepository(database_url=targeted_database_url)
+            if targeted_database_url
+            else None
+        )
+        from music_app.services.lastfm_retry_jobs_postgres import (
+            PostgresLastfmRetryJobRepository,
+        )
 
-        def targeted_request_root_ids(request) -> tuple[str, ...]:
-            root_ids = {str(request.root_id)}
-            for move in request.moves:
-                root_ids.add(str(move.source_root_id))
-                root_ids.add(str(move.destination_root_id))
-            return tuple(sorted(root_id for root_id in root_ids if root_id))
+        _app.state.lastfm_retry_job_repository = (
+            PostgresLastfmRetryJobRepository(database_url=targeted_database_url)
+            if targeted_database_url
+            else None
+        )
+        watcher_library_id = (
+            scan_jobs.resolve_local_library_id() if targeted_database_url else None
+        )
 
-        def reconcile_targeted_request(request) -> None:
-            root_healthy = all(
-                runtime.library_watch_health_service
-                .root_allows_destructive_reconciliation(root_id)
-                for root_id in targeted_request_root_ids(request)
-            )
-            result = targeted_reconciler.reconcile(
-                request,
-                root_healthy=root_healthy,
-            )
-            if getattr(result, "health", None) == "stable_write_unavailable":
-                for root_id in targeted_request_root_ids(request):
-                    persist_library_watch_problem(
-                        CoordinatorProblem("stable_write_unavailable", root_id)
-                    )
-
-        def submit_targeted_reconciliation(request) -> None:
-            affected_root_ids = targeted_request_root_ids(request)
-            future = targeted_executor.submit(reconcile_targeted_request, request)
-            if future is None:
-                runtime.logger.error(
-                    "Targeted library reconciliation backlog is full."
-                )
-                for root_id in affected_root_ids:
-                    persist_library_watch_problem(
-                        CoordinatorProblem("overflow", root_id)
-                    )
+        def create_targeted_reconciliation(request) -> None:
+            if watcher_library_id is None:
                 return
-
-            def report_reconciliation_failure(completed) -> None:
-                try:
-                    completed.result()
-                except Exception:
-                    runtime.logger.exception(
-                        "Targeted library reconciliation failed."
-                    )
-                    for root_id in affected_root_ids:
-                        persist_library_watch_problem(
-                            CoordinatorProblem(
-                                "reconciliation_failed",
-                                root_id,
-                            )
-                        )
-
-            future.add_done_callback(report_reconciliation_failure)
+            scan_jobs.enqueue_targeted_reconciliation(
+                library_id=watcher_library_id,
+                request=request,
+                producer_request_key=request.producer_request_key,
+                deployment_mode="self_hosted_private_web",
+                client_surface="library_watcher",
+                scheduled_at=datetime.now(timezone.utc),
+            )
 
         def persist_library_watch_health(event) -> None:
             try:
@@ -448,13 +384,13 @@ def create_asgi_app():
 
         try:
             runtime.library_event_coordinator = LibraryEventCoordinator(
-                emit_request=submit_targeted_reconciliation,
+                emit_request=create_targeted_reconciliation,
                 emit_health_event=persist_library_watch_health,
                 emit_problem=persist_library_watch_problem,
                 auto_schedule=True,
             )
             runtime.library_watch_service = LibraryWatchService(
-                WatchdogLibraryEventSource(get_library_roots(runtime.config)),
+                WatchdogLibraryEventSource(targeted_roots),
                 runtime.library_event_coordinator.accept,
             )
             _app.state.library_watch_service = runtime.library_watch_service
@@ -464,7 +400,6 @@ def create_asgi_app():
 
         def replace_live_library_roots(roots) -> None:
             root_definitions = tuple(dict(root) for root in roots)
-            targeted_reconciler.replace_roots(root_definitions)
             try:
                 runtime.library_watch_service.replace_roots(root_definitions)
             except Exception:
@@ -483,7 +418,7 @@ def create_asgi_app():
         ) -> int:
             return _recover_library_watch_after_manual_scan(
                 health_service=runtime.library_watch_health_service,
-                targeted_reconciler=targeted_reconciler,
+                targeted_reconciler=None,
                 watch_service=runtime.library_watch_service,
                 root_definitions=get_library_roots(runtime.config),
                 scan_mode=scan_mode,

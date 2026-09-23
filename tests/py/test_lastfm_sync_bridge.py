@@ -96,10 +96,15 @@ class _PlaybackCompleteHarness:
     def log_event(self, action: str, **kwargs: object) -> None:
         self.logged_events.append({"action": action, **kwargs})
 
-    def record(self, payload: dict[str, object]) -> tuple[dict[str, object], int]:
+    def record(
+        self, payload: dict[str, object], *, record_retryable_scrobble=None
+    ) -> tuple[dict[str, object], int]:
         from music_app.services.lastfm_sync_bridge import record_playback_session_complete
         from music_app.services.listen_history import is_meaningful_listen_session
 
+        kwargs = {}
+        if record_retryable_scrobble is not None:
+            kwargs["record_retryable_scrobble"] = record_retryable_scrobble
         return record_playback_session_complete(
             self.config,
             payload,
@@ -110,6 +115,7 @@ class _PlaybackCompleteHarness:
             update_listen_history_entry=self.update_entry,
             scrobble_track=self.scrobble_track,
             log_lastfm_scrobble_event=self.log_event,
+            **kwargs,
         )
 
 
@@ -218,6 +224,91 @@ def test_record_playback_session_complete_queues_failed_scrobble_with_retry_prob
     assert harness.logged_events[0]["retry_count"] == 1
 
 
+def test_retryable_playback_failure_uses_injected_atomic_durable_composer():
+    from music_app.services.lastfm import LastfmError
+
+    harness = _PlaybackCompleteHarness()
+    durable_calls = []
+
+    def fail_scrobble(_config, payload):
+        harness.scrobble_calls.append(payload)
+        raise LastfmError("provider busy", retryable=True)
+
+    harness.scrobble_track = fail_scrobble
+    response, status = harness.record(
+        _complete_payload(),
+        record_retryable_scrobble=lambda config, **values: durable_calls.append(
+            (config, values)
+        ),
+    )
+
+    assert status == 200 and response["scrobbled"] is False
+    assert len(durable_calls) == 1
+    assert durable_calls[0][1]["listen_id"] == "listen-1"
+    assert durable_calls[0][1]["retry_count"] == 1
+
+
+def test_durable_owned_playback_failure_is_excluded_from_legacy_retry_selector():
+    from music_app.services.lastfm import LastfmError
+    from music_app.services.listen_history import is_pending_scrobble_entry
+
+    harness = _PlaybackCompleteHarness()
+    harness.scrobble_track = lambda *_args: (_ for _ in ()).throw(
+        LastfmError("provider busy", retryable=True)
+    )
+    response, status = harness.record(
+        _complete_payload(),
+        record_retryable_scrobble=lambda *_args, **_kwargs: object(),
+    )
+
+    assert status == 200
+    assert response["entry"]["scrobble_durable_job_owned"] is True
+    assert is_pending_scrobble_entry(response["entry"]) is False
+
+
+@pytest.mark.parametrize("error_kind", ["network_error", "malformed_response"])
+def test_possible_initial_send_is_marked_ambiguous_and_never_enqueued(
+    error_kind, monkeypatch
+):
+    from music_app.services.lastfm import LastfmError
+    from music_app.services import lastfm_sync_bridge
+
+    harness = _PlaybackCompleteHarness()
+    durable_calls = []
+    monkeypatch.setattr(
+        lastfm_sync_bridge, "clear_pending_scrobble", lambda *_args, **_kwargs: None
+    )
+    harness.scrobble_track = lambda *_args: (_ for _ in ()).throw(
+        LastfmError("uncertain provider outcome", retryable=True, error_kind=error_kind)
+    )
+
+    response, status = harness.record(
+        _complete_payload(),
+        record_retryable_scrobble=lambda *_args, **kwargs: durable_calls.append(kwargs),
+    )
+
+    assert status == 200 and durable_calls == []
+    assert response["entry"]["scrobble_retryable"] is False
+    assert response["entry"]["sync_problem"]["status"] == "ambiguous"
+
+
+def test_initial_reauthentication_failure_is_persisted_as_hold_not_immediate_job():
+    from music_app.services.lastfm import LastfmError
+
+    harness = _PlaybackCompleteHarness()
+    durable_calls = []
+    harness.scrobble_track = lambda *_args: (_ for _ in ()).throw(
+        LastfmError("session expired", reauthentication_required=True)
+    )
+
+    harness.record(
+        _complete_payload(),
+        record_retryable_scrobble=lambda *_args, **kwargs: durable_calls.append(kwargs),
+    )
+
+    assert durable_calls[0]["reauthentication_required"] is True
+
+
 @pytest.mark.parametrize("http_status", [429, 502, 503])
 def test_record_playback_session_complete_queues_empty_transient_http_failure(monkeypatch, http_status):
     from music_app.services import lastfm_sync_bridge
@@ -281,3 +372,153 @@ def test_record_playback_session_complete_ignores_too_short_listens():
     assert harness.updated_entries == []
     assert harness.scrobble_calls == []
     assert harness.logged_events == []
+
+
+def _record_measured_completion(monkeypatch, provider, durable_recorder):
+    from contextlib import nullcontext
+
+    from music_app.services import lastfm_sync_bridge
+    from music_app.services.listen_history import is_meaningful_listen_session
+
+    monkeypatch.setattr(
+        lastfm_sync_bridge,
+        "measured_provider_guard",
+        lambda *_args, **_kwargs: nullcontext(),
+    )
+    stored = {}
+
+    def append_entry(_config, entry, **scope):
+        assert scope == {"account_id": 7, "library_id": 9}
+        stored.update({**entry, "id": "measured-listen-1", "persisted": True})
+        return dict(stored)
+
+    def update_entry(_config, entry_id, updates, **scope):
+        assert entry_id == "measured-listen-1"
+        assert scope == {"account_id": 7, "library_id": 9}
+        stored.update(updates)
+        return dict(stored)
+
+    payload = {
+        **_complete_payload(),
+        "measurement_version": "rendered-pcm-v1",
+        "device_id": "cb94994e-b97e-4f92-968a-f9cb552a0694",
+        "session_id": "45d9facc-f9f8-46e0-a590-6743394144f5",
+        "sequence": 1,
+        "finalized": True,
+        "measured_listened_seconds": 180,
+        "max_measured_contiguous_seconds": 180,
+    }
+    return lastfm_sync_bridge.record_playback_session_complete(
+        {},
+        payload,
+        user_timezone="UTC",
+        account_id=7,
+        library_id=9,
+        lastfm_session=object(),
+        normalize_playback_track_payload=lambda value: value,
+        is_meaningful_listen_session=is_meaningful_listen_session,
+        append_listen_history_entry=append_entry,
+        update_listen_history_entry=update_entry,
+        scrobble_track=provider,
+        log_lastfm_scrobble_event=lambda *_args, **_kwargs: None,
+        record_retryable_scrobble=durable_recorder,
+    )
+
+
+@pytest.mark.parametrize(
+    ("error", "expected_reauthentication"),
+    [
+        ("retryable", False),
+        ("reauthentication", True),
+    ],
+)
+def test_measured_known_not_sent_failure_is_accepted_by_durable_retry_owner(
+    monkeypatch, error, expected_reauthentication
+):
+    from music_app.services.lastfm import LastfmError
+
+    durable_calls = []
+
+    def provider(*_args, **_kwargs):
+        if error == "reauthentication":
+            raise LastfmError(
+                "session expired",
+                code=9,
+                reauthentication_required=True,
+                error_kind="provider_error",
+            )
+        raise LastfmError(
+            "provider busy", code=11, retryable=True, error_kind="provider_error"
+        )
+
+    body, status = _record_measured_completion(
+        monkeypatch,
+        provider,
+        lambda config, **values: durable_calls.append((config, values)) or object(),
+    )
+
+    assert status == 200
+    assert len(durable_calls) == 1
+    config, values = durable_calls[0]
+    assert config == {}
+    assert values["listen_id"] == "measured-listen-1"
+    assert values["entry"]["id"] == "measured-listen-1"
+    assert values["entry"]["persisted"] is True
+    assert values["entry"]["scrobble_submission_state"] == "not_sent"
+    assert values["retry_count"] == 1
+    assert values["error"] in {"provider busy", "session expired"}
+    assert values.get("reauthentication_required", False) is expected_reauthentication
+    assert body["entry"]["scrobble_durable_job_owned"] is True
+
+
+def test_measured_retry_marks_durable_ownership_only_after_acceptance(monkeypatch):
+    from music_app.services.lastfm import LastfmError
+
+    body, status = _record_measured_completion(
+        monkeypatch,
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            LastfmError(
+                "provider busy", code=11, retryable=True, error_kind="provider_error"
+            )
+        ),
+        lambda *_args, **_kwargs: None,
+    )
+
+    assert status == 200
+    assert body["entry"].get("scrobble_durable_job_owned") is not True
+
+
+@pytest.mark.parametrize("outcome", ["accepted", "sent", "uncertain", "permanent"])
+def test_measured_non_retryable_provider_outcomes_are_never_durably_enqueued(
+    monkeypatch, outcome
+):
+    from music_app.services.lastfm import LastfmError, LastfmSubmissionOutcome
+
+    def provider(*_args, **_kwargs):
+        if outcome == "accepted":
+            return None
+        if outcome == "sent":
+            return LastfmSubmissionOutcome(
+                sent=True,
+                accepted=0,
+                outcome="unconfirmed",
+                message="provider receipt unavailable",
+            )
+        if outcome == "uncertain":
+            raise LastfmError(
+                "possible send", retryable=True, error_kind="network_error"
+            )
+        raise LastfmError(
+            "permanent rejection", code=6, retryable=False, error_kind="provider_error"
+        )
+
+    durable_calls = []
+    body, status = _record_measured_completion(
+        monkeypatch,
+        provider,
+        lambda *_args, **values: durable_calls.append(values) or object(),
+    )
+
+    assert status == 200
+    assert durable_calls == []
+    assert body["entry"].get("scrobble_durable_job_owned") is not True

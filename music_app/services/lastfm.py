@@ -351,6 +351,20 @@ def scrobble_track(config: dict[str, Any], payload: dict[str, Any], *, session=_
         session = get_saved_lastfm_session(config)
     if session is None:
         return LastfmSubmissionOutcome(sent=False, outcome="not_connected", message="Last.fm account is not connected.")
+    return scrobble_track_with_session(config, payload, session.session_key)
+
+
+def scrobble_track_with_session(
+    config: dict[str, Any], payload: dict[str, Any], session_key: str
+) -> LastfmSubmissionOutcome:
+    """Submit with the secret already authorized for the claimed job."""
+
+    if not isinstance(session_key, str) or not session_key:
+        return LastfmSubmissionOutcome(
+            sent=False,
+            outcome="not_connected",
+            message="Last.fm account is not connected.",
+        )
     artist = str(payload.get("artist") or "").strip()
     track = str(payload.get("track") or "").strip()
     timestamp = int(payload.get("timestamp") or 0)
@@ -360,7 +374,7 @@ def scrobble_track(config: dict[str, Any], payload: dict[str, Any], *, session=_
         config,
         "track.scrobble",
         {
-            "sk": session.session_key,
+            "sk": session_key,
             "artist": artist,
             "track": track,
             "timestamp": timestamp,

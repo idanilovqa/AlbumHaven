@@ -12,7 +12,6 @@ from fastapi import FastAPI
 
 from music_app.services.auth_login_postgres import LoginOutcome, LoginResult
 from music_app.services.auth_password_reset_request_postgres import (
-    PasswordResetDelivery,
     PasswordResetRequestResult,
 )
 from music_app.services.auth_password_reset_lifecycle_postgres import (
@@ -116,12 +115,7 @@ class FakeResetRequests:
 
     def request_reset(self, **kwargs):
         self.calls.append(kwargs)
-        delivery = (
-            PasswordResetDelivery(81, 41, "member@example.test", "r" * 43)
-            if self.eligible
-            else None
-        )
-        return PasswordResetRequestResult(delivery=delivery)
+        return PasswordResetRequestResult()
 
 
 class FakeResetLifecycle:
@@ -352,7 +346,7 @@ def test_get_forgot_password_mints_purpose_bound_csrf_and_renders_approved_recov
 
 
 @pytest.mark.parametrize("eligible", [False, True])
-def test_forgot_password_submission_has_one_generic_response_and_background_delivery(auth_asgi, eligible):
+def test_forgot_password_submission_has_one_generic_response_without_request_delivery(auth_asgi, eligible):
     app, preauth, _ = _app(auth_asgi)
     reset_requests = FakeResetRequests(eligible=eligible)
     delivered = []
@@ -375,7 +369,9 @@ def test_forgot_password_submission_has_one_generic_response_and_background_deli
     assert b"member@example.test" not in body
     assert preauth.consumed == [CSRF]
     assert len(reset_requests.calls) == 1
-    assert bool(delivered) is eligible
+    assert delivered == []
+    assert reset_requests.calls[0]["client_surface"] == "private_web"
+    assert reset_requests.calls[0]["request_origin_ref"].endswith(".public")
     assert any(
         value.startswith(FORGOT_CSRF_COOKIE + "=") and "Max-Age=0" in value
         for value in _set_cookies(headers)

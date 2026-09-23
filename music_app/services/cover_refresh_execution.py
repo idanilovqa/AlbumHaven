@@ -64,6 +64,26 @@ def _build_automatic_cover_write_guard(
     folder: Path,
     track_paths: set[str],
 ) -> Callable[..., object]:
+    claimed_persister = config.get("CLAIMED_COVER_SELECTION_PERSISTER")
+
+    def persist_selection(
+        selected_track_paths: set[str],
+        selected_cover_path: Path,
+        **kwargs: object,
+    ) -> dict[str, object]:
+        if callable(claimed_persister):
+            return claimed_persister(
+                selected_track_paths,
+                selected_cover_path,
+                **kwargs,
+            )
+        return persist_cover_selection_for_tracks_for_config(
+            config,
+            selected_track_paths,
+            selected_cover_path,
+            **kwargs,
+        )
+
     def automatic_write_guard(
         write_action: Callable[[], object],
         *,
@@ -120,8 +140,7 @@ def _build_automatic_cover_write_guard(
                 return result
 
             persistence_origin = "user" if preserve_user_ownership else "automatic"
-            persistence_result = persist_cover_selection_for_tracks_for_config(
-                config,
+            persistence_result = persist_selection(
                 track_paths,
                 selected_cover_path,
                 cover_revision=provisional_revision,
@@ -146,8 +165,7 @@ def _build_automatic_cover_write_guard(
 
             exact_revision = cover_revision_for_path(written_path)
             if exact_revision != provisional_revision:
-                persist_cover_selection_for_tracks_for_config(
-                    config,
+                persist_selection(
                     track_paths,
                     written_path,
                     cover_revision=exact_revision,
@@ -285,11 +303,27 @@ def run_cover_jobs(
     }
     candidate_publishers: dict[int, object] = {}
     candidate_callbacks: dict[int, Callable[..., object]] = {}
+    candidate_snapshot_published: set[int] = set()
+    candidate_repository_factory = config.get(
+        "COVER_CANDIDATE_SNAPSHOT_REPOSITORY_FACTORY"
+    )
+    candidate_persistence_required = bool(
+        config.get("COVER_CANDIDATE_SNAPSHOT_PERSISTENCE_REQUIRED")
+    )
 
     for job in jobs:
         album_id = job.get("album_id")
         try:
-            repository = AlbumCoverCandidateSnapshotRepository(config)
+            generation = str(uuid.uuid4())
+            repository = (
+                candidate_repository_factory(
+                    album_id=album_id,
+                    search_generation=generation,
+                    search_kind="automatic",
+                )
+                if callable(candidate_repository_factory)
+                else AlbumCoverCandidateSnapshotRepository(config)
+            )
             if not isinstance(album_id, int) or album_id <= 0:
                 album_id = repository.resolve_album_id_for_track_paths(
                     track_paths=[
@@ -303,7 +337,7 @@ def run_cover_jobs(
             publisher = AlbumCoverCandidatePublisher(
                 repository,
                 album_id=album_id,
-                search_generation=str(uuid.uuid4()),
+                search_generation=generation,
                 search_kind="automatic",
             )
             publisher.begin_candidate_generation()
@@ -315,10 +349,17 @@ def run_cover_jobs(
                 automatic_improvement: bool = False,
                 _publisher=publisher,
                 _album_id=album_id,
+                _job_key=id(job),
             ) -> None:
                 try:
                     candidate_payload = _automatic_candidate_payload(candidate)
                     accepted = _publisher.publish_candidates([candidate_payload])
+                    if candidate_persistence_required and not accepted:
+                        raise RuntimeError(
+                            "candidate snapshot publication lost its claim"
+                        )
+                    if accepted:
+                        candidate_snapshot_published.add(_job_key)
                     mark_improvement = getattr(
                         _publisher, "mark_automatic_improvement", None
                     )
@@ -331,6 +372,8 @@ def run_cover_jobs(
                         )
                         mark_improvement(qualifying_candidate_id)
                 except Exception as exc:
+                    if candidate_persistence_required:
+                        raise
                     logger.warning(
                         "Automatic candidate snapshot publication failed album_id=%s error=%r",
                         _album_id,
@@ -339,6 +382,8 @@ def run_cover_jobs(
 
             candidate_callbacks[id(job)] = publish_candidate
         except Exception as exc:
+            if candidate_persistence_required:
+                raise
             logger.warning(
                 "Automatic candidate snapshot publisher initialization failed album_id=%s error=%r",
                 album_id,
@@ -349,7 +394,7 @@ def run_cover_jobs(
         job: dict[str, object], detail: Mapping[str, object]
     ) -> None:
         publisher = candidate_publishers.get(id(job))
-        if publisher is None:
+        if publisher is None or id(job) not in candidate_snapshot_published:
             return
         reason = str(detail.get("reason") or "")
         terminal = (
@@ -360,8 +405,12 @@ def run_cover_jobs(
         if not callable(terminal):
             return
         try:
-            terminal()
+            accepted = bool(terminal())
+            if candidate_persistence_required and not accepted:
+                raise RuntimeError("candidate snapshot terminal update lost its claim")
         except Exception as exc:
+            if candidate_persistence_required:
+                raise
             logger.warning(
                 "Automatic candidate snapshot terminal update failed album_id=%s error=%r",
                 job.get("album_id"),

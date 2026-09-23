@@ -7,6 +7,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from threading import Event, Lock, Timer
 from time import monotonic
+from uuid import uuid4
 
 from music_app.services.library_reconciliation import LibraryEvent, LibraryEventKind
 
@@ -23,6 +24,7 @@ class TargetedMove:
 @dataclass(frozen=True, slots=True)
 class TargetedReconciliationRequest:
     root_id: str
+    producer_request_key: str | None = None
     paths: frozenset[Path] = frozenset()
     deleted_paths: frozenset[Path] = frozenset()
     deleted_subtrees: frozenset[Path] = frozenset()
@@ -40,6 +42,7 @@ class CoordinatorProblem:
 class _PendingGroup:
     root_id: str
     directory: Path
+    producer_request_key: str
     active_paths: dict[Path, bool] = field(default_factory=dict)
     deleted_paths: set[Path] = field(default_factory=set)
     deleted_subtrees: set[Path] = field(default_factory=set)
@@ -115,6 +118,7 @@ class LibraryEventCoordinator:
         debounce_seconds: float = 0.5,
         max_flush_delay_seconds: float = 5.0,
         auto_schedule: bool = False,
+        producer_request_key_factory: Callable[[], str] | None = None,
         clock: Callable[[], float] | None = None,
         timer_factory: Callable[[float, Callable[[], None]], Timer] | None = None,
     ) -> None:
@@ -134,6 +138,9 @@ class LibraryEventCoordinator:
             float(max_flush_delay_seconds),
         )
         self._auto_schedule = bool(auto_schedule)
+        self._producer_request_key_factory = producer_request_key_factory or (
+            lambda: f"watcher-{uuid4().hex}"
+        )
         self._clock = clock or monotonic
         self._timer_factory = timer_factory or Timer
         self._pending: dict[tuple[str, Path], _PendingGroup] = {}
@@ -210,7 +217,13 @@ class LibraryEventCoordinator:
         if group_key not in updates:
             group = self._pending.get(group_key)
             updates[group_key] = _PendingGroupUpdate(
-                group if group is not None else _PendingGroup(root_id, directory)
+                group
+                if group is not None
+                else _PendingGroup(
+                    root_id,
+                    directory,
+                    str(self._producer_request_key_factory()),
+                )
             )
         return updates[group_key]
 
@@ -320,11 +333,37 @@ class LibraryEventCoordinator:
                     if dispositions.get(move.destination) != "deleted":
                         targets = live_targets.setdefault(move.destination_root_id, {})
                         targets[move.destination] = targets.get(move.destination, False) or move.is_directory
-            for group in sorted(
+            ordered = sorted(
                 pending,
                 key=lambda item: (item.root_id, str(item.directory).casefold()),
-            ):
-                self._emit_group(group, dispositions, live_targets.get(group.root_id, {}))
+            )
+            for index, group in enumerate(ordered):
+                try:
+                    self._emit_group(
+                        group,
+                        dispositions,
+                        live_targets.get(group.root_id, {}),
+                    )
+                except Exception:
+                    with self._lock:
+                        for uncommitted in ordered[index:]:
+                            key = (uncommitted.root_id, uncommitted.directory)
+                            current = self._pending.get(key)
+                            if current is None:
+                                self._pending[key] = uncommitted
+                            else:
+                                current.active_paths.update(uncommitted.active_paths)
+                                current.deleted_paths.update(uncommitted.deleted_paths)
+                                current.deleted_subtrees.update(
+                                    uncommitted.deleted_subtrees
+                                )
+                                current.moves.update(uncommitted.moves)
+                        self._pending_entry_count = sum(
+                            item.entry_count for item in self._pending.values()
+                        )
+                        if self._auto_schedule and not self._stopped:
+                            self._schedule_flush_locked()
+                    raise
 
     def _emit_group(
         self, group: _PendingGroup, dispositions: dict[Path, str], live_targets: dict[Path, bool],
@@ -388,14 +427,20 @@ class LibraryEventCoordinator:
             not ready and not deleted and not deleted_subtrees and not ready_moves
         ):
             return
+        ready_directories = {
+            path for path in ready if group.active_paths.get(path, False)
+        }
         self._emit_request(
             TargetedReconciliationRequest(
                 root_id=group.root_id,
-                paths=frozenset(ready),
+                producer_request_key=group.producer_request_key,
+                paths=frozenset(ready - ready_directories),
                 deleted_paths=frozenset(deleted),
                 deleted_subtrees=frozenset(deleted_subtrees),
                 moves=tuple(ready_moves),
-                preserved_subtrees=frozenset(preserved_subtrees),
+                preserved_subtrees=frozenset(
+                    preserved_subtrees | ready_directories
+                ),
             )
         )
 

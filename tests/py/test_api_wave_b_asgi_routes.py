@@ -1149,11 +1149,13 @@ def test_asgi_lastfm_settings_authenticates_and_saves_session(app, monkeypatch, 
 
     auth_calls: list[dict[str, object]] = []
     retry_calls: list[object] = []
+    release_calls: list[dict[str, object]] = []
     monkeypatch.setattr(asgi_routes, "lastfm_api_enabled", lambda config: True)
     monkeypatch.setattr(
         asgi_routes,
         "retry_pending_lastfm_scrobbles",
         lambda config, *, reauthenticated=False, account_id: retry_calls.append((config, reauthenticated, account_id)),
+        raising=False,
     )
     def fake_authenticate(config, username, password, connected_at, user_timezone, *, account_id):
         auth_calls.append(
@@ -1181,6 +1183,15 @@ def test_asgi_lastfm_settings_authenticates_and_saves_session(app, monkeypatch, 
     asgi_app.state.config = app.config
     asgi_app.state.logger = app.logger
     asgi_app.state.library_state = app.library_state
+    asgi_app.state.lastfm_retry_job_repository = type(
+        "RetryRepository",
+        (),
+        {
+            "release_after_reauthentication": staticmethod(
+                lambda **values: release_calls.append(values) or ()
+            )
+        },
+    )()
 
     status, _headers, body = _run_asgi_request(
         asgi_app,
@@ -1203,7 +1214,8 @@ def test_asgi_lastfm_settings_authenticates_and_saves_session(app, monkeypatch, 
     assert auth_calls[0]["user_timezone"] == "America/Denver"
     assert auth_calls[0]["account_id"] == 1
     assert auth_calls[0]["config"] is app.config
-    assert retry_calls == [(app.config, True, 1)]
+    assert retry_calls == []
+    assert release_calls == []
 
 
 def test_asgi_lastfm_settings_records_safe_history_when_provider_rejects_connection(
@@ -1636,6 +1648,82 @@ def test_asgi_playback_session_complete_persists_listen_history(
     assert entry["request_origin"] == request_origin
     assert calls[0]["request_origin"] == request_origin
     assert measured_rows(ledger, ledger["other"]) == []
+
+
+def test_measured_scrobble_route_supplies_durable_retry_recorder(monkeypatch):
+    import asyncio
+
+    from music_app.routes import api_wave_b_asgi_routes as routes
+
+    owner = SimpleNamespace(account_id=7, library_id=9)
+
+    async def history_scope(_request, required=True):
+        return owner
+
+    async def request_json():
+        return {"measurement_version": "rendered-pcm-v1"}
+
+    captured = {}
+
+    def record_complete(_config, payload, **dependencies):
+        captured.update(dependencies)
+        assert payload["finalized"] is False
+        return {"ok": True, "scrobbled": False}, 200
+
+    monkeypatch.setattr(routes, "history_scope_for_request", history_scope)
+    monkeypatch.setattr(routes, "get_saved_lastfm_session", lambda *_args, **_kwargs: object())
+    monkeypatch.setattr(routes, "record_playback_session_complete", record_complete)
+    request = SimpleNamespace(
+        json=request_json,
+        app=SimpleNamespace(state=SimpleNamespace(config={}, logger=None)),
+        state=SimpleNamespace(),
+    )
+
+    response = asyncio.run(routes.playback_session_scrobble(request))
+
+    assert response.status_code == 200
+    assert callable(captured["record_retryable_scrobble"])
+
+
+def test_durable_lastfm_retry_recorder_preserves_policy_scope(monkeypatch):
+    from music_app.routes import api_wave_b_asgi_routes as routes
+
+    calls = []
+    accepted = object()
+    repository = SimpleNamespace(
+        accept_playback_failure=lambda **values: calls.append(values) or accepted
+    )
+    audit = SimpleNamespace(
+        action="integration.lastfm.scrobble",
+        account_id=7,
+        library_id=9,
+        deployment_mode="self_hosted",
+        client_surface_class="private_web",
+    )
+    request = SimpleNamespace(
+        app=SimpleNamespace(
+            state=SimpleNamespace(lastfm_retry_job_repository=repository)
+        ),
+        state=SimpleNamespace(policy_evaluation=SimpleNamespace(audit=audit)),
+    )
+    monkeypatch.setattr(
+        routes, "request_origin_ref_for_request", lambda _request: "browser:tab-123"
+    )
+
+    result = routes._durable_lastfm_retry_recorder(request)(
+        {},
+        listen_id="measured-listen-1",
+        entry={"id": "measured-listen-1"},
+        retry_count=1,
+        error="provider busy",
+    )
+
+    assert result is accepted
+    assert calls[0]["account_id"] == 7
+    assert calls[0]["library_id"] == 9
+    assert calls[0]["request_origin_ref"] == "browser:tab-123"
+    assert calls[0]["deployment_mode"] == "self_hosted"
+    assert calls[0]["client_surface"] == "private_web"
 
 
 def test_asgi_loop_mutations_preserve_validation_and_create_side_effects(app, monkeypatch):

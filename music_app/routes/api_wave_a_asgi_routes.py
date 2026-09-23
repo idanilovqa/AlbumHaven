@@ -8,6 +8,7 @@ from music_app.services.log_history import history_scope_for_request
 import inspect
 import logging
 from collections.abc import Mapping
+from datetime import datetime, timezone
 from threading import Event
 from time import perf_counter
 from typing import Any
@@ -53,8 +54,9 @@ from music_app.services.missing_album_removal_postgres import (
     MissingAlbumRootUnavailable,
     PostgresMissingAlbumRemovalService,
 )
-from music_app.services.policy_asgi import require_action
+from music_app.services.policy_asgi import require_action, request_origin_ref_for_request
 from music_app.services.library_roots import (
+    get_library_roots,
     library_root_cache_identity,
     load_library_root_settings,
 )
@@ -239,6 +241,61 @@ def _start_background_refresh_for_asgi_request(request: Request):
         )
 
     return start_asgi_background_refresh
+
+
+def _start_library_settings_refresh_for_asgi_request(
+    request: Request,
+    *,
+    policy_evaluation: object,
+):
+    scan_jobs = getattr(request.app.state, "scan_job_repository", None)
+    if scan_jobs is None:
+        return _start_background_refresh_for_asgi_request(request)
+
+    audit = getattr(policy_evaluation, "audit", None)
+    library_id = getattr(audit, "library_id", None)
+    if not isinstance(library_id, int) or library_id < 1:
+        raise LibrarySettingsWorkflowError(
+            "Authorized library scope is unavailable.", status_code=403
+        )
+    origin_ref = request_origin_ref_for_request(request)
+
+    def enqueue_settings_refresh(
+        force: bool = False, *, scan_mode: str = "background"
+    ) -> None:
+        root_ids = tuple(
+            str(root.get("id") or "").strip()
+            for root in get_library_roots(_app_config(request))
+            if str(root.get("id") or "").strip()
+        )
+        if not root_ids:
+            raise LibrarySettingsWorkflowError(
+                "Configured library roots are unavailable.", status_code=400
+            )
+        try:
+            accepted = scan_jobs.enqueue_authorized_full_scan(
+                policy_evaluation=policy_evaluation,
+                library_id=library_id,
+                request_origin_ref=origin_ref,
+                root_ids=root_ids,
+                mode=scan_mode,
+                force=force,
+                scheduled_at=datetime.now(timezone.utc),
+            )
+        except LibrarySettingsWorkflowError:
+            raise
+        except Exception as exc:
+            raise LibrarySettingsWorkflowError(
+                "Library settings were saved, but the inventory refresh could not be queued.",
+                status_code=503,
+            ) from exc
+        if not accepted.created:
+            raise LibrarySettingsWorkflowError(
+                "Library settings were saved, but another library scan is already running.",
+                status_code=409,
+            )
+
+    return enqueue_settings_refresh
 
 
 async def _json_payload(request: Request) -> JsonDict | None:
@@ -538,6 +595,8 @@ async def library_settings_write(request: Request) -> JSONResponse:
             ({"ok": False, "error": "Library settings payload must be an object."}, 400)
         )
 
+    refresh_policy_evaluation = await require_action("library.refresh")(request)
+
     try:
         replace_live_watch_roots = getattr(
             request.app.state,
@@ -555,7 +614,10 @@ async def library_settings_write(request: Request) -> JSONResponse:
                 settings_payload,
                 **scope,
                 library_state=_library_state(request),
-                start_background_refresh=_start_background_refresh_for_asgi_request(request),
+                start_background_refresh=_start_library_settings_refresh_for_asgi_request(
+                    request,
+                    policy_evaluation=refresh_policy_evaluation,
+                ),
                 build_status_payload=lambda: _build_status_payload_from_state(_library_state(request)),
                 replace_watch_roots=(
                     replace_live_watch_roots

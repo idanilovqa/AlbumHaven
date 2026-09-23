@@ -176,7 +176,10 @@ test('FTC-TAGS-021 and FTC-ALBUM-DETAILS-018 consolidate one logical release', {
       artist: ARTIST,
       year: YEAR,
     });
-    expect(postgresIdentity.album_ids).toHaveLength(1);
+    expect(
+      postgresIdentity.album_ids,
+      `Expected one persisted album identity, received ${JSON.stringify(postgresIdentity)}`,
+    ).toHaveLength(1);
     expect(postgresIdentity.album_ids[0]).toEqual(expect.any(Number));
     expect(postgresIdentity.album_keys).toHaveLength(1);
     expect(postgresIdentity.track_counts).toEqual([TRACKS.length]);

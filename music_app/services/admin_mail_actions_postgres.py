@@ -13,15 +13,11 @@ from music_app.services.admin_member_mutation_postgres import (
     RecentAuthenticationRequired,
     lock_current_actor_session,
 )
-from music_app.services.auth_password_reset_request_postgres import (
-    PasswordResetDelivery,
+from music_app.services.auth_mail_jobs_postgres import (
+    AcceptedAuthMailJob,
+    PostgresAuthMailJobRepository,
 )
-from music_app.services.auth_tokens import (
-    IssuedOpaqueToken,
-    hash_opaque_token,
-    issue_opaque_token,
-    keyed_bucket_digest,
-)
+from music_app.services.auth_tokens import keyed_bucket_digest
 
 try:  # pragma: no cover - exercised with the optional runtime driver.
     import psycopg
@@ -42,14 +38,14 @@ _RESET_DOMAIN = "album-haven:reset-account"
 class AdminMailActionResult:
     accepted: bool = True
     welcome_outbox_id: int | None = None
-    password_reset_delivery: PasswordResetDelivery | None = None
+    accepted_job: AcceptedAuthMailJob | None = None
     throttled: bool = False
 
     def __repr__(self) -> str:
         return (
             f"{type(self).__name__}(accepted=True, "
             f"welcome_outbox_id={self.welcome_outbox_id!r}, "
-            "password_reset_delivery=<redacted>, "
+            f"accepted_job={self.accepted_job!r}, "
             f"throttled={self.throttled!r})"
         )
 
@@ -61,7 +57,7 @@ class PostgresAdminMailActionService:
         *,
         connect: Callable[[str], Any] | None = None,
         clock: Callable[[], datetime] | None = None,
-        token_issuer: Callable[[], object] = issue_opaque_token,
+        job_repository: Any | None = None,
     ) -> None:
         payload = config if isinstance(config, Mapping) else {}
         self._database_url = str(
@@ -90,11 +86,14 @@ class PostgresAdminMailActionService:
                 _positive_id(policy.get("window_seconds")),
             )
         self._reset_token_seconds = _positive_id(payload.get("reset_token_seconds"))
-        if self._reset_token_seconds > 1800 or not callable(token_issuer):
+        if self._reset_token_seconds > 1800:
             raise ValueError("Administrator mail-action policy is invalid.")
         self._connect = connect or _connect
         self._clock = clock or (lambda: datetime.now(timezone.utc))
-        self._token_issuer = token_issuer
+        self._jobs = job_repository or PostgresAuthMailJobRepository(
+            database_url=self._database_url,
+            connect_to_database=self._connect,
+        )
 
     def queue_welcome(
         self,
@@ -105,6 +104,9 @@ class PostgresAdminMailActionService:
         library_id: object,
         target_account_id: object,
         request_ref: object,
+        request_origin_ref: str | None = None,
+        deployment_mode: str = "self_hosted",
+        client_surface: str = "private_web",
     ) -> AdminMailActionResult:
         actor_id, current_library_id, target_id, reference, now = self._inputs(
             actor_account_id,
@@ -136,15 +138,28 @@ class PostgresAdminMailActionService:
                         """
                         insert into app.mail_outbox (
                           account_id, message_category, delivery_status,
-                          attempt_count, created_at, next_attempt_at
-                        ) values (%s, 'welcome', 'pending', 0, %s, %s)
+                          attempt_count, created_at, next_attempt_at,
+                          row_revision, accepted_attempt, actor_account_id,
+                          authorization_mode, delivery_checkpoint, updated_at
+                        ) values (
+                          %s, 'welcome', 'pending', 0, %s, %s, 0, 1, %s,
+                          'actor', 'accepted', %s
+                        )
                         returning id
                         """,
-                        (target_id, now, now),
+                        (target_id, now, now, actor_id, now),
                     ).fetchall()
                 )
+                job = self._jobs.compose_existing_intent_in_transaction(
+                    connection, outbox_id=outbox_id, category="welcome",
+                    account_id=target_id, actor_account_id=actor_id,
+                    library_id=current_library_id,
+                    request_origin_ref=request_origin_ref,
+                    deployment_mode=deployment_mode, client_surface=client_surface,
+                    scheduled_at=now,
+                )
                 self._audit(connection, actor_id, target_id, "welcome_resend_queued", "success", reference, now)
-            return AdminMailActionResult(welcome_outbox_id=outbox_id)
+            return AdminMailActionResult(welcome_outbox_id=outbox_id, accepted_job=job)
         except (PermissionError, ValueError):
             raise
         except Exception:
@@ -159,6 +174,9 @@ class PostgresAdminMailActionService:
         library_id: object,
         target_account_id: object,
         request_ref: object,
+        request_origin_ref: str | None = None,
+        deployment_mode: str = "self_hosted",
+        client_surface: str = "private_web",
     ) -> AdminMailActionResult:
         actor_id, current_library_id, target_id, reference, now = self._inputs(
             actor_account_id,
@@ -182,56 +200,39 @@ class PostgresAdminMailActionService:
                 ):
                     self._audit(connection, actor_id, target_id, "password_reset_throttled", "throttled", reference, now)
                     return AdminMailActionResult(throttled=True)
-                issued = _issued_token(self._token_issuer)
                 credential_version = _positive_id(target.get("credential_version"))
-                connection.execute(
-                    """
-                    update app.password_reset_tokens
-                    set revoked_at = %s
-                    where account_id = %s and purpose = 'password_reset'
-                      and consumed_at is null and revoked_at is null
-                    """,
-                    (now, target_id),
-                )
-                reset_id = _returned_id(
-                    connection.execute(
-                        """
-                        insert into app.password_reset_tokens (
-                          account_id, token_hash, purpose, credential_version,
-                          created_at, expires_at, request_ref
-                        ) values (%s, %s, 'password_reset', %s, %s, %s, %s)
-                        returning id
-                        """,
-                        (
-                            target_id,
-                            issued.digest,
-                            credential_version,
-                            now,
-                            now + timedelta(seconds=self._reset_token_seconds),
-                            reference,
-                        ),
-                    ).fetchall()
-                )
                 outbox_id = _returned_id(
                     connection.execute(
                         """
                         insert into app.mail_outbox (
-                          account_id, reset_token_id, message_category,
-                          delivery_status, attempt_count, created_at
-                        ) values (%s, %s, 'password_reset', 'pending', 0, %s)
+                          account_id, message_category, delivery_status,
+                          attempt_count, next_attempt_at, row_revision,
+                          accepted_attempt, actor_account_id, authorization_mode,
+                          delivery_checkpoint, target_credential_version,
+                          lifecycle_expires_at, created_at, updated_at
+                        ) values (
+                          %s, 'password_reset', 'pending', 0, %s, 0, 1, %s,
+                          'actor', 'accepted', %s, %s, %s, %s
+                        )
                         returning id
                         """,
-                        (target_id, reset_id, now),
+                        (
+                            target_id, now, actor_id, credential_version,
+                            now + timedelta(seconds=self._reset_token_seconds),
+                            now, now,
+                        ),
                     ).fetchall()
                 )
-                self._audit(connection, actor_id, target_id, "password_reset_queued", "success", reference, now)
-                delivery = PasswordResetDelivery(
-                    outbox_id=outbox_id,
-                    account_id=target_id,
-                    recipient=_recipient(target.get("contact_email")),
-                    raw_token=issued.raw,
+                job = self._jobs.compose_existing_intent_in_transaction(
+                    connection, outbox_id=outbox_id, category="password_reset",
+                    account_id=target_id, actor_account_id=actor_id,
+                    library_id=current_library_id,
+                    request_origin_ref=request_origin_ref,
+                    deployment_mode=deployment_mode, client_surface=client_surface,
+                    scheduled_at=now,
                 )
-            return AdminMailActionResult(password_reset_delivery=delivery)
+                self._audit(connection, actor_id, target_id, "password_reset_queued", "success", reference, now)
+            return AdminMailActionResult(accepted_job=job)
         except (PermissionError, ValueError):
             raise
         except Exception:
@@ -383,25 +384,6 @@ def _eligible(row: Mapping[str, object]) -> bool:
         and not isinstance(row.get("credential_version"), bool)
         and int(row.get("credential_version")) >= 1
     )
-
-
-def _issued_token(provider: Callable[[], object]) -> IssuedOpaqueToken:
-    value = provider()
-    if not isinstance(value, IssuedOpaqueToken):
-        raise RuntimeError
-    try:
-        valid = hash_opaque_token(value.raw) == value.digest
-    except (TypeError, ValueError):
-        valid = False
-    if not valid:
-        raise RuntimeError
-    return value
-
-
-def _recipient(value: object) -> str:
-    if not isinstance(value, str) or not value or "\r" in value or "\n" in value:
-        raise RuntimeError
-    return value
 
 
 def _returned_id(rows: object) -> int:

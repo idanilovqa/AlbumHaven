@@ -4,11 +4,13 @@ from __future__ import annotations
 
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from typing import Any
 
 from argon2 import extract_parameters
 from argon2.exceptions import InvalidHashError
 from argon2.low_level import ARGON2_VERSION, Type
+from music_app.services.auth_mail_jobs_postgres import PostgresAuthMailJobRepository
 
 try:  # pragma: no cover - exercised when the optional runtime driver is present.
     import psycopg
@@ -51,6 +53,8 @@ class PostgresAuthBootstrapService:
         config: Mapping[str, object] | None,
         *,
         connect: Callable[[str], Any] | None = None,
+        clock: Callable[[], datetime] | None = None,
+        job_repository: Any | None = None,
     ) -> None:
         payload = config if isinstance(config, Mapping) else {}
         self._database_url = str(payload.get(_DATABASE_URL_KEY) or "").strip()
@@ -59,6 +63,8 @@ class PostgresAuthBootstrapService:
         self._active_policy_version = payload.get("argon2_policy_version")
         self._welcome_enabled = payload.get("welcome_enabled") is True
         self._connect = connect or _connect
+        self._clock = clock or (lambda: datetime.now(timezone.utc))
+        self._jobs = job_repository
 
     def reconcile_owner(
         self,
@@ -267,21 +273,48 @@ class PostgresAuthBootstrapService:
                         if welcome_rows:
                             welcome_outbox_id = _required_id(welcome_rows[0], ("id",))
                         else:
+                            accepted_at = self._clock().astimezone(timezone.utc)
                             created_welcome = _only_row(
                                 connection.execute(
                                     """
                                     insert into app.mail_outbox (
                                       account_id, message_category, delivery_status,
-                                      next_attempt_at
-                                    ) values (%s, %s, %s, now())
+                                      attempt_count, next_attempt_at, row_revision,
+                                      accepted_attempt, actor_account_id,
+                                      authorization_mode, delivery_checkpoint,
+                                      created_at, updated_at
+                                    ) values (
+                                      %s, %s, %s, 0, %s, 0, 1, %s, 'actor',
+                                      'accepted', %s, %s
+                                    )
                                     returning id
                                     """,
-                                    (account_id, "welcome", "pending"),
+                                    (
+                                        account_id, "welcome", "pending",
+                                        accepted_at, account_id,
+                                        accepted_at, accepted_at,
+                                    ),
                                 ).fetchall(),
                                 "Bootstrap welcome outbox context is invalid.",
                             )
                             welcome_outbox_id = _required_id(
                                 created_welcome, ("id",)
+                            )
+                            jobs = self._jobs or PostgresAuthMailJobRepository(
+                                database_url=self._database_url,
+                                connect_to_database=self._connect,
+                            )
+                            jobs.compose_existing_intent_in_transaction(
+                                connection,
+                                outbox_id=welcome_outbox_id,
+                                category="welcome",
+                                account_id=account_id,
+                                actor_account_id=account_id,
+                                library_id=library_id,
+                                request_origin_ref="system:bootstrap-owner",
+                                deployment_mode="self_hosted",
+                                client_surface="node",
+                                scheduled_at=accepted_at,
                             )
                             welcome_queued = True
         except Exception as exc:

@@ -8,8 +8,7 @@ from typing import Any
 
 from music_app.services.admin_account_creation import CreatedAccount
 from music_app.services.admin_member_mutation_postgres import lock_current_actor_session
-from music_app.services.auth_invitation_models import InvitationDelivery
-from music_app.services.auth_tokens import IssuedOpaqueToken
+from music_app.services.auth_mail_jobs_postgres import PostgresAuthMailJobRepository
 
 try:  # pragma: no cover - exercised with the optional runtime driver.
     import psycopg
@@ -34,6 +33,7 @@ class PostgresAdminAccountRepository:
         config: Mapping[str, object] | None,
         *,
         connect: Callable[[str], Any] | None = None,
+        job_repository: Any | None = None,
         clock: Callable[[], datetime] | None = None,
     ) -> None:
         payload = config if isinstance(config, Mapping) else {}
@@ -43,6 +43,10 @@ class PostgresAdminAccountRepository:
         if not self._database_url:
             raise RuntimeError("Database configuration is required for account creation.")
         self._connect = connect or _connect
+        self._jobs = job_repository or PostgresAuthMailJobRepository(
+            database_url=self._database_url,
+            connect_to_database=self._connect,
+        )
         self._clock = clock or (lambda: datetime.now(timezone.utc))
 
     def create_account(
@@ -56,19 +60,22 @@ class PostgresAdminAccountRepository:
         contact_email: str,
         contact_email_normalized: str,
         capability_keys: tuple[str, ...],
-        invitation: IssuedOpaqueToken | None,
+        send_invitation: bool,
         invitation_expires_at: datetime | None,
         created_at: datetime,
         request_ref: str,
+        request_origin_ref: str | None = None,
+        deployment_mode: str = "self_hosted",
+        client_surface: str = "private_web",
     ) -> CreatedAccount:
         _positive_id(actor_account_id)
         _positive_id(library_id)
         created_at = _aware_utc(created_at)
-        if invitation is None and invitation_expires_at is not None:
+        if not isinstance(send_invitation, bool):
+            raise ValueError("Managed account invitation choice is invalid.")
+        if not send_invitation and invitation_expires_at is not None:
             raise ValueError("Managed account invitation expiry is invalid.")
-        if invitation is not None:
-            if not isinstance(invitation, IssuedOpaqueToken):
-                raise ValueError("Managed account invitation is invalid.")
+        if send_invitation:
             invitation_expires_at = _aware_utc(invitation_expires_at)
             if invitation_expires_at <= created_at:
                 raise ValueError("Managed account invitation expiry is invalid.")
@@ -139,47 +146,40 @@ class PostgresAdminAccountRepository:
                             """,
                             (account_id, capability_key, library_id),
                         )
-                    invitation_delivery = None
-                    if invitation is not None:
-                        token_id = _returned_id(
-                            connection.execute(
-                                """
-                                insert into app.account_invitation_tokens (
-                                  account_id, token_hash, purpose, created_at,
-                                  expires_at, request_ref
-                                ) values (%s, %s, 'account_invitation', %s, %s, %s)
-                                returning id
-                                """,
-                                (
-                                    account_id,
-                                    invitation.digest,
-                                    created_at,
-                                    invitation_expires_at,
-                                    request_ref,
-                                ),
-                            ).fetchall()
-                        )
+                    invitation_queued = False
+                    if send_invitation:
                         outbox_id = _returned_id(
                             connection.execute(
                                 """
                                 insert into app.mail_outbox (
-                                  account_id, invitation_token_id,
-                                  message_category, delivery_status, created_at
-                                ) values (%s, %s, 'account_invitation', 'pending', %s)
+                                  account_id, message_category, delivery_status,
+                                  attempt_count, next_attempt_at, row_revision,
+                                  accepted_attempt, actor_account_id,
+                                  authorization_mode, delivery_checkpoint,
+                                  lifecycle_expires_at, created_at, updated_at
+                                ) values (
+                                  %s, 'account_invitation', 'pending', 0, %s,
+                                  0, 1, %s, 'actor', 'accepted', %s, %s, %s
+                                )
                                 returning id
                                 """,
-                                (account_id, token_id, created_at),
+                                (
+                                    account_id, created_at, actor_account_id,
+                                    invitation_expires_at, created_at, created_at,
+                                ),
                             ).fetchall()
                         )
-                        invitation_delivery = InvitationDelivery(
-                            outbox_id=outbox_id,
-                            invitation_token_id=token_id,
-                            account_id=account_id,
-                            recipient=contact_email,
-                            username=username_display,
-                            raw_token=invitation.raw,
-                            expires_at=invitation_expires_at,
+                        self._jobs.compose_existing_intent_in_transaction(
+                            connection, outbox_id=outbox_id,
+                            category="account_invitation", account_id=account_id,
+                            actor_account_id=actor_account_id,
+                            library_id=library_id,
+                            request_origin_ref=request_origin_ref,
+                            deployment_mode=deployment_mode,
+                            client_surface=client_surface,
+                            scheduled_at=created_at,
                         )
+                        invitation_queued = True
                     connection.execute(
                         """
                         insert into app.security_audit_events (
@@ -200,7 +200,7 @@ class PostgresAdminAccountRepository:
             raise
         return CreatedAccount(
             account_id=account_id,
-            invitation_delivery=invitation_delivery,
+            invitation_queued=invitation_queued,
         )
 
 

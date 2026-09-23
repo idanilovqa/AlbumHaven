@@ -94,6 +94,38 @@ Use lowercase, zero-padded filenames and apply them in lexical order:
 0065_native_player_component_provenance.sql
 0066_allow_appearance_panel_outline.sql
 0067_add_scanned_exception_candidate_index.sql
+0068_scoped_saved_loop_orders.sql
+0069_scoped_operational_log_versions.sql
+0070_appearance_loop_control_style.sql
+0071_allow_harbor_mint_appearance_palette.sql
+0072_measured_local_listen_sessions.sql
+0073_preserve_measured_listen_history.sql
+0074_create_saved_loop_waveform_peaks.sql
+0075_appearance_device_sections.sql
+0076_docked_compact_player_behavior.sql
+0077_allow_parchment_pine_appearance_palette.sql
+0078_add_compact_player_motion_and_floating_edge.sql
+0079_docked_compact_player_regular_style.sql
+0080_create_durable_job_foundation.sql
+0081_request_durable_job_cancellation.sql
+0082_harden_durable_job_boundaries.sql
+0083_grant_worker_authorization_reads.sql
+0084_add_job_transition_retention_index.sql
+0085_create_scan_job_intents.sql
+0086_grant_worker_targeted_reconciliation.sql
+0087_authorize_full_scan_lifecycle.sql
+0088_grant_worker_full_scan_execution.sql
+0089_create_durable_cover_job_state.sql
+0090_grant_worker_cover_lookup.sql
+0091_grant_worker_cover_refresh.sql
+0092_create_remote_cover_save_checkpoints.sql
+0093_complete_durable_scan_status_projection.sql
+0094_create_lastfm_retry_job_state.sql
+0095_grant_worker_lastfm_retry.sql
+0096_create_auth_mail_job_state.sql
+0097_grant_worker_auth_mail.sql
+0098_validate_durable_worker_startup.sql
+0099_retire_vacated_structural_album.sql
 ```
 
 Section 3 owns the first baseline schema migration. Do not add future-feature reservation schemas here. Phase 6 migration files should stay current-stack scoped and target app-owned durable data for `album_haven_core`.
@@ -157,5 +189,47 @@ Section 3 owns the first baseline schema migration. Do not add future-feature re
 `0063_replace_missing_album_removal_lock_snapshot.sql` acquires the inventory publication lock in a separate statement before the volatile missing-album removal function reads inventory. A removal that waits for a publisher sees its committed active files before deciding whether deletion is allowed. The function retains its original guards, result shape, security-definer scope, and execution grants.
 
 `0064_grant_library_membership_delete.sql` grants the application role `DELETE` only on `library.library_memberships` so the existing authorized access-removal transaction can complete. Other runtime and readonly privileges are unchanged.
+
+`0080_create_durable_job_foundation.sql` adds the private shared job ledger, transition history, and worker heartbeat tables. It closes the initial job-kind and state sets, enforces bounded JSON and coherent lease/terminal state, and adds claim, status, retry, and retention indexes. The application can enqueue and request cancellation, the dedicated worker can claim and transition work, and neither the worker nor readonly role receives deletion access; retention remains migrator-owned.
+
+`0081_request_durable_job_cancellation.sql` replaces direct application updates with a narrowly granted, migrator-owned cancellation function. It atomically cancels queued or retry-wait work with one transition, records only cooperative cancellation metadata for running work, and leaves terminal or inaccessible jobs unchanged.
+
+`0082_harden_durable_job_boundaries.sql` closes transition history to legal state-machine edges, narrows worker updates to orchestration columns, and preserves the first accepted running-job cancellation metadata when requests repeat.
+
+`0083_grant_worker_authorization_reads.sql` grants the worker only the non-secret, column-scoped account, ownership, library-membership, capability, and request-origin reads required to revalidate durable-job authority from stable identifiers. It grants no table-wide reads, sequence access, or access to private identity, credential, origin-key, or filesystem fields.
+
+`0084_add_job_transition_retention_index.sql` adds the timestamp-and-ID index used by bounded migrator-owned transition retention. It grants no runtime deletion privilege.
+
+`0085_create_scan_job_intents.sql` adds private full-scan and targeted-reconciliation intent records, stable root references, active full-scan exclusion, lifecycle synchronization, bounded checkpointing, orphan recovery, and claimed-intent loaders. Generic jobs retain only stable intent identities; raw paths remain in the private scan domain.
+
+`0086_grant_worker_targeted_reconciliation.sql` adds claimed-scope revalidation and a lease-fenced targeted inventory publication boundary. The worker receives only the narrow functions and columns needed to reconstruct authorized roots and publish one claimed reconciliation.
+
+`0087_authorize_full_scan_lifecycle.sql` adds an atomic created-versus-already-active acceptance result and domain-linked active full-scan cancellation. Authorized library operators can request cancellation without direct scan-domain table access, while malformed or unlinked generic jobs remain outside the cancellation boundary.
+
+`0088_grant_worker_full_scan_execution.sql` adds claim-scoped current-root loading, private monotonic full-scan progress, and a lease-fenced same-transaction publication boundary that records the committed inventory revision. That publication transaction also inserts exactly one server-owned, path-free `post_scan_cover_refresh` job keyed by library and resulting revision; an immutable-identity collision aborts the publication instead of accepting mismatched work. A claimed follow-up validator rechecks the exact active lease and current inventory revision. The worker receives only these narrow scan-domain functions; authenticated status reads use a separate application-only projection so private current paths never enter generic job data.
+
+`0089_create_durable_cover_job_state.sql` adds stable album, root, actor, origin, candidate-generation, revision, cancellation, and linked-job identities to cover lookup tasks; adds the bounded bulk-refresh progress projection; and registers retry-safe `cover_bulk_refresh` work without weakening existing job kinds. Historical notification metadata is scrubbed of album payloads and track paths while the private selected-cover column remains in the cover domain.
+
+`0090_grant_worker_cover_lookup.sql` adds claim-scoped cover-task validation, current album/root/path reconstruction, bounded cancellation observation, and row-revision-plus-lease-fenced task publication. The worker receives only execute access to these narrow functions; private paths and provider results remain confined to the cover domain.
+
+`0091_grant_worker_cover_refresh.sql` adds atomic user bulk-refresh acceptance, one shared claimed execution scope for manual and post-scan refreshes, durable progress and cancellation, and an authenticated status projection. The worker reconstructs private inventory only through lease-fenced functions, while generic job rows and status retain opaque IDs, counts, and safe labels.
+
+`0092_create_remote_cover_save_checkpoints.sql` adds atomic remote-selection acceptance and a private, revisioned checkpoint record for download, owned-artifact, selection, promotion, publication, rollback, and ambiguous recovery states. The worker can load private candidate/root/path scope and advance or publish only through an active lease-fenced job.
+
+`0093_complete_durable_scan_status_projection.sql` keeps authenticated scan status authoritative through publication. It projects the committed album count, exposes relation publication as active scan work, and bridges the atomically queued post-scan cover job into cover progress without exposing generic job identities or private paths.
+
+`0094_create_lastfm_retry_job_state.sql` makes each accepted Last.fm provider retry an explicit one-attempt durable job. It adds stable pending-row and active-session identities, bounded attempt and disposition state, idempotent source identity, and a due-retry index while keeping scrobble payloads in the private integration domain.
+
+`0095_grant_worker_lastfm_retry.sql` adds the lease-fenced validation, secret-loading, attempt transition, terminal convergence, and bounded legacy-adoption functions used by the worker. The worker receives execute access only and retains no direct Last.fm table access; possible-send outcomes converge to held ambiguity instead of automatic replay.
+
+`0096_create_auth_mail_job_state.sql` extends the existing mail outbox with stable actor, origin, accepted-attempt, checkpoint, revision, provider-disposition, and current-job fences. It classifies legacy token-bearing invitation and reset work as non-replayable, preserves completed evidence, and supports atomic tokenless intent plus generic-job composition without copying recipients, tokens, links, messages, or SMTP settings into the generic ledger.
+
+`0097_grant_worker_auth_mail.sql` adds category-specific claimed authorization, minimum delivery-context loading, hash-only token issuance, send checkpoints, terminal convergence, welcome retry scheduling, and bounded legacy-welcome adoption. The dedicated worker receives execute access only to lease-fenced functions and no broad reads of accounts, credentials, tokens, mail outbox, throttles, audit records, or settings; uncertain invitation and reset delivery remains ambiguous and is never replayed automatically.
+
+`0098_validate_durable_worker_startup.sql` adds the closed startup contract used before a worker advertises readiness. It requires the exact registered handler set, every handler-owned function and execute grant, generic-ledger table and update-column grants, and transition-sequence usage. It returns only a boolean and exposes no schema, role, path, credential, or job detail.
+
+`0099_retire_vacated_structural_album.sql` adds narrow application and worker boundaries for retiring zero-track album rows after structural and durable targeted reconciliation. It validates and locks same-library identities, preserves real track tombstones and cover-save checkpoint references, moves durable key/ID dependents with conflict-safe semantics, and sweeps only exact artist/title/year/edition siblings. The family-wide `separate_releases` marker does not protect an otherwise empty duplicate row; track ownership and active cover checkpoints remain row-specific guards. The targeted worker entry point additionally requires the current job attempt, lease, intent, and committed publication before using server-recorded affected album keys. Roles receive only function execution rather than destructive table privileges.
+
+Durable-jobs launch, health, shutdown, promotion, rollback, retention, and troubleshooting guidance is maintained in [`docs/operations/postgres-durable-jobs.md`](../../docs/operations/postgres-durable-jobs.md).
 
 Set `PGPASSFILE` when passwordless local automation is required. Keep migration SQL idempotent and review query plans for index-sensitive changes.

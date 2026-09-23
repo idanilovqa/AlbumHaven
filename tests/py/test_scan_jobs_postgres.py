@@ -1,0 +1,1137 @@
+from __future__ import annotations
+
+import json
+from contextlib import nullcontext
+from datetime import datetime, timezone
+from hashlib import sha256
+from pathlib import Path
+from types import SimpleNamespace
+
+import pytest
+
+from music_app.services.library_event_coordinator import (
+    TargetedMove,
+    TargetedReconciliationRequest,
+)
+from music_app.services.allowed_actions import PolicyDecision
+from music_app.services.jobs.models import (
+    JobCancellationDisposition,
+    JobCancellationResult,
+)
+from music_app.services.policy_evaluator import PolicyAudit, PolicyEvaluationResult
+
+
+NOW = datetime(2026, 9, 6, 18, 0, tzinfo=timezone.utc)
+
+
+class _Result:
+    def __init__(self, *, one=None, all_rows=()):
+        self._one = one
+        self._all = list(all_rows)
+
+    def fetchone(self):
+        return self._one
+
+    def fetchall(self):
+        return list(self._all)
+
+
+class _RecordingConnection:
+    def __init__(self, results=()):
+        self.results = list(results)
+        self.executed = []
+        self.commits = 0
+        self.rollbacks = 0
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, traceback):
+        if exc_type is None:
+            self.commits += 1
+        else:
+            self.rollbacks += 1
+
+    def transaction(self):
+        return nullcontext()
+
+    def execute(self, statement, parameters=None):
+        self.executed.append((str(statement), parameters or {}))
+        if self.results:
+            result = self.results.pop(0)
+            if isinstance(result, BaseException):
+                raise result
+            return result
+        return _Result()
+
+
+class _Connector:
+    def __init__(self, connection):
+        self.connection = connection
+        self.urls = []
+
+    def __call__(self, database_url):
+        self.urls.append(database_url)
+        return self.connection
+
+
+class _JobRepository:
+    def __init__(self, *, job_id=901, error=None):
+        self.job_id = job_id
+        self.error = error
+        self.calls = []
+        self.cancel_calls = []
+        self.sql_seen_at_enqueue = []
+
+    def enqueue_in_transaction(self, connection, command):
+        self.calls.append((connection, command))
+        self.sql_seen_at_enqueue.append(
+            tuple(_normalized(statement) for statement, _ in connection.executed)
+        )
+        if self.error is not None:
+            raise self.error
+        return self.job_id
+
+    def request_cancel(self, job_id, *, actor_account_id, now):
+        self.cancel_calls.append((job_id, actor_account_id, now))
+        if self.error is not None:
+            raise self.error
+        return JobCancellationResult(
+            job_id=job_id,
+            disposition=JobCancellationDisposition.RUNNING_REQUESTED,
+        )
+
+
+def _repository(connection, *, jobs=None):
+    from music_app.services.scan_jobs_postgres import PostgresScanJobRepository
+
+    connector = _Connector(connection)
+    jobs = jobs or _JobRepository()
+    repository = PostgresScanJobRepository(
+        database_url="postgresql://app-role@localhost/album_haven",
+        connect_to_database=connector,
+        job_repository=jobs,
+    )
+    return repository, connector, jobs
+
+
+def _normalized(statement):
+    return " ".join(statement.casefold().split())
+
+
+def _root_row(logical_root_id, root_id, *, library_id=19, is_active=True):
+    return {
+        "logical_root_id": logical_root_id,
+        "root_id": root_id,
+        "library_id": library_id,
+        "is_active": is_active,
+    }
+
+
+def _targeted_request():
+    return TargetedReconciliationRequest(
+        root_id="root-a",
+        paths=frozenset(
+            {
+                Path("C:/Music/Zulu/02.flac"),
+                Path("C:/Music/Alpha/01.flac"),
+            }
+        ),
+        deleted_paths=frozenset({Path("C:/Music/Old/03.flac")}),
+        deleted_subtrees=frozenset({Path("C:/Music/Gone")}),
+        preserved_subtrees=frozenset(
+            {
+                Path("C:/Music/Gone/Recreated"),
+                Path("C:/Music/Old Album/Surviving Disc"),
+            }
+        ),
+        moves=(
+            TargetedMove(
+                source=Path("C:/Music/Old Album"),
+                destination=Path("D:/Music/New Album"),
+                source_root_id="root-a",
+                destination_root_id="root-b",
+                is_directory=True,
+            ),
+            TargetedMove(
+                source=Path("C:/Music/Alpha/04.flac"),
+                destination=Path("C:/Music/Alpha/05.flac"),
+                source_root_id="root-a",
+                destination_root_id="root-a",
+                is_directory=False,
+            ),
+        ),
+    )
+
+
+def test_targeted_publication_converges_vacated_albums_under_the_same_lease():
+    connection = _RecordingConnection(
+        results=(
+            _Result(one={
+                "publication_won": True,
+                "inventory_mutation_revision": 17,
+                "affected_album_keys": ["artist::album"],
+            }),
+            _Result(one={"retired_count": 2}),
+        )
+    )
+    repository, _, _ = _repository(connection)
+    claim = SimpleNamespace(
+        job_id=91,
+        attempt=2,
+        worker_id="worker-a",
+        lease_token="lease-a",
+    )
+
+    result = repository.publish_claimed_targeted_reconciliation(
+        claim=claim,
+        intent_id=41,
+        inventory={"artists": [], "albums": [], "featured_artists": [], "tracks": [], "track_files": []},
+        stale_scopes=[],
+        now=NOW,
+    )
+
+    assert result["publication_won"] is True
+    assert len(connection.executed) == 2
+    converge_sql, converge_params = connection.executed[1]
+    assert "retire_claimed_targeted_reconciliation_vacated_albums" in converge_sql
+    assert converge_params == {
+        "intent_id": 41,
+        "job_id": 91,
+        "attempt": 2,
+        "worker_id": "worker-a",
+        "lease_token": "lease-a",
+        "now": NOW,
+    }
+
+
+def test_claimed_targeted_preparation_loads_only_through_lease_fenced_function():
+    connection = _RecordingConnection(
+        results=(
+            _Result(
+                one={
+                    "separate_release_keys": [
+                        "artist::album::disc-2",
+                        "artist::album::deluxe",
+                    ],
+                    "existing_memberships": [
+                        {
+                            "private_path": "C:/Music/Album/01.flac",
+                            "album_key": "artist::album",
+                            "album_title": "Album",
+                            "release_year": 2026,
+                            "edition": "",
+                            "artist_key": "artist",
+                        }
+                    ],
+                }
+            ),
+        )
+    )
+    repository, _, _ = _repository(connection)
+
+    preparation = repository.load_claimed_targeted_reconciliation_preparation(
+        intent_id=41,
+        library_id=19,
+        job_id=91,
+        attempt=2,
+        worker_id="worker-a",
+        lease_token="lease-a",
+        now=NOW,
+    )
+
+    assert preparation.separate_release_keys == (
+        "artist::album::deluxe",
+        "artist::album::disc-2",
+    )
+    assert preparation.existing_memberships == (
+        {
+            "private_path": "C:/Music/Album/01.flac",
+            "album_key": "artist::album",
+            "album_title": "Album",
+            "release_year": 2026,
+            "edition": "",
+            "artist_key": "artist",
+        },
+    )
+    [(statement, parameters)] = connection.executed
+    assert "load_claimed_targeted_reconciliation_preparation" in _normalized(
+        statement
+    )
+    assert " from library.separate_releases" not in _normalized(statement)
+    assert parameters == {
+        "intent_id": 41,
+        "library_id": 19,
+        "job_id": 91,
+        "attempt": 2,
+        "worker_id": "worker-a",
+        "lease_token": "lease-a",
+        "now": NOW,
+    }
+
+
+def _policy_evaluation(
+    action="library.refresh",
+    *,
+    allowed=True,
+    account_id=7,
+    library_id=19,
+    bootstrap_owner=False,
+    deployment_mode="self_hosted_private_web",
+    client_surface="private_web",
+    request_origin_type="browser",
+    request_origin_key="refresh-42",
+):
+    return PolicyEvaluationResult(
+        decision=PolicyDecision(
+            action=action,
+            allowed=allowed,
+            reason_code="granted" if allowed else "capability_denied",
+        ),
+        audit=PolicyAudit(
+            action=action,
+            actor_class="active",
+            account_id=account_id,
+            bootstrap_owner=bootstrap_owner,
+            reason_code="granted" if allowed else "capability_denied",
+            deployment_mode=deployment_mode,
+            client_surface_class=client_surface,
+            request_origin_type=request_origin_type,
+            request_origin_ref_digest=sha256(
+                f"{request_origin_type}:{request_origin_key}".encode("utf-8")
+            ).hexdigest(),
+            library_id=library_id,
+        ),
+    )
+
+
+def test_full_scan_domain_record_is_created_before_path_free_job_in_one_transaction():
+    connection = _RecordingConnection(
+        [
+            _Result(
+                all_rows=(
+                    _root_row("root-a", 31),
+                    _root_row("root-b", 32),
+                )
+            ),
+            _Result(one={"intent_id": 71, "job_id": None, "created": True}),
+            _Result(one={"intent_id": 71}),
+        ]
+    )
+    repository, connector, jobs = _repository(connection)
+
+    result = repository.enqueue_full_scan(
+        library_id=19,
+        account_id=7,
+        capability_key="library.refresh",
+        request_origin_ref="origin:refresh-42",
+        deployment_mode="self_hosted_private_web",
+        client_surface="web",
+        root_ids=("root-a", "root-b"),
+        mode="normal",
+        force=True,
+        scheduled_at=NOW,
+    )
+
+    assert result.intent_id == 71
+    assert result.job_id == 901
+    assert connector.urls == ["postgresql://app-role@localhost/album_haven"]
+    assert connection.commits == 1
+    assert connection.rollbacks == 0
+    assert len(jobs.calls) == 1
+    assert jobs.calls[0][0] is connection
+    assert any(
+        "create_full_scan_intent" in sql
+        for sql in jobs.sql_seen_at_enqueue[0]
+    )
+    assert not any(
+        "link_scan_intent_job" in sql
+        for sql in jobs.sql_seen_at_enqueue[0]
+    )
+    create_index = next(
+        index
+        for index, (sql, _) in enumerate(connection.executed)
+        if "create_full_scan_intent" in _normalized(sql)
+    )
+    link_index = next(
+        index
+        for index, (sql, _) in enumerate(connection.executed)
+        if "link_scan_intent_job" in _normalized(sql)
+    )
+    assert create_index < link_index
+
+    command = jobs.calls[0][1]
+    assert command.subject_kind == "full_scan_intent"
+    assert command.subject_ref == "71"
+    assert command.parameters == {"intent_id": 71}
+    assert command.library_id == 19
+    assert command.account_id == 7
+    assert command.capability_key == "library.refresh"
+    assert command.request_origin_ref == "origin:refresh-42"
+    assert command.idempotency_key == "full-scan-intent:71"
+
+
+def test_targeted_intent_preserves_exact_ordered_paths_moves_and_subtrees_before_enqueue():
+    request = _targeted_request()
+    connection = _RecordingConnection(
+        [
+            _Result(
+                all_rows=(
+                    _root_row("root-a", 31),
+                    _root_row("root-b", 32),
+                )
+            ),
+            _Result(one={"intent_id": 84}),
+            _Result(one={"intent_id": 84}),
+        ]
+    )
+    repository, _, jobs = _repository(connection)
+
+    result = repository.enqueue_targeted_reconciliation(
+        library_id=19,
+        request=request,
+        deployment_mode="self_hosted_private_web",
+        client_surface="library_watcher",
+        scheduled_at=NOW,
+    )
+
+    assert result.intent_id == 84
+    assert result.job_id == 901
+    assert connection.commits == 1
+    create_sql, values = next(
+        (sql, values)
+        for sql, values in connection.executed
+        if "create_targeted_reconciliation_intent" in _normalized(sql)
+    )
+    assert "select" in _normalized(create_sql)
+    assert values["active_paths"] == [
+        str(Path("C:/Music/Alpha/01.flac")),
+        str(Path("C:/Music/Zulu/02.flac")),
+    ]
+    assert values["deleted_paths"] == [str(Path("C:/Music/Old/03.flac"))]
+    assert values["deleted_subtrees"] == [str(Path("C:/Music/Gone"))]
+    assert values["preserved_subtrees"] == [
+        str(Path("C:/Music/Gone/Recreated")),
+        str(Path("C:/Music/Old Album/Surviving Disc")),
+    ]
+    assert values["primary_root_id"] == 31
+    assert json.loads(values["moves_json"]) == [
+        {
+            "destination_path": str(Path("D:/Music/New Album")),
+            "destination_root_id": 32,
+            "is_directory": True,
+            "ordinal": 0,
+            "source_path": str(Path("C:/Music/Old Album")),
+            "source_root_id": 31,
+        },
+        {
+            "destination_path": str(Path("C:/Music/Alpha/05.flac")),
+            "destination_root_id": 31,
+            "is_directory": False,
+            "ordinal": 1,
+            "source_path": str(Path("C:/Music/Alpha/04.flac")),
+            "source_root_id": 31,
+        },
+    ]
+    canonical_payload = json.dumps(
+        {
+            "active_paths": values["active_paths"],
+            "deleted_paths": values["deleted_paths"],
+            "deleted_subtrees": values["deleted_subtrees"],
+            "moves": json.loads(values["moves_json"]),
+            "preserved_subtrees": values["preserved_subtrees"],
+            "primary_root_id": values["primary_root_id"],
+        },
+        ensure_ascii=False,
+        allow_nan=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    )
+    expected_digest = sha256(canonical_payload.encode("utf-8")).hexdigest()
+    assert values["request_digest"] == expected_digest
+    assert jobs.calls[0][1].idempotency_key == (
+        f"targeted-reconciliation-request:{expected_digest}"
+    )
+
+
+def test_targeted_enqueue_persists_active_directory_as_recursive_scope(tmp_path):
+    active_directory = tmp_path / "Artist" / "Album" / "Disc 2"
+    active_directory.mkdir(parents=True)
+    connection = _RecordingConnection(
+        [
+            _Result(all_rows=(_root_row("root-a", 31),)),
+            _Result(one={"intent_id": 84}),
+            _Result(one={"intent_id": 84}),
+        ]
+    )
+    repository, _, _ = _repository(connection)
+
+    repository.enqueue_targeted_reconciliation(
+        library_id=19,
+        request=TargetedReconciliationRequest(
+            root_id="root-a",
+            paths=frozenset({active_directory}),
+        ),
+        deployment_mode="self_hosted_private_web",
+        client_surface="library_watcher",
+        scheduled_at=NOW,
+    )
+
+    _, values = next(
+        (sql, values)
+        for sql, values in connection.executed
+        if "create_targeted_reconciliation_intent" in _normalized(sql)
+    )
+    assert values["active_paths"] == []
+    assert values["preserved_subtrees"] == [str(active_directory)]
+
+
+def test_targeted_generic_job_contains_only_stable_intent_identity_not_paths():
+    connection = _RecordingConnection(
+        [
+            _Result(
+                all_rows=(
+                    _root_row("root-a", 31),
+                    _root_row("root-b", 32),
+                )
+            ),
+            _Result(one={"intent_id": 84}),
+            _Result(one={"intent_id": 84}),
+        ]
+    )
+    repository, _, jobs = _repository(connection)
+
+    repository.enqueue_targeted_reconciliation(
+        library_id=19,
+        request=_targeted_request(),
+        deployment_mode="self_hosted_private_web",
+        client_surface="library_watcher",
+        scheduled_at=NOW,
+    )
+
+    command = jobs.calls[0][1]
+    assert command.subject_kind == "targeted_reconciliation_intent"
+    assert command.subject_ref == "84"
+    assert command.parameters == {"intent_id": 84}
+    assert command.idempotency_key.startswith("targeted-reconciliation-request:")
+    assert command.idempotency_key != "targeted-reconciliation-intent:84"
+    assert command.account_id is None
+    assert command.capability_key is None
+    assert command.request_origin_ref is None
+    serialized_identity = json.dumps(
+        {
+            "subject_kind": command.subject_kind,
+            "subject_ref": command.subject_ref,
+            "parameters": command.parameters,
+            "idempotency_key": command.idempotency_key,
+        },
+        sort_keys=True,
+    )
+    assert "Music" not in serialized_identity
+    assert ".flac" not in serialized_identity
+
+
+def test_job_enqueue_failure_rolls_back_targeted_domain_record():
+    connection = _RecordingConnection(
+        [
+            _Result(
+                all_rows=(
+                    _root_row("root-a", 31),
+                    _root_row("root-b", 32),
+                )
+            ),
+            _Result(one={"intent_id": 84}),
+        ]
+    )
+    jobs = _JobRepository(error=RuntimeError("database write failed"))
+    repository, _, _ = _repository(connection, jobs=jobs)
+
+    with pytest.raises(RuntimeError, match="database write failed"):
+        repository.enqueue_targeted_reconciliation(
+            library_id=19,
+            request=_targeted_request(),
+            deployment_mode="self_hosted_private_web",
+            client_surface="library_watcher",
+            scheduled_at=NOW,
+        )
+
+    assert connection.commits == 0
+    assert connection.rollbacks == 1
+    assert len(jobs.calls) == 1
+    assert not any(
+        "link_scan_intent_job" in _normalized(sql)
+        for sql, _ in connection.executed
+    )
+
+
+@pytest.mark.parametrize(
+    "root_rows",
+    [
+        (),
+        (_root_row("root-a", 31, is_active=False),),
+        (_root_row("root-a", 31, library_id=27),),
+        (_root_row("root-a", 31),),
+    ],
+    ids=("unknown-primary", "inactive-primary", "cross-library-primary", "missing-move-root"),
+)
+def test_targeted_enqueue_rejects_invalid_inactive_or_cross_library_roots(root_rows):
+    connection = _RecordingConnection([_Result(all_rows=root_rows)])
+    repository, _, jobs = _repository(connection)
+
+    with pytest.raises(ValueError, match="root"):
+        repository.enqueue_targeted_reconciliation(
+            library_id=19,
+            request=_targeted_request(),
+            deployment_mode="self_hosted_private_web",
+            client_surface="library_watcher",
+            scheduled_at=NOW,
+        )
+
+    assert jobs.calls == []
+    assert len(connection.executed) == 1
+    root_sql = _normalized(connection.executed[0][0])
+    assert "from library.library_roots" in root_sql
+    assert "library_id" in root_sql
+    assert "is_active is true" in root_sql
+    assert not any(
+        "create_targeted_reconciliation_intent" in _normalized(sql)
+        for sql, _ in connection.executed
+    )
+
+
+def test_claimed_targeted_intent_reload_is_immutable_and_exact():
+    loaded = {
+        "intent_id": 84,
+        "library_id": 19,
+        "logical_root_id": "root-a",
+        "active_paths": [
+            str(Path("C:/Music/Alpha/01.flac")),
+            str(Path("C:/Music/Zulu/02.flac")),
+        ],
+        "deleted_paths": [str(Path("C:/Music/Old/03.flac"))],
+        "deleted_subtrees": [str(Path("C:/Music/Gone"))],
+        "preserved_subtrees": [
+            str(Path("C:/Music/Gone/Recreated")),
+            str(Path("C:/Music/Old Album/Surviving Disc")),
+        ],
+        "moves": [
+            {
+                "source_path": str(Path("C:/Music/Old Album")),
+                "destination_path": str(Path("D:/Music/New Album")),
+                "source_root_ref": "root-a",
+                "destination_root_ref": "root-b",
+                "is_directory": True,
+            }
+        ],
+        "exception_overrides": {
+            str(Path("C:/Music/Alpha/01.flac")): "Interview"
+        },
+    }
+    connection = _RecordingConnection(
+        [_Result(one=dict(loaded)), _Result(one=dict(loaded))]
+    )
+    repository, _, _ = _repository(connection)
+
+    first = repository.load_claimed_targeted_reconciliation(
+        job_id=901,
+        worker_id="worker-a",
+        lease_token="lease-a",
+    )
+    second = repository.load_claimed_targeted_reconciliation(
+        job_id=901,
+        worker_id="worker-a",
+        lease_token="lease-a",
+    )
+
+    assert first == second
+    assert first.root_id == "root-a"
+    assert first.paths == frozenset(Path(path) for path in loaded["active_paths"])
+    assert first.deleted_paths == frozenset(
+        Path(path) for path in loaded["deleted_paths"]
+    )
+    assert first.deleted_subtrees == frozenset(
+        Path(path) for path in loaded["deleted_subtrees"]
+    )
+    assert first.preserved_subtrees == frozenset(
+        Path(path) for path in loaded["preserved_subtrees"]
+    )
+    assert first.moves == (
+        TargetedMove(
+            source=Path("C:/Music/Old Album"),
+            destination=Path("D:/Music/New Album"),
+            source_root_id="root-a",
+            destination_root_id="root-b",
+            is_directory=True,
+        ),
+    )
+    assert first.exception_overrides == {
+        str(Path("C:/Music/Alpha/01.flac")): "Interview"
+    }
+    for statement, values in connection.executed:
+        sql = _normalized(statement)
+        assert "load_claimed_targeted_reconciliation_intent" in sql
+        assert not any(token in sql for token in (" insert ", " update ", " delete "))
+        assert values == {
+            "job_id": 901,
+            "worker_id": "worker-a",
+            "lease_token": "lease-a",
+        }
+
+
+def test_duplicate_logical_root_rows_fail_closed_before_domain_or_job_write():
+    connection = _RecordingConnection(
+        [
+            _Result(
+                all_rows=(
+                    _root_row("root-a", 31),
+                    _root_row("root-a", 32),
+                )
+            )
+        ]
+    )
+    repository, _, jobs = _repository(connection)
+
+    with pytest.raises(ValueError, match="duplicate|ambiguous.*root"):
+        repository.enqueue_full_scan(
+            library_id=19,
+            account_id=7,
+            capability_key="library.refresh",
+            request_origin_ref="origin:refresh-42",
+            deployment_mode="self_hosted_private_web",
+            client_surface="private_web",
+            root_ids=("root-a",),
+            mode="normal",
+            force=False,
+            scheduled_at=NOW,
+        )
+
+    assert jobs.calls == []
+    assert len(connection.executed) == 1
+
+
+def test_claimed_full_scan_loader_returns_exact_immutable_root_snapshot():
+    connection = _RecordingConnection(
+        [
+            _Result(
+                one={
+                    "intent_id": 71,
+                    "library_id": 19,
+                    "initiating_account_id": 7,
+                    "mode": "manual_full_rescan",
+                        "force": True,
+                        "logical_root_ids": ["root-a", "root-b"],
+                        "inventory_mutation_revision": 0,
+                        "committed_inventory_revision": None,
+                }
+            )
+        ]
+    )
+    repository, _, _ = _repository(connection)
+
+    intent = repository.load_claimed_full_scan(
+        job_id=901,
+        worker_id="worker-a",
+        lease_token="lease-a",
+    )
+
+    assert intent.intent_id == 71
+    assert intent.library_id == 19
+    assert intent.initiating_account_id == 7
+    assert intent.mode == "manual_full_rescan"
+    assert intent.force is True
+    assert intent.root_ids == ("root-a", "root-b")
+    [(statement, values)] = connection.executed
+    assert "load_claimed_full_scan_intent" in _normalized(statement)
+    assert values == {
+        "job_id": 901,
+        "worker_id": "worker-a",
+        "lease_token": "lease-a",
+    }
+
+
+def test_targeted_producer_request_key_converges_intent_and_job_idempotency():
+    connection = _RecordingConnection(
+        [
+            _Result(
+                all_rows=(
+                    _root_row("root-a", 31),
+                    _root_row("root-b", 32),
+                )
+            ),
+            _Result(one={"intent_id": 84, "job_id": None}),
+            _Result(one={"intent_id": 84}),
+            _Result(
+                all_rows=(
+                    _root_row("root-a", 31),
+                    _root_row("root-b", 32),
+                )
+            ),
+            _Result(one={"intent_id": 84, "job_id": 901}),
+        ]
+    )
+    repository, _, jobs = _repository(connection)
+    call = {
+        "library_id": 19,
+        "request": _targeted_request(),
+        "producer_request_key": "watcher-root-a-batch-20260906-0001",
+        "deployment_mode": "self_hosted_private_web",
+        "client_surface": "library_watcher",
+        "scheduled_at": NOW,
+    }
+
+    first = repository.enqueue_targeted_reconciliation(**call)
+    second = repository.enqueue_targeted_reconciliation(**call)
+
+    assert first == second
+    create_calls = [
+        values
+        for statement, values in connection.executed
+        if "create_targeted_reconciliation_intent" in _normalized(statement)
+    ]
+    assert [values["producer_request_key"] for values in create_calls] == [
+        call["producer_request_key"],
+        call["producer_request_key"],
+    ]
+    assert len(jobs.calls) == 1
+    assert jobs.calls[0][1].idempotency_key == (
+        "targeted-reconciliation-request:watcher-root-a-batch-20260906-0001"
+    )
+    assert jobs.calls[0][1].subject_ref == "84"
+
+
+def test_scan_intent_create_functions_receive_exact_accepted_context():
+    full_connection = _RecordingConnection(
+        [
+            _Result(all_rows=(_root_row("root-a", 31),)),
+            _Result(one={"intent_id": 71, "job_id": None, "created": True}),
+            _Result(one={"intent_id": 71}),
+        ]
+    )
+    full_repository, _, _ = _repository(full_connection)
+    full_repository.enqueue_full_scan(
+        library_id=19,
+        account_id=7,
+        capability_key="library.refresh",
+        request_origin_ref="origin:refresh-42",
+        deployment_mode="self_hosted_private_web",
+        client_surface="private_web",
+        root_ids=("root-a",),
+        mode="normal",
+        force=False,
+        scheduled_at=NOW,
+    )
+    _, full_values = next(
+        item
+        for item in full_connection.executed
+        if "create_full_scan_intent" in _normalized(item[0])
+    )
+    assert full_values["capability_key"] == "library.refresh"
+    assert full_values["request_origin_ref"] == "origin:refresh-42"
+    assert full_values["deployment_mode"] == "self_hosted_private_web"
+    assert full_values["client_surface"] == "private_web"
+
+    targeted_connection = _RecordingConnection(
+        [
+            _Result(
+                all_rows=(
+                    _root_row("root-a", 31),
+                    _root_row("root-b", 32),
+                )
+            ),
+            _Result(one={"intent_id": 84, "job_id": None}),
+            _Result(one={"intent_id": 84}),
+        ]
+    )
+    targeted_repository, _, _ = _repository(targeted_connection)
+    targeted_repository.enqueue_targeted_reconciliation(
+        library_id=19,
+        request=_targeted_request(),
+        producer_request_key="watcher-context-0001",
+        deployment_mode="self_hosted_private_web",
+        client_surface="library_watcher",
+        scheduled_at=NOW,
+    )
+    _, targeted_values = next(
+        item
+        for item in targeted_connection.executed
+        if "create_targeted_reconciliation_intent" in _normalized(item[0])
+    )
+    assert targeted_values["deployment_mode"] == "self_hosted_private_web"
+    assert targeted_values["client_surface"] == "library_watcher"
+
+
+def test_targeted_same_producer_key_with_different_payload_fails_closed():
+    collision = RuntimeError("targeted reconciliation request key payload mismatch")
+    connection = _RecordingConnection(
+        [
+            _Result(
+                all_rows=(
+                    _root_row("root-a", 31),
+                    _root_row("root-b", 32),
+                )
+            ),
+            _Result(one={"intent_id": 84, "job_id": None}),
+            _Result(one={"intent_id": 84}),
+            _Result(
+                all_rows=(
+                    _root_row("root-a", 31),
+                    _root_row("root-b", 32),
+                )
+            ),
+            collision,
+        ]
+    )
+    repository, _, jobs = _repository(connection)
+    repository.enqueue_targeted_reconciliation(
+        library_id=19,
+        request=_targeted_request(),
+        producer_request_key="watcher-collision-0001",
+        deployment_mode="self_hosted_private_web",
+        client_surface="library_watcher",
+        scheduled_at=NOW,
+    )
+    changed_request = TargetedReconciliationRequest(
+        root_id="root-a",
+        paths=frozenset({Path("C:/Music/Different/99.flac")}),
+    )
+
+    with pytest.raises(RuntimeError, match="payload mismatch"):
+        repository.enqueue_targeted_reconciliation(
+            library_id=19,
+            request=changed_request,
+            producer_request_key="watcher-collision-0001",
+            deployment_mode="self_hosted_private_web",
+            client_surface="library_watcher",
+            scheduled_at=NOW,
+        )
+
+    assert len(jobs.calls) == 1
+    assert connection.commits == 1
+    assert connection.rollbacks == 1
+    assert sum(
+        "link_scan_intent_job" in _normalized(statement)
+        for statement, _ in connection.executed
+    ) == 1
+
+
+def test_authorized_full_scan_producer_persists_exact_approved_context():
+    connection = _RecordingConnection(
+        [
+            _Result(all_rows=(_root_row("root-a", 31), _root_row("root-b", 32))),
+            _Result(one={"intent_id": 71, "job_id": None, "created": True}),
+            _Result(one={"intent_id": 71}),
+        ]
+    )
+    repository, _, jobs = _repository(connection)
+
+    accepted = repository.enqueue_authorized_full_scan(
+        policy_evaluation=_policy_evaluation(),
+        library_id=19,
+        request_origin_ref="browser:refresh-42",
+        root_ids=("root-a", "root-b"),
+        mode="manual_full_rescan",
+        force=True,
+        scheduled_at=NOW,
+    )
+
+    assert accepted == type(accepted)(intent_id=71, job_id=901, created=True)
+    command = jobs.calls[0][1]
+    assert command.account_id == 7
+    assert command.library_id == 19
+    assert command.capability_key == "library.refresh"
+    assert command.request_origin_ref == "browser:refresh-42"
+    assert command.deployment_mode == "self_hosted_private_web"
+    assert command.client_surface == "private_web"
+    assert command.parameters == {"intent_id": 71}
+    assert command.idempotency_key == "full-scan-intent:71"
+
+
+def test_authorized_full_scan_accepts_bootstrap_owner_for_cold_start():
+    connection = _RecordingConnection(
+        [
+            _Result(all_rows=(_root_row("root-a", 31),)),
+            _Result(one={"intent_id": 72, "job_id": None, "created": True}),
+            _Result(one={"intent_id": 72}),
+        ]
+    )
+    repository, _, jobs = _repository(connection)
+
+    repository.enqueue_authorized_full_scan(
+        policy_evaluation=_policy_evaluation(
+            bootstrap_owner=True, request_origin_key="cold-start-owner"
+        ),
+        library_id=19,
+        request_origin_ref="browser:cold-start-owner",
+        root_ids=("root-a",),
+        mode="background",
+        force=False,
+        scheduled_at=NOW,
+        cold_start=True,
+    )
+
+    assert jobs.calls[0][1].account_id == 7
+
+
+@pytest.mark.parametrize(
+    ("evaluation", "library_id", "origin_ref", "cold_start", "message"),
+    [
+        (_policy_evaluation(allowed=False), 19, "browser:refresh-42", False, "not authorized"),
+        (_policy_evaluation(action="library.refresh.cancel"), 19, "browser:refresh-42", False, "library.refresh"),
+        (_policy_evaluation(library_id=27), 19, "browser:refresh-42", False, "library"),
+        (_policy_evaluation(request_origin_type="tauri"), 19, "browser:refresh-42", False, "origin"),
+        (_policy_evaluation(), 19, "browser:different-origin", False, "origin"),
+        (_policy_evaluation(bootstrap_owner=False), 19, "browser:refresh-42", True, "bootstrap"),
+    ],
+)
+def test_authorized_full_scan_fails_closed_before_database_write(
+    evaluation, library_id, origin_ref, cold_start, message
+):
+    connection = _RecordingConnection()
+    repository, _, jobs = _repository(connection)
+
+    with pytest.raises(PermissionError, match=message):
+        repository.enqueue_authorized_full_scan(
+            policy_evaluation=evaluation,
+            library_id=library_id,
+            request_origin_ref=origin_ref,
+            root_ids=("root-a",),
+            mode="background",
+            force=False,
+            scheduled_at=NOW,
+            cold_start=cold_start,
+        )
+
+    assert connection.executed == []
+    assert jobs.calls == []
+
+
+def test_duplicate_authorized_full_scan_requests_converge_on_database_active_job():
+    connection = _RecordingConnection(
+        [
+            _Result(all_rows=(_root_row("root-a", 31),)),
+            _Result(one={"intent_id": 71, "job_id": None, "created": True}),
+            _Result(one={"intent_id": 71}),
+            _Result(all_rows=(_root_row("root-a", 31),)),
+            _Result(one={"intent_id": 71, "job_id": 901, "created": False}),
+        ]
+    )
+    repository, _, jobs = _repository(connection)
+    arguments = {
+        "policy_evaluation": _policy_evaluation(),
+        "library_id": 19,
+        "request_origin_ref": "browser:refresh-42",
+        "root_ids": ("root-a",),
+        "mode": "background",
+        "force": False,
+        "scheduled_at": NOW,
+    }
+
+    first = repository.enqueue_authorized_full_scan(**arguments)
+    second = repository.enqueue_authorized_full_scan(**arguments)
+
+    assert first == second
+    assert first.created is True
+    assert second.created is False
+    assert len(jobs.calls) == 1
+    assert sum(
+        "create_full_scan_intent" in _normalized(statement)
+        for statement, _ in connection.executed
+    ) == 2
+
+
+def test_authorized_full_scan_cancellation_targets_database_active_job_only():
+    connection = _RecordingConnection(
+        [
+            _Result(
+                one={
+                    "job_id": 901,
+                    "prior_state": "running",
+                    "next_state": "running",
+                    "reason_code": "running_requested",
+                    "transition_recorded": False,
+                }
+            )
+        ]
+    )
+    repository, _, jobs = _repository(connection)
+
+    result = repository.cancel_authorized_full_scan(
+        policy_evaluation=_policy_evaluation(action="library.refresh.cancel"),
+        library_id=19,
+        now=NOW,
+    )
+
+    assert result is not None
+    assert result.disposition is JobCancellationDisposition.RUNNING_REQUESTED
+    assert jobs.cancel_calls == []
+    [(statement, values)] = connection.executed
+    assert "request_active_full_scan_cancellation" in _normalized(statement)
+    assert "progress_current" not in _normalized(statement)
+    assert values == {"library_id": 19, "account_id": 7, "now": NOW}
+
+
+def test_authorized_full_scan_cancellation_is_noop_without_active_job():
+    connection = _RecordingConnection([_Result(one=None)])
+    repository, _, jobs = _repository(connection)
+
+    result = repository.cancel_authorized_full_scan(
+        policy_evaluation=_policy_evaluation(action="library.refresh.cancel"),
+        library_id=19,
+        now=NOW,
+    )
+
+    assert result is None
+    assert jobs.cancel_calls == []
+
+
+@pytest.mark.parametrize(
+    "evaluation",
+    [
+        _policy_evaluation(action="library.refresh"),
+        _policy_evaluation(action="library.refresh.cancel", allowed=False),
+        _policy_evaluation(action="library.refresh.cancel", account_id=None),
+        _policy_evaluation(action="library.refresh.cancel", library_id=27),
+    ],
+)
+def test_authorized_full_scan_cancellation_fails_closed(evaluation):
+    connection = _RecordingConnection()
+    repository, _, jobs = _repository(connection)
+
+    with pytest.raises(PermissionError):
+        repository.cancel_authorized_full_scan(
+            policy_evaluation=evaluation,
+            library_id=19,
+            now=NOW,
+        )
+
+    assert connection.executed == []
+    assert jobs.cancel_calls == []
+
+
+def test_post_scan_cover_scope_validation_uses_only_claim_and_revision_identity():
+    connection = _RecordingConnection([_Result(one={"scope_current": True})])
+    repository, _, _ = _repository(connection)
+
+    current = repository.validate_claimed_post_scan_cover_refresh(
+        library_id=19,
+        inventory_revision=41,
+        job_id=903,
+        attempt=1,
+        worker_id="worker-cover",
+        lease_token="lease-cover",
+        now=NOW,
+    )
+
+    assert current is True
+    [(statement, values)] = connection.executed
+    assert "validate_claimed_post_scan_cover_refresh" in _normalized(statement)
+    assert values == {
+        "library_id": 19,
+        "inventory_revision": 41,
+        "job_id": 903,
+        "attempt": 1,
+        "worker_id": "worker-cover",
+        "lease_token": "lease-cover",
+        "now": NOW,
+    }
+    assert "path" not in repr(values).casefold()

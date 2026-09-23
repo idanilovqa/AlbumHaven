@@ -227,81 +227,23 @@ def retry_pending_lastfm_scrobbles(
         return summary
 
 
-def start_lastfm_retry_worker(app) -> None:
-    config = app.config
-    logger = app.logger
+def start_lastfm_retry_worker(_app: object) -> None:
+    """Fail closed for callers that have not migrated to the durable worker."""
 
-    global _WORKER_THREAD, _WORKER_APP_KEY, _WORKER_STOP_EVENT
-    app_key = str(config.get("DATA_DIR") or "")
-    with _WORKER_LOCK:
-        if (
-            _WORKER_THREAD
-            and _WORKER_THREAD.is_alive()
-            and _WORKER_APP_KEY == app_key
-            and (_WORKER_STOP_EVENT is None or not _WORKER_STOP_EVENT.is_set())
-        ):
-            return
-
-        if _WORKER_STOP_EVENT is not None:
-            _WORKER_STOP_EVENT.set()
-
-        stop_event = threading.Event()
-
-        def worker() -> None:
-            while not stop_event.is_set():
-                try:
-                    summary = retry_pending_lastfm_scrobbles(config)
-                    if summary["attempted"]:
-                        log_app_event(
-                            config,
-                            logger,
-                            "Last.fm retry pass completed",
-                            attempted=summary["attempted"],
-                            succeeded=summary["succeeded"],
-                            failed=summary["failed"],
-                            pending_after=summary["pending_after"],
-                        )
-                except Exception as exc:
-                    log_app_event(
-                        config,
-                        logger,
-                        "Last.fm retry worker failed",
-                        level="error",
-                        error=str(exc),
-                    )
-                stop_event.wait(_RETRY_INTERVAL_SECONDS)
-
-        _WORKER_APP_KEY = app_key
-        _WORKER_STOP_EVENT = stop_event
-        _WORKER_THREAD = threading.Thread(
-            target=worker,
-            name="albumhaven-lastfm-retry",
-            daemon=True,
-        )
-        _WORKER_THREAD.start()
+    raise RuntimeError("the process-local Last.fm retry daemon has been retired")
 
 
-def stop_lastfm_retry_worker(app=None, *, wait: bool = False, timeout: float = 5.0) -> bool:
-    global _WORKER_THREAD, _WORKER_APP_KEY, _WORKER_STOP_EVENT
+def stop_lastfm_retry_worker(
+    _app: object | None = None, *, wait: bool = False, timeout: float = 5.0
+) -> bool:
+    """Report that no process-local retry daemon exists."""
 
-    app_key = str(app.config.get("DATA_DIR") or "") if app is not None else ""
-    thread: threading.Thread | None = None
-    with _WORKER_LOCK:
-        if app is not None and app_key != _WORKER_APP_KEY:
-            return False
-        if _WORKER_STOP_EVENT is None:
-            return False
+    del wait, timeout
+    return False
 
-        _WORKER_STOP_EVENT.set()
-        thread = _WORKER_THREAD
 
-    if wait and thread is not None:
-        thread.join(timeout=timeout)
-
-    with _WORKER_LOCK:
-        if _WORKER_THREAD is thread and (thread is None or not thread.is_alive()):
-            _WORKER_THREAD = None
-            _WORKER_APP_KEY = ""
-            _WORKER_STOP_EVENT = None
-
-    return True
+__all__ = [
+    "LastfmRetryBatchError",
+    "pending_scrobble_count",
+    "retry_pending_lastfm_scrobbles",
+]

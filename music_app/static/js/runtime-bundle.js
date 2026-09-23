@@ -5017,7 +5017,8 @@ function renderLibraryLoader(data = {}, options = {}) {
   });
   const finalizingActiveScan = scanPageVisible
     && Boolean(data.scan_in_progress)
-    && String(data.scan_phase || '').trim().toLowerCase() === 'finalizing';
+    && String(data.scan_phase || '').trim().toLowerCase() === 'finalizing'
+    && Number(data.album_total || 0) > 0;
   // The dedicated page hides, but deliberately retains, the previous gallery and
   // query. Its Browse action must not wait for that retained view to become empty.
   const retainedBrowseAvailable = scanPageVisible
@@ -14082,6 +14083,14 @@ async function fetchAndRender(url, push = true, options = {}) {
     if (requestTagEditMutationRevision !== Number(state.ui.tagEditOptimisticMutationRevision || 0)) {
       return false;
     }
+    if (
+      !push
+      && typeof requestOptions.shouldApplyResponse !== 'function'
+      && typeof hasActiveTagEditViewMutation === 'function'
+      && hasActiveTagEditViewMutation()
+    ) {
+      return false;
+    }
     if (typeof requestOptions.shouldApplyResponse === 'function') {
       let shouldApplyResponse = false;
       try {
@@ -16562,6 +16571,63 @@ function finalizedAlbumsCoverExpectedTrackPaths(originalAlbum, optimisticAlbums,
   return Array.from(expectedPaths).every((path) => finalizedPaths.has(path));
 }
 
+function albumDeclaredMembershipCount(album) {
+  const explicitMembershipCount = getAlbumTrackPaths(album).size;
+  const declaredCounts = [album?.track_count_preview, album?.track_count]
+    .map((value) => Number(value))
+    .filter((value) => Number.isFinite(value) && value >= 0);
+  return Math.max(explicitMembershipCount, ...declaredCounts, 0);
+}
+
+function collectAlbumsFromViewPayload(payload) {
+  return ['primary_artist_groups', 'family_artist_groups', 'artist_groups']
+    .flatMap((field) => (Array.isArray(payload?.[field]) ? payload[field] : []))
+    .flatMap((group) => (Array.isArray(group?.albums) ? group.albums : []));
+}
+
+function canonicalViewPayloadCoversExpectedTagEdit(payload, originalAlbum, optimisticAlbums) {
+  const expectedAlbums = Array.isArray(optimisticAlbums) && optimisticAlbums.length
+    ? optimisticAlbums
+    : [originalAlbum].filter(Boolean);
+  const canonicalAlbums = collectAlbumsFromViewPayload(payload);
+  if (!expectedAlbums.length || !canonicalAlbums.length) return false;
+  const expectedReleaseGroups = [];
+  expectedAlbums.forEach((expectedAlbum) => {
+    const matchingGroup = expectedReleaseGroups.find((group) => (
+      albumsShareLogicalReleaseIdentity(group[0], expectedAlbum)
+      || albumsShareRuntimeIdentityAlias(group[0], expectedAlbum)
+    ));
+    if (matchingGroup) matchingGroup.push(expectedAlbum);
+    else expectedReleaseGroups.push([expectedAlbum]);
+  });
+  return expectedReleaseGroups.every((expectedReleaseGroup) => {
+    const expectedAlbum = expectedReleaseGroup[0];
+    const expectedAliases = new Set();
+    const expectedPaths = new Set();
+    let opaqueMembershipCount = 0;
+    expectedReleaseGroup.forEach((album) => {
+      getAlbumRuntimeIdentityAliases(album).forEach((alias) => expectedAliases.add(alias));
+      const albumPaths = getAlbumTrackPaths(album);
+      albumPaths.forEach((path) => expectedPaths.add(path));
+      opaqueMembershipCount += Math.max(
+        0,
+        albumDeclaredMembershipCount(album) - albumPaths.size,
+      );
+    });
+    const expectedCount = expectedPaths.size + opaqueMembershipCount;
+    if (!expectedCount) return false;
+    return canonicalAlbums.some((canonicalAlbum) => {
+      const canonicalAliases = getAlbumRuntimeIdentityAliases(canonicalAlbum);
+      const aliasesMatch = Array.from(expectedAliases)
+        .some((alias) => canonicalAliases.has(alias));
+      return (
+        (aliasesMatch || albumsShareLogicalReleaseIdentity(expectedAlbum, canonicalAlbum))
+        && albumDeclaredMembershipCount(canonicalAlbum) >= expectedCount
+      );
+    });
+  });
+}
+
 function albumsShareTrackPath(left, rightPaths) {
   if (!rightPaths?.size) return false;
   return Array.from(getAlbumTrackPaths(left))
@@ -16710,6 +16776,10 @@ function getAlbumRuntimeIdentityAliases(album) {
 let tagEditViewMutationGeneration = 0;
 const tagEditViewMutationResourceClaims = new Map();
 const settledTagEditViewMutations = new Set();
+
+function hasActiveTagEditViewMutation() {
+  return tagEditViewMutationResourceClaims.size > 0;
+}
 
 function claimTagEditViewMutation(album, editedTrackPaths = [], updates = {}) {
   if (Object.values(updates || {}).some((edits) => (
@@ -18072,19 +18142,45 @@ async function watchSaveTask(taskId, context = {}) {
             && !mutationWasSuperseded()
           ) {
             try {
-              viewRefreshed = await fetchAndRender(
-                buildApiUrl(state.view),
-                false,
-                {
-                  ...currentViewRenderOptions(),
-                  preserveMountedGalleryChildren: true,
-                  ...(!structuralTagEditRequiresCanonicalView
-                    ? { retainMountedGalleryIfEquivalent: true }
-                    : {}),
-                  restartIfSameUrl: true,
-                  shouldApplyResponse: () => !mutationWasSuperseded(),
-                },
-              );
+              const canonicalRefreshAttempts = structuralPartialMembershipRequiresCanonicalRefresh
+                ? 80
+                : 1;
+              for (
+                let refreshAttempt = 0;
+                refreshAttempt < canonicalRefreshAttempts;
+                refreshAttempt += 1
+              ) {
+                viewRefreshed = await fetchAndRender(
+                  buildApiUrl(state.view),
+                  false,
+                  {
+                    ...currentViewRenderOptions(),
+                    preserveMountedGalleryChildren: !structuralPartialMembershipRequiresCanonicalRefresh,
+                    ...(
+                      !structuralTagEditRequiresCanonicalView
+                      && !structuralPartialMembershipRequiresCanonicalRefresh
+                      ? { retainMountedGalleryIfEquivalent: true }
+                      : {}
+                    ),
+                    restartIfSameUrl: true,
+                    shouldApplyResponse: (payload) => (
+                      !mutationWasSuperseded()
+                      && (
+                        !structuralPartialMembershipRequiresCanonicalRefresh
+                        || canonicalViewPayloadCoversExpectedTagEdit(
+                          payload,
+                          originalAlbum,
+                          context.optimisticAlbums,
+                        )
+                      )
+                    ),
+                  },
+                );
+                if (viewRefreshed || mutationWasSuperseded()) break;
+                if (refreshAttempt + 1 < canonicalRefreshAttempts) {
+                  await waitForBrowserTimeout(250);
+                }
+              }
               if (viewRefreshed && finalizedAlbums.length) {
                 modalUpdatedAlbums = enrichFinalizedAlbumsWithCanonicalVisibleProjections(
                   finalizedAlbums,
@@ -27735,6 +27831,17 @@ async function confirmManualTagEdit() {
   const tagEditMutationClaim = claimTagEditViewMutation(album, editedPaths, updates);
   settleTagEditorSessionMutationClaim();
   const optimisticUpdatedAlbums = buildOptimisticUpdatedAlbumsFromEdits(album, updates);
+  const preEditCanonicalReadinessAlbums = (
+    typeof collectVisibleAlbumsUnique === 'function'
+    && typeof getAlbumTrackPaths === 'function'
+    && typeof albumsShareTrackPath === 'function'
+    && typeof albumsShareRuntimeIdentityAlias === 'function'
+  )
+    ? collectVisibleAlbumsUnique().filter((visibleAlbum) => (
+      !albumsShareTrackPath(visibleAlbum, getAlbumTrackPaths(album))
+      && !albumsShareRuntimeIdentityAlias(visibleAlbum, album)
+    ))
+    : [];
   const pendingProblematicEntry = registerPendingProblematicOptimisticEdit(
     album,
     optimisticUpdatedAlbums,
@@ -27772,6 +27879,11 @@ async function confirmManualTagEdit() {
       originalAlbum: album,
       tagEdits: updates,
     },
+  );
+  const optimisticCanonicalReadinessAlbums = (
+    preEditCanonicalReadinessAlbums.length
+      ? [...preEditCanonicalReadinessAlbums, ...optimisticUpdatedAlbums]
+      : reconciledOptimisticAlbums
   );
   if (typeof applyTagEditsToNonAlbumView === 'function') {
     applyTagEditsToNonAlbumView(album, updates);
@@ -27850,7 +27962,7 @@ async function confirmManualTagEdit() {
       preserveAbsoluteScroll: true,
       absoluteScrollPosition,
       problematicMutationOriginKey,
-      optimisticAlbums: optimisticUpdatedAlbums,
+      optimisticAlbums: optimisticCanonicalReadinessAlbums,
       pendingProblematicEntry,
     };
     if (

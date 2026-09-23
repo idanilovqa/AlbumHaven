@@ -198,12 +198,16 @@ test('scan database preflight accepts the dedicated local identity and exact CI 
         'postgresql://album_haven_migrator@localhost:5432/album_haven_scan_e2e',
       ALBUM_HAVEN_SCAN_PERFORMANCE_DATABASE_URL:
         'postgresql://album_haven_app@localhost:5432/album_haven_scan_e2e',
+      ALBUM_HAVEN_WORKER_DATABASE_URL:
+        'postgresql://album_haven_worker@localhost:5432/album_haven_scan_e2e',
     },
     {
       ALBUM_HAVEN_SCAN_PERFORMANCE_SETUP_DATABASE_URL:
         'postgresql://album_haven_migrator_perf_123@localhost:5432/album_haven_ci_perf_123',
       ALBUM_HAVEN_SCAN_PERFORMANCE_DATABASE_URL:
         'postgresql://album_haven_app_perf_123@localhost:5432/album_haven_ci_perf_123',
+      ALBUM_HAVEN_WORKER_DATABASE_URL:
+        'postgresql://album_haven_worker_perf_123@localhost:5432/album_haven_ci_perf_123',
     },
   ];
 
@@ -222,6 +226,8 @@ test('scan database preflight rejects mismatched CI suffixes', () => {
         'postgresql://album_haven_migrator_perf_123@localhost:5432/album_haven_ci_perf_123',
       ALBUM_HAVEN_SCAN_PERFORMANCE_DATABASE_URL:
         'postgresql://album_haven_app_perf_456@localhost:5432/album_haven_ci_perf_123',
+      ALBUM_HAVEN_WORKER_DATABASE_URL:
+        'postgresql://album_haven_worker_perf_123@localhost:5432/album_haven_ci_perf_123',
     }),
     /suffix|album_haven_app_perf_123|matching/i,
   );

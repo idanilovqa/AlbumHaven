@@ -177,6 +177,109 @@ class ScanCacheAdapter(Protocol):
         ...
 
 
+class DurableTargetedReconciliationPreparationAdapter:
+    """Prepare worker inventory in memory and publish through its lease fence."""
+
+    backend = PERSISTENCE_BACKEND_POSTGRES
+
+    def __init__(
+        self,
+        *,
+        build_albums: Callable[
+            [dict[str, dict[str, object]], set[str] | None], list[object]
+        ] = build_albums_from_file_cache,
+    ) -> None:
+        self._build_albums = build_albums
+
+    def persist_targeted_inventory_mutation(
+        self,
+        *,
+        root_id: str,
+        active_file_entries: dict[str, dict[str, object]],
+        deleted_paths: tuple[str, ...] = (),
+        deleted_subtrees: tuple[str, ...] = (),
+        moves: tuple[dict[str, object], ...] = (),
+        publication_guard: object,
+        preparation_scope: object,
+    ) -> dict[str, object]:
+        normalized_root_id = str(root_id or "").strip()
+        if not normalized_root_id:
+            raise ValueError("Targeted inventory mutation requires a root id.")
+        publish = getattr(publication_guard, "publish_prepared", None)
+        if not callable(publish):
+            raise ValueError("Durable targeted publication guard is required.")
+
+        file_cache = {
+            str(path): dict(entry)
+            for path, entry in active_file_entries.items()
+            if str(path).strip() and isinstance(entry, dict)
+        }
+        separate_release_keys = {
+            str(key)
+            for key in getattr(preparation_scope, "separate_release_keys", ())
+            if str(key)
+        }
+        albums = self._build_albums(
+            _file_cache_with_inferred_blank_album_memberships(file_cache),
+            separate_release_keys,
+        )
+        artists, album_rows, featured, tracks, files = _inventory_rows_from_albums(
+            file_cache, albums
+        )
+        _remap_targeted_album_identity_rows(
+            album_rows=album_rows,
+            featured_artist_rows=featured,
+            track_rows=tracks,
+            existing_memberships=list(
+                getattr(preparation_scope, "existing_memberships", ())
+            ),
+            separate_release_keys=separate_release_keys,
+        )
+        inventory = {
+            "artists": _jsonb_compatible(artists),
+            "albums": _jsonb_compatible(album_rows),
+            "featured_artists": _jsonb_compatible(featured),
+            "tracks": _jsonb_compatible(tracks),
+            "track_files": _jsonb_compatible(files),
+        }
+
+        stale_by_root: dict[str, dict[str, set[str]]] = {
+            normalized_root_id: {
+                "paths": {str(path) for path in deleted_paths if str(path)},
+                "subtrees": {
+                    str(path) for path in deleted_subtrees if str(path)
+                },
+            }
+        }
+        for move in moves:
+            source_root_id = str(
+                move.get("source_root_id") or normalized_root_id
+            ).strip()
+            source_path = str(move.get("source_path") or "").strip()
+            if not source_root_id or not source_path:
+                continue
+            stale_target = stale_by_root.setdefault(
+                source_root_id, {"paths": set(), "subtrees": set()}
+            )
+            stale_target[
+                "subtrees" if move.get("is_directory") else "paths"
+            ].add(source_path)
+        stale_scopes = [
+            {
+                "root_id": stale_root_id,
+                "paths": sorted(target["paths"]),
+                "subtrees": sorted(target["subtrees"]),
+            }
+            for stale_root_id, target in sorted(stale_by_root.items())
+            if target["paths"] or target["subtrees"]
+        ]
+
+        result = publish(inventory=inventory, stale_scopes=stale_scopes)
+        if not isinstance(result, dict):
+            return {"publication_won": False}
+        return result
+
+
 class PostgresScanCacheAdapter:
     backend = PERSISTENCE_BACKEND_POSTGRES
 
@@ -207,6 +310,29 @@ class PostgresScanCacheAdapter:
         with self._connect_to_database() as connection:
             _ensure_bootstrap_context(connection)
             return _load_inventory_mutation_revision(connection)
+
+    def prepare_full_scan_inventory(
+        self,
+        file_cache: dict[str, dict[str, object]],
+        *,
+        separate_release_keys: set[str] | None = None,
+    ) -> dict[str, object]:
+        """Prepare bounded JSON rows for claim-scoped database publication."""
+
+        albums = self._build_albums(
+            _file_cache_with_inferred_blank_album_memberships(file_cache),
+            set(separate_release_keys or set()),
+        )
+        artists, album_rows, featured, tracks, files = _inventory_rows_from_albums(
+            file_cache, albums
+        )
+        return {
+            "artists": _jsonb_compatible(artists),
+            "albums": _jsonb_compatible(album_rows),
+            "featured_artists": _jsonb_compatible(featured),
+            "tracks": _jsonb_compatible(tracks),
+            "track_files": _jsonb_compatible(files),
+        }
 
     def load_targeted_subtree_track_paths(
         self, subtrees_by_root: dict[str, set[str]],
@@ -273,6 +399,11 @@ class PostgresScanCacheAdapter:
                 source_path
             )
 
+        durable_publication_guard = (
+            publication_guard
+            if callable(getattr(publication_guard, "publish_prepared", None))
+            else None
+        )
         with self._connect_to_database() as connection, ExitStack() as publication_stack:
             connection.execute(_inventory_publication_advisory_lock_sql())
             _ensure_bootstrap_context(connection)
@@ -284,8 +415,13 @@ class PostgresScanCacheAdapter:
                     str(move.get("destination_root_id") or normalized_root_id)
                     for move in moves
                 )
+                health_guard = (
+                    guard_destructive_library_publication
+                    if durable_publication_guard is not None
+                    else publication_guard or guard_destructive_library_publication
+                )
                 publication_stack.enter_context(
-                    (publication_guard or guard_destructive_library_publication)(connection, sorted(affected_roots))
+                    health_guard(connection, sorted(affected_roots))
                 )
             separate_release_keys = _load_separate_release_keys(connection)
             existing_memberships = [
@@ -462,11 +598,17 @@ class PostgresScanCacheAdapter:
             revision = int(
                 _row_mapping(revision_row).get("inventory_mutation_revision") or 0
             )
-            connection.commit()
-        return {
-            "inventory_mutation_revision": revision,
-            "affected_album_keys": sorted(affected_album_keys),
-        }
+            result = {
+                "inventory_mutation_revision": revision,
+                "affected_album_keys": sorted(affected_album_keys),
+            }
+            if durable_publication_guard is not None:
+                published = durable_publication_guard(connection, connection.commit)
+                if not published:
+                    return {}
+            else:
+                connection.commit()
+        return result
 
     def load_snapshot_strict(self, cache_path: Path, root_identity: object) -> ScanCacheSnapshot:
         del cache_path
@@ -1098,16 +1240,10 @@ class PostgresScanCacheAdapter:
                     else ""
                 )
             )
-            destination_separate_release_key = (
-                album_separate_release_key(
-                    str(
-                        getattr(destination_album, "album_artist", "") or ""
-                    ),
-                    str(getattr(destination_album, "name", "") or ""),
-                    getattr(destination_album, "edition", None),
-                )
-                if updates_release_year
-                else ""
+            destination_separate_release_key = album_separate_release_key(
+                str(getattr(destination_album, "album_artist", "") or ""),
+                str(getattr(destination_album, "name", "") or ""),
+                getattr(destination_album, "edition", None),
             )
             destination_is_explicit_separate = (
                 destination_separate_release_key
@@ -1159,6 +1295,12 @@ class PostgresScanCacheAdapter:
                 result.get("inventory_mutation_revision") or 0
             )
             destination_album_id = int(result.get("destination_album_id") or 0)
+            source_album_id = int(result.get("source_album_id") or 0)
+            source_library_id = int(result.get("source_library_id") or 0)
+            source_album_key = str(result.get("source_album_key") or "").strip()
+            destination_album_key = str(
+                result.get("destination_album_key") or destination_album_key
+            ).strip()
             persisted_separate_release_key = str(
                 result.get("separate_release_key") or ""
             ).strip()
@@ -1188,12 +1330,36 @@ class PostgresScanCacheAdapter:
                 raise RuntimeError(
                     "Targeted structural tag persistence did not update the complete album inventory."
                 )
+            retirement_disposition = ""
+            if source_album_id and source_album_id != destination_album_id:
+                retirement_disposition = _retire_vacated_structural_album(
+                    connection,
+                    source_album_id=source_album_id,
+                    destination_album_id=destination_album_id,
+                    library_id=source_library_id,
+                    source_album_key=source_album_key,
+                    destination_album_key=destination_album_key,
+                )
             _execute_semantic_local_album_reconciliation(
                 connection,
                 target_album_ids=(destination_album_id,),
                 allow_same_year_separate_release_merge=(
                     normalized_changed_fields == frozenset({"album"})
                 ),
+            )
+            if retirement_disposition == "preserved_track_tombstone":
+                _retire_vacated_structural_album(
+                    connection,
+                    source_album_id=source_album_id,
+                    destination_album_id=destination_album_id,
+                    library_id=source_library_id,
+                    source_album_key=source_album_key,
+                    destination_album_key=destination_album_key,
+                )
+            _retire_vacated_structural_album_siblings(
+                connection,
+                destination_album_id=destination_album_id,
+                library_id=source_library_id,
             )
             committed_relation_state = (
                 _commit_structural_relation_projection(connection, self._config)
@@ -3493,6 +3659,99 @@ def _execute_semantic_local_album_reconciliation(
             connection.execute(statement)
 
 
+def _retire_vacated_structural_album(
+    connection: Any,
+    *,
+    source_album_id: int,
+    destination_album_id: int,
+    library_id: int,
+    source_album_key: str,
+    destination_album_key: str,
+) -> str:
+    """Move remaining durable references, then remove a fully vacated album."""
+
+    if (
+        source_album_id < 1
+        or destination_album_id < 1
+        or library_id < 1
+        or source_album_id == destination_album_id
+        or not source_album_key
+        or not destination_album_key
+    ):
+        raise RuntimeError("Vacated structural album retirement received invalid identity data.")
+    parameters = {
+        "source_album_id": source_album_id,
+        "destination_album_id": destination_album_id,
+        "library_id": library_id,
+        "source_album_key": source_album_key,
+        "destination_album_key": destination_album_key,
+    }
+    row = _row_mapping(
+        _first_row(
+            connection.execute(
+                """
+                select library.retire_vacated_structural_album(
+                  %(library_id)s,
+                  %(source_album_id)s,
+                  %(destination_album_id)s,
+                  %(source_album_key)s,
+                  %(destination_album_key)s
+                ) as disposition
+                """,
+                parameters,
+            )
+        )
+    )
+    disposition = str(row.get("disposition") or "").strip()
+    if disposition not in {
+        "retired",
+        "preserved_track_tombstone",
+        "preserved_cover_checkpoint",
+    }:
+        raise RuntimeError("Vacated structural album retirement did not converge.")
+    return disposition
+
+
+def _retire_vacated_structural_album_siblings(
+    connection: Any,
+    *,
+    destination_album_id: int,
+    library_id: int,
+) -> int:
+    """Retire exact-identity zero-track siblings left by structural reconciliation."""
+
+    if destination_album_id < 1 or library_id < 1:
+        raise RuntimeError(
+            "Vacated structural album sibling retirement received invalid identity data."
+        )
+    row = _row_mapping(
+        _first_row(
+            connection.execute(
+                """
+                select library.retire_vacated_structural_album_siblings(
+                  %(library_id)s,
+                  %(destination_album_id)s
+                ) as retired_count
+                """,
+                {
+                    "destination_album_id": destination_album_id,
+                    "library_id": library_id,
+                },
+            )
+        )
+    )
+    retired_count = row.get("retired_count")
+    if (
+        isinstance(retired_count, bool)
+        or not isinstance(retired_count, int)
+        or retired_count < 0
+    ):
+        raise RuntimeError(
+            "Vacated structural album sibling retirement did not converge."
+        )
+    return retired_count
+
+
 def _persist_blank_album_tag_edit_sql() -> str:
     return """
         with bootstrap_context as (
@@ -4439,7 +4698,12 @@ def _persist_structural_album_tag_edit_sql(
         ),
         updated_album_mbid_assertions as (
           update library.local_mbid_assertions
-          set album_id = destination_album.id
+          set album_id = destination_album.id,
+              target_key = case
+                when library.local_mbid_assertions.target_kind = 'album'
+                then destination_album.album_key
+                else library.local_mbid_assertions.target_key
+              end
           from validated_source_album
           cross join destination_album
           where library.local_mbid_assertions.album_id = validated_source_album.id
@@ -4504,6 +4768,16 @@ def _persist_structural_album_tag_edit_sql(
             and (select count(*) from updated_track_files) =
                 (select input_path_count from selection_scope)
         ),
+        deleted_destination_separate_release as (
+          delete from library.separate_releases
+          using bootstrap_context, vacated_source_album
+          where library.separate_releases.library_id =
+                bootstrap_context.library_id
+            and library.separate_releases.release_key =
+                %(destination_separate_release_key)s
+            and not %(updates_release_year)s::boolean
+          returning library.separate_releases.release_key
+        ),
         updated_library as (
           update library.libraries
           set metadata = jsonb_set(
@@ -4540,6 +4814,7 @@ def _persist_structural_album_tag_edit_sql(
             and (select count(*) from updated_tracks) =
                 (select input_path_count from selection_scope)
             and (select count(*) from destination_album) = 1
+            and (select count(*) from deleted_destination_separate_release) >= 0
             and (
                   not exists (select 1 from existing_destination_album)
                   or (select input_path_count from selection_scope) < (
@@ -4560,6 +4835,10 @@ def _persist_structural_album_tag_edit_sql(
           0 as destination_conflict_count,
           (select count(*) from destination_album) as destination_album_count,
           (select id from destination_album) as destination_album_id,
+          (select id from validated_source_album) as source_album_id,
+          (select library_id from validated_source_album) as source_library_id,
+          (select album_key from validated_source_album) as source_album_key,
+          (select album_key from destination_album) as destination_album_key,
           (select count(*) from destination_album) as album_rows_updated,
           (select count(*) from updated_tracks) as track_rows_updated,
           (select count(*) from updated_track_files) as track_file_rows_updated,

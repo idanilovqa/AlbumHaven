@@ -716,6 +716,17 @@ async function confirmManualTagEdit() {
   const tagEditMutationClaim = claimTagEditViewMutation(album, editedPaths, updates);
   settleTagEditorSessionMutationClaim();
   const optimisticUpdatedAlbums = buildOptimisticUpdatedAlbumsFromEdits(album, updates);
+  const preEditCanonicalReadinessAlbums = (
+    typeof collectVisibleAlbumsUnique === 'function'
+    && typeof getAlbumTrackPaths === 'function'
+    && typeof albumsShareTrackPath === 'function'
+    && typeof albumsShareRuntimeIdentityAlias === 'function'
+  )
+    ? collectVisibleAlbumsUnique().filter((visibleAlbum) => (
+      !albumsShareTrackPath(visibleAlbum, getAlbumTrackPaths(album))
+      && !albumsShareRuntimeIdentityAlias(visibleAlbum, album)
+    ))
+    : [];
   const pendingProblematicEntry = registerPendingProblematicOptimisticEdit(
     album,
     optimisticUpdatedAlbums,
@@ -753,6 +764,11 @@ async function confirmManualTagEdit() {
       originalAlbum: album,
       tagEdits: updates,
     },
+  );
+  const optimisticCanonicalReadinessAlbums = (
+    preEditCanonicalReadinessAlbums.length
+      ? [...preEditCanonicalReadinessAlbums, ...optimisticUpdatedAlbums]
+      : reconciledOptimisticAlbums
   );
   if (typeof applyTagEditsToNonAlbumView === 'function') {
     applyTagEditsToNonAlbumView(album, updates);
@@ -831,7 +847,7 @@ async function confirmManualTagEdit() {
       preserveAbsoluteScroll: true,
       absoluteScrollPosition,
       problematicMutationOriginKey,
-      optimisticAlbums: optimisticUpdatedAlbums,
+      optimisticAlbums: optimisticCanonicalReadinessAlbums,
       pendingProblematicEntry,
     };
     if (

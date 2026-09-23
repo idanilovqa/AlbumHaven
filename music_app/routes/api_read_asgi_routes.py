@@ -7,6 +7,7 @@ from music_app.services.loops import project_loop_for_client, project_loop_order
 import logging
 import time
 from collections.abc import Iterable, Mapping
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
@@ -26,6 +27,7 @@ from music_app.services.state import (
     format_timestamp,
     hydrate_library_state_for_config,
     refresh_relation_views_for_state,
+    sync_durable_inventory_revision,
 )
 from music_app.services.opinion_read_seams import build_crowd_opinion_modal_payload
 from music_app.services.page_resource_seams import (
@@ -41,12 +43,20 @@ from music_app.services.library_watch_health import LibraryWatchHealthService
 from music_app.services.library_warning_dismissals import PostgresLibraryWarningDismissals, warning_token
 from music_app.routes.bounded_json import read_bounded_json_object, JSONBodyTooLarge
 from music_app.services.policy_asgi import allowed_actions_for_request
+from music_app.services.private_route_boundary import (
+    _job_status_service,
+    _sanitize_public_worker_health,
+)
 from music_app.services.listen_through import (
     apply_album_preference_overlay,
     default_album_preference_overlay,
 )
 from music_app.services.persistence_selection import select_runtime_persistence_adapter
-from music_app.services.scan_state import resolve_active_scan_browse_state
+from music_app.services.scan_state import (
+    project_durable_full_scan_status,
+    project_durable_full_scan_preview,
+    resolve_active_scan_browse_state,
+)
 from music_app.services.view_payloads import (
     build_home_payload,
     build_view_payload,
@@ -242,12 +252,31 @@ def _postgres_browse_library_state(request: Request) -> Mapping[str, object] | N
     return library_state if isinstance(library_state, Mapping) else None
 
 
+def _request_scan_browse_state(request: Request) -> dict[str, object]:
+    library_state = _library_state(request)
+    browse_state = resolve_active_scan_browse_state(library_state)
+    scan_jobs = getattr(request.app.state, "scan_job_repository", None)
+    evaluation = getattr(request.state, "policy_evaluation", None)
+    audit = getattr(evaluation, "audit", None)
+    library_id = getattr(audit, "library_id", None)
+    if scan_jobs is None or not isinstance(library_id, int) or library_id <= 0:
+        return browse_state
+    try:
+        preview = scan_jobs.load_authorized_full_scan_preview(
+            policy_evaluation=evaluation,
+            library_id=library_id,
+        )
+    except Exception:
+        return browse_state
+    return project_durable_full_scan_preview(library_state, preview)
+
+
 def _should_use_transient_scan_browse_state(
     library_state: Mapping[str, object],
     browse_state: Mapping[str, object],
 ) -> bool:
     return (
-        bool(library_state.get("scan_in_progress"))
+        bool(browse_state.get("scan_in_progress"))
         and bool(browse_state.get("albums"))
         and not bool(library_state.get("albums"))
     )
@@ -356,15 +385,49 @@ async def dismiss_library_warning(request: Request) -> JSONResponse:
 @router.get("/status")
 async def status(request: Request) -> JSONResponse:
     library_state = _library_state(request)
+    await run_in_threadpool(
+        sync_durable_inventory_revision,
+        library_state,
+        _app_config(request),
+    )
+    scan_jobs = getattr(request.app.state, "scan_job_repository", None)
+    evaluation = getattr(request.state, "policy_evaluation", None)
+    audit = getattr(evaluation, "audit", None)
+    library_id = getattr(audit, "library_id", None)
+    durable_status = None
+    durable_cover_status = None
+    if scan_jobs is not None and isinstance(library_id, int) and library_id > 0:
+        try:
+            durable_status = await run_in_threadpool(
+                scan_jobs.load_authorized_full_scan_status,
+                policy_evaluation=evaluation,
+                library_id=library_id,
+            )
+        except Exception:
+            durable_status = None
+    cover_jobs = getattr(request.app.state, "cover_job_repository", None)
+    if cover_jobs is not None and isinstance(library_id, int) and library_id > 0:
+        try:
+            durable_cover_status = await run_in_threadpool(
+                cover_jobs.load_cover_refresh_status,
+                library_id=library_id,
+            )
+        except Exception:
+            durable_cover_status = None
     # Status is observational: API-only clients see pending discovery, but only
     # the root response handoff or an explicit manual refresh starts the scan.
     with request.app.state.cold_scan_handoff_lock:
         payload = dict(_build_status_payload_from_state(library_state))
+        if durable_status is not None:
+            payload.update(project_durable_full_scan_status(durable_status))
+        if isinstance(durable_cover_status, Mapping):
+            payload.update(durable_cover_status)
         handoff_status = str(library_state.get("cold_scan_handoff_status") or "idle")
         if library_state.get("cold_scan_pending") or handoff_status == "claimed":
             payload["scan_in_progress"] = True
             payload["scan_phase"] = "discovering"
             payload["scan_mode"] = "background"
+
     payload["watcher_health"] = await run_in_threadpool(
         _project_library_watch_health_for_request,
         request,
@@ -375,23 +438,150 @@ async def status(request: Request) -> JSONResponse:
     actor = getattr(request.state, "current_actor", None)
     if health["warning_token"] and getattr(actor, "account_id", None) is not None:
         try:
-            dismissed = await run_in_threadpool(_warning_dismissals(request).load, actor.account_id)
+            dismissed = await run_in_threadpool(
+                _warning_dismissals(request).load,
+                actor.account_id,
+            )
             health["dismissed"] = dismissed == health["warning_token"]
         except Exception:
             # A failed preference read must not hide a health warning.
             pass
 
     scope = await history_scope_for_request(request, required=False)
-    payload['log_history_revision'] = ''
+    payload["log_history_revision"] = ""
     if scope is not None:
         try:
-            payload['log_history_revision'] = await run_in_threadpool(
-                load_log_history_revision, _app_config(request), scope=scope,
+            payload["log_history_revision"] = await run_in_threadpool(
+                load_log_history_revision,
+                _app_config(request),
+                scope=scope,
             )
         except Exception:
-            logging.getLogger(__name__).warning('Operational history revision is unavailable')
-    payload["allowed_actions"] = allowed_actions_for_request(request, ("library.loops.create",)).as_payload()
+            logging.getLogger(__name__).warning(
+                "Operational history revision is unavailable"
+            )
+    payload["allowed_actions"] = allowed_actions_for_request(
+        request,
+        ("library.loops.create",),
+    ).as_payload()
+
+    service = _job_status_service(request.app)
+    operator_allowed = allowed_actions_for_request(
+        request,
+        ("ops.jobs.status.read",),
+    ).allows("ops.jobs.status.read")
+    now = datetime.now(timezone.utc)
+    if operator_allowed:
+        operator_status = getattr(service, "operator_status", None)
+        try:
+            result = (
+                await run_in_threadpool(operator_status, now)
+                if callable(operator_status)
+                else None
+            )
+        except Exception:
+            result = None
+        job_status = _sanitize_operator_job_status(result)
+        payload["worker_status"] = job_status["worker_status"]
+        payload["job_status"] = job_status
+    else:
+        public_health = getattr(service, "public_health", None)
+        try:
+            result = (
+                await run_in_threadpool(public_health, now)
+                if callable(public_health)
+                else None
+            )
+        except Exception:
+            result = None
+        worker_health = _sanitize_public_worker_health(result)
+        payload["worker_status"] = worker_health["worker_status"]
     return JSONResponse(payload)
+
+
+def _sanitize_operator_job_status(value: object) -> dict[str, object]:
+    unavailable = _unavailable_operator_job_status()
+    if not isinstance(value, Mapping):
+        return unavailable
+    public_health = _sanitize_public_worker_health(
+        {"status": "ok", "worker_status": value.get("worker_status")}
+    )
+    if public_health["worker_status"] == "worker_unavailable" and value.get(
+        "worker_status"
+    ) != "worker_unavailable":
+        return unavailable
+
+    worker = value.get("worker")
+    if worker is not None:
+        if not isinstance(worker, Mapping):
+            return unavailable
+        instance_id = worker.get("instance_id")
+        lifecycle_state = worker.get("lifecycle_state")
+        heartbeat_age = worker.get("heartbeat_age_seconds")
+        if (
+            not isinstance(instance_id, str)
+            or not instance_id
+            or len(instance_id) > 128
+            or lifecycle_state not in {"starting", "running", "draining", "stopped"}
+            or not _is_bounded_status_integer(heartbeat_age)
+        ):
+            return unavailable
+        worker_projection: dict[str, object] | None = {
+            "instance_id": instance_id,
+            "lifecycle_state": lifecycle_state,
+            "heartbeat_age_seconds": heartbeat_age,
+        }
+    else:
+        worker_projection = None
+    if (
+        worker_projection is None
+        and public_health["worker_status"] in {"worker_ready", "worker_degraded"}
+    ):
+        return unavailable
+
+    jobs = value.get("jobs")
+    if not isinstance(jobs, Mapping):
+        return unavailable
+    job_keys = (
+        "queued_count",
+        "running_count",
+        "retry_count",
+        "failed_count",
+        "ambiguous_count",
+        "oldest_queue_age_seconds",
+        "claim_lag_seconds",
+    )
+    if any(not _is_bounded_status_integer(jobs.get(key)) for key in job_keys):
+        return unavailable
+    return {
+        "worker_status": public_health["worker_status"],
+        "worker": worker_projection,
+        "jobs": {key: jobs[key] for key in job_keys},
+    }
+
+
+def _is_bounded_status_integer(value: object) -> bool:
+    return (
+        isinstance(value, int)
+        and not isinstance(value, bool)
+        and 0 <= value <= 2_147_483_647
+    )
+
+
+def _unavailable_operator_job_status() -> dict[str, object]:
+    return {
+        "worker_status": "worker_unavailable",
+        "worker": None,
+        "jobs": {
+            "queued_count": 0,
+            "running_count": 0,
+            "retry_count": 0,
+            "failed_count": 0,
+            "ambiguous_count": 0,
+            "oldest_queue_age_seconds": 0,
+            "claim_lag_seconds": 0,
+        },
+    }
 
 
 def _state_percent(library_state: dict[str, object], *, processed_key: str, total_key: str) -> int:
@@ -458,7 +648,7 @@ def _build_status_payload_from_state(library_state: dict[str, object]) -> dict[s
 @router.get("/view-data")
 def view_data(request: Request) -> JSONResponse:
     library_state = _library_state(request)
-    browse_state = resolve_active_scan_browse_state(library_state)
+    browse_state = _request_scan_browse_state(request)
     if _should_use_transient_scan_browse_state(library_state, browse_state):
         request_started_at = time.perf_counter()
         payload = build_view_payload(

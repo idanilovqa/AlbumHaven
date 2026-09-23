@@ -150,7 +150,6 @@ def _main(module, dependencies, *, argv=(), stdin=None):
         breached_checker=dependencies.breached_checker,
         password_hasher=dependencies.password_hasher,
         bootstrap_service_factory=dependencies.service_factory,
-        welcome_delivery_runner=dependencies.delivery_runner,
     )
 
 
@@ -294,46 +293,16 @@ def test_script_main_guard_does_not_embed_password_flags_or_environment_reads():
     assert "argparse" not in text
 
 
-def test_enabled_welcome_is_delivered_only_after_bootstrap_commit(bootstrap_script):
+def test_enabled_welcome_is_left_for_the_durable_worker(bootstrap_script):
     dependencies = _dependencies(welcome_enabled=True)
 
     assert _main(bootstrap_script, dependencies) == 0
 
-    assert dependencies.events[-2:] == ["reconcile", ("deliver-welcome", 91)]
+    assert dependencies.events[-1:] == ["reconcile"]
 
 
-def test_welcome_delivery_failure_never_rolls_back_bootstrap(bootstrap_script):
-    dependencies = _dependencies(welcome_enabled=True)
-
-    def broken_delivery(_outbox_id, *, config):
-        dependencies.events.append("deliver-failed")
-        raise RuntimeError("smtp-secret")
-
-    dependencies.delivery_runner = broken_delivery
-
-    assert _main(bootstrap_script, dependencies) == 0
-    assert dependencies.events[-2:] == ["reconcile", "deliver-failed"]
-    combined = dependencies.stdout.getvalue() + dependencies.stderr.getvalue()
-    assert "smtp-secret" not in combined
-
-
-@pytest.mark.parametrize(
-    ("reason", "expected"),
-    [
-        ("failed", "was not delivered"),
-        ("unknown", "outcome is unknown"),
-    ],
-)
-def test_welcome_delivery_result_is_reported_without_changing_success(
-    bootstrap_script, reason, expected
-):
-    dependencies = _dependencies(welcome_enabled=True)
-
-    def delivery_result(_outbox_id, *, config):
-        return SimpleNamespace(delivered=False, reason=reason)
-
-    dependencies.delivery_runner = delivery_result
-
-    assert _main(bootstrap_script, dependencies) == 0
-    assert expected in dependencies.stderr.getvalue()
-    assert PASSWORD not in dependencies.stderr.getvalue()
+def test_bootstrap_script_contains_no_request_process_mail_executor():
+    source = Path(__file__).resolve().parents[2] / "scripts" / "bootstrap_auth_owner.py"
+    text = source.read_text(encoding="utf-8")
+    assert "deliver_welcome" not in text
+    assert "welcome_delivery_runner" not in text

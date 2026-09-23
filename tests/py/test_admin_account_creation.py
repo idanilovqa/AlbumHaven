@@ -2,7 +2,6 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from music_app.services.auth_tokens import issue_opaque_token
 from music_app.services.current_actor import ActorState, CurrentActor, LibraryRelationship
 
 
@@ -33,20 +32,20 @@ class Repository:
         return __import__(
             "music_app.services.admin_account_creation",
             fromlist=["CreatedAccount"],
-        ).CreatedAccount(account_id=41, invitation_delivery=None)
+        ).CreatedAccount(
+            account_id=41,
+            invitation_queued=bool(kwargs.get("send_invitation")),
+        )
 
 
 def test_admin_create_normalizes_identity_and_creates_pending_account_without_credential():
     from music_app.services.admin_account_creation import AdminAccountCreationService
 
     repository = Repository()
-    issued = issue_opaque_token(random_bytes=lambda count: b"x" * count)
-    issued_calls = []
     now = datetime(2026, 9, 1, 12, 30, tzinfo=timezone.utc)
     service = AdminAccountCreationService(
         repository=repository,
         invitation_token_seconds=259_200,
-        token_issuer=lambda: issued_calls.append(True) or issued,
         clock=lambda: now,
     )
 
@@ -60,8 +59,7 @@ def test_admin_create_normalizes_identity_and_creates_pending_account_without_cr
     )
 
     assert result.account_id == 41
-    assert result.invitation_delivery is None
-    assert issued_calls == []
+    assert result.invitation_queued is False
     call = repository.calls[0]
     assert call["actor_account_id"] == 7
     assert call["library_id"] == 23
@@ -70,7 +68,7 @@ def test_admin_create_normalizes_identity_and_creates_pending_account_without_cr
     assert call["contact_email"] == "Test.User+1@EXAMPLE.COM"
     assert call["contact_email_normalized"] == "Test.User+1@example.com"
     assert call["capability_keys"] == ("library.browse.read", "library.media.read")
-    assert call["invitation"] is None
+    assert call["send_invitation"] is False
     assert call["invitation_expires_at"] is None
     assert call["created_at"] == now
     assert call["request_ref"] == "a" * 32
@@ -78,16 +76,14 @@ def test_admin_create_normalizes_identity_and_creates_pending_account_without_cr
     assert "credential" not in call
 
 
-def test_admin_create_issues_invitation_with_caller_owned_timestamp_and_request_ref():
+def test_admin_create_accepts_tokenless_invitation_with_caller_owned_expiry():
     from music_app.services.admin_account_creation import AdminAccountCreationService
 
     repository = Repository()
-    issued = issue_opaque_token(random_bytes=lambda count: b"x" * count)
     now = datetime(2026, 9, 1, 12, 30, tzinfo=timezone.utc)
     service = AdminAccountCreationService(
         repository=repository,
         invitation_token_seconds=259_200,
-        token_issuer=lambda: issued,
         clock=lambda: now,
     )
     service.create_account(
@@ -97,7 +93,7 @@ def test_admin_create_issues_invitation_with_caller_owned_timestamp_and_request_
         request_ref="b" * 32,
     )
     call = repository.calls[0]
-    assert call["invitation"] is issued
+    assert call["send_invitation"] is True
     assert call["created_at"] == now
     assert call["invitation_expires_at"] == now + timedelta(seconds=259_200)
     assert call["request_ref"] == "b" * 32
@@ -110,7 +106,6 @@ def test_account_creation_requires_bootstrap_owner_current_library_and_allowlist
     service = AdminAccountCreationService(
         repository=repository,
         invitation_token_seconds=259_200,
-        token_issuer=lambda: issue_opaque_token(random_bytes=lambda count: b"x" * count),
         clock=lambda: datetime(2026, 9, 1, tzinfo=timezone.utc),
     )
     ordinary = CurrentActor(state=ActorState.ACTIVE, account_id=9, session_id=12)

@@ -4,7 +4,7 @@ import json
 import logging
 import os
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from threading import Event, Lock, Thread
 from types import SimpleNamespace
@@ -228,6 +228,41 @@ def _dedicated_database_urls_or_skip(monkeypatch: pytest.MonkeyPatch) -> tuple[s
     return setup_url, runtime_url
 
 
+def _durable_job_database_urls_or_skip(
+    monkeypatch: pytest.MonkeyPatch,
+) -> tuple[str, str, str, str]:
+    setup_url, runtime_url = _dedicated_database_urls_or_skip(monkeypatch)
+    worker_url = str(
+        os.environ.get("ALBUM_HAVEN_WORKER_DATABASE_URL") or ""
+    ).strip()
+    readonly_url = str(os.environ.get("DATABASE_READONLY_URL") or "").strip()
+    if not worker_url or not readonly_url:
+        _skip_or_fail_ci(
+            "Dedicated worker and read-only Postgres URLs are not configured."
+        )
+
+    database_names = {
+        urlparse(value).path.lstrip("/")
+        for value in (setup_url, runtime_url, worker_url, readonly_url)
+    }
+    if len(database_names) != 1:
+        _skip_or_fail_ci("Dedicated Postgres role URLs do not share one database.")
+
+    try:
+        import psycopg
+    except ImportError:
+        _skip_or_fail_ci("psycopg is required for dedicated isolated Postgres tests.")
+        raise AssertionError("unreachable")
+    try:
+        with isolatedPostgres._connect(worker_url) as connection:
+            isolatedPostgres._assert_connected_role(connection, "album_haven_worker")
+        with isolatedPostgres._connect(readonly_url) as connection:
+            isolatedPostgres._assert_connected_role(connection, "album_haven_readonly")
+    except psycopg.OperationalError as exc:
+        _skip_or_fail_ci(f"Dedicated isolated Postgres role is unavailable: {exc}")
+    return setup_url, runtime_url, worker_url, readonly_url
+
+
 def _drop_application_schemas(setup_url: str) -> None:
     with isolatedPostgres._connect(setup_url) as connection:
         isolatedPostgres._assert_connected_role(connection, isolatedPostgres.SETUP_ROLE)
@@ -357,6 +392,513 @@ def _phase6_plan_evidence(plan_document: object) -> dict[str, object]:
         "shared_read_blocks": int(root_plan.get("Shared Read Blocks") or 0),
         "shared_hit_blocks": int(root_plan.get("Shared Hit Blocks") or 0),
     }
+
+
+def test_live_durable_worker_startup_preflight_accepts_worker_and_rejects_missing_grants(
+    monkeypatch,
+):
+    setup_url, app_url, worker_url, readonly_url = _durable_job_database_urls_or_skip(
+        monkeypatch
+    )
+    registered_kinds = [
+        "auth_invitation_delivery",
+        "auth_password_reset_delivery",
+        "auth_welcome_delivery",
+        "cover_bulk_refresh",
+        "cover_lookup",
+        "cover_remote_save",
+        "full_scan",
+        "lastfm_scrobble_retry",
+        "post_scan_cover_refresh",
+        "targeted_reconciliation",
+    ]
+    cleanup_complete = False
+
+    try:
+        _drop_application_schemas(setup_url)
+        isolatedPostgres.prepare_isolated_database(setup_url, app_url)
+        with isolatedPostgres._connect(setup_url) as connection:
+            connection.execute(
+                "grant execute on function "
+                "ops.validate_durable_worker_startup(text[]) "
+                "to album_haven_readonly"
+            )
+        with isolatedPostgres._connect(worker_url) as connection:
+            worker_result = connection.execute(
+                "select ops.validate_durable_worker_startup(%s::text[]) as valid",
+                (registered_kinds,),
+            ).fetchone()
+        with isolatedPostgres._connect(readonly_url) as connection:
+            denied_result = connection.execute(
+                "select ops.validate_durable_worker_startup(%s::text[]) as valid",
+                (registered_kinds,),
+            ).fetchone()
+
+        assert worker_result["valid"] is True
+        assert denied_result["valid"] is False
+        isolatedPostgres.reset_application_tables(setup_url)
+        cleanup_complete = True
+    finally:
+        with isolatedPostgres._connect(setup_url) as connection:
+            connection.execute(
+                "revoke execute on function "
+                "ops.validate_durable_worker_startup(text[]) "
+                "from album_haven_readonly"
+            )
+        if not cleanup_complete:
+            isolatedPostgres.reset_application_tables(setup_url)
+
+
+def test_live_durable_job_migration_is_idempotent_and_roles_are_narrow(
+    monkeypatch,
+):
+    setup_url, app_url, worker_url, readonly_url = _durable_job_database_urls_or_skip(
+        monkeypatch
+    )
+    psycopg = pytest.importorskip("psycopg")
+    migrations_root = Path(__file__).resolve().parents[2] / "migrations" / "postgres"
+    migration_sql = (
+        migrations_root / "0080_create_durable_job_foundation.sql"
+    ).read_text(encoding="utf-8")
+    cleanup_complete = False
+
+    insert_sql = """
+        insert into ops.jobs (
+          kind, subject_kind, subject_ref, parameters, deployment_mode,
+          client_surface, idempotency_key, max_attempts, recovery_policy
+        ) values (
+          'auth_password_reset_delivery', 'mail_outbox', %s, '{}'::jsonb,
+          'self_hosted_private_web', 'web', %s, 1,
+          'ambiguous_on_stale_lease'
+        )
+        returning id
+    """
+
+    try:
+        _drop_application_schemas(setup_url)
+        isolatedPostgres.prepare_isolated_database(setup_url, app_url)
+
+        with isolatedPostgres._connect(setup_url) as connection:
+            isolatedPostgres._assert_connected_role(
+                connection, isolatedPostgres.SETUP_ROLE
+            )
+            connection.execute(migration_sql)
+            connection.execute(migration_sql)
+            for migration_path in sorted(migrations_root.glob("006[45]_*.sql")):
+                connection.execute(migration_path.read_text(encoding="utf-8"))
+            index_rows = connection.execute(
+                """
+                select indexname, indexdef
+                  from pg_indexes
+                 where schemaname = 'ops'
+                   and indexname in (
+                     'jobs_idempotency_idx',
+                     'jobs_runnable_claim_idx',
+                     'jobs_active_lease_idx',
+                     'jobs_terminal_retention_idx',
+                     'worker_instances_heartbeat_idx',
+                     'worker_instances_retention_idx'
+                   )
+                """
+            ).fetchall()
+        indexes = {str(row["indexname"]): str(row["indexdef"]) for row in index_rows}
+        assert set(indexes) == {
+            "jobs_idempotency_idx",
+            "jobs_runnable_claim_idx",
+            "jobs_active_lease_idx",
+            "jobs_terminal_retention_idx",
+            "worker_instances_heartbeat_idx",
+            "worker_instances_retention_idx",
+        }
+        assert " WHERE " in indexes["worker_instances_heartbeat_idx"]
+        assert " WHERE " in indexes["worker_instances_retention_idx"]
+
+        with isolatedPostgres._connect(setup_url) as connection:
+            connection.autocommit = True
+            with pytest.raises(psycopg.errors.CheckViolation):
+                connection.execute(
+                    insert_sql.replace(
+                        "'auth_password_reset_delivery'", "'album_move'"
+                    ),
+                    ("invalid-kind", "phase8:invalid-kind"),
+                )
+            with pytest.raises(psycopg.errors.CheckViolation):
+                connection.execute(
+                    insert_sql.replace("'{}'::jsonb", "'[]'::jsonb"),
+                    ("invalid-parameters", "phase8:invalid-parameters"),
+                )
+            connection.execute(
+                insert_sql,
+                ("idempotency", "phase8:null-safe-idempotency"),
+            )
+            with pytest.raises(psycopg.errors.UniqueViolation):
+                connection.execute(
+                    insert_sql,
+                    ("idempotency", "phase8:null-safe-idempotency"),
+                )
+
+        with isolatedPostgres._connect(app_url) as connection:
+            app_job_id = int(
+                connection.execute(
+                    insert_sql,
+                    ("app-authority", "phase8:app-authority"),
+                ).fetchone()["id"]
+            )
+
+        with isolatedPostgres._connect(app_url) as connection:
+            connection.autocommit = True
+            with pytest.raises(psycopg.errors.InsufficientPrivilege):
+                connection.execute(
+                    "update ops.jobs set state = 'failed' where id = %s",
+                    (app_job_id,),
+                )
+            with pytest.raises(psycopg.errors.InsufficientPrivilege):
+                connection.execute(
+                    """
+                    update ops.jobs
+                       set cancel_requested_at = now(),
+                           cancel_reason_code = 'owner_request'
+                     where id = %s
+                    """,
+                    (app_job_id,),
+                )
+
+        with isolatedPostgres._connect(worker_url) as connection:
+            claimed = connection.execute(
+                """
+                update ops.jobs
+                   set state = 'running', attempt_count = 1,
+                       lease_owner = 'phase8-live-worker',
+                       lease_token = 'phase8-live-lease',
+                       lease_expires_at = now() + interval '300 seconds',
+                       heartbeat_at = now(), started_at = now(), updated_at = now()
+                 where id = %s and state = 'queued'
+             returning id
+                """,
+                (app_job_id,),
+            ).fetchone()
+            assert int(claimed["id"]) == app_job_id
+            connection.execute(
+                """
+                insert into ops.job_transitions (
+                  job_id, prior_state, next_state, attempt_count, reason_code,
+                  worker_instance_id
+                ) values (%s, 'queued', 'running', 1, 'claimed',
+                          'phase8-live-worker')
+                """,
+                (app_job_id,),
+            )
+            connection.execute(
+                """
+                insert into ops.worker_instances (
+                  instance_id, lifecycle_state, started_at, last_heartbeat_at,
+                  compatible_schema_version, registered_handler_fingerprint
+                ) values (
+                  'phase8-live-worker', 'running', now(), now(), 63,
+                  'phase8-live-handlers'
+                )
+                """
+            )
+
+        with isolatedPostgres._connect(worker_url) as connection:
+            connection.autocommit = True
+            with pytest.raises(psycopg.errors.InsufficientPrivilege):
+                connection.execute("delete from ops.jobs where id = %s", (app_job_id,))
+            for assignment in (
+                "account_id = null",
+                "idempotency_key = 'worker-rewrite'",
+                "audit_hold = true",
+                "tombstoned_at = now()",
+            ):
+                with pytest.raises(psycopg.errors.InsufficientPrivilege):
+                    connection.execute(
+                        f"update ops.jobs set {assignment} where id = %s",
+                        (app_job_id,),
+                    )
+            with pytest.raises(psycopg.errors.CheckViolation):
+                connection.execute(
+                    """
+                    insert into ops.job_transitions (
+                      job_id, prior_state, next_state, attempt_count,
+                      reason_code, worker_instance_id
+                    ) values (%s, 'running', 'running', 1, 'illegal_pair',
+                              'phase8-live-worker')
+                    """,
+                    (app_job_id,),
+                )
+
+        with isolatedPostgres._connect(readonly_url) as connection:
+            connection.autocommit = True
+            with pytest.raises(psycopg.errors.InsufficientPrivilege):
+                connection.execute("select id from ops.jobs limit 1")
+            with pytest.raises(psycopg.errors.InsufficientPrivilege):
+                connection.execute("select nextval('ops.jobs_id_seq')")
+            with pytest.raises(psycopg.errors.InsufficientPrivilege):
+                connection.execute("select nextval('ops.job_transitions_id_seq')")
+
+        _drop_application_schemas(setup_url)
+        cleanup_complete = True
+    finally:
+        if not cleanup_complete:
+            _drop_application_schemas(setup_url)
+
+
+def test_live_durable_job_cancellation_function_preserves_legal_transitions(
+    monkeypatch,
+):
+    setup_url, app_url, worker_url, readonly_url = _durable_job_database_urls_or_skip(
+        monkeypatch
+    )
+    psycopg = pytest.importorskip("psycopg")
+    requested_at = datetime(2026, 9, 5, 19, 0, tzinfo=timezone.utc)
+    cleanup_complete = False
+
+    try:
+        _drop_application_schemas(setup_url)
+        isolatedPostgres.prepare_isolated_database(setup_url, app_url)
+
+        with isolatedPostgres._connect(setup_url) as connection:
+            actor_id = int(
+                connection.execute(
+                    """
+                    insert into app.accounts (
+                      display_name, account_kind, username_display,
+                      username_normalized, contact_email,
+                      contact_email_normalized
+                    ) values (
+                      'Phase 8 cancellation actor', 'owner',
+                      'Phase 8 cancellation actor', 'phase8-cancellation-actor',
+                      'phase8-cancellation-actor@example.test',
+                      'phase8-cancellation-actor@example.test'
+                    )
+                    returning id
+                    """
+                ).fetchone()["id"]
+            )
+            other_actor_id = int(
+                connection.execute(
+                    """
+                    insert into app.accounts (
+                      display_name, account_kind, username_display,
+                      username_normalized, contact_email,
+                      contact_email_normalized
+                    ) values (
+                      'Phase 8 other cancellation actor', 'owner',
+                      'Phase 8 other cancellation actor',
+                      'phase8-other-cancellation-actor',
+                      'phase8-other-cancellation-actor@example.test',
+                      'phase8-other-cancellation-actor@example.test'
+                    )
+                    returning id
+                    """
+                ).fetchone()["id"]
+            )
+            function_owner = connection.execute(
+                """
+                select pg_get_userbyid(procedure.proowner) as owner_name
+                  from pg_proc procedure
+                 where procedure.oid =
+                       'ops.request_job_cancellation(bigint,bigint,timestamptz)'::regprocedure
+                """
+            ).fetchone()
+            current_role = connection.execute(
+                "select current_user as role_name"
+            ).fetchone()["role_name"]
+            assert function_owner["owner_name"] == current_role
+
+            job_ids = {}
+            for label, state, attempt_count, completed_at, lease_values in (
+                ("queued", "queued", 0, None, (None, None, None, None)),
+                ("retry", "retry_wait", 1, None, (None, None, None, None)),
+                (
+                    "running",
+                    "running",
+                    1,
+                    None,
+                    (
+                        "phase8-cancel-worker",
+                        "phase8-cancel-lease",
+                        requested_at + timedelta(seconds=300),
+                        requested_at,
+                    ),
+                ),
+                ("terminal", "succeeded", 1, requested_at, (None, None, None, None)),
+            ):
+                started_at = None if state == "queued" else requested_at
+                job_ids[label] = int(
+                    connection.execute(
+                        """
+                        insert into ops.jobs (
+                          kind, state, subject_kind, subject_ref, parameters,
+                          account_id, deployment_mode, client_surface,
+                          idempotency_key, attempt_count, max_attempts,
+                          recovery_policy, started_at, completed_at, lease_owner,
+                          lease_token, lease_expires_at, heartbeat_at
+                        ) values (
+                          'full_scan', %s, 'library', %s, '{}'::jsonb,
+                          %s, 'self_hosted_private_web', 'web', %s, %s, 2,
+                          'retry_safe', %s, %s, %s, %s, %s, %s
+                        )
+                        returning id
+                        """,
+                        (
+                            state,
+                            f"phase8-cancel-{label}",
+                            actor_id,
+                            f"phase8:cancel:{label}",
+                            attempt_count,
+                            started_at,
+                            completed_at,
+                            *lease_values,
+                        ),
+                    ).fetchone()["id"]
+                )
+
+        def request_cancellation(job_id: int):
+            with isolatedPostgres._connect(app_url) as connection:
+                return connection.execute(
+                    """
+                    select *
+                      from ops.request_job_cancellation(%s, %s, %s)
+                    """,
+                    (job_id, actor_id, requested_at),
+                ).fetchone()
+
+        queued_result = request_cancellation(job_ids["queued"])
+        assert queued_result == {
+            "job_id": job_ids["queued"],
+            "prior_state": "queued",
+            "next_state": "canceled",
+            "reason_code": "canceled",
+            "transition_recorded": True,
+        }
+        retry_result = request_cancellation(job_ids["retry"])
+        assert retry_result == {
+            "job_id": job_ids["retry"],
+            "prior_state": "retry_wait",
+            "next_state": "canceled",
+            "reason_code": "canceled",
+            "transition_recorded": True,
+        }
+        running_result = request_cancellation(job_ids["running"])
+        assert running_result == {
+            "job_id": job_ids["running"],
+            "prior_state": "running",
+            "next_state": "running",
+            "reason_code": "cancel_requested",
+            "transition_recorded": False,
+        }
+        with isolatedPostgres._connect(app_url) as connection:
+            repeated_running_result = connection.execute(
+                "select * from ops.request_job_cancellation(%s, %s, %s)",
+                (job_ids["running"], actor_id, requested_at + timedelta(minutes=1)),
+            ).fetchone()
+        assert repeated_running_result == running_result
+        terminal_result = request_cancellation(job_ids["terminal"])
+        assert terminal_result == {
+            "job_id": job_ids["terminal"],
+            "prior_state": "succeeded",
+            "next_state": "succeeded",
+            "reason_code": "terminal_noop",
+            "transition_recorded": False,
+        }
+        with isolatedPostgres._connect(app_url) as connection:
+            inaccessible_result = connection.execute(
+                "select * from ops.request_job_cancellation(%s, %s, %s)",
+                (job_ids["terminal"], other_actor_id, requested_at),
+            ).fetchone()
+        assert inaccessible_result == {
+            "job_id": job_ids["terminal"],
+            "prior_state": None,
+            "next_state": None,
+            "reason_code": "not_found",
+            "transition_recorded": False,
+        }
+        missing_result = request_cancellation(9_223_372_036_854_775_000)
+        assert missing_result == {
+            "job_id": 9_223_372_036_854_775_000,
+            "prior_state": None,
+            "next_state": None,
+            "reason_code": "not_found",
+            "transition_recorded": False,
+        }
+
+        with isolatedPostgres._connect(setup_url) as connection:
+            persisted = {
+                row["subject_ref"]: row
+                for row in connection.execute(
+                    """
+                    select subject_ref, state, cancel_requested_at,
+                           cancel_requested_by_account_id, cancel_reason_code
+                      from ops.jobs
+                     where id = any(%s)
+                    """,
+                    (list(job_ids.values()),),
+                ).fetchall()
+            }
+            transitions = connection.execute(
+                """
+                select job_id, prior_state, next_state, reason_code
+                  from ops.job_transitions
+                 where job_id = any(%s)
+                 order by job_id
+                """,
+                (list(job_ids.values()),),
+            ).fetchall()
+
+        assert persisted["phase8-cancel-queued"]["state"] == "canceled"
+        assert persisted["phase8-cancel-retry"]["state"] == "canceled"
+        running_row = persisted["phase8-cancel-running"]
+        assert running_row["state"] == "running"
+        assert running_row["cancel_requested_at"] == requested_at
+        assert running_row["cancel_requested_by_account_id"] == actor_id
+        assert running_row["cancel_reason_code"] == "owner_request"
+        terminal_row = persisted["phase8-cancel-terminal"]
+        assert terminal_row["state"] == "succeeded"
+        assert terminal_row["cancel_requested_at"] is None
+        assert [
+            (row["job_id"], row["prior_state"], row["next_state"])
+            for row in transitions
+        ] == [
+            (job_ids["queued"], "queued", "canceled"),
+            (job_ids["retry"], "retry_wait", "canceled"),
+        ]
+
+        with isolatedPostgres._connect(app_url) as connection:
+            connection.autocommit = True
+            for statement in (
+                "update ops.jobs set state = 'failed' where id = %s",
+                "update ops.jobs set cancel_requested_at = now() where id = %s",
+                "insert into ops.job_transitions (job_id, next_state, attempt_count, reason_code) values (%s, 'canceled', 0, 'forged')",
+                "delete from ops.jobs where id = %s",
+            ):
+                with pytest.raises(psycopg.errors.InsufficientPrivilege):
+                    connection.execute(statement, (job_ids["running"],))
+            for arguments in (
+                (0, actor_id, requested_at),
+                (job_ids["running"], 0, requested_at),
+                (job_ids["running"], actor_id, None),
+            ):
+                with pytest.raises(psycopg.errors.InvalidParameterValue):
+                    connection.execute(
+                        "select * from ops.request_job_cancellation(%s, %s, %s)",
+                        arguments,
+                    )
+
+        for denied_url in (worker_url, readonly_url):
+            with isolatedPostgres._connect(denied_url) as connection:
+                connection.autocommit = True
+                with pytest.raises(psycopg.errors.InsufficientPrivilege):
+                    connection.execute(
+                        "select * from ops.request_job_cancellation(%s, %s, %s)",
+                        (job_ids["running"], actor_id, requested_at),
+                    )
+
+        _drop_application_schemas(setup_url)
+        cleanup_complete = True
+    finally:
+        if not cleanup_complete:
+            _drop_application_schemas(setup_url)
 
 
 def test_phase6_plan_evidence_uses_cumulative_root_buffer_counters_once():
@@ -948,6 +1490,296 @@ def test_live_cover_upgrade_compare_and_swap_rejects_stale_automatic_state(
             isolatedPostgres.reset_application_tables(setup_url)
 
 
+def test_live_vacated_structural_album_sweep_retires_exact_zero_track_siblings(
+    monkeypatch,
+):
+    import psycopg
+
+    setup_url, runtime_url, _worker_url, readonly_url = (
+        _durable_job_database_urls_or_skip(monkeypatch)
+    )
+    cleanup_complete = False
+
+    try:
+        isolatedPostgres.reset_application_tables(setup_url)
+        isolatedPostgres.prepare_isolated_database(setup_url, runtime_url)
+        with isolatedPostgres._connect(setup_url) as connection:
+            library_id = int(connection.execute(
+                """
+                select library.libraries.id
+                from app.bootstrap_owners
+                join library.libraries
+                  on library.libraries.owner_account_id = app.bootstrap_owners.account_id
+                where app.bootstrap_owners.owner_key = 'local-bootstrap-owner'
+                  and library.libraries.library_kind = 'local'
+                limit 1
+                """
+            ).fetchone()["id"])
+            artist_id = int(connection.execute(
+                """
+                insert into library.local_artists (library_id, artist_key, name)
+                values (%s, 'sweep-artist', 'Sweep Artist')
+                returning id
+                """,
+                (library_id,),
+            ).fetchone()["id"])
+            destination_id = int(connection.execute(
+                """
+                insert into library.local_albums (
+                  library_id, artist_id, album_key, title, release_year, metadata
+                ) values (%s, %s, 'sweep-destination', 'Exact Album', 1988, '{}')
+                returning id
+                """,
+                (library_id, artist_id),
+            ).fetchone()["id"])
+            connection.execute(
+                """
+                insert into library.separate_releases (library_id, release_key)
+                values (%s, 'sweep artist::exact album')
+                """,
+                (library_id,),
+            )
+            source_ids = [
+                int(connection.execute(
+                    """
+                    insert into library.local_albums (
+                      library_id, artist_id, album_key, title, release_year, metadata
+                    ) values (%s, %s, %s, 'Exact Album', 1988, '{}')
+                    returning id
+                    """,
+                    (library_id, artist_id, source_key),
+                ).fetchone()["id"])
+                for source_key in ("sweep-source-one", "sweep-source-two")
+            ]
+            protected_source_id = int(connection.execute(
+                """
+                insert into library.local_albums (
+                  library_id, artist_id, album_key, title, release_year, metadata
+                ) values (%s, %s, 'sweep-protected', 'Exact Album', 1988, '{}')
+                returning id
+                """,
+                (library_id, artist_id),
+            ).fetchone()["id"])
+            connection.execute(
+                """
+                insert into library.local_tracks (
+                  library_id, album_id, artist_id, track_key, title
+                ) values
+                  (%s, %s, %s, 'sweep-track', 'Sweep Track'),
+                  (%s, %s, %s, 'sweep-protected-track', 'Protected Track')
+                """,
+                (
+                    library_id, destination_id, artist_id,
+                    library_id, protected_source_id, artist_id,
+                ),
+            )
+
+        with isolatedPostgres._connect(readonly_url) as connection:
+            with pytest.raises(psycopg.errors.InsufficientPrivilege):
+                connection.execute(
+                    "select library.retire_vacated_structural_album_siblings(%s, %s)",
+                    (library_id, destination_id),
+                ).fetchone()
+
+        with isolatedPostgres._connect(runtime_url) as connection:
+            retired_count = int(connection.execute(
+                "select library.retire_vacated_structural_album_siblings(%s, %s) "
+                "as retired_count",
+                (library_id, destination_id),
+            ).fetchone()["retired_count"])
+
+        with isolatedPostgres._connect(setup_url) as connection:
+            remaining_ids = {
+                int(row["id"])
+                for row in connection.execute(
+                    "select id from library.local_albums where library_id = %s",
+                    (library_id,),
+                ).fetchall()
+            }
+        assert retired_count == 2
+        assert destination_id in remaining_ids
+        assert protected_source_id in remaining_ids
+        assert remaining_ids.isdisjoint(source_ids)
+
+        isolatedPostgres.reset_application_tables(setup_url)
+        cleanup_complete = True
+    finally:
+        if not cleanup_complete:
+            isolatedPostgres.reset_application_tables(setup_url)
+
+
+@pytest.mark.parametrize(
+    ("checkpoint", "expected_disposition"),
+    (
+        ("accepted", "preserved_cover_checkpoint"),
+        ("publication_completed", "retired"),
+        ("rolled_back", "retired"),
+        ("ambiguous", "retired"),
+    ),
+)
+def test_live_vacated_structural_album_retirement_blocks_only_active_cover_save(
+    monkeypatch,
+    checkpoint,
+    expected_disposition,
+):
+    setup_url, runtime_url, _worker_url, _readonly_url = (
+        _durable_job_database_urls_or_skip(monkeypatch)
+    )
+    cleanup_complete = False
+
+    try:
+        isolatedPostgres.reset_application_tables(setup_url)
+        isolatedPostgres.prepare_isolated_database(setup_url, runtime_url)
+        with isolatedPostgres._connect(setup_url) as connection:
+            scope = connection.execute(
+                """
+                select owner.account_id, library_record.id as library_id
+                from app.bootstrap_owners as owner
+                join library.libraries as library_record
+                  on library_record.owner_account_id = owner.account_id
+                where owner.owner_key = 'local-bootstrap-owner'
+                  and library_record.library_kind = 'local'
+                limit 1
+                """
+            ).fetchone()
+            library_id = int(scope["library_id"])
+            root_id = int(connection.execute(
+                """
+                insert into library.library_roots (
+                  library_id, root_path, root_kind, is_active, metadata
+                ) values (%s, %s, 'main', true, '{}'::jsonb)
+                returning id
+                """,
+                (library_id, f"C:/private/retirement-{checkpoint}"),
+            ).fetchone()["id"])
+            artist_id = int(connection.execute(
+                """
+                insert into library.local_artists (library_id, artist_key, name)
+                values (%s, %s, 'Retirement Artist')
+                returning id
+                """,
+                (library_id, f"retirement-artist-{checkpoint}"),
+            ).fetchone()["id"])
+            destination_id = int(connection.execute(
+                """
+                insert into library.local_albums (
+                  library_id, artist_id, album_key, title, release_year, metadata
+                ) values (%s, %s, %s, 'Retirement Album', 1999, '{}')
+                returning id
+                """,
+                (library_id, artist_id, f"retirement-destination-{checkpoint}"),
+            ).fetchone()["id"])
+            source_id = int(connection.execute(
+                """
+                insert into library.local_albums (
+                  library_id, artist_id, album_key, title, release_year, metadata
+                ) values (%s, %s, %s, 'Retirement Album', 1999, '{}')
+                returning id
+                """,
+                (library_id, artist_id, f"retirement-source-{checkpoint}"),
+            ).fetchone()["id"])
+            job_id = int(connection.execute(
+                """
+                insert into ops.jobs (
+                  kind, subject_kind, subject_ref, parameters, library_id,
+                  deployment_mode, client_surface, idempotency_key,
+                  max_attempts, recovery_policy
+                ) values (
+                  'cover_remote_save', 'cover_lookup_task', %s, '{}'::jsonb, %s,
+                  'self_hosted_private_web', 'private_web', %s,
+                  1, 'ambiguous_on_stale_lease'
+                ) returning id
+                """,
+                (
+                    f"retirement-task-{checkpoint}",
+                    library_id,
+                    f"retirement-cover-save-{checkpoint}",
+                ),
+            ).fetchone()["id"])
+            task_id = int(connection.execute(
+                """
+                insert into ops.cover_lookup_tasks (
+                  library_id, task_key, status, local_album_id,
+                  library_root_id, job_id
+                ) values (%s, %s, 'completed', %s, %s, %s)
+                returning id
+                """,
+                (
+                    library_id,
+                    f"retirement-task-{checkpoint}",
+                    source_id,
+                    root_id,
+                    job_id,
+                ),
+            ).fetchone()["id"])
+            connection.execute(
+                """
+                insert into ops.cover_remote_save_checkpoints (
+                  task_id, job_id, library_id, local_album_id, library_root_id,
+                  candidate_generation, candidate_id, checkpoint,
+                  resource_revision, completed_at
+                ) values (
+                  %s, %s, %s, %s, %s,
+                  '00000000-0000-0000-0000-000000000082'::uuid,
+                  %s, %s, 0,
+                  case when %s in (
+                    'publication_completed', 'rolled_back', 'ambiguous'
+                  ) then now() else null end
+                )
+                """,
+                (
+                    task_id,
+                    job_id,
+                    library_id,
+                    source_id,
+                    root_id,
+                    f"retirement-candidate-{checkpoint}",
+                    checkpoint,
+                    checkpoint,
+                ),
+            )
+
+        with isolatedPostgres._connect(runtime_url) as connection:
+            disposition = str(connection.execute(
+                """
+                select library.retire_vacated_structural_album(
+                  %s, %s, %s, %s, %s
+                ) as disposition
+                """,
+                (
+                    library_id,
+                    source_id,
+                    destination_id,
+                    f"retirement-source-{checkpoint}",
+                    f"retirement-destination-{checkpoint}",
+                ),
+            ).fetchone()["disposition"])
+
+        with isolatedPostgres._connect(setup_url) as connection:
+            source_exists = bool(connection.execute(
+                "select exists(select 1 from library.local_albums where id = %s) as present",
+                (source_id,),
+            ).fetchone()["present"])
+            checkpoint_album_id = int(connection.execute(
+                "select local_album_id from ops.cover_remote_save_checkpoints where job_id = %s",
+                (job_id,),
+            ).fetchone()["local_album_id"])
+
+        assert disposition == expected_disposition
+        if checkpoint == "accepted":
+            assert source_exists is True
+            assert checkpoint_album_id == source_id
+        else:
+            assert source_exists is False
+            assert checkpoint_album_id == destination_id
+
+        isolatedPostgres.reset_application_tables(setup_url)
+        cleanup_complete = True
+    finally:
+        if not cleanup_complete:
+            isolatedPostgres.reset_application_tables(setup_url)
+
+
 def test_live_waveform_peak_cache_roundtrip_invalidation_upsert_grants_and_cascade(
     monkeypatch,
     tmp_path,
@@ -1470,9 +2302,14 @@ def test_live_targeted_album_rename_commits_without_rebuilding_unrelated_invento
                 """
                 update library.local_track_files
                    set metadata = jsonb_set(
-                     metadata,
-                     '{scan_cache,file_entry}',
-                     %(file_entry)s::jsonb,
+                     jsonb_set(
+                       metadata,
+                       '{scan_cache,file_entry}',
+                       %(file_entry)s::jsonb,
+                       true
+                     ),
+                     '{scan_cache,stale}',
+                     'true'::jsonb,
                      true
                    )
                  where private_path = %(private_path)s
@@ -1510,6 +2347,24 @@ def test_live_targeted_album_rename_commits_without_rebuilding_unrelated_invento
                 where title = 'Old Album'
                 """
             ).fetchone()
+            source_file_counts = connection.execute(
+                """
+                select
+                  count(*) as total_count,
+                  count(*) filter (
+                    where coalesce(
+                      (library.local_track_files.metadata
+                        #>> '{scan_cache,stale}')::boolean,
+                      false
+                    ) is false
+                  ) as active_count
+                from library.local_track_files
+                join library.local_tracks
+                  on library.local_tracks.id = library.local_track_files.track_id
+                where library.local_tracks.album_id = %(album_id)s
+                """,
+                {"album_id": old_album["id"]},
+            ).fetchone()
             connection.execute(
                 """
                 insert into app.album_ratings (
@@ -1530,6 +2385,7 @@ def test_live_targeted_album_rename_commits_without_rebuilding_unrelated_invento
                 },
             )
         before_by_path = {str(row["private_path"]): dict(row) for row in before_rows}
+        assert int(source_file_counts["active_count"]) == 2, source_file_counts
         prepared_inventory_revision = adapter.load_inventory_mutation_revision()
         updated = {
             path: {**entry, "album": "New Album"}
@@ -1546,6 +2402,7 @@ def test_live_targeted_album_rename_commits_without_rebuilding_unrelated_invento
 
         assert result["track_rows_updated"] == 2
         assert result["track_file_rows_updated"] == 2
+        assert result["destination_album_id"] == old_album["id"], result
         assert result["inventory_mutation_revision"] == prepared_inventory_revision + 1
         with isolatedPostgres._connect(setup_url) as connection:
             after_rows = connection.execute(
@@ -1663,12 +2520,25 @@ def test_live_targeted_album_rename_commits_without_rebuilding_unrelated_invento
                 where library.local_albums.title = 'Existing Album'
                 """
             ).fetchone()["track_count"]
+            merged_rating = connection.execute(
+                """
+                select rating
+                from app.album_ratings
+                where library_id = %(library_id)s
+                  and album_key = %(album_key)s
+                """,
+                {
+                    "library_id": old_album["library_id"],
+                    "album_key": existing_destination_before["album_key"],
+                },
+            ).fetchone()
         assert int(after_merge["new_album_count"]) == 1
         assert int(after_merge["existing_album_count"]) == 1
         assert int(after_merge["old_album_count"]) == 0
         assert after_merge["existing_album_id"] == existing_destination_before["id"]
         assert after_merge["existing_cover_path"] == existing_destination_before["cover_path"]
         assert int(merged_track_count) == 3
+        assert int(merged_rating["rating"]) == 9
 
         current_cover_revision = adapter.load_cover_mutation_revision()
         with pytest.raises(ScanCachePublicationSuperseded, match="Inventory changed"):

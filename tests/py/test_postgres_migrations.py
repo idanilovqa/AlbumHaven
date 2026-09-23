@@ -30,7 +30,335 @@ MISSING_ALBUM_REMOVAL_SNAPSHOT_MIGRATION = (
 READONLY_ACCOUNT_PRIVILEGES_MIGRATION = (
     MIGRATIONS_DIR / "0062_narrow_readonly_account_privileges.sql"
 )
+DURABLE_JOBS_MIGRATION = (
+    MIGRATIONS_DIR / "0080_create_durable_job_foundation.sql"
+)
+DURABLE_JOB_CANCELLATION_MIGRATION = (
+    MIGRATIONS_DIR / "0081_request_durable_job_cancellation.sql"
+)
+DURABLE_JOB_BOUNDARY_HARDENING_MIGRATION = (
+    MIGRATIONS_DIR / "0082_harden_durable_job_boundaries.sql"
+)
+DURABLE_JOB_AUTHORIZATION_READS_MIGRATION = (
+    MIGRATIONS_DIR / "0083_grant_worker_authorization_reads.sql"
+)
+DURABLE_JOB_RETENTION_INDEX_MIGRATION = (
+    MIGRATIONS_DIR / "0084_add_job_transition_retention_index.sql"
+)
+SCAN_JOB_INTENTS_MIGRATION = (
+    MIGRATIONS_DIR / "0085_create_scan_job_intents.sql"
+)
+TARGETED_RECONCILIATION_WORKER_MIGRATION = (
+    MIGRATIONS_DIR / "0086_grant_worker_targeted_reconciliation.sql"
+)
+FULL_SCAN_LIFECYCLE_MIGRATION = (
+    MIGRATIONS_DIR / "0087_authorize_full_scan_lifecycle.sql"
+)
+FULL_SCAN_WORKER_MIGRATION = (
+    MIGRATIONS_DIR / "0088_grant_worker_full_scan_execution.sql"
+)
+DURABLE_COVER_STATE_MIGRATION = (
+    MIGRATIONS_DIR / "0089_create_durable_cover_job_state.sql"
+)
+COVER_LOOKUP_WORKER_MIGRATION = (
+    MIGRATIONS_DIR / "0090_grant_worker_cover_lookup.sql"
+)
+COVER_REFRESH_WORKER_MIGRATION = (
+    MIGRATIONS_DIR / "0091_grant_worker_cover_refresh.sql"
+)
+REMOTE_COVER_SAVE_MIGRATION = (
+    MIGRATIONS_DIR / "0092_create_remote_cover_save_checkpoints.sql"
+)
+DURABLE_SCAN_STATUS_MIGRATION = (
+    MIGRATIONS_DIR / "0093_complete_durable_scan_status_projection.sql"
+)
+LASTFM_RETRY_JOB_STATE_MIGRATION = (
+    MIGRATIONS_DIR / "0094_create_lastfm_retry_job_state.sql"
+)
+LASTFM_RETRY_WORKER_MIGRATION = (
+    MIGRATIONS_DIR / "0095_grant_worker_lastfm_retry.sql"
+)
+AUTH_MAIL_JOB_STATE_MIGRATION = (
+    MIGRATIONS_DIR / "0096_create_auth_mail_job_state.sql"
+)
+AUTH_MAIL_WORKER_MIGRATION = (
+    MIGRATIONS_DIR / "0097_grant_worker_auth_mail.sql"
+)
+DURABLE_WORKER_PREFLIGHT_MIGRATION = (
+    MIGRATIONS_DIR / "0098_validate_durable_worker_startup.sql"
+)
+VACATED_STRUCTURAL_ALBUM_MIGRATION = (
+    MIGRATIONS_DIR / "0099_retire_vacated_structural_album.sql"
+)
 BASELINE_MIGRATION = MIGRATIONS_DIR / "0001_create_current_stack_schemas.sql"
+
+
+def test_durable_scan_status_closes_inventory_relation_and_cover_handoff_gaps():
+    sql = _normalized_sql(DURABLE_SCAN_STATUS_MIGRATION.read_text(encoding="utf-8"))
+
+    assert "count(distinct album.id)" in sql
+    assert "file.metadata #>> '{scan_cache,stale}'" in sql
+    assert "function library.load_authorized_album_total(p_library_id bigint)" in sql
+    assert "function library.load_authorized_full_scan_relation_status(p_library_id bigint)" in sql
+    assert "count(distinct artist.id)" in sql
+    assert "function library.checkpoint_claimed_full_scan_v2(" in sql
+    assert "function library.load_authorized_full_scan_metrics(p_library_id bigint)" in sql
+    assert "job.kind = 'post_scan_cover_refresh'" in sql
+    assert "job.state in ('queued', 'running', 'retry_wait')" in sql
+    assert "coalesce(active_refresh.covers_in_progress, pending_follow_up.covers_in_progress, false)" in sql
+
+
+def test_lastfm_retry_job_state_preserves_stable_pending_identity_and_fences_attempts():
+    sql = _normalized_sql(LASTFM_RETRY_JOB_STATE_MIGRATION.read_text(encoding="utf-8"))
+
+    for column in (
+        "row_revision",
+        "accepted_attempt",
+        "current_job_id",
+        "active_session_id",
+        "request_origin_id",
+        "last_provider_disposition",
+        "repair_reason_code",
+    ):
+        assert f"add column if not exists {column}" in sql
+    assert "pending_scrobbles_source_identity_idx" in sql
+    assert "pending_scrobbles_due_retry_idx" in sql
+    assert "pending_scrobbles_current_job_id_key" in sql
+    assert "attempt_count >= 0" in sql
+    assert "accepted_attempt >= 1" in sql
+    assert "accepted_attempt <= 5" in sql
+    assert "orphaned_repair" in sql
+    assert "references ops.jobs(id) on delete set null" in sql
+    assert "references integration.lastfm_sessions(id) on delete set null" in sql
+    assert "references app.request_origins(id) on delete set null" in sql
+    assert "legacy_attempt_repaired" in sql
+    assert "legacy_status_repaired" in sql
+    due_index = sql.split("create index if not exists pending_scrobbles_due_retry_idx", 1)[1]
+    assert "where status in ('pending', 'retry_wait')" in due_index
+    assert "where status in ('pending', 'retry_wait', 'orphaned_repair')" not in due_index
+
+
+def test_lastfm_retry_worker_migration_exposes_only_claim_fenced_secret_access():
+    sql = _normalized_sql(LASTFM_RETRY_WORKER_MIGRATION.read_text(encoding="utf-8"))
+
+    assert "function ops.validate_claimed_lastfm_retry(" in sql
+    assert "function ops.load_claimed_lastfm_session_secret(" in sql
+    assert "job.kind = 'lastfm_scrobble_retry'" in sql
+    assert "job.state = 'running'" in sql
+    assert "job.lease_expires_at > p_now" in sql
+    assert "pending.current_job_id = job.id" in sql
+    assert "pending.row_revision = job.scope_version" in sql
+    assert "pending.accepted_attempt = job.resource_revision" in sql
+    assert "session.id = pending.active_session_id" in sql
+    assert "session.is_active" in sql
+    assert "revoke all on table integration.lastfm_sessions from album_haven_worker" in sql
+    assert "revoke all on table integration.pending_scrobbles from album_haven_worker" in sql
+    assert "grant execute on function ops.load_claimed_lastfm_session_secret" in sql
+    authorization_return = sql.split("returns table (", 1)[1].split(") language sql", 1)[0]
+    assert "integration_session_ref varchar" in authorization_return
+    assert "session_key_encrypted" not in authorization_return
+
+
+def test_auth_mail_job_state_adds_stable_checkpointed_outbox_ownership():
+    assert AUTH_MAIL_JOB_STATE_MIGRATION.is_file()
+    sql = _normalized_sql(AUTH_MAIL_JOB_STATE_MIGRATION.read_text(encoding="utf-8"))
+
+    for column in (
+        "row_revision",
+        "accepted_attempt",
+        "current_job_id",
+        "request_origin_id",
+        "actor_account_id",
+        "authorization_mode",
+        "delivery_checkpoint",
+        "provider_disposition",
+        "delivery_reason_code",
+        "updated_at",
+    ):
+        assert f"add column if not exists {column}" in sql
+    assert "mail_outbox_current_job_id_key" in sql
+    assert "mail_outbox_due_welcome_job_idx" in sql
+    assert "mail_outbox_tokenless_accepted_idx" in sql
+    assert "mail_outbox_stale_sending_job_idx" in sql
+    assert "references ops.jobs(id) on delete set null" in sql
+    assert "references app.request_origins(id) on delete set null" in sql
+    assert "accepted_attempt between 1 and 5" in sql
+    assert "accepted_attempt <= least(5, attempt_count + 1)" in sql
+    assert "updated_at >= created_at" in sql
+    assert "octet_length(delivery_reason_code) between 1 and 128" in sql
+    assert "legacy_token_unavailable" in sql
+    assert "delivery_status = 'unknown'" in sql
+    assert "message_category in ('account_invitation', 'password_reset')" in sql
+    assert "reset_token_id is null" in sql
+    assert "invitation_token_id is null" in sql
+
+
+def test_auth_mail_worker_migration_exposes_only_claim_fenced_delivery_access():
+    assert AUTH_MAIL_WORKER_MIGRATION.is_file()
+    sql = _normalized_sql(AUTH_MAIL_WORKER_MIGRATION.read_text(encoding="utf-8"))
+
+    assert "add column if not exists target_credential_version" in sql
+    assert "add column if not exists lifecycle_expires_at" in sql
+    assert "add column if not exists public_throttle_id" in sql
+    assert "mail_outbox_public_throttle_id_idx" in sql
+    assert "function ops.validate_claimed_auth_mail(" in sql
+    assert "function ops.load_claimed_auth_mail_context(" in sql
+    assert "function ops.issue_claimed_auth_mail_token_hash(" in sql
+    assert "function ops.reconcile_auth_mail_jobs(" in sql
+    assert "job.kind = expected_job_kind" in sql
+    assert "job.state = 'running'" in sql
+    assert "job.lease_expires_at > p_now" in sql
+    assert "outbox.current_job_id = job.id" in sql
+    assert "outbox.row_revision = job.scope_version" in sql
+    assert "outbox.accepted_attempt = job.resource_revision" in sql
+    assert "throttle.id = outbox.public_throttle_id" in sql
+    assert "octet_length(p_token_hash) <> 32" in sql
+    for table in (
+        "app.accounts",
+        "app.account_credentials",
+        "app.password_reset_tokens",
+        "app.account_invitation_tokens",
+        "app.auth_throttles",
+        "app.mail_outbox",
+        "app.security_audit_events",
+    ):
+        assert f"revoke all on table {table} from album_haven_worker" in sql
+    assert "grant execute on function ops.validate_claimed_auth_mail" in sql
+    assert "grant execute on function ops.load_claimed_auth_mail_context" in sql
+    assert "grant execute on function ops.issue_claimed_auth_mail_token_hash" in sql
+    assert "grant execute on function ops.reconcile_auth_mail_jobs" in sql
+    assert "for update of outbox skip locked" in sql
+    assert "generic_terminal_converged" in sql
+
+
+def test_durable_worker_preflight_checks_schema_handlers_and_worker_grants():
+    sql = _normalized_sql(
+        DURABLE_WORKER_PREFLIGHT_MIGRATION.read_text(encoding="utf-8")
+    )
+
+    assert "function ops.validate_durable_worker_startup(" in sql
+    assert "security definer" in sql
+    assert "set search_path = pg_catalog" in sql
+    for kind in (
+        "full_scan",
+        "targeted_reconciliation",
+        "post_scan_cover_refresh",
+        "cover_lookup",
+        "cover_bulk_refresh",
+        "cover_remote_save",
+        "lastfm_scrobble_retry",
+        "auth_welcome_delivery",
+        "auth_invitation_delivery",
+        "auth_password_reset_delivery",
+    ):
+        assert f"'{kind}'" in sql
+    assert "to_regprocedure(required.signature) is null" in sql
+    assert "ops.schema_migrations" not in sql
+    assert "has_function_privilege(session_user, required.signature, 'execute')" in sql
+    assert "has_table_privilege(session_user, 'ops.jobs', 'select')" in sql
+    assert "has_sequence_privilege(" in sql
+    assert "'ops.job_transitions_id_seq', 'usage'" in sql
+    assert "'state', 'scheduled_at', 'attempt_count', 'lease_owner', 'lease_token'" in sql
+    assert "has_column_privilege(" in sql
+    assert (
+        "library.retire_claimed_targeted_reconciliation_vacated_albums"
+        "(bigint,bigint,integer,character varying,character varying,"
+        "timestamp with time zone)"
+    ) in sql
+    assert (
+        "library.load_claimed_targeted_reconciliation_preparation"
+        "(bigint,bigint,bigint,integer,character varying,character varying,"
+        "timestamp with time zone)"
+        in sql
+    )
+    assert "grant execute on function ops.validate_durable_worker_startup(text[])" in sql
+    assert "owner to album_haven_migrator" not in sql
+
+
+def test_vacated_structural_album_retirement_is_narrow_and_dependency_complete():
+    sql = _normalized_sql(
+        VACATED_STRUCTURAL_ALBUM_MIGRATION.read_text(encoding="utf-8")
+    )
+
+    assert "function library.retire_vacated_structural_album(" in sql
+    assert "security definer" in sql
+    assert "set search_path = pg_catalog" in sql
+    assert "grant execute on function library.retire_vacated_structural_album(" in sql
+    assert "to album_haven_app" in sql
+    assert "grant delete on" not in sql
+    assert "preserved_track_tombstone" in sql
+    assert "preserved_cover_checkpoint" in sql
+    for durable_relation in (
+        "app.album_ratings",
+        "library.local_album_featured_artists",
+        "library.local_mbid_assertions",
+        "library.ignored_versions",
+        "library.manual_versions",
+        "ops.cover_remote_save_checkpoints",
+        "ops.cover_lookup_tasks",
+        "library.local_album_cover_candidate_snapshots",
+    ):
+        assert durable_relation in sql
+    assert "delete from library.local_albums" in sql
+
+
+def test_vacated_structural_album_retirement_blocks_only_active_cover_save_checkpoints():
+    sql = _normalized_sql(
+        VACATED_STRUCTURAL_ALBUM_MIGRATION.read_text(encoding="utf-8")
+    )
+
+    terminal_checkpoints = "('publication_completed', 'rolled_back', 'ambiguous')"
+    assert (
+        "ops.cover_remote_save_checkpoints.checkpoint not in "
+        f"{terminal_checkpoints}"
+    ) in sql
+    assert "update ops.cover_remote_save_checkpoints" in sql
+    assert "set local_album_id = p_destination_album_id" in sql
+    assert (
+        "ops.cover_remote_save_checkpoints.checkpoint in "
+        f"{terminal_checkpoints}"
+    ) in sql
+
+
+def test_vacated_structural_album_sibling_sweep_is_exact_bounded_and_family_marker_safe():
+    sql = _normalized_sql(
+        VACATED_STRUCTURAL_ALBUM_MIGRATION.read_text(encoding="utf-8")
+    )
+
+    assert "function library.retire_vacated_structural_album_siblings(" in sql
+    assert "grant execute on function library.retire_vacated_structural_album_siblings(" in sql
+    assert "to album_haven_app" in sql
+    assert "pg_advisory_xact_lock" in sql
+    assert "candidate_album.artist_id = destination.artist_id" in sql
+    assert "destination.artist_id is null" in sql
+    assert "nullif(btrim(destination.title), '') is null" in sql
+    assert "lower(btrim(candidate_album.title)) = lower(btrim(destination.title))" in sql
+    assert "candidate_album.release_year is not distinct from destination.release_year" in sql
+    assert "candidate_album.metadata ->> 'edition'" in sql
+    assert "not exists ( select 1 from library.local_tracks" in sql
+    assert "from library.separate_releases" not in sql
+    assert "order by candidate_album.id" in sql
+    assert "for update of candidate_album" in sql
+    assert "library.retire_vacated_structural_album(" in sql
+
+
+def test_targeted_reconciliation_album_retirement_is_claim_and_lease_scoped():
+    sql = _normalized_sql(
+        VACATED_STRUCTURAL_ALBUM_MIGRATION.read_text(encoding="utf-8")
+    )
+
+    assert "function library.retire_claimed_targeted_reconciliation_vacated_albums(" in sql
+    assert "job.kind = 'targeted_reconciliation'" in sql
+    assert "job.state = 'running'" in sql
+    assert "job.attempt_count = p_attempt" in sql
+    assert "job.lease_owner = p_worker_id" in sql
+    assert "job.lease_token = p_lease_token" in sql
+    assert "job.lease_expires_at > p_now" in sql
+    assert "intent.publication_attempt = p_attempt" in sql
+    assert "intent.committed_inventory_revision is not null" in sql
+    assert "library.retire_vacated_structural_album_siblings(" in sql
+    assert "grant execute on function library.retire_claimed_targeted_reconciliation_vacated_albums(" in sql
+    assert "to album_haven_worker" in sql
 LOCAL_MBID_ASSERTIONS_MIGRATION = MIGRATIONS_DIR / "0002_create_local_mbid_assertions.sql"
 LOCAL_MBID_PROJECTION_PROVENANCE_MIGRATION = (
     MIGRATIONS_DIR / "0003_add_local_mbid_projection_provenance.sql"
@@ -432,7 +760,7 @@ def test_postgres_migration_filenames_are_zero_padded_sql_and_lexically_ordered(
 
     assert all(re.fullmatch(r"\d{4}_[a-z0-9_]+\.sql", name) for name in migration_names)
     assert migration_numbers == list(range(1, len(migration_numbers) + 1))
-    assert migration_names[-40:] == [
+    assert migration_names[-60:] == [
         "0040_repair_ignored_repairs_delete_grant.sql",
         "0041_create_local_album_cover_candidate_snapshots.sql",
         "0042_track_distinct_cover_improvement_alerts.sql",
@@ -473,9 +801,99 @@ def test_postgres_migration_filenames_are_zero_padded_sql_and_lexically_ordered(
         "0077_allow_parchment_pine_appearance_palette.sql",
         "0078_add_compact_player_motion_and_floating_edge.sql",
         "0079_docked_compact_player_regular_style.sql",
+        "0080_create_durable_job_foundation.sql",
+        "0081_request_durable_job_cancellation.sql",
+        "0082_harden_durable_job_boundaries.sql",
+        "0083_grant_worker_authorization_reads.sql",
+        "0084_add_job_transition_retention_index.sql",
+        "0085_create_scan_job_intents.sql",
+        "0086_grant_worker_targeted_reconciliation.sql",
+        "0087_authorize_full_scan_lifecycle.sql",
+        "0088_grant_worker_full_scan_execution.sql",
+        "0089_create_durable_cover_job_state.sql",
+        "0090_grant_worker_cover_lookup.sql",
+        "0091_grant_worker_cover_refresh.sql",
+        "0092_create_remote_cover_save_checkpoints.sql",
+        "0093_complete_durable_scan_status_projection.sql",
+        "0094_create_lastfm_retry_job_state.sql",
+        "0095_grant_worker_lastfm_retry.sql",
+        "0096_create_auth_mail_job_state.sql",
+        "0097_grant_worker_auth_mail.sql",
+        "0098_validate_durable_worker_startup.sql",
+        "0099_retire_vacated_structural_album.sql",
     ]
 
 
+def test_cover_lookup_worker_migration_keeps_private_scope_behind_claim_fences():
+    sql = _normalized_sql(COVER_LOOKUP_WORKER_MIGRATION.read_text(encoding="utf-8"))
+
+    for function_name in (
+        "accept_cover_lookup",
+        "validate_claimed_cover_lookup",
+        "load_claimed_cover_lookup",
+        "claimed_cover_lookup_cancel_requested",
+        "load_claimed_cover_lookup_cancellation",
+        "publish_claimed_cover_lookup",
+        "finalize_claimed_cover_lookup_canceled",
+    ):
+        assert f"function ops.{function_name}" in sql
+    assert "job.lease_expires_at > observed_at" in sql
+    assert "job.lease_token = requested_lease_token" in sql
+    assert "task.row_revision = expected_row_revision" in sql
+    assert "array_agg(file.private_path" in sql
+    assert "grant execute on function ops.load_claimed_cover_lookup" in sql
+    assert "grant select on library.local_track_files" not in sql
+    assert "grant select on ops.cover_lookup_tasks" not in sql
+
+
+def test_cover_refresh_worker_migration_uses_one_fenced_core_and_private_status():
+    sql = _normalized_sql(COVER_REFRESH_WORKER_MIGRATION.read_text(encoding="utf-8"))
+
+    for function_name in (
+        "accept_cover_bulk_refresh",
+        "begin_claimed_cover_refresh",
+        "checkpoint_claimed_cover_refresh",
+        "finish_claimed_cover_refresh",
+        "persist_claimed_automatic_cover_selection",
+        "load_authorized_cover_refresh_status",
+    ):
+        assert f"function ops.{function_name}" in sql
+    assert "job.kind in ('cover_bulk_refresh', 'post_scan_cover_refresh')" in sql
+    assert "#variable_conflict use_column" in sql
+    assert "count(distinct album.id) filter (where file.id is not null)::integer" in sql
+    assert "job.lease_expires_at > observed_at" in sql
+    assert "refresh.row_revision = expected_row_revision" in sql
+    assert "grant execute on function ops.begin_claimed_cover_refresh" in sql
+    assert "grant execute on function ops.persist_claimed_automatic_cover_selection" in sql
+    assert "grant select on library.local_track_files" not in sql
+
+
+def test_remote_cover_save_migration_has_private_checkpoints_and_claim_fences():
+    sql = _normalized_sql(REMOTE_COVER_SAVE_MIGRATION.read_text(encoding="utf-8"))
+
+    assert "create table if not exists ops.cover_remote_save_checkpoints" in sql
+    for checkpoint in (
+        "accepted",
+        "download_started",
+        "artifact_written",
+        "selection_committed",
+        "promotion_completed",
+        "publication_completed",
+        "rolled_back",
+        "ambiguous",
+    ):
+        assert f"'{checkpoint}'" in sql
+    for function_name in (
+        "accept_cover_remote_save",
+        "load_claimed_cover_remote_save",
+        "checkpoint_claimed_cover_remote_save",
+        "persist_claimed_remote_cover_selection",
+        "publish_claimed_cover_remote_save",
+    ):
+        assert f"function ops.{function_name}" in sql
+    assert "job.lease_token = requested_lease_token" in sql
+    assert "job.lease_expires_at > observed_at" in sql
+    assert "grant select on library.local_track_files" not in sql
 def test_docked_compact_player_regular_style_migration_is_additive_and_default_off():
     sql = _normalized_sql(
         (MIGRATIONS_DIR / "0079_docked_compact_player_regular_style.sql").read_text(
@@ -502,6 +920,88 @@ def test_readonly_account_privilege_migration_is_upgrade_safe_and_identity_priva
         "metadata",
     ):
         assert private_column not in grant_columns
+
+
+def test_full_scan_publication_uses_the_authorized_root_path_style():
+    sql = _normalized_sql(FULL_SCAN_WORKER_MIGRATION.read_text(encoding="utf-8"))
+
+    assert (
+        "library.local_path_key(root.root_path) || case "
+        "library.local_path_style(root.root_path) when 'windows' then e'\\\\' else '/' end"
+    ) in sql
+
+
+def test_full_scan_worker_migration_can_reapply_after_authorization_shape_expands():
+    sql = _normalized_sql(FULL_SCAN_WORKER_MIGRATION.read_text(encoding="utf-8"))
+    signature = (
+        "app.load_claimed_job_authorization_context( bigint, integer, varchar, "
+        "varchar, timestamptz )"
+    )
+
+    drop_position = sql.index(f"drop function if exists {signature}")
+    create_position = sql.index(
+        "create or replace function app.load_claimed_job_authorization_context("
+    )
+    assert drop_position < create_position
+
+
+def test_full_scan_publication_uses_shared_account_lifecycle_lock():
+    sql = _normalized_sql(FULL_SCAN_WORKER_MIGRATION.read_text(encoding="utf-8"))
+    function_sql = sql.split(
+        "create or replace function library.publish_claimed_full_scan(", 1
+    )[1].split("create or replace function library.full_scan_publication_scope_current(", 1)[0]
+    account_lock = function_sql.split(
+        "perform 1 from app.accounts as account", 1
+    )[1].split("if not found", 1)[0]
+
+    assert "for share" in account_lock
+    assert "for update" not in account_lock
+
+
+def test_durable_cover_state_migration_extends_jobs_without_weakening_existing_kinds():
+    sql = _normalized_sql(DURABLE_COVER_STATE_MIGRATION.read_text(encoding="utf-8"))
+
+    assert "drop constraint if exists jobs_kind_check" in sql
+    assert "drop constraint if exists jobs_kind_attempts_check" in sql
+    assert "drop constraint if exists jobs_kind_recovery_check" in sql
+    for kind in (
+        "full_scan",
+        "targeted_reconciliation",
+        "post_scan_cover_refresh",
+        "cover_lookup",
+        "cover_bulk_refresh",
+        "cover_remote_save",
+        "lastfm_scrobble_retry",
+        "auth_welcome_delivery",
+        "auth_invitation_delivery",
+        "auth_password_reset_delivery",
+    ):
+        assert f"'{kind}'" in sql
+    assert "kind = 'cover_bulk_refresh' and max_attempts = 2" in sql
+    assert "'cover_bulk_refresh'" in sql and "recovery_policy = 'retry_safe'" in sql
+
+
+def test_durable_cover_state_migration_adds_stable_authority_and_scrubs_paths():
+    sql = _normalized_sql(DURABLE_COVER_STATE_MIGRATION.read_text(encoding="utf-8"))
+
+    for column in (
+        "local_album_id",
+        "library_root_id",
+        "initiating_account_id",
+        "request_origin_id",
+        "candidate_generation",
+        "resource_revision",
+        "cancel_requested_at",
+        "row_revision",
+        "job_id",
+    ):
+        assert f"add column if not exists {column}" in sql
+    assert "create table if not exists ops.cover_bulk_refreshes" in sql
+    assert "cover_bulk_refreshes_one_active_per_library_idx" in sql
+    assert "metadata #- '{track_paths}'" in sql
+    assert "#- '{source_payload,track_paths}'" in sql
+    assert "#- '{source_payload,album_payload}'" in sql
+    assert "drop column if exists selected_cover_private_path" not in sql
 
 
 def test_album_details_appearance_migration_has_closed_defaults():
@@ -2860,3 +3360,1196 @@ def test_tag_edit_intents_migration_creates_recoverable_least_privilege_journal(
     assert "grant select on table library.tag_edit_intents to album_haven_readonly" not in sql
     assert "grant delete" not in sql
     assert "grant all" not in sql
+
+
+def test_durable_job_foundation_migration_file_exists():
+    assert DURABLE_JOBS_MIGRATION.is_file(), (
+        "durable job foundation migration SQL is not present yet; "
+        "Task 2 requires 0080_create_durable_job_foundation.sql"
+    )
+
+
+@pytest.fixture
+def durable_jobs_sql() -> str:
+    if not DURABLE_JOBS_MIGRATION.exists():
+        pytest.skip(
+            "durable job foundation migration SQL is not present yet; "
+            "test_durable_job_foundation_migration_file_exists captures the TDD red state"
+        )
+    return DURABLE_JOBS_MIGRATION.read_text(encoding="utf-8")
+
+
+def test_durable_job_migration_creates_private_operational_tables(durable_jobs_sql):
+    sql = _normalized_sql(durable_jobs_sql)
+
+    for table_name in ("ops.jobs", "ops.job_transitions", "ops.worker_instances"):
+        assert f"create table if not exists {table_name}" in sql
+    assert "for update skip locked" not in sql
+    assert "album_move" not in sql
+
+
+def test_durable_job_migration_closes_job_kinds_and_states(durable_jobs_sql):
+    sql = _normalized_sql(durable_jobs_sql)
+
+    expected_kinds = {
+        "full_scan",
+        "targeted_reconciliation",
+        "post_scan_cover_refresh",
+        "cover_lookup",
+        "cover_remote_save",
+        "lastfm_scrobble_retry",
+        "auth_welcome_delivery",
+        "auth_invitation_delivery",
+        "auth_password_reset_delivery",
+    }
+    expected_states = {
+        "queued",
+        "running",
+        "retry_wait",
+        "succeeded",
+        "failed",
+        "canceled",
+        "ambiguous",
+    }
+
+    for value in expected_kinds | expected_states:
+        assert f"'{value}'" in sql
+    assert "constraint jobs_kind_check" in sql
+    assert "constraint jobs_state_check" in sql
+    assert "constraint job_transitions_prior_state_check" in sql
+    assert "constraint job_transitions_next_state_check" in sql
+
+
+def test_durable_job_migration_uses_bounded_types_and_named_coherence_constraints(
+    durable_jobs_sql,
+):
+    sql = _normalized_sql(durable_jobs_sql)
+    jobs_sql = _table_sql(sql, "ops.jobs")
+    transitions_sql = _table_sql(sql, "ops.job_transitions")
+    workers_sql = _table_sql(sql, "ops.worker_instances")
+
+    assert "id bigint generated always as identity primary key" in jobs_sql
+    assert "created_at timestamptz" in jobs_sql
+    assert "scheduled_at timestamptz" in jobs_sql
+    assert "updated_at timestamptz" in jobs_sql
+    for bounded_column in (
+        "kind varchar(",
+        "state varchar(",
+        "subject_kind varchar(",
+        "subject_ref varchar(",
+        "capability_key varchar(",
+        "idempotency_key varchar(",
+        "lease_owner varchar(",
+        "lease_token varchar(",
+    ):
+        assert bounded_column in jobs_sql
+    assert "parameters jsonb not null" in jobs_sql
+    assert "jsonb_typeof(parameters) = 'object'" in jobs_sql
+    assert "octet_length(parameters::text) <= 4096" in jobs_sql
+    for constraint_name in (
+        "jobs_parameters_shape_check",
+        "jobs_parameters_size_check",
+        "jobs_attempts_check",
+        "jobs_lease_coherence_check",
+        "jobs_terminal_coherence_check",
+    ):
+        assert f"constraint {constraint_name}" in jobs_sql
+
+    assert "id bigint generated always as identity primary key" in transitions_sql
+    assert "reason_code varchar(" in transitions_sql
+    assert "transitioned_at timestamptz" in transitions_sql
+    assert "constraint job_transitions_attempt_check" in transitions_sql
+    assert "instance_id varchar(" in workers_sql
+    assert "started_at timestamptz" in workers_sql
+    assert "last_heartbeat_at timestamptz" in workers_sql
+    assert "constraint worker_instances_lifecycle_state_check" in workers_sql
+
+
+def test_durable_job_migration_enforces_attempt_lease_and_terminal_coherence(
+    durable_jobs_sql,
+):
+    sql = _normalized_sql(durable_jobs_sql)
+    jobs_sql = _table_sql(sql, "ops.jobs")
+
+    assert re.search(r"attempt_count\s*>=\s*0", jobs_sql)
+    assert re.search(r"max_attempts\s*>\s*0", jobs_sql)
+    assert re.search(r"attempt_count\s*<=\s*max_attempts", jobs_sql)
+    for lease_column in (
+        "lease_owner",
+        "lease_token",
+        "lease_expires_at",
+        "heartbeat_at",
+    ):
+        assert lease_column in jobs_sql
+    assert "state = 'running'" in jobs_sql
+    assert "completed_at is not null" in jobs_sql
+    for terminal_state in ("succeeded", "failed", "canceled", "ambiguous"):
+        assert f"'{terminal_state}'" in jobs_sql
+
+
+def test_durable_job_migration_declares_indexed_foreign_keys_with_deletion_rules(
+    durable_jobs_sql,
+):
+    sql = _normalized_sql(durable_jobs_sql)
+    jobs_sql = _table_sql(sql, "ops.jobs")
+
+    foreign_keys = (
+        ("account_id", "app.accounts"),
+        ("library_id", "library.libraries"),
+        ("request_origin_id", "app.request_origins"),
+    )
+    for column_name, referenced_table in foreign_keys:
+        assert re.search(
+            rf"{column_name}\s+bigint\s+references\s+{re.escape(referenced_table)}\(id\)\s+"
+            rf"on\s+delete\s+(?:restrict|set null)",
+            jobs_sql,
+        )
+        assert _qualified_index_pattern("ops.jobs", (column_name,)).search(
+            durable_jobs_sql
+        )
+    assert "on delete cascade" not in jobs_sql
+
+    transitions_sql = _table_sql(sql, "ops.job_transitions")
+    assert "job_id bigint not null references ops.jobs(id) on delete cascade" in transitions_sql
+    assert _qualified_index_pattern("ops.job_transitions", ("job_id",)).search(
+        durable_jobs_sql
+    )
+
+
+def test_durable_job_migration_uses_null_safe_scoped_idempotency(durable_jobs_sql):
+    sql = _normalized_sql(durable_jobs_sql)
+
+    index_match = re.search(
+        r"create unique index if not exists jobs_idempotency_idx\s+on ops\.jobs\s*\((?P<columns>[^;]+)\);",
+        sql,
+    )
+    assert index_match is not None
+    columns = index_match.group("columns")
+    for fragment in (
+        "kind",
+        "coalesce(account_id, 0)",
+        "coalesce(library_id, 0)",
+        "subject_kind",
+        "subject_ref",
+        "idempotency_key",
+    ):
+        assert fragment in columns
+
+
+def test_durable_job_migration_adds_claim_status_retention_and_heartbeat_indexes(
+    durable_jobs_sql,
+):
+    sql = _normalized_sql(durable_jobs_sql)
+
+    for index_name in (
+        "jobs_runnable_claim_idx",
+        "jobs_active_lease_idx",
+        "jobs_owner_library_status_idx",
+        "jobs_retry_due_idx",
+        "jobs_terminal_retention_idx",
+        "job_transitions_job_id_idx",
+        "worker_instances_heartbeat_idx",
+    ):
+        assert f"create index if not exists {index_name}" in sql
+    assert re.search(
+        r"jobs_runnable_claim_idx.+priority\s+desc.+scheduled_at.+id.+where.+state\s+in\s*\('queued',\s*'retry_wait'\)",
+        sql,
+    )
+    assert re.search(
+        r"jobs_active_lease_idx.+lease_expires_at.+where.+state\s*=\s*'running'",
+        sql,
+    )
+    assert re.search(
+        r"jobs_terminal_retention_idx.+completed_at.+where.+state\s+in\s*\([^)]*'succeeded'[^)]*'failed'[^)]*'canceled'[^)]*\)",
+        sql,
+    )
+
+
+def test_durable_job_migration_applies_least_privilege_grants(durable_jobs_sql):
+    sql = _normalized_sql(durable_jobs_sql)
+
+    for table_name in ("ops.jobs", "ops.job_transitions", "ops.worker_instances"):
+        assert f"revoke all on table {table_name} from public" in sql
+        assert f"revoke all on table {table_name} from album_haven_readonly" in sql
+    assert "grant usage on schema ops to album_haven_worker" in sql
+    assert "grant select, update on table ops.jobs to album_haven_worker" in sql
+    assert (
+        "grant select, insert on table ops.job_transitions to album_haven_worker"
+        in sql
+    )
+    assert (
+        "grant select, insert, update on table ops.worker_instances to album_haven_worker"
+        in sql
+    )
+    assert (
+        "grant usage, select on sequence ops.job_transitions_id_seq to album_haven_worker"
+        in sql
+    )
+    assert "grant delete on table ops.jobs to album_haven_worker" not in sql
+    assert "grant delete" not in " ".join(
+        fragment
+        for fragment in sql.split(";")
+        if "to album_haven_worker" in fragment
+    )
+    assert "grant all" not in sql
+
+
+def test_durable_job_migration_limits_app_to_enqueue_and_cancel_columns(
+    durable_jobs_sql,
+):
+    sql = _normalized_sql(durable_jobs_sql)
+
+    assert not re.search(
+        r"grant\s+[^;()]*\bupdate\b[^;()]*\bon\s+table\s+ops\.jobs\s+"
+        r"to\s+album_haven_app",
+        sql,
+    )
+    insert_grant = re.search(
+        r"grant\s+insert\s*\((?P<columns>[^)]+)\)\s+on\s+table\s+"
+        r"ops\.jobs\s+to\s+album_haven_app",
+        sql,
+    )
+    assert insert_grant is not None
+    insert_columns = {
+        column.strip() for column in insert_grant.group("columns").split(",")
+    }
+    assert {
+        "kind",
+        "subject_kind",
+        "subject_ref",
+        "parameters",
+        "account_id",
+        "library_id",
+        "capability_key",
+        "request_origin_id",
+        "deployment_mode",
+        "client_surface",
+        "idempotency_key",
+        "priority",
+        "scheduled_at",
+        "max_attempts",
+        "recovery_policy",
+    }.issubset(insert_columns)
+    assert insert_columns.isdisjoint(
+        {
+            "state",
+            "attempt_count",
+            "lease_owner",
+            "lease_token",
+            "lease_expires_at",
+            "heartbeat_at",
+            "completed_at",
+            "outcome_code",
+            "audit_hold",
+            "tombstoned_at",
+        }
+    )
+
+    update_grant = re.search(
+        r"grant\s+update\s*\((?P<columns>[^)]+)\)\s+on\s+table\s+"
+        r"ops\.jobs\s+to\s+album_haven_app",
+        sql,
+    )
+    assert update_grant is not None
+    assert {
+        column.strip() for column in update_grant.group("columns").split(",")
+    } == {
+        "cancel_requested_at",
+        "cancel_requested_by_account_id",
+        "cancel_reason_code",
+        "updated_at",
+    }
+
+
+def test_durable_job_cancellation_migration_file_exists():
+    assert DURABLE_JOB_CANCELLATION_MIGRATION.is_file(), (
+        "durable job cancellation migration SQL is not present yet; "
+        "Task 3 requires 0081_request_durable_job_cancellation.sql"
+    )
+
+
+@pytest.fixture
+def durable_job_cancellation_sql() -> str:
+    if not DURABLE_JOB_CANCELLATION_MIGRATION.exists():
+        pytest.skip(
+            "durable job cancellation migration SQL is not present yet; "
+            "test_durable_job_cancellation_migration_file_exists captures the TDD red state"
+        )
+    return DURABLE_JOB_CANCELLATION_MIGRATION.read_text(encoding="utf-8")
+
+
+def test_durable_job_cancellation_function_is_atomic_validated_and_narrowly_granted(
+    durable_job_cancellation_sql,
+):
+    sql = _normalized_sql(durable_job_cancellation_sql)
+    signature = "ops.request_job_cancellation(bigint, bigint, timestamptz)"
+
+    assert "create or replace function ops.request_job_cancellation(" in sql
+    assert "returns table (" in sql
+    for result_field in (
+        "job_id bigint",
+        "prior_state varchar(",
+        "next_state varchar(",
+        "reason_code varchar(",
+        "transition_recorded boolean",
+    ):
+        assert result_field in sql
+    assert "language plpgsql" in sql
+    assert "security definer" in sql
+    assert "set search_path = pg_catalog" in sql
+    assert "from ops.jobs" in sql
+    assert "for update" in sql
+    assert "update ops.jobs" in sql
+    assert "insert into ops.job_transitions" in sql
+
+    for parameter_check in (
+        "p_job_id is null or p_job_id <= 0",
+        "p_actor_account_id is null or p_actor_account_id <= 0",
+        "p_requested_at is null",
+    ):
+        assert parameter_check in sql
+    for result_code in (
+        "'canceled'",
+        "'cancel_requested'",
+        "'terminal_noop'",
+        "'not_found'",
+    ):
+        assert result_code in sql
+
+    revoke_update = re.search(
+        r"revoke\s+update\s*\((?P<columns>[^)]+)\)\s+on\s+table\s+"
+        r"ops\.jobs\s+from\s+album_haven_app",
+        sql,
+    )
+    assert revoke_update is not None
+    assert {
+        column.strip() for column in revoke_update.group("columns").split(",")
+    } == {
+        "cancel_requested_at",
+        "cancel_requested_by_account_id",
+        "cancel_reason_code",
+        "updated_at",
+    }
+    assert f"revoke all on function {signature} from public" in sql
+    assert f"grant execute on function {signature} to album_haven_app" in sql
+    assert f"grant execute on function {signature} to album_haven_worker" not in sql
+    assert f"grant execute on function {signature} to album_haven_readonly" not in sql
+
+
+def test_durable_job_migration_explicitly_revokes_readonly_sequence_access(
+    durable_jobs_sql,
+):
+    sql = _normalized_sql(durable_jobs_sql)
+
+    for sequence_name in ("ops.jobs_id_seq", "ops.job_transitions_id_seq"):
+        assert (
+            f"revoke all on sequence {sequence_name} from album_haven_readonly"
+            in sql
+        )
+
+
+def test_durable_job_worker_status_and_retention_indexes_are_partial(
+    durable_jobs_sql,
+):
+    sql = _normalized_sql(durable_jobs_sql)
+
+    assert re.search(
+        r"create index if not exists worker_instances_heartbeat_idx\s+"
+        r"on ops\.worker_instances\s*\(last_heartbeat_at,\s*instance_id\)\s+"
+        r"where lifecycle_state in\s*\('starting',\s*'running',\s*'draining'\)",
+        sql,
+    )
+    assert re.search(
+        r"create index if not exists worker_instances_retention_idx\s+"
+        r"on ops\.worker_instances\s*\(last_heartbeat_at,\s*instance_id\)\s+"
+        r"where lifecycle_state = 'stopped'",
+        sql,
+    )
+
+
+def test_durable_job_boundary_hardening_migration_file_exists():
+    assert DURABLE_JOB_BOUNDARY_HARDENING_MIGRATION.is_file(), (
+        "Task 3 requires additive migration 0082_harden_durable_job_boundaries.sql"
+    )
+
+
+def test_durable_job_boundary_hardening_enforces_transitions_and_worker_columns():
+    if not DURABLE_JOB_BOUNDARY_HARDENING_MIGRATION.exists():
+        pytest.skip("durable job boundary hardening migration is not present yet")
+    sql = _normalized_sql(
+        DURABLE_JOB_BOUNDARY_HARDENING_MIGRATION.read_text(encoding="utf-8")
+    )
+
+    assert "constraint job_transitions_legal_pair_check" in sql
+    assert "prior_state is null and next_state = 'queued'" in sql
+    for legal_pair in (
+        "prior_state = 'queued' and next_state in ('running', 'canceled')",
+        "prior_state = 'retry_wait' and next_state in ('running', 'canceled')",
+        "prior_state = 'running' and next_state in ('succeeded', 'failed', 'retry_wait', 'canceled', 'ambiguous')",
+    ):
+        assert legal_pair in sql
+    assert "revoke update on table ops.jobs from album_haven_app" in sql
+    assert "revoke update on table ops.jobs from album_haven_worker" in sql
+    worker_update = re.search(
+        r"grant update\s*\((?P<columns>[^)]+)\)\s+on table ops\.jobs\s+"
+        r"to album_haven_worker",
+        sql,
+    )
+    assert worker_update is not None
+    assert {
+        column.strip() for column in worker_update.group("columns").split(",")
+    } == {
+        "state", "scheduled_at", "attempt_count", "lease_owner", "lease_token",
+        "lease_expires_at", "heartbeat_at", "started_at", "completed_at",
+        "outcome_code", "updated_at",
+    }
+    assert "grant select on table ops.jobs to album_haven_worker" in sql
+    assert "cancel_requested_at = coalesce(jobs.cancel_requested_at" in sql
+    assert "cancel_requested_by_account_id = coalesce(" in sql
+
+
+def test_worker_authorization_read_migration_file_exists():
+    assert DURABLE_JOB_AUTHORIZATION_READS_MIGRATION.is_file(), (
+        "Task 4 requires additive migration "
+        "0083_grant_worker_authorization_reads.sql"
+    )
+
+
+def test_worker_authorization_reads_are_column_scoped_private_and_upgrade_safe():
+    if not DURABLE_JOB_AUTHORIZATION_READS_MIGRATION.exists():
+        pytest.skip("worker authorization read migration is not present yet")
+    sql = _normalized_sql(
+        DURABLE_JOB_AUTHORIZATION_READS_MIGRATION.read_text(encoding="utf-8")
+    )
+
+    assert "do $$" in sql
+    assert (
+        "if exists (select 1 from pg_roles where rolname = 'album_haven_worker') then"
+        in sql
+    )
+    assert "grant usage on schema app, library to album_haven_worker" in sql
+    expected_grants = {
+        "app.accounts": {"id", "is_active", "disabled_at"},
+        "app.bootstrap_owners": {"account_id", "owner_key"},
+        "library.libraries": {"id", "owner_account_id"},
+        "library.library_memberships": {
+            "library_id",
+            "account_id",
+            "membership_role",
+        },
+        "app.capabilities": {
+            "account_id",
+            "capability_key",
+            "scope_kind",
+            "scope_id",
+            "revoked_at",
+        },
+        "app.request_origins": {
+            "id",
+            "account_id",
+            "client_surface_class",
+            "origin_type",
+        },
+    }
+    for table_name, expected_columns in expected_grants.items():
+        revoke = f"revoke select on table {table_name} from album_haven_worker"
+        assert revoke in sql
+        grant = re.search(
+            rf"grant\s+select\s*\((?P<columns>[^)]+)\)\s+on\s+table\s+"
+            rf"{re.escape(table_name)}\s+to\s+album_haven_worker",
+            sql,
+        )
+        assert grant is not None
+        assert sql.index(revoke) < grant.start()
+        assert {
+            column.strip() for column in grant.group("columns").split(",")
+        } == expected_columns
+        assert not re.search(
+            rf"grant\s+select\s+on\s+table\s+{re.escape(table_name)}\s+"
+            r"to\s+album_haven_worker",
+            sql,
+        )
+
+    for private_column in (
+        "password_hash",
+        "session_token_hash",
+        "token_hash",
+        "origin_key",
+        "root_path",
+        "display_name",
+        "username_display",
+        "name",
+    ):
+        assert not re.search(rf"\b{re.escape(private_column)}\b", sql)
+
+
+def test_durable_job_retention_index_migration_file_exists():
+    assert DURABLE_JOB_RETENTION_INDEX_MIGRATION.is_file(), (
+        "Task 7 requires additive migration "
+        "0084_add_job_transition_retention_index.sql"
+    )
+
+
+def test_durable_job_retention_index_is_ordered_and_does_not_broaden_privileges():
+    if not DURABLE_JOB_RETENTION_INDEX_MIGRATION.exists():
+        pytest.skip("durable job transition retention index migration is not present yet")
+    sql = _normalized_sql(
+        DURABLE_JOB_RETENTION_INDEX_MIGRATION.read_text(encoding="utf-8")
+    )
+
+    assert re.search(
+        r"create index if not exists job_transitions_retention_idx\s+"
+        r"on ops\.job_transitions\s*\(transitioned_at,\s*id\)",
+        sql,
+    )
+    for runtime_role in (
+        "album_haven_app",
+        "album_haven_worker",
+        "album_haven_readonly",
+    ):
+        assert not re.search(rf"\bgrant\b[^;]*\bto\s+{runtime_role}\b", sql)
+    assert not re.search(r"\bgrant\s+delete\b", sql)
+
+
+def scan_job_intents_sql() -> str:
+    assert SCAN_JOB_INTENTS_MIGRATION.is_file(), (
+        "Task 1 requires additive migration "
+        "0085_create_scan_job_intents.sql"
+    )
+    return SCAN_JOB_INTENTS_MIGRATION.read_text(encoding="utf-8")
+
+
+def test_scan_job_intent_migration_creates_private_normalized_domain_records():
+    sql = _normalized_sql(scan_job_intents_sql())
+    tables = (
+        "library.full_scan_intents",
+        "library.full_scan_intent_roots",
+        "library.targeted_reconciliation_intents",
+        "library.targeted_reconciliation_intent_paths",
+        "library.targeted_reconciliation_intent_moves",
+    )
+    for table in tables:
+        assert f"create table if not exists {table}" in sql
+        assert f"revoke all on table {table} from public" in sql
+
+    full_scan = _table_sql(sql, "library.full_scan_intents")
+    for fragment in (
+        "library_id bigint not null references library.libraries(id) on delete restrict",
+        "initiating_account_id bigint not null references app.accounts(id) on delete restrict",
+        "mode varchar(",
+        "force boolean not null",
+        "state varchar(",
+        "progress_current",
+        "progress_total",
+        "committed_inventory_revision bigint",
+        "job_id bigint",
+    ):
+        assert fragment in full_scan
+    assert "'library_settings_update'" in full_scan
+    assert "check (state in (" in full_scan
+
+    roots = _table_sql(sql, "library.full_scan_intent_roots")
+    assert "intent_id bigint not null references library.full_scan_intents(id)" in roots
+    assert "root_id bigint not null references library.library_roots(id) on delete restrict" in roots
+    assert "ordinal" in roots
+
+    paths = _table_sql(sql, "library.targeted_reconciliation_intent_paths")
+    assert "intent_id bigint not null references library.targeted_reconciliation_intents(id)" in paths
+    assert "path_kind varchar(" in paths
+    assert (
+        "path_kind in ('active', 'deleted', 'deleted_subtree', 'preserved_subtree')"
+        in paths
+    )
+    assert "path text not null" in paths
+    assert "ordinal" in paths
+
+    moves = _table_sql(sql, "library.targeted_reconciliation_intent_moves")
+    for fragment in (
+        "source_path text not null",
+        "destination_path text not null",
+        "source_root_id bigint not null references library.library_roots(id) on delete restrict",
+        "destination_root_id bigint not null references library.library_roots(id) on delete restrict",
+        "is_directory boolean not null",
+        "ordinal",
+    ):
+        assert fragment in moves
+
+
+def test_scan_job_intent_migration_indexes_foreign_keys_and_active_full_scan_exclusion():
+    sql = _normalized_sql(scan_job_intents_sql())
+
+    for index_name in (
+        "full_scan_intents_library_id_idx",
+        "full_scan_intents_job_id_idx",
+        "full_scan_intent_roots_root_id_idx",
+        "targeted_reconciliation_intents_library_id_idx",
+        "targeted_reconciliation_intents_job_id_idx",
+        "targeted_reconciliation_intent_paths_intent_id_idx",
+        "targeted_reconciliation_intent_moves_source_root_id_idx",
+        "targeted_reconciliation_intent_moves_destination_root_id_idx",
+    ):
+        assert f"index if not exists {index_name}" in sql
+
+    active_index = re.search(
+        r"create unique index if not exists jobs_one_active_full_scan_per_library_idx\s+"
+        r"on ops\.jobs\s*\(library_id\)\s+where\s+(?P<predicate>[^;]+)",
+        sql,
+    )
+    assert active_index is not None
+    predicate = active_index.group("predicate")
+    assert "kind = 'full_scan'" in predicate
+    assert re.search(r"state\s+in\s*\('queued',\s*'running',\s*'retry_wait'\)", predicate)
+    assert "library_id is not null" in predicate
+
+
+def test_scan_job_intent_migration_uses_narrow_function_grants_for_private_paths():
+    sql = _normalized_sql(scan_job_intents_sql())
+    private_tables = (
+        "library.full_scan_intents",
+        "library.full_scan_intent_roots",
+        "library.targeted_reconciliation_intents",
+        "library.targeted_reconciliation_intent_paths",
+        "library.targeted_reconciliation_intent_moves",
+    )
+    for table in private_tables:
+        for role in ("album_haven_app", "album_haven_worker", "album_haven_readonly"):
+            assert not re.search(
+                rf"grant\s+(?:select|insert|update|delete|truncate|references|trigger|all)"
+                rf"[^;]*on table {re.escape(table)}[^;]*to {role}",
+                sql,
+            )
+
+    producer_functions = (
+        "library.create_full_scan_intent",
+        "library.create_targeted_reconciliation_intent",
+        "library.link_scan_intent_job",
+    )
+    for function in producer_functions:
+        assert f"create or replace function {function}" in sql
+        assert re.search(
+            rf"grant execute on function {re.escape(function)}\([^;]+to album_haven_app",
+            sql,
+        )
+        assert re.search(
+            rf"revoke all on function {re.escape(function)}\([^;]+from public",
+            sql,
+        )
+
+    for loader in (
+        "library.load_claimed_full_scan_intent",
+        "library.load_claimed_targeted_reconciliation_intent",
+    ):
+        assert f"create or replace function {loader}" in sql
+        assert re.search(
+            rf"grant execute on function {re.escape(loader)}\([^;]+to album_haven_worker",
+            sql,
+        )
+        assert not re.search(
+            rf"grant execute on function {re.escape(loader)}\([^;]+to album_haven_(?:app|readonly)",
+            sql,
+        )
+    assert "security definer" in sql
+    assert "set search_path" in sql
+
+
+def test_scan_job_intent_migration_revokes_inherited_table_and_sequence_privileges():
+    sql = _normalized_sql(scan_job_intents_sql())
+    roles = ("album_haven_app", "album_haven_worker", "album_haven_readonly")
+    tables = (
+        "library.full_scan_intents",
+        "library.full_scan_intent_roots",
+        "library.targeted_reconciliation_intents",
+        "library.targeted_reconciliation_intent_paths",
+        "library.targeted_reconciliation_intent_moves",
+    )
+    sequences = (
+        "library.full_scan_intents_id_seq",
+        "library.targeted_reconciliation_intents_id_seq",
+    )
+    table_revokes = re.findall(r"revoke all on table ([^;]+) from ([a-z_]+)", sql)
+    for table in tables:
+        for role in roles:
+            assert any(
+                role == revoked_role and table in revoked_tables
+                for revoked_tables, revoked_role in table_revokes
+            )
+    sequence_revokes = re.findall(
+        r"revoke all on sequence ([^;]+) from ([a-z_]+)", sql
+    )
+    for sequence in sequences:
+        for role in ("public", *roles):
+            assert any(
+                role == revoked_role and sequence in revoked_sequences
+                for revoked_sequences, revoked_role in sequence_revokes
+            )
+
+
+def test_scan_job_intent_migration_gives_targeted_requests_a_stable_producer_identity():
+    sql = _normalized_sql(scan_job_intents_sql())
+    targeted = _table_sql(sql, "library.targeted_reconciliation_intents")
+
+    assert "producer_request_key varchar(" in targeted
+    assert "producer_request_key" in sql
+    assert re.search(
+        r"create unique index if not exists "
+        r"targeted_reconciliation_intents_producer_request_idx\s+"
+        r"on library\.targeted_reconciliation_intents\s*"
+        r"\(library_id,\s*producer_request_key\)",
+        sql,
+    )
+    create_function = sql.split(
+        "create or replace function library.create_targeted_reconciliation_intent",
+        1,
+    )[1].split("create or replace function library.link_scan_intent_job", 1)[0]
+    assert "p_producer_request_key varchar" in create_function
+    assert "on conflict" in create_function
+    assert "producer_request_key" in create_function
+
+
+def test_scan_job_link_function_binds_exact_library_account_and_parameters():
+    sql = _normalized_sql(scan_job_intents_sql())
+    function_sql = sql.split(
+        "create or replace function library.link_scan_intent_job", 1
+    )[1].split(
+        "create or replace function library.load_claimed_targeted_reconciliation_intent",
+        1,
+    )[0]
+
+    full_branch = function_sql.split("if p_kind = 'full_scan' then", 1)[1].split(
+        "elsif p_kind = 'targeted_reconciliation' then", 1
+    )[0]
+    targeted_branch = function_sql.split(
+        "elsif p_kind = 'targeted_reconciliation' then", 1
+    )[1]
+
+    assert re.search(
+        r"job\.library_id\s*=\s*(?:intent|library\.full_scan_intents)\.library_id",
+        full_branch,
+    )
+    assert re.search(
+        r"job\.account_id\s*=\s*"
+        r"(?:intent|library\.full_scan_intents)\.initiating_account_id",
+        full_branch,
+    )
+    assert re.search(
+        r"job\.library_id\s*=\s*"
+        r"(?:intent|library\.targeted_reconciliation_intents)\.library_id",
+        targeted_branch,
+    )
+    assert "job.account_id is null" in targeted_branch
+    assert "job.capability_key is null" in targeted_branch
+    assert "job.request_origin_id is null" in targeted_branch
+    assert re.search(
+        r"job\.parameters\s*=\s*(?:pg_catalog\.)?jsonb_build_object\("
+        r"\s*'intent_id',\s*p_intent_id\s*\)",
+        function_sql,
+    )
+
+
+def test_scan_job_intent_migration_atomically_mirrors_every_job_state():
+    sql = _normalized_sql(scan_job_intents_sql())
+    trigger_function = sql.split(
+        "create or replace function library.sync_scan_intent_job_state()", 1
+    )[1].split("create trigger jobs_sync_scan_intent_state", 1)[0]
+
+    assert "returns trigger" in trigger_function
+    assert "security definer" in trigger_function
+    assert "set search_path = pg_catalog" in trigger_function
+    assert "new.kind not in ('full_scan', 'targeted_reconciliation')" in trigger_function
+    for job_state, intent_state in (
+        ("queued", "accepted"),
+        ("running", "running"),
+        ("retry_wait", "retry_wait"),
+        ("succeeded", "succeeded"),
+        ("canceled", "canceled"),
+    ):
+        assert re.search(
+            rf"when '{job_state}' then '{intent_state}'", trigger_function
+        )
+    assert "else 'failed'" in trigger_function
+    assert "outcome_code" in trigger_function
+    assert "completed_at" in trigger_function
+    assert "outcome_code varchar(128)" in _table_sql(
+        sql, "library.full_scan_intents"
+    )
+    assert "outcome_code varchar(128)" in _table_sql(
+        sql, "library.targeted_reconciliation_intents"
+    )
+    assert re.search(
+        r"create trigger jobs_sync_scan_intent_state\s+"
+        r"after update of state on ops\.jobs",
+        sql,
+    )
+
+
+def test_claimed_scan_checkpoint_is_lease_scoped_and_compare_and_set():
+    sql = _normalized_sql(scan_job_intents_sql())
+    function_sql = sql.split(
+        "create or replace function library.checkpoint_claimed_scan_intent(", 1
+    )[1].split("create or replace function library.repair_orphaned_scan_intents", 1)[0]
+
+    for parameter in (
+        "p_kind varchar",
+        "p_intent_id bigint",
+        "p_job_id bigint",
+        "p_attempt integer",
+        "p_worker_id varchar",
+        "p_lease_token varchar",
+        "p_expected_state varchar",
+        "p_progress_current bigint",
+        "p_progress_total bigint",
+        "p_inventory_revision bigint",
+        "p_now timestamptz",
+    ):
+        assert parameter in function_sql
+    for predicate in (
+        "job.attempt_count = p_attempt",
+        "job.lease_owner = p_worker_id",
+        "job.lease_token = p_lease_token",
+        "job.lease_expires_at > p_now",
+        "intent.state = p_expected_state",
+    ):
+        assert predicate in function_sql
+    assert "job.state = 'running'" in function_sql
+    assert "progress_current" in function_sql
+    assert "progress_total" in function_sql
+    assert "committed_inventory_revision" in function_sql
+    assert "p_progress_current >= intent.progress_current" in function_sql
+    assert "p_progress_total >= intent.progress_total" in function_sql
+    assert "p_inventory_revision >= intent.committed_inventory_revision" in function_sql
+    assert "p_now >= intent.updated_at" in function_sql
+    assert "security definer" in function_sql
+
+
+def test_orphan_scan_intent_repair_is_old_unlinked_accepted_and_bounded():
+    sql = _normalized_sql(scan_job_intents_sql())
+    function_sql = sql.split(
+        "create or replace function library.repair_orphaned_scan_intents(", 1
+    )[1].split("revoke all on function", 1)[0]
+
+    assert "p_now timestamptz" in function_sql
+    assert "p_limit integer" in function_sql
+    assert (
+        re.search(r"p_limit[^;]+between 1 and 1000", function_sql)
+        or ("p_limit < 1" in function_sql and "p_limit > 1000" in function_sql)
+    )
+    assert "job_id is null" in function_sql
+    assert "state = 'accepted'" in function_sql
+    assert re.search(r"accepted_at\s*<=?\s*p_now\s*-\s*interval", function_sql)
+    assert "order by accepted_at, id" in function_sql
+    assert "limit p_limit" in function_sql
+    assert "for update" in function_sql
+    assert "skip locked" in function_sql
+    assert "security definer" in function_sql
+
+
+def test_full_scan_intent_stores_and_link_validates_exact_accepted_authority():
+    sql = _normalized_sql(scan_job_intents_sql())
+    full_scan = _table_sql(sql, "library.full_scan_intents")
+    for column in (
+        "capability_key varchar(128) not null",
+        "request_origin_id bigint not null references app.request_origins(id)",
+        "deployment_mode varchar(128) not null",
+        "client_surface varchar(128) not null",
+    ):
+        assert column in full_scan
+    targeted = _table_sql(sql, "library.targeted_reconciliation_intents")
+    assert "deployment_mode varchar(128) not null" in targeted
+    assert "client_surface varchar(128) not null" in targeted
+
+    link_sql = sql.split(
+        "create or replace function library.link_scan_intent_job", 1
+    )[1].split("create or replace function library.load_claimed", 1)[0]
+    full_branch = link_sql.split("if p_kind = 'full_scan' then", 1)[1].split(
+        "elsif p_kind = 'targeted_reconciliation' then", 1
+    )[0]
+    targeted_branch = link_sql.split(
+        "elsif p_kind = 'targeted_reconciliation' then", 1
+    )[1]
+    assert "job.capability_key = 'library.refresh'" in full_branch
+    for field in (
+        "request_origin_id",
+        "deployment_mode",
+        "client_surface",
+    ):
+        assert re.search(rf"job\.{field}\s*=\s*intent\.{field}", full_branch)
+    for field in ("deployment_mode", "client_surface"):
+        assert re.search(rf"job\.{field}\s*=\s*intent\.{field}", targeted_branch)
+
+
+def targeted_reconciliation_worker_sql() -> str:
+    assert TARGETED_RECONCILIATION_WORKER_MIGRATION.is_file(), (
+        "Task 2 requires migration 0086_grant_worker_targeted_reconciliation.sql"
+    )
+    return TARGETED_RECONCILIATION_WORKER_MIGRATION.read_text(encoding="utf-8")
+
+
+def test_targeted_worker_migration_exposes_only_claim_scoped_functions():
+    sql = _normalized_sql(targeted_reconciliation_worker_sql())
+    scope_function = "library.load_claimed_targeted_reconciliation_scope"
+    fence_function = "library.fence_targeted_reconciliation_publication"
+
+    preparation_function = (
+        "library.load_claimed_targeted_reconciliation_preparation"
+    )
+
+    for function in (scope_function, preparation_function, fence_function):
+        assert f"create or replace function {function}" in sql
+        assert re.search(
+            rf"revoke all on function {re.escape(function)}\([^;]+from public", sql
+        )
+        assert re.search(
+            rf"grant execute on function {re.escape(function)}\([^;]+"
+            r"to album_haven_worker",
+            sql,
+        )
+        assert not re.search(
+            rf"grant execute on function {re.escape(function)}\([^;]+"
+            r"to album_haven_(?:app|readonly)",
+            sql,
+        )
+    assert "security definer" in sql
+    assert "set search_path = pg_catalog" in sql
+    for sensitive_table in (
+        "library.library_roots",
+        "library.libraries",
+        "library.separate_releases",
+        "library.local_track_files",
+        "library.local_tracks",
+        "library.local_albums",
+        "library.local_artists",
+        "app.accounts",
+        "app.capabilities",
+        "app.request_origins",
+    ):
+        assert not re.search(
+            rf"grant\s+(?:select|insert|update|delete|all)[^;]*"
+            rf"on table {re.escape(sensitive_table)}[^;]*to album_haven_worker",
+            sql,
+        )
+    for fragment in (
+        "revoke select (id, is_active, disabled_at) on table app.accounts from album_haven_worker",
+        "revoke select (account_id, owner_key) on table app.bootstrap_owners from album_haven_worker",
+        "revoke select (id, owner_account_id) on table library.libraries from album_haven_worker",
+        "revoke select (library_id, account_id, membership_role) on table library.library_memberships from album_haven_worker",
+        "revoke select (account_id, capability_key, scope_kind, scope_id, revoked_at) on table app.capabilities from album_haven_worker",
+        "revoke select (id, account_id, client_surface_class, origin_type) on table app.request_origins from album_haven_worker",
+    ):
+        assert fragment in sql
+
+
+def test_targeted_worker_preparation_is_lease_fenced_without_private_table_grants():
+    sql = _normalized_sql(targeted_reconciliation_worker_sql())
+    function_sql = sql.split(
+        "create or replace function library.load_claimed_targeted_reconciliation_preparation",
+        1,
+    )[1].split("create or replace function", 1)[0]
+
+    for predicate in (
+        "intent.id = p_intent_id",
+        "intent.library_id = p_library_id",
+        "job.id = p_job_id",
+        "job.attempt_count = p_attempt",
+        "job.lease_owner = p_worker_id",
+        "job.lease_token = p_lease_token",
+        "job.lease_expires_at > p_now",
+    ):
+        assert predicate in function_sql
+    assert "library.separate_releases" in function_sql
+    assert "library.local_track_files" in function_sql
+    assert "existing_memberships" in function_sql
+    assert "event_path.path_kind in ('active', 'preserved_subtree')" in function_sql
+    assert "event_path.path_kind = 'preserved_subtree' as is_subtree" in function_sql
+    assert "move.destination_path" in function_sql
+    assert "library.local_path_key" in function_sql
+    assert "limit 16385" in function_sql
+    assert not re.search(
+        r"grant\s+select[^;]*on table library\.separate_releases[^;]*"
+        r"to album_haven_worker",
+        sql,
+    )
+
+
+def test_targeted_preserved_subtrees_are_private_bounded_and_lease_scoped():
+    intent_sql = _normalized_sql(scan_job_intents_sql())
+    create_function = intent_sql.split(
+        "create or replace function library.create_targeted_reconciliation_intent",
+        1,
+    )[1].split("create or replace function library.link_scan_intent_job", 1)[0]
+    assert "p_preserved_subtrees text[]" in create_function
+    assert "array_length(p_preserved_subtrees, 1), 0) > 4096" in create_function
+    assert "'preserved_subtree'::varchar" in create_function
+    assert "targeted reconciliation preserved subtree scope is invalid" in create_function
+
+    worker_sql = _normalized_sql(targeted_reconciliation_worker_sql())
+    loader = worker_sql.split(
+        "create or replace function library.load_claimed_targeted_reconciliation_intent_v2",
+        1,
+    )[1].split("create or replace function", 1)[0]
+    assert "preserved_subtrees text[]" in loader
+    assert "path.path_kind = 'preserved_subtree'" in loader
+    for predicate in (
+        "job.state = 'running'",
+        "job.lease_owner = p_worker_id",
+        "job.lease_token = p_lease_token",
+        "job.lease_expires_at > now()",
+    ):
+        assert predicate in loader
+
+    publication = worker_sql.split(
+        "create or replace function library.publish_claimed_targeted_reconciliation",
+        1,
+    )[1].split("revoke all on function", 1)[0]
+    assert "authorized_preserved_subtrees text[]" in publication
+    assert "coalesce(authorized_preserved_subtrees, array[]::text[])" in publication
+    assert "library.local_path_key(submitted_files.private_path)" in publication
+
+
+def test_targeted_publication_fence_checks_exact_live_claim_in_mutation_transaction():
+    sql = _normalized_sql(targeted_reconciliation_worker_sql())
+    function_sql = sql.split(
+        "create or replace function library.fence_targeted_reconciliation_publication",
+        1,
+    )[1].split("revoke all on function", 1)[0]
+    for parameter in (
+        "p_intent_id bigint",
+        "p_job_id bigint",
+        "p_attempt integer",
+        "p_worker_id varchar",
+        "p_lease_token varchar",
+        "p_now timestamptz",
+    ):
+        assert parameter in function_sql
+    for predicate in (
+        "job.id = p_job_id",
+        "job.kind = 'targeted_reconciliation'",
+        "job.state = 'running'",
+        "job.attempt_count = p_attempt",
+        "job.lease_owner = p_worker_id",
+        "job.lease_token = p_lease_token",
+        "job.lease_expires_at > p_now",
+        "intent.id = p_intent_id",
+        "intent.job_id = p_job_id",
+        "intent.state = 'running'",
+    ):
+        assert predicate in function_sql
+    assert "publication_attempt" in function_sql
+    assert "return" in function_sql
+
+
+def test_targeted_publication_reuses_one_unseparated_semantic_album_identity():
+    sql = _normalized_sql(targeted_reconciliation_worker_sql())
+    function_sql = sql.split(
+        "create or replace function library.publish_claimed_targeted_reconciliation",
+        1,
+    )[1].split("revoke all on function", 1)[0]
+
+    assert "create temporary table targeted_album_key_map" in function_sql
+    assert "input_album_key text primary key" in function_sql
+    assert "target_album_key text not null" in function_sql
+    assert "existing.album_key = input.album_key" in function_sql
+    assert "not exists ( select 1 from library.separate_releases" in function_sql
+    assert "join pg_temp.targeted_album_key_map as album_map" in function_sql
+    assert "album.album_key = album_map.target_album_key" in function_sql
+
+
+def test_claimed_targeted_scope_revalidates_library_roots_and_watcher_health():
+    sql = _normalized_sql(targeted_reconciliation_worker_sql())
+    function_sql = sql.split(
+        "create or replace function library.load_claimed_targeted_reconciliation_scope",
+        1,
+    )[1].split("create or replace function", 1)[0]
+    assert "library.library_roots" in function_sql
+    assert "is_active is true" in function_sql
+    assert "library_id" in function_sql
+    assert "library_watch_health" in function_sql
+    for predicate in (
+        "job.state = 'running'",
+        "job.attempt_count = p_attempt",
+        "job.lease_owner = p_worker_id",
+        "job.lease_token = p_lease_token",
+        "job.lease_expires_at > p_now",
+    ):
+        assert predicate in function_sql
+        assert predicate in function_sql
+
+
+def test_full_scan_lifecycle_migration_returns_atomic_acceptance_disposition():
+    sql = _normalized_sql(FULL_SCAN_LIFECYCLE_MIGRATION.read_text(encoding="utf-8"))
+
+    assert "create or replace function library.create_full_scan_intent_v2(" in sql
+    assert "returns table (intent_id bigint, job_id bigint, created boolean)" in sql
+    assert "from library.create_full_scan_intent(" in sql
+    assert "accepted.job_id is null" in sql
+    assert "grant execute on function library.create_full_scan_intent_v2(" in sql
+
+
+def test_full_scan_lifecycle_cancellation_is_domain_linked_and_progress_preserving():
+    sql = _normalized_sql(FULL_SCAN_LIFECYCLE_MIGRATION.read_text(encoding="utf-8"))
+    function_sql = sql.split(
+        "create or replace function library.request_active_full_scan_cancellation(",
+        1,
+    )[1].split("revoke all on function", 1)[0]
+
+    assert "security definer" in function_sql
+    assert "from library.full_scan_intents as intent" in function_sql
+    assert "join ops.jobs as job on job.id = intent.job_id" in function_sql
+    assert "job.subject_kind = 'full_scan_intent'" in function_sql
+    assert "job.subject_ref = intent.id::text" in function_sql
+    assert "job.parameters = jsonb_build_object('intent_id', intent.id)" in function_sql
+    assert "cancel_requested_by_account_id = p_actor_account_id" in function_sql
+    assert "job.account_id = p_actor_account_id" not in function_sql
+    assert "progress_current" not in function_sql
+    assert "progress_total" not in function_sql
+    assert (
+        "grant execute on function library.request_active_full_scan_cancellation("
+        in sql
+    )
+    worker_privileges = sql.split(
+        "rolname = 'album_haven_worker'", 1
+    )[1].split("rolname = 'album_haven_readonly'", 1)[0]
+    assert "grant execute" not in worker_privileges
+
+
+def test_scan_publications_share_one_inventory_serialization_lock():
+    targeted_sql = _normalized_sql(
+        TARGETED_RECONCILIATION_WORKER_MIGRATION.read_text(encoding="utf-8")
+    )
+    full_sql = _normalized_sql(
+        FULL_SCAN_WORKER_MIGRATION.read_text(encoding="utf-8")
+    )
+    lock = "pg_advisory_xact_lock( hashtext('album-haven:local-inventory-publication') )"
+
+    assert lock in targeted_sql
+    assert lock in full_sql
+
+
+def test_obsolete_revision_only_full_scan_fence_is_not_granted_to_worker():
+    sql = _normalized_sql(
+        FULL_SCAN_WORKER_MIGRATION.read_text(encoding="utf-8")
+    )
+    signature = (
+        "library.fence_full_scan_publication(bigint, bigint, integer, varchar, "
+        "varchar, bigint, timestamptz)"
+    )
+
+    assert f"revoke all on function {signature} from public" in sql
+    assert f"revoke execute on function {signature} from album_haven_worker" in sql
+    assert f"grant execute on function {signature} to album_haven_worker" not in sql
+
+
+def test_full_scan_publication_atomically_enqueues_revision_keyed_cover_follow_up():
+    sql = _normalized_sql(
+        FULL_SCAN_WORKER_MIGRATION.read_text(encoding="utf-8")
+    )
+
+    assert "'post_scan_cover_refresh'" in sql
+    assert "'inventory_revision'" in sql
+    assert "'revision-' || committed_revision::text" in sql
+    assert (
+        "'post-scan-cover-refresh:' || claimed_library_id::text || ':' || "
+        "committed_revision::text"
+    ) in sql
+    assert "resource_revision" in sql
+    assert "on conflict do nothing" in sql
+    assert "post-scan cover follow-up identity conflict" in sql

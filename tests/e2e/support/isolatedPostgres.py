@@ -587,6 +587,24 @@ def grant_runtime_role_privileges(
           end loop;
 
           for privilege in
+            select column_privilege.privilege_type,
+                   column_privilege.table_schema,
+                   column_privilege.table_name,
+                   column_privilege.column_name
+              from information_schema.column_privileges as column_privilege
+             where column_privilege.grantee = 'album_haven_app'
+          loop
+            execute format(
+              'grant %s (%I) on table %I.%I to %I',
+              privilege.privilege_type,
+              privilege.column_name,
+              privilege.table_schema,
+              privilege.table_name,
+              {runtime_role}
+            );
+          end loop;
+
+          for privilege in
             select allowed.privilege_type, relation.oid::regclass as object_name
             from pg_catalog.pg_class relation
             join pg_catalog.pg_namespace namespace on namespace.oid=relation.relnamespace

@@ -3650,3 +3650,183 @@ def test_successful_remote_save_publishes_fetch_and_persistence_phase_metrics(co
     assert final_snapshot["phase_timings_ms"]["scoring"] == 4.5
     assert final_snapshot["phase_timings_ms"]["fetch"] > 0
     assert final_snapshot["phase_timings_ms"]["persistence"] > 1.5
+
+
+def test_claimed_remote_cover_save_checkpoints_local_promotion_before_publication(
+    config, logger, monkeypatch, tmp_path: Path
+):
+    album_root = tmp_path / "Artist" / "Album"
+    album_root.mkdir(parents=True)
+    track_path = album_root / "01.flac"
+    track_path.write_bytes(b"track")
+    cover_path = album_root / "cover.jpg"
+    scope = SimpleNamespace(
+        library_root_path=str(album_root),
+        track_paths=(str(track_path),),
+        selected_candidate={
+            "id": "candidate-1",
+            "url": "https://images.invalid/cover.jpg",
+            "art_kind": "cover",
+        },
+    )
+    promotion = SimpleNamespace(
+        cover_path=cover_path,
+        promoted_cover_revision="revision-1",
+    )
+    monkeypatch.setattr(
+        cover_lookup_runtime,
+        "fetch_remote_cover_bytes",
+        lambda *_args, **_kwargs: (b"remote-image", "image/jpeg"),
+    )
+    monkeypatch.setattr(
+        cover_lookup_runtime,
+        "begin_remote_cover_promotion",
+        lambda *_args, **_kwargs: promotion,
+    )
+    completed = []
+    monkeypatch.setattr(
+        cover_lookup_runtime,
+        "complete_local_image_promotion",
+        lambda value: completed.append(value),
+    )
+    checkpoints = []
+    revision = 0
+
+    def checkpoint(name, **kwargs):
+        nonlocal revision
+        revision += 1
+        checkpoints.append((name, kwargs))
+        return revision
+
+    persisted = []
+
+    def persist_selection(**kwargs):
+        nonlocal revision
+        revision += 1
+        persisted.append(kwargs)
+        return revision
+
+    published = []
+
+    result = cover_lookup_runtime.run_claimed_cover_remote_save(
+        scope=scope,
+        config=config,
+        logger=logger,
+        should_cancel=lambda: False,
+        checkpoint=checkpoint,
+        persist_selection=persist_selection,
+        publish=lambda **kwargs: published.append(kwargs) is None,
+    )
+
+    assert result == {"status": "succeeded"}
+    assert [name for name, _kwargs in checkpoints] == [
+        "download_started",
+        "artifact_written",
+        "promotion_completed",
+    ]
+    assert persisted[0]["selected_cover_path"] == str(cover_path)
+    assert completed == [promotion]
+    assert published[0]["linked_remote"] is False
+
+
+def test_claimed_remote_cover_save_rolls_back_exact_promotion_when_artifact_checkpoint_is_lost(
+    config, logger, monkeypatch, tmp_path: Path
+):
+    album_root = tmp_path / "Artist" / "Album"
+    album_root.mkdir(parents=True)
+    track_path = album_root / "01.flac"
+    track_path.write_bytes(b"track")
+    promotion = SimpleNamespace(
+        cover_path=album_root / "cover.jpg",
+        promoted_cover_revision="revision-1",
+    )
+    monkeypatch.setattr(
+        cover_lookup_runtime,
+        "fetch_remote_cover_bytes",
+        lambda *_args, **_kwargs: (b"remote-image", "image/jpeg"),
+    )
+    monkeypatch.setattr(
+        cover_lookup_runtime,
+        "begin_remote_cover_promotion",
+        lambda *_args, **_kwargs: promotion,
+    )
+    rolled_back = []
+    monkeypatch.setattr(
+        cover_lookup_runtime,
+        "rollback_local_image_promotion",
+        lambda value: rolled_back.append(value),
+    )
+    calls = 0
+
+    def checkpoint(_name, **_kwargs):
+        nonlocal calls
+        calls += 1
+        return 1 if calls == 1 else None
+
+    result = cover_lookup_runtime.run_claimed_cover_remote_save(
+        scope=SimpleNamespace(
+            library_root_path=str(album_root),
+            track_paths=(str(track_path),),
+            selected_candidate={
+                "id": "candidate-1",
+                "url": "https://images.invalid/cover.jpg",
+            },
+        ),
+        config=config,
+        logger=logger,
+        should_cancel=lambda: False,
+        checkpoint=checkpoint,
+        persist_selection=lambda **_kwargs: pytest.fail("selection must not run"),
+        publish=lambda **_kwargs: pytest.fail("publication must not run"),
+    )
+
+    assert result["status"] == "ambiguous"
+    assert rolled_back == [promotion]
+
+
+def test_claimed_display_only_remote_cover_commits_link_without_fetch(
+    config, logger, monkeypatch, tmp_path: Path
+):
+    album_root = tmp_path / "Artist" / "Album"
+    album_root.mkdir(parents=True)
+    track_path = album_root / "01.flac"
+    track_path.write_bytes(b"track")
+    monkeypatch.setattr(
+        cover_lookup_runtime,
+        "fetch_remote_cover_bytes",
+        lambda *_args, **_kwargs: pytest.fail("display-only art must not be fetched"),
+    )
+    revision = 0
+    persisted = []
+
+    def next_revision(*_args, **_kwargs):
+        nonlocal revision
+        revision += 1
+        return revision
+
+    def persist(**kwargs):
+        persisted.append(kwargs)
+        return next_revision()
+
+    result = cover_lookup_runtime.run_claimed_cover_remote_save(
+        scope=SimpleNamespace(
+            library_root_path=str(album_root),
+            track_paths=(str(track_path),),
+            selected_candidate={
+                "id": "candidate-linked",
+                "url": "https://open.spotify.invalid/image",
+                "source": "spotify",
+                "display_only": True,
+            },
+        ),
+        config=config,
+        logger=logger,
+        should_cancel=lambda: False,
+        checkpoint=next_revision,
+        persist_selection=persist,
+        publish=lambda **_kwargs: True,
+    )
+
+    assert result == {"status": "succeeded"}
+    assert persisted[0]["linked_remote"] is True
+    assert persisted[0]["selected_cover_path"] is None

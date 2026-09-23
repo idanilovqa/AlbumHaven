@@ -150,6 +150,24 @@ test('scan database configuration preflight fails before launch when dedicated U
   );
 });
 
+test('scan database configuration preflight requires a dedicated worker URL', () => {
+  const scanTargets = _private.listGroupedPerformanceTargets('scan');
+
+  assert.throws(
+    () => _private.assertScanPerformanceDatabaseConfiguration(scanTargets, {
+      ALBUM_HAVEN_SCAN_PERFORMANCE_SETUP_DATABASE_URL:
+        'postgresql://album_haven_migrator@localhost:5432/album_haven_scan_e2e',
+      ALBUM_HAVEN_SCAN_PERFORMANCE_DATABASE_URL:
+        'postgresql://album_haven_app@localhost:5432/album_haven_scan_e2e',
+    }),
+    (error) => {
+      assert.match(error.message, /ALBUM_HAVEN_WORKER_DATABASE_URL/);
+      assert.match(error.message, /album_haven_worker/);
+      return true;
+    },
+  );
+});
+
 test('scan database configuration preflight ignores target sets without scan benchmarks', () => {
   assert.doesNotThrow(() => {
     _private.assertScanPerformanceDatabaseConfiguration(
@@ -172,6 +190,8 @@ test('scan database configuration preflight rejects core and non-isolated databa
         ALBUM_HAVEN_SCAN_PERFORMANCE_SETUP_DATABASE_URL:
           `postgresql://album_haven_migrator@localhost:5432/${databaseName}`,
         ALBUM_HAVEN_SCAN_PERFORMANCE_DATABASE_URL: runtimeUrl,
+        ALBUM_HAVEN_WORKER_DATABASE_URL:
+          'postgresql://album_haven_worker@localhost:5432/album_haven_scan_e2e',
       }),
       expectedMessage,
     );
@@ -187,6 +207,8 @@ test('scan database configuration preflight requires both credentials to target 
         'postgresql://album_haven_migrator@localhost:5432/album_haven_scan_e2e',
       ALBUM_HAVEN_SCAN_PERFORMANCE_DATABASE_URL:
         'postgresql://album_haven_app@localhost:5432/album_haven_other_scan_e2e',
+      ALBUM_HAVEN_WORKER_DATABASE_URL:
+        'postgresql://album_haven_worker@localhost:5432/album_haven_scan_e2e',
     }),
     /must target the same isolated database/,
   );
@@ -201,6 +223,8 @@ test('scan database configuration preflight rejects the setup role as the runtim
         'postgresql://album_haven_migrator@localhost:5432/album_haven_scan_e2e',
       ALBUM_HAVEN_SCAN_PERFORMANCE_DATABASE_URL:
         'postgresql://album_haven_migrator@localhost:5432/album_haven_scan_e2e',
+      ALBUM_HAVEN_WORKER_DATABASE_URL:
+        'postgresql://album_haven_worker@localhost:5432/album_haven_scan_e2e',
     }),
     /album_haven_app/,
   );
@@ -215,6 +239,8 @@ test('scan database configuration preflight requires documented least-privilege 
         'postgresql://postgres@localhost:5432/album_haven_scan_e2e',
       ALBUM_HAVEN_SCAN_PERFORMANCE_DATABASE_URL:
         'postgresql://runtime@localhost:5432/album_haven_scan_e2e',
+      ALBUM_HAVEN_WORKER_DATABASE_URL:
+        'postgresql://album_haven_worker@localhost:5432/album_haven_scan_e2e',
     }),
     /album_haven_migrator/,
   );
@@ -227,6 +253,8 @@ test('configured suite stops before Playwright when read-only scan connectivity 
       'postgresql://album_haven_migrator@localhost:5432/album_haven_scan_e2e',
     ALBUM_HAVEN_SCAN_PERFORMANCE_DATABASE_URL:
       'postgresql://album_haven_app@localhost:5432/album_haven_scan_e2e',
+    ALBUM_HAVEN_WORKER_DATABASE_URL:
+      'postgresql://album_haven_worker@localhost:5432/album_haven_scan_e2e',
   };
   const calls = [];
 
@@ -276,6 +304,7 @@ test('scan database configuration preflight honors dotenv values with process en
     [
       'ALBUM_HAVEN_SCAN_PERFORMANCE_SETUP_DATABASE_URL=postgresql://album_haven_migrator@localhost:5432/album_haven_scan_e2e',
       'ALBUM_HAVEN_SCAN_PERFORMANCE_DATABASE_URL=postgresql://dotenv_app@localhost:5432/album_haven_scan_e2e',
+      'ALBUM_HAVEN_WORKER_DATABASE_URL=postgresql://album_haven_worker@localhost:5432/album_haven_scan_e2e',
       '',
     ].join('\n'),
     'utf8',

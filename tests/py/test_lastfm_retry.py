@@ -112,48 +112,6 @@ def test_retry_pending_lastfm_scrobbles_keeps_failed_entries_queued(monkeypatch)
     assert summaries == [summary]
 
 
-def test_retry_worker_does_not_branch_on_testing_config(monkeypatch):
-    from music_app.services import lastfm_retry
-
-    starts = []
-
-    class FakeEvent:
-        def __init__(self):
-            self._set = False
-
-        def is_set(self):
-            return self._set
-
-        def set(self):
-            self._set = True
-
-    class FakeThread:
-        def __init__(self, **kwargs):
-            self.kwargs = kwargs
-
-        def start(self):
-            starts.append(self.kwargs["name"])
-
-        def is_alive(self):
-            return False
-
-    monkeypatch.setattr(lastfm_retry, "_WORKER_THREAD", None)
-    monkeypatch.setattr(lastfm_retry, "_WORKER_APP_KEY", "")
-    monkeypatch.setattr(lastfm_retry, "_WORKER_STOP_EVENT", None)
-    monkeypatch.setattr(lastfm_retry.threading, "Event", FakeEvent)
-    monkeypatch.setattr(lastfm_retry.threading, "Thread", FakeThread)
-    app = SimpleNamespace(
-        config={"TESTING": True, "DATA_DIR": "test-runtime"},
-        logger=SimpleNamespace(),
-    )
-
-    lastfm_retry.start_lastfm_retry_worker(app)
-
-    assert starts == ["albumhaven-lastfm-retry"]
-    assert lastfm_retry._WORKER_APP_KEY == "test-runtime"
-    assert lastfm_retry.stop_lastfm_retry_worker(app) is True
-
-
 def test_pending_scrobble_permanent_provider_error_is_not_requeued(monkeypatch):
     from music_app.services import lastfm_sync_bridge
     from music_app.services.lastfm import LastfmError
@@ -919,3 +877,15 @@ def test_reauthentication_required_retry_waits_for_successful_reconnect(monkeypa
     assert retried == {"attempted": True, "succeeded": True, "failed": False}
     assert len(calls) == 1
     assert updates[0]["scrobbled"] is True
+
+
+def test_process_local_retry_worker_remains_retired():
+    from music_app.services import lastfm_retry
+
+    with pytest.raises(
+        RuntimeError,
+        match="process-local Last.fm retry daemon has been retired",
+    ):
+        lastfm_retry.start_lastfm_retry_worker(object())
+
+    assert lastfm_retry.stop_lastfm_retry_worker() is False

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Mapping
 from concurrent.futures import TimeoutError as FutureTimeoutError
+from contextvars import ContextVar
 from datetime import datetime, timezone
 import inspect
 from types import MethodType
@@ -9,6 +10,7 @@ import os
 from pathlib import Path
 from threading import Event, Lock
 import time
+import uuid
 
 from music_app.services import cover_provider_matching
 from music_app.services.album_cover_candidate_publisher import AlbumCoverCandidatePublisher
@@ -64,6 +66,9 @@ _COVER_LOOKUP_BANDCAMP_EXECUTOR = create_daemon_executor(
 )
 _CANDIDATE_LOOKUP_JOB_CONTRACT = build_cover_lookup_job_contract("candidate_lookup")
 _RUNTIME_PHASE_NAMES = ("discovery", "fetch", "scoring", "persistence")
+_CLAIMED_LOOKUP_PUBLISHER: ContextVar[Callable[..., bool] | None] = ContextVar(
+    "claimed_cover_lookup_publisher", default=None
+)
 
 
 def _new_runtime_phase_metrics() -> tuple[dict[str, float], dict[str, int]]:
@@ -134,7 +139,7 @@ def _publish_candidate_runtime_phase_metrics(
     timings: dict[str, float],
     counts: dict[str, int],
 ) -> None:
-    if not cover_lookup_result(task_id):
+    if _CLAIMED_LOOKUP_PUBLISHER.get() is None and not cover_lookup_result(task_id):
         return
     _update_candidate_lookup_task(
         task_id,
@@ -167,6 +172,13 @@ def _update_candidate_lookup_task(
 ) -> None:
     if "possible_matches" in changes:
         changes["candidate_updated_at"] = datetime.now(timezone.utc).isoformat()
+    claimed_publisher = _CLAIMED_LOOKUP_PUBLISHER.get()
+    if claimed_publisher is not None:
+        claimed_publisher(
+            job_contract=_CANDIDATE_LOOKUP_JOB_CONTRACT,
+            **changes,
+        )
+        return
     update_cover_lookup_task(
         task_id,
         config=config,
@@ -278,6 +290,105 @@ def queue_cover_lookup_save_remote_task(
     register_cover_lookup_future(task_id, future)
 
 
+def run_claimed_cover_remote_save(
+    *,
+    scope,
+    config: Mapping[str, object],
+    logger,
+    should_cancel: Callable[[], bool],
+    checkpoint: Callable[..., int | None],
+    persist_selection: Callable[..., int | None],
+    publish: Callable[..., bool],
+) -> dict[str, object]:
+    """Execute one claimed remote selection with conservative crash recovery."""
+
+    del logger
+    album_root = Path(scope.library_root_path)
+    track_paths = {str(path) for path in scope.track_paths}
+    try:
+        common_parent = Path(os.path.commonpath([str(Path(path).parent) for path in track_paths]))
+    except (ValueError, TypeError):
+        return {"status": "failed", "reason_code": "album_scope_invalid"}
+    if not track_paths or common_parent.resolve(strict=False) != album_root.resolve(strict=False):
+        return {"status": "failed", "reason_code": "album_scope_invalid"}
+    selected_image = selected_remote_image_from_lookup_match(
+        dict(scope.selected_candidate)
+    )
+    if should_cancel():
+        return {"status": "canceled", "reason_code": "canceled_before_download"}
+
+    if selected_image.display_only:
+        revision = checkpoint("artifact_written")
+        if revision is None:
+            return {"status": "ambiguous", "reason_code": "artifact_checkpoint_lost"}
+        revision = persist_selection(
+            expected_checkpoint_revision=revision,
+            selected_cover_path=None,
+            selected_cover_revision=None,
+            linked_remote=True,
+        )
+        if revision is None:
+            return {"status": "ambiguous", "reason_code": "selection_commit_uncertain"}
+        revision = checkpoint("promotion_completed")
+        if revision is None:
+            return {"status": "ambiguous", "reason_code": "promotion_checkpoint_lost"}
+        if not publish(
+            expected_checkpoint_revision=revision,
+            selected_cover_path=None,
+            linked_remote=True,
+        ):
+            return {"status": "ambiguous", "reason_code": "publication_uncertain"}
+        return {"status": "succeeded"}
+
+    revision = checkpoint("download_started")
+    if revision is None:
+        return {"status": "ambiguous", "reason_code": "download_checkpoint_lost"}
+    if should_cancel():
+        return {"status": "canceled", "reason_code": "canceled_before_fetch"}
+    raw_bytes, _mime_type = fetch_remote_cover_bytes(
+        selected_image.url,
+        config=config,
+    )
+    if not raw_bytes:
+        return {"status": "failed", "reason_code": "download_failed"}
+    promotion = begin_remote_cover_promotion(
+        album_root,
+        raw_bytes,
+        serialize_selection=True,
+    )
+    if promotion is None:
+        return {"status": "failed", "reason_code": "image_validation_failed"}
+    artifact_revision = str(promotion.promoted_cover_revision or "").strip()
+    revision = checkpoint(
+        "artifact_written",
+        artifact_key=uuid.uuid4(),
+        cover_revision=artifact_revision,
+    )
+    if revision is None:
+        rollback_local_image_promotion(promotion)
+        return {"status": "ambiguous", "reason_code": "artifact_checkpoint_lost"}
+    revision = persist_selection(
+        expected_checkpoint_revision=revision,
+        selected_cover_path=str(promotion.cover_path),
+        selected_cover_revision=artifact_revision,
+        linked_remote=False,
+    )
+    if revision is None:
+        complete_local_image_promotion(promotion)
+        return {"status": "ambiguous", "reason_code": "selection_commit_uncertain"}
+    complete_local_image_promotion(promotion)
+    revision = checkpoint("promotion_completed")
+    if revision is None:
+        return {"status": "ambiguous", "reason_code": "promotion_checkpoint_lost"}
+    if not publish(
+        expected_checkpoint_revision=revision,
+        selected_cover_path=str(promotion.cover_path),
+        linked_remote=False,
+    ):
+        return {"status": "ambiguous", "reason_code": "publication_uncertain"}
+    return {"status": "succeeded"}
+
+
 def _run_cover_lookup_job(runtime_job: CoverLookupRuntimeJob) -> None:
     provider_deadline_at = build_cover_lookup_provider_deadline_at(runtime_job.config)
     _run_cover_lookup_task(
@@ -351,7 +462,59 @@ def _terminalize_canceled_cover_lookup_task(
             candidate_publisher.fail()
         except Exception:
             pass
-    finalize_cover_lookup_task_canceled(task_id, config=config)
+    claimed_publisher = _CLAIMED_LOOKUP_PUBLISHER.get()
+    if claimed_publisher is not None:
+        claimed_publisher(
+            cancel_requested=True,
+            status="canceled",
+            progress=100,
+            progress_label="Canceled",
+            finished_at=datetime.now(timezone.utc).isoformat(),
+            message="Cover art lookup canceled.",
+            job_contract=_CANDIDATE_LOOKUP_JOB_CONTRACT,
+        )
+    else:
+        finalize_cover_lookup_task_canceled(task_id, config=config)
+
+
+class _ClaimedLookupCancelSignal:
+    def __init__(self, should_cancel: Callable[[], bool]) -> None:
+        self._should_cancel = should_cancel
+
+    def is_set(self) -> bool:
+        return bool(self._should_cancel())
+
+
+def run_claimed_cover_lookup(
+    *,
+    task_id: str,
+    config: Mapping[str, object],
+    logger: object,
+    user_agent: str,
+    album: dict[str, object],
+    track_paths: set[str],
+    manual_urls: list[str],
+    provider_deadline_at: float,
+    should_cancel: Callable[[], bool],
+    publish: Callable[..., bool],
+) -> None:
+    """Run the existing provider pipeline inside one durable claim boundary."""
+
+    token = _CLAIMED_LOOKUP_PUBLISHER.set(publish)
+    try:
+        _run_cover_lookup_task(
+            task_id,
+            config,
+            logger,
+            user_agent,
+            album,
+            track_paths,
+            _ClaimedLookupCancelSignal(should_cancel),
+            manual_urls,
+            provider_deadline_at=provider_deadline_at,
+        )
+    finally:
+        _CLAIMED_LOOKUP_PUBLISHER.reset(token)
 
 
 def _run_provider_call_until_deadline(
@@ -432,9 +595,23 @@ def _run_cover_lookup_task(
     candidate_publisher = None
     candidate_snapshot_published = False
     candidate_snapshot_diagnostic = ""
+    candidate_repository_factory = config.get(
+        "COVER_CANDIDATE_SNAPSHOT_REPOSITORY_FACTORY"
+    )
+    candidate_persistence_required = bool(
+        config.get("COVER_CANDIDATE_SNAPSHOT_PERSISTENCE_REQUIRED")
+    )
     try:
-        repository = AlbumCoverCandidateSnapshotRepository(config)
         album_id = int(album.get("id") or 0)
+        repository = (
+            candidate_repository_factory(
+                album_id=album_id,
+                search_generation=task_id,
+                search_kind="manual",
+            )
+            if callable(candidate_repository_factory)
+            else AlbumCoverCandidateSnapshotRepository(config)
+        )
         if album_id <= 0:
             album_id = int(
                 repository.resolve_album_id_for_track_paths(
@@ -450,6 +627,8 @@ def _run_cover_lookup_task(
                 search_kind="manual",
             )
     except Exception:
+        if candidate_persistence_required:
+            raise
         candidate_publisher = None
         candidate_snapshot_diagnostic = "durable_candidate_persistence_failed"
 
@@ -459,10 +638,13 @@ def _run_cover_lookup_task(
         if candidate_publisher is None or not candidates:
             return
         try:
-            candidate_snapshot_published = bool(
-                candidate_publisher.publish_candidates(candidates)
-            ) or candidate_snapshot_published
+            accepted = bool(candidate_publisher.publish_candidates(candidates))
+            if candidate_persistence_required and not accepted:
+                raise RuntimeError("candidate snapshot publication lost its claim")
+            candidate_snapshot_published = accepted or candidate_snapshot_published
         except Exception:
+            if candidate_persistence_required:
+                raise
             candidate_publisher = None
             candidate_snapshot_diagnostic = "durable_candidate_persistence_failed"
 
@@ -901,8 +1083,12 @@ def _run_cover_lookup_task(
         caa_empty_notice = not archive_candidates
         if candidate_publisher is not None and candidate_snapshot_published:
             try:
-                candidate_publisher.complete()
+                completed = bool(candidate_publisher.complete())
+                if candidate_persistence_required and not completed:
+                    raise RuntimeError("candidate snapshot completion lost its claim")
             except Exception:
+                if candidate_persistence_required:
+                    raise
                 candidate_snapshot_diagnostic = "durable_candidate_persistence_failed"
         phase_started = time.perf_counter()
         _update_candidate_lookup_task(
@@ -945,7 +1131,11 @@ def _run_cover_lookup_task(
             task_id=task_id,
             artist=str(album.get("album_artist") or ""),
             album=str(album.get("name") or album.get("album") or ""),
-            error=str(exc),
+            error=(
+                type(exc).__name__
+                if _CLAIMED_LOOKUP_PUBLISHER.get() is not None
+                else str(exc)
+            ),
         )
         phase_started = time.perf_counter()
         _update_candidate_lookup_task(

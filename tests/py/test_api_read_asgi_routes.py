@@ -15,6 +15,8 @@ from tests.py.asgi_testing import collect_route_paths as _collect_route_paths
 from tests.py.asgi_testing import run_asgi_request as _run_asgi_request
 from tests.py.asgi_testing import runtime_app_from_asgi_app
 
+from music_app.services.current_actor import ActorState, CapabilityGrant, CurrentActor
+
 
 @pytest.fixture
 def app(tmp_path, monkeypatch):
@@ -62,6 +64,20 @@ def test_asgi_status_route_preserves_current_payload_shape(app):
     assert status == 200
     assert headers["content-type"].startswith("application/json")
     payload = _decode_json(body)
+    assert payload["worker_status"] == "worker_unavailable"
+    assert payload["job_status"] == {
+        "worker_status": "worker_unavailable",
+        "worker": None,
+        "jobs": {
+            "queued_count": 0,
+            "running_count": 0,
+            "retry_count": 0,
+            "failed_count": 0,
+            "ambiguous_count": 0,
+            "oldest_queue_age_seconds": 0,
+            "claim_lag_seconds": 0,
+        },
+    }
     assert payload["scan_in_progress"] is False
     assert payload["scan_percent"] == 0
     assert payload["scan_mode"] == "idle"
@@ -71,6 +87,298 @@ def test_asgi_status_route_preserves_current_payload_shape(app):
     assert payload["album_total"] == 0
     assert payload["last_scan_display"] == "Never"
     assert payload["log_history_revision"] == ""
+
+
+def test_asgi_status_syncs_worker_committed_inventory_revision(monkeypatch, app):
+    from music_app.routes import api_read_asgi_routes
+
+    calls = []
+
+    def sync(library_state, config):
+        calls.append((library_state, config))
+        library_state["inventory_mutation_revision"] = 27
+        return 27
+
+    monkeypatch.setattr(
+        api_read_asgi_routes, "sync_durable_inventory_revision", sync
+    )
+    asgi_app = _make_asgi_app()
+
+    status, _headers, body = _run_asgi_request(asgi_app, "GET", "/status")
+
+    assert status == 200
+    assert _decode_json(body)["inventory_mutation_revision"] == 27
+    assert len(calls) == 1
+
+
+def test_authenticated_status_keeps_private_current_path_out_of_job_projection():
+    from music_app.routes import api_read_asgi_routes
+
+    private_path = "C:/Users/private/Music/Artist/Album/01.flac"
+    payload = api_read_asgi_routes._build_status_payload_from_state(
+        {
+            "scan_in_progress": True,
+            "scan_current_path": private_path,
+            "scan_processed": 1,
+            "scan_total": 2,
+        }
+    )
+
+    assert payload["scan_current_path"] == private_path
+    assert "job_status" not in payload
+    assert "worker_status" not in payload
+
+
+def test_request_scan_browse_state_loads_private_durable_preview(monkeypatch):
+    from music_app.routes import api_read_asgi_routes
+
+    evaluation = SimpleNamespace(audit=SimpleNamespace(library_id=7))
+    preview = {
+        "file_cache": {"private-track": {"artist": "Artist"}},
+        "separate_release_keys": ("release-a",),
+    }
+    repository = SimpleNamespace(
+        load_authorized_full_scan_preview=lambda **kwargs: (
+            preview
+            if kwargs == {"policy_evaluation": evaluation, "library_id": 7}
+            else None
+        )
+    )
+    request = SimpleNamespace(
+        app=SimpleNamespace(
+            state=SimpleNamespace(
+                library_state={"albums": [], "file_cache": {}},
+                scan_job_repository=repository,
+            )
+        ),
+        state=SimpleNamespace(policy_evaluation=evaluation),
+    )
+    projected = {"scan_in_progress": True, "albums": ["partial"]}
+    monkeypatch.setattr(
+        api_read_asgi_routes,
+        "project_durable_full_scan_preview",
+        lambda library_state, loaded_preview: (
+            projected
+            if library_state == {"albums": [], "file_cache": {}}
+            and loaded_preview is preview
+            else {}
+        ),
+    )
+
+    assert api_read_asgi_routes._request_scan_browse_state(request) is projected
+
+
+class _ActorResolver:
+    def __init__(self, actor):
+        self.actor = actor
+
+    def resolve(self, _raw_token):
+        return self.actor
+
+
+class _JobStatusService:
+    def __init__(self, *, worker_status="worker_ready", fail=False):
+        self.worker_status = worker_status
+        self.fail = fail
+        self.public_calls = []
+        self.operator_calls = []
+
+    def public_health(self, now):
+        self.public_calls.append(now)
+        if self.fail:
+            raise RuntimeError("postgresql://user:password@private-host/jobs")
+        return {"status": "ok", "worker_status": self.worker_status}
+
+    def operator_status(self, now):
+        self.operator_calls.append(now)
+        if self.fail:
+            raise RuntimeError("postgresql://user:password@private-host/jobs")
+        return {
+            "worker_status": self.worker_status,
+            "scan_current_path": "C:/Users/private/Music/Artist/Album/01.flac",
+            "worker": {
+                "instance_id": "worker-opaque-a",
+                "lifecycle_state": "running",
+                "heartbeat_age_seconds": 12,
+            },
+            "jobs": {
+                "queued_count": 3,
+                "running_count": 2,
+                "retry_count": 1,
+                "failed_count": 4,
+                "ambiguous_count": 1,
+                "oldest_queue_age_seconds": 120,
+                "claim_lag_seconds": 45,
+                "current_path": "C:/Users/private/Music/Artist/Album/01.flac",
+            },
+        }
+
+
+def _status_actor(*, bootstrap=False, include_operator_capability=False):
+    grants = [CapabilityGrant("library.browse.read", "global", None)]
+    if include_operator_capability:
+        grants.append(CapabilityGrant("ops.jobs.status.read", "global", None))
+    return CurrentActor(
+        state=ActorState.ACTIVE,
+        account_id=7,
+        session_id=11,
+        username_display="Operator",
+        is_bootstrap_owner=bootstrap,
+        capability_grants=tuple(grants),
+    )
+
+
+def test_asgi_status_gives_ordinary_status_reader_only_coarse_worker_health():
+    asgi_app = _make_asgi_app()
+    service = _JobStatusService(worker_status="worker_degraded")
+    asgi_app.state.current_actor_resolver = _ActorResolver(_status_actor())
+    asgi_app.state.job_status_service = service
+
+    status, _headers, body = _run_asgi_request(asgi_app, "GET", "/status")
+
+    assert status == 200
+    payload = _decode_json(body)
+    assert payload["worker_status"] == "worker_degraded"
+    assert "job_status" not in payload
+    assert len(service.public_calls) == 1
+    assert service.operator_calls == []
+    private_names = {
+        "instance_id",
+        "heartbeat_age_seconds",
+        "queued_count",
+        "running_count",
+        "retry_count",
+        "failed_count",
+        "ambiguous_count",
+        "oldest_queue_age_seconds",
+        "claim_lag_seconds",
+    }
+    assert private_names.isdisjoint(payload)
+
+
+@pytest.mark.parametrize(
+    "actor",
+    [
+        pytest.param(_status_actor(bootstrap=True), id="bootstrap-owner"),
+        pytest.param(
+            _status_actor(include_operator_capability=True),
+            id="explicit-capability",
+        ),
+    ],
+)
+def test_asgi_status_adds_one_sanitized_nested_projection_for_authorized_operator(actor):
+    asgi_app = _make_asgi_app()
+    service = _JobStatusService()
+    asgi_app.state.current_actor_resolver = _ActorResolver(actor)
+    asgi_app.state.job_status_service = service
+
+    status, _headers, body = _run_asgi_request(asgi_app, "GET", "/status")
+
+    assert status == 200
+    payload = _decode_json(body)
+    assert payload["worker_status"] == "worker_ready"
+    assert payload["job_status"] == {
+        "worker_status": "worker_ready",
+        "worker": {
+            "instance_id": "worker-opaque-a",
+            "lifecycle_state": "running",
+            "heartbeat_age_seconds": 12,
+        },
+        "jobs": {
+            "queued_count": 3,
+            "running_count": 2,
+            "retry_count": 1,
+            "failed_count": 4,
+            "ambiguous_count": 1,
+            "oldest_queue_age_seconds": 120,
+            "claim_lag_seconds": 45,
+        },
+    }
+    assert "scan_current_path" not in payload["job_status"]
+    assert "current_path" not in payload["job_status"]["jobs"]
+    assert service.public_calls == []
+    assert len(service.operator_calls) == 1
+    assert "subject_ref" not in repr(payload["job_status"])
+    assert "parameters" not in repr(payload["job_status"])
+    assert "account_id" not in repr(payload["job_status"])
+    assert "library_id" not in repr(payload["job_status"])
+
+
+@pytest.mark.parametrize("worker_status", ["worker_ready", "worker_degraded"])
+def test_asgi_status_fails_closed_when_operator_worker_details_are_missing(worker_status):
+    asgi_app = _make_asgi_app()
+    secret = "postgresql://user:password@private-host/jobs"
+    service = _JobStatusService(worker_status=worker_status)
+
+    def inconsistent_operator_status(now):
+        service.operator_calls.append(now)
+        return {
+            "worker_status": worker_status,
+            "worker": None,
+            "jobs": {
+                "queued_count": 3,
+                "running_count": 2,
+                "retry_count": 1,
+                "failed_count": 4,
+                "ambiguous_count": 1,
+                "oldest_queue_age_seconds": 120,
+                "claim_lag_seconds": 45,
+            },
+            "diagnostic": secret,
+        }
+
+    service.operator_status = inconsistent_operator_status
+    asgi_app.state.current_actor_resolver = _ActorResolver(_status_actor(bootstrap=True))
+    asgi_app.state.job_status_service = service
+
+    status, _headers, body = _run_asgi_request(asgi_app, "GET", "/status")
+
+    assert status == 200
+    payload = _decode_json(body)
+    assert payload["worker_status"] == "worker_unavailable"
+    assert payload["job_status"] == {
+        "worker_status": "worker_unavailable",
+        "worker": None,
+        "jobs": {
+            "queued_count": 0,
+            "running_count": 0,
+            "retry_count": 0,
+            "failed_count": 0,
+            "ambiguous_count": 0,
+            "oldest_queue_age_seconds": 0,
+            "claim_lag_seconds": 0,
+        },
+    }
+    assert len(service.operator_calls) == 1
+    assert secret not in body.decode("utf-8")
+
+
+def test_asgi_status_service_failure_is_sanitized_and_preserves_existing_payload():
+    asgi_app = _make_asgi_app()
+    secret = "postgresql://user:password@private-host/jobs"
+    asgi_app.state.current_actor_resolver = _ActorResolver(_status_actor(bootstrap=True))
+    asgi_app.state.job_status_service = _JobStatusService(fail=True)
+
+    status, _headers, body = _run_asgi_request(asgi_app, "GET", "/status")
+
+    assert status == 200
+    payload = _decode_json(body)
+    assert payload["scan_in_progress"] is False
+    assert payload["worker_status"] == "worker_unavailable"
+    assert payload["job_status"] == {
+        "worker_status": "worker_unavailable",
+        "worker": None,
+        "jobs": {
+            "queued_count": 0,
+            "running_count": 0,
+            "retry_count": 0,
+            "failed_count": 0,
+            "ambiguous_count": 0,
+            "oldest_queue_age_seconds": 0,
+            "claim_lag_seconds": 0,
+        },
+    }
+    assert secret not in body.decode("utf-8")
 
 
 def test_status_payload_counts_matching_active_scan_preview_without_leaking_preview_metadata():

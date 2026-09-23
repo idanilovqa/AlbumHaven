@@ -1,4 +1,5 @@
 from datetime import datetime, timezone
+from hashlib import sha256
 
 import pytest
 
@@ -168,6 +169,10 @@ def test_constraints_never_create_authority_and_audit_redacts_origin_key():
     assert result.decision.reason_code == "capability_required"
     assert result.audit.client_surface_class == "private_web"
     assert result.audit.request_origin_type == "network"
+    assert result.audit.library_id == 23
+    assert result.audit.request_origin_ref_digest == sha256(
+        b"network:privacy-key"
+    ).hexdigest()
     assert "privacy-key" not in repr(result.audit)
     assert "privacy-key" not in repr(result)
 

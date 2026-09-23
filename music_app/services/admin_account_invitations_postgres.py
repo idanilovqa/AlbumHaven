@@ -24,8 +24,11 @@ from music_app.services.auth_invitation_models import (
     INVITATION_MESSAGE_CATEGORY,
     INVITATION_URL_PURPOSE,
     CopiedInvitation,
-    InvitationDelivery,
     validated_issued_invitation_token,
+)
+from music_app.services.auth_mail_jobs_postgres import (
+    AcceptedAuthMailJob,
+    PostgresAuthMailJobRepository,
 )
 from music_app.services.auth_tokens import issue_opaque_token
 from music_app.services.mail_config import build_public_url
@@ -45,7 +48,6 @@ _FUTURE_SKEW = timedelta(minutes=5)
 
 @dataclass(frozen=True, repr=False, slots=True)
 class _RotatedInvitation:
-    outbox_id: int | None
     invitation_token_id: int
     account_id: int
     recipient: str
@@ -55,8 +57,7 @@ class _RotatedInvitation:
 
     def __repr__(self) -> str:
         return (
-            f"{type(self).__name__}(outbox_id={self.outbox_id!r}, "
-            f"invitation_token_id={self.invitation_token_id!r}, "
+            f"{type(self).__name__}(invitation_token_id={self.invitation_token_id!r}, "
             f"account_id={self.account_id!r}, recipient=<redacted>, "
             f"username={self.username!r}, raw_token=<redacted>, "
             f"expires_at={self.expires_at!r})"
@@ -72,6 +73,7 @@ class PostgresAdminAccountInvitationService:
         clock: Callable[[], datetime] | None = None,
         token_issuer: Callable[[], object] = issue_opaque_token,
         audit_repository: Any,
+        job_repository: Any | None = None,
     ) -> None:
         payload = config if isinstance(config, Mapping) else {}
         self._database_url = str(
@@ -93,6 +95,10 @@ class PostgresAdminAccountInvitationService:
         self._clock = clock or (lambda: datetime.now(timezone.utc))
         self._token_issuer = token_issuer
         self._audit = audit_repository
+        self._jobs = job_repository or PostgresAuthMailJobRepository(
+            database_url=self._database_url,
+            connect_to_database=self._connect,
+        )
 
     def issue_copy(
         self,
@@ -111,7 +117,6 @@ class PostgresAdminAccountInvitationService:
             library_id=library_id,
             target_account_id=target_account_id,
             request_ref=request_ref,
-            enqueue=False,
         )
         return CopiedInvitation(
             invitation_url=_invitation_url(
@@ -130,27 +135,76 @@ class PostgresAdminAccountInvitationService:
         library_id: object,
         target_account_id: object,
         request_ref: object,
-    ) -> InvitationDelivery:
-        issued = self._issue(
-            actor_account_id=actor_account_id,
-            actor_session_id=actor_session_id,
-            actor_authenticated_at=actor_authenticated_at,
-            library_id=library_id,
-            target_account_id=target_account_id,
-            request_ref=request_ref,
-            enqueue=True,
-        )
-        if issued.outbox_id is None:
-            raise RuntimeError("Managed account invitation outbox was not created.")
-        return InvitationDelivery(
-            outbox_id=issued.outbox_id,
-            invitation_token_id=issued.invitation_token_id,
-            account_id=issued.account_id,
-            recipient=issued.recipient,
-            username=issued.username,
-            raw_token=issued.raw_token,
-            expires_at=issued.expires_at,
-        )
+        request_origin_ref: str | None = None,
+        deployment_mode: str = "self_hosted",
+        client_surface: str = "private_web",
+    ) -> AcceptedAuthMailJob:
+        now = _aware_utc(self._clock())
+        authenticated = _aware_utc(actor_authenticated_at)
+        if authenticated > now + _FUTURE_SKEW or now - authenticated > _RECENT_AUTH_WINDOW:
+            raise RecentAuthenticationRequired("Recent authentication is required.")
+        actor_id = _positive_id(actor_account_id)
+        current_library_id = _positive_id(library_id)
+        target_id = _positive_id(target_account_id)
+        reference = _request_ref(request_ref)
+        try:
+            with self._operation() as connection:
+                _load_eligible_invitation_account(
+                    connection, actor_id, current_library_id, target_id
+                )
+                now = lock_current_actor_session(
+                    connection,
+                    actor_account_id=actor_id,
+                    actor_session_id=actor_session_id,
+                    clock=self._clock,
+                )
+                expires_at = now + timedelta(seconds=self._invitation_token_seconds)
+                outbox_id = _single_id(
+                    connection.execute(
+                        """
+                        insert into app.mail_outbox (
+                          account_id, message_category, delivery_status,
+                          attempt_count, next_attempt_at, row_revision,
+                          accepted_attempt, actor_account_id, authorization_mode,
+                          delivery_checkpoint, lifecycle_expires_at,
+                          created_at, updated_at
+                        ) values (
+                          %s, %s, 'pending', 0, %s, 0, 1, %s, 'actor',
+                          'accepted', %s, %s, %s
+                        ) returning id
+                        """,
+                        (
+                            target_id, INVITATION_MESSAGE_CATEGORY, now,
+                            actor_id, expires_at, now, now,
+                        ),
+                    ).fetchall(),
+                    "outbox id",
+                )
+                job = self._jobs.compose_existing_intent_in_transaction(
+                    connection, outbox_id=outbox_id,
+                    category=INVITATION_MESSAGE_CATEGORY,
+                    account_id=target_id, actor_account_id=actor_id,
+                    library_id=current_library_id,
+                    request_origin_ref=request_origin_ref,
+                    deployment_mode=deployment_mode, client_surface=client_surface,
+                    scheduled_at=now,
+                )
+                self._audit.append_in_transaction(
+                    connection,
+                    category=SecurityAuditCategory.ACCOUNT_INVITATION,
+                    outcome=SecurityAuditOutcome.SUCCESS,
+                    reason=InvitationAuditReason.INVITATION_QUEUED,
+                    actor_account_id=actor_id,
+                    target_account_id=target_id,
+                    request_ref=reference,
+                    occurred_at=now,
+                    metadata=None,
+                )
+                return job
+        except (PermissionError, RecentAuthenticationRequired, ValueError):
+            raise
+        except Exception:
+            raise RuntimeError("Managed account invitation persistence failed.") from None
 
     def _issue(
         self,
@@ -161,10 +215,7 @@ class PostgresAdminAccountInvitationService:
         library_id: object,
         target_account_id: object,
         request_ref: object,
-        enqueue: bool,
     ) -> _RotatedInvitation:
-        if not isinstance(enqueue, bool):
-            raise ValueError("Invitation delivery choice is invalid.")
         now = _aware_utc(self._clock())
         authenticated = _aware_utc(actor_authenticated_at)
         if authenticated > now + _FUTURE_SKEW or now - authenticated > _RECENT_AUTH_WINDOW:
@@ -183,7 +234,6 @@ class PostgresAdminAccountInvitationService:
                     library_id=current_library_id,
                     target_account_id=target_id,
                     request_ref=reference,
-                    enqueue=enqueue,
                     now=now,
                     token_issuer=self._token_issuer,
                     invitation_token_seconds=self._invitation_token_seconds,
@@ -215,7 +265,6 @@ def _rotate_invitation_in_transaction(
     library_id: int,
     target_account_id: int,
     request_ref: str,
-    enqueue: bool,
     now: datetime,
     token_issuer: Callable[[], object],
     invitation_token_seconds: int,
@@ -319,35 +368,11 @@ def _rotate_invitation_in_transaction(
         ).fetchall(),
         "invitation token id",
     )
-    outbox_id = None
-    if enqueue:
-        outbox_id = _single_id(
-            connection.execute(
-                """
-                insert into app.mail_outbox (
-                  account_id, invitation_token_id, message_category,
-                  delivery_status, next_attempt_at
-                ) values (%s, %s, %s, 'pending', %s)
-                returning id
-                """,
-                (
-                    target_account_id,
-                    token_id,
-                    INVITATION_MESSAGE_CATEGORY,
-                    now,
-                ),
-            ).fetchall(),
-            "outbox id",
-        )
     audit_repository.append_in_transaction(
         connection,
         category=SecurityAuditCategory.ACCOUNT_INVITATION,
         outcome=SecurityAuditOutcome.SUCCESS,
-        reason=(
-            InvitationAuditReason.INVITATION_QUEUED
-            if enqueue
-            else InvitationAuditReason.INVITATION_COPIED
-        ),
+        reason=InvitationAuditReason.INVITATION_COPIED,
         actor_account_id=actor_account_id,
         target_account_id=target_account_id,
         request_ref=request_ref,
@@ -355,7 +380,6 @@ def _rotate_invitation_in_transaction(
         metadata=None,
     )
     return _RotatedInvitation(
-        outbox_id=outbox_id,
         invitation_token_id=token_id,
         account_id=target_account_id,
         recipient=recipient,
@@ -363,6 +387,62 @@ def _rotate_invitation_in_transaction(
         raw_token=issued.raw,
         expires_at=expires_at,
     )
+
+
+def _load_eligible_invitation_account(
+    connection: Any,
+    actor_account_id: int,
+    library_id: int,
+    target_account_id: int,
+) -> Mapping[str, object]:
+    rows = connection.execute(
+        """
+        with locked_accounts as (
+          select id, account_kind, username_display, contact_email,
+                 is_active, disabled_at
+          from app.accounts
+          where id in (%s, %s)
+          order by id for update
+        ), locked_library as (
+          select id, owner_account_id
+          from library.libraries
+          where id = %s
+          for update
+        )
+        select target.id, target.username_display, target.contact_email
+        from locked_accounts actor
+        join app.bootstrap_owners authority
+          on authority.account_id = actor.id
+         and authority.owner_key = 'local-bootstrap-owner'
+        join locked_library on locked_library.owner_account_id = actor.id
+        join locked_accounts target on target.id = %s
+        join library.library_memberships membership
+          on membership.account_id = target.id
+         and membership.library_id = locked_library.id
+        left join app.bootstrap_owners target_owner
+          on target_owner.account_id = target.id
+        left join app.account_credentials credential
+          on credential.account_id = target.id
+        where actor.id = %s
+          and actor.is_active is true
+          and actor.disabled_at is null
+          and target.account_kind = 'managed_user'
+          and target.is_active is true
+          and target.disabled_at is null
+          and target_owner.account_id is null
+          and credential.account_id is null
+        """,
+        (
+            actor_account_id,
+            target_account_id,
+            library_id,
+            target_account_id,
+            actor_account_id,
+        ),
+    ).fetchall()
+    if len(rows) != 1 or not isinstance(rows[0], Mapping):
+        raise PermissionError("Managed account invitation is not permitted.")
+    return rows[0]
 
 
 def _invitation_url(public_base_url: str, raw_token: str) -> str:

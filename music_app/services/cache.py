@@ -29,13 +29,20 @@ _AUTHORITATIVE_COVER_FIELDS = frozenset(
     }
 )
 _MISSING_CACHE_FIELD = object()
+_INTEGER_TAG_FIELDS = frozenset({"year", "track_number", "disc_number", "album_rating"})
 
 
 def _cache_rebase_comparison_value(key: str, value: object) -> object:
     if key == "exception_type" and value is not _MISSING_CACHE_FIELD:
         return normalize_exception_value(value)
-    if key in {"year", "track_number", "disc_number"} and value is not _MISSING_CACHE_FIELD:
-        return str(value or "").strip()
+    if key in _INTEGER_TAG_FIELDS and value is not _MISSING_CACHE_FIELD:
+        text = str(value or "").strip()
+        if not text:
+            return None
+        try:
+            return int(text)
+        except (TypeError, ValueError):
+            return value
     return value
 
 

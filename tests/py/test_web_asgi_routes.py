@@ -116,6 +116,42 @@ def _extract_bootstrap_payload_from_shell(body: bytes) -> dict[str, object]:
     return payload
 
 
+def test_root_bootstrap_projects_authorized_durable_scan_status(app, monkeypatch):
+    from music_app.routes import web_asgi
+
+    asgi_app = _make_asgi_app(app)
+    calls = []
+    evaluation = SimpleNamespace(
+        decision=SimpleNamespace(allowed=True),
+        audit=SimpleNamespace(library_id=19),
+    )
+    monkeypatch.setattr(
+        web_asgi,
+        "evaluate_action_for_request",
+        lambda request, action: evaluation,
+    )
+    _configure_selected_postgres_empty_root_bootstrap(monkeypatch, web_asgi)
+    asgi_app.state.scan_job_repository = SimpleNamespace(
+        load_authorized_full_scan_status=lambda **kwargs: calls.append(kwargs)
+        or {
+            "state": "running",
+            "progress_current": 3,
+            "progress_total": 8,
+            "phase": "finalizing",
+            "mode": "manual_full_rescan",
+        }
+    )
+
+    status, _headers, body = _run_asgi_request(asgi_app, "GET", "/")
+
+    assert status == 200
+    payload = _extract_bootstrap_payload_from_shell(body)
+    assert payload["bootstrap"]["scanInProgress"] is True
+    assert payload["bootstrap"]["scanPhase"] == "finalizing"
+    assert payload["bootstrap"]["scanMode"] == "manual_full_rescan"
+    assert calls == [{"policy_evaluation": evaluation, "library_id": 19}]
+
+
 def _configure_selected_postgres_empty_root_bootstrap(monkeypatch, web_asgi) -> None:
     def fake_build_postgres_root_startup_view(*, config, query_args):
         initial_view = web_asgi._build_empty_initial_view(
@@ -618,6 +654,34 @@ def test_asgi_refresh_api_rejects_duplicate_full_rescan_without_resetting_active
     assert library_state["scan_total"] == 5389
     assert library_state["scan_current_path"] == "Artist/Album"
     assert library_state["scan_progress_samples"] == [1, 2, 3]
+
+
+def test_refresh_and_cancel_routes_use_database_authoritative_full_scan_lifecycle():
+    import inspect
+
+    from music_app.routes import web_asgi
+
+    refresh_source = inspect.getsource(web_asgi.refresh_api)
+    cancel_source = inspect.getsource(web_asgi.cancel_refresh_api)
+
+    assert "enqueue_authorized_full_scan" in refresh_source
+    assert ".created" in refresh_source
+    assert "status_code=409" in refresh_source
+    assert '"ok": True, "full_rescan": full_rescan' in refresh_source
+    assert "cancel_authorized_full_scan" in cancel_source
+    assert '"ok": True' in cancel_source
+    assert '"cancelled"' in cancel_source
+
+
+def test_legacy_refresh_redirect_acknowledgement_remains_unchanged():
+    import inspect
+
+    from music_app.routes import web_asgi
+
+    source = inspect.getsource(web_asgi.refresh)
+
+    assert 'RedirectResponse(location, status_code=302)' in source
+    assert '"refreshed", "1"' in source
 
 
 def test_asgi_index_records_cold_scan_handoff_failure(app, monkeypatch):

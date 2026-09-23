@@ -3,12 +3,12 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from inspect import isawaitable
+import json
 from pathlib import Path
 import threading
 from uuid import uuid4
 
-from fastapi import APIRouter, BackgroundTasks, Request
+from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse, JSONResponse, Response
 from fastapi.templating import Jinja2Templates
 from starlette.concurrency import run_in_threadpool
@@ -38,7 +38,10 @@ from music_app.services.admin_reauthentication_postgres import (
 from music_app.services.admin_mail_actions_postgres import (
     PostgresAdminMailActionService,
 )
-from music_app.services.policy_asgi import allowed_actions_for_request
+from music_app.services.policy_asgi import (
+    allowed_actions_for_request,
+    request_origin_ref_for_request,
+)
 
 
 router = APIRouter()
@@ -243,40 +246,26 @@ async def revoke_managed_account_sessions(request: Request, account_id: int) -> 
 
 @router.post("/admin/accounts/{account_id}/welcome", status_code=202)
 async def resend_managed_account_welcome(
-    request: Request, account_id: int, background_tasks: BackgroundTasks
+    request: Request, account_id: int
 ) -> Response:
     if await _empty_payload(request) is None:
         return JSONResponse({"detail": "Mail action was invalid."}, status_code=400)
     outcome = await _queue_mail_action(request, account_id, "welcome")
     if isinstance(outcome, Response):
         return outcome
-    if outcome.welcome_outbox_id is not None:
-        background_tasks.add_task(
-            _deliver_pending_welcome, request.app, outcome.welcome_outbox_id
-        )
-    return JSONResponse(
-        {"accepted": True}, status_code=202, background=background_tasks
-    )
+    return JSONResponse({"accepted": True}, status_code=202)
 
 
 @router.post("/admin/accounts/{account_id}/password-reset", status_code=202)
 async def send_managed_account_password_reset(
-    request: Request, account_id: int, background_tasks: BackgroundTasks
+    request: Request, account_id: int
 ) -> Response:
     if await _empty_payload(request) is None:
         return JSONResponse({"detail": "Mail action was invalid."}, status_code=400)
     outcome = await _queue_mail_action(request, account_id, "password-reset")
     if isinstance(outcome, Response):
         return outcome
-    if outcome.password_reset_delivery is not None:
-        background_tasks.add_task(
-            _deliver_pending_password_reset,
-            request.app,
-            outcome.password_reset_delivery,
-        )
-    return JSONResponse(
-        {"accepted": True}, status_code=202, background=background_tasks
-    )
+    return JSONResponse({"accepted": True}, status_code=202)
 
 
 @router.post("/admin/accounts/{account_id}/invitation/copy")
@@ -320,7 +309,6 @@ async def copy_managed_account_invitation(
 async def send_managed_account_invitation(
     request: Request,
     account_id: int,
-    background_tasks: BackgroundTasks,
 ) -> Response:
     try:
         invitation_enabled = _mail_config(request.app).get("invitation_enabled")
@@ -334,7 +322,7 @@ async def send_managed_account_invitation(
             {"detail": "Invitation email is not configured."}, status_code=409
         )
     try:
-        delivery = await run_in_threadpool(
+        await run_in_threadpool(
             _invitation_service(request).queue_email,
             actor_account_id=request.state.current_actor.account_id,
             actor_session_id=request.state.current_actor.session_id,
@@ -342,6 +330,7 @@ async def send_managed_account_invitation(
             library_id=request.state.current_actor.current_library_id,
             target_account_id=account_id,
             request_ref=uuid4().hex,
+            **_auth_mail_job_context(request),
         )
     except RecentAuthenticationRequired:
         return JSONResponse(
@@ -354,14 +343,7 @@ async def send_managed_account_invitation(
             {"detail": "Invitation email is temporarily unavailable."},
             status_code=503,
         )
-    background_tasks.add_task(
-        _deliver_pending_invitation,
-        request.app,
-        delivery,
-    )
-    return JSONResponse(
-        {"accepted": True}, status_code=202, background=background_tasks
-    )
+    return JSONResponse({"accepted": True}, status_code=202)
 
 
 @router.post("/admin/reauthenticate")
@@ -390,7 +372,7 @@ async def reauthenticate_administrator(request: Request) -> Response:
 
 
 @router.post("/admin/accounts", status_code=201)
-async def create_managed_account(request: Request, background_tasks: BackgroundTasks):
+async def create_managed_account(request: Request):
     payload = await _json_payload(request)
     if payload is None:
         return _invalid()
@@ -415,6 +397,7 @@ async def create_managed_account(request: Request, background_tasks: BackgroundT
             capability_keys=payload["capability_keys"],
             send_invitation=payload["send_invitation"],
             request_ref=uuid4().hex,
+            **_auth_mail_job_context(request),
         )
     except PermissionError:
         return JSONResponse({"detail": "Action not permitted."}, status_code=403)
@@ -430,20 +413,13 @@ async def create_managed_account(request: Request, background_tasks: BackgroundT
             {"detail": "Account creation is temporarily unavailable."},
             status_code=503,
         )
-    if result.invitation_delivery is not None:
-        background_tasks.add_task(
-            _deliver_pending_invitation,
-            request.app,
-            result.invitation_delivery,
-        )
     return JSONResponse(
         {
             "account_id": result.account_id,
             "pending": True,
-            "invitation_queued": result.invitation_delivery is not None,
+            "invitation_queued": result.invitation_queued,
         },
         status_code=201,
-        background=background_tasks,
     )
 
 
@@ -531,6 +507,7 @@ async def _queue_mail_action(request: Request, account_id: int, action: str):
             library_id=actor.current_library_id,
             target_account_id=account_id,
             request_ref=uuid4().hex,
+            **_auth_mail_job_context(request),
         )
     except RecentAuthenticationRequired:
         return JSONResponse(
@@ -544,6 +521,22 @@ async def _queue_mail_action(request: Request, account_id: int, action: str):
         return JSONResponse(
             {"detail": "Mail action is temporarily unavailable."}, status_code=503
         )
+
+
+def _auth_mail_job_context(request: Request) -> dict[str, str]:
+    evaluation = getattr(request.state, "policy_evaluation", None)
+    audit = getattr(evaluation, "audit", None)
+    actor_id = getattr(request.state.current_actor, "account_id", None)
+    origin = request_origin_ref_for_request(request)
+    return {
+        "request_origin_ref": f"{origin}.account-{actor_id}",
+        "deployment_mode": str(
+            getattr(audit, "deployment_mode", "self_hosted")
+        ),
+        "client_surface": str(
+            getattr(audit, "client_surface_class", "private_web")
+        ),
+    }
 
 
 async def _bounded_json_object(request: Request) -> dict[str, object] | None:
@@ -765,102 +758,3 @@ def _service(request: Request):
 
 def _invalid():
     return JSONResponse({"detail": "Account request was invalid."}, status_code=400)
-
-
-async def _deliver_pending_welcome(app, outbox_id: int) -> None:
-    try:
-        delivery = getattr(app.state, "welcome_delivery", None)
-        if callable(delivery):
-            result = await run_in_threadpool(delivery, outbox_id)
-            if isawaitable(result):
-                await result
-            return
-        from config import build_mail_config
-        from music_app.services.auth_mail_outbox_postgres import (
-            PostgresWelcomeOutboxService,
-            deliver_welcome,
-        )
-
-        mail_config = build_mail_config()
-        if mail_config.get("welcome_enabled") is not True:
-            return
-        repository_config = dict(mail_config)
-        repository_config["ALBUM_HAVEN_APP_DATABASE_URL"] = app.state.auth_policy_config[
-            "ALBUM_HAVEN_APP_DATABASE_URL"
-        ]
-        await deliver_welcome(
-            outbox_id,
-            config=mail_config,
-            repository=PostgresWelcomeOutboxService(repository_config),
-        )
-    except Exception:
-        # Account activation and the committed retryable outbox row are non-gating.
-        return
-
-
-async def _deliver_pending_invitation(app, delivery) -> None:
-    try:
-        callback = getattr(app.state, "invitation_delivery", None)
-        if callable(callback):
-            result = await run_in_threadpool(callback, delivery)
-            if isawaitable(result):
-                await result
-            return
-        from config import build_mail_config
-        from music_app.services.auth_mail_outbox_postgres import (
-            PostgresInvitationOutboxService,
-            deliver_invitation,
-        )
-
-        mail_config = getattr(app.state, "mail_config", None)
-        if not isinstance(mail_config, Mapping):
-            mail_config = build_mail_config()
-        if mail_config.get("invitation_enabled") is not True:
-            return
-        repository_config = getattr(app.state, "repository_config", None)
-        if not isinstance(repository_config, Mapping):
-            repository_config = dict(mail_config)
-            repository_config["ALBUM_HAVEN_APP_DATABASE_URL"] = (
-                app.state.auth_policy_config["ALBUM_HAVEN_APP_DATABASE_URL"]
-            )
-        await deliver_invitation(
-            delivery,
-            config=mail_config,
-            repository=PostgresInvitationOutboxService(repository_config),
-        )
-    except Exception:
-        # The committed token and outbox row remain authoritative; delivery is
-        # deliberately non-gating and can be retried through the admin flow.
-        return
-
-
-async def _deliver_pending_password_reset(app, delivery) -> None:
-    try:
-        runner = getattr(app.state, "password_reset_delivery", None)
-        if callable(runner):
-            result = await run_in_threadpool(runner, delivery)
-            if isawaitable(result):
-                await result
-            return
-        from config import build_mail_config
-        from music_app.services.auth_mail_outbox_postgres import (
-            PostgresPasswordResetOutboxService,
-            deliver_password_reset,
-        )
-
-        mail_config = build_mail_config()
-        if mail_config.get("password_reset_enabled") is not True:
-            return
-        repository_config = dict(mail_config)
-        repository_config["ALBUM_HAVEN_APP_DATABASE_URL"] = (
-            app.state.auth_policy_config["ALBUM_HAVEN_APP_DATABASE_URL"]
-        )
-        await deliver_password_reset(
-            delivery,
-            config=mail_config,
-            repository=PostgresPasswordResetOutboxService(repository_config),
-        )
-    except Exception:
-        # The committed token and outbox row remain authoritative; send attempts
-        # are deliberately non-gating and ambiguous failures are terminal.
-        return

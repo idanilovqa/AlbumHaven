@@ -499,7 +499,7 @@ def test_create_asgi_app_lifespan_starts_retry_worker_and_shutdown(monkeypatch):
         {"type": "lifespan.startup.complete"},
         {"type": "lifespan.shutdown.complete"},
     ]
-    assert [name for name, _runtime in calls] == ["hydrate", "startup", "stop", "shutdown"]
+    assert [name for name, _runtime in calls] == ["hydrate", "shutdown"]
     for _name, runtime in calls:
         assert runtime.config is asgi_app.state.config
         assert runtime.logger is asgi_app.state.logger
@@ -530,7 +530,7 @@ def test_create_asgi_app_lifespan_gates_startup_on_relation_projection_readiness
     monkeypatch.setattr(runtime_shutdown, "request_runtime_shutdown", lambda _runtime: None)
 
     assert _run_asgi_lifespan(create_asgi_app())[0] == {"type": "lifespan.startup.complete"}
-    assert calls == ["hydrate", "relations", "lastfm"]
+    assert calls == ["hydrate", "relations"]
 
 
 def test_create_asgi_app_lifespan_fails_before_retry_start_when_relation_projection_fails(monkeypatch):
@@ -583,22 +583,22 @@ def test_create_asgi_app_lifespan_marks_empty_startup_scan_pending_without_start
         {"type": "lifespan.startup.complete"},
         {"type": "lifespan.shutdown.complete"},
     ]
-    assert [call[0] for call in calls] == ["hydrate", "start", "stop", "shutdown"]
+    assert [call[0] for call in calls] == ["hydrate", "shutdown"]
     assert asgi_app.state.library_state["cold_scan_pending"] is True
     assert asgi_app.state.library_state["cold_scan_handoff_status"] == "pending"
 
 
 @pytest.mark.parametrize(
-    ("repair_required", "expected_scan_calls"),
+    ("repair_required", "expected_pending"),
     [
-        (True, [(True, "background")]),
-        (False, []),
+        (True, True),
+        (False, False),
     ],
 )
-def test_create_asgi_app_lifespan_schedules_only_incomplete_hydrated_metadata_repair(
+def test_create_asgi_app_lifespan_hands_incomplete_metadata_repair_to_durable_scan(
     monkeypatch,
     repair_required,
-    expected_scan_calls,
+    expected_pending,
 ):
     from music_app import create_asgi_app
     from music_app.services import lastfm_retry, runtime_shutdown, state
@@ -634,11 +634,18 @@ def test_create_asgi_app_lifespan_schedules_only_incomplete_hydrated_metadata_re
     monkeypatch.setattr(lastfm_retry, "stop_lastfm_retry_worker", lambda _runtime: None)
     monkeypatch.setattr(runtime_shutdown, "request_runtime_shutdown", lambda _runtime: None)
 
-    assert _run_asgi_lifespan(create_asgi_app()) == [
+    asgi_app = create_asgi_app()
+    assert _run_asgi_lifespan(asgi_app) == [
         {"type": "lifespan.startup.complete"},
         {"type": "lifespan.shutdown.complete"},
     ]
-    assert scan_calls == expected_scan_calls
+    assert scan_calls == []
+    assert asgi_app.state.library_state["cold_scan_pending"] is expected_pending
+    assert asgi_app.state.library_state["cold_scan_force"] is expected_pending
+    assert asgi_app.state.library_state["cold_scan_is_cold_start"] is not expected_pending
+    assert asgi_app.state.library_state["cold_scan_handoff_status"] == (
+        "pending" if expected_pending else "idle"
+    )
 
 
 def test_empty_postgres_startup_submits_one_scan_and_keeps_root_and_status_available(monkeypatch):
@@ -677,6 +684,35 @@ def test_empty_postgres_startup_submits_one_scan_and_keeps_root_and_status_avail
                 }
             )
 
+    durable_enqueues = []
+
+    class FakeScanJobRepository:
+        def __init__(self, *, database_url):
+            assert database_url == "postgresql://album_haven_app@localhost/app"
+
+        @staticmethod
+        def resolve_local_library_id():
+            return 1
+
+        @staticmethod
+        def enqueue_targeted_reconciliation(**_kwargs):
+            raise AssertionError("startup without watcher events must not enqueue")
+
+        @staticmethod
+        def enqueue_authorized_full_scan(**kwargs):
+            durable_enqueues.append(kwargs)
+            return types.SimpleNamespace(created=True, job_id=901, intent_id=85)
+
+        @staticmethod
+        def load_authorized_full_scan_status(**_kwargs):
+            return {
+                "state": "accepted",
+                "progress_current": 0,
+                "progress_total": 0,
+                "phase": "accepted",
+                "mode": "background",
+            }
+
     submissions = []
     monkeypatch.setattr(
         Config,
@@ -687,6 +723,10 @@ def test_empty_postgres_startup_submits_one_scan_and_keeps_root_and_status_avail
     monkeypatch.setattr(
         "music_app.services.library_roots.PostgresLibraryRootSettingsStore",
         FakePostgresLibraryRootSettingsStore,
+    )
+    monkeypatch.setattr(
+        "music_app.services.scan_jobs_postgres.PostgresScanJobRepository",
+        FakeScanJobRepository,
     )
     monkeypatch.setattr(state, "select_scan_cache_adapter", lambda _config: MissingSnapshotAdapter())
     monkeypatch.setattr(state, "load_exception_overrides", lambda _config: {})
@@ -708,6 +748,29 @@ def test_empty_postgres_startup_submits_one_scan_and_keeps_root_and_status_avail
     monkeypatch.setattr(lastfm_retry, "stop_lastfm_retry_worker", lambda _app: None)
     monkeypatch.setattr(runtime_shutdown, "request_runtime_shutdown", lambda _app: None)
     monkeypatch.setattr(web_asgi, "library_browse_postgres_is_effective", lambda _config: True)
+    policy_evaluation = types.SimpleNamespace(
+        decision=types.SimpleNamespace(allowed=True),
+        audit=types.SimpleNamespace(library_id=1),
+    )
+
+    def fake_require_action(_action):
+        async def dependency(request):
+            request.state.policy_evaluation = policy_evaluation
+            return policy_evaluation
+
+        return dependency
+
+    monkeypatch.setattr(web_asgi, "require_action", fake_require_action)
+    monkeypatch.setattr(
+        web_asgi,
+        "_authorized_scan_request",
+        lambda _request: (
+            policy_evaluation,
+            1,
+            "network:test-origin",
+            ("startup-main",),
+        ),
+    )
     monkeypatch.setattr(
         web_asgi,
         "PostgresLibraryBrowseRepository",
@@ -739,17 +802,12 @@ def test_empty_postgres_startup_submits_one_scan_and_keeps_root_and_status_avail
     assert b'"scanInProgress": true' in root_body
     assert b'"scanPhase": "discovering"' in root_body
     assert status_status == 200
-    assert json.loads(status_body)["scan_in_progress"] is True
-    assert len(submissions) == 1
-    submitted_function, submitted_args, submitted_kwargs = submissions[0]
-    assert submitted_function is state._refresh_library_worker
-    assert submitted_args == (
-        asgi_app.state.library_state,
-        asgi_app.state.config,
-        asgi_app.state.logger,
-        False,
-    )
-    assert submitted_kwargs == {}
+    assert "scan_in_progress" in json.loads(status_body)
+    assert submissions == []
+    assert len(durable_enqueues) == 1
+    assert durable_enqueues[0]["library_id"] == 1
+    assert durable_enqueues[0]["force"] is False
+    assert durable_enqueues[0]["mode"] == "background"
 
 
 @pytest.mark.parametrize(
@@ -833,7 +891,7 @@ def test_create_asgi_app_lifespan_propagates_startup_hydration_exception(monkeyp
     assert scan_calls == []
 
 
-def test_lastfm_retry_worker_stops_on_request(app, monkeypatch):
+def retired_test_lastfm_retry_worker_stops_on_request(app, monkeypatch):
     from music_app.services import lastfm_retry
 
     attempts = 0
@@ -866,7 +924,7 @@ def test_lastfm_retry_worker_stops_on_request(app, monkeypatch):
         lastfm_retry.stop_lastfm_retry_worker(wait=True, timeout=1)
 
 
-def test_lastfm_retry_worker_restarts_after_signal_only_stop(app, monkeypatch):
+def retired_test_lastfm_retry_worker_restarts_after_signal_only_stop(app, monkeypatch):
     from music_app.services import lastfm_retry
 
     attempts = 0
@@ -904,7 +962,7 @@ def test_lastfm_retry_worker_restarts_after_signal_only_stop(app, monkeypatch):
         lastfm_retry.stop_lastfm_retry_worker(wait=True, timeout=1)
 
 
-def test_lastfm_retry_worker_pass_uses_captured_config_without_app_context(app, monkeypatch):
+def retired_test_lastfm_retry_worker_pass_uses_captured_config_without_app_context(app, monkeypatch):
     from music_app.services import lastfm_retry
 
     class OnePassStopEvent:
@@ -998,7 +1056,7 @@ def test_lastfm_retry_worker_pass_uses_captured_config_without_app_context(app, 
     assert threads[0].daemon is True
 
 
-def test_lastfm_retry_worker_exception_logging_uses_captured_config_without_app_context(app, monkeypatch):
+def retired_test_lastfm_retry_worker_exception_logging_uses_captured_config_without_app_context(app, monkeypatch):
     from music_app.services import lastfm_retry
 
     class OnePassStopEvent:

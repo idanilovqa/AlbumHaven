@@ -42,12 +42,14 @@ const SCAN_STATUS_SAMPLES_ROOT = path.join(repoRoot, '.tmp', 'playwright-scan-st
 const SCAN_PERFORMANCE_APP_PATH = path.join(repoRoot, 'tests', 'e2e', 'support', 'scanPerformanceApp.py');
 const SCAN_SETUP_DATABASE_ENV = 'ALBUM_HAVEN_SCAN_PERFORMANCE_SETUP_DATABASE_URL';
 const SCAN_RUNTIME_DATABASE_ENV = 'ALBUM_HAVEN_SCAN_PERFORMANCE_DATABASE_URL';
+const SCAN_WORKER_DATABASE_ENV = 'ALBUM_HAVEN_WORKER_DATABASE_URL';
 const SCAN_ALLOW_SHARED_DATABASE_ENV = 'ALBUM_HAVEN_SCAN_PERFORMANCE_ALLOW_SHARED_DATABASE';
 const SCAN_DATABASE_RUNBOOK = '.env.example';
 const PERFORMANCE_CHILD_MAX_BUFFER_BYTES = 64 * 1024 * 1024;
 const SCAN_DATABASE_NAME = 'album_haven_scan_e2e';
 const SCAN_SETUP_DATABASE_ROLE = 'album_haven_migrator';
 const SCAN_RUNTIME_DATABASE_ROLE = 'album_haven_app';
+const SCAN_WORKER_DATABASE_ROLE = 'album_haven_worker';
 const PRELOADED_RELEASE_FIXTURE_MODE = 'preloaded-release';
 const GENERATED_ISOLATED_FIXTURE_MODE = 'generated-isolated';
 const OWNER_RUNTIME_ENV_KEYS = Object.freeze([
@@ -493,6 +495,7 @@ function scanDatabasePreflightError(reason) {
     `Scan targets reset app-owned tables and require the existing dedicated ${SCAN_DATABASE_NAME} database.`,
     `Set ${SCAN_SETUP_DATABASE_ENV}=postgresql://${SCAN_SETUP_DATABASE_ROLE}@localhost:5432/${SCAN_DATABASE_NAME}`,
     `Set ${SCAN_RUNTIME_DATABASE_ENV}=postgresql://${SCAN_RUNTIME_DATABASE_ROLE}@localhost:5432/${SCAN_DATABASE_NAME}`,
+    `Set ${SCAN_WORKER_DATABASE_ENV}=postgresql://${SCAN_WORKER_DATABASE_ROLE}@localhost:5432/${SCAN_DATABASE_NAME}`,
     'For local passwordless automation, set PGPASSFILE to your PostgreSQL password file.',
     `Database and role provisioning instructions: ${SCAN_DATABASE_RUNBOOK}`,
     'The performance runner will not create database roles and must never run scan targets against album_haven_core.',
@@ -535,7 +538,11 @@ function assertScanPerformanceDatabaseConfiguration(targets, env) {
   if (!targets.some((target) => target.kind === 'scan')) {
     return;
   }
-  const missingEnvNames = [SCAN_SETUP_DATABASE_ENV, SCAN_RUNTIME_DATABASE_ENV].filter(
+  const missingEnvNames = [
+    SCAN_SETUP_DATABASE_ENV,
+    SCAN_RUNTIME_DATABASE_ENV,
+    SCAN_WORKER_DATABASE_ENV,
+  ].filter(
     (envName) => !String(env[envName] || '').trim(),
   );
   if (missingEnvNames.length > 0) {
@@ -549,6 +556,10 @@ function assertScanPerformanceDatabaseConfiguration(targets, env) {
     SCAN_RUNTIME_DATABASE_ENV,
     String(env[SCAN_RUNTIME_DATABASE_ENV]).trim(),
   );
+  const workerIdentity = parseScanDatabaseUrl(
+    SCAN_WORKER_DATABASE_ENV,
+    String(env[SCAN_WORKER_DATABASE_ENV]).trim(),
+  );
   const setupDatabaseIdentity = [
     setupIdentity.protocol,
     setupIdentity.host,
@@ -561,9 +572,16 @@ function assertScanPerformanceDatabaseConfiguration(targets, env) {
     runtimeIdentity.port,
     runtimeIdentity.databaseName,
   ].join('|');
-  if (setupDatabaseIdentity !== runtimeDatabaseIdentity) {
+  const workerDatabaseIdentity = [
+    workerIdentity.protocol,
+    workerIdentity.host,
+    workerIdentity.port,
+    workerIdentity.databaseName,
+  ].join('|');
+  if (setupDatabaseIdentity !== runtimeDatabaseIdentity
+    || setupDatabaseIdentity !== workerDatabaseIdentity) {
     throw scanDatabasePreflightError(
-      `${SCAN_SETUP_DATABASE_ENV} and ${SCAN_RUNTIME_DATABASE_ENV} must target the same isolated database.`,
+      `${SCAN_SETUP_DATABASE_ENV}, ${SCAN_RUNTIME_DATABASE_ENV}, and ${SCAN_WORKER_DATABASE_ENV} must target the same isolated database.`,
     );
   }
   if (String(env[SCAN_ALLOW_SHARED_DATABASE_ENV] || '').trim()) {
@@ -573,9 +591,10 @@ function assertScanPerformanceDatabaseConfiguration(targets, env) {
   }
   if (setupIdentity.databaseName === SCAN_DATABASE_NAME) {
     if (setupIdentity.username !== SCAN_SETUP_DATABASE_ROLE
-      || runtimeIdentity.username !== SCAN_RUNTIME_DATABASE_ROLE) {
+      || runtimeIdentity.username !== SCAN_RUNTIME_DATABASE_ROLE
+      || workerIdentity.username !== SCAN_WORKER_DATABASE_ROLE) {
       throw scanDatabasePreflightError(
-        `the dedicated local identity requires ${SCAN_SETUP_DATABASE_ROLE}/${SCAN_RUNTIME_DATABASE_ROLE} roles.`,
+        `the dedicated local identity requires ${SCAN_SETUP_DATABASE_ROLE}/${SCAN_RUNTIME_DATABASE_ROLE}/${SCAN_WORKER_DATABASE_ROLE} roles.`,
       );
     }
     return;
@@ -592,10 +611,12 @@ function assertScanPerformanceDatabaseConfiguration(targets, env) {
   const suffix = suffixMatch[1];
   const expectedSetupRole = `${SCAN_SETUP_DATABASE_ROLE}_${suffix}`;
   const expectedRuntimeRole = `${SCAN_RUNTIME_DATABASE_ROLE}_${suffix}`;
+  const expectedWorkerRole = `${SCAN_WORKER_DATABASE_ROLE}_${suffix}`;
   if (setupIdentity.username !== expectedSetupRole
-    || runtimeIdentity.username !== expectedRuntimeRole) {
+    || runtimeIdentity.username !== expectedRuntimeRole
+    || workerIdentity.username !== expectedWorkerRole) {
     throw scanDatabasePreflightError(
-      `CI database suffix ${suffix} requires matching ${expectedSetupRole}/${expectedRuntimeRole} roles.`,
+      `CI database suffix ${suffix} requires matching ${expectedSetupRole}/${expectedRuntimeRole}/${expectedWorkerRole} roles.`,
     );
   }
 }

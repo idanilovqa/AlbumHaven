@@ -207,11 +207,26 @@ function didTestFail(testInfo) {
   return testInfo.status !== testInfo.expectedStatus;
 }
 
+export function sanitizeRuntimeArtifactText(value) {
+  return String(value || '').replace(/https?:\/\/[^\s]+/gu, (candidate) => {
+    try {
+      const parsed = new URL(candidate);
+      if (['/cover', '/cover-preview', '/view-data'].includes(parsed.pathname)) {
+        parsed.search = '';
+        parsed.hash = '';
+      }
+      return parsed.toString();
+    } catch {
+      return candidate;
+    }
+  });
+}
+
 function formatRuntimeLogEntry(entry) {
   const location = entry.location
-    ? ` @ ${entry.location.url || 'unknown'}:${entry.location.lineNumber ?? 0}:${entry.location.columnNumber ?? 0}`
+    ? ` @ ${sanitizeRuntimeArtifactText(entry.location.url || 'unknown')}:${entry.location.lineNumber ?? 0}:${entry.location.columnNumber ?? 0}`
     : '';
-  return `[${entry.timestamp}] ${entry.kind}/${entry.type}: ${entry.text}${location}`;
+  return `[${entry.timestamp}] ${entry.kind}/${entry.type}: ${sanitizeRuntimeArtifactText(entry.text)}${location}`;
 }
 
 function formatRuntimeLogs(entries) {

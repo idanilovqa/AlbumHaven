@@ -688,49 +688,72 @@ test('renderLibraryLoader shows regular scan cancellation only on the dedicated 
   assert.equal(browseButton.textContent, 'Browse Library');
 });
 
-test('renderLibraryLoader keeps Cancel Scan and Browse Library available while artist relations finalize', () => {
+test('renderLibraryLoader keeps Browse Library available at finalizing album-count boundaries', () => {
   const {
     context,
     actions,
     browseButton,
     cancelButton,
   } = createLoaderRenderFixture();
+  for (const albumTotal of [1, 100]) {
+    vm.runInContext(`
+      state.view = {
+        album_count: ${albumTotal},
+        artists_sidebar: [{ artist: 'Broadcast', count: 1 }],
+        primary_artist_groups: [{
+          artist: 'Broadcast',
+          albums: [{ key: 'broadcast::tender-buttons' }],
+        }],
+        family_artist_groups: [],
+        artist_groups: [{
+          artist: 'Broadcast',
+          albums: [{ key: 'broadcast::tender-buttons' }],
+        }],
+        query: '',
+        selected_artist: '',
+      };
+      state.status = {
+        scan_in_progress: true,
+        scan_phase: 'finalizing',
+        scan_mode: 'background',
+        relations_in_progress: true,
+        relations_phase: 'Refreshing artist relationships',
+        album_total: ${albumTotal},
+      };
+      state.awaitingInitialDataRefresh = false;
+      state.ui.scanPageReturnContext = { view: state.view };
+      renderLibraryLoader(state.status, { scanPageVisible: true });
+    `, context);
+
+    assert.equal(actions.hidden, false);
+    assert.equal(cancelButton.hidden, false);
+    assert.equal(cancelButton.disabled, false);
+    assert.equal(cancelButton.textContent, 'Cancel Scan');
+    assert.equal(browseButton.hidden, false);
+    assert.equal(browseButton.disabled, false);
+    assert.equal(browseButton.textContent, 'Browse Library');
+  }
+});
+
+test('renderLibraryLoader does not offer an empty durable finalizing snapshot', () => {
+  const { context, browseButton } = createLoaderRenderFixture();
   vm.runInContext(`
     state.view = {
-      album_count: 120,
-      artists_sidebar: [{ artist: 'Broadcast', count: 1 }],
-      primary_artist_groups: [{
-        artist: 'Broadcast',
-        albums: [{ key: 'broadcast::tender-buttons' }],
-      }],
-      family_artist_groups: [],
-      artist_groups: [{
-        artist: 'Broadcast',
-        albums: [{ key: 'broadcast::tender-buttons' }],
-      }],
-      query: '',
-      selected_artist: '',
+      album_count: 0, artists_sidebar: [], primary_artist_groups: [],
+      family_artist_groups: [], artist_groups: [], query: '', selected_artist: '',
     };
     state.status = {
       scan_in_progress: true,
       scan_phase: 'finalizing',
-      scan_mode: 'background',
       relations_in_progress: true,
-      relations_phase: 'Refreshing artist relationships',
-      album_total: 120,
+      album_total: 0,
     };
     state.awaitingInitialDataRefresh = false;
-    state.ui.scanPageReturnContext = { view: state.view };
+    state.ui.scanPageReturnContext = { view: {} };
     renderLibraryLoader(state.status, { scanPageVisible: true });
   `, context);
 
-  assert.equal(actions.hidden, false);
-  assert.equal(cancelButton.hidden, false);
-  assert.equal(cancelButton.disabled, false);
-  assert.equal(cancelButton.textContent, 'Cancel Scan');
-  assert.equal(browseButton.hidden, false);
-  assert.equal(browseButton.disabled, false);
-  assert.equal(browseButton.textContent, 'Browse Library');
+  assert.equal(browseButton.hidden, true);
 });
 
 test('renderLibraryLoader keeps the Browse Library label while a browse request is pending', () => {

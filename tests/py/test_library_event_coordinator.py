@@ -47,6 +47,34 @@ def test_duplicate_modifications_coalesce_by_album_directory(tmp_path: Path):
     assert emitted[0].paths == frozenset({path})
 
 
+def test_active_directory_is_preserved_as_recursive_target_scope(tmp_path: Path):
+    from music_app.services.library_event_coordinator import LibraryEventCoordinator
+    from music_app.services.library_reconciliation import LibraryEventKind
+
+    emitted = []
+    album_directory = tmp_path / "Artist" / "Album" / "Disc 2"
+    album_directory.mkdir(parents=True)
+    coordinator = LibraryEventCoordinator(
+        emit_request=emitted.append,
+        stat_path=lambda _path: (100, 10),
+        wait=lambda _seconds: None,
+    )
+
+    coordinator.accept(
+        _event(
+            LibraryEventKind.CREATED,
+            tmp_path,
+            "Artist/Album/Disc 2",
+            is_directory=True,
+        )
+    )
+    coordinator.flush()
+
+    assert len(emitted) == 1
+    assert emitted[0].paths == frozenset()
+    assert emitted[0].preserved_subtrees == frozenset({album_directory})
+
+
 def test_rapid_multi_file_copy_emits_one_album_request(tmp_path: Path):
     from music_app.services.library_event_coordinator import LibraryEventCoordinator
     from music_app.services.library_reconciliation import LibraryEventKind
@@ -1028,6 +1056,76 @@ def test_stop_cancels_pending_work_without_stability_waits_and_rejects_new_event
     ) is False
 
 
+def test_flush_attaches_one_stable_producer_key_to_the_coalesced_durable_request(
+    tmp_path: Path,
+):
+    from music_app.services.library_event_coordinator import LibraryEventCoordinator
+    from music_app.services.library_reconciliation import LibraryEventKind
+
+    emitted = []
+    coordinator = LibraryEventCoordinator(
+        emit_request=emitted.append,
+        producer_request_key_factory=lambda: "watcher-batch-0001",
+        stat_path=lambda _path: (100, 10),
+        wait=lambda _seconds: None,
+    )
+    coordinator.accept(_event(LibraryEventKind.CREATED, tmp_path, "Artist/Album/01.flac"))
+    coordinator.accept(_event(LibraryEventKind.CREATED, tmp_path, "Artist/Album/02.flac"))
+
+    coordinator.flush()
+
+    assert len(emitted) == 1
+    assert emitted[0].producer_request_key == "watcher-batch-0001"
+    assert emitted[0].paths == frozenset(
+        {
+            tmp_path / "Artist/Album/01.flac",
+            tmp_path / "Artist/Album/02.flac",
+        }
+    )
+
+
+def test_failed_durable_emit_restores_batch_with_same_producer_key(tmp_path: Path):
+    from music_app.services.library_event_coordinator import LibraryEventCoordinator
+    from music_app.services.library_reconciliation import LibraryEventKind
+
+    attempts = []
+
+    def emit(request):
+        attempts.append(request)
+        if len(attempts) == 1:
+            raise RuntimeError("database unavailable")
+
+    coordinator = LibraryEventCoordinator(
+        emit_request=emit,
+        producer_request_key_factory=lambda: "watcher-batch-retry",
+        stat_path=lambda _path: (100, 10),
+        wait=lambda _seconds: None,
+    )
+    coordinator.accept(_event(LibraryEventKind.CREATED, tmp_path, "Artist/Album/01.flac"))
+
+    with pytest.raises(RuntimeError, match="database unavailable"):
+        coordinator.flush()
+    coordinator.flush()
+
+    assert len(attempts) == 2
+    assert attempts[0] == attempts[1]
+    assert attempts[1].producer_request_key == "watcher-batch-retry"
+
+
+def test_lifespan_enqueues_durable_targeted_work_without_weakening_watch_lifecycle():
+    import inspect
+
+    import music_app
+
+    source = inspect.getsource(music_app.create_asgi_app)
+
+    assert "targeted_executor.submit" not in source
+    assert "create_targeted_reconciliation" in source
+    assert "producer_request_key" in source
+    assert "LibraryEventCoordinator(" in source
+    assert "auto_schedule=True" in source
+    assert "library_watch_service.start()" in source
+    assert "_stop_library_watch_runtime(" in source
 def test_stop_returns_while_an_existing_flush_is_blocked_in_filesystem_io(tmp_path: Path):
     from music_app.services.library_event_coordinator import LibraryEventCoordinator
     from music_app.services.library_reconciliation import LibraryEventKind

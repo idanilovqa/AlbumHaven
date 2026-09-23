@@ -1328,6 +1328,83 @@ def test_structural_album_edit_scopes_selection_and_completeness_to_active_track
         "library.local_track_files.metadata #>> '{scan_cache,stale}'"
     ) >= 2
     assert sql.count("::boolean, false ) is false") >= 2
+    assert "ops.cover_remote_save_checkpoints" not in sql
+
+
+def test_vacated_structural_album_retirement_uses_narrow_database_boundary():
+    from music_app.services import scan_cache_persistence
+
+    class RetirementConnection(FakeConnection):
+        def execute(self, sql, params=None):
+            cursor = super().execute(sql, params)
+            if "retire_vacated_structural_album" in sql:
+                return FakeCursor([{"disposition": "retired"}])
+            return cursor
+
+    connection = RetirementConnection()
+
+    disposition = scan_cache_persistence._retire_vacated_structural_album(
+        connection,
+        source_album_id=41,
+        destination_album_id=73,
+        library_id=5,
+        source_album_key="artist::source",
+        destination_album_key="artist::destination",
+    )
+
+    assert disposition == "retired"
+    assert len(connection.executed) == 1
+    sql, params = connection.executed[0]
+    assert "library.retire_vacated_structural_album" in sql
+    assert params == {
+        "source_album_id": 41,
+        "destination_album_id": 73,
+        "library_id": 5,
+        "source_album_key": "artist::source",
+        "destination_album_key": "artist::destination",
+    }
+
+
+def test_vacated_structural_album_sibling_retirement_uses_bounded_database_boundary():
+    from music_app.services import scan_cache_persistence
+
+    class SiblingRetirementConnection(FakeConnection):
+        def execute(self, sql, params=None):
+            cursor = super().execute(sql, params)
+            if "retire_vacated_structural_album_siblings" in sql:
+                return FakeCursor([{"retired_count": 2}])
+            return cursor
+
+    connection = SiblingRetirementConnection()
+
+    retired_count = scan_cache_persistence._retire_vacated_structural_album_siblings(
+        connection,
+        destination_album_id=73,
+        library_id=5,
+    )
+
+    assert retired_count == 2
+    assert len(connection.executed) == 1
+    sql, params = connection.executed[0]
+    assert "library.retire_vacated_structural_album_siblings" in sql
+    assert params == {"destination_album_id": 73, "library_id": 5}
+
+
+def test_structural_edit_sweeps_vacated_siblings_after_semantic_reconciliation():
+    import inspect
+
+    from music_app.services import scan_cache_persistence
+
+    source = inspect.getsource(
+        scan_cache_persistence.PostgresScanCacheAdapter.persist_structural_tag_edit
+    )
+
+    reconcile_at = source.index("_execute_semantic_local_album_reconciliation")
+    sweep_at = source.index("_retire_vacated_structural_album_siblings")
+    assert reconcile_at < sweep_at
+    assert "retirement_disposition = _retire_vacated_structural_album" in source
+    assert "retirement_disposition == \"preserved_track_tombstone\"" in source
+    assert source.count("_retire_vacated_structural_album(") == 2
 
 
 def test_scan_publication_relies_on_row_local_identity_constraint_without_full_library_reconciliation():
@@ -2975,3 +3052,213 @@ def test_postgres_scan_cache_rating_seed_failure_rolls_back_and_propagates(monke
     assert connection.exit_exc_type is RuntimeError
     assert connection.commit_calls == 0
     assert any("jsonb_build_object('scan_cache'" in sql for sql, _params in connection.executed)
+
+
+def test_durable_targeted_preparer_publishes_only_claim_scoped_prepared_payload():
+    from types import SimpleNamespace
+
+    from music_app.services.scan_cache_persistence import (
+        DurableTargetedReconciliationPreparationAdapter,
+    )
+
+    observed = {}
+
+    def build_albums(file_cache, separate_release_keys):
+        observed["file_cache"] = file_cache
+        observed["separate_release_keys"] = separate_release_keys
+        return []
+
+    class PublicationGuard:
+        def publish_prepared(self, *, inventory, stale_scopes):
+            observed["inventory"] = inventory
+            observed["stale_scopes"] = stale_scopes
+            return {
+                "publication_won": True,
+                "inventory_mutation_revision": 17,
+                "affected_album_keys": [],
+            }
+
+    adapter = DurableTargetedReconciliationPreparationAdapter(
+        build_albums=build_albums
+    )
+    active_path = "C:/Music/Album/01.flac"
+    active_entry = {
+        "path": active_path,
+        "mtime": 1710000000.0,
+        "size": 12345,
+        "album": "Album",
+        "album_artist": "Artist",
+        "title": "Track",
+        "track_number": 1,
+        "disc_number": 1,
+        "disc_number_raw": "1",
+        "artist": "Artist",
+        "duration_seconds": 178,
+        "cover_path": None,
+        "year": 2026,
+        "edition": None,
+        "album_rating": 0,
+        "library_root_id": "root-a",
+        "library_root_category": "main_library_roots",
+        "exception_type": None,
+    }
+    result = adapter.persist_targeted_inventory_mutation(
+        root_id="root-a",
+        active_file_entries={active_path: active_entry},
+        deleted_paths=("C:/Music/Removed/01.flac",),
+        deleted_subtrees=("C:/Music/Gone",),
+        moves=(
+            {
+                "source_root_id": "root-b",
+                "source_path": "D:/Music/Old",
+                "destination_root_id": "root-a",
+                "destination_path": "C:/Music/New",
+                "is_directory": True,
+            },
+        ),
+        preparation_scope=SimpleNamespace(
+            separate_release_keys=("artist::album::disc-2",),
+            existing_memberships=(),
+        ),
+        publication_guard=PublicationGuard(),
+    )
+
+    assert observed["separate_release_keys"] == {"artist::album::disc-2"}
+    assert observed["file_cache"] == {active_path: active_entry}
+    assert set(observed["inventory"]) == {
+        "artists",
+        "albums",
+        "featured_artists",
+        "tracks",
+        "track_files",
+    }
+    assert observed["inventory"]["albums"] == []
+    assert observed["inventory"]["track_files"][0]["private_path"] == active_path
+    assert observed["stale_scopes"] == [
+        {
+            "root_id": "root-a",
+            "paths": ["C:/Music/Removed/01.flac"],
+            "subtrees": ["C:/Music/Gone"],
+        },
+        {"root_id": "root-b", "paths": [], "subtrees": ["D:/Music/Old"]},
+    ]
+    assert result["inventory_mutation_revision"] == 17
+
+
+@pytest.mark.parametrize(
+    ("generated_key", "generated_artist", "existing_key", "existing_artist"),
+    (
+        (
+            "artist::album::folder-two",
+            "artist",
+            "artist::album",
+            "artist",
+        ),
+        (
+            "artist::album::disc-2",
+            "artist",
+            "artist::album",
+            "artist",
+        ),
+        (
+            "various artists::compilation",
+            "various artists",
+            "various artists::compilation::canonical",
+            "various artists",
+        ),
+    ),
+    ids=("partial-multi-folder", "partial-multi-disc", "partial-compilation"),
+)
+def test_durable_targeted_preparer_remaps_active_membership_identity_before_publish(
+    monkeypatch,
+    generated_key,
+    generated_artist,
+    existing_key,
+    existing_artist,
+):
+    from music_app.services import scan_cache_persistence
+    from music_app.services.scan_cache_persistence import (
+        DurableTargetedReconciliationPreparationAdapter,
+    )
+
+    path = "C:/Music/Album/Disc 2/01.flac"
+    published = {}
+    monkeypatch.setattr(
+        scan_cache_persistence,
+        "_inventory_rows_from_albums",
+        lambda _cache, _albums: (
+            [
+                {
+                    "artist_key": generated_artist,
+                    "name": generated_artist,
+                    "sort_name": generated_artist,
+                    "metadata": {},
+                },
+                {
+                    "artist_key": existing_artist,
+                    "name": existing_artist,
+                    "sort_name": existing_artist,
+                    "metadata": {},
+                },
+            ],
+            [
+                {
+                    "artist_key": generated_artist,
+                    "album_key": generated_key,
+                    "title": "Album",
+                    "release_year": 2026,
+                    "metadata": {"edition": ""},
+                }
+            ],
+            [
+                {
+                    "album_key": generated_key,
+                    "artist_key": generated_artist,
+                    "featured_kind": "owner",
+                    "metadata": {},
+                }
+            ],
+            [
+                {
+                    "album_key": generated_key,
+                    "artist_key": generated_artist,
+                    "track_key": path,
+                }
+            ],
+            [],
+        ),
+    )
+
+    class PublicationGuard:
+        def publish_prepared(self, *, inventory, stale_scopes):
+            published.update(inventory)
+            assert stale_scopes == []
+            return {"publication_won": True}
+
+    adapter = DurableTargetedReconciliationPreparationAdapter(
+        build_albums=lambda _cache, _separate: []
+    )
+    adapter.persist_targeted_inventory_mutation(
+        root_id="root-a",
+        active_file_entries={path: {"path": path, "album": "Album"}},
+        preparation_scope=SimpleNamespace(
+            separate_release_keys=(),
+            existing_memberships=(
+                {
+                    "private_path": path,
+                    "album_key": existing_key,
+                    "album_title": "Album",
+                    "release_year": 2026,
+                    "edition": "",
+                    "artist_key": existing_artist,
+                },
+            ),
+        ),
+        publication_guard=PublicationGuard(),
+    )
+
+    assert published["albums"][0]["album_key"] == existing_key
+    assert published["albums"][0]["artist_key"] == existing_artist
+    assert published["featured_artists"][0]["album_key"] == existing_key
+    assert published["featured_artists"][0]["artist_key"] == existing_artist
+    assert published["tracks"][0]["album_key"] == existing_key

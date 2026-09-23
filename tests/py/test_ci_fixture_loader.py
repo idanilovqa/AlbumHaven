@@ -1836,6 +1836,7 @@ def test_bootstrap_contract_uses_strict_suffixed_database_and_role_names(tmp_pat
         "migrator": "album_haven_migrator_run_123_attempt_2_python_windows",
         "app": "album_haven_app_run_123_attempt_2_python_windows",
         "readonly": "album_haven_readonly_run_123_attempt_2_python_windows",
+        "worker": "album_haven_worker_run_123_attempt_2_python_windows",
     }
     assert contract["appPrivilegeMode"] == "Direct"
     assert _bootstrap_contract(tmp_path, AppPrivilegeMode="Inherited")["appPrivilegeMode"] == "Inherited"
@@ -1858,6 +1859,7 @@ def test_bootstrap_contract_defines_least_privilege_positive_and_negative_probes
         "migrator": {"allow": ["create-schema", "temporary-table", "select", "insert", "update", "delete", "sequence-usage"], "deny": ["superuser", "createdb", "createrole", "replication", "bypassrls"]},
         "app": {"allow": ["connect", "temporary-table", "schema-usage", "select", "insert", "update", "sequence-usage"], "deny": ["create-schema", "truncate", "references", "trigger", "ops-write"]},
         "readonly": {"allow": ["connect", "schema-usage", "select"], "deny": ["temporary-table", "insert", "update", "delete", "truncate", "sequence-usage"]},
+        "worker": {"allow": ["connect", "schema-usage", "select", "insert", "update", "sequence-usage"], "deny": ["create-schema", "temporary-table", "delete", "truncate", "references", "trigger"]},
     }
 
 
@@ -1903,7 +1905,7 @@ def test_bootstrap_contract_limits_teardown_to_exact_owned_database_and_roles(tm
     assert contract["teardown"] == {
         "terminateDatabase": "album_haven_ci_run_123_attempt_2_python_windows",
         "dropDatabase": "album_haven_ci_run_123_attempt_2_python_windows",
-        "dropRoles": ["album_haven_app_run_123_attempt_2_python_windows", "album_haven_readonly_run_123_attempt_2_python_windows", "album_haven_migrator_run_123_attempt_2_python_windows"],
+        "dropRoles": ["album_haven_app_run_123_attempt_2_python_windows", "album_haven_readonly_run_123_attempt_2_python_windows", "album_haven_worker_run_123_attempt_2_python_windows", "album_haven_migrator_run_123_attempt_2_python_windows"],
         "stateRequired": True,
         "rejectUnownedTargets": True,
     }

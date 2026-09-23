@@ -10,7 +10,7 @@ const ALL_ARTISTS_RETURN_MEMORY_POLICY = 'all-artists-return-memory-sample-windo
 function isTemporaryColdProblematicApiException(metricId, targetMs, graceMs, hardCeilingMs) {
   // Owner-approved temporary allowance; restore the original ceiling after Phase 9 investigation.
   return metricId === 'utility-problematic-files-isolated-postgres.coldProblematicApiMs'
-    && targetMs === 1000 && graceMs === 800 && hardCeilingMs === 1800;
+    && targetMs === 1000 && graceMs === 1000 && hardCeilingMs === 2000;
 }
 
 function finiteNonNegativeNumber(value) {

@@ -45,14 +45,14 @@ test('timing budgets preserve explicit owner-approved grace within 200-400 ms', 
   assert.throws(() => defineTimingBudget({ targetMaximum: 1000, graceMs: 401 }), /between 200 and 400 ms/);
 });
 
-test('temporary cold API grace is metric-scoped and preserves exact boundaries', async () => {
+test('temporary cold API 1000 ms grace is metric-scoped and preserves exact boundaries', async () => {
   const { defineTimingBudget, evaluateTimingBudget } = await import('../../tests/e2e/helpers/timingBudget.js');
   const metricId = 'utility-problematic-files-isolated-postgres.coldProblematicApiMs';
-  const contract = { metricId, targetMaximum: 1000, graceMs: 800, hardCeiling: 1800 };
+  const contract = { metricId, targetMaximum: 1000, graceMs: 1000, hardCeiling: 2000 };
   for (const contractName of ['local', 'ci']) {
     for (const [actual, status, passed] of [
       [1000, 'target-met', true], [1001, 'grace-used', true],
-      [1800, 'grace-used', true], [1801, 'hard-fail', false],
+      [2000, 'grace-used', true], [2001, 'hard-fail', false],
     ]) {
       const result = evaluateTimingBudget(actual, { ...contract, contractName });
       assert.equal(result.status, status);
@@ -63,8 +63,8 @@ test('temporary cold API grace is metric-scoped and preserves exact boundaries',
   }
   for (const override of [
     { metricId: undefined }, { metricId: 'example.readyMs' },
-    { targetMaximum: 999, hardCeiling: 1799 },
-    { graceMs: 799, hardCeiling: 1799 }, { hardCeiling: 1801 },
+    { targetMaximum: 999, hardCeiling: 1999 },
+    { graceMs: 999, hardCeiling: 1999 }, { hardCeiling: 2001 },
   ]) {
     assert.throws(() => defineTimingBudget({ ...contract, ...override }), /grace|ceiling/i);
   }

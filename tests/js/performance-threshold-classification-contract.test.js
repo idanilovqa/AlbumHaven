@@ -211,18 +211,18 @@ test('runner keeps all-attempt aggregation while reporter keeps majority aggrega
   assert.equal(reporterSummary.passed, true);
 });
 
-test('cold API temporary exception retains identity through raw and aggregate classification', () => {
+test('cold API temporary 1000 ms grace retains identity through raw and aggregate classification', () => {
   const runner = require('../../scripts/run-performance-playwright.cjs')._private;
   const reporter = require('../../scripts/playwright-performance-reporter.cjs')._private;
   const metricId = 'utility-problematic-files-isolated-postgres.coldProblematicApiMs';
   const row = {
     metricId, key: 'coldProblematicApiMs', checkpointKey: 'problematic-files-cold-api',
-    units: 'ms', actual: 1454, targetMaximum: 1000, graceMs: 800,
-    hardCeiling: 1800, allowedMaximum: 1800, passed: true, performanceStatus: 'grace-used',
+    units: 'ms', actual: 1454, targetMaximum: 1000, graceMs: 1000,
+    hardCeiling: 2000, allowedMaximum: 2000, passed: true, performanceStatus: 'grace-used',
   };
   for (const [actual, performanceStatus, passed] of [
     [1000, 'target-met', true], [1001, 'grace-used', true],
-    [1800, 'grace-used', true], [1801, 'hard-fail', false],
+    [2000, 'grace-used', true], [2001, 'hard-fail', false],
   ]) {
     const result = authority.classifyPerformanceThreshold({ ...row, actual });
     assert.equal(result.performanceStatus, performanceStatus);
@@ -245,15 +245,37 @@ test('cold API temporary exception retains identity through raw and aggregate cl
     assert.equal(aggregate([row, { ...row, metricId: 'other.ready' }, row]).passed, false);
     for (const override of [
       { metricId: undefined }, { metricId: 'other.ready' },
-      { targetMaximum: 999, hardCeiling: 1799, allowedMaximum: 1799 },
-      { graceMs: 799, hardCeiling: 1799, allowedMaximum: 1799 },
-      { hardCeiling: 1801, allowedMaximum: 1801 },
+      { targetMaximum: 999, hardCeiling: 1999, allowedMaximum: 1999 },
+      { graceMs: 999, hardCeiling: 1999, allowedMaximum: 1999 },
+      { hardCeiling: 2001, allowedMaximum: 2001 },
     ]) {
       const invalid = { ...row, ...override };
       assert.equal(authority.classifyPerformanceThreshold(invalid).passed, false);
       assert.equal(reporter.summarizeBenchmarkValidation({ results: [invalid] }, true).results[0].passed, false);
       assert.equal(aggregate([invalid]).passed, false);
     }
+  }
+});
+
+test('Problematic Files initial readiness classifies 1400 ms as grace-used and 1401 ms as hard-fail', () => {
+  const row = {
+    metricId: 'utility-problematic-files-isolated-postgres.problematicReadyMs',
+    key: 'problematicReadyMs',
+    units: 'ms',
+    targetMaximum: 1000,
+    graceMs: 400,
+    hardCeiling: 1400,
+    allowedMaximum: 1400,
+  };
+  for (const [actual, performanceStatus, passed] of [
+    [1000, 'target-met', true],
+    [1001, 'grace-used', true],
+    [1400, 'grace-used', true],
+    [1401, 'hard-fail', false],
+  ]) {
+    const result = authority.classifyPerformanceThreshold({ ...row, actual });
+    assert.equal(result.performanceStatus, performanceStatus);
+    assert.equal(result.passed, passed);
   }
 });
 

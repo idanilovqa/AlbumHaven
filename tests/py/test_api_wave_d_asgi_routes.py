@@ -1992,6 +1992,7 @@ def test_asgi_cover_lookup_add_remote_merges_existing_candidates_and_remote_imag
         "Manual cover link extraction requested",
         "Manual cover link extraction completed",
     ]
+    assert all("urls" not in call for call in log_calls)
     assert all(call["config"] is app.config for call in log_calls)
     assert all(call["logger"] is asgi_app.state.logger for call in log_calls)
     assert update_calls[0]["config"] is app.config

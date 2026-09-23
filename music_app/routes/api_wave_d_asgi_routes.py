@@ -1218,7 +1218,6 @@ async def utilities_cover_lookup_add_remote(request: Request) -> JSONResponse:
         album=str((album or {}).get("name") or (album or {}).get("album") or ""),
         task_id=task_id,
         url_count=len(cleaned_urls),
-        urls=cleaned_urls,
      history_scope=history_scope)
     album_context = resolve_album_context(config, album or {})
     if album_context is None:

@@ -527,6 +527,55 @@ def test_asgi_library_settings_write_uses_asgi_state_without_bridge_context(app,
     ]]
 
 
+def test_library_settings_refresh_uses_authorized_durable_scan_when_available(
+    monkeypatch,
+):
+    from music_app.routes import api_wave_a_asgi_routes as routes
+
+    enqueues = []
+    repository = SimpleNamespace(
+        enqueue_authorized_full_scan=lambda **kwargs: (
+            enqueues.append(kwargs)
+            or SimpleNamespace(created=True, job_id=91, intent_id=92)
+        )
+    )
+    request = SimpleNamespace(
+        app=SimpleNamespace(
+            state=SimpleNamespace(
+                scan_job_repository=repository,
+                config={},
+                library_state={},
+                logger=SimpleNamespace(),
+            )
+        )
+    )
+    evaluation = SimpleNamespace(audit=SimpleNamespace(library_id=7))
+    monkeypatch.setattr(
+        routes,
+        "get_library_roots",
+        lambda _config: [{"id": "updated-root", "path": "C:/Music"}],
+    )
+    monkeypatch.setattr(
+        routes,
+        "request_origin_ref_for_request",
+        lambda _request: "network:settings-request",
+    )
+
+    start_refresh = routes._start_library_settings_refresh_for_asgi_request(
+        request,
+        policy_evaluation=evaluation,
+    )
+    start_refresh(force=True, scan_mode="library_settings_update")
+
+    assert len(enqueues) == 1
+    assert enqueues[0]["policy_evaluation"] is evaluation
+    assert enqueues[0]["library_id"] == 7
+    assert enqueues[0]["request_origin_ref"] == "network:settings-request"
+    assert enqueues[0]["root_ids"] == ("updated-root",)
+    assert enqueues[0]["mode"] == "library_settings_update"
+    assert enqueues[0]["force"] is True
+
+
 def test_asgi_library_settings_post_persists_settings_and_starts_refresh(app, asgi_app, monkeypatch, ledger):
     from music_app.routes import api_wave_a_asgi_routes as asgi_routes
     from music_app.services.current_actor import ActorState, CurrentActor, LibraryRelationship

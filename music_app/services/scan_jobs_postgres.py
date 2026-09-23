@@ -82,6 +82,10 @@ class ClaimedTargetedReconciliationIntent:
         return self.request.deleted_subtrees
 
     @property
+    def preserved_subtrees(self) -> frozenset[Path]:
+        return self.request.preserved_subtrees
+
+    @property
     def moves(self) -> tuple[TargetedMove, ...]:
         return self.request.moves
 
@@ -462,6 +466,9 @@ class PostgresScanJobRepository:
             active_paths = sorted(str(path) for path in request.paths)
             deleted_paths = sorted(str(path) for path in request.deleted_paths)
             deleted_subtrees = sorted(str(path) for path in request.deleted_subtrees)
+            preserved_subtrees = sorted(
+                str(path) for path in request.preserved_subtrees
+            )
             canonical_payload = json.dumps(
                 {
                     "active_paths": active_paths,
@@ -469,6 +476,7 @@ class PostgresScanJobRepository:
                     "deleted_subtrees": deleted_subtrees,
                     "moves": moves,
                     "primary_root_id": resolved[request.root_id],
+                    "preserved_subtrees": preserved_subtrees,
                 },
                 ensure_ascii=False,
                 allow_nan=False,
@@ -489,7 +497,8 @@ class PostgresScanJobRepository:
                     %(producer_request_key)s, %(request_digest)s,
                     %(deployment_mode)s, %(client_surface)s,
                     %(active_paths)s, %(deleted_paths)s,
-                    %(deleted_subtrees)s, %(moves_json)s::jsonb,
+                    %(deleted_subtrees)s, %(preserved_subtrees)s,
+                    %(moves_json)s::jsonb,
                     %(accepted_at)s
                   )
                 """,
@@ -503,6 +512,7 @@ class PostgresScanJobRepository:
                     "active_paths": active_paths,
                     "deleted_paths": deleted_paths,
                     "deleted_subtrees": deleted_subtrees,
+                    "preserved_subtrees": preserved_subtrees,
                     "moves_json": json.dumps(
                         moves, ensure_ascii=False, separators=(",", ":"), sort_keys=True
                     ),
@@ -1048,6 +1058,9 @@ class PostgresScanJobRepository:
             ),
             deleted_subtrees=frozenset(
                 Path(value) for value in payload.get("deleted_subtrees") or ()
+            ),
+            preserved_subtrees=frozenset(
+                Path(value) for value in payload.get("preserved_subtrees") or ()
             ),
             moves=tuple(
                 TargetedMove(

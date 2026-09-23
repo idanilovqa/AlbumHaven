@@ -139,6 +139,12 @@ def _targeted_request():
         ),
         deleted_paths=frozenset({Path("C:/Music/Old/03.flac")}),
         deleted_subtrees=frozenset({Path("C:/Music/Gone")}),
+        preserved_subtrees=frozenset(
+            {
+                Path("C:/Music/Gone/Recreated"),
+                Path("C:/Music/Old Album/Surviving Disc"),
+            }
+        ),
         moves=(
             TargetedMove(
                 source=Path("C:/Music/Old Album"),
@@ -300,7 +306,7 @@ def test_full_scan_domain_record_is_created_before_path_free_job_in_one_transact
     assert command.idempotency_key == "full-scan-intent:71"
 
 
-def test_targeted_intent_preserves_exact_ordered_paths_and_moves_before_enqueue():
+def test_targeted_intent_preserves_exact_ordered_paths_moves_and_subtrees_before_enqueue():
     request = _targeted_request()
     connection = _RecordingConnection(
         [
@@ -339,6 +345,10 @@ def test_targeted_intent_preserves_exact_ordered_paths_and_moves_before_enqueue(
     ]
     assert values["deleted_paths"] == [str(Path("C:/Music/Old/03.flac"))]
     assert values["deleted_subtrees"] == [str(Path("C:/Music/Gone"))]
+    assert values["preserved_subtrees"] == [
+        str(Path("C:/Music/Gone/Recreated")),
+        str(Path("C:/Music/Old Album/Surviving Disc")),
+    ]
     assert values["primary_root_id"] == 31
     assert json.loads(values["moves_json"]) == [
         {
@@ -358,6 +368,25 @@ def test_targeted_intent_preserves_exact_ordered_paths_and_moves_before_enqueue(
             "source_root_id": 31,
         },
     ]
+    canonical_payload = json.dumps(
+        {
+            "active_paths": values["active_paths"],
+            "deleted_paths": values["deleted_paths"],
+            "deleted_subtrees": values["deleted_subtrees"],
+            "moves": json.loads(values["moves_json"]),
+            "preserved_subtrees": values["preserved_subtrees"],
+            "primary_root_id": values["primary_root_id"],
+        },
+        ensure_ascii=False,
+        allow_nan=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    )
+    expected_digest = sha256(canonical_payload.encode("utf-8")).hexdigest()
+    assert values["request_digest"] == expected_digest
+    assert jobs.calls[0][1].idempotency_key == (
+        f"targeted-reconciliation-request:{expected_digest}"
+    )
 
 
 def test_targeted_generic_job_contains_only_stable_intent_identity_not_paths():
@@ -484,6 +513,10 @@ def test_claimed_targeted_intent_reload_is_immutable_and_exact():
         ],
         "deleted_paths": [str(Path("C:/Music/Old/03.flac"))],
         "deleted_subtrees": [str(Path("C:/Music/Gone"))],
+        "preserved_subtrees": [
+            str(Path("C:/Music/Gone/Recreated")),
+            str(Path("C:/Music/Old Album/Surviving Disc")),
+        ],
         "moves": [
             {
                 "source_path": str(Path("C:/Music/Old Album")),
@@ -521,6 +554,9 @@ def test_claimed_targeted_intent_reload_is_immutable_and_exact():
     )
     assert first.deleted_subtrees == frozenset(
         Path(path) for path in loaded["deleted_subtrees"]
+    )
+    assert first.preserved_subtrees == frozenset(
+        Path(path) for path in loaded["preserved_subtrees"]
     )
     assert first.moves == (
         TargetedMove(

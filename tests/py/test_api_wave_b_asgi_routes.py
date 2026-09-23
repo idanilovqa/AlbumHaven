@@ -1650,6 +1650,82 @@ def test_asgi_playback_session_complete_persists_listen_history(
     assert measured_rows(ledger, ledger["other"]) == []
 
 
+def test_measured_scrobble_route_supplies_durable_retry_recorder(monkeypatch):
+    import asyncio
+
+    from music_app.routes import api_wave_b_asgi_routes as routes
+
+    owner = SimpleNamespace(account_id=7, library_id=9)
+
+    async def history_scope(_request, required=True):
+        return owner
+
+    async def request_json():
+        return {"measurement_version": "rendered-pcm-v1"}
+
+    captured = {}
+
+    def record_complete(_config, payload, **dependencies):
+        captured.update(dependencies)
+        assert payload["finalized"] is False
+        return {"ok": True, "scrobbled": False}, 200
+
+    monkeypatch.setattr(routes, "history_scope_for_request", history_scope)
+    monkeypatch.setattr(routes, "get_saved_lastfm_session", lambda *_args, **_kwargs: object())
+    monkeypatch.setattr(routes, "record_playback_session_complete", record_complete)
+    request = SimpleNamespace(
+        json=request_json,
+        app=SimpleNamespace(state=SimpleNamespace(config={}, logger=None)),
+        state=SimpleNamespace(),
+    )
+
+    response = asyncio.run(routes.playback_session_scrobble(request))
+
+    assert response.status_code == 200
+    assert callable(captured["record_retryable_scrobble"])
+
+
+def test_durable_lastfm_retry_recorder_preserves_policy_scope(monkeypatch):
+    from music_app.routes import api_wave_b_asgi_routes as routes
+
+    calls = []
+    accepted = object()
+    repository = SimpleNamespace(
+        accept_playback_failure=lambda **values: calls.append(values) or accepted
+    )
+    audit = SimpleNamespace(
+        action="integration.lastfm.scrobble",
+        account_id=7,
+        library_id=9,
+        deployment_mode="self_hosted",
+        client_surface_class="private_web",
+    )
+    request = SimpleNamespace(
+        app=SimpleNamespace(
+            state=SimpleNamespace(lastfm_retry_job_repository=repository)
+        ),
+        state=SimpleNamespace(policy_evaluation=SimpleNamespace(audit=audit)),
+    )
+    monkeypatch.setattr(
+        routes, "request_origin_ref_for_request", lambda _request: "browser:tab-123"
+    )
+
+    result = routes._durable_lastfm_retry_recorder(request)(
+        {},
+        listen_id="measured-listen-1",
+        entry={"id": "measured-listen-1"},
+        retry_count=1,
+        error="provider busy",
+    )
+
+    assert result is accepted
+    assert calls[0]["account_id"] == 7
+    assert calls[0]["library_id"] == 9
+    assert calls[0]["request_origin_ref"] == "browser:tab-123"
+    assert calls[0]["deployment_mode"] == "self_hosted"
+    assert calls[0]["client_surface"] == "private_web"
+
+
 def test_asgi_loop_mutations_preserve_validation_and_create_side_effects(app, monkeypatch):
     _authorize_loop_fixture(monkeypatch)
     from music_app.routes import api_wave_b_asgi_routes as asgi_routes

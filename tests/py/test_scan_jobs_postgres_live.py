@@ -231,7 +231,7 @@ def test_live_scan_migration_compiles_and_effectively_denies_private_storage(
     procedures = (
         "library.create_full_scan_intent(bigint,bigint,varchar,varchar,varchar,varchar,varchar,boolean,bigint[],timestamptz)",
         "library.create_full_scan_intent_v2(bigint,bigint,varchar,varchar,varchar,varchar,varchar,boolean,bigint[],timestamptz)",
-        "library.create_targeted_reconciliation_intent(bigint,bigint,varchar,varchar,varchar,varchar,text[],text[],text[],jsonb,timestamptz)",
+        "library.create_targeted_reconciliation_intent(bigint,bigint,varchar,varchar,varchar,varchar,text[],text[],text[],text[],jsonb,timestamptz)",
         "library.link_scan_intent_job(varchar,bigint,bigint)",
         "library.request_active_full_scan_cancellation(bigint,bigint,timestamptz)",
         "library.load_claimed_full_scan_intent(bigint,varchar,varchar)",
@@ -374,7 +374,7 @@ def test_live_concurrent_full_scan_requests_converge_on_one_intent_and_job(
     assert row == {"intents": 1, "jobs": 1}
 
 
-def test_live_targeted_paths_and_moves_round_trip_exactly_through_claimed_loader(
+def test_live_targeted_paths_moves_and_preserved_subtrees_round_trip_through_claimed_loader(
     live_scan_database,
 ):
     setup_url, runtime_url, worker_url = live_scan_database
@@ -386,6 +386,9 @@ def test_live_targeted_paths_and_moves_round_trip_exactly_through_claimed_loader
         ),
         deleted_paths=frozenset({Path(r"C:\Music\Old\03.flac")}),
         deleted_subtrees=frozenset({Path(r"C:\Music\Gone")}),
+        preserved_subtrees=frozenset(
+            {Path(r"C:\Music\Gone\Recreated Disc")}
+        ),
         moves=(
             TargetedMove(
                 source=Path(r"C:\Music\Old Album"),
@@ -451,6 +454,11 @@ def test_live_targeted_paths_and_moves_round_trip_exactly_through_claimed_loader
         ("active", str(Path(r"C:\Music\Zulu\02.flac")), 1),
         ("deleted", str(Path(r"C:\Music\Old\03.flac")), 0),
         ("deleted_subtree", str(Path(r"C:\Music\Gone")), 0),
+        (
+            "preserved_subtree",
+            str(Path(r"C:\Music\Gone\Recreated Disc")),
+            0,
+        ),
     ]
     assert [dict(row) for row in move_rows] == [
         {

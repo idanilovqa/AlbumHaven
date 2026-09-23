@@ -105,6 +105,78 @@ def _durable_cover_request_context(request: Request):
     return repository, audit
 
 
+def _cover_lookup_task_sort_key(task: Mapping[str, object]) -> tuple[str, str]:
+    timestamp = (
+        str(task.get("notification_completed_at") or "").strip()
+        or str(task.get("finished_at") or "").strip()
+        or str(task.get("updated_at") or "").strip()
+        or str(task.get("created_at") or "").strip()
+    )
+    return timestamp, str(task.get("id") or "")
+
+
+def _list_cover_lookup_tasks_for_request(
+    request: Request, config: Mapping[str, object]
+) -> list[dict[str, object]]:
+    tasks_by_id = {
+        str(task.get("id") or "").strip(): task
+        for task in list_cover_lookup_tasks(config=config)
+        if str(task.get("id") or "").strip()
+    }
+    durable = _durable_cover_request_context(request)
+    if durable is not None:
+        repository, audit = durable
+        durable_tasks = repository.list_candidate_lookup_tasks(
+            actor_account_id=audit.account_id,
+            library_id=audit.library_id,
+        )
+        for task in durable_tasks:
+            serialized = serialize_cover_lookup_task_payload(task)
+            task_id = str((serialized or {}).get("id") or "").strip()
+            if task_id:
+                tasks_by_id[task_id] = serialized
+    tasks = list(tasks_by_id.values())
+    tasks.sort(key=_cover_lookup_task_sort_key, reverse=True)
+    return tasks
+
+
+def _clear_cover_lookup_tasks_for_request(
+    request: Request,
+    config: Mapping[str, object],
+    task_ids: list[str] | None,
+) -> int:
+    removed_count = clear_completed_cover_lookup_tasks(task_ids, config=config)
+    durable = _durable_cover_request_context(request)
+    if durable is not None:
+        repository, audit = durable
+        removed_count += len(
+            repository.clear_completed_candidate_lookup_tasks(
+                actor_account_id=audit.account_id,
+                library_id=audit.library_id,
+                task_keys=task_ids,
+            )
+        )
+    return removed_count
+
+
+def _mark_cover_lookup_task_action_for_request(
+    request: Request,
+    config: Mapping[str, object],
+    task_id: str,
+) -> dict[str, object] | None:
+    durable = _durable_cover_request_context(request)
+    if durable is not None:
+        repository, audit = durable
+        task = repository.mark_candidate_lookup_notification_action_taken(
+            actor_account_id=audit.account_id,
+            library_id=audit.library_id,
+            task_key=task_id,
+        )
+        if task is not None:
+            return serialize_cover_lookup_task_payload(task)
+    return mark_cover_lookup_task_notification_action_taken(task_id, config=config)
+
+
 def _lookup_task_payload_for_request(
     request: Request, task_id: str
 ) -> dict[str, object]:
@@ -345,7 +417,9 @@ def _task_matches_album_context(
 @router.get("/utilities/cover-lookup/tasks")
 async def utilities_cover_lookup_tasks(request: Request) -> JSONResponse:
     config = _app_config(request)
-    return JSONResponse({"ok": True, "tasks": list_cover_lookup_tasks(config=config)})
+    return JSONResponse(
+        {"ok": True, "tasks": _list_cover_lookup_tasks_for_request(request, config)}
+    )
 
 
 @router.post("/utilities/cover-lookup/tasks/clear-completed")
@@ -356,12 +430,14 @@ async def utilities_cover_lookup_tasks_clear_completed(request: Request) -> JSON
     raw_task_ids = payload.get("task_ids") if isinstance(payload, dict) else None
     task_ids = _clean_string_list(raw_task_ids) if isinstance(raw_task_ids, list) else None
     config = _app_config(request)
-    removed_count = clear_completed_cover_lookup_tasks(task_ids, config=config)
+    removed_count = _clear_cover_lookup_tasks_for_request(
+        request, config, task_ids
+    )
     return JSONResponse(
         {
             "ok": True,
             "removed_count": removed_count,
-            "tasks": list_cover_lookup_tasks(config=config),
+            "tasks": _list_cover_lookup_tasks_for_request(request, config),
         }
     )
 
@@ -372,14 +448,16 @@ async def utilities_cover_lookup_task_clear(request: Request, task_id: str) -> J
     if not normalized_id:
         return _json_response(_task_not_found_response("Lookup task"))
     config = _app_config(request)
-    removed_count = clear_completed_cover_lookup_tasks([normalized_id], config=config)
+    removed_count = _clear_cover_lookup_tasks_for_request(
+        request, config, [normalized_id]
+    )
     if removed_count <= 0:
         return _json_response(_task_not_found_response("Lookup task"))
     return JSONResponse(
         {
             "ok": True,
             "removed_count": removed_count,
-            "tasks": list_cover_lookup_tasks(config=config),
+            "tasks": _list_cover_lookup_tasks_for_request(request, config),
         }
     )
 
@@ -390,10 +468,18 @@ async def utilities_cover_lookup_task_mark_action_taken(request: Request, task_i
     if not normalized_id:
         return _json_response(_task_not_found_response("Lookup task"))
     config = _app_config(request)
-    task = mark_cover_lookup_task_notification_action_taken(normalized_id, config=config)
+    task = _mark_cover_lookup_task_action_for_request(
+        request, config, normalized_id
+    )
     if task is None:
         return _json_response(_task_not_found_response("Lookup task"))
-    return JSONResponse({"ok": True, "task": task, "tasks": list_cover_lookup_tasks(config=config)})
+    return JSONResponse(
+        {
+            "ok": True,
+            "task": task,
+            "tasks": _list_cover_lookup_tasks_for_request(request, config),
+        }
+    )
 
 
 @router.post("/utilities/cover-lookup/gallery")
@@ -1010,6 +1096,7 @@ async def utilities_cover_lookup_save_remote(request: Request) -> JSONResponse:
     task_id = str(payload.get("task_id") or "").strip()
     candidate_id = str(payload.get("candidate_id") or "").strip()
     snapshot_generation = str(payload.get("snapshot_generation") or "").strip()
+    durable = _durable_cover_request_context(request)
     album_context = resolve_album_context(config, album or {})
     if album_context is None:
         return _json_response(({"ok": False, "error": "Album root could not be resolved"}, 400))
@@ -1079,12 +1166,62 @@ async def utilities_cover_lookup_save_remote(request: Request) -> JSONResponse:
         ) if isinstance(snapshot_candidates, list) else None
         if selected_match:
             if not task_payload:
-                task_id, _cancel_event = create_cover_lookup_task(
-                    dict(album or {}),
-                    album_context.track_paths,
-                    internal=True,
-                )
-                task_payload = cover_lookup_result(task_id)
+                if durable is not None:
+                    durable_repository, audit = durable
+                    try:
+                        generation = uuid.UUID(snapshot_generation)
+                        task_id = generation.hex
+                        task_payload = {
+                            "id": task_id,
+                            "status": "completed",
+                            "type": "cover-art-lookup",
+                            "internal": True,
+                            "artist": str((album or {}).get("album_artist") or ""),
+                            "album": str((album or {}).get("name") or (album or {}).get("album") or ""),
+                            "year": (album or {}).get("year"),
+                            "progress": 100,
+                            "progress_label": "Completed",
+                            "message": "Saved cover candidates restored.",
+                            "possible_matches": [
+                                dict(item)
+                                for item in snapshot_candidates
+                                if isinstance(item, Mapping)
+                            ],
+                            "selected_candidate_id": "",
+                            "result_kind": "possible-matches",
+                        }
+                        durable_repository.persist_candidate_authority(
+                            task_key=task_id,
+                            library_id=audit.library_id,
+                            album_key=str((album or {}).get("key") or (album or {}).get("album_key") or ""),
+                            account_id=audit.account_id,
+                            request_origin_ref=request_origin_ref_for_request(request),
+                            deployment_mode=audit.deployment_mode,
+                            client_surface=audit.client_surface_class,
+                            candidate_generation=generation,
+                            resource_revision=durable_repository.current_inventory_revision(
+                                library_id=audit.library_id
+                            ),
+                            recorded_at=datetime.now(timezone.utc),
+                            task_payload=task_payload,
+                            candidates=task_payload["possible_matches"],
+                            best_candidate_id=str(candidate_snapshot.get("best_candidate_id") or "") or None,
+                        )
+                    except (TypeError, ValueError):
+                        return _json_response(
+                            ({"ok": False, "error": "Saved cover candidate generation was not found"}, 404)
+                        )
+                    except Exception:
+                        return _json_response(
+                            ({"ok": False, "error": "Saved cover candidates could not be restored"}, 503)
+                        )
+                else:
+                    task_id, _cancel_event = create_cover_lookup_task(
+                        dict(album or {}),
+                        album_context.track_paths,
+                        internal=True,
+                    )
+                    task_payload = cover_lookup_result(task_id)
     if not task_payload:
         return _json_response(_task_not_found_response("Lookup task"))
     if not selected_match:
@@ -1099,7 +1236,6 @@ async def utilities_cover_lookup_save_remote(request: Request) -> JSONResponse:
                 400,
             )
         )
-    durable = _durable_cover_request_context(request)
     accepted_durably = False
     if durable is not None:
         repository, audit = durable
@@ -1243,28 +1379,77 @@ async def utilities_cover_lookup_add_remote(request: Request) -> JSONResponse:
      history_scope=history_scope)
     if not matches:
         return _json_response(({"ok": False, "error": "No usable cover art could be extracted from those links"}, 400))
-    if not task_id:
+    durable = _durable_cover_request_context(request)
+    task_payload = _lookup_task_payload_for_request(request, task_id)
+    if durable is None and not task_id:
         task_id, _cancel_event = create_cover_lookup_task(album or {}, album_context.track_paths)
-    task_payload = cover_lookup_result(task_id)
+        task_payload = cover_lookup_result(task_id)
     merged_matches = merge_lookup_matches(
         task_payload.get("possible_matches") if isinstance(task_payload.get("possible_matches"), list) else [],
         matches,
     )
-    update_cover_lookup_task(
-        task_id,
-        config=config,
-        possible_matches=merged_matches,
-        status="completed",
-        progress=100,
-        progress_label="Completed",
-        message="Remote matches updated from pasted links.",
-        result_kind="possible-matches",
-        finished_at=datetime.now(timezone.utc).isoformat(),
-    )
+    if durable is not None:
+        repository, audit = durable
+        generation = uuid.uuid4()
+        task_id = task_id or generation.hex
+        task_payload = {
+            **dict(task_payload or {}),
+            "id": task_id,
+            "status": "completed",
+            "type": "cover-art-lookup",
+            "internal": False,
+            "artist": str((album or {}).get("album_artist") or ""),
+            "album": str((album or {}).get("name") or (album or {}).get("album") or ""),
+            "year": (album or {}).get("year"),
+            "progress": 100,
+            "progress_label": "Completed",
+            "message": "Remote matches updated from pasted links.",
+            "possible_matches": merged_matches,
+            "selected_candidate_id": "",
+            "result_kind": "possible-matches",
+            "finished_at": datetime.now(timezone.utc).isoformat(),
+        }
+        try:
+            repository.persist_candidate_authority(
+                task_key=task_id,
+                library_id=audit.library_id,
+                album_key=str((album or {}).get("key") or (album or {}).get("album_key") or ""),
+                account_id=audit.account_id,
+                request_origin_ref=request_origin_ref_for_request(request),
+                deployment_mode=audit.deployment_mode,
+                client_surface=audit.client_surface_class,
+                candidate_generation=generation,
+                resource_revision=repository.current_inventory_revision(
+                    library_id=audit.library_id
+                ),
+                recorded_at=datetime.now(timezone.utc),
+                task_payload=task_payload,
+                candidates=merged_matches,
+                best_candidate_id=str(merged_matches[0].get("id") or "") or None,
+            )
+        except ValueError as exc:
+            return _json_response(({"ok": False, "error": str(exc)}, 409))
+        except Exception:
+            return _json_response(
+                ({"ok": False, "error": "Manual cover candidates could not be saved"}, 503)
+            )
+    else:
+        update_cover_lookup_task(
+            task_id,
+            config=config,
+            possible_matches=merged_matches,
+            status="completed",
+            progress=100,
+            progress_label="Completed",
+            message="Remote matches updated from pasted links.",
+            result_kind="possible-matches",
+            finished_at=datetime.now(timezone.utc).isoformat(),
+        )
+        task_payload = cover_lookup_result(task_id)
     return JSONResponse(
         {
             "ok": True,
-            "task": serialize_cover_lookup_task_payload(cover_lookup_result(task_id)),
+            "task": serialize_cover_lookup_task_payload(task_payload),
             "gallery": _serialize_cover_gallery_from_asgi(
                 request,
                 album_context.album_root,

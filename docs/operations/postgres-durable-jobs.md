@@ -128,7 +128,7 @@ After a targeted reconciliation wins authoritative publication, the same transac
 
 Expired retry-safe scan leases are reconciled before new claims. Recovery repeats only work that did not commit its authoritative publication. A committed full scan and its revision-keyed cover follow-up are one transaction, so recovery can produce neither committed inventory without its follow-up nor duplicate follow-ups for the same library revision. Do not repair scan jobs by editing the ledger or private intent tables.
 
-For a growing scan backlog, inspect only the authorized aggregate status. Confirm that the worker is ready, the relevant kind is registered, leases are advancing, and the current library/root authority is valid. A growing `post_scan_cover_refresh` backlog is not expected after migrations through `0076` and the matching worker artifact are active. Never copy subject references, generic parameters, scan-domain records, filesystem paths, or SQL parameter values into logs or tickets.
+For a growing scan backlog, inspect only the authorized aggregate status. Confirm that the worker is ready, the relevant kind is registered, leases are advancing, and the current library/root authority is valid. A growing `post_scan_cover_refresh` backlog is not expected after migrations through `0093` and the matching worker artifact are active. Never copy subject references, generic parameters, scan-domain records, filesystem paths, or SQL parameter values into logs or tickets.
 
 ## Cover jobs and recovery
 
@@ -166,7 +166,7 @@ For an authentication-mail backlog, inspect only authorized aggregate status and
 
 Use this additive order:
 
-1. Back up Postgres and apply migrations through `0082_retire_vacated_structural_album.sql` with the migrator role.
+1. Back up Postgres and apply migrations through `0099_retire_vacated_structural_album.sql` with the migrator role.
 2. Deploy the new worker artifact while the existing web artifact still owns its pre-cutover execution path.
 3. Configure the dedicated worker-role URL and mail settings, start the worker, and confirm the closed startup preflight accepts its exact handler registry, schema, function grants, table columns, and transition-sequence access before readiness. Confirm its claim filter includes every completed scan, cover, Last.fm, and authentication-mail kind.
 4. Verify the worker fingerprint and role checks before deploying the compatible web artifact that enables durable producers. Drain any old request-owned mail tasks first. Exactly one execution owner may accept each workflow during cutover.

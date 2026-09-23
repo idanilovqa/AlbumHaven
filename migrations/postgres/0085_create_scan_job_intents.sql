@@ -18,7 +18,7 @@ create table if not exists library.full_scan_intents (
   updated_at timestamptz not null default now(),
   completed_at timestamptz,
   constraint full_scan_intents_mode_check check (
-    mode in ('normal', 'background', 'manual_full_rescan')
+    mode in ('normal', 'background', 'manual_full_rescan', 'library_settings_update')
   ),
   constraint full_scan_intents_state_check check (state in (
     'accepted', 'running', 'retry_wait', 'succeeded', 'failed', 'canceled'
@@ -76,7 +76,9 @@ create table if not exists library.targeted_reconciliation_intent_paths (
   path text not null,
   ordinal integer not null,
   primary key (intent_id, path_kind, ordinal),
-  constraint targeted_reconciliation_intent_paths_kind_check check (path_kind in ('active', 'deleted', 'deleted_subtree')),
+  constraint targeted_reconciliation_intent_paths_kind_check check (
+    path_kind in ('active', 'deleted', 'deleted_subtree', 'preserved_subtree')
+  ),
   constraint targeted_reconciliation_intent_paths_value_check check (
     length(path) between 1 and 4096 and path !~ '[[:cntrl:]]'
   ),
@@ -232,6 +234,7 @@ create or replace function library.create_targeted_reconciliation_intent(
   p_active_paths text[],
   p_deleted_paths text[],
   p_deleted_subtrees text[],
+  p_preserved_subtrees text[],
   p_moves jsonb,
   p_accepted_at timestamptz
 )
@@ -255,6 +258,7 @@ begin
      coalesce(array_length(p_active_paths, 1), 0) > 4096 or
      coalesce(array_length(p_deleted_paths, 1), 0) > 4096 or
      coalesce(array_length(p_deleted_subtrees, 1), 0) > 4096 or
+     coalesce(array_length(p_preserved_subtrees, 1), 0) > 4096 or
      jsonb_array_length(coalesce(p_moves, '[]'::jsonb)) > 4096 then
     raise exception 'targeted reconciliation intent is invalid';
   end if;
@@ -263,6 +267,32 @@ begin
      where id = p_primary_root_id and library_id = p_library_id and is_active is true
   ) then
     raise exception 'targeted reconciliation root scope is invalid';
+  end if;
+  if exists (
+    select 1
+      from unnest(
+        coalesce(p_preserved_subtrees, array[]::text[])
+      ) as preserved(path)
+     where preserved.path is null
+        or not exists (
+          select 1
+            from library.library_roots as primary_root
+           where primary_root.id = p_primary_root_id
+             and primary_root.library_id = p_library_id
+             and primary_root.is_active is true
+             and (
+               library.local_path_key(preserved.path)
+                 = library.local_path_key(primary_root.root_path)
+               or left(
+                    library.local_path_key(preserved.path),
+                    char_length(library.local_path_key(primary_root.root_path)) + 1
+                  ) = library.local_path_key(primary_root.root_path)
+                      || case library.local_path_style(primary_root.root_path)
+                           when 'windows' then E'\\' else '/' end
+             )
+        )
+  ) then
+    raise exception 'targeted reconciliation preserved subtree scope is invalid';
   end if;
 
   perform pg_catalog.pg_advisory_xact_lock(
@@ -319,6 +349,9 @@ begin
       union all
       select 'deleted_subtree'::varchar, path, ordinality
         from unnest(coalesce(p_deleted_subtrees, array[]::text[])) with ordinality as item(path, ordinality)
+      union all
+      select 'preserved_subtree'::varchar, path, ordinality
+        from unnest(coalesce(p_preserved_subtrees, array[]::text[])) with ordinality as item(path, ordinality)
     ) as source;
 
   insert into library.targeted_reconciliation_intent_moves (
@@ -626,6 +659,7 @@ returns table (
   active_paths text[],
   deleted_paths text[],
   deleted_subtrees text[],
+  preserved_subtrees text[],
   moves jsonb
 )
 language sql
@@ -640,6 +674,8 @@ as $$
            filter (where path.path_kind = 'deleted'), array[]::text[]),
          coalesce(array_agg(path.path order by path.ordinal)
            filter (where path.path_kind = 'deleted_subtree'), array[]::text[]),
+         coalesce(array_agg(path.path order by path.ordinal)
+           filter (where path.path_kind = 'preserved_subtree'), array[]::text[]),
          coalesce((
            select jsonb_agg(jsonb_build_object(
              'source_path', move.source_path,
@@ -713,7 +749,7 @@ revoke all on sequence library.full_scan_intents_id_seq from public;
 revoke all on sequence library.targeted_reconciliation_intents_id_seq from public;
 
 revoke all on function library.create_full_scan_intent(bigint, bigint, varchar, varchar, varchar, varchar, varchar, boolean, bigint[], timestamptz) from public;
-revoke all on function library.create_targeted_reconciliation_intent(bigint, bigint, varchar, varchar, varchar, varchar, text[], text[], text[], jsonb, timestamptz) from public;
+revoke all on function library.create_targeted_reconciliation_intent(bigint, bigint, varchar, varchar, varchar, varchar, text[], text[], text[], text[], jsonb, timestamptz) from public;
 revoke all on function library.link_scan_intent_job(varchar, bigint, bigint) from public;
 revoke all on function library.sync_scan_intent_job_state() from public;
 revoke all on function library.checkpoint_claimed_scan_intent(varchar, bigint, bigint, integer, varchar, varchar, varchar, bigint, bigint, bigint, timestamptz) from public;
@@ -732,7 +768,7 @@ begin
     revoke all on sequence library.full_scan_intents_id_seq from album_haven_app;
     revoke all on sequence library.targeted_reconciliation_intents_id_seq from album_haven_app;
     grant execute on function library.create_full_scan_intent(bigint, bigint, varchar, varchar, varchar, varchar, varchar, boolean, bigint[], timestamptz) to album_haven_app;
-    grant execute on function library.create_targeted_reconciliation_intent(bigint, bigint, varchar, varchar, varchar, varchar, text[], text[], text[], jsonb, timestamptz) to album_haven_app;
+    grant execute on function library.create_targeted_reconciliation_intent(bigint, bigint, varchar, varchar, varchar, varchar, text[], text[], text[], text[], jsonb, timestamptz) to album_haven_app;
     grant execute on function library.link_scan_intent_job(varchar, bigint, bigint) to album_haven_app;
   end if;
   if exists (select 1 from pg_roles where rolname = 'album_haven_worker') then

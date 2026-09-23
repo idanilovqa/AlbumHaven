@@ -76,11 +76,18 @@ def run_claimed_cover_refresh(
     from music_app.services.library import build_albums_from_file_cache
 
     file_cache = {str(path): dict(entry) for path, entry in scope.file_cache.items()}
+    separate_release_keys = {
+        str(key)
+        for key in getattr(scope, "separate_release_keys", ())
+        if str(key).strip()
+    }
     library_state = _DurableCoverRefreshState(
         {
             "file_cache": file_cache,
-            "albums": build_albums_from_file_cache(file_cache, set()),
-            "separate_release_keys": set(),
+            "albums": build_albums_from_file_cache(
+                file_cache, separate_release_keys
+            ),
+            "separate_release_keys": separate_release_keys,
             "scan_generation": 0,
             "scan_in_progress": False,
             "cover_generation": 1,

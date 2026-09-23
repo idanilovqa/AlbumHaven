@@ -31,64 +31,64 @@ READONLY_ACCOUNT_PRIVILEGES_MIGRATION = (
     MIGRATIONS_DIR / "0062_narrow_readonly_account_privileges.sql"
 )
 DURABLE_JOBS_MIGRATION = (
-    MIGRATIONS_DIR / "0063_create_durable_job_foundation.sql"
+    MIGRATIONS_DIR / "0080_create_durable_job_foundation.sql"
 )
 DURABLE_JOB_CANCELLATION_MIGRATION = (
-    MIGRATIONS_DIR / "0064_request_durable_job_cancellation.sql"
+    MIGRATIONS_DIR / "0081_request_durable_job_cancellation.sql"
 )
 DURABLE_JOB_BOUNDARY_HARDENING_MIGRATION = (
-    MIGRATIONS_DIR / "0065_harden_durable_job_boundaries.sql"
+    MIGRATIONS_DIR / "0082_harden_durable_job_boundaries.sql"
 )
 DURABLE_JOB_AUTHORIZATION_READS_MIGRATION = (
-    MIGRATIONS_DIR / "0066_grant_worker_authorization_reads.sql"
+    MIGRATIONS_DIR / "0083_grant_worker_authorization_reads.sql"
 )
 DURABLE_JOB_RETENTION_INDEX_MIGRATION = (
-    MIGRATIONS_DIR / "0067_add_job_transition_retention_index.sql"
+    MIGRATIONS_DIR / "0084_add_job_transition_retention_index.sql"
 )
 SCAN_JOB_INTENTS_MIGRATION = (
-    MIGRATIONS_DIR / "0068_create_scan_job_intents.sql"
+    MIGRATIONS_DIR / "0085_create_scan_job_intents.sql"
 )
 TARGETED_RECONCILIATION_WORKER_MIGRATION = (
-    MIGRATIONS_DIR / "0069_grant_worker_targeted_reconciliation.sql"
+    MIGRATIONS_DIR / "0086_grant_worker_targeted_reconciliation.sql"
 )
 FULL_SCAN_LIFECYCLE_MIGRATION = (
-    MIGRATIONS_DIR / "0070_authorize_full_scan_lifecycle.sql"
+    MIGRATIONS_DIR / "0087_authorize_full_scan_lifecycle.sql"
 )
 FULL_SCAN_WORKER_MIGRATION = (
-    MIGRATIONS_DIR / "0071_grant_worker_full_scan_execution.sql"
+    MIGRATIONS_DIR / "0088_grant_worker_full_scan_execution.sql"
 )
 DURABLE_COVER_STATE_MIGRATION = (
-    MIGRATIONS_DIR / "0072_create_durable_cover_job_state.sql"
+    MIGRATIONS_DIR / "0089_create_durable_cover_job_state.sql"
 )
 COVER_LOOKUP_WORKER_MIGRATION = (
-    MIGRATIONS_DIR / "0073_grant_worker_cover_lookup.sql"
+    MIGRATIONS_DIR / "0090_grant_worker_cover_lookup.sql"
 )
 COVER_REFRESH_WORKER_MIGRATION = (
-    MIGRATIONS_DIR / "0074_grant_worker_cover_refresh.sql"
+    MIGRATIONS_DIR / "0091_grant_worker_cover_refresh.sql"
 )
 REMOTE_COVER_SAVE_MIGRATION = (
-    MIGRATIONS_DIR / "0075_create_remote_cover_save_checkpoints.sql"
+    MIGRATIONS_DIR / "0092_create_remote_cover_save_checkpoints.sql"
 )
 DURABLE_SCAN_STATUS_MIGRATION = (
-    MIGRATIONS_DIR / "0076_complete_durable_scan_status_projection.sql"
+    MIGRATIONS_DIR / "0093_complete_durable_scan_status_projection.sql"
 )
 LASTFM_RETRY_JOB_STATE_MIGRATION = (
-    MIGRATIONS_DIR / "0077_create_lastfm_retry_job_state.sql"
+    MIGRATIONS_DIR / "0094_create_lastfm_retry_job_state.sql"
 )
 LASTFM_RETRY_WORKER_MIGRATION = (
-    MIGRATIONS_DIR / "0078_grant_worker_lastfm_retry.sql"
+    MIGRATIONS_DIR / "0095_grant_worker_lastfm_retry.sql"
 )
 AUTH_MAIL_JOB_STATE_MIGRATION = (
-    MIGRATIONS_DIR / "0079_create_auth_mail_job_state.sql"
+    MIGRATIONS_DIR / "0096_create_auth_mail_job_state.sql"
 )
 AUTH_MAIL_WORKER_MIGRATION = (
-    MIGRATIONS_DIR / "0080_grant_worker_auth_mail.sql"
+    MIGRATIONS_DIR / "0097_grant_worker_auth_mail.sql"
 )
 DURABLE_WORKER_PREFLIGHT_MIGRATION = (
-    MIGRATIONS_DIR / "0081_validate_durable_worker_startup.sql"
+    MIGRATIONS_DIR / "0098_validate_durable_worker_startup.sql"
 )
 VACATED_STRUCTURAL_ALBUM_MIGRATION = (
-    MIGRATIONS_DIR / "0082_retire_vacated_structural_album.sql"
+    MIGRATIONS_DIR / "0099_retire_vacated_structural_album.sql"
 )
 BASELINE_MIGRATION = MIGRATIONS_DIR / "0001_create_current_stack_schemas.sql"
 
@@ -778,43 +778,43 @@ def test_postgres_migration_filenames_are_zero_padded_sql_and_lexically_ordered(
         "0060_player_aware_interaction_outline.sql",
         "0061_create_missing_album_removal_function.sql",
         "0062_narrow_readonly_account_privileges.sql",
-        "0063_create_durable_job_foundation.sql",
         "0063_replace_missing_album_removal_lock_snapshot.sql",
         "0064_grant_library_membership_delete.sql",
-        "0064_request_durable_job_cancellation.sql",
-        "0065_harden_durable_job_boundaries.sql",
         "0065_native_player_component_provenance.sql",
         "0066_allow_appearance_panel_outline.sql",
-        "0066_grant_worker_authorization_reads.sql",
-        "0067_add_job_transition_retention_index.sql",
         "0067_add_scanned_exception_candidate_index.sql",
-        "0068_create_scan_job_intents.sql",
         "0068_scoped_saved_loop_orders.sql",
-        "0069_grant_worker_targeted_reconciliation.sql",
         "0069_scoped_operational_log_versions.sql",
         "0070_appearance_loop_control_style.sql",
-        "0070_authorize_full_scan_lifecycle.sql",
         "0071_allow_harbor_mint_appearance_palette.sql",
-        "0071_grant_worker_full_scan_execution.sql",
-        "0072_create_durable_cover_job_state.sql",
         "0072_measured_local_listen_sessions.sql",
-        "0073_grant_worker_cover_lookup.sql",
         "0073_preserve_measured_listen_history.sql",
         "0074_create_saved_loop_waveform_peaks.sql",
-        "0074_grant_worker_cover_refresh.sql",
         "0075_appearance_device_sections.sql",
-        "0075_create_remote_cover_save_checkpoints.sql",
-        "0076_complete_durable_scan_status_projection.sql",
         "0076_docked_compact_player_behavior.sql",
         "0077_allow_parchment_pine_appearance_palette.sql",
-        "0077_create_lastfm_retry_job_state.sql",
         "0078_add_compact_player_motion_and_floating_edge.sql",
-        "0078_grant_worker_lastfm_retry.sql",
-        "0079_create_auth_mail_job_state.sql",
         "0079_docked_compact_player_regular_style.sql",
-        "0080_grant_worker_auth_mail.sql",
-        "0081_validate_durable_worker_startup.sql",
-        "0082_retire_vacated_structural_album.sql",
+        "0080_create_durable_job_foundation.sql",
+        "0081_request_durable_job_cancellation.sql",
+        "0082_harden_durable_job_boundaries.sql",
+        "0083_grant_worker_authorization_reads.sql",
+        "0084_add_job_transition_retention_index.sql",
+        "0085_create_scan_job_intents.sql",
+        "0086_grant_worker_targeted_reconciliation.sql",
+        "0087_authorize_full_scan_lifecycle.sql",
+        "0088_grant_worker_full_scan_execution.sql",
+        "0089_create_durable_cover_job_state.sql",
+        "0090_grant_worker_cover_lookup.sql",
+        "0091_grant_worker_cover_refresh.sql",
+        "0092_create_remote_cover_save_checkpoints.sql",
+        "0093_complete_durable_scan_status_projection.sql",
+        "0094_create_lastfm_retry_job_state.sql",
+        "0095_grant_worker_lastfm_retry.sql",
+        "0096_create_auth_mail_job_state.sql",
+        "0097_grant_worker_auth_mail.sql",
+        "0098_validate_durable_worker_startup.sql",
+        "0099_retire_vacated_structural_album.sql",
     ]
 
 
@@ -3359,7 +3359,7 @@ def test_tag_edit_intents_migration_creates_recoverable_least_privilege_journal(
 def test_durable_job_foundation_migration_file_exists():
     assert DURABLE_JOBS_MIGRATION.is_file(), (
         "durable job foundation migration SQL is not present yet; "
-        "Task 2 requires 0063_create_durable_job_foundation.sql"
+        "Task 2 requires 0080_create_durable_job_foundation.sql"
     )
 
 
@@ -3658,7 +3658,7 @@ def test_durable_job_migration_limits_app_to_enqueue_and_cancel_columns(
 def test_durable_job_cancellation_migration_file_exists():
     assert DURABLE_JOB_CANCELLATION_MIGRATION.is_file(), (
         "durable job cancellation migration SQL is not present yet; "
-        "Task 3 requires 0064_request_durable_job_cancellation.sql"
+        "Task 3 requires 0081_request_durable_job_cancellation.sql"
     )
 
 
@@ -3763,7 +3763,7 @@ def test_durable_job_worker_status_and_retention_indexes_are_partial(
 
 def test_durable_job_boundary_hardening_migration_file_exists():
     assert DURABLE_JOB_BOUNDARY_HARDENING_MIGRATION.is_file(), (
-        "Task 3 requires additive migration 0065_harden_durable_job_boundaries.sql"
+        "Task 3 requires additive migration 0082_harden_durable_job_boundaries.sql"
     )
 
 
@@ -3805,7 +3805,7 @@ def test_durable_job_boundary_hardening_enforces_transitions_and_worker_columns(
 def test_worker_authorization_read_migration_file_exists():
     assert DURABLE_JOB_AUTHORIZATION_READS_MIGRATION.is_file(), (
         "Task 4 requires additive migration "
-        "0066_grant_worker_authorization_reads.sql"
+        "0083_grant_worker_authorization_reads.sql"
     )
 
 
@@ -3880,7 +3880,7 @@ def test_worker_authorization_reads_are_column_scoped_private_and_upgrade_safe()
 def test_durable_job_retention_index_migration_file_exists():
     assert DURABLE_JOB_RETENTION_INDEX_MIGRATION.is_file(), (
         "Task 7 requires additive migration "
-        "0067_add_job_transition_retention_index.sql"
+        "0084_add_job_transition_retention_index.sql"
     )
 
 
@@ -3908,7 +3908,7 @@ def test_durable_job_retention_index_is_ordered_and_does_not_broaden_privileges(
 def scan_job_intents_sql() -> str:
     assert SCAN_JOB_INTENTS_MIGRATION.is_file(), (
         "Task 1 requires additive migration "
-        "0068_create_scan_job_intents.sql"
+        "0085_create_scan_job_intents.sql"
     )
     return SCAN_JOB_INTENTS_MIGRATION.read_text(encoding="utf-8")
 
@@ -3939,6 +3939,7 @@ def test_scan_job_intent_migration_creates_private_normalized_domain_records():
         "job_id bigint",
     ):
         assert fragment in full_scan
+    assert "'library_settings_update'" in full_scan
     assert "check (state in (" in full_scan
 
     roots = _table_sql(sql, "library.full_scan_intent_roots")
@@ -3949,7 +3950,10 @@ def test_scan_job_intent_migration_creates_private_normalized_domain_records():
     paths = _table_sql(sql, "library.targeted_reconciliation_intent_paths")
     assert "intent_id bigint not null references library.targeted_reconciliation_intents(id)" in paths
     assert "path_kind varchar(" in paths
-    assert "check (path_kind in ('active', 'deleted', 'deleted_subtree'))" in paths
+    assert (
+        "path_kind in ('active', 'deleted', 'deleted_subtree', 'preserved_subtree')"
+        in paths
+    )
     assert "path text not null" in paths
     assert "ordinal" in paths
 
@@ -4269,7 +4273,7 @@ def test_full_scan_intent_stores_and_link_validates_exact_accepted_authority():
 
 def targeted_reconciliation_worker_sql() -> str:
     assert TARGETED_RECONCILIATION_WORKER_MIGRATION.is_file(), (
-        "Task 2 requires migration 0069_grant_worker_targeted_reconciliation.sql"
+        "Task 2 requires migration 0086_grant_worker_targeted_reconciliation.sql"
     )
     return TARGETED_RECONCILIATION_WORKER_MIGRATION.read_text(encoding="utf-8")
 
@@ -4317,6 +4321,41 @@ def test_targeted_worker_migration_exposes_only_claim_scoped_functions():
         "revoke select (id, account_id, client_surface_class, origin_type) on table app.request_origins from album_haven_worker",
     ):
         assert fragment in sql
+
+
+def test_targeted_preserved_subtrees_are_private_bounded_and_lease_scoped():
+    intent_sql = _normalized_sql(scan_job_intents_sql())
+    create_function = intent_sql.split(
+        "create or replace function library.create_targeted_reconciliation_intent",
+        1,
+    )[1].split("create or replace function library.link_scan_intent_job", 1)[0]
+    assert "p_preserved_subtrees text[]" in create_function
+    assert "array_length(p_preserved_subtrees, 1), 0) > 4096" in create_function
+    assert "'preserved_subtree'::varchar" in create_function
+    assert "targeted reconciliation preserved subtree scope is invalid" in create_function
+
+    worker_sql = _normalized_sql(targeted_reconciliation_worker_sql())
+    loader = worker_sql.split(
+        "create or replace function library.load_claimed_targeted_reconciliation_intent_v2",
+        1,
+    )[1].split("create or replace function", 1)[0]
+    assert "preserved_subtrees text[]" in loader
+    assert "path.path_kind = 'preserved_subtree'" in loader
+    for predicate in (
+        "job.state = 'running'",
+        "job.lease_owner = p_worker_id",
+        "job.lease_token = p_lease_token",
+        "job.lease_expires_at > now()",
+    ):
+        assert predicate in loader
+
+    publication = worker_sql.split(
+        "create or replace function library.publish_claimed_targeted_reconciliation",
+        1,
+    )[1].split("revoke all on function", 1)[0]
+    assert "authorized_preserved_subtrees text[]" in publication
+    assert "coalesce(authorized_preserved_subtrees, array[]::text[])" in publication
+    assert "library.local_path_key(submitted_files.private_path)" in publication
 
 
 def test_targeted_publication_fence_checks_exact_live_claim_in_mutation_transaction():

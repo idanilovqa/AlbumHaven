@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping
 from datetime import datetime, timezone
 from typing import Any
+from uuid import UUID
 
 from music_app.services.cover_provider_deadline import (
     cover_lookup_provider_deadline_at,
@@ -12,6 +13,113 @@ from music_app.services.cover_provider_deadline import (
 from music_app.services.jobs.authorization import AuthorizationDecision
 from music_app.services.jobs.models import ClaimedJob, JobKind, JobState, JobTransitionResult
 from music_app.jobs.safe_logging import DurablePipelineLogger
+
+
+_CANDIDATE_REPOSITORY_FACTORY_KEY = (
+    "COVER_CANDIDATE_SNAPSHOT_REPOSITORY_FACTORY"
+)
+_CANDIDATE_PERSISTENCE_REQUIRED_KEY = (
+    "COVER_CANDIDATE_SNAPSHOT_PERSISTENCE_REQUIRED"
+)
+
+
+class _ClaimedCandidateSnapshotRepository:
+    """Adapt candidate publication to one already-authorized durable claim."""
+
+    def __init__(
+        self,
+        *,
+        mutate: Callable[..., bool],
+        album_id: int,
+        search_generation: str,
+        search_kind: str,
+    ) -> None:
+        self._mutate = mutate
+        self._album_id = int(album_id)
+        self._candidate_generation = UUID(str(search_generation))
+        self._search_kind = str(search_kind)
+
+    def resolve_album_id_for_track_paths(self, *, track_paths: object) -> int:
+        del track_paths
+        return self._album_id
+
+    def _scope(
+        self,
+        *,
+        album_id: int,
+        search_generation: str,
+        search_kind: str | None = None,
+    ) -> None:
+        if (
+            int(album_id) != self._album_id
+            or UUID(str(search_generation)) != self._candidate_generation
+            or (
+                search_kind is not None
+                and str(search_kind).casefold() != self._search_kind.casefold()
+            )
+        ):
+            raise ValueError("candidate snapshot escaped its claimed scope")
+
+    def publish_generation(self, **values: object) -> bool:
+        self._scope(
+            album_id=int(values["album_id"]),
+            search_generation=str(values["search_generation"]),
+            search_kind=str(values["search_kind"]),
+        )
+        return bool(
+            self._mutate(
+                album_id=self._album_id,
+                candidate_generation=self._candidate_generation,
+                operation="publish",
+                search_kind=self._search_kind,
+                search_started_at=str(values.get("search_started_at") or ""),
+                candidates=values.get("candidates") or [],
+                best_candidate_id=values.get("best_candidate_id"),
+                automatic_improvement=bool(values.get("automatic_improvement")),
+                candidate_id=None,
+            )
+        )
+
+    def finish_generation(self, **values: object) -> bool:
+        self._scope(
+            album_id=int(values["album_id"]),
+            search_generation=str(values["search_generation"]),
+        )
+        status = str(values.get("status") or "").casefold()
+        if status not in {"completed", "failed"}:
+            raise ValueError("candidate snapshot terminal status is invalid")
+        return bool(
+            self._mutate(
+                album_id=self._album_id,
+                candidate_generation=self._candidate_generation,
+                operation=f"finish_{status}",
+                search_kind=self._search_kind,
+                search_started_at="",
+                candidates=[],
+                best_candidate_id=None,
+                automatic_improvement=False,
+                candidate_id=None,
+            )
+        )
+
+    def mark_automatic_improvement(self, **values: object) -> bool:
+        self._scope(
+            album_id=int(values["album_id"]),
+            search_generation=str(values["search_generation"]),
+        )
+        return bool(
+            self._mutate(
+                album_id=self._album_id,
+                candidate_generation=self._candidate_generation,
+                operation="mark_improvement",
+                search_kind=self._search_kind,
+                search_started_at="",
+                candidates=[],
+                best_candidate_id=None,
+                automatic_improvement=False,
+                candidate_id=values.get("candidate_id"),
+            )
+        )
 
 
 def _candidate_lookup_task_id(claim: ClaimedJob) -> int | None:
@@ -166,10 +274,37 @@ def build_cover_lookup_handler(
             return JobTransitionResult(JobState.CANCELED, "cover_lookup_canceled")
 
         provider_deadline_at = build_deadline(config)
+        execution_config = dict(config)
+
+        def candidate_repository_factory(**factory_values: object) -> object:
+            album_id = int(factory_values.get("album_id") or 0)
+            generation = str(factory_values.get("search_generation") or "")
+            search_kind = str(factory_values.get("search_kind") or "")
+            if (
+                album_id != int(scope.album.get("id") or 0)
+                or UUID(generation) != UUID(str(scope.task_key))
+                or search_kind.casefold() != "manual"
+            ):
+                raise ValueError("candidate snapshot escaped its lookup claim")
+            return _ClaimedCandidateSnapshotRepository(
+                mutate=lambda **mutation: (
+                    cover_repository.mutate_claimed_lookup_candidate_snapshot(
+                        **_claim_parameters(claim, now()), **mutation
+                    )
+                ),
+                album_id=album_id,
+                search_generation=generation,
+                search_kind=search_kind,
+            )
+
+        execution_config[_CANDIDATE_REPOSITORY_FACTORY_KEY] = (
+            candidate_repository_factory
+        )
+        execution_config[_CANDIDATE_PERSISTENCE_REQUIRED_KEY] = True
         try:
             run_lookup(
                 task_id=str(scope.task_key),
-                config=config,
+                config=execution_config,
                 logger=durable_logger,
                 user_agent=str(config.get("MUSICBRAINZ_USER_AGENT") or ""),
                 album=dict(scope.album),
@@ -328,6 +463,30 @@ def build_cover_refresh_handler(
             return JobTransitionResult(JobState.CANCELED, "cover_refresh_canceled")
         execution_config = dict(config)
 
+        def candidate_repository_factory(**factory_values: object) -> object:
+            album_id = int(factory_values.get("album_id") or 0)
+            generation = str(factory_values.get("search_generation") or "")
+            search_kind = str(factory_values.get("search_kind") or "")
+            if album_id <= 0 or search_kind.casefold() != "automatic":
+                raise ValueError("candidate snapshot escaped its refresh claim")
+            return _ClaimedCandidateSnapshotRepository(
+                mutate=lambda **mutation: (
+                    cover_repository.mutate_claimed_refresh_candidate_snapshot(
+                        **_refresh_claim_parameters(claim, now()),
+                        task_id=scope.task_id,
+                        **mutation,
+                    )
+                ),
+                album_id=album_id,
+                search_generation=generation,
+                search_kind=search_kind,
+            )
+
+        execution_config[_CANDIDATE_REPOSITORY_FACTORY_KEY] = (
+            candidate_repository_factory
+        )
+        execution_config[_CANDIDATE_PERSISTENCE_REQUIRED_KEY] = True
+
         def persist_claimed_selection(
             track_paths: set[str], selected_cover_path: Any, **options: object
         ) -> dict[str, object]:
@@ -358,7 +517,8 @@ def build_cover_refresh_handler(
         if fence_lost or not context.lease_active:
             return JobTransitionResult(JobState.CANCELED, "cover_refresh_lease_lost")
         canceled = should_cancel()
-        next_status = "canceled" if canceled else "completed"
+        failed = max(0, int(result.get("failed") or 0)) > 0
+        next_status = "canceled" if canceled else ("failed" if failed else "completed")
         try:
             finished = cover_repository.finish_claimed_cover_refresh(
                 **_refresh_claim_parameters(claim, now()),
@@ -375,6 +535,8 @@ def build_cover_refresh_handler(
             return JobTransitionResult(JobState.CANCELED, "cover_refresh_lease_lost")
         if canceled:
             return JobTransitionResult(JobState.CANCELED, "cover_refresh_canceled")
+        if failed:
+            return JobTransitionResult(JobState.FAILED, "cover_refresh_failed")
         return JobTransitionResult(JobState.SUCCEEDED, "cover_refresh_completed")
 
     return handle

@@ -56,6 +56,7 @@ class ClaimedCoverRefreshScope:
     task_key: str
     row_revision: int
     file_cache: Mapping[str, Mapping[str, object]]
+    separate_release_keys: tuple[str, ...]
     progress_total: int
     mode: str
     force_search: bool
@@ -108,6 +109,42 @@ def _mapping(row: object) -> dict[str, object]:
     if hasattr(row, "keys"):
         return {str(key): row[key] for key in row.keys()}
     return {}
+
+
+def _timestamp_text(value: object) -> str:
+    return value.isoformat() if isinstance(value, datetime) else str(value or "").strip()
+
+
+def _candidate_lookup_task_from_row(row: object) -> dict[str, object] | None:
+    mapped = _mapping(row)
+    task_key = str(mapped.get("task_key") or "").strip()
+    payload = mapped.get("provider_payload")
+    if not task_key or not isinstance(payload, Mapping):
+        return None
+    task = dict(payload)
+    for private_key in (
+        "album_payload",
+        "track_paths",
+        "path",
+        "track_ref",
+        "selected_cover_private_path",
+        "selected_cover_path",
+        "local_cover_path",
+        "cover_path",
+    ):
+        task.pop(private_key, None)
+    task["id"] = task_key
+    task["status"] = str(mapped.get("status") or task.get("status") or "").strip()
+    metadata = mapped.get("metadata")
+    metadata = metadata if isinstance(metadata, Mapping) else {}
+    task["notification_action_taken"] = bool(
+        metadata.get("notification_action_taken")
+    )
+    completed_at = _timestamp_text(mapped.get("completed_at"))
+    if completed_at:
+        task["notification_completed_at"] = completed_at
+    task["notification_expires_at"] = ""
+    return task
 
 
 class PostgresCoverJobRepository:
@@ -198,6 +235,72 @@ class PostgresCoverJobRepository:
             job_id=_positive("job_id", accepted.get("job_id")),
             row_revision=max(0, int(accepted.get("row_revision") or 0)),
         )
+
+    def persist_candidate_authority(
+        self,
+        *,
+        task_key: str,
+        library_id: int,
+        album_key: str,
+        account_id: int,
+        request_origin_ref: str,
+        deployment_mode: str,
+        client_surface: str,
+        candidate_generation: UUID,
+        resource_revision: int,
+        recorded_at: datetime,
+        task_payload: Mapping[str, object],
+        candidates: Sequence[Mapping[str, object]],
+        best_candidate_id: str | None,
+    ) -> dict[str, object]:
+        """Atomically bind synchronous candidates to durable task/snapshot authority."""
+
+        origin_type, separator, origin_key = _bounded(
+            "request_origin_ref", request_origin_ref, maximum=1024
+        ).partition(":")
+        if not separator or not origin_type or not origin_key:
+            raise ValueError("request_origin_ref must contain type and key")
+        if not isinstance(candidate_generation, UUID):
+            raise ValueError("candidate_generation must be a UUID")
+        normalized_candidates = [
+            dict(candidate) for candidate in candidates if isinstance(candidate, Mapping)
+        ]
+        if not normalized_candidates:
+            raise ValueError("candidate authority requires candidates")
+        values = {
+            "task_key": _bounded("task_key", task_key, maximum=128),
+            "library_id": _positive("library_id", library_id),
+            "album_key": _bounded("album_key", album_key, maximum=1024),
+            "account_id": _positive("account_id", account_id),
+            "origin_type": _bounded("origin_type", origin_type, maximum=64),
+            "origin_key": _bounded("origin_key", origin_key, maximum=512),
+            "deployment_mode": _bounded(
+                "deployment_mode", deployment_mode, maximum=128
+            ),
+            "client_surface": _bounded(
+                "client_surface", client_surface, maximum=128
+            ),
+            "candidate_generation": candidate_generation,
+            "resource_revision": max(0, int(resource_revision)),
+            "recorded_at": recorded_at,
+            "task_payload": json.dumps(dict(task_payload), ensure_ascii=True),
+            "candidates": json.dumps(normalized_candidates, ensure_ascii=True),
+            "best_candidate_id": (
+                _bounded("best_candidate_id", best_candidate_id, maximum=256)
+                if best_candidate_id
+                else None
+            ),
+        }
+        with self._connect() as connection:
+            row = _mapping(
+                connection.execute(
+                    "select * from ops.persist_cover_candidate_authority(%(task_key)s, %(library_id)s, %(album_key)s, %(account_id)s, %(origin_type)s, %(origin_key)s, %(deployment_mode)s, %(client_surface)s, %(candidate_generation)s, %(resource_revision)s, %(recorded_at)s, %(task_payload)s::jsonb, %(candidates)s::jsonb, %(best_candidate_id)s)",
+                    values,
+                ).fetchone()
+            )
+        if not row:
+            raise ValueError("cover candidate authority scope is unavailable")
+        return row
 
     def current_inventory_revision(self, *, library_id: int) -> int:
         with self._connect() as connection:
@@ -428,6 +531,80 @@ class PostgresCoverJobRepository:
             task_payload=dict(row.get("task_payload") or task_payload),
         )
 
+    @staticmethod
+    def _candidate_snapshot_mutation_values(
+        *,
+        album_id: int,
+        candidate_generation: UUID,
+        operation: str,
+        search_kind: str,
+        search_started_at: str,
+        candidates: Sequence[Mapping[str, object]],
+        best_candidate_id: str | None,
+        automatic_improvement: bool,
+        candidate_id: str | None,
+        **_unused: object,
+    ) -> dict[str, object]:
+        normalized_operation = _bounded(
+            "operation", operation, maximum=32
+        ).casefold()
+        if normalized_operation not in {
+            "publish",
+            "finish_completed",
+            "finish_failed",
+            "mark_improvement",
+        }:
+            raise ValueError("candidate snapshot operation is invalid")
+        normalized_kind = _bounded("search_kind", search_kind, maximum=32).casefold()
+        if normalized_kind not in {"automatic", "manual"}:
+            raise ValueError("candidate snapshot search kind is invalid")
+        if not isinstance(candidate_generation, UUID):
+            raise ValueError("candidate_generation must be a UUID")
+        return {
+            "album_id": _positive("album_id", album_id),
+            "candidate_generation": candidate_generation,
+            "operation": normalized_operation,
+            "search_kind": normalized_kind,
+            "search_started_at": str(search_started_at or "").strip() or None,
+            "candidates": json.dumps(
+                [
+                    dict(candidate)
+                    for candidate in candidates
+                    if isinstance(candidate, Mapping)
+                ],
+                ensure_ascii=True,
+            ),
+            "best_candidate_id": str(best_candidate_id or "").strip() or None,
+            "automatic_improvement": bool(automatic_improvement),
+            "candidate_id": str(candidate_id or "").strip() or None,
+        }
+
+    def mutate_claimed_lookup_candidate_snapshot(
+        self, *, task_key: str, task_id: int, **values: object
+    ) -> bool:
+        parameters = self._claim_values(
+            task_key=task_key, task_id=task_id, **values
+        )
+        parameters.update(self._candidate_snapshot_mutation_values(**values))
+        with self._connect() as connection:
+            row = connection.execute(
+                "select ops.mutate_claimed_cover_lookup_candidate_snapshot(%(task_key)s, %(task_id)s, %(library_id)s, %(job_id)s, %(attempt)s, %(worker_id)s, %(lease_token)s, %(now)s, %(album_id)s, %(candidate_generation)s, %(operation)s, %(search_kind)s, %(search_started_at)s::timestamptz, %(candidates)s::jsonb, %(best_candidate_id)s, %(automatic_improvement)s, %(candidate_id)s) as accepted",
+                parameters,
+            ).fetchone()
+        return bool(_mapping(row).get("accepted"))
+
+    def mutate_claimed_refresh_candidate_snapshot(
+        self, *, task_id: int, **values: object
+    ) -> bool:
+        parameters = self._refresh_claim_values(task_id=task_id, **values)
+        parameters.update(self._candidate_snapshot_mutation_values(**values))
+        with self._connect() as connection:
+            row = connection.execute(
+                "select ops.mutate_claimed_cover_refresh_candidate_snapshot(%(task_id)s, %(library_id)s, %(job_id)s, %(attempt)s, %(worker_id)s, %(lease_token)s, %(now)s, %(album_id)s, %(candidate_generation)s, %(operation)s, %(search_kind)s, %(search_started_at)s::timestamptz, %(candidates)s::jsonb, %(best_candidate_id)s, %(automatic_improvement)s, %(candidate_id)s) as accepted",
+                parameters,
+            ).fetchone()
+        return bool(_mapping(row).get("accepted"))
+
     def finalize_claimed_candidate_lookup_canceled(
         self,
         *,
@@ -511,6 +688,11 @@ class PostgresCoverJobRepository:
             task_key=_bounded("task_key", row.get("task_key"), maximum=128),
             row_revision=max(0, int(row.get("row_revision") or 0)),
             file_cache=file_cache,
+            separate_release_keys=tuple(
+                str(key)
+                for key in (row.get("separate_release_keys") or ())
+                if str(key).strip()
+            ),
             progress_total=max(0, int(row.get("progress_total") or 0)),
             mode=_bounded("mode", row.get("mode"), maximum=32),
             force_search=bool(row.get("force_search")),
@@ -851,6 +1033,150 @@ class PostgresCoverJobRepository:
             ).fetchone()
         revision = _mapping(row).get("row_revision")
         return int(revision) if revision is not None else None
+
+    @staticmethod
+    def _task_management_values(
+        *, actor_account_id: int, library_id: int
+    ) -> dict[str, object]:
+        return {
+            "actor_account_id": _positive("actor_account_id", actor_account_id),
+            "library_id": _positive("library_id", library_id),
+            "terminal_statuses": ["completed", "failed", "canceled"],
+        }
+
+    def list_candidate_lookup_tasks(
+        self, *, actor_account_id: int, library_id: int
+    ) -> list[dict[str, object]]:
+        values = self._task_management_values(
+            actor_account_id=actor_account_id, library_id=library_id
+        )
+        sql = """
+            select task_key, status, requested_at, completed_at,
+                   provider_payload, metadata
+              from ops.cover_lookup_tasks as task
+             where task.library_id = %(library_id)s
+               and task.metadata ->> 'source_family' = 'durable_cover_lookup'
+               and exists (
+                     select 1
+                       from library.libraries as scoped_library
+                      where scoped_library.id = task.library_id
+                        and (
+                          scoped_library.owner_account_id = %(actor_account_id)s
+                          or exists (
+                            select 1
+                              from library.library_memberships as membership
+                             where membership.library_id = task.library_id
+                               and membership.account_id = %(actor_account_id)s
+                          )
+                        )
+                   )
+             order by coalesce(task.completed_at, task.requested_at) desc,
+                      task.task_key desc
+        """
+        with self._connect() as connection:
+            rows = connection.execute(sql, values).fetchall()
+        return [
+            task
+            for task in (_candidate_lookup_task_from_row(row) for row in rows)
+            if task is not None
+        ]
+
+    def clear_completed_candidate_lookup_tasks(
+        self,
+        *,
+        actor_account_id: int,
+        library_id: int,
+        task_keys: Sequence[str] | None,
+    ) -> set[str]:
+        values = self._task_management_values(
+            actor_account_id=actor_account_id, library_id=library_id
+        )
+        normalized_keys = [
+            _bounded("task_key", task_key, maximum=128)
+            for task_key in (task_keys or ())
+        ]
+        if task_keys is not None and not normalized_keys:
+            return set()
+        values.update(
+            {
+                "clear_all": task_keys is None,
+                "task_keys": normalized_keys,
+            }
+        )
+        sql = """
+            delete from ops.cover_lookup_tasks as task
+             where task.library_id = %(library_id)s
+               and task.metadata ->> 'source_family' = 'durable_cover_lookup'
+               and task.status = any(%(terminal_statuses)s::varchar[])
+               and (%(clear_all)s or task.task_key = any(%(task_keys)s::text[]))
+               and exists (
+                     select 1
+                       from library.libraries as scoped_library
+                      where scoped_library.id = task.library_id
+                        and (
+                          scoped_library.owner_account_id = %(actor_account_id)s
+                          or exists (
+                            select 1
+                              from library.library_memberships as membership
+                             where membership.library_id = task.library_id
+                               and membership.account_id = %(actor_account_id)s
+                          )
+                        )
+                   )
+            returning task.task_key
+        """
+        with self._connect() as connection:
+            rows = connection.execute(sql, values).fetchall()
+        return {
+            str(_mapping(row).get("task_key") or "").strip()
+            for row in rows
+            if str(_mapping(row).get("task_key") or "").strip()
+        }
+
+    def mark_candidate_lookup_notification_action_taken(
+        self,
+        *,
+        actor_account_id: int,
+        library_id: int,
+        task_key: str,
+    ) -> dict[str, object] | None:
+        values = self._task_management_values(
+            actor_account_id=actor_account_id, library_id=library_id
+        )
+        values["task_key"] = _bounded("task_key", task_key, maximum=128)
+        sql = """
+            update ops.cover_lookup_tasks as task
+               set metadata = jsonb_set(
+                     coalesce(metadata, '{}'::jsonb),
+                     '{notification_action_taken}',
+                     'true'::jsonb,
+                     true
+                   ),
+                   row_revision = row_revision + 1
+             where task.library_id = %(library_id)s
+               and task.task_key = %(task_key)s
+               and task.metadata ->> 'source_family' = 'durable_cover_lookup'
+               and task.status = any(%(terminal_statuses)s::varchar[])
+               and exists (
+                     select 1
+                       from library.libraries as scoped_library
+                      where scoped_library.id = task.library_id
+                        and (
+                          scoped_library.owner_account_id = %(actor_account_id)s
+                          or exists (
+                            select 1
+                              from library.library_memberships as membership
+                             where membership.library_id = task.library_id
+                               and membership.account_id = %(actor_account_id)s
+                          )
+                        )
+                   )
+            returning task.task_key, task.status, task.requested_at,
+                      task.completed_at, task.provider_payload, task.metadata
+        """
+        with self._connect() as connection:
+            row = connection.execute(sql, values).fetchone()
+        return _candidate_lookup_task_from_row(row)
 
     def get_task(self, *, task_key: str, library_id: int) -> dict[str, object] | None:
         values = {

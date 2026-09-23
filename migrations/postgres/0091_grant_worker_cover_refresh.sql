@@ -172,6 +172,7 @@ returns table (
   task_key text,
   row_revision bigint,
   file_cache jsonb,
+  separate_release_keys text[],
   progress_total integer,
   mode text,
   force_search boolean
@@ -294,6 +295,15 @@ begin
           )
       ) filter (where file.id is not null),
       '{}'::jsonb
+    ),
+    coalesce(
+      array(
+        select release.release_key
+          from library.separate_releases as release
+         where release.library_id = requested_library_id
+         order by release.release_key
+      ),
+      array[]::text[]
     ),
     count(distinct album.id) filter (where file.id is not null)::integer,
     selected_refresh.mode::text,
@@ -671,5 +681,69 @@ begin
     grant execute on function ops.accept_cover_bulk_refresh(text, bigint, bigint, text, text, text, text, text, boolean, bigint, timestamptz) to album_haven_app;
     grant execute on function ops.request_cover_bulk_refresh_cancellation(bigint, bigint, timestamptz) to album_haven_app;
     grant execute on function ops.load_authorized_cover_refresh_status(bigint) to album_haven_app;
+  end if;
+end $$;
+
+create or replace function ops.mutate_claimed_cover_refresh_candidate_snapshot(
+  requested_task_id bigint,
+  requested_library_id bigint,
+  requested_job_id bigint,
+  requested_attempt integer,
+  requested_worker_id text,
+  requested_lease_token text,
+  observed_at timestamptz,
+  requested_album_id bigint,
+  requested_candidate_generation uuid,
+  requested_operation text,
+  requested_search_kind text,
+  requested_search_started_at timestamptz,
+  requested_candidates jsonb,
+  requested_best_candidate_id text,
+  requested_automatic_improvement boolean,
+  requested_candidate_id text
+)
+returns boolean
+language plpgsql
+security definer
+set search_path = pg_catalog, ops, library
+as $$
+begin
+  if requested_search_kind <> 'automatic' or not exists (
+    select 1
+      from ops.cover_bulk_refreshes as refresh
+      join ops.jobs as job on job.id = refresh.job_id
+      join library.local_albums as album
+        on album.id = requested_album_id
+       and album.library_id = requested_library_id
+     where refresh.id = requested_task_id
+       and refresh.library_id = requested_library_id
+       and refresh.status = 'running'
+       and refresh.cancel_requested_at is null
+       and job.id = requested_job_id
+       and job.kind in ('cover_bulk_refresh', 'post_scan_cover_refresh')
+       and job.state = 'running'
+       and job.attempt_count = requested_attempt
+       and job.lease_owner = requested_worker_id
+       and job.lease_token = requested_lease_token
+       and job.lease_expires_at > observed_at
+       and job.cancel_requested_at is null
+  ) then
+    return false;
+  end if;
+  return ops.apply_claimed_cover_candidate_snapshot(
+    requested_album_id, requested_candidate_generation, requested_operation,
+    requested_search_kind, requested_search_started_at, requested_candidates,
+    requested_best_candidate_id, requested_automatic_improvement,
+    requested_candidate_id, observed_at
+  );
+end;
+$$;
+
+revoke all on function ops.mutate_claimed_cover_refresh_candidate_snapshot(bigint, bigint, bigint, integer, text, text, timestamptz, bigint, uuid, text, text, timestamptz, jsonb, text, boolean, text) from public;
+
+do $$
+begin
+  if exists (select 1 from pg_roles where rolname = 'album_haven_worker') then
+    grant execute on function ops.mutate_claimed_cover_refresh_candidate_snapshot(bigint, bigint, bigint, integer, text, text, timestamptz, bigint, uuid, text, text, timestamptz, jsonb, text, boolean, text) to album_haven_worker;
   end if;
 end $$;

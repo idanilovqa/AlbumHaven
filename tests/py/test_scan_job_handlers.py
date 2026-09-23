@@ -64,6 +64,9 @@ class _ScanRepository:
         self.request = TargetedReconciliationRequest(
             root_id="root-a",
             deleted_paths=frozenset({Path("C:/Music/Removed/01.flac")}),
+            preserved_subtrees=frozenset(
+                {Path("C:/Music/Removed/Recreated Disc")}
+            ),
         )
         self.intent = SimpleNamespace(
             intent_id=84,
@@ -193,6 +196,9 @@ def test_handler_reloads_private_intent_and_current_roots_before_publication():
     assert reconciler.roots == [repository.roots]
     assert reconciler.exception_overrides == [repository.intent.exception_overrides]
     assert reconciler.requests == [(repository.request, True)]
+    assert reconciler.requests[0][0].preserved_subtrees == frozenset(
+        {Path("C:/Music/Removed/Recreated Disc")}
+    )
     assert context.reauthorizations == 1
     assert reconciler.mutations == [repository.request]
     assert repository.fences[0]["connection"] == "inventory-connection"

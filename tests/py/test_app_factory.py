@@ -589,16 +589,16 @@ def test_create_asgi_app_lifespan_marks_empty_startup_scan_pending_without_start
 
 
 @pytest.mark.parametrize(
-    ("repair_required", "expected_scan_calls"),
+    ("repair_required", "expected_pending"),
     [
-        (True, [(True, "background")]),
-        (False, []),
+        (True, True),
+        (False, False),
     ],
 )
-def test_create_asgi_app_lifespan_schedules_only_incomplete_hydrated_metadata_repair(
+def test_create_asgi_app_lifespan_hands_incomplete_metadata_repair_to_durable_scan(
     monkeypatch,
     repair_required,
-    expected_scan_calls,
+    expected_pending,
 ):
     from music_app import create_asgi_app
     from music_app.services import lastfm_retry, runtime_shutdown, state
@@ -634,11 +634,18 @@ def test_create_asgi_app_lifespan_schedules_only_incomplete_hydrated_metadata_re
     monkeypatch.setattr(lastfm_retry, "stop_lastfm_retry_worker", lambda _runtime: None)
     monkeypatch.setattr(runtime_shutdown, "request_runtime_shutdown", lambda _runtime: None)
 
-    assert _run_asgi_lifespan(create_asgi_app()) == [
+    asgi_app = create_asgi_app()
+    assert _run_asgi_lifespan(asgi_app) == [
         {"type": "lifespan.startup.complete"},
         {"type": "lifespan.shutdown.complete"},
     ]
-    assert scan_calls == expected_scan_calls
+    assert scan_calls == []
+    assert asgi_app.state.library_state["cold_scan_pending"] is expected_pending
+    assert asgi_app.state.library_state["cold_scan_force"] is expected_pending
+    assert asgi_app.state.library_state["cold_scan_is_cold_start"] is not expected_pending
+    assert asgi_app.state.library_state["cold_scan_handoff_status"] == (
+        "pending" if expected_pending else "idle"
+    )
 
 
 def test_empty_postgres_startup_submits_one_scan_and_keeps_root_and_status_available(monkeypatch):

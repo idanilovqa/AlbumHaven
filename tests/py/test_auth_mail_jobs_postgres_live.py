@@ -439,7 +439,7 @@ def test_live_migration_rerun_preserves_job_owned_rows_and_holds_legacy_token_ma
             Path(__file__).resolve().parents[2]
             / "migrations"
             / "postgres"
-            / "0079_create_auth_mail_job_state.sql"
+            / "0096_create_auth_mail_job_state.sql"
         ).read_text(encoding="utf-8")
         connection.execute(migration_sql)
         active_row = connection.execute(

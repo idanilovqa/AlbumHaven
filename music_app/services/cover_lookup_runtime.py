@@ -595,9 +595,23 @@ def _run_cover_lookup_task(
     candidate_publisher = None
     candidate_snapshot_published = False
     candidate_snapshot_diagnostic = ""
+    candidate_repository_factory = config.get(
+        "COVER_CANDIDATE_SNAPSHOT_REPOSITORY_FACTORY"
+    )
+    candidate_persistence_required = bool(
+        config.get("COVER_CANDIDATE_SNAPSHOT_PERSISTENCE_REQUIRED")
+    )
     try:
-        repository = AlbumCoverCandidateSnapshotRepository(config)
         album_id = int(album.get("id") or 0)
+        repository = (
+            candidate_repository_factory(
+                album_id=album_id,
+                search_generation=task_id,
+                search_kind="manual",
+            )
+            if callable(candidate_repository_factory)
+            else AlbumCoverCandidateSnapshotRepository(config)
+        )
         if album_id <= 0:
             album_id = int(
                 repository.resolve_album_id_for_track_paths(
@@ -613,6 +627,8 @@ def _run_cover_lookup_task(
                 search_kind="manual",
             )
     except Exception:
+        if candidate_persistence_required:
+            raise
         candidate_publisher = None
         candidate_snapshot_diagnostic = "durable_candidate_persistence_failed"
 
@@ -622,10 +638,13 @@ def _run_cover_lookup_task(
         if candidate_publisher is None or not candidates:
             return
         try:
-            candidate_snapshot_published = bool(
-                candidate_publisher.publish_candidates(candidates)
-            ) or candidate_snapshot_published
+            accepted = bool(candidate_publisher.publish_candidates(candidates))
+            if candidate_persistence_required and not accepted:
+                raise RuntimeError("candidate snapshot publication lost its claim")
+            candidate_snapshot_published = accepted or candidate_snapshot_published
         except Exception:
+            if candidate_persistence_required:
+                raise
             candidate_publisher = None
             candidate_snapshot_diagnostic = "durable_candidate_persistence_failed"
 
@@ -1064,8 +1083,12 @@ def _run_cover_lookup_task(
         caa_empty_notice = not archive_candidates
         if candidate_publisher is not None and candidate_snapshot_published:
             try:
-                candidate_publisher.complete()
+                completed = bool(candidate_publisher.complete())
+                if candidate_persistence_required and not completed:
+                    raise RuntimeError("candidate snapshot completion lost its claim")
             except Exception:
+                if candidate_persistence_required:
+                    raise
                 candidate_snapshot_diagnostic = "durable_candidate_persistence_failed"
         phase_started = time.perf_counter()
         _update_candidate_lookup_task(

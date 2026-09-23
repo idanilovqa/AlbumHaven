@@ -189,6 +189,7 @@ returns table (
   active_paths text[],
   deleted_paths text[],
   deleted_subtrees text[],
+  preserved_subtrees text[],
   moves jsonb,
   exception_overrides jsonb
 )
@@ -254,6 +255,16 @@ as $$
                 else path.path end
            order by path.ordinal
          ) filter (where path.path_kind = 'deleted_subtree'), array[]::text[]),
+         coalesce(array_agg(
+           case when library.local_path_key(path.path) = library.local_path_key(primary_roots.accepted_path)
+                  or left(
+                    library.local_path_key(path.path),
+                    char_length(library.local_path_key(primary_roots.accepted_path)) + 1
+                  ) = library.local_path_key(primary_roots.accepted_path) || case library.local_path_style(primary_roots.accepted_path) when 'windows' then E'\\' else '/' end
+                then primary_roots.current_path || substring(path.path from char_length(primary_roots.accepted_path) + 1)
+                else path.path end
+           order by path.ordinal
+         ) filter (where path.path_kind = 'preserved_subtree'), array[]::text[]),
          coalesce((
            select jsonb_agg(jsonb_build_object(
              'source_path', case
@@ -307,14 +318,24 @@ as $$
                  from (
                    select primary_roots.accepted_path as accepted_root_path,
                           primary_roots.current_path as current_root_path,
-                          event_path.path as accepted_event_path
+                          event_path.path as accepted_event_path,
+                          false as is_subtree
                      from library.targeted_reconciliation_intent_paths as event_path
                     where event_path.intent_id = claimed.id
                       and event_path.path_kind = 'active'
                    union all
+                   select primary_roots.accepted_path,
+                          primary_roots.current_path,
+                          event_path.path,
+                          true
+                     from library.targeted_reconciliation_intent_paths as event_path
+                    where event_path.intent_id = claimed.id
+                      and event_path.path_kind = 'preserved_subtree'
+                   union all
                    select event_move.accepted_destination_root_path,
                           current_destination.root_path,
-                          event_move.destination_path
+                          event_move.destination_path,
+                          false
                      from library.targeted_reconciliation_intent_moves as event_move
                      join library.library_roots as accepted_destination
                        on accepted_destination.id = event_move.destination_root_id
@@ -325,7 +346,9 @@ as $$
                       and current_destination.is_active is true
                     where event_move.intent_id = claimed.id
                  ) as scoped
-                where regexp_replace(
+                where (
+                  not scoped.is_subtree
+                  and regexp_replace(
                         case library.local_path_style(exception.track_key)
                           when 'windows' then lower(replace(exception.track_key, E'\\', '/'))
                           else replace(exception.track_key, E'\\', '/')
@@ -338,6 +361,19 @@ as $$
                         end,
                         '/[^/]*$', ''
                       )
+                ) or (
+                  scoped.is_subtree
+                  and (
+                    library.local_path_key(exception.track_key)
+                      = library.local_path_key(scoped.accepted_event_path)
+                    or left(
+                         library.local_path_key(exception.track_key),
+                         char_length(library.local_path_key(scoped.accepted_event_path)) + 1
+                       ) = library.local_path_key(scoped.accepted_event_path)
+                           || case library.local_path_style(scoped.accepted_event_path)
+                                when 'windows' then E'\\' else '/' end
+                  )
+                )
                 order by scoped.accepted_root_path, scoped.current_root_path
                 limit 1
              ) as authorized on true
@@ -427,6 +463,7 @@ declare
   authorized_active_paths text[];
   authorized_deleted_paths text[];
   authorized_deleted_subtrees text[];
+  authorized_preserved_subtrees text[];
   authorized_moves jsonb;
 begin
   if p_intent_id is null or p_job_id is null or p_attempt is null or
@@ -514,10 +551,10 @@ begin
   end if;
 
   select loaded.logical_root_id, loaded.active_paths, loaded.deleted_paths,
-         loaded.deleted_subtrees, loaded.moves
+         loaded.deleted_subtrees, loaded.preserved_subtrees, loaded.moves
     into authorized_primary_root_id, authorized_active_paths,
          authorized_deleted_paths, authorized_deleted_subtrees,
-         authorized_moves
+         authorized_preserved_subtrees, authorized_moves
     from library.load_claimed_targeted_reconciliation_intent_v2(
       p_job_id, p_worker_id, p_lease_token
     ) as loaded;
@@ -528,10 +565,16 @@ begin
 
   if exists (
     with allowed_active as (
-      select authorized_primary_root_id as root_id, path
+      select authorized_primary_root_id as root_id, path, false as is_subtree
         from unnest(coalesce(authorized_active_paths, array[]::text[])) as item(path)
       union all
-      select move ->> 'destination_root_ref', move ->> 'destination_path'
+      select authorized_primary_root_id, path, true
+        from unnest(
+          coalesce(authorized_preserved_subtrees, array[]::text[])
+        ) as item(path)
+      union all
+      select move ->> 'destination_root_ref', move ->> 'destination_path',
+             coalesce((move ->> 'is_directory')::boolean, false)
         from jsonb_array_elements(coalesce(authorized_moves, '[]'::jsonb)) as item(move)
     ), submitted_files as (
       select input.private_path
@@ -543,7 +586,9 @@ begin
      where nullif(btrim(submitted_files.private_path), '') is null
         or not exists (
           select 1 from allowed_active
-           where regexp_replace(
+           where (
+             not allowed_active.is_subtree
+             and regexp_replace(
                    case library.local_path_style(submitted_files.private_path)
                      when 'windows' then lower(replace(submitted_files.private_path, E'\\', '/'))
                      else replace(submitted_files.private_path, E'\\', '/')
@@ -556,6 +601,19 @@ begin
                    end,
                    '/[^/]*$', ''
                  )
+           ) or (
+             allowed_active.is_subtree
+             and (
+               library.local_path_key(submitted_files.private_path)
+                 = library.local_path_key(allowed_active.path)
+               or left(
+                    library.local_path_key(submitted_files.private_path),
+                    char_length(library.local_path_key(allowed_active.path)) + 1
+                  ) = library.local_path_key(allowed_active.path)
+                      || case library.local_path_style(allowed_active.path)
+                           when 'windows' then E'\\' else '/' end
+             )
+           )
         )
   ) then
     raise exception 'targeted publication file scope is invalid';

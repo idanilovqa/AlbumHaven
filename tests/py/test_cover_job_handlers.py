@@ -211,6 +211,118 @@ def test_cover_lookup_handler_stops_after_lost_publication_fence():
     assert outcome.reason_code == "cover_lookup_lease_lost"
 
 
+def test_cover_lookup_handler_injects_lease_fenced_candidate_snapshot_repository():
+    from music_app.jobs.cover_handlers import build_cover_lookup_handler
+
+    repository = _Repository()
+    generation = "7fd1c5cc-6e48-41a1-8174-65bcb75d094e"
+    repository.scope = SimpleNamespace(**{**vars(repository.scope), "task_key": generation})
+    snapshot_mutations = []
+
+    def mutate_claimed_lookup_candidate_snapshot(**kwargs):
+        snapshot_mutations.append(kwargs)
+        return True
+
+    repository.mutate_claimed_lookup_candidate_snapshot = (
+        mutate_claimed_lookup_candidate_snapshot
+    )
+
+    def run_lookup(**kwargs):
+        factory = kwargs["config"]["COVER_CANDIDATE_SNAPSHOT_REPOSITORY_FACTORY"]
+        snapshot_repository = factory(
+            album_id=101,
+            search_generation=generation,
+            search_kind="manual",
+        )
+        assert snapshot_repository.publish_generation(
+            album_id=101,
+            search_generation=generation,
+            search_kind="manual",
+            search_started_at=NOW.isoformat(),
+            candidates=[
+                {
+                    "id": "candidate-1",
+                    "url": "https://images.example/cover.jpg",
+                    "art_kind": "cover",
+                }
+            ],
+            best_candidate_id="candidate-1",
+            automatic_improvement=False,
+        )
+        kwargs["publish"](status="completed", progress=100)
+
+    outcome = build_cover_lookup_handler(
+        cover_repository=repository,
+        config={"MUSICBRAINZ_USER_AGENT": "Album Haven tests"},
+        logger=SimpleNamespace(),
+        run_lookup=run_lookup,
+        build_deadline=lambda _config: 1.0,
+        clock=lambda: NOW,
+    )(
+        _claim(
+            subject_ref=generation,
+            idempotency_key=f"cover-lookup:9:{generation}",
+        ),
+        _Context(),
+    )
+
+    assert outcome.next_state == JobState.SUCCEEDED
+    assert snapshot_mutations[0]["album_id"] == 101
+    assert snapshot_mutations[0]["job_id"] == 71
+    assert snapshot_mutations[0]["lease_token"] == "cover-lease-a"
+
+
+def test_cover_lookup_handler_fails_when_candidate_snapshot_publication_fails():
+    from music_app.jobs.cover_handlers import build_cover_lookup_handler
+
+    repository = _Repository()
+    generation = "7fd1c5cc-6e48-41a1-8174-65bcb75d094e"
+    repository.scope = SimpleNamespace(**{**vars(repository.scope), "task_key": generation})
+    repository.mutate_claimed_lookup_candidate_snapshot = lambda **_kwargs: False
+
+    def run_lookup(**kwargs):
+        factory = kwargs["config"]["COVER_CANDIDATE_SNAPSHOT_REPOSITORY_FACTORY"]
+        snapshot_repository = factory(
+            album_id=101,
+            search_generation=generation,
+            search_kind="manual",
+        )
+        if not snapshot_repository.publish_generation(
+            album_id=101,
+            search_generation=generation,
+            search_kind="manual",
+            search_started_at=NOW.isoformat(),
+            candidates=[
+                {
+                    "id": "candidate-1",
+                    "url": "https://images.example/cover.jpg",
+                    "art_kind": "cover",
+                }
+            ],
+            best_candidate_id="candidate-1",
+            automatic_improvement=False,
+        ):
+            raise RuntimeError("candidate snapshot publication lost its claim")
+
+    outcome = build_cover_lookup_handler(
+        cover_repository=repository,
+        config={"MUSICBRAINZ_USER_AGENT": "Album Haven tests"},
+        logger=SimpleNamespace(),
+        run_lookup=run_lookup,
+        build_deadline=lambda _config: 1.0,
+        clock=lambda: NOW,
+    )(
+        _claim(
+            subject_ref=generation,
+            idempotency_key=f"cover-lookup:9:{generation}",
+        ),
+        _Context(),
+    )
+
+    assert outcome.next_state == JobState.FAILED
+    assert outcome.reason_code == "cover_lookup_failed"
+
+
 def test_post_scan_cover_refresh_uses_shared_claimed_core_and_publishes_progress():
     from music_app.jobs.cover_handlers import build_cover_refresh_handler
 
@@ -291,6 +403,77 @@ def test_post_scan_cover_refresh_uses_shared_claimed_core_and_publishes_progress
     assert repository.finished[0]["next_status"] == "completed"
 
 
+def test_cover_refresh_handler_injects_lease_fenced_candidate_snapshot_repository():
+    from music_app.jobs.cover_handlers import build_cover_refresh_handler
+
+    claim = _claim(
+        job_id=88,
+        kind="post_scan_cover_refresh",
+        subject_kind="inventory_revision",
+        subject_ref="revision-12",
+        parameters={"inventory_revision": 12},
+        account_id=None,
+        capability_key=None,
+        request_origin_id=None,
+        idempotency_key="post-scan-cover-refresh:9:12",
+    )
+    scope = SimpleNamespace(
+        task_id=51,
+        task_key="post-scan-12",
+        row_revision=1,
+        file_cache={},
+        progress_total=0,
+        mode="post_scan",
+        force_search=False,
+    )
+
+    class Repository:
+        def __init__(self):
+            self.snapshot_mutations = []
+
+        def begin_claimed_cover_refresh(self, **_kwargs):
+            return scope
+
+        def cover_refresh_cancel_requested(self, **_kwargs):
+            return False
+
+        def finish_claimed_cover_refresh(self, **_kwargs):
+            return True
+
+        def mutate_claimed_refresh_candidate_snapshot(self, **kwargs):
+            self.snapshot_mutations.append(kwargs)
+            return True
+
+    repository = Repository()
+
+    def run_refresh(**kwargs):
+        factory = kwargs["config"]["COVER_CANDIDATE_SNAPSHOT_REPOSITORY_FACTORY"]
+        snapshot_repository = factory(
+            album_id=101,
+            search_generation="7fd1c5cc-6e48-41a1-8174-65bcb75d094e",
+            search_kind="automatic",
+        )
+        assert snapshot_repository.finish_generation(
+            album_id=101,
+            search_generation="7fd1c5cc-6e48-41a1-8174-65bcb75d094e",
+            status="completed",
+        )
+        return {"processed": 0, "downloaded": 0, "failed": 0}
+
+    outcome = build_cover_refresh_handler(
+        cover_repository=repository,
+        config={},
+        logger=SimpleNamespace(),
+        run_refresh=run_refresh,
+        clock=lambda: NOW,
+    )(claim, _Context())
+
+    assert outcome.next_state == JobState.SUCCEEDED
+    assert repository.snapshot_mutations[0]["task_id"] == 51
+    assert repository.snapshot_mutations[0]["job_id"] == 88
+    assert repository.snapshot_mutations[0]["operation"] == "finish_completed"
+
+
 def test_post_scan_cover_refresh_real_runtime_finishes_no_jobs_once(tmp_path, monkeypatch):
     from music_app.jobs.cover_handlers import build_cover_refresh_handler
     from music_app.services import state as state_service
@@ -369,6 +552,63 @@ def test_post_scan_cover_refresh_real_runtime_finishes_no_jobs_once(tmp_path, mo
     assert len(repository.finished) == 1
     assert repository.finished[0]["next_status"] == "completed"
     assert repository.finished[0]["processed_count"] == 0
+
+
+def test_claimed_cover_refresh_preserves_split_same_identity_releases(monkeypatch):
+    from music_app.services import state as state_service
+    from music_app.services.cover_refresh_runtime import run_claimed_cover_refresh
+
+    def entry(path: str, year: int) -> dict[str, object]:
+        return {
+            "path": path,
+            "title": f"Track {year}",
+            "artist": "Artist",
+            "album_artist": "Artist",
+            "album": "Same Title",
+            "year": year,
+            "track_number": 1,
+            "disc_number": 1,
+            "disc_number_raw": "1",
+            "edition": "",
+            "album_rating": 0,
+            "duration_seconds": 180,
+            "cover_path": None,
+        }
+
+    observed = {}
+
+    def refresh(library_state, *_args, **_kwargs):
+        observed.update(library_state)
+        return {"processed": 0, "downloaded": 0, "failed": 0}
+
+    monkeypatch.setattr(
+        state_service, "refresh_unsuccessful_cover_artwork_for_state", refresh
+    )
+    scope = SimpleNamespace(
+        file_cache={
+            "C:/Music/Artist/Same Title/2001/01.flac": entry(
+                "C:/Music/Artist/Same Title/2001/01.flac", 2001
+            ),
+            "C:/Music/Artist/Same Title/2011/01.flac": entry(
+                "C:/Music/Artist/Same Title/2011/01.flac", 2011
+            ),
+        },
+        separate_release_keys=("artist::same title",),
+        progress_total=2,
+        mode="manual",
+        force_search=False,
+    )
+
+    run_claimed_cover_refresh(
+        scope=scope,
+        config={},
+        logger=SimpleNamespace(),
+        should_cancel=lambda: False,
+        progress=lambda **_kwargs: True,
+    )
+
+    assert observed["separate_release_keys"] == {"artist::same title"}
+    assert sorted(album.year for album in observed["albums"]) == [2001, 2011]
 
 
 def test_shared_cover_refresh_core_cancels_when_projection_fence_is_lost():

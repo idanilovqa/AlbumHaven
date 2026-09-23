@@ -547,3 +547,311 @@ begin
     grant execute on function ops.request_cover_lookup_cancellation(text, bigint, bigint, timestamptz) to album_haven_app;
   end if;
 end $$;
+
+create or replace function ops.apply_claimed_cover_candidate_snapshot(
+  requested_album_id bigint,
+  requested_candidate_generation uuid,
+  requested_operation text,
+  requested_search_kind text,
+  requested_search_started_at timestamptz,
+  requested_candidates jsonb,
+  requested_best_candidate_id text,
+  requested_automatic_improvement boolean,
+  requested_candidate_id text,
+  observed_at timestamptz
+)
+returns boolean
+language plpgsql
+security definer
+set search_path = pg_catalog, library
+as $$
+declare
+  affected integer := 0;
+begin
+  if requested_operation = 'publish' then
+    if requested_search_kind not in ('automatic', 'manual')
+       or requested_search_started_at is null
+       or jsonb_typeof(requested_candidates) <> 'array'
+       or jsonb_array_length(requested_candidates) = 0 then
+      return false;
+    end if;
+    insert into library.local_album_cover_candidate_snapshots (
+      album_id, search_generation, search_kind, status, revision,
+      candidates, best_candidate_id, automatic_improvement_revision,
+      seen_automatic_improvement_revision, started_at, updated_at, finished_at
+    ) values (
+      requested_album_id, requested_candidate_generation, requested_search_kind,
+      'running', 1, requested_candidates, requested_best_candidate_id,
+      case when requested_automatic_improvement then 1 else 0 end,
+      0, requested_search_started_at, observed_at, null
+    )
+    on conflict (album_id) do update set
+      search_generation = excluded.search_generation,
+      search_kind = excluded.search_kind,
+      status = 'running',
+      revision = case
+        when library.local_album_cover_candidate_snapshots.candidates
+               is distinct from excluded.candidates
+          or library.local_album_cover_candidate_snapshots.best_candidate_id
+               is distinct from excluded.best_candidate_id
+          then library.local_album_cover_candidate_snapshots.revision + 1
+        else library.local_album_cover_candidate_snapshots.revision
+      end,
+      candidates = excluded.candidates,
+      best_candidate_id = excluded.best_candidate_id,
+      automatic_improvement_revision =
+        library.local_album_cover_candidate_snapshots.automatic_improvement_revision
+        + case
+            when requested_automatic_improvement
+             and (
+               library.local_album_cover_candidate_snapshots.candidates
+                 is distinct from excluded.candidates
+               or library.local_album_cover_candidate_snapshots.best_candidate_id
+                 is distinct from excluded.best_candidate_id
+             ) then 1
+            else 0
+          end,
+      started_at = case
+        when library.local_album_cover_candidate_snapshots.search_generation
+             = excluded.search_generation
+          then library.local_album_cover_candidate_snapshots.started_at
+        else excluded.started_at
+      end,
+      updated_at = observed_at,
+      finished_at = null
+    where (
+      library.local_album_cover_candidate_snapshots.search_generation
+        = excluded.search_generation
+      and library.local_album_cover_candidate_snapshots.status = 'running'
+    ) or (
+      excluded.started_at > library.local_album_cover_candidate_snapshots.started_at
+      and (
+        library.local_album_cover_candidate_snapshots.status in ('completed', 'failed')
+        or (
+          library.local_album_cover_candidate_snapshots.status = 'running'
+          and excluded.search_kind = 'manual'
+          and library.local_album_cover_candidate_snapshots.search_kind = 'automatic'
+        )
+      )
+    );
+  elsif requested_operation in ('finish_completed', 'finish_failed') then
+    update library.local_album_cover_candidate_snapshots as snapshot
+       set status = case
+             when requested_operation = 'finish_completed' then 'completed'
+             else 'failed'
+           end,
+           updated_at = observed_at,
+           finished_at = observed_at
+     where snapshot.album_id = requested_album_id
+       and snapshot.search_generation = requested_candidate_generation
+       and snapshot.status = 'running';
+  elsif requested_operation = 'mark_improvement' then
+    update library.local_album_cover_candidate_snapshots as snapshot
+       set automatic_improvement_revision = snapshot.automatic_improvement_revision + 1,
+           automatic_improvement_candidate_id = requested_candidate_id,
+           updated_at = observed_at
+     where snapshot.album_id = requested_album_id
+       and snapshot.search_generation = requested_candidate_generation
+       and snapshot.search_kind = 'automatic'
+       and nullif(requested_candidate_id, '') is not null
+       and snapshot.automatic_improvement_candidate_id
+             is distinct from requested_candidate_id
+       and exists (
+         select 1 from jsonb_array_elements(snapshot.candidates) as candidate
+          where candidate ->> 'id' = requested_candidate_id
+       );
+  else
+    return false;
+  end if;
+  get diagnostics affected = row_count;
+  return affected = 1;
+end;
+$$;
+
+create or replace function ops.mutate_claimed_cover_lookup_candidate_snapshot(
+  requested_task_key text,
+  requested_task_id bigint,
+  requested_library_id bigint,
+  requested_job_id bigint,
+  requested_attempt integer,
+  requested_worker_id text,
+  requested_lease_token text,
+  observed_at timestamptz,
+  requested_album_id bigint,
+  requested_candidate_generation uuid,
+  requested_operation text,
+  requested_search_kind text,
+  requested_search_started_at timestamptz,
+  requested_candidates jsonb,
+  requested_best_candidate_id text,
+  requested_automatic_improvement boolean,
+  requested_candidate_id text
+)
+returns boolean
+language plpgsql
+security definer
+set search_path = pg_catalog, ops
+as $$
+begin
+  if not exists (
+    select 1
+      from ops.cover_lookup_tasks as task
+      join ops.jobs as job on job.id = task.job_id
+     where task.id = requested_task_id
+       and task.task_key = requested_task_key
+       and task.library_id = requested_library_id
+       and task.local_album_id = requested_album_id
+       and task.candidate_generation = requested_candidate_generation
+       and task.status = 'running'
+       and task.cancel_requested_at is null
+       and job.id = requested_job_id
+       and job.kind = 'cover_lookup'
+       and job.state = 'running'
+       and job.attempt_count = requested_attempt
+       and job.lease_owner = requested_worker_id
+       and job.lease_token = requested_lease_token
+       and job.lease_expires_at > observed_at
+       and job.cancel_requested_at is null
+  ) then
+    return false;
+  end if;
+  return ops.apply_claimed_cover_candidate_snapshot(
+    requested_album_id, requested_candidate_generation, requested_operation,
+    requested_search_kind, requested_search_started_at, requested_candidates,
+    requested_best_candidate_id, requested_automatic_improvement,
+    requested_candidate_id, observed_at
+  );
+end;
+$$;
+
+create or replace function ops.persist_cover_candidate_authority(
+  requested_task_key text,
+  requested_library_id bigint,
+  requested_album_key text,
+  requested_account_id bigint,
+  requested_origin_type text,
+  requested_origin_key text,
+  requested_deployment_mode text,
+  requested_client_surface text,
+  requested_candidate_generation uuid,
+  requested_resource_revision bigint,
+  recorded_at timestamptz,
+  requested_task_payload jsonb,
+  requested_candidates jsonb,
+  requested_best_candidate_id text
+)
+returns table (task_id bigint, row_revision bigint, candidate_generation uuid)
+language plpgsql
+security definer
+set search_path = pg_catalog, ops, app, library
+as $$
+declare
+  resolved_album_id bigint;
+  resolved_root_id bigint;
+  resolved_origin_id bigint;
+  selected_task ops.cover_lookup_tasks%rowtype;
+begin
+  if jsonb_typeof(requested_candidates) <> 'array'
+     or jsonb_array_length(requested_candidates) = 0
+     or requested_task_payload -> 'possible_matches' is distinct from requested_candidates then
+    return;
+  end if;
+  select album.id, min(root.id)
+    into resolved_album_id, resolved_root_id
+    from library.local_albums as album
+    join library.local_tracks as track
+      on track.album_id = album.id and track.library_id = album.library_id
+    join library.local_track_files as file on file.track_id = track.id
+    join library.library_roots as root
+      on root.id = file.library_root_id
+     and root.library_id = album.library_id
+     and root.is_active is true
+   where album.library_id = requested_library_id
+     and album.album_key = requested_album_key
+   group by album.id
+  having count(distinct root.id) = 1;
+  if resolved_album_id is null or resolved_root_id is null then
+    return;
+  end if;
+  select origin.id into resolved_origin_id
+    from app.request_origins as origin
+   where origin.account_id = requested_account_id
+     and origin.origin_type = requested_origin_type
+     and origin.origin_key = requested_origin_key
+     and origin.client_surface_class = requested_client_surface
+   order by origin.id desc limit 1;
+  if resolved_origin_id is null then
+    return;
+  end if;
+  if not ops.apply_claimed_cover_candidate_snapshot(
+    resolved_album_id, requested_candidate_generation, 'publish', 'manual',
+    recorded_at, requested_candidates, requested_best_candidate_id, false,
+    null, recorded_at
+  ) then
+    return;
+  end if;
+  if not ops.apply_claimed_cover_candidate_snapshot(
+    resolved_album_id, requested_candidate_generation, 'finish_completed',
+    'manual', null, '[]'::jsonb, null, false, null, recorded_at
+  ) then
+    return;
+  end if;
+  insert into ops.cover_lookup_tasks (
+    library_id, task_key, status, requested_at, completed_at, album_key,
+    provider_payload, metadata, local_album_id, library_root_id,
+    initiating_account_id, request_origin_id, capability_key,
+    deployment_mode, client_surface, candidate_generation,
+    resource_revision, row_revision, job_id
+  ) values (
+    requested_library_id, requested_task_key, 'completed', recorded_at,
+    recorded_at, requested_album_key, requested_task_payload,
+    jsonb_build_object(
+      'source_family', 'durable_cover_lookup',
+      'source', 'durable_cover_candidate_authority',
+      'source_key', requested_task_key,
+      'source_payload', jsonb_build_object('id', requested_task_key)
+    ),
+    resolved_album_id, resolved_root_id, requested_account_id,
+    resolved_origin_id, 'library.covers.lookup', requested_deployment_mode,
+    requested_client_surface, requested_candidate_generation,
+    requested_resource_revision, 0, null
+  )
+  on conflict (library_id, (metadata ->> 'source_family'), task_key)
+    where library_id is not null and metadata ? 'source_family'
+  do update set
+    status = 'completed',
+    completed_at = recorded_at,
+    provider_payload = excluded.provider_payload,
+    request_origin_id = excluded.request_origin_id,
+    deployment_mode = excluded.deployment_mode,
+    client_surface = excluded.client_surface,
+    candidate_generation = excluded.candidate_generation,
+    resource_revision = excluded.resource_revision,
+    row_revision = ops.cover_lookup_tasks.row_revision + 1,
+    job_id = null
+  where ops.cover_lookup_tasks.local_album_id = excluded.local_album_id
+    and ops.cover_lookup_tasks.library_root_id = excluded.library_root_id
+    and ops.cover_lookup_tasks.initiating_account_id = excluded.initiating_account_id
+    and ops.cover_lookup_tasks.status not in ('pending', 'running')
+  returning * into selected_task;
+  if selected_task.id is null then
+    return;
+  end if;
+  return query select selected_task.id, selected_task.row_revision,
+                      selected_task.candidate_generation;
+end;
+$$;
+
+revoke all on function ops.apply_claimed_cover_candidate_snapshot(bigint, uuid, text, text, timestamptz, jsonb, text, boolean, text, timestamptz) from public;
+revoke all on function ops.mutate_claimed_cover_lookup_candidate_snapshot(text, bigint, bigint, bigint, integer, text, text, timestamptz, bigint, uuid, text, text, timestamptz, jsonb, text, boolean, text) from public;
+revoke all on function ops.persist_cover_candidate_authority(text, bigint, text, bigint, text, text, text, text, uuid, bigint, timestamptz, jsonb, jsonb, text) from public;
+
+do $$
+begin
+  if exists (select 1 from pg_roles where rolname = 'album_haven_worker') then
+    grant execute on function ops.mutate_claimed_cover_lookup_candidate_snapshot(text, bigint, bigint, bigint, integer, text, text, timestamptz, bigint, uuid, text, text, timestamptz, jsonb, text, boolean, text) to album_haven_worker;
+  end if;
+  if exists (select 1 from pg_roles where rolname = 'album_haven_app') then
+    grant execute on function ops.persist_cover_candidate_authority(text, bigint, text, bigint, text, text, text, text, uuid, bigint, timestamptz, jsonb, jsonb, text) to album_haven_app;
+  end if;
+end $$;

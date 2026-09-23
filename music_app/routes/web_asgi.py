@@ -171,7 +171,7 @@ def _start_claimed_cold_scan(request: Request, token: int) -> None:
                 library_state,
                 _app_config(request),
                 _app_logger(request),
-                force=False,
+                force=bool(library_state.get("cold_scan_force")),
                 scan_mode="background",
             )
         except Exception as exc:
@@ -983,9 +983,11 @@ async def index(request: Request) -> Response:
                     request_origin_ref=origin_ref,
                     root_ids=root_ids,
                     mode="background",
-                    force=False,
+                    force=bool(library_state.get("cold_scan_force")),
                     scheduled_at=datetime.now(timezone.utc),
-                    cold_start=True,
+                    cold_start=bool(
+                        library_state.get("cold_scan_is_cold_start", True)
+                    ),
                 )
                 library_state["cold_scan_handoff_status"] = "started"
             except Exception as exc:

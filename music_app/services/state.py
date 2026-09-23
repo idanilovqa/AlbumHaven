@@ -271,6 +271,8 @@ def init_state(app) -> None:
         "cold_scan_handoff_error": "",
         "cold_scan_claim_token": 0,
         "cold_scan_claimed_at": 0.0,
+        "cold_scan_force": False,
+        "cold_scan_is_cold_start": True,
         "rescan_ignore_existing_cache": False,
         "scan_metadata_repair_required": False,
         "relation_views": empty_relation_views(),

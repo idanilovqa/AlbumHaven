@@ -55,7 +55,15 @@ def append_measured(adapter, entry, *, account_id, library_id):
     item = normalize_measurement(entry, account_id=account_id, library_id=library_id)
     identity = f"{account_id}:{library_id}:{item['device_id']}:{item['session_id']}"
     item["id"] = hashlib.sha256(identity.encode()).hexdigest()
-    server_fields = {"id", "recorded_at", "scrobbled", "scrobble_error", "scrobble_retryable", "sync_problem"}
+    server_fields = {
+        "id",
+        "recorded_at",
+        "scrobbled",
+        "scrobble_error",
+        "scrobble_retryable",
+        "last_scrobble_attempt_at",
+        "sync_problem",
+    }
     def submitted_fields(value):
         return {key: item for key, item in value.items() if key not in server_fields and not key.startswith("scrobble_")}
     with adapter._connect_to_database() as connection:
@@ -89,9 +97,9 @@ def append_measured(adapter, entry, *, account_id, library_id):
                     or (current["finalized"] and not item["finalized"])):
                 raise MeasuredListenError("Listen counters cannot regress", 409)
             # Provider state belongs to the server's exact-row update path.
-            for key in ("scrobbled", "scrobble_error", "scrobble_retryable", "sync_problem", "scrobble_submission_state"):
-                if key in previous:
-                    item[key] = previous[key]
+            for key, value in previous.items():
+                if key in server_fields or key.startswith("scrobble_"):
+                    item[key] = value
         item.setdefault("recorded_at", datetime.now(timezone.utc).isoformat())
         metadata = Jsonb({"source_payload": item})
         values = (item["measured_listened_seconds"], item["max_measured_contiguous_seconds"],

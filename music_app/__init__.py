@@ -254,7 +254,6 @@ def create_asgi_app():
     from music_app.services.state import (
         ensure_runtime_relation_projection_ready,
         hydrate_runtime_library_state_on_startup,
-        start_background_refresh_for_state,
     )
 
     runtime = _create_asgi_runtime_state()
@@ -272,13 +271,12 @@ def create_asgi_app():
             and library_state.get("scan_metadata_repair_required")
             and not library_state.get("scan_in_progress")
         ):
-            start_background_refresh_for_state(
-                library_state,
-                runtime.config,
-                runtime.logger,
-                force=True,
-                scan_mode="background",
-            )
+            with runtime.cold_scan_handoff_lock:
+                library_state["cold_scan_pending"] = True
+                library_state["cold_scan_handoff_status"] = "pending"
+                library_state["cold_scan_handoff_error"] = ""
+                library_state["cold_scan_force"] = True
+                library_state["cold_scan_is_cold_start"] = False
         if (
             not hydrated
             and not library_state.get("last_error")
@@ -291,6 +289,8 @@ def create_asgi_app():
                 library_state["cold_scan_pending"] = True
                 library_state["cold_scan_handoff_status"] = "pending"
                 library_state["cold_scan_handoff_error"] = ""
+                library_state["cold_scan_force"] = False
+                library_state["cold_scan_is_cold_start"] = True
         targeted_database_url = str(
             runtime.config.get("ALBUM_HAVEN_APP_DATABASE_URL") or ""
         ).strip()

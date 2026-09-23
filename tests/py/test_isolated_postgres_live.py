@@ -458,7 +458,7 @@ def test_live_durable_job_migration_is_idempotent_and_roles_are_narrow(
     psycopg = pytest.importorskip("psycopg")
     migrations_root = Path(__file__).resolve().parents[2] / "migrations" / "postgres"
     migration_sql = (
-        migrations_root / "0063_create_durable_job_foundation.sql"
+        migrations_root / "0080_create_durable_job_foundation.sql"
     ).read_text(encoding="utf-8")
     cleanup_complete = False
 

@@ -20,6 +20,9 @@ class _Result:
     def fetchone(self):
         return self.row
 
+    def fetchall(self):
+        return self.row if isinstance(self.row, list) else []
+
 
 class _Connection:
     def __init__(self, rows):
@@ -144,3 +147,234 @@ def test_get_task_is_scoped_by_library_and_task_identity():
     assert "where library_id = %(library_id)s" in sql
     assert "and task_key = %(task_key)s" in sql
     assert parameters == {"library_id": 19, "task_key": "lookup-opaque-42"}
+
+
+def test_list_candidate_lookup_tasks_reloads_only_the_authorized_library():
+    connection = _Connection(
+        [[
+            {
+                "task_key": "lookup-opaque-42",
+                "status": "completed",
+                "requested_at": NOW,
+                "completed_at": NOW,
+                "provider_payload": {
+                    "id": "lookup-opaque-42",
+                    "status": "completed",
+                    "artist": "Artist",
+                },
+                "metadata": {
+                    "source_family": "durable_cover_lookup",
+                    "notification_action_taken": False,
+                },
+            }
+        ]]
+    )
+    repository = _repository(connection, _Jobs())
+
+    tasks = repository.list_candidate_lookup_tasks(
+        actor_account_id=7, library_id=19
+    )
+
+    assert tasks == [
+        {
+            "id": "lookup-opaque-42",
+            "status": "completed",
+            "artist": "Artist",
+            "notification_action_taken": False,
+            "notification_completed_at": NOW.isoformat(),
+            "notification_expires_at": "",
+        }
+    ]
+    sql, parameters = connection.executed[0]
+    assert "library_id = %(library_id)s" in sql
+    assert "source_family' = 'durable_cover_lookup'" in sql
+    assert "membership.account_id = %(actor_account_id)s" in sql
+    assert parameters["actor_account_id"] == 7
+    assert parameters["library_id"] == 19
+
+
+def test_clear_completed_candidate_lookup_tasks_is_terminal_and_library_scoped():
+    connection = _Connection(
+        [[{"task_key": "lookup-opaque-42"}]]
+    )
+    repository = _repository(connection, _Jobs())
+
+    removed = repository.clear_completed_candidate_lookup_tasks(
+        actor_account_id=7,
+        library_id=19,
+        task_keys=["lookup-opaque-42"],
+    )
+
+    assert removed == {"lookup-opaque-42"}
+    sql, parameters = connection.executed[0]
+    assert "status = any(%(terminal_statuses)s" in sql
+    assert "library_id = %(library_id)s" in sql
+    assert "source_family' = 'durable_cover_lookup'" in sql
+    assert "membership.account_id = %(actor_account_id)s" in sql
+    assert parameters["task_keys"] == ["lookup-opaque-42"]
+
+
+def test_mark_candidate_lookup_notification_action_is_terminal_and_library_scoped():
+    connection = _Connection(
+        [
+            {
+                "task_key": "lookup-opaque-42",
+                "status": "completed",
+                "requested_at": NOW,
+                "completed_at": NOW,
+                "provider_payload": {"id": "lookup-opaque-42"},
+                "metadata": {
+                    "source_family": "durable_cover_lookup",
+                    "notification_action_taken": True,
+                },
+            }
+        ]
+    )
+    repository = _repository(connection, _Jobs())
+
+    task = repository.mark_candidate_lookup_notification_action_taken(
+        actor_account_id=7,
+        library_id=19,
+        task_key="lookup-opaque-42",
+    )
+
+    assert task is not None
+    assert task["id"] == "lookup-opaque-42"
+    assert task["notification_action_taken"] is True
+    sql, parameters = connection.executed[0]
+    assert "status = any(%(terminal_statuses)s" in sql
+    assert "library_id = %(library_id)s" in sql
+    assert "source_family' = 'durable_cover_lookup'" in sql
+    assert "membership.account_id = %(actor_account_id)s" in sql
+    assert parameters["actor_account_id"] == 7
+
+
+def test_persist_candidate_authority_uses_one_atomic_postgres_boundary():
+    connection = _Connection(
+        [
+            {
+                "task_id": 73,
+                "row_revision": 6,
+                "candidate_generation": GENERATION,
+            }
+        ]
+    )
+    repository = _repository(connection, _Jobs())
+    candidate = {
+        "id": "candidate-1",
+        "url": "https://images.example/cover.jpg",
+        "art_kind": "cover",
+    }
+
+    authority = repository.persist_candidate_authority(
+        task_key="lookup-opaque-42",
+        library_id=19,
+        album_key="scan-artist-001|album-001|2001",
+        account_id=7,
+        request_origin_ref="origin:accepted-42",
+        deployment_mode="self_hosted_private_web",
+        client_surface="web",
+        candidate_generation=GENERATION,
+        resource_revision=5,
+        recorded_at=NOW,
+        task_payload={"possible_matches": [candidate]},
+        candidates=[candidate],
+        best_candidate_id="candidate-1",
+    )
+
+    assert authority["task_id"] == 73
+    assert authority["candidate_generation"] == GENERATION
+    sql, parameters = connection.executed[0]
+    assert "ops.persist_cover_candidate_authority" in sql
+    assert "insert into ops.cover_lookup_tasks" not in sql
+    assert parameters["candidate_generation"] == GENERATION
+    assert connection.commits == 1
+
+
+@pytest.mark.parametrize(
+    ("method_name", "function_name", "extra"),
+    [
+        (
+            "mutate_claimed_lookup_candidate_snapshot",
+            "ops.mutate_claimed_cover_lookup_candidate_snapshot",
+            {"task_key": "lookup-opaque-42", "task_id": 73},
+        ),
+        (
+            "mutate_claimed_refresh_candidate_snapshot",
+            "ops.mutate_claimed_cover_refresh_candidate_snapshot",
+            {"task_id": 73},
+        ),
+    ],
+)
+def test_claimed_candidate_snapshot_mutations_use_narrow_fenced_functions(
+    method_name, function_name, extra
+):
+    connection = _Connection([{"accepted": True}])
+    repository = _repository(connection, _Jobs())
+
+    accepted = getattr(repository, method_name)(
+        library_id=19,
+        job_id=88,
+        attempt=1,
+        worker_id="cover-worker-a",
+        lease_token="lease-a",
+        now=NOW,
+        album_id=101,
+        candidate_generation=GENERATION,
+        operation="publish",
+        search_kind="manual" if "lookup" in method_name else "automatic",
+        search_started_at=NOW.isoformat(),
+        candidates=[
+            {
+                "id": "candidate-1",
+                "url": "https://images.example/cover.jpg",
+                "art_kind": "cover",
+            }
+        ],
+        best_candidate_id="candidate-1",
+        automatic_improvement=False,
+        candidate_id=None,
+        **extra,
+    )
+
+    assert accepted is True
+    sql, parameters = connection.executed[0]
+    assert function_name in sql
+    assert "local_album_cover_candidate_snapshots" not in sql
+    assert parameters["lease_token"] == "lease-a"
+
+
+def test_begin_claimed_cover_refresh_returns_lease_fenced_separate_release_keys():
+    connection = _Connection(
+        [
+            {
+                "task_id": 51,
+                "task_key": "post-scan-12",
+                "row_revision": 2,
+                "file_cache": {},
+                "separate_release_keys": ["artist::same title"],
+                "progress_total": 0,
+                "mode": "post_scan",
+                "force_search": False,
+            }
+        ]
+    )
+    repository = _repository(connection, _Jobs())
+
+    scope = repository.begin_claimed_cover_refresh(
+        task_id=None,
+        library_id=19,
+        job_id=88,
+        attempt=1,
+        worker_id="cover-worker-a",
+        lease_token="lease-a",
+        now=NOW,
+        mode="post_scan",
+        inventory_revision=5,
+        task_key="revision-5",
+    )
+
+    assert scope is not None
+    assert scope.separate_release_keys == ("artist::same title",)
+    sql = connection.executed[0][0]
+    assert "ops.begin_claimed_cover_refresh" in sql

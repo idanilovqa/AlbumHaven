@@ -205,6 +205,71 @@ def test_targeted_publication_converges_vacated_albums_under_the_same_lease():
     }
 
 
+def test_claimed_targeted_preparation_loads_only_through_lease_fenced_function():
+    connection = _RecordingConnection(
+        results=(
+            _Result(
+                one={
+                    "separate_release_keys": [
+                        "artist::album::disc-2",
+                        "artist::album::deluxe",
+                    ],
+                    "existing_memberships": [
+                        {
+                            "private_path": "C:/Music/Album/01.flac",
+                            "album_key": "artist::album",
+                            "album_title": "Album",
+                            "release_year": 2026,
+                            "edition": "",
+                            "artist_key": "artist",
+                        }
+                    ],
+                }
+            ),
+        )
+    )
+    repository, _, _ = _repository(connection)
+
+    preparation = repository.load_claimed_targeted_reconciliation_preparation(
+        intent_id=41,
+        library_id=19,
+        job_id=91,
+        attempt=2,
+        worker_id="worker-a",
+        lease_token="lease-a",
+        now=NOW,
+    )
+
+    assert preparation.separate_release_keys == (
+        "artist::album::deluxe",
+        "artist::album::disc-2",
+    )
+    assert preparation.existing_memberships == (
+        {
+            "private_path": "C:/Music/Album/01.flac",
+            "album_key": "artist::album",
+            "album_title": "Album",
+            "release_year": 2026,
+            "edition": "",
+            "artist_key": "artist",
+        },
+    )
+    [(statement, parameters)] = connection.executed
+    assert "load_claimed_targeted_reconciliation_preparation" in _normalized(
+        statement
+    )
+    assert " from library.separate_releases" not in _normalized(statement)
+    assert parameters == {
+        "intent_id": 41,
+        "library_id": 19,
+        "job_id": 91,
+        "attempt": 2,
+        "worker_id": "worker-a",
+        "lease_token": "lease-a",
+        "now": NOW,
+    }
+
+
 def _policy_evaluation(
     action="library.refresh",
     *,
@@ -387,6 +452,38 @@ def test_targeted_intent_preserves_exact_ordered_paths_moves_and_subtrees_before
     assert jobs.calls[0][1].idempotency_key == (
         f"targeted-reconciliation-request:{expected_digest}"
     )
+
+
+def test_targeted_enqueue_persists_active_directory_as_recursive_scope(tmp_path):
+    active_directory = tmp_path / "Artist" / "Album" / "Disc 2"
+    active_directory.mkdir(parents=True)
+    connection = _RecordingConnection(
+        [
+            _Result(all_rows=(_root_row("root-a", 31),)),
+            _Result(one={"intent_id": 84}),
+            _Result(one={"intent_id": 84}),
+        ]
+    )
+    repository, _, _ = _repository(connection)
+
+    repository.enqueue_targeted_reconciliation(
+        library_id=19,
+        request=TargetedReconciliationRequest(
+            root_id="root-a",
+            paths=frozenset({active_directory}),
+        ),
+        deployment_mode="self_hosted_private_web",
+        client_surface="library_watcher",
+        scheduled_at=NOW,
+    )
+
+    _, values = next(
+        (sql, values)
+        for sql, values in connection.executed
+        if "create_targeted_reconciliation_intent" in _normalized(sql)
+    )
+    assert values["active_paths"] == []
+    assert values["preserved_subtrees"] == [str(active_directory)]
 
 
 def test_targeted_generic_job_contains_only_stable_intent_identity_not_paths():

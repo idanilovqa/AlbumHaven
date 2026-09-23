@@ -47,6 +47,34 @@ def test_duplicate_modifications_coalesce_by_album_directory(tmp_path: Path):
     assert emitted[0].paths == frozenset({path})
 
 
+def test_active_directory_is_preserved_as_recursive_target_scope(tmp_path: Path):
+    from music_app.services.library_event_coordinator import LibraryEventCoordinator
+    from music_app.services.library_reconciliation import LibraryEventKind
+
+    emitted = []
+    album_directory = tmp_path / "Artist" / "Album" / "Disc 2"
+    album_directory.mkdir(parents=True)
+    coordinator = LibraryEventCoordinator(
+        emit_request=emitted.append,
+        stat_path=lambda _path: (100, 10),
+        wait=lambda _seconds: None,
+    )
+
+    coordinator.accept(
+        _event(
+            LibraryEventKind.CREATED,
+            tmp_path,
+            "Artist/Album/Disc 2",
+            is_directory=True,
+        )
+    )
+    coordinator.flush()
+
+    assert len(emitted) == 1
+    assert emitted[0].paths == frozenset()
+    assert emitted[0].preserved_subtrees == frozenset({album_directory})
+
+
 def test_rapid_multi_file_copy_emits_one_album_request(tmp_path: Path):
     from music_app.services.library_event_coordinator import LibraryEventCoordinator
     from music_app.services.library_reconciliation import LibraryEventKind

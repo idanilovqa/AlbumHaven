@@ -1861,3 +1861,144 @@ def test_live_full_scan_publication_waits_for_concurrent_authority_revocation(
             result = publication.result(timeout=5)
 
     assert result["publication_won"] is False
+
+
+def test_live_worker_loads_active_directory_membership_without_private_reads(
+    live_scan_database,
+    tmp_path,
+):
+    import psycopg
+
+    from music_app.services.scan_cache_persistence import (
+        DurableTargetedReconciliationPreparationAdapter,
+    )
+
+    setup_url, runtime_url, worker_url = live_scan_database
+    suffix = "worker-preparation-directory"
+    _, library_id = _seed_scope(setup_url, suffix)
+    root = tmp_path / "library"
+    active_directory = root / "Artist" / "Album" / "Disc 2"
+    active_directory.mkdir(parents=True)
+    disc_one_path = root / "Artist" / "Album" / "Disc 1" / "01.flac"
+    disc_two_path = active_directory / "01.flac"
+
+    with isolatedPostgres._connect(setup_url) as connection:
+        connection.execute(
+            """
+            update library.library_roots
+               set root_path = %s
+             where library_id = %s
+               and metadata ->> 'root_id' = 'root-a'
+            """,
+            (str(root), library_id),
+        )
+        artist_id = connection.execute(
+            """
+            insert into library.local_artists (library_id, artist_key, name)
+            values (%s, 'artist', 'Artist')
+            returning id
+            """,
+            (library_id,),
+        ).fetchone()["id"]
+        album_id = connection.execute(
+            """
+            insert into library.local_albums (
+              library_id, artist_id, album_key, title
+            ) values (%s, %s, 'artist::album', 'Album')
+            returning id
+            """,
+            (library_id, artist_id),
+        ).fetchone()["id"]
+        for disc_number, private_path in (
+            (1, disc_one_path),
+            (2, disc_two_path),
+        ):
+            track_id = connection.execute(
+                """
+                insert into library.local_tracks (
+                  library_id, album_id, artist_id, track_key, title,
+                  disc_number, track_number
+                ) values (%s, %s, %s, %s, 'Track 1', %s, 1)
+                returning id
+                """,
+                (
+                    library_id,
+                    album_id,
+                    artist_id,
+                    f"artist::album::disc-{disc_number}::track-1",
+                    disc_number,
+                ),
+            ).fetchone()["id"]
+            connection.execute(
+                """
+                insert into library.local_track_files (track_id, private_path)
+                values (%s, %s)
+                """,
+                (track_id, str(private_path)),
+            )
+
+    accepted = _scan_repository(runtime_url).enqueue_targeted_reconciliation(
+        library_id=library_id,
+        request=TargetedReconciliationRequest(
+            root_id="root-a",
+            paths=frozenset({active_directory}),
+        ),
+        producer_request_key=f"watcher-{suffix}-0001",
+        deployment_mode="self_hosted_private_web",
+        client_surface="library_watcher",
+        scheduled_at=datetime.now(timezone.utc) - timedelta(seconds=1),
+    )
+    claimed = PostgresJobRepository(
+        database_url=worker_url,
+        connect_to_database=isolatedPostgres._connect,
+    ).claim(
+        worker_id=f"scan-{suffix}-worker",
+        now=datetime.now(timezone.utc),
+        lease_seconds=300,
+    )
+    assert claimed is not None and claimed.job_id == accepted.job_id
+
+    worker_repository = _scan_repository(worker_url)
+    preparation = worker_repository.load_claimed_targeted_reconciliation_preparation(
+        intent_id=accepted.intent_id,
+        library_id=library_id,
+        job_id=claimed.job_id,
+        attempt=claimed.attempt,
+        worker_id=claimed.worker_id,
+        lease_token=claimed.lease_token,
+        now=datetime.now(timezone.utc),
+    )
+
+    assert preparation.separate_release_keys == ()
+    assert [
+        membership["private_path"]
+        for membership in preparation.existing_memberships
+    ] == [str(disc_two_path)]
+
+    class PublicationGuard:
+        def publish_prepared(self, *, inventory, stale_scopes):
+            return worker_repository.publish_claimed_targeted_reconciliation(
+                claim=claimed,
+                intent_id=accepted.intent_id,
+                inventory=inventory,
+                stale_scopes=stale_scopes,
+                now=datetime.now(timezone.utc),
+            )
+
+    result = DurableTargetedReconciliationPreparationAdapter(
+        build_albums=lambda _cache, _separate: []
+    ).persist_targeted_inventory_mutation(
+        root_id="root-a",
+        active_file_entries={},
+        preparation_scope=preparation,
+        publication_guard=PublicationGuard(),
+    )
+
+    assert result["publication_won"] is True
+    with pytest.raises(psycopg.errors.InsufficientPrivilege):
+        with isolatedPostgres._connect(worker_url) as connection:
+            connection.execute(
+                "select release_key from library.separate_releases "
+                "where library_id = %s",
+                (library_id,),
+            ).fetchall()

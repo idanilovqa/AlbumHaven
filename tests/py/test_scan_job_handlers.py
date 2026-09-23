@@ -86,6 +86,7 @@ class _ScanRepository:
         self.healthy = healthy
         self.loads = []
         self.scope_loads = []
+        self.preparation_loads = []
         self.fences = []
         self.published_attempts = set()
 
@@ -99,6 +100,13 @@ class _ScanRepository:
             roots=self.roots,
             root_healthy=self.healthy,
             scope_complete=True,
+        )
+
+    def load_claimed_targeted_reconciliation_preparation(self, **kwargs):
+        self.preparation_loads.append(kwargs)
+        return SimpleNamespace(
+            separate_release_keys=("artist::album::disc-2",),
+            existing_memberships=(),
         )
 
     def fence_targeted_reconciliation_publication(
@@ -145,10 +153,12 @@ class _Reconciler:
         publication_guard,
         root_definitions,
         exception_overrides,
+        preparation_scope,
     ):
         self.replace_roots(root_definitions)
         self.replace_exception_overrides(exception_overrides)
         self.requests.append((request, root_healthy))
+        self.preparation_scope = preparation_scope
         if self.before_publication is not None:
             self.before_publication()
         committed = publication_guard(
@@ -193,6 +203,10 @@ def test_handler_reloads_private_intent_and_current_roots_before_publication():
             "now": NOW,
         }
     ]
+    assert repository.preparation_loads == repository.scope_loads
+    assert reconciler.preparation_scope.separate_release_keys == (
+        "artist::album::disc-2",
+    )
     assert reconciler.roots == [repository.roots]
     assert reconciler.exception_overrides == [repository.intent.exception_overrides]
     assert reconciler.requests == [(repository.request, True)]

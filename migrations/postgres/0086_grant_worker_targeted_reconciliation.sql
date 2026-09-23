@@ -177,6 +177,182 @@ as $$
    order by root.id;
 $$;
 
+create or replace function library.load_claimed_targeted_reconciliation_preparation(
+  p_intent_id bigint,
+  p_library_id bigint,
+  p_job_id bigint,
+  p_attempt integer,
+  p_worker_id varchar,
+  p_lease_token varchar,
+  p_now timestamptz
+)
+returns table (
+  separate_release_keys text[],
+  existing_memberships jsonb
+)
+language sql
+security definer
+set search_path = pg_catalog
+as $$
+  with claimed_intent as (
+    select intent.id, intent.library_id, intent.primary_root_id,
+           intent.accepted_primary_root_path
+      from library.targeted_reconciliation_intents as intent
+      join ops.jobs as job on job.id = intent.job_id
+     where intent.id = p_intent_id
+       and intent.library_id = p_library_id
+       and intent.job_id = p_job_id
+       and intent.state = 'running'
+       and job.id = p_job_id
+       and job.kind = 'targeted_reconciliation'
+       and job.subject_kind = 'targeted_reconciliation_intent'
+       and job.subject_ref = p_intent_id::text
+       and job.library_id = p_library_id
+       and job.state = 'running'
+       and job.attempt_count = p_attempt
+       and job.lease_owner = p_worker_id
+       and job.lease_token = p_lease_token
+       and job.lease_expires_at > p_now
+  ), primary_roots as (
+    select claimed_intent.id as intent_id,
+           claimed_intent.library_id,
+           claimed_intent.accepted_primary_root_path as accepted_path,
+           current_root.root_path as current_path
+      from claimed_intent
+      join library.library_roots as accepted_root
+        on accepted_root.id = claimed_intent.primary_root_id
+      join library.library_roots as current_root
+        on current_root.library_id = claimed_intent.library_id
+       and current_root.metadata ->> 'root_id'
+             = accepted_root.metadata ->> 'root_id'
+       and current_root.is_active is true
+  ), allowed_active as (
+    select case
+             when library.local_path_key(event_path.path)
+                    = library.local_path_key(primary_roots.accepted_path)
+               or left(
+                    library.local_path_key(event_path.path),
+                    char_length(library.local_path_key(primary_roots.accepted_path)) + 1
+                  ) = library.local_path_key(primary_roots.accepted_path)
+                      || case library.local_path_style(primary_roots.accepted_path)
+                           when 'windows' then E'\\' else '/' end
+             then primary_roots.current_path
+                  || substring(
+                       event_path.path
+                       from char_length(primary_roots.accepted_path) + 1
+                     )
+             else event_path.path
+           end as path,
+           event_path.path_kind = 'preserved_subtree' as is_subtree
+      from primary_roots
+      join library.targeted_reconciliation_intent_paths as event_path
+        on event_path.intent_id = primary_roots.intent_id
+       and event_path.path_kind in ('active', 'preserved_subtree')
+    union all
+    select case
+             when library.local_path_key(move.destination_path)
+                    = library.local_path_key(move.accepted_destination_root_path)
+               or left(
+                    library.local_path_key(move.destination_path),
+                    char_length(library.local_path_key(move.accepted_destination_root_path)) + 1
+                  ) = library.local_path_key(move.accepted_destination_root_path)
+                      || case library.local_path_style(move.accepted_destination_root_path)
+                           when 'windows' then E'\\' else '/' end
+             then current_destination.root_path
+                  || substring(
+                       move.destination_path
+                       from char_length(move.accepted_destination_root_path) + 1
+                     )
+             else move.destination_path
+           end,
+           move.is_directory
+      from claimed_intent
+      join library.targeted_reconciliation_intent_moves as move
+        on move.intent_id = claimed_intent.id
+      join library.library_roots as accepted_destination
+        on accepted_destination.id = move.destination_root_id
+      join library.library_roots as current_destination
+        on current_destination.library_id = claimed_intent.library_id
+       and current_destination.metadata ->> 'root_id'
+             = accepted_destination.metadata ->> 'root_id'
+       and current_destination.is_active is true
+  ), memberships as (
+    select file.private_path,
+           album.album_key,
+           album.title as album_title,
+           album.release_year,
+           album.metadata ->> 'edition' as edition,
+           artist.artist_key
+      from claimed_intent
+      join library.local_track_files as file on file.scan_cache_stale is false
+      join library.local_tracks as track
+        on track.id = file.track_id
+       and track.library_id = claimed_intent.library_id
+      join library.local_albums as album
+        on album.id = track.album_id
+       and album.library_id = claimed_intent.library_id
+      join library.local_artists as artist
+        on artist.id = album.artist_id
+       and artist.library_id = claimed_intent.library_id
+     where exists (
+       select 1
+         from allowed_active
+        where (
+          not allowed_active.is_subtree
+          and regexp_replace(
+                case library.local_path_style(file.private_path)
+                  when 'windows' then lower(replace(file.private_path, E'\\', '/'))
+                  else replace(file.private_path, E'\\', '/')
+                end,
+                '/[^/]*$', ''
+              ) = regexp_replace(
+                case library.local_path_style(allowed_active.path)
+                  when 'windows' then lower(replace(allowed_active.path, E'\\', '/'))
+                  else replace(allowed_active.path, E'\\', '/')
+                end,
+                '/[^/]*$', ''
+              )
+        ) or (
+          allowed_active.is_subtree
+          and (
+            library.local_path_key(file.private_path)
+              = library.local_path_key(allowed_active.path)
+            or left(
+                 library.local_path_key(file.private_path),
+                 char_length(library.local_path_key(allowed_active.path)) + 1
+               ) = library.local_path_key(allowed_active.path)
+                   || case library.local_path_style(allowed_active.path)
+                        when 'windows' then E'\\' else '/' end
+          )
+        )
+     )
+  ), bounded_memberships as (
+    select *
+      from memberships
+     order by private_path
+     limit 16385
+  )
+  select coalesce((
+           select array_agg(separated.release_key order by separated.release_key)
+             from library.separate_releases as separated
+            where separated.library_id = claimed_intent.library_id
+         ), array[]::text[]),
+         coalesce((
+           select jsonb_agg(
+                    jsonb_build_object(
+                      'private_path', bounded_memberships.private_path,
+                      'album_key', bounded_memberships.album_key,
+                      'album_title', bounded_memberships.album_title,
+                      'release_year', bounded_memberships.release_year,
+                      'edition', bounded_memberships.edition,
+                      'artist_key', bounded_memberships.artist_key
+                    ) order by bounded_memberships.private_path
+                  )
+             from bounded_memberships
+         ), '[]'::jsonb)
+    from claimed_intent;
+$$;
+
 create or replace function library.load_claimed_targeted_reconciliation_intent_v2(
   p_job_id bigint,
   p_worker_id varchar,
@@ -1023,6 +1199,7 @@ end;
 $$;
 
 revoke all on function library.load_claimed_targeted_reconciliation_scope(bigint, bigint, bigint, integer, varchar, varchar, timestamptz) from public;
+revoke all on function library.load_claimed_targeted_reconciliation_preparation(bigint, bigint, bigint, integer, varchar, varchar, timestamptz) from public;
 revoke all on function library.load_claimed_targeted_reconciliation_intent_v2(bigint, varchar, varchar) from public;
 revoke all on function library.fence_targeted_reconciliation_publication(bigint, bigint, integer, varchar, varchar, timestamptz) from public;
 revoke all on function library.publish_claimed_targeted_reconciliation(bigint, bigint, integer, varchar, varchar, jsonb, jsonb, timestamptz) from public;
@@ -1043,6 +1220,7 @@ begin
     revoke select (id, account_id, client_surface_class, origin_type)
       on table app.request_origins from album_haven_worker;
     grant execute on function library.load_claimed_targeted_reconciliation_scope(bigint, bigint, bigint, integer, varchar, varchar, timestamptz) to album_haven_worker;
+    grant execute on function library.load_claimed_targeted_reconciliation_preparation(bigint, bigint, bigint, integer, varchar, varchar, timestamptz) to album_haven_worker;
     grant execute on function library.load_claimed_targeted_reconciliation_intent_v2(bigint, varchar, varchar) to album_haven_worker;
     grant execute on function library.fence_targeted_reconciliation_publication(bigint, bigint, integer, varchar, varchar, timestamptz) to album_haven_worker;
     grant execute on function library.publish_claimed_targeted_reconciliation(bigint, bigint, integer, varchar, varchar, jsonb, jsonb, timestamptz) to album_haven_worker;

@@ -22,6 +22,7 @@ declare
   required_functions constant text[] := array[
     'app.load_claimed_job_authorization_context(bigint,integer,character varying,character varying,timestamp with time zone)',
     'library.load_claimed_targeted_reconciliation_scope(bigint,bigint,bigint,integer,character varying,character varying,timestamp with time zone)',
+    'library.load_claimed_targeted_reconciliation_preparation(bigint,bigint,bigint,integer,character varying,character varying,timestamp with time zone)',
     'library.load_claimed_targeted_reconciliation_intent_v2(bigint,character varying,character varying)',
     'library.fence_targeted_reconciliation_publication(bigint,bigint,integer,character varying,character varying,timestamp with time zone)',
     'library.publish_claimed_targeted_reconciliation(bigint,bigint,integer,character varying,character varying,jsonb,jsonb,timestamp with time zone)',

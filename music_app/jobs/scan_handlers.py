@@ -457,6 +457,17 @@ def build_targeted_reconciliation_handler(
                 lease_token=claim.lease_token,
                 now=now(),
             )
+            preparation_scope = (
+                scan_repository.load_claimed_targeted_reconciliation_preparation(
+                    intent_id=intent_id,
+                    library_id=claim.library_id,
+                    job_id=claim.job_id,
+                    attempt=claim.attempt,
+                    worker_id=claim.worker_id,
+                    lease_token=claim.lease_token,
+                    now=now(),
+                )
+            )
         except Exception:
             return JobTransitionResult(JobState.CANCELED, "targeted_scope_invalid")
         request = getattr(intent, "request", intent)
@@ -536,6 +547,7 @@ def build_targeted_reconciliation_handler(
                 exception_overrides=dict(
                     getattr(intent, "exception_overrides", {}) or {}
                 ),
+                preparation_scope=preparation_scope,
             )
         except Exception:
             return JobTransitionResult(JobState.FAILED, "targeted_reconciliation_failed")

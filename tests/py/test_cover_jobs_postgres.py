@@ -188,15 +188,28 @@ def test_list_candidate_lookup_tasks_reloads_only_the_authorized_library():
     sql, parameters = connection.executed[0]
     assert "library_id = %(library_id)s" in sql
     assert "source_family' = 'durable_cover_lookup'" in sql
+    assert "notification_cleared" in sql
     assert "membership.account_id = %(actor_account_id)s" in sql
     assert parameters["actor_account_id"] == 7
     assert parameters["library_id"] == 19
 
 
 def test_clear_completed_candidate_lookup_tasks_is_terminal_and_library_scoped():
-    connection = _Connection(
-        [[{"task_key": "lookup-opaque-42"}]]
-    )
+    class CheckpointConnection(_Connection):
+        def __init__(self):
+            super().__init__([[{"task_key": "lookup-opaque-42"}]])
+            self.remote_save_checkpoints = {
+                "lookup-opaque-42": "publication_completed"
+            }
+
+        def execute(self, sql, parameters=None):
+            if "delete from ops.cover_lookup_tasks" in " ".join(
+                str(sql).casefold().split()
+            ):
+                raise RuntimeError("remote-save checkpoint restricts task deletion")
+            return super().execute(sql, parameters)
+
+    connection = CheckpointConnection()
     repository = _repository(connection, _Jobs())
 
     removed = repository.clear_completed_candidate_lookup_tasks(
@@ -207,11 +220,17 @@ def test_clear_completed_candidate_lookup_tasks_is_terminal_and_library_scoped()
 
     assert removed == {"lookup-opaque-42"}
     sql, parameters = connection.executed[0]
+    assert "update ops.cover_lookup_tasks" in sql
+    assert "delete from ops.cover_lookup_tasks" not in sql
+    assert "'{notification_cleared}'" in sql
     assert "status = any(%(terminal_statuses)s" in sql
     assert "library_id = %(library_id)s" in sql
     assert "source_family' = 'durable_cover_lookup'" in sql
     assert "membership.account_id = %(actor_account_id)s" in sql
     assert parameters["task_keys"] == ["lookup-opaque-42"]
+    assert connection.remote_save_checkpoints == {
+        "lookup-opaque-42": "publication_completed"
+    }
 
 
 def test_mark_candidate_lookup_notification_action_is_terminal_and_library_scoped():
@@ -245,6 +264,7 @@ def test_mark_candidate_lookup_notification_action_is_terminal_and_library_scope
     assert "status = any(%(terminal_statuses)s" in sql
     assert "library_id = %(library_id)s" in sql
     assert "source_family' = 'durable_cover_lookup'" in sql
+    assert "notification_cleared" in sql
     assert "membership.account_id = %(actor_account_id)s" in sql
     assert parameters["actor_account_id"] == 7
 

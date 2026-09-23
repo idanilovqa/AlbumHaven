@@ -120,6 +120,8 @@ def test_worker_bootstrap_registers_the_closed_targeted_reconciliation_handler()
     source = inspect.getsource(run_jobs_worker._build_worker)
 
     assert "build_targeted_reconciliation_handler" in source
+    assert "DurableTargetedReconciliationPreparationAdapter" in source
+    assert "repository=PostgresScanCacheAdapter" not in source
     assert "JobKind.TARGETED_RECONCILIATION" in source
     assert "handlers.register" in source
     assert "load_claimed_targeted_reconciliation_scope" in source

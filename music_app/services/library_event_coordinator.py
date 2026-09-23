@@ -427,15 +427,20 @@ class LibraryEventCoordinator:
             not ready and not deleted and not deleted_subtrees and not ready_moves
         ):
             return
+        ready_directories = {
+            path for path in ready if group.active_paths.get(path, False)
+        }
         self._emit_request(
             TargetedReconciliationRequest(
                 root_id=group.root_id,
                 producer_request_key=group.producer_request_key,
-                paths=frozenset(ready),
+                paths=frozenset(ready - ready_directories),
                 deleted_paths=frozenset(deleted),
                 deleted_subtrees=frozenset(deleted_subtrees),
                 moves=tuple(ready_moves),
-                preserved_subtrees=frozenset(preserved_subtrees),
+                preserved_subtrees=frozenset(
+                    preserved_subtrees | ready_directories
+                ),
             )
         )
 

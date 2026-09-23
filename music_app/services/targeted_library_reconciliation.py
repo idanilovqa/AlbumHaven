@@ -86,6 +86,7 @@ class TargetedLibraryReconciler:
         publication_guard: Callable[[Any, Callable[[], object]], object] | None = None,
         root_definitions: Iterable[dict[str, object]] | None = None,
         exception_overrides: dict[str, object] | None = None,
+        preparation_scope: object | None = None,
     ) -> TargetedReconciliationResult:
         if self._stop_event.is_set():
             return TargetedReconciliationResult(0, (), "cancelled")
@@ -301,6 +302,11 @@ class TargetedLibraryReconciler:
                     }
                     if publication_guard is not None
                     or self._publication_guard is not None
+                    else {}
+                ),
+                **(
+                    {"preparation_scope": preparation_scope}
+                    if preparation_scope is not None
                     else {}
                 ),
             )

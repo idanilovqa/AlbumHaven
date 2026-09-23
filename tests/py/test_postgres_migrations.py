@@ -265,6 +265,12 @@ def test_durable_worker_preflight_checks_schema_handlers_and_worker_grants():
         "(bigint,bigint,integer,character varying,character varying,"
         "timestamp with time zone)"
     ) in sql
+    assert (
+        "library.load_claimed_targeted_reconciliation_preparation"
+        "(bigint,bigint,bigint,integer,character varying,character varying,"
+        "timestamp with time zone)"
+        in sql
+    )
     assert "grant execute on function ops.validate_durable_worker_startup(text[])" in sql
     assert "owner to album_haven_migrator" not in sql
 
@@ -4283,7 +4289,11 @@ def test_targeted_worker_migration_exposes_only_claim_scoped_functions():
     scope_function = "library.load_claimed_targeted_reconciliation_scope"
     fence_function = "library.fence_targeted_reconciliation_publication"
 
-    for function in (scope_function, fence_function):
+    preparation_function = (
+        "library.load_claimed_targeted_reconciliation_preparation"
+    )
+
+    for function in (scope_function, preparation_function, fence_function):
         assert f"create or replace function {function}" in sql
         assert re.search(
             rf"revoke all on function {re.escape(function)}\([^;]+from public", sql
@@ -4303,6 +4313,11 @@ def test_targeted_worker_migration_exposes_only_claim_scoped_functions():
     for sensitive_table in (
         "library.library_roots",
         "library.libraries",
+        "library.separate_releases",
+        "library.local_track_files",
+        "library.local_tracks",
+        "library.local_albums",
+        "library.local_artists",
         "app.accounts",
         "app.capabilities",
         "app.request_origins",
@@ -4321,6 +4336,38 @@ def test_targeted_worker_migration_exposes_only_claim_scoped_functions():
         "revoke select (id, account_id, client_surface_class, origin_type) on table app.request_origins from album_haven_worker",
     ):
         assert fragment in sql
+
+
+def test_targeted_worker_preparation_is_lease_fenced_without_private_table_grants():
+    sql = _normalized_sql(targeted_reconciliation_worker_sql())
+    function_sql = sql.split(
+        "create or replace function library.load_claimed_targeted_reconciliation_preparation",
+        1,
+    )[1].split("create or replace function", 1)[0]
+
+    for predicate in (
+        "intent.id = p_intent_id",
+        "intent.library_id = p_library_id",
+        "job.id = p_job_id",
+        "job.attempt_count = p_attempt",
+        "job.lease_owner = p_worker_id",
+        "job.lease_token = p_lease_token",
+        "job.lease_expires_at > p_now",
+    ):
+        assert predicate in function_sql
+    assert "library.separate_releases" in function_sql
+    assert "library.local_track_files" in function_sql
+    assert "existing_memberships" in function_sql
+    assert "event_path.path_kind in ('active', 'preserved_subtree')" in function_sql
+    assert "event_path.path_kind = 'preserved_subtree' as is_subtree" in function_sql
+    assert "move.destination_path" in function_sql
+    assert "library.local_path_key" in function_sql
+    assert "limit 16385" in function_sql
+    assert not re.search(
+        r"grant\s+select[^;]*on table library\.separate_releases[^;]*"
+        r"to album_haven_worker",
+        sql,
+    )
 
 
 def test_targeted_preserved_subtrees_are_private_bounded_and_lease_scoped():

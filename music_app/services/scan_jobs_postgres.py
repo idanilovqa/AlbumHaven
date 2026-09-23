@@ -97,6 +97,12 @@ class ClaimedTargetedReconciliationScope:
     scope_complete: bool
 
 
+@dataclass(frozen=True, slots=True)
+class ClaimedTargetedReconciliationPreparation:
+    separate_release_keys: tuple[str, ...]
+    existing_memberships: tuple[Mapping[str, object], ...]
+
+
 def _connect(database_url: str) -> Any:
     import psycopg
     from psycopg.rows import dict_row
@@ -463,11 +469,17 @@ class PostgresScanJobRepository:
                 }
                 for ordinal, move in enumerate(request.moves)
             ]
-            active_paths = sorted(str(path) for path in request.paths)
+            active_directories = {
+                path for path in request.paths if path.is_dir()
+            }
+            active_paths = sorted(
+                str(path) for path in request.paths - active_directories
+            )
             deleted_paths = sorted(str(path) for path in request.deleted_paths)
             deleted_subtrees = sorted(str(path) for path in request.deleted_subtrees)
             preserved_subtrees = sorted(
-                str(path) for path in request.preserved_subtrees
+                str(path)
+                for path in request.preserved_subtrees | active_directories
             )
             canonical_payload = json.dumps(
                 {
@@ -1143,6 +1155,53 @@ class PostgresScanJobRepository:
             tuple(roots), root_healthy, bool(roots) and scope_complete
         )
 
+    def load_claimed_targeted_reconciliation_preparation(
+        self,
+        *,
+        intent_id: int,
+        library_id: int,
+        job_id: int,
+        attempt: int,
+        worker_id: str,
+        lease_token: str,
+        now: datetime,
+    ) -> ClaimedTargetedReconciliationPreparation:
+        parameters = {
+            "intent_id": _positive_id(intent_id, "intent_id"),
+            "library_id": _positive_id(library_id, "library_id"),
+            "job_id": _positive_id(job_id, "job_id"),
+            "attempt": _positive_id(attempt, "attempt"),
+            "worker_id": _bounded_text(worker_id, "worker_id"),
+            "lease_token": _bounded_text(lease_token, "lease_token"),
+            "now": now,
+        }
+        with self._connect() as connection:
+            row = connection.execute(
+                """
+                select *
+                  from library.load_claimed_targeted_reconciliation_preparation(
+                    %(intent_id)s, %(library_id)s, %(job_id)s, %(attempt)s,
+                    %(worker_id)s, %(lease_token)s, %(now)s
+                  )
+                """,
+                parameters,
+            ).fetchone()
+        if row is None:
+            raise RuntimeError("claimed targeted preparation scope is unavailable")
+        payload = _row_mapping(row)
+        values = payload.get("separate_release_keys") or ()
+        raw_memberships = payload.get("existing_memberships") or ()
+        if not isinstance(raw_memberships, (list, tuple)) or not all(
+            isinstance(item, Mapping) for item in raw_memberships
+        ):
+            raise RuntimeError("claimed targeted preparation memberships are invalid")
+        if len(raw_memberships) > 16_384:
+            raise RuntimeError("claimed targeted preparation memberships are too large")
+        return ClaimedTargetedReconciliationPreparation(
+            tuple(sorted({str(value) for value in values if str(value)})),
+            tuple(MappingProxyType(dict(item)) for item in raw_memberships),
+        )
+
     def fence_targeted_reconciliation_publication(
         self,
         *,
@@ -1296,6 +1355,7 @@ class PostgresScanJobRepository:
 __all__ = [
     "ClaimedFullScanIntent",
     "ClaimedFullScanScope",
+    "ClaimedTargetedReconciliationPreparation",
     "PostgresScanJobRepository",
     "ScanJobEnqueueResult",
 ]

@@ -139,7 +139,9 @@ def _build_worker(
     )
     from music_app.services.cover_refresh_runtime import run_claimed_cover_refresh
     from music_app.services.policy_evaluator import PolicyEvaluator
-    from music_app.services.scan_cache_persistence import PostgresScanCacheAdapter
+    from music_app.services.scan_cache_persistence import (
+        DurableTargetedReconciliationPreparationAdapter,
+    )
     from music_app.services.scan_jobs_postgres import PostgresScanJobRepository
     from music_app.services.lastfm_retry_jobs_postgres import (
         PostgresLastfmRetryJobRepository,
@@ -191,10 +193,7 @@ def _build_worker(
     scan_config["ALBUM_HAVEN_APP_DATABASE_URL"] = config.database_url
     reconciler = TargetedLibraryReconciler(
         scan_config,
-        repository=PostgresScanCacheAdapter(
-            scan_config,
-            connect=connect_to_database,
-        ),
+        repository=DurableTargetedReconciliationPreparationAdapter(),
         root_definitions=(),
         exception_overrides={},
     )

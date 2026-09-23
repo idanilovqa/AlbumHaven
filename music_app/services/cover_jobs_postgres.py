@@ -1056,6 +1056,7 @@ class PostgresCoverJobRepository:
               from ops.cover_lookup_tasks as task
              where task.library_id = %(library_id)s
                and task.metadata ->> 'source_family' = 'durable_cover_lookup'
+               and coalesce(task.metadata ->> 'notification_cleared', 'false') <> 'true'
                and exists (
                      select 1
                        from library.libraries as scoped_library
@@ -1104,9 +1105,17 @@ class PostgresCoverJobRepository:
             }
         )
         sql = """
-            delete from ops.cover_lookup_tasks as task
+            update ops.cover_lookup_tasks as task
+               set metadata = jsonb_set(
+                     coalesce(task.metadata, '{}'::jsonb),
+                     '{notification_cleared}',
+                     'true'::jsonb,
+                     true
+                   ),
+                   row_revision = task.row_revision + 1
              where task.library_id = %(library_id)s
                and task.metadata ->> 'source_family' = 'durable_cover_lookup'
+               and coalesce(task.metadata ->> 'notification_cleared', 'false') <> 'true'
                and task.status = any(%(terminal_statuses)s::varchar[])
                and (%(clear_all)s or task.task_key = any(%(task_keys)s::text[]))
                and exists (
@@ -1156,6 +1165,7 @@ class PostgresCoverJobRepository:
              where task.library_id = %(library_id)s
                and task.task_key = %(task_key)s
                and task.metadata ->> 'source_family' = 'durable_cover_lookup'
+               and coalesce(task.metadata ->> 'notification_cleared', 'false') <> 'true'
                and task.status = any(%(terminal_statuses)s::varchar[])
                and exists (
                      select 1

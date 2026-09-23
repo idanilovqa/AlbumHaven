@@ -356,20 +356,35 @@ def test_asgi_durable_cover_lookup_tasks_reload_mark_and_clear_with_policy_scope
                     "notification_action_taken": False,
                     "notification_completed_at": "2026-09-23T12:00:00+00:00",
                     "notification_expires_at": "",
-                }
+                },
+                "durable-lookup-2": {
+                    "id": "durable-lookup-2",
+                    "status": "completed",
+                    "artist": "Second Scoped Artist",
+                    "notification_action_taken": False,
+                    "notification_completed_at": "2026-09-23T12:01:00+00:00",
+                    "notification_expires_at": "",
+                },
+            }
+            self.remote_save_checkpoints = {
+                "durable-lookup-1": "publication_completed"
             }
             self.scopes = []
 
         def list_candidate_lookup_tasks(self, *, actor_account_id, library_id):
             self.scopes.append(("list", actor_account_id, library_id))
-            return [dict(task) for task in self.tasks.values()]
+            return [
+                dict(task)
+                for task in self.tasks.values()
+                if not task.get("notification_cleared")
+            ]
 
         def mark_candidate_lookup_notification_action_taken(
             self, *, actor_account_id, library_id, task_key
         ):
             self.scopes.append(("mark", actor_account_id, library_id))
             task = self.tasks.get(task_key)
-            if task is None:
+            if task is None or task.get("notification_cleared"):
                 return None
             task["notification_action_taken"] = True
             return dict(task)
@@ -382,10 +397,12 @@ def test_asgi_durable_cover_lookup_tasks_reload_mark_and_clear_with_policy_scope
             removed = {
                 task_key
                 for task_key, task in list(self.tasks.items())
-                if task_key in selected and task["status"] in {"completed", "failed", "canceled"}
+                if task_key in selected
+                and task["status"] in {"completed", "failed", "canceled"}
+                and not task.get("notification_cleared")
             }
             for task_key in removed:
-                self.tasks.pop(task_key)
+                self.tasks[task_key]["notification_cleared"] = True
             return removed
 
     repository = DurableCoverTasks()
@@ -401,10 +418,10 @@ def test_asgi_durable_cover_lookup_tasks_reload_mark_and_clear_with_policy_scope
     list_status, _headers, list_body = _run_asgi_request(
         first_app, "GET", "/utilities/cover-lookup/tasks"
     )
-    mark_status, _headers, mark_body = _run_asgi_request(
+    single_clear_status, _headers, single_clear_body = _run_asgi_request(
         first_app,
         "POST",
-        "/utilities/cover-lookup/task/durable-lookup-1/mark-action-taken",
+        "/utilities/cover-lookup/task/durable-lookup-1/clear",
         json_body={},
     )
 
@@ -413,18 +430,36 @@ def test_asgi_durable_cover_lookup_tasks_reload_mark_and_clear_with_policy_scope
     reload_status, _headers, reload_body = _run_asgi_request(
         reloaded_app, "GET", "/utilities/cover-lookup/tasks"
     )
+    mark_status, _headers, mark_body = _run_asgi_request(
+        reloaded_app,
+        "POST",
+        "/utilities/cover-lookup/task/durable-lookup-2/mark-action-taken",
+        json_body={},
+    )
     clear_status, _headers, clear_body = _run_asgi_request(
         reloaded_app,
         "POST",
         "/utilities/cover-lookup/tasks/clear-completed",
-        json_body={"task_ids": ["durable-lookup-1"]},
+        json_body={},
     )
 
-    assert list_status == mark_status == reload_status == clear_status == 200
-    assert _decode_json(list_body)["tasks"][0]["id"] == "durable-lookup-1"
+    assert list_status == single_clear_status == mark_status == reload_status == clear_status == 200
+    assert {task["id"] for task in _decode_json(list_body)["tasks"]} == {
+        "durable-lookup-1",
+        "durable-lookup-2",
+    }
+    assert _decode_json(single_clear_body)["removed_count"] == 1
+    assert "durable-lookup-1" in repository.tasks
+    assert repository.remote_save_checkpoints == {
+        "durable-lookup-1": "publication_completed"
+    }
+    assert [task["id"] for task in _decode_json(reload_body)["tasks"]] == [
+        "durable-lookup-2"
+    ]
     assert _decode_json(mark_body)["task"]["notification_action_taken"] is True
-    assert _decode_json(reload_body)["tasks"][0]["notification_action_taken"] is True
     assert _decode_json(clear_body) == {"ok": True, "removed_count": 1, "tasks": []}
+    assert set(repository.tasks) == {"durable-lookup-1", "durable-lookup-2"}
+    assert all(task["notification_cleared"] for task in repository.tasks.values())
     assert repository.scopes
     assert {(account_id, library_id) for _, account_id, library_id in repository.scopes} == {(1, 1)}
 

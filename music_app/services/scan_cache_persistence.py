@@ -177,6 +177,109 @@ class ScanCacheAdapter(Protocol):
         ...
 
 
+class DurableTargetedReconciliationPreparationAdapter:
+    """Prepare worker inventory in memory and publish through its lease fence."""
+
+    backend = PERSISTENCE_BACKEND_POSTGRES
+
+    def __init__(
+        self,
+        *,
+        build_albums: Callable[
+            [dict[str, dict[str, object]], set[str] | None], list[object]
+        ] = build_albums_from_file_cache,
+    ) -> None:
+        self._build_albums = build_albums
+
+    def persist_targeted_inventory_mutation(
+        self,
+        *,
+        root_id: str,
+        active_file_entries: dict[str, dict[str, object]],
+        deleted_paths: tuple[str, ...] = (),
+        deleted_subtrees: tuple[str, ...] = (),
+        moves: tuple[dict[str, object], ...] = (),
+        publication_guard: object,
+        preparation_scope: object,
+    ) -> dict[str, object]:
+        normalized_root_id = str(root_id or "").strip()
+        if not normalized_root_id:
+            raise ValueError("Targeted inventory mutation requires a root id.")
+        publish = getattr(publication_guard, "publish_prepared", None)
+        if not callable(publish):
+            raise ValueError("Durable targeted publication guard is required.")
+
+        file_cache = {
+            str(path): dict(entry)
+            for path, entry in active_file_entries.items()
+            if str(path).strip() and isinstance(entry, dict)
+        }
+        separate_release_keys = {
+            str(key)
+            for key in getattr(preparation_scope, "separate_release_keys", ())
+            if str(key)
+        }
+        albums = self._build_albums(
+            _file_cache_with_inferred_blank_album_memberships(file_cache),
+            separate_release_keys,
+        )
+        artists, album_rows, featured, tracks, files = _inventory_rows_from_albums(
+            file_cache, albums
+        )
+        _remap_targeted_album_identity_rows(
+            album_rows=album_rows,
+            featured_artist_rows=featured,
+            track_rows=tracks,
+            existing_memberships=list(
+                getattr(preparation_scope, "existing_memberships", ())
+            ),
+            separate_release_keys=separate_release_keys,
+        )
+        inventory = {
+            "artists": _jsonb_compatible(artists),
+            "albums": _jsonb_compatible(album_rows),
+            "featured_artists": _jsonb_compatible(featured),
+            "tracks": _jsonb_compatible(tracks),
+            "track_files": _jsonb_compatible(files),
+        }
+
+        stale_by_root: dict[str, dict[str, set[str]]] = {
+            normalized_root_id: {
+                "paths": {str(path) for path in deleted_paths if str(path)},
+                "subtrees": {
+                    str(path) for path in deleted_subtrees if str(path)
+                },
+            }
+        }
+        for move in moves:
+            source_root_id = str(
+                move.get("source_root_id") or normalized_root_id
+            ).strip()
+            source_path = str(move.get("source_path") or "").strip()
+            if not source_root_id or not source_path:
+                continue
+            stale_target = stale_by_root.setdefault(
+                source_root_id, {"paths": set(), "subtrees": set()}
+            )
+            stale_target[
+                "subtrees" if move.get("is_directory") else "paths"
+            ].add(source_path)
+        stale_scopes = [
+            {
+                "root_id": stale_root_id,
+                "paths": sorted(target["paths"]),
+                "subtrees": sorted(target["subtrees"]),
+            }
+            for stale_root_id, target in sorted(stale_by_root.items())
+            if target["paths"] or target["subtrees"]
+        ]
+
+        result = publish(inventory=inventory, stale_scopes=stale_scopes)
+        if not isinstance(result, dict):
+            return {"publication_won": False}
+        return result
+
+
 class PostgresScanCacheAdapter:
     backend = PERSISTENCE_BACKEND_POSTGRES
 

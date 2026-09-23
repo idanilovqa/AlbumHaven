@@ -9615,6 +9615,71 @@ def test_problematic_summary_skips_repairs_for_rows_rejected_by_persisted_mojiba
     assert "Encoding problem" not in summary["problem_reasons"]
 
 
+def test_problematic_projection_reuses_text_classification_only_within_one_call(monkeypatch):
+    from music_app.services import library_browse_postgres as module
+
+    rows = []
+    for album_id, album_key, album_title in (
+        (101, "first-album", "First Album"),
+        (102, "second-album", "Second Album"),
+    ):
+        row = _normal_problematic_product_row(
+            album_key=album_key,
+            album_title=album_title,
+        )
+        row.update(
+            {
+                "album_id": album_id,
+                "track_id": album_id + 500,
+                "track_key": f"{album_key}-track",
+            }
+        )
+        rows.append(row)
+
+    calls = []
+
+    def observed_reason(label, value, *, detect_encoding=True):
+        calls.append((label, value, detect_encoding))
+        return None
+
+    monkeypatch.setattr(module, "_text_problem_reason_fast", observed_reason)
+
+    def classify_projection():
+        albums = module._problematic_album_projection_payloads(rows)
+        assert len(albums) == 2
+        for album in albums:
+            module._cached_problematic_text_reason(
+                album,
+                "Track title",
+                "Shared Track",
+                detect_encoding=True,
+            )
+            module._cached_problematic_text_reason(
+                album,
+                "Track title",
+                "Shared Track",
+                detect_encoding=False,
+            )
+            module._cached_problematic_text_reason(
+                album,
+                "Album",
+                "Shared Track",
+                detect_encoding=True,
+            )
+
+    classify_projection()
+    classify_projection()
+
+    expected_calls = {
+        ("Track title", "Shared Track", True),
+        ("Track title", "Shared Track", False),
+        ("Album", "Shared Track", True),
+    }
+    assert set(calls) == expected_calls
+    assert len(calls) == 2 * len(expected_calls)
+    assert all(calls.count(expected) == 2 for expected in expected_calls)
+
+
 class _ProblematicSnapshotConnectionStub:
     def __enter__(self):
         return self

@@ -2663,6 +2663,7 @@ def _problematic_album_projection_payloads(rows: list[object]) -> list[dict[str,
     metadata_by_persisted_album: dict[object, dict[str, object]] = {}
     base_key_by_persisted_album: dict[object, str] = {}
     string_set_cache: dict[tuple[str, ...], set[str]] = {}
+    text_problem_reason_cache: dict[tuple[str, str, bool], str | None] = {}
     previous_ignored_value: object = object()
     previous_ignored_keys: set[str] = set()
     previous_separate_value: object = object()
@@ -2728,6 +2729,7 @@ def _problematic_album_projection_payloads(rows: list[object]) -> list[dict[str,
             if not isinstance(artists, list):
                 artists = [artist_display] if artist_display else []
             album = {
+                "_text_problem_reason_cache": text_problem_reason_cache,
                 "key": album_key,
                 "album_ref": album_key,
                 "_persisted_album_key": persisted_album_key,

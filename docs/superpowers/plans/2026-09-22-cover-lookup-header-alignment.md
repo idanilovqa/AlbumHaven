@@ -38,4 +38,3 @@
 - [ ] Add a light-mode-only opacity swap while retaining existing hover/focus transitions.
 - [ ] Run the complete component spec and related cover-lookup tests.
 - [ ] Run `git diff --check` and verify port 5001 serves the updated CSS.
-

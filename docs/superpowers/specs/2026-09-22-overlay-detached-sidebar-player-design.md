@@ -33,4 +33,3 @@ The active element is preserved because the DOM is unchanged. Existing labels, k
 - Pure unit coverage for detachment eligibility across expanded, floating, docked, rail-play, and rail-artbox presentations.
 - Component coverage that toggles `body.modal-open`, verifies detach/restore without replacing the player node, checks z-order and button interaction, and confirms the revealed artwork remains inside the detached surface.
 - Rebuild the runtime bundle and run the focused player unit/component suites.
-

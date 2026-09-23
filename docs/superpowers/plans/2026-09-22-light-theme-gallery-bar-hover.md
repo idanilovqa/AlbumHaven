@@ -36,4 +36,3 @@
 - [ ] Run the exact component test and confirm both modes pass.
 - [ ] Run the complete Gallery component spec and related Gallery CSS contract tests.
 - [ ] Run `git diff --check` and verify port 5001 serves the new rule.
-

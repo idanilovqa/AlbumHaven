@@ -369,7 +369,10 @@
     editor.setAttribute('data-alert-family', value.alert_family || 'ember');
     applyCompactPlayerAppearance(value, editor, effective);
   }
-  function clearTheme(rootElement) { applyTheme(empty(), rootElement); }
+  function clearTheme(rootElement) {
+    applyTheme(empty(), rootElement);
+    rootElement.style.removeProperty('--compact-floating-edge-color');
+  }
   const appearanceSectionKeys = {
     backgrounds: 'main', seekbar: 'player', 'selection-accent': 'interaction', alerts: 'alerts', 'album-page': 'album',
   };
@@ -1110,7 +1113,11 @@
       if (device && !device.disabled) controller.setDeviceProfile(device.getAttribute('data-appearance-device'));
     });
     return state => {
-      controls.querySelectorAll('[data-appearance-device]').forEach(button => button.setAttribute('aria-pressed', String(button.getAttribute('data-appearance-device') === state.activeDeviceProfile)));
+      controls.querySelectorAll('[data-appearance-device]').forEach(button => {
+        const profile = button.getAttribute('data-appearance-device');
+        button.disabled = profile !== 'web_desktop' || state.loading || state.saving || state.loadFailed;
+        button.setAttribute('aria-pressed', String(profile === state.activeDeviceProfile));
+      });
     };
     };
     const mount = host => {
@@ -1124,10 +1131,10 @@
       let drawnPalette;
       const sync = state => {
         if (mounted !== editor) return;
-        syncDeviceProfile(state);
         const disabled = state.loading || state.saving || state.loadFailed, preference = state.draft, effective = state.effective;
         editor.setAttribute('aria-busy', String(state.loading || state.saving));
         editor.querySelectorAll('button,input').forEach(element => { element.disabled = disabled; });
+        syncDeviceProfile(state);
         editor.querySelectorAll('[data-background-palette]').forEach(button => button.setAttribute('aria-pressed', String(button.getAttribute('data-background-palette') === preference.palette_id)));
         const palette = palettes.find(item => item.id === preference.palette_id);
         const legacy = !palette && (preference.main_surface_color || preference.panel_background_color);
@@ -1201,10 +1208,10 @@
       };
     const sync = state => {
       if (mounted !== editor) return;
-      syncDeviceProfile(state);
         const disabled = state.loading || state.saving || state.loadFailed;
         editor.setAttribute('aria-busy', String(state.loading || state.saving));
         editor.querySelectorAll('button').forEach(button => { button.disabled = disabled; });
+        syncDeviceProfile(state);
         editor.querySelectorAll('.appearance-alert-family-card').forEach(button => button.setAttribute('aria-pressed', String(button.getAttribute('data-alert-family') === state.draft.alert_family)));
         editor.querySelectorAll('[data-alert-preview-severity]').forEach(button => button.setAttribute('aria-pressed', String(button.getAttribute('data-alert-preview-severity') === previewSeverity)));
         const preview = find('[data-alert-live-preview]');
@@ -1246,10 +1253,10 @@
       });
     const sync = state => {
       if (mounted !== editor) return;
-      syncDeviceProfile(state);
         const disabled = state.loading || state.saving || state.loadFailed;
         editor.setAttribute('aria-busy', String(state.loading || state.saving));
         editor.querySelectorAll('button').forEach(button => { button.disabled = disabled; });
+        syncDeviceProfile(state);
         editor.querySelectorAll('[data-album-details-layout]').forEach(button => button.setAttribute('aria-pressed', String(button.getAttribute('data-album-details-layout') === state.draft.album_details_layout)));
         editor.querySelectorAll('[data-album-playing-row-animation]').forEach(button => button.setAttribute('aria-pressed', String(button.getAttribute('data-album-playing-row-animation') === state.draft.album_playing_row_animation)));
         editor.querySelectorAll('[data-album-preview-state]').forEach(button => button.setAttribute('aria-pressed', String(button.getAttribute('data-album-preview-state') === previewState)));
@@ -1292,10 +1299,10 @@
       find('.background-status').hidden = true;
     const sync = state => {
       if (mounted !== editor) return;
-      syncDeviceProfile(state);
         const disabled = state.loading || state.saving || state.loadFailed;
         editor.setAttribute('aria-busy', String(state.loading || state.saving));
         editor.querySelectorAll('button,input').forEach(element => { element.disabled = disabled; });
+        syncDeviceProfile(state);
       const accent = state.draft.selection_accent || defaultSelectionAccent;
       find('[data-action-button-outlines]').checked = state.draft.action_button_outlines !== false;
         find('[data-aggregate-accent-enabled]').checked = accent.enabled;
@@ -1366,7 +1373,6 @@
       find('.background-status').hidden = true;
     const sync = state => {
       if (mounted !== editor) return;
-      syncDeviceProfile(state);
         if ((state.seekbarMode === 'waveform') !== waveformSelected) {
           const restoreModeFocus = editor.contains?.(document.activeElement)
             && document.activeElement?.hasAttribute?.('data-appearance-seekbar-mode');
@@ -1378,6 +1384,7 @@
         editor.querySelectorAll('[data-appearance-seekbar-mode]').forEach(radio => { radio.checked = radio.value === state.seekbarMode; });
         editor.setAttribute('aria-busy', String(state.loading || state.saving));
         editor.querySelectorAll('button,input').forEach(element => { element.disabled = disabled; });
+        syncDeviceProfile(state);
         editor.querySelectorAll('[data-background-player-mode]').forEach(button => button.setAttribute('aria-pressed', String((button.getAttribute('data-background-player-mode') === 'custom') === custom)));
         find('[data-waveform-mode-help]').textContent = waveformSelected
           ? (custom ? 'Custom colors stay together when you change palettes. Match palette resets the complete player color group.' : 'Your palette sets the complete player color group. Changing any field creates a custom group.')

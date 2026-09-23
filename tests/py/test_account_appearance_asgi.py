@@ -276,6 +276,63 @@ def test_storage_failure_is_retryable_without_exposing_database_details_or_succe
     assert repository.rows == {}
 
 
+@pytest.mark.parametrize("profiles", [
+    {"watch": {}},
+    {"mobile": {"sections": {"player": {"mode": "inherit", "values": {}}}}},
+    {"tv": {"sections": {"main": {"mode": "custom", "values": {
+        "main_surface_color": "not-a-color",
+    }}}}},
+])
+def test_invalid_device_profiles_return_bad_request_before_database_access(profiles):
+    from music_app.services.appearance_preferences_postgres import PostgresAppearancePreferencesRepository
+
+    app, _repository, _resolver = _app()
+    connections = []
+
+    def connect(_url):
+        connections.append(True)
+        raise RuntimeError("Database must not be accessed for an invalid preference.")
+
+    app.state.appearance_preferences_repository = PostgresAppearancePreferencesRepository(
+        {"ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://unused"}, connect=connect,
+    )
+    payload = {
+        **{key: value for key, value in AGGREGATE_APPEARANCE.items()
+           if key not in {"revision", "player_recent_sets"}},
+        "expected_revision": 7, "device_profiles": profiles, "action_button_outlines": True,
+    }
+    status, headers, body = _request(app, "PUT", payload)
+    assert status == 400
+    assert decode_json(body) == {"error": "invalid_appearance"}
+    assert "no-store" in headers["cache-control"]
+    assert connections == []
+
+
+def test_device_profile_route_preserves_omitted_fields_and_reports_storage_outage():
+    app, repository, _resolver = _app()
+    profiles = {"mobile": {"sections": {"player": {
+        "mode": "custom", "values": {"compact_player_style": "floating"},
+    }}}}
+    payload = {
+        **{key: value for key, value in AGGREGATE_APPEARANCE.items()
+           if key not in {"revision", "player_recent_sets"}},
+        "expected_revision": 7, "device_profiles": profiles, "action_button_outlines": True,
+    }
+    captured = []
+
+    def save(**kwargs):
+        captured.append(kwargs["device_profiles"])
+        raise RuntimeError("private database connection details")
+
+    repository.save_device_profiles = save
+    status, headers, body = _request(app, "PUT", payload)
+    assert captured == [profiles]
+    assert "compact_player_motion" not in captured[0]["mobile"]["sections"]["player"]["values"]
+    assert status == 503
+    assert decode_json(body) == {"error": "appearance_unavailable"}
+    assert "no-store" in headers["cache-control"]
+
+
 def _shell_request(app, actor):
     request = Request({"type": "http", "app": app, "headers": []})
     request.state.current_actor = actor

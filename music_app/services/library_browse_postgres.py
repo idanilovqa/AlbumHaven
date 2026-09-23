@@ -3580,13 +3580,14 @@ def _problematic_encoding_repair_preview(
     return result if include_preview_rows else {**result, "preview_rows": []}
 
 
-def _problematic_track_problem_rows(
-    album: Mapping[str, object], *, include_repair_metadata: bool = True,
-) -> list[dict[str, object]]:
-    rows: list[dict[str, object]] = []
+def _iter_problematic_track_reasons(
+    album: Mapping[str, object],
+    *,
+    track_order_issues: list[dict[str, object]],
+    include_repair_metadata: bool,
+) -> Iterable[tuple[str, str, list[str], dict[str, str] | None]]:
     ignored_repair_keys = set(album.get("_ignored_repair_keys") or set())
     album_problem_identity = str(album.get("album_ref") or album.get("key") or "")
-    track_order_issues = _track_order_issues(album)
     album_year = _normalized_problem_year(album.get("year"))
     include_complete_repair_scope = bool(track_order_issues)
     track_order_issue_by_disc = {
@@ -3597,7 +3598,7 @@ def _problematic_track_problem_rows(
         str(track.get("path") or ""): track
         for track in album.get("tracks") or []
         if isinstance(track, Mapping) and str(track.get("path") or "")
-    }
+    } if include_complete_repair_scope else {}
     entries_by_path = {
         str(entry.get("path") or ""): entry
         for entry in album.get("_file_entries") or []
@@ -3622,7 +3623,7 @@ def _problematic_track_problem_rows(
         if not path:
             continue
         reasons: list[str] = []
-        reason_fields: dict[str, str] = {}
+        reason_fields: dict[str, str] | None = {} if include_repair_metadata else None
 
         def add(reason: str | None, field: str) -> None:
             if (
@@ -3643,7 +3644,8 @@ def _problematic_track_problem_rows(
                 )
             ):
                 reasons.append(reason)
-                reason_fields[reason] = field
+                if reason_fields is not None:
+                    reason_fields[reason] = field
 
         for field_name, label in (
             ("album", "Album"),
@@ -3683,8 +3685,21 @@ def _problematic_track_problem_rows(
         filename = basename(path)
         if filename in ("", "."):
             filename = Path(path).name
+        yield path, filename, reasons, reason_fields
+
+
+def _problematic_track_problem_rows(
+    album: Mapping[str, object], *, include_repair_metadata: bool = True,
+) -> list[dict[str, object]]:
+    rows: list[dict[str, object]] = []
+    track_order_issues = _track_order_issues(album)
+    for path, filename, reasons, reason_fields in _iter_problematic_track_reasons(
+        album,
+        track_order_issues=track_order_issues,
+        include_repair_metadata=include_repair_metadata,
+    ):
         row = {"path": path, "filename": filename, "reasons": reasons}
-        if include_repair_metadata:
+        if reason_fields is not None:
             file_path = Path(path)
             row.update({
                 "file_type": file_path.suffix.lstrip(".").upper(),
@@ -3703,7 +3718,7 @@ def _problematic_track_problem_rows(
                 ],
             })
         rows.append(row)
-    if include_complete_repair_scope:
+    if track_order_issues:
         return rows
     return sorted(rows, key=lambda row: str(row.get("filename") or "").casefold())
 
@@ -3742,13 +3757,27 @@ def _problematic_surviving_reasons(
         else _problematic_album_scope_reasons(album)
     ):
         add(reason)
-    for row in (
-        track_problem_rows
-        if track_problem_rows is not None
-        else _problematic_track_problem_rows(album, include_repair_metadata=False)
-    ):
-        for reason in row.get("reasons") or []:
-            add(reason)
+    if track_problem_rows is not None:
+        for row in track_problem_rows:
+            for reason in row.get("reasons") or []:
+                add(reason)
+        return reasons
+
+    track_order_issues = _track_order_issues(album)
+    first_positions: dict[str, tuple[str, int, int]] = {}
+    for row_index, (_, filename, row_reasons, _) in enumerate(_iter_problematic_track_reasons(
+        album, track_order_issues=track_order_issues, include_repair_metadata=False,
+    )):
+        filename_key = "" if track_order_issues else filename.casefold()
+        for reason_index, reason in enumerate(row_reasons):
+            if reason in reasons:
+                continue
+            position = (filename_key, row_index, reason_index)
+            previous = first_positions.get(reason)
+            if previous is None or position < previous:
+                first_positions[reason] = position
+    # Match the stable detail-row order while sorting only distinct reasons.
+    reasons.extend(sorted(first_positions, key=first_positions.__getitem__))
     return reasons
 
 

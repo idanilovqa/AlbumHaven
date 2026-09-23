@@ -39,11 +39,70 @@ function loadVirtualList({ horizontal = false } = {}) {
 
 function createList(overrides = {}) {
   const listeners = new Map();
-  return {
+  const document = { activeElement: null };
+  class Element {
+    constructor(tagName) {
+      this.tagName = tagName;
+      this.ownerDocument = document;
+      this.children = [];
+      this.parentNode = null;
+      this.attributes = {};
+      this.dataset = {};
+      this.style = { cssText: '' };
+    }
+    setAttribute(name, value) { this.attributes[name] = String(value); }
+    getAttribute(name) { return this.attributes[name] ?? null; }
+    get firstElementChild() { return this.children[0] || null; }
+    get nextElementSibling() { return this.parentNode?.children[this.parentNode.children.indexOf(this) + 1] || null; }
+    contains(node) { return node === this || this.children.some(child => child.contains(node)); }
+    closest(selector) {
+      const attribute = selector.match(/^\[([^\]]+)\]$/)?.[1];
+      return attribute && this.getAttribute(attribute) !== null ? this : this.parentNode?.closest(selector) || null;
+    }
+    focus() { document.activeElement = this; }
+    remove() {
+      if (!this.parentNode) return;
+      if (this.contains(document.activeElement)) document.activeElement = null;
+      this.parentNode.children.splice(this.parentNode.children.indexOf(this), 1);
+      this.parentNode = null;
+    }
+    insertBefore(node, reference) {
+      if (node === reference) return node;
+      node.remove();
+      const index = reference === null ? this.children.length : this.children.indexOf(reference);
+      assert.ok(index >= 0, 'reference must belong to the parent');
+      this.children.splice(index, 0, node);
+      node.parentNode = this;
+      return node;
+    }
+    replaceChildren(...nodes) {
+      [...this.children].forEach(node => node.remove());
+      nodes.forEach(node => this.insertBefore(node, null));
+    }
+    get innerHTML() { return this.children.map(child => child.outerHTML).join(''); }
+    get outerHTML() {
+      const attributes = { ...this.attributes };
+      if (this.className) attributes.class = this.className;
+      if (this.style.cssText) attributes.style = this.style.cssText;
+      const markup = Object.entries(attributes).map(([name, value]) => ` ${name}="${value}"`).join('');
+      return `<${this.tagName}${markup}>${this.innerHTML}</${this.tagName}>`;
+    }
+  }
+  document.createElement = tagName => {
+    if (tagName !== 'template') return new Element(tagName);
+    const content = new Element('fragment');
+    return { content, set innerHTML(html) {
+      const match = html.match(/^<([a-z]+)([^>]*)><\/\1>$/);
+      assert.ok(match, 'fixture expects one empty rendered element');
+      const element = new Element(match[1]);
+      for (const [, name, value] of match[2].matchAll(/([\w-]+)="([^"]*)"/g)) element.setAttribute(name, value);
+      content.replaceChildren(element);
+    } };
+  };
+  return Object.assign(new Element('div'), {
     clientHeight: 340,
     clientWidth: 320,
     dataset: {},
-    innerHTML: '',
     scrollLeft: 0,
     scrollTop: 0,
     addEventListener(type, callback) {
@@ -52,14 +111,14 @@ function createList(overrides = {}) {
     removeEventListener(type, callback) {
       if (listeners.get(type) === callback) listeners.delete(type);
     },
-    emit(type) {
-      listeners.get(type)?.();
+    emit(type, event = {}) {
+      listeners.get(type)?.(event);
     },
     listenerCount() {
       return listeners.size;
     },
     ...overrides,
-  };
+  });
 }
 
 function makeItems(count) {
@@ -161,7 +220,7 @@ test('dispose removes listeners and cancels later rendering', () => {
     renderRow: (item) => `<button data-problematic-album-key="${item.key}"></button>`,
   });
   virtualList.render(makeItems(706), 'album-0');
-  assert.equal(list.listenerCount(), 1);
+  assert.equal(list.listenerCount(), 2);
 
   list.emit('scroll');
   virtualList.dispose();

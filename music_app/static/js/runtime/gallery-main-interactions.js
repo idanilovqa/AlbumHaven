@@ -477,7 +477,7 @@ function renderGalleryFamilyPanelBody(panelBody, html) {
 }
 
 function syncGalleryBarSearchVisibility() {
-  const bar = document.querySelector?.('[data-gallery-bar]');
+  const bar = document.querySelector?.('[data-gallery-bar-instance="gallery"]');
   if (!bar) return;
   const draftQuery = String(state.ui?.searchDraftQuery || '').trim();
   const committedQuery = String(state.view?.query || '').trim();
@@ -488,7 +488,7 @@ function syncGalleryBarSearchVisibility() {
 }
 
 function updateGalleryMainChrome() {
-  const bar = document.querySelector('[data-gallery-bar]');
+  const bar = document.querySelector('[data-gallery-bar-instance="gallery"]');
   const scroll = document.getElementById('albums-scroll');
   if (!bar || !scroll) return;
   syncGalleryBarSearchVisibility();

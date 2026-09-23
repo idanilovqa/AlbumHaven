@@ -1249,16 +1249,6 @@ function handleUtilityBootstrapKeyDown(event) {
   const filterInput = event.target?.matches?.('input, textarea, [contenteditable="true"]');
   if (state.utility.activeTab === 'problematic-files' && filterTarget && !filterInput) {
     const els = getUtilityModalElements();
-    if (event.key === 'Escape' && state.utility.problemDropdownOpen) {
-      event.preventDefault();
-      event.stopPropagation?.();
-      state.utility.problemDropdownOpen = false;
-      els.problemFilterMenu.hidden = true;
-      els.problemFilterButton.setAttribute('aria-expanded', 'false');
-      if (typeof clearTriggerAnchor === 'function') clearTriggerAnchor(els.problemFilterMenu);
-      els.problemFilterButton.focus();
-      return true;
-    }
     if (['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key) && !els.problemFilterButton.disabled) {
       event.preventDefault();
       if (!state.utility.problemDropdownOpen) {

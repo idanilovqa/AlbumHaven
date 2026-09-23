@@ -34,6 +34,8 @@ function buildExpectedCloudE2EInventory({
     target: target.name,
     measurementExpected: target.measurementExpected !== false,
     fixtureMode: target.fixtureMode,
+    coverageCaseIds: target.measurementExpected === false
+      ? target.cases.map((entry) => entry.case.match(/FTC-[A-Z0-9-]+/)[0]).sort() : [],
   }));
   const coverageOnlyTargets = performance.filter((target) => !target.measurementExpected).map((target) => target.target);
   if (coverageOnlyTargets.length !== 3 || coverageOnlyTargets[0] !== 'scan-page' || coverageOnlyTargets[1] !== 'scan-health' || coverageOnlyTargets[2] !== 'scan-error') {
@@ -328,12 +330,11 @@ function normalizePerformance(row, artifact, run, previousEntries, now) {
     if (row.measurementExpected !== false || payload.coverageOnly !== true
       || payload.attempts.length !== 0
       || (payload.series !== undefined && (!Array.isArray(payload.series) || payload.series.length !== 0))
-      || payload.attemptCount !== 1 || payload.testCount !== (row.target === 'scan-page' ? 2 : 1) || !Array.isArray(payload.cases)) {
+      || payload.attemptCount !== 1 || payload.testCount !== row.coverageCaseIds.length || !Array.isArray(payload.cases)) {
       throw new Error(`malformed coverage-only performance result ${row.target}`);
     }
     const screenshotFiles = [];
-    const expectedCaseIds = row.target === 'scan-error' ? ['FTC-OPS-003G']
-      : row.target === 'scan-health' ? ['FTC-OPS-003F'] : ['FTC-OPS-003C', 'FTC-OPS-003E'];
+    const expectedCaseIds = row.coverageCaseIds;
     const cases = payload.cases.map((entry) => {
       if (!entry || !expectedCaseIds.includes(entry.testId) || typeof entry.name !== 'string'
         || !['passed', 'failed', 'skipped', 'timedOut', 'interrupted'].includes(entry.status)

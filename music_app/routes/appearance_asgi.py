@@ -14,6 +14,7 @@ from music_app.services.appearance_preferences_postgres import (
     PostgresAppearancePreferencesRepository,
     appearance_client_profile,
     expand_appearance_preferences,
+    normalize_appearance_device_profiles,
     normalize_appearance_preferences,
     resolve_appearance_device_profile,
 )
@@ -108,6 +109,11 @@ async def put_appearance(request: Request) -> JSONResponse:
             raise ValueError("Invalid expected revision.")
         if not aggregate and expected_revision is not None:
             raise ValueError("Unexpected revision.")
+        if device_profile_write:
+            normalize_appearance_device_profiles(
+                device_profiles,
+                base_preferences={**colors, "action_button_outlines": action_button_outlines},
+            )
     except JSONBodyTooLarge:
         return JSONResponse(
             {"error": "appearance_payload_too_large"},

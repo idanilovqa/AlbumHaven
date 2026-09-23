@@ -464,7 +464,8 @@ for (const method of ['mount', 'mountSeekbar']) {
     await expect(input).toHaveCSS('color', expected.ink);
     await expect(input).toHaveCSS('background-color', expected.control);
     await expect(input).toHaveCSS('border-top-color', expected.line);
-    await expect(page.locator('#utility-modal-footer [data-background-cancel]')).toHaveCSS('background-color', expected.control);
+    await expect(page.locator('#utility-modal-footer [data-background-cancel]')).toHaveCSS('background-color', 'rgba(0, 0, 0, 0)');
+    await expect(page.locator('#utility-modal-footer [data-background-cancel]')).toHaveCSS('color', expected.ink);
     await expect(page.locator('#utility-modal-footer [data-background-save]')).toHaveCSS('background-color', expected.control);
     await expect(page.locator('#utility-modal-footer [data-background-save]')).toHaveCSS('color', expected.ink);
     expect(await page.evaluate(() => document.documentElement.style.getPropertyValue('--appearance-ink'))).toBe('');
@@ -632,6 +633,36 @@ test('Mobile and TV device appearance is disabled without an outer pill', async 
   await expect(controls).toHaveCSS('border-radius', '0px');
   await expect(controls).toHaveCSS('background-color', 'rgba(0, 0, 0, 0)');
 });
+
+for (const method of ['mount', 'mountAlerts', 'mountAlbumPage', 'mountSelectionAccent', 'mountSeekbar']) {
+  test(`${method} keeps unavailable devices natively disabled after load save and cancel`, async ({ page }) => {
+    await mount(page, method);
+    await page.route('**/account/appearance', route => {
+      if (route.request().method() !== 'PUT') return route.fallback();
+      const { expected_revision, ...saved } = route.request().postDataJSON();
+      return route.fulfill({ json: { ...saved, revision: expected_revision + 1 } });
+    });
+    for (const stage of ['load', 'save', 'cancel']) {
+      await page.evaluate(async stage => {
+        const controller = window.AlbumHavenAppearance.instance.controller;
+        if (stage === 'load') await window.AlbumHavenAppearance.instance.load();
+        else {
+          controller.setColor('main_surface_color', stage === 'save' ? '#123456' : '#654321');
+          if (stage === 'save') await controller.save();
+          else controller.cancel();
+        }
+      }, stage);
+      for (const device of ['mobile', 'tv']) {
+        const button = page.locator(`[data-appearance-device="${device}"]`);
+        expect(await button.evaluate(element => element.disabled), `${device} after ${stage}`).toBe(true);
+        await button.evaluate(element => element.click());
+        expect(await page.evaluate(() => window.AlbumHavenAppearance.instance.controller.getState().activeDeviceProfile)).toBe('web_desktop');
+        await expect(button).toHaveAttribute('aria-pressed', 'false');
+      }
+      await expect(page.locator('[data-appearance-device="web_desktop"]')).toHaveAttribute('aria-pressed', 'true');
+    }
+  });
+}
 
 test('actual Utilities close-button MouseEvent keeps the dirty editor until discard is accepted', async ({ page }) => {
   await mount(page, 'mountSeekbar');

@@ -746,7 +746,7 @@ test('family panel heading uses the selected primary artist with an adjacent cou
     primary_artist_groups: [{ artist: 'Neal Morse', albums: [{ key: 'one', source: 'main_library' }] }],
     family_artist_groups: [{ artist: 'Cosmic Cathedral', albums: [{ key: 'two', source: 'main_library' }] }],
   } }, document: {
-    querySelector: selector => ({ '[data-gallery-bar]': bar, '[data-gallery-family-panel-title]': title, '[data-gallery-family-panel-total]': total })[selector] || null,
+    querySelector: selector => ({ '[data-gallery-bar-instance="gallery"]': bar, '[data-gallery-family-panel-title]': title, '[data-gallery-family-panel-total]': total })[selector] || null,
     getElementById: id => id === 'albums-scroll' ? { scrollTop: 0 } : null,
   } });
   context.updateGalleryMainControls = () => {};
@@ -1243,7 +1243,7 @@ test('partial bootstrap gallery chrome reports empty results after all sources a
     initial_view_partial: true, artist_count: 120, album_count: 900,
     artist_groups: [{ artist: 'Preview artist', albums: [{ key: 'preview', source: 'main_library' }] }],
   } }, document: {
-    querySelector: selector => selector === '[data-gallery-bar]' ? bar : null,
+    querySelector: selector => selector === '[data-gallery-bar-instance="gallery"]' ? bar : null,
     getElementById: id => id === 'albums-scroll' ? scroll : null,
   } });
   context.updateGalleryMainControls = () => {};
@@ -1265,7 +1265,7 @@ test('gallery bar stays hidden throughout active search transitions', () => {
   const context = loadRuntime({ state: { gallery: {}, ui: { searchDraftQuery: '' }, view: {
     query: '', artist_groups: [],
   } }, document: {
-    querySelector: selector => selector === '[data-gallery-bar]' ? bar : null,
+    querySelector: selector => selector === '[data-gallery-bar-instance="gallery"]' ? bar : null,
     getElementById: id => id === 'albums-scroll' ? { scrollTop: 0 } : null,
   } });
   context.updateGalleryMainControls = () => {};
@@ -1319,7 +1319,7 @@ test('root gallery summary counts canonical albums once across artist credits af
       { artist: 'Guest', albums: [{ ...shared }] },
     ],
   } }, document: {
-    querySelector: selector => selector === '[data-gallery-bar]' ? bar : null,
+    querySelector: selector => selector === '[data-gallery-bar-instance="gallery"]' ? bar : null,
     getElementById: id => id === 'albums-scroll' ? { scrollTop: 0 } : null,
   } });
   context.updateGalleryMainControls = () => {};

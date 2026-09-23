@@ -7856,6 +7856,71 @@ def test_problematic_album_detail_explains_album_tag_problem_with_value_and_fiel
     ]
 
 
+@pytest.mark.parametrize("kind", ["ordinary", "incomplete", "missing"])
+@pytest.mark.parametrize("excluded", [False, True])
+def test_problematic_summary_matches_detail_reason_order_and_exclusions(kind, excluded):
+    from copy import deepcopy
+    from music_app.services.library_browse_postgres import (
+        _problematic_album_detail_payload,
+        _problematic_album_summary_payload,
+    )
+
+    paths = ["library/a/z.flac", "library/b/same.flac", "library/c/SAME.flac", "library/d/same.flac"]
+    entries = [
+        {"path": path, "album": "Album", "album_artist": "Artist", "artist": "Artist",
+         "title": "Track", "year": 2001, "track_number": index + 1, "disc_number": 1}
+        for index, path in enumerate(paths)
+    ]
+    entries[0]["title"] = ""
+    entries[1]["artist"] = ""
+    entries[2]["year"] = None
+    entries[3]["album_artist"] = ""
+    if kind == "incomplete":
+        entries[-1]["track_number"] = 5
+    album = {
+        "key": "reason-order", "album_ref": "artist::album", "name": "Album",
+        "album_artist": "Artist", "year": 2001, "cover_path": "covers/album.jpg",
+        "local_cover_width": 1000, "local_cover_height": 1000,
+        "tracks": [{"path": entry["path"], "title": entry["title"],
+                    "track_number": entry["track_number"], "disc_number": 1} for entry in entries],
+        "_file_entries": entries,
+        "_ignored_repair_keys": {
+            "artist::album::problem-album::missing-track-artist", f"{paths[2]}::year",
+        } if excluded else set(),
+    }
+    if kind == "missing":
+        album.update(inventory_status="missing", tracks=[], _file_entries=[])
+
+    # Independent inputs avoid allowing detail construction to prime summary caches.
+    summary = _problematic_album_summary_payload(deepcopy(album))
+    detail = _problematic_album_detail_payload(deepcopy(album))
+    assert summary is not None and detail is not None
+    reasons = list(dict.fromkeys(
+        [row["reason"] for row in detail["album_problem_rows"]]
+        + [reason for row in detail["track_problem_rows"] for reason in row["reasons"]]
+    ))
+    assert summary["problem_reasons"] == detail["problem_reasons"] == reasons
+    assert summary["issue_count"] == len(reasons)
+    if kind == "missing":
+        assert reasons == ["Album not found"]
+        assert summary["track_paths"] == []
+    else:
+        expected_paths = paths if kind == "incomplete" else [paths[1], paths[2], paths[3], paths[0]]
+        if excluded and kind == "ordinary":
+            expected_paths = [paths[3], paths[0]]
+        assert [row["path"] for row in detail["track_problem_rows"]] == expected_paths
+        if excluded:
+            assert "Missing track artist" not in reasons
+            assert "Missing year" not in reasons
+        else:
+            expected = ["Missing track artist", "Missing year", "Missing album artist", "Missing track title"]
+            if kind == "ordinary":
+                assert reasons == expected
+            else:
+                assert reasons[0] == "Missing track title"
+                assert any(reason.startswith("Incomplete track order") for reason in reasons)
+
+
 def test_album_exclusion_suppresses_matching_track_reason_and_removes_summary():
     from music_app.services.library_browse_postgres import (
         _problematic_album_summary_payload,

@@ -51,7 +51,7 @@ function renderProblematicFiles({ preserveProblematicTree = false } = {}) {
       if (!album) return;
       const selected = album.key === selectedKey;
       const content = getProblematicAlbumNavigationOptions(album, selected);
-      if (retainTree) {
+      if (retainTree || problematicFilesVirtualList) {
         const previous = problematicNavigationRowContent.get(row);
         window.NavigationTree.updateItem(row, {
           ...content,

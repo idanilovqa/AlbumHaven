@@ -325,7 +325,7 @@ html .cover-lookup-drawer {
 :root :is(button, .button, [role='button'], [data-actionable]):not(.navigation-tree-item):not(.tag-editor-track):not(.tag-editor-track *):not(.track-modal-cover-button):not(.loop-edit-action):not(.loop-range-handle):not(.global-player *):active:not(:disabled):not([aria-disabled='true']) {
   border-color: var(--appearance-interaction-outline, var(--appearance-accent));
 }
-:root:is([data-appearance-palette], [data-appearance-item-action-pressed]) :is(button, .button, [role='button'], [data-actionable]):not(.appearance-muted-spectrum button):not(.artist-family-panel__artist):not(.utility-list-item):not(.account-menu-item):not(.navigation-tree-item):not(.tag-editor-track):not(.tag-editor-track *):not(.track-modal-cover-button):not(.ui-button--quiet):not(.loop-edit-action):not(.loop-range-handle):not(.global-player *):active:not(:disabled):not([aria-disabled='true']) {
+:root:is([data-appearance-palette], [data-appearance-item-action-pressed]) :is(button, .button, [role='button'], [data-actionable]):not(.appearance-muted-spectrum button):not(.artist-family-panel__artist):not(.utility-list-item):not(.account-menu-item):not(.navigation-tree-item):not(.tag-editor-track):not(.tag-editor-track *):not(.track-modal-cover-button):not(.ui-button--quiet):not(.loop-edit-action):not(.loop-range-handle):not(.album-card *):not(.global-player *):active:not(:disabled):not([aria-disabled='true']) {
   background: var(--appearance-item-action-pressed, var(--appearance-item-action-hover-background, var(--appearance-control)));
 }
 :root {

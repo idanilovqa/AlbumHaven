@@ -53,6 +53,38 @@ async function mountStatusComponent(page, status) {
   }, status);
 }
 
+test('gallery resize and search updates preserve the Library Status bar', async ({ page }) => {
+  const errors = [];
+  page.on('pageerror', error => errors.push(error.message));
+  await mountStatusComponent(page, {
+    scan_in_progress: false, covers_in_progress: false, relations_in_progress: false,
+    scan_outcome: 'failed', scan_total: 10, scan_processed: 4, last_error: 'Scan interrupted',
+  });
+  await page.addScriptTag({ path: path.join(root, 'music_app/static/js/runtime/gallery-main-interactions.js') });
+  await page.evaluate(() => {
+    // Supply the retained gallery model; exercise the real chrome and status-bar owners together.
+    window.updateGalleryMainControls = () => {};
+    window.getFilteredGalleryMainModel = () => ({ totals: { artistCount: 1, albumCount: 1 }, groups: [] });
+    window.getGalleryMainContextSections = () => [];
+    window.hasGalleryArtistFamily = () => false;
+    window.resolveGallerySummaryTotals = (_view, totals) => totals;
+    window.resolveGalleryBarContext = () => ({ kind: 'gallery', artistCount: 1, albumCount: 1 });
+    window.addEventListener('resize', updateGalleryMainChrome);
+  });
+  await page.getByRole('button', { name: 'Open status component', exact: true }).click();
+  const status = page.getByRole('region', { name: 'Library Status Page controls', exact: true });
+  await expect(status).toBeVisible();
+  await page.evaluate(() => {
+    window.dispatchEvent(new Event('resize'));
+    state.ui.searchDraftQuery = 'retained search';
+    state.view.query = 'retained search';
+    syncGalleryBarSearchVisibility();
+  });
+  await expect(status).toBeVisible();
+  await expect(page.locator('[data-close-scan-page]')).toBeVisible();
+  expect(errors).toEqual([]);
+});
+
 for (const outcome of ['failed', 'cancelled']) {
   test(`Library Status component retains a usable catalog after a ${outcome} scan`, async ({ page }) => {
     const diagnostic = 'Cannot publish <img src=x onerror="window.scanErrorExecuted=true"> & retry';

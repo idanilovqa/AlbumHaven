@@ -865,6 +865,15 @@ function handleModalEscapeKeydown(event) {
     return;
   }
   if (modal.id === 'utility-modal') {
+    if (state.utility.activeTab === 'problematic-files' && state.utility.problemDropdownOpen) {
+      const els = getUtilityModalElements();
+      state.utility.problemDropdownOpen = false;
+      els.problemFilterMenu.hidden = true;
+      els.problemFilterButton.setAttribute('aria-expanded', 'false');
+      if (typeof clearTriggerAnchor === 'function') clearTriggerAnchor(els.problemFilterMenu);
+      els.problemFilterButton.focus();
+      return;
+    }
     if (typeof cancelActiveSavedLoopCreation === 'function' && cancelActiveSavedLoopCreation()) return;
     const editor = typeof getBackgroundAppearanceEditor === 'function' ? getBackgroundAppearanceEditor() : null;
     if (editor?.allowLeave(() => true) === false) return;

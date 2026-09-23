@@ -32,6 +32,14 @@
     let selectedKey = '';
     let frame = 0;
     let disposed = false;
+    const mountedRows = new Map();
+    const [before, after] = ['before', 'after'].map((position) => {
+      const spacer = list.ownerDocument.createElement('div');
+      spacer.className = 'problematic-virtual-spacer';
+      spacer.setAttribute('data-problematic-virtual-spacer', position);
+      spacer.setAttribute('aria-hidden', 'true');
+      return spacer;
+    });
     const savedOffset = savedOffsets.get(list) || { horizontal: 0, vertical: 0 };
     list.scrollLeft = savedOffset.horizontal;
     list.scrollTop = savedOffset.vertical;
@@ -42,6 +50,7 @@
     );
 
     const renderNow = () => {
+      if (frame) global.cancelAnimationFrame(frame);
       frame = 0;
       if (disposed) return;
       const horizontal = isHorizontal();
@@ -58,15 +67,35 @@
       const beforeSize = range.start * stride;
       const afterSize = (items.length - range.end) * stride;
       const dimension = horizontal ? 'width' : 'height';
-      const rows = items.slice(range.start, range.end).map((item) => (
-        renderRow(item, String(item?.key || '') === selectedKey)
-      )).join('');
-
-      list.innerHTML = [
-        `<div class="problematic-virtual-spacer" data-problematic-virtual-spacer="before" style="${dimension}:${beforeSize}px" aria-hidden="true"></div>`,
-        rows,
-        `<div class="problematic-virtual-spacer" data-problematic-virtual-spacer="after" style="${dimension}:${afterSize}px" aria-hidden="true"></div>`,
-      ].join('');
+      const visibleItems = items.slice(range.start, range.end);
+      const keys = new Set(visibleItems.map((item) => String(item.key)));
+      const focused = list.ownerDocument.activeElement;
+      before.style.cssText = `${dimension}:${beforeSize}px`;
+      after.style.cssText = `${dimension}:${afterSize}px`;
+      if (before.parentNode !== list) list.replaceChildren(before, after);
+      for (const [key, row] of mountedRows) {
+        if (keys.has(key)) continue;
+        row.remove();
+        mountedRows.delete(key);
+      }
+      let previous = before;
+      for (const item of visibleItems) {
+        const key = String(item.key);
+        let row = mountedRows.get(key);
+        if (!row) {
+          const template = list.ownerDocument.createElement('template');
+          template.innerHTML = renderRow(item, key === selectedKey);
+          row = template.content.firstElementChild;
+          mountedRows.set(key, row);
+        }
+        if (previous.nextElementSibling !== row) list.insertBefore(row, previous.nextElementSibling);
+        previous = row;
+      }
+      if (horizontal) list.scrollLeft = offset;
+      else list.scrollTop = offset;
+      if (focused && list.contains(focused) && list.ownerDocument.activeElement !== focused) {
+        focused.focus({ preventScroll: true });
+      }
       list.dataset.problematicMountedCount = String(range.end - range.start);
       list.dataset.problematicVirtualStart = String(range.start);
       list.dataset.problematicVirtualEnd = String(range.end);
@@ -104,6 +133,21 @@
       if (selectedKey !== previousSelectedKey) reveal(selectedKey);
     };
 
+    const handleKeydown = (event) => {
+      if (event.key !== 'Tab' || event.altKey || event.ctrlKey || event.metaKey) return;
+      const row = event.target.closest?.('[data-problematic-album-key]');
+      if (!row || !list.contains(row)) return;
+      const index = items.findIndex((item) => String(item.key) === row.getAttribute('data-problematic-album-key'));
+      const nextIndex = index + (event.shiftKey ? -1 : 1);
+      if (index < 0 || nextIndex < 0 || nextIndex >= items.length) return;
+      const key = String(items[nextIndex].key);
+      if (mountedRows.has(key)) return;
+      event.preventDefault();
+      reveal(key);
+      renderNow();
+      mountedRows.get(key)?.focus({ preventScroll: true });
+    };
+
     const dispose = () => {
       if (disposed) return;
       disposed = true;
@@ -112,6 +156,7 @@
         vertical: Number(list.scrollTop) || 0,
       });
       list.removeEventListener('scroll', schedule);
+      list.removeEventListener('keydown', handleKeydown);
       global.removeEventListener?.('resize', schedule);
       if (frame) global.cancelAnimationFrame(frame);
       delete list.dataset.problematicMountedCount;
@@ -121,6 +166,7 @@
     };
 
     list.addEventListener('scroll', schedule, { passive: true });
+    list.addEventListener('keydown', handleKeydown);
     global.addEventListener?.('resize', schedule, { passive: true });
     return { render, reveal, dispose };
   }

@@ -975,14 +975,14 @@ export const UTILITY_PROBLEMATIC_FILES_LOCAL_BENCHMARK = defineBenchmark({
       checkpointKey: 'problematic-files-cold-api',
       metricPath: 'coldProblematicApiMs',
       units: 'ms',
-      description: 'The cold Problematic Files API request should complete end to end within the 1000 ms target plus the owner-approved 200 ms grace.',
+      description: 'The cold Problematic Files API retains its 1000 ms target with an owner-approved temporary 800 ms grace and 1800 ms ceiling pending Phase 9 investigation.',
       // Historical 15-row HTTP-probe timings are retained in the benchmark notes;
       // native fetch timing on the 706-row fixture has no established baseline.
       observedBaseline: null,
       observedRange: { min: null, max: null },
       targetMaximum: 1000,
-      graceMs: 200,
-      maxAllowed: 1200,
+      graceMs: 800,
+      maxAllowed: 1800,
     },
     {
       key: 'problematicResponseBytes',

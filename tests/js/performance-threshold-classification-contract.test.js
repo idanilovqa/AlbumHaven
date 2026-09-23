@@ -211,6 +211,52 @@ test('runner keeps all-attempt aggregation while reporter keeps majority aggrega
   assert.equal(reporterSummary.passed, true);
 });
 
+test('cold API temporary exception retains identity through raw and aggregate classification', () => {
+  const runner = require('../../scripts/run-performance-playwright.cjs')._private;
+  const reporter = require('../../scripts/playwright-performance-reporter.cjs')._private;
+  const metricId = 'utility-problematic-files-isolated-postgres.coldProblematicApiMs';
+  const row = {
+    metricId, key: 'coldProblematicApiMs', checkpointKey: 'problematic-files-cold-api',
+    units: 'ms', actual: 1454, targetMaximum: 1000, graceMs: 800,
+    hardCeiling: 1800, allowedMaximum: 1800, passed: true, performanceStatus: 'grace-used',
+  };
+  for (const [actual, performanceStatus, passed] of [
+    [1000, 'target-met', true], [1001, 'grace-used', true],
+    [1800, 'grace-used', true], [1801, 'hard-fail', false],
+  ]) {
+    const result = authority.classifyPerformanceThreshold({ ...row, actual });
+    assert.equal(result.performanceStatus, performanceStatus);
+    assert.equal(result.passed, passed);
+  }
+  const summarized = reporter.summarizeBenchmarkValidation({ results: [row] }, true);
+  assert.equal(summarized.results[0].metricId, metricId);
+  assert.equal(summarized.results[0].performanceStatus, 'grace-used');
+  assert.equal(summarized.results[0].passed, true);
+  const aggregators = [
+    rows => runner.buildAggregatedThresholdEvaluation(rows.map(result => ({ status: 0, validationResults: [result] }))),
+    rows => reporter.buildVerificationMetricSummary(rows.map(result => ({ status: 'passed', benchmarkValidation: { results: [result] } }))),
+  ];
+  for (const aggregate of aggregators) {
+    const result = aggregate([row, row, row]);
+    assert.equal(result.passed, true);
+    assert.equal(result.metrics[0].metricId, metricId);
+    assert.equal(result.metrics[0].medianActual, 1454);
+    assert.equal(result.metrics[0].performanceStatus, 'grace-used');
+    assert.equal(aggregate([row, { ...row, metricId: 'other.ready' }, row]).passed, false);
+    for (const override of [
+      { metricId: undefined }, { metricId: 'other.ready' },
+      { targetMaximum: 999, hardCeiling: 1799, allowedMaximum: 1799 },
+      { graceMs: 799, hardCeiling: 1799, allowedMaximum: 1799 },
+      { hardCeiling: 1801, allowedMaximum: 1801 },
+    ]) {
+      const invalid = { ...row, ...override };
+      assert.equal(authority.classifyPerformanceThreshold(invalid).passed, false);
+      assert.equal(reporter.summarizeBenchmarkValidation({ results: [invalid] }, true).results[0].passed, false);
+      assert.equal(aggregate([invalid]).passed, false);
+    }
+  }
+});
+
 test('timing helper, runner, and reporter delegate to the shared authority', () => {
   const consumerPaths = [
     'tests/e2e/helpers/timingBudget.js',

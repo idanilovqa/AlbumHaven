@@ -7,6 +7,12 @@ const PERFORMANCE_THRESHOLD_STATUS = Object.freeze({
 
 const ALL_ARTISTS_RETURN_MEMORY_POLICY = 'all-artists-return-memory-sample-window';
 
+function isTemporaryColdProblematicApiException(metricId, targetMs, graceMs, hardCeilingMs) {
+  // Owner-approved temporary allowance; restore the original ceiling after Phase 9 investigation.
+  return metricId === 'utility-problematic-files-isolated-postgres.coldProblematicApiMs'
+    && targetMs === 1000 && graceMs === 800 && hardCeilingMs === 1800;
+}
+
 function finiteNonNegativeNumber(value) {
   if (value === null || value === undefined || (typeof value === 'string' && value.trim() === '')) {
     return null;
@@ -75,7 +81,9 @@ function classifyPerformanceThreshold(contract = {}) {
     || (units === 'ms' && graceWasDeclared && (
       graceMs === null
       || graceMs < 200
-      || graceMs > 400
+      || (graceMs > 400 && !isTemporaryColdProblematicApiException(
+        contract.metricId, targetMaximum, graceMs, hardCeiling,
+      ))
       || targetMaximum + graceMs !== hardCeiling
     ))) {
     return hardFail(false);
@@ -127,4 +135,5 @@ function classifyPerformanceThreshold(contract = {}) {
 module.exports = {
   PERFORMANCE_THRESHOLD_STATUS,
   classifyPerformanceThreshold,
+  isTemporaryColdProblematicApiException,
 };

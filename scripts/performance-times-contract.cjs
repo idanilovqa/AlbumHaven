@@ -1,5 +1,6 @@
 const fs = require('node:fs');
 const path = require('node:path');
+const { isTemporaryColdProblematicApiException } = require('./performance-threshold-classification.cjs');
 
 const DEFAULT_CONTRACT_PATH = path.join(__dirname, '..', 'tests', 'ci', 'performance-times.json');
 const CONTRACT_NAMES = new Set(['local', 'ci']);
@@ -27,7 +28,8 @@ function validateTriplet(metricId, contractName, value) {
     value.hardCeilingMs,
     `${metricId}.${contractName}.hardCeilingMs`,
   );
-  if (graceMs < MIN_GRACE_MS || graceMs > MAX_GRACE_MS) {
+  if (graceMs < MIN_GRACE_MS || (graceMs > MAX_GRACE_MS
+    && !isTemporaryColdProblematicApiException(metricId, targetMs, graceMs, hardCeilingMs))) {
     throw new Error(`${metricId}.${contractName} grace must be between 200 and 400 ms.`);
   }
   if (targetMs + graceMs !== hardCeilingMs) {

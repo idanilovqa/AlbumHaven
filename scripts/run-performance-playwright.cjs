@@ -1471,6 +1471,7 @@ function buildAggregatedThresholdEvaluation(attemptRecords = []) {
     for (const result of attemptRecord.validationResults || []) {
       const entry = resultMap.get(result.key) || {
         key: result.key,
+        ...(result.metricId !== undefined ? { metricId: result.metricId } : {}),
         checkpointKey: result.checkpointKey || '',
         description: result.description || '',
         units: result.units || '',
@@ -1493,6 +1494,7 @@ function buildAggregatedThresholdEvaluation(attemptRecords = []) {
       const resultAllowedMaximum = optionalFiniteNumber(result.allowedMaximum);
       const effectiveCeiling = resolveEffectiveCeiling(result);
       entry.contractConsistent = entry.contractConsistent
+        && entry.metricId === result.metricId
         && entry.units === (result.units || '')
         && entry.targetMaximum === resultTargetMaximum
         && entry.graceMs === resultGraceMs
@@ -1512,6 +1514,7 @@ function buildAggregatedThresholdEvaluation(attemptRecords = []) {
         entry.actuals.push(actual);
       }
       const rawClassification = classifyPerformanceThreshold({
+        metricId: result.metricId,
         units: result.units,
         actual,
         targetMaximum: result.targetMaximum,
@@ -1544,6 +1547,7 @@ function buildAggregatedThresholdEvaluation(attemptRecords = []) {
     const medianActual = median(entry.actuals);
     const meanActual = mean(entry.actuals);
     const medianClassification = classifyPerformanceThreshold({
+      metricId: entry.metricId,
       units: entry.units,
       actual: medianActual,
       targetMaximum: entry.targetMaximum,

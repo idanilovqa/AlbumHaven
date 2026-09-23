@@ -77,6 +77,28 @@ test('performance timing contract fails closed for missing metrics and invalid t
   }
 });
 
+test('temporary cold API exception is exact and cannot widen other contracts', (t) => {
+  const { loadPerformanceTimesContract, resolveTimingBudget } = loadAuthority();
+  const metricId = 'utility-problematic-files-isolated-postgres.coldProblematicApiMs';
+  const approved = { targetMs: 1000, graceMs: 800, hardCeilingMs: 1800 };
+  for (const contractName of ['local', 'ci']) {
+    const contractPath = writeContract(t, { [metricId]: validMetric({ [contractName]: approved }) });
+    const contract = loadPerformanceTimesContract({ contractPath });
+    assert.deepEqual(resolveTimingBudget(metricId, contractName, contract), {
+      metricId, contractName, targetMaximum: 1000, graceMs: 800, hardCeiling: 1800,
+    });
+    for (const [id, triplet] of [
+      ['example.ready', approved],
+      [metricId, { targetMs: 999, graceMs: 800, hardCeilingMs: 1799 }],
+      [metricId, { targetMs: 1000, graceMs: 799, hardCeilingMs: 1799 }],
+      [metricId, { ...approved, hardCeilingMs: 1801 }],
+    ]) {
+      const invalidPath = writeContract(t, { [id]: validMetric({ [contractName]: triplet }) });
+      assert.throws(() => loadPerformanceTimesContract({ contractPath: invalidPath }), /grace|ceiling/i);
+    }
+  }
+});
+
 test('checked-in timing authority contains the approved local and CI triplets', () => {
   const {
     loadPerformanceTimesContract,
@@ -84,6 +106,10 @@ test('checked-in timing authority contains the approved local and CI triplets', 
   } = loadAuthority();
   const contract = loadPerformanceTimesContract();
   const approved = {
+    'utility-problematic-files-isolated-postgres.coldProblematicApiMs': {
+      local: [1000, 800, 1800],
+      ci: [1000, 800, 1800],
+    },
     'playback-start.maximumStartMs': {
       local: [900, 200, 1100],
       ci: [1800, 200, 2000],

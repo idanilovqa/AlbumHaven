@@ -32,6 +32,85 @@ const indexTemplateSource = fs.readFileSync(
   'utf8',
 );
 
+test('connected trigger accents follow light palette colors', () => {
+  assert.match(
+    triggerAnchorCssSource,
+    /:root\[data-appearance-mode='light'\]\s*\{[^}]*--appearance-selected-accent:\s*var\(--appearance-accent,\s*#596775\);/,
+  );
+  assert.match(
+    triggerAnchorCssSource,
+    /--trigger-anchor-accent:\s*var\(--appearance-selected-accent\);/,
+  );
+});
+
+test('connected triggers leave the edge adjoining their surface unpainted', () => {
+  assert.match(
+    triggerAnchorCssSource,
+    /\.trigger-anchor-open\s*\{[^}]*var\(--trigger-anchor-border-fill\) border-box !important;/s,
+  );
+  assert.match(
+    triggerAnchorCssSource,
+    /\.trigger-anchor-open::after\s*\{[^}]*top:\s*calc\(100% - 3px\);[^}]*height:\s*calc\(var\(--trigger-anchor-gap, 0px\) \+ 3px\);/s,
+  );
+  assert.match(
+    triggerAnchorCssSource,
+    /\.trigger-anchor-open\[data-trigger-anchor-edge="bottom"\]::after\s*\{[^}]*bottom:\s*calc\(100% - 3px\);/s,
+  );
+});
+
+test('Gallery toolbar buttons use the surrounding main surface', () => {
+  assert.match(
+    galleryMainCssSource,
+    /\.gallery-bar__actions\s*\{[^}]*--gallery-toolbar-button-background:\s*var\(--appearance-main-surface,\s*var\(--panel\)\)/,
+  );
+  assert.match(
+    galleryMainCssSource,
+    /\.gallery-action-button\s*\{[^}]*background:\s*var\(--gallery-toolbar-button-background,\s*var\(--appearance-main-surface,\s*var\(--panel\)\)\)/,
+  );
+  assert.match(
+    galleryMainCssSource,
+    /\.gallery-bar__actions :is\(\.gallery-view-cluster, \.gallery-view-choice\)\s*\{[^}]*background:\s*var\(--gallery-toolbar-button-background\)/,
+  );
+});
+
+test('connected dropdown surfaces follow their light content context', () => {
+  assert.match(
+    indexTemplateSource,
+    /data-anchored-surface="album-types" data-trigger-anchor-context="content"/,
+  );
+  assert.match(
+    triggerAnchorCssSource,
+    /:root\[data-appearance-mode='light'\] :is\(\.shell-main-surface, \.settings-outlet\)\s*\{[^}]*--trigger-anchor-background:\s*var\(--appearance-card\);/,
+  );
+  assert.match(
+    triggerAnchorCssSource,
+    /:root\s*\{[^}]*--trigger-anchor-background:\s*var\(--appearance-panel-background, var\(--panel\)\);/,
+  );
+  assert.match(
+    triggerAnchorCssSource,
+    /:root\[data-appearance-mode='light'\] \.trigger-anchor-surface\[data-trigger-anchor-context='content'\]:is\(\[data-anchored-surface\], \.artist-info-overlay\)\s*\{[^}]*--trigger-anchor-background:\s*var\(--appearance-card\);[^}]*--text:\s*var\(--appearance-ink\);[^}]*--muted:\s*var\(--appearance-muted\);/,
+  );
+  assert.match(
+    triggerAnchorCssSource,
+    /\.trigger-anchor-open\[data-trigger-anchor-context='content'\]\s*\{[^}]*--trigger-anchor-background:\s*var\(--appearance-card, var\(--panel\)\);/,
+  );
+});
+
+test('app-bar dropdown surfaces use Settings panel text and hover tokens after portaling', () => {
+  assert.match(
+    indexTemplateSource,
+    /data-anchored-surface="sources" data-trigger-anchor-context="chrome"/,
+  );
+  assert.match(
+    triggerAnchorCssSource,
+    /data-trigger-anchor-context='chrome'[^}]*\{[^}]*--text:\s*var\(--appearance-panel-ink,[^}]*--muted:\s*var\(--appearance-panel-muted,[^}]*--panel:\s*var\(--appearance-panel-background,[^}]*--dropdown-item-hover-background:\s*var\(--appearance-panel-action-hover-background,[^}]*color:\s*var\(--text\);/,
+  );
+  assert.match(
+    triggerAnchorCssSource,
+    /\.trigger-anchor-open\[data-trigger-anchor-context='chrome'\]\s*\{[^}]*--trigger-anchor-background:\s*var\(--appearance-panel-background, var\(--panel\)\);/,
+  );
+});
+
 function loadRuntime(overrides = {}) {
   const context = {
     escapeHtml: (value) => String(value ?? '')
@@ -126,6 +205,17 @@ test('artist info ignores queued pre-open scroll but dismisses real post-open mo
   assert.equal(surface.hidden, true, 'actual horizontal movement dismisses the popup');
 });
 
+test('Album Types uses the same theme-inheriting stacked-sleeves icon before and after hydration', () => {
+  const context = loadRuntime();
+  const bar = requireContract(context, 'buildGalleryBarHtml')({});
+  const template = fs.readFileSync(path.join(__dirname, '../../../music_app/templates/index.html'), 'utf8');
+  const icon = markup => markup.match(/data-gallery-bar-action="album-types"[^>]*>(<svg[\s\S]*?<\/svg>)/)[1];
+  assert.equal(icon(bar), icon(template));
+  assert.match(icon(bar), /<rect x="8" y="8" width="14" height="14" rx="2"\/>/);
+  assert.match(icon(bar), /fill="currentColor" fill-rule="evenodd" stroke="none"/);
+  assert.doesNotMatch(icon(bar), /#[0-9a-f]{3,8}|fill="(?:white|black)"/i);
+});
+
 test('reusable GalleryBar, switch, panel, info overlay, divider, and artist heading render accessible contracts', () => {
   const context = loadRuntime();
   const buildGalleryBarHtml = requireContract(context, 'buildGalleryBarHtml');
@@ -161,6 +251,13 @@ test('reusable GalleryBar, switch, panel, info overlay, divider, and artist head
   assert.match(artistBar, /Transatlantic/);
   assert.match(artistBar, /5 albums/);
   assert.match(artistBar, /data-artist-info-trigger/);
+
+  const singleArtistBar = buildGalleryBarHtml({ contextKind: 'single-artist', artist: 'Alestorm', albumCount: 4 });
+  assert.match(singleArtistBar, /data-gallery-context-name>Alestorm</);
+  assert.match(singleArtistBar, /data-artist-info-trigger/);
+  assert.match(singleArtistBar, /data-gallery-context-artist-divider hidden/);
+  assert.match(singleArtistBar, /data-gallery-context-inline-total hidden><\/span>/);
+  assert.match(singleArtistBar, /data-gallery-context-summary>4 albums</);
 
   const toggle = buildSwitchHtml({ id: 'gallery-source-hoard', label: 'Hoard', checked: true });
   assert.match(toggle, /role="switch"/);
@@ -223,7 +320,7 @@ test('Combine similar artists sits in its own row directly below the Artist Fami
   assert.ok(liveHeaderEnd >= 0 && liveHeaderEnd < liveCombineRow);
   assert.doesNotMatch(livePanel.slice(0, liveHeaderEnd), /data-toggle-combine-similar-artists/);
   assert.match(triggerAnchorCssSource, /:is\([^}]*\.artist-family-panel__combine-row \.gallery-switch[^}]*\)\s*\{[^}]*transition:\s*background-color 150ms ease/);
-  assert.match(triggerAnchorCssSource, /:is\([^}]*\.artist-family-panel__combine-row \.gallery-switch[^}]*\):hover[^}]*\{[^}]*background:\s*var\(--dropdown-item-hover-background/);
+  assert.match(triggerAnchorCssSource, /\.artist-family-panel__combine-row \.gallery-switch:hover:not\(:disabled\):not\(\[aria-disabled="true"\]\)\s*\{[^}]*background:\s*transparent\s*!important/);
   assert.match(triggerAnchorCssSource, /\.artist-family-panel__combine-row \.gallery-switch:active[^}]*\{[^}]*background:\s*var\(--dropdown-item-hover-background[^}]*border-color:\s*transparent/);
 });
 
@@ -272,6 +369,14 @@ function createStateForContract() {
 test('the live Album types menu starts with unavailable loose tracks disabled', () => {
   assert.match(
     indexTemplateSource,
+    /\[\('studio', 'Studio'\), \('ep', 'EP'\), \('live', 'Live'\), \('demo', 'Demo'\), \('compilation', 'Compilation'\), \('single', 'Single'\)\]/,
+  );
+  assert.match(
+    indexTemplateSource,
+    /data-gallery-album-type="\{\{ value \}\}"[^>]*aria-pressed="\{\{ 'true' if value in \['studio', 'ep'\] else 'false' \}\}" disabled aria-disabled="true"/,
+  );
+  assert.match(
+    indexTemplateSource,
     /data-open-non-album-tracks="1"[^>]*disabled[^>]*aria-disabled="true"/,
   );
   const context = loadRuntime();
@@ -286,6 +391,9 @@ test('artist info triggers use a larger plain information glyph with neutral env
   const markup = buildFamilyArtistHeaderHtml({ artist: 'Neal Morse', albumCount: 2 });
   assert.match(markup, /gallery-info-button__glyph/);
   assert.doesNotMatch(markup, /ⓘ/);
+  assert.match(galleryMainCssSource, /\.artist-info-overlay\s*\{[^}]*background:\s*var\(--panel\);[^}]*color:\s*var\(--text\);/);
+  assert.match(galleryMainCssSource, /\.artist-info-overlay__links :is\(a, button\)\s*\{[^}]*color:\s*var\(--appearance-accent,/);
+  assert.match(galleryMainCssSource, /\.artist-info-overlay__image\s*\{[^}]*background:\s*var\(--panel-2,/);
   assert.match(galleryMainCssSource, /\.gallery-info-button\s*\{[^}]*width:\s*30px[^}]*height:\s*30px[^}]*border-radius:\s*6px/);
   assert.match(galleryMainCssSource, /\.artist-info-overlay::before/);
   assert.match(galleryMainCssSource, /\.artist-family-panel::before/);
@@ -301,14 +409,20 @@ test('view navigation closes the drawer controller as well as clearing its rende
 test('the collapsed Gallery view control hides the inactive icon instead of overlapping it', () => {
   const css = fs.readFileSync(path.join(runtimeRoot, '..', '..', 'css', 'unfolding-action-button.css'), 'utf8');
   for (const rule of ['flex: 0 0 0px', 'min-width: 0', 'overflow: hidden', 'visibility: hidden', 'pointer-events: none', 'outline: none !important', 'prefers-reduced-motion']) assert.ok(css.includes(rule));
-  assert.match(css, /:is\(:hover, :focus-within\)[^{]*\{[^}]*outline:/);
+ assert.doesNotMatch(css, /:is\(:hover, :focus-within\)[^{]*\{[^}]*outline:/);
+ assert.doesNotMatch(css, /\.unfolding-action-button:focus-within\s*\{[^}]*outline:/);
+ assert.match(css, /> \.unfolding-action-button__action:is\(:hover, :focus-visible\)\s*\{[^}]*color:\s*color-mix\(in srgb,[^}]*var\(--appearance-play, #4ade80\) 70%/s);
   assert.doesNotMatch(css, /border-left:/);
 });
 
 test('client Gallery state defaults to all sources, Studio plus EP, cards, and an unfiltered gallery', () => {
   const context = loadRuntime();
-  const createGalleryMainState = requireContract(context, 'createGalleryMainState');
-  assert.deepEqual(plain(createGalleryMainState()), {
+ const createGalleryMainState = requireContract(context, 'createGalleryMainState');
+ assert.deepEqual(
+  plain(vm.runInContext('GALLERY_RELEASE_TYPES', context)),
+  ['studio', 'ep', 'live', 'demo', 'compilation', 'single'],
+ );
+ assert.deepEqual(plain(createGalleryMainState()), {
     sources: { main_library: true, new_arrivals: true, hoard: true },
     albumTypes: ['studio', 'ep'],
     view: 'cards',
@@ -335,7 +449,7 @@ test('new primary artist navigation resets filters while preserving the display 
   });
 });
 
-test('source, supported type, view, and family transitions retain durable cards and covers values', () => {
+test('source, unavailable type, view, and family transitions retain durable cards and covers values', () => {
   const context = loadRuntime();
   const createGalleryMainState = requireContract(context, 'createGalleryMainState');
   const reduceGalleryMainState = requireContract(context, 'reduceGalleryMainState');
@@ -346,7 +460,7 @@ test('source, supported type, view, and family transitions retain durable cards 
   state = reduceGalleryMainState(state, { type: 'toggle-family-artist', artist: 'Flying Colors' });
   assert.deepEqual(plain(state), {
     sources: { main_library: true, new_arrivals: true, hoard: false },
-    albumTypes: ['studio', 'ep', 'compilation'],
+    albumTypes: ['studio', 'ep'],
     view: 'covers',
     familyArtists: ['Flying Colors'],
   });
@@ -679,6 +793,11 @@ test('Artist Family panel uses fixed-width reusable filter pills with optional a
   assert.doesNotMatch(markup, /<img[^>]+\ssrc=/);
   assert.match(markup, /ui-filter-pill__marker artist-family-panel__marker/);
   assert.match(markup, /ui-filter-pill__count artist-family-panel__count/);
+  assert.match(galleryMainCssSource, /\.artist-family-panel__artist\.is-active\s*\{[^}]*border-color:\s*var\(--appearance-play,\s*#4bc173\)/);
+  assert.match(galleryMainCssSource, /\.artist-family-panel__marker\s*\{[^}]*background:\s*var\(--appearance-play,\s*#4bc173\)/);
+  assert.match(galleryMainCssSource, /\.artist-family-panel__count\s*\{[^}]*color:\s*var\(--appearance-ink[^}]*background:\s*color-mix\(in srgb, var\(--appearance-control/);
+  assert.match(galleryMainCssSource, /:root \.artist-family-panel__artist\s*\{[^}]*background:\s*var\(--family-row-background,\s*var\(--panel,\s*#111517\)\)/);
+  assert.doesNotMatch(galleryMainCssSource, /--family-row-selected/);
   assert.match(textOnlyPill, /class="ui-filter-pill"/);
   assert.match(textOnlyPill, /ui-filter-pill__label/);
   assert.doesNotMatch(textOnlyPill, /ui-filter-pill__artwork/);
@@ -688,7 +807,7 @@ test('Artist Family panel uses fixed-width reusable filter pills with optional a
   assert.match(triggerAnchorCssSource, /:is\([^}]*\.ui-filter-pill[^}]*\):hover[^}]*\{[^}]*background:\s*var\(--dropdown-item-hover-background/);
   assert.doesNotMatch(galleryMainCssSource, /\.artist-family-panel__artist\.is-primary\s*\{/);
   assert.match(galleryMainCssSource, /height: 60px/);
-  assert.match(galleryMainCssSource, /box-shadow: none !important/);
+  assert.doesNotMatch(galleryMainCssSource, /\.artist-family-panel__artist\s*\{[^}]*background:\s*[^;{}]*!important/);
 });
 
 test('Artist Family panel sends deferred artwork through the shared gallery cover loader', () => {
@@ -711,7 +830,7 @@ test('Artist Family panel sends deferred artwork through the shared gallery cove
   assert.equal(panelBody.scrollTop, 12);
 });
 
-test('unavailable release types remain inert while Studio and Compilation use catalog-backed facts', () => {
+test('all unavailable release types remain inert while catalog-backed facts are classified', () => {
   const context = loadRuntime();
   const classifyGalleryReleaseType = requireContract(context, 'classifyGalleryReleaseType');
   const createGalleryMainState = requireContract(context, 'createGalleryMainState');
@@ -726,7 +845,8 @@ test('unavailable release types remain inert while Studio and Compilation use ca
   assert.equal(classifyGalleryReleaseType({ title: 'Radio Single' }), 'studio');
   assert.equal(classifyGalleryReleaseType({ title: 'Ordinary Record' }), 'studio');
 
-  for (const albumType of ['live', 'demo', 'ep', 'single']) {
+  assert.deepEqual(plain(createGalleryMainState().albumTypes), ['studio', 'ep']);
+  for (const albumType of ['studio', 'live', 'demo', 'compilation', 'ep', 'single']) {
     const state = createGalleryMainState();
     assert.deepEqual(
       plain(reduceGalleryMainState(state, { type: 'toggle-album-type', albumType })),
@@ -757,6 +877,39 @@ test('unavailable release types remain inert while Studio and Compilation use ca
     { key: 'family', albums: ['single'] },
   ]);
   assert.deepEqual(filtered.totals, { artistCount: 2, albumCount: 4 });
+});
+
+test('art-only Gallery hover frame covers the complete card edge', () => {
+  assert.match(
+    galleryMainCssSource,
+    /\.album-card\[data-gallery-release-year\]\[data-gallery-display="covers"\]::after\s*\{[^}]*inset:\s*-1px;[^}]*border:\s*5px solid transparent;[^}]*border-radius:\s*14px;[^}]*clip-path:/s,
+  );
+  assert.match(
+    galleryMainCssSource,
+    /\.album-card\[data-gallery-release-year\]\[data-gallery-display="covers"\]:is\(:hover, :focus-within\)::after\s*\{[^}]*border-color:\s*var\(--gallery-artbox-hover-frame,[^}]*opacity:\s*1;/s,
+  );
+  assert.doesNotMatch(galleryMainCssSource, /\.gallery-card__year-frame\s*\{/);
+});
+
+test('default Gallery filters exclude compilation metadata while type controls are unavailable', () => {
+  const context = loadRuntime();
+  const createGalleryMainState = requireContract(context, 'createGalleryMainState');
+  const filterGalleryModel = requireContract(context, 'filterGalleryModel');
+  const filtered = plain(filterGalleryModel({
+    groups: [{
+      artist: 'IR8 / Sexoturica',
+      albums: [{
+        key: 'ir8 / sexoturica::ir8 vs sexoturica',
+        name: 'IR8 vs Sexoturica',
+        is_compilation: true,
+        source: 'main_library',
+      }],
+    }],
+    filterState: createGalleryMainState(),
+  }));
+
+  assert.deepEqual(filtered.groups, []);
+  assert.deepEqual(filtered.totals, { artistCount: 0, albumCount: 0 });
 });
 
 test('targeted reconciliation updates affected groups and counts without loader, menu, scroll, or root replacement', () => {
@@ -800,6 +953,9 @@ test('scroll context distinguishes the gallery root, a selected family, and the 
   });
   assert.deepEqual(plain(resolveGalleryBarContext({ scrollTop: 0, primaryArtist: 'Neal Morse', artistCount: 2, albumCount: 10, groups })), {
     kind: 'family', primaryArtist: 'Neal Morse', artistCount: 2, albumCount: 10,
+  });
+  assert.deepEqual(plain(resolveGalleryBarContext({ scrollTop: 0, primaryArtist: 'Alestorm', hasFamily: false, artistCount: 1, albumCount: 4, groups })), {
+    kind: 'single-artist', artist: 'Alestorm', albumCount: 4,
   });
   assert.deepEqual(plain(resolveGalleryBarContext({ scrollTop: 760, galleryBarBottom: 120, primaryArtist: 'Neal Morse', artistCount: 2, albumCount: 10, groups })), {
     kind: 'artist', artist: 'Transatlantic', albumCount: 4,
@@ -871,23 +1027,49 @@ test('local artist information stays capability-bounded and leaves unavailable o
   }
 });
 
-test('family panel observes player height and changes only its own lower bound', () => {
+test('family panel reserves its lower bound only for an overlapping visible player', () => {
   const observed = [];
-  const player = { id: 'bottom-player', style: { untouched: 'yes' } };
-  const panel = { style: { bottom: '' } };
+  let playerBounds = { left: 0, right: 800, top: 684, bottom: 800, width: 800, height: 116 };
+  const player = {
+    id: 'bottom-player', hidden: false, style: { untouched: 'yes' },
+    getBoundingClientRect: () => playerBounds,
+  };
+  const panel = {
+    style: { bottom: '' },
+    getBoundingClientRect: () => ({ left: 410, right: 800, width: 390 }),
+  };
   let observerCallback;
   class ResizeObserver {
     constructor(callback) { observerCallback = callback; }
     observe(target) { observed.push(target); }
     disconnect() {}
   }
-  const context = loadRuntime({ ResizeObserver });
+  const context = loadRuntime({ ResizeObserver, window: { innerHeight: 800, innerWidth: 800 } });
   const observeArtistFamilyPanelBounds = requireContract(context, 'observeArtistFamilyPanelBounds');
   observeArtistFamilyPanelBounds({ panel, player });
-  observerCallback([{ target: player, contentRect: { height: 116 } }]);
   assert.deepEqual(observed, [player]);
   assert.equal(panel.style.bottom, '116px');
+
+  playerBounds = { left: 0, right: 96, top: 704, bottom: 800, width: 96, height: 96 };
+  observerCallback();
+  assert.equal(panel.style.bottom, '0px');
+
+  playerBounds = { left: 0, right: 800, top: 684, bottom: 800, width: 800, height: 116 };
+  player.hidden = true;
+  observerCallback();
+  assert.equal(panel.style.bottom, '0px');
   assert.deepEqual(player.style, { untouched: 'yes' });
+
+  context.refreshCount = 0;
+  vm.runInContext('galleryFamilyPanelObserver = { refresh() { refreshCount += 1; } }', context);
+  const positionArtistFamilyPanelEnvelope = requireContract(context, 'positionArtistFamilyPanelEnvelope');
+  const positionedPanel = { dataset: {}, style: { setProperty() {} }, getBoundingClientRect: () => ({ top: 52 }) };
+  const anchor = {
+    getBoundingClientRect: () => ({ bottom: 42, right: 780, width: 34, height: 34 }),
+    closest: () => ({ getBoundingClientRect: () => ({ bottom: 52 }) }),
+  };
+  positionArtistFamilyPanelEnvelope(positionedPanel, anchor);
+  assert.equal(context.refreshCount, 1);
 });
 
 test('local Gallery filters preserve the current URL and browser history', () => {
@@ -1070,6 +1252,56 @@ test('partial bootstrap gallery chrome reports empty results after all sources a
   });
   context.updateGalleryMainChrome();
   assert.equal(summary.textContent, '0 artists · 0 albums');
+});
+
+test('gallery bar stays hidden throughout active search transitions', () => {
+  assert.match(bootstrapGalleryEventHandlersSource,
+    /function updateGallerySearchDraftQuery\(nextQuery\)[\s\S]*?syncGalleryBarSearchVisibility\(\);/);
+  const name = { textContent: '' };
+  const summary = { textContent: '' };
+  const bar = { hidden: false, offsetHeight: 54,
+    querySelector: selector => selector === '[data-gallery-context-name]' ? name
+      : selector === '[data-gallery-context-summary]' ? summary : null };
+  const context = loadRuntime({ state: { gallery: {}, ui: { searchDraftQuery: '' }, view: {
+    query: '', artist_groups: [],
+  } }, document: {
+    querySelector: selector => selector === '[data-gallery-bar]' ? bar : null,
+    getElementById: id => id === 'albums-scroll' ? { scrollTop: 0 } : null,
+  } });
+  context.updateGalleryMainControls = () => {};
+  context.state.gallery.mainState = context.createGalleryMainState();
+
+  context.updateGalleryMainChrome();
+  assert.equal(bar.hidden, false);
+
+  context.state.ui.searchDraftQuery = 'neal morse';
+  context.updateGalleryMainChrome();
+  assert.equal(bar.hidden, true, 'draft query hides stale Gallery context while loading');
+
+  context.state.ui.searchDraftQuery = '';
+  context.state.view.query = 'neal morse';
+  context.updateGalleryMainChrome();
+  assert.equal(bar.hidden, true, 'committed query keeps Gallery context hidden');
+
+  context.state.ui.searchDraftQuery = 'neal morse';
+  context.state.view.selected_artist = 'Neal Morse';
+  context.syncGalleryBarSearchVisibility();
+  assert.equal(bar.hidden, false, 'resolved artist links show the Gallery family controls even when q is retained');
+
+  context.state.ui.searchDraftQuery = 'neal morse band';
+  context.syncGalleryBarSearchVisibility();
+  assert.equal(bar.hidden, true, 'editing a resolved artist query hides its stale Gallery family controls');
+
+  context.state.ui.searchDraftQuery = '';
+  context.state.view.selected_artist = '';
+  context.state.view.query = '';
+  context.updateGalleryMainChrome();
+  assert.equal(bar.hidden, false, 'clearing search restores Gallery context');
+});
+
+test('server-rendered searches hide the gallery bar only until an artist is resolved', () => {
+  assert.match(indexTemplateSource,
+    /<section class="gallery-bar"[^>]*\{% if query and not effective_selected_artist %\} hidden\{% endif %\}/);
 });
 
 test('root gallery summary counts canonical albums once across artist credits after filtering', () => {

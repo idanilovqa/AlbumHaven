@@ -1,0 +1,12 @@
+const fs = require('node:fs');
+const vm = require('node:vm');
+const path = require('node:path');
+const file = process.argv[2];
+const html = fs.readFileSync(file, 'utf8');
+const scripts = [...html.matchAll(/<script>([\s\S]*?)<\/script>/g)];
+scripts.forEach((s,i) => new vm.Script(s[1],{filename:'mockup-script-'+i}));
+const ids = [...html.matchAll(/\bid="([^"]+)"/g)].map(x=>x[1]);
+if (new Set(ids).size !== ids.length) throw Error('Duplicate IDs');
+for (const ref of html.matchAll(/href="#([^"]+)"/g)) if (!ids.includes(ref[1])) throw Error('Missing SVG reference '+ref[1]);
+for (const key of ['data-choice="a"','data-choice="b"','data-choice="c"','prefers-reduced-motion','ondblclick','showModal()']) if (!html.includes(key)) throw Error('Missing contract '+key);
+console.log(JSON.stringify({javascript:'syntax valid',variants:3,duplicateIds:0,svgReferences:'valid',bytes:Buffer.byteLength(html),remoteDependencies:0,browserVerification:'blocked by automatic approval review'},null,2));

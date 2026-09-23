@@ -161,7 +161,7 @@ export class CoverLookup extends BasePage {
   }
 
   get taskStatusWithinCardSelector() {
-    return '.cover-lookup-task-status';
+    return '.cover-lookup-task-status-label';
   }
 
   get taskElapsedWithinCardSelector() {

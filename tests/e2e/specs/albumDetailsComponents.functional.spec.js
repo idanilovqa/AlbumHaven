@@ -82,6 +82,24 @@ test('FTC-ALBUM-DETAILS-019 keeps all persisted layouts on the shared compact Al
       const artboxBounds = await artbox.boundingBox();
       expect(artboxBounds).not.toBeNull();
       expect(Math.abs(artboxBounds.width - artboxBounds.height)).toBeLessThanOrEqual(1);
+      await expect(trackModalActions.trackModal.artboxOverlay).toHaveCSS('opacity', '0');
+      await artbox.hover();
+      await expect(trackModalActions.trackModal.artboxOverlay).toHaveCSS('opacity', '1');
+      await expect(trackModalActions.trackModal.coverLookupButton).toBeVisible();
+      await expect(trackModalActions.trackModal.fastCoverFetchButton).toBeVisible();
+      await trackModalActions.trackModal.coverLookupButton.focus();
+      await expect(trackModalActions.trackModal.artboxOverlay).toHaveCSS('opacity', '1');
+      await expect(trackModalActions.trackModal.coverLightboxButton).toBeVisible();
+      const [bodyBounds, coverBounds, mainBounds] = await Promise.all([
+        trackModalActions.trackModal.body.boundingBox(),
+        trackModalActions.trackModal.cover.boundingBox(),
+        trackModalActions.trackModal.main.boundingBox(),
+      ]);
+      expect(bodyBounds).not.toBeNull();
+      expect(coverBounds).not.toBeNull();
+      expect(mainBounds).not.toBeNull();
+      expect(mainBounds.x + mainBounds.width).toBeGreaterThanOrEqual(bodyBounds.x + bodyBounds.width - 1);
+      expect(mainBounds.x).toBeGreaterThanOrEqual(coverBounds.x + coverBounds.width);
       await expect(trackModalActions.trackModal.albumTrackTable.root).toHaveAttribute('data-playing-animation', /^(enabled|disabled)$/);
       await expect(trackModalActions.trackModal.albumTrackTable.discHeadings).toHaveText(['CD 1', 'CD 2']);
       await expect(trackModalActions.trackModal.albumTrackTable.tables).toHaveCount(2);
@@ -119,6 +137,9 @@ test('FTC-ALBUM-DETAILS-019 keeps all persisted layouts on the shared compact Al
     expect(dialogBounds).not.toBeNull();
     expect(dialogBounds.width).toBeLessThanOrEqual(390);
     await expect(trackModalActions.trackModal.albumTrackTable.rows.first()).toBeVisible();
+    await expect(trackModalActions.trackModal.artboxOverlay).toBeVisible();
+    await expect(trackModalActions.trackModal.coverLookupButton).toBeVisible();
+    await expect(trackModalActions.trackModal.fastCoverFetchButton).toBeVisible();
     await trackModalActions.close();
   });
 

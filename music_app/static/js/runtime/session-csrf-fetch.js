@@ -18,6 +18,15 @@
     return '';
   };
 
+  const fetchSameOriginRead = async (input, init) => {
+    try {
+      return await originalFetch(input, init);
+    } catch (error) {
+      if (error?.name !== 'TypeError') throw error;
+      return originalFetch(input, init);
+    }
+  };
+
   window.fetch = (input, init) => {
     const requestInit = init && typeof init === 'object' ? init : undefined;
     const method = String(requestInit?.method || input?.method || 'GET').toUpperCase();
@@ -27,9 +36,12 @@
     } catch (_error) {
       return originalFetch(input, init);
     }
-    if (safeMethods.has(method) || url.origin !== window.location.origin) {
-      return originalFetch(input, init);
+    if (safeMethods.has(method)) {
+      return url.origin === window.location.origin
+        ? fetchSameOriginRead(input, init)
+        : originalFetch(input, init);
     }
+    if (url.origin !== window.location.origin) return originalFetch(input, init);
     const csrfToken = readCookie(csrfCookieName);
     if (!csrfToken) {
       return originalFetch(input, init);

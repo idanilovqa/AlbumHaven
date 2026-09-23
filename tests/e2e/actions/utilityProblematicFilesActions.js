@@ -103,6 +103,10 @@ export class UtilityProblematicFilesActions {
     };
   }
 
+  async readMountedListItemCount() {
+    return this.utilityProblematicFilesTab.listItems.count();
+  }
+
   async readRepresentativeSearchToken() {
     const items = await this.readVisibleListItems();
     return items

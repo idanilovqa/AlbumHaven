@@ -11,6 +11,7 @@ import {
   expectPostgresLibraryBrowseTelemetry,
   measureActionTime,
   measureProblematicFilesSettingsOpenWithNetworkEvidence,
+  measureUtilityTabSwitch,
   summarizeProblematicFilesDiagnostics,
   UTILITY_PROBLEMATIC_FILES_LOCAL_BENCHMARK,
 } from '../helpers/index.js';
@@ -29,8 +30,10 @@ test.describe(`${PROBLEMATIC_CASE_ID} utility-problematic-files responsiveness`,
     page,
     settingsModalAppBarActions,
     stepLogger,
+    utilityTabBarActions,
     utilityProblematicFilesActions,
     utilityProblematicFilesLocalReport,
+    utilityRulesActions,
   }) => {
     requirePostgresRuntimeEnv('the Problematic Files benchmark');
 
@@ -302,6 +305,65 @@ test.describe(`${PROBLEMATIC_CASE_ID} utility-problematic-files responsiveness`,
       })
     ));
 
+    await stepLogger.step('Warm the Rules tab before cached transition measurements', async () => {
+      await utilityTabBarActions.openTab('rules');
+      await utilityRulesActions.waitForReady({ timeout: 120000 });
+    });
+
+    const problematicCachedEnterMs = await stepLogger.step('Measure cached Rules to Problematic Files transition', async () => {
+      const timingMs = await measureUtilityTabSwitch(
+        'problematic-files',
+        utilityTabBarActions,
+        (options) => utilityProblematicFilesActions.waitForReady(options),
+      );
+      await utilityProblematicFilesLocalReport.recordTimingCheckpoint({
+        key: 'problematic-files-cached-enter',
+        label: 'Cached Rules to Problematic Files ready',
+        timingMs,
+      });
+      return timingMs;
+    });
+
+    const problematicMountedRowCount = await stepLogger.step('Verify the 706-row list is virtualized', async () => {
+      const mountedCount = await utilityProblematicFilesActions.readMountedListItemCount();
+      expect(mountedCount, 'Expected Problematic Files to mount a bounded virtual row window.').toBeLessThanOrEqual(60);
+      expect(mountedCount, 'Expected the virtual row window to contain visible rows.').toBeGreaterThan(0);
+      utilityProblematicFilesLocalReport.recordTextCheckpoint({
+        key: 'problematic-files-mounted-rows',
+        label: 'Problematic Files mounted virtual rows',
+        valueText: `${mountedCount} of 706 rows`,
+      });
+      return mountedCount;
+    });
+
+    const problematicCachedExitMs = await stepLogger.step('Measure cached Problematic Files to Rules transition', async () => {
+      const timingMs = await measureUtilityTabSwitch(
+        'rules',
+        utilityTabBarActions,
+        (options) => utilityRulesActions.waitForReady(options),
+      );
+      await utilityProblematicFilesLocalReport.recordTimingCheckpoint({
+        key: 'problematic-files-cached-exit',
+        label: 'Cached Problematic Files to Rules ready',
+        timingMs,
+      });
+      return timingMs;
+    });
+
+    const problematicCachedReenterMs = await stepLogger.step('Repeat cached Problematic Files entry', async () => {
+      const timingMs = await measureUtilityTabSwitch(
+        'problematic-files',
+        utilityTabBarActions,
+        (options) => utilityProblematicFilesActions.waitForReady(options),
+      );
+      await utilityProblematicFilesLocalReport.recordTimingCheckpoint({
+        key: 'problematic-files-cached-reenter',
+        label: 'Repeated cached Problematic Files ready',
+        timingMs,
+      });
+      return timingMs;
+    });
+
     await stepLogger.step('Close Settings cleanly after the Problematic Files pass', async () => {
       await settingsModalAppBarActions.closeSettings();
     });
@@ -313,6 +375,10 @@ test.describe(`${PROBLEMATIC_CASE_ID} utility-problematic-files responsiveness`,
       problematicReadyPerformanceStatus: problematicReadyOutcome.status,
       problematicReadyTargetMet: problematicReadyOutcome.targetMet,
       problematicReadyGraceUsed: problematicReadyOutcome.graceUsed,
+      problematicCachedEnterMs,
+      problematicCachedExitMs,
+      problematicCachedReenterMs,
+      problematicMountedRowCount,
       problematicIdleMemory,
       searchReadyMs,
       searchToken,

@@ -87,3 +87,129 @@ def test_live_selection_accent_first_use_and_existing_row_preserve_aggregate_fie
     for operation in [lambda: store.load(owner + 100000), lambda: store.save(owner + 100000, preference)]:
         with pytest.raises(RuntimeError, match="account is unavailable"):
             operation()
+
+
+def test_live_sidebar_edge_constraint_rejects_invalid_json_atomically(appearance_database):
+    from psycopg import IntegrityError
+    from psycopg.types.json import Jsonb
+
+    setup_url, _, owner = appearance_database
+    invalid = [
+        None, [], "theme", {}, {"source": "player"}, {"color": None},
+        {"source": None, "color": None}, {"source": 1, "color": None},
+        {"source": "other", "color": None},
+        {"source": "player", "color": "#123456"},
+        {"source": "theme", "color": "#123456"},
+        {"source": "custom", "color": None},
+        {"source": "custom", "color": 123456},
+        {"source": "custom", "color": "#123"},
+        {"source": "custom", "color": "#12345678"},
+        {"source": "custom", "color": "#GGGGGG"},
+        {"source": "player", "color": None, "extra": True},
+    ]
+    with isolatedPostgres._connect(setup_url) as connection:
+        connection.execute("""
+            insert into app.user_appearance_preferences (account_id, client_profile, revision)
+            values (%s, 'desktop', 4)
+        """, (owner,))
+        before = connection.execute("""
+            select * from app.user_appearance_preferences
+            where account_id = %s and client_profile = 'desktop'
+        """, (owner,)).fetchone()
+        for edge in invalid:
+            with pytest.raises(IntegrityError):
+                with connection.transaction():
+                    connection.execute("""
+                        update app.user_appearance_preferences
+                        set floating_player_edge = %s, revision = revision + 1
+                        where account_id = %s and client_profile = 'desktop'
+                    """, (Jsonb(edge), owner))
+        with pytest.raises(IntegrityError):
+            with connection.transaction():
+                connection.execute("""
+                    update app.user_appearance_preferences set floating_player_edge = null
+                    where account_id = %s and client_profile = 'desktop'
+                """, (owner,))
+        after = connection.execute("""
+            select * from app.user_appearance_preferences
+            where account_id = %s and client_profile = 'desktop'
+        """, (owner,)).fetchone()
+        assert after == before
+
+
+@pytest.mark.parametrize("write_path", ["aggregate", "canonical", "compact", "background", "device"])
+def test_live_sidebar_writes_preserve_omitted_fields_and_custom_profiles(appearance_database, write_path):
+    from copy import deepcopy
+    from music_app.services.appearance_preferences_postgres import PostgresAppearancePreferencesRepository
+    from tests.py.test_appearance_device_profiles import _aggregate_write
+
+    setup_url, runtime_url, owner = appearance_database
+    repository = PostgresAppearancePreferencesRepository(
+        {"ALBUM_HAVEN_APP_DATABASE_URL": runtime_url}, connect=isolatedPostgres._connect,
+    )
+    base = {"main_surface_color": None, "panel_background_color": None}
+    canonical = {**base, "palette_id": "parchment-pine", "panel_index": 0,
+                 "player_override": None, "compact_player_style": "docked"}
+    aggregate = _aggregate_write()
+    for field in ("docked_compact_player_regular_style", "compact_player_motion", "floating_player_edge"):
+        aggregate.pop(field, None)
+    profiles = {profile: {"sections": {"player": {"mode": "custom", "values": {
+                    "compact_player_style": "docked", "docked_compact_player_behavior": behavior,
+                    "docked_compact_player_regular_style": True,
+                    "compact_player_motion": "slow", "floating_player_edge": {"source": "custom", "color": color},
+    }}}} for profile, behavior, color in (
+        ("mobile", "artbox", "#123456"), ("tv", "float_on_collapse", "#654321"),
+    )}
+
+    def write(extra, revision, profile_values):
+        payload = {
+            "aggregate": aggregate, "canonical": canonical,
+            "compact": {**base, "compact_player_style": "docked"},
+            "background": base, "device": aggregate,
+        }[write_path]
+        if write_path == "device":
+            return repository.save_device_profiles(
+                account_id=owner, preferences={**payload, **extra},
+                device_profiles=profile_values, action_button_outlines=True,
+                expected_revision=revision,
+            )
+        return repository.save_preferences(
+            account_id=owner, preferences={**payload, **extra},
+            expected_revision=revision if write_path == "aggregate" else None,
+        )
+
+    explicit = {"docked_compact_player_regular_style": True, "compact_player_motion": "slow",
+                "floating_player_edge": {"source": "custom", "color": "#ABCDEF"}}
+    first = write(explicit, 0, profiles)
+    assert first["compact_player_motion"] == "slow"
+    assert first["docked_compact_player_regular_style"] is True
+    assert first["floating_player_edge"] == explicit["floating_player_edge"]
+    seeded = repository.save_device_profiles(
+        account_id=owner, preferences={**aggregate, **explicit},
+        device_profiles=profiles, action_button_outlines=True,
+        expected_revision=first["revision"],
+    )
+    legacy_profiles = deepcopy(profiles)
+    for profile in legacy_profiles.values():
+        profile["sections"]["player"]["values"].pop("compact_player_motion")
+        profile["sections"]["player"]["values"].pop("docked_compact_player_regular_style")
+        profile["sections"]["player"]["values"].pop("floating_player_edge")
+    omitted = write({}, seeded["revision"], legacy_profiles)
+    loaded = repository.load_preferences(account_id=owner)
+    assert loaded["revision"] == omitted["revision"] == seeded["revision"] + 1
+    assert loaded["compact_player_motion"] == "slow"
+    assert loaded["docked_compact_player_regular_style"] is True
+    assert loaded["floating_player_edge"] == explicit["floating_player_edge"]
+    saved_profiles = repository.load_device_profiles(account_id=owner)["device_profiles"]
+    for profile in ("mobile", "tv"):
+        saved = saved_profiles[profile]["sections"]["player"]["values"]
+        wanted = profiles[profile]["sections"]["player"]["values"]
+        assert saved["compact_player_motion"] == wanted["compact_player_motion"]
+        assert saved["floating_player_edge"] == wanted["floating_player_edge"]
+        assert saved["docked_compact_player_behavior"] == wanted["docked_compact_player_behavior"]
+    reset = write({"compact_player_motion": "normal",
+                   "floating_player_edge": {"source": "player", "color": None}},
+                  omitted["revision"], profiles)
+    assert reset["compact_player_motion"] == "normal"
+    assert reset["docked_compact_player_regular_style"] is True
+    assert reset["floating_player_edge"] == {"source": "player", "color": None}

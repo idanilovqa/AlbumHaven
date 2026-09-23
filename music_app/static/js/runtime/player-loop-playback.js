@@ -143,6 +143,10 @@ function setCurrentPlayerTrack(track, options = {}) {
       duration: Number(previousPlaybackSnapshot?.duration) || undefined,
     });
   }
+  if (track && !String(track.coverPath || '').trim() && typeof resolveAlbumForPlayerTrack === 'function') {
+    const resolvedCoverPath = String(resolveAlbumForPlayerTrack(track)?.cover_path || '').trim();
+    if (resolvedCoverPath) track = { ...track, coverPath: resolvedCoverPath };
+  }
   state.player.current = track;
   if (typeof probeCachedWaveformPeaks === 'function') {
     const cachedWaveformProbe = probeCachedWaveformPeaks(

@@ -936,6 +936,13 @@ export class CoverLookupActions {
     await this.coverLookup.taskOpenButtonByTitle(taskTitle).click();
   }
 
+  async openTaskWithKeyboard(taskTitle, key = 'Enter') {
+    const opener = this.coverLookup.taskOpenButtonByTitle(taskTitle);
+    await opener.focus();
+    await expect(opener).toBeFocused();
+    await opener.press(key);
+  }
+
   async waitForTaskStatus(taskTitle, expectedStatus, options = {}) {
     await expect(this.coverLookup.taskStatusByTitle(taskTitle)).toHaveText(expectedStatus, {
       timeout: options.timeout || 30000,

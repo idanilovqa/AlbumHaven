@@ -72,6 +72,10 @@ export class UtilityAppearanceTab extends BasePage {
     return this.compactPlayerStyle.button(style);
   }
 
+  dockedCompactPlayerBehaviorButton(behavior) {
+    return this.compactPlayerStyle.behaviorButton(behavior);
+  }
+
   loopStyleButton(style) {
     return this.editor.locator(`[data-loop-control-style-choice="${style}"]`);
   }

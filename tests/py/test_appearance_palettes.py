@@ -7,11 +7,15 @@ from tests.py.test_account_appearance_asgi import _actor, _app, _request
 from tests.py.test_appearance_preferences_postgres import Connection, _repository
 
 
-PALETTES = ("steelblue", "navy", "harbor-mint", "powderblue", "graphite", "slate", "midnight", "black", "blackgray", "paper", "silver", "coollight")
+PALETTES = ("steelblue", "navy", "harbor-mint", "powderblue", "graphite", "slate", "midnight", "black", "blackgray", "paper", "silver", "coollight", "parchment-pine")
 DEFAULTS = {
     "main_surface_color": None, "panel_background_color": None,
     "palette_id": None, "panel_index": 0, "player_override": None,
     "compact_player_style": "docked",
+    "docked_compact_player_behavior": "follow_sidebar",
+    "docked_compact_player_regular_style": False,
+    "compact_player_motion": "normal",
+    "floating_player_edge": {"source": "player", "color": None},
     "album_details_layout": "classic_bar",
     "album_playing_row_animation": "enabled",
     "alert_family": "ember",
@@ -133,7 +137,9 @@ def test_repository_persists_full_player_group_and_palette_in_one_account_owned_
     assert len(connection.operations) == 1
     sql, params = connection.operations[0]
     assert "on conflict (account_id, client_profile)" in sql
-    assert tuple(params) == (52, "desktop", None, None, "steelblue", 2, PLAYER["background"], PLAYER["fill"], PLAYER["edge"], [], "docked", "classic_bar", "enabled", "ember")
+    assert tuple(params[:14]) == (52, "desktop", None, None, "steelblue", 2, PLAYER["background"], PLAYER["fill"], PLAYER["edge"], [], "docked", "follow_sidebar", False, "normal")
+    assert getattr(params[14], "obj", params[14]) == {"source": "player", "color": None}
+    assert tuple(params[15:]) == ("classic_bar", "enabled", "ember")
     assert connection.closed
 
 

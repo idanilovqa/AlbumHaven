@@ -28,7 +28,7 @@
       return `
         <div class="playback-control-cluster playback-control-cluster--compact compact-player-transport" data-playback-control-cluster data-playback-control-variant="compact-player">
           <button class="compact-player-skip" type="button" data-playback-control-action="previous" data-compact-player-previous aria-label="Previous track">${renderPreviousIcon()}</button>
-          <button class="compact-player-play" type="button" data-playback-control-action="play-pause" data-compact-player-play aria-label="Play">&#9654;</button>
+          <button class="compact-player-play" type="button" data-playback-control-action="play-pause" data-compact-player-play aria-label="Play"><svg class="compact-player-play-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M8 5v14l12-7z"></path></svg></button>
           <button class="compact-player-skip" type="button" data-playback-control-action="next" data-compact-player-next aria-label="Next track">${renderNextIcon()}</button>
         </div>
       `;

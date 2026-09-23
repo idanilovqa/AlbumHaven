@@ -889,7 +889,7 @@ function loadHelpers(origin = 'http://localhost:5000') {
     scan_mode: 'manual_full_rescan',
   }))), {
     action: 'go-to-scan-page',
-    label: 'Go to Scan Page',
+    label: 'Go to Library Status Page',
     disabled: false,
   });
   assert.deepEqual(JSON.parse(JSON.stringify(resolvePrimaryStatusContextAction({
@@ -899,7 +899,7 @@ function loadHelpers(origin = 'http://localhost:5000') {
     scanPageVisible: true,
   }))), {
     action: 'go-to-scan-page',
-    label: 'Go to Scan Page',
+    label: 'Go to Library Status Page',
     disabled: false,
   });
   assert.deepEqual(JSON.parse(JSON.stringify(resolvePrimaryStatusContextAction({
@@ -907,14 +907,14 @@ function loadHelpers(origin = 'http://localhost:5000') {
     scan_mode: 'background',
   }))), {
     action: 'go-to-scan-page',
-    label: 'Go to Scan Page',
+    label: 'Go to Library Status Page',
     disabled: false,
   });
   assert.deepEqual(JSON.parse(JSON.stringify(resolvePrimaryStatusContextAction({
     covers_in_progress: true,
   }))), {
     action: 'go-to-scan-page',
-    label: 'Go to Scan Page',
+    label: 'Go to Library Status Page',
     disabled: false,
   });
   assert.deepEqual(JSON.parse(JSON.stringify(resolvePrimaryStatusContextAction({}))), {
@@ -958,7 +958,7 @@ function loadHelpers(origin = 'http://localhost:5000') {
   };
   context.ensureStatusContextMenu = () => menu;
   context.syncStatusContextMenu();
-  assert.equal(menu.primaryButton.textContent, 'Go to Scan Page');
+  assert.equal(menu.primaryButton.textContent, 'Go to Library Status Page');
   assert.equal(menu.primaryButton.disabled, false);
   assert.equal(menu.primaryButton.attrs['data-status-action'], 'go-to-scan-page');
   assert.equal(menu.coverButton.textContent, 'Cancel Album Cover Scan');

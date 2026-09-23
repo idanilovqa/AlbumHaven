@@ -1954,10 +1954,10 @@ function getSelectedTagEditorPaths(tracks) {
   let selectedPaths = Array.isArray(state.tagEditor.selectedPaths)
     ? state.tagEditor.selectedPaths.map((path) => String(path || '')).filter((path) => validPaths.has(path))
     : [];
-  if (!selectedPaths.length && state.tagEditor.selectedPath && validPaths.has(String(state.tagEditor.selectedPath))) {
+  if (!Array.isArray(state.tagEditor.selectedPaths) && state.tagEditor.selectedPath && validPaths.has(String(state.tagEditor.selectedPath))) {
     selectedPaths = [String(state.tagEditor.selectedPath)];
   }
-  if (!selectedPaths.length && tracks.length) {
+  if (!Array.isArray(state.tagEditor.selectedPaths) && !selectedPaths.length && tracks.length) {
     selectedPaths = [String(tracks[0].path || '')].filter(Boolean);
   }
   state.tagEditor.selectedPaths = selectedPaths;
@@ -1994,7 +1994,7 @@ function setTagEditorSelectedPaths(paths, anchorPath = '') {
   const selectedPaths = (paths || [])
     .map((path) => String(path || ''))
     .filter((path) => path && validPaths.has(path) && !seen.has(path) && seen.add(path));
-  state.tagEditor.selectedPaths = selectedPaths.length ? selectedPaths : [getTagEditorTrackPathAt(0)].filter(Boolean);
+  state.tagEditor.selectedPaths = selectedPaths;
   state.tagEditor.selectedPath = state.tagEditor.selectedPaths[0] || '';
   state.tagEditor.anchorPath = anchorPath || state.tagEditor.anchorPath || state.tagEditor.selectedPath;
   state.tagEditor.autoNumberStatus = '';
@@ -2042,6 +2042,54 @@ function renderTagEditorArtwork(selectedPaths) {
     : '<div class="tag-editor-artwork-placeholder">No artwork</div>';
 }
 
+function stageTagEditorTrackOrder(tracks) {
+  const orderedTracks = Array.isArray(tracks) ? tracks : [];
+  orderedTracks.forEach((track, index) => {
+    const path = String(track?.path || '');
+    if (!path) return;
+    state.tagEditor.values[path] = {
+      ...(state.tagEditor.values[path] || {}),
+      track_number: String(index + 1),
+    };
+  });
+  state.tagEditor.autoNumberActive = false;
+  state.tagEditor.autoNumberAppliedSelectionSignature = '';
+  state.tagEditor.autoNumberTrackNumberSnapshots = {};
+}
+
+function applyTagEditorTrackReorder(draggedPath, beforePath = null) {
+  const previous = Array.isArray(state.tagEditor.tracks) ? state.tagEditor.tracks : [];
+  const reordered = reorderTagEditorTracksByPath(previous, draggedPath, beforePath);
+  if (reordered.every((track, index) => track === previous[index])) return false;
+  state.tagEditor.tracks = reordered;
+  stageTagEditorTrackOrder(reordered);
+  renderTagEditor();
+  syncTagEditorAutoNumberControls();
+  return true;
+}
+
+function clearTagEditorReorderCue() {
+  const list = getTagEditorElements().list;
+  list?.classList?.remove('is-reorder-end');
+  list?.querySelectorAll?.('[data-tag-editor-track]').forEach((row) => {
+    row.classList?.remove('is-reorder-before', 'is-reorder-dragged');
+  });
+  state.tagEditor.reorder = null;
+}
+
+function showTagEditorReorderCue(beforePath = null) {
+  const list = getTagEditorElements().list;
+  if (!list) return;
+  list.classList.remove('is-reorder-end');
+  list.querySelectorAll('[data-tag-editor-track]').forEach((row) => {
+    const path = String(row.getAttribute('data-tag-editor-track') || '');
+    row.classList.toggle('is-reorder-before', Boolean(beforePath) && path === String(beforePath));
+    row.classList.toggle('is-reorder-dragged', path === String(state.tagEditor.reorder?.draggedPath || ''));
+  });
+  if (!beforePath) list.classList.add('is-reorder-end');
+  if (state.tagEditor.reorder) state.tagEditor.reorder.beforePath = beforePath || null;
+}
+
 function renderTagEditor(options = {}) {
   const els = getTagEditorElements();
   if (!els.overlay || !els.list || !els.form) return;
@@ -2076,32 +2124,34 @@ function renderTagEditor(options = {}) {
       const path = String(button.getAttribute('data-tag-editor-track') || '');
       const isSelected = selectedPathSet.has(path);
       button.classList.toggle('is-active', isSelected);
-      button.setAttribute('aria-pressed', isSelected ? 'true' : 'false');
+      button.querySelector?.('.tag-editor-track-select')
+        ?.setAttribute?.('aria-pressed', isSelected ? 'true' : 'false');
     });
   } else {
     const rows = tracks.map((track) => {
       const path = String(track.path || '');
       const fileType = getFileTypeFromPath(path);
       const filename = getFilenameFromPath(path) || track.title || path;
-      const content = `
-        <button class="tag-editor-track ${selectedPathSet.has(path) ? 'is-active' : ''}" type="button" data-tag-editor-track="${escapeHtml(path)}" aria-pressed="${selectedPathSet.has(path) ? 'true' : 'false'}" title="${escapeHtml(path)}">
-          <span class="tag-editor-track-title">${escapeHtml(filename)}</span>
-          ${fileType ? `<span class="utility-repair-file-type">${escapeHtml(fileType)}</span>` : ''}
-        </button>
+      return `
+        <div class="tag-editor-track ${selectedPathSet.has(path) ? 'is-active' : ''}" role="listitem" data-tag-editor-track="${escapeHtml(path)}" title="${escapeHtml(path)}">
+          <span class="tag-editor-track-accent" aria-hidden="true"></span>
+          <button class="tag-editor-reorder-grip" type="button" draggable="true" data-tag-editor-reorder-grip="${escapeHtml(path)}" aria-label="Reorder ${escapeHtml(filename)}; use Arrow Up or Arrow Down"><span aria-hidden="true">⋮⋮</span></button>
+          <button class="tag-editor-track-select" type="button" aria-pressed="${selectedPathSet.has(path) ? 'true' : 'false'}">
+            <span class="tag-editor-track-title">${escapeHtml(filename)}</span>
+            ${fileType ? `<span class="utility-repair-file-type">${escapeHtml(fileType)}</span>` : ''}
+          </button>
+        </div>
       `;
-      return { key: path, cells: { file: content } };
     });
-    els.list.innerHTML = buildCompactDataTable({
-      id: 'tag-editor-files-table', ariaLabel: 'Files to edit',
-      columns: 'minmax(0, 1fr)', headers: 'screen-reader', density: 'compact',
-      frame: 'inset', overflow: 'none',
-      columnsConfig: [{ key: 'file', label: 'File' }], rows,
-    });
+    els.list.setAttribute('role', 'list');
+    els.list.setAttribute('aria-label', 'Files to edit');
+    els.list.innerHTML = rows.join('');
   }
 
   els.form.querySelectorAll('[data-tag-field]').forEach((input) => {
     const field = input.getAttribute('data-tag-field') || '';
     const displayValue = getTagEditorFieldDisplayValue(field, selectedPaths);
+    input.disabled = selectedPaths.length === 0;
     input.value = displayValue.value;
     input.placeholder = displayValue.mixed ? 'Mixed values' : '';
   });

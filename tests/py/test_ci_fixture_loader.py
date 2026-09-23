@@ -690,7 +690,7 @@ def _synthetic_v102_problematic_files_assertion() -> dict[str, object]:
         for index in range(1, 11)
     )
     return {
-        "problematicItemCount": 18,
+        "problematicItemCount": 706,
         "candidateTrackFileCount": 125,
         "expectedProblemTypes": [
             "Encoding problem",
@@ -719,10 +719,10 @@ def _synthetic_v102_problematic_files_assertion() -> dict[str, object]:
 UTILITY_PROBLEMATIC_PROFILE = "utility-problematic-files"
 UTILITY_PROBLEMATIC_COUNTS = {
     "artists": 40,
-    "albums": 400,
+    "albums": 706,
     "tracks": 7200,
     "trackFiles": 7200,
-    "covers": 386,
+    "covers": 627,
 }
 
 
@@ -854,7 +854,7 @@ def test_loader_fails_closed_when_aria_exclusive_selection_ownership_mismatches(
 @pytest.mark.parametrize(
     "mutation",
     [
-        lambda value: value.update(problematicItemCount=17),
+        lambda value: value.update(problematicItemCount=705),
         lambda value: value.update(candidateTrackFileCount=124),
         lambda value: value["expectedProblemTypes"].append("Missing year"),
         lambda value: value["expectedProblemReasons"].pop(),
@@ -983,7 +983,7 @@ def test_loader_staged_problematic_files_validation_covers_required_row_shapes()
     assert "Synthetic Problem Control Artist" in serialized_parameters
     assert "Missing Cover Control 10" in serialized_parameters
     assert "Incomplete track order: Disc 2 missing 1, 2, 3" in serialized_parameters
-    for expected in (40, 400, 7200, 386, 125, 18, 14):
+    for expected in (40, 706, 7200, 627, 125, 706, 14):
         assert str(expected) in serialized_parameters
     assertion = _synthetic_v102_problematic_files_assertion()
     for album in assertion["expectedProblematicAlbums"]:
@@ -1090,7 +1090,7 @@ def test_loader_projected_problematic_files_validation_uses_normal_profile_rows(
         [parameters for _statement, parameters in statements], ensure_ascii=False
     )
     assert UTILITY_PROBLEMATIC_PROFILE in serialized_parameters
-    for expected in (40, 400, 7200, 386, 125, 18, 14):
+    for expected in (40, 706, 7200, 627, 125, 706, 14):
         assert str(expected) in serialized_parameters
     for album in _synthetic_v102_problematic_files_assertion()[
         "expectedProblematicAlbums"

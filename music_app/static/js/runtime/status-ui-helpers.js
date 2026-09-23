@@ -138,7 +138,7 @@ function ensureStatusContextMenu() {
   menu.innerHTML = [
     ['scan-action', 'full-rescan', 'Full Rescan'],
     ['cover-action', 'fetch-covers', 'Fetch Album Covers'],
-    ['scan-page', 'go-to-scan-page', 'Open Library/Scan'],
+    ['scan-page', 'go-to-scan-page', 'Open Library Status Page'],
   ].map(([role, action, label]) => ButtonComponent.renderButton({
     label, className: 'gallery-menu-action',
     attributes: { 'data-status-role': role, 'data-status-action': action },
@@ -155,7 +155,7 @@ function resolvePrimaryStatusContextAction(status = {}, options = {}) {
   if (anyBusy) {
     return {
       action: 'go-to-scan-page',
-      label: 'Go to Scan Page',
+      label: 'Go to Library Status Page',
       disabled: false,
     };
   }

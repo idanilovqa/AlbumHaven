@@ -58,7 +58,7 @@ function ensureVersionPickerModal() {
         <div class="version-picker-list" data-version-picker-list></div>
       </div>
       <div class="confirm-modal-actions version-picker-actions">
-        <button type="button" class="button version-picker-cancel" data-close-version-picker="1">Cancel</button>
+        <button type="button" class="button ui-button ui-button--quiet ui-button--medium version-picker-cancel" data-close-version-picker="1">Cancel</button>
         <button type="button" class="button version-picker-save" data-save-version-picker="1">Save</button>
       </div>
     </div>

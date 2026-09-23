@@ -2170,6 +2170,33 @@
     "ownerApproval": "approved"
   },
   {
+    "config": "playwright.config.js",
+    "project": "functional",
+    "test": "tests/e2e/specs/tagEditorSelectionReorder.spec.js",
+    "case": "FTC-TAGS-025 preserves selection and reorder semantics through cancel and apply",
+    "profile": "functional-core",
+    "setupScope": "isolated",
+    "stateMode": "owned-mutation",
+    "setupGroup": "editor-controls",
+    "executionWave": 3,
+    "databaseScenarios": [
+      "tag-edit:selection-reorder"
+    ],
+    "filesystemScenarios": [
+      "media-copy:tag-editor-selection-reorder"
+    ],
+    "expectedContracts": [
+      "pointer-and-modifier-selection",
+      "grip-only-pointer-and-keyboard-reorder",
+      "cancel-rollback-and-apply-persistence"
+    ],
+    "mutationOwnership": {
+      "databaseIdentity": "case:tag-editor-selection-reorder",
+      "filesystemCopy": "media/cases/tag-editor-selection-reorder"
+    },
+    "ownerApproval": "approved"
+  },
+  {
     "config": "playwright.autoplay-allowed.config.js",
     "project": "reload-autoplay-allowed",
     "test": "tests/e2e/specs/playerReloadAutoplayAllowed.spec.js",
@@ -3124,16 +3151,66 @@
     ],
     "ownerApproval": "approved"
   },
+  {
+    "config": "playwright.config.js",
+    "project": "functional",
+    "test": "tests/e2e/specs/playerViewModes.spec.js",
+    "case": "FTC-ARTIST-TREE-001 folding reflows the virtual gallery without losing browse or player state",
+    "profile": "functional-core",
+    "setupScope": "isolated",
+    "stateMode": "owned-mutation",
+    "executionWave": 2,
+    "databaseScenarios": ["gallery-search:artist-tree-fold", "playback:artist-tree-fold"],
+    "filesystemScenarios": ["audio-copy:artist-tree-fold"],
+    "expectedContracts": ["artist-tree-reflow", "browse-state-preservation", "persistent-player-node", "reduced-motion-fold"],
+    "mutationOwnership": {
+      "databaseIdentity": "case:artist-tree-fold",
+      "filesystemCopy": "media/cases/artist-tree-fold"
+    },
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/buttonInteractionOutline.spec.js",
+    "case": "non-green player surfaces derive computed action hover colors and bare chrome keeps focus",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "player-derived-action-hover",
+      "bare-action-focus"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/artistTreeReflow.spec.js",
+    "case": "folding Artist Tree reclaims layout width and preserves the persistent player node",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "artist-tree-fold-reflow",
+      "persistent-player-identity"
+    ],
+    "ownerApproval": "approved"
+  },
   { "config": "playwright.component.config.js", "project": "", "test": "tests/components/searchInput.spec.js", "case": "Search: typing owns the field cue; keyboard action focus owns only its button", "profile": null, "setupScope": "suite", "stateMode": "read-only", "databaseScenarios": [], "filesystemScenarios": [], "expectedContracts": ["search-field-cue", "keyboard-action-focus"], "ownerApproval": "approved" },
   { "config": "playwright.component.config.js", "project": "", "test": "tests/components/searchInput.spec.js", "case": "Search: joined suggestions and open anchors retain their own boundary", "profile": null, "setupScope": "suite", "stateMode": "read-only", "databaseScenarios": [], "filesystemScenarios": [], "expectedContracts": ["search-suggestions-boundary", "open-anchor-boundary"], "ownerApproval": "approved" },
   { "config": "playwright.component.config.js", "project": "", "test": "tests/components/searchInput.spec.js", "case": "Search: pointer-down has no field glow before click after typing=false", "profile": null, "setupScope": "suite", "stateMode": "read-only", "databaseScenarios": [], "filesystemScenarios": [], "expectedContracts": ["pointer-focus-ownership", "search-field-cue"], "ownerApproval": "approved" },
   { "config": "playwright.component.config.js", "project": "", "test": "tests/components/searchInput.spec.js", "case": "Search: pointer-down has no field glow before click after typing=true", "profile": null, "setupScope": "suite", "stateMode": "read-only", "databaseScenarios": [], "filesystemScenarios": [], "expectedContracts": ["pointer-focus-ownership", "search-field-cue"], "ownerApproval": "approved" },
-  { "config": "playwright.component.config.js", "project": "", "test": "tests/components/searchInput.spec.js", "case": "Search: native clear keeps input focus and its field cue", "profile": null, "setupScope": "suite", "stateMode": "read-only", "databaseScenarios": [], "filesystemScenarios": [], "expectedContracts": ["native-clear-focus", "search-field-cue"], "ownerApproval": "approved" },
+  { "config": "playwright.component.config.js", "project": "", "test": "tests/components/searchInput.spec.js", "case": "Search: explicit clear is leftmost, empties the field, and restores input focus", "profile": null, "setupScope": "suite", "stateMode": "read-only", "databaseScenarios": [], "filesystemScenarios": [], "expectedContracts": ["explicit-clear-focus", "search-field-cue"], "ownerApproval": "approved" },
   { "config": "playwright.component.config.js", "project": "", "test": "tests/components/searchInput.spec.js", "case": "Filters: typing owns the field cue; keyboard action focus owns only its button", "profile": null, "setupScope": "suite", "stateMode": "read-only", "databaseScenarios": [], "filesystemScenarios": [], "expectedContracts": ["filter-field-cue", "keyboard-action-focus"], "ownerApproval": "approved" },
   { "config": "playwright.component.config.js", "project": "", "test": "tests/components/searchInput.spec.js", "case": "Filters: joined suggestions and open anchors retain their own boundary", "profile": null, "setupScope": "suite", "stateMode": "read-only", "databaseScenarios": [], "filesystemScenarios": [], "expectedContracts": ["filter-suggestions-boundary", "open-anchor-boundary"], "ownerApproval": "approved" },
   { "config": "playwright.component.config.js", "project": "", "test": "tests/components/searchInput.spec.js", "case": "Filters: pointer-down has no field glow before click after typing=false", "profile": null, "setupScope": "suite", "stateMode": "read-only", "databaseScenarios": [], "filesystemScenarios": [], "expectedContracts": ["pointer-focus-ownership", "filter-field-cue"], "ownerApproval": "approved" },
   { "config": "playwright.component.config.js", "project": "", "test": "tests/components/searchInput.spec.js", "case": "Filters: pointer-down has no field glow before click after typing=true", "profile": null, "setupScope": "suite", "stateMode": "read-only", "databaseScenarios": [], "filesystemScenarios": [], "expectedContracts": ["pointer-focus-ownership", "filter-field-cue"], "ownerApproval": "approved" },
-  { "config": "playwright.component.config.js", "project": "", "test": "tests/components/searchInput.spec.js", "case": "Filters: native clear keeps input focus and its field cue", "profile": null, "setupScope": "suite", "stateMode": "read-only", "databaseScenarios": [], "filesystemScenarios": [], "expectedContracts": ["native-clear-focus", "filter-field-cue"], "ownerApproval": "approved" },
+  { "config": "playwright.component.config.js", "project": "", "test": "tests/components/searchInput.spec.js", "case": "Filters: explicit clear is leftmost, empties the field, and restores input focus", "profile": null, "setupScope": "suite", "stateMode": "read-only", "databaseScenarios": [], "filesystemScenarios": [], "expectedContracts": ["explicit-clear-focus", "filter-field-cue"], "ownerApproval": "approved" },
   { "config": "playwright.component.config.js", "project": "", "test": "tests/components/searchInput.spec.js", "case": "calendar shares input, action press, and keyboard focus ownership", "profile": null, "setupScope": "suite", "stateMode": "read-only", "databaseScenarios": [], "filesystemScenarios": [], "expectedContracts": ["calendar-input-focus", "shared-action-press"], "ownerApproval": "approved" },
   { "config": "playwright.component.config.js", "project": "", "test": "tests/components/searchInput.spec.js", "case": "library path shares input, action press, and keyboard focus ownership", "profile": null, "setupScope": "suite", "stateMode": "read-only", "databaseScenarios": [], "filesystemScenarios": [], "expectedContracts": ["library-path-focus", "shared-action-press"], "ownerApproval": "approved" },
   { "config": "playwright.component.config.js", "project": "", "test": "tests/components/searchInput.spec.js", "case": "account password shares input, action press, and keyboard focus ownership", "profile": null, "setupScope": "suite", "stateMode": "read-only", "databaseScenarios": [], "filesystemScenarios": [], "expectedContracts": ["account-password-focus", "shared-action-press"], "ownerApproval": "approved" },

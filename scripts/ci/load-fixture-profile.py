@@ -139,10 +139,10 @@ _PROBLEMATIC_FILES_ALBUMS = (
 _UTILITY_PROBLEMATIC_PROFILE = "utility-problematic-files"
 _UTILITY_PROBLEMATIC_COUNTS = {
     "artists": 40,
-    "albums": 400,
+    "albums": 706,
     "tracks": 7200,
     "trackFiles": 7200,
-    "covers": 386,
+    "covers": 627,
 }
 _UTILITY_PROBLEMATIC_ASSERTION_KEYS = frozenset(
     {
@@ -815,7 +815,7 @@ def _problematic_files_filtering_contract(
         for row in normalized_albums
     }
     if (
-        value.get("problematicItemCount") != 18
+            value.get("problematicItemCount") != 706
         or value.get("candidateTrackFileCount") != 125
         or value.get("expectedProblemTypes") != list(_PROBLEMATIC_FILES_TYPES)
         or value.get("expectedProblemReasons") != list(_PROBLEMATIC_FILES_REASONS)
@@ -826,7 +826,7 @@ def _problematic_files_filtering_contract(
     ):
         raise ValueError("fixture named scenario mismatch: problematic-files-filtering")
     return {
-        "problematicItemCount": 18,
+            "problematicItemCount": 706,
         "candidateTrackFileCount": 125,
         "expectedProblemTypes": list(_PROBLEMATIC_FILES_TYPES),
         "expectedProblemReasons": list(_PROBLEMATIC_FILES_REASONS),

@@ -22,6 +22,10 @@ EXTENDED_DEFAULTS = {
     "player_override": None,
     "waveform_recent_colors": [],
     "compact_player_style": "docked",
+    "docked_compact_player_behavior": "follow_sidebar",
+    "docked_compact_player_regular_style": False,
+    "compact_player_motion": "normal",
+    "floating_player_edge": {"source": "player", "color": None},
     "album_details_layout": "classic_bar",
     "album_playing_row_animation": "enabled",
     "alert_family": "ember",
@@ -350,6 +354,8 @@ def test_direct_account_settings_embeds_its_authenticated_theme_before_body_rend
         "selection_accent": {"enabled": True, "color": "#34CA78"},
         "player_style_override": None,
         "player_recent_sets": [],
+        "action_button_outlines": True,
+        "device_profiles": {},
         "load_error": False,
     }
     assert bootstrap.end() < html.index("<body")
@@ -377,7 +383,7 @@ def test_shell_bootstrap_embeds_the_current_aggregate_revision_before_the_editor
     html = body.decode("utf-8")
     bootstrap = re.search(r'<script\b[^>]*\bid="appearance-bootstrap"[^>]*>(.*?)</script>', html, re.S)
     assert bootstrap is not None
-    assert json.loads(bootstrap.group(1)) == {**AGGREGATE_APPEARANCE, "loop_control_style": style, "load_error": False}
+    assert json.loads(bootstrap.group(1)) == {**AGGREGATE_APPEARANCE, "loop_control_style": style, "action_button_outlines": True, "device_profiles": {}, "load_error": False}
 
 
 def test_get_returns_one_complete_revisioned_appearance_snapshot_and_csrf():
@@ -503,3 +509,142 @@ def test_production_app_registers_each_appearance_method_once():
         ("GET", "/account/appearance"),
         ("PUT", "/account/appearance"),
     ]
+
+
+def test_get_uses_atomic_device_profile_snapshot_when_repository_supports_it():
+    app, repository, _resolver = _app()
+    snapshot = {
+        **AGGREGATE_APPEARANCE,
+        "loop_control_style": "capsule",
+        "action_button_outlines": False,
+        "device_profiles": {"mobile": {"sections": {}}, "tv": {"sections": {}}},
+    }
+    reads = []
+    repository.load_device_profiles = lambda *, account_id: reads.append(account_id) or snapshot
+
+    status, _headers, body = _request(app)
+
+    assert status == 200
+    assert decode_json(body) == {
+        **snapshot,
+        "csrf_token": issue_session_csrf(SESSION, app.state.auth_policy_config),
+    }
+    assert reads == [41]
+    assert repository.reads == []
+
+
+def test_mobile_shell_hydration_resolves_the_saved_mobile_profile():
+    from music_app.routes.appearance_asgi import load_appearance_context
+
+    app, repository, _resolver = _app()
+    snapshot = {
+        **AGGREGATE_APPEARANCE,
+        "loop_control_style": "capsule",
+        "action_button_outlines": True,
+        "device_profiles": {
+            "mobile": {
+                "sections": {
+                    "main": {
+                        "mode": "custom",
+                        "values": {
+                            "main_surface_color": "#112233",
+                            "panel_background_color": "#445566",
+                        },
+                    },
+                    "interaction": {
+                        "mode": "custom",
+                        "values": {"action_button_outlines": False},
+                    },
+                },
+            },
+            "tv": {"sections": {}},
+        },
+    }
+    reads = []
+    repository.load_device_profiles = lambda *, account_id: reads.append(account_id) or snapshot
+    request = _shell_request(app, _actor())
+    request.state.policy_evaluation = SimpleNamespace(
+        audit=SimpleNamespace(client_surface_class="mobile"),
+    )
+
+    context = asyncio.run(load_appearance_context(request))
+
+    assert context["appearance_preferences"]["main_surface_color"] == "#112233"
+    assert context["appearance_preferences"]["panel_background_color"] == "#445566"
+    assert context["appearance_preferences"]["action_button_outlines"] is False
+    assert reads == [41]
+    assert repository.reads == []
+
+
+def test_put_forwards_device_profiles_and_outline_with_the_aggregate_atomically():
+    app, repository, _resolver = _app()
+    submitted = {
+        **{
+            key: value
+            for key, value in AGGREGATE_APPEARANCE.items()
+            if key not in {"revision", "player_recent_sets"}
+        },
+        "loop_control_style": "capsule",
+        "expected_revision": 7,
+        "applied_player_set": None,
+        "action_button_outlines": False,
+        "device_profiles": {},
+    }
+    saved = {
+        **AGGREGATE_APPEARANCE,
+        "loop_control_style": "capsule",
+        "revision": 8,
+        "action_button_outlines": False,
+        "device_profiles": {"mobile": {"sections": {}}, "tv": {"sections": {}}},
+    }
+    captured = []
+
+    def save_device_profiles(**kwargs):
+        captured.append(kwargs)
+        return saved
+
+    repository.save_device_profiles = save_device_profiles
+    status, _headers, body = _request(app, "PUT", submitted)
+
+    assert status == 200
+    assert decode_json(body) == saved
+    assert len(captured) == 1
+    assert captured[0]["account_id"] == 41
+    assert captured[0]["expected_revision"] == 7
+    assert captured[0]["device_profiles"] == {}
+    assert captured[0]["action_button_outlines"] is False
+    assert "device_profiles" not in captured[0]["preferences"]
+    assert "action_button_outlines" not in captured[0]["preferences"]
+    assert repository.writes == []
+
+def test_device_profile_conflict_returns_current_profiles_and_outline():
+    from music_app.services.appearance_preferences_postgres import AppearanceRevisionConflict
+
+    app, repository, _resolver = _app()
+    submitted = {
+        **{
+            key: value
+            for key, value in AGGREGATE_APPEARANCE.items()
+            if key not in {"revision", "player_recent_sets"}
+        },
+        "expected_revision": 7,
+        "applied_player_set": None,
+        "action_button_outlines": False,
+        "device_profiles": {},
+    }
+    current = {
+        **AGGREGATE_APPEARANCE,
+        "loop_control_style": "capsule",
+        "revision": 9,
+        "action_button_outlines": True,
+        "device_profiles": {"mobile": {"sections": {}}, "tv": {"sections": {}}},
+    }
+
+    def save_device_profiles(**_kwargs):
+        raise AppearanceRevisionConflict(current=current)
+
+    repository.save_device_profiles = save_device_profiles
+    status, _headers, body = _request(app, "PUT", submitted)
+
+    assert status == 409
+    assert decode_json(body) == {"error": "appearance_conflict", "appearance": current}

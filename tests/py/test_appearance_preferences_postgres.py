@@ -20,6 +20,10 @@ EXTENDED_DEFAULTS = {
     "player_override": None,
     "waveform_recent_colors": [],
     "compact_player_style": "docked",
+    "docked_compact_player_behavior": "follow_sidebar",
+    "docked_compact_player_regular_style": False,
+    "compact_player_motion": "normal",
+    "floating_player_edge": {"source": "player", "color": None},
     "album_details_layout": "classic_bar",
     "album_playing_row_animation": "enabled",
     "alert_family": "ember",
@@ -228,6 +232,43 @@ def test_normalizer_accepts_only_the_complete_closed_aggregate_snapshot():
     assert normalize_appearance_preferences(payload) == payload
 
 
+@pytest.mark.parametrize("behavior", ["follow_sidebar", "stay_docked"])
+def test_normalizer_accepts_closed_docked_compact_player_behavior(behavior):
+    from music_app.services.appearance_preferences_postgres import normalize_appearance_preferences
+
+    payload = aggregate_write(docked_compact_player_behavior=behavior)
+
+    assert normalize_appearance_preferences(payload)["docked_compact_player_behavior"] == behavior
+
+
+@pytest.mark.parametrize("behavior", [None, "", "follow", "stay-docked", 1])
+def test_normalizer_rejects_unknown_docked_compact_player_behavior(behavior):
+    from music_app.services.appearance_preferences_postgres import normalize_appearance_preferences
+
+    with pytest.raises(ValueError, match="docked compact player behavior"):
+        normalize_appearance_preferences(aggregate_write(docked_compact_player_behavior=behavior))
+
+
+def test_normalizer_accepts_boolean_docked_compact_player_regular_style():
+    from music_app.services.appearance_preferences_postgres import normalize_appearance_preferences
+
+    for enabled in (False, True):
+        normalized = normalize_appearance_preferences(
+            aggregate_write(docked_compact_player_regular_style=enabled)
+        )
+        assert normalized["docked_compact_player_regular_style"] is enabled
+
+
+@pytest.mark.parametrize("value", [None, 0, 1, "false", "true", [], {}])
+def test_normalizer_rejects_non_boolean_docked_compact_player_regular_style(value):
+    from music_app.services.appearance_preferences_postgres import normalize_appearance_preferences
+
+    with pytest.raises(ValueError, match="Docked compact player regular style"):
+        normalize_appearance_preferences(
+            aggregate_write(docked_compact_player_regular_style=value)
+        )
+
+
 @pytest.mark.parametrize("source", ["automatic", "theme", "player"])
 def test_normalizer_accepts_linked_outline_sources(source):
     from music_app.services.appearance_preferences_postgres import normalize_appearance_preferences
@@ -388,6 +429,7 @@ def test_repository_conditionally_saves_every_section_and_increments_revision_in
     assert result == {**saved, "loop_control_style": "capsule"}
     assert len(connection.operations) == 1
     sql, params = connection.operations[0]
+    assert sql.count("%s") == len(params)
     assert "app.user_appearance_preferences" in sql
     assert "revision" in sql
     assert "revision + 1" in sql or "revision+1" in sql

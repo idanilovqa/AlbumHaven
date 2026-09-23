@@ -629,6 +629,13 @@
               "test": "tests/e2e/specs/tagEditorBackdrop.spec.js",
               "case": "FTC-TAGS-016 tag editor backdrop closes only when no tag changes are pending",
               "area": "tag-edit"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/tagEditorSelectionReorder.spec.js",
+              "case": "FTC-TAGS-025 preserves selection and reorder semantics through cancel and apply",
+              "area": "tag-edit"
             }
           ]
         }
@@ -858,6 +865,14 @@
               "test": "tests/e2e/specs/playerViewModes.spec.js",
               "case": "FTC-PLAYER-019 / FTC-PLAYER-020 / FTC-PLAYER-021 / FTC-PLAYER-022 switches expanded, docked, and floating player views without sharing runner state",
               "area": "playback"
+            },
+
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/playerViewModes.spec.js",
+              "case": "FTC-ARTIST-TREE-001 folding reflows the virtual gallery without losing browse or player state",
+              "area": "gallery-search"
             },
             {
               "config": "playwright.config.js",

@@ -1,0 +1,14 @@
+{
+  "status": "A/C revision pending visual review; B accepted",
+  "artifact": "mockup.html",
+  "requirements": "requirements.md",
+  "theme": "theme.json",
+  "previous": "../v002/mockup.html",
+  "acceptedVariant": "B",
+  "changes": [
+    "single top tree toggle icon",
+    "A bottom play; artwork unfolds upward; no compact chevron",
+    "C corner play 6px lower"
+  ],
+  "productionImplemented": false
+}

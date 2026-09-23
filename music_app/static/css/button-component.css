@@ -29,11 +29,31 @@
 .ui-button__content { display: inline-flex; align-items: center; justify-content: center; line-height: 1; }
 .ui-button--medium { min-height: 34px; }
 .ui-button--small { min-height: 26px; }
+.ui-button--primary {
+  border-color: var(--appearance-primary-button, var(--accent));
+  background: var(--appearance-primary-button, var(--accent));
+  color: var(--appearance-primary-button-ink, #fff);
+  font-weight: 700;
+}
+.ui-button--secondary {
+  border-color: var(--appearance-line, var(--border));
+  background: var(--appearance-neutral-button-background, var(--appearance-control, var(--panel)));
+  color: var(--appearance-ink, var(--text));
+}
+:root .ui-button.ui-button--quiet {
+  border-color: var(--appearance-line, var(--border));
+  background: transparent;
+  color: var(--appearance-ink, var(--text));
+}
 .ui-button--icon { padding: 0; aspect-ratio: 1; }
 .ui-button:hover:not(:disabled):not([aria-disabled='true']) {
-  border-color: var(--appearance-interaction-outline, var(--appearance-accent, #72baff));
-  outline-color: var(--appearance-interaction-outline, var(--appearance-accent, #72baff));
+  border-color: var(--appearance-item-action-hover-border, var(--appearance-line, #526173));
   background: var(--appearance-item-action-hover-background, var(--appearance-hover, #293a50));
+}
+.ui-button--primary:hover:not(:disabled):not([aria-disabled='true']) {
+  border-color: color-mix(in srgb, var(--appearance-primary-button, var(--accent)) 80%, white);
+  background: color-mix(in srgb, var(--appearance-primary-button, var(--accent)) 88%, white);
+  color: var(--appearance-primary-button-ink, #fff);
 }
 .ui-button:active:not(:disabled):not([aria-disabled='true']) {
   background: var(--appearance-item-action-pressed, var(--appearance-item-action-hover-background, var(--appearance-hover, #293a50)));
@@ -41,11 +61,12 @@
 .ui-button:focus-visible {
   outline-color: var(--appearance-interaction-outline, var(--appearance-accent, #72baff));
 }
-.ui-button--quiet:hover:not(:disabled):not([aria-disabled='true']) {
-  background: color-mix(in srgb, currentColor 6%, transparent);
+:root .ui-button.ui-button--quiet:hover:not(:disabled):not([aria-disabled='true']) {
+  border-color: var(--appearance-item-action-hover-border, var(--appearance-line, var(--border)));
+  background: transparent;
 }
-.ui-button--quiet:active:not(:disabled):not([aria-disabled='true']) {
-  background: color-mix(in srgb, currentColor 10%, transparent);
+:root .ui-button.ui-button--quiet:active:not(:disabled):not([aria-disabled='true']) {
+  background: transparent;
 }
 .ui-button:disabled, .ui-button[aria-disabled='true'] { cursor: not-allowed; }
 
@@ -75,7 +96,7 @@
   border-radius: 8px;
   outline: 1px solid transparent;
   outline-offset: 1px;
-  background: var(--appearance-control, var(--app-control, var(--panel, #1e2c3e)));
+  background: var(--appearance-neutral-button-background, var(--appearance-control, var(--app-control, var(--panel, #1e2c3e))));
   color: var(--appearance-ink, var(--app-ink, var(--text, #f3f6fa)));
   font: inherit;
   transition: background 150ms ease, border-color 150ms ease, color 150ms ease, outline-color 150ms ease;
@@ -102,8 +123,7 @@
 }
 .action-button--round { border-radius: 50%; }
 .action-button:hover:not(:disabled):not([aria-disabled='true']) {
-  border-color: var(--appearance-interaction-outline, var(--appearance-accent, #72baff));
-  outline-color: var(--appearance-interaction-outline, var(--appearance-accent, #72baff));
+  border-color: var(--appearance-item-action-hover-border, var(--appearance-line, #526173));
   background: var(--appearance-item-action-hover-background, var(--appearance-hover, #293a50));
 }
 .action-button:active:not(:disabled):not([aria-disabled='true']) {
@@ -111,6 +131,17 @@
 }
 .action-button:focus-visible {
   outline-color: var(--appearance-interaction-outline, var(--appearance-accent, #72baff));
+}
+.action-button--bare:not(.trigger-anchor-open):not(.global-player *),
+:root[data-action-button-outlines='off'] .action-button:not(.trigger-anchor-open):not(.global-player *):not(.action-button--destructive) {
+  border-color: transparent;
+  background: transparent;
+  box-shadow: none;
+}
+.action-button--bare:not(.trigger-anchor-open):not(.global-player *):hover:not(:disabled):not([aria-disabled='true']),
+:root[data-action-button-outlines='off'] .action-button:not(.trigger-anchor-open):not(.global-player *):not(.action-button--destructive):hover:not(:disabled):not([aria-disabled='true']) {
+  border-color: transparent;
+  background: color-mix(in srgb, var(--appearance-item-action-hover-background, var(--appearance-hover, #293a50)) 45%, transparent);
 }
 .action-button--destructive {
   --appearance-interaction-outline: var(--appearance-error, #ef5350);

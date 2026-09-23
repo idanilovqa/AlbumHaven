@@ -36,19 +36,7 @@
 .search-field input[type='search']::-webkit-search-cancel-button {
   -webkit-appearance: none;
   appearance: none;
-  width: 26px;
-  height: 26px;
-  cursor: pointer;
-  margin: 0 0 0 4px;
-  border-radius: 4px;
-  background-image: linear-gradient(45deg, transparent 42%, currentColor 42%, currentColor 58%, transparent 58%),
-    linear-gradient(-45deg, transparent 42%, currentColor 42%, currentColor 58%, transparent 58%);
-  background-size: 9px 9px;
-  background-position: center;
-  background-repeat: no-repeat;
-}
-.search-field input[type='search']::-webkit-search-cancel-button:hover {
-  background-color: var(--search-field-hover, var(--panel-2));
+  display: none;
 }
 :root .search-field .search-field-control > input[type='search']:focus-visible,
 :root .search-field .search-field-action > .search-field-button:focus-visible {
@@ -57,6 +45,7 @@
   box-shadow: none;
 }
 .search-field-action { display: flex; align-items: stretch; padding: 2px; }
+.search-field-action > .search-field-button[hidden] { display: none; }
 .search-field-action > .search-field-button {
   appearance: none;
   display: inline-grid;
@@ -81,12 +70,21 @@
    Its bridge must paint over the enclosing field border without clipping. */
 :root .search-field-control:has(.search-field-button.trigger-anchor-open) {
   outline: none;
+  border-bottom-right-radius: 0;
 }
 .search-field-action > .search-field-button.trigger-anchor-open {
   overflow: visible;
-  z-index: 1;
+  z-index: 41;
 }
-
+/* Portaled dialogs can paint above the field regardless of the button's z-index.
+   Their shadows must not introduce a divider across the connected surface. */
+:root .trigger-anchor-surface[data-trigger-anchor-search="true"] {
+  box-shadow: none;
+}
+.search-field-action > .search-field-button.trigger-anchor-open::after {
+  /* Overlap the menu by one pixel so fractional field edges cannot leak through. */
+  height: calc(var(--trigger-anchor-gap, 0px) + 4px);
+}
 .recent-search-popover { position: fixed; z-index: 105; }
 
 :root .search-field-control:has(input[aria-expanded="true"]) {

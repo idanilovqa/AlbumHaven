@@ -222,7 +222,7 @@ test('FTC-COVERS-007 notification states and bulk clear preserve active work', {
     await trackModalActions.waitForLoadedSummary();
     await trackModalActions.openCoverLookup();
     await coverLookupActions.waitForModalReady();
-    actionedTaskTitle = await coverLookupActions.readModalSubtitle();
+    actionedTaskTitle = NOTIFICATION_ACTIONED_TARGET.album;
     const expectedCover = findFixtureCoverBySubtitle(
       Object.values(MANUAL_PROVIDER_COVER).join(' - '),
     );
@@ -260,7 +260,7 @@ test('FTC-COVERS-007 notification states and bulk clear preserve active work', {
   });
 
   await stepLogger.step('Select the notification card text without opening the modal and verify the completed elapsed pill', async () => {
-    await coverLookupActions.waitForTaskStatus(actionedTaskTitle, 'Completed');
+    await coverLookupActions.waitForTaskStatus(actionedTaskTitle, /^(?:\d+ )?covers found$/u);
     const info=coverLookupActions.coverLookup.taskInfoByTitle(actionedTaskTitle);
     const clear=coverLookupActions.coverLookup.taskClearButtonByTitle(actionedTaskTitle);
     await clear.hover();
@@ -272,6 +272,10 @@ test('FTC-COVERS-007 notification states and bulk clear preserve active work', {
     await clear.press('Shift+Tab');
     await expect(info).toBeFocused();
     await expect(info).toHaveJSProperty('tabIndex',0);
+    await expect(info).toHaveAttribute(
+      'aria-label',
+      `Open Cover Look Up: ${NOTIFICATION_ACTIONED_TARGET.album} — ${NOTIFICATION_ACTIONED_TARGET.artist} · ${NOTIFICATION_ACTIONED_TARGET.year}`,
+    );
     await info.press('Tab');
     await expect(clear).toBeFocused();
     await clear.press('Tab');
@@ -280,9 +284,10 @@ test('FTC-COVERS-007 notification states and bulk clear preserve active work', {
     terminalDuration = await coverLookupActions.waitForTerminalTaskElapsed(actionedTaskTitle);
     await coverLookupActions.expectTaskElapsedStable(actionedTaskTitle, terminalDuration);
     const selection = await coverLookupActions.dragSelectTaskTitleWithoutOpeningModal(actionedTaskTitle);
-    expect(selection.selectedText).toContain('COVER ART LOOK UP');
     expect(selection.selectedText).toContain(actionedTaskTitle);
-    expect(selection.selectedText).toContain('Completed');
+    expect(selection.selectedText).toContain(NOTIFICATION_ACTIONED_TARGET.artist);
+    expect(selection.selectedText).toContain(String(NOTIFICATION_ACTIONED_TARGET.year));
+    expect(selection.selectedText).toMatch(/(?:\d+ )?covers found/u);
     expect(selection.clipboardText).toBe(selection.selectedText);
     expect(selection.cursor).toBe('pointer');
     const elapsedPill = await coverLookupActions.readTaskElapsedPill(actionedTaskTitle);
@@ -295,7 +300,7 @@ test('FTC-COVERS-007 notification states and bulk clear preserve active work', {
   });
 
   await stepLogger.step('Choose the returned cover and keep the completed duration frozen', async () => {
-    await coverLookupActions.openTask(actionedTaskTitle);
+    await coverLookupActions.openTaskWithKeyboard(actionedTaskTitle, 'Enter');
     await coverLookupActions.waitForModalReady();
     await coverLookupActions.waitForModalResultsReady();
     await coverLookupActions.selectFirstRemoteCoverAndSave();
@@ -310,7 +315,7 @@ test('FTC-COVERS-007 notification states and bulk clear preserve active work', {
     await trackModalActions.waitForLoadedSummary();
     await trackModalActions.openCoverLookup();
     await coverLookupActions.waitForModalReady();
-    noResultTaskTitle = await coverLookupActions.readModalSubtitle();
+    noResultTaskTitle = SECOND_COVER_LOOKUP_TARGET.album;
     expect(noResultTaskTitle).not.toBe(actionedTaskTitle);
     await coverLookupActions.setProviderFixtureMode('no-results');
     await coverLookupActions.startSearch();
@@ -330,7 +335,7 @@ test('FTC-COVERS-007 notification states and bulk clear preserve active work', {
     await trackModalActions.waitForLoadedSummary();
     await trackModalActions.openCoverLookup();
     await coverLookupActions.waitForModalReady();
-    failedTaskTitle = await coverLookupActions.readModalSubtitle();
+    failedTaskTitle = NOTIFICATION_FAILED_TARGET.album;
     expect(failedTaskTitle).not.toBe(actionedTaskTitle);
     expect(failedTaskTitle).not.toBe(noResultTaskTitle);
     await coverLookupActions.setProviderFixtureMode('failed');
@@ -351,7 +356,7 @@ test('FTC-COVERS-007 notification states and bulk clear preserve active work', {
     await trackModalActions.waitForLoadedSummary();
     await trackModalActions.openCoverLookup();
     await coverLookupActions.waitForModalReady();
-    activeTaskTitle = await coverLookupActions.readModalSubtitle();
+    activeTaskTitle = ACTIVE_COVER_LOOKUP_TARGET.album;
     expect(activeTaskTitle).not.toBe(actionedTaskTitle);
     expect(activeTaskTitle).not.toBe(noResultTaskTitle);
     expect(activeTaskTitle).not.toBe(failedTaskTitle);

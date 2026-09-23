@@ -782,10 +782,10 @@ test('render adopts same-cover in-flight work before pruning removed cover consu
   assert.equal(context.getIndexedAlbum('fallback-1')?.name, 'Fallback Album');
 }
 
-function createResponsiveGalleryScenario(galleryScalePercent, clientWidth) {
+function createResponsiveGalleryScenario(galleryScalePercent, clientWidth, albumCount = 6) {
   const { context, scrollEl } = createRuntimeContext();
   const virtualGrid = vm.runInContext('virtualGrid', context);
-  const albums = Array.from({ length: 6 }, (_value, index) => ({
+  const albums = Array.from({ length: albumCount }, (_value, index) => ({
     key: `responsive-${index + 1}`,
     name: `Responsive Album ${index + 1}`,
     album_artist: 'Responsive Artist',
@@ -3035,7 +3035,10 @@ test('switching Cards to No info invalidates mounted card markup without replaci
 
   context.renderArtistGroups({ preserveScroll: true });
 
-  assert.deepEqual(JSON.parse(JSON.stringify(receivedOptions)), { preserveScroll: true });
+  assert.deepEqual(JSON.parse(JSON.stringify(receivedOptions)), {
+    preserveScroll: true,
+    showArtistSectionHeaders: true,
+  });
   assert.equal(receivedLayoutConfig, context.CARD_GALLERY_LAYOUT_CONFIG);
 }
 
@@ -3062,14 +3065,14 @@ test('switching Cards to No info invalidates mounted card markup without replaci
   context.renderArtistGroups({ preserveScroll: true });
   assert.deepEqual(
     JSON.parse(JSON.stringify(receivedOptions[0])),
-    { preserveScroll: true },
+    { preserveScroll: true, showArtistSectionHeaders: true },
   );
 
   context.state.view.initial_view_partial = true;
   context.renderArtistGroups({ preserveScroll: true });
   assert.deepEqual(
     JSON.parse(JSON.stringify(receivedOptions[1])),
-    { preserveScroll: true },
+    { preserveScroll: true, showArtistSectionHeaders: true },
   );
 }
 
@@ -3929,6 +3932,33 @@ test('selected gallery scale controls the breakpoint while cards fill available 
       },
     },
   );
+});
+
+test('Artist Tree settlement adds a column and fills the row when a multi-row gallery can fit it with a slight card reduction', () => {
+  const { scrollEl, virtualGrid } = createResponsiveGalleryScenario(100, 1672, 32);
+  const initialCardTrackWidth = virtualGrid.cardTrackWidth;
+
+  scrollEl.clientWidth = 1848;
+  virtualGrid.recalculate({ preserveCardTrackWidth: true });
+
+  assert.equal(virtualGrid.columns, 7);
+  assert.ok(virtualGrid.cardTrackWidth < initialCardTrackWidth);
+  assert.equal(
+    virtualGrid.cardTrackWidth * virtualGrid.columns
+      + virtualGrid.columnGap * (virtualGrid.columns - 1),
+    1844,
+  );
+});
+
+test('Artist Tree settlement leaves card sizing alone when every artist has only one incomplete row', () => {
+  const { scrollEl, virtualGrid } = createResponsiveGalleryScenario(100, 1672, 3);
+  const initialCardTrackWidth = virtualGrid.cardTrackWidth;
+
+  scrollEl.clientWidth = 1848;
+  virtualGrid.recalculate({ preserveCardTrackWidth: true });
+
+  assert.equal(virtualGrid.columns, 6);
+  assert.equal(virtualGrid.cardTrackWidth, initialCardTrackWidth);
 });
 
 test('fallback rows preserve the selected gallery scale track cap', () => {

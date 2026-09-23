@@ -18,6 +18,7 @@ const helperSource = fs.readFileSync(helperPath, 'utf8');
 
 function loadHelper(overrides = {}) {
   const context = {
+    ButtonComponent: require(path.join(__dirname, '../../../music_app/static/js/button-component.js')),
     state: {
       coverLookup: {
         modal: {
@@ -38,6 +39,25 @@ function loadHelper(overrides = {}) {
   return context;
 }
 
+{
+  const hoveredAction = {};
+  const focusedAction = { closest: () => ({}) };
+  const context = loadHelper({ document: { activeElement: null } });
+  const body = {
+    contains: () => false,
+    querySelector: (selector) => (
+      selector === '.cover-lookup-task-actions :hover' ? hoveredAction : null
+    ),
+  };
+
+  assert.equal(context.hasActiveCoverLookupDrawerAction(body), true);
+
+  context.document.activeElement = focusedAction;
+  body.contains = (element) => element === focusedAction;
+  body.querySelector = () => null;
+  assert.equal(context.hasActiveCoverLookupDrawerAction(body), true);
+}
+
 function createDrawerHarness(overrides = {}) {
   const drawerElement = {
     hidden: false,
@@ -46,7 +66,14 @@ function createDrawerHarness(overrides = {}) {
   const bodyElement = { innerHTML: '' };
   const badgeElement = { hidden: false, textContent: '' };
   const buttonElement = { classList: { toggle: () => {} } };
-  const clearElement = { hidden: false };
+  const clearElement = {
+    hidden: false,
+    disabled: false,
+    attributes: {},
+    setAttribute(name, value) {
+      this.attributes[name] = String(value);
+    },
+  };
   const modalElement = { hidden: true };
   const intervalCalls = [];
   const clearedIntervals = [];
@@ -270,7 +297,7 @@ function createDrawerHarness(overrides = {}) {
 
   assert.match(
     bodyElement.innerHTML,
-    /<div class="cover-lookup-task-open" role="button" tabindex="0" data-open-cover-lookup-task="completed-task">/,
+    /<div class="cover-lookup-task-open" role="button" tabindex="0" aria-label="Open Cover Look Up: Kill Em All — Metallica · 1983" data-open-cover-lookup-task="completed-task">/,
     'the clickable card text should use a default-selectable surface',
   );
   assert.doesNotMatch(
@@ -575,7 +602,7 @@ function createDrawerHarness(overrides = {}) {
   await context.loadCoverLookupTasks({ toast: false });
 
   assert.equal(context.state.coverLookup.tasks[0].notification_action_taken, true);
-  assert.match(bodyElement.innerHTML, /Art chosen/);
+  assert.match(bodyElement.innerHTML, /Lookup failed/);
 })().catch((error) => {
   console.error(error);
   process.exitCode = 1;
@@ -1978,6 +2005,53 @@ function createDrawerHarness(overrides = {}) {
   context.renderCoverLookupDrawer();
 
   assert.equal(clearElement.hidden, false);
+  assert.equal(clearElement.disabled, false);
+  assert.equal(clearElement.attributes['aria-disabled'], 'false');
+})().catch((error) => {
+  console.error(error);
+  process.exitCode = 1;
+});
+
+;(async () => {
+  await Promise.resolve();
+  const toastCalls = [];
+  const { context, clearElement } = createDrawerHarness({
+    showToast: (...args) => toastCalls.push(args),
+  });
+
+  context.state.coverLookup.tasks = [];
+  context.renderCoverLookupDrawer();
+
+  assert.equal(clearElement.hidden, false);
+  assert.equal(clearElement.disabled, true);
+  assert.equal(clearElement.attributes['aria-disabled'], 'true');
+  await context.clearCompletedCoverLookupTasks();
+  assert.deepEqual(toastCalls, []);
+})().catch((error) => {
+  console.error(error);
+  process.exitCode = 1;
+});
+
+;(async () => {
+  await Promise.resolve();
+  const toastCalls = [];
+  const { context } = createDrawerHarness({
+    fetch: async () => ({
+      ok: true,
+      json: async () => ({ ok: true, removed_count: 0, tasks: [] }),
+    }),
+    showToast: (...args) => toastCalls.push(args),
+  });
+  context.state.coverLookup.tasks = [{
+    id: 'completed-task',
+    status: 'completed',
+    notification_action_taken: false,
+  }];
+
+  await context.clearCompletedCoverLookupTasks();
+
+  assert.deepEqual(context.state.coverLookup.tasks, []);
+  assert.deepEqual(toastCalls, []);
 })().catch((error) => {
   console.error(error);
   process.exitCode = 1;
@@ -2481,7 +2555,7 @@ function createDrawerHarness(overrides = {}) {
 
   context.renderCoverLookupDrawer();
 
-  assert.match(bodyElement.innerHTML, /Completed — no result/);
+  assert.match(bodyElement.innerHTML, /No covers found/);
 })().catch((error) => {
   console.error(error);
   process.exitCode = 1;
@@ -2512,6 +2586,7 @@ function createDrawerHarness(overrides = {}) {
       artist: 'Failed Artist',
       album: 'Failed Album',
       progress: 100,
+      album_payload: { key: 'failed-album' },
     },
   ];
 
@@ -2529,6 +2604,8 @@ function createDrawerHarness(overrides = {}) {
     bodyElement.innerHTML,
     /cover-lookup-task-elapsed[^"]*\bis-failed\b[^"]*"[^>]*data-cover-lookup-task-elapsed="failed-task"/,
   );
+  assert.match(bodyElement.innerHTML, /data-retry-cover-lookup-task="failed-task"[^>]*aria-label="Retry lookup"[^]*?<svg/);
+  assert.match(bodyElement.innerHTML, /data-clear-cover-lookup-task="failed-task"/);
 })().catch((error) => {
   console.error(error);
   process.exitCode = 1;
@@ -2615,6 +2692,26 @@ function createDrawerHarness(overrides = {}) {
   context.renderCoverLookupDrawer();
 
   assert.match(bodyElement.innerHTML, /data-clear-cover-lookup-task="completed-task"/);
+
+  context.state.coverLookup.tasks = [
+    {
+      id: 'running-task',
+      status: 'running',
+      artist: 'Artist',
+      album: 'Album',
+      year: 2001,
+      progress: 50,
+    },
+  ];
+
+  context.renderCoverLookupDrawer();
+
+  assert.match(bodyElement.innerHTML, /data-cancel-cover-lookup-task="running-task"/);
+  assert.match(
+    bodyElement.innerHTML,
+    /class="ui-icon action-button__icon ui-icon--close"/,
+    'the running-task stop action must use the shared stroked close icon',
+  );
 }
 
 {

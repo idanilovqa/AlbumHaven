@@ -212,6 +212,20 @@ def _add_manual_cover_candidates_from_urls_sequential(
             candidates.extend(expanded)
             continue
 
+        expanded = cover_provider_fallback_web.expand_manual_direct_image_url_candidates(
+            normalized_url,
+            target_artist=target_artist,
+            target_album=target_album,
+            target_year=target_year,
+            user_agent=user_agent,
+            manual_source_details=cover_provider_candidates.manual_source_details,
+            probe_match_candidates=cover_provider_runtime.probe_match_candidates,
+            allow_unprobed_fallback=False,
+        )
+        if expanded:
+            candidates.extend(expanded)
+            continue
+
         expanded = cover_provider_fallback_web.expand_generic_manual_page_url_candidates(
             normalized_url,
             target_artist=target_artist,

@@ -803,6 +803,91 @@ function attachTrackButtons() {
   });
 }
 
+// Escape belongs to the visible foreground overlay, even when focus is behind it.
+function getTopmostOpenModal() {
+  const overlays = '.track-modal, .utility-modal, .confirm-modal, .tag-editor-modal, .cover-lookup-modal, .non-album-modal, .image-lightbox, .repair-progress-overlay';
+  const candidates = [...new Set(Array.from(document.querySelectorAll(
+    `${overlays}, [aria-modal="true"], #app-form-modal`,
+  )).map(node => node.closest(overlays) || node))];
+  const stack = node => {
+    const contexts = [];
+    for (let current = node; current; current = current.parentElement) {
+      const style = getComputedStyle(current);
+      if (style.zIndex !== 'auto' && style.zIndex !== ''
+          || ['fixed', 'sticky'].includes(style.position)
+          || Number(style.opacity) < 1
+          || style.transform && style.transform !== 'none'
+          || style.filter && style.filter !== 'none'
+          || style.isolation === 'isolate'
+          || /paint|layout|strict|content/.test(style.contain || '')) {
+        contexts.unshift({ node: current, z: Number(style.zIndex) || 0 });
+      }
+    }
+    return contexts;
+  };
+  const visible = candidates.filter(node => {
+    if (node.closest('[hidden], [inert]') || !node.getClientRects().length) return false;
+    const style = getComputedStyle(node);
+    return style.visibility !== 'hidden' && style.visibility !== 'collapse';
+  }).map(node => ({ node, stack: stack(node) }));
+  visible.sort((a, b) => {
+    let index = 0;
+    while (a.stack[index] && b.stack[index] && a.stack[index].node === b.stack[index].node) index += 1;
+    const left = a.stack[index];
+    const right = b.stack[index];
+    const order = (left?.z || 0) - (right?.z || 0);
+    if (order) return order;
+    return (left?.node || a.node).compareDocumentPosition(right?.node || b.node) & 4 ? -1 : 1;
+  });
+  return visible.at(-1)?.node || null;
+}
+
+function handleModalEscapeKeydown(event) {
+  if (event.key !== 'Escape') return;
+  const modal = getTopmostOpenModal();
+  if (!modal) return;
+  // Capture and stop immediately: closing one dialog must not expose another
+  // to this same keypress, including handlers attached directly to its controls.
+  event.stopImmediatePropagation?.();
+  if (event.defaultPrevented) return;
+  event.preventDefault?.();
+  if (event.repeat || event.isComposing) return;
+  if (modal.id === 'tag-editor-modal') {
+    if (state.tagEditor.reorder) {
+      clearTagEditorReorderCue();
+    } else if (getSelectedTagEditorPaths(state.tagEditor.tracks || []).length > 1) {
+      setTagEditorSelectedPaths([]);
+      state.tagEditor.anchorPath = '';
+      renderTagEditor({ preserveTrackList: true });
+    } else {
+      closeTagEditor();
+    }
+    return;
+  }
+  if (modal.id === 'utility-modal') {
+    if (typeof cancelActiveSavedLoopCreation === 'function' && cancelActiveSavedLoopCreation()) return;
+    const editor = typeof getBackgroundAppearanceEditor === 'function' ? getBackgroundAppearanceEditor() : null;
+    if (editor?.allowLeave(() => true) === false) return;
+    closeUtilityModal(true);
+    return;
+  }
+  const close = {
+    'track-modal': () => closeTrackModal(),
+    'image-lightbox': () => closeImageLightbox(),
+    'repair-confirm-modal': () => closeRepairConfirmModal(),
+    'tag-edit-confirm-modal': () => closeTagEditConfirmModal(),
+    'cover-lookup-modal': () => closeCoverLookupModal(),
+    'cover-lookup-delete-confirm-modal': () => closeCoverLookupDeleteConfirm(),
+    'non-album-modal': () => closeNonAlbumModal(),
+    'version-picker-modal': () => closeVersionPickerModal(),
+  }[modal.id];
+  if (close) close();
+  else {
+    // Promise-backed dialogs must settle through their own cancel actions.
+    modal.querySelector('#app-confirm-cancel, #app-form-cancel, #loop-name-cancel, #loop-delete-confirm-cancel')?.click();
+  }
+}
+
 function attachModalEvents() {
   const els = getTrackModalElements();
   if (!els.overlay || els.overlay.dataset.bound === '1') return;
@@ -814,52 +899,7 @@ function attachModalEvents() {
       closeTrackModal();
     }
   });
-  document.addEventListener('keydown', (event) => {
-    if (event.key !== 'Escape') return;
-    const lightboxEls = getLightboxElements();
-    if (lightboxEls.overlay && !lightboxEls.overlay.hidden) {
-      closeImageLightbox();
-      return;
-    }
-    const repairConfirmEls = getRepairConfirmElements();
-    if (repairConfirmEls.overlay && !repairConfirmEls.overlay.hidden) {
-      closeRepairConfirmModal();
-      return;
-    }
-    const coverLookupEls = getCoverLookupModalElements();
-    if (coverLookupEls.overlay && !coverLookupEls.overlay.hidden) {
-      closeCoverLookupModal();
-      return;
-    }
-    const coverLookupDeleteConfirmEls = getCoverLookupDeleteConfirmElements();
-    if (coverLookupDeleteConfirmEls.overlay && !coverLookupDeleteConfirmEls.overlay.hidden) {
-      closeCoverLookupDeleteConfirm();
-      return;
-    }
-    if (!els.overlay.hidden && els.overlay.classList.contains('is-above-settings')) {
-      if (!event.defaultPrevented) closeTrackModal();
-      return;
-    }
-    const utilityEls = getUtilityModalElements();
-    if (utilityEls.overlay && !utilityEls.overlay.hidden) {
-      if (event.defaultPrevented) return;
-      if (typeof cancelActiveSavedLoopCreation === 'function'
-          && cancelActiveSavedLoopCreation()) {
-        event.preventDefault();
-        return;
-      }
-      closeUtilityModal();
-      return;
-    }
-    const nonAlbumEls = getNonAlbumModalElements();
-    if (nonAlbumEls.overlay && !nonAlbumEls.overlay.hidden) {
-      closeNonAlbumModal();
-      return;
-    }
-    if (!els.overlay.hidden) {
-      closeTrackModal();
-    }
-  });
+  document.addEventListener('keydown', handleModalEscapeKeydown, true);
   document.addEventListener('keydown', (event) => {
     const lightboxEls = getLightboxElements();
     if (!lightboxEls.overlay || lightboxEls.overlay.hidden) return;

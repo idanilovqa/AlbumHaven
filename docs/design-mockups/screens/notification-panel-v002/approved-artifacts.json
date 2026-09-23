@@ -1,0 +1,12 @@
+{
+  "schemaVersion": 1,
+  "status": "approved",
+  "approvedAt": "2026-09-21",
+  "approvedBy": "user",
+  "approvalQuote": "Approved",
+  "scope": "Navigation-tree-derived Cover Look Up notification panel and cards, including compact state labels, state-colored progress, shared actions, and no left-edge accent.",
+  "hashAlgorithm": "SHA256",
+  "artifacts": {
+    "index.html": "0bc14cb79b73cc1c08c1d6ed8b12557107e29e7cab42c9d3aa64eea91fd45516"
+  }
+}

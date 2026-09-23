@@ -1099,6 +1099,7 @@ function abandonScanPageForNavigation(options = {}) {
   claimLocalViewStateNavigation();
   state.ui.scanPageReturnContext = null;
   state.ui.forceScanPageVisible = false;
+  if (typeof unmountLibraryStatusBar === 'function') unmountLibraryStatusBar();
   resumeScanPageGalleryCoverLoads();
   if (options.clearSelection === true) {
     state.view = {
@@ -1150,6 +1151,7 @@ function closeScanPage() {
   }
   state.ui.searchDraftQuery = String(returnContext.searchDraftQuery ?? state.view?.query ?? '');
   state.ui.scanPageReturnContext = null;
+  if (typeof unmountLibraryStatusBar === 'function') unmountLibraryStatusBar();
   const searchInput = document.getElementById('search-input');
   if (searchInput) searchInput.value = state.ui.searchDraftQuery;
   if (
@@ -1271,6 +1273,7 @@ async function browseScannedLibrarySnapshot() {
     });
     state.ui.scanPageReturnContext = null;
     state.ui.forceScanPageVisible = false;
+    if (typeof unmountLibraryStatusBar === 'function') unmountLibraryStatusBar();
     state.ui.searchDraftQuery = '';
     const searchInput = document.getElementById('search-input');
     if (searchInput) searchInput.value = '';
@@ -1336,6 +1339,7 @@ async function browseScannedLibrarySnapshot() {
     ) {
       state.ui.scanPageReturnContext = null;
       state.ui.forceScanPageVisible = false;
+      if (typeof unmountLibraryStatusBar === 'function') unmountLibraryStatusBar();
       state.ui.searchDraftQuery = '';
       const searchInput = document.getElementById('search-input');
       if (searchInput) searchInput.value = '';

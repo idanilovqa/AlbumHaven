@@ -46,6 +46,38 @@
   pointer-events: none;
 }
 .album-artbox__action .small-alert { max-width: 100%; pointer-events: auto; }
+
+.album-artbox__overlay {
+ position: absolute;
+ right: 12px;
+ bottom: 12px;
+ z-index: 3;
+ display: flex;
+ flex-direction: row;
+ gap: 7px;
+ opacity: 0;
+ transform: translateY(5px);
+ pointer-events: none;
+ transition: opacity 160ms ease, transform 160ms ease;
+}
+.album-artbox:hover .album-artbox__overlay,
+.album-artbox:focus-within .album-artbox__overlay {
+ opacity: 1;
+ transform: translateY(0);
+ pointer-events: auto;
+}
+
+@media (hover: none) {
+ .album-artbox__overlay {
+  opacity: 1;
+  transform: none;
+  pointer-events: auto;
+ }
+}
+
+@media (prefers-reduced-motion: reduce) {
+ .album-artbox__overlay { transition: none; }
+}
 /* The ready cover's rounded corners reveal the album panel, not placeholder tint. */
 .track-modal-cover-shell .album-artbox--ready {
   border-radius: 14px;

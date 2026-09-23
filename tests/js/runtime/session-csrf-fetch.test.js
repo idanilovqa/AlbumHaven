@@ -14,12 +14,13 @@ const sourcePath = path.join(
   'session-csrf-fetch.js',
 );
 
-function load(cookie = '__Host-album_haven_csrf=csrf-value') {
+function load(cookie = '__Host-album_haven_csrf=csrf-value', fetchImpl = null) {
   const calls = [];
   const window = {
     location: { href: 'https://music.test/albums', origin: 'https://music.test' },
     fetch: async (...args) => {
       calls.push(args);
+      if (fetchImpl) return fetchImpl(...args);
       return { ok: true };
     },
   };
@@ -28,6 +29,31 @@ function load(cookie = '__Host-album_haven_csrf=csrf-value') {
   vm.runInContext(fs.readFileSync(sourcePath, 'utf8'), context, { filename: sourcePath });
   return { window, calls };
 }
+
+test('same-origin reads retry once after a transient network failure', async () => {
+  let attempts = 0;
+  const { window, calls } = load(undefined, async () => {
+    attempts += 1;
+    if (attempts === 1) throw new TypeError('Failed to fetch');
+    return { ok: true };
+  });
+
+  const response = await window.fetch('/library-settings', { headers: { Accept: 'application/json' } });
+
+  assert.equal(response.ok, true);
+  assert.equal(calls.length, 2);
+  assert.equal(calls[0][0], '/library-settings');
+  assert.equal(calls[1][0], '/library-settings');
+});
+
+test('same-origin reads do not retry cancellations', async () => {
+  const cancelled = new Error('cancelled');
+  cancelled.name = 'AbortError';
+  const { window, calls } = load(undefined, async () => { throw cancelled; });
+
+  await assert.rejects(window.fetch('/utilities/integrations'), { name: 'AbortError' });
+  assert.equal(calls.length, 1);
+});
 
 test('same-origin unsafe fetch receives the readable session CSRF cookie as a header', async () => {
   const { window, calls } = load();

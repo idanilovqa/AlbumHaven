@@ -432,8 +432,7 @@ def test_postgres_migration_filenames_are_zero_padded_sql_and_lexically_ordered(
 
     assert all(re.fullmatch(r"\d{4}_[a-z0-9_]+\.sql", name) for name in migration_names)
     assert migration_numbers == list(range(1, len(migration_numbers) + 1))
-    assert migration_names[-36:] == [
-        "0039_repair_semantic_album_reconciliation_delete_grants.sql",
+    assert migration_names[-40:] == [
         "0040_repair_ignored_repairs_delete_grant.sql",
         "0041_create_local_album_cover_candidate_snapshots.sql",
         "0042_track_distinct_cover_improvement_alerts.sql",
@@ -469,7 +468,22 @@ def test_postgres_migration_filenames_are_zero_padded_sql_and_lexically_ordered(
         "0072_measured_local_listen_sessions.sql",
         "0073_preserve_measured_listen_history.sql",
         "0074_create_saved_loop_waveform_peaks.sql",
+        "0075_appearance_device_sections.sql",
+        "0076_docked_compact_player_behavior.sql",
+        "0077_allow_parchment_pine_appearance_palette.sql",
+        "0078_add_compact_player_motion_and_floating_edge.sql",
+        "0079_docked_compact_player_regular_style.sql",
     ]
+
+
+def test_docked_compact_player_regular_style_migration_is_additive_and_default_off():
+    sql = _normalized_sql(
+        (MIGRATIONS_DIR / "0079_docked_compact_player_regular_style.sql").read_text(
+            encoding="utf-8"
+        )
+    )
+
+    assert "add column docked_compact_player_regular_style boolean not null default false" in sql
 
 
 def test_readonly_account_privilege_migration_is_upgrade_safe_and_identity_private():

@@ -36,7 +36,6 @@
 }
 #app-form-modal.app-form-anchored:has(.date-range-picker) .confirm-modal-dialog {
   animation: none;
-  clip-path: none;
   border-inline: 1px solid var(--border);
 }
 #app-form-modal:has(.date-range-picker) .utility-detail-meta { margin: 10px 0 0; }

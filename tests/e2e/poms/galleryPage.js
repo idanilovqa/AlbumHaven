@@ -299,6 +299,27 @@ export class GalleryPage extends BasePage {
     });
   }
 
+  async readArtistTreeReflowCheckpoint() {
+    // parity-check: allow-read-only-measurement-evaluate -- atomically measure the production virtual grid and its visible anchor
+    return this.galleryScroll.evaluate((scroll) => {
+      const rows = Array.from(scroll.querySelectorAll('.album-row'));
+      const visibleCards = Array.from(scroll.querySelectorAll('.album-card[data-gallery-card-key]'))
+        .map((card) => ({ card, bounds: card.getBoundingClientRect() }))
+        .filter(({ bounds }) => bounds.bottom > scroll.getBoundingClientRect().top
+          && bounds.top < scroll.getBoundingClientRect().bottom)
+        .sort((left, right) => left.bounds.top - right.bounds.top || left.bounds.left - right.bounds.left);
+      const template = rows.map((row) => getComputedStyle(row).gridTemplateColumns)
+        .find((value) => String(value || '').trim()) || '';
+      return {
+        anchorKey: String(visibleCards[0]?.card.getAttribute('data-gallery-card-key') || ''),
+        columns: template.split(/\s+/u).filter(Boolean).length,
+        query: String(typeof state !== 'undefined' ? state?.view?.query || '' : ''),
+        selectedArtist: String(typeof state !== 'undefined' ? state?.view?.selected_artist || '' : ''),
+        scrollTop: Number(scroll.scrollTop || 0),
+      };
+    });
+  }
+
   async readRenderedAlbumCardTrackCounts(artistName) {
     const section = this.sectionByArtistHeading(artistName);
     const renderedCards = section.locator(this.albumCardWithinSectionSelector);

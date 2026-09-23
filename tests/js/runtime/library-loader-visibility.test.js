@@ -273,6 +273,50 @@ test('buildLoaderStatusLines keeps discovery and indexing as distinct scan phase
   assert.equal(indexing[0].title, 'Scanning music files');
 });
 
+test('resolveLibraryScanPhaseStates keeps reached work bright and terminal states truthful', () => {
+  const { resolveLibraryScanPhaseStates } = loadHelpers();
+  const states = value => Object.fromEntries(Object.entries(resolveLibraryScanPhaseStates(value)));
+
+  assert.deepEqual(states({ scan_in_progress: true, scan_phase: 'discovering' }), {
+    discover: 'current', metadata: 'future', covers: 'future', relations: 'future',
+  });
+  assert.deepEqual(states({ scan_in_progress: true, scan_phase: 'indexing' }), {
+    discover: 'complete', metadata: 'current', covers: 'future', relations: 'future',
+  });
+  assert.deepEqual(states({ covers_in_progress: true }), {
+    discover: 'complete', metadata: 'complete', covers: 'current', relations: 'future',
+  });
+  assert.deepEqual(states({ relations_in_progress: true }), {
+    discover: 'complete', metadata: 'complete', covers: 'complete', relations: 'current',
+  });
+  assert.deepEqual(states({ scan_in_progress: true, scan_phase: 'finalizing' }), {
+    discover: 'complete', metadata: 'complete', covers: 'complete', relations: 'current',
+  });
+  assert.deepEqual(states({ scan_outcome: 'completed' }), {
+    discover: 'complete', metadata: 'complete', covers: 'complete', relations: 'complete',
+  });
+  assert.deepEqual(states({ scan_outcome: 'cancelled', scan_processed: 3, scan_total: 8 }), {
+    discover: 'complete', metadata: 'future', covers: 'future', relations: 'future',
+  });
+});
+
+test('renderLibraryLoader keeps the scan title through finalizing, cover, and relation work', () => {
+  for (const status of [
+    { scan_in_progress: true, scan_phase: 'finalizing' },
+    { covers_in_progress: true },
+    { relations_in_progress: true },
+  ]) {
+    const { context, title } = createLoaderRenderFixture();
+    context.scanStatus = status;
+    vm.runInContext(`
+      state.view = { album_count: 1, query: '', selected_artist: '' };
+      state.ui.scanPageReturnContext = { view: state.view };
+      renderLibraryLoader(scanStatus, { scanPageVisible: true });
+    `, context);
+    assert.equal(title.textContent, 'Scanning the library');
+  }
+});
+
 test('buildLoaderStatusLines labels scan admission as discovery', () => {
   const { buildLoaderStatusLines } = loadHelpers();
 
@@ -721,10 +765,10 @@ test('renderLibraryLoader keeps the Browse Library label while a browse request 
   assert.equal(browseButton.textContent, 'Browse Library');
 });
 
-test('Scan Page markup keeps destructive cancellation left of neutral library browsing', () => {
-  const template = fs.readFileSync(indexTemplatePath, 'utf8');
-  const actionsMatch = template.match(
-    /<div class="library-loader-actions"[\s\S]*?<\/div>/,
+test('Library Status Page GalleryBar keeps neutral browsing before separate destructive cancellation', () => {
+  const runtime = fs.readFileSync(helperPaths[1], 'utf8');
+  const actionsMatch = runtime.match(
+    /<section class="gallery-bar gallery-bar--scan"[\s\S]*?<div class="gallery-bar__actions library-loader-actions"[\s\S]*?<\/div>[\s\S]*?<\/section>/,
   );
 
   assert.ok(actionsMatch, 'Expected one Scan Page action group');
@@ -733,10 +777,10 @@ test('Scan Page markup keeps destructive cancellation left of neutral library br
   const browseIndex = actionsMarkup.indexOf('id="library-loader-browse-button"');
   assert.ok(cancelIndex >= 0, 'Expected the dedicated Scan Page cancel button');
   assert.ok(browseIndex >= 0, 'Expected the Scan Page browse button');
-  assert.ok(cancelIndex < browseIndex, 'Cancel must stay left of Browse Library');
+  assert.ok(browseIndex < cancelIndex, 'Browse Library must remain the first continuation action');
   assert.match(
     actionsMarkup,
-    /class="button library-loader-cancel-button"/,
+    /class="button [^"]*library-loader-cancel-button"/,
   );
 });
 

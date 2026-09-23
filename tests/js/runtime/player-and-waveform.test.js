@@ -124,6 +124,46 @@ test('saved-loop waveform settings refresh even without a main-player track', as
   assert.deepEqual(modes, ['waveform', 'default']);
 });
 
+test('loaded track uses its resolved album cover when the track payload omits artwork', () => {
+  const coverButton = {
+    hidden: true,
+    style: { backgroundImage: '' },
+    textContent: '',
+    classList: {
+      toggle() {},
+      remove() {},
+    },
+  };
+  let imageProbe = null;
+  class LoadedImage {
+    constructor() {
+      imageProbe = this;
+    }
+  }
+  const album = { cover_path: 'C:/Music/Artist/Album/cover.jpg' };
+  const { context } = loadRuntime({
+    Image: LoadedImage,
+    resolveAlbumForPlayerTrack: () => album,
+  });
+  context.getPlayerElements = () => ({ coverButton });
+
+  context.setCurrentPlayerTrack({
+    src: '/track?path=track.flac',
+    path: 'C:/Music/Artist/Album/track.flac',
+    title: 'Track',
+    album: 'Album',
+  }, { persist: false });
+  imageProbe.onload();
+
+  assert.equal(context.state.player.current.coverPath, album.cover_path);
+  assert.equal(imageProbe.src, `/cover?path=${encodeURIComponent(album.cover_path)}`);
+  assert.equal(
+    coverButton.style.backgroundImage,
+    `url("/cover?path=${encodeURIComponent(album.cover_path)}")`,
+  );
+  assert.equal(coverButton.hidden, false);
+});
+
 function loadRuntime(overrides = {}) {
   const context = {
     state: {

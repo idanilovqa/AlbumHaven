@@ -29,6 +29,10 @@ test('desktop library search aligns to the main panel outer edge', () => {
     appChromeCss,
     /\.app-bar \.toolbar-left\s*\{[^}]*padding-left:\s*0;/,
   );
+  assert.match(
+    galleryMainCss,
+    /data-shell-horizontal-align="gallery-body"\][^}]*margin-left:\s*0;/,
+  );
 });
 
 test('app-bar search keeps the native clear control close to the search action', () => {
@@ -49,10 +53,10 @@ test('shared search owns one external interaction outline with no outlined child
   );
 });
 
-test('narrow library search and Gallery body share the 24px content gutter', () => {
+test('narrow library search aligns to the main panel outer edge', () => {
   assert.match(
     galleryMainCss,
-    /@media \(max-width:\s*720px\)[\s\S]*?data-shell-horizontal-align="gallery-body"\][^}]*margin-left:\s*12px;/,
+    /@media \(max-width:\s*720px\)[\s\S]*?data-shell-horizontal-align="gallery-body"\][^}]*margin-left:\s*-6px;/,
   );
 });
 

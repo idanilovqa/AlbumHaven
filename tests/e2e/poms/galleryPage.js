@@ -200,7 +200,7 @@ export class GalleryPage extends BasePage {
   }
 
   get artistHeadingSelector() {
-    return '#artist-groups .artist-name';
+    return '#artist-groups .artist-name, [data-gallery-bar][data-gallery-context-kind="artist"] [data-gallery-context-name], [data-gallery-bar][data-gallery-context-kind="single-artist"] [data-gallery-context-name]';
   }
 
   get artistSectionSelector() {
@@ -297,6 +297,40 @@ export class GalleryPage extends BasePage {
       albumYearSelector: this.albumCard.yearWithinCardSelector,
       albumYearPattern: VISIBLE_ALBUM_YEAR_PATTERN,
     });
+  }
+
+  async readArtistTreeReflowCheckpoint(reference = null) {
+    // parity-check: allow-read-only-measurement-evaluate -- atomically measure the production virtual grid and its visible anchor
+    return this.galleryScroll.evaluate((scroll, reference) => {
+      const rows = Array.from(scroll.querySelectorAll('.album-row'));
+      const viewport = scroll.getBoundingClientRect();
+      const triggers = Array.from(scroll.querySelectorAll('[data-open-tracklist="1"][data-album-key]'));
+      const triggerKind = (trigger) => trigger.matches('.album-card__artbox-trigger') ? 'artbox' : 'title';
+      const trigger = reference
+        ? triggers.find((candidate) => candidate.getAttribute('data-album-key') === reference.anchorKey
+          && candidate.closest('.album-card[data-gallery-card-key]')?.getAttribute('data-gallery-card-key') === reference.anchorCardKey
+          && triggerKind(candidate) === reference.anchorTrigger)
+        : triggers.find((candidate) => candidate.getBoundingClientRect().bottom >= viewport.top + 1);
+      const card = trigger?.closest('.album-card[data-gallery-card-key]');
+      const bounds = trigger?.getBoundingClientRect();
+      const cardBounds = card?.getBoundingClientRect();
+      const visible = (rect) => Boolean(rect && rect.bottom > viewport.top && rect.top < viewport.bottom);
+      const template = rows.map((row) => getComputedStyle(row).gridTemplateColumns)
+        .find((value) => String(value || '').trim()) || '';
+      return {
+        anchorKey: String(trigger?.getAttribute('data-album-key') || ''),
+        anchorCardKey: String(card?.getAttribute('data-gallery-card-key') || ''),
+        anchorTrigger: trigger ? triggerKind(trigger) : '',
+        anchorVisible: visible(bounds) && visible(cardBounds),
+        anchorOffset: bounds ? bounds.top - viewport.top : null,
+        columns: template.split(/\s+/u).filter(Boolean).length,
+        query: String(typeof state !== 'undefined' ? state?.view?.query || '' : ''),
+        selectedArtist: String(typeof state !== 'undefined' ? state?.view?.selected_artist || '' : ''),
+        scrollTop: Number(scroll.scrollTop || 0),
+        reflowDiagnostics: globalThis.__ALBUM_HAVEN_VIRTUAL_GRID__ || null,
+        galleryWidth: scroll.clientWidth,
+      };
+    }, reference);
   }
 
   async readRenderedAlbumCardTrackCounts(artistName) {

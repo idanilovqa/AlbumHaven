@@ -7856,6 +7856,71 @@ def test_problematic_album_detail_explains_album_tag_problem_with_value_and_fiel
     ]
 
 
+@pytest.mark.parametrize("kind", ["ordinary", "incomplete", "missing"])
+@pytest.mark.parametrize("excluded", [False, True])
+def test_problematic_summary_matches_detail_reason_order_and_exclusions(kind, excluded):
+    from copy import deepcopy
+    from music_app.services.library_browse_postgres import (
+        _problematic_album_detail_payload,
+        _problematic_album_summary_payload,
+    )
+
+    paths = ["library/a/z.flac", "library/b/same.flac", "library/c/SAME.flac", "library/d/same.flac"]
+    entries = [
+        {"path": path, "album": "Album", "album_artist": "Artist", "artist": "Artist",
+         "title": "Track", "year": 2001, "track_number": index + 1, "disc_number": 1}
+        for index, path in enumerate(paths)
+    ]
+    entries[0]["title"] = ""
+    entries[1]["artist"] = ""
+    entries[2]["year"] = None
+    entries[3]["album_artist"] = ""
+    if kind == "incomplete":
+        entries[-1]["track_number"] = 5
+    album = {
+        "key": "reason-order", "album_ref": "artist::album", "name": "Album",
+        "album_artist": "Artist", "year": 2001, "cover_path": "covers/album.jpg",
+        "local_cover_width": 1000, "local_cover_height": 1000,
+        "tracks": [{"path": entry["path"], "title": entry["title"],
+                    "track_number": entry["track_number"], "disc_number": 1} for entry in entries],
+        "_file_entries": entries,
+        "_ignored_repair_keys": {
+            "artist::album::problem-album::missing-track-artist", f"{paths[2]}::year",
+        } if excluded else set(),
+    }
+    if kind == "missing":
+        album.update(inventory_status="missing", tracks=[], _file_entries=[])
+
+    # Independent inputs avoid allowing detail construction to prime summary caches.
+    summary = _problematic_album_summary_payload(deepcopy(album))
+    detail = _problematic_album_detail_payload(deepcopy(album))
+    assert summary is not None and detail is not None
+    reasons = list(dict.fromkeys(
+        [row["reason"] for row in detail["album_problem_rows"]]
+        + [reason for row in detail["track_problem_rows"] for reason in row["reasons"]]
+    ))
+    assert summary["problem_reasons"] == detail["problem_reasons"] == reasons
+    assert summary["issue_count"] == len(reasons)
+    if kind == "missing":
+        assert reasons == ["Album not found"]
+        assert summary["track_paths"] == []
+    else:
+        expected_paths = paths if kind == "incomplete" else [paths[1], paths[2], paths[3], paths[0]]
+        if excluded and kind == "ordinary":
+            expected_paths = [paths[3], paths[0]]
+        assert [row["path"] for row in detail["track_problem_rows"]] == expected_paths
+        if excluded:
+            assert "Missing track artist" not in reasons
+            assert "Missing year" not in reasons
+        else:
+            expected = ["Missing track artist", "Missing year", "Missing album artist", "Missing track title"]
+            if kind == "ordinary":
+                assert reasons == expected
+            else:
+                assert reasons[0] == "Missing track title"
+                assert any(reason.startswith("Incomplete track order") for reason in reasons)
+
+
 def test_album_exclusion_suppresses_matching_track_reason_and_removes_summary():
     from music_app.services.library_browse_postgres import (
         _problematic_album_summary_payload,
@@ -9343,6 +9408,143 @@ def test_final_file_scope_ignore_removes_reason_from_summary_without_hiding_albu
     assert detail["track_problem_rows"] == []
 
 
+@pytest.mark.parametrize("case", ["complete", "incomplete", "multi_disc", "missing_number", "missing_text", "year_mismatch", "encoding"])
+@pytest.mark.parametrize("ignore_scope", [None, "album", "file", "legacy"])
+def test_problematic_summary_reason_rows_match_full_repair_rows(case, ignore_scope):
+    from music_app.services import library_browse_postgres as browse
+
+    numbers = [1, 3, 4] if case == "incomplete" else [1, 2, 3]
+    discs = [1, 2, 2] if case == "multi_disc" else None
+    if case == "missing_number":
+        numbers = [1, None, 3]
+    rows = _healthy_problematic_order_rows(
+        numbers, disc_numbers=discs,
+        filename_numbers=[1, 2, 3] if case == "missing_number" else None,
+    )
+    rows[-1]["file_entry"]["year"] = None
+    if case == "missing_text":
+        rows[0]["file_entry"]["title"] = ""
+    elif case == "year_mismatch":
+        rows[0]["file_entry"]["year"] = "1999"
+    elif case == "encoding":
+        rows[0]["file_entry"]["title"] = "Caf\u00c3\u00a9"
+    album = browse._problematic_album_projection_payloads(rows)[0]
+    path = rows[-1]["file_private_path"]
+    if ignore_scope == "legacy":
+        album["_ignored_repair_keys"] = {f"{path}::year"}
+    elif ignore_scope:
+        owner = album["album_ref"] if ignore_scope == "album" else path
+        album["_ignored_repair_keys"] = {
+            browse._problem_identity_row_key(owner, "Missing year", scope=ignore_scope)
+        }
+    full_rows = browse._problematic_track_problem_rows(album)
+    compact_rows = browse._problematic_track_problem_rows(album, include_repair_metadata=False)
+    assert compact_rows == [
+        {key: row[key] for key in ("path", "filename", "reasons")}
+        for row in full_rows
+    ]
+    assert browse._problematic_album_summary_payload(album) == browse._problematic_album_summary_payload(
+        album, track_problem_rows=full_rows,
+    )
+
+
+@pytest.mark.parametrize(
+    ("override", "persisted", "scanned", "expected"),
+    [
+        (True, None, "Non-album rarity", ""),
+        (True, "Non-album rarity", None, "Non-album rarity"),
+        (False, "Non-album rarity", None, ""),
+        (False, None, "Non-album rarity", "Non-album rarity"),
+        (None, None, "Non-album rarity", "Non-album rarity"),
+        (None, "Non-album rarity", None, "Non-album rarity"),
+    ],
+)
+def test_problematic_projection_resolves_each_file_exception_once(
+    monkeypatch, override, persisted, scanned, expected,
+):
+    from music_app.services import library_browse_postgres as browse
+
+    rows = _healthy_problematic_order_rows([1, 2, 3])
+    for row in rows:
+        row["exception_override_present"] = override
+        row["exception_type"] = persisted
+        row["file_entry"]["exception_type"] = scanned
+    original = browse._effective_row_exception_type
+    calls = []
+
+    def observed(row):
+        calls.append(row["file_private_path"])
+        return original(row)
+
+    monkeypatch.setattr(browse, "_effective_row_exception_type", observed)
+    album = browse._problematic_album_projection_payloads(rows)[0]
+    assert [track["exception_type"] for track in album["tracks"]] == [expected] * 3
+    assert [entry["exception_type"] for entry in album["_file_entries"]] == [expected] * 3
+    assert calls == [row["file_private_path"] for row in rows]
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "z/track.flac", r"C:\Music\track.flac", "C:track.flac",
+        "z/track.flac/", "z/track.flac/.", "z/..", ".", "/",
+        "C:\\", "C:", r"\\server\share", "\\\\server\\share\\",
+        r"\\server\share\track.flac", "z/.hidden", "z/track.",
+    ],
+)
+def test_problematic_compact_filenames_preserve_native_paths_and_reason_order(monkeypatch, path):
+    from os.path import basename
+    from music_app.services import library_browse_postgres as browse
+
+    rows = _healthy_problematic_order_rows([1, 2, 3])
+    paths = [path, "a/Other.flac", "m/third.flac"]
+    for row, track_path in zip(rows, paths, strict=True):
+        row["file_private_path"] = track_path
+        row["file_entry"]["path"] = track_path
+    rows[0]["file_entry"]["title"] = ""
+    rows[1]["file_entry"]["year"] = None
+    rows[2]["file_entry"]["artist"] = ""
+    album = browse._problematic_album_projection_payloads(rows)[0]
+    full = browse._problematic_track_problem_rows(album)
+    original_path = browse.Path
+    assert all(row["filename"] == original_path(row["path"]).name for row in full)
+    path_calls = []
+
+    def observed_path(value):
+        path_calls.append(value)
+        return original_path(value)
+
+    monkeypatch.setattr(browse, "Path", observed_path)
+    compact = browse._problematic_track_problem_rows(album, include_repair_metadata=False)
+    assert all(row["filename"] == original_path(row["path"]).name for row in compact)
+    assert compact == [{key: row[key] for key in ("path", "filename", "reasons")} for row in full]
+    assert path_calls == [value for value in paths if basename(value) in ("", ".")]
+
+
+def test_problematic_summary_omits_unused_repair_identity_materialization(monkeypatch):
+    from music_app.services import library_browse_postgres as browse
+
+    rows = _healthy_problematic_order_rows([1, 2, 3])
+    for row in rows:
+        row["file_entry"]["year"] = None
+    album = browse._problematic_album_projection_payloads(rows)[0]
+    calls = []
+    original = browse._problem_identity_row_key
+
+    def record_identity(*args, **kwargs):
+        calls.append((args, kwargs))
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(browse, "_problem_identity_row_key", record_identity)
+    full_rows = browse._problematic_track_problem_rows(album)
+    full_count = len(calls)
+    calls.clear()
+    compact_rows = browse._problematic_track_problem_rows(album, include_repair_metadata=False)
+    assert len(calls) == full_count - sum(len(row["reasons"]) for row in full_rows)
+    assert all("ignorable_reasons" not in row and "file_type" not in row for row in compact_rows)
+    assert all("ignorable_reasons" in row and "file_type" in row for row in full_rows)
+
+
 def test_problematic_summary_search_text_includes_track_titles_without_heavy_detail_arrays():
     from music_app.services.library_browse_postgres import (
         _problematic_album_projection_payloads,
@@ -9411,6 +9613,71 @@ def test_problematic_summary_skips_repairs_for_rows_rejected_by_persisted_mojiba
 
     assert summary is not None
     assert "Encoding problem" not in summary["problem_reasons"]
+
+
+def test_problematic_projection_reuses_text_classification_only_within_one_call(monkeypatch):
+    from music_app.services import library_browse_postgres as module
+
+    rows = []
+    for album_id, album_key, album_title in (
+        (101, "first-album", "First Album"),
+        (102, "second-album", "Second Album"),
+    ):
+        row = _normal_problematic_product_row(
+            album_key=album_key,
+            album_title=album_title,
+        )
+        row.update(
+            {
+                "album_id": album_id,
+                "track_id": album_id + 500,
+                "track_key": f"{album_key}-track",
+            }
+        )
+        rows.append(row)
+
+    calls = []
+
+    def observed_reason(label, value, *, detect_encoding=True):
+        calls.append((label, value, detect_encoding))
+        return None
+
+    monkeypatch.setattr(module, "_text_problem_reason_fast", observed_reason)
+
+    def classify_projection():
+        albums = module._problematic_album_projection_payloads(rows)
+        assert len(albums) == 2
+        for album in albums:
+            module._cached_problematic_text_reason(
+                album,
+                "Track title",
+                "Shared Track",
+                detect_encoding=True,
+            )
+            module._cached_problematic_text_reason(
+                album,
+                "Track title",
+                "Shared Track",
+                detect_encoding=False,
+            )
+            module._cached_problematic_text_reason(
+                album,
+                "Album",
+                "Shared Track",
+                detect_encoding=True,
+            )
+
+    classify_projection()
+    classify_projection()
+
+    expected_calls = {
+        ("Track title", "Shared Track", True),
+        ("Track title", "Shared Track", False),
+        ("Album", "Shared Track", True),
+    }
+    assert set(calls) == expected_calls
+    assert len(calls) == 2 * len(expected_calls)
+    assert all(calls.count(expected) == 2 for expected in expected_calls)
 
 
 class _ProblematicSnapshotConnectionStub:
@@ -10043,6 +10310,67 @@ def test_postgres_library_browse_builds_utility_rules_projection_from_rows():
         delimiter_aware_parser in sql
         for delimiter_aware_parser in ("regexp_match(", "regexp_replace(", "substring(", "reverse(")
     ), "album exclusion SQL must identify the problem-album suffix from the right"
+
+
+def test_known_problem_reason_identity_does_not_encode_unused_fallback(monkeypatch):
+    from music_app.services import library_browse_postgres as module
+
+    def reject_encoding(_reason):
+        raise AssertionError("Known reason identities must not encode an unused fallback.")
+
+    monkeypatch.setattr(module, "_encoded_problem_reason_identity", reject_encoding)
+    for reason, code in module._PROBLEM_REASON_IDENTITY_CODES.items():
+        assert module._problem_reason_identity_code(f"  {reason}  ") == code
+
+
+def test_unknown_problem_reason_identity_encodes_normalized_reason_once(monkeypatch):
+    from music_app.services import library_browse_postgres as module
+
+    reason = "Unexpected embedded cuesheet marker"
+    original = module._encoded_problem_reason_identity
+    expected = original(reason)
+    calls = []
+
+    def record_encoding(value):
+        calls.append(value)
+        return original(value)
+
+    monkeypatch.setattr(module, "_encoded_problem_reason_identity", record_encoding)
+    assert module._problem_reason_identity_code(f"  {reason}  ") == expected
+    assert module._decoded_problem_reason_identity(expected) == reason
+    assert calls == [reason]
+
+
+@pytest.mark.parametrize("scope", ["album", "file"])
+def test_empty_problem_ignore_set_does_not_build_identity(monkeypatch, scope):
+    from music_app.services import library_browse_postgres as module
+
+    def reject_identity(*_args, **_kwargs):
+        raise AssertionError("An empty ignore set cannot contain any reason identity.")
+
+    monkeypatch.setattr(module, "_problem_identity_row_key", reject_identity)
+    assert module._problem_reason_is_ignored(
+        set(), "fixture-track.flac", "Missing year", scope=scope, legacy_field="year"
+    ) is False
+
+
+@pytest.mark.parametrize("scope", ["album", "file"])
+@pytest.mark.parametrize("reason", ["Missing year", "Unexpected embedded cuesheet marker"])
+def test_nonempty_problem_ignore_set_preserves_exact_and_legacy_matching(scope, reason):
+    from music_app.services import library_browse_postgres as module
+
+    path = "fixture-track.flac"
+    identity = module._problem_identity_row_key(path, reason, scope=scope)
+    assert module._problem_reason_is_ignored({identity}, path, reason, scope=scope)
+    assert module._problem_reason_is_ignored(
+        {f"{path}::year"}, path, reason, scope=scope, legacy_field="year"
+    )
+    assert not module._problem_reason_is_ignored(
+        {f"{path}::year"}, path, reason, scope=scope
+    )
+    assert not module._problem_reason_is_ignored(
+        {identity}, "different-track.flac", reason, scope=scope, legacy_field="year"
+    )
 
 
 def test_problem_exclusion_identity_round_trips_exact_visible_reasons_into_rules():

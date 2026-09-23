@@ -132,7 +132,7 @@ export class TagEditorActions {
     await track.scrollIntoViewIfNeeded();
     await expect(track).toBeVisible();
     await track.click();
-    await expect(track).toHaveAttribute('aria-pressed', 'true');
+    await expect(this.tagEditor.selectionToggleByFilename(filename)).toHaveAttribute('aria-pressed', 'true');
   }
 
   async selectTracksByFilenames(filenames) {
@@ -159,15 +159,12 @@ export class TagEditorActions {
       throw new Error('A drag-selected track range requires at least two filenames.');
     }
     const firstTrack = this.tagEditor.trackButtonByFilename(expectedFilenames[0]);
-    const lastTrack = this.tagEditor.trackButtonByFilename(expectedFilenames.at(-1));
     await expect(firstTrack).toHaveCount(1);
-    await expect(lastTrack).toHaveCount(1);
     await firstTrack.scrollIntoViewIfNeeded();
-    await lastTrack.scrollIntoViewIfNeeded();
+    await expect(firstTrack).toBeVisible();
     const firstBox = await firstTrack.boundingBox();
-    const lastBox = await lastTrack.boundingBox();
-    if (!firstBox || !lastBox) {
-      throw new Error('The drag-selected track range must be visible.');
+    if (!firstBox) {
+      throw new Error('The first drag-selected track must be visible.');
     }
     await this.tagEditor.page.mouse.move(
       firstBox.x + firstBox.width / 2,
@@ -175,11 +172,13 @@ export class TagEditorActions {
     );
     await this.tagEditor.page.mouse.down();
     try {
-      await this.tagEditor.page.mouse.move(
-        lastBox.x + lastBox.width / 2,
-        lastBox.y + lastBox.height / 2,
-        { steps: 10 },
-      );
+      for (const filename of expectedFilenames.slice(1)) {
+        const track = this.tagEditor.trackButtonByFilename(filename);
+        await expect(track).toBeVisible();
+        const box = await track.boundingBox();
+        if (!box) throw new Error(`The drag-selected track must be visible: ${filename}`);
+        await this.tagEditor.page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+      }
     } finally {
       await this.tagEditor.page.mouse.up();
     }
@@ -191,6 +190,113 @@ export class TagEditorActions {
     return (await this.tagEditor.activeTrackTitles.allTextContents())
       .map((filename) => String(filename || '').trim())
       .filter(Boolean);
+  }
+
+  async selectTrackWithModifier(filename, modifier) {
+    const track = this.tagEditor.trackButtonByFilename(filename);
+    await expect(track).toHaveCount(1);
+    await track.click({ modifiers: [modifier] });
+  }
+
+  async expectSelectedTrackFilenames(filenames) {
+    await expect(this.tagEditor.activeTrackButtons).toHaveCount(filenames.length);
+    expect(await this.readSelectedTrackFilenames()).toEqual(filenames);
+  }
+
+  async dragReorderBefore(filename, beforeFilename) {
+    try {
+      await this.startNativeReorder(filename);
+      await this.moveNativeReorderBefore(beforeFilename);
+    } finally {
+      await this.tagEditor.page.mouse.up();
+    }
+  }
+
+  async startNativeReorder(filename) {
+    const grip = this.tagEditor.reorderGripByFilename(filename);
+    await grip.scrollIntoViewIfNeeded();
+    const box = await grip.boundingBox();
+    if (!box) throw new Error('The reorder grip must have visible bounds.');
+    const x = box.x + box.width / 2;
+    const y = box.y + box.height / 2;
+    await this.tagEditor.page.mouse.move(x, y);
+    await this.tagEditor.page.mouse.down();
+    // Start the native drag before scrolling a distant destination into view.
+    await this.tagEditor.page.mouse.move(x + 8, y, { steps: 2 });
+    await this.tagEditor.page.mouse.move(x + 9, y);
+    await expect(this.tagEditor.trackButtonByFilename(filename)).toHaveClass(/is-reorder-dragged/);
+  }
+
+  async moveNativeReorderBefore(beforeFilename) {
+    const target = this.tagEditor.trackButtonByFilename(beforeFilename);
+    await target.scrollIntoViewIfNeeded();
+    const targetBox = await target.boundingBox();
+    if (!targetBox) throw new Error('The reorder target must have visible bounds.');
+    const x = targetBox.x + targetBox.width / 2;
+    const y = targetBox.y + targetBox.height / 4;
+    await this.tagEditor.page.mouse.move(x, y);
+    await this.tagEditor.page.mouse.move(x, y);
+    await expect(target).toHaveClass(/is-reorder-before/);
+  }
+
+  async dragReorderBelowList(filename) {
+    try {
+      await this.startNativeReorder(filename);
+      await this.tagEditor.trackButtons.last().scrollIntoViewIfNeeded();
+      const target = await this.tagEditor.trackList.boundingBox();
+      if (!target) throw new Error('The tag editor track list must have visible bounds.');
+      const x = target.x + target.width / 2;
+      const y = target.y + target.height - 2;
+      await this.tagEditor.page.mouse.move(x, y);
+      await this.tagEditor.page.mouse.move(x, y);
+      await expect(this.tagEditor.trackList).toHaveClass(/is-reorder-end/);
+    } finally {
+      await this.tagEditor.page.mouse.up();
+    }
+  }
+
+  async dragTrackWithoutGrip(filename, beforeFilename) {
+    await this.tagEditor.selectionToggleByFilename(filename).dragTo(
+      this.tagEditor.selectionToggleByFilename(beforeFilename),
+    );
+    await expect(this.tagEditor.reorderCueRows).toHaveCount(0);
+    await expect(this.tagEditor.trackList).not.toHaveClass(/is-reorder-end/);
+  }
+
+  async dropReorderOutsideList(filename) {
+    try {
+      await this.startNativeReorder(filename);
+      const header = await this.tagEditor.subtitle.boundingBox();
+      if (!header) throw new Error('The tag editor subtitle must have visible bounds.');
+      const x = header.x + header.width / 2;
+      const y = header.y + header.height / 2;
+      await this.tagEditor.page.mouse.move(x, y);
+      await this.tagEditor.page.mouse.move(x, y);
+    } finally {
+      await this.tagEditor.page.mouse.up();
+    }
+    await expect(this.tagEditor.reorderCueRows).toHaveCount(0);
+    await expect(this.tagEditor.trackList).not.toHaveClass(/is-reorder-end/);
+  }
+
+  async reorderWithKeyboard(filename, key) {
+    const grip = this.tagEditor.reorderGripByFilename(filename);
+    await expect(grip).toBeVisible();
+    await grip.focus();
+    await grip.press(key);
+    await expect(grip).toBeFocused();
+  }
+
+  async cancelActiveReorder(filename, beforeFilename) {
+    try {
+      await this.startNativeReorder(filename);
+      await this.moveNativeReorderBefore(beforeFilename);
+      await this.tagEditor.page.keyboard.press('Escape');
+      await expect(this.tagEditor.trackList).not.toHaveClass(/is-reorder-end/);
+      await expect(this.tagEditor.reorderCueRows).toHaveCount(0);
+    } finally {
+      await this.tagEditor.page.mouse.up();
+    }
   }
 
   async selectAllTracks() {
@@ -438,6 +544,12 @@ export class TagEditorActions {
     const timeout = options.timeout || 30000;
     await this.tagEditor.cancelButton.click();
     await expect(this.tagEditor.overlay).toBeHidden({ timeout });
+  }
+
+  async closeIfOpen(options = {}) {
+    if (await this.tagEditor.overlay.isVisible()) {
+      await this.close(options);
+    }
   }
 
   async dismissTopmostOverlayWithEscape() {

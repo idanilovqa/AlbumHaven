@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.9.46 - 2026-09-23
+
+- Reworked Cover Look Up and album artwork controls with shared components,
+  staged paste/drop/file inputs, source previews, and failure recovery.
+- Added a Library Status Page with scan phases, cancellation, failure reporting,
+  and access to the library during scans.
+- Preserved gallery position and playback while folding the Artist Tree, and
+  refined docked, sidebar, and floating player layouts and appearance controls.
+- Added account-scoped device appearance storage while keeping Mobile and TV
+  editing disabled and preserving their saved compatibility values.
+- Unified modal Escape handling, notification actions, connected menus, and
+  Edit Tags selection and reorder behavior.
+- Virtualized the Problematic Files list while preserving search, filtering,
+  selection, and navigation. Cold-load performance optimization remains Phase 9
+  debt under an owner-approved temporary timing exception.
+- Expanded focused browser and component coverage for these interactions and
+  adopted the published v1.0.25 test fixtures.
+
 ## 0.9.45 - 2026-09-21
 
 - Reworked Settings around shared navigation, search, rules, suggestions,

@@ -5,6 +5,35 @@
   --trigger-anchor-cap: var(--trigger-anchor-accent);
   --trigger-anchor-background: var(--appearance-panel-background, var(--panel));
 }
+:root[data-appearance-mode='light'] {
+  --appearance-selected-accent: var(--appearance-accent, #596775);
+}
+:root[data-appearance-mode='light'] :is(.shell-main-surface, .settings-outlet) {
+  --trigger-anchor-background: var(--appearance-card);
+}
+:root[data-appearance-mode='light'] .trigger-anchor-surface[data-trigger-anchor-context='content']:is([data-anchored-surface], .artist-info-overlay) {
+  --trigger-anchor-background: var(--appearance-card);
+  --text: var(--appearance-ink);
+  --muted: var(--appearance-muted);
+  --border: var(--appearance-line);
+  color: var(--text);
+}
+:root .trigger-anchor-open[data-trigger-anchor-context='content'] {
+  --trigger-anchor-background: var(--appearance-card, var(--panel));
+}
+:root .trigger-anchor-open[data-trigger-anchor-context='chrome'] {
+  --trigger-anchor-background: var(--appearance-panel-background, var(--panel));
+}
+:root :is(.app-bar .trigger-anchor-surface, .trigger-anchor-surface[data-trigger-anchor-context='chrome']) {
+  --text: var(--appearance-panel-ink, var(--app-ink, #eee));
+  --muted: var(--appearance-panel-muted, var(--app-muted, #aab4c0));
+  --border: var(--appearance-panel-line, #526173);
+  --panel: var(--appearance-panel-background, #171717);
+  --trigger-anchor-background: var(--appearance-panel-background, #171717);
+  --dropdown-item-hover-background: var(--appearance-panel-action-hover-background,
+    color-mix(in srgb, var(--text) 8%, var(--panel)));
+  color: var(--text);
+}
 @property --trigger-anchor-cap { syntax: '<color>'; inherits: true; initial-value: #55c7ff; }
 :root .trigger-anchor-open,
 #utility-modal .utility-tab.is-active {
@@ -51,9 +80,12 @@
 }
 :root .trigger-anchor-surface::after {
   content: ''; position: absolute; inset: 0 0 auto; height: 2px; padding: 0;
+  /* Anchor geometry uses the outer border box, not the inset padding box. */
+  left: -1px; right: -1px;
   border: 0; border-radius: 0; pointer-events: none; mask: none; clip-path: none;
-  background: var(--trigger-anchor-line-left) left top / calc(var(--trigger-anchor-left) + 1px) var(--trigger-top-line-width, 2px) no-repeat,
-    var(--trigger-anchor-line-right) right top / calc(var(--trigger-anchor-right) + 1px) var(--trigger-top-line-width, 2px) no-repeat;
+  background: linear-gradient(var(--trigger-anchor-background), var(--trigger-anchor-background)) calc(var(--trigger-anchor-left) + 2px) top / calc(var(--trigger-anchor-width) - 4px) var(--trigger-top-line-width, 2px) no-repeat,
+    var(--trigger-anchor-line-left) left top / calc(var(--trigger-anchor-left) + 2px) var(--trigger-top-line-width, 2px) no-repeat,
+    var(--trigger-anchor-line-right) right top / calc(var(--trigger-anchor-right) + 2px) var(--trigger-top-line-width, 2px) no-repeat;
 }
 :root .trigger-anchor-open[data-trigger-anchor-edge="bottom"] {
   border-top: 0 !important; border-bottom: 2px solid transparent !important;
@@ -63,29 +95,28 @@
 :root .trigger-anchor-surface[data-trigger-anchor-edge="bottom"] { border-top: 1px solid var(--border); border-bottom: 0; }
 :root .trigger-anchor-surface[data-trigger-anchor-edge="bottom"]::before { top: auto; bottom: calc(-1 * var(--trigger-anchor-gap) - 2px); }
 :root .trigger-anchor-surface[data-trigger-anchor-edge="bottom"]::after { top: auto; bottom: 0; }
-@keyframes trigger-anchor-unfold {
-  from { clip-path: inset(calc(-1 * var(--trigger-anchor-gap, 0px) - 2px) 0 100%); }
-  to { clip-path: inset(calc(-1 * var(--trigger-anchor-gap, 0px) - 2px) 0 0); }
-}
-:root .trigger-anchor-surface:not(.artist-family-panel) { animation: trigger-anchor-unfold 200ms cubic-bezier(.22, 1, .36, 1); }
 @media (prefers-reduced-motion: reduce) {
   :root .trigger-anchor-surface { animation: none; transition: none; }
 }
 /* Keep the bridge outside scrollable menu contents. */
 :root .trigger-anchor-surface::before { display: none; }
 :root .trigger-anchor-open::after {
-  content: ''; position: absolute; left: -2px; right: -2px; top: 100%;
-  height: var(--trigger-anchor-gap, 0px);
+  content: ''; position: absolute; left: -2px; right: -2px; top: calc(100% - 3px);
+  height: calc(var(--trigger-anchor-gap, 0px) + 3px);
   border-inline: 2px solid var(--trigger-anchor-accent); box-sizing: border-box;
   background: var(--trigger-anchor-background); pointer-events: none;
 }
-:root .trigger-anchor-open[data-trigger-anchor-edge="bottom"]::after { top: auto; bottom: 100%; }
-:root .trigger-anchor-surface[data-trigger-anchor-edge="bottom"] { animation-name: trigger-anchor-unfold-up; }
-@keyframes trigger-anchor-unfold-up {
-  from { clip-path: inset(100% 0 0); }
-  to { clip-path: inset(0); }
-}
+:root .trigger-anchor-open[data-trigger-anchor-edge="bottom"]::after { top: auto; bottom: calc(100% - 3px); }
 :root .trigger-anchor-surface { border-color: var(--border); }
+
+/* A popup's shadow must not darken the connected button or their shared join.
+   Keep room for the side/bottom shadow without clipping the menu contents. */
+:root .trigger-anchor-surface:not(.artist-family-panel) {
+  clip-path: inset(0 -80px -80px -80px);
+}
+:root .trigger-anchor-surface:not(.artist-family-panel)[data-trigger-anchor-edge="bottom"] {
+  clip-path: inset(-80px -80px 0 -80px);
+}
 
 /* Selected accents stay separate from the chosen interaction color. */
 :root .trigger-anchor-open:is(:hover, :focus-visible) { --trigger-anchor-cap: var(--appearance-interaction-outline, var(--appearance-play)); }
@@ -95,10 +126,12 @@
   display: block;
   top: 0; bottom: auto; left: -1px;
   width: 2px; height: min(210px, 100%);
+  z-index: 1;
   border: 0;
   --trigger-edge-direction: to bottom;
   background: linear-gradient(var(--trigger-edge-direction),
     var(--trigger-anchor-accent) 0,
+    var(--trigger-anchor-accent) 5px,
     color-mix(in srgb, var(--trigger-anchor-accent) 65%, transparent) 17%,
     color-mix(in srgb, var(--trigger-anchor-accent) 25%, transparent) 43%,
     color-mix(in srgb, var(--trigger-anchor-accent) 5%, transparent) 71%,
@@ -162,6 +195,9 @@
 :root :is(.account-menu-item, .gallery-anchored-menu button, [role="menu"] [role^="menuitem"], [role="listbox"] [role="option"], .album-card-context-menu button, .status-context-menu button, .gallery-options-menu button, .utility-problem-filter-option, .utility-loop-speed-menu button, .recent-search-option, .artist-family-panel__combine-row .gallery-switch):focus-visible:not(:disabled):not([aria-disabled="true"]) {
   text-decoration: underline;
   text-underline-offset: 3px;
+}
+:root .artist-family-panel__combine-row .gallery-switch:hover:not(:disabled):not([aria-disabled="true"]) {
+  background: transparent !important;
 }
 :root .artist-family-panel__combine-row .gallery-switch:active:not(:disabled):not([aria-disabled="true"]) {
   background: var(--dropdown-item-hover-background, color-mix(in srgb, var(--text, #eee) 8%, var(--panel, #171717))) !important;

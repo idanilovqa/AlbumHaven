@@ -183,6 +183,28 @@ function sequentialSampler(statuses) {
   };
 }
 
+test('production sample projection preserves failed and recovered terminal outcomes', async () => {
+  const fixtureRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'scan-terminal-outcome-'));
+  const samplesPath = path.join(fixtureRoot, 'status.jsonl');
+  try {
+    for (const outcome of ['failed', 'completed']) {
+      const error = outcome === 'failed' ? 'permission denied for table local_track_files' : '';
+      fs.writeFileSync(samplesPath, `${JSON.stringify({
+        recordedAtEpochMs: 1000,
+        status: { scan_in_progress: false, scan_outcome: outcome, last_error: error },
+      })}\n`, 'utf8');
+      const sampler = createScanStatusSampler({ samplesPath });
+      const snapshot = await sampler.snapshot();
+      assert.equal(snapshot.samples[0].scanOutcome, outcome);
+      const terminal = await waitForStatusIdle(sampler);
+      assert.equal(terminal.scan_outcome, outcome);
+      assert.equal(terminal.last_error, error);
+    }
+  } finally {
+    fs.rmSync(fixtureRoot, { recursive: true, force: true });
+  }
+});
+
 test('scan status waiters consume only the newest production sample', async () => {
   const idle = {
     scanInProgress: false,

@@ -11,6 +11,27 @@ const searchToolbarUrl = pathToFileURL(path.join(
   'searchToolbar.js',
 )).href;
 
+test('search and gallery settlement observe artist GalleryBar context as well as section headings', async () => {
+  const { SearchToolbar } = await import(searchToolbarUrl);
+  const { GalleryPage } = await import(new URL('./galleryPage.js', searchToolbarUrl));
+  const { ScanPage } = await import(new URL('./scanPage.js', searchToolbarUrl));
+  for (const headingSelector of [
+    SearchToolbar.prototype.artistHeadingSelector,
+    GalleryPage.prototype.artistHeadingSelector,
+    ScanPage.prototype.galleryHeadingSelector,
+  ]) {
+    const selectors = headingSelector.split(', ');
+    assert.deepEqual(selectors, [
+      '#artist-groups .artist-name',
+      '[data-gallery-bar][data-gallery-context-kind="artist"] [data-gallery-context-name]',
+      '[data-gallery-bar][data-gallery-context-kind="single-artist"] [data-gallery-context-name]',
+    ]);
+    for (const excludedContext of ['gallery', 'family']) {
+      assert.equal(selectors.some(selector => selector.includes(`data-gallery-context-kind="${excludedContext}"`)), false);
+    }
+  }
+});
+
 test('settled search query prefers the current runtime view after a local clear', async () => {
   const { resolveCurrentCanonicalQuery } = await import(searchToolbarUrl);
 

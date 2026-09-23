@@ -393,7 +393,8 @@ def test_scan_provider_isolation_rejects_blank_default_and_network_capable_group
         })
 
 
-def test_configure_environment_uses_explicit_runner_owned_temp_root(tmp_path, monkeypatch):
+@pytest.mark.parametrize("scenario", ["add-album", "health-warning"])
+def test_configure_environment_uses_explicit_runner_owned_temp_root(tmp_path, monkeypatch, scenario):
     module = _load_module()
     leased_root = (tmp_path / 'runner-owned-scan-root').resolve()
     leased_root.mkdir()
@@ -430,11 +431,19 @@ def test_configure_environment_uses_explicit_runner_owned_temp_root(tmp_path, mo
         'initialize_scan_performance_database',
         lambda database_url: calls.append(('initialize', database_url)),
     )
-    monkeypatch.setattr(
-        module,
-        'persist_scan_performance_library_root',
-        lambda database_url, music_dir: calls.append(('persist', database_url, music_dir)),
-    )
+    unavailable_roots = []
+
+    def persist_roots(database_url, music_dir, *, unavailable_root=None):
+        calls.append(('persist', database_url, music_dir))
+        if scenario == 'health-warning':
+            assert unavailable_root.is_dir()
+            assert list(unavailable_root.iterdir()) == []
+            assert unavailable_root.is_relative_to(leased_root)
+            unavailable_roots.append(unavailable_root)
+        else:
+            assert unavailable_root is None
+
+    monkeypatch.setattr(module, 'persist_scan_performance_library_root', persist_roots)
     monkeypatch.setattr(
         module,
         'configure_performance_auth_environment',
@@ -447,7 +456,8 @@ def test_configure_environment_uses_explicit_runner_owned_temp_root(tmp_path, mo
     )
 
     try:
-        music_dir = module.configure_environment('add-album')
+        music_dir = module.configure_environment(scenario)
+        assert all(not root.exists() for root in unavailable_roots)
 
         assert music_dir == expected_music_dir
         assert module._TEMP_ROOT == leased_root

@@ -1,6 +1,24 @@
+import { expect } from '@playwright/test';
+
 export class NavigationPanelActions {
   constructor(navigationPanel) {
     this.navigationPanel = navigationPanel;
+  }
+
+  async setArtistTreeFolded(folded) {
+    const expectedFolded = Boolean(folded);
+    const current = await this.navigationPanel.readArtistTreeFoldState();
+    if (current.folded !== expectedFolded) {
+      const control = expectedFolded
+        ? this.navigationPanel.artistTreeFoldButton
+        : this.navigationPanel.artistTreeNavigationButton;
+      await control.click();
+    }
+    await expect.poll(
+      async () => this.navigationPanel.readArtistTreeFoldState(),
+      { timeout: 5000 },
+    ).toMatchObject({ folded: expectedFolded, transitioning: false });
+    return this.navigationPanel.readArtistTreeFoldState();
   }
 
   parseVisibleCount(text) {

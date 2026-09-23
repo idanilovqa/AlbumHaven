@@ -23,6 +23,30 @@ export class NavigationPanel extends BasePage {
     this.allArtistsCount = page.locator(this.allArtistsCountSelector);
     this.activeSidebarLink = page.locator(this.activeSidebarLinkSelector);
     this.activeAllArtistsLink = page.locator(this.activeAllArtistsSelector);
+    this.artistTreeFoldButton = page.getByRole('button', { name: 'Collapse Artist Tree', exact: true });
+    this.artistTreeNavigationButton = page.getByRole('button', { name: 'Artist Tree', exact: true });
+  }
+
+  async readArtistTreeFoldState() {
+    // parity-check: allow-read-only-measurement-evaluate -- read settled production shell geometry and accessibility state
+    return this.page.locator('#app-shell').evaluate((shell) => {
+      const rail = document.getElementById('shell-navigation-rail');
+      const main = document.getElementById('shell-main-surface');
+      return {
+        folded: shell.classList.contains('is-artist-tree-folded'),
+        transitioning: Boolean(rail?.classList.contains('is-transitioning')),
+        mainWidth: main?.getBoundingClientRect().width || 0,
+        railWidth: rail?.getBoundingClientRect().width || 0,
+      };
+    });
+  }
+
+  async readReducedMotionState() {
+    // parity-check: allow-read-only-measurement-evaluate -- read settled reduced-motion CSS only
+    return this.page.locator('html').evaluate((root) => ({
+      duration: getComputedStyle(root).getPropertyValue('--compact-motion-duration').trim(),
+      transition: getComputedStyle(root).transitionProperty,
+    }));
   }
 
   get sidebarArtistSelector() {

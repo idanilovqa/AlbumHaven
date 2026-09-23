@@ -219,7 +219,7 @@ test('notification owner ignores occluded background controls, retries deferred 
   assert.equal(styles.get('--notification-available-width'), '179px');
   assert.equal(node.offsetWidth, 179, 'the host must apply the visual width before reading notification geometry');
   assert.equal(attributes.has('data-notification-deferred'), false);
-  assert.match(baseLayoutSource, /min-width:\s*min\(280px, var\(--notification-available-width\)\)/u);
+  assert.match(baseLayoutSource, /#toast-layer > \.toast\.floating-notification-positioned\s*\{[^}]*min-width:\s*0/u);
   context.unregisterFloatingNotification(node);
   assert.equal(disconnected, 2);
   assert.equal(listeners.size, 0);
@@ -412,6 +412,17 @@ test('toast placement is opt-in for the cover lookup start notification', () => 
 
   assert.equal(toasts[0].className, 'toast');
   assert.equal(toasts[1].className, 'toast is-top-center');
+});
+
+test('toast alerts render as compact single-line notifications without a heading', () => {
+  const { context, toasts } = createContext();
+
+  context.showToast('Cover art lookup started.', 'success');
+
+  assert.match(toasts[0].innerHTML, /on-page-alert--compact/);
+  assert.match(toasts[0].innerHTML, /Cover art lookup started\./);
+  assert.doesNotMatch(toasts[0].innerHTML, /on-page-alert__title/);
+  assert.doesNotMatch(toasts[0].innerHTML, />Update</);
 });
 
 test('simultaneous identical error toasts coalesce while distinct errors remain visible', () => {
@@ -729,11 +740,11 @@ test('floating alerts use approved severity, escaped messages, and shared repair
   context.showToast('<img src=x onerror=alert(1)>', 'error');
   context.showToast('Watch the library', 'warning');
   context.showToast('Saved', 'success');
-  assert.match(toasts[0].innerHTML, /on-page-alert--error" role="alert"/);
+  assert.match(toasts[0].innerHTML, /on-page-alert--error on-page-alert--compact" role="alert"/);
   assert.match(toasts[0].innerHTML, /&lt;img src=x onerror=alert\(1\)&gt;/);
   assert.doesNotMatch(toasts[0].innerHTML, /<img/);
   assert.match(toasts[1].innerHTML, /on-page-alert--warning/);
-  assert.match(toasts[2].innerHTML, /on-page-alert--info" role="status"/);
+  assert.match(toasts[2].innerHTML, /on-page-alert--info on-page-alert--compact" role="status"/);
   const repair = createRepairAlertContext();
   repair.context.showRepairAlert('<b>Pending</b>', 'success', null);
   assert.match(repair.alert.innerHTML, /on-page-alert--info" role="status"/);

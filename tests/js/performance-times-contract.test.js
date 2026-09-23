@@ -77,6 +77,28 @@ test('performance timing contract fails closed for missing metrics and invalid t
   }
 });
 
+test('temporary cold API 1000 ms grace is exact and cannot widen other contracts', (t) => {
+  const { loadPerformanceTimesContract, resolveTimingBudget } = loadAuthority();
+  const metricId = 'utility-problematic-files-isolated-postgres.coldProblematicApiMs';
+  const approved = { targetMs: 1000, graceMs: 1000, hardCeilingMs: 2000 };
+  for (const contractName of ['local', 'ci']) {
+    const contractPath = writeContract(t, { [metricId]: validMetric({ [contractName]: approved }) });
+    const contract = loadPerformanceTimesContract({ contractPath });
+    assert.deepEqual(resolveTimingBudget(metricId, contractName, contract), {
+      metricId, contractName, targetMaximum: 1000, graceMs: 1000, hardCeiling: 2000,
+    });
+    for (const [id, triplet] of [
+      ['example.ready', approved],
+      [metricId, { targetMs: 999, graceMs: 1000, hardCeilingMs: 1999 }],
+      [metricId, { targetMs: 1000, graceMs: 999, hardCeilingMs: 1999 }],
+      [metricId, { ...approved, hardCeilingMs: 2001 }],
+    ]) {
+      const invalidPath = writeContract(t, { [id]: validMetric({ [contractName]: triplet }) });
+      assert.throws(() => loadPerformanceTimesContract({ contractPath: invalidPath }), /grace|ceiling/i);
+    }
+  }
+});
+
 test('checked-in timing authority contains the approved local and CI triplets', () => {
   const {
     loadPerformanceTimesContract,
@@ -84,6 +106,26 @@ test('checked-in timing authority contains the approved local and CI triplets', 
   } = loadAuthority();
   const contract = loadPerformanceTimesContract();
   const approved = {
+    'utility-problematic-files-isolated-postgres.coldProblematicApiMs': {
+      local: [1000, 1000, 2000],
+      ci: [1000, 1000, 2000],
+    },
+    'utility-problematic-files-isolated-postgres.problematicReadyMs': {
+      local: [1000, 400, 1400],
+      ci: [1000, 400, 1400],
+    },
+    'utility-problematic-files-isolated-postgres.problematicCachedEnterMs': {
+      local: [1000, 200, 1200],
+      ci: [1000, 200, 1200],
+    },
+    'utility-problematic-files-isolated-postgres.problematicCachedExitMs': {
+      local: [1000, 200, 1200],
+      ci: [1000, 200, 1200],
+    },
+    'utility-problematic-files-isolated-postgres.problematicCachedReenterMs': {
+      local: [1000, 200, 1200],
+      ci: [1000, 200, 1200],
+    },
     'playback-start.maximumStartMs': {
       local: [900, 200, 1100],
       ci: [1800, 200, 2000],
@@ -174,7 +216,7 @@ test('every checked-in timing metric declares explicit local and CI contracts', 
   const requiredMetricIds = listRequiredPerformanceTimingMetricIds();
 
   assert.ok(Object.keys(contract).length > 6, 'the authority must cover all timing metrics, not only overrides');
-  assert.ok(requiredMetricIds.length > 19, 'the required inventory must cover timing metrics across the 19 targets');
+  assert.ok(requiredMetricIds.length > 19, 'the required inventory must cover timing metrics across the 21 targets');
   assert.equal(new Set(requiredMetricIds).size, requiredMetricIds.length, 'required timing metric ids must be unique');
   assert.deepEqual(
     Object.keys(contract).sort(),

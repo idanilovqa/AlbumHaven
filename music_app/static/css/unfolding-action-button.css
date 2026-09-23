@@ -10,10 +10,6 @@
   transition: width 180ms ease;
 }
 .unfolding-action-button.is-open { width: calc(32px * var(--unfolding-action-count, 2) + 2px); }
-.unfolding-action-button:is(:hover, :focus-within) {
-  outline: 1px solid var(--appearance-interaction-outline, var(--appearance-play));
-  outline-offset: 1px;
-}
 :root .unfolding-action-button > .unfolding-action-button__action {
   display: inline-grid;
   place-items: center;
@@ -54,4 +50,8 @@
   background: transparent !important;
 }
 
-:root .unfolding-action-button > .unfolding-action-button__action:is(:hover, :focus-visible) { color: var(--appearance-interaction-outline, var(--appearance-play)); }
+:root .unfolding-action-button > .unfolding-action-button__action:is(:hover, :focus-visible) {
+  color: color-mix(in srgb,
+    var(--appearance-play, #4ade80) 70%,
+    var(--appearance-ink, var(--text)));
+}

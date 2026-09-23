@@ -19,7 +19,12 @@ export class TagEditor extends BasePage {
     this.trackList = this.overlay.locator('#tag-editor-track-list');
     this.trackButtons = this.overlay.locator('[data-tag-editor-track]');
     this.trackTitles = this.overlay.locator('[data-tag-editor-track] .tag-editor-track-title');
-    this.activeTrackButtons = this.overlay.locator('[data-tag-editor-track][aria-pressed="true"]');
+    this.reorderCueRows = this.trackList.locator(
+      '[data-tag-editor-track].is-reorder-before, [data-tag-editor-track].is-reorder-dragged',
+    );
+    this.activeTrackButtons = this.trackButtons.filter({
+      has: this.page.locator('.tag-editor-track-select[aria-pressed="true"]'),
+    });
     this.activeTrackTitles = this.activeTrackButtons.locator('.tag-editor-track-title');
     this.albumNameInput = this.overlay.locator('input[data-tag-field="album"]');
     this.artistInput = this.overlay.locator('input[data-tag-field="artist"]');
@@ -91,6 +96,16 @@ export class TagEditor extends BasePage {
       has: this.page.locator('.tag-editor-track-title').filter({
         hasText: exactNormalizedText(filename),
       }),
+    });
+  }
+
+  selectionToggleByFilename(filename) {
+    return this.trackButtonByFilename(filename).locator('.tag-editor-track-select');
+  }
+
+  reorderGripByFilename(filename) {
+    return this.trackButtonByFilename(filename).getByRole('button', {
+      name: exactNormalizedText(`Reorder ${filename}; use Arrow Up or Arrow Down`),
     });
   }
 

@@ -30,6 +30,7 @@ const RUNTIME_SCRIPT_PATHS = [
   'js/runtime/album-details-components.js',
   'js/runtime/core-state-and-helpers.js',
   'js/runtime/trigger-anchor.js',
+  'js/runtime/search-input.js',
   'js/runtime/gallery-main-interactions.js',
   'js/runtime/compact-player-helpers.js',
   'js/runtime/player-streaming-engine.js',
@@ -59,8 +60,10 @@ const RUNTIME_SCRIPT_PATHS = [
   'js/runtime/library-settings.js',
   'js/runtime/cover-lookup-notification-helpers.js',
   'js/runtime/appearance-backgrounds-bridge.js',
+  'js/runtime/problematic-files-virtual-list.js',
   'js/runtime/utility-renderers-and-actions.js',
   'js/runtime/utility-loop-playback.js',
+  'js/runtime/tag-editor-reorder.js',
   'js/runtime/utility-loaders-and-cover-lookup.js',
   'js/runtime/cover-lookup-modal-and-drawer.js',
   'js/runtime/tag-editor-and-optimistic-updates.js',
@@ -84,7 +87,9 @@ function buildRuntimeBundle() {
   ];
   for (const scriptPath of RUNTIME_SCRIPT_PATHS) {
     const absolutePath = path.join(repoRoot, 'music_app', 'static', scriptPath);
-    const source = fs.readFileSync(absolutePath, 'utf8').replace(/\s+$/u, '');
+    const source = fs.readFileSync(absolutePath, 'utf8')
+      .replace(/\r\n?/gu, '\n')
+      .replace(/\s+$/u, '');
     chunks.push(`// BEGIN ${scriptPath}`);
     chunks.push(source);
     chunks.push(`// END ${scriptPath}`);

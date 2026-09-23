@@ -18,6 +18,41 @@ test('upward dropdown joins its bottom edge to the trigger', () => {
   assert.equal(geometry.gap, 8);
 });
 
+test('anchored surfaces retain the trigger content context after being portaled', () => {
+  const classes = { add() {}, remove() {} };
+  const surface = {
+    hidden: false,
+    dataset: {},
+    classList: classes,
+    style: { setProperty() {} },
+    getBoundingClientRect: () => ({ left: 0, right: 200, top: 50, bottom: 250 }),
+  };
+  const anchor = {
+    dataset: {},
+    classList: classes,
+    style: { setProperty() {} },
+    closest: () => ({}),
+    getBoundingClientRect: () => ({ left: 100, right: 134, top: 10, bottom: 44, width: 34 }),
+  };
+
+  context.syncTriggerAnchor(surface, anchor);
+  assert.equal(surface.dataset.triggerAnchorContext, 'content');
+  assert.equal(anchor.dataset.triggerAnchorContext, 'content');
+
+  anchor.closest = () => null;
+  context.syncTriggerAnchor(surface, anchor);
+  assert.equal(surface.dataset.triggerAnchorContext, 'chrome');
+  assert.equal(anchor.dataset.triggerAnchorContext, 'chrome');
+  anchor.matches = selector => selector === '.search-field-button';
+  context.syncTriggerAnchor(surface, anchor);
+  assert.equal(surface.dataset.triggerAnchorSearch, 'true');
+  context.clearTriggerAnchor(surface);
+  assert.equal(surface.dataset.triggerAnchorSearch, undefined);
+  anchor.matches = () => false;
+  context.syncTriggerAnchor(surface, anchor);
+  assert.equal(surface.dataset.triggerAnchorSearch, undefined);
+});
+
 test('closing and reanchoring restore the previous trigger', () => {
   const element = (rect) => {
     const classes = new Set();

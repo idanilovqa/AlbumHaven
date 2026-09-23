@@ -1,7 +1,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
-test('every shared millisecond benchmark declares a 200-400 ms grace without replacing its target', async () => {
+test('shared millisecond benchmarks enforce ordinary grace or the exact approved cold-load exception', async () => {
   const benchmarks = await import('../../tests/e2e/helpers/syntheticPerformanceBenchmark.js');
   const catalog = [
     benchmarks.ALL_ARTISTS_LOCAL_BENCHMARK,
@@ -15,10 +15,16 @@ test('every shared millisecond benchmark declares a 200-400 ms grace without rep
     benchmark.expectations.filter((expectation) => expectation.units === 'ms')
   ));
 
-  assert.equal(timingExpectations.length, 52);
+  assert.equal(timingExpectations.length, 55);
   for (const expectation of timingExpectations) {
     assert.ok(Number.isFinite(expectation.targetMaximum), `${expectation.key} target`);
-    assert.ok(expectation.graceMs >= 200 && expectation.graceMs <= 400, `${expectation.key} grace`);
+    if (expectation.metricId === 'utility-problematic-files-isolated-postgres.coldProblematicApiMs') {
+      assert.equal(expectation.targetMaximum, 1000);
+      assert.equal(expectation.graceMs, 1000);
+      assert.equal(expectation.maxAllowed, 2000);
+    } else {
+      assert.ok(expectation.graceMs >= 200 && expectation.graceMs <= 400, `${expectation.key} grace`);
+    }
     assert.equal(expectation.maxAllowed, expectation.targetMaximum + expectation.graceMs, `${expectation.key} ceiling`);
     assert.equal(expectation.hardCeiling, expectation.maxAllowed, `${expectation.key} hard ceiling alias`);
   }
@@ -120,7 +126,7 @@ test('shared benchmark terminal lines report target, grace, hard ceiling, and cl
   ];
   const lines = evaluations.flatMap(benchmarks.formatBenchmarkTimingResults);
 
-  assert.equal(lines.length, 52);
+  assert.equal(lines.length, 55);
   for (const line of lines) {
     assert.match(line, /^\[performance-budget\] \S+: (TARGET MET|GRACE USED|HARD FAIL):/);
     assert.match(line, /target/);
@@ -449,9 +455,13 @@ test('utility problematic-files benchmark guards the cold API, payload size, vis
   } = await import('../../tests/e2e/helpers/syntheticPerformanceBenchmark.js');
 
   const passingEvaluation = evaluateUtilityProblematicFilesLocalBenchmark({
-    coldProblematicApiMs: 1200,
-    problematicResponseBytes: 409600,
-    problematicReadyMs: 1200,
+    coldProblematicApiMs: 2000,
+    problematicResponseBytes: 2097152,
+    problematicReadyMs: 1400,
+    problematicCachedEnterMs: 1000,
+    problematicCachedExitMs: 1000,
+    problematicCachedReenterMs: 1000,
+    problematicMountedRowCount: 20,
     searchReadyMs: 350,
     longestProblemFilterMs: 3300,
     problematicIdleMemory: { peakBytes: 50331648 },
@@ -459,8 +469,12 @@ test('utility problematic-files benchmark guards the cold API, payload size, vis
   });
   const filterFailure = evaluateUtilityProblematicFilesLocalBenchmark({
     coldProblematicApiMs: 1000,
-    problematicResponseBytes: 409600,
+    problematicResponseBytes: 2097152,
     problematicReadyMs: 1000,
+    problematicCachedEnterMs: 1000,
+    problematicCachedExitMs: 1000,
+    problematicCachedReenterMs: 1000,
+    problematicMountedRowCount: 20,
     searchReadyMs: 350,
     longestProblemFilterMs: 3701,
     problematicIdleMemory: { peakBytes: 50331648 },
@@ -468,17 +482,25 @@ test('utility problematic-files benchmark guards the cold API, payload size, vis
   });
   const readinessFailure = evaluateUtilityProblematicFilesLocalBenchmark({
     coldProblematicApiMs: 1000,
-    problematicResponseBytes: 409600,
-    problematicReadyMs: 1201,
+    problematicResponseBytes: 2097152,
+    problematicReadyMs: 1401,
+    problematicCachedEnterMs: 1000,
+    problematicCachedExitMs: 1000,
+    problematicCachedReenterMs: 1000,
+    problematicMountedRowCount: 20,
     searchReadyMs: 350,
     longestProblemFilterMs: 3300,
     problematicIdleMemory: { peakBytes: 50331648 },
     finalMemory: { peakBytes: 50331648 },
   });
   const coldApiFailure = evaluateUtilityProblematicFilesLocalBenchmark({
-    coldProblematicApiMs: 1201,
-    problematicResponseBytes: 409600,
+    coldProblematicApiMs: 2001,
+    problematicResponseBytes: 2097152,
     problematicReadyMs: 1000,
+    problematicCachedEnterMs: 1000,
+    problematicCachedExitMs: 1000,
+    problematicCachedReenterMs: 1000,
+    problematicMountedRowCount: 20,
     searchReadyMs: 350,
     longestProblemFilterMs: 3300,
     problematicIdleMemory: { peakBytes: 50331648 },
@@ -486,8 +508,12 @@ test('utility problematic-files benchmark guards the cold API, payload size, vis
   });
   const responseSizeFailure = evaluateUtilityProblematicFilesLocalBenchmark({
     coldProblematicApiMs: 1000,
-    problematicResponseBytes: 409601,
+    problematicResponseBytes: 2097153,
     problematicReadyMs: 1000,
+    problematicCachedEnterMs: 1000,
+    problematicCachedExitMs: 1000,
+    problematicCachedReenterMs: 1000,
+    problematicMountedRowCount: 20,
     searchReadyMs: 350,
     longestProblemFilterMs: 3300,
     problematicIdleMemory: { peakBytes: 50331648 },
@@ -504,7 +530,7 @@ test('utility problematic-files benchmark guards the cold API, payload size, vis
   assert.notEqual(passingEvaluation.benchmark.datasetContract.problematicItemCount, 177);
   assert.equal(
     passingEvaluation.benchmark.version,
-    '2026-08-08-isolated-postgres-problematic-files-v5',
+    '2026-09-23-isolated-postgres-problematic-files-v6',
   );
   assert.equal(
     passingEvaluation.benchmark.datasetContract.mode,
@@ -514,7 +540,7 @@ test('utility problematic-files benchmark guards the cold API, payload size, vis
     Number.isInteger(passingEvaluation.benchmark.datasetContract.problematicItemCount)
       && passingEvaluation.benchmark.datasetContract.problematicItemCount > 0,
   );
-  assert.equal(passingEvaluation.benchmark.datasetContract.problematicItemCount, 18);
+  assert.equal(passingEvaluation.benchmark.datasetContract.problematicItemCount, 706);
   assert.deepEqual(
     passingEvaluation.benchmark.datasetContract.expectedProblemTypes,
     [
@@ -599,7 +625,7 @@ test('utility problematic-files benchmark guards the cold API, payload size, vis
   assert.notEqual(
     validationPayload.sampleWindow.datasetItemCount,
     passingEvaluation.benchmark.datasetContract.problematicItemCount,
-    'The July 31 sample describes the historical 15-item dataset, not the current 18-item contract.',
+    'The July 31 sample describes the historical 15-item dataset, not the current 706-item contract.',
   );
   assert.match(validationPayload.sampleWindow.label, /five sequential final-source fresh-app runs/);
   assert.equal(validationPayload.sampleWindow.browser, 'chromium');
@@ -615,16 +641,28 @@ test('utility problematic-files benchmark guards the cold API, payload size, vis
     ])),
     {
       coldProblematicApiMs: {
-        observedBaseline: 239,
-        observedRange: { min: 176, max: 305 },
+        observedBaseline: null,
+        observedRange: { min: null, max: null },
       },
       problematicResponseBytes: {
-        observedBaseline: 80037,
-        observedRange: { min: 80037, max: 80037 },
+        observedBaseline: null,
+        observedRange: { min: null, max: null },
       },
       problematicReadyMs: {
         observedBaseline: 384,
         observedRange: { min: 346, max: 440 },
+      },
+      problematicCachedEnterMs: {
+        observedBaseline: null,
+        observedRange: { min: null, max: null },
+      },
+      problematicCachedExitMs: {
+        observedBaseline: null,
+        observedRange: { min: null, max: null },
+      },
+      problematicCachedReenterMs: {
+        observedBaseline: null,
+        observedRange: { min: null, max: null },
       },
       searchReadyMs: {
         observedBaseline: 62,
@@ -645,14 +683,14 @@ test('utility problematic-files benchmark guards the cold API, payload size, vis
     },
   );
   assert.equal(coldApiExpectation?.targetMaximum, 1000);
-  assert.equal(coldApiExpectation?.graceMs, 200);
-  assert.equal(coldApiExpectation?.maxAllowed, 1200);
+  assert.equal(coldApiExpectation?.graceMs, 1000);
+  assert.equal(coldApiExpectation?.maxAllowed, 2000);
   assert.equal(passingEvaluation.results.find((result) => result.key === 'coldProblematicApiMs')?.graceUsed, true);
-  assert.equal(responseSizeExpectation?.maxAllowed, 409600);
+  assert.equal(responseSizeExpectation?.maxAllowed, 2097152);
   assert.equal(responseSizeExpectation?.units, 'bytes');
   assert.equal(readinessExpectation?.targetMaximum, 1000);
-  assert.equal(readinessExpectation?.graceMs, 200);
-  assert.equal(readinessExpectation?.maxAllowed, 1200);
+  assert.equal(readinessExpectation?.graceMs, 400);
+  assert.equal(readinessExpectation?.maxAllowed, 1400);
   assert.equal(passingEvaluation.results.find((result) => result.key === 'problematicReadyMs')?.graceUsed, true);
   assert.equal(longestFilterExpectation?.targetMaximum, 3300);
   assert.equal(longestFilterExpectation?.graceMs, 400);
@@ -660,11 +698,11 @@ test('utility problematic-files benchmark guards the cold API, payload size, vis
   assert.equal(filterFailure.failures.length, 1);
   assert.match(filterFailure.failures[0], /longestProblemFilterMs hard-fail: exceeded 3700 ms/);
   assert.equal(readinessFailure.failures.length, 1);
-  assert.match(readinessFailure.failures[0], /problematicReadyMs hard-fail: exceeded 1200 ms/);
+  assert.match(readinessFailure.failures[0], /problematicReadyMs hard-fail: exceeded 1400 ms/);
   assert.equal(coldApiFailure.failures.length, 1);
-  assert.match(coldApiFailure.failures[0], /coldProblematicApiMs hard-fail: exceeded 1200 ms/);
+  assert.match(coldApiFailure.failures[0], /coldProblematicApiMs hard-fail: exceeded 2000 ms/);
   assert.equal(responseSizeFailure.failures.length, 1);
-  assert.match(responseSizeFailure.failures[0], /problematicResponseBytes failed: exceeded 0.4 MB \(409600 bytes\)/);
+  assert.match(responseSizeFailure.failures[0], /problematicResponseBytes failed: exceeded 2.0 MB \(2097152 bytes\)/);
 });
 
 test('utility benchmark fails closed when a required metric is absent or non-finite', async () => {
@@ -674,8 +712,12 @@ test('utility benchmark fails closed when a required metric is absent or non-fin
   const invalidValues = [undefined, null, '', Number.NaN, Number.POSITIVE_INFINITY];
   const validMetrics = {
     coldProblematicApiMs: 1000,
-    problematicResponseBytes: 409600,
+    problematicResponseBytes: 2097152,
     problematicReadyMs: 1000,
+    problematicCachedEnterMs: 1000,
+    problematicCachedExitMs: 1000,
+    problematicCachedReenterMs: 1000,
+    problematicMountedRowCount: 20,
     searchReadyMs: 350,
     longestProblemFilterMs: 500,
     problematicIdleMemory: { peakBytes: 50331648 },

@@ -54,12 +54,14 @@
   align-items: stretch;
   flex: 1;
   min-width: 0;
-  gap: 6px;
+  gap: 0;
   overflow-x: auto;
+  overflow-y: hidden;
   scrollbar-width: thin;
   padding: 0;
   border: 0;
 }
+.utility-tab + .utility-tab { margin-left: -1px; }
 .utility-tab {
   border: 1px solid var(--border);
   border-bottom: 0;
@@ -86,6 +88,16 @@
   background: linear-gradient(var(--trigger-anchor-background), var(--trigger-anchor-background)) padding-box,
     var(--trigger-anchor-border-fill) border-box;
   box-shadow: none;
+}
+#utility-modal .utility-tab.is-active::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: -2px;
+  height: 3px;
+  background: var(--trigger-anchor-background);
+  pointer-events: none;
 }
 .utility-modal-header::after {
   content: '';
@@ -136,6 +148,14 @@
   gap: 0;
   min-width: 0;
 }
+.utility-sidebar-search .search-field-action > [data-search-submit] {
+  display: none;
+}
+@media (max-width: 720px) {
+  .utility-sidebar-search .search-field-action > [data-search-submit] {
+    display: inline-grid;
+  }
+}
 .utility-search-input {
   flex: 1 1 auto;
   width: 100%;
@@ -156,17 +176,17 @@
   height: 100%;
 }
 #utility-modal .search-field { --search-field-background: var(--appearance-control, var(--panel-2)); }
-#utility-modal .search-field-action > .utility-problem-filter-button[hidden],
-#utility-modal .search-field-action:has(> .utility-problem-filter-button[hidden]) { display: none; }
+#utility-modal .search-field-action > .utility-problem-filter-button[hidden] { display: none; }
 .utility-problem-filter-button.is-active {
   color: var(--text);
 }
 .utility-problem-filter-menu {
   position: absolute;
   top: calc(100% + 6px);
-  right: 0;
+  left: -4px;
+  right: 3px;
   z-index: 40;
-  width: min(300px, calc(100vw - 48px));
+  width: auto;
   max-height: 320px;
   overflow-y: auto;
   padding: 6px;
@@ -297,6 +317,12 @@
 #utility-modal .navigation-tree-item--wide:is(:hover, .is-selected) { border-color: var(--border); background: var(--appearance-item-hover, var(--panel-2)); }
 #utility-modal .navigation-tree-item--wide.is-selected { background: var(--selection-body-background, var(--panel-2)); }
 #utility-modal .navigation-tree-item--wide:focus-visible { outline: 2px solid var(--muted); outline-offset: -2px; }
+.problematic-virtual-spacer {
+  flex: 0 0 auto;
+  min-width: 0;
+  min-height: 0;
+  pointer-events: none;
+}
 .navigation-tree-artwork { display: block; width: 40px; height: 40px; flex: 0 0 40px; border-radius: 7px; overflow: hidden; }
 .navigation-tree-artwork > .album-artbox { height: 100%; }
 #utility-modal :is(.utility-detail-header, .utility-loop-detail-header) { grid-template-columns: 88px minmax(0, 1fr); gap: 16px; }
@@ -620,6 +646,9 @@
   position: relative;
   overflow-y: auto;
   padding: 14px 18px 18px;
+}
+#utility-modal[data-active-tab="appearance"] .utility-detail {
+  overflow-x: hidden;
 }
 #utility-modal .utility-detail .appearance-background-editor {
   margin: 0;
@@ -1337,13 +1366,11 @@
   gap: 10px;
   margin-top: 18px;
 }
-.confirm-modal-danger,
-#tag-editor-modal [data-open-tag-edit-confirm="1"]:not(:disabled) {
+.confirm-modal-danger {
   border-color: rgba(239,68,68,0.45);
   background: rgba(239,68,68,0.12);
 }
-.confirm-modal-danger:hover,
-#tag-editor-modal [data-open-tag-edit-confirm="1"]:hover:not(:disabled) {
+.confirm-modal-danger:hover {
   border-color: rgba(239,68,68,0.7);
 }
 .repair-progress-overlay {
@@ -1446,22 +1473,85 @@
   border-right: 1px solid var(--border);
 }
 .tag-editor-track {
+  position: relative;
   width: 100%;
+  flex-shrink: 0;
   display: flex;
   align-items: center;
-  justify-content: space-between;
   gap: 8px;
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  background: rgba(255,255,255,0.03);
+  border: 0;
+  border-radius: 9px;
+  background: transparent;
   color: var(--text);
   cursor: pointer;
   padding: 5px 7px;
   text-align: left;
   user-select: none;
 }
+.tag-editor-track-accent {
+  align-self: center;
+  width: 3px;
+  height: 18px;
+  flex: 0 0 3px;
+  border-radius: 999px;
+  background: transparent;
+}
+.tag-editor-track.is-active .tag-editor-track-accent {
+  background: var(--navigation-tree-selection-accent-color, var(--accent));
+}
+.tag-editor-reorder-grip,
+.tag-editor-track-select {
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+}
+.tag-editor-reorder-grip {
+  width: 24px;
+  min-height: 28px;
+  flex: 0 0 24px;
+  padding: 0;
+  color: var(--muted);
+  cursor: grab;
+}
+.tag-editor-reorder-grip:hover {
+  outline: 0;
+}
+.tag-editor-reorder-grip:active { cursor: grabbing; }
+.tag-editor-track-select {
+  min-width: 0;
+  flex: 1 1 auto;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 0;
+  text-align: left;
+  cursor: pointer;
+}
+.tag-editor-track.is-reorder-before::before {
+  content: '';
+  position: absolute;
+  z-index: 1;
+  top: -3px;
+  left: 3px;
+  right: 3px;
+  height: 2px;
+  border-radius: 999px;
+  background: var(--navigation-tree-selection-accent-color, var(--accent));
+}
+.tag-editor-track.is-reorder-dragged { opacity: 0.55; }
+.tag-editor-track-list.is-reorder-end::after {
+  flex-shrink: 0;
+  content: '';
+  display: block;
+  height: 2px;
+  margin: 2px 3px 0;
+  border-radius: 999px;
+  background: var(--navigation-tree-selection-accent-color, var(--accent));
+}
 .tag-editor-track.is-active {
-  border-color: var(--navigation-tree-selection-accent-color, var(--accent));
+  border-color: transparent;
   background: var(--tag-editor-selection-fill);
 }
 .tag-editor-track-title {
@@ -1613,7 +1703,7 @@
   min-width: 64px;
   border: 1px solid var(--border);
   border-radius: 8px;
-  background: #182331;
+  background: rgba(255,255,255,0.03);
   color: var(--text);
   padding: 8px;
   text-align: center;
@@ -1794,6 +1884,26 @@
 #app-form-modal.app-form-reading [hidden] { display: none !important; }
 
 .settings-guide-copy { white-space: normal; }
+
+.utility-problem-filter {
+  --problem-filter-connected-edge: var(--appearance-line, var(--border));
+}
+.utility-problem-filter-menu.trigger-anchor-surface {
+  border-color: var(--problem-filter-connected-edge);
+}
+/* Paint the joined edge on the scrolling surface itself so it stays continuous
+   beside the scrollbar and does not move with the menu options. */
+:root .utility-problem-filter-menu.trigger-anchor-surface[data-trigger-anchor-side="right"] {
+  border-right: 2px solid transparent;
+  background: var(--trigger-anchor-line-left) left top / calc(var(--trigger-anchor-left) + 1px) 2px no-repeat border-box,
+    linear-gradient(to bottom, var(--trigger-anchor-accent) 0 5px,
+    var(--problem-filter-connected-edge, var(--border)) 210px) right top / 2px 100% no-repeat border-box,
+    var(--trigger-anchor-background);
+}
+:root #utility-modal .utility-problem-filter-menu.trigger-anchor-surface[data-trigger-anchor-side="right"]::before,
+:root .utility-problem-filter-menu.trigger-anchor-surface[data-trigger-anchor-side="right"]::after {
+  display: none;
+}
 .settings-guide-copy pre { white-space: pre-wrap; overflow-wrap: anywhere; }
 
 .library-settings-move-policy-row { display: grid; gap: 8px; margin-bottom: 12px; max-width: 440px; }

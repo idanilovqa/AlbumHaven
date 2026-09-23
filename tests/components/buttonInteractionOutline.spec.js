@@ -40,6 +40,7 @@ const editorPageRuntimePath = path.join(
 );
 const componentUrl = 'http://button-interaction-component.test/editor-footer';
 const outlineColor = 'rgb(255, 90, 117)';
+const hoverEdgeColor = 'rgb(107, 123, 112)';
 
 async function mountEditorFooter(page) {
   await page.route(componentUrl, (route) => route.fulfill({
@@ -54,6 +55,7 @@ async function mountEditorFooter(page) {
               --appearance-line: #4b5563;
               --appearance-control: #1f2937;
               --appearance-item-action-hover-background: #293a50;
+              --appearance-item-action-hover-border: #6b7b70;
               --appearance-ink: #f3f6fa;
               --appearance-muted: #aeb9c7;
               --appearance-panel-background: #111827;
@@ -93,7 +95,7 @@ async function mountEditorFooter(page) {
     document.getElementById('preview-host').innerHTML = `<div class="background-preview-actions">
       <span><strong>Buttons</strong><small>Hover, press, or use Tab to preview interactions.</small></span>
       <div>${ButtonComponent.renderButton({ label: 'Cancel', variant: 'secondary', size: 'small', quiet: true, attributes: { 'data-background-preview-cancel': true } })}${ButtonComponent.renderButton({ label: 'Save', variant: 'primary', size: 'small', attributes: { 'data-background-preview-save': true } })}</div>
-    </div>${ButtonComponent.renderActionButton({ ariaLabel: 'Remove loop', icon: 'delete', shape: 'round', semantic: 'destructive', attributes: { 'data-round-destructive': true } })}`;
+    </div>${ButtonComponent.renderActionButton({ ariaLabel: 'Bare action', icon: 'search', presentation: 'bare', attributes: { 'data-bare-action': true } })}${ButtonComponent.renderActionButton({ ariaLabel: 'Remove loop', icon: 'delete', shape: 'round', semantic: 'destructive', attributes: { 'data-round-destructive': true } })}`;
   });
 }
 
@@ -116,8 +118,8 @@ test('shared footer buttons render themed hover and keyboard-focus outlines whil
   await expect(reset).toHaveCSS('outline-style', 'solid');
   await expect(reset).toHaveCSS('outline-width', '1px');
   await expect(reset).toHaveCSS('outline-offset', '-1px');
-  await expect(reset).toHaveCSS('outline-color', outlineColor);
-  await expect(reset).toHaveCSS('border-color', outlineColor);
+  await expect(reset).toHaveCSS('outline-color', 'rgba(0, 0, 0, 0)');
+  await expect(reset).toHaveCSS('border-color', hoverEdgeColor);
 
   await page.mouse.move(0, 0);
   await page.keyboard.press('Tab');
@@ -129,8 +131,8 @@ test('shared footer buttons render themed hover and keyboard-focus outlines whil
   await cancel.hover();
   await expect(cancel).toHaveClass(/ui-button--quiet/);
   await expect(cancel).toHaveCSS('outline-style', 'solid');
-  await expect(cancel).toHaveCSS('outline-color', outlineColor);
-  await expect(cancel).toHaveCSS('border-color', outlineColor);
+  await expect(cancel).toHaveCSS('outline-color', 'rgba(0, 0, 0, 0)');
+  await expect(cancel).toHaveCSS('border-color', hoverEdgeColor);
   const quietHoverBackground = await cancel.evaluate((element) => getComputedStyle(element).backgroundColor);
   expect(quietHoverBackground).not.toBe('rgb(41, 58, 80)');
 
@@ -155,7 +157,7 @@ test('shared footer buttons render themed hover and keyboard-focus outlines whil
   await expect(playerAction).toHaveCSS('outline-style', 'none');
 
   await previewCancel.hover();
-  await expect(previewCancel).toHaveCSS('outline-color', outlineColor);
+  await expect(previewCancel).toHaveCSS('outline-color', 'rgba(0, 0, 0, 0)');
   const previewQuietHover = await previewCancel.evaluate((element) => getComputedStyle(element).backgroundColor);
   expect(previewQuietHover).not.toBe('rgb(41, 58, 80)');
 
@@ -163,6 +165,34 @@ test('shared footer buttons render themed hover and keyboard-focus outlines whil
   await page.keyboard.press('Tab');
   await expect(previewSave).toBeFocused();
   await expect(previewSave).toHaveCSS('outline-color', outlineColor);
+});
+
+test('non-green player surfaces derive computed action hover colors and bare chrome keeps focus', async ({ page }) => {
+  await mountEditorFooter(page);
+  const action = page.locator('[data-bare-action]');
+  await expect(action).toHaveCSS('background-color', 'rgba(0, 0, 0, 0)');
+  await expect(action).toHaveCSS('border-color', 'rgba(0, 0, 0, 0)');
+
+  const samples = [];
+  for (const player of ['#112233', '#5c183e']) {
+    await page.locator('html').evaluate((root, value) => {
+      root.style.setProperty('--appearance-player', value);
+      root.style.setProperty('--appearance-item-action-hover-background', `color-mix(in srgb, ${value} 14%, color-mix(in srgb, #303c36 85%, #eeeeee))`);
+      root.style.setProperty('--appearance-item-action-hover-border', `color-mix(in srgb, ${value} 22%, #858985)`);
+    }, player);
+    await action.hover();
+    samples.push(await action.evaluate((element) => ({
+      background: getComputedStyle(element).backgroundColor,
+      border: getComputedStyle(element).borderColor,
+    })));
+    await page.mouse.move(0, 0);
+  }
+  expect(samples[0].background).not.toBe(samples[1].background);
+  expect(samples[0].background).not.toContain('29, 185, 84');
+
+  await action.focus();
+  await expect(action).toHaveCSS('outline-color', outlineColor);
+  await expect(page.getByRole('button', { name: 'Player action', exact: true })).toHaveCSS('outline-style', 'none');
 });
 
 test('round destructive ActionButton centers its SVG and keeps error-family interaction feedback', async ({ page }) => {

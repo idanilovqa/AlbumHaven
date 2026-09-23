@@ -236,11 +236,13 @@ function syncLibraryWatcherWarning(data = {}) {
   registerFloatingNotification(libraryWatcherWarning, { origin: 'bottom-right' });
 }
 
-function buildFloatingNotificationAlertHtml(message, variant, actionsHtml = '', messageId = '') {
+function buildFloatingNotificationAlertHtml(message, variant, actionsHtml = '', messageId = '', compact = false) {
   const severity = normalizeAlertSeverity(variant);
   return buildOnPageAlertHtml({
-    severity, title: severity === 'error' ? 'Error' : severity === 'warning' ? 'Warning' : 'Update',
+    severity,
+    title: compact ? '' : severity === 'error' ? 'Error' : severity === 'warning' ? 'Warning' : 'Update',
     message, actionsHtml, messageId, role: severity === 'info' ? 'status' : 'alert',
+    className: compact ? 'on-page-alert--compact' : '',
   });
 }
 
@@ -259,7 +261,7 @@ function showToast(message, variant = 'success', duration = 3600, options = {}) 
     isNotificationErrorVariant(variant) ? 'is-error' : '',
     options.placement === 'top-center' ? 'is-top-center' : '',
   ].filter(Boolean).join(' ');
-  toast.innerHTML = buildFloatingNotificationAlertHtml(message, variant);
+  toast.innerHTML = buildFloatingNotificationAlertHtml(message, variant, '', '', true);
   layer.appendChild(toast);
   if (errorKey) activeErrorToasts.set(errorKey, toast);
   registerFloatingNotification(toast, { origin: options.placement === 'top-center' ? 'top-center' : 'top-right', onPlaced() {

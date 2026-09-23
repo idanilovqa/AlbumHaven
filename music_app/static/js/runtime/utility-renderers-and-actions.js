@@ -1,5 +1,12 @@
 ﻿const problematicNavigationRowContent = new WeakMap();
 
+let problematicFilesVirtualList = null;
+
+function disposeProblematicFilesVirtualList() {
+  problematicFilesVirtualList?.dispose?.();
+  problematicFilesVirtualList = null;
+}
+
 function renderProblematicFiles({ preserveProblematicTree = false } = {}) {
   const els = getUtilityModalElements();
   if (!els.overlay || !els.list || !els.detail || !els.count) return;
@@ -7,6 +14,7 @@ function renderProblematicFiles({ preserveProblematicTree = false } = {}) {
 
   const priorListScrollTop = Number(els.list.scrollTop);
   const replaceListContents = (html) => {
+    disposeProblematicFilesVirtualList();
     const retainedScrollGeometry = els.list.querySelector?.('[data-problematic-scroll-retainer]') || null;
     els.list.innerHTML = html;
     if (retainedScrollGeometry && typeof els.list.appendChild === 'function') {
@@ -17,14 +25,25 @@ function renderProblematicFiles({ preserveProblematicTree = false } = {}) {
     }
   };
 
-  const mountedRows = preserveProblematicTree
+  const virtualListApi = typeof window !== 'undefined'
+    ? window.ProblematicFilesVirtualList
+    : globalThis.ProblematicFilesVirtualList;
+  const mountedRows = preserveProblematicTree && !virtualListApi?.create
     ? Array.from(els.list.querySelectorAll?.('[data-problematic-album-key]') || []) : [];
   const albumsByKey = new Map((state.utility.problematicFiles || []).map(album => [String(album.key), album]));
   const mountedItems = mountedRows.map(row => albumsByKey.get(row.getAttribute('data-problematic-album-key')));
   const retainTree = mountedRows.length > 0 && mountedItems.every(Boolean);
   const items = retainTree ? mountedItems : getFilteredProblematicAlbums();
   const renderTree = selectedKey => {
-    if (!retainTree) {
+    if (!problematicFilesVirtualList && virtualListApi?.create) {
+      problematicFilesVirtualList = virtualListApi.create({
+        list: els.list,
+        renderRow: (album, selected) => buildProblematicAlbumListItem(album, selected),
+      });
+    }
+    if (problematicFilesVirtualList) {
+      problematicFilesVirtualList.render(items, selectedKey);
+    } else if (!retainTree) {
       replaceListContents(items.map(album => buildProblematicAlbumListItem(album, album.key === selectedKey)).join(''));
     }
     Array.from(els.list.querySelectorAll?.('[data-problematic-album-key]') || []).forEach(row => {
@@ -32,7 +51,7 @@ function renderProblematicFiles({ preserveProblematicTree = false } = {}) {
       if (!album) return;
       const selected = album.key === selectedKey;
       const content = getProblematicAlbumNavigationOptions(album, selected);
-      if (retainTree) {
+      if (retainTree || problematicFilesVirtualList) {
         const previous = problematicNavigationRowContent.get(row);
         window.NavigationTree.updateItem(row, {
           ...content,
@@ -599,7 +618,8 @@ function filterUtilityAppearanceNavigation() {
   const query = String(state.utility.appearanceSearchQuery || '').trim().toLocaleLowerCase();
   let matches = 0;
   els.list?.querySelectorAll('[data-utility-appearance-key]').forEach((row) => {
-    row.hidden = !String(row.textContent || '').toLocaleLowerCase().includes(query);
+    const keywords = row.getAttribute?.('data-utility-appearance-key') === 'seekbar' ? ' compact sidebar floating edge slow motion' : '';
+    row.hidden = !(String(row.textContent || '') + keywords).toLocaleLowerCase().includes(query);
     if (!row.hidden) matches += 1;
   });
   const empty = els.list?.querySelector('[data-appearance-search-empty]');
@@ -753,6 +773,7 @@ function renderUtilityModalContent(options = {}) {
   if (els.search) els.search.readOnly = false;
   if (els.problemFilterButton) { els.problemFilterButton.setAttribute('aria-label', 'Filters'); els.problemFilterButton.setAttribute('title', 'Filter by problem type'); els.problemFilterButton.setAttribute('aria-haspopup', 'listbox'); els.problemFilterButton.setAttribute('aria-controls', 'utility-problem-filter-menu'); }
   const activeTab = state.utility.activeTab || 'problematic-files';
+  if (activeTab !== 'problematic-files') disposeProblematicFilesVirtualList();
   if (activeTab !== 'log-history' && els.list?.dataset) els.list.dataset.utilityNavigationOwner = activeTab;
   if (activeTab !== 'loops' && typeof disposeMountedLoopActions === 'function') disposeMountedLoopActions(els.detail);
   if (activeTab !== 'appearance' && typeof unmountAppearanceEditors === 'function') unmountAppearanceEditors();
@@ -785,6 +806,7 @@ function renderUtilityModalContent(options = {}) {
   } else {
     renderProblematicFiles(options);
   }
+  if (typeof updateSearchClearAction === 'function') updateSearchClearAction(els.search);
 }
 
 const utilityTabAlignmentObservers = new WeakMap();

@@ -8,7 +8,7 @@ const componentPath = path.join(repoRoot, 'music_app', 'static', 'js', 'button-c
 
 test('shared icon renderer emits normalized decorative SVGs from a fixed registry', () => {
   const button = require(componentPath);
-  for (const name of ['play', 'pause', 'edit', 'close', 'more', 'delete', 'previous', 'next']) {
+  for (const name of ['play', 'pause', 'edit', 'close', 'more', 'delete', 'previous', 'next', 'bolt']) {
     const html = button.renderIconSvg(name, { className: `ui-icon--${name}` });
     assert.match(html, /^<svg class="ui-icon ui-icon--/);
     assert.match(html, /viewBox="0 0 24 24"/);
@@ -16,6 +16,7 @@ test('shared icon renderer emits normalized decorative SVGs from a fixed registr
     assert.match(html, /focusable="false"/);
     assert.match(html, /<path d="[^"]+"\/>/);
   }
+  assert.match(button.renderIconSvg('bolt'), /<path d="m13 2-9 12h7l-1 8 10-13h-7z"\/>/);
   assert.throws(() => button.renderIconSvg('invented'), /Unknown icon/);
   assert.throws(
     () => button.renderIconSvg('play', { className: 'safe\" onclick=\"alert' }),
@@ -51,11 +52,12 @@ test('shared Button CSS centers content on both axes and EditorFooter composes t
   assert.match(css, /\.ui-button\s*\{[^}]*display:\s*inline-flex[^}]*align-items:\s*center[^}]*justify-content:\s*center[^}]*line-height:\s*1/s);
   assert.match(css, /\.ui-button\[hidden\]\s*\{[^}]*display:\s*none\s*!important/s);
   assert.match(css, /\.ui-button\s*\{[^}]*outline:\s*1px solid transparent[^}]*outline-offset:\s*-1px[^}]*transition:[^;}]*outline-color 150ms ease/s);
-  assert.match(css, /\.ui-button:hover:not\(:disabled\):not\(\[aria-disabled='true'\]\)\s*\{[^}]*border-color:\s*var\(--appearance-interaction-outline,[^}]*outline-color:\s*var\(--appearance-interaction-outline,/s);
+  assert.match(css, /\.ui-button:hover:not\(:disabled\):not\(\[aria-disabled='true'\]\)\s*\{[^}]*border-color:\s*var\(--appearance-item-action-hover-border,[^}]*background:\s*var\(--appearance-item-action-hover-background,/s);
   assert.match(css, /\.ui-button:active:not\(:disabled\):not\(\[aria-disabled='true'\]\)\s*\{[^}]*background:\s*var\(--appearance-item-action-pressed,/s);
   assert.match(css, /\.ui-button:focus-visible\s*\{[^}]*outline-color:\s*var\(--appearance-interaction-outline,/s);
-  assert.match(css, /\.ui-button--quiet:hover:not\(:disabled\):not\(\[aria-disabled='true'\]\)\s*\{[^}]*background:\s*color-mix\(in srgb, currentColor 6%, transparent\)/s);
-  assert.match(css, /\.ui-button--quiet:active:not\(:disabled\):not\(\[aria-disabled='true'\]\)\s*\{[^}]*background:\s*color-mix\(in srgb, currentColor 10%, transparent\)/s);
+  assert.match(css, /:root \.ui-button\.ui-button--quiet\s*\{[^}]*border-color:\s*var\(--appearance-line,[^}]*background:\s*transparent/s);
+  assert.match(css, /:root \.ui-button\.ui-button--quiet:hover:not\(:disabled\):not\(\[aria-disabled='true'\]\)\s*\{[^}]*background:\s*transparent/s);
+  assert.match(css, /:root \.ui-button\.ui-button--quiet:active:not\(:disabled\):not\(\[aria-disabled='true'\]\)\s*\{[^}]*background:\s*transparent/s);
   assert.match(editor, /ButtonComponent\.renderButton/);
   assert.match(editor, /label:\s*secondary\.label \|\| 'Cancel'[\s\S]*quiet:\s*true/);
   assert.doesNotMatch(editor, /<button/);
@@ -131,13 +133,23 @@ test('ActionButton supports shared round and destructive specializations with a 
   );
 });
 
+test('ActionButton accepts the shared bare presentation and rejects unknown presentations', () => {
+  const button = require(componentPath);
+  const html = button.renderActionButton({ ariaLabel: 'Fold artists', icon: 'previous', presentation: 'bare' });
+  assert.match(html, /action-button action-button--bare/);
+  assert.throws(
+    () => button.renderActionButton({ ariaLabel: 'Wrong presentation', presentation: 'floating' }),
+    /Unknown ActionButton presentation/,
+  );
+});
+
 test('ActionButton CSS owns one 34px theme-aware surface and inert disabled treatment', () => {
   const css = fs.readFileSync(path.join(repoRoot, 'music_app', 'static', 'css', 'button-component.css'), 'utf8');
   assert.match(css, /\.action-button\s*\{[^}]*width:\s*34px[^}]*height:\s*34px[^}]*min-width:\s*34px[^}]*min-height:\s*34px/s);
-  assert.match(css, /\.action-button\s*\{[^}]*border-radius:\s*8px[^}]*background:\s*var\(--appearance-control,/s);
-  assert.match(css, /\.action-button:hover:not\(:disabled\):not\(\[aria-disabled='true'\]\)\s*\{[^}]*border-color:\s*var\(--appearance-interaction-outline,/s);
+  assert.match(css, /\.action-button\s*\{[^}]*border-radius:\s*8px[^}]*background:\s*var\(--appearance-neutral-button-background,\s*var\(--appearance-control,/s);
+  assert.match(css, /\.action-button:hover:not\(:disabled\):not\(\[aria-disabled='true'\]\)\s*\{[^}]*border-color:\s*var\(--appearance-item-action-hover-border,/s);
   assert.match(css, /\.action-button\s*\{[^}]*outline:\s*1px solid transparent[^}]*outline-offset:\s*1px[^}]*transition:[^;}]*outline-color 150ms ease/s);
-  assert.match(css, /\.action-button:hover:not\(:disabled\):not\(\[aria-disabled='true'\]\)\s*\{[^}]*outline-color:\s*var\(--appearance-interaction-outline,/s);
+  assert.doesNotMatch(css, /\.action-button:hover:not\(:disabled\):not\(\[aria-disabled='true'\]\)\s*\{[^}]*outline-color:/s);
   assert.match(css, /\.action-button:focus-visible\s*\{[^}]*outline-color:\s*var\(--appearance-interaction-outline,/s);
   assert.match(css, /\.action-button:disabled,[^{]*\.action-button\[aria-disabled='true'\]\s*\{[^}]*opacity:[^;}]+;[^}]*cursor:\s*not-allowed/s);
   assert.match(css, /\.action-button--round\s*\{[^}]*border-radius:\s*50%/s);

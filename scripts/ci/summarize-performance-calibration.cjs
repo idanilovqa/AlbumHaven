@@ -3,7 +3,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { isDeepStrictEqual } = require('node:util');
 
-const EXPECTED_TARGET_COUNT = 19;
+const EXPECTED_TARGET_COUNT = 21;
 const DEFAULT_PERFORMANCE_CONTRACT = path.resolve(
   __dirname, '..', '..', 'tests', 'ci', 'performance-targets.json',
 );
@@ -36,7 +36,7 @@ function validateContract(contract) {
   if (!isDeepStrictEqual(contract, checkedIn)
     || contract?.schemaVersion !== 1
     || contract.targets?.length !== EXPECTED_TARGET_COUNT) {
-    throw new Error('calibration requires the exact checked-in 19-target performance registry schema and inventory');
+    throw new Error('calibration requires the exact checked-in 21-target performance registry schema and inventory');
   }
   return contract.targets.map((target) => target.name);
 }

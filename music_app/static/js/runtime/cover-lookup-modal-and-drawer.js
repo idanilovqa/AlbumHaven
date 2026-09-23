@@ -10,8 +10,14 @@
   };
 }
 
+const MAX_COVER_LOOKUP_STAGED_IMAGES = 8;
+const MAX_COVER_LOOKUP_IMAGE_BYTES = 10 * 1024 * 1024;
+
 function revokeCoverLookupPastedImageUrls() {
-  const items = Array.isArray(state.coverLookup.modal.pastedImages) ? state.coverLookup.modal.pastedImages : [];
+  const items = [
+    ...(Array.isArray(state.coverLookup.modal.pastedImages) ? state.coverLookup.modal.pastedImages : []),
+    ...(Array.isArray(state.coverLookup.modal.manualImageAttachments) ? state.coverLookup.modal.manualImageAttachments : []),
+  ];
   items.forEach((item) => {
     const objectUrl = String(item?.object_url || '').trim();
     if (objectUrl.startsWith('blob:')) {
@@ -39,7 +45,17 @@ function fileToDataUrl(file) {
 
 async function addPastedImageToCoverLookup(file) {
   if (!(file instanceof Blob) || !String(file.type || '').startsWith('image/')) {
-    return false;
+    throw new Error('Choose an image file.');
+  }
+  if (Number(file.size || 0) > MAX_COVER_LOOKUP_IMAGE_BYTES) {
+    throw new Error('Images must be 10 MB or smaller.');
+  }
+  const stagedCount = (Array.isArray(state.coverLookup.modal.pastedImages)
+    ? state.coverLookup.modal.pastedImages.length : 0)
+    + (Array.isArray(state.coverLookup.modal.manualImageAttachments)
+      ? state.coverLookup.modal.manualImageAttachments.length : 0);
+  if (stagedCount >= MAX_COVER_LOOKUP_STAGED_IMAGES) {
+    throw new Error(`You can stage up to ${MAX_COVER_LOOKUP_STAGED_IMAGES} images.`);
   }
   const dataUrl = await fileToDataUrl(file);
   if (!dataUrl) {
@@ -58,18 +74,69 @@ async function addPastedImageToCoverLookup(file) {
     mime_type: String(file.type || 'image/png').trim() || 'image/png',
     size_bytes: Number(file.size || 0) || 0,
   };
-  state.coverLookup.modal.pastedImages = [
+  state.coverLookup.modal.manualImageAttachments = [
+    ...(Array.isArray(state.coverLookup.modal.manualImageAttachments)
+      ? state.coverLookup.modal.manualImageAttachments : []),
     nextItem,
-    ...(Array.isArray(state.coverLookup.modal.pastedImages) ? state.coverLookup.modal.pastedImages : []),
   ];
-  state.coverLookup.modal.pendingLocalPath = '';
-  state.coverLookup.modal.selectedRemoteId = '';
-  state.coverLookup.modal.pendingPastedImageId = nextItem.id;
-  state.coverLookup.modal.statusText = 'Clipboard image added.';
+  state.coverLookup.modal.statusText = 'Image ready to extract.';
   state.coverLookup.modal.statusTone = 'neutral';
   renderCoverLookupModal();
-  syncCoverLookupSelectionUi();
   return true;
+}
+
+async function addCoverLookupFiles(files) {
+  const candidates = Array.from(files || []);
+  let added = 0;
+  for (const file of candidates) {
+    await addPastedImageToCoverLookup(file);
+    added += 1;
+  }
+  return added;
+}
+
+function removePastedImageFromCoverLookup(imageId) {
+  const id = String(imageId || '').trim();
+  const items = Array.isArray(state.coverLookup.modal.pastedImages)
+    ? state.coverLookup.modal.pastedImages : [];
+  const removed = items.find(item => String(item?.id || '') === id);
+  if (!removed) return false;
+  const objectUrl = String(removed.object_url || '').trim();
+  if (objectUrl.startsWith('blob:')) URL.revokeObjectURL(objectUrl);
+  state.coverLookup.modal.pastedImages = items.filter(item => String(item?.id || '') !== id);
+  if (String(state.coverLookup.modal.pendingPastedImageId || '') === id) {
+    state.coverLookup.modal.pendingPastedImageId = '';
+  }
+  renderCoverLookupModal();
+  return true;
+}
+
+function removeCoverLookupPendingAttachment(imageId) {
+  const id = String(imageId || '').trim();
+  const items = Array.isArray(state.coverLookup.modal.manualImageAttachments)
+    ? state.coverLookup.modal.manualImageAttachments : [];
+  const removed = items.find(item => String(item?.id || '') === id);
+  if (!removed) return false;
+  const objectUrl = String(removed.object_url || '').trim();
+  if (objectUrl.startsWith('blob:')) URL.revokeObjectURL(objectUrl);
+  state.coverLookup.modal.manualImageAttachments = items.filter(
+    item => String(item?.id || '') !== id,
+  );
+  renderCoverLookupModal();
+  return true;
+}
+
+function extractCoverLookupPendingAttachments() {
+  const attachments = Array.isArray(state.coverLookup.modal.manualImageAttachments)
+    ? state.coverLookup.modal.manualImageAttachments : [];
+  if (!attachments.length) return 0;
+  state.coverLookup.modal.pastedImages = [
+    ...attachments,
+    ...(Array.isArray(state.coverLookup.modal.pastedImages)
+      ? state.coverLookup.modal.pastedImages : []),
+  ];
+  state.coverLookup.modal.manualImageAttachments = [];
+  return attachments.length;
 }
 
 async function handleCoverLookupClipboardPaste(clipboardData) {
@@ -453,11 +520,28 @@ function buildAppleMusicGlyph() {
 }
 
 function buildDeezerGlyph() {
+  // The compact Deezer treatment uses the approved purple heart.
   return `
     <svg viewBox="0 0 24 24" focusable="false" aria-hidden="true">
-      <path d="M4 14h2.2v6H4zm3.4-3h2.2v9H7.4zm3.4-2h2.2v11h-2.2zm3.4-3h2.2v14h-2.2zm3.4 5H20v9h-2.2z" fill="currentColor"></path>
+      <path d="M12 20.2 4.8 13A4.7 4.7 0 0 1 11.4 6.3l.6.7.6-.7A4.7 4.7 0 0 1 19.2 13Z" fill="currentColor"></path>
     </svg>
   `;
+}
+
+function buildCaaGlyph() {
+  return '<span aria-hidden="true">CAA</span>';
+}
+
+function getRemoteCoverSourceLabel(source, fallback = '') {
+  return ({
+    apple: 'Apple',
+    spotify: 'Spotify',
+    deezer: 'Deezer',
+    bandcamp: 'Bandcamp',
+    discogs: 'Discogs',
+    cover_art_archive: 'CAA',
+    youtube_music: 'YouTube Music',
+  })[String(source || '').trim().toLowerCase()] || String(fallback || source || '').trim();
 }
 
 function buildYouTubeMusicGlyph() {
@@ -509,6 +593,9 @@ function buildRemoteCoverSourceBadge(source, className = 'cover-lookup-art-sourc
   if (normalizedSource === 'discogs') {
     return `<span class="${className} is-discogs" aria-hidden="true">${buildDiscogsGlyph()}</span>`;
   }
+  if (normalizedSource === 'cover_art_archive') {
+    return `<span class="${className} is-caa" aria-hidden="true">${buildCaaGlyph()}</span>`;
+  }
   return '';
 }
 
@@ -531,6 +618,12 @@ function coverLookupHasManualLinks() {
   return collectManualCoverLookupUrls().length > 0;
 }
 
+function coverLookupHasManualInput() {
+  const attachments = Array.isArray(state.coverLookup.modal.manualImageAttachments)
+    ? state.coverLookup.modal.manualImageAttachments : [];
+  return attachments.length > 0 || Boolean(String(state.coverLookup.modal.manualUrlText || '').trim());
+}
+
 function syncCoverLookupManualControlsUi() {
   const input = document.getElementById('cover-lookup-pasted-urls');
   const submitButton = document.querySelector('[data-add-cover-lookup-remote="1"]');
@@ -541,7 +634,7 @@ function syncCoverLookupManualControlsUi() {
     input.disabled = searchControlsDisabled;
   }
   if (submitButton instanceof HTMLButtonElement) {
-    submitButton.disabled = searchControlsDisabled || !String(state.coverLookup.modal.manualUrlText || '').trim();
+    submitButton.disabled = searchControlsDisabled || !coverLookupHasManualInput();
   }
   if (findBetterButton instanceof HTMLButtonElement) {
     findBetterButton.disabled = searchControlsDisabled;
@@ -628,7 +721,10 @@ function syncCoverLookupSelectionUi() {
     }
   });
   modal.querySelectorAll('[data-cover-lookup-saved-remote]').forEach((card) => {
-    const isActive = !selectedRemoteId && !pendingLocalPath && !pendingPastedImageId;
+    const isActive = !selectedRemoteId
+      && !pendingLocalPath
+      && !pendingPastedImageId
+      && !String(state.coverLookup.modal.activeLocalSelectionPath || '');
     card.classList.toggle('is-active', isActive);
     let check = card.querySelector('.cover-lookup-art-check');
     if (isActive && !check) {
@@ -1048,6 +1144,23 @@ function hasActiveCoverLookupDrawerTextSelection(body) {
   );
 }
 
+function hasActiveCoverLookupDrawerAction(body) {
+  if (!body || typeof body.contains !== 'function') return false;
+  const activeElement = typeof document !== 'undefined' ? document.activeElement : null;
+  const focusedAction = activeElement && body.contains(activeElement) && activeElement.closest?.('.cover-lookup-task-actions')
+    ? activeElement
+    : null;
+  const hoveredAction = body.querySelector?.('.cover-lookup-task-actions :hover');
+  return [focusedAction, hoveredAction].some((action) => {
+    if (!action) return false;
+    const cancelButton = action.closest?.('[data-cancel-cover-lookup-task]');
+    if (!cancelButton) return true;
+    const taskId = cancelButton.getAttribute('data-cancel-cover-lookup-task');
+    const task = (state.coverLookup.tasks || []).find((candidate) => String(candidate?.id || '') === taskId);
+    return ['pending', 'running'].includes(String(task?.status || ''));
+  });
+}
+
 function findCoverLookupTaskOpenForSelectionNode(node) {
   const element = typeof node?.closest === 'function' ? node : node?.parentElement;
   return element?.closest?.('.cover-lookup-task-open') || null;
@@ -1066,12 +1179,13 @@ function handleCoverLookupTaskOpenCopy(event) {
   return true;
 }
 
-function renderCoverLookupDrawer() {
+function renderCoverLookupDrawer({ preserveInteraction = true } = {}) {
   const drawer = document.getElementById('cover-lookup-drawer');
   const body = document.getElementById('cover-lookup-drawer-body');
   const badge = document.getElementById('cover-lookup-drawer-badge');
   const button = document.getElementById('cover-lookup-drawer-button');
   const clearButton = document.getElementById('cover-lookup-drawer-clear');
+  const summary = document.getElementById('cover-lookup-drawer-summary');
   if (!drawer || !body || !button || !badge) return;
   const tasks = Array.isArray(state.coverLookup.tasks) ? state.coverLookup.tasks : [];
   drawer.hidden = !state.coverLookup.drawerOpen;
@@ -1080,13 +1194,22 @@ function renderCoverLookupDrawer() {
   const pendingNotificationCount = tasks.filter((task) => isCompletedCoverLookupTask(task) && !Boolean(task?.notification_action_taken)).length;
   const terminalCount = tasks.filter((task) => isCompletedCoverLookupTask(task)).length;
   const badgeCount = activeCount + pendingNotificationCount;
+  if (summary) {
+    summary.textContent = [
+      activeCount ? `${activeCount} active` : '',
+      terminalCount ? `${terminalCount} finished` : '',
+    ].filter(Boolean).join(' · ') || 'No activity';
+  }
   badge.hidden = badgeCount <= 0;
   badge.textContent = String(badgeCount || '');
   button.classList.toggle('has-active-lookups', badgeCount > 0);
   if (clearButton) {
-    clearButton.hidden = terminalCount <= 0;
+    clearButton.hidden = false;
+    clearButton.disabled = terminalCount <= 0;
+    clearButton.setAttribute?.('aria-disabled', String(terminalCount <= 0));
   }
-  const preserveSelectedNotificationText = hasActiveCoverLookupDrawerTextSelection(body);
+  const preserveSelectedNotificationText = preserveInteraction
+    && (hasActiveCoverLookupDrawerTextSelection(body) || hasActiveCoverLookupDrawerAction(body));
   if (!tasks.length) {
     if (!preserveSelectedNotificationText) {
       body.innerHTML = '<div class="cover-lookup-drawer-empty">You\'re not looking for anything at the moment. Search for specific album art to see notifications.</div>';
@@ -1099,39 +1222,78 @@ function renderCoverLookupDrawer() {
     const status = String(task?.status || '');
     const isCompleted = isCompletedCoverLookupTask(task);
     const isNoResult = status === 'completed' && String(task?.result_kind || '') === 'no-results';
-    const statusLabel = isNoResult
-      ? 'Completed — no result'
+    const foundCount = Array.isArray(task?.possible_matches) ? task.possible_matches.length : 0;
+    const statusLabel = status === 'failed'
+      ? 'Lookup failed'
+      : status === 'canceled'
+      ? 'Canceled'
+      : isNoResult
+      ? 'No covers found'
       : isCompleted && task?.notification_action_taken
       ? 'Art chosen'
       : status === 'completed'
-        ? 'Completed'
-      : (task?.progress_label || status || 'Queued');
+        ? `${foundCount ? `${foundCount} ` : ''}covers found`
+      : status === 'pending'
+          ? 'Queued'
+          : 'Searching';
+    const taskStateClass = status === 'failed'
+      ? 'is-failed'
+      : ['pending', 'running'].includes(status)
+        ? 'is-running'
+        : 'is-completed';
     const elapsedStateClass = status === 'failed'
       ? 'is-failed'
       : isCompleted
         ? 'is-completed'
         : 'is-active';
     const elapsedLabel = getCoverLookupTaskElapsedLabel(task, Date.now());
-    const line = [task?.artist || '', task?.album || '', task?.year || ''].filter(Boolean).join(' - ');
+    const albumTitle = String(task?.album || '').trim() || 'Unknown album';
+    const albumByline = [task?.artist || '', task?.year || ''].filter(Boolean).join(' · ');
+    const openLabel = `Open Cover Look Up: ${albumTitle}${albumByline ? ` — ${albumByline}` : ''}`;
+    const coverUrl = typeof buildAlbumDisplayCoverUrl === 'function'
+      ? String(buildAlbumDisplayCoverUrl(task?.album_payload || {}) || '').trim()
+      : '';
+    const coverMarkup = coverUrl
+      ? `<img class="cover-lookup-task-cover" src="${escapeHtml(coverUrl)}" alt="">`
+      : '<span class="cover-lookup-task-cover is-placeholder" aria-hidden="true"></span>';
     return `
-      <div class="cover-lookup-task-card">
-        <div class="cover-lookup-task-open" role="button" tabindex="0" data-open-cover-lookup-task="${escapeHtml(task.id || '')}">
-          <div class="cover-lookup-task-type">COVER ART LOOK UP</div>
-          <div class="cover-lookup-task-title">${escapeHtml(line || 'Unknown album')}</div>
-          <div class="cover-lookup-task-status">${escapeHtml(statusLabel)}</div>
-          <div class="cover-lookup-task-elapsed ${elapsedStateClass}" data-cover-lookup-task-elapsed="${escapeHtml(task.id || '')}" ${elapsedLabel ? '' : 'hidden'}>${escapeHtml(elapsedLabel)}</div>
-          <div class="cover-lookup-task-progress"><span style="width:${progress}%"></span></div>
+      <div class="cover-lookup-task-card navigation-tree-item ${taskStateClass}">
+        <div class="cover-lookup-task-open" role="button" tabindex="0" aria-label="${escapeHtml(openLabel)}" data-open-cover-lookup-task="${escapeHtml(task.id || '')}">
+          ${coverMarkup}
+          <span class="cover-lookup-task-copy">
+            <span class="cover-lookup-task-title">${escapeHtml(albumTitle)}</span>
+            <span class="cover-lookup-task-byline">${escapeHtml(albumByline)}</span>
+            <span class="cover-lookup-task-meta">
+              <span class="cover-lookup-task-status-label ${taskStateClass}">${escapeHtml(statusLabel)}</span>
+              <span class="cover-lookup-task-elapsed ${elapsedStateClass}" data-cover-lookup-task-elapsed="${escapeHtml(task.id || '')}" ${elapsedLabel ? '' : 'hidden'}>${escapeHtml(elapsedLabel)}</span>
+            </span>
+          </span>
         </div>
+      <div class="cover-lookup-task-actions">
+        ${status === 'failed' && task?.album_payload
+          ? `<button class="button ui-button ui-button--secondary ui-button--small ui-button--icon cover-lookup-task-retry" type="button" data-retry-cover-lookup-task="${escapeHtml(task.id || '')}" aria-label="Retry lookup" title="Retry lookup"><svg class="ui-icon" viewBox="0 0 20 20" aria-hidden="true"><path d="M15.5 7A6 6 0 1 0 16 12M15.5 7V3.5M15.5 7H12"/></svg></button>`
+          : ''}
         ${['pending', 'running'].includes(status)
-          ? `<button class="cover-lookup-task-cancel" type="button" data-cancel-cover-lookup-task="${escapeHtml(task.id || '')}" aria-label="Stop lookup">✕</button>`
+          ? ButtonComponent.renderActionButton({
+            icon: 'close',
+            semantic: 'destructive',
+            ariaLabel: 'Stop lookup',
+            title: 'Stop lookup',
+            className: 'cover-lookup-task-cancel',
+            attributes: { 'data-cancel-cover-lookup-task': task.id || '' },
+          })
           : isCompleted
-            ? `<button class="cover-lookup-task-clear" type="button" data-clear-cover-lookup-task="${escapeHtml(task.id || '')}" aria-label="Clear notification" title="Clear notification">
-                <span class="cover-lookup-drawer-clear-glyph cover-lookup-task-clear-glyph" aria-hidden="true">
-                  <img class="cover-lookup-drawer-clear-glyph-default" src="/static/images/clear-notifications-icon-offwhite.png" alt="">
-                  <img class="cover-lookup-drawer-clear-glyph-hover" src="/static/images/clear-notifications-icon.png" alt="">
-                </span>
-              </button>`
+            ? ButtonComponent.renderActionButton({
+              icon: 'delete',
+              semantic: 'destructive',
+              ariaLabel: 'Delete notification',
+              title: 'Delete notification',
+              className: 'cover-lookup-task-clear',
+              attributes: { 'data-clear-cover-lookup-task': task.id || '' },
+            })
             : ''}
+      </div>
+      <div class="cover-lookup-task-progress" aria-hidden="true"><span style="width:${progress}%"></span></div>
       </div>
     `;
   }).join('');
@@ -1148,14 +1310,13 @@ async function clearCompletedCoverLookupTasks() {
     .map((task) => String(task?.id || '').trim())
     .filter(Boolean);
   if (!terminalTaskIds.length) {
-    showToast('There were no finished cover lookups to clear.', 'success', 2200);
     return;
   }
   const terminalTaskIdSet = new Set(terminalTaskIds);
   state.coverLookup.tasks = previousTasks.filter(
     (task) => !terminalTaskIdSet.has(String(task?.id || '').trim()),
   );
-  renderCoverLookupDrawer();
+  renderCoverLookupDrawer({ preserveInteraction: false });
   stopCoverLookupPollingIfIdle();
   try {
     const response = await fetch('/utilities/cover-lookup/tasks/clear-completed', {
@@ -1173,11 +1334,10 @@ async function clearCompletedCoverLookupTasks() {
     state.coverLookup.tasks = mergeCoverLookupTasksWithNotifications(Array.isArray(data.tasks) ? data.tasks : []);
     renderCoverLookupDrawer();
     stopCoverLookupPollingIfIdle();
-    showToast(Number(data.removed_count || 0) > 0 ? 'Finished cover lookups cleared.' : 'There were no finished cover lookups to clear.', 'success', 2200);
   } catch (error) {
     state.coverLookup.tasks = previousTasks;
     console.error('[AlbumHaven][CoverLookup] Failed to clear completed tasks.', error);
-    renderCoverLookupDrawer();
+    renderCoverLookupDrawer({ preserveInteraction: false });
     stopCoverLookupPollingIfIdle();
     showToast(error.message || 'Failed to clear completed cover lookups.', 'error', 2800);
   }
@@ -1193,7 +1353,7 @@ async function clearCoverLookupTaskNotification(taskId) {
   if (String(state.coverLookup.modal.taskId || '') === normalizedTaskId) {
     state.coverLookup.modal.taskId = '';
   }
-  renderCoverLookupDrawer();
+  renderCoverLookupDrawer({ preserveInteraction: false });
   stopCoverLookupPollingIfIdle();
   try {
     const response = await fetch(`/utilities/cover-lookup/task/${encodeURIComponent(normalizedTaskId)}/clear`, {
@@ -1215,7 +1375,7 @@ async function clearCoverLookupTaskNotification(taskId) {
   } catch (error) {
     state.coverLookup.tasks = previousTasks;
     console.error('[AlbumHaven][CoverLookup] Failed to clear notification.', error);
-    renderCoverLookupDrawer();
+    renderCoverLookupDrawer({ preserveInteraction: false });
     stopCoverLookupPollingIfIdle();
     showToast(error.message || 'Failed to clear notification.', 'error', 2800);
   }
@@ -1225,13 +1385,10 @@ function buildCoverLookupCard(item, kind = 'local') {
   const resolution = item?.resolution || ((item?.width && item?.height) ? `${item.width}x${item.height}` : 'Unknown');
   const isRemoteKind = kind === 'remote' || kind === 'saved-remote';
   const isPastedKind = kind === 'pasted';
-  const isSpotify = String(item?.source || '').trim() === 'spotify';
   const isOtherRemoteArt = isRemoteKind && String(item?.art_kind || 'cover') !== 'cover';
   const previewFallbackImageUrl = '/static/images/remote-preview-unavailable.png';
   const sourceBadge = buildRemoteCoverSourceBadge(item?.source);
-  const remoteSourceLabel = isSpotify
-    ? 'SPOTIFY'
-    : String(item?.source_label || item?.source || '').trim();
+  const remoteSourceLabel = getRemoteCoverSourceLabel(item?.source, item?.source_label);
   const imageUrl = kind === 'remote'
     ? buildRemoteCoverLookupDisplayUrl(item, item?.thumbnail_url || item?.url || '', item?.id || item?.url || '')
     : kind === 'saved-remote'
@@ -1253,7 +1410,8 @@ function buildCoverLookupCard(item, kind = 'local') {
     ? (!state.coverLookup.modal.selectedRemoteId && (
       String(state.coverLookup.modal.pendingLocalPath || '')
         ? String(state.coverLookup.modal.pendingLocalPath || '') === String(item?.path || '')
-        : String(item?.path || '') === getCoverLookupActiveLocalPath()
+        : !String(state.coverLookup.modal.pendingPastedImageId || '')
+          && String(item?.path || '') === getCoverLookupActiveLocalPath()
     ))
     : kind === 'pasted'
       ? (!String(state.coverLookup.modal.selectedRemoteId || '') && !String(state.coverLookup.modal.pendingLocalPath || '') && state.coverLookup.modal.pendingPastedImageId === String(item?.id || ''))
@@ -1261,6 +1419,7 @@ function buildCoverLookupCard(item, kind = 'local') {
       ? (
         !String(state.coverLookup.modal.selectedRemoteId || '')
         && !String(state.coverLookup.modal.pendingLocalPath || '')
+        && !String(state.coverLookup.modal.pendingPastedImageId || '')
         && !String(state.coverLookup.modal.activeLocalSelectionPath || '')
       )
       : (!isOtherRemoteArt && state.coverLookup.modal.selectedRemoteId === String(item?.id || ''));
@@ -1314,6 +1473,7 @@ function buildCoverLookupCard(item, kind = 'local') {
           </button>
           ${isActive ? '<span class="cover-lookup-art-check">&#10003;</span>' : ''}
           ${kind === 'local' ? `<button class="cover-lookup-art-delete" type="button" data-delete-local-cover="${escapeHtml(item.path || '')}" aria-label="Delete local cover art">&#128465;</button>` : ''}
+          ${isPastedKind ? `<button class="cover-lookup-art-delete" type="button" data-remove-pasted-cover="${escapeHtml(item.id || '')}" aria-label="Remove staged image">&#10005;</button>` : ''}
         </span>
         <span class="cover-lookup-art-meta">
           <span class="cover-lookup-art-name">${escapeHtml(item.relative_path || item.filename || item.album || (isPastedKind ? 'Pasted image' : 'Cover art'))}</span>
@@ -1371,6 +1531,11 @@ function restoreCoverLookupModalScrollAnchor(body, snapshot) {
   );
 }
 
+function formatCoverLookupImageCount(count) {
+  const safeCount = Math.max(0, Number(count || 0) || 0);
+  return `${safeCount} ${safeCount === 1 ? 'image' : 'images'}`;
+}
+
 function renderCoverLookupModal() {
   const els = getCoverLookupModalElements();
   if (!els.overlay || !els.body) return;
@@ -1384,6 +1549,8 @@ function renderCoverLookupModal() {
   }
   const localCovers = Array.isArray(modalState.localCovers) ? modalState.localCovers : [];
   const pastedImages = Array.isArray(modalState.pastedImages) ? modalState.pastedImages : [];
+  const manualImageAttachments = Array.isArray(modalState.manualImageAttachments)
+    ? modalState.manualImageAttachments : [];
   const otherArt = Array.isArray(modalState.otherArt) ? modalState.otherArt : [];
   const remoteCover = modalState.remoteCover && typeof modalState.remoteCover === 'object' ? modalState.remoteCover : null;
   const possibleMatches = Array.isArray(modalState.possibleMatches) ? modalState.possibleMatches : [];
@@ -1450,7 +1617,8 @@ function renderCoverLookupModal() {
   const searchControlsDisabledAttr = searchControlsDisabled ? 'disabled' : '';
   const manualInputDisabled = searchControlsDisabled;
   const manualInputDisabledAttr = manualInputDisabled ? 'disabled' : '';
-  const manualSearchDisabled = searchControlsDisabled || !String(modalState.manualUrlText || '').trim();
+  const manualSearchDisabled = searchControlsDisabled
+    || (!String(modalState.manualUrlText || '').trim() && !manualImageAttachments.length);
   const manualSearchDisabledAttr = manualSearchDisabled ? 'disabled' : '';
   const googleSearchUrl = buildCoverLookupImageSearchUrl('google', album);
   const yandexSearchUrl = buildCoverLookupImageSearchUrl('yandex', album);
@@ -1474,7 +1642,7 @@ function renderCoverLookupModal() {
         ${remoteOtherArtMatches.length ? `<div class="cover-lookup-subsection-title">OTHER COVER ART</div><div class="cover-lookup-gallery">${remoteOtherArtMatches.map((item) => buildCoverLookupCard(item, 'remote')).join('')}</div>` : ''}
         ${showCaaEmptyNotice ? `<div class="cover-lookup-subsection-title">Cover Art Archive</div><div class="cover-lookup-empty">We cannot guarantee Cover Art Archive results. Its API is flaky, you can try doing the same search later and might see good matches here</div>` : ''}
       `
-    : (taskRunning ? '' : '<div class="cover-lookup-empty">No remote matches yet.</div>');
+    : '';
   if (modalState.loading) {
     els.body.innerHTML = '<div class="cover-lookup-empty">Loading cover art gallery...</div>';
     els.body.scrollTop = 0;
@@ -1486,32 +1654,42 @@ function renderCoverLookupModal() {
   }
   els.body.innerHTML = `
     <section class="cover-lookup-section">
-      <h4 class="cover-lookup-section-title">Local Covers</h4>
+      <h4 class="cover-lookup-section-title">LOCAL · ${formatCoverLookupImageCount(localCovers.length)}</h4>
       <div class="cover-lookup-gallery">${localCovers.length ? localCovers.map((item) => buildCoverLookupCard(item, 'local')).join('') : '<div class="cover-lookup-empty">No local cover art found in this album folder.</div>'}</div>
       ${pastedImages.length ? `<div class="cover-lookup-subsection-title">PASTED IMAGES</div><div class="cover-lookup-gallery">${pastedImages.map((item) => buildCoverLookupCard(item, 'pasted')).join('')}</div>` : ''}
       ${otherArt.length ? `<div class="cover-lookup-subsection-title">Other art</div><div class="cover-lookup-gallery">${otherArt.map((item) => buildCoverLookupCard(item, 'local')).join('')}</div>` : ''}
     </section>
-    <section class="cover-lookup-section">
-      <h4 class="cover-lookup-section-title">Remote Cover Art</h4>
-      <div class="cover-lookup-gallery">${remoteCover ? buildCoverLookupCard(remoteCover, 'saved-remote') : '<div class="cover-lookup-empty">No remote cover is currently selected.</div>'}</div>
-    </section>
+    ${remoteCover ? `<section class="cover-lookup-section">
+      <h4 class="cover-lookup-section-title">REMOTE · ${formatCoverLookupImageCount(1)}</h4>
+      <div class="cover-lookup-gallery">${buildCoverLookupCard(remoteCover, 'saved-remote')}</div>
+    </section>` : ''}
     <section class="cover-lookup-section">
       <div class="cover-lookup-section-heading">
-        <h4 class="cover-lookup-section-title">Possible Matches</h4>
+        <h4 class="cover-lookup-section-title">${possibleMatches.length || taskRunning || showCaaEmptyNotice ? `POSSIBLE MATCHES · ${formatCoverLookupImageCount(possibleMatches.length)}` : 'ADD COVER ART'}</h4>
       </div>
       ${progressMarkup}
       ${possibleMatchesMarkup}
         <div class="cover-lookup-manual-add" data-cover-lookup-scroll-key="manual-add">
-        <div class="cover-lookup-manual-copy">
-          <div class="cover-lookup-manual-description">Search on the internet or manually add album links to improve cover results.</div>
-          <div class="cover-lookup-manual-note">Find Better Art will also use anything pasted here.</div>
-        </div>
+        <div class="cover-lookup-manual-divider" aria-hidden="true"></div>
+        <div class="cover-lookup-subsection-title">MANUAL SEARCH</div>
         <div class="cover-lookup-search-shortcuts">
-          <a class="cover-lookup-search-chip is-google" href="${googleSearchUrl}" target="_blank" rel="noreferrer"><span class="cover-lookup-search-chip-logo">G</span><span>Google</span></a>
-          <a class="cover-lookup-search-chip is-yandex" href="${yandexSearchUrl}" target="_blank" rel="noreferrer"><span class="cover-lookup-search-chip-logo">Y</span><span>Yandex</span></a>
+          <a class="cover-lookup-search-chip is-google" href="${googleSearchUrl}" target="_blank" rel="noreferrer"><img class="cover-lookup-search-chip-logo" src="/static/images/google.ico" alt=""><span>Google</span><span class="cover-lookup-external-marker" aria-hidden="true">↗</span></a>
+          <a class="cover-lookup-search-chip is-yandex" href="${yandexSearchUrl}" target="_blank" rel="noreferrer"><img class="cover-lookup-search-chip-logo" src="/static/images/yandex.ico" alt=""><span>Yandex</span><span class="cover-lookup-external-marker" aria-hidden="true">↗</span></a>
         </div>
-        <div class="cover-lookup-manual-row">
-          <textarea class="cover-lookup-manual-input" id="cover-lookup-pasted-urls" rows="4" placeholder="You can paste your image or direct link to the album page or jpg here" ${manualInputDisabledAttr}>${escapeHtml(modalState.manualUrlText || '')}</textarea>
+        <div class="cover-lookup-manual-row" data-cover-lookup-drop-zone="1">
+          <div class="cover-lookup-manual-content">
+            <div class="cover-lookup-manual-attachments" ${manualImageAttachments.length ? '' : 'hidden'}>
+              ${manualImageAttachments.map((item) => `
+                <span class="cover-lookup-manual-attachment" data-cover-lookup-pending-attachment="${escapeHtml(item.id || '')}" title="${escapeHtml(item.filename || 'Image')}">
+                  <img src="${escapeHtml(item.object_url || item.data_url || '')}" alt="">
+                  <button type="button" data-remove-cover-lookup-pending-attachment="${escapeHtml(item.id || '')}" aria-label="Remove ${escapeHtml(item.filename || 'image')}">×</button>
+                </span>
+              `).join('')}
+            </div>
+            <textarea class="cover-lookup-manual-input" id="cover-lookup-pasted-urls" rows="1" placeholder="Paste an image or a direct image or album link" ${manualInputDisabledAttr}>${escapeHtml(modalState.manualUrlText || '')}</textarea>
+          </div>
+          <input type="file" accept="image/*" multiple data-cover-lookup-file-input hidden ${manualInputDisabledAttr}>
+          <button class="cover-lookup-manual-open" type="button" data-choose-cover-lookup-files="1" aria-label="Add image" ${manualInputDisabledAttr}><span aria-hidden="true">+</span><span>Add image</span></button>
         </div>
         <div class="cover-lookup-manual-actions">
           <button class="button cover-lookup-manual-submit" type="button" data-add-cover-lookup-remote="1" ${manualSearchDisabledAttr}>Extract images</button>
@@ -1686,6 +1864,7 @@ async function openCoverLookupModal(album, options = {}) {
   state.coverLookup.modal.localCovers = [];
   revokeCoverLookupPastedImageUrls();
   state.coverLookup.modal.pastedImages = [];
+  state.coverLookup.modal.manualImageAttachments = [];
   state.coverLookup.modal.otherArt = [];
   state.coverLookup.modal.pendingLocalPath = '';
   state.coverLookup.modal.pendingPastedImageId = '';
@@ -1728,6 +1907,7 @@ function closeCoverLookupModal() {
   state.coverLookup.modal.activeLocalSelectionPath = '';
   revokeCoverLookupPastedImageUrls();
   state.coverLookup.modal.pastedImages = [];
+  state.coverLookup.modal.manualImageAttachments = [];
   state.coverLookup.modal.manualBusy = false;
   if (els.saveRemote instanceof HTMLButtonElement) {
     els.saveRemote.hidden = false;
@@ -2045,7 +2225,18 @@ async function addRemoteCoverLinksFromLookup() {
   const album = state.coverLookup.modal.album;
   const input = document.getElementById('cover-lookup-pasted-urls');
   const urls = collectManualCoverLookupUrls();
-  if (!album || !urls.length) return;
+  const attachmentCount = Array.isArray(state.coverLookup.modal.manualImageAttachments)
+    ? state.coverLookup.modal.manualImageAttachments.length : 0;
+  if (!album || (!urls.length && !attachmentCount)) return;
+  const extractedImageCount = extractCoverLookupPendingAttachments();
+  if (!urls.length) {
+    state.coverLookup.modal.statusText = extractedImageCount === 1
+      ? 'Image extracted.'
+      : `${extractedImageCount} images extracted.`;
+    state.coverLookup.modal.statusTone = 'neutral';
+    renderCoverLookupModal();
+    return;
+  }
   try {
     state.coverLookup.modal.manualBusy = true;
     renderCoverLookupModal();
@@ -2077,7 +2268,13 @@ async function addRemoteCoverLinksFromLookup() {
     }
     await loadCoverLookupTasks({ toast: false });
     renderCoverLookupModal();
-    showToast('Remote cover links added.', 'success', 2200);
+    showToast(
+      extractedImageCount
+        ? `Extracted ${extractedImageCount} image${extractedImageCount === 1 ? '' : 's'} and added remote links.`
+        : 'Remote cover links added.',
+      'success',
+      2200,
+    );
   } catch (error) {
     state.coverLookup.modal.statusText = String(error?.message || 'Nothing was found in the pasted links.');
     state.coverLookup.modal.statusTone = 'error';
@@ -2151,4 +2348,3 @@ async function saveCoverFromLookup() {
     await saveLocalCoverFromLookup(state.coverLookup.modal.pendingLocalPath);
   }
 }
-

@@ -21,8 +21,12 @@ export class UtilityAppearanceTab extends BasePage {
     this.mainBody = new UtilityMainBody(page, testInfo);
     this.detailScroller = this.mainBody.detail;
     this.editor = page.locator('.appearance-background-editor');
+    this.deviceControls = page.locator('.appearance-device-controls');
+    this.deviceModeControls = page.locator('[data-appearance-device-mode]');
     this.editorHeading = this.editor.getByRole('heading', { level: 3 });
     this.navigationTree = new NavigationTree(this.sidebar.list);
+    this.visibleSectionButtons = this.sidebar.list.locator('[data-utility-appearance-key]:visible');
+    this.searchEmpty = this.sidebar.list.locator('[data-appearance-search-empty]');
     this.seekbarModeInputs = page.locator(this.seekbarModeSelector);
     this.colorInputs = page.locator('[data-appearance-color]');
     this.compactPlayerStyle = new CompactPlayerStyleControl(
@@ -70,6 +74,14 @@ export class UtilityAppearanceTab extends BasePage {
 
   compactStyleButton(style) {
     return this.compactPlayerStyle.button(style);
+  }
+
+  deviceButton(name) {
+    return this.deviceControls.getByRole('button', { name, exact: true });
+  }
+
+  dockedCompactPlayerBehaviorButton(behavior) {
+    return this.compactPlayerStyle.behaviorButton(behavior);
   }
 
   loopStyleButton(style) {

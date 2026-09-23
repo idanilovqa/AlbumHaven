@@ -7,7 +7,7 @@ test.beforeEach(async ({ page }) => {
   await page.setViewportSize({ width: 1200, height: 800 });
   await page.route('http://player-component.test/', route => route.fulfill({
     contentType: 'text/html',
-    body: `<html data-compact-player-style="docked"><body>
+    body: `<html data-compact-player-style="floating"><body>
       <button id="outside">Outside player</button>
       <section class="global-player">
         <div class="player-shell">
@@ -16,6 +16,7 @@ test.beforeEach(async ({ page }) => {
         </div>
         <div class="compact-player-shell">
           <button data-ui-button-action="player-expand">Expand</button>
+          <div data-playback-control-cluster><button data-playback-control-action="play-pause">Compact play</button></div>
         </div>
       </section>
     </body></html>`,
@@ -102,4 +103,13 @@ test('responsive expansion retains a focus position when playback is disabled', 
   await page.getByRole('button', { name: 'Expand', exact: true }).focus();
   await page.setViewportSize({ width: 600, height: 800 });
   await expect(page.locator('.player-shell')).toBeFocused();
+});
+
+test('docked keyboard collapse focuses Play when the compact chevron is absent', async ({ page }) => {
+  await page.locator('html').evaluate(element => element.setAttribute('data-compact-player-style', 'docked'));
+  const collapse = page.getByRole('button', { name: 'Collapse', exact: true });
+  await collapse.focus();
+  await collapse.press('Enter');
+  await expect(page.getByRole('button', { name: 'Compact play', exact: true })).toBeFocused();
+  await expect(page.locator('[data-ui-button-action="player-expand"]')).toBeHidden();
 });

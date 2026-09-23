@@ -49,6 +49,10 @@ export class TrackModal extends BasePage {
     this.missingAlert = this.dialog.locator('[data-on-page-alert="error"]');
     this.removeMissingAlbumButton = this.dialog.locator('[data-remove-missing-album="1"]');
     this.artbox = this.dialog.locator('#track-modal-cover .album-artbox');
+    this.artboxOverlay = this.artbox.locator('.album-artbox__overlay');
+    this.body = this.dialog.locator('.track-modal-body');
+    this.cover = this.dialog.locator('.track-modal-cover');
+    this.main = this.dialog.locator('.track-modal-main');
     this.missingEditButton = this.dialog.getByRole('button', { name: 'Edit album tags unavailable while album is missing' });
     this.missingFolderButton = this.dialog.getByRole('button', { name: 'Open album folder unavailable while album is missing' });
     this.appConfirmDialog = new AppConfirmDialog(page);
@@ -288,6 +292,26 @@ export class TrackModal extends BasePage {
       await titleHandle.dispose();
       await tableHandle.dispose();
     }
+  }
+
+  async readArtworkReleasedWidth() {
+    // parity-check: allow-read-only-measurement-evaluate -- measure the actual grid content box, excluding padding, borders and any scrollbar
+    return this.dialog.evaluate((dialog) => {
+      const body = dialog.querySelector('.track-modal-body');
+      const cover = dialog.querySelector('.track-modal-cover');
+      const main = dialog.querySelector('.track-modal-main');
+      if (!body || !cover || !main) throw new Error('Expected the Album Details artwork and main layout.');
+      const owner = getComputedStyle(body).display === 'contents' ? body.parentElement : body;
+      const ownerBounds = owner.getBoundingClientRect();
+      const mainBounds = main.getBoundingClientRect();
+      return {
+        contentRight: ownerBounds.left + owner.clientLeft + owner.clientWidth
+          - parseFloat(getComputedStyle(owner).paddingRight),
+        mainRight: mainBounds.right,
+        mainLeft: mainBounds.left,
+        coverRight: cover.getBoundingClientRect().right,
+      };
+    });
   }
 
   async readCoverLightboxSources() {

@@ -103,6 +103,10 @@ export class UtilityProblematicFilesActions {
     };
   }
 
+  async readMountedListItemCount() {
+    return this.utilityProblematicFilesTab.listItems.count();
+  }
+
   async readRepresentativeSearchToken() {
     const items = await this.readVisibleListItems();
     return items
@@ -117,34 +121,12 @@ export class UtilityProblematicFilesActions {
   }
 
   async waitForSearchResults(searchTerm, options = {}) {
-    await this.utilityProblematicFilesTab.waitForPageCondition((expected) => {
-      if (typeof state === 'undefined') return false;
-      if ((state.utility?.searchQuery || '') !== expected.term) return false;
-      // Input state changes before the debounced render. Observe the whole keyed
-      // projection, not merely the previous tree remaining nonempty.
-      if (typeof getFilteredProblematicAlbums !== 'function') return false;
-      const keys = getFilteredProblematicAlbums().map(item => String(item.key));
-      const items = Array.from(document.querySelectorAll(expected.listItemSelector));
-      return keys.length > 0 && items.length === keys.length
-        && items.every((item, index) => item.getAttribute('data-problematic-album-key') === keys[index]);
-    }, {
-      timeout: options.timeout || 60000,
-    }, {
-      term: searchTerm,
-      listItemSelector: this.utilityProblematicFilesTab.listItemSelector,
-    });
+    await this.utilityProblematicFilesTab.waitForSearchProjection(searchTerm, options);
   }
 
   async clearSearch() {
     await this.utilityProblematicFilesTab.searchSection.searchInput.fill('');
-    await this.utilityProblematicFilesTab.waitForPageCondition((selector) => {
-      if (typeof state === 'undefined' || (state.utility?.searchQuery || '') !== '') return false;
-      if (typeof getFilteredProblematicAlbums !== 'function') return false;
-      const keys = getFilteredProblematicAlbums().map(item => String(item.key));
-      const items = Array.from(document.querySelectorAll(selector));
-      return items.length === keys.length
-        && items.every((item, index) => item.getAttribute('data-problematic-album-key') === keys[index]);
-    }, { timeout: 60000 }, this.utilityProblematicFilesTab.listItemSelector);
+    await this.waitForSearchResults('');
   }
 
   async readProblemFilterValues() {

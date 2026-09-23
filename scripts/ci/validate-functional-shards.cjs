@@ -12,9 +12,9 @@ const EXPECTED_CONFIGS = Object.freeze([
 ]);
 const EXPECTED_SHARDS = Object.freeze([
   ['gallery-search-visual', 46],
-  ['cover-providers', 19],
-  ['metadata-mutations', 13],
-  ['playback-utilities', 37],
+  ['cover-providers', 20],
+  ['metadata-mutations', 14],
+  ['playback-utilities', 40],
 ]);
 const OWNER_RUNTIME_ENV_KEYS = Object.freeze([
   'MUSIC_DIR',
@@ -206,7 +206,7 @@ function validateFunctionalShardContract(contract, discoveredCases) {
   for (const key of ownedKeys) {
     if (!discoveredKeys.has(key)) errors.push(`orphan or unknown owned functional case: ${key.replaceAll('\u0000', ' | ')}`);
   }
-  if (owned.length !== 115) errors.push(`functional contract owns ${owned.length} cases; expected 115`);
+  if (owned.length !== 120) errors.push(`functional contract owns ${owned.length} cases; expected 120`);
   return errors;
 }
 

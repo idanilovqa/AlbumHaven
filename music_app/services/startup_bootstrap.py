@@ -395,7 +395,7 @@ def build_startup_artist_section_html(group: dict[str, object], section_type: st
         '<h2 class="artist-name">{artist_name}</h2>'
         '<div class="artist-meta">{album_count} album{album_plural}</div>'
         "</div>"
-        '<div class="artist-rows"><div class="album-row" style="grid-template-columns:repeat(auto-fill, minmax(240px, 320px)); justify-content:flex-start;">{album_cards}</div></div>'
+        '<div class="artist-rows"><div class="album-row" style="grid-template-columns:repeat(auto-fill, minmax(240px, 1fr)); justify-content:flex-start;">{album_cards}</div></div>'
         "</section>"
     ).format(
         section_type=escape(section_type),

@@ -1,0 +1,75 @@
+/* Copied from settings branch music_app/static/css/runtime/utilities.css; selectors adapted for the mock. */
+.tabs {
+  position: relative;
+  display: flex;
+  justify-content: space-between;
+  align-items: stretch;
+  gap: 12px;
+  padding: 10px 16px 0;
+  min-height: 58px;
+  flex: 0 0 auto;
+  box-sizing: border-box;
+  border: 0;
+  --utility-tab-accent: var(--appearance-waveform-edge, var(--accent));
+  background-image: linear-gradient(var(--border), var(--border));
+  background-position: bottom;
+  background-repeat: no-repeat;
+  background-size: 100% 1px;
+}
+.tabs {
+  display: flex;
+  align-items: stretch;
+  flex: 1;
+  min-width: 0;
+  gap: 0;
+  overflow-x: auto;
+  scrollbar-width: thin;
+  padding: 0;
+  border: 0;
+}
+.tabs button {
+  border: 1px solid var(--border);
+  border-bottom: 0;
+  background: rgba(255,255,255,0.03);
+  color: var(--muted);
+  border-radius: 12px 12px 0 0;
+  padding: 10px 14px;
+  font-size: 0.78rem;
+  white-space: nowrap;
+  flex: 0 0 auto;
+  font-weight: 700;
+  cursor: pointer;
+  position: relative;
+  bottom: 0;
+  text-decoration: none;
+}
+.tabs button[aria-selected=true] {
+  color: var(--text);
+  z-index: 1;
+  border: 1px solid transparent;
+  border-top-width: 2px;
+  border-bottom-color: var(--appearance-panel-background, var(--panel));
+  background: linear-gradient(var(--appearance-panel-background, var(--panel)), var(--appearance-panel-background, var(--panel))) padding-box,
+    linear-gradient(to bottom, var(--utility-tab-accent), color-mix(in srgb, var(--utility-tab-accent) 48%, transparent) 28%, transparent) border-box;
+  box-shadow: 0 -3px 10px color-mix(in srgb, var(--utility-tab-accent) 10%, transparent);
+}
+.tabs::after {
+  content: '';
+  position: absolute;
+  pointer-events: none;
+  inset: auto 0 0;
+  height: 1px;
+  background: linear-gradient(to right,
+    transparent calc(var(--active-tab-left, 0px) - 100px),
+    var(--utility-tab-accent) var(--active-tab-left, 0px),
+    transparent var(--active-tab-left, 0px), transparent var(--active-tab-right, 0px),
+    var(--utility-tab-accent) var(--active-tab-right, 0px),
+    transparent calc(var(--active-tab-right, 0px) + 100px));
+}
+.tabs button:hover { outline: none; }
+.tabs button:focus-visible { outline: 2px solid var(--utility-tab-accent); outline-offset: -4px; }
+.tabs{position:relative;--border:var(--line);--text:var(--ink);--utility-tab-accent:var(--appearance-waveform-edge,var(--blue));padding:10px 16px 0;flex-wrap:nowrap}
+.tabs button[aria-selected=true]{margin-bottom:0}
+
+/* The mock combines header and tab strip in one element. */
+.tabs{justify-content:flex-start}

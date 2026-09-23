@@ -288,6 +288,13 @@ test('editing a tag field refreshes the canonical pending-change presentation', 
   assert.equal(calls.pendingSyncs, 1);
 });
 
+test('Problematic Files tab activation owns one settled render', () => {
+  assert.match(
+    helperSource,
+    /await loadProblematicFiles\(!state\.utility\.loaded, \{ render: false \}\);[\s\S]{0,500}renderUtilityModalContent\(\);/,
+  );
+});
+
 test('switching away from Loops clears session-only Space ownership', () => {
   assert.match(
     helperSource,

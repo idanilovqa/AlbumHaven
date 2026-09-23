@@ -72,6 +72,7 @@ export {
   measureProblematicFilesOpen,
   measureProblematicFilesSettingsOpen,
   measureProblematicFilesSettingsOpenWithNetworkEvidence,
+  readCompletedResponseDurationMs,
   partitionAuthenticatedCoverPreemptionRuntimeLogs,
   partitionProblematicFilesRuntimeLogs,
   readGalleryCoverPreemptionSnapshot,

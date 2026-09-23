@@ -1,0 +1,32 @@
+/* Scoped snapshot of current runtime/base-layout.css artist navigation rules. */
+.artist-tree-sample .sidebar-top { margin-bottom: 12px; }
+.artist-tree-sample .shell-navigation-rail-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.artist-tree-sample .sidebar h2 { margin: 0 0 10px; font-size: 1rem; }
+.artist-tree-sample .artist-list { display: flex; flex-direction: column; gap: 6px; }
+.artist-tree-sample .artist-link {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 9px 10px;
+  border-radius: 10px;
+  color: var(--text);
+  text-decoration: none;
+  border: 1px solid transparent;
+  background: transparent;
+  min-width: 0;
+}
+.artist-tree-sample .artist-link .artist-name-label {
+  flex: 1 1 auto;
+  min-width: 0;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  line-height: 1.2;
+}
+.artist-tree-sample .artist-link:hover, .artist-tree-sample .artist-link.active { background: var(--panel); border-color: var(--border); }
+.artist-tree-sample .artist-count { color: var(--muted); font-size: 0.9rem; flex: 0 0 auto; white-space: nowrap; align-self: flex-start; }

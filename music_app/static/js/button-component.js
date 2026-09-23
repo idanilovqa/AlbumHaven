@@ -6,6 +6,7 @@
   const types = new Set(['button', 'submit', 'reset']);
   const actionButtonShapes = new Set(['default', 'round']);
   const actionButtonSemantics = new Set(['default', 'destructive']);
+  const actionButtonPresentations = new Set(['outlined', 'bare']);
   const iconPaths = Object.freeze({
     calendar: 'M4 5h16v15H4V5ZM8 3v4M16 3v4M4 10h16',
     copy: 'M8 8h12v12H8V8ZM4 16H3V3h13v1M8 4H4v4',
@@ -19,6 +20,7 @@
     delete: 'M8 8.5v9M12 8.5v9M16 8.5v9M5.5 6h13M9 6V4.5h6V6M7 6l.75 14h8.5L17 6',
     previous: 'm15 6-6 6 6 6',
     next: 'm9 6 6 6-6 6',
+    bolt: 'm13 2-9 12h7l-1 8 10-13h-7z',
   });
   const escape = value => String(value ?? '').replace(/[&<>"']/g, character => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[character]));
   const validAttribute = name => /^[a-zA-Z][a-zA-Z0-9_.:-]*$/.test(name);
@@ -70,13 +72,16 @@
     const ariaLabel = String(options.ariaLabel || '').trim();
     const shape = options.shape || 'default';
     const semantic = options.semantic || 'default';
+    const presentation = options.presentation || 'outlined';
     if (!ariaLabel) throw new TypeError('ActionButton requires an accessible label.');
     if (!actionButtonShapes.has(shape)) throw new TypeError('Unknown ActionButton shape.');
     if (!actionButtonSemantics.has(semantic)) throw new TypeError('Unknown ActionButton semantic.');
+    if (!actionButtonPresentations.has(presentation)) throw new TypeError('Unknown ActionButton presentation.');
     if (!validClassList(options.iconClass)) throw new TypeError('Invalid ActionButton icon class.');
     const specializationClasses = [
       shape === 'default' ? '' : `action-button--${shape}`,
       semantic === 'default' ? '' : `action-button--${semantic}`,
+      presentation === 'outlined' ? '' : `action-button--${presentation}`,
     ].filter(Boolean);
     const actionOptions = {
       ...options,

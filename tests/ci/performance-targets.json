@@ -476,6 +476,36 @@
           "case": "isolated scan performance benchmarks › FTC-OPS-003E dedicated Scan Page cancels regular and full scans"
         }
       ]
+    },
+    {
+      "name": "scan-health",
+      "measurementExpected": false,
+      "fixtureProfile": "scan-library",
+      "fixtureMode": "generated-isolated",
+      "runnerClass": "scan",
+      "workers": 1,
+      "defaultMember": true,
+      "calibrationState": "uncalibrated",
+      "blocking": false,
+      "targetMs": null,
+      "graceMs": null,
+      "ceilingMs": null,
+      "cases": [{"config":"playwright.scan-performance.config.cjs","project":"scan-performance","test":"tests/e2e/scanPerformance/scanPerformance.spec.js","case":"isolated scan performance benchmarks › FTC-OPS-003F acknowledges a naturally unavailable library root without hiding recovery status"}]
+    },
+    {
+      "name": "scan-error",
+      "measurementExpected": false,
+      "fixtureProfile": "scan-library",
+      "fixtureMode": "generated-isolated",
+      "runnerClass": "scan",
+      "workers": 1,
+      "defaultMember": true,
+      "calibrationState": "uncalibrated",
+      "blocking": false,
+      "targetMs": null,
+      "graceMs": null,
+      "ceilingMs": null,
+      "cases": [{"config":"playwright.scan-performance.config.cjs","project":"scan-performance","test":"tests/e2e/scanPerformance/scanPerformance.spec.js","case":"isolated scan performance benchmarks › FTC-OPS-003G failed scan publication retains the library and recovers after permissions return"}]
     }
   ]
 }

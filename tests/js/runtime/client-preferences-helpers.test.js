@@ -87,6 +87,7 @@ function loadHelper(overrides = {}) {
   assert.deepEqual(JSON.parse(JSON.stringify(context.getDefaultShellLayoutPreferences())), {
     contextualPaneWidthPx: 320,
     infoDrawerWidthPx: 360,
+    artistTreeFolded: null,
   });
   assert.equal(context.getDefaultAlbumOpenMode(), 'modal');
   assert.deepEqual(JSON.parse(JSON.stringify(context.normalizeGalleryDisplayPreferences({
@@ -106,9 +107,11 @@ function loadHelper(overrides = {}) {
   assert.deepEqual(JSON.parse(JSON.stringify(context.normalizeShellLayoutPreferences({
     contextualPaneWidthPx: 280,
     infoDrawerWidthPx: 420,
+    artistTreeFolded: true,
   }))), {
     contextualPaneWidthPx: 280,
     infoDrawerWidthPx: 420,
+    artistTreeFolded: true,
   });
   assert.equal(context.normalizeAlbumOpenMode('page'), 'page');
 }
@@ -132,9 +135,11 @@ function loadHelper(overrides = {}) {
   assert.deepEqual(JSON.parse(JSON.stringify(context.normalizeShellLayoutPreferences({
     contextualPaneWidthPx: 10,
     infoDrawerWidthPx: 9999,
+    artistTreeFolded: 'yes',
   }))), {
     contextualPaneWidthPx: 320,
     infoDrawerWidthPx: 360,
+    artistTreeFolded: null,
   });
   assert.equal(context.normalizeAlbumOpenMode('sideways'), 'modal');
 }
@@ -156,6 +161,7 @@ function loadHelper(overrides = {}) {
   context.state.ui.shellLayoutPreferences = {
     contextualPaneWidthPx: 280,
     infoDrawerWidthPx: 420,
+    artistTreeFolded: false,
   };
   context.persistGalleryDisplayPreferences();
   context.persistGalleryPlaybackPreferences();
@@ -184,6 +190,7 @@ function loadHelper(overrides = {}) {
     JSON.stringify({
       contextualPaneWidthPx: 280,
       infoDrawerWidthPx: 420,
+      artistTreeFolded: false,
     }),
   );
 }
@@ -208,6 +215,7 @@ function loadHelper(overrides = {}) {
   storage.set('albumhaven.shellLayoutPreferences.v1', JSON.stringify({
     contextualPaneWidthPx: 275,
     infoDrawerWidthPx: 410,
+    artistTreeFolded: true,
   }));
 
   context.restorePersistedClientPreferences();
@@ -230,6 +238,7 @@ function loadHelper(overrides = {}) {
   assert.deepEqual(JSON.parse(JSON.stringify(context.state.ui.shellLayoutPreferences)), {
     contextualPaneWidthPx: 275,
     infoDrawerWidthPx: 410,
+    artistTreeFolded: true,
   });
 }
 
@@ -262,6 +271,7 @@ function loadHelper(overrides = {}) {
   assert.deepEqual(JSON.parse(JSON.stringify(context.state.ui.shellLayoutPreferences)), {
     contextualPaneWidthPx: 320,
     infoDrawerWidthPx: 360,
+    artistTreeFolded: null,
   });
 }
 

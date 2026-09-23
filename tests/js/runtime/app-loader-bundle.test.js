@@ -61,6 +61,7 @@ const expectedRuntimeOrder = [
   'album-details-components.js',
   'core-state-and-helpers.js',
   'trigger-anchor.js',
+  'search-input.js',
   'gallery-main-interactions.js',
   'compact-player-helpers.js',
   'player-streaming-engine.js',
@@ -90,8 +91,10 @@ const expectedRuntimeOrder = [
   'library-settings.js',
   'cover-lookup-notification-helpers.js',
   'appearance-backgrounds-bridge.js',
+  'problematic-files-virtual-list.js',
   'utility-renderers-and-actions.js',
   'utility-loop-playback.js',
+  'tag-editor-reorder.js',
   'utility-loaders-and-cover-lookup.js',
   'cover-lookup-modal-and-drawer.js',
   'tag-editor-and-optimistic-updates.js',
@@ -118,6 +121,7 @@ test('app loader fetches one generated runtime bundle instead of individual runt
     expectedRuntimeOrder.map((fileName) => `js/runtime/${fileName}`),
   );
   assert.equal(normalizeNewlines(bundleJs), normalizeNewlines(buildRuntimeBundle()));
+  assert.doesNotMatch(buildRuntimeBundle(), /\r/, 'generated runtime bundle must use LF line endings');
   assert.match(appJs, /const runtimeAssetVersion = encodeURIComponent\(/);
   assert.match(appJs, /const runtimeBundlePath = `js\/runtime-bundle\.js\$\{runtimeAssetVersion/);
   assert.doesNotMatch(appJs, /const scriptPaths = \[/);

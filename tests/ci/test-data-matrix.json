@@ -1,5 +1,19 @@
 [
   {
+    "config": "playwright.scan-performance.config.cjs",
+    "project": "scan-performance",
+    "test": "tests/e2e/scanPerformance/scanPerformance.spec.js",
+    "case": "isolated scan performance benchmarks › FTC-OPS-003G failed scan publication retains the library and recovers after permissions return",
+    "profile": "scan-library",
+    "setupScope": "isolated",
+    "stateMode": "global-mutation",
+    "databaseScenarios": ["scan:publication-permission-failure"],
+    "filesystemScenarios": ["media-copy:scan-error"],
+    "expectedContracts": ["failed-publication-retains-library", "durable-terminal-error", "native-full-scan-recovery"],
+    "globalMutationReason": "Revokes only the unique runtime role INSERT privilege on local_track_files inside its owned database, restoring it in finally before recovery.",
+    "ownerApproval": "approved"
+  },
+  {
     "config": "playwright.config.js",
     "project": "functional",
     "test": "tests/e2e/specs/artistCompilationFamily.spec.js",
@@ -725,6 +739,33 @@
     "mutationOwnership": {
       "databaseIdentity": "case:provider-reopen",
       "filesystemCopy": "media/cases/provider-reopen"
+    },
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.config.js",
+    "project": "functional",
+    "test": "tests/e2e/specs/coverLookup.spec.js",
+    "case": "FTC-COVERS-024 manual composer preserves staged images and exclusive choices at narrow width",
+    "profile": "functional-core",
+    "setupScope": "isolated",
+    "stateMode": "owned-mutation",
+    "executionWave": 1,
+    "databaseScenarios": [
+      "cover-lookup:manual-composer"
+    ],
+    "filesystemScenarios": [
+      "covers:approved-existing-pool",
+      "media-copy:manual-composer"
+    ],
+    "expectedContracts": [
+      "composer-staging-and-failure-retention",
+      "direct-extensionless-image-extraction",
+      "exclusive-cover-selection"
+    ],
+    "mutationOwnership": {
+      "databaseIdentity": "case:manual-composer",
+      "filesystemCopy": "media/cases/manual-composer"
     },
     "ownerApproval": "approved"
   },
@@ -2170,6 +2211,33 @@
     "ownerApproval": "approved"
   },
   {
+    "config": "playwright.config.js",
+    "project": "functional",
+    "test": "tests/e2e/specs/tagEditorSelectionReorder.spec.js",
+    "case": "FTC-TAGS-025 preserves selection and reorder semantics through cancel and apply",
+    "profile": "functional-core",
+    "setupScope": "isolated",
+    "stateMode": "owned-mutation",
+    "setupGroup": "editor-controls",
+    "executionWave": 3,
+    "databaseScenarios": [
+      "tag-edit:selection-reorder"
+    ],
+    "filesystemScenarios": [
+      "media-copy:tag-editor-selection-reorder"
+    ],
+    "expectedContracts": [
+      "pointer-and-modifier-selection",
+      "grip-only-pointer-and-keyboard-reorder",
+      "cancel-rollback-and-apply-persistence"
+    ],
+    "mutationOwnership": {
+      "databaseIdentity": "case:tag-editor-selection-reorder",
+      "filesystemCopy": "media/cases/tag-editor-selection-reorder"
+    },
+    "ownerApproval": "approved"
+  },
+  {
     "config": "playwright.autoplay-allowed.config.js",
     "project": "reload-autoplay-allowed",
     "test": "tests/e2e/specs/playerReloadAutoplayAllowed.spec.js",
@@ -2778,7 +2846,7 @@
     "config": "playwright.scan-performance.config.cjs",
     "project": "scan-performance",
     "test": "tests/e2e/scanPerformance/scanPerformance.spec.js",
-    "case": "isolated scan performance benchmarks \u203a FTC-OPS-003E dedicated Scan Page cancels regular and full scans",
+      "case": "isolated scan performance benchmarks \u203a FTC-OPS-003E dedicated Scan Page cancels regular and full scans",
     "profile": "scan-library",
     "setupScope": "isolated",
     "stateMode": "global-mutation",
@@ -2792,9 +2860,26 @@
       "regular-scan-cancellation",
       "full-scan-cancellation"
     ],
-    "globalMutationReason": "Cancels the process-global scan worker in both regular and full modes.",
-    "ownerApproval": "approved"
-  },
+      "globalMutationReason": "Cancels the process-global scan worker in both regular and full modes.",
+      "ownerApproval": "approved"
+    },
+    {
+      "config": "playwright.scan-performance.config.cjs",
+      "project": "scan-performance",
+      "test": "tests/e2e/scanPerformance/scanPerformance.spec.js",
+      "case": "isolated scan performance benchmarks \u203a FTC-OPS-003F acknowledges a naturally unavailable library root without hiding recovery status",
+      "profile": "scan-library",
+      "setupScope": "isolated",
+      "stateMode": "owned-mutation",
+      "databaseScenarios": ["scan:unavailable-root-health"],
+      "filesystemScenarios": ["media-copy:scan-health", "prestart:remove-owned-empty-root"],
+      "expectedContracts": ["warning-acknowledgment-preserves-recovery", "status-gallerybar-mount-restoration"],
+      "mutationOwnership": {
+        "databaseIdentity": "case:scan-health",
+        "filesystemCopy": "media/cases/scan-health"
+      },
+      "ownerApproval": "approved"
+    },
   {
     "config": "playwright.config.js",
     "project": "functional",
@@ -2862,6 +2947,27 @@
       "databaseIdentity": "case:watcher-reconciliation",
       "filesystemCopy": "media/cases/watcher-reconciliation"
     },
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.config.js",
+    "project": "functional",
+    "test": "tests/e2e/specs/albumDetailsComponents.functional.spec.js",
+    "case": "FTC-ALBUM-DETAILS-022 touch artwork controls open full cover and Cover Lookup without hover",
+    "profile": "functional-core",
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "executionWave": 1,
+    "databaseScenarios": [
+      "album:ordinary-numeric-disc-control"
+    ],
+    "filesystemScenarios": [
+      "media:ordinary-numeric-disc-control"
+    ],
+    "expectedContracts": [
+      "touch-artwork-fullscreen",
+      "touch-cover-lookup-without-hover"
+    ],
     "ownerApproval": "approved"
   },
   {
@@ -2996,7 +3102,7 @@
     "config": "playwright.component.config.js",
     "project": "",
     "test": "tests/components/playerViews.spec.js",
-    "case": "docked compact player balances expand, artwork, and transport without exposing expanded content",
+    "case": "tree-wide dock shows artwork, metadata, and Play without expanded content",
     "profile": null,
     "setupScope": "suite",
     "stateMode": "read-only",
@@ -3046,14 +3152,14 @@
     "config": "playwright.component.config.js",
     "project": "",
     "test": "tests/components/albumTrackTable.spec.js",
-    "case": "ActionButton hover and keyboard focus share the same outline without shifting layout",
+    "case": "ActionButton hover uses semantic edge while keyboard focus keeps its outline without shifting layout",
     "profile": null,
     "setupScope": "suite",
     "stateMode": "read-only",
     "databaseScenarios": [],
     "filesystemScenarios": [],
     "expectedContracts": [
-      "album-details-action-hover-focus-outline",
+      "album-details-action-hover-edge-keyboard-focus-outline",
       "no-action-layout-shift"
     ],
     "ownerApproval": "approved"
@@ -3124,16 +3230,66 @@
     ],
     "ownerApproval": "approved"
   },
+  {
+    "config": "playwright.config.js",
+    "project": "functional",
+    "test": "tests/e2e/specs/playerViewModes.spec.js",
+    "case": "FTC-ARTIST-TREE-001 folding reflows the virtual gallery without losing browse or player state",
+    "profile": "functional-core",
+    "setupScope": "isolated",
+    "stateMode": "owned-mutation",
+    "executionWave": 2,
+    "databaseScenarios": ["gallery-search:artist-tree-fold", "playback:artist-tree-fold"],
+    "filesystemScenarios": ["audio-copy:artist-tree-fold"],
+    "expectedContracts": ["artist-tree-reflow", "browse-state-preservation", "persistent-player-node", "reduced-motion-fold"],
+    "mutationOwnership": {
+      "databaseIdentity": "case:artist-tree-fold",
+      "filesystemCopy": "media/cases/artist-tree-fold"
+    },
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/buttonInteractionOutline.spec.js",
+    "case": "non-green player surfaces derive computed action hover colors and bare chrome keeps focus",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "player-derived-action-hover",
+      "bare-action-focus"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/artistTreeReflow.spec.js",
+    "case": "folding Artist Tree reclaims layout width and preserves the persistent player node",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "artist-tree-fold-reflow",
+      "persistent-player-identity"
+    ],
+    "ownerApproval": "approved"
+  },
   { "config": "playwright.component.config.js", "project": "", "test": "tests/components/searchInput.spec.js", "case": "Search: typing owns the field cue; keyboard action focus owns only its button", "profile": null, "setupScope": "suite", "stateMode": "read-only", "databaseScenarios": [], "filesystemScenarios": [], "expectedContracts": ["search-field-cue", "keyboard-action-focus"], "ownerApproval": "approved" },
   { "config": "playwright.component.config.js", "project": "", "test": "tests/components/searchInput.spec.js", "case": "Search: joined suggestions and open anchors retain their own boundary", "profile": null, "setupScope": "suite", "stateMode": "read-only", "databaseScenarios": [], "filesystemScenarios": [], "expectedContracts": ["search-suggestions-boundary", "open-anchor-boundary"], "ownerApproval": "approved" },
   { "config": "playwright.component.config.js", "project": "", "test": "tests/components/searchInput.spec.js", "case": "Search: pointer-down has no field glow before click after typing=false", "profile": null, "setupScope": "suite", "stateMode": "read-only", "databaseScenarios": [], "filesystemScenarios": [], "expectedContracts": ["pointer-focus-ownership", "search-field-cue"], "ownerApproval": "approved" },
   { "config": "playwright.component.config.js", "project": "", "test": "tests/components/searchInput.spec.js", "case": "Search: pointer-down has no field glow before click after typing=true", "profile": null, "setupScope": "suite", "stateMode": "read-only", "databaseScenarios": [], "filesystemScenarios": [], "expectedContracts": ["pointer-focus-ownership", "search-field-cue"], "ownerApproval": "approved" },
-  { "config": "playwright.component.config.js", "project": "", "test": "tests/components/searchInput.spec.js", "case": "Search: native clear keeps input focus and its field cue", "profile": null, "setupScope": "suite", "stateMode": "read-only", "databaseScenarios": [], "filesystemScenarios": [], "expectedContracts": ["native-clear-focus", "search-field-cue"], "ownerApproval": "approved" },
+  { "config": "playwright.component.config.js", "project": "", "test": "tests/components/searchInput.spec.js", "case": "Search: explicit clear is leftmost, empties the field, and restores input focus", "profile": null, "setupScope": "suite", "stateMode": "read-only", "databaseScenarios": [], "filesystemScenarios": [], "expectedContracts": ["explicit-clear-focus", "search-field-cue"], "ownerApproval": "approved" },
   { "config": "playwright.component.config.js", "project": "", "test": "tests/components/searchInput.spec.js", "case": "Filters: typing owns the field cue; keyboard action focus owns only its button", "profile": null, "setupScope": "suite", "stateMode": "read-only", "databaseScenarios": [], "filesystemScenarios": [], "expectedContracts": ["filter-field-cue", "keyboard-action-focus"], "ownerApproval": "approved" },
   { "config": "playwright.component.config.js", "project": "", "test": "tests/components/searchInput.spec.js", "case": "Filters: joined suggestions and open anchors retain their own boundary", "profile": null, "setupScope": "suite", "stateMode": "read-only", "databaseScenarios": [], "filesystemScenarios": [], "expectedContracts": ["filter-suggestions-boundary", "open-anchor-boundary"], "ownerApproval": "approved" },
   { "config": "playwright.component.config.js", "project": "", "test": "tests/components/searchInput.spec.js", "case": "Filters: pointer-down has no field glow before click after typing=false", "profile": null, "setupScope": "suite", "stateMode": "read-only", "databaseScenarios": [], "filesystemScenarios": [], "expectedContracts": ["pointer-focus-ownership", "filter-field-cue"], "ownerApproval": "approved" },
   { "config": "playwright.component.config.js", "project": "", "test": "tests/components/searchInput.spec.js", "case": "Filters: pointer-down has no field glow before click after typing=true", "profile": null, "setupScope": "suite", "stateMode": "read-only", "databaseScenarios": [], "filesystemScenarios": [], "expectedContracts": ["pointer-focus-ownership", "filter-field-cue"], "ownerApproval": "approved" },
-  { "config": "playwright.component.config.js", "project": "", "test": "tests/components/searchInput.spec.js", "case": "Filters: native clear keeps input focus and its field cue", "profile": null, "setupScope": "suite", "stateMode": "read-only", "databaseScenarios": [], "filesystemScenarios": [], "expectedContracts": ["native-clear-focus", "filter-field-cue"], "ownerApproval": "approved" },
+  { "config": "playwright.component.config.js", "project": "", "test": "tests/components/searchInput.spec.js", "case": "Filters: explicit clear is leftmost, empties the field, and restores input focus", "profile": null, "setupScope": "suite", "stateMode": "read-only", "databaseScenarios": [], "filesystemScenarios": [], "expectedContracts": ["explicit-clear-focus", "filter-field-cue"], "ownerApproval": "approved" },
   { "config": "playwright.component.config.js", "project": "", "test": "tests/components/searchInput.spec.js", "case": "calendar shares input, action press, and keyboard focus ownership", "profile": null, "setupScope": "suite", "stateMode": "read-only", "databaseScenarios": [], "filesystemScenarios": [], "expectedContracts": ["calendar-input-focus", "shared-action-press"], "ownerApproval": "approved" },
   { "config": "playwright.component.config.js", "project": "", "test": "tests/components/searchInput.spec.js", "case": "library path shares input, action press, and keyboard focus ownership", "profile": null, "setupScope": "suite", "stateMode": "read-only", "databaseScenarios": [], "filesystemScenarios": [], "expectedContracts": ["library-path-focus", "shared-action-press"], "ownerApproval": "approved" },
   { "config": "playwright.component.config.js", "project": "", "test": "tests/components/searchInput.spec.js", "case": "account password shares input, action press, and keyboard focus ownership", "profile": null, "setupScope": "suite", "stateMode": "read-only", "databaseScenarios": [], "filesystemScenarios": [], "expectedContracts": ["account-password-focus", "shared-action-press"], "ownerApproval": "approved" },
@@ -4044,6 +4200,26 @@
   {
     "config": "playwright.config.js",
     "project": "functional",
+    "test": "tests/e2e/specs/settingsRefactorShell.spec.js",
+    "case": "FTC-SETTINGS-S06 searches preserve independent tab queries and unsaved editors",
+    "profile": "functional-core",
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "executionWave": 1,
+    "databaseScenarios": [
+      "settings-shell:independent-search-drafts"
+    ],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "rules-applied-row-search",
+      "independent-tab-queries",
+      "retained-unsaved-editors-no-save"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.config.js",
+    "project": "functional",
     "test": "tests/e2e/specs/appearanceControls.spec.js",
     "case": "FTC-SETTINGS-A01 shared search preserves the staged loop style and Save hydrates it before Settings opens",
     "profile": "functional-core",
@@ -4339,6 +4515,1371 @@
     "expectedContracts": [
       "persistent-waveform-canvas-identity",
       "presentation-gated-paint-and-no-pointer-interception"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/appBarSettingsIcon.spec.js",
+    "case": "Settings glyph is sized and centered on the app-bar action centerline",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "Settings glyph is sized and centered on the app-bar action centerline"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/appearanceWorkspace.spec.js",
+    "case": "Appearance detail remains vertical-only when its content fits the available width",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "Appearance detail remains vertical-only when its content fits the available width"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/appearanceWorkspace.spec.js",
+    "case": "tables resolve their surface locally inside dark panels on a light page",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "tables resolve their surface locally inside dark panels on a light page"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/appearanceWorkspace.spec.js",
+    "case": "dark black tables stay close to the panel rather than washed-out grey",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "dark black tables stay close to the panel rather than washed-out grey"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/appearanceWorkspace.spec.js",
+    "case": "dark parchment-pine tables stay close to the panel rather than washed-out grey",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "dark parchment-pine tables stay close to the panel rather than washed-out grey"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/appearanceWorkspace.spec.js",
+    "case": "dark table bodies and headers exactly match their owning panel in black",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "dark table bodies and headers exactly match their owning panel in black"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/appearanceWorkspace.spec.js",
+    "case": "dark table bodies and headers exactly match their owning panel in parchment-pine",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "dark table bodies and headers exactly match their owning panel in parchment-pine"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/appearanceWorkspace.spec.js",
+    "case": "light Problematic Files tables share the album-details table presentation",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "light Problematic Files tables share the album-details table presentation"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/appearanceWorkspace.spec.js",
+    "case": "light Artist Family selection uses a translucent green fill through hover and focus",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "light Artist Family selection uses a translucent green fill through hover and focus"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/appearanceWorkspace.spec.js",
+    "case": "dark Artist Family selection keeps the border-only treatment",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "dark Artist Family selection keeps the border-only treatment"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/appearanceWorkspace.spec.js",
+    "case": "Mobile and TV device appearance is disabled without an outer pill",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "Mobile and TV device appearance is disabled without an outer pill"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/appearanceWorkspace.spec.js",
+    "case": "Parchment & Pine renders dark rail controls while preserving the light main theme",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "Parchment & Pine renders dark rail controls while preserving the light main theme"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/appearanceWorkspace.spec.js",
+    "case": "Player preview surround matches the Settings page surface in light themes",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "Player preview surround matches the Settings page surface in light themes"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/appearanceWorkspace.spec.js",
+    "case": "docked player regular style checkbox persists and resets with Appearance",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "docked player regular style checkbox persists and resets with Appearance"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/appearanceWorkspace.spec.js",
+    "case": "sidebar Appearance controls preview locally and persist through Save reload Cancel and Reset",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "sidebar Appearance controls preview locally and persist through Save reload Cancel and Reset"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/clientLayoutPrepaint.spec.js",
+    "case": "server preview fills six columns before gallery JavaScript runs",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "server preview fills six columns before gallery JavaScript runs"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/clientLayoutPrepaint.spec.js",
+    "case": "saved tree, player, and gallery scale are applied before content becomes visible",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "saved tree, player, and gallery scale are applied before content becomes visible"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/clientLayoutPrepaint.spec.js",
+    "case": "hidden startup gallery uses its settled main-surface width before reveal",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "hidden startup gallery uses its settled main-surface width before reveal"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/compactPlayerFocus.spec.js",
+    "case": "docked keyboard collapse focuses Play when the compact chevron is absent",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "docked keyboard collapse focuses Play when the compact chevron is absent"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/coverLookupDrawerHeader.spec.js",
+    "case": "cover lookup drawer actions align complete title subtitle block",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "cover lookup drawer actions align complete title subtitle block"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/coverLookupDrawerHeader.spec.js",
+    "case": "light theme keeps the dark clear glyph through hover and focus",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "light theme keeps the dark clear glyph through hover and focus"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/coverLookupDrawerHeader.spec.js",
+    "case": "light theme keeps the disabled clear brush legible",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "light theme keeps the disabled clear brush legible"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/coverLookupDrawerHeader.spec.js",
+    "case": "dark theme retains the current clear glyph swap",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "dark theme retains the current clear glyph swap"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/galleryBarAlignment.spec.js",
+    "case": "Gallery-bar actions align with the right edge of their layout boundary",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "Gallery-bar actions align with the right edge of their layout boundary"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/galleryBarAlignment.spec.js",
+    "case": "light Gallery-bar hover uses its approved surface",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "light Gallery-bar hover uses its approved surface"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/galleryBarAlignment.spec.js",
+    "case": "dark Gallery-bar hover uses its approved surface",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "dark Gallery-bar hover uses its approved surface"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/galleryCardHoverYear.spec.js",
+    "case": "art-only Gallery glow centers meet the hover-frame gap endpoints",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "art-only Gallery glow centers meet the hover-frame gap endpoints"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/galleryPlayerBoundary.spec.js",
+    "case": "gallery scroller ends at the player top edge without an empty gutter",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "gallery scroller ends at the player top edge without an empty gutter"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/libraryStatusPage.spec.js",
+    "case": "Library Status component retains a usable catalog after a failed scan",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "Library Status component retains a usable catalog after a failed scan"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/libraryStatusPage.spec.js",
+    "case": "Library Status component retains a usable catalog after a cancelled scan",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "Library Status component retains a usable catalog after a cancelled scan"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/modalEscape.spec.js",
+    "case": "real Escape clears all file selections, disables fields, then cancels only Edit tags",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "real Escape clears all file selections, disables fields, then cancels only Edit tags"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/modalEscape.spec.js",
+    "case": "a promise-backed confirmation cancels once and leaves the editor selection intact",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "a promise-backed confirmation cancels once and leaves the editor selection intact"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/modalEscape.spec.js",
+    "case": "Escape targets the foreground even when keyboard focus remains behind it",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "Escape targets the foreground even when keyboard focus remains behind it"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/modalEscape.spec.js",
+    "case": "nested stacking contexts outrank a child dialog with a larger local z-index",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "nested stacking contexts outrank a child dialog with a larger local z-index"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/savedLoopLightTheme.spec.js",
+    "case": "light themes give saved-loop cards a neutral readable surface and unboxed pitch controls",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "light themes give saved-loop cards a neutral readable surface and unboxed pitch controls"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/savedLoopLightTheme.spec.js",
+    "case": "dark themes use translucent accent controls",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "dark themes use translucent accent controls"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/savedLoopLightTheme.spec.js",
+    "case": "four saved loops preserve clear gaps in light",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "four saved loops preserve clear gaps in light"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/savedLoopLightTheme.spec.js",
+    "case": "four saved loops preserve clear gaps in charcoal",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "four saved loops preserve clear gaps in charcoal"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/savedLoopLightTheme.spec.js",
+    "case": "four saved loops preserve clear gaps in black",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "four saved loops preserve clear gaps in black"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/searchInput.spec.js",
+    "case": "Settings hides Search on desktop, keeps Enter submission, and shows Search on mobile",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "Settings hides Search on desktop, keeps Enter submission, and shows Search on mobile"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/searchInput.spec.js",
+    "case": "Settings filter dropdown right edge joins its anchor button",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "Settings filter dropdown right edge joins its anchor button"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/sidebarPlayer.spec.js",
+    "case": "overlay-detached light docked player restores its pale outline and returns to green on close",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "overlay-detached light docked player restores its pale outline and returns to green on close"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/sidebarPlayer.spec.js",
+    "case": "sidebar player A preserves its collapsed visual presentation @visual",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "sidebar player A preserves its collapsed visual presentation @visual"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/sidebarPlayer.spec.js",
+    "case": "sidebar player B preserves its collapsed visual presentation @visual",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "sidebar player B preserves its collapsed visual presentation @visual"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/sidebarPlayer.spec.js",
+    "case": "sidebar player C preserves its collapsed visual presentation @visual",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "sidebar player C preserves its collapsed visual presentation @visual"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/sidebarPlayer.spec.js",
+    "case": "light regular docked player visually restores its divider after detachment @visual",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "light regular docked player visually restores its divider after detachment @visual"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/sidebarPlayer.spec.js",
+    "case": "regular style gives only the docked presentation the player surface and separator",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "regular style gives only the docked presentation the player surface and separator"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/sidebarPlayer.spec.js",
+    "case": "light themes use one green docked divider with an upward shadow including native surfaces",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "light themes use one green docked divider with an upward shadow including native surfaces"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/sidebarPlayer.spec.js",
+    "case": "regular style preserves the rounded collapsed Stay docked frame",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "regular style preserves the rounded collapsed Stay docked frame"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/sidebarPlayer.spec.js",
+    "case": "regular style restores the native player surface when no custom surface is active",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "regular style restores the native player surface when no custom surface is active"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/sidebarPlayer.spec.js",
+    "case": "default docked player keeps the sidebar surface without a separator",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "default docked player keeps the sidebar surface without a separator"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/sidebarPlayer.spec.js",
+    "case": "regular style does not change the sidebar artbox surface",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "regular style does not change the sidebar artbox surface"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/sidebarPlayer.spec.js",
+    "case": "overlay reassembles sidebar artbox into the transparent rail play player",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "overlay reassembles sidebar artbox into the transparent rail play player"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/sidebarPlayer.spec.js",
+    "case": "shared modal state detaches and restores the same interactive docked player",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "shared modal state detaches and restores the same interactive docked player"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/sidebarPlayer.spec.js",
+    "case": "overlay-detached rail play keeps a transparent wrapper while revealing artwork",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "overlay-detached rail play keeps a transparent wrapper while revealing artwork"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/sidebarPlayer.spec.js",
+    "case": "overlay-detached rail play artwork double click opens Album Details without expanding",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "overlay-detached rail play artwork double click opens Album Details without expanding"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/sidebarPlayer.spec.js",
+    "case": "rail play button keeps its position when artwork double click opens Album Details",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "rail play button keeps its position when artwork double click opens Album Details"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/sidebarPlayer.spec.js",
+    "case": "reload restores the Artist Tree and player compact states for this browser",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "reload restores the Artist Tree and player compact states for this browser"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/sidebarPlayer.spec.js",
+    "case": "normal reassembly shares sidebar width on every intermediate frame",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "normal reassembly shares sidebar width on every intermediate frame"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/sidebarPlayer.spec.js",
+    "case": "slow reassembly shares sidebar width on every intermediate frame",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "slow reassembly shares sidebar width on every intermediate frame"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/sidebarPlayer.spec.js",
+    "case": "reduced motion overrides Slow and preserves the saved preference",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "reduced motion overrides Slow and preserves the saved preference"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/sidebarPlayer.spec.js",
+    "case": "docked play is proportionate and preserves centered SVG artwork across playback states",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "docked play is proportionate and preserves centered SVG artwork across playback states"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/sidebarPlayer.spec.js",
+    "case": "A is a bottom rail play button with upward art and an unclipped glow",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "A is a bottom rail play button with upward art and an unclipped glow"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/sidebarPlayer.spec.js",
+    "case": "rail play artwork single click expands the regular player",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "rail play artwork single click expands the regular player"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/sidebarPlayer.spec.js",
+    "case": "B keeps floating geometry, drag position, and protruding controls inside viewport",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "B keeps floating geometry, drag position, and protruding controls inside viewport"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/sidebarPlayer.spec.js",
+    "case": "A reveals metadata 700ms after artwork motion and reabsorbs it on exit",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "A reveals metadata 700ms after artwork motion and reabsorbs it on exit"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/sidebarPlayer.spec.js",
+    "case": "Stay Docked drags from empty space and resets after expand-collapse",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "Stay Docked drags from empty space and resets after expand-collapse"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/sidebarPlayer.spec.js",
+    "case": "docked title and artist pan independently and recalculate after track and tree changes",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "docked title and artist pan independently and recalculate after track and tree changes"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/sidebarPlayer.spec.js",
+    "case": "reduced motion keeps overflowing compact metadata clipped with ellipsis",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "reduced motion keeps overflowing compact metadata clipped with ellipsis"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/sidebarPlayer.spec.js",
+    "case": "C positions art and play over the lower-right corner; single click waits 300ms",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "C positions art and play over the lower-right corner; single click waits 300ms"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/sidebarPlayer.spec.js",
+    "case": "C reveals metadata after 700ms to the right of its edge play button",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "C reveals metadata after 700ms to the right of its edge play button"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/sidebarPlayer.spec.js",
+    "case": "C double click opens details without expanded-player flash",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "C double click opens details without expanded-player flash"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/sidebarPlayer.spec.js",
+    "case": "C keyboard Enter acts immediately",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "C keyboard Enter acts immediately"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/sidebarPlayer.spec.js",
+    "case": "C keyboard Space acts immediately",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "C keyboard Space acts immediately"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/sidebarPlayer.spec.js",
+    "case": "C keyboard ArrowUp acts immediately",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "C keyboard ArrowUp acts immediately"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/sidebarPlayer.spec.js",
+    "case": "idle follow_sidebar cover still expands the full player",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "idle follow_sidebar cover still expands the full player"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/sidebarPlayer.spec.js",
+    "case": "idle artbox cover still expands the full player",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "idle artbox cover still expands the full player"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/sidebarPlayer.spec.js",
+    "case": "tree-wide dock single cover gesture preserves expanded vs album semantics",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "tree-wide dock single cover gesture preserves expanded vs album semantics"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/sidebarPlayer.spec.js",
+    "case": "tree-wide dock double cover gesture preserves expanded vs album semantics",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "tree-wide dock double cover gesture preserves expanded vs album semantics"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/sidebarPlayer.spec.js",
+    "case": "sidebar mini-player artwork has no dark side frame",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "sidebar mini-player artwork has no dark side frame"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/sidebarPlayer.spec.js",
+    "case": "sidebar hover album keeps inherited text styling and displays its full label",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "sidebar hover album keeps inherited text styling and displays its full label"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/triggerAnchorSurface.spec.js",
+    "case": "open anchors resynchronize after native nested scroll and resize, then clear geometry on close and reopen",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "open anchors resynchronize after native nested scroll and resize, then clear geometry on close and reopen"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/triggerAnchorSurface.spec.js",
+    "case": "Artist Family opening keeps its top shadow clip stationary",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "Artist Family opening keeps its top shadow clip stationary"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/triggerAnchorSurface.spec.js",
+    "case": "a dropdown extending both sides has mirrored left and right joins",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "a dropdown extending both sides has mirrored left and right joins"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/triggerAnchorSurface.spec.js",
+    "case": "Artist Info open anchor uses its panel surface without a bottom divider",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "Artist Info open anchor uses its panel surface without a bottom divider"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/triggerAnchorSurface.spec.js",
+    "case": "Album Types open anchor uses its panel surface without a bottom divider",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "Album Types open anchor uses its panel surface without a bottom divider"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/triggerAnchorSurface.spec.js",
+    "case": "Library open anchor uses its panel surface without a bottom divider",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "Library open anchor uses its panel surface without a bottom divider"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/triggerAnchorSurface.spec.js",
+    "case": "Sources open anchor uses its panel surface without a bottom divider",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "Sources open anchor uses its panel surface without a bottom divider"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/triggerAnchorSurface.spec.js",
+    "case": "Settings open anchor uses its panel surface without a bottom divider",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "Settings open anchor uses its panel surface without a bottom divider"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/triggerAnchorSurface.spec.js",
+    "case": "Search Filter open anchor uses its panel surface without a bottom divider",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "Search Filter open anchor uses its panel surface without a bottom divider"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/triggerAnchorSurface.spec.js",
+    "case": "Log History Period open anchor uses its panel surface without a bottom divider",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "Log History Period open anchor uses its panel surface without a bottom divider"
     ],
     "ownerApproval": "approved"
   }

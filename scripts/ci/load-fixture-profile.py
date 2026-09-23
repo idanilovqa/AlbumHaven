@@ -139,10 +139,10 @@ _PROBLEMATIC_FILES_ALBUMS = (
 _UTILITY_PROBLEMATIC_PROFILE = "utility-problematic-files"
 _UTILITY_PROBLEMATIC_COUNTS = {
     "artists": 40,
-    "albums": 400,
+    "albums": 706,
     "tracks": 7200,
     "trackFiles": 7200,
-    "covers": 386,
+    "covers": 627,
 }
 _UTILITY_PROBLEMATIC_ASSERTION_KEYS = frozenset(
     {
@@ -796,6 +796,7 @@ def _problematic_files_filtering_contract(
             or not reasons
             or not all(isinstance(reason, str) and reason for reason in reasons)
             or len(reasons) != len(set(reasons))
+            or any(reason not in _PROBLEMATIC_FILES_REASONS for reason in reasons)
         ):
             raise ValueError("fixture named scenario mismatch: problematic-files-filtering")
         identity = (artist, album)
@@ -815,19 +816,21 @@ def _problematic_files_filtering_contract(
         for row in normalized_albums
     }
     if (
-        value.get("problematicItemCount") != 18
-        or value.get("candidateTrackFileCount") != 125
+        value.get("problematicItemCount") != counts["albums"]
+        or value.get("candidateTrackFileCount") != counts["trackFiles"]
         or value.get("expectedProblemTypes") != list(_PROBLEMATIC_FILES_TYPES)
         or value.get("expectedProblemReasons") != list(_PROBLEMATIC_FILES_REASONS)
-        or actual_album_contract != expected_album_contract
-        or len(normalized_albums) != 18
+        or any(actual_album_contract.get(identity) != reasons for identity, reasons in expected_album_contract.items())
+        or len(normalized_albums) != counts["albums"]
+        or sum("Missing cover art" in row["problemReasons"] for row in normalized_albums)
+            != counts["albums"] - counts["covers"]
         or value.get("summariesCompact") is not True
         or value.get("initialDetailMatchesFirstSummary") is not True
     ):
         raise ValueError("fixture named scenario mismatch: problematic-files-filtering")
     return {
-        "problematicItemCount": 18,
-        "candidateTrackFileCount": 125,
+        "problematicItemCount": counts["albums"],
+        "candidateTrackFileCount": counts["trackFiles"],
         "expectedProblemTypes": list(_PROBLEMATIC_FILES_TYPES),
         "expectedProblemReasons": list(_PROBLEMATIC_FILES_REASONS),
         "expectedProblematicAlbums": normalized_albums,
@@ -956,7 +959,7 @@ def validate_staged_problematic_files_scenario(
             select artist, album from uncovered
             except select artist, album from expected_uncovered
           )
-          and not exists (select 1 from album_counts where album_count<>10)
+          and not exists (select 1 from album_counts where album_count not between %s and %s)
           and not exists (
             select 1 from active
             where jsonb_typeof(metadata) is distinct from 'object'
@@ -1033,7 +1036,9 @@ def validate_staged_problematic_files_scenario(
             contract["problematicItemCount"],
             contract["candidateTrackFileCount"],
             contract["problematicItemCount"],
-            14,
+            counts["albums"] - counts["covers"],
+            counts["albums"] // counts["artists"],
+            (counts["albums"] + counts["artists"] - 1) // counts["artists"],
             "E2E Rarity Artist",
             "Two Track Rarity Fixture",
             ["1:1", "1:3"],
@@ -1149,7 +1154,7 @@ def validate_projected_problematic_files_scenario(
             select artist,album from uncovered
             except select artist,album from expected_uncovered
           )
-          and not exists (select 1 from album_counts where album_count<>10)
+          and not exists (select 1 from album_counts where album_count not between %s and %s)
           and not exists (
             select 1 from active
             where jsonb_typeof(file_metadata) is distinct from 'object'
@@ -1221,7 +1226,9 @@ def validate_projected_problematic_files_scenario(
             contract["problematicItemCount"],
             contract["candidateTrackFileCount"],
             contract["problematicItemCount"],
-            14,
+            counts["albums"] - counts["covers"],
+            counts["albums"] // counts["artists"],
+            (counts["albums"] + counts["artists"] - 1) // counts["artists"],
             "E2E Rarity Artist",
             "Two Track Rarity Fixture",
             ["1:1", "1:3"],

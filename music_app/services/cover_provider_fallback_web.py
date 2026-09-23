@@ -712,6 +712,7 @@ def expand_manual_direct_image_url_candidates(
     user_agent: str,
     manual_source_details: ManualSourceDetails,
     probe_match_candidates: ProbeCandidates,
+    allow_unprobed_fallback: bool = True,
 ) -> list[CoverCandidate]:
     split = urllib.parse.urlsplit(normalized_url)
     manual_source, manual_source_label = manual_source_details(normalized_url)
@@ -740,6 +741,8 @@ def expand_manual_direct_image_url_candidates(
     )
     if probed:
         return probed
+    if not allow_unprobed_fallback:
+        return []
     return [
         CoverCandidate(
             source=manual_source,

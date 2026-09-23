@@ -1,38 +1,4 @@
 const utilityLoopStereoLoads = new WeakMap();
-const utilityLoopStereoQueue = [];
-let utilityLoopStereoLoadActive = false;
-
-function drainUtilityLoopStereoQueue() {
-  const eligible = job => job.canvas.isConnected
-    && state.player.appearance?.seekbarMode === 'waveform'
-    && !state.utility.loopEditors?.[job.loopId]?.active
-    && document.querySelector(`[data-loop-stereo-waveform="${cssEscape(job.loopId)}"]`) === job.canvas;
-  for (let index = utilityLoopStereoQueue.length - 1; index >= 0; index -= 1) {
-    const job = utilityLoopStereoQueue[index];
-    if (eligible(job)) continue;
-    job.canvas.hidden = true;
-    job.canvas.parentElement?.classList.toggle('is-stereo-waveform', false);
-    utilityLoopStereoQueue.splice(index, 1);
-    utilityLoopStereoLoads.delete(job.canvas);
-  }
-  if (utilityLoopStereoLoadActive || !utilityLoopStereoQueue.length) return;
-  const job = utilityLoopStereoQueue.shift();
-  utilityLoopStereoLoadActive = true;
-  Promise.resolve(loadSavedLoopWaveformPeaks(job.loopId)).catch(() => null).then(peaks => {
-    job.entry.loading = false;
-    job.entry.peaks = peaks;
-    job.entry.retryAt = Date.now() + 5000;
-    if (eligible(job)) {
-      updateUtilityLoopStereoWaveform(job.loopId, job.audio);
-    } else {
-      job.canvas.hidden = true;
-      job.canvas.parentElement?.classList.toggle('is-stereo-waveform', false);
-    }
-  }).finally(() => {
-    utilityLoopStereoLoadActive = false;
-    drainUtilityLoopStereoQueue();
-  });
-}
 
 function updateUtilityLoopStereoWaveform(loopId, audio) {
   const canvas = document.querySelector(`[data-loop-stereo-waveform="${cssEscape(loopId)}"]`);
@@ -40,30 +6,42 @@ function updateUtilityLoopStereoWaveform(loopId, audio) {
   const enabled = state.player.appearance?.seekbarMode === 'waveform';
   const editing = Boolean(state.utility.loopEditors?.[loopId]?.active);
   const cached = utilityLoopStereoLoads.get(canvas);
-  const coolingDown = cached && !cached.loading && !cached.peaks && Date.now() < cached.retryAt;
-  const presented = enabled && !editing && !coolingDown;
+  const peaks = getCachedSavedLoopWaveformPeaks(loopId) || cached?.peaks;
+  const coolingDown = cached && !cached.loading && !peaks && Date.now() < cached.retryAt;
+  const presented = canvas.isConnected && enabled && !editing && !coolingDown;
   canvas.hidden = !presented;
   canvas.parentElement?.classList.toggle('is-stereo-waveform', presented);
-  if (!enabled || editing) { drainUtilityLoopStereoQueue(); return; }
-  if (cached?.peaks) {
+  if (!presented) return;
+  if (peaks) {
     const duration = Number(audio.duration) || 0;
-    drawCombinedLoopWaveform(canvas, cached.peaks, duration > 0 ? (Number(audio.currentTime) || 0) / duration : 0);
+    drawCombinedLoopWaveform(canvas, peaks, duration > 0 ? (Number(audio.currentTime) || 0) / duration : 0);
     return;
   }
-  if (cached && (cached.loading || Date.now() < cached.retryAt)) return;
+  if (cached?.loading) return;
   const entry = { peaks: null, loading: true, retryAt: 0 };
   utilityLoopStereoLoads.set(canvas, entry);
-  utilityLoopStereoQueue.push({ loopId, audio, canvas, entry });
-  drainUtilityLoopStereoQueue();
+  Promise.resolve(loadSavedLoopWaveformPeaks(loopId)).catch(() => null).then(peaks => {
+    entry.loading = false;
+    entry.peaks = peaks;
+    entry.retryAt = Date.now() + 5000;
+    if (canvas.isConnected
+        && document.querySelector(`[data-loop-stereo-waveform="${cssEscape(loopId)}"]`) === canvas) {
+      updateUtilityLoopStereoWaveform(loopId, audio);
+    } else {
+      canvas.hidden = true;
+      canvas.parentElement?.classList.toggle('is-stereo-waveform', false);
+    }
+  });
 }
 
 function refreshUtilityLoopStereoWaveforms() {
-  drainUtilityLoopStereoQueue();
+  if (state.utility.loopsLoaded && Array.isArray(state.utility.loops)) {
+    retainSavedLoopWaveformPeaks(state.utility.loops.map(loop => loop.id));
+  }
   document.querySelectorAll('[data-loop-audio]').forEach(audio => {
     updateUtilityLoopStereoWaveform(audio.getAttribute('data-loop-audio'), audio);
   });
 }
-
 function isUtilityLoopTextEntry(element) {
   if (!(element instanceof HTMLElement)) return false;
   const tagName = String(element.tagName || '').toUpperCase();

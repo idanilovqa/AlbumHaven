@@ -3,8 +3,8 @@ const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 const { PERFORMANCE_SHARDS } = require('./resolve-ci-shard.cjs');
 
-const EXPECTED_TARGET_COUNT = 19;
-const EXPECTED_CASE_COUNT = 26;
+const EXPECTED_TARGET_COUNT = 21;
+const EXPECTED_CASE_COUNT = 28;
 const MATRIX_FIELDS = ['shard', 'fixtureProfile', 'fixtureMode', 'harness', 'basePort', 'targets'];
 const CALIBRATION_POLICY = Object.freeze({
   evidenceMode: 'retained-cohorts',
@@ -25,7 +25,7 @@ const SHARD_DEFINITIONS = Object.freeze([
   { shard: 'synthetic-large-library', fixtureProfile: 'synthetic-large-library', fixtureMode: 'preloaded-release', harness: 'managed-app', basePort: '4173', targets: 'idle-memory,all-artists,artist-family,search-all-artists,utility-rules,selected-artist,search-browse,root-album-browse,app-open-all-artists,rules-focused' },
   { shard: 'utility-problematic-files', fixtureProfile: 'utility-problematic-files', fixtureMode: 'preloaded-release', harness: 'managed-app', basePort: '4253', targets: 'utility-problematic-files,problematic-files-focused' },
   { shard: 'playback-media', fixtureProfile: 'playback-media', fixtureMode: 'generated-isolated', harness: 'managed-app', basePort: '4213', targets: 'playback-start,gapless-playback' },
-  { shard: 'scan-library', fixtureProfile: 'scan-library', fixtureMode: 'generated-isolated', harness: 'scan', basePort: '4293', targets: 'scan-cold,scan-cached,scan-add-album,scan-metadata,scan-page' },
+  { shard: 'scan-library', fixtureProfile: 'scan-library', fixtureMode: 'generated-isolated', harness: 'scan', basePort: '4293', targets: 'scan-cold,scan-cached,scan-add-album,scan-metadata,scan-page,scan-health,scan-error' },
 ]);
 const FIXTURE_DOWNLOAD_PROFILES = Object.freeze({
   'synthetic-large-library': 'synthetic-large-library',
@@ -154,7 +154,7 @@ function validateShardRows(errors, rawRows, contract) {
   const registered = (contract.targets || []).map((target) => target.name);
   if (owned.length !== registered.length || new Set(owned).size !== registered.length
     || registered.some((name) => !owned.includes(name))) {
-    errors.push('all 19 performance targets must be owned exactly once across four profile runners');
+    errors.push('all 21 performance targets must be owned exactly once across four profile runners');
   }
 }
 

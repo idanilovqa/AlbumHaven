@@ -7,9 +7,101 @@ const ALBUM = {
   album: 'Signed Scrobble Journey',
   year: '2026',
 };
-test(`${CASE_ID} switches expanded, docked, and floating player views without sharing runner state`, { tag: '@area:playback' }, async ({
+const REFLOW_ARTIST = 'ДДТ';
+
+test('FTC-ARTIST-TREE-001 folding reflows the virtual gallery without losing browse or player state', { tag: ['@area:playback', '@area:gallery-search'] }, async ({
   galleryActions,
   globalPlayerActions,
+  navigationPanelActions,
+  page,
+  searchToolbarActions,
+  stepLogger,
+  trackModalActions,
+}, testInfo) => {
+  let playbackIdentity;
+  let persistentPlayer;
+
+  await stepLogger.step('Start playback and browse a scrolled selected-artist search', async () => {
+    await page.setViewportSize({ width: 1400, height: 760 });
+    await galleryActions.goto();
+    await galleryActions.waitForGalleryReady();
+    await navigationPanelActions.setArtistTreeFolded(false);
+    await galleryActions.selectAlbumDetailsByIdentity(ALBUM);
+    await trackModalActions.waitForLoadedSummary();
+    const selectedTrack = await trackModalActions.playTrackAt(0);
+    await globalPlayerActions.waitForCurrentTrack({ path: selectedTrack.path, trackTitle: selectedTrack.title });
+    playbackIdentity = await globalPlayerActions.readCurrentPlaybackSummary();
+    persistentPlayer = await globalPlayerActions.globalPlayer.player.elementHandle();
+    await trackModalActions.close();
+
+    await searchToolbarActions.search(REFLOW_ARTIST, { submitWithEnter: true });
+    await searchToolbarActions.waitForQuery(REFLOW_ARTIST);
+    await navigationPanelActions.waitForSidebarSelection(REFLOW_ARTIST);
+    await galleryActions.waitForSelectedArtistGallery(REFLOW_ARTIST, { queryValue: REFLOW_ARTIST });
+    await galleryActions.jumpGalleryToMiddle();
+  });
+
+  await stepLogger.step('Gain one column at 1400px and preserve the visible anchor and state', async () => {
+    const before = await galleryActions.galleryPage.readArtistTreeReflowCheckpoint();
+    expect(before.scrollTop).toBeGreaterThan(0);
+    expect(before.anchorKey).not.toBe('');
+    expect(before.anchorVisible).toBe(true);
+    await navigationPanelActions.setArtistTreeFolded(true);
+    await expect.poll(async () => (await galleryActions.galleryPage.readArtistTreeReflowCheckpoint()).columns)
+      .toBe(before.columns + 1);
+    const after = await galleryActions.galleryPage.readArtistTreeReflowCheckpoint(before);
+    expect(after.anchorKey).toBe(before.anchorKey);
+    expect(after.anchorCardKey).toBe(before.anchorCardKey);
+    expect(after.anchorTrigger).toBe(before.anchorTrigger);
+    expect(after.anchorVisible).toBe(true);
+    // CSS subpixel track rounding may differ by less than one pixel.
+    expect(Math.abs(after.anchorOffset - before.anchorOffset)).toBeLessThanOrEqual(1);
+    expect(after.query).toBe(REFLOW_ARTIST);
+    expect(after.selectedArtist).toBe(REFLOW_ARTIST);
+    const playbackAfter = await globalPlayerActions.readCurrentPlaybackSummary();
+    expect(playbackAfter.title).toBe(playbackIdentity.title);
+    expect(await globalPlayerActions.globalPlayer.isConnected(persistentPlayer)).toBe(true);
+  });
+
+  await stepLogger.step('Repeat the fold at a width that does not gain a column', async () => {
+    await navigationPanelActions.setArtistTreeFolded(false);
+    await page.setViewportSize({ width: 1060, height: 760 });
+    await expect.poll(async () => (await galleryActions.galleryPage.readArtistTreeReflowCheckpoint()).columns)
+      .toBe(3);
+    const before = await galleryActions.galleryPage.readArtistTreeReflowCheckpoint();
+    expect(before.anchorVisible).toBe(true);
+    await navigationPanelActions.setArtistTreeFolded(true);
+    await expect.poll(async () => (await galleryActions.galleryPage.readArtistTreeReflowCheckpoint()).columns)
+      .toBe(before.columns);
+    const after = await galleryActions.galleryPage.readArtistTreeReflowCheckpoint(before);
+    await testInfo.attach('artist-tree-no-gain-reflow.json', {
+      body: JSON.stringify({ before, after }, null, 2),
+      contentType: 'application/json',
+    });
+    expect(after.anchorKey).toBe(before.anchorKey);
+    expect(after.anchorCardKey).toBe(before.anchorCardKey);
+    expect(after.anchorTrigger).toBe(before.anchorTrigger);
+    expect(after.anchorVisible).toBe(true);
+    expect(Math.abs(after.anchorOffset - before.anchorOffset)).toBeLessThanOrEqual(1);
+    expect(after.query).toBe(REFLOW_ARTIST);
+    expect(after.selectedArtist).toBe(REFLOW_ARTIST);
+  });
+
+  await stepLogger.step('Honor reduced motion across another expand and fold cycle', async () => {
+    await page.emulateMedia({ reducedMotion: 'reduce' });
+    await navigationPanelActions.setArtistTreeFolded(false);
+    await navigationPanelActions.setArtistTreeFolded(true);
+    const motion = await navigationPanelActions.navigationPanel.readReducedMotionState();
+    expect(motion.duration).toBe('1ms');
+    expect(motion.transition).toBe('none');
+  });
+});
+
+test(`${CASE_ID} switches expanded, docked, and floating player views without sharing runner state`, { tag: '@area:playback' }, async ({
+  appearancePreferenceIsolation,
+  galleryActions,
+  globalPlayerActions,
+  navigationPanelActions,
   page,
   playbackEvidence,
   settingsModalAppBarActions,
@@ -24,6 +116,7 @@ test(`${CASE_ID} switches expanded, docked, and floating player views without sh
   await stepLogger.step('Start generated playback through the production album flow', async () => {
     await galleryActions.goto();
     await galleryActions.waitForGalleryReady();
+    await appearancePreferenceIsolation.capture();
     await galleryActions.selectAlbumDetailsByIdentity(ALBUM);
     await trackModalActions.waitForLoadedSummary();
     const playbackMark = await playbackEvidence.playbackMark();
@@ -98,13 +191,17 @@ test(`${CASE_ID} switches expanded, docked, and floating player views without sh
   });
 
   await stepLogger.step('Collapse to Docked and expand without changing playback identity', async () => {
+    await navigationPanelActions.setArtistTreeFolded(false);
     const before = await globalPlayerActions.readCurrentPlaybackSummary();
+    await expect(globalPlayerActions.globalPlayer.expandedPlaybackControls.previousButton).toHaveCount(0);
+    await expect(globalPlayerActions.globalPlayer.expandedPlaybackControls.nextButton).toHaveCount(0);
     const docked = await globalPlayerActions.collapsePlayer('docked');
-    expect(docked.player.height).toBe(76);
-    expect(docked.player.width).toBeGreaterThan(200);
+    expect(docked.player.height).toBe(72);
+    expect(docked.player.width).toBe(240);
     expect(docked.rootClasses).toContain('has-docked-compact-player');
-    await expect(globalPlayerActions.globalPlayer.compactPlayer.controls.previousButton).toBeDisabled();
-    await expect(globalPlayerActions.globalPlayer.compactPlayer.controls.nextButton).toBeEnabled();
+    await expect(globalPlayerActions.globalPlayer.compactPlayer.controls.previousButton).toBeHidden();
+    await expect(globalPlayerActions.globalPlayer.compactPlayer.controls.nextButton).toBeHidden();
+    await expect(globalPlayerActions.globalPlayer.compactPlayer.expand.root).toBeHidden();
     await expect(globalPlayerActions.globalPlayer.compactPlayer.controls.playPauseButton).toBeVisible();
     const during = await globalPlayerActions.readCurrentPlaybackSummary();
     expect(during.title).toBe(before.title);
@@ -113,6 +210,44 @@ test(`${CASE_ID} switches expanded, docked, and floating player views without sh
     const after = await globalPlayerActions.readCurrentPlaybackSummary();
     expect(after.title).toBe(before.title);
     expect(after.paused).toBe(before.paused);
+  });
+
+  await stepLogger.step('Folded Artist Tree follows the saved docked compact-player behavior', async () => {
+    await settingsModalAppBarActions.openSettings();
+    await utilityTabBarActions.openTab('appearance');
+    await utilityAppearanceActions.waitForReady();
+    await utilityAppearanceActions.openSection('seekbar');
+    await utilityAppearanceActions.saveDockedCompactPlayerBehavior('follow_sidebar');
+    await settingsModalAppBarActions.closeSettings();
+
+    await navigationPanelActions.setArtistTreeFolded(true);
+    const followed = await globalPlayerActions.collapsePlayer('docked', { presentation: 'rail_play' });
+    expect(followed.player.width).toBe(64);
+    expect(followed.player.height).toBe(100);
+    await expect(globalPlayerActions.globalPlayer.player).toHaveClass(/\bis-rail-compact\b/);
+    await expect(globalPlayerActions.globalPlayer.compactPlayer.coverButton).toHaveCSS('opacity', '0');
+    await expect(globalPlayerActions.globalPlayer.compactPlayer.coverButton).toHaveAttribute('tabindex', '-1');
+    await expect(globalPlayerActions.globalPlayer.compactPlayer.controls.previousButton).toBeHidden();
+    await expect(globalPlayerActions.globalPlayer.compactPlayer.controls.nextButton).toBeHidden();
+    await expect(globalPlayerActions.globalPlayer.compactPlayer.controls.playPauseButton).toBeVisible();
+    await expect(globalPlayerActions.globalPlayer.compactPlayer.expand.root).toBeHidden();
+    await globalPlayerActions.expandPlayer();
+
+    await settingsModalAppBarActions.openSettings();
+    await utilityTabBarActions.openTab('appearance');
+    await utilityAppearanceActions.waitForReady();
+    await utilityAppearanceActions.openSection('seekbar');
+    await utilityAppearanceActions.saveDockedCompactPlayerBehavior('stay_docked');
+    await settingsModalAppBarActions.closeSettings();
+
+    const stayed = await globalPlayerActions.collapsePlayer('docked');
+    expect(stayed.player.width).toBe(240);
+    await expect(globalPlayerActions.globalPlayer.player).not.toHaveClass(/\bis-rail-compact\b/);
+    await expect(globalPlayerActions.globalPlayer.compactPlayer.coverButton).toBeVisible();
+    await expect(globalPlayerActions.globalPlayer.compactPlayer.controls.nextButton).toBeHidden();
+    await expect(globalPlayerActions.globalPlayer.compactPlayer.controls.playPauseButton).toBeVisible();
+    await globalPlayerActions.expandPlayer();
+    await navigationPanelActions.setArtistTreeFolded(false);
   });
 
   await stepLogger.step('Save Floating in Appearance and collapse into its overlay layout', async () => {
@@ -126,7 +261,8 @@ test(`${CASE_ID} switches expanded, docked, and floating player views without sh
     expect(floating.player.width).toBe(96);
     expect(floating.player.height).toBe(96);
     expect(floating.player.x).toBeCloseTo(12, 0);
-    expect(page.viewportSize().height - floating.player.y - floating.player.height).toBeCloseTo(4, 0);
+    // The initial position reserves the 105px control footprint plus its 8px margin.
+    expect(page.viewportSize().height - floating.player.y - floating.player.height).toBeCloseTo(17, 0);
     expect(floating.rootClasses).toContain('has-floating-compact-player');
     expect(floating.expandOwnedByCompactShell).toBe(true);
     expect(floating.expand.x).toBeLessThan(floating.player.x);
@@ -139,16 +275,17 @@ test(`${CASE_ID} switches expanded, docked, and floating player views without sh
     await expect(globalPlayerActions.globalPlayer.compactPlayer.expand.root).toHaveCSS('border-top-width', '1px');
     await page.mouse.move(page.viewportSize().width / 2, page.viewportSize().height / 2);
     await surfaces.search.focus();
-    await expect(globalPlayerActions.globalPlayer.player).toHaveCSS('--compact-floating-edge-strength', '12%');
+    await expect(globalPlayerActions.globalPlayer.player).toHaveCSS('border-top-width', '1px');
     const idleAppearance = (await globalPlayerActions.readViewCheckpoint()).floatingAppearance;
+    expect(idleAppearance.borderColor).not.toBe('rgba(0, 0, 0, 0)');
     await globalPlayerActions.globalPlayer.player.hover();
     const hoverAppearance = (await globalPlayerActions.readViewCheckpoint()).floatingAppearance;
-    expect(hoverAppearance.borderColor).not.toBe(idleAppearance.borderColor);
+    expect(hoverAppearance.borderColor).toBe(idleAppearance.borderColor);
     expect(hoverAppearance.boxShadow).not.toBe(idleAppearance.boxShadow);
     await page.mouse.move(page.viewportSize().width / 2, page.viewportSize().height / 2);
     await globalPlayerActions.globalPlayer.compactPlayer.expand.root.focus();
     const focusAppearance = (await globalPlayerActions.readViewCheckpoint()).floatingAppearance;
-    expect(focusAppearance.borderColor).not.toBe(idleAppearance.borderColor);
+    expect(focusAppearance.borderColor).toBe(idleAppearance.borderColor);
     expect(focusAppearance.coverBoxShadow).not.toBe(idleAppearance.coverBoxShadow);
     await globalPlayerActions.globalPlayer.compactPlayer.expand.root.blur();
   });

@@ -434,6 +434,7 @@ function summarizeBenchmarkValidation(benchmarkValidation, processPassed) {
         const targetMaximum = optionalFiniteNumber(result.targetMaximum);
         const hardCeiling = resolveEffectiveCeiling(result).value;
         const classification = classifyPerformanceThreshold({
+          metricId: result.metricId,
           units: result.units,
           actual,
           targetMaximum,
@@ -451,6 +452,7 @@ function summarizeBenchmarkValidation(benchmarkValidation, processPassed) {
         });
         return {
         key: result.key || '',
+        ...(result.metricId !== undefined ? { metricId: result.metricId } : {}),
         checkpointKey: String(result.checkpointKey),
         description: result.description || '',
         units: result.units || '',
@@ -566,6 +568,7 @@ function buildVerificationMetricSummary(entries = []) {
     for (const result of results) {
       const existing = resultMap.get(result.key) || {
         key: result.key || '',
+        ...(result.metricId !== undefined ? { metricId: result.metricId } : {}),
         checkpointKey: result.checkpointKey || '',
         description: result.description || '',
         units: result.units || '',
@@ -587,6 +590,7 @@ function buildVerificationMetricSummary(entries = []) {
       const resultAllowedMaximum = optionalFiniteNumber(result.allowedMaximum);
       const effectiveCeiling = resolveEffectiveCeiling(result);
       existing.contractConsistent = existing.contractConsistent
+        && existing.metricId === result.metricId
         && existing.units === (result.units || '')
         && existing.targetMaximum === resultTargetMaximum
         && existing.graceMs === resultGraceMs
@@ -602,6 +606,7 @@ function buildVerificationMetricSummary(entries = []) {
         existing.actuals.push(actual);
       }
       const rawClassification = classifyPerformanceThreshold({
+        metricId: result.metricId,
         units: result.units,
         actual,
         targetMaximum: result.targetMaximum,
@@ -630,6 +635,7 @@ function buildVerificationMetricSummary(entries = []) {
     const medianActual = median(metric.actuals);
     const averageActual = average(metric.actuals);
     const medianClassification = classifyPerformanceThreshold({
+      metricId: metric.metricId,
       units: metric.units,
       actual: medianActual,
       targetMaximum: metric.targetMaximum,

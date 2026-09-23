@@ -116,6 +116,8 @@ const PERFORMANCE_GROUPS = Object.freeze({
     'scan-add-album',
     'scan-metadata',
     'scan-page',
+    'scan-health',
+    'scan-error',
   ],
   'idle-memory': [
     'idle-memory',
@@ -145,6 +147,8 @@ const PERFORMANCE_GROUPS = Object.freeze({
     'scan-add-album',
     'scan-metadata',
     'scan-page',
+    'scan-health',
+    'scan-error',
   ],
 });
 
@@ -451,6 +455,30 @@ const PERFORMANCE_TARGETS = {
       ALBUM_HAVEN_SCAN_PERFORMANCE_SCENARIO: 'add-album',
       ALBUM_HAVEN_COVER_PROVIDER_GROUPS: 'offline',
     },
+  },
+};
+
+PERFORMANCE_TARGETS['scan-health'] = {
+  ...PERFORMANCE_TARGETS['scan-page'],
+  coverageDescription: 'Production watcher health warning from an isolated configured root removed before startup.',
+  grep: 'FTC-OPS-003F',
+  aliasNames: ['scan-health'],
+  casePatterns: ['FTC-OPS-003F'],
+  env: {
+    ALBUM_HAVEN_SCAN_PERFORMANCE_SCENARIO: 'health-warning',
+    ALBUM_HAVEN_COVER_PROVIDER_GROUPS: 'offline',
+  },
+};
+
+PERFORMANCE_TARGETS['scan-error'] = {
+  ...PERFORMANCE_TARGETS['scan-page'],
+  coverageDescription: 'Real failed scan publication, retained library, and recovery using an isolated runtime-role privilege fault.',
+  grep: 'FTC-OPS-003G',
+  aliasNames: ['scan-error'],
+  casePatterns: ['FTC-OPS-003G'],
+  env: {
+    ALBUM_HAVEN_SCAN_PERFORMANCE_SCENARIO: 'cached',
+    ALBUM_HAVEN_COVER_PROVIDER_GROUPS: 'offline',
   },
 };
 
@@ -1443,6 +1471,7 @@ function buildAggregatedThresholdEvaluation(attemptRecords = []) {
     for (const result of attemptRecord.validationResults || []) {
       const entry = resultMap.get(result.key) || {
         key: result.key,
+        ...(result.metricId !== undefined ? { metricId: result.metricId } : {}),
         checkpointKey: result.checkpointKey || '',
         description: result.description || '',
         units: result.units || '',
@@ -1465,6 +1494,7 @@ function buildAggregatedThresholdEvaluation(attemptRecords = []) {
       const resultAllowedMaximum = optionalFiniteNumber(result.allowedMaximum);
       const effectiveCeiling = resolveEffectiveCeiling(result);
       entry.contractConsistent = entry.contractConsistent
+        && entry.metricId === result.metricId
         && entry.units === (result.units || '')
         && entry.targetMaximum === resultTargetMaximum
         && entry.graceMs === resultGraceMs
@@ -1484,6 +1514,7 @@ function buildAggregatedThresholdEvaluation(attemptRecords = []) {
         entry.actuals.push(actual);
       }
       const rawClassification = classifyPerformanceThreshold({
+        metricId: result.metricId,
         units: result.units,
         actual,
         targetMaximum: result.targetMaximum,
@@ -1516,6 +1547,7 @@ function buildAggregatedThresholdEvaluation(attemptRecords = []) {
     const medianActual = median(entry.actuals);
     const meanActual = mean(entry.actuals);
     const medianClassification = classifyPerformanceThreshold({
+      metricId: entry.metricId,
       units: entry.units,
       actual: medianActual,
       targetMaximum: entry.targetMaximum,
@@ -2403,7 +2435,7 @@ function runSequentialPerformanceSuite(options) {
 
 function printUsage() {
   console.log('Usage: npm run test:e2e:performance -- [--group all|idle-memory|playback-start|gapless-playback|real-app|scan] [--test <name-or-path>] [--repeat-count <n>] [--headed|--headless] [--browser chromium|chrome|edge] [--grep <pattern>]');
-  console.log('Known names: idle-memory, playback-start, gapless-playback, all-artists, artist-family, search-all-artists, utility-problematic-files, utility-rules, selected-artist, search-browse, root-album-browse, app-open-all-artists, problematic-files-focused, rules-focused, scan-cold, scan-cached, scan-add-album, scan-metadata, scan-page');
+    console.log('Known names: idle-memory, playback-start, gapless-playback, all-artists, artist-family, search-all-artists, utility-problematic-files, utility-rules, selected-artist, search-browse, root-album-browse, app-open-all-artists, problematic-files-focused, rules-focused, scan-cold, scan-cached, scan-add-album, scan-metadata, scan-page, scan-health, scan-error');
   console.log('Known groups: all, idle-memory, playback-start, gapless-playback, real-app, scan');
   console.log('Coverage classes: real-app-isolated-postgres-memory, real-app-isolated-postgres-playback, real-app-library-browse-load, scanner-index-cache.');
   console.log('The performance runner defaults to headless mode; pass --headed to keep the browser visible.');

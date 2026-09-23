@@ -4,7 +4,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
 const api = require('../../../music_app/static/js/appearance-backgrounds.js');
-const defaults = () => ({main_surface_color:null,panel_background_color:null,palette_id:null,panel_index:0,player_override:null,compact_player_style:'docked',album_details_layout:'classic_bar',album_playing_row_animation:'enabled',alert_family:'ember',loop_control_style:'capsule'});
+const defaults = () => ({main_surface_color:null,panel_background_color:null,palette_id:null,panel_index:0,player_override:null,compact_player_style:'docked',docked_compact_player_behavior:'follow_sidebar',docked_compact_player_regular_style:false,compact_player_motion:'normal',floating_player_edge:{source:'player',color:null},album_details_layout:'classic_bar',album_playing_row_animation:'enabled',alert_family:'ember',loop_control_style:'capsule',action_button_outlines:true,device_profiles:{}});
 const custom = () => ({...defaults(),palette_id:'steelblue',player_override:{background:'#14283B',fill:'#8BAED1',edge:'#B9CADD'}});
 function setup(options={}) {
   const requests=[],applied=[];

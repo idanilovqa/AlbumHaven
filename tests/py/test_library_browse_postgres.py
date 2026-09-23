@@ -7383,6 +7383,7 @@ def test_postgres_album_payloads_by_track_paths_applies_separate_release_split_t
         {
             "key": "split artist::split album::year::1999",
             "album_ref": "split artist::split album::year::1999",
+            "_persisted_album_key": "split artist::split album",
             "name": "Split Album",
             "album_artist": "Split Artist",
             "artists": ["Split Artist"],
@@ -7951,16 +7952,14 @@ def test_problematic_files_summary_sql_prefilters_a_safe_superset_without_changi
     assert "active_candidate_ids as" in summary_sql
     assert "duplicate_track_ids as" not in summary_sql
     assert "duplicate_candidate_ids as" not in summary_sql
-    assert (
-        "group by active_problem_rows.album_id, active_problem_rows.track_id "
-        "having count(*) > 1"
-    ) in summary_sql
+    assert "having count(distinct source_directory) > 1" in summary_sql
+    assert "identity_candidates.file_year = candidate.file_year" in summary_sql
     assert "select duplicate_album_ids.album_id from duplicate_album_ids" in summary_sql
     assert "candidate_album_ids as" in summary_sql
     assert "active_file_refs as" not in summary_sql
     assert "active_file_entry_scalars as" not in summary_sql
     assert "join candidate_album_ids on candidate_album_ids.album_id = library.local_albums.id" in summary_sql
-    assert "octet_length(" not in summary_sql
+    assert "octet_length(file_album) <> length(file_album)" in summary_sql
     assert summary_sql.count("translate(") >= 4
     assert summary_sql.count("~ %(mojibake_candidate_pattern)s::text") >= 2
     assert summary_sql.count("mod(ascii(candidate_character.value), 256) = 0") >= 2

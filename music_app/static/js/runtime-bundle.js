@@ -4225,11 +4225,27 @@ function buildGalleryCardHtml(config = {}) {
   const displayMode = String(config.displayMode || 'cards') === 'covers' ? 'covers' : 'cards';
   const releaseYear = displayMode === 'covers' ? String(config.year ?? '').trim() : '';
   const openAttributes = `data-open-tracklist="1" data-album-key="${escapeHtml(config.albumKey || '')}" data-album-version-key="${escapeHtml(config.albumVersionKey || '')}" data-album="${escapeHtml(config.albumFallback || '')}"`;
+  const sourceCategories = ['main', 'hoard', 'new_arrivals'].filter((category) => (
+    Array.isArray(config.sourceCategories) && config.sourceCategories.includes(category)
+  ));
+  const sourceColors = { main: 'var(--gallery-artbox-hover-frame, #fff)', hoard: 'var(--library-source-hoard)', new_arrivals: 'var(--library-source-arrivals)' };
+  const sourceGradient = sourceCategories.length
+    ? `conic-gradient(${sourceCategories.map((category, index) => `${sourceColors[category]} ${index * 100 / sourceCategories.length}% ${(index + 1) * 100 / sourceCategories.length}%`).join(', ')})`
+    : 'none';
+  const sourceAction = (category, label, drawing) => `<button class="ui-button ui-button--small gallery-source-action gallery-source-action--${category}" type="button" aria-label="${label}" ${openAttributes}><svg viewBox="0 0 48 48" aria-hidden="true" focusable="false">${drawing}</svg><span>${label}</span></button>`;
+  const sourceActions = [
+    sourceCategories.includes('hoard') ? sourceAction('hoard', 'Hoard', '<path d="M5 22v-7A10 10 0 0 1 15 5h18a10 10 0 0 1 10 10v7H5Zm1 0v19h36V22M5 18h38M13 6v12m22-12v12M13 23v17m22-17v17M8 41v3m32-3v3"/><rect x="19" y="21" width="10" height="13" rx="2"/><path d="M21 21v-3a3 3 0 0 1 6 0v3M24 26v3"/><path d="M9 12h.1M39 12h.1M9 28h.1M39 28h.1M9 35h.1M39 35h.1"/>') : '',
+    sourceCategories.includes('new_arrivals') ? sourceAction('new_arrivals', 'New Arrivals', '<path d="M17 14a9 9 0 0 1 8-4h11a9 9 0 0 1 9 9v15H27V19a9 9 0 0 0-9-9M27 34h-9M30 34v12m3-12v12M34 15V2h7v4h-7"/><circle cx="16" cy="26" r="11"/><circle cx="16" cy="26" r="3"/><path d="M17 18a8 8 0 0 1 7 7M17 21a5 5 0 0 1 4 4M8 33l-6 5q8 3 16-1"/><path d="m8 5 1.2 3.8L13 10l-3.8 1.2L8 15l-1.2-3.8L3 10l3.8-1.2Z" fill="currentColor" stroke="none"/>') : '',
+  ].join('');
+  const duplicateAction = config.hasDuplicateFiles
+    ? sourceAction('duplicate', 'Duplicate files', '<path d="M24 6 45 42H3Z"/><path d="M24 18v11m0 6v1"/>')
+    : '';
   return `
-    <section class="album-card" data-gallery-display="${displayMode}"${releaseYear ? ` data-gallery-release-year="${escapeHtml(releaseYear)}"` : ''} data-gallery-card-key="${escapeHtml(config.identity || '')}" data-gallery-card-render-key="${escapeHtml(config.renderKey || '')}">
+    <section class="album-card" data-library-sources="${sourceCategories.join(' ')}" style="--library-source-gradient:${sourceGradient}" data-gallery-display="${displayMode}"${releaseYear ? ` data-gallery-release-year="${escapeHtml(releaseYear)}"` : ''} data-gallery-card-key="${escapeHtml(config.identity || '')}" data-gallery-card-render-key="${escapeHtml(config.renderKey || '')}">
       <button class="album-card__artbox-trigger album-open-trigger cover" type="button" ${openAttributes} aria-label="${escapeHtml(config.openLabel || `Open ${config.title || 'album'} tracklist`)}">
         ${String(config.artboxHtml || '')}
       </button>
+      ${sourceActions || duplicateAction ? `<div class="gallery-card__source-overlay"><div class="gallery-card__source-actions">${sourceActions}</div>${duplicateAction}</div>` : ''}
       ${releaseYear ? `<span class="gallery-card__hover-year" aria-hidden="true">${escapeHtml(releaseYear)}</span>` : ''}
       ${displayMode === 'covers'
         ? `<span class="gallery-card__focus-title">${escapeHtml(config.title || '')}</span>`
@@ -31740,6 +31756,9 @@ function albumCardHtml(album, options = {}) {
     remote_cover_thumbnail_url: String(album?.remote_cover_thumbnail_url || ''),
     inventory_status: String(album?.inventory_status || ''),
     missing_since: String(album?.missing_since || ''),
+    root_provenance: { categories: getAlbumCardSourceCategories(album).map((category) => category === 'main' ? 'main_library' : category) },
+    library_root_category: album?.library_root_category,
+    has_duplicate_files: album?.has_duplicate_files === true,
     allowed_actions: album?.allowed_actions && typeof album.allowed_actions === 'object'
       ? album.allowed_actions
       : {},
@@ -31780,6 +31799,8 @@ function albumCardHtml(album, options = {}) {
     trackCount: summary.trackCount,
     lengthDisplay: summary.lengthDisplay,
     artboxHtml,
+    sourceCategories: getAlbumCardSourceCategories(album),
+    hasDuplicateFiles: album?.has_duplicate_files === true,
     displayMode: options.displayMode || state?.gallery?.mainState?.view || state?.view?.gallery_display_mode,
   });
 }
@@ -31787,6 +31808,16 @@ function albumCardHtml(album, options = {}) {
 function getAlbumCardRating(album) {
   const rating = album?.album_preference?.rating;
   return Number.isInteger(rating) && rating >= 1 && rating <= 10 ? rating : null;
+}
+
+function getAlbumCardSourceCategories(album) {
+  const categories = typeof resolveGalleryAlbumSources === 'function'
+    ? resolveGalleryAlbumSources(album)
+    : (Array.isArray(album?.root_provenance?.categories)
+      ? album.root_provenance.categories
+      : [album?.library_root_category || 'main_library']);
+  const normalized = categories.map((category) => category === 'main_library' ? 'main' : category);
+  return ['main', 'hoard', 'new_arrivals'].filter((category) => normalized.includes(category));
 }
 
 function getAlbumCardRenderKey(album) {
@@ -31805,6 +31836,8 @@ function getAlbumCardRenderKey(album) {
     String(album?.remote_cover_thumbnail_url || album?.remote_cover_url || '').trim(),
     String(album?.inventory_status || ''),
     String(album?.missing_since || ''),
+    getAlbumCardSourceCategories(album),
+    album?.has_duplicate_files === true,
     String(state?.gallery?.mainState?.view || state?.view?.gallery_display_mode || 'cards'),
   ]);
 }

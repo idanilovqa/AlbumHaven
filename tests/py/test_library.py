@@ -1544,7 +1544,7 @@ def test_get_album_duplicate_sources_emits_sorted_folder_payloads(monkeypatch):
     assert serialized_titles == ["Alpha", "Beta", "Alpha", "Beta"]
 
 
-def test_get_album_duplicate_sources_rejects_mismatched_folder_track_groups(monkeypatch):
+def test_get_album_duplicate_sources_accepts_mismatched_tracks_for_same_album_identity(monkeypatch):
     serialized_titles: list[str] = []
 
     def fake_track_to_dict(track):
@@ -1590,9 +1590,9 @@ def test_get_album_duplicate_sources_rejects_mismatched_folder_track_groups(monk
 
     payload = get_album_duplicate_sources(album)
 
-    assert payload == []
-    assert getattr(album, "_cached_duplicate_sources") == []
-    assert serialized_titles == []
+    assert len(payload) == 2
+    assert getattr(album, "_cached_duplicate_sources") == payload
+    assert serialized_titles == ["Alpha", "Gamma"]
 
 
 def test_build_album_base_payload_keeps_shared_album_fields():

@@ -23,38 +23,51 @@
 
 **Owners:** `music_app/services/library.py`, `music_app/services/library_browse_postgres.py`, `music_app/routes/api_problematic_albums.py`; tests `tests/py/test_multi_root_duplicates.py`.
 
-- [ ] Separate test author adds cases through real Track/Album objects and existing construction seams: same artist/title/valid year qualifies despite track-count, duration and edition differences; unknown/conflicting identity, different year/artist, same container and multidisc do not.
-- [ ] Run `python -m pytest tests/py/test_multi_root_duplicates.py -q`; retain missing-behavior failures before implementation.
-- [ ] Implement one shared normalized identity rule at the existing domain boundary, reused in the Postgres problem projection. Keep version records and each source's queue separate; all affected versions expose the group.
-- [ ] Run the new tests and focused existing duplicate/problem cases; reconcile only contracts explicitly changed by the approved rule.
+- [x] Separate test author adds cases through real Track/Album objects and existing construction seams: same artist/title/valid year qualifies despite track-count, duration and edition differences; unknown/conflicting identity, different year/artist, same container and multidisc do not.
+- [x] Run `python -m pytest tests/py/test_multi_root_duplicates.py -q`; retain missing-behavior failures before implementation.
+- [x] Implement one shared normalized identity rule at the existing domain boundary, reused in the Postgres problem projection. Keep version records and each source's queue separate; all affected versions expose the group.
+- [x] Run the new tests and focused existing duplicate/problem cases; reconcile only contracts explicitly changed by the approved rule.
 
 ## 2. Appearance persistence and approved gallery indicators
 
 **Owners:** `music_app/services/appearance_preferences_postgres.py`, `music_app/static/js/utilities/appearance-tab.js`, `music_app/static/js/appearance-backgrounds.js`, shared gallery/artbox runtime and CSS; additive migration only if existing profile ownership requires it.
 
-- [ ] Separate test author traces aggregate/profile defaults and authors strict boolean, all-disabled rejection, legacy compatibility and profile-isolation cases in `tests/py/test_library_source_appearance.py`.
-- [ ] Run the focused file and retain RED evidence.
-- [ ] Add three account-owned independent settings through existing staged Save/Cancel and revision/profile semantics. Preserve old payloads with valid defaults; direct invalid API writes fail.
-- [ ] Add focused JavaScript behavior tests before implementation: neutral/main+hoard+arrivals segments, icon-only hover expansion, duplicate warning independent of icon preference, no nested interactive controls.
-- [ ] Extend shared cards/artboxes with subtle amber/teal treatment, theme-neutral Main segments, accessible individual hover/focus actions and owner-referenced SVG icons. Include provenance/problem state in virtualized render invalidation.
-- [ ] Run focused JS and Python checks sequentially. Existing missing inventory warning remains distinct from duplicate files.
+- [x] Separate test author traces aggregate/profile defaults and authors strict boolean, all-disabled rejection, legacy compatibility and profile-isolation cases in `tests/py/test_library_source_appearance.py`.
+- [x] Run the focused file and retain RED evidence.
+- [x] Add three account-owned independent settings through existing staged Save/Cancel and revision/profile semantics. Preserve old payloads with valid defaults; direct invalid API writes fail.
+- [x] Add focused JavaScript behavior tests before implementation: neutral/main+hoard+arrivals segments, icon-only hover expansion, duplicate warning independent of icon preference, no nested interactive controls.
+- [x] Extend shared cards/artboxes with subtle amber/teal treatment, theme-neutral Main segments, accessible individual hover/focus actions and owner-referenced SVG icons. Include provenance/problem state in virtualized render invalidation.
+- [x] Run focused JS and Python checks sequentially. Existing missing inventory warning remains distinct from duplicate files.
 
 ## 3. Root, scan, cover and media readiness
 
 **Owners:** existing `library_roots.py`, `scoped_library_roots.py`, `library_settings.py`, `library_indexing.py`, `cover_workflow.py`, `scan_state.py`, and media routes.
 
-- [ ] Inspect existing contracts and run focused category enumeration, second-root media containment, cover-target and offline-root tests.
+- [x] Inspect existing contracts and run focused category enumeration, second-root media containment, cover-target and offline-root tests.
 - [ ] If a gap fails an approved case, add a regression test before the minimal responsible-layer fix. No speculative replacement of working root/scan infrastructure.
 - [ ] Establish runnable local build prerequisites without changing production roots or initiating a scan before acceptance.
 
 ## 4. Verification, documentation and manual handoff
 
-- [ ] Separate verification handoff runs relevant focused checks, reports exact counts and prerequisites.
-- [ ] Complete two full relevant-diff local review passes; repair all confirmed issues. A substantive second-pass issue requires another full pass.
-- [ ] Reconcile owning companion plan, UI registry and functional cases without overwriting concurrent private documentation changes. Check only proven milestones; leave release/manual/E2E/move items open.
-- [ ] Provide the owner a runnable initial build and exact manual script: configure sources, test all three Appearance toggles and last-enabled constraint, hover/focus icons, inspect duplicates and play one selected copy.
+- [x] Separate verification handoff runs relevant focused checks, reports exact counts and prerequisites.
+- [x] Complete two full relevant-diff local review passes; repair all confirmed issues. A substantive second-pass issue requires another full pass.
+- [x] Reconcile owning companion plan, UI registry and functional cases without overwriting concurrent private documentation changes. Check only proven milestones; leave release/manual/E2E/move items open.
+- [x] Provide the owner a runnable initial build and exact manual script: configure sources, test all three Appearance toggles and last-enabled constraint, hover/focus icons, inspect duplicates and play one selected copy.
 - [ ] After owner acceptance, configure authorized real roots, run full scan/missing-cover pass, report unavailable roots and provider failures; proceed to approved E2E/release gates separately.
 
 ## Progress
 
-Design approval recorded; test-author handoffs started. No product implementation or real-source scan verified yet.
+Initial implementation is in this worktree. Red-first duplicate regressions covered
+unknown and conflicting metadata, cross-edition and separated-year copies,
+source-specific queues, and real PostgreSQL candidate/Problematic Files reads.
+The final focused command on September 23 passed `78` Python tests across the
+new duplicate and Appearance files (including isolated PostgreSQL cases).
+The two source-specific Node test files exited successfully, and the rendered
+gallery component file passed `4 / 4` cases in dark and light themes. The
+runtime bundle was regenerated. Four full local diff-review passes repaired
+all validated findings; pass four found none. The component screenshots were
+visually inspected. Exact elapsed slice times were not recorded.
+
+This is not owner acceptance or release evidence. The owner has not manually
+accepted the build. Real root configuration, a full scan, cover fetching,
+functional E2E, large-library query performance, and full CI remain open.

@@ -25,13 +25,14 @@ _DOCKED_COMPACT_FIELDS = (*_COMPACT_FIELDS, "docked_compact_player_behavior")
 _LEGACY_COMPACT_FIELDS = (*_FIELDS, "compact_player_style")
 _ALBUM_PAGE_FIELDS = ("album_details_layout", "album_playing_row_animation")
 _ALERT_FIELDS = ("alert_family",)
+_SOURCE_INDICATOR_DEFAULTS = {"card_colors": False, "hover_outline_colors": False, "icons": True}
 _PLAYER_FIELDS = ("background", "fill", "edge")
 _PLAYER_COLUMNS = (
     "player_background_color", "player_waveform_fill_color", "player_waveform_edge_color"
 )
 _STORAGE_FIELDS = (*_FIELDS, "palette_id", "panel_index", *_PLAYER_COLUMNS, "waveform_recent_colors", "compact_player_style", "docked_compact_player_behavior", "docked_compact_player_regular_style", "compact_player_motion", "floating_player_edge")
 _AGGREGATE_COLUMNS = ("revision", "interaction_overrides", "selection_accent", "player_style_override", "player_recent_sets")
-_ROW_COLUMNS = (*_STORAGE_FIELDS, *_ALBUM_PAGE_FIELDS, *_ALERT_FIELDS, *_AGGREGATE_COLUMNS, "loop_control_style")
+_ROW_COLUMNS = (*_STORAGE_FIELDS, *_ALBUM_PAGE_FIELDS, *_ALERT_FIELDS, *_AGGREGATE_COLUMNS, "loop_control_style", "library_source_indicators")
 _READ_COLUMNS = ", ".join(_ROW_COLUMNS)
 _SAVED_READ_COLUMNS = ", ".join(f"saved.{name}" for name in _ROW_COLUMNS)
 _INTERACTION_COLOR_FIELDS = (
@@ -54,9 +55,9 @@ _DEVICE_SECTION_FIELDS = {
     "player": frozenset(("player_override", "player_style_override", "compact_player_style", "docked_compact_player_behavior", "docked_compact_player_regular_style", "compact_player_motion", "floating_player_edge")),
     "interaction": frozenset(("interaction_overrides", "selection_accent", "action_button_outlines")),
     "alerts": frozenset(_ALERT_FIELDS),
-    "album": frozenset(_ALBUM_PAGE_FIELDS),
+    "album": frozenset((*_ALBUM_PAGE_FIELDS, "library_source_indicators")),
 }
-_DEVICE_FIELD_DEFAULTS = {"docked_compact_player_behavior": "follow_sidebar", "docked_compact_player_regular_style": False, "compact_player_motion": "normal", "floating_player_edge": {"source": "player", "color": None}}
+_DEVICE_FIELD_DEFAULTS = {"library_source_indicators": _SOURCE_INDICATOR_DEFAULTS, "docked_compact_player_behavior": "follow_sidebar", "docked_compact_player_regular_style": False, "compact_player_motion": "normal", "floating_player_edge": {"source": "player", "color": None}}
 
 
 class AppearanceLoopStyleForbidden(PermissionError):
@@ -272,12 +273,23 @@ def _floating_player_edge(value: object) -> dict[str, str | None]:
     return {"source": source, "color": color}
 
 
+def _source_indicators(value: object) -> dict[str, bool]:
+    if (not isinstance(value, Mapping) or set(value) != set(_SOURCE_INDICATOR_DEFAULTS)
+            or any(type(flag) is not bool for flag in value.values())):
+        raise ValueError("Library source indicators require three boolean choices.")
+    if not any(value.values()):
+        raise ValueError("At least one library source indicator must remain enabled.")
+    return dict(value)
+
+
 def normalize_appearance_preferences(payload: object) -> dict[str, object]:
     """Preserve optional-field omission for older preference writers."""
     if not isinstance(payload, Mapping):
         return _normalize_appearance_preferences(payload)
     writable = dict(payload)
     optional = {}
+    if "library_source_indicators" in writable:
+        optional["library_source_indicators"] = _source_indicators(writable.pop("library_source_indicators"))
     if "loop_control_style" in writable:
         optional["loop_control_style"] = _closed_choice(
             writable.pop("loop_control_style"), LOOP_CONTROL_STYLES, "Unknown loop control style.")
@@ -419,6 +431,7 @@ def expand_appearance_preferences(payload: object) -> dict[str, object]:
                 "compact_player_motion": "normal", "floating_player_edge": {"source": "player", "color": None},
                 "album_details_layout": "classic_bar", "album_playing_row_animation": "enabled",
                 "alert_family": "ember", "loop_control_style": "capsule",
+                "library_source_indicators": dict(_SOURCE_INDICATOR_DEFAULTS),
                 **normalized, "waveform_recent_colors": history, "revision": revision, **aggregate,
                 "player_recent_sets": recent_sets}
     history = _recent_colors(writable.pop("waveform_recent_colors", []))
@@ -428,6 +441,7 @@ def expand_appearance_preferences(payload: object) -> dict[str, object]:
             "compact_player_motion": "normal", "floating_player_edge": {"source": "player", "color": None},
             "album_details_layout": "classic_bar", "album_playing_row_animation": "enabled",
             "alert_family": "ember", "loop_control_style": "capsule",
+            "library_source_indicators": dict(_SOURCE_INDICATOR_DEFAULTS),
             **normalized, "waveform_recent_colors": history}
 
 
@@ -500,6 +514,7 @@ def _preferences(row: object) -> dict[str, object]:
             "album_playing_row_animation": values.get("album_playing_row_animation", "enabled"),
             "alert_family": values.get("alert_family", "ember"),
             "loop_control_style": values.get("loop_control_style", "capsule"),
+            "library_source_indicators": values.get("library_source_indicators", _SOURCE_INDICATOR_DEFAULTS),
             **{name: values.get(name) for name in _AGGREGATE_COLUMNS},
         })
     return expand_appearance_preferences({
@@ -513,6 +528,7 @@ def _preferences(row: object) -> dict[str, object]:
         "docked_compact_player_regular_style": values.get("docked_compact_player_regular_style", False),
         "compact_player_motion": values.get("compact_player_motion", "normal"),
         "floating_player_edge": values.get("floating_player_edge", {"source": "player", "color": None}),
+        "library_source_indicators": values.get("library_source_indicators", _SOURCE_INDICATOR_DEFAULTS),
     })
 
 def _device_profile_preferences(row: object) -> dict[str, object]:
@@ -593,6 +609,15 @@ class PostgresAppearancePreferencesRepository:
                         f"jsonb_set({profile_update}, '{path}', "
                         f"coalesce(saved.device_section_profiles #> '{path}', incoming.profiles #> '{path}'))"
                     )
+        for profile in ("mobile", "tv"):
+            raw_profile = device_profiles.get(profile, {}) if isinstance(device_profiles, Mapping) else {}
+            raw_album = raw_profile.get("sections", raw_profile).get("album", {})
+            if raw_album.get("mode") == "custom" and "library_source_indicators" not in raw_album.get("values", {}):
+                path = "{" + f"{profile},sections,album,values,library_source_indicators" + "}"
+                profile_update = (
+                    f"jsonb_set({profile_update}, '{path}', "
+                    f"coalesce(saved.device_section_profiles #> '{path}', incoming.profiles #> '{path}'))"
+                )
         sql = f"""with incoming as (
                    select %s::bigint account_id, %s::jsonb profiles, %s::boolean outlines,
                           %s::text main_surface_color, %s::text panel_background_color,
@@ -606,7 +631,8 @@ class PostgresAppearancePreferencesRepository:
                            %s::text album_details_layout,
                           %s::text album_playing_row_animation, %s::text alert_family,
                           %s::text player_background, %s::text player_fill, %s::text player_edge,
-                          %s::text loop_control_style, %s::boolean allow_loop_control_style
+                          %s::text loop_control_style, %s::boolean allow_loop_control_style,
+                          %s::jsonb library_source_indicators
                  ), updated as (
                    update app.user_appearance_preferences as saved
                       set main_surface_color = incoming.main_surface_color,
@@ -629,6 +655,7 @@ class PostgresAppearancePreferencesRepository:
                           album_playing_row_animation = incoming.album_playing_row_animation,
                           alert_family = incoming.alert_family,
                           loop_control_style = coalesce(incoming.loop_control_style, saved.loop_control_style),
+                          library_source_indicators = coalesce(incoming.library_source_indicators, saved.library_source_indicators),
                           action_button_outlines = incoming.outlines,
                           device_section_profiles = {profile_update},
                           revision = saved.revision + 1, updated_at = now()
@@ -650,7 +677,7 @@ class PostgresAppearancePreferencesRepository:
                       player_style_override, player_recent_sets, waveform_recent_colors,
                        revision, compact_player_style, docked_compact_player_behavior, docked_compact_player_regular_style, compact_player_motion, floating_player_edge, album_details_layout, album_playing_row_animation,
                       alert_family, player_background_color, player_waveform_fill_color,
-                      player_waveform_edge_color, loop_control_style, action_button_outlines, device_section_profiles)
+                      player_waveform_edge_color, loop_control_style, action_button_outlines, device_section_profiles, library_source_indicators)
                    select account_id, 'desktop', main_surface_color, panel_background_color,
                           palette_id, panel_index, interaction_overrides, selection_accent,
                           player_style_override, app.merge_player_recent_sets('[]'::jsonb, applied_player_set),
@@ -659,7 +686,8 @@ class PostgresAppearancePreferencesRepository:
                        coalesce(docked_compact_player_regular_style, false),
                        coalesce(compact_player_motion, 'normal'), coalesce(floating_player_edge, '{{"source":"player","color":null}}'::jsonb), album_details_layout, album_playing_row_animation,
                           alert_family, player_background, player_fill, player_edge,
-                          coalesce(loop_control_style, 'capsule'), outlines, profiles
+                          coalesce(loop_control_style, 'capsule'), outlines, profiles,
+                          coalesce(library_source_indicators, '{{"card_colors":false,"hover_outline_colors":false,"icons":true}}'::jsonb)
                      from incoming where expected_revision = 0
                        and (loop_control_style is null or loop_control_style = 'capsule' or allow_loop_control_style)
                        and (allow_loop_control_style or (
@@ -682,6 +710,7 @@ class PostgresAppearancePreferencesRepository:
             colors["album_details_layout"], colors["album_playing_row_animation"], colors["alert_family"],
             *((colors["player_override"] or {}).get(field) for field in _PLAYER_FIELDS),
             colors.get("loop_control_style"), allow_loop_control_style is True,
+            _jsonb(colors.get("library_source_indicators")),
         )
         with self._connection() as connection:
             row = connection.execute(sql, params).fetchone()
@@ -740,7 +769,8 @@ class PostgresAppearancePreferencesRepository:
                             %s::text album_details_layout, %s::text album_playing_row_animation,
                             %s::text alert_family,
                             %s::text player_background, %s::text player_fill, %s::text player_edge,
-                            %s::text loop_control_style, %s::boolean allow_loop_control_style
+                          %s::text loop_control_style, %s::boolean allow_loop_control_style,
+                          %s::jsonb library_source_indicators
                    ), updated as (
                      update app.user_appearance_preferences as saved
                         set main_surface_color = incoming.main_surface_color,
@@ -766,6 +796,7 @@ class PostgresAppearancePreferencesRepository:
                             album_playing_row_animation = incoming.album_playing_row_animation,
                             alert_family = incoming.alert_family,
                             loop_control_style = coalesce(incoming.loop_control_style, saved.loop_control_style),
+                          library_source_indicators = coalesce(incoming.library_source_indicators, saved.library_source_indicators),
                             revision = saved.revision + 1,
                             updated_at = now()
                        from incoming
@@ -782,7 +813,7 @@ class PostgresAppearancePreferencesRepository:
                       palette_id, panel_index, interaction_overrides, selection_accent,
                       player_style_override, player_recent_sets, waveform_recent_colors,
                        revision, compact_player_style, docked_compact_player_behavior, docked_compact_player_regular_style, compact_player_motion, floating_player_edge, album_details_layout, album_playing_row_animation,
-                      alert_family, player_background_color, player_waveform_fill_color, player_waveform_edge_color, loop_control_style)
+                      alert_family, player_background_color, player_waveform_fill_color, player_waveform_edge_color, loop_control_style, library_source_indicators)
                    select account_id, client_profile, main_surface_color, panel_background_color,
                           palette_id, panel_index, interaction_overrides, selection_accent,
                           player_style_override,
@@ -792,7 +823,8 @@ class PostgresAppearancePreferencesRepository:
                        coalesce(docked_compact_player_regular_style, false),
                        coalesce(compact_player_motion, 'normal'), coalesce(floating_player_edge, '{{"source":"player","color":null}}'::jsonb),
                           album_details_layout, album_playing_row_animation, alert_family,
-                          player_background, player_fill, player_edge, coalesce(loop_control_style, 'capsule')
+                          player_background, player_fill, player_edge, coalesce(loop_control_style, 'capsule'),
+                          coalesce(library_source_indicators, '{{"card_colors":false,"hover_outline_colors":false,"icons":true}}'::jsonb)
                      from incoming where expected_revision = 0
                        and (loop_control_style is null or loop_control_style = 'capsule'
                             or allow_loop_control_style)
@@ -812,6 +844,7 @@ class PostgresAppearancePreferencesRepository:
                 colors["alert_family"],
                 *((colors["player_override"] or {}).get(field) for field in _PLAYER_FIELDS),
                 colors.get("loop_control_style"), allow_loop_control_style is True,
+                _jsonb(colors.get("library_source_indicators")),
             )
             with self._connection() as connection:
                 row = connection.execute(sql, params).fetchone()
@@ -837,7 +870,7 @@ class PostgresAppearancePreferencesRepository:
             style_column = ", compact_player_style" if "compact_player_style" in colors else ""
             style_value = ", %s::text" if "compact_player_style" in colors else ""
             style_update = "compact_player_style = excluded.compact_player_style," if "compact_player_style" in colors else ""
-            for name, cast in (("docked_compact_player_regular_style", "boolean"), ("compact_player_motion", "text"), ("floating_player_edge", "jsonb")):
+            for name, cast in (("docked_compact_player_regular_style", "boolean"), ("compact_player_motion", "text"), ("floating_player_edge", "jsonb"), ("library_source_indicators", "jsonb")):
                 if name in colors:
                     style_column += f", {name}"
                     style_value += f", %s::{cast}"
@@ -869,6 +902,8 @@ class PostgresAppearancePreferencesRepository:
                 params += (colors["compact_player_motion"],)
             if "floating_player_edge" in colors:
                 params += (_jsonb(colors["floating_player_edge"]),)
+            if "library_source_indicators" in colors:
+                params += (_jsonb(colors["library_source_indicators"]),)
         else:
             player = colors["player_override"] or dict.fromkeys(_PLAYER_FIELDS)
             sql = f"""with incoming as (
@@ -881,17 +916,18 @@ class PostgresAppearancePreferencesRepository:
                              %s::boolean as docked_compact_player_regular_style,
                              %s::text as compact_player_motion, %s::jsonb as floating_player_edge,
                             %s::text as album_details_layout, %s::text as album_playing_row_animation,
-                            %s::text as alert_family
+                            %s::text as alert_family, %s::jsonb as library_source_indicators
                    )
                    insert into app.user_appearance_preferences as saved
-                     (account_id, client_profile, {", ".join(_STORAGE_FIELDS)}, album_details_layout, album_playing_row_animation, alert_family, revision)
+                     (account_id, client_profile, {", ".join(_STORAGE_FIELDS)}, album_details_layout, album_playing_row_animation, alert_family, library_source_indicators, revision)
                    select account_id, client_profile, main_surface_color, panel_background_color, palette_id, panel_index,
                           player_background_color, player_waveform_fill_color, player_waveform_edge_color,
                           app.merge_waveform_recent_colors(updates || array[player_waveform_fill_color, player_waveform_edge_color]),
                            coalesce(compact_player_style, 'docked'), coalesce(docked_compact_player_behavior, 'follow_sidebar'),
                        coalesce(docked_compact_player_regular_style, false),
                        coalesce(compact_player_motion, 'normal'), coalesce(floating_player_edge, '{{"source":"player","color":null}}'::jsonb), coalesce(album_details_layout, 'classic_bar'),
-                          coalesce(album_playing_row_animation, 'enabled'), coalesce(alert_family, 'ember'), 1
+                          coalesce(album_playing_row_animation, 'enabled'), coalesce(alert_family, 'ember'),
+                          coalesce(library_source_indicators, '{{"card_colors":false,"hover_outline_colors":false,"icons":true}}'::jsonb), 1
                      from incoming where true
                    on conflict (account_id, client_profile) do update
                      set main_surface_color = excluded.main_surface_color,
@@ -909,6 +945,7 @@ class PostgresAppearancePreferencesRepository:
                          album_details_layout = coalesce((select album_details_layout from incoming), saved.album_details_layout),
                          album_playing_row_animation = coalesce((select album_playing_row_animation from incoming), saved.album_playing_row_animation),
                          alert_family = coalesce((select alert_family from incoming), saved.alert_family),
+                         library_source_indicators = coalesce((select library_source_indicators from incoming), saved.library_source_indicators),
                          revision = saved.revision + 1,
                          waveform_recent_colors = app.merge_waveform_recent_colors(
                            (select updates from incoming)
@@ -930,7 +967,7 @@ class PostgresAppearancePreferencesRepository:
                       colors["palette_id"], colors["panel_index"],
                       player["background"], player["fill"], player["edge"], updates,
                        colors.get("compact_player_style"), colors.get("docked_compact_player_behavior"), colors.get("docked_compact_player_regular_style"), colors.get("compact_player_motion"), _jsonb(colors.get("floating_player_edge")), colors.get("album_details_layout"),
-                      colors.get("album_playing_row_animation"), colors.get("alert_family"))
+                      colors.get("album_playing_row_animation"), colors.get("alert_family"), _jsonb(colors.get("library_source_indicators")))
         with self._connection() as connection:
             row = connection.execute(sql, params).fetchone()
             if row is None:

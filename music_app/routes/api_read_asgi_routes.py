@@ -65,11 +65,15 @@ def _project_missing_album_actions_for_request(
 ) -> object:
     allowed_actions = allowed_actions_for_request(
         request,
-        ("library.inventory.manage", "library.files.edit_tags", "library.rules.manage", "library.files.open_location", "library.covers.fetch"),
+        ("library.inventory.manage", "library.files.edit_tags", "library.rules.manage", "library.files.open_location", "library.covers.fetch", "library.paths.read"),
     )
 
     def visit(value: object) -> None:
         if isinstance(value, dict):
+            if isinstance(value.get("duplicate_sources"), list):
+                value["duplicate_source_count"] = len(value["duplicate_sources"])
+                if not allowed_actions.as_payload().get("library.paths.read"):
+                    value["duplicate_sources"] = []
             if "suggested_edits" in value:
                 value["allowed_actions"] = allowed_actions.as_payload()
             if value.get("inventory_status") == "missing":

@@ -40,6 +40,9 @@ function albumCardHtml(album, options = {}) {
     remote_cover_thumbnail_url: String(album?.remote_cover_thumbnail_url || ''),
     inventory_status: String(album?.inventory_status || ''),
     missing_since: String(album?.missing_since || ''),
+    root_provenance: { categories: getAlbumCardSourceCategories(album).map((category) => category === 'main' ? 'main_library' : category) },
+    library_root_category: album?.library_root_category,
+    has_duplicate_files: album?.has_duplicate_files === true,
     allowed_actions: album?.allowed_actions && typeof album.allowed_actions === 'object'
       ? album.allowed_actions
       : {},
@@ -80,6 +83,8 @@ function albumCardHtml(album, options = {}) {
     trackCount: summary.trackCount,
     lengthDisplay: summary.lengthDisplay,
     artboxHtml,
+    sourceCategories: getAlbumCardSourceCategories(album),
+    hasDuplicateFiles: album?.has_duplicate_files === true,
     displayMode: options.displayMode || state?.gallery?.mainState?.view || state?.view?.gallery_display_mode,
   });
 }
@@ -87,6 +92,16 @@ function albumCardHtml(album, options = {}) {
 function getAlbumCardRating(album) {
   const rating = album?.album_preference?.rating;
   return Number.isInteger(rating) && rating >= 1 && rating <= 10 ? rating : null;
+}
+
+function getAlbumCardSourceCategories(album) {
+  const categories = typeof resolveGalleryAlbumSources === 'function'
+    ? resolveGalleryAlbumSources(album)
+    : (Array.isArray(album?.root_provenance?.categories)
+      ? album.root_provenance.categories
+      : [album?.library_root_category || 'main_library']);
+  const normalized = categories.map((category) => category === 'main_library' ? 'main' : category);
+  return ['main', 'hoard', 'new_arrivals'].filter((category) => normalized.includes(category));
 }
 
 function getAlbumCardRenderKey(album) {
@@ -105,6 +120,8 @@ function getAlbumCardRenderKey(album) {
     String(album?.remote_cover_thumbnail_url || album?.remote_cover_url || '').trim(),
     String(album?.inventory_status || ''),
     String(album?.missing_since || ''),
+    getAlbumCardSourceCategories(album),
+    album?.has_duplicate_files === true,
     String(state?.gallery?.mainState?.view || state?.view?.gallery_display_mode || 'cards'),
   ]);
 }

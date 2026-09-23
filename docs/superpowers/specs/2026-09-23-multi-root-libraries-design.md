@@ -8,8 +8,9 @@
 - [x] Owner confirms the current-stack exception for this early delivery.
 - [x] Owner approves this technical design and v003 layout with final icon refinements.
 - [ ] Owner approves automated functional scenarios and performance assessment.
-- [ ] Add failing focused tests and implement the approved behavior.
-- [ ] Focused verification and owner manual acceptance.
+- [x] Add failing focused tests and implement the approved behavior.
+- [x] Focused verification of the initial build.
+- [ ] Owner manual acceptance.
 - [ ] Add approved functional E2E coverage after manual acceptance.
 - [ ] Complete required review and CI before release; configure and scan real sources on an accepted build.
 
@@ -49,8 +50,8 @@ silently removed or newly enabled by source configuration.
 
 Root reads/management reuse `library.settings.read` / `library.settings.manage`
 for the current media-host library and owner/admin workflows. Scan controls use
-the existing scan authority, whose exact action key must be verified during
-implementation intake. Existing root validation and bounded folder browsing
+the existing `library.refresh` action (`POST /refresh-api`), with
+`library.refresh.cancel` for cancellation. Existing root validation and bounded folder browsing
 remain authoritative; folder browsing additionally requires its existing
 filesystem and path-read grants.
 
@@ -175,7 +176,11 @@ Source badges appear on card hover or keyboard focus; only hovering/focusing
 the individual icon expands its label. Artwork hover never expands labels.
 Each accessible named action opens Album Details source information. Touch
 keeps a usable explicit control. Mixed-source albums show both category markers and
-list every authorized location; no source silently wins by ordering. Use a
+list every authorized location; no source silently wins by ordering. In this
+initial build, the owner approved showing alternate copy details and enabling
+copy selection only for actors with existing `library.paths.read` authority.
+Other library readers still receive duplicate warnings and default playback;
+their response must omit alternate folder and track paths. Use a
 neutral mixed-card surface with both category accents. Missing-album and problem
 alerts remain separate semantic states. Latest owner correction removes all
 below-card duplicate messages: an artbox warning action expands to `Duplicate

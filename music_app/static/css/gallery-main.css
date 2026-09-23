@@ -263,3 +263,87 @@
 }
 .gallery-card__hover-year::before { right: calc(50% + var(--gallery-year-gap) - 3px); }
 .gallery-card__hover-year::after { left: calc(50% + var(--gallery-year-gap) - 3px); }
+
+/* Shared library provenance: card and artbox coloring are independent. */
+.album-card[data-library-sources] {
+  --library-source-hoard: #d5a757;
+  --library-source-arrivals: #74bdb4;
+  --library-source-tint: var(--panel);
+}
+:root[data-appearance-mode="light"] .album-card[data-library-sources] {
+  --library-source-hoard: #865b13;
+  --library-source-arrivals: #247870;
+}
+.album-card[data-library-sources="hoard"] { --library-source-tint: color-mix(in srgb, var(--panel) 92%, var(--library-source-hoard)); }
+.album-card[data-library-sources="new_arrivals"] { --library-source-tint: color-mix(in srgb, var(--panel) 92%, var(--library-source-arrivals)); }
+:root[data-library-source-card-colors="true"] .album-card[data-library-sources]:not([data-library-sources=""]):not([data-library-sources="main"]) {
+  border-color: transparent;
+  background: linear-gradient(var(--library-source-tint), var(--library-source-tint)) padding-box, var(--library-source-gradient) border-box;
+}
+:root[data-library-source-card-colors="true"] .album-card[data-library-sources]:not([data-library-sources="main"]) > .album-body {
+  background: var(--library-source-tint);
+}
+:root[data-library-source-hover-outline-colors="true"] .album-card[data-library-sources]:not([data-library-sources=""]):not([data-library-sources="main"]) > .cover::after {
+  display: block;
+  box-sizing: border-box;
+  border: 5px solid transparent;
+  background: var(--library-source-gradient) border-box;
+  mask: linear-gradient(#fff 0 0) padding-box, linear-gradient(#fff 0 0);
+  mask-composite: exclude;
+  opacity: 0;
+  box-shadow: none;
+}
+:root[data-library-source-hover-outline-colors="true"] .album-card[data-library-sources]:not([data-library-sources=""]):not([data-library-sources="main"]):is(:hover, :focus-within) > .cover::after { opacity: 1; }
+:root[data-library-source-hover-outline-colors="true"] .album-card[data-library-sources][data-gallery-release-year] > .cover::after {
+  clip-path: polygon(0 0, calc(50% - var(--gallery-year-gap)) 0, calc(50% - var(--gallery-year-gap)) 12px, calc(50% + var(--gallery-year-gap)) 12px, calc(50% + var(--gallery-year-gap)) 0, 100% 0, 100% 100%, 0 100%);
+}
+:root[data-library-source-hover-outline-colors="true"] .album-card[data-library-sources]:not([data-library-sources=""]):not([data-library-sources="main"])[data-gallery-display="covers"]::after { display: none; }
+.gallery-card__source-overlay {
+  position: absolute;
+  inset: 0 0 auto;
+  aspect-ratio: 1;
+  z-index: 6;
+  pointer-events: none;
+}
+.gallery-card__source-actions {
+  position: absolute;
+  top: 9px;
+  left: 9px;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+  max-width: calc(100% - 18px);
+}
+.album-card .gallery-source-action {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: flex-start;
+  min-height: 36px;
+  min-width: 36px;
+  max-width: 100%;
+  padding: 5px;
+  border: 1px solid currentColor;
+  border-radius: 7px;
+  color: var(--library-source-hoard);
+  background: var(--panel);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 150ms ease;
+}
+.album-card .gallery-source-action--new_arrivals { color: var(--library-source-arrivals); }
+.album-card .gallery-source-action svg { width: 24px; height: 24px; flex: none; fill: none; stroke: currentColor; stroke-width: 2.2; stroke-linecap: round; stroke-linejoin: round; }
+.album-card .gallery-source-action span { max-width: 0; overflow: hidden; opacity: 0; white-space: nowrap; font-size: 12px; transition: max-width 150ms ease, opacity 150ms ease, margin 150ms ease; }
+.album-card:is(:hover, :focus-within) .gallery-source-action { opacity: 1; pointer-events: auto; }
+.album-card .gallery-source-action:is(:hover, :focus-visible) span { max-width: 150px; margin-left: 6px; opacity: 1; }
+.album-card .gallery-source-action:focus-visible { outline: 2px solid var(--text); outline-offset: 2px; }
+.album-card .gallery-source-action--duplicate { position: absolute; right: 9px; bottom: 9px; max-width: calc(100% - 18px); }
+.album-card:has(.album-artbox--missing) .gallery-source-action--duplicate { bottom: 52px; }
+:root[data-library-source-icons="false"] .gallery-card__source-actions { display: none; }
+@media (hover: none) {
+  .album-card .gallery-source-action { min-height: 44px; min-width: 44px; opacity: 1; pointer-events: auto; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .album-card .gallery-source-action, .album-card .gallery-source-action span { transition: none; }
+}

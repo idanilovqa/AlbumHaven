@@ -70,11 +70,14 @@ export class GlobalPlayerActions {
     await this.globalPlayer.collapse.root.click();
     await expect(this.globalPlayer.player).toHaveClass(/\bis-compact\b/, { timeout: options.timeout || 60000 });
     await expect(this.globalPlayer.compactPlayer.root).toHaveAttribute('aria-hidden', 'false');
+    const presentation = options.presentation || expectedStyle;
+    await expect(this.globalPlayer.player).toHaveAttribute('data-compact-presentation', presentation);
     if (expectedStyle === 'floating') {
       await expect(this.globalPlayer.player).toHaveCSS('width', '96px', { timeout: options.timeout || 60000 });
       await expect(this.globalPlayer.player).toHaveCSS('height', '96px', { timeout: options.timeout || 60000 });
     } else if (expectedStyle === 'docked') {
-      await expect(this.globalPlayer.player).toHaveCSS('height', '76px', { timeout: options.timeout || 60000 });
+      const height = presentation === 'rail_play' || presentation === 'rail_artbox' ? '100px' : '72px';
+      await expect(this.globalPlayer.player).toHaveCSS('height', height, { timeout: options.timeout || 60000 });
     }
     const checkpoint = await this.globalPlayer.readViewCheckpoint();
     expect(checkpoint.mode).toBe('compact');
@@ -83,8 +86,16 @@ export class GlobalPlayerActions {
   }
 
   async expandPlayer(options = {}) {
-    await expect(this.globalPlayer.compactPlayer.expand.root).toBeVisible({ timeout: options.timeout || 60000 });
-    await this.globalPlayer.compactPlayer.expand.root.click();
+    const presentation = await this.globalPlayer.player.getAttribute('data-compact-presentation');
+    if (presentation === 'floating') {
+      await expect(this.globalPlayer.compactPlayer.expand.root).toBeVisible({ timeout: options.timeout || 60000 });
+      await this.globalPlayer.compactPlayer.expand.root.click();
+    } else {
+      if (presentation === 'rail_play') await this.globalPlayer.compactPlayer.controls.playPauseButton.hover();
+      await expect(this.globalPlayer.compactPlayer.coverButton).toBeVisible({ timeout: options.timeout || 60000 });
+      await expect(this.globalPlayer.compactPlayer.coverButton).toHaveCSS('opacity', '1');
+      await this.globalPlayer.compactPlayer.coverButton.click();
+    }
     await expect(this.globalPlayer.player).not.toHaveClass(/\bis-compact\b/, { timeout: options.timeout || 60000 });
     await expect(this.globalPlayer.expandedShell).toHaveAttribute('aria-hidden', 'false');
     const checkpoint = await this.globalPlayer.readViewCheckpoint();

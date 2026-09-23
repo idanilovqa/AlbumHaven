@@ -18,9 +18,9 @@ const { FUNCTIONAL_SHARDS } = require('../../scripts/ci/resolve-ci-shard.cjs');
 
 const EXPECTED_SHARD_COUNTS = new Map([
   ['gallery-search-visual', 46],
-  ['cover-providers', 19],
+  ['cover-providers', 20],
   ['metadata-mutations', 14],
-  ['playback-utilities', 38],
+  ['playback-utilities', 40],
 ]);
 const EXPECTED_SHARD_DISPLAY_NAMES = new Map([
   ['gallery-search-visual', 'Gallery, Search & Visual'],
@@ -110,7 +110,7 @@ function functionalJobSource() {
   return { workflow, job: workflow.slice(start, end) };
 }
 
-test('functional shard contract pins the approved four-way 117-case assignment', () => {
+test('functional shard contract pins the approved four-way 120-case assignment', () => {
   const contract = readJson(shardContractPath);
   assert.equal(contract.browser, 'chrome');
   assert.equal(contract.workersPerInvocation, 1);
@@ -124,7 +124,7 @@ test('functional shard contract pins the approved four-way 117-case assignment',
     assert.ok(shard.invocations.length > 0, `${shard.name} must not be empty`);
     assert.ok(shard.suitePrerequisites.length > 0, `${shard.name} must declare prerequisites`);
   }
-  assert.equal(total, 117);
+  assert.equal(total, 120);
   for (const ownedCase of ownedCases(contract)) {
     assert.match(ownedCase.area, /^[a-z]+(?:-[a-z]+)*$/, ownedCase.case);
   }
@@ -802,7 +802,9 @@ validatorTest('playback restores three wave baselines and isolates conflicting e
     waves[0].invocations.flatMap((invocation) => invocation.cases.map(({ case: name }) => name)),
     [
       'FTC-SETTINGS-I02 Scrobbling statistics and readable Foobar help retain disabled playlist import',
-      'FTC-SETTINGS-H04 Period includes complete local dates across skipped midnight',
+    'FTC-SETTINGS-H04 Period includes complete local dates across skipped midnight',
+    'FTC-SETTINGS-S06 searches preserve independent tab queries and unsaved editors',
+    'FTC-ALBUM-DETAILS-022 touch artwork controls open full cover and Cover Lookup without hover',
       'FTC-UTIL-PROBLEMS-011 hides dead problem actions for a generated excluded album',
       'FTC-UTIL-PROBLEMS-011 opens the exact problematic track from album details',
       'FTC-UTIL-PROBLEMS-001 scopes exclusions with optimistic persistence and reload',
@@ -884,9 +886,9 @@ validatorTest('all four shards use explicit effect-compatible wave budgets', () 
   const matrix = readJson(path.join(repoRoot, 'tests', 'ci', 'test-data-matrix.json'));
   const expected = new Map([
     ['gallery-search-visual', { cases: 46, waves: [1, 2] }],
-    ['cover-providers', { cases: 19, waves: [1, 2] }],
+    ['cover-providers', { cases: 20, waves: [1, 2] }],
     ['metadata-mutations', { cases: 14, waves: [1, 2, 3] }],
-    ['playback-utilities', { cases: 38, waves: [1, 2, 3, 4] }],
+    ['playback-utilities', { cases: 40, waves: [1, 2, 3, 4] }],
   ]);
   const matrixByCase = new Map(matrix.map((row) => [row.case, row]));
 

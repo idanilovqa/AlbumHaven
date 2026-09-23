@@ -31,6 +31,7 @@ test('FTC-SETTINGS-A01 shared search preserves the staged loop style and Save hy
   await settingsModalAppBarActions.openSettings();
   await utilityTabBarActions.openTab('appearance');
   await utilityAppearanceActions.waitForReady();
+  await utilityAppearanceActions.expectWebDesktopOnlyDeviceControls();
   await utilityAppearanceActions.openSection('seekbar');
   const savedStyle = await appearance.liveLoopCluster.getAttribute('data-loop-control-style');
   const otherStyle = savedStyle === 'companion' ? 'capsule' : 'companion';
@@ -46,6 +47,7 @@ test('FTC-SETTINGS-A01 shared search preserves the staged loop style and Save hy
   await appearance.sidebar.search.fill('');
   await utilityAppearanceActions.cancel();
   await expect(appearance.loopStyleButton(savedStyle)).toHaveAttribute('aria-pressed', 'true');
+  await utilityAppearanceActions.expectWebDesktopOnlyDeviceControls();
   await appearance.loopStyleButton('companion').click();
   if (savedStyle !== 'companion') await utilityAppearanceActions.save();
   await utilityAppearanceActions.openSection('backgrounds');
@@ -59,6 +61,7 @@ test('FTC-SETTINGS-A01 shared search preserves the staged loop style and Save hy
   await utilityAppearanceActions.waitForReady();
   await utilityAppearanceActions.openSection('seekbar');
   await expect(appearance.loopStyleButton('companion')).toHaveAttribute('aria-pressed', 'true');
+  await utilityAppearanceActions.expectWebDesktopOnlyDeviceControls();
   await appearance.editorFooter.reset.root.click();
   await expect(appearance.loopStyleButton('capsule')).toHaveAttribute('aria-pressed', 'true');
   await expect(appearance.liveLoopCluster).toHaveAttribute('data-loop-control-style', 'companion');

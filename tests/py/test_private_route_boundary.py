@@ -441,6 +441,58 @@ def test_anonymous_root_redirects_to_login(method):
     assert resolver.calls == [None]
 
 
+@pytest.mark.parametrize(
+    ("method", "route"),
+    [
+        ("GET", "/utilities/cover-lookup/tasks"),
+        ("POST", "/utilities/cover-lookup/tasks/clear-completed"),
+        ("POST", "/utilities/cover-lookup/task/private-task/clear"),
+        ("POST", "/utilities/cover-lookup/task/private-task/mark-action-taken"),
+        ("POST", "/utilities/cover-lookup/task/private-task/cancel"),
+    ],
+)
+def test_authenticated_listener_without_cover_task_capabilities_cannot_read_or_mutate_tasks(
+    monkeypatch, method, route,
+):
+    from music_app.routes import api_wave_d_asgi_routes as cover_routes
+    from music_app.services.auth_session_csrf import issue_session_csrf
+    from music_app.services.current_actor import ActorState, LibraryRelationship
+
+    actor = CurrentActor(
+        state=ActorState.ACTIVE,
+        account_id=7,
+        session_id=11,
+        current_library_id=41,
+        library_relationships=(LibraryRelationship(41, "listener", False),),
+    )
+    app, resolver = _app(actor)
+    app.include_router(cover_routes.router)
+
+    def forbidden_task_access(*_args, **_kwargs):
+        pytest.fail("Capability denial must precede task lookup and mutation")
+
+    for operation in (
+        "list_cover_lookup_tasks",
+        "clear_completed_cover_lookup_tasks",
+        "mark_cover_lookup_task_notification_action_taken",
+        "cancel_cover_lookup_task_payload",
+        "cover_lookup_result",
+    ):
+        monkeypatch.setattr(cover_routes, operation, forbidden_task_access)
+    session = "s" * 43
+    csrf = issue_session_csrf(session, app.state.auth_policy_config)
+    status, body = _request(
+        app,
+        route,
+        method=method,
+        cookie=f"__Host-album_haven_session={session}; __Host-album_haven_csrf={csrf}",
+        headers={"origin": "https://music.test", "x-album-haven-csrf": csrf},
+    )
+    assert status == 403
+    assert resolver.calls == [session]
+    assert body == b'{"detail":"Action not permitted."}'
+
+
 def test_authenticated_bootstrap_owner_reaches_private_route():
     actor = CurrentActor(
         state=__import__("music_app.services.current_actor", fromlist=["ActorState"]).ActorState.ACTIVE,

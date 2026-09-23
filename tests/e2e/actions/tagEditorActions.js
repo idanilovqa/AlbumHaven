@@ -204,26 +204,79 @@ export class TagEditorActions {
   }
 
   async dragReorderBefore(filename, beforeFilename) {
+    try {
+      await this.startNativeReorder(filename);
+      await this.moveNativeReorderBefore(beforeFilename);
+    } finally {
+      await this.tagEditor.page.mouse.up();
+    }
+  }
+
+  async startNativeReorder(filename) {
     const grip = this.tagEditor.reorderGripByFilename(filename);
+    await grip.scrollIntoViewIfNeeded();
+    const box = await grip.boundingBox();
+    if (!box) throw new Error('The reorder grip must have visible bounds.');
+    const x = box.x + box.width / 2;
+    const y = box.y + box.height / 2;
+    await this.tagEditor.page.mouse.move(x, y);
+    await this.tagEditor.page.mouse.down();
+    // Start the native drag before scrolling a distant destination into view.
+    await this.tagEditor.page.mouse.move(x + 8, y, { steps: 2 });
+    await this.tagEditor.page.mouse.move(x + 9, y);
+    await expect(this.tagEditor.trackButtonByFilename(filename)).toHaveClass(/is-reorder-dragged/);
+  }
+
+  async moveNativeReorderBefore(beforeFilename) {
     const target = this.tagEditor.trackButtonByFilename(beforeFilename);
-    await expect(grip).toBeVisible();
-    await expect(target).toBeVisible();
+    await target.scrollIntoViewIfNeeded();
     const targetBox = await target.boundingBox();
     if (!targetBox) throw new Error('The reorder target must have visible bounds.');
-    await grip.dragTo(target, {
-      targetPosition: { x: targetBox.width / 2, y: 1 },
-    });
+    const x = targetBox.x + targetBox.width / 2;
+    const y = targetBox.y + targetBox.height / 4;
+    await this.tagEditor.page.mouse.move(x, y);
+    await this.tagEditor.page.mouse.move(x, y);
+    await expect(target).toHaveClass(/is-reorder-before/);
   }
 
   async dragReorderBelowList(filename) {
-    const grip = this.tagEditor.reorderGripByFilename(filename);
-    await expect(grip).toBeVisible();
-    await expect(this.tagEditor.trackList).toBeVisible();
-    const target = await this.tagEditor.trackList.boundingBox();
-    if (!target) throw new Error('The tag editor track list must have visible bounds.');
-    await grip.dragTo(this.tagEditor.trackList, {
-      targetPosition: { x: target.width / 2, y: target.height - 1 },
-    });
+    try {
+      await this.startNativeReorder(filename);
+      await this.tagEditor.trackButtons.last().scrollIntoViewIfNeeded();
+      const target = await this.tagEditor.trackList.boundingBox();
+      if (!target) throw new Error('The tag editor track list must have visible bounds.');
+      const x = target.x + target.width / 2;
+      const y = target.y + target.height - 2;
+      await this.tagEditor.page.mouse.move(x, y);
+      await this.tagEditor.page.mouse.move(x, y);
+      await expect(this.tagEditor.trackList).toHaveClass(/is-reorder-end/);
+    } finally {
+      await this.tagEditor.page.mouse.up();
+    }
+  }
+
+  async dragTrackWithoutGrip(filename, beforeFilename) {
+    await this.tagEditor.selectionToggleByFilename(filename).dragTo(
+      this.tagEditor.selectionToggleByFilename(beforeFilename),
+    );
+    await expect(this.tagEditor.reorderCueRows).toHaveCount(0);
+    await expect(this.tagEditor.trackList).not.toHaveClass(/is-reorder-end/);
+  }
+
+  async dropReorderOutsideList(filename) {
+    try {
+      await this.startNativeReorder(filename);
+      const header = await this.tagEditor.subtitle.boundingBox();
+      if (!header) throw new Error('The tag editor subtitle must have visible bounds.');
+      const x = header.x + header.width / 2;
+      const y = header.y + header.height / 2;
+      await this.tagEditor.page.mouse.move(x, y);
+      await this.tagEditor.page.mouse.move(x, y);
+    } finally {
+      await this.tagEditor.page.mouse.up();
+    }
+    await expect(this.tagEditor.reorderCueRows).toHaveCount(0);
+    await expect(this.tagEditor.trackList).not.toHaveClass(/is-reorder-end/);
   }
 
   async reorderWithKeyboard(filename, key) {
@@ -235,24 +288,9 @@ export class TagEditorActions {
   }
 
   async cancelActiveReorder(filename, beforeFilename) {
-    const grip = this.tagEditor.reorderGripByFilename(filename);
-    const target = this.tagEditor.trackButtonByFilename(beforeFilename);
-    await expect(grip).toBeVisible();
-    await expect(target).toBeVisible();
-    const gripBox = await grip.boundingBox();
-    const targetBox = await target.boundingBox();
-    if (!gripBox || !targetBox) throw new Error('The reorder source and target must have visible bounds.');
-    await this.tagEditor.page.mouse.move(
-      gripBox.x + (gripBox.width / 2),
-      gripBox.y + (gripBox.height / 2),
-    );
-    await this.tagEditor.page.mouse.down();
     try {
-      await this.tagEditor.page.mouse.move(
-        targetBox.x + (targetBox.width / 2),
-        targetBox.y + 1,
-        { steps: 5 },
-      );
+      await this.startNativeReorder(filename);
+      await this.moveNativeReorderBefore(beforeFilename);
       await this.tagEditor.page.keyboard.press('Escape');
       await expect(this.tagEditor.trackList).not.toHaveClass(/is-reorder-end/);
       await expect(this.tagEditor.reorderCueRows).toHaveCount(0);

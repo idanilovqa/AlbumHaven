@@ -1,6 +1,8 @@
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
+const os = require('node:os');
+const { createHash } = require('node:crypto');
 const test = require('node:test');
 const { pathToFileURL } = require('node:url');
 
@@ -12,6 +14,57 @@ const fixtureDataUrl = pathToFileURL(path.join(
   'helpers',
   'coverLookupFixtureData.js',
 )).href;
+
+test('provider artwork resolves the released contract identity by exact bytes, not legacy asset ID', async (t) => {
+  const { resolveProviderFixtureCover, findFixtureCoverBySubtitle } = await import(fixtureDataUrl);
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cover-contract-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  fs.mkdirSync(path.join(root, 'media'));
+  fs.mkdirSync(path.join(root, 'loopback'));
+  const bytes = Buffer.from('fixture-owned image bytes');
+  fs.writeFileSync(path.join(root, 'media', 'cover.jpg'), bytes);
+  const sha256 = createHash('sha256').update(bytes).digest('hex').toUpperCase();
+  const approved = { assetId: 'approved-cover-01', sha256 };
+  const contractPath = path.join(root, 'loopback', 'cover-responses.json');
+  const spec = {
+    cover_id: 'release-cover-01', artist: 'Released Artist', album: 'Released Album',
+    year: 2009, width: 7500, height: 7500, staged_path: 'media/cover.jpg',
+  };
+  const environment = {
+    ALBUM_HAVEN_FIXTURE_PROFILE: 'functional-core',
+    ALBUM_HAVEN_FIXTURE_ROOT: root,
+    ALBUM_HAVEN_MEDIA_ROOT: path.join(root, 'media'),
+  };
+  const writeContract = (covers, schemaVersion = 1) => fs.writeFileSync(
+    contractPath, JSON.stringify({ schemaVersion, covers }),
+  );
+  writeContract([spec]);
+  assert.deepEqual(resolveProviderFixtureCover(approved, environment), {
+    ...spec, assetId: 'release-cover-01', sha256,
+  });
+  assert.equal(resolveProviderFixtureCover(approved, {}), approved);
+  assert.equal(findFixtureCoverBySubtitle('Synthetic Cover Artist - Canonical Cover Fixture - 2026', {})
+    .assetId, 'approved-cover-01');
+  assert.throws(() => resolveProviderFixtureCover({ ...approved, sha256: '' }, environment), /exact SHA-256/);
+  assert.throws(() => resolveProviderFixtureCover({ ...approved, sha256: '0'.repeat(64) }, environment),
+    /exactly one released provider asset/);
+  writeContract([spec, { ...spec, cover_id: 'duplicate' }]);
+  assert.throws(() => resolveProviderFixtureCover(approved, environment), /exactly one released provider asset/);
+  for (const staged_path of ['../outside.jpg', '/outside.jpg', 'C:\\outside.jpg']) {
+    writeContract([{ ...spec, staged_path }]);
+    assert.throws(() => resolveProviderFixtureCover(approved, environment), /unsafe artwork path/);
+  }
+  writeContract([spec], 2);
+  assert.throws(() => resolveProviderFixtureCover(approved, environment), /schema version 1/);
+  writeContract([{ ...spec, width: 0 }]);
+  assert.throws(() => resolveProviderFixtureCover(approved, environment), /invalid artwork descriptor/);
+  const outside = fs.mkdtempSync(path.join(os.tmpdir(), 'cover-contract-outside-'));
+  t.after(() => fs.rmSync(outside, { recursive: true, force: true }));
+  fs.writeFileSync(path.join(outside, 'cover.jpg'), bytes);
+  fs.symlinkSync(outside, path.join(root, 'linked-outside'), 'junction');
+  writeContract([{ ...spec, staged_path: 'linked-outside/cover.jpg' }]);
+  assert.throws(() => resolveProviderFixtureCover(approved, environment), /unsafe artwork path/);
+});
 
 test('cover lookup scenarios own distinct mutable album identities', async () => {
   const { COVER_LOOKUP_TEST_TARGETS } = await import(fixtureDataUrl);
@@ -115,7 +168,9 @@ test('notification text selection drags across measured text lines instead of th
     .split('async readTaskElapsed', 1)[0];
 
   assert.match(method, /document\.createRange\(\)/);
-  assert.match(method, /range\.getClientRects\(\)/);
+  assert.match(method, /firstCharacterRange\.getBoundingClientRect\(\)/);
+  assert.match(method, /candidateRange\.getBoundingClientRect\(\)/);
+  assert.doesNotMatch(method, /selectNodeContents\(element\)/);
   assert.match(method, /textRects\[0\][\s\S]*textRects\[textRects\.length - 1\]/);
   assert.doesNotMatch(method, /box\.y \+ \(box\.height \/ 2\)/);
 });
@@ -133,9 +188,8 @@ test('notification text selection ends inside the final text glyph instead of th
     .split('async readTaskElapsed', 1)[0];
 
   assert.match(method, /NodeFilter\.SHOW_TEXT/);
-  assert.match(method, /lastTextNode/);
-  assert.match(method, /lastCharacterRange\.setStart\(lastTextNode, lastTextEnd - 1\)/);
-  assert.match(method, /lastCharacterRange\.setEnd\(lastTextNode, lastTextEnd\)/);
+  assert.match(method, /candidateRange\.setStart\(textNode, candidateTextEnd - 1\)/);
+  assert.match(method, /candidateRange\.setEnd\(textNode, candidateTextEnd\)/);
   assert.match(method, /endRect\.left \+ \(endRect\.right - endRect\.left\) \* 0\.75/);
   assert.doesNotMatch(method, /endRect\.right - 2/);
 });

@@ -13,6 +13,8 @@ export class SettingsIntegrations {
     this.save = this.detail.getByRole('button', { name: 'Save library settings', exact: true });
     this.error = this.detail.locator('[data-on-page-alert="error"]');
     this.search = page.locator('#utility-problematic-search');
+    this.visibleNavigation = page.locator('[data-utility-integration-key]:visible');
+    this.searchEmpty = page.locator('[data-integration-search-empty]');
     this.playbackStatistics = this.detail.getByRole('heading', { name: 'Playback statistics', exact: true });
     this.importButton = this.detail.getByRole('button', { name: 'Import', exact: true });
     this.instructions = this.detail.getByRole('button', { name: 'Read setup instructions', exact: true });
@@ -20,6 +22,10 @@ export class SettingsIntegrations {
     this.guideClose = this.guide.getByRole('button', { name: 'Close', exact: true });
   }
   navigation(label) { return this.page.locator('[data-utility-integration-key]').filter({ hasText: new RegExp(`^${label}$`, 'u') }); }
+  async isRetainedField(handle) {
+    // parity-check: allow-read-only-measurement-evaluate -- search must retain the actual unsaved input, not mount a lookalike
+    return handle.evaluate(node => node.isConnected);
+  }
   section(title) { return this.detail.locator('.library-settings-section').filter({ has: this.page.getByRole('heading', { name: title, exact: true }) }); }
   roots(title) { return this.section(title).getByRole('textbox'); }
   async rootValues(title) {

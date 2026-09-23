@@ -36,11 +36,11 @@ function buildExpectedCloudE2EInventory({
     fixtureMode: target.fixtureMode,
   }));
   const coverageOnlyTargets = performance.filter((target) => !target.measurementExpected).map((target) => target.target);
-  if (coverageOnlyTargets.length !== 1 || coverageOnlyTargets[0] !== 'scan-page') {
-    throw new Error('cloud E2E inventory must declare only scan-page as coverage-only');
+  if (coverageOnlyTargets.length !== 3 || coverageOnlyTargets[0] !== 'scan-page' || coverageOnlyTargets[1] !== 'scan-health' || coverageOnlyTargets[2] !== 'scan-error') {
+    throw new Error('cloud E2E inventory must declare only scan-page, scan-health, and scan-error as coverage-only');
   }
-  if (functional.length !== 4 || performance.length !== 19) {
-    throw new Error(`cloud E2E inventory mismatch: expected 4 functional and 19 performance, got ${functional.length} and ${performance.length}`);
+  if (functional.length !== 4 || performance.length !== 21) {
+    throw new Error(`cloud E2E inventory mismatch: expected 4 functional and 21 performance, got ${functional.length} and ${performance.length}`);
   }
   const ids = [...functional, ...performance].map((entry) => entry.childId);
   const names = [...functional, ...performance].map((entry) => entry.artifactName);
@@ -328,11 +328,12 @@ function normalizePerformance(row, artifact, run, previousEntries, now) {
     if (row.measurementExpected !== false || payload.coverageOnly !== true
       || payload.attempts.length !== 0
       || (payload.series !== undefined && (!Array.isArray(payload.series) || payload.series.length !== 0))
-      || payload.attemptCount !== 1 || payload.testCount !== 2 || !Array.isArray(payload.cases)) {
+      || payload.attemptCount !== 1 || payload.testCount !== (row.target === 'scan-page' ? 2 : 1) || !Array.isArray(payload.cases)) {
       throw new Error(`malformed coverage-only performance result ${row.target}`);
     }
     const screenshotFiles = [];
-    const expectedCaseIds = ['FTC-OPS-003C', 'FTC-OPS-003E'];
+    const expectedCaseIds = row.target === 'scan-error' ? ['FTC-OPS-003G']
+      : row.target === 'scan-health' ? ['FTC-OPS-003F'] : ['FTC-OPS-003C', 'FTC-OPS-003E'];
     const cases = payload.cases.map((entry) => {
       if (!entry || !expectedCaseIds.includes(entry.testId) || typeof entry.name !== 'string'
         || !['passed', 'failed', 'skipped', 'timedOut', 'interrupted'].includes(entry.status)

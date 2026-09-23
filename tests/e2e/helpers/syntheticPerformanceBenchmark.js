@@ -976,8 +976,10 @@ export const UTILITY_PROBLEMATIC_FILES_LOCAL_BENCHMARK = defineBenchmark({
       metricPath: 'coldProblematicApiMs',
       units: 'ms',
       description: 'The cold Problematic Files API request should complete end to end within the 1000 ms target plus the owner-approved 200 ms grace.',
-      observedBaseline: 239,
-      observedRange: { min: 176, max: 305 },
+      // Historical 15-row HTTP-probe timings are retained in the benchmark notes;
+      // native fetch timing on the 706-row fixture has no established baseline.
+      observedBaseline: null,
+      observedRange: { min: null, max: null },
       targetMaximum: 1000,
       graceMs: 200,
       maxAllowed: 1200,
@@ -987,10 +989,10 @@ export const UTILITY_PROBLEMATIC_FILES_LOCAL_BENCHMARK = defineBenchmark({
       checkpointKey: 'problematic-files-response-bytes',
       metricPath: 'problematicResponseBytes',
       units: 'bytes',
-      description: 'The Problematic Files response body should remain at or below 400 KiB.',
-      observedBaseline: 80037,
-      observedRange: { min: 80037, max: 80037 },
-      maxAllowed: 409600,
+      description: 'The approved 706-row fixture response must remain at or below its 2 MiB test budget; this is not an application response cap.',
+      observedBaseline: null,
+      observedRange: { min: null, max: null },
+      maxAllowed: 2097152,
     },
     {
       key: 'problematicReadyMs',

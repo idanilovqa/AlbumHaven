@@ -1,5 +1,6 @@
 import { expect, test } from '../support/baseFixtures.js';
 import { SettingsRefactorShell } from '../poms/settingsRefactorShell.js';
+import { SettingsIntegrations } from '../poms/settingsIntegrations.js';
 
 async function openProblems({ page, galleryActions, settingsModalAppBarActions, utilityTabBarActions, utilityProblematicFilesActions }) {
   await galleryActions.goto();
@@ -27,6 +28,120 @@ async function expectFilterInside(shell) {
       && menu.top >= anchor.bottom - 1;
   }).toBe(true);
 }
+
+test('FTC-SETTINGS-S06 searches preserve independent tab queries and unsaved editors', { tag: '@area:settings' }, async ({
+  page, galleryActions, settingsModalAppBarActions, utilityTabBarActions,
+  utilityRulesActions, utilityIntegrationsActions, utilityAppearanceActions,
+}) => {
+  await galleryActions.goto();
+  await galleryActions.waitForGalleryReady();
+  await settingsModalAppBarActions.openSettings();
+  const shell = new SettingsRefactorShell(page);
+  const rules = utilityRulesActions.utilityRulesTab;
+  const integrations = new SettingsIntegrations(page);
+  const appearance = utilityAppearanceActions.utilityAppearanceTab;
+  const noMatch = 'settings-search-no-match-7f402e';
+
+  await utilityTabBarActions.openTab('rules');
+  await utilityRulesActions.waitForReady();
+  await utilityRulesActions.openProblemExclusions();
+  await expect(rules.exclusionRows.first()).toBeVisible();
+  const ruleRows = await rules.exclusionRows.count();
+  const referenceKey = await rules.exclusionRows.first().getAttribute('data-cdt-row-key');
+  const ruleQuery = (await rules.exclusionReason(rules.exclusionRows.first()).textContent()).trim();
+  expect(ruleQuery).not.toBe('');
+  await shell.search.fill(ruleQuery);
+  await expect(rules.exclusionRowByKey(referenceKey)).toBeVisible();
+  await shell.search.fill(noMatch);
+  await expect(rules.exclusionRows).toHaveCount(0);
+  await expect(rules.ruleTitle).toHaveText('Problem exclusions');
+  await shell.search.fill('');
+  await expect(rules.exclusionRows).toHaveCount(ruleRows);
+  await shell.search.fill(ruleQuery);
+  await expect(rules.exclusionRowByKey(referenceKey)).toBeVisible();
+
+  await utilityTabBarActions.openTab('integrations');
+  await utilityIntegrationsActions.waitForReady();
+  await integrations.navigation('Library').click();
+  await expect(integrations.roots('Main Library').first()).toBeVisible();
+  await expect(shell.search).toHaveValue('');
+  const integrationCount = await integrations.visibleNavigation.count();
+  expect(integrationCount).toBeGreaterThan(1);
+  const rootInput = integrations.roots('Main Library').first();
+  const originalRoot = await rootInput.inputValue();
+  const draftRoot = 'settings-search-unsaved-draft';
+  await rootInput.fill(draftRoot);
+  const retainedInput = await rootInput.elementHandle();
+  try {
+    await shell.search.fill('Foobar2000');
+    await expect(integrations.visibleNavigation).toHaveCount(1);
+    await expect(integrations.navigation('Foobar2000')).toBeVisible();
+    await expect(integrations.navigation('Library')).toBeHidden();
+    await expect(rootInput).toHaveValue(draftRoot);
+    expect(await integrations.isRetainedField(retainedInput)).toBe(true);
+    await shell.search.fill(noMatch);
+    await expect(integrations.visibleNavigation).toHaveCount(0);
+    await expect(integrations.searchEmpty).toBeVisible();
+    await expect(rootInput).toHaveValue(draftRoot);
+    await shell.search.fill('');
+    await expect(integrations.visibleNavigation).toHaveCount(integrationCount);
+    await expect(integrations.searchEmpty).toBeHidden();
+    await expect(rootInput).toHaveValue(draftRoot);
+    expect(await integrations.isRetainedField(retainedInput)).toBe(true);
+  } finally {
+    await retainedInput.dispose();
+    await rootInput.fill(originalRoot);
+  }
+  await shell.search.fill('Library');
+
+  await utilityTabBarActions.openTab('appearance');
+  await utilityAppearanceActions.waitForReady();
+  await utilityAppearanceActions.openSection('seekbar');
+  await expect(shell.search).toHaveValue('');
+  const appearanceCount = await appearance.visibleSectionButtons.count();
+  expect(appearanceCount).toBeGreaterThan(1);
+  const savedStyle = await appearance.liveLoopCluster.getAttribute('data-loop-control-style');
+  const draftStyle = savedStyle === 'companion' ? 'capsule' : 'companion';
+  await appearance.loopStyleButton(draftStyle).click();
+  const retainedEditor = await appearance.editor.elementHandle();
+  try {
+    await shell.search.fill('Album page');
+    await expect(appearance.visibleSectionButtons).toHaveCount(1);
+    await expect(appearance.sectionButton('album-page')).toBeVisible();
+    await expect(appearance.sectionButton('seekbar')).toBeHidden();
+    await expect(appearance.loopStyleButton(draftStyle)).toHaveAttribute('aria-pressed', 'true');
+    expect(await appearance.isRetainedEditor(retainedEditor)).toBe(true);
+    await shell.search.fill(noMatch);
+    await expect(appearance.visibleSectionButtons).toHaveCount(0);
+    await expect(appearance.searchEmpty).toBeVisible();
+    await expect(appearance.loopStyleButton(draftStyle)).toHaveAttribute('aria-pressed', 'true');
+    await shell.search.fill('');
+    await expect(appearance.visibleSectionButtons).toHaveCount(appearanceCount);
+    await expect(appearance.searchEmpty).toBeHidden();
+    await expect(appearance.loopStyleButton(draftStyle)).toHaveAttribute('aria-pressed', 'true');
+    expect(await appearance.isRetainedEditor(retainedEditor)).toBe(true);
+    await expect(appearance.liveLoopCluster).toHaveAttribute('data-loop-control-style', savedStyle);
+  } finally {
+    await retainedEditor.dispose();
+    await utilityAppearanceActions.cancel();
+  }
+  await shell.search.fill('Album page');
+
+  await utilityTabBarActions.openTab('rules');
+  await utilityRulesActions.waitForReady();
+  await expect(shell.search).toHaveValue(ruleQuery);
+  await expect(rules.ruleTitle).toHaveText('Problem exclusions');
+  await expect(rules.exclusionRowByKey(referenceKey)).toBeVisible();
+  await utilityTabBarActions.openTab('integrations');
+  await utilityIntegrationsActions.waitForReady();
+  await expect(shell.search).toHaveValue('Library');
+  await expect(integrations.roots('Main Library').first()).toHaveValue(originalRoot);
+  await utilityTabBarActions.openTab('appearance');
+  await utilityAppearanceActions.waitForReady();
+  await expect(shell.search).toHaveValue('Album page');
+  await expect(appearance.loopStyleButton(savedStyle)).toHaveAttribute('aria-pressed', 'true');
+  await settingsModalAppBarActions.closeSettings();
+});
 
 test('FTC-SETTINGS-S01 six tabs preserve keyboard wrapping and joined Close hit testing', { tag: '@area:settings' }, async ({
   page, galleryActions, settingsModalAppBarActions, utilityTabBarActions, utilityProblematicFilesActions,

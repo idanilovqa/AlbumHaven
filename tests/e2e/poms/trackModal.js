@@ -294,6 +294,26 @@ export class TrackModal extends BasePage {
     }
   }
 
+  async readArtworkReleasedWidth() {
+    // parity-check: allow-read-only-measurement-evaluate -- measure the actual grid content box, excluding padding, borders and any scrollbar
+    return this.dialog.evaluate((dialog) => {
+      const body = dialog.querySelector('.track-modal-body');
+      const cover = dialog.querySelector('.track-modal-cover');
+      const main = dialog.querySelector('.track-modal-main');
+      if (!body || !cover || !main) throw new Error('Expected the Album Details artwork and main layout.');
+      const owner = getComputedStyle(body).display === 'contents' ? body.parentElement : body;
+      const ownerBounds = owner.getBoundingClientRect();
+      const mainBounds = main.getBoundingClientRect();
+      return {
+        contentRight: ownerBounds.left + owner.clientLeft + owner.clientWidth
+          - parseFloat(getComputedStyle(owner).paddingRight),
+        mainRight: mainBounds.right,
+        mainLeft: mainBounds.left,
+        coverRight: cover.getBoundingClientRect().right,
+      };
+    });
+  }
+
   async readCoverLightboxSources() {
     return {
       full: String(await this.coverLightboxButton.getAttribute('data-cover-src') || ''),

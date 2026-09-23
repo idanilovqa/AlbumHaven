@@ -377,6 +377,13 @@
               "config": "playwright.config.js",
               "project": "functional",
               "test": "tests/e2e/specs/coverLookup.spec.js",
+              "case": "FTC-COVERS-024 manual composer preserves staged images and exclusive choices at narrow width",
+              "area": "cover-providers"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/coverLookup.spec.js",
               "case": "FTC-COVERS-022 cover gallery loading starts before the task list responds",
               "area": "cover-providers"
             },
@@ -834,8 +841,22 @@
             {
               "config": "playwright.config.js",
               "project": "functional",
+              "test": "tests/e2e/specs/settingsRefactorShell.spec.js",
+              "case": "FTC-SETTINGS-S06 searches preserve independent tab queries and unsaved editors",
+              "area": "settings"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
               "test": "tests/e2e/specs/libraryFilesystemWatcher.functional.spec.js",
               "case": "FTC-LIBROOTS-016 / 017 / 018 reconciles filesystem changes and confirms missing-album removal",
+              "area": "album-details"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/albumDetailsComponents.functional.spec.js",
+              "case": "FTC-ALBUM-DETAILS-022 touch artwork controls open full cover and Cover Lookup without hover",
               "area": "album-details"
             },
             {

@@ -10,13 +10,13 @@ const galleryActionsUrl = pathToFileURL(path.join(
   'actions',
   'galleryActions.js',
 )).href;
-const galleryPageSource = require('node:fs').readFileSync(path.join(
+const galleryPageUrl = pathToFileURL(path.join(
   __dirname,
   '..',
   'e2e',
   'poms',
   'galleryPage.js',
-), 'utf8');
+)).href;
 
 function settledSnapshot(overrides = {}) {
   return {
@@ -182,10 +182,77 @@ test('gallery target classification treats the explicit settled empty UI as term
   );
 });
 
-test('gallery target state uses the current search input for local transitions that reuse a response payload', () => {
+test('gallery target state uses the current search input for local transitions that reuse a response payload', async () => {
+  const { GalleryPage } = await import(galleryPageUrl);
+  const targetStateSource = GalleryPage.prototype.readAlbumTargetState.toString();
   assert.match(
-    galleryPageSource,
+    targetStateSource,
     /inputQuery = await input\.count\(\) \? await input\.inputValue\(\) : ''[\s\S]*canonicalQuery = String\(inputQuery \|\| ''\)\.trim\(\)/,
   );
-  assert.doesNotMatch(galleryPageSource, /runtimeQuery|state\?\.view\?\.query/);
+  assert.doesNotMatch(targetStateSource, /runtimeQuery|state\?\.view\?\.query/);
+});
+
+test('artist-tree reflow checkpoint only observes runtime view and scroll state', async () => {
+  const { GalleryPage } = await import(galleryPageUrl);
+  const view = Object.freeze({ query: 'ДДТ', selected_artist: 'ДДТ' });
+  const state = Object.freeze({ view });
+  const scroll = Object.freeze({
+    scrollTop: 240,
+    querySelectorAll: () => [],
+    getBoundingClientRect: () => ({ top: 0, bottom: 600 }),
+  });
+  const checkpoint = await GalleryPage.prototype.readArtistTreeReflowCheckpoint.call({
+    galleryScroll: {
+      evaluate: (measure, reference) => require('node:vm').runInNewContext(
+        `"use strict"; (${measure.toString()})(scroll, reference)`,
+        { state, scroll, reference },
+      ),
+    },
+  });
+  assert.equal(checkpoint.query, 'ДДТ');
+  assert.equal(checkpoint.selectedArtist, 'ДДТ');
+  assert.equal(checkpoint.scrollTop, 240);
+});
+
+test('artist-tree checkpoint follows the captured trigger and rejects missing or hidden references', async () => {
+  const { GalleryPage } = await import(galleryPageUrl);
+  let referenceTop = 40;
+  const makeTrigger = (key, kind, top) => {
+    const card = Object.freeze({
+      getAttribute: () => `card-${key}`,
+      getBoundingClientRect: () => ({ top: top(), bottom: top() + 220 }),
+    });
+    return Object.freeze({
+      getAttribute: () => key,
+      matches: () => kind === 'artbox',
+      closest: () => card,
+      getBoundingClientRect: () => ({ top: top(), bottom: top() + 200 }),
+    });
+  };
+  const earlier = makeTrigger('earlier', 'artbox', () => 40);
+  const original = makeTrigger('original', 'artbox', () => referenceTop);
+  let triggers = [original];
+  const scroll = Object.freeze({
+    scrollTop: 240,
+    querySelectorAll: (selector) => selector === '.album-row' ? [] : triggers,
+    getBoundingClientRect: () => ({ top: 0, bottom: 600 }),
+  });
+  const pom = { galleryScroll: { evaluate: (measure, reference) => measure(scroll, reference) } };
+  const before = await GalleryPage.prototype.readArtistTreeReflowCheckpoint.call(pom);
+  assert.equal(before.anchorTrigger, 'artbox');
+  assert.equal(before.anchorVisible, true);
+  triggers = [earlier, original];
+  const after = await GalleryPage.prototype.readArtistTreeReflowCheckpoint.call(pom, before);
+  assert.equal(after.anchorKey, 'original');
+  assert.equal(after.anchorCardKey, 'card-original');
+  assert.equal(after.anchorOffset, 40);
+  assert.equal(after.anchorVisible, true);
+  referenceTop = -300;
+  const hidden = await GalleryPage.prototype.readArtistTreeReflowCheckpoint.call(pom, before);
+  assert.equal(hidden.anchorVisible, false);
+  triggers = [earlier];
+  const missing = await GalleryPage.prototype.readArtistTreeReflowCheckpoint.call(pom, before);
+  assert.equal(missing.anchorKey, '');
+  assert.equal(missing.anchorOffset, null);
+  assert.equal(missing.anchorVisible, false);
 });

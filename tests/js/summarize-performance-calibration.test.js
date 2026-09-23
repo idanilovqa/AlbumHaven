@@ -98,7 +98,7 @@ test('uses every retained sample, groups local and CI fingerprints, and reports 
   assert.equal(summary.thresholdDecision.action, 'retain-unchanged');
   assert.equal(summary.thresholdDecision.exceptionsRequireOwnerApproval, true);
   assert.equal(summary.excludedEvidenceCount, 2);
-  assert.equal(summary.targets.length, 19);
+  assert.equal(summary.targets.length, 21);
 
   const observed = summary.targets.find((entry) => entry.name === target);
   assert.equal(observed.calibrationState, 'reset-by-fingerprint-or-source-revision');
@@ -149,7 +149,7 @@ test('does not require 20 samples per target or a 380-sample paid campaign', () 
 test('fails closed on invented registries, malformed measurements, and untrusted provenance', () => {
   const partial = input([sampleFor('local', 1, 786)]);
   partial.performanceContract.targets.pop();
-  assert.throws(() => summarizePerformanceCalibration(partial), /exact checked-in 19-target/i);
+  assert.throws(() => summarizePerformanceCalibration(partial), /exact checked-in 21-target/i);
   const malformed = input([sampleFor('local', 1, 786)]);
   malformed.samples[0].result.series[0].attempts[0].actualValue = Number.NaN;
   assert.throws(() => summarizePerformanceCalibration(malformed), /malformed performance sample/i);

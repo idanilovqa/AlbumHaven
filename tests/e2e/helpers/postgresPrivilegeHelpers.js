@@ -192,3 +192,51 @@ export async function temporarilyRevokeRuntimeInsertPrivileges(tableNames, optio
     options,
   );
 }
+
+export async function withScanPublicationPrivilegeFailure(run, options = {}) {
+  const env = options.env || process.env;
+  const setupUrl = env.ALBUM_HAVEN_SCAN_PERFORMANCE_SETUP_DATABASE_URL;
+  const connection = resolveIsolatedE2ESetupConnection(setupUrl);
+  let runtime;
+  try {
+    runtime = new URL(env.ALBUM_HAVEN_SCAN_PERFORMANCE_DATABASE_URL);
+  } catch {
+    throw new Error('Scan publication fault requires an exact isolated runtime identity.');
+  }
+  const setup = new URL(connection.databaseTarget);
+  if (!connection.databaseName.startsWith('album_haven_ci_')
+    || runtime.protocol !== setup.protocol || runtime.hostname !== setup.hostname
+    || runtime.port !== setup.port || runtime.pathname !== setup.pathname
+    || decodeURIComponent(runtime.username) !== connection.runtimeRoleName
+    || runtime.search || runtime.hash || typeof run !== 'function') {
+    throw new Error('Scan publication fault requires an exact isolated setup/runtime identity.');
+  }
+  const relations = ['library.local_track_files'];
+  const guard = await temporarilyRevokeRuntimePrivileges(relations, 'INSERT', new Set(relations), {
+    ...options,
+    env: { ...env, ALBUM_HAVEN_FAKE_E2E_SETUP_DATABASE_URL: setupUrl },
+  });
+  const failures = [];
+  let result;
+  try {
+    const { stdout } = await executePsql({
+      args: ['--no-psqlrc', '--quiet', '--tuples-only', '--no-align',
+        `--dbname=${connection.databaseTarget}`, '--set=ON_ERROR_STOP=1',
+        `--command=${privilegeQuery(relations, 'INSERT', connection.runtimeRoleName)}`],
+      env: psqlEnvironment(env, connection.password, options.platform || process.platform),
+      execFileAsync: options.execFileAsync || execFileAsyncDefault,
+      platform: options.platform || process.platform,
+    });
+    if (!['library.local_track_files|f', 'library.local_track_files|false'].includes(String(stdout).trim())) {
+      throw new Error('Scan publication INSERT privilege was not effectively revoked.');
+    }
+    result = await run();
+  } catch (error) {
+    failures.push(error);
+  } finally {
+    try { await guard.restore(); } catch (error) { failures.push(error); }
+  }
+  if (failures.length > 1) throw new AggregateError(failures, 'Scan failure scenario and privilege restoration failed.');
+  if (failures.length) throw failures[0];
+  return result;
+}

@@ -70,6 +70,16 @@ export class UtilityAppearanceActions {
     await expect(this.utilityAppearanceTab.documentRoot).toHaveAttribute('data-compact-player-style', normalized);
   }
 
+  async expectWebDesktopOnlyDeviceControls() {
+    const appearance = this.utilityAppearanceTab;
+    await expect(appearance.deviceButton('Web / Desktop')).toHaveAttribute('aria-pressed', 'true');
+    for (const name of ['Mobile', 'TV']) {
+      await expect(appearance.deviceButton(name)).toBeVisible();
+      await expect(appearance.deviceButton(name)).toBeDisabled();
+    }
+    await expect(appearance.deviceModeControls).toHaveCount(0);
+  }
+
   async saveDockedCompactPlayerBehavior(behavior) {
     const normalized = behavior === 'stay_docked' ? 'stay_docked' : 'follow_sidebar';
     await this.saveCompactPlayerStyle('docked');

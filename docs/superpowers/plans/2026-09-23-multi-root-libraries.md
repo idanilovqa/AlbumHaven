@@ -86,3 +86,10 @@ new server (PID 20024) was stopped out of caution; the cover worker (PID 44676)
 continued. The earlier listener check silently suppressed an access-denied error
 and was not evidence of failed startup. Live owner review remains open; verify
 the server with a direct HTTP request and monitor memory on the next launch.
+
+The current one-worker cover pass must not be restarted merely to raise
+concurrency. `run_cover_jobs` writes individual cover files during the pass, but
+publishes the updated scan cache and saves the cover lookup cache after the job
+loop. Interrupting it now could discard in-memory metadata for completed jobs
+and require rework; let the existing pass finish unless the owner approves an
+explicit recovery plan.

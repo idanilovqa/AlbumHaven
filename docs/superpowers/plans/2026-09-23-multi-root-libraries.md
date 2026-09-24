@@ -77,9 +77,10 @@ accepted the build. The four requested roots are configured, migrations 0079,
 entries across Main, Hoard and New Arrivals. A read-only live query confirmed
 57,975 current Main files, 100,070 Hoard files across three roots, and 1,500
 New Arrivals files; five additional Main rows are marked scan-cache-stale.
-A separate missing-cover pass is
-running; its final results, functional E2E, large-library query performance,
-and full CI remain open.
+The app's read-only Problematic Files projection found 254 duplicate-marked
+album records; all 254 appear in its summary and carry the `Duplicate files`
+reason. A separate missing-cover pass is running; its final results,
+functional E2E, large-library query performance, and full CI remain open.
 
 The isolated runtime bundle built from 74 modules. A review server launched
 against the existing private-node configuration, completed startup with 159,545

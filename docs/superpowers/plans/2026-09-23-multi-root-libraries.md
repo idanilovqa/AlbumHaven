@@ -14,7 +14,7 @@
 - Defaults: card colors off, source hover outlines off, source icons on. At least one enabled; server and UI enforce the invariant.
 - Existing Main roots and move policies remain unchanged. No machine paths in committed defaults.
 - One test command at a time; Python and JavaScript must not overlap. Focused local verification only.
-- Initial implementation ends at owner manual acceptance. E2E, full CI, release and real-source scan remain gated; do not publish inherited branch changes implicitly.
+- Initial implementation still requires owner manual acceptance. E2E, full CI and release remain gated; the owner separately authorized real-root configuration and a full scan before acceptance. Do not publish inherited branch changes implicitly.
 - Delivery outcome: source-aware browse/play and duplicates, corresponding to partial AH-W02-001/002/003. AH-W02-004 dedicated review and AH-W02-005 moves remain open.
 - Prerequisites: existing categorized root persistence, media containment, PCM playback, shared GalleryCard and aggregate Appearance profiles.
 - Compatibility: additive account preferences with legacy defaults; no media moves/deletes, no change to root IDs or media references. Revert rendering independently without losing inventory.
@@ -45,7 +45,7 @@
 
 - [x] Inspect existing contracts and run focused category enumeration, second-root media containment, cover-target and offline-root tests.
 - [ ] If a gap fails an approved case, add a regression test before the minimal responsible-layer fix. No speculative replacement of working root/scan infrastructure.
-- [ ] Establish runnable local build prerequisites without changing production roots or initiating a scan before acceptance.
+- [ ] Launch the isolated build with the existing private-node configuration for owner manual acceptance; do not commit credentials.
 
 ## 4. Verification, documentation and manual handoff
 
@@ -53,7 +53,10 @@
 - [x] Complete two full relevant-diff local review passes; repair all confirmed issues. A substantive second-pass issue requires another full pass.
 - [x] Reconcile owning companion plan, UI registry and functional cases without overwriting concurrent private documentation changes. Check only proven milestones; leave release/manual/E2E/move items open.
 - [x] Provide the owner a runnable initial build and exact manual script: configure sources, test all three Appearance toggles and last-enabled constraint, hover/focus icons, inspect duplicates and play one selected copy.
-- [ ] After owner acceptance, configure authorized real roots, run full scan/missing-cover pass, report unavailable roots and provider failures; proceed to approved E2E/release gates separately.
+- [x] Configure the four owner-requested roots, apply and verify required migrations, and preserve the existing Main root and move policy.
+- [x] Run the full scan and verify published track-file inventory in Main, Hoard, and New Arrivals. The one-shot runner exited during post-scan cover planning because it omitted the app's logging initialization; the scan inventory itself was published.
+- [ ] Finish the missing-cover pass and report downloads, no-match/provider failures, unavailable roots, and remaining errors.
+- [ ] After owner manual acceptance, proceed to approved E2E and release gates separately.
 
 ## Progress
 
@@ -69,5 +72,8 @@ all validated findings; pass four found none. The component screenshots were
 visually inspected. Exact elapsed slice times were not recorded.
 
 This is not owner acceptance or release evidence. The owner has not manually
-accepted the build. Real root configuration, a full scan, cover fetching,
-functional E2E, large-library query performance, and full CI remain open.
+accepted the build. The four requested roots are configured, migrations 0079,
+0080 and 0081 match the live ledger, and a full scan published 159,545 file
+entries across Main, Hoard and New Arrivals. A separate missing-cover pass is
+running; its final results, functional E2E, large-library query performance,
+and full CI remain open.

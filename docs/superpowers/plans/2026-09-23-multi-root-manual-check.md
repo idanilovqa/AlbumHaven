@@ -25,11 +25,12 @@ Do not provision a replacement owner or reset credentials for this feature.
 2. Change options, press Cancel, and confirm saved styling is unchanged. Save a
    different valid combination and reload; confirm it persists. Card color,
    outline color and icons must behave independently.
-3. In library settings, preserve existing Main roots and move policy. Add the
-   owner-provided Hoard and New Arrivals paths in one save after initial acceptance.
-   A save triggers indexing plus missing-cover refresh. Do not configure a root
-   that overlaps another root. Report inaccessible mapped drives rather than
-   replacing them with an inferred location.
+3. In library settings, confirm the owner-provided Hoard and New Arrivals paths
+   are present, with the existing Main root and move policy preserved. All four
+   added folders were accessible when configured, and a full scan has published
+   their inventory. Do not configure a root that overlaps another root. Report
+   any later inaccessible mapped drive rather than replacing it with an inferred
+   location.
 4. Inspect Hoard and New Arrivals albums in Cards and Covers modes. Hover artwork:
    icons appear, but labels stay collapsed. Hover/focus each individual icon:
    only that label expands. Check the chest and mailbox/vinyl designs in both
@@ -51,6 +52,7 @@ Do not provision a replacement owner or reset credentials for this feature.
    inventory warnings remain available. `Album not found` is only for missing
    inventory, not missing artwork or duplicates.
 
-After acceptance, record full scan counts, missing-cover completion/no-match
-results, unavailable roots and remaining errors. Preserve existing selected art.
+The full scan has published 159,545 file entries. After the cover pass, record
+its completion/no-match results, unavailable roots and remaining errors.
+Preserve existing selected art.
 Functional E2E and complete CI/release gates are separate follow-up checkpoints.

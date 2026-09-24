@@ -74,7 +74,10 @@ visually inspected. Exact elapsed slice times were not recorded.
 This is not owner acceptance or release evidence. The owner has not manually
 accepted the build. The four requested roots are configured, migrations 0079,
 0080 and 0081 match the live ledger, and a full scan published 159,545 file
-entries across Main, Hoard and New Arrivals. A separate missing-cover pass is
+entries across Main, Hoard and New Arrivals. A read-only live query confirmed
+57,975 current Main files, 100,070 Hoard files across three roots, and 1,500
+New Arrivals files; five additional Main rows are marked scan-cache-stale.
+A separate missing-cover pass is
 running; its final results, functional E2E, large-library query performance,
 and full CI remain open.
 

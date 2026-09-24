@@ -79,8 +79,10 @@ running; its final results, functional E2E, large-library query performance,
 and full CI remain open.
 
 The isolated runtime bundle built from 74 modules. A review server launched
-against the existing private-node configuration, but startup had not opened a
-listener after several minutes and its working set rose past 2.4 GB while free
-physical memory fell below 1 GB. Only that new server (PID 20024) was stopped;
-the cover worker (PID 44676) continued. Review-server startup remains open
-until it can be run without jeopardizing the cover pass.
+against the existing private-node configuration, completed startup with 159,545
+files and 14,673 albums hydrated, and served `/status` with HTTP 200. Its working
+set then rose past 2.4 GB while free physical memory fell below 1 GB. Only that
+new server (PID 20024) was stopped out of caution; the cover worker (PID 44676)
+continued. The earlier listener check silently suppressed an access-denied error
+and was not evidence of failed startup. Live owner review remains open; verify
+the server with a direct HTTP request and monitor memory on the next launch.

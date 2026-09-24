@@ -45,7 +45,7 @@
 
 - [x] Inspect existing contracts and run focused category enumeration, second-root media containment, cover-target and offline-root tests.
 - [ ] If a gap fails an approved case, add a regression test before the minimal responsible-layer fix. No speculative replacement of working root/scan infrastructure.
-- [ ] Launch the isolated build with the existing private-node configuration for owner manual acceptance; do not commit credentials.
+- [x] Launch the isolated build with the existing private-node configuration for owner manual acceptance; do not commit credentials.
 
 ## 4. Verification, documentation and manual handoff
 
@@ -86,6 +86,13 @@ new server (PID 20024) was stopped out of caution; the cover worker (PID 44676)
 continued. The earlier listener check silently suppressed an access-denied error
 and was not evidence of failed startup. Live owner review remains open; verify
 the server with a direct HTTP request and monitor memory on the next launch.
+
+The subsequent isolated review launch uses the app's built-in local HTTPS mode
+at `https://127.0.0.1:5001/login`, with the loopback URL and no trusted proxy
+for this process only. Startup again hydrated 159,545 files and 14,673 albums;
+an unverified-certificate HTTPS request returned the login page with HTTP 200.
+The review server was left running for owner manual acceptance. This does not
+prove the owner accepted the feature or that the missing-cover pass finished.
 
 The current one-worker cover pass must not be restarted merely to raise
 concurrency. `run_cover_jobs` writes individual cover files during the pass, but

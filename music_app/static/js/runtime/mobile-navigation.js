@@ -10,7 +10,7 @@ function isMobileClient() {
 function usesMobilePageLayout() { return Number(window.innerWidth) <= 900; }
 function mobilePageDescriptor(kind, album = null) {
   const albumKey = album ? String(getAlbumRequestKey(album) || '') : '';
-  const subtitle = album ? [album.album_artist || album.artist, album.year, album.total_duration_display].filter(Boolean).join(' · ') : '';
+  const subtitle = album ? [kind === 'cover-lookup' ? album.name : '', album.album_artist || album.artist, album.year, album.total_duration_display].filter(Boolean).join(' · ') : '';
   return { kind, albumKey, title: kind === 'utilities' ? 'Settings' : kind === 'cover-lookup' ? 'Cover lookup' : kind === 'non-album' ? 'Non-album tracks' : String(album?.name || 'Album'),
     subtitle, tab: kind === 'utilities' ? state.utility.activeTab : '' };
 }
@@ -25,9 +25,9 @@ function syncMobilePageShell() {
   outlet.hidden = !active;
   document.getElementById('mobile-back-button').hidden = !active;
   document.getElementById('mobile-library-button').hidden = Boolean(active);
-  for (const descriptor of mobilePageState.pages) {
-    const element = document.getElementById(MOBILE_PAGE_KINDS[descriptor.kind]);
-    if (element) { element.hidden = descriptor !== active; element.inert = descriptor !== active; }
+  for (const kind of mobilePageState.originals.keys()) {
+    const element = document.getElementById(MOBILE_PAGE_KINDS[kind]);
+    if (element) { element.hidden = kind !== active?.kind; element.inert = kind !== active?.kind; }
   }
   if (active) {
     document.getElementById('mobile-page-title').textContent = active.title;
@@ -76,7 +76,13 @@ function presentMobilePage(descriptor) {
   }
   // A changed album reuses one component; older history entries retain its key for Back/Forward.
   const previousIndex = mobilePageState.pages.findIndex(page => page.kind === descriptor.kind);
-  if (previousIndex >= 0) mobilePageState.pages.splice(previousIndex);
+  if (previousIndex >= 0) {
+    // Returning to an existing page (for example from player artwork) must retire
+    // all intervening surfaces. Dropping descriptors alone leaves orphaned UI visible.
+    const retired = mobilePageState.pages.splice(previousIndex + 1);
+    retired.reverse().forEach(cleanupMobilePage);
+    mobilePageState.pages.splice(previousIndex, 1);
+  }
   mobilePageState.pages.push(descriptor);
   closeArtistsDrawer({ restoreFocus: false });
   closeGalleryMainSurface?.(false);

@@ -192,3 +192,16 @@ html[data-client-profile="mobile"] :is([data-account-menu-admin], [data-utility-
   .global-player:not(.is-compact) .player-play-cluster[data-loop-control-style] .loop-play-control-button { width: 40px; height: 40px; min-width: 40px; min-height: 40px; top: 2px; left: 2px; }
   .global-player .player-time { min-width: 0; max-width: 52px; white-space: normal; line-height: 1.1; font-size: 9px; }
 }
+
+/* Device-profile controls are a stacked field group, not squeezed into a toolbar. */
+.appearance-device-controls { flex-wrap: wrap; }
+.appearance-device-controls .appearance-device-help { flex: 1 0 100%; }
+@media (max-width: 900px) {
+  .appearance-device-controls { display: flex; flex-direction: column; align-items: stretch; gap: 8px; }
+  .appearance-device-controls > * { width: 100%; min-width: 0; box-sizing: border-box; }
+  .appearance-device-controls .appearance-device-selector { flex-wrap: nowrap; }
+  .appearance-device-controls .appearance-device-selector button { padding: 7px 8px; font-size: 13px; white-space: nowrap; }
+  .appearance-device-controls .appearance-device-mode { margin: 0; }
+  .appearance-device-controls .appearance-device-mode button { min-height: 38px; font-size: 12px; padding: 6px 10px; }
+  .appearance-device-controls .appearance-device-help { flex-basis: auto; margin: 0; }
+}

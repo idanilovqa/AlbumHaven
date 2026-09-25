@@ -6,7 +6,10 @@ from collections.abc import Callable, Mapping
 from datetime import datetime, timezone
 from typing import Any
 
-from music_app.services.admin_account_creation import CreatedAccount
+from music_app.services.admin_account_creation import CreatedAccount, _capabilities
+from music_app.services.admin_authority import ADMIN_LIBRARY_AUTHORITY_SQL, lock_admin_accounts
+from music_app.services.capability_assignments import CapabilityAssignment, store_assignment
+from music_app.services.capabilities import CAPABILITY_KEYS
 from music_app.services.admin_member_mutation_postgres import lock_current_actor_session
 from music_app.services.auth_invitation_models import InvitationDelivery
 from music_app.services.auth_tokens import IssuedOpaqueToken
@@ -60,9 +63,14 @@ class PostgresAdminAccountRepository:
         invitation_expires_at: datetime | None,
         created_at: datetime,
         request_ref: str,
+        assignment: CapabilityAssignment | None = None,
     ) -> CreatedAccount:
         _positive_id(actor_account_id)
         _positive_id(library_id)
+        capability_keys = _capabilities(capability_keys)
+        if assignment is not None and (not isinstance(assignment, CapabilityAssignment)
+                                       or assignment.effective_keys != capability_keys):
+            raise ValueError("Managed account assignment is invalid.")
         created_at = _aware_utc(created_at)
         if invitation is None and invitation_expires_at is not None:
             raise ValueError("Managed account invitation expiry is invalid.")
@@ -75,23 +83,17 @@ class PostgresAdminAccountRepository:
         try:
             with self._connect(self._database_url) as connection:
                 with connection.transaction():
+                    lock_admin_accounts(connection, actor_account_id, actor_account_id)
                     authority = connection.execute(
-                        """
-                        select owner.account_id as actor_account_id,
-                               library.id as library_id
-                        from app.bootstrap_owners owner
-                        join app.accounts account
-                          on account.id = owner.account_id
-                         and account.is_active is true
-                         and account.disabled_at is null
-                        join library.libraries library
-                          on library.id = %s
-                         and library.owner_account_id = account.id
-                        where owner.account_id = %s
-                          and owner.owner_key = 'local-bootstrap-owner'
-                        for update of account, library
-                        """,
-                        (library_id, actor_account_id),
+                        f"""
+                        select actor.id as actor_account_id, locked_library.id as library_id
+                        from app.accounts actor
+                        join library.libraries locked_library on locked_library.id = %s
+                        where actor.id = %s and actor.is_active is true
+                          and actor.disabled_at is null
+                          and {ADMIN_LIBRARY_AUTHORITY_SQL}
+                        for update of actor, locked_library
+                        """, (library_id, actor_account_id),
                     ).fetchall()
                     if len(authority) != 1:
                         raise PermissionError(
@@ -100,7 +102,7 @@ class PostgresAdminAccountRepository:
                     lock_current_actor_session(
                         connection, actor_account_id=actor_account_id,
                         actor_session_id=actor_session_id, clock=self._clock,
-                        require_recent_auth=False,
+                        require_recent_auth=bool(set(capability_keys) & CAPABILITY_KEYS),
                     )
                     account_id = _returned_id(
                         connection.execute(
@@ -139,6 +141,9 @@ class PostgresAdminAccountRepository:
                             """,
                             (account_id, capability_key, library_id),
                         )
+                    if assignment is not None:
+                        store_assignment(connection, account_id=account_id, library_id=library_id,
+                                         assignment=assignment)
                     invitation_delivery = None
                     if invitation is not None:
                         token_id = _returned_id(

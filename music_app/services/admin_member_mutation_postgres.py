@@ -8,7 +8,13 @@ from datetime import datetime, timedelta, timezone
 import re
 from typing import Any, Iterator
 
-from music_app.services.admin_account_creation import MANAGED_CAPABILITY_KEYS
+from music_app.services.admin_authority import (
+    ADMIN_LIBRARY_AUTHORITY_SQL, ADMIN_TARGET_PROTECTION_SQL, lock_admin_accounts,
+)
+from music_app.services.capability_assignments import (
+    ASSIGNABLE_CAPABILITY_KEYS, AssignmentConflict, build_assignment, read_assignment, access_revision as assignment_revision,
+    store_assignment,
+)
 
 try:  # pragma: no cover - exercised with the optional runtime driver.
     import psycopg
@@ -95,7 +101,9 @@ class PostgresAdminMemberMutationService:
         capability_keys: Iterable[object],
         confirm_disable: object,
         confirm_remove_access: object,
-        request_ref: object,
+        request_ref: str,
+        role_keys: object = None,
+        access_revision: object = None,
     ) -> None:
         actor_id = _positive_id(actor_account_id)
         target_id = _positive_id(target_account_id)
@@ -104,7 +112,9 @@ class PostgresAdminMemberMutationService:
         access = _boolean(current_library_access)
         disable_confirmed = _boolean(confirm_disable)
         removal_confirmed = _boolean(confirm_remove_access)
-        capabilities = _capabilities(capability_keys, allow_empty=not access)
+        assignment = (build_assignment(role_keys, capability_keys, allow_empty=not access)
+                      if role_keys is not None else None)
+        capabilities = assignment.effective_keys if assignment is not None else _capabilities(capability_keys, allow_empty=not access)
         reference = _request_ref(request_ref)
         now = self._recent_now(actor_authenticated_at)
 
@@ -124,6 +134,18 @@ class PostgresAdminMemberMutationService:
                     # Owner capabilities are inherited; saving their displayed
                     # values must not replace the owner membership or grants.
                     return
+                current_keys = tuple(locked.get("current_capability_keys") or ())
+                previous = read_assignment(locked.get("access_assignment"), current_keys)
+                if assignment is not None:
+                    expected = assignment_revision(previous, current_keys,
+                        active=locked.get("target_is_active") is True,
+                        access=locked.get("target_has_library_access") is True)
+                    if not isinstance(access_revision, str) or access_revision != expected:
+                        raise AssignmentConflict("Access changed. Reload this user before saving again.")
+                elif previous.role_keys:
+                    raise AssignmentConflict("This user has assigned roles. Reload before changing permissions.")
+                if actor_id == target_id and (not active or not access or "capability.admin" not in capabilities):
+                    raise PermissionError("Keep Admin and library access on your own account.")
                 if locked.get("target_is_active") is True and not active and not disable_confirmed:
                     raise DestructiveConfirmationRequired("Account disable confirmation is required.")
                 if (
@@ -168,8 +190,9 @@ class PostgresAdminMemberMutationService:
                     update app.capabilities set revoked_at = %s
                     where account_id = %s and scope_kind = 'library'
                       and scope_id = %s and revoked_at is null
+                      and (%s or capability_key = any(%s))
                     """,
-                    (now, target_id, current_library_id),
+                    (now, target_id, current_library_id, not access, sorted(ASSIGNABLE_CAPABILITY_KEYS)),
                 )
                 if access:
                     for capability_key in capabilities:
@@ -182,6 +205,9 @@ class PostgresAdminMemberMutationService:
                             """,
                             (target_id, capability_key, current_library_id, now),
                         )
+                if assignment is not None:
+                    store_assignment(connection, account_id=target_id, library_id=current_library_id,
+                        assignment=assignment if access else build_assignment((), (), allow_empty=True))
                 if not active:
                     connection.execute(
                         """
@@ -309,10 +335,11 @@ class PostgresAdminMemberMutationService:
         library_id: int,
         target_account_id: int,
     ) -> Mapping[str, object]:
+        lock_admin_accounts(connection, actor_account_id, target_account_id)
         rows = connection.execute(
-            """
+            f"""
             with locked_accounts as (
-              select id, account_kind, is_active, disabled_at
+              select id, account_kind, is_active, disabled_at, metadata
               from app.accounts
               where id in (%s, %s)
               order by id for update
@@ -323,7 +350,13 @@ class PostgresAdminMemberMutationService:
             select actor.id as actor_account_id,
                    locked_library.id as library_id,
                    target.id as target_account_id,
-                   target.is_active as target_is_active,
+                   (target.is_active is true and target.disabled_at is null) as target_is_active,
+                   target.metadata -> 'library_access_assignments_v1'
+                     -> locked_library.id::text as access_assignment,
+                   coalesce((select array_agg(capability_key order by capability_key)
+                     from app.capabilities where account_id = target.id
+                     and scope_kind = 'library' and scope_id = locked_library.id
+                     and revoked_at is null), array[]::text[]) as current_capability_keys,
                    exists (
                      select 1 from app.bootstrap_owners
                      where account_id = target.id
@@ -335,13 +368,12 @@ class PostgresAdminMemberMutationService:
                        and account_id = target.id
                    ) as target_has_library_access
             from locked_accounts actor
-            join app.bootstrap_owners authority
-              on authority.account_id = actor.id
-             and authority.owner_key = 'local-bootstrap-owner'
-            join locked_library on locked_library.owner_account_id = actor.id
+            join locked_library on true
             join locked_accounts target on target.id = %s
             where actor.id = %s and actor.is_active is true
               and actor.disabled_at is null
+              and {ADMIN_LIBRARY_AUTHORITY_SQL}
+              and {ADMIN_TARGET_PROTECTION_SQL}
               and target.account_kind in ('bootstrap_owner', 'managed_user')
               and (
                 target.id = locked_library.owner_account_id
@@ -401,7 +433,7 @@ def _capabilities(values: Iterable[object], *, allow_empty: bool = False) -> tup
         (not received and not allow_empty)
         or any(not isinstance(item, str) for item in received)
         or len(set(received)) != len(received)
-        or any(item not in MANAGED_CAPABILITY_KEYS for item in received)
+        or any(item not in ASSIGNABLE_CAPABILITY_KEYS for item in received)
     ):
         raise ValueError("Account management capabilities are invalid.")
     return tuple(sorted(received))

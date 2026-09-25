@@ -33,6 +33,7 @@ CAPABILITY_ACTIONS = MappingProxyType({
     "delete": frozenset({"library.inventory.manage", "library.covers.delete"}),
     "admin": frozenset({
         "accounts.read", "accounts.create", "accounts.manage",
+        "accounts.membership.manage", "accounts.capabilities.manage",
         "accounts.sessions.revoke", "accounts.welcome.send",
         "accounts.password_reset.send", "accounts.invitation.copy",
         "accounts.invitation.send", "accounts.reauthenticate",

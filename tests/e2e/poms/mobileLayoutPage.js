@@ -1,7 +1,7 @@
-const { expect } = require('@playwright/test');
+import { expect } from '@playwright/test';
 
 /** Selectors and user interactions for the shared responsive application shell. */
-class MobileLayoutPage {
+export class MobileLayoutPage {
   constructor(page) {
     this.page = page;
     this.loginForm = page.getByRole('form', { name: 'Album Haven sign in' });
@@ -83,4 +83,3 @@ class MobileLayoutPage {
   }
 }
 
-module.exports = { MobileLayoutPage };

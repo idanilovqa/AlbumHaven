@@ -1,7 +1,7 @@
-const { test, expect } = require('@playwright/test');
-const path = require('node:path');
-const fs = require('node:fs/promises');
-const { MobileLayoutPage } = require('../poms/mobileLayoutPage');
+import { test, expect } from '@playwright/test';
+import path from 'node:path';
+import fs from 'node:fs/promises';
+import { MobileLayoutPage } from '../poms/mobileLayoutPage.js';
 
 const screenshotDirectory = path.resolve('test-results/mobile-screenshots');
 async function capture(page, name) {

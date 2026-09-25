@@ -373,6 +373,7 @@ function openNonAlbumModal() {
       actionsHtml: buildLooseTracksHeaderActionsHtml(),
     });
   }
+  if (typeof presentMobilePage === 'function') presentMobilePage(mobilePageDescriptor('non-album'));
   els.table.innerHTML = looseTracks.length
     ? buildNonAlbumTrackSectionsMarkup(looseTracks)
     : '<div class="utility-empty-state">No non-album tracks found in this view.</div>';
@@ -382,6 +383,7 @@ function openNonAlbumModal() {
 }
 
 function openNonAlbumTagEditor() {
+  if (typeof isMobileClient === 'function' && isMobileClient()) return;
   const tracks = getVisibleNonAlbumTracks();
   if (!tracks.length) {
     showRepairAlert('No tracks to edit.', 'error');
@@ -543,6 +545,7 @@ function overlayClickStartedOnOverlay(overlay, event) {
 }
 
 function closeNonAlbumModal() {
+  if (typeof dismissMobilePage === 'function' && dismissMobilePage('non-album')) return;
   const els = getNonAlbumModalElements();
   if (!els.overlay) return;
   els.overlay.hidden = true;

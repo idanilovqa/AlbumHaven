@@ -2,6 +2,7 @@ import { test, expect } from '@playwright/test';
 import path from 'node:path';
 import fs from 'node:fs/promises';
 import { MobileLayoutPage } from '../poms/mobileLayoutPage.js';
+import { NavigationPanel } from '../poms/navigationPanel.js';
 
 const screenshotDirectory = path.resolve('test-results/mobile-screenshots');
 async function capture(page, name) {
@@ -43,6 +44,7 @@ test('mobile login, Home rows, artist drawer, search and right-side family panel
   await capture(page, '04-search-gallery');
   await app.libraryButton.click();
   await app.artist('Northlight').click();
+  await new NavigationPanel(page).waitForMountedFamilySelectionSettled('Northlight');
   const family = app.familyButton;
   await expect(family).toBeVisible();
   await family.click();
@@ -59,11 +61,12 @@ test('two- and three-column cards and art-only modes persist to a fresh mobile s
   await app.threeColumnsButton.click();
   await expect(app.homeGrid).toHaveCSS('grid-template-columns', /\S+ \S+ \S+/);
   await capture(page, '07-home-cards-three-columns');
+  const saved = page.waitForResponse(response => response.url().includes('/account/layout-preferences')
+    && response.request().method() === 'PUT'
+    && response.request().postDataJSON()?.changes?.galleryDisplayPreferences?.defaultGalleryDisplayMode === 'covers');
   await app.selectView('covers');
+  expect((await saved).status()).toBe(200);
   await capture(page, '08-home-art-only');
-  await expect.poll(async () => (await page.request.get('/account/layout-preferences')).json()).toMatchObject({
-    profiles: { mobile: { mobileGridColumns: 3, galleryDisplayPreferences: { defaultGalleryDisplayMode: 'covers' } } },
-  });
   const context = await browser.newContext({ baseURL: new URL(page.url()).origin, viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true });
   try {
     const another = await context.newPage();

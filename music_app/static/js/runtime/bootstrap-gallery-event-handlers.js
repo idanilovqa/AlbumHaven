@@ -1012,6 +1012,8 @@ function handleGalleryBootstrapSearchInput(nextQuery) {
 }
 
 function commitGallerySearchQuery(nextQuery, options = {}) {
+  if (typeof prepareMobileGallerySearch === 'function'
+    && !prepareMobileGallerySearch(() => commitGallerySearchQuery(nextQuery, { ...options, mobileLeaveConfirmed: true }), options.mobileLeaveConfirmed === true)) return;
   clearPendingSelectedArtistReconcile();
   clearPendingGallerySearchCommit();
   if (

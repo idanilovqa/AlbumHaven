@@ -1,6 +1,6 @@
 /* Responsive shell navigation. Existing components retain their data and event owners. */
 const mobilePageState = { pages: [], originals: new Map(), restoring: false, cleaning: false, initialized: false, searchOpen: false };
-const MOBILE_PAGE_KINDS = Object.freeze({ album: 'track-modal', utilities: 'utility-modal', 'cover-lookup': 'cover-lookup-modal' });
+const MOBILE_PAGE_KINDS = Object.freeze({ album: 'track-modal', utilities: 'utility-modal', 'cover-lookup': 'cover-lookup-modal', 'non-album': 'non-album-modal' });
 
 function isMobileClient() {
   return window.AlbumHavenDevicePreferences?.profile?.() === 'mobile'
@@ -11,7 +11,7 @@ function usesMobilePageLayout() { return Number(window.innerWidth) <= 900; }
 function mobilePageDescriptor(kind, album = null) {
   const albumKey = album ? String(getAlbumRequestKey(album) || '') : '';
   const subtitle = album ? [album.album_artist || album.artist, album.year, album.total_duration_display].filter(Boolean).join(' · ') : '';
-  return { kind, albumKey, title: kind === 'utilities' ? 'Settings' : kind === 'cover-lookup' ? 'Cover lookup' : String(album?.name || 'Album'),
+  return { kind, albumKey, title: kind === 'utilities' ? 'Settings' : kind === 'cover-lookup' ? 'Cover lookup' : kind === 'non-album' ? 'Non-album tracks' : String(album?.name || 'Album'),
     subtitle, tab: kind === 'utilities' ? state.utility.activeTab : '' };
 }
 function syncMobilePageShell() {
@@ -97,6 +97,7 @@ function cleanupMobilePage(descriptor) {
     if (descriptor.kind === 'album') closeTrackModal();
     else if (descriptor.kind === 'utilities') closeUtilityModal(true);
     else if (descriptor.kind === 'cover-lookup') closeCoverLookupModal();
+    else if (descriptor.kind === 'non-album') closeNonAlbumModal();
   } finally { mobilePageState.cleaning = false; }
   if (element && original) {
     element.inert = false;
@@ -127,12 +128,14 @@ function navigateMobileBack() {
   // Keep the Appearance editor's unsaved-changes guard on both its close button and Back.
   if (active.kind === 'utilities') closeUtilityModal();
   else if (active.kind === 'album') closeTrackModal();
+  else if (active.kind === 'non-album') closeNonAlbumModal();
   else closeCoverLookupModal();
 }
 function restoreMobilePage(descriptor) {
   if (!descriptor || !Object.hasOwn(MOBILE_PAGE_KINDS, descriptor.kind)) return;
   const album = descriptor.albumKey ? (getIndexedAlbum(descriptor.albumKey) || { key: descriptor.albumKey, name: descriptor.title || 'Album', preview_only: true }) : null;
-  if (descriptor.kind === 'album' && album) openTrackModal(album);
+  if (descriptor.kind === 'non-album') openNonAlbumModal();
+  else if (descriptor.kind === 'album' && album) openTrackModal(album);
   else if (descriptor.kind === 'utilities') {
     setUtilityActiveTab(['appearance', 'integrations'].includes(descriptor.tab) ? descriptor.tab : 'appearance');
     openUtilityModal();
@@ -173,6 +176,17 @@ function syncMobileGalleryControls() {
     button.title = button.getAttribute('aria-label');
     button.querySelector('[data-mobile-grid-density-label]').textContent = `${columns} columns`;
   });
+}
+function prepareMobileGallerySearch(onConfirmed, skipAppearanceGuard = false) {
+  if (!mobilePageState.pages.length) return true;
+  if (!skipAppearanceGuard && mobilePageState.pages.some(page => page.kind === 'utilities')
+    && typeof confirmBackgroundAppearanceLeave === 'function'
+    && !confirmBackgroundAppearanceLeave(onConfirmed)) return false;
+  while (mobilePageState.pages.length) cleanupMobilePage(mobilePageState.pages.pop());
+  syncMobilePageShell();
+  // Keep the page behind the new search entry available through browser Back.
+  writeMobilePageHistory();
+  return true;
 }
 function setMobileSearchOpen(open) {
   mobilePageState.searchOpen = Boolean(open);
@@ -238,7 +252,7 @@ function initMobileNavigation() {
   // Enforce presentation restrictions at all delegated mobile action entry points.
   document.addEventListener('click', (event) => {
     if (!isMobileClient()) return;
-    if (event.target.closest?.('[data-open-tag-editor], [data-edit-tags], [data-edit-album-tags], [data-edit-track-tags], [data-account-menu-admin], [data-utility-tab="problematic-files"], [data-utility-tab="rules"], [data-utility-tab="loops"], [data-utility-tab="log-history"]')) {
+    if (event.target.closest?.('[data-open-non-album-tag-editor], [data-open-tag-editor], [data-edit-tags], [data-edit-album-tags], [data-edit-track-tags], [data-account-menu-admin], [data-utility-tab="problematic-files"], [data-utility-tab="rules"], [data-utility-tab="loops"], [data-utility-tab="log-history"]')) {
       event.preventDefault(); event.stopImmediatePropagation();
     }
   }, true);

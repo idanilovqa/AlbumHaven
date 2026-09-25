@@ -528,7 +528,7 @@
       if (id !== null && !selectedPalette) throw new TypeError('Unknown palette.');
       if (busy()) return;
       promote(); draft = { ...draft, ...empty(), palette_id: id, panel_index: 0 };
-      if (aggregate && selectedPalette) {
+      if (aggregate && selectedPalette && activeDeviceProfile === 'web_desktop') {
         draft.selection_accent = {
           enabled: draft.selection_accent?.enabled !== false,
           color: selectedPalette.selectionAccent,
@@ -792,6 +792,7 @@
     };
     const resetSection = (section = activeSection) => {
       if (busy()) return;
+      if (activeDeviceProfile !== 'web_desktop') setDeviceSectionMode('custom');
       if (!aggregate) { reset(); return; }
       if (section === 'backgrounds') {
         Object.assign(draft, empty(), { palette_id: null, panel_index: 0 });
@@ -1119,25 +1120,52 @@
       mountedFooter = null;
     };
     const mountDeviceProfileControls = editor => {
+      // Resolve on mount as well: the shell may have crossed a breakpoint since boot.
+      controller.setDeviceProfile(window.AlbumHavenDevicePreferences?.profile?.() || 'web_desktop');
+      const fields = document.createElement('fieldset');
+      fields.className = 'appearance-device-fields';
+      while (editor.firstChild) fields.appendChild(editor.firstChild);
+      editor.appendChild(fields);
       editor.insertAdjacentHTML('afterbegin', `<section class="appearance-device-controls" aria-label="Appearance device profile">
         <div class="appearance-device-selector" role="group" aria-label="Device profile">
           <button type="button" data-appearance-device="web_desktop" class="button ui-button ui-button--secondary ui-button--small">Web / Desktop</button>
-        <button type="button" data-appearance-device="mobile" class="button ui-button ui-button--secondary ui-button--small" disabled aria-disabled="true" title="Mobile appearance is not available in this stack">Mobile</button>
-        <button type="button" data-appearance-device="tv" class="button ui-button ui-button--secondary ui-button--small" disabled aria-disabled="true" title="TV appearance is not available in this stack">TV</button>
-      </div>
+          <button type="button" data-appearance-device="mobile" class="button ui-button ui-button--secondary ui-button--small">Mobile</button>
+          <button type="button" data-appearance-device="tv" class="button ui-button ui-button--secondary ui-button--small" disabled aria-disabled="true" title="TV appearance is not available in this stack">TV</button>
+        </div>
+        <div class="appearance-device-mode" role="group" aria-label="Appearance linking" hidden>
+          <button type="button" class="button" data-appearance-device-mode="follow">Follow Web / Desktop</button>
+          <button type="button" class="button" data-appearance-device-mode="custom">Custom mobile</button>
+        </div>
+        <p class="appearance-device-help" data-appearance-device-help hidden></p>
       </section>`);
-    const controls = editor.querySelector('.appearance-device-controls');
-    controls.addEventListener('click', event => {
-      const device = event.target.closest('[data-appearance-device]');
-      if (device && !device.disabled) controller.setDeviceProfile(device.getAttribute('data-appearance-device'));
-    });
-    return state => {
-      controls.querySelectorAll('[data-appearance-device]').forEach(button => {
-        const profile = button.getAttribute('data-appearance-device');
-        button.disabled = profile !== 'web_desktop' || state.loading || state.saving || state.loadFailed;
-        button.setAttribute('aria-pressed', String(profile === state.activeDeviceProfile));
+      const controls = editor.querySelector('.appearance-device-controls');
+      controls.addEventListener('click', event => {
+        const device = event.target.closest('[data-appearance-device]');
+        if (device && !device.disabled) controller.setDeviceProfile(device.getAttribute('data-appearance-device'));
+        const mode = event.target.closest('[data-appearance-device-mode]');
+        if (mode && !mode.disabled) controller.setDeviceSectionMode(mode.getAttribute('data-appearance-device-mode'));
       });
-    };
+      return state => {
+        const busy = state.loading || state.saving || state.loadFailed;
+        controls.querySelectorAll('[data-appearance-device]').forEach(button => {
+          const profile = button.getAttribute('data-appearance-device');
+          button.disabled = profile === 'tv' || busy;
+          button.setAttribute('aria-disabled', String(button.disabled));
+          button.setAttribute('aria-pressed', String(profile === state.activeDeviceProfile));
+        });
+        const mobile = state.activeDeviceProfile === 'mobile';
+        const section = appearanceSectionKeys[state.activeSection];
+        const mode = state.deviceProfiles.mobile.sections[section]?.mode || 'follow';
+        controls.querySelector('.appearance-device-mode').hidden = !mobile;
+        controls.querySelectorAll('[data-appearance-device-mode]').forEach(button => {
+          button.disabled = busy;
+          button.setAttribute('aria-pressed', String(button.getAttribute('data-appearance-device-mode') === mode));
+        });
+        const help = controls.querySelector('[data-appearance-device-help]');
+        help.hidden = !mobile;
+        help.textContent = mode === 'follow' ? 'This section follows Web / Desktop. Choose Custom mobile to make it different.' : 'Only the mobile profile changes. Other sections can still follow Web / Desktop.';
+        fields.disabled = busy || (mobile && mode === 'follow');
+      };
     };
     const mount = host => {
       unmount(); host.innerHTML = editorMarkup(); mounted = host.querySelector('.appearance-background-editor');

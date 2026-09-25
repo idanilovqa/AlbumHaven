@@ -4319,3 +4319,31 @@ test('family information button survives forced render through pointerup and cli
   assert.notStrictEqual(mountedButton, infoButton);
   virtualGrid.destroy();
 });
+
+for (const mobile of [true, false]) {
+  test(`leaving mobile Home restores gallery width before ${mobile ? 'search' : 'wide-tablet'} rendering`, () => {
+    const { context, scrollEl } = createRuntimeContext();
+    const grid = vm.runInContext('virtualGrid', context);
+    const home = { hidden: false };
+    let galleryVisible = false;
+    const main = { classList: { toggle(name, enabled) {
+      assert.equal(name, 'has-mobile-home');
+      galleryVisible = !enabled;
+    } } };
+    const originalGetById = context.document.getElementById;
+    context.document.getElementById = id => id === 'mobile-home' ? home
+      : id === 'shell-main-surface' ? main : originalGetById(id);
+    Object.defineProperty(scrollEl, 'clientWidth', { get: () => galleryVisible ? 980 : 0 });
+    context.usesMobilePageLayout = () => mobile;
+    context.state.view.selected_artist = 'Northlight';
+    context.state.view.primary_artist_groups = [{ artist: 'Northlight', albums: [
+      { key: 'quiet-hours', name: 'The Quiet Hours', album_artist: 'Northlight', tracks: [] },
+    ] }];
+    vm.runInContext(fs.readFileSync(path.join(path.dirname(helperPath), 'mobile-home.js'), 'utf8'), context);
+
+    context.renderArtistGroups();
+
+    assert.equal(home.hidden, true, 'Home must yield the shared gallery before it measures its container');
+    assert.ok(grid.cardTrackWidth > 200, `expected a readable card, received ${grid.cardTrackWidth}px`);
+  });
+}

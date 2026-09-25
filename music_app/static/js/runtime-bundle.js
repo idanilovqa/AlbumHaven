@@ -33929,6 +33929,8 @@ function getGalleryModeRenderer(mode) {
 }
 
 function renderArtistGroups(options = {}) {
+  // Home hides the gallery; restore its visibility before measuring virtual rows.
+  if (typeof syncMobileHome === 'function') syncMobileHome();
   const model = getFilteredGalleryMainModel();
   const modeConfig = getGalleryModeConfig(state.gallery.mainState.view);
   const renderOptions = {

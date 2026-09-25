@@ -6,6 +6,7 @@ import { TrackModal } from '../poms/trackModal.js';
 import { GlobalPlayer } from '../poms/globalPlayer.js';
 import { CoverLookup } from '../poms/coverLookup.js';
 import { UtilityAppearanceTab } from '../poms/utilityAppearanceTab.js';
+import { UtilityIntegrationsTab } from '../poms/utilityIntegrationsTab.js';
 
 const screenshotDirectory = path.resolve('test-results/mobile-screenshots');
 async function capture(page, name) {
@@ -121,6 +122,9 @@ test('Appearance and Integrations use pages and restricted utilities are absent'
   await capture(page, '10-appearance');
   await app.utilityTab('integrations').click();
   await expect(app.pageTitle).toHaveText('Integrations');
+  const integrations = new UtilityIntegrationsTab(page);
+  await expect(integrations.scrobbling).toBeVisible();
+  await expect(integrations.lastfmUsername).toBeVisible();
   await capture(page, '11-integrations');
   await app.backButton.click();
   await expect(app.home).toBeVisible();
@@ -143,6 +147,7 @@ test('narrow phones do not overflow and wide tablets retain desktop geometry', a
   await app.searchInput.fill('Northlight');
   await app.searchInput.press('Enter');
   await expect(app.galleryCards.first()).toBeVisible();
+  await expect.poll(async () => (await app.galleryCards.first().boundingBox())?.width || 0).toBeGreaterThan(100);
   await capture(page, '14-wide-tablet');
 });
 

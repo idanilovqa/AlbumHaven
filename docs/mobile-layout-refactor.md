@@ -70,3 +70,17 @@ Tree heading CSS-selector contract, Main-elements/player token isolation, and th
 floating-player hover-strength CSS contract. Those inherited appearance issues
 are not changed by this task and remain outside its mobile acceptance result.
 No checklist counters or checkbox totals changed.
+
+
+### Home-to-gallery geometry
+
+Hosted run `36197332874` passed the seven mobile scenarios on source
+`8fcd8378505c2cccf05d863add6605365631efcd`. The subsequent wide-tablet screenshot
+exposed a real layout error: the virtual grid measured its container while Home
+still hid it, leaving one-pixel card tracks. The shared gallery renderer now
+synchronizes Home visibility before measurement. Two regression cases reproduce
+the search and wide-tablet transitions. The browser scenario also checks that
+the resulting cards have readable width. The Integrations capture now waits for
+the real Last.fm controls rather than its loading heading. No existing scenario,
+assertion, timeout or retry policy is weakened. Final hosted verification and
+rendered-screen inspection are pending. No checklist counters were changed.

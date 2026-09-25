@@ -11,6 +11,7 @@ function element() {
   const styles = new Map(), attributes = new Map(), children = new Map(), listeners = new Map();
   return {
     styles, attributes, listeners, children: [], innerHTML: '', value: '',
+    appendChild(child) { this.children.push(child); return child; },
     insertAdjacentHTML(_position, markup) { this.innerHTML += markup; },
     style: {
       setProperty: (key, value) => styles.set(key, value),
@@ -33,7 +34,7 @@ function element() {
 async function mounted(method, initial = preference(), saveResponse) {
   const root = element(), host = element();
   const document = {
-    documentElement: root, addEventListener() {},
+    documentElement: root, addEventListener() {}, createElement: () => element(),
     getElementById: id => id === 'appearance-bootstrap' ? { textContent: JSON.stringify(initial) } : null,
   };
   const window = {

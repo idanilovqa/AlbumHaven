@@ -2,7 +2,10 @@ import { test, expect } from '@playwright/test';
 import path from 'node:path';
 import fs from 'node:fs/promises';
 import { MobileLayoutPage } from '../poms/mobileLayoutPage.js';
-import { NavigationPanel } from '../poms/navigationPanel.js';
+import { TrackModal } from '../poms/trackModal.js';
+import { GlobalPlayer } from '../poms/globalPlayer.js';
+import { CoverLookup } from '../poms/coverLookup.js';
+import { UtilityAppearanceTab } from '../poms/utilityAppearanceTab.js';
 
 const screenshotDirectory = path.resolve('test-results/mobile-screenshots');
 async function capture(page, name) {
@@ -44,12 +47,17 @@ test('mobile login, Home rows, artist drawer, search and right-side family panel
   await capture(page, '04-search-gallery');
   await app.libraryButton.click();
   await app.artist('Northlight').click();
-  await new NavigationPanel(page).waitForMountedFamilySelectionSettled('Northlight');
+  await expect(app.artistRail).not.toHaveClass(/is-mobile-drawer-open/);
   const family = app.familyButton;
   await expect(family).toBeVisible();
   await family.click();
-  await expect(app.familyPanel).toBeVisible();
+  try { await expect(app.familyPanel).toBeVisible(); }
+  finally { await fs.writeFile(path.join(screenshotDirectory, 'family-diagnostic.json'), JSON.stringify({errors, ...await app.diagnosticState()}, null, 2)); }
   await capture(page, '05-artist-family');
+  const familyBounds = await app.familyPanel.boundingBox();
+  expect(familyBounds.x + familyBounds.width).toBeCloseTo(390, 0);
+  await page.keyboard.press('Escape');
+  await expect(app.familyPanel).not.toBeVisible();
   expect(errors).toEqual([]);
 });
 
@@ -83,6 +91,11 @@ test('album details are a page, keep the player, support Back and full artwork',
   await app.homeAlbums.first().click();
   await expect(app.albumPage).toBeVisible();
   await expect(app.trackTable).toBeVisible();
+  const details = new TrackModal(page);
+  await details.coverLightboxButton.click();
+  await expect(details.lightboxImage).toBeVisible();
+  await capture(page, '15-full-artwork');
+  await details.lightboxCloseButton.click();
   await expect(app.albumDialogs).toHaveCount(0);
   await expect(app.editTags).not.toBeVisible();
   await capture(page, '09-album-details');
@@ -129,4 +142,59 @@ test('narrow phones do not overflow and wide tablets retain desktop geometry', a
   await app.searchInput.press('Enter');
   await expect(app.galleryCards.first()).toBeVisible();
   await capture(page, '14-wide-tablet');
+});
+
+
+test('mobile appearance can be customized, saved and linked back without changing the base profile', async ({page}) => {
+  const app = new MobileLayoutPage(page), appearance = new UtilityAppearanceTab(page);
+  await login(app);
+  await app.openSettings();
+  await expect(app.mobileAppearance).toHaveAttribute('aria-pressed', 'true');
+  await expect(app.followAppearance).toHaveAttribute('aria-pressed', 'true');
+  await expect(app.appearanceFields).toBeDisabled();
+  const basePalette = await appearance.documentRoot.getAttribute('data-appearance-palette');
+  await app.customAppearance.click();
+  await expect(app.appearanceFields).toBeEnabled();
+  await appearance.paletteButton('paper').click();
+  await expect(appearance.documentRoot).toHaveAttribute('data-appearance-palette', basePalette);
+  const saved = page.waitForResponse(response => response.url().endsWith('/account/appearance') && response.request().method() === 'PUT');
+  await app.saveAppearance.click();
+  expect((await saved).status()).toBe(200);
+  await expect(appearance.documentRoot).toHaveAttribute('data-appearance-palette', 'paper');
+  await capture(page, '16-custom-mobile-appearance');
+  await page.reload();
+  await expect(app.customAppearance).toHaveAttribute('aria-pressed', 'true');
+  await expect(appearance.documentRoot).toHaveAttribute('data-appearance-palette', 'paper');
+  await app.followAppearance.click();
+  await app.saveAppearance.click();
+  await expect(appearance.documentRoot).toHaveAttribute('data-appearance-palette', basePalette);
+});
+
+test('real local playback continues across pages and player artwork opens its album', async ({page}) => {
+  const app = new MobileLayoutPage(page), details = new TrackModal(page), player = new GlobalPlayer(page);
+  await login(app);
+  const mountedPlayer = await player.player.elementHandle();
+  await app.homeAlbums.first().click();
+  await details.playButtonAt(1).click();
+  await expect(player.title).toContainText('Small Hours');
+  await expect(player.playButton).toHaveAttribute('aria-label', /Pause/);
+  const bounds = await player.playButton.boundingBox();
+  expect(bounds.x).toBeGreaterThanOrEqual(0);
+  expect(bounds.x + bounds.width).toBeLessThanOrEqual(390);
+  await capture(page, '17-playing-album');
+  await app.openSettings();
+  expect(await player.isConnected(mountedPlayer)).toBeTruthy();
+  await expect(player.playButton).toHaveAttribute('aria-label', /Pause/);
+  await expect(player.title).toContainText('Coming Home', {timeout: 25000});
+  await player.coverButton.click();
+  await expect(app.trackTable).toBeVisible();
+  await details.coverLookupButton.click();
+  const lookup = new CoverLookup(page);
+  await expect(app.coverLookupPage).toBeVisible();
+  await expect(lookup.modalDialog).toHaveAttribute('role', 'region');
+  await expect(lookup.activeLocalCoverCard).toBeVisible();
+  await capture(page, '18-cover-lookup');
+  await app.backButton.click();
+  await expect(app.trackTable).toBeVisible();
+  await mountedPlayer.dispose();
 });

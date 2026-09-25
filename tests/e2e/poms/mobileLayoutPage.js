@@ -42,6 +42,12 @@ export class MobileLayoutPage {
     this.profileButton = page.locator('#app-shell .account-profile-button');
     this.securityHeading = page.getByRole('heading', { name: 'Password & security' });
     this.mobileNavigation = page.locator('#mobile-navigation');
+    this.coverLookupPage = page.locator('#mobile-page-outlet #cover-lookup-modal');
+    this.mobileAppearance = page.locator('[data-appearance-device="mobile"]');
+    this.followAppearance = page.locator('[data-appearance-device-mode="follow"]');
+    this.customAppearance = page.locator('[data-appearance-device-mode="custom"]');
+    this.appearanceFields = page.locator('.appearance-device-fields');
+    this.saveAppearance = page.locator('#utility-modal-footer [data-editor-footer-action="primary"]');
   }
 
   async signIn(username, password) {
@@ -75,6 +81,23 @@ export class MobileLayoutPage {
     await this.settingsButton.click();
     await this.utilitiesButton.click();
     await expect(this.utilitiesPage).toBeVisible();
+  }
+
+  async diagnosticState() {
+    // parity-check: allow-read-only-measurement-evaluate -- capture existing view and computed geometry without mutating production state.
+    return this.page.evaluate(() => {
+      const selectors = ['#artist-family-panel', '.player-shell', '.player-play-cluster', '#player-play', '#player-time', '#shell-navigation-rail'];
+      const nodes = Object.fromEntries(selectors.map(selector => {
+        const el = document.querySelector(selector);
+        if (!el) return [selector, null];
+        const style = getComputedStyle(el), box = el.getBoundingClientRect();
+        return [selector, { hidden: el.hidden, classes: el.className, x: box.x, y: box.y, width: box.width, height: box.height,
+          display: style.display, opacity: style.opacity, visibility: style.visibility, gridColumns: style.gridTemplateColumns, position: style.position }];
+      }));
+      return { nodes, url: location.href, selectedArtist: state.view.selected_artist, query: state.view.query,
+        activeSurface: galleryMainSurfaceController?.current()?.key, pendingView: state.ui.pendingViewTransition,
+        pendingRequest: state.ui.activeViewRequestUrl, searchTimer: Boolean(state.ui.pendingSelectedArtistReconcileTimer) };
+    });
   }
 
   async hasNoHorizontalOverflow() {

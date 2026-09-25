@@ -870,13 +870,15 @@ test('Player and Seekbar hides loop controls outside Web Desktop', () => {
   assert.match(source, /loopSetting\.hidden = state\.activeDeviceProfile !== 'web_desktop' \|\| !state\.canChangeLoopStyle/);
 });
 
-test('Appearance device selector disables unsupported clients without an outer pill', () => {
+test('Appearance device selector enables mobile linking and keeps unsupported TV disabled without an outer pill', () => {
   const source = fs.readFileSync(path.join(__dirname, '../../../music_app/static/js/appearance-backgrounds.js'), 'utf8');
   const css = fs.readFileSync(path.join(__dirname, '../../../music_app/static/css/appearance-backgrounds.css'), 'utf8');
   assert.match(source, /data-appearance-device="web_desktop"[^>]*class="[^"]*ui-button/);
-  assert.match(source, /data-appearance-device="mobile"[^>]*disabled/);
+  assert.doesNotMatch(source, /data-appearance-device="mobile"[^>]*disabled/);
   assert.match(source, /data-appearance-device="tv"[^>]*disabled/);
-  assert.doesNotMatch(source, /data-appearance-device-mode=/);
+  assert.match(source, /data-appearance-device-mode="follow"/);
+  assert.match(source, /data-appearance-device-mode="custom"/);
+  assert.match(source, /fields\.disabled = busy \|\| \(mobile && mode === 'follow'\)/);
   const controlsRule = css.match(/\.appearance-device-controls\s*\{[\s\S]*?\}/)?.[0] || '';
   assert.match(controlsRule, /border:\s*0/);
   assert.match(controlsRule, /border-radius:\s*0/);

@@ -334,6 +334,13 @@ function closeGalleryMainSurface(returnFocus = true) {
   return closed;
 }
 
+function getGalleryFamilyContextKey(view = state.view) {
+  return JSON.stringify([
+    String(view.selected_artist || '').trim(), String(view.query || '').trim(),
+    String(view.gallery_scope || 'all'), String(view.surface?.active || 'albums'),
+  ]);
+}
+
 function openGalleryMainSurface(key, anchor, surface, align = 'right') {
   if (!anchor || !surface) return false;
   if (surface.matches?.('.gallery-anchored-menu') && surface.parentElement !== document.body) {
@@ -351,6 +358,7 @@ function openGalleryMainSurface(key, anchor, surface, align = 'right') {
   });
   const scroll = key.startsWith('artist:') ? document.getElementById('albums-scroll') : null;
   galleryMainSurfaceController.activate({ key, anchor, surface,
+    familyContextKey: key === 'artist-family' ? getGalleryFamilyContextKey() : null,
     openingScrollPosition: scroll ? { top: scroll.scrollTop, left: scroll.scrollLeft } : null });
   anchor.setAttribute('aria-expanded', 'true');
   surface.hidden = false;

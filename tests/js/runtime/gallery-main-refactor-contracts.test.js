@@ -406,6 +406,66 @@ test('view navigation closes the drawer controller as well as clearing its rende
   assert.match(renderRelatedBody, /galleryPanel\.hidden = true/);
 });
 
+function familyRefreshRuntime() {
+  const classes = new Set();
+  const attributes = new Map();
+  let focusCount = 0;
+  const trigger = { hidden: false, setAttribute(name, value) { attributes.set(name, value); },
+    focus() { focusCount += 1; } };
+  const panel = { hidden: true, matches: () => false, setAttribute() {},
+    classList: { add: name => classes.add(name), remove: name => classes.delete(name) } };
+  const body = { innerHTML: '<button>Northlight</button>', dataset: { galleryRenderSignature: 'retained' } };
+  const state = { view: { selected_artist: 'Northlight', query: 'Northlight', gallery_scope: 'all' }, ui: {} };
+  const context = loadRuntime({ state, window: {}, document: {
+    getElementById: () => null,
+    querySelector: selector => ({
+      '[data-artist-family-panel]': panel,
+      '[data-gallery-bar-action="artist-family"]': trigger,
+      '[data-gallery-family-panel-body]': body,
+    })[selector] || null,
+  } });
+  context.focusGalleryMainSurface = () => {};
+  vm.runInContext(coreStateAndHelpersSource.match(/function renderRelated\(\) \{[\s\S]*?\n\}/)[0], context);
+  context.openGalleryMainSurface('artist-family', trigger, panel);
+  return { context, state, panel, body, attributes, classes, focusCount: () => focusCount };
+}
+
+test('same-artist hydration preserves the open Family panel, its contents and focus', () => {
+  const run = familyRefreshRuntime();
+  run.state.view = { ...run.state.view, album_count: 4, related_artists: ['Northlight', 'Northlight Ensemble'] };
+  run.context.renderRelated();
+  assert.equal(run.panel.hidden, false);
+  assert.equal(run.classes.has('is-open'), true);
+  assert.equal(run.attributes.get('aria-expanded'), 'true');
+  assert.equal(run.body.innerHTML, '<button>Northlight</button>');
+  assert.equal(run.body.dataset.galleryRenderSignature, 'retained');
+  assert.equal(run.focusCount(), 0);
+  assert.equal(vm.runInContext('galleryMainSurfaceController.isOpen("artist-family")', run.context), true);
+});
+
+for (const change of [
+  { selected_artist: 'Another Artist' }, { selected_artist: '' },
+  { query: 'Other search' }, { gallery_scope: 'new_arrivals' },
+]) {
+  test(`Family panel closes on changed browse context ${JSON.stringify(change)}`, () => {
+    const run = familyRefreshRuntime();
+    Object.assign(run.state.view, change);
+    run.context.renderRelated();
+    assert.equal(run.panel.hidden, true);
+    assert.equal(run.attributes.get('aria-expanded'), 'false');
+    assert.equal(run.body.innerHTML, '');
+    assert.equal(vm.runInContext('galleryMainSurfaceController.isOpen("artist-family")', run.context), false);
+  });
+}
+
+test('pending artist navigation dismisses Family before the next payload arrives', () => {
+  const run = familyRefreshRuntime();
+  run.state.ui.pendingSidebarSelectedArtist = 'Another Artist';
+  run.context.renderRelated();
+  assert.equal(run.panel.hidden, true);
+  assert.equal(run.body.innerHTML, '');
+});
+
 test('the collapsed Gallery view control hides the inactive icon instead of overlapping it', () => {
   const css = fs.readFileSync(path.join(runtimeRoot, '..', '..', 'css', 'unfolding-action-button.css'), 'utf8');
   for (const rule of ['flex: 0 0 0px', 'min-width: 0', 'overflow: hidden', 'visibility: hidden', 'pointer-events: none', 'outline: none !important', 'prefers-reduced-motion']) assert.ok(css.includes(rule));

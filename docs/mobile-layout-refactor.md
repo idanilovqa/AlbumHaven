@@ -32,4 +32,23 @@ Use focused unit/contract tests for changed seams and production-path browser ve
 
 ## Progress
 
-Implementation not yet complete. Verification bootstrap added; runtime work and screenshots follow in subsequent commits on this branch.
+The responsive runtime, Home, gallery modes, navigable detail/settings/cover pages,
+account-scoped preferences and persistent-player integration are implemented on this
+branch. The native packaging and future playlist/top features remain outside scope.
+
+The last hosted run at `f659a98fbd9add2a80f2cbd8c8570525f2179bfd` passed six of seven
+mobile scenarios, including actual playback across page navigation, mobile appearance
+customization, and saving gallery preferences into a fresh login. It exposed an
+Artist Family lifecycle defect: a late canonical refresh of the same optimistic
+artist view dismissed the panel after the user opened it.
+
+The continuation fixes that lifecycle at the shared rendering boundary. An open
+Family panel retains its content and focus on same-context hydration, but closes
+when artist, search, scope or surface changes, or when another artist navigation or
+scan page is pending. The failing browser scenario and its assertions are unchanged.
+Six added unit cases cover refresh retention and navigation dismissal. Focused local
+verification: 134 JavaScript tests, 12 Python tests, and production parity passed.
+Hosted verification and final screenshot inspection remain in progress.
+
+No checklist counters exist in this document; no checkbox totals were changed.
+No merge, release, or full PR-gate certification is implied by branch verification.

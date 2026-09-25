@@ -5125,23 +5125,37 @@ function renderLibraryLoader(data = {}, options = {}) {
 }
 
 function renderRelated() {
-  if (typeof galleryMainSurfaceController !== 'undefined'
-      && galleryMainSurfaceController?.isOpen?.('artist-family')
-      && typeof closeGalleryMainSurface === 'function') {
-    closeGalleryMainSurface(false);
-  }
-  const galleryPanel = document.querySelector?.('[data-artist-family-panel]');
-  const galleryToggle = document.querySelector?.('[data-gallery-bar-action="artist-family"]');
-  const galleryBody = document.querySelector?.('[data-gallery-family-panel-body]');
-  if (galleryPanel) {
-    galleryPanel.hidden = true;
-    galleryPanel.classList.remove('is-open');
-    galleryPanel.setAttribute('aria-hidden', 'true');
-  }
-  if (galleryToggle) galleryToggle.setAttribute('aria-expanded', 'false');
-  if (galleryBody) {
-    galleryBody.innerHTML = '';
-    delete galleryBody.dataset.galleryRenderSignature;
+  const activeFamily = typeof galleryMainSurfaceController !== 'undefined'
+    ? galleryMainSurfaceController?.current?.() : null;
+  const pendingArtist = String(state.ui?.pendingSidebarSelectedArtist || '').trim();
+  // Optimistic navigation can expose the controls before its canonical payload returns.
+  // That refresh must not dismiss a panel the user has just opened for the same view.
+  const preserveFamily = activeFamily?.key === 'artist-family'
+    && typeof getGalleryFamilyContextKey === 'function'
+    && activeFamily.familyContextKey === getGalleryFamilyContextKey()
+    && (!pendingArtist || pendingArtist === String(state.view.selected_artist || '').trim())
+    && !state.ui?.pendingSidebarAllArtistsActive
+    && !state.ui?.scanPageReturnContext
+    && !state.ui?.forceScanPageVisible;
+  if (!preserveFamily) {
+    if (typeof galleryMainSurfaceController !== 'undefined'
+        && galleryMainSurfaceController?.isOpen?.('artist-family')
+        && typeof closeGalleryMainSurface === 'function') {
+      closeGalleryMainSurface(false);
+    }
+    const galleryPanel = document.querySelector?.('[data-artist-family-panel]');
+    const galleryToggle = document.querySelector?.('[data-gallery-bar-action="artist-family"]');
+    const galleryBody = document.querySelector?.('[data-gallery-family-panel-body]');
+    if (galleryPanel) {
+      galleryPanel.hidden = true;
+      galleryPanel.classList.remove('is-open');
+      galleryPanel.setAttribute('aria-hidden', 'true');
+    }
+    if (galleryToggle) galleryToggle.setAttribute('aria-expanded', 'false');
+    if (galleryBody) {
+      galleryBody.innerHTML = '';
+      delete galleryBody.dataset.galleryRenderSignature;
+    }
   }
   const box = document.getElementById('related-box');
   const toggle = document.getElementById('related-toggle');
@@ -5724,6 +5738,13 @@ function closeGalleryMainSurface(returnFocus = true) {
   return closed;
 }
 
+function getGalleryFamilyContextKey(view = state.view) {
+  return JSON.stringify([
+    String(view.selected_artist || '').trim(), String(view.query || '').trim(),
+    String(view.gallery_scope || 'all'), String(view.surface?.active || 'albums'),
+  ]);
+}
+
 function openGalleryMainSurface(key, anchor, surface, align = 'right') {
   if (!anchor || !surface) return false;
   if (surface.matches?.('.gallery-anchored-menu') && surface.parentElement !== document.body) {
@@ -5741,6 +5762,7 @@ function openGalleryMainSurface(key, anchor, surface, align = 'right') {
   });
   const scroll = key.startsWith('artist:') ? document.getElementById('albums-scroll') : null;
   galleryMainSurfaceController.activate({ key, anchor, surface,
+    familyContextKey: key === 'artist-family' ? getGalleryFamilyContextKey() : null,
     openingScrollPosition: scroll ? { top: scroll.scrollTop, left: scroll.scrollLeft } : null });
   anchor.setAttribute('aria-expanded', 'true');
   surface.hidden = false;

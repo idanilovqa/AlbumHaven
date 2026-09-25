@@ -1,0 +1,16 @@
+{% set capability_ui = request.state.capability_ui | default(none) %}
+{% if capability_ui %}
+<script id="capability-bootstrap" type="application/json">{{ capability_ui | tojson }}</script>
+<style id="capability-visibility">
+{% if capability_ui.denied_selectors %}
+{{ capability_ui.denied_selectors | join(',\n') | safe }} { display: none !important; }
+{% endif %}
+.capability-section-denied { display: none; }
+{% for tab in capability_ui.denied_tabs %}
+#utility-modal[data-active-tab="{{ tab }}"] .utility-modal-body,
+#utility-modal[data-active-tab="{{ tab }}"] .utility-modal-footer { display: none !important; }
+#utility-modal[data-active-tab="{{ tab }}"] .capability-section-denied { display: block; }
+{% endfor %}
+</style>
+<script src="/static/js/capability-ui.js?v=1{% if runtime_asset_version is defined %}-{{ runtime_asset_version }}{% endif %}"></script>
+{% endif %}

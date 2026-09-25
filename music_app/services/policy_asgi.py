@@ -72,6 +72,10 @@ def require_action(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Action not permitted.",
             )
+        if action == "app.shell.read":
+            from music_app.services.capability_ui import project_capability_ui
+
+            request.state.capability_ui = project_capability_ui(request)
         return result
 
     return dependency

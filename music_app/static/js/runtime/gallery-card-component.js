@@ -1,5 +1,5 @@
 function buildGalleryCardHtml(config = {}) {
-  const displayMode = String(config.displayMode || 'cards') === 'covers' ? 'covers' : 'cards';
+  const displayMode = ['list', 'cards', 'covers'].includes(config.displayMode) ? config.displayMode : 'cards';
   const releaseYear = displayMode === 'covers' ? String(config.year ?? '').trim() : '';
   const openAttributes = `data-open-tracklist="1" data-album-key="${escapeHtml(config.albumKey || '')}" data-album-version-key="${escapeHtml(config.albumVersionKey || '')}" data-album="${escapeHtml(config.albumFallback || '')}"`;
   return `

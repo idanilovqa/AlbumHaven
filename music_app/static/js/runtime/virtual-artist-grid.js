@@ -1003,8 +1003,17 @@ class VirtualArtistGrid {
         : targetCardTrackWidth;
     }
     const displayMode = resolveGalleryRendererMode(state?.gallery?.mainState?.view || state?.view?.gallery_display_mode);
+    const mobileGeometry = window.AlbumHavenClientLayout?.resolveMobileGalleryGeometry({
+      viewportWidth: window.innerWidth, availableWidth: width, mode: displayMode,
+      columns: window.AlbumHavenDevicePreferences?.read('mobileGridColumns', 2), gap: this.columnGap,
+    });
+    if (mobileGeometry) {
+      this.columns = mobileGeometry.columns;
+      this.cardTrackWidth = mobileGeometry.cardTrackWidth;
+    }
     const rowGeometryKey = `${displayMode}:${this.columns}:${this.cardTrackWidth}`;
-    const estimatedRowHeight = displayMode === 'covers' ? this.cardTrackWidth : this.collapsedRowHeight;
+    const estimatedRowHeight = mobileGeometry?.estimatedRowHeight
+      || (displayMode === 'covers' ? this.cardTrackWidth : this.collapsedRowHeight);
     let offsetTop = 0;
     this.sectionByKey = new Map();
     this.sections.forEach((section) => {

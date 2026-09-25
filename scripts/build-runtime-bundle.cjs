@@ -77,6 +77,8 @@ const RUNTIME_SCRIPT_PATHS = [
   'js/runtime/track-modal-and-gallery.js',
   'js/runtime/bootstrap-utility-event-handlers.js',
   'js/runtime/bootstrap-gallery-event-handlers.js',
+  'js/runtime/mobile-navigation.js',
+  'js/runtime/mobile-home.js',
   'js/runtime/bootstrap-event-handlers.js',
   'js/runtime/bootstrap-init.js',
 ];

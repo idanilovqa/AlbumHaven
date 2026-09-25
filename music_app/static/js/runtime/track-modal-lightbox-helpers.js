@@ -112,6 +112,7 @@ function clearTrackModalRenderedState() {
 }
 
 function openTrackModalShell(album) {
+  if (typeof presentMobileAlbumPage === 'function') presentMobileAlbumPage(album);
   const els = getTrackModalElements();
   if (!els.overlay || !album) return;
   state.modalReleases = [album];
@@ -529,6 +530,7 @@ function queueVisibleTrackModalAlbumDetailsPrewarm(containerEl, scrollEl, limit 
 }
 
 function openTrackModal(album, options = {}) {
+  if (album && typeof presentMobileAlbumPage === 'function') presentMobileAlbumPage(album);
   const els = getTrackModalElements();
   if (!els.overlay || !album) return;
   if (options.foreground && document.getElementById('utility-modal')?.hidden === false) {
@@ -763,6 +765,7 @@ function closeImageLightbox() {
 }
 
 function closeTrackModal() {
+  if (typeof dismissMobilePage === 'function' && dismissMobilePage('album')) return;
   const els = getTrackModalElements();
   if (!els.overlay) return;
   els.overlay.hidden = true;
@@ -826,6 +829,7 @@ function getTopmostOpenModal() {
     return contexts;
   };
   const visible = candidates.filter(node => {
+    if (node.classList?.contains?.('is-mobile-page')) return false;
     if (node.closest('[hidden], [inert]') || !node.getClientRects().length) return false;
     const style = getComputedStyle(node);
     return style.visibility !== 'hidden' && style.visibility !== 'collapse';

@@ -501,7 +501,7 @@ function handleSidebarArtistSelectionClick(event) {
     query: state.view.query,
     selected_artist: artist,
     all_artists_active: false,
-    visible_library_categories: primaryArtistChanged
+    visible_library_categories: primaryArtistChanged && !(typeof isMobileClient === 'function' && isMobileClient())
       ? ['main_library', 'new_arrivals', 'hoard']
       : state.view.visible_library_categories,
     related_filter_artists: [],

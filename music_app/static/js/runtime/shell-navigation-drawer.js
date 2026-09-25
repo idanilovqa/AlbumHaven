@@ -67,6 +67,8 @@ function syncArtistsDrawerVisibility() {
     rail.classList.toggle('is-mobile-drawer', isDrawerVisible);
     rail.classList.toggle('is-mobile-drawer-open', isOpen);
     rail.setAttribute('aria-hidden', isDrawerVisible && !isOpen ? 'true' : 'false');
+    rail.inert = isDrawerVisible && !isOpen;
+    document.getElementById('mobile-library-button')?.setAttribute('aria-expanded', String(isOpen));
   }
 
   if (isArtistsDrawerElement(backdrop)) {
@@ -190,6 +192,7 @@ function openArtistsDrawer() {
   }
   state.ui.artistsDrawerOpen = true;
   syncArtistsDrawerVisibility();
+  document.querySelector('[data-mobile-library-mode="artists"]')?.focus?.();
   return true;
 }
 
@@ -198,7 +201,7 @@ function closeArtistsDrawer(options = {}) {
   state.ui.artistsDrawerOpen = false;
   syncArtistsDrawerVisibility();
   if (wasOpen && options.restoreFocus !== false) {
-    document.getElementById('artists-drawer-button')?.focus?.();
+    (document.getElementById('mobile-library-button') || document.getElementById('artists-drawer-button'))?.focus?.();
   }
   return wasOpen;
 }

@@ -41,6 +41,8 @@ _PRIVATE_ROUTE_ACTIONS = {
     ("POST", "/admin/reauthenticate"): "accounts.reauthenticate",
     ("GET", "/account"): "account.self.read",
     ("GET", "/account/appearance"): "account.self.appearance.read",
+    ("GET", "/account/layout-preferences"): "account.self.appearance.read",
+    ("PUT", "/account/layout-preferences"): "account.self.appearance.write",
     ("PUT", "/account/appearance"): "account.self.appearance.write",
     ("GET", "/api/account/appearance/selection-accent"): "account.self.appearance.selection_accent.read",
     ("PUT", "/api/account/appearance/selection-accent"): "account.self.appearance.selection_accent.update",
@@ -53,6 +55,7 @@ _PRIVATE_ROUTE_ACTIONS = {
     ("POST", "/account/library-warning/dismiss"): "account.self.library_warning.dismiss",
     ("GET", "/view-data"): "library.browse.read",
     ("GET", "/home-data"): "library.browse.read",
+    ("GET", "/home/recent-albums"): "library.browse.read",
     ("GET", "/album-details"): "library.browse.read",
     ("GET", "/utilities/problematic-files"): "library.problems.read",
     ("GET", "/utilities/problematic-files/detail"): "library.problems.read",
@@ -180,7 +183,7 @@ def install_private_route_boundary(app: FastAPI) -> None:
         action = private_action_for_route(request.method, route_path) or "app.access"
         preference_headers = (
             {"Cache-Control": "no-store, max-age=0"}
-            if route_path in {"/account/appearance", "/api/account/appearance/selection-accent"} else {}
+            if route_path in {"/account/appearance", "/account/layout-preferences", "/api/account/appearance/selection-accent"} else {}
         )
         await current_actor_from_request(request)
         resource = _private_resource(request, route_path)

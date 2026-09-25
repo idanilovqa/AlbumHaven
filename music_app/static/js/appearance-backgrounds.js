@@ -392,6 +392,21 @@
     return Object.fromEntries(Object.entries(appearanceSectionFields).map(([section, fields]) => [section,
       Object.fromEntries(fields.map(field => [field, copy(preference[field])]))]));
   }
+  function resolveClientAppearance(preference, clientProfile = 'web_desktop', profileSet = null) {
+    const normalized = normalizePreferences(preference);
+    if (!['mobile', 'tv'].includes(clientProfile)) return normalized;
+    const profiles = profileSet || normalized.device_profiles || {};
+    const resolved = { ...normalized };
+    for (const [section, fields] of Object.entries(appearanceSectionFields)) {
+      const candidate = profiles[clientProfile]?.sections?.[section];
+      if (candidate?.mode !== 'custom') continue;
+      for (const field of fields) {
+        if (section === 'player' && field === 'loop_control_style') continue;
+        if (Object.hasOwn(candidate.values || {}, field)) resolved[field] = copy(candidate.values[field]);
+      }
+    }
+    return normalizePreferences(resolved);
+  }
   function createController({ initial = empty(), request, apply = () => {}, loopCreateAllowed = false }) {
     let aggregate = isAggregate(initial), revision = aggregate && Number.isInteger(initial.revision) ? initial.revision : 0;
     let playerRecentSets = aggregate ? normalizePlayerSets(initial.player_recent_sets) : [], pendingPlayerSet = null, activeSection = 'backgrounds';
@@ -1047,8 +1062,10 @@
       };
     }
     catch (_failure) { /* Missing or invalid bootstrap never applies untrusted CSS. */ }
-    let savedPlayerColors = null;
-    const applySavedTheme = preference => {
+    let savedPlayerColors = null, controller = null;
+    const applySavedTheme = sourcePreference => {
+      const profile = window.AlbumHavenDevicePreferences?.profile?.() || 'web_desktop';
+      const preference = resolveClientAppearance(sourcePreference, profile, controller?.getState().deviceProfiles);
       applyTheme(preference, root);
       savedPlayerColors = !nativePlayerComponents(preference).waveform && (preference.palette_id || preference.player_override || preference.player_style_override) ? resolveAppearance({ ...preference, player_override: preference.player_style_override || preference.player_override }).player : null;
       if (typeof window.CustomEvent === 'function') window.dispatchEvent?.(new window.CustomEvent('album-haven-appearance-change'));
@@ -1074,7 +1091,9 @@
       if (method === 'GET') csrfToken = typeof data.csrf_token === 'string' ? data.csrf_token : '';
       return data;
     };
-    const controller = createController({ initial, request, apply: applySavedTheme, loopCreateAllowed: () => loopCreateAllowed });
+    controller = createController({ initial, request, apply: applySavedTheme, loopCreateAllowed: () => loopCreateAllowed });
+    controller.setDeviceProfile(window.AlbumHavenDevicePreferences?.profile?.() || 'web_desktop');
+    window.matchMedia?.('(max-width: 900px)')?.addEventListener?.('change', () => applySavedTheme(controller.getState().saved));
     const load = async () => { const result = await controller.load(); if (result) loaded = true; return result; };
     let footerDispose = null, mountedFooter = null, restoreFooterTheme = null;
     const mountSharedFooter = (localHost, options) => {
@@ -1571,7 +1590,7 @@
       getSavedLoopControlStyle: () => controller.getState().saved.loop_control_style === 'companion' ? 'companion' : 'capsule',
       getSavedPlayerColors: () => savedPlayerColors ? { ...savedPlayerColors } : null };
   }
-  const api = { normalizeColor, normalizeInteractionOverrides, resolveInteractionOutline, resolveActionInteractionTokens, derivePairedPlayerColor, setPlayerStylePath, colorToRgb, contrastRatio, applyTheme, clearTheme, createController, installBrowser, palettes, playerThemes, editorMarkup, seekbarMarkup, selectionAccentMarkup, alertsMarkup, albumPageMarkup, resolveAppearance, selectionAccentColors, brightAccentColors, interactionColorFamilies, interactionControlsMarkup, getSavedPlayerColors: () => api.instance?.getSavedPlayerColors() || null };
+  const api = { resolveClientAppearance, normalizeColor, normalizeInteractionOverrides, resolveInteractionOutline, resolveActionInteractionTokens, derivePairedPlayerColor, setPlayerStylePath, colorToRgb, contrastRatio, applyTheme, clearTheme, createController, installBrowser, palettes, playerThemes, editorMarkup, seekbarMarkup, selectionAccentMarkup, alertsMarkup, albumPageMarkup, resolveAppearance, selectionAccentColors, brightAccentColors, interactionColorFamilies, interactionControlsMarkup, getSavedPlayerColors: () => api.instance?.getSavedPlayerColors() || null };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   if (scope && scope.document) { scope.AlbumHavenAppearance = api; api.instance = installBrowser(scope, scope.document); }
 })(typeof window !== 'undefined' ? window : null);

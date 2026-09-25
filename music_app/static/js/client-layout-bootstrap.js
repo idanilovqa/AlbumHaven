@@ -88,7 +88,8 @@
       appearance = JSON.parse(documentObject.getElementById('appearance-bootstrap')?.textContent || '{}');
     } catch (_error) {}
     let storage = null;
-    try { storage = globalObject.localStorage; } catch (_error) {}
+    try { storage = globalObject.AlbumHavenDevicePreferences?.enabled
+      ? globalObject.AlbumHavenDevicePreferences : globalObject.localStorage; } catch (_error) {}
     const layout = resolveClientLayoutPreferences({
       storage,
       href: globalObject.location?.href,
@@ -179,7 +180,15 @@
 
       const gallery = documentObject.getElementById('albums-scroll');
       const availableWidth = Math.max(1, measureStartupGalleryWidth(gallery, documentObject) - 4);
-      const geometry = resolveStartupGalleryGeometry({
+      const preferences = globalObject.AlbumHavenDevicePreferences;
+      const mobileGeometry = globalObject.AlbumHavenClientLayout?.resolveMobileGalleryGeometry?.({
+        availableWidth,
+        viewportWidth: globalObject.innerWidth,
+        mode: preferences?.read?.('galleryDisplayPreferences', {})?.defaultGalleryDisplayMode || 'cards',
+        columns: preferences?.read?.('mobileGridColumns', 2),
+        gap: 14,
+      });
+      const geometry = mobileGeometry || resolveStartupGalleryGeometry({
         availableWidth,
         scalePercent: layout.galleryScalePercent,
       });

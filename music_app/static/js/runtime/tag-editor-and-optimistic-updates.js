@@ -228,6 +228,7 @@ function settleTagEditorSessionMutationClaim(tagEditor = state.tagEditor) {
 }
 
 function openTagEditor(album, options = {}) {
+  if (typeof isMobileClient === 'function' && isMobileClient()) return false;
   const els = getTagEditorElements();
   if (!els.overlay || !album) return;
   bindOverlayPointerOrigin(els.overlay);

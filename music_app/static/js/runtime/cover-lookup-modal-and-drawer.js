@@ -1,4 +1,4 @@
-﻿function getCoverLookupModalElements() {
+function getCoverLookupModalElements() {
   return {
     overlay: document.getElementById('cover-lookup-modal'),
     body: document.getElementById('cover-lookup-modal-body'),
@@ -1853,6 +1853,7 @@ async function refreshCoverLookupGallery(showLoading = true) {
 }
 
 async function openCoverLookupModal(album, options = {}) {
+  if (album && typeof presentMobileCoverLookupPage === 'function') presentMobileCoverLookupPage(album);
   const els = getCoverLookupModalElements();
   if (!els.overlay || !album) return;
   const matchingTask = !options.taskId
@@ -1897,6 +1898,7 @@ async function openCoverLookupModal(album, options = {}) {
 }
 
 function closeCoverLookupModal() {
+  if (typeof dismissMobilePage === 'function' && dismissMobilePage('cover-lookup')) return;
   const els = getCoverLookupModalElements();
   if (!els.overlay) return;
   els.overlay.hidden = true;

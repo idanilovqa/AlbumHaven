@@ -11,6 +11,7 @@
   <link rel="stylesheet" href="/static/css/scrollbar.css">
   <link rel="stylesheet" href="/static/css/settings-navigation.css">
   <link rel="stylesheet" href="/static/css/app-chrome.css">
+  <link rel="stylesheet" href="/static/css/mobile-layout.css?v={{ runtime_asset_version | default(app_version) }}">
   {% include "partials/navigation-tree-assets.html" %}
   <script src="/static/js/account.js" defer></script>
   <script src="/static/js/admin-members.js" defer></script>
@@ -26,6 +27,7 @@
     {% set settings_section = 'account' %}
     {% include "partials/admin-settings-nav.html" %}
     <div class="settings-outlet" data-settings-outlet>
+    <a class="mobile-settings-back" href="/" aria-label="Back to library"><span aria-hidden="true">←</span> Back</a>
     <section class="account-main">
       <header class="account-header">
         <div class="account-avatar" aria-hidden="true">{{ profile.username[:2] | upper }}</div>

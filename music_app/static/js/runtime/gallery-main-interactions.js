@@ -252,7 +252,10 @@ function syncGalleryMainStateFromLocation() {
   const visible = new Set(categories.length ? categories : ['main_library', 'new_arrivals', 'hoard']);
   const mainState = ensureGalleryMainState();
   mainState.sources = { main_library: visible.has('main_library'), new_arrivals: visible.has('new_arrivals'), hoard: visible.has('hoard') };
-  mainState.view = normalizeGalleryView(url.searchParams.get('gallery_display') || 'cards');
+  mainState.view = normalizeGalleryView(url.searchParams.get('gallery_display')
+    || state.gallery.displayPreferences?.defaultGalleryDisplayMode || 'cards');
+  const savedSources = window.AlbumHavenDevicePreferences?.read('gallerySources', null);
+  if (!categories.length && savedSources) mainState.sources = { ...mainState.sources, ...savedSources };
   syncGalleryFamilySelection(mainState, {
     selected_artist: url.searchParams.get('artist'),
     related_filter_artists: url.searchParams.getAll('related_artist'),
@@ -566,8 +569,15 @@ function transitionGalleryMain(action) {
   const hydrationCategories = action.type === 'toggle-source'
     ? activeGallerySourceCategories(nextState) : null;
   state.gallery.mainState = nextState;
+  if (action.type === 'set-view') {
+    state.view.gallery_display_mode = nextState.view;
+    persistCurrentGalleryDisplayPreferences(state.view);
+  }
+  if (action.type === 'toggle-source') window.AlbumHavenDevicePreferences?.write('gallerySources', nextState.sources);
   if (previousView !== state.gallery.mainState.view && virtualGrid) virtualGrid.lastKey = '';
   renderArtistGroups({ preserveScroll: true, preserveAbsoluteScroll: true });
+  if (typeof renderMobileHome === 'function') renderMobileHome();
+  if (typeof syncMobileGalleryControls === 'function') syncMobileGalleryControls();
   if (hydrationCategories?.length && typeof buildApiUrl === 'function' && typeof fetchAndRender === 'function') {
     const hydrationUrl = buildApiUrl(buildGallerySourceHydrationView({
       currentView: state.view,

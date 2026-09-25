@@ -133,6 +133,7 @@ def _configure_asgi_app(app, runtime) -> None:
     from music_app.routes.admin_asgi import router as admin_asgi_router
     from music_app.routes.account_asgi import router as account_asgi_router
     from music_app.routes.appearance_asgi import router as appearance_asgi_router
+    from music_app.routes.client_layout_asgi import router as client_layout_asgi_router
     from music_app.routes.selection_accent_asgi import router as selection_accent_asgi_router
     from music_app.routes.api_wave_a_asgi_routes import router as api_wave_a_asgi_router
     from music_app.routes.api_wave_b_asgi_routes import router as api_wave_b_asgi_router
@@ -222,6 +223,7 @@ def _configure_asgi_app(app, runtime) -> None:
     app.include_router(auth_asgi_router)
     app.include_router(account_asgi_router)
     app.include_router(appearance_asgi_router)
+    app.include_router(client_layout_asgi_router)
     app.include_router(selection_accent_asgi_router)
     app.include_router(admin_asgi_router)
     app.include_router(web_asgi_router)

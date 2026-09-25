@@ -2133,6 +2133,8 @@ function getBrowserLocalStorage() {
 }
 
 function getLocalStorageItem(key, fallback = '') {
+  const preferences = window.AlbumHavenDevicePreferences;
+  if (preferences?.handles?.(key)) return preferences.getItem(key) ?? fallback;
   const storage = getBrowserLocalStorage();
   if (!storage) return fallback;
   try {
@@ -2144,6 +2146,8 @@ function getLocalStorageItem(key, fallback = '') {
 }
 
 function setLocalStorageItem(key, value) {
+  const preferences = window.AlbumHavenDevicePreferences;
+  if (preferences?.handles?.(key)) return preferences.setItem(key, String(value ?? ''));
   const storage = getBrowserLocalStorage();
   if (!storage) return false;
   try {
@@ -3931,8 +3935,8 @@ function buildGalleryBarHtml(config = {}) {
   return `<div class="gallery-bar__context"><div class="gallery-bar__title"><span data-gallery-context-name>${escapeHtml(title)}</span>${info}<span class="gallery-bar__artist-divider gallery-divider__line" data-gallery-context-artist-divider hidden></span><span class="gallery-bar__artist-total" data-gallery-context-inline-total hidden></span></div><span class="gallery-bar__summary" data-gallery-context-summary>${escapeHtml(summary)}</span></div>
     <div class="gallery-bar__actions">
       <button class="gallery-action-button" type="button" data-gallery-bar-action="artist-family" aria-label="Artist Family" aria-controls="artist-family-panel" aria-expanded="false"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="8" cy="8" r="3"/><circle cx="17" cy="9" r="2.5"/><path d="M3 19c.5-3.5 2.2-5.2 5-5.2s4.5 1.7 5 5.2M14 14.5c3.5-.8 5.8.8 6.5 4.5"/></svg></button>
-      <div class="gallery-view-cluster unfolding-action-button" id="gallery-view-cluster-options" data-gallery-view-cluster><button class="gallery-view-choice action-button unfolding-action-button__action" type="button" tabindex="-1" data-gallery-view-choice="covers" aria-label="No info" title="No info"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="m5 17 5-5 3 3 2-2 4 4"/></svg></button><button class="gallery-view-choice action-button unfolding-action-button__action is-active" type="button" data-gallery-bar-action="view" data-gallery-view-choice="cards" aria-label="Cards" title="Cards" aria-controls="gallery-view-cluster-options" aria-expanded="false"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 15h18M7 18h6"/></svg></button></div>
-      <button class="gallery-action-button" type="button" data-gallery-bar-action="album-types" aria-label="Album types" aria-controls="gallery-album-types-menu" aria-expanded="false"><svg viewBox="0 0 24 24" aria-hidden="true" stroke-linecap="round" stroke-linejoin="round"><path d="M5 17H4a2 2 0 0 1-2-2V6a2 2 0 0 1 1.5-1.94l8-2A2 2 0 0 1 14 4v1"/><path d="M8 20H7a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2v1"/><rect x="8" y="8" width="14" height="14" rx="2"/><path fill="currentColor" fill-rule="evenodd" stroke="none" d="M19 15a4 4 0 1 1-8 0 4 4 0 0 1 8 0Zm-3 0a1 1 0 1 0-2 0 1 1 0 0 0 2 0Z"/></svg></button>
+      <div class="gallery-view-cluster unfolding-action-button" id="gallery-view-cluster-options" data-gallery-view-cluster><button class="gallery-view-choice action-button unfolding-action-button__action" type="button" tabindex="-1" data-gallery-view-choice="list" aria-label="Rows" title="Rows"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="18" height="7" rx="2"/><rect x="3" y="14" width="18" height="7" rx="2"/><path d="M9 3v7M9 14v7"/></svg></button><button class="gallery-view-choice action-button unfolding-action-button__action" type="button" tabindex="-1" data-gallery-view-choice="covers" aria-label="No info" title="No info"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="m5 17 5-5 3 3 2-2 4 4"/></svg></button><button class="gallery-view-choice action-button unfolding-action-button__action is-active" type="button" data-gallery-bar-action="view" data-gallery-view-choice="cards" aria-label="Cards" title="Cards" aria-controls="gallery-view-cluster-options" aria-expanded="false"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 15h18M7 18h6"/></svg></button></div>
+      <button class="gallery-action-button mobile-gallery-density" type="button" data-mobile-grid-density aria-label="Use three columns" title="Use three columns"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg><span class="sr-only" data-mobile-grid-density-label>2 columns</span></button><button class="gallery-action-button" type="button" data-gallery-bar-action="album-types" aria-label="Album types" aria-controls="gallery-album-types-menu" aria-expanded="false"><svg viewBox="0 0 24 24" aria-hidden="true" stroke-linecap="round" stroke-linejoin="round"><path d="M5 17H4a2 2 0 0 1-2-2V6a2 2 0 0 1 1.5-1.94l8-2A2 2 0 0 1 14 4v1"/><path d="M8 20H7a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2v1"/><rect x="8" y="8" width="14" height="14" rx="2"/><path fill="currentColor" fill-rule="evenodd" stroke="none" d="M19 15a4 4 0 1 1-8 0 4 4 0 0 1 8 0Zm-3 0a1 1 0 1 0-2 0 1 1 0 0 0 2 0Z"/></svg></button>
     </div>`;
 }
 
@@ -3998,7 +4002,7 @@ function createGalleryMainState(overrides = {}) {
   const galleryState = {
     sources: { main_library: true, new_arrivals: true, hoard: true, ...(overrides.sources || {}) },
     albumTypes: Array.isArray(overrides.albumTypes) ? overrides.albumTypes.slice() : ['studio', 'ep'],
-    view: ['cards', 'covers'].includes(overrides.view) ? overrides.view : 'cards',
+    view: ['list', 'cards', 'covers'].includes(overrides.view) ? overrides.view : 'cards',
     familyArtists: Array.isArray(overrides.familyArtists) ? overrides.familyArtists.slice() : [],
   };
   if (overrides.familySelectionExplicit === true) galleryState.familySelectionExplicit = true;
@@ -4007,12 +4011,13 @@ function createGalleryMainState(overrides = {}) {
 }
 
 function resetGalleryMainStateForPrimaryArtist(current = {}) {
-  return createGalleryMainState({ view: current.view });
+  return createGalleryMainState({ view: current.view, ...(typeof isMobileClient === 'function' && isMobileClient() ? { sources: current.sources } : {}) });
 }
 
 function normalizeGalleryView(value) {
   const normalized = String(value || '').trim().toLowerCase();
   if (normalized === 'no info' || normalized === 'covers') return 'covers';
+  if (normalized === 'list' || normalized === 'rows') return 'list';
   return 'cards';
 }
 
@@ -4222,7 +4227,7 @@ function resolveGallerySummaryTotals(view, mountedTotals, filterState, groups) {
 // BEGIN js/runtime/gallery-card-component.js
 
 function buildGalleryCardHtml(config = {}) {
-  const displayMode = String(config.displayMode || 'cards') === 'covers' ? 'covers' : 'cards';
+  const displayMode = ['list', 'cards', 'covers'].includes(config.displayMode) ? config.displayMode : 'cards';
   const releaseYear = displayMode === 'covers' ? String(config.year ?? '').trim() : '';
   const openAttributes = `data-open-tracklist="1" data-album-key="${escapeHtml(config.albumKey || '')}" data-album-version-key="${escapeHtml(config.albumVersionKey || '')}" data-album="${escapeHtml(config.albumFallback || '')}"`;
   return `
@@ -5637,7 +5642,10 @@ function syncGalleryMainStateFromLocation() {
   const visible = new Set(categories.length ? categories : ['main_library', 'new_arrivals', 'hoard']);
   const mainState = ensureGalleryMainState();
   mainState.sources = { main_library: visible.has('main_library'), new_arrivals: visible.has('new_arrivals'), hoard: visible.has('hoard') };
-  mainState.view = normalizeGalleryView(url.searchParams.get('gallery_display') || 'cards');
+  mainState.view = normalizeGalleryView(url.searchParams.get('gallery_display')
+    || state.gallery.displayPreferences?.defaultGalleryDisplayMode || 'cards');
+  const savedSources = window.AlbumHavenDevicePreferences?.read('gallerySources', null);
+  if (!categories.length && savedSources) mainState.sources = { ...mainState.sources, ...savedSources };
   syncGalleryFamilySelection(mainState, {
     selected_artist: url.searchParams.get('artist'),
     related_filter_artists: url.searchParams.getAll('related_artist'),
@@ -5951,8 +5959,15 @@ function transitionGalleryMain(action) {
   const hydrationCategories = action.type === 'toggle-source'
     ? activeGallerySourceCategories(nextState) : null;
   state.gallery.mainState = nextState;
+  if (action.type === 'set-view') {
+    state.view.gallery_display_mode = nextState.view;
+    persistCurrentGalleryDisplayPreferences(state.view);
+  }
+  if (action.type === 'toggle-source') window.AlbumHavenDevicePreferences?.write('gallerySources', nextState.sources);
   if (previousView !== state.gallery.mainState.view && virtualGrid) virtualGrid.lastKey = '';
   renderArtistGroups({ preserveScroll: true, preserveAbsoluteScroll: true });
+  if (typeof renderMobileHome === 'function') renderMobileHome();
+  if (typeof syncMobileGalleryControls === 'function') syncMobileGalleryControls();
   if (hydrationCategories?.length && typeof buildApiUrl === 'function' && typeof fetchAndRender === 'function') {
     const hydrationUrl = buildApiUrl(buildGallerySourceHydrationView({
       currentView: state.view,
@@ -8400,6 +8415,8 @@ function syncArtistsDrawerVisibility() {
     rail.classList.toggle('is-mobile-drawer', isDrawerVisible);
     rail.classList.toggle('is-mobile-drawer-open', isOpen);
     rail.setAttribute('aria-hidden', isDrawerVisible && !isOpen ? 'true' : 'false');
+    rail.inert = isDrawerVisible && !isOpen;
+    document.getElementById('mobile-library-button')?.setAttribute('aria-expanded', String(isOpen));
   }
 
   if (isArtistsDrawerElement(backdrop)) {
@@ -8523,6 +8540,7 @@ function openArtistsDrawer() {
   }
   state.ui.artistsDrawerOpen = true;
   syncArtistsDrawerVisibility();
+  document.querySelector('[data-mobile-library-mode="artists"]')?.focus?.();
   return true;
 }
 
@@ -8531,7 +8549,7 @@ function closeArtistsDrawer(options = {}) {
   state.ui.artistsDrawerOpen = false;
   syncArtistsDrawerVisibility();
   if (wasOpen && options.restoreFocus !== false) {
-    document.getElementById('artists-drawer-button')?.focus?.();
+    (document.getElementById('mobile-library-button') || document.getElementById('artists-drawer-button'))?.focus?.();
   }
   return wasOpen;
 }
@@ -11090,6 +11108,7 @@ function clearTrackModalRenderedState() {
 }
 
 function openTrackModalShell(album) {
+  if (typeof presentMobileAlbumPage === 'function') presentMobileAlbumPage(album);
   const els = getTrackModalElements();
   if (!els.overlay || !album) return;
   state.modalReleases = [album];
@@ -11507,6 +11526,7 @@ function queueVisibleTrackModalAlbumDetailsPrewarm(containerEl, scrollEl, limit 
 }
 
 function openTrackModal(album, options = {}) {
+  if (album && typeof presentMobileAlbumPage === 'function') presentMobileAlbumPage(album);
   const els = getTrackModalElements();
   if (!els.overlay || !album) return;
   if (options.foreground && document.getElementById('utility-modal')?.hidden === false) {
@@ -11741,6 +11761,7 @@ function closeImageLightbox() {
 }
 
 function closeTrackModal() {
+  if (typeof dismissMobilePage === 'function' && dismissMobilePage('album')) return;
   const els = getTrackModalElements();
   if (!els.overlay) return;
   els.overlay.hidden = true;
@@ -11804,6 +11825,7 @@ function getTopmostOpenModal() {
     return contexts;
   };
   const visible = candidates.filter(node => {
+    if (node.classList?.contains?.('is-mobile-page')) return false;
     if (node.closest('[hidden], [inert]') || !node.getClientRects().length) return false;
     const style = getComputedStyle(node);
     return style.visibility !== 'hidden' && style.visibility !== 'collapse';
@@ -13797,6 +13819,8 @@ function renderView(options = {}) {
   }
   renderLibraryLoader(state.status);
   scheduleSidebarRender();
+  if (typeof syncMobileHome === 'function') syncMobileHome();
+  if (typeof syncMobileGalleryControls === 'function') syncMobileGalleryControls();
 }
 
 function hasEquivalentGalleryRenderTopology(retainedGroups, canonicalGroups) {
@@ -20606,7 +20630,7 @@ function mountAlertsAppearanceEditor(detail) {
 
 // BEGIN js/runtime/utility-renderers-and-actions.js
 
-﻿const problematicNavigationRowContent = new WeakMap();
+const problematicNavigationRowContent = new WeakMap();
 
 let problematicFilesVirtualList = null;
 
@@ -21381,6 +21405,7 @@ function renderUtilityModalContent(options = {}) {
   if (els.search) els.search.readOnly = false;
   if (els.problemFilterButton) { els.problemFilterButton.setAttribute('aria-label', 'Filters'); els.problemFilterButton.setAttribute('title', 'Filter by problem type'); els.problemFilterButton.setAttribute('aria-haspopup', 'listbox'); els.problemFilterButton.setAttribute('aria-controls', 'utility-problem-filter-menu'); }
   const activeTab = state.utility.activeTab || 'problematic-files';
+  if (typeof syncMobileUtilityContext === 'function') syncMobileUtilityContext();
   if (activeTab !== 'problematic-files') disposeProblematicFilesVirtualList();
   if (activeTab !== 'log-history' && els.list?.dataset) els.list.dataset.utilityNavigationOwner = activeTab;
   if (activeTab !== 'loops' && typeof disposeMountedLoopActions === 'function') disposeMountedLoopActions(els.detail);
@@ -21550,6 +21575,7 @@ function collapseAllUtilityLoopGroups() {
 }
 
 function setUtilityActiveTab(nextTab, skipAppearanceGuard = false) {
+  if (typeof isMobileClient === 'function' && isMobileClient() && !['appearance', 'integrations'].includes(nextTab)) return false;
   const normalizedTab = String(nextTab || 'problematic-files');
   if (!skipAppearanceGuard && normalizedTab !== state.utility.activeTab && typeof confirmBackgroundAppearanceLeave === 'function' && !confirmBackgroundAppearanceLeave(() => {
     setUtilityActiveTab(normalizedTab, true);
@@ -23655,6 +23681,8 @@ function resumeDeferredUtilityViewRequest() {
 let utilityCoverLoadSuspensionToken = 0;
 
 function openUtilityModal({ resetSearch = true, resetSelection = true, forceLoad = true } = {}) {
+  if (typeof isMobileClient === 'function' && isMobileClient() && !['appearance', 'integrations'].includes(state.utility.activeTab)) state.utility.activeTab = 'appearance';
+  if (typeof presentMobileUtilityPage === 'function') presentMobileUtilityPage();
   const els = getUtilityModalElements();
   if (!els.overlay) return;
   document.getElementById('track-modal')?.classList.remove('is-above-settings');
@@ -23871,6 +23899,7 @@ async function submitPendingLastfmScrobbles() {
 
 function closeUtilityModal(skipAppearanceGuard = false) {
   if (skipAppearanceGuard !== true && typeof confirmBackgroundAppearanceLeave === 'function' && !confirmBackgroundAppearanceLeave(() => closeUtilityModal(true))) return;
+  if (typeof dismissMobilePage === 'function' && dismissMobilePage('utilities')) return;
   if (typeof unmountAppearanceEditors === 'function') unmountAppearanceEditors();
   if (typeof disposeMountedLoopActions === 'function') disposeMountedLoopActions(getUtilityModalElements()?.detail);
   const els = getUtilityModalElements();
@@ -24717,7 +24746,7 @@ function renderTagEditor(options = {}) {
 
 // BEGIN js/runtime/cover-lookup-modal-and-drawer.js
 
-﻿function getCoverLookupModalElements() {
+function getCoverLookupModalElements() {
   return {
     overlay: document.getElementById('cover-lookup-modal'),
     body: document.getElementById('cover-lookup-modal-body'),
@@ -26572,6 +26601,7 @@ async function refreshCoverLookupGallery(showLoading = true) {
 }
 
 async function openCoverLookupModal(album, options = {}) {
+  if (album && typeof presentMobileCoverLookupPage === 'function') presentMobileCoverLookupPage(album);
   const els = getCoverLookupModalElements();
   if (!els.overlay || !album) return;
   const matchingTask = !options.taskId
@@ -26616,6 +26646,7 @@ async function openCoverLookupModal(album, options = {}) {
 }
 
 function closeCoverLookupModal() {
+  if (typeof dismissMobilePage === 'function' && dismissMobilePage('cover-lookup')) return;
   const els = getCoverLookupModalElements();
   if (!els.overlay) return;
   els.overlay.hidden = true;
@@ -27302,6 +27333,7 @@ function settleTagEditorSessionMutationClaim(tagEditor = state.tagEditor) {
 }
 
 function openTagEditor(album, options = {}) {
+  if (typeof isMobileClient === 'function' && isMobileClient()) return false;
   const els = getTagEditorElements();
   if (!els.overlay || !album) return;
   bindOverlayPointerOrigin(els.overlay);
@@ -32778,8 +32810,17 @@ class VirtualArtistGrid {
         : targetCardTrackWidth;
     }
     const displayMode = resolveGalleryRendererMode(state?.gallery?.mainState?.view || state?.view?.gallery_display_mode);
+    const mobileGeometry = window.AlbumHavenClientLayout?.resolveMobileGalleryGeometry({
+      viewportWidth: window.innerWidth, availableWidth: width, mode: displayMode,
+      columns: window.AlbumHavenDevicePreferences?.read('mobileGridColumns', 2), gap: this.columnGap,
+    });
+    if (mobileGeometry) {
+      this.columns = mobileGeometry.columns;
+      this.cardTrackWidth = mobileGeometry.cardTrackWidth;
+    }
     const rowGeometryKey = `${displayMode}:${this.columns}:${this.cardTrackWidth}`;
-    const estimatedRowHeight = displayMode === 'covers' ? this.cardTrackWidth : this.collapsedRowHeight;
+    const estimatedRowHeight = mobileGeometry?.estimatedRowHeight
+      || (displayMode === 'covers' ? this.cardTrackWidth : this.collapsedRowHeight);
     let offsetTop = 0;
     this.sectionByKey = new Map();
     this.sections.forEach((section) => {
@@ -35338,7 +35379,7 @@ function initCompactPlayer() {
   if (!els.player || els.player.dataset.compactBound === '1') return;
   els.player.dataset.compactBound = '1';
   let saved = 'expanded';
-  try { saved = window.localStorage.getItem(COMPACT_PLAYER_MODE_STORAGE_KEY) || 'expanded'; } catch (_error) {}
+  try { saved = (window.AlbumHavenDevicePreferences?.enabled ? window.AlbumHavenDevicePreferences : window.localStorage).getItem(COMPACT_PLAYER_MODE_STORAGE_KEY) || 'expanded'; } catch (_error) {}
   applyCompactPlayerMode(saved, { persist: false });
   if (typeof MutationObserver === 'function' && document.body) {
     new MutationObserver(() => syncDockedCompactPresentation(els))
@@ -35497,7 +35538,7 @@ function initCompactPlayer() {
     if (!compactPlayerEligible()) applyCompactPlayerMode('expanded', { persist: false });
     else if (compactPlayerMode === 'expanded') {
       let savedMode = 'expanded';
-      try { savedMode = window.localStorage.getItem(COMPACT_PLAYER_MODE_STORAGE_KEY) || 'expanded'; } catch (_error) {}
+      try { savedMode = (window.AlbumHavenDevicePreferences?.enabled ? window.AlbumHavenDevicePreferences : window.localStorage).getItem(COMPACT_PLAYER_MODE_STORAGE_KEY) || 'expanded'; } catch (_error) {}
       applyCompactPlayerMode(savedMode, { persist: false });
     } else if (compactPlayerPresentation === 'floating' && compactPlayerPosition) {
       compactPlayerPosition = clampCompactPlayerPosition({ ...compactPlayerPosition, playerWidth: 105, playerHeight: 105,
@@ -37545,7 +37586,7 @@ function handleSidebarArtistSelectionClick(event) {
     query: state.view.query,
     selected_artist: artist,
     all_artists_active: false,
-    visible_library_categories: primaryArtistChanged
+    visible_library_categories: primaryArtistChanged && !(typeof isMobileClient === 'function' && isMobileClient())
       ? ['main_library', 'new_arrivals', 'hoard']
       : state.view.visible_library_categories,
     related_filter_artists: [],
@@ -38957,6 +38998,349 @@ function handleGalleryBootstrapPopState() {
 
 // END js/runtime/bootstrap-gallery-event-handlers.js
 
+// BEGIN js/runtime/mobile-navigation.js
+
+/* Responsive shell navigation. Existing components retain their data and event owners. */
+const mobilePageState = { pages: [], originals: new Map(), restoring: false, cleaning: false, initialized: false, searchOpen: false };
+const MOBILE_PAGE_KINDS = Object.freeze({ album: 'track-modal', utilities: 'utility-modal', 'cover-lookup': 'cover-lookup-modal' });
+
+function isMobileClient() {
+  return window.AlbumHavenDevicePreferences?.profile?.() === 'mobile'
+    || window.AlbumHavenClientLayout?.classifyProfile({ viewportWidth: window.innerWidth, userAgent: window.navigator?.userAgent,
+      platform: window.navigator?.platform, maxTouchPoints: window.navigator?.maxTouchPoints }) === 'mobile';
+}
+function usesMobilePageLayout() { return Number(window.innerWidth) <= 900; }
+function mobilePageDescriptor(kind, album = null) {
+  const albumKey = album ? String(getAlbumRequestKey(album) || '') : '';
+  const subtitle = album ? [album.album_artist || album.artist, album.year, album.total_duration_display].filter(Boolean).join(' · ') : '';
+  return { kind, albumKey, title: kind === 'utilities' ? 'Settings' : kind === 'cover-lookup' ? 'Cover lookup' : String(album?.name || 'Album'),
+    subtitle, tab: kind === 'utilities' ? state.utility.activeTab : '' };
+}
+function syncMobilePageShell() {
+  const active = mobilePageState.pages.at(-1);
+  const main = document.getElementById('shell-main-surface');
+  const header = document.getElementById('mobile-page-header');
+  const outlet = document.getElementById('mobile-page-outlet');
+  if (!main || !header || !outlet) return;
+  main.classList.toggle('has-mobile-page', Boolean(active));
+  header.hidden = !active;
+  outlet.hidden = !active;
+  document.getElementById('mobile-back-button').hidden = !active;
+  document.getElementById('mobile-library-button').hidden = Boolean(active);
+  for (const descriptor of mobilePageState.pages) {
+    const element = document.getElementById(MOBILE_PAGE_KINDS[descriptor.kind]);
+    if (element) { element.hidden = descriptor !== active; element.inert = descriptor !== active; }
+  }
+  if (active) {
+    document.getElementById('mobile-page-title').textContent = active.title;
+    document.getElementById('mobile-page-summary').textContent = active.subtitle;
+    document.title = `${active.title} — Album Haven`;
+  }
+  // A page is not a modal and must never trap focus away from the persistent player.
+  if (!document.querySelector('[aria-modal="true"]:not([hidden])')?.getClientRects().length) document.body.classList.remove('modal-open');
+}
+function writeMobilePageHistory(mode = 'push') {
+  const url = new URL(window.location.href);
+  const active = mobilePageState.pages.at(-1);
+  ['mobile_page', 'mobile_album', 'utility_tab'].forEach(key => url.searchParams.delete(key));
+  if (active) {
+    url.searchParams.set('mobile_page', active.kind);
+    if (active.albumKey) url.searchParams.set('mobile_album', active.albumKey);
+    if (active.kind === 'utilities') url.searchParams.set('utility_tab', active.tab || 'appearance');
+  }
+  const snapshot = { ...(window.history.state || {}), mobilePages: mobilePageState.pages.map(page => ({ ...page })) };
+  if (mode === 'replace') window.history.replaceState(snapshot, '', url);
+  else if (window.AlbumHavenSettingsNavigation?.instance?.pushLibraryHistory) window.AlbumHavenSettingsNavigation.instance.pushLibraryHistory(url.href, snapshot);
+  else window.history.pushState(snapshot, '', url);
+}
+function presentMobilePage(descriptor) {
+  if (!usesMobilePageLayout() && !mobilePageState.pages.length) return false;
+  const outlet = document.getElementById('mobile-page-outlet');
+  const element = document.getElementById(MOBILE_PAGE_KINDS[descriptor.kind]);
+  if (!outlet || !element) return false;
+  const active = mobilePageState.pages.at(-1);
+  if (active?.kind === descriptor.kind && active.albumKey === descriptor.albumKey) {
+    Object.assign(active, descriptor);
+    syncMobilePageShell();
+    return true;
+  }
+  if (!mobilePageState.originals.has(descriptor.kind)) {
+    const placeholder = document.createComment(`Original ${descriptor.kind} surface`);
+    element.before(placeholder);
+    const dialog = element.querySelector('[role="dialog"]') || element;
+    mobilePageState.originals.set(descriptor.kind, { placeholder, dialog, role: dialog.getAttribute('role'),
+      modal: dialog.getAttribute('aria-modal'), returnFocus: document.activeElement });
+    dialog.setAttribute('role', 'region');
+    dialog.removeAttribute('aria-modal');
+    dialog.setAttribute('aria-label', descriptor.kind === 'album' ? 'Album details' : descriptor.title);
+    element.classList.add('is-mobile-page');
+    outlet.appendChild(element);
+  }
+  // A changed album reuses one component; older history entries retain its key for Back/Forward.
+  const previousIndex = mobilePageState.pages.findIndex(page => page.kind === descriptor.kind);
+  if (previousIndex >= 0) mobilePageState.pages.splice(previousIndex);
+  mobilePageState.pages.push(descriptor);
+  closeArtistsDrawer({ restoreFocus: false });
+  closeGalleryMainSurface?.(false);
+  syncMobilePageShell();
+  if (!mobilePageState.restoring) writeMobilePageHistory();
+  requestAnimationFrame(() => document.getElementById('mobile-page-header')?.focus({ preventScroll: true }));
+  return true;
+}
+function presentMobileAlbumPage(album) { return presentMobilePage(mobilePageDescriptor('album', album)); }
+function presentMobileUtilityPage() { return presentMobilePage(mobilePageDescriptor('utilities')); }
+function presentMobileCoverLookupPage(album) { return presentMobilePage(mobilePageDescriptor('cover-lookup', album)); }
+
+function cleanupMobilePage(descriptor) {
+  const element = document.getElementById(MOBILE_PAGE_KINDS[descriptor.kind]);
+  const original = mobilePageState.originals.get(descriptor.kind);
+  mobilePageState.cleaning = true;
+  try {
+    if (descriptor.kind === 'album') closeTrackModal();
+    else if (descriptor.kind === 'utilities') closeUtilityModal(true);
+    else if (descriptor.kind === 'cover-lookup') closeCoverLookupModal();
+  } finally { mobilePageState.cleaning = false; }
+  if (element && original) {
+    element.inert = false;
+    element.classList.remove('is-mobile-page');
+    if (original.role === null) original.dialog.removeAttribute('role'); else original.dialog.setAttribute('role', original.role);
+    if (original.modal === null) original.dialog.removeAttribute('aria-modal'); else original.dialog.setAttribute('aria-modal', original.modal);
+    original.dialog.removeAttribute('aria-label');
+    original.placeholder.replaceWith(element);
+    mobilePageState.originals.delete(descriptor.kind);
+  }
+  return original?.returnFocus;
+}
+function dismissMobilePage(kind) {
+  if (mobilePageState.cleaning || !mobilePageState.pages.some(page => page.kind === kind)) return false;
+  if (window.history.state?.mobilePages?.length) window.history.back();
+  else {
+    const descriptor = mobilePageState.pages.pop();
+    const focus = cleanupMobilePage(descriptor);
+    writeMobilePageHistory('replace');
+    syncMobilePageShell();
+    if (focus?.isConnected) focus.focus({ preventScroll: true });
+  }
+  return true;
+}
+function navigateMobileBack() {
+  const active = mobilePageState.pages.at(-1);
+  if (!active) return;
+  // Keep the Appearance editor's unsaved-changes guard on both its close button and Back.
+  if (active.kind === 'utilities') closeUtilityModal();
+  else if (active.kind === 'album') closeTrackModal();
+  else closeCoverLookupModal();
+}
+function restoreMobilePage(descriptor) {
+  if (!descriptor || !Object.hasOwn(MOBILE_PAGE_KINDS, descriptor.kind)) return;
+  const album = descriptor.albumKey ? (getIndexedAlbum(descriptor.albumKey) || { key: descriptor.albumKey, name: descriptor.title || 'Album', preview_only: true }) : null;
+  if (descriptor.kind === 'album' && album) openTrackModal(album);
+  else if (descriptor.kind === 'utilities') {
+    setUtilityActiveTab(['appearance', 'integrations'].includes(descriptor.tab) ? descriptor.tab : 'appearance');
+    openUtilityModal();
+  } else if (descriptor.kind === 'cover-lookup' && album) void openCoverLookupModal(album);
+}
+function handleMobilePagePopState() {
+  const requested = Array.isArray(window.history.state?.mobilePages) ? window.history.state.mobilePages : [];
+  const hadPage = mobilePageState.pages.length > 0;
+  if (!hadPage && !requested.length) return false;
+  let common = 0;
+  while (common < requested.length && common < mobilePageState.pages.length
+    && requested[common].kind === mobilePageState.pages[common].kind
+    && requested[common].albumKey === mobilePageState.pages[common].albumKey) common += 1;
+  let focus;
+  while (mobilePageState.pages.length > common) focus = cleanupMobilePage(mobilePageState.pages.pop());
+  mobilePageState.restoring = true;
+  try { requested.slice(common).forEach(restoreMobilePage); }
+  finally { mobilePageState.restoring = false; }
+  syncMobilePageShell();
+  if (!requested.length && focus?.isConnected) requestAnimationFrame(() => focus.focus({ preventScroll: true }));
+  return true;
+}
+function syncMobileUtilityContext() {
+  const descriptor = mobilePageState.pages.find(page => page.kind === 'utilities');
+  if (!descriptor) return;
+  descriptor.title = state.utility.activeTab === 'integrations' ? 'Integrations' : 'Appearance';
+  descriptor.subtitle = 'Settings · Saved to your account';
+  descriptor.tab = state.utility.activeTab;
+  syncMobilePageShell();
+  if (!mobilePageState.restoring) writeMobilePageHistory('replace');
+}
+function syncMobileGalleryControls() {
+  const columns = window.AlbumHavenDevicePreferences?.read('mobileGridColumns', 2) === 3 ? 3 : 2;
+  document.documentElement.style.setProperty('--mobile-gallery-columns', String(columns));
+  document.querySelectorAll('[data-mobile-grid-density]').forEach(button => {
+    button.hidden = !usesMobilePageLayout() || ensureGalleryMainState().view === 'list';
+    button.setAttribute('aria-label', columns === 2 ? 'Use three columns' : 'Use two columns');
+    button.title = button.getAttribute('aria-label');
+    button.querySelector('[data-mobile-grid-density-label]').textContent = `${columns} columns`;
+  });
+}
+function setMobileSearchOpen(open) {
+  mobilePageState.searchOpen = Boolean(open);
+  const nav = document.getElementById('mobile-navigation');
+  nav?.classList.toggle('is-search-open', Boolean(open));
+  document.getElementById('mobile-search-button')?.setAttribute('aria-expanded', String(Boolean(open)));
+  const form = document.getElementById('search-form');
+  if (usesMobilePageLayout() && form) { form.inert = !open; form.setAttribute('aria-hidden', String(!open)); }
+  if (open) document.getElementById('search-input')?.focus();
+}
+function initMobileNavigation() {
+  if (mobilePageState.initialized || !document.getElementById('mobile-navigation')) return;
+  mobilePageState.initialized = true;
+  const form = document.getElementById('search-form');
+  const placeholder = document.createComment('Desktop search position');
+  form?.before(placeholder);
+  const syncLayout = () => {
+    const mobile = usesMobilePageLayout();
+    document.documentElement.dataset.clientProfile = window.AlbumHavenDevicePreferences?.profile() || (isMobileClient() ? 'mobile' : 'web_desktop');
+    if (form) {
+      if (mobile) document.getElementById('mobile-search-dock')?.appendChild(form);
+      else { placeholder.after(form); form.inert = false; form.removeAttribute('aria-hidden'); }
+      if (mobile) setMobileSearchOpen(mobilePageState.searchOpen);
+    }
+    syncMobileGalleryControls();
+    syncMobilePageShell();
+  };
+  syncLayout();
+  window.matchMedia('(max-width: 900px)').addEventListener('change', () => {
+    const saved = window.AlbumHavenDevicePreferences?.read('galleryDisplayPreferences', null);
+    if (saved && !new URL(window.location.href).searchParams.has('gallery_display')) {
+      state.gallery.displayPreferences = saved;
+      state.gallery.mainState.view = saved.defaultGalleryDisplayMode;
+      state.view.gallery_display_mode = saved.defaultGalleryDisplayMode;
+    }
+    syncLayout();
+    if (virtualGrid) { virtualGrid.lastKey = ''; virtualGrid.recalculate(); }
+    renderArtistGroups({ preserveScroll: true });
+    if (typeof renderMobileHome === 'function') renderMobileHome();
+  });
+  document.addEventListener('click', (event) => {
+    if (event.target.closest?.('[data-mobile-search]')) setMobileSearchOpen(!mobilePageState.searchOpen);
+    if (event.target.closest?.('[data-mobile-back]')) navigateMobileBack();
+    const density = event.target.closest?.('[data-mobile-grid-density]');
+    if (density) {
+      const columns = window.AlbumHavenDevicePreferences?.read('mobileGridColumns', 2) === 3 ? 2 : 3;
+      window.AlbumHavenDevicePreferences?.write('mobileGridColumns', columns);
+      syncMobileGalleryControls();
+      if (virtualGrid) { virtualGrid.lastKey = ''; virtualGrid.recalculate(); }
+      renderArtistGroups({ preserveScroll: true });
+      renderMobileHome();
+    }
+    const libraryMode = event.target.closest?.('[data-mobile-library-mode]');
+    if (libraryMode) {
+      const mode = libraryMode.dataset.mobileLibraryMode;
+      document.querySelectorAll('[data-mobile-library-mode]').forEach(button => button.setAttribute('aria-pressed', String(button === libraryMode)));
+      document.getElementById('artist-tree-expanded').hidden = mode !== 'artists';
+      const empty = document.getElementById('mobile-library-placeholder');
+      empty.hidden = mode === 'artists';
+      empty.textContent = mode === 'playlists' ? 'Playlists will appear here when playlist support is available.' : 'Album tops will appear here when album rankings are available.';
+    }
+  });
+  // Enforce presentation restrictions at all delegated mobile action entry points.
+  document.addEventListener('click', (event) => {
+    if (!isMobileClient()) return;
+    if (event.target.closest?.('[data-open-tag-editor], [data-edit-tags], [data-edit-album-tags], [data-edit-track-tags], [data-account-menu-admin], [data-utility-tab="problematic-files"], [data-utility-tab="rules"], [data-utility-tab="loops"], [data-utility-tab="log-history"]')) {
+      event.preventDefault(); event.stopImmediatePropagation();
+    }
+  }, true);
+  document.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape' && mobilePageState.searchOpen && form?.contains(event.target)) {
+      event.preventDefault(); setMobileSearchOpen(false); document.getElementById('mobile-search-button')?.focus(); return;
+    }
+    const rail = document.getElementById('shell-navigation-rail');
+    if (event.key === 'Tab' && state.ui.artistsDrawerOpen && usesMobilePageLayout()) {
+      const focusable = [...rail.querySelectorAll('button:not([disabled]), a[href], input:not([disabled])')].filter(node => !node.closest('[hidden], [inert]') && node.getClientRects().length);
+      const first = focusable[0], last = focusable.at(-1);
+      if (event.shiftKey && (document.activeElement === first || !rail.contains(document.activeElement))) { event.preventDefault(); last?.focus(); }
+      else if (!event.shiftKey && (document.activeElement === last || !rail.contains(document.activeElement))) { event.preventDefault(); first?.focus(); }
+    }
+  });
+  document.addEventListener('album-haven:preferences-sync', (event) => {
+    let status = document.getElementById('mobile-preference-status');
+    if (!status) { status = document.createElement('p'); status.id = 'mobile-preference-status'; status.className = 'mobile-preference-status'; status.setAttribute('role', 'status'); document.body.appendChild(status); }
+    status.hidden = !['unsaved', 'unavailable'].includes(event.detail.state);
+    status.textContent = 'Settings have not synced. They will retry when you reconnect.';
+  });
+  const url = new URL(window.location.href);
+  if (usesMobilePageLayout() && url.searchParams.has('mobile_page')) {
+    mobilePageState.restoring = true;
+    try { restoreMobilePage({ kind: url.searchParams.get('mobile_page'), albumKey: url.searchParams.get('mobile_album') || '', title: 'Album', tab: url.searchParams.get('utility_tab') }); }
+    finally { mobilePageState.restoring = false; }
+    // A directly loaded page has no guaranteed in-app previous entry.
+    window.history.replaceState({ ...(window.history.state || {}), mobilePages: [] }, '', window.location.href);
+  }
+}
+
+// END js/runtime/mobile-navigation.js
+
+// BEGIN js/runtime/mobile-home.js
+
+/* Home uses real account-scoped listen history and the existing GalleryCard renderer. */
+const mobileHomeState = { albums: null, loading: false, error: false, request: null, refreshedAt: 0, renderKey: '' };
+function shouldShowMobileHome() {
+  return usesMobilePageLayout() && !String(state.view.query || '').trim() && !String(state.view.selected_artist || '').trim()
+    && state.view?.shell_layout?.slots?.main_content?.content_kind !== 'discovery_center_page';
+}
+function renderMobileHome() {
+  const host = document.getElementById('mobile-home');
+  if (!host || !shouldShowMobileHome()) return;
+  const mode = ensureGalleryMainState().view;
+  const sources = ensureGalleryMainState().sources;
+  const albums = (mobileHomeState.albums || []).filter(album => resolveGalleryAlbumSources(album).some(source => sources[source] !== false));
+  const key = JSON.stringify([mode, albums, mobileHomeState.error, mobileHomeState.loading]);
+  if (key === mobileHomeState.renderKey) return;
+  mobileHomeState.renderKey = key;
+  const intro = '<header class="mobile-home-heading"><h2>Recently played</h2><p>Pick up where you left off.</p></header>';
+  if (mobileHomeState.error) {
+    host.innerHTML = `${intro}<div class="mobile-home-empty" role="status"><p>Recently played albums could not be loaded.</p><button type="button" class="button" data-mobile-home-retry>Try again</button></div>`;
+  } else if (mobileHomeState.loading && mobileHomeState.albums === null) {
+    host.innerHTML = `${intro}<p role="status">Loading your recent albums…</p>`;
+  } else if (!albums.length) {
+    host.innerHTML = `${intro}<div class="mobile-home-empty" role="status"><p>${mobileHomeState.albums?.length ? 'No recent albums match your selected library sources.' : 'Your listening history starts here. Play an album and it will appear on Home.'}</p><button type="button" class="button" data-toggle-artists-drawer="1">Browse artists</button></div>`;
+  } else {
+    host.innerHTML = `${intro}<div class="mobile-home-grid" data-view="${escapeHtml(mode)}">${albums.map(album => albumCardHtml(album, { displayMode: mode, coverPriority: 'visible' })).join('')}</div>`;
+    // Use normal production cover URLs and existing image load/error handlers.
+    host.querySelectorAll('img[data-gallery-cover-src]').forEach(image => {
+      image.loading = 'lazy'; image.src = image.dataset.galleryCoverSrc;
+    });
+  }
+  host.querySelector('[data-mobile-home-retry]')?.addEventListener('click', () => { void loadMobileRecentAlbums(true); });
+}
+async function loadMobileRecentAlbums(force = false) {
+  if (mobileHomeState.loading || (!force && mobileHomeState.albums !== null && Date.now() - mobileHomeState.refreshedAt < 30000)) return;
+  mobileHomeState.loading = true; mobileHomeState.error = false;
+  renderMobileHome();
+  try {
+    const response = await fetch('/home/recent-albums', { credentials: 'same-origin', cache: 'no-store', headers: { Accept: 'application/json' } });
+    if (!response.ok || response.redirected) throw new Error('Recent albums unavailable.');
+    const payload = await response.json();
+    mobileHomeState.albums = Array.isArray(payload.albums) ? payload.albums : [];
+    mobileHomeState.refreshedAt = Date.now();
+  } catch (_error) { mobileHomeState.error = true; }
+  finally { mobileHomeState.loading = false; renderMobileHome(); }
+}
+function syncMobileHome() {
+  const host = document.getElementById('mobile-home');
+  if (!host) return;
+  const show = shouldShowMobileHome();
+  host.hidden = !show;
+  document.getElementById('shell-main-surface')?.classList.toggle('has-mobile-home', show);
+  if (!show) return;
+  const bar = document.querySelector('[data-gallery-bar-instance="gallery"]');
+  if (bar) {
+    bar.hidden = false;
+    const name = bar.querySelector('[data-gallery-context-name]');
+    const summary = bar.querySelector('[data-gallery-context-summary]');
+    if (name) name.textContent = 'Home';
+    if (summary) summary.textContent = 'Your music, ready to play';
+  }
+  renderMobileHome();
+  void loadMobileRecentAlbums();
+}
+
+// END js/runtime/mobile-home.js
+
 // BEGIN js/runtime/bootstrap-event-handlers.js
 
 // Keep this file as a thin registration seam; feature logic belongs in
@@ -39099,6 +39483,7 @@ searchInput?.addEventListener('input', () => {
 });
 
 window.addEventListener('popstate', () => {
+  if (typeof handleMobilePagePopState === 'function' && handleMobilePagePopState()) return;
   handleGalleryBootstrapPopState();
 });
 
@@ -39106,7 +39491,7 @@ window.addEventListener('popstate', () => {
 
 // BEGIN js/runtime/bootstrap-init.js
 
-﻿restorePlayerAppearance();
+restorePlayerAppearance();
 attachModalEvents();
 document.querySelectorAll('[data-account-menu-component]').forEach(attachAccountMenu);
 attachCoverLookupModalEvents();
@@ -39220,6 +39605,8 @@ if (bootstrap.startupPayloadTiers?.hydration && typeof bootstrap.startupPayloadT
 }
 renderView();
 if (typeof initGalleryMain === 'function') initGalleryMain();
+if (typeof initMobileNavigation === 'function') initMobileNavigation();
+if (typeof syncMobileHome === 'function') syncMobileHome();
 startupMetrics.markInitialRender(state.view);
 const hasAuthoritativeServerRenderedInitialView = Boolean(
   !bootstrap.partialView

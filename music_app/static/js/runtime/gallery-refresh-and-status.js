@@ -430,6 +430,8 @@ function renderView(options = {}) {
   }
   renderLibraryLoader(state.status);
   scheduleSidebarRender();
+  if (typeof syncMobileHome === 'function') syncMobileHome();
+  if (typeof syncMobileGalleryControls === 'function') syncMobileGalleryControls();
 }
 
 function hasEquivalentGalleryRenderTopology(retainedGroups, canonicalGroups) {

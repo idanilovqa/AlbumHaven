@@ -30,57 +30,68 @@ Include loading, empty/error states, missing/unavailable albums, session expiry/
 
 Use focused unit/contract tests for changed seams and production-path browser verification with isolated Postgres and generated media. Capture real screenshots at phone, narrow-phone, and wide-tablet/desktop sizes. Do not substitute generated mockups or app-owned API mocks for screenshots of the implemented application. Existing full PR gates remain authoritative for release readiness; this branch workflow supplies development evidence, not a replacement release gate.
 
-## Progress
+## Delivery status
 
-The responsive runtime, Home, gallery modes, navigable detail/settings/cover pages,
-account-scoped preferences and persistent-player integration are implemented on this
-branch. The native packaging and future playlist/top features remain outside scope.
+The mobile view refactor is implemented on `2026-09-25-mobile-layout`, using the
+existing components and plain JavaScript/template stack. The owner waived the
+mockup review gate for this task only. No parent-branch change, merge, release,
+native package or future playlist/top implementation is included.
 
-The last hosted run at `f659a98fbd9add2a80f2cbd8c8570525f2179bfd` passed six of seven
-mobile scenarios, including actual playback across page navigation, mobile appearance
-customization, and saving gallery preferences into a fresh login. It exposed an
-Artist Family lifecycle defect: a late canonical refresh of the same optimistic
-artist view dismissed the panel after the user opened it.
+### Verified implementation
 
-The continuation fixes that lifecycle at the shared rendering boundary. An open
-Family panel retains its content and focus on same-context hydration, but closes
-when artist, search, scope or surface changes, or when another artist navigation or
-scan page is pending. The failing browser scenario and its assertions are unchanged.
-Six added unit cases cover refresh retention and navigation dismissal. Focused local
-verification: 134 JavaScript tests, 12 Python tests, and production parity passed.
-Hosted verification and final screenshot inspection remain in progress.
+Tested application source: `b9b233cb8fda6cfc337326abc7d44115d42dbab6`.
+Hosted run: `36198005259` (Mobile Layout Verification), completed successfully.
+Screenshot snapshot: `5e8ea80beadab82f4db6c6ac0822bc0612cac42f`.
+The snapshot contains 18 PNGs under `test-results/mobile-screenshots/` and the
+Playwright result under `test-results/mobile-layout-results.json`.
 
-No checklist counters exist in this document; no checkbox totals were changed.
-No merge, release, or full PR-gate certification is implied by branch verification.
+- Seven real-app browser scenarios passed with no retries. They cover login and
+  Home, drawer/search/Artist Family, persisted gallery modes and density, album
+  details and full artwork, settings/integrations/account navigation, narrow-phone
+  and wide-tablet geometry, independent mobile appearance, and actual playback
+  across page navigation and a track boundary.
+- Hosted focused checks passed: 135 JavaScript tests, 12 Python tests, and the
+  production-parity gate. An expanded local focused command also includes the
+  virtual-grid regressions: all 186 JavaScript tests passed.
+- The browser uses the production ASGI app, normal routes, repositories and player,
+  backed by disposable PostgreSQL and generated test media. Screenshots do not
+  contain the owner's real library and are not generated UI concepts.
 
+### Defects corrected during verification
 
-### Rendered-screen follow-up
+Same-artist hydration no longer closes an open Artist Family panel. The panel
+still closes on a real artist, search, scope or surface change. Drawer labels fit
+within their controls, and Home keeps its heading after density changes. Leaving
+Home now restores the gallery before measuring virtual rows, preventing one-pixel
+cards after search or a wide-tablet resize. Integrations captures wait for the
+real Last.fm controls instead of capturing the loading state. Existing browser
+assertions, flows, timeouts and retry policy were not weakened in these fixes.
 
-The seven mobile scenarios passed in hosted run `36196874885` on source
-`23bbb2c697d0bcbe3a60749968a8d538e576a78b`. Screenshot inspection then identified
-clipped library-section labels and a Home heading overwritten by gallery geometry
-refreshes. The follow-up preserves Home context in the shared chrome renderer and
-gives the existing drawer buttons content-sized flex tracks. It adds assertions
-for label fit and Home context without removing or changing any prior acceptance
-flow. Final screenshots are recaptured after this change.
+### Testing boundary
 
-Additional local related-seam verification ran 579 JavaScript tests: 576 passed.
-Three failures also reproduce with the original base implementation: the Artist
-Tree heading CSS-selector contract, Main-elements/player token isolation, and the
-floating-player hover-strength CSS contract. Those inherited appearance issues
-are not changed by this task and remain outside its mobile acceptance result.
-No checklist counters or checkbox totals changed.
+The additional related-seam run had 576 passing tests out of 579. Three failures
+also reproduce with the original base implementation: the Artist Tree heading
+CSS-selector contract, Main-elements/player token isolation, and floating-player
+hover-strength CSS. They were not changed to force a pass. Full authoritative PR
+regression, owner manual acceptance and release certification remain separate
+from this task-specific verification. Physical-device native packaging, platform
+background-audio behavior and every error/session-expiry edge case are not
+certified by the seven browser scenarios.
 
+### Local handoff
 
-### Home-to-gallery geometry
+Use this branch rather than the parent. Existing databases need the additive
+`migrations/postgres/0080_user_client_layout_preferences.sql` migration applied
+through the established migrator workflow before account/device settings can
+sync. No existing migration was rewritten.
 
-Hosted run `36197332874` passed the seven mobile scenarios on source
-`8fcd8378505c2cccf05d863add6605365631efcd`. The subsequent wide-tablet screenshot
-exposed a real layout error: the virtual grid measured its container while Home
-still hid it, leaving one-pixel card tracks. The shared gallery renderer now
-synchronizes Home visibility before measurement. Two regression cases reproduce
-the search and wide-tablet transitions. The browser scenario also checks that
-the resulting cards have readable width. The Integrations capture now waits for
-the real Last.fm controls rather than its loading heading. No existing scenario,
-assertion, timeout or retry policy is weakened. Final hosted verification and
-rendered-screen inspection are pending. No checklist counters were changed.
+Check Home at phone width, switch Rows/Cards/No info and two/three columns, then
+reopen the account on another mobile session to confirm persistence. Open an
+album, play a track, visit Appearance or Integrations, and use player artwork to
+return to the album. Verify Artist Family from the right and resize above 900px
+for the desktop presentation. Playlists and Album tops have explicit unavailable
+states, not fake implementations.
+
+No checklist counters exist in this document. Exact direct-work and process
+elapsed times were not recorded. The implementation is retained on the task
+branch for the owner's inspection; no publication is implied.

@@ -14,6 +14,7 @@ from music_app.services.admin_member_mutation_postgres import (
     RecentAuthenticationRequired,
     lock_current_actor_session,
 )
+from music_app.services.admin_authority import ADMIN_LIBRARY_AUTHORITY_SQL
 from music_app.services.auth_audit_postgres import (
     InvitationAuditReason,
     SecurityAuditCategory,
@@ -228,7 +229,7 @@ def _rotate_invitation_in_transaction(
         (actor_account_id, target_account_id),
     ).fetchall()
     rows = connection.execute(
-        """
+        f"""
         with locked_accounts as (
           select id, account_kind, username_display, contact_email,
                  is_active, disabled_at
@@ -243,10 +244,7 @@ def _rotate_invitation_in_transaction(
         )
         select target.id, target.username_display, target.contact_email
         from locked_accounts actor
-        join app.bootstrap_owners authority
-          on authority.account_id = actor.id
-         and authority.owner_key = 'local-bootstrap-owner'
-        join locked_library on locked_library.owner_account_id = actor.id
+        join locked_library on true
         join locked_accounts target on target.id = %s
         join library.library_memberships membership
           on membership.account_id = target.id
@@ -258,6 +256,7 @@ def _rotate_invitation_in_transaction(
         where actor.id = %s
           and actor.is_active is true
           and actor.disabled_at is null
+          and {ADMIN_LIBRARY_AUTHORITY_SQL}
           and target.account_kind = 'managed_user'
           and target.is_active is true
           and target.disabled_at is null

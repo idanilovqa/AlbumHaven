@@ -9,6 +9,10 @@ from datetime import datetime, timedelta, timezone
 import re
 from typing import Any, Iterator
 
+from music_app.services.admin_authority import (
+    ADMIN_LIBRARY_AUTHORITY_SQL, ADMIN_TARGET_PROTECTION_SQL, lock_admin_accounts,
+)
+
 from music_app.services.admin_member_mutation_postgres import (
     RecentAuthenticationRequired,
     lock_current_actor_session,
@@ -252,8 +256,9 @@ class PostgresAdminMailActionService:
 
     @staticmethod
     def _lock_authority_and_target(connection: Any, actor_id: int, library_id: int, target_id: int) -> Mapping[str, object]:
+        lock_admin_accounts(connection, actor_id, target_id)
         rows = connection.execute(
-            """
+            f"""
             with locked_accounts as (
               select id, account_kind, is_active, disabled_at, contact_email
               from app.accounts where id in (%s, %s) order by id for update
@@ -270,10 +275,7 @@ class PostgresAdminMailActionService:
                    target.contact_email,
                    credential.credential_version
             from locked_accounts actor
-            join app.bootstrap_owners authority
-              on authority.account_id = actor.id
-             and authority.owner_key = 'local-bootstrap-owner'
-            join locked_library on locked_library.owner_account_id = actor.id
+            join locked_library on true
             join locked_accounts target on target.id = %s
             join library.library_memberships membership
               on membership.library_id = locked_library.id
@@ -281,6 +283,8 @@ class PostgresAdminMailActionService:
             join app.account_credentials credential on credential.account_id = target.id
             where actor.id = %s and actor.is_active is true
               and actor.disabled_at is null
+              and {ADMIN_LIBRARY_AUTHORITY_SQL}
+              and {ADMIN_TARGET_PROTECTION_SQL}
             for update of credential, membership
             """,
             (actor_id, target_id, library_id, target_id, actor_id),

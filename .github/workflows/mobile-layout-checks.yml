@@ -1,0 +1,35 @@
+name: Mobile Layout Verification
+
+on:
+  push:
+    branches:
+      - 2026-09-25-mobile-layout
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: mobile-layout-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  source_snapshot:
+    name: Source snapshot for isolated verification
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - name: Archive tracked application source
+        run: |
+          mkdir -p "${{ runner.temp }}/mobile-source"
+          git archive --format=tar.gz --output="${{ runner.temp }}/mobile-source/albumhaven-source.tar.gz" HEAD
+          git rev-parse HEAD > "${{ runner.temp }}/mobile-source/source-commit.txt"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mobile-source-${{ github.sha }}
+          path: ${{ runner.temp }}/mobile-source/
+          if-no-files-found: error
+          retention-days: 3

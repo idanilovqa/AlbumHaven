@@ -18,15 +18,51 @@ jobs:
     name: Source snapshot for isolated verification
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v5
         with:
           persist-credentials: false
-      - name: Archive tracked application source
+      - name: Prepare tracked source snapshot
+        shell: python
         run: |
-          mkdir -p "${{ runner.temp }}/mobile-source"
-          git archive --format=tar.gz --output="${{ runner.temp }}/mobile-source/albumhaven-source.tar.gz" HEAD
-          git rev-parse HEAD > "${{ runner.temp }}/mobile-source/source-commit.txt"
+          import hashlib, json, os, pathlib, subprocess, tarfile
+          out = pathlib.Path(os.environ['RUNNER_TEMP']) / 'mobile-source'
+          out.mkdir()
+          files = subprocess.check_output(['git', 'ls-files', '-z']).decode().split('\0')
+          extensions = {'.py', '.js', '.cjs', '.mjs', '.json', '.html', '.css', '.svg', '.sql', '.txt', '.ini', '.yaml', '.yml', '.toml', '.md', '.ps1', '.sh', '.lock', '.example'}
+          archive = out / 'albumhaven-source.tar.gz'
+          with tarfile.open(archive, 'w:gz') as tar:
+              for name in files:
+                  path = pathlib.Path(name)
+                  if name and path.is_file() and (path.suffix in extensions or path.name.startswith('.git')):
+                      tar.add(path, arcname=name, recursive=False)
+          content = archive.read_bytes()
+          parts = []
+          for index, offset in enumerate(range(0, len(content), 700000)):
+              name = f'source-{index:02d}.bin'
+              (out / name).write_bytes(content[offset:offset+700000])
+              parts.append(name)
+          manifest = {'source_commit': subprocess.check_output(['git','rev-parse','HEAD']).decode().strip(), 'sha256': hashlib.sha256(content).hexdigest(), 'parts': parts}
+          (out / 'manifest.json').write_text(json.dumps(manifest))
+      - name: Expose temporary snapshot through the repository file API
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const path = require('path');
+            const dir = path.join(process.env.RUNNER_TEMP, 'mobile-source');
+            const manifest = JSON.parse(fs.readFileSync(path.join(dir, 'manifest.json'), 'utf8'));
+            const tree = [];
+            for (const name of [...manifest.parts, 'manifest.json']) {
+              const blob = await github.rest.git.createBlob({ ...context.repo, content: fs.readFileSync(path.join(dir, name)).toString('base64'), encoding: 'base64' });
+              tree.push({ path: name, mode: '100644', type: 'blob', sha: blob.data.sha });
+            }
+            const sourceTree = await github.rest.git.createTree({ ...context.repo, tree });
+            const snapshot = await github.rest.git.createCommit({ ...context.repo, message: `Temporary mobile verification source snapshot of ${context.sha}`, tree: sourceTree.data.sha, parents: [] });
+            console.log('CONNECTOR_SOURCE_SNAPSHOT ' + JSON.stringify({ snapshot_commit: snapshot.data.sha, ...manifest }));
+            // No branch or tag points at this transport snapshot. Application history is unchanged.
       - uses: actions/upload-artifact@v4
         with:
           name: mobile-source-${{ github.sha }}

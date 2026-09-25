@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from music_app.services.capabilities import client_allows_action, grant_keys_for_action
 from music_app.services.allowed_actions import PolicyDecision
 from music_app.services.current_actor import ActorState, CapabilityGrant
 from music_app.services.policy import PolicyContext
@@ -95,6 +96,15 @@ class PolicyEvaluator:
             return False, "client_surface_denied"
         if not constraints.request_origin_allowed:
             return False, "request_origin_denied"
+        administrator = actor.is_bootstrap_owner or any(
+            grant.capability_key == "capability.admin" and _scope_matches(grant, context)
+            for grant in actor.capability_grants
+            if isinstance(grant, CapabilityGrant)
+        )
+        if not client_allows_action(
+            context.action, context.client_surface_class, administrator=administrator
+        ):
+            return False, "client_surface_denied"
         if actor.is_bootstrap_owner:
             return True, "bootstrap_owner"
         if context.action == "auth.session.logout" and actor.session_id is not None:
@@ -116,13 +126,12 @@ class PolicyEvaluator:
 
 
 def _grant_matches(grant: CapabilityGrant, context: PolicyContext) -> bool:
-    required_capability = (
-        "library.browse.read" if context.action in LIBRARY_SHELL_ACTIONS else context.action
-    )
-    if not isinstance(grant, CapabilityGrant) or grant.capability_key not in {
-        context.action, required_capability
-    }:
+    if not isinstance(grant, CapabilityGrant) or grant.capability_key not in grant_keys_for_action(context.action):
         return False
+    return _scope_matches(grant, context)
+
+
+def _scope_matches(grant: CapabilityGrant, context: PolicyContext) -> bool:
     if grant.scope_kind == "global":
         return grant.scope_id is None
     if grant.scope_kind == "library":

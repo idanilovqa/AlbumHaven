@@ -8,6 +8,7 @@ import hmac
 
 from fastapi import HTTPException, Request, status
 
+from music_app.services.client_surfaces import client_surface_from_request
 from music_app.services.current_actor_asgi import current_actor_from_request
 from music_app.services.allowed_actions import AllowedActions
 from music_app.services.policy import PolicyContext, RequestOrigin, ResourceScope
@@ -43,7 +44,7 @@ def require_action(
             resource=resource,
             deployment_mode=_deployment_mode(request),
             request_origin=_request_origin(request),
-            client_surface_class="private_web",
+            client_surface_class=client_surface_from_request(request),
         )
         constraint_resolver = getattr(
             request.app.state, "policy_constraint_resolver", None
@@ -105,7 +106,7 @@ def allowed_actions_for_request(
             target_account_id=target_account_id,
             deployment_mode=_deployment_mode(request),
             request_origin=_request_origin(request),
-            client_surface_class="private_web",
+            client_surface_class=client_surface_from_request(request),
         )
         constraints = (
             constraint_resolver(context)
@@ -126,6 +127,7 @@ def _library_scope(actor, action: str, explicit_library_id: int | None) -> int |
         or action in LIBRARY_SHELL_ACTIONS
         or action.startswith("integration.")
         or action.startswith("accounts.")
+        or action.startswith("capability.")
     ):
         return None
     current_library_id = actor.current_library_id

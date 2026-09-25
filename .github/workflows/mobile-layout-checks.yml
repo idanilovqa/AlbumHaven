@@ -31,7 +31,6 @@ jobs:
     env:
       ALBUM_HAVEN_FAKE_E2E_SETUP_DATABASE_URL: postgresql://album_haven_migrator@127.0.0.1:5432/album_haven_fake_e2e
       ALBUM_HAVEN_FAKE_E2E_DATABASE_URL: postgresql://album_haven_app@127.0.0.1:5432/album_haven_fake_e2e
-      PGPASSFILE: ${{ runner.temp }}/mobile.pgpass
     steps:
       - uses: actions/checkout@v5
         with:
@@ -102,7 +101,9 @@ jobs:
           CREATE DATABASE album_haven_fake_e2e OWNER album_haven_migrator;
           SQL
           umask 077
-          printf '%s\n' '127.0.0.1:5432:album_haven_fake_e2e:album_haven_migrator:isolated-mobile-setup' '127.0.0.1:5432:album_haven_fake_e2e:album_haven_app:isolated-mobile-app' > "$PGPASSFILE"
+          pgpass="$RUNNER_TEMP/mobile.pgpass"
+          printf '%s\n' '127.0.0.1:5432:album_haven_fake_e2e:album_haven_migrator:isolated-mobile-setup' '127.0.0.1:5432:album_haven_fake_e2e:album_haven_app:isolated-mobile-app' > "$pgpass"
+          printf 'PGPASSFILE=%s\n' "$pgpass" >> "$GITHUB_ENV"
       - name: Focused unit and contract tests
         run: |
           node --test tests/js/client-device-preferences.test.js tests/js/runtime/gallery-main*.test.js tests/js/runtime/modal-escape.test.js tests/js/runtime/compact-player-helpers.test.js tests/js/runtime/app-loader-bundle.test.js

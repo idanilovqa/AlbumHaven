@@ -1,0 +1,37 @@
+<section data-capability-assignment aria-label="Role and capability assignment">
+  <input type="hidden" name="access_revision" value="{{ access_editor.revision }}">
+  <fieldset class="permission-fieldset">
+    <legend>Roles</legend>
+    <aside class="role-note"><span aria-hidden="true">ⓘ</span><span>Roles add together. Admin manages users and access; Owner grants library features, not administration. Select both only when both are needed.</span></aside>
+    <div class="permission-groups">
+      {% for roles in access_editor.roles | batch(2) %}
+      <section class="permission-group">
+        {% for role in roles %}
+        <label><span>{{ role.label }}</span><input class="switch" type="checkbox" name="role_keys" value="{{ role.key }}" data-role-label="{{ role.label }}" data-role-grants="{{ role.grants | tojson | forceescape }}" {% if role.key in access_editor.role_keys %}checked{% endif %}></label>
+        {% endfor %}
+      </section>
+      {% endfor %}
+    </div>
+  </fieldset>
+  <fieldset class="permission-fieldset">
+    <legend>Additional capabilities</legend>
+    <aside class="role-note"><span aria-hidden="true">ⓘ</span><span>Checked, disabled switches are included by a selected role. Other switches add individual capabilities. Device restrictions still apply.</span></aside>
+    <div class="permission-groups">
+      {% for capabilities in access_editor.capabilities | batch(4) %}
+      <section class="permission-group">
+        {% for capability_key, label in capabilities %}
+        <label><span>{{ label }}</span><input class="switch" type="checkbox" name="additional_capability_keys" value="{{ capability_key }}" data-explicit-grant="{{ 'true' if capability_key in access_editor.capability_keys else 'false' }}" {% if capability_key in access_editor.inherited_keys %}checked disabled title="Included by a selected role"{% elif capability_key in access_editor.capability_keys %}checked{% endif %}></label>
+        {% endfor %}
+      </section>
+      {% endfor %}
+    </div>
+  </fieldset>
+  {% for capability_key in access_editor.unlisted_keys %}
+  <input type="hidden" name="additional_capability_keys" value="{{ capability_key }}">
+  {% endfor %}
+  {% if access_editor.unlisted_keys %}<p>Other retained explicit grants: {{ access_editor.unlisted_keys | join(', ') }}.</p>{% endif %}
+  {% if access_editor.unmanaged_keys %}<p>Grants outside this editor are preserved: {{ access_editor.unmanaged_keys | join(', ') }}. Removing library access revokes all current-library grants.</p>{% endif %}
+  <p data-role-summary aria-live="polite">Role selections and individual capabilities are saved together.</p>
+  <button class="admin-button" type="button" data-roles-only {% if not access_editor.role_keys %}disabled{% endif %}>Use selected roles only</button>
+  <aside class="role-note"><span aria-hidden="true">ⓘ</span><span>For a new user, selecting a role replaces untouched legacy Listener defaults. Existing users keep their explicit grants unless you choose “Use selected roles only”. To avoid locking yourself out, keep Admin and library access on your own account.</span></aside>
+</section>

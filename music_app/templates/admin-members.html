@@ -50,15 +50,15 @@
         {% for member in roster.members %}
         {% set can_copy_invitation = member.membership_role and member.account_status == 'Pending invitation' and allowed_actions.allows('accounts.invitation.copy') %}
         {% set can_send_invitation = member.membership_role and member.account_status == 'Pending invitation' and invitation_email_enabled and allowed_actions.allows('accounts.invitation.send') %}
-        {% set can_edit_member = allowed_actions.allows('accounts.manage') %}
+        {% set can_edit_member = allowed_actions.allows('accounts.manage') and (not member.is_bootstrap_owner or request.state.current_actor.is_bootstrap_owner) %}
         <article class="members-row" role="row">
           <div class="member-identity" role="cell">
             <span class="member-avatar" aria-hidden="true">{{ member.username[:2] | upper }}</span>
             <span><strong>{{ member.username }}</strong><small>{{ member.contact_email }}</small></span>
           </div>
           <div class="member-access" role="cell" data-label="Role / access">
-            <strong>{% if member.is_bootstrap_owner %}Owner{% else %}Listener{% if member.capability_keys | sort != listener_defaults | sort %} · Customized{% endif %}{% endif %}</strong>
-            <small>{% if member.is_bootstrap_owner %}Full access{% elif member.membership_role %}{{ member.capability_keys | length }} explicit capabilities{% else %}No current-library access{% endif %}</small>
+            <strong>{{ member_role_label(member, listener_defaults) }}</strong>
+            <small>{% if member.is_bootstrap_owner %}Full access{% elif member.membership_role %}{{ member.capability_keys | length }} effective grants{% else %}No current-library access{% endif %}</small>
           </div>
           <div role="cell" data-label="Status"><span class="status-dot {% if member.account_status == 'Disabled' %}is-disabled{% elif member.account_status == 'Pending invitation' %}is-pending{% endif %}"></span>{{ member.account_status }}</div>
           <div role="cell" data-label="Sessions">{{ member.active_session_count }} active session{{ "" if member.active_session_count == 1 else "s" }}</div>

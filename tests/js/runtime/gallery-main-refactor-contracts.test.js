@@ -1436,3 +1436,33 @@ test('family rows use available album art and retain independent pressed states'
   assert.match(html, /artist-family-panel__primary-divider/);
   assert.doesNotMatch(html, /data-open-lightbox/);
 });
+
+
+test('Home keeps its context through density refreshes and returns to Gallery on a wide viewport', () => {
+  const name = { textContent: '' }, summary = { textContent: '' };
+  const bar = { hidden: false, offsetHeight: 54, dataset: {},
+    querySelector: selector => selector === '[data-gallery-context-name]' ? name
+      : selector === '[data-gallery-context-summary]' ? summary : null };
+  const context = loadRuntime({ window: { innerWidth: 390 },
+    state: { gallery: {}, ui: {}, view: { query: '', selected_artist: '', artist_groups: [], artist_count: 4, album_count: 8 } },
+    document: {
+      querySelector: selector => selector === '[data-gallery-bar-instance="gallery"]' ? bar : null,
+      getElementById: id => id === 'albums-scroll' ? { scrollTop: 0 } : null,
+    },
+  });
+  vm.runInContext('function usesMobilePageLayout() { return window.innerWidth <= 900; }', context);
+  vm.runInContext(fs.readFileSync(path.join(runtimeRoot, 'mobile-home.js'), 'utf8'), context);
+  context.updateGalleryMainControls = () => {};
+  context.state.gallery.mainState = context.createGalleryMainState();
+  context.updateGalleryMainChrome();
+  assert.equal(name.textContent, 'Home');
+  assert.equal(summary.textContent, 'Your music, ready to play');
+  context.state.gallery.mainState.view = 'cards';
+  context.updateGalleryMainChrome();
+  assert.equal(name.textContent, 'Home');
+  assert.equal(bar.dataset.galleryContextKind, 'home');
+  context.window.innerWidth = 1180;
+  context.updateGalleryMainChrome();
+  assert.equal(name.textContent, 'Gallery');
+  assert.equal(bar.dataset.galleryContextKind, 'gallery');
+});

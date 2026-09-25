@@ -52,3 +52,21 @@ Hosted verification and final screenshot inspection remain in progress.
 
 No checklist counters exist in this document; no checkbox totals were changed.
 No merge, release, or full PR-gate certification is implied by branch verification.
+
+
+### Rendered-screen follow-up
+
+The seven mobile scenarios passed in hosted run `36196874885` on source
+`23bbb2c697d0bcbe3a60749968a8d538e576a78b`. Screenshot inspection then identified
+clipped library-section labels and a Home heading overwritten by gallery geometry
+refreshes. The follow-up preserves Home context in the shared chrome renderer and
+gives the existing drawer buttons content-sized flex tracks. It adds assertions
+for label fit and Home context without removing or changing any prior acceptance
+flow. Final screenshots are recaptured after this change.
+
+Additional local related-seam verification ran 579 JavaScript tests: 576 passed.
+Three failures also reproduce with the original base implementation: the Artist
+Tree heading CSS-selector contract, Main-elements/player token isolation, and the
+floating-player hover-strength CSS contract. Those inherited appearance issues
+are not changed by this task and remain outside its mobile acceptance result.
+No checklist counters or checkbox totals changed.

@@ -81,7 +81,8 @@ html[data-client-profile="mobile"] :is([data-account-menu-admin], [data-utility-
   .mobile-gallery-density[hidden] { display: none; }
   .shell-layout .shell-navigation-rail { top: var(--app-bar-height); bottom: var(--player-height); width: min(360px, calc(100vw - 28px)); padding: 0; border-radius: 0 16px 16px 0; }
   .mobile-library-modes { display: flex; gap: 4px; padding: 12px 8px; border-bottom: 1px solid var(--border); flex-shrink: 0; }
-  .mobile-library-modes .action-button { width: auto; padding: 0 8px; min-height: 40px; font-size: 12px; }
+  .mobile-library-modes .action-button { flex: 1 0 auto; width: auto; min-width: max-content; padding: 0 8px; min-height: 40px; font-size: 12px; white-space: nowrap; }
+  .mobile-library-modes [data-close-artists-drawer] { flex: 0 0 40px; min-width: 40px; }
   .mobile-library-modes [aria-pressed="true"] { color: var(--appearance-selected-accent, #34ca78); background: var(--app-active); }
   .mobile-library-placeholder:not([hidden]) { display: block; padding: 24px 18px; line-height: 1.5; color: var(--muted); }
   #artist-tree-expanded { min-height: 0; flex: 1; display: flex; flex-direction: column; }

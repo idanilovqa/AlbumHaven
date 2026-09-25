@@ -10,6 +10,8 @@ export class MobileLayoutPage {
     this.signInButton = page.getByRole('button', { name: 'Sign in', exact: true });
     this.appShell = page.locator('#app-shell');
     this.home = page.locator('#mobile-home');
+    this.galleryContextName = page.locator('[data-gallery-bar-instance="gallery"] [data-gallery-context-name]');
+    this.librarySectionButtons = page.locator('[data-mobile-library-mode]');
     this.homeCards = this.home.locator('.album-card');
     this.homeAlbums = this.home.locator('[data-open-tracklist]');
     this.homeGrid = page.locator('.mobile-home-grid');
@@ -98,6 +100,12 @@ export class MobileLayoutPage {
         activeSurface: galleryMainSurfaceController?.current()?.key, pendingView: state.ui.pendingViewTransition,
         pendingRequest: state.ui.activeViewRequestUrl, searchTimer: Boolean(state.ui.pendingSelectedArtistReconcileTimer) };
     });
+  }
+
+  async librarySectionLabelsFit() {
+    // parity-check: allow-read-only-measurement-evaluate -- measure label clipping in the rendered navigation controls.
+    return this.librarySectionButtons.evaluateAll(buttons => buttons.length === 3
+      && buttons.every(button => button.scrollWidth <= button.clientWidth));
   }
 
   async hasNoHorizontalOverflow() {

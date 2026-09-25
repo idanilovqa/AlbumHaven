@@ -524,14 +524,19 @@ function updateGalleryMainChrome() {
   const oldInfo = bar.querySelector('[data-artist-info-trigger]');
   const inlineDivider = bar.querySelector('[data-gallery-context-artist-divider]');
   const inlineTotal = bar.querySelector('[data-gallery-context-inline-total]');
-  if (bar.dataset) bar.dataset.galleryContextKind = context.kind;
+  const mobileHome = typeof shouldShowMobileHome === 'function' && shouldShowMobileHome();
+  if (bar.dataset) bar.dataset.galleryContextKind = mobileHome ? 'home' : context.kind;
   summary.hidden = false;
   if (inlineDivider) inlineDivider.hidden = true;
   if (inlineTotal) {
     inlineTotal.hidden = true;
     inlineTotal.textContent = '';
   }
-  if (context.kind === 'gallery' || context.kind === 'family') {
+  if (mobileHome) {
+    name.textContent = 'Home';
+    summary.textContent = 'Your music, ready to play';
+    oldInfo?.remove();
+  } else if (context.kind === 'gallery' || context.kind === 'family') {
     name.textContent = context.kind === 'gallery' ? 'Gallery' : `${context.primaryArtist} family`;
     summary.textContent = `${galleryMainPlural(context.artistCount, 'artist')} · ${galleryMainPlural(context.albumCount, 'album')}`;
     oldInfo?.remove();

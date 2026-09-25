@@ -34,6 +34,7 @@ test('mobile login, Home rows, artist drawer, search and right-side family panel
   await capture(page, '02-home-rows');
   await app.libraryButton.click();
   await expect(app.artistRail).toHaveClass(/is-mobile-drawer-open/);
+  await expect.poll(() => app.librarySectionLabelsFit()).toBeTruthy();
   await capture(page, '03-artist-navigation');
   await app.playlistsMode.click();
   await expect(app.libraryPlaceholder).toContainText('when playlist support is available');
@@ -68,6 +69,7 @@ test('two- and three-column cards and art-only modes persist to a fresh mobile s
   await capture(page, '06-home-cards-two-columns');
   await app.threeColumnsButton.click();
   await expect(app.homeGrid).toHaveCSS('grid-template-columns', /\S+ \S+ \S+/);
+  await expect(app.galleryContextName).toHaveText('Home');
   await capture(page, '07-home-cards-three-columns');
   const saved = page.waitForResponse(response => response.url().includes('/account/layout-preferences')
     && response.request().method() === 'PUT'

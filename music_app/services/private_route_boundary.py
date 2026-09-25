@@ -81,7 +81,7 @@ _PRIVATE_ROUTE_ACTIONS = {
     ("GET", "/virtual-artists/{virtual_artist_ref}"): "library.virtual_discography.read",
     ("GET", "/virtual-releases/{virtual_release_ref}"): "library.virtual_discography.read",
     ("GET", "/track"): "library.media.read",
-    ("GET", "/cover"): "library.media.read",
+    ("GET", "/cover"): "library.artwork.read",
     ("GET", "/loops/media/{loop_id}"): "library.loops.media.read",
     ("GET", "/loops/pitch-preview/{preview_id}"): "library.loops.media.read",
     ("GET", "/utilities/cover-lookup/remote-image"): "library.covers.remote.read",
@@ -117,10 +117,10 @@ _PRIVATE_ROUTE_ACTIONS = {
     ("POST", "/utilities/cover-lookup/start"): "library.covers.lookup",
     ("POST", "/utilities/cover-lookup/task/{task_id}/cancel"): "library.covers.lookup.cancel",
     ("POST", "/utilities/cover-lookup/local-select"): "library.covers.write",
-    ("POST", "/utilities/cover-lookup/local-delete"): "library.covers.write",
-    ("POST", "/utilities/cover-lookup/pasted-image-save"): "library.covers.write",
+    ("POST", "/utilities/cover-lookup/local-delete"): "library.covers.delete",
+    ("POST", "/utilities/cover-lookup/pasted-image-save"): "library.covers.upload",
     ("POST", "/utilities/cover-lookup/save-remote"): "library.covers.write",
-    ("POST", "/utilities/cover-lookup/add-remote"): "library.covers.write",
+    ("POST", "/utilities/cover-lookup/add-remote"): "library.covers.link",
     ("POST", "/utilities/fetch-cover"): "library.covers.fetch",
     ("POST", "/utilities/fetch-covers-unsuccessful"): "library.covers.fetch",
     ("POST", "/utilities/cancel-cover-scan"): "library.covers.fetch.cancel",
@@ -188,6 +188,15 @@ def install_private_route_boundary(app: FastAPI) -> None:
             await require_action(action, resource=resource)(request)
             if route_path == '/utilities/log-history/export':
                 await require_action('library.logs.read', resource=resource)(request)
+            if route_path == "/cover":
+                if request.query_params.get("loop_id"):
+                    await require_action("library.loops.read", resource=resource)(request)
+                from music_app.services.capability_artwork import browse_artwork_response
+
+                artwork = await browse_artwork_response(request)
+                if artwork is not None:
+                    _refresh_session_csrf_cookie(request, artwork)
+                    return artwork
         except HTTPException as exc:
             if (
                 exc.status_code == 401

@@ -153,3 +153,9 @@
 .settings-host .permission-groups { grid-template-columns: 1fr; }
 .settings-host .permission-group + .permission-group { padding: 14px 0 0; border-left: 0; border-top: 1px solid var(--line); }
 }
+
+/* Disabled controls must remain visibly inactive, including hover/focus. */
+.settings-host .admin-button:disabled {
+  color: var(--muted); background: var(--surface-2); border-color: var(--line);
+  opacity: .65; cursor: not-allowed; filter: none; box-shadow: none;
+}

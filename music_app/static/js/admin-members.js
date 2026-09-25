@@ -1,6 +1,49 @@
 (() => {
   'use strict';
 
+  function bindCapabilityAssignment(form) {
+    const editor = form.querySelector('[data-capability-assignment]');
+    if (!editor) return null;
+    const roleInputs = [...editor.querySelectorAll('[name="role_keys"]')];
+    const inputs = [...form.querySelectorAll('input[type="checkbox"][name="capability_keys"], input[type="checkbox"][name="additional_capability_keys"]')];
+    const direct = new Set(inputs.filter((input) => input.dataset.explicitGrant === 'true'
+      || input.dataset.explicitGrant === undefined && input.checked).map((input) => input.value));
+    editor.querySelectorAll('input[type="hidden"][name="additional_capability_keys"]').forEach((input) => direct.add(input.value));
+    const legacySummary = form.querySelector('[data-legacy-permission-summary]');
+    const summary = editor.querySelector('[data-role-summary]');
+    const rolesOnly = editor.querySelector('[data-roles-only]');
+    let newUserDefaults = form.dataset.mode === 'create';
+    const selectedRoles = () => roleInputs.filter((input) => input.checked);
+    const sync = () => {
+      const selected = selectedRoles();
+      const inherited = new Set(selected.flatMap((input) => JSON.parse(input.dataset.roleGrants)));
+      for (const input of inputs) {
+        input.checked = direct.has(input.value) || inherited.has(input.value);
+        input.disabled = inherited.has(input.value);
+        input.title = inherited.has(input.value) ? 'Included by a selected role' : '';
+      }
+      if (legacySummary) legacySummary.hidden = selected.length > 0;
+      if (rolesOnly) rolesOnly.disabled = selected.length === 0;
+      if (summary) summary.textContent = selected.length
+        ? `Assigned roles: ${selected.map((input) => input.dataset.roleLabel).join(' + ')}. ${direct.size} explicit grants.`
+        : `No named roles. ${direct.size} explicit grants.`;
+    };
+    for (const input of inputs) input.addEventListener('change', () => {
+      newUserDefaults = false;
+      if (input.disabled) return;
+      if (input.checked) direct.add(input.value); else direct.delete(input.value);
+      sync();
+    });
+    for (const input of roleInputs) input.addEventListener('change', () => {
+      if (newUserDefaults && selectedRoles().length) { direct.clear(); newUserDefaults = false; }
+      sync();
+    });
+    rolesOnly?.addEventListener('click', () => { direct.clear(); newUserDefaults = false; sync(); });
+    sync();
+    return { capabilityKeys: () => [...direct].sort(), roleKeys: () => selectedRoles().map((input) => input.value) };
+  }
+
+
   function mount(root, options = {}) {
   const document = root;
   let active = true;
@@ -346,6 +389,7 @@
 
   const form = document.querySelector('[data-admin-account-form]');
   if (!form) return cleanup;
+  const assignment = bindCapabilityAssignment(form);
   const error = form.parentElement?.querySelector('[data-admin-form-error]');
   const status = form.parentElement?.querySelector('[data-admin-form-status]');
   const submit = form.querySelector('button[type="submit"]');
@@ -430,8 +474,9 @@
         await requestJson('/admin/accounts', 'POST', {
           username: form.elements.username.value,
           contact_email: form.elements.contact_email.value,
-          capability_keys: data.getAll('capability_keys').map(String),
+          capability_keys: assignment ? assignment.capabilityKeys() : data.getAll('capability_keys').map(String),
           send_invitation: form.elements.send_invitation.checked,
+          ...(assignment ? { role_keys: assignment.roleKeys() } : {}),
         }, csrfToken);
         completedDestination = '/admin/members?created=1';
         await navigateAfterMutation(completedDestination, submit);
@@ -453,9 +498,10 @@
       await requestJson(`/admin/accounts/${encodeURIComponent(accountId)}`, 'PATCH', {
         is_active: isActive,
         current_library_access: hasAccess,
-        capability_keys: data.getAll('capability_keys').map(String),
+        capability_keys: assignment ? assignment.capabilityKeys() : data.getAll('capability_keys').map(String),
         confirm_disable: confirmDisable,
         confirm_remove_access: confirmRemoveAccess,
+        ...(assignment ? { role_keys: assignment.roleKeys(), access_revision: String(data.get('access_revision') || '') } : {}),
       }, csrfToken);
       completedDestination = '/admin/members';
       await navigateAfterMutation(completedDestination, submit);
@@ -579,6 +625,7 @@
   return cleanup;
   }
   window.AlbumHavenMountAdmin = mount;
+  window.AlbumHavenBindCapabilityAssignment = bindCapabilityAssignment;
   // Existing standalone consumers still work; the Settings controller owns mounting in the shared host.
   if (!document.querySelector('[data-settings-host]')) mount(document);
 })();

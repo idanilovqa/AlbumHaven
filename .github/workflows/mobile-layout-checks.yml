@@ -2,8 +2,7 @@ name: Mobile Layout Verification
 
 on:
   push:
-    branches:
-      - 2026-09-25-mobile-layout
+    branches: [2026-09-25-mobile-layout]
   workflow_dispatch:
 
 permissions:
@@ -14,58 +13,147 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  source_snapshot:
-    name: Source snapshot for isolated verification
+  mobile:
+    name: Production app mobile verification
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 25
     permissions:
       contents: write
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_PASSWORD: isolated-mobile-admin
+        ports: [5432:5432]
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      ALBUM_HAVEN_FAKE_E2E_SETUP_DATABASE_URL: postgresql://album_haven_migrator:isolated-mobile-setup@127.0.0.1:5432/album_haven_fake_e2e
+      ALBUM_HAVEN_FAKE_E2E_DATABASE_URL: postgresql://album_haven_app:isolated-mobile-app@127.0.0.1:5432/album_haven_fake_e2e
     steps:
       - uses: actions/checkout@v5
         with:
           persist-credentials: false
-      - name: Prepare tracked source snapshot
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+      - name: Apply hash-verified editor patch when present
         shell: python
         run: |
-          import hashlib, json, os, pathlib, subprocess, tarfile
-          out = pathlib.Path(os.environ['RUNNER_TEMP']) / 'mobile-source'
-          out.mkdir()
-          files = subprocess.check_output(['git', 'ls-files', '-z']).decode().split('\0')
-          extensions = {'.py', '.js', '.cjs', '.mjs', '.json', '.html', '.css', '.svg', '.sql', '.txt', '.ini', '.yaml', '.yml', '.toml', '.md', '.ps1', '.sh', '.lock', '.example'}
-          archive = out / 'albumhaven-source.tar.gz'
-          with tarfile.open(archive, 'w:gz') as tar:
-              for name in files:
-                  path = pathlib.Path(name)
-                  if name and path.is_file() and (path.suffix in extensions or path.name.startswith('.git')):
-                      tar.add(path, arcname=name, recursive=False)
-          content = archive.read_bytes()
-          parts = []
-          for index, offset in enumerate(range(0, len(content), 700000)):
-              name = f'source-{index:02d}.bin'
-              (out / name).write_bytes(content[offset:offset+700000])
-              parts.append(name)
-          manifest = {'source_commit': subprocess.check_output(['git','rev-parse','HEAD']).decode().strip(), 'sha256': hashlib.sha256(content).hexdigest(), 'parts': parts}
-          (out / 'manifest.json').write_text(json.dumps(manifest))
-      - name: Expose temporary snapshot through the repository file API
+          import base64, lzma, hashlib, json, pathlib, subprocess
+          transport = pathlib.Path('.chat-editor/mobile-layout-patch.json')
+          if transport.exists():
+              descriptor = json.loads(transport.read_text())
+              digest = descriptor['sha256']
+              parts = [pathlib.Path('.chat-editor') / name for name in descriptor['parts']]
+              if any(part.parent != pathlib.Path('.chat-editor') for part in parts):
+                  raise RuntimeError('Invalid editor patch path')
+              encoded = ''.join(part.read_text() for part in parts)
+              patch = lzma.decompress(base64.b64decode(encoded, validate=True))
+              if hashlib.sha256(patch).hexdigest() != digest.strip():
+                  raise RuntimeError('Editor patch hash mismatch')
+              subprocess.run(['git', 'apply', '--index', '--unidiff-zero', '--whitespace=error'], input=patch, check=True)
+              subprocess.run(['git', 'rm', str(transport), *map(str, parts)], check=True)
+          subprocess.run(['node', 'scripts/build-runtime-bundle.cjs'], check=True)
+          subprocess.run(['git', 'add', 'music_app/static/js/runtime-bundle.js'], check=True)
+      - name: Commit verified source and generated bundle on the task branch only
         uses: actions/github-script@v7
         with:
           script: |
             const fs = require('fs');
-            const path = require('path');
-            const dir = path.join(process.env.RUNNER_TEMP, 'mobile-source');
-            const manifest = JSON.parse(fs.readFileSync(path.join(dir, 'manifest.json'), 'utf8'));
+            const cp = require('child_process');
+            const names = cp.execFileSync('git', ['diff', '--cached', '--name-only', '-z'], {encoding: 'utf8'}).split('\0').filter(Boolean);
+            if (!names.length) return;
+            if (context.ref !== 'refs/heads/2026-09-25-mobile-layout') throw new Error('Unexpected branch');
+            const current = await github.rest.git.getRef({...context.repo, ref: 'heads/2026-09-25-mobile-layout'});
+            if (current.data.object.sha !== context.sha) throw new Error('Branch moved during verification');
+            const commit = await github.rest.git.getCommit({...context.repo, commit_sha: context.sha});
             const tree = [];
-            for (const name of [...manifest.parts, 'manifest.json']) {
-              const blob = await github.rest.git.createBlob({ ...context.repo, content: fs.readFileSync(path.join(dir, name)).toString('base64'), encoding: 'base64' });
-              tree.push({ path: name, mode: '100644', type: 'blob', sha: blob.data.sha });
+            for (const name of names) {
+              if (!fs.existsSync(name)) { tree.push({path: name, mode: '100644', type: 'blob', sha: null}); continue; }
+              const blob = await github.rest.git.createBlob({...context.repo, content: fs.readFileSync(name).toString('base64'), encoding: 'base64'});
+              tree.push({path: name, mode: '100644', type: 'blob', sha: blob.data.sha});
             }
-            const sourceTree = await github.rest.git.createTree({ ...context.repo, tree });
-            const snapshot = await github.rest.git.createCommit({ ...context.repo, message: `Temporary mobile verification source snapshot of ${context.sha}`, tree: sourceTree.data.sha, parents: [] });
-            console.log('CONNECTOR_SOURCE_SNAPSHOT ' + JSON.stringify({ snapshot_commit: snapshot.data.sha, ...manifest }));
-            // No branch or tag points at this transport snapshot. Application history is unchanged.
-      - uses: actions/upload-artifact@v4
+            const updated = await github.rest.git.createTree({...context.repo, base_tree: commit.data.tree.sha, tree});
+            const applied = await github.rest.git.createCommit({...context.repo, message: 'feat(mobile): implement shared responsive pages and account preferences', tree: updated.data.sha, parents: [context.sha]});
+            await github.rest.git.updateRef({...context.repo, ref: 'heads/2026-09-25-mobile-layout', sha: applied.data.sha, force: false});
+            cp.execFileSync('git', ['fetch', '--no-tags', 'origin', applied.data.sha]);
+            cp.execFileSync('git', ['reset', '--hard', applied.data.sha]);
+            console.log('IMPLEMENTATION_HEAD ' + applied.data.sha);
+      - name: Install application and test dependencies
+        run: |
+          npm ci
+          python -m pip install -r requirements.txt
+      - name: Provision disposable database roles
+        env:
+          PGPASSWORD: isolated-mobile-admin
+        run: |
+          psql -h 127.0.0.1 -U postgres -v ON_ERROR_STOP=1 <<'SQL'
+          CREATE ROLE album_haven_migrator LOGIN PASSWORD 'isolated-mobile-setup';
+          CREATE ROLE album_haven_app LOGIN PASSWORD 'isolated-mobile-app';
+          CREATE DATABASE album_haven_fake_e2e OWNER album_haven_migrator;
+          SQL
+      - name: Focused unit and contract tests
+        run: |
+          node --test tests/js/client-device-preferences.test.js tests/js/runtime/gallery-main*.test.js tests/js/runtime/modal-escape.test.js tests/js/runtime/compact-player-helpers.test.js tests/js/runtime/app-loader-bundle.test.js
+          python -m pytest -q tests/test_client_layout_preferences.py
+          npm run check:e2e-production-parity
+      - name: Set up pinned Chrome
+        id: chrome
+        uses: browser-actions/setup-chrome@v2
         with:
-          name: mobile-source-${{ github.sha }}
-          path: ${{ runner.temp }}/mobile-source/
-          if-no-files-found: error
-          retention-days: 3
+          chrome-version: '151.0.7922.138'
+      - name: Run real-app mobile scenarios and capture pages
+        env:
+          PLAYWRIGHT_BROWSER: chrome
+          PLAYWRIGHT_CHROME_EXECUTABLE: ${{ steps.chrome.outputs.chrome-path }}
+        run: |
+          export PLAYWRIGHT_PYTHON="$(which python)"
+          npx playwright test --config=playwright.mobile-layout.config.js
+      - name: Publish connector-readable visual evidence
+        if: ${{ always() }}
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const cp = require('child_process');
+            const path = require('path');
+            const files = [];
+            function visit(dir) {
+              if (!fs.existsSync(dir)) return;
+              for (const entry of fs.readdirSync(dir, {withFileTypes: true})) {
+                const name = path.join(dir, entry.name);
+                if (entry.isDirectory()) visit(name);
+                else if (/\.(png|json|md)$/.test(name) && fs.statSync(name).size < 950000) files.push(name);
+              }
+            }
+            visit('test-results/mobile-screenshots');
+            visit('test-results/mobile-layout');
+            if (fs.existsSync('test-results/mobile-layout-results.json')) files.push('test-results/mobile-layout-results.json');
+            const source = cp.execFileSync('git', ['rev-parse', 'HEAD'], {encoding: 'utf8'}).trim();
+            fs.mkdirSync('test-results', {recursive: true});
+            fs.writeFileSync('test-results/mobile-evidence.json', JSON.stringify({source_commit: source, fixture: 'Isolated PostgreSQL and generated albums; production application and routes', files}, null, 2));
+            files.push('test-results/mobile-evidence.json');
+            const tree = [];
+            for (const name of files) {
+              const blob = await github.rest.git.createBlob({...context.repo, content: fs.readFileSync(name).toString('base64'), encoding: 'base64'});
+              tree.push({path: name, mode: '100644', type: 'blob', sha: blob.data.sha});
+            }
+            const evidenceTree = await github.rest.git.createTree({...context.repo, tree});
+            const evidence = await github.rest.git.createCommit({...context.repo, message: `Mobile verification evidence for ${source}`, tree: evidenceTree.data.sha, parents: []});
+            console.log('CONNECTOR_MOBILE_EVIDENCE ' + JSON.stringify({snapshot_commit: evidence.data.sha, source_commit: source, files}));
+            // Evidence is not committed to any application branch or tag.
+      - uses: actions/upload-artifact@v4
+        if: ${{ always() }}
+        with:
+          name: mobile-layout-evidence-${{ github.run_attempt }}
+          path: test-results/
+          if-no-files-found: warn
+          retention-days: 7

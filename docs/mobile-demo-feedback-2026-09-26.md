@@ -204,17 +204,17 @@ These refinements retain the approved Home A, original large artwork, Compact
 cover A and Centered cover B; no new design approval or capability is introduced.
 Application base inspected: `0d18a1856d439de6d13726c431a3383be52e5909`.
 
-- [ ] L01 — Inline album identity is the only visible identity in either smaller-art
+- [x] L01 — Inline album identity is the only visible identity in either smaller-art
   layout while that block remains in the content viewport. Once the complete block
   and cover scroll out, the shared Gallery Bar displays the album identity and
   thumbnail. Scrolling back reverses it. The large-art variant always retains its
   original Gallery Bar identity. The player is intentionally independent.
-- [ ] L02 — Thin-line mode is 76px tall before safe-area inset. Keep artwork left,
+- [x] L02 — Thin-line mode is 76px tall before safe-area inset. Keep artwork left,
   artist above a single song / album line, timestamp at the bottom to the left of
   Play, and geometrically centered Play/Pause SVGs. The thin range stays operable;
   its invisible touch target must not intercept the Play or artwork buttons.
   Regular and waveform remain selectable and desktop presentation is unchanged.
-- [ ] L03 — Artists, Settings and account-navigation hamburger controls precede
+- [x] L03 — Artists, Settings and account-navigation hamburger controls precede
   their header names, including in DOM/keyboard order. No trigger returns to the
   search row. Preserve capabilities, page Back and subsection controls.
 
@@ -223,7 +223,7 @@ return identity checks for both small layouts and classic, drawer-trigger order,
 and narrow/normal phone transport geometry with real playback and seeking. Add
 unit coverage for a tall wrapped identity, missing cover, non-album page, and reverse
 scroll. Run the existing mobile development workflow without weakening its tests,
-timeouts or retry policy. Capture new real-app evidence. Counter: 0/3 latest
+timeouts or retry policy. Capture new real-app evidence. Counter: 3/3 latest
 corrections verified; the historical repair counts above are not release claims.
 
 
@@ -255,3 +255,32 @@ line heights and their boxes differed by one pixel. The actual screenshot confir
 the compact player and lower timestamp; set both track-line children to the same
 14px line height rather than weakening the assertion. The replay retains the same
 320px/390px bounds, centered-glyph and Play hit-target checks.
+
+
+### Latest corrections verified
+
+Application source `417f29b4eb17cf60844173e7cb48f5d0a65b694d` passed
+Mobile Layout Verification run `36273431960`: all seven baseline and ten extended
+real-app browser scenarios, focused unit/contract checks and production parity.
+Evidence snapshot: `4f6b7019fb57ec45e0ccc372f40838eb579c0a4f`.
+The final text alignment uses centered flex items and explicit equal text boxes;
+none of the geometry assertions or tolerances was relaxed. The thin range remains
+seekable without covering the Play hit target. Both 320px and 390px compositions
+passed, as did Play/Pause centering, saved preferences and desktop isolation.
+
+Inspected real screenshots: `42-album-stacked-bar.png`,
+`42-album-editorial-canvas.png`, `43-scrolled-stacked-bar.png`,
+`44-real-thin-progress.png` and `46-narrow-thin-player.png`. These render the actual
+production app against isolated Postgres and generated media, not mockups.
+Both small-art variants show only their inline identity initially; the Gallery Bar
+takes over after scrolling. All three latest requirements are checked above (3/3).
+The older 35-item acceptance inventory is not silently converted into a full
+release certification by this development run. D01/D02 owner approvals remain
+recorded in the approved-design section.
+
+Changed source/test composition: nine files across the mobile header/album helper,
+mobile stylesheet, library/page-bar templates, shared POM, approved-options browser
+scenario, unit seam and this owning document. Exact direct-work/process elapsed
+times were not recorded. No main merge, native-platform certification or complete
+release-regression result is implied. Render staging/upgrade verification is a
+separate delivery step and must be checked before updating the deployed branch.

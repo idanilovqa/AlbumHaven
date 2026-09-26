@@ -1100,7 +1100,7 @@ function resumeDeferredUtilityViewRequest() {
 let utilityCoverLoadSuspensionToken = 0;
 
 function openUtilityModal({ resetSearch = true, resetSelection = true, forceLoad = true } = {}) {
-  if (typeof isMobileClient === 'function' && isMobileClient() && !['appearance', 'integrations'].includes(state.utility.activeTab)) state.utility.activeTab = 'appearance';
+  if (typeof isMobileClient === 'function' && isMobileClient() && !mobileUtilityTabAllowed(state.utility.activeTab)) state.utility.activeTab = 'appearance';
   if (typeof presentMobileUtilityPage === 'function') presentMobileUtilityPage();
   const els = getUtilityModalElements();
   if (!els.overlay) return;

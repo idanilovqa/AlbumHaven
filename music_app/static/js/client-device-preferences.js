@@ -23,10 +23,16 @@
     return nativeMobile || Number(options.viewportWidth) <= 900 ? 'mobile' : 'web_desktop';
   }
 
+  function resolveGalleryViewForWidth(value, viewportWidth) {
+    const mode = value === 'list' || value === 'rows' ? 'list' : value === 'covers' ? 'covers' : 'cards';
+    return mode === 'list' && Number(viewportWidth) > 900 ? 'cards' : mode;
+  }
+
   function resolveMobileGalleryGeometry(options = {}) {
-    if (Number(options.viewportWidth) > 900 && options.mode !== 'list') return null;
+    if (Number(options.viewportWidth) > 900) return null;
     const width = Math.max(1, Number(options.availableWidth) || 1);
-    const columns = options.mode === 'list' ? 1 : Number(options.columns) === 3 ? 3 : 2;
+    const requestedColumns = Number(options.columns);
+    const columns = options.mode === 'list' ? 1 : [1, 2, 3].includes(requestedColumns) ? requestedColumns : 2;
     const gap = Math.max(0, Number(options.gap) || 0);
     const cardTrackWidth = Math.max(1, Math.floor(((width - (columns - 1) * gap) / columns) * 1000) / 1000);
     return {
@@ -62,7 +68,12 @@
     };
     const read = (field, fallback) => {
       const value = profiles[profile()]?.[field];
-      return value === undefined ? fallback : clone(value);
+      if (value === undefined) return fallback;
+      const result = clone(value);
+      if (field === 'galleryDisplayPreferences') {
+        result.defaultGalleryDisplayMode = resolveGalleryViewForWidth(result.defaultGalleryDisplayMode, env.innerWidth);
+      }
+      return result;
     };
     const schedule = () => {
       if (timer !== null) env.clearTimeout(timer);
@@ -129,7 +140,7 @@
     return api;
   }
 
-  const helpers = { STORAGE_KEYS, classifyProfile, resolveMobileGalleryGeometry, createStore };
+  const helpers = { STORAGE_KEYS, classifyProfile, resolveGalleryViewForWidth, resolveMobileGalleryGeometry, createStore };
   if (typeof module !== 'undefined' && module.exports) module.exports = helpers;
   if (globalObject) globalObject.AlbumHavenClientLayout = helpers;
   const documentObject = globalObject?.document;

@@ -176,3 +176,5 @@
 .album-track-table__row, .album-track-table__title, .album-track-table__path { cursor: pointer; }
 
 .album-track-table [role="columnheader"][data-cdt-column="number"] { width: 28px; text-align: center; }
+
+.album-track-table .compact-data-table { color: var(--appearance-ink, var(--text)); }

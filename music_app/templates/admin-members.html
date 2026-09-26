@@ -1,3 +1,4 @@
+{% from "partials/page-gallery-bar.html" import page_gallery_bar %}
 {% from "components/on-page-alert.html" import on_page_alert %}
 <!doctype html>
 <html lang="en">
@@ -16,6 +17,8 @@
   <script src="/static/js/settings-navigation.js" defer></script>
   {% include "partials/appearance-bootstrap.html" %}
   <link rel="stylesheet" href="/static/css/runtime/alert-components.css">
+  <link rel="stylesheet" href="/static/css/gallery-main.css?v={{ runtime_asset_version | default(app_version) }}">
+  <link rel="stylesheet" href="/static/css/mobile-layout.css?v={{ runtime_asset_version | default(app_version) }}">
 </head>
 <body>
   {{ on_page_alert('This page could not be loaded. Please try again.', severity='error', hidden=true, class_name='settings-navigation-error', attributes={'data-settings-navigation-error': ''}) }}
@@ -26,13 +29,9 @@
     <div class="settings-outlet" data-settings-outlet>
     <script id="admin-allowed-actions" type="application/json">{{ allowed_actions.as_payload() | tojson }}</script>
     <section class="settings-main" data-admin-roster data-csrf-token="{{ csrf_token }}">
-      <header class="members-heading">
-        <div>
-          <h1>Users &amp; access</h1>
-          <p>Manage who can sign in and what they can do in {{ roster.library_name }}.</p>
-        </div>
+      {% call page_gallery_bar('Users & access', roster.library_name, settings_navigation=true) %}
         {% if allowed_actions.allows('accounts.create') %}<a class="admin-button is-primary" href="/admin/accounts/new"><span aria-hidden="true">♙+</span> Add user</a>{% endif %}
-      </header>
+      {% endcall %}
 
       {% if created %}{{ on_page_alert('The account was created and is waiting for its invitation to be accepted.', role='status', class_name='admin-notice') }}{% endif %}
       {{ on_page_alert(role='status', hidden=true, attributes={'data-admin-roster-status': '', 'aria-live': 'polite'}) }}

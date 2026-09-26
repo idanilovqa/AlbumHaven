@@ -47,6 +47,8 @@ def persist_settings_playback_inventory(
     setup_database_url: str,
     library_root: Path,
     file_cache: dict[str, dict[str, object]],
+    *,
+    rebuild_relations: bool = False,
 ) -> None:
     from config import PERSISTENCE_BACKEND_POSTGRES
     from music_app.services.library_roots import (
@@ -74,4 +76,5 @@ def persist_settings_playback_inventory(
     })
     PostgresScanCacheAdapter(config).save_snapshot(
         config["CACHE_PATH"], file_cache, library_root_cache_identity(config), time.time(),
+        rebuild_relation_projection=rebuild_relations,
     )

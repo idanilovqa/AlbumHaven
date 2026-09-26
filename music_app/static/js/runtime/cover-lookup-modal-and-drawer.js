@@ -1663,7 +1663,7 @@ function renderCoverLookupModal() {
       <h4 class="cover-lookup-section-title">REMOTE · ${formatCoverLookupImageCount(1)}</h4>
       <div class="cover-lookup-gallery">${buildCoverLookupCard(remoteCover, 'saved-remote')}</div>
     </section>` : ''}
-    <section class="cover-lookup-section">
+    <section class="cover-lookup-section cover-lookup-results" data-search-started="${Boolean(task || modalState.candidateGeneration || possibleMatches.length)}">
       <div class="cover-lookup-section-heading">
         <h4 class="cover-lookup-section-title">${possibleMatches.length || taskRunning || showCaaEmptyNotice ? `POSSIBLE MATCHES · ${formatCoverLookupImageCount(possibleMatches.length)}` : 'ADD COVER ART'}</h4>
       </div>

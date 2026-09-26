@@ -111,8 +111,8 @@ jobs:
           printf 'PGPASSFILE=%s\n' "$pgpass" >> "$GITHUB_ENV"
       - name: Focused unit and contract tests
         run: |
-          node --test tests/js/client-device-preferences.test.js tests/js/runtime/gallery-main*.test.js tests/js/runtime/modal-escape.test.js tests/js/runtime/compact-player-helpers.test.js tests/js/runtime/app-loader-bundle.test.js tests/js/runtime/mobile-feedback.test.js tests/js/runtime/album-track-table.test.js tests/js/runtime/settings-navigation.test.js tests/js/runtime/appearance-device-profiles.test.js tests/js/runtime/appearance-workspace.test.js
-          python -m pytest -q tests/test_client_layout_preferences.py tests/test_mobile_component_templates.py
+          node --test tests/js/client-device-preferences.test.js tests/js/runtime/gallery-main*.test.js tests/js/runtime/modal-escape.test.js tests/js/runtime/compact-player-helpers.test.js tests/js/runtime/app-loader-bundle.test.js tests/js/runtime/mobile-feedback.test.js tests/js/runtime/mobile-approved-options.test.js tests/js/runtime/album-track-table.test.js tests/js/runtime/settings-navigation.test.js tests/js/runtime/appearance-device-profiles.test.js tests/js/runtime/appearance-workspace.test.js
+          python -m pytest -q tests/test_client_layout_preferences.py tests/test_mobile_component_templates.py tests/test_mobile_approved_options.py
           npm run check:e2e-production-parity
       - name: Set up pinned Chrome
         id: chrome

@@ -176,3 +176,16 @@ DOM nodes. No fixture, timeout, retry, or product inventory contract is weakened
 The thin progress interaction and Save/Cancel checks passed before its fresh-
 session Settings navigation hit the CSS issue. Remove the old preview-only knob
 while retaining its progress fill. Full browser rerun remains required.
+
+### Scroll-measurement synchronization
+
+Run 36263190574 on source 7807d8a82d1d156d7136cf3af9d0e60c46df2605 passed
+244 JavaScript and 21 Python checks, production parity, all seven baseline browser
+scenarios and eight of nine extended scenarios. All three new approval scenarios
+passed, including every album layout, saved choices and real thin-line seeking.
+The remaining existing preview check measured immediately after wheel dispatch
+(y=380.78); its retained failure screenshot shows the completed scroll with the
+preview pinned below the bar (approximately y=202). Playwright documents that
+mouse.wheel returns before scrolling finishes. The POM now observes the original
+position bound through the existing assertion wait policy, keeping both y >= header.y
+and y < 300. No product change, retry, timeout setting or acceptance bound is changed.

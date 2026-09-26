@@ -147,6 +147,17 @@ export class MobileLayoutPage {
     expect([...seen].map(title => title.trim()).sort()).toEqual([...titles].sort());
   }
 
+  async expectPlayerPreviewPinned(preview, maximumTop) {
+    // wheel() dispatches input but does not wait for the browser's scroll frame.
+    // Keep the original geometry bounds; wait through the normal assertion policy.
+    await expect(preview).toBeVisible();
+    await expect.poll(async () => (await preview.boundingBox())?.y ?? Number.POSITIVE_INFINITY)
+      .toBeLessThan(maximumTop);
+    const bounds = await preview.boundingBox(), header = await this.pageTitle.boundingBox();
+    expect(bounds.y).toBeGreaterThanOrEqual(header.y);
+    expect(bounds.y).toBeLessThan(maximumTop);
+  }
+
   async selectView(view) {
     if (!['cards', 'covers', 'list'].includes(view)) throw new TypeError('Unknown gallery view');
     await this.activeView.click();

@@ -92,9 +92,7 @@ test('mobile Appearance stays on Mobile, follows saved desktop, uses a page surf
   await app.selectSubsection('seekbar');
   await expect(appearance.playerPreviewDock).toBeVisible();
   await app.scrollRegion('album', 350);
-  const bounds = await appearance.playerPreviewDock.boundingBox(), header = await app.pageTitle.boundingBox();
-  expect(bounds.y).toBeGreaterThanOrEqual(header.y);
-  expect(bounds.y).toBeLessThan(300);
+  await app.expectPlayerPreviewPinned(appearance.playerPreviewDock, 300);
   await snapshot('30-pinned-player-preview');
   await app.selectSubsection('album-page');
   await expect(app.albumLayout('classic_bar')).toBeVisible();

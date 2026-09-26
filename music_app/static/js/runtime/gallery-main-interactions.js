@@ -316,7 +316,7 @@ function getGalleryFamilyPanelModel() {
 function closeGalleryMainSurface(returnFocus = true) {
   const active = galleryMainSurfaceController?.current?.();
   if (!active) return false;
-  const slidingPanel = active.surface.matches?.('.artist-family-panel') === true;
+  const slidingPanel = active.surface.matches?.('.artist-family-panel, .mobile-settings-drawer') === true;
   active.surface.classList?.remove?.('is-open');
   active.surface.setAttribute?.('aria-hidden', 'true');
   active.anchor?.setAttribute?.('aria-expanded', 'false');
@@ -353,7 +353,7 @@ function openGalleryMainSurface(key, anchor, surface, align = 'right') {
     return false;
   }
   if (previous) closeGalleryMainSurface(false);
-  if (typeof activateTriggerSurface === 'function') activateTriggerSurface(surface, () => {
+  if (!surface.matches?.('.mobile-settings-drawer') && typeof activateTriggerSurface === 'function') activateTriggerSurface(surface, () => {
     if (galleryMainSurfaceController.current()?.surface === surface) closeGalleryMainSurface(false);
   });
   const scroll = key.startsWith('artist:') ? document.getElementById('albums-scroll') : null;
@@ -362,13 +362,15 @@ function openGalleryMainSurface(key, anchor, surface, align = 'right') {
     openingScrollPosition: scroll ? { top: scroll.scrollTop, left: scroll.scrollLeft } : null });
   anchor.setAttribute('aria-expanded', 'true');
   surface.hidden = false;
-  if (surface.matches?.('.artist-family-panel')) {
+  if (surface.matches?.('.artist-family-panel, .mobile-settings-drawer')) {
     surface.classList?.remove?.('is-open');
     void surface.offsetWidth;
   }
   surface.classList?.add?.('is-open');
   surface.setAttribute?.('aria-hidden', 'false');
-  if (surface.matches?.('.gallery-anchored-menu, .artist-info-overlay')) positionGalleryAnchoredSurface(surface, anchor, align);
+  if (surface.matches?.('.mobile-settings-drawer')) {
+    surface.style.top = `${Math.round(document.getElementById('mobile-page-header').getBoundingClientRect().bottom)}px`;
+  } else if (surface.matches?.('.gallery-anchored-menu, .artist-info-overlay')) positionGalleryAnchoredSurface(surface, anchor, align);
   if (surface.matches?.('.artist-family-panel')) positionArtistFamilyPanelEnvelope(surface, anchor);
   if (shouldFocusGalleryMainSurface(key)) focusGalleryMainSurface(surface);
   return true;
@@ -376,6 +378,10 @@ function openGalleryMainSurface(key, anchor, surface, align = 'right') {
 
 function updateGalleryMainControls() {
   const mainState = ensureGalleryMainState();
+  mainState.view = normalizeGalleryView(mainState.view);
+  state.view.gallery_display_mode = normalizeGalleryView(state.view.gallery_display_mode);
+  const rowChoice = document.querySelector('[data-gallery-view-choice="list"]');
+  if (rowChoice) rowChoice.hidden = Number(window.innerWidth) > 900;
   const hasSelectedArtist = Boolean(String(state.view.selected_artist || '').trim());
   const familyTrigger = document.querySelector('[data-gallery-bar-action="artist-family"]');
   if (familyTrigger) familyTrigger.hidden = !hasSelectedArtist;
@@ -534,7 +540,7 @@ function updateGalleryMainChrome() {
   }
   if (mobileHome) {
     name.textContent = 'Home';
-    summary.textContent = 'Your music, ready to play';
+    summary.textContent = '';
     oldInfo?.remove();
   } else if (context.kind === 'gallery' || context.kind === 'family') {
     name.textContent = context.kind === 'gallery' ? 'Gallery' : `${context.primaryArtist} family`;

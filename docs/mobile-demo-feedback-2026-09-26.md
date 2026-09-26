@@ -18,7 +18,7 @@ The latest owner statements supersede the earlier mobile proposal: remove the ap
 
 ## Approved repair inventory
 
-Each item below is an unchecked delivery requirement, not a claim that it is already fixed. Count: 34 open repair items; 0 complete. Design gates are tracked separately.
+Each item below is an unchecked delivery requirement, not a claim that it is already fixed. Count: 35 open repair items; 0 complete. Design gates are tracked separately.
 
 - [ ] R01 — Rows is a mobile/narrow-client view only. Remove it from regular desktop/laptop choices and normalize an inapplicable saved or URL-selected Rows mode without overwriting the user's independent mobile choice. Wide tablets use desktop presentation.
 - [ ] R02 — Library status must not replace the idle/ready icon on hover. Preserve the real scanning/progress icon states.
@@ -55,6 +55,8 @@ Each item below is an unchecked delivery requirement, not a claim that it is alr
 - [ ] R33 — Remove Back and Artist Tree triggers from the search row. Put Artist Tree to the right of the Gallery Bar title (the username on approved Home); preserve inner-page Back navigation in the page/Gallery Bar instead of the search zone.
 - [ ] R34 — The All Artists mobile Gallery Bar follows the currently scrolled artist, like desktop. Keep the explicit All Artists surface separate from the personal Home surface.
 
+- [ ] R35 — For actors without Admin Panel access, show My Account in the settings/profile dropdown and open Password. Actors with Admin Panel retain that entry, not a redundant toolbar profile. Password, Users and Edit/Add User use the shared page Gallery Bar component with appropriate Back and mobile account navigation.
+
 ## Extended demo data
 
 - [ ] F01 — Provide at least one clearly named sixteen-track album and enough fictional family-linked artists/albums for sustained gallery and drawer scrolling. Generate covers and playable audio before app startup through normal inventory persistence. Do not alter original small-fixture expectations or reset the hosted account, preferences, or listening history.
@@ -72,4 +74,38 @@ Existing tests that assert an explicitly superseded UI flow may need owner-appro
 
 ## Progress
 
-Intake: all owner comments consolidated, duplicate cover-sizing report deduplicated, latest navigation instructions given precedence. No runtime repair or deployment is claimed by this planning commit. Repair checklist: 0/34 complete; fixture checklist: 0/1; design gates: 0/2. Counts checked against the items above.
+Intake: all owner comments consolidated, duplicate cover-sizing report deduplicated, latest navigation instructions given precedence. No runtime repair or deployment is claimed by this planning commit. Repair checklist: 0/35 complete; fixture checklist: 0/1; design gates: 0/2. Counts checked against the items above.
+
+## Current repair batch (verification in progress)
+
+The working implementation covers R01–R35 using the existing SearchInput,
+GalleryBar/ActionButton, NavigationTree, GalleryCard/AlbumArtbox, AlbumTrackTable,
+Appearance editor and player ownership boundaries. `partials/page-gallery-bar.html`
+is a shared composition of the existing GalleryBar and ActionButton contract,
+used by Password and account-admin pages; it is not a new visual family.
+
+The opt-in extended fixture contains 39 albums and 130 generated tracks, including
+Northlight / Sixteen Horizons with 16 tracks and five collaboration families.
+The original eight-album fixture is unchanged unless the explicit pre-start
+extended fixture switch is selected. Render will use that opt-in only after the
+mobile changes pass their real-app checks. No demo credentials are changed.
+
+Focused local verification: 239 JavaScript tests and 16 Python tests passed;
+production-path parity check passed. Actual hosted browser verification and
+manual screenshot inspection are still pending, so no repair checkboxes are
+closed by this progress note. Counter checked: 0/35 repairs, 0/1 fixture,
+0/2 design approvals complete.
+
+The owner explicitly replaced these old UI journeys: Artists/Playlists drawer
+mode buttons become a single Artists header; a text column-cycle control becomes
+a zoom menu; Settings category tabs become a drawer; the profile toolbar shortcut
+becomes the existing permission-aware menu/account path; the promotional Home
+subtitle is removed. Browser checks now use those requested visible controls,
+retaining search, family, persistence, Back/Forward, settings fields, player
+continuity and real-app assertions. No timeout, retry, audio architecture or
+success condition was relaxed. New tests add row-body activation, sixteen-track
+scrolling, sticky identity, search-from-details, single-column geometry,
+capability-filtered settings, candidate geometry and full-art control placement.
+
+Home/Recent in-page tabs and distinct mobile album compositions remain D01/D02
+approval gates. They are not silently included in the production patch.

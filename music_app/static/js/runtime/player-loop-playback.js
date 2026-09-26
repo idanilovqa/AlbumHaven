@@ -1,3 +1,16 @@
+function renderGlobalPlayerMetadata(els, track) {
+  const mobile = typeof usesMobilePageLayout === 'function' && usesMobilePageLayout();
+  if (els.artist) {
+    els.artist.hidden = !mobile || !track;
+    els.artist.textContent = track?.artist || '';
+  }
+  if (els.title) {
+    const parts = (mobile ? [track?.title] : [track?.artist, track?.title]).filter(Boolean);
+    els.title.textContent = parts.length ? `${parts.join(' - ')}${track?.album ? ' /' : ''}` : '';
+  }
+  if (els.albumLink) { els.albumLink.textContent = track?.album || ''; els.albumLink.hidden = !track?.album; }
+}
+
 function clampLoopTimes() {
   const duration = getPlayerDuration() || 0;
   const max = duration > 0 ? duration : Math.max(state.player.loopEnd, 30);
@@ -107,16 +120,7 @@ function updatePlayerUi() {
   if (els.loopEndHandle) els.loopEndHandle.hidden = !state.player.loopActive;
   const loopRangeSurface = els.loopRange?.querySelector('[data-loop-range-surface]');
   if (loopRangeSurface) loopRangeSurface.hidden = !state.player.loopActive;
-  if (els.title) {
-    const titleParts = [displayTrack?.artist, displayTrack?.title].filter(Boolean);
-    els.title.textContent = titleParts.length
-      ? `${titleParts.join(' - ')}${displayTrack?.album ? ' /' : ''}`
-      : '';
-  }
-  if (els.albumLink) {
-    els.albumLink.textContent = displayTrack?.album || '';
-    els.albumLink.hidden = !displayTrack?.album;
-  }
+  renderGlobalPlayerMetadata(els, displayTrack);
   updateLoopInputsFromState();
   updateWaveformAppearance();
   const compactPeaks = state.player.waveform?.compactPeaks?.data;
@@ -164,16 +168,7 @@ function setCurrentPlayerTrack(track, options = {}) {
   state.player.loopStart = 0;
   state.player.loopEnd = 30;
   state.player.loopEditDurationSeconds = 0;
-  const titleParts = [track?.artist, track?.title].filter(Boolean);
-  if (els.title) {
-    els.title.textContent = titleParts.length
-      ? `${titleParts.join(' - ')}${track?.album ? ' /' : ''}`
-      : '';
-  }
-  if (els.albumLink) {
-    els.albumLink.textContent = track?.album || '';
-    els.albumLink.hidden = !track?.album;
-  }
+  renderGlobalPlayerMetadata(els, track);
   if (els.coverButton) {
     const coverPath = track?.coverPath || '';
     const loadId = (state.player.coverLoadId || 0) + 1;
@@ -900,6 +895,7 @@ function attachSharedPlayer() {
     if (trackRow && trackRow.dataset.doubleClickBound !== '1') {
       trackRow.dataset.doubleClickBound = '1';
       trackRow.addEventListener('dblclick', handleAlbumTrackRowDoubleClick);
+      trackRow.addEventListener('click', handleAlbumTrackRowClick);
     }
     btn.addEventListener('click', (event) => {
       const focusTimeline = event?.isTrusted !== false;

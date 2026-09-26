@@ -1,7 +1,11 @@
+{% from "partials/button.html" import action_button %}
 {% from "components/navigation-tree.html" import navigation_tree_item %}
 {% set navigation_actions = account_allowed_actions if account_allowed_actions is defined else allowed_actions %}
 <aside class="settings-nav navigation-tree" aria-label="Settings navigation" data-settings-nav data-navigation-tree="settings">
-  <h2>Settings</h2>
+  <div class="settings-nav-heading">
+    {% call action_button('Back to page', class_name='mobile-bar-action', attributes={'data-settings-nav-close': '1'}, presentation='bare') %}<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m10 5-7 7 7 7M3 12h18"/></svg>{% endcall %}
+    <h2>Settings</h2>
+  </div>
   <nav>
     {% if navigation_actions.allows('accounts.read') %}{{ navigation_tree_item('Users', '/admin/members', 'users', settings_section != 'account', '♙', attributes={'data-settings-section': 'users'}) }}{% endif %}
     {{ navigation_tree_item('My account', '/account', 'account', settings_section == 'account', '◇', attributes={'data-settings-section': 'account'}) }}
@@ -11,3 +15,5 @@
     </form>
   </nav>
 </aside>
+
+<button class="settings-nav-backdrop" type="button" data-settings-nav-close aria-label="Close account navigation" hidden></button>

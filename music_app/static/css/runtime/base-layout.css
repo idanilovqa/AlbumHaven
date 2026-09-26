@@ -207,8 +207,6 @@ input[type='search'] {
 }
 .status-indicator.is-busy .status-spinner { display: inline-block; }
 .status-indicator.is-done .status-check { display: inline-block; }
-.status-indicator.is-done:hover .status-check { display: none; }
-.status-indicator.is-done:hover .status-refresh { display: inline-block; }
 .status-indicator.is-done:not(:disabled) { cursor: pointer; }
 .status-indicator:disabled { cursor: default; opacity: 0.95; }
 .status-indicator.is-idle { color: var(--muted); }

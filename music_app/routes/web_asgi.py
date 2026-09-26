@@ -217,6 +217,9 @@ def _template_response(request: Request, context: dict[str, object]) -> Response
             ),
             **context,
             "playback_allowed_actions": allowed_actions_for_request(request, ("library.loops.create",)),
+            "utility_allowed_actions": allowed_actions_for_request(request, (
+                "library.rules.read", "library.loops.read", "library.logs.read", "integration.settings.read", "library.settings.read",
+            )),
         },
     )
 

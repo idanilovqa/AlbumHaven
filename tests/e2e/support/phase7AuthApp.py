@@ -450,6 +450,7 @@ def main() -> None:
     parser.add_argument("--worker-port", type=int)
     parser.add_argument("--playback-media", action="store_true")
     parser.add_argument("--mobile-layout-media", action="store_true")
+    parser.add_argument("--extended-mobile-media", action="store_true")
     args = parser.parse_args()
 
     setup_database_url, runtime_database_url = resolve_isolated_database_urls()
@@ -481,7 +482,7 @@ def main() -> None:
         playback_inventory = {}
         if args.mobile_layout_media:
             from mobileLayoutFixture import prepare_mobile_layout_media, seed_mobile_recent_history
-            playback_inventory = prepare_mobile_layout_media(temp_root / "media")
+            playback_inventory = prepare_mobile_layout_media(temp_root / "media", extended=args.extended_mobile_media)
         elif args.playback_media:
             playback_inventory = prepare_settings_playback_media(temp_root / "media")
         prepare_isolated_database(setup_database_url, runtime_database_url)

@@ -4,6 +4,7 @@ function getPlayerElements() {
     coverButton: document.getElementById('player-cover-button'),
     play: document.getElementById('player-play'),
     title: document.getElementById('player-title'),
+    artist: document.getElementById('player-artist'),
     albumLink: document.getElementById('player-album-link'),
     waveformCanvas: document.getElementById('player-waveform-canvas'),
     timeline: document.getElementById('player-timeline'),

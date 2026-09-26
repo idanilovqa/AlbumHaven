@@ -120,7 +120,7 @@ function buildUrl(view) {
   appendPlaylistStateParams(params, view, resolvedSurface);
   if (view.query) params.set('q', view.query);
   if (view.selected_artist) params.set('artist', view.selected_artist);
-  if (view.all_artists_active && view.query) params.set('all_artists', '1');
+  if (view.all_artists_active) params.set('all_artists', '1');
   if (view.gallery_scope) params.set('gallery_scope', view.gallery_scope);
   const galleryDisplayMode = normalizeGalleryDisplayMode(view.gallery_display_mode);
   if (galleryDisplayMode !== 'cards') params.set('gallery_display', galleryDisplayMode);
@@ -152,7 +152,7 @@ function buildApiUrl(view, options = {}) {
   appendPlaylistStateParams(params, view, resolvedSurface);
   if (view.query) params.set('q', view.query);
   if (view.selected_artist) params.set('artist', view.selected_artist);
-  if (view.all_artists_active && view.query) params.set('all_artists', '1');
+  if (view.all_artists_active) params.set('all_artists', '1');
   if (view.gallery_scope) params.set('gallery_scope', view.gallery_scope);
   const galleryDisplayMode = normalizeGalleryDisplayMode(view.gallery_display_mode);
   if (galleryDisplayMode !== 'cards') params.set('gallery_display', galleryDisplayMode);

@@ -148,15 +148,16 @@
 /* Share the gallery divider's pixel row and thickness. */
 :root .artist-family-panel.trigger-anchor-surface {
   /* The button owns the bridge; do not expose the panel shadow above its edge. */
-  clip-path: inset(-1px 0 100% 0);
+  clip-path: inset(-2px -2px 100% -2px);
 }
 :root .artist-family-panel.trigger-anchor-surface.is-open {
-  clip-path: inset(-1px 0 0 0);
+  clip-path: inset(-2px -2px 0 -2px);
 }
 :root .artist-family-panel.trigger-anchor-surface::after {
   top: -1px;
-  height: 1px;
-  --trigger-top-line-width: 1px;
+  height: 2px;
+  --trigger-top-line-width: 2px;
+  z-index: 2;
 }
 
 /* Suppress selection paint outside the origin before the browser draws a drag. */

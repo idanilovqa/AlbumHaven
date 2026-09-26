@@ -18,12 +18,30 @@ ALBUMS = (
 )
 
 
-def prepare_mobile_layout_media(root: Path) -> dict[str, dict[str, object]]:
+EXTENDED_ARTISTS = ("Mira Vale", "Juniper Coast", "The Lumen Trio", "Aster Lane", "Orion Field")
+LONG_ALBUM = "Sixteen Horizons"
+LONG_TRACKS = ("First Horizon", "Daybreak", "Coastline", "Driftwood", "Open Sky", "Tidal Light",
+               "Crossing", "Distant Voices", "Paper Moon", "Afterglow", "Quiet Motion", "Northbound",
+               "Blue Hour", "Last Ferry", "Constellations", "Homeward")
+
+
+def mobile_layout_albums(extended: bool = False):
+    if not extended:
+        return ALBUMS
+    extra = [("Northlight", LONG_ALBUM, 2026, (112, 147, 154))]
+    for artist_index, artist in enumerate(EXTENDED_ARTISTS):
+        color = (70 + artist_index * 22, 135 - artist_index * 9, 115 + artist_index * 14)
+        extra.append((f"Northlight & {artist}", f"Shared Horizons {artist_index + 1}", 2025, color))
+        extra.extend((artist, f"Collected Skies {index:02d}", 2000 + index, color) for index in range(1, 6))
+    return (*ALBUMS, *extra)
+
+
+def prepare_mobile_layout_media(root: Path, *, extended: bool = False) -> dict[str, dict[str, object]]:
     from PIL import Image, ImageDraw
     from music_app.services.metadata import FILE_METADATA_SCHEMA_VERSION
 
     inventory = {}
-    for album_index, (artist, album, year, color) in enumerate(ALBUMS):
+    for album_index, (artist, album, year, color) in enumerate(mobile_layout_albums(extended)):
         folder = root / artist / album
         folder.mkdir(parents=True, exist_ok=True)
         cover = folder / "cover.jpg"
@@ -33,12 +51,16 @@ def prepare_mobile_layout_media(root: Path) -> dict[str, dict[str, object]]:
             radius = ring * 23
             fill = tuple(min(255, int(channel * (0.35 + (10 - ring) * 0.085))) for channel in color)
             draw.ellipse((240-radius, 215-radius, 240+radius, 215+radius), fill=fill)
-        draw.polygon([(0, 370), (480, 90 + album_index * 16), (480, 480), (0, 480)], fill=tuple(channel // 3 for channel in color))
+        draw.polygon([(0, 370), (480, 90 + (album_index % 8) * 16), (480, 480), (0, 480)], fill=tuple(channel // 3 for channel in color))
         draw.text((28, 420), album.upper(), fill=(239, 242, 243))
         draw.text((28, 446), artist.upper(), fill=(182, 190, 195))
         image.save(cover, quality=90)
-        for track_index, title in enumerate(("Open Water", "Small Hours", "Coming Home"), start=1):
-            duration = 180 if track_index == 1 else 12
+        if extended:
+            # Two real local candidates exercise the gallery and artwork-series controls.
+            image.transpose(Image.Transpose.FLIP_LEFT_RIGHT).save(folder / "cover-alternate.jpg", quality=90)
+        titles = LONG_TRACKS if album == LONG_ALBUM else ("Open Water", "Small Hours", "Coming Home")
+        for track_index, title in enumerate(titles, start=1):
+            duration = 180 if album_index < len(ALBUMS) and track_index == 1 else 12
             path = generate_playback_start_fixture_audio(root, folder / f"{track_index:02d} - {title}.mp3", duration_seconds=duration, frequency_hz=220 + album_index * 25 + track_index * 20).resolve()
             stat = path.stat()
             inventory[str(path)] = {

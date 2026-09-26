@@ -1,3 +1,4 @@
+{% from "partials/page-gallery-bar.html" import page_gallery_bar %}
 {% from "components/on-page-alert.html" import on_page_alert %}
 <!doctype html>
 <html lang="en">
@@ -16,6 +17,8 @@
   <script src="/static/js/settings-navigation.js" defer></script>
   {% include "partials/appearance-bootstrap.html" %}
   <link rel="stylesheet" href="/static/css/runtime/alert-components.css">
+  <link rel="stylesheet" href="/static/css/gallery-main.css?v={{ runtime_asset_version | default(app_version) }}">
+  <link rel="stylesheet" href="/static/css/mobile-layout.css?v={{ runtime_asset_version | default(app_version) }}">
 </head>
 <body>
   {{ on_page_alert('This page could not be loaded. Please try again.', severity='error', hidden=true, class_name='settings-navigation-error', attributes={'data-settings-navigation-error': ''}) }}
@@ -26,18 +29,7 @@
     <div class="settings-outlet" data-settings-outlet>
     <script id="admin-allowed-actions" type="application/json">{{ allowed_actions.as_payload() | tojson }}</script>
     <section class="settings-main detail-main">
-      <a class="detail-back" href="/admin/members">←&nbsp; Back to users</a>
-      <header class="detail-heading">
-        <h1>{{ "Edit user" if member else "Add user" }}</h1>
-        {% if member %}
-        <div class="detail-person">
-          <span class="member-avatar" aria-hidden="true">{{ member.username[:2] | upper }}</span>
-          <span><strong>{{ member.username }}</strong><small>{{ member.contact_email }}</small></span>
-        </div>
-        {% else %}
-        <p>The user will choose their password after opening a one-time invitation link.</p>
-        {% endif %}
-      </header>
+      {{ page_gallery_bar('Edit user' if member else 'Add user', member.username if member else '', back_href='/admin/members', back_label='Back to users', settings_navigation=true) }}
 
       {{ on_page_alert(severity='error', hidden=true, class_name='admin-form-error', attributes={'data-admin-form-error': ''}) }}
       {{ on_page_alert(role='status', hidden=true, class_name='admin-form-status', attributes={'data-admin-form-status': ''}) }}

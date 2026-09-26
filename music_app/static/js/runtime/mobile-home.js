@@ -1,7 +1,7 @@
 /* Home uses real account-scoped listen history and the existing GalleryCard renderer. */
 const mobileHomeState = { albums: null, loading: false, error: false, request: null, refreshedAt: 0, renderKey: '' };
 function shouldShowMobileHome() {
-  return usesMobilePageLayout() && !String(state.view.query || '').trim() && !String(state.view.selected_artist || '').trim()
+  return usesMobilePageLayout() && new URL(window.location.href).searchParams.get('all_artists') !== '1' && !state.view.all_artists_active && !String(state.view.query || '').trim() && !String(state.view.selected_artist || '').trim()
     && state.view?.shell_layout?.slots?.main_content?.content_kind !== 'discovery_center_page';
 }
 function renderMobileHome() {
@@ -13,7 +13,7 @@ function renderMobileHome() {
   const key = JSON.stringify([mode, albums, mobileHomeState.error, mobileHomeState.loading]);
   if (key === mobileHomeState.renderKey) return;
   mobileHomeState.renderKey = key;
-  const intro = '<header class="mobile-home-heading"><h2>Recently played</h2><p>Pick up where you left off.</p></header>';
+  const intro = '<header class="mobile-home-heading"><h2>Recently played</h2></header>';
   if (mobileHomeState.error) {
     host.innerHTML = `${intro}<div class="mobile-home-empty" role="status"><p>Recently played albums could not be loaded.</p><button type="button" class="button" data-mobile-home-retry>Try again</button></div>`;
   } else if (mobileHomeState.loading && mobileHomeState.albums === null) {
@@ -55,7 +55,7 @@ function syncMobileHome() {
     const name = bar.querySelector('[data-gallery-context-name]');
     const summary = bar.querySelector('[data-gallery-context-summary]');
     if (name) name.textContent = 'Home';
-    if (summary) summary.textContent = 'Your music, ready to play';
+    if (summary) summary.textContent = '';
   }
   renderMobileHome();
   void loadMobileRecentAlbums();

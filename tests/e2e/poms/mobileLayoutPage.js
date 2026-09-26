@@ -11,7 +11,7 @@ export class MobileLayoutPage {
     this.appShell = page.locator('#app-shell');
     this.home = page.locator('#mobile-home');
     this.galleryContextName = page.locator('[data-gallery-bar-instance="gallery"] [data-gallery-context-name]');
-    this.librarySectionButtons = page.locator('[data-mobile-library-mode]');
+    this.artistHeading = page.locator('#shell-navigation-rail h2');
     this.homeCards = this.home.locator('.album-card');
     this.homeAlbums = this.home.locator('[data-open-tracklist]');
     this.homeGrid = page.locator('.mobile-home-grid');
@@ -20,16 +20,14 @@ export class MobileLayoutPage {
     this.libraryButton = page.locator('#mobile-library-button');
     this.artistRail = page.locator('#shell-navigation-rail');
     this.closeArtistRail = this.artistRail.locator('[data-close-artists-drawer]');
-    this.artistsMode = page.getByRole('button', { name: 'Artists', exact: true });
-    this.playlistsMode = page.getByRole('button', { name: 'Playlists', exact: true });
-    this.libraryPlaceholder = page.locator('#mobile-library-placeholder');
+    this.artistPlaceholderTabs = page.locator('[data-mobile-library-mode]');
     this.galleryCards = page.locator('#artist-groups .album-card');
     this.familyButton = page.locator('[data-gallery-bar-action="artist-family"]');
     this.familyPanel = page.locator('#artist-family-panel');
     this.viewCluster = page.locator('#gallery-view-cluster-options');
     this.activeView = this.viewCluster.locator('.is-active');
-    this.threeColumnsButton = page.getByRole('button', { name: 'Use three columns' });
-    this.twoColumnsButton = page.getByRole('button', { name: 'Use two columns' });
+    this.zoomButton = page.getByRole('button', { name: 'Gallery zoom', exact: true });
+    this.zoomMenu = page.locator('#mobile-gallery-density-menu');
     this.albumPage = page.locator('#mobile-page-outlet #track-modal');
     this.trackTable = page.locator('#track-modal .album-track-table');
     this.albumDialogs = page.locator('#track-modal [aria-modal="true"]');
@@ -42,7 +40,31 @@ export class MobileLayoutPage {
     this.utilitiesDialogs = page.locator('#utility-modal [role="dialog"]');
     this.pageTitle = page.locator('#mobile-page-title');
     this.profileButton = page.locator('#app-shell .account-profile-button');
-    this.securityHeading = page.getByRole('heading', { name: 'Password & security' });
+    this.adminLink = page.locator('#app-shell [data-account-menu-admin]');
+    this.accountNavToggle = page.locator('[data-settings-outlet] [data-settings-nav-toggle]');
+    this.accountLink = page.locator('[data-settings-nav] [data-settings-section="account"]');
+    this.securityHeading = page.getByRole('heading', { name: 'Password', exact: true });
+    this.settingsSectionsButton = page.locator('#mobile-settings-button');
+    this.settingsDrawer = page.locator('#mobile-settings-drawer');
+    this.subsectionButton = page.locator('#mobile-settings-section-button');
+    this.subsectionMenu = page.locator('#mobile-settings-subsection-menu');
+    this.albumCover = page.locator('#track-modal-cover');
+    this.albumThumbnail = page.locator('#mobile-page-cover');
+    this.albumRows = page.locator('#track-modal .album-track-table__row');
+    this.pageOutlet = page.locator('#mobile-page-outlet');
+    this.playerTime = page.locator('#player-time');
+    this.playerArtist = page.locator('#player-artist');
+    this.findBetterArt = page.locator('#cover-lookup-find-better-button');
+    this.coverCandidates = page.locator('#cover-lookup-modal .cover-lookup-gallery').first().locator('.cover-lookup-art-card');
+    this.coverBody = page.locator('#cover-lookup-modal-body');
+    this.manualCoverSearch = page.locator('#cover-lookup-modal .cover-lookup-manual-add');
+    this.coverResults = page.locator('#cover-lookup-modal .cover-lookup-results');
+    this.mobileAlbumLayoutChoice = page.locator('.appearance-background-editor [data-album-details-layout]').first();
+    this.familyArtists = page.locator('#artist-family-panel [data-gallery-family-artist]');
+    this.fullArtwork = page.locator('#image-lightbox-image');
+    this.fullArtworkNav = page.locator('.image-lightbox-navigation');
+    this.allArtists = page.locator('#sidebar-list a').filter({ hasText: /All artists/i }).first();
+    this.galleryScroll = page.locator('#albums-scroll');
     this.mobileNavigation = page.locator('#mobile-navigation');
     this.coverLookupPage = page.locator('#mobile-page-outlet #cover-lookup-modal');
     this.mobileAppearance = page.locator('[data-appearance-device="mobile"]');
@@ -103,9 +125,58 @@ export class MobileLayoutPage {
   }
 
   async librarySectionLabelsFit() {
-    // parity-check: allow-read-only-measurement-evaluate -- measure label clipping in the rendered navigation controls.
-    return this.librarySectionButtons.evaluateAll(buttons => buttons.length === 3
-      && buttons.every(button => button.scrollWidth <= button.clientWidth));
+    // parity-check: allow-read-only-measurement-evaluate -- measure the requested single drawer heading.
+    return this.artistHeading.evaluate(heading => heading.scrollWidth <= heading.clientWidth);
+  }
+
+  async selectColumns(columns) {
+    if (![1, 2, 3].includes(columns)) throw new TypeError('Invalid column count');
+    await this.zoomButton.click();
+    await this.zoomMenu.locator(`[data-mobile-grid-columns="${columns}"]`).click();
+    await expect(this.zoomMenu).not.toBeVisible();
+  }
+
+  async selectUtility(section) {
+    if (!['rules', 'loops', 'log-history', 'appearance', 'integrations'].includes(section)) throw new TypeError('Invalid section');
+    await this.settingsSectionsButton.click();
+    await this.settingsDrawer.locator(`[data-mobile-settings-choice="${section}"]`).click();
+    await expect(this.settingsDrawer).not.toBeVisible();
+  }
+
+  async selectSubsection(key) {
+    if (!['library', 'lastfm', 'backgrounds', 'seekbar', 'selection-accent', 'alerts', 'album-page'].includes(key)) throw new TypeError('Invalid subsection');
+    await this.subsectionButton.click();
+    await this.subsectionMenu.locator(`[data-mobile-subsection="${key}"]`).click();
+    await expect(this.subsectionMenu).not.toBeVisible();
+  }
+
+  async openPassword() {
+    await this.settingsButton.click();
+    await this.adminLink.click();
+    await this.accountNavToggle.click();
+    await this.accountLink.click();
+    await expect(this.securityHeading).toBeVisible();
+  }
+
+  async search(query) {
+    if (!(await this.searchInput.isVisible())) await this.searchButton.click();
+    await this.searchInput.fill(query);
+    await this.searchInput.press('Enter');
+    await expect(this.galleryCards.first()).toBeVisible();
+  }
+
+  async openAlbumBody(title) {
+    const card = this.galleryCards.filter({ has: this.page.getByRole('button', { name: title, exact: true }) });
+    await card.locator('.album-meta-row').click();
+    await expect(this.trackTable).toBeVisible();
+  }
+
+  async playRow(index) { await this.albumRows.nth(index).locator('.album-track-table__title').click(); }
+
+  async scrollRegion(region, delta) {
+    const target = region === 'album' ? this.pageOutlet : region === 'cover' ? this.coverBody : this.galleryScroll;
+    await target.hover();
+    await this.page.mouse.wheel(0, delta);
   }
 
   async hasNoHorizontalOverflow() {

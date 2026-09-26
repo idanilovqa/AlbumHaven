@@ -37,9 +37,8 @@ test('mobile login, Home rows, artist drawer, search and right-side family panel
   await expect(app.artistRail).toHaveClass(/is-mobile-drawer-open/);
   await expect.poll(() => app.librarySectionLabelsFit()).toBeTruthy();
   await capture(page, '03-artist-navigation');
-  await app.playlistsMode.click();
-  await expect(app.libraryPlaceholder).toContainText('when playlist support is available');
-  await app.artistsMode.click();
+  await expect(app.artistHeading).toHaveText('Artists');
+  await expect(app.artistPlaceholderTabs).toHaveCount(0);
   await app.closeArtistRail.click();
   await app.searchButton.click();
   await expect(app.searchInput).toBeFocused();
@@ -68,7 +67,7 @@ test('two- and three-column cards and art-only modes persist to a fresh mobile s
   await login(app);
   await app.selectView('cards');
   await capture(page, '06-home-cards-two-columns');
-  await app.threeColumnsButton.click();
+  await app.selectColumns(3);
   await expect(app.homeGrid).toHaveCSS('grid-template-columns', /\S+ \S+ \S+/);
   await expect(app.galleryContextName).toHaveText('Home');
   await capture(page, '07-home-cards-three-columns');
@@ -84,7 +83,7 @@ test('two- and three-column cards and art-only modes persist to a fresh mobile s
     const anotherApp = new MobileLayoutPage(another);
     await login(anotherApp);
     await expect(anotherApp.homeCards.first()).toHaveAttribute('data-gallery-display', 'covers');
-    await expect(anotherApp.twoColumnsButton).toBeVisible();
+    await expect(anotherApp.zoomButton).toHaveAttribute('title', 'Gallery zoom: 3 columns');
   } finally { await context.close(); }
 });
 
@@ -120,15 +119,17 @@ test('Appearance and Integrations use pages and restricted utilities are absent'
   await expect(app.utilityTab('rules')).not.toBeVisible();
   await expect(app.utilitiesDialogs).toHaveCount(0);
   await capture(page, '10-appearance');
-  await app.utilityTab('integrations').click();
+  await app.selectUtility('integrations');
+  await app.selectSubsection('lastfm');
   await expect(app.pageTitle).toHaveText('Integrations');
   const integrations = new UtilityIntegrationsTab(page);
-  await expect(integrations.scrobbling).toBeVisible();
+  await expect(app.subsectionButton).toHaveText('Scrobbling');
   await expect(integrations.lastfmUsername).toBeVisible();
   await capture(page, '11-integrations');
   await app.backButton.click();
   await expect(app.home).toBeVisible();
-  await app.profileButton.click();
+  await expect(app.profileButton).toHaveCount(0);
+  await app.openPassword();
   await expect(app.securityHeading).toBeVisible();
   await capture(page, '12-account');
 });

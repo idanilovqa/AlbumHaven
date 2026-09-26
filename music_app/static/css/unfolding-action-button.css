@@ -1,7 +1,7 @@
 .unfolding-action-button {
   display: inline-flex;
-  width: 34px;
-  height: 34px;
+  width: var(--unfolding-action-size, 34px);
+  height: var(--unfolding-action-size, 34px);
   box-sizing: border-box;
   overflow: hidden;
   border: 1px solid var(--border);
@@ -9,15 +9,15 @@
   background: var(--appearance-control, var(--app-control, var(--panel)));
   transition: width 180ms ease;
 }
-.unfolding-action-button.is-open { width: calc(32px * var(--unfolding-action-count, 2) + 2px); }
+.unfolding-action-button.is-open { width: calc((var(--unfolding-action-size, 34px) - 2px) * var(--unfolding-action-count, 2) + 2px); }
 :root .unfolding-action-button > .unfolding-action-button__action {
   display: inline-grid;
   place-items: center;
   flex: 0 0 0px;
   width: 0;
   min-width: 0;
-  height: 32px;
-  min-height: 32px;
+  height: calc(var(--unfolding-action-size, 34px) - 2px);
+  min-height: calc(var(--unfolding-action-size, 34px) - 2px);
   padding: 0;
   overflow: hidden;
   border: 0;
@@ -32,7 +32,7 @@
 }
 :root .unfolding-action-button.is-open > .unfolding-action-button__action,
 :root .unfolding-action-button > .unfolding-action-button__action.is-active {
-  flex-basis: 32px;
+  flex-basis: calc(var(--unfolding-action-size, 34px) - 2px);
   opacity: 1;
   visibility: visible;
   pointer-events: auto;
@@ -55,3 +55,5 @@
     var(--appearance-play, #4ade80) 70%,
     var(--appearance-ink, var(--text)));
 }
+
+:root .unfolding-action-button > .unfolding-action-button__action[hidden] { display: none; }

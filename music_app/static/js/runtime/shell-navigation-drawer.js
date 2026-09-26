@@ -192,7 +192,7 @@ function openArtistsDrawer() {
   }
   state.ui.artistsDrawerOpen = true;
   syncArtistsDrawerVisibility();
-  document.querySelector?.('[data-mobile-library-mode="artists"]')?.focus?.();
+  document.querySelector?.('#artist-tree-expanded [data-close-artists-drawer]')?.focus?.();
   return true;
 }
 

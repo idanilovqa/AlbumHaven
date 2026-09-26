@@ -1443,7 +1443,7 @@ test('Home keeps its context through density refreshes and returns to Gallery on
   const bar = { hidden: false, offsetHeight: 54, dataset: {},
     querySelector: selector => selector === '[data-gallery-context-name]' ? name
       : selector === '[data-gallery-context-summary]' ? summary : null };
-  const context = loadRuntime({ window: { innerWidth: 390 },
+  const context = loadRuntime({ URL, window: { innerWidth: 390, location: { href: 'https://albumhaven.example/' } },
     state: { gallery: {}, ui: {}, view: { query: '', selected_artist: '', artist_groups: [], artist_count: 4, album_count: 8 } },
     document: {
       querySelector: selector => selector === '[data-gallery-bar-instance="gallery"]' ? bar : null,
@@ -1456,7 +1456,7 @@ test('Home keeps its context through density refreshes and returns to Gallery on
   context.state.gallery.mainState = context.createGalleryMainState();
   context.updateGalleryMainChrome();
   assert.equal(name.textContent, 'Home');
-  assert.equal(summary.textContent, 'Your music, ready to play');
+  assert.equal(summary.textContent, '');
   context.state.gallery.mainState.view = 'cards';
   context.updateGalleryMainChrome();
   assert.equal(name.textContent, 'Home');

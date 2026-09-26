@@ -107,7 +107,18 @@ function triggerAlbumTrackPlayActivation(button) {
   }, { once: true });
 }
 
+function handleAlbumTrackRowClick(event) {
+  if (typeof usesMobilePageLayout !== 'function' || !usesMobilePageLayout()) return;
+  if (event.detail > 1) return;
+  activateAlbumTrackRow(event);
+}
+
 function handleAlbumTrackRowDoubleClick(event) {
+  if (typeof usesMobilePageLayout === 'function' && usesMobilePageLayout()) return;
+  activateAlbumTrackRow(event);
+}
+
+function activateAlbumTrackRow(event) {
   if (event.target.closest?.('button, a, input, textarea, select, [contenteditable=true]')) return;
   const row = event.currentTarget;
   event.preventDefault();

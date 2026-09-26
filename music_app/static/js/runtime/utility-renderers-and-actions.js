@@ -773,7 +773,7 @@ function renderUtilityModalContent(options = {}) {
   if (els.search) els.search.readOnly = false;
   if (els.problemFilterButton) { els.problemFilterButton.setAttribute('aria-label', 'Filters'); els.problemFilterButton.setAttribute('title', 'Filter by problem type'); els.problemFilterButton.setAttribute('aria-haspopup', 'listbox'); els.problemFilterButton.setAttribute('aria-controls', 'utility-problem-filter-menu'); }
   const activeTab = state.utility.activeTab || 'problematic-files';
-  if (typeof syncMobileUtilityContext === 'function') syncMobileUtilityContext();
+
   if (activeTab !== 'problematic-files') disposeProblematicFilesVirtualList();
   if (activeTab !== 'log-history' && els.list?.dataset) els.list.dataset.utilityNavigationOwner = activeTab;
   if (activeTab !== 'loops' && typeof disposeMountedLoopActions === 'function') disposeMountedLoopActions(els.detail);
@@ -808,6 +808,7 @@ function renderUtilityModalContent(options = {}) {
     renderProblematicFiles(options);
   }
   if (typeof updateSearchClearAction === 'function') updateSearchClearAction(els.search);
+  if (typeof syncMobileUtilityContext === 'function') syncMobileUtilityContext();
 }
 
 const utilityTabAlignmentObservers = new WeakMap();

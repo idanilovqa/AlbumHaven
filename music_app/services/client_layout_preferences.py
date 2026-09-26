@@ -69,7 +69,7 @@ def normalize_changes(value: object) -> dict[str, object]:
                 "defaultGalleryScalePercent": _integer(item["defaultGalleryScalePercent"], 80, 140),
             }
         elif key == "mobileGridColumns":
-            result[key] = _integer(candidate, 2, 3)
+            result[key] = _integer(candidate, 1, 3)
         elif key == "galleryPlaybackPreferences":
             item = _object(candidate, set(_DEFAULTS[key]))
             result[key] = {name: _choice(setting, ("stop", "continue")) for name, setting in item.items()}

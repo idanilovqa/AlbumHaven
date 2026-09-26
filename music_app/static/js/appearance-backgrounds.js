@@ -1119,6 +1119,7 @@
       if (mountedFooter?.id === 'utility-modal-footer') { mountedFooter.innerHTML = ''; mountedFooter.hidden = true; }
       mountedFooter = null;
     };
+    const isPhoneEditor = () => window.AlbumHavenDevicePreferences?.profile?.() === 'mobile';
     const mountDeviceProfileControls = editor => {
       // Resolve on mount as well: the shell may have crossed a breakpoint since boot.
       controller.setDeviceProfile(window.AlbumHavenDevicePreferences?.profile?.() || 'web_desktop');
@@ -1141,7 +1142,7 @@
       const controls = editor.querySelector('.appearance-device-controls');
       controls.addEventListener('click', event => {
         const device = event.target.closest('[data-appearance-device]');
-        if (device && !device.disabled) controller.setDeviceProfile(device.getAttribute('data-appearance-device'));
+        if (device && !device.disabled && (!isPhoneEditor() || device.dataset.appearanceDevice === 'mobile')) controller.setDeviceProfile(device.getAttribute('data-appearance-device'));
         const mode = event.target.closest('[data-appearance-device-mode]');
         if (mode && !mode.disabled) controller.setDeviceSectionMode(mode.getAttribute('data-appearance-device-mode'));
       });
@@ -1149,7 +1150,8 @@
         const busy = state.loading || state.saving || state.loadFailed;
         controls.querySelectorAll('[data-appearance-device]').forEach(button => {
           const profile = button.getAttribute('data-appearance-device');
-          button.disabled = profile === 'tv' || busy;
+          button.disabled = profile === 'tv' || busy || (isPhoneEditor() && profile !== 'mobile');
+          button.hidden = isPhoneEditor() && profile !== 'mobile';
           button.setAttribute('aria-disabled', String(button.disabled));
           button.setAttribute('aria-pressed', String(profile === state.activeDeviceProfile));
         });

@@ -58,6 +58,9 @@ test('original large album and both approved small-art choices persist with shar
         expect(cover.width).toBeGreaterThan(150);
         expect(identity.y).toBeGreaterThanOrEqual(cover.y + cover.height);
         expect(cover.x + cover.width / 2).toBeCloseTo(table.x + table.width / 2, 0);
+        await expect(app.albumIdentityTitle).toHaveCSS('text-align', 'center');
+        await expect(app.albumIdentitySummary).toHaveCSS('text-align', 'center');
+        expect((await app.albumIdentityCopy.boundingBox()).width).toBeCloseTo(table.width, 0);
       }
     }
     await snapshot(`42-album-${layout.replaceAll('_', '-')}`);

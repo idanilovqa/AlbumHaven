@@ -189,3 +189,10 @@ preview pinned below the bar (approximately y=202). Playwright documents that
 mouse.wheel returns before scrolling finishes. The POM now observes the original
 position bound through the existing assertion wait policy, keeping both y >= header.y
 and y < 300. No product change, retry, timeout setting or acceptance bound is changed.
+
+Visual inspection of the three actual layout captures found Centered cover still
+inheriting an intrinsic-width flex identity from the desktop header component.
+The mobile composition now gives that shared copy its full content width, centers
+all identity lines for the approved B variant and allows long titles to wrap.
+Additive browser checks protect centered text and copy width; the original art,
+track table, shared Gallery Bar and scrolling thumbnail remain unchanged.

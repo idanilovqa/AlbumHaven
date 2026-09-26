@@ -28,6 +28,9 @@ export class MobileLayoutPage {
     this.galleryAlbums = this.galleryCards.locator('[data-open-tracklist]');
     this.galleryGrid = this.galleryCards.first().locator('..');
     this.albumIdentity = page.locator('.mobile-album-identity');
+    this.albumIdentityCopy = this.albumIdentity.locator('.album-details-header__copy');
+    this.albumIdentityTitle = this.albumIdentity.locator('.album-details-header__primary');
+    this.albumIdentitySummary = this.albumIdentity.locator('.album-details-header__secondary');
     this.timeline = page.locator('#player-timeline');
     this.playerPlay = page.locator('#player-play');
     this.cancelAppearance = page.locator('#utility-modal-footer [data-editor-footer-action="secondary"]');

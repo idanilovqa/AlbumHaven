@@ -56,6 +56,7 @@ export class MobileLayoutPage {
     this.utilitiesPage = page.locator('#mobile-page-outlet #utility-modal');
     this.utilitiesDialogs = page.locator('#utility-modal [role="dialog"]');
     this.pageTitle = page.locator('#mobile-page-title');
+    this.pageSummary = page.locator('#mobile-page-summary');
     this.profileButton = page.locator('#app-shell .account-profile-button');
     this.adminLink = page.locator('#app-shell [data-account-menu-admin]');
     this.accountNavToggle = page.locator('[data-settings-outlet] [data-settings-nav-toggle]');
@@ -137,6 +138,55 @@ export class MobileLayoutPage {
       progress: parseFloat(input.style.getPropertyValue('--player-seek-progress')),
       value: Number(input.value), max: Number(input.max),
     }));
+  }
+
+  async expectHeaderNavigationBeforeTitle(kind) {
+    const selectors = {
+      gallery: ['#mobile-library-button', '[data-gallery-bar-instance="gallery"] [data-gallery-context-name]'],
+      settings: ['#mobile-settings-button', '#mobile-page-title'],
+      account: ['[data-settings-outlet] [data-settings-nav-toggle]', '[data-settings-outlet] .gallery-bar__title'],
+    };
+    if (!selectors[kind]) throw new TypeError('Unknown header kind');
+    const [buttonSelector, titleSelector] = selectors[kind];
+    await expect(this.page.locator(buttonSelector)).toBeVisible();
+    await expect(this.page.locator(titleSelector)).toBeVisible();
+    // parity-check: allow-read-only-measurement-evaluate -- inspect visual and DOM order of existing controls.
+    const order = await this.page.evaluate(([buttonSelector, titleSelector]) => {
+      const button = document.querySelector(buttonSelector), title = document.querySelector(titleSelector);
+      const a = button.getBoundingClientRect(), b = title.getBoundingClientRect();
+      return { right: a.right, left: b.left, before: Boolean(button.compareDocumentPosition(title) & Node.DOCUMENT_POSITION_FOLLOWING) };
+    }, [buttonSelector, titleSelector]);
+    expect(order.before).toBe(true);
+    expect(order.right).toBeLessThanOrEqual(order.left);
+  }
+
+  async expectThinPlayerComposition() {
+    await expect(this.player).toHaveAttribute('data-player-seekbar-presentation', 'thin');
+    await expect(this.playerArtist).toBeVisible();
+    await expect(this.playerTime).toBeVisible();
+    // parity-check: allow-read-only-measurement-evaluate -- measure the live transport and hit-test the existing play control.
+    const geometry = await this.player.evaluate(player => {
+      const play = player.querySelector('#player-play'), icon = play.querySelector('svg');
+      const rect = node => { const b = node.getBoundingClientRect(); return { x: b.x, y: b.y, width: b.width, height: b.height, right: b.right, bottom: b.bottom }; };
+      const button = rect(play);
+      return { player: rect(player), play: button, icon: rect(icon), time: rect(player.querySelector('#player-time')),
+        song: rect(player.querySelector('#player-title')), album: rect(player.querySelector('#player-album-link')),
+        lowerPlayTarget: play.contains(document.elementFromPoint(button.x + button.width / 2, button.bottom - 6)),
+        iconTransform: getComputedStyle(icon).transform,
+      };
+    });
+    expect(geometry.player.height).toBeLessThanOrEqual(80);
+    expect(geometry.time.right).toBeLessThanOrEqual(geometry.play.x);
+    expect(geometry.time.y).toBeGreaterThan(geometry.play.y);
+    expect(geometry.time.height).toBeLessThan(20);
+    expect(geometry.song.y).toBeCloseTo(geometry.album.y, 0);
+    expect(geometry.song.height).toBeLessThan(20);
+    expect(geometry.album.height).toBeLessThan(20);
+    expect(geometry.icon.x + geometry.icon.width / 2).toBeCloseTo(geometry.play.x + geometry.play.width / 2, 0);
+    expect(geometry.icon.y + geometry.icon.height / 2).toBeCloseTo(geometry.play.y + geometry.play.height / 2, 0);
+    expect(geometry.iconTransform).toBe('none');
+    expect(geometry.lowerPlayTarget).toBe(true);
+    expect(await this.hasNoHorizontalOverflow()).toBe(true);
   }
 
   async expectGalleryAlbumInventory(titles, lastTitle) {

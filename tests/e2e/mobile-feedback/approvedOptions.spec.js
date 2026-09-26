@@ -9,6 +9,7 @@ test('approved Home A has account identity, disabled News, keyboard tabs and no 
   await expect(app.viewCluster).not.toBeVisible();
   await expect(app.zoomButton).not.toBeVisible();
   await expect(app.libraryButton).toBeVisible();
+  await app.expectHeaderNavigationBeforeTitle('gallery');
   await snapshot('40-approved-home-a-dark');
   for (const name of ['Top tracks', 'Top albums', 'Top Artists']) {
     const tab = app.homeTabs.getByRole('tab', { name, exact: true });
@@ -46,9 +47,13 @@ test('original large album and both approved small-art choices persist with shar
     const cover = await app.albumCover.boundingBox(), table = await app.trackTable.boundingBox();
     if (layout === 'classic_bar') {
       await expect(app.albumIdentity).not.toBeVisible();
+      await expect(app.pageTitle).toBeVisible();
       expect(cover.width).toBeCloseTo(table.width, 0);
     } else {
       await expect(app.albumIdentity).toContainText('Northlight');
+      await expect(app.albumIdentityTitle).toBeInViewport();
+      await expect(app.pageTitle).not.toBeVisible();
+      await expect(app.pageSummary).not.toBeVisible();
       expect(cover.width).toBeLessThan(table.width);
       const identity = await app.albumIdentity.boundingBox();
       if (layout === 'stacked_bar') {
@@ -66,9 +71,19 @@ test('original large album and both approved small-art choices persist with shar
     await snapshot(`42-album-${layout.replaceAll('_', '-')}`);
     await app.scrollRegion('album', 900);
     await expect(app.albumThumbnail).toBeVisible();
+    await expect(app.pageTitle).toBeVisible();
+    await expect(app.pageSummary).toBeVisible();
+    if (layout !== 'classic_bar') await expect(app.albumIdentity).not.toBeInViewport();
     const thumb = await app.albumThumbnail.boundingBox(), title = await app.pageTitle.boundingBox();
     expect(thumb.x + thumb.width).toBeLessThanOrEqual(title.x);
     await snapshot(`43-scrolled-${layout.replaceAll('_', '-')}`);
+    await app.scrollRegion('album', -1500);
+    await expect(app.albumCover).toBeInViewport();
+    await expect(app.albumThumbnail).not.toBeVisible();
+    if (layout !== 'classic_bar') {
+      await expect(app.albumIdentityTitle).toBeInViewport();
+      await expect(app.pageTitle).not.toBeVisible();
+    } else await expect(app.pageTitle).toBeVisible();
     await page.reload();
     await expect(app.albumRows).toHaveCount(16);
     await expect(app.albumPage).toHaveAttribute('data-mobile-album-layout', layout);
@@ -89,9 +104,15 @@ test('thin mobile progress uses real playback, seeking and saved UI choice witho
   expect(line.height).toBeGreaterThanOrEqual(24);
   expect(line.bottom).toBeCloseTo(line.playerBottom, 0);
   expect(line.progress).toBeCloseTo(line.value / line.max * 100, 1);
+  await app.expectThinPlayerComposition();
   await snapshot('44-real-thin-progress');
+  await page.setViewportSize({ width: 320, height: 740 });
+  await app.expectThinPlayerComposition();
+  await snapshot('46-narrow-thin-player');
+  await page.setViewportSize({ width: 390, height: 844 });
   await app.playerPlay.click();
   await expect(app.playerPlay).toHaveAttribute('aria-label', 'Play');
+  await app.expectThinPlayerComposition();
   const pausedPosition = Number(await app.timeline.inputValue());
   await app.openSettings();
   await app.selectSubsection('seekbar');
@@ -128,4 +149,19 @@ test('thin mobile progress uses real playback, seeking and saved UI choice witho
   } finally { await context.close(); }
   await page.setViewportSize({ width: 1180, height: 820 });
   await expect(app.player).toHaveAttribute('data-player-seekbar-presentation', 'regular');
+});
+
+
+test('hamburger menus precede the name in Gallery, Settings and Password headers', async ({ app, snapshot }) => {
+  await app.expectHeaderNavigationBeforeTitle('gallery');
+  await app.browseArtist();
+  await app.expectHeaderNavigationBeforeTitle('gallery');
+  await app.openSettings();
+  await app.expectHeaderNavigationBeforeTitle('settings');
+  await app.selectUtility('integrations');
+  await app.expectHeaderNavigationBeforeTitle('settings');
+  await snapshot('47-settings-menu-left');
+  await app.openPassword();
+  await app.expectHeaderNavigationBeforeTitle('account');
+  await snapshot('48-password-menu-left');
 });

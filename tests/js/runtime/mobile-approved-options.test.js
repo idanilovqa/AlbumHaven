@@ -39,3 +39,26 @@ test('three existing album layout values are preserved, including the original f
   for (const value of ['classic_bar', 'stacked_bar', 'editorial_canvas']) assert.equal(normalizeAlbumDetailsLayout(value), value);
   assert.equal(normalizeAlbumDetailsLayout('unknown'), 'classic_bar');
 });
+
+test('album identity has exactly one owner until the complete inline block scrolls away', () => {
+  const { resolveMobileAlbumHeaderState: resolve } = load('album-details-components.js', ['resolveMobileAlbumHeaderState']);
+  const geometry = { albumPage: true, hasInlineIdentity: true, hasCover: true, viewportTop: 160, coverBottom: 150 };
+  assert.equal(resolve({ ...geometry, identityBottom: 210 }).bodyOwnsIdentity, true);
+  assert.equal(resolve({ ...geometry, identityBottom: 210 }).showCover, false);
+  assert.equal(resolve({ ...geometry, identityBottom: 160 }).bodyOwnsIdentity, false);
+  assert.equal(resolve({ ...geometry, identityBottom: 160 }).showCover, true);
+  // Scrolling upward must return ownership to the body, not retain sticky text.
+  assert.equal(resolve({ ...geometry, identityBottom: 300 }).bodyOwnsIdentity, true);
+});
+
+test('album header preserves classic, no-art and non-album page identities', () => {
+  const { resolveMobileAlbumHeaderState: resolve } = load('album-details-components.js', ['resolveMobileAlbumHeaderState']);
+  const geometry = { albumPage: true, hasInlineIdentity: false, hasCover: true, viewportTop: 160, coverBottom: 350 };
+  assert.equal(resolve(geometry).bodyOwnsIdentity, false);
+  assert.equal(resolve(geometry).showCover, false);
+  assert.equal(resolve({ ...geometry, coverBottom: 100 }).showCover, true);
+  assert.equal(resolve({ ...geometry, coverBottom: 100, hasCover: false }).showCover, false);
+  const settings = resolve({ ...geometry, albumPage: false, hasInlineIdentity: true, identityBottom: 250 });
+  assert.equal(settings.bodyOwnsIdentity, false);
+  assert.equal(settings.showCover, false);
+});

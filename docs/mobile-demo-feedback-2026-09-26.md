@@ -52,7 +52,7 @@ Each item below is an unchecked delivery requirement, not a claim that it is alr
 - [ ] R30 — Hide hover-only and other inapplicable touch-client settings. Preserve applicable selection, focus, player colors, seekbar, and motion settings. Audit compact/docked controls: do not expose desktop sidebar-docking options that cannot affect the always-bottom mobile player; report the supported mobile equivalents.
 - [ ] R31 — Follow Web/Desktop must resolve and visibly apply the saved desktop section to the mobile preview; saving persists inheritance and reopening resolves current desktop values. Custom mobile values stay isolated. Do not claim identical source/target palettes prove a broken inheritance flow.
 - [ ] R32 — Icon buttons on dark bars use that bar's surface treatment, not an unrelated bright theme fill, and vice versa on light bars. Apply through the shared chrome/content token boundary.
-- [ ] R33 — Remove Back and Artist Tree triggers from the search row. Put Artist Tree to the right of the Gallery Bar title (the username on approved Home); preserve inner-page Back navigation in the page/Gallery Bar instead of the search zone.
+- [ ] R33 — Remove Back and Artist Tree triggers from the search row. Put Artist Tree to the left of the Gallery Bar title (the username on approved Home); preserve inner-page Back navigation in the page/Gallery Bar instead of the search zone.
 - [ ] R34 — The All Artists mobile Gallery Bar follows the currently scrolled artist, like desktop. Keep the explicit All Artists surface separate from the personal Home surface.
 
 - [ ] R35 — For actors without Admin Panel access, show My Account in the settings/profile dropdown and open Password. Actors with Admin Panel retain that entry, not a redundant toolbar profile. Password, Users and Edit/Add User use the shared page Gallery Bar component with appropriate Back and mobile account navigation.
@@ -196,3 +196,32 @@ The mobile composition now gives that shared copy its full content width, center
 all identity lines for the approved B variant and allows long titles to wrap.
 Additive browser checks protect centered text and copy width; the original art,
 track table, shared Gallery Bar and scrolling thumbnail remain unchanged.
+
+
+## Latest owner corrections: identity handoff, slim transport and navigation order
+
+These refinements retain the approved Home A, original large artwork, Compact
+cover A and Centered cover B; no new design approval or capability is introduced.
+Application base inspected: `0d18a1856d439de6d13726c431a3383be52e5909`.
+
+- [ ] L01 — Inline album identity is the only visible identity in either smaller-art
+  layout while that block remains in the content viewport. Once the complete block
+  and cover scroll out, the shared Gallery Bar displays the album identity and
+  thumbnail. Scrolling back reverses it. The large-art variant always retains its
+  original Gallery Bar identity. The player is intentionally independent.
+- [ ] L02 — Thin-line mode is 76px tall before safe-area inset. Keep artwork left,
+  artist above a single song / album line, timestamp at the bottom to the left of
+  Play, and geometrically centered Play/Pause SVGs. The thin range stays operable;
+  its invisible touch target must not intercept the Play or artwork buttons.
+  Regular and waveform remain selectable and desktop presentation is unchanged.
+- [ ] L03 — Artists, Settings and account-navigation hamburger controls precede
+  their header names, including in DOM/keyboard order. No trigger returns to the
+  search row. Preserve capabilities, page Back and subsection controls.
+
+Verification: extend the existing approved-options scenarios with initial/scrolled/
+return identity checks for both small layouts and classic, drawer-trigger order,
+and narrow/normal phone transport geometry with real playback and seeking. Add
+unit coverage for a tall wrapped identity, missing cover, non-album page, and reverse
+scroll. Run the existing mobile development workflow without weakening its tests,
+timeouts or retry policy. Capture new real-app evidence. Counter: 0/3 latest
+corrections verified; the historical repair counts above are not release claims.

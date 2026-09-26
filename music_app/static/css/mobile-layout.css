@@ -10,6 +10,9 @@
 .page-gallery-bar > .gallery-bar__context { flex: 1; min-width: 0; }
 .page-gallery-bar__back { color: inherit; text-decoration: none; }
 .mobile-page-header { flex-shrink: 0; }
+/* Reserve header geometry during the handoff so scrolling cannot bounce. */
+.mobile-page-header[data-album-identity-in-body="true"] > .gallery-bar__context { visibility: hidden; }
+.player-track-meta { display: contents; }
 .mobile-page-header h1, .mobile-page-header p { margin: 0; }
 .mobile-page-cover { width: 40px; height: 40px; flex: 0 0 40px; border-radius: 6px; object-fit: cover; }
 .mobile-page-outlet { min-height: 0; flex: 1; overflow: auto; overscroll-behavior: contain; }
@@ -180,7 +183,8 @@ html[data-client-profile="mobile"] :is([data-utility-tab="problematic-files"], [
   .global-player:not(.is-compact) .player-play-cluster[data-loop-control-style] { grid-column: 3; grid-row: 1; justify-self: end; align-self: center; --loop-play-control-size: 52px; width: 52px; height: 52px; min-width: 52px; flex-basis: 52px; border: 0; border-radius: 0; background: transparent; box-shadow: none; }
   .global-player:not(.is-compact) .player-play-cluster::before, .global-player:not(.is-compact) .player-play-cluster::after { display: none; }
   .global-player:not(.is-compact) .player-play-cluster[data-loop-control-style] .loop-play-control-button { position: static; width: 52px; height: 52px; min-width: 52px; min-height: 52px; margin: 0; }
-  .global-player .loop-play-control-button > .ui-icon { width: 32px; height: 32px; fill: currentColor; stroke: none; }
+  .global-player .loop-play-control-button { display: grid; place-items: center; text-align: center; line-height: 0; }
+  .global-player .loop-play-control-button > .ui-icon { display: block; width: 32px; height: 32px; margin: 0; transform: none; fill: currentColor; stroke: none; }
   .global-player #player-cover-button.is-idle-placeholder { visibility: hidden; pointer-events: none; }
   .global-player :is(.player-loop-actions, [data-ui-button-action="player-collapse"], .compact-player-shell) { display: none !important; }
   .global-player[data-player-seekbar-presentation] .player-time { position: static; inset: auto; grid-column: 3; grid-row: 2; align-self: center; justify-self: end; min-width: 0; margin: 0; white-space: nowrap; font-size: 11px; line-height: 1.3; font-variant-numeric: tabular-nums; }
@@ -263,8 +267,16 @@ html[data-client-profile="mobile"] :is([data-utility-tab="problematic-files"], [
   .is-mobile-page .appearance-album-layout-grid { display: grid; grid-template-columns: minmax(0, 1fr); }
   .is-mobile-page .appearance-album-page__controls > .appearance-subsection-heading { display: block; }
   /* Same range and audio clock. Three-pixel visual track, 24px touch/keyboard target. */
-  .global-player[data-player-seekbar-presentation="thin"] .player-shell { position: static; }
-  .global-player[data-player-seekbar-presentation="thin"] .player-timeline-wrap { position: absolute; inset: auto 0 env(safe-area-inset-bottom, 0px); width: 100%; height: 24px; grid-column: auto; grid-row: auto; }
+  :root:has(.global-player[data-player-seekbar-presentation="thin"]) { --player-height: calc(76px + env(safe-area-inset-bottom, 0px)); }
+  .global-player[data-player-seekbar-presentation="thin"] .player-shell { position: static; grid-template-columns: 48px minmax(0, 1fr) 52px; grid-template-rows: 18px 16px 14px; row-gap: 2px; }
+  .global-player[data-player-seekbar-presentation="thin"] #player-cover-button { grid-row: 1 / -1; position: relative; z-index: 1; }
+  .global-player[data-player-seekbar-presentation="thin"] .player-meta { grid-row: 1 / 3; align-self: start; position: relative; z-index: 1; }
+  .global-player[data-player-seekbar-presentation="thin"] .player-track-meta { display: flex; align-items: baseline; gap: 4px; width: 100%; min-width: 0; white-space: nowrap; }
+  .global-player[data-player-seekbar-presentation="thin"] .player-track-meta > * { flex: 0 1 auto; min-width: 0; margin: 0; }
+  .global-player[data-player-seekbar-presentation="thin"] .player-album-link::before { content: "/ "; }
+  .global-player[data-player-seekbar-presentation="thin"] .player-play-cluster[data-loop-control-style] { grid-row: 1 / -1; }
+  .global-player[data-player-seekbar-presentation="thin"] .player-time { grid-column: 2; grid-row: 3; align-self: end; justify-self: end; pointer-events: none; }
+  .global-player[data-player-seekbar-presentation="thin"] .player-timeline-wrap { position: absolute; inset: auto 0 env(safe-area-inset-bottom, 0px); width: 100%; height: 24px; grid-column: auto; grid-row: auto; z-index: 0; }
   .global-player[data-player-seekbar-presentation="thin"] .player-timeline { appearance: none; top: 0; bottom: 0; height: 24px; border: 0; border-radius: 0; padding: 0; margin: 0; background: linear-gradient(to right, var(--appearance-waveform-edge, #afd8c2) var(--player-seek-progress, 0%), color-mix(in srgb, var(--appearance-player-ink, #dcebe3) 18%, transparent) var(--player-seek-progress, 0%)) bottom / 100% 3px no-repeat; box-shadow: none; cursor: pointer; }
   .global-player[data-player-seekbar-presentation="thin"] .player-timeline::-webkit-slider-runnable-track { height: 3px; border: 0; background: transparent; box-shadow: none; }
   .global-player[data-player-seekbar-presentation="thin"] .player-timeline::-webkit-slider-thumb { appearance: none; width: 0; height: 0; border: 0; background: transparent; box-shadow: none; }

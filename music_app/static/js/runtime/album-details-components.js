@@ -112,6 +112,19 @@ function buildMissingAlbumDetailsHtml(config = {}) {
   });
 }
 
+/* Inline album metadata and the pinned Gallery Bar never own visible identity
+   simultaneously. A taller wrapped identity must finish scrolling out too. */
+function resolveMobileAlbumHeaderState({ albumPage, hasInlineIdentity, hasCover,
+  viewportTop, coverBottom, identityBottom } = {}) {
+  const bodyOwnsIdentity = Boolean(albumPage && hasInlineIdentity
+    && (!Number.isFinite(identityBottom) || identityBottom > viewportTop + 1));
+  return {
+    bodyOwnsIdentity,
+    showCover: Boolean(albumPage && hasCover && !bodyOwnsIdentity
+      && Number.isFinite(coverBottom) && coverBottom <= viewportTop + 1),
+  };
+}
+
 /* Mobile composes the same live artwork/table; desktop layout values stay intact. */
 function syncMobileAlbumComposition(album) {
   const overlay = document.getElementById('track-modal');

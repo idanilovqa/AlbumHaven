@@ -4363,6 +4363,19 @@ function buildMissingAlbumDetailsHtml(config = {}) {
   });
 }
 
+/* Inline album metadata and the pinned Gallery Bar never own visible identity
+   simultaneously. A taller wrapped identity must finish scrolling out too. */
+function resolveMobileAlbumHeaderState({ albumPage, hasInlineIdentity, hasCover,
+  viewportTop, coverBottom, identityBottom } = {}) {
+  const bodyOwnsIdentity = Boolean(albumPage && hasInlineIdentity
+    && (!Number.isFinite(identityBottom) || identityBottom > viewportTop + 1));
+  return {
+    bodyOwnsIdentity,
+    showCover: Boolean(albumPage && hasCover && !bodyOwnsIdentity
+      && Number.isFinite(coverBottom) && coverBottom <= viewportTop + 1),
+  };
+}
+
 /* Mobile composes the same live artwork/table; desktop layout values stay intact. */
 function syncMobileAlbumComposition(album) {
   const overlay = document.getElementById('track-modal');
@@ -39161,7 +39174,8 @@ function syncMobilePageShell() {
     document.title = `${active.title} — Album Haven`;
   }
   document.getElementById('mobile-settings-actions').hidden = active?.kind !== 'utilities';
-  scheduleMobileAlbumThumbnail();
+  document.getElementById('mobile-settings-button').hidden = active?.kind !== 'utilities';
+  syncMobileAlbumHeader();
   // A page is not a modal and must never trap focus away from the persistent player.
   if (!document.querySelector('[aria-modal="true"]:not([hidden])')?.getClientRects().length) document.body.classList.remove('modal-open');
 }
@@ -39217,7 +39231,8 @@ function presentMobilePage(descriptor) {
   syncMobilePageShell();
   if (!mobilePageState.restoring) writeMobilePageHistory();
   requestAnimationFrame(() => {
-    const title = document.getElementById('mobile-page-title');
+    const inBody = document.getElementById('mobile-page-header')?.dataset.albumIdentityInBody === 'true';
+    const title = document.getElementById(inBody ? 'mobile-album-identity-title' : 'mobile-page-title');
     if (title) { title.tabIndex = -1; title.focus({ preventScroll: true }); }
   });
   return true;
@@ -39519,21 +39534,40 @@ function handleMobileSettingsClick(event) {
   }
   return false;
 }
+function syncMobileAlbumHeader() {
+  const header = document.getElementById('mobile-page-header');
+  const context = header?.querySelector('.gallery-bar__context');
+  const thumbnail = document.getElementById('mobile-page-cover');
+  if (!header || !context || !thumbnail) return;
+  const active = mobilePageState.pages.at(-1);
+  const outlet = document.getElementById('mobile-page-outlet');
+  const cover = document.getElementById('track-modal-cover');
+  const identity = document.querySelector('#track-modal .mobile-album-identity');
+  const albumPage = active?.kind === 'album' && usesMobilePageLayout();
+  const hasInlineIdentity = albumPage && identity && !identity.hidden;
+  const presentation = resolveMobileAlbumHeaderState({
+    albumPage,
+    hasInlineIdentity,
+    hasCover: Boolean(active?.coverSrc),
+    viewportTop: outlet?.getBoundingClientRect().top,
+    coverBottom: albumPage ? cover?.getBoundingClientRect().bottom : undefined,
+    identityBottom: hasInlineIdentity ? identity.getBoundingClientRect().bottom : undefined,
+  });
+  header.dataset.albumIdentityInBody = String(presentation.bodyOwnsIdentity);
+  context.inert = presentation.bodyOwnsIdentity;
+  if (presentation.bodyOwnsIdentity) context.setAttribute('aria-hidden', 'true');
+  else context.removeAttribute('aria-hidden');
+  thumbnail.hidden = !presentation.showCover;
+  if (presentation.showCover && thumbnail.getAttribute('src') !== active.coverSrc) thumbnail.src = active.coverSrc;
+  if (active?.kind !== 'album') thumbnail.removeAttribute('src');
+}
+
 let mobileAlbumThumbnailFrame = 0;
 function scheduleMobileAlbumThumbnail() {
   if (mobileAlbumThumbnailFrame) return;
   mobileAlbumThumbnailFrame = requestAnimationFrame(() => {
     mobileAlbumThumbnailFrame = 0;
-    const active = mobilePageState.pages.at(-1);
-    const thumbnail = document.getElementById('mobile-page-cover');
-    if (!thumbnail) return;
-    const outlet = document.getElementById('mobile-page-outlet');
-    const cover = document.getElementById('track-modal-cover');
-    const show = active?.kind === 'album' && Boolean(active.coverSrc) && cover && outlet
-      && cover.getBoundingClientRect().bottom <= outlet.getBoundingClientRect().top + 1;
-    thumbnail.hidden = !show;
-    if (show && thumbnail.getAttribute('src') !== active.coverSrc) thumbnail.src = active.coverSrc;
-    if (!show && active?.kind !== 'album') thumbnail.removeAttribute('src');
+    syncMobileAlbumHeader();
   });
 }
 

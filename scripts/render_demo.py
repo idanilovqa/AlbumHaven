@@ -142,7 +142,7 @@ def provision(admin_url: str, runtime_url: str, app_password: str, password_hash
                         (display_name, account_kind, username_display, username_normalized, contact_email, contact_email_normalized, metadata)
                         values ('Rendref','bootstrap_owner','Rendref','rendref','demo@example.test','demo@example.test',%s) returning id""", (metadata,)).fetchone()[0]
                     lock.execute("insert into app.bootstrap_owners (account_id,owner_key,metadata) values (%s,'local-bootstrap-owner',%s)", (account_id, metadata))
-                    lock.execute("insert into library.libraries (owner_account_id,name,library_kind,metadata) values (%s,'Generated Demo Library','local',%s)", (account_id, metadata))
+                    lock.execute("insert into library.libraries (owner_account_id,name,library_kind,metadata) values (%s,'Local Library','local',%s)", (account_id, metadata))
 
             from config import build_auth_config
             from music_app.services.auth_bootstrap_postgres import PostgresAuthBootstrapService

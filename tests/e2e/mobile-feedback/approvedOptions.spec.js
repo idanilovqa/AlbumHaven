@@ -112,6 +112,7 @@ test('thin mobile progress uses real playback, seeking and saved UI choice witho
   await expect(app.player).toHaveAttribute('data-player-seekbar-presentation', 'thin');
   expect(Number(await app.timeline.inputValue())).toBeCloseTo(pausedPosition, 0);
   await expect(app.playerPreview).toHaveAttribute('data-seekbar-mode', 'thin');
+  await expect(app.playerPreview.locator('.player-preview-seekbar > span')).not.toBeVisible();
   await snapshot('45-thin-progress-setting');
   const context = await browser.newContext({ baseURL: new URL(page.url()).origin, viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true });
   try {

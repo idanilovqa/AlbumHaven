@@ -244,7 +244,7 @@ html[data-client-profile="mobile"] :is([data-utility-tab="problematic-files"], [
   .has-mobile-home > .gallery-bar { flex-wrap: wrap; }
   .has-mobile-home > .gallery-bar > .gallery-bar__context { flex: 1 1 calc(100% - 48px); }
   .gallery-bar__home-tabs:not([hidden]) { display: block; flex: 0 0 100%; }
-  .has-mobile-home .gallery-bar__actions, .gallery-bar__actions[hidden] { display: none !important; }
+  .has-mobile-home > [data-gallery-bar-instance="gallery"] > .gallery-bar__actions, .gallery-bar__actions[hidden] { display: none !important; }
   .mobile-home .in-page-tabs { justify-content: space-between; gap: 12px; }
   .mobile-home-empty { padding: 34px 12px; font-size: 14px; color: var(--muted, currentColor); }
   .mobile-home [hidden] { display: none !important; }
@@ -274,8 +274,7 @@ html[data-client-profile="mobile"] :is([data-utility-tab="problematic-files"], [
   .global-player[data-player-seekbar-presentation="thin"] .player-timeline:focus-visible { outline: 2px solid var(--appearance-waveform-edge, #afd8c2); outline-offset: -2px; }
   .player-live-preview[data-seekbar-mode="thin"] { position: relative; padding-bottom: 16px; }
   .player-live-preview[data-seekbar-mode="thin"] .player-preview-seekbar { position: absolute; left: 0; right: 0; bottom: 0; height: 3px; width: auto; border: 0; border-radius: 0; box-shadow: none; overflow: hidden; }
-  .player-live-preview[data-seekbar-mode="thin"] .player-preview-seekbar::before,
+  .player-live-preview[data-seekbar-mode="thin"] .player-preview-seekbar::before { display: block; background: var(--preview-waveform-edge); }
   .player-live-preview[data-seekbar-mode="thin"] .player-preview-seekbar::after,
-  .player-live-preview[data-seekbar-mode="thin"] .player-preview-seekbar span::before,
-  .player-live-preview[data-seekbar-mode="thin"] .player-preview-seekbar span::after { display: none; }
+  .player-live-preview[data-seekbar-mode="thin"] .player-preview-seekbar > span { display: none; }
 }

@@ -161,3 +161,18 @@ retain the regular desktop presentation. The draft preview reflects the chosen m
 
 Implementation is prepared; the new hosted verification result has not yet been
 recorded. Earlier repair checklist counters are not changed by this approval entry.
+
+### Approved-options browser reconciliation
+
+Run 36261877358 retained 244 passing JavaScript checks and 21 passing Python checks,
+with 10 passing and six failing browser scenarios. Five failures exposed an
+over-broad Home CSS selector hiding the Settings Gallery Bar actions; scope it
+to Home's gallery-bar instance. The remaining failure was introduced while moving
+the retired Home album-grid inventory assertion to the virtualized All Artists
+view: seven cards are mounted initially, with the eighth beyond the viewport.
+Retain exact coverage of all eight fixture titles by visibly scrolling to the
+last album and checking the union of rendered titles, not by requiring offscreen
+DOM nodes. No fixture, timeout, retry, or product inventory contract is weakened.
+The thin progress interaction and Save/Cancel checks passed before its fresh-
+session Settings navigation hit the CSS issue. Remove the old preview-only knob
+while retaining its progress fill. Full browser rerun remains required.

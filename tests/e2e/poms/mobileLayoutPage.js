@@ -135,6 +135,17 @@ export class MobileLayoutPage {
     }));
   }
 
+  async expectGalleryAlbumInventory(titles, lastTitle) {
+    // A virtual gallery mounts its viewport, not the entire library at once.
+    const labels = this.galleryCards.locator('.album-title-button');
+    await expect(labels.first()).toBeVisible();
+    const seen = new Set(await labels.allTextContents());
+    await this.scrollRegion('gallery', 1400);
+    await expect(this.galleryCards.getByRole('button', { name: lastTitle, exact: true })).toBeVisible();
+    for (const title of await labels.allTextContents()) seen.add(title);
+    expect([...seen].map(title => title.trim()).sort()).toEqual([...titles].sort());
+  }
+
   async selectView(view) {
     if (!['cards', 'covers', 'list'].includes(view)) throw new TypeError('Unknown gallery view');
     await this.activeView.click();

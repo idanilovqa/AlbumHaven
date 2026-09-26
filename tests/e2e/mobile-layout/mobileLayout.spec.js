@@ -42,7 +42,10 @@ test('mobile login, Home rows, artist drawer, search and right-side family panel
   await expect(app.artistHeading).toHaveText('Artists');
   await expect(app.artistPlaceholderTabs).toHaveCount(0);
   await app.allArtists.click();
-  await expect(app.galleryCards).toHaveCount(8);
+  await app.expectGalleryAlbumInventory([
+    'Another Shore', 'First Light', 'The Quiet Hours', 'Paper Satellites',
+    'Night Atlas', 'After the Rain', 'Blue Frequency', 'Between Two Skies',
+  ], 'Between Two Skies');
   await expect(app.artistRail).not.toHaveClass(/is-mobile-drawer-open/);
   await app.searchButton.click();
   await expect(app.searchInput).toBeFocused();

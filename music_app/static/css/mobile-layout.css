@@ -241,8 +241,8 @@ html[data-client-profile="mobile"] :is([data-utility-tab="problematic-files"], [
 .in-page-tabs > [role="tab"]:focus-visible { outline: 2px solid var(--appearance-selected-accent, currentColor); outline-offset: 3px; }
 .mobile-album-identity, .gallery-bar__home-tabs { display: none; }
 @media (max-width: 900px) {
-  .has-mobile-home > .gallery-bar { flex-wrap: wrap; }
-  .has-mobile-home > .gallery-bar > .gallery-bar__context { flex: 1 1 calc(100% - 48px); }
+  .has-mobile-home > [data-gallery-bar-instance="gallery"] { flex-wrap: wrap; }
+  .has-mobile-home > [data-gallery-bar-instance="gallery"] > .gallery-bar__context { flex: 1 1 calc(100% - 48px); }
   .gallery-bar__home-tabs:not([hidden]) { display: block; flex: 0 0 100%; }
   .has-mobile-home > [data-gallery-bar-instance="gallery"] > .gallery-bar__actions, .gallery-bar__actions[hidden] { display: none !important; }
   .mobile-home .in-page-tabs { justify-content: space-between; gap: 12px; }

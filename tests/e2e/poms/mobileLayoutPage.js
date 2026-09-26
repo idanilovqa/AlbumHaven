@@ -35,6 +35,7 @@ export class MobileLayoutPage {
     this.regularOption = page.locator('[data-appearance-seekbar-mode="default"]');
     this.waveformOption = page.locator('[data-appearance-seekbar-mode="waveform"]');
     this.playerPreview = page.locator('[data-player-live-preview]');
+    this.playerPreviewKnob = this.playerPreview.locator('.player-preview-seekbar > span');
     this.familyButton = page.locator('[data-gallery-bar-action="artist-family"]');
     this.familyPanel = page.locator('#artist-family-panel');
     this.viewCluster = page.locator('#gallery-view-cluster-options');

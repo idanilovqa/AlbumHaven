@@ -9,6 +9,7 @@ test('approved Home A has account identity, disabled News, keyboard tabs and no 
   await expect(app.viewCluster).not.toBeVisible();
   await expect(app.zoomButton).not.toBeVisible();
   await expect(app.libraryButton).toBeVisible();
+  await snapshot('40-approved-home-a-dark');
   for (const name of ['Top tracks', 'Top albums', 'Top Artists']) {
     const tab = app.homeTabs.getByRole('tab', { name, exact: true });
     await tab.click();
@@ -17,7 +18,6 @@ test('approved Home A has account identity, disabled News, keyboard tabs and no 
   }
   await app.homeTabs.getByRole('tab', { name: 'Top Artists', exact: true }).press('Home');
   await expect(app.homeTabs.getByRole('tab', { name: 'Top tracks', exact: true })).toBeFocused();
-  await snapshot('40-approved-home-a-dark');
   await app.openSettings();
   await app.customAppearance.click();
   await new UtilityAppearanceTab(page).paletteButton('parchment-pine').click();
@@ -112,7 +112,7 @@ test('thin mobile progress uses real playback, seeking and saved UI choice witho
   await expect(app.player).toHaveAttribute('data-player-seekbar-presentation', 'thin');
   expect(Number(await app.timeline.inputValue())).toBeCloseTo(pausedPosition, 0);
   await expect(app.playerPreview).toHaveAttribute('data-seekbar-mode', 'thin');
-  await expect(app.playerPreview.locator('.player-preview-seekbar > span')).not.toBeVisible();
+  await expect(app.playerPreviewKnob).not.toBeVisible();
   await snapshot('45-thin-progress-setting');
   const context = await browser.newContext({ baseURL: new URL(page.url()).origin, viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true });
   try {

@@ -1,7 +1,7 @@
 name: Render Demo Verification
 on:
   push:
-    branches: [2026-09-25-render-demo]
+    branches: [2026-09-25-render-demo, 2026-09-26-render-mobile-feedback]
   workflow_dispatch:
 permissions:
   contents: read
@@ -27,6 +27,11 @@ jobs:
         with:
           python-version: '3.11'
           cache: pip
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Build the production runtime bundle
+        run: node scripts/build-runtime-bundle.cjs
       - name: Install dependencies
         run: python -m pip install -r requirements.txt httpx
       - name: Deployment guard tests
@@ -39,5 +44,5 @@ jobs:
           CREATE ROLE demo_owner LOGIN CREATEROLE PASSWORD 'isolated-ci-owner';
           CREATE DATABASE album_haven_ci_render_demo OWNER demo_owner;
           SQL
-      - name: Seed twice and verify normal authentication
+      - name: Upgrade the legacy demo, repeat startup and verify normal authentication
         run: python scripts/render_demo_smoke.py

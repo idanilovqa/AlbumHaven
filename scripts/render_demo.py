@@ -119,7 +119,7 @@ def apply_migrations(connection) -> None:
         connection.execute("insert into ops.schema_migrations (migration_name, checksum) values (%s,%s)", (path.name, checksum))
 
 
-def provision(admin_url: str, runtime_url: str, app_password: str, password_hash: str) -> None:
+def provision(admin_url: str, runtime_url: str, app_password: str, password_hash: str, *, extended_media: bool = True) -> None:
     import psycopg
     from psycopg import sql
     from psycopg.types.json import Jsonb
@@ -162,8 +162,8 @@ def provision(admin_url: str, runtime_url: str, app_password: str, password_hash
             sys.path.insert(0, str(support))
             from mobileLayoutFixture import prepare_mobile_layout_media
             from phase7PlaybackFixture import persist_settings_playback_inventory
-            inventory = prepare_mobile_layout_media(DEMO_ROOT / "media")
-            persist_settings_playback_inventory(admin_url, DEMO_ROOT / "media", inventory)
+            inventory = prepare_mobile_layout_media(DEMO_ROOT / "media", extended=extended_media)
+            persist_settings_playback_inventory(admin_url, DEMO_ROOT / "media", inventory, rebuild_relations=extended_media)
             sys.path.remove(str(support))
             with lock.transaction():
                 account_id = lock.execute("select account_id from app.bootstrap_owners where owner_key='local-bootstrap-owner'").fetchone()[0]
@@ -184,7 +184,7 @@ def provision(admin_url: str, runtime_url: str, app_password: str, password_hash
             lock.execute("select pg_advisory_unlock(%s)", (LOCK_ID,))
 
 
-def prepare() -> None:
+def prepare(*, extended_media: bool = True) -> None:
     admin_url = validate_database_url(os.environ.get("ALBUM_HAVEN_DEMO_DATABASE_URL", ""), os.environ.get("ALBUM_HAVEN_DEMO_DATABASE_HOST", ""))
     app_password = os.environ.get("ALBUM_HAVEN_DEMO_APP_DB_PASSWORD", "")
     password_hash = os.environ.get("ALBUM_HAVEN_DEMO_PASSWORD_HASH", "")
@@ -194,7 +194,7 @@ def prepare() -> None:
     configure_environment(runtime_url)
     if str(ROOT) not in sys.path:
         sys.path.insert(0, str(ROOT))
-    provision(admin_url, runtime_url, app_password, password_hash)
+    provision(admin_url, runtime_url, app_password, password_hash, extended_media=extended_media)
     # The serving process does not need the database-owner connection or seed hash.
     for key in ("ALBUM_HAVEN_DEMO_DATABASE_URL", "ALBUM_HAVEN_DEMO_PASSWORD_HASH", "ALBUM_HAVEN_DEMO_APP_DB_PASSWORD"):
         os.environ.pop(key, None)

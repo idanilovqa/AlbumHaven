@@ -19,7 +19,7 @@ Repository: `https://github.com/idanilovqa/AlbumHaven`
 Branch: `2026-09-25-render-demo`
 Build: `python -m pip install -r requirements.txt && node scripts/build-runtime-bundle.cjs`
 Start: `python scripts/render_demo.py`
-Auto-deploy: disabled; deploy explicitly after the verification workflow passes.
+Read auto-deploy from the live Render service before publishing. The existing service currently deploys commits automatically. Verify the combined application/hosting snapshot on `2026-09-26-render-mobile-feedback` before promoting it to the deployment branch; do not trigger a second deployment after that push.
 
 Required private environment variables:
 
@@ -50,8 +50,10 @@ Postgres advisory lock. It creates the existing application roles and serves
 through the restricted `album_haven_app` role, never the database-owner role.
 
 Before ASGI startup, the launcher reuses only the generated-media seed helpers
-used for the mobile screenshots: eight fictional albums with 24 MP3 test-tone
-tracks and generated covers. No test control, reset, fake login, or SMTP server
+used for the mobile screenshots: 39 fictional albums with 130 MP3 test-tone
+tracks, alternate local covers and a normal persisted artist-family projection.
+Northlight / Sixteen Horizons contains 16 tracks. The original eight albums and
+their media paths are preserved during the upgrade. No test control, reset, fake login, or SMTP server
 is started. All UI and playback use the production application and database.
 
 The fixed `/tmp/albumhaven-mobile-demo/media` location is regenerated on restart.
@@ -63,11 +65,24 @@ this is not long-term storage. No production data is copied or migrated.
 ## Verification and limitations
 
 `Render Demo Verification` runs the launcher with a disposable PostgreSQL 17
-database owned by a non-superuser with CREATEROLE, seeds twice, checks inventory
-and credential/history retention, verifies restricted DB privileges, then uses
+database owned by a non-superuser with CREATEROLE. It starts with the original
+eight-album library, upgrades to the expanded library and repeats that startup,
+checks exact album/track counts, the sixteen-track album, the family projection,
+original IDs and credential/history/preference retention, verifies restricted DB
+privileges, then uses
 the normal ASGI login and account routes. Local launcher guard tests use unittest.
 
 A successful CI smoke test is not proof that the public Render deployment works.
 After the service goes live, verify HTTPS, unauthenticated login redirect,
 responsive Home, album search/details, saved preferences, and actual audio.
 Physical Android/iOS behavior and full release regression are separate checks.
+
+
+## Mobile feedback promotion
+
+The mobile branch owns all application UI changes. The staging branch combines
+that verified application source with these hosting-only updates. This is still
+a generated-data preview, not a release or a merge to main. No environment
+secrets, credentials, outbound integrations or hosting plans are changed. The
+pre-start `extended_media` argument exists solely to verify upgrade from the
+previous generated inventory; the live server has no test-mode branch.

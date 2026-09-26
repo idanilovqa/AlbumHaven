@@ -1,0 +1,60 @@
+name: Render Public Preview Check
+
+on:
+  push:
+    branches: [2026-09-26-render-mobile-feedback]
+    paths: ['.github/workflows/render-public-preview-check.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  public-preview:
+    runs-on: ubuntu-latest
+    timeout-minutes: 7
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Verify deployed public routes and exact stylesheet without credentials
+        shell: python
+        run: |
+          import hashlib
+          import os
+          from pathlib import Path
+          import time
+          import urllib.error
+          import urllib.parse
+          import urllib.request
+
+          origin = 'https://albumhaven.onrender.com'
+          expected = hashlib.sha256(Path('music_app/static/css/mobile-layout.css').read_bytes()).hexdigest()
+          deadline = time.monotonic() + 300
+          attempt = 0
+          while True:
+              attempt += 1
+              try:
+                  request = urllib.request.Request(origin + '/', headers={'Cache-Control': 'no-cache'})
+                  with urllib.request.urlopen(request, timeout=12) as response:
+                      final = urllib.parse.urlsplit(response.url)
+                      assert response.status == 200, 'Public login failed'
+                      assert final.scheme == 'https' and final.netloc == 'albumhaven.onrender.com' and final.path == '/login', 'Unauthenticated route did not redirect to the normal login'
+                      assert b'Album Haven sign in' in response.read(1048576), 'Normal login form missing'
+                  with urllib.request.urlopen(origin + '/health', timeout=12) as response:
+                      assert response.status == 200, 'Public health check failed'
+                  request = urllib.request.Request(origin + '/static/css/mobile-layout.css?verification=' + os.environ['GITHUB_SHA'], headers={'Cache-Control': 'no-cache'})
+                  with urllib.request.urlopen(request, timeout=12) as response:
+                      assert response.status == 200, 'Public stylesheet unavailable'
+                      actual = hashlib.sha256(response.read(1048576)).hexdigest()
+                      assert actual == expected, 'Deployment has not served the verified stylesheet yet'
+                  print('PASS: public HTTPS, normal unauthenticated login redirect, health and exact verified mobile CSS SHA256 ' + expected)
+                  break
+              except (AssertionError, urllib.error.URLError, TimeoutError) as error:
+                  print('Preview readiness attempt', attempt, type(error).__name__)
+                  if time.monotonic() >= deadline:
+                      raise RuntimeError('Public preview verification did not pass within its bounded deployment-readiness window') from None
+                  time.sleep(10)

@@ -69,7 +69,8 @@ html[data-client-profile="mobile"] :is([data-utility-tab="problematic-files"], [
   .gallery-bar :is(.gallery-action-button, .action-button), .gallery-view-cluster { --unfolding-action-size: 40px; }
   .gallery-bar :is(.gallery-action-button, .action-button) { width: 40px; height: 40px; min-width: 40px; min-height: 40px; }
   .mobile-bar-action, .mobile-gallery-density { display: inline-grid; place-items: center; flex: 0 0 40px; }
-  .mobile-bar-action[hidden], .mobile-gallery-density[hidden] { display: none; }
+  .mobile-bar-action[hidden], .mobile-gallery-density[hidden], .mobile-page-header [hidden], .global-player [hidden] { display: none !important; }
+  #mobile-page-title:focus { outline: none; }
   .gallery-bar svg, .mobile-drawer-heading svg { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
   .shell-layout .shell-navigation-rail { top: var(--app-bar-height); bottom: var(--player-height); width: min(320px, 75vw); max-width: 75vw; padding: 0; border-radius: 0 16px 16px 0; }
   #artist-tree-expanded { min-height: 0; flex: 1; display: flex; flex-direction: column; }
@@ -114,6 +115,7 @@ html[data-client-profile="mobile"] :is([data-utility-tab="problematic-files"], [
   .is-mobile-page .track-modal-cover :is(img, .album-artbox) { width: 100%; max-height: none; aspect-ratio: 1; object-fit: contain; }
   .is-mobile-page .track-modal-main { min-width: 0; width: 100%; overflow: visible; }
   .is-mobile-page :is(.track-modal-list, .track-list, .track-table-wrap, .album-track-table-wrap) { max-height: none; overflow: visible; }
+  .is-mobile-page .track-modal-list { padding: 0; scrollbar-gutter: auto; }
   .is-mobile-page .track-modal-table-wrap { width: 100%; overflow-x: auto; }
   .is-mobile-page :is(table, .album-track-table) { width: 100%; min-width: 0 !important; font-size: 12px; }
   .is-mobile-page :is(th, td) { padding: 10px 5px; }
@@ -131,6 +133,8 @@ html[data-client-profile="mobile"] :is([data-utility-tab="problematic-files"], [
   .is-mobile-page .appearance-interaction-row:has([data-interaction-color="item_hover"], [data-interaction-color="button_hover_background"]) { display: none; }
   .is-mobile-page :is(.background-player-modes, .appearance-segmented, .background-companions, .background-palette-grid) { row-gap: 12px; }
   .is-mobile-page .background-choices > section:last-of-type { border-bottom: none; padding-bottom: 0; }
+  #utility-modal.is-mobile-page[data-active-tab="appearance"] .utility-modal-body,
+  #utility-modal.is-mobile-page[data-active-tab="appearance"] .utility-modal-body > .utility-detail { overflow: visible; }
   .is-mobile-page .player-preview-dock { position: sticky; top: 0; z-index: 2; background: var(--appearance-main-surface, var(--bg)); padding: 8px 0 12px; }
   .appearance-device-controls { display: flex; flex-direction: column; align-items: stretch; gap: 10px; }
   .appearance-device-controls > * { min-width: 0; box-sizing: border-box; }

@@ -42,7 +42,8 @@ def prepare_mobile_layout_media(root: Path, *, extended: bool = False) -> dict[s
 
     inventory = {}
     for album_index, (artist, album, year, color) in enumerate(mobile_layout_albums(extended)):
-        folder = root / artist / album
+        folder = (root / "Families" / "Northlight family" / artist / album
+                  if extended and album_index >= len(ALBUMS) else root / artist / album)
         folder.mkdir(parents=True, exist_ok=True)
         cover = folder / "cover.jpg"
         image = Image.new("RGB", (480, 480), tuple(channel // 5 for channel in color))
@@ -56,7 +57,7 @@ def prepare_mobile_layout_media(root: Path, *, extended: bool = False) -> dict[s
         draw.text((28, 446), artist.upper(), fill=(182, 190, 195))
         image.save(cover, quality=90)
         if extended:
-            # Two real local candidates exercise the gallery and artwork-series controls.
+            # Two real local candidates exercise the Cover Look Up gallery.
             image.transpose(Image.Transpose.FLIP_LEFT_RIGHT).save(folder / "cover-alternate.jpg", quality=90)
         titles = LONG_TRACKS if album == LONG_ALBUM else ("Open Water", "Small Hours", "Coming Home")
         for track_index, title in enumerate(titles, start=1):

@@ -90,7 +90,10 @@ function presentMobilePage(descriptor) {
   closeGalleryMainSurface?.(false);
   syncMobilePageShell();
   if (!mobilePageState.restoring) writeMobilePageHistory();
-  requestAnimationFrame(() => document.getElementById('mobile-page-header')?.focus({ preventScroll: true }));
+  requestAnimationFrame(() => {
+    const title = document.getElementById('mobile-page-title');
+    if (title) { title.tabIndex = -1; title.focus({ preventScroll: true }); }
+  });
   return true;
 }
 function presentMobileAlbumPage(album) { return presentMobilePage(mobilePageDescriptor('album', album)); }

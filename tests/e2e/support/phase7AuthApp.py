@@ -488,7 +488,8 @@ def main() -> None:
         prepare_isolated_database(setup_database_url, runtime_database_url)
         _bootstrap_owner(runtime_database_url)
         persist_settings_playback_inventory(
-            setup_database_url, temp_root / "media", playback_inventory
+            setup_database_url, temp_root / "media", playback_inventory,
+            rebuild_relations=args.extended_mobile_media,
         )
 
         if args.mobile_layout_media:
@@ -499,7 +500,8 @@ def main() -> None:
             seed_bootstrap_owner_and_library(setup_database_url)
             _bootstrap_owner(runtime_database_url)
             persist_settings_playback_inventory(
-                setup_database_url, temp_root / "media", playback_inventory
+                setup_database_url, temp_root / "media", playback_inventory,
+                rebuild_relations=args.extended_mobile_media,
             )
 
             if args.mobile_layout_media:

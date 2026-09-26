@@ -98,7 +98,7 @@ test('mobile Appearance stays on Mobile, follows saved desktop, uses a page surf
 
 test('Cover Look Up has one header, two candidates, pinned action and artwork controls below the image', async ({ page, app, snapshot }) => {
   const details = new TrackModal(page);
-  await app.search('Sixteen Horizons');
+  await app.search('Northlight');
   await app.openAlbumBody('Sixteen Horizons');
   await details.coverLookupButton.click();
   await expect(app.pageTitle).toHaveText('Cover Art Look Up');

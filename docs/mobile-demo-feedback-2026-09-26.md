@@ -109,3 +109,9 @@ capability-filtered settings, candidate geometry and full-art control placement.
 
 Home/Recent in-page tabs and distinct mobile album compositions remain D01/D02
 approval gates. They are not silently included in the production patch.
+
+### Browser verification follow-up
+
+Run 36247891186 exercised source 973810a21e325fcf28aba598d64ace7b31f85e62. The extended suite reported four failures: a retained 20px list indent misaligned the track table; legacy utility overflow prevented the player preview from sticking; the new single-result artwork test supplied no navigable album series; and the extended fixture had no persisted family projection. Repairs remove the inherited indent/overflow and preserve hidden controls, seed new media in a real nested family folder with normal relation-projection publication, and keep the same artwork-navigation assertion while selecting the intended multi-album series in pre-action setup. No timeout, retry or acceptance bound was widened. Existing eight-album fixture paths and counts remain unchanged. All repair checkboxes remain pending rendered verification.
+
+Design proposals are in `docs/design-mockups/mobile-feedback-2026-09-26/options.html`. Home A/B and Album A/B/C remain owner-approval gated and are not runtime code.

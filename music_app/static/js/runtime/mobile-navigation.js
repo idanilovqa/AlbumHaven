@@ -418,6 +418,12 @@ function syncMobileAlbumHeader() {
   context.inert = presentation.bodyOwnsIdentity;
   if (presentation.bodyOwnsIdentity) context.setAttribute('aria-hidden', 'true');
   else context.removeAttribute('aria-hidden');
+  if (identity) {
+    const deferToHeader = Boolean(hasInlineIdentity && !presentation.bodyOwnsIdentity);
+    identity.inert = deferToHeader;
+    if (deferToHeader) identity.setAttribute('aria-hidden', 'true');
+    else identity.removeAttribute('aria-hidden');
+  }
   thumbnail.hidden = !presentation.showCover;
   if (presentation.showCover && thumbnail.getAttribute('src') !== active.coverSrc) thumbnail.src = active.coverSrc;
   if (active?.kind !== 'album') thumbnail.removeAttribute('src');

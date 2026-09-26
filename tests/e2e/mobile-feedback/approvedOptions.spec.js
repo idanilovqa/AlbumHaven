@@ -73,7 +73,10 @@ test('original large album and both approved small-art choices persist with shar
     await expect(app.albumThumbnail).toBeVisible();
     await expect(app.pageTitle).toBeVisible();
     await expect(app.pageSummary).toBeVisible();
-    if (layout !== 'classic_bar') await expect(app.albumIdentity).not.toBeInViewport();
+    if (layout !== 'classic_bar') {
+      await expect(app.albumIdentity).not.toBeInViewport();
+      await expect(app.albumIdentity).toHaveAttribute('aria-hidden', 'true');
+    }
     const thumb = await app.albumThumbnail.boundingBox(), title = await app.pageTitle.boundingBox();
     expect(thumb.x + thumb.width).toBeLessThanOrEqual(title.x);
     await snapshot(`43-scrolled-${layout.replaceAll('_', '-')}`);

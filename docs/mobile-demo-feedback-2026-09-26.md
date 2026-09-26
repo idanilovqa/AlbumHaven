@@ -225,3 +225,33 @@ unit coverage for a tall wrapped identity, missing cover, non-album page, and re
 scroll. Run the existing mobile development workflow without weakening its tests,
 timeouts or retry policy. Capture new real-app evidence. Counter: 0/3 latest
 corrections verified; the historical repair counts above are not release claims.
+
+
+### Patch reconciliation
+
+Source `5db8901510aebfead68dc72a6a7d0ea33d14e3ba` contains the latest
+identity, thin-player and leading-menu repairs. Run 36272373053 passed its
+focused checks but was cancelled when a second overlapping transport commit
+arrived. Run 36272418024 correctly rejected that transport because its recorded
+source blobs still named the older 0d18a185 snapshot. The overlapping patch
+is preserved in commit 658a14809a7bdc3e1f6f46b3a004066ae1f04ed2.
+
+Reconciliation retains the committed shared-helper implementation and its
+geometry, click-hit-target and navigation-order checks. It also adopts the
+overlapping patch's accessibility refinement: once inline album identity has
+scrolled away, that copy becomes inert and hidden from the accessibility tree
+while retaining its layout box. Scrolling back reverses that state. No existing
+source is reset, no test bound is relaxed, and no duplicate header or transport
+implementation is introduced. The 0/3 current-refinement verification counter
+remains open until the replacement real-app run completes.
+
+
+### Thin-player line-height correction
+
+Run 36272617063 tested the reconciled source on af09a8affd0fd3ded3dc839f16e45717239400b7.
+All seven baseline and nine of ten extended browser cases passed. The only failure
+was the new same-line geometry assertion: song and album text inherited different
+line heights and their boxes differed by one pixel. The actual screenshot confirms
+the compact player and lower timestamp; set both track-line children to the same
+14px line height rather than weakening the assertion. The replay retains the same
+320px/390px bounds, centered-glyph and Play hit-target checks.

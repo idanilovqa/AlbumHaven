@@ -109,6 +109,7 @@ const expectedRuntimeOrder = [
   'bootstrap-utility-event-handlers.js',
   'bootstrap-gallery-event-handlers.js',
   'mobile-navigation.js',
+  'in-page-tabs.js',
   'mobile-home.js',
   'bootstrap-event-handlers.js',
   'bootstrap-init.js',

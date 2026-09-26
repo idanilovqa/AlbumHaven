@@ -1,8 +1,10 @@
 """Deployment safeguards; no network, database, or production state is touched."""
 import importlib.util
 from pathlib import Path
+import os
+import tempfile
 import unittest
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 ROOT = Path(__file__).resolve().parents[2]
 spec = importlib.util.spec_from_file_location("render_demo", ROOT / "scripts" / "render_demo.py")
@@ -53,6 +55,23 @@ class RenderDemoConfigurationTests(unittest.TestCase):
         connection.execute.return_value.fetchone.return_value = ("app.bootstrap_owners",)
         connection.execute.return_value.fetchall.return_value = [(demo.MARKER,)]
         self.assertFalse(demo.assert_demo_ownership(connection))
+
+    def test_disabled_email_removes_inherited_smtp_configuration(self):
+        environment = {
+            "ALBUM_HAVEN_PUBLIC_BASE_URL": "https://demo.example.test",
+            "ALBUM_HAVEN_AUTH_HMAC_SECRET": "test-only-secret-" * 3,
+            "ALBUM_HAVEN_SMTP_USERNAME": "old-mail-account",
+            "ALBUM_HAVEN_SMTP_PASSWORD": "old-mail-password",
+            "ALBUM_HAVEN_SMTP_HOST": "smtp.example.test",
+            "ALBUM_HAVEN_SMTP_SECURITY": "plaintext",
+        }
+        with tempfile.TemporaryDirectory() as folder:
+            with patch.dict(os.environ, environment, clear=True), patch.object(demo, "DEMO_ROOT", Path(folder)):
+                demo.configure_environment("postgresql://application@demo/database")
+                self.assertFalse(any(key.startswith("ALBUM_HAVEN_SMTP_") for key in os.environ))
+                self.assertEqual(os.environ["ALBUM_HAVEN_WELCOME_EMAIL_ENABLED"], "false")
+                self.assertEqual(os.environ["ALBUM_HAVEN_PASSWORD_RESET_EMAIL_ENABLED"], "false")
+                self.assertEqual(os.environ["ALBUM_HAVEN_INVITATION_EMAIL_ENABLED"], "false")
 
     def test_fresh_database_can_be_seeded(self):
         connection = Mock()

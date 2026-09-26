@@ -81,8 +81,12 @@ def configure_environment(runtime_url: str) -> None:
     })
     # No real integration accounts or mail delivery belong in a generated demo.
     for key in ("LASTFM_API_KEY", "LASTFM_API_SECRET", "SPOTIFY_CLIENT_ID", "SPOTIFY_CLIENT_SECRET",
-                "DISCOGS_CONSUMER_KEY", "DISCOGS_CONSUMER_SECRET", "ALBUM_HAVEN_SMTP_USERNAME", "ALBUM_HAVEN_SMTP_PASSWORD"):
+                "DISCOGS_CONSUMER_KEY", "DISCOGS_CONSUMER_SECRET"):
         os.environ[key] = ""
+    # Mail configuration distinguishes an absent credential from an empty one.
+    for key in tuple(os.environ):
+        if key.startswith("ALBUM_HAVEN_SMTP_"):
+            os.environ.pop(key, None)
 
 
 def assert_demo_ownership(connection) -> bool:

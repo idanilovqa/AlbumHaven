@@ -15,7 +15,8 @@ async function capture(page, name) {
 }
 async function login(app) {
   await app.signIn('rendref', 'Phase Seven Owner Passphrase 2026!');
-  await expect(app.homeCards).toHaveCount(8);
+  await expect(app.galleryContextName).toHaveText('Rendref');
+  await expect(app.homePanel).toHaveText('Nothing to show yet. Work in progress.');
 }
 
 test.beforeEach(async () => {
@@ -31,16 +32,21 @@ test('mobile login, Home rows, artist drawer, search and right-side family panel
   await capture(page, '01-mobile-login');
   await login(app);
   await expect(app.searchInput).not.toBeVisible();
-  await expect(app.homeCards.first()).toHaveAttribute('data-gallery-display', 'list');
+  await expect(app.recentTab).toHaveAttribute('aria-selected', 'true');
+  await expect(app.newsTab).toBeDisabled();
   await capture(page, '02-home-rows');
   await app.libraryButton.click();
   await expect(app.artistRail).toHaveClass(/is-mobile-drawer-open/);
   await expect.poll(() => app.librarySectionLabelsFit()).toBeTruthy();
   await capture(page, '03-artist-navigation');
-  await app.playlistsMode.click();
-  await expect(app.libraryPlaceholder).toContainText('when playlist support is available');
-  await app.artistsMode.click();
-  await app.closeArtistRail.click();
+  await expect(app.artistHeading).toHaveText('Artists');
+  await expect(app.artistPlaceholderTabs).toHaveCount(0);
+  await app.allArtists.click();
+  await app.expectGalleryAlbumInventory([
+    'Another Shore', 'First Light', 'The Quiet Hours', 'Paper Satellites',
+    'Night Atlas', 'After the Rain', 'Blue Frequency', 'Between Two Skies',
+  ], 'Between Two Skies');
+  await expect(app.artistRail).not.toHaveClass(/is-mobile-drawer-open/);
   await app.searchButton.click();
   await expect(app.searchInput).toBeFocused();
   await app.searchInput.fill('Northlight');
@@ -66,11 +72,12 @@ test('mobile login, Home rows, artist drawer, search and right-side family panel
 test('two- and three-column cards and art-only modes persist to a fresh mobile session', async ({ page, browser }) => {
   const app = new MobileLayoutPage(page);
   await login(app);
+  await app.browseArtist();
   await app.selectView('cards');
   await capture(page, '06-home-cards-two-columns');
-  await app.threeColumnsButton.click();
-  await expect(app.homeGrid).toHaveCSS('grid-template-columns', /\S+ \S+ \S+/);
-  await expect(app.galleryContextName).toHaveText('Home');
+  await app.selectColumns(3);
+  await expect(app.galleryGrid).toHaveCSS('grid-template-columns', /\S+ \S+ \S+/);
+  await expect(app.galleryContextName).toHaveText('Northlight');
   await capture(page, '07-home-cards-three-columns');
   const saved = page.waitForResponse(response => response.url().includes('/account/layout-preferences')
     && response.request().method() === 'PUT'
@@ -83,15 +90,17 @@ test('two- and three-column cards and art-only modes persist to a fresh mobile s
     const another = await context.newPage();
     const anotherApp = new MobileLayoutPage(another);
     await login(anotherApp);
-    await expect(anotherApp.homeCards.first()).toHaveAttribute('data-gallery-display', 'covers');
-    await expect(anotherApp.twoColumnsButton).toBeVisible();
+    await anotherApp.browseArtist();
+    await expect(anotherApp.galleryCards.first()).toHaveAttribute('data-gallery-display', 'covers');
+    await expect(anotherApp.zoomButton).toHaveAttribute('title', 'Gallery zoom: 3 columns');
   } finally { await context.close(); }
 });
 
 test('album details are a page, keep the player, support Back and full artwork', async ({ page }) => {
   const app = new MobileLayoutPage(page);
   await login(app);
-  await app.homeAlbums.first().click();
+  await app.browseArtist();
+  await app.galleryAlbums.first().click();
   await expect(app.albumPage).toBeVisible();
   await expect(app.trackTable).toBeVisible();
   const details = new TrackModal(page);
@@ -103,11 +112,12 @@ test('album details are a page, keep the player, support Back and full artwork',
   await expect(app.editTags).not.toBeVisible();
   await capture(page, '09-album-details');
   await app.backButton.click();
-  await expect(app.home).toBeVisible();
+  await expect(app.galleryCards.first()).toBeVisible();
   await page.goForward();
   await expect(app.trackTable).toBeVisible();
   await app.backButton.click();
-  await app.homeAlbums.first().click();
+  await app.browseArtist();
+  await app.galleryAlbums.first().click();
   await expect(app.trackTable).toBeVisible();
   await expect(app.player).toBeVisible();
 });
@@ -120,15 +130,17 @@ test('Appearance and Integrations use pages and restricted utilities are absent'
   await expect(app.utilityTab('rules')).not.toBeVisible();
   await expect(app.utilitiesDialogs).toHaveCount(0);
   await capture(page, '10-appearance');
-  await app.utilityTab('integrations').click();
+  await app.selectUtility('integrations');
+  await app.selectSubsection('lastfm');
   await expect(app.pageTitle).toHaveText('Integrations');
   const integrations = new UtilityIntegrationsTab(page);
-  await expect(integrations.scrobbling).toBeVisible();
+  await expect(app.subsectionButton).toHaveText('Scrobbling');
   await expect(integrations.lastfmUsername).toBeVisible();
   await capture(page, '11-integrations');
   await app.backButton.click();
   await expect(app.home).toBeVisible();
-  await app.profileButton.click();
+  await expect(app.profileButton).toHaveCount(0);
+  await app.openPassword();
   await expect(app.securityHeading).toBeVisible();
   await capture(page, '12-account');
 });
@@ -137,6 +149,7 @@ test('narrow phones do not overflow and wide tablets retain desktop geometry', a
   const app = new MobileLayoutPage(page);
   await page.setViewportSize({ width: 320, height: 740 });
   await login(app);
+  await app.browseArtist();
   await app.selectView('cards');
   await capture(page, '13-narrow-phone');
   const noOverflow = await app.hasNoHorizontalOverflow();
@@ -183,7 +196,8 @@ test('real local playback continues across pages and player artwork opens its al
   const app = new MobileLayoutPage(page), details = new TrackModal(page), player = new GlobalPlayer(page);
   await login(app);
   const mountedPlayer = await player.player.elementHandle();
-  await app.homeAlbums.first().click();
+  await app.browseArtist();
+  await app.galleryAlbums.first().click();
   await details.playButtonAt(1).click();
   await expect(player.title).toContainText('Small Hours');
   await expect(player.playButton).toHaveAttribute('aria-label', /Pause/);

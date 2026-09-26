@@ -59,6 +59,13 @@ function handleGalleryBootstrapClick(event) {
     return;
   }
 
+  const albumRow = event.target.closest('.album-card[data-gallery-display="list"]');
+  if (albumRow && !event.target.closest('button, a, input, select, textarea, [role="button"]')) {
+    const trigger = albumRow.querySelector('[data-open-tracklist="1"]');
+    if (trigger) { event.preventDefault(); openTrackModalForButton(trigger); }
+    return;
+  }
+
   const relatedToggle = event.target.closest('#related-toggle');
   if (relatedToggle) {
     event.preventDefault();
@@ -936,7 +943,8 @@ function scheduleGallerySearchCommit(nextQuery, options = {}) {
   if (String(normalizedQuery || '').trim()) {
     state.ui.pendingSearchClearOnBlur = false;
   }
-  if (normalizedQuery === committedQuery && !shouldReselectCommittedQuery) {
+  if (normalizedQuery === committedQuery && !shouldReselectCommittedQuery
+    && !(typeof hasActiveMobilePage === 'function' && hasActiveMobilePage())) {
     clearPendingGallerySearchCommit();
     if (options.recordRecentSearch === true) recordRecentSearchQuery(normalizedQuery);
     return false;
@@ -962,6 +970,7 @@ function scheduleGallerySearchCommit(nextQuery, options = {}) {
 
 function handleGalleryBootstrapSearchSubmit(event) {
   event.preventDefault();
+  if (typeof handleMobileSearchSubmit === 'function' && handleMobileSearchSubmit()) return;
   const input = document.getElementById('search-input');
   const nextQuery = input?.value || '';
   closeRecentSearchPopover();

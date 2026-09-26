@@ -504,22 +504,13 @@
   transition: none;
 }
 .image-lightbox-close {
-  position: absolute;
-  z-index: 3;
-  top: 16px;
-  right: 16px;
-  width: 40px;
-  height: 40px;
-  border-radius: 999px;
-  border: 1px solid var(--lightbox-control-border);
-  background: rgba(17, 24, 39, 0.9);
-  color: var(--lightbox-control-ink);
-  cursor: pointer;
-  font-size: 1rem;
+  position: absolute; z-index: 3; top: max(12px, env(safe-area-inset-top)); right: 12px;
+  display: grid; place-items: center; width: 44px; height: 44px;
+  border: 0; border-radius: 6px; background: transparent;
+  color: var(--lightbox-control-ink); cursor: pointer;
 }
-.image-lightbox-close:hover {
-  border-color: var(--lightbox-control-accent);
-}
+.image-lightbox-close svg { width: 26px; height: 26px; stroke: currentColor; fill: none; stroke-width: 1.8; stroke-linecap: round; }
+.image-lightbox-close:is(:hover, :focus-visible) { background: color-mix(in srgb, var(--lightbox-control-ink) 10%, transparent); }
 .image-lightbox-nav {
   position: absolute;
   top: 50%;
@@ -668,3 +659,5 @@
   .track-modal-dialog:has(> .track-modal-header > .album-details-header[data-album-details-layout="editorial_canvas"]) .track-modal-cover,
   .track-modal-dialog:has(> .track-modal-header > .album-details-header[data-album-details-layout="editorial_canvas"]) .track-modal-main { grid-row: auto; }
 }
+
+.image-lightbox-navigation { display: contents; }

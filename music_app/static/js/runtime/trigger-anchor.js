@@ -65,8 +65,16 @@ function syncTriggerAnchor(surface, anchor) {
   });
   const previous = triggerAnchorBindings.get(surface);
   if (previous && previous.anchor !== anchor) clearTriggerAnchor(surface);
-  const geometry = getTriggerAnchorGeometry(anchor.getBoundingClientRect(), surface.getBoundingClientRect());
   const surfaceStyle = globalThis.getComputedStyle?.(surface);
+  let bounds = surface.getBoundingClientRect();
+  // Side drawers animate their position, not their layout width. The joined
+  // outline belongs to the final layout box, not the in-flight transform.
+  if (surface.matches?.('.artist-family-panel') && surfaceStyle?.transform && surfaceStyle.transform !== 'none') {
+    const transform = new DOMMatrixReadOnly(surfaceStyle.transform);
+    bounds = { left: bounds.left - transform.m41, right: bounds.right - transform.m41,
+      top: bounds.top - transform.m42, bottom: bounds.bottom - transform.m42 };
+  }
+  const geometry = getTriggerAnchorGeometry(anchor.getBoundingClientRect(), bounds);
   const renderedBackground = surfaceStyle?.backgroundColor?.trim();
   const surfaceBackground = renderedBackground
     && renderedBackground !== 'transparent'

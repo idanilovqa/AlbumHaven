@@ -81,7 +81,7 @@ function collapseAllUtilityLoopGroups() {
 }
 
 function setUtilityActiveTab(nextTab, skipAppearanceGuard = false) {
-  if (typeof isMobileClient === 'function' && isMobileClient() && !['appearance', 'integrations'].includes(nextTab)) return false;
+  if (typeof isMobileClient === 'function' && isMobileClient() && !mobileUtilityTabAllowed(nextTab)) return false;
   const normalizedTab = String(nextTab || 'problematic-files');
   if (!skipAppearanceGuard && normalizedTab !== state.utility.activeTab && typeof confirmBackgroundAppearanceLeave === 'function' && !confirmBackgroundAppearanceLeave(() => {
     setUtilityActiveTab(normalizedTab, true);

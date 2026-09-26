@@ -46,6 +46,9 @@ if (typeof window !== 'undefined' && typeof window.addEventListener === 'functio
   window.addEventListener('album-haven-appearance-change', () => {
     if (typeof updateWaveformAppearance === 'function') updateWaveformAppearance();
     syncSavedAppearanceLoopControlStyle();
+    if (typeof syncMobileAlbumComposition === 'function' && typeof getCurrentTrackModalAlbum === 'function') {
+      syncMobileAlbumComposition(getCurrentTrackModalAlbum());
+    }
   });
 }
 

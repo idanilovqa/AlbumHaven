@@ -10,7 +10,7 @@ function createGalleryMainState(overrides = {}) {
   const galleryState = {
     sources: { main_library: true, new_arrivals: true, hoard: true, ...(overrides.sources || {}) },
     albumTypes: Array.isArray(overrides.albumTypes) ? overrides.albumTypes.slice() : ['studio', 'ep'],
-    view: ['list', 'cards', 'covers'].includes(overrides.view) ? overrides.view : 'cards',
+    view: normalizeGalleryView(overrides.view),
     familyArtists: Array.isArray(overrides.familyArtists) ? overrides.familyArtists.slice() : [],
   };
   if (overrides.familySelectionExplicit === true) galleryState.familySelectionExplicit = true;
@@ -25,7 +25,9 @@ function resetGalleryMainStateForPrimaryArtist(current = {}) {
 function normalizeGalleryView(value) {
   const normalized = String(value || '').trim().toLowerCase();
   if (normalized === 'no info' || normalized === 'covers') return 'covers';
-  if (normalized === 'list' || normalized === 'rows') return 'list';
+  if (normalized === 'list' || normalized === 'rows') {
+    return typeof window !== 'undefined' && Number(window.innerWidth) > 900 ? 'cards' : 'list';
+  }
   return 'cards';
 }
 

@@ -884,8 +884,8 @@
       error = typeof message === 'string' ? message : ''; loading = false; saving = false; loadFailed = true; syncInputs(); notify();
     };
     return { getState, setColor, setPalette, setPanelIndex, setPlayerMode, setCompactPlayerStyle, setDockedCompactPlayerBehavior, setDockedCompactPlayerRegularStyle, setCompactPlayerMotion, setFloatingPlayerEdge, setLoopControlStyle, setAlbumDetailsLayout, setAlbumPlayingRowAnimation, setAlertFamily, setPlayerColor, setWaveformColor, restoreWaveformColors,
-      configureSeekbar(mode, applyMode) { if (!seekbarConfigured) { savedSeekbarMode = draftSeekbarMode = mode === 'waveform' ? 'waveform' : 'default'; seekbarConfigured = true; } applySeekbarMode = applyMode; },
-      setSeekbarMode(mode) { if (busy()) return; draftSeekbarMode = mode === 'waveform' ? 'waveform' : 'default'; notify(); },
+      configureSeekbar(mode, applyMode) { if (!seekbarConfigured) { savedSeekbarMode = draftSeekbarMode = ['default', 'waveform', 'thin'].includes(mode) ? mode : 'default'; seekbarConfigured = true; } applySeekbarMode = applyMode; },
+      setSeekbarMode(mode) { if (busy()) return; draftSeekbarMode = ['default', 'waveform', 'thin'].includes(mode) ? mode : 'default'; notify(); },
       setPlayerStyle, setPlayerStyleColor, restorePlayerSet, setSelectionAccent, setActionButtonOutlines, setInteractionOverrides, setItemOutline, useThemeInteractions, setDeviceProfile, setDeviceSectionMode, setActiveSection, cancel, reset, resetSection, load, save, clear,
       reconcileLoopCapability, subscribe(listener) { listeners.add(listener); return () => listeners.delete(listener); } };
   }
@@ -932,8 +932,12 @@
     const tracks = [['1', 'Mystery Train', '6:53'], ['2', 'My New World', '16:20'], ['3', 'We All Need Some Light', '5:45'], ['4', 'Duel With The Devil', '26:43']];
     return `<div class="appearance-album-preview__table"><div class="appearance-album-preview__table-head"><span></span><b>#</b><strong>Track</strong><em>Length</em></div>${tracks.map(([number, title, length], index) => `<div class="appearance-album-preview__track${index === 0 ? ' is-playing' : ''}"><button type="button" tabindex="-1" aria-label="Play ${title}">▶</button><b>${number}</b><strong>${title}</strong><em>${length}</em></div>`).join('')}<div class="appearance-album-preview__total"><strong>Total Length: 1h 17m 13s</strong></div></div>`;
   }
-  function albumPageMarkup() {
-    const layouts = [
+  function albumPageMarkup({ mobile = false } = {}) {
+    const layouts = mobile ? [
+      ['classic_bar', 'Large cover', 'Full-width artwork with album information in the Gallery Bar.'],
+      ['stacked_bar', 'Compact cover', 'Small artwork beside the album information.'],
+      ['editorial_canvas', 'Centered cover', 'Medium artwork centered above the album information.'],
+    ] : [
       ['classic_bar', 'Classic Bar', 'Album information stays in the app bar.'],
       ['stacked_bar', 'Stacked Bar', 'Identity and metadata use two header lines.'],
       ['editorial_canvas', 'Editorial Canvas', 'Art and large album identity lead the page.'],
@@ -1003,22 +1007,22 @@
   function loopControlStyleMarkup() {
     return `<h4>Loop controls</h4><div class="background-player-modes" role="group" aria-label="Loop control style">${[['capsule', 'A · Joined capsule'], ['companion', 'B · Companion button']].map(([value, label]) => ButtonComponent.renderButton({ label, attributes: { 'data-loop-control-style-choice': value, 'aria-pressed': 'false' } })).join('')}</div>`;
   }
-  function seekbarMarkup(seekbarMode = 'default', { loopCreateAllowed = false } = {}) {
+  function seekbarMarkup(seekbarMode = 'default', { loopCreateAllowed = false, mobile = false } = {}) {
     const waveformSelected = seekbarMode === 'waveform';
     return `<section class="appearance-background-editor appearance-seekbar-editor" aria-labelledby="appearance-waveform-title">
       <h3 id="appearance-waveform-title">Player &amp; Seekbar</h3><p class="background-intro">Adjust relative colors without changing the real stereo waveform, loop selection, or handle behavior.</p>
-      <div class="player-preview-dock"><div class="player-live-preview" data-player-live-preview aria-label="Player color preview">
+      <div class="player-preview-dock"><div class="player-live-preview" data-player-live-preview data-seekbar-mode="${seekbarMode}" aria-label="Player color preview">
         <div class="player-preview-cover" data-player-preview-cover aria-hidden="true">♫</div>
         <div class="player-preview-transport" aria-hidden="true"><span>▶</span><small>✂</small></div>
         <div class="player-preview-main"><div class="player-preview-meta"><span><strong data-player-preview-title>Still Water</strong><span data-player-preview-album> / Coastal Lines</span></span><time data-player-preview-time>1:42 / 4:12</time></div>
           ${waveformSelected ? `<svg class="player-preview-waveform" viewBox="0 0 600 42" preserveAspectRatio="none" role="img" aria-label="Stereo waveform using the selected colors">
             <g class="player-preview-unplayed"><path class="player-preview-channel is-left" d="M0 10 L20 8 L40 5 L60 9 L80 3 L100 7 L120 4 L140 8 L160 2 L180 6 L200 4 L220 9 L240 5 L260 7 L280 3 L300 8 L320 4 L340 6 L360 2 L380 7 L400 5 L420 9 L440 4 L460 6 L480 3 L500 8 L520 5 L540 7 L560 4 L580 8 L600 10 L580 12 L560 16 L540 13 L520 15 L500 12 L480 17 L460 14 L440 16 L420 11 L400 15 L380 13 L360 18 L340 14 L320 16 L300 12 L280 17 L260 13 L240 15 L220 11 L200 16 L180 14 L160 18 L140 12 L120 16 L100 13 L80 17 L60 11 L40 15 L20 12 Z"/><path class="player-preview-channel is-right" d="M0 31 L20 28 L40 25 L60 30 L80 24 L100 27 L120 23 L140 29 L160 25 L180 22 L200 28 L220 24 L240 30 L260 26 L280 23 L300 28 L320 25 L340 21 L360 27 L380 24 L400 29 L420 23 L440 26 L460 22 L480 28 L500 24 L520 30 L540 25 L560 27 L580 24 L600 31 L580 34 L560 36 L540 33 L520 38 L500 34 L480 37 L460 32 L440 36 L420 33 L400 39 L380 35 L360 37 L340 31 L320 36 L300 34 L280 39 L260 35 L240 37 L220 32 L200 38 L180 34 L160 37 L140 33 L120 39 L100 35 L80 38 L60 32 L40 37 L20 34 Z"/></g>
             <g class="player-preview-played"><path class="player-preview-channel is-left" d="M0 10 L20 8 L40 5 L60 9 L80 3 L100 7 L120 4 L140 8 L160 2 L180 6 L200 4 L220 9 L240 5 L260 7 L280 3 L300 8 L320 4 L340 6 L360 2 L380 7 L400 5 L420 9 L440 4 L460 6 L480 3 L500 8 L520 5 L540 7 L560 4 L580 8 L600 10 L580 12 L560 16 L540 13 L520 15 L500 12 L480 17 L460 14 L440 16 L420 11 L400 15 L380 13 L360 18 L340 14 L320 16 L300 12 L280 17 L260 13 L240 15 L220 11 L200 16 L180 14 L160 18 L140 12 L120 16 L100 13 L80 17 L60 11 L40 15 L20 12 Z"/><path class="player-preview-channel is-right" d="M0 31 L20 28 L40 25 L60 30 L80 24 L100 27 L120 23 L140 29 L160 25 L180 22 L200 28 L220 24 L240 30 L260 26 L280 23 L300 28 L320 25 L340 21 L360 27 L380 24 L400 29 L420 23 L440 26 L460 22 L480 28 L500 24 L520 30 L540 25 L560 27 L580 24 L600 31 L580 34 L560 36 L540 33 L520 38 L500 34 L480 37 L460 32 L440 36 L420 33 L400 39 L380 35 L360 37 L340 31 L320 36 L300 34 L280 39 L260 35 L240 37 L220 32 L200 38 L180 34 L160 37 L140 33 L120 39 L100 35 L80 38 L60 32 L40 37 L20 34 Z"/></g><line class="player-preview-playhead" x1="246" x2="246" y1="0" y2="42"/><circle class="player-preview-playhead-dot" cx="246" cy="21" r="2.5"/><g class="player-preview-loop-handles" aria-hidden="true"><line x1="145" x2="145" y1="0" y2="42"/><line x1="475" x2="475" y1="0" y2="42"/></g>
-          </svg>` : ''}${waveformSelected ? '' : `<div class="player-preview-seekbar" aria-label="Default seekbar preview"><span></span></div>`}
+          </svg>` : ''}${waveformSelected ? '' : `<div class="player-preview-seekbar" aria-label="${seekbarMode === 'thin' ? 'Thin progress line' : 'Default seekbar'} preview"><span></span></div>`}
         </div>
       </div>
       </div>
-      <section class="player-seekbar-mode" aria-labelledby="appearance-seekbar-style-label"><h4 id="appearance-seekbar-style-label">Seekbar style</h4><p class="background-help">Choose the player seekbar style. Changes apply after Save.</p><div class="appearance-section player-seekbar-options"><label class="appearance-option"><input type="radio" name="seekbar-mode" value="default" ${waveformSelected ? '' : 'checked'} data-appearance-seekbar-mode="default"><span>Default seekbar</span></label><label class="appearance-option"><input type="radio" name="seekbar-mode" value="waveform" ${waveformSelected ? 'checked' : ''} data-appearance-seekbar-mode="waveform"><span>Waveform seekbar</span></label></div></section>
+      <section class="player-seekbar-mode" aria-labelledby="appearance-seekbar-style-label"><h4 id="appearance-seekbar-style-label">Seekbar style</h4><p class="background-help">Choose the player seekbar style. Changes apply after Save.</p><div class="appearance-section player-seekbar-options"><label class="appearance-option"><input type="radio" name="seekbar-mode" value="default" ${seekbarMode === 'default' ? 'checked' : ''} data-appearance-seekbar-mode="default"><span>Default seekbar</span></label><label class="appearance-option"><input type="radio" name="seekbar-mode" value="waveform" ${waveformSelected ? 'checked' : ''} data-appearance-seekbar-mode="waveform"><span>Waveform seekbar</span></label>${mobile ? `<label class="appearance-option"><input type="radio" name="seekbar-mode" value="thin" ${seekbarMode === 'thin' ? 'checked' : ''} data-appearance-seekbar-mode="thin"><span>Thin progress line</span></label>` : ''}</div></section>
       <div class="player-editor-workspace">
         <div class="player-editor-controls">
           <section class="player-theme-suggestions" aria-labelledby="appearance-player-themes-label"><h4 id="appearance-player-themes-label">Player themes</h4><p class="background-help">Choose a complete starting style, then adjust any individual color below.</p><div class="player-theme-grid">${playerThemes.map(theme => `<button type="button" class="player-theme-card" data-player-theme="${theme.id}" aria-pressed="false" title="${theme.description}" style="--theme-surface-start:${theme.style.surface.start};--theme-surface-end:${theme.style.surface.end};--theme-surface-angle:${theme.style.surface.angle}deg;--theme-control:${theme.style.controls.fill};--theme-wave-fill:${theme.style.waveform.fill};--theme-wave-edge:${theme.style.waveform.edge}"><span class="player-theme-swatch"><i></i><b></b></span><strong>${theme.name}</strong></button>`).join('')}</div></section>
@@ -1119,6 +1123,7 @@
       if (mountedFooter?.id === 'utility-modal-footer') { mountedFooter.innerHTML = ''; mountedFooter.hidden = true; }
       mountedFooter = null;
     };
+    const isPhoneEditor = () => window.AlbumHavenDevicePreferences?.profile?.() === 'mobile';
     const mountDeviceProfileControls = editor => {
       // Resolve on mount as well: the shell may have crossed a breakpoint since boot.
       controller.setDeviceProfile(window.AlbumHavenDevicePreferences?.profile?.() || 'web_desktop');
@@ -1141,7 +1146,7 @@
       const controls = editor.querySelector('.appearance-device-controls');
       controls.addEventListener('click', event => {
         const device = event.target.closest('[data-appearance-device]');
-        if (device && !device.disabled) controller.setDeviceProfile(device.getAttribute('data-appearance-device'));
+        if (device && !device.disabled && (!isPhoneEditor() || device.dataset.appearanceDevice === 'mobile')) controller.setDeviceProfile(device.getAttribute('data-appearance-device'));
         const mode = event.target.closest('[data-appearance-device-mode]');
         if (mode && !mode.disabled) controller.setDeviceSectionMode(mode.getAttribute('data-appearance-device-mode'));
       });
@@ -1149,7 +1154,8 @@
         const busy = state.loading || state.saving || state.loadFailed;
         controls.querySelectorAll('[data-appearance-device]').forEach(button => {
           const profile = button.getAttribute('data-appearance-device');
-          button.disabled = profile === 'tv' || busy;
+          button.disabled = profile === 'tv' || busy || (isPhoneEditor() && profile !== 'mobile');
+          button.hidden = isPhoneEditor() && profile !== 'mobile';
           button.setAttribute('aria-disabled', String(button.disabled));
           button.setAttribute('aria-pressed', String(profile === state.activeDeviceProfile));
         });
@@ -1286,7 +1292,7 @@
       unsubscribe = controller.subscribe(sync); sync(controller.getState()); if (!loaded) void load(); return unmount;
     };
     const mountAlbumPage = host => {
-      unmount(); host.innerHTML = albumPageMarkup(); mounted = host.querySelector('.appearance-album-page');
+      unmount(); host.innerHTML = albumPageMarkup({ mobile: isPhoneEditor() }); mounted = host.querySelector('.appearance-album-page');
     controller.setActiveSection('album-page');
     const editor = mounted;
     const syncDeviceProfile = mountDeviceProfileControls(editor);
@@ -1403,8 +1409,9 @@
     };
     const mountSeekbar = (host, { getLegacyColors = () => null, getSeekbarMode = () => 'default', applySeekbarMode = () => {} } = {}) => {
       controller.configureSeekbar(getSeekbarMode(), applySeekbarMode);
-      const waveformSelected = controller.getState().seekbarMode === 'waveform';
-      unmount(); host.innerHTML = seekbarMarkup(waveformSelected ? 'waveform' : 'default', { loopCreateAllowed }); mounted = host.querySelector('.appearance-background-editor');
+      const selectedMode = controller.getState().seekbarMode;
+      const waveformSelected = selectedMode === 'waveform';
+      unmount(); host.innerHTML = seekbarMarkup(selectedMode, { loopCreateAllowed, mobile: isPhoneEditor() }); mounted = host.querySelector('.appearance-background-editor');
     controller.setActiveSection('seekbar');
     const editor = mounted, find = selector => editor.querySelector(selector);
     const syncDeviceProfile = mountDeviceProfileControls(editor);
@@ -1420,7 +1427,7 @@
       find('.background-status').hidden = true;
     const sync = state => {
       if (mounted !== editor) return;
-        if ((state.seekbarMode === 'waveform') !== waveformSelected) {
+        if (state.seekbarMode !== selectedMode) {
           const restoreModeFocus = editor.contains?.(document.activeElement)
             && document.activeElement?.hasAttribute?.('data-appearance-seekbar-mode');
           mountSeekbar(host, { getLegacyColors, getSeekbarMode, applySeekbarMode });

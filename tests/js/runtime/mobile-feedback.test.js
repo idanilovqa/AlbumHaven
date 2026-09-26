@@ -79,10 +79,38 @@ test('mobile player metadata separates artist from track and album without chang
   context.renderGlobalPlayerMetadata(elements, track);
   assert.equal(elements.artist.textContent, 'Northlight');
   assert.equal(elements.artist.hidden, false);
-  assert.equal(elements.title.textContent, 'Open Water /');
+  assert.equal(elements.title.textContent, 'Open Water');
   assert.equal(elements.albumLink.textContent, 'After the Rain');
   mobile = false;
   context.renderGlobalPlayerMetadata(elements, track);
   assert.equal(elements.artist.hidden, true);
   assert.equal(elements.title.textContent, 'Northlight - Open Water /');
+});
+
+
+test('mobile play/pause uses the shared SVG without rebuilding it every playback tick', () => {
+  let mobile = true, writes = 0;
+  const attributes = new Map();
+  const button = { textContent: '', getAttribute: key => attributes.get(key),
+    setAttribute: (key, value) => attributes.set(key, value),
+    set innerHTML(value) { this.markup = value; writes += 1; },
+  };
+  const context = load('player-loop-playback.js', {
+    usesMobilePageLayout: () => mobile,
+    ButtonComponent: require('../../../music_app/static/js/button-component.js'),
+  });
+  context.renderGlobalPlayerPlayGlyph(button, false);
+  assert.match(button.markup, /<svg/);
+  assert.match(button.markup, /M7.5 6.5/);
+  context.renderGlobalPlayerPlayGlyph(button, false);
+  assert.equal(writes, 1);
+  context.renderGlobalPlayerPlayGlyph(button, true);
+  assert.match(button.markup, /M9 6.4/);
+  assert.equal(writes, 2);
+  mobile = false;
+  context.renderGlobalPlayerPlayGlyph(button, true);
+  assert.equal(button.textContent, '\u25B6');
+  mobile = true;
+  context.renderGlobalPlayerPlayGlyph(button, true);
+  assert.equal(writes, 3);
 });

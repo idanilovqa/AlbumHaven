@@ -54,6 +54,9 @@ export class MobileLayoutPage {
     this.pageOutlet = page.locator('#mobile-page-outlet');
     this.playerTime = page.locator('#player-time');
     this.playerArtist = page.locator('#player-artist');
+    this.playerGlyph = page.locator('#player-play > svg');
+    this.appearanceEditor = page.locator('#utility-modal .appearance-background-editor');
+    this.searchControl = page.locator('#mobile-navigation .search-field-control');
     this.findBetterArt = page.locator('#cover-lookup-find-better-button');
     this.coverCandidates = page.locator('#cover-lookup-modal .cover-lookup-gallery').first().locator('.cover-lookup-art-card');
     this.coverBody = page.locator('#cover-lookup-modal-body');

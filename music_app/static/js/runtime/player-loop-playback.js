@@ -6,9 +6,19 @@ function renderGlobalPlayerMetadata(els, track) {
   }
   if (els.title) {
     const parts = (mobile ? [track?.title] : [track?.artist, track?.title]).filter(Boolean);
-    els.title.textContent = parts.length ? `${parts.join(' - ')}${track?.album ? ' /' : ''}` : '';
+    els.title.textContent = parts.length ? `${parts.join(' - ')}${!mobile && track?.album ? ' /' : ''}` : '';
   }
   if (els.albumLink) { els.albumLink.textContent = track?.album || ''; els.albumLink.hidden = !track?.album; }
+}
+
+function renderGlobalPlayerPlayGlyph(button, paused) {
+  const mobile = typeof usesMobilePageLayout === 'function' && usesMobilePageLayout();
+  const icon = paused ? 'play' : 'pause';
+  const key = `${mobile ? 'svg' : 'text'}:${icon}`;
+  if (button.getAttribute?.('data-player-glyph') === key) return;
+  if (mobile) button.innerHTML = ButtonComponent.renderIconSvg(icon);
+  else button.textContent = paused ? '\u25B6' : '\u23F8';
+  button.setAttribute('data-player-glyph', key);
 }
 
 function clampLoopTimes() {
@@ -105,7 +115,7 @@ function updatePlayerUi() {
     busy: state.player.saveBusy || lockedByAnotherTab,
   });
   if (els.play) {
-    els.play.textContent = playback.paused ? '\u25B6' : '\u23F8';
+    renderGlobalPlayerPlayGlyph(els.play, playback.paused);
     els.play.setAttribute('aria-label', lockedByAnotherTab ? 'Playback locked in another tab' : (playback.paused ? 'Play' : 'Pause'));
     els.play.disabled = lockedByAnotherTab || !hasTrack;
   }

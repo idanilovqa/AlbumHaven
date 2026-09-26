@@ -20,6 +20,8 @@ test('row-body opens the sixteen-track album; scrolling shows a bar thumbnail; s
   const player = new GlobalPlayer(page);
   await expect(player.title).toContainText('Quiet Motion');
   await expect(player.playButton).toHaveAttribute('aria-label', /Pause/);
+  await expect(app.playerGlyph).toBeVisible();
+  await expect(player.title).toHaveText('Quiet Motion');
   await expect(app.playerArtist).toHaveText('Northlight');
   await expect(app.playerTime).toHaveCSS('white-space', 'nowrap');
   await app.search('Echo Harbor');
@@ -83,6 +85,9 @@ test('mobile Appearance stays on Mobile, follows saved desktop, uses a page surf
   await appearance.paletteButton('parchment-pine').click();
   await app.saveAppearance.click();
   await expect(appearance.documentRoot).toHaveAttribute('data-appearance-palette', 'parchment-pine');
+  await expect(app.appearanceEditor).toHaveCSS('background-color', 'rgb(232, 224, 207)');
+  await expect(app.appearanceEditor).toHaveCSS('color', 'rgb(57, 60, 50)');
+  await expect(app.searchControl).toHaveCSS('background-color', 'rgb(32, 36, 34)');
   await snapshot('29-light-appearance-page');
   await app.selectSubsection('seekbar');
   await expect(appearance.playerPreviewDock).toBeVisible();

@@ -6,7 +6,7 @@
 .appearance-device-controls { flex-wrap: wrap; }
 .appearance-device-controls .appearance-device-help { flex: 1 0 100%; }
 .page-gallery-bar { flex-shrink: 0; width: 100%; box-sizing: border-box; }
-.page-gallery-bar h1 { margin: 0; font: inherit; }
+.page-gallery-bar h1 { margin: 0; }
 .page-gallery-bar > .gallery-bar__context { flex: 1; min-width: 0; }
 .page-gallery-bar__back { color: inherit; text-decoration: none; }
 .mobile-page-header { flex-shrink: 0; }
@@ -51,7 +51,14 @@ html[data-client-profile="mobile"] :is([data-utility-tab="problematic-files"], [
   .mobile-search-dock { display: flex; justify-content: flex-end; min-width: 0; width: 100%; }
   .mobile-search-dock #search-form { display: block; width: 44px; max-width: 100%; min-width: 0; padding: 0; margin: 0; transition: width 200ms ease; }
   .mobile-navigation.is-search-open #search-form { width: 100%; }
-  .mobile-search-dock .search-field { font-size: 16px; --search-field-height: 40px; --search-field-radius: 12px; }
+  .mobile-search-dock .search-field {
+    font-size: 16px; --search-field-height: 40px; --search-field-radius: 12px;
+    --search-field-background: var(--appearance-panel-control, var(--app-control));
+    --search-field-color: var(--appearance-panel-ink, var(--app-ink));
+    --search-field-muted: var(--appearance-panel-muted, var(--app-muted));
+    --search-field-border: var(--appearance-panel-line, var(--border));
+    --search-field-hover: var(--appearance-panel-action-hover-background, var(--app-active));
+  }
   .mobile-search-dock .search-field-control { height: 40px; min-width: 0; overflow: hidden; }
   .mobile-search-dock .search-field-control > input { padding-left: 12px; font-size: 16px; }
   .mobile-search-dock .search-field-action { padding: 0; }
@@ -83,7 +90,7 @@ html[data-client-profile="mobile"] :is([data-utility-tab="problematic-files"], [
   .artist-family-panel__title-row { flex-wrap: wrap; gap: 6px; }
   .artist-family-panel header { padding: 16px 12px 12px; }
   .artist-family-panel header p { display: none; }
-  .artist-family-panel__name { overflow-wrap: anywhere; }
+  .artist-family-panel .artist-family-panel__name { white-space: normal; overflow-wrap: anywhere; text-overflow: clip; }
   .mobile-settings-drawer.gallery-anchored-menu { position: fixed; left: 0 !important; right: auto !important; width: min(320px, 75vw); max-width: 75vw !important; bottom: var(--player-height); max-height: none; border-radius: 0 14px 14px 0; padding: 0 10px 14px; overflow-y: auto; }
   .mobile-drawer-heading { display: flex; align-items: center; gap: 8px; padding: 16px 4px; }
   .mobile-drawer-heading h2 { margin: 0; font-size: 18px; }
@@ -120,6 +127,9 @@ html[data-client-profile="mobile"] :is([data-utility-tab="problematic-files"], [
   .is-mobile-page :is(table, .album-track-table) { width: 100%; min-width: 0 !important; font-size: 12px; }
   .is-mobile-page :is(th, td) { padding: 10px 5px; }
   .is-mobile-page .album-details-editorial-copy { display: none; }
+  .is-mobile-page > :is(.utility-modal-dialog, .cover-lookup-modal-dialog, .non-album-modal-dialog) {
+    --appearance-panel-background: var(--appearance-main-surface, var(--app-surface));
+  }
   .is-mobile-page .utility-modal-header, .is-mobile-page .utility-tabs { display: none; }
   .is-mobile-page .utility-modal-body { display: flex; flex-direction: column; min-height: 0; overflow: visible; }
   .is-mobile-page .utility-sidebar { width: 100%; min-width: 0; max-height: 170px; border-right: 0; border-bottom: 1px solid var(--border); }
@@ -135,6 +145,12 @@ html[data-client-profile="mobile"] :is([data-utility-tab="problematic-files"], [
   .is-mobile-page .background-choices > section:last-of-type { border-bottom: none; padding-bottom: 0; }
   #utility-modal.is-mobile-page[data-active-tab="appearance"] .utility-modal-body,
   #utility-modal.is-mobile-page[data-active-tab="appearance"] .utility-modal-body > .utility-detail { overflow: visible; }
+  /* This editor is a page, not a dark companion dialog. Its own draft main
+     surface stays scoped to the editor; miniature previews keep their tokens. */
+  .is-mobile-page .appearance-background-editor {
+    --appearance-panel-background: var(--appearance-main-surface) !important;
+    background: var(--appearance-main-surface);
+  }
   .is-mobile-page .player-preview-dock { position: sticky; top: 0; z-index: 2; background: var(--appearance-main-surface, var(--bg)); padding: 8px 0 12px; }
   .appearance-device-controls { display: flex; flex-direction: column; align-items: stretch; gap: 10px; }
   .appearance-device-controls > * { min-width: 0; box-sizing: border-box; }
@@ -164,6 +180,8 @@ html[data-client-profile="mobile"] :is([data-utility-tab="problematic-files"], [
   .global-player:not(.is-compact) .player-play-cluster[data-loop-control-style] { grid-column: 3; grid-row: 1; justify-self: end; align-self: center; --loop-play-control-size: 52px; width: 52px; height: 52px; min-width: 52px; flex-basis: 52px; border: 0; border-radius: 0; background: transparent; box-shadow: none; }
   .global-player:not(.is-compact) .player-play-cluster::before, .global-player:not(.is-compact) .player-play-cluster::after { display: none; }
   .global-player:not(.is-compact) .player-play-cluster[data-loop-control-style] .loop-play-control-button { position: static; width: 52px; height: 52px; min-width: 52px; min-height: 52px; margin: 0; }
+  .global-player .loop-play-control-button > .ui-icon { width: 32px; height: 32px; fill: currentColor; stroke: none; }
+  .global-player #player-cover-button.is-idle-placeholder { visibility: hidden; pointer-events: none; }
   .global-player :is(.player-loop-actions, [data-ui-button-action="player-collapse"], .compact-player-shell) { display: none !important; }
   .global-player[data-player-seekbar-presentation] .player-time { position: static; inset: auto; grid-column: 3; grid-row: 2; align-self: center; justify-self: end; min-width: 0; margin: 0; white-space: nowrap; font-size: 11px; line-height: 1.3; font-variant-numeric: tabular-nums; }
   .global-player[data-player-seekbar-presentation] .player-timeline-wrap { position: relative; inset: auto; grid-column: 1 / 3; grid-row: 2; width: auto; height: 24px; min-height: 0; align-self: center; margin: 0; }
@@ -174,7 +192,7 @@ html[data-client-profile="mobile"] :is([data-utility-tab="problematic-files"], [
   .settings-outlet { grid-column: 1; min-width: 0; padding: 12px; overflow: auto; background: var(--appearance-main-surface, var(--bg)); }
   .settings-outlet .account-main { width: 100%; min-width: 0; padding: 0; }
   .settings-outlet .form-grid { grid-template-columns: minmax(0, 1fr); }
-  .settings-outlet .page-gallery-bar { position: sticky; top: -12px; padding-top: 12px; background: var(--appearance-main-surface, var(--bg)); z-index: 4; }
+  .settings-outlet .page-gallery-bar { position: sticky; top: -12px; padding-top: 12px; background: var(--app-surface); z-index: 4; }
   .settings-shell .settings-nav { display: block; position: fixed; top: var(--app-bar-height); bottom: var(--player-height); left: 0; width: min(320px, 75vw); box-sizing: border-box; padding: 0 12px 16px; z-index: 4500; overflow-y: auto; transform: translateX(-102%); visibility: hidden; transition: transform 200ms ease, visibility 200ms; border-radius: 0 14px 14px 0; }
   .settings-shell .settings-nav.is-settings-navigation-open { transform: none; visibility: visible; }
   .settings-nav-backdrop:not([hidden]) { display: block; position: fixed; inset: var(--app-bar-height) 0 var(--player-height); border: 0; background: rgb(0 0 0 / .22); z-index: 4400; }

@@ -1,46 +1,18 @@
-/* Home uses real account-scoped listen history and the existing GalleryCard renderer. */
-const mobileHomeState = { albums: null, loading: false, error: false, request: null, refreshedAt: 0, renderKey: '' };
+/* Approved personal Home: the Gallery Bar owns Recent/News; in-page tabs own the body. */
 function shouldShowMobileHome() {
-  return usesMobilePageLayout() && new URL(window.location.href).searchParams.get('all_artists') !== '1' && !state.view.all_artists_active && !String(state.view.query || '').trim() && !String(state.view.selected_artist || '').trim()
+  return usesMobilePageLayout() && new URL(window.location.href).searchParams.get('all_artists') !== '1'
+    && !state.view.all_artists_active && !String(state.view.query || '').trim() && !String(state.view.selected_artist || '').trim()
     && state.view?.shell_layout?.slots?.main_content?.content_kind !== 'discovery_center_page';
 }
 function renderMobileHome() {
   const host = document.getElementById('mobile-home');
-  if (!host || !shouldShowMobileHome()) return;
-  const mode = ensureGalleryMainState().view;
-  const sources = ensureGalleryMainState().sources;
-  const albums = (mobileHomeState.albums || []).filter(album => resolveGalleryAlbumSources(album).some(source => sources[source] !== false));
-  const key = JSON.stringify([mode, albums, mobileHomeState.error, mobileHomeState.loading]);
-  if (key === mobileHomeState.renderKey) return;
-  mobileHomeState.renderKey = key;
-  const intro = '<header class="mobile-home-heading"><h2>Recently played</h2></header>';
-  if (mobileHomeState.error) {
-    host.innerHTML = `${intro}<div class="mobile-home-empty" role="status"><p>Recently played albums could not be loaded.</p><button type="button" class="button" data-mobile-home-retry>Try again</button></div>`;
-  } else if (mobileHomeState.loading && mobileHomeState.albums === null) {
-    host.innerHTML = `${intro}<p role="status">Loading your recent albums…</p>`;
-  } else if (!albums.length) {
-    host.innerHTML = `${intro}<div class="mobile-home-empty" role="status"><p>${mobileHomeState.albums?.length ? 'No recent albums match your selected library sources.' : 'Your listening history starts here. Play an album and it will appear on Home.'}</p><button type="button" class="button" data-toggle-artists-drawer="1">Browse artists</button></div>`;
-  } else {
-    host.innerHTML = `${intro}<div class="mobile-home-grid" data-view="${escapeHtml(mode)}">${albums.map(album => albumCardHtml(album, { displayMode: mode, coverPriority: 'visible' })).join('')}</div>`;
-    // Use normal production cover URLs and existing image load/error handlers.
-    host.querySelectorAll('img[data-gallery-cover-src]').forEach(image => {
-      image.loading = 'lazy'; image.src = image.dataset.galleryCoverSrc;
-    });
-  }
-  host.querySelector('[data-mobile-home-retry]')?.addEventListener('click', () => { void loadMobileRecentAlbums(true); });
-}
-async function loadMobileRecentAlbums(force = false) {
-  if (mobileHomeState.loading || (!force && mobileHomeState.albums !== null && Date.now() - mobileHomeState.refreshedAt < 30000)) return;
-  mobileHomeState.loading = true; mobileHomeState.error = false;
-  renderMobileHome();
-  try {
-    const response = await fetch('/home/recent-albums', { credentials: 'same-origin', cache: 'no-store', headers: { Accept: 'application/json' } });
-    if (!response.ok || response.redirected) throw new Error('Recent albums unavailable.');
-    const payload = await response.json();
-    mobileHomeState.albums = Array.isArray(payload.albums) ? payload.albums : [];
-    mobileHomeState.refreshedAt = Date.now();
-  } catch (_error) { mobileHomeState.error = true; }
-  finally { mobileHomeState.loading = false; renderMobileHome(); }
+  if (!host || !shouldShowMobileHome() || host.dataset.homeMounted === 'true') return;
+  const tabs = [['tracks', 'Top tracks'], ['albums', 'Top albums'], ['artists', 'Top Artists']]
+    .map(([key, label]) => ({ key, label, panelId: `mobile-home-${key}` }));
+  host.innerHTML = buildInPageTabsHtml({ id: 'mobile-home-tabs', label: 'Recent listening', tabs, selectedKey: 'tracks' })
+    + tabs.map(tab => `<section class="mobile-home-empty" id="${tab.panelId}" role="tabpanel" aria-labelledby="mobile-home-tabs-${tab.key}" tabindex="0"${tab.key === 'tracks' ? '' : ' hidden'}><p>Nothing to show yet. Work in progress.</p></section>`).join('');
+  mountInPageTabs(host.querySelector('[role="tablist"]'));
+  host.dataset.homeMounted = 'true';
 }
 function syncMobileHome() {
   const host = document.getElementById('mobile-home');
@@ -48,15 +20,30 @@ function syncMobileHome() {
   const show = shouldShowMobileHome();
   host.hidden = !show;
   document.getElementById('shell-main-surface')?.classList.toggle('has-mobile-home', show);
-  if (!show) return;
   const bar = document.querySelector('[data-gallery-bar-instance="gallery"]');
   if (bar) {
-    bar.hidden = false;
-    const name = bar.querySelector('[data-gallery-context-name]');
-    const summary = bar.querySelector('[data-gallery-context-summary]');
-    if (name) name.textContent = 'Home';
-    if (summary) summary.textContent = '';
+    let tabs = bar.querySelector('.gallery-bar__home-tabs');
+    if (show && !tabs) {
+      tabs = document.createElement('div');
+      tabs.className = 'gallery-bar__home-tabs';
+      tabs.innerHTML = buildInPageTabsHtml({ id: 'mobile-recents-navigation', label: 'Home sections', selectedKey: 'recent', tabs: [
+        { key: 'recent', label: 'Recent', panelId: 'mobile-home' }, { key: 'news', label: 'News', disabled: true },
+      ] });
+      bar.appendChild(tabs);
+      mountInPageTabs(tabs.querySelector('[role="tablist"]'));
+      host.setAttribute('role', 'tabpanel');
+      host.setAttribute('aria-labelledby', 'mobile-recents-navigation-recent');
+    }
+    if (tabs) tabs.hidden = !show;
+    const actions = bar.querySelector('.gallery-bar__actions');
+    if (actions) actions.hidden = show;
+    if (show) {
+      bar.hidden = false;
+      const name = bar.querySelector('[data-gallery-context-name]');
+      const summary = bar.querySelector('[data-gallery-context-summary]');
+      if (name) name.textContent = host.dataset.accountName || 'My music';
+      if (summary) summary.textContent = '';
+    }
   }
-  renderMobileHome();
-  void loadMobileRecentAlbums();
+  if (show) renderMobileHome();
 }

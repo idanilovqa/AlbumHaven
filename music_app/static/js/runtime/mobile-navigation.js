@@ -241,6 +241,7 @@ function initMobileNavigation() {
     }
     syncMobileGalleryControls();
     syncMobilePageShell();
+    if (typeof syncMobileAlbumComposition === 'function') syncMobileAlbumComposition(getCurrentTrackModalAlbum());
   };
   document.getElementById('mobile-page-outlet')?.addEventListener('scroll', scheduleMobileAlbumThumbnail, { passive: true });
   window.addEventListener('resize', scheduleMobileAlbumThumbnail, { passive: true });
@@ -256,6 +257,7 @@ function initMobileNavigation() {
     syncMobileHome();
     if (virtualGrid) { virtualGrid.lastKey = ''; virtualGrid.recalculate(); }
     renderArtistGroups({ preserveScroll: true });
+    restorePlayerAppearance();
     updatePlayerUi();
     if (typeof renderMobileHome === 'function') renderMobileHome();
   });

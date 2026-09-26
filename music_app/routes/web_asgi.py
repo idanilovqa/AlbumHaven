@@ -202,6 +202,7 @@ def _runtime_asset_version(asset_paths: tuple[Path, ...] | None = None) -> str:
 
 
 def _template_response(request: Request, context: dict[str, object]) -> Response:
+    actor = getattr(request.state, "current_actor", None)
     request.app.state.runtime_asset_version = _runtime_asset_version()
     return request.app.state.templates.TemplateResponse(
         request,
@@ -211,6 +212,7 @@ def _template_response(request: Request, context: dict[str, object]) -> Response
             "url_for": lambda name, **path_params: _template_url_for(request, name, **path_params),
             "runtime_asset_version": request.app.state.runtime_asset_version,
             "account_menu_allowed_actions": allowed_actions_for_request(request, ("accounts.read",)),
+            "current_account_name": (actor.username_display or actor.display_name or "") if actor and actor.is_authenticated else "",
             "account_menu_csrf_token": issue_session_csrf(
                 request.cookies.get("__Host-album_haven_session"),
                 request.app.state.auth_policy_config,

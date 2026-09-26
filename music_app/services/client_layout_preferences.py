@@ -36,6 +36,7 @@ def default_preferences(profile: str) -> dict[str, object]:
     if normalize_profile(profile) == "mobile":
         result["galleryDisplayPreferences"]["defaultGalleryDisplayMode"] = "list"
         result["albumOpenMode"] = "page"
+        result["playerAppearance"]["seekbarMode"] = "thin"
     return result
 
 
@@ -104,7 +105,7 @@ def normalize_changes(value: object) -> dict[str, object]:
             if any(not isinstance(item[name], str) or not re.fullmatch(r"#[0-9a-fA-F]{6}", item[name])
                    for name in ("waveformFillColor", "waveformEdgeColor")):
                 raise ValueError("Invalid player colors.")
-            result[key] = {**item, "seekbarMode": _choice(item["seekbarMode"], ("default", "waveform"))}
+            result[key] = {**item, "seekbarMode": _choice(item["seekbarMode"], ("default", "waveform", "thin"))}
     return result
 
 

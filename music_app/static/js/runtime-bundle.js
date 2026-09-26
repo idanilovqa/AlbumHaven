@@ -4265,7 +4265,8 @@ function buildAlbumDetailsHeaderHtml(config = {}) {
   if (variant === 'copy') {
     const title = escapeHtml(config.title || '');
     const subtitle = escapeHtml(config.subtitle || '');
-    return `<header class="album-details-header" data-album-details-layout="classic_bar" data-album-details-variant="copy"><div class="album-details-header__identity"><div class="album-details-header__copy"><h3 class="album-details-header__primary" id="${titleId}">${title}</h3><div class="album-details-header__secondary" id="${subtitleId}">${subtitle}</div></div></div>${actionHtml ? `<div class="album-details-header__actions">${actionHtml}</div>` : ''}</header>`;
+    const eyebrow = escapeHtml(config.eyebrow || '');
+    return `<header class="album-details-header" data-album-details-layout="classic_bar" data-album-details-variant="copy"><div class="album-details-header__identity"><div class="album-details-header__copy">${eyebrow ? `<div class="album-details-header__eyebrow">${eyebrow}</div>` : ''}<h3 class="album-details-header__primary" id="${titleId}">${title}</h3><div class="album-details-header__secondary" id="${subtitleId}">${subtitle}</div></div></div>${actionHtml ? `<div class="album-details-header__actions">${actionHtml}</div>` : ''}</header>`;
   }
   const artist = escapeHtml(config.artist || '');
   const album = escapeHtml(config.album || 'Album');
@@ -4360,6 +4361,39 @@ function buildMissingAlbumDetailsHtml(config = {}) {
     message,
     actionsHtml: `${removeButton}${keepButton}`,
   });
+}
+
+/* Mobile composes the same live artwork/table; desktop layout values stay intact. */
+function syncMobileAlbumComposition(album) {
+  const overlay = document.getElementById('track-modal');
+  const cover = document.getElementById('track-modal-cover');
+  const body = cover?.closest('.track-modal-body');
+  if (!overlay || !cover || !body || !album) return;
+  const mobile = overlay.classList.contains('is-mobile-page') && usesMobilePageLayout();
+  const layout = normalizeAlbumDetailsLayout(document.documentElement.getAttribute('data-album-details-layout'));
+  overlay.dataset.mobileAlbumLayout = mobile ? layout : '';
+  let identity = body.querySelector('.mobile-album-identity');
+  if (!identity && mobile && layout !== 'classic_bar') {
+    identity = document.createElement('div');
+    identity.className = 'mobile-album-identity';
+    cover.after(identity);
+  }
+  if (identity) {
+    identity.hidden = !mobile || layout === 'classic_bar';
+    if (!identity.hidden) {
+      identity.innerHTML = buildAlbumDetailsHeaderHtml({
+        variant: 'copy', titleId: 'mobile-album-identity-title', subtitleId: 'mobile-album-identity-summary',
+        title: album.name || 'Album',
+        eyebrow: album.album_artist || album.artist || '',
+        subtitle: [album.year, album.total_duration_display].filter(Boolean).join(' · '),
+      });
+    }
+  }
+  if (mobile) {
+    const descriptor = mobilePageState.pages.find(page => page.kind === 'album');
+    if (descriptor) Object.assign(descriptor, mobilePageDescriptor('album', album));
+    syncMobilePageShell();
+  }
 }
 
 // END js/runtime/album-details-components.js
@@ -8999,7 +9033,7 @@ function normalizePlayerAppearance(input = {}) {
     ? String(input.waveformEdgeColor)
     : defaults.waveformEdgeColor;
   return {
-    seekbarMode: mode === 'waveform' ? 'waveform' : 'default',
+    seekbarMode: ['default', 'waveform', 'thin'].includes(mode) ? mode : 'default',
     waveformFillColor: fill,
     waveformEdgeColor: edge,
   };
@@ -13208,8 +13242,15 @@ function clearWaveformCanvas() {
 }
 
 const playerTextTransitions = new WeakMap();
+function resolvePlayerSeekbarPresentation({ isWaveform, seekbarMode, viewportWidth } = {}) {
+  if (isWaveform) return 'waveform';
+  return seekbarMode === 'thin' && Number(viewportWidth) > 0 && Number(viewportWidth) <= 900
+    ? 'thin' : 'regular';
+}
 function setPlayerSeekbarPresentation(isWaveform) {
-  const mode = isWaveform ? 'waveform' : 'regular';
+  const mode = resolvePlayerSeekbarPresentation({
+    isWaveform, seekbarMode: state.player.appearance?.seekbarMode, viewportWidth: window.innerWidth,
+  });
   const player = getPlayerElements().player;
   const previousMode = player?.getAttribute('data-player-seekbar-presentation');
   const animateText = previousMode && previousMode !== mode
@@ -20460,6 +20501,9 @@ if (typeof window !== 'undefined' && typeof window.addEventListener === 'functio
   window.addEventListener('album-haven-appearance-change', () => {
     if (typeof updateWaveformAppearance === 'function') updateWaveformAppearance();
     syncSavedAppearanceLoopControlStyle();
+    if (typeof syncMobileAlbumComposition === 'function' && typeof getCurrentTrackModalAlbum === 'function') {
+      syncMobileAlbumComposition(getCurrentTrackModalAlbum());
+    }
   });
 }
 
@@ -29125,6 +29169,7 @@ function renderTrackModalRelease(album) {
       els.duplicateTabs.innerHTML = '';
     }
   }
+  if (typeof syncMobileAlbumComposition === 'function') syncMobileAlbumComposition(album);
   els.list.innerHTML = albumMissing ? '' : buildTrackListHtml(tracks, album, totalLength);
   if (els.footer) {
     els.footer.textContent = '';
@@ -39322,6 +39367,7 @@ function initMobileNavigation() {
     }
     syncMobileGalleryControls();
     syncMobilePageShell();
+    if (typeof syncMobileAlbumComposition === 'function') syncMobileAlbumComposition(getCurrentTrackModalAlbum());
   };
   document.getElementById('mobile-page-outlet')?.addEventListener('scroll', scheduleMobileAlbumThumbnail, { passive: true });
   window.addEventListener('resize', scheduleMobileAlbumThumbnail, { passive: true });
@@ -39337,6 +39383,7 @@ function initMobileNavigation() {
     syncMobileHome();
     if (virtualGrid) { virtualGrid.lastKey = ''; virtualGrid.recalculate(); }
     renderArtistGroups({ preserveScroll: true });
+    restorePlayerAppearance();
     updatePlayerUi();
     if (typeof renderMobileHome === 'function') renderMobileHome();
   });
@@ -39492,51 +39539,66 @@ function scheduleMobileAlbumThumbnail() {
 
 // END js/runtime/mobile-navigation.js
 
+// BEGIN js/runtime/in-page-tabs.js
+
+/* Lightweight, keyboard-operable tabs. Tokens come from the containing surface. */
+function buildInPageTabsHtml({ id, label, tabs = [], selectedKey } = {}) {
+  const selected = tabs.find(tab => !tab.disabled && tab.key === selectedKey)
+    || tabs.find(tab => !tab.disabled);
+  return `<div class="in-page-tabs" id="${escapeHtml(id)}" role="tablist" aria-label="${escapeHtml(label)}">${tabs.map(tab => {
+    const active = tab === selected;
+    return `<button type="button" role="tab" id="${escapeHtml(id)}-${escapeHtml(tab.key)}" data-in-page-tab="${escapeHtml(tab.key)}" aria-selected="${active}" tabindex="${active ? 0 : -1}"${tab.panelId ? ` aria-controls="${escapeHtml(tab.panelId)}"` : ''}${tab.disabled ? ' disabled aria-disabled="true"' : ''}>${escapeHtml(tab.label)}</button>`;
+  }).join('')}</div>`;
+}
+const mountedInPageTabs = new WeakSet();
+function mountInPageTabs(tablist) {
+  if (!tablist || mountedInPageTabs.has(tablist)) return;
+  mountedInPageTabs.add(tablist);
+  const buttons = () => [...tablist.querySelectorAll('[data-in-page-tab]')];
+  const select = target => {
+    if (!target || target.disabled || !buttons().includes(target)) return;
+    for (const button of buttons()) {
+      const active = button === target;
+      button.setAttribute('aria-selected', String(active));
+      button.tabIndex = active ? 0 : -1;
+      const panelId = button.getAttribute('aria-controls');
+      const panel = panelId ? tablist.ownerDocument.getElementById(panelId) : null;
+      if (panel) panel.hidden = !active;
+    }
+  };
+  tablist.addEventListener('click', event => select(event.target.closest('[data-in-page-tab]')));
+  tablist.addEventListener('keydown', event => {
+    if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
+    const enabled = buttons().filter(button => !button.disabled);
+    const index = enabled.indexOf(event.target);
+    if (index < 0) return;
+    event.preventDefault();
+    const next = event.key === 'Home' ? 0 : event.key === 'End' ? enabled.length - 1
+      : (index + (event.key === 'ArrowRight' ? 1 : -1) + enabled.length) % enabled.length;
+    select(enabled[next]);
+    enabled[next].focus();
+  });
+}
+
+// END js/runtime/in-page-tabs.js
+
 // BEGIN js/runtime/mobile-home.js
 
-/* Home uses real account-scoped listen history and the existing GalleryCard renderer. */
-const mobileHomeState = { albums: null, loading: false, error: false, request: null, refreshedAt: 0, renderKey: '' };
+/* Approved personal Home: the Gallery Bar owns Recent/News; in-page tabs own the body. */
 function shouldShowMobileHome() {
-  return usesMobilePageLayout() && new URL(window.location.href).searchParams.get('all_artists') !== '1' && !state.view.all_artists_active && !String(state.view.query || '').trim() && !String(state.view.selected_artist || '').trim()
+  return usesMobilePageLayout() && new URL(window.location.href).searchParams.get('all_artists') !== '1'
+    && !state.view.all_artists_active && !String(state.view.query || '').trim() && !String(state.view.selected_artist || '').trim()
     && state.view?.shell_layout?.slots?.main_content?.content_kind !== 'discovery_center_page';
 }
 function renderMobileHome() {
   const host = document.getElementById('mobile-home');
-  if (!host || !shouldShowMobileHome()) return;
-  const mode = ensureGalleryMainState().view;
-  const sources = ensureGalleryMainState().sources;
-  const albums = (mobileHomeState.albums || []).filter(album => resolveGalleryAlbumSources(album).some(source => sources[source] !== false));
-  const key = JSON.stringify([mode, albums, mobileHomeState.error, mobileHomeState.loading]);
-  if (key === mobileHomeState.renderKey) return;
-  mobileHomeState.renderKey = key;
-  const intro = '<header class="mobile-home-heading"><h2>Recently played</h2></header>';
-  if (mobileHomeState.error) {
-    host.innerHTML = `${intro}<div class="mobile-home-empty" role="status"><p>Recently played albums could not be loaded.</p><button type="button" class="button" data-mobile-home-retry>Try again</button></div>`;
-  } else if (mobileHomeState.loading && mobileHomeState.albums === null) {
-    host.innerHTML = `${intro}<p role="status">Loading your recent albums…</p>`;
-  } else if (!albums.length) {
-    host.innerHTML = `${intro}<div class="mobile-home-empty" role="status"><p>${mobileHomeState.albums?.length ? 'No recent albums match your selected library sources.' : 'Your listening history starts here. Play an album and it will appear on Home.'}</p><button type="button" class="button" data-toggle-artists-drawer="1">Browse artists</button></div>`;
-  } else {
-    host.innerHTML = `${intro}<div class="mobile-home-grid" data-view="${escapeHtml(mode)}">${albums.map(album => albumCardHtml(album, { displayMode: mode, coverPriority: 'visible' })).join('')}</div>`;
-    // Use normal production cover URLs and existing image load/error handlers.
-    host.querySelectorAll('img[data-gallery-cover-src]').forEach(image => {
-      image.loading = 'lazy'; image.src = image.dataset.galleryCoverSrc;
-    });
-  }
-  host.querySelector('[data-mobile-home-retry]')?.addEventListener('click', () => { void loadMobileRecentAlbums(true); });
-}
-async function loadMobileRecentAlbums(force = false) {
-  if (mobileHomeState.loading || (!force && mobileHomeState.albums !== null && Date.now() - mobileHomeState.refreshedAt < 30000)) return;
-  mobileHomeState.loading = true; mobileHomeState.error = false;
-  renderMobileHome();
-  try {
-    const response = await fetch('/home/recent-albums', { credentials: 'same-origin', cache: 'no-store', headers: { Accept: 'application/json' } });
-    if (!response.ok || response.redirected) throw new Error('Recent albums unavailable.');
-    const payload = await response.json();
-    mobileHomeState.albums = Array.isArray(payload.albums) ? payload.albums : [];
-    mobileHomeState.refreshedAt = Date.now();
-  } catch (_error) { mobileHomeState.error = true; }
-  finally { mobileHomeState.loading = false; renderMobileHome(); }
+  if (!host || !shouldShowMobileHome() || host.dataset.homeMounted === 'true') return;
+  const tabs = [['tracks', 'Top tracks'], ['albums', 'Top albums'], ['artists', 'Top Artists']]
+    .map(([key, label]) => ({ key, label, panelId: `mobile-home-${key}` }));
+  host.innerHTML = buildInPageTabsHtml({ id: 'mobile-home-tabs', label: 'Recent listening', tabs, selectedKey: 'tracks' })
+    + tabs.map(tab => `<section class="mobile-home-empty" id="${tab.panelId}" role="tabpanel" aria-labelledby="mobile-home-tabs-${tab.key}" tabindex="0"${tab.key === 'tracks' ? '' : ' hidden'}><p>Nothing to show yet. Work in progress.</p></section>`).join('');
+  mountInPageTabs(host.querySelector('[role="tablist"]'));
+  host.dataset.homeMounted = 'true';
 }
 function syncMobileHome() {
   const host = document.getElementById('mobile-home');
@@ -39544,17 +39606,32 @@ function syncMobileHome() {
   const show = shouldShowMobileHome();
   host.hidden = !show;
   document.getElementById('shell-main-surface')?.classList.toggle('has-mobile-home', show);
-  if (!show) return;
   const bar = document.querySelector('[data-gallery-bar-instance="gallery"]');
   if (bar) {
-    bar.hidden = false;
-    const name = bar.querySelector('[data-gallery-context-name]');
-    const summary = bar.querySelector('[data-gallery-context-summary]');
-    if (name) name.textContent = 'Home';
-    if (summary) summary.textContent = '';
+    let tabs = bar.querySelector('.gallery-bar__home-tabs');
+    if (show && !tabs) {
+      tabs = document.createElement('div');
+      tabs.className = 'gallery-bar__home-tabs';
+      tabs.innerHTML = buildInPageTabsHtml({ id: 'mobile-recents-navigation', label: 'Home sections', selectedKey: 'recent', tabs: [
+        { key: 'recent', label: 'Recent', panelId: 'mobile-home' }, { key: 'news', label: 'News', disabled: true },
+      ] });
+      bar.appendChild(tabs);
+      mountInPageTabs(tabs.querySelector('[role="tablist"]'));
+      host.setAttribute('role', 'tabpanel');
+      host.setAttribute('aria-labelledby', 'mobile-recents-navigation-recent');
+    }
+    if (tabs) tabs.hidden = !show;
+    const actions = bar.querySelector('.gallery-bar__actions');
+    if (actions) actions.hidden = show;
+    if (show) {
+      bar.hidden = false;
+      const name = bar.querySelector('[data-gallery-context-name]');
+      const summary = bar.querySelector('[data-gallery-context-summary]');
+      if (name) name.textContent = host.dataset.accountName || 'My music';
+      if (summary) summary.textContent = '';
+    }
   }
-  renderMobileHome();
-  void loadMobileRecentAlbums();
+  if (show) renderMobileHome();
 }
 
 // END js/runtime/mobile-home.js

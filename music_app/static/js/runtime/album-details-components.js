@@ -14,7 +14,8 @@ function buildAlbumDetailsHeaderHtml(config = {}) {
   if (variant === 'copy') {
     const title = escapeHtml(config.title || '');
     const subtitle = escapeHtml(config.subtitle || '');
-    return `<header class="album-details-header" data-album-details-layout="classic_bar" data-album-details-variant="copy"><div class="album-details-header__identity"><div class="album-details-header__copy"><h3 class="album-details-header__primary" id="${titleId}">${title}</h3><div class="album-details-header__secondary" id="${subtitleId}">${subtitle}</div></div></div>${actionHtml ? `<div class="album-details-header__actions">${actionHtml}</div>` : ''}</header>`;
+    const eyebrow = escapeHtml(config.eyebrow || '');
+    return `<header class="album-details-header" data-album-details-layout="classic_bar" data-album-details-variant="copy"><div class="album-details-header__identity"><div class="album-details-header__copy">${eyebrow ? `<div class="album-details-header__eyebrow">${eyebrow}</div>` : ''}<h3 class="album-details-header__primary" id="${titleId}">${title}</h3><div class="album-details-header__secondary" id="${subtitleId}">${subtitle}</div></div></div>${actionHtml ? `<div class="album-details-header__actions">${actionHtml}</div>` : ''}</header>`;
   }
   const artist = escapeHtml(config.artist || '');
   const album = escapeHtml(config.album || 'Album');
@@ -109,4 +110,37 @@ function buildMissingAlbumDetailsHtml(config = {}) {
     message,
     actionsHtml: `${removeButton}${keepButton}`,
   });
+}
+
+/* Mobile composes the same live artwork/table; desktop layout values stay intact. */
+function syncMobileAlbumComposition(album) {
+  const overlay = document.getElementById('track-modal');
+  const cover = document.getElementById('track-modal-cover');
+  const body = cover?.closest('.track-modal-body');
+  if (!overlay || !cover || !body || !album) return;
+  const mobile = overlay.classList.contains('is-mobile-page') && usesMobilePageLayout();
+  const layout = normalizeAlbumDetailsLayout(document.documentElement.getAttribute('data-album-details-layout'));
+  overlay.dataset.mobileAlbumLayout = mobile ? layout : '';
+  let identity = body.querySelector('.mobile-album-identity');
+  if (!identity && mobile && layout !== 'classic_bar') {
+    identity = document.createElement('div');
+    identity.className = 'mobile-album-identity';
+    cover.after(identity);
+  }
+  if (identity) {
+    identity.hidden = !mobile || layout === 'classic_bar';
+    if (!identity.hidden) {
+      identity.innerHTML = buildAlbumDetailsHeaderHtml({
+        variant: 'copy', titleId: 'mobile-album-identity-title', subtitleId: 'mobile-album-identity-summary',
+        title: album.name || 'Album',
+        eyebrow: album.album_artist || album.artist || '',
+        subtitle: [album.year, album.total_duration_display].filter(Boolean).join(' · '),
+      });
+    }
+  }
+  if (mobile) {
+    const descriptor = mobilePageState.pages.find(page => page.kind === 'album');
+    if (descriptor) Object.assign(descriptor, mobilePageDescriptor('album', album));
+    syncMobilePageShell();
+  }
 }

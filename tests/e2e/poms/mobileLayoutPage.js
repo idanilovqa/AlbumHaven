@@ -14,7 +14,10 @@ export class MobileLayoutPage {
     this.artistHeading = page.locator('#shell-navigation-rail h2');
     this.homeCards = this.home.locator('.album-card');
     this.homeAlbums = this.home.locator('[data-open-tracklist]');
-    this.homeGrid = page.locator('.mobile-home-grid');
+    this.homeTabs = this.home.getByRole('tablist', { name: 'Recent listening' });
+    this.homePanel = this.home.getByRole('tabpanel');
+    this.recentTab = page.getByRole('tab', { name: 'Recent', exact: true });
+    this.newsTab = page.getByRole('tab', { name: 'News', exact: true });
     this.searchInput = page.locator('#search-input');
     this.searchButton = page.locator('#mobile-search-button');
     this.libraryButton = page.locator('#mobile-library-button');
@@ -22,6 +25,16 @@ export class MobileLayoutPage {
     this.closeArtistRail = this.artistRail.locator('[data-close-artists-drawer]');
     this.artistPlaceholderTabs = page.locator('[data-mobile-library-mode]');
     this.galleryCards = page.locator('#artist-groups .album-card');
+    this.galleryAlbums = this.galleryCards.locator('[data-open-tracklist]');
+    this.galleryGrid = this.galleryCards.first().locator('..');
+    this.albumIdentity = page.locator('.mobile-album-identity');
+    this.timeline = page.locator('#player-timeline');
+    this.playerPlay = page.locator('#player-play');
+    this.cancelAppearance = page.locator('#utility-modal-footer [data-editor-footer-action="secondary"]');
+    this.thinOption = page.locator('[data-appearance-seekbar-mode="thin"]');
+    this.regularOption = page.locator('[data-appearance-seekbar-mode="default"]');
+    this.waveformOption = page.locator('[data-appearance-seekbar-mode="waveform"]');
+    this.playerPreview = page.locator('[data-player-live-preview]');
     this.familyButton = page.locator('[data-gallery-bar-action="artist-family"]');
     this.familyPanel = page.locator('#artist-family-panel');
     this.viewCluster = page.locator('#gallery-view-cluster-options');
@@ -84,6 +97,42 @@ export class MobileLayoutPage {
     await this.password.fill(password);
     await this.signInButton.click();
     await expect(this.appShell).toBeVisible();
+  }
+
+  async browseArtist(name = 'Northlight') {
+    await this.libraryButton.click();
+    await this.artist(name).click();
+    await expect(this.home).not.toBeVisible();
+    await expect(this.galleryCards.first()).toBeVisible();
+  }
+
+  albumLayout(value) {
+    if (!['classic_bar', 'stacked_bar', 'editorial_canvas'].includes(value)) throw new TypeError('Invalid album layout');
+    return this.page.locator(`.appearance-album-layout-card[data-album-details-layout="${value}"]`);
+  }
+
+  async saveAppearanceChanges() {
+    const saved = this.page.waitForResponse(response => response.url().endsWith('/account/appearance') && response.request().method() === 'PUT');
+    await this.saveAppearance.click();
+    expect((await saved).status()).toBe(200);
+    await expect(this.saveAppearance).toBeDisabled();
+  }
+
+  async seekAt(fraction) {
+    const box = await this.timeline.boundingBox();
+    await this.timeline.click({ position: { x: box.width * fraction, y: box.height - 2 } });
+  }
+
+  async thinProgressGeometry() {
+    // parity-check: allow-read-only-measurement-evaluate -- inspect the live range's visual track and actual audio progress.
+    return this.timeline.evaluate(input => ({
+      backgroundSize: getComputedStyle(input).backgroundSize,
+      height: input.getBoundingClientRect().height,
+      bottom: input.getBoundingClientRect().bottom,
+      playerBottom: input.closest('.global-player').getBoundingClientRect().bottom,
+      progress: parseFloat(input.style.getPropertyValue('--player-seek-progress')),
+      value: Number(input.value), max: Number(input.max),
+    }));
   }
 
   async selectView(view) {

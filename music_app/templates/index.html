@@ -227,7 +227,7 @@
       </section>
 
 
-      <section class="mobile-home gallery-scrollbar" id="mobile-home" aria-label="Recently played albums" hidden></section>
+      <section class="mobile-home gallery-scrollbar" id="mobile-home" data-account-name="{{ current_account_name|default('') }}" aria-label="Recent" hidden></section>
       <div class="albums-scroll" id="albums-scroll" {% if show_initial_library_loader %}hidden{% endif %}>
         <div class="albums-viewport" id="albums-viewport" data-shell-horizontal-align="gallery-body">
           <div class="gallery-focus-glow" id="gallery-focus-glow" hidden aria-hidden="true"></div>

@@ -9,7 +9,8 @@ export const test = base.extend({
     expect(response.ok).toBeTruthy();
     const app = new MobileLayoutPage(page);
     await app.signIn('rendref', 'Phase Seven Owner Passphrase 2026!');
-    await expect(app.homeCards).toHaveCount(8);
+    await expect(app.galleryContextName).toHaveText('Rendref');
+    await expect(app.homePanel).toHaveText('Nothing to show yet. Work in progress.');
     await use(app);
   },
   snapshot: async ({ page }, use) => {

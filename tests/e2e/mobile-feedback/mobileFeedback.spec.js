@@ -97,7 +97,9 @@ test('mobile Appearance stays on Mobile, follows saved desktop, uses a page surf
   expect(bounds.y).toBeLessThan(300);
   await snapshot('30-pinned-player-preview');
   await app.selectSubsection('album-page');
-  await expect(app.mobileAlbumLayoutChoice).not.toBeVisible();
+  await expect(app.albumLayout('classic_bar')).toBeVisible();
+  await expect(app.albumLayout('stacked_bar')).toBeVisible();
+  await expect(app.albumLayout('editorial_canvas')).toBeVisible();
   await snapshot('31-mobile-album-options');
 });
 

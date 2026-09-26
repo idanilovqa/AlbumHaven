@@ -120,3 +120,44 @@ Design proposals are in `docs/design-mockups/mobile-feedback-2026-09-26/options.
 ### Visual acceptance correction
 
 Run 36248729830 passed all seven baseline and six extended browser scenarios, plus 239 focused JavaScript checks, 16 Python checks and production parity, on source 78d7d9ccf0b2c6f5e7b3f0ea3b85cfa1006c0b3b. Manual screenshot review still found the Appearance editor's inline companion background overriding the light page, the relocated SearchInput missing its chrome token context, and an emoji-rendered pause glyph. This correction keeps the draft main surface local to the editor, binds SearchInput to the containing chrome colors, and reuses the shared SVG play/pause icons on mobile without rebuilding them per audio tick. Long family names now wrap inside the narrow drawer. Shared page headings retain GalleryBar typography. Added browser assertions check actual selected-palette colors and the player glyph; focused local verification is 240 JavaScript checks, 16 Python checks and production parity. Remote verification remains required before deployment. Checklist counts remain 0/35, 0/1, 0/2 pending final reconciliation.
+
+
+## Approved Home, album options and mobile progress line — 2026-09-26
+
+Approval: `docs/design-mockups/mobile-feedback-2026-09-26/approval.md`.
+D01 is approved as Home concept A. D02 is approved as the existing large-art layout
+plus Compact cover (A) and Centered cover (B); the latter are additions, not replacements.
+The existing account-owned mobile album section reuses its three persisted layout
+values; desktop labels and layouts are unchanged. Follow Web / Desktop and Custom
+mobile retain their existing section semantics, Save, Cancel and account isolation.
+
+Home displays the authenticated username in the Gallery Bar. Recent is selected and
+News is disabled. The shared in-page underline tabs are Top tracks, Top albums and
+Top Artists, each with "Nothing to show yet. Work in progress." Gallery display and
+album-type controls are hidden only on Home. Artist browsing and desktop root
+library browsing remain available.
+
+Thin progress line is an additional mobile seekbar choice under Player & Seekbar.
+It is the default for previously unsaved mobile player preferences; existing saved
+regular or waveform choices are retained. The three-pixel line is driven by the
+existing range value and playback clock, without a knob or second audio timeline.
+The range retains a larger invisible touch target, keyboard seeking and disabled
+semantics. Loop editing retains its existing waveform presentation; wide layouts
+retain the regular desktop presentation. The draft preview reflects the chosen mode.
+
+### Verification contract for this approved change
+
+- Preserve baseline artist/gallery, density, history and continuous-playback checks.
+  Since the owner replaced Home's recent-album grid with placeholders, enter the
+  album gallery through Artists for the old gallery scenarios. Retain the eight-album
+  inventory check in All Artists. Home's superseded grid assertion becomes the
+  exact approved account identity, tabs, unavailable News and placeholder checks.
+- Add real-app checks for all three album compositions, sixteen tracks, persisted
+  selection, shared Gallery Bar metadata and thumbnail-on-scroll in every layout.
+- Add real playback/seek verification for the thin line, Save/Cancel and regular /
+  waveform alternatives, mobile-session persistence, and wide-layout fallback.
+- Keep actual screenshots and pass/failure evidence tied to the implementation head.
+  Focused development CI does not replace the complete release/PR gates.
+
+Implementation is prepared; the new hosted verification result has not yet been
+recorded. Earlier repair checklist counters are not changed by this approval entry.

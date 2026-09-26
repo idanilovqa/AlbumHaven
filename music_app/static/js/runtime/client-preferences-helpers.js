@@ -138,7 +138,7 @@ function normalizePlayerAppearance(input = {}) {
     ? String(input.waveformEdgeColor)
     : defaults.waveformEdgeColor;
   return {
-    seekbarMode: mode === 'waveform' ? 'waveform' : 'default',
+    seekbarMode: ['default', 'waveform', 'thin'].includes(mode) ? mode : 'default',
     waveformFillColor: fill,
     waveformEdgeColor: edge,
   };

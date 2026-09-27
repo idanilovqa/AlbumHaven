@@ -48,16 +48,23 @@ test('single mobile track-body activation uses the real play control and exclude
   const row = { querySelector: () => button, contains: () => false, dataset: {}, ownerDocument: { getSelection: () => ({ removeAllRanges() {} }) } };
   const context = load('album-track-table.js', { usesMobilePageLayout: () => true,
     window: { getSelection: () => ({ removeAllRanges() {} }) }, state: { player: { current: null } },
-    triggerAlbumTrackPlayActivation: () => calls.push('pulse'),
+    activateSharedTrackButton: (target, options) => {
+      assert.equal(target, button);
+      assert.equal(options.restart, true);
+      calls.push('restart');
+    },
   });
   // The table event uses the component's existing click route, never a second player.
   const event = { target: { closest: () => null }, currentTarget: row, detail: 1, preventDefault() {} };
   context.handleAlbumTrackRowClick(event);
   assert.equal(calls.filter(x => x === 'play').length, 1);
   context.handleAlbumTrackRowClick({ ...event, target: { closest: () => button } });
+  assert.deepEqual(calls, ['play']);
   context.handleAlbumTrackRowClick({ ...event, detail: 2 });
+  // Mobile handles the second tap above; a native dblclick must not restart twice.
   context.handleAlbumTrackRowDoubleClick(event);
   assert.equal(calls.filter(x => x === 'play').length, 1);
+  assert.equal(calls.filter(x => x === 'restart').length, 1);
 });
 
 test('personal Home is distinct from the explicit All Artists route', () => {
@@ -113,4 +120,31 @@ test('mobile play/pause uses the shared SVG without rebuilding it every playback
   mobile = true;
   context.renderGlobalPlayerPlayGlyph(button, true);
   assert.equal(writes, 3);
+});
+
+
+test('hierarchical mobile Back preserves the original parent across album replacements and history restoration', () => {
+  const api = load('mobile-navigation.js');
+  const descriptor = { kind: 'album', albumKey: 'second' };
+  assert.equal(api.resolveMobileParentPosition(descriptor, null, { albumHavenNavigationPosition: 2 }), 2);
+  assert.equal(api.resolveMobileParentPosition(descriptor, { parentPosition: 2 }, { albumHavenNavigationPosition: 5 }), 2);
+  assert.equal(api.resolveMobileParentPosition(descriptor, null, { albumHavenNavigationPosition: 5,
+    mobilePages: [{ ...descriptor, parentPosition: 2 }] }), 2);
+  assert.equal(api.mobileParentHistoryDelta(2, 5), -3);
+  for (const invalid of [null, undefined, -1, 1.5, NaN, 5, 6]) {
+    assert.equal(api.mobileParentHistoryDelta(invalid, 5), null);
+  }
+  assert.equal(api.mobileParentHistoryDelta(0, 1), -1);
+});
+
+test('header Back traverses to its parent without replacing the child history entry before popstate', () => {
+  const movements = [];
+  const context = load('mobile-navigation.js', { window: { history: {
+    state: { albumHavenNavigationPosition: 4 }, go: delta => movements.push(delta),
+    replaceState() { throw new Error('Back must retain the child entry for Forward'); },
+  } } });
+  vm.runInContext("mobilePageState.pages.push({ kind: 'album', albumKey: 'one', parentPosition: 2 });", context);
+  assert.equal(context.dismissMobilePage('album'), true);
+  assert.deepEqual(movements, [-2]);
+  assert.equal(vm.runInContext('mobilePageState.pages.length', context), 1);
 });

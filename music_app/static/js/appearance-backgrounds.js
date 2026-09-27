@@ -453,6 +453,8 @@
     let recentColors = normalizeRecentColors(initial.waveform_recent_colors), waveformColorUpdates = [];
     let loading = false, saving = false, error = '', loadFailed = false, generation = 0;
     const listeners = new Set(), busy = () => loading || saving || loadFailed;
+    const editBlocked = () => busy() || (activeDeviceProfile !== 'web_desktop'
+      && deviceProfiles[activeDeviceProfile].sections[appearanceSectionKeys[activeSection]]?.mode !== 'custom');
     let savedSeekbarMode = 'default', draftSeekbarMode = 'default', applySeekbarMode = () => {}, seekbarConfigured = false;
     const mayChangeLoopStyle = () => (typeof loopCreateAllowed === 'function' ? loopCreateAllowed() : loopCreateAllowed) === true;
     const syncInputs = (preserveErrors = false) => {
@@ -498,7 +500,7 @@
         }
       }
       const canSave = dirty && !busy() && !Object.keys(errors).length;
-      return { seekbarMode: draftSeekbarMode, saved: copy(saved), draft: copy(draft), revision, activeSection, activeDeviceProfile, deviceProfiles: copy(deviceProfiles), playerRecentSets: copy(playerRecentSets), errors: { ...errors }, inputValues: { ...inputValues }, effective,
+      return { canEdit: !editBlocked(), seekbarMode: draftSeekbarMode, saved: copy(saved), draft: copy(draft), revision, activeSection, activeDeviceProfile, deviceProfiles: copy(deviceProfiles), playerRecentSets: copy(playerRecentSets), errors: { ...errors }, inputValues: { ...inputValues }, effective,
         recentColors: [...recentColors], waveformColorUpdates: [...waveformColorUpdates], loading, saving, dirty, canSave, error, loadFailed, warnings, canChangeLoopStyle: mayChangeLoopStyle(),
         footer: { dirty, canSave, canRetry: dirty && Boolean(error), status: dirty ? 'Unsaved appearance changes' : 'Saved to your account' } };
     };
@@ -517,7 +519,7 @@
     };
     const setColor = (key, value) => {
       if (!keys.includes(key)) throw new TypeError('Unknown appearance field.');
-      if (busy()) return;
+      if (editBlocked()) return;
       inputValues[key] = value === null ? defaults[key] : String(value);
       try { draft[key] = normalizeColor(value); if (isCanonical(draft)) { draft.palette_id = null; draft.panel_index = 0; } delete errors[key]; error = ''; }
       catch (failure) { errors[key] = failure.message; }
@@ -526,7 +528,7 @@
     const setPalette = id => {
       const selectedPalette = id === null ? null : palettes.find(palette => palette.id === id);
       if (id !== null && !selectedPalette) throw new TypeError('Unknown palette.');
-      if (busy()) return;
+      if (editBlocked()) return;
       promote(); draft = { ...draft, ...empty(), palette_id: id, panel_index: 0 };
       if (aggregate && selectedPalette && activeDeviceProfile === 'web_desktop') {
         draft.selection_accent = {
@@ -538,12 +540,12 @@
     };
     const setPanelIndex = index => {
       if (!Number.isInteger(index) || index < 0 || index > (draft.palette_id ? 2 : 0)) throw new TypeError('Unknown panel companion.');
-      if (busy()) return;
+      if (editBlocked()) return;
       promote(); draft.panel_index = index; error = ''; syncInputs(true); notify();
     };
     const setPlayerMode = mode => {
       if (!['palette', 'custom'].includes(mode)) throw new TypeError('Unknown player mode.');
-      if (busy()) return;
+      if (editBlocked()) return;
       promote();
       if (mode === 'palette') clearPlayerStyleErrors();
       if (aggregate) {
@@ -564,16 +566,16 @@
     };
     const setCompactPlayerStyle = style => {
       if (!['docked', 'floating'].includes(style)) throw new TypeError('Unknown compact player style.');
-      if (busy()) return;
+      if (editBlocked()) return;
       promote(); draft.compact_player_style = style; error = ''; notify();
     };
     const setDockedCompactPlayerBehavior = behavior => {
       if (!['follow_sidebar', 'float_on_collapse', 'artbox', 'stay_docked'].includes(behavior)) throw new TypeError('Unknown docked compact player behavior.');
-      if (busy()) return;
+      if (editBlocked()) return;
       promote(); draft.docked_compact_player_behavior = behavior; error = ''; notify();
     };
     const setDockedCompactPlayerRegularStyle = enabled => {
-      if (busy()) return;
+      if (editBlocked()) return;
       promote();
       draft.docked_compact_player_regular_style = enabled === true;
       error = '';
@@ -581,17 +583,17 @@
     };
     const setCompactPlayerMotion = value => {
       if (!['normal', 'slow'].includes(value)) throw new TypeError('Unknown compact player motion.');
-      if (busy()) return;
+      if (editBlocked()) return;
       promote(); draft.compact_player_motion = value; error = ''; notify();
     };
     const setFloatingPlayerEdge = value => {
       const edge = normalizeFloatingPlayerEdge(value);
-      if (busy()) return;
+      if (editBlocked()) return;
       promote(); draft.floating_player_edge = edge; error = ''; notify();
     };
     const setLoopControlStyle = style => {
       if (!['capsule', 'companion'].includes(style)) throw new TypeError('Unknown loop control style.');
-      if (busy() || !mayChangeLoopStyle()) return;
+      if (editBlocked() || !mayChangeLoopStyle()) return;
       promoteAggregate(); draft.loop_control_style = style; error = ''; notify();
     };
     const reconcileLoopCapability = () => {
@@ -618,23 +620,23 @@
     };
     const setAlbumDetailsLayout = layout => {
       if (!['classic_bar', 'stacked_bar', 'editorial_canvas'].includes(layout)) throw new TypeError('Unknown Album Details layout.');
-      if (busy()) return;
+      if (editBlocked()) return;
       promoteAggregate(); draft.album_details_layout = layout; error = ''; notify();
     };
     const setAlbumPlayingRowAnimation = value => {
       if (!['enabled', 'disabled'].includes(value)) throw new TypeError('Unknown playing-row animation.');
-      if (busy()) return;
+      if (editBlocked()) return;
       promoteAggregate(); draft.album_playing_row_animation = value; error = ''; notify();
     };
     const setAlertFamily = family => {
       if (!['ember', 'signal', 'quiet'].includes(family)) throw new TypeError('Unknown alert family.');
-      if (busy()) return;
+      if (editBlocked()) return;
       promoteAggregate(); draft.alert_family = family; error = ''; notify();
     };
     const rememberColor = color => { waveformColorUpdates = [color, ...waveformColorUpdates.filter(item => item !== color)].slice(0, 5); };
     const setPlayerColor = (field, value, { recordRecent = true } = {}) => {
       if (!['background', 'fill', 'edge'].includes(field)) throw new TypeError('Unknown player color.');
-      if (busy()) return;
+      if (editBlocked()) return;
       promote(); const key = 'player_' + field; inputValues[key] = String(value);
       try {
         const color = normalizeColor(value); if (color === null) throw new TypeError('A player color is required.');
@@ -655,7 +657,7 @@
         setPlayerColor(field, value, { recordRecent });
         return;
       }
-      if (busy()) return;
+      if (editBlocked()) return;
       promote(); const key = 'player_' + field; inputValues[key] = String(value);
       try {
         const color = normalizeColor(value); if (color === null) throw new TypeError('A waveform color is required.');
@@ -671,7 +673,7 @@
       if (!pair || typeof pair !== 'object' || Array.isArray(pair) || Object.keys(pair).length !== 2 || !['fill', 'edge'].every(field => Object.hasOwn(pair, field))) throw new TypeError('Both previous waveform colors are required.');
       const fill = normalizeColor(pair.fill), edge = normalizeColor(pair.edge);
       if (fill === null || edge === null) throw new TypeError('Both previous waveform colors are required.');
-      if (busy()) return;
+      if (editBlocked()) return;
       promote();
       if (aggregate || Object.hasOwn(draft, 'player_style_override')) {
         const style = effectivePlayerStyle(getState());
@@ -685,7 +687,7 @@
       error = ''; syncInputs(true); notify();
     };
     const setPlayerStyle = (value, { preserveColorErrors = false } = {}) => {
-      if (busy()) return;
+      if (editBlocked()) return;
       const style = normalizePlayerOverride(value);
       if (!style || !Object.hasOwn(style, 'surface')) throw new TypeError('A complete player style is required.');
       promoteAggregate(); draft.player_style_override = style; pendingPlayerSet = copy(style);
@@ -698,7 +700,7 @@
     };
     const setPlayerStyleColor = (path, value) => {
       if (!playerStyleColorPaths.includes(path)) throw new TypeError('Unknown player style color.');
-      if (busy()) return;
+      if (editBlocked()) return;
       const key = 'player_style_' + path; inputValues[key] = String(value);
       try {
         const style = effectivePlayerStyle(getState());
@@ -711,21 +713,21 @@
     };
     const restorePlayerSet = value => setPlayerStyle(value);
     const setSelectionAccent = value => {
-      if (busy()) return;
+      if (editBlocked()) return;
       if (!value || typeof value !== 'object' || typeof value.enabled !== 'boolean') throw new TypeError('Invalid selection accent.');
       promoteAggregate(); draft.selection_accent = { enabled: value.enabled, color: normalizeColor(value.color) }; error = ''; notify();
     };
     const setActionButtonOutlines = enabled => {
-      if (busy()) return;
+      if (editBlocked()) return;
       promoteAggregate(); draft.action_button_outlines = enabled !== false; error = ''; notify();
     };
     const setInteractionOverrides = value => {
-      if (busy()) return;
+      if (editBlocked()) return;
       if (!value || typeof value !== 'object' || Array.isArray(value)) throw new TypeError('Invalid interaction overrides.');
       promoteAggregate(); draft.interaction_overrides = normalizeInteractionOverrides(value); error = ''; notify();
     };
     const setItemOutline = (source, color = null) => {
-      if (busy()) return;
+      if (editBlocked()) return;
       const normalized = normalizeItemOutline({ source, color });
       promoteAggregate();
       draft.interaction_overrides = { ...draft.interaction_overrides, item_outline: normalized };
@@ -771,7 +773,7 @@
       applyActiveDeviceSection(); error = ''; notify();
     };
     const setDeviceSectionMode = mode => {
-      if (activeDeviceProfile === 'web_desktop') return;
+      if (busy() || activeDeviceProfile === 'web_desktop') return;
       promoteAggregate();
       const section = appearanceSectionKeys[activeSection];
       captureActiveDeviceSection();
@@ -786,13 +788,12 @@
     };
     const cancel = () => { if (loading || saving) return; draftSeekbarMode = savedSeekbarMode; draft = copy(saved); deviceProfiles = copy(savedDeviceProfiles); pendingPlayerSet = null; errors = {}; waveformColorUpdates = []; error = ''; applyActiveDeviceSection(); syncInputs(); notify(); };
     const reset = () => {
-      if (busy()) return;
+      if (editBlocked()) return;
       draft = isCanonical(draft) ? { ...canonicalEmpty(), player_override: draft.player_override ? { ...draft.player_override } : null, loop_control_style: draft.loop_control_style || 'capsule' } : empty();
       keys.forEach(key => delete errors[key]); error = ''; syncInputs(true); notify();
     };
     const resetSection = (section = activeSection) => {
-      if (busy()) return;
-      if (activeDeviceProfile !== 'web_desktop') setDeviceSectionMode('custom');
+      if (editBlocked()) return;
       if (!aggregate) { reset(); return; }
       if (section === 'backgrounds') {
         Object.assign(draft, empty(), { palette_id: null, panel_index: 0 });
@@ -885,7 +886,7 @@
     };
     return { getState, setColor, setPalette, setPanelIndex, setPlayerMode, setCompactPlayerStyle, setDockedCompactPlayerBehavior, setDockedCompactPlayerRegularStyle, setCompactPlayerMotion, setFloatingPlayerEdge, setLoopControlStyle, setAlbumDetailsLayout, setAlbumPlayingRowAnimation, setAlertFamily, setPlayerColor, setWaveformColor, restoreWaveformColors,
       configureSeekbar(mode, applyMode) { if (!seekbarConfigured) { savedSeekbarMode = draftSeekbarMode = ['default', 'waveform', 'thin'].includes(mode) ? mode : 'default'; seekbarConfigured = true; } applySeekbarMode = applyMode; },
-      setSeekbarMode(mode) { if (busy()) return; draftSeekbarMode = ['default', 'waveform', 'thin'].includes(mode) ? mode : 'default'; notify(); },
+      setSeekbarMode(mode) { if (editBlocked()) return; draftSeekbarMode = ['default', 'waveform', 'thin'].includes(mode) ? mode : 'default'; notify(); },
       setPlayerStyle, setPlayerStyleColor, restorePlayerSet, setSelectionAccent, setActionButtonOutlines, setInteractionOverrides, setItemOutline, useThemeInteractions, setDeviceProfile, setDeviceSectionMode, setActiveSection, cancel, reset, resetSection, load, save, clear,
       reconcileLoopCapability, subscribe(listener) { listeners.add(listener); return () => listeners.delete(listener); } };
   }
@@ -1171,6 +1172,9 @@
         help.hidden = !mobile;
         help.textContent = mode === 'follow' ? 'This section follows Web / Desktop. Choose Custom mobile to make it different.' : 'Only the mobile profile changes. Other sections can still follow Web / Desktop.';
         fields.disabled = busy || (mobile && mode === 'follow');
+        fields.inert = fields.disabled;
+        fields.setAttribute('aria-disabled', String(fields.disabled));
+        editor.dataset.appearanceReadOnly = String(mobile && mode === 'follow');
       };
     };
     const mount = host => {
@@ -1219,7 +1223,7 @@
         find('[data-background-player-summary]').innerHTML = ['background', 'fill', 'edge'].map(field => { const color = effective.player[field]; return `<span><i style="background:${color}"></i>${({ background: 'Background', fill: 'Fill', edge: 'Edge' })[field]} <b>${color}</b></span>`; }).join('');
         syncAppearanceAlert(find('[data-background-warning]'), state.warnings.length ? `Low contrast: ${state.warnings.join('; ')}. Some text may be hard to read. You can still save these colors.` : '', 'warning');
         syncAppearanceAlert(find('[data-background-request-error]'), state.error);
-        footerFind('[data-background-reset]').disabled = disabled;
+        footerFind('[data-background-reset]').disabled = !state.canEdit;
         footerFind('[data-background-cancel]').disabled = state.loading || state.saving || !state.dirty;
         footerFind('[data-background-save]').disabled = !state.canSave; footerFind('[data-background-save]').textContent = state.saving ? 'Saving…' : 'Save';
         footerFind('[data-background-retry]').hidden = !state.loadFailed; footerFind('[data-background-retry]').disabled = state.loading || state.saving;
@@ -1278,7 +1282,7 @@
         find('[data-alert-preview-small-expanded]').innerHTML = AlertComponent.buildSmallAlertHtml({ severity: previewSeverity, message: smallMessage, className: 'appearance-alert-preview__small-expanded' });
         syncAppearanceAlert(find('[data-background-request-error]'), state.error);
         const findFooter = selector => footerHost.querySelector(selector);
-        findFooter('[data-background-reset]').disabled = disabled;
+        findFooter('[data-background-reset]').disabled = !state.canEdit;
         findFooter('[data-background-cancel]').disabled = state.loading || state.saving || !state.dirty;
         const saveButton = findFooter('[data-background-save]'); saveButton.disabled = !state.canSave; (saveButton.querySelector('.ui-button__content') || saveButton).textContent = state.saving ? 'Saving…' : 'Save';
         findFooter('[data-background-retry]').hidden = !state.loadFailed;
@@ -1323,7 +1327,7 @@
         preview.setAttribute('data-album-playing-row-animation', state.draft.album_playing_row_animation || 'enabled');
         syncAppearanceAlert(editor.querySelector('[data-background-request-error]'), state.error);
         const findFooter = selector => footerHost.querySelector(selector);
-        findFooter('[data-background-reset]').disabled = disabled;
+        findFooter('[data-background-reset]').disabled = !state.canEdit;
         findFooter('[data-background-cancel]').disabled = state.loading || state.saving || !state.dirty;
         const saveButton = findFooter('[data-background-save]'); saveButton.disabled = !state.canSave; (saveButton.querySelector('.ui-button__content') || saveButton).textContent = state.saving ? 'Saving…' : 'Save';
         findFooter('[data-background-retry]').hidden = !state.loadFailed;
@@ -1378,7 +1382,7 @@
         preview.style.setProperty('--navigation-tree-selection-accent-color', accent.color);
         preview.style.setProperty('--navigation-tree-selection-accent-width', accent.enabled ? '3px' : '0px');
         syncAppearanceAlert(find('[data-background-request-error]'), state.error);
-        footerFind('[data-background-reset]').disabled = disabled;
+        footerFind('[data-background-reset]').disabled = !state.canEdit;
         footerFind('[data-background-cancel]').disabled = state.loading || state.saving || !state.dirty;
         footerFind('[data-background-save]').disabled = !state.canSave;
         footerFind('[data-background-retry]').hidden = !state.loadFailed; footerFind('[data-background-retry]').disabled = state.loading || state.saving;
@@ -1536,7 +1540,7 @@
           hiddenWaveformErrors ? 'Select Waveform seekbar above to correct its color errors before saving. Your entered values are retained.' : '',
         ].filter(Boolean).join(' ');
         syncAppearanceAlert(find('[data-background-request-error]'), state.error);
-        footerFind('[data-background-reset]').disabled = disabled;
+        footerFind('[data-background-reset]').disabled = !state.canEdit;
         footerFind('[data-background-cancel]').disabled = state.loading || state.saving || !state.dirty;
         const saveButton = footerFind('[data-background-save]'); saveButton.disabled = !state.canSave; (saveButton.querySelector('.ui-button__content') || saveButton).textContent = state.saving ? 'Saving…' : 'Save';
         footerFind('[data-background-retry]').hidden = !state.loadFailed; footerFind('[data-background-retry]').disabled = state.loading || state.saving;

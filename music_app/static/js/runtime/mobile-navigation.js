@@ -54,11 +54,25 @@ function writeMobilePageHistory(mode = 'push') {
   else if (window.AlbumHavenSettingsNavigation?.instance?.pushLibraryHistory) window.AlbumHavenSettingsNavigation.instance.pushLibraryHistory(url.href, snapshot);
   else window.history.pushState(snapshot, '', url);
 }
+// Header Back follows the retained parent, while browser Forward keeps the child.
+function resolveMobileParentPosition(descriptor, previous, snapshot = {}) {
+  const restored = Array.isArray(snapshot.mobilePages)
+    ? snapshot.mobilePages.find(page => page.kind === descriptor.kind && page.albumKey === descriptor.albumKey) : null;
+  const position = previous?.parentPosition ?? restored?.parentPosition ?? snapshot.albumHavenNavigationPosition;
+  return Number.isSafeInteger(position) && position >= 0 ? position : null;
+}
+function mobileParentHistoryDelta(parentPosition, currentPosition) {
+  return Number.isSafeInteger(parentPosition) && parentPosition >= 0
+    && Number.isSafeInteger(currentPosition) && parentPosition < currentPosition
+    ? parentPosition - currentPosition : null;
+}
 function presentMobilePage(descriptor) {
   if (!usesMobilePageLayout() && !mobilePageState.pages.length) return false;
   const outlet = document.getElementById('mobile-page-outlet');
   const element = document.getElementById(MOBILE_PAGE_KINDS[descriptor.kind]);
   if (!outlet || !element) return false;
+  descriptor.parentPosition = resolveMobileParentPosition(descriptor,
+    mobilePageState.pages.find(page => page.kind === descriptor.kind), window.history.state || {});
   const active = mobilePageState.pages.at(-1);
   if (active?.kind === descriptor.kind && active.albumKey === descriptor.albumKey) {
     Object.assign(active, descriptor);
@@ -125,14 +139,21 @@ function cleanupMobilePage(descriptor) {
 }
 function dismissMobilePage(kind) {
   if (mobilePageState.cleaning || !mobilePageState.pages.some(page => page.kind === kind)) return false;
-  if (window.history.state?.mobilePages?.length) window.history.back();
-  else {
-    const descriptor = mobilePageState.pages.pop();
-    const focus = cleanupMobilePage(descriptor);
-    writeMobilePageHistory('replace');
-    syncMobilePageShell();
-    if (focus?.isConnected) focus.focus({ preventScroll: true });
+  const index = mobilePageState.pages.findIndex(page => page.kind === kind);
+  const delta = mobileParentHistoryDelta(mobilePageState.pages[index].parentPosition,
+    window.history.state?.albumHavenNavigationPosition);
+  if (delta !== null) {
+    // Popstate retires the surface only after the traversal commits. This also
+    // keeps Forward usable, instead of overwriting the album's history entry.
+    window.history.go(delta);
+    return true;
   }
+  const retired = mobilePageState.pages.splice(index).reverse();
+  let focus;
+  retired.forEach(descriptor => { focus = cleanupMobilePage(descriptor); });
+  writeMobilePageHistory('replace');
+  syncMobilePageShell();
+  if (focus?.isConnected) focus.focus({ preventScroll: true });
   return true;
 }
 function navigateMobileBack() {
@@ -205,6 +226,12 @@ function prepareMobileGallerySearch(onConfirmed, skipAppearanceGuard = false) {
   return true;
 }
 function setMobileSearchOpen(open) {
+  mobilePageState.searchSuggestionsReady = false;
+  if (typeof closeRecentSearchPopover === 'function') closeRecentSearchPopover();
+  if (open) {
+    const form = document.getElementById('search-form');
+    document.dispatchEvent(new CustomEvent('album-haven:surface-opening', { detail: { surface: form } }));
+  }
   mobilePageState.searchOpen = Boolean(open);
   const nav = document.getElementById('mobile-navigation');
   nav?.classList.toggle('is-search-open', Boolean(open));
@@ -248,7 +275,14 @@ function initMobileNavigation() {
   document.getElementById('mobile-page-outlet')?.addEventListener('scroll', scheduleMobileAlbumThumbnail, { passive: true });
   window.addEventListener('resize', scheduleMobileAlbumThumbnail, { passive: true });
   syncLayout();
+  initMobileGalleryPinch();
+  const searchResize = typeof ResizeObserver === 'function' ? new ResizeObserver(() => {
+    const active = galleryMainSurfaceController?.current?.();
+    if (active?.key === 'search-suggestions') positionSearchSuggestionsSurface(active.surface);
+  }) : null;
+  if (form) searchResize?.observe(form);
   window.matchMedia('(max-width: 900px)').addEventListener('change', () => {
+    if (galleryMainSurfaceController?.current?.()?.surface?.matches?.('.artist-info-overlay')) closeGalleryMainSurface(false);
     const saved = window.AlbumHavenDevicePreferences?.read('galleryDisplayPreferences', null);
     if (saved) {
       state.gallery.displayPreferences = saved;
@@ -275,12 +309,8 @@ function initMobileNavigation() {
     if (choice) {
       const columns = Number(choice.dataset.mobileGridColumns);
       if (![1, 2, 3].includes(columns)) return;
-      window.AlbumHavenDevicePreferences?.write('mobileGridColumns', columns);
       closeGalleryMainSurface(true);
-      syncMobileGalleryControls();
-      if (virtualGrid) { virtualGrid.lastKey = ''; virtualGrid.recalculate(); }
-      renderArtistGroups({ preserveScroll: true });
-      renderMobileHome();
+      setMobileGalleryColumns(columns);
     }
   });
   // Enforce presentation restrictions at all delegated mobile action entry points.
@@ -291,6 +321,14 @@ function initMobileNavigation() {
     }
   }, true);
   document.addEventListener('keydown', (event) => {
+    const dialog = document.querySelector('.is-mobile-artist-dialog[aria-modal="true"]');
+    if (dialog && event.key === 'Tab') {
+      const items = [...dialog.querySelectorAll('button:not([disabled]), a[href]')].filter(node => node.getClientRects().length);
+      const first = items[0], last = items.at(-1);
+      if (event.shiftKey && (document.activeElement === first || !dialog.contains(document.activeElement))) { event.preventDefault(); last?.focus(); }
+      else if (!event.shiftKey && (document.activeElement === last || !dialog.contains(document.activeElement))) { event.preventDefault(); first?.focus(); }
+      return;
+    }
     if (event.key === 'Escape' && mobilePageState.searchOpen && form?.contains(event.target)) {
       event.preventDefault(); setMobileSearchOpen(false); document.getElementById('mobile-search-button')?.focus(); return;
     }
@@ -331,15 +369,22 @@ function mobileUtilityTabAllowed(tab, actions = window.__ALBUM_HAVEN_UTILITY_ALL
   const section = Object.hasOwn(MOBILE_UTILITY_SECTIONS, tab) ? MOBILE_UTILITY_SECTIONS[tab] : null;
   return Boolean(section && (!section.action || actions[section.action] === true));
 }
+function mobileUtilitySubsectionAttribute(tab = state.utility.activeTab) {
+  return ({ appearance: 'data-utility-appearance-key', integrations: 'data-utility-integration-key', rules: 'data-utility-rule-key' })[tab] || '';
+}
 function mobileUtilitySubsections() {
   const list = getUtilityModalElements().list;
-  const appearance = state.utility.activeTab === 'appearance';
-  if (!appearance && state.utility.activeTab !== 'integrations') return [];
-  const attribute = appearance ? 'data-utility-appearance-key' : 'data-utility-integration-key';
-  const selected = appearance ? state.utility.appearanceKey : state.utility.selectedIntegrationKey;
+  const attribute = mobileUtilitySubsectionAttribute();
+  if (!attribute) return [];
+  const selected = state.utility.activeTab === 'appearance' ? state.utility.appearanceKey
+    : state.utility.activeTab === 'rules' ? state.utility.selectedRuleKey : state.utility.selectedIntegrationKey;
   return [...(list?.querySelectorAll(`[${attribute}]`) || [])].map(node => ({
-    key: node.getAttribute(attribute), label: node.getAttribute(attribute) === 'lastfm' ? 'Scrobbling' : node.textContent.trim(), selected: node.getAttribute(attribute) === selected,
-  })).filter(item => appearance || item.key !== 'library' || window.__ALBUM_HAVEN_UTILITY_ALLOWED_ACTIONS__?.['library.settings.read'] === true);
+    key: node.getAttribute(attribute),
+    label: node.getAttribute(attribute) === 'lastfm' ? 'Scrobbling'
+      : (node.querySelector('.utility-list-item-title, .navigation-tree__label') || node).textContent.trim(),
+    selected: node.getAttribute(attribute) === selected,
+  })).filter(item => state.utility.activeTab !== 'integrations' || item.key !== 'library'
+    || window.__ALBUM_HAVEN_UTILITY_ALLOWED_ACTIONS__?.['library.settings.read'] === true);
 }
 function syncMobileUtilityNavigation() {
   const list = document.querySelector('[data-mobile-settings-list]');
@@ -356,11 +401,14 @@ function syncMobileUtilityNavigation() {
   const choices = mobileUtilitySubsections();
   const trigger = document.getElementById('mobile-settings-section-button');
   const menu = document.getElementById('mobile-settings-subsection-menu');
-  trigger.hidden = !choices.length;
-  trigger.querySelector('[data-mobile-subsection-label]').textContent = choices.find(item => item.selected)?.label || 'Sections';
+  trigger.hidden = !choices.length && state.utility.activeTab !== 'rules';
+  trigger.querySelector('[data-mobile-subsection-label]').textContent = choices.find(item => item.selected)?.label || (state.utility.activeTab === 'rules' ? 'Rules' : 'Sections');
   const menuSignature = JSON.stringify(choices);
   if (menu.dataset.renderKey !== menuSignature) {
     menu.innerHTML = choices.map(item => `<button class="gallery-menu-action" type="button" data-mobile-subsection="${escapeHtml(item.key)}" aria-pressed="${item.selected}">${escapeHtml(item.label)}</button>`).join('');
+    if (state.utility.activeTab === 'rules') {
+      menu.innerHTML = choices.length ? choices.map(item => window.NavigationTree.renderItem({ key: item.key, label: item.label, action: true, variant: 'panel', selected: item.selected, attributes: { 'data-mobile-subsection': item.key } })).join('') : '<p class="utility-empty-state compact">No rules found.</p>';
+    }
     menu.dataset.renderKey = menuSignature;
   }
 }
@@ -388,7 +436,7 @@ function handleMobileSettingsClick(event) {
     event.preventDefault();
     if (mobileUtilitySubsections().some(item => item.key === choice.dataset.mobileSubsection)) {
       closeGalleryMainSurface(false);
-      const attribute = state.utility.activeTab === 'appearance' ? 'data-utility-appearance-key' : 'data-utility-integration-key';
+      const attribute = mobileUtilitySubsectionAttribute();
       [...getUtilityModalElements().list.querySelectorAll(`[${attribute}]`)].find(node => node.getAttribute(attribute) === choice.dataset.mobileSubsection)?.click();
     }
     return true;
@@ -445,4 +493,80 @@ function scheduleMobileAlbumThumbnail() {
     mobileAlbumThumbnailFrame = 0;
     syncMobileAlbumHeader();
   });
+}
+
+function returnMobilePagesToGallery() {
+  while (mobilePageState.pages.length) cleanupMobilePage(mobilePageState.pages.pop());
+  syncMobilePageShell();
+  writeMobilePageHistory('replace');
+  syncMobileHome();
+}
+if (typeof window !== 'undefined') window.AlbumHavenReturnToGallery = returnMobilePagesToGallery;
+
+const mobileArtistInfoInert = new Map();
+function syncMobileArtistInfoDialog(overlay, open) {
+  const modal = Boolean(open && usesMobilePageLayout());
+  overlay.classList.toggle('is-mobile-artist-dialog', modal);
+  const backdrop = document.querySelector('.mobile-artist-info-backdrop');
+  if (backdrop) backdrop.hidden = !modal;
+  if (modal) {
+    overlay.setAttribute('aria-modal', 'true');
+    for (const node of document.querySelectorAll('#app-shell, [data-settings-host], .global-player')) {
+      if (!mobileArtistInfoInert.has(node)) mobileArtistInfoInert.set(node, node.inert);
+      node.inert = true;
+    }
+  } else {
+    overlay.removeAttribute('aria-modal');
+    for (const [node, inert] of mobileArtistInfoInert) node.inert = inert;
+    mobileArtistInfoInert.clear();
+  }
+}
+
+// A deliberate pinch changes density in stable 1/2/3-column steps. One finger
+// remains native scrolling; browser magnification remains available outside Gallery.
+function resolvePinchColumns(columns, scale) {
+  const start = [1, 2, 3].includes(columns) ? columns : 2;
+  if (!Number.isFinite(scale) || scale <= 0) return start;
+  const steps = scale >= 1 ? Math.floor(Math.log(scale) / Math.log(1.28) + 1e-9)
+    : -Math.floor(Math.log(1 / scale) / Math.log(1.28) + 1e-9);
+  return Math.max(1, Math.min(3, start - steps));
+}
+function setMobileGalleryColumns(columns) {
+  if (![1, 2, 3].includes(columns) || !usesMobilePageLayout()) return false;
+  if (window.AlbumHavenDevicePreferences?.read('mobileGridColumns', 2) === columns) return false;
+  const anchor = typeof virtualGrid !== 'undefined' ? virtualGrid?.captureScrollAnchor?.() : null;
+  window.AlbumHavenDevicePreferences?.write('mobileGridColumns', columns);
+  syncMobileGalleryControls();
+  if (typeof virtualGrid !== 'undefined' && virtualGrid) virtualGrid.lastKey = '';
+  renderArtistGroups({ preserveScroll: true });
+  if (anchor) virtualGrid.restoreScrollAnchor(anchor);
+  return true;
+}
+function initMobileGalleryPinch() {
+  const gallery = document.getElementById('albums-scroll');
+  if (!gallery || gallery.dataset.pinchBound === 'true') return;
+  gallery.dataset.pinchBound = 'true';
+  let gesture = null, suppressClickUntil = 0;
+  const distance = touches => Math.hypot(touches[0].clientX - touches[1].clientX, touches[0].clientY - touches[1].clientY);
+  gallery.addEventListener('touchstart', event => {
+    if (!usesMobilePageLayout() || ensureGalleryMainState().view === 'list') return;
+    if (event.touches.length !== 2) { gesture = null; return; }
+    const span = distance(event.touches);
+    if (span < 24) return;
+    gesture = { distance: span, columns: window.AlbumHavenDevicePreferences?.read('mobileGridColumns', 2) || 2 };
+    if (event.cancelable) event.preventDefault();
+    closeGalleryMainSurface(false);
+  }, { passive: false });
+  gallery.addEventListener('touchmove', event => {
+    if (!gesture || event.touches.length !== 2) return;
+    if (event.cancelable) event.preventDefault();
+    suppressClickUntil = Date.now() + 450;
+    setMobileGalleryColumns(resolvePinchColumns(gesture.columns, distance(event.touches) / gesture.distance));
+  }, { passive: false });
+  const finish = () => { if (gesture) suppressClickUntil = Date.now() + 450; gesture = null; };
+  gallery.addEventListener('touchend', finish, { passive: true });
+  gallery.addEventListener('touchcancel', finish, { passive: true });
+  gallery.addEventListener('click', event => {
+    if (Date.now() < suppressClickUntil) { event.preventDefault(); event.stopImmediatePropagation(); }
+  }, true);
 }

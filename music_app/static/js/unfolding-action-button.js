@@ -4,7 +4,7 @@
   function mount(root, options = {}) {
     if (instances.has(root)) {
       const instance = instances.get(root);
-      instance.configure(options);
+      if (arguments.length > 1) instance.configure(options);
       return instance;
     }
     const buttons = Array.from(root.querySelectorAll('button'));
@@ -20,11 +20,14 @@
     });
     function sync() {
       root.classList.toggle('is-open', expanded);
+      root.dataset.unfoldDirection = config.direction === 'down' ? 'down' : 'left';
       const visible = buttons.filter(button => !button.hidden);
       if (selected.hidden) selected = visible[0] || selected;
       root.style.setProperty('--unfolding-action-count', visible.length);
+      let slot = 1;
       buttons.forEach(button => {
         const active = button === selected;
+        button.style?.setProperty?.('--unfolding-action-index', String(active ? 0 : button.hidden ? 0 : slot++));
         button.classList.toggle('is-active', active);
         button.setAttribute('aria-pressed', String(active));
         button.setAttribute('aria-expanded', String(expanded));
@@ -33,11 +36,14 @@
       });
     }
     function close(returnFocus = false) {
+      const wasExpanded = expanded;
       expanded = false;
       sync();
+      if (wasExpanded) config.onClose?.();
       if (returnFocus) selected.focus();
     }
     function open(keyboard = false) {
+      config.onOpen?.();
       expanded = true;
       sync();
       if (keyboard) (buttons.find(button => button !== selected && !button.disabled && !button.hidden) || selected).focus();
@@ -56,13 +62,15 @@
       if (event.key === 'Escape' && expanded) {
         event.preventDefault(); event.stopPropagation(); close(true); return;
       }
-      if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
+      const forward = config.direction === 'down' ? 'ArrowDown' : 'ArrowRight';
+      const backward = config.direction === 'down' ? 'ArrowUp' : 'ArrowLeft';
+      if (![backward, forward, 'Home', 'End'].includes(event.key)) return;
       event.preventDefault();
       if (!expanded) open();
       const enabled = buttons.filter(button => !button.disabled && !button.hidden);
       const index = enabled.indexOf(root.ownerDocument.activeElement);
       const next = event.key === 'Home' ? 0 : event.key === 'End' ? enabled.length - 1
-        : (index + (event.key === 'ArrowRight' ? 1 : -1) + enabled.length) % enabled.length;
+        : (index + (event.key === forward ? 1 : -1) + enabled.length) % enabled.length;
       enabled[next]?.focus();
     }
     function outside(event) { if (!root.contains(event.target)) close(); }

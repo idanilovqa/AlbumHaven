@@ -731,7 +731,9 @@ function renderRecentSearchPopover() {
   const { input, popover } = getRecentSearchElements();
   if (!ui || !input || !popover) return;
   const queries = readRecentSearchQueries();
-  const open = Boolean(ui.recentSearchPopoverOpen && queries.length);
+  const mobileReady = typeof mobilePageState === 'undefined' || typeof usesMobilePageLayout !== 'function' || !usesMobilePageLayout()
+    || (mobilePageState.searchOpen && mobilePageState.searchSuggestionsReady && String(getRecentSearchElements().input?.value || '').trim());
+  const open = Boolean(ui.recentSearchPopoverOpen && queries.length && mobileReady);
   if (ui.recentSearchActiveIndex >= queries.length) ui.recentSearchActiveIndex = -1;
   popover.innerHTML = queries.map((query, index) => {
     const selected = open && index === ui.recentSearchActiveIndex;
@@ -752,6 +754,8 @@ function renderRecentSearchPopover() {
 function openRecentSearchPopover() {
   const ui = ensureRecentSearchState();
   if (!ui || !readRecentSearchQueries().length) return false;
+  if (typeof usesMobilePageLayout === 'function' && usesMobilePageLayout()
+      && (!mobilePageState.searchOpen || !mobilePageState.searchSuggestionsReady || !String(getRecentSearchElements().input?.value || '').trim())) return false;
   ui.recentSearchPopoverOpen = true;
   ui.recentSearchActiveIndex = -1;
   renderRecentSearchPopover();
@@ -772,7 +776,7 @@ function closeRecentSearchPopover() {
   ui.recentSearchActiveIndex = -1;
   renderRecentSearchPopover();
   if (typeof galleryMainSurfaceController !== 'undefined' && galleryMainSurfaceController?.isOpen?.('search-suggestions')) {
-    galleryMainSurfaceController.close(false);
+    closeGalleryMainSurface(false);
   }
 }
 
@@ -820,7 +824,9 @@ function handleGalleryBootstrapSearchKeyDown(event) {
   const ui = ensureRecentSearchState();
   if (!ui) return false;
   const queries = readRecentSearchQueries();
-  const open = Boolean(ui.recentSearchPopoverOpen && queries.length);
+  const mobileReady = typeof mobilePageState === 'undefined' || typeof usesMobilePageLayout !== 'function' || !usesMobilePageLayout()
+    || (mobilePageState.searchOpen && mobilePageState.searchSuggestionsReady && String(getRecentSearchElements().input?.value || '').trim());
+  const open = Boolean(ui.recentSearchPopoverOpen && queries.length && mobileReady);
   if (event.key === 'Tab') {
     closeRecentSearchPopover();
     return false;
@@ -994,6 +1000,7 @@ function handleGalleryBootstrapSearchSubmit(event) {
 }
 
 function handleGalleryBootstrapSearchInput(nextQuery) {
+  if (typeof mobilePageState !== 'undefined') mobilePageState.searchSuggestionsReady = Boolean(String(nextQuery || '').trim());
   clearPendingSelectedArtistReconcile();
   const prewarmSearchGeneration = beginAlbumDetailPrewarmSearchSuspension();
   beginSearchWaveformPeakLoadSuspension();

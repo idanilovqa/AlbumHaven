@@ -987,50 +987,51 @@ function attachSharedPlayer() {
       trackRow.addEventListener('dblclick', handleAlbumTrackRowDoubleClick);
       trackRow.addEventListener('click', handleAlbumTrackRowClick);
     }
-    btn.addEventListener('click', (event) => {
-      const focusTimeline = event?.isTrusted !== false;
-      const src = btn.getAttribute('data-src');
-      if (!src) return;
-      if (typeof triggerAlbumTrackPlayActivation === 'function' && btn.classList?.contains('album-track-table__play')) {
-        triggerAlbumTrackPlayActivation(btn);
-      }
-      const trackPath = btn.getAttribute('data-track-path') || decodeURIComponent((src.split('path=')[1] || '').split('&')[0] || '');
-      const isCurrentTrack = String(state.player.current?.path || '') === String(trackPath || '');
-      const playback = getPlayerPlaybackSnapshot();
-      const isLoadedCurrentTrack = isCurrentTrack && String(playback.src || '') === String(src);
-      if (isLoadedCurrentTrack) {
-        togglePlayerPlayback({ focusTimelineOnResume: focusTimeline });
-        updatePlayerUi();
-        return;
-      }
-      const currentAlbum = !document.getElementById('track-modal')?.hidden
-        ? state.modalReleases[state.modalReleaseIndex] || null
-        : null;
-      const playbackStart = playTrackFromPayload({
-        src,
-        path: trackPath,
-        title: btn.getAttribute('data-track-title') || 'Track',
-        artist: btn.getAttribute('data-track-artist') || '',
-        albumArtist: btn.getAttribute('data-track-album-artist') || '',
-        album: btn.getAttribute('data-track-album') || '',
-        coverPath: btn.getAttribute('data-track-cover') || '',
-        durationSeconds: Number(btn.getAttribute('data-track-duration-seconds')) || 0,
-      });
-      if (currentAlbum) {
-        setAlbumPlaybackQueue(currentAlbum, trackPath);
-      } else {
-        state.player.playbackQueue = null;
-      }
-      if (typeof observeStreamingFacadeCallback === 'function') {
-        observeStreamingFacadeCallback(playbackStart, 'track-selection-start-error');
-      } else {
-        void playbackStart.catch((error) => {
-          console.warn('[AlbumHaven][Playback] Track selection failed.', error);
-        });
-      }
-      if (focusTimeline) focusPlayerTimeline();
-    });
+    btn.addEventListener('click', event => activateSharedTrackButton(btn, { focusTimeline: event?.isTrusted !== false }));
   });
+}
+
+function activateSharedTrackButton(btn, { restart = false, focusTimeline = false } = {}) {
+  const src = btn.getAttribute('data-src');
+  if (!src) return;
+  if (typeof triggerAlbumTrackPlayActivation === 'function' && btn.classList?.contains('album-track-table__play')) {
+    triggerAlbumTrackPlayActivation(btn);
+  }
+  const trackPath = btn.getAttribute('data-track-path') || decodeURIComponent((src.split('path=')[1] || '').split('&')[0] || '');
+  const isCurrentTrack = String(state.player.current?.path || '') === String(trackPath || '');
+  const playback = getPlayerPlaybackSnapshot();
+  const isLoadedCurrentTrack = isCurrentTrack && String(playback.src || '') === String(src);
+  if (isLoadedCurrentTrack && !restart) {
+    togglePlayerPlayback({ focusTimelineOnResume: focusTimeline });
+    updatePlayerUi();
+    return;
+  }
+  const currentAlbum = !document.getElementById('track-modal')?.hidden
+    ? state.modalReleases[state.modalReleaseIndex] || null
+    : null;
+  const playbackStart = playTrackFromPayload({
+    src,
+    path: trackPath,
+    title: btn.getAttribute('data-track-title') || 'Track',
+    artist: btn.getAttribute('data-track-artist') || '',
+    albumArtist: btn.getAttribute('data-track-album-artist') || '',
+    album: btn.getAttribute('data-track-album') || '',
+    coverPath: btn.getAttribute('data-track-cover') || '',
+    durationSeconds: Number(btn.getAttribute('data-track-duration-seconds')) || 0,
+  });
+  if (currentAlbum) {
+    setAlbumPlaybackQueue(currentAlbum, trackPath);
+  } else {
+    state.player.playbackQueue = null;
+  }
+  if (typeof observeStreamingFacadeCallback === 'function') {
+    observeStreamingFacadeCallback(playbackStart, 'track-selection-start-error');
+  } else {
+    void playbackStart.catch((error) => {
+      console.warn('[AlbumHaven][Playback] Track selection failed.', error);
+    });
+  }
+  if (focusTimeline) focusPlayerTimeline();
 }
 
 function claimGlobalPlayerSpaceOwnership() {

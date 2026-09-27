@@ -107,26 +107,30 @@ function triggerAlbumTrackPlayActivation(button) {
   }, { once: true });
 }
 
+const albumTrackRowTaps = new WeakMap();
 function handleAlbumTrackRowClick(event) {
   if (typeof usesMobilePageLayout !== 'function' || !usesMobilePageLayout()) return;
-  if (event.detail > 1) return;
-  activateAlbumTrackRow(event);
+  if (event.target.closest?.('button, a, input, textarea, select, [contenteditable=true]')) return;
+  const now = Date.now(), last = albumTrackRowTaps.get(event.currentTarget);
+  const doubleTap = event.detail > 1 || (last !== undefined && now - last <= 320);
+  if (doubleTap) albumTrackRowTaps.delete(event.currentTarget);
+  else albumTrackRowTaps.set(event.currentTarget, now);
+  activateAlbumTrackRow(event, { restart: doubleTap });
 }
-
 function handleAlbumTrackRowDoubleClick(event) {
+  // Touch click timing above also supports browsers that do not emit dblclick.
   if (typeof usesMobilePageLayout === 'function' && usesMobilePageLayout()) return;
   activateAlbumTrackRow(event);
 }
-
-function activateAlbumTrackRow(event) {
+function activateAlbumTrackRow(event, { restart = false } = {}) {
   if (event.target.closest?.('button, a, input, textarea, select, [contenteditable=true]')) return;
   const row = event.currentTarget;
   event.preventDefault();
-  // Double-click is playback; ordinary drag selection remains native and copyable.
   const selection = row.ownerDocument.getSelection();
-  if (selection && row.contains(selection.anchorNode) && row.contains(selection.focusNode)) {
-    selection.removeAllRanges();
-  }
-  if (row.dataset.trackPlaying === 'true') return;
-  row.querySelector('.play-track-button')?.click();
+  if (selection && row.contains(selection.anchorNode) && row.contains(selection.focusNode)) selection.removeAllRanges();
+  const mobile = typeof usesMobilePageLayout === 'function' && usesMobilePageLayout();
+  if (!mobile && row.dataset.trackPlaying === 'true') return;
+  const button = row.querySelector('.play-track-button');
+  if (restart && button) activateSharedTrackButton(button, { restart: true });
+  else button?.click();
 }

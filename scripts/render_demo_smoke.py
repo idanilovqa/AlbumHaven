@@ -55,7 +55,13 @@ for _ in range(2):
         loops = connection.execute("""select id,loop_key,loop_private_path,start_seconds,end_seconds
             from app.saved_loops where account_id=%s and loop_key like 'mobile-demo-loop-%%'
             order by loop_key""", (account_id,)).fetchall()
-        assert len(loops) == 7, len(loops)
+        assert len(loops) == 8, len(loops)
+        # The owner requested four clips together in one song, not four separate pages.
+        four_clip_song = connection.execute("""select count(distinct track_id), count(*)
+            from app.saved_loops where account_id=%s and loop_key = any(%s)""",
+            (account_id, ['mobile-demo-loop-opening-motif', 'mobile-demo-loop-rhythm-study',
+                          'mobile-demo-loop-transition', 'mobile-demo-loop-bridge-study'])).fetchone()
+        assert four_clip_song == (1, 4), four_clip_song
         for row in loops:
             media = Path(row[2])
             assert media.is_relative_to(render_demo.DEMO_ROOT / "app-data")
@@ -85,4 +91,4 @@ with TestClient(create_asgi_app(), base_url=settings["ALBUM_HAVEN_PUBLIC_BASE_UR
         assert clip.status_code == 200, clip.status_code
         assert clip.headers.get("content-type", "").startswith("audio/")
         assert len(clip.content) > 0
-print("PASS: original 8-album library upgraded to 39 albums/130 tracks, sixteen-track album, family projection, repeated startup, preserved IDs/credentials/history/preferences, restricted DB role, real login, authenticated routes and seven retained playable demo loops.")
+print("PASS: original 8-album library upgraded to 39 albums/130 tracks, sixteen-track album, family projection, repeated startup, preserved IDs/credentials/history/preferences, restricted DB role, real login, authenticated routes and eight retained playable demo loops including four in one song.")

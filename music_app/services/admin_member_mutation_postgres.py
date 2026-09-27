@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from music_app.services.postgres_connections import pooled_connection as _connect
+
 from collections.abc import Callable, Iterable, Mapping
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
@@ -16,12 +18,6 @@ from music_app.services.capability_assignments import (
     store_assignment,
 )
 
-try:  # pragma: no cover - exercised with the optional runtime driver.
-    import psycopg
-    from psycopg.rows import dict_row
-except ImportError:  # pragma: no cover
-    psycopg = None
-    dict_row = None
 
 
 _RECENT_AUTH_WINDOW = timedelta(minutes=10)
@@ -40,8 +36,12 @@ class DestructiveConfirmationRequired(ValueError):
 def lock_current_actor_session(connection: Any, *, actor_account_id: int,
                                actor_session_id: object,
                                clock: Callable[[], datetime],
-                               require_recent_auth: bool = True) -> datetime:
-    """Revalidate the admitted session after its account authority lock."""
+                               require_recent_auth: bool = False) -> datetime:
+    """Revalidate the live session, not time elapsed since the last password entry.
+
+    Normal Admin actions use sliding idle/absolute expiry. Explicit step-up is
+    retained only for callers that deliberately request it; the Admin UI does not.
+    """
     try:
         session_id = _positive_id(actor_session_id)
     except ValueError:
@@ -104,7 +104,7 @@ class PostgresAdminMemberMutationService:
         request_ref: str,
         role_keys: object = None,
         access_revision: object = None,
-    ) -> None:
+    ) -> dict[str, object]:
         actor_id = _positive_id(actor_account_id)
         target_id = _positive_id(target_account_id)
         current_library_id = _positive_id(library_id)
@@ -133,7 +133,9 @@ class PostgresAdminMemberMutationService:
                         raise PermissionError("The bootstrap owner is protected.")
                     # Owner capabilities are inherited; saving their displayed
                     # values must not replace the owner membership or grants.
-                    return
+                    current_keys = tuple(locked.get("current_capability_keys") or ())
+                    current = read_assignment(locked.get("access_assignment"), current_keys)
+                    return {"access_revision": assignment_revision(current, current_keys, active=True, access=True)}
                 current_keys = tuple(locked.get("current_capability_keys") or ())
                 previous = read_assignment(locked.get("access_assignment"), current_keys)
                 if assignment is not None:
@@ -263,6 +265,9 @@ class PostgresAdminMemberMutationService:
                         len(capabilities) if access else 0,
                     ),
                 )
+                persisted_keys = tuple(sorted(set(capabilities) | (set(current_keys) - ASSIGNABLE_CAPABILITY_KEYS))) if access else ()
+                persisted_assignment = assignment if assignment is not None and access else read_assignment(None, persisted_keys)
+                return {"access_revision": assignment_revision(persisted_assignment, persisted_keys, active=active, access=access)}
         except (PermissionError, ValueError):
             raise
         except Exception:
@@ -323,7 +328,7 @@ class PostgresAdminMemberMutationService:
     def _recent_now(self, authenticated_at: object) -> datetime:
         now = _aware_utc(self._clock())
         authenticated = _aware_utc(authenticated_at)
-        if authenticated > now + _FUTURE_SKEW or now - authenticated > _RECENT_AUTH_WINDOW:
+        if authenticated > now + _FUTURE_SKEW:
             raise RecentAuthenticationRequired("Recent authentication is required.")
         return now
 
@@ -449,9 +454,3 @@ def _aware_utc(value: object) -> datetime:
     if not isinstance(value, datetime) or value.tzinfo is None:
         raise RecentAuthenticationRequired("Recent authentication is required.")
     return value.astimezone(timezone.utc)
-
-
-def _connect(database_url: str):
-    if psycopg is None:
-        raise RuntimeError("psycopg is required for account management.")
-    return psycopg.connect(database_url, row_factory=dict_row)

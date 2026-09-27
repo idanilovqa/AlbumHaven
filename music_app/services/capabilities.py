@@ -42,13 +42,20 @@ CAPABILITY_ACTIONS = MappingProxyType({
     "practice": frozenset({
         "library.loops.read", "library.loops.media.read", "library.loops.preview",
     }),
-    "repair": frozenset({"library.problems.read", "library.files.repair"}),
-    "rules": frozenset({
+    "repair": frozenset({
+        "library.problems.read", "library.files.repair",
         "library.rules.read", "library.rules.manage", "library.versions.manage",
+        "library.logs.read", "library.logs.export",
     }),
     "move": frozenset({"library.files.move"}),
 })
 CAPABILITY_KEYS = frozenset(f"capability.{key}" for key in CAPABILITY_ACTIONS)
+# Stored pre-merge Rules grants still work; new assignments use one canonical key.
+CAPABILITY_ALIASES = MappingProxyType({"capability.rules": "capability.repair"})
+
+
+def normalize_capability_keys(keys: Iterable[str]) -> tuple[str, ...]:
+    return tuple(sorted({CAPABILITY_ALIASES.get(key, key) for key in keys}))
 
 # Owner includes every existing library feature, but account administration is
 # separately assignable. These finite extras await a more granular user-facing
@@ -115,11 +122,15 @@ def grant_keys_for_action(action: str) -> frozenset[str]:
         keys.add("library.browse.read")
     if action == "library.tasks.read":
         keys.update({"capability.edit", "capability.repair", "capability.move"})
+    if action in CAPABILITY_ALIASES:
+        keys.add(CAPABILITY_ALIASES[action])
+    keys.update(old for old, canonical in CAPABILITY_ALIASES.items() if canonical in keys)
     return frozenset(keys)
 
 
 def action_capabilities(action: str) -> frozenset[str]:
     """Classify actions for client ceilings, including direct coarse-key queries."""
+    action = CAPABILITY_ALIASES.get(action, action)
     names = {name for name, actions in CAPABILITY_ACTIONS.items() if action in actions}
     if action == "system.admin":
         names.add("admin")

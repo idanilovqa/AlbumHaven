@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from music_app.services.postgres_connections import pooled_connection as _connect
+
 from collections.abc import Callable, Mapping
 from datetime import datetime, timezone
 from typing import Any
@@ -14,12 +16,6 @@ from music_app.services.admin_member_mutation_postgres import lock_current_actor
 from music_app.services.auth_invitation_models import InvitationDelivery
 from music_app.services.auth_tokens import IssuedOpaqueToken
 
-try:  # pragma: no cover - exercised with the optional runtime driver.
-    import psycopg
-    from psycopg.rows import dict_row
-except ImportError:  # pragma: no cover
-    psycopg = None
-    dict_row = None
 
 
 _IDENTITY_CONSTRAINTS = frozenset(
@@ -102,7 +98,7 @@ class PostgresAdminAccountRepository:
                     lock_current_actor_session(
                         connection, actor_account_id=actor_account_id,
                         actor_session_id=actor_session_id, clock=self._clock,
-                        require_recent_auth=bool(set(capability_keys) & CAPABILITY_KEYS),
+                        require_recent_auth=False,
                     )
                     account_id = _returned_id(
                         connection.execute(
@@ -227,9 +223,3 @@ def _returned_id(rows: object) -> int:
     row = rows[0]
     value = row.get("id") if isinstance(row, Mapping) else None
     return _positive_id(value)
-
-
-def _connect(database_url: str):
-    if psycopg is None:
-        raise RuntimeError("psycopg is required for account creation.")
-    return psycopg.connect(database_url, row_factory=dict_row)

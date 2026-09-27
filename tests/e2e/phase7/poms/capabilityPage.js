@@ -8,6 +8,9 @@ export class CapabilityPage {
     this.settings = new SettingsModalAppBarActions(this.menu);
     this.policy = page.locator('#capability-bootstrap');
     this.player = page.locator('.global-player');
+    this.scanIndicator = page.locator('#scan-indicator');
+    this.coverLookup = page.locator('#cover-lookup-drawer-button');
+    this.shell = page.locator('#app-shell');
     this.notice = page.locator('.capability-section-denied');
   }
 
@@ -17,6 +20,12 @@ export class CapabilityPage {
 
   async allowedActions() {
     return JSON.parse(await this.policy.textContent()).allowed_actions;
+  }
+
+  async reservedPlayerHeight() {
+    // parity-check: allow-read-only-measurement-evaluate -- inspect actual shell allocation
+    return this.page.locator('html').evaluate(element =>
+      parseFloat(getComputedStyle(element).getPropertyValue('--player-height')));
   }
 
   async openSettings() {

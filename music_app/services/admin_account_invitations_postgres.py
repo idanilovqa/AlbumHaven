@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from music_app.services.postgres_connections import pooled_connection as _connect
+
 from collections.abc import Callable, Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -31,16 +33,9 @@ from music_app.services.auth_invitation_models import (
 from music_app.services.auth_tokens import issue_opaque_token
 from music_app.services.mail_config import build_public_url
 
-try:  # pragma: no cover - exercised with the optional runtime driver.
-    import psycopg
-    from psycopg.rows import dict_row
-except ImportError:  # pragma: no cover
-    psycopg = None
-    dict_row = None
 
 
 _REQUEST_REFERENCE = re.compile(r"[A-Za-z0-9._:-]{1,128}")
-_RECENT_AUTH_WINDOW = timedelta(minutes=10)
 _FUTURE_SKEW = timedelta(minutes=5)
 
 
@@ -168,7 +163,7 @@ class PostgresAdminAccountInvitationService:
             raise ValueError("Invitation delivery choice is invalid.")
         now = _aware_utc(self._clock())
         authenticated = _aware_utc(actor_authenticated_at)
-        if authenticated > now + _FUTURE_SKEW or now - authenticated > _RECENT_AUTH_WINDOW:
+        if authenticated > now + _FUTURE_SKEW:
             raise RecentAuthenticationRequired("Recent authentication is required.")
         actor_id = _positive_id(actor_account_id)
         current_library_id = _positive_id(library_id)
@@ -403,9 +398,3 @@ def _single_id(rows: object, field: str) -> int:
         return _positive_id(value)
     except ValueError:
         raise RuntimeError(f"Managed account {field} is invalid.") from None
-
-
-def _connect(database_url: str):
-    if psycopg is None:
-        raise RuntimeError("psycopg is required for managed account invitations.")
-    return psycopg.connect(database_url, row_factory=dict_row)

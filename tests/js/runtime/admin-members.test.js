@@ -31,7 +31,7 @@ function element(initial = {}) {
     select() { this.selected = true; },
     contains(target) { return target === this || (this.children || []).includes(target); },
     async click() {
-      return this.listeners.get('click')?.({ currentTarget: this, target: this });
+      return this.listeners.get('click')?.({ currentTarget: this, target: this, detail: 0, preventDefault() {}, stopPropagation() {} });
     },
   };
 }
@@ -112,7 +112,7 @@ function loadRuntime({ mode = 'create', active = true, initialActive = true, lib
       location: { assign: (value) => { assigned = value; } },
     },
     document: {
-      querySelectorAll: () => [toggle],
+      querySelectorAll: selector => selector === '[data-password-toggle]' ? [toggle] : [],
       getElementById: (id) => (id === 'admin-new-password' ? password : null),
       querySelector: (selector) => {
         if (selector === '[data-admin-account-form]') return form;
@@ -122,6 +122,7 @@ function loadRuntime({ mode = 'create', active = true, initialActive = true, lib
     },
   });
   form.requestSubmit = () => { form.submission = form.listeners.get('submit')({ preventDefault() {} }); };
+  vm.runInContext(fs.readFileSync(path.join(path.dirname(sourcePath), 'runtime/account-menu.js'), 'utf8'), context);
   vm.runInContext(fs.readFileSync(sourcePath, 'utf8'), context, { filename: sourcePath });
   if (navigate) context.window.AlbumHavenMountAdmin(context.document, { navigate });
   return {
@@ -150,6 +151,10 @@ function loadRosterRuntime({
     children: [copyInvite, sendInvite, edit],
   });
   menu.querySelector = (selector) => (selector === '[role="menuitem"]' ? copyInvite : null);
+  menu.querySelectorAll = () => [copyInvite, sendInvite, edit];
+  const menuComponent = element({ children: [menuButton, menu, copyInvite, sendInvite, edit] });
+  menuComponent.querySelector = selector => selector === '[data-account-menu-trigger]' ? menuButton : menu;
+
   const status = alertElement();
   const error = alertElement();
   const fallbackInput = element({ value: '', readOnly: true, focused: false, selected: false });
@@ -226,7 +231,7 @@ function loadRosterRuntime({
       addEventListener(name, callback) { documentListeners.set(name, callback); },
       querySelectorAll(selector) {
         if (selector === '[data-password-toggle]') return [];
-        if (selector === '[data-member-menu-trigger]') return [menuButton];
+        if (selector === '.member-actions[data-account-menu-component]') return [menuComponent];
         if (selector === '[data-copy-invitation]') return [copyInvite];
         if (selector === '[data-send-invitation]') return [sendInvite, sendOtherInvite];
         if (selector === '[data-member-menu]:not([hidden])') {
@@ -245,10 +250,11 @@ function loadRosterRuntime({
       getElementById() { return null; },
     },
   });
+  vm.runInContext(fs.readFileSync(path.join(path.dirname(sourcePath), 'runtime/account-menu.js'), 'utf8'), context);
   vm.runInContext(fs.readFileSync(sourcePath, 'utf8'), context, { filename: sourcePath });
   const cleanup = context.window.AlbumHavenMountAdmin(context.document);
   return {
-    row: { menuButton, menu, copyInvite, sendInvite, sendOtherInvite },
+    row: { menuButton, menu, menuComponent, copyInvite, sendInvite, sendOtherInvite },
     status,
     error,
     fallback: { panel: fallback, input: fallbackInput, manual: fallbackManual, dismiss: fallbackDismiss },
@@ -261,44 +267,30 @@ function loadRosterRuntime({
   };
 }
 
-test('detail Enter uses Continue and does not submit another stale account mutation', async () => {
-  let patches = 0;
-  const runtime = loadRuntime({ mode: 'edit', request: async (_url, options) => {
-    if (options.method === 'PATCH' && ++patches === 1) {
-      return { ok: false, status: 409, json: async () => ({ detail: 'Recent authentication is required.' }) };
-    }
-    return { ok: true, json: async () => ({}) };
-  } });
+test('saving an active account stays in its editor without requesting a password', async () => {
+  const runtime = loadRuntime({ mode: 'edit' });
   runtime.form.requestSubmit();
   await runtime.form.submission;
-  assert.equal(runtime.reauth.panel.hidden, false);
-  runtime.reauth.password.value = 'owner password';
-  let prevented = false;
-  runtime.reauth.password.listeners.get('keydown')({ key: 'Enter', preventDefault() { prevented = true; } });
-  await new Promise(setImmediate);
-  assert.equal(prevented, true);
-  assert.deepEqual(runtime.fetches.map(([url, options]) => [url, options.method]), [
-    ['/admin/accounts/41', 'PATCH'], ['/admin/reauthenticate', 'POST'], ['/admin/accounts/41', 'PATCH'],
-  ]);
-  assert.equal(runtime.reauth.password.value, '');
+  assert.equal(runtime.fetches.length, 1);
+  assert.equal(runtime.fetches[0][0], '/admin/accounts/41');
+  assert.equal(runtime.fetches[0][1].method, 'PATCH');
+  assert.equal(runtime.assigned(), '');
+  assert.equal(runtime.status.hidden, false);
+  assert.equal(runtime.status.textContent, 'Changes saved.');
+  assert.equal(runtime.submit.disabled, false);
   assert.equal(runtime.reauth.panel.hidden, true);
 });
 
-test('detail Enter respects an in-flight Continue and leaves composing input alone', () => {
-  const runtime = loadRuntime({ mode: 'edit' });
-  runtime.reauth.password.value = 'owner password';
-  runtime.reauth.submit.disabled = true;
-  let prevented = 0;
-  const press = runtime.reauth.password.listeners.get('keydown');
-  press({ key: 'Enter', preventDefault() { prevented += 1; } });
-  press({ key: 'Enter', isComposing: true, preventDefault() { prevented += 1; } });
-  assert.equal(prevented, 1);
-  assert.equal(runtime.fetches.length, 0);
-  runtime.reauth.submit.disabled = false;
-  runtime.reauth.password.value = '';
-  press({ key: 'Enter', preventDefault() {} });
-  assert.equal(runtime.fetches.length, 0);
-  assert.equal(runtime.reauth.password.focused, true);
+test('a stale access revision reports the conflict without a password popup or automatic retry', async () => {
+  const runtime = loadRuntime({ mode: 'edit', request: async () => ({ ok: false, status: 409,
+    json: async () => ({ detail: 'Access changed. Reload this user before saving again.' }) }) });
+  runtime.form.requestSubmit();
+  await runtime.form.submission;
+  assert.equal(runtime.fetches.length, 1);
+  assert.equal(runtime.reauth.panel.hidden, true);
+  assert.equal(runtime.error.hidden, false);
+  assert.match(runtime.error.textContent, /Access changed/);
+  assert.equal(runtime.assigned(), '');
 });
 
 test('roster menu is clamped above its last-row trigger and closes on layout change or disposal', async () => {
@@ -385,10 +377,11 @@ test('admin edit form confirms destructive state and sends the bounded patch con
     confirm_disable: true,
     confirm_remove_access: false,
   });
-  assert.equal(runtime.assigned(), '/admin/members');
+  assert.equal(runtime.assigned(), '');
+  assert.equal(runtime.status.textContent, 'Changes saved.');
 });
 
-for (const mode of ['create', 'edit']) {
+for (const mode of ['create']) {
   test(`completed ${mode} mutation retries failed navigation without repeating the mutation`, async () => {
     const destinations = [];
     const runtime = loadRuntime({
@@ -469,7 +462,7 @@ test('admin roster three-dot menu is accessible and closes on Escape outside poi
   assert.equal(row.menu.hidden, false);
   assert.equal(row.copyInvite.focused, true);
 
-  row.menu.listeners.get('keydown')({ key: 'Escape' });
+  row.menuComponent.listeners.get('keydown')({ key: 'Escape', target: row.copyInvite, preventDefault() {}, stopPropagation() {} });
   assert.equal(row.menu.hidden, true);
   assert.equal(row.menuButton.getAttribute('aria-expanded'), 'false');
   assert.equal(row.menuButton.focused, true);
@@ -479,7 +472,7 @@ test('admin roster three-dot menu is accessible and closes on Escape outside poi
   assert.equal(row.menu.hidden, true);
 
   await row.menuButton.click();
-  row.menu.listeners.get('focusout')({ relatedTarget: runtime.outside });
+  row.menuComponent.listeners.get('focusout')({ relatedTarget: runtime.outside });
   assert.equal(row.menu.hidden, true);
 });
 
@@ -548,18 +541,17 @@ for (const secondAction of ['copyInvite', 'sendInvite']) {
   }
 }
 
-test('roster invitation rotation remains owned through reauthentication and releases on cancel', async () => {
+test('failed invitation rotation releases the controls without prompting or retrying', async () => {
   const runtime = loadRosterRuntime({ reauthOnFirstCopy: true });
   await runtime.row.copyInvite.click();
-  await runtime.row.sendInvite.click();
   assert.equal(runtime.fetches.length, 1);
-  assert.equal(runtime.reauth.panel.hidden, false);
-  runtime.reauth.password.value = 'discard this cancelled password';
-  await runtime.reauth.cancel.click();
-  assert.equal(runtime.reauth.password.value, '');
+  assert.equal(runtime.reauth.panel.hidden, true);
   assert.equal(runtime.row.copyInvite.disabled, false);
+  assert.equal(runtime.row.sendInvite.disabled, false);
+  assert.equal(runtime.error.hidden, false);
   await runtime.row.sendInvite.click();
   assert.equal(runtime.fetches.length, 2);
+  assert.equal(runtime.fetches[1].url, '/admin/accounts/41/invitation/send');
 });
 
 test('admin roster invitation actions close the menu and restore trigger focus', async () => {
@@ -600,46 +592,23 @@ for (const [label, copyResponse] of [
   });
 }
 
-test('admin roster invitation action performs one 409 reauthentication retry', async () => {
+test('an invitation conflict does not call the removed reauthentication UI', async () => {
   const runtime = loadRosterRuntime({ reauthOnFirstCopy: true });
-
   await runtime.row.copyInvite.click();
-  assert.equal(runtime.reauth.panel.hidden, false);
-  assert.equal(runtime.reauth.password.focused, true);
-
-  runtime.reauth.password.value = 'administrator private password';
-  await runtime.reauth.submit.click();
-
-  assert.deepEqual(runtime.fetches.map(({ url }) => url), [
-    '/admin/accounts/41/invitation/copy',
-    '/admin/reauthenticate',
-    '/admin/accounts/41/invitation/copy',
-  ]);
-  assert.deepEqual(JSON.parse(runtime.fetches[1].options.body), {
-    password: 'administrator private password',
-  });
+  assert.deepEqual(runtime.fetches.map(({url}) => url), ['/admin/accounts/41/invitation/copy']);
   assert.equal(runtime.reauth.panel.hidden, true);
-  assert.equal(runtime.reauth.password.value, '');
-  assert.equal(
-    runtime.clipboard.value,
-    'https://example.test/accept-invitation?purpose=account-invitation&token=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA',
-  );
+  assert.equal(runtime.clipboard.value, '');
+  assert.equal(runtime.error.hidden, false);
 });
 
-test('admin roster empty reauthentication stays local and returns focus with an alert', async () => {
-  const runtime = loadRosterRuntime({ reauthOnFirstCopy: true });
-
-  await runtime.row.copyInvite.click();
+test('an expired administrator session uses normal sign-in instead of a confirmation form', async () => {
+  const runtime = loadRuntime({ mode: 'edit', request: async () => ({ ok: false, status: 401,
+    json: async () => ({ detail: 'Session expired. Sign in again.' }) }) });
+  runtime.form.requestSubmit();
+  await runtime.form.submission;
   assert.equal(runtime.fetches.length, 1);
-  runtime.reauth.password.focused = false;
-
-  await runtime.reauth.submit.click();
-
-  assert.equal(runtime.fetches.length, 1);
-  assert.equal(runtime.reauth.panel.hidden, false);
-  assert.equal(runtime.reauth.password.focused, true);
-  assert.equal(runtime.error.hidden, false);
-  assert.match(runtime.error.textContent, /password/i);
+  assert.equal(runtime.assigned(), '/login');
+  assert.equal(runtime.reauth.panel.hidden, true);
 });
 
 
@@ -668,4 +637,18 @@ test('labeled disable remains disable after cancelling its first confirmation', 
   const payload = JSON.parse(runtime.fetches[0][1].body);
   assert.equal(payload.is_active, false);
   assert.equal(payload.confirm_disable, true);
+});
+
+
+test('repeated edit saves do not navigate or repeat the previous mutation on a background GET', async () => {
+  const destinations = [];
+  const runtime = loadRuntime({ mode: 'edit', navigate: async url => { destinations.push(url); return true; } });
+  runtime.form.requestSubmit();
+  await runtime.form.submission;
+  runtime.form.requestSubmit();
+  await runtime.form.submission;
+  assert.deepEqual(destinations, []);
+  assert.deepEqual(runtime.fetches.map(([, init]) => init.method), ['PATCH', 'PATCH']);
+  assert.equal(runtime.status.textContent, 'Changes saved.');
+  assert.equal(runtime.submit.disabled, false);
 });

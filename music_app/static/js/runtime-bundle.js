@@ -8592,39 +8592,50 @@ function handleArtistsDrawerKeydown(event) {
 // BEGIN js/runtime/account-menu.js
 
 // Shared disclosure menu: action ownership remains with the rendered links/forms.
-function attachAccountMenu(component) {
+// Consumers may position the same menu inside a scrolling table or app bar.
+function attachAccountMenu(component, options = {}) {
   const trigger = component.querySelector('[data-account-menu-trigger]');
   const menu = component.querySelector('[data-account-menu]');
   if (!trigger || !menu) return;
+  const listeners = [];
+  const on = (target, name, callback, config) => {
+    target.addEventListener?.(name, callback, config);
+    listeners.push(() => target.removeEventListener?.(name, callback, config));
+  };
   const disabled = (item) => item.disabled || item.getAttribute('aria-disabled') === 'true';
-  const enabledItems = () => Array.from(menu.querySelectorAll('[role="menuitem"]')).filter((item) => !disabled(item));
+  const enabledItems = () => Array.from(menu.querySelectorAll('[role="menuitem"]'))
+    .filter((item) => !disabled(item) && !item.hidden);
   const close = (restoreFocus = false) => {
     menu.hidden = true;
     if (typeof clearTriggerAnchor === 'function') clearTriggerAnchor(menu);
     trigger.setAttribute('aria-expanded', 'false');
     if (restoreFocus) trigger.focus();
   };
+  const position = () => {
+    if (typeof options?.position === 'function') options.position(trigger, menu);
+    if (typeof syncTriggerAnchor === 'function') syncTriggerAnchor(menu, trigger);
+  };
   const open = (last = false, focusItem = true) => {
     if (typeof activateTriggerSurface === 'function') activateTriggerSurface(menu, () => close(false));
     menu.hidden = false;
     trigger.setAttribute('aria-expanded', 'true');
-    if (typeof syncTriggerAnchor === 'function') syncTriggerAnchor(menu, trigger);
+    position();
     const items = enabledItems();
-    if (focusItem) (last ? items[items.length - 1] : items[0])?.focus();
+    if (focusItem) (last ? items[items.length - 1] : items[0])?.focus({ preventScroll: true });
   };
-  globalThis.addEventListener?.('resize', () => {
-    if (!menu.hidden && typeof syncTriggerAnchor === 'function') syncTriggerAnchor(menu, trigger);
+  on(globalThis, 'resize', () => {
+    if (!menu.hidden) position();
   });
   const reject = (event) => {
     event.preventDefault();
     event.stopImmediatePropagation();
   };
-  trigger.addEventListener('click', (event) => {
+  on(trigger, 'click', (event) => {
     event.preventDefault();
-    if (menu.hidden) open(false, event.detail === 0);
+    if (menu.hidden) open(false, options?.focusOnPointer === true || event.detail === 0);
     else close(true);
   });
-  menu.addEventListener('click', (event) => {
+  on(menu, 'click', (event) => {
     const item = event.target?.closest?.('[role="menuitem"]');
     if (!item || !menu.contains(item)) return;
     if (disabled(item)) {
@@ -8634,7 +8645,7 @@ function attachAccountMenu(component) {
     // Restore the opener before Settings captures focus for its modal.
     close(true);
   }, true);
-  component.addEventListener('keydown', (event) => {
+  on(component, 'keydown', (event) => {
     const item = event.target?.closest?.('[role="menuitem"]');
     if (item && disabled(item) && ['Enter', ' ', 'Spacebar'].includes(event.key)) {
       reject(event);
@@ -8656,18 +8667,25 @@ function attachAccountMenu(component) {
     if (!['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) return;
     event.preventDefault();
     const items = enabledItems();
+    if (!items.length) return;
     const current = items.indexOf(document.activeElement);
     const next = event.key === 'Home' ? 0
       : event.key === 'End' ? items.length - 1
         : (current + (event.key === 'ArrowDown' ? 1 : -1) + items.length) % items.length;
-    items[next]?.focus();
+    items[next]?.focus({ preventScroll: true });
   });
-  document.addEventListener('click', (event) => {
+  const closeOutside = (event) => {
     if (!component.contains(event.target)) close();
-  });
-  component.addEventListener('focusout', (event) => {
+  };
+  on(document, 'pointerdown', closeOutside);
+  on(document, 'click', closeOutside);
+  on(component, 'focusout', (event) => {
     if (!component.contains(event.relatedTarget)) close();
   });
+  return () => {
+    close();
+    listeners.forEach(dispose => dispose());
+  };
 }
 
 // END js/runtime/account-menu.js
@@ -12761,7 +12779,7 @@ function drawCombinedLoopWaveform(canvas, waveform, progressRatio = 0) {
       const owner = escapePlaybackControlAttribute(ownerId || 'global-player');
       return `
         <span class="playback-control-cluster playback-control-cluster--expanded loop-play-control-cluster player-play-cluster" data-playback-control-cluster data-playback-control-variant="expanded-player" data-loop-control-style="${style}">
-          <button class="loop-play-control-button player-play" type="button" id="player-play" data-playback-control-action="play-pause" aria-label="Play or pause">Play</button>
+          <button class="loop-play-control-button player-play" type="button" id="player-play" data-playback-control-action="play-pause" aria-label="Play or pause"><svg class="ui-icon player-transport-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M9 6.4v11.2l9-5.6-9-5.6Z"/></svg></button>
           <span class="loop-play-control-actions player-loop-actions" data-playback-control-loop-actions data-loop-action-mount="${owner}" data-loop-action-owner="${owner}"></span>
         </span>
       `;
@@ -21551,6 +21569,7 @@ function collapseAllUtilityLoopGroups() {
 
 function setUtilityActiveTab(nextTab, skipAppearanceGuard = false) {
   const normalizedTab = String(nextTab || 'problematic-files');
+  if (typeof window !== 'undefined' && window.AlbumHavenCapabilities && !window.AlbumHavenCapabilities.allowsUtilityTab(normalizedTab)) return state.utility.activeTab;
   if (!skipAppearanceGuard && normalizedTab !== state.utility.activeTab && typeof confirmBackgroundAppearanceLeave === 'function' && !confirmBackgroundAppearanceLeave(() => {
     setUtilityActiveTab(normalizedTab, true);
     if (typeof loadActiveUtilityTab === 'function') loadActiveUtilityTab(true);
@@ -23533,6 +23552,7 @@ async function runLocalPlaylistImportAnalysis() {
 }
 
 function loadActiveUtilityTab(force = false) {
+  if (typeof window !== 'undefined' && window.AlbumHavenCapabilities && !window.AlbumHavenCapabilities.allowsUtilityTab(state.utility.activeTab)) return null;
   if (state.utility.activeTab === 'rules') {
     return loadUtilityRules(force);
   }
@@ -23657,6 +23677,12 @@ let utilityCoverLoadSuspensionToken = 0;
 function openUtilityModal({ resetSearch = true, resetSelection = true, forceLoad = true } = {}) {
   const els = getUtilityModalElements();
   if (!els.overlay) return;
+  if (typeof window !== 'undefined' && window.AlbumHavenCapabilities) {
+    const permittedTab = window.AlbumHavenCapabilities.resolveUtilityTab(state.utility.activeTab);
+    if (!permittedTab) return;
+    setUtilityActiveTab(permittedTab);
+    if (state.utility.activeTab !== permittedTab) return;
+  }
   document.getElementById('track-modal')?.classList.remove('is-above-settings');
   if (
     !utilityCoverLoadSuspensionToken
@@ -33978,7 +34004,8 @@ function updatePlayerUi() {
     busy: state.player.saveBusy || lockedByAnotherTab,
   });
   if (els.play) {
-    els.play.textContent = playback.paused ? '\u25B6' : '\u23F8';
+    const icon = window.ButtonComponent.renderIconSvg(playback.paused ? 'play' : 'pause', { className: 'player-transport-icon' });
+    if (els.play.innerHTML !== icon) els.play.innerHTML = icon;
     els.play.setAttribute('aria-label', lockedByAnotherTab ? 'Playback locked in another tab' : (playback.paused ? 'Play' : 'Pause'));
     els.play.disabled = lockedByAnotherTab || !hasTrack;
   }
@@ -39118,7 +39145,8 @@ if (typeof initCompactPlayer === 'function') initCompactPlayer();
 if (typeof initPlaybackOwnershipCoordinator === 'function') {
   initPlaybackOwnershipCoordinator();
 }
-if (typeof prepareStreamingPlaybackEngine === 'function') {
+if (typeof prepareStreamingPlaybackEngine === 'function'
+    && (!window.AlbumHavenCapabilities || window.AlbumHavenCapabilities.allows('library.media.read'))) {
   void prepareStreamingPlaybackEngine().catch((error) => {
     console.error('[AlbumHaven][Playback] Failed to prepare streaming playback.', error);
   });

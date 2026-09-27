@@ -10,7 +10,7 @@ from dataclasses import dataclass
 import hashlib
 import json
 
-from music_app.services.capabilities import CAPABILITY_KEYS, ROLE_PRESETS
+from music_app.services.capabilities import CAPABILITY_ALIASES, CAPABILITY_KEYS, ROLE_PRESETS, normalize_capability_keys
 
 LEGACY_CAPABILITY_KEYS = frozenset({
     "library.browse.read", "library.media.read", "library.problems.read",
@@ -22,7 +22,7 @@ LEGACY_CAPABILITY_KEYS = frozenset({
     "library.track_preferences.manage", "integration.lastfm.scrobbles.submit",
 })
 ASSIGNABLE_CAPABILITY_KEYS = (
-    LEGACY_CAPABILITY_KEYS | CAPABILITY_KEYS | frozenset().union(*ROLE_PRESETS.values())
+    LEGACY_CAPABILITY_KEYS | CAPABILITY_KEYS | frozenset(CAPABILITY_ALIASES) | frozenset().union(*ROLE_PRESETS.values())
 )
 ROLE_LABELS = {key: key.title() for key in ROLE_PRESETS}
 CAPABILITY_LABELS = {
@@ -30,7 +30,7 @@ CAPABILITY_LABELS = {
     "capability.edit": "Edit", "capability.change_covers": "Change covers",
     "capability.delete": "Delete", "capability.admin": "Admin",
     "capability.create_loop": "Create loop", "capability.practice": "Practice",
-    "capability.repair": "Repair", "capability.rules": "Rules", "capability.move": "Move",
+    "capability.repair": "Repair / Rules / Logs", "capability.move": "Move",
 }
 
 
@@ -46,7 +46,7 @@ class CapabilityAssignment:
     @property
     def effective_keys(self) -> tuple[str, ...]:
         inherited = set().union(*(ROLE_PRESETS[key] for key in self.role_keys))
-        return tuple(sorted(inherited | set(self.capability_keys)))
+        return normalize_capability_keys(inherited | set(self.capability_keys))
 
     def as_payload(self) -> dict[str, object]:
         return {"version": 1, "role_keys": list(self.role_keys),
@@ -66,7 +66,7 @@ def _keys(value: object, allowed: Collection[str], label: str) -> tuple[str, ...
 def build_assignment(roles: object, capabilities: object, *, allow_empty: bool = False) -> CapabilityAssignment:
     assignment = CapabilityAssignment(
         _keys(roles, ROLE_PRESETS, "roles"),
-        _keys(capabilities, ASSIGNABLE_CAPABILITY_KEYS, "capabilities"),
+        normalize_capability_keys(_keys(capabilities, ASSIGNABLE_CAPABILITY_KEYS, "capabilities")),
     )
     if not allow_empty and not assignment.effective_keys:
         raise ValueError("Account capabilities must not be empty.")
@@ -75,7 +75,7 @@ def build_assignment(roles: object, capabilities: object, *, allow_empty: bool =
 
 def read_assignment(payload: object, effective_keys: object) -> CapabilityAssignment:
     """Return recorded choices only when they still describe the live grants."""
-    current = tuple(sorted(set(effective_keys) & ASSIGNABLE_CAPABILITY_KEYS))
+    current = normalize_capability_keys(set(effective_keys) & ASSIGNABLE_CAPABILITY_KEYS)
     if isinstance(payload, Mapping) and type(payload.get("version")) is int and payload["version"] == 1:
         try:
             assignment = build_assignment(payload.get("role_keys"), payload.get("capability_keys"), allow_empty=True)

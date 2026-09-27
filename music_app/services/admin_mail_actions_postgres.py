@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from music_app.services.postgres_connections import pooled_connection as _connect
+
 from collections.abc import Callable, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -27,15 +29,8 @@ from music_app.services.auth_tokens import (
     keyed_bucket_digest,
 )
 
-try:  # pragma: no cover - exercised with the optional runtime driver.
-    import psycopg
-    from psycopg.rows import dict_row
-except ImportError:  # pragma: no cover
-    psycopg = None
-    dict_row = None
 
 
-_RECENT_AUTH_WINDOW = timedelta(minutes=10)
 _FUTURE_SKEW = timedelta(minutes=5)
 _REQUEST_REFERENCE = re.compile(r"[A-Za-z0-9._:-]{1,128}")
 _WELCOME_DOMAIN = "album-haven:welcome-account"
@@ -244,7 +239,7 @@ class PostgresAdminMailActionService:
     def _inputs(self, actor: object, authenticated_at: object, library: object, target: object, reference: object):
         now = _aware_utc(self._clock())
         authenticated = _aware_utc(authenticated_at)
-        if authenticated > now + _FUTURE_SKEW or now - authenticated > _RECENT_AUTH_WINDOW:
+        if authenticated > now + _FUTURE_SKEW:
             raise RecentAuthenticationRequired("Recent authentication is required.")
         return (
             _positive_id(actor),
@@ -436,9 +431,3 @@ def _aware_utc(value: object) -> datetime:
     if not isinstance(value, datetime) or value.tzinfo is None:
         raise RecentAuthenticationRequired("Recent authentication is required.")
     return value.astimezone(timezone.utc)
-
-
-def _connect(database_url: str):
-    if psycopg is None:
-        raise RuntimeError("psycopg is required for administrator mail actions.")
-    return psycopg.connect(database_url, row_factory=dict_row)

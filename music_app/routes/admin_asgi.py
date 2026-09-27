@@ -147,7 +147,7 @@ async def new_managed_account(request: Request) -> Response:
 
 @router.get("/admin/accounts/{account_id}", response_class=HTMLResponse)
 async def edit_managed_account(request: Request, account_id: int) -> Response:
-    roster = await _load_roster(request)
+    roster = await _load_roster(request, target_account_id=account_id)
     if isinstance(roster, Response):
         return roster
     member = next((item for item in roster.members if item.account_id == account_id), None)
@@ -185,7 +185,7 @@ async def update_managed_account(request: Request, account_id: int) -> Response:
     ):
         return JSONResponse({"detail": "Action not permitted."}, status_code=403)
     try:
-        await run_in_threadpool(
+        saved = await run_in_threadpool(
             _mutation_service(request).update_account,
             actor_account_id=actor.account_id,
             actor_session_id=actor.session_id,
@@ -204,7 +204,7 @@ async def update_managed_account(request: Request, account_id: int) -> Response:
     except AssignmentConflict as exc:
         return JSONResponse({"detail": str(exc)}, status_code=409)
     except RecentAuthenticationRequired:
-        return JSONResponse({"detail": "Recent authentication is required."}, status_code=409)
+        return JSONResponse({"detail": "Session expired. Sign in again."}, status_code=401)
     except DestructiveConfirmationRequired:
         return JSONResponse({"detail": "Explicit confirmation is required."}, status_code=409)
     except PermissionError:
@@ -213,7 +213,7 @@ async def update_managed_account(request: Request, account_id: int) -> Response:
         return JSONResponse({"detail": "Account update was invalid."}, status_code=400)
     except Exception:
         return JSONResponse({"detail": "Account update is temporarily unavailable."}, status_code=503)
-    return JSONResponse({"updated": True})
+    return JSONResponse({"updated": True, **(saved if isinstance(saved, dict) else {})})
 
 
 @router.post("/admin/accounts/{account_id}/sessions/revoke")
@@ -236,7 +236,7 @@ async def revoke_managed_account_sessions(request: Request, account_id: int) -> 
             request_ref=uuid4().hex,
         )
     except RecentAuthenticationRequired:
-        return JSONResponse({"detail": "Recent authentication is required."}, status_code=409)
+        return JSONResponse({"detail": "Session expired. Sign in again."}, status_code=401)
     except DestructiveConfirmationRequired:
         return JSONResponse({"detail": "Explicit confirmation is required."}, status_code=409)
     except PermissionError:
@@ -302,7 +302,7 @@ async def copy_managed_account_invitation(
         )
     except RecentAuthenticationRequired:
         return JSONResponse(
-            {"detail": "Recent authentication is required."}, status_code=409
+            {"detail": "Session expired. Sign in again."}, status_code=401
         )
     except PermissionError:
         return JSONResponse({"detail": "Action not permitted."}, status_code=403)
@@ -352,7 +352,7 @@ async def send_managed_account_invitation(
         )
     except RecentAuthenticationRequired:
         return JSONResponse(
-            {"detail": "Recent authentication is required."}, status_code=409
+            {"detail": "Session expired. Sign in again."}, status_code=401
         )
     except PermissionError:
         return JSONResponse({"detail": "Action not permitted."}, status_code=403)
@@ -425,7 +425,7 @@ async def create_managed_account(request: Request, background_tasks: BackgroundT
             **({"role_keys": payload["role_keys"]} if "role_keys" in payload else {}),
         )
     except RecentAuthenticationRequired:
-        return JSONResponse({"detail": "Recent authentication is required."}, status_code=409)
+        return JSONResponse({"detail": "Session expired. Sign in again."}, status_code=401)
     except PermissionError:
         return JSONResponse({"detail": "Action not permitted."}, status_code=403)
     except ManagedAccountIdentityConflict:
@@ -556,7 +556,7 @@ async def _queue_mail_action(request: Request, account_id: int, action: str):
         )
     except RecentAuthenticationRequired:
         return JSONResponse(
-            {"detail": "Recent authentication is required."}, status_code=409
+            {"detail": "Session expired. Sign in again."}, status_code=401
         )
     except PermissionError:
         return JSONResponse({"detail": "Action not permitted."}, status_code=403)
@@ -584,7 +584,7 @@ async def _bounded_json_object(request: Request) -> dict[str, object] | None:
     return payload if isinstance(payload, dict) else None
 
 
-async def _load_roster(request: Request):
+async def _load_roster(request: Request, *, target_account_id: int | None = None):
     actor = request.state.current_actor
     if actor.account_id is None or actor.current_library_id is None:
         return HTMLResponse("Action not permitted.", status_code=403)
@@ -593,6 +593,7 @@ async def _load_roster(request: Request):
             _members_service(request).load_roster,
             actor_account_id=actor.account_id,
             library_id=actor.current_library_id,
+            **({"target_account_id": target_account_id} if target_account_id is not None else {}),
         )
     except PermissionError:
         return HTMLResponse("Action not permitted.", status_code=403)

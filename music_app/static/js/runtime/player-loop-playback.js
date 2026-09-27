@@ -92,7 +92,8 @@ function updatePlayerUi() {
     busy: state.player.saveBusy || lockedByAnotherTab,
   });
   if (els.play) {
-    els.play.textContent = playback.paused ? '\u25B6' : '\u23F8';
+    const icon = window.ButtonComponent.renderIconSvg(playback.paused ? 'play' : 'pause', { className: 'player-transport-icon' });
+    if (els.play.innerHTML !== icon) els.play.innerHTML = icon;
     els.play.setAttribute('aria-label', lockedByAnotherTab ? 'Playback locked in another tab' : (playback.paused ? 'Play' : 'Pause'));
     els.play.disabled = lockedByAnotherTab || !hasTrack;
   }

@@ -717,6 +717,8 @@ a.play { color: var(--accent); text-decoration: none; margin-left: 8px; }
 .loop-play-control-cluster[data-loop-action-state="editing"][data-loop-action-engaged="true"]::before { width: 123px; }
 .loop-play-control-button {
   box-sizing: border-box;
+  display: grid;
+  place-items: center;
   position: absolute;
   top: 4px;
   left: 4px;
@@ -737,6 +739,7 @@ a.play { color: var(--accent); text-decoration: none; margin-left: 8px; }
   pointer-events: auto;
   box-shadow: 0 10px 26px color-mix(in srgb, var(--success) 28%, transparent);
 }
+.loop-play-control-button > .player-transport-icon { display: block; width: 24px; height: 24px; fill: currentColor; stroke: none; }
 .global-player .loop-play-control-button {
   transition: box-shadow 150ms ease, border-color 150ms ease;
 }

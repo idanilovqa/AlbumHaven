@@ -10,6 +10,8 @@
         actions: Object.freeze({ ...actions }),
         deniedSelectors: Array.isArray(payload.denied_selectors) ? payload.denied_selectors : [],
         deniedTabs: Array.isArray(payload.denied_tabs) ? payload.denied_tabs : [],
+        availableTabs: Object.freeze(Array.isArray(payload.available_tabs)
+          ? payload.available_tabs.filter(tab => typeof tab === 'string') : []),
         clientSurface: String(payload.client_surface || 'private_web'),
       });
     } catch (_error) {
@@ -20,7 +22,11 @@
   function install(document) {
     const policy = readPolicy(document);
     const allows = (action) => Boolean(policy && policy.actions[action] === true);
-    const result = Object.freeze({ allows, clientSurface: policy?.clientSurface || 'private_web' });
+    const allowsUtilityTab = (tab) => Boolean(policy && policy.availableTabs.includes(tab));
+    const resolveUtilityTab = (preferred) => allowsUtilityTab(preferred)
+      ? preferred : policy?.availableTabs[0] || null;
+    const result = Object.freeze({ allows, allowsUtilityTab, resolveUtilityTab,
+      clientSurface: policy?.clientSurface || 'private_web' });
     root.AlbumHavenCapabilities = result;
     if (!policy) return result;
     const denied = policy.deniedSelectors.join(',');
@@ -35,6 +41,10 @@
       }, true);
     }
     const ready = () => {
+      // Keyboard traversal uses native hidden state, not just CSS visibility.
+      document.querySelectorAll?.('[data-utility-tab]').forEach(tab => {
+        tab.hidden = !allowsUtilityTab(tab.getAttribute('data-utility-tab'));
+      });
       if (!policy.deniedTabs.length) return;
       const dialog = document.querySelector('#utility-modal .utility-modal-dialog');
       if (!dialog || dialog.querySelector('.capability-section-denied')) return;

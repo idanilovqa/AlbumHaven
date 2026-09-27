@@ -48,7 +48,6 @@ def render(target, *, administrator_is_bootstrap=True, allowed=None, template='a
     stubs = {name: '' for name in ['partials/navigation-tree-assets.html',
         'partials/admin-settings-nav.html', 'partials/appearance-bootstrap.html']}
     stubs['partials/app-bar.html'] = '{% macro app_bar() %}{% endmacro %}'
-    stubs['components/on-page-alert.html'] = "{% macro on_page_alert(message='') %}{{ kwargs and '' }}{% endmacro %}"
     env = Environment(loader=ChoiceLoader([DictLoader(stubs), FileSystemLoader(ROOT / 'music_app/templates')]),
         autoescape=select_autoescape())
     defaults = constant('_LISTENER_DEFAULTS')
@@ -70,11 +69,13 @@ def test_legacy_eighteen_fields_are_unchanged_and_new_capabilities_are_separate(
     assert {item['value'] for item in legacy} == MANAGED_CAPABILITY_KEYS
     assert all(item['type'] == 'checkbox' and 'disabled' not in item for item in legacy)
     assert {item['value'] for item in legacy if 'checked' in item} == constant('_LISTENER_DEFAULTS')
-    assert len(inputs.named('additional_capability_keys')) == 11
+    assert len(inputs.named('additional_capability_keys')) == 10
     assert len(inputs.named('role_keys')) == 5
-    assert '<option value="listener">Listener</option>' in html
-    assert '<option value="owner"' not in html
-    assert 'Individual permissions below override' in html
+    assert 'name="capability_role"' not in html
+    assert 'data-legacy-permission-summary' not in html
+    assert 'Individual permissions below override' not in html
+    assert 'gallery-switch__input' in html
+    assert 'gallery-bar__title' in html
 
 
 def test_bootstrap_owner_keeps_inherited_legacy_form_and_no_assignable_roles():

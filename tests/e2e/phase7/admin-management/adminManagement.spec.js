@@ -63,7 +63,7 @@ const EDITABLE_CAPABILITIES = Object.freeze([
   'View virtual discography',
 ]);
 
-test('admin detail password Enter reauthenticates before retrying Save changes', async ({ page }) => {
+test('active administrator saves repeatedly in place without periodic password reconfirmation', async ({ page }) => {
   await signIn(page, OWNER, '/admin/members');
   const members = new MembersPage(page);
   await members.openAddUser();
@@ -80,15 +80,14 @@ test('admin detail password Enter reauthenticates before retrying Save changes',
       mutations.push({ pathname, method: request.method() });
     }
   });
-  await page.getByRole('button', { name: 'Save changes', exact: true }).click();
-  const password = members.reauthPassword;
-  await expect(password).toBeVisible();
-  await password.fill(OWNER.password);
-  await password.press('Enter');
-  await expect(page).toHaveURL(/\/admin\/members$/);
-  expect(mutations.map(({ method }) => method)).toEqual(['PATCH', 'POST', 'PATCH']);
-  expect(mutations[1].pathname).toBe('/admin/reauthenticate');
+  await members.saveWithoutLeaving();
+  await members.capabilitySwitch('View library rules').check();
+  await members.saveWithoutLeaving();
+  expect(mutations.map(({ method }) => method)).toEqual(['PATCH', 'PATCH']);
+  expect(mutations.every(({ pathname }) => pathname !== '/admin/reauthenticate')).toBe(true);
   await expect(members.reauthPanel).toHaveCount(0);
+  await page.reload();
+  await expect(members.capabilitySwitch('View library rules')).toBeChecked();
 });
 
 test('admin last-row actions remain usable in the scrolling tablet roster', async ({ page }) => {
@@ -323,8 +322,9 @@ test('FTC-PERMISSIONS-009 denies limited administration and preserves owner-only
   await page.goto('/admin/accounts/new');
   await expect(page.getByText('system.admin')).toHaveCount(0);
   const newMember = new MembersPage(page);
-  await expect(newMember.capabilityRole).toHaveValue('listener');
-  await expect(newMember.ownerRoleOption).toHaveCount(0);
+  await expect(newMember.capabilityRole).toHaveCount(0);
+  await expect(newMember.roles.getByRole('checkbox')).toHaveCount(5);
+  await expect(newMember.assignedRoles).toHaveCount(0);
 
   const listenerSession = await freshBrowserSession.create();
   const listenerPage = listenerSession.page;
@@ -340,9 +340,8 @@ test('FTC-PERMISSIONS-009 denies limited administration and preserves owner-only
 
   await page.goto(`/admin/accounts/${ownerId}`);
   const members = new MembersPage(page);
-  await expect(members.capabilityRole).toHaveValue('owner');
-  await expect(members.capabilityRole).toHaveText('Owner');
-  await expect(members.capabilityRole).toBeDisabled();
+  await expect(members.capabilityRole).toHaveCount(0);
+  await expect(members.roles).toHaveCount(0);
   await expect(members.ownerFullAccess).toBeVisible();
   await expect(members.libraryAccess).toBeChecked();
   await expect(members.libraryAccess).toBeDisabled();
@@ -392,8 +391,8 @@ test('FTC-PERMISSIONS-009 denies limited administration and preserves owner-only
     name: `Actions for ${LISTENER.username}`,
   }).click();
   await listenerRow.getByRole('menuitem', { name: 'Edit' }).click();
-  await expect(members.capabilityRole).toHaveValue('listener');
-  await expect(members.ownerRoleOption).toHaveCount(0);
+  await expect(members.capabilityRole).toHaveCount(0);
+  await expect(members.assignedRoles).toHaveCount(0);
   await expect(members.libraryAccess).toBeChecked();
   await expect(members.libraryAccess).toBeEnabled();
   await expect(members.capabilitySwitches).toHaveCount(EDITABLE_CAPABILITIES.length);
@@ -423,15 +422,15 @@ test('FTC-PERMISSIONS-009 Owner save preserves inherited capabilities and member
   await members.openEditUser(OWNER.username);
   const before = await databaseState();
   expect(before.owner_membership_role).toBe('owner');
-  await expect(members.capabilityRole).toHaveValue('owner');
+  await expect(members.capabilityRole).toHaveCount(0);
   await expect(members.ownerFullAccess).toBeVisible();
   await expect(members.libraryAccess).toBeChecked();
   await expect(members.libraryAccess).toBeDisabled();
 
   await members.submitAccountChanges();
   await members.openEditUser(OWNER.username);
-  await expect(members.capabilityRole).toHaveValue('owner');
-  await expect(members.capabilityRole).toBeDisabled();
+  await expect(members.capabilityRole).toHaveCount(0);
+  await expect(members.roles).toHaveCount(0);
   await expect(members.ownerFullAccess).toBeVisible();
   await expect(members.libraryAccess).toBeChecked();
   await expect(members.libraryAccess).toBeDisabled();

@@ -229,6 +229,7 @@ function loadHelper(overrides = {}) {
       addEventListener: () => {},
     },
     window: {
+      ButtonComponent: require('../../../music_app/static/js/button-component.js'),
       addEventListener: () => {},
     },
     fetch: async () => ({

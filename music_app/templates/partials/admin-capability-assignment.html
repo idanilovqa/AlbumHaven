@@ -1,13 +1,16 @@
+{% from "components/on-page-alert.html" import on_page_alert %}
+{% from "partials/switch.html" import ui_switch %}
+{% from "partials/button.html" import ui_button %}
 <section data-capability-assignment aria-label="Role and capability assignment">
   <input type="hidden" name="access_revision" value="{{ access_editor.revision }}">
   <fieldset class="permission-fieldset">
     <legend>Roles</legend>
-    <aside class="role-note"><span aria-hidden="true">ⓘ</span><span>Roles add together. Admin manages users and access; Owner grants library features, not administration. Select both only when both are needed.</span></aside>
+    {{ on_page_alert('Roles add together. Admin manages users and access; Owner grants library features, not administration. Select both only when both are needed.', role='note', class_name='role-note') }}
     <div class="permission-groups">
       {% for roles in access_editor.roles | batch(2) %}
       <section class="permission-group">
         {% for role in roles %}
-        <label><span>{{ role.label }}</span><input class="switch" type="checkbox" name="role_keys" value="{{ role.key }}" data-role-label="{{ role.label }}" data-role-grants="{{ role.grants | tojson | forceescape }}" {% if role.key in access_editor.role_keys %}checked{% endif %}></label>
+        {{ ui_switch(role.label, 'role_keys', role.key, checked=role.key in access_editor.role_keys, attributes={'data-role-label': role.label, 'data-role-grants': role.grants | tojson}) }}
         {% endfor %}
       </section>
       {% endfor %}
@@ -15,12 +18,12 @@
   </fieldset>
   <fieldset class="permission-fieldset">
     <legend>Additional capabilities</legend>
-    <aside class="role-note"><span aria-hidden="true">ⓘ</span><span>Checked, disabled switches are included by a selected role. Other switches add individual capabilities. Device restrictions still apply.</span></aside>
+    {{ on_page_alert('Checked, disabled switches are included by a selected role. Other switches add individual capabilities. Device restrictions still apply. Web tag editing requires both Edit and Admin. Mobile and TV never permit tag editing, deleting, or creating loops.', role='note', class_name='role-note') }}
     <div class="permission-groups">
       {% for capabilities in access_editor.capabilities | batch(4) %}
       <section class="permission-group">
         {% for capability_key, label in capabilities %}
-        <label><span>{{ label }}</span><input class="switch" type="checkbox" name="additional_capability_keys" value="{{ capability_key }}" data-explicit-grant="{{ 'true' if capability_key in access_editor.capability_keys else 'false' }}" {% if capability_key in access_editor.inherited_keys %}checked disabled title="Included by a selected role"{% elif capability_key in access_editor.capability_keys %}checked{% endif %}></label>
+        {{ ui_switch(label, 'additional_capability_keys', capability_key, checked=capability_key in access_editor.inherited_keys or capability_key in access_editor.capability_keys, disabled=capability_key in access_editor.inherited_keys, attributes={'data-explicit-grant': 'true' if capability_key in access_editor.capability_keys else 'false', 'title': 'Included by a selected role' if capability_key in access_editor.inherited_keys else none}) }}
         {% endfor %}
       </section>
       {% endfor %}
@@ -32,6 +35,6 @@
   {% if access_editor.unlisted_keys %}<p>Other retained explicit grants: {{ access_editor.unlisted_keys | join(', ') }}.</p>{% endif %}
   {% if access_editor.unmanaged_keys %}<p>Grants outside this editor are preserved: {{ access_editor.unmanaged_keys | join(', ') }}. Removing library access revokes all current-library grants.</p>{% endif %}
   <p data-role-summary aria-live="polite">Role selections and individual capabilities are saved together.</p>
-  <button class="admin-button" type="button" data-roles-only {% if not access_editor.role_keys %}disabled{% endif %}>Use selected roles only</button>
-  <aside class="role-note"><span aria-hidden="true">ⓘ</span><span>For a new user, selecting a role replaces untouched legacy Listener defaults. Existing users keep their explicit grants unless you choose “Use selected roles only”. To avoid locking yourself out, keep Admin and library access on your own account.</span></aside>
+  {{ ui_button('Use selected roles only', disabled=not access_editor.role_keys, attributes={'data-roles-only': true}) }}
+  {{ on_page_alert('For a new user, selecting a role replaces untouched legacy Listener defaults. Existing users keep their explicit grants unless you choose “Use selected roles only”. To avoid locking yourself out, keep Admin and library access on your own account.', role='note', class_name='role-note') }}
 </section>

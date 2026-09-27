@@ -4,11 +4,13 @@ from __future__ import annotations
 
 from collections.abc import Callable, Iterable, Mapping
 import hashlib
+from dataclasses import replace
 import hmac
 
 from fastapi import HTTPException, Request, status
 
 from music_app.services.client_surfaces import client_surface_from_request
+from music_app.services.local_folder_access import can_open_client_folder
 from music_app.services.current_actor_asgi import current_actor_from_request
 from music_app.services.allowed_actions import AllowedActions
 from music_app.services.policy import PolicyContext, RequestOrigin, ResourceScope
@@ -60,6 +62,8 @@ def require_action(
             request.app.state.policy_evaluator = evaluator
         if not isinstance(evaluator, PolicyEvaluator):
             raise RuntimeError("Policy evaluator configuration is invalid.")
+        if action == "library.files.open_location" and not can_open_client_folder(request):
+            constraints = replace(constraints, request_origin_allowed=False)
         result = evaluator.evaluate(context, constraints=constraints)
         request.state.policy_evaluation = result
         if not actor.is_authenticated:
@@ -117,6 +121,8 @@ def allowed_actions_for_request(
             if callable(constraint_resolver)
             else PolicyEvaluationConstraints()
         )
+        if action == "library.files.open_location" and not can_open_client_folder(request):
+            constraints = replace(constraints, request_origin_allowed=False)
         decisions.append(
             evaluator.evaluate(context, constraints=constraints).decision
         )

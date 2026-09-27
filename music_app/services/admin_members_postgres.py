@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from music_app.services.postgres_connections import pooled_connection as _connect
+
 from collections.abc import Callable, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -10,12 +12,6 @@ from typing import Any, Iterator
 
 from music_app.services.admin_authority import ADMIN_LIBRARY_AUTHORITY_SQL
 
-try:  # pragma: no cover - exercised when the optional runtime driver is present.
-    import psycopg
-    from psycopg.rows import dict_row
-except ImportError:  # pragma: no cover
-    psycopg = None
-    dict_row = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -65,10 +61,13 @@ class PostgresAdminMembersService:
         *,
         actor_account_id: object,
         library_id: object,
+        target_account_id: object = None,
     ) -> AdminMembersRoster:
         actor_id = _positive_id(actor_account_id)
         current_library_id = _positive_id(library_id)
         now = _aware_utc(self._clock())
+        target_id = _positive_id(target_account_id) if target_account_id is not None else None
+        target_filter = "and account.id = %s" if target_id is not None else ""
         try:
             with self._operation() as connection:
                 rows = connection.execute(
@@ -155,10 +154,11 @@ class PostgresAdminMembersService:
                       where account_id = account.id and revoked_at is null
                         and idle_expires_at > %s and absolute_expires_at > %s
                     ) session on true
+                    where true {target_filter}
                     order by (owner.account_id is not null) desc,
                              account.username_normalized, account.id
                     """,
-                    (current_library_id, actor_id, now, now),
+                    (current_library_id, actor_id, now, now, *((target_id,) if target_id is not None else ())),
                 ).fetchall()
             if not rows:
                 raise PermissionError("Members & Access is not permitted.")
@@ -259,9 +259,3 @@ def _aware_utc(value: object) -> datetime:
 
 def _optional_datetime(value: object) -> datetime | None:
     return None if value is None else _aware_utc(value)
-
-
-def _connect(database_url: str):
-    if psycopg is None:
-        raise RuntimeError("psycopg is required for Members & Access.")
-    return psycopg.connect(database_url, row_factory=dict_row)

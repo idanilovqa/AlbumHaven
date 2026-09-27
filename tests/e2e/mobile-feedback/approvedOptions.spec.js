@@ -68,6 +68,7 @@ test('original large album and both approved small-art choices persist with shar
         expect((await app.albumIdentityCopy.boundingBox()).width).toBeCloseTo(table.width, 0);
       }
     }
+    if (layout !== 'classic_bar') await app.expectApprovedAlbumOverview(layout);
     await snapshot(`42-album-${layout.replaceAll('_', '-')}`);
     await app.scrollRegion('album', 900);
     await expect(app.albumThumbnail).toBeVisible();
@@ -167,4 +168,38 @@ test('hamburger menus precede the name in Gallery, Settings and Password headers
   await app.openPassword();
   await app.expectHeaderNavigationBeforeTitle('account');
   await snapshot('48-password-menu-left');
+});
+
+
+test('empty mobile player keeps its centered message beside the disabled transport', async ({ page, app, snapshot }) => {
+  await app.expectEmptyPlayerComposition();
+  await snapshot('49-empty-thin-player');
+  await page.setViewportSize({ width: 320, height: 740 });
+  await app.expectEmptyPlayerComposition();
+  await page.setViewportSize({ width: 390, height: 844 });
+  await app.openSettings();
+  await app.selectSubsection('seekbar');
+  await app.customAppearance.click();
+  await app.regularOption.check();
+  await app.saveAppearanceChanges();
+  await app.expectEmptyPlayerComposition();
+  await snapshot('50-empty-regular-player');
+});
+
+test('relocated album actions retain cover lookup and Back without changing the selected layout', async ({ app }) => {
+  for (const [index, layout] of ['stacked_bar', 'editorial_canvas'].entries()) {
+    await app.openSettings();
+    await app.selectSubsection('album-page');
+    if (index === 0) await app.customAppearance.click();
+    await app.albumLayout(layout).click();
+    await app.saveAppearanceChanges();
+    await app.search('Sixteen Horizons');
+    await app.openAlbumBody('Sixteen Horizons');
+    await app.expectApprovedAlbumOverview(layout);
+    await app.albumCoverSearch.click();
+    await expect(app.coverLookupPage).toBeVisible();
+    await app.backButton.click();
+    await expect(app.albumPage).toHaveAttribute('data-mobile-album-layout', layout);
+    await app.expectApprovedAlbumOverview(layout);
+  }
 });

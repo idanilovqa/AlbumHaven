@@ -284,3 +284,46 @@ scenario, unit seam and this owning document. Exact direct-work/process elapsed
 times were not recorded. No main merge, native-platform certification or complete
 release-regression result is implied. Render staging/upgrade verification is a
 separate delivery step and must be checked before updating the deployed branch.
+
+
+## Final approved A/B and empty/three-line player repair
+
+Pinned base: `f3eaf46307f6ee08e00b0182f27a6f8ae9ba371f`. The final image and
+explicit last owner statements are recorded in the owning approval document.
+Earlier screenshots with swapped or vertical A controls are not authoritative.
+
+Implementation checklist (3/3 prepared; hosted verification is a separate gate):
+
+- [x] A remains side-by-side with square art, Back at the art's top-left, and
+  horizontal cover tools at the content's far right aligned to the art bottom.
+  B remains centered with vertical top-right tools and only artist • year/title
+  beneath. Both reuse the existing artbox, action nodes and Gallery Bar. The real
+  track table and its styling are unchanged. No redundant Album label/title outline.
+- [x] Back is the same shared control, moved between the overview and pinned bar;
+  the pinned identity overlays the scroll surface without changing its geometry.
+  Returning to classic/desktop restores the original controls. Cover refreshes
+  replace stale relocated tools rather than creating duplicate buttons.
+- [x] Empty playback puts its status beside the disabled Play control on the same
+  centerline. The 76px thin player has three independent metadata lines and a
+  fourth timestamp row. Overflow uses the existing compact metadata motion policy,
+  measured on resize/font/content changes, never restarted on every audio tick.
+  Reduced motion and desktop stop the animation. The editor preview uses the
+  mobile three-line composition; standard/waveform choices remain available.
+
+Acceptance coverage extends the existing approved-options flow with A/B geometry,
+Back and Cover Look Up navigation, square art, no tools inside the artbox, no title
+outline, exact B copy, and empty-state geometry at 320/390px. The sole superseded
+player expectation (song and album sharing a y-coordinate) is replaced by ordered,
+non-overlapping artist/song/album/timestamp rows per the owner's explicit reversal.
+All other size, seeking, icon-centering, persistence and desktop checks stay intact.
+No retry, timeout or geometry tolerance is relaxed.
+
+Focused local results: eight JavaScript seam tests passed, syntax and whitespace
+checks passed. An isolated Chromium DOM/component probe verified all three long
+text rows overflow independently, repeated ticks preserve their nodes, reduced
+motion toggles cleanly, desktop clears motion, and empty text remains centered at
+320/390px. This is component verification, not a production-app screenshot or a
+full release result. The normal hosted mobile workflow must pass before promoting
+these application changes to the generated-data Render demo. No secret, account,
+media inventory, real integration or hosting-plan change belongs to this repair.
+Historical R01–R35 counters above remain historical intake, not a new release claim.

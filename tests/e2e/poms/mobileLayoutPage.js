@@ -68,6 +68,10 @@ export class MobileLayoutPage {
     this.subsectionMenu = page.locator('#mobile-settings-subsection-menu');
     this.albumCover = page.locator('#track-modal-cover');
     this.albumThumbnail = page.locator('#mobile-page-cover');
+    this.albumOverview = page.locator('#track-modal .mobile-album-overview');
+    this.albumCoverSearch = page.locator('#track-modal [data-open-track-modal-cover-lookup]');
+    this.albumQuickSearch = page.locator('#track-modal [data-track-modal-fast-cover-fetch]');
+    this.playerEmptyMessage = page.locator('[data-player-empty-message]');
     this.albumRows = page.locator('#track-modal .album-track-table__row');
     this.pageOutlet = page.locator('#mobile-page-outlet');
     this.playerTime = page.locator('#player-time');
@@ -170,7 +174,7 @@ export class MobileLayoutPage {
       const rect = node => { const b = node.getBoundingClientRect(); return { x: b.x, y: b.y, width: b.width, height: b.height, right: b.right, bottom: b.bottom }; };
       const button = rect(play);
       return { player: rect(player), play: button, icon: rect(icon), time: rect(player.querySelector('#player-time')),
-        song: rect(player.querySelector('#player-title')), album: rect(player.querySelector('#player-album-link')),
+        artist: rect(player.querySelector('#player-artist')), song: rect(player.querySelector('#player-title')), album: rect(player.querySelector('#player-album-link')),
         lowerPlayTarget: play.contains(document.elementFromPoint(button.x + button.width / 2, button.bottom - 6)),
         iconTransform: getComputedStyle(icon).transform,
       };
@@ -179,13 +183,60 @@ export class MobileLayoutPage {
     expect(geometry.time.right).toBeLessThanOrEqual(geometry.play.x);
     expect(geometry.time.y).toBeGreaterThan(geometry.play.y);
     expect(geometry.time.height).toBeLessThan(20);
-    expect(geometry.song.y).toBeCloseTo(geometry.album.y, 0);
+    expect(geometry.song.y).toBeGreaterThanOrEqual(geometry.artist.bottom);
+    expect(geometry.album.y).toBeGreaterThanOrEqual(geometry.song.bottom);
+    expect(geometry.time.y).toBeGreaterThanOrEqual(geometry.album.bottom);
     expect(geometry.song.height).toBeLessThan(20);
     expect(geometry.album.height).toBeLessThan(20);
     expect(geometry.icon.x + geometry.icon.width / 2).toBeCloseTo(geometry.play.x + geometry.play.width / 2, 0);
     expect(geometry.icon.y + geometry.icon.height / 2).toBeCloseTo(geometry.play.y + geometry.play.height / 2, 0);
     expect(geometry.iconTransform).toBe('none');
     expect(geometry.lowerPlayTarget).toBe(true);
+    expect(await this.hasNoHorizontalOverflow()).toBe(true);
+  }
+
+  async expectApprovedAlbumOverview(layout) {
+    await expect(this.albumOverview).toBeVisible();
+    await expect(this.backButton).toBeVisible();
+    await expect(this.albumCoverSearch).toBeVisible();
+    await expect(this.albumQuickSearch).toBeVisible();
+    const art = await this.albumCover.boundingBox();
+    const back = await this.backButton.boundingBox();
+    const search = await this.albumCoverSearch.boundingBox();
+    const quick = await this.albumQuickSearch.boundingBox();
+    const overview = await this.albumOverview.boundingBox();
+    const table = await this.trackTable.boundingBox();
+    expect(art.width).toBeCloseTo(art.height, 0);
+    expect(back.y).toBeCloseTo(art.y, 0);
+    expect(back.x + back.width).toBeLessThanOrEqual(art.x);
+    expect(quick.x + quick.width).toBeCloseTo(overview.x + overview.width, 0);
+    await expect(this.albumCover.locator('.track-modal-cover-tool')).toHaveCount(0);
+    await expect(this.albumIdentityTitle).toHaveCSS('outline-style', 'none');
+    if (layout === 'stacked_bar') {
+      expect(search.y).toBeCloseTo(quick.y, 0);
+      expect(search.x + search.width).toBeLessThan(quick.x);
+      expect(quick.y + quick.height).toBeCloseTo(art.y + art.height, 0);
+      expect(table.y - (art.y + art.height)).toBeLessThan(40);
+    } else {
+      expect(search.y).toBeCloseTo(art.y, 0);
+      expect(search.x).toBeCloseTo(quick.x, 0);
+      expect(quick.y).toBeGreaterThanOrEqual(search.y + search.height);
+      await expect(this.albumIdentity.locator('.album-details-header__eyebrow')).toHaveText('Northlight • 2026');
+      await expect(this.albumIdentitySummary).not.toBeVisible();
+    }
+    expect(await this.hasNoHorizontalOverflow()).toBe(true);
+  }
+
+  async expectEmptyPlayerComposition() {
+    await expect(this.playerEmptyMessage).toBeVisible();
+    await expect(this.playerEmptyMessage).toHaveText('Nothing is playing');
+    await expect(this.playerPlay).toBeDisabled();
+    const message = await this.playerEmptyMessage.boundingBox();
+    const play = await this.playerPlay.boundingBox();
+    expect(message.y + message.height / 2).toBeCloseTo(play.y + play.height / 2, 0);
+    expect(message.x + message.width).toBeLessThanOrEqual(play.x);
+    await expect(this.playerTime).not.toBeVisible();
+    await expect(this.timeline).not.toBeVisible();
     expect(await this.hasNoHorizontalOverflow()).toBe(true);
   }
 

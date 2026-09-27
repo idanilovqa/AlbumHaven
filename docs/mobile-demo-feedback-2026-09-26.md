@@ -204,17 +204,17 @@ These refinements retain the approved Home A, original large artwork, Compact
 cover A and Centered cover B; no new design approval or capability is introduced.
 Application base inspected: `0d18a1856d439de6d13726c431a3383be52e5909`.
 
-- [ ] L01 — Inline album identity is the only visible identity in either smaller-art
+- [x] L01 — Inline album identity is the only visible identity in either smaller-art
   layout while that block remains in the content viewport. Once the complete block
   and cover scroll out, the shared Gallery Bar displays the album identity and
   thumbnail. Scrolling back reverses it. The large-art variant always retains its
   original Gallery Bar identity. The player is intentionally independent.
-- [ ] L02 — Thin-line mode is 76px tall before safe-area inset. Keep artwork left,
+- [x] L02 — Thin-line mode is 76px tall before safe-area inset. Keep artwork left,
   artist above a single song / album line, timestamp at the bottom to the left of
   Play, and geometrically centered Play/Pause SVGs. The thin range stays operable;
   its invisible touch target must not intercept the Play or artwork buttons.
   Regular and waveform remain selectable and desktop presentation is unchanged.
-- [ ] L03 — Artists, Settings and account-navigation hamburger controls precede
+- [x] L03 — Artists, Settings and account-navigation hamburger controls precede
   their header names, including in DOM/keyboard order. No trigger returns to the
   search row. Preserve capabilities, page Back and subsection controls.
 
@@ -223,7 +223,7 @@ return identity checks for both small layouts and classic, drawer-trigger order,
 and narrow/normal phone transport geometry with real playback and seeking. Add
 unit coverage for a tall wrapped identity, missing cover, non-album page, and reverse
 scroll. Run the existing mobile development workflow without weakening its tests,
-timeouts or retry policy. Capture new real-app evidence. Counter: 0/3 latest
+timeouts or retry policy. Capture new real-app evidence. Counter: 3/3 latest
 corrections verified; the historical repair counts above are not release claims.
 
 
@@ -255,3 +255,118 @@ line heights and their boxes differed by one pixel. The actual screenshot confir
 the compact player and lower timestamp; set both track-line children to the same
 14px line height rather than weakening the assertion. The replay retains the same
 320px/390px bounds, centered-glyph and Play hit-target checks.
+
+
+### Latest corrections verified
+
+Application source `417f29b4eb17cf60844173e7cb48f5d0a65b694d` passed
+Mobile Layout Verification run `36273431960`: all seven baseline and ten extended
+real-app browser scenarios, focused unit/contract checks and production parity.
+Evidence snapshot: `4f6b7019fb57ec45e0ccc372f40838eb579c0a4f`.
+The final text alignment uses centered flex items and explicit equal text boxes;
+none of the geometry assertions or tolerances was relaxed. The thin range remains
+seekable without covering the Play hit target. Both 320px and 390px compositions
+passed, as did Play/Pause centering, saved preferences and desktop isolation.
+
+Inspected real screenshots: `42-album-stacked-bar.png`,
+`42-album-editorial-canvas.png`, `43-scrolled-stacked-bar.png`,
+`44-real-thin-progress.png` and `46-narrow-thin-player.png`. These render the actual
+production app against isolated Postgres and generated media, not mockups.
+Both small-art variants show only their inline identity initially; the Gallery Bar
+takes over after scrolling. All three latest requirements are checked above (3/3).
+The older 35-item acceptance inventory is not silently converted into a full
+release certification by this development run. D01/D02 owner approvals remain
+recorded in the approved-design section.
+
+Changed source/test composition: nine files across the mobile header/album helper,
+mobile stylesheet, library/page-bar templates, shared POM, approved-options browser
+scenario, unit seam and this owning document. Exact direct-work/process elapsed
+times were not recorded. No main merge, native-platform certification or complete
+release-regression result is implied. Render staging/upgrade verification is a
+separate delivery step and must be checked before updating the deployed branch.
+
+
+## Final approved A/B and empty/three-line player repair
+
+Pinned base: `f3eaf46307f6ee08e00b0182f27a6f8ae9ba371f`. The final image and
+explicit last owner statements are recorded in the owning approval document.
+Earlier screenshots with swapped or vertical A controls are not authoritative.
+
+Implementation checklist (3/3 prepared; hosted verification is a separate gate):
+
+- [x] A remains side-by-side with square art, Back at the art's top-left, and
+  horizontal cover tools at the content's far right aligned to the art bottom.
+  B remains centered with vertical top-right tools and only artist • year/title
+  beneath. Both reuse the existing artbox, action nodes and Gallery Bar. The real
+  track table and its styling are unchanged. No redundant Album label/title outline.
+- [x] Back is the same shared control, moved between the overview and pinned bar;
+  the pinned identity overlays the scroll surface without changing its geometry.
+  Returning to classic/desktop restores the original controls. Cover refreshes
+  replace stale relocated tools rather than creating duplicate buttons.
+- [x] Empty playback puts its status beside the disabled Play control on the same
+  centerline. The 76px thin player has three independent metadata lines and a
+  fourth timestamp row. Overflow uses the existing compact metadata motion policy,
+  measured on resize/font/content changes, never restarted on every audio tick.
+  Reduced motion and desktop stop the animation. The editor preview uses the
+  mobile three-line composition; standard/waveform choices remain available.
+
+Acceptance coverage extends the existing approved-options flow with A/B geometry,
+Back and Cover Look Up navigation, square art, no tools inside the artbox, no title
+outline, exact B copy, and empty-state geometry at 320/390px. The sole superseded
+player expectation (song and album sharing a y-coordinate) is replaced by ordered,
+non-overlapping artist/song/album/timestamp rows per the owner's explicit reversal.
+All other size, seeking, icon-centering, persistence and desktop checks stay intact.
+No retry, timeout or geometry tolerance is relaxed.
+
+Focused local results: eight JavaScript seam tests passed, syntax and whitespace
+checks passed. An isolated Chromium DOM/component probe verified all three long
+text rows overflow independently, repeated ticks preserve their nodes, reduced
+motion toggles cleanly, desktop clears motion, and empty text remains centered at
+320/390px. This is component verification, not a production-app screenshot or a
+full release result. The normal hosted mobile workflow must pass before promoting
+these application changes to the generated-data Render demo. No secret, account,
+media inventory, real integration or hosting-plan change belongs to this repair.
+Historical R01–R35 counters above remain historical intake, not a new release claim.
+
+
+### Final-layout verification follow-up
+
+Run `36295983367` exercised application source
+`b071658c85bb95fecbfe7537339c2c4ae38339bb`. It passed six of seven baseline
+and eleven of twelve feedback scenarios, including both exact A/B arrangements,
+reverse identity handoff, real three-line playback/seek, saved appearance and
+cover-tool navigation. Retained evidence snapshot:
+`aa0633e52d19d4f2d5016430e2b81c51172b9ba4`.
+
+The empty-player check compared two different animation frames immediately after
+switching from thin to regular. The existing registered `--player-height`
+transition is 320ms; a local Chromium probe reproduced the identical 1.828px
+sequential-sample discrepancy while simultaneous centerlines differed by 0px.
+The POM now reads both existing bounding rectangles in one read-only evaluation,
+like the other transport geometry checks. The same centerline assertion,
+precision, hidden-control assertions, scenario, timeout and retry policy remain.
+This is a measurement repair, not a change to the approved player or its motion.
+
+The baseline All Artists inventory did not reach its last virtualized card after
+wheel input in that run. Preserve that failure and its trace; the inventory,
+scroll action and full eight-title assertion remain unchanged for verification.
+No deployment or new successful verification is claimed by this follow-up.
+
+
+### Layout round-trip correction
+
+Run `36296503948` passed all seven baseline and twelve feedback browser scenarios
+on source `e53e1e6b43cd119e5d8278f42d483071cc8b07ec`; the first run's gallery
+failure remains retained above, and its flow and assertions were not changed.
+The atomic empty-state measurement preserves the original alignment requirement.
+
+The final source pass found that switching a small-art layout through classic
+could retain the inline identity outside the newly created overview. An isolated
+Chromium DOM probe using the actual composition function reproduced the orphaned
+copy on A -> classic -> B -> classic -> A. Reattach the same retained identity to
+the current overview; keep one artwork, action group, identity and table. Add a
+real-app scenario for that exact saved-layout round trip through visible Settings
+and Back, without reload or runtime-state injection. It preserves all established
+assertions and adds no retry or timeout override. The three implementation items
+remain prepared (3/3); this correction still requires the normal hosted rerun
+before demo promotion. No table, audio-engine, permission or hosting change.

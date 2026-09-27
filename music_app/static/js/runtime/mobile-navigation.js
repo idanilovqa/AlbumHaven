@@ -414,7 +414,16 @@ function syncMobileAlbumHeader() {
     coverBottom: albumPage ? cover?.getBoundingClientRect().bottom : undefined,
     identityBottom: hasInlineIdentity ? identity.getBoundingClientRect().bottom : undefined,
   });
+  header.dataset.inlineAlbumLayout = String(Boolean(hasInlineIdentity));
   header.dataset.albumIdentityInBody = String(presentation.bodyOwnsIdentity);
+  // One Back button: beside the cover initially, in the pinned bar after handoff.
+  const back = document.getElementById('mobile-back-button');
+  const overview = document.querySelector('#track-modal .mobile-album-overview');
+  const backHost = presentation.bodyOwnsIdentity && overview ? overview : header;
+  if (back && back.parentElement !== backHost) backHost.prepend(back);
+  header.inert = presentation.bodyOwnsIdentity;
+  if (presentation.bodyOwnsIdentity) header.setAttribute('aria-hidden', 'true');
+  else header.removeAttribute('aria-hidden');
   context.inert = presentation.bodyOwnsIdentity;
   if (presentation.bodyOwnsIdentity) context.setAttribute('aria-hidden', 'true');
   else context.removeAttribute('aria-hidden');

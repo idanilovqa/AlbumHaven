@@ -62,3 +62,32 @@ test('album header preserves classic, no-art and non-album page identities', () 
   assert.equal(settings.bodyOwnsIdentity, false);
   assert.equal(settings.showCover, false);
 });
+
+
+test('small-art identity does not move to the bar while the cover is still visible', () => {
+  const { resolveMobileAlbumHeaderState: resolve } = load('album-details-components.js', ['resolveMobileAlbumHeaderState']);
+  const geometry = { albumPage: true, hasInlineIdentity: true, hasCover: true, viewportTop: 160, identityBottom: 140 };
+  assert.equal(resolve({ ...geometry, coverBottom: 190 }).bodyOwnsIdentity, true);
+  assert.equal(resolve({ ...geometry, coverBottom: 150 }).bodyOwnsIdentity, false);
+  assert.equal(resolve({ ...geometry, coverBottom: 150 }).showCover, true);
+});
+
+test('metadata updates preserve unchanged text nodes and expose three independent mobile values', () => {
+  let mobile = true;
+  const { renderGlobalPlayerMetadata } = load('player-loop-playback.js', ['renderGlobalPlayerMetadata'], {
+    usesMobilePageLayout: () => mobile,
+  });
+  const row = () => ({ _text: '', writes: 0, get textContent() { return this._text; }, set textContent(text) { this.writes++; this._text = text; } });
+  const els = { artist: row(), title: row(), albumLink: row() };
+  const track = { artist: 'Artist with a long name', title: 'Song with a long name', album: 'Album with a long name' };
+  renderGlobalPlayerMetadata(els, track);
+  assert.equal(els.artist.textContent, track.artist);
+  assert.equal(els.title.textContent, track.title);
+  assert.equal(els.albumLink.textContent, track.album);
+  renderGlobalPlayerMetadata(els, track);
+  for (const node of Object.values(els)) assert.equal(node.writes, 1);
+  mobile = false;
+  renderGlobalPlayerMetadata(els, track);
+  assert.equal(els.artist.hidden, true);
+  assert.equal(els.title.textContent, `${track.artist} - ${track.title} /`);
+});

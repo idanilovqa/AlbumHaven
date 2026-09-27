@@ -1,14 +1,91 @@
+// The persistent player owns only three measured rows. Audio ticks do not replace
+// their nodes or restart animation; ResizeObserver handles width/font changes.
+let globalPlayerMetadataMotion = null;
+function syncGlobalPlayerMetadataMotion(els, mobile) {
+  const rows = [els.artist, els.title, els.albumLink].filter(row => row?.ownerDocument?.createElement);
+  if (!rows.length || typeof window === 'undefined') return;
+  if (!mobile) {
+    globalPlayerMetadataMotion?.dispose();
+    globalPlayerMetadataMotion = null;
+    return;
+  }
+  if (!globalPlayerMetadataMotion) {
+    const entries = new Map();
+    const media = window.matchMedia?.('(prefers-reduced-motion: reduce)');
+    let frame = 0;
+    let disposed = false;
+    const refresh = () => {
+      frame = 0;
+      for (const [row, text] of entries) {
+        const motion = !media?.matches && !row.hidden
+          ? resolveCompactPlayerMetadataRowMotion({ scrollWidth: text.scrollWidth, clientWidth: row.clientWidth })
+          : { overflowing: false, distance: 0, durationMs: 0 };
+        row.classList.toggle('is-metadata-overflowing', motion.overflowing);
+        row.style.setProperty('--player-metadata-distance', `${motion.distance}px`);
+        row.style.setProperty('--player-metadata-duration', `${motion.durationMs}ms`);
+      }
+    };
+    const schedule = () => {
+      if (!disposed && !frame) frame = window.requestAnimationFrame(refresh);
+    };
+    const observer = typeof ResizeObserver === 'function' ? new ResizeObserver(schedule) : null;
+    media?.addEventListener?.('change', schedule);
+    window.addEventListener('resize', schedule, { passive: true });
+    document.fonts?.ready.then(schedule);
+    globalPlayerMetadataMotion = {
+      update(row) {
+        let text = row.querySelector('[data-player-metadata-text]');
+        if (!text) {
+          text = row.ownerDocument.createElement('span');
+          text.setAttribute('data-player-metadata-text', '');
+          text.textContent = row.textContent;
+          row.replaceChildren(text);
+        }
+        if (entries.get(row) === text) return;
+        const previous = entries.get(row);
+        if (previous) observer?.unobserve(previous);
+        entries.set(row, text);
+        observer?.observe(row);
+        observer?.observe(text);
+        schedule();
+      },
+      dispose() {
+        disposed = true;
+        if (frame) window.cancelAnimationFrame(frame);
+        observer?.disconnect();
+        media?.removeEventListener?.('change', schedule);
+        window.removeEventListener('resize', schedule);
+        for (const row of entries.keys()) {
+          row.classList.remove('is-metadata-overflowing');
+          row.style.removeProperty('--player-metadata-distance');
+          row.style.removeProperty('--player-metadata-duration');
+        }
+        entries.clear();
+      },
+    };
+  }
+  rows.forEach(row => globalPlayerMetadataMotion.update(row));
+}
+
 function renderGlobalPlayerMetadata(els, track) {
   const mobile = typeof usesMobilePageLayout === 'function' && usesMobilePageLayout();
+  const setText = (row, text) => {
+    if (!row) return;
+    if (row.textContent !== text) row.textContent = text;
+    if (mobile) row.setAttribute?.('title', text);
+    else row.removeAttribute?.('title');
+  };
   if (els.artist) {
     els.artist.hidden = !mobile || !track;
-    els.artist.textContent = track?.artist || '';
+    setText(els.artist, track?.artist || '');
   }
-  if (els.title) {
-    const parts = (mobile ? [track?.title] : [track?.artist, track?.title]).filter(Boolean);
-    els.title.textContent = parts.length ? `${parts.join(' - ')}${!mobile && track?.album ? ' /' : ''}` : '';
+  const parts = (mobile ? [track?.title] : [track?.artist, track?.title]).filter(Boolean);
+  setText(els.title, parts.length ? `${parts.join(' - ')}${!mobile && track?.album ? ' /' : ''}` : '');
+  if (els.albumLink) {
+    setText(els.albumLink, track?.album || '');
+    els.albumLink.hidden = !track?.album;
   }
-  if (els.albumLink) { els.albumLink.textContent = track?.album || ''; els.albumLink.hidden = !track?.album; }
+  syncGlobalPlayerMetadataMotion(els, mobile);
 }
 
 function renderGlobalPlayerPlayGlyph(button, paused) {
@@ -88,6 +165,9 @@ function updatePlayerUi() {
   const displayTrack = mirroredTrack || state.player.current;
   state.player.lastKnownWasPlaying = Boolean(!lockedByAnotherTab && !playback.paused && !playback.ended);
   const hasTrack = Boolean(displayTrack && (lockedByAnotherTab || playback.src || state.player.current?.src));
+  els.player?.classList?.toggle('is-empty', !hasTrack);
+  const emptyMessage = els.player?.querySelector?.('[data-player-empty-message]');
+  if (emptyMessage) emptyMessage.hidden = hasTrack;
   const duration = getPlayerDuration();
   const dragPreview = Number(state.player.timelineDragPreviewSeconds);
   const current = state.player.timelineDragging && Number.isFinite(dragPreview)

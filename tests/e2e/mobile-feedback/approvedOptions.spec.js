@@ -203,3 +203,28 @@ test('relocated album actions retain cover lookup and Back without changing the 
     await app.expectApprovedAlbumOverview(layout);
   }
 });
+
+
+test('switching through original artwork restores each approved overview without reloading', async ({ app, snapshot }) => {
+  await app.search('Sixteen Horizons');
+  await app.openAlbumBody('Sixteen Horizons');
+  for (const [index, layout] of ['stacked_bar', 'classic_bar', 'editorial_canvas', 'classic_bar', 'stacked_bar'].entries()) {
+    await app.openSettings();
+    await app.selectSubsection('album-page');
+    if (index === 0) await app.customAppearance.click();
+    await app.albumLayout(layout).click();
+    await app.saveAppearanceChanges();
+    await app.backButton.click();
+    await expect(app.albumPage).toHaveAttribute('data-mobile-album-layout', layout);
+    await expect(app.albumRows).toHaveCount(16);
+    if (layout === 'classic_bar') {
+      await expect(app.pageTitle).toBeVisible();
+      await expect(app.albumIdentity).not.toBeVisible();
+    } else {
+      await expect(app.pageTitle).not.toBeVisible();
+      await expect(app.albumIdentity).toBeVisible();
+      await app.expectApprovedAlbumOverview(layout);
+    }
+  }
+  await snapshot('51-approved-a-after-layout-roundtrip');
+});

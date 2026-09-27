@@ -148,8 +148,9 @@ function syncMobileAlbumComposition(album) {
   if (inline && !identity) {
     identity = document.createElement('div');
     identity.className = 'mobile-album-identity';
-    overview.appendChild(identity);
   }
+  // Classic/desktop keeps the copy outside its retired overview; reattach on return.
+  if (inline && identity.parentElement !== overview) overview.appendChild(identity);
   if (identity) {
     identity.hidden = !inline;
     if (inline) {

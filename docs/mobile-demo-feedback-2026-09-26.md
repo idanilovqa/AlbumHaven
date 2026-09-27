@@ -351,3 +351,22 @@ The baseline All Artists inventory did not reach its last virtualized card after
 wheel input in that run. Preserve that failure and its trace; the inventory,
 scroll action and full eight-title assertion remain unchanged for verification.
 No deployment or new successful verification is claimed by this follow-up.
+
+
+### Layout round-trip correction
+
+Run `36296503948` passed all seven baseline and twelve feedback browser scenarios
+on source `e53e1e6b43cd119e5d8278f42d483071cc8b07ec`; the first run's gallery
+failure remains retained above, and its flow and assertions were not changed.
+The atomic empty-state measurement preserves the original alignment requirement.
+
+The final source pass found that switching a small-art layout through classic
+could retain the inline identity outside the newly created overview. An isolated
+Chromium DOM probe using the actual composition function reproduced the orphaned
+copy on A -> classic -> B -> classic -> A. Reattach the same retained identity to
+the current overview; keep one artwork, action group, identity and table. Add a
+real-app scenario for that exact saved-layout round trip through visible Settings
+and Back, without reload or runtime-state injection. It preserves all established
+assertions and adds no retry or timeout override. The three implementation items
+remain prepared (3/3); this correction still requires the normal hosted rerun
+before demo promotion. No table, audio-engine, permission or hosting change.

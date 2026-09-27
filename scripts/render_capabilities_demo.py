@@ -80,7 +80,7 @@ def application_url(admin_url: str, password: str) -> str:
 def assert_ownership(connection) -> bool:
     exists = connection.execute("select to_regclass('app.bootstrap_owners')").fetchone()[0]
     if exists is None:
-        occupied = connection.execute("select count(*) from information_schema.tables where table_schema in ('app','library','integration','ops')").fetchone()[0]
+        occupied = connection.execute("select count(*) from information_schema.tables where table_schema not in ('pg_catalog','information_schema') and table_type='BASE TABLE'").fetchone()[0]
         if occupied:
             raise ValueError('Refusing to initialize unrelated application schemas.')
         return True
@@ -171,7 +171,6 @@ def prepare() -> None:
     import psycopg
     from psycopg import sql
     from psycopg.types.json import Jsonb
-    from music_app.services.capability_assignments import build_assignment, store_assignment
     metadata = read_database_configuration()
     admin_url = metadata['connection_string']
     app_password = os.environ.get('ALBUM_HAVEN_CAPS_APP_DB_PASSWORD', '')
@@ -180,6 +179,7 @@ def prepare() -> None:
         raise ValueError('Separate strong database password and demo password hashes are required.')
     runtime_url = application_url(admin_url, app_password)
     configure(runtime_url)
+    from music_app.services.capability_assignments import build_assignment, store_assignment
     with psycopg.connect(admin_url, autocommit=True, connect_timeout=30) as connection:
         connection.execute("set lock_timeout='60s'")
         connection.execute("set statement_timeout='120s'")
@@ -191,6 +191,8 @@ def prepare() -> None:
                     existing = connection.execute('select rolsuper,rolcreaterole,rolcreatedb,rolbypassrls from pg_roles where rolname=%s',(role,)).fetchone()
                     if existing is None:
                         connection.execute(sql.SQL('create role {} nologin').format(sql.Identifier(role)))
+                    elif first:
+                        raise ValueError('Reserved application roles already exist outside this demo; refusing to reuse them.')
                     elif any(existing):
                         raise ValueError('Refusing an overprivileged existing application role.')
                 connection.execute(sql.SQL('alter role album_haven_app login password {}').format(sql.Literal(app_password)))
@@ -199,7 +201,7 @@ def prepare() -> None:
                     marker = Jsonb({'deployment':MARKER})
                     owner = connection.execute("insert into app.accounts (display_name,account_kind,username_display,username_normalized,contact_email,contact_email_normalized,metadata) values ('Rendref','bootstrap_owner','Rendref','rendref','capabilities-recovery@example.test','capabilities-recovery@example.test',%s) returning id", (marker,)).fetchone()[0]
                     connection.execute("insert into app.bootstrap_owners(account_id,owner_key,metadata) values (%s,'local-bootstrap-owner',%s)",(owner,marker))
-                    library = connection.execute("insert into library.libraries(owner_account_id,name,library_kind,metadata) values (%s,'Capabilities Demo Library','local',%s) returning id",(owner,marker)).fetchone()[0]
+                    library = connection.execute("insert into library.libraries(owner_account_id,name,library_kind,metadata) values (%s,'Local Library','local',%s) returning id",(owner,marker)).fetchone()[0]
                     connection.execute("insert into library.library_memberships(library_id,account_id,membership_role) values (%s,%s,'owner')",(library,owner))
                     connection.execute("insert into app.account_credentials(account_id,encoded_hash,hash_algorithm,hash_policy_version,credential_version,administrator_set) values (%s,%s,'argon2id',1,1,false)",(owner,hashes['Rendref']))
                 library = connection.execute("select l.id from library.libraries l join app.bootstrap_owners b on l.owner_account_id=b.account_id where b.owner_key='local-bootstrap-owner' and l.library_kind='local'").fetchone()[0]

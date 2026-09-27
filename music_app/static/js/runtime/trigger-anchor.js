@@ -22,6 +22,7 @@ function activateTriggerSurface(surface, close) {
     previous.close();
   }
   activeTriggerSurface = { surface, close, parent: activeTriggerSurface };
+  if (typeof CustomEvent === 'function') surface.ownerDocument?.dispatchEvent?.(new CustomEvent('album-haven:surface-opening', { detail: { surface } }));
 }
 
 const triggerAnchorBindings = new WeakMap();
@@ -155,6 +156,7 @@ function installPanelSelectionBoundary() {
   };
   document.addEventListener('pointerdown', event => {
     release();
+    if (event.pointerType === 'touch') { gestureOrigin = null; return; }
     gestureOrigin = event.button === 0 ? event.target.closest?.('.trigger-anchor-surface, .artist-info-overlay, [role="dialog"], [role="menu"]') : null;
     origin = event.button === 0 ? event.target.closest?.('.artist-info-overlay, .trigger-anchor-surface, .album-track-table, [role=dialog]') : null;
     if (origin) {
@@ -180,3 +182,15 @@ function installPanelSelectionBoundary() {
   document.addEventListener('pointercancel', () => { gestureOrigin = null; release(); }, true);
   globalThis.addEventListener?.('blur', () => { gestureOrigin = null; release(); });
 }
+
+// Standalone Settings pages participate without depending on the library bundle.
+globalThis.document?.addEventListener?.('album-haven:surface-opening', event => {
+  const surface = event.detail?.surface;
+  if (!surface) return;
+  while (activeTriggerSurface && activeTriggerSurface.surface !== surface
+      && !activeTriggerSurface.surface.contains?.(surface)) {
+    const previous = activeTriggerSurface;
+    activeTriggerSurface = previous.parent || null;
+    previous.close();
+  }
+});

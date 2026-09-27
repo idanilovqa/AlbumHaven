@@ -27,12 +27,15 @@
     };
     const openDrawer = anchor => {
       drawerAnchor = anchor;
+      document.dispatchEvent(new window.CustomEvent('album-haven:surface-opening', { detail: { surface: nav } }));
       nav.classList.add('is-settings-navigation-open');
       nav.inert = false; nav.setAttribute('aria-hidden', 'false');
       anchor.setAttribute('aria-expanded', 'true');
       if (drawerBackdrop) drawerBackdrop.hidden = false;
       nav.querySelector('button:not([disabled]), a[href]')?.focus();
     };
+    const onSurfaceOpening = event => { if (event.detail?.surface !== nav && !nav.contains(event.detail?.surface)) closeDrawer(false); };
+    document.addEventListener('album-haven:surface-opening', onSurfaceOpening);
     const syncDrawerLayout = () => closeDrawer(false);
     window.addEventListener('resize', syncDrawerLayout);
     closeDrawer(false);
@@ -119,7 +122,7 @@
       window.NavigationTree.setSelection(nav, url.pathname === '/account' ? 'account' : 'users');
     };
 
-    async function navigate(value, { historyMode = 'push', method = 'GET', body, leaveConfirmed = false } = {}) {
+    async function navigate(value, { historyMode = 'push', method = 'GET', body, leaveConfirmed = false, hierarchy = false } = {}) {
       const url = urlFor(value);
       const posting = method === 'POST' && url && isAccountPost(url.pathname);
       const returning = library && url && (url.href === libraryUrl || url.pathname === '/');
@@ -142,6 +145,13 @@
         library.hidden = false;
         document.title = libraryTitle;
         updateHistory(libraryUrl, historyMode, libraryHistoryState);
+        if (hierarchy && typeof window.AlbumHavenReturnToGallery === 'function') {
+          window.AlbumHavenReturnToGallery();
+          libraryUrl = window.location.href;
+          libraryHistoryState = window.history.state;
+          updateHistory(libraryUrl, 'none');
+          libraryTitle = document.title;
+        }
         navigationPending = false;
         return true;
       }
@@ -212,7 +222,7 @@
       const url = urlFor(link.href);
       if (!url || (!isSettingsPath(url.pathname) && !(library && !host.hidden && url.pathname === '/'))) return;
       event.preventDefault();
-      void navigate(url.href);
+      void navigate(url.href, { hierarchy: link.hasAttribute('data-settings-parent') || url.pathname === '/' });
     };
     const onSubmit = (event) => {
       const form = event.target;
@@ -299,6 +309,7 @@
         ++sequence;
         pending?.abort();
         disposeContent();
+        document.removeEventListener('album-haven:surface-opening', onSurfaceOpening);
         document.removeEventListener('keydown', onDrawerKeydown);
         window.removeEventListener('resize', syncDrawerLayout);
         document.removeEventListener('click', onClick);

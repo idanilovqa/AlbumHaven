@@ -204,3 +204,20 @@
   background: var(--dropdown-item-hover-background, color-mix(in srgb, var(--text, #eee) 8%, var(--panel, #171717))) !important;
   border-color: transparent !important;
 }
+
+@media (max-width: 900px) {
+  :root :is(.account-menu-item, .gallery-anchored-menu button, .gallery-anchored-menu a, .recent-search-option, .navigation-tree-item):is(:hover, :active, :focus-visible):not(:disabled):not([aria-disabled="true"]) {
+    background: transparent !important; box-shadow: none !important; color: var(--text, var(--appearance-ink));
+    text-decoration: underline; text-decoration-thickness: 1px; text-underline-offset: .22em;
+  }
+  :root .gallery-bar :is(.action-button, .gallery-action-button, .gallery-view-choice, .gallery-view-cluster):not(.trigger-anchor-open):is(:hover, :active) { background: transparent !important; box-shadow: none !important; }
+  :root .artist-family-panel.trigger-anchor-surface { clip-path: inset(0 -80px -80px -80px) !important; }
+}
+
+@media (max-width: 900px) {
+  :root .navigation-tree-item:is(.is-selected, .active, .is-active) {
+    background: transparent !important; box-shadow: none !important;
+    color: var(--text, var(--appearance-ink)); text-decoration: underline; text-underline-offset: .22em;
+  }
+  :root .in-page-tabs [role="tab"]:is(:hover, :active, :focus-visible) { background: transparent !important; }
+}

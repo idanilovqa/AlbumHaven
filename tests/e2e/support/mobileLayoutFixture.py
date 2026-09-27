@@ -88,3 +88,72 @@ def seed_mobile_recent_history(database_url: str) -> None:
                 (account_id, library_id, track_id, played_at, listen_source, source_family, source_entry_id)
                 values (%s,%s,%s,%s,'local','mobile-layout-fixture',%s)""",
                 (owner, library_id, track_id, now - timedelta(minutes=index * 13), f"fixture-{index}"))
+
+
+# Opt-in generated previews only. The production application never reads this list.
+DEMO_LOOP_WINDOWS = (
+    ('opening-motif', 'After the Rain', 'Open Water', 'Opening motif', 2.0, 10.0),
+    ('rhythm-study', 'After the Rain', 'Open Water', 'Rhythm study', 18.0, 30.0),
+    ('transition', 'After the Rain', 'Open Water', 'Transition', 42.0, 51.0),
+    ('night-pulse', 'Night Atlas', 'Open Water', 'Night pulse', 4.0, 16.0),
+    ('night-coda', 'Night Atlas', 'Open Water', 'Night coda', 24.0, 32.0),
+    ('first-light', LONG_ALBUM, 'First Horizon', 'First light', 0.5, 5.0),
+    ('horizon-phrase', LONG_ALBUM, 'First Horizon', 'Horizon phrase', 5.0, 10.5),
+)
+
+
+def seed_mobile_demo_loops(database_url: str, inventory: dict, data_dir: Path) -> None:
+    """Add playable clips through the scoped repository without resetting saved loops.
+
+    Call only after isolated/demo ownership validation and normal inventory seeding.
+    Existing IDs, titles, order, removals and user-created clips are not rewritten.
+    Regenerate missing disposable media after hosting restarts, never real media.
+    """
+    import psycopg
+    from psycopg.rows import dict_row
+    from music_app.services.loops import create_loop_file, loops_dir
+    from music_app.services.saved_loops_postgres import SavedLoopsPostgresAdapter
+
+    with psycopg.connect(database_url, row_factory=dict_row) as connection:
+        scope = connection.execute("""select o.account_id, l.id as library_id
+            from app.bootstrap_owners o join library.libraries l
+            on l.owner_account_id=o.account_id
+            where o.owner_key='local-bootstrap-owner'
+            and l.name='Local Library' and l.library_kind='local'""").fetchone()
+        if scope is None:
+            raise RuntimeError('Generated loop preview requires its existing owner and library.')
+        keys = [f'mobile-demo-loop-{item[0]}' for item in DEMO_LOOP_WINDOWS]
+        saved = {row['loop_key']: row for row in connection.execute("""select loop_key,
+            source_private_path, loop_private_path, start_seconds, end_seconds, metadata
+            from app.saved_loops where account_id=%s and library_id=%s and loop_key=any(%s)""",
+            (scope['account_id'], scope['library_id'], keys)).fetchall()}
+    config = {'ALBUM_HAVEN_APP_DATABASE_URL': database_url, 'DATA_DIR': data_dir}
+    adapter = SavedLoopsPostgresAdapter(config)
+    directory = loops_dir(config, **scope)
+    for suffix, album, title, name, start, end in DEMO_LOOP_WINDOWS:
+        key = f'mobile-demo-loop-{suffix}'
+        source = next((item for item in inventory.values()
+                       if item['artist'] == 'Northlight' and item['album'] == album and item['title'] == title), None)
+        if source is None:
+            raise RuntimeError('Generated loop source is missing from the prepared preview inventory.')
+        existing = saved.get(key)
+        if existing and (existing.get('metadata') or {}).get('removed') in (True, 'true'):
+            continue
+        path = directory / f'{key}.mp3'
+        source_path = Path(source['path']).resolve()
+        if existing:
+            # Do not overwrite a relocated artifact or a source outside this generated inventory.
+            if existing['loop_private_path'] != str(path) or existing['source_private_path'] != str(source_path):
+                continue
+            start, end = float(existing['start_seconds']), float(existing['end_seconds'])
+        if not 0 <= start < end <= float(source['duration_seconds']):
+            raise RuntimeError('Generated loop range no longer fits its prepared source.')
+        if not path.exists():
+            create_loop_file(config, source_path, start, end, key, **scope)
+        if not existing:
+            adapter.add_scoped_loop(**scope, item={
+                'id': key, 'name': name, 'artist': source['artist'], 'album': album,
+                'title': title, 'source_path': str(source_path), 'path': str(path),
+                'start_seconds': start, 'end_seconds': end, 'duration_seconds': end - start,
+                'created_at': '2026-09-27T00:00:00+00:00',
+            })

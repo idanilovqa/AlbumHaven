@@ -11,7 +11,7 @@ export class MobileLayoutPage {
     this.appShell = page.locator('#app-shell');
     this.home = page.locator('#mobile-home');
     this.galleryContextName = page.locator('[data-gallery-bar-instance="gallery"] [data-gallery-context-name]');
-    this.artistHeading = page.locator('#shell-navigation-rail h2');
+    this.artistHeading = page.locator('#shell-navigation-rail h2:visible');
     this.homeCards = this.home.locator('.album-card');
     this.homeAlbums = this.home.locator('[data-open-tracklist]');
     this.homeTabs = this.home.getByRole('tablist', { name: 'Recent listening' });
@@ -185,7 +185,7 @@ export class MobileLayoutPage {
     expect(geometry.time.height).toBeLessThan(20);
     expect(geometry.song.y).toBeGreaterThanOrEqual(geometry.artist.bottom);
     expect(geometry.album.y).toBeGreaterThanOrEqual(geometry.song.bottom);
-    expect(geometry.time.y).toBeGreaterThanOrEqual(geometry.album.bottom);
+    expect(geometry.time.y + geometry.time.height / 2).toBeCloseTo(geometry.album.y + geometry.album.height / 2, 0);
     expect(geometry.song.height).toBeLessThan(20);
     expect(geometry.album.height).toBeLessThan(20);
     expect(geometry.icon.x + geometry.icon.width / 2).toBeCloseTo(geometry.play.x + geometry.play.width / 2, 0);

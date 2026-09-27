@@ -160,10 +160,12 @@ def provision(admin_url: str, runtime_url: str, app_password: str, password_hash
             # Never import or start phase7AuthApp's control/reset/SMTP servers.
             support = ROOT / "tests" / "e2e" / "support"
             sys.path.insert(0, str(support))
-            from mobileLayoutFixture import prepare_mobile_layout_media
+            from mobileLayoutFixture import prepare_mobile_layout_media, seed_mobile_demo_loops
             from phase7PlaybackFixture import persist_settings_playback_inventory
             inventory = prepare_mobile_layout_media(DEMO_ROOT / "media", extended=extended_media)
             persist_settings_playback_inventory(admin_url, DEMO_ROOT / "media", inventory, rebuild_relations=extended_media)
+            if extended_media:
+                seed_mobile_demo_loops(runtime_url, inventory, DEMO_ROOT / "app-data")
             sys.path.remove(str(support))
             with lock.transaction():
                 account_id = lock.execute("select account_id from app.bootstrap_owners where owner_key='local-bootstrap-owner'").fetchone()[0]

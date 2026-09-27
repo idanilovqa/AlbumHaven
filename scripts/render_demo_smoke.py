@@ -37,6 +37,7 @@ preferences = PostgresClientLayoutPreferences({"ALBUM_HAVEN_APP_DATABASE_URL": o
 preferences.save_changes(account_id=account_id, profile="mobile", changes={"mobileGridColumns": 3})
 # Upgrade the original eight-album deployment, then repeat the expanded startup.
 # Both passes retain the same existing account, IDs, preferences and listening history.
+seeded_loops = None
 for _ in range(2):
     os.environ.update(settings)
     render_demo.prepare()
@@ -51,6 +52,19 @@ for _ in range(2):
         assert connection.execute("select count(*) from library.local_artist_family_links").fetchone()[0] > 0
         assert connection.execute("select current_user").fetchone()[0] == "album_haven_app"
         assert not connection.execute("select has_schema_privilege(current_user,'app','CREATE')").fetchone()[0]
+        loops = connection.execute("""select id,loop_key,loop_private_path,start_seconds,end_seconds
+            from app.saved_loops where account_id=%s and loop_key like 'mobile-demo-loop-%%'
+            order by loop_key""", (account_id,)).fetchall()
+        assert len(loops) == 7, len(loops)
+        for row in loops:
+            media = Path(row[2])
+            assert media.is_relative_to(render_demo.DEMO_ROOT / "app-data")
+            assert media.is_file() and media.stat().st_size > 0
+            assert float(row[4]) > float(row[3]) >= 0
+        if seeded_loops is None:
+            seeded_loops = loops
+        else:
+            assert loops == seeded_loops, "Repeated startup changed saved loop identities or ranges"
     assert preferences.load_profiles(account_id=account_id)["mobile"]["mobileGridColumns"] == 3
 
 from music_app import create_asgi_app
@@ -66,4 +80,9 @@ with TestClient(create_asgi_app(), base_url=settings["ALBUM_HAVEN_PUBLIC_BASE_UR
     assert "failed" not in response.headers.get("location", ""), response.headers.get("location")
     assert client.get("/account/layout-preferences").status_code == 200
     assert client.get("/").status_code == 200
-print("PASS: original 8-album library upgraded to 39 albums/130 tracks, sixteen-track album, family projection, repeated startup, preserved IDs/credentials/history/preferences, restricted DB role, real login and authenticated routes.")
+    for row in seeded_loops:
+        clip = client.get("/loops/media/" + row[1])
+        assert clip.status_code == 200, clip.status_code
+        assert clip.headers.get("content-type", "").startswith("audio/")
+        assert len(clip.content) > 0
+print("PASS: original 8-album library upgraded to 39 albums/130 tracks, sixteen-track album, family projection, repeated startup, preserved IDs/credentials/history/preferences, restricted DB role, real login, authenticated routes and seven retained playable demo loops.")

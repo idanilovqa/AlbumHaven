@@ -48,16 +48,23 @@ test('single mobile track-body activation uses the real play control and exclude
   const row = { querySelector: () => button, contains: () => false, dataset: {}, ownerDocument: { getSelection: () => ({ removeAllRanges() {} }) } };
   const context = load('album-track-table.js', { usesMobilePageLayout: () => true,
     window: { getSelection: () => ({ removeAllRanges() {} }) }, state: { player: { current: null } },
-    triggerAlbumTrackPlayActivation: () => calls.push('pulse'),
+    activateSharedTrackButton: (target, options) => {
+      assert.equal(target, button);
+      assert.equal(options.restart, true);
+      calls.push('restart');
+    },
   });
   // The table event uses the component's existing click route, never a second player.
   const event = { target: { closest: () => null }, currentTarget: row, detail: 1, preventDefault() {} };
   context.handleAlbumTrackRowClick(event);
   assert.equal(calls.filter(x => x === 'play').length, 1);
   context.handleAlbumTrackRowClick({ ...event, target: { closest: () => button } });
+  assert.deepEqual(calls, ['play']);
   context.handleAlbumTrackRowClick({ ...event, detail: 2 });
+  // Mobile handles the second tap above; a native dblclick must not restart twice.
   context.handleAlbumTrackRowDoubleClick(event);
   assert.equal(calls.filter(x => x === 'play').length, 1);
+  assert.equal(calls.filter(x => x === 'restart').length, 1);
 });
 
 test('personal Home is distinct from the explicit All Artists route', () => {

@@ -38,7 +38,15 @@ function observeArtistFamilyPanelBounds({ panel, player } = {}) {
   if (!panel || !player) return { disconnect() {} };
   const update = () => {
     const playerBounds = player.getBoundingClientRect?.();
-    const panelBounds = panel.getBoundingClientRect?.();
+    let panelBounds = panel.getBoundingClientRect?.();
+    // Reserve the visible player's space using the drawer's settled box, not
+    // its off-screen animation frame, so the first swipe cannot hit the player.
+    const panelStyle = typeof getComputedStyle === 'function' ? getComputedStyle(panel) : null;
+    if (panelBounds && panelStyle?.transform && panelStyle.transform !== 'none'
+        && typeof DOMMatrixReadOnly === 'function') {
+      const transform = new DOMMatrixReadOnly(panelStyle.transform);
+      panelBounds = { left: panelBounds.left - transform.m41, right: panelBounds.right - transform.m41 };
+    }
     const style = typeof getComputedStyle === 'function' ? getComputedStyle(player) : null;
     const opacity = Number.parseFloat(style?.opacity);
     const visible = !player.hidden

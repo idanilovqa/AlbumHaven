@@ -380,7 +380,7 @@ html[data-client-profile="mobile"] :is([data-utility-tab="problematic-files"], [
   .shell-navigation-rail .mobile-artists-mode { display: block; }
   .mobile-artists-mode-button { width: auto; min-width: 0; height: 40px; padding: 0 12px; border: 1px solid var(--appearance-panel-line, var(--border)); border-radius: 9px; color: inherit; background: transparent; }
   .shell-navigation-rail .mobile-artists-mode { flex: 0 1 auto; min-width: 0; }
-  .shell-navigation-rail .mobile-artists-mode-button { display: inline-flex; width: max-content; max-width: 100%; flex: none; }
+  .shell-navigation-rail .mobile-artists-mode-button { display: inline-flex; width: max-content; max-width: 100%; flex: none; aspect-ratio: auto; }
   .mobile-artists-mode-button .action-button__content { display: flex; align-items: center; gap: 8px; width: auto; height: auto; }
   .shell-navigation-rail .sidebar-top .mobile-bar-action { display: inline-grid; width: 40px; height: 40px; min-width: 40px; min-height: 40px; }
   .shell-navigation-rail .sidebar-top .mobile-bar-action svg { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }

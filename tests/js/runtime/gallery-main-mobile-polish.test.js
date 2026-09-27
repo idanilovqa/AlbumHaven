@@ -116,3 +116,26 @@ test('mobile artist dialog restores previous inert states instead of enabling an
   assert.deepEqual(nodes.map(node => node.inert), [false, true, false]);
   assert.equal(backdrop.hidden, true);
 });
+
+
+test('sliding family reserves the player edge before its first touch, using its settled horizontal bounds', () => {
+  let moving = true;
+  const playerBounds = { left: 0, right: 390, top: 524, bottom: 600, width: 390, height: 76 };
+  const panel = { style: {}, getBoundingClientRect: () => moving ? { left: 390, right: 683 } : { left: 97, right: 390 } };
+  const player = { getBoundingClientRect: () => playerBounds };
+  const { observeArtistFamilyPanelBounds: observe } = load('gallery-main-interactions.js', ['observeArtistFamilyPanelBounds'], {
+    window: { innerHeight: 600 },
+    getComputedStyle: node => node === panel ? { transform: moving ? 'matrix(1, 0, 0, 1, 293, 0)' : 'none' }
+      : { opacity: '1', display: 'block', visibility: 'visible' },
+    DOMMatrixReadOnly: class { constructor() { this.m41 = 293; } },
+  });
+  const observer = observe({ panel, player });
+  assert.equal(panel.style.bottom, '76px');
+  moving = false;
+  observer.refresh();
+  assert.equal(panel.style.bottom, '76px');
+  // Desktop floating transports outside the panel's horizontal span do not reserve space.
+  playerBounds.right = 50;
+  observer.refresh();
+  assert.equal(panel.style.bottom, '0px');
+});

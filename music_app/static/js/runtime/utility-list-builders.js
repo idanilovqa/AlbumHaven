@@ -53,7 +53,7 @@ function buildUtilityLoopEntry(loop) {
         ${state.utility.allowedActions?.['library.loops.delete'] === true ? window.ButtonComponent.renderActionButton({ icon: 'delete', semantic: 'destructive', ariaLabel: `Delete ${loop.name || 'Saved loop'}`, title: `Delete ${loop.name || 'Saved loop'}`, className: 'utility-loop-remove', attributes: { 'data-delete-saved-loop': loop.id || '' } }) : ''}
       </div>
       <div class="utility-loop-shell" data-utility-loop-shell="${escapeHtml(loop.id || '')}">
-        <audio class="utility-loop-audio" data-loop-audio="${escapeHtml(loop.id || '')}" data-original-src="${mediaSrc}" src="${mediaSrc}" preload="none"></audio>
+        <audio class="utility-loop-audio" data-loop-audio="${escapeHtml(loop.id || '')}" data-original-src="${mediaSrc}" data-loop-duration="${Math.max(0, Number(loop.duration_seconds) || 0)}" src="${mediaSrc}" preload="none"></audio>
         ${renderPlaybackControlCluster({
           variant: 'saved-loop',
           ownerId: `saved-loop-${String(loop.id || '')}`,
@@ -80,9 +80,13 @@ function buildUtilityLoopEntry(loop) {
           </div>
         </div>
         <button class="utility-loop-repeat ${repeatEnabled ? 'is-active' : ''}" type="button" data-toggle-loop-repeat="${escapeHtml(loop.id || '')}" aria-pressed="${repeatEnabled ? 'true' : 'false'}" aria-label="${repeatEnabled ? 'Disable repeat' : 'Enable repeat'}" title="${repeatEnabled ? 'Disable repeat' : 'Enable repeat'}">&#8635;</button>
+        ${window.ButtonComponent.renderButton({ label: 'Pitch 0', size: 'small', className: 'utility-loop-pitch-button', ariaLabel: 'Pitch shift', attributes: { 'data-loop-pitch-value-button': loop.id || '', 'aria-haspopup': 'menu', 'aria-expanded': 'false' } })}
+        <div class="utility-loop-speed-menu utility-loop-pitch-menu" data-loop-pitch-menu="${loopId}" role="menu" aria-label="Pitch shift" hidden>
+          ${Array.from({ length: 25 }, (_, index) => index - 12).map(value => `<button type="button" role="menuitemradio" aria-checked="${value === 0}" data-loop-pitch-option="${value}">${value === 0 ? 'Original pitch' : `${value > 0 ? '+' : ''}${value} semitones`}</button>`).join('')}
+        </div>
         <div class="utility-loop-speed-control" data-loop-speed-control="${escapeHtml(loop.id || '')}" aria-label="Playback speed">
           <button class="utility-loop-speed-step" type="button" data-loop-speed-step="-0.05" aria-label="Decrease speed">-</button>
-          <button class="utility-loop-speed-value" type="button" data-loop-speed-value-button="${escapeHtml(loop.id || '')}" aria-label="Playback speed">1x</button>
+          <button class="utility-loop-speed-value" type="button" data-loop-speed-value-button="${escapeHtml(loop.id || '')}" aria-label="Playback speed" aria-haspopup="menu" aria-expanded="false">1x</button>
           <button class="utility-loop-speed-step" type="button" data-loop-speed-step="0.05" aria-label="Increase speed">+</button>
           <div class="utility-loop-speed-menu" data-loop-speed-menu="${escapeHtml(loop.id || '')}" hidden>
             <button type="button" data-loop-speed-option="0.25">0.25x</button>

@@ -23,7 +23,8 @@ async function handleUtilityBootstrapClick(event) {
     openUtilityLogHistoryTab(selectedLogHistoryId);
     return;
   }
-  if (!event.target.closest('.utility-loop-speed-control')) {
+  if (!event.target.closest('.utility-loop-speed-control, .utility-loop-speed-menu, [data-loop-pitch-value-button]')) {
+    closeUtilityLoopSettingMenu(false);
     document.querySelectorAll('.utility-loop-speed-menu').forEach((menu) => {
       menu.hidden = true;
     });
@@ -331,6 +332,10 @@ async function handleUtilityBootstrapClick(event) {
   if (utilityLoopSpeedValueButton) {
     event.preventDefault();
     const loopId = utilityLoopSpeedValueButton.getAttribute('data-loop-speed-value-button') || '';
+    if (typeof usesMobilePageLayout === 'function' && usesMobilePageLayout()) {
+      toggleUtilityLoopSettingMenu(loopId, 'speed', event.detail === 0);
+      return;
+    }
     const menu = document.querySelector(`[data-loop-speed-menu="${cssEscape(loopId)}"]`);
     if (menu) {
       updateUtilityLoopAudioRate(loopId);
@@ -368,11 +373,28 @@ async function handleUtilityBootstrapClick(event) {
     const loopId = menu?.getAttribute('data-loop-speed-menu') || '';
     const audio = document.querySelector(`[data-loop-audio="${cssEscape(loopId)}"]`);
     if (audio) {
-      const next = Math.max(0.25, Math.min(1.5, Math.round((Number(utilityLoopSpeedOptionButton.getAttribute('data-loop-speed-option') || 1) || 1) * 4) / 4));
+      const next = Math.max(0.25, Math.min(2, Math.round((Number(utilityLoopSpeedOptionButton.getAttribute('data-loop-speed-option') || 1) || 1) * 4) / 4));
       audio.dataset.speed = String(next);
       updateUtilityLoopAudioRate(loopId);
     }
     if (menu) menu.hidden = true;
+    closeUtilityLoopSettingMenu(true);
+    return;
+  }
+
+  const pitchTrigger = event.target.closest('[data-loop-pitch-value-button]');
+  if (pitchTrigger && typeof usesMobilePageLayout === 'function' && usesMobilePageLayout()) {
+    event.preventDefault();
+    toggleUtilityLoopSettingMenu(pitchTrigger.dataset.loopPitchValueButton, 'pitch', event.detail === 0);
+    return;
+  }
+  const pitchOption = event.target.closest('[data-loop-pitch-option]');
+  if (pitchOption) {
+    event.preventDefault();
+    const loopId = pitchOption.closest('[data-loop-pitch-menu]')?.dataset.loopPitchMenu;
+    const pitch = Number(pitchOption.dataset.loopPitchOption);
+    closeUtilityLoopSettingMenu(true);
+    if (loopId && Number.isInteger(pitch) && pitch >= -12 && pitch <= 12) void renderUtilityLoopPitchPreview(loopId, pitch);
     return;
   }
 

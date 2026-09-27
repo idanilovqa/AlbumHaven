@@ -1,0 +1,123 @@
+import { test, expect } from '../fixtures/mobileFeedbackTest.js';
+import { MobilePolishPage } from '../poms/mobilePolishPage.js';
+
+test('phone menus are exclusive, search is joined, gallery pinch and first-touch panel scrolling work', async ({ page, app, snapshot }) => {
+  const phone = new MobilePolishPage(page);
+  await page.setViewportSize({ width: 390, height: 600 });
+  await app.search('Northlight');
+  await phone.clearSearch.click();
+  await app.searchButton.click();
+  await app.searchButton.click();
+  await expect(phone.recentSuggestions).not.toBeVisible();
+  await app.searchInput.fill('N');
+  await phone.expectJoinedSuggestions();
+  await app.searchInput.fill('Northlight');
+  await app.searchInput.press('Enter');
+  await app.browseArtist();
+  await phone.expectBarAligned(phone.mainGalleryBar);
+  await app.selectView('cards');
+  await phone.expectViewUnfoldsDown();
+  await phone.nativePinch(1.7);
+  await phone.expectGridColumns(1);
+  await phone.nativePinch(.5);
+  await phone.expectGridColumns(3);
+  await app.selectView('cards');
+  await phone.expectCardTextAndStats();
+  await app.familyButton.click();
+  await phone.firstFamilySwipe();
+  await snapshot('60-mobile-family-first-touch');
+  await app.libraryButton.click();
+  await expect(app.familyPanel).not.toBeVisible();
+  await expect(app.artistRail.getByRole('button', { name: 'Artists', exact: true })).toBeVisible();
+  await app.closeArtistRail.click();
+  await phone.artistInfo.click();
+  await phone.expectArtistDialogCentered();
+  await snapshot('61-mobile-artist-dialog');
+  await phone.artistDialog.getByRole('button', { name: 'Close artist information' }).click();
+  await app.openSettings();
+  await app.settingsSectionsButton.click();
+  await phone.expectSettingsDrawerAtBodyTop();
+  await app.settingsButton.click();
+  await expect(app.settingsDrawer).not.toBeVisible();
+  await expect(phone.visibleAccountMenu).toBeVisible();
+});
+
+test('Admin is a readable phone table and header Back exits the hierarchy after Loops, Users and Password', async ({ page, app, snapshot }) => {
+  const phone = new MobilePolishPage(page);
+  for (const palette of ['black', 'paper', 'parchment-pine']) {
+    await phone.usePalette(palette);
+    await app.openSettings();
+    await app.selectUtility('loops');
+    await phone.openUsers();
+    await phone.expectBarAligned(phone.accountBar);
+    await phone.expectResponsiveUsers();
+    await snapshot(`62-admin-table-${palette}`);
+    await phone.memberMenu.getByRole('menuitem', { name: 'Edit', exact: true }).click();
+    await phone.expectPermissionContrast();
+    await snapshot(`63-admin-permissions-${palette}`);
+    await phone.parentLink.click();
+    await expect(phone.usersTable).toBeVisible();
+    await app.accountNavToggle.click();
+    await app.accountLink.click();
+    await expect(app.securityHeading).toBeVisible();
+    await phone.expectBarAligned(phone.accountBar);
+    await phone.parentLink.click();
+    await expect(app.galleryContextName).toHaveText('Rendref');
+    await expect(app.utilitiesPage).not.toBeVisible();
+    await expect(phone.accountHost).not.toBeVisible();
+  }
+});
+
+test('Follow mode locks every phone editor and Rules uses the page-bar navigation dropdown', async ({ page, app, snapshot }) => {
+  await app.openSettings();
+  for (const section of ['backgrounds', 'seekbar', 'selection-accent', 'alerts', 'album-page']) {
+    await app.selectSubsection(section);
+    await expect(app.followAppearance).toHaveAttribute('aria-pressed', 'true');
+    await expect(app.appearanceFields).toHaveJSProperty('disabled', true);
+    await expect(app.appearanceFields).toHaveAttribute('inert');
+  }
+  await app.customAppearance.click();
+  await expect(app.appearanceFields).toHaveJSProperty('disabled', false);
+  await app.albumLayout('stacked_bar').click();
+  await app.saveAppearanceChanges();
+  await snapshot('64-custom-mobile-enabled');
+  await app.selectUtility('rules');
+  await app.subsectionButton.click();
+  await expect(app.subsectionMenu).toBeVisible();
+  await expect(app.subsectionMenu).toHaveAttribute('aria-label', 'Settings subsections');
+  await snapshot('65-rules-page-navigation');
+});
+
+test('phone track tap pauses, double tap restarts, and generated saved loops really play', async ({ page, app, snapshot }) => {
+  const phone = new MobilePolishPage(page);
+  await phone.usePalette('parchment-pine');
+  await app.openSettings();
+  await app.selectSubsection('seekbar');
+  await app.customAppearance.click();
+  await app.thinOption.click();
+  await app.saveAppearanceChanges();
+  await app.search('After the Rain');
+  await app.openAlbumBody('After the Rain');
+  await app.playRow(0);
+  await expect(app.playerPlay).toHaveAttribute('aria-label', 'Pause');
+  await expect(app.playerTime).toHaveText(/^0:0[2-9]\s*\/\s*3:00$/);
+  await phone.firstTrackTitle.tap();
+  await expect(app.playerPlay).toHaveAttribute('aria-label', 'Play');
+  await phone.resumeBeforeDoubleTap();
+  await phone.firstTrackTitle.tap();
+  await phone.firstTrackTitle.tap();
+  await expect(app.playerPlay).toHaveAttribute('aria-label', 'Pause');
+  await expect(app.playerTime).toHaveText(/^0:0[01]\s*\/\s*3:00$/);
+  await app.expectThinPlayerComposition();
+  await app.albumCoverSearch.click();
+  await expect(phone.selectedCover).toHaveCSS('background-color', 'rgba(0, 0, 0, 0)');
+  await snapshot('66-cover-outline-light');
+  await app.openSettings();
+  await app.selectUtility('loops');
+  await expect(phone.loopEntries.first()).toBeVisible();
+  await phone.loopPlay.tap();
+  await expect(phone.loopTime).not.toHaveText('0:00 / 0:00');
+  await phone.expectLoopAdvancing();
+  expect(await app.hasNoHorizontalOverflow()).toBe(true);
+  await snapshot('67-playing-demo-loops');
+});

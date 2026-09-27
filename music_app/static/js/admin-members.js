@@ -6,10 +6,11 @@
   let active = true;
   let removePointerListener = () => {};
   let removePlacementListeners = () => {};
+  let removeSurfaceListener = () => {};
   const requests = typeof AbortController === 'undefined' ? null : new AbortController();
   const nativeFetch = globalThis.fetch;
   const fetch = (url, init) => nativeFetch(url, { ...init, ...(requests ? { signal: requests.signal } : {}) });
-  const cleanup = () => { active = false; requests?.abort(); removePointerListener(); removePlacementListeners(); };
+  const cleanup = () => { active = false; requests?.abort(); removePointerListener(); removePlacementListeners(); removeSurfaceListener(); };
   const navigate = (url) => {
     if (!active) return Promise.resolve(false);
     return options.navigate ? options.navigate(url) : window.location.assign(url);
@@ -193,6 +194,7 @@
       menu.hidden = !opening;
       trigger.setAttribute('aria-expanded', String(opening));
       if (opening) {
+        if (typeof window.CustomEvent === 'function') ownerDocument.dispatchEvent?.(new window.CustomEvent('album-haven:surface-opening', { detail: { surface: menu } }));
         positionMenu(trigger, menu);
         menu.querySelector('[role="menuitem"]')?.focus({ preventScroll: true });
       }
@@ -223,6 +225,16 @@
       ) closeMenu(trigger, menu);
     }
   };
+  const ownerDocument = root.ownerDocument || root;
+  const onSurfaceOpening = event => {
+    for (const menu of document.querySelectorAll('[data-member-menu]:not([hidden])')) {
+      if (menu === event.detail?.surface || menu.contains(event.detail?.surface)) continue;
+      const trigger = document.querySelector(`[data-member-menu-trigger="${menu.dataset.memberMenu}"]`);
+      if (trigger) closeMenu(trigger, menu);
+    }
+  };
+  ownerDocument.addEventListener?.('album-haven:surface-opening', onSurfaceOpening);
+  removeSurfaceListener = () => ownerDocument.removeEventListener?.('album-haven:surface-opening', onSurfaceOpening);
   document.addEventListener?.('pointerdown', onPointerDown);
   removePointerListener = () => document.removeEventListener?.('pointerdown', onPointerDown);
   const closeOnLayoutChange = (event) => {

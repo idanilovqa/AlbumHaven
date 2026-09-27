@@ -327,3 +327,27 @@ full release result. The normal hosted mobile workflow must pass before promotin
 these application changes to the generated-data Render demo. No secret, account,
 media inventory, real integration or hosting-plan change belongs to this repair.
 Historical R01–R35 counters above remain historical intake, not a new release claim.
+
+
+### Final-layout verification follow-up
+
+Run `36295983367` exercised application source
+`b071658c85bb95fecbfe7537339c2c4ae38339bb`. It passed six of seven baseline
+and eleven of twelve feedback scenarios, including both exact A/B arrangements,
+reverse identity handoff, real three-line playback/seek, saved appearance and
+cover-tool navigation. Retained evidence snapshot:
+`aa0633e52d19d4f2d5016430e2b81c51172b9ba4`.
+
+The empty-player check compared two different animation frames immediately after
+switching from thin to regular. The existing registered `--player-height`
+transition is 320ms; a local Chromium probe reproduced the identical 1.828px
+sequential-sample discrepancy while simultaneous centerlines differed by 0px.
+The POM now reads both existing bounding rectangles in one read-only evaluation,
+like the other transport geometry checks. The same centerline assertion,
+precision, hidden-control assertions, scenario, timeout and retry policy remain.
+This is a measurement repair, not a change to the approved player or its motion.
+
+The baseline All Artists inventory did not reach its last virtualized card after
+wheel input in that run. Preserve that failure and its trace; the inventory,
+scroll action and full eight-title assertion remain unchanged for verification.
+No deployment or new successful verification is claimed by this follow-up.

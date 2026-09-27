@@ -231,8 +231,11 @@ export class MobileLayoutPage {
     await expect(this.playerEmptyMessage).toBeVisible();
     await expect(this.playerEmptyMessage).toHaveText('Nothing is playing');
     await expect(this.playerPlay).toBeDisabled();
-    const message = await this.playerEmptyMessage.boundingBox();
-    const play = await this.playerPlay.boundingBox();
+    // parity-check: allow-read-only-measurement-evaluate -- sample both centerlines in one frame while the shared player height animates.
+    const { message, play } = await this.player.evaluate(player => ({
+      message: player.querySelector('[data-player-empty-message]').getBoundingClientRect().toJSON(),
+      play: player.querySelector('#player-play').getBoundingClientRect().toJSON(),
+    }));
     expect(message.y + message.height / 2).toBeCloseTo(play.y + play.height / 2, 0);
     expect(message.x + message.width).toBeLessThanOrEqual(play.x);
     await expect(this.playerTime).not.toBeVisible();

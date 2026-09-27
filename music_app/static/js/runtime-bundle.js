@@ -4368,7 +4368,8 @@ function buildMissingAlbumDetailsHtml(config = {}) {
 function resolveMobileAlbumHeaderState({ albumPage, hasInlineIdentity, hasCover,
   viewportTop, coverBottom, identityBottom } = {}) {
   const bodyOwnsIdentity = Boolean(albumPage && hasInlineIdentity
-    && (!Number.isFinite(identityBottom) || identityBottom > viewportTop + 1));
+    && (!Number.isFinite(identityBottom) || identityBottom > viewportTop + 1
+      || (hasCover && Number.isFinite(coverBottom) && coverBottom > viewportTop + 1)));
   return {
     bodyOwnsIdentity,
     showCover: Boolean(albumPage && hasCover && !bodyOwnsIdentity
@@ -4376,7 +4377,8 @@ function resolveMobileAlbumHeaderState({ albumPage, hasInlineIdentity, hasCover,
   };
 }
 
-/* Mobile composes the same live artwork/table; desktop layout values stay intact. */
+/* Both approved small layouts reuse the live artwork, actions and track table.
+   Relocate the existing action nodes, rather than duplicating their state/handlers. */
 function syncMobileAlbumComposition(album) {
   const overlay = document.getElementById('track-modal');
   const cover = document.getElementById('track-modal-cover');
@@ -4384,23 +4386,61 @@ function syncMobileAlbumComposition(album) {
   if (!overlay || !cover || !body || !album) return;
   const mobile = overlay.classList.contains('is-mobile-page') && usesMobilePageLayout();
   const layout = normalizeAlbumDetailsLayout(document.documentElement.getAttribute('data-album-details-layout'));
+  const inline = mobile && layout !== 'classic_bar';
   overlay.dataset.mobileAlbumLayout = mobile ? layout : '';
+  let overview = body.querySelector('.mobile-album-overview');
   let identity = body.querySelector('.mobile-album-identity');
-  if (!identity && mobile && layout !== 'classic_bar') {
+  if (inline && !overview) {
+    overview = document.createElement('div');
+    overview.className = 'mobile-album-overview';
+    cover.before(overview);
+    overview.appendChild(cover);
+  }
+  if (inline && !identity) {
     identity = document.createElement('div');
     identity.className = 'mobile-album-identity';
-    cover.after(identity);
   }
+  // Classic/desktop keeps the copy outside its retired overview; reattach on return.
+  if (inline && identity.parentElement !== overview) overview.appendChild(identity);
   if (identity) {
-    identity.hidden = !mobile || layout === 'classic_bar';
-    if (!identity.hidden) {
+    identity.hidden = !inline;
+    if (inline) {
+      const centered = layout === 'editorial_canvas';
+      const artist = album.album_artist || album.artist || '';
       identity.innerHTML = buildAlbumDetailsHeaderHtml({
         variant: 'copy', titleId: 'mobile-album-identity-title', subtitleId: 'mobile-album-identity-summary',
         title: album.name || 'Album',
-        eyebrow: album.album_artist || album.artist || '',
-        subtitle: [album.year, album.total_duration_display].filter(Boolean).join(' · '),
+        eyebrow: centered ? [artist, album.year].filter(Boolean).join(' • ') : artist,
+        subtitle: centered ? '' : [album.year, album.total_duration_display].filter(Boolean).join(' • '),
       });
+      // B has exactly two visible lines. Keep the shared header builder unchanged.
+      identity.querySelector('.album-details-header__secondary').hidden = centered;
     }
+  }
+  const freshActions = cover.querySelector('.album-artbox__overlay');
+  const previousActions = overview?.querySelector('.mobile-album-actions');
+  if (inline) {
+    // A cover refresh creates a new overlay; retire the old, relocated one.
+    if (freshActions && previousActions && freshActions !== previousActions) previousActions.remove();
+    const actions = freshActions || previousActions;
+    if (String(album.inventory_status || '').toLowerCase() === 'missing') actions?.remove();
+    else if (actions) {
+      actions.classList.add('mobile-album-actions');
+      overview.appendChild(actions);
+    }
+  } else if (overview) {
+    const actions = freshActions || previousActions;
+    if (freshActions && previousActions && freshActions !== previousActions) previousActions.remove();
+    if (actions) {
+      actions.classList.remove('mobile-album-actions');
+      cover.querySelector('.album-artbox')?.appendChild(actions);
+    }
+    // The one Back control returns to its shared bar when leaving the inline layout.
+    const back = overview.querySelector('#mobile-back-button');
+    if (back) document.getElementById('mobile-page-header')?.prepend(back);
+    overview.before(cover);
+    if (identity) overview.before(identity);
+    overview.remove();
   }
   if (mobile) {
     const descriptor = mobilePageState.pages.find(page => page.kind === 'album');
@@ -34045,17 +34085,94 @@ function renderArtistGroups(options = {}) {
 
 // BEGIN js/runtime/player-loop-playback.js
 
+// The persistent player owns only three measured rows. Audio ticks do not replace
+// their nodes or restart animation; ResizeObserver handles width/font changes.
+let globalPlayerMetadataMotion = null;
+function syncGlobalPlayerMetadataMotion(els, mobile) {
+  const rows = [els.artist, els.title, els.albumLink].filter(row => row?.ownerDocument?.createElement);
+  if (!rows.length || typeof window === 'undefined') return;
+  if (!mobile) {
+    globalPlayerMetadataMotion?.dispose();
+    globalPlayerMetadataMotion = null;
+    return;
+  }
+  if (!globalPlayerMetadataMotion) {
+    const entries = new Map();
+    const media = window.matchMedia?.('(prefers-reduced-motion: reduce)');
+    let frame = 0;
+    let disposed = false;
+    const refresh = () => {
+      frame = 0;
+      for (const [row, text] of entries) {
+        const motion = !media?.matches && !row.hidden
+          ? resolveCompactPlayerMetadataRowMotion({ scrollWidth: text.scrollWidth, clientWidth: row.clientWidth })
+          : { overflowing: false, distance: 0, durationMs: 0 };
+        row.classList.toggle('is-metadata-overflowing', motion.overflowing);
+        row.style.setProperty('--player-metadata-distance', `${motion.distance}px`);
+        row.style.setProperty('--player-metadata-duration', `${motion.durationMs}ms`);
+      }
+    };
+    const schedule = () => {
+      if (!disposed && !frame) frame = window.requestAnimationFrame(refresh);
+    };
+    const observer = typeof ResizeObserver === 'function' ? new ResizeObserver(schedule) : null;
+    media?.addEventListener?.('change', schedule);
+    window.addEventListener('resize', schedule, { passive: true });
+    document.fonts?.ready.then(schedule);
+    globalPlayerMetadataMotion = {
+      update(row) {
+        let text = row.querySelector('[data-player-metadata-text]');
+        if (!text) {
+          text = row.ownerDocument.createElement('span');
+          text.setAttribute('data-player-metadata-text', '');
+          text.textContent = row.textContent;
+          row.replaceChildren(text);
+        }
+        if (entries.get(row) === text) return;
+        const previous = entries.get(row);
+        if (previous) observer?.unobserve(previous);
+        entries.set(row, text);
+        observer?.observe(row);
+        observer?.observe(text);
+        schedule();
+      },
+      dispose() {
+        disposed = true;
+        if (frame) window.cancelAnimationFrame(frame);
+        observer?.disconnect();
+        media?.removeEventListener?.('change', schedule);
+        window.removeEventListener('resize', schedule);
+        for (const row of entries.keys()) {
+          row.classList.remove('is-metadata-overflowing');
+          row.style.removeProperty('--player-metadata-distance');
+          row.style.removeProperty('--player-metadata-duration');
+        }
+        entries.clear();
+      },
+    };
+  }
+  rows.forEach(row => globalPlayerMetadataMotion.update(row));
+}
+
 function renderGlobalPlayerMetadata(els, track) {
   const mobile = typeof usesMobilePageLayout === 'function' && usesMobilePageLayout();
+  const setText = (row, text) => {
+    if (!row) return;
+    if (row.textContent !== text) row.textContent = text;
+    if (mobile) row.setAttribute?.('title', text);
+    else row.removeAttribute?.('title');
+  };
   if (els.artist) {
     els.artist.hidden = !mobile || !track;
-    els.artist.textContent = track?.artist || '';
+    setText(els.artist, track?.artist || '');
   }
-  if (els.title) {
-    const parts = (mobile ? [track?.title] : [track?.artist, track?.title]).filter(Boolean);
-    els.title.textContent = parts.length ? `${parts.join(' - ')}${!mobile && track?.album ? ' /' : ''}` : '';
+  const parts = (mobile ? [track?.title] : [track?.artist, track?.title]).filter(Boolean);
+  setText(els.title, parts.length ? `${parts.join(' - ')}${!mobile && track?.album ? ' /' : ''}` : '');
+  if (els.albumLink) {
+    setText(els.albumLink, track?.album || '');
+    els.albumLink.hidden = !track?.album;
   }
-  if (els.albumLink) { els.albumLink.textContent = track?.album || ''; els.albumLink.hidden = !track?.album; }
+  syncGlobalPlayerMetadataMotion(els, mobile);
 }
 
 function renderGlobalPlayerPlayGlyph(button, paused) {
@@ -34135,6 +34252,9 @@ function updatePlayerUi() {
   const displayTrack = mirroredTrack || state.player.current;
   state.player.lastKnownWasPlaying = Boolean(!lockedByAnotherTab && !playback.paused && !playback.ended);
   const hasTrack = Boolean(displayTrack && (lockedByAnotherTab || playback.src || state.player.current?.src));
+  els.player?.classList?.toggle('is-empty', !hasTrack);
+  const emptyMessage = els.player?.querySelector?.('[data-player-empty-message]');
+  if (emptyMessage) emptyMessage.hidden = hasTrack;
   const duration = getPlayerDuration();
   const dragPreview = Number(state.player.timelineDragPreviewSeconds);
   const current = state.player.timelineDragging && Number.isFinite(dragPreview)
@@ -39553,7 +39673,16 @@ function syncMobileAlbumHeader() {
     coverBottom: albumPage ? cover?.getBoundingClientRect().bottom : undefined,
     identityBottom: hasInlineIdentity ? identity.getBoundingClientRect().bottom : undefined,
   });
+  header.dataset.inlineAlbumLayout = String(Boolean(hasInlineIdentity));
   header.dataset.albumIdentityInBody = String(presentation.bodyOwnsIdentity);
+  // One Back button: beside the cover initially, in the pinned bar after handoff.
+  const back = document.getElementById('mobile-back-button');
+  const overview = document.querySelector('#track-modal .mobile-album-overview');
+  const backHost = presentation.bodyOwnsIdentity && overview ? overview : header;
+  if (back && back.parentElement !== backHost) backHost.prepend(back);
+  header.inert = presentation.bodyOwnsIdentity;
+  if (presentation.bodyOwnsIdentity) header.setAttribute('aria-hidden', 'true');
+  else header.removeAttribute('aria-hidden');
   context.inert = presentation.bodyOwnsIdentity;
   if (presentation.bodyOwnsIdentity) context.setAttribute('aria-hidden', 'true');
   else context.removeAttribute('aria-hidden');

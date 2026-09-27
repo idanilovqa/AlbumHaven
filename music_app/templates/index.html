@@ -274,6 +274,7 @@
   </main>
   <div class="global-player shell-bottom-player" data-shell-slot="bottom_player" data-shell-content-kind="{{ shell_bottom_player.content_kind or 'global_player' }}" data-shell-is-persistent="{{ 'true' if shell_bottom_player.is_persistent else 'false' }}">
     <div class="player-shell">
+      <span class="player-empty-message" data-player-empty-message role="status" hidden>Nothing is playing</span>
       <div class="player-controls">
         {% call ui_button(variant='icon', size='small', action='player-collapse', class_name='player-collapse-button', aria_label='Collapse player', title='Collapse player') %}‹{% endcall %}
         <button class="player-cover-button" type="button" id="player-cover-button" aria-label="Open album details" hidden></button>

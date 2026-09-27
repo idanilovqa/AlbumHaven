@@ -121,3 +121,30 @@ test('mobile play/pause uses the shared SVG without rebuilding it every playback
   context.renderGlobalPlayerPlayGlyph(button, true);
   assert.equal(writes, 3);
 });
+
+
+test('hierarchical mobile Back preserves the original parent across album replacements and history restoration', () => {
+  const api = load('mobile-navigation.js');
+  const descriptor = { kind: 'album', albumKey: 'second' };
+  assert.equal(api.resolveMobileParentPosition(descriptor, null, { albumHavenNavigationPosition: 2 }), 2);
+  assert.equal(api.resolveMobileParentPosition(descriptor, { parentPosition: 2 }, { albumHavenNavigationPosition: 5 }), 2);
+  assert.equal(api.resolveMobileParentPosition(descriptor, null, { albumHavenNavigationPosition: 5,
+    mobilePages: [{ ...descriptor, parentPosition: 2 }] }), 2);
+  assert.equal(api.mobileParentHistoryDelta(2, 5), -3);
+  for (const invalid of [null, undefined, -1, 1.5, NaN, 5, 6]) {
+    assert.equal(api.mobileParentHistoryDelta(invalid, 5), null);
+  }
+  assert.equal(api.mobileParentHistoryDelta(0, 1), -1);
+});
+
+test('header Back traverses to its parent without replacing the child history entry before popstate', () => {
+  const movements = [];
+  const context = load('mobile-navigation.js', { window: { history: {
+    state: { albumHavenNavigationPosition: 4 }, go: delta => movements.push(delta),
+    replaceState() { throw new Error('Back must retain the child entry for Forward'); },
+  } } });
+  vm.runInContext("mobilePageState.pages.push({ kind: 'album', albumKey: 'one', parentPosition: 2 });", context);
+  assert.equal(context.dismissMobilePage('album'), true);
+  assert.deepEqual(movements, [-2]);
+  assert.equal(vm.runInContext('mobilePageState.pages.length', context), 1);
+});

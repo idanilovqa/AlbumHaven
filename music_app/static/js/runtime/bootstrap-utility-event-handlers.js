@@ -44,6 +44,10 @@ async function handleUtilityBootstrapClick(event) {
   const utilitiesButton = event.target.closest('[data-open-utilities="1"]');
   if (utilitiesButton) {
     event.preventDefault();
+    // The general Settings entry starts at Appearance; explicit utility routes
+    // and browser-history restoration still choose their requested section.
+    if (typeof usesMobilePageLayout === 'function' && usesMobilePageLayout()
+        && setUtilityActiveTab('appearance') !== 'appearance') return;
     openUtilityModal();
     return;
   }

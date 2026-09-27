@@ -1732,7 +1732,6 @@ function applyViewPayload(payload, options = {}) {
   const nextSelectedArtist = String(nextView.selected_artist || '').trim();
   const selectionChanged = previousSelectedArtist !== nextSelectedArtist;
   const previousHadRelatedArtists = Array.isArray(previousView.related_artists) && previousView.related_artists.length > 0;
-  const allArtistsChanged = Boolean(previousView.all_artists_active) !== Boolean(nextView.all_artists_active);
   const navigationRailContentKindChanged = (
     getRuntimeNavigationRailContentKind(previousView) !== getRuntimeNavigationRailContentKind(nextView)
   );
@@ -1756,11 +1755,9 @@ function applyViewPayload(payload, options = {}) {
   }
   if (
     state.ui?.artistsDrawerOpen
-    && (
-      selectionChanged
-      || allArtistsChanged
-      || navigationRailContentKindChanged
-    )
+    // Explicit navigation closes its drawer at activation. A later search
+    // response must not dismiss a drawer the user has opened since that request.
+    && navigationRailContentKindChanged
     && typeof closeArtistsDrawer === 'function'
   ) {
     closeArtistsDrawer({ restoreFocus: false });
@@ -36041,6 +36038,10 @@ async function handleUtilityBootstrapClick(event) {
   const utilitiesButton = event.target.closest('[data-open-utilities="1"]');
   if (utilitiesButton) {
     event.preventDefault();
+    // The general Settings entry starts at Appearance; explicit utility routes
+    // and browser-history restoration still choose their requested section.
+    if (typeof usesMobilePageLayout === 'function' && usesMobilePageLayout()
+        && setUtilityActiveTab('appearance') !== 'appearance') return;
     openUtilityModal();
     return;
   }
@@ -39405,14 +39406,25 @@ function writeMobilePageHistory(mode = 'push') {
   else if (window.AlbumHavenSettingsNavigation?.instance?.pushLibraryHistory) window.AlbumHavenSettingsNavigation.instance.pushLibraryHistory(url.href, snapshot);
   else window.history.pushState(snapshot, '', url);
 }
+// Header Back follows the retained parent, while browser Forward keeps the child.
+function resolveMobileParentPosition(descriptor, previous, snapshot = {}) {
+  const restored = Array.isArray(snapshot.mobilePages)
+    ? snapshot.mobilePages.find(page => page.kind === descriptor.kind && page.albumKey === descriptor.albumKey) : null;
+  const position = previous?.parentPosition ?? restored?.parentPosition ?? snapshot.albumHavenNavigationPosition;
+  return Number.isSafeInteger(position) && position >= 0 ? position : null;
+}
+function mobileParentHistoryDelta(parentPosition, currentPosition) {
+  return Number.isSafeInteger(parentPosition) && parentPosition >= 0
+    && Number.isSafeInteger(currentPosition) && parentPosition < currentPosition
+    ? parentPosition - currentPosition : null;
+}
 function presentMobilePage(descriptor) {
   if (!usesMobilePageLayout() && !mobilePageState.pages.length) return false;
   const outlet = document.getElementById('mobile-page-outlet');
   const element = document.getElementById(MOBILE_PAGE_KINDS[descriptor.kind]);
   if (!outlet || !element) return false;
-  if (descriptor.kind !== 'cover-lookup' && !mobilePageState.pages.some(page => page.kind === descriptor.kind)) {
-    while (mobilePageState.pages.length) cleanupMobilePage(mobilePageState.pages.pop());
-  }
+  descriptor.parentPosition = resolveMobileParentPosition(descriptor,
+    mobilePageState.pages.find(page => page.kind === descriptor.kind), window.history.state || {});
   const active = mobilePageState.pages.at(-1);
   if (active?.kind === descriptor.kind && active.albumKey === descriptor.albumKey) {
     Object.assign(active, descriptor);
@@ -39480,6 +39492,14 @@ function cleanupMobilePage(descriptor) {
 function dismissMobilePage(kind) {
   if (mobilePageState.cleaning || !mobilePageState.pages.some(page => page.kind === kind)) return false;
   const index = mobilePageState.pages.findIndex(page => page.kind === kind);
+  const delta = mobileParentHistoryDelta(mobilePageState.pages[index].parentPosition,
+    window.history.state?.albumHavenNavigationPosition);
+  if (delta !== null) {
+    // Popstate retires the surface only after the traversal commits. This also
+    // keeps Forward usable, instead of overwriting the album's history entry.
+    window.history.go(delta);
+    return true;
+  }
   const retired = mobilePageState.pages.splice(index).reverse();
   let focus;
   retired.forEach(descriptor => { focus = cleanupMobilePage(descriptor); });

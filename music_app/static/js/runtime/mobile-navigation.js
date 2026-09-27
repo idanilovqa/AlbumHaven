@@ -54,14 +54,25 @@ function writeMobilePageHistory(mode = 'push') {
   else if (window.AlbumHavenSettingsNavigation?.instance?.pushLibraryHistory) window.AlbumHavenSettingsNavigation.instance.pushLibraryHistory(url.href, snapshot);
   else window.history.pushState(snapshot, '', url);
 }
+// Header Back follows the retained parent, while browser Forward keeps the child.
+function resolveMobileParentPosition(descriptor, previous, snapshot = {}) {
+  const restored = Array.isArray(snapshot.mobilePages)
+    ? snapshot.mobilePages.find(page => page.kind === descriptor.kind && page.albumKey === descriptor.albumKey) : null;
+  const position = previous?.parentPosition ?? restored?.parentPosition ?? snapshot.albumHavenNavigationPosition;
+  return Number.isSafeInteger(position) && position >= 0 ? position : null;
+}
+function mobileParentHistoryDelta(parentPosition, currentPosition) {
+  return Number.isSafeInteger(parentPosition) && parentPosition >= 0
+    && Number.isSafeInteger(currentPosition) && parentPosition < currentPosition
+    ? parentPosition - currentPosition : null;
+}
 function presentMobilePage(descriptor) {
   if (!usesMobilePageLayout() && !mobilePageState.pages.length) return false;
   const outlet = document.getElementById('mobile-page-outlet');
   const element = document.getElementById(MOBILE_PAGE_KINDS[descriptor.kind]);
   if (!outlet || !element) return false;
-  if (descriptor.kind !== 'cover-lookup' && !mobilePageState.pages.some(page => page.kind === descriptor.kind)) {
-    while (mobilePageState.pages.length) cleanupMobilePage(mobilePageState.pages.pop());
-  }
+  descriptor.parentPosition = resolveMobileParentPosition(descriptor,
+    mobilePageState.pages.find(page => page.kind === descriptor.kind), window.history.state || {});
   const active = mobilePageState.pages.at(-1);
   if (active?.kind === descriptor.kind && active.albumKey === descriptor.albumKey) {
     Object.assign(active, descriptor);
@@ -129,6 +140,14 @@ function cleanupMobilePage(descriptor) {
 function dismissMobilePage(kind) {
   if (mobilePageState.cleaning || !mobilePageState.pages.some(page => page.kind === kind)) return false;
   const index = mobilePageState.pages.findIndex(page => page.kind === kind);
+  const delta = mobileParentHistoryDelta(mobilePageState.pages[index].parentPosition,
+    window.history.state?.albumHavenNavigationPosition);
+  if (delta !== null) {
+    // Popstate retires the surface only after the traversal commits. This also
+    // keeps Forward usable, instead of overwriting the album's history entry.
+    window.history.go(delta);
+    return true;
+  }
   const retired = mobilePageState.pages.splice(index).reverse();
   let focus;
   retired.forEach(descriptor => { focus = cleanupMobilePage(descriptor); });

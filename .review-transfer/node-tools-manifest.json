@@ -1,0 +1,42 @@
+{
+  "lock_sha256": "85d5c3ce022ffd6b5f4dbe3a40a329ccb7de07a208c72cebd8ff8d8b7d3d466e",
+  "archive_sha256": "b83f0cb1c47b7d6288189a7000771deba3450d79de28098d3c187133006c03f7",
+  "archive_bytes": 3749123,
+  "parts": [
+    {
+      "name": "node-tools-000.b64",
+      "sha256": "d79e4795e87056c990e9ffbafb691bbc1427eddccfaee2e16a55b853c65dbb96",
+      "bytes": 800000
+    },
+    {
+      "name": "node-tools-001.b64",
+      "sha256": "d83323a1f8bdde3fb9c3656b9085b5da41cdcdf1c3aea9886d21c167f0bf850d",
+      "bytes": 800000
+    },
+    {
+      "name": "node-tools-002.b64",
+      "sha256": "5115fc2e9b1df1b1f0380b91b0203213920888cc45d03e4618fa1ff3ac9ca082",
+      "bytes": 800000
+    },
+    {
+      "name": "node-tools-003.b64",
+      "sha256": "03680f617aba4344268b32f3b72086cf529541ef058cb4361b39eed4e57bf278",
+      "bytes": 800000
+    },
+    {
+      "name": "node-tools-004.b64",
+      "sha256": "c2cb59a68c31e67f34385863f08222935856971c9f2b467d29a2fc3f262d0533",
+      "bytes": 800000
+    },
+    {
+      "name": "node-tools-005.b64",
+      "sha256": "152a00b90f65d3bd054cfff9d7488bf2f418d0dd7e36cba32352413c1fa034de",
+      "bytes": 800000
+    },
+    {
+      "name": "node-tools-006.b64",
+      "sha256": "c98fcbfe6c1128874b7d09c5fe53b0da4d145d0f09addc914b8667801f32271c",
+      "bytes": 198832
+    }
+  ]
+}

@@ -6,6 +6,9 @@ import { UtilityAppearanceTab } from './utilityAppearanceTab.js';
 export class MobilePolishPage extends MobileLayoutPage {
   constructor(page) {
     super(page);
+    this.pinchHint = page.getByRole('status').filter({ hasText: 'Pinch with two fingers to resize covers' });
+    this.pinchHintLights = this.pinchHint.locator('i');
+    this.albumTypes = page.getByRole('button', { name: 'Album types', exact: true });
     this.mainGalleryBar = page.locator('[data-gallery-bar-instance="gallery"]');
     this.firstTrackTitle = this.albumRows.first().locator('.album-track-table__title');
     this.selectedCover = this.coverLookupPage.locator('.cover-lookup-art-card.is-active');
@@ -99,10 +102,35 @@ export class MobilePolishPage extends MobileLayoutPage {
     const sourceMenu = this.page.locator('#gallery-sources-menu');
     await sources.click();
     await this.expectChromeMenu(sourceMenu);
+    await sources.click();
+    await expect(sourceMenu).not.toBeVisible();
+    await sources.click();
+    await this.homePanel.click();
+    await expect(sourceMenu).not.toBeVisible();
+    await sources.click();
     await this.page.keyboard.press('Escape');
     await this.page.locator('#scan-indicator').click({ button: 'right' });
     await this.expectChromeMenu(this.page.locator('#status-context-menu'));
     await this.page.keyboard.press('Escape');
+  }
+
+  async expectGalleryHeaderLayout() {
+    const name = await this.galleryContextName.boundingBox();
+    const actions = await this.mainGalleryBar.locator(':scope > .gallery-bar__actions').boundingBox();
+    expect(actions.y).toBeGreaterThanOrEqual(name.y + name.height);
+    expect(actions.x + actions.width).toBeLessThanOrEqual(this.page.viewportSize().width);
+    await this.albumTypes.focus();
+    await expect(this.albumTypes).toHaveCSS('outline-style', 'solid');
+    // parity-check: allow-read-only-measurement-evaluate -- ordinary gallery actions paint focus with an outline.
+    const outline = await this.albumTypes.evaluate(node => {
+      const style = getComputedStyle(node);
+      return { color: style.outlineColor, width: style.outlineWidth };
+    });
+    await this.activeView.focus();
+    await expect(this.activeView).toBeFocused();
+    // The shared unfolding control paints its focus border on the enclosing cluster.
+    await expect(this.viewCluster).toHaveCSS('border-top-color', outline.color);
+    await expect(this.viewCluster).toHaveCSS('border-top-width', outline.width);
   }
 
   async expectPlayerMetadataNearCover() {

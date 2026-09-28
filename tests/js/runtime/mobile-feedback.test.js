@@ -199,3 +199,24 @@ test('utility detail pushes its index parent and Back preserves the Forward entr
   context.openMobileUtilityDetail('another-album');
   assert.equal(writes.length, 2);
 });
+
+test('reloaded album remains the history parent of a subsequently opened child', () => {
+  const history = { state: { albumHavenNavigationPosition: 4 }, replaceState(value) { this.state = value; } };
+  const context = load('mobile-navigation.js', {
+    URL,
+    window: { innerWidth: 390, location: { href: 'https://example.test/?mobile_page=album&mobile_album=one' },
+      history, addEventListener() {}, matchMedia: () => ({ addEventListener() {} }) },
+    document: { getElementById: id => id === 'mobile-navigation' ? {} : null, createComment: () => ({}), addEventListener() {},
+      documentElement: { dataset: {}, style: { setProperty() {} } } },
+    state: { utility: { activeTab: 'appearance' } },
+  });
+  context.promoteVisibleMobileDialogs = () => {};
+  context.restoreMobilePage = descriptor => {
+    context.restoredDescriptor = descriptor;
+    vm.runInContext('mobilePageState.pages.push(restoredDescriptor)', context);
+  };
+  context.initMobileNavigation();
+  assert.equal(history.state.mobilePages.length, 1);
+  assert.equal(history.state.mobilePages[0].albumKey, 'one');
+  assert.equal(context.resolveMobileParentPosition({ kind: 'cover-lookup', albumKey: 'one' }, null, history.state), 4);
+});

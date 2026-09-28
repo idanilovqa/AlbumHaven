@@ -23,6 +23,21 @@ for (const palette of ['black', 'parchment-pine']) {
     await snapshot(`72-mobile-loop-pitch-${palette}`);
     await page.keyboard.press('Escape');
     await expect(loops.pitchMenu).not.toBeVisible();
+    await page.setViewportSize({ width: 320, height: 568 });
+    for (const [trigger, menu, selected] of [[loops.speed, loops.speedMenu, '2x'], [loops.pitch, loops.pitchMenu, '+2 semitones']]) {
+      await trigger.scrollIntoViewIfNeeded();
+      const anchor = await trigger.boundingBox();
+      await trigger.tap();
+      await loops.expectPickerInsideViewport(menu);
+      await expect(menu.getByRole('menuitemradio', { checked: true })).toContainText(selected);
+      await page.touchscreen.tap(anchor.x + anchor.width / 2, anchor.y + anchor.height / 2);
+      await expect(menu).not.toBeVisible();
+      await trigger.tap();
+      const popup = await menu.boundingBox();
+      expect(popup.x).toBeGreaterThan(0);
+      await page.touchscreen.tap(popup.x / 2, popup.y + popup.height / 2);
+      await expect(menu).not.toBeVisible();
+    }
   });
 }
 

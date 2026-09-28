@@ -348,3 +348,17 @@ for (const [name, anchorClass, surfaceClass, context] of cases) {
     expect(styles.panelClipPath).toBe('inset(0px -80px -80px)');
   });
 }
+
+test('nested calendar dates remain clickable beyond the parent panel clipping boundary', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await mountVisualAnchor(page, 'Log History Period');
+  await page.evaluate(() => mountDateRangePicker(document.getElementById('date-content')));
+  await page.getByRole('button', { name: 'Choose to date', exact: true }).click();
+  const calendar = page.getByRole('dialog', { name: 'Choose to date', exact: true });
+  await calendar.getByRole('button', { name: 'Next month', exact: true }).click();
+  await calendar.getByRole('button', { name: 'Previous month', exact: true }).click();
+  await calendar.locator('[data-calendar-date="2026-09-28"]').click();
+  await expect(page.getByRole('textbox', { name: 'To date', exact: true })).toHaveValue('2026-09-28');
+  await expect(calendar).toHaveCount(0);
+  await expect(page.locator('#surface')).toHaveCSS('clip-path', 'inset(0px -80px -80px)');
+});

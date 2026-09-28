@@ -21,7 +21,7 @@ for (const palette of ['black', 'parchment-pine']) {
     await snapshot(`80-retained-settings-desktop-${palette}`);
     await page.setViewportSize({ width: 390, height: 844 });
     await expect(app.mobileAppearance).toHaveAttribute('aria-pressed', 'true');
-    await expect(appearance.documentRoot).toHaveAttribute('data-appearance-palette', palette);
+    await expect(appearance.documentRoot).toHaveAttribute('data-appearance-palette', 'paper');
     await app.selectSubsection('backgrounds');
     await expect(appearance.paletteButton('paper')).toHaveAttribute('aria-pressed', 'true');
     await app.cancelAppearance.click();

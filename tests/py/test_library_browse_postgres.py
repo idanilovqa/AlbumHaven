@@ -1345,7 +1345,8 @@ def test_postgres_library_browse_omits_category_filter_for_all_visible_categorie
     ]
 
 
-def test_postgres_library_browse_builds_root_album_browse_payload_from_rows():
+@pytest.mark.parametrize("all_artists", [False, True])
+def test_postgres_library_browse_builds_root_album_browse_payload_from_rows(all_artists):
     from music_app.services.library_browse_postgres import PostgresLibraryBrowseRepository
 
     executed: list[object] = []
@@ -1406,7 +1407,7 @@ def test_postgres_library_browse_builds_root_album_browse_payload_from_rows():
     )
 
     payload = repository.build_root_album_browse_payload(
-        query_params={
+        query_params={"all_artists": "1" if all_artists else "0",
             "surface": "albums",
             "gallery_display": "list",
             "gallery_scale_percent": "125",
@@ -1432,7 +1433,7 @@ def test_postgres_library_browse_builds_root_album_browse_payload_from_rows():
     assert payload["artist_family_filters"] == []
     assert payload["related_filter_artists"] == []
     assert payload["primary_filter_active"] is False
-    assert payload["all_artists_active"] is False
+    assert payload["all_artists_active"] is all_artists
     assert payload["listen_through_scope_candidates"] == {}
     assert payload["ignored_version_keys"] == []
     assert payload["manual_version_links"] == {}

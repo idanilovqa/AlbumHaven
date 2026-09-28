@@ -32,7 +32,7 @@ test('row-body opens the sixteen-track album; scrolling shows a bar thumbnail; s
 });
 
 test('single expanding search and zoom support 1/2/3 columns; Rows disappears at desktop width', async ({ page, app, snapshot }) => {
-  await expect(app.mobileNavigation.getByRole('button', { name: 'Search', exact: true })).toHaveCount(1);
+  await expect(app.searchButton).toHaveCount(1);
   await app.searchButton.click();
   await expect(app.searchInput).toBeFocused();
   await app.searchButton.click();
@@ -41,7 +41,8 @@ test('single expanding search and zoom support 1/2/3 columns; Rows disappears at
   await app.selectView('covers');
   for (const columns of [3, 2, 1]) {
     await app.selectColumns(columns);
-    await expect(app.zoomButton).toHaveAttribute('title', `Gallery zoom: ${columns} ${columns === 1 ? 'column' : 'columns'}`);
+    await app.expectGridColumns(columns);
+    await expect(app.zoomButton).toHaveCount(0);
   }
   await expect.poll(async () => (await app.galleryCards.first().boundingBox())?.width).toBeGreaterThan(320);
   await snapshot('24-single-column-art');

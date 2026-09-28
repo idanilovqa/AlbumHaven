@@ -2,7 +2,7 @@
 
 ## Scope and acceptance source
 
-Review of `2026-09-25-mobile-layout` from `d4dd05df85d39e912dc20292b3a08c075523e34a`, including the inherited work and these corrections. The initial reviewed head was `dd60411380dfa9d19497f22638bccf8cd132e266`. The original conversation, checked through its authenticated UI, and the recorded Sep 26/27 feedback and approval documents supply acceptance. Older conversation loading was incomplete; the repository's detailed acceptance inventory supplies the remaining traceability. This is generated-data preview work, not main/release certification.
+Review of `2026-09-25-mobile-layout` from `d4dd05df85d39e912dc20292b3a08c075523e34a`, including the inherited work and these corrections. The initial reviewed head was `dd60411380dfa9d19497f22638bccf8cd132e266`. The original conversation, checked through its authenticated UI and subsequently the app internal read_thread tool, and the recorded Sep 26/27 feedback and approval documents supply acceptance. The internal tool returned six recent turns, including the final loop-navigation request; older conversation loading was incomplete. The repository's detailed acceptance inventory supplies the remaining traceability. This is generated-data preview work, not main/release certification.
 
 Later approvals supersede the original Home recents requirement: Home A intentionally shows the account name, Recent/disabled News and placeholder Top tabs. The unselected Home B and album C concepts are not missing features. Three album choices remain: original large artwork, approved compact A, and centered B. See `docs/design-mockups/mobile-feedback-2026-09-26/approval.md`.
 
@@ -41,7 +41,11 @@ Historical intake checkboxes in earlier documents remain historical; they are no
 - Run [36372598161](https://github.com/idanilovqa/AlbumHaven/actions/runs/36372598161): 7 baseline + 28 extended production-app browser cases passed, zero skipped/flaky/unexpected. Isolated PostgreSQL and generated media; no production API mocks.
 - Focused local appearance/device/bridge checks: 130 JavaScript tests passed in the earlier repair checkpoint. Production parity and whitespace checks passed after the final visual fixes.
 - Run [36373169471](https://github.com/idanilovqa/AlbumHaven/actions/runs/36373169471): 7 baseline + 27 extended passed; the new focus assertion exposed the shared dropdown `!important` reset overriding the first outline fix. Increased the scoped rule priority; retained the assertion and failure evidence.
-- Final mobile run, Render upgrade checks, deployed commit and final screenshot inspection: pending; append verified evidence before handoff.
+- Final mobile run [36373692126](https://github.com/idanilovqa/AlbumHaven/actions/runs/36373692126), functional source `b956873e5aed278a01f1f185461c0280ec13d9f9`: **329 JavaScript + 21 Python tests and 35 browser scenarios passed** (7 baseline, 28 extended; zero skipped/flaky/unexpected). Production parity passed. Final artifact `10950596013` was downloaded and screenshots inspected, including the retained desktop Back arrow, mobile waveform preview and single-heading Parchment loop page.
+- Render staging [36378157060](https://github.com/idanilovqa/AlbumHaven/actions/runs/36378157060), `fc9f80e70628bda6427aae7617abfdf9e31f6f85`: deployment guards, legacy generated-demo upgrade, repeated startup and normal authentication passed. The staging tree differs from tested mobile source only by the six preserved hosting files.
+- Live promotion `deee0270c1fe0ff2b9214872c4113af5fef5c36b`: Render deployment `dep-dasusvbtqb8s73a6akf0` became live at 2026-09-28 04:40:37 UTC. Public check [36378399194](https://github.com/idanilovqa/AlbumHaven/actions/runs/36378399194) passed HTTPS, normal login routing, health and exact reviewed stylesheet.
+- Authenticated live check at 390×844 confirmed the account-name Home heading, Settings navigation and readable waveform draft preview. Cancel discarded the draft; resizing to 1280×900 selected the saved desktop profile and retained a visible working Back button. Screenshots captured; temporary browser viewport restored. Existing account preferences were not saved over.
+- This final report update is documentation only. The tested functional source remains `b956873`; no claim that a later documentation commit reran the complete suite.
 
 ## Manual mobile cases
 

@@ -34,6 +34,7 @@ def normalize_profile(value: object) -> str:
 def default_preferences(profile: str) -> dict[str, object]:
     result = deepcopy(_DEFAULTS)
     if normalize_profile(profile) == "mobile":
+        result["mobileGridColumns"] = 3
         result["galleryDisplayPreferences"]["defaultGalleryDisplayMode"] = "list"
         result["albumOpenMode"] = "page"
         result["playerAppearance"]["seekbarMode"] = "thin"

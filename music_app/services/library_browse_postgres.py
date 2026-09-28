@@ -1067,7 +1067,7 @@ class PostgresLibraryBrowseRepository:
             "search_filter_contract": _build_search_filter_contract(),
             "search_query_contract": _build_search_query_contract(),
             "selected_artist": "",
-            "all_artists_active": False,
+            "all_artists_active": _request_flag((query_params or {}).get("all_artists")),
             "show_all_artists_sidebar_link": True,
             "related_filter_artists": [],
             "primary_filter_active": False,

@@ -131,6 +131,8 @@ function loadHelper() {
   };
   const rafQueue = [];
   const context = {
+    isMobileClient: () => false,
+    usesMobilePageLayout: () => false,
     Date: { now() { return context.__now; } },
     __now: 1800000,
     Image: FakePreloader,
@@ -1210,3 +1212,29 @@ test('legacy Gallery options no longer owns source switches or New Arrivals navi
   assert.match(menu.innerHTML, /data-album-card-action="move_to_library"/);
   assert.match(menu.innerHTML, /Move to Main Library/);
 }
+
+
+test('album context menus are unavailable for narrow layouts and wide mobile clients', () => {
+  for (const [mobile, narrow] of [[true, false], [false, true]]) {
+    const { context } = loadHelper();
+    context.isMobileClient = () => mobile;
+    context.usesMobilePageLayout = () => narrow;
+    context.ensureAlbumCardContextMenu = () => { throw new Error('Mobile must not build desktop actions'); };
+    context.showAlbumCardContextMenu(10, 20, { key: 'generated' });
+  }
+});
+
+test('backdrop tap retains its pointer origin through delayed touch click, but image drag does not close', () => {
+  const { context } = loadHelper();
+  const handlers = {}, timers = [];
+  const overlay = { dataset: {}, addEventListener: (event, callback) => { handlers[event] = callback; } };
+  context.scheduleBrowserTimeout = callback => timers.push(callback);
+  context.bindOverlayPointerOrigin(overlay);
+  handlers.pointerdown({ target: overlay });
+  assert.equal(context.overlayClickStartedOnOverlay(overlay, { target: overlay }), true);
+  handlers.click();
+  timers.splice(0).forEach(callback => callback());
+  assert.equal(context.overlayClickStartedOnOverlay(overlay, { target: overlay }), false);
+  handlers.pointerdown({ target: {} });
+  assert.equal(context.overlayClickStartedOnOverlay(overlay, { target: overlay }), false);
+});

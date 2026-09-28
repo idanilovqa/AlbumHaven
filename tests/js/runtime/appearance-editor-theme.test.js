@@ -59,7 +59,7 @@ async function mounted(method, initial = preference(), saveResponse, client = {}
   };
 }
 
-test('responsive appearance applies saved mobile colors, never another section of an unsaved draft', async () => {
+test('responsive appearance retains Main elements live preview across sections until Cancel', async () => {
   let breakpointChanged;
   const { instance, root } = await mounted('mount', preference(), undefined, {
     AlbumHavenDevicePreferences: { profile: () => 'mobile' },
@@ -70,7 +70,7 @@ test('responsive appearance applies saved mobile colors, never another section o
   instance.controller.setActiveSection('album-page');
   assert.equal(instance.controller.getState().dirty, true);
   breakpointChanged();
-  assert.equal(root.getAttribute('data-appearance-palette'), 'steelblue');
+  assert.equal(root.getAttribute('data-appearance-palette'), 'paper');
   instance.controller.cancel();
   assert.equal(root.getAttribute('data-appearance-palette'), 'steelblue');
 });
@@ -115,7 +115,7 @@ function assertSavedEditor(editor) {
 for (const method of ['mount', 'mountSeekbar']) {
   const name = method === 'mount' ? 'Backgrounds' : 'Seekbar';
 
-  test(`${name} preview follows draft palettes while the editor inherits the saved app`, async () => {
+  test(`${name} preview follows draft palettes; only Main elements recolors the app`, async () => {
     const { instance, root, editor, preview } = await mounted(method);
     const savedRoot = [...root.styles];
     assertEditorTheme(preview, preference());
@@ -128,8 +128,14 @@ for (const method of ['mount', 'mountSeekbar']) {
         assertEditorTheme(preview, draft);
         assertSavedEditor(editor);
         assert.ok(api.contrastRatio(preview.styles.get('--appearance-ink'), preview.styles.get('--appearance-main-surface')) >= 4.5);
-        assert.deepEqual([...root.styles], savedRoot, 'Draft editor theme must not recolor the saved app');
-        assert.equal(root.getAttribute('data-appearance-palette'), 'steelblue');
+        if (method === 'mount') {
+          assert.equal(root.getAttribute('data-appearance-palette'), palette_id);
+          assert.equal(root.styles.get('--appearance-main-surface'), api.resolveAppearance(draft).main);
+        } else {
+          assert.deepEqual([...root.styles], savedRoot, 'Player drafts stay in their preview');
+          assert.equal(root.getAttribute('data-appearance-palette'), 'steelblue');
+        }
+        assert.equal(instance.controller.getState().saved.palette_id, 'steelblue');
       }
     }
   });
@@ -147,7 +153,7 @@ for (const method of ['mount', 'mountSeekbar']) {
     assert.deepEqual([...root.styles], savedRoot);
   });
 
-  test(`${name} Reset pins default preview tokens and successful Save alone updates the app`, async () => {
+  test(`${name} Reset previews defaults and only successful Save persists the draft`, async () => {
     let finishSave;
     const pending = new Promise(resolve => { finishSave = resolve; });
     const saved = preference({ palette_id: 'paper', panel_index: 1 });
@@ -156,14 +162,18 @@ for (const method of ['mount', 'mountSeekbar']) {
     instance.controller.reset();
     assertEditorTheme(preview, preference({ palette_id: null }));
     assertSavedEditor(editor);
-    assert.deepEqual([...root.styles], savedRoot, 'Default draft must override inherited saved light tokens locally');
+    if (method === 'mount') assert.equal(root.getAttribute('data-appearance-palette'), null);
+    else assert.deepEqual([...root.styles], savedRoot);
+    assert.equal(instance.controller.getState().saved.palette_id, 'paper');
     instance.controller.setPalette('black');
     instance.controller.setPanelIndex(2);
     const draft = preference({ palette_id: 'black', panel_index: 2 });
     const saving = instance.controller.save();
     assertEditorTheme(preview, draft);
     assertSavedEditor(editor);
-    assert.deepEqual([...root.styles], savedRoot, 'Pending Save cannot apply draft tokens to the app');
+    if (method === 'mount') assert.equal(root.getAttribute('data-appearance-palette'), 'black');
+    else assert.deepEqual([...root.styles], savedRoot);
+    assert.equal(instance.controller.getState().saved.palette_id, 'paper');
     finishSave(draft);
     assert.equal(await saving, true);
     assertEditorTheme(preview, draft);
@@ -350,4 +360,14 @@ test('seekbar drafts stay with their device profile and save through retained ca
   profile = 'mobile';
   breakpointChanged();
   assert.equal(instance.controller.getState().seekbarMode, 'waveform');
+});
+
+
+test('leaving Main elements restores saved colors without persisting its live preview', async () => {
+  const { instance, root } = await mounted('mount');
+  instance.controller.setPalette('paper');
+  assert.equal(root.getAttribute('data-appearance-palette'), 'paper');
+  instance.unmount();
+  assert.equal(root.getAttribute('data-appearance-palette'), 'steelblue');
+  assert.equal(instance.controller.getState().saved.palette_id, 'steelblue');
 });

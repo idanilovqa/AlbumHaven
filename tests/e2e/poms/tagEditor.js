@@ -71,6 +71,15 @@ export class TagEditor extends BasePage {
     this.repairAlertLogHistory = page.locator(this.repairAlertLogHistorySelector);
   }
 
+  async readFormAndStripeColors() {
+    // parity-check: allow-read-only-measurement-evaluate -- read the existing tag form and alternating unselected rows.
+    return this.overlay.evaluate(node => {
+      const paint = element => ({ background: getComputedStyle(element).backgroundColor, ink: getComputedStyle(element).color });
+      const rows = [...node.querySelectorAll('.tag-editor-track:not(.is-active)')].slice(0, 3);
+      return { rows: rows.map(paint), input: paint(node.querySelector('[data-tag-field="album"]')), apply: paint(node.querySelector('[data-open-tag-edit-confirm]')) };
+    });
+  }
+
   get dialogSelector() {
     return '.tag-editor-dialog';
   }

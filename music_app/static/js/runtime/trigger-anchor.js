@@ -56,6 +56,8 @@ function clearTriggerAnchor(surface) {
 
 function syncTriggerAnchor(surface, anchor) {
   if (!surface?.getBoundingClientRect || !anchor?.getBoundingClientRect || surface.hidden) return;
+  const previous = triggerAnchorBindings.get(surface);
+  if (previous && previous.anchor !== anchor) clearTriggerAnchor(surface);
   const anchorContext = anchor.closest?.('.shell-main-surface, .settings-outlet') ? 'content' : 'chrome';
   surface.dataset.triggerAnchorContext = anchorContext;
   anchor.dataset.triggerAnchorContext = anchorContext;
@@ -64,8 +66,9 @@ function syncTriggerAnchor(surface, anchor) {
     anchor.setAttribute?.('aria-expanded', 'false');
     clearTriggerAnchor(surface);
   });
-  const previous = triggerAnchorBindings.get(surface);
-  if (previous && previous.anchor !== anchor) clearTriggerAnchor(surface);
+  // Establish the owning surface before sampling its paint for the joined trigger.
+  surface.classList.add('trigger-anchor-surface');
+  surface.style.removeProperty?.('--trigger-anchor-background');
   const surfaceStyle = globalThis.getComputedStyle?.(surface);
   let bounds = surface.getBoundingClientRect();
   // Side drawers animate their position, not their layout width. The joined
@@ -88,7 +91,6 @@ function syncTriggerAnchor(surface, anchor) {
     surface.style.setProperty('--trigger-anchor-background', surfaceBackground);
     anchor.style.setProperty('--trigger-anchor-background', surfaceBackground);
   }
-  surface.classList.add('trigger-anchor-surface');
   if (anchor.matches?.('.search-field-button')) surface.dataset.triggerAnchorSearch = 'true';
   else delete surface.dataset.triggerAnchorSearch;
   anchor.classList.add('trigger-anchor-open');

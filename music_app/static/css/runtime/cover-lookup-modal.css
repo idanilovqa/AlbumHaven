@@ -75,36 +75,6 @@
   color: var(--muted);
   font-size: 0.84rem;
 }
-#cover-lookup-find-better-button {
-  flex: 0 0 auto;
-  min-width: 168px;
-  min-height: 42px;
-  border-width: 2px;
-  border-color: var(--appearance-primary-button, var(--accent));
-  background: color-mix(in srgb, var(--appearance-primary-button, var(--panel)) 80%, var(--appearance-primary-button-ink, var(--text)));
-  color: var(--appearance-primary-button-ink, var(--text));
-  font-weight: 800;
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.2);
-  transition: background 150ms ease, border-color 150ms ease, box-shadow 150ms ease, transform 100ms ease;
-}
-#cover-lookup-find-better-button:hover:not(:disabled) {
-  border-color: color-mix(in srgb, var(--appearance-primary-button, var(--accent)) 80%, white);
-  background: color-mix(in srgb, var(--appearance-primary-button, var(--accent)) 88%, white);
-  box-shadow:
-    0 0 16px color-mix(in srgb, var(--appearance-interaction-outline, var(--accent)) 26%, transparent),
-    0 8px 24px rgba(0, 0, 0, 0.22);
-}
-#cover-lookup-find-better-button:active:not(:disabled) {
-  transform: translateY(1px);
-}
-@media (max-width: 720px) {
-  .cover-lookup-search-action {
-    width: 100%;
-  }
-  #cover-lookup-find-better-button {
-    width: 100%;
-  }
-}
 .cover-lookup-section {
   display: grid;
   gap: 12px;
@@ -394,8 +364,10 @@
   overflow: hidden;
 }
 .cover-lookup-art-card.is-active {
-  border-color: rgba(96,165,250,0.7);
-  box-shadow: 0 0 0 1px rgba(96,165,250,0.3), 0 0 16px rgba(96,165,250,0.18);
+  border-color: #60a5fa;
+  outline: 3px solid #60a5fa;
+  outline-offset: -2px;
+  box-shadow: none;
 }
 .cover-lookup-art-preview {
   position: relative;

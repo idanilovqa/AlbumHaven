@@ -1812,8 +1812,10 @@ function tryRestoreClearedSearchView(nextView, options = {}) {
     clearPendingSelectedArtistReconcile();
     state.ui.viewStateRevision = Number(state.ui.viewStateRevision || 0) + 1;
     state.ui.pendingViewRequest = null;
+    const hadPendingTransition = state.ui.pendingViewTransition;
     state.ui.pendingViewTransition = false;
     state.ui.pendingViewTransitionRequestId = 0;
+    if (hadPendingTransition) renderLibraryLoader(state.status);
     renderSidebar();
     pushBrowserViewState(nextView);
     return true;

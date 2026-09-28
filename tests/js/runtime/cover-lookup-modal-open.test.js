@@ -219,3 +219,33 @@ test('accepted lookup renders running feedback before follow-up reads settle', a
   });
   await startPromise;
 });
+
+
+test('gallery responses cannot overwrite another album or a newer gallery request', async () => {
+  const requests = [], applied = [];
+  const context = vm.createContext({
+    state: { coverLookup: { modal: { album: { key: 'first' } } } }, console,
+    fetch: () => new Promise(resolve => requests.push(resolve)),
+    showToast: () => { throw new Error('Stale requests must not notify'); },
+  });
+  vm.runInContext(helperSource, context);
+  context.renderCoverLookupModal = () => {};
+  context.applyCoverLookupGalleryPayload = data => applied.push(data.id);
+  context.markCoverLookupAutomaticImprovementSeen = () => new Promise(() => {});
+  const first = context.refreshCoverLookupGallery();
+  context.state.coverLookup.modal.album = { key: 'second' };
+  const second = context.refreshCoverLookupGallery();
+  requests[1]({ ok: true, json: async () => ({ ok: true, id: 'second' }) });
+  await second;
+  assert.equal(context.state.coverLookup.modal.loading, false, 'mark-seen must not delay gallery display');
+  requests[0]({ ok: true, json: async () => ({ ok: true, id: 'first' }) });
+  await first;
+  assert.deepEqual(applied, ['second']);
+  const older = context.refreshCoverLookupGallery();
+  const newer = context.refreshCoverLookupGallery();
+  requests[3]({ ok: true, json: async () => ({ ok: true, id: 'newer' }) });
+  await newer;
+  requests[2]({ ok: true, json: async () => ({ ok: true, id: 'older' }) });
+  await older;
+  assert.deepEqual(applied, ['second', 'newer']);
+});

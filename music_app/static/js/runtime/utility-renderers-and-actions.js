@@ -518,6 +518,7 @@ function bindUtilityLoopDragAndDrop() {
 }
 
 function syncUtilityLoopPanelVisibility() {
+  if (typeof getMobileLoopPage === 'function' && getMobileLoopPage()?.loopSongId) return;
   const visibleIds = new Set(getFilteredUtilityLoops().map(loop => String(loop.id)));
   const els = getUtilityModalElements();
   els.detail?.querySelectorAll('[data-utility-loop-entry]').forEach(panel => { panel.hidden = !visibleIds.has(getUtilityLoopNodeId(panel)); });
@@ -542,6 +543,11 @@ function filterUtilityLoopViews() {
   const els = getUtilityModalElements();
   const filtered = getFilteredUtilityLoops();
   if (els.count) els.count.textContent = String(filtered.length);
+  if (typeof getMobileLoopPage === 'function' && getMobileLoopPage()) {
+    renderUtilityLoopList(els, filtered);
+    syncMobileUtilityContext();
+    return;
+  }
   if (filtered.length && !filtered.some(loop => buildUtilityLoopGroupKey(loop) === state.utility.selectedLoopGroupKey)) {
     state.utility.selectedLoopGroupKey = buildUtilityLoopGroupKey(filtered[0]);
     state.utility.selectedLoopId = String(filtered[0].id);
@@ -562,6 +568,12 @@ function renderUtilityLoops() {
   if (els.overlay.hidden) return;
   els.detail.classList.add('is-loop-detail');
   const loops = state.utility.loops || [];
+  const mobilePage = typeof getMobileLoopPage === 'function' ? getMobileLoopPage() : null;
+  const mobileGroup = mobilePage ? resolveMobileLoopSongGroup(mobilePage, loops) : null;
+  if (mobilePage && mobilePage.loopSongId && !mobileGroup && state.utility.loopsLoaded
+      && !state.utility.loopsLoading && !state.utility.loopsLoadError) mobilePage.loopSongId = '';
+  els.overlay.dataset.mobileLoopView = mobilePage?.loopSongId ? 'song' : 'list';
+  if (mobilePage) pauseOtherUtilityLoopPlayback(null);
   if (els.sidebarLabel) els.sidebarLabel.textContent = 'Loops';
   const filtered = getFilteredUtilityLoops();
   els.count.textContent = String(filtered.length);
@@ -584,8 +596,9 @@ function renderUtilityLoops() {
   }
 
   if (state.utility.loopsLoadError) {
-    els.list.innerHTML = '';
-    els.detail.innerHTML = buildOnPageAlertHtml({ severity: 'error', title: 'Saved loops unavailable', message: state.utility.loopsLoadError });
+    const errorHtml = buildOnPageAlertHtml({ severity: 'error', title: 'Saved loops unavailable', message: state.utility.loopsLoadError });
+    els.list.innerHTML = mobilePage ? errorHtml : '';
+    els.detail.innerHTML = errorHtml;
     return;
   }
   if (!loops.length) {
@@ -595,7 +608,15 @@ function renderUtilityLoops() {
     return;
   }
 
-  const groupedLoops = groupUtilityLoops(filtered.length ? filtered : loops);
+  if (mobilePage && !mobileGroup) {
+    renderUtilityLoopList(els, filtered);
+    els.detail.innerHTML = '';
+    clearUtilityLoopSpaceOwner();
+    restoreMobileLoopListScroll(mobilePage);
+    return;
+  }
+  if (mobileGroup) state.utility.selectedLoopGroupKey = String(mobileGroup.key);
+  const groupedLoops = groupUtilityLoops(mobileGroup ? loops : (filtered.length ? filtered : loops));
   if (!state.utility.selectedLoopGroupKey || !groupedLoops.some((group) => String(group.key || '') === String(state.utility.selectedLoopGroupKey || ''))) {
     state.utility.selectedLoopGroupKey = String(groupedLoops[0]?.key || '');
   }

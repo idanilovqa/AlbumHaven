@@ -468,7 +468,24 @@ html[data-client-profile="mobile"] :is([data-utility-tab="problematic-files"], [
 /* Same saved-loop component and audio owner, compact phone composition. */
 .utility-loop-pitch-button { display: none; }
 @media (max-width: 900px) {
-  #utility-modal.is-mobile-page[data-active-tab="loops"] .utility-sidebar { max-height: 112px; }
+  /* The mobile loop index and a song's players are separate views of one component. */
+  #utility-modal.is-mobile-page[data-active-tab="loops"] .utility-sidebar {
+    max-height: none; height: auto; flex: 1 1 auto; overflow: visible; border: 0;
+  }
+  #utility-modal.is-mobile-page[data-active-tab="loops"] .utility-list { max-height: none; overflow: visible; padding: 0 0 16px; }
+  #utility-modal.is-mobile-page[data-active-tab="loops"] .utility-sidebar-search {
+    position: sticky; top: 0; z-index: 2; padding: 6px 0 12px; background: var(--appearance-main-surface, var(--bg));
+  }
+  #utility-modal.is-mobile-page[data-active-tab="loops"] .utility-search-row { padding: 0; }
+  #utility-modal.is-mobile-page[data-active-tab="loops"] .search-field-control { --search-field-height: 40px; --search-field-radius: 10px; }
+  #utility-modal.is-mobile-page[data-active-tab="loops"][data-mobile-loop-view="list"] .utility-detail,
+  #utility-modal.is-mobile-page[data-active-tab="loops"][data-mobile-loop-view="song"] .utility-sidebar,
+  #utility-modal.is-mobile-page[data-active-tab="loops"][data-mobile-loop-view="song"] .utility-loop-detail-header { display: none; }
+  #mobile-page-header[data-loop-song="true"] { align-items: center; gap: 10px; }
+  #mobile-page-header[data-loop-song="true"] #mobile-settings-button { display: none; }
+  #mobile-page-header .mobile-loop-page-cover { position: static; width: 56px; height: 56px; flex: 0 0 56px; }
+  #mobile-page-header[data-loop-song="true"] .gallery-bar__title { min-height: 0; font-size: 17px; }
+  #mobile-page-header[data-loop-song="true"] .gallery-bar__summary { margin-top: 3px; font-size: 11px; line-height: 1.4; }
   #utility-modal.is-mobile-page .utility-loop-detail-header { grid-template-columns: 56px minmax(0, 1fr); gap: 10px; padding: 12px 0; align-items: center; }
   #utility-modal.is-mobile-page .utility-detail-cover.utility-loop-sticky-cover { width: 56px; height: 56px; flex-basis: 56px; }
   .is-mobile-page .utility-loop-detail-header .utility-detail-title { margin: 0 0 2px; font-size: 15px; }

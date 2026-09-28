@@ -1793,6 +1793,96 @@ test('context guard covers existing pages and future popups, then restores every
   assert.equal(context.route(), 'original-context-route');
 });
 
+test('fresh browser sessions retain independent ownership and clean up every context', async (t) => {
+  const source = read('tests/e2e/support/baseFixtures.js');
+  const start = source.indexOf('  freshBrowserSession: async');
+  const end = source.indexOf('\n  startupRelationProjectionReadiness:', start);
+  const fixtureSource = source.slice(start, end);
+  for (const failure of [null, 'initialize', 'dispose', 'artifact']) {
+    await t.test(failure || 'normal teardown', async () => {
+      const sessions = [];
+      const attachments = [];
+      const dependencyNames = [
+        'GalleryActions', 'GalleryPage', 'CoverLookupActions', 'CoverLookup',
+        'SearchToolbarActions', 'SearchToolbar', 'TagEditorActions', 'TagEditor',
+        'TrackModalActions', 'TrackModal',
+      ];
+      const dependencies = Object.fromEntries(dependencyNames.map((name) => [name, class {}]));
+      Object.assign(dependencies, {
+        URL,
+        installContextRequestInterceptionGuard: (context) => {
+          context.guarded = true;
+          return () => { context.restored = true; };
+        },
+        getProductionViewObserver: (page) => ({
+          async initialize() {
+            if (failure === 'initialize' && page.context.id === 2) throw new Error('initialize failed');
+          },
+          async dispose() {
+            page.context.disposed = true;
+            if (failure === 'dispose' && page.context.id === 1) throw new Error('dispose failed');
+          },
+        }),
+        observePageRuntimeLogs: (page) => ({
+          stop() { page.context.stopped = true; },
+          snapshot() { return []; },
+        }),
+        didTestFail: () => true,
+        formatRuntimeLogs: () => 'logs',
+      });
+      const fixture = require('node:vm').runInNewContext(
+        `({${fixtureSource}}).freshBrowserSession`, dependencies,
+      );
+      const execution = fixture({
+        browser: {
+          async newContext(options) {
+            const context = {
+              id: sessions.length + 1, options,
+              async newPage() {
+                assert.equal(this.guarded, true);
+                return { context: this, screenshot: async () => Buffer.from('screenshot') };
+              },
+              async close() { this.closed = true; },
+            };
+            sessions.push(context);
+            return context;
+          },
+        },
+        testArtifacts: {
+          queueTextAttachment(name) {
+            attachments.push(name);
+            if (failure === 'artifact') throw new Error('artifact failed');
+          },
+          queueAttachment({ name }) { attachments.push(name); },
+        },
+        authenticateFreshBrowserSession: false,
+        storageState: { cookies: [{ name: 'owner' }], origins: [] },
+      }, async (factory) => {
+        const first = await factory.create();
+        const second = await factory.create();
+        assert.notEqual(first.context, second.context);
+        assert.notEqual(first.page, second.page);
+        assert.equal(first.context.closed, undefined, 'first identity remains usable');
+        for (const session of sessions) assert.equal(session.options.storageState.cookies.length, 0);
+      }, { project: { use: { baseURL: 'http://localhost:5000' } } });
+      if (failure) await assert.rejects(execution, /initialize failed|Failed to clean up fresh browser sessions/);
+      else await execution;
+      assert.equal(sessions.length, 2);
+      for (const session of sessions) {
+        assert.equal(session.disposed, true);
+        assert.equal(session.restored, true);
+        assert.equal(session.closed, true);
+        if (failure !== 'initialize' || session.id !== 2) assert.equal(session.stopped, true);
+      }
+      if (!failure) {
+        assert.equal(new Set(attachments).size, 4, 'each session retains its own failure evidence');
+        assert.ok(attachments.includes('fresh-browser-session-runtime-log.txt'));
+        assert.ok(attachments.includes('fresh-browser-session-2-runtime-log.txt'));
+      }
+    });
+  }
+});
+
 test('all E2E specs inherit guarded fixtures and cannot create direct browser pages', () => {
   const e2eRoot = path.join(repoRoot, 'tests/e2e');
   const sources = [];

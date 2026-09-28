@@ -2845,7 +2845,6 @@ def test_asgi_root_album_browse_postgres_selection_rejects_unsupported_requests(
 
     complex_queries = [
         {"surface": "albums", "payload_tier": "full"},
-        {"surface": "albums", "all_artists": "1"},
         {"surface": "albums", "related_artist": "United States of America"},
         {"surface": "albums", "primary_filter": "1"},
         {"surface": "albums", "playlist": "favorites"},

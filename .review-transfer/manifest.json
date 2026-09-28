@@ -1,0 +1,572 @@
+{
+  "head": "61027a1d986d410fc49d257ddd805d6e4d6c63f3",
+  "base": "a5c23fc8963f9ecc531468a61653bf2d798e8c6d",
+  "merge_base": "a5c23fc8963f9ecc531468a61653bf2d798e8c6d",
+  "excluded_binary_files": [
+    {
+      "ref": "61027a1d986d410fc49d257ddd805d6e4d6c63f3",
+      "path": ".codex-restart/task9-loop-waveform-gap-failure.jpeg",
+      "size": 44376,
+      "sha256": "90169dfc0c03b35fbebf0f953a09914b8db0bafd2fb4681fcb666ad6e2082b2e"
+    },
+    {
+      "ref": "61027a1d986d410fc49d257ddd805d6e4d6c63f3",
+      "path": "docs/design-mockups/components/harbor-mint/v001/owner-reference.png",
+      "size": 47545,
+      "sha256": "93caef82052a6015a6870adca7b245b1f84af488cacba7ef7c20f1ec62a2d006"
+    },
+    {
+      "ref": "61027a1d986d410fc49d257ddd805d6e4d6c63f3",
+      "path": "docs/design-mockups/components/sidebar-player/v001/current-player.png",
+      "size": 5786,
+      "sha256": "ddbb56743cbad3eb91566d8d0c56c41097f5032294b1666155122cc7c7fc75dd"
+    },
+    {
+      "ref": "61027a1d986d410fc49d257ddd805d6e4d6c63f3",
+      "path": "docs/design-mockups/components/sidebar-player/v002/current-player.png",
+      "size": 5786,
+      "sha256": "ddbb56743cbad3eb91566d8d0c56c41097f5032294b1666155122cc7c7fc75dd"
+    },
+    {
+      "ref": "61027a1d986d410fc49d257ddd805d6e4d6c63f3",
+      "path": "docs/design-mockups/components/sidebar-player/v003/current-player.png",
+      "size": 5786,
+      "sha256": "ddbb56743cbad3eb91566d8d0c56c41097f5032294b1666155122cc7c7fc75dd"
+    },
+    {
+      "ref": "61027a1d986d410fc49d257ddd805d6e4d6c63f3",
+      "path": "docs/design-mockups/components/sidebar-player/v004/current-player.png",
+      "size": 5786,
+      "sha256": "ddbb56743cbad3eb91566d8d0c56c41097f5032294b1666155122cc7c7fc75dd"
+    },
+    {
+      "ref": "61027a1d986d410fc49d257ddd805d6e4d6c63f3",
+      "path": "docs/design-mockups/screens/remaining-ui/v001/references/album-details.png",
+      "size": 158936,
+      "sha256": "962209efcca1df4e8050f388134470fc33926ae638649b77228bff4a356beeef"
+    },
+    {
+      "ref": "61027a1d986d410fc49d257ddd805d6e4d6c63f3",
+      "path": "docs/design-mockups/screens/remaining-ui/v001/references/cover-lookup.png",
+      "size": 125045,
+      "sha256": "2c55a6ac75fdb337561a64108ad0de3f5b599e112d57e7abce1e47a12ddab6c9"
+    },
+    {
+      "ref": "61027a1d986d410fc49d257ddd805d6e4d6c63f3",
+      "path": "docs/design-mockups/screens/remaining-ui/v001/references/notifications.png",
+      "size": 36194,
+      "sha256": "041c512c80e4f8dc3cd802fe06773446d498c16d062ab28f06fc29ca748c758f"
+    },
+    {
+      "ref": "61027a1d986d410fc49d257ddd805d6e4d6c63f3",
+      "path": "docs/design-mockups/screens/remaining-ui/v001/source-logos/google.ico",
+      "size": 5430,
+      "sha256": "6da5620880159634213e197fafca1dde0272153be3e4590818533fab8d040770"
+    },
+    {
+      "ref": "61027a1d986d410fc49d257ddd805d6e4d6c63f3",
+      "path": "docs/design-mockups/screens/remaining-ui/v001/source-logos/yandex.ico",
+      "size": 1662,
+      "sha256": "9a8c4ab2a3a2451c6f1b31af29eeeced47745013711f641eafa80828a2b251de"
+    },
+    {
+      "ref": "61027a1d986d410fc49d257ddd805d6e4d6c63f3",
+      "path": "docs/design-mockups/screens/utilities-refactor/v001/references/stored-admin-desktop.jpg",
+      "size": 25822,
+      "sha256": "0777741f83e56bdc43c7e40996c15f0248e111a60a18648005388292a8e644cc"
+    },
+    {
+      "ref": "61027a1d986d410fc49d257ddd805d6e4d6c63f3",
+      "path": "docs/design-mockups/screens/utilities-refactor/v001/references/stored-library-desktop.jpg",
+      "size": 32230,
+      "sha256": "30acf38891f4206c0bc65b5491373cb3ecc7e17d1c7aad7a8622ea09c8d7f2ce"
+    },
+    {
+      "ref": "61027a1d986d410fc49d257ddd805d6e4d6c63f3",
+      "path": "docs/design-mockups/screens/utilities-refactor/v002/components/loop-cancel-mask.png",
+      "size": 180275,
+      "sha256": "a7d8ada687ea0298609e153e1c9f7373273d76dbb19ead41fc4414932c3a0fe8"
+    },
+    {
+      "ref": "61027a1d986d410fc49d257ddd805d6e4d6c63f3",
+      "path": "docs/design-mockups/screens/utilities-refactor/v002/components/loop-scissors-mask.png",
+      "size": 205867,
+      "sha256": "e42f45968f1ddf142ec1e0cd5bb84a018b07f6bf7a66ccfd9b665a3d009d38eb"
+    },
+    {
+      "ref": "61027a1d986d410fc49d257ddd805d6e4d6c63f3",
+      "path": "docs/design-mockups/screens/utilities-refactor/v002/references/revised-loops.png",
+      "size": 67678,
+      "sha256": "5965afc84542b206ad51e693d924f657e15fd83361c780371d13e26a543e1f71"
+    },
+    {
+      "ref": "61027a1d986d410fc49d257ddd805d6e4d6c63f3",
+      "path": "docs/gallery-local-review.md",
+      "size": 30440,
+      "sha256": "9b1dd8b4f8b60c0102b171d60ccffff47462ea7d42c95c5d61829da448c7d1dc"
+    },
+    {
+      "ref": "61027a1d986d410fc49d257ddd805d6e4d6c63f3",
+      "path": "music_app/static/images/album-haven-cloud-vinyl.png",
+      "size": 86249,
+      "sha256": "febbc15f861cc64c87b4f1161feb5c9876832cc8ab4f516ac7b31c84cc6a69d1"
+    },
+    {
+      "ref": "61027a1d986d410fc49d257ddd805d6e4d6c63f3",
+      "path": "music_app/static/images/clear-notifications-icon-offwhite.png",
+      "size": 186292,
+      "sha256": "540609d22836a11fbd702b42a40fc321cdab8f2671586b98f827312ad1831c14"
+    },
+    {
+      "ref": "61027a1d986d410fc49d257ddd805d6e4d6c63f3",
+      "path": "music_app/static/images/clear-notifications-icon.png",
+      "size": 394167,
+      "sha256": "cfc82fb8f3faea067131de9a062254ff4d4669f6867cc01727020a5fa5f988e5"
+    },
+    {
+      "ref": "61027a1d986d410fc49d257ddd805d6e4d6c63f3",
+      "path": "music_app/static/images/cover-lookup-gallery-icon-offwhite.png",
+      "size": 228410,
+      "sha256": "b861db14e5af0769b6693e3605df4da401a77bd540637874c8c4cc965d1b7e59"
+    },
+    {
+      "ref": "61027a1d986d410fc49d257ddd805d6e4d6c63f3",
+      "path": "music_app/static/images/cover-lookup-gallery-icon.png",
+      "size": 1163993,
+      "sha256": "e8ec0d92219608836aa47cdcd8beb93ea7c7e20f40d664c1b64d35327e639585"
+    },
+    {
+      "ref": "61027a1d986d410fc49d257ddd805d6e4d6c63f3",
+      "path": "music_app/static/images/cover-lookup-notification-icon-offwhite.png",
+      "size": 220948,
+      "sha256": "ca9d39b4084c259bbb29f5e870c524a0fd31a4bde3da02fd9ba595360632663f"
+    },
+    {
+      "ref": "61027a1d986d410fc49d257ddd805d6e4d6c63f3",
+      "path": "music_app/static/images/cover-lookup-notification-icon.png",
+      "size": 841732,
+      "sha256": "01124815f26c21287d2e523360221e9d1115b37741292ee8d36af93d8a198739"
+    },
+    {
+      "ref": "61027a1d986d410fc49d257ddd805d6e4d6c63f3",
+      "path": "music_app/static/images/google.ico",
+      "size": 5430,
+      "sha256": "6da5620880159634213e197fafca1dde0272153be3e4590818533fab8d040770"
+    },
+    {
+      "ref": "61027a1d986d410fc49d257ddd805d6e4d6c63f3",
+      "path": "music_app/static/images/icons/loop-cancel-mask.png",
+      "size": 180275,
+      "sha256": "a7d8ada687ea0298609e153e1c9f7373273d76dbb19ead41fc4414932c3a0fe8"
+    },
+    {
+      "ref": "61027a1d986d410fc49d257ddd805d6e4d6c63f3",
+      "path": "music_app/static/images/icons/loop-scissors-mask.png",
+      "size": 205867,
+      "sha256": "e42f45968f1ddf142ec1e0cd5bb84a018b07f6bf7a66ccfd9b665a3d009d38eb"
+    },
+    {
+      "ref": "61027a1d986d410fc49d257ddd805d6e4d6c63f3",
+      "path": "music_app/static/images/loading-idea.png",
+      "size": 1604223,
+      "sha256": "51e89bd5bab24db40a79a842ad07e66e80f34e14342dc10ec49701e801891fe8"
+    },
+    {
+      "ref": "61027a1d986d410fc49d257ddd805d6e4d6c63f3",
+      "path": "music_app/static/images/quick-search-icon-offwhite.png",
+      "size": 224427,
+      "sha256": "03835c89f54dd361d7ea1c8e84957e6bc16edbef914be4badad44716de13d831"
+    },
+    {
+      "ref": "61027a1d986d410fc49d257ddd805d6e4d6c63f3",
+      "path": "music_app/static/images/quick-search-icon.png",
+      "size": 1130109,
+      "sha256": "3feec4719c0117b828218922ba8431fea8e43ee4651e346e21d1731eb5028d65"
+    },
+    {
+      "ref": "61027a1d986d410fc49d257ddd805d6e4d6c63f3",
+      "path": "music_app/static/images/remote-preview-unavailable.png",
+      "size": 1995416,
+      "sha256": "c3cddd5848e12b82feb902f9d41ab31e37cec5de47d2e07ba836769aca6ff87b"
+    },
+    {
+      "ref": "61027a1d986d410fc49d257ddd805d6e4d6c63f3",
+      "path": "music_app/static/images/yandex.ico",
+      "size": 1662,
+      "sha256": "9a8c4ab2a3a2451c6f1b31af29eeeced47745013711f641eafa80828a2b251de"
+    },
+    {
+      "ref": "61027a1d986d410fc49d257ddd805d6e4d6c63f3",
+      "path": "tests/components/playerViews.spec.js-snapshots/docked-compact-player-win32.png",
+      "size": 14888,
+      "sha256": "d7079dae945d27a4fe68eca7caf98edbc4bcafad888b8bbb788a9f619e5161cc"
+    },
+    {
+      "ref": "61027a1d986d410fc49d257ddd805d6e4d6c63f3",
+      "path": "tests/components/playerViews.spec.js-snapshots/expanded-regular-player-win32.png",
+      "size": 62054,
+      "sha256": "18f61df51f35c70eb9318cf2b991bd377d14a03c72d87976c6df19e9fba397b1"
+    },
+    {
+      "ref": "61027a1d986d410fc49d257ddd805d6e4d6c63f3",
+      "path": "tests/components/playerViews.spec.js-snapshots/expanded-waveform-player-win32.png",
+      "size": 75985,
+      "sha256": "d9d5b5e315c60f4a7ef0f37b0f41e4a64071320189bfdd35165d6784cd61403c"
+    },
+    {
+      "ref": "61027a1d986d410fc49d257ddd805d6e4d6c63f3",
+      "path": "tests/components/playerViews.spec.js-snapshots/floating-compact-player-win32.png",
+      "size": 6304,
+      "sha256": "053b0b7a9a3caaf2af0aa34d5375d8e460f8440393495bfd57587fd82f6a4387"
+    },
+    {
+      "ref": "61027a1d986d410fc49d257ddd805d6e4d6c63f3",
+      "path": "tests/components/sidebarPlayer.spec.js-snapshots/sidebar-player-A-artwork-and-metadata-win32.png",
+      "size": 12436,
+      "sha256": "d61be19c444d84f705f74f3bcb68de492c5fdd4ffaad169a9f9f8ca160e1992f"
+    },
+    {
+      "ref": "61027a1d986d410fc49d257ddd805d6e4d6c63f3",
+      "path": "tests/components/sidebarPlayer.spec.js-snapshots/sidebar-player-A-collapsed-win32.png",
+      "size": 5681,
+      "sha256": "80289d85eefd08cc2c16a0ea10820362ef71ae1b5238d0d27e118d8f0001ed42"
+    },
+    {
+      "ref": "61027a1d986d410fc49d257ddd805d6e4d6c63f3",
+      "path": "tests/components/sidebarPlayer.spec.js-snapshots/sidebar-player-B-collapsed-win32.png",
+      "size": 12250,
+      "sha256": "e098211aa90b13be4206c66a308221226518f3b8e1ec6814b3413672a00695bd"
+    },
+    {
+      "ref": "61027a1d986d410fc49d257ddd805d6e4d6c63f3",
+      "path": "tests/components/sidebarPlayer.spec.js-snapshots/sidebar-player-C-collapsed-win32.png",
+      "size": 8449,
+      "sha256": "10e4dbec3a66325767fa350099f7892d87d61855b13567059912cb2089ea4c20"
+    },
+    {
+      "ref": "61027a1d986d410fc49d257ddd805d6e4d6c63f3",
+      "path": "tests/components/sidebarPlayer.spec.js-snapshots/sidebar-player-C-detached-artwork-win32.png",
+      "size": 12528,
+      "sha256": "c68138fcf3582daf093290a62991d2df5ffa63e2575887e4d92d85ab4002d319"
+    },
+    {
+      "ref": "61027a1d986d410fc49d257ddd805d6e4d6c63f3",
+      "path": "tests/components/sidebarPlayer.spec.js-snapshots/sidebar-player-light-regular-detached-win32.png",
+      "size": 12769,
+      "sha256": "7bba5d53fe997c6bd45a8d934dea17abe1a104b5296838b8603e524e7e9e08a5"
+    },
+    {
+      "ref": "61027a1d986d410fc49d257ddd805d6e4d6c63f3",
+      "path": "tests/components/sidebarPlayer.spec.js-snapshots/sidebar-player-light-regular-docked-win32.png",
+      "size": 12156,
+      "sha256": "65ca27a1b36d4e458a65e5ac6062d86fd470ae686fa703675ca6db4b8aaa5d6a"
+    },
+    {
+      "ref": "61027a1d986d410fc49d257ddd805d6e4d6c63f3",
+      "path": "tests/components/triggerAnchorSurface.spec.js-snapshots/anchor-album-types-win32.png",
+      "size": 11833,
+      "sha256": "49c7dfd1bffb2cd38210f1eaca65b0c77ac598485e0350c5a05fa51ee7295889"
+    },
+    {
+      "ref": "61027a1d986d410fc49d257ddd805d6e4d6c63f3",
+      "path": "tests/components/triggerAnchorSurface.spec.js-snapshots/anchor-log-history-period-win32.png",
+      "size": 7840,
+      "sha256": "2fb4ac252e317e1ff99d0e3b58c4d4ef0d003f19310809d300ff97290d31d2f1"
+    },
+    {
+      "ref": "61027a1d986d410fc49d257ddd805d6e4d6c63f3",
+      "path": "tests/components/triggerAnchorSurface.spec.js-snapshots/anchor-settings-win32.png",
+      "size": 8498,
+      "sha256": "8b690b609e8ab0acdb88970192399e2547f4e15dada09ea46bde2b8b445e5ef8"
+    },
+    {
+      "ref": "a5c23fc8963f9ecc531468a61653bf2d798e8c6d",
+      "path": ".codex-restart/task9-loop-waveform-gap-failure.jpeg",
+      "size": 44376,
+      "sha256": "90169dfc0c03b35fbebf0f953a09914b8db0bafd2fb4681fcb666ad6e2082b2e"
+    },
+    {
+      "ref": "a5c23fc8963f9ecc531468a61653bf2d798e8c6d",
+      "path": "docs/design-mockups/components/harbor-mint/v001/owner-reference.png",
+      "size": 47545,
+      "sha256": "93caef82052a6015a6870adca7b245b1f84af488cacba7ef7c20f1ec62a2d006"
+    },
+    {
+      "ref": "a5c23fc8963f9ecc531468a61653bf2d798e8c6d",
+      "path": "docs/design-mockups/screens/utilities-refactor/v001/references/stored-admin-desktop.jpg",
+      "size": 25822,
+      "sha256": "0777741f83e56bdc43c7e40996c15f0248e111a60a18648005388292a8e644cc"
+    },
+    {
+      "ref": "a5c23fc8963f9ecc531468a61653bf2d798e8c6d",
+      "path": "docs/design-mockups/screens/utilities-refactor/v001/references/stored-library-desktop.jpg",
+      "size": 32230,
+      "sha256": "30acf38891f4206c0bc65b5491373cb3ecc7e17d1c7aad7a8622ea09c8d7f2ce"
+    },
+    {
+      "ref": "a5c23fc8963f9ecc531468a61653bf2d798e8c6d",
+      "path": "docs/design-mockups/screens/utilities-refactor/v002/components/loop-cancel-mask.png",
+      "size": 180275,
+      "sha256": "a7d8ada687ea0298609e153e1c9f7373273d76dbb19ead41fc4414932c3a0fe8"
+    },
+    {
+      "ref": "a5c23fc8963f9ecc531468a61653bf2d798e8c6d",
+      "path": "docs/design-mockups/screens/utilities-refactor/v002/components/loop-scissors-mask.png",
+      "size": 205867,
+      "sha256": "e42f45968f1ddf142ec1e0cd5bb84a018b07f6bf7a66ccfd9b665a3d009d38eb"
+    },
+    {
+      "ref": "a5c23fc8963f9ecc531468a61653bf2d798e8c6d",
+      "path": "docs/design-mockups/screens/utilities-refactor/v002/references/revised-loops.png",
+      "size": 67678,
+      "sha256": "5965afc84542b206ad51e693d924f657e15fd83361c780371d13e26a543e1f71"
+    },
+    {
+      "ref": "a5c23fc8963f9ecc531468a61653bf2d798e8c6d",
+      "path": "docs/gallery-local-review.md",
+      "size": 30440,
+      "sha256": "9b1dd8b4f8b60c0102b171d60ccffff47462ea7d42c95c5d61829da448c7d1dc"
+    },
+    {
+      "ref": "a5c23fc8963f9ecc531468a61653bf2d798e8c6d",
+      "path": "music_app/static/images/album-haven-cloud-vinyl.png",
+      "size": 86249,
+      "sha256": "febbc15f861cc64c87b4f1161feb5c9876832cc8ab4f516ac7b31c84cc6a69d1"
+    },
+    {
+      "ref": "a5c23fc8963f9ecc531468a61653bf2d798e8c6d",
+      "path": "music_app/static/images/clear-notifications-icon-offwhite.png",
+      "size": 186292,
+      "sha256": "540609d22836a11fbd702b42a40fc321cdab8f2671586b98f827312ad1831c14"
+    },
+    {
+      "ref": "a5c23fc8963f9ecc531468a61653bf2d798e8c6d",
+      "path": "music_app/static/images/clear-notifications-icon.png",
+      "size": 394167,
+      "sha256": "cfc82fb8f3faea067131de9a062254ff4d4669f6867cc01727020a5fa5f988e5"
+    },
+    {
+      "ref": "a5c23fc8963f9ecc531468a61653bf2d798e8c6d",
+      "path": "music_app/static/images/cover-lookup-gallery-icon-offwhite.png",
+      "size": 228410,
+      "sha256": "b861db14e5af0769b6693e3605df4da401a77bd540637874c8c4cc965d1b7e59"
+    },
+    {
+      "ref": "a5c23fc8963f9ecc531468a61653bf2d798e8c6d",
+      "path": "music_app/static/images/cover-lookup-gallery-icon.png",
+      "size": 1163993,
+      "sha256": "e8ec0d92219608836aa47cdcd8beb93ea7c7e20f40d664c1b64d35327e639585"
+    },
+    {
+      "ref": "a5c23fc8963f9ecc531468a61653bf2d798e8c6d",
+      "path": "music_app/static/images/cover-lookup-notification-icon-offwhite.png",
+      "size": 220948,
+      "sha256": "ca9d39b4084c259bbb29f5e870c524a0fd31a4bde3da02fd9ba595360632663f"
+    },
+    {
+      "ref": "a5c23fc8963f9ecc531468a61653bf2d798e8c6d",
+      "path": "music_app/static/images/cover-lookup-notification-icon.png",
+      "size": 841732,
+      "sha256": "01124815f26c21287d2e523360221e9d1115b37741292ee8d36af93d8a198739"
+    },
+    {
+      "ref": "a5c23fc8963f9ecc531468a61653bf2d798e8c6d",
+      "path": "music_app/static/images/icons/loop-cancel-mask.png",
+      "size": 180275,
+      "sha256": "a7d8ada687ea0298609e153e1c9f7373273d76dbb19ead41fc4414932c3a0fe8"
+    },
+    {
+      "ref": "a5c23fc8963f9ecc531468a61653bf2d798e8c6d",
+      "path": "music_app/static/images/icons/loop-scissors-mask.png",
+      "size": 205867,
+      "sha256": "e42f45968f1ddf142ec1e0cd5bb84a018b07f6bf7a66ccfd9b665a3d009d38eb"
+    },
+    {
+      "ref": "a5c23fc8963f9ecc531468a61653bf2d798e8c6d",
+      "path": "music_app/static/images/loading-idea.png",
+      "size": 1604223,
+      "sha256": "51e89bd5bab24db40a79a842ad07e66e80f34e14342dc10ec49701e801891fe8"
+    },
+    {
+      "ref": "a5c23fc8963f9ecc531468a61653bf2d798e8c6d",
+      "path": "music_app/static/images/quick-search-icon-offwhite.png",
+      "size": 224427,
+      "sha256": "03835c89f54dd361d7ea1c8e84957e6bc16edbef914be4badad44716de13d831"
+    },
+    {
+      "ref": "a5c23fc8963f9ecc531468a61653bf2d798e8c6d",
+      "path": "music_app/static/images/quick-search-icon.png",
+      "size": 1130109,
+      "sha256": "3feec4719c0117b828218922ba8431fea8e43ee4651e346e21d1731eb5028d65"
+    },
+    {
+      "ref": "a5c23fc8963f9ecc531468a61653bf2d798e8c6d",
+      "path": "music_app/static/images/remote-preview-unavailable.png",
+      "size": 1995416,
+      "sha256": "c3cddd5848e12b82feb902f9d41ab31e37cec5de47d2e07ba836769aca6ff87b"
+    },
+    {
+      "ref": "a5c23fc8963f9ecc531468a61653bf2d798e8c6d",
+      "path": "tests/components/playerViews.spec.js-snapshots/docked-compact-player-win32.png",
+      "size": 15674,
+      "sha256": "5a35559549c9df080cce697f77e16c719805c2871ecbc99227832eddafc09d59"
+    },
+    {
+      "ref": "a5c23fc8963f9ecc531468a61653bf2d798e8c6d",
+      "path": "tests/components/playerViews.spec.js-snapshots/expanded-regular-player-win32.png",
+      "size": 62054,
+      "sha256": "18f61df51f35c70eb9318cf2b991bd377d14a03c72d87976c6df19e9fba397b1"
+    },
+    {
+      "ref": "a5c23fc8963f9ecc531468a61653bf2d798e8c6d",
+      "path": "tests/components/playerViews.spec.js-snapshots/expanded-waveform-player-win32.png",
+      "size": 75985,
+      "sha256": "d9d5b5e315c60f4a7ef0f37b0f41e4a64071320189bfdd35165d6784cd61403c"
+    },
+    {
+      "ref": "a5c23fc8963f9ecc531468a61653bf2d798e8c6d",
+      "path": "tests/components/playerViews.spec.js-snapshots/floating-compact-player-win32.png",
+      "size": 6571,
+      "sha256": "f1cef9ef8f93e1d95b0d752c7bc5ad8186fa53b409626b8e5ea39570016fcfdf"
+    }
+  ],
+  "parts": [
+    {
+      "name": "source-000.b64",
+      "sha256": "71fb1a9a6256612a93a43c62ac6335e997ac0626a26c088a2fe417306b81c2d8",
+      "bytes": 600000
+    },
+    {
+      "name": "source-001.b64",
+      "sha256": "14d53a52db354f281fc50af46c95f2659b642afc2997cfed08f44f57c3ca4356",
+      "bytes": 600000
+    },
+    {
+      "name": "source-002.b64",
+      "sha256": "a81d93cc431db9f44a6d5210680d07bd05bd934e17056f6ec497b6973c0cf5f7",
+      "bytes": 600000
+    },
+    {
+      "name": "source-003.b64",
+      "sha256": "90bb1f976395313666ed032d0960c30a741af439e6e324580ed9e689472a13ad",
+      "bytes": 600000
+    },
+    {
+      "name": "source-004.b64",
+      "sha256": "779d801a039fe8c6676bf73d86c2122fd38f6523570e025280fd4ada0755c244",
+      "bytes": 600000
+    },
+    {
+      "name": "source-005.b64",
+      "sha256": "64f817f955ad0ee94b6c897b3b06975af98950b5b91855d1d4821d2475dc9973",
+      "bytes": 600000
+    },
+    {
+      "name": "source-006.b64",
+      "sha256": "365b3cf4827b0f4614c08fb046ae85e75b66f18781df01b8cef4e8fd0ae9f16b",
+      "bytes": 600000
+    },
+    {
+      "name": "source-007.b64",
+      "sha256": "bd8c6dfd24f44409ab8f975a6e780601da856c91486f7e52067b1e1f5ae5b6cf",
+      "bytes": 600000
+    },
+    {
+      "name": "source-008.b64",
+      "sha256": "b35a0f98f059e0a854b0660b3913cb37b75d323859bcc02f4110352a78ba09ef",
+      "bytes": 600000
+    },
+    {
+      "name": "source-009.b64",
+      "sha256": "0bf1ef03998e461d88932145656c71bcf6c3be5b6985aad82e815b94b77b2627",
+      "bytes": 600000
+    },
+    {
+      "name": "source-010.b64",
+      "sha256": "b1bbcd1ef618e52c6c9e0e8bddd756b79b9cd616e8847af7a61e02235883ab65",
+      "bytes": 600000
+    },
+    {
+      "name": "source-011.b64",
+      "sha256": "c5b897e608417e5e807094364c4005789673f0640ed565ae788f382a73468285",
+      "bytes": 600000
+    },
+    {
+      "name": "source-012.b64",
+      "sha256": "87fb6ce4f3e75c3e50b3993767eb076152635f7337e9c59383fcd4406d667fa6",
+      "bytes": 600000
+    },
+    {
+      "name": "source-013.b64",
+      "sha256": "c9a985b7c0850be742f10fe22f25759efe7ba7142a1184cba2706f5947fdee80",
+      "bytes": 600000
+    },
+    {
+      "name": "source-014.b64",
+      "sha256": "03837b70200262a5bd54118634e5c3807fa650895125aaaee156a97fc9817e14",
+      "bytes": 600000
+    },
+    {
+      "name": "source-015.b64",
+      "sha256": "6eeb6bf518e815a12ea077632dc0363557090de688fbc43e7989011cd48bf2f4",
+      "bytes": 600000
+    },
+    {
+      "name": "source-016.b64",
+      "sha256": "9e93764d8d8e52512ee35cd6a46fac01def9f794006b25e25cd8909d80782f63",
+      "bytes": 600000
+    },
+    {
+      "name": "source-017.b64",
+      "sha256": "d2695ac9c2c681a1fed64d9b572097aa0c99e96c66b2f158aaafbc3d0a8a32bc",
+      "bytes": 600000
+    },
+    {
+      "name": "source-018.b64",
+      "sha256": "ecb859a0bbd1d4598e195fe60c13cab2540cfa5e3422cd6294b86d0636250e82",
+      "bytes": 600000
+    },
+    {
+      "name": "source-019.b64",
+      "sha256": "a529b5708d5dde1094d5581fb47dc58d3bb006e09974b44fdb9acc24ece72eaf",
+      "bytes": 600000
+    },
+    {
+      "name": "source-020.b64",
+      "sha256": "21afac6dda1fcd3bff4d8b1ad21adad266da49198ac4cb4e940d12fa1ca86a38",
+      "bytes": 600000
+    },
+    {
+      "name": "source-021.b64",
+      "sha256": "741c635a2860ac8d15b9b05d0804d2a99f14eab1ec7f9bf229664494481e9f34",
+      "bytes": 600000
+    },
+    {
+      "name": "source-022.b64",
+      "sha256": "e78e34a725e1e1e628a1a034df89ee30c1319a6274f69666307ac1a019c34619",
+      "bytes": 600000
+    },
+    {
+      "name": "source-023.b64",
+      "sha256": "81cebb2985c5c4a13362a792d1dd37c2d3b63456c09b16586338bdb7f0731a66",
+      "bytes": 600000
+    },
+    {
+      "name": "source-024.b64",
+      "sha256": "a4d8172d524a0c4cdbe972dc208f09eb3acc3612857edf6a88c2ede7d710c04e",
+      "bytes": 600000
+    },
+    {
+      "name": "source-025.b64",
+      "sha256": "9efc158407e27f5b518bc501715d3766b104fc89db61bbc4b93feab0ef15ad90",
+      "bytes": 600000
+    },
+    {
+      "name": "source-026.b64",
+      "sha256": "111dcb386b23b5d1fa28a612e7fe6ac98b257c637a9254034be9ed50f94a4a02",
+      "bytes": 552880
+    }
+  ],
+  "archive_sha256": "a0ded3e714fc78a6b1af6ebad6e891d9e298c4a83b7bf12ea2b2d65f2b059453",
+  "archive_bytes": 12114658
+}

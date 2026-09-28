@@ -14315,13 +14315,14 @@ async function fetchAndRender(url, push = true, options = {}) {
   if (!retainsMountedSelectedViewState) {
     renderRelated();
   }
-  if (!requestOptions.preserveScroll && requestOptions.skipPendingViewTransition !== true) {
+  if (state.ui.pendingViewTransition
+    || (!requestOptions.preserveScroll && requestOptions.skipPendingViewTransition !== true)) {
     beginPendingViewTransition(requestId);
   }
   if (!requestOptions.preserveScanPage && !state.ui.scanPageReturnContext) {
     state.ui.forceScanPageVisible = false;
   }
-  if (requestOptions.preserveGalleryOptionsMenu !== true) {
+  if (requestOptions.preserveGalleryOptionsMenu !== true && !requestOptions.startupRefresh) {
     hideGalleryOptionsMenu();
   }
   try {

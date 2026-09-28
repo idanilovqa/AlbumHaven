@@ -37,6 +37,7 @@ test('completed lookup starts its single gallery request before the task list se
     resolveTasksRequest = resolve;
   });
   const context = {
+    window: {},
     state: {
       coverLookup: {
         tasks: [],
@@ -126,6 +127,7 @@ test('accepted lookup renders running feedback before follow-up reads settle', a
   const toastCalls = [];
   const renderSnapshots = [];
   const context = {
+    window: {},
     state: {
       coverLookup: {
         tasks: [],

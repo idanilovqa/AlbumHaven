@@ -56,3 +56,25 @@ test('full-access desktop installs no click interception', () => {
   install(document);
   assert.equal(document.handlers.has('click'), false);
 });
+
+
+test('TV candidate filtering accepts only server-projected provider groups and fails closed on missing provenance', () => {
+  const ui = install(documentFor({ allowed_actions: {}, client_surface: 'tv',
+    cover_provider_groups: ['services', 'cover_art_archive', null, 7], denied_selectors: [] }));
+  for (const group of ['services', 'cover_art_archive']) {
+    assert.equal(ui.allowsCoverCandidate({ lookup_group: group }), true);
+  }
+  for (const candidate of [undefined, {}, { lookup_group: 'manual_links', source: 'spotify' },
+    { lookup_group: 'local' }, { lookup_group: 7 }]) {
+    assert.equal(ui.allowsCoverCandidate(candidate), false);
+  }
+  const missingGroups = install(documentFor({ allowed_actions: {}, client_surface: 'tv', denied_selectors: [] }));
+  assert.equal(missingGroups.allowsCoverCandidate({ lookup_group: 'services' }), false);
+  assert.equal(install(documentFor('bad')).allowsCoverCandidate({ lookup_group: 'services' }), false);
+});
+
+test('desktop cover selection keeps existing local and manual candidates', () => {
+  const ui = install(documentFor({ allowed_actions: {}, client_surface: 'private_web', denied_selectors: [] }));
+  assert.equal(ui.allowsCoverCandidate({ lookup_group: 'manual_links' }), true);
+  assert.equal(ui.allowsCoverCandidate({ lookup_group: 'local' }), true);
+});

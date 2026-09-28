@@ -1,3 +1,7 @@
+function librarySettingsReadOnlyClient() {
+  return typeof isMobileClient === 'function' && isMobileClient();
+}
+
 const LIBRARY_SETTINGS_ROOT_CATEGORIES = Object.freeze([
   'main_library_roots',
   'hoarding_library_roots',
@@ -212,6 +216,7 @@ function applyLibrarySettingsFieldTarget(target) {
 }
 
 function handleLibrarySettingsClick(event) {
+  if (librarySettingsReadOnlyClient() && event.target.closest('[data-add-library-root], [data-remove-library-root], [data-browse-library-root], [data-library-policy-trigger], [id^="library-auto-move-"], [data-save-library-settings], [data-import-album-ratings]')) { event.preventDefault(); return true; }
   const toggle = event.target.closest('[id^="library-auto-move-"]');
   if (toggle) {
     event.preventDefault();
@@ -460,7 +465,7 @@ function buildLibrarySettingsPolicyButton(field, roots, selectedId, label) {
   const selectedLabel = choices.find(choice => choice.value === selectedId)?.label || choices[0]?.label;
   return window.ButtonComponent.renderButton({
     label: selectedLabel,
-    ariaLabel: label, disabled: ensureLibrarySettingsState().allowedActions?.['library.settings.manage'] !== true,
+    ariaLabel: label, disabled: librarySettingsReadOnlyClient() || ensureLibrarySettingsState().allowedActions?.['library.settings.manage'] !== true,
     attributes: { 'data-library-policy-trigger': field, 'aria-haspopup': 'menu', 'aria-expanded': 'false' },
   });
 }
@@ -470,7 +475,7 @@ function buildLibraryMovePolicyRow(field, roots, selectedId, title, destinationL
   const enabled = owner.moveAutomationDraft?.[field] === true;
   const hasRoots = buildLibrarySettingsRootOptions(roots).length > 0;
   return `<div class="library-settings-move-policy-row">
-    ${buildGallerySwitchHtml({ id: `library-auto-move-${key}`, label: title, checked: enabled, disabled: !hasRoots || owner.allowedActions?.['library.settings.manage'] !== true })}
+    ${buildGallerySwitchHtml({ id: `library-auto-move-${key}`, label: title, checked: enabled, disabled: librarySettingsReadOnlyClient() || !hasRoots || owner.allowedActions?.['library.settings.manage'] !== true })}
     ${enabled && hasRoots ? buildLibrarySettingsPolicyButton(field, roots, selectedId, destinationLabel) : ''}
   </div>`;
 }
@@ -478,7 +483,7 @@ function buildLibraryMovePolicyRow(field, roots, selectedId, title, destinationL
 function buildLibrarySettingsRootSection(category, title, description) {
   const draft = getLibrarySettingsDraft();
   const roots = Array.isArray(draft[category]) ? draft[category] : [];
-  const canManage = ensureLibrarySettingsState().allowedActions?.['library.settings.manage'] === true;
+  const canManage = !librarySettingsReadOnlyClient() && ensureLibrarySettingsState().allowedActions?.['library.settings.manage'] === true;
   const canBrowse = canManage && ensureLibrarySettingsState().allowedActions?.['library.filesystem.browse'] === true && ensureLibrarySettingsState().allowedActions?.['library.paths.read'] === true;
   const rows = roots.map((root, index) => `<div class="library-settings-root-row">
     <div class="library-settings-path-control ui-input-action"><input type="text" value="${escapeHtml(root.path || '')}"
@@ -547,13 +552,13 @@ function buildUtilityLibrarySettingsDetail() {
             <h4>Album ratings</h4>
             <p>Copy file-tag ratings into albums that do not already have an app rating. Existing app ratings remain unchanged.</p>
           </div>
-          <button class="button button-secondary" type="button" data-import-album-ratings="1" ${librarySettingsState.albumRatingImportBusy ? 'disabled' : ''}>${librarySettingsState.albumRatingImportBusy ? 'Importing ratings...' : 'Import ratings'}</button>
+          <button class="button button-secondary" type="button" data-import-album-ratings="1" ${librarySettingsReadOnlyClient() || librarySettingsState.albumRatingImportBusy ? 'disabled' : ''}>${librarySettingsState.albumRatingImportBusy ? 'Importing ratings...' : 'Import ratings'}</button>
         </div>
         ${importResult ? `<div class="library-settings-import-result" data-album-rating-import-result="1">Created: ${escapeHtml(importResult.created)} \u00b7 Authority skipped: ${escapeHtml(importResult.authority_skipped)} \u00b7 Failed: ${escapeHtml(importResult.failed)}</div>` : ''}
       </section>
       <div class="confirm-modal-actions">
-        <button class="button button-secondary" type="button" data-reload-library-settings="1" ${librarySettingsState.saveBusy ? 'disabled' : ''}>Reload</button>
-        <button class="button" type="button" data-save-library-settings="1" ${librarySettingsState.saveBusy || librarySettingsState.allowedActions?.['library.settings.manage'] !== true ? 'disabled' : ''}>${librarySettingsState.saveBusy ? 'Saving...' : 'Save library settings'}</button>
+        <button class="button button-secondary" type="button" data-reload-library-settings="1" ${librarySettingsState.saveBusy ? 'disabled' : ''}>Refresh</button>
+        <button class="button" type="button" data-save-library-settings="1" ${librarySettingsReadOnlyClient() || librarySettingsState.saveBusy || librarySettingsState.allowedActions?.['library.settings.manage'] !== true ? 'disabled' : ''}>${librarySettingsState.saveBusy ? 'Saving...' : 'Save library settings'}</button>
       </div>
     </div>
   `;

@@ -96,6 +96,7 @@ function reconcileUtilityLogHistoryTree(els, value) {
     els.list.dataset.utilityNavigationOwner = 'log-history';
   }
   const rows = (state.utility.logHistory || []).map(item => ({ id: String(item.id), item }));
+  if (typeof usesMobilePageLayout === 'function' && usesMobilePageLayout()) rows.unshift({ id: 'recent', recent: true });
   if (value.temporaryRowId) rows.unshift({ id: value.temporaryRowId, temporary: true });
   const existing = new Map(Array.from(els.list.querySelectorAll('[data-utility-log-history-id]'), node => [node.getAttribute('data-utility-log-history-id'), node]));
   const wanted = new Set(rows.map(row => row.id));
@@ -105,7 +106,7 @@ function reconcileUtilityLogHistoryTree(els, value) {
     let node = existing.get(row.id);
     if (!node) {
       const host = document.createElement('div');
-      host.innerHTML = row.temporary ? window.NavigationTree.renderItem({ action: true, variant: 'panel', key: row.id, label: 'Selected period', subtitle: value.periodLabel || '', attributes: { 'data-utility-log-history-id': row.id, 'data-log-query-row': '1' } }) : buildUtilityLogHistoryListItem(row.item, false);
+      host.innerHTML = row.recent ? window.NavigationTree.renderItem({ action: true, variant: 'panel', key: 'recent', label: 'Recent activity', subtitle: 'Latest library events', attributes: { 'data-utility-log-history-id': 'recent' } }) : row.temporary ? window.NavigationTree.renderItem({ action: true, variant: 'panel', key: row.id, label: 'Selected period', subtitle: value.periodLabel || '', attributes: { 'data-utility-log-history-id': row.id, 'data-log-query-row': '1' } }) : buildUtilityLogHistoryListItem(row.item, false);
       node = host.firstElementChild;
     }
     if (node !== cursor) els.list.insertBefore(node, cursor);
@@ -118,6 +119,7 @@ function reconcileUtilityLogHistoryTree(els, value) {
 
 async function selectUtilityLogHistoryEvent(id) {
   const controller = getUtilityLogHistoryController();
+  if (id === 'recent') { controller.clear(); return controller.refresh(); }
   if (id === controller.getState().temporaryRowId) return controller.selectPeriod();
   if (id === controller.getState().selectedEventId) return;
   await controller.selectEvent(id);

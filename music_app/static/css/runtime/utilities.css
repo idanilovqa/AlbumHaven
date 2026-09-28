@@ -1032,78 +1032,78 @@
     overflow-wrap: anywhere;
   }
 
-  #utility-modal[data-active-tab="problematic-files"] .utility-modal-dialog {
+  #utility-modal:not(.is-mobile-page)[data-active-tab="problematic-files"] .utility-modal-dialog {
     height: calc(100dvh - 16px);
     max-height: calc(100dvh - 16px);
   }
 
-  #utility-modal[data-active-tab="rules"] .utility-modal-dialog {
+  #utility-modal:not(.is-mobile-page)[data-active-tab="rules"] .utility-modal-dialog {
     height: calc(100dvh - 16px);
     max-height: calc(100dvh - 16px);
   }
 
-  #utility-modal[data-active-tab="problematic-files"] .utility-modal-body {
+  #utility-modal:not(.is-mobile-page)[data-active-tab="problematic-files"] .utility-modal-body {
     grid-template-columns: minmax(0, 1fr);
     grid-template-rows: auto minmax(0, 1fr);
     overflow: hidden;
   }
 
-  #utility-modal[data-active-tab="rules"] .utility-modal-body {
+  #utility-modal:not(.is-mobile-page)[data-active-tab="rules"] .utility-modal-body {
     grid-template-columns: minmax(0, 1fr);
     grid-template-rows: auto minmax(0, 1fr);
     overflow: hidden;
   }
 
-  #utility-modal[data-active-tab="problematic-files"] .utility-sidebar {
+  #utility-modal:not(.is-mobile-page)[data-active-tab="problematic-files"] .utility-sidebar {
     max-height: 220px;
     border-right: 0;
     border-bottom: 1px solid var(--border);
   }
 
-  #utility-modal[data-active-tab="rules"] .utility-sidebar {
+  #utility-modal:not(.is-mobile-page)[data-active-tab="rules"] .utility-sidebar {
     max-height: 220px;
     border-right: 0;
     border-bottom: 1px solid var(--border);
   }
 
-  #utility-modal[data-active-tab="problematic-files"] .utility-list {
+  #utility-modal:not(.is-mobile-page)[data-active-tab="problematic-files"] .utility-list {
     flex-direction: row;
     overflow-x: auto;
     overflow-y: hidden;
   }
 
-  #utility-modal[data-active-tab="rules"] .utility-list {
+  #utility-modal:not(.is-mobile-page)[data-active-tab="rules"] .utility-list {
     flex-direction: row;
     overflow-x: auto;
     overflow-y: hidden;
   }
 
-  #utility-modal[data-active-tab="problematic-files"] .utility-list-item {
+  #utility-modal:not(.is-mobile-page)[data-active-tab="problematic-files"] .utility-list-item {
     flex: 0 0 min(240px, 78vw);
     width: min(240px, 78vw);
   }
 
-  #utility-modal[data-active-tab="rules"] .utility-list-item {
+  #utility-modal:not(.is-mobile-page)[data-active-tab="rules"] .utility-list-item {
     flex: 0 0 min(240px, 78vw);
     width: min(240px, 78vw);
   }
 
-  #utility-modal[data-active-tab="problematic-files"] .utility-detail {
+  #utility-modal:not(.is-mobile-page)[data-active-tab="problematic-files"] .utility-detail {
     min-height: 0;
     overflow-y: auto;
   }
 
-  #utility-modal[data-active-tab="rules"] .utility-detail {
+  #utility-modal:not(.is-mobile-page)[data-active-tab="rules"] .utility-detail {
     min-height: 0;
     overflow-y: auto;
   }
 
-  #utility-modal[data-active-tab="problematic-files"] .utility-detail-header {
+  #utility-modal:not(.is-mobile-page)[data-active-tab="problematic-files"] .utility-detail-header {
     grid-template-columns: 84px minmax(0, 1fr);
     align-items: start;
   }
 
-  #utility-modal[data-active-tab="problematic-files"] .utility-detail-cover {
+  #utility-modal:not(.is-mobile-page)[data-active-tab="problematic-files"] .utility-detail-cover {
     width: 84px;
     height: 84px;
   }
@@ -1842,7 +1842,7 @@
 .utility-detail-summary { min-width: 0; overflow-wrap: anywhere; }
 .utility-detail-context-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; align-items: start; gap: 8px; margin: 0; }
 @media (max-width: 760px) {
-  #utility-modal[data-active-tab="problematic-files"] .utility-detail-header { grid-template-columns: 84px minmax(0, 1fr); }
+  #utility-modal:not(.is-mobile-page)[data-active-tab="problematic-files"] .utility-detail-header { grid-template-columns: 84px minmax(0, 1fr); }
   .utility-detail-header > .utility-detail-cover { grid-column: 1; grid-row: 1 / span 2; }
   .utility-detail-header > .utility-detail-context-actions { grid-column: 2; grid-row: 1; }
   .utility-detail-header > .utility-detail-summary { grid-column: 2; grid-row: 2; }

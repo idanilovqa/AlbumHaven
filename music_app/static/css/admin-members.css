@@ -42,7 +42,7 @@
 .settings-host .members-heading p,
 .settings-host .detail-heading p { margin: 6px 0 0; color: var(--muted); font-size: 13px; }
 .settings-host .admin-button { min-height: 40px; padding: 0 15px; display: inline-flex; align-items: center; justify-content: center; gap: 7px; border: 1px solid var(--line); border-radius: 9px; color: var(--ink); background: transparent; font-weight: 700; text-decoration: none; cursor: pointer; }
-.settings-host .admin-button.is-primary { border-color: var(--green); color: var(--appearance-play-ink, #06150e); background: var(--green); }
+.settings-host .admin-button.ui-button--primary { border-color: var(--appearance-primary-button); color: var(--appearance-primary-button-ink); background: var(--appearance-primary-button); }
 .settings-host .admin-button.is-danger { border-color: #d93d45; color: var(--red); }
 .settings-host .admin-button:hover,
 .settings-host .admin-button:focus-visible { filter: brightness(1.1); outline: none; box-shadow: 0 0 0 3px rgb(86 173 255 / 14%); }
@@ -166,5 +166,13 @@
   .settings-host .permission-group h2, .settings-host .permission-fieldset legend { color: var(--ink); }
   .settings-host .switch:disabled { opacity: 1; filter: grayscale(1); }
   .settings-host .detail-setting { gap: 12px; }
-  .settings-host .member-actions-menu :is(button, a):is(:hover, :active, :focus-visible) { background: transparent; color: var(--ink); text-decoration: underline; text-underline-offset: .22em; }
+  .settings-host .member-actions-menu :is(button, a):is(:hover, :active, :focus-visible) { background: transparent; color: var(--ink); text-decoration: none; text-underline-offset: .22em; }
 }
+
+@media (max-width: 900px) {
+  .settings-host .settings-outlet .page-gallery-bar { padding-top: 0; margin-bottom: 12px; }
+  .settings-host .settings-nav .mobile-bar-action { display: inline-grid; width: 40px; height: 40px; flex: 0 0 40px; }
+  .settings-host .detail-setting .admin-button { flex: 0 0 auto; min-width: 104px; min-height: 40px; padding: 0 12px; }
+}
+
+.settings-host .admin-role-info { margin: 0 0 14px; }

@@ -58,7 +58,8 @@ function syncTriggerAnchor(surface, anchor) {
   if (!surface?.getBoundingClientRect || !anchor?.getBoundingClientRect || surface.hidden) return;
   const previous = triggerAnchorBindings.get(surface);
   if (previous && previous.anchor !== anchor) clearTriggerAnchor(surface);
-  const anchorContext = anchor.closest?.('.shell-main-surface, .settings-outlet') ? 'content' : 'chrome';
+  const anchorContext = surface.matches?.('.mobile-settings-drawer') ? 'chrome'
+    : anchor.closest?.('.shell-main-surface, .settings-outlet') ? 'content' : 'chrome';
   surface.dataset.triggerAnchorContext = anchorContext;
   anchor.dataset.triggerAnchorContext = anchorContext;
   activateTriggerSurface(surface, () => {

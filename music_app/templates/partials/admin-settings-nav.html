@@ -4,7 +4,7 @@
 <aside class="settings-nav navigation-tree" aria-label="Settings navigation" data-settings-nav data-navigation-tree="settings">
   <div class="settings-nav-heading">
     {% call action_button('Back to page', class_name='mobile-bar-action', attributes={'data-settings-nav-close': '1'}, presentation='bare') %}<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m10 5-7 7 7 7M3 12h18"/></svg>{% endcall %}
-    <h2>Settings</h2>
+    <h2>Admin</h2>
   </div>
   <nav>
     {% if navigation_actions.allows('accounts.read') %}{{ navigation_tree_item('Users', '/admin/members', 'users', settings_section != 'account', '♙', attributes={'data-settings-section': 'users'}) }}{% endif %}

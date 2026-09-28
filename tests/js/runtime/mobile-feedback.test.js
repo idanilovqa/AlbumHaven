@@ -38,7 +38,8 @@ test('mobile Settings consumes only server-authorized section actions', () => {
   assert.equal(context.mobileUtilityTabAllowed('rules', {}), false);
   assert.equal(context.mobileUtilityTabAllowed('rules', { 'library.rules.read': true }), true);
   assert.equal(context.mobileUtilityTabAllowed('loops', { 'library.loops.read': true }), true);
-  assert.equal(context.mobileUtilityTabAllowed('problematic-files', { 'library.problems.read': true }), false);
+  assert.equal(context.mobileUtilityTabAllowed('problematic-files', { 'library.problems.read': true }), true);
+  assert.equal(context.mobileUtilityTabAllowed('problematic-files', {}), false);
   assert.equal(context.mobileUtilityTabAllowed('__proto__', {}), false);
 });
 

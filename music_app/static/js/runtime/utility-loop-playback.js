@@ -341,21 +341,19 @@ function positionUtilityLoopSpeedMenu(loopId, setting = 'speed') {
   const triggerRect = trigger.getBoundingClientRect();
   const menuRect = menu.getBoundingClientRect();
 
-
-
-  let left = triggerRect.left + (triggerRect.width / 2) - (menuRect.width / 2);
-  const below = window.innerHeight - triggerRect.bottom - 8;
-  const above = triggerRect.top - 8;
-  const opensBelow = below >= menuRect.height || below >= above;
-  menu.style.maxHeight = `${Math.max(0, Math.min(menuRect.height, (opensBelow ? below : above) - 6))}px`;
-  const popupHeight = Math.min(menuRect.height, Math.max(0, (opensBelow ? below : above) - 6));
-  let top = opensBelow ? triggerRect.bottom + 6 : triggerRect.top - popupHeight - 6;
-
   const padding = 8;
-  const clamped = clampPositionToViewport(left, top, menuRect.width, popupHeight, padding);
-
-  menu.style.left = `${clamped.left}px`;
-  menu.style.top = `${clamped.top}px`;
+  const playerTop = document.querySelector('.global-player')?.getBoundingClientRect().top || window.innerHeight;
+  const bottom = Math.min(window.innerHeight, playerTop);
+  const popupHeight = Math.min(menuRect.height, bottom - padding * 2);
+  menu.style.maxHeight = `${popupHeight}px`;
+  const optionHeight = activeOption.getBoundingClientRect().height;
+  const selectedCenter = activeOption.offsetTop + optionHeight / 2;
+  const triggerCenter = triggerRect.top + triggerRect.height / 2;
+  const top = Math.max(padding, Math.min(triggerCenter - selectedCenter, bottom - padding - popupHeight));
+  const left = Math.max(padding, Math.min(triggerRect.right - menuRect.width, window.innerWidth - padding - menuRect.width));
+  menu.style.left = `${left}px`;
+  menu.style.top = `${top}px`;
+  menu.scrollTop = Math.max(0, selectedCenter - (triggerCenter - top));
   menu.style.visibility = '';
   if (!menu.classList.contains('is-mobile-loop-menu') && typeof syncTriggerAnchor === 'function') syncTriggerAnchor(menu, trigger);
 }
@@ -402,8 +400,7 @@ function toggleUtilityLoopSettingMenu(loopId, setting, keyboard = false) {
   menu.hidden = false;
   trigger.setAttribute('aria-expanded', 'true');
   positionUtilityLoopSpeedMenu(loopId, setting);
-  const selected = menu.querySelector('[aria-checked="true"]');
-  if (selected) menu.scrollTop = Math.max(0, selected.offsetTop - menu.clientHeight / 2);
+
   const options = () => [...menu.querySelectorAll('button:not(:disabled)')];
   if (keyboard) (menu.querySelector('[aria-checked="true"]') || options()[0])?.focus({ preventScroll: true });
   document.addEventListener('pointerdown', event => {

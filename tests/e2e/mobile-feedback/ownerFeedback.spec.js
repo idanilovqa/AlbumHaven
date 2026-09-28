@@ -14,12 +14,15 @@ for (const palette of ['black', 'paper', 'parchment-pine']) {
     await covers.drawerButton.click();
     await expect(covers.drawer).toBeVisible();
     expect((await covers.drawer.boundingBox()).width).toBeLessThanOrEqual(page.viewportSize().width * .75 + 1);
+    const [clear, close] = await covers.notificationActionDimensions();
+    expect(clear).toEqual(close);
     await snapshot(`90-notifications-${palette}`);
     await covers.drawerCloseButton.click();
     await phone.browseArtist();
     await phone.selectView('cards');
     await phone.expectGridColumns(3);
     await phone.expectNumericRatings();
+    await phone.expectGalleryHeaderLayout();
     await expect(phone.zoomButton).not.toBeVisible();
     await phone.longPressAlbum();
     await expect(phone.albumContextMenu).not.toBeVisible();
@@ -167,3 +170,20 @@ test('desktop tag fields, Apply and alternating track stripes work in dark and l
     }
   } finally { await context.close(); }
 });
+
+for (const reducedMotion of ['no-preference', 'reduce']) {
+  test(`mobile pinch hint appears once and respects ${reducedMotion} motion`, async ({ page, app }) => {
+    const phone = new MobilePolishPage(page);
+    await page.emulateMedia({ reducedMotion });
+    await phone.browseArtist();
+    await expect(phone.pinchHint).toBeVisible();
+    await expect(phone.pinchHintLights).toHaveCount(2);
+    await expect(phone.pinchHint).toHaveCSS('animation-name', reducedMotion === 'reduce' ? 'none' : 'mobile-hint-fade');
+    await expect(phone.pinchHintLights.first()).toHaveCSS('animation-name', reducedMotion === 'reduce' ? 'none' : 'mobile-hint-spread');
+    await expect(phone.pinchHint).toHaveCount(0, { timeout: 6000 });
+    await phone.selectView('covers');
+    await phone.selectView('cards');
+    await expect(phone.pinchHint).toHaveCount(0);
+    await phone.expectGridColumns(3);
+  });
+}

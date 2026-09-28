@@ -247,7 +247,8 @@ export class MobilePolishPage extends MobileLayoutPage {
 
   async expectCardTextAndStats() {
     await expect(this.page.locator('.album-card .is-card-text-overflowing').first()).toBeVisible();
-    await expect(this.page.locator('.album-card .rating-row:visible')).toHaveCount(0);
+    await this.expectNumericRatings();
+    await expect(this.page.locator('.album-card .rating-row[data-rating-value="0"]:visible')).toHaveCount(0);
     // parity-check: allow-read-only-measurement-evaluate -- every rendered title and statistic keeps a single line.
     const wraps = await this.galleryCards.locator('.album-title-button, .album-subtitle, .track-count, .album-length')
       .evaluateAll(nodes => nodes.map(node => getComputedStyle(node).whiteSpace));

@@ -119,6 +119,7 @@ test('desktop tag fields, Apply and alternating track stripes work in dark and l
     for (const palette of ['black', 'paper', 'parchment-pine']) {
       await web.settingsButton.click();
       await web.utilitiesButton.click();
+      await web.utilityTab('appearance').click();
       await appearance.sectionButton('backgrounds').click();
       await appearance.paletteButton(palette).click();
       await web.saveAppearanceChanges();

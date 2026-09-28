@@ -45,12 +45,11 @@ def prepare_settings_playback_media(library_root: Path) -> dict[str, dict[str, o
             "metadata_schema_version": FILE_METADATA_SCHEMA_VERSION,
         }
     }
-    arrival = library_root.parent / "arrivals" / artist / "Boundary Arrival" / "01 - Arrival Signal.mp3"
+    arrival = library_root / artist / "Boundary Arrival" / "01 - Arrival Signal.mp3"
     arrival.parent.mkdir(parents=True, exist_ok=True)
     shutil.copy2(track, arrival)
     inventory[str(arrival)] = {**inventory[str(track)], "path": str(arrival),
-        "album": "Boundary Arrival", "title": "Arrival Signal", "cover_path": None,
-        "library_root_id": "boundary-arrivals", "library_root_category": "new_arrivals"}
+        "album": "Boundary Arrival", "title": "Arrival Signal", "cover_path": None}
     return inventory
 
 
@@ -83,8 +82,6 @@ def persist_settings_playback_inventory(
             "path": str(library_root.resolve()),
             "layout_mode": "artist",
         }],
-        "new_arrivals_roots": [{"id": "boundary-arrivals",
-            "path": str((library_root.parent / "arrivals").resolve()), "layout_mode": "artist"}],
     })
     if not file_cache:
         PostgresScanCacheAdapter(config).save_snapshot(

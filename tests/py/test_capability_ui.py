@@ -63,9 +63,15 @@ def test_tv_limits_bootstrap_owner_and_admin_too():
     assert ".play-track-button" not in value["denied_selectors"]
 
 
-def test_rendref_desktop_projection_does_not_hide_existing_controls():
+def test_rendref_desktop_projection_only_hides_unimplemented_move():
     value = projection(["owner", "admin"], bootstrap=True)
-    assert value["denied_selectors"] == []
+    assert set(value["denied_selectors"]) == {
+        "[data-move-problematic-album]",
+        '[data-required-action="capability.move"]',
+        '[data-required-action="library.files.move"]',
+        '[data-album-card-action="move_to_library"]',
+        '[data-album-card-action="move_to_hoard"]',
+    }
     assert value["denied_tabs"] == []
 
 
@@ -102,10 +108,8 @@ def test_tv_projects_provider_only_cover_controls_without_hiding_lookup():
     assert not selectors.intersection(desktop["denied_selectors"])
 
 
-def test_gallery_actions_follow_move_folder_and_version_permissions():
+def test_gallery_actions_follow_folder_and_version_permissions():
     selectors = {
-        '[data-album-card-action="move_to_library"]',
-        '[data-album-card-action="move_to_hoard"]',
         '[data-album-card-action="open-explorer"]',
         '[data-album-card-action="mark-version"]',
         '[data-album-card-action="unmark-version"]',

@@ -55,7 +55,7 @@ export async function prepareOwnedBoundaryLoop({ page, freshBrowserSession, iden
   await page.reload();
 }
 
-export async function assertOwnedLoopBoundary(page, utilityLoopsActions, profile, loopName = BOUNDARY_LOOP) {
+export async function assertOwnedLoopControls(page, utilityLoopsActions, profile, loopName = BOUNDARY_LOOP) {
   const ui = new CapabilityPracticePage(page);
   const boundary = new CapabilityBoundaryPage(page);
   await page.goto('/');
@@ -81,6 +81,12 @@ export async function assertOwnedLoopBoundary(page, utilityLoopsActions, profile
     await expect(boundary.visibleLoopReorder).toHaveCount(0);
     await expect(entry).toHaveAttribute('draggable', 'false');
   }
+  return loopId;
+}
+
+export async function assertOwnedLoopBoundary(page, utilityLoopsActions, profile, loopName = BOUNDARY_LOOP) {
+  const loopId = await assertOwnedLoopControls(page, utilityLoopsActions, profile, loopName);
+  const ui = new CapabilityPracticePage(page);
   await utilityLoopsActions.playLoopByName(loopName);
   const evidence = await utilityLoopsActions.readDecodedLoopSampleEvidence(loopId);
   expect(evidence.nonZeroSamples).toBeGreaterThan(0);

@@ -14,13 +14,13 @@ function input(value, checked = false, dataset = {}) {
 }
 function fixture({ mode = 'edit', direct = ['library.browse.read', 'library.media.read'], selected = [], hidden = [] } = {}) {
   const definitions = { viewer: ['capability.view'], listener: ['capability.view', 'capability.play'],
-    owner: ['capability.view', 'capability.play', 'capability.edit'], admin: ['capability.view', 'capability.admin'] };
+    owner: ['capability.view', 'capability.play', 'capability.edit', 'capability.move'], admin: ['capability.view', 'capability.admin'] };
   const roles = Object.entries(definitions).map(([key, grants]) => input(key, selected.includes(key), {
     roleLabel: key, roleGrants: JSON.stringify(grants),
   }));
   const keys = ['library.browse.read', 'library.media.read', 'capability.view', 'capability.play',
-    'capability.admin', 'capability.edit', 'capability.practice'];
-  const capabilities = keys.map((key) => input(key, direct.includes(key), { explicitGrant: String(direct.includes(key)) }));
+    'capability.admin', 'capability.edit', 'capability.practice', 'capability.move'];
+  const capabilities = keys.map((key) => input(key, direct.includes(key), { explicitGrant: String(direct.includes(key)), ...(key === 'capability.move' ? { unavailableReason: 'Not implemented. Moving music is unavailable.' } : {}) }));
   const summary = { textContent: '' }, legacy = { hidden: false }, only = input('only');
   const editor = {
     dataset: { prerequisites: JSON.stringify({
@@ -173,4 +173,29 @@ test('roles-only cannot clear individual grants without a role and disables agai
   assert.equal(f.only.disabled, true);
   f.only.click();
   assert.deepEqual(f.direct(), ['capability.admin', 'capability.view']);
+});
+
+
+test('unimplemented Move stays disabled and unchecked through role sync and preserves ordinary saved grants', () => {
+  const f = fixture({ direct: ['capability.move'] });
+  const move = f.capability('capability.move');
+  const expectUnavailable = () => {
+    assert.equal(move.disabled, true);
+    assert.equal(move.checked, false);
+    assert.equal(move.title, 'Not implemented. Moving music is unavailable.');
+  };
+  expectUnavailable();
+  assert.deepEqual(f.direct(), ['capability.move']);
+  move.change(true);
+  expectUnavailable();
+  f.role('owner').change(true);
+  expectUnavailable();
+  assert.deepEqual(f.direct(), ['capability.move']);
+  f.role('owner').change(false);
+  expectUnavailable();
+  assert.deepEqual(f.direct(), ['capability.move']);
+  f.role('viewer').change(true);
+  f.only.click();
+  expectUnavailable();
+  assert.deepEqual(f.direct(), []);
 });

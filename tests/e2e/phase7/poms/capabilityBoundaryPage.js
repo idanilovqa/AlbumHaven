@@ -12,11 +12,8 @@ export class CapabilityBoundaryPage extends CapabilityPage {
     this.visibleLoopDelete = page.locator('[data-delete-saved-loop]:visible');
     this.visibleLoopReorder = page.locator('[data-move-utility-loop]:visible');
     this.coverDelete = page.locator('#cover-lookup-modal [data-delete-local-cover]');
-    this.galleryMove = page.locator('#album-card-context-menu [data-album-card-action^="move_to_"]');
-    this.visibleGalleryMove = page.locator('#album-card-context-menu [data-album-card-action^="move_to_"]:visible');
     this.galleryFolder = page.locator('#album-card-context-menu [data-album-card-action="open-explorer"]');
     this.galleryVersion = page.locator('#album-card-context-menu [data-album-card-action="mark-version"]');
-    this.moveButtons = page.locator('[data-move-problematic-album]:visible');
     this.settingsDialog = page.locator('#utility-modal');
     this.libraryShell = page.locator('#app-shell');
   }

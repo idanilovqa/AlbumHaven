@@ -1,5 +1,5 @@
 import { assertCapabilityBoundary } from '../actions/capabilityBoundaryActions.js';
-import { assertOwnedLoopBoundary } from '../actions/capabilityLoopBoundaryActions.js';
+import { assertOwnedLoopControls } from '../actions/capabilityLoopBoundaryActions.js';
 import { enrollCapabilityMember, openCapabilityFixtureAlbum } from '../actions/capabilityEditorActions.js';
 import { authenticatedPageGet } from '../../helpers/authenticatedPageRequest.js';
 import { CapabilityPracticePage } from '../poms/capabilityPracticePage.js';
@@ -134,6 +134,6 @@ test('FTC-CAP-AUDIT-013 Practice retains owned loop artwork waveform and playbac
   const denied = await authenticatedPageGet(page, `/track?path=${encodeURIComponent(track.path)}`);
   expect(denied.status()).toBe(403);
   expect(await denied.json()).toEqual({ detail: 'Action not permitted.' });
-  await assertOwnedLoopBoundary(page, utilityLoopsActions, { visible: ['practice'] }, loopName);
+  await assertOwnedLoopControls(page, utilityLoopsActions, { visible: ['practice'] }, loopName);
   await assertCapabilityBoundary(page, { visible: ['practice'] });
 });

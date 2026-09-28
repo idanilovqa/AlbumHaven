@@ -65,7 +65,6 @@ export async function assertCapabilityBoundary(page, profile, testInfo) {
   await card.click({ button: 'right' });
   await expectControl(ui.galleryFolder, allowed.has('folder'));
   await expectControl(ui.galleryVersion, allowed.has('repair'));
-  if (!allowed.has('move')) await expect(ui.visibleGalleryMove).toHaveCount(0);
   await page.keyboard.press('Escape');
   await gallery.selectAlbumDetailsByIdentity({
     artist: 'Settings Navigation Fixture', album: 'Missing Boundary Session', year: '2026',
@@ -99,7 +98,6 @@ export async function assertCapabilityBoundary(page, profile, testInfo) {
     await expect(problems.excludeProblemButton).toBeVisible();
     await expectControl(problems.detailEditTagsButton, allowed.has('edit'));
     await expectControl(problems.detailOpenInExplorerButton, allowed.has('folder'));
-    if (!allowed.has('move')) await expect(ui.moveButtons).toHaveCount(0);
     for (const key of ['rules', 'log-history']) {
       await ui.tab(key).click();
       await expect(ui.tab(key)).toHaveAttribute('aria-selected', 'true');
@@ -121,27 +119,5 @@ export async function assertCapabilityBoundary(page, profile, testInfo) {
     const response = await page.goto('/admin/members');
     expect(response.status()).toBe(403);
     await expect(ui.forbidden).toBeVisible();
-  }
-}
-
-// Keep positive Move checks last: known projection failures must not conceal
-// coverage of the other independently granted actions.
-export async function assertMoveBoundary(page, profile, testInfo) {
-  if (!profile.visible.includes('move')) return;
-  const ui = new CapabilityBoundaryPage(page);
-  const gallery = new GalleryPage(page, testInfo);
-  await page.goto('/');
-  const card = gallery.albumCard.cardByIdentity('Settings Navigation Fixture', 'Boundary Arrival', '2026');
-  await expect(card).toBeVisible();
-  await card.click({ button: 'right' });
-  await expect(ui.galleryMove.first()).toBeVisible();
-  await page.keyboard.press('Escape');
-  if (profile.visible.includes('repair')) {
-    await ui.openSettings();
-    await ui.tab('problematic-files').click();
-    const problems = new UtilityProblematicFilesTab(page, testInfo);
-    await new UtilityProblematicFilesActions(problems).selectAlbumByTitle('Boundary Arrival');
-    await expect(problems.detailTitle).toContainText('Boundary Arrival');
-    await expect(ui.moveButtons.first()).toBeVisible();
   }
 }

@@ -46,7 +46,7 @@ def allowed(actor, action, surface="private_web", library_id=23):
     ("musician", "library.loops.create", True),
     ("musician", "library.loops.media.read", True),
     ("musician", "library.files.edit_tags", False),
-    ("owner", "library.files.move", True),
+    ("owner", "library.files.move", False),
     ("owner", "library.files.edit_tags", False),
     ("owner", "library.files.repair", True),
     ("owner", "accounts.create", False),
@@ -85,10 +85,10 @@ def test_practice_does_not_grant_creation_or_mutation():
     assert not allowed(actor, "library.loops.delete")
 
 
-def test_rendref_retains_all_desktop_web_capabilities():
+def test_rendref_retains_implemented_desktop_web_capabilities():
     actor = actor_for("owner", "admin", bootstrap=True)
     for key in CAPABILITY_KEYS:
-        assert allowed(actor, key)
+        assert allowed(actor, key) is (key != "capability.move")
     assert allowed(actor, "library.files.edit_tags")
     assert allowed(actor, "system.admin")
 
@@ -101,7 +101,7 @@ def test_owner_plus_admin_may_edit_web_but_owner_alone_only_native_desktop():
 
 def test_scope_is_preserved_and_role_does_not_grant_unreviewed_future_actions():
     actor = actor_for("owner", "admin")
-    assert not allowed(actor, "library.files.move", library_id=24)
+    assert not allowed(actor, "library.files.repair", library_id=24)
     assert not allowed(actor, "accounts.read", library_id=24)
     assert not allowed(actor, "library.future_feature.write")
     assert not allowed(actor, "system.admin")
@@ -182,3 +182,12 @@ def test_edit_prerequisites_do_not_bypass_client_or_admin_ceilings(surface, admi
     assert allowed(actor, "library.files.edit_tags", surface) is (
         surface == "desktop" or (administrator and surface in {"private_web", "cloud_web"})
     )
+
+
+@pytest.mark.parametrize("surface", ["desktop", "private_web", "mobile", "tv"])
+@pytest.mark.parametrize("bootstrap", [False, True])
+def test_unimplemented_move_is_unavailable_even_with_owner_grants(surface, bootstrap):
+    actor = actor_for("owner", "admin", bootstrap=bootstrap)
+    assert "capability.move" in capability_keys_for_roles(["owner"])
+    assert not allowed(actor, "capability.move", surface)
+    assert not allowed(actor, "library.files.move", surface)

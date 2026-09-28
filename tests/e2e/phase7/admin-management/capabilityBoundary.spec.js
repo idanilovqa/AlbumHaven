@@ -1,6 +1,6 @@
 import { test, expect } from '../support/baseFixtures.js';
 import { enrollCapabilityProfile } from '../actions/capabilityProfileEnrollment.js';
-import { assertCapabilityBoundary, assertMoveBoundary } from '../actions/capabilityBoundaryActions.js';
+import { assertCapabilityBoundary } from '../actions/capabilityBoundaryActions.js';
 import { ROLE_PROFILES, CAPABILITY_PROFILES, UNION_PROFILES, CLIENT_PROFILES } from '../actions/capabilityProfiles.js';
 import { prepareOwnedBoundaryLoop, assertOwnedLoopBoundary } from '../actions/capabilityLoopBoundaryActions.js';
 import { openCapabilityFixtureAlbum } from '../actions/capabilityEditorActions.js';
@@ -45,7 +45,6 @@ for (const [id, profiles] of [['016', ROLE_PROFILES], ['017', CAPABILITY_PROFILE
           }
         }
         if (profile.visible.includes('practice')) await assertOwnedLoopBoundary(page, utilityLoopsActions, profile);
-        await assertMoveBoundary(page, profile, testInfo);
       });
     });
   }

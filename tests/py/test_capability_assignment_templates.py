@@ -125,3 +125,15 @@ def test_editor_back_link_precedes_heading_and_roles_only_help_is_accessibly_bou
     assert 'Select at least one role first.' in html
     assert ('Save changes' if target else 'Create user') in html
     assert 'Use selected roles only' in html
+
+
+@pytest.mark.parametrize('assignment', [build_assignment(['owner'], []), build_assignment([], ['capability.move'])])
+def test_unimplemented_move_renders_disabled_unchecked_without_losing_saved_direct_grant(assignment):
+    html = render(member(assignment=assignment))
+    move = next(item for item in Inputs(html).named('additional_capability_keys')
+        if item.get('type') == 'checkbox' and item['value'] == 'capability.move')
+    assert 'disabled' in move
+    assert 'checked' not in move
+    assert move['data-unavailable-reason'] == 'Not implemented. Moving music is unavailable.'
+    assert move['data-explicit-grant'] == ('true' if 'capability.move' in assignment.capability_keys else 'false')
+    assert 'Not implemented. Moving music is unavailable.' in html

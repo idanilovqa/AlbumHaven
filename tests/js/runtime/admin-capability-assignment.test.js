@@ -161,3 +161,16 @@ test('Admin alone does not infer View, while Practice implies only View', () => 
   assert.equal(f.capability('capability.play').checked, false);
   assert.deepEqual(f.direct(), ['capability.admin', 'capability.practice']);
 });
+
+
+test('roles-only cannot clear individual grants without a role and disables again when the last role is removed', () => {
+  const f = fixture({ direct: ['capability.admin', 'capability.view'] });
+  f.only.click();
+  assert.deepEqual(f.direct(), ['capability.admin', 'capability.view']);
+  f.role('viewer').change(true);
+  assert.equal(f.only.disabled, false);
+  f.role('viewer').change(false);
+  assert.equal(f.only.disabled, true);
+  f.only.click();
+  assert.deepEqual(f.direct(), ['capability.admin', 'capability.view']);
+});

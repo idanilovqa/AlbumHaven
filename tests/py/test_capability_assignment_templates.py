@@ -110,3 +110,18 @@ def test_named_roles_render_without_implicit_other_role_or_system_authority():
     assert 'checked' in roles['admin'] and 'checked' not in roles['owner']
     assert 'system.admin' not in html
     assert 'value="owner"' in html  # An independently assignable checkbox, not bootstrap ownership.
+
+
+@pytest.mark.parametrize('target', [None, member()])
+def test_editor_back_link_precedes_heading_and_roles_only_help_is_accessibly_bound(target):
+    html = render(target)
+    back = html.index('aria-label="Back to users"')
+    heading = html.index('<h1 class="gallery-bar__title">')
+    assert back < heading
+    assert 'href="/admin/members"' in html[:heading]
+    assert 'gallery-bar__back' in html[:heading]
+    assert 'data-roles-only aria-describedby="roles-only-help"' in html
+    assert 'id="roles-only-help"' in html
+    assert 'Select at least one role first.' in html
+    assert ('Save changes' if target else 'Create user') in html
+    assert 'Use selected roles only' in html

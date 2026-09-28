@@ -20672,8 +20672,17 @@ function mountSeekbarAppearanceEditor(detail) {
   const editor = getBackgroundAppearanceEditor();
   if (editor?.mountSeekbar) editor.mountSeekbar(host, {
     getLegacyColors: getPreviousBrowserWaveformColors,
-    getSeekbarMode: () => state.player.appearance?.seekbarMode || 'default',
-    applySeekbarMode: seekbarMode => {
+    getSeekbarMode: profile => window.AlbumHavenDevicePreferences?.enabled
+      ? window.AlbumHavenDevicePreferences.read('playerAppearance', {}, profile).seekbarMode || 'default'
+      : state.player.appearance?.seekbarMode || 'default',
+    applySeekbarMode: (seekbarMode, profile) => {
+      const preferences = window.AlbumHavenDevicePreferences;
+      if (preferences?.enabled) {
+        const appearance = normalizePlayerAppearance({ ...preferences.read('playerAppearance', {}, profile), seekbarMode });
+        preferences.write('playerAppearance', appearance, profile);
+        if (profile === preferences.profile()) { state.player.appearance = appearance; updateWaveformAppearance(true); }
+        return;
+      }
       state.player.appearance = normalizePlayerAppearance({ ...state.player.appearance, seekbarMode });
       persistPlayerAppearance();
       updateWaveformAppearance(true);

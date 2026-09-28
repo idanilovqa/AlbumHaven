@@ -23,7 +23,8 @@
       {% for capabilities in access_editor.capabilities | batch(4) %}
       <section class="permission-group">
         {% for capability_key, label in capabilities %}
-        {{ ui_switch(label, 'additional_capability_keys', capability_key, checked=capability_key in access_editor.inherited_keys or capability_key in access_editor.capability_keys, disabled=capability_key in access_editor.inherited_keys, description='Included by selected roles or required capabilities.' if capability_key in access_editor.inherited_keys else 'Optional individual grant.', attributes={'data-capability-label': label, 'data-explicit-grant': 'true' if capability_key in access_editor.capability_keys else 'false', 'title': 'Included by a selected role' if capability_key in access_editor.inherited_keys else none}) }}
+        {% set unavailable_reason = access_editor.unavailable_capabilities.get(capability_key) %}
+        {{ ui_switch(label, 'additional_capability_keys', capability_key, checked=not unavailable_reason and (capability_key in access_editor.inherited_keys or capability_key in access_editor.capability_keys), disabled=unavailable_reason or capability_key in access_editor.inherited_keys, description=unavailable_reason or ('Included by selected roles or required capabilities.' if capability_key in access_editor.inherited_keys else 'Optional individual grant.'), attributes={'data-capability-label': label, 'data-explicit-grant': 'true' if capability_key in access_editor.capability_keys else 'false', 'data-unavailable-reason': unavailable_reason, 'title': unavailable_reason or ('Included by a selected role' if capability_key in access_editor.inherited_keys else none)}) }}
         {% endfor %}
       </section>
       {% endfor %}
@@ -32,7 +33,7 @@
   {% for capability_key in access_editor.unlisted_keys %}
   <input type="hidden" name="additional_capability_keys" value="{{ capability_key }}">
   {% endfor %}
-  {% if access_editor.unlisted_keys %}<p data-retained-grants>Retained individual grants still authorize their actions, even when the corresponding capability above is off: {{ access_editor.unlisted_keys | join(', ') }}. Choose “Use selected roles only” to remove these grants.</p>{% endif %}
+  {% if access_editor.unlisted_keys %}<p data-retained-grants>Retained individual grants still authorize available actions, subject to device restrictions, even when the corresponding capability above is off: {{ access_editor.unlisted_keys | join(', ') }}. Choose “Use selected roles only” to remove these grants.</p>{% endif %}
   {% if access_editor.unmanaged_keys %}<p>Grants outside this editor are preserved: {{ access_editor.unmanaged_keys | join(', ') }}. Removing library access revokes all current-library grants.</p>{% endif %}
   <p data-role-summary aria-live="polite">Role selections and individual capabilities are saved together.</p>
   <div class="roles-only-action">

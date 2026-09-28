@@ -11,7 +11,7 @@ import hashlib
 import json
 
 from music_app.services.capabilities import (
-    CAPABILITY_ALIASES, CAPABILITY_KEYS, CAPABILITY_PREREQUISITES, ROLE_PRESETS,
+    CAPABILITY_ALIASES, CAPABILITY_KEYS, CAPABILITY_PREREQUISITES, ROLE_PRESETS, UNAVAILABLE_CAPABILITIES,
     effective_capability_keys, normalize_capability_keys,
 )
 
@@ -128,6 +128,7 @@ def assignment_editor(member, listener_defaults) -> dict[str, object]:
         "roles": [{"key": key, "label": ROLE_LABELS[key], "grants": sorted(grants)}
                   for key, grants in ROLE_PRESETS.items()],
         "capabilities": list(CAPABILITY_LABELS.items()),
+        "unavailable_capabilities": dict(UNAVAILABLE_CAPABILITIES),
         "label": member_role_label(member, listener_defaults) if member else "Listener",
         "unmanaged_keys": sorted(set(keys) - ASSIGNABLE_CAPABILITY_KEYS),
         "inherited_keys": sorted(role_grants | prerequisites),

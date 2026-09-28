@@ -50,6 +50,9 @@ CAPABILITY_ACTIONS = MappingProxyType({
     "move": frozenset({"library.files.move"}),
 })
 CAPABILITY_KEYS = frozenset(f"capability.{key}" for key in CAPABILITY_ACTIONS)
+UNAVAILABLE_CAPABILITIES = MappingProxyType({
+    "capability.move": "Not implemented. Moving music is unavailable.",
+})
 # Stored pre-merge Rules grants still work; new assignments use one canonical key.
 CAPABILITY_ALIASES = MappingProxyType({"capability.rules": "capability.repair"})
 # Complete prerequisites, shared by assignment expansion and durable-grant lookup.
@@ -160,8 +163,10 @@ def action_capabilities(action: str) -> frozenset[str]:
 
 
 def client_allows_action(action: str, surface: str, *, administrator: bool) -> bool:
-    """Client restrictions only narrow durable authority, including for owners."""
+    """Availability and client limits narrow durable authority, including owners."""
     capabilities = action_capabilities(action)
+    if any(f"capability.{name}" in UNAVAILABLE_CAPABILITIES for name in capabilities):
+        return False
     if surface in {"mobile", "tv"} and capabilities & {"edit", "delete", "create_loop"}:
         return False
     if surface == "tv" and capabilities & {"practice", "admin"}:

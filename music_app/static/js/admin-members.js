@@ -27,6 +27,12 @@
         }
       }
       for (const input of inputs) {
+        if (input.dataset.unavailableReason) {
+          input.checked = false;
+          input.disabled = true;
+          input.title = input.dataset.unavailableReason;
+          continue;
+        }
         const reasons = [];
         if (inherited.has(input.value)) reasons.push('Included by a selected role');
         if (requiredBy.has(input.value)) reasons.push(`Required by ${requiredBy.get(input.value).join(', ')}`);

@@ -47,10 +47,12 @@ test('shared search owns one external interaction outline with no outlined child
     searchInputCss,
     /:root \.search-field \.search-field-control > input\[type='search'\]:focus-visible,\s*:root \.search-field \.search-field-action > \.search-field-button:focus-visible\s*\{[^}]*border:\s*0;[^}]*outline:\s*none;[^}]*box-shadow:\s*none;/,
   );
-  assert.match(
-    appearanceCss,
-    /:not\(\.navigation-tree-item\):not\(\.search-field-button\):not\(\.cover-lookup-task-open\):not\(\.global-player \*\):hover[^\{]*\{[^}]*outline:/,
-  );
+  const genericHover = appearanceCss.match(
+    /:not\(\.navigation-tree-item\):not\(\.search-field-button\):not\(\.cover-lookup-task-open\):not\(\.global-player \*\):hover[^\{]*\{([^}]*)\}/,
+  )?.[1] || '';
+  assert.match(genericHover, /border-color:\s*var\(--appearance-item-action-hover-border/);
+  assert.doesNotMatch(genericHover, /outline:/);
+  assert.match(appearanceCss, /:not\(\.search-field \*\):not\(\.ui-input-action \*\):not\(\.gallery-info-button\):focus-visible\s*\{[^}]*outline:/);
 });
 
 test('narrow library search aligns to the main panel outer edge', () => {

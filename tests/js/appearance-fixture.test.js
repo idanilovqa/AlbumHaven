@@ -96,6 +96,8 @@ function loadAlbumDetailsSpec(withRestoredAppearanceFixture) {
   const fixtures = {}, cases = new Map();
   const register = (title, _options, callback) => cases.set(title, callback);
   register.setTimeout = () => {};
+  register.describe = (_title, body) => body();
+  register.use = () => {};
   const context = { test: register, base: { extend(values) { Object.assign(fixtures, values); return register; } },
     expect() {}, PERFORMANCE_AUTH_USERNAME: 'authenticated-fixture', withRestoredAppearanceFixture };
   const filename = path.resolve(__dirname, '../e2e/specs/albumDetailsComponents.functional.spec.js');

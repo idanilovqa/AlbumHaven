@@ -282,6 +282,10 @@ async function handleUtilityBootstrapClick(event) {
   if (utilityLoopItemButton) {
     event.preventDefault();
     state.utility.loopSuppressClick = false;
+    if (typeof getMobileLoopPage === 'function' && getMobileLoopPage()) {
+      const loop = (state.utility.loops || []).find(item => String(item.id) === utilityLoopItemButton.getAttribute('data-utility-loop-id'));
+      if (loop) openMobileLoopSong(buildUtilityLoopGroupKey(loop));
+    }
     return;
   }
 
@@ -293,6 +297,7 @@ async function handleUtilityBootstrapClick(event) {
       return;
     }
     const groupKey = utilityLoopButton.getAttribute('data-utility-loop-group-key') || '';
+    if (typeof getMobileLoopPage === 'function' && getMobileLoopPage()) { openMobileLoopSong(groupKey); return; }
     const sameGroup = groupKey === String(state.utility.selectedLoopGroupKey || '');
     const now = Date.now();
     const isDoubleClickCandidate = String(state.utility.lastLoopGroupClickKey || '') === String(groupKey)

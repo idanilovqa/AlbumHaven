@@ -6,6 +6,7 @@ for (const palette of ['black', 'parchment-pine']) {
     const loops = new MobileLoopsPage(page);
     await loops.usePalette(palette);
     await loops.openFourLoopSong();
+    await loops.expectSongPage();
     for (const width of [390, 320, 430]) {
       await page.setViewportSize({ width, height: 844 });
       await loops.expectCompactPlayers();
@@ -30,3 +31,36 @@ test('regular desktop saved-loop blocks retain inline controls and the same four
   await loops.openDesktopLoops();
   await snapshot('73-desktop-loop-reference');
 });
+
+for (const palette of ['black', 'parchment-pine']) {
+  test(`mobile loop index filters before opening a song, and Back retains the list in ${palette}`, async ({ page, app, snapshot }) => {
+    const loops = new MobileLoopsPage(page);
+    await loops.usePalette(palette);
+    await loops.openSettings();
+    await loops.selectUtility('loops');
+    await loops.expectLoopIndex();
+    await snapshot(`74-loop-index-${palette}`);
+    await loops.loopSearch.fill('Bridge study');
+    await expect(loops.song).toBeVisible();
+    await loops.song.click();
+    await loops.expectSongPage();
+    await snapshot(`75-loop-song-${palette}`);
+    // Filtering the index never trims the selected song's four loop players.
+    await loops.backButton.click();
+    await loops.expectLoopIndex();
+    await expect(loops.loopSearch).toHaveValue('Bridge study');
+    await page.goForward();
+    await loops.expectSongPage();
+    await page.reload();
+    await loops.expectSongPage();
+    await loops.backButton.click();
+    await loops.expectLoopIndex();
+    await expect(loops.loopSearch).toHaveValue('Bridge study');
+    await loops.loopSearch.fill('No such generated loop');
+    await expect(loops.loopList).toHaveText('No matching loops.');
+    await loops.loopSearch.fill('');
+    await expect(loops.song).toBeVisible();
+    await loops.backButton.click();
+    await expect(loops.galleryContextName).toHaveText('Rendref');
+  });
+}

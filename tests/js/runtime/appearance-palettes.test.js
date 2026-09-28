@@ -420,10 +420,10 @@ test('Parchment & Pine resolves its three dark companions on the approved light 
   });
 });
 
-test('Parchment & Pine uses a dark default selection fill for every NavigationTree item', () => {
+test('Parchment & Pine uses its containing surface for default NavigationTree selection', () => {
   assert.match(
     appearanceCss,
-    /data-appearance-palette='parchment-pine'\]:not\(\[data-appearance-item-selected\]\) \.navigation-tree-item\s*\{[^}]*--selection-body-background:\s*color-mix\(in srgb, var\(--appearance-panel-ink\) 18%, var\(--appearance-panel-background\)\);/,
+    /data-appearance-palette='parchment-pine'\]:not\(\[data-appearance-item-selected\]\) \.navigation-tree-item\s*\{[^}]*--selection-body-background:\s*color-mix\(in srgb, var\(--text\) 10%, var\(--panel\)\);/,
   );
 });
 

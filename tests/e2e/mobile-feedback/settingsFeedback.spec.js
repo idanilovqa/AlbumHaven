@@ -61,6 +61,8 @@ test('Logs cards open Recent activity, export, and preserve Back and Forward', a
   await ui.filter.click();
   await expect(ui.form).toBeVisible();
   await ui.expectReadable(ui.formPanel);
+  await expect(ui.formPanel).not.toHaveCSS('background-color', 'rgba(0, 0, 0, 0)');
+  await expect(ui.formPanel).toHaveCSS('border-left-style', 'solid');
   await snapshot('108-logs-filter');
   await ui.filter.click();
   await expect(ui.form).not.toBeVisible();

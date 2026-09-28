@@ -1246,14 +1246,14 @@ html .cover-lookup-drawer {
 /* Content surfaces retain their palette when moved out of the page or resized.
    Chrome drawers deliberately use the app-bar companion instead. */
 :root {
-  --appearance-content-ink: var(--appearance-ink);
-  --appearance-content-muted: var(--appearance-muted);
+  --appearance-content-ink: var(--appearance-ink, var(--text));
+  --appearance-content-muted: var(--appearance-muted, var(--muted));
   --appearance-content-focus-outline: var(--appearance-focus-outline);
   --appearance-content-interaction-outline: var(--appearance-interaction-outline);
   --appearance-content-color-scheme: dark;
-  --appearance-content-card: var(--appearance-card);
-  --appearance-content-control: var(--appearance-control);
-  --appearance-content-line: var(--appearance-line);
+  --appearance-content-card: var(--appearance-card, var(--panel));
+  --appearance-content-control: var(--appearance-control, var(--panel-2));
+  --appearance-content-line: var(--appearance-line, var(--border));
   --appearance-content-action-hover-background: var(--appearance-item-action-hover-background);
   --appearance-content-action-pressed: var(--appearance-item-action-pressed);
 }
@@ -1282,12 +1282,12 @@ html .cover-lookup-drawer {
   color: var(--text);
 }
 :root .mobile-settings-drawer {
-  --appearance-ink: var(--appearance-panel-ink); --text: var(--appearance-panel-ink);
-  --appearance-muted: var(--appearance-panel-muted); --muted: var(--appearance-panel-muted);
-  --panel: var(--appearance-panel-background); --border: var(--appearance-panel-line);
-  --appearance-card: var(--appearance-panel-control);
+  --appearance-ink: var(--appearance-panel-ink, var(--appearance-content-ink)); --text: var(--appearance-panel-ink, var(--appearance-content-ink));
+  --appearance-muted: var(--appearance-panel-muted, var(--appearance-content-muted)); --muted: var(--appearance-panel-muted, var(--appearance-content-muted));
+  --panel: var(--appearance-panel-background, var(--appearance-content-card)); --border: var(--appearance-panel-line, var(--appearance-content-line));
+  --appearance-card: var(--appearance-panel-control, var(--appearance-content-control));
   --selection-body-background: color-mix(in srgb, var(--text) 10%, var(--panel));
-  --trigger-anchor-background: var(--appearance-panel-background);
+  --trigger-anchor-background: var(--appearance-panel-background, var(--appearance-content-card));
   color: var(--text); background: var(--panel);
 }
 :root .is-mobile-page .search-field {
@@ -1302,3 +1302,5 @@ html .cover-lookup-drawer {
 :root[data-appearance-palette='parchment-pine'] { --appearance-content-muted: var(--appearance-content-ink); }
 
 :root[data-appearance-mode='light'], :root[data-appearance-palette='parchment-pine'] { --appearance-content-color-scheme: light; }
+
+:root[data-appearance-item-selected] :is(.is-mobile-page > .utility-modal-dialog, .is-mobile-page > .cover-lookup-modal-dialog, .is-mobile-page > .non-album-modal-dialog, .trigger-anchor-surface[data-trigger-anchor-context='content'], .mobile-settings-drawer) { --selection-body-background: var(--appearance-item-selected); }

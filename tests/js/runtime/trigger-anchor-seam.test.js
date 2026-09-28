@@ -35,7 +35,7 @@ test('connected dropdown surfaces do not animate their shadow-bearing outer pane
   );
 });
 
-test('open trigger preserves and shares the panel color rendered before anchor styling', () => {
+test('open trigger shares the panel color after its owning theme context is applied', () => {
   const context = vm.createContext({
     getComputedStyle: surface => ({
       getPropertyValue: property => property === '--trigger-anchor-background' ? '#fff7e5' : '',
@@ -76,8 +76,8 @@ test('open trigger preserves and shares the panel color rendered before anchor s
   };
 
   context.syncTriggerAnchor(surface, anchor);
-  assert.equal(triggerProperties.get('--trigger-anchor-background'), 'rgb(237, 242, 247)');
-  assert.equal(surfaceProperties.get('--trigger-anchor-background'), 'rgb(237, 242, 247)');
+  assert.equal(triggerProperties.get('--trigger-anchor-background'), 'rgb(255, 247, 229)');
+  assert.equal(surfaceProperties.get('--trigger-anchor-background'), 'rgb(255, 247, 229)');
   context.clearTriggerAnchor(surface);
   assert.equal(triggerProperties.has('--trigger-anchor-background'), false);
   assert.equal(surfaceProperties.has('--trigger-anchor-background'), false);

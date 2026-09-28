@@ -11,12 +11,16 @@
 :root[data-appearance-mode='light'] :is(.shell-main-surface, .settings-outlet) {
   --trigger-anchor-background: var(--appearance-card);
 }
-:root[data-appearance-mode='light'] .trigger-anchor-surface[data-trigger-anchor-context='content'] {
+/* Context is set before the connector samples the popup background. Apply the
+   content palette at that point, including mixed content/chrome themes. */
+:root [data-trigger-anchor-context='content'],
+:root[data-appearance-palette] [data-trigger-anchor-context='content'] {
   --trigger-anchor-background: var(--appearance-card);
   --panel: var(--appearance-card);
   --text: var(--appearance-ink);
   --muted: var(--appearance-muted);
   --border: var(--appearance-line);
+  background: var(--trigger-anchor-background);
   color: var(--text);
 }
 :root .trigger-anchor-open[data-trigger-anchor-context='content'] {

@@ -51,6 +51,7 @@ test('Admin is a readable phone table and header Back exits the hierarchy after 
     await phone.openUsers();
     await phone.expectBarAligned(phone.accountBar);
     await phone.expectResponsiveUsers();
+    await phone.expectPrimaryActionContrast();
     await snapshot(`62-admin-table-${palette}`);
     await phone.memberMenu.getByRole('menuitem', { name: 'Edit', exact: true }).click();
     await phone.expectPermissionContrast();
@@ -60,6 +61,7 @@ test('Admin is a readable phone table and header Back exits the hierarchy after 
     await app.accountNavToggle.click();
     await app.accountLink.click();
     await expect(app.securityHeading).toBeVisible();
+    await phone.expectPrimaryActionContrast('Change password', 'button');
     await phone.expectBarAligned(phone.accountBar);
     await phone.parentLink.click();
     await expect(app.galleryContextName).toHaveText('Rendref');

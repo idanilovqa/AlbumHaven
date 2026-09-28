@@ -319,3 +319,35 @@ for (const method of ['mount', 'mountSeekbar', 'mountSelectionAccent', 'mountAle
     assert.equal(notice.innerHTML, '');
   });
 }
+
+test('seekbar drafts stay with their device profile and save through retained callbacks after resize', async () => {
+  let profile = 'mobile', breakpointChanged;
+  const { instance, host } = await mounted('mount', preference(), undefined, {
+    AlbumHavenDevicePreferences: { profile: () => profile },
+    matchMedia: () => ({ addEventListener: (_event, listener) => { breakpointChanged = listener; } }),
+  });
+  const applied = [];
+  instance.mountSeekbar(host, {
+    getSeekbarMode: selected => selected === 'mobile' ? 'thin' : 'default',
+    applySeekbarMode: (mode, selected) => applied.push([selected, mode]),
+  });
+  instance.controller.setDeviceSectionMode('custom');
+  instance.controller.setSeekbarMode('waveform');
+  profile = 'web_desktop';
+  breakpointChanged();
+  assert.equal(instance.controller.getState().seekbarMode, 'default');
+  assert.equal(instance.controller.getState().dirty, true);
+  assert.equal(await instance.controller.save(), true);
+  assert.deepEqual(applied, [['mobile', 'waveform']]);
+  assert.equal(instance.controller.getState().dirty, false);
+  profile = 'mobile';
+  breakpointChanged();
+  assert.equal(instance.controller.getState().seekbarMode, 'waveform');
+  instance.controller.setSeekbarMode('thin');
+  profile = 'web_desktop';
+  breakpointChanged();
+  instance.controller.cancel();
+  profile = 'mobile';
+  breakpointChanged();
+  assert.equal(instance.controller.getState().seekbarMode, 'waveform');
+});

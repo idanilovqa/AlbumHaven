@@ -27,8 +27,15 @@ for (const palette of ['black', 'parchment-pine']) {
     await expect(appearance.documentRoot).toHaveAttribute('data-appearance-palette', palette);
     await app.selectSubsection('seekbar');
     await expect(app.thinOption).toBeVisible();
+    await app.customAppearance.click();
+    await app.waveformOption.check();
     await page.setViewportSize({ width: 1280, height: 900 });
     await expect(app.thinOption).toHaveCount(0);
+    await expect(app.regularOption).toBeChecked();
+    await app.saveAppearanceChanges();
+    await page.setViewportSize({ width: 390, height: 844 });
+    await expect(app.waveformOption).toBeChecked();
+    await page.setViewportSize({ width: 1280, height: 900 });
     await app.backButton.click();
     await expect(app.utilitiesPage).not.toBeVisible();
 
@@ -51,7 +58,8 @@ for (const palette of ['black', 'parchment-pine']) {
     await expect(app.backButton).toBeVisible();
     await app.backButton.click();
     await expect(app.albumPage).not.toBeVisible();
-    await app.openAlbumBody('After the Rain');
+    await app.selectView('cards');
+    await app.galleryCards.getByRole('button', { name: 'After the Rain', exact: true }).click();
     await expect(app.albumDialogs).toBeVisible();
     await page.setViewportSize({ width: 390, height: 844 });
     await expect(app.albumPage).toBeVisible();

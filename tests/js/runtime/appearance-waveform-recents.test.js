@@ -155,7 +155,7 @@ for(const [from,to] of [
   const {controller}=setup(); controller.setPlayerColor('background','#112233'); controller.setPlayerColor('fill','#345678');
   const before=controller.getState().draft; let guards=0,renders=0;
   const context=vm.createContext({state:{utility:{appearanceKey:from},coverLookup:{}},document:{querySelectorAll:()=>[]},console,
-    confirmBackgroundAppearanceLeave:()=>{guards++;return false;},renderUtilityModalContent:()=>{renders++;}});
+    closeUtilityLoopSettingMenu(){},confirmBackgroundAppearanceLeave:()=>{guards++;return false;},renderUtilityModalContent:()=>{renders++;}});
   vm.runInContext(fs.readFileSync(path.join(__dirname,'../../../music_app/static/js/runtime/bootstrap-utility-event-handlers.js'),'utf8'),context);
   const button={getAttribute:()=>to};
   await context.handleUtilityBootstrapClick({target:{closest:selector=>selector==='[data-utility-appearance-key]'?button:null},preventDefault(){}});
@@ -219,6 +219,18 @@ test('actual Seekbar renderer supplies its color editor host to the shared insta
   assert.equal(typeof mounts[0].options.getLegacyColors,'function');
   assert.equal(typeof mounts[0].options.getSeekbarMode,'function');
   assert.equal(mounts[0].options.getSeekbarMode(),'waveform');
+  const profileWrites = [];
+  context.window.AlbumHavenDevicePreferences = {
+    enabled: true, profile: () => 'web_desktop',
+    read: (_field, fallback, profile) => profile === 'mobile' ? { seekbarMode: 'thin' } : fallback,
+    write: (field, value, profile) => profileWrites.push({ field, value, profile }),
+  };
+  context.normalizePlayerAppearance = value => value;
+  assert.equal(mounts[0].options.getSeekbarMode('web_desktop'), 'default');
+  assert.equal(mounts[0].options.getSeekbarMode('mobile'), 'thin');
+  mounts[0].options.applySeekbarMode('waveform', 'mobile');
+  assert.equal(profileWrites[0].profile, 'mobile');
+  assert.equal(profileWrites[0].value.seekbarMode, 'waveform');
   assert.equal(storageReads,0,'Rendering must not inspect previous browser colors');
   assert.equal(unmounts,1);
   assert.equal(controller.getState().draft.player_override.background,'#112233');

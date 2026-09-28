@@ -455,7 +455,16 @@
     const listeners = new Set(), busy = () => loading || saving || loadFailed;
     const editBlocked = () => busy() || (activeDeviceProfile !== 'web_desktop'
       && deviceProfiles[activeDeviceProfile].sections[appearanceSectionKeys[activeSection]]?.mode !== 'custom');
-    let savedSeekbarMode = 'default', draftSeekbarMode = 'default', applySeekbarMode = () => {}, seekbarConfigured = false;
+    let applySeekbarMode = () => {}, readSeekbarMode = () => 'default', seekbarConfigured = false;
+    const seekbarModes = new Map();
+    const normalizeSeekbarMode = mode => ['default', 'waveform', 'thin'].includes(mode) ? mode : 'default';
+    const seekbarState = () => {
+      if (!seekbarModes.has(activeDeviceProfile)) {
+        const mode = normalizeSeekbarMode(readSeekbarMode(activeDeviceProfile));
+        seekbarModes.set(activeDeviceProfile, { saved: mode, draft: mode });
+      }
+      return seekbarModes.get(activeDeviceProfile);
+    };
     const mayChangeLoopStyle = () => (typeof loopCreateAllowed === 'function' ? loopCreateAllowed() : loopCreateAllowed) === true;
     const syncInputs = (preserveErrors = false) => {
       const next = Object.fromEntries(keys.map(key => [key, draft[key] || defaults[key]]));
@@ -487,7 +496,7 @@
     };
     const getState = () => {
       const comparable = comparableDraftState();
-      const dirty = draftSeekbarMode !== savedSeekbarMode
+      const dirty = [...seekbarModes.values()].some(mode => mode.draft !== mode.saved)
         || stableJson(comparable.baseDraft) !== stableJson(saved)
         || stableJson(persistedDeviceProfiles(comparable.profiles)) !== stableJson(persistedDeviceProfiles(savedDeviceProfiles))
         || Object.keys(errors).length > 0
@@ -500,7 +509,7 @@
         }
       }
       const canSave = dirty && !busy() && !Object.keys(errors).length;
-      return { canEdit: !editBlocked(), seekbarMode: draftSeekbarMode, saved: copy(saved), draft: copy(draft), revision, activeSection, activeDeviceProfile, deviceProfiles: copy(deviceProfiles), playerRecentSets: copy(playerRecentSets), errors: { ...errors }, inputValues: { ...inputValues }, effective,
+      return { canEdit: !editBlocked(), seekbarMode: seekbarState().draft, saved: copy(saved), draft: copy(draft), revision, activeSection, activeDeviceProfile, deviceProfiles: copy(deviceProfiles), playerRecentSets: copy(playerRecentSets), errors: { ...errors }, inputValues: { ...inputValues }, effective,
         recentColors: [...recentColors], waveformColorUpdates: [...waveformColorUpdates], loading, saving, dirty, canSave, error, loadFailed, warnings, canChangeLoopStyle: mayChangeLoopStyle(),
         footer: { dirty, canSave, canRetry: dirty && Boolean(error), status: dirty ? 'Unsaved appearance changes' : 'Saved to your account' } };
     };
@@ -786,7 +795,7 @@
       captureActiveDeviceSection(); restoreBaseSection(previousSection);
       activeSection = value; applyActiveDeviceSection(); notify();
     };
-    const cancel = () => { if (loading || saving) return; draftSeekbarMode = savedSeekbarMode; draft = copy(saved); deviceProfiles = copy(savedDeviceProfiles); pendingPlayerSet = null; errors = {}; waveformColorUpdates = []; error = ''; applyActiveDeviceSection(); syncInputs(); notify(); };
+    const cancel = () => { if (loading || saving) return; seekbarModes.forEach(mode => { mode.draft = mode.saved; }); draft = copy(saved); deviceProfiles = copy(savedDeviceProfiles); pendingPlayerSet = null; errors = {}; waveformColorUpdates = []; error = ''; applyActiveDeviceSection(); syncInputs(); notify(); };
     const reset = () => {
       if (editBlocked()) return;
       draft = isCanonical(draft) ? { ...canonicalEmpty(), player_override: draft.player_override ? { ...draft.player_override } : null, loop_control_style: draft.loop_control_style || 'capsule' } : empty();
@@ -845,6 +854,7 @@
           ...(waveformColorUpdates.length ? { waveform_color_updates: [...waveformColorUpdates] } : {}),
         }
         : { ...copy(draft), ...(waveformColorUpdates.length ? { waveform_color_updates: [...waveformColorUpdates] } : {}) };
+      const submittedSeekbars = [...seekbarModes].filter(([, mode]) => mode.draft !== mode.saved).map(([profile, mode]) => [profile, mode.draft]);
       saving = true; error = ''; notify();
       try {
         const response = await request('PUT', submitted);
@@ -852,7 +862,10 @@
         if (ownGeneration !== generation) return false;
         if (aggregate) { revision = response.revision; playerRecentSets = normalizePlayerSets(response.player_recent_sets); }
         saved = preference; draft = copy(saved); deviceProfiles = profileApi.normalize(response.device_profiles, appearancePreferenceSections(saved)); savedDeviceProfiles = copy(deviceProfiles); applyActiveDeviceSection(); pendingPlayerSet = null; recentColors = history; waveformColorUpdates = []; errors = {}; syncInputs(); apply(copy(saved));
-        if (draftSeekbarMode !== savedSeekbarMode) { applySeekbarMode(draftSeekbarMode); savedSeekbarMode = draftSeekbarMode; }
+        for (const [profile, mode] of submittedSeekbars) {
+          applySeekbarMode(mode, profile);
+          seekbarModes.get(profile).saved = mode;
+        }
         return true;
       } catch (failure) {
         if (ownGeneration === generation) {
@@ -880,13 +893,18 @@
       } finally { if (ownGeneration === generation) { saving = false; applyActiveDeviceSection(); notify(); } }
     };
     const clear = (message = '') => {
+      seekbarModes.clear(); seekbarConfigured = false;
       ++generation; saved = isCanonical(saved) ? canonicalEmpty() : empty(); draft = copy(saved); errors = {};
       recentColors = []; waveformColorUpdates = []; playerRecentSets = []; pendingPlayerSet = null; revision = 0;
       error = typeof message === 'string' ? message : ''; loading = false; saving = false; loadFailed = true; syncInputs(); notify();
     };
     return { getState, setColor, setPalette, setPanelIndex, setPlayerMode, setCompactPlayerStyle, setDockedCompactPlayerBehavior, setDockedCompactPlayerRegularStyle, setCompactPlayerMotion, setFloatingPlayerEdge, setLoopControlStyle, setAlbumDetailsLayout, setAlbumPlayingRowAnimation, setAlertFamily, setPlayerColor, setWaveformColor, restoreWaveformColors,
-      configureSeekbar(mode, applyMode) { if (!seekbarConfigured) { savedSeekbarMode = draftSeekbarMode = ['default', 'waveform', 'thin'].includes(mode) ? mode : 'default'; seekbarConfigured = true; } applySeekbarMode = applyMode; },
-      setSeekbarMode(mode) { if (editBlocked()) return; draftSeekbarMode = ['default', 'waveform', 'thin'].includes(mode) ? mode : 'default'; notify(); },
+      configureSeekbar(mode, applyMode, readMode = () => mode) {
+        readSeekbarMode = readMode; applySeekbarMode = applyMode;
+        if (!seekbarConfigured) { seekbarModes.clear(); seekbarConfigured = true; }
+        seekbarState();
+      },
+      setSeekbarMode(mode) { if (editBlocked()) return; seekbarState().draft = normalizeSeekbarMode(mode); notify(); },
       setPlayerStyle, setPlayerStyleColor, restorePlayerSet, setSelectionAccent, setActionButtonOutlines, setInteractionOverrides, setItemOutline, useThemeInteractions, setDeviceProfile, setDeviceSectionMode, setActiveSection, cancel, reset, resetSection, load, save, clear,
       reconcileLoopCapability, subscribe(listener) { listeners.add(listener); return () => listeners.delete(listener); } };
   }
@@ -1053,6 +1071,7 @@
     if (window.AlbumHavenAppearance?.instance) return window.AlbumHavenAppearance.instance;
     const root = document.documentElement;
     let initial = empty(), csrfToken = '', loaded = false, mounted = null, unsubscribe = null, sessionGeneration = 0;
+    let remountEditor = null;
     let activePlayerTab = 'surface', activeWaveformTab = 'waveform', loopCreateAllowed = false;
     try {
       const bootstrap = JSON.parse(document.getElementById('appearance-bootstrap')?.textContent || '{}');
@@ -1118,15 +1137,13 @@
       return mountedFooter;
     };
     const unmount = () => {
-      unsubscribe?.(); unsubscribe = null; footerDispose?.(); footerDispose = null; mounted = null;
+      unsubscribe?.(); unsubscribe = null; footerDispose?.(); footerDispose = null; mounted = null; remountEditor = null;
       restoreFooterTheme?.(); restoreFooterTheme = null;
       if (mountedFooter?.id === 'utility-modal-footer') { mountedFooter.innerHTML = ''; mountedFooter.hidden = true; }
       mountedFooter = null;
     };
     const isPhoneEditor = () => window.AlbumHavenDevicePreferences?.profile?.() === 'mobile';
     const mountDeviceProfileControls = editor => {
-      // Resolve on mount as well: the shell may have crossed a breakpoint since boot.
-      controller.setDeviceProfile(window.AlbumHavenDevicePreferences?.profile?.() || 'web_desktop');
       const fields = document.createElement('fieldset');
       fields.className = 'appearance-device-fields';
       while (editor.firstChild) fields.appendChild(editor.firstChild);
@@ -1177,7 +1194,7 @@
       };
     };
     const mount = host => {
-      unmount(); host.innerHTML = editorMarkup(); mounted = host.querySelector('.appearance-background-editor');
+      unmount(); remountEditor = () => mount(host); host.innerHTML = editorMarkup(); mounted = host.querySelector('.appearance-background-editor');
       controller.setActiveSection('backgrounds');
       const editor = mounted, find = selector => editor.querySelector(selector);
       const syncDeviceProfile = mountDeviceProfileControls(editor);
@@ -1245,7 +1262,7 @@
       unsubscribe = controller.subscribe(sync); sync(controller.getState()); if (!loaded) void load(); return unmount;
     };
     const mountAlerts = host => {
-      unmount(); host.innerHTML = alertsMarkup(); mounted = host.querySelector('.appearance-alerts');
+      unmount(); remountEditor = () => mountAlerts(host); host.innerHTML = alertsMarkup(); mounted = host.querySelector('.appearance-alerts');
     controller.setActiveSection('alerts');
     const editor = mounted, find = selector => editor.querySelector(selector);
     const syncDeviceProfile = mountDeviceProfileControls(editor);
@@ -1295,7 +1312,7 @@
       unsubscribe = controller.subscribe(sync); sync(controller.getState()); if (!loaded) void load(); return unmount;
     };
     const mountAlbumPage = host => {
-      unmount(); host.innerHTML = albumPageMarkup({ mobile: isPhoneEditor() }); mounted = host.querySelector('.appearance-album-page');
+      unmount(); remountEditor = () => mountAlbumPage(host); host.innerHTML = albumPageMarkup({ mobile: isPhoneEditor() }); mounted = host.querySelector('.appearance-album-page');
     controller.setActiveSection('album-page');
     const editor = mounted;
     const syncDeviceProfile = mountDeviceProfileControls(editor);
@@ -1341,7 +1358,7 @@
       unsubscribe = controller.subscribe(sync); sync(controller.getState()); if (!loaded) void load(); return unmount;
     };
     const mountSelectionAccent = host => {
-      unmount(); host.innerHTML = selectionAccentMarkup(); mounted = host.querySelector('.appearance-background-editor');
+      unmount(); remountEditor = () => mountSelectionAccent(host); host.innerHTML = selectionAccentMarkup(); mounted = host.querySelector('.appearance-background-editor');
     controller.setActiveSection('selection-accent');
     const editor = mounted, find = selector => editor.querySelector(selector);
     const syncDeviceProfile = mountDeviceProfileControls(editor);
@@ -1411,10 +1428,10 @@
       unsubscribe = controller.subscribe(sync); sync(controller.getState()); if (!loaded) void load(); return unmount;
     };
     const mountSeekbar = (host, { getLegacyColors = () => null, getSeekbarMode = () => 'default', applySeekbarMode = () => {} } = {}) => {
-      controller.configureSeekbar(getSeekbarMode(), applySeekbarMode);
+      controller.configureSeekbar(getSeekbarMode(controller.getState().activeDeviceProfile), applySeekbarMode, getSeekbarMode);
       const selectedMode = controller.getState().seekbarMode;
       const waveformSelected = selectedMode === 'waveform';
-      unmount(); host.innerHTML = seekbarMarkup(selectedMode, { loopCreateAllowed, mobile: isPhoneEditor() }); mounted = host.querySelector('.appearance-background-editor');
+      unmount(); remountEditor = () => mountSeekbar(host, { getLegacyColors, getSeekbarMode, applySeekbarMode }); host.innerHTML = seekbarMarkup(selectedMode, { loopCreateAllowed, mobile: isPhoneEditor() }); mounted = host.querySelector('.appearance-background-editor');
     controller.setActiveSection('seekbar');
     const editor = mounted, find = selector => editor.querySelector(selector);
     const syncDeviceProfile = mountDeviceProfileControls(editor);
@@ -1630,11 +1647,8 @@
       const profile = window.AlbumHavenDevicePreferences?.profile?.() || 'web_desktop';
       const previous = controller.getState();
       controller.setDeviceProfile(profile);
-      if (profile !== previous.activeDeviceProfile && mounted?.parentElement) {
-        // Recompose the same editor so mobile-only controls follow the new profile.
-        ({ backgrounds: mount, seekbar: mountSeekbar, 'selection-accent': mountSelectionAccent,
-          alerts: mountAlerts, 'album-page': mountAlbumPage })[previous.activeSection](mounted.parentElement);
-      }
+      // Retain each editor's integration callbacks as its responsive markup changes.
+      if (profile !== previous.activeDeviceProfile) remountEditor?.();
       applySavedTheme(controller.getState().saved);
     });
     return { controller, mount, mountSeekbar, mountSelectionAccent, mountAlerts, mountAlbumPage, unmount, allowLeave, clearSession, load,

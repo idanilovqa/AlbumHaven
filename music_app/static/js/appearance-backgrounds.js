@@ -1071,7 +1071,7 @@
     let savedPlayerColors = null, controller = null;
     const applySavedTheme = sourcePreference => {
       const profile = window.AlbumHavenDevicePreferences?.profile?.() || 'web_desktop';
-      const preference = resolveClientAppearance(sourcePreference, profile, controller?.getState().deviceProfiles);
+      const preference = resolveClientAppearance(sourcePreference, profile);
       applyTheme(preference, root);
       savedPlayerColors = !nativePlayerComponents(preference).waveform && (preference.palette_id || preference.player_override || preference.player_style_override) ? resolveAppearance({ ...preference, player_override: preference.player_style_override || preference.player_override }).player : null;
       if (typeof window.CustomEvent === 'function') window.dispatchEvent?.(new window.CustomEvent('album-haven-appearance-change'));

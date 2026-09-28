@@ -10,7 +10,7 @@ const preference = (changes = {}) => ({
 function element() {
   const styles = new Map(), attributes = new Map(), children = new Map(), listeners = new Map();
   return {
-    styles, attributes, listeners, children: [], innerHTML: '', value: '',
+    styles, attributes, listeners, dataset: {}, children: [], innerHTML: '', value: '',
     appendChild(child) { this.children.push(child); return child; },
     insertAdjacentHTML(_position, markup) { this.innerHTML += markup; },
     style: {
@@ -31,13 +31,14 @@ function element() {
   };
 }
 
-async function mounted(method, initial = preference(), saveResponse) {
+async function mounted(method, initial = preference(), saveResponse, client = {}) {
   const root = element(), host = element();
   const document = {
     documentElement: root, addEventListener() {}, createElement: () => element(),
     getElementById: id => id === 'appearance-bootstrap' ? { textContent: JSON.stringify(initial) } : null,
   };
   const window = {
+    ...client,
     location: { href: 'https://music.test/', origin: 'https://music.test' },
     addEventListener() {}, confirm: () => true,
     fetch: async (_url, options) => {
@@ -57,6 +58,22 @@ async function mounted(method, initial = preference(), saveResponse) {
     preview: host.querySelector('.appearance-background-editor').querySelector(method === 'mount' ? '[data-background-preview]' : '[data-player-live-preview]'),
   };
 }
+
+test('responsive appearance applies saved mobile colors, never another section of an unsaved draft', async () => {
+  let breakpointChanged;
+  const { instance, root } = await mounted('mount', preference(), undefined, {
+    AlbumHavenDevicePreferences: { profile: () => 'mobile' },
+    matchMedia: () => ({ addEventListener: (_event, listener) => { breakpointChanged = listener; } }),
+  });
+  instance.controller.setDeviceSectionMode('custom');
+  instance.controller.setPalette('paper');
+  instance.controller.setActiveSection('album-page');
+  assert.equal(instance.controller.getState().dirty, true);
+  breakpointChanged();
+  assert.equal(root.getAttribute('data-appearance-palette'), 'steelblue');
+  instance.controller.cancel();
+  assert.equal(root.getAttribute('data-appearance-palette'), 'steelblue');
+});
 
 function assertEditorTheme(preview, draft) {
   const effective = api.resolveAppearance(draft);

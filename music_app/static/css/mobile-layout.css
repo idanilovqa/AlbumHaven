@@ -621,6 +621,10 @@ html[data-client-profile="mobile"] :is([data-open-problematic-album-folder], [da
     box-shadow: 18px 0 36px rgb(0 0 0 / .33);
     overscroll-behavior: contain; touch-action: pan-y;
   }
+  /* Keep navigation controls fixed; the bounded list owns vertical scrolling. */
+  .shell-layout .shell-navigation-rail { display: flex; flex-direction: column; overflow: hidden; }
+  .shell-layout #artist-tree-expanded { height: 100%; }
+  .shell-layout #sidebar-list { overscroll-behavior: contain; touch-action: pan-y; }
   :root :is(.shell-navigation-rail-backdrop, .settings-nav-backdrop) {
     top: var(--app-bar-height); bottom: var(--player-height);
     border: 0; box-shadow: none; border-radius: 0; touch-action: none;
@@ -644,7 +648,7 @@ html[data-client-profile="mobile"] :is([data-open-problematic-album-folder], [da
     grid-template-rows: auto; flex-wrap: nowrap; box-shadow: none;
   }
   /* Save/error announcements stay in the accessibility tree, not a second footer row. */
-  :root .is-mobile-page :is(.editor-footer-status, #cover-lookup-modal-status:not(:has([data-on-page-alert])), #cover-lookup-search-hint) {
+  :root .is-mobile-page :is(.editor-footer-status, #cover-lookup-modal-status:not(:has([data-on-page-alert], .on-page-alert, [role="alert"])), #cover-lookup-search-hint) {
     position: absolute; width: 1px; height: 1px; min-height: 0;
     padding: 0; margin: -1px; border: 0; overflow: hidden;
     clip-path: inset(50%); white-space: nowrap;
@@ -700,8 +704,12 @@ html[data-client-profile="mobile"] :is([data-open-problematic-album-folder], [da
 
 @media (max-width: 900px) {
   /* Failures remain visible above the compact button row, never silently clipped. */
-  #cover-lookup-modal.is-mobile-page #cover-lookup-modal-status:has([data-on-page-alert]) {
+  #cover-lookup-modal.is-mobile-page #cover-lookup-modal-status:has([data-on-page-alert], .on-page-alert, [role="alert"]) {
     position: absolute; inset: auto 0 100%; max-height: 180px; overflow-y: auto;
     background: var(--appearance-main-surface, var(--panel)); z-index: 1;
   }
+}
+
+@media (max-width: 900px) {
+  #cover-lookup-modal.is-mobile-page .cover-lookup-section + .cover-lookup-section { margin-top: 20px; }
 }

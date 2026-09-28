@@ -45,7 +45,7 @@ test('album ratings share the title line; scrolled identity is centered and init
     await phone.expectRatingBesideTitle();
   }
   await phone.search('Sixteen Horizons');
-  await phone.openAlbumBody('Sixteen Horizons');
+  await phone.openAlbumTitle('Sixteen Horizons');
   await expect(phone.albumRows).toHaveCount(16);
   await expect(phone.pageOutlet).toHaveAttribute('data-mobile-page-kind', 'album');
   await expect(phone.pageOutlet).not.toHaveAttribute('data-page-interacted', 'true');

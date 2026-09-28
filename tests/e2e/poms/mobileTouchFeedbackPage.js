@@ -30,8 +30,16 @@ export class MobileTouchFeedbackPage extends MobilePolishPage {
   }
   async swipeAt(x, y, distance = -160) {
     const session = await this.page.context().newCDPSession(this.page);
-    try { await session.send('Input.synthesizeScrollGesture', { x, y, yDistance: distance, gestureSourceType: 'touch', speed: 450 }); }
-    finally { await session.detach(); }
+    // Use the same trusted touch sequence as the existing first-swipe Family test.
+    // synthesizeScrollGesture did not deliver a scrolling touch on this runner.
+    const point = offset => [{ x, y: y + offset, id: 0 }];
+    try {
+      await session.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: point(0) });
+      for (let step = 1; step <= 12; step++) {
+        await session.send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: point(distance * step / 12) });
+      }
+      await session.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+    } finally { await session.detach(); }
   }
   async expectDrawerAtAppBar(drawer) {
     await expect(drawer).toBeVisible();
@@ -52,6 +60,7 @@ export class MobileTouchFeedbackPage extends MobilePolishPage {
     const before = await this.readScroll(this.artistRail);
     await this.swipeAt(box.x + box.width / 2, box.y + box.height - 45);
     await expect.poll(() => this.readScroll(this.artistRail)).toBeGreaterThan(before);
+    await expect(this.closeArtistRail).toBeInViewport();
     return this.readPaint(this.artistRail);
   }
   async expectGalleryMeetsPlayer() {
@@ -77,6 +86,10 @@ export class MobileTouchFeedbackPage extends MobilePolishPage {
     const rating = await rated.locator('.rating-row').boundingBox();
     expect(rating.x).toBeGreaterThanOrEqual(title.x + title.width);
     expect(rating.y + rating.height / 2).toBeCloseTo(title.y + title.height / 2, 0);
+  }
+  async openAlbumTitle(title) {
+    await this.galleryCards.getByRole('button', { name: title, exact: true }).click();
+    await expect(this.trackTable).toBeVisible();
   }
   async expectThumbnailCentered() {
     await expect(this.albumThumbnail).toBeVisible();

@@ -53,6 +53,9 @@ export class MobileLoopsPage extends MobilePolishPage {
       expect(card.time.height).toBeLessThan(20);
       expect(card.whiteSpace).toBe('nowrap');
     }
+    const cover = await this.root.locator('.utility-loop-sticky-cover').boundingBox();
+    expect(cover.width).toBe(56);
+    expect(cover.height).toBe(56);
     expect(await this.hasNoHorizontalOverflow()).toBe(true);
   }
 
@@ -102,6 +105,14 @@ export class MobileLoopsPage extends MobilePolishPage {
     expect(box.y).toBeGreaterThanOrEqual(0);
     expect(box.x + box.width).toBeLessThanOrEqual(viewport.width);
     expect(box.y + box.height).toBeLessThanOrEqual(viewport.height);
+    // parity-check: allow-read-only-measurement-evaluate -- portal ink must keep its owning theme in hover/selected states.
+    const ink = await menu.evaluate(node => getComputedStyle(node).color);
+    const selected = menu.locator('[aria-checked="true"]');
+    for (const option of [menu.locator('[aria-checked="false"]').first(), selected]) {
+      await option.hover();
+      await expect(option).toHaveCSS('background-color', 'rgba(0, 0, 0, 0)');
+      await expect(option).toHaveCSS('color', ink);
+    }
   }
 
   async openDesktopLoops() {

@@ -469,8 +469,8 @@ html[data-client-profile="mobile"] :is([data-utility-tab="problematic-files"], [
 .utility-loop-pitch-button { display: none; }
 @media (max-width: 900px) {
   #utility-modal.is-mobile-page[data-active-tab="loops"] .utility-sidebar { max-height: 112px; }
-  .is-mobile-page .utility-loop-detail-header { grid-template-columns: 56px minmax(0, 1fr); gap: 10px; padding: 12px 0; align-items: center; }
-  .is-mobile-page .utility-loop-sticky-cover { width: 56px; }
+  #utility-modal.is-mobile-page .utility-loop-detail-header { grid-template-columns: 56px minmax(0, 1fr); gap: 10px; padding: 12px 0; align-items: center; }
+  #utility-modal.is-mobile-page .utility-detail-cover.utility-loop-sticky-cover { width: 56px; height: 56px; flex-basis: 56px; }
   .is-mobile-page .utility-loop-detail-header .utility-detail-title { margin: 0 0 2px; font-size: 15px; }
   .is-mobile-page .utility-loop-detail-header .utility-detail-meta { font-size: 11px; line-height: 1.4; }
   .is-mobile-page .utility-loop-group-summary { display: grid; gap: 2px; }
@@ -509,6 +509,7 @@ html[data-client-profile="mobile"] :is([data-utility-tab="problematic-files"], [
   :root .is-mobile-page .utility-loop-entry :is(.utility-loop-repeat, .utility-loop-pitch-button, .utility-loop-speed-value):is(:hover, :active) { background: transparent !important; box-shadow: none !important; }
   :root .utility-loop-speed-menu.is-mobile-loop-menu { position: fixed; z-index: 5100; width: 168px; max-height: 248px; padding: 6px; gap: 0; border: 1px solid var(--loop-menu-line, var(--border)); border-radius: 12px; background: var(--loop-menu-surface, var(--panel)); color: var(--loop-menu-ink, var(--text)); box-shadow: 0 8px 24px #0003; overscroll-behavior: contain; touch-action: pan-y; box-sizing: border-box; }
   :root .is-mobile-loop-menu button { display: flex; align-items: center; justify-content: space-between; min-height: 36px; padding: 0 10px; font-size: 12px; font-weight: 400; color: inherit; background: transparent !important; border: 0 !important; box-shadow: none !important; text-align: left; }
+  :root [role="menu"].utility-loop-speed-menu.is-mobile-loop-menu > button[role="menuitemradio"]:is(:hover, :active, :focus-visible, [aria-checked]) { background: transparent !important; color: var(--loop-menu-ink, var(--text)) !important; }
   :root .is-mobile-loop-menu button[aria-checked="true"] { font-weight: 700; }
   .is-mobile-loop-menu button[aria-checked="true"]::after { content: '✓'; margin-left: 12px; }
   :root .is-mobile-loop-menu button:focus-visible { outline: 1px solid currentColor !important; outline-offset: -2px; text-decoration: underline; }

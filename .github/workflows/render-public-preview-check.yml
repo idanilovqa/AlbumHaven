@@ -1,9 +1,6 @@
 name: Render Public Preview Check
 
 on:
-  push:
-    branches: [2026-09-26-render-mobile-feedback]
-    paths: ['.github/workflows/render-public-preview-check.yml']
   workflow_dispatch:
 
 permissions:
@@ -20,7 +17,7 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-      - name: Verify deployed public routes and exact stylesheet without credentials
+      - name: Verify deployed public routes and exact assets without credentials
         shell: python
         run: |
           import hashlib
@@ -32,7 +29,8 @@ jobs:
           import urllib.request
 
           origin = 'https://albumhaven.onrender.com'
-          expected = hashlib.sha256(Path('music_app/static/css/mobile-layout.css').read_bytes()).hexdigest()
+          assets = ['css/mobile-layout.css', 'css/runtime/trigger-anchor.css', 'js/runtime-bundle.js']
+          expected = {asset: hashlib.sha256(Path('music_app/static', asset).read_bytes()).hexdigest() for asset in assets}
           deadline = time.monotonic() + 300
           attempt = 0
           while True:
@@ -46,12 +44,13 @@ jobs:
                       assert b'Album Haven sign in' in response.read(1048576), 'Normal login form missing'
                   with urllib.request.urlopen(origin + '/health', timeout=12) as response:
                       assert response.status == 200, 'Public health check failed'
-                  request = urllib.request.Request(origin + '/static/css/mobile-layout.css?verification=' + os.environ['GITHUB_SHA'], headers={'Cache-Control': 'no-cache'})
-                  with urllib.request.urlopen(request, timeout=12) as response:
-                      assert response.status == 200, 'Public stylesheet unavailable'
-                      actual = hashlib.sha256(response.read(1048576)).hexdigest()
-                      assert actual == expected, 'Deployment has not served the verified stylesheet yet'
-                  print('PASS: public HTTPS, normal unauthenticated login redirect, health and exact verified mobile CSS SHA256 ' + expected)
+                  for asset, digest in expected.items():
+                      request = urllib.request.Request(origin + '/static/' + asset + '?verification=' + os.environ['GITHUB_SHA'], headers={'Cache-Control': 'no-cache'})
+                      with urllib.request.urlopen(request, timeout=12) as response:
+                          assert response.status == 200, 'Public asset unavailable: ' + asset
+                          actual = hashlib.sha256(response.read(8388608)).hexdigest()
+                          assert actual == digest, 'Deployment has not served the verified asset yet: ' + asset
+                  print('PASS: public HTTPS, normal unauthenticated login redirect, health and exact verified asset SHA256 hashes', expected)
                   break
               except (AssertionError, urllib.error.URLError, TimeoutError) as error:
                   print('Preview readiness attempt', attempt, type(error).__name__)

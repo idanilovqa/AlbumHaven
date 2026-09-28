@@ -14,12 +14,18 @@ for (const palette of ['black', 'paper', 'parchment-pine']) {
     await covers.drawerButton.click();
     await expect(covers.drawer).toBeVisible();
     expect((await covers.drawer.boundingBox()).width).toBeLessThanOrEqual(page.viewportSize().width * .75 + 1);
+    const [clear, close] = await covers.notificationActionDimensions();
+    for (const key of Object.keys(clear)) expect(clear[key]).toBeCloseTo(close[key], 2);
     await snapshot(`90-notifications-${palette}`);
     await covers.drawerCloseButton.click();
     await phone.browseArtist();
     await phone.selectView('cards');
     await phone.expectGridColumns(3);
     await phone.expectNumericRatings();
+    await phone.expectGalleryHeaderLayout();
+    await expect(phone.zoomButton).not.toBeVisible();
+    await phone.longPressAlbum();
+    await expect(phone.albumContextMenu).not.toBeVisible();
     await phone.galleryCards.first().click({ button: 'right' });
     await expect(phone.albumContextMenu).not.toBeVisible();
     await snapshot(`91-three-columns-${palette}`);
@@ -111,6 +117,21 @@ test('cover selection saves before closing, reopens with saved artwork, and back
   await expect(covers.activeLocalCoverCard).toBeVisible();
   await expect(covers.saveRemoteButton).toBeDisabled();
   await snapshot('94-cover-reopened');
+  await phone.backButton.click();
+  await page.reload();
+  const afterReload = page.waitForResponse(response => response.url().endsWith('/utilities/cover-lookup/gallery'));
+  await details.coverLookupButton.click();
+  const persisted = await (await afterReload).json();
+  expect(persisted.local_covers.find(cover => cover.is_active).cover_revision).toBe(data.updated_album.cover_revision);
+  expect(persisted.local_covers.map(cover => cover.cover_revision)).toEqual(reopened.local_covers.map(cover => cover.cover_revision));
+  await covers.inactiveLocalCoverCards.first().click();
+  await expect(covers.saveRemoteButton).toBeEnabled();
+  await phone.backButton.click();
+  const cancelled = page.waitForResponse(response => response.url().endsWith('/utilities/cover-lookup/gallery'));
+  await details.coverLookupButton.click();
+  const unchanged = await (await cancelled).json();
+  expect(unchanged.local_covers.find(cover => cover.is_active).cover_revision).toBe(data.updated_album.cover_revision);
+  await expect(covers.saveRemoteButton).toBeDisabled();
 });
 
 
@@ -149,3 +170,21 @@ test('desktop tag fields, Apply and alternating track stripes work in dark and l
     }
   } finally { await context.close(); }
 });
+
+for (const reducedMotion of ['no-preference', 'reduce']) {
+  test(`mobile pinch hint appears once and respects ${reducedMotion} motion`, async ({ page, app }) => {
+    const phone = new MobilePolishPage(page);
+    await page.emulateMedia({ reducedMotion });
+    await phone.browseArtist();
+    await phone.selectView('cards');
+    await expect(phone.pinchHint).toBeVisible();
+    await expect(phone.pinchHintLights).toHaveCount(2);
+    await expect(phone.pinchHint).toHaveCSS('animation-name', reducedMotion === 'reduce' ? 'none' : 'mobile-hint-fade');
+    await expect(phone.pinchHintLights.first()).toHaveCSS('animation-name', reducedMotion === 'reduce' ? 'none' : 'mobile-hint-spread');
+    await expect(phone.pinchHint).toHaveCount(0, { timeout: 6000 });
+    await phone.selectView('covers');
+    await phone.selectView('cards');
+    await expect(phone.pinchHint).toHaveCount(0);
+    await phone.expectGridColumns(3);
+  });
+}

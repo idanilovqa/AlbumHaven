@@ -135,6 +135,18 @@ export class CoverLookup extends BasePage {
     return '[data-close-cover-lookup-drawer="1"]';
   }
 
+  async notificationActionDimensions() {
+    const dimensions = [];
+    for (const button of [this.drawerClearCompletedButton, this.drawerCloseButton]) {
+      // parity-check: allow-read-only-measurement-evaluate -- compare the shared notification action hit targets and glyph boxes.
+      dimensions.push(await button.evaluate(node => {
+        const box = node.getBoundingClientRect(), glyph = node.querySelector('svg').getBoundingClientRect();
+        return { width: box.width, height: box.height, glyphWidth: glyph.width, glyphHeight: glyph.height };
+      }));
+    }
+    return dimensions;
+  }
+
   get drawerClearCompletedButtonSelector() {
     return '#cover-lookup-drawer-clear';
   }

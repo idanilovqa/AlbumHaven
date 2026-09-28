@@ -306,6 +306,7 @@ function buildProblemIgnoresRuleDetail(rule) {
       <div class="utility-rule-detail utility-problem-exclusions-detail">
         <h3 class="utility-rule-title">${escapeHtml(rule?.title || 'Problem exclusions')}</h3>
         <p class="utility-rule-description">${escapeHtml(rule?.description || 'Album or file problems excluded from Problematic Files.')}</p>
+        ${!albumItems.length && !fileItems.length ? `<p class="utility-detail-meta">${rule.album_items?.length || rule.file_items?.length ? 'No problem exclusions match your search.' : 'No problem exclusions yet.'}</p>` : ''}
         ${albumItems.length ? `<section class="utility-problem-exclusion-group">
           <h4 class="utility-detail-section-title">ALBUM EXCLUSIONS</h4>
           ${table(albumItems, 'Artist / Album', 'Album exclusions', 'problem-exclusions-album', 'album')}

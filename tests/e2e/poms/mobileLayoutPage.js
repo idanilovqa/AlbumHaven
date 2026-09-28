@@ -329,6 +329,17 @@ export class MobileLayoutPage {
     return this.artistHeading.evaluate(heading => heading.scrollWidth <= heading.clientWidth);
   }
 
+  async longPressAlbum() {
+    const box = await this.galleryCards.first().boundingBox();
+    const cdp = await this.page.context().newCDPSession(this.page);
+    try {
+      await cdp.send('Input.synthesizeTapGesture', {
+        x: box.x + box.width / 2, y: box.y + Math.min(30, box.height / 2),
+        duration: 1000, gestureSourceType: 'touch',
+      });
+    } finally { await cdp.detach(); }
+  }
+
   async nativePinch(scale) {
     const box = await this.galleryScroll.boundingBox();
     const center = { x: box.x + box.width / 2, y: box.y + Math.min(150, box.height / 2) };
@@ -371,7 +382,7 @@ export class MobileLayoutPage {
   }
 
   async selectSubsection(key) {
-    if (!['library', 'lastfm', 'backgrounds', 'seekbar', 'selection-accent', 'alerts', 'album-page'].includes(key)) throw new TypeError('Invalid subsection');
+    if (!['library', 'lastfm', 'backgrounds', 'seekbar', 'selection-accent', 'alerts', 'album-page', 'version-exceptions', 'problem-ignores'].includes(key)) throw new TypeError('Invalid subsection');
     await this.subsectionButton.click();
     await this.subsectionMenu.locator(`[data-mobile-subsection="${key}"]`).click();
     await expect(this.subsectionMenu).not.toBeVisible();

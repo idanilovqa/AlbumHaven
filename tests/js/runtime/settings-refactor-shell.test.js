@@ -84,9 +84,11 @@ for (const [key, start, expected] of [['ArrowRight', 5, 0], ['ArrowLeft', 0, 5],
 test('S03 Escape closes the filter dropdown and restores its anchor focus', () => {
   const { context, els } = harness();
   context.state.utility.problemDropdownOpen = true;
+  vm.runInContext(read('music_app/static/js/runtime/track-modal-lightbox-helpers.js'), context);
+  context.getTopmostOpenModal = () => ({ id: 'utility-modal' });
   const target = { closest: (selector) => selector.includes('problem-filter') ? els.problemFilterMenu : null };
   let prevented = false;
-  context.handleUtilityBootstrapKeyDown({ key: 'Escape', target, preventDefault() { prevented = true; } });
+  context.handleModalEscapeKeydown({ key: 'Escape', target, stopImmediatePropagation() {}, preventDefault() { prevented = true; } });
   assert.equal(context.state.utility.problemDropdownOpen, false);
   assert.equal(els.problemFilterButton.focused, true);
   assert.equal(prevented, true);

@@ -89,3 +89,14 @@ def test_unknown_and_false_decisions_are_not_exposed_as_permissions():
     value = build_capability_ui({"library.media.read": False}, "private_web")
     assert ".play-track-button" in value["denied_selectors"]
     assert "appearance" in value["denied_tabs"]
+
+
+def test_tv_projects_provider_only_cover_controls_without_hiding_lookup():
+    value = projection(["owner", "admin"], "tv", bootstrap=True)
+    selectors = {".cover-lookup-manual-add", "[data-select-local-cover]", "[data-select-pasted-cover]"}
+    assert selectors <= set(value["denied_selectors"])
+    assert value["allowed_actions"]["library.covers.lookup"] is True
+    assert value["allowed_actions"]["library.covers.write"] is True
+    assert set(value["cover_provider_groups"]) == {"services", "cover_art_archive"}
+    desktop = projection(["owner", "admin"], bootstrap=True)
+    assert not selectors.intersection(desktop["denied_selectors"])

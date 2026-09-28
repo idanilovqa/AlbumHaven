@@ -1,0 +1,76 @@
+name: PR17 Offline Test Tools
+on:
+  push:
+    branches: [chatgpt/pr17-review-workspace-20260928]
+    paths: [.github/workflows/pr17-offline-test-tools.yml]
+permissions: {}
+jobs:
+  prepare:
+    if: github.repository == 'idanilovqa/AlbumHaven'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+      actions: read
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install only the existing lockfile dependencies
+        env:
+          PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1'
+        run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Pack public dependencies and extract original failure blocks
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: python
+        run: |
+          import base64, hashlib, io, json, pathlib, re, tarfile, urllib.request
+          target = pathlib.Path('.review-transfer')
+          target.mkdir(exist_ok=True)
+          archive = io.BytesIO()
+          with tarfile.open(fileobj=archive, mode='w:gz') as output:
+              output.add('node_modules')
+          raw = archive.getvalue()
+          manifest = {'lock_sha256': hashlib.sha256(pathlib.Path('package-lock.json').read_bytes()).hexdigest(), 'archive_sha256': hashlib.sha256(raw).hexdigest(), 'archive_bytes': len(raw), 'parts': []}
+          for index, offset in enumerate(range(0, len(raw), 600000)):
+              name = 'node-tools-%03d.b64' % index
+              content = base64.b64encode(raw[offset:offset + 600000])
+              (target / name).write_bytes(content)
+              manifest['parts'].append({'name': name, 'sha256': hashlib.sha256(content).hexdigest(), 'bytes': len(content)})
+          (target / 'node-tools-manifest.json').write_text(json.dumps(manifest, indent=2) + '\n')
+          jobs = [108992934909,108992934939,108992935107,108992935152,108992935201,108992935310,108992935386,108992935447,108992935498,108992935607]
+          inventory = []
+          for job in jobs:
+              request = urllib.request.Request('https://api.github.com/repos/idanilovqa/AlbumHaven/actions/jobs/' + str(job) + '/logs')
+              request.add_unredirected_header('Authorization', 'Bearer ' + __import__('os').environ['GH_TOKEN'])
+              with urllib.request.urlopen(request, timeout=90) as response:
+                  text = response.read().decode('utf-8', errors='replace')
+              text = re.sub(r'\x1b\[[0-9;]*[A-Za-z]', '', text)
+              lines = [re.sub(r'^\d{4}-\d\d-\d\dT\S+\s?', '', line) for line in text.splitlines()]
+              failures = []
+              for index, line in enumerate(lines):
+                  if re.match(r'^\s*\d+\)\s+(?:\[|tests[\\/])', line):
+                      end = index + 1
+                      while end < min(len(lines), index + 100) and 'attachment #' not in lines[end]:
+                          end += 1
+                      failures.append({'line': index + 1, 'text': '\n'.join(lines[index:end]).strip()})
+                  elif re.match(r'^\s*not ok \d+\s*-', line):
+                      end = index + 1
+                      while end < min(len(lines), index + 90) and lines[end].strip() != '...':
+                          end += 1
+                      failures.append({'line': index + 1, 'text': '\n'.join(lines[index:end + 1]).strip()})
+              inventory.append({'job': job, 'source_lines': len(lines), 'failures': failures})
+          (target / 'original-failure-blocks.json').write_text(json.dumps(inventory, indent=2) + '\n')
+          print(json.dumps({'dependencies': manifest, 'jobs': [{'job': entry['job'], 'failure_blocks': len(entry['failures'])} for entry in inventory]}, indent=2))
+      - name: Save diagnostics only on the isolated helper branch
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF" = refs/heads/chatgpt/pr17-review-workspace-20260928
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -f .review-transfer/node-tools-* .review-transfer/original-failure-blocks.json
+          git commit -m 'chore(review): save locked tools and original failure blocks'
+          git push origin HEAD:refs/heads/chatgpt/pr17-review-workspace-20260928

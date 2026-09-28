@@ -104,7 +104,8 @@ function renderProblematicFiles({ preserveProblematicTree = false } = {}) {
     return;
   }
 
-  if (mobileIndex && !mobilePageState.pages.at(-1)?.utilityDetail) {
+  const mobilePage = mobileIndex ? mobilePageState.pages.at(-1) : null;
+  if (mobileIndex && (mobilePage?.tab !== 'problematic-files' || !mobilePage.utilityDetail)) {
     renderTree('');
     els.detail.innerHTML = '';
     return;

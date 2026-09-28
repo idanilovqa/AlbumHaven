@@ -1825,18 +1825,6 @@
   font-weight: 400;
 }
 #utility-modal .utility-detected-actions > .ui-button:disabled { opacity: .42; }
-#utility-modal .utility-exception-action {
-  color: color-mix(in srgb, var(--appearance-error, #df8f96) 70%, var(--appearance-ink, var(--text)));
-  background: color-mix(in srgb, var(--appearance-error, #df8f96) 12%, var(--appearance-control, var(--panel-2)));
-  border-color: color-mix(in srgb, var(--appearance-error, #df8f96) 48%, var(--appearance-line, var(--border)));
-}
-#utility-modal .utility-exception-action:hover:not(:disabled),
-#utility-modal .utility-exception-action:active:not(:disabled) {
-  background: color-mix(in srgb, var(--appearance-error, #df8f96) 22%, var(--appearance-control, var(--panel-2)));
-  border-color: var(--appearance-error, #df8f96);
-  outline-color: var(--appearance-error, #df8f96);
-}
-#utility-modal .utility-exception-action:focus-visible { outline-color: var(--appearance-error, #df8f96); }
 .utility-problem-suggestion { user-select: none; touch-action: pan-y; }
 #utility-modal .utility-detail-header { grid-template-columns: 88px minmax(0, 1fr) auto; }
 .utility-detail-summary { min-width: 0; overflow-wrap: anywhere; }

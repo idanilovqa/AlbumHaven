@@ -558,7 +558,7 @@ function buildUtilityLibrarySettingsDetail() {
       </section>
       <div class="confirm-modal-actions">
         <button class="button button-secondary" type="button" data-reload-library-settings="1" ${librarySettingsState.saveBusy ? 'disabled' : ''}>Refresh</button>
-        <button class="button" type="button" data-save-library-settings="1" ${librarySettingsReadOnlyClient() || librarySettingsState.saveBusy || librarySettingsState.allowedActions?.['library.settings.manage'] !== true ? 'disabled' : ''}>${librarySettingsState.saveBusy ? 'Saving...' : 'Save library settings'}</button>
+        <button class="button ui-button ui-button--primary ui-button--medium" type="button" data-save-library-settings="1" ${librarySettingsReadOnlyClient() || librarySettingsState.saveBusy || librarySettingsState.allowedActions?.['library.settings.manage'] !== true ? 'disabled' : ''}>${librarySettingsState.saveBusy ? 'Saving...' : 'Save library settings'}</button>
       </div>
     </div>
   `;

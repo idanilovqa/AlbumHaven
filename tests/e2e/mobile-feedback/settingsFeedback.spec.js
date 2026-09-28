@@ -61,6 +61,7 @@ test('Logs cards open Recent activity, export, and preserve Back and Forward', a
   await ui.filter.click();
   await expect(ui.form).toBeVisible();
   await ui.expectReadable(ui.formPanel);
+  await snapshot('108-logs-filter');
   await ui.filter.click();
   await expect(ui.form).not.toBeVisible();
   await ui.filter.click();
@@ -68,19 +69,23 @@ test('Logs cards open Recent activity, export, and preserve Back and Forward', a
   await expect(ui.form).not.toBeVisible();
 });
 
-test('Problematic Files uses generated defects and mobile cards with persistent detail navigation', async ({ page, app, snapshot }) => {
+for (const palette of ['black', 'paper', 'parchment-pine']) test(`Problematic Files uses ${palette} cards with persistent detail navigation`, async ({ page, app, snapshot }) => {
   const ui = new MobileSettingsFeedbackPage(page);
+  await ui.usePalette(palette);
   await ui.openSettings();
+  await ui.selectUtility('log-history');
+  await ui.recentActivity.click();
+  await expect(ui.detail).toBeVisible();
   await ui.selectUtility('problematic-files');
   await expect(ui.problemCards.first()).toBeVisible();
   await expect(ui.detail).not.toBeVisible();
-  await snapshot('105-problematic-index');
+  await snapshot(`105-problematic-index-${palette}`);
   await ui.problemCards.first().click();
   await expect(ui.detail).toBeVisible();
   await expect(ui.detail).toContainText(/Missing track number|Missing year/);
   await expect(ui.list).not.toBeVisible();
   expect(await ui.hasNoHorizontalOverflow()).toBe(true);
-  await snapshot('106-problematic-detail');
+  await snapshot(`106-problematic-detail-${palette}`);
   await ui.backButton.click();
   await expect(ui.problemCards.first()).toBeVisible();
   await ui.problemCards.first().click();

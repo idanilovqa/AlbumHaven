@@ -1248,6 +1248,9 @@ html .cover-lookup-drawer {
 :root {
   --appearance-content-ink: var(--appearance-ink);
   --appearance-content-muted: var(--appearance-muted);
+  --appearance-content-focus-outline: var(--appearance-focus-outline);
+  --appearance-content-interaction-outline: var(--appearance-interaction-outline);
+  --appearance-content-color-scheme: dark;
   --appearance-content-card: var(--appearance-card);
   --appearance-content-control: var(--appearance-control);
   --appearance-content-line: var(--appearance-line);
@@ -1257,6 +1260,9 @@ html .cover-lookup-drawer {
 :root :is(.is-mobile-page > .utility-modal-dialog, .is-mobile-page > .cover-lookup-modal-dialog, .is-mobile-page > .non-album-modal-dialog, .trigger-anchor-surface[data-trigger-anchor-context='content']) {
   --appearance-ink: var(--appearance-content-ink);
   --appearance-muted: var(--appearance-content-muted);
+  --appearance-focus-outline: var(--appearance-content-focus-outline);
+  --appearance-interaction-outline: var(--appearance-content-interaction-outline);
+  color-scheme: var(--appearance-content-color-scheme);
   --appearance-card: var(--appearance-content-card);
   --appearance-control: var(--appearance-content-control);
   --appearance-line: var(--appearance-content-line);
@@ -1266,6 +1272,8 @@ html .cover-lookup-drawer {
   --appearance-panel-background: var(--appearance-content-card);
   --text: var(--appearance-content-ink); --ink: var(--appearance-content-ink);
   --muted: var(--appearance-content-muted); --app-ink: var(--appearance-content-ink);
+  --app-muted: var(--appearance-content-muted);
+  --surface: var(--appearance-main-surface); --surface-2: var(--appearance-content-card);
   --panel: var(--appearance-content-card); --panel-2: var(--appearance-content-control);
   --border: var(--appearance-content-line); --line: var(--appearance-content-line);
   --trigger-anchor-background: var(--appearance-content-card);
@@ -1285,8 +1293,12 @@ html .cover-lookup-drawer {
 :root .is-mobile-page .search-field {
   --search-field-background: var(--appearance-card);
   --search-field-color: var(--appearance-ink);
-  --search-field-placeholder: var(--appearance-muted);
+  --search-field-muted: var(--appearance-muted);
   --search-field-border: var(--appearance-line);
 }
 :root .is-mobile-page .utility-tab { --trigger-anchor-background: var(--appearance-card); }
 :root .is-mobile-page > :is(.utility-modal-dialog, .cover-lookup-modal-dialog, .non-album-modal-dialog) { --appearance-panel-background: var(--appearance-main-surface); }
+
+:root[data-appearance-palette='parchment-pine'] { --appearance-content-muted: var(--appearance-content-ink); }
+
+:root[data-appearance-mode='light'], :root[data-appearance-palette='parchment-pine'] { --appearance-content-color-scheme: light; }

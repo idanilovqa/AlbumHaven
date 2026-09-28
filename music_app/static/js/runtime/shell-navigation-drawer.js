@@ -194,7 +194,7 @@ function openArtistsDrawer() {
   if (typeof activateTriggerSurface === 'function') activateTriggerSurface(rail, () => closeArtistsDrawer({ restoreFocus: false }));
   state.ui.artistsDrawerOpen = true;
   syncArtistsDrawerVisibility();
-  document.querySelector?.('#artist-tree-expanded [data-close-artists-drawer]')?.focus?.();
+  document.querySelector?.('#artist-tree-expanded [data-close-artists-drawer]')?.focus?.({ preventScroll: true });
   return true;
 }
 
@@ -204,7 +204,7 @@ function closeArtistsDrawer(options = {}) {
   if (typeof clearTriggerAnchor === 'function') clearTriggerAnchor(document.getElementById('shell-navigation-rail'));
   syncArtistsDrawerVisibility();
   if (wasOpen && options.restoreFocus !== false) {
-    (document.getElementById('mobile-library-button') || document.getElementById('artists-drawer-button'))?.focus?.();
+    (document.getElementById('mobile-library-button') || document.getElementById('artists-drawer-button'))?.focus?.({ preventScroll: true });
   }
   return wasOpen;
 }

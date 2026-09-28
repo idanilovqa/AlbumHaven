@@ -98,10 +98,11 @@ test('cover selection saves before closing, reopens with saved artwork, and back
   await expect(covers.localCoverCards).toHaveCount(2);
   await covers.inactiveLocalCoverCards.first().click();
   await expect(covers.saveRemoteButton).toBeEnabled();
+  const selectedPath = await covers.activeLocalCoverCard.getAttribute('data-select-local-cover');
   await expect(covers.activeLocalCoverCard).toHaveCSS('outline-width', '3px');
   const saveBox = await covers.saveRemoteButton.boundingBox(), findBox = await covers.findBetterButton.boundingBox();
   expect(saveBox.y).toBeCloseTo(findBox.y, 0);
-  expect(saveBox.x + saveBox.width).toBeLessThan(findBox.x);
+  expect(findBox.x + findBox.width).toBeLessThan(saveBox.x);
   expect(findBox.width).toBeLessThan(180);
   await snapshot('93-cover-selection-footer');
   const saved = page.waitForResponse(response => response.url().endsWith('/utilities/cover-lookup/local-select'));
@@ -114,7 +115,9 @@ test('cover selection saves before closing, reopens with saved artwork, and back
   await details.coverLookupButton.click();
   const reopened = await (await gallery).json();
   expect(reopened.local_covers.find(cover => cover.is_active).cover_revision).toBe(data.updated_album.cover_revision);
-  await expect(covers.activeLocalCoverCard).toBeVisible();
+  expect(reopened.selected_source_path).toBe(selectedPath);
+  await expect(covers.activeLocalCoverCard).toHaveAttribute('data-select-local-cover', selectedPath);
+  await expect(covers.localCoverCards).toHaveCount(2);
   await expect(covers.saveRemoteButton).toBeDisabled();
   await snapshot('94-cover-reopened');
   await phone.backButton.click();
@@ -124,6 +127,8 @@ test('cover selection saves before closing, reopens with saved artwork, and back
   const persisted = await (await afterReload).json();
   expect(persisted.local_covers.find(cover => cover.is_active).cover_revision).toBe(data.updated_album.cover_revision);
   expect(persisted.local_covers.map(cover => cover.cover_revision)).toEqual(reopened.local_covers.map(cover => cover.cover_revision));
+  expect(persisted.selected_source_path).toBe(selectedPath);
+  await expect(covers.activeLocalCoverCard).toHaveAttribute('data-select-local-cover', selectedPath);
   await covers.inactiveLocalCoverCards.first().click();
   await expect(covers.saveRemoteButton).toBeEnabled();
   await phone.backButton.click();

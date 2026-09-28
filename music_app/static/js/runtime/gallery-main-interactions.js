@@ -388,7 +388,7 @@ function openGalleryMainSurface(key, anchor, surface, align = 'right') {
   surface.classList?.add?.('is-open');
   surface.setAttribute?.('aria-hidden', 'false');
   if (surface.matches?.('.mobile-settings-drawer')) {
-    surface.style.top = `${Math.round(document.getElementById('shell-main-surface').getBoundingClientRect().top)}px`;
+    surface.style.top = `${Math.max(0, Math.round(document.querySelector('#app-shell .app-bar').getBoundingClientRect().bottom))}px`;
   } else if (surface.matches?.('.gallery-anchored-menu, .artist-info-overlay')) positionGalleryAnchoredSurface(surface, anchor, align);
   if (surface.matches?.('.artist-family-panel')) positionArtistFamilyPanelEnvelope(surface, anchor);
   if (surface.matches?.('.artist-info-overlay') && typeof syncMobileArtistInfoDialog === 'function') syncMobileArtistInfoDialog(surface, true);

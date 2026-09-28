@@ -23,6 +23,7 @@ function syncMobilePageShell() {
   main.classList.toggle('has-mobile-page', Boolean(active));
   header.hidden = !active;
   outlet.hidden = !active;
+  outlet.dataset.mobilePageKind = active?.kind || '';
   document.getElementById('mobile-back-button').hidden = !active;
   document.getElementById('mobile-library-button').hidden = Boolean(active);
   for (const kind of mobilePageState.originals.keys()) {
@@ -114,6 +115,7 @@ function presentMobilePage(descriptor) {
     syncMobilePageShell();
     return true;
   }
+  delete outlet.dataset.pageInteracted;
   if (!mobilePageState.originals.has(descriptor.kind)) {
     const placeholder = document.createComment(`Original ${descriptor.kind} surface`);
     element.before(placeholder);
@@ -448,7 +450,16 @@ function initMobileNavigation() {
     if (['loops', 'integrations', 'log-history', 'problematic-files'].includes(state.utility.activeTab) && mobilePageState.pages.some(page => page.kind === 'utilities')) renderUtilityModalContent();
     if (typeof syncMobileAlbumComposition === 'function') syncMobileAlbumComposition(getCurrentTrackModalAlbum());
   };
-  document.getElementById('mobile-page-outlet')?.addEventListener('scroll', scheduleMobileAlbumThumbnail, { passive: true });
+  const pageOutlet = document.getElementById('mobile-page-outlet');
+  pageOutlet?.addEventListener('scroll', scheduleMobileAlbumThumbnail, { passive: true });
+  const showPageScrollbar = event => {
+    if (!event.isTrusted || !usesMobilePageLayout() || mobilePageState.pages.at(-1)?.kind !== 'album') return;
+    if (event.type === 'keydown' && !['ArrowDown', 'ArrowUp', 'PageDown', 'PageUp', 'Home', 'End', ' '].includes(event.key)) return;
+    pageOutlet.dataset.pageInteracted = 'true';
+  };
+  for (const type of ['pointerdown', 'touchstart', 'wheel', 'keydown']) {
+    pageOutlet?.addEventListener(type, showPageScrollbar, { passive: true, capture: true });
+  }
   window.addEventListener('resize', scheduleMobileAlbumThumbnail, { passive: true });
   syncLayout();
   initMobileGalleryPinch();

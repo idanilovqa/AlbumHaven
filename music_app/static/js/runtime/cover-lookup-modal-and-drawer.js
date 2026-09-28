@@ -381,14 +381,22 @@ function applyCoverLookupCandidateSource(candidateSource) {
 function applyCoverLookupGalleryPayload(gallery) {
   if (!gallery || typeof gallery !== 'object') return;
   const incomingLocalCovers = Array.isArray(gallery.local_covers) ? gallery.local_covers : [];
+  const savedSource = String(gallery.selected_source_path || '');
+  const candidates = [...incomingLocalCovers, ...(Array.isArray(gallery.other_art) ? gallery.other_art : [])];
   const incomingActiveLocalCover = !gallery.remote_cover
-    ? incomingLocalCovers.find((cover) => Boolean(cover?.is_active) && cover?.path)
+    ? candidates.find(cover => savedSource && String(cover?.path || '') === savedSource)
+      || candidates.find(cover => Boolean(cover?.is_active) && cover?.path)
     : null;
   if (incomingActiveLocalCover) {
     state.coverLookup.modal.activeLocalSelectionPath = String(incomingActiveLocalCover.path);
   }
   state.coverLookup.modal.remoteCover = gallery.remote_cover && typeof gallery.remote_cover === 'object' ? gallery.remote_cover : null;
-  state.coverLookup.modal.localCovers = incomingLocalCovers;
+  // The canonical copy is not a second artwork choice when the server verified
+  // an identical source. Keep the real sources visible and the saved source selected.
+  state.coverLookup.modal.localCovers = incomingLocalCovers.filter(cover => !(
+    incomingActiveLocalCover && String(cover?.path || '') === String(gallery.active_cover_path || '')
+    && String(cover?.path || '') !== String(incomingActiveLocalCover.path)
+  ));
   state.coverLookup.modal.otherArt = Array.isArray(gallery.other_art) ? gallery.other_art : [];
   const task = gallery.task && typeof gallery.task === 'object' ? gallery.task : null;
   const candidateSnapshot = normalizeCoverLookupCandidateSnapshot(gallery.candidate_snapshot);

@@ -226,3 +226,10 @@
   }
   :root .in-page-tabs [role="tab"]:is(:hover, :active, :focus-visible) { background: transparent !important; }
 }
+
+/* Album Types uses the same seam position as Artist Family. The center is painted
+   with the panel color while the two outer segments retain the shared accent. */
+:root #gallery-album-types-menu.trigger-anchor-surface[data-trigger-anchor-edge="top"] { border-top-width: 0; }
+:root #gallery-album-types-menu.trigger-anchor-surface[data-trigger-anchor-edge="top"]::after {
+  top: -1px; height: 2px; --trigger-top-line-width: 2px; z-index: 2;
+}

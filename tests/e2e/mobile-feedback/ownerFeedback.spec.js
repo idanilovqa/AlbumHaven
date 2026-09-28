@@ -74,14 +74,15 @@ test('Home loading replaces the complete page and search expands beside the logo
   await expect(phone.searchInput).toBeFocused();
   const brand = await phone.brand.boundingBox(), search = await phone.searchControl.boundingBox();
   expect(search.x).toBeGreaterThanOrEqual(brand.x + brand.width);
-  await expect.poll(async () => { const box = await phone.searchControl.boundingBox(); return box.x + box.width; }).toBeCloseTo(page.viewportSize().width - 12, 0);
-  await expect(phone.settingsButton).not.toBeVisible();
+  await expect.poll(async () => { const box = await phone.searchControl.boundingBox(); return box.x + box.width; }).toBeCloseTo((await phone.settingsButton.boundingBox()).x - 8, 0);
+  await expect(phone.settingsButton).toBeVisible();
   await phone.galleryContextName.click();
   await expect(phone.searchInput).not.toBeVisible();
   await phone.search('Northlight');
   await phone.galleryContextName.click();
-  await expect(phone.searchInput).toBeVisible();
+  await expect(phone.searchInput).not.toBeVisible();
   await expect(phone.searchInput).toHaveValue('Northlight');
+  await expect(phone.searchButton).toHaveAttribute('data-has-query', 'true');
 });
 
 test('cover selection saves before closing, reopens with saved artwork, and backdrop closes full art', async ({ page, app, snapshot }) => {

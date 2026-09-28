@@ -23,3 +23,27 @@ Add exact-byte/source fallback unit coverage and strengthen the existing real co
 
 ## First browser pass follow-up
 The full first pass preserved all existing behavior: 970 JavaScript checks, the cover/mobile Python checks, the baseline seven browser scenarios and 51 extended browser scenarios passed. Three newly authored scenarios exposed two probe issues and a drawer sizing issue. The new touch helper now uses the existing suite's trusted touchStart/touchMove/touchEnd sequence rather than a synthesized scroll command that did not scroll on the runner. The title/scrollbar scenario now opens a Cards-mode album through its actual title control; the row-body route is intentionally Rows-only. Assertions, timeouts, retries and coverage are not relaxed. The Artist drawer now gives the bounded list its own scrolling area, keeping Back/Artists visible instead of allowing the whole rail to scroll its header away. Possible Matches receives an explicit inter-section gap; compact cover-footer errors remain visible for either supported alert markup.
+
+
+## Header/search follow-up — owner screenshot
+
+The owner supersedes centered scrolled artwork and nonempty search staying expanded.
+The pinned album thumbnail and first title line share a top edge; the metadata
+line fits within the thumbnail height. Long text keeps its full accessible content
+and uses a single-line ellipsis instead of extending the compact header.
+
+Expanded phone search reserves the existing rightmost Settings action. Clicking
+outside collapses it without clearing or changing the query/results; reopening
+returns to the same query. A small notification-colored dot and accessible
+description indicate a retained query while collapsed. Clear removes that state.
+Reload and width transitions must not reopen a collapsed populated search.
+Desktop search, album composition, playback, capabilities and the track table
+remain unchanged. This uses the existing task-scoped mockup waiver.
+
+Verification scope: focused search state tests, both empty and populated outside
+dismissal, clear/reopen, same-tap Settings activation, reload and responsive
+transitions, plus top/bottom header geometry and real screenshots on 390px and
+320px phones in dark/light themes. Only the superseded centering, right-edge
+search width, hidden Settings, and populated-outside-expansion assertions change;
+all unrelated acceptance cases and timeout/retry contracts remain intact.
+No checklist counter is present in this owning repair note.

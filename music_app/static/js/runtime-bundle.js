@@ -5550,6 +5550,7 @@ globalThis.document?.addEventListener?.('album-haven:surface-opening', event => 
 function updateSearchClearAction(input) {
   const clear = input?.closest?.('.search-field-control')?.querySelector?.('[data-search-clear]');
   if (clear) clear.hidden = !input.value || input.disabled || input.readOnly;
+  if (input?.id === 'search-input' && typeof syncMobileSearchQueryIndicator === 'function') syncMobileSearchQueryIndicator();
 }
 
 document.addEventListener('input', (event) => {
@@ -14026,6 +14027,7 @@ function renderView(options = {}) {
   const searchInput = document.getElementById('search-input');
   if (searchInput) {
     searchInput.value = String(state.ui?.searchDraftQuery ?? state.view.query ?? '');
+    if (typeof updateSearchClearAction === 'function') updateSearchClearAction(searchInput);
   }
   const searchForm = document.getElementById('search-form');
   const ensureHiddenInput = (name, values) => {
@@ -14721,7 +14723,10 @@ function openScanPage() {
   suspendScanPageGalleryCoverLoads();
   state.ui.forceScanPageVisible = true;
   const searchInput = document.getElementById('search-input');
-  if (searchInput) searchInput.value = '';
+  if (searchInput) {
+    searchInput.value = '';
+    if (typeof updateSearchClearAction === 'function') updateSearchClearAction(searchInput);
+  }
   renderSidebar();
   renderRelated();
   renderLibraryLoader(state.status, { scanPageVisible: true });
@@ -14791,7 +14796,10 @@ function closeScanPage() {
   state.ui.scanPageReturnContext = null;
   if (typeof unmountLibraryStatusBar === 'function') unmountLibraryStatusBar();
   const searchInput = document.getElementById('search-input');
-  if (searchInput) searchInput.value = state.ui.searchDraftQuery;
+  if (searchInput) {
+    searchInput.value = state.ui.searchDraftQuery;
+    if (typeof updateSearchClearAction === 'function') updateSearchClearAction(searchInput);
+  }
   if (
     returnContext.url
     && typeof window !== 'undefined'
@@ -39958,6 +39966,22 @@ function prepareMobileGallerySearch(onConfirmed, skipAppearanceGuard = false) {
   writeMobilePageHistory();
   return true;
 }
+// The badge is a projection of the existing input, never a second query store.
+function syncMobileSearchQueryIndicator() {
+  const button = document.getElementById('mobile-search-button');
+  if (!button) return;
+  const hasQuery = Boolean(String(document.getElementById('search-input')?.value || '').trim());
+  button.setAttribute('data-has-query', String(hasQuery));
+  if (hasQuery && usesMobilePageLayout()) button.setAttribute('aria-description', 'Search query present');
+  else button.removeAttribute('aria-description');
+}
+function handleMobileSearchOutsideClick(event) {
+  if (!usesMobilePageLayout() || !mobilePageState.searchOpen) return;
+  if (document.getElementById('search-form')?.contains(event.target)
+    || document.getElementById('recent-search-popover')?.contains(event.target)) return;
+  // Capture dismissal without cancelling the same tap's Settings/page action.
+  setMobileSearchOpen(false);
+}
 function setMobileSearchOpen(open) {
   mobilePageState.searchSuggestionsReady = false;
   if (typeof closeRecentSearchPopover === 'function') closeRecentSearchPopover();
@@ -39972,7 +39996,12 @@ function setMobileSearchOpen(open) {
   form?.closest('.app-bar')?.classList.toggle('is-search-open', Boolean(open));
   document.getElementById('mobile-search-button')?.setAttribute('aria-expanded', String(Boolean(open)));
   const input = document.getElementById('search-input');
-  if (input && usesMobilePageLayout()) { input.inert = !open; input.setAttribute('aria-hidden', String(!open)); }
+  if (input && usesMobilePageLayout()) {
+    if (!open && document.activeElement === input) input.blur();
+    input.inert = !open;
+    input.setAttribute('aria-hidden', String(!open));
+  }
+  syncMobileSearchQueryIndicator();
   if (open) input?.focus();
 }
 function handleMobileSearchSubmit() {
@@ -40025,7 +40054,8 @@ function initMobileNavigation() {
         if (input) { input.inert = false; input.removeAttribute('aria-hidden'); }
         submit?.removeAttribute('aria-expanded');
       }
-      if (mobile) setMobileSearchOpen(mobilePageState.searchOpen || Boolean(document.getElementById('search-input')?.value?.trim()));
+      if (mobile) setMobileSearchOpen(mobilePageState.searchOpen);
+      else syncMobileSearchQueryIndicator();
     }
     promoteVisibleMobileDialogs();
     syncMobileGalleryControls();
@@ -40067,9 +40097,8 @@ function initMobileNavigation() {
     updatePlayerUi();
     if (typeof renderMobileHome === 'function') renderMobileHome();
   });
+  document.addEventListener('click', handleMobileSearchOutsideClick, true);
   document.addEventListener('click', (event) => {
-    if (usesMobilePageLayout() && mobilePageState.searchOpen && !form?.contains(event.target)
-      && !String(document.getElementById('search-input')?.value || '').trim()) setMobileSearchOpen(false);
     if (handleMobileSettingsClick(event)) return;
     if (event.target.closest?.('[data-mobile-back]')) navigateMobileBack();
 
@@ -40090,8 +40119,7 @@ function initMobileNavigation() {
       else if (!event.shiftKey && (document.activeElement === last || !dialog.contains(document.activeElement))) { event.preventDefault(); first?.focus(); }
       return;
     }
-    if (event.key === 'Escape' && mobilePageState.searchOpen && form?.contains(event.target)
-      && !String(document.getElementById('search-input')?.value || '').trim()) {
+    if (event.key === 'Escape' && usesMobilePageLayout() && mobilePageState.searchOpen && form?.contains(event.target)) {
       event.preventDefault(); setMobileSearchOpen(false); document.getElementById('mobile-search-button')?.focus(); return;
     }
     const settingsOpen = galleryMainSurfaceController?.current?.()?.key === 'mobile-settings';

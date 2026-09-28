@@ -391,6 +391,7 @@ function renderView(options = {}) {
   const searchInput = document.getElementById('search-input');
   if (searchInput) {
     searchInput.value = String(state.ui?.searchDraftQuery ?? state.view.query ?? '');
+    if (typeof updateSearchClearAction === 'function') updateSearchClearAction(searchInput);
   }
   const searchForm = document.getElementById('search-form');
   const ensureHiddenInput = (name, values) => {
@@ -1086,7 +1087,10 @@ function openScanPage() {
   suspendScanPageGalleryCoverLoads();
   state.ui.forceScanPageVisible = true;
   const searchInput = document.getElementById('search-input');
-  if (searchInput) searchInput.value = '';
+  if (searchInput) {
+    searchInput.value = '';
+    if (typeof updateSearchClearAction === 'function') updateSearchClearAction(searchInput);
+  }
   renderSidebar();
   renderRelated();
   renderLibraryLoader(state.status, { scanPageVisible: true });
@@ -1156,7 +1160,10 @@ function closeScanPage() {
   state.ui.scanPageReturnContext = null;
   if (typeof unmountLibraryStatusBar === 'function') unmountLibraryStatusBar();
   const searchInput = document.getElementById('search-input');
-  if (searchInput) searchInput.value = state.ui.searchDraftQuery;
+  if (searchInput) {
+    searchInput.value = state.ui.searchDraftQuery;
+    if (typeof updateSearchClearAction === 'function') updateSearchClearAction(searchInput);
+  }
   if (
     returnContext.url
     && typeof window !== 'undefined'

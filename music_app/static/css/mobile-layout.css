@@ -31,7 +31,7 @@
   border: 0; border-radius: 0; box-shadow: none; margin: 0; overflow: visible; background: transparent;
 }
 .is-mobile-page :is([data-close-non-album-modal], [data-close-track-modal], #track-modal-close, #utility-modal-close, [data-close-cover-lookup-modal]) { display: none !important; }
-.mobile-home { overflow: auto; min-height: 0; flex: 1; padding: 4px 2px 20px; }
+.mobile-home { overflow: auto; min-height: 0; flex: 1; padding: 0 2px 20px; }
 .mobile-home-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 14px; }
 .mobile-home-grid[data-view="list"] { grid-template-columns: 1fr; }
 .shell-main-surface.has-mobile-home > #albums-scroll { display: none !important; }
@@ -216,7 +216,6 @@ html[data-client-profile="mobile"] :is([data-open-problematic-album-folder], [da
 }
 @media (max-width: 350px) {
   .gallery-bar { flex-wrap: wrap; }
-  [data-gallery-bar-instance="gallery"] > .gallery-bar__context { flex-basis: 100%; }
   .gallery-bar__actions { margin-left: auto; }
   .shell-layout .toolbar-right { gap: 1px; }
   .mobile-settings-section-button { max-width: 132px; }
@@ -242,11 +241,10 @@ html[data-client-profile="mobile"] :is([data-open-problematic-album-folder], [da
 .in-page-tabs > [role="tab"]:focus-visible { outline: 2px solid var(--appearance-selected-accent, currentColor); outline-offset: 3px; }
 .mobile-album-identity, .gallery-bar__home-tabs { display: none; }
 @media (max-width: 900px) {
-  .mobile-home > [data-gallery-bar-instance="gallery"] { flex-wrap: wrap; }
-  .mobile-home > [data-gallery-bar-instance="gallery"] > .gallery-bar__context { flex: 1 1 calc(100% - 48px); }
-  .gallery-bar__home-tabs:not([hidden]) { display: block; flex: 0 0 100%; }
+  .gallery-bar__home-tabs:not([hidden]) { display: block; grid-column: 1 / -1; }
   .mobile-home > [data-gallery-bar-instance="gallery"] > .gallery-bar__actions, .gallery-bar__actions[hidden] { display: none !important; }
-  .mobile-home .in-page-tabs { justify-content: space-between; gap: 12px; }
+  .mobile-home .in-page-tabs { justify-content: flex-start; gap: 24px; }
+  .mobile-home #mobile-home-tabs { justify-content: space-between; gap: 12px; }
   .mobile-home-empty { padding: 34px 12px; font-size: 14px; color: var(--muted, currentColor); }
   .mobile-home [hidden] { display: none !important; }
   .mobile-album-identity:not([hidden]) { display: block; min-width: 0; }
@@ -365,7 +363,6 @@ html[data-client-profile="mobile"] :is([data-open-problematic-album-folder], [da
   .gallery-bar__actions, .gallery-bar > .action-button { align-self: flex-start; }
   .gallery-bar__actions { align-items: center; }
   .gallery-bar__summary { margin-block: 3px 0; }
-  .gallery-bar__context:has(#mobile-library-button) > .gallery-bar__summary { padding-left: 46px; }
   .page-gallery-bar .gallery-bar__actions:empty { display: none; }
   .page-gallery-bar :is(.action-button--bare, [data-settings-nav-toggle]),
   #mobile-back-button { background: transparent !important; border-color: transparent !important; box-shadow: none !important; color: inherit; }
@@ -531,9 +528,28 @@ html[data-client-profile="mobile"] :is([data-open-problematic-album-folder], [da
 /* Main-area loading and Home each occupy one complete page. */
 .shell-main-surface.has-library-loader:not(.has-mobile-page) > :not(#library-loader) { display: none !important; }
 @media (max-width: 900px) {
-  [data-gallery-bar-instance="gallery"] { flex-wrap: wrap; }
-  [data-gallery-bar-instance="gallery"] > .gallery-bar__context { flex: 1 0 100%; }
-  [data-gallery-bar-instance="gallery"] > .gallery-bar__actions { margin-left: auto; }
+  /* The title gets the full first row. Count and controls share the second,
+     rather than pushing the controls below both title and count. */
+  .shell-layout .shell-main-surface:not(.has-mobile-page) { padding-top: 8px; }
+  [data-gallery-bar-instance="gallery"] {
+    display: grid; grid-template-columns: minmax(0, 1fr) auto;
+    align-items: center; gap: 2px 8px; padding-bottom: 6px;
+  }
+  [data-gallery-bar-instance="gallery"] > .gallery-bar__context { display: contents; }
+  [data-gallery-bar-instance="gallery"] .gallery-bar__title { grid-column: 1 / -1; }
+  [data-gallery-bar-instance="gallery"] .gallery-bar__summary {
+    grid-column: 1; grid-row: 2; align-self: center; min-width: 0; margin: 0;
+  }
+  [data-gallery-bar-instance="gallery"] .gallery-bar__summary:empty { display: none; }
+  [data-gallery-bar-instance="gallery"] > .gallery-bar__actions {
+    grid-column: 2; grid-row: 2; justify-self: end; align-self: center; margin: 0;
+  }
+  :root #mobile-library-button {
+    border: 0 !important; background: transparent !important; box-shadow: none !important;
+    color: inherit;
+  }
+  :root #mobile-library-button:not(:focus-visible) { outline: none !important; }
+  :root #mobile-library-button:focus-visible { outline: 1px solid currentColor !important; outline-offset: -3px; }
   :root .gallery-bar .gallery-action-button:focus {
     outline: 1px solid var(--appearance-ink, var(--text)); outline-offset: -1px;
   }

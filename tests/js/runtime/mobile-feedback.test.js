@@ -220,3 +220,129 @@ test('reloaded album remains the history parent of a subsequently opened child',
   assert.equal(history.state.mobilePages[0].albumKey, 'one');
   assert.equal(context.resolveMobileParentPosition({ kind: 'cover-lookup', albumKey: 'one' }, null, history.state), 4);
 });
+
+
+test('leaving the last mobile page reconciles its retained gallery parent without resetting scroll', () => {
+  const calls = [];
+  const context = load('mobile-navigation.js', {
+    window: { history: { state: { mobilePages: [] } } },
+    handleGalleryBootstrapPopState: options => calls.push(options),
+  });
+  context.cleanupMobilePage = () => null;
+  context.syncMobilePageShell = () => {};
+  vm.runInContext("mobilePageState.pages.push({kind:'album',albumKey:'one'});", context);
+  assert.equal(context.handleMobilePagePopState(), true);
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].preserveScroll, true);
+  assert.equal(vm.runInContext('mobilePageState.pages.length', context), 0);
+  // An ordinary gallery traversal remains owned by the normal popstate handler.
+  assert.equal(context.handleMobilePagePopState(), false);
+  assert.equal(calls.length, 1);
+});
+
+test('mobile child-to-parent traversal does not refresh the gallery behind the parent page', () => {
+  let refreshes = 0;
+  const context = load('mobile-navigation.js', {
+    window: { history: { state: { mobilePages: [{kind:'album',albumKey:'one'}] } } },
+    handleGalleryBootstrapPopState: () => { refreshes += 1; },
+  });
+  context.cleanupMobilePage = () => null;
+  context.syncMobilePageShell = () => {};
+  vm.runInContext("mobilePageState.pages.push({kind:'album',albumKey:'one'}, {kind:'cover-lookup',albumKey:'one'});", context);
+  assert.equal(context.handleMobilePagePopState(), true);
+  assert.equal(refreshes, 0);
+  assert.equal(vm.runInContext('mobilePageState.pages.length', context), 1);
+});
+
+test('shared gallery popstate forwards retained-scroll options to the existing request owner', () => {
+  const calls = [], options = { preserveScroll: true };
+  const context = load('bootstrap-gallery-event-handlers.js', {
+    syncGalleryMainStateFromLocation: () => calls.push('location'),
+    getBrowserLocationHref: () => 'https://example.test/?q=After+the+Rain',
+    fetchAndRender: (...args) => calls.push(args),
+  });
+  context.handleGalleryBootstrapPopState(options);
+  assert.equal(calls[0], 'location');
+  assert.equal(calls[1][0], 'https://example.test/?q=After+the+Rain');
+  assert.equal(calls[1][1], false);
+  assert.equal(calls[1][2], options);
+});
+
+test('direct or reloaded mobile Back restores the gallery when there is no traversable parent entry', () => {
+  const calls = [];
+  const context = load('mobile-navigation.js', {
+    window: { history: { state: { albumHavenNavigationPosition: 4 } } },
+    handleGalleryBootstrapPopState: options => calls.push(['parent', options.preserveScroll]),
+  });
+  context.cleanupMobilePage = () => null;
+  context.writeMobilePageHistory = mode => calls.push(['history', mode]);
+  context.syncMobilePageShell = () => calls.push(['shell']);
+  vm.runInContext("mobilePageState.pages.push({kind:'album',albumKey:'one',parentPosition:4});", context);
+  assert.equal(context.dismissMobilePage('album'), true);
+  assert.deepEqual(calls, [['history', 'replace'], ['shell'], ['parent', true]]);
+  assert.equal(vm.runInContext('mobilePageState.pages.length', context), 0);
+});
+
+test('fallback Back to another mobile page leaves its background gallery alone', () => {
+  let refreshes = 0;
+  const context = load('mobile-navigation.js', {
+    window: { history: { state: {} } },
+    handleGalleryBootstrapPopState: () => { refreshes += 1; },
+  });
+  context.cleanupMobilePage = () => null;
+  context.writeMobilePageHistory = () => {};
+  context.syncMobilePageShell = () => {};
+  vm.runInContext("mobilePageState.pages.push({kind:'album',albumKey:'one'}, {kind:'cover-lookup',albumKey:'one'});", context);
+  assert.equal(context.dismissMobilePage('cover-lookup'), true);
+  assert.equal(refreshes, 0);
+  assert.equal(vm.runInContext('mobilePageState.pages.length', context), 1);
+});
+
+
+test('mobile parent scroll position is captured once and survives reload and responsive promotion', () => {
+  const context = load('mobile-navigation.js');
+  const descriptor = {kind:'album', albumKey:'one'};
+  const initial = context.resolveMobileParentScrollPosition(descriptor, null, {}, {scrollTop:180, scrollLeft:0});
+  assert.equal(initial.scrollTop, 180);
+  const previous = {...descriptor, parentScrollPosition:initial};
+  const moved = {scrollTop:1400, scrollLeft:0};
+  assert.equal(context.resolveMobileParentScrollPosition(descriptor, previous, {}, moved).scrollTop, 180);
+  assert.equal(context.resolveMobileParentScrollPosition(descriptor, null, {mobilePages:[previous]}, moved).scrollTop, 180);
+  assert.equal(context.resolveMobileParentScrollPosition(descriptor, null, {}, null), null);
+  assert.equal(context.resolveMobileParentScrollPosition(descriptor, null, {}, {scrollTop:NaN, scrollLeft:0}), null);
+});
+
+test('mobile gallery return restores saved coordinates before refreshing through the existing request owner', () => {
+  const calls = [];
+  const position = {scrollTop:0, scrollLeft:0};
+  const context = load('mobile-navigation.js', {
+    virtualGrid: {restoreOwnedAbsoluteScrollPosition: value => { calls.push(['position',value]); return true; }, render: force => calls.push(['render',force])},
+    handleGalleryBootstrapPopState: options => calls.push(['request',options]),
+  });
+  context.restoreMobileGalleryParent({parentScrollPosition:position});
+  assert.equal(calls[0][1], position);
+  assert.deepEqual(calls[1], ['render',true]);
+  assert.equal(calls[2][1].preserveScroll,true);
+  assert.equal(calls[2][1].preserveAbsoluteScroll,true);
+  assert.equal(calls[2][1].absoluteScrollPosition,position);
+});
+
+test('both history Back and direct Back restore the root page viewport, not a hidden gallery position', () => {
+  for (const traversal of [false,true]) {
+    const calls = [];
+    const position = {scrollTop:64,scrollLeft:0};
+    const context = load('mobile-navigation.js', {
+      window:{history:{state:{mobilePages:[]}}},
+      restorePosition:position,
+    });
+    context.cleanupMobilePage = () => null;
+    context.syncMobilePageShell = () => {};
+    context.writeMobilePageHistory = () => {};
+    context.restoreMobileGalleryParent = page => calls.push(page.parentScrollPosition);
+    vm.runInContext("mobilePageState.pages.push({kind:'album',albumKey:'one',parentScrollPosition:restorePosition});",context);
+    if(traversal) context.handleMobilePagePopState();
+    else context.dismissMobilePage('album');
+    assert.equal(calls.length,1);
+    assert.equal(calls[0],position);
+  }
+});

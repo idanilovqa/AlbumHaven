@@ -1,0 +1,49 @@
+name: PR17 Failure Evidence
+on:
+  push:
+    branches: [chatgpt/pr17-review-workspace-20260928]
+    paths: [.github/workflows/pr17-failure-evidence.yml]
+permissions:
+  actions: read
+jobs:
+  evidence:
+    if: github.repository == 'idanilovqa/AlbumHaven'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    strategy:
+      fail-fast: false
+      matrix:
+        job: [108992934909, 108992934939, 108992935107, 108992935152, 108992935201, 108992935310, 108992935386, 108992935447, 108992935498, 108992935607]
+    steps:
+      - name: Original masked failure excerpts
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVIDENCE_JOB: ${{ matrix.job }}
+        shell: python
+        run: |
+          import os, re, urllib.request
+          job = os.environ['EVIDENCE_JOB']
+          request = urllib.request.Request('https://api.github.com/repos/idanilovqa/AlbumHaven/actions/jobs/' + job + '/logs', headers={'Accept': 'application/vnd.github+json'})
+          request.add_unredirected_header('Authorization', 'Bearer ' + os.environ['GH_TOKEN'])
+          with urllib.request.urlopen(request, timeout=90) as response:
+              raw = response.read().decode('utf-8', errors='replace')
+          raw = re.sub(r'\x1b\[[0-9;]*[A-Za-z]', '', raw)
+          lines = [re.sub(r'^\d{4}-\d\d-\d\dT\S+\s?', '', line) for line in raw.splitlines()]
+          indices = set()
+          for index, line in enumerate(lines):
+              if re.match(r'^\s*not ok \d+\s*-', line):
+                  stop = index + 1
+                  while stop < min(len(lines), index + 100) and lines[stop].strip() != '...':
+                      stop += 1
+                  indices.update(range(max(0, index - 1), min(len(lines), stop + 1)))
+              elif re.match(r'^\s*\d+\)\s+(?:\[|tests[\\/])', line):
+                  indices.update(range(index, min(len(lines), index + 45)))
+              elif re.search(r'(?:^|\s)(?:Error:|Traceback \(most recent call last\):|[A-Za-z]+Error:|[A-Za-z]+Exception:)|\b\d+ (?:failed|passed)\b|^# (?:tests|pass|fail|skipped|duration_ms) ', line):
+                  indices.update(range(max(0, index - 2), min(len(lines), index + 12)))
+          print('ORIGINAL JOB ' + job + '; full log lines=' + str(len(lines)) + '; selected lines=' + str(len(indices)))
+          previous = -2
+          for index in sorted(indices):
+              if index != previous + 1:
+                  print('...')
+              print(str(index + 1) + ': ' + lines[index])
+              previous = index

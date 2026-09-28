@@ -29,7 +29,7 @@ def test_repair_and_old_rules_grants_both_grant_all_maintenance_actions():
                 client_surface_class='private_web')
             assert PolicyEvaluator().evaluate(context).decision.allowed, (key, action)
     assert len(CAPABILITY_LABELS) == 10
-    assert CAPABILITY_LABELS['capability.repair'] == 'Repair / Rules / Logs'
+    assert CAPABILITY_LABELS['capability.repair'] == 'Repair files, rules and logs'
     assert 'capability.rules' not in CAPABILITY_LABELS
 
 
@@ -104,7 +104,9 @@ class Connection:
                 target_is_bootstrap_owner=False, current_capability_keys=list(self.keys), access_assignment=self.assignment)] if self.authorized else [])
         if 'from app.account_sessions' in sql: return Result([self.session])
         if sql.startswith('update app.capabilities'): self.keys = []
-        if sql.startswith('insert into app.capabilities'): self.keys.append(params[1])
+        if sql.startswith('insert into app.capabilities'):
+            assert 'from unnest(%s::text[])' in sql
+            self.keys.extend(params[3])
         if sql.startswith('update app.accounts') and 'library_access_assignments_v1' in sql:
             self.assignment = json.loads(params[1])
         return Result()
@@ -127,6 +129,7 @@ def test_active_admin_can_save_repeatedly_after_days_without_password_prompt():
         assert saved['access_revision'] != revision
         revision = saved['access_revision']
     assert connection.events == ['begin', 'commit', 'begin', 'commit']
+    assert sum(sql.startswith('insert into app.capabilities') for sql, _ in connection.operations) == 2
 
 
 @pytest.mark.parametrize('changes', [

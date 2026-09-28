@@ -52,10 +52,25 @@ CAPABILITY_ACTIONS = MappingProxyType({
 CAPABILITY_KEYS = frozenset(f"capability.{key}" for key in CAPABILITY_ACTIONS)
 # Stored pre-merge Rules grants still work; new assignments use one canonical key.
 CAPABILITY_ALIASES = MappingProxyType({"capability.rules": "capability.repair"})
+# Complete prerequisites, shared by assignment expansion and durable-grant lookup.
+CAPABILITY_PREREQUISITES = MappingProxyType({
+    key: frozenset({"capability.view", "capability.play"} if key in {
+        "capability.edit", "capability.delete",
+    } else {"capability.view"})
+    for key in CAPABILITY_KEYS - {"capability.view", "capability.admin"}
+})
 
 
 def normalize_capability_keys(keys: Iterable[str]) -> tuple[str, ...]:
     return tuple(sorted({CAPABILITY_ALIASES.get(key, key) for key in keys}))
+
+
+def effective_capability_keys(keys: Iterable[str]) -> tuple[str, ...]:
+    """Expand coarse prerequisites without changing recorded explicit choices."""
+    explicit = normalize_capability_keys(keys)
+    return tuple(sorted(set(explicit).union(
+        *(CAPABILITY_PREREQUISITES.get(key, ()) for key in explicit)
+    )))
 
 # Owner includes every existing library feature, but account administration is
 # separately assignable. These finite extras await a more granular user-facing
@@ -107,11 +122,12 @@ def capability_keys_for_roles(roles: Iterable[str]) -> tuple[str, ...]:
         raise ValueError("Roles must be a collection of preset keys.") from None
     if not requested or any(not isinstance(role, str) or role not in ROLE_PRESETS for role in requested):
         raise ValueError("Unknown or empty role preset selection.")
-    return tuple(sorted(set().union(*(ROLE_PRESETS[role] for role in requested))))
+    return effective_capability_keys(set().union(*(ROLE_PRESETS[role] for role in requested)))
 
 
 def grant_keys_for_action(action: str) -> frozenset[str]:
     """Alternative durable grants for an action; scope is still checked separately."""
+    action = CAPABILITY_ALIASES.get(action, action)
     keys = {action, *ACTION_GRANT_ALIASES.get(action, ())}
     keys.update(
         f"capability.{name}"
@@ -122,8 +138,8 @@ def grant_keys_for_action(action: str) -> frozenset[str]:
         keys.add("library.browse.read")
     if action == "library.tasks.read":
         keys.update({"capability.edit", "capability.repair", "capability.move"})
-    if action in CAPABILITY_ALIASES:
-        keys.add(CAPABILITY_ALIASES[action])
+    keys.update(key for key, prerequisites in CAPABILITY_PREREQUISITES.items()
+                if prerequisites & keys)
     keys.update(old for old, canonical in CAPABILITY_ALIASES.items() if canonical in keys)
     return frozenset(keys)
 

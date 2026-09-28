@@ -54,25 +54,14 @@
         {% set is_owner = member and member.is_bootstrap_owner %}
         {% if is_owner %}
         {{ on_page_alert('The protected owner has full access. These inherited permissions cannot be changed individually.', title='Owner · Full access', class_name='role-note') }}
+        {% for group_name, capabilities in capability_groups %}
+        {% for capability_key, label in capabilities %}
+        <input type="hidden" name="capability_keys" value="{{ capability_key }}">
+        {% endfor %}
+        {% endfor %}
         {% else %}
         {% include "partials/admin-capability-assignment.html" %}
         {% endif %}
-        {% set selected = access_editor.capability_keys if access_editor is defined else (member.capability_keys if member else listener_defaults) %}
-
-        <fieldset class="permission-fieldset">
-          <legend>{{ "Individual" if member else "Explicit" }} permissions</legend>
-          <div class="permission-groups">
-            {% for group_name, capabilities in capability_groups %}
-            <section class="permission-group">
-              <h2>{{ group_name }}</h2>
-              {% for capability_key, label in capabilities %}
-              {{ ui_switch(label, 'capability_keys', capability_key, checked=is_owner or capability_key in access_editor.inherited_keys or capability_key in selected, disabled=is_owner or capability_key in access_editor.inherited_keys, attributes={'data-explicit-grant': 'true' if capability_key in selected else 'false', 'title': 'Included by a selected role' if capability_key in access_editor.inherited_keys else none}) }}
-              {% if is_owner %}<input type="hidden" name="capability_keys" value="{{ capability_key }}">{% endif %}
-              {% endfor %}
-            </section>
-            {% endfor %}
-          </div>
-        </fieldset>
         {% endif %}
 
         {% if member %}

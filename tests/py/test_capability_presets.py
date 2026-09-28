@@ -1,5 +1,6 @@
 """Additive role/device policy coverage; existing functional journeys are unchanged."""
 
+from dataclasses import replace
 from types import SimpleNamespace
 
 import pytest
@@ -142,3 +143,42 @@ def test_native_context_is_server_owned_and_can_be_narrowed():
     assert client_surface_from_request(request) == "desktop"
     request.headers["x-album-haven-client-surface"] = "tv"
     assert client_surface_from_request(request) == "tv"
+
+
+@pytest.mark.parametrize("key", sorted(CAPABILITY_KEYS - {"capability.admin"}) + ["capability.rules"])
+def test_persisted_coarse_grants_imply_view_only_in_their_library(key):
+    # No assignment expansion: these are grants persisted before prerequisites existed.
+    actor = replace(actor_for("viewer"), capability_grants=(CapabilityGrant(key, "library", 23),))
+    for action in ("capability.view", "app.shell.read", "library.browse.read", "library.artwork.read"):
+        assert allowed(actor, action), (key, action)
+        assert not allowed(actor, action, library_id=24), (key, action)
+    assert allowed(actor, "library.media.read") is (key in {
+        "capability.play", "capability.edit", "capability.delete",
+    })
+
+
+def test_admin_coarse_grant_alone_does_not_imply_view_or_play():
+    actor = replace(actor_for("viewer"), capability_grants=(CapabilityGrant("capability.admin", "library", 23),))
+    assert allowed(actor, "accounts.manage")
+    for action in ("capability.view", "app.shell.read", "library.browse.read", "library.media.read"):
+        assert not allowed(actor, action)
+
+
+@pytest.mark.parametrize("key", ["library.files.edit_tags", "library.inventory.manage", "library.rules.manage"])
+def test_legacy_fine_grained_mutation_grants_do_not_inherit_coarse_prerequisites(key):
+    actor = replace(actor_for("viewer"), capability_grants=(CapabilityGrant(key, "library", 23),))
+    assert allowed(actor, key, "desktop")
+    assert not allowed(actor, "library.browse.read")
+    assert not allowed(actor, "library.media.read")
+
+
+@pytest.mark.parametrize("surface", ["private_web", "cloud_web", "desktop", "mobile", "tv"])
+@pytest.mark.parametrize("administrator", [False, True])
+def test_edit_prerequisites_do_not_bypass_client_or_admin_ceilings(surface, administrator):
+    keys = ["capability.edit"] + (["capability.admin"] if administrator else [])
+    actor = replace(actor_for("viewer"), capability_grants=tuple(CapabilityGrant(key, "library", 23) for key in keys))
+    assert allowed(actor, "library.browse.read", surface)
+    assert allowed(actor, "library.media.read", surface)
+    assert allowed(actor, "library.files.edit_tags", surface) is (
+        surface == "desktop" or (administrator and surface in {"private_web", "cloud_web"})
+    )

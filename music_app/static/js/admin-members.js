@@ -9,18 +9,34 @@
     const direct = new Set(inputs.filter((input) => input.dataset.explicitGrant === 'true'
       || input.dataset.explicitGrant === undefined && input.checked).map((input) => input.value));
     editor.querySelectorAll('input[type="hidden"][name="additional_capability_keys"]').forEach((input) => direct.add(input.value));
+    const prerequisites = JSON.parse(editor.dataset?.prerequisites || '{}');
+    const labels = new Map(inputs.map((input) => [input.value, input.dataset.capabilityLabel || input.value]));
     const summary = editor.querySelector('[data-role-summary]');
     const rolesOnly = editor.querySelector('[data-roles-only]');
+    const retained = editor.querySelector('[data-retained-grants]');
     let newUserDefaults = form.dataset.mode === 'create';
     const selectedRoles = () => roleInputs.filter((input) => input.checked);
     const sync = () => {
       const selected = selectedRoles();
       const inherited = new Set(selected.flatMap((input) => JSON.parse(input.dataset.roleGrants)));
-      for (const input of inputs) {
-        input.checked = direct.has(input.value) || inherited.has(input.value);
-        input.disabled = inherited.has(input.value);
-        input.title = inherited.has(input.value) ? 'Included by a selected role' : '';
+      const requiredBy = new Map();
+      for (const key of new Set([...direct, ...inherited])) {
+        for (const required of prerequisites[key] || []) {
+          if (!requiredBy.has(required)) requiredBy.set(required, []);
+          requiredBy.get(required).push(labels.get(key) || key);
+        }
       }
+      for (const input of inputs) {
+        const reasons = [];
+        if (inherited.has(input.value)) reasons.push('Included by a selected role');
+        if (requiredBy.has(input.value)) reasons.push(`Required by ${requiredBy.get(input.value).join(', ')}`);
+        input.checked = direct.has(input.value) || reasons.length > 0;
+        input.disabled = reasons.length > 0;
+        input.title = reasons.join('. ');
+        const description = input.closest?.('.gallery-switch')?.querySelector('small');
+        if (description) description.textContent = input.title;
+      }
+      if (retained) retained.hidden = ![...direct].some((key) => !labels.has(key));
       if (rolesOnly) rolesOnly.disabled = selected.length === 0;
       if (summary) summary.textContent = selected.length
         ? `Assigned roles: ${selected.map((input) => input.dataset.roleLabel).join(' + ')}. ${direct.size} explicit grants.`
@@ -294,6 +310,21 @@
   const status = form.parentElement?.querySelector('[data-admin-form-status]');
   const submit = form.querySelector('button[type="submit"]');
   let completedDestination = null;
+  let busy = false;
+  let disabledBeforeRequest = [];
+  const setBusy = (value) => {
+    busy = value;
+    if (value) {
+      disabledBeforeRequest = [...form.querySelectorAll('input, button, select, textarea')]
+        .map((control) => [control, control.disabled]);
+      for (const [control] of disabledBeforeRequest) control.disabled = true;
+      form.setAttribute?.('aria-busy', 'true');
+    } else if (active) {
+      for (const [control, disabled] of disabledBeforeRequest) control.disabled = disabled;
+      disabledBeforeRequest = [];
+      form.setAttribute?.('aria-busy', 'false');
+    }
+  };
 
   const showError = (message) => {
     if (!error) return;
@@ -308,6 +339,7 @@
   };
 
   const navigateAfterMutation = async (destination, button) => {
+    if (!active) return;
     if (button) button.disabled = true;
     try {
       if (await navigate(destination) !== false) return;
@@ -333,6 +365,7 @@
       },
       body: JSON.stringify(payload),
     });
+    if (!active) throw new Error('Account editor closed.');
     if (response.status === 401) {
       window.location.assign('/login');
       throw new Error('Session expired. Sign in again.');
@@ -348,7 +381,7 @@
 
   form.addEventListener('submit', async (event) => {
     event.preventDefault();
-    if (submit?.disabled) return;
+    if (!active || busy || submit?.disabled) return;
     if (completedDestination) {
       await navigateAfterMutation(completedDestination, submit);
       return;
@@ -359,7 +392,7 @@
     }
     const data = new FormData(form);
     if (status) status.hidden = true;
-    if (submit) submit.disabled = true;
+    setBusy(true);
     if (error) error.hidden = true;
     try {
       const csrfToken = String(data.get('csrf_token') || '');
@@ -381,11 +414,9 @@
       const confirmDisable = form.dataset.initialActive === 'true' && !isActive;
       const confirmRemoveAccess = form.dataset.initialLibraryAccess === 'true' && !hasAccess;
       if (confirmDisable && !window.confirm('Disable this account and revoke all active sessions?')) {
-        if (submit) submit.disabled = false;
         return;
       }
       if (confirmRemoveAccess && !window.confirm('Remove this user from the current library?')) {
-        if (submit) submit.disabled = false;
         return;
       }
       const response = await requestJson(`/admin/accounts/${encodeURIComponent(accountId)}`, 'PATCH', {
@@ -408,16 +439,17 @@
       const toggle = form.querySelector('[data-admin-action="toggle-active"]');
       if (toggle) (toggle.querySelector?.('.ui-button__content') || toggle).textContent = isActive ? 'Disable account' : 'Enable account';
       showStatus('Changes saved.');
-      if (submit) submit.disabled = false;
     } catch (requestError) {
-      showError(requestError.message);
-      if (submit) submit.disabled = false;
+      if (active) showError(requestError.message);
+    } finally {
+      setBusy(false);
     }
   });
 
   form.querySelectorAll?.('[data-admin-action]')?.forEach((button) => {
     let completedActionDestination = null;
     button.addEventListener('click', async () => {
+      if (!active || busy || button.disabled) return;
       if (completedActionDestination) {
         await navigateAfterMutation(completedActionDestination, button);
         return;
@@ -433,7 +465,7 @@
         const data = new FormData(form);
         const accountId = String(data.get('account_id') || '');
         const endpoint = action === 'reset' ? 'password-reset' : 'welcome';
-        button.disabled = true;
+        setBusy(true);
         if (error) error.hidden = true;
         if (status) status.hidden = true;
         try {
@@ -443,20 +475,21 @@
             {},
             String(data.get('csrf_token') || ''),
           );
+          if (!active) return;
           showStatus(action === 'reset'
             ? 'If delivery is available, a password reset email has been queued.'
             : 'If delivery is available, a welcome email has been queued.');
         } catch (requestError) {
-          showError(requestError.message);
+          if (active) showError(requestError.message);
         } finally {
-          button.disabled = false;
+          setBusy(false);
         }
         return;
       }
       if (action !== 'revoke' || !window.confirm('Revoke every active session for this user?')) return;
       const data = new FormData(form);
       const accountId = String(data.get('account_id') || '');
-      button.disabled = true;
+      setBusy(true);
       try {
         await requestJson(
           `/admin/accounts/${encodeURIComponent(accountId)}/sessions/revoke`,
@@ -467,8 +500,9 @@
         completedActionDestination = `/admin/accounts/${encodeURIComponent(accountId)}`;
         await navigateAfterMutation(completedActionDestination, button);
       } catch (requestError) {
-        showError(requestError.message);
-        button.disabled = false;
+        if (active) showError(requestError.message);
+      } finally {
+        setBusy(false);
       }
     });
   });

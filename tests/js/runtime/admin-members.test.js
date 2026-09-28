@@ -43,7 +43,8 @@ function loadRuntime({ mode = 'create', active = true, initialActive = true, lib
   const error = alertElement();
   const reauth = { panel: element({ hidden: true }), password: element({ value: '' }), submit: element({ disabled: false }) };
   const status = alertElement();
-  const activeControl = element({ checked: active });
+  const activeControl = element({ checked: active, disabled: false });
+  const inheritedControl = element({ checked: true, disabled: true });
   const activeAction = element({ dataset: { adminAction: 'toggle-active' } });
   const reset = element({ dataset: { adminAction: 'reset' }, disabled: false });
   const welcome = element({ dataset: { adminAction: 'welcome' }, disabled: false });
@@ -70,7 +71,8 @@ function loadRuntime({ mode = 'create', active = true, initialActive = true, lib
       return null;
     },
     querySelectorAll: (selector) => (
-      selector === '[data-admin-action]' && mode === 'edit' ? [reset, welcome, revoke, activeAction] : []
+      selector === 'input, button, select, textarea' ? [submit, activeControl, inheritedControl, reset, welcome, revoke, activeAction]
+        : selector === '[data-admin-action]' && mode === 'edit' ? [reset, welcome, revoke, activeAction] : []
     ),
     parentElement: {
       querySelector: (selector) => (
@@ -126,7 +128,7 @@ function loadRuntime({ mode = 'create', active = true, initialActive = true, lib
   vm.runInContext(fs.readFileSync(sourcePath, 'utf8'), context, { filename: sourcePath });
   if (navigate) context.window.AlbumHavenMountAdmin(context.document, { navigate });
   return {
-    password, toggle, submit, error, status, reset, welcome, revoke, activeAction, activeControl, form, fetches, confirmations, reauth,
+    password, toggle, submit, error, status, reset, welcome, revoke, activeAction, activeControl, inheritedControl, form, fetches, confirmations, reauth,
     assigned: () => assigned,
   };
 }
@@ -652,3 +654,27 @@ test('repeated edit saves do not navigate or repeat the previous mutation on a b
   assert.equal(runtime.status.textContent, 'Changes saved.');
   assert.equal(runtime.submit.disabled, false);
 });
+
+
+for (const ok of [true, false]) {
+  test(`save freezes controls, excludes duplicate requests, and restores inherited disabled state (${ok})`, async () => {
+    let finish;
+    const pending = new Promise(resolve => { finish = resolve; });
+    const runtime = loadRuntime({ mode: 'edit', request: () => pending });
+    const submit = () => runtime.form.listeners.get('submit')({ preventDefault() {} });
+    const first = submit();
+    assert.equal(runtime.form.getAttribute('aria-busy'), 'true');
+    for (const control of [runtime.submit, runtime.activeControl, runtime.inheritedControl, runtime.reset]) {
+      assert.equal(control.disabled, true);
+    }
+    await submit();
+    assert.equal(runtime.fetches.length, 1);
+    finish({ ok, status: ok ? 200 : 409, json: async () => ({ detail: 'Concurrent update' }) });
+    await first;
+    assert.equal(runtime.form.getAttribute('aria-busy'), 'false');
+    assert.equal(runtime.submit.disabled, false);
+    assert.equal(runtime.activeControl.disabled, false);
+    assert.equal(runtime.inheritedControl.disabled, true);
+    assert.equal(runtime.error.hidden, ok);
+  });
+}

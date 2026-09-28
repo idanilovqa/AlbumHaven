@@ -9,7 +9,7 @@ function input(value, checked = false, dataset = {}) {
   const handlers = new Map();
   return { value, checked, disabled: false, dataset, title: '',
     addEventListener(type, fn) { handlers.set(type, fn); },
-    change(checked) { this.checked = checked; handlers.get('change')?.(); },
+    change(checked) { if (this.disabled) return; this.checked = checked; handlers.get('change')?.(); },
     click() { if (!this.disabled) handlers.get('click')?.(); } };
 }
 function fixture({ mode = 'edit', direct = ['library.browse.read', 'library.media.read'], selected = [], hidden = [] } = {}) {
@@ -23,6 +23,10 @@ function fixture({ mode = 'edit', direct = ['library.browse.read', 'library.medi
   const capabilities = keys.map((key) => input(key, direct.includes(key), { explicitGrant: String(direct.includes(key)) }));
   const summary = { textContent: '' }, legacy = { hidden: false }, only = input('only');
   const editor = {
+    dataset: { prerequisites: JSON.stringify({
+      'capability.play': ['capability.view'], 'capability.edit': ['capability.view', 'capability.play'],
+      'capability.practice': ['capability.view'],
+    }) },
     querySelectorAll(selector) {
       return selector === '[name="role_keys"]' ? roles : hidden.map((value) => input(value));
     },
@@ -116,4 +120,44 @@ test('bootstrap or legacy forms without the assignment section are left alone', 
   const context = { window: {}, document: { querySelector: () => ({}) } };
   vm.runInNewContext(source, context);
   assert.equal(context.window.AlbumHavenBindCapabilityAssignment({ querySelector: () => null }), null);
+});
+
+
+test('Edit infers disabled View and Play without adding explicit grants', () => {
+  const f = fixture({ direct: [] });
+  f.capability('capability.edit').change(true);
+  for (const key of ['capability.view', 'capability.play']) {
+    assert.equal(f.capability(key).checked, true);
+    assert.equal(f.capability(key).disabled, true);
+    assert.match(f.capability(key).title, /Required by/);
+    f.capability(key).change(false);
+    assert.equal(f.capability(key).checked, true);
+  }
+  assert.deepEqual(f.direct(), ['capability.edit']);
+  f.capability('capability.edit').change(false);
+  for (const key of ['capability.view', 'capability.play']) {
+    assert.equal(f.capability(key).checked, false);
+    assert.equal(f.capability(key).disabled, false);
+  }
+  assert.deepEqual(f.direct(), []);
+});
+
+test('removing Edit retains explicitly chosen View across remount', () => {
+  const before = fixture({ direct: ['capability.view', 'capability.edit'] });
+  const f = fixture({ direct: before.direct() });
+  f.capability('capability.edit').change(false);
+  assert.deepEqual(f.direct(), ['capability.view']);
+  assert.equal(f.capability('capability.view').checked, true);
+  assert.equal(f.capability('capability.view').disabled, false);
+  assert.equal(f.capability('capability.play').checked, false);
+});
+
+test('Admin alone does not infer View, while Practice implies only View', () => {
+  const f = fixture({ direct: ['capability.admin'] });
+  assert.equal(f.capability('capability.view').checked, false);
+  f.capability('capability.practice').change(true);
+  assert.equal(f.capability('capability.view').checked, true);
+  assert.equal(f.capability('capability.view').disabled, true);
+  assert.equal(f.capability('capability.play').checked, false);
+  assert.deepEqual(f.direct(), ['capability.admin', 'capability.practice']);
 });

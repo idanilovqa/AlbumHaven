@@ -10,7 +10,10 @@ from dataclasses import dataclass
 import hashlib
 import json
 
-from music_app.services.capabilities import CAPABILITY_ALIASES, CAPABILITY_KEYS, ROLE_PRESETS, normalize_capability_keys
+from music_app.services.capabilities import (
+    CAPABILITY_ALIASES, CAPABILITY_KEYS, CAPABILITY_PREREQUISITES, ROLE_PRESETS,
+    effective_capability_keys, normalize_capability_keys,
+)
 
 LEGACY_CAPABILITY_KEYS = frozenset({
     "library.browse.read", "library.media.read", "library.problems.read",
@@ -26,11 +29,12 @@ ASSIGNABLE_CAPABILITY_KEYS = (
 )
 ROLE_LABELS = {key: key.title() for key in ROLE_PRESETS}
 CAPABILITY_LABELS = {
-    "capability.view": "View", "capability.play": "Play",
-    "capability.edit": "Edit", "capability.change_covers": "Change covers",
-    "capability.delete": "Delete", "capability.admin": "Admin",
-    "capability.create_loop": "Create loop", "capability.practice": "Practice",
-    "capability.repair": "Repair / Rules / Logs", "capability.move": "Move",
+    "capability.view": "View library", "capability.play": "Play music",
+    "capability.edit": "Edit audio tags", "capability.change_covers": "Change covers",
+    "capability.delete": "Delete covers and missing inventory",
+    "capability.admin": "Administer users and access",
+    "capability.create_loop": "Create loops", "capability.practice": "Practice with loops",
+    "capability.repair": "Repair files, rules and logs", "capability.move": "Move music",
 }
 
 
@@ -46,7 +50,7 @@ class CapabilityAssignment:
     @property
     def effective_keys(self) -> tuple[str, ...]:
         inherited = set().union(*(ROLE_PRESETS[key] for key in self.role_keys))
-        return normalize_capability_keys(inherited | set(self.capability_keys))
+        return effective_capability_keys(inherited | set(self.capability_keys))
 
     def as_payload(self) -> dict[str, object]:
         return {"version": 1, "role_keys": list(self.role_keys),
@@ -82,7 +86,7 @@ def read_assignment(payload: object, effective_keys: object) -> CapabilityAssign
         except ValueError:
             pass
         else:
-            if assignment.effective_keys == current:
+            if assignment.effective_keys == effective_capability_keys(current):
                 return assignment
     return CapabilityAssignment((), current)
 
@@ -110,8 +114,15 @@ def store_assignment(connection, *, account_id: int, library_id: int,
 
 
 def assignment_editor(member, listener_defaults) -> dict[str, object]:
-    keys = tuple(member.capability_keys) if member else tuple(sorted(listener_defaults))
-    assignment = read_assignment(getattr(member, "access_assignment", None), keys)
+    if member:
+        keys = tuple(member.capability_keys)
+        assignment = read_assignment(getattr(member, "access_assignment", None), keys)
+    else:
+        assignment = build_assignment(["listener"], [])
+        keys = assignment.effective_keys
+    role_grants = set().union(*(ROLE_PRESETS[key] for key in assignment.role_keys))
+    chosen = role_grants | set(assignment.capability_keys)
+    prerequisites = set().union(*(CAPABILITY_PREREQUISITES.get(key, ()) for key in chosen))
     return {
         **assignment.as_payload(),
         "roles": [{"key": key, "label": ROLE_LABELS[key], "grants": sorted(grants)}
@@ -119,8 +130,9 @@ def assignment_editor(member, listener_defaults) -> dict[str, object]:
         "capabilities": list(CAPABILITY_LABELS.items()),
         "label": member_role_label(member, listener_defaults) if member else "Listener",
         "unmanaged_keys": sorted(set(keys) - ASSIGNABLE_CAPABILITY_KEYS),
-        "inherited_keys": sorted(set().union(*(ROLE_PRESETS[key] for key in assignment.role_keys))),
-        "unlisted_keys": sorted(set(assignment.capability_keys) - CAPABILITY_KEYS - LEGACY_CAPABILITY_KEYS),
+        "inherited_keys": sorted(role_grants | prerequisites),
+        "prerequisites": {key: sorted(grants) for key, grants in CAPABILITY_PREREQUISITES.items()},
+        "unlisted_keys": sorted(set(assignment.capability_keys) - CAPABILITY_KEYS),
         "revision": access_revision(assignment, keys, active=bool(member and member.is_active),
                                     access=bool(member and member.membership_role)),
     }

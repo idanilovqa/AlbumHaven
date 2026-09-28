@@ -62,14 +62,20 @@ def render(target, *, administrator_is_bootstrap=True, allowed=None, template='a
 
 
 @pytest.mark.parametrize('target', [None, member()])
-def test_legacy_eighteen_fields_are_unchanged_and_new_capabilities_are_separate(target):
+def test_simplified_capabilities_retain_legacy_grants_as_hidden_explicit_choices(target):
     html = render(target); inputs = Inputs(html)
-    legacy = inputs.named('capability_keys')
-    assert len(legacy) == len(MANAGED_CAPABILITY_KEYS) == 18
-    assert {item['value'] for item in legacy} == MANAGED_CAPABILITY_KEYS
-    assert all(item['type'] == 'checkbox' and 'disabled' not in item for item in legacy)
-    assert {item['value'] for item in legacy if 'checked' in item} == constant('_LISTENER_DEFAULTS')
-    assert len(inputs.named('additional_capability_keys')) == 10
+    assert not inputs.named('capability_keys')
+    additional = inputs.named('additional_capability_keys')
+    switches = [item for item in additional if item['type'] == 'checkbox']
+    hidden = [item for item in additional if item['type'] == 'hidden']
+    assert len(switches) == 10
+    assert {item['value'] for item in hidden} == (constant('_LISTENER_DEFAULTS') if target else set())
+    selected_roles = {item['value'] for item in inputs.named('role_keys') if 'checked' in item}
+    assert selected_roles == (set() if target else {'listener'})
+    if target is None:
+        assert {item['value'] for item in switches if 'checked' in item} == {'capability.view', 'capability.play'}
+        assert all('disabled' in item for item in switches if 'checked' in item)
+    assert all('disabled' not in item for item in hidden)
     assert len(inputs.named('role_keys')) == 5
     assert 'name="capability_role"' not in html
     assert 'data-legacy-permission-summary' not in html
@@ -78,12 +84,13 @@ def test_legacy_eighteen_fields_are_unchanged_and_new_capabilities_are_separate(
     assert 'gallery-bar__title' in html
 
 
-def test_bootstrap_owner_keeps_inherited_legacy_form_and_no_assignable_roles():
+def test_bootstrap_owner_preserves_all_grants_without_editable_capabilities():
     html = render(member(bootstrap=True)); inputs = Inputs(html)
     switches = [item for item in inputs.named('capability_keys') if item['type'] == 'checkbox']
     hidden = [item for item in inputs.named('capability_keys') if item['type'] == 'hidden']
-    assert len(switches) == len(hidden) == 18
-    assert all('checked' in item and 'disabled' in item for item in switches)
+    assert not switches
+    assert {item["value"] for item in hidden} == MANAGED_CAPABILITY_KEYS
+    assert all("disabled" not in item for item in hidden)
     assert not inputs.named('role_keys') and not inputs.named('additional_capability_keys')
     assert 'Owner · Full access' in html
 

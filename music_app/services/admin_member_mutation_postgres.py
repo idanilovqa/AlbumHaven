@@ -197,16 +197,17 @@ class PostgresAdminMemberMutationService:
                     (now, target_id, current_library_id, not access, sorted(ASSIGNABLE_CAPABILITY_KEYS)),
                 )
                 if access:
-                    for capability_key in capabilities:
-                        connection.execute(
-                            """
-                            insert into app.capabilities (
-                              account_id, capability_key, scope_kind, scope_id,
-                              granted_at, revoked_at
-                            ) values (%s, %s, 'library', %s, %s, null)
-                            """,
-                            (target_id, capability_key, current_library_id, now),
+                    connection.execute(
+                        """
+                        insert into app.capabilities (
+                          account_id, capability_key, scope_kind, scope_id,
+                          granted_at, revoked_at
                         )
+                        select %s, granted.capability_key, 'library', %s, %s, null
+                        from unnest(%s::text[]) as granted(capability_key)
+                        """,
+                        (target_id, current_library_id, now, list(capabilities)),
+                    )
                 if assignment is not None:
                     store_assignment(connection, account_id=target_id, library_id=current_library_id,
                         assignment=assignment if access else build_assignment((), (), allow_empty=True))

@@ -2,6 +2,7 @@
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 import json
+from types import SimpleNamespace
 
 import pytest
 
@@ -60,6 +61,69 @@ def test_choices_round_trip_and_expand_only_on_server(roles):
     assert set(assignment.effective_keys) <= ASSIGNABLE_CAPABILITY_KEYS
 
 
+@pytest.mark.parametrize("key", sorted(CAPABILITY_KEYS))
+def test_direct_choices_persist_separately_from_inferred_prerequisites(key):
+    assignment = build_assignment([], [key])
+    expected = {key}
+    if key != "capability.admin":
+        expected.add("capability.view")
+    if key in {"capability.edit", "capability.delete"}:
+        expected.add("capability.play")
+    assert set(assignment.effective_keys) == expected
+    assert assignment.as_payload()["capability_keys"] == [key]
+    for live_keys in ([key], assignment.effective_keys):
+        assert read_assignment(assignment.as_payload(), live_keys) == assignment
+    member = SimpleNamespace(capability_keys=assignment.effective_keys,
+        access_assignment=assignment.as_payload(), is_active=True,
+        membership_role="member", is_bootstrap_owner=False)
+    editor = assignment_editor(member, [])
+    assert editor["capability_keys"] == [key]
+    assert set(editor["inherited_keys"]) == expected - {key}
+
+
+@pytest.mark.parametrize("explicit_view", [False, True])
+def test_removing_edit_drops_only_its_inferred_prerequisites(explicit_view):
+    keys = ["capability.edit"] + (["capability.view"] if explicit_view else [])
+    before = build_assignment([], keys)
+    restored = read_assignment(before.as_payload(), before.effective_keys)
+    after = build_assignment([], [key for key in restored.capability_keys if key != "capability.edit"], allow_empty=True)
+    assert after.effective_keys == (("capability.view",) if explicit_view else ())
+    assert read_assignment(after.as_payload(), after.effective_keys) == after
+
+
+def test_removing_role_preserves_explicit_edit_and_its_prerequisites():
+    before = build_assignment(["owner"], ["capability.edit"])
+    restored = read_assignment(before.as_payload(), before.effective_keys)
+    after = build_assignment([], restored.capability_keys)
+    assert after.capability_keys == ("capability.edit",)
+    assert set(after.effective_keys) == {"capability.edit", "capability.play", "capability.view"}
+
+
+def test_revoked_coarse_grant_cannot_be_resurrected_from_saved_choices():
+    before = build_assignment([], ["capability.edit"])
+    remaining = ("capability.play", "capability.view")
+    restored = read_assignment(before.as_payload(), remaining)
+    assert restored.role_keys == ()
+    assert restored.capability_keys == remaining
+    assert restored.effective_keys == remaining
+    assert read_assignment(before.as_payload(), ()).effective_keys == ()
+
+
+def test_rules_alias_round_trip_adds_view_without_recording_it_as_explicit():
+    saved = {"version": 1, "role_keys": [], "capability_keys": ["capability.rules"]}
+    restored = read_assignment(saved, ["capability.rules"])
+    assert restored.capability_keys == ("capability.repair",)
+    assert restored.effective_keys == ("capability.repair", "capability.view")
+    assert read_assignment(restored.as_payload(), restored.effective_keys) == restored
+
+
+@pytest.mark.parametrize("key", ["library.inventory.manage", "library.media.read", "library.rules.read"])
+def test_legacy_assignment_choices_do_not_acquire_coarse_prerequisites(key):
+    assignment = build_assignment([], [key])
+    assert assignment.effective_keys == (key,)
+    assert read_assignment(assignment.as_payload(), [key]) == assignment
+
+
 @pytest.mark.parametrize("roles,keys", [
     (["root"], []), (["system.admin"], []), (["admin", "admin"], []),
     ("admin", []), ({"admin": True}, []), ([True], []), (None, []),
@@ -114,9 +178,9 @@ class Result:
 
 class Connection:
     """In-memory transaction observer, not a substitute for the PostgreSQL tests."""
-    def __init__(self, *, keys=("capability.view",), assignment=None, authorized=True, stale=False):
+    def __init__(self, *, keys=("capability.view",), assignment=None, authorized=True, session_failure=None):
         self.keys, self.assignment = tuple(keys), assignment
-        self.authorized, self.stale = authorized, stale
+        self.authorized, self.session_failure = authorized, session_failure
         self.operations, self.events = [], []
         self.locked = False
     def __enter__(self): return self
@@ -144,8 +208,9 @@ class Connection:
                 target_is_bootstrap_owner=False, current_capability_keys=self.keys,
                 access_assignment=self.assignment)])
         if "from app.account_sessions" in statement:
-            return Result([dict(id=11, account_id=7, authenticated_at=NOW-timedelta(minutes=11) if self.stale else NOW,
-                idle_expires_at=NOW+timedelta(hours=1), absolute_expires_at=NOW+timedelta(days=1), revoked_at=None)])
+            return Result([dict(id=11, account_id=7, authenticated_at=NOW-timedelta(days=5),
+                idle_expires_at=NOW if self.session_failure == "expired-session" else NOW+timedelta(hours=1),
+                absolute_expires_at=NOW+timedelta(days=1), revoked_at=NOW if self.session_failure == "revoked-session" else None)])
         return Result()
 
 
@@ -165,8 +230,9 @@ def test_update_persists_choices_and_effective_scoped_grants_in_one_transaction(
     connection = Connection()
     update(connection, roles=("admin", "listener"), direct=("capability.practice",))
     inserts = [params for sql, params in connection.operations if "insert into app.capabilities" in sql]
-    assert {values[1] for values in inserts} == {"capability.admin", "capability.view", "capability.play", "capability.practice"}
-    assert all(values[0] == 41 and values[2] == 9 for values in inserts)
+    assert len(inserts) == 1
+    assert set(inserts[0][3]) == {"capability.admin", "capability.view", "capability.play", "capability.practice"}
+    assert inserts[0][:3] == (41, 9, NOW)
     metadata = next(params for sql, params in connection.operations if "library_access_assignments_v1" in sql and sql.startswith("update"))
     assert metadata[0] == "9" and metadata[2] == 41
     assert json.loads(metadata[1]) == dict(version=1, role_keys=["admin", "listener"], capability_keys=["capability.practice"])
@@ -174,11 +240,24 @@ def test_update_persists_choices_and_effective_scoped_grants_in_one_transaction(
     assert connection.events == ["begin", "commit"]
 
 
-@pytest.mark.parametrize("failure", ["revoked-admin", "stale-form", "stale-session"])
+def test_update_persists_edit_prerequisites_but_only_the_explicit_choice_in_metadata():
+    connection = Connection()
+    update(connection, roles=(), direct=("capability.edit",))
+    inserts = [params for sql, params in connection.operations if "insert into app.capabilities" in sql]
+    assert len(inserts) == 1
+    assert set(inserts[0][3]) == {"capability.edit", "capability.play", "capability.view"}
+    assert inserts[0][:3] == (41, 9, NOW)
+    metadata = next(params for sql, params in connection.operations
+        if "library_access_assignments_v1" in sql and sql.startswith("update"))
+    assert json.loads(metadata[1]) == dict(version=1, role_keys=[], capability_keys=["capability.edit"])
+    assert connection.events == ["begin", "commit"]
+
+
+@pytest.mark.parametrize("failure", ["revoked-admin", "stale-form", "expired-session", "revoked-session"])
 def test_rejected_update_rolls_back_without_writing_grants(failure):
-    connection = Connection(authorized=failure != "revoked-admin", stale=failure == "stale-session")
+    connection = Connection(authorized=failure != "revoked-admin", session_failure=failure)
     error = {"revoked-admin": PermissionError, "stale-form": AssignmentConflict,
-             "stale-session": RecentAuthenticationRequired}[failure]
+             "expired-session": RecentAuthenticationRequired, "revoked-session": RecentAuthenticationRequired}[failure]
     with pytest.raises(error):
         update(connection, revision="0"*64 if failure == "stale-form" else None)
     assert not any(sql.startswith(("update ", "insert ", "delete ")) for sql, _ in connection.operations)
@@ -272,3 +351,11 @@ def test_assignment_template_inherited_controls_are_checked_and_disabled_before_
     assert "checked" in values["capability.play"] and "disabled" not in values["capability.play"]
     assert len([item for item in inputs.items if item.get("name") == "role_keys"]) == 5
     assert "system.admin" not in html
+
+
+def test_new_user_editor_defaults_to_listener_without_hidden_explicit_grants():
+    editor = assignment_editor(None, ["library.browse.read", "library.media.read"])
+    assert editor["role_keys"] == ["listener"]
+    assert editor["capability_keys"] == []
+    assert editor["unlisted_keys"] == []
+    assert set(editor["inherited_keys"]) == {"capability.view", "capability.play"}

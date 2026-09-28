@@ -128,15 +128,16 @@ class PostgresAdminAccountRepository:
                         """,
                         (library_id, account_id),
                     )
-                    for capability_key in capability_keys:
-                        connection.execute(
-                            """
-                            insert into app.capabilities (
-                              account_id, capability_key, scope_kind, scope_id
-                            ) values (%s, %s, 'library', %s)
-                            """,
-                            (account_id, capability_key, library_id),
+                    connection.execute(
+                        """
+                        insert into app.capabilities (
+                          account_id, capability_key, scope_kind, scope_id
                         )
+                        select %s, granted.capability_key, 'library', %s
+                        from unnest(%s::text[]) as granted(capability_key)
+                        """,
+                        (account_id, library_id, list(capability_keys)),
+                    )
                     if assignment is not None:
                         store_assignment(connection, account_id=account_id, library_id=library_id,
                                          assignment=assignment)

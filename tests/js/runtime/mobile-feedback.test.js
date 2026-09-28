@@ -297,3 +297,52 @@ test('fallback Back to another mobile page leaves its background gallery alone',
   assert.equal(refreshes, 0);
   assert.equal(vm.runInContext('mobilePageState.pages.length', context), 1);
 });
+
+
+test('mobile parent scroll position is captured once and survives reload and responsive promotion', () => {
+  const context = load('mobile-navigation.js');
+  const descriptor = {kind:'album', albumKey:'one'};
+  const initial = context.resolveMobileParentScrollPosition(descriptor, null, {}, {scrollTop:180, scrollLeft:0});
+  assert.equal(initial.scrollTop, 180);
+  const previous = {...descriptor, parentScrollPosition:initial};
+  const moved = {scrollTop:1400, scrollLeft:0};
+  assert.equal(context.resolveMobileParentScrollPosition(descriptor, previous, {}, moved).scrollTop, 180);
+  assert.equal(context.resolveMobileParentScrollPosition(descriptor, null, {mobilePages:[previous]}, moved).scrollTop, 180);
+  assert.equal(context.resolveMobileParentScrollPosition(descriptor, null, {}, null), null);
+  assert.equal(context.resolveMobileParentScrollPosition(descriptor, null, {}, {scrollTop:NaN, scrollLeft:0}), null);
+});
+
+test('mobile gallery return restores saved coordinates before refreshing through the existing request owner', () => {
+  const calls = [];
+  const position = {scrollTop:0, scrollLeft:0};
+  const context = load('mobile-navigation.js', {
+    virtualGrid: {restoreOwnedAbsoluteScrollPosition: value => { calls.push(['position',value]); return true; }, render: force => calls.push(['render',force])},
+    handleGalleryBootstrapPopState: options => calls.push(['request',options]),
+  });
+  context.restoreMobileGalleryParent({parentScrollPosition:position});
+  assert.equal(calls[0][1], position);
+  assert.deepEqual(calls[1], ['render',true]);
+  assert.equal(calls[2][1].preserveScroll,true);
+  assert.equal(calls[2][1].preserveAbsoluteScroll,true);
+  assert.equal(calls[2][1].absoluteScrollPosition,position);
+});
+
+test('both history Back and direct Back restore the root page viewport, not a hidden gallery position', () => {
+  for (const traversal of [false,true]) {
+    const calls = [];
+    const position = {scrollTop:64,scrollLeft:0};
+    const context = load('mobile-navigation.js', {
+      window:{history:{state:{mobilePages:[]}}},
+      restorePosition:position,
+    });
+    context.cleanupMobilePage = () => null;
+    context.syncMobilePageShell = () => {};
+    context.writeMobilePageHistory = () => {};
+    context.restoreMobileGalleryParent = page => calls.push(page.parentScrollPosition);
+    vm.runInContext("mobilePageState.pages.push({kind:'album',albumKey:'one',parentScrollPosition:restorePosition});",context);
+    if(traversal) context.handleMobilePagePopState();
+    else context.dismissMobilePage('album');
+    assert.equal(calls.length,1);
+    assert.equal(calls[0],position);
+  }
+});

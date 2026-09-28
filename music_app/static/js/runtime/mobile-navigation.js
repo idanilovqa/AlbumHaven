@@ -76,13 +76,38 @@ function mobileParentHistoryDelta(parentPosition, currentPosition) {
     && Number.isSafeInteger(currentPosition) && parentPosition < currentPosition
     ? parentPosition - currentPosition : null;
 }
+// Page history owns the viewport it came from. Resizing a hidden gallery can
+// otherwise replace that position with the first visible row in another section.
+function resolveMobileParentScrollPosition(descriptor, previous, snapshot = {}, scroll = null) {
+  const restored = Array.isArray(snapshot.mobilePages)
+    ? snapshot.mobilePages.find(page => page.kind === descriptor.kind && page.albumKey === descriptor.albumKey) : null;
+  const position = previous?.parentScrollPosition ?? restored?.parentScrollPosition ?? scroll;
+  if (!position || !Number.isFinite(position.scrollTop) || !Number.isFinite(position.scrollLeft)) return null;
+  return { scrollTop: Math.max(0, position.scrollTop), scrollLeft: Math.max(0, position.scrollLeft) };
+}
+function restoreMobileGalleryParent(descriptor) {
+  const position = descriptor?.parentScrollPosition;
+  const options = { preserveScroll: true };
+  if (position) {
+    options.preserveAbsoluteScroll = true;
+    options.absoluteScrollPosition = position;
+    // Restore before the request too: equivalent responses may retain the mounted
+    // gallery. The virtual grid already owns stabilization and row materialization.
+    if (typeof virtualGrid !== 'undefined' && virtualGrid?.restoreOwnedAbsoluteScrollPosition(position)) {
+      virtualGrid.render(true);
+    }
+  }
+  handleGalleryBootstrapPopState(options);
+}
 function presentMobilePage(descriptor) {
   if (!usesMobilePageLayout() && !mobilePageState.pages.length) return false;
   const outlet = document.getElementById('mobile-page-outlet');
   const element = document.getElementById(MOBILE_PAGE_KINDS[descriptor.kind]);
   if (!outlet || !element) return false;
-  descriptor.parentPosition = resolveMobileParentPosition(descriptor,
-    mobilePageState.pages.find(page => page.kind === descriptor.kind), window.history.state || {});
+  const previous = mobilePageState.pages.find(page => page.kind === descriptor.kind);
+  descriptor.parentPosition = resolveMobileParentPosition(descriptor, previous, window.history.state || {});
+  descriptor.parentScrollPosition = resolveMobileParentScrollPosition(descriptor, previous, window.history.state || {},
+    mobilePageState.pages.length ? null : document.getElementById('albums-scroll'));
   const active = mobilePageState.pages.at(-1);
   if (active?.kind === descriptor.kind && active.albumKey === descriptor.albumKey) {
     Object.assign(active, descriptor);
@@ -163,7 +188,7 @@ function dismissMobilePage(kind) {
   retired.forEach(descriptor => { focus = cleanupMobilePage(descriptor); });
   writeMobilePageHistory('replace');
   syncMobilePageShell();
-  if (!mobilePageState.pages.length) handleGalleryBootstrapPopState({ preserveScroll: true });
+  if (!mobilePageState.pages.length) restoreMobileGalleryParent(retired.at(-1));
   if (focus?.isConnected) focus.focus({ preventScroll: true });
   return true;
 }
@@ -220,6 +245,7 @@ function handleMobilePagePopState() {
       || (requested[common].tab === mobilePageState.pages[common].tab
         && String(requested[common].utilityDetail || '') === String(mobilePageState.pages[common].utilityDetail || '')
         && String(requested[common].loopSongId || '') === String(mobilePageState.pages[common].loopSongId || '')))) common += 1;
+  const parent = mobilePageState.pages[0];
   let focus;
   while (mobilePageState.pages.length > common) focus = cleanupMobilePage(mobilePageState.pages.pop());
   mobilePageState.restoring = true;
@@ -228,7 +254,7 @@ function handleMobilePagePopState() {
   syncMobilePageShell();
   // A background refresh may have replaced the gallery while its child was open.
   // Restore the retained parent URL through the normal gallery request owner.
-  if (!requested.length) handleGalleryBootstrapPopState({ preserveScroll: true });
+  if (!requested.length) restoreMobileGalleryParent(parent);
   if (!requested.length && focus?.isConnected) requestAnimationFrame(() => focus.focus({ preventScroll: true }));
   return true;
 }

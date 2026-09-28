@@ -2221,7 +2221,10 @@ function getBrowserDialogTarget() {
 
 let activeAppFormDialog = null;
 function showAppFormDialog(options = {}) {
-  if (activeAppFormDialog) return activeAppFormDialog.promise;
+  if (activeAppFormDialog) {
+    if (options.anchor && activeAppFormDialog.anchor === options.anchor) activeAppFormDialog.close?.();
+    return activeAppFormDialog?.promise || Promise.resolve(null);
+  }
   const get = name => document.getElementById(`app-form-${name}`);
   const modal = get('modal'), title = get('title'), content = get('content'), error = get('error'), cancel = get('cancel'), submit = get('submit');
   if (!modal || !title || !content || !error || !cancel || !submit) return Promise.resolve(null);
@@ -2232,7 +2235,7 @@ function showAppFormDialog(options = {}) {
   let positionObserver = null;
   const listen = (node, name, handler) => { node.addEventListener(name, handler); listeners.push([node, name, handler]); };
   let resolve; const promise = new Promise(done => { resolve = done; });
-  const owner = { promise }; activeAppFormDialog = owner;
+  const owner = { promise, anchor }; activeAppFormDialog = owner;
   let submitEnabled = options.submitEnabled !== false, submitting = false;
   const syncSubmit = () => { if (activeAppFormDialog === owner) submit.disabled = submitting || !submitEnabled; };
   const controls = { setSubmitEnabled(value) {
@@ -2249,6 +2252,7 @@ function showAppFormDialog(options = {}) {
     modal.hidden = true; content.innerHTML = ''; activeAppFormDialog = null;
     resolve(value); previousFocus?.focus?.({ preventScroll: true });
   };
+  owner.close = () => finish(null);
   const apply = async event => {
     event?.preventDefault?.();
     if (submit.disabled || options.mode === 'reading') return;
@@ -2286,6 +2290,10 @@ function showAppFormDialog(options = {}) {
     };
     modal.classList.add('app-form-anchored'); anchoredPanel.setAttribute('aria-modal', 'false');
     position();
+    if (typeof activateTriggerSurface === 'function') activateTriggerSurface(anchoredPanel, () => finish(null));
+    listen(document, 'pointerdown', event => {
+      if (!anchoredPanel.contains(event.target) && !anchor.contains(event.target)) finish(null);
+    });
     if (typeof window.addEventListener === 'function') listen(window, 'resize', position);
     if (window.visualViewport?.addEventListener) listen(window.visualViewport, 'resize', position);
     if (typeof ResizeObserver === 'function') {
@@ -5389,7 +5397,8 @@ function syncTriggerAnchor(surface, anchor) {
   if (!surface?.getBoundingClientRect || !anchor?.getBoundingClientRect || surface.hidden) return;
   const previous = triggerAnchorBindings.get(surface);
   if (previous && previous.anchor !== anchor) clearTriggerAnchor(surface);
-  const anchorContext = anchor.closest?.('.shell-main-surface, .settings-outlet') ? 'content' : 'chrome';
+  const anchorContext = surface.matches?.('.mobile-settings-drawer') ? 'chrome'
+    : anchor.closest?.('.shell-main-surface, .settings-outlet') ? 'content' : 'chrome';
   surface.dataset.triggerAnchorContext = anchorContext;
   anchor.dataset.triggerAnchorContext = anchorContext;
   activateTriggerSurface(surface, () => {
@@ -15907,6 +15916,7 @@ function reconcileUtilityLogHistoryTree(els, value) {
     els.list.dataset.utilityNavigationOwner = 'log-history';
   }
   const rows = (state.utility.logHistory || []).map(item => ({ id: String(item.id), item }));
+  if (typeof usesMobilePageLayout === 'function' && usesMobilePageLayout()) rows.unshift({ id: 'recent', recent: true });
   if (value.temporaryRowId) rows.unshift({ id: value.temporaryRowId, temporary: true });
   const existing = new Map(Array.from(els.list.querySelectorAll('[data-utility-log-history-id]'), node => [node.getAttribute('data-utility-log-history-id'), node]));
   const wanted = new Set(rows.map(row => row.id));
@@ -15916,7 +15926,7 @@ function reconcileUtilityLogHistoryTree(els, value) {
     let node = existing.get(row.id);
     if (!node) {
       const host = document.createElement('div');
-      host.innerHTML = row.temporary ? window.NavigationTree.renderItem({ action: true, variant: 'panel', key: row.id, label: 'Selected period', subtitle: value.periodLabel || '', attributes: { 'data-utility-log-history-id': row.id, 'data-log-query-row': '1' } }) : buildUtilityLogHistoryListItem(row.item, false);
+      host.innerHTML = row.recent ? window.NavigationTree.renderItem({ action: true, variant: 'panel', key: 'recent', label: 'Recent activity', subtitle: 'Latest library events', attributes: { 'data-utility-log-history-id': 'recent' } }) : row.temporary ? window.NavigationTree.renderItem({ action: true, variant: 'panel', key: row.id, label: 'Selected period', subtitle: value.periodLabel || '', attributes: { 'data-utility-log-history-id': row.id, 'data-log-query-row': '1' } }) : buildUtilityLogHistoryListItem(row.item, false);
       node = host.firstElementChild;
     }
     if (node !== cursor) els.list.insertBefore(node, cursor);
@@ -15929,6 +15939,7 @@ function reconcileUtilityLogHistoryTree(els, value) {
 
 async function selectUtilityLogHistoryEvent(id) {
   const controller = getUtilityLogHistoryController();
+  if (id === 'recent') { controller.clear(); return controller.refresh(); }
   if (id === controller.getState().temporaryRowId) return controller.selectPeriod();
   if (id === controller.getState().selectedEventId) return;
   await controller.selectEvent(id);
@@ -19754,6 +19765,10 @@ async function queueProblemExclusionRevert(item) {
 
 // BEGIN js/runtime/library-settings.js
 
+function librarySettingsReadOnlyClient() {
+  return typeof isMobileClient === 'function' && isMobileClient();
+}
+
 const LIBRARY_SETTINGS_ROOT_CATEGORIES = Object.freeze([
   'main_library_roots',
   'hoarding_library_roots',
@@ -19968,6 +19983,7 @@ function applyLibrarySettingsFieldTarget(target) {
 }
 
 function handleLibrarySettingsClick(event) {
+  if (librarySettingsReadOnlyClient() && event.target.closest('[data-add-library-root], [data-remove-library-root], [data-browse-library-root], [data-library-policy-trigger], [id^="library-auto-move-"], [data-save-library-settings], [data-import-album-ratings]')) { event.preventDefault(); return true; }
   const toggle = event.target.closest('[id^="library-auto-move-"]');
   if (toggle) {
     event.preventDefault();
@@ -20216,7 +20232,7 @@ function buildLibrarySettingsPolicyButton(field, roots, selectedId, label) {
   const selectedLabel = choices.find(choice => choice.value === selectedId)?.label || choices[0]?.label;
   return window.ButtonComponent.renderButton({
     label: selectedLabel,
-    ariaLabel: label, disabled: ensureLibrarySettingsState().allowedActions?.['library.settings.manage'] !== true,
+    ariaLabel: label, disabled: librarySettingsReadOnlyClient() || ensureLibrarySettingsState().allowedActions?.['library.settings.manage'] !== true,
     attributes: { 'data-library-policy-trigger': field, 'aria-haspopup': 'menu', 'aria-expanded': 'false' },
   });
 }
@@ -20226,7 +20242,7 @@ function buildLibraryMovePolicyRow(field, roots, selectedId, title, destinationL
   const enabled = owner.moveAutomationDraft?.[field] === true;
   const hasRoots = buildLibrarySettingsRootOptions(roots).length > 0;
   return `<div class="library-settings-move-policy-row">
-    ${buildGallerySwitchHtml({ id: `library-auto-move-${key}`, label: title, checked: enabled, disabled: !hasRoots || owner.allowedActions?.['library.settings.manage'] !== true })}
+    ${buildGallerySwitchHtml({ id: `library-auto-move-${key}`, label: title, checked: enabled, disabled: librarySettingsReadOnlyClient() || !hasRoots || owner.allowedActions?.['library.settings.manage'] !== true })}
     ${enabled && hasRoots ? buildLibrarySettingsPolicyButton(field, roots, selectedId, destinationLabel) : ''}
   </div>`;
 }
@@ -20234,7 +20250,7 @@ function buildLibraryMovePolicyRow(field, roots, selectedId, title, destinationL
 function buildLibrarySettingsRootSection(category, title, description) {
   const draft = getLibrarySettingsDraft();
   const roots = Array.isArray(draft[category]) ? draft[category] : [];
-  const canManage = ensureLibrarySettingsState().allowedActions?.['library.settings.manage'] === true;
+  const canManage = !librarySettingsReadOnlyClient() && ensureLibrarySettingsState().allowedActions?.['library.settings.manage'] === true;
   const canBrowse = canManage && ensureLibrarySettingsState().allowedActions?.['library.filesystem.browse'] === true && ensureLibrarySettingsState().allowedActions?.['library.paths.read'] === true;
   const rows = roots.map((root, index) => `<div class="library-settings-root-row">
     <div class="library-settings-path-control ui-input-action"><input type="text" value="${escapeHtml(root.path || '')}"
@@ -20303,13 +20319,13 @@ function buildUtilityLibrarySettingsDetail() {
             <h4>Album ratings</h4>
             <p>Copy file-tag ratings into albums that do not already have an app rating. Existing app ratings remain unchanged.</p>
           </div>
-          <button class="button button-secondary" type="button" data-import-album-ratings="1" ${librarySettingsState.albumRatingImportBusy ? 'disabled' : ''}>${librarySettingsState.albumRatingImportBusy ? 'Importing ratings...' : 'Import ratings'}</button>
+          <button class="button button-secondary" type="button" data-import-album-ratings="1" ${librarySettingsReadOnlyClient() || librarySettingsState.albumRatingImportBusy ? 'disabled' : ''}>${librarySettingsState.albumRatingImportBusy ? 'Importing ratings...' : 'Import ratings'}</button>
         </div>
         ${importResult ? `<div class="library-settings-import-result" data-album-rating-import-result="1">Created: ${escapeHtml(importResult.created)} \u00b7 Authority skipped: ${escapeHtml(importResult.authority_skipped)} \u00b7 Failed: ${escapeHtml(importResult.failed)}</div>` : ''}
       </section>
       <div class="confirm-modal-actions">
-        <button class="button button-secondary" type="button" data-reload-library-settings="1" ${librarySettingsState.saveBusy ? 'disabled' : ''}>Reload</button>
-        <button class="button" type="button" data-save-library-settings="1" ${librarySettingsState.saveBusy || librarySettingsState.allowedActions?.['library.settings.manage'] !== true ? 'disabled' : ''}>${librarySettingsState.saveBusy ? 'Saving...' : 'Save library settings'}</button>
+        <button class="button button-secondary" type="button" data-reload-library-settings="1" ${librarySettingsState.saveBusy ? 'disabled' : ''}>Refresh</button>
+        <button class="button" type="button" data-save-library-settings="1" ${librarySettingsReadOnlyClient() || librarySettingsState.saveBusy || librarySettingsState.allowedActions?.['library.settings.manage'] !== true ? 'disabled' : ''}>${librarySettingsState.saveBusy ? 'Saving...' : 'Save library settings'}</button>
       </div>
     </div>
   `;
@@ -20920,7 +20936,9 @@ function renderProblematicFiles({ preserveProblematicTree = false } = {}) {
     }
   };
 
-  const virtualListApi = typeof window !== 'undefined'
+  const mobileIndex = typeof usesMobilePageLayout === 'function' && usesMobilePageLayout();
+  if (mobileIndex) disposeProblematicFilesVirtualList();
+  const virtualListApi = mobileIndex ? null : typeof window !== 'undefined'
     ? window.ProblematicFilesVirtualList
     : globalThis.ProblematicFilesVirtualList;
   const mountedRows = preserveProblematicTree && !virtualListApi?.create
@@ -20994,6 +21012,12 @@ function renderProblematicFiles({ preserveProblematicTree = false } = {}) {
   if (!items.length) {
     replaceListContents('<div class="utility-empty-state compact">No matching problematic albums found.</div>');
     els.detail.innerHTML = '<div class="utility-empty-state">No matching problematic albums found.</div>';
+    return;
+  }
+
+  if (mobileIndex && !mobilePageState.pages.at(-1)?.utilityDetail) {
+    renderTree('');
+    els.detail.innerHTML = '';
     return;
   }
 
@@ -22120,21 +22144,19 @@ function positionUtilityLoopSpeedMenu(loopId, setting = 'speed') {
   const triggerRect = trigger.getBoundingClientRect();
   const menuRect = menu.getBoundingClientRect();
 
-
-
-  let left = triggerRect.left + (triggerRect.width / 2) - (menuRect.width / 2);
-  const below = window.innerHeight - triggerRect.bottom - 8;
-  const above = triggerRect.top - 8;
-  const opensBelow = below >= menuRect.height || below >= above;
-  menu.style.maxHeight = `${Math.max(0, Math.min(menuRect.height, (opensBelow ? below : above) - 6))}px`;
-  const popupHeight = Math.min(menuRect.height, Math.max(0, (opensBelow ? below : above) - 6));
-  let top = opensBelow ? triggerRect.bottom + 6 : triggerRect.top - popupHeight - 6;
-
   const padding = 8;
-  const clamped = clampPositionToViewport(left, top, menuRect.width, popupHeight, padding);
-
-  menu.style.left = `${clamped.left}px`;
-  menu.style.top = `${clamped.top}px`;
+  const playerTop = document.querySelector('.global-player')?.getBoundingClientRect().top || window.innerHeight;
+  const bottom = Math.min(window.innerHeight, playerTop);
+  const popupHeight = Math.min(menuRect.height, bottom - padding * 2);
+  menu.style.maxHeight = `${popupHeight}px`;
+  const optionHeight = activeOption.getBoundingClientRect().height;
+  const selectedCenter = activeOption.offsetTop + optionHeight / 2;
+  const triggerCenter = triggerRect.top + triggerRect.height / 2;
+  const top = Math.max(padding, Math.min(triggerCenter - selectedCenter, bottom - padding - popupHeight));
+  const left = Math.max(padding, Math.min(triggerRect.right - menuRect.width, window.innerWidth - padding - menuRect.width));
+  menu.style.left = `${left}px`;
+  menu.style.top = `${top}px`;
+  menu.scrollTop = Math.max(0, selectedCenter - (triggerCenter - top));
   menu.style.visibility = '';
   if (!menu.classList.contains('is-mobile-loop-menu') && typeof syncTriggerAnchor === 'function') syncTriggerAnchor(menu, trigger);
 }
@@ -22181,8 +22203,7 @@ function toggleUtilityLoopSettingMenu(loopId, setting, keyboard = false) {
   menu.hidden = false;
   trigger.setAttribute('aria-expanded', 'true');
   positionUtilityLoopSpeedMenu(loopId, setting);
-  const selected = menu.querySelector('[aria-checked="true"]');
-  if (selected) menu.scrollTop = Math.max(0, selected.offsetTop - menu.clientHeight / 2);
+
   const options = () => [...menu.querySelectorAll('button:not(:disabled)')];
   if (keyboard) (menu.querySelector('[aria-checked="true"]') || options()[0])?.focus({ preventScroll: true });
   document.addEventListener('pointerdown', event => {
@@ -36247,7 +36268,7 @@ async function handleUtilityBootstrapClick(event) {
   if (utilityLogHistoryButton || logAction) {
     event.preventDefault();
     try {
-      if (utilityLogHistoryButton) await selectUtilityLogHistoryEvent(utilityLogHistoryButton.getAttribute('data-utility-log-history-id'));
+      if (utilityLogHistoryButton) { openMobileUtilityDetail(utilityLogHistoryButton.getAttribute('data-utility-log-history-id')); await selectUtilityLogHistoryEvent(utilityLogHistoryButton.getAttribute('data-utility-log-history-id')); }
       else await handleUtilityLogHistoryAction(logAction.getAttribute('data-log-history-action'));
     } catch (error) { showToast(error.message || 'Unable to load log history.', 'error', 3200); }
     return;
@@ -36318,8 +36339,12 @@ async function handleUtilityBootstrapClick(event) {
   if (problematicAlbumButton) {
     event.preventDefault();
     const selectedKey = problematicAlbumButton.getAttribute('data-problematic-album-key') || '';
+    openMobileUtilityDetail(selectedKey);
     if (state.utility.selectedProblematicKey === selectedKey && getSelectedProblematicAlbum()?.detail_loaded
-        && !state.utility.focusedTrackPath && state.utility.showRepairedDisplay) return;
+        && !state.utility.focusedTrackPath && state.utility.showRepairedDisplay) {
+      if (typeof usesMobilePageLayout === 'function' && usesMobilePageLayout()) renderUtilityModalContent();
+      return;
+    }
     state.utility.selectedProblematicKey = selectedKey;
     state.utility.focusedTrackPath = '';
     state.utility.proposalSelections = {};
@@ -39573,7 +39598,9 @@ function syncMobilePageShell() {
   }
   if (active) {
     document.getElementById('mobile-page-title').textContent = active.title;
-    document.getElementById('mobile-page-summary').textContent = active.subtitle;
+    const summary = document.getElementById('mobile-page-summary');
+    summary.textContent = active.subtitle;
+    if (active.loopCount) { const count = document.createElement('span'); count.className = 'mobile-loop-count'; count.textContent = active.loopCount; summary.appendChild(count); }
     document.title = `${active.title} — Album Haven`;
   }
   document.getElementById('mobile-settings-actions').hidden = active?.kind !== 'utilities';
@@ -39586,12 +39613,13 @@ function syncMobilePageShell() {
 function writeMobilePageHistory(mode = 'push') {
   const url = new URL(window.location.href);
   const active = mobilePageState.pages.at(-1);
-  ['mobile_page', 'mobile_album', 'utility_tab', 'loop_song', 'loop_filter'].forEach(key => url.searchParams.delete(key));
+  ['mobile_page', 'mobile_album', 'utility_tab', 'loop_song', 'loop_filter', 'utility_detail'].forEach(key => url.searchParams.delete(key));
   if (active) {
     url.searchParams.set('mobile_page', active.kind);
     if (active.albumKey) url.searchParams.set('mobile_album', active.albumKey);
     if (active.kind === 'utilities') {
       url.searchParams.set('utility_tab', active.tab || 'appearance');
+      if (active.utilityDetail) url.searchParams.set('utility_detail', active.utilityDetail);
       if (active.tab === 'loops') {
         if (active.loopSongId) url.searchParams.set('loop_song', active.loopSongId);
         if (active.loopFilter) url.searchParams.set('loop_filter', active.loopFilter);
@@ -39708,6 +39736,12 @@ function dismissMobilePage(kind) {
 function navigateMobileBack() {
   const active = mobilePageState.pages.at(-1);
   if (!active) return;
+  if (active.utilityDetail) {
+    const delta = mobileParentHistoryDelta(active.utilityListPosition, window.history.state?.albumHavenNavigationPosition);
+    if (delta !== null) window.history.go(delta);
+    else { active.utilityDetail = ''; renderUtilityModalContent(); }
+    return;
+  }
   if (getMobileLoopPage()?.loopSongId) { returnMobileLoopList(); return; }
   // Keep the Appearance editor's unsaved-changes guard on both its close button and Back.
   if (active.kind === 'utilities') closeUtilityModal();
@@ -39725,6 +39759,13 @@ function restoreMobilePage(descriptor) {
     if (state.utility.activeTab === 'loops') state.utility.loopsSearchQuery = String(descriptor.loopFilter || '');
     openUtilityModal();
     const page = mobilePageState.pages.find(item => item.kind === 'utilities');
+    if (page && ['log-history', 'problematic-files'].includes(state.utility.activeTab)) {
+      page.utilityDetail = String(descriptor.utilityDetail || '');
+      page.utilityListPosition = descriptor.utilityListPosition ?? null;
+      if (page.utilityDetail && state.utility.activeTab === 'problematic-files') state.utility.selectedProblematicKey = page.utilityDetail;
+      if (page.utilityDetail && state.utility.activeTab === 'log-history') void selectUtilityLogHistoryEvent(page.utilityDetail);
+      renderUtilityModalContent();
+    }
     if (page && state.utility.activeTab === 'loops') {
       Object.assign(page, { loopSongId: String(descriptor.loopSongId || ''), loopFilter: String(descriptor.loopFilter || ''),
         loopListPosition: descriptor.loopListPosition ?? null, loopListScroll: Number(descriptor.loopListScroll) || 0,
@@ -39743,6 +39784,7 @@ function handleMobilePagePopState() {
     && requested[common].albumKey === mobilePageState.pages[common].albumKey
     && (requested[common].kind !== 'utilities'
       || (requested[common].tab === mobilePageState.pages[common].tab
+        && String(requested[common].utilityDetail || '') === String(mobilePageState.pages[common].utilityDetail || '')
         && String(requested[common].loopSongId || '') === String(mobilePageState.pages[common].loopSongId || '')))) common += 1;
   let focus;
   while (mobilePageState.pages.length > common) focus = cleanupMobilePage(mobilePageState.pages.pop());
@@ -39757,6 +39799,9 @@ function syncMobileUtilityContext() {
   const descriptor = mobilePageState.pages.find(page => page.kind === 'utilities');
   if (!descriptor) return;
   if (descriptor.tab !== state.utility.activeTab) {
+    document.getElementById('mobile-page-outlet').scrollTop = 0;
+    delete descriptor.utilityDetail;
+    delete descriptor.utilityListPosition;
     delete descriptor.loopSongId;
     delete descriptor.loopListPosition;
     delete descriptor.loopListScroll;
@@ -39766,11 +39811,12 @@ function syncMobileUtilityContext() {
   const song = group?.representativeLoop || group?.loops[0];
   descriptor.title = song ? song.title || song.name || 'Saved loops'
     : MOBILE_UTILITY_SECTIONS[state.utility.activeTab]?.label || 'Settings';
-  descriptor.subtitle = song ? [song.artist || 'Unknown artist', song.album, song.year,
-    `${group.loops.length} saved loop${group.loops.length === 1 ? '' : 's'}`].filter(Boolean).join(' • ') : '';
+  descriptor.subtitle = song ? [song.artist || 'Unknown artist', song.album, song.year].filter(Boolean).join(' • ') : '';
+  descriptor.loopCount = song ? `${group.loops.length} saved loop${group.loops.length === 1 ? '' : 's'}` : '';
   if (descriptor.tab === 'loops') descriptor.loopFilter = String(state.utility.loopsSearchQuery || '');
   syncMobilePageShell();
   syncMobileUtilityNavigation();
+  syncMobileUtilityDetail();
   if (!mobilePageState.restoring) writeMobilePageHistory('replace');
 }
 // Loops uses the existing tree as its mobile index, not a second data source.
@@ -39974,7 +40020,7 @@ function initMobileNavigation() {
   // Enforce presentation restrictions at all delegated mobile action entry points.
   document.addEventListener('click', (event) => {
     if (!isMobileClient()) return;
-    if (event.target.closest?.('[data-open-non-album-tag-editor], [data-open-tag-editor], [data-edit-tags], [data-edit-album-tags], [data-edit-track-tags], [data-utility-tab="problematic-files"], [data-revert-version-exception], [data-revert-problem-ignore], [data-delete-saved-loop]')) {
+    if (event.target.closest?.('[data-open-non-album-tag-editor], [data-open-tag-editor], [data-edit-tags], [data-edit-album-tags], [data-edit-track-tags], [data-revert-version-exception], [data-revert-problem-ignore], [data-delete-saved-loop]')) {
       event.preventDefault(); event.stopImmediatePropagation();
     }
   }, true);
@@ -40009,7 +40055,7 @@ function initMobileNavigation() {
   const url = new URL(window.location.href);
   if (usesMobilePageLayout() && url.searchParams.has('mobile_page')) {
     mobilePageState.restoring = true;
-    try { restoreMobilePage({ kind: url.searchParams.get('mobile_page'), albumKey: url.searchParams.get('mobile_album') || '', title: 'Album', tab: url.searchParams.get('utility_tab'), loopSongId: url.searchParams.get('loop_song') || '', loopFilter: url.searchParams.get('loop_filter') || '' }); }
+    try { restoreMobilePage({ kind: url.searchParams.get('mobile_page'), albumKey: url.searchParams.get('mobile_album') || '', title: 'Album', tab: url.searchParams.get('utility_tab'), utilityDetail: url.searchParams.get('utility_detail') || '', loopSongId: url.searchParams.get('loop_song') || '', loopFilter: url.searchParams.get('loop_filter') || '' }); }
     finally { mobilePageState.restoring = false; }
     // A directly loaded page has no guaranteed in-app previous entry.
     const loopPage = getMobileLoopPage();
@@ -40023,6 +40069,7 @@ function initMobileNavigation() {
 
 
 const MOBILE_UTILITY_SECTIONS = Object.freeze({
+  'problematic-files': { label: 'Problematic Files', action: 'library.problems.read' },
   rules: { label: 'Rules', action: 'library.rules.read' },
   loops: { label: 'Loops', action: 'library.loops.read' },
   'log-history': { label: 'Log History', action: 'library.logs.read' },
@@ -40255,6 +40302,26 @@ function showMobileGalleryPinchHint() {
   hint.innerHTML = '<span aria-hidden="true"><i></i><i></i></span>Pinch with two fingers to resize covers';
   document.getElementById('shell-main-surface').appendChild(hint);
   scheduleBrowserTimeout(() => hint.remove(), 4000);
+}
+
+// Mobile index/detail composition retains the same utility data and action owners.
+function openMobileUtilityDetail(key) {
+  const page = mobilePageState.pages.at(-1);
+  if (!usesMobilePageLayout() || page?.kind !== 'utilities' || !['log-history', 'problematic-files'].includes(page.tab)) return;
+  if (!page.utilityDetail) {
+    page.utilityListPosition = window.history.state?.albumHavenNavigationPosition ?? null;
+    writeMobilePageHistory('replace');
+    page.utilityDetail = key;
+    writeMobilePageHistory();
+  } else page.utilityDetail = key;
+  syncMobileUtilityDetail();
+  document.getElementById('mobile-page-outlet').scrollTop = 0;
+}
+function syncMobileUtilityDetail() {
+  const page = mobilePageState.pages.at(-1);
+  const modal = document.getElementById('utility-modal');
+  if (!modal) return;
+  modal.dataset.mobileUtilityView = page?.utilityDetail ? 'detail' : 'list';
 }
 
 // END js/runtime/mobile-navigation.js

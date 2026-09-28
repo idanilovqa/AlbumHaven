@@ -87,6 +87,8 @@ for (const palette of ['black', 'paper', 'parchment-pine']) test(`Problematic Fi
   await expect(ui.detail).toContainText(/Missing track number|Missing year/);
   await expect(ui.list).not.toBeVisible();
   expect(await ui.hasNoHorizontalOverflow()).toBe(true);
+  const titleBox = await ui.problemTitle.boundingBox(), coverBox = await ui.problemCover.boundingBox();
+  expect(Math.abs(titleBox.y - coverBox.y)).toBeLessThanOrEqual(4);
   await snapshot(`106-problematic-detail-${palette}`);
   await ui.backButton.click();
   await expect(ui.problemCards.first()).toBeVisible();

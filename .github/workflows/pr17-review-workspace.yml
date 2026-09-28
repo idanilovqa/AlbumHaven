@@ -1,0 +1,124 @@
+name: PR17 Review Workspace
+on:
+  push:
+    branches: [chatgpt/pr17-review-workspace-20260928]
+    paths: [.github/workflows/pr17-review-workspace.yml]
+permissions: {}
+jobs:
+  source:
+    if: github.repository == 'idanilovqa/AlbumHaven'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+          submodules: false
+      - name: Package immutable public tracked source for offline review
+        env:
+          REVIEW_HEAD: 61027a1d986d410fc49d257ddd805d6e4d6c63f3
+          REVIEW_BASE: a5c23fc8963f9ecc531468a61653bf2d798e8c6d
+        shell: python
+        run: |
+          import base64, hashlib, io, json, os, pathlib, subprocess, tarfile
+          head, base = os.environ['REVIEW_HEAD'], os.environ['REVIEW_BASE']
+          def git(*args):
+              return subprocess.check_output(['git', *args])
+          assert git('rev-parse', head).decode().strip() == head
+          assert git('rev-parse', base).decode().strip() == base
+          merge_base = git('merge-base', base, head).decode().strip()
+          manifest = {'head': head, 'base': base, 'merge_base': merge_base, 'excluded_binary_files': [], 'parts': []}
+          packed = io.BytesIO()
+          with tarfile.open(fileobj=packed, mode='w:gz') as out:
+              def add(name, data, mode=0o644):
+                  item = tarfile.TarInfo(name)
+                  item.size, item.mode, item.mtime = len(data), mode, 0
+                  out.addfile(item, io.BytesIO(data))
+              for prefix, ref in [('head', head), ('base', merge_base)]:
+                  data = git('archive', '--format=tar', ref)
+                  with tarfile.open(fileobj=io.BytesIO(data), mode='r:') as source:
+                      for member in source:
+                          if not member.isfile():
+                              if not member.isdir():
+                                  manifest['excluded_binary_files'].append({'ref': ref, 'path': member.name, 'kind': 'nonregular'})
+                              continue
+                          content = source.extractfile(member).read()
+                          try:
+                              content.decode('utf-8')
+                              text = b'\x00' not in content
+                          except UnicodeDecodeError:
+                              text = False
+                          if text:
+                              add(prefix + '/' + member.name, content, member.mode)
+                          else:
+                              manifest['excluded_binary_files'].append({'ref': ref, 'path': member.name, 'size': len(content), 'sha256': hashlib.sha256(content).hexdigest()})
+                  add('evidence/' + prefix + '-tree.tsv', git('ls-tree', '-rl', ref))
+              add('evidence/branch.diff', git('diff', '--no-ext-diff', '--find-renames', '--unified=8', merge_base, head))
+              add('evidence/changed-paths.tsv', git('diff', '--name-status', merge_base, head))
+              add('evidence/commits.txt', git('log', '--format=%H %s', merge_base + '..' + head))
+          raw = packed.getvalue()
+          manifest['archive_sha256'] = hashlib.sha256(raw).hexdigest()
+          manifest['archive_bytes'] = len(raw)
+          destination = pathlib.Path('.review-transfer')
+          destination.mkdir(exist_ok=True)
+          for index, offset in enumerate(range(0, len(raw), 450000)):
+              name = 'source-%03d.b64' % index
+              content = base64.b64encode(raw[offset:offset + 450000])
+              (destination / name).write_bytes(content)
+              manifest['parts'].append({'name': name, 'sha256': hashlib.sha256(content).hexdigest(), 'bytes': len(content)})
+          (destination / 'manifest.json').write_text(json.dumps(manifest, indent=2) + '\n')
+          print(json.dumps({key: value for key, value in manifest.items() if key != 'excluded_binary_files'}, indent=2))
+      - name: Save source-only transfer on the isolated diagnostic branch
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF" = refs/heads/chatgpt/pr17-review-workspace-20260928
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -f .review-transfer/
+          git commit -m 'chore(review): store immutable public source transfer'
+          git push origin HEAD:refs/heads/chatgpt/pr17-review-workspace-20260928
+  failure_evidence:
+    if: github.repository == 'idanilovqa/AlbumHaven'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      actions: read
+    strategy:
+      fail-fast: false
+      matrix:
+        job: [108992934909, 108992934939, 108992935107, 108992935152, 108992935201, 108992935310, 108992935386, 108992935447, 108992935498, 108992935607]
+    steps:
+      - name: Print compact original failure evidence without rerunning tests
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVIDENCE_JOB: ${{ matrix.job }}
+        shell: python
+        run: |
+          import os, re, urllib.request
+          job = os.environ['EVIDENCE_JOB']
+          request = urllib.request.Request('https://api.github.com/repos/idanilovqa/AlbumHaven/actions/jobs/' + job + '/logs', headers={'Authorization': 'Bearer ' + os.environ['GH_TOKEN'], 'Accept': 'application/vnd.github+json'})
+          with urllib.request.urlopen(request, timeout=90) as response:
+              raw = response.read().decode('utf-8', errors='replace')
+          raw = re.sub(r'\x1b\[[0-9;]*[A-Za-z]', '', raw)
+          lines = [re.sub(r'^\d{4}-\d\d-\d\dT\S+\s?', '', line) for line in raw.splitlines()]
+          indices = set()
+          for index, line in enumerate(lines):
+              if re.match(r'^\s*not ok \d+\s*-', line):
+                  stop = index + 1
+                  while stop < min(len(lines), index + 100) and lines[stop].strip() != '...':
+                      stop += 1
+                  indices.update(range(max(0, index - 1), min(len(lines), stop + 1)))
+              elif re.match(r'^\s*\d+\)\s+(?:\[|tests[\\/])', line):
+                  indices.update(range(index, min(len(lines), index + 45)))
+              elif re.search(r'(?:^|\s)(?:Error:|Traceback \(most recent call last\):|[A-Za-z]+Error:|[A-Za-z]+Exception:)|\b\d+ (?:failed|passed)\b|^# (?:tests|pass|fail|skipped|duration_ms) ', line):
+                  indices.update(range(max(0, index - 2), min(len(lines), index + 12)))
+          print('ORIGINAL JOB ' + job + '; full log lines=' + str(len(lines)) + '; selected lines=' + str(len(indices)))
+          previous = -2
+          for index in sorted(indices):
+              if index != previous + 1:
+                  print('...')
+              print(str(index + 1) + ': ' + lines[index])
+              previous = index

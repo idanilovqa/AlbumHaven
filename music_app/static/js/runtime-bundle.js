@@ -6119,7 +6119,7 @@ function updateGalleryMainChrome() {
     inlineTotal.textContent = '';
   }
   if (mobileHome) {
-    name.textContent = 'Home';
+    name.textContent = document.getElementById('mobile-home')?.dataset.accountName || 'My music';
     summary.textContent = '';
     oldInfo?.remove();
   } else if (context.kind === 'gallery' || context.kind === 'family') {
@@ -39856,6 +39856,30 @@ function handleMobileSearchSubmit() {
   return false;
 }
 function hasActiveMobilePage() { return mobilePageState.pages.length > 0; }
+function promoteVisibleMobileDialogs() {
+  if (!usesMobilePageLayout()) return;
+  const kinds = ['album', 'non-album', 'utilities', 'cover-lookup'];
+  if (document.getElementById('track-modal')?.classList.contains('is-above-settings')) {
+    kinds.splice(kinds.indexOf('album'), 1);
+    kinds.splice(kinds.indexOf('cover-lookup'), 0, 'album');
+  }
+  // Capture visibility before moving surfaces: presenting a child hides its parent.
+  const visible = kinds.filter(kind => {
+    const element = document.getElementById(MOBILE_PAGE_KINDS[kind]);
+    return element && !element.hidden && !mobilePageState.originals.has(kind);
+  });
+  for (const kind of visible) {
+    if (kind === 'utilities' && !mobileUtilityTabAllowed(state.utility.activeTab)) {
+      setUtilityActiveTab('appearance');
+      void loadActiveUtilityTab();
+    }
+    const album = kind === 'album' ? getCurrentTrackModalAlbum()
+      : kind === 'cover-lookup' ? state.coverLookup.modal.album : null;
+    presentMobilePage(mobilePageDescriptor(kind, album));
+    if (kind === 'utilities') renderUtilityModalContent();
+  }
+}
+
 function initMobileNavigation() {
   if (mobilePageState.initialized || !document.getElementById('mobile-navigation')) return;
   mobilePageState.initialized = true;
@@ -39877,6 +39901,7 @@ function initMobileNavigation() {
       }
       if (mobile) setMobileSearchOpen(mobilePageState.searchOpen);
     }
+    promoteVisibleMobileDialogs();
     syncMobileGalleryControls();
     syncMobilePageShell();
     if (state.utility.activeTab === 'loops' && mobilePageState.pages.some(page => page.kind === 'utilities')) renderUtilityModalContent();

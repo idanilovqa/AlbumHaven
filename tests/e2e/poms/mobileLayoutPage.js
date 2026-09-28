@@ -52,6 +52,7 @@ export class MobileLayoutPage {
     this.backButton = page.locator('#mobile-back-button');
     this.player = page.locator('.global-player');
     this.settingsButton = page.locator('#app-shell [data-account-menu-trigger]');
+    this.signOut = page.getByRole('menuitem', { name: 'Sign Out', exact: true });
     this.utilitiesButton = page.locator('#app-shell [data-open-utilities]');
     this.utilitiesPage = page.locator('#mobile-page-outlet #utility-modal');
     this.utilitiesDialogs = page.locator('#utility-modal [role="dialog"]');
@@ -304,6 +305,11 @@ export class MobileLayoutPage {
         activeSurface: galleryMainSurfaceController?.current()?.key, pendingView: state.ui.pendingViewTransition,
         pendingRequest: state.ui.activeViewRequestUrl, searchTimer: Boolean(state.ui.pendingSelectedArtistReconcileTimer) };
     });
+  }
+
+  async galleryTitleFits() {
+    // parity-check: allow-read-only-measurement-evaluate -- measure the visible title beside its real gallery controls.
+    return this.galleryContextName.evaluate(title => title.scrollWidth <= title.clientWidth);
   }
 
   async librarySectionLabelsFit() {

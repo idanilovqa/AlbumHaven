@@ -222,6 +222,7 @@ html[data-client-profile="mobile"] :is([data-utility-tab="problematic-files"], [
 }
 @media (max-width: 350px) {
   .gallery-bar { flex-wrap: wrap; }
+  [data-gallery-bar-instance="gallery"] > .gallery-bar__context { flex-basis: 100%; }
   .gallery-bar__actions { margin-left: auto; }
   .shell-layout .toolbar-right { gap: 1px; }
   .mobile-settings-section-button { max-width: 132px; }

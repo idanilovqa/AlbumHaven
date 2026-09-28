@@ -5882,5 +5882,140 @@
       "Log History Period open anchor uses its panel surface without a bottom divider"
     ],
     "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/appearanceWorkspace.spec.js",
+    "case": "mount keeps unavailable devices natively disabled after load save and cancel",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "mount keeps unavailable devices natively disabled after load save and cancel"
+    ],
+    "ownerApproval": "pending"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/appearanceWorkspace.spec.js",
+    "case": "mountAlerts keeps unavailable devices natively disabled after load save and cancel",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "mountAlerts keeps unavailable devices natively disabled after load save and cancel"
+    ],
+    "ownerApproval": "pending"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/appearanceWorkspace.spec.js",
+    "case": "mountAlbumPage keeps unavailable devices natively disabled after load save and cancel",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "mountAlbumPage keeps unavailable devices natively disabled after load save and cancel"
+    ],
+    "ownerApproval": "pending"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/appearanceWorkspace.spec.js",
+    "case": "mountSelectionAccent keeps unavailable devices natively disabled after load save and cancel",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "mountSelectionAccent keeps unavailable devices natively disabled after load save and cancel"
+    ],
+    "ownerApproval": "pending"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/appearanceWorkspace.spec.js",
+    "case": "mountSeekbar keeps unavailable devices natively disabled after load save and cancel",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "mountSeekbar keeps unavailable devices natively disabled after load save and cancel"
+    ],
+    "ownerApproval": "pending"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/libraryStatusPage.spec.js",
+    "case": "gallery resize and search updates preserve the Library Status bar",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "gallery resize and search updates preserve the Library Status bar"
+    ],
+    "ownerApproval": "pending"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/modalEscape.spec.js",
+    "case": "Settings filter consumes first Escape and returns focus before the next closes Settings",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "Settings filter consumes first Escape and returns focus before the next closes Settings"
+    ],
+    "ownerApproval": "pending"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/problematicFilesVirtualFocus.spec.js",
+    "case": "scroll and resize retain focused row identity within unchanged and overlapping windows",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "scroll and resize retain focused row identity within unchanged and overlapping windows"
+    ],
+    "ownerApproval": "pending"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/problematicFilesVirtualFocus.spec.js",
+    "case": "native Tab and ShiftTab traverse past the initial window and leave at the true ends",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "native Tab and ShiftTab traverse past the initial window and leave at the true ends"
+    ],
+    "ownerApproval": "pending"
   }
 ]

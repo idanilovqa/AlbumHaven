@@ -14,6 +14,8 @@ for (const palette of ['black', 'parchment-pine']) {
     await app.selectSubsection('album-page');
     await page.setViewportSize({ width: 1280, height: 900 });
     await expect(app.backButton).toBeVisible();
+    await expect(app.backGlyph).toHaveCSS('stroke-width', '1.7px');
+    await expect(app.backGlyph).toHaveCSS('width', '22px');
     await expect(appearance.deviceButton('Web / Desktop')).toHaveAttribute('aria-pressed', 'true');
     await expect(app.cancelAppearance).toBeEnabled();
     await snapshot(`80-retained-settings-desktop-${palette}`);
@@ -27,6 +29,7 @@ for (const palette of ['black', 'parchment-pine']) {
     await expect(appearance.documentRoot).toHaveAttribute('data-appearance-palette', palette);
     await app.selectSubsection('seekbar');
     await expect(app.thinOption).toBeVisible();
+    await app.expectPlayerPreviewReadable();
     await app.customAppearance.click();
     await app.waveformOption.check();
     await page.setViewportSize({ width: 1280, height: 900 });
@@ -47,7 +50,10 @@ for (const palette of ['black', 'parchment-pine']) {
     await expect(app.utilitiesPage).toBeVisible();
     await expect(app.utilitiesDialogs).toHaveCount(0);
     await expect(app.thinOption).toBeVisible();
+    await app.expectPlayerPreviewReadable();
     await expect(app.backButton).toBeVisible();
+    await expect(app.backGlyph).toHaveCSS('stroke-width', '1.7px');
+    await expect(app.backGlyph).toHaveCSS('width', '22px');
     await snapshot(`81-promoted-settings-phone-${palette}`);
     await app.backButton.click();
     await expect(app.utilitiesPage).not.toBeVisible();
@@ -56,6 +62,8 @@ for (const palette of ['black', 'parchment-pine']) {
     await app.openAlbumBody('After the Rain');
     await page.setViewportSize({ width: 1280, height: 900 });
     await expect(app.backButton).toBeVisible();
+    await expect(app.backGlyph).toHaveCSS('stroke-width', '1.7px');
+    await expect(app.backGlyph).toHaveCSS('width', '22px');
     await app.backButton.click();
     await expect(app.albumPage).not.toBeVisible();
     await app.selectView('cards');
@@ -65,6 +73,8 @@ for (const palette of ['black', 'parchment-pine']) {
     await expect(app.albumPage).toBeVisible();
     await expect(app.albumDialogs).toHaveCount(0);
     await expect(app.backButton).toBeVisible();
+    await expect(app.backGlyph).toHaveCSS('stroke-width', '1.7px');
+    await expect(app.backGlyph).toHaveCSS('width', '22px');
     expect(await app.hasNoHorizontalOverflow()).toBe(true);
     await snapshot(`82-promoted-album-phone-${palette}`);
   });

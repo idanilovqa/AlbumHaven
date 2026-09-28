@@ -50,6 +50,7 @@ export class MobileLayoutPage {
     this.albumDialogs = page.locator('#track-modal [aria-modal="true"]');
     this.editTags = page.locator('#track-modal-edit-tags');
     this.backButton = page.locator('#mobile-back-button');
+    this.backGlyph = this.backButton.locator('svg');
     this.player = page.locator('.global-player');
     this.settingsButton = page.locator('#app-shell [data-account-menu-trigger]');
     this.signOut = page.getByRole('menuitem', { name: 'Sign Out', exact: true });
@@ -194,6 +195,16 @@ export class MobileLayoutPage {
     expect(geometry.iconTransform).toBe('none');
     expect(geometry.lowerPlayTarget).toBe(true);
     expect(await this.hasNoHorizontalOverflow()).toBe(true);
+  }
+
+  async expectPlayerPreviewReadable() {
+    await expect(this.playerPreview).toBeVisible();
+    // parity-check: allow-read-only-measurement-evaluate -- compare the three metadata rows in the rendered shared preview.
+    const rows = await this.playerPreview.evaluate(preview =>
+      ['artist', 'title', 'album'].map(name => preview.querySelector(`[data-player-preview-${name}]`).getBoundingClientRect().toJSON()));
+    expect(rows[1].y).toBeGreaterThanOrEqual(rows[0].bottom);
+    expect(rows[2].y).toBeGreaterThanOrEqual(rows[1].bottom);
+    for (const row of rows) expect(row.width).toBeGreaterThan(40);
   }
 
   async expectApprovedAlbumOverview(layout) {

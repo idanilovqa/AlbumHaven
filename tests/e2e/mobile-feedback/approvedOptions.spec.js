@@ -125,6 +125,7 @@ test('thin mobile progress uses real playback, seeking and saved UI choice witho
   await app.regularOption.check();
   await app.saveAppearanceChanges();
   await expect(app.player).toHaveAttribute('data-player-seekbar-presentation', 'regular');
+  await app.expectPlayerPreviewReadable();
   await app.thinOption.check();
   await app.cancelAppearance.click();
   await expect(app.regularOption).toBeChecked();
@@ -132,6 +133,7 @@ test('thin mobile progress uses real playback, seeking and saved UI choice witho
   await app.waveformOption.check();
   await app.saveAppearanceChanges();
   await expect(app.player).toHaveAttribute('data-player-seekbar-presentation', 'waveform');
+  await app.expectPlayerPreviewReadable();
   await app.thinOption.check();
   const savedLayout = page.waitForResponse(response => response.url().endsWith('/account/layout-preferences')
     && response.request().method() === 'PUT' && response.request().postDataJSON()?.changes?.playerAppearance?.seekbarMode === 'thin');

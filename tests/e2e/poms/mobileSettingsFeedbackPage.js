@@ -10,6 +10,8 @@ export class MobileSettingsFeedbackPage extends MobileLoopsPage {
     this.detail = this.root.locator('#utility-problematic-detail');
     this.exportLogs = this.detail.locator('[data-log-history-action="export-current"]');
     this.list = this.root.locator('#utility-problematic-list');
+    this.problemTitle = this.detail.locator('.utility-detail-summary .utility-detail-title');
+    this.problemCover = this.detail.locator('.utility-detail-cover');
     this.problemCards = this.list.locator('[data-problematic-album-key]');
     this.recentActivity = this.list.locator('[data-utility-log-history-id="recent"]');
     this.filter = this.root.locator('#utility-problem-filter-button');

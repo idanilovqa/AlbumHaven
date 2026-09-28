@@ -582,6 +582,8 @@ html[data-client-profile="mobile"] :is([data-open-problematic-album-folder], [da
   #utility-modal.is-mobile-page[data-active-tab="rules"] .utility-detail { flex: none; }
   #utility-modal.is-mobile-page .utility-detail-header { grid-template-columns: 84px minmax(0, 1fr); }
   #utility-modal.is-mobile-page .utility-detail-cover { width: 84px; height: 84px; flex-basis: 84px; }
-  #utility-modal.is-mobile-page .utility-detail-context-actions { grid-column: 1 / -1; justify-content: flex-start; }
+  #utility-modal.is-mobile-page .utility-detail-header > .utility-detail-cover { grid-row: 1; }
+  #utility-modal.is-mobile-page .utility-detail-summary { grid-column: 2; grid-row: 1; }
+  #utility-modal.is-mobile-page .utility-detail-context-actions { grid-column: 1 / -1; grid-row: 2; justify-content: flex-start; }
   :root .is-mobile-page .utility-loop-entry .utility-loop-repeat.is-active:is(button, :hover, :active, :focus) { background: var(--appearance-primary-button) !important; color: var(--appearance-primary-button-ink) !important; border-color: var(--appearance-primary-button); }
 }

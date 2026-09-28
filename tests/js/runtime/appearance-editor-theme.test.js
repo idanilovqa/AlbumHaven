@@ -10,7 +10,7 @@ const preference = (changes = {}) => ({
 function element() {
   const styles = new Map(), attributes = new Map(), children = new Map(), listeners = new Map();
   return {
-    styles, attributes, listeners, children: [], innerHTML: '', value: '',
+    styles, attributes, listeners, dataset: {}, children: [], innerHTML: '', value: '',
     appendChild(child) { this.children.push(child); return child; },
     insertAdjacentHTML(_position, markup) { this.innerHTML += markup; },
     style: {
@@ -31,13 +31,14 @@ function element() {
   };
 }
 
-async function mounted(method, initial = preference(), saveResponse) {
+async function mounted(method, initial = preference(), saveResponse, client = {}) {
   const root = element(), host = element();
   const document = {
     documentElement: root, addEventListener() {}, createElement: () => element(),
     getElementById: id => id === 'appearance-bootstrap' ? { textContent: JSON.stringify(initial) } : null,
   };
   const window = {
+    ...client,
     location: { href: 'https://music.test/', origin: 'https://music.test' },
     addEventListener() {}, confirm: () => true,
     fetch: async (_url, options) => {
@@ -57,6 +58,42 @@ async function mounted(method, initial = preference(), saveResponse) {
     preview: host.querySelector('.appearance-background-editor').querySelector(method === 'mount' ? '[data-background-preview]' : '[data-player-live-preview]'),
   };
 }
+
+test('responsive appearance applies saved mobile colors, never another section of an unsaved draft', async () => {
+  let breakpointChanged;
+  const { instance, root } = await mounted('mount', preference(), undefined, {
+    AlbumHavenDevicePreferences: { profile: () => 'mobile' },
+    matchMedia: () => ({ addEventListener: (_event, listener) => { breakpointChanged = listener; } }),
+  });
+  instance.controller.setDeviceSectionMode('custom');
+  instance.controller.setPalette('paper');
+  instance.controller.setActiveSection('album-page');
+  assert.equal(instance.controller.getState().dirty, true);
+  breakpointChanged();
+  assert.equal(root.getAttribute('data-appearance-palette'), 'steelblue');
+  instance.controller.cancel();
+  assert.equal(root.getAttribute('data-appearance-palette'), 'steelblue');
+});
+
+test('an open appearance editor follows the client profile across the breakpoint', async () => {
+  let profile = 'web_desktop', breakpointChanged;
+  const { instance } = await mounted('mount', preference(), undefined, {
+    AlbumHavenDevicePreferences: { profile: () => profile },
+    matchMedia: () => ({ addEventListener: (_event, listener) => { breakpointChanged = listener; } }),
+  });
+  profile = 'mobile';
+  breakpointChanged();
+  assert.equal(instance.controller.getState().activeDeviceProfile, 'mobile');
+  instance.controller.setDeviceSectionMode('custom');
+  instance.controller.setPalette('paper');
+  profile = 'web_desktop';
+  breakpointChanged();
+  assert.equal(instance.controller.getState().activeDeviceProfile, 'web_desktop');
+  assert.equal(instance.controller.getState().draft.palette_id, 'steelblue');
+  profile = 'mobile';
+  breakpointChanged();
+  assert.equal(instance.controller.getState().draft.palette_id, 'paper', 'resizing retains the mobile draft');
+});
 
 function assertEditorTheme(preview, draft) {
   const effective = api.resolveAppearance(draft);
@@ -282,3 +319,35 @@ for (const method of ['mount', 'mountSeekbar', 'mountSelectionAccent', 'mountAle
     assert.equal(notice.innerHTML, '');
   });
 }
+
+test('seekbar drafts stay with their device profile and save through retained callbacks after resize', async () => {
+  let profile = 'mobile', breakpointChanged;
+  const { instance, host } = await mounted('mount', preference(), undefined, {
+    AlbumHavenDevicePreferences: { profile: () => profile },
+    matchMedia: () => ({ addEventListener: (_event, listener) => { breakpointChanged = listener; } }),
+  });
+  const applied = [];
+  instance.mountSeekbar(host, {
+    getSeekbarMode: selected => selected === 'mobile' ? 'thin' : 'default',
+    applySeekbarMode: (mode, selected) => applied.push([selected, mode]),
+  });
+  instance.controller.setDeviceSectionMode('custom');
+  instance.controller.setSeekbarMode('waveform');
+  profile = 'web_desktop';
+  breakpointChanged();
+  assert.equal(instance.controller.getState().seekbarMode, 'default');
+  assert.equal(instance.controller.getState().dirty, true);
+  assert.equal(await instance.controller.save(), true);
+  assert.deepEqual(applied, [['mobile', 'waveform']]);
+  assert.equal(instance.controller.getState().dirty, false);
+  profile = 'mobile';
+  breakpointChanged();
+  assert.equal(instance.controller.getState().seekbarMode, 'waveform');
+  instance.controller.setSeekbarMode('thin');
+  profile = 'web_desktop';
+  breakpointChanged();
+  instance.controller.cancel();
+  profile = 'mobile';
+  breakpointChanged();
+  assert.equal(instance.controller.getState().seekbarMode, 'waveform');
+});

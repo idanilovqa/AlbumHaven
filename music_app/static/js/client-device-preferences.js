@@ -66,8 +66,8 @@
         env.document?.dispatchEvent?.(new env.CustomEvent('album-haven:preferences-sync', { detail: { state: value } }));
       }
     };
-    const read = (field, fallback) => {
-      const value = profiles[profile()]?.[field];
+    const read = (field, fallback, selected = profile()) => {
+      const value = profiles[selected]?.[field];
       if (value === undefined) return fallback;
       const result = clone(value);
       if (field === 'galleryDisplayPreferences') {
@@ -79,9 +79,8 @@
       if (timer !== null) env.clearTimeout(timer);
       timer = env.setTimeout(() => { timer = null; void flush(); }, 180);
     };
-    const write = (field, value) => {
-      if (!enabled || !Object.values(STORAGE_KEYS).includes(field)) return false;
-      const selected = profile();
+    const write = (field, value, selected = profile()) => {
+      if (!enabled || !['web_desktop', 'mobile', 'tv'].includes(selected) || !Object.values(STORAGE_KEYS).includes(field)) return false;
       const current = profiles[selected] || (profiles[selected] = {});
       if (JSON.stringify(current[field]) === JSON.stringify(value)) return true;
       current[field] = clone(value);

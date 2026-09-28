@@ -148,3 +148,31 @@ test('header Back traverses to its parent without replacing the child history en
   assert.deepEqual(movements, [-2]);
   assert.equal(vm.runInContext('mobilePageState.pages.length', context), 1);
 });
+
+
+test('breakpoint promotion retains open surfaces and puts an album above Settings in the same order', () => {
+  const calls = [];
+  const nodes = Object.fromEntries(['track-modal', 'utility-modal', 'cover-lookup-modal', 'non-album-modal'].map(id => [id, {
+    hidden: id === 'non-album-modal', classList: { contains: name => id === 'track-modal' && name === 'is-above-settings' },
+  }]));
+  const album = { key: 'generated-album', name: 'Generated album' };
+  const context = load('mobile-navigation.js', {
+    document: { getElementById: id => nodes[id] },
+    state: { utility: { activeTab: 'problematic-files' }, coverLookup: { modal: { album } } },
+    getCurrentTrackModalAlbum: () => album,
+    loadActiveUtilityTab: () => calls.push('load'),
+    renderUtilityModalContent: () => calls.push('render'),
+  });
+  context.mobileUtilityTabAllowed = tab => tab === 'appearance';
+  context.setUtilityActiveTab = tab => { context.state.utility.activeTab = tab; };
+  context.mobilePageDescriptor = (kind, value) => ({ kind, album: value });
+  context.presentMobilePage = descriptor => calls.push(descriptor);
+  context.promoteVisibleMobileDialogs();
+  assert.deepEqual(calls.map(call => typeof call === 'string' ? call : call.kind), ['load', 'utilities', 'render', 'album', 'cover-lookup']);
+  assert.equal(calls[3].album, album);
+  assert.equal(context.state.utility.activeTab, 'appearance');
+  calls.length = 0;
+  context.window.innerWidth = 1280;
+  context.promoteVisibleMobileDialogs();
+  assert.deepEqual(calls, []);
+});

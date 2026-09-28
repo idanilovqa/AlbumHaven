@@ -10,6 +10,9 @@
 .page-gallery-bar > .gallery-bar__context { flex: 1; min-width: 0; }
 .page-gallery-bar__back { color: inherit; text-decoration: none; }
 .mobile-page-header { flex-shrink: 0; }
+/* Retained pages still need an exit when the window grows beyond phone width. */
+.mobile-page-header [data-mobile-back]:not([hidden]) { display: inline-grid; place-items: center; flex: 0 0 40px; }
+.mobile-page-header [data-mobile-back] svg { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
 /* Reserve header geometry during the handoff so scrolling cannot bounce. */
 .mobile-page-header[data-album-identity-in-body="true"] > .gallery-bar__context { visibility: hidden; }
 .player-track-meta { display: contents; }
@@ -220,6 +223,7 @@ html[data-client-profile="mobile"] :is([data-utility-tab="problematic-files"], [
 }
 @media (max-width: 350px) {
   .gallery-bar { flex-wrap: wrap; }
+  [data-gallery-bar-instance="gallery"] > .gallery-bar__context { flex-basis: 100%; }
   .gallery-bar__actions { margin-left: auto; }
   .shell-layout .toolbar-right { gap: 1px; }
   .mobile-settings-section-button { max-width: 132px; }
@@ -332,18 +336,25 @@ html[data-client-profile="mobile"] :is([data-utility-tab="problematic-files"], [
 }
 
 @media (max-width: 900px) {
-  .player-live-preview[data-mobile-player-preview="true"][data-seekbar-mode="thin"] { display: grid; grid-template-columns: 48px minmax(0, 1fr) auto 52px; grid-template-rows: 16px 14px 14px; align-content: center; gap: 3px 10px; height: 76px; box-sizing: border-box; padding: 8px 12px; }
-  .player-live-preview[data-mobile-player-preview="true"][data-seekbar-mode="thin"] :is(.player-preview-main, .player-preview-meta, .player-preview-track-meta) { display: contents; }
-  .player-live-preview[data-mobile-player-preview="true"][data-seekbar-mode="thin"] .player-preview-cover { grid-column: 1; grid-row: 1 / -1; align-self: center; width: 48px; height: 48px; }
-  .player-live-preview[data-mobile-player-preview="true"][data-seekbar-mode="thin"] .player-preview-transport { grid-column: 4; grid-row: 1 / -1; align-self: center; justify-self: end; display: grid; place-items: center; width: 52px; height: 52px; margin: 0; }
+  .player-live-preview[data-mobile-player-preview="true"] { display: grid; grid-template-columns: 48px minmax(0, 1fr) auto 52px; grid-template-rows: 16px 14px 14px; align-content: center; gap: 3px 10px; height: 76px; box-sizing: border-box; padding: 8px 12px; }
+  .player-live-preview[data-mobile-player-preview="true"] :is(.player-preview-main, .player-preview-meta, .player-preview-track-meta) { display: contents; }
+  .player-live-preview[data-mobile-player-preview="true"] .player-preview-cover { grid-column: 1; grid-row: 1 / -1; align-self: center; width: 48px; height: 48px; }
+  .player-live-preview[data-mobile-player-preview="true"] .player-preview-transport { grid-column: 4; grid-row: 1 / -1; align-self: center; justify-self: end; display: grid; place-items: center; width: 52px; height: 52px; margin: 0; }
   .player-live-preview[data-mobile-player-preview="true"] .player-preview-transport small { display: none; }
   .player-live-preview[data-mobile-player-preview="true"] .player-preview-transport > span { display: grid; place-items: center; line-height: 0; }
   .player-live-preview[data-mobile-player-preview="true"] .player-preview-transport svg { width: 28px; height: 28px; fill: currentColor; stroke: none; }
-  .player-live-preview[data-mobile-player-preview="true"][data-seekbar-mode="thin"] [data-player-preview-artist] { grid-column: 2; grid-row: 1; font-size: 14px; line-height: 16px; }
-  .player-live-preview[data-mobile-player-preview="true"][data-seekbar-mode="thin"] [data-player-preview-title] { grid-column: 2; grid-row: 2; font-size: 11px; line-height: 14px; }
-  .player-live-preview[data-mobile-player-preview="true"][data-seekbar-mode="thin"] [data-player-preview-album] { grid-column: 2; grid-row: 3; font-size: 11px; line-height: 14px; }
-  .player-live-preview[data-mobile-player-preview="true"][data-seekbar-mode="thin"] [data-player-preview-time] { grid-column: 3; grid-row: 3; justify-self: end; font-size: 11px; line-height: 14px; }
+  .player-live-preview[data-mobile-player-preview="true"] [data-player-preview-artist] { grid-column: 2; grid-row: 1; font-size: 14px; line-height: 16px; }
+  .player-live-preview[data-mobile-player-preview="true"] [data-player-preview-title] { grid-column: 2; grid-row: 2; font-size: 11px; line-height: 14px; }
+  .player-live-preview[data-mobile-player-preview="true"] [data-player-preview-album] { grid-column: 2; grid-row: 3; font-size: 11px; line-height: 14px; }
+  .player-live-preview[data-mobile-player-preview="true"] [data-player-preview-time] { grid-column: 3; grid-row: 3; justify-self: end; font-size: 11px; line-height: 14px; }
   .player-live-preview[data-mobile-player-preview="true"] :is([data-player-preview-artist], [data-player-preview-title], [data-player-preview-album]) { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+  .player-live-preview[data-mobile-player-preview="true"]:not([data-seekbar-mode="thin"]) { grid-template-columns: 48px minmax(0, 1fr) 90px; grid-template-rows: 16px 14px 14px 24px; height: 104px; }
+  .player-live-preview[data-mobile-player-preview="true"]:not([data-seekbar-mode="thin"]) :is(.player-preview-cover, .player-preview-transport) { grid-row: 1 / 4; }
+  .player-live-preview[data-mobile-player-preview="true"]:not([data-seekbar-mode="thin"]) .player-preview-transport { grid-column: 3; }
+  .player-live-preview[data-mobile-player-preview="true"]:not([data-seekbar-mode="thin"]) [data-player-preview-time] { grid-row: 4; align-self: center; }
+  .player-live-preview[data-mobile-player-preview="true"]:not([data-seekbar-mode="thin"]) :is(.player-preview-seekbar, .player-preview-waveform) { grid-column: 1 / 3; grid-row: 4; align-self: center; }
+  .player-live-preview[data-mobile-player-preview="true"] .player-preview-waveform { height: 24px; }
+
 }
 
 /* 2026-09-27 owner feedback: mobile composition at existing component boundaries. */

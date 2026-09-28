@@ -74,7 +74,19 @@ export class TagEditor extends BasePage {
   async readFormAndStripeColors() {
     // parity-check: allow-read-only-measurement-evaluate -- read the existing tag form and alternating unselected rows.
     return this.overlay.evaluate(node => {
-      const paint = element => ({ background: getComputedStyle(element).backgroundColor, ink: getComputedStyle(element).color });
+      const paint = element => {
+        const layers = [];
+        for (let node = element; node; node = node.parentElement) {
+          const color = getComputedStyle(node).backgroundColor;
+          const values = color.match(/[\d.]+/g).map(Number);
+          const rgb = values.slice(0, 3).map(value => color.startsWith('color(') ? value * 255 : value);
+          const alpha = values[3] ?? 1;
+          layers.unshift({ rgb, alpha });
+          if (alpha === 1) break;
+        }
+        const rgb = layers.reduce((under, layer) => layer.rgb.map((value, index) => value * layer.alpha + under[index] * (1 - layer.alpha)), [255, 255, 255]);
+        return { background: `rgb(${rgb.join(', ')})`, ink: getComputedStyle(element).color };
+      };
       const rows = [...node.querySelectorAll('.tag-editor-track:not(.is-active)')].slice(0, 3);
       return { rows: rows.map(paint), input: paint(node.querySelector('[data-tag-field="album"]')), apply: paint(node.querySelector('[data-open-tag-edit-confirm]')) };
     });

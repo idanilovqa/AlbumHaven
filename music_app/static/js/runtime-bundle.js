@@ -5400,8 +5400,9 @@ function syncTriggerAnchor(surface, anchor) {
   if (!surface?.getBoundingClientRect || !anchor?.getBoundingClientRect || surface.hidden) return;
   const previous = triggerAnchorBindings.get(surface);
   if (previous && previous.anchor !== anchor) clearTriggerAnchor(surface);
+  const contextOwner = anchor.closest?.('.trigger-anchor-surface, .shell-main-surface, .settings-outlet');
   const anchorContext = surface.matches?.('.mobile-settings-drawer') ? 'chrome'
-    : anchor.closest?.('.shell-main-surface, .settings-outlet') ? 'content' : 'chrome';
+    : contextOwner?.dataset?.triggerAnchorContext || (contextOwner ? 'content' : 'chrome');
   surface.dataset.triggerAnchorContext = anchorContext;
   anchor.dataset.triggerAnchorContext = anchorContext;
   activateTriggerSurface(surface, () => {
@@ -16455,7 +16456,7 @@ function buildUtilityIntegrationDetail(item) {
     const format = state.utility.foobarFormat || 'Playback Statistics XML';
     return `<div class="utility-rule-detail"><h3 class="utility-rule-title">Foobar2000</h3>
       <section class="library-settings-section"><label class="lastfm-inline-field"><span>SQLite database</span><input class="utility-search-input" type="text" placeholder="SQLite database path" disabled aria-describedby="foobar-unavailable"></label>
-      <div class="settings-integration-actions">${button({ label: 'Save', disabled: true })}</div></section>
+      <div class="settings-integration-actions">${button({ label: 'Save', variant: 'primary', disabled: true })}</div></section>
       <section class="library-settings-section"><h4>Import playback history</h4><div class="settings-integration-actions">
       ${button({ label: format, attributes: { 'data-foobar-format-trigger': '1', 'aria-haspopup': 'menu', 'aria-expanded': 'false' } })}
       ${button({ label: 'Import', disabled: true, attributes: { 'data-foobar-import': '1' } })}</div>
@@ -16732,7 +16733,7 @@ function buildDetectedProblemsHtml(album) {
     id: 'problematic-track-problems', ariaLabel: 'Detected problems',
     columns: 'minmax(180px,1fr) minmax(160px,1fr) minmax(180px,1.2fr)',
     columnsConfig: [{ key: 'filename', label: 'Track / file' }, { key: 'reason', label: 'Problems' }, { key: 'suggested', label: 'Suggested edits' }],
-    headers: 'visible', density: 'compact', overflow: 'local', mobile: 'preserve', frame: 'outline', rows: tableRows,
+    headers: 'visible', density: 'compact', overflow: 'local', mobile: 'stack', frame: 'outline', rows: tableRows,
   }) : '';
   const separateCandidate = album?.separate_release_candidate;
   const separateKey = String(separateCandidate?.key || '');
@@ -16740,7 +16741,7 @@ function buildDetectedProblemsHtml(album) {
   const separateActions = separateKey ? `<label class="utility-separate-release-choice ${separateSelected ? 'is-active' : ''}">
       <input type="checkbox" data-separate-release-key="${escapeHtml(separateKey)}" ${separateSelected ? 'checked' : ''}>
       <span>Separate releases</span><small>${escapeHtml((separateCandidate.years || []).join(' / '))}</small></label>
-    ${ButtonComponent.renderButton({ label: 'Apply separate releases', className: 'utility-detail-apply', disabled: !separateSelected || !album.allowed_actions?.['library.rules.manage'], attributes: { 'data-open-separate-release-confirm': '1' } })}` : '';
+    ${ButtonComponent.renderButton({ label: 'Apply separate releases', variant: 'primary', className: 'utility-detail-apply', disabled: !separateSelected || !album.allowed_actions?.['library.rules.manage'], attributes: { 'data-open-separate-release-confirm': '1' } })}` : '';
   const selected = Object.values(state.utility.proposalSelections || {}).some(Boolean);
   return `<div class="sr-only" data-problem-exclusion-status role="status" tabindex="-1"></div>
     <div class="utility-album-problem-labels">${albumProblems}</div>
@@ -16748,8 +16749,8 @@ function buildDetectedProblemsHtml(album) {
     ${table ? `<div class="utility-detected-table">${table}</div>` : `<p class="utility-detail-meta">${selectedFilters.length ? 'No per-track problems match the selected filters.' : albumRows.length ? 'Only album-level problems found. No per-track problems.' : 'No per-track problems found.'}</p>`}
     ${albumProblems || tableRows.length || separateActions || getIgnoredRepairRowKeys().length ? `<div class="utility-detected-actions">
       ${separateActions}
-      ${ButtonComponent.renderButton({ label: 'Create Exception', className: 'utility-exception-action', disabled: !getIgnoredRepairRowKeys().length || !album.allowed_actions?.['library.rules.manage'], attributes: { 'data-open-exclusion-confirm': '1' } })}
-      ${tableRows.length ? ButtonComponent.renderButton({ label: selected ? 'Apply' : 'Apply All', className: 'utility-detail-apply', disabled: !album.allowed_actions?.['library.files.edit_tags'] || !getApplicableProblemSuggestions().length || Boolean(state.utility.proposalApplyBusy), attributes: { 'data-apply-problem-suggestions': '1' } }) : ''}
+      ${ButtonComponent.renderButton({ label: 'Create Exception', variant: 'primary', className: 'utility-exception-action', disabled: !getIgnoredRepairRowKeys().length || !album.allowed_actions?.['library.rules.manage'], attributes: { 'data-open-exclusion-confirm': '1' } })}
+      ${tableRows.length ? ButtonComponent.renderButton({ label: selected ? 'Apply' : 'Apply All', variant: 'primary', className: 'utility-detail-apply', disabled: !album.allowed_actions?.['library.files.edit_tags'] || !getApplicableProblemSuggestions().length || Boolean(state.utility.proposalApplyBusy), attributes: { 'data-apply-problem-suggestions': '1' } }) : ''}
     </div>` : ''}`;
 }
 function buildProblematicAlbumDetail(album) {
@@ -20328,7 +20329,7 @@ function buildUtilityLibrarySettingsDetail() {
       </section>
       <div class="confirm-modal-actions">
         <button class="button button-secondary" type="button" data-reload-library-settings="1" ${librarySettingsState.saveBusy ? 'disabled' : ''}>Refresh</button>
-        <button class="button" type="button" data-save-library-settings="1" ${librarySettingsReadOnlyClient() || librarySettingsState.saveBusy || librarySettingsState.allowedActions?.['library.settings.manage'] !== true ? 'disabled' : ''}>${librarySettingsState.saveBusy ? 'Saving...' : 'Save library settings'}</button>
+        <button class="button ui-button ui-button--primary ui-button--medium" type="button" data-save-library-settings="1" ${librarySettingsReadOnlyClient() || librarySettingsState.saveBusy || librarySettingsState.allowedActions?.['library.settings.manage'] !== true ? 'disabled' : ''}>${librarySettingsState.saveBusy ? 'Saving...' : 'Save library settings'}</button>
       </div>
     </div>
   `;
@@ -21018,7 +21019,8 @@ function renderProblematicFiles({ preserveProblematicTree = false } = {}) {
     return;
   }
 
-  if (mobileIndex && !mobilePageState.pages.at(-1)?.utilityDetail) {
+  const mobilePage = mobileIndex ? mobilePageState.pages.at(-1) : null;
+  if (mobileIndex && (mobilePage?.tab !== 'problematic-files' || !mobilePage.utilityDetail)) {
     renderTree('');
     els.detail.innerHTML = '';
     return;

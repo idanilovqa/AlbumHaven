@@ -95,6 +95,7 @@ DEMO_LOOP_WINDOWS = (
     ('opening-motif', 'After the Rain', 'Open Water', 'Opening motif', 2.0, 10.0),
     ('rhythm-study', 'After the Rain', 'Open Water', 'Rhythm study', 18.0, 30.0),
     ('transition', 'After the Rain', 'Open Water', 'Transition', 42.0, 51.0),
+    ('bridge-study', 'After the Rain', 'Open Water', 'Bridge study', 64.0, 76.0),
     ('night-pulse', 'Night Atlas', 'Open Water', 'Night pulse', 4.0, 16.0),
     ('night-coda', 'Night Atlas', 'Open Water', 'Night coda', 24.0, 32.0),
     ('first-light', LONG_ALBUM, 'First Horizon', 'First light', 0.5, 5.0),

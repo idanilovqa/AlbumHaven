@@ -25,7 +25,9 @@ function renderProblematicFiles({ preserveProblematicTree = false } = {}) {
     }
   };
 
-  const virtualListApi = typeof window !== 'undefined'
+  const mobileIndex = typeof usesMobilePageLayout === 'function' && usesMobilePageLayout();
+  if (mobileIndex) disposeProblematicFilesVirtualList();
+  const virtualListApi = mobileIndex ? null : typeof window !== 'undefined'
     ? window.ProblematicFilesVirtualList
     : globalThis.ProblematicFilesVirtualList;
   const mountedRows = preserveProblematicTree && !virtualListApi?.create
@@ -99,6 +101,13 @@ function renderProblematicFiles({ preserveProblematicTree = false } = {}) {
   if (!items.length) {
     replaceListContents('<div class="utility-empty-state compact">No matching problematic albums found.</div>');
     els.detail.innerHTML = '<div class="utility-empty-state">No matching problematic albums found.</div>';
+    return;
+  }
+
+  const mobilePage = mobileIndex ? mobilePageState.pages.at(-1) : null;
+  if (mobileIndex && (mobilePage?.tab !== 'problematic-files' || !mobilePage.utilityDetail)) {
+    renderTree('');
+    els.detail.innerHTML = '';
     return;
   }
 

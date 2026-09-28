@@ -1893,7 +1893,8 @@ a.play { color: var(--accent); text-decoration: none; margin-left: 8px; }
 .utility-log-presets { display: flex; flex-wrap: wrap; gap: 6px; }
 .utility-log-type-options { display: grid; gap: 8px; }
 .utility-log-type-options label { display: flex; align-items: center; gap: 8px; }
-.app-form-anchored { background: transparent; }
+.app-form-anchored { background: transparent; pointer-events: none; }
+.app-form-anchored .confirm-modal-dialog { pointer-events: auto; }
 #app-form-modal .confirm-modal-dialog { box-sizing: border-box; display: flex; flex-direction: column; max-height: 100%; overflow: visible; }
 #app-form-content { min-height: 0; padding: 4px; overflow-y: auto; overscroll-behavior: contain; }
 #app-form-modal .confirm-modal-title, #app-form-modal .confirm-modal-actions, #app-form-error { flex: 0 0 auto; }

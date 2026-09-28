@@ -39,6 +39,13 @@ test('anchored surfaces retain the trigger content context after being portaled'
   assert.equal(surface.dataset.triggerAnchorContext, 'content');
   assert.equal(anchor.dataset.triggerAnchorContext, 'content');
 
+  anchor.closest = () => ({ dataset: { triggerAnchorContext: 'content' } });
+  context.syncTriggerAnchor(surface, anchor);
+  assert.equal(surface.dataset.triggerAnchorContext, 'content', 'nested portaled menu inherits content palette');
+  surface.matches = selector => selector === '.mobile-settings-drawer';
+  context.syncTriggerAnchor(surface, anchor);
+  assert.equal(surface.dataset.triggerAnchorContext, 'chrome', 'navigation drawer retains app-bar palette');
+  surface.matches = () => false;
   anchor.closest = () => null;
   context.syncTriggerAnchor(surface, anchor);
   assert.equal(surface.dataset.triggerAnchorContext, 'chrome');

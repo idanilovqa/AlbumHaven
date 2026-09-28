@@ -1160,7 +1160,7 @@ html .cover-lookup-drawer {
   color-scheme: var(--appearance-panel-color-scheme);
 }
 :root[data-appearance-palette='parchment-pine']:not([data-appearance-item-selected]) .navigation-tree-item {
-  --selection-body-background: color-mix(in srgb, var(--appearance-panel-ink) 18%, var(--appearance-panel-background));
+  --selection-body-background: color-mix(in srgb, var(--text) 10%, var(--panel));
 }
 /* Use content ink for readable text while retaining the approved muted palette token. */
 :root[data-appearance-palette='parchment-pine'] :is(.shell-main-surface, .settings-main) {
@@ -1242,3 +1242,65 @@ html .cover-lookup-drawer {
 :root .tag-editor-track:not(.is-active):not(:hover):nth-child(even) { background: color-mix(in srgb, var(--text) 7%, var(--appearance-card, var(--panel))); }
 .appearance-device-mode button[aria-pressed='true'] { border-color: currentColor; box-shadow: inset 0 0 0 1px currentColor; font-weight: 700; }
 .appearance-device-mode button[aria-pressed='true']::before { content: '✓ '; }
+
+/* Content surfaces retain their palette when moved out of the page or resized.
+   Chrome drawers deliberately use the app-bar companion instead. */
+:root {
+  --appearance-content-ink: var(--appearance-ink, var(--text));
+  --appearance-content-muted: var(--appearance-muted, var(--muted));
+  --appearance-content-focus-outline: var(--appearance-focus-outline);
+  --appearance-content-interaction-outline: var(--appearance-interaction-outline);
+  --appearance-content-color-scheme: dark;
+  --appearance-content-card: var(--appearance-card, var(--panel));
+  --appearance-content-control: var(--appearance-control, var(--panel-2));
+  --appearance-content-line: var(--appearance-line, var(--border));
+  --appearance-content-action-hover-background: var(--appearance-item-action-hover-background);
+  --appearance-content-action-pressed: var(--appearance-item-action-pressed);
+}
+:root :is(.is-mobile-page > .utility-modal-dialog, .is-mobile-page > .cover-lookup-modal-dialog, .is-mobile-page > .non-album-modal-dialog, .trigger-anchor-surface[data-trigger-anchor-context='content']) {
+  --appearance-ink: var(--appearance-content-ink);
+  --appearance-muted: var(--appearance-content-muted);
+  --appearance-focus-outline: var(--appearance-content-focus-outline);
+  --appearance-interaction-outline: var(--appearance-content-interaction-outline);
+  color-scheme: var(--appearance-content-color-scheme);
+  --appearance-card: var(--appearance-content-card);
+  --appearance-control: var(--appearance-content-control);
+  --appearance-line: var(--appearance-content-line);
+  --appearance-item-action-hover-background: var(--appearance-content-action-hover-background);
+  --appearance-item-action-pressed: var(--appearance-content-action-pressed);
+  --appearance-neutral-button-background: var(--appearance-content-control);
+  --appearance-panel-background: var(--appearance-content-card);
+  --text: var(--appearance-content-ink); --ink: var(--appearance-content-ink);
+  --muted: var(--appearance-content-muted); --app-ink: var(--appearance-content-ink);
+  --app-muted: var(--appearance-content-muted);
+  --surface: var(--appearance-main-surface); --surface-2: var(--appearance-content-card);
+  --panel: var(--appearance-content-card); --panel-2: var(--appearance-content-control);
+  --border: var(--appearance-content-line); --line: var(--appearance-content-line);
+  --trigger-anchor-background: var(--appearance-content-card);
+  --selection-body-background: color-mix(in srgb, var(--text) 10%, var(--panel));
+  --dropdown-item-hover-background: color-mix(in srgb, var(--text) 8%, var(--panel));
+  color: var(--text);
+}
+:root .mobile-settings-drawer {
+  --appearance-ink: var(--appearance-panel-ink, var(--appearance-content-ink)); --text: var(--appearance-panel-ink, var(--appearance-content-ink));
+  --appearance-muted: var(--appearance-panel-muted, var(--appearance-content-muted)); --muted: var(--appearance-panel-muted, var(--appearance-content-muted));
+  --panel: var(--appearance-panel-background, var(--appearance-content-card)); --border: var(--appearance-panel-line, var(--appearance-content-line));
+  --appearance-card: var(--appearance-panel-control, var(--appearance-content-control));
+  --selection-body-background: color-mix(in srgb, var(--text) 10%, var(--panel));
+  --trigger-anchor-background: var(--appearance-panel-background, var(--appearance-content-card));
+  color: var(--text); background: var(--panel);
+}
+:root .is-mobile-page .search-field {
+  --search-field-background: var(--appearance-card);
+  --search-field-color: var(--appearance-ink);
+  --search-field-muted: var(--appearance-muted);
+  --search-field-border: var(--appearance-line);
+}
+:root .is-mobile-page .utility-tab { --trigger-anchor-background: var(--appearance-card); }
+:root .is-mobile-page > :is(.utility-modal-dialog, .cover-lookup-modal-dialog, .non-album-modal-dialog) { --appearance-panel-background: var(--appearance-main-surface); }
+
+:root[data-appearance-palette='parchment-pine'] { --appearance-content-muted: var(--appearance-content-ink); }
+
+:root[data-appearance-mode='light'], :root[data-appearance-palette='parchment-pine'] { --appearance-content-color-scheme: light; }
+
+:root[data-appearance-item-selected] :is(.is-mobile-page > .utility-modal-dialog, .is-mobile-page > .cover-lookup-modal-dialog, .is-mobile-page > .non-album-modal-dialog, .trigger-anchor-surface[data-trigger-anchor-context='content'], .mobile-settings-drawer) { --selection-body-background: var(--appearance-item-selected); }

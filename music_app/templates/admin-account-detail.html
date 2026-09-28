@@ -50,10 +50,10 @@
         {% set is_owner = member and member.is_bootstrap_owner %}
         {% if is_owner %}
         <label class="detail-field"><span>Capability role</span><select name="capability_role" disabled><option value="owner" selected>Owner</option></select></label>
-        <aside class="role-note"><span aria-hidden="true">ⓘ</span><span>Owner includes every capability.<br>These permissions are inherited from Owner and cannot be changed individually.</span></aside>
+        {{ on_page_alert('Owner includes every capability. These permissions are inherited from Owner and cannot be changed individually.', severity='info', role='status', class_name='admin-role-info') }}
         {% else %}
         <label class="detail-field"><span>Capability role</span><select name="capability_role"><option value="listener">Listener</option></select></label>
-        <aside class="role-note"><span aria-hidden="true">ⓘ</span><span>Listener applies a baseline set of capabilities.<br>Individual permissions below override the role and are authoritative.</span></aside>
+        {{ on_page_alert('Listener applies a baseline set of capabilities. Individual permissions below override the role and are authoritative.', severity='info', role='status', class_name='admin-role-info') }}
         {% endif %}
         {% set selected = member.capability_keys if member else listener_defaults %}
         <div class="effective-access"><strong>Effective access</strong><span>{% if is_owner %}Owner · Full access{% else %}Listener{% if member and member.capability_keys | sort != listener_defaults | sort %} · Customized <small>(overrides applied)</small>{% endif %}{% endif %}</span></div>
@@ -78,9 +78,9 @@
         <section class="account-settings" aria-labelledby="account-settings-title">
           <h2 id="account-settings-title">Account settings</h2>
           {% if allowed_actions.allows('accounts.membership.manage') %}<div class="detail-setting"><span><strong>Library access</strong><small>Allow this user to access {{ roster.library_name }}.</small></span><input class="switch" type="checkbox" name="current_library_access" {% if member.is_bootstrap_owner %}checked disabled{% elif member.membership_role %}checked{% endif %} aria-label="Current library access">{% if member.is_bootstrap_owner %}<input type="hidden" name="current_library_access" value="on">{% endif %}</div>{% endif %}
-          {% if member.membership_role and member.has_credential and allowed_actions.allows('accounts.password_reset.send') %}<div class="detail-setting"><span><strong>Send password reset email</strong><small>Email a link to reset the user's password.</small></span><button class="admin-button" type="button" data-admin-action="reset">Send email</button></div>{% endif %}
-          {% if member.is_bootstrap_owner and allowed_actions.allows('accounts.welcome.send') %}<div class="detail-setting"><span><strong>Resend welcome email</strong><small>Email the username and sign-in URL, never a password.</small></span><button class="admin-button" type="button" data-admin-action="welcome">Resend email</button></div>{% endif %}
-          {% if allowed_actions.allows('accounts.sessions.revoke') %}<div class="detail-setting"><span><strong>Revoke all sessions</strong><small>Sign the user out from all active sessions.</small></span><button class="admin-button" type="button" data-admin-action="revoke">Revoke sessions</button></div>{% endif %}
+          {% if member.membership_role and member.has_credential and allowed_actions.allows('accounts.password_reset.send') %}<div class="detail-setting"><span><strong>Send password reset email</strong><small>Email a link to reset the user's password.</small></span><button class="admin-button ui-button ui-button--primary ui-button--medium" type="button" data-admin-action="reset">Send email</button></div>{% endif %}
+          {% if member.is_bootstrap_owner and allowed_actions.allows('accounts.welcome.send') %}<div class="detail-setting"><span><strong>Resend welcome email</strong><small>Email the username and sign-in URL, never a password.</small></span><button class="admin-button ui-button ui-button--primary ui-button--medium" type="button" data-admin-action="welcome">Resend email</button></div>{% endif %}
+          {% if allowed_actions.allows('accounts.sessions.revoke') %}<div class="detail-setting"><span><strong>Revoke all sessions</strong><small>Sign the user out from all active sessions.</small></span><button class="admin-button ui-button ui-button--primary ui-button--medium" type="button" data-admin-action="revoke">Revoke sessions</button></div>{% endif %}
           {% if allowed_actions.allows('accounts.manage') and not member.is_bootstrap_owner %}<div class="detail-setting is-danger"><span><strong>{{ "Disable" if member.is_active else "Enable" }} account</strong><small>{{ "Prevent the user from signing in." if member.is_active else "Allow the user to sign in with their existing password." }}</small></span><button class="admin-button is-danger" type="button" data-admin-action="toggle-active">{{ "Disable" if member.is_active else "Enable" }} account</button></div>{% endif %}
         </section>
         {% else %}
@@ -94,13 +94,13 @@
             <p>Enter your own current password to continue this sensitive administrator action.</p>
           </div>
           <label><span>Your current password</span><span class="password-control ui-input-action"><input id="admin-current-password" type="password" autocomplete="current-password" data-reauth-password><button type="button" data-password-toggle="admin-current-password" aria-pressed="false">Show</button></span></label>
-          <div class="reauth-actions"><button class="admin-button" type="button" data-reauth-cancel>Cancel</button><button class="admin-button is-primary" type="button" data-reauth-submit>Continue</button></div>
+          <div class="reauth-actions"><button class="admin-button ui-button ui-button--quiet ui-button--medium" type="button" data-reauth-cancel>Cancel</button><button class="admin-button ui-button ui-button--primary ui-button--medium" type="button" data-reauth-submit>Continue</button></div>
         </section>
         {% endif %}
 
         <footer class="detail-actions">
-          <a class="admin-button" href="/admin/members">Cancel</a>
-          {% if (member and allowed_actions.allows('accounts.manage') and allowed_actions.allows('accounts.membership.manage') and allowed_actions.allows('accounts.capabilities.manage')) or (not member and allowed_actions.allows('accounts.create')) %}<button class="admin-button is-primary" type="submit">{{ "Save changes" if member else "Create user" }}</button>{% endif %}
+          <a class="admin-button ui-button ui-button--quiet ui-button--medium" href="/admin/members">Cancel</a>
+          {% if (member and allowed_actions.allows('accounts.manage') and allowed_actions.allows('accounts.membership.manage') and allowed_actions.allows('accounts.capabilities.manage')) or (not member and allowed_actions.allows('accounts.create')) %}<button class="admin-button ui-button ui-button--primary ui-button--medium" type="submit">{{ "Save changes" if member else "Create user" }}</button>{% endif %}
         </footer>
       </form>
     </section>

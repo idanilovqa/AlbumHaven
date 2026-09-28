@@ -92,7 +92,7 @@ async function handleUtilityBootstrapClick(event) {
   if (utilityLogHistoryButton || logAction) {
     event.preventDefault();
     try {
-      if (utilityLogHistoryButton) await selectUtilityLogHistoryEvent(utilityLogHistoryButton.getAttribute('data-utility-log-history-id'));
+      if (utilityLogHistoryButton) { openMobileUtilityDetail(utilityLogHistoryButton.getAttribute('data-utility-log-history-id')); await selectUtilityLogHistoryEvent(utilityLogHistoryButton.getAttribute('data-utility-log-history-id')); }
       else await handleUtilityLogHistoryAction(logAction.getAttribute('data-log-history-action'));
     } catch (error) { showToast(error.message || 'Unable to load log history.', 'error', 3200); }
     return;
@@ -163,8 +163,12 @@ async function handleUtilityBootstrapClick(event) {
   if (problematicAlbumButton) {
     event.preventDefault();
     const selectedKey = problematicAlbumButton.getAttribute('data-problematic-album-key') || '';
+    openMobileUtilityDetail(selectedKey);
     if (state.utility.selectedProblematicKey === selectedKey && getSelectedProblematicAlbum()?.detail_loaded
-        && !state.utility.focusedTrackPath && state.utility.showRepairedDisplay) return;
+        && !state.utility.focusedTrackPath && state.utility.showRepairedDisplay) {
+      if (typeof usesMobilePageLayout === 'function' && usesMobilePageLayout()) renderUtilityModalContent();
+      return;
+    }
     state.utility.selectedProblematicKey = selectedKey;
     state.utility.focusedTrackPath = '';
     state.utility.proposalSelections = {};

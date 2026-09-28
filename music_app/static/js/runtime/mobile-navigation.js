@@ -31,7 +31,9 @@ function syncMobilePageShell() {
   }
   if (active) {
     document.getElementById('mobile-page-title').textContent = active.title;
-    document.getElementById('mobile-page-summary').textContent = active.subtitle;
+    const summary = document.getElementById('mobile-page-summary');
+    summary.textContent = active.subtitle;
+    if (active.loopCount) { const count = document.createElement('span'); count.className = 'mobile-loop-count'; count.textContent = active.loopCount; summary.appendChild(count); }
     document.title = `${active.title} — Album Haven`;
   }
   document.getElementById('mobile-settings-actions').hidden = active?.kind !== 'utilities';
@@ -44,12 +46,13 @@ function syncMobilePageShell() {
 function writeMobilePageHistory(mode = 'push') {
   const url = new URL(window.location.href);
   const active = mobilePageState.pages.at(-1);
-  ['mobile_page', 'mobile_album', 'utility_tab', 'loop_song', 'loop_filter'].forEach(key => url.searchParams.delete(key));
+  ['mobile_page', 'mobile_album', 'utility_tab', 'loop_song', 'loop_filter', 'utility_detail'].forEach(key => url.searchParams.delete(key));
   if (active) {
     url.searchParams.set('mobile_page', active.kind);
     if (active.albumKey) url.searchParams.set('mobile_album', active.albumKey);
     if (active.kind === 'utilities') {
       url.searchParams.set('utility_tab', active.tab || 'appearance');
+      if (active.utilityDetail) url.searchParams.set('utility_detail', active.utilityDetail);
       if (active.tab === 'loops') {
         if (active.loopSongId) url.searchParams.set('loop_song', active.loopSongId);
         if (active.loopFilter) url.searchParams.set('loop_filter', active.loopFilter);
@@ -166,6 +169,12 @@ function dismissMobilePage(kind) {
 function navigateMobileBack() {
   const active = mobilePageState.pages.at(-1);
   if (!active) return;
+  if (active.utilityDetail) {
+    const delta = mobileParentHistoryDelta(active.utilityListPosition, window.history.state?.albumHavenNavigationPosition);
+    if (delta !== null) window.history.go(delta);
+    else { active.utilityDetail = ''; renderUtilityModalContent(); }
+    return;
+  }
   if (getMobileLoopPage()?.loopSongId) { returnMobileLoopList(); return; }
   // Keep the Appearance editor's unsaved-changes guard on both its close button and Back.
   if (active.kind === 'utilities') closeUtilityModal();
@@ -183,6 +192,13 @@ function restoreMobilePage(descriptor) {
     if (state.utility.activeTab === 'loops') state.utility.loopsSearchQuery = String(descriptor.loopFilter || '');
     openUtilityModal();
     const page = mobilePageState.pages.find(item => item.kind === 'utilities');
+    if (page && ['log-history', 'problematic-files'].includes(state.utility.activeTab)) {
+      page.utilityDetail = String(descriptor.utilityDetail || '');
+      page.utilityListPosition = descriptor.utilityListPosition ?? null;
+      if (page.utilityDetail && state.utility.activeTab === 'problematic-files') state.utility.selectedProblematicKey = page.utilityDetail;
+      if (page.utilityDetail && state.utility.activeTab === 'log-history') void selectUtilityLogHistoryEvent(page.utilityDetail).catch(error => showToast(error.message || 'Unable to load log history.', 'error', 3200));
+      renderUtilityModalContent();
+    }
     if (page && state.utility.activeTab === 'loops') {
       Object.assign(page, { loopSongId: String(descriptor.loopSongId || ''), loopFilter: String(descriptor.loopFilter || ''),
         loopListPosition: descriptor.loopListPosition ?? null, loopListScroll: Number(descriptor.loopListScroll) || 0,
@@ -201,6 +217,7 @@ function handleMobilePagePopState() {
     && requested[common].albumKey === mobilePageState.pages[common].albumKey
     && (requested[common].kind !== 'utilities'
       || (requested[common].tab === mobilePageState.pages[common].tab
+        && String(requested[common].utilityDetail || '') === String(mobilePageState.pages[common].utilityDetail || '')
         && String(requested[common].loopSongId || '') === String(mobilePageState.pages[common].loopSongId || '')))) common += 1;
   let focus;
   while (mobilePageState.pages.length > common) focus = cleanupMobilePage(mobilePageState.pages.pop());
@@ -215,6 +232,9 @@ function syncMobileUtilityContext() {
   const descriptor = mobilePageState.pages.find(page => page.kind === 'utilities');
   if (!descriptor) return;
   if (descriptor.tab !== state.utility.activeTab) {
+    document.getElementById('mobile-page-outlet').scrollTop = 0;
+    delete descriptor.utilityDetail;
+    delete descriptor.utilityListPosition;
     delete descriptor.loopSongId;
     delete descriptor.loopListPosition;
     delete descriptor.loopListScroll;
@@ -224,11 +244,12 @@ function syncMobileUtilityContext() {
   const song = group?.representativeLoop || group?.loops[0];
   descriptor.title = song ? song.title || song.name || 'Saved loops'
     : MOBILE_UTILITY_SECTIONS[state.utility.activeTab]?.label || 'Settings';
-  descriptor.subtitle = song ? [song.artist || 'Unknown artist', song.album, song.year,
-    `${group.loops.length} saved loop${group.loops.length === 1 ? '' : 's'}`].filter(Boolean).join(' • ') : '';
+  descriptor.subtitle = song ? [song.artist || 'Unknown artist', song.album, song.year].filter(Boolean).join(' • ') : '';
+  descriptor.loopCount = song ? `${group.loops.length} saved loop${group.loops.length === 1 ? '' : 's'}` : '';
   if (descriptor.tab === 'loops') descriptor.loopFilter = String(state.utility.loopsSearchQuery || '');
   syncMobilePageShell();
   syncMobileUtilityNavigation();
+  syncMobileUtilityDetail();
   if (!mobilePageState.restoring) writeMobilePageHistory('replace');
 }
 // Loops uses the existing tree as its mobile index, not a second data source.
@@ -394,7 +415,7 @@ function initMobileNavigation() {
     promoteVisibleMobileDialogs();
     syncMobileGalleryControls();
     syncMobilePageShell();
-    if (state.utility.activeTab === 'loops' && mobilePageState.pages.some(page => page.kind === 'utilities')) renderUtilityModalContent();
+    if (['loops', 'integrations', 'log-history', 'problematic-files'].includes(state.utility.activeTab) && mobilePageState.pages.some(page => page.kind === 'utilities')) renderUtilityModalContent();
     if (typeof syncMobileAlbumComposition === 'function') syncMobileAlbumComposition(getCurrentTrackModalAlbum());
   };
   document.getElementById('mobile-page-outlet')?.addEventListener('scroll', scheduleMobileAlbumThumbnail, { passive: true });
@@ -432,7 +453,7 @@ function initMobileNavigation() {
   // Enforce presentation restrictions at all delegated mobile action entry points.
   document.addEventListener('click', (event) => {
     if (!isMobileClient()) return;
-    if (event.target.closest?.('[data-open-non-album-tag-editor], [data-open-tag-editor], [data-edit-tags], [data-edit-album-tags], [data-edit-track-tags], [data-utility-tab="problematic-files"], [data-revert-version-exception], [data-revert-problem-ignore], [data-delete-saved-loop]')) {
+    if (event.target.closest?.('[data-open-problematic-album-folder], [data-open-non-album-tag-editor], [data-open-tag-editor], [data-edit-tags], [data-edit-album-tags], [data-edit-track-tags], [data-revert-version-exception], [data-revert-problem-ignore], [data-delete-saved-loop]')) {
       event.preventDefault(); event.stopImmediatePropagation();
     }
   }, true);
@@ -467,7 +488,7 @@ function initMobileNavigation() {
   const url = new URL(window.location.href);
   if (usesMobilePageLayout() && url.searchParams.has('mobile_page')) {
     mobilePageState.restoring = true;
-    try { restoreMobilePage({ kind: url.searchParams.get('mobile_page'), albumKey: url.searchParams.get('mobile_album') || '', title: 'Album', tab: url.searchParams.get('utility_tab'), loopSongId: url.searchParams.get('loop_song') || '', loopFilter: url.searchParams.get('loop_filter') || '' }); }
+    try { restoreMobilePage({ kind: url.searchParams.get('mobile_page'), albumKey: url.searchParams.get('mobile_album') || '', title: 'Album', tab: url.searchParams.get('utility_tab'), utilityDetail: url.searchParams.get('utility_detail') || '', loopSongId: url.searchParams.get('loop_song') || '', loopFilter: url.searchParams.get('loop_filter') || '' }); }
     finally { mobilePageState.restoring = false; }
     // A directly loaded page has no guaranteed in-app previous entry.
     const loopPage = getMobileLoopPage();
@@ -481,6 +502,7 @@ function initMobileNavigation() {
 
 
 const MOBILE_UTILITY_SECTIONS = Object.freeze({
+  'problematic-files': { label: 'Problematic Files', action: 'library.problems.read' },
   rules: { label: 'Rules', action: 'library.rules.read' },
   loops: { label: 'Loops', action: 'library.loops.read' },
   'log-history': { label: 'Log History', action: 'library.logs.read' },
@@ -713,4 +735,24 @@ function showMobileGalleryPinchHint() {
   hint.innerHTML = '<span aria-hidden="true"><i></i><i></i></span>Pinch with two fingers to resize covers';
   document.getElementById('shell-main-surface').appendChild(hint);
   scheduleBrowserTimeout(() => hint.remove(), 4000);
+}
+
+// Mobile index/detail composition retains the same utility data and action owners.
+function openMobileUtilityDetail(key) {
+  const page = mobilePageState.pages.at(-1);
+  if (!usesMobilePageLayout() || page?.kind !== 'utilities' || !['log-history', 'problematic-files'].includes(page.tab)) return;
+  if (!page.utilityDetail) {
+    page.utilityListPosition = window.history.state?.albumHavenNavigationPosition ?? null;
+    writeMobilePageHistory('replace');
+    page.utilityDetail = key;
+    writeMobilePageHistory();
+  } else page.utilityDetail = key;
+  syncMobileUtilityDetail();
+  document.getElementById('mobile-page-outlet').scrollTop = 0;
+}
+function syncMobileUtilityDetail() {
+  const page = mobilePageState.pages.at(-1);
+  const modal = document.getElementById('utility-modal');
+  if (!modal) return;
+  modal.dataset.mobileUtilityView = page?.utilityDetail ? 'detail' : 'list';
 }

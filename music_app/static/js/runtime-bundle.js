@@ -2278,7 +2278,10 @@ function showAppFormDialog(options = {}) {
       const boundary = boundaryElement?.getBoundingClientRect();
       const left = Math.max(8, Math.min(window.innerWidth - 16, Number(boundary?.left || 0) + 8));
       const right = Math.max(left + 1, Math.min(window.innerWidth - 8, Number(boundary?.right || window.innerWidth) - 8));
-      const bottom = Math.max(9, Math.min(window.innerHeight - 8, Number(boundary?.bottom || window.innerHeight) - 8));
+      const pageBottom = boundaryElement?.closest?.('.is-mobile-page')
+        ? document.querySelector('.global-player')?.getBoundingClientRect().top || window.innerHeight
+        : boundary?.bottom || window.innerHeight;
+      const bottom = Math.max(9, Math.min(window.innerHeight - 8, Number(pageBottom) - 8));
       const width = Math.min(440, right - left);
       const top = Math.max(8, Math.min(joinedTop, Math.max(8, bottom - 240)));
       const panelLeft = searchRect
@@ -2289,8 +2292,8 @@ function showAppFormDialog(options = {}) {
       syncTriggerAnchor(anchoredPanel, anchor);
     };
     modal.classList.add('app-form-anchored'); anchoredPanel.setAttribute('aria-modal', 'false');
-    position();
     if (typeof activateTriggerSurface === 'function') activateTriggerSurface(anchoredPanel, () => finish(null));
+    position();
     listen(document, 'pointerdown', event => {
       if (!anchoredPanel.contains(event.target) && !anchor.contains(event.target)) finish(null);
     });
@@ -15932,7 +15935,7 @@ function reconcileUtilityLogHistoryTree(els, value) {
     if (node !== cursor) els.list.insertBefore(node, cursor);
     cursor = node.nextElementSibling;
     if (row.temporary) window.NavigationTree.updateItem(node, { label: 'Selected period', subtitle: value.periodLabel || '' });
-    window.NavigationTree.setItemSelected(node, row.temporary ? Boolean(value.temporaryRowId && !value.selectedEventId) : row.id === value.selectedEventId);
+    window.NavigationTree.setItemSelected(node, row.recent ? !value.selectedEventId && !value.temporaryRowId : row.temporary ? Boolean(value.temporaryRowId && !value.selectedEventId) : row.id === value.selectedEventId);
   }
   els.count.textContent = String(rows.length);
 }
@@ -22147,12 +22150,12 @@ function positionUtilityLoopSpeedMenu(loopId, setting = 'speed') {
   const padding = 8;
   const playerTop = document.querySelector('.global-player')?.getBoundingClientRect().top || window.innerHeight;
   const bottom = Math.min(window.innerHeight, playerTop);
-  const popupHeight = Math.min(menuRect.height, bottom - padding * 2);
-  menu.style.maxHeight = `${popupHeight}px`;
   const optionHeight = activeOption.getBoundingClientRect().height;
   const selectedCenter = activeOption.offsetTop + optionHeight / 2;
   const triggerCenter = triggerRect.top + triggerRect.height / 2;
-  const top = Math.max(padding, Math.min(triggerCenter - selectedCenter, bottom - padding - popupHeight));
+  const top = Math.max(padding, Math.min(triggerCenter - selectedCenter, bottom - padding - optionHeight));
+  const popupHeight = Math.max(optionHeight, Math.min(menuRect.height, bottom - padding - top));
+  menu.style.maxHeight = `${popupHeight}px`;
   const left = Math.max(padding, Math.min(triggerRect.right - menuRect.width, window.innerWidth - padding - menuRect.width));
   menu.style.left = `${left}px`;
   menu.style.top = `${top}px`;
@@ -39763,7 +39766,7 @@ function restoreMobilePage(descriptor) {
       page.utilityDetail = String(descriptor.utilityDetail || '');
       page.utilityListPosition = descriptor.utilityListPosition ?? null;
       if (page.utilityDetail && state.utility.activeTab === 'problematic-files') state.utility.selectedProblematicKey = page.utilityDetail;
-      if (page.utilityDetail && state.utility.activeTab === 'log-history') void selectUtilityLogHistoryEvent(page.utilityDetail);
+      if (page.utilityDetail && state.utility.activeTab === 'log-history') void selectUtilityLogHistoryEvent(page.utilityDetail).catch(error => showToast(error.message || 'Unable to load log history.', 'error', 3200));
       renderUtilityModalContent();
     }
     if (page && state.utility.activeTab === 'loops') {
@@ -39982,7 +39985,7 @@ function initMobileNavigation() {
     promoteVisibleMobileDialogs();
     syncMobileGalleryControls();
     syncMobilePageShell();
-    if (state.utility.activeTab === 'loops' && mobilePageState.pages.some(page => page.kind === 'utilities')) renderUtilityModalContent();
+    if (['loops', 'integrations', 'log-history', 'problematic-files'].includes(state.utility.activeTab) && mobilePageState.pages.some(page => page.kind === 'utilities')) renderUtilityModalContent();
     if (typeof syncMobileAlbumComposition === 'function') syncMobileAlbumComposition(getCurrentTrackModalAlbum());
   };
   document.getElementById('mobile-page-outlet')?.addEventListener('scroll', scheduleMobileAlbumThumbnail, { passive: true });
@@ -40020,7 +40023,7 @@ function initMobileNavigation() {
   // Enforce presentation restrictions at all delegated mobile action entry points.
   document.addEventListener('click', (event) => {
     if (!isMobileClient()) return;
-    if (event.target.closest?.('[data-open-non-album-tag-editor], [data-open-tag-editor], [data-edit-tags], [data-edit-album-tags], [data-edit-track-tags], [data-revert-version-exception], [data-revert-problem-ignore], [data-delete-saved-loop]')) {
+    if (event.target.closest?.('[data-open-problematic-album-folder], [data-open-non-album-tag-editor], [data-open-tag-editor], [data-edit-tags], [data-edit-album-tags], [data-edit-track-tags], [data-revert-version-exception], [data-revert-problem-ignore], [data-delete-saved-loop]')) {
       event.preventDefault(); event.stopImmediatePropagation();
     }
   }, true);

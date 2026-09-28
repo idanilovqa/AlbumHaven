@@ -76,6 +76,10 @@ export class UtilityLogHistoryTab extends BasePage {
     return this.periodDialog.getByRole('dialog', { name: `Choose ${field} date`, exact: true });
   }
 
+  enabledPeriodDays(field) {
+    return this.periodCalendar(field).locator('[data-calendar-date]:not(:disabled)');
+  }
+
   periodCalendarDay(field, date) {
     return this.periodCalendar(field).locator(`[data-calendar-date="${date}"]`);
   }

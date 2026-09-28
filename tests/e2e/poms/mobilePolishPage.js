@@ -102,7 +102,7 @@ export class MobilePolishPage extends MobileLayoutPage {
     await sources.click();
     await expect(sourceMenu).not.toBeVisible();
     await sources.click();
-    await this.galleryContextName.click();
+    await this.homePanel.click();
     await expect(sourceMenu).not.toBeVisible();
     await sources.click();
     await this.page.keyboard.press('Escape');

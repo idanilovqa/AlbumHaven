@@ -13,27 +13,27 @@ for (const palette of ['black', 'paper', 'parchment-pine']) {
     await ui.selectUtility('log-history');
     await logs.periodButton.click();
     const today = await logs.periodFrom.inputValue();
-    await logs.periodFrom.fill('2026-09-25');
-    await logs.periodTo.fill('2026-09-24');
-    await logs.periodDialog.getByRole('button', { name: 'Apply', exact: true }).click();
-    await expect(logs.periodDialog).toContainText('The start date must precede the end date.');
-    await expect(logs.periodRow).toHaveCount(0);
-    await logs.periodTo.fill('2026-09-25');
+    // Read-only fields enforce ordering through the shared calendar.
     for (const field of ['from', 'to']) {
       await logs.periodDateButton(field).click();
       const calendar = logs.periodCalendar(field);
       await expect(calendar).toBeVisible();
-      await ui.expectReadable(logs.periodCalendarDay(field, '2026-09-25'));
+      await ui.expectReadable(logs.periodCalendarDay(field, today));
       const box = await calendar.boundingBox(), viewport = page.viewportSize();
       expect(box.x).toBeGreaterThanOrEqual(0);
       expect(box.y).toBeGreaterThanOrEqual(0);
       expect(box.x + box.width).toBeLessThanOrEqual(viewport.width);
       expect(box.y + box.height).toBeLessThanOrEqual(viewport.height);
-      await logs.periodCalendarDay(field, '2026-09-24').click();
+      await calendar.getByRole('button', { name: field === 'from' ? 'Next month' : 'Previous month', exact: true }).click();
+      await expect(logs.enabledPeriodDays(field)).toHaveCount(0);
+      await calendar.getByRole('button', { name: field === 'from' ? 'Previous month' : 'Next month', exact: true }).click();
+      await logs.periodCalendarDay(field, today).click();
       await expect(calendar).not.toBeVisible();
     }
-    await expect(logs.periodFrom).toHaveValue('2026-09-24');
-    await expect(logs.periodTo).toHaveValue('2026-09-24');
+    await logs.periodDateButton('from').click();
+    await logs.periodCalendar('from').getByRole('button', { name: 'Previous month', exact: true }).click();
+    await logs.enabledPeriodDays('from').first().click();
+    await expect(logs.periodFrom).not.toHaveValue(today);
     await logs.periodDialog.getByRole('button', { name: 'Cancel', exact: true }).click();
     await expect(logs.periodDialog).not.toBeVisible();
     await expect(logs.periodRow).toHaveCount(0);
@@ -61,7 +61,7 @@ for (const palette of ['black', 'paper', 'parchment-pine']) {
   });
 }
 
-test('mobile Problematic Files search, filters and exact exceptions survive reload and can be reverted', async ({ page, app }) => {
+test('mobile Problematic Files search, filters and exact exceptions survive reload while Rules remains read-only', async ({ page, app }) => {
   const ui = new MobileSettingsFeedbackPage(page), problems = new UtilityProblematicFilesTab(page), rules = new UtilityRulesTab(page);
   const search = problems.searchSection;
   await ui.openSettings();
@@ -118,21 +118,9 @@ test('mobile Problematic Files search, filters and exact exceptions survive relo
   await ui.selectSubsection('problem-ignores');
   const row = rules.exclusionRowContaining('Collected Skies 02');
   await expect(rules.exclusionReason(row)).toHaveText(reason);
-  await rules.revertButtonForRow(row).click();
-  await rules.revertNo.click();
-  await expect(row).toBeVisible();
-  await rules.revertButtonForRow(row).click();
-  const reverted = page.waitForResponse(response => response.request().method() === 'POST'
-    && new URL(response.url()).pathname === '/utilities/rules/problem-ignores/revert');
-  await rules.revertYes.click();
-  expect((await reverted).ok()).toBe(true);
-  await expect(ui.detail).toContainText('No problem exclusions yet.');
+  await expect(rules.revertButtonForRow(row)).not.toBeVisible();
   await page.reload();
-  await expect(ui.detail).toContainText('No problem exclusions yet.');
-  await ui.selectUtility('problematic-files');
-  await search.searchInput.fill('Collected Skies 02');
-  await problems.listItems.click();
-  await expect(problems.detailProblemChips).toHaveCount(count);
+  await expect(rules.exclusionReason(rules.exclusionRowContaining('Collected Skies 02'))).toHaveText(reason);
 });
 
 test('mobile Library Refresh reloads saved settings and remains read-only after resizing', async ({ page, app }) => {

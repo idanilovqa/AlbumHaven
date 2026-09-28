@@ -29,7 +29,7 @@ for (const palette of ['black', 'parchment-pine']) {
       const anchor = await trigger.boundingBox();
       await trigger.tap();
       await loops.expectPickerInsideViewport(menu);
-      await expect(menu.getByRole('menuitemradio', { name: selected, exact: true })).toHaveAttribute('aria-checked', 'true');
+      await expect(menu.getByRole('menuitemradio', { checked: true })).toContainText(selected);
       await page.touchscreen.tap(anchor.x + anchor.width / 2, anchor.y + anchor.height / 2);
       await expect(menu).not.toBeVisible();
       await trigger.tap();

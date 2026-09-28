@@ -42,7 +42,11 @@ for (const palette of ['black', 'paper', 'parchment-pine']) {
     expect(after.height).toBeCloseTo(before.height, 0);
     await expect(phone.selectionPreviewRow).toHaveCSS('border-left-width', '1px');
     await snapshot(`92-selection-no-accent-${palette}`);
-    await phone.cancelAppearance.click();
+    await appearance.interactionColorButton('item_selected', 'blue').click();
+    await phone.saveAppearanceChanges();
+    await phone.settingsSectionsButton.click();
+    await expect(phone.selectedSettingsSection).toHaveCSS('background-color', 'rgb(63, 95, 126)');
+    await phone.settingsDrawerBack.click();
     await phone.selectSubsection('alerts');
     await phone.customAppearance.click();
     await expect(phone.alertFamily).toBeEnabled();

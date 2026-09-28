@@ -11,6 +11,8 @@ export class MobilePolishPage extends MobileLayoutPage {
     this.selectedCover = this.coverLookupPage.locator('.cover-lookup-art-card.is-active');
     this.accountHost = page.locator('[data-settings-host]:not([hidden])');
     this.accountBar = this.accountHost.locator('.page-gallery-bar');
+    this.selectedSettingsSection = this.settingsDrawer.locator('.navigation-tree-item.is-selected');
+    this.settingsDrawerBack = this.settingsDrawer.getByRole('button', { name: 'Back to settings', exact: true });
     this.adminDrawer = this.accountHost.locator('[data-settings-nav]');
     this.adminBack = this.adminDrawer.getByRole('button', { name: 'Back to page', exact: true });
     this.adminActions = this.accountHost.locator('[data-admin-action]:not(.is-danger)');

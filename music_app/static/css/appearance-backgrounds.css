@@ -1251,13 +1251,19 @@ html .cover-lookup-drawer {
   --appearance-content-card: var(--appearance-card);
   --appearance-content-control: var(--appearance-control);
   --appearance-content-line: var(--appearance-line);
+  --appearance-content-action-hover-background: var(--appearance-item-action-hover-background);
+  --appearance-content-action-pressed: var(--appearance-item-action-pressed);
 }
-:root :is(.is-mobile-page > .utility-modal-dialog, .is-mobile-page > .cover-lookup-modal-dialog, .trigger-anchor-surface[data-trigger-anchor-context='content']) {
+:root :is(.is-mobile-page > .utility-modal-dialog, .is-mobile-page > .cover-lookup-modal-dialog, .is-mobile-page > .non-album-modal-dialog, .trigger-anchor-surface[data-trigger-anchor-context='content']) {
   --appearance-ink: var(--appearance-content-ink);
   --appearance-muted: var(--appearance-content-muted);
   --appearance-card: var(--appearance-content-card);
   --appearance-control: var(--appearance-content-control);
   --appearance-line: var(--appearance-content-line);
+  --appearance-item-action-hover-background: var(--appearance-content-action-hover-background);
+  --appearance-item-action-pressed: var(--appearance-content-action-pressed);
+  --appearance-neutral-button-background: var(--appearance-content-control);
+  --appearance-panel-background: var(--appearance-content-card);
   --text: var(--appearance-content-ink); --ink: var(--appearance-content-ink);
   --muted: var(--appearance-content-muted); --app-ink: var(--appearance-content-ink);
   --panel: var(--appearance-content-card); --panel-2: var(--appearance-content-control);
@@ -1283,4 +1289,4 @@ html .cover-lookup-drawer {
   --search-field-border: var(--appearance-line);
 }
 :root .is-mobile-page .utility-tab { --trigger-anchor-background: var(--appearance-card); }
-:root .trigger-anchor-surface[data-trigger-anchor-context='content'] :is(button, input, select) { color: var(--text); }
+:root .is-mobile-page > :is(.utility-modal-dialog, .cover-lookup-modal-dialog, .non-album-modal-dialog) { --appearance-panel-background: var(--appearance-main-surface); }

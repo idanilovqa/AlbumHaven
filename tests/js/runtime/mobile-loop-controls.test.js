@@ -140,3 +140,16 @@ test('the mobile index mounts no loop players, and a song detail ignores the ind
   assert.equal(detail.innerHTML, 'four players');
   assert.deepEqual(initialized, ['1', '2', '3', '4']);
 });
+
+
+test('loop picker aligns selected row near the player without going below it', () => {
+  const option = { offsetTop: 114, getBoundingClientRect: () => ({ height: 36 }) };
+  const menu = { hidden: false, style: {}, classList: { contains: () => true }, querySelector: () => option, getBoundingClientRect: () => ({ width: 168, height: 248 }) };
+  const trigger = { getBoundingClientRect: () => ({ top: 710, height: 36, right: 366 }) };
+  const context = load('utility-loop-playback.js', { cssEscape: String, window: { innerWidth: 390, innerHeight: 844 },
+    document: { querySelector: selector => selector === '.global-player' ? { getBoundingClientRect: () => ({ top: 769 }) } : selector.includes('value-button') ? trigger : menu } });
+  context.positionUtilityLoopSpeedMenu('test');
+  const top = parseFloat(menu.style.top), height = parseFloat(menu.style.maxHeight);
+  assert.equal(top + option.offsetTop + 18 - menu.scrollTop, 728);
+  assert.ok(top + height <= 761);
+});

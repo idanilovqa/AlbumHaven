@@ -8,7 +8,7 @@ for (const palette of ['black', 'paper', 'parchment-pine']) {
     await ui.openSettings();
     await ui.settingsSectionsButton.click();
     await ui.expectChromeMenu(ui.settingsDrawer);
-    await ui.settingsSectionsButton.click();
+    await ui.settingsDrawerBack.click();
     await expect(ui.settingsDrawer).not.toBeVisible();
     await ui.selectUtility('rules');
     await expect(ui.detail).toContainText('No version exceptions yet.');
@@ -45,6 +45,11 @@ test('Logs cards open Recent activity, export, and preserve Back and Forward', a
   await expect(ui.detail).toBeVisible();
   await expect(ui.list).not.toBeVisible();
   await snapshot('104-logs-detail');
+  const downloadPromise = page.waitForEvent('download');
+  await ui.exportLogs.click();
+  const download = await downloadPromise;
+  expect(download.suggestedFilename()).toMatch(/^album-haven-logs-.*\.json$/);
+  expect(await download.failure()).toBeNull();
   await ui.backButton.click();
   await expect(ui.recentActivity).toBeVisible();
   await page.goForward();

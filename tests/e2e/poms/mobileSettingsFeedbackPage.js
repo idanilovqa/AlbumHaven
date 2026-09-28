@@ -4,9 +4,11 @@ import { MobileLoopsPage } from './mobileLoopsPage.js';
 export class MobileSettingsFeedbackPage extends MobileLoopsPage {
   constructor(page) {
     super(page);
-    this.selectedSubsection = this.subsectionMenu.locator('.is-active, [aria-pressed="true"], [aria-selected="true"]').first();
+    this.selectedSubsection = this.subsectionMenu.locator('.is-selected, .is-active, [aria-pressed="true"], [aria-selected="true"]').first();
+    this.settingsDrawerBack = this.settingsDrawer.getByRole('button', { name: 'Back to settings', exact: true });
     this.loopCount = this.pageSummary.locator('.mobile-loop-count');
     this.detail = this.root.locator('#utility-problematic-detail');
+    this.exportLogs = this.detail.locator('[data-log-history-action="export-current"]');
     this.list = this.root.locator('#utility-problematic-list');
     this.problemCards = this.list.locator('[data-problematic-album-key]');
     this.recentActivity = this.list.locator('[data-utility-log-history-id="recent"]');

@@ -38,7 +38,7 @@
 .mobile-home-empty { padding: 32px 14px; text-align: center; }
 .mobile-preference-status { position: fixed; bottom: calc(var(--player-height) + 8px); left: 16px; right: 16px; z-index: 6500; padding: 12px; border: 1px solid var(--border); border-radius: 8px; background: var(--panel); font-size: 13px; }
 /* Keep mobile-unsupported file mutations unavailable on wide mobile clients too. */
-html[data-client-profile="mobile"] :is([data-open-non-album-tag-editor], [data-open-tag-editor], [data-edit-tags], [data-edit-album-tags], [data-edit-track-tags], #track-modal-edit-tags, #track-modal-folder) { display: none !important; }
+html[data-client-profile="mobile"] :is([data-open-problematic-album-folder], [data-open-non-album-tag-editor], [data-open-tag-editor], [data-edit-tags], [data-edit-album-tags], [data-edit-track-tags], #track-modal-edit-tags, #track-modal-folder) { display: none !important; }
 /* A button takes its surface from its containing bar, not a contrasting card. */
 .app-bar { --appearance-neutral-button-background: var(--app-control, var(--panel-2)); }
 
@@ -75,7 +75,7 @@ html[data-client-profile="mobile"] :is([data-open-non-album-tag-editor], [data-o
   .app-bar--library:not(.is-search-open) [data-search-clear] { display: none; }
   .shell-layout .shell-main-surface { grid-row: 3; grid-column: 1; width: auto; min-width: 0; padding: 14px 12px 0; margin: 0; border-radius: 16px 16px 0 0; overflow: hidden; }
   .shell-main-surface > .gallery-top-row { display: none; }
-  .gallery-bar { align-items: flex-start; gap: 8px; padding: 0 0 14px; min-width: 0; flex-shrink: 0; }
+  .gallery-bar { align-items: flex-start; gap: 8px; padding: 0 0 10px; min-height: 40px; margin-bottom: 0; min-width: 0; flex-shrink: 0; }
   .gallery-bar__context { min-width: 0; flex: 1; }
   .gallery-bar__title { min-height: 40px; margin: 0; font-size: 18px; line-height: 1.3; min-width: 0; gap: 6px; }
   .gallery-bar__title > [data-gallery-context-name] { min-width: 0; white-space: normal; overflow-wrap: anywhere; }
@@ -86,7 +86,7 @@ html[data-client-profile="mobile"] :is([data-open-non-album-tag-editor], [data-o
   .mobile-bar-action { display: inline-grid; place-items: center; flex: 0 0 40px; }
   .mobile-bar-action[hidden], .mobile-page-header [hidden], .global-player [hidden] { display: none !important; }
   #mobile-page-title:focus, #mobile-album-identity-title:focus { outline: none; }
-  .gallery-bar svg, .mobile-drawer-heading svg { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
+  .gallery-bar svg, .mobile-drawer-heading svg, .settings-nav-heading svg { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
   .shell-layout .shell-navigation-rail { top: var(--app-bar-height); bottom: var(--player-height); width: min(320px, 75vw); max-width: 75vw; padding: 0; border-radius: 0 16px 16px 0; }
   #artist-tree-expanded { min-height: 0; flex: 1; display: flex; flex-direction: column; }
   #artist-tree-expanded[hidden] { display: none; }
@@ -467,12 +467,6 @@ html[data-client-profile="mobile"] :is([data-open-non-album-tag-editor], [data-o
 
 @media (max-width: 900px) {
   :root .in-page-tabs > [role="tab"],
-  :root .navigation-tree .navigation-tree-item:is(.is-selected, .active, .is-active) {
-    background: transparent !important; box-shadow: none !important;
-  }
-  :root .navigation-tree .navigation-tree-item:is(.is-selected, .active, .is-active) {
-    color: inherit; text-decoration: none; text-underline-offset: .22em;
-  }
   :root .mobile-artists-mode-button[aria-pressed="true"] { background: transparent !important; color: inherit; box-shadow: none !important; }
   .player-live-preview[data-mobile-player-preview="true"] .player-preview-transport { filter: saturate(1.35) contrast(1.08); }
 
@@ -595,7 +589,7 @@ html[data-client-profile="mobile"] :is([data-open-non-album-tag-editor], [data-o
   #utility-modal.is-mobile-page:is([data-active-tab="log-history"], [data-active-tab="problematic-files"]) .utility-list-item { width: 100%; flex: none; }
   #utility-modal.is-mobile-page:is([data-active-tab="log-history"], [data-active-tab="problematic-files"])[data-mobile-utility-view="list"] .utility-detail,
   #utility-modal.is-mobile-page:is([data-active-tab="log-history"], [data-active-tab="problematic-files"])[data-mobile-utility-view="detail"] .utility-sidebar { display: none; }
-  #utility-modal.is-mobile-page .utility-sidebar-top { padding: 0 0 10px; }
+  #utility-modal.is-mobile-page .utility-sidebar-search { padding: 0 0 10px; }
   #utility-modal.is-mobile-page[data-active-tab="rules"] .utility-detail { flex: none; }
   #utility-modal.is-mobile-page .utility-detail-header { grid-template-columns: 84px minmax(0, 1fr); }
   #utility-modal.is-mobile-page .utility-detail-context-actions { grid-column: 1 / -1; justify-content: flex-start; }

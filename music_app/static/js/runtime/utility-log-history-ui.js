@@ -112,7 +112,7 @@ function reconcileUtilityLogHistoryTree(els, value) {
     if (node !== cursor) els.list.insertBefore(node, cursor);
     cursor = node.nextElementSibling;
     if (row.temporary) window.NavigationTree.updateItem(node, { label: 'Selected period', subtitle: value.periodLabel || '' });
-    window.NavigationTree.setItemSelected(node, row.temporary ? Boolean(value.temporaryRowId && !value.selectedEventId) : row.id === value.selectedEventId);
+    window.NavigationTree.setItemSelected(node, row.recent ? !value.selectedEventId && !value.temporaryRowId : row.temporary ? Boolean(value.temporaryRowId && !value.selectedEventId) : row.id === value.selectedEventId);
   }
   els.count.textContent = String(rows.length);
 }

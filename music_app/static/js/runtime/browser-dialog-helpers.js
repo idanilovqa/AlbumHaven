@@ -65,7 +65,10 @@ function showAppFormDialog(options = {}) {
       const boundary = boundaryElement?.getBoundingClientRect();
       const left = Math.max(8, Math.min(window.innerWidth - 16, Number(boundary?.left || 0) + 8));
       const right = Math.max(left + 1, Math.min(window.innerWidth - 8, Number(boundary?.right || window.innerWidth) - 8));
-      const bottom = Math.max(9, Math.min(window.innerHeight - 8, Number(boundary?.bottom || window.innerHeight) - 8));
+      const pageBottom = boundaryElement?.closest?.('.is-mobile-page')
+        ? document.querySelector('.global-player')?.getBoundingClientRect().top || window.innerHeight
+        : boundary?.bottom || window.innerHeight;
+      const bottom = Math.max(9, Math.min(window.innerHeight - 8, Number(pageBottom) - 8));
       const width = Math.min(440, right - left);
       const top = Math.max(8, Math.min(joinedTop, Math.max(8, bottom - 240)));
       const panelLeft = searchRect
@@ -76,8 +79,8 @@ function showAppFormDialog(options = {}) {
       syncTriggerAnchor(anchoredPanel, anchor);
     };
     modal.classList.add('app-form-anchored'); anchoredPanel.setAttribute('aria-modal', 'false');
-    position();
     if (typeof activateTriggerSurface === 'function') activateTriggerSurface(anchoredPanel, () => finish(null));
+    position();
     listen(document, 'pointerdown', event => {
       if (!anchoredPanel.contains(event.target) && !anchor.contains(event.target)) finish(null);
     });

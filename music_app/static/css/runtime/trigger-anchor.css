@@ -195,7 +195,8 @@
 }
 :root :is(.account-menu-item, .gallery-anchored-menu button, [role="menu"] [role^="menuitem"], [role="listbox"] [role="option"], .album-card-context-menu button, .status-context-menu button, .gallery-options-menu button, .utility-problem-filter-option, .utility-loop-speed-menu button, .recent-search-option, .artist-family-panel__combine-row .gallery-switch):focus-visible:not(:disabled):not([aria-disabled="true"]) {
   text-decoration: none;
-  text-underline-offset: 3px;
+  outline: 2px solid currentColor !important;
+  outline-offset: -2px;
 }
 :root .artist-family-panel__combine-row .gallery-switch:hover:not(:disabled):not([aria-disabled="true"]) {
   background: transparent !important;

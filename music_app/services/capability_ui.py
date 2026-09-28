@@ -9,6 +9,7 @@ from types import MappingProxyType
 
 from music_app.services.capabilities import CAPABILITY_ACTIONS, CAPABILITY_KEYS
 from music_app.services.client_surfaces import client_surface_from_request
+from music_app.services.cover_provider_candidates import PROVIDER_LOOKUP_GROUPS
 
 
 UTILITY_TAB_ACTIONS = MappingProxyType({
@@ -80,6 +81,10 @@ def build_capability_ui(allowed: dict[str, bool], client_surface: str) -> dict[s
         for selector in selectors
     ]
     denied_tabs = [tab for tab, action in UTILITY_TAB_ACTIONS.items() if not allowed.get(action, False)]
+    if client_surface == "tv":
+        denied_selectors.extend((
+            ".cover-lookup-manual-add", "[data-select-local-cover]", "[data-select-pasted-cover]",
+        ))
     denied_selectors.extend(f'[data-utility-tab="{tab}"]' for tab in denied_tabs)
     denied_selectors.extend(
         f'[data-required-action="{action}"]' for action in UI_ACTIONS
@@ -88,6 +93,7 @@ def build_capability_ui(allowed: dict[str, bool], client_surface: str) -> dict[s
     return {
         "allowed_actions": allowed,
         "client_surface": client_surface,
+        "cover_provider_groups": list(PROVIDER_LOOKUP_GROUPS),
         "denied_selectors": denied_selectors,
         "denied_tabs": denied_tabs,
         "available_tabs": [tab for tab in UTILITY_TAB_ACTIONS if tab not in denied_tabs],

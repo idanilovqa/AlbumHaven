@@ -5,6 +5,7 @@ const { resolveBrowserProjectUse } = require('./scripts/playwright-runtime-flags
 
 const port = Number(process.env.PHASE7_ADMIN_PORT || 6190);
 const smtpPort = Number(process.env.PHASE7_ADMIN_SMTP_PORT || 6191);
+const providerPort = Number(process.env.PHASE7_ADMIN_PROVIDER_PORT || 6194);
 const controlPort = Number(process.env.PHASE7_ADMIN_CONTROL_PORT || 6192);
 const pythonExe = resolvePlaywrightPython(process.env);
 const launcher = path.join(__dirname, 'tests', 'e2e', 'support', 'phase7AuthApp.py');
@@ -17,6 +18,7 @@ const runtimeDatabaseURL = process.env.ALBUM_HAVEN_FAKE_E2E_DATABASE_URL
 process.env.PHASE7_AUTH_CONTROL_URL = `http://127.0.0.1:${controlPort}`;
 
 module.exports = defineConfig({
+  metadata: { providerBaseURL: `http://127.0.0.1:${providerPort}` },
   testDir: path.join(__dirname, 'tests', 'e2e', 'phase7', 'admin-management'),
   outputDir: path.join(__dirname, 'test-results', 'playwright-artifacts', 'phase7-admin'),
   forbidOnly: Boolean(process.env.CI),
@@ -34,7 +36,7 @@ module.exports = defineConfig({
   },
   projects: [{ name: 'phase7-admin-management' }],
   webServer: {
-    command: `"${pythonExe}" "${launcher}" --port ${port} --smtp-port ${smtpPort} --control-port ${controlPort} --playback-media`,
+    command: `"${pythonExe}" "${launcher}" --port ${port} --smtp-port ${smtpPort} --control-port ${controlPort} --provider-port ${providerPort} --playback-media`,
     url: `http://127.0.0.1:${port}/health`,
     reuseExistingServer: false,
     stdout: 'pipe',

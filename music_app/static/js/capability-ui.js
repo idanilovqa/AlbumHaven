@@ -13,6 +13,8 @@
         availableTabs: Object.freeze(Array.isArray(payload.available_tabs)
           ? payload.available_tabs.filter(tab => typeof tab === 'string') : []),
         clientSurface: String(payload.client_surface || 'private_web'),
+        coverProviderGroups: Object.freeze(Array.isArray(payload.cover_provider_groups)
+          ? payload.cover_provider_groups.filter(group => typeof group === 'string') : []),
       });
     } catch (_error) {
       return null;
@@ -25,7 +27,9 @@
     const allowsUtilityTab = (tab) => Boolean(policy && policy.availableTabs.includes(tab));
     const resolveUtilityTab = (preferred) => allowsUtilityTab(preferred)
       ? preferred : policy?.availableTabs[0] || null;
-    const result = Object.freeze({ allows, allowsUtilityTab, resolveUtilityTab,
+    const allowsCoverCandidate = (candidate) => Boolean(policy && (policy.clientSurface !== 'tv'
+      || policy.coverProviderGroups.includes(candidate?.lookup_group)));
+    const result = Object.freeze({ allows, allowsUtilityTab, resolveUtilityTab, allowsCoverCandidate,
       clientSurface: policy?.clientSurface || 'private_web' });
     root.AlbumHavenCapabilities = result;
     if (!policy) return result;

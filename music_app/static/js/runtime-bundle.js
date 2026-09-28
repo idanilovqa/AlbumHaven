@@ -40068,8 +40068,9 @@ function initMobileNavigation() {
     if (loopPage) {
       loopPage.parentPosition = null;
       loopPage.loopListPosition = null;
-      writeMobilePageHistory('replace');
-    } else window.history.replaceState({ ...(window.history.state || {}), mobilePages: [] }, '', window.location.href);
+    }
+    // Keep the restored page as a parent for any child opened after reload.
+    writeMobilePageHistory('replace');
   }
 }
 

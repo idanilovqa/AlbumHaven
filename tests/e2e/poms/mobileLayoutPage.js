@@ -364,7 +364,7 @@ export class MobileLayoutPage {
   }
 
   async selectUtility(section) {
-    if (!['rules', 'loops', 'log-history', 'appearance', 'integrations'].includes(section)) throw new TypeError('Invalid section');
+    if (!['problematic-files', 'rules', 'loops', 'log-history', 'appearance', 'integrations'].includes(section)) throw new TypeError('Invalid section');
     await this.settingsSectionsButton.click();
     await this.settingsDrawer.locator(`[data-mobile-settings-choice="${section}"]`).click();
     await expect(this.settingsDrawer).not.toBeVisible();

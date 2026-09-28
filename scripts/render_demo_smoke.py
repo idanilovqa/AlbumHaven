@@ -104,6 +104,15 @@ with TestClient(create_asgi_app(), base_url=settings["ALBUM_HAVEN_PUBLIC_BASE_UR
     assert "failed" not in response.headers.get("location", ""), response.headers.get("location")
     assert client.get("/account/layout-preferences").status_code == 200
     assert client.get("/").status_code == 200
+    problems = client.get('/utilities/problematic-files')
+    assert problems.status_code == 200
+    items = problems.json()['items']
+    generated = [item for item in items if item.get('name') in ('Collected Skies 02', 'Collected Skies 03')]
+    assert len(generated) == 2, [(item.get('album_artist'), item.get('name')) for item in items]
+    for item in generated:
+        detail = client.get('/utilities/problematic-files/detail', params={'album_key': item['key']})
+        assert detail.status_code == 200
+        assert any(label in detail.text for label in ('Missing track number', 'Missing year')), detail.text[:300]
     for row in seeded_loops:
         clip = client.get("/loops/media/" + row[1])
         assert clip.status_code == 200, clip.status_code

@@ -758,3 +758,13 @@ test('automatic move switches are UI-only and reveal destinations only while ena
   owner.allowedActions['library.settings.manage'] = false;
   assert.match(render(), /disabled/);
 });
+
+test('mobile Library path actions remain read-only despite server manage permission', () => {
+  const { context, calls } = loadHelpers({ isMobileClient: () => true });
+  const event = { target: { closest: () => ({}) }, preventDefault() {} };
+  assert.equal(context.handleLibrarySettingsClick(event), true);
+  assert.equal(calls.fetches.length, 0);
+  assert.equal(context.librarySettingsReadOnlyClient(), true);
+  context.isMobileClient = () => false;
+  assert.equal(context.librarySettingsReadOnlyClient(), false);
+});

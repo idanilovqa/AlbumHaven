@@ -72,6 +72,14 @@ def prepare_mobile_layout_media(root: Path, *, extended: bool = False) -> dict[s
                 "cover_path": str(cover.resolve()), "library_root_id": "isolated-e2e-root",
                 "library_root_category": "main_library", "metadata_schema_version": FILE_METADATA_SCHEMA_VERSION,
             }
+    if extended:
+        # Real metadata defects on generated, non-loop albums exercise the normal
+        # problematic-files projection without adding routes or touching user media.
+        for item in inventory.values():
+            if item['artist'] == 'Aster Lane' and item['album'] == 'Collected Skies 02':
+                item['track_number'] = None
+            elif item['artist'] == 'Orion Field' and item['album'] == 'Collected Skies 03':
+                item['year'] = None
     return inventory
 
 

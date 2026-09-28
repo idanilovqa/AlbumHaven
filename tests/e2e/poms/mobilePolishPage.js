@@ -11,6 +11,10 @@ export class MobilePolishPage extends MobileLayoutPage {
     this.selectedCover = this.coverLookupPage.locator('.cover-lookup-art-card.is-active');
     this.accountHost = page.locator('[data-settings-host]:not([hidden])');
     this.accountBar = this.accountHost.locator('.page-gallery-bar');
+    this.adminDrawer = this.accountHost.locator('[data-settings-nav]');
+    this.adminBack = this.adminDrawer.getByRole('button', { name: 'Back to page', exact: true });
+    this.adminActions = this.accountHost.locator('[data-admin-action]:not(.is-danger)');
+    this.ownerInfo = this.accountHost.locator('.admin-role-info');
     this.parentLink = this.accountBar.locator('[data-settings-parent]');
     this.usersTable = this.accountHost.getByRole('table');
     this.userActions = this.accountHost.getByRole('button', { name: 'Actions for Rendref', exact: true });
@@ -34,6 +38,21 @@ export class MobilePolishPage extends MobileLayoutPage {
     this.alertFamily = page.locator('[data-alert-family="signal"].appearance-alert-family-card');
     this.lightbox = page.locator('#image-lightbox');
     this.visibleAccountMenu = page.locator('#app-shell [data-account-menu]:not([hidden])');
+  }
+
+  async expectAdminFeedback() {
+    await expect(this.ownerInfo).toHaveAttribute('data-on-page-alert', 'info');
+    // parity-check: allow-read-only-measurement-evaluate -- compare the shared action controls' rendered dimensions.
+    const boxes = await this.adminActions.evaluateAll(nodes => nodes.map(node => ({ width: node.getBoundingClientRect().width, height: node.getBoundingClientRect().height })));
+    expect(boxes.length).toBeGreaterThan(1);
+    for (const box of boxes) { expect(box.width).toBeCloseTo(140, 0); expect(box.height).toBeCloseTo(40, 0); }
+    const header = await this.accountBar.boundingBox();
+    expect(header.y).toBeLessThanOrEqual(85);
+    await this.accountNavToggle.click();
+    await expect(this.adminDrawer.getByRole('heading', { name: 'Admin', exact: true })).toBeVisible();
+    await expect(this.adminBack.locator('svg')).toHaveCSS('stroke-width', '1.7px');
+    await this.adminBack.click();
+    await expect(this.adminDrawer).not.toBeVisible();
   }
 
   async expectHeaderActionsAligned() {
@@ -158,7 +177,17 @@ export class MobilePolishPage extends MobileLayoutPage {
 
   expectContrast(colors) {
     const luminance = color => {
-      const values = color.match(/[\d.]+/g).map(Number).slice(0, 3);
+      const values = color.match(/[-+]?(?:\d*\.)?\d+(?:e[-+]?\d+)?/gi).map(Number).slice(0, 3);
+      if (color.startsWith('oklab(')) {
+        const [L, a, b] = values;
+        const l = (L + .3963377774 * a + .2158037573 * b) ** 3;
+        const m = (L - .1055613458 * a - .0638541728 * b) ** 3;
+        const s = (L - .0894841775 * a - 1.291485548 * b) ** 3;
+        const rgb = [4.0767416621 * l - 3.3077115913 * m + .2309699292 * s,
+          -1.2684380046 * l + 2.6097574011 * m - .3413193965 * s,
+          -.0041960863 * l - .7034186147 * m + 1.707614701 * s].map(value => Math.max(0, Math.min(1, value)));
+        return rgb[0] * .2126 + rgb[1] * .7152 + rgb[2] * .0722;
+      }
       const rgb = values.map(value => color.startsWith('color(') ? value : value / 255)
         .map(value => value <= .04045 ? value / 12.92 : ((value + .055) / 1.055) ** 2.4);
       return rgb[0] * .2126 + rgb[1] * .7152 + rgb[2] * .0722;

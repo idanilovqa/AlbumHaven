@@ -149,6 +149,8 @@ function createContext(stateOverrides = {}) {
     clearBrowserTimeout() {},
     closeRepairConfirmModal() {},
     closeUtilityModal() {},
+    closeUtilityLoopSettingMenu() {},
+    openMobileUtilityDetail() {},
     buildCompactDataTable() {
       return '';
     },

@@ -7,7 +7,7 @@ function setup() {
   const nodes = new Map();
   for (const id of ['app-form-modal', 'app-form-title', 'app-form-content', 'app-form-error', 'app-form-cancel', 'app-form-submit']) nodes.set(id, { hidden: true, disabled: false, style: {}, listeners: new Map(), addEventListener(name, fn) { this.listeners.set(name, fn); }, removeEventListener(name) { this.listeners.delete(name); }, focus() {}, querySelectorAll() { return []; } });
   const focus = [];
-  const document = { getElementById: id => nodes.get(id), activeElement: { focus: options => focus.push(options) } };
+  const document = { addEventListener() {}, removeEventListener() {}, getElementById: id => nodes.get(id), activeElement: { focus: options => focus.push(options) } };
   const context = vm.createContext({ document, window: {}, Promise });
   vm.runInContext(fs.readFileSync(path.resolve(__dirname, '../../../music_app/static/js/runtime/browser-dialog-helpers.js'), 'utf8'), context);
   const fire = (id, name) => nodes.get(id).listeners.get(name)?.({ preventDefault() {}, stopPropagation() {} });
@@ -139,3 +139,23 @@ for (const searchLeft of [390, 1480]) {
     await pending;
   });
 }
+
+
+test('anchored form owns cleanup before positioning and same-trigger dismissal settles its promise', async () => {
+  const h = setup(), events = new Map(); let close;
+  Object.assign(h.context.document, { addEventListener: (name, handler) => events.set(name, handler), removeEventListener: name => events.delete(name) });
+  const panel = { style: {}, setAttribute() {}, removeAttribute() {}, contains: () => false };
+  const modal = h.nodes.get('app-form-modal');
+  modal.querySelector = () => panel; modal.classList = { add() {}, remove() {} };
+  Object.assign(h.context.window, { innerWidth: 390, innerHeight: 844 });
+  const anchor = { getBoundingClientRect: () => ({ left: 320, right: 350, bottom: 175 }), contains: () => false };
+  h.context.activateTriggerSurface = (_surface, callback) => { close ||= callback; };
+  h.context.syncTriggerAnchor = () => h.context.activateTriggerSurface(panel, () => { modal.hidden = true; });
+  h.context.clearTriggerAnchor = () => { close = null; };
+  let pending = h.context.showAppFormDialog({ anchor });
+  close(); assert.equal(await pending, null); assert.equal(events.size, 0);
+  pending = h.context.showAppFormDialog({ anchor });
+  await h.context.showAppFormDialog({ anchor }); assert.equal(await pending, null);
+  pending = h.context.showAppFormDialog({ anchor });
+  events.get('pointerdown')({ target: {} }); assert.equal(await pending, null);
+});

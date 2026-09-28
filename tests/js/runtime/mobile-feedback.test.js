@@ -38,7 +38,8 @@ test('mobile Settings consumes only server-authorized section actions', () => {
   assert.equal(context.mobileUtilityTabAllowed('rules', {}), false);
   assert.equal(context.mobileUtilityTabAllowed('rules', { 'library.rules.read': true }), true);
   assert.equal(context.mobileUtilityTabAllowed('loops', { 'library.loops.read': true }), true);
-  assert.equal(context.mobileUtilityTabAllowed('problematic-files', { 'library.problems.read': true }), false);
+  assert.equal(context.mobileUtilityTabAllowed('problematic-files', { 'library.problems.read': true }), true);
+  assert.equal(context.mobileUtilityTabAllowed('problematic-files', {}), false);
   assert.equal(context.mobileUtilityTabAllowed('__proto__', {}), false);
 });
 
@@ -175,4 +176,26 @@ test('breakpoint promotion retains open surfaces and puts an album above Setting
   context.window.innerWidth = 1280;
   context.promoteVisibleMobileDialogs();
   assert.deepEqual(calls, []);
+});
+
+test('utility detail pushes its index parent and Back preserves the Forward entry', () => {
+  const writes = [], movements = [];
+  const outlet = { scrollTop: 120 }, modal = { dataset: {} };
+  const context = load('mobile-navigation.js', {
+    window: { innerWidth: 390, history: { state: { albumHavenNavigationPosition: 7 }, go: delta => movements.push(delta) } },
+    document: { getElementById: id => id === 'mobile-page-outlet' ? outlet : modal },
+  });
+  vm.runInContext("mobilePageState.pages.push({kind:'utilities',tab:'problematic-files'})", context);
+  context.writeMobilePageHistory = mode => writes.push({ mode: mode || 'push', key: vm.runInContext('mobilePageState.pages.at(-1).utilityDetail', context) });
+  context.openMobileUtilityDetail('generated-album');
+  assert.deepEqual(writes, [{ mode: 'replace', key: undefined }, { mode: 'push', key: 'generated-album' }]);
+  assert.equal(modal.dataset.mobileUtilityView, 'detail');
+  assert.equal(outlet.scrollTop, 0);
+  context.window.history.state.albumHavenNavigationPosition = 8;
+  context.navigateMobileBack();
+  assert.deepEqual(movements, [-1]);
+  assert.equal(writes.length, 2);
+  context.window.innerWidth = 1280;
+  context.openMobileUtilityDetail('another-album');
+  assert.equal(writes.length, 2);
 });

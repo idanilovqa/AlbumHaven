@@ -374,6 +374,7 @@ test('player album resolution rejects an active queue snapshot when the requeste
 
 function loadLoopBuilderHelpers() {
   const context = {
+    ButtonComponent: require('../../../music_app/static/js/button-component.js'),
     state: {
       utility: {
         loops: [],
@@ -393,6 +394,7 @@ function loadLoopBuilderHelpers() {
         : `${wholeMinutes}:${String(Math.floor(remaining)).padStart(2, '0')}`;
     },
   };
+  context.window = context;
   vm.createContext(context);
   vm.runInContext(playbackControlClusterSource, context, { filename: playbackControlClusterPath });
   vm.runInContext(fs.readFileSync(path.join(path.dirname(helperPath), 'player-and-waveform.js'), 'utf8'), context);
@@ -6237,7 +6239,7 @@ test('Problematic Files detail renders the approved three-column compact table c
     ['Missing cover art', 'Missing year', 'Missing track number'],
   );
   assert.equal(context.lastCompactTableConfig.frame, 'outline');
-  assert.equal(context.lastCompactTableConfig.mobile, 'preserve');
+  assert.equal(context.lastCompactTableConfig.mobile, 'stack');
   assert.equal(context.lastCompactTableConfig.overflow, 'local');
   assert.equal(context.lastCompactTableConfig.columnsConfig.length, 3);
   assert.deepEqual(
@@ -6633,11 +6635,11 @@ test('saved loop layout keeps edit timestamps in a dedicated row above the mono 
   assert.match(mainRule, /display:\s*grid/);
   assert.match(
     mainRule,
-    /grid-template-rows:\s*22px\s+32px/,
+    /grid-template-rows:\s*22px\s+44px/,
     'the saved player must reserve the same timestamp-row height when edit mode hides pitch',
   );
   assert.doesNotMatch(mainRule, /grid-template-rows:\s*auto/);
-  assert.match(mainRule, /height:\s*58px/);
+  assert.match(mainRule, /height:\s*70px/);
   assert.match(mainRule, /(?:row-)?gap:\s*4px/);
   assert.match(
     mainRule,
@@ -6657,8 +6659,8 @@ test('saved loop layout keeps edit timestamps in a dedicated row above the mono 
     /transform\s*:/,
     'a transformed timeline wrapper traps the saved z4 range handles below the overlaid z3 Play pod',
   );
-  assert.match(timelineWrapRule, /min-height:\s*32px/);
-  assert.match(timelineWrapRule, /height:\s*32px/);
+  assert.match(timelineWrapRule, /min-height:\s*44px/);
+  assert.match(timelineWrapRule, /height:\s*44px/);
   assert.match(globalRangeSurfaceRule, /z-index:\s*2/);
   assert.match(savedPodRule, /position:\s*absolute/);
   assert.match(savedPodRule, /z-index:\s*4/);

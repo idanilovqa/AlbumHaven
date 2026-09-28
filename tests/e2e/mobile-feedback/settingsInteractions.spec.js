@@ -75,6 +75,13 @@ test('mobile Problematic Files search, filters and exact exceptions survive relo
   await search.searchInput.fill('');
   await expect(problems.listItems.first()).toBeVisible();
   await search.problemFilterButton.click();
+  await expect(search.problemFilterMenu).toBeVisible();
+  await search.problemFilterButton.click();
+  await expect(search.problemFilterMenu).not.toBeVisible();
+  await search.problemFilterButton.click();
+  await ui.pageTitle.click();
+  await expect(search.problemFilterMenu).not.toBeVisible();
+  await search.problemFilterButton.click();
   await search.filterOptionByValue('Missing year').click();
   await expect(search.filterChipByValue('Missing year')).toBeVisible();
   await expect(problems.listItems.filter({ hasText: 'Collected Skies 03' })).toBeVisible();

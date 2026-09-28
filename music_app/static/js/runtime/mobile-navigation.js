@@ -675,7 +675,7 @@ function initMobileGalleryPinch() {
     if (event.touches.length !== 2) { gesture = null; return; }
     const span = distance(event.touches);
     if (span < 24) return;
-    gesture = { distance: span, columns: window.AlbumHavenDevicePreferences?.read('mobileGridColumns', 3) || 3 };
+    gesture = { targetColumns: null, distance: span, columns: window.AlbumHavenDevicePreferences?.read('mobileGridColumns', 3) || 3 };
     if (event.cancelable) event.preventDefault();
     closeGalleryMainSurface(false);
   }, { passive: false });
@@ -683,9 +683,16 @@ function initMobileGalleryPinch() {
     if (!gesture || event.touches.length !== 2) return;
     if (event.cancelable) event.preventDefault();
     suppressClickUntil = Date.now() + 450;
-    setMobileGalleryColumns(resolvePinchColumns(gesture.columns, distance(event.touches) / gesture.distance));
+    gesture.targetColumns = resolvePinchColumns(gesture.columns, distance(event.touches) / gesture.distance);
   }, { passive: false });
-  const finish = () => { if (gesture) suppressClickUntil = Date.now() + 450; gesture = null; };
+  // Keep the touched DOM mounted until both fingers lift. Replacing it mid-gesture
+  // cancels native touch delivery and can strand the gallery at an intermediate scale.
+  const finish = event => {
+    const completed = gesture;
+    if (completed) suppressClickUntil = Date.now() + 450;
+    gesture = null;
+    if (event.type === 'touchend' && completed?.targetColumns) setMobileGalleryColumns(completed.targetColumns);
+  };
   gallery.addEventListener('touchend', finish, { passive: true });
   gallery.addEventListener('touchcancel', finish, { passive: true });
   gallery.addEventListener('click', event => {

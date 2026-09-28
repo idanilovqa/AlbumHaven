@@ -208,7 +208,7 @@ test('relocated album actions retain cover lookup and Back without changing the 
 
 
 test('switching through original artwork restores each approved overview without reloading', async ({ app, snapshot }) => {
-  await app.search('Sixteen Horizons');
+  await app.browseArtist();
   await app.openAlbumBody('Sixteen Horizons');
   for (const [index, layout] of ['stacked_bar', 'classic_bar', 'editorial_canvas', 'classic_bar', 'stacked_bar'].entries()) {
     await app.openSettings();

@@ -25601,7 +25601,9 @@ async function markCoverLookupAutomaticImprovementSeen(candidateSnapshot) {
       }
     }
   } catch (error) {
-    state.coverLookup.modal.seenCandidateImprovementToken = '';
+    if (state.coverLookup.modal.album === album && state.coverLookup.modal.seenCandidateImprovementToken === seenToken) {
+      state.coverLookup.modal.seenCandidateImprovementToken = '';
+    }
     console.warn('[AlbumHaven][CoverLookup] Failed to mark automatic candidate update as seen.', error);
   }
 }
@@ -39414,8 +39416,10 @@ function tryRestoreClearedSearchView(nextView, options = {}) {
     clearPendingSelectedArtistReconcile();
     state.ui.viewStateRevision = Number(state.ui.viewStateRevision || 0) + 1;
     state.ui.pendingViewRequest = null;
+    const hadPendingTransition = state.ui.pendingViewTransition;
     state.ui.pendingViewTransition = false;
     state.ui.pendingViewTransitionRequestId = 0;
+    if (hadPendingTransition) renderLibraryLoader(state.status);
     renderSidebar();
     pushBrowserViewState(nextView);
     return true;
@@ -40212,7 +40216,7 @@ function initMobileGalleryPinch() {
     if (event.touches.length !== 2) { gesture = null; return; }
     const span = distance(event.touches);
     if (span < 24) return;
-    gesture = { distance: span, columns: window.AlbumHavenDevicePreferences?.read('mobileGridColumns', 3) || 3 };
+    gesture = { targetColumns: null, distance: span, columns: window.AlbumHavenDevicePreferences?.read('mobileGridColumns', 3) || 3 };
     if (event.cancelable) event.preventDefault();
     closeGalleryMainSurface(false);
   }, { passive: false });
@@ -40220,9 +40224,16 @@ function initMobileGalleryPinch() {
     if (!gesture || event.touches.length !== 2) return;
     if (event.cancelable) event.preventDefault();
     suppressClickUntil = Date.now() + 450;
-    setMobileGalleryColumns(resolvePinchColumns(gesture.columns, distance(event.touches) / gesture.distance));
+    gesture.targetColumns = resolvePinchColumns(gesture.columns, distance(event.touches) / gesture.distance);
   }, { passive: false });
-  const finish = () => { if (gesture) suppressClickUntil = Date.now() + 450; gesture = null; };
+  // Keep the touched DOM mounted until both fingers lift. Replacing it mid-gesture
+  // cancels native touch delivery and can strand the gallery at an intermediate scale.
+  const finish = event => {
+    const completed = gesture;
+    if (completed) suppressClickUntil = Date.now() + 450;
+    gesture = null;
+    if (event.type === 'touchend' && completed?.targetColumns) setMobileGalleryColumns(completed.targetColumns);
+  };
   gallery.addEventListener('touchend', finish, { passive: true });
   gallery.addEventListener('touchcancel', finish, { passive: true });
   gallery.addEventListener('click', event => {
@@ -40320,8 +40331,8 @@ function syncMobileHome() {
   const bar = document.querySelector('[data-gallery-bar-instance="gallery"]');
   if (bar) {
     if (!mobileHomeBarPosition) { mobileHomeBarPosition = document.createComment('GalleryBar position'); bar.before(mobileHomeBarPosition); }
-    if (show) host.prepend(bar);
-    else mobileHomeBarPosition.after(bar);
+    if (show && bar.parentElement !== host) host.prepend(bar);
+    else if (!show && bar.parentNode !== mobileHomeBarPosition.parentNode) mobileHomeBarPosition.after(bar);
     let tabs = bar.querySelector('.gallery-bar__home-tabs');
     if (show && !tabs) {
       tabs = document.createElement('div');

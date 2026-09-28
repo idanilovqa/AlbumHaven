@@ -2,6 +2,7 @@ import { test, expect } from '../fixtures/mobileFeedbackTest.js';
 import { MobilePolishPage } from '../poms/mobilePolishPage.js';
 import { UtilityAppearanceTab } from '../poms/utilityAppearanceTab.js';
 import { CoverLookup } from '../poms/coverLookup.js';
+import { TagEditor } from '../poms/tagEditor.js';
 import { TrackModal } from '../poms/trackModal.js';
 
 for (const palette of ['black', 'paper', 'parchment-pine']) {
@@ -62,7 +63,7 @@ test('Home loading replaces the complete page and search expands beside the logo
   await expect(phone.searchInput).toBeFocused();
   const brand = await phone.brand.boundingBox(), search = await phone.searchControl.boundingBox();
   expect(search.x).toBeGreaterThanOrEqual(brand.x + brand.width);
-  expect(search.x + search.width).toBeCloseTo(page.viewportSize().width - 12, 0);
+  await expect.poll(async () => { const box = await phone.searchControl.boundingBox(); return box.x + box.width; }).toBeCloseTo(page.viewportSize().width - 12, 0);
   await expect(phone.settingsButton).not.toBeVisible();
   await phone.galleryContextName.click();
   await expect(phone.searchInput).not.toBeVisible();
@@ -105,4 +106,37 @@ test('cover selection saves before closing, reopens with saved artwork, and back
   await expect(covers.activeLocalCoverCard).toBeVisible();
   await expect(covers.saveRemoteButton).toBeDisabled();
   await snapshot('94-cover-reopened');
+});
+
+
+test('desktop tag fields, Apply and alternating track stripes work in dark and light palettes', async ({ page, app, browser, snapshot }) => {
+  const context = await browser.newContext({ baseURL: new URL(page.url()).origin, viewport: { width: 1366, height: 900 }, isMobile: false, hasTouch: false });
+  try {
+    const desktop = await context.newPage();
+    const web = new MobilePolishPage(desktop), appearance = new UtilityAppearanceTab(desktop), tags = new TagEditor(desktop), details = new TrackModal(desktop);
+    await web.signIn('rendref', 'Phase Seven Owner Passphrase 2026!');
+    for (const palette of ['black', 'paper', 'parchment-pine']) {
+      await web.settingsButton.click();
+      await web.utilitiesButton.click();
+      await appearance.sectionButton('backgrounds').click();
+      await appearance.paletteButton(palette).click();
+      await web.saveAppearanceChanges();
+      await desktop.keyboard.press('Escape');
+      await web.search('Sixteen Horizons');
+      await web.galleryAlbums.first().click();
+      await details.editTagsButton.click();
+      await tags.trackButtons.first().getByRole('button').last().click();
+      await tags.albumNameInput.fill('Unsaved preview title');
+      await expect(tags.applyButton).toBeEnabled();
+      const paint = await tags.readFormAndStripeColors();
+      expect(paint.rows).toHaveLength(3);
+      expect(paint.rows[0].background).not.toBe(paint.rows[1].background);
+      expect(paint.rows[0].background).toBe(paint.rows[2].background);
+      expect(paint.apply.background).not.toBe(paint.input.background);
+      web.expectContrast([paint.apply, paint.input, ...paint.rows]);
+      await desktop.screenshot({ path: `test-results/mobile-screenshots/95-desktop-tags-${palette}.png`, fullPage: true });
+      await tags.cancelButton.click();
+      await desktop.keyboard.press('Escape');
+    }
+  } finally { await context.close(); }
 });

@@ -95,48 +95,6 @@
   align-items: center;
   gap: 8px;
 }
-.cover-lookup-drawer-clear .action-button__content {
-  position: relative;
-}
-.cover-lookup-drawer-clear-glyph {
-  position: absolute;
-  top: 50%;
-  left: 50%;
-  display: block;
-  width: 28px;
-  height: 28px;
-  transform: translate(-50%, -50%);
-}
-.cover-lookup-drawer-clear-glyph img {
-  position: absolute;
-  inset: 0;
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
-  display: block;
-  transition: opacity 180ms ease;
-}
-.cover-lookup-drawer-clear-glyph-hover {
-  opacity: 0;
-}
-.cover-lookup-drawer-clear:hover .cover-lookup-drawer-clear-glyph-default,
-.cover-lookup-drawer-clear:focus-visible .cover-lookup-drawer-clear-glyph-default {
-  opacity: 0;
-}
-.cover-lookup-drawer-clear:hover .cover-lookup-drawer-clear-glyph-hover,
-.cover-lookup-drawer-clear:focus-visible .cover-lookup-drawer-clear-glyph-hover {
-  opacity: 1;
-}
-:root[data-appearance-mode='light']
-  .cover-lookup-drawer-clear
-  .cover-lookup-drawer-clear-glyph-default {
-  opacity: 0;
-}
-:root[data-appearance-mode='light']
-  .cover-lookup-drawer-clear
-  .cover-lookup-drawer-clear-glyph-hover {
-  opacity: 1;
-}
 :root[data-appearance-mode='light']
   .cover-lookup-drawer-clear:is(:disabled, [aria-disabled='true']) {
   opacity: 0.75;

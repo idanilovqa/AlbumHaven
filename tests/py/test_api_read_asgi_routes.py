@@ -2442,7 +2442,8 @@ def test_postgres_selected_artist_request_does_not_require_omit_sidebar(app, asg
     assert asgi_read_routes._is_postgres_selected_artist_request(request) is True
 
 
-def test_asgi_root_album_browse_uses_postgres_browse_without_flask_bridge(app, asgi_app, monkeypatch):
+@pytest.mark.parametrize("all_artists", [None, "1"])
+def test_asgi_root_album_browse_uses_postgres_browse_without_flask_bridge(app, asgi_app, monkeypatch, all_artists):
     from music_app.routes import api_read_asgi_routes as asgi_read_routes
 
     def fail_hydrate():
@@ -2511,6 +2512,7 @@ def test_asgi_root_album_browse_uses_postgres_browse_without_flask_bridge(app, a
         "/view-data",
         query={
             "surface": "albums",
+            **({"all_artists": all_artists} if all_artists else {}),
             "gallery_display": "covers",
             "gallery_scale_percent": "120",
             "omit_sidebar": "1",

@@ -37,7 +37,7 @@ export class MobilePolishPage extends MobileLayoutPage {
   }
 
   async expectHeaderActionsAligned() {
-    const controls = this.page.locator('.app-bar--library .toolbar-right > .action-button, .app-bar--library [data-account-menu-trigger], #mobile-search-button');
+    const controls = this.page.locator('.app-bar--library .toolbar-right > .action-button, .app-bar--library [data-account-menu-trigger], #search-form .search-field-control');
     // parity-check: allow-read-only-measurement-evaluate -- measure actual mobile header button rectangles.
     const boxes = await controls.evaluateAll(nodes => nodes.map(node => node.getBoundingClientRect()).filter(box => box.width && box.height).map(box => ({ width: box.width, height: box.height, center: box.y + box.height / 2 })));
     expect(boxes.length).toBeGreaterThanOrEqual(4);
@@ -171,7 +171,7 @@ export class MobilePolishPage extends MobileLayoutPage {
 
   async expectBarAligned(bar) {
     // parity-check: allow-read-only-measurement-evaluate -- inspect visible shared bar controls in a single frame.
-    const centers = await bar.evaluate(node => [...(node.querySelector('.gallery-bar__actions') || node).querySelectorAll('.action-button:not(.unfolding-action-button__action), .gallery-action-button, .gallery-view-cluster')]
+    const centers = await bar.evaluate(node => [...(node.matches('[data-gallery-bar-instance="gallery"]') ? node.querySelector('.gallery-bar__actions') : node).querySelectorAll('.action-button:not(.unfolding-action-button__action), .gallery-action-button, .gallery-view-cluster')]
       .map(button => button.getBoundingClientRect()).filter(rect => rect.width && rect.height)
       .map(rect => rect.top + rect.height / 2));
     expect(centers.length).toBeGreaterThan(1);

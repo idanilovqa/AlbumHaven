@@ -475,7 +475,9 @@ async function markCoverLookupAutomaticImprovementSeen(candidateSnapshot) {
       }
     }
   } catch (error) {
-    state.coverLookup.modal.seenCandidateImprovementToken = '';
+    if (state.coverLookup.modal.album === album && state.coverLookup.modal.seenCandidateImprovementToken === seenToken) {
+      state.coverLookup.modal.seenCandidateImprovementToken = '';
+    }
     console.warn('[AlbumHaven][CoverLookup] Failed to mark automatic candidate update as seen.', error);
   }
 }

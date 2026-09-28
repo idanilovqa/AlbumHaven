@@ -26,8 +26,8 @@ function syncMobileHome() {
   const bar = document.querySelector('[data-gallery-bar-instance="gallery"]');
   if (bar) {
     if (!mobileHomeBarPosition) { mobileHomeBarPosition = document.createComment('GalleryBar position'); bar.before(mobileHomeBarPosition); }
-    if (show) host.prepend(bar);
-    else mobileHomeBarPosition.after(bar);
+    if (show && bar.parentElement !== host) host.prepend(bar);
+    else if (!show && bar.parentNode !== mobileHomeBarPosition.parentNode) mobileHomeBarPosition.after(bar);
     let tabs = bar.querySelector('.gallery-bar__home-tabs');
     if (show && !tabs) {
       tabs = document.createElement('div');

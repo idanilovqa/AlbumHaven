@@ -1,6 +1,6 @@
 /* Responsive compositions of the existing GalleryBar, ActionButton, drawers,
    AlbumArtbox, AlbumTrackTable, Appearance editor and persistent player. */
-.mobile-navigation, .mobile-gallery-density, .mobile-bar-action,
+.mobile-navigation, .mobile-bar-action,
 .mobile-drawer-heading, .settings-nav-backdrop { display: none; }
 .appearance-device-fields { display: contents; }
 .appearance-device-controls { flex-wrap: wrap; }
@@ -83,8 +83,8 @@ html[data-client-profile="mobile"] :is([data-utility-tab="problematic-files"], [
   .gallery-bar__actions { flex-shrink: 0; gap: 4px; align-self: flex-start; }
   .gallery-bar :is(.gallery-action-button, .action-button), .gallery-view-cluster { --unfolding-action-size: 40px; }
   .gallery-bar :is(.gallery-action-button, .action-button) { width: 40px; height: 40px; min-width: 40px; min-height: 40px; }
-  .mobile-bar-action, .mobile-gallery-density { display: inline-grid; place-items: center; flex: 0 0 40px; }
-  .mobile-bar-action[hidden], .mobile-gallery-density[hidden], .mobile-page-header [hidden], .global-player [hidden] { display: none !important; }
+  .mobile-bar-action { display: inline-grid; place-items: center; flex: 0 0 40px; }
+  .mobile-bar-action[hidden], .mobile-page-header [hidden], .global-player [hidden] { display: none !important; }
   #mobile-page-title:focus, #mobile-album-identity-title:focus { outline: none; }
   .gallery-bar svg, .mobile-drawer-heading svg { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
   .shell-layout .shell-navigation-rail { top: var(--app-bar-height); bottom: var(--player-height); width: min(320px, 75vw); max-width: 75vw; padding: 0; border-radius: 0 16px 16px 0; }
@@ -453,7 +453,7 @@ html[data-client-profile="mobile"] :is([data-utility-tab="problematic-files"], [
   .album-card .chip-row { flex-wrap: wrap; gap: 4px 8px; }
   .album-card :is(.track-count, .album-length) { flex: 0 0 auto; white-space: nowrap; overflow-wrap: normal; font-size: clamp(8px, 8cqi, 11px); }
   .global-player #player-play:not(:disabled) { opacity: 1; filter: saturate(1.35) contrast(1.08); background: var(--appearance-play, #24b86b); color: var(--appearance-play-ink, #06251a); border-color: var(--appearance-player-control-border, #86efac); }
-  .global-player[data-player-seekbar-presentation="thin"] .player-meta { display: grid; grid-template-rows: 16px 14px 14px; }
+  .global-player[data-player-seekbar-presentation="thin"] .player-meta { display: grid; grid-template-columns: minmax(0, 1fr); grid-template-rows: 16px 14px 14px; justify-content: stretch; }
   .global-player[data-player-seekbar-presentation="thin"] #player-artist { grid-row: 1; }
   .global-player[data-player-seekbar-presentation="thin"] #player-title { grid-row: 2; }
   .global-player[data-player-seekbar-presentation="thin"] #player-album-link { grid-row: 3; }
@@ -554,7 +554,6 @@ html[data-client-profile="mobile"] :is([data-utility-tab="problematic-files"], [
   :root .gallery-bar .gallery-action-button:focus {
     outline: 1px solid var(--appearance-ink, var(--text)); outline-offset: -1px;
   }
-  .global-player[data-player-seekbar-presentation] .player-meta { margin: 0; padding: 0; justify-self: stretch; }
   .global-player[data-player-seekbar-presentation] .player-shell { column-gap: 8px; }
   .cover-lookup-drawer.shell-info-drawer { width: min(320px, 75vw); max-width: 75vw; }
   .cover-lookup-drawer-header { flex-wrap: wrap; gap: 8px; }

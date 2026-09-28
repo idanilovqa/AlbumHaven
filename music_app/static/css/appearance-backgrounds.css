@@ -1237,6 +1237,7 @@ html .cover-lookup-drawer {
   background: color-mix(in srgb, var(--appearance-card) 85%, var(--appearance-control));
   color: var(--appearance-ink); border-color: var(--appearance-line);
 }
+:root .tag-editor-track.is-active:nth-child(even) { background: color-mix(in srgb, var(--text, #eee) 7%, var(--tag-editor-selection-fill)) !important; }
 :root .tag-editor-track:not(.is-active):not(:hover):nth-child(odd) { background: var(--appearance-card, var(--panel)); }
 :root .tag-editor-track:not(.is-active):not(:hover):nth-child(even) { background: color-mix(in srgb, var(--text) 7%, var(--appearance-card, var(--panel))); }
 .appearance-device-mode button[aria-pressed='true'] { border-color: currentColor; box-shadow: inset 0 0 0 1px currentColor; font-weight: 700; }

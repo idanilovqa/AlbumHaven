@@ -178,6 +178,10 @@ def install_private_route_boundary(app: FastAPI) -> None:
             return await call_next(request)
         route_path = _matched_route_path(app, request)
         action = private_action_for_route(request.method, route_path) or "app.access"
+        if (request.method == "GET" and route_path == "/playback/waveform"
+                and str(request.query_params.get("loop_id") or "").strip()):
+            # The route resolves this resource through the actor's owned loops.
+            action = "library.loops.media.read"
         preference_headers = (
             {"Cache-Control": "no-store, max-age=0"}
             if route_path in {"/account/appearance", "/api/account/appearance/selection-accent"} else {}

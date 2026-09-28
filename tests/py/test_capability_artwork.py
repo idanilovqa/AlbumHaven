@@ -64,3 +64,48 @@ def test_artwork_output_has_bounded_dimensions(tmp_path):
     with Image.open(BytesIO(response.body)) as decoded:
         assert decoded.width == 2048
         assert decoded.height < 2048
+
+
+@pytest.mark.parametrize("owned", [True, False])
+def test_practice_artwork_resolves_only_owned_loop_cover_not_submitted_path(tmp_path, monkeypatch, owned):
+    import asyncio
+    from fastapi import FastAPI, Request
+    from music_app.services.capability_artwork import browse_artwork_response
+    from music_app.services.current_actor import ActorState, CapabilityGrant, CurrentActor, LibraryRelationship
+
+    cover = tmp_path / "owned.png"
+    Image.new("RGB", (3, 2), "red").save(cover)
+    cover.write_bytes(cover.read_bytes() + b"ID3 private audio")
+    actor = CurrentActor(state=ActorState.ACTIVE, account_id=7, session_id=11,
+        current_library_id=23, library_relationships=(LibraryRelationship(23, "member", False),),
+        capability_grants=(CapabilityGrant("capability.practice", "library", 23),))
+    app = FastAPI()
+    app.state.config = {"ALBUM_HAVEN_DEPLOYMENT_MODE": "self_hosted"}
+    app.state.auth_policy_config = {"hmac": {"secret": "a" * 32, "key_version": 1}}
+    request = Request({"type": "http", "method": "GET", "path": "/cover", "scheme": "https",
+        "query_string": b"loop_id=owned-loop&path=other-private-track.mp3", "headers": [],
+        "client": ("127.0.0.1", 1234), "server": ("music.test", 443), "app": app,
+        "state": {"current_actor": actor}})
+    calls = []
+    def get_loop(config, loop_id, **scope):
+        assert loop_id == "owned-loop"
+        assert scope == {"account_id": 7, "library_id": 23}
+        return {"cover_path": str(cover)} if owned else None
+    def resolve(config, raw_path):
+        calls.append(raw_path)
+        assert raw_path == str(cover)
+        return cover
+    monkeypatch.setattr("music_app.services.loops.get_loop", get_loop)
+    monkeypatch.setattr("music_app.services.library_roots.resolve_configured_media_path", resolve)
+    if owned:
+        response = asyncio.run(browse_artwork_response(request))
+        assert response.media_type == "image/png"
+        assert b"private audio" not in response.body
+        with Image.open(BytesIO(response.body)) as image:
+            assert image.getpixel((0, 0)) == (255, 0, 0)
+        assert calls == [str(cover)]
+    else:
+        with pytest.raises(HTTPException) as error:
+            asyncio.run(browse_artwork_response(request))
+        assert error.value.status_code == 404
+        assert not calls

@@ -55,14 +55,21 @@ async def browse_artwork_response(request) -> Response | None:
     allowed = allowed_actions_for_request(request, ("library.media.read",)).as_payload()
     if allowed.get("library.media.read") is True:
         return None
-    # Saved-loop artwork uses its own resource ownership path in web_asgi. It is
-    # not resolved through a user-supplied path under browse-only authority.
-    if request.query_params.get("loop_id"):
-        raise HTTPException(status_code=403, detail="Action not permitted.")
     from music_app.services.library_roots import resolve_configured_media_path
 
     config = getattr(request.app.state, "config", {})
     raw_path = str(request.query_params.get("path") or "")
+    loop_id = request.query_params.get("loop_id")
+    if loop_id:
+        from music_app.services.loop_request_scope import saved_loop_scope
+        from music_app.services.loops import get_loop
+
+        scope = await saved_loop_scope(request)
+        item = await run_in_threadpool(get_loop, config, loop_id, **scope)
+        if item is None or not item.get("cover_path"):
+            raise HTTPException(status_code=404, detail="Artwork not found.")
+        # Ignore a supplied path: only this owned loop's stored cover is eligible.
+        raw_path = str(item["cover_path"])
     resolved = await run_in_threadpool(resolve_configured_media_path, config, raw_path)
     if resolved is None:
         raise HTTPException(status_code=404, detail="Artwork not found.")

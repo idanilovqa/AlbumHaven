@@ -751,3 +751,19 @@ def test_loop_resource_reference_uses_policy_grammar(reference, route):
 def test_only_exact_readonly_invitation_handoff_is_public(method, path, allowed):
     from music_app.services.private_route_boundary import _is_public
     assert _is_public(method, path) is allowed
+
+
+@pytest.mark.parametrize("key,query,expected", [
+    ("capability.practice", "loop_id=owned-loop", 200),
+    ("capability.practice", "path=track.mp3", 403),
+    ("capability.practice", "loop_id=%20&path=track.mp3", 403),
+    ("capability.view", "loop_id=owned-loop", 403),
+])
+def test_saved_loop_waveform_uses_practice_authority_without_granting_track_waveforms(key, query, expected):
+    from music_app.services.current_actor import ActorState, CapabilityGrant, LibraryRelationship
+    app, _ = _app(CurrentActor(state=ActorState.ACTIVE, account_id=7, session_id=11,
+        current_library_id=41, library_relationships=(LibraryRelationship(41, "member", False),),
+        capability_grants=(CapabilityGrant(key, "library", 41),)))
+    app.add_api_route("/playback/waveform", lambda: {"waveform": True})
+    status, _ = _request(app, "/playback/waveform", query=query)
+    assert status == expected

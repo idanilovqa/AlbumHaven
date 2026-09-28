@@ -4,7 +4,9 @@ from pathlib import Path
 import os
 import tempfile
 import unittest
-from unittest.mock import Mock, patch
+from unittest.mock import Mock, MagicMock, patch
+from types import SimpleNamespace
+import sys
 
 ROOT = Path(__file__).resolve().parents[2]
 spec = importlib.util.spec_from_file_location("render_demo", ROOT / "scripts" / "render_demo.py")
@@ -77,6 +79,46 @@ class RenderDemoConfigurationTests(unittest.TestCase):
         connection = Mock()
         connection.execute.return_value.fetchone.side_effect = [(None,), (0,)]
         self.assertTrue(demo.assert_demo_ownership(connection))
+
+
+class RenderDemoMediaPreparationTests(unittest.TestCase):
+    def test_instance_media_does_not_hold_a_database_connection(self):
+        events = []
+        connection = MagicMock()
+        connection.__enter__.return_value = connection
+        connection.__exit__.side_effect = lambda *_: events.append("closed")
+        connection.execute.side_effect = lambda query: events.append(query)
+        inventory = {"generated": {"title": "Prepared clip"}}
+        generator = Mock(side_effect=lambda *_args, **_kwargs: (events.append("media"), inventory)[1])
+        before = list(sys.path)
+        with patch.dict(sys.modules, {"mobileLayoutFixture": SimpleNamespace(prepare_mobile_layout_media=generator)}), \
+                patch.dict(sys.modules, {"psycopg": SimpleNamespace(connect=Mock(return_value=connection))}), \
+                patch.object(demo, "assert_demo_ownership", side_effect=lambda _: events.append("ownership")):
+            self.assertIs(demo.prepare_instance_media("postgresql://test", extended_media=True), inventory)
+        self.assertEqual(events, ["set transaction read only", "set local statement_timeout = '120s'", "ownership", "closed", "media"])
+        generator.assert_called_once_with(demo.DEMO_ROOT / "media", extended=True)
+        self.assertEqual(sys.path, before)
+
+    def test_foreign_database_is_rejected_before_media_generation(self):
+        connection = MagicMock()
+        connection.__enter__.return_value = connection
+        generator = Mock()
+        with patch.dict(sys.modules, {"mobileLayoutFixture": SimpleNamespace(prepare_mobile_layout_media=generator)}), \
+                patch.dict(sys.modules, {"psycopg": SimpleNamespace(connect=Mock(return_value=connection))}), \
+                patch.object(demo, "assert_demo_ownership", side_effect=RuntimeError("ownership marker")):
+            with self.assertRaisesRegex(RuntimeError, "ownership marker"):
+                demo.prepare_instance_media("postgresql://test", extended_media=True)
+        generator.assert_not_called()
+
+    def test_generation_failure_restores_module_search_path(self):
+        connection = MagicMock()
+        connection.__enter__.return_value = connection
+        before = list(sys.path)
+        with patch.dict(sys.modules, {"mobileLayoutFixture": SimpleNamespace(prepare_mobile_layout_media=Mock(side_effect=RuntimeError("encoder failed")))}), \
+                patch.dict(sys.modules, {"psycopg": SimpleNamespace(connect=Mock(return_value=connection))}), patch.object(demo, "assert_demo_ownership"):
+            with self.assertRaisesRegex(RuntimeError, "encoder failed"):
+                demo.prepare_instance_media("postgresql://test", extended_media=True)
+        self.assertEqual(sys.path, before)
 
 
 if __name__ == "__main__":

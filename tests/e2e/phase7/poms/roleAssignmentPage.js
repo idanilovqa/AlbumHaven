@@ -1,17 +1,11 @@
 import { expect } from '@playwright/test';
-import { MembersPage } from './authPages.js';
+import { CapabilityEditorPage } from './capabilityEditorPage.js';
 
-export class RoleAssignmentPage extends MembersPage {
+export class RoleAssignmentPage extends CapabilityEditorPage {
   constructor(page) {
     super(page);
-    this.roles = page.getByRole('group', { name: 'Roles', exact: true });
-    this.additional = page.getByRole('group', { name: 'Additional capabilities', exact: true });
-    this.rolesOnly = page.getByRole('button', { name: 'Use selected roles only', exact: true });
     this.error = page.locator('[data-admin-form-error]');
   }
-
-  role(label) { return this.roles.getByRole('checkbox', { name: label, exact: true }); }
-  capability(label) { return this.additional.getByRole('checkbox', { name: label, exact: true }); }
 
   async setRolesOnly(labels) {
     for (const label of ['Viewer', 'Listener', 'Musician', 'Owner', 'Admin']) {

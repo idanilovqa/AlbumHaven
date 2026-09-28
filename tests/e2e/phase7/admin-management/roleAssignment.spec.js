@@ -15,8 +15,8 @@ test('FTC-CAP-AUDIT-007 delegated Admin assigns independent roles and individual
   const access = new RoleAssignmentPage(adminPage);
   await access.openEditUser(MEMBER.username);
   await access.expectRoles(['Musician']);
-  await expect(access.capability('Play')).toBeChecked();
-  await expect(access.capability('Play')).toBeDisabled();
+  await expect(access.capability('Play music')).toBeChecked();
+  await expect(access.capability('Play music')).toBeDisabled();
   await access.capability('Change covers').check();
   await access.submitAccountChanges();
   await access.openEditUser(MEMBER.username);
@@ -28,7 +28,7 @@ test('FTC-CAP-AUDIT-007 delegated Admin assigns independent roles and individual
   await access.expectRosterRole(MEMBER.username, 'Owner');
   await access.openEditUser(MEMBER.username);
   await access.expectRoles(['Owner']);
-  await expect(access.capability('Admin')).not.toBeChecked();
+  await expect(access.capability('Administer users and access')).not.toBeChecked();
   const denied = await memberPage.goto('/admin/members');
   expect(denied.status()).toBe(403);
   await expect(memberPage.getByText('Action not permitted.', { exact: true })).toBeVisible();

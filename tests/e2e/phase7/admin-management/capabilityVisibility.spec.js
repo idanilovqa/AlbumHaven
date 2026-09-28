@@ -9,7 +9,7 @@ const MISSING_TRACK = '/track?path=capability-audit-no-such-track.mp3';
 // Additive production-app scenarios. Existing permission and functional specs
 // remain unchanged; accounts are created and configured through the real UI.
 test('FTC-CAP-AUDIT-001 Viewer browses but has no playback or privileged sections', async ({ page, freshBrowserSession }) => {
-  const memberPage = await signInCapabilityMember(page, freshBrowserSession, 'viewer', ['View library', 'View virtual discography']);
+  const memberPage = await signInCapabilityMember(page, freshBrowserSession, 'viewer', ['View library']);
   const ui = new CapabilityPage(memberPage);
   await ui.openSettings();
   await expect(ui.tab('appearance')).toHaveAttribute('aria-selected', 'true');
@@ -33,7 +33,7 @@ test('FTC-CAP-AUDIT-001 Viewer browses but has no playback or privileged section
 });
 
 test('FTC-CAP-AUDIT-002 Listener retains playback and Appearance without Problems Rules or Loops', async ({ page, freshBrowserSession }) => {
-  const memberPage = await signInCapabilityMember(page, freshBrowserSession, 'listener', ['View library', 'Play and download files']);
+  const memberPage = await signInCapabilityMember(page, freshBrowserSession, 'listener', ['Play music']);
   const ui = new CapabilityPage(memberPage);
   await ui.openSettings();
   await expect(ui.tab('appearance')).toHaveAttribute('aria-selected', 'true');
@@ -51,7 +51,7 @@ test('FTC-CAP-AUDIT-002 Listener retains playback and Appearance without Problem
 });
 
 test('FTC-CAP-AUDIT-003 Practice-only grants expose saved loops without creation', async ({ page, freshBrowserSession }) => {
-  const memberPage = await signInCapabilityMember(page, freshBrowserSession, 'practice', ['View library', 'View saved loops', 'Play saved loop media']);
+  const memberPage = await signInCapabilityMember(page, freshBrowserSession, 'practice', ['Practice with loops']);
   const ui = new CapabilityPage(memberPage);
   await ui.openSettings();
   await ui.tab('loops').click();

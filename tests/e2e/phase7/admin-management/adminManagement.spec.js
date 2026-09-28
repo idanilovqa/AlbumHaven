@@ -36,34 +36,23 @@ const MENU_LISTENER = Object.freeze({
 
 const LISTENER_CAPABILITIES = Object.freeze([
   'View library',
-  'Play and download files',
-  'View library resources',
-  'Create playlists',
-  'Discovery and listening views',
+  'Play music',
 ]);
 
 const EDITABLE_CAPABILITIES = Object.freeze([
   'View library',
-  'Play and download files',
-  'Review library problems',
-  'Remove missing library inventory',
-  'View library resources',
-  'Create playlists',
-  'Edit own playlists',
-  'Manage playlist items',
-  'Track preferences',
-  'Discovery and listening views',
-  'View saved loops',
-  'Play saved loop media',
-  'View album opinions',
-  'Submit pending Last.fm scrobbles',
-  'View library rules',
-  'View operational logs',
-  'Export operational logs',
-  'View virtual discography',
+  'Play music',
+  'Edit audio tags',
+  'Change covers',
+  'Delete covers and missing inventory',
+  'Administer users and access',
+  'Create loops',
+  'Practice with loops',
+  'Repair files, rules and logs',
+  'Move music',
 ]);
 
-test('active administrator saves repeatedly in place without periodic password reconfirmation', async ({ page }) => {
+ test('active administrator saves repeatedly in place without periodic password reconfirmation', async ({ page }) => {
   await signIn(page, OWNER, '/admin/members');
   const members = new MembersPage(page);
   await members.openAddUser();
@@ -81,16 +70,16 @@ test('active administrator saves repeatedly in place without periodic password r
     }
   });
   await members.saveWithoutLeaving();
-  await members.capabilitySwitch('View library rules').check();
+  await members.capabilitySwitch('Repair files, rules and logs').check();
   await members.saveWithoutLeaving();
   expect(mutations.map(({ method }) => method)).toEqual(['PATCH', 'PATCH']);
   expect(mutations.every(({ pathname }) => pathname !== '/admin/reauthenticate')).toBe(true);
   await expect(members.reauthPanel).toHaveCount(0);
   await page.reload();
-  await expect(members.capabilitySwitch('View library rules')).toBeChecked();
+  await expect(members.capabilitySwitch('Repair files, rules and logs')).toBeChecked();
 });
 
-test('admin last-row actions remain usable in the scrolling tablet roster', async ({ page }) => {
+ test('admin last-row actions remain usable in the scrolling tablet roster', async ({ page }) => {
   await signIn(page, OWNER, '/admin/members');
   const members = new MembersPage(page);
   await members.openAddUser();
@@ -126,7 +115,7 @@ test('admin last-row actions remain usable in the scrolling tablet roster', asyn
   await expect(members.openActionMenus).toHaveCount(0);
 });
 
-test('FTC-PERMISSIONS-011 owner discovers Settings and Users through the shared rounded menu', async ({ page }) => {
+ test('FTC-PERMISSIONS-011 owner discovers Settings and Users through the shared rounded menu', async ({ page }) => {
   await signIn(page);
   const menu = new SettingsModalAppBar(page);
   const actions = new SettingsModalAppBarActions(menu);
@@ -180,7 +169,7 @@ test('FTC-PERMISSIONS-011 owner discovers Settings and Users through the shared 
   await expect(returnedMembers.placeholderEntries).toHaveCount(0);
 });
 
-test('FTC-PERMISSIONS-012 limited member sees no Admin Panel and signs out through the shared menu', async ({ page, freshBrowserSession }) => {
+ test('FTC-PERMISSIONS-012 limited member sees no Admin Panel and signs out through the shared menu', async ({ page, freshBrowserSession }) => {
   await signIn(page);
   const members = new MembersPage(page);
   await members.open();
@@ -249,7 +238,7 @@ async function createListener(page) {
   return { completion: creation };
 }
 
-test('creates, rotates, accepts, and signs in through a copied invitation', async ({ page, freshBrowserSession }) => {
+ test('creates, rotates, accepts, and signs in through a copied invitation', async ({ page, freshBrowserSession }) => {
   await signIn(page);
   const members = new MembersPage(page);
   await members.open();
@@ -288,7 +277,7 @@ test('creates, rotates, accepts, and signs in through a copied invitation', asyn
   ).toBeVisible();
 });
 
-test('delivers a usable invitation through the local SMTP capture server', async ({ page, freshBrowserSession }) => {
+ test('delivers a usable invitation through the local SMTP capture server', async ({ page, freshBrowserSession }) => {
   await signIn(page);
   const members = new MembersPage(page);
   await members.open();
@@ -308,7 +297,7 @@ test('delivers a usable invitation through the local SMTP capture server', async
   ).toBeVisible();
 });
 
-test('FTC-PERMISSIONS-009 denies limited administration and preserves owner-only authority', async ({ page, freshBrowserSession }) => {
+ test('FTC-PERMISSIONS-009 denies limited administration and preserves owner-only authority', async ({ page, freshBrowserSession }) => {
   await signIn(page);
   const { completion } = await createListener(page);
   await completion;
@@ -324,7 +313,8 @@ test('FTC-PERMISSIONS-009 denies limited administration and preserves owner-only
   const newMember = new MembersPage(page);
   await expect(newMember.capabilityRole).toHaveCount(0);
   await expect(newMember.roles.getByRole('checkbox')).toHaveCount(5);
-  await expect(newMember.assignedRoles).toHaveCount(0);
+  await expect(newMember.assignedRoles).toHaveCount(1);
+  await expect(newMember.roles.getByRole('checkbox', { name: 'Listener', exact: true })).toBeChecked();
 
   const listenerSession = await freshBrowserSession.create();
   const listenerPage = listenerSession.page;
@@ -347,7 +337,8 @@ test('FTC-PERMISSIONS-009 denies limited administration and preserves owner-only
   await expect(members.libraryAccess).toBeDisabled();
   await expect(members.capabilitySwitches).toHaveCount(EDITABLE_CAPABILITIES.length);
   for (const label of EDITABLE_CAPABILITIES) {
-    await expect(members.capabilitySwitch(label)).toBeChecked();
+    // Move remains a visible, unavailable placeholder even for the owner.
+    await expect(members.capabilitySwitch(label)).toBeChecked({ checked: label !== 'Move music' });
     await expect(members.capabilitySwitch(label)).toBeDisabled();
   }
   await expect(page.getByRole('button', { name: 'Send email', exact: true })).toBeVisible();
@@ -392,14 +383,20 @@ test('FTC-PERMISSIONS-009 denies limited administration and preserves owner-only
   }).click();
   await listenerRow.getByRole('menuitem', { name: 'Edit' }).click();
   await expect(members.capabilityRole).toHaveCount(0);
-  await expect(members.assignedRoles).toHaveCount(0);
+  await expect(members.assignedRoles).toHaveCount(1);
+  await expect(members.roles.getByRole('checkbox', { name: 'Listener', exact: true })).toBeChecked();
   await expect(members.libraryAccess).toBeChecked();
   await expect(members.libraryAccess).toBeEnabled();
   await expect(members.capabilitySwitches).toHaveCount(EDITABLE_CAPABILITIES.length);
   await expect(members.checkedCapabilitySwitches).toHaveCount(LISTENER_CAPABILITIES.length);
-  for (const label of LISTENER_CAPABILITIES) {
-    await expect(members.capabilitySwitch(label)).toBeChecked();
-    await expect(members.capabilitySwitch(label)).toBeEnabled();
+  for (const label of EDITABLE_CAPABILITIES) {
+    const inherited = LISTENER_CAPABILITIES.includes(label);
+    await expect(members.capabilitySwitch(label)).toBeChecked({ checked: inherited });
+    if (inherited || label === 'Move music') {
+      await expect(members.capabilitySwitch(label)).toBeDisabled();
+    } else {
+      await expect(members.capabilitySwitch(label)).toBeEnabled();
+    }
   }
   await expect(
     page.getByRole('button', { name: 'Resend email', exact: true }),
@@ -415,7 +412,7 @@ test('FTC-PERMISSIONS-009 denies limited administration and preserves owner-only
   expect(resetMessage.body).not.toContain(LISTENER.password);
 });
 
-test('FTC-PERMISSIONS-009 Owner save preserves inherited capabilities and membership', async ({ page }) => {
+ test('FTC-PERMISSIONS-009 Owner save preserves inherited capabilities and membership', async ({ page }) => {
   await signIn(page);
   const members = new MembersPage(page);
   await members.open();
@@ -436,7 +433,8 @@ test('FTC-PERMISSIONS-009 Owner save preserves inherited capabilities and member
   await expect(members.libraryAccess).toBeDisabled();
   await expect(members.capabilitySwitches).toHaveCount(EDITABLE_CAPABILITIES.length);
   for (const label of EDITABLE_CAPABILITIES) {
-    await expect(members.capabilitySwitch(label)).toBeChecked();
+    // Move remains a visible, unavailable placeholder even for the owner.
+    await expect(members.capabilitySwitch(label)).toBeChecked({ checked: label !== 'Move music' });
     await expect(members.capabilitySwitch(label)).toBeDisabled();
   }
   const after = await databaseState();

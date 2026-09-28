@@ -94,7 +94,7 @@ export class MembersPage {
     this.assignedRoles = this.roles.getByRole('checkbox', { checked: true });
     this.savedStatus = page.locator('[data-admin-form-status]');
     this.backToUsers = page.getByRole('link', { name: /Back to users/ });
-    this.permissions = page.getByRole('group', { name: /^(Individual|Explicit) permissions$/ });
+    this.permissions = page.getByRole('group', { name: 'Capabilities', exact: true });
     this.capabilitySwitches = this.permissions.getByRole('checkbox');
     this.checkedCapabilitySwitches = this.permissions.getByRole('checkbox', { checked: true });
     this.ownerFullAccess = page.getByText(/^Owner\s*·\s*Full access$/);

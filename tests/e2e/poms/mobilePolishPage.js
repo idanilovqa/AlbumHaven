@@ -165,7 +165,7 @@ export class MobilePolishPage extends MobileLayoutPage {
     };
     for (const pair of colors) {
       const ink = luminance(pair.ink), background = luminance(pair.background);
-      expect((Math.max(ink, background) + .05) / (Math.min(ink, background) + .05)).toBeGreaterThanOrEqual(4.5);
+      expect((Math.max(ink, background) + .05) / (Math.min(ink, background) + .05), JSON.stringify(pair)).toBeGreaterThanOrEqual(4.5);
     }
   }
 

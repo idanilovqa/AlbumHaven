@@ -130,12 +130,15 @@ test('desktop tag fields, Apply and alternating track stripes work in dark and l
       await tags.trackButtons.first().getByRole('button').last().click();
       await tags.albumNameInput.fill('Unsaved preview title');
       await expect(tags.applyButton).toBeEnabled();
-      const paint = await tags.readFormAndStripeColors();
-      expect(paint.rows).toHaveLength(3);
-      expect(paint.rows[0].background).not.toBe(paint.rows[1].background);
-      expect(paint.rows[0].background).toBe(paint.rows[2].background);
-      expect(paint.apply.background).not.toBe(paint.input.background);
-      web.expectContrast([paint.apply, paint.input, ...paint.rows]);
+      // The shared button animates from disabled to enabled paint.
+      await expect(async () => {
+        const paint = await tags.readFormAndStripeColors();
+        expect(paint.rows).toHaveLength(3);
+        expect(paint.rows[0].background).not.toBe(paint.rows[1].background);
+        expect(paint.rows[0].background).toBe(paint.rows[2].background);
+        expect(paint.apply.background).not.toBe(paint.input.background);
+        web.expectContrast([paint.apply, paint.input, ...paint.rows]);
+      }).toPass({ timeout: 5000 });
       await desktop.screenshot({ path: `test-results/mobile-screenshots/95-desktop-tags-${palette}.png`, fullPage: true });
       await tags.cancelButton.click();
       await desktop.keyboard.press('Escape');

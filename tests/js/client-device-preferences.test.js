@@ -60,3 +60,16 @@ test('anonymous contexts never claim an account preference namespace', () => {
   assert.equal(store.handles('albumhaven.albumOpenMode.v1'), false);
   assert.equal(store.write('mobileGridColumns', 3), false);
 });
+
+
+test('an appearance save targets its edited profile even after the viewport changes', async () => {
+  const writes = [];
+  const { store, window } = fixture(async (_url, options) => { writes.push(JSON.parse(options.body)); return { ok: true }; });
+  window.innerWidth = 1440;
+  assert.equal(store.write('playerAppearance', { seekbarMode: 'waveform' }, 'mobile'), true);
+  assert.deepEqual(store.read('playerAppearance', null, 'mobile'), { seekbarMode: 'waveform' });
+  assert.equal(store.read('playerAppearance', null), null);
+  assert.equal(store.write('playerAppearance', {}, 'invalid'), false);
+  await store.flush();
+  assert.deepEqual(writes, [{ profile: 'mobile', changes: { playerAppearance: { seekbarMode: 'waveform' } } }]);
+});

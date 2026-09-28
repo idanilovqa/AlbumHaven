@@ -40,7 +40,7 @@
 .settings-host .account-main .field small { display: block; min-height: 13px; margin-top: 6px; color: var(--muted); font-size: 10px; }
 .settings-host .account-main .field .field-error { color: var(--red); }
 .settings-host .account-main .button:not(.ui-button) { height: 42px; padding: 0 17px; border: 1px solid var(--line); border-radius: 10px; color: var(--ink); background: var(--surface-2); font-weight: 700; cursor: pointer; }
-.settings-host .account-main .button.is-primary { border-color: #39c77d; background: var(--green); color: #06150e; }
+.settings-host .account-main .button.is-primary { border-color: var(--green); background: var(--green); color: var(--appearance-play-ink, #06150e); }
 .settings-host .account-main .button.is-ghost { background: transparent; }
 .settings-host .account-main .button.is-small { height: 34px; padding: 0 12px; font-size: 12px; }
 .settings-host .account-main .button:not(.ui-button):hover,

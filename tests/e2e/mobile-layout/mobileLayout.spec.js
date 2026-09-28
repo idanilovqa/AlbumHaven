@@ -151,6 +151,7 @@ test('narrow phones do not overflow and wide tablets retain desktop geometry', a
   await login(app);
   await app.browseArtist();
   await app.selectView('cards');
+  expect(await app.galleryTitleFits()).toBe(true);
   await capture(page, '13-narrow-phone');
   const noOverflow = await app.hasNoHorizontalOverflow();
   expect(noOverflow).toBeTruthy();

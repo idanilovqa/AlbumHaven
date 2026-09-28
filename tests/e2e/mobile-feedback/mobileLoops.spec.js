@@ -64,3 +64,15 @@ for (const palette of ['black', 'parchment-pine']) {
     await expect(loops.galleryContextName).toHaveText('Rendref');
   });
 }
+
+
+test('an unavailable saved-loop deep link returns to the usable mobile index', async ({ page, app }) => {
+  const loops = new MobileLoopsPage(page);
+  await page.goto('/?mobile_page=utilities&utility_tab=loops&loop_song=removed-review-loop');
+  await loops.expectLoopIndex();
+  await expect(loops.song).toBeVisible();
+  await loops.song.click();
+  await loops.expectSongPage();
+  await loops.backButton.click();
+  await loops.expectLoopIndex();
+});

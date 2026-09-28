@@ -1447,7 +1447,7 @@ test('Home keeps its context through density refreshes and returns to Gallery on
     state: { gallery: {}, ui: {}, view: { query: '', selected_artist: '', artist_groups: [], artist_count: 4, album_count: 8 } },
     document: {
       querySelector: selector => selector === '[data-gallery-bar-instance="gallery"]' ? bar : null,
-      getElementById: id => id === 'albums-scroll' ? { scrollTop: 0 } : null,
+      getElementById: id => id === 'albums-scroll' ? { scrollTop: 0 } : id === 'mobile-home' ? { dataset: { accountName: 'Rendref' } } : null,
     },
   });
   vm.runInContext('function usesMobilePageLayout() { return window.innerWidth <= 900; }', context);
@@ -1455,11 +1455,11 @@ test('Home keeps its context through density refreshes and returns to Gallery on
   context.updateGalleryMainControls = () => {};
   context.state.gallery.mainState = context.createGalleryMainState();
   context.updateGalleryMainChrome();
-  assert.equal(name.textContent, 'Home');
+  assert.equal(name.textContent, 'Rendref');
   assert.equal(summary.textContent, '');
   context.state.gallery.mainState.view = 'cards';
   context.updateGalleryMainChrome();
-  assert.equal(name.textContent, 'Home');
+  assert.equal(name.textContent, 'Rendref');
   assert.equal(bar.dataset.galleryContextKind, 'home');
   context.window.innerWidth = 1180;
   context.updateGalleryMainChrome();

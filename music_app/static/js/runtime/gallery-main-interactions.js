@@ -562,7 +562,7 @@ function updateGalleryMainChrome() {
     inlineTotal.textContent = '';
   }
   if (mobileHome) {
-    name.textContent = 'Home';
+    name.textContent = document.getElementById('mobile-home')?.dataset.accountName || 'My music';
     summary.textContent = '';
     oldInfo?.remove();
   } else if (context.kind === 'gallery' || context.kind === 'family') {

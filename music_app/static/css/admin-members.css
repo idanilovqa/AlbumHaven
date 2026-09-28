@@ -42,7 +42,7 @@
 .settings-host .members-heading p,
 .settings-host .detail-heading p { margin: 6px 0 0; color: var(--muted); font-size: 13px; }
 .settings-host .admin-button { min-height: 40px; padding: 0 15px; display: inline-flex; align-items: center; justify-content: center; gap: 7px; border: 1px solid var(--line); border-radius: 9px; color: var(--ink); background: transparent; font-weight: 700; text-decoration: none; cursor: pointer; }
-.settings-host .admin-button.is-primary { border-color: var(--green); color: #06150e; background: var(--green); }
+.settings-host .admin-button.is-primary { border-color: var(--green); color: var(--appearance-play-ink, #06150e); background: var(--green); }
 .settings-host .admin-button.is-danger { border-color: #d93d45; color: var(--red); }
 .settings-host .admin-button:hover,
 .settings-host .admin-button:focus-visible { filter: brightness(1.1); outline: none; box-shadow: 0 0 0 3px rgb(86 173 255 / 14%); }
@@ -84,6 +84,7 @@
 .settings-host .member-actions-menu button:focus-visible,
 .settings-host .member-actions-menu a:hover,
 .settings-host .member-actions-menu a:focus-visible { outline: none; background: var(--surface-2); }
+:root .settings-host .member-actions-menu :is(button, a):focus-visible { outline: 2px solid currentColor !important; outline-offset: -2px; }
 .settings-host .invitation-copy-fallback { margin: 0 0 18px; padding: 15px; border: 1px solid var(--line); border-radius: 9px; background: var(--surface-2); }
 .settings-host .invitation-copy-fallback p { margin: 0 0 10px; color: var(--ink); font-size: 12px; }
 .settings-host .invitation-copy-fallback input[readonly] {

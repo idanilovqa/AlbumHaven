@@ -65,6 +65,18 @@ export class MobilePolishPage extends MobileLayoutPage {
       ink: getComputedStyle(label).color,
       background: getComputedStyle(label.closest('.settings-outlet')).backgroundColor,
     })));
+    this.expectContrast(colors);
+  }
+
+  async expectPrimaryActionContrast(name = 'Add user', role = 'link') {
+    const button = this.accountHost.getByRole(role, { name, exact: true });
+    await expect(button).toBeVisible();
+    // parity-check: allow-read-only-measurement-evaluate -- verify the actual button's paired theme colors.
+    const colors = await button.evaluate(node => ({ ink: getComputedStyle(node).color, background: getComputedStyle(node).backgroundColor }));
+    this.expectContrast([colors]);
+  }
+
+  expectContrast(colors) {
     const luminance = color => {
       const values = color.match(/[\d.]+/g).map(Number).slice(0, 3);
       const rgb = values.map(value => color.startsWith('color(') ? value : value / 255)

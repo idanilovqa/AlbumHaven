@@ -84,6 +84,7 @@
 .settings-host .member-actions-menu button:focus-visible,
 .settings-host .member-actions-menu a:hover,
 .settings-host .member-actions-menu a:focus-visible { outline: none; background: var(--surface-2); }
+.settings-host .member-actions-menu :is(button, a):focus-visible { outline: 2px solid currentColor; outline-offset: -2px; }
 .settings-host .invitation-copy-fallback { margin: 0 0 18px; padding: 15px; border: 1px solid var(--line); border-radius: 9px; background: var(--surface-2); }
 .settings-host .invitation-copy-fallback p { margin: 0 0 10px; color: var(--ink); font-size: 12px; }
 .settings-host .invitation-copy-fallback input[readonly] {

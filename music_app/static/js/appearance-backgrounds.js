@@ -1099,7 +1099,6 @@
     };
     controller = createController({ initial, request, apply: applySavedTheme, loopCreateAllowed: () => loopCreateAllowed });
     controller.setDeviceProfile(window.AlbumHavenDevicePreferences?.profile?.() || 'web_desktop');
-    window.matchMedia?.('(max-width: 900px)')?.addEventListener?.('change', () => applySavedTheme(controller.getState().saved));
     const load = async () => { const result = await controller.load(); if (result) loaded = true; return result; };
     let footerDispose = null, mountedFooter = null, restoreFooterTheme = null;
     const mountSharedFooter = (localHost, options) => {
@@ -1627,6 +1626,17 @@
     });
     window.addEventListener('pagehide', () => clearSession());
     window.addEventListener('pageshow', event => { if (event.persisted) { clearSession(); void load(); } });
+    window.matchMedia?.('(max-width: 900px)')?.addEventListener?.('change', () => {
+      const profile = window.AlbumHavenDevicePreferences?.profile?.() || 'web_desktop';
+      const previous = controller.getState();
+      controller.setDeviceProfile(profile);
+      if (profile !== previous.activeDeviceProfile && mounted?.parentElement) {
+        // Recompose the same editor so mobile-only controls follow the new profile.
+        ({ backgrounds: mount, seekbar: mountSeekbar, 'selection-accent': mountSelectionAccent,
+          alerts: mountAlerts, 'album-page': mountAlbumPage })[previous.activeSection](mounted.parentElement);
+      }
+      applySavedTheme(controller.getState().saved);
+    });
     return { controller, mount, mountSeekbar, mountSelectionAccent, mountAlerts, mountAlbumPage, unmount, allowLeave, clearSession, load,
       setLoopCreateAllowed(value) { const next = value === true; if (next === loopCreateAllowed) return; loopCreateAllowed = next; controller.reconcileLoopCapability(); },
       getSavedLoopControlStyle: () => controller.getState().saved.loop_control_style === 'companion' ? 'companion' : 'capsule',

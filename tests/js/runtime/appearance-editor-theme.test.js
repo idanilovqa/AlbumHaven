@@ -75,6 +75,26 @@ test('responsive appearance applies saved mobile colors, never another section o
   assert.equal(root.getAttribute('data-appearance-palette'), 'steelblue');
 });
 
+test('an open appearance editor follows the client profile across the breakpoint', async () => {
+  let profile = 'web_desktop', breakpointChanged;
+  const { instance } = await mounted('mount', preference(), undefined, {
+    AlbumHavenDevicePreferences: { profile: () => profile },
+    matchMedia: () => ({ addEventListener: (_event, listener) => { breakpointChanged = listener; } }),
+  });
+  profile = 'mobile';
+  breakpointChanged();
+  assert.equal(instance.controller.getState().activeDeviceProfile, 'mobile');
+  instance.controller.setDeviceSectionMode('custom');
+  instance.controller.setPalette('paper');
+  profile = 'web_desktop';
+  breakpointChanged();
+  assert.equal(instance.controller.getState().activeDeviceProfile, 'web_desktop');
+  assert.equal(instance.controller.getState().draft.palette_id, 'steelblue');
+  profile = 'mobile';
+  breakpointChanged();
+  assert.equal(instance.controller.getState().draft.palette_id, 'paper', 'resizing retains the mobile draft');
+});
+
 function assertEditorTheme(preview, draft) {
   const effective = api.resolveAppearance(draft);
   assert.equal(preview.styles.get('--appearance-main-surface'), effective.main, 'Preview main must follow its draft');

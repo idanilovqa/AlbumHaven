@@ -10,6 +10,8 @@
 .page-gallery-bar > .gallery-bar__context { flex: 1; min-width: 0; }
 .page-gallery-bar__back { color: inherit; text-decoration: none; }
 .mobile-page-header { flex-shrink: 0; }
+/* Retained pages still need an exit when the window grows beyond phone width. */
+.mobile-page-header [data-mobile-back]:not([hidden]) { display: inline-grid; place-items: center; flex: 0 0 40px; }
 /* Reserve header geometry during the handoff so scrolling cannot bounce. */
 .mobile-page-header[data-album-identity-in-body="true"] > .gallery-bar__context { visibility: hidden; }
 .player-track-meta { display: contents; }

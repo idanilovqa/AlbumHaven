@@ -21398,6 +21398,7 @@ function bindUtilityLoopDragAndDrop() {
 }
 
 function syncUtilityLoopPanelVisibility() {
+  if (typeof getMobileLoopPage === 'function' && getMobileLoopPage()?.loopSongId) return;
   const visibleIds = new Set(getFilteredUtilityLoops().map(loop => String(loop.id)));
   const els = getUtilityModalElements();
   els.detail?.querySelectorAll('[data-utility-loop-entry]').forEach(panel => { panel.hidden = !visibleIds.has(getUtilityLoopNodeId(panel)); });
@@ -21422,6 +21423,11 @@ function filterUtilityLoopViews() {
   const els = getUtilityModalElements();
   const filtered = getFilteredUtilityLoops();
   if (els.count) els.count.textContent = String(filtered.length);
+  if (typeof getMobileLoopPage === 'function' && getMobileLoopPage()) {
+    renderUtilityLoopList(els, filtered);
+    syncMobileUtilityContext();
+    return;
+  }
   if (filtered.length && !filtered.some(loop => buildUtilityLoopGroupKey(loop) === state.utility.selectedLoopGroupKey)) {
     state.utility.selectedLoopGroupKey = buildUtilityLoopGroupKey(filtered[0]);
     state.utility.selectedLoopId = String(filtered[0].id);
@@ -21442,6 +21448,12 @@ function renderUtilityLoops() {
   if (els.overlay.hidden) return;
   els.detail.classList.add('is-loop-detail');
   const loops = state.utility.loops || [];
+  const mobilePage = typeof getMobileLoopPage === 'function' ? getMobileLoopPage() : null;
+  const mobileGroup = mobilePage ? resolveMobileLoopSongGroup(mobilePage, loops) : null;
+  if (mobilePage && mobilePage.loopSongId && !mobileGroup && state.utility.loopsLoaded
+      && !state.utility.loopsLoading && !state.utility.loopsLoadError) mobilePage.loopSongId = '';
+  els.overlay.dataset.mobileLoopView = mobilePage?.loopSongId ? 'song' : 'list';
+  if (mobilePage) pauseOtherUtilityLoopPlayback(null);
   if (els.sidebarLabel) els.sidebarLabel.textContent = 'Loops';
   const filtered = getFilteredUtilityLoops();
   els.count.textContent = String(filtered.length);
@@ -21464,8 +21476,9 @@ function renderUtilityLoops() {
   }
 
   if (state.utility.loopsLoadError) {
-    els.list.innerHTML = '';
-    els.detail.innerHTML = buildOnPageAlertHtml({ severity: 'error', title: 'Saved loops unavailable', message: state.utility.loopsLoadError });
+    const errorHtml = buildOnPageAlertHtml({ severity: 'error', title: 'Saved loops unavailable', message: state.utility.loopsLoadError });
+    els.list.innerHTML = mobilePage ? errorHtml : '';
+    els.detail.innerHTML = errorHtml;
     return;
   }
   if (!loops.length) {
@@ -21475,7 +21488,15 @@ function renderUtilityLoops() {
     return;
   }
 
-  const groupedLoops = groupUtilityLoops(filtered.length ? filtered : loops);
+  if (mobilePage && !mobileGroup) {
+    renderUtilityLoopList(els, filtered);
+    els.detail.innerHTML = '';
+    clearUtilityLoopSpaceOwner();
+    restoreMobileLoopListScroll(mobilePage);
+    return;
+  }
+  if (mobileGroup) state.utility.selectedLoopGroupKey = String(mobileGroup.key);
+  const groupedLoops = groupUtilityLoops(mobileGroup ? loops : (filtered.length ? filtered : loops));
   if (!state.utility.selectedLoopGroupKey || !groupedLoops.some((group) => String(group.key || '') === String(state.utility.selectedLoopGroupKey || ''))) {
     state.utility.selectedLoopGroupKey = String(groupedLoops[0]?.key || '');
   }
@@ -36382,6 +36403,10 @@ async function handleUtilityBootstrapClick(event) {
   if (utilityLoopItemButton) {
     event.preventDefault();
     state.utility.loopSuppressClick = false;
+    if (typeof getMobileLoopPage === 'function' && getMobileLoopPage()) {
+      const loop = (state.utility.loops || []).find(item => String(item.id) === utilityLoopItemButton.getAttribute('data-utility-loop-id'));
+      if (loop) openMobileLoopSong(buildUtilityLoopGroupKey(loop));
+    }
     return;
   }
 
@@ -36393,6 +36418,7 @@ async function handleUtilityBootstrapClick(event) {
       return;
     }
     const groupKey = utilityLoopButton.getAttribute('data-utility-loop-group-key') || '';
+    if (typeof getMobileLoopPage === 'function' && getMobileLoopPage()) { openMobileLoopSong(groupKey); return; }
     const sameGroup = groupKey === String(state.utility.selectedLoopGroupKey || '');
     const now = Date.now();
     const isDoubleClickCandidate = String(state.utility.lastLoopGroupClickKey || '') === String(groupKey)
@@ -39517,17 +39543,24 @@ function syncMobilePageShell() {
   document.getElementById('mobile-settings-actions').hidden = active?.kind !== 'utilities';
   document.getElementById('mobile-settings-button').hidden = active?.kind !== 'utilities';
   syncMobileAlbumHeader();
+  syncMobileLoopHeader();
   // A page is not a modal and must never trap focus away from the persistent player.
   if (!document.querySelector('[aria-modal="true"]:not([hidden])')?.getClientRects().length) document.body.classList.remove('modal-open');
 }
 function writeMobilePageHistory(mode = 'push') {
   const url = new URL(window.location.href);
   const active = mobilePageState.pages.at(-1);
-  ['mobile_page', 'mobile_album', 'utility_tab'].forEach(key => url.searchParams.delete(key));
+  ['mobile_page', 'mobile_album', 'utility_tab', 'loop_song', 'loop_filter'].forEach(key => url.searchParams.delete(key));
   if (active) {
     url.searchParams.set('mobile_page', active.kind);
     if (active.albumKey) url.searchParams.set('mobile_album', active.albumKey);
-    if (active.kind === 'utilities') url.searchParams.set('utility_tab', active.tab || 'appearance');
+    if (active.kind === 'utilities') {
+      url.searchParams.set('utility_tab', active.tab || 'appearance');
+      if (active.tab === 'loops') {
+        if (active.loopSongId) url.searchParams.set('loop_song', active.loopSongId);
+        if (active.loopFilter) url.searchParams.set('loop_filter', active.loopFilter);
+      }
+    }
   }
   const snapshot = { ...(window.history.state || {}), mobilePages: mobilePageState.pages.map(page => ({ ...page })) };
   if (mode === 'replace') window.history.replaceState(snapshot, '', url);
@@ -39639,6 +39672,7 @@ function dismissMobilePage(kind) {
 function navigateMobileBack() {
   const active = mobilePageState.pages.at(-1);
   if (!active) return;
+  if (getMobileLoopPage()?.loopSongId) { returnMobileLoopList(); return; }
   // Keep the Appearance editor's unsaved-changes guard on both its close button and Back.
   if (active.kind === 'utilities') closeUtilityModal();
   else if (active.kind === 'album') closeTrackModal();
@@ -39652,7 +39686,15 @@ function restoreMobilePage(descriptor) {
   else if (descriptor.kind === 'album' && album) openTrackModal(album);
   else if (descriptor.kind === 'utilities') {
     setUtilityActiveTab(mobileUtilityTabAllowed(descriptor.tab) ? descriptor.tab : 'appearance');
+    if (state.utility.activeTab === 'loops') state.utility.loopsSearchQuery = String(descriptor.loopFilter || '');
     openUtilityModal();
+    const page = mobilePageState.pages.find(item => item.kind === 'utilities');
+    if (page && state.utility.activeTab === 'loops') {
+      Object.assign(page, { loopSongId: String(descriptor.loopSongId || ''), loopFilter: String(descriptor.loopFilter || ''),
+        loopListPosition: descriptor.loopListPosition ?? null, loopListScroll: Number(descriptor.loopListScroll) || 0,
+        restoreLoopScroll: !descriptor.loopSongId });
+      renderUtilityModalContent();
+    }
   } else if (descriptor.kind === 'cover-lookup' && album) void openCoverLookupModal(album);
 }
 function handleMobilePagePopState() {
@@ -39662,7 +39704,10 @@ function handleMobilePagePopState() {
   let common = 0;
   while (common < requested.length && common < mobilePageState.pages.length
     && requested[common].kind === mobilePageState.pages[common].kind
-    && requested[common].albumKey === mobilePageState.pages[common].albumKey) common += 1;
+    && requested[common].albumKey === mobilePageState.pages[common].albumKey
+    && (requested[common].kind !== 'utilities'
+      || (requested[common].tab === mobilePageState.pages[common].tab
+        && String(requested[common].loopSongId || '') === String(mobilePageState.pages[common].loopSongId || '')))) common += 1;
   let focus;
   while (mobilePageState.pages.length > common) focus = cleanupMobilePage(mobilePageState.pages.pop());
   mobilePageState.restoring = true;
@@ -39675,13 +39720,97 @@ function handleMobilePagePopState() {
 function syncMobileUtilityContext() {
   const descriptor = mobilePageState.pages.find(page => page.kind === 'utilities');
   if (!descriptor) return;
-  descriptor.title = MOBILE_UTILITY_SECTIONS[state.utility.activeTab]?.label || 'Settings';
-  descriptor.subtitle = '';
+  if (descriptor.tab !== state.utility.activeTab) {
+    delete descriptor.loopSongId;
+    delete descriptor.loopListPosition;
+    delete descriptor.loopListScroll;
+  }
   descriptor.tab = state.utility.activeTab;
+  const group = resolveMobileLoopSongGroup(descriptor, state.utility.loops || []);
+  const song = group?.representativeLoop || group?.loops[0];
+  descriptor.title = song ? song.title || song.name || 'Saved loops'
+    : MOBILE_UTILITY_SECTIONS[state.utility.activeTab]?.label || 'Settings';
+  descriptor.subtitle = song ? [song.artist || 'Unknown artist', song.album, song.year,
+    `${group.loops.length} saved loop${group.loops.length === 1 ? '' : 's'}`].filter(Boolean).join(' • ') : '';
+  if (descriptor.tab === 'loops') descriptor.loopFilter = String(state.utility.loopsSearchQuery || '');
   syncMobilePageShell();
   syncMobileUtilityNavigation();
   if (!mobilePageState.restoring) writeMobilePageHistory('replace');
 }
+// Loops uses the existing tree as its mobile index, not a second data source.
+// Only an explicit song activation enters detail; desktop auto-selection is separate.
+function getMobileLoopPage() {
+  const page = mobilePageState.pages.at(-1);
+  return usesMobilePageLayout() && page?.kind === 'utilities' && state.utility.activeTab === 'loops' ? page : null;
+}
+function resolveMobileLoopSongGroup(page, loops) {
+  if (page?.tab !== 'loops' || !page.loopSongId) return null;
+  const songLoop = loops.find(loop => String(loop.id) === String(page.loopSongId));
+  if (!songLoop) return null;
+  const key = buildUtilityLoopGroupKey(songLoop);
+  return groupUtilityLoops(loops).find(group => String(group.key) === String(key)) || null;
+}
+function openMobileLoopSong(groupKey) {
+  const page = getMobileLoopPage();
+  const group = groupUtilityLoops(state.utility.loops || []).find(item => String(item.key) === String(groupKey));
+  if (!page || !group?.loops.length) return false;
+  if (page.loopSongId) return true;
+  const outlet = document.getElementById('mobile-page-outlet');
+  page.loopFilter = String(state.utility.loopsSearchQuery || '');
+  page.loopListScroll = outlet.scrollTop;
+  page.loopListPosition = window.history.state?.albumHavenNavigationPosition ?? null;
+  writeMobilePageHistory('replace');
+  page.loopSongId = String(group.loops[0].id);
+  state.utility.selectedLoopGroupKey = String(group.key);
+  state.utility.selectedLoopId = page.loopSongId;
+  closeGalleryMainSurface(false);
+  const wasRestoring = mobilePageState.restoring;
+  mobilePageState.restoring = true;
+  try { renderUtilityModalContent(); }
+  finally { mobilePageState.restoring = wasRestoring; }
+  writeMobilePageHistory();
+  outlet.scrollTop = 0;
+  document.getElementById('mobile-page-title')?.focus({ preventScroll: true });
+  return true;
+}
+function returnMobileLoopList() {
+  const page = getMobileLoopPage();
+  if (!page?.loopSongId) return false;
+  const delta = mobileParentHistoryDelta(page.loopListPosition, window.history.state?.albumHavenNavigationPosition);
+  if (delta !== null) { window.history.go(delta); return true; }
+  // A directly loaded song has no in-app previous entry. Back still goes to Loops.
+  page.loopSongId = '';
+  page.restoreLoopScroll = true;
+  renderUtilityModalContent();
+  return true;
+}
+function restoreMobileLoopListScroll(page) {
+  if (!page?.restoreLoopScroll || state.utility.loopsLoading) return;
+  delete page.restoreLoopScroll;
+  requestAnimationFrame(() => {
+    if (getMobileLoopPage() !== page || page.loopSongId) return;
+    document.getElementById('mobile-page-outlet').scrollTop = Number(page.loopListScroll) || 0;
+  });
+}
+function syncMobileLoopHeader() {
+  const header = document.getElementById('mobile-page-header');
+  if (!header) return;
+  const group = resolveMobileLoopSongGroup(getMobileLoopPage(), state.utility.loops || []);
+  header.dataset.loopSong = String(Boolean(group));
+  let cover = document.getElementById('mobile-loop-page-cover');
+  if (!group) { if (cover) cover.hidden = true; return; }
+  if (!cover) {
+    cover = document.createElement('div');
+    cover.id = 'mobile-loop-page-cover';
+    cover.className = 'utility-detail-cover utility-loop-sticky-cover mobile-loop-page-cover';
+    header.querySelector('.gallery-bar__context').before(cover);
+  }
+  const song = group.representativeLoop || group.loops[0];
+  const markup = buildUtilityAlbumArtbox(song, { label: `Artwork for ${song.title || song.name || 'loop'}`, interactive: false });
+  if (cover.innerHTML !== markup) cover.innerHTML = markup;
+  cover.hidden = false;
+}
+
 function syncMobileGalleryControls() {
   const savedColumns = window.AlbumHavenDevicePreferences?.read('mobileGridColumns', 2);
   const columns = [1, 2, 3].includes(savedColumns) ? savedColumns : 2;
@@ -39750,6 +39879,7 @@ function initMobileNavigation() {
     }
     syncMobileGalleryControls();
     syncMobilePageShell();
+    if (state.utility.activeTab === 'loops' && mobilePageState.pages.some(page => page.kind === 'utilities')) renderUtilityModalContent();
     if (typeof syncMobileAlbumComposition === 'function') syncMobileAlbumComposition(getCurrentTrackModalAlbum());
   };
   document.getElementById('mobile-page-outlet')?.addEventListener('scroll', scheduleMobileAlbumThumbnail, { passive: true });
@@ -39830,10 +39960,15 @@ function initMobileNavigation() {
   const url = new URL(window.location.href);
   if (usesMobilePageLayout() && url.searchParams.has('mobile_page')) {
     mobilePageState.restoring = true;
-    try { restoreMobilePage({ kind: url.searchParams.get('mobile_page'), albumKey: url.searchParams.get('mobile_album') || '', title: 'Album', tab: url.searchParams.get('utility_tab') }); }
+    try { restoreMobilePage({ kind: url.searchParams.get('mobile_page'), albumKey: url.searchParams.get('mobile_album') || '', title: 'Album', tab: url.searchParams.get('utility_tab'), loopSongId: url.searchParams.get('loop_song') || '', loopFilter: url.searchParams.get('loop_filter') || '' }); }
     finally { mobilePageState.restoring = false; }
     // A directly loaded page has no guaranteed in-app previous entry.
-    window.history.replaceState({ ...(window.history.state || {}), mobilePages: [] }, '', window.location.href);
+    const loopPage = getMobileLoopPage();
+    if (loopPage) {
+      loopPage.parentPosition = null;
+      loopPage.loopListPosition = null;
+      writeMobilePageHistory('replace');
+    } else window.history.replaceState({ ...(window.history.state || {}), mobilePages: [] }, '', window.location.href);
   }
 }
 

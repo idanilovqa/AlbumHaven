@@ -61,3 +61,82 @@ test('a failed pitch preview restores the last applied pitch, not a pending choi
   assert.equal(audio.dataset.pitch, '0');
   assert.equal(audio.dataset.pitchPending, undefined);
 });
+
+
+test('mobile loop detail requires an explicit, current song ID and resolves the whole group', () => {
+  const loops = [{ id: 'one', song_key: 'track:1' }, { id: 'two', song_key: 'track:1' }];
+  const context = load('mobile-navigation.js', {
+    state: { utility: { activeTab: 'loops' } }, window: { innerWidth: 390 },
+    buildUtilityLoopGroupKey: loop => loop.song_key,
+    groupUtilityLoops: items => [{ key: 'track:1', loops: items }],
+  });
+  assert.equal(context.resolveMobileLoopSongGroup({ tab: 'loops' }, loops), null);
+  assert.equal(context.resolveMobileLoopSongGroup({ tab: 'loops', loopSongId: 'removed' }, loops), null);
+  assert.equal(context.resolveMobileLoopSongGroup({ tab: 'appearance', loopSongId: 'one' }, loops), null);
+  assert.equal(context.resolveMobileLoopSongGroup({ tab: 'loops', loopSongId: 'two' }, loops).loops.length, 2);
+  vm.runInContext("mobilePageState.pages.push({kind:'utilities',tab:'loops'})", context);
+  assert.equal(context.getMobileLoopPage().tab, 'loops');
+  context.window.innerWidth = 901;
+  assert.equal(context.getMobileLoopPage(), null);
+});
+
+test('song activation snapshots the filtered index before pushing detail; Back follows that parent', () => {
+  const loops = [{ id: 'first', song_key: 'track:1' }, { id: 'second', song_key: 'track:1' }];
+  const writes = [], traversals = [];
+  const outlet = { scrollTop: 123 };
+  const context = load('mobile-navigation.js', {
+    state: { utility: { activeTab: 'loops', loops, loopsSearchQuery: 'Bridge' } },
+    window: { innerWidth: 390, history: { state: { albumHavenNavigationPosition: 5 }, go: delta => traversals.push(delta) } },
+    document: { getElementById: id => id === 'mobile-page-outlet' ? outlet : { focus() {} } },
+    buildUtilityLoopGroupKey: loop => loop.song_key,
+    groupUtilityLoops: items => [{ key: 'track:1', loops: items }],
+    closeGalleryMainSurface() {}, renderUtilityModalContent() {},
+  });
+  vm.runInContext("mobilePageState.pages.push({kind:'utilities',tab:'loops'})", context);
+  context.writeMobilePageHistory = mode => writes.push({ mode: mode || 'push', ...context.getMobileLoopPage() });
+  assert.equal(context.openMobileLoopSong('missing'), false);
+  assert.equal(writes.length, 0);
+  assert.equal(context.openMobileLoopSong('track:1'), true);
+  assert.equal(writes.length, 2);
+  assert.equal(writes[0].mode, 'replace');
+  assert.equal(writes[0].loopSongId, undefined);
+  assert.equal(writes[0].loopListScroll, 123);
+  assert.equal(writes[0].loopFilter, 'Bridge');
+  assert.equal(writes[1].mode, 'push');
+  assert.equal(writes[1].loopSongId, 'first');
+  assert.equal(outlet.scrollTop, 0);
+  context.window.history.state.albumHavenNavigationPosition = 6;
+  assert.equal(context.returnMobileLoopList(), true);
+  assert.deepEqual(traversals, [-1]);
+});
+
+test('the mobile index mounts no loop players, and a song detail ignores the index filter', () => {
+  const loops = [1, 2, 3, 4].map(id => ({ id: String(id), song_key: 'track:1' }));
+  const page = { tab: 'loops' }, group = { key: 'track:1', loops };
+  const detail = { classList: { add() {} }, innerHTML: 'old' };
+  const els = { overlay: { hidden: false, dataset: {} }, list: {}, detail, count: {}, search: {} };
+  const initialized = [], lists = [];
+  const context = load('utility-renderers-and-actions.js', {
+    state: { utility: { activeTab: 'loops', loops, loopsLoaded: true, loopsSearchQuery: 'one clip' } },
+    getUtilityModalElements: () => els, getMobileLoopPage: () => page,
+    resolveMobileLoopSongGroup: () => page.loopSongId ? group : null,
+    getFilteredUtilityLoops: () => [loops[0]], groupUtilityLoops: () => [group],
+    getSelectedUtilityLoopGroup: () => group,
+    pauseOtherUtilityLoopPlayback() {}, clearUtilityLoopSpaceOwner() {}, restoreMobileLoopListScroll() {},
+    buildUtilityLoopDetail: value => { assert.equal(value.loops.length, 4); return 'four players'; },
+    initializeUtilityLoopPlayer: loop => initialized.push(loop.id), updateUtilityLoopRepeatButton() {},
+  });
+  context.renderUtilityLoopList = (_els, items) => lists.push(items.length);
+  context.bindUtilityLoopDragAndDrop = () => {};
+  context.syncUtilityLoopPanelVisibility = () => {};
+  context.renderUtilityLoops();
+  assert.equal(els.overlay.dataset.mobileLoopView, 'list');
+  assert.equal(detail.innerHTML, '');
+  assert.equal(initialized.length, 0);
+  assert.deepEqual(lists, [1]);
+  page.loopSongId = '1';
+  context.renderUtilityLoops();
+  assert.equal(els.overlay.dataset.mobileLoopView, 'song');
+  assert.equal(detail.innerHTML, 'four players');
+  assert.deepEqual(initialized, ['1', '2', '3', '4']);
+});

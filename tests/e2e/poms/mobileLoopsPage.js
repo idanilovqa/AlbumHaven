@@ -18,12 +18,37 @@ export class MobileLoopsPage extends MobilePolishPage {
     this.pitchMenu = page.locator('[data-loop-pitch-menu="mobile-demo-loop-opening-motif"]');
     this.speedMenu = page.locator('[data-loop-speed-menu="mobile-demo-loop-opening-motif"]');
     this.desktopLoopsTab = this.root.locator('[data-utility-tab="loops"]');
+    this.loopSearch = this.root.locator('#utility-problematic-search');
+    this.loopList = this.root.locator('#utility-problematic-list');
+    this.songHeader = page.locator('#mobile-page-header');
+    this.inlineSongHeader = this.root.locator('.utility-loop-detail-header');
   }
 
   async openFourLoopSong() {
     await this.openSettings();
     await this.selectUtility('loops');
+    await this.expectLoopIndex();
     await this.song.click();
+    await expect(this.loopEntries).toHaveCount(4);
+    await expect(this.entry).toBeVisible();
+  }
+
+  async expectLoopIndex() {
+    await expect(this.pageTitle).toHaveText('Loops');
+    await expect(this.loopSearch).toBeVisible();
+    await expect(this.loopList).toBeVisible();
+    await expect(this.loopEntries).toHaveCount(0);
+    const bar = await this.songHeader.boundingBox(), search = await this.loopSearch.boundingBox();
+    expect(search.y).toBeGreaterThanOrEqual(bar.y + bar.height - 1);
+    expect(await this.hasNoHorizontalOverflow()).toBe(true);
+  }
+
+  async expectSongPage() {
+    await expect(this.pageTitle).toHaveText('Open Water');
+    await expect(this.songHeader).toContainText('Northlight');
+    await expect(this.loopSearch).not.toBeVisible();
+    await expect(this.loopList).not.toBeVisible();
+    await expect(this.inlineSongHeader).not.toBeVisible();
     await expect(this.loopEntries).toHaveCount(4);
     await expect(this.entry).toBeVisible();
   }
@@ -53,7 +78,7 @@ export class MobileLoopsPage extends MobilePolishPage {
       expect(card.time.height).toBeLessThan(20);
       expect(card.whiteSpace).toBe('nowrap');
     }
-    const cover = await this.root.locator('.utility-loop-sticky-cover').boundingBox();
+    const cover = await this.page.locator('#mobile-loop-page-cover').boundingBox();
     expect(cover.width).toBe(56);
     expect(cover.height).toBe(56);
     expect(await this.hasNoHorizontalOverflow()).toBe(true);

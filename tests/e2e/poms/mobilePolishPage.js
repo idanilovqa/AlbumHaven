@@ -22,6 +22,7 @@ export class MobilePolishPage extends MobileLayoutPage {
     this.artistDialog = page.locator('.artist-info-overlay[aria-modal="true"]');
     this.artistInfo = page.locator('#artist-groups [data-artist-info-trigger]').first();
     this.familyBody = this.familyPanel.locator('[data-gallery-family-panel-body]');
+    this.loopSongs = this.utilitiesPage.locator('[data-utility-loop-group-key]');
     this.loopEntries = this.utilitiesPage.locator('[data-utility-loop-entry]');
     this.loopPlay = this.loopEntries.first().locator('[data-loop-play]');
     this.loopTime = this.loopEntries.first().locator('[data-loop-time]');

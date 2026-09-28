@@ -114,6 +114,7 @@ test('phone track tap pauses, double tap restarts, and generated saved loops rea
   await snapshot('66-cover-outline-light');
   await app.openSettings();
   await app.selectUtility('loops');
+  await phone.loopSongs.first().click();
   await expect(phone.loopEntries.first()).toBeVisible();
   await phone.loopPlay.tap();
   await expect(phone.loopTime).not.toHaveText('0:00 / 0:00');

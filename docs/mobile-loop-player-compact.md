@@ -47,3 +47,27 @@ scenarios in the existing isolated Postgres/generated-media mobile suite. No
 existing expectation, timeout, retry or unrelated fixture is weakened. Run the
 mobile preview gates before promoting app changes to render-demo; this is not
 a full release or a merge to main.
+
+## Mobile index → song navigation (owner follow-up)
+
+The owner approved the compact blocks, then explicitly requested the existing
+loop navigation tree as a separate mobile index. Entering Loops now shows only
+that tree and its existing filter at the top. Selecting a song (or its nested
+loop item) opens the full song group. The filter belongs to the index: even a
+query matching one clip must not remove the song's other loop players.
+
+Song identity and the existing cover component have one visible owner, the
+shared Gallery/Page Bar; the desktop detail header remains desktop-only. No
+loop search or navigation tree is visible on the song page. Header Back returns
+to the list with its filter and scroll retained, then to the parent/main page.
+Browser Back/Forward and direct song reload use the existing mobile page history;
+unknown or removed song IDs fall back to the list after data loads. No capability,
+server route, persistence, fixture population, or audio architecture change.
+
+Acceptance MLP05: index-only entry; filter and no-match state; explicit song
+activation; all four clips despite a single-clip filter; one song identity; no
+loop search in detail; hierarchy Back and browser Forward/reload; both themes.
+The existing MLP01 cover-size measurement now locates the same 56px component in
+the shared Page Bar instead of the duplicate body header. Two additive browser
+scenarios cover this owner-requested navigation flow without changing playback,
+picker, width, timeout, retry, or desktop checks.

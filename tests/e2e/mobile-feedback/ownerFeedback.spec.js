@@ -20,6 +20,9 @@ for (const palette of ['black', 'paper', 'parchment-pine']) {
     await phone.selectView('cards');
     await phone.expectGridColumns(3);
     await phone.expectNumericRatings();
+    await expect(phone.zoomButton).not.toBeVisible();
+    await phone.longPressAlbum();
+    await expect(phone.albumContextMenu).not.toBeVisible();
     await phone.galleryCards.first().click({ button: 'right' });
     await expect(phone.albumContextMenu).not.toBeVisible();
     await snapshot(`91-three-columns-${palette}`);
@@ -111,6 +114,21 @@ test('cover selection saves before closing, reopens with saved artwork, and back
   await expect(covers.activeLocalCoverCard).toBeVisible();
   await expect(covers.saveRemoteButton).toBeDisabled();
   await snapshot('94-cover-reopened');
+  await phone.backButton.click();
+  await page.reload();
+  const afterReload = page.waitForResponse(response => response.url().endsWith('/utilities/cover-lookup/gallery'));
+  await details.coverLookupButton.click();
+  const persisted = await (await afterReload).json();
+  expect(persisted.local_covers.find(cover => cover.is_active).cover_revision).toBe(data.updated_album.cover_revision);
+  expect(persisted.local_covers.map(cover => cover.cover_revision)).toEqual(reopened.local_covers.map(cover => cover.cover_revision));
+  await covers.inactiveLocalCoverCards.first().click();
+  await expect(covers.saveRemoteButton).toBeEnabled();
+  await phone.backButton.click();
+  const cancelled = page.waitForResponse(response => response.url().endsWith('/utilities/cover-lookup/gallery'));
+  await details.coverLookupButton.click();
+  const unchanged = await (await cancelled).json();
+  expect(unchanged.local_covers.find(cover => cover.is_active).cover_revision).toBe(data.updated_album.cover_revision);
+  await expect(covers.saveRemoteButton).toBeDisabled();
 });
 
 

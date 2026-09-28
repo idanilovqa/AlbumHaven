@@ -6768,3 +6768,12 @@ test('immediate operation events mark the captured history stale without persist
   assert.equal(context.state.utility.logHistory.length, 0);
   assert.deepEqual(stale, ['new-activity']);
 });
+
+test('Problem exclusions distinguish empty rules from a search with no matches', () => {
+  const { context } = loadProblematicTrackNavigationHelpers();
+  const empty = context.buildUtilityRuleDetail({ key: 'problem-ignores', album_items: [], file_items: [] });
+  assert.match(empty, /No problem exclusions yet\./);
+  context.matchesUtilityRuleSearch = () => false;
+  const filtered = context.buildUtilityRuleDetail({ key: 'problem-ignores', album_items: [{ album: 'Elsewhere' }], file_items: [] });
+  assert.match(filtered, /No problem exclusions match your search\./);
+});

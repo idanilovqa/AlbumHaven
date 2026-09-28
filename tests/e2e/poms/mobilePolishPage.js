@@ -99,6 +99,12 @@ export class MobilePolishPage extends MobileLayoutPage {
     const sourceMenu = this.page.locator('#gallery-sources-menu');
     await sources.click();
     await this.expectChromeMenu(sourceMenu);
+    await sources.click();
+    await expect(sourceMenu).not.toBeVisible();
+    await sources.click();
+    await this.galleryContextName.click();
+    await expect(sourceMenu).not.toBeVisible();
+    await sources.click();
     await this.page.keyboard.press('Escape');
     await this.page.locator('#scan-indicator').click({ button: 'right' });
     await this.expectChromeMenu(this.page.locator('#status-context-menu'));

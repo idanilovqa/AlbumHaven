@@ -53,6 +53,7 @@ test('mobile login, Home rows, artist drawer, search and right-side family panel
   await app.searchInput.press('Enter');
   await expect(app.galleryCards.first()).toBeVisible();
   await capture(page, '04-search-gallery');
+  await app.revealHeaderActions();
   await app.libraryButton.click();
   await app.artist('Northlight').click();
   await expect(app.artistRail).not.toHaveClass(/is-mobile-drawer-open/);
@@ -74,6 +75,7 @@ test('two- and three-column cards and art-only modes persist to a fresh mobile s
   await login(app);
   await app.browseArtist();
   await app.selectView('cards');
+  await app.selectColumns(2);
   await capture(page, '06-home-cards-two-columns');
   await app.selectColumns(3);
   await expect(app.galleryGrid).toHaveCSS('grid-template-columns', /\S+ \S+ \S+/);
@@ -92,7 +94,8 @@ test('two- and three-column cards and art-only modes persist to a fresh mobile s
     await login(anotherApp);
     await anotherApp.browseArtist();
     await expect(anotherApp.galleryCards.first()).toHaveAttribute('data-gallery-display', 'covers');
-    await expect(anotherApp.zoomButton).toHaveAttribute('title', 'Gallery zoom: 3 columns');
+    await anotherApp.expectGridColumns(3);
+    await expect(anotherApp.zoomButton).toHaveCount(0);
   } finally { await context.close(); }
 });
 
@@ -179,7 +182,7 @@ test('mobile appearance can be customized, saved and linked back without changin
   await expect(app.appearanceFields).not.toHaveAttribute('disabled');
   await expect(appearance.paletteButton('parchment-pine')).toBeEnabled();
   await appearance.paletteButton('parchment-pine').click();
-  await expect.poll(() => appearance.documentRoot.getAttribute('data-appearance-palette')).toBe(basePalette);
+  await expect(appearance.documentRoot).toHaveAttribute('data-appearance-palette', 'parchment-pine');
   const saved = page.waitForResponse(response => response.url().endsWith('/account/appearance') && response.request().method() === 'PUT');
   await app.saveAppearance.click();
   expect((await saved).status()).toBe(200);

@@ -1,5 +1,7 @@
 """Verify demo provisioning with a disposable CI database and normal ASGI routes."""
 import os
+import hashlib
+import shutil
 from pathlib import Path
 import re
 import secrets
@@ -38,6 +40,7 @@ preferences.save_changes(account_id=account_id, profile="mobile", changes={"mobi
 # Upgrade the original eight-album deployment, then repeat the expanded startup.
 # Both passes retain the same existing account, IDs, preferences and listening history.
 seeded_loops = None
+selected_cover = None
 for _ in range(2):
     os.environ.update(settings)
     render_demo.prepare()
@@ -67,6 +70,21 @@ for _ in range(2):
             assert media.is_relative_to(render_demo.DEMO_ROOT / "app-data")
             assert media.is_file() and media.stat().st_size > 0
             assert float(row[4]) > float(row[3]) >= 0
+        assert connection.execute("select count(*) from app.album_ratings where account_id=%s", (account_id,)).fetchone()[0] > 0
+        if selected_cover is None:
+            # Seed an already-saved generated cover selection, then exercise the real
+            # restart path below. Browser coverage owns the local-select route.
+            album_id, cover_path = connection.execute("select id, cover_path from library.local_albums order by id limit 1").fetchone()
+            cover = Path(cover_path)
+            alternate = cover.with_name('cover-alternate.jpg')
+            revision = hashlib.sha256(alternate.read_bytes()).hexdigest()
+            shutil.copyfile(alternate, cover)
+            connection.execute("update library.local_albums set metadata=metadata || jsonb_build_object('cover_revision', %s::text, 'cover_selection_origin', 'user') where id=%s", (revision, album_id))
+            selected_cover = (album_id, cover_path, revision)
+        else:
+            album_id, cover_path, revision = selected_cover
+            assert hashlib.sha256(Path(cover_path).read_bytes()).hexdigest() == revision
+            assert connection.execute("select metadata->>'cover_revision', metadata->>'cover_selection_origin' from library.local_albums where id=%s", (album_id,)).fetchone() == (revision, 'user')
         if seeded_loops is None:
             seeded_loops = loops
         else:

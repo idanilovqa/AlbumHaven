@@ -15,7 +15,7 @@ export class MobileLayoutPage {
     this.homeCards = this.home.locator('.album-card');
     this.homeAlbums = this.home.locator('[data-open-tracklist]');
     this.homeTabs = this.home.getByRole('tablist', { name: 'Recent listening' });
-    this.homePanel = this.home.getByRole('tabpanel');
+    this.homePanel = this.home.locator('.mobile-home-empty:visible');
     this.recentTab = page.getByRole('tab', { name: 'Recent', exact: true });
     this.newsTab = page.getByRole('tab', { name: 'News', exact: true });
     this.searchInput = page.locator('#search-input');
@@ -44,7 +44,6 @@ export class MobileLayoutPage {
     this.viewCluster = page.locator('#gallery-view-cluster-options');
     this.activeView = this.viewCluster.locator('.is-active');
     this.zoomButton = page.getByRole('button', { name: 'Gallery zoom', exact: true });
-    this.zoomMenu = page.locator('#mobile-gallery-density-menu');
     this.albumPage = page.locator('#mobile-page-outlet #track-modal');
     this.trackTable = page.locator('#track-modal .album-track-table');
     this.albumDialogs = page.locator('#track-modal [aria-modal="true"]');
@@ -80,7 +79,7 @@ export class MobileLayoutPage {
     this.playerArtist = page.locator('#player-artist');
     this.playerGlyph = page.locator('#player-play > svg');
     this.appearanceEditor = page.locator('#utility-modal .appearance-background-editor');
-    this.searchControl = page.locator('#mobile-navigation .search-field-control');
+    this.searchControl = page.locator('#search-form .search-field-control');
     this.findBetterArt = page.locator('#cover-lookup-find-better-button');
     this.coverCandidates = page.locator('#cover-lookup-modal .cover-lookup-gallery').first().locator('.cover-lookup-art-card');
     this.coverBody = page.locator('#cover-lookup-modal-body');
@@ -111,6 +110,7 @@ export class MobileLayoutPage {
   }
 
   async browseArtist(name = 'Northlight') {
+    await this.revealHeaderActions();
     await this.libraryButton.click();
     await this.artist(name).click();
     await expect(this.home).not.toBeVisible();
@@ -296,6 +296,7 @@ export class MobileLayoutPage {
   }
 
   async openSettings() {
+    await this.revealHeaderActions();
     await this.settingsButton.click();
     await this.utilitiesButton.click();
     await expect(this.utilitiesPage).toBeVisible();
@@ -328,11 +329,38 @@ export class MobileLayoutPage {
     return this.artistHeading.evaluate(heading => heading.scrollWidth <= heading.clientWidth);
   }
 
+  async nativePinch(scale) {
+    const box = await this.galleryScroll.boundingBox();
+    const center = { x: box.x + box.width / 2, y: box.y + Math.min(150, box.height / 2) };
+    const cdp = await this.page.context().newCDPSession(this.page);
+    const points = span => [0, 1].map(index => ({ x: center.x + (index ? 1 : -1) * span / 2, y: center.y, id: index }));
+    try {
+      await cdp.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: points(110) });
+      for (let step = 1; step <= 12; step++) await cdp.send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: points(110 * (1 + (scale - 1) * step / 12)) });
+      await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+    } finally { await cdp.detach(); }
+  }
+
+  async expectGridColumns(count) {
+    // parity-check: allow-read-only-measurement-evaluate -- count computed grid tracks after a real gesture.
+    await expect.poll(async () => (await this.galleryGrid.evaluate(grid => getComputedStyle(grid).gridTemplateColumns)).split(' ').length).toBe(count);
+    // parity-check: allow-read-only-measurement-evaluate -- pinch changes application density, not browser magnification.
+    expect(await this.page.evaluate(() => window.visualViewport.scale)).toBe(1);
+  }
+
   async selectColumns(columns) {
     if (![1, 2, 3].includes(columns)) throw new TypeError('Invalid column count');
-    await this.zoomButton.click();
-    await this.zoomMenu.locator(`[data-mobile-grid-columns="${columns}"]`).click();
-    await expect(this.zoomMenu).not.toBeVisible();
+    await this.nativePinch(.45);
+    await this.expectGridColumns(3);
+    if (columns < 3) await this.nativePinch(columns === 2 ? 1.4 : 1.8);
+    await this.expectGridColumns(columns);
+  }
+
+  async revealHeaderActions() {
+    if (await this.searchInput.isVisible()) {
+      await this.searchInput.fill('');
+      await this.searchInput.press('Escape');
+    }
   }
 
   async selectUtility(section) {

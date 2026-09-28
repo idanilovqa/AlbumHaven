@@ -257,8 +257,8 @@
       else style.removeProperty('--appearance-' + token);
     }
     if (themed) {
-      style.setProperty('--appearance-primary-button', effective.tokens.control);
-      style.setProperty('--appearance-primary-button-ink', effective.tokens.ink);
+      style.setProperty('--appearance-primary-button', effective.tokens['primary-button']);
+      style.setProperty('--appearance-primary-button-ink', effective.tokens['primary-button-ink']);
     } else {
       style.removeProperty('--appearance-primary-button');
       style.removeProperty('--appearance-primary-button-ink');
@@ -337,8 +337,8 @@
     editor.style.setProperty('--appearance-main-surface', effective.main);
     editor.style.setProperty('--appearance-panel-background', effective.panel);
     for (const [token, color] of Object.entries(effective.tokens)) editor.style.setProperty('--appearance-' + token, color);
-    editor.style.setProperty('--appearance-primary-button', effective.tokens.control);
-    editor.style.setProperty('--appearance-primary-button-ink', effective.tokens.ink);
+    editor.style.setProperty('--appearance-primary-button', effective.tokens['primary-button']);
+    editor.style.setProperty('--appearance-primary-button-ink', effective.tokens['primary-button-ink']);
     const interactions = value.interaction_overrides || {};
     editor.style.setProperty('--appearance-selected-accent', interactions.panel_outline || '#55C7FF');
     editor.style.setProperty('--selection-body-background', interactions.item_selected
@@ -775,6 +775,14 @@
       applySectionToDraft(section, profileApi.resolveSection(deviceProfiles, activeDeviceProfile, section));
       syncInputs(true);
     };
+    const getMainPreview = () => {
+      const profiles = copy(savedDeviceProfiles);
+      for (const profile of profileApi.profiles) profiles[profile].sections.main = copy(deviceProfiles[profile].sections.main);
+      if (activeSection === 'backgrounds' && (activeDeviceProfile === 'web_desktop' || profiles[activeDeviceProfile].sections.main.mode === 'custom')) {
+        profiles[activeDeviceProfile].sections.main.values = copySectionFromDraft('main');
+      }
+      return { ...copy(saved), ...profiles.web_desktop.sections.main.values, device_profiles: persistedDeviceProfiles(profiles) };
+    };
     const setDeviceProfile = profile => {
       if (!profileApi.profiles.includes(profile) || profile === activeDeviceProfile) return;
       const section = appearanceSectionKeys[activeSection];
@@ -906,7 +914,7 @@
       },
       setSeekbarMode(mode) { if (editBlocked()) return; seekbarState().draft = normalizeSeekbarMode(mode); notify(); },
       setPlayerStyle, setPlayerStyleColor, restorePlayerSet, setSelectionAccent, setActionButtonOutlines, setInteractionOverrides, setItemOutline, useThemeInteractions, setDeviceProfile, setDeviceSectionMode, setActiveSection, cancel, reset, resetSection, load, save, clear,
-      reconcileLoopCapability, subscribe(listener) { listeners.add(listener); return () => listeners.delete(listener); } };
+      getMainPreview, reconcileLoopCapability, subscribe(listener) { listeners.add(listener); return () => listeners.delete(listener); } };
   }
   function colorField(field, label) {
     return `<div class="background-color-field"><label for="appearance-player-${field}-hex">${label}</label>
@@ -1008,12 +1016,10 @@
       <section aria-labelledby="appearance-panel-label"><h4 id="appearance-panel-label"><span>2</span>App bar &amp; panels</h4><p class="background-help" data-background-panel-help></p><div class="background-companions" data-background-companions></div>
       <p class="background-help">App bar, artist tree, menus, floating panels, and dialogs.</p></section>
       <section class="background-player-section" aria-labelledby="appearance-player-label"><h4 id="appearance-player-label"><span>3</span>Player &amp; waveform</h4><p class="background-help">One color group for your player and waveform.</p>
-      <div class="background-player-modes" role="group" aria-label="Player color mode"><button type="button" data-background-player-mode="palette" aria-pressed="true">Match player</button><button type="button" data-background-player-mode="custom" data-utility-appearance-key="seekbar" aria-pressed="false">Customize</button></div>
-      <p class="background-help" data-background-player-help></p><div class="background-player-fields" data-background-player-fields hidden>${colorField('background', 'Player background')}<small>Player text and buttons adapt to the background.</small></div>
-      <button class="button button-secondary background-editor-link" type="button" data-utility-appearance-key="seekbar">Edit waveform in Seekbar</button><p class="background-field-error" data-background-other-errors hidden></p><div class="background-player-summary" data-background-player-summary></div><p class="background-help">Waveform fill and edge stay with this group. Edit those colors in Seekbar.</p></section>
-      <p class="background-help">Player overrides are edited in Player &amp; Seekbar and remain visible in this preview.</p>
-      <p class="background-help">Save applies every pending Appearance change. Cancel restores the saved set.</p></div>
-      <aside class="background-preview-column"><div class="background-preview-heading">Preview <small>Changes apply after Save</small></div>
+      <p class="background-help">You can customize your player's colors in the “Player &amp; Seekbar” setting.</p>
+      <p class="background-field-error" data-background-other-errors hidden></p><div class="background-player-summary" data-background-player-summary></div></section>
+      <p class="background-help">Main elements preview across the app. Save keeps your changes; Cancel restores your saved appearance.</p></div>
+      <aside class="background-preview-column"><div class="background-preview-heading">Preview <small>Save to keep changes</small></div>
       <div class="background-preview" data-background-preview aria-label="Appearance preview"><div class="background-preview-bar"><span aria-hidden="true">♫</span><span class="background-preview-search">Search your library</span><span aria-hidden="true">A</span></div>
       <div class="background-preview-body"><div class="background-preview-tree"><strong>Artists</strong><span>All artists</span><span>Coastal Lines</span><span>Northbound</span><span>Slow Seasons</span></div>
       <div class="background-preview-content"><strong>Your library</strong><div class="background-preview-card"><div aria-hidden="true">♫</div><small>Still Water</small><span class="background-preview-stars" aria-label="5 stars">★★★★★</span></div><div class="background-preview-floating">Album options<span>View album</span><span>Album details</span></div></div></div>
@@ -1118,6 +1124,8 @@
     };
     controller = createController({ initial, request, apply: applySavedTheme, loopCreateAllowed: () => loopCreateAllowed });
     controller.setDeviceProfile(window.AlbumHavenDevicePreferences?.profile?.() || 'web_desktop');
+    const applyEditorPreview = () => applySavedTheme(mounted ? controller.getMainPreview() : controller.getState().saved);
+    controller.subscribe(applyEditorPreview);
     const load = async () => { const result = await controller.load(); if (result) loaded = true; return result; };
     let footerDispose = null, mountedFooter = null, restoreFooterTheme = null;
     const mountSharedFooter = (localHost, options) => {
@@ -1133,7 +1141,8 @@
         });
         localHost.remove(); dialogHost.hidden = false;
       }
-      footerDispose = window.EditorPage?.mountFooter?.(mountedFooter, { status: 'Saved to your account', ...options }) || null;
+      footerDispose = window.EditorPage?.mountFooter?.(mountedFooter, { status: 'Saved to your account', ...options, resetLabel: isPhoneEditor() ? 'Reset' : options.resetLabel }) || null;
+      mountedFooter.querySelector('[data-background-reset]')?.setAttribute('aria-label', options.resetLabel || 'Reset');
       return mountedFooter;
     };
     const unmount = () => {
@@ -1141,6 +1150,7 @@
       restoreFooterTheme?.(); restoreFooterTheme = null;
       if (mountedFooter?.id === 'utility-modal-footer') { mountedFooter.innerHTML = ''; mountedFooter.hidden = true; }
       mountedFooter = null;
+      applySavedTheme(controller.getState().saved);
     };
     const isPhoneEditor = () => window.AlbumHavenDevicePreferences?.profile?.() === 'mobile';
     const mountDeviceProfileControls = editor => {
@@ -1226,15 +1236,6 @@
         preview.style.setProperty('--preview-main', effective.main); preview.style.setProperty('--preview-panels', effective.panel);
         preview.style.setProperty('--preview-floating', !palette && !preference.panel_background_color ? '#1F2937' : effective.panel);
         for (const [token, value] of Object.entries(effective.tokens)) preview.style.setProperty('--preview-' + token, value);
-        const custom = Boolean(preference.player_style_override || preference.player_override);
-        editor.querySelectorAll('[data-background-player-mode]').forEach(button => button.setAttribute('aria-pressed', String((button.getAttribute('data-background-player-mode') === 'custom') === custom)));
-        find('[data-background-player-fields]').hidden = !custom;
-        find('[data-background-player-help]').textContent = custom ? 'Your background, waveform fill and edge stay together when you change palettes.' : 'The palette sets your player background, waveform fill and edge together.';
-        for (const field of ['background']) {
-          const key = 'player_' + field, picker = find(`[data-player-picker="${field}"]`), hex = find(`[data-player-hex="${field}"]`);
-          picker.value = effective.player[field]; if (hex.value !== state.inputValues[key]) hex.value = state.inputValues[key];
-          hex.setAttribute('aria-invalid', String(Boolean(state.errors[key]))); find(`[data-player-error="${field}"]`).textContent = state.errors[key] || '';
-        }
         const otherErrors = find('[data-background-other-errors]'); otherErrors.hidden = !state.errors.player_fill && !state.errors.player_edge; otherErrors.textContent = 'Fix the waveform color errors in Seekbar before saving.';
         find('[data-background-player-summary]').innerHTML = ['background', 'fill', 'edge'].map(field => { const color = effective.player[field]; return `<span><i style="background:${color}"></i>${({ background: 'Background', fill: 'Fill', edge: 'Edge' })[field]} <b>${color}</b></span>`; }).join('');
         syncAppearanceAlert(find('[data-background-warning]'), state.warnings.length ? `Low contrast: ${state.warnings.join('; ')}. Some text may be hard to read. You can still save these colors.` : '', 'warning');
@@ -1649,7 +1650,7 @@
       controller.setDeviceProfile(profile);
       // Retain each editor's integration callbacks as its responsive markup changes.
       if (profile !== previous.activeDeviceProfile) remountEditor?.();
-      applySavedTheme(controller.getState().saved);
+      applyEditorPreview();
     });
     return { controller, mount, mountSeekbar, mountSelectionAccent, mountAlerts, mountAlbumPage, unmount, allowLeave, clearSession, load,
       setLoopCreateAllowed(value) { const next = value === true; if (next === loopCreateAllowed) return; loopCreateAllowed = next; controller.reconcileLoopCapability(); },

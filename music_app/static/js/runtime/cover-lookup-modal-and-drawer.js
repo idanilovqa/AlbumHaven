@@ -464,8 +464,9 @@ async function markCoverLookupAutomaticImprovementSeen(candidateSnapshot) {
       seen_automatic_improvement_revision: automaticRevision,
       has_unseen_automatic_improvement: false,
     };
-    state.coverLookup.modal.candidateSnapshot = markedSnapshot;
     album.cover_candidate_snapshot = markedSnapshot;
+    if (state.coverLookup.modal.album !== album) return;
+    state.coverLookup.modal.candidateSnapshot = markedSnapshot;
     if (typeof document !== 'undefined' && typeof document.querySelector === 'function') {
       const lookupButton = document.querySelector('[data-open-track-modal-cover-lookup]');
       if (lookupButton) {
@@ -474,7 +475,9 @@ async function markCoverLookupAutomaticImprovementSeen(candidateSnapshot) {
       }
     }
   } catch (error) {
-    state.coverLookup.modal.seenCandidateImprovementToken = '';
+    if (state.coverLookup.modal.album === album && state.coverLookup.modal.seenCandidateImprovementToken === seenToken) {
+      state.coverLookup.modal.seenCandidateImprovementToken = '';
+    }
     console.warn('[AlbumHaven][CoverLookup] Failed to mark automatic candidate update as seen.', error);
   }
 }
@@ -652,7 +655,8 @@ function syncCoverLookupSaveButton() {
   const hasLocalSelection = hasPendingLocalCoverSelection();
   const hasPastedSelection = Boolean(pendingPastedImageId);
   saveButton.hidden = false;
-  saveButton.disabled = !(hasRemoteSelection || hasLocalSelection || hasPastedSelection);
+  saveButton.disabled = Boolean(state.coverLookup.modal.saving) || !(hasRemoteSelection || hasLocalSelection || hasPastedSelection);
+  saveButton.textContent = state.coverLookup.modal.saving ? 'Saving…' : 'Save';
 }
 
 function isCompletedCoverLookupTask(task) {
@@ -1825,9 +1829,14 @@ function applyCoverLookupTaskUpdates(task, options = {}) {
   refreshCoverLookupAlbumArtwork(task.album_payload || state.coverLookup.modal.album || null, task.updated_albums);
 }
 
+let coverLookupGalleryRequest = 0;
+let coverLookupModalSession = 0;
+
 async function refreshCoverLookupGallery(showLoading = true) {
   const album = state.coverLookup.modal.album;
   if (!album) return;
+  const request = ++coverLookupGalleryRequest;
+  const isCurrent = () => request === coverLookupGalleryRequest;
   state.coverLookup.modal.loading = Boolean(showLoading);
   renderCoverLookupModal();
   try {
@@ -1837,22 +1846,26 @@ async function refreshCoverLookupGallery(showLoading = true) {
       body: JSON.stringify({ album, task_id: state.coverLookup.modal.taskId || '' }),
     });
     const data = await response.json().catch(() => ({}));
+    if (!isCurrent()) return;
     if (!response.ok || !data.ok) {
       throw new Error(data.error || 'Failed to load cover art gallery');
     }
     console.log('[AlbumHaven][CoverLookup] Gallery response.', data);
     applyCoverLookupGalleryPayload(data);
-    await markCoverLookupAutomaticImprovementSeen(state.coverLookup.modal.candidateSnapshot);
     state.coverLookup.modal.loading = false;
     renderCoverLookupModal();
+    void markCoverLookupAutomaticImprovementSeen(state.coverLookup.modal.candidateSnapshot);
   } catch (error) {
+    if (!isCurrent()) return;
     state.coverLookup.modal.loading = false;
     console.error('[AlbumHaven][CoverLookup] Failed to load gallery.', error);
+    renderCoverLookupModal();
     showToast(error.message || 'Failed to load cover art gallery.', 'error', 2800);
   }
 }
 
 async function openCoverLookupModal(album, options = {}) {
+  coverLookupModalSession += 1;
   if (album && typeof presentMobileCoverLookupPage === 'function') presentMobileCoverLookupPage(album);
   const els = getCoverLookupModalElements();
   if (!els.overlay || !album) return;
@@ -1898,6 +1911,8 @@ async function openCoverLookupModal(album, options = {}) {
 }
 
 function closeCoverLookupModal() {
+  coverLookupGalleryRequest += 1;
+  coverLookupModalSession += 1;
   if (typeof dismissMobilePage === 'function' && dismissMobilePage('cover-lookup')) return;
   const els = getCoverLookupModalElements();
   if (!els.overlay) return;
@@ -2028,16 +2043,16 @@ function selectLocalCoverFromLookup(sourcePath) {
 }
 
 async function saveLocalCoverFromLookup(sourcePath) {
+  const session = coverLookupModalSession;
   const album = state.coverLookup.modal.album;
   const taskId = String(state.coverLookup.modal.taskId || '');
-  if (!album || !sourcePath) return;
+  if (!album || !sourcePath || state.coverLookup.modal.saving) return;
+  state.coverLookup.modal.saving = true;
+  syncCoverLookupSaveButton();
   const previousAlbum = deepCloneJson(album);
   const optimisticAlbum = buildOptimisticCoverUpdatedAlbum(album, sourcePath);
   applyOptimisticLocalCoverSelection(album, sourcePath);
-  state.coverLookup.modal.pendingLocalPath = '';
-  state.coverLookup.modal.selectedRemoteId = '';
   markTrackModalCoverTransitionPending(album);
-  closeCoverLookupModal();
   if (optimisticAlbum) {
     markAlbumCoverPathsFresh([optimisticAlbum]);
     syncCoverLookupAlbumReferences([optimisticAlbum]);
@@ -2067,6 +2082,7 @@ async function saveLocalCoverFromLookup(sourcePath) {
       markCoverLookupTaskActionTaken(taskId, album);
       renderCoverLookupDrawer();
     }
+    if (coverLookupModalSession === session) closeCoverLookupModal();
     showToast('Local cover art selected.', 'success', 2200);
   } catch (error) {
     if (previousAlbum) {
@@ -2077,6 +2093,9 @@ async function saveLocalCoverFromLookup(sourcePath) {
     }
     console.error('[AlbumHaven][CoverLookup] Failed to select local cover.', error);
     showToast(error.message || 'Failed to select local cover art.', 'error', 2800);
+  } finally {
+    state.coverLookup.modal.saving = false;
+    syncCoverLookupSaveButton();
   }
 }
 

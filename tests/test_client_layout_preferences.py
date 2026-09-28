@@ -9,6 +9,8 @@ def test_mobile_defaults_are_independent_from_desktop():
     desktop = default_preferences('web_desktop')
     assert mobile['galleryDisplayPreferences']['defaultGalleryDisplayMode'] == 'list'
     assert mobile['albumOpenMode'] == 'page'
+    assert mobile['mobileGridColumns'] == 3
+    assert desktop['mobileGridColumns'] == 2
     mobile['gallerySources']['hoard'] = False
     assert desktop['gallerySources']['hoard'] is True
     assert default_preferences('mobile')['gallerySources']['hoard'] is True

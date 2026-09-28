@@ -1005,7 +1005,7 @@ class VirtualArtistGrid {
     const displayMode = resolveGalleryRendererMode(state?.gallery?.mainState?.view || state?.view?.gallery_display_mode);
     const mobileGeometry = window.AlbumHavenClientLayout?.resolveMobileGalleryGeometry({
       viewportWidth: window.innerWidth, availableWidth: width, mode: displayMode,
-      columns: window.AlbumHavenDevicePreferences?.read('mobileGridColumns', 2), gap: this.columnGap,
+      columns: window.AlbumHavenDevicePreferences?.read('mobileGridColumns', 3), gap: this.columnGap,
     });
     if (mobileGeometry) {
       this.columns = mobileGeometry.columns;

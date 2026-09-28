@@ -18,6 +18,7 @@ function hideAlbumCardContextMenu() {
 }
 
 function showAlbumCardContextMenu(x, y, album) {
+  if (isMobileClient() || usesMobilePageLayout()) { hideAlbumCardContextMenu(); return; }
   const menu = ensureAlbumCardContextMenu();
   menu.style.left = `${x}px`;
   menu.style.top = `${y}px`;
@@ -410,7 +411,7 @@ function bindOverlayPointerOrigin(overlay) {
   overlay.addEventListener('pointerdown', (event) => {
     overlay.dataset.pointerDownStartedOnOverlay = event.target === overlay ? '1' : '0';
   });
-  overlay.addEventListener('pointerup', () => {
+  overlay.addEventListener('click', () => {
     scheduleBrowserTimeout(() => {
       overlay.dataset.pointerDownStartedOnOverlay = '0';
     }, 0);

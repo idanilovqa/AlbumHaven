@@ -758,13 +758,14 @@ test('normal selected-artist requests retain existing family reconciliation and 
   assert.equal(calls.renderRelated, 2);
 });
 
-test('fetchAndRender lets a newer tree request supersede startup hydration work', async () => {
+for (const preserveScroll of [false, true]) {
+test(`fetchAndRender transfers a superseded transition to the new request (preserveScroll: ${preserveScroll})`, async () => {
   const { context, calls, pendingRequests } = createContext();
 
   const firstPromise = context.fetchAndRender('/view-data?artist=First', false, { startupRefresh: true });
   assert.equal(pendingRequests.length, 1);
 
-  const secondPromise = context.fetchAndRender('/view-data?artist=Second', true, { startupRefresh: false });
+  const secondPromise = context.fetchAndRender('/view-data?artist=Second', true, { startupRefresh: false, preserveScroll });
   assert.equal(pendingRequests.length, 2);
   assert.equal(pendingRequests[0].options.signal.aborted, true);
 
@@ -779,11 +780,14 @@ test('fetchAndRender lets a newer tree request supersede startup hydration work'
   assert.deepEqual(calls.applyViewPayload, [{ selected_artist: 'Second' }]);
   assert.equal(context.state.view.selected_artist, 'Second');
   assert.equal(context.state.busy, false);
+  assert.equal(context.state.ui.pendingViewTransition, false);
+  assert.equal(context.state.ui.pendingViewTransitionRequestId, 0);
   assert.equal(context.state.ui.activeViewRequestController, null);
   assert.deepEqual(calls.pushBrowserViewState, [context.state.view]);
 
   await firstPromise;
 });
+}
 
 test('fetchAndRender cannot overwrite a newer locally filtered artist-family view', async () => {
   const { context, calls, pendingRequests } = createContext();
@@ -5796,4 +5800,19 @@ test('a finalization cancellation reconciles the authoritative gallery without s
   assert.equal(context.state.wasScanFinalizing, false);
   assert.equal(context.state.view.artist_groups[0].albums[0].key, 'authoritative');
   assert.deepEqual(calls.showToast, []);
+});
+
+
+test('startup hydration preserves an open Sources menu while foreground navigation closes it', async () => {
+  const { context, pendingRequests } = createContext();
+  let closes = 0;
+  context.hideGalleryOptionsMenu = () => { closes++; };
+  const startup = context.fetchAndRender('/view-data', false, { startupRefresh: true, preserveScroll: true });
+  assert.equal(closes, 0);
+  pendingRequests[0].resolveWith({ artist_groups: [] });
+  await startup;
+  const navigation = context.fetchAndRender('/view-data?artist=Northlight');
+  assert.equal(closes, 1);
+  pendingRequests[1].resolveWith({ selected_artist: 'Northlight', artist_groups: [] });
+  await navigation;
 });

@@ -39736,6 +39736,7 @@ function dismissMobilePage(kind) {
   retired.forEach(descriptor => { focus = cleanupMobilePage(descriptor); });
   writeMobilePageHistory('replace');
   syncMobilePageShell();
+  if (!mobilePageState.pages.length) handleGalleryBootstrapPopState({ preserveScroll: true });
   if (focus?.isConnected) focus.focus({ preventScroll: true });
   return true;
 }

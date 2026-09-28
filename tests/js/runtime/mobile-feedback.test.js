@@ -267,3 +267,33 @@ test('shared gallery popstate forwards retained-scroll options to the existing r
   assert.equal(calls[1][1], false);
   assert.equal(calls[1][2], options);
 });
+
+test('direct or reloaded mobile Back restores the gallery when there is no traversable parent entry', () => {
+  const calls = [];
+  const context = load('mobile-navigation.js', {
+    window: { history: { state: { albumHavenNavigationPosition: 4 } } },
+    handleGalleryBootstrapPopState: options => calls.push(['parent', options.preserveScroll]),
+  });
+  context.cleanupMobilePage = () => null;
+  context.writeMobilePageHistory = mode => calls.push(['history', mode]);
+  context.syncMobilePageShell = () => calls.push(['shell']);
+  vm.runInContext("mobilePageState.pages.push({kind:'album',albumKey:'one',parentPosition:4});", context);
+  assert.equal(context.dismissMobilePage('album'), true);
+  assert.deepEqual(calls, [['history', 'replace'], ['shell'], ['parent', true]]);
+  assert.equal(vm.runInContext('mobilePageState.pages.length', context), 0);
+});
+
+test('fallback Back to another mobile page leaves its background gallery alone', () => {
+  let refreshes = 0;
+  const context = load('mobile-navigation.js', {
+    window: { history: { state: {} } },
+    handleGalleryBootstrapPopState: () => { refreshes += 1; },
+  });
+  context.cleanupMobilePage = () => null;
+  context.writeMobilePageHistory = () => {};
+  context.syncMobilePageShell = () => {};
+  vm.runInContext("mobilePageState.pages.push({kind:'album',albumKey:'one'}, {kind:'cover-lookup',albumKey:'one'});", context);
+  assert.equal(context.dismissMobilePage('cover-lookup'), true);
+  assert.equal(refreshes, 0);
+  assert.equal(vm.runInContext('mobilePageState.pages.length', context), 1);
+});

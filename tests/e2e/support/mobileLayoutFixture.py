@@ -158,3 +158,23 @@ def seed_mobile_demo_loops(database_url: str, inventory: dict, data_dir: Path) -
                 'start_seconds': start, 'end_seconds': end, 'duration_seconds': end - start,
                 'created_at': '2026-09-27T00:00:00+00:00',
             })
+
+
+def seed_mobile_demo_ratings(database_url: str) -> None:
+    """Rate generated albums once; preserve saved ratings, including cleared ones."""
+    import psycopg
+    with psycopg.connect(database_url) as connection:
+        for index, (artist, album, _year, _color) in enumerate(mobile_layout_albums(True)):
+            if index % 3 == 2:
+                continue
+            connection.execute("""insert into app.album_ratings
+                (account_id, library_id, album_key, rating, provenance, metadata)
+                select o.account_id, a.library_id, a.album_key, %s, 'e2e_fixture',
+                    '{"source":"mobile-generated-preview"}'::jsonb
+                from app.bootstrap_owners o join library.libraries l on l.owner_account_id=o.account_id
+                join library.local_albums a on a.library_id=l.id
+                join library.local_artists ar on ar.id=a.artist_id
+                where o.owner_key='local-bootstrap-owner' and l.name='Local Library'
+                    and l.library_kind='local' and ar.name=%s and a.title=%s
+                on conflict (account_id, library_id, album_key) do nothing""",
+                (5 + index % 6, artist, album))

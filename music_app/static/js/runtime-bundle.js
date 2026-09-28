@@ -3933,7 +3933,7 @@ function buildGalleryBarHtml(config = {}) {
     <div class="gallery-bar__actions">
       <button class="gallery-action-button" type="button" data-gallery-bar-action="artist-family" aria-label="Artist Family" aria-controls="artist-family-panel" aria-expanded="false"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="8" cy="8" r="3"/><circle cx="17" cy="9" r="2.5"/><path d="M3 19c.5-3.5 2.2-5.2 5-5.2s4.5 1.7 5 5.2M14 14.5c3.5-.8 5.8.8 6.5 4.5"/></svg></button>
       <div class="gallery-view-cluster unfolding-action-button" id="gallery-view-cluster-options" data-gallery-view-cluster><button class="gallery-view-choice action-button unfolding-action-button__action" type="button" tabindex="-1" data-gallery-view-choice="list" aria-label="Rows" title="Rows"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="18" height="7" rx="2"/><rect x="3" y="14" width="18" height="7" rx="2"/><path d="M9 3v7M9 14v7"/></svg></button><button class="gallery-view-choice action-button unfolding-action-button__action" type="button" tabindex="-1" data-gallery-view-choice="covers" aria-label="No info" title="No info"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="m5 17 5-5 3 3 2-2 4 4"/></svg></button><button class="gallery-view-choice action-button unfolding-action-button__action is-active" type="button" data-gallery-bar-action="view" data-gallery-view-choice="cards" aria-label="Cards" title="Cards" aria-controls="gallery-view-cluster-options" aria-expanded="false"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 15h18M7 18h6"/></svg></button></div>
-      <button class="gallery-action-button mobile-gallery-density" type="button" data-mobile-grid-density aria-label="Use three columns" title="Use three columns"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg><span class="sr-only" data-mobile-grid-density-label>2 columns</span></button><button class="gallery-action-button" type="button" data-gallery-bar-action="album-types" aria-label="Album types" aria-controls="gallery-album-types-menu" aria-expanded="false"><svg viewBox="0 0 24 24" aria-hidden="true" stroke-linecap="round" stroke-linejoin="round"><path d="M5 17H4a2 2 0 0 1-2-2V6a2 2 0 0 1 1.5-1.94l8-2A2 2 0 0 1 14 4v1"/><path d="M8 20H7a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2v1"/><rect x="8" y="8" width="14" height="14" rx="2"/><path fill="currentColor" fill-rule="evenodd" stroke="none" d="M19 15a4 4 0 1 1-8 0 4 4 0 0 1 8 0Zm-3 0a1 1 0 1 0-2 0 1 1 0 0 0 2 0Z"/></svg></button>
+      <button class="gallery-action-button" type="button" data-gallery-bar-action="album-types" aria-label="Album types" aria-controls="gallery-album-types-menu" aria-expanded="false"><svg viewBox="0 0 24 24" aria-hidden="true" stroke-linecap="round" stroke-linejoin="round"><path d="M5 17H4a2 2 0 0 1-2-2V6a2 2 0 0 1 1.5-1.94l8-2A2 2 0 0 1 14 4v1"/><path d="M8 20H7a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2v1"/><rect x="8" y="8" width="14" height="14" rx="2"/><path fill="currentColor" fill-rule="evenodd" stroke="none" d="M19 15a4 4 0 1 1-8 0 4 4 0 0 1 8 0Zm-3 0a1 1 0 1 0-2 0 1 1 0 0 0 2 0Z"/></svg></button>
     </div>`;
 }
 
@@ -5169,6 +5169,8 @@ function renderLibraryLoader(data = {}, options = {}) {
   const canCancelScan = shouldShow && scanPageVisible && Boolean(data.scan_in_progress);
   setDomPropertyIfChanged(loader, 'hidden', !shouldShow);
   loader.classList?.toggle('is-scan-page', scanPageVisible);
+  document.getElementById('shell-main-surface')?.classList.toggle('has-library-loader', shouldShow);
+  if (typeof syncMobileHome === 'function') syncMobileHome();
   const galleryWasHidden = scroll.hidden;
   setDomPropertyIfChanged(scroll, 'hidden', shouldShow);
   if (galleryWasHidden && !shouldShow && scroll.clientWidth > 0 && typeof virtualGrid !== 'undefined') {
@@ -5385,6 +5387,8 @@ function clearTriggerAnchor(surface) {
 
 function syncTriggerAnchor(surface, anchor) {
   if (!surface?.getBoundingClientRect || !anchor?.getBoundingClientRect || surface.hidden) return;
+  const previous = triggerAnchorBindings.get(surface);
+  if (previous && previous.anchor !== anchor) clearTriggerAnchor(surface);
   const anchorContext = anchor.closest?.('.shell-main-surface, .settings-outlet') ? 'content' : 'chrome';
   surface.dataset.triggerAnchorContext = anchorContext;
   anchor.dataset.triggerAnchorContext = anchorContext;
@@ -5393,8 +5397,9 @@ function syncTriggerAnchor(surface, anchor) {
     anchor.setAttribute?.('aria-expanded', 'false');
     clearTriggerAnchor(surface);
   });
-  const previous = triggerAnchorBindings.get(surface);
-  if (previous && previous.anchor !== anchor) clearTriggerAnchor(surface);
+  // Establish the owning surface before sampling its paint for the joined trigger.
+  surface.classList.add('trigger-anchor-surface');
+  surface.style.removeProperty?.('--trigger-anchor-background');
   const surfaceStyle = globalThis.getComputedStyle?.(surface);
   let bounds = surface.getBoundingClientRect();
   // Side drawers animate their position, not their layout width. The joined
@@ -5417,7 +5422,6 @@ function syncTriggerAnchor(surface, anchor) {
     surface.style.setProperty('--trigger-anchor-background', surfaceBackground);
     anchor.style.setProperty('--trigger-anchor-background', surfaceBackground);
   }
-  surface.classList.add('trigger-anchor-surface');
   if (anchor.matches?.('.search-field-button')) surface.dataset.triggerAnchorSearch = 'true';
   else delete surface.dataset.triggerAnchorSearch;
   anchor.classList.add('trigger-anchor-open');
@@ -9997,6 +10001,7 @@ function hideAlbumCardContextMenu() {
 }
 
 function showAlbumCardContextMenu(x, y, album) {
+  if (isMobileClient() || usesMobilePageLayout()) { hideAlbumCardContextMenu(); return; }
   const menu = ensureAlbumCardContextMenu();
   menu.style.left = `${x}px`;
   menu.style.top = `${y}px`;
@@ -10389,7 +10394,7 @@ function bindOverlayPointerOrigin(overlay) {
   overlay.addEventListener('pointerdown', (event) => {
     overlay.dataset.pointerDownStartedOnOverlay = event.target === overlay ? '1' : '0';
   });
-  overlay.addEventListener('pointerup', () => {
+  overlay.addEventListener('click', () => {
     scheduleBrowserTimeout(() => {
       overlay.dataset.pointerDownStartedOnOverlay = '0';
     }, 0);
@@ -25585,8 +25590,9 @@ async function markCoverLookupAutomaticImprovementSeen(candidateSnapshot) {
       seen_automatic_improvement_revision: automaticRevision,
       has_unseen_automatic_improvement: false,
     };
-    state.coverLookup.modal.candidateSnapshot = markedSnapshot;
     album.cover_candidate_snapshot = markedSnapshot;
+    if (state.coverLookup.modal.album !== album) return;
+    state.coverLookup.modal.candidateSnapshot = markedSnapshot;
     if (typeof document !== 'undefined' && typeof document.querySelector === 'function') {
       const lookupButton = document.querySelector('[data-open-track-modal-cover-lookup]');
       if (lookupButton) {
@@ -25773,7 +25779,8 @@ function syncCoverLookupSaveButton() {
   const hasLocalSelection = hasPendingLocalCoverSelection();
   const hasPastedSelection = Boolean(pendingPastedImageId);
   saveButton.hidden = false;
-  saveButton.disabled = !(hasRemoteSelection || hasLocalSelection || hasPastedSelection);
+  saveButton.disabled = Boolean(state.coverLookup.modal.saving) || !(hasRemoteSelection || hasLocalSelection || hasPastedSelection);
+  saveButton.textContent = state.coverLookup.modal.saving ? 'Saving…' : 'Save';
 }
 
 function isCompletedCoverLookupTask(task) {
@@ -26946,9 +26953,14 @@ function applyCoverLookupTaskUpdates(task, options = {}) {
   refreshCoverLookupAlbumArtwork(task.album_payload || state.coverLookup.modal.album || null, task.updated_albums);
 }
 
+let coverLookupGalleryRequest = 0;
+let coverLookupModalSession = 0;
+
 async function refreshCoverLookupGallery(showLoading = true) {
   const album = state.coverLookup.modal.album;
   if (!album) return;
+  const request = ++coverLookupGalleryRequest;
+  const isCurrent = () => request === coverLookupGalleryRequest;
   state.coverLookup.modal.loading = Boolean(showLoading);
   renderCoverLookupModal();
   try {
@@ -26958,22 +26970,26 @@ async function refreshCoverLookupGallery(showLoading = true) {
       body: JSON.stringify({ album, task_id: state.coverLookup.modal.taskId || '' }),
     });
     const data = await response.json().catch(() => ({}));
+    if (!isCurrent()) return;
     if (!response.ok || !data.ok) {
       throw new Error(data.error || 'Failed to load cover art gallery');
     }
     console.log('[AlbumHaven][CoverLookup] Gallery response.', data);
     applyCoverLookupGalleryPayload(data);
-    await markCoverLookupAutomaticImprovementSeen(state.coverLookup.modal.candidateSnapshot);
     state.coverLookup.modal.loading = false;
     renderCoverLookupModal();
+    void markCoverLookupAutomaticImprovementSeen(state.coverLookup.modal.candidateSnapshot);
   } catch (error) {
+    if (!isCurrent()) return;
     state.coverLookup.modal.loading = false;
     console.error('[AlbumHaven][CoverLookup] Failed to load gallery.', error);
+    renderCoverLookupModal();
     showToast(error.message || 'Failed to load cover art gallery.', 'error', 2800);
   }
 }
 
 async function openCoverLookupModal(album, options = {}) {
+  coverLookupModalSession += 1;
   if (album && typeof presentMobileCoverLookupPage === 'function') presentMobileCoverLookupPage(album);
   const els = getCoverLookupModalElements();
   if (!els.overlay || !album) return;
@@ -27019,6 +27035,8 @@ async function openCoverLookupModal(album, options = {}) {
 }
 
 function closeCoverLookupModal() {
+  coverLookupGalleryRequest += 1;
+  coverLookupModalSession += 1;
   if (typeof dismissMobilePage === 'function' && dismissMobilePage('cover-lookup')) return;
   const els = getCoverLookupModalElements();
   if (!els.overlay) return;
@@ -27149,16 +27167,16 @@ function selectLocalCoverFromLookup(sourcePath) {
 }
 
 async function saveLocalCoverFromLookup(sourcePath) {
+  const session = coverLookupModalSession;
   const album = state.coverLookup.modal.album;
   const taskId = String(state.coverLookup.modal.taskId || '');
-  if (!album || !sourcePath) return;
+  if (!album || !sourcePath || state.coverLookup.modal.saving) return;
+  state.coverLookup.modal.saving = true;
+  syncCoverLookupSaveButton();
   const previousAlbum = deepCloneJson(album);
   const optimisticAlbum = buildOptimisticCoverUpdatedAlbum(album, sourcePath);
   applyOptimisticLocalCoverSelection(album, sourcePath);
-  state.coverLookup.modal.pendingLocalPath = '';
-  state.coverLookup.modal.selectedRemoteId = '';
   markTrackModalCoverTransitionPending(album);
-  closeCoverLookupModal();
   if (optimisticAlbum) {
     markAlbumCoverPathsFresh([optimisticAlbum]);
     syncCoverLookupAlbumReferences([optimisticAlbum]);
@@ -27188,6 +27206,7 @@ async function saveLocalCoverFromLookup(sourcePath) {
       markCoverLookupTaskActionTaken(taskId, album);
       renderCoverLookupDrawer();
     }
+    if (coverLookupModalSession === session) closeCoverLookupModal();
     showToast('Local cover art selected.', 'success', 2200);
   } catch (error) {
     if (previousAlbum) {
@@ -27198,6 +27217,9 @@ async function saveLocalCoverFromLookup(sourcePath) {
     }
     console.error('[AlbumHaven][CoverLookup] Failed to select local cover.', error);
     showToast(error.message || 'Failed to select local cover art.', 'error', 2800);
+  } finally {
+    state.coverLookup.modal.saving = false;
+    syncCoverLookupSaveButton();
   }
 }
 
@@ -33186,7 +33208,7 @@ class VirtualArtistGrid {
     const displayMode = resolveGalleryRendererMode(state?.gallery?.mainState?.view || state?.view?.gallery_display_mode);
     const mobileGeometry = window.AlbumHavenClientLayout?.resolveMobileGalleryGeometry({
       viewportWidth: window.innerWidth, availableWidth: width, mode: displayMode,
-      columns: window.AlbumHavenDevicePreferences?.read('mobileGridColumns', 2), gap: this.columnGap,
+      columns: window.AlbumHavenDevicePreferences?.read('mobileGridColumns', 3), gap: this.columnGap,
     });
     if (mobileGeometry) {
       this.columns = mobileGeometry.columns;
@@ -39821,16 +39843,10 @@ function syncMobileLoopHeader() {
 }
 
 function syncMobileGalleryControls() {
-  const savedColumns = window.AlbumHavenDevicePreferences?.read('mobileGridColumns', 2);
-  const columns = [1, 2, 3].includes(savedColumns) ? savedColumns : 2;
+  const savedColumns = window.AlbumHavenDevicePreferences?.read('mobileGridColumns', 3);
+  const columns = [1, 2, 3].includes(savedColumns) ? savedColumns : 3;
   document.documentElement.style.setProperty('--mobile-gallery-columns', String(columns));
-  document.querySelectorAll('[data-mobile-grid-density]').forEach(button => {
-    button.hidden = !usesMobilePageLayout() || ensureGalleryMainState().view === 'list';
-    button.title = `Gallery zoom: ${columns} ${columns === 1 ? 'column' : 'columns'}`;
-  });
-  document.querySelectorAll('[data-mobile-grid-columns]').forEach(button => {
-    button.setAttribute('aria-pressed', String(Number(button.dataset.mobileGridColumns) === columns));
-  });
+
 }
 function prepareMobileGallerySearch(onConfirmed, skipAppearanceGuard = false) {
   if (!mobilePageState.pages.length) return true;
@@ -39851,8 +39867,10 @@ function setMobileSearchOpen(open) {
     document.dispatchEvent(new CustomEvent('album-haven:surface-opening', { detail: { surface: form } }));
   }
   mobilePageState.searchOpen = Boolean(open);
+  const form = document.getElementById('search-form');
   const nav = document.getElementById('mobile-navigation');
   nav?.classList.toggle('is-search-open', Boolean(open));
+  form?.closest('.app-bar')?.classList.toggle('is-search-open', Boolean(open));
   document.getElementById('mobile-search-button')?.setAttribute('aria-expanded', String(Boolean(open)));
   const input = document.getElementById('search-input');
   if (input && usesMobilePageLayout()) { input.inert = !open; input.setAttribute('aria-hidden', String(!open)); }
@@ -39901,14 +39919,14 @@ function initMobileNavigation() {
     const mobile = usesMobilePageLayout();
     document.documentElement.dataset.clientProfile = window.AlbumHavenDevicePreferences?.profile() || (isMobileClient() ? 'mobile' : 'web_desktop');
     if (form) {
-      if (mobile) document.getElementById('mobile-search-dock')?.appendChild(form);
+      if (mobile) document.querySelector('.app-bar-brand')?.after(form);
       else {
         placeholder.after(form);
         const input = document.getElementById('search-input');
         if (input) { input.inert = false; input.removeAttribute('aria-hidden'); }
         submit?.removeAttribute('aria-expanded');
       }
-      if (mobile) setMobileSearchOpen(mobilePageState.searchOpen);
+      if (mobile) setMobileSearchOpen(mobilePageState.searchOpen || Boolean(document.getElementById('search-input')?.value?.trim()));
     }
     promoteVisibleMobileDialogs();
     syncMobileGalleryControls();
@@ -39942,20 +39960,11 @@ function initMobileNavigation() {
     if (typeof renderMobileHome === 'function') renderMobileHome();
   });
   document.addEventListener('click', (event) => {
+    if (usesMobilePageLayout() && mobilePageState.searchOpen && !form?.contains(event.target)
+      && !String(document.getElementById('search-input')?.value || '').trim()) setMobileSearchOpen(false);
     if (handleMobileSettingsClick(event)) return;
     if (event.target.closest?.('[data-mobile-back]')) navigateMobileBack();
-    const density = event.target.closest?.('[data-mobile-grid-density]');
-    if (density) {
-      openGalleryMainSurface('gallery-density', density, document.getElementById('mobile-gallery-density-menu'));
-      return;
-    }
-    const choice = event.target.closest?.('[data-mobile-grid-columns]');
-    if (choice) {
-      const columns = Number(choice.dataset.mobileGridColumns);
-      if (![1, 2, 3].includes(columns)) return;
-      closeGalleryMainSurface(true);
-      setMobileGalleryColumns(columns);
-    }
+
   });
   // Enforce presentation restrictions at all delegated mobile action entry points.
   document.addEventListener('click', (event) => {
@@ -39973,7 +39982,8 @@ function initMobileNavigation() {
       else if (!event.shiftKey && (document.activeElement === last || !dialog.contains(document.activeElement))) { event.preventDefault(); first?.focus(); }
       return;
     }
-    if (event.key === 'Escape' && mobilePageState.searchOpen && form?.contains(event.target)) {
+    if (event.key === 'Escape' && mobilePageState.searchOpen && form?.contains(event.target)
+      && !String(document.getElementById('search-input')?.value || '').trim()) {
       event.preventDefault(); setMobileSearchOpen(false); document.getElementById('mobile-search-button')?.focus(); return;
     }
     const settingsOpen = galleryMainSurfaceController?.current?.()?.key === 'mobile-settings';
@@ -40174,7 +40184,7 @@ function syncMobileArtistInfoDialog(overlay, open) {
 // A deliberate pinch changes density in stable 1/2/3-column steps. One finger
 // remains native scrolling; browser magnification remains available outside Gallery.
 function resolvePinchColumns(columns, scale) {
-  const start = [1, 2, 3].includes(columns) ? columns : 2;
+  const start = [1, 2, 3].includes(columns) ? columns : 3;
   if (!Number.isFinite(scale) || scale <= 0) return start;
   const steps = scale >= 1 ? Math.floor(Math.log(scale) / Math.log(1.28) + 1e-9)
     : -Math.floor(Math.log(1 / scale) / Math.log(1.28) + 1e-9);
@@ -40182,7 +40192,7 @@ function resolvePinchColumns(columns, scale) {
 }
 function setMobileGalleryColumns(columns) {
   if (![1, 2, 3].includes(columns) || !usesMobilePageLayout()) return false;
-  if (window.AlbumHavenDevicePreferences?.read('mobileGridColumns', 2) === columns) return false;
+  if (window.AlbumHavenDevicePreferences?.read('mobileGridColumns', 3) === columns) return false;
   const anchor = typeof virtualGrid !== 'undefined' ? virtualGrid?.captureScrollAnchor?.() : null;
   window.AlbumHavenDevicePreferences?.write('mobileGridColumns', columns);
   syncMobileGalleryControls();
@@ -40202,7 +40212,7 @@ function initMobileGalleryPinch() {
     if (event.touches.length !== 2) { gesture = null; return; }
     const span = distance(event.touches);
     if (span < 24) return;
-    gesture = { distance: span, columns: window.AlbumHavenDevicePreferences?.read('mobileGridColumns', 2) || 2 };
+    gesture = { distance: span, columns: window.AlbumHavenDevicePreferences?.read('mobileGridColumns', 3) || 3 };
     if (event.cancelable) event.preventDefault();
     closeGalleryMainSurface(false);
   }, { passive: false });
@@ -40218,6 +40228,21 @@ function initMobileGalleryPinch() {
   gallery.addEventListener('click', event => {
     if (Date.now() < suppressClickUntil) { event.preventDefault(); event.stopImmediatePropagation(); }
   }, true);
+}
+
+let mobileGalleryHintShown = false;
+function showMobileGalleryPinchHint() {
+  if (mobileGalleryHintShown || !usesMobilePageLayout() || mobilePageState.pages.length
+    || state.ui?.pendingViewTransition || shouldShowMobileHome() || ensureGalleryMainState().view === 'list') return;
+  const gallery = document.getElementById('albums-scroll');
+  if (!gallery || !gallery.querySelector('.album-card')) return;
+  mobileGalleryHintShown = true;
+  const hint = document.createElement('div');
+  hint.className = 'mobile-pinch-hint';
+  hint.setAttribute('role', 'status');
+  hint.innerHTML = '<span aria-hidden="true"><i></i><i></i></span>Pinch with two fingers to resize covers';
+  document.getElementById('shell-main-surface').appendChild(hint);
+  scheduleBrowserTimeout(() => hint.remove(), 4000);
 }
 
 // END js/runtime/mobile-navigation.js
@@ -40267,9 +40292,11 @@ function mountInPageTabs(tablist) {
 
 // BEGIN js/runtime/mobile-home.js
 
-/* Approved personal Home: the Gallery Bar owns Recent/News; in-page tabs own the body. */
+/* Home owns its GalleryBar and both tab rows as one composite page. */
+let mobileHomeBarPosition = null;
 function shouldShowMobileHome() {
   return usesMobilePageLayout() && new URL(window.location.href).searchParams.get('all_artists') !== '1'
+    && !state.ui?.pendingViewTransition
     && !state.view.all_artists_active && !String(state.view.query || '').trim() && !String(state.view.selected_artist || '').trim()
     && state.view?.shell_layout?.slots?.main_content?.content_kind !== 'discovery_center_page';
 }
@@ -40278,8 +40305,8 @@ function renderMobileHome() {
   if (!host || !shouldShowMobileHome() || host.dataset.homeMounted === 'true') return;
   const tabs = [['tracks', 'Top tracks'], ['albums', 'Top albums'], ['artists', 'Top Artists']]
     .map(([key, label]) => ({ key, label, panelId: `mobile-home-${key}` }));
-  host.innerHTML = buildInPageTabsHtml({ id: 'mobile-home-tabs', label: 'Recent listening', tabs, selectedKey: 'tracks' })
-    + tabs.map(tab => `<section class="mobile-home-empty" id="${tab.panelId}" role="tabpanel" aria-labelledby="mobile-home-tabs-${tab.key}" tabindex="0"${tab.key === 'tracks' ? '' : ' hidden'}><p>Nothing to show yet. Work in progress.</p></section>`).join('');
+  host.innerHTML = '<div id="mobile-home-recent" role="tabpanel" aria-labelledby="mobile-recents-navigation-recent">' + buildInPageTabsHtml({ id: 'mobile-home-tabs', label: 'Recent listening', tabs, selectedKey: 'tracks' })
+    + tabs.map(tab => `<section class="mobile-home-empty" id="${tab.panelId}" role="tabpanel" aria-labelledby="mobile-home-tabs-${tab.key}" tabindex="0"${tab.key === 'tracks' ? '' : ' hidden'}><p>Nothing to show yet. Work in progress.</p></section>`).join('') + '</div>';
   mountInPageTabs(host.querySelector('[role="tablist"]'));
   host.dataset.homeMounted = 'true';
 }
@@ -40287,21 +40314,24 @@ function syncMobileHome() {
   const host = document.getElementById('mobile-home');
   if (!host) return;
   const show = shouldShowMobileHome();
+  if (show) renderMobileHome();
   host.hidden = !show;
   document.getElementById('shell-main-surface')?.classList.toggle('has-mobile-home', show);
   const bar = document.querySelector('[data-gallery-bar-instance="gallery"]');
   if (bar) {
+    if (!mobileHomeBarPosition) { mobileHomeBarPosition = document.createComment('GalleryBar position'); bar.before(mobileHomeBarPosition); }
+    if (show) host.prepend(bar);
+    else mobileHomeBarPosition.after(bar);
     let tabs = bar.querySelector('.gallery-bar__home-tabs');
     if (show && !tabs) {
       tabs = document.createElement('div');
       tabs.className = 'gallery-bar__home-tabs';
       tabs.innerHTML = buildInPageTabsHtml({ id: 'mobile-recents-navigation', label: 'Home sections', selectedKey: 'recent', tabs: [
-        { key: 'recent', label: 'Recent', panelId: 'mobile-home' }, { key: 'news', label: 'News', disabled: true },
+        { key: 'recent', label: 'Recent', panelId: 'mobile-home-recent' }, { key: 'news', label: 'News', disabled: true },
       ] });
       bar.appendChild(tabs);
       mountInPageTabs(tabs.querySelector('[role="tablist"]'));
-      host.setAttribute('role', 'tabpanel');
-      host.setAttribute('aria-labelledby', 'mobile-recents-navigation-recent');
+      host.setAttribute('aria-label', 'Home');
     }
     if (tabs) tabs.hidden = !show;
     const actions = bar.querySelector('.gallery-bar__actions');
@@ -40314,7 +40344,7 @@ function syncMobileHome() {
       if (summary) summary.textContent = '';
     }
   }
-  if (show) renderMobileHome();
+  if (!show) showMobileGalleryPinchHint();
 }
 
 // END js/runtime/mobile-home.js

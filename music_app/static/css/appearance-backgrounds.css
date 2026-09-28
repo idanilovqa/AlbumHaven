@@ -667,7 +667,7 @@ html .cover-lookup-drawer {
 .selection-preview-example strong { font-size: 10px; }
 .selection-preview-example small { color: var(--appearance-muted); font-size: 9px; }
 .selection-preview-example.is-navigation-hover { background: var(--appearance-item-hover, var(--appearance-hover)); }
-.selection-preview-example.is-navigation-selected { border-left: var(--navigation-tree-selection-accent-width,3px) solid var(--navigation-tree-selection-accent-color,#34CA78); background: var(--appearance-item-selected, var(--appearance-hover)); }
+.selection-preview-example.is-navigation-selected { box-shadow: inset var(--navigation-tree-selection-accent-width,3px) 0 var(--navigation-tree-selection-accent-color,#34CA78); background: var(--appearance-item-selected, var(--appearance-hover)); }
 .selection-preview-example.is-item-hover-background { background: var(--appearance-item-action-hover-background, var(--appearance-control)); }
 .selection-preview-example.is-item-outline { border-color: var(--appearance-interaction-outline, var(--appearance-accent)); outline: 1px solid var(--appearance-interaction-outline, var(--appearance-focus-outline, var(--appearance-play, var(--appearance-accent)))); outline-offset: 1px; }
 .selection-preview-example.is-item-pressed { background: var(--appearance-item-action-pressed, var(--appearance-control)); }
@@ -1144,8 +1144,6 @@ html .cover-lookup-drawer {
   --appearance-line: var(--appearance-panel-line);
   --appearance-control: var(--appearance-panel-control);
   --appearance-card: var(--appearance-panel-control);
-  --appearance-primary-button: var(--appearance-panel-control);
-  --appearance-primary-button-ink: var(--appearance-panel-ink);
   --text: var(--appearance-panel-ink);
   --ink: var(--appearance-panel-ink);
   --muted: var(--appearance-panel-muted);
@@ -1188,8 +1186,6 @@ html .cover-lookup-drawer {
   --preview-muted: var(--preview-panel-muted);
   --preview-line: var(--preview-panel-line);
   --preview-control: var(--preview-panel-control);
-  --appearance-primary-button: var(--preview-panel-control);
-  --appearance-primary-button-ink: var(--preview-panel-ink);
   color: var(--preview-panel-ink);
   border-color: var(--preview-panel-line);
   color-scheme: var(--preview-panel-color-scheme);
@@ -1235,3 +1231,13 @@ html .cover-lookup-drawer {
   border-top: 0;
   box-shadow: 0 14px 30px #0009;
 }
+
+/* Form fields and primary actions have separate semantic surfaces. */
+:root[data-appearance-mode='light'] :is(.tag-editor-form, .settings-host, .appearance-background-editor) :is(input:not([type='checkbox']):not([type='radio']):not([type='range']):not([type='color']), select, textarea) {
+  background: color-mix(in srgb, var(--appearance-card) 85%, var(--appearance-control));
+  color: var(--appearance-ink); border-color: var(--appearance-line);
+}
+:root .tag-editor-track:not(.is-active):not(:hover):nth-child(odd) { background: var(--appearance-card, var(--panel)); }
+:root .tag-editor-track:not(.is-active):not(:hover):nth-child(even) { background: color-mix(in srgb, var(--text) 7%, var(--appearance-card, var(--panel))); }
+.appearance-device-mode button[aria-pressed='true'] { border-color: currentColor; box-shadow: inset 0 0 0 1px currentColor; font-weight: 700; }
+.appearance-device-mode button[aria-pressed='true']::before { content: '✓ '; }

@@ -306,16 +306,10 @@ function syncMobileLoopHeader() {
 }
 
 function syncMobileGalleryControls() {
-  const savedColumns = window.AlbumHavenDevicePreferences?.read('mobileGridColumns', 2);
-  const columns = [1, 2, 3].includes(savedColumns) ? savedColumns : 2;
+  const savedColumns = window.AlbumHavenDevicePreferences?.read('mobileGridColumns', 3);
+  const columns = [1, 2, 3].includes(savedColumns) ? savedColumns : 3;
   document.documentElement.style.setProperty('--mobile-gallery-columns', String(columns));
-  document.querySelectorAll('[data-mobile-grid-density]').forEach(button => {
-    button.hidden = !usesMobilePageLayout() || ensureGalleryMainState().view === 'list';
-    button.title = `Gallery zoom: ${columns} ${columns === 1 ? 'column' : 'columns'}`;
-  });
-  document.querySelectorAll('[data-mobile-grid-columns]').forEach(button => {
-    button.setAttribute('aria-pressed', String(Number(button.dataset.mobileGridColumns) === columns));
-  });
+
 }
 function prepareMobileGallerySearch(onConfirmed, skipAppearanceGuard = false) {
   if (!mobilePageState.pages.length) return true;
@@ -336,8 +330,10 @@ function setMobileSearchOpen(open) {
     document.dispatchEvent(new CustomEvent('album-haven:surface-opening', { detail: { surface: form } }));
   }
   mobilePageState.searchOpen = Boolean(open);
+  const form = document.getElementById('search-form');
   const nav = document.getElementById('mobile-navigation');
   nav?.classList.toggle('is-search-open', Boolean(open));
+  form?.closest('.app-bar')?.classList.toggle('is-search-open', Boolean(open));
   document.getElementById('mobile-search-button')?.setAttribute('aria-expanded', String(Boolean(open)));
   const input = document.getElementById('search-input');
   if (input && usesMobilePageLayout()) { input.inert = !open; input.setAttribute('aria-hidden', String(!open)); }
@@ -386,14 +382,14 @@ function initMobileNavigation() {
     const mobile = usesMobilePageLayout();
     document.documentElement.dataset.clientProfile = window.AlbumHavenDevicePreferences?.profile() || (isMobileClient() ? 'mobile' : 'web_desktop');
     if (form) {
-      if (mobile) document.getElementById('mobile-search-dock')?.appendChild(form);
+      if (mobile) document.querySelector('.app-bar-brand')?.after(form);
       else {
         placeholder.after(form);
         const input = document.getElementById('search-input');
         if (input) { input.inert = false; input.removeAttribute('aria-hidden'); }
         submit?.removeAttribute('aria-expanded');
       }
-      if (mobile) setMobileSearchOpen(mobilePageState.searchOpen);
+      if (mobile) setMobileSearchOpen(mobilePageState.searchOpen || Boolean(document.getElementById('search-input')?.value?.trim()));
     }
     promoteVisibleMobileDialogs();
     syncMobileGalleryControls();
@@ -427,20 +423,11 @@ function initMobileNavigation() {
     if (typeof renderMobileHome === 'function') renderMobileHome();
   });
   document.addEventListener('click', (event) => {
+    if (usesMobilePageLayout() && mobilePageState.searchOpen && !form?.contains(event.target)
+      && !String(document.getElementById('search-input')?.value || '').trim()) setMobileSearchOpen(false);
     if (handleMobileSettingsClick(event)) return;
     if (event.target.closest?.('[data-mobile-back]')) navigateMobileBack();
-    const density = event.target.closest?.('[data-mobile-grid-density]');
-    if (density) {
-      openGalleryMainSurface('gallery-density', density, document.getElementById('mobile-gallery-density-menu'));
-      return;
-    }
-    const choice = event.target.closest?.('[data-mobile-grid-columns]');
-    if (choice) {
-      const columns = Number(choice.dataset.mobileGridColumns);
-      if (![1, 2, 3].includes(columns)) return;
-      closeGalleryMainSurface(true);
-      setMobileGalleryColumns(columns);
-    }
+
   });
   // Enforce presentation restrictions at all delegated mobile action entry points.
   document.addEventListener('click', (event) => {
@@ -458,7 +445,8 @@ function initMobileNavigation() {
       else if (!event.shiftKey && (document.activeElement === last || !dialog.contains(document.activeElement))) { event.preventDefault(); first?.focus(); }
       return;
     }
-    if (event.key === 'Escape' && mobilePageState.searchOpen && form?.contains(event.target)) {
+    if (event.key === 'Escape' && mobilePageState.searchOpen && form?.contains(event.target)
+      && !String(document.getElementById('search-input')?.value || '').trim()) {
       event.preventDefault(); setMobileSearchOpen(false); document.getElementById('mobile-search-button')?.focus(); return;
     }
     const settingsOpen = galleryMainSurfaceController?.current?.()?.key === 'mobile-settings';
@@ -659,7 +647,7 @@ function syncMobileArtistInfoDialog(overlay, open) {
 // A deliberate pinch changes density in stable 1/2/3-column steps. One finger
 // remains native scrolling; browser magnification remains available outside Gallery.
 function resolvePinchColumns(columns, scale) {
-  const start = [1, 2, 3].includes(columns) ? columns : 2;
+  const start = [1, 2, 3].includes(columns) ? columns : 3;
   if (!Number.isFinite(scale) || scale <= 0) return start;
   const steps = scale >= 1 ? Math.floor(Math.log(scale) / Math.log(1.28) + 1e-9)
     : -Math.floor(Math.log(1 / scale) / Math.log(1.28) + 1e-9);
@@ -667,7 +655,7 @@ function resolvePinchColumns(columns, scale) {
 }
 function setMobileGalleryColumns(columns) {
   if (![1, 2, 3].includes(columns) || !usesMobilePageLayout()) return false;
-  if (window.AlbumHavenDevicePreferences?.read('mobileGridColumns', 2) === columns) return false;
+  if (window.AlbumHavenDevicePreferences?.read('mobileGridColumns', 3) === columns) return false;
   const anchor = typeof virtualGrid !== 'undefined' ? virtualGrid?.captureScrollAnchor?.() : null;
   window.AlbumHavenDevicePreferences?.write('mobileGridColumns', columns);
   syncMobileGalleryControls();
@@ -687,7 +675,7 @@ function initMobileGalleryPinch() {
     if (event.touches.length !== 2) { gesture = null; return; }
     const span = distance(event.touches);
     if (span < 24) return;
-    gesture = { distance: span, columns: window.AlbumHavenDevicePreferences?.read('mobileGridColumns', 2) || 2 };
+    gesture = { distance: span, columns: window.AlbumHavenDevicePreferences?.read('mobileGridColumns', 3) || 3 };
     if (event.cancelable) event.preventDefault();
     closeGalleryMainSurface(false);
   }, { passive: false });
@@ -703,4 +691,19 @@ function initMobileGalleryPinch() {
   gallery.addEventListener('click', event => {
     if (Date.now() < suppressClickUntil) { event.preventDefault(); event.stopImmediatePropagation(); }
   }, true);
+}
+
+let mobileGalleryHintShown = false;
+function showMobileGalleryPinchHint() {
+  if (mobileGalleryHintShown || !usesMobilePageLayout() || mobilePageState.pages.length
+    || state.ui?.pendingViewTransition || shouldShowMobileHome() || ensureGalleryMainState().view === 'list') return;
+  const gallery = document.getElementById('albums-scroll');
+  if (!gallery || !gallery.querySelector('.album-card')) return;
+  mobileGalleryHintShown = true;
+  const hint = document.createElement('div');
+  hint.className = 'mobile-pinch-hint';
+  hint.setAttribute('role', 'status');
+  hint.innerHTML = '<span aria-hidden="true"><i></i><i></i></span>Pinch with two fingers to resize covers';
+  document.getElementById('shell-main-surface').appendChild(hint);
+  scheduleBrowserTimeout(() => hint.remove(), 4000);
 }

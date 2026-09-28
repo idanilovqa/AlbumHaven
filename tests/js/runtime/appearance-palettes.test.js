@@ -438,7 +438,7 @@ test('Parchment & Pine keeps Artist Info on the light card color roles', () => {
 test('Parchment & Pine gives content cards and controls distinct beige surfaces', () => {
   const palette = runtime().palettes.find(item => item.id === 'parchment-pine');
   assert.equal(palette.tokens.card, '#FFF7E5');
-  assert.equal(palette.tokens.control, '#C8B58F');
+  assert.equal(palette.tokens.control, '#F5EEDC');
   assert.notEqual(palette.tokens.card, palette.main);
   assert.notEqual(palette.tokens.control, palette.main);
 });

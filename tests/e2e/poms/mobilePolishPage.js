@@ -119,25 +119,6 @@ export class MobilePolishPage extends MobileLayoutPage {
     await this.viewCluster.locator('[data-gallery-view-choice="covers"]').click();
   }
 
-  async nativePinch(scale) {
-    const box = await this.galleryScroll.boundingBox();
-    const center = { x: box.x + box.width / 2, y: box.y + Math.min(150, box.height / 2) };
-    const cdp = await this.page.context().newCDPSession(this.page);
-    const points = span => [0, 1].map(index => ({ x: center.x + (index ? 1 : -1) * span / 2, y: center.y, id: index }));
-    try {
-      await cdp.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: points(110) });
-      for (let step = 1; step <= 12; step++) await cdp.send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: points(110 * (1 + (scale - 1) * step / 12)) });
-      await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
-    } finally { await cdp.detach(); }
-  }
-
-  async expectGridColumns(count) {
-    // parity-check: allow-read-only-measurement-evaluate -- count computed grid tracks after a real gesture.
-    await expect.poll(async () => (await this.galleryGrid.evaluate(grid => getComputedStyle(grid).gridTemplateColumns)).split(' ').length).toBe(count);
-    // parity-check: allow-read-only-measurement-evaluate -- pinch changes application density, not browser magnification.
-    expect(await this.page.evaluate(() => window.visualViewport.scale)).toBe(1);
-  }
-
   async firstFamilySwipe() {
     await expect(this.familyBody).toBeVisible();
     // parity-check: allow-read-only-measurement-evaluate -- confirm the prepared short-phone panel has overflowing real entries.

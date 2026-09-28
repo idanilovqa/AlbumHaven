@@ -28,7 +28,8 @@
     const appearance = options.appearance && typeof options.appearance === 'object'
       ? options.appearance
       : {};
-    const artistTreeFolded = desktop && shell.artistTreeFolded === true;
+    const artistTreeFolded = desktop && (typeof shell.artistTreeFolded === 'boolean'
+      ? shell.artistTreeFolded : options.defaultCollapsed === true);
     const savedPlayerMode = readStorage(options.storage, COMPACT_PLAYER_MODE_KEY);
     const compactPlayerMode = desktop && savedPlayerMode === 'compact' ? 'compact' : 'expanded';
     const style = appearance.compact_player_style === 'floating' ? 'floating' : 'docked';
@@ -79,7 +80,7 @@
     return Math.max(0, surfaceWidth - padding);
   }
 
-  function capture() {
+  function capture(options = {}) {
     const documentObject = globalObject.document;
     const root = documentObject?.documentElement;
     if (!root) return null;
@@ -94,6 +95,7 @@
       href: globalObject.location?.href,
       viewportWidth: globalObject.innerWidth,
       appearance,
+      defaultCollapsed: options.defaultCollapsed,
     });
     layout.compactPlayerStyle = appearance.compact_player_style === 'floating' ? 'floating' : 'docked';
     layout.dockedCompactPlayerBehavior = ['follow_sidebar', 'float_on_collapse', 'artbox', 'stay_docked']

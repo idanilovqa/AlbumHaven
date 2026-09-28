@@ -51,6 +51,7 @@ ACTION_SELECTORS = MappingProxyType({
     "library.covers.lookup": (
         "#cover-lookup-drawer-button", "[data-toggle-cover-lookup-drawer]",
         "[data-open-track-modal-cover-lookup]", "[data-open-cover-lookup-task]",
+        "[data-track-modal-fast-cover-fetch]", "[data-open-track-modal-fetch-cover]",
         "[data-start-cover-lookup]", "[data-retry-cover-lookup-task]",
         "#cover-lookup-modal", "#cover-lookup-drawer",
     ),

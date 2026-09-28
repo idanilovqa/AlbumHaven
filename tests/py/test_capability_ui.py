@@ -116,3 +116,11 @@ def test_gallery_actions_follow_folder_and_version_permissions():
     }
     assert selectors <= set(projection(["viewer"])["denied_selectors"])
     assert not selectors.intersection(projection(["owner"])["denied_selectors"])
+
+
+def test_album_fast_cover_fetch_follows_cover_lookup_permission():
+    selectors = {"[data-track-modal-fast-cover-fetch]", "[data-open-track-modal-fetch-cover]"}
+    for role in ("viewer", "listener", "musician", "admin"):
+        assert selectors <= set(projection([role])["denied_selectors"])
+    for surface in ("private_web", "mobile", "tv"):
+        assert not selectors.intersection(projection(["owner"], surface)["denied_selectors"])

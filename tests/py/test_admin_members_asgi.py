@@ -402,7 +402,7 @@ def test_nonowner_editor_exposes_roles_and_preserves_explicit_legacy_grants(path
         assert all("disabled" in item for item in checked)
     else:
         assert {item["value"] for item in hidden} == {"library.browse.read", "library.playlists.create"}
-        assert all("disabled" not in item for item in inputs)
+        assert {item["value"] for item in inputs if "disabled" in item} == {"capability.move"}
         assert not any("checked" in item for item in switches)
 
 

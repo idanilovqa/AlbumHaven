@@ -55,6 +55,8 @@ function clearTriggerAnchor(surface) {
 
 function syncTriggerAnchor(surface, anchor) {
   if (!surface?.getBoundingClientRect || !anchor?.getBoundingClientRect || surface.hidden) return;
+  const previous = triggerAnchorBindings.get(surface);
+  if (previous && previous.anchor !== anchor) clearTriggerAnchor(surface);
   const anchorContext = anchor.closest?.('.shell-main-surface, .settings-outlet') ? 'content' : 'chrome';
   surface.dataset.triggerAnchorContext = anchorContext;
   anchor.dataset.triggerAnchorContext = anchorContext;
@@ -63,8 +65,6 @@ function syncTriggerAnchor(surface, anchor) {
     anchor.setAttribute?.('aria-expanded', 'false');
     clearTriggerAnchor(surface);
   });
-  const previous = triggerAnchorBindings.get(surface);
-  if (previous && previous.anchor !== anchor) clearTriggerAnchor(surface);
   const geometry = getTriggerAnchorGeometry(anchor.getBoundingClientRect(), surface.getBoundingClientRect());
   const surfaceStyle = globalThis.getComputedStyle?.(surface);
   const renderedBackground = surfaceStyle?.backgroundColor?.trim();

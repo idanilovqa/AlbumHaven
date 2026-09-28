@@ -3,11 +3,13 @@
 from dataclasses import dataclass, field
 from html.parser import HTMLParser
 from pathlib import Path
+from types import SimpleNamespace
 
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 import pytest
 
 from music_app.services.allowed_actions import AllowedActions
+from music_app.services.capability_assignments import assignment_editor
 
 
 @dataclass(eq=False)
@@ -77,6 +79,7 @@ def render():
             "visible_library_categories": ["albums", "singles"],
         }
         html = environment.get_template(name).render(
+            request=SimpleNamespace(state=SimpleNamespace(capability_ui=None)),
             url_for=lambda endpoint, **kwargs: "/static/" + kwargs["filename"],
             app_name="Album Haven",
             app_version="test",
@@ -96,6 +99,7 @@ def render():
             member=None,
             listener_defaults=[],
             capability_groups=[],
+            access_editor=assignment_editor(None, []),
         )
         return Document(html).root
 
@@ -179,14 +183,12 @@ def test_gallery_template_hosts_exact_controls_and_album_type_defaults(render):
     assert album_types.attrs["aria-label"] == "Album types"
     choices = album_types.find_all("button", **{"data-gallery-album-type": None})
     assert [choice.attrs["data-gallery-album-type"] for choice in choices] == [
-        "studio", "live", "demo", "compilation", "ep", "single",
+        "studio", "ep", "live", "demo", "compilation", "single",
     ]
     selected = [choice.attrs["data-gallery-album-type"] for choice in choices if choice.attrs.get("aria-pressed") == "true"]
     assert selected == ["studio", "ep"]
     choices_by_type = {choice.attrs["data-gallery-album-type"]: choice for choice in choices}
-    assert "disabled" not in choices_by_type["studio"].attrs
-    assert "disabled" not in choices_by_type["compilation"].attrs
-    for release_type in ("live", "demo", "ep", "single"):
+    for release_type in ("studio", "ep", "live", "demo", "compilation", "single"):
         assert "disabled" in choices_by_type[release_type].attrs
         assert choices_by_type[release_type].attrs["aria-disabled"] == "true"
     album_types.one("button", **{"data-open-non-album-tracks": "1"})
@@ -284,7 +286,7 @@ def test_search_component_defaults_to_an_accessible_embedded_submit_action(rende
     assert "hidden" in document.one(id="catalog-suggestions").attrs
 
 
-def test_search_component_allows_a_complete_button_override_and_multiple_instances(render_search_component):
+def test_search_component_appends_custom_actions_and_supports_multiple_instances(render_search_component):
     document = render_search_component('''
         {% call(action_class) search_input("filter-search", name="filter", label="Filter albums") %}
           <button class="{{ action_class }}" type="button" aria-label="Filter" data-filter="albums">Go</button>
@@ -301,5 +303,11 @@ def test_search_component_allows_a_complete_button_override_and_multiple_instanc
     assert custom.attrs["data-filter"] == "albums"
     assert custom.parent.parent is field.parent
     assert not custom.find_all("svg")
-    assert len(document.find_all("button")) == 2
-    assert document.one("button", type="submit").attrs["aria-label"] == "Find tracks"
+    assert len(document.find_all("button")) == 5
+    assert len(document.find_all("button", **{"data-search-submit": None})) == 2
+    clear_buttons = document.find_all("button", **{"data-search-clear": None})
+    assert len(clear_buttons) == 2
+    assert all("hidden" in button.attrs for button in clear_buttons)
+    assert custom.parent.children[-1] is custom
+    second_field = document.one("input", id="second-search")
+    assert second_field.parent.one("button", type="submit").attrs["aria-label"] == "Find tracks"

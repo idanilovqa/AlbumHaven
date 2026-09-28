@@ -1,0 +1,143 @@
+name: Verify and promote exact mobile header patch
+on:
+  push:
+    branches: [2026-09-28-header-preview]
+    paths: ['.github/workflows/promote-mobile-header.yml']
+  workflow_dispatch:
+permissions:
+  contents: write
+  actions: read
+concurrency:
+  group: render-demo-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_PASSWORD: isolated-ci-admin
+        ports: [5432:5432]
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+          ref: 5e758a740f3d4d672e547b36ac93be392b4c8739
+      - name: Copy only the exact verified header and parent-navigation files
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs'), path = require('path'), cp = require('child_process');
+            const source = 'cfc8f9167694b15611a57632784039654c6d0e83';
+            const destination = '5e758a740f3d4d672e547b36ac93be392b4c8739';
+            if (context.repo.owner !== 'idanilovqa' || context.repo.repo !== 'AlbumHaven'
+                || context.ref !== 'refs/heads/2026-09-28-header-preview') throw new Error('Unexpected promotion context');
+            const run = await github.rest.actions.getWorkflowRun({...context.repo, run_id: 36475139286});
+            if (run.data.conclusion !== 'success' || run.data.head_sha !== '98055be52fd86cba9627dd12e8f0540080dc657f') throw new Error('Mobile verification did not pass');
+            const applied = await github.rest.git.getCommit({...context.repo, commit_sha: source});
+            if (applied.data.parents[0]?.sha !== run.data.head_sha) throw new Error('Verified source is not the workflow-applied child');
+            const expected = {
+              'docs/mobile-header-density.md': ['8a940a415050b49c3e5fe705887fb9aede138fa5', null],
+              'music_app/static/css/mobile-layout.css': ['42d542d2d2c2b3c81ecca64bc1c5754920708051', '3c9d4313f787ac259998fbb0501de988250c0149'],
+              'tests/e2e/mobile-feedback/mobileHeader.spec.js': ['4c115ab3b8de2a2039337c0a9c8aff453c7d5e6b', null],
+              'tests/e2e/poms/mobileHeaderPage.js': ['df6b13ba6e1910f4973286fb98469d06fa39fbd8', null],
+              'music_app/static/js/runtime/mobile-navigation.js': ['6ebc7d94e8f57805d1995053f14f7c10c9d359c5', '75d6df2a55c7762d9d4f923e371417c5879ece75'],
+              'music_app/static/js/runtime/bootstrap-gallery-event-handlers.js': ['56b2de40d3b72be3d2df948dda704d9b6726a79e', 'fe8d722725a2ab5ec9b07d6f7760f78d4206a27f'],
+              'tests/js/runtime/mobile-feedback.test.js': ['b62634f9249d08c22fe5629cd979a5cd122eb08c', '850cc999f9b3e79fff57da4bf1bcf4cdab1b87a8'],
+              'music_app/static/js/runtime-bundle.js': ['2505d5ee4c87b7c0977d98a3af88a7b24bd07033', '9898b91c76dc12f0b6fe284995085a9f7efac3b2'],
+            };
+            const base = await github.rest.git.getRef({...context.repo, ref: 'heads/2026-09-25-render-demo'});
+            const head = await github.rest.git.getRef({...context.repo, ref: 'heads/2026-09-25-mobile-layout'});
+            if (base.data.object.sha !== destination || head.data.object.sha !== source) throw new Error('A branch moved; reconcile before retrying');
+            for (const [name, [blob, previous]] of Object.entries(expected)) {
+              let current = null;
+              try { current = cp.execFileSync('git', ['rev-parse', 'HEAD:' + name], {encoding:'utf8', stdio:['ignore','pipe','ignore']}).trim(); } catch (error) { if (previous !== null) throw error; }
+              if (current !== previous) throw new Error('Destination changed: ' + name);
+              const result = await github.rest.repos.getContent({...context.repo, path: name, ref: source});
+              if (result.data.type !== 'file' || result.data.sha !== blob) throw new Error('Source hash mismatch: ' + name);
+              const content = result.data.encoding === 'base64' ? result.data
+                : (await github.rest.git.getBlob({...context.repo, file_sha: blob})).data;
+              if (content.encoding !== 'base64') throw new Error('Unexpected source encoding');
+              fs.mkdirSync(path.dirname(name), {recursive:true});
+              fs.writeFileSync(name, Buffer.from(content.content, 'base64'));
+              if (cp.execFileSync('git', ['hash-object', name], {encoding:'utf8'}).trim() !== blob) throw new Error('Copied hash mismatch');
+            }
+            fs.writeFileSync(process.env.RUNNER_TEMP + '/header-promotion.json', JSON.stringify({source, destination, expected}));
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Build the production runtime bundle
+        run: node scripts/build-runtime-bundle.cjs
+      - name: Install dependencies
+        run: |
+          npm ci
+          python -m pip install -r requirements.txt httpx
+      - name: Focused navigation regression checks on the composed demo
+        run: node --test tests/js/runtime/mobile-feedback.test.js
+      - name: Deployment guard tests
+        run: python -m unittest discover -s tests/py -p test_render_demo_launcher.py -v
+      - name: Provision disposable database with a non-superuser owner
+        env:
+          PGPASSWORD: isolated-ci-admin
+        run: |
+          psql -h 127.0.0.1 -U postgres -v ON_ERROR_STOP=1 <<'SQL'
+          CREATE ROLE demo_owner LOGIN CREATEROLE PASSWORD 'isolated-ci-owner';
+          CREATE DATABASE album_haven_ci_render_demo OWNER demo_owner;
+          SQL
+      - name: Upgrade the legacy demo, repeat startup and verify normal authentication
+        run: python scripts/render_demo_smoke.py
+      - name: Promote the verified files without merging other branch work
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs'), cp = require('child_process');
+            const {source, destination, expected} = JSON.parse(fs.readFileSync(process.env.RUNNER_TEMP + '/header-promotion.json', 'utf8'));
+            const head = await github.rest.git.getRef({...context.repo, ref: 'heads/2026-09-25-mobile-layout'});
+            const base = await github.rest.git.getRef({...context.repo, ref: 'heads/2026-09-25-render-demo'});
+            if (head.data.object.sha !== source || base.data.object.sha !== destination) throw new Error('Branch moved during demo checks');
+            const tree = [];
+            for (const [name, [sha]] of Object.entries(expected)) {
+              if (cp.execFileSync('git', ['hash-object', name], {encoding:'utf8'}).trim() !== sha) throw new Error('Verified file changed: ' + name);
+              tree.push({path:name, mode:'100644', type:'blob', sha});
+            }
+            const commit = await github.rest.git.getCommit({...context.repo, commit_sha:destination});
+            const updatedTree = await github.rest.git.createTree({...context.repo, base_tree:commit.data.tree.sha, tree});
+            const updated = await github.rest.git.createCommit({...context.repo, message:'fix(mobile): deploy compact headers and retained gallery parent navigation', tree:updatedTree.data.sha, parents:[destination]});
+            await github.rest.git.updateRef({...context.repo, ref:'heads/2026-09-25-render-demo', sha:updated.data.sha, force:false});
+            console.log('VERIFIED_HEADER_DEPLOY_COMMIT ' + updated.data.sha);
+      - name: Verify the public deployment serves the exact reviewed CSS and runtime
+        shell: python
+        run: |
+          import hashlib, pathlib, time, urllib.error, urllib.parse, urllib.request
+          origin = 'https://albumhaven.onrender.com'
+          assets = ['css/mobile-layout.css', 'js/runtime-bundle.js']
+          expected = {name: hashlib.sha256((pathlib.Path('music_app/static') / name).read_bytes()).hexdigest() for name in assets}
+          deadline = time.monotonic() + 300
+          while True:
+              try:
+                  with urllib.request.urlopen(origin + '/', timeout=15) as response:
+                      target = urllib.parse.urlsplit(response.url)
+                      assert response.status == 200 and target.scheme == 'https' and target.netloc == 'albumhaven.onrender.com' and target.path == '/login'
+                      assert b'Album Haven sign in' in response.read(1048576)
+                  with urllib.request.urlopen(origin + '/health', timeout=15) as response:
+                      assert response.status == 200
+                  for name, checksum in expected.items():
+                      request = urllib.request.Request(origin + '/static/' + name + '?header-verification=' + checksum[:16], headers={'Cache-Control': 'no-cache'})
+                      with urllib.request.urlopen(request, timeout=15) as response:
+                          assert response.status == 200
+                          assert hashlib.sha256(response.read(4194304)).hexdigest() == checksum, 'Waiting for the verified deployment assets'
+                  print('PASS: public HTTPS, normal login, health, and exact verified CSS/runtime SHA256 hashes ' + str(expected))
+                  break
+              except (AssertionError, urllib.error.URLError, TimeoutError):
+                  if time.monotonic() >= deadline:
+                      raise RuntimeError('Public deployment verification did not pass within five minutes') from None
+                  time.sleep(10)

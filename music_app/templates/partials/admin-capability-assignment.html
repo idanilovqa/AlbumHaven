@@ -35,6 +35,9 @@
   {% if access_editor.unlisted_keys %}<p data-retained-grants>Retained individual grants still authorize their actions, even when the corresponding capability above is off: {{ access_editor.unlisted_keys | join(', ') }}. Choose “Use selected roles only” to remove these grants.</p>{% endif %}
   {% if access_editor.unmanaged_keys %}<p>Grants outside this editor are preserved: {{ access_editor.unmanaged_keys | join(', ') }}. Removing library access revokes all current-library grants.</p>{% endif %}
   <p data-role-summary aria-live="polite">Role selections and individual capabilities are saved together.</p>
-  {{ ui_button('Use selected roles only', disabled=not access_editor.role_keys, attributes={'data-roles-only': true}) }}
-  {{ on_page_alert('For a new user, selecting a role replaces untouched legacy Listener defaults. Existing users keep their explicit grants unless you choose “Use selected roles only”. To avoid locking yourself out, keep Admin and library access on your own account.', role='note', class_name='role-note') }}
+  <div class="roles-only-action">
+    {{ ui_button('Use selected roles only', disabled=not access_editor.role_keys, attributes={'data-roles-only': true, 'aria-describedby': 'roles-only-help'}) }}
+    <p id="roles-only-help">Select at least one role first. This removes individual grants and keeps the selected roles’ permissions. Changes apply only when you select {{ 'Save changes' if member else 'Create user' }}.</p>
+  </div>
+  {{ on_page_alert('New users start with Listener selected. Roles add together. Existing users keep their individual grants unless you choose “Use selected roles only”. To avoid locking yourself out, keep Admin and library access on your own account.', role='note', class_name='role-note') }}
 </section>

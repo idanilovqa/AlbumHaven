@@ -1,5 +1,11 @@
-{% macro gallery_bar(title, summary='', class_name='') -%}
+{% from "partials/button.html" import ui_link %}
+{% macro gallery_bar(title, summary='', class_name='', back_href='', back_label='Back') -%}
 <header class="gallery-bar{% if class_name %} {{ class_name }}{% endif %}">
+  {% if back_href %}
+  {% call ui_link('', back_href, variant='icon', class_name='action-button gallery-bar__back', attributes={'aria-label': back_label, 'title': back_label}) %}
+    <svg class="ui-icon action-button__icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="m10 5-7 7 7 7M3 12h18"/></svg>
+  {% endcall %}
+  {% endif %}
   <div class="gallery-bar__context"><h1 class="gallery-bar__title">{{ title }}</h1>{% if summary %}<p class="gallery-bar__summary">{{ summary }}</p>{% endif %}</div>
   <div class="gallery-bar__actions">{% if caller is defined %}{{ caller() }}{% endif %}</div>
 </header>

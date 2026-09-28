@@ -62,8 +62,9 @@
 }
 .settings-host .invitation-copy-fallback .admin-button { margin-top: 10px; }
 .settings-host .detail-main { width: min(970px, 100%); }
-.settings-host .detail-back { display: inline-flex; margin: 0; font-size: 13px; }
 .settings-host .detail-heading { margin-bottom: 25px; }
+.settings-host .roles-only-action { display: grid; justify-items: start; gap: 8px; margin-bottom: 18px; }
+.settings-host .roles-only-action p { margin: 0; color: var(--muted); font-size: 12px; line-height: 1.5; }
 .settings-host .detail-person { margin: 0 0 18px; display: flex; align-items: center; gap: 13px; }
 .settings-host .admin-detail-form { display: grid; }
 .settings-host .detail-field { margin-bottom: 14px; display: grid; grid-template-columns: 220px minmax(0, 1fr); align-items: start; gap: 18px; }

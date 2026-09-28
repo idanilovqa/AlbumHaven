@@ -166,6 +166,8 @@
   outline-offset: -1px !important;
   box-shadow: none;
 }
+.ui-button:disabled,
+.ui-button[aria-disabled='true'],
 .action-button:disabled,
 .action-button[aria-disabled='true'] {
   opacity: 0.38;

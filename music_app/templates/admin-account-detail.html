@@ -30,9 +30,7 @@
     <div class="settings-outlet" data-settings-outlet>
     <script id="admin-allowed-actions" type="application/json">{{ allowed_actions.as_payload() | tojson }}</script>
     <section class="settings-main detail-main">
-      {% call gallery_bar('Edit user' if member else 'Add user', '' if member else 'The user will choose their password after opening a one-time invitation link.', 'detail-heading') %}
-        {{ ui_link('← Back to users', '/admin/members', size='small', class_name='detail-back') }}
-      {% endcall %}
+      {{ gallery_bar('Edit user' if member else 'Add user', '' if member else 'The user will choose their password after opening a one-time invitation link.', 'detail-heading', back_href='/admin/members', back_label='Back to users') }}
       {% if member %}<div class="detail-person"><span class="member-avatar" aria-hidden="true">{{ member.username[:2] | upper }}</span><span><strong>{{ member.username }}</strong><small>{{ member.contact_email }}</small></span></div>{% endif %}
 
       {{ on_page_alert(severity='error', hidden=true, class_name='admin-form-error', attributes={'data-admin-form-error': ''}) }}

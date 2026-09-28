@@ -37,7 +37,7 @@
 .gallery-anchored-menu[hidden] { display: none; }
 .gallery-menu-title { display: block; padding: 7px 8px; color: var(--muted); font-size: .66rem; letter-spacing: .12em; text-transform: uppercase; }
 .gallery-switch, .gallery-type-choice, .gallery-menu-action { width: 100%; min-height: 40px; display: flex; align-items: center; gap: 10px; padding: 0 8px; border: 0; border-radius: 7px; background: transparent; color: inherit; text-align: left; cursor: pointer; }
-.gallery-switch:hover, .gallery-type-choice:hover, .gallery-menu-action:hover { background: var(--dropdown-item-hover-background, var(--appearance-item-hover, color-mix(in srgb, var(--panel) 82%, white 8%))); }
+.gallery-type-choice:hover, .gallery-menu-action:hover { background: var(--dropdown-item-hover-background, var(--appearance-item-hover, color-mix(in srgb, var(--panel) 82%, white 8%))); }
 .gallery-switch:focus-visible, .gallery-type-choice:focus-visible, .gallery-menu-action:focus-visible { outline: 2px solid var(--appearance-interaction-outline, var(--appearance-focus-outline, var(--appearance-play, #55c7ff))); outline-offset: 1px; }
 .gallery-switch__track { width: 36px; height: 20px; flex: 0 0 36px; display: flex; margin-left: auto; padding: 2px; border-radius: 999px; background: #58615f; transition: background-color 150ms ease; }
 .gallery-switch[aria-checked="true"] .gallery-switch__track,

@@ -7,5 +7,5 @@
 {%- endmacro %}
 
 {% macro ui_link(label, href, variant='secondary', size='medium', class_name='', attributes={}) -%}
-<a href="{{ href }}" class="button ui-button ui-button--{{ variant }} ui-button--{{ size }}{% if class_name %} {{ class_name }}{% endif %}"{% for key, item in attributes.items() %}{% if item is sameas true %} {{ key }}{% elif item is not sameas false and item is not none %} {{ key }}="{{ item | forceescape }}"{% endif %}{% endfor %}><span class="ui-button__content">{{ label }}</span></a>
+<a href="{{ href }}" class="button ui-button ui-button--{{ variant }} ui-button--{{ size }}{% if class_name %} {{ class_name }}{% endif %}"{% for key, item in attributes.items() %}{% if item is sameas true %} {{ key }}{% elif item is not sameas false and item is not none %} {{ key }}="{{ item | forceescape }}"{% endif %}{% endfor %}><span class="ui-button__content">{% if caller is defined %}{{ caller() }}{% else %}{{ label }}{% endif %}</span></a>
 {%- endmacro %}

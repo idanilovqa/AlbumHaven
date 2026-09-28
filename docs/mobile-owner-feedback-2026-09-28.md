@@ -39,11 +39,19 @@ Generated-media preview: https://albumhaven.onrender.com
 - The Postgres root-browse route rejected the existing All artists flag. It now accepts that normal request and preserves its view state.
 - Clearing a pending search through the cached-gallery path could leave loading visible. The retained-view path now dismisses the pending loader.
 - Rebuilding cards during a pinch could detach its touch target. Density is committed when the gesture ends.
+- A replacement request now acquires any pending loader, including preserve-scroll requests; background startup refreshes no longer dismiss Sources.
 - Home’s GalleryBar is moved only when its owning page changes, avoiding repeated reparenting during gallery updates.
 
 ## Verification status
 
-Final cloud results and deployed commit are pending. This document is a request map, not a completion claim until those results are recorded.
+Verified source: `c70d04ed04a4489c51ea469695e60db69db0e26f`.
+[Mobile Layout Verification run 36388913943](https://github.com/idanilovqa/AlbumHaven/actions/runs/36388913943) passed: 587 JavaScript tests, 23 preference/template/generated-media Python tests, 16 root-browse Python tests, seven baseline browser scenarios and 34 extended browser scenarios. Production parity passed. Evidence snapshot: `d0f43092cfa17d27140c6384faaaaea7fb6b96b5`.
+
+Generated-media startup and repeat-start preservation passed in [Render staging run 36388265948](https://github.com/idanilovqa/AlbumHaven/actions/runs/36388265948), against staging `7aeb756b20c86adbfb3f18981e8ae8a08749b83d`. Staging subsequently received only the final browser contrast-measurement correction. The launcher preserves existing accounts, password hashes, identities, preferences, listening history, loops and generated cover selections.
+
+The review completed two full relevant-diff passes and reassessed the resulting fixes. Final screenshots were inspected for Black, Paper and Parchment & Pine, including desktop field readability and alternating tag rows. Input contrast measurements composite translucent focus fills over their actual surface; the 4.5:1 threshold remains intact.
+
+Deployment and public verification are recorded in the delivery report after Render finishes serving the promoted source.
 
 The browser suites use the production ASGI application, ordinary routes, isolated PostgreSQL and generated media. Added cases cover three palettes, real native pinch gestures, loader ownership, search geometry, appearance save/cancel, selected covers, backdrop dismissal, player spacing and desktop tag fields/stripes. Existing playback, loops, account, navigation and responsive-transition scenarios remain in the run.
 

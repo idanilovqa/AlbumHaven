@@ -120,6 +120,7 @@ test('mobile Problematic Files search, filters and exact exceptions survive relo
   await expect(rules.exclusionReason(row)).toHaveText(reason);
   await expect(rules.revertButtonForRow(row)).not.toBeVisible();
   await page.reload();
+  await ui.selectSubsection('problem-ignores');
   await expect(rules.exclusionReason(rules.exclusionRowContaining('Collected Skies 02'))).toHaveText(reason);
 });
 

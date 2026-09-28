@@ -117,6 +117,10 @@
 :root .trigger-anchor-surface:not(.artist-family-panel)[data-trigger-anchor-edge="bottom"] {
   clip-path: inset(-80px -80px 0 -80px);
 }
+/* Nested popups must escape the parent's shadow/anchor clipping boundary. */
+:root .trigger-anchor-surface:not(.artist-family-panel):has(.trigger-anchor-surface:not([hidden])) {
+  clip-path: none;
+}
 
 /* Selected accents stay separate from the chosen interaction color. */
 :root .trigger-anchor-open:is(:hover, :focus-visible) { --trigger-anchor-cap: var(--appearance-interaction-outline, var(--appearance-play)); }

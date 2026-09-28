@@ -126,6 +126,7 @@ jobs:
           PLAYWRIGHT_CHROME_EXECUTABLE: ${{ steps.chrome.outputs.chrome-path }}
         run: |
           export PLAYWRIGHT_PYTHON="$(which python)"
+          npx playwright test --config=playwright.component.config.js triggerAnchorSurface.spec.js --grep "nested calendar dates"
           npx playwright test --config=playwright.mobile-layout.config.js
       - name: Verify extended mobile feedback scenarios
         if: ${{ !cancelled() && steps.chrome.outcome == 'success' }}

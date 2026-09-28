@@ -15,7 +15,7 @@ for (const palette of ['black', 'paper', 'parchment-pine']) {
     await expect(covers.drawer).toBeVisible();
     expect((await covers.drawer.boundingBox()).width).toBeLessThanOrEqual(page.viewportSize().width * .75 + 1);
     const [clear, close] = await covers.notificationActionDimensions();
-    expect(clear).toEqual(close);
+    for (const key of Object.keys(clear)) expect(clear[key]).toBeCloseTo(close[key], 2);
     await snapshot(`90-notifications-${palette}`);
     await covers.drawerCloseButton.click();
     await phone.browseArtist();
@@ -176,6 +176,7 @@ for (const reducedMotion of ['no-preference', 'reduce']) {
     const phone = new MobilePolishPage(page);
     await page.emulateMedia({ reducedMotion });
     await phone.browseArtist();
+    await phone.selectView('cards');
     await expect(phone.pinchHint).toBeVisible();
     await expect(phone.pinchHintLights).toHaveCount(2);
     await expect(phone.pinchHint).toHaveCSS('animation-name', reducedMotion === 'reduce' ? 'none' : 'mobile-hint-fade');

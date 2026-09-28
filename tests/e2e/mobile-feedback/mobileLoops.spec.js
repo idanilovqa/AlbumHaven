@@ -33,7 +33,9 @@ for (const palette of ['black', 'parchment-pine']) {
       await page.touchscreen.tap(anchor.x + anchor.width / 2, anchor.y + anchor.height / 2);
       await expect(menu).not.toBeVisible();
       await trigger.tap();
-      await loops.pageTitle.tap();
+      const popup = await menu.boundingBox();
+      expect(popup.x).toBeGreaterThan(0);
+      await page.touchscreen.tap(popup.x / 2, popup.y + popup.height / 2);
       await expect(menu).not.toBeVisible();
     }
   });

@@ -603,3 +603,113 @@ html[data-client-profile="mobile"] :is([data-open-problematic-album-folder], [da
   #utility-modal.is-mobile-page .utility-detail-context-actions { grid-column: 1 / -1; grid-row: 2; justify-content: flex-start; }
   :root .is-mobile-page .utility-loop-entry .utility-loop-repeat.is-active:is(button, :hover, :active, :focus) { background: var(--appearance-primary-button) !important; color: var(--appearance-primary-button-ink) !important; border-color: var(--appearance-primary-button); }
 }
+
+/* Phone touch-feedback pass: content edges, drawer ownership and compact footers. */
+@media (max-width: 900px) {
+  html:has(.shell-layout, .settings-host), body:has(.shell-layout, .settings-host) {
+    height: 100dvh; overflow: hidden; overscroll-behavior: none;
+  }
+  /* A fixed player's old desktop shadow obscured an entire row above its edge. */
+  :root .global-player { box-shadow: none !important; backdrop-filter: none; }
+  .shell-main-surface, .settings-host .settings-outlet { padding-bottom: 0; }
+  #albums-scroll, #mobile-page-outlet { margin-bottom: 0; }
+
+  :root :is(.shell-layout .shell-navigation-rail, .settings-host .settings-nav, .mobile-settings-drawer.gallery-anchored-menu) {
+    top: var(--app-bar-height); bottom: var(--player-height);
+    margin: 0; border: 0 !important; outline: 0; border-radius: 0 16px 16px 0;
+    background: var(--appearance-panel-background, var(--app-chrome));
+    box-shadow: 18px 0 36px rgb(0 0 0 / .33);
+    overscroll-behavior: contain; touch-action: pan-y;
+  }
+  /* Keep navigation controls fixed; the bounded list owns vertical scrolling. */
+  .shell-layout .shell-navigation-rail { display: flex; flex-direction: column; overflow: hidden; }
+  .shell-layout #artist-tree-expanded { height: 100%; }
+  .shell-layout #sidebar-list { overscroll-behavior: contain; touch-action: pan-y; }
+  :root :is(.shell-navigation-rail-backdrop, .settings-nav-backdrop) {
+    top: var(--app-bar-height); bottom: var(--player-height);
+    border: 0; box-shadow: none; border-radius: 0; touch-action: none;
+  }
+  /* Only the drawer scrolls. Overflow:hidden retains the underlying scroll offset. */
+  body:has(.is-mobile-drawer-open, .is-settings-navigation-open, .mobile-settings-drawer.is-open, .artist-family-panel.is-open)
+    :is(#albums-scroll, #mobile-page-outlet, .mobile-home, .settings-outlet) {
+    overflow: hidden !important; touch-action: none; overscroll-behavior: none;
+  }
+
+  :root .cover-lookup-drawer-actions .action-button {
+    width: 40px; min-width: 40px; height: 40px; min-height: 40px; padding: 0;
+  }
+  :root .cover-lookup-drawer-actions .action-button svg { width: 24px; height: 24px; stroke-width: 1.7; }
+
+  :root #utility-modal.is-mobile-page .utility-modal-footer {
+    min-height: 0; margin: 0; padding: 8px 0; border: 0; box-shadow: none;
+  }
+  :root #utility-modal.is-mobile-page .editor-footer {
+    min-height: 0; margin: 0; padding: 0; border: 0; gap: 8px;
+    grid-template-rows: auto; flex-wrap: nowrap; box-shadow: none;
+  }
+  /* Save/error announcements stay in the accessibility tree, not a second footer row. */
+  :root .is-mobile-page :is(.editor-footer-status, #cover-lookup-modal-status:not(:has([data-on-page-alert], .on-page-alert, [role="alert"])), #cover-lookup-search-hint) {
+    position: absolute; width: 1px; height: 1px; min-height: 0;
+    padding: 0; margin: -1px; border: 0; overflow: hidden;
+    clip-path: inset(50%); white-space: nowrap;
+  }
+  :root #cover-lookup-modal.is-mobile-page .cover-lookup-modal-actions {
+    min-height: 0; padding: 8px 0; margin: 0; border: 0; box-shadow: none;
+    display: flex; align-items: center; justify-content: space-between; gap: 8px; position: relative;
+  }
+  :root #cover-lookup-modal.is-mobile-page .cover-lookup-search-action { order: 0; margin: 0; width: auto; }
+  :root #cover-lookup-modal.is-mobile-page .cover-lookup-modal-actions-right { order: 1; margin: 0; }
+  :root #cover-lookup-modal.is-mobile-page #cover-lookup-find-better-button {
+    background: transparent; border: 1px solid var(--appearance-line, var(--border));
+    color: var(--appearance-ink, var(--text)); font-weight: 600;
+    min-height: 36px; padding-inline: 12px; box-shadow: none;
+  }
+  :root #cover-lookup-modal.is-mobile-page #cover-lookup-find-better-button:not(:disabled):hover {
+    background: var(--appearance-hover, var(--panel));
+  }
+
+  /* The existing Library Status bar was mistakenly hidden with the background gallery. */
+  .shell-main-surface.has-library-loader:not(.has-mobile-page) > #library-status-gallery-bar { display: flex !important; }
+  #library-status-gallery-bar { padding: 0 0 6px; align-items: center; margin: 0; }
+  #library-status-gallery-bar > .gallery-bar__context { display: flex; align-items: center; gap: 8px; }
+  :root #library-loader-back-button { background: transparent; border: 0; box-shadow: none; width: 40px; height: 40px; }
+  #library-loader-back-button svg { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width: 1.7; }
+  #library-scan-gallery-summary, #library-loader.is-scan-page #library-state-title { display: none; }
+  #library-loader.is-scan-page { padding-top: 12px; }
+
+  /* A single centered header group when the inline album identity has scrolled away. */
+  #mobile-page-header:not([data-album-identity-in-body="true"]) { align-items: center; }
+  #mobile-page-header:not([data-album-identity-in-body="true"]) > :is(.gallery-bar__context, .mobile-page-cover, .mobile-bar-action) { align-self: center; }
+  #mobile-page-header .gallery-bar__summary { margin: 2px 0 0; }
+
+  .album-card .gallery-card-info { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 6px; align-content: start; }
+  .album-card .gallery-card-info > .album-title { grid-column: 1; grid-row: 1; margin: 0; min-width: 0; align-self: center; }
+  .album-card .gallery-card-info > .rating-row { grid-column: 2; grid-row: 1; align-self: center; margin: 0; }
+  .album-card .gallery-card-info:not(:has(> .rating-row:not([data-rating-value="0"]))) > .album-title { grid-column: 1 / -1; }
+  .album-card .gallery-card-info > .album-meta-row { grid-column: 1 / -1; grid-row: 2; }
+  .album-card .gallery-card-info > .chip-row { grid-column: 1 / -1; grid-row: 3; }
+  .album-card .rating-text { font-size: clamp(8px, 8cqi, 11px); white-space: nowrap; padding: 2px 4px; }
+
+  /* Keep gutter width stable; only its initial paint is hidden. */
+  #mobile-page-outlet[data-mobile-page-kind="album"]:not([data-page-interacted="true"]) {
+    scrollbar-color: transparent transparent;
+  }
+  #mobile-page-outlet[data-mobile-page-kind="album"]:not([data-page-interacted="true"])::-webkit-scrollbar-thumb {
+    background: transparent;
+  }
+}
+@media (max-width: 900px) and (forced-colors: active) {
+  #mobile-page-outlet[data-mobile-page-kind="album"] { scrollbar-color: auto; }
+}
+
+@media (max-width: 900px) {
+  /* Failures remain visible above the compact button row, never silently clipped. */
+  #cover-lookup-modal.is-mobile-page #cover-lookup-modal-status:has([data-on-page-alert], .on-page-alert, [role="alert"]) {
+    position: absolute; inset: auto 0 100%; max-height: 180px; overflow-y: auto;
+    background: var(--appearance-main-surface, var(--panel)); z-index: 1;
+  }
+}
+
+@media (max-width: 900px) {
+  #cover-lookup-modal.is-mobile-page .cover-lookup-section + .cover-lookup-section { margin-top: 20px; }
+}

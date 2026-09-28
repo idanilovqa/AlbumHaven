@@ -578,9 +578,9 @@ let detachedGalleryBarNextSibling = null;
 function buildLibraryStatusBarHtml() {
   return `<section class="gallery-bar gallery-bar--scan" id="library-status-gallery-bar" data-gallery-bar data-gallery-bar-instance="library-status" aria-label="Library Status Page controls">
     <div class="gallery-bar__context">
-      <button class="gallery-action-button library-loader-back-button" id="library-loader-back-button" type="button" data-close-scan-page="1" aria-label="Back to previous library view"><span class="library-loader-back-icon" aria-hidden="true">&#8592;</span></button>
+      ${ButtonComponent.renderActionButton({ icon: 'back', presentation: 'bare', ariaLabel: 'Back to previous library view', className: 'gallery-action-button library-loader-back-button', attributes: { id: 'library-loader-back-button', 'data-close-scan-page': '1' } })}
       <div class="library-scan-gallery-copy">
-        <div class="gallery-bar__title"><span>Library Status Page</span></div>
+        <div class="gallery-bar__title"><span>Library State</span></div>
         <span class="gallery-bar__summary" id="library-scan-gallery-summary" aria-live="polite">Preparing status...</span>
       </div>
     </div>

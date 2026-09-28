@@ -40,7 +40,7 @@ function renderTrackModalLoadingState(album) {
   }
   els.cover.innerHTML = `
     <div class="track-modal-cover-shell">
-      <div class="cover-placeholder">Loading cover art...</div>
+      ${buildAlbumArtboxHtml({ state: 'loading', label: 'Loading cover art' })}
     </div>
   `;
   if (els.missingWarning) {

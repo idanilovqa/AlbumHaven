@@ -1241,7 +1241,6 @@ html .cover-lookup-drawer {
 :root .tag-editor-track:not(.is-active):not(:hover):nth-child(odd) { background: var(--appearance-card, var(--panel)); }
 :root .tag-editor-track:not(.is-active):not(:hover):nth-child(even) { background: color-mix(in srgb, var(--text) 7%, var(--appearance-card, var(--panel))); }
 .appearance-device-mode button[aria-pressed='true'] { border-color: currentColor; box-shadow: inset 0 0 0 1px currentColor; font-weight: 700; }
-.appearance-device-mode button[aria-pressed='true']::before { content: '✓ '; }
 
 /* Content surfaces retain their palette when moved out of the page or resized.
    Chrome drawers deliberately use the app-bar companion instead. */

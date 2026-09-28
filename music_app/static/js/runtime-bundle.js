@@ -3855,7 +3855,9 @@ function buildAlbumArtboxHtml(config = {}) {
   const actionHtml = String(config.actionHtml || '');
   const content = state === 'missing' || state === 'empty'
     ? buildMissingAlbumMarkHtml()
-    : (coverHtml || `<span class="album-artbox__placeholder">${state === 'loading' ? 'Loading cover art' : 'No cover art'}</span>`);
+    : (coverHtml || (state === 'loading'
+      ? '<img class="album-artbox__loading" src="/static/images/loading-idea.png" alt="" aria-hidden="true">'
+      : '<span class="album-artbox__placeholder">No cover art</span>'));
   return `<span class="album-artbox album-artbox--${state}" data-album-artbox-state="${state}" aria-label="${escapeHtml(label)}">${content}${overlayHtml ? `<span class="album-artbox__overlay">${overlayHtml}</span>` : ''}${actionHtml ? `<span class="album-artbox__action">${actionHtml}</span>` : ''}</span>`;
 }
 
@@ -5086,9 +5088,9 @@ let detachedGalleryBarNextSibling = null;
 function buildLibraryStatusBarHtml() {
   return `<section class="gallery-bar gallery-bar--scan" id="library-status-gallery-bar" data-gallery-bar data-gallery-bar-instance="library-status" aria-label="Library Status Page controls">
     <div class="gallery-bar__context">
-      <button class="gallery-action-button library-loader-back-button" id="library-loader-back-button" type="button" data-close-scan-page="1" aria-label="Back to previous library view"><span class="library-loader-back-icon" aria-hidden="true">&#8592;</span></button>
+      ${ButtonComponent.renderActionButton({ icon: 'back', presentation: 'bare', ariaLabel: 'Back to previous library view', className: 'gallery-action-button library-loader-back-button', attributes: { id: 'library-loader-back-button', 'data-close-scan-page': '1' } })}
       <div class="library-scan-gallery-copy">
-        <div class="gallery-bar__title"><span>Library Status Page</span></div>
+        <div class="gallery-bar__title"><span>Library State</span></div>
         <span class="gallery-bar__summary" id="library-scan-gallery-summary" aria-live="polite">Preparing status...</span>
       </div>
     </div>
@@ -5962,7 +5964,7 @@ function openGalleryMainSurface(key, anchor, surface, align = 'right') {
   surface.classList?.add?.('is-open');
   surface.setAttribute?.('aria-hidden', 'false');
   if (surface.matches?.('.mobile-settings-drawer')) {
-    surface.style.top = `${Math.round(document.getElementById('shell-main-surface').getBoundingClientRect().top)}px`;
+    surface.style.top = `${Math.max(0, Math.round(document.querySelector('#app-shell .app-bar').getBoundingClientRect().bottom))}px`;
   } else if (surface.matches?.('.gallery-anchored-menu, .artist-info-overlay')) positionGalleryAnchoredSurface(surface, anchor, align);
   if (surface.matches?.('.artist-family-panel')) positionArtistFamilyPanelEnvelope(surface, anchor);
   if (surface.matches?.('.artist-info-overlay') && typeof syncMobileArtistInfoDialog === 'function') syncMobileArtistInfoDialog(surface, true);
@@ -8771,7 +8773,7 @@ function openArtistsDrawer() {
   if (typeof activateTriggerSurface === 'function') activateTriggerSurface(rail, () => closeArtistsDrawer({ restoreFocus: false }));
   state.ui.artistsDrawerOpen = true;
   syncArtistsDrawerVisibility();
-  document.querySelector?.('#artist-tree-expanded [data-close-artists-drawer]')?.focus?.();
+  document.querySelector?.('#artist-tree-expanded [data-close-artists-drawer]')?.focus?.({ preventScroll: true });
   return true;
 }
 
@@ -8781,7 +8783,7 @@ function closeArtistsDrawer(options = {}) {
   if (typeof clearTriggerAnchor === 'function') clearTriggerAnchor(document.getElementById('shell-navigation-rail'));
   syncArtistsDrawerVisibility();
   if (wasOpen && options.restoreFocus !== false) {
-    (document.getElementById('mobile-library-button') || document.getElementById('artists-drawer-button'))?.focus?.();
+    (document.getElementById('mobile-library-button') || document.getElementById('artists-drawer-button'))?.focus?.({ preventScroll: true });
   }
   return wasOpen;
 }
@@ -11272,7 +11274,7 @@ function renderTrackModalLoadingState(album) {
   }
   els.cover.innerHTML = `
     <div class="track-modal-cover-shell">
-      <div class="cover-placeholder">Loading cover art...</div>
+      ${buildAlbumArtboxHtml({ state: 'loading', label: 'Loading cover art' })}
     </div>
   `;
   if (els.missingWarning) {
@@ -25535,14 +25537,22 @@ function applyCoverLookupCandidateSource(candidateSource) {
 function applyCoverLookupGalleryPayload(gallery) {
   if (!gallery || typeof gallery !== 'object') return;
   const incomingLocalCovers = Array.isArray(gallery.local_covers) ? gallery.local_covers : [];
+  const savedSource = String(gallery.selected_source_path || '');
+  const candidates = [...incomingLocalCovers, ...(Array.isArray(gallery.other_art) ? gallery.other_art : [])];
   const incomingActiveLocalCover = !gallery.remote_cover
-    ? incomingLocalCovers.find((cover) => Boolean(cover?.is_active) && cover?.path)
+    ? candidates.find(cover => savedSource && String(cover?.path || '') === savedSource)
+      || candidates.find(cover => Boolean(cover?.is_active) && cover?.path)
     : null;
   if (incomingActiveLocalCover) {
     state.coverLookup.modal.activeLocalSelectionPath = String(incomingActiveLocalCover.path);
   }
   state.coverLookup.modal.remoteCover = gallery.remote_cover && typeof gallery.remote_cover === 'object' ? gallery.remote_cover : null;
-  state.coverLookup.modal.localCovers = incomingLocalCovers;
+  // The canonical copy is not a second artwork choice when the server verified
+  // an identical source. Keep the real sources visible and the saved source selected.
+  state.coverLookup.modal.localCovers = incomingLocalCovers.filter(cover => !(
+    incomingActiveLocalCover && String(cover?.path || '') === String(gallery.active_cover_path || '')
+    && String(cover?.path || '') !== String(incomingActiveLocalCover.path)
+  ));
   state.coverLookup.modal.otherArt = Array.isArray(gallery.other_art) ? gallery.other_art : [];
   const task = gallery.task && typeof gallery.task === 'object' ? gallery.task : null;
   const candidateSnapshot = normalizeCoverLookupCandidateSnapshot(gallery.candidate_snapshot);
@@ -39596,6 +39606,7 @@ function syncMobilePageShell() {
   main.classList.toggle('has-mobile-page', Boolean(active));
   header.hidden = !active;
   outlet.hidden = !active;
+  outlet.dataset.mobilePageKind = active?.kind || '';
   document.getElementById('mobile-back-button').hidden = !active;
   document.getElementById('mobile-library-button').hidden = Boolean(active);
   for (const kind of mobilePageState.originals.keys()) {
@@ -39687,6 +39698,7 @@ function presentMobilePage(descriptor) {
     syncMobilePageShell();
     return true;
   }
+  delete outlet.dataset.pageInteracted;
   if (!mobilePageState.originals.has(descriptor.kind)) {
     const placeholder = document.createComment(`Original ${descriptor.kind} surface`);
     element.before(placeholder);
@@ -40021,7 +40033,16 @@ function initMobileNavigation() {
     if (['loops', 'integrations', 'log-history', 'problematic-files'].includes(state.utility.activeTab) && mobilePageState.pages.some(page => page.kind === 'utilities')) renderUtilityModalContent();
     if (typeof syncMobileAlbumComposition === 'function') syncMobileAlbumComposition(getCurrentTrackModalAlbum());
   };
-  document.getElementById('mobile-page-outlet')?.addEventListener('scroll', scheduleMobileAlbumThumbnail, { passive: true });
+  const pageOutlet = document.getElementById('mobile-page-outlet');
+  pageOutlet?.addEventListener('scroll', scheduleMobileAlbumThumbnail, { passive: true });
+  const showPageScrollbar = event => {
+    if (!event.isTrusted || !usesMobilePageLayout() || mobilePageState.pages.at(-1)?.kind !== 'album') return;
+    if (event.type === 'keydown' && !['ArrowDown', 'ArrowUp', 'PageDown', 'PageUp', 'Home', 'End', ' '].includes(event.key)) return;
+    pageOutlet.dataset.pageInteracted = 'true';
+  };
+  for (const type of ['pointerdown', 'touchstart', 'wheel', 'keydown']) {
+    pageOutlet?.addEventListener(type, showPageScrollbar, { passive: true, capture: true });
+  }
   window.addEventListener('resize', scheduleMobileAlbumThumbnail, { passive: true });
   syncLayout();
   initMobileGalleryPinch();

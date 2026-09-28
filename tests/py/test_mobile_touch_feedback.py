@@ -1,0 +1,65 @@
+"""The picker identity follows exact saved media bytes; persistence remains canonical."""
+import hashlib
+from pathlib import Path
+
+from music_app.services.cover_state import selected_local_cover_source, serialize_cover_gallery_payload
+
+
+def candidate(path: Path):
+    return {"path": str(path)}
+
+
+def test_matching_source_is_selected_without_changing_canonical_file(tmp_path):
+    canonical = tmp_path / "cover.jpg"
+    original = tmp_path / "cover-original.jpg"
+    alternative = tmp_path / "cover-alternate.jpg"
+    canonical.write_bytes(b"selected image")
+    alternative.write_bytes(b"selected image")
+    original.write_bytes(b"original image")
+    digest = hashlib.sha256(canonical.read_bytes()).hexdigest()
+    rows = [candidate(original), candidate(alternative), candidate(canonical)]
+    assert selected_local_cover_source(rows, canonical, digest) == str(alternative)
+    assert canonical.read_bytes() == b"selected image"
+    assert original.read_bytes() == b"original image"
+
+
+def test_source_falls_back_when_deleted_or_changed_even_at_same_size(tmp_path):
+    canonical, source = tmp_path / "cover.jpg", tmp_path / "alternate.jpg"
+    canonical.write_bytes(b"image-a")
+    source.write_bytes(b"image-b")
+    digest = hashlib.sha256(canonical.read_bytes()).hexdigest()
+    rows = [candidate(source), candidate(canonical)]
+    assert selected_local_cover_source(rows, canonical, digest) == str(canonical)
+    source.unlink()
+    assert selected_local_cover_source(rows, canonical, digest) == str(canonical)
+    assert selected_local_cover_source(rows, None, None) is None
+
+
+def test_initial_unrevisioned_media_uses_exact_bytes_not_filename(tmp_path):
+    canonical, source = tmp_path / "cover.jpg", tmp_path / "cover-original.jpg"
+    canonical.write_bytes(b"original")
+    source.write_bytes(b"original")
+    assert selected_local_cover_source([candidate(canonical), candidate(source)], canonical, None) == str(source)
+
+
+def test_gallery_keeps_canonical_authority_and_exposes_picker_source(tmp_path):
+    canonical, source = tmp_path / "cover.jpg", tmp_path / "alternate.jpg"
+    canonical.write_bytes(b"saved")
+    source.write_bytes(b"saved")
+    revision = hashlib.sha256(b"saved").hexdigest()
+    cache = {"track.mp3": {"cover_path": str(canonical), "cover_revision": revision}}
+    payload = serialize_cover_gallery_payload(album_root=tmp_path, track_paths={"track.mp3"},
+        file_cache=cache, image_extensions={".jpg"}, image_dimensions=lambda _path: (32, 32),
+        is_squareish_cover=lambda _width, _height: True)
+    assert payload["active_cover_path"] == str(canonical)
+    assert payload["selected_source_path"] == str(source)
+    active = [item for item in payload["local_covers"] if item["is_active"]]
+    assert len(active) == 1
+    assert active[0]["path"] == str(canonical)
+    assert active[0]["cover_revision"] == revision
+    cache["track.mp3"]["remote_cover_url"] = "https://example.test/cover.jpg"
+    remote = serialize_cover_gallery_payload(album_root=tmp_path, track_paths={"track.mp3"},
+        file_cache=cache, image_extensions={".jpg"}, image_dimensions=lambda _path: (32, 32),
+        is_squareish_cover=lambda _width, _height: True)
+    assert remote["selected_source_path"] is None
+    assert not any(item["is_active"] for item in remote["local_covers"])

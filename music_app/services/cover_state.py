@@ -135,6 +135,42 @@ def iter_local_cover_candidates(
     return candidates
 
 
+def selected_local_cover_source(
+    candidates: list[dict[str, object]], active_path: Path | None, revision: str | None,
+) -> str | None:
+    """Find the source image of the persisted cover without inventing preference state.
+
+    Local selection promotes exact bytes to cover.jpg. The canonical file remains
+    active for playback/scanning; a matching retained source is the picker identity.
+    A stale/deleted source cannot remain selected because its bytes must still match.
+    """
+    if active_path is None:
+        return None
+    fallback = str(active_path)
+    try:
+        size = active_path.stat().st_size
+        if not revision:
+            with active_path.open("rb") as image:
+                revision = hashlib.file_digest(image, "sha256").hexdigest()
+    except OSError:
+        return fallback
+    for item in candidates:
+        candidate = Path(str(item["path"]))
+        if candidate == active_path:
+            continue
+        try:
+            if candidate.stat().st_size != size:
+                continue
+            with candidate.open("rb") as image:
+                digest = hashlib.file_digest(image, "sha256").hexdigest()
+            if digest == revision:
+                return str(candidate)
+        except OSError:
+            # A file can be removed while the gallery enumerates local media.
+            continue
+    return fallback
+
+
 def serialize_cover_gallery_payload(
     *,
     album_root: Path,
@@ -167,6 +203,8 @@ def serialize_cover_gallery_payload(
         "ok": True,
         "album_root": str(album_root),
         "active_cover_path": str(active_cover_path) if active_cover_path else None,
+        "selected_source_path": (None if active_remote_cover else
+                                 selected_local_cover_source(local_candidates, active_cover_path, active_cover_revision)),
         "remote_cover": active_remote_cover,
         "local_covers": [item for item in local_candidates if item.get("is_squareish")],
         "other_art": [item for item in local_candidates if not item.get("is_squareish")],

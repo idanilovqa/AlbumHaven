@@ -1,3 +1,4 @@
+import { assertCapabilityBoundary } from '../actions/capabilityBoundaryActions.js';
 import { enrollCapabilityMember, openCapabilityFixtureAlbum } from '../actions/capabilityEditorActions.js';
 import { prepareDesktopCoverCandidates, decodedArtworkEvidence } from '../actions/capabilityCoverActions.js';
 import { CapabilityCoverLookup } from '../poms/capabilityCoverLookup.js';
@@ -48,4 +49,5 @@ test('FTC-CAP-AUDIT-014 TV selects real provider artwork while hiding retained m
   await desktop.tracks.openCoverLookup();
   await desktop.actions.waitForModalResultsReady();
   await expect(desktop.lookup.remoteCoverCardById(desktop.manualId)).toBeVisible();
+  await assertCapabilityBoundary(page, { visible: ['covers'], providerOnly: true }, testInfo);
 });

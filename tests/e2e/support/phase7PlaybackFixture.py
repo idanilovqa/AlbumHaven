@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from pathlib import Path
 import time
+import shutil
 
 from isolatedLibraryApp import generate_playback_start_fixture_audio
 
@@ -23,7 +24,7 @@ def prepare_settings_playback_media(library_root: Path) -> dict[str, dict[str, o
     cover = track.parent / "cover.png"
     Image.new("RGB", (32, 32), (40, 120, 180)).save(cover)
     stat = track.stat()
-    return {
+    inventory = {
         str(track): {
             "path": str(track),
             "mtime": stat.st_mtime,
@@ -44,6 +45,14 @@ def prepare_settings_playback_media(library_root: Path) -> dict[str, dict[str, o
             "metadata_schema_version": FILE_METADATA_SCHEMA_VERSION,
         }
     }
+    arrival = library_root.parent / "arrivals" / artist / "Boundary Arrival" / "01 - Arrival Signal.mp3"
+    arrival.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(track, arrival)
+    inventory[str(arrival)] = {**inventory[str(track)], "path": str(arrival),
+        "album": "Boundary Arrival", "title": "Arrival Signal", "cover_path": None,
+        "library_root_id": "boundary-arrivals", "library_root_category": "new_arrivals"}
+    return inventory
+
 
 
 def persist_settings_playback_inventory(
@@ -74,9 +83,30 @@ def persist_settings_playback_inventory(
             "path": str(library_root.resolve()),
             "layout_mode": "artist",
         }],
+        "new_arrivals_roots": [{"id": "boundary-arrivals",
+            "path": str((library_root.parent / "arrivals").resolve()), "layout_mode": "artist"}],
     })
-    PostgresScanCacheAdapter(config).save_snapshot(
-        config["CACHE_PATH"], file_cache, library_root_cache_identity(config), time.time(),
+    if not file_cache:
+        PostgresScanCacheAdapter(config).save_snapshot(
+            config["CACHE_PATH"], file_cache, library_root_cache_identity(config), time.time(),
+        )
+        return
+    # Missing inventory is a real prior scan observation, followed by an observed
+    # disappearance before ASGI starts. The application receives normal rows only.
+    existing_path, existing = next(iter(file_cache.items()))
+    missing_path = library_root / "Settings Navigation Fixture" / "Missing Boundary Session" / "01 - Missing Signal.mp3"
+    missing_path.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(existing_path, missing_path)
+    missing = {**existing, "path": str(missing_path), "album": "Missing Boundary Session",
+               "title": "Missing Signal", "cover_path": None}
+    adapter = PostgresScanCacheAdapter(config)
+    root_identity = library_root_cache_identity(config)
+    adapter.save_snapshot(config["CACHE_PATH"], {**file_cache, str(missing_path): missing}, root_identity, time.time())
+    missing_path.unlink()
+    missing_path.parent.rmdir()
+    adapter.save_snapshot(
+        config["CACHE_PATH"], file_cache, root_identity, time.time(),
+        observed_library_root_ids={"isolated-e2e-root"},
     )
 
 

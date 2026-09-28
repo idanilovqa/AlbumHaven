@@ -1,3 +1,5 @@
+import { assertCapabilityBoundary } from '../actions/capabilityBoundaryActions.js';
+import { assertOwnedLoopBoundary } from '../actions/capabilityLoopBoundaryActions.js';
 import { enrollCapabilityMember, openCapabilityFixtureAlbum } from '../actions/capabilityEditorActions.js';
 import { authenticatedPageGet } from '../../helpers/authenticatedPageRequest.js';
 import { CapabilityPracticePage } from '../poms/capabilityPracticePage.js';
@@ -25,6 +27,7 @@ test('FTC-CAP-AUDIT-009 Play implies locked View and repeated saves preserve exp
   await editor.page.reload();
   await expect(editor.capability('View library')).toBeChecked();
   await expect(editor.capability('Play music')).not.toBeChecked();
+  await assertCapabilityBoundary(page, { visible: [] });
 });
 
 for (const capability of ['Play music', 'Edit audio tags', 'Delete covers and missing inventory']) {
@@ -42,6 +45,7 @@ test(`FTC-CAP-AUDIT-010 ${capability} alone streams generated music through the 
   expect(evidence.renderedFrameDelta).toBeGreaterThan(0);
   await expect(globalPlayerActions.globalPlayer.playButton).toHaveAttribute('aria-label', 'Pause');
   expect(playbackEvidence.activeSocketCount()).toBe(1);
+  await assertCapabilityBoundary(page, { visible: capability.startsWith('Delete') ? ['play', 'delete'] : ['play'] });
 });
 
 }
@@ -58,6 +62,7 @@ test('FTC-CAP-AUDIT-011 Repair-only member opens Rules and Logs without playback
   await expect(ui.tab('log-history')).toHaveAttribute('aria-selected', 'true');
   await utilityLogHistoryActions.waitForReady();
   await expect(ui.player).toBeHidden();
+  await assertCapabilityBoundary(page, { visible: ['repair'] });
 });
 
 test('FTC-CAP-AUDIT-012 cover controls follow Change covers and web tag editing also requires Admin', async ({
@@ -85,6 +90,7 @@ test('FTC-CAP-AUDIT-012 cover controls follow Change covers and web tag editing 
   await openCapabilityFixtureAlbum(galleryActions);
   await expect(album.editTagsButton).toBeVisible();
   await expect(album.editTagsButton).toBeEnabled();
+  await assertCapabilityBoundary(page, { visible: ['play', 'edit', 'covers', 'admin'] });
 });
 
 
@@ -128,4 +134,6 @@ test('FTC-CAP-AUDIT-013 Practice retains owned loop artwork waveform and playbac
   const denied = await authenticatedPageGet(page, `/track?path=${encodeURIComponent(track.path)}`);
   expect(denied.status()).toBe(403);
   expect(await denied.json()).toEqual({ detail: 'Action not permitted.' });
+  await assertOwnedLoopBoundary(page, utilityLoopsActions, { visible: ['practice'] }, loopName);
+  await assertCapabilityBoundary(page, { visible: ['practice'] });
 });

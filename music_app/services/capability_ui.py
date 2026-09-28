@@ -33,9 +33,17 @@ ACTION_SELECTORS = MappingProxyType({
         "[data-apply-problem-suggestions]",
     ),
     "library.inventory.manage": ("[data-remove-missing-album]",),
-    "library.files.move": ("[data-move-problematic-album]",),
+    "library.files.move": (
+        "[data-move-problematic-album]",
+        '[data-album-card-action="move_to_library"]', '[data-album-card-action="move_to_hoard"]',
+    ),
     "library.files.open_location": (
         "#track-modal-folder", "[data-open-track-modal-folder]", "[data-open-problematic-album-folder]",
+        '[data-album-card-action="open-explorer"]',
+    ),
+    "library.versions.manage": (
+        '[data-album-card-action="mark-version"]', '[data-album-card-action="unmark-version"]',
+        "#version-picker-modal", '[data-save-version-picker="1"]',
     ),
     "library.loops.create": ("[data-playback-control-loop-actions]",),
     "library.loops.delete": ("[data-delete-saved-loop]",),

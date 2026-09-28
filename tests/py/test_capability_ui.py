@@ -100,3 +100,15 @@ def test_tv_projects_provider_only_cover_controls_without_hiding_lookup():
     assert set(value["cover_provider_groups"]) == {"services", "cover_art_archive"}
     desktop = projection(["owner", "admin"], bootstrap=True)
     assert not selectors.intersection(desktop["denied_selectors"])
+
+
+def test_gallery_actions_follow_move_folder_and_version_permissions():
+    selectors = {
+        '[data-album-card-action="move_to_library"]',
+        '[data-album-card-action="move_to_hoard"]',
+        '[data-album-card-action="open-explorer"]',
+        '[data-album-card-action="mark-version"]',
+        '[data-album-card-action="unmark-version"]',
+    }
+    assert selectors <= set(projection(["viewer"])["denied_selectors"])
+    assert not selectors.intersection(projection(["owner"])["denied_selectors"])

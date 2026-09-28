@@ -160,10 +160,18 @@ def provision(admin_url: str, runtime_url: str, app_password: str, password_hash
             # Never import or start phase7AuthApp's control/reset/SMTP servers.
             support = ROOT / "tests" / "e2e" / "support"
             sys.path.insert(0, str(support))
-            from mobileLayoutFixture import prepare_mobile_layout_media, seed_mobile_demo_loops
+            from mobileLayoutFixture import prepare_mobile_layout_media, seed_mobile_demo_loops, seed_mobile_demo_ratings, restore_mobile_demo_covers
             from phase7PlaybackFixture import persist_settings_playback_inventory
+            selected_covers = dict(lock.execute("""select distinct a.cover_path, a.metadata->>'cover_revision'
+                from library.local_albums a join library.libraries l on l.id=a.library_id
+                join app.bootstrap_owners o on o.account_id=l.owner_account_id
+                where o.owner_key='local-bootstrap-owner' and l.name='Local Library'
+                    and l.library_kind='local' and a.metadata->>'cover_selection_origin'='user'
+                    and a.cover_path is not null""").fetchall())
             inventory = prepare_mobile_layout_media(DEMO_ROOT / "media", extended=extended_media)
+            restore_mobile_demo_covers(inventory, selected_covers)
             persist_settings_playback_inventory(admin_url, DEMO_ROOT / "media", inventory, rebuild_relations=extended_media)
+            seed_mobile_demo_ratings(runtime_url)
             if extended_media:
                 seed_mobile_demo_loops(runtime_url, inventory, DEMO_ROOT / "app-data")
             sys.path.remove(str(support))

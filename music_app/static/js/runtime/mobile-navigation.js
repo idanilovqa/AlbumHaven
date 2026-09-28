@@ -225,6 +225,9 @@ function handleMobilePagePopState() {
   try { requested.slice(common).forEach(restoreMobilePage); }
   finally { mobilePageState.restoring = false; }
   syncMobilePageShell();
+  // A background refresh may have replaced the gallery while its child was open.
+  // Restore the retained parent URL through the normal gallery request owner.
+  if (!requested.length) handleGalleryBootstrapPopState({ preserveScroll: true });
   if (!requested.length && focus?.isConnected) requestAnimationFrame(() => focus.focus({ preventScroll: true }));
   return true;
 }

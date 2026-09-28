@@ -1926,7 +1926,7 @@ function syncSearchClear() {
   }
 }
 
-function handleGalleryBootstrapPopState() {
+function handleGalleryBootstrapPopState(options = {}) {
   if (typeof syncGalleryMainStateFromLocation === 'function') syncGalleryMainStateFromLocation();
-  fetchAndRender(getBrowserLocationHref(), false);
+  fetchAndRender(getBrowserLocationHref(), false, options);
 }

@@ -57,9 +57,19 @@ export class MobileTouchFeedbackPage extends MobilePolishPage {
     const box = await this.artistRail.boundingBox();
     await this.swipeAt(box.x + box.width + 25, box.y + 180);
     expect(await this.readScroll(this.galleryScroll)).toBe(background);
+    // The production drawer reveals the selected artist on opening. At 650px
+    // this can already be the bottom of the list: swipe toward available content.
+    // parity-check: allow-read-only-measurement-evaluate -- measure native scroll range.
+    const range = await this.artistRail.evaluate(node => [node, ...node.querySelectorAll('*')]
+      .reduce((sum, item) => sum + Math.max(0, item.scrollHeight - item.clientHeight), 0));
     const before = await this.readScroll(this.artistRail);
-    await this.swipeAt(box.x + box.width / 2, box.y + box.height - 45);
-    await expect.poll(() => this.readScroll(this.artistRail)).toBeGreaterThan(before);
+    expect(range).toBeGreaterThan(0);
+    const towardTop = before > 0;
+    await this.swipeAt(box.x + box.width / 2,
+      towardTop ? box.y + 110 : box.y + box.height - 45, towardTop ? 160 : -160);
+    await expect.poll(async () => ((await this.readScroll(this.artistRail)) - before)
+      * (towardTop ? -1 : 1)).toBeGreaterThan(0);
+    expect(await this.readScroll(this.galleryScroll)).toBe(background);
     await expect(this.closeArtistRail).toBeInViewport();
     return this.readPaint(this.artistRail);
   }
@@ -97,6 +107,13 @@ export class MobileTouchFeedbackPage extends MobilePolishPage {
     expect(image.y + image.height / 2).toBeCloseTo(copy.y + copy.height / 2, 0);
   }
   async openLibraryStatus() {
+    // The mobile search replaces app-bar actions while expanded. Collapse it
+    // through its existing controls before opening the Library status menu.
+    if (await this.searchInput.isVisible()) {
+      await this.searchInput.fill('');
+      await this.searchButton.click();
+      await expect(this.searchInput).not.toBeVisible();
+    }
     await this.statusButton.click({ button: 'right' });
     await this.statusPageAction.click();
     await expect(this.statusPageBar).toBeVisible();

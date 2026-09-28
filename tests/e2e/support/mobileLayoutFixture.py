@@ -178,3 +178,23 @@ def seed_mobile_demo_ratings(database_url: str) -> None:
                     and l.library_kind='local' and ar.name=%s and a.title=%s
                 on conflict (account_id, library_id, album_key) do nothing""",
                 (5 + index % 6, artist, album))
+
+
+def restore_mobile_demo_covers(inventory: dict, selections: dict[str, str]) -> None:
+    """Restore selected generated artwork by its saved content hash after a restart."""
+    import hashlib
+    import shutil
+    for cover_path, revision in selections.items():
+        entries = [entry for entry in inventory.values() if entry.get('cover_path') == cover_path]
+        if not entries:
+            raise ValueError('Saved demo cover is outside the generated inventory.')
+        cover = Path(cover_path)
+        candidates = [cover, cover.with_name('cover-alternate.jpg')]
+        match = next((candidate for candidate in candidates if candidate.is_file()
+                      and hashlib.sha256(candidate.read_bytes()).hexdigest() == revision), None)
+        if match is None:
+            raise ValueError('Saved artwork cannot be regenerated; refusing to replace the selected cover.')
+        if match != cover:
+            shutil.copyfile(match, cover)
+        for entry in entries:
+            entry.update(cover_revision=revision, cover_selection_origin='user')

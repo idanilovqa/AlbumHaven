@@ -11,6 +11,7 @@ test('phones share one profile; wide mobile tablets keep mobile preferences, not
 });
 
 test('phone geometry is two or three columns; rows fill the width and covers stay square', () => {
+  assert.equal(resolveMobileGalleryGeometry({ availableWidth: 360, viewportWidth: 390, mode: 'cards' }).columns, 3);
   const two = resolveMobileGalleryGeometry({ availableWidth: 360, viewportWidth: 390, columns: 2, mode: 'cards', gap: 14 });
   assert.equal(two.columns, 2);
   assert.equal(two.cardTrackWidth, 173);

@@ -551,7 +551,7 @@ html[data-client-profile="mobile"] :is([data-utility-tab="problematic-files"], [
   [data-gallery-bar-instance="gallery"] { flex-wrap: wrap; }
   [data-gallery-bar-instance="gallery"] > .gallery-bar__context { flex: 1 0 100%; }
   [data-gallery-bar-instance="gallery"] > .gallery-bar__actions { margin-left: auto; }
-  :root .gallery-bar :is(.gallery-action-button, .gallery-view-choice):focus {
+  :root .gallery-bar .gallery-action-button:focus {
     outline: 1px solid var(--appearance-ink, var(--text)); outline-offset: -1px;
   }
   .global-player[data-player-seekbar-presentation] .player-meta { margin: 0; padding: 0; justify-self: stretch; }

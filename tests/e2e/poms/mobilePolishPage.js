@@ -26,7 +26,87 @@ export class MobilePolishPage extends MobileLayoutPage {
     this.loopEntries = this.utilitiesPage.locator('[data-utility-loop-entry]');
     this.loopPlay = this.loopEntries.first().locator('[data-loop-play]');
     this.loopTime = this.loopEntries.first().locator('[data-loop-time]');
+    this.mainSurface = page.locator('#shell-main-surface');
+    this.header = page.locator('.app-bar--library');
+    this.brand = this.header.locator('.app-bar-brand');
+    this.albumContextMenu = page.locator('#album-card-context-menu');
+    this.selectionPreviewRow = page.locator('.selection-preview-example.is-navigation-selected');
+    this.alertFamily = page.locator('[data-alert-family="signal"].appearance-alert-family-card');
+    this.lightbox = page.locator('#image-lightbox');
     this.visibleAccountMenu = page.locator('#app-shell [data-account-menu]:not([hidden])');
+  }
+
+  async expectHeaderActionsAligned() {
+    const controls = this.page.locator('.app-bar--library .toolbar-right > .action-button, .app-bar--library [data-account-menu-trigger], #mobile-search-button');
+    // parity-check: allow-read-only-measurement-evaluate -- measure actual mobile header button rectangles.
+    const boxes = await controls.evaluateAll(nodes => nodes.map(node => node.getBoundingClientRect()).filter(box => box.width && box.height).map(box => ({ width: box.width, height: box.height, center: box.y + box.height / 2 })));
+    expect(boxes.length).toBeGreaterThanOrEqual(4);
+    for (const box of boxes) { expect(box.width).toBeCloseTo(40, 0); expect(box.height).toBeCloseTo(40, 0); }
+    expect(Math.max(...boxes.map(box => box.center)) - Math.min(...boxes.map(box => box.center))).toBeLessThanOrEqual(1);
+  }
+
+  async expectAppearanceFooterFits() {
+    const footer = this.page.locator('#utility-modal-footer');
+    const boxes = await Promise.all(['reset', 'secondary', 'primary'].map(action => footer.locator(`[data-editor-footer-action="${action}"]`).boundingBox()));
+    for (const box of boxes) { expect(box).not.toBeNull(); expect(box.x).toBeGreaterThanOrEqual(0); expect(box.x + box.width).toBeLessThanOrEqual(this.page.viewportSize().width); }
+    expect(Math.max(...boxes.map(box => box.y)) - Math.min(...boxes.map(box => box.y))).toBeLessThanOrEqual(1);
+    expect(boxes[0].x + boxes[0].width).toBeLessThanOrEqual(boxes[1].x);
+    expect(boxes[1].x + boxes[1].width).toBeLessThanOrEqual(boxes[2].x);
+  }
+
+  async expectNumericRatings() {
+    const rating = this.galleryCards.locator('.rating-row:not([data-rating-value="0"])').first();
+    await expect(rating.locator('.rating-text')).toBeVisible();
+    await expect(rating.locator('.rating-text')).toHaveText(/^[1-9]0?\/10$/);
+    await expect(rating.locator('.stars')).not.toBeVisible();
+    // parity-check: allow-read-only-measurement-evaluate -- verify rendered rating colors and bounds.
+    const paint = await rating.locator('.rating-text').evaluate(node => ({ ink: getComputedStyle(node).color, background: getComputedStyle(node).backgroundColor, width: node.getBoundingClientRect().width, parent: node.closest('.album-card').getBoundingClientRect().width }));
+    expect(paint.width).toBeLessThan(paint.parent);
+    this.expectContrast([paint]);
+  }
+
+  async expectChromeMenu(menu) {
+    await expect(menu).toBeVisible();
+    // parity-check: allow-read-only-measurement-evaluate -- compare the menu paint against its actual app bar owner.
+    const paint = await menu.evaluate(node => ({ ink: getComputedStyle(node).color, background: getComputedStyle(node).backgroundColor, bar: getComputedStyle(document.querySelector('.app-bar')).backgroundColor }));
+    expect(paint.background).toBe(paint.bar);
+    this.expectContrast([paint]);
+  }
+
+  async inspectHeaderMenus() {
+    const sources = this.page.locator('#gallery-sources-button');
+    const sourceMenu = this.page.locator('#gallery-sources-menu');
+    await sources.click();
+    await this.expectChromeMenu(sourceMenu);
+    await this.page.keyboard.press('Escape');
+    await this.page.locator('#scan-indicator').click({ button: 'right' });
+    await this.expectChromeMenu(this.page.locator('#status-context-menu'));
+    await this.page.keyboard.press('Escape');
+  }
+
+  async expectPlayerMetadataNearCover() {
+    const art = await this.page.locator('#player-cover-button').boundingBox();
+    const title = await this.playerArtist.boundingBox();
+    expect(title.x - (art.x + art.width)).toBeGreaterThanOrEqual(0);
+    expect(title.x - (art.x + art.width)).toBeLessThanOrEqual(12);
+  }
+
+  async expectGalleryLoadingOwnsPage() {
+    const cdp = await this.page.context().newCDPSession(this.page);
+    try {
+      await cdp.send('Network.enable');
+      await cdp.send('Network.emulateNetworkConditions', { offline: false, latency: 1000, downloadThroughput: -1, uploadThroughput: -1 });
+      await this.libraryButton.click();
+      await this.artist('Northlight').click();
+      const loader = this.page.locator('#library-loader');
+      await expect(loader).toBeVisible();
+      await expect(this.mainGalleryBar).not.toBeVisible();
+      await expect(this.home).not.toBeVisible();
+      const main = await this.page.locator('#shell-main-surface').boundingBox();
+      const loading = await loader.boundingBox();
+      expect(loading.y - main.y).toBeLessThanOrEqual(20);
+      await expect(this.galleryCards.first()).toBeVisible();
+    } finally { await cdp.send('Network.emulateNetworkConditions', { offline: false, latency: 0, downloadThroughput: -1, uploadThroughput: -1 }); await cdp.detach(); }
   }
 
   async usePalette(id) {
@@ -91,7 +171,7 @@ export class MobilePolishPage extends MobileLayoutPage {
 
   async expectBarAligned(bar) {
     // parity-check: allow-read-only-measurement-evaluate -- inspect visible shared bar controls in a single frame.
-    const centers = await bar.evaluate(node => [...node.querySelectorAll('.action-button:not(.unfolding-action-button__action), .gallery-action-button, .gallery-view-cluster')]
+    const centers = await bar.evaluate(node => [...(node.querySelector('.gallery-bar__actions') || node).querySelectorAll('.action-button:not(.unfolding-action-button__action), .gallery-action-button, .gallery-view-cluster')]
       .map(button => button.getBoundingClientRect()).filter(rect => rect.width && rect.height)
       .map(rect => rect.top + rect.height / 2));
     expect(centers.length).toBeGreaterThan(1);

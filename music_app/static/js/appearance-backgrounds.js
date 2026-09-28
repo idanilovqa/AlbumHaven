@@ -1141,7 +1141,8 @@
         });
         localHost.remove(); dialogHost.hidden = false;
       }
-      footerDispose = window.EditorPage?.mountFooter?.(mountedFooter, { status: 'Saved to your account', ...options }) || null;
+      footerDispose = window.EditorPage?.mountFooter?.(mountedFooter, { status: 'Saved to your account', ...options, resetLabel: isPhoneEditor() ? 'Reset' : options.resetLabel }) || null;
+      mountedFooter.querySelector('[data-background-reset]')?.setAttribute('aria-label', options.resetLabel || 'Reset');
       return mountedFooter;
     };
     const unmount = () => {

@@ -1,0 +1,63 @@
+name: Read retained mobile navigation trace
+on:
+  push:
+    branches: [2026-09-28-header-investigation]
+    paths: ['.github/workflows/mobile-header-diagnostic.yml']
+  workflow_dispatch:
+permissions:
+  actions: read
+  contents: write
+jobs:
+  trace:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          artifact-ids: '10990351924'
+          run-id: '36467040723'
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          path: evidence
+      - name: Extract navigation metadata only
+        shell: python
+        run: |
+          import json, pathlib, zipfile
+          traces = list(pathlib.Path('evidence').rglob('trace.zip'))
+          if len(traces) != 1:
+              raise RuntimeError('Expected the retained failing trace')
+          output = {'source_run': 36467040723, 'source_commit': '245d94609752130b995f7e635a23700a4914b3d5', 'events': []}
+          with zipfile.ZipFile(traces[0]) as trace:
+              for name in trace.namelist():
+                  if not name.endswith(('.trace', '.network')):
+                      continue
+                  for line in trace.read(name).decode('utf-8').splitlines():
+                      try:
+                          event = json.loads(line)
+                      except ValueError:
+                          continue
+                      kind = event.get('type')
+                      if kind == 'before':
+                          params = event.get('params', {})
+                          # No filled values, headers, response bodies or login credentials.
+                          safe = {key: params[key] for key in ('selector', 'url', 'width', 'height', 'viewportSize', 'key') if key in params}
+                          output['events'].append({'type': kind, 'file': name, 'call': event.get('callId'), 'time': event.get('startTime'), 'api': event.get('apiName'), 'method': event.get('method'), 'params': safe})
+                      elif kind == 'after' and event.get('error'):
+                          output['events'].append({'type': kind, 'call': event.get('callId'), 'time': event.get('endTime'), 'error': event['error']})
+                      elif kind == 'frame-snapshot':
+                          snap = event.get('snapshot', {})
+                          output['events'].append({'type': kind, 'name': snap.get('snapshotName'), 'time': snap.get('timestamp'), 'url': snap.get('frameUrl')})
+                      elif kind == 'resource-snapshot':
+                          snap = event.get('snapshot', {})
+                          request = snap.get('request', {})
+                          if any(part in request.get('url', '') for part in ('/view-data', '/home-data', '/album-details')):
+                              output['events'].append({'type': kind, 'time': snap.get('_monotonicTime'), 'url': request.get('url'), 'status': snap.get('response', {}).get('status')})
+          pathlib.Path('navigation-trace.json').write_text(json.dumps(output, indent=2))
+      - name: Publish read-only diagnostic snapshot
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const blob = await github.rest.git.createBlob({...context.repo, content: fs.readFileSync('navigation-trace.json').toString('base64'), encoding: 'base64'});
+            const tree = await github.rest.git.createTree({...context.repo, tree: [{path: 'navigation-trace.json', mode: '100644', type: 'blob', sha: blob.data.sha}]});
+            const commit = await github.rest.git.createCommit({...context.repo, message: 'Read-only retained responsive navigation failure evidence', tree: tree.data.sha, parents: []});
+            console.log('NAVIGATION_TRACE_SNAPSHOT ' + commit.data.sha);

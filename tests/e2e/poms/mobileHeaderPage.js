@@ -44,9 +44,19 @@ export class MobileHeaderPage extends MobilePolishPage {
     const bar = await this.mainGalleryBar.boundingBox();
     const main = await this.mainSurface.boundingBox();
     expect(actions.y - title.y - title.height).toBeGreaterThanOrEqual(0);
-    expect(actions.y - title.y - title.height).toBeLessThanOrEqual(4);
-    expect(summary.y + summary.height / 2).toBeCloseTo(actions.y + actions.height / 2, 0);
-    expect(summary.x + summary.width).toBeLessThanOrEqual(actions.x);
+    const name = await this.galleryContextName.boundingBox();
+    expect(summary.x).toBeCloseTo(name.x, 0);
+    if (this.page.viewportSize().width <= 350) {
+      // The owner requested a separate action row on very narrow phones.
+      expect(summary.y - title.y - title.height).toBeGreaterThanOrEqual(0);
+      expect(summary.y - title.y - title.height).toBeLessThanOrEqual(4);
+      expect(actions.y - summary.y - summary.height).toBeGreaterThanOrEqual(0);
+      expect(actions.y - summary.y - summary.height).toBeLessThanOrEqual(4);
+    } else {
+      expect(actions.y - title.y - title.height).toBeLessThanOrEqual(4);
+      expect(summary.y + summary.height / 2).toBeCloseTo(actions.y + actions.height / 2, 0);
+      expect(summary.x + summary.width).toBeLessThanOrEqual(actions.x);
+    }
     expect(actions.x + actions.width).toBeCloseTo(bar.x + bar.width, 0);
     expect(bar.y - main.y).toBeLessThanOrEqual(10);
     expect(bar.y + bar.height - actions.y - actions.height).toBeLessThanOrEqual(8);

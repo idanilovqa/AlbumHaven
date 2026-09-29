@@ -12,6 +12,8 @@ export class MobileTouchFeedbackPage extends MobilePolishPage {
     this.notificationActions = this.notificationPanel.locator('.cover-lookup-drawer-actions .action-button');
     this.notificationClose = this.notificationPanel.locator('[data-close-cover-lookup-drawer]');
     this.scrolledCopy = page.locator('#mobile-page-header > .gallery-bar__context');
+    this.settingsMenu = page.locator('#app-shell [data-account-menu]');
+    this.mainSearchClear = page.locator('#search-form [data-search-clear]');
     this.statusButton = page.getByRole('button', { name: 'Library status', exact: true });
     this.statusPageAction = page.locator('[data-status-action="go-to-scan-page"]');
     this.statusPageBar = page.locator('#library-status-gallery-bar');
@@ -101,10 +103,44 @@ export class MobileTouchFeedbackPage extends MobilePolishPage {
     await this.galleryCards.getByRole('button', { name: title, exact: true }).click();
     await expect(this.trackTable).toBeVisible();
   }
-  async expectThumbnailCentered() {
+  async expectThumbnailTopAligned() {
     await expect(this.albumThumbnail).toBeVisible();
-    const [image, copy] = await Promise.all([this.albumThumbnail.boundingBox(), this.scrolledCopy.boundingBox()]);
-    expect(image.y + image.height / 2).toBeCloseTo(copy.y + copy.height / 2, 0);
+    const [image, title, summary] = await Promise.all([
+      this.albumThumbnail.boundingBox(), this.pageTitle.boundingBox(), this.pageSummary.boundingBox(),
+    ]);
+    expect(image.y).toBeCloseTo(title.y, 0);
+    expect(summary.y).toBeGreaterThanOrEqual(title.y + title.height);
+    expect(summary.y + summary.height).toBeLessThanOrEqual(image.y + image.height);
+  }
+  async expectSearchCollapsed(query) {
+    await expect(this.searchInput).not.toBeVisible();
+    await expect(this.searchInput).toHaveValue(query);
+    await expect(this.searchButton).toHaveAttribute('aria-expanded', 'false');
+    await expect(this.searchButton).toHaveAttribute('data-has-query', String(Boolean(query.trim())));
+    if (query.trim()) {
+      await expect(this.searchButton).toHaveAttribute('aria-description', 'Search query present');
+      // parity-check: allow-read-only-measurement-evaluate -- the query dot must actually be painted, not only marked in state.
+      const dot = await this.searchButton.evaluate(node => {
+        const css = getComputedStyle(node, '::before');
+        return { content: css.content, width: css.width, height: css.height, background: css.backgroundColor };
+      });
+      expect(dot.content).toBe('""');
+      expect(dot.width).toBe('8px'); expect(dot.height).toBe('8px');
+      expect(dot.background).not.toBe('rgba(0, 0, 0, 0)');
+    } else await expect(this.searchButton).not.toHaveAttribute('aria-description');
+  }
+  async expectExpandedSearchLeavesSettings() {
+    await expect(this.searchInput).toBeVisible();
+    await expect(this.settingsButton).toBeVisible();
+    await expect(this.settingsButton).toBeEnabled();
+    // parity-check: allow-read-only-measurement-evaluate -- measure non-overlap and hit-test the real Settings button after search expands.
+    await expect.poll(() => this.searchControl.evaluate(control => {
+      const button = document.querySelector('#app-shell [data-account-menu-trigger]');
+      const field = control.getBoundingClientRect(), settings = button.getBoundingClientRect();
+      return Math.abs(field.right - (settings.left - 8)) < 1
+        && Math.abs(settings.right - (window.innerWidth - 12)) < 1
+        && button.contains(document.elementFromPoint(settings.x + settings.width / 2, settings.y + settings.height / 2));
+    })).toBe(true);
   }
   async openLibraryStatus() {
     // The mobile search replaces app-bar actions while expanded. Collapse it

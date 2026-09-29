@@ -37,7 +37,7 @@ for (const palette of ['black', 'parchment-pine']) {
   });
 }
 
-test('album ratings share the title line; scrolled identity is centered and initial scrollbars wait for touch', async ({ page, app, snapshot }) => {
+test('album ratings share the title line; scrolled identity is top-aligned and initial scrollbars wait for touch', async ({ page, app, snapshot }) => {
   const phone = new MobileTouchFeedbackPage(page);
   await phone.browseArtist();
   for (const mode of ['list', 'cards']) {
@@ -52,8 +52,8 @@ test('album ratings share the title line; scrolled identity is centered and init
   await expect(phone.pageOutlet).toHaveCSS('scrollbar-color', 'rgba(0, 0, 0, 0) rgba(0, 0, 0, 0)');
   await phone.scrollRegion('album', 550);
   await expect(phone.pageOutlet).toHaveAttribute('data-page-interacted', 'true');
-  await phone.expectThumbnailCentered();
-  await snapshot('114-scrolled-album-centered');
+  await phone.expectThumbnailTopAligned();
+  await snapshot('114-scrolled-album-top-aligned');
   await phone.backButton.click();
   await phone.openLibraryStatus();
   await snapshot('115-library-state-back');
@@ -61,3 +61,47 @@ test('album ratings share the title line; scrolled identity is centered and init
   await expect(phone.statusPageBar).not.toBeVisible();
   await expect(phone.galleryCards.first()).toBeVisible();
 });
+
+
+for (const [width, palette] of [[390, 'black'], [320, 'parchment-pine']]) {
+  test(`mobile search retains query, reserves Settings and restores collapsed state at ${width}px`, async ({ page, app, snapshot }) => {
+    const phone = new MobileTouchFeedbackPage(page);
+    await page.setViewportSize({ width, height: 844 });
+    await phone.usePalette(palette);
+    await phone.search('Sixteen Horizons');
+    await phone.galleryContextName.click();
+    await phone.expectSearchCollapsed('Sixteen Horizons');
+    await snapshot(`116-query-indicator-${width}`);
+    await phone.searchButton.tap();
+    await expect(phone.searchInput).toBeFocused();
+    await expect(phone.searchInput).toHaveValue('Sixteen Horizons');
+    await phone.expectExpandedSearchLeavesSettings();
+    await snapshot(`117-search-reserves-settings-${width}`);
+    await phone.settingsButton.tap();
+    await expect(phone.settingsMenu).toBeVisible();
+    await phone.expectSearchCollapsed('Sixteen Horizons');
+    await snapshot(`118-search-settings-same-tap-${width}`);
+    await phone.settingsButton.tap();
+    await expect(phone.settingsMenu).not.toBeVisible();
+    await page.reload();
+    await expect(phone.galleryCards.first()).toBeVisible();
+    await phone.expectSearchCollapsed('Sixteen Horizons');
+    await page.setViewportSize({ width: 1180, height: 844 });
+    await expect(phone.searchInput).toBeVisible();
+    await expect(phone.searchInput).toHaveValue('Sixteen Horizons');
+    await page.setViewportSize({ width, height: 844 });
+    await phone.expectSearchCollapsed('Sixteen Horizons');
+    await phone.openAlbumTitle('Sixteen Horizons');
+    await phone.scrollRegion('album', 550);
+    await phone.expectThumbnailTopAligned();
+    await snapshot(`119-top-aligned-album-${width}`);
+    await phone.searchButton.tap();
+    await phone.searchInput.press('Escape');
+    await phone.expectSearchCollapsed('Sixteen Horizons');
+    await phone.searchButton.tap();
+    await phone.mainSearchClear.tap();
+    await expect(phone.searchInput).toHaveValue('');
+    await phone.visibleAppBar.tap({ position: { x: 2, y: 2 } });
+    await phone.expectSearchCollapsed('');
+  });
+}

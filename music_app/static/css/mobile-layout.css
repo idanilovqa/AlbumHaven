@@ -57,8 +57,15 @@ html[data-client-profile="mobile"] :is([data-open-problematic-album-folder], [da
   .mobile-navigation { display: none; align-items: center; justify-content: flex-end; grid-row: 2; grid-column: 1; padding: 0 12px; min-width: 0; height: var(--mobile-navigation-height); }
 
   .app-bar--library #search-form { grid-column: 2; grid-row: 1; display: block; width: 40px; max-width: 100%; min-width: 0; padding: 0; margin: 0; transition: width 340ms cubic-bezier(.22, 1, .36, 1); }
-  .app-bar--library.is-search-open #search-form { grid-column: 2 / -1; width: 100%; }
-  .app-bar--library.is-search-open .toolbar-right { visibility: hidden; pointer-events: none; }
+  .shell-layout .app-bar.is-search-open { grid-template-columns: 40px minmax(0, 1fr) 40px; }
+  .app-bar--library.is-search-open #search-form { grid-column: 2; width: 100%; }
+  .app-bar--library.is-search-open .toolbar-right > :not(.account-menu-component) { display: none; }
+  #mobile-search-button { position: relative; }
+  .app-bar--library:not(.is-search-open) #mobile-search-button[data-has-query="true"]::before {
+    content: ''; position: absolute; top: 5px; right: 5px; width: 8px; height: 8px;
+    border-radius: 50%; background: var(--appearance-info, #64a8ff);
+    box-shadow: 0 0 0 2px var(--app-chrome); pointer-events: none;
+  }
   .app-bar--library .search-field {
     font-size: 16px; --search-field-height: 40px; --search-field-radius: 12px;
     --search-field-background: var(--appearance-panel-control, var(--app-control));
@@ -677,10 +684,19 @@ html[data-client-profile="mobile"] :is([data-open-problematic-album-folder], [da
   #library-scan-gallery-summary, #library-loader.is-scan-page #library-state-title { display: none; }
   #library-loader.is-scan-page { padding-top: 12px; }
 
-  /* A single centered header group when the inline album identity has scrolled away. */
   #mobile-page-header:not([data-album-identity-in-body="true"]) { align-items: center; }
   #mobile-page-header:not([data-album-identity-in-body="true"]) > :is(.gallery-bar__context, .mobile-page-cover, .mobile-bar-action) { align-self: center; }
   #mobile-page-header .gallery-bar__summary { margin: 2px 0 0; }
+  /* The pinned album identity is two compact lines beside the 40px artwork.
+     Do not reserve the generic toolbar title's 40px minimum above its metadata. */
+  #mobile-page-header:has(> .mobile-page-cover:not([hidden])) > :is(.gallery-bar__context, .mobile-page-cover) { align-self: flex-start; }
+  #mobile-page-header:has(> .mobile-page-cover:not([hidden])) #mobile-page-title {
+    display: block; min-height: 0; line-height: 22px;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  #mobile-page-header:has(> .mobile-page-cover:not([hidden])) #mobile-page-summary {
+    line-height: 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
 
   .album-card .gallery-card-info { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 6px; align-content: start; }
   .album-card .gallery-card-info > .album-title { grid-column: 1; grid-row: 1; margin: 0; min-width: 0; align-self: center; }

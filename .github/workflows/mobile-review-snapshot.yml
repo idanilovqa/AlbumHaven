@@ -1,0 +1,58 @@
+name: Mobile Release Review Snapshot
+on:
+  push:
+    branches: [2026-09-25-mobile-layout]
+    paths: [.github/workflows/mobile-review-snapshot.yml]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  snapshot:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Export only pinned tracked public source and review diffs
+        shell: python
+        run: |
+          import base64, hashlib, io, json, lzma, pathlib, subprocess, tarfile
+          source = '3534ebd5ee6a9d30499ee55499980c8d8cad0176'
+          target = pathlib.Path('review-export')
+          target.mkdir()
+          archive = subprocess.check_output(['git', 'archive', '--format=tar', source])
+          compressed = lzma.compress(archive)
+          encoded = base64.b64encode(compressed).decode('ascii')
+          parts = []
+          for index, start in enumerate(range(0, len(encoded), 800000)):
+              name = f'source-{index:03d}.b64'
+              (target / name).write_text(encoded[start:start + 800000])
+              parts.append(name)
+          base = subprocess.check_output(['git', 'merge-base', source, 'origin/main'], text=True).strip()
+          diff = subprocess.check_output(['git', 'diff', '--no-ext-diff', '--binary', base, source])
+          diff_encoded = base64.b64encode(lzma.compress(diff)).decode('ascii')
+          diff_parts = []
+          for index, start in enumerate(range(0, len(diff_encoded), 800000)):
+              name = f'diff-{index:03d}.b64'
+              (target / name).write_text(diff_encoded[start:start + 800000])
+              diff_parts.append(name)
+          manifest = {'source_commit': source, 'base_commit': base, 'source_sha256': hashlib.sha256(compressed).hexdigest(), 'diff_sha256': hashlib.sha256(diff).hexdigest(), 'parts': parts, 'diff_parts': diff_parts}
+          (target / 'manifest.json').write_text(json.dumps(manifest, indent=2))
+      - name: Publish unreferenced review snapshot in this repository
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const dir = 'review-export';
+            const tree = [];
+            for (const name of fs.readdirSync(dir).sort()) {
+              const blob = await github.rest.git.createBlob({...context.repo, content: fs.readFileSync(`${dir}/${name}`, 'utf8'), encoding: 'utf-8'});
+              tree.push({path: name, mode: '100644', type: 'blob', sha: blob.data.sha});
+            }
+            const created = await github.rest.git.createTree({...context.repo, tree});
+            const commit = await github.rest.git.createCommit({...context.repo, message: 'Pinned public source snapshot for owner-requested mobile release audit', tree: created.data.sha, parents: []});
+            console.log('REVIEW_SNAPSHOT ' + JSON.stringify({commit: commit.data.sha, ...JSON.parse(fs.readFileSync(`${dir}/manifest.json`, 'utf8'))}));

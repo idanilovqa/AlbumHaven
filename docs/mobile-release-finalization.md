@@ -49,3 +49,21 @@ checks or unrelated acceptance assertions changed.
 Pending: focused checks; full PR CI with skip_reviews; complete failure inventory
 and repair; two complete self-review passes; coverage audit; version/release notes;
 merge/tag/release. A successful preview-only workflow is not release evidence.
+
+## Dismissal repair checkpoint — 2026-09-29
+
+The failed candidate `234d4f5c579be29b3f19dcd72afb7719c13d4ed4` lets the
+follow-up native click through when the owner's dismissal callback restores
+focus. The capture-phase window blur listener also receives descendant blur
+notifications and incorrectly resets the pending click guard. Filter only that
+listener by its actual window target; retain focus restoration, cancellation,
+keyboard activation, normal next gestures and listener disposal.
+
+Added bound-listener regressions reproduce the defect for touch, mouse and pen:
+all three fail against the original source and pass after this correction. The
+focused Node dismissal file reports 16 passed, zero failed/skipped. The extra
+window-focus-loss case verifies that genuine window blur still resets the guard.
+Existing E2E scenarios, assertions, timeouts and performance budgets are unchanged.
+The real-app dismissal scenarios and the complete PR pipeline still require a
+new run on the repaired head; the other failed jobs remain unresolved. This
+checkpoint is not a green-CI, full-review, coverage-audit or release claim.

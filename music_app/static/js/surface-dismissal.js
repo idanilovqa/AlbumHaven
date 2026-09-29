@@ -56,11 +56,16 @@
   }
   function bind(window, resolve) {
     const handlers = create(resolve);
-    for (const [type, handler] of Object.entries(handlers)) {
+    const listeners = { ...handlers, blur(event) {
+      // Restoring the opener's focus emits a descendant blur during dismissal.
+      // Only loss of window focus may release the pending native-click guard.
+      if (event.target === window) handlers.blur();
+    } };
+    for (const [type, handler] of Object.entries(listeners)) {
       window.addEventListener(type, handler, { capture: true, passive: false });
     }
     return () => {
-      for (const [type, handler] of Object.entries(handlers)) window.removeEventListener(type, handler, true);
+      for (const [type, handler] of Object.entries(listeners)) window.removeEventListener(type, handler, true);
       handlers.blur();
     };
   }

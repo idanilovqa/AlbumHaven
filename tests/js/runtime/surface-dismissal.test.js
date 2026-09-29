@@ -111,3 +111,57 @@ test('binding uses capture and releases every listener on disposal', () => {
   const dispose = bind(window, () => null);
   assert.equal(listeners.size, 6); dispose(); assert.equal(listeners.size, 0);
 });
+
+
+function boundHarness() {
+  const listeners = new Map();
+  const window = {
+    addEventListener(type, handler) { listeners.set(type, handler); },
+    removeEventListener(type) { listeners.delete(type); },
+  };
+  const focusedItem = {}, background = {};
+  let active = null, closes = 0;
+  const dispose = bind(window, () => active);
+  const send = (type, target = background, extra = {}) => {
+    const event = { target, currentTarget: window, pointerId: 1, isPrimary: true, button: 0,
+      clientX: 12, clientY: 12, detail: 1, prevented: false, stopped: false,
+      preventDefault() { this.prevented = true; },
+      stopImmediatePropagation() { this.stopped = true; }, ...extra };
+    listeners.get(type)(event);
+    return event;
+  };
+  active = { surface: { contains: target => target === focusedItem }, dismiss() {
+    closes += 1;
+    active = null;
+    // Returning focus to the opener blurs the previously focused panel item.
+    // Capture listeners on window observe that blur even though window stays focused.
+    send('blur', focusedItem);
+  } };
+  return { send, window, background, dispose, closes: () => closes };
+}
+
+for (const pointerType of ['touch', 'mouse', 'pen']) {
+  test(`${pointerType}: returning focus during dismissal cannot release the pending background click`, () => {
+    const h = boundHarness();
+    try {
+      for (const type of ['pointerdown', 'pointerup', 'click']) {
+        const event = h.send(type, h.background, { pointerType });
+        assert.equal(event.prevented, true, type);
+        assert.equal(event.stopped, true, type);
+      }
+      assert.equal(h.closes(), 1);
+      for (const type of ['pointerdown', 'pointerup', 'click']) {
+        assert.equal(h.send(type, h.background, { pointerType }).stopped, false, type);
+      }
+    } finally { h.dispose(); }
+  });
+}
+
+test('losing window focus still clears the pending dismissal gesture', () => {
+  const h = boundHarness();
+  try {
+    h.send('pointerdown'); h.send('pointerup');
+    h.send('blur', h.window);
+    assert.equal(h.send('click').stopped, false);
+  } finally { h.dispose(); }
+});

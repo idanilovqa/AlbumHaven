@@ -1,87 +1,19 @@
 name: Capabilities Release Diagnostics
 
 on:
-  push:
-    branches: [2026-09-25-capabilities-audit]
-    paths: [.github/workflows/capabilities-release-diagnostics.yml]
+  workflow_dispatch:
 
 permissions:
   contents: read
 
 jobs:
-  probe:
-    if: github.repository == 'idanilovqa/AlbumHaven' && github.ref == 'refs/heads/2026-09-25-capabilities-audit'
-    runs-on: windows-2025
-    timeout-minutes: 20
+  inspect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v5
-        with:
-          fetch-depth: 2
-      - name: Verify probe parent
-        shell: pwsh
+      - name: Print source hashes
+        shell: bash
         run: |
-          if ((git rev-parse HEAD^) -ne '1f74df43e2c9150b84433baf6ff0fbb2458cae19') { throw 'Unexpected probe parent' }
-          if (git status --porcelain) { throw 'Dirty checkout' }
-      - name: Apply candidate product-only repairs in worktree
-        shell: python
-        run: |
-          from pathlib import Path
-          import re
-
-          path = Path('music_app/static/css/runtime/non-album-and-player.css')
-          text = path.read_text(encoding='utf-8')
-          shell_old = """.utility-loop-shell {
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto auto;
-  grid-template-rows: 22px 44px;"""
-          shell_new = shell_old.replace('22px 44px', '22px 32px')
-          assert text.count(shell_old) == 1
-          text = text.replace(shell_old, shell_new)
-
-          main_pattern = re.compile(r"(\.utility-loop-main\s*\{[^}]*grid-template-rows:\s*)22px\s+44px(;[^}]*height:\s*)70px(;)", re.S)
-          text, count = main_pattern.subn(r"\g<1>22px 32px\g<2>58px\g<3>", text)
-          assert count == 1, count
-
-          timeline_pattern = re.compile(r"(\.utility-loop-timeline-wrap\s*\{[^}]*?)(min-height:\s*)44px(;[^}]*?)(height:\s*)44px(;)", re.S)
-          text, count = timeline_pattern.subn(r"\g<1>\g<2>32px\g<3>\g<4>32px\g<5>", text)
-          assert count == 1, count
-          path.write_text(text, encoding='utf-8')
-
-          path = Path('music_app/static/css/button-component.css')
-          text = path.read_text(encoding='utf-8')
-          marker = """.action-button--bare:not(.trigger-anchor-open):not(.global-player *):hover:not(:disabled):not([aria-disabled='true']),
-:root[data-action-button-outlines='off'] .action-button:not(.trigger-anchor-open):not(.global-player *):not(.action-button--destructive):hover:not(:disabled):not([aria-disabled='true']) {
-  border-color: transparent;
-  background: color-mix(in srgb, var(--appearance-item-action-hover-background, var(--appearance-hover, #293a50)) 45%, transparent);
-}"""
-          assert text.count(marker) == 1
-          stronger = """
-:root .action-button.action-button--bare:not(.trigger-anchor-open):not(.global-player *):hover:not(:disabled):not([aria-disabled='true']),
-:root[data-action-button-outlines='off'] .action-button:not(.trigger-anchor-open):not(.global-player *):not(.action-button--destructive):hover:not(:disabled):not([aria-disabled='true']) {
-  border-color: transparent;
-  background: color-mix(in srgb, var(--appearance-item-action-hover-background, var(--appearance-hover, #293a50)) 45%, transparent);
-}
-"""
-          text = text.replace(marker, marker + stronger)
-          path.write_text(text, encoding='utf-8')
-
-          print('Candidate diff:')
-          import subprocess
-          subprocess.run(['git','diff','--check'], check=True)
-          subprocess.run(['git','diff','--','music_app/static/css/runtime/non-album-and-player.css','music_app/static/css/button-component.css'], check=True)
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '24'
-      - name: Install Node dependencies
-        run: npm ci
-      - name: Run saved-loop JavaScript contract
-        run: node --test tests/js/runtime/utility-list-builders.test.js
-      - name: Set up Chrome
-        id: chrome
-        uses: browser-actions/setup-chrome@v2
-        with:
-          chrome-version: stable
-      - name: Run focused component contracts
-        env:
-          PLAYWRIGHT_CHROME_EXECUTABLE: ${{ steps.chrome.outputs.chrome-path }}
-        run: npm run test:component -- tests/components/buttonInteractionOutline.spec.js tests/components/searchInput.spec.js tests/components/triggerAnchorSurface.spec.js
+          git rev-parse HEAD
+          git status --porcelain

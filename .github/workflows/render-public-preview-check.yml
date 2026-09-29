@@ -1,6 +1,9 @@
 name: Render Public Preview Check
 
 on:
+  push:
+    branches: [2026-09-29-render-feedback-promotion]
+    paths: ['.github/workflows/render-public-preview-check.yml']
   workflow_dispatch:
 
 permissions:
@@ -13,6 +16,7 @@ jobs:
     steps:
       - uses: actions/checkout@v5
         with:
+          ref: 3534ebd5ee6a9d30499ee55499980c8d8cad0176
           persist-credentials: false
       - uses: actions/setup-python@v5
         with:
@@ -29,7 +33,7 @@ jobs:
           import urllib.request
 
           origin = 'https://albumhaven.onrender.com'
-          assets = ['css/mobile-layout.css', 'css/runtime/trigger-anchor.css', 'js/runtime-bundle.js']
+          assets = ['css/mobile-layout.css', 'css/runtime/trigger-anchor.css', 'css/runtime/cover-lookup-modal.css', 'js/runtime-bundle.js']
           expected = {asset: hashlib.sha256(Path('music_app/static', asset).read_bytes()).hexdigest() for asset in assets}
           deadline = time.monotonic() + 300
           attempt = 0

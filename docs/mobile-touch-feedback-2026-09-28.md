@@ -72,4 +72,20 @@ count pair together. Long names may wrap naturally without changing that inset.
 Desktop layouts, Home tabs, album headers, search, and all control behavior remain
 unchanged. Verify both black and parchment at 320/350/351/390/430/900px, live
 resizing, a long artist name and opening/dismissing Artist Family. This is an
-additive acceptance check; no existing test contract or checklist count changes.
+additive alignment check. The older compact-header expectation that always put
+controls beside counts is superseded only at 350px and below by the owner's
+explicit three-row instruction; it now checks both adjacent row gaps against the
+same four-pixel limit. Wider-screen row alignment, edge bounds, touch-target
+sizes, menu behavior, timeouts and retries are unchanged. No checklist counter
+is present in this repair note.
+
+
+### Gallery alignment verification follow-up
+
+Run 36509616193 passed focused checks, all seven baseline browser cases and 54
+extended cases. The new exact-x/row checks passed at all seven tested widths in
+both themes. Four failures were test-contract issues: the existing compact-header
+probe still required two rows at 320px (now explicitly superseded), and the two
+new long-name checks omitted the existing family suffix for an artist that does
+have a family. The latter now asserts the full exact family title; no product
+name, dataset, navigation behavior, assertion budget or retry policy is changed.

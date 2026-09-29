@@ -123,7 +123,7 @@ for (const palette of ['black', 'parchment-pine']) {
     await phone.page.keyboard.press('Escape');
     await expect(phone.familyPanel).not.toBeVisible();
     await phone.browseArtist('Northlight & The Lumen Trio');
-    await expect(phone.galleryContextName).toHaveText('Northlight & The Lumen Trio');
+    await expect(phone.galleryContextName).toHaveText('Northlight & The Lumen Trio family');
     await phone.expectGalleryTextColumn(false);
     await snapshot(`121-long-artist-text-column-${palette}`);
   });

@@ -270,9 +270,12 @@ test('themed player boundaries preserve floating hover and focus strength', () =
     /border-color:\s*var\(--appearance-player-ink\)/,
     'expanded and docked player boundaries still follow the saved player ink',
   );
+  const floatingBoundaryRule = cssRule(playerCss, '\\.global-player\\.is-floating-compact');
+  assert.match(floatingBoundaryRule, /border:\s*1px solid var\(--compact-floating-edge-color,/);
+  assert.match(floatingBoundaryRule, /box-shadow:\s*0 0 0 1px var\(--compact-floating-edge-color,/);
   assert.match(
     playerCss,
-    /\.global-player\.is-floating-compact:is\(:hover,:focus-within\)\s*\{[^}]*--compact-floating-edge-strength:\s*30%/s,
+    /\.global-player\.is-floating-compact:is\(:hover,:focus-within\)\s*\{[^}]*--compact-floating-glow-strength:\s*38%[^}]*--compact-floating-control-glow-strength:\s*48%/s,
   );
 });
 

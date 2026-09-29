@@ -69,7 +69,7 @@ test('failed notification retry and clear remain separate actions that do not ac
 
   assert.match(drawer, /status === 'failed'[^]*data-retry-cover-lookup-task/);
   assert.match(drawer, /data-clear-cover-lookup-task/);
-  const retryHandler = handlers.match(/const retryCoverLookupTaskButton[^]*?\n\s*}\n\n/)?.[0] || '';
+  const retryHandler = handlers.match(/const retryCoverLookupTaskButton[^]*?\r?\n\s*}\r?\n\r?\n/)?.[0] || '';
   assert.match(retryHandler, /event\.stopPropagation\(\)/);
   assert.match(retryHandler, /startCoverLookupForAlbum\(task\.album_payload, \{ backgroundOnly: true \}\)/);
 });

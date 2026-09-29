@@ -88,7 +88,7 @@ test('connected dropdown surfaces follow their light content context', () => {
   );
   assert.match(
     triggerAnchorCssSource,
-    /:root\[data-appearance-mode='light'\] \.trigger-anchor-surface\[data-trigger-anchor-context='content'\]:is\(\[data-anchored-surface\], \.artist-info-overlay\)\s*\{[^}]*--trigger-anchor-background:\s*var\(--appearance-card\);[^}]*--text:\s*var\(--appearance-ink\);[^}]*--muted:\s*var\(--appearance-muted\);/,
+    /:root \[data-trigger-anchor-context='content'\],\s*:root\[data-appearance-palette\] \[data-trigger-anchor-context='content'\]\s*\{[^}]*--trigger-anchor-background:\s*var\(--appearance-card\);[^}]*--text:\s*var\(--appearance-ink\);[^}]*--muted:\s*var\(--appearance-muted\);/,
   );
   assert.match(
     triggerAnchorCssSource,

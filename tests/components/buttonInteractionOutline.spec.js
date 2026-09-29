@@ -181,11 +181,13 @@ test('non-green player surfaces derive computed action hover colors and bare chr
       root.style.setProperty('--appearance-item-action-hover-border', `color-mix(in srgb, ${value} 22%, #858985)`);
     }, player);
     await action.hover();
+    await action.evaluate((element) => Promise.all(element.getAnimations().map((animation) => animation.finished)));
     samples.push(await action.evaluate((element) => ({
       background: getComputedStyle(element).backgroundColor,
       border: getComputedStyle(element).borderColor,
     })));
     await page.mouse.move(0, 0);
+    await action.evaluate((element) => Promise.all(element.getAnimations().map((animation) => animation.finished)));
   }
   expect(samples[0].background).not.toBe(samples[1].background);
   expect(samples[0].background).not.toContain('29, 185, 84');

@@ -12344,11 +12344,15 @@ function mountLoopEditActionControl({
     if (next.reset || contextChanged || !currentCanCreate || (wasActive && !currentActive)) {
       clearTimers();
       renderEngagement(retained() && currentCanCreate);
+      // A context reset must not require leaving and re-entering Play to reveal its actions.
+      pointerWithin = pointerWithin || Boolean(compound.matches?.(':hover'));
+      if (pointerWithin && currentCanCreate) visit();
     } else if ((!wasActive && currentActive) || (!wasAllowed && currentCanCreate)) {
       pointerWithin = pointerWithin || Boolean(compound.matches?.(':hover'));
       focusWithin = focusWithin || Boolean(ownerDocument?.activeElement && compound.contains?.(ownerDocument.activeElement));
       clearTimers();
       renderEngagement(retained() || (currentActive && pointerWithin));
+      if (pointerWithin && !currentEngaged) visit();
     } else if (retained()) renderEngagement(true);
     root.hidden = !currentCanCreate;
     const unavailable = !currentEnabled || !currentCanCreate;
@@ -12395,6 +12399,8 @@ function mountLoopEditActionControl({
   listen(touchQuery, 'change', () => { if (retained()) visit(); else leave(); });
   renderEngagement(Boolean(touchQuery?.matches));
   update({ enabled, canCreate, active, busy });
+  pointerWithin = Boolean(compound.matches?.(':hover'));
+  if (pointerWithin) visit();
   return {
     update,
     destroy() {
@@ -15524,8 +15530,11 @@ function mountDateRangePicker(container) {
     input = root.querySelector(`[name="${button.dataset.calendarTrigger}"]`);
     month = input.value ? new Date(`${input.value}T12:00:00`) : new Date();
     popup = document.createElement('div'); popup.className = 'calendar-picker ui-scrollbar';
+    popup.setAttribute('popover', 'manual');
     popup.setAttribute('role', 'dialog'); popup.setAttribute('aria-label', button.getAttribute('aria-label'));
     container.appendChild(popup); trigger.setAttribute('aria-expanded', 'true');
+    // Keep the calendar in its form's focus/selection scope, above ancestor clipping.
+    popup.showPopover();
     popup.addEventListener('click', e => {
       const date = e.target.closest('[data-calendar-date]'), nav = e.target.closest('[data-calendar-month]');
       if (date && !date.disabled) { input.value = date.dataset.calendarDate; input.dispatchEvent(new Event('input', { bubbles: true })); close(true); }

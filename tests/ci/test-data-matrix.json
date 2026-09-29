@@ -5896,7 +5896,7 @@
     "expectedContracts": [
       "mount keeps unavailable devices natively disabled after load save and cancel"
     ],
-    "ownerApproval": "pending"
+    "ownerApproval": "approved"
   },
   {
     "config": "playwright.component.config.js",
@@ -5911,7 +5911,7 @@
     "expectedContracts": [
       "mountAlerts keeps unavailable devices natively disabled after load save and cancel"
     ],
-    "ownerApproval": "pending"
+    "ownerApproval": "approved"
   },
   {
     "config": "playwright.component.config.js",
@@ -5926,7 +5926,7 @@
     "expectedContracts": [
       "mountAlbumPage keeps unavailable devices natively disabled after load save and cancel"
     ],
-    "ownerApproval": "pending"
+    "ownerApproval": "approved"
   },
   {
     "config": "playwright.component.config.js",
@@ -5941,7 +5941,7 @@
     "expectedContracts": [
       "mountSelectionAccent keeps unavailable devices natively disabled after load save and cancel"
     ],
-    "ownerApproval": "pending"
+    "ownerApproval": "approved"
   },
   {
     "config": "playwright.component.config.js",
@@ -5956,7 +5956,7 @@
     "expectedContracts": [
       "mountSeekbar keeps unavailable devices natively disabled after load save and cancel"
     ],
-    "ownerApproval": "pending"
+    "ownerApproval": "approved"
   },
   {
     "config": "playwright.component.config.js",
@@ -5971,7 +5971,7 @@
     "expectedContracts": [
       "gallery resize and search updates preserve the Library Status bar"
     ],
-    "ownerApproval": "pending"
+    "ownerApproval": "approved"
   },
   {
     "config": "playwright.component.config.js",
@@ -5986,7 +5986,7 @@
     "expectedContracts": [
       "Settings filter consumes first Escape and returns focus before the next closes Settings"
     ],
-    "ownerApproval": "pending"
+    "ownerApproval": "approved"
   },
   {
     "config": "playwright.component.config.js",
@@ -6001,7 +6001,7 @@
     "expectedContracts": [
       "scroll and resize retain focused row identity within unchanged and overlapping windows"
     ],
-    "ownerApproval": "pending"
+    "ownerApproval": "approved"
   },
   {
     "config": "playwright.component.config.js",
@@ -6016,6 +6016,24 @@
     "expectedContracts": [
       "native Tab and ShiftTab traverse past the initial window and leave at the true ends"
     ],
-    "ownerApproval": "pending"
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/calendarPicker.spec.js",
+    "case": "calendar days remain clickable above the anchored form and Escape closes only the calendar",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "native-calendar-day-selection-outside-parent-clip",
+      "calendar-focus-restoration",
+      "nested-Escape-preserves-date-range-form",
+      "date-range-apply-preserves-selected-values"
+    ],
+    "ownerApproval": "approved"
   }
 ]

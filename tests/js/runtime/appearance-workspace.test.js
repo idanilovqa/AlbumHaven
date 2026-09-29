@@ -740,7 +740,7 @@ test('Item interaction tokens cover shared actionable controls without recolorin
   assert.match(css, /:is\(button, input, select, \[role='button'\], \[data-actionable\]\)[^{]*:not\(\.global-player \*\)[^{]*:focus-visible[^{}]*\{[^}]*outline:\s*1px solid var\(--appearance-interaction-outline,[^;}]+;[^}]*outline-offset:\s*1px/s);
   assert.match(css, /:root\s+:is\(button, \.button, \[role='button'\], \[data-actionable\]\)[^{]*:hover[^{}]*\{[^}]*border-color:\s*var\(--appearance-item-action-hover-border,/s);
   assert.match(css, /:root\s+:is\(button, input, select, \[role='button'\], \[data-actionable\]\)[^{]*:not\(\.global-player \*\)[^{]*:focus-visible[^{}]*\{[^}]*outline:\s*1px solid var\(--appearance-interaction-outline,/s);
-  assert.match(css, /:is\(input\[type='checkbox'\], input\[type='radio'\]\):not\(\.global-player \*\):hover:not\(:disabled\)[^{}]*\{[^}]*outline:\s*1px solid var\(--appearance-interaction-outline,/s);
+  assert.match(css, /:is\(input\[type='checkbox'\], input\[type='radio'\]\):not\(\.global-player \*\):hover:not\(:disabled\)[^{}]*\{[^}]*outline:\s*1px solid var\(--appearance-control-selected\)/s);
   assert.match(css, /:root\[data-appearance-palette\]\s+:is\(input\[type='checkbox'\], input\[type='radio'\]\)\s*\{[^}]*accent-color:\s*var\(--appearance-control-selected\)/s);
   assert.doesNotMatch(css, /:root\[data-appearance-palette\][^{]*:focus-visible\s*\{[^}]*--appearance-interaction-outline/s);
 });

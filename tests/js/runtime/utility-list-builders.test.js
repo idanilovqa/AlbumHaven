@@ -6633,11 +6633,11 @@ test('saved loop layout keeps edit timestamps in a dedicated row above the mono 
   assert.match(mainRule, /display:\s*grid/);
   assert.match(
     mainRule,
-    /grid-template-rows:\s*22px\s+32px/,
+    /grid-template-rows:\s*22px\s+44px/,
     'the saved player must reserve the same timestamp-row height when edit mode hides pitch',
   );
   assert.doesNotMatch(mainRule, /grid-template-rows:\s*auto/);
-  assert.match(mainRule, /height:\s*58px/);
+  assert.match(mainRule, /height:\s*70px/);
   assert.match(mainRule, /(?:row-)?gap:\s*4px/);
   assert.match(
     mainRule,
@@ -6657,8 +6657,8 @@ test('saved loop layout keeps edit timestamps in a dedicated row above the mono 
     /transform\s*:/,
     'a transformed timeline wrapper traps the saved z4 range handles below the overlaid z3 Play pod',
   );
-  assert.match(timelineWrapRule, /min-height:\s*32px/);
-  assert.match(timelineWrapRule, /height:\s*32px/);
+  assert.match(timelineWrapRule, /min-height:\s*44px/);
+  assert.match(timelineWrapRule, /height:\s*44px/);
   assert.match(globalRangeSurfaceRule, /z-index:\s*2/);
   assert.match(savedPodRule, /position:\s*absolute/);
   assert.match(savedPodRule, /z-index:\s*4/);

@@ -14,7 +14,7 @@ const css = fs.readFileSync(
 
 function cssRule(selector) {
   const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  return css.match(new RegExp(`${escaped}\\s*\\{([^}]*)\\}`, 's'))?.[1] || '';
+  return css.replace(/\r\n/g, '\n').match(new RegExp(`${escaped}\\s*\\{([^}]*)\\}`, 's'))?.[1] || '';
 }
 
 test('cover source entry is compact, supports picker and drop, and omits redundant helper copy', () => {

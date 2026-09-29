@@ -14,6 +14,7 @@ export async function waitForScanDrivenGalleryReady({
       minimumSidebarCount: Math.max(0, requiredSidebarCount - 1),
     });
   } else {
+    await navigationPanelActions.setArtistTreeFolded(false);
     await navigationPanelActions.navigationPanel.allArtistsLink.waitFor({
       state: 'visible',
       timeout: 60000,

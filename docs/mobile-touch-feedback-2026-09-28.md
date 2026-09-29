@@ -89,3 +89,52 @@ probe still required two rows at 320px (now explicitly superseded), and the two
 new long-name checks omitted the existing family suffix for an artist that does
 have a family. The latter now asserts the full exact family title; no product
 name, dataset, navigation behavior, assertion budget or retry policy is changed.
+
+
+## Rating, compact-header, loop-menu and cover CTA follow-up
+
+Latest owner feedback supersedes the title-line mobile rating position and the
+large gap above the header counts. In every information-bearing mobile Gallery
+mode, show the rating first on the track-count line, vertically centered with its
+text; leave unrated albums and No info without rating decoration. Preserve the
+full album-title width and single-line duration. Keep the family title/counts'
+shared left inset, but make counts the immediately following line (at most 4px
+gap). Right-side controls move up with that row; at 350px and below they still
+occupy the compact third row. Preserve existing 40px navigation/action hit areas.
+
+Phone Pitch and Speed menus must open against their own button, using the shared
+joined trigger/surface treatment, not center the selected option over the player.
+Prefer below if it fits, otherwise above or the roomier side, bounded by the app
+bar and bottom player. Show the active option by scrolling only the menu's inner
+list. Preserve selection, audio ownership, repeat, outside/Escape dismissal and
+exclusive menu ownership. Desktop inline pitch/speed controls remain unchanged.
+
+Find Better Art receives a restrained, theme-colored glow on both desktop and
+mobile, with stronger hover/keyboard-focus feedback, no perpetual animation and
+no size/footer change. Disabled actions do not glow; forced-color and reduced-
+motion settings remain usable. Save retains its existing primary action.
+
+Verification extends the existing generated-media real-app scenarios in Solid
+Black and Parchment & Pine. The superseded rating-next-to-title and centered-count
+row probes now assert the owner's rating-before-track-count and tight next-line
+placement. The previous mobile selected-option-over-trigger test is replaced by
+edge-joined geometry plus selected-option visibility; desktop positioning remains
+separately covered. Keep all unrelated functional flows, thresholds, retries and
+timeouts. No checklist counter exists here; no release/main merge is authorized.
+
+
+### Follow-up verification
+
+Run 36515039315 passed the unit/contract stage, seven baseline browser scenarios
+and 56 extended scenarios, including both new CTA/glow cases and joined loop-menu
+cases. Four failures exposed obsolete duplicated probes: two header probes still
+measured the full title-container origin/center rather than the actual first text
+line; one legacy picker probe still required selected-option/button overlap; and
+the new rating probe counted the existing card's intentionally clipped 14px glow
+overscan as content overflow. The equivalent user-visible assertions now measure
+the bare control against the bar and first text line, the joined popup edge, and
+the actual metadata owner plus each label's bounds. No retries, waits, timeouts,
+playback assertions or navigation actions change. Reviewing the desktop Pine
+screenshot also exposed inherited dark CTA ink on dark chrome: the shared CTA now
+uses its owning surface's text and a lightly accent-tinted opaque background, with
+real contrast checks on both mobile and desktop.

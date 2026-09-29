@@ -92,12 +92,30 @@ export class MobileTouchFeedbackPage extends MobilePolishPage {
       expect(prefix).not.toContain('✓');
     }
   }
-  async expectRatingBesideTitle() {
+  async expectRatingBeforeTracks() {
     const rated = this.galleryCards.filter({ has: this.page.locator('.rating-row:not([data-rating-value="0"])') }).first();
-    const title = await rated.locator('.album-title').boundingBox();
-    const rating = await rated.locator('.rating-row').boundingBox();
-    expect(rating.x).toBeGreaterThanOrEqual(title.x + title.width);
-    expect(rating.y + rating.height / 2).toBeCloseTo(title.y + title.height / 2, 0);
+    await expect(rated.locator('.rating-text')).toBeVisible();
+    const [title, rating, tracks, length] = await Promise.all([
+      rated.locator('.album-title').boundingBox(), rated.locator('.rating-text').boundingBox(),
+      rated.locator('.track-count').boundingBox(), rated.locator('.album-length').boundingBox(),
+    ]);
+    expect(rating.x + rating.width).toBeLessThanOrEqual(tracks.x);
+    expect(rating.y + rating.height / 2).toBeCloseTo(tracks.y + tracks.height / 2, 0);
+    expect(rating.y).toBeGreaterThanOrEqual(title.y + title.height);
+    await expect(rated.locator('.track-count')).toHaveCSS('white-space', 'nowrap');
+    await expect(rated.locator('.album-length')).toHaveCSS('white-space', 'nowrap');
+    expect(length.width).toBeLessThanOrEqual((await rated.boundingBox()).width);
+    // The card's existing ::before deliberately overscans by 14px for its clipped glow.
+    // Measure the content owner, not that decorative overflow.
+    // parity-check: allow-read-only-measurement-evaluate -- verify metadata itself fits its card in dense grids.
+    expect(await rated.locator('.gallery-card-info').evaluate(node => node.scrollWidth <= node.clientWidth + 1)).toBe(true);
+    const frame = await rated.boundingBox();
+    for (const label of [rating, tracks, length]) {
+      expect(label.x).toBeGreaterThanOrEqual(frame.x);
+      expect(label.x + label.width).toBeLessThanOrEqual(frame.x + frame.width);
+    }
+    const unrated = this.galleryCards.filter({ has: this.page.locator('.rating-row[data-rating-value="0"]') }).first();
+    await expect(unrated.locator('.rating-row')).not.toBeVisible();
   }
   async openAlbumTitle(title) {
     await this.galleryCards.getByRole('button', { name: title, exact: true }).click();
@@ -117,6 +135,7 @@ export class MobileTouchFeedbackPage extends MobilePolishPage {
     ]);
     expect(counts.x).toBeGreaterThanOrEqual(hamburger.x + hamburger.width);
     expect(counts.y).toBeGreaterThanOrEqual(name.y + name.height);
+    expect(counts.y - name.y - name.height).toBeLessThanOrEqual(4);
     expect(controls.x + controls.width).toBeCloseTo(bar.x + bar.width, 0);
     // parity-check: allow-read-only-measurement-evaluate -- count text must fit without splitting numbers from their labels.
     const textLines = await summary.evaluate(node => {
@@ -128,7 +147,7 @@ export class MobileTouchFeedbackPage extends MobilePolishPage {
       expect(controls.y).toBeGreaterThanOrEqual(counts.y + counts.height);
       expect(controls.y - counts.y - counts.height).toBeLessThanOrEqual(4);
     } else {
-      expect(controls.y + controls.height / 2).toBeCloseTo(counts.y + counts.height / 2, 0);
+      expect(controls.y).toBeCloseTo(counts.y, 0);
       expect(counts.x + counts.width).toBeLessThanOrEqual(controls.x);
     }
     expect(await this.hasNoHorizontalOverflow()).toBe(true);
@@ -171,6 +190,45 @@ export class MobileTouchFeedbackPage extends MobilePolishPage {
         && Math.abs(settings.right - (window.innerWidth - 12)) < 1
         && button.contains(document.elementFromPoint(settings.x + settings.width / 2, settings.y + settings.height / 2));
     })).toBe(true);
+  }
+  async openCoverCtaAtWidth(width) {
+    await this.page.setViewportSize({ width, height: 900 });
+    // Start at the normal route so desktop opens a real modal, not a retained mobile page.
+    await this.page.goto('/');
+    await this.search('Sixteen Horizons');
+    await this.openAlbumTitle('Sixteen Horizons');
+    await this.albumCoverSearch.click();
+    await expect(this.findBetterArt).toBeVisible();
+    await expect(this.findBetterArt).toBeEnabled();
+    const overlay = this.page.locator('#cover-lookup-modal');
+    if (width <= 900) await expect(overlay).toHaveClass(/is-mobile-page/);
+    else await expect(overlay).not.toHaveClass(/is-mobile-page/);
+  }
+  async expectCoverCtaGlow() {
+    const button = this.findBetterArt;
+    const before = await button.boundingBox();
+    await expect(button).not.toHaveCSS('box-shadow', 'none');
+    await this.expectCoverCtaContrast();
+    await button.hover();
+    await expect(button).not.toHaveCSS('box-shadow', 'none');
+    await button.focus();
+    await expect(button).toBeFocused();
+    await this.expectCoverCtaContrast();
+    const after = await button.boundingBox();
+    expect(after.width).toBe(before.width); expect(after.height).toBe(before.height);
+    const footer = await this.page.locator('#cover-lookup-modal .cover-lookup-modal-actions').boundingBox();
+    if (this.page.viewportSize().width <= 900) expect(footer.height).toBeLessThanOrEqual(56);
+    await this.page.emulateMedia({ reducedMotion: 'reduce' });
+    await expect(button).toHaveCSS('transition-duration', '0s');
+    await expect(button).not.toHaveCSS('box-shadow', 'none');
+    await this.page.emulateMedia({ reducedMotion: 'no-preference' });
+  }
+  async expectCoverCtaContrast() {
+    // parity-check: allow-read-only-measurement-evaluate -- verify the CTA's theme-owned text against its real opaque button surface.
+    const paint = await this.findBetterArt.evaluate(node => ({
+      ink: getComputedStyle(node).color, background: getComputedStyle(node).backgroundColor,
+    }));
+    this.expectContrast([paint]);
   }
   async openLibraryStatus() {
     // The mobile search replaces app-bar actions while expanded. Collapse it

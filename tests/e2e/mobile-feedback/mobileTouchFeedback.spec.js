@@ -37,12 +37,13 @@ for (const palette of ['black', 'parchment-pine']) {
   });
 }
 
-test('album ratings share the title line; scrolled identity is top-aligned and initial scrollbars wait for touch', async ({ page, app, snapshot }) => {
+test('album ratings precede tracks on one line; scrolled identity is top-aligned and initial scrollbars wait for touch', async ({ page, app, snapshot }) => {
   const phone = new MobileTouchFeedbackPage(page);
   await phone.browseArtist();
   for (const mode of ['list', 'cards']) {
     await phone.selectView(mode);
-    await phone.expectRatingBesideTitle();
+    await phone.expectRatingBeforeTracks();
+    await snapshot(`122-rating-before-tracks-${mode}`);
   }
   await phone.search('Sixteen Horizons');
   await phone.openAlbumTitle('Sixteen Horizons');
@@ -126,5 +127,18 @@ for (const palette of ['black', 'parchment-pine']) {
     await expect(phone.galleryContextName).toHaveText('Northlight & The Lumen Trio family');
     await phone.expectGalleryTextColumn(false);
     await snapshot(`121-long-artist-text-column-${palette}`);
+  });
+}
+
+
+for (const palette of ['black', 'parchment-pine']) {
+  test(`Find Better Art glows without expanding its footer on phone and desktop in ${palette}`, async ({ page, app, snapshot }) => {
+    const phone = new MobileTouchFeedbackPage(page);
+    await phone.usePalette(palette);
+    for (const width of [390, 1440]) {
+      await phone.openCoverCtaAtWidth(width);
+      await phone.expectCoverCtaGlow();
+      await snapshot(`123-cover-cta-glow-${palette}-${width}`);
+    }
   });
 }

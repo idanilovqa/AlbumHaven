@@ -15,9 +15,14 @@ export class MobileHeaderPage extends MobilePolishPage {
     await expect(this.libraryButton).toHaveCSS('background-color', 'rgba(0, 0, 0, 0)');
     await expect(this.libraryButton).toHaveCSS('box-shadow', 'none');
     const button = await this.libraryButton.boundingBox();
-    const title = await this.galleryTitle.boundingBox();
-    expect(button.x).toBeCloseTo(title.x, 0);
-    expect(button.y + button.height / 2).toBeCloseTo(title.y + title.height / 2, 0);
+    const bar = await this.mainGalleryBar.boundingBox();
+    const name = await this.galleryContextName.boundingBox();
+    // The 40px bare hit area centers on the first text line, without stretching it.
+    // parity-check: allow-read-only-measurement-evaluate -- measure the actual title's first line height, including wrapped long names.
+    const lineHeight = await this.galleryContextName.evaluate(node => parseFloat(getComputedStyle(node).lineHeight));
+    expect(button.x).toBeCloseTo(bar.x, 0);
+    expect(name.x).toBeCloseTo(button.x + button.width + 6, 0);
+    expect(button.y + button.height / 2).toBeCloseTo(name.y + lineHeight / 2, 0);
     expect(button.width).toBeGreaterThanOrEqual(40);
     expect(button.height).toBeGreaterThanOrEqual(40);
   }
@@ -54,7 +59,8 @@ export class MobileHeaderPage extends MobilePolishPage {
       expect(actions.y - summary.y - summary.height).toBeLessThanOrEqual(4);
     } else {
       expect(actions.y - title.y - title.height).toBeLessThanOrEqual(4);
-      expect(summary.y + summary.height / 2).toBeCloseTo(actions.y + actions.height / 2, 0);
+      expect(summary.y - title.y - title.height).toBeLessThanOrEqual(4);
+      expect(summary.y).toBeCloseTo(actions.y, 0);
       expect(summary.x + summary.width).toBeLessThanOrEqual(actions.x);
     }
     expect(actions.x + actions.width).toBeCloseTo(bar.x + bar.width, 0);

@@ -50,6 +50,7 @@ function clearTriggerAnchor(surface) {
   delete surface.dataset.triggerAnchorSearch;
  binding.anchor.style.removeProperty?.('--trigger-anchor-background');
  surface.style.removeProperty?.('--trigger-anchor-background');
+ surface.style.removeProperty?.('background-color');
  triggerAnchorBindings.delete(surface);
 }
 
@@ -77,6 +78,7 @@ function syncTriggerAnchor(surface, anchor) {
     : surfaceStyle?.getPropertyValue?.('--trigger-anchor-background')?.trim();
   if (surfaceBackground) {
     surface.style.setProperty('--trigger-anchor-background', surfaceBackground);
+    surface.style.setProperty('background-color', surfaceBackground);
     anchor.style.setProperty('--trigger-anchor-background', surfaceBackground);
   }
   surface.classList.add('trigger-anchor-surface');

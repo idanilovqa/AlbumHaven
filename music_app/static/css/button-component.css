@@ -143,6 +143,9 @@
   border-color: transparent;
   background: color-mix(in srgb, var(--appearance-item-action-hover-background, var(--appearance-hover, #293a50)) 45%, transparent);
 }
+:root .action-button.action-button--bare:not(.trigger-anchor-open):not(.global-player *) {
+  transition: border-color 150ms ease, color 150ms ease, outline-color 150ms ease;
+}
 .action-button--destructive {
   --appearance-interaction-outline: var(--appearance-error, #ef5350);
   color: var(--alert-error-ink, color-mix(in srgb, var(--appearance-error, #ef5350) 72%, white 28%));

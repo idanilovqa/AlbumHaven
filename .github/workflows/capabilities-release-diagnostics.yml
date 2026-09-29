@@ -1,78 +1,59 @@
 name: Capabilities Release Diagnostics
 
 on:
-  push:
-    branches: [2026-09-25-capabilities-audit]
-    paths: [.github/workflows/capabilities-release-diagnostics.yml]
+  workflow_dispatch:
 
 permissions:
   contents: read
 
 jobs:
   probe:
-    if: github.repository == 'idanilovqa/AlbumHaven' && github.ref == 'refs/heads/2026-09-25-capabilities-audit'
+    if: github.repository == 'idanilovqa/AlbumHaven' && github.ref == 'refs/heads/chatgpt/pr17-css-probe2-20260929'
     runs-on: windows-2025
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v5
         with:
           fetch-depth: 2
-      - name: Verify probe parent
+      - name: Verify helper parent
         shell: pwsh
         run: |
-          if ((git rev-parse HEAD^) -ne '1f74df43e2c9150b84433baf6ff0fbb2458cae19') { throw 'Unexpected probe parent' }
+          if ((git rev-parse HEAD^) -ne 'b4ec1a51a4ca717e42f73f2b9cb362e833b800cd') { throw 'Unexpected helper parent' }
           if (git status --porcelain) { throw 'Dirty checkout' }
-      - name: Apply candidate product-only repairs in worktree
+      - name: Apply saved-loop candidate in worktree
         shell: python
         run: |
           from pathlib import Path
-          import re
-
-          path = Path('music_app/static/css/runtime/non-album-and-player.css')
-          text = path.read_text(encoding='utf-8')
-          shell_old = """.utility-loop-shell {
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto auto;
-  grid-template-rows: 22px 44px;"""
-          shell_new = shell_old.replace('22px 44px', '22px 32px')
-          assert text.count(shell_old) == 1
-          text = text.replace(shell_old, shell_new)
-
-          main_pattern = re.compile(r"(\.utility-loop-main\s*\{[^}]*grid-template-rows:\s*)22px\s+44px(;[^}]*height:\s*)70px(;)", re.S)
-          text, count = main_pattern.subn(r"\g<1>22px 32px\g<2>58px\g<3>", text)
-          assert count == 1, count
-
-          timeline_pattern = re.compile(r"(\.utility-loop-timeline-wrap\s*\{[^}]*?)(min-height:\s*)44px(;[^}]*?)(height:\s*)44px(;)", re.S)
-          text, count = timeline_pattern.subn(r"\g<1>\g<2>32px\g<3>\g<4>32px\g<5>", text)
-          assert count == 1, count
-          path.write_text(text, encoding='utf-8')
-
-          path = Path('music_app/static/css/button-component.css')
-          text = path.read_text(encoding='utf-8')
-          marker = """.action-button--bare:not(.trigger-anchor-open):not(.global-player *):hover:not(:disabled):not([aria-disabled='true']),
-:root[data-action-button-outlines='off'] .action-button:not(.trigger-anchor-open):not(.global-player *):not(.action-button--destructive):hover:not(:disabled):not([aria-disabled='true']) {
-  border-color: transparent;
-  background: color-mix(in srgb, var(--appearance-item-action-hover-background, var(--appearance-hover, #293a50)) 45%, transparent);
-}"""
-          assert text.count(marker) == 1
-          stronger = """
-:root .action-button.action-button--bare:not(.trigger-anchor-open):not(.global-player *):hover:not(:disabled):not([aria-disabled='true']),
-:root[data-action-button-outlines='off'] .action-button:not(.trigger-anchor-open):not(.global-player *):not(.action-button--destructive):hover:not(:disabled):not([aria-disabled='true']) {
-  border-color: transparent;
-  background: color-mix(in srgb, var(--appearance-item-action-hover-background, var(--appearance-hover, #293a50)) 45%, transparent);
-}
-"""
-          text = text.replace(marker, marker + stronger)
-          path.write_text(text, encoding='utf-8')
-
-          print('Candidate diff:')
-          import subprocess
-          subprocess.run(['git','diff','--check'], check=True)
-          subprocess.run(['git','diff','--','music_app/static/css/runtime/non-album-and-player.css','music_app/static/css/button-component.css'], check=True)
+          p = Path('music_app/static/css/runtime/non-album-and-player.css')
+          s = p.read_text(encoding='utf-8')
+          old = """.utility-loop-shell {
+            display: grid;
+            grid-template-columns: auto minmax(0, 1fr) auto auto;
+            grid-template-rows: 22px 44px;"""
+          assert s.count(old) == 1
+          s = s.replace(old, old.replace('22px 44px', '22px 32px'))
+          old = """.utility-loop-main {
+            grid-row: 1 / 3;
+            position: relative;
+            display: grid;
+            grid-template-rows: 22px 44px;
+            row-gap: 4px;
+            min-width: 0;
+            height: 70px;"""
+          assert s.count(old) == 1
+          s = s.replace(old, old.replace('22px 44px', '22px 32px').replace('height: 70px', 'height: 58px'))
+          old = """  height: 44px;
+            min-height: 44px;
+            min-width: 0;
+          }
+          .utility-loop-timeline {"""
+          assert s.count(old) == 1
+          s = s.replace(old, old.replace('height: 44px', 'height: 32px').replace('min-height: 44px', 'min-height: 32px'))
+          p.write_text(s, encoding='utf-8')
       - uses: actions/setup-node@v4
         with:
           node-version: '24'
-      - name: Install Node dependencies
+      - name: Install dependencies
         run: npm ci
       - name: Run saved-loop JavaScript contract
         run: node --test tests/js/runtime/utility-list-builders.test.js
@@ -84,4 +65,4 @@ jobs:
       - name: Run focused component contracts
         env:
           PLAYWRIGHT_CHROME_EXECUTABLE: ${{ steps.chrome.outputs.chrome-path }}
-        run: npm run test:component -- tests/components/buttonInteractionOutline.spec.js tests/components/searchInput.spec.js tests/components/triggerAnchorSurface.spec.js
+        run: npx playwright test -c playwright.component.config.js tests/components/buttonInteractionOutline.spec.js tests/components/searchInput.spec.js tests/components/triggerAnchorSurface.spec.js

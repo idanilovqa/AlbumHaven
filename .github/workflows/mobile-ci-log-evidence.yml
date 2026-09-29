@@ -1,0 +1,60 @@
+name: Mobile CI Failure Logs
+on:
+  push:
+    branches: [2026-09-29-mobile-ci-repair-evidence]
+    paths: [.github/workflows/mobile-ci-log-evidence.yml]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  collect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+      actions: read
+    steps:
+      - name: Encrypt existing CI logs before connector transport
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const crypto = require('crypto');
+            const publicKey = `-----BEGIN PUBLIC KEY-----
+            MIIBojANBgkqhkiG9w0BAQEFAAOCAY8AMIIBigKCAYEA0NkRIWZi2I2faI48VaMB
+            5cGCsYRgLW2pD+GD1GsUMcehkmIrLtwTUFAxpSMouDLKyZwEm7HSrlgSNARrB0jL
+            BGMW0hxrMhfNwLnKat1Wer8aUtP8kbXSmwomvCcJ8W406Rzr1ozKpGgrWXt4L0Qh
+            JBJhzOXK7/iWfPboyBn0gzPdAoYWHHoDCPyimg7SDnpurDAuyi4ThlmjWyytIw3S
+            uyFGOTKTdawxW/H5Rs5rY9GoMs0l7RATQNaXQFPXr5DInB42r2kPsc+2C9veGOJh
+            zkosz1LfOhUuOj9wVOQFLeWfoanI8/Kgj62V5YAKeC+DpKv5+vm5P2QLrHTbZSgY
+            xv2pOex73Wsw54OaCdEIeDv83LX7nu7f6YvcvXVbLKaPRz13QeEYf8qMS6YYefCk
+            Vlo4rTL41HCbiTbq9N1jJ0bDJg3xasCWE2D/Cf2oTRmEb63N+Tkb9SVtFnKedusC
+            o2WOHoK1XtDa3Tu4JOHIe0SJhKKiRq9nJ0k/JC+lxJNhAgMBAAE=
+            -----END PUBLIC KEY-----`;
+            const tree = [];
+            const manifest = {algorithm: 'RSA-OAEP-SHA256 + AES-256-GCM', source_commit: '234d4f5c579be29b3f19dcd72afb7719c13d4ed4', runs: {}};
+            for (const run_id of [36523829343, 36523583725]) {
+              const run = (await github.rest.actions.getWorkflowRun({...context.repo, run_id})).data;
+              if (!['234d4f5c579be29b3f19dcd72afb7719c13d4ed4', 'df40b2b64243fb512400e638699af739e1f7678a'].includes(run.head_sha)) throw new Error('Unexpected source');
+              const response = await github.rest.actions.downloadWorkflowRunLogs({...context.repo, run_id});
+              const archive = Buffer.from(response.data);
+              if (archive.readUInt32LE(0) !== 0x04034b50) throw new Error('Expected ZIP logs');
+              const key = crypto.randomBytes(32), iv = crypto.randomBytes(12);
+              const cipher = crypto.createCipheriv('aes-256-gcm', key, iv);
+              const aad = Buffer.from(`${context.repo.owner}/${context.repo.repo}:${run_id}`);
+              cipher.setAAD(aad);
+              const encrypted = Buffer.concat([cipher.update(archive), cipher.final(), cipher.getAuthTag()]);
+              const parts = [];
+              for (let offset = 0, n = 0; offset < encrypted.length; offset += 800000, n++) {
+                const name = `run-${run_id}-${String(n).padStart(3, '0')}.bin`;
+                const part = encrypted.subarray(offset, offset + 800000);
+                const blob = await github.rest.git.createBlob({...context.repo, content: part.toString('base64'), encoding: 'base64'});
+                tree.push({path: name, mode: '100644', type: 'blob', sha: blob.data.sha});
+                parts.push({name, sha256: crypto.createHash('sha256').update(part).digest('hex')});
+              }
+              manifest.runs[run_id] = {head_sha: run.head_sha, parts, iv: iv.toString('base64'), aad: aad.toString('base64'), key: crypto.publicEncrypt({key: publicKey, padding: crypto.constants.RSA_PKCS1_OAEP_PADDING, oaepHash: 'sha256'}, key).toString('base64'), archive_sha256: crypto.createHash('sha256').update(archive).digest('hex')};
+            }
+            const meta = await github.rest.git.createBlob({...context.repo, content: JSON.stringify(manifest, null, 2), encoding: 'utf-8'});
+            tree.push({path: 'encrypted-manifest.json', mode: '100644', type: 'blob', sha: meta.data.sha});
+            const result = await github.rest.git.createTree({...context.repo, tree});
+            const commit = await github.rest.git.createCommit({...context.repo, message: 'Encrypted owner-authorized CI failure evidence', tree: result.data.sha, parents: []});
+            console.log('ENCRYPTED_CI_EVIDENCE ' + JSON.stringify({commit: commit.data.sha, parts: tree.map(item => item.path)}));

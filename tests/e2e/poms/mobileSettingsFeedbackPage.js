@@ -51,9 +51,13 @@ export class MobileSettingsFeedbackPage extends MobileLoopsPage {
   }
 
   async expectAnchoredSelection(menu, trigger) {
-    const selected = await menu.locator('[aria-checked="true"]').boundingBox();
+    await expect(menu.locator('[aria-checked="true"]')).toBeInViewport();
+    await expect(trigger).toHaveClass(/trigger-anchor-open/);
     const anchor = await trigger.boundingBox(), popup = await menu.boundingBox();
-    expect(Math.abs(selected.y + selected.height / 2 - anchor.y - anchor.height / 2)).toBeLessThan(2);
+    const edge = await menu.getAttribute('data-trigger-anchor-edge');
+    expect(['top', 'bottom']).toContain(edge);
+    const gap = edge === 'bottom' ? anchor.y - popup.y - popup.height : popup.y - anchor.y - anchor.height;
+    expect(Math.abs(gap)).toBeLessThan(2);
     expect(popup.y).toBeGreaterThanOrEqual(0);
     expect(popup.y + popup.height).toBeLessThanOrEqual((await this.player.boundingBox()).y);
   }

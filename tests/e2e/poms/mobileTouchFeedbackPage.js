@@ -105,8 +105,15 @@ export class MobileTouchFeedbackPage extends MobilePolishPage {
     await expect(rated.locator('.track-count')).toHaveCSS('white-space', 'nowrap');
     await expect(rated.locator('.album-length')).toHaveCSS('white-space', 'nowrap');
     expect(length.width).toBeLessThanOrEqual((await rated.boundingBox()).width);
-    // parity-check: allow-read-only-measurement-evaluate -- verify the rendered metadata does not overflow in dense grids.
-    expect(await rated.evaluate(node => node.scrollWidth <= node.clientWidth + 1)).toBe(true);
+    // The card's existing ::before deliberately overscans by 14px for its clipped glow.
+    // Measure the content owner, not that decorative overflow.
+    // parity-check: allow-read-only-measurement-evaluate -- verify metadata itself fits its card in dense grids.
+    expect(await rated.locator('.gallery-card-info').evaluate(node => node.scrollWidth <= node.clientWidth + 1)).toBe(true);
+    const frame = await rated.boundingBox();
+    for (const label of [rating, tracks, length]) {
+      expect(label.x).toBeGreaterThanOrEqual(frame.x);
+      expect(label.x + label.width).toBeLessThanOrEqual(frame.x + frame.width);
+    }
     const unrated = this.galleryCards.filter({ has: this.page.locator('.rating-row[data-rating-value="0"]') }).first();
     await expect(unrated.locator('.rating-row')).not.toBeVisible();
   }
@@ -201,10 +208,12 @@ export class MobileTouchFeedbackPage extends MobilePolishPage {
     const button = this.findBetterArt;
     const before = await button.boundingBox();
     await expect(button).not.toHaveCSS('box-shadow', 'none');
+    await this.expectCoverCtaContrast();
     await button.hover();
     await expect(button).not.toHaveCSS('box-shadow', 'none');
     await button.focus();
     await expect(button).toBeFocused();
+    await this.expectCoverCtaContrast();
     const after = await button.boundingBox();
     expect(after.width).toBe(before.width); expect(after.height).toBe(before.height);
     const footer = await this.page.locator('#cover-lookup-modal .cover-lookup-modal-actions').boundingBox();
@@ -213,6 +222,13 @@ export class MobileTouchFeedbackPage extends MobilePolishPage {
     await expect(button).toHaveCSS('transition-duration', '0s');
     await expect(button).not.toHaveCSS('box-shadow', 'none');
     await this.page.emulateMedia({ reducedMotion: 'no-preference' });
+  }
+  async expectCoverCtaContrast() {
+    // parity-check: allow-read-only-measurement-evaluate -- verify the CTA's theme-owned text against its real opaque button surface.
+    const paint = await this.findBetterArt.evaluate(node => ({
+      ink: getComputedStyle(node).color, background: getComputedStyle(node).backgroundColor,
+    }));
+    this.expectContrast([paint]);
   }
   async openLibraryStatus() {
     // The mobile search replaces app-bar actions while expanded. Collapse it

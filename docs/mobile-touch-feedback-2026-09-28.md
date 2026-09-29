@@ -121,3 +121,20 @@ placement. The previous mobile selected-option-over-trigger test is replaced by
 edge-joined geometry plus selected-option visibility; desktop positioning remains
 separately covered. Keep all unrelated functional flows, thresholds, retries and
 timeouts. No checklist counter exists here; no release/main merge is authorized.
+
+
+### Follow-up verification
+
+Run 36515039315 passed the unit/contract stage, seven baseline browser scenarios
+and 56 extended scenarios, including both new CTA/glow cases and joined loop-menu
+cases. Four failures exposed obsolete duplicated probes: two header probes still
+measured the full title-container origin/center rather than the actual first text
+line; one legacy picker probe still required selected-option/button overlap; and
+the new rating probe counted the existing card's intentionally clipped 14px glow
+overscan as content overflow. The equivalent user-visible assertions now measure
+the bare control against the bar and first text line, the joined popup edge, and
+the actual metadata owner plus each label's bounds. No retries, waits, timeouts,
+playback assertions or navigation actions change. Reviewing the desktop Pine
+screenshot also exposed inherited dark CTA ink on dark chrome: the shared CTA now
+uses its owning surface's text and a lightly accent-tinted opaque background, with
+real contrast checks on both mobile and desktop.

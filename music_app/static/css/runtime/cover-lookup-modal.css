@@ -758,6 +758,8 @@
 /* Theme-aware discovery CTA: static halo, no layout growth or perpetual pulse. */
 :root #cover-lookup-modal #cover-lookup-find-better-button:not(:disabled):not([aria-disabled="true"]) {
   --cover-search-accent: var(--appearance-primary-button, var(--accent));
+  color: var(--text);
+  background: color-mix(in srgb, var(--cover-search-accent) 8%, var(--panel));
   border-color: color-mix(in srgb, var(--cover-search-accent) 72%, var(--appearance-line, var(--border)));
   box-shadow: 0 0 12px color-mix(in srgb, var(--cover-search-accent) 36%, transparent),
     inset 0 0 0 1px color-mix(in srgb, var(--cover-search-accent) 18%, transparent);

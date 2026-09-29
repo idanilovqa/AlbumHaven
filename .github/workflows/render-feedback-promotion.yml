@@ -1,0 +1,129 @@
+name: Verified feedback preview promotion
+on:
+  push:
+    branches: [2026-09-29-render-feedback-promotion]
+    paths: ['.github/workflows/render-feedback-promotion.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+  actions: read
+concurrency:
+  group: render-feedback-promotion
+  cancel-in-progress: false
+jobs:
+  verify-and-promote:
+    if: github.repository == 'idanilovqa/AlbumHaven' && github.ref == 'refs/heads/2026-09-29-render-feedback-promotion'
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    permissions:
+      contents: write
+      actions: read
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_PASSWORD: isolated-ci-admin
+        ports: [5432:5432]
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      VERIFIED_SOURCE: 814a2d1e4f00555bf8ddfe72d8e31b6ea1468703
+      SOURCE_BASELINE: 96ec9a6489a8d5b0fb096c131294a701fc110b37
+      RENDER_BASE: b395c618cafdffb30d05da9038672016c6e6d173
+      MOBILE_RUN: '36516894221'
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: b395c618cafdffb30d05da9038672016c6e6d173
+          persist-credentials: false
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Prepare only exact feedback files against the unchanged preview baseline
+        shell: python
+        run: |
+          import json, os, pathlib, subprocess
+          paths = [
+            'docs/mobile-touch-feedback-2026-09-28.md',
+            'music_app/static/css/mobile-layout.css',
+            'music_app/static/css/runtime/cover-lookup-modal.css',
+            'music_app/static/js/runtime/utility-loop-playback.js',
+            'music_app/static/js/runtime-bundle.js',
+            'tests/e2e/mobile-feedback/mobileTouchFeedback.spec.js',
+            'tests/e2e/poms/mobileLoopsPage.js',
+            'tests/e2e/poms/mobileTouchFeedbackPage.js',
+            'tests/e2e/poms/mobileHeaderPage.js',
+            'tests/e2e/poms/mobileSettingsFeedbackPage.js',
+            'tests/js/runtime/mobile-loop-controls.test.js',
+          ]
+          for commit in [os.environ['VERIFIED_SOURCE'], os.environ['SOURCE_BASELINE']]:
+              subprocess.run(['git', 'fetch', '--no-tags', 'origin', commit], check=True)
+          subprocess.run(['git', 'diff', '--exit-code', os.environ['SOURCE_BASELINE'], os.environ['RENDER_BASE'], '--', *paths], check=True)
+          subprocess.run(['git', 'checkout', os.environ['VERIFIED_SOURCE'], '--', *paths], check=True)
+          pathlib.Path(os.environ['RUNNER_TEMP'], 'feedback-paths.json').write_text(json.dumps(paths))
+          subprocess.run(['git', 'diff', '--cached', '--check'], check=True)
+          subprocess.run(['node', 'scripts/build-runtime-bundle.cjs'], check=True)
+          subprocess.run(['git', 'diff', '--exit-code', '--', 'music_app/static/js/runtime-bundle.js'], check=True)
+      - name: Install deployment verification dependencies
+        run: python -m pip install -r requirements.txt httpx
+      - name: Run unchanged deployment guard tests
+        run: python -m unittest discover -s tests/py -p test_render_demo_launcher.py -v
+      - name: Provision disposable non-superuser database owner
+        env:
+          PGPASSWORD: isolated-ci-admin
+        run: |
+          psql -h 127.0.0.1 -U postgres -v ON_ERROR_STOP=1 <<'SQL'
+          CREATE ROLE demo_owner LOGIN CREATEROLE PASSWORD 'isolated-ci-owner';
+          CREATE DATABASE album_haven_ci_render_demo OWNER demo_owner;
+          SQL
+      - name: Verify legacy demo upgrade, retained data, repeated startup and authentication
+        run: python scripts/render_demo_smoke.py
+      - name: Require successful exact-head mobile verification and publish only tested files
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const cp = require('child_process');
+            const path = require('path');
+            const source = process.env.VERIFIED_SOURCE;
+            const base = process.env.RENDER_BASE;
+            const target = 'heads/2026-09-25-render-demo';
+            const runId = Number(process.env.MOBILE_RUN);
+            const deadline = Date.now() + 15 * 60 * 1000;
+            while (true) {
+              const {data: run} = await github.rest.actions.getWorkflowRun({...context.repo, run_id: runId});
+              if (run.head_sha !== source || run.head_branch !== '2026-09-25-mobile-layout' || run.path !== '.github/workflows/mobile-layout-checks.yml') throw new Error('Verification identity mismatch');
+              if (run.status === 'completed') {
+                if (run.conclusion !== 'success') throw new Error('Mobile verification did not pass; preview left unchanged');
+                break;
+              }
+              if (Date.now() > deadline) throw new Error('Mobile verification still pending; preview left unchanged');
+              await new Promise(resolve => setTimeout(resolve, 15000));
+            }
+            const branch = await github.rest.git.getRef({...context.repo, ref: 'heads/2026-09-25-mobile-layout'});
+            if (branch.data.object.sha !== source) throw new Error('Mobile branch moved; fresh verification required');
+            const before = await github.rest.git.getRef({...context.repo, ref: target});
+            if (before.data.object.sha !== base) throw new Error('Preview branch moved; reconcile instead of overwriting');
+            const paths = JSON.parse(fs.readFileSync(path.join(process.env.RUNNER_TEMP, 'feedback-paths.json'), 'utf8'));
+            const changed = cp.execFileSync('git', ['diff', '--cached', '--name-only', '-z'], {encoding: 'utf8'}).split('\0').filter(Boolean);
+            if (!changed.length || changed.some(name => !paths.includes(name))) throw new Error('Unexpected promotion file set');
+            cp.execFileSync('git', ['diff', '--exit-code', source, '--', ...paths]);
+            const entries = changed.map(name => {
+              const sha = cp.execFileSync('git', ['rev-parse', `${source}:${name}`], {encoding:'utf8'}).trim();
+              return {path: name, mode: '100644', type: 'blob', sha};
+            });
+            const previous = await github.rest.git.getCommit({...context.repo, commit_sha: base});
+            const tree = await github.rest.git.createTree({...context.repo, base_tree: previous.data.tree.sha, tree: entries});
+            const commit = await github.rest.git.createCommit({...context.repo,
+              message: `fix(mobile): deploy verified ratings, compact headers, joined loop menus and cover glow (${source.slice(0,8)})`,
+              tree: tree.data.sha, parents: [base]});
+            const fresh = await github.rest.git.getRef({...context.repo, ref: target});
+            if (fresh.data.object.sha !== base) throw new Error('Concurrent preview change; refusing update');
+            await github.rest.git.updateRef({...context.repo, ref: target, sha: commit.data.sha, force: false});
+            console.log('PROMOTED_RENDER_HEAD ' + JSON.stringify({source_commit: source, preview_commit: commit.data.sha, mobile_run: runId, files: changed}));

@@ -51,8 +51,8 @@
 }
 :root .trigger-anchor-surface,
 .utility-modal-header {
-  --trigger-anchor-line-left: linear-gradient(to left, var(--trigger-anchor-accent), color-mix(in srgb, var(--trigger-anchor-accent) 65%, var(--border)) 25%, color-mix(in srgb, var(--trigger-anchor-accent) 20%, var(--border)) 65%, var(--border) 100%);
-  --trigger-anchor-line-right: linear-gradient(to right, var(--trigger-anchor-accent), color-mix(in srgb, var(--trigger-anchor-accent) 65%, var(--border)) 25%, color-mix(in srgb, var(--trigger-anchor-accent) 20%, var(--border)) 65%, var(--border) 100%);
+  --trigger-anchor-line-left: linear-gradient(to left, var(--trigger-anchor-accent) 0 5px, color-mix(in srgb, var(--trigger-anchor-accent) 65%, var(--border)) 25%, color-mix(in srgb, var(--trigger-anchor-accent) 20%, var(--border)) 65%, var(--border) 100%);
+  --trigger-anchor-line-right: linear-gradient(to right, var(--trigger-anchor-accent) 0 5px, color-mix(in srgb, var(--trigger-anchor-accent) 65%, var(--border)) 25%, color-mix(in srgb, var(--trigger-anchor-accent) 20%, var(--border)) 65%, var(--border) 100%);
 }
 :root .trigger-anchor-open {
   --trigger-anchor-cap: var(--trigger-anchor-accent);
@@ -109,7 +109,7 @@
   content: ''; position: absolute; left: -2px; right: -2px; top: calc(100% - 3px);
   height: calc(var(--trigger-anchor-gap, 0px) + 3px);
   border-inline: 2px solid var(--trigger-anchor-accent); box-sizing: border-box;
-  background: var(--trigger-anchor-background); pointer-events: none;
+  background: var(--trigger-anchor-background); background-clip: padding-box; pointer-events: none;
 }
 :root .trigger-anchor-open[data-trigger-anchor-edge="bottom"]::after { top: auto; bottom: calc(100% - 3px); }
 :root .trigger-anchor-surface { border-color: var(--border); }

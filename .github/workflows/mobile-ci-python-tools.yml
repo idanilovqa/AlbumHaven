@@ -1,0 +1,42 @@
+name: Mobile Python Reproduction Tools
+on:
+  push:
+    branches: [2026-09-29-mobile-ci-repair-evidence]
+    paths: [.github/workflows/mobile-ci-python-tools.yml]
+permissions:
+  contents: read
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Download public runtime wheels
+        run: |
+          mkdir wheels
+          python -m pip download --only-binary=:all: --dest wheels 'psycopg[binary]' zstandard aiosmtplib watchdog ytmusicapi fastapi==0.115.6
+          tar -cf wheels.tar wheels
+      - name: Preserve checksummed public tooling
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs'), crypto = require('crypto');
+            const bytes = fs.readFileSync('wheels.tar');
+            const tree = [], parts = [];
+            for (let offset = 0, index = 0; offset < bytes.length; offset += 800000, index++) {
+              const name = `wheels-${String(index).padStart(3, '0')}.bin`;
+              const data = bytes.subarray(offset, offset + 800000);
+              const blob = await github.rest.git.createBlob({...context.repo, encoding: 'base64', content: data.toString('base64')});
+              parts.push({name, sha256: crypto.createHash('sha256').update(data).digest('hex')});
+              tree.push({path: name, mode: '100644', type: 'blob', sha: blob.data.sha});
+            }
+            const manifest = {sha256: crypto.createHash('sha256').update(bytes).digest('hex'), parts};
+            const blob = await github.rest.git.createBlob({...context.repo, encoding: 'utf-8', content: JSON.stringify(manifest)});
+            tree.push({path: 'wheels-manifest.json', mode: '100644', type: 'blob', sha: blob.data.sha});
+            const t = await github.rest.git.createTree({...context.repo, tree});
+            const c = await github.rest.git.createCommit({...context.repo, message: 'Public Python wheels for isolated repair', tree: t.data.sha, parents: []});
+            console.log('PYTHON_REPRODUCTION_TOOLS ' + JSON.stringify({commit: c.data.sha, ...manifest}));

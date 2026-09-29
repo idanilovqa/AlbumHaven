@@ -1,0 +1,38 @@
+name: PR19 pinned review chunks
+on:
+  push:
+    branches: [2026-09-29-pr19-diagnostics]
+    paths: [.github/workflows/pr19-review-chunks.yml]
+permissions:
+  contents: write
+jobs:
+  package:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/github-script@v7
+        with:
+          script: |
+            const crypto = require('crypto');
+            const source = '750339579adf46f7e2e52a8a98cc0732f06a54b7';
+            const listing = await github.rest.git.getTree({...context.repo, tree_sha: source});
+            const tree = [], manifest = {source, files:{}};
+            for (const name of ['review.diff','review-files.txt']) {
+              const entry = listing.data.tree.find(item => item.path === name);
+              if (!entry || entry.type !== 'blob') throw new Error('Missing exact review source');
+              const response = await github.rest.git.getBlob({...context.repo, file_sha: entry.sha});
+              const data = Buffer.from(response.data.content, 'base64'), parts = [];
+              for (let start=0, index=0; start<data.length; start+=650000, index++) {
+                const path = name + '.' + String(index).padStart(2,'0') + '.txt';
+                const value = data.subarray(start,start+650000);
+                const blob = await github.rest.git.createBlob({...context.repo, content:value.toString('base64'), encoding:'base64'});
+                tree.push({path, mode:'100644', type:'blob', sha:blob.data.sha}); parts.push(path);
+              }
+              manifest.files[name] = {sha256:crypto.createHash('sha256').update(data).digest('hex'), parts};
+            }
+            const blob = await github.rest.git.createBlob({...context.repo, content:JSON.stringify(manifest), encoding:'utf-8'});
+            tree.push({path:'review-chunks.json', mode:'100644', type:'blob', sha:blob.data.sha});
+            const createdTree=await github.rest.git.createTree({...context.repo,tree});
+            const commit=await github.rest.git.createCommit({...context.repo,tree:createdTree.data.sha,parents:[],message:'Exact pinned review diff chunks; no application branch changed'});
+            console.log('REVIEW_CHUNKS '+commit.data.sha);
+            console.log(JSON.stringify(manifest));

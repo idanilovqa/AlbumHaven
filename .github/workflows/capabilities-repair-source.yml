@@ -1,4 +1,4 @@
-name: Capabilities Repair Evidence
+name: Apply Verified Capabilities Admin Repair
 
 on:
   push:
@@ -9,58 +9,77 @@ permissions:
   contents: read
 
 jobs:
-  collect:
+  apply:
     if: github.repository == 'idanilovqa/AlbumHaven' && github.ref == 'refs/heads/2026-09-25-capabilities-audit'
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
     permissions:
       contents: write
-      actions: read
     env:
       TARGET_BRANCH: 2026-09-25-capabilities-audit
     steps:
-      - uses: actions/checkout@v4
-      - name: Remove retrieved temporary source transport
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 2
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Verify exact preimages and apply the locally tested patch
         shell: bash
         run: |
           set -euo pipefail
-          if test -d .agent-repair-source; then
-            test "$(git ls-remote origin "refs/heads/$TARGET_BRANCH" | cut -f1)" = "$GITHUB_SHA"
-            git rm -r -- .agent-repair-source
-            git config user.name 'github-actions[bot]'
-            git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-            git commit -m 'chore(review): remove completed source transport'
-            git push origin "HEAD:refs/heads/$TARGET_BRANCH"
-          fi
-      - name: Read the completed CI failure inventory
-        env:
-          GH_TOKEN: ${{ github.token }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          for job in 109189962638 109189962584 109189962522 109189962653 109189962670 109189962685 109189962724 109189962747 109189962855 109189962913; do
-            gh api --allow-escape-sequences "repos/idanilovqa/AlbumHaven/actions/jobs/$job/logs" > "$RUNNER_TEMP/failure-$job.log"
-          done
+          test "$(git rev-parse HEAD^)" = a84994b44e52755337c01ca7c708309a76e003d2
           python - <<'PY'
-          import os, pathlib, re
-          jobs = [(109189962638, 'Portable JavaScript'), (109189962584, 'Windows JavaScript'), (109189962522, 'Components'), (109189962653, 'Administration'), (109189962670, 'Playback utilities'), (109189962685, 'Gallery search visual'), (109189962724, 'Metadata mutations'), (109189962747, 'Synthetic performance'), (109189962855, 'Scan performance'), (109189962913, 'Cover providers')]
-          for job, name in jobs:
-              p = pathlib.Path(os.environ['RUNNER_TEMP']) / f'failure-{job}.log'
-              lines = [re.sub(r'\x1b\[[0-9;]*m', '', line) for line in p.read_text(encoding='utf-8', errors='replace').splitlines()]
-              lines = [re.sub(r'^\d{4}-\d\d-\d\dT[0-9:.]+Z\s?', '', line) for line in lines]
-              print(f'\n=== Job {job}: {name}; original source 3a8d6784806acf14c898414815fcb11ec167f58f ===')
-              starts = [i for i, line in enumerate(lines) if re.search(r'\bnot ok \d+\b', line) or re.match(r'^\s*\d+\)\s+.*(?:\.spec\.js|\u203a)', line)]
-              for start in starts:
-                  end = start + 1
-                  while end < len(lines) and not re.search(r'# Subtest:|^\s*\d+\)\s+|^\s*\d+ (?:failed|passed)|^\s*attachment #|^\s*\.\.\.\s*$', lines[end]):
-                      end += 1
-                  block = lines[max(0, start - 1):end]
-                  if len(block) > 75:
-                      print('\n'.join(block[:45] + ['[Long assertion body omitted; original job retains complete evidence.]'] + block[-20:]))
-                  else:
-                      print('\n'.join(block))
-              print('--- Totals and runtime errors ---')
-              for line in lines:
-                  if re.search(r'# (?:tests|pass|fail|skipped) \d+\b|^\s*\d+ (?:failed|passed)|##\[error\]|hard-fail|^\s*(?:Error|TimeoutError):', line):
-                      print(line[:2000])
+          import hashlib, pathlib, subprocess
+          preimages = {
+              'music_app/services/private_route_boundary.py': 'e14e1a71b1da32a7a0ad17d54881a61090155d58',
+              'music_app/templates/admin-account-detail.html': 'd972e752674c7730542e279f842acafac802b58e',
+              'music_app/templates/partials/admin-capability-assignment.html': 'e2b320ada2f019b33eb6b8946e5dd520dbeda805',
+              'tests/py/test_capability_assignment_templates.py': 'ea3215335cea53515fecb991dff7bf3889088069',
+              'tests/py/test_private_route_boundary.py': '1c0d635c1c907109d1f44de33afe64998e78849f',
+          }
+          for path, expected in preimages.items():
+              actual = subprocess.check_output(['git', 'hash-object', path], text=True).strip()
+              assert actual == expected, (path, actual, expected)
+          assert not pathlib.Path('music_app/templates/partials/admin-capability-switches.html').exists()
+          data = pathlib.Path('.agent-admin-repair.patch').read_bytes()
+          assert hashlib.sha256(data).hexdigest() == 'cf802e8ae7470d311d2c138e3591b148cfcac7818b6c3ca6ff3e14cd74a28e43'
           PY
+          git apply --check --index .agent-admin-repair.patch
+          git apply --index .agent-admin-repair.patch
+          git diff --cached --check
+      - name: Install application dependencies
+        run: python -m pip install -r requirements.txt
+      - name: Run focused Python authorization and template regression checks
+        run: python -m pytest -q --tb=short tests/py/test_capability_assignment_templates.py tests/py/test_capability_assignments.py tests/py/test_private_route_boundary.py
+      - name: Run focused JavaScript admin checks sequentially after Python
+        run: node --test --test-concurrency=1 tests/js/runtime/admin-members.test.js tests/js/runtime/admin-capability-assignment.test.js tests/js/phase7-account-admin-presentation.test.js
+      - name: Verify tested postimages and publish only this repair
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import hashlib, pathlib, subprocess
+          postimages = {
+              'music_app/services/private_route_boundary.py': '212f74c239d3caff141badb7b8cc1c7cbdafb690fde06606628d86c6f7ac0b07',
+              'music_app/templates/admin-account-detail.html': '7f3f0acb4279e919e33396a7b1934f112038559ff4b4ea9238756427aa5e2e76',
+              'music_app/templates/partials/admin-capability-assignment.html': '09fcb3862e20da3ec580e0f3c0d29555b06f77188e004ceeb7bc0032ab91f94a',
+              'tests/py/test_capability_assignment_templates.py': '57156a5294dfb94770cd983eb99cc0fef9e9889ebe1c418b091767b358cfb380',
+              'tests/py/test_private_route_boundary.py': 'eec090d87789a0762c06184781b0064a0e8166254f51e7e7ca291b0c37fad61b',
+              'music_app/templates/partials/admin-capability-switches.html': 'cd82d9f98ff5ee4ddb089ec38f10f28b1b256fdb1670aa4519e207e5eceb6f4d',
+          }
+          for path, expected in postimages.items():
+              assert hashlib.sha256(pathlib.Path(path).read_bytes()).hexdigest() == expected, path
+          staged = set(subprocess.check_output(['git', 'diff', '--cached', '--name-only'], text=True).splitlines())
+          assert staged == set(postimages), staged
+          assert not subprocess.check_output(['git', 'diff', '--name-only'], text=True).strip()
+          PY
+          test "$(git ls-remote origin "refs/heads/$TARGET_BRANCH" | cut -f1)" = "$GITHUB_SHA"
+          git rm -- .agent-admin-repair.patch
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'fix(admin): show protected owner capabilities and readable forbidden pages'
+          git push origin "HEAD:refs/heads/$TARGET_BRANCH"

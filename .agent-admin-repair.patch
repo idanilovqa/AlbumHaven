@@ -1,0 +1,168 @@
+diff --git a/music_app/services/private_route_boundary.py b/music_app/services/private_route_boundary.py
+index e14e1a7..f07666f 100644
+--- a/music_app/services/private_route_boundary.py
++++ b/music_app/services/private_route_boundary.py
+@@ -7,7 +7,7 @@ import hashlib
+ import hmac
+ 
+ from fastapi import FastAPI, HTTPException, Request
+-from fastapi.responses import JSONResponse, RedirectResponse
++from fastapi.responses import JSONResponse, PlainTextResponse, RedirectResponse
+ from starlette.datastructures import QueryParams
+ from starlette.responses import Response
+ from starlette.routing import Match
+@@ -208,6 +208,18 @@ def install_private_route_boundary(app: FastAPI) -> None:
+                 and request.url.path == "/"
+             ):
+                 return RedirectResponse("/login", status_code=303)
++            if (
++                exc.status_code == 403
++                and request.method == "GET"
++                and route_path in {"/admin/members", "/admin/accounts/new", "/admin/accounts/{account_id}"}
++                and request.headers.get("sec-fetch-dest") == "document"
++            ):
++                # A denied browser page must remain readable. Fetch/API clients
++                # retain the JSON error contract, and no admin handler is entered.
++                return PlainTextResponse(
++                    "Action not permitted.", status_code=403,
++                    headers={**(exc.headers or {}), "Cache-Control": "no-store, max-age=0"},
++                )
+             return JSONResponse(
+                 {"detail": exc.detail},
+                 status_code=exc.status_code,
+diff --git a/music_app/templates/admin-account-detail.html b/music_app/templates/admin-account-detail.html
+index d972e75..64bd6ec 100644
+--- a/music_app/templates/admin-account-detail.html
++++ b/music_app/templates/admin-account-detail.html
+@@ -52,6 +52,9 @@
+         {% set is_owner = member and member.is_bootstrap_owner %}
+         {% if is_owner %}
+         {{ on_page_alert('The protected owner has full access. These inherited permissions cannot be changed individually.', title='Owner · Full access', class_name='role-note') }}
++        {% with capabilities_readonly=true %}
++        {% include "partials/admin-capability-switches.html" %}
++        {% endwith %}
+         {% for group_name, capabilities in capability_groups %}
+         {% for capability_key, label in capabilities %}
+         <input type="hidden" name="capability_keys" value="{{ capability_key }}">
+diff --git a/music_app/templates/partials/admin-capability-assignment.html b/music_app/templates/partials/admin-capability-assignment.html
+index e2b320a..916071b 100644
+--- a/music_app/templates/partials/admin-capability-assignment.html
++++ b/music_app/templates/partials/admin-capability-assignment.html
+@@ -16,20 +16,7 @@
+       {% endfor %}
+     </div>
+   </fieldset>
+-  <fieldset class="permission-fieldset">
+-    <legend>Capabilities</legend>
+-    {{ on_page_alert('Checked, disabled switches are required by another capability or included by a selected role. Their descriptions explain why. Other switches add individual capabilities. Device restrictions still apply. Web tag editing requires both Edit and Admin. Mobile and TV never permit tag editing, deleting, or creating loops.', role='note', class_name='role-note') }}
+-    <div class="permission-groups">
+-      {% for capabilities in access_editor.capabilities | batch(4) %}
+-      <section class="permission-group">
+-        {% for capability_key, label in capabilities %}
+-        {% set unavailable_reason = access_editor.unavailable_capabilities.get(capability_key) %}
+-        {{ ui_switch(label, 'additional_capability_keys', capability_key, checked=not unavailable_reason and (capability_key in access_editor.inherited_keys or capability_key in access_editor.capability_keys), disabled=unavailable_reason or capability_key in access_editor.inherited_keys, description=unavailable_reason or ('Included by selected roles or required capabilities.' if capability_key in access_editor.inherited_keys else 'Optional individual grant.'), attributes={'data-capability-label': label, 'data-explicit-grant': 'true' if capability_key in access_editor.capability_keys else 'false', 'data-unavailable-reason': unavailable_reason, 'title': unavailable_reason or ('Included by a selected role' if capability_key in access_editor.inherited_keys else none)}) }}
+-        {% endfor %}
+-      </section>
+-      {% endfor %}
+-    </div>
+-  </fieldset>
++  {% include "partials/admin-capability-switches.html" %}
+   {% for capability_key in access_editor.unlisted_keys %}
+   <input type="hidden" name="additional_capability_keys" value="{{ capability_key }}">
+   {% endfor %}
+diff --git a/tests/py/test_capability_assignment_templates.py b/tests/py/test_capability_assignment_templates.py
+index ea32153..9249a67 100644
+--- a/tests/py/test_capability_assignment_templates.py
++++ b/tests/py/test_capability_assignment_templates.py
+@@ -137,3 +137,22 @@ def test_unimplemented_move_renders_disabled_unchecked_without_losing_saved_dire
+     assert move['data-unavailable-reason'] == 'Not implemented. Moving music is unavailable.'
+     assert move['data-explicit-grant'] == ('true' if 'capability.move' in assignment.capability_keys else 'false')
+     assert 'Not implemented. Moving music is unavailable.' in html
++
++
++def test_protected_owner_displays_inherited_capabilities_without_submitted_choices():
++    html = render(member(bootstrap=True))
++    switches = Inputs(html).named('owner_capability_keys')
++    assert len(switches) == 10
++    assert all(item['type'] == 'checkbox' and 'disabled' in item for item in switches)
++    assert {item['value'] for item in switches if 'checked' in item} == {
++        'capability.view', 'capability.play', 'capability.edit',
++        'capability.change_covers', 'capability.delete', 'capability.admin',
++        'capability.create_loop', 'capability.practice', 'capability.repair',
++    }
++    assert '<legend>Capabilities</legend>' in html
++    assert 'data-capability-assignment' not in html
++    assert not Inputs(html).named('additional_capability_keys')
++    assert not Inputs(html).named('role_keys')
++    move = next(item for item in switches if item['value'] == 'capability.move')
++    assert move['aria-label'] == 'Move music'
++    assert move['data-unavailable-reason'] == 'Not implemented. Moving music is unavailable.'
+diff --git a/tests/py/test_private_route_boundary.py b/tests/py/test_private_route_boundary.py
+index 1c0d635..2af9a51 100644
+--- a/tests/py/test_private_route_boundary.py
++++ b/tests/py/test_private_route_boundary.py
+@@ -767,3 +767,39 @@ def test_saved_loop_waveform_uses_practice_authority_without_granting_track_wave
+     app.add_api_route("/playback/waveform", lambda: {"waveform": True})
+     status, _ = _request(app, "/playback/waveform", query=query)
+     assert status == expected
++
++
++@pytest.mark.parametrize('path', ['/admin/members', '/admin/accounts/new', '/admin/accounts/41'])
++@pytest.mark.parametrize('destination', ['document', 'empty', None])
++def test_admin_denial_is_readable_for_navigation_but_json_for_api_clients(path, destination):
++    from music_app.services.current_actor import ActorState, LibraryRelationship
++
++    actor = CurrentActor(
++        state=ActorState.ACTIVE, account_id=7, session_id=11,
++        current_library_id=41,
++        library_relationships=(LibraryRelationship(41, 'listener', False),),
++    )
++    app, resolver = _app(actor)
++
++    async def forbidden_handler():
++        pytest.fail('Unauthorized navigation must not enter an admin route')
++
++    app.add_api_route('/admin/members', forbidden_handler, methods=['GET'])
++    app.add_api_route('/admin/accounts/new', forbidden_handler, methods=['GET'])
++    app.add_api_route('/admin/accounts/{account_id}', forbidden_handler, methods=['GET'])
++    headers = {'sec-fetch-dest': destination} if destination else {}
++    status, body, response_headers = _request(
++        app, path, cookie='__Host-album_haven_session=opaque-session',
++        headers=headers, include_headers=True,
++    )
++    assert status == 403
++    assert resolver.calls == ['opaque-session']
++    if destination == 'document':
++        assert body == b'Action not permitted.'
++        assert dict(response_headers)[b'content-type'].startswith(b'text/plain')
++        assert dict(response_headers)[b'cache-control'] == b'no-store, max-age=0'
++    else:
++        assert body == b'{"detail":"Action not permitted."}'
++        assert dict(response_headers)[b'content-type'] == b'application/json'
++    assert b'location' not in dict(response_headers)
++    assert b'set-cookie' not in dict(response_headers)
+diff --git a/music_app/templates/partials/admin-capability-switches.html b/music_app/templates/partials/admin-capability-switches.html
+new file mode 100644
+index 0000000..bd949bf
+--- /dev/null
++++ b/music_app/templates/partials/admin-capability-switches.html
+@@ -0,0 +1,19 @@
++{% from "components/on-page-alert.html" import on_page_alert %}
++{% from "partials/switch.html" import ui_switch %}
++{% set capabilities_readonly = capabilities_readonly | default(false) %}
++  <fieldset class="permission-fieldset">
++    <legend>Capabilities</legend>
++    {% if not capabilities_readonly %}
++    {{ on_page_alert('Checked, disabled switches are required by another capability or included by a selected role. Their descriptions explain why. Other switches add individual capabilities. Device restrictions still apply. Web tag editing requires both Edit and Admin. Mobile and TV never permit tag editing, deleting, or creating loops.', role='note', class_name='role-note') }}
++    {% endif %}
++    <div class="permission-groups">
++      {% for capabilities in access_editor.capabilities | batch(4) %}
++      <section class="permission-group">
++        {% for capability_key, label in capabilities %}
++        {% set unavailable_reason = access_editor.unavailable_capabilities.get(capability_key) %}
++        {{ ui_switch(label, 'owner_capability_keys' if capabilities_readonly else 'additional_capability_keys', capability_key, checked=not unavailable_reason and (capabilities_readonly or capability_key in access_editor.inherited_keys or capability_key in access_editor.capability_keys), disabled=capabilities_readonly or unavailable_reason or capability_key in access_editor.inherited_keys, description=unavailable_reason or ('Inherited from protected owner access.' if capabilities_readonly else 'Included by selected roles or required capabilities.' if capability_key in access_editor.inherited_keys else 'Optional individual grant.'), attributes={'data-capability-label': label, 'data-explicit-grant': 'true' if capability_key in access_editor.capability_keys else 'false', 'data-unavailable-reason': unavailable_reason, 'title': unavailable_reason or ('Included by a selected role' if capability_key in access_editor.inherited_keys else none)}) }}
++        {% endfor %}
++      </section>
++      {% endfor %}
++    </div>
++  </fieldset>

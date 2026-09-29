@@ -23,13 +23,9 @@ jobs:
       - name: Collect public binaries only, never a database or account state
         run: |
           docker pull postgres:17
-          docker create --name pg-tools postgres:17
-          mkdir -p reproduction-tools/pg/lib reproduction-tools/pg/share reproduction-tools/pg/bin
-          docker cp pg-tools:/usr/lib/postgresql/17/bin/. reproduction-tools/pg/bin/
-          docker cp pg-tools:/usr/lib/postgresql/17/lib/. reproduction-tools/pg/lib/
-          docker cp pg-tools:/usr/share/postgresql/17/. reproduction-tools/pg/share/
-          docker rm pg-tools
-          rm -rf reproduction-tools/pg/lib/bitcode
+          mkdir -p reproduction-tools/pg
+          docker run --rm --entrypoint tar postgres:17 -chf - /usr/lib/postgresql/17 /usr/share/postgresql/17 | tar -xf - -C reproduction-tools/pg
+          rm -rf reproduction-tools/pg/usr/lib/postgresql/17/lib/bitcode
           mv node_modules reproduction-tools/
           tar -C reproduction-tools -cJf reproduction-tools.tar.xz .
       - name: Expose verified binary parts to the authenticated editor

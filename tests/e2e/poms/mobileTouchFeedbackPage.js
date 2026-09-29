@@ -103,6 +103,36 @@ export class MobileTouchFeedbackPage extends MobilePolishPage {
     await this.galleryCards.getByRole('button', { name: title, exact: true }).click();
     await expect(this.trackTable).toBeVisible();
   }
+  async expectGalleryTextColumn(stackedActions) {
+    const summary = this.mainGalleryBar.locator('[data-gallery-context-summary]');
+    const actions = this.mainGalleryBar.locator(':scope > .gallery-bar__actions');
+    await expect(summary).toBeVisible();
+    await expect.poll(async () => {
+      const [name, counts] = await Promise.all([this.galleryContextName.boundingBox(), summary.boundingBox()]);
+      return counts.x - name.x;
+    }).toBeCloseTo(0, 0);
+    const [name, counts, controls, hamburger, bar] = await Promise.all([
+      this.galleryContextName.boundingBox(), summary.boundingBox(), actions.boundingBox(),
+      this.libraryButton.boundingBox(), this.mainGalleryBar.boundingBox(),
+    ]);
+    expect(counts.x).toBeGreaterThanOrEqual(hamburger.x + hamburger.width);
+    expect(counts.y).toBeGreaterThanOrEqual(name.y + name.height);
+    expect(controls.x + controls.width).toBeCloseTo(bar.x + bar.width, 0);
+    // parity-check: allow-read-only-measurement-evaluate -- count text must fit without splitting numbers from their labels.
+    const textLines = await summary.evaluate(node => {
+      const range = document.createRange(); range.selectNodeContents(node);
+      return Array.from(range.getClientRects()).length;
+    });
+    expect(textLines).toBe(1);
+    if (stackedActions) {
+      expect(controls.y).toBeGreaterThanOrEqual(counts.y + counts.height);
+      expect(controls.y - counts.y - counts.height).toBeLessThanOrEqual(4);
+    } else {
+      expect(controls.y + controls.height / 2).toBeCloseTo(counts.y + counts.height / 2, 0);
+      expect(counts.x + counts.width).toBeLessThanOrEqual(controls.x);
+    }
+    expect(await this.hasNoHorizontalOverflow()).toBe(true);
+  }
   async expectThumbnailTopAligned() {
     await expect(this.albumThumbnail).toBeVisible();
     const [image, title, summary] = await Promise.all([

@@ -105,3 +105,26 @@ for (const [width, palette] of [[390, 'black'], [320, 'parchment-pine']]) {
     await phone.expectSearchCollapsed('');
   });
 }
+
+
+for (const palette of ['black', 'parchment-pine']) {
+  test(`gallery counts retain the family-name column across narrow and roomy phones in ${palette}`, async ({ page, app, snapshot }) => {
+    const phone = new MobileTouchFeedbackPage(page);
+    await phone.usePalette(palette);
+    await phone.browseArtist();
+    await expect(phone.galleryContextName).toHaveText('Northlight family');
+    for (const width of [390, 320, 350, 351, 430, 900, 390]) {
+      await page.setViewportSize({ width, height: 844 });
+      await phone.expectGalleryTextColumn(width <= 350);
+      if (width === 320 || width === 430) await snapshot(`120-family-text-column-${palette}-${width}`);
+    }
+    await phone.familyButton.click();
+    await expect(phone.familyPanel).toBeVisible();
+    await phone.page.keyboard.press('Escape');
+    await expect(phone.familyPanel).not.toBeVisible();
+    await phone.browseArtist('Northlight & The Lumen Trio');
+    await expect(phone.galleryContextName).toHaveText('Northlight & The Lumen Trio');
+    await phone.expectGalleryTextColumn(false);
+    await snapshot(`121-long-artist-text-column-${palette}`);
+  });
+}

@@ -535,21 +535,21 @@ html[data-client-profile="mobile"] :is([data-open-problematic-album-folder], [da
 /* Main-area loading and Home each occupy one complete page. */
 .shell-main-surface.has-library-loader:not(.has-mobile-page) > :not(#library-loader) { display: none !important; }
 @media (max-width: 900px) {
-  /* The title gets the full first row. Count and controls share the second,
-     rather than pushing the controls below both title and count. */
+  /* Reserve the hamburger's column on both rows: counts start at the title,
+     never under the navigation button. Controls share the count row when roomy. */
   .shell-layout .shell-main-surface:not(.has-mobile-page) { padding-top: 8px; }
   [data-gallery-bar-instance="gallery"] {
-    display: grid; grid-template-columns: minmax(0, 1fr) auto;
-    align-items: center; gap: 2px 8px; padding-bottom: 6px;
+    display: grid; grid-template-columns: 40px minmax(0, 1fr) auto;
+    align-items: center; gap: 2px 6px; padding-bottom: 6px;
   }
   [data-gallery-bar-instance="gallery"] > .gallery-bar__context { display: contents; }
   [data-gallery-bar-instance="gallery"] .gallery-bar__title { grid-column: 1 / -1; }
   [data-gallery-bar-instance="gallery"] .gallery-bar__summary {
-    grid-column: 1; grid-row: 2; align-self: center; min-width: 0; margin: 0;
+    grid-column: 2; grid-row: 2; align-self: center; min-width: 0; margin: 0;
   }
   [data-gallery-bar-instance="gallery"] .gallery-bar__summary:empty { display: none; }
   [data-gallery-bar-instance="gallery"] > .gallery-bar__actions {
-    grid-column: 2; grid-row: 2; justify-self: end; align-self: center; margin: 0;
+    grid-column: 3; grid-row: 2; justify-self: end; align-self: center; margin: 0;
   }
   :root #mobile-library-button {
     border: 0 !important; background: transparent !important; box-shadow: none !important;
@@ -574,6 +574,12 @@ html[data-client-profile="mobile"] :is([data-open-problematic-album-folder], [da
   .is-mobile-page .editor-footer-actions { grid-column: 2; grid-row: 1; justify-content: flex-end; }
   .is-mobile-page .editor-footer-status { grid-column: 1 / -1; grid-row: 2; margin: 0; font-size: 11px; }
   .is-mobile-page .editor-footer .button { padding-inline: 10px; min-height: 36px; }
+}
+
+@media (max-width: 350px) {
+  /* A third action row is preferable to squeezing or left-shifting the counts. */
+  [data-gallery-bar-instance="gallery"] .gallery-bar__summary { grid-column: 2 / -1; }
+  [data-gallery-bar-instance="gallery"] > .gallery-bar__actions { grid-column: 2 / -1; grid-row: 3; }
 }
 
 @media (max-width: 900px) {

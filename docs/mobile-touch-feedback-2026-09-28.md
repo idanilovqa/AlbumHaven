@@ -59,3 +59,17 @@ now retires that deferred startup request at the existing fetch owner, alongside
 queued startup hydration. The browser flows, assertions, retries and timeouts
 are unchanged. A focused unit regression exercises the actual deferred-request
 resumer, the interrupted request, and the successful search without a Home replay.
+
+
+## Gallery count alignment follow-up
+
+Keep the artist/family name and the artist/album counts on one shared left edge,
+to the right of the existing 40px hamburger and its 6px gap. On roomy phones,
+the first row is the name and the second row holds counts plus right-aligned
+actions. At 350px and below, use a third compact row for the actions instead of
+moving counts under the hamburger or splitting a number from its label. Keep the
+count pair together. Long names may wrap naturally without changing that inset.
+Desktop layouts, Home tabs, album headers, search, and all control behavior remain
+unchanged. Verify both black and parchment at 320/350/351/390/430/900px, live
+resizing, a long artist name and opening/dismissing Artist Family. This is an
+additive acceptance check; no existing test contract or checklist count changes.

@@ -3,7 +3,7 @@ import { CapabilityPage } from './capabilityPage.js';
 export class CapabilityBoundaryPage extends CapabilityPage {
   constructor(page) {
     super(page);
-    this.forbidden = page.getByText('{"detail":"Action not permitted."}', { exact: true });
+    this.forbidden = page.getByText('Action not permitted.', { exact: true });
     this.usersHeading = page.getByRole('heading', { name: 'Users & access', exact: true });
     this.addUser = page.getByRole('link', { name: 'Add user', exact: true });
     this.ownerActions = page.getByRole('button', { name: 'Actions for Rendref', exact: true });

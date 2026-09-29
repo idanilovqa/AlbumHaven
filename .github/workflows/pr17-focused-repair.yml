@@ -1,0 +1,130 @@
+name: PR17 focused repair verification
+on:
+  push:
+    branches: [chatgpt/pr17-failure-inventory-20260929]
+    paths: [.github/workflows/pr17-focused-repair.yml]
+permissions:
+  contents: read
+jobs:
+  verify:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - run: git config --global core.autocrlf false
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          path: helper
+          persist-credentials: false
+      - uses: actions/checkout@v4
+        with:
+          ref: 583ccd062124ede1aec933de4fd08d4f71f2cf17
+          path: application
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Apply only checksum-verified repair outputs
+        working-directory: application
+        run: python ../helper/.ci/apply-pr17-repair.py ../helper/.ci/pr17-repair-operations.json apply
+      - name: Install locked test tooling
+        working-directory: application
+        run: npm ci
+      - name: Install production Python dependencies for component rendering and discovery
+        working-directory: application
+        run: python -m pip install -r requirements.txt
+      - name: Focused JavaScript contracts
+        working-directory: application
+        run: |
+          node --test --test-concurrency=1 \
+            tests/js/runtime/appearance-v009-player-isolation.test.js \
+            tests/js/runtime/appearance-workspace.test.js \
+            tests/js/runtime/button-component.test.js \
+            tests/js/runtime/cover-lookup-source-input.test.js \
+            tests/js/runtime/gallery-main-refactor-contracts.test.js \
+            tests/js/runtime/remaining-ui-dialogs.test.js \
+            tests/js/runtime/loop-range-controls.test.js \
+            tests/js/runtime/utility-log-history-live.test.js \
+            tests/js/validate-foundation-gates.test.js \
+            tests/js/ci-fixture-data-contracts.test.js \
+            tests/js/foobar-backup-helper.test.js
+          node --test --test-concurrency=1 --test-name-pattern='saved loop layout' tests/js/runtime/utility-list-builders.test.js
+          node scripts/check-e2e-production-parity.cjs
+      - uses: browser-actions/setup-chrome@v2
+        if: runner.os == 'Windows'
+        id: chrome
+        with:
+          chrome-version: 151.0.7922.138
+      - name: Pinned Chrome component verification
+        if: runner.os == 'Windows'
+        working-directory: application
+        env:
+          PLAYWRIGHT_CHROME_EXECUTABLE: ${{ steps.chrome.outputs.chrome-path }}
+        run: |
+          npx playwright test --config=playwright.component.config.js \
+            tests/components/calendarPicker.spec.js \
+            tests/components/buttonInteractionOutline.spec.js \
+            tests/components/loopRangeControls.spec.js
+      - name: Recheck all output hashes after verification
+        working-directory: application
+        run: python ../helper/.ci/apply-pr17-repair.py ../helper/.ci/pr17-repair-operations.json verify
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: pr17-focused-component-evidence-${{ runner.os }}
+          path: application/test-results/playwright-artifacts/components
+          if-no-files-found: ignore
+          retention-days: 7
+  publish:
+    needs: verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - run: git config --global core.autocrlf false
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          path: helper
+          persist-credentials: false
+      - uses: actions/checkout@v4
+        with:
+          ref: 583ccd062124ede1aec933de4fd08d4f71f2cf17
+          path: application
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Reapply verified output bytes
+        working-directory: application
+        run: python ../helper/.ci/apply-pr17-repair.py ../helper/.ci/pr17-repair-operations.json apply
+      - name: Reject concurrent branch changes
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const pr = (await github.rest.pulls.get({owner:'idanilovqa',repo:'AlbumHaven',pull_number:17})).data;
+            if (pr.head.ref !== '2026-09-25-capabilities-audit' || pr.head.sha !== '583ccd062124ede1aec933de4fd08d4f71f2cf17') throw new Error('PR head changed; repair requires reconciliation');
+      - name: Commit the verified repair without helper files or history rewrites
+        working-directory: application
+        run: |
+          git config user.name 'idanilovqa'
+          git config user.email '39825960+idanilovqa@users.noreply.github.com'
+          python ../helper/.ci/apply-pr17-repair.py ../helper/.ci/pr17-repair-operations.json verify
+          git add -- music_app/static/css/date-range-picker.css music_app/static/js/runtime-bundle.js music_app/static/js/runtime/date-range-picker.js music_app/static/js/runtime/loop-range-controls.js scripts/ci/validate-foundation-gates.cjs tests/ci/test-data-matrix.json tests/components/buttonInteractionOutline.spec.js tests/components/calendarPicker.spec.js tests/js/ci-fixture-data-contracts.test.js tests/js/runtime/appearance-v009-player-isolation.test.js tests/js/runtime/appearance-workspace.test.js tests/js/runtime/button-component.test.js tests/js/runtime/cover-lookup-source-input.test.js tests/js/runtime/gallery-main-refactor-contracts.test.js tests/js/runtime/loop-range-controls.test.js tests/js/runtime/remaining-ui-dialogs.test.js tests/js/runtime/utility-list-builders.test.js tests/js/validate-foundation-gates.test.js
+          git diff --cached --check
+          git commit -m 'fix(ui): restore loop hover and calendar selection with verified contracts'
+          git push origin HEAD:refs/heads/2026-09-25-capabilities-audit
+          echo "PUBLISHED_REPAIR=$(git rev-parse HEAD)"

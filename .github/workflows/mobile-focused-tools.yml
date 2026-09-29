@@ -1,0 +1,57 @@
+name: Mobile focused reproduction tools
+on:
+  push:
+    branches: [2026-09-25-mobile-layout]
+    paths: [.github/workflows/mobile-focused-tools.yml]
+permissions:
+  contents: read
+jobs:
+  tools:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Stage only public package dependencies for the offline diagnostic container
+        run: |
+          mkdir -p offline/{deb,wheels,npm}
+          docker run --rm -v "$PWD/offline/deb:/out" debian:trixie-slim sh -ec 'apt-get update -qq; cd /out; apt-get download postgresql-17 postgresql-client-17'
+          python -m pip download --dest offline/wheels --only-binary=:all: 'psycopg[binary]' zstandard watchdog aiosmtplib ytmusicapi 'fastapi==0.115.6'
+          cd offline/npm
+          npm pack '@playwright/test@1.61.1' 'playwright@1.61.1' 'playwright-core@1.61.1'
+      - name: Package public dependencies without app source, credentials or fixture data
+        shell: python
+        run: |
+          import base64, hashlib, json, lzma, pathlib, tarfile, io
+          root = pathlib.Path('offline')
+          files = sorted(p for p in root.rglob('*') if p.is_file())
+          manifest = {str(p.relative_to(root)): {'sha256':hashlib.sha256(p.read_bytes()).hexdigest(),'bytes':p.stat().st_size} for p in files}
+          data=io.BytesIO()
+          with tarfile.open(fileobj=data,mode='w') as tar:
+              for p in files: tar.add(p, arcname=str(p.relative_to(root)),recursive=False)
+          compressed=lzma.compress(data.getvalue())
+          encoded=base64.b64encode(compressed).decode()
+          out=pathlib.Path('export');out.mkdir()
+          parts=[]
+          for n,start in enumerate(range(0,len(encoded),850000)):
+              name=f'tools-{n:03d}.b64';(out/name).write_text(encoded[start:start+850000]);parts.append(name)
+          (out/'manifest.json').write_text(json.dumps({'sha256':hashlib.sha256(compressed).hexdigest(),'files':manifest,'parts':parts},indent=2))
+      - name: Publish temporary connector-readable public tools snapshot
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs=require('fs');const tree=[];
+            for(const name of fs.readdirSync('export')){
+              const blob=await github.rest.git.createBlob({...context.repo,content:fs.readFileSync('export/'+name,'utf8'),encoding:'utf-8'});
+              tree.push({path:name,mode:'100644',type:'blob',sha:blob.data.sha});
+            }
+            const t=await github.rest.git.createTree({...context.repo,tree});
+            const c=await github.rest.git.createCommit({...context.repo,tree:t.data.sha,parents:[],message:'Public dependency tools for offline focused verification'});
+            console.log('OFFLINE_TOOLS '+c.data.sha+' '+fs.readFileSync('export/manifest.json','utf8'));
+            // No application branch, release, data or hosting change.

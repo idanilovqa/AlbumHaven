@@ -52,6 +52,9 @@
         {% set is_owner = member and member.is_bootstrap_owner %}
         {% if is_owner %}
         {{ on_page_alert('The protected owner has full access. These inherited permissions cannot be changed individually.', title='Owner · Full access', class_name='role-note') }}
+        {% with capabilities_readonly=true %}
+        {% include "partials/admin-capability-switches.html" %}
+        {% endwith %}
         {% for group_name, capabilities in capability_groups %}
         {% for capability_key, label in capabilities %}
         <input type="hidden" name="capability_keys" value="{{ capability_key }}">

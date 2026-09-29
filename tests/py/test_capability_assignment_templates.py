@@ -137,3 +137,22 @@ def test_unimplemented_move_renders_disabled_unchecked_without_losing_saved_dire
     assert move['data-unavailable-reason'] == 'Not implemented. Moving music is unavailable.'
     assert move['data-explicit-grant'] == ('true' if 'capability.move' in assignment.capability_keys else 'false')
     assert 'Not implemented. Moving music is unavailable.' in html
+
+
+def test_protected_owner_displays_inherited_capabilities_without_submitted_choices():
+    html = render(member(bootstrap=True))
+    switches = Inputs(html).named('owner_capability_keys')
+    assert len(switches) == 10
+    assert all(item['type'] == 'checkbox' and 'disabled' in item for item in switches)
+    assert {item['value'] for item in switches if 'checked' in item} == {
+        'capability.view', 'capability.play', 'capability.edit',
+        'capability.change_covers', 'capability.delete', 'capability.admin',
+        'capability.create_loop', 'capability.practice', 'capability.repair',
+    }
+    assert '<legend>Capabilities</legend>' in html
+    assert 'data-capability-assignment' not in html
+    assert not Inputs(html).named('additional_capability_keys')
+    assert not Inputs(html).named('role_keys')
+    move = next(item for item in switches if item['value'] == 'capability.move')
+    assert move['aria-label'] == 'Move music'
+    assert move['data-unavailable-reason'] == 'Not implemented. Moving music is unavailable.'

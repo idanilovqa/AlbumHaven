@@ -16,20 +16,7 @@
       {% endfor %}
     </div>
   </fieldset>
-  <fieldset class="permission-fieldset">
-    <legend>Capabilities</legend>
-    {{ on_page_alert('Checked, disabled switches are required by another capability or included by a selected role. Their descriptions explain why. Other switches add individual capabilities. Device restrictions still apply. Web tag editing requires both Edit and Admin. Mobile and TV never permit tag editing, deleting, or creating loops.', role='note', class_name='role-note') }}
-    <div class="permission-groups">
-      {% for capabilities in access_editor.capabilities | batch(4) %}
-      <section class="permission-group">
-        {% for capability_key, label in capabilities %}
-        {% set unavailable_reason = access_editor.unavailable_capabilities.get(capability_key) %}
-        {{ ui_switch(label, 'additional_capability_keys', capability_key, checked=not unavailable_reason and (capability_key in access_editor.inherited_keys or capability_key in access_editor.capability_keys), disabled=unavailable_reason or capability_key in access_editor.inherited_keys, description=unavailable_reason or ('Included by selected roles or required capabilities.' if capability_key in access_editor.inherited_keys else 'Optional individual grant.'), attributes={'data-capability-label': label, 'data-explicit-grant': 'true' if capability_key in access_editor.capability_keys else 'false', 'data-unavailable-reason': unavailable_reason, 'title': unavailable_reason or ('Included by a selected role' if capability_key in access_editor.inherited_keys else none)}) }}
-        {% endfor %}
-      </section>
-      {% endfor %}
-    </div>
-  </fieldset>
+  {% include "partials/admin-capability-switches.html" %}
   {% for capability_key in access_editor.unlisted_keys %}
   <input type="hidden" name="additional_capability_keys" value="{{ capability_key }}">
   {% endfor %}

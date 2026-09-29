@@ -767,3 +767,39 @@ def test_saved_loop_waveform_uses_practice_authority_without_granting_track_wave
     app.add_api_route("/playback/waveform", lambda: {"waveform": True})
     status, _ = _request(app, "/playback/waveform", query=query)
     assert status == expected
+
+
+@pytest.mark.parametrize('path', ['/admin/members', '/admin/accounts/new', '/admin/accounts/41'])
+@pytest.mark.parametrize('destination', ['document', 'empty', None])
+def test_admin_denial_is_readable_for_navigation_but_json_for_api_clients(path, destination):
+    from music_app.services.current_actor import ActorState, LibraryRelationship
+
+    actor = CurrentActor(
+        state=ActorState.ACTIVE, account_id=7, session_id=11,
+        current_library_id=41,
+        library_relationships=(LibraryRelationship(41, 'listener', False),),
+    )
+    app, resolver = _app(actor)
+
+    async def forbidden_handler():
+        pytest.fail('Unauthorized navigation must not enter an admin route')
+
+    app.add_api_route('/admin/members', forbidden_handler, methods=['GET'])
+    app.add_api_route('/admin/accounts/new', forbidden_handler, methods=['GET'])
+    app.add_api_route('/admin/accounts/{account_id}', forbidden_handler, methods=['GET'])
+    headers = {'sec-fetch-dest': destination} if destination else {}
+    status, body, response_headers = _request(
+        app, path, cookie='__Host-album_haven_session=opaque-session',
+        headers=headers, include_headers=True,
+    )
+    assert status == 403
+    assert resolver.calls == ['opaque-session']
+    if destination == 'document':
+        assert body == b'Action not permitted.'
+        assert dict(response_headers)[b'content-type'].startswith(b'text/plain')
+        assert dict(response_headers)[b'cache-control'] == b'no-store, max-age=0'
+    else:
+        assert body == b'{"detail":"Action not permitted."}'
+        assert dict(response_headers)[b'content-type'] == b'application/json'
+    assert b'location' not in dict(response_headers)
+    assert b'set-cookie' not in dict(response_headers)

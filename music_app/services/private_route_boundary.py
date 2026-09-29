@@ -7,7 +7,7 @@ import hashlib
 import hmac
 
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import JSONResponse, RedirectResponse
+from fastapi.responses import JSONResponse, PlainTextResponse, RedirectResponse
 from starlette.datastructures import QueryParams
 from starlette.responses import Response
 from starlette.routing import Match
@@ -208,6 +208,18 @@ def install_private_route_boundary(app: FastAPI) -> None:
                 and request.url.path == "/"
             ):
                 return RedirectResponse("/login", status_code=303)
+            if (
+                exc.status_code == 403
+                and request.method == "GET"
+                and route_path in {"/admin/members", "/admin/accounts/new", "/admin/accounts/{account_id}"}
+                and request.headers.get("sec-fetch-dest") == "document"
+            ):
+                # A denied browser page must remain readable. Fetch/API clients
+                # retain the JSON error contract, and no admin handler is entered.
+                return PlainTextResponse(
+                    "Action not permitted.", status_code=403,
+                    headers={**(exc.headers or {}), "Cache-Control": "no-store, max-age=0"},
+                )
             return JSONResponse(
                 {"detail": exc.detail},
                 status_code=exc.status_code,

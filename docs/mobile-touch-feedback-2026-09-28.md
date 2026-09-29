@@ -47,3 +47,15 @@ transitions, plus top/bottom header geometry and real screenshots on 390px and
 search width, hidden Settings, and populated-outside-expansion assertions change;
 all unrelated acceptance cases and timeout/retry contracts remain intact.
 No checklist counter is present in this owning repair note.
+
+
+### Search retention verification follow-up
+
+Run 36500253754 passed the seven baseline and all 54 existing extended scenarios,
+but both new retained-query cases exposed a real request-ordering defect after
+Appearance Back: a resumed Home hydration remained eligible for another replay
+after the explicit search had acquired the request slot. Foreground navigation
+now retires that deferred startup request at the existing fetch owner, alongside
+queued startup hydration. The browser flows, assertions, retries and timeouts
+are unchanged. A focused unit regression exercises the actual deferred-request
+resumer, the interrupted request, and the successful search without a Home replay.

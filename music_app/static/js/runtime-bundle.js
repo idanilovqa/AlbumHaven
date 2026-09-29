@@ -14256,6 +14256,9 @@ async function fetchAndRender(url, push = true, options = {}) {
     : null;
   if (!requestOptions.startupRefresh) {
     clearStartupHydrationFollowup();
+    // Foreground navigation supersedes a Home hydration deferred by Settings,
+    // including a resumed request that was just interrupted by this search.
+    state.ui.deferredUtilityViewRequest = null;
     state.awaitingInitialDataRefresh = false;
   }
   if (state.busy) {

@@ -5816,3 +5816,27 @@ test('startup hydration preserves an open Sources menu while foreground navigati
   pendingRequests[1].resolveWith({ selected_artist: 'Northlight', artist_groups: [] });
   await navigation;
 });
+
+
+test('explicit search retires a resumed utility startup refresh instead of replaying Home', async () => {
+  const { context, calls, pendingRequests } = createContext();
+  vm.runInContext(fs.readFileSync(path.join(path.dirname(helperPath), 'utility-loaders-and-cover-lookup.js'), 'utf8'), context);
+  const deferred = {
+    url: '/view-data?surface=albums&omit_sidebar=1', push: false,
+    originatingViewStateRevision: context.state.ui.viewStateRevision,
+    options: { startupRefresh: true, startupHydrationTier: 'full', preserveScroll: true },
+  };
+  context.state.ui.deferredUtilityViewRequest = deferred;
+  assert.equal(context.resumeDeferredUtilityViewRequest(), true);
+  assert.equal(pendingRequests.length, 1);
+  const search = context.fetchAndRender('/view-data?q=Sixteen+Horizons', true);
+  assert.equal(pendingRequests[0].options.signal.aborted, true);
+  assert.equal(context.state.ui.deferredUtilityViewRequest, null);
+  pendingRequests[1].resolveWith({ query: 'Sixteen Horizons', selected_artist: 'Northlight', artist_groups: [] });
+  assert.equal(await search, true);
+  await flushMicrotasks();
+  assert.equal(calls.fetchRequests.length, 2);
+  assert.equal(context.state.view.query, 'Sixteen Horizons');
+  assert.equal(context.state.view.selected_artist, 'Northlight');
+  assert.equal(context.state.ui.pendingViewRequest, null);
+});

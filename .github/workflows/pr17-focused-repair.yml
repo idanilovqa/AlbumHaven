@@ -1,4 +1,5 @@
 name: PR17 focused repair verification
+# Revision 2 reconciles both exact matrix counters after adding the calendar regression.
 on:
   push:
     branches: [chatgpt/pr17-failure-inventory-20260929]

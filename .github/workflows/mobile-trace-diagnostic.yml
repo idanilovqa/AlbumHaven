@@ -1,0 +1,53 @@
+name: Inspect Retained Mobile Search Trace
+on:
+  push:
+    branches: [2026-09-26-render-mobile-feedback]
+    paths: [.github/workflows/mobile-trace-diagnostic.yml]
+permissions:
+  contents: read
+  actions: read
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          github-token: ${{ github.token }}
+          run-id: 36500253754
+          name: mobile-layout-evidence-1
+          path: evidence
+      - name: Read only generated-data action and URL evidence
+        shell: python
+        run: |
+          import json, pathlib, zipfile
+          from urllib.parse import urlsplit
+          for path in pathlib.Path('evidence').rglob('trace.zip'):
+              if '6e003' not in str(path):
+                  continue
+              print('TRACE', path.parent.name)
+              with zipfile.ZipFile(path) as archive:
+                  for name in archive.namelist():
+                      if not name.endswith(('.trace', '.network')):
+                          continue
+                      print('PART', name)
+                      for line in archive.read(name).decode().splitlines():
+                          item = json.loads(line)
+                          kind = item.get('type')
+                          if kind == 'before':
+                              params = item.get('params', {})
+                              selector = params.get('selector', '')
+                              if 'password' in selector.lower() or 'username' in selector.lower():
+                                  continue
+                              keep = {k: params[k] for k in ['selector', 'key', 'url', 'value', 'position'] if k in params}
+                              print(json.dumps({'type': kind, 'time': item.get('startTime'), 'id': item.get('callId'), 'method': item.get('method'), 'params': keep}))
+                          elif kind == 'frame-snapshot':
+                              snap = item.get('snapshot', {})
+                              if snap.get('isMainFrame'):
+                                  print(json.dumps({'type': 'frame', 'name': snap.get('snapshotName'), 'url': snap.get('frameUrl')}))
+                          elif kind == 'resource-snapshot':
+                              snap = item.get('snapshot', {})
+                              request = snap.get('request', {})
+                              url = urlsplit(request.get('url', ''))
+                              if url.path in ['/', '/view-data', '/home-data', '/bootstrap-data']:
+                                  print(json.dumps({'type': 'network', 'time': snap.get('startedDateTime'), 'path': url.path, 'query': url.query, 'status': snap.get('response', {}).get('status')}))

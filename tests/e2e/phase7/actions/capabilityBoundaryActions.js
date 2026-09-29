@@ -118,6 +118,6 @@ export async function assertCapabilityBoundary(page, profile, testInfo) {
   } else {
     const response = await page.goto('/admin/members');
     expect(response.status()).toBe(403);
-    await expect(ui.forbidden).toBeVisible();
+    await expect(ui.adminForbidden).toBeVisible();
   }
 }

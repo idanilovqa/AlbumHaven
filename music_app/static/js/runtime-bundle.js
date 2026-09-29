@@ -3856,7 +3856,7 @@ function buildAlbumArtboxHtml(config = {}) {
   const content = state === 'missing' || state === 'empty'
     ? buildMissingAlbumMarkHtml()
     : (coverHtml || (state === 'loading'
-      ? '<img class="album-artbox__loading" src="/static/images/loading-idea.png" alt="" aria-hidden="true">'
+      ? '<span class="album-artbox__placeholder" role="status">Loading cover art...</span>'
       : '<span class="album-artbox__placeholder">No cover art</span>'));
   return `<span class="album-artbox album-artbox--${state}" data-album-artbox-state="${state}" aria-label="${escapeHtml(label)}">${content}${overlayHtml ? `<span class="album-artbox__overlay">${overlayHtml}</span>` : ''}${actionHtml ? `<span class="album-artbox__action">${actionHtml}</span>` : ''}</span>`;
 }
@@ -5356,7 +5356,7 @@ function getTriggerAnchorGeometry(anchor, surface) {
 }
 
 let activeTriggerSurface = null;
-function activateTriggerSurface(surface, close) {
+function activateTriggerSurface(surface, close, options = {}) {
   for (let owner = activeTriggerSurface; owner; owner = owner.parent) {
     if (owner.surface === surface) return;
   }
@@ -5365,7 +5365,7 @@ function activateTriggerSurface(surface, close) {
     activeTriggerSurface = previous.parent || null;
     previous.close();
   }
-  activeTriggerSurface = { surface, close, parent: activeTriggerSurface };
+  activeTriggerSurface = { surface, close, anchor: options.anchor, parent: activeTriggerSurface };
   if (typeof CustomEvent === 'function') surface.ownerDocument?.dispatchEvent?.(new CustomEvent('album-haven:surface-opening', { detail: { surface } }));
 }
 
@@ -5542,6 +5542,29 @@ globalThis.document?.addEventListener?.('album-haven:surface-opening', event => 
     previous.close();
   }
 });
+
+// The existing surface/modal owners remain authoritative. This adapter only
+// reserves the outside gesture before any target or document handler sees it.
+function getDismissibleForegroundSurface() {
+  const modal = typeof getTopmostOpenModal === 'function' ? getTopmostOpenModal() : null;
+  const owner = activeTriggerSurface;
+  const anchor = owner && (triggerAnchorBindings.get(owner.surface)?.anchor || owner.anchor);
+  if (owner && !owner.surface.hidden && (!modal || modal === owner.surface
+      || modal.contains(owner.surface) || (anchor && modal.contains(anchor)))) {
+    return { surface: owner.surface, anchor, dismiss() {
+      if (activeTriggerSurface !== owner) return;
+      owner.close();
+      if (anchor?.isConnected) anchor.focus?.({ preventScroll: true });
+    } };
+  }
+  if (!modal) return null;
+  return { surface: modal, contains: target => target !== modal && modal.contains(target), dismiss() {
+    if (getTopmostOpenModal() === modal) dismissForegroundModal(modal);
+  } };
+}
+if (typeof window !== 'undefined' && globalThis.AlbumHavenSurfaceDismissal) {
+  globalThis.AlbumHavenSurfaceDismissal.bind(window, getDismissibleForegroundSurface);
+}
 
 // END js/runtime/trigger-anchor.js
 
@@ -5951,7 +5974,7 @@ function openGalleryMainSurface(key, anchor, surface, align = 'right') {
   if (previous) closeGalleryMainSurface(false);
   if (typeof activateTriggerSurface === 'function') activateTriggerSurface(surface, () => {
     if (galleryMainSurfaceController.current()?.surface === surface) closeGalleryMainSurface(false);
-  });
+  }, { anchor });
   const scroll = key.startsWith('artist:') ? document.getElementById('albums-scroll') : null;
   galleryMainSurfaceController.activate({ key, anchor, surface,
     familyContextKey: key === 'artist-family' ? getGalleryFamilyContextKey() : null,
@@ -8771,7 +8794,7 @@ function openArtistsDrawer() {
     return false;
   }
   const rail = document.getElementById('shell-navigation-rail');
-  if (typeof activateTriggerSurface === 'function') activateTriggerSurface(rail, () => closeArtistsDrawer({ restoreFocus: false }));
+  if (typeof activateTriggerSurface === 'function') activateTriggerSurface(rail, () => closeArtistsDrawer({ restoreFocus: false }), { anchor: document.getElementById('mobile-library-button') || document.getElementById('artists-drawer-button') });
   state.ui.artistsDrawerOpen = true;
   syncArtistsDrawerVisibility();
   document.querySelector?.('#artist-tree-expanded [data-close-artists-drawer]')?.focus?.({ preventScroll: true });
@@ -12119,6 +12142,12 @@ function handleModalEscapeKeydown(event) {
     closeUtilityModal(true);
     return;
   }
+  dismissForegroundModal(modal);
+}
+
+function dismissForegroundModal(modal) {
+  if (modal.id === 'tag-editor-modal') { closeTagEditor(); return; }
+  if (modal.id === 'utility-modal') { closeUtilityModal(); return; }
   const close = {
     'track-modal': () => closeTrackModal(),
     'image-lightbox': () => closeImageLightbox(),
@@ -26411,6 +26440,15 @@ function renderCoverLookupDrawer({ preserveInteraction = true } = {}) {
   const summary = document.getElementById('cover-lookup-drawer-summary');
   if (!drawer || !body || !button || !badge) return;
   const tasks = Array.isArray(state.coverLookup.tasks) ? state.coverLookup.tasks : [];
+  if (state.coverLookup.drawerOpen && typeof activateTriggerSurface === 'function' && !drawer.classList.contains('is-open')) {
+    activateTriggerSurface(drawer, () => {
+      state.coverLookup.drawerOpen = false;
+      renderCoverLookupDrawer();
+      stopCoverLookupPollingIfIdle();
+    }, { anchor: button });
+  } else if (!state.coverLookup.drawerOpen && typeof clearTriggerAnchor === 'function') {
+    clearTriggerAnchor(drawer);
+  }
   drawer.hidden = !state.coverLookup.drawerOpen;
   drawer.classList.toggle('is-open', state.coverLookup.drawerOpen);
   const activeCount = tasks.filter((task) => ['pending', 'running'].includes(String(task?.status || ''))).length;

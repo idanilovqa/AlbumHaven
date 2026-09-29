@@ -34,6 +34,10 @@
       if (drawerBackdrop) drawerBackdrop.hidden = false;
       nav.querySelector('button:not([disabled]), a[href]')?.focus({ preventScroll: true });
     };
+    const disposeDismissal = window.AlbumHavenSurfaceDismissal?.bind(window, () =>
+      nav.classList.contains('is-settings-navigation-open') ? {
+        surface: nav, anchor: drawerAnchor, dismiss: () => closeDrawer(true),
+      } : null);
     const onSurfaceOpening = event => { if (event.detail?.surface !== nav && !nav.contains(event.detail?.surface)) closeDrawer(false); };
     document.addEventListener('album-haven:surface-opening', onSurfaceOpening);
     const syncDrawerLayout = () => closeDrawer(false);
@@ -309,6 +313,7 @@
         ++sequence;
         pending?.abort();
         disposeContent();
+        disposeDismissal?.();
         document.removeEventListener('album-haven:surface-opening', onSurfaceOpening);
         document.removeEventListener('keydown', onDrawerKeydown);
         window.removeEventListener('resize', syncDrawerLayout);

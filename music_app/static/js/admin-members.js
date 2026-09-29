@@ -7,10 +7,11 @@
   let removePointerListener = () => {};
   let removePlacementListeners = () => {};
   let removeSurfaceListener = () => {};
+  let removeDismissalListener = () => {};
   const requests = typeof AbortController === 'undefined' ? null : new AbortController();
   const nativeFetch = globalThis.fetch;
   const fetch = (url, init) => nativeFetch(url, { ...init, ...(requests ? { signal: requests.signal } : {}) });
-  const cleanup = () => { active = false; requests?.abort(); removePointerListener(); removePlacementListeners(); removeSurfaceListener(); };
+  const cleanup = () => { active = false; requests?.abort(); removePointerListener(); removePlacementListeners(); removeSurfaceListener(); removeDismissalListener(); };
   const navigate = (url) => {
     if (!active) return Promise.resolve(false);
     return options.navigate ? options.navigate(url) : window.location.assign(url);
@@ -211,6 +212,14 @@
       }
     });
   }
+
+  removeDismissalListener = window.AlbumHavenSurfaceDismissal?.bind(window, () => {
+    const menu = document.querySelector('[data-member-menu]:not([hidden])');
+    const trigger = menu && document.querySelector(`[data-member-menu-trigger="${menu.dataset.memberMenu}"]`);
+    return menu && trigger ? { surface: menu, anchor: trigger, dismiss() {
+      closeMenu(trigger, menu); trigger.focus({ preventScroll: true });
+    } } : null;
+  }) || (() => {});
 
   const onPointerDown = (event) => {
     for (const menu of document.querySelectorAll('[data-member-menu]:not([hidden])')) {

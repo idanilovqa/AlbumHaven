@@ -115,9 +115,11 @@ for (const interaction of ['focus', 'hover']) {
 }
 
 function createDrawerHarness(overrides = {}) {
+  const drawerClasses = new Set();
   const drawerElement = {
     hidden: false,
-    classList: { toggle: () => {} },
+    classList: { contains: name => drawerClasses.has(name),
+      toggle: (name, enabled) => enabled ? drawerClasses.add(name) : drawerClasses.delete(name) },
   };
   const bodyElement = { innerHTML: '' };
   const badgeElement = { hidden: false, textContent: '' };

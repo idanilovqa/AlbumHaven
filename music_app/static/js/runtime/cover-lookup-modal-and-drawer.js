@@ -1200,6 +1200,15 @@ function renderCoverLookupDrawer({ preserveInteraction = true } = {}) {
   const summary = document.getElementById('cover-lookup-drawer-summary');
   if (!drawer || !body || !button || !badge) return;
   const tasks = Array.isArray(state.coverLookup.tasks) ? state.coverLookup.tasks : [];
+  if (state.coverLookup.drawerOpen && typeof activateTriggerSurface === 'function' && !drawer.classList.contains('is-open')) {
+    activateTriggerSurface(drawer, () => {
+      state.coverLookup.drawerOpen = false;
+      renderCoverLookupDrawer();
+      stopCoverLookupPollingIfIdle();
+    }, { anchor: button });
+  } else if (!state.coverLookup.drawerOpen && typeof clearTriggerAnchor === 'function') {
+    clearTriggerAnchor(drawer);
+  }
   drawer.hidden = !state.coverLookup.drawerOpen;
   drawer.classList.toggle('is-open', state.coverLookup.drawerOpen);
   const activeCount = tasks.filter((task) => ['pending', 'running'].includes(String(task?.status || ''))).length;

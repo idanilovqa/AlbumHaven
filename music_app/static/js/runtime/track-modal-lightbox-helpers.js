@@ -884,6 +884,12 @@ function handleModalEscapeKeydown(event) {
     closeUtilityModal(true);
     return;
   }
+  dismissForegroundModal(modal);
+}
+
+function dismissForegroundModal(modal) {
+  if (modal.id === 'tag-editor-modal') { closeTagEditor(); return; }
+  if (modal.id === 'utility-modal') { closeUtilityModal(); return; }
   const close = {
     'track-modal': () => closeTrackModal(),
     'image-lightbox': () => closeImageLightbox(),

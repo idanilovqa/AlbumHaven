@@ -374,7 +374,7 @@ function openGalleryMainSurface(key, anchor, surface, align = 'right') {
   if (previous) closeGalleryMainSurface(false);
   if (typeof activateTriggerSurface === 'function') activateTriggerSurface(surface, () => {
     if (galleryMainSurfaceController.current()?.surface === surface) closeGalleryMainSurface(false);
-  });
+  }, { anchor });
   const scroll = key.startsWith('artist:') ? document.getElementById('albums-scroll') : null;
   galleryMainSurfaceController.activate({ key, anchor, surface,
     familyContextKey: key === 'artist-family' ? getGalleryFamilyContextKey() : null,

@@ -14,12 +14,13 @@ test('shared back glyph is an actual bare ActionButton with accessible name', ()
   assert.match(markup, /M19 12H5/);
 });
 
-test('loading artbox reuses existing artwork without changing empty/missing states', () => {
+test('loading artbox is a plain text square without changing empty/missing states', () => {
   const context = vm.createContext({ escapeHtml });
   vm.runInContext(fs.readFileSync(path.join(__dirname, '../../../music_app/static/js/runtime/album-artbox.js'), 'utf8'), context);
   const loading = context.buildAlbumArtboxHtml({ state: 'loading', label: 'Loading cover art' });
   assert.match(loading, /data-album-artbox-state="loading"/);
-  assert.match(loading, /\/static\/images\/loading-idea.png/);
+  assert.match(loading, /role="status">Loading cover art\.\.\.</);
+  assert.doesNotMatch(loading, /<img|<svg/);
   assert.doesNotMatch(context.buildAlbumArtboxHtml({ state: 'empty', label: 'No cover' }), /loading-idea/);
   assert.doesNotMatch(context.buildAlbumArtboxHtml({ state: 'missing', label: 'Missing album' }), /loading-idea/);
 });

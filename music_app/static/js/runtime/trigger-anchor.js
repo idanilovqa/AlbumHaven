@@ -12,7 +12,7 @@ function getTriggerAnchorGeometry(anchor, surface) {
 }
 
 let activeTriggerSurface = null;
-function activateTriggerSurface(surface, close) {
+function activateTriggerSurface(surface, close, options = {}) {
   for (let owner = activeTriggerSurface; owner; owner = owner.parent) {
     if (owner.surface === surface) return;
   }
@@ -21,7 +21,7 @@ function activateTriggerSurface(surface, close) {
     activeTriggerSurface = previous.parent || null;
     previous.close();
   }
-  activeTriggerSurface = { surface, close, parent: activeTriggerSurface };
+  activeTriggerSurface = { surface, close, anchor: options.anchor, parent: activeTriggerSurface };
   if (typeof CustomEvent === 'function') surface.ownerDocument?.dispatchEvent?.(new CustomEvent('album-haven:surface-opening', { detail: { surface } }));
 }
 
@@ -198,3 +198,26 @@ globalThis.document?.addEventListener?.('album-haven:surface-opening', event => 
     previous.close();
   }
 });
+
+// The existing surface/modal owners remain authoritative. This adapter only
+// reserves the outside gesture before any target or document handler sees it.
+function getDismissibleForegroundSurface() {
+  const modal = typeof getTopmostOpenModal === 'function' ? getTopmostOpenModal() : null;
+  const owner = activeTriggerSurface;
+  const anchor = owner && (triggerAnchorBindings.get(owner.surface)?.anchor || owner.anchor);
+  if (owner && !owner.surface.hidden && (!modal || modal === owner.surface
+      || modal.contains(owner.surface) || (anchor && modal.contains(anchor)))) {
+    return { surface: owner.surface, anchor, dismiss() {
+      if (activeTriggerSurface !== owner) return;
+      owner.close();
+      if (anchor?.isConnected) anchor.focus?.({ preventScroll: true });
+    } };
+  }
+  if (!modal) return null;
+  return { surface: modal, contains: target => target !== modal && modal.contains(target), dismiss() {
+    if (getTopmostOpenModal() === modal) dismissForegroundModal(modal);
+  } };
+}
+if (typeof window !== 'undefined' && globalThis.AlbumHavenSurfaceDismissal) {
+  globalThis.AlbumHavenSurfaceDismissal.bind(window, getDismissibleForegroundSurface);
+}

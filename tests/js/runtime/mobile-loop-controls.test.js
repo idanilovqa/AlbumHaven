@@ -142,11 +142,56 @@ test('the mobile index mounts no loop players, and a song detail ignores the ind
 });
 
 
-test('loop picker aligns selected row near the player without going below it', () => {
-  const option = { offsetTop: 114, getBoundingClientRect: () => ({ height: 36 }) };
-  const menu = { hidden: false, style: {}, classList: { contains: () => true }, querySelector: () => option, getBoundingClientRect: () => ({ width: 168, height: 248 }) };
-  const trigger = { getBoundingClientRect: () => ({ top: 710, height: 36, right: 366 }) };
+test('phone loop picker joins its button above the player and scrolls the active option inside', () => {
+  const option = { offsetTop: 432, getBoundingClientRect: () => ({ height: 36 }) };
+  const list = { clientHeight: 234, scrollTop: 0 };
+  const menu = { hidden: false, style: {}, classList: { contains: () => true },
+    querySelector: selector => selector === '.utility-loop-menu-options' ? list : option,
+    getBoundingClientRect: () => ({ width: 168, height: 248 }) };
+  const trigger = { getBoundingClientRect: () => ({ top: 710, bottom: 746, height: 36, left: 298, right: 366 }) };
+  let joined = false;
   const context = load('utility-loop-playback.js', { cssEscape: String, window: { innerWidth: 390, innerHeight: 844 },
+    syncTriggerAnchor: (surface, anchor) => { assert.equal(surface, menu); assert.equal(anchor, trigger); joined = true; },
+    document: { querySelector(selector) {
+      if (selector === '.global-player') return { getBoundingClientRect: () => ({ top: 769 }) };
+      if (selector === '.app-bar') return { getBoundingClientRect: () => ({ bottom: 56 }) };
+      return selector.includes('value-button') ? trigger : menu;
+    } } });
+  context.positionUtilityLoopSpeedMenu('test', 'pitch');
+  const top = parseFloat(menu.style.top), height = parseFloat(menu.style.maxHeight);
+  assert.equal(top + height, 710);
+  assert.equal(parseFloat(menu.style.left) + 168, 366);
+  assert.ok(option.offsetTop - list.scrollTop >= 0);
+  assert.ok(option.offsetTop + 36 - list.scrollTop <= list.clientHeight);
+  assert.equal(joined, true);
+});
+
+test('loop menu placement flips at screen edges while keeping a zero-gap join', () => {
+  const { resolveUtilityLoopMenuPlacement: place } = load('utility-loop-playback.js');
+  const bounds = { left: 8, right: 382, top: 64, bottom: 761 };
+  const menu = { width: 168, height: 248 };
+  for (const [top, expectedEdge] of [[100, 'top'], [360, 'top'], [700, 'bottom']]) {
+    const anchor = { left: 298, right: 366, top, bottom: top + 36 };
+    const result = place(anchor, menu, bounds);
+    assert.equal(result.edge, expectedEdge);
+    assert.equal(expectedEdge === 'top' ? result.top : result.top + result.height,
+      expectedEdge === 'top' ? anchor.bottom : anchor.top);
+    assert.ok(result.top >= bounds.top);
+    assert.ok(result.top + result.height <= bounds.bottom);
+  }
+  const short = place({ left: 4, right: 72, top: 200, bottom: 236 }, menu,
+    { left: 8, right: 312, top: 64, bottom: 390 });
+  assert.equal(short.edge, 'top');
+  assert.equal(short.left, 8);
+  assert.equal(short.height, 154);
+  assert.equal(short.top, 236);
+});
+
+test('desktop speed menu retains selected-row positioning', () => {
+  const option = { offsetTop: 114, getBoundingClientRect: () => ({ height: 36 }) };
+  const menu = { hidden: false, style: {}, classList: { contains: () => false }, querySelector: () => option, getBoundingClientRect: () => ({ width: 78, height: 168 }) };
+  const trigger = { getBoundingClientRect: () => ({ top: 710, height: 36, right: 366 }) };
+  const context = load('utility-loop-playback.js', { cssEscape: String, window: { innerWidth: 1440, innerHeight: 844 },
     document: { querySelector: selector => selector === '.global-player' ? { getBoundingClientRect: () => ({ top: 769 }) } : selector.includes('value-button') ? trigger : menu } });
   context.positionUtilityLoopSpeedMenu('test');
   const top = parseFloat(menu.style.top), height = parseFloat(menu.style.maxHeight);

@@ -143,6 +143,12 @@
   border-color: transparent;
   background: color-mix(in srgb, var(--appearance-item-action-hover-background, var(--appearance-hover, #293a50)) 45%, transparent);
 }
+:root .action-button.action-button--bare:not(.trigger-anchor-open):not(.global-player *):hover:not(:disabled):not([aria-disabled='true']),
+:root[data-action-button-outlines='off'] .action-button:not(.trigger-anchor-open):not(.global-player *):not(.action-button--destructive):hover:not(:disabled):not([aria-disabled='true']) {
+  border-color: transparent;
+  background: color-mix(in srgb, var(--appearance-item-action-hover-background, var(--appearance-hover, #293a50)) 45%, transparent);
+}
+
 .action-button--destructive {
   --appearance-interaction-outline: var(--appearance-error, #ef5350);
   color: var(--alert-error-ink, color-mix(in srgb, var(--appearance-error, #ef5350) 72%, white 28%));

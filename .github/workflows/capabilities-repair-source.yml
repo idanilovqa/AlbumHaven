@@ -1,0 +1,127 @@
+name: Capabilities Repair Source
+
+on:
+  push:
+    branches: [2026-09-25-capabilities-audit]
+    paths: [.github/workflows/capabilities-repair-source.yml]
+
+permissions:
+  contents: read
+
+jobs:
+  collect:
+    if: github.repository == 'idanilovqa/AlbumHaven' && github.ref == 'refs/heads/2026-09-25-capabilities-audit'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+      actions: read
+    env:
+      SOURCE_SHA: 3a8d6784806acf14c898414815fcb11ec167f58f
+      BASE_SHA: a5c23fc8963f9ecc531468a61653bf2d798e8c6d
+      TARGET_BRANCH: 2026-09-25-capabilities-audit
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+      - name: Verify pinned source and collect text snapshots
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD^)" = "$SOURCE_SHA"
+          test -z "$(git status --porcelain)"
+          test ! -e .agent-repair-source
+          git fetch --no-tags --depth=1 origin "$BASE_SHA"
+          python - <<'PY'
+          import base64, hashlib, io, json, os, pathlib, subprocess, zipfile
+          source, base = os.environ['SOURCE_SHA'], os.environ['BASE_SHA']
+          def git(*args):
+              return subprocess.check_output(['git', *args])
+          changed = set(git('diff', '--name-only', '--no-renames', '-z', base, source).decode().rstrip('\0').split('\0'))
+          allowed_suffixes = {'.py', '.js', '.cjs', '.mjs', '.json', '.html', '.css', '.md', '.txt', '.toml', '.yml', '.yaml', '.ps1', '.sql', '.sh', '.ini', '.cfg', '.in', '.xml', '.ts', '.tsx', '.jsx'}
+          root_names = {'AGENTS.md', 'Dockerfile', 'Makefile', 'LICENSE', '.gitignore', '.gitattributes', '.npmrc', '.python-version', '.node-version', 'VERSION'}
+          manifest = {'source_sha': source, 'base_sha': base, 'changed_files': sorted(changed), 'files': [], 'omitted': []}
+          archive = io.BytesIO()
+          with zipfile.ZipFile(archive, 'w', zipfile.ZIP_DEFLATED, compresslevel=9) as output:
+              for label, revision in [('head', source), ('base', base)]:
+                  for entry in git('ls-tree', '-r', '-z', revision).split(b'\0'):
+                      if not entry:
+                          continue
+                      metadata, raw_path = entry.split(b'\t', 1)
+                      mode, kind, blob = metadata.decode().split()
+                      path = raw_path.decode('utf-8')
+                      if label == 'base' and path not in changed:
+                          continue
+                      p = pathlib.PurePosixPath(path)
+                      if kind != 'blob' or mode not in {'100644', '100755'} or '..' in p.parts or p.is_absolute():
+                          manifest['omitted'].append([label, path, blob, 'non-regular'])
+                          continue
+                      if p.suffix not in allowed_suffixes and path not in root_names:
+                          manifest['omitted'].append([label, path, blob, 'non-text-extension'])
+                          continue
+                      if any(part in {'.git', 'node_modules', '.venv', '.codex'} for part in p.parts) or p.name.startswith('.env'):
+                          manifest['omitted'].append([label, path, blob, 'excluded'])
+                          continue
+                      data = git('cat-file', 'blob', blob)
+                      try:
+                          data.decode('utf-8')
+                      except UnicodeDecodeError:
+                          manifest['omitted'].append([label, path, blob, 'non-utf8'])
+                          continue
+                      if b'\0' in data:
+                          manifest['omitted'].append([label, path, blob, 'binary'])
+                          continue
+                      output.writestr(label + '/' + path, data)
+                      manifest['files'].append({'snapshot': label, 'path': path, 'blob': blob, 'mode': mode})
+              output.writestr('source-manifest.json', json.dumps(manifest, ensure_ascii=False, indent=2))
+          payload = archive.getvalue()
+          encoded = base64.b64encode(payload)
+          destination = pathlib.Path('.agent-repair-source')
+          destination.mkdir()
+          parts = []
+          for index, start in enumerate(range(0, len(encoded), 750000)):
+              name = f'part-{index:03d}.txt'
+              part = encoded[start:start + 750000]
+              (destination / name).write_bytes(part)
+              parts.append({'name': name, 'size': len(part), 'sha256': hashlib.sha256(part).hexdigest()})
+          receipt = {'source_sha': source, 'base_sha': base, 'archive_sha256': hashlib.sha256(payload).hexdigest(), 'archive_bytes': len(payload), 'file_count': len(manifest['files']), 'parts': parts, 'purpose': 'Temporary public-source review snapshot, not application data or release verification. Remove before publication.'}
+          (destination / 'manifest.json').write_text(json.dumps(receipt, indent=2) + '\n', encoding='utf-8')
+          print(json.dumps(receipt, indent=2))
+          PY
+      - name: Publish only temporary source parts to this branch
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git ls-remote origin "refs/heads/$TARGET_BRANCH" | cut -f1)" = "$GITHUB_SHA"
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -- .agent-repair-source
+          git commit -m 'chore(review): retain temporary pinned source transport'
+          git push origin "HEAD:refs/heads/$TARGET_BRANCH"
+      - name: Print existing JavaScript failure excerpts without publishing logs
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          for job in 109189962638 109189962584; do
+            gh api "repos/idanilovqa/AlbumHaven/actions/jobs/$job/logs" > "$RUNNER_TEMP/unit-$job.log"
+          done
+          python - <<'PY'
+          import os, pathlib, re
+          for job in (109189962638, 109189962584):
+              p = pathlib.Path(os.environ['RUNNER_TEMP']) / f'unit-{job}.log'
+              lines = p.read_text(encoding='utf-8', errors='replace').splitlines()
+              print(f'\n=== Existing CI job {job}: failing unit tests ===')
+              shown = set()
+              for index, line in enumerate(lines):
+                  if re.search(r'\bnot ok \d+\b', line):
+                      for position in range(max(0, index - 1), min(len(lines), index + 44)):
+                          if position not in shown:
+                              print(re.sub(r'\x1b\[[0-9;]*m', '', lines[position]))
+                              shown.add(position)
+              for line in lines:
+                  if re.search(r'# (tests|pass|fail|skipped) \d+\b', line):
+                      print(line)
+          PY

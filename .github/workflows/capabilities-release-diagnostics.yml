@@ -1,7 +1,11 @@
 name: Capabilities Release Diagnostics
 
 on:
-  workflow_dispatch:
+  push:
+    branches:
+      - 2026-09-25-capabilities-audit
+    paths:
+      - .github/workflows/capabilities-release-diagnostics.yml
 
 permissions:
   contents: read
@@ -12,8 +16,15 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v5
-      - name: Print source hashes
+        with:
+          fetch-depth: 1
+      - name: Print exact repair sources
         shell: bash
         run: |
-          git rev-parse HEAD
-          git status --porcelain
+          set -euo pipefail
+          echo "HEAD=$(git rev-parse HEAD)"
+          for path in             music_app/static/css/runtime/non-album-and-player.css             music_app/static/css/button-component.css             music_app/static/css/runtime/trigger-anchor.css             tests/e2e/actions/navigationPanelActions.js             tests/e2e/poms/navigationPanel.js             tests/e2e/phase7/poms/capabilityBoundaryPage.js             tests/e2e/phase7/actions/capabilityBoundaryActions.js; do
+            echo "===== BEGIN $path ====="
+            cat "$path"
+            echo "===== END $path ====="
+          done

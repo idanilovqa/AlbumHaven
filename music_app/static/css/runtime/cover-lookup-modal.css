@@ -758,6 +758,10 @@
 /* Theme-aware discovery CTA: static halo, no layout growth or perpetual pulse. */
 :root #cover-lookup-modal #cover-lookup-find-better-button:not(:disabled):not([aria-disabled="true"]) {
   --cover-search-accent: var(--appearance-primary-button, var(--accent));
+  /* Keep shared and mobile interaction rules on the same opaque owning surface. */
+  --appearance-hover: color-mix(in srgb, var(--cover-search-accent) 12%, var(--panel));
+  --appearance-item-action-hover-background: var(--appearance-hover);
+  --appearance-item-action-pressed: color-mix(in srgb, var(--cover-search-accent) 18%, var(--panel));
   color: var(--text);
   background: color-mix(in srgb, var(--cover-search-accent) 8%, var(--panel));
   border-color: color-mix(in srgb, var(--cover-search-accent) 72%, var(--appearance-line, var(--border)));
@@ -766,6 +770,7 @@
   transition: box-shadow 180ms ease, border-color 180ms ease;
 }
 :root #cover-lookup-modal #cover-lookup-find-better-button:not(:disabled):not([aria-disabled="true"]):is(:hover, :focus-visible) {
+  background: var(--appearance-item-action-hover-background);
   border-color: var(--cover-search-accent);
   box-shadow: 0 0 18px color-mix(in srgb, var(--cover-search-accent) 48%, transparent),
     inset 0 0 0 1px color-mix(in srgb, var(--cover-search-accent) 30%, transparent);

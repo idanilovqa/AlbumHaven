@@ -52,21 +52,21 @@ jobs:
           (out / 'source-manifest.json').write_text(json.dumps(manifest))
           (out / 'review.diff').write_bytes(subprocess.check_output(['git','diff','--no-ext-diff',base+'...'+head,'--','.',':(exclude)music_app/static/js/runtime-bundle.js']))
           (out / 'review-files.txt').write_bytes(subprocess.check_output(['git','diff','--no-ext-diff','--name-status',base+'...'+head]))
-      - name: Collect completed failure evidence without altering application branches
+      - name: Retain review evidence and explicitly distinguish unfinished CI jobs
         uses: actions/github-script@v7
         with:
           script: |
             const fs = require('fs');
             const out = '/tmp/pr19-diagnostics';
-            const inventory = [];
+            const inventory = [], runs = [];
             for (const run of [36607258113, 36607251447]) {
               const result = await github.rest.actions.getWorkflowRun({...context.repo, run_id: run});
-              if (result.data.status !== 'completed') throw new Error('Wait for the complete failure inventory');
               if (result.data.head_sha !== '62346e8b258d2feee4388b297622d1c7c0adff68') throw new Error('Unexpected run head');
+              runs.push({id:run,status:result.data.status,conclusion:result.data.conclusion});
               const jobs = await github.paginate(github.rest.actions.listJobsForWorkflowRun, {...context.repo, run_id:run, per_page:100});
               for (const job of jobs) {
                 const entry = {run, id:job.id, name:job.name, status:job.status, conclusion:job.conclusion, failures:[]};
-                if (job.conclusion === 'failure') {
+                if (job.status === 'completed' && job.conclusion === 'failure') {
                   const response = await github.request('GET /repos/{owner}/{repo}/actions/jobs/{job_id}/logs', {...context.repo, job_id:job.id});
                   const log = typeof response.data === 'string' ? response.data : Buffer.from(response.data).toString('utf8');
                   const lines = log.split('\n').map(line => line.replace(/^\d{4}-\d\d-\d\dT\S+\s*/, '').replace(/\x1b\[[0-9;]*m/g, ''));
@@ -82,14 +82,14 @@ jobs:
                 inventory.push(entry);
               }
             }
-            fs.writeFileSync(out+'/failures.json', JSON.stringify({head:'62346e8b258d2feee4388b297622d1c7c0adff68',jobs:inventory},null,2));
+            fs.writeFileSync(out+'/failures.json', JSON.stringify({head:'62346e8b258d2feee4388b297622d1c7c0adff68',complete:runs.every(r=>r.status==='completed'),runs,jobs:inventory},null,2));
             const tree=[];
             for (const name of fs.readdirSync(out)) {
               const blob=await github.rest.git.createBlob({...context.repo,content:fs.readFileSync(out+'/'+name).toString('base64'),encoding:'base64'});
               tree.push({path:name,mode:'100644',type:'blob',sha:blob.data.sha});
             }
             const t=await github.rest.git.createTree({...context.repo,tree});
-            const commit=await github.rest.git.createCommit({...context.repo,tree:t.data.sha,parents:[],message:'Pinned PR19 review and completed failure evidence for 62346e8b'});
+            const commit=await github.rest.git.createCommit({...context.repo,tree:t.data.sha,parents:[],message:'Pinned PR19 review source and observed CI evidence for 62346e8b'});
             console.log('DIAGNOSTIC_SNAPSHOT '+commit.data.sha);
-            console.log(JSON.stringify(inventory.map(j=>({id:j.id,name:j.name,status:j.status,conclusion:j.conclusion,messages:j.failures.length}))));
+            console.log(JSON.stringify({runs,jobs:inventory.map(j=>({id:j.id,name:j.name,status:j.status,conclusion:j.conclusion,messages:j.failures.length}))}));
             console.log('SOURCE_PARTS '+JSON.stringify(fs.readdirSync(out)));

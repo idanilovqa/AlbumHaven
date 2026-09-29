@@ -1,0 +1,64 @@
+name: Mobile Failure Snapshot Evidence
+on:
+  push:
+    branches: [2026-09-29-mobile-ci-repair-evidence]
+    paths: [.github/workflows/mobile-ci-text-evidence.yml]
+permissions:
+  contents: read
+jobs:
+  collect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+      actions: read
+    steps:
+      - name: Collect existing failure text without publishing fixture content
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs'), cp = require('child_process');
+            fs.mkdirSync('private-artifacts');
+            const ids = [11016248126,11015933970,11015347509,11014588696,11014775495,11014321271,11014720802,11013977223,11014411890,11013914354,11014414008,11014049290,11014334136,11014293965,11014593787,11013909364,11014299157,11014264149,11014478927];
+            for (const artifact_id of ids) {
+              const info = (await github.rest.actions.getArtifact({...context.repo, artifact_id})).data;
+              if (info.workflow_run.head_sha !== '234d4f5c579be29b3f19dcd72afb7719c13d4ed4') throw new Error('Unexpected source');
+              const data = await github.rest.actions.downloadArtifact({...context.repo, artifact_id, archive_format: 'zip'});
+              const filename = `private-artifacts/${artifact_id}.zip`;
+              fs.writeFileSync(filename, Buffer.from(data.data));
+              cp.execFileSync('python3', ['-c', `import pathlib, zipfile\np=pathlib.Path('${filename}')\nwith zipfile.ZipFile(p) as src, zipfile.ZipFile('private-text.zip', 'a', compression=zipfile.ZIP_DEFLATED) as dst:\n for item in src.infolist():\n  if not item.is_dir() and pathlib.PurePosixPath(item.filename).suffix in {'.md','.json','.log','.txt'} and item.file_size <= 10000000:\n   dst.writestr('${artifact_id}/'+item.filename, src.read(item))\np.unlink()`]);
+            }
+      - name: Encrypt snapshots for authenticated connector transport
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs'), crypto = require('crypto');
+            const publicKey = `-----BEGIN PUBLIC KEY-----
+            MIIBojANBgkqhkiG9w0BAQEFAAOCAY8AMIIBigKCAYEA0NkRIWZi2I2faI48VaMB
+            5cGCsYRgLW2pD+GD1GsUMcehkmIrLtwTUFAxpSMouDLKyZwEm7HSrlgSNARrB0jL
+            BGMW0hxrMhfNwLnKat1Wer8aUtP8kbXSmwomvCcJ8W406Rzr1ozKpGgrWXt4L0Qh
+            JBJhzOXK7/iWfPboyBn0gzPdAoYWHHoDCPyimg7SDnpurDAuyi4ThlmjWyytIw3S
+            uyFGOTKTdawxW/H5Rs5rY9GoMs0l7RATQNaXQFPXr5DInB42r2kPsc+2C9veGOJh
+            zkosz1LfOhUuOj9wVOQFLeWfoanI8/Kgj62V5YAKeC+DpKv5+vm5P2QLrHTbZSgY
+            xv2pOex73Wsw54OaCdEIeDv83LX7nu7f6YvcvXVbLKaPRz13QeEYf8qMS6YYefCk
+            Vlo4rTL41HCbiTbq9N1jJ0bDJg3xasCWE2D/Cf2oTRmEb63N+Tkb9SVtFnKedusC
+            o2WOHoK1XtDa3Tu4JOHIe0SJhKKiRq9nJ0k/JC+lxJNhAgMBAAE=
+            -----END PUBLIC KEY-----`;
+            const archive = fs.readFileSync('private-text.zip');
+            const key = crypto.randomBytes(32), iv = crypto.randomBytes(12), aad = Buffer.from('AlbumHaven:234d4f5c:failure-text');
+            const cipher = crypto.createCipheriv('aes-256-gcm', key, iv);
+            cipher.setAAD(aad);
+            const bytes = Buffer.concat([cipher.update(archive),cipher.final(),cipher.getAuthTag()]);
+            const tree = [], parts = [];
+            for (let offset=0,index=0;offset<bytes.length;offset+=800000,index++) {
+              const name=`failure-text-${String(index).padStart(3,'0')}.bin`, data=bytes.subarray(offset,offset+800000);
+              const blob=await github.rest.git.createBlob({...context.repo,content:data.toString('base64'),encoding:'base64'});
+              tree.push({path:name,mode:'100644',type:'blob',sha:blob.data.sha});
+              parts.push({name,sha256:crypto.createHash('sha256').update(data).digest('hex')});
+            }
+            const manifest={source_commit:'234d4f5c579be29b3f19dcd72afb7719c13d4ed4',parts,iv:iv.toString('base64'),aad:aad.toString('base64'),key:crypto.publicEncrypt({key:publicKey,padding:crypto.constants.RSA_PKCS1_OAEP_PADDING,oaepHash:'sha256'},key).toString('base64'),archive_sha256:crypto.createHash('sha256').update(archive).digest('hex')};
+            const meta=await github.rest.git.createBlob({...context.repo,content:JSON.stringify(manifest),encoding:'utf-8'});
+            tree.push({path:'failure-text-manifest.json',mode:'100644',type:'blob',sha:meta.data.sha});
+            const t=await github.rest.git.createTree({...context.repo,tree});
+            const c=await github.rest.git.createCommit({...context.repo,message:'Encrypted failure snapshot evidence',tree:t.data.sha,parents:[]});
+            console.log('FAILURE_SNAPSHOTS '+JSON.stringify({commit:c.data.sha,parts:tree.map(x=>x.path)}));

@@ -1,0 +1,72 @@
+{
+  "head": "5d98f6e6260e689905e92574e727193df64915ea",
+  "bytes": 11169300,
+  "sha256": "e8f742dc90f5a44ad5c44d9f981c62ba0ab24eb90f0a93f12aced1cd01fd7bdb",
+  "parts": [
+    {
+      "path": ".ci/pr17-source-01.b64",
+      "bytes": 900000,
+      "sha256": "28b6b17b7595997e3f2bade9aa4aff933f4483a4f4099a36ad3e3c8f099148c6"
+    },
+    {
+      "path": ".ci/pr17-source-02.b64",
+      "bytes": 900000,
+      "sha256": "240c5272f3c440fd823385ccbdeb4c9fddb46de9e18ccebe4cfd17d5c0f7e763"
+    },
+    {
+      "path": ".ci/pr17-source-03.b64",
+      "bytes": 900000,
+      "sha256": "bef9e86a444723edace76d5369b67074fa63f717694e99c6a7cde79b1d93f661"
+    },
+    {
+      "path": ".ci/pr17-source-04.b64",
+      "bytes": 900000,
+      "sha256": "9539f5af7ac37cc77ab07bcdb2cc2abdb381fdf6a367595e716c453392848b81"
+    },
+    {
+      "path": ".ci/pr17-source-05.b64",
+      "bytes": 900000,
+      "sha256": "eb339b2789e2666fbc4741fcb19abc80834cbb5f138ee1dc99f1a1ec2a3c1793"
+    },
+    {
+      "path": ".ci/pr17-source-06.b64",
+      "bytes": 900000,
+      "sha256": "364f42beb87ef4a2ab9b9acabe8a164742b14491ef13ff90a06d8c71be1f52f4"
+    },
+    {
+      "path": ".ci/pr17-source-07.b64",
+      "bytes": 900000,
+      "sha256": "bc5bfbdb844e89700765b78523537c4fd9414a7be0c189ffe9999ff1ab773eb7"
+    },
+    {
+      "path": ".ci/pr17-source-08.b64",
+      "bytes": 900000,
+      "sha256": "0b198f4c0c0a7554bcae05ef41d26593d39fad705d854c1ff996e6866709f0cb"
+    },
+    {
+      "path": ".ci/pr17-source-09.b64",
+      "bytes": 900000,
+      "sha256": "26ad8e495bf91318fab29d9772c22e21951d8a9942f60e0c1405de658e36faee"
+    },
+    {
+      "path": ".ci/pr17-source-10.b64",
+      "bytes": 900000,
+      "sha256": "dbbac19fca4ff0f3578a9b33f24d9e2cc232c09d11643bcdc4094e66d1ef3573"
+    },
+    {
+      "path": ".ci/pr17-source-11.b64",
+      "bytes": 900000,
+      "sha256": "bac8d6db7aa23c315b39727b4885ad74b909fdbc347a18756e6712cb27d85aaf"
+    },
+    {
+      "path": ".ci/pr17-source-12.b64",
+      "bytes": 900000,
+      "sha256": "063f5d3b0b929ecf9602b3ec9cb97584f671c8559342066369617340e68a905b"
+    },
+    {
+      "path": ".ci/pr17-source-13.b64",
+      "bytes": 369300,
+      "sha256": "fcae492ccc21bc4d314744d5eedfa915ae1dd2e0ef3e4592921238cbcd922215"
+    }
+  ]
+}

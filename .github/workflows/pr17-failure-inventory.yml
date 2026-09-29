@@ -1,0 +1,57 @@
+name: PR17 failure inventory
+on:
+  push:
+    branches: [chatgpt/pr17-failure-inventory-20260929]
+    paths: [.github/workflows/pr17-failure-inventory.yml]
+permissions:
+  contents: read
+  actions: read
+jobs:
+  inventory:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Read retained failures from both native PR runs
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const owner = 'idanilovqa';
+            const repo = 'AlbumHaven';
+            const expected = '5d98f6e6260e689905e92574e727193df64915ea';
+            const pr = await github.rest.pulls.get({ owner, repo, pull_number: 17 });
+            if (pr.data.head.sha !== expected) throw new Error('PR head changed; do not mix evidence');
+            console.log('PINNED_HEAD ' + expected + ' MERGE ' + pr.data.merge_commit_sha);
+            for (const run_id of [36585661805, 36574746219]) {
+              const run = await github.rest.actions.getWorkflowRun({owner, repo, run_id});
+              console.log('RUN ' + JSON.stringify({id: run_id, head:run.data.head_sha, status:run.data.status, conclusion:run.data.conclusion}));
+              const jobs = await github.paginate(github.rest.actions.listJobsForWorkflowRun, {owner, repo, run_id, filter:'latest', per_page:100});
+              for (const job of jobs) {
+                console.log('JOB ' + JSON.stringify({id:job.id,name:job.name,status:job.status,conclusion:job.conclusion,sha:job.head_sha}));
+                if (job.conclusion !== 'failure') continue;
+                const response = await github.rest.actions.downloadJobLogsForWorkflowRun({owner, repo, job_id:job.id});
+                const raw = typeof response.data === 'string' ? response.data : Buffer.from(response.data).toString('utf8');
+                const lines = raw.replace(/\u001b\[[0-9;]*m/g,'').split(/\r?\n/).map(line => line.replace(/^\d{4}-\d\d-\d\dT\S+\s/,''));
+                let currentTest = '';
+                for (let i=0; i<lines.length; i++) {
+                  const line = lines[i];
+                  if (line.includes('[TEST]')) currentTest = line;
+                  if (/^\s*not ok \d+/.test(line)) {
+                    let end=i+1;
+                    while (end<lines.length && !/^\s*\.\.\.\s*$/.test(lines[end])) end++;
+                    const block=lines.slice(i,end+1);
+                    console.log('TAP_FAILURE ' + job.id);
+                    for (const text of block.slice(0,24)) console.log('| ' + text.slice(0,1000));
+                    if (block.length>24) {
+                      console.log('| ... diagnostic payload omitted; full original job log retained ...');
+                      for (const text of block.slice(Math.max(24,block.length-16))) console.log('| ' + text.slice(0,1000));
+                    }
+                    i=end;
+                  } else if (line.includes('[FAIL]')) {
+                    console.log('| ' + currentTest);
+                    console.log('| ' + line);
+                  } else if (/^\s*(?:x|×|✘)\s+\d+\s+\[|^\s*\d+\)\s+\[|^# (?:tests|pass|fail|skipped) |failed targets:|hard-fail|^\s*Error:|##\[error\]/.test(line)) {
+                    console.log('| ' + line.slice(0,1400));
+                  }
+                }
+              }
+            }

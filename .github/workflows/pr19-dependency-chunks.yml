@@ -1,0 +1,32 @@
+name: PR19 connector dependency chunks
+on:
+  push:
+    branches: [2026-09-29-pr19-diagnostics]
+    paths: [.github/workflows/pr19-dependency-chunks.yml]
+permissions:
+  contents: write
+jobs:
+  package:
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    steps:
+      - uses: actions/github-script@v7
+        with:
+          script: |
+            const ref='71ba9251e89e6debeea36dc18743d93517428e1f';
+            const listing=await github.rest.git.getTree({...context.repo,tree_sha:ref});
+            const byName=new Map(listing.data.tree.map(x=>[x.path,x.sha]));
+            async function bytes(name) { const b=await github.rest.git.getBlob({...context.repo,file_sha:byName.get(name)}); return Buffer.from(b.data.content,'base64'); }
+            const manifest=JSON.parse((await bytes('toolchain-manifest.json')).toString());
+            const tree=[];
+            async function add(name,data) { const b=await github.rest.git.createBlob({...context.repo,content:data.toString('base64'),encoding:'base64'}); tree.push({path:name,mode:'100644',type:'blob',sha:b.data.sha}); }
+            for (const [key,item] of Object.entries(manifest.archives)) {
+              const chunks=[]; for (const name of item.parts) chunks.push(await bytes(name));
+              const value=Buffer.concat(chunks); item.parts=[];
+              for (let start=0,index=0;start<value.length;start+=700000,index++) { const name=key+'-small-'+String(index).padStart(2,'0')+'.bin'; await add(name,value.subarray(start,start+700000)); item.parts.push(name); }
+            }
+            await add('toolchain-small-manifest.json',Buffer.from(JSON.stringify(manifest)));
+            const t=await github.rest.git.createTree({...context.repo,tree});
+            const c=await github.rest.git.createCommit({...context.repo,tree:t.data.sha,parents:[],message:'Bounded connector dependency chunks; no app data'});
+            console.log('TOOLCHAIN_SMALL_SNAPSHOT '+c.data.sha);
+            console.log(JSON.stringify(manifest));

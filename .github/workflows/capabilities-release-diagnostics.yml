@@ -1,30 +1,42 @@
 name: Capabilities Release Diagnostics
 
 on:
-  push:
-    branches:
-      - 2026-09-25-capabilities-audit
-    paths:
-      - .github/workflows/capabilities-release-diagnostics.yml
+  workflow_dispatch:
 
 permissions:
   contents: read
 
 jobs:
   inspect:
-    runs-on: ubuntu-latest
+    if: github.repository == 'idanilovqa/AlbumHaven' && github.ref == 'refs/heads/chatgpt/pr17-run301-visual-diagnostics-20260929'
+    runs-on: windows-2025
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v5
-        with:
-          fetch-depth: 1
-      - name: Print exact repair sources
-        shell: bash
+      - name: Verify diagnostic head
+        shell: pwsh
         run: |
-          set -euo pipefail
-          echo "HEAD=$(git rev-parse HEAD)"
-          for path in             music_app/static/css/runtime/non-album-and-player.css             music_app/static/css/button-component.css             music_app/static/css/runtime/trigger-anchor.css             tests/e2e/actions/navigationPanelActions.js             tests/e2e/poms/navigationPanel.js             tests/e2e/phase7/poms/capabilityBoundaryPage.js             tests/e2e/phase7/actions/capabilityBoundaryActions.js; do
-            echo "===== BEGIN $path ====="
-            cat "$path"
-            echo "===== END $path ====="
-          done
+          if ((git rev-parse HEAD^) -ne '9bdc4c6fc11d216594ff359529e8e85f9016a5b8') { throw 'Unexpected diagnostic parent' }
+          if (git status --porcelain) { throw 'Dirty checkout' }
+      - name: Print focused source
+        shell: python
+        run: |
+          from pathlib import Path
+          targets = {
+            'tests/components/searchInput.spec.js': (170, 300),
+            'tests/components/triggerAnchorSurface.spec.js': (180, 235),
+            'tests/components/buttonInteractionOutline.spec.js': (160, 205),
+            'music_app/static/css/runtime/trigger-anchor.css': (1, 175),
+            'music_app/static/js/runtime/trigger-anchor.js': (1, 125),
+            'music_app/static/js/runtime/player-loop-playback.js': (880, 1120),
+            'music_app/static/js/playback-control-cluster.js': (1, 320),
+          }
+          for raw, (start, end) in targets.items():
+            path = Path(raw)
+            print(f'===== {raw} [{start}:{end}] =====')
+            if not path.exists():
+              print('MISSING')
+              continue
+            lines = path.read_text(encoding='utf-8').splitlines()
+            for n in range(max(1,start), min(end,len(lines))+1):
+              print(f'{n:05d}: {lines[n-1]}')

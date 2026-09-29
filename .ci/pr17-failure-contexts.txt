@@ -1,0 +1,1191 @@
+PR head 5d98f6e6260e689905e92574e727193df64915ea
+Merge 8e19566942598d634b351714c3d1bf914714757c
+
+JOB 109465371565 JavaScript Tests (Portable) completed failure
+
+JOB 109465370627 JavaScript Tests (Windows Contract) completed failure
+
+JOB 109465371659 Component Tests (Pinned Chrome) completed failure
+
+JOB 109465371212 E2E: cover-providers completed failure
+  1) [functional] › tests\e2e\specs\coverLookup.spec.js:138:1 › FTC-COVERS-022 cover gallery loading starts before the task list responds @area:cover-providers 
+
+    Error: expect(received).toBeTruthy()
+
+    Received: undefined
+
+      164 |       (candidate) => candidate.source.toLocaleLowerCase() === 'apple music',
+      165 |     );
+    > 166 |     expect(appleCandidate?.id).toBeTruthy();
+          |                                ^
+      167 |     await coverLookupActions.waitForCandidateImageFixtureBlocked();
+      168 |   });
+      169 |
+        at D:\a\AlbumHaven\AlbumHaven\tests\e2e\specs\coverLookup.spec.js:166:32
+        at runStep (D:\a\AlbumHaven\AlbumHaven\tests\e2e\support\baseFixtures.js:147:22)
+        at D:\a\AlbumHaven\AlbumHaven\tests\e2e\specs\coverLookup.spec.js:151:3
+
+  1) [functional] › tests\e2e\specs\coverLookup.spec.js:510:1 › FTC-COVERS-013 partial cover results survive drawer reopen, save cancellation, and reload @area:cover-providers 
+
+    Error: expect(received).toBe(expected) // Object.is equality
+
+    Expected: "Crack The Skye Fixture 02"
+    Received: "Mastodon - Crack The Skye Fixture 02 - 2009"
+
+      608 |     const modal = await coverLookupActions.inspectModalComponents();
+      609 |
+    > 610 |     expect(modal.subtitle).toBe(taskTitle);
+          |                            ^
+      611 |     expect(modal.hasFindBetterButton).toBe(true);
+      612 |     expect(modal.hasSaveButton).toBe(true);
+      613 |     expect(modal.hasManualInput).toBe(true);
+        at D:\a\AlbumHaven\AlbumHaven\tests\e2e\specs\coverLookup.spec.js:610:28
+        at runStep (D:\a\AlbumHaven\AlbumHaven\tests\e2e\support\baseFixtures.js:147:22)
+        at D:\a\AlbumHaven\AlbumHaven\tests\e2e\specs\coverLookup.spec.js:593:3
+
+  1) [functional] › tests\e2e\specs\coverLookup.spec.js:646:1 › FTC-COVERS-019 Spotify stays linked while a downloadable provider reopens locally @area:cover-providers 
+
+    Error: expect(received).toBeTruthy()
+
+    Received: undefined
+
+      673 |     );
+      674 |     expect(spotifyCandidate?.id).toBeTruthy();
+    > 675 |     expect(appleCandidate?.id).toBeTruthy();
+          |                                ^
+      676 |   });
+      677 |
+      678 |   await stepLogger.step('Save Spotify and retain it as the selected linked remote cover', async () => {
+        at D:\a\AlbumHaven\AlbumHaven\tests\e2e\specs\coverLookup.spec.js:675:32
+        at runStep (D:\a\AlbumHaven\AlbumHaven\tests\e2e\support\baseFixtures.js:147:22)
+        at D:\a\AlbumHaven\AlbumHaven\tests\e2e\specs\coverLookup.spec.js:657:3
+
+  1) [functional] › tests\e2e\specs\coverLookup.spec.js:1052:1 › FTC-COVERS-017 manual lookup progressively retains provider alternatives @area:cover-providers 
+
+    Error: expect(received).toBe(expected) // Object.is equality
+
+    Expected: true
+    Received: false
+
+      1109 |     expect(completedCandidates.every((candidate) => candidate.source.length > 0)).toBe(true);
+      1110 |     expect(completedCandidates.some((candidate) => candidate.source === 'Discogs')).toBe(true);
+    > 1111 |     expect(completedCandidates.some((candidate) => candidate.source === 'Cover Art Archive')).toBe(true);
+           |                                                                                               ^
+      1112 |     const discogsGroup = await coverLookupActions.readProviderGroupSummary('discogs');
+      1113 |     const archiveGroup = await coverLookupActions.readProviderGroupSummary('cover_art_archive');
+      1114 |     expect(discogsGroup.cards).toBeGreaterThanOrEqual(1);
+        at D:\a\AlbumHaven\AlbumHaven\tests\e2e\specs\coverLookup.spec.js:1111:95
+        at runStep (D:\a\AlbumHaven\AlbumHaven\tests\e2e\support\baseFixtures.js:147:22)
+        at D:\a\AlbumHaven\AlbumHaven\tests\e2e\specs\coverLookup.spec.js:1099:3
+
+  1) [functional] › tests\e2e\specs\coverLookup.spec.js:1177:1 › FTC-COVERS-020 provider deadline keeps candidates found by earlier services @area:cover-providers 
+
+    Error: expect(received).toBe(expected) // Object.is equality
+
+    Expected: true
+    Received: false
+
+      1202 |     await coverLookupActions.waitForRemoteCandidateCountAtLeast(1);
+      1203 |     const candidates = await coverLookupActions.readRemoteCandidateSummaries();
+    > 1204 |     expect(candidates.some((candidate) => candidate.source === 'Apple Music')).toBe(true);
+           |                                                                                ^
+      1205 |     const evidence = await coverLookupActions.readProviderFixtureEvidence();
+      1206 |     expect(evidence.apple_search_requests).toBeGreaterThan(0);
+      1207 |     expect(evidence.manual_page_requests).toBeGreaterThan(0);
+        at D:\a\AlbumHaven\AlbumHaven\tests\e2e\specs\coverLookup.spec.js:1204:80
+        at runStep (D:\a\AlbumHaven\AlbumHaven\tests\e2e\support\baseFixtures.js:147:22)
+        at D:\a\AlbumHaven\AlbumHaven\tests\e2e\specs\coverLookup.spec.js:1200:3
+
+  1) [functional] › tests\e2e\specs\lastfmProductionPath.spec.js:22:1 › FTC-PLAYBACK-LASTFM-013 production UI connects and scrobbles through the signed Last.fm provider path @area:playback 
+
+    Test timeout of 240000ms exceeded.
+
+    Error: locator.click: Test timeout of 240000ms exceeded.
+    Call log:
+      - waiting for locator('#sidebar-list [data-sidebar-artist][data-sidebar-artist="Album Haven Last.fm Fixture"]').first()
+        - locator resolved to <a data-nav="1" data-navigation-tree-item="artists" class="artist-link navigation-tree-item" data-sidebar-artist="Album Haven Last.fm Fixture" data-navigation-tree-key="artist:Album Haven Last.fm Fixture" href="/?surface=albums&artist=Album+Haven+Last.fm+Fixture&gallery_scope=all&category=main_library&category=hoard&category=new_arrivals">…</a>
+      - attempting click action
+        2 × waiting for element to be visible, enabled and stable
+          - element is not visible
+        - retrying click action
+        - waiting 20ms
+        2 × waiting for element to be visible, enabled and stable
+          - element is not visible
+        - retrying click action
+          - waiting 100ms
+        437 × waiting for element to be visible, enabled and stable
+            - element is not visible
+          - retrying click action
+            - waiting 500ms
+
+
+       at ..\actions\navigationPanelActions.js:279
+
+      277 |     const selectedArtist = String(artistName || '').trim();
+      278 |     const artistLocator = this.navigationPanel.sidebarArtistByName(selectedArtist);
+    > 279 |     await artistLocator.click({ noWaitAfter: true, ...options });
+          |                         ^
+      280 |   }
+      281 |
+      282 |   async moveSidebarArtistOutsideViewport(artistName, options = {}) {
+        at NavigationPanelActions.selectSidebarArtistByName (D:\a\AlbumHaven\AlbumHaven\tests\e2e\actions\navigationPanelActions.js:279:25)
+        at fn (D:\a\AlbumHaven\AlbumHaven\tests\e2e\specs\lastfmProductionPath.spec.js:149:34)
+        at runStep (D:\a\AlbumHaven\AlbumHaven\tests\e2e\support\baseFixtures.js:147:28)
+        at Object.step (D:\a\AlbumHaven\AlbumHaven\tests\e2e\support\baseFixtures.js:185:14)
+        at D:\a\AlbumHaven\AlbumHaven\tests\e2e\specs\lastfmProductionPath.spec.js:148:20
+
+  1) [functional] › tests\e2e\specs\lastfmProductionPath.spec.js:233:1 › FTC-PLAYBACK-LASTFM-016 consecutive tracks each scrobble exactly once in order @area:playback 
+
+    Test timeout of 240000ms exceeded.
+
+    Error: locator.click: Test timeout of 240000ms exceeded.
+    Call log:
+      - waiting for locator('#sidebar-list [data-sidebar-artist][data-sidebar-artist="Album Haven Last.fm Fixture"]').first()
+        - locator resolved to <a data-nav="1" data-navigation-tree-item="artists" class="artist-link navigation-tree-item" data-sidebar-artist="Album Haven Last.fm Fixture" data-navigation-tree-key="artist:Album Haven Last.fm Fixture" href="/?surface=albums&artist=Album+Haven+Last.fm+Fixture&gallery_scope=all&category=main_library&category=hoard&category=new_arrivals">…</a>
+      - attempting click action
+        2 × waiting for element to be visible, enabled and stable
+          - element is not visible
+        - retrying click action
+        - waiting 20ms
+        2 × waiting for element to be visible, enabled and stable
+          - element is not visible
+        - retrying click action
+          - waiting 100ms
+        450 × waiting for element to be visible, enabled and stable
+            - element is not visible
+          - retrying click action
+            - waiting 500ms
+
+
+       at ..\actions\navigationPanelActions.js:279
+
+      277 |     const selectedArtist = String(artistName || '').trim();
+      278 |     const artistLocator = this.navigationPanel.sidebarArtistByName(selectedArtist);
+    > 279 |     await artistLocator.click({ noWaitAfter: true, ...options });
+          |                         ^
+      280 |   }
+      281 |
+      282 |   async moveSidebarArtistOutsideViewport(artistName, options = {}) {
+        at NavigationPanelActions.selectSidebarArtistByName (D:\a\AlbumHaven\AlbumHaven\tests\e2e\actions\navigationPanelActions.js:279:25)
+        at fn (D:\a\AlbumHaven\AlbumHaven\tests\e2e\specs\lastfmProductionPath.spec.js:261:34)
+        at runStep (D:\a\AlbumHaven\AlbumHaven\tests\e2e\support\baseFixtures.js:147:28)
+        at Object.step (D:\a\AlbumHaven\AlbumHaven\tests\e2e\support\baseFixtures.js:185:14)
+        at D:\a\AlbumHaven\AlbumHaven\tests\e2e\specs\lastfmProductionPath.spec.js:260:20
+
+  1) [functional] › tests\e2e\specs\lastfmProductionPath.spec.js:326:1 › FTC-PLAYBACK-LASTFM-017 pending scrobbles report failure in Logs and submit after recovery @area:playback 
+
+    Test timeout of 240000ms exceeded.
+
+    Error: locator.click: Test timeout of 240000ms exceeded.
+    Call log:
+      - waiting for locator('#sidebar-list [data-sidebar-artist][data-sidebar-artist="Album Haven Last.fm Fixture"]').first()
+        - locator resolved to <a data-nav="1" data-navigation-tree-item="artists" class="artist-link navigation-tree-item" data-sidebar-artist="Album Haven Last.fm Fixture" data-navigation-tree-key="artist:Album Haven Last.fm Fixture" href="/?surface=albums&artist=Album+Haven+Last.fm+Fixture&gallery_scope=all&category=main_library&category=hoard&category=new_arrivals">…</a>
+      - attempting click action
+        2 × waiting for element to be visible, enabled and stable
+          - element is not visible
+        - retrying click action
+        - waiting 20ms
+        2 × waiting for element to be visible, enabled and stable
+          - element is not visible
+        - retrying click action
+          - waiting 100ms
+        450 × waiting for element to be visible, enabled and stable
+            - element is not visible
+          - retrying click action
+            - waiting 500ms
+
+
+       at ..\actions\navigationPanelActions.js:279
+
+      277 |     const selectedArtist = String(artistName || '').trim();
+      278 |     const artistLocator = this.navigationPanel.sidebarArtistByName(selectedArtist);
+    > 279 |     await artistLocator.click({ noWaitAfter: true, ...options });
+          |                         ^
+      280 |   }
+      281 |
+      282 |   async moveSidebarArtistOutsideViewport(artistName, options = {}) {
+        at NavigationPanelActions.selectSidebarArtistByName (D:\a\AlbumHaven\AlbumHaven\tests\e2e\actions\navigationPanelActions.js:279:25)
+        at D:\a\AlbumHaven\AlbumHaven\tests\e2e\specs\lastfmProductionPath.spec.js:359:34
+        at runStep (D:\a\AlbumHaven\AlbumHaven\tests\e2e\support\baseFixtures.js:147:22)
+        at D:\a\AlbumHaven\AlbumHaven\tests\e2e\specs\lastfmProductionPath.spec.js:357:3
+
+  1) [cover-rescan] › tests\e2e\specs\coverLookup.spec.js:713:1 › FTC-COVERS-011 selected local art remains authoritative after rescan and app restart @area:cover-providers 
+
+    Error: Expected album "Crack The Skye" under heading "Mastodon" after scrolling the gallery with 1 scroll actions.
+
+       at ..\actions\galleryActions.js:991
+
+      989 |       );
+      990 |     }
+    > 991 |     throw new Error(
+          |           ^
+      992 |       `Expected album "${albumName}" under heading "${artistName}" after scrolling the gallery `
+      993 |       + `with ${scrollActions} scroll actions.`,
+      994 |     );
+        at GalleryActions.scrollToAlbumUnderHeading (D:\a\AlbumHaven\AlbumHaven\tests\e2e\actions\galleryActions.js:991:11)
+        at D:\a\AlbumHaven\AlbumHaven\tests\e2e\specs\coverLookup.spec.js:760:5
+        at runStep (D:\a\AlbumHaven\AlbumHaven\tests\e2e\support\baseFixtures.js:147:22)
+        at D:\a\AlbumHaven\AlbumHaven\tests\e2e\specs\coverLookup.spec.js:754:3
+
+  1) [functional] › tests\e2e\specs\coverLookupMatching.spec.js:58:1 › FTC-COVERS-016 lookup matching rejects larger false Metallica releases before provider autoselection @area:cover-providers 
+
+    Error: expect(locator).toHaveText(expected) failed
+
+    Locator: locator('#cover-lookup-drawer-body .cover-lookup-task-card').filter({ has: locator('.cover-lookup-task-title').filter({ hasText: 'Metallica - Kill \'Em All - 1983' }) }).first().locator('.cover-lookup-task-status-label').first()
+    Expected: "Completed"
+    Timeout: 30000ms
+    Error: element(s) not found
+
+    Call log:
+      - Expect "toHaveText" with timeout 30000ms
+      - waiting for locator('#cover-lookup-drawer-body .cover-lookup-task-card').filter({ has: locator('.cover-lookup-task-title').filter({ hasText: 'Metallica - Kill \'Em All - 1983' }) }).first().locator('.cover-lookup-task-status-label').first()
+
+
+       at ..\actions\coverLookupActions.js:1063
+
+      1061 |
+      1062 |   async waitForTaskStatus(taskTitle, expectedStatus, options = {}) {
+    > 1063 |     await expect(this.coverLookup.taskStatusByTitle(taskTitle)).toHaveText(expectedStatus, {
+           |                                                                 ^
+      1064 |       timeout: options.timeout || 30000,
+      1065 |     });
+      1066 |   }
+        at CoverLookupActions.waitForTaskStatus (D:\a\AlbumHaven\AlbumHaven\tests\e2e\actions\coverLookupActions.js:1063:65)
+        at D:\a\AlbumHaven\AlbumHaven\tests\e2e\specs\coverLookupMatching.spec.js:97:30
+        at runStep (D:\a\AlbumHaven\AlbumHaven\tests\e2e\support\baseFixtures.js:147:22)
+        at D:\a\AlbumHaven\AlbumHaven\tests\e2e\specs\coverLookupMatching.spec.js:89:3
+
+
+JOB 109465371691 E2E: playback-utilities completed failure
+  1) [functional] › tests\e2e\specs\loops.functional.spec.js:254:3 › FTC-SETTINGS-H04 Period includes complete local dates across skipped midnight @area:log-history 
+
+    Test timeout of 240000ms exceeded.
+
+    Error: locator.click: Test timeout of 240000ms exceeded.
+    Call log:
+      - waiting for getByRole('dialog', { name: 'Date range', exact: true }).getByRole('dialog', { name: 'Choose to date', exact: true }).locator('[data-calendar-date="2026-09-05"]')
+        - locator resolved to <button type="button" aria-pressed="false" data-calendar-date="2026-09-05" aria-label="Saturday, September 5, 2026" class="button ui-button ui-button--secondary ui-button--medium calendar-picker__day">…</button>
+      - attempting click action
+        2 × waiting for element to be visible, enabled and stable
+          - element is visible, enabled and stable
+          - scrolling into view if needed
+          - done scrolling
+          - <div id="app-form-modal" data-pointer-origin-bound="1" class="confirm-modal app-form-anchored" data-pointer-down-started-on-overlay="0">…</div> intercepts pointer events
+        - retrying click action
+        - waiting 20ms
+        2 × waiting for element to be visible, enabled and stable
+          - element is visible, enabled and stable
+          - scrolling into view if needed
+          - done scrolling
+          - <div id="app-form-modal" data-pointer-origin-bound="1" class="confirm-modal app-form-anchored" data-pointer-down-started-on-overlay="0">…</div> intercepts pointer events
+        - retrying click action
+          - waiting 100ms
+        453 × waiting for element to be visible, enabled and stable
+            - element is visible, enabled and stable
+            - scrolling into view if needed
+            - done scrolling
+            - <div id="app-form-modal" data-pointer-origin-bound="1" class="confirm-modal app-form-anchored" data-pointer-down-started-on-overlay="0">…</div> intercepts pointer events
+          - retrying click action
+            - waiting 500ms
+
+
+       at ..\actions\utilityLogHistoryActions.js:92
+
+      90 |         await calendar.getByRole('button', { name: direction, exact: true }).click();
+      91 |       }
+    > 92 |       await history.periodCalendarDay(field, date).click();
+         |                                                    ^
+      93 |       await expect(calendar).toBeHidden();
+      94 |       await expect(input).toHaveValue(date);
+      95 |     };
+        at choose (D:\a\AlbumHaven\AlbumHaven\tests\e2e\actions\utilityLogHistoryActions.js:92:52)
+        at UtilityLogHistoryActions.selectPeriodDay (D:\a\AlbumHaven\AlbumHaven\tests\e2e\actions\utilityLogHistoryActions.js:99:7)
+        at D:\a\AlbumHaven\AlbumHaven\tests\e2e\specs\loops.functional.spec.js:268:7
+
+  2) [functional] › tests\e2e\specs\problematicFileNavigation.spec.js:36:1 › FTC-UTIL-PROBLEMS-011 hides dead problem actions for a generated excluded album @area:problematic-files 
+
+    Error: Expected album "?" under heading "Generated Problem Fixture" after scrolling the gallery with 2 scroll actions.
+
+       at ..\actions\galleryActions.js:991
+
+      989 |       );
+      990 |     }
+    > 991 |     throw new Error(
+          |           ^
+      992 |       `Expected album "${albumName}" under heading "${artistName}" after scrolling the gallery `
+      993 |       + `with ${scrollActions} scroll actions.`,
+      994 |     );
+        at GalleryActions.scrollToAlbumUnderHeading (D:\a\AlbumHaven\AlbumHaven\tests\e2e\actions\galleryActions.js:991:11)
+        at GalleryActions.waitForAlbumVisibleUnderHeading (D:\a\AlbumHaven\AlbumHaven\tests\e2e\actions\galleryActions.js:848:9)
+        at D:\a\AlbumHaven\AlbumHaven\tests\e2e\specs\problematicFileNavigation.spec.js:51:5
+        at runStep (D:\a\AlbumHaven\AlbumHaven\tests\e2e\support\baseFixtures.js:147:22)
+        at D:\a\AlbumHaven\AlbumHaven\tests\e2e\specs\problematicFileNavigation.spec.js:46:3
+
+  3) [functional] › tests\e2e\specs\problematicFileNavigation.spec.js:81:1 › FTC-UTIL-PROBLEMS-011 opens the exact problematic track from album details @area:problematic-files 
+
+    Error: expect(received).toBeGreaterThan(expected)
+
+    Expected: > 9
+    Received:   8
+
+      121 |     const fullProblematicAlbums = await utilityProblematicFilesActions.readVisibleListItems();
+      122 |     fullProblematicAlbumCount = fullProblematicAlbums.length;
+    > 123 |     expect(fullProblematicAlbumCount).toBeGreaterThan(9);
+          |                                       ^
+      124 |     await utilityProblematicFilesActions.search(PROBLEMATIC_TRACK);
+      125 |     await utilityProblematicFilesActions.waitForSearchResults(PROBLEMATIC_TRACK);
+      126 |     const filteredProblematicAlbums = await utilityProblematicFilesActions.readVisibleListItems();
+        at D:\a\AlbumHaven\AlbumHaven\tests\e2e\specs\problematicFileNavigation.spec.js:123:39
+        at runStep (D:\a\AlbumHaven\AlbumHaven\tests\e2e\support\baseFixtures.js:147:22)
+        at D:\a\AlbumHaven\AlbumHaven\tests\e2e\specs\problematicFileNavigation.spec.js:117:3
+
+  1) [functional] › tests\e2e\specs\nonAlbumRarity.spec.js:999:1 › FTC-TAGS-024 completes a verified Album and Exception intent during app restart @area:tag-edit 
+
+    Error: Expected album "Two Track Rarity Fixture" under heading "E2E Rarity Artist" after scrolling the gallery with 2 scroll actions.
+
+       at ..\actions\galleryActions.js:991
+
+      989 |       );
+      990 |     }
+    > 991 |     throw new Error(
+          |           ^
+      992 |       `Expected album "${albumName}" under heading "${artistName}" after scrolling the gallery `
+      993 |       + `with ${scrollActions} scroll actions.`,
+      994 |     );
+        at GalleryActions.scrollToAlbumUnderHeading (D:\a\AlbumHaven\AlbumHaven\tests\e2e\actions\galleryActions.js:991:11)
+        at GalleryActions.waitForAlbumVisibleUnderHeading (D:\a\AlbumHaven\AlbumHaven\tests\e2e\actions\galleryActions.js:848:9)
+        at D:\a\AlbumHaven\AlbumHaven\tests\e2e\specs\nonAlbumRarity.spec.js:1028:5
+        at runStep (D:\a\AlbumHaven\AlbumHaven\tests\e2e\support\baseFixtures.js:147:22)
+        at D:\a\AlbumHaven\AlbumHaven\tests\e2e\specs\nonAlbumRarity.spec.js:1024:3
+
+  1) [functional] › tests\e2e\specs\loops.functional.spec.js:375:1 › FTC-UTIL-LOOPS-021 / FTC-UTIL-LOOPS-023 / FTC-UTIL-LOOPS-024 / FTC-UTIL-LOOPS-026 / FTC-PLAYER-017 / FTC-PLAYER-011 fake-data bottom-player loop save and Utility Loops playback stay grouped under one track @area:loops 
+
+    Error: expect(locator).toHaveCSS(expected) failed
+
+    Locator:  locator('[data-utility-loop-entry]').filter({ has: locator('.utility-detail-title').filter({ hasText: /^\s*Warmup Loop\s*$/ }) }).locator('[data-loop-action-owner]').locator('[data-loop-action-pod]')
+    Expected: "34px"
+    Received: "33.9844px"
+    Timeout:  10000ms
+
+    Call log:
+      - Expect "toHaveCSS" with timeout 10000ms
+      - waiting for locator('[data-utility-loop-entry]').filter({ has: locator('.utility-detail-title').filter({ hasText: /^\s*Warmup Loop\s*$/ }) }).locator('[data-loop-action-owner]').locator('[data-loop-action-pod]')
+        24 × locator resolved to <span data-loop-action-pod="" class="loop-edit-action-pod">…</span>
+           - unexpected value "33.9844px"
+
+
+       at ..\actions\utilityLoopsActions.js:406
+
+      404 |     const style = await entryCard.controlStyleForEntry(entry).getAttribute('data-loop-control-style');
+      405 |     const editing = await entryCard.loopActionForEntry(entry).getAttribute('data-loop-action-state') === 'editing';
+    > 406 |     await expect(entryCard.loopPodForEntry(entry)).toHaveCSS('width', `${style === 'companion' ? (editing ? 88 : 58) : (editing ? 65 : 34)}px`);
+          |                                                    ^
+      407 |     return entryCard.readLoopActionVisualSnapshot(entry);
+      408 |   }
+      409 |
+        at UtilityLoopsActions.hoverLoopActionByName (D:\a\AlbumHaven\AlbumHaven\tests\e2e\actions\utilityLoopsActions.js:406:52)
+        at UtilityLoopsActions.revealCreateAnotherLoopEditorByName (D:\a\AlbumHaven\AlbumHaven\tests\e2e\actions\utilityLoopsActions.js:455:5)
+        at D:\a\AlbumHaven\AlbumHaven\tests\e2e\specs\loops.functional.spec.js:850:22
+        at runStep (D:\a\AlbumHaven\AlbumHaven\tests\e2e\support\baseFixtures.js:147:22)
+        at D:\a\AlbumHaven\AlbumHaven\tests\e2e\specs\loops.functional.spec.js:849:3
+
+  1) [functional] › tests\e2e\specs\loops.functional.spec.js:292:1 › FTC-SETTINGS-L02 native panel drag persists order while another loop retains playback and its pending range @area:loops 
+
+    Error: expect(locator).toHaveAttribute(expected) failed
+
+    Locator:  locator('[data-loop-action-owner="global-player"]')
+    Expected: "true"
+    Received: "false"
+    Timeout:  10000ms
+
+    Call log:
+      - Expect "toHaveAttribute" with timeout 10000ms
+      - waiting for locator('[data-loop-action-owner="global-player"]')
+        24 × locator resolved to <span aria-busy="false" class="loop-edit-actions" data-loop-action-state="idle" data-loop-action-engaged="false" data-loop-action-owner="global-player">…</span>
+           - unexpected value "false"
+
+
+       at ..\actions\globalPlayerActions.js:591
+
+      589 |     );
+      590 |     if (await this.globalPlayer.loopAction.getAttribute('data-loop-action-state') !== 'disabled') {
+    > 591 |       await expect(this.globalPlayer.loopAction).toHaveAttribute('data-loop-action-engaged', 'true');
+          |                                                  ^
+      592 |     }
+      593 |     const locator = target === 'create'
+      594 |       ? this.globalPlayer.loopCreateButton
+        at GlobalPlayerActions.hoverLoopAction (D:\a\AlbumHaven\AlbumHaven\tests\e2e\actions\globalPlayerActions.js:591:50)
+        at GlobalPlayerActions.openLoopEditor (D:\a\AlbumHaven\AlbumHaven\tests\e2e\actions\globalPlayerActions.js:504:5)
+        at D:\a\AlbumHaven\AlbumHaven\tests\e2e\specs\loops.functional.spec.js:305:5
+
+  1) [functional] › tests\e2e\specs\loops.functional.spec.js:174:1 › FTC-SETTINGS-H03 real log download matches the displayed captured snapshot @area:log-history 
+
+    Error: expect(locator).toHaveAttribute(expected) failed
+
+    Locator:  locator('[data-loop-action-owner="global-player"]')
+    Expected: "true"
+    Received: "false"
+    Timeout:  10000ms
+
+    Call log:
+      - Expect "toHaveAttribute" with timeout 10000ms
+      - waiting for locator('[data-loop-action-owner="global-player"]')
+        24 × locator resolved to <span aria-busy="false" class="loop-edit-actions" data-loop-action-state="idle" data-loop-action-engaged="false" data-loop-action-owner="global-player">…</span>
+           - unexpected value "false"
+
+
+       at ..\actions\globalPlayerActions.js:591
+
+      589 |     );
+      590 |     if (await this.globalPlayer.loopAction.getAttribute('data-loop-action-state') !== 'disabled') {
+    > 591 |       await expect(this.globalPlayer.loopAction).toHaveAttribute('data-loop-action-engaged', 'true');
+          |                                                  ^
+      592 |     }
+      593 |     const locator = target === 'create'
+      594 |       ? this.globalPlayer.loopCreateButton
+        at GlobalPlayerActions.hoverLoopAction (D:\a\AlbumHaven\AlbumHaven\tests\e2e\actions\globalPlayerActions.js:591:50)
+        at GlobalPlayerActions.openLoopEditor (D:\a\AlbumHaven\AlbumHaven\tests\e2e\actions\globalPlayerActions.js:504:5)
+        at D:\a\AlbumHaven\AlbumHaven\tests\e2e\specs\loops.functional.spec.js:186:3
+
+  1) [functional] › tests\e2e\specs\loops.functional.spec.js:1117:1 › FTC-UTIL-LOOPS-026 delete confirmation foregrounds the open Utility modal @area:loops 
+
+    Error: expect(locator).toHaveAttribute(expected) failed
+
+    Locator:  locator('[data-loop-action-owner="global-player"]')
+    Expected: "true"
+    Received: "false"
+    Timeout:  10000ms
+
+    Call log:
+      - Expect "toHaveAttribute" with timeout 10000ms
+      - waiting for locator('[data-loop-action-owner="global-player"]')
+        24 × locator resolved to <span aria-busy="false" class="loop-edit-actions" data-loop-action-state="idle" data-loop-action-engaged="false" data-loop-action-owner="global-player">…</span>
+           - unexpected value "false"
+
+
+       at ..\actions\globalPlayerActions.js:591
+
+      589 |     );
+      590 |     if (await this.globalPlayer.loopAction.getAttribute('data-loop-action-state') !== 'disabled') {
+    > 591 |       await expect(this.globalPlayer.loopAction).toHaveAttribute('data-loop-action-engaged', 'true');
+          |                                                  ^
+      592 |     }
+      593 |     const locator = target === 'create'
+      594 |       ? this.globalPlayer.loopCreateButton
+        at GlobalPlayerActions.hoverLoopAction (D:\a\AlbumHaven\AlbumHaven\tests\e2e\actions\globalPlayerActions.js:591:50)
+        at GlobalPlayerActions.openLoopEditor (D:\a\AlbumHaven\AlbumHaven\tests\e2e\actions\globalPlayerActions.js:504:5)
+        at D:\a\AlbumHaven\AlbumHaven\tests\e2e\specs\loops.functional.spec.js:1137:3
+
+  1) [functional] › tests\e2e\specs\loops.functional.spec.js:1153:1 › FTC-UTIL-LOOPS-024 Enter opens naming from the active saved-loop editor @area:loops 
+
+    Error: expect(locator).toHaveAttribute(expected) failed
+
+    Locator:  locator('[data-loop-action-owner="global-player"]')
+    Expected: "true"
+    Received: "false"
+    Timeout:  10000ms
+
+    Call log:
+      - Expect "toHaveAttribute" with timeout 10000ms
+      - waiting for locator('[data-loop-action-owner="global-player"]')
+        24 × locator resolved to <span aria-busy="false" class="loop-edit-actions" data-loop-action-state="idle" data-loop-action-engaged="false" data-loop-action-owner="global-player">…</span>
+           - unexpected value "false"
+
+
+       at ..\actions\globalPlayerActions.js:591
+
+      589 |     );
+      590 |     if (await this.globalPlayer.loopAction.getAttribute('data-loop-action-state') !== 'disabled') {
+    > 591 |       await expect(this.globalPlayer.loopAction).toHaveAttribute('data-loop-action-engaged', 'true');
+          |                                                  ^
+      592 |     }
+      593 |     const locator = target === 'create'
+      594 |       ? this.globalPlayer.loopCreateButton
+        at GlobalPlayerActions.hoverLoopAction (D:\a\AlbumHaven\AlbumHaven\tests\e2e\actions\globalPlayerActions.js:591:50)
+        at GlobalPlayerActions.openLoopEditor (D:\a\AlbumHaven\AlbumHaven\tests\e2e\actions\globalPlayerActions.js:504:5)
+        at D:\a\AlbumHaven\AlbumHaven\tests\e2e\specs\loops.functional.spec.js:1173:3
+
+  1) [functional] › tests\e2e\specs\loops.functional.spec.js:1195:1 › FTC-PLAYER-017 scissors remains available after saving a loop @area:loops 
+
+    Error: expect(locator).toHaveAttribute(expected) failed
+
+    Locator:  locator('[data-loop-action-owner="global-player"]')
+    Expected: "true"
+    Received: "false"
+    Timeout:  10000ms
+
+    Call log:
+      - Expect "toHaveAttribute" with timeout 10000ms
+      - waiting for locator('[data-loop-action-owner="global-player"]')
+        24 × locator resolved to <span aria-busy="false" class="loop-edit-actions" data-loop-action-state="idle" data-loop-action-engaged="false" data-loop-action-owner="global-player">…</span>
+           - unexpected value "false"
+
+
+       at ..\actions\globalPlayerActions.js:591
+
+      589 |     );
+      590 |     if (await this.globalPlayer.loopAction.getAttribute('data-loop-action-state') !== 'disabled') {
+    > 591 |       await expect(this.globalPlayer.loopAction).toHaveAttribute('data-loop-action-engaged', 'true');
+          |                                                  ^
+      592 |     }
+      593 |     const locator = target === 'create'
+      594 |       ? this.globalPlayer.loopCreateButton
+        at GlobalPlayerActions.hoverLoopAction (D:\a\AlbumHaven\AlbumHaven\tests\e2e\actions\globalPlayerActions.js:591:50)
+        at GlobalPlayerActions.openLoopEditor (D:\a\AlbumHaven\AlbumHaven\tests\e2e\actions\globalPlayerActions.js:504:5)
+        at D:\a\AlbumHaven\AlbumHaven\tests\e2e\specs\loops.functional.spec.js:1211:3
+
+  1) [functional] › tests\e2e\specs\loops.functional.spec.js:1219:1 › FTC-PLAYER-017 loop-edit reload restores the active playhead @area:loops 
+
+    Error: expect(locator).toHaveAttribute(expected) failed
+
+    Locator:  locator('[data-loop-action-owner="global-player"]')
+    Expected: "true"
+    Received: "false"
+    Timeout:  10000ms
+
+    Call log:
+      - Expect "toHaveAttribute" with timeout 10000ms
+      - waiting for locator('[data-loop-action-owner="global-player"]')
+        24 × locator resolved to <span aria-busy="false" class="loop-edit-actions" data-loop-action-state="idle" data-loop-action-engaged="false" data-loop-action-owner="global-player">…</span>
+           - unexpected value "false"
+
+
+       at ..\actions\globalPlayerActions.js:591
+
+      589 |     );
+      590 |     if (await this.globalPlayer.loopAction.getAttribute('data-loop-action-state') !== 'disabled') {
+    > 591 |       await expect(this.globalPlayer.loopAction).toHaveAttribute('data-loop-action-engaged', 'true');
+          |                                                  ^
+      592 |     }
+      593 |     const locator = target === 'create'
+      594 |       ? this.globalPlayer.loopCreateButton
+        at GlobalPlayerActions.hoverLoopAction (D:\a\AlbumHaven\AlbumHaven\tests\e2e\actions\globalPlayerActions.js:591:50)
+        at GlobalPlayerActions.openLoopEditor (D:\a\AlbumHaven\AlbumHaven\tests\e2e\actions\globalPlayerActions.js:504:5)
+        at D:\a\AlbumHaven\AlbumHaven\tests\e2e\specs\loops.functional.spec.js:1237:3
+
+  1) [functional] › tests\e2e\specs\loops.functional.spec.js:29:1 › FTC-UTIL-LOOPS-028 five paused saved loops render waveforms after a cold reload @area:loops 
+
+    Error: expect(locator).toHaveCSS(expected) failed
+
+    Locator:  locator('[data-utility-loop-entry]').filter({ has: locator('.utility-detail-title').filter({ hasText: /^\s*Waveform 1790694662480 0 3\s*$/ }) }).locator('[data-loop-action-owner]').locator('[data-loop-action-pod]')
+    Expected: "34px"
+    Received: "33.9844px"
+    Timeout:  10000ms
+
+    Call log:
+      - Expect "toHaveCSS" with timeout 10000ms
+      - waiting for locator('[data-utility-loop-entry]').filter({ has: locator('.utility-detail-title').filter({ hasText: /^\s*Waveform 1790694662480 0 3\s*$/ }) }).locator('[data-loop-action-owner]').locator('[data-loop-action-pod]')
+        24 × locator resolved to <span data-loop-action-pod="" class="loop-edit-action-pod">…</span>
+           - unexpected value "33.9844px"
+
+
+       at ..\actions\utilityLoopsActions.js:406
+
+      404 |     const style = await entryCard.controlStyleForEntry(entry).getAttribute('data-loop-control-style');
+      405 |     const editing = await entryCard.loopActionForEntry(entry).getAttribute('data-loop-action-state') === 'editing';
+    > 406 |     await expect(entryCard.loopPodForEntry(entry)).toHaveCSS('width', `${style === 'companion' ? (editing ? 88 : 58) : (editing ? 65 : 34)}px`);
+          |                                                    ^
+      407 |     return entryCard.readLoopActionVisualSnapshot(entry);
+      408 |   }
+      409 |
+        at UtilityLoopsActions.hoverLoopActionByName (D:\a\AlbumHaven\AlbumHaven\tests\e2e\actions\utilityLoopsActions.js:406:52)
+        at D:\a\AlbumHaven\AlbumHaven\tests\e2e\specs\loops.functional.spec.js:135:5
+
+  1) [functional] › tests\e2e\specs\nonAlbumRarity.spec.js:128:1 › FTC-TAGS-005 keeps a failed physical tag write visible and records it in Log History @area:tag-edit 
+
+    Error: Expected album "Two Track Rarity Fixture" under heading "E2E Rarity Artist" after scrolling the gallery with 0 scroll actions.
+
+       at ..\actions\galleryActions.js:991
+
+      989 |       );
+      990 |     }
+    > 991 |     throw new Error(
+          |           ^
+      992 |       `Expected album "${albumName}" under heading "${artistName}" after scrolling the gallery `
+      993 |       + `with ${scrollActions} scroll actions.`,
+      994 |     );
+        at GalleryActions.scrollToAlbumUnderHeading (D:\a\AlbumHaven\AlbumHaven\tests\e2e\actions\galleryActions.js:991:11)
+        at GalleryActions.waitForAlbumVisibleUnderHeading (D:\a\AlbumHaven\AlbumHaven\tests\e2e\actions\galleryActions.js:848:9)
+        at D:\a\AlbumHaven\AlbumHaven\tests\e2e\specs\nonAlbumRarity.spec.js:143:5
+        at runStep (D:\a\AlbumHaven\AlbumHaven\tests\e2e\support\baseFixtures.js:147:22)
+        at D:\a\AlbumHaven\AlbumHaven\tests\e2e\specs\nonAlbumRarity.spec.js:138:3
+
+  1) [functional] › tests\e2e\specs\appearanceControls.spec.js:114:1 › FTC-APPEARANCE-001 applies every Appearance control family to real UI and preserves it across reload @area:responsive-visual 
+
+    Error: expect(received).toEqual(expected) // deep equality
+
+    - Expected  - 1
+    + Received  + 1
+
+      Object {
+    -   "backgroundColor": "rgb(244, 245, 246)",
+    +   "backgroundColor": "rgb(255, 255, 255)",
+        "borderColor": "rgb(184, 189, 197)",
+        "color": "rgb(32, 33, 36)",
+      }
+
+      329 |     await settingsModalAppBarActions.closeSettings();
+      330 |     const galleryOptionsIdle = await galleryActions.galleryPage.readGalleryOptionsAppearance();
+    > 331 |     expect(galleryOptionsIdle).toEqual({
+          |                                ^
+      332 |       backgroundColor: 'rgb(244, 245, 246)',
+      333 |       borderColor: 'rgb(184, 189, 197)',
+      334 |       color: 'rgb(32, 33, 36)',
+        at D:\a\AlbumHaven\AlbumHaven\tests\e2e\specs\appearanceControls.spec.js:331:32
+        at runStep (D:\a\AlbumHaven\AlbumHaven\tests\e2e\support\baseFixtures.js:147:22)
+        at D:\a\AlbumHaven\AlbumHaven\tests\e2e\specs\appearanceControls.spec.js:328:3
+
+    Error: Appearance waveform_recent_colors restoration did not persist.
+
+       at ..\helpers\appearancePreferenceIsolation.js:73
+
+      71 |       if (!response.ok()) throw new Error(`Appearance restoration failed: HTTP ${response.status()}.`);
+      72 |       const restored = await response.json();
+    > 73 |       for (const field of FIELDS) if (!equal(restored[field], payload[field])) throw new Error(`Appearance ${field} restoration did not persist.`);
+         |                                                                                      ^
+      74 |     },
+      75 |   };
+      76 | }
+        at Object.restore (D:\a\AlbumHaven\AlbumHaven\tests\e2e\helpers\appearancePreferenceIsolation.js:73:86)
+        at Object.appearancePreferenceIsolation (D:\a\AlbumHaven\AlbumHaven\tests\e2e\support\baseFixtures.js:326:45)
+
+  1) [functional] › tests\e2e\specs\playerViewModes.spec.js:100:1 › FTC-PLAYER-019 / FTC-PLAYER-020 / FTC-PLAYER-021 / FTC-PLAYER-022 switches expanded, docked, and floating player views without sharing runner state @area:playback 
+
+    Error: expect(locator).toHaveAttribute(expected) failed
+
+    Locator:  locator('[data-loop-action-owner="global-player"]')
+    Expected: "true"
+    Received: "false"
+    Timeout:  10000ms
+
+    Call log:
+      - Expect "toHaveAttribute" with timeout 10000ms
+      - waiting for locator('[data-loop-action-owner="global-player"]')
+        24 × locator resolved to <span aria-busy="false" class="loop-edit-actions" data-loop-action-state="idle" data-loop-action-engaged="false" data-loop-action-owner="global-player">…</span>
+           - unexpected value "false"
+
+
+       at ..\actions\globalPlayerActions.js:591
+
+      589 |     );
+      590 |     if (await this.globalPlayer.loopAction.getAttribute('data-loop-action-state') !== 'disabled') {
+    > 591 |       await expect(this.globalPlayer.loopAction).toHaveAttribute('data-loop-action-engaged', 'true');
+          |                                                  ^
+      592 |     }
+      593 |     const locator = target === 'create'
+      594 |       ? this.globalPlayer.loopCreateButton
+        at GlobalPlayerActions.hoverLoopAction (D:\a\AlbumHaven\AlbumHaven\tests\e2e\actions\globalPlayerActions.js:591:50)
+        at GlobalPlayerActions.openLoopEditor (D:\a\AlbumHaven\AlbumHaven\tests\e2e\actions\globalPlayerActions.js:504:5)
+        at D:\a\AlbumHaven\AlbumHaven\tests\e2e\specs\playerViewModes.spec.js:180:5
+        at runStep (D:\a\AlbumHaven\AlbumHaven\tests\e2e\support\baseFixtures.js:147:22)
+        at D:\a\AlbumHaven\AlbumHaven\tests\e2e\specs\playerViewModes.spec.js:171:3
+
+  1) [functional] › tests\e2e\specs\playerArtworkSearchContext.spec.js:10:1 › FTC-PLAYER-015 player artwork reopens the playing album after selecting an unrelated search result @area:playback 
+
+    Test timeout of 240000ms exceeded.
+
+    Error: locator.click: Test timeout of 240000ms exceeded.
+    Call log:
+      - waiting for locator('#sidebar-list [data-sidebar-artist][data-sidebar-artist="Album Haven Last.fm Fixture"]').first()
+        - locator resolved to <a data-nav="1" aria-current="true" data-navigation-tree-item="artists" data-sidebar-artist="Album Haven Last.fm Fixture" class="artist-link active navigation-tree-item is-selected" data-navigation-tree-key="artist:Album Haven Last.fm Fixture" href="/?surface=albums&q=Album+Haven+Last.fm+Fixture&artist=Album+Haven+Last.fm+Fixture&gallery_scope=all&category=main_library&category=new_arrivals&category=hoard">…</a>
+      - attempting click action
+        2 × waiting for element to be visible, enabled and stable
+          - element is not visible
+        - retrying click action
+        - waiting 20ms
+        2 × waiting for element to be visible, enabled and stable
+          - element is not visible
+        - retrying click action
+          - waiting 100ms
+        462 × waiting for element to be visible, enabled and stable
+            - element is not visible
+          - retrying click action
+            - waiting 500ms
+
+
+       at ..\actions\navigationPanelActions.js:279
+
+      277 |     const selectedArtist = String(artistName || '').trim();
+      278 |     const artistLocator = this.navigationPanel.sidebarArtistByName(selectedArtist);
+    > 279 |     await artistLocator.click({ noWaitAfter: true, ...options });
+          |                         ^
+      280 |   }
+      281 |
+      282 |   async moveSidebarArtistOutsideViewport(artistName, options = {}) {
+        at NavigationPanelActions.selectSidebarArtistByName (D:\a\AlbumHaven\AlbumHaven\tests\e2e\actions\navigationPanelActions.js:279:25)
+        at D:\a\AlbumHaven\AlbumHaven\tests\e2e\specs\playerArtworkSearchContext.spec.js:73:34
+        at runStep (D:\a\AlbumHaven\AlbumHaven\tests\e2e\support\baseFixtures.js:147:22)
+        at D:\a\AlbumHaven\AlbumHaven\tests\e2e\specs\playerArtworkSearchContext.spec.js:69:3
+
+  1) [functional] › tests\e2e\specs\loop-edit-expiry.functional.spec.js:15:1 › FTC-PLAYER-017 / FTC-UTIL-LOOPS-024 loop creation expires through the shared production session controller @area:loops 
+
+    Error: expect(locator).toHaveAttribute(expected) failed
+
+    Locator:  locator('[data-loop-action-owner="global-player"]')
+    Expected: "true"
+    Received: "false"
+    Timeout:  10000ms
+
+    Call log:
+      - Expect "toHaveAttribute" with timeout 10000ms
+      - waiting for locator('[data-loop-action-owner="global-player"]')
+        24 × locator resolved to <span aria-busy="false" class="loop-edit-actions" data-loop-action-state="idle" data-loop-action-engaged="false" data-loop-action-owner="global-player">…</span>
+           - unexpected value "false"
+
+
+       at ..\actions\globalPlayerActions.js:591
+
+      589 |     );
+      590 |     if (await this.globalPlayer.loopAction.getAttribute('data-loop-action-state') !== 'disabled') {
+    > 591 |       await expect(this.globalPlayer.loopAction).toHaveAttribute('data-loop-action-engaged', 'true');
+          |                                                  ^
+      592 |     }
+      593 |     const locator = target === 'create'
+      594 |       ? this.globalPlayer.loopCreateButton
+        at GlobalPlayerActions.hoverLoopAction (D:\a\AlbumHaven\AlbumHaven\tests\e2e\actions\globalPlayerActions.js:591:50)
+        at GlobalPlayerActions.openLoopEditor (D:\a\AlbumHaven\AlbumHaven\tests\e2e\actions\globalPlayerActions.js:504:5)
+        at D:\a\AlbumHaven\AlbumHaven\tests\e2e\specs\loop-edit-expiry.functional.spec.js:48:5
+        at runStep (D:\a\AlbumHaven\AlbumHaven\tests\e2e\support\baseFixtures.js:147:22)
+        at D:\a\AlbumHaven\AlbumHaven\tests\e2e\specs\loop-edit-expiry.functional.spec.js:27:3
+
+  1) [functional] › tests\e2e\specs\loop-edit-expiry.functional.spec.js:103:1 › FTC-PLAYER-017 / FTC-UTIL-LOOPS-024 page reload exits bottom-player loop edit mode @area:loops 
+
+    Error: expect(locator).toHaveAttribute(expected) failed
+
+    Locator:  locator('[data-loop-action-owner="global-player"]')
+    Expected: "true"
+    Received: "false"
+    Timeout:  10000ms
+
+    Call log:
+      - Expect "toHaveAttribute" with timeout 10000ms
+      - waiting for locator('[data-loop-action-owner="global-player"]')
+        24 × locator resolved to <span aria-busy="false" class="loop-edit-actions" data-loop-action-state="idle" data-loop-action-engaged="false" data-loop-action-owner="global-player">…</span>
+           - unexpected value "false"
+
+
+       at ..\actions\globalPlayerActions.js:591
+
+      589 |     );
+      590 |     if (await this.globalPlayer.loopAction.getAttribute('data-loop-action-state') !== 'disabled') {
+    > 591 |       await expect(this.globalPlayer.loopAction).toHaveAttribute('data-loop-action-engaged', 'true');
+          |                                                  ^
+      592 |     }
+      593 |     const locator = target === 'create'
+      594 |       ? this.globalPlayer.loopCreateButton
+        at GlobalPlayerActions.hoverLoopAction (D:\a\AlbumHaven\AlbumHaven\tests\e2e\actions\globalPlayerActions.js:591:50)
+        at GlobalPlayerActions.openLoopEditor (D:\a\AlbumHaven\AlbumHaven\tests\e2e\actions\globalPlayerActions.js:504:5)
+        at D:\a\AlbumHaven\AlbumHaven\tests\e2e\specs\loop-edit-expiry.functional.spec.js:124:5
+        at runStep (D:\a\AlbumHaven\AlbumHaven\tests\e2e\support\baseFixtures.js:147:22)
+        at D:\a\AlbumHaven\AlbumHaven\tests\e2e\specs\loop-edit-expiry.functional.spec.js:112:3
+
+  1) [functional] › tests\e2e\specs\loop-edit-expiry.functional.spec.js:147:1 › FTC-PLAYER-017 / FTC-UTIL-LOOPS-024 returning to a suspended tab reconciles an overdue loop edit lease @area:loops 
+
+    Error: expect(locator).toHaveAttribute(expected) failed
+
+    Locator:  locator('[data-loop-action-owner="global-player"]')
+    Expected: "true"
+    Received: "false"
+    Timeout:  10000ms
+
+    Call log:
+      - Expect "toHaveAttribute" with timeout 10000ms
+      - waiting for locator('[data-loop-action-owner="global-player"]')
+        24 × locator resolved to <span aria-busy="false" class="loop-edit-actions" data-loop-action-state="idle" data-loop-action-engaged="false" data-loop-action-owner="global-player">…</span>
+           - unexpected value "false"
+
+
+       at ..\actions\globalPlayerActions.js:591
+
+      589 |     );
+      590 |     if (await this.globalPlayer.loopAction.getAttribute('data-loop-action-state') !== 'disabled') {
+    > 591 |       await expect(this.globalPlayer.loopAction).toHaveAttribute('data-loop-action-engaged', 'true');
+          |                                                  ^
+      592 |     }
+      593 |     const locator = target === 'create'
+      594 |       ? this.globalPlayer.loopCreateButton
+        at GlobalPlayerActions.hoverLoopAction (D:\a\AlbumHaven\AlbumHaven\tests\e2e\actions\globalPlayerActions.js:591:50)
+        at GlobalPlayerActions.openLoopEditor (D:\a\AlbumHaven\AlbumHaven\tests\e2e\actions\globalPlayerActions.js:504:5)
+        at D:\a\AlbumHaven\AlbumHaven\tests\e2e\specs\loop-edit-expiry.functional.spec.js:166:5
+        at runStep (D:\a\AlbumHaven\AlbumHaven\tests\e2e\support\baseFixtures.js:147:22)
+        at D:\a\AlbumHaven\AlbumHaven\tests\e2e\specs\loop-edit-expiry.functional.spec.js:153:3
+
+  1) [functional] › tests\e2e\specs\nonAlbumRarity.spec.js:207:1 › FTC-TAGS-023 failed tag saves preserve the source modal for a successful retry @area:tag-edit 
+
+    Error: Expected album "Two Track Rarity Fixture" under heading "E2E Rarity Artist" after scrolling the gallery with 0 scroll actions.
+
+       at ..\actions\galleryActions.js:991
+
+      989 |       );
+      990 |     }
+    > 991 |     throw new Error(
+          |           ^
+      992 |       `Expected album "${albumName}" under heading "${artistName}" after scrolling the gallery `
+      993 |       + `with ${scrollActions} scroll actions.`,
+      994 |     );
+        at GalleryActions.scrollToAlbumUnderHeading (D:\a\AlbumHaven\AlbumHaven\tests\e2e\actions\galleryActions.js:991:11)
+        at GalleryActions.waitForAlbumVisibleUnderHeading (D:\a\AlbumHaven\AlbumHaven\tests\e2e\actions\galleryActions.js:848:9)
+        at D:\a\AlbumHaven\AlbumHaven\tests\e2e\specs\nonAlbumRarity.spec.js:224:5
+        at runStep (D:\a\AlbumHaven\AlbumHaven\tests\e2e\support\baseFixtures.js:147:22)
+        at D:\a\AlbumHaven\AlbumHaven\tests\e2e\specs\nonAlbumRarity.spec.js:219:3
+
+  1) [functional] › tests\e2e\specs\nonAlbumRarity.spec.js:316:1 › FTC-NON-ALBUM-012 renders exception groups as the approved compact track table @area:album-details 
+
+    Error: Expected album "Two Track Rarity Fixture" under heading "E2E Rarity Artist" after scrolling the gallery with 0 scroll actions.
+
+       at ..\actions\galleryActions.js:991
+
+      989 |       );
+      990 |     }
+    > 991 |     throw new Error(
+          |           ^
+      992 |       `Expected album "${albumName}" under heading "${artistName}" after scrolling the gallery `
+      993 |       + `with ${scrollActions} scroll actions.`,
+      994 |     );
+        at GalleryActions.scrollToAlbumUnderHeading (D:\a\AlbumHaven\AlbumHaven\tests\e2e\actions\galleryActions.js:991:11)
+        at GalleryActions.waitForAlbumVisibleUnderHeading (D:\a\AlbumHaven\AlbumHaven\tests\e2e\actions\galleryActions.js:848:9)
+        at D:\a\AlbumHaven\AlbumHaven\tests\e2e\specs\nonAlbumRarity.spec.js:335:7
+        at runStep (D:\a\AlbumHaven\AlbumHaven\tests\e2e\support\baseFixtures.js:147:22)
+        at D:\a\AlbumHaven\AlbumHaven\tests\e2e\specs\nonAlbumRarity.spec.js:330:5
+
+  1) [functional] › tests\e2e\specs\nonAlbumRarity.spec.js:420:1 › FTC-NON-ALBUM-011 permits a nonempty Album rename from post-rarity Problematic Files @area:album-details 
+
+    Error: Expected album "Two Track Rarity Fixture" under heading "E2E Rarity Artist" after scrolling the gallery with 0 scroll actions.
+
+       at ..\actions\galleryActions.js:991
+
+      989 |       );
+      990 |     }
+    > 991 |     throw new Error(
+          |           ^
+      992 |       `Expected album "${albumName}" under heading "${artistName}" after scrolling the gallery `
+      993 |       + `with ${scrollActions} scroll actions.`,
+      994 |     );
+        at GalleryActions.scrollToAlbumUnderHeading (D:\a\AlbumHaven\AlbumHaven\tests\e2e\actions\galleryActions.js:991:11)
+        at GalleryActions.waitForAlbumVisibleUnderHeading (D:\a\AlbumHaven\AlbumHaven\tests\e2e\actions\galleryActions.js:848:9)
+        at D:\a\AlbumHaven\AlbumHaven\tests\e2e\specs\nonAlbumRarity.spec.js:440:7
+        at runStep (D:\a\AlbumHaven\AlbumHaven\tests\e2e\support\baseFixtures.js:147:22)
+        at D:\a\AlbumHaven\AlbumHaven\tests\e2e\specs\nonAlbumRarity.spec.js:435:5
+
+  1) [functional] › tests\e2e\specs\nonAlbumRarity.spec.js:531:1 › FTC-NON-ALBUM-014 clears Album durably and refreshes Problematic Files @area:album-details 
+
+    Error: Expected album "Two Track Rarity Fixture" under heading "E2E Rarity Artist" after scrolling the gallery with 0 scroll actions.
+
+       at ..\actions\galleryActions.js:991
+
+      989 |       );
+      990 |     }
+    > 991 |     throw new Error(
+          |           ^
+      992 |       `Expected album "${albumName}" under heading "${artistName}" after scrolling the gallery `
+      993 |       + `with ${scrollActions} scroll actions.`,
+      994 |     );
+        at GalleryActions.scrollToAlbumUnderHeading (D:\a\AlbumHaven\AlbumHaven\tests\e2e\actions\galleryActions.js:991:11)
+        at GalleryActions.selectAlbumDetailsByIdentity (D:\a\AlbumHaven\AlbumHaven\tests\e2e\actions\galleryActions.js:1111:5)
+        at D:\a\AlbumHaven\AlbumHaven\tests\e2e\specs\nonAlbumRarity.spec.js:552:7
+        at runStep (D:\a\AlbumHaven\AlbumHaven\tests\e2e\support\baseFixtures.js:147:22)
+        at D:\a\AlbumHaven\AlbumHaven\tests\e2e\specs\nonAlbumRarity.spec.js:547:5
+
+  1) [functional] › tests\e2e\specs\nonAlbumRarity.spec.js:651:1 › FTC-TAGS-004 and FTC-NON-ALBUM-014 preserve rapid Album and Exception edits across gallery transitions @area:tag-edit 
+
+    Error: Expected album "Two Track Rarity Fixture" under heading "E2E Rarity Artist" after scrolling the gallery with 1 scroll actions.
+
+       at ..\actions\galleryActions.js:991
+
+      989 |       );
+      990 |     }
+    > 991 |     throw new Error(
+          |           ^
+      992 |       `Expected album "${albumName}" under heading "${artistName}" after scrolling the gallery `
+      993 |       + `with ${scrollActions} scroll actions.`,
+      994 |     );
+        at GalleryActions.scrollToAlbumUnderHeading (D:\a\AlbumHaven\AlbumHaven\tests\e2e\actions\galleryActions.js:991:11)
+        at GalleryActions.selectAlbumDetailsByIdentity (D:\a\AlbumHaven\AlbumHaven\tests\e2e\actions\galleryActions.js:1111:5)
+        at TagEditorActions.openForAlbum (D:\a\AlbumHaven\AlbumHaven\tests\e2e\actions\tagEditorActions.js:27:5)
+        at D:\a\AlbumHaven\AlbumHaven\tests\e2e\specs\nonAlbumRarity.spec.js:668:7
+        at runStep (D:\a\AlbumHaven\AlbumHaven\tests\e2e\support\baseFixtures.js:147:22)
+        at D:\a\AlbumHaven\AlbumHaven\tests\e2e\specs\nonAlbumRarity.spec.js:665:5
+
+  1) [functional] › tests\e2e\specs\nonAlbumRarity.spec.js:813:1 › FTC-NON-ALBUM-010 / FTC-NON-ALBUM-009 / FTC-NON-ALBUM-008 / FTC-NON-ALBUM-007 / FTC-NON-ALBUM-006 / FTC-TAGS-007 / FTC-NON-ALBUM-005 keeps rarity modal transitions and sibling album state canonical @area:tag-edit 
+
+    Error: Expected album "Two Track Rarity Fixture" under heading "E2E Rarity Artist" after scrolling the gallery with 0 scroll actions.
+
+       at ..\actions\galleryActions.js:991
+
+      989 |       );
+      990 |     }
+    > 991 |     throw new Error(
+          |           ^
+      992 |       `Expected album "${albumName}" under heading "${artistName}" after scrolling the gallery `
+      993 |       + `with ${scrollActions} scroll actions.`,
+      994 |     );
+        at GalleryActions.scrollToAlbumUnderHeading (D:\a\AlbumHaven\AlbumHaven\tests\e2e\actions\galleryActions.js:991:11)
+        at GalleryActions.waitForAlbumVisibleUnderHeading (D:\a\AlbumHaven\AlbumHaven\tests\e2e\actions\galleryActions.js:848:9)
+        at D:\a\AlbumHaven\AlbumHaven\tests\e2e\specs\nonAlbumRarity.spec.js:830:5
+        at runStep (D:\a\AlbumHaven\AlbumHaven\tests\e2e\support\baseFixtures.js:147:22)
+        at D:\a\AlbumHaven\AlbumHaven\tests\e2e\specs\nonAlbumRarity.spec.js:825:3
+
+  1) [non-album-rescan] › tests\e2e\specs\nonAlbumRarity.spec.js:29:1 › FTC-NON-ALBUM-013 keeps a strongly inferred blank-Album track in Other and Album Details @area:album-details 
+
+    Error: Expected album "Queued Album Rename Fixture" under heading "E2E Rarity Artist" after scrolling the gallery with 2 scroll actions.
+
+       at ..\actions\galleryActions.js:991
+
+      989 |       );
+      990 |     }
+    > 991 |     throw new Error(
+          |           ^
+      992 |       `Expected album "${albumName}" under heading "${artistName}" after scrolling the gallery `
+      993 |       + `with ${scrollActions} scroll actions.`,
+      994 |     );
+        at GalleryActions.scrollToAlbumUnderHeading (D:\a\AlbumHaven\AlbumHaven\tests\e2e\actions\galleryActions.js:991:11)
+        at GalleryActions.waitForAlbumVisibleUnderHeading (D:\a\AlbumHaven\AlbumHaven\tests\e2e\actions\galleryActions.js:848:9)
+        at openAlbum (D:\a\AlbumHaven\AlbumHaven\tests\e2e\specs\nonAlbumRarity.spec.js:44:5)
+        at D:\a\AlbumHaven\AlbumHaven\tests\e2e\specs\nonAlbumRarity.spec.js:76:7
+        at runStep (D:\a\AlbumHaven\AlbumHaven\tests\e2e\support\baseFixtures.js:147:22)
+        at D:\a\AlbumHaven\AlbumHaven\tests\e2e\specs\nonAlbumRarity.spec.js:75:5
+
+
+JOB 109465371736 E2E Performance: synthetic-large-library completed failure
+  1) [synthetic-large-library] › tests\e2e\syntheticLargeLibrary\allArtistsResponsiveness.spec.js:54:3 › FTC-GALLERY-STARTUP-005A synthetic-large responsiveness › All Artists round-trip reports synthetic-data responsiveness and memory timings 
+
+    Test timeout of 420000ms exceeded.
+
+2026-09-29 14:59:33,272 [INFO] music_app: Startup scan-cache hydration completed files=57980 albums=5329
+2026-09-29 14:59:37,475 [INFO] music_app: {"action": "Index request completed", "album_count": 0, "artist_count": 0, "bootstrap_mode": "fresh_preview", "covers_in_progress": false, "elapsed_ms": 532.61, "hydrate_in_progress": false, "payload_elapsed_ms": 398.79, "query": "", "scan_in_progress": false, "selected_artist": ""}
+[playwright-wrapper-failure-latched] {"phase":"tests-complete","status":"failed","total":1,"completed":1,"failed":1,"skipped":0,"errors":0}
+[playwright-wrapper-diagnostic] {"reason":"wrapper-child-lifecycle-mismatch","childExitCode":1,"childExitSignal":null,"childCloseCode":1,"childCloseSignal":null,"processError":null,"stopReason":"none","cleanupOutcome":"completed"}
+[playwright-wrapper-final-decision] {"wrapperExitCode":1,"attemptReturn":{"exitCode":1,"exitReason":"wrapper-child-lifecycle-mismatch"},"fakeDatabaseCleanup":{"status":"completed","error":null,"mode":"lock-only"},"scanAppCleanup":{"status":"not-required","error":null},"isolatedAppCleanup":{"status":"completed","error":null},"tempCleanup":{"status":"completed","error":null,"removedCount":0},"passivePortDiagnostics":[{"port":4181,"status":"completed","error":null,"ownerCount":0},{"port":4183,"status":"completed","error":null,"ownerCount":0}],"finalSummary":{"phase":"run-final","status":"failed","total":1,"completed":1,"failed":1,"skipped":0,"errors":0,"listOnly":false},"exitReason":"wrapper-child-lifecycle-mismatch"}
+    Error: locator.click: Test timeout of 420000ms exceeded.
+    Call log:
+      - waiting for locator('#sidebar-list [data-sidebar-artist]').first()
+        - locator resolved to <a data-nav="1" data-sidebar-artist="3" data-navigation-tree-item="artists" data-navigation-tree-key="artist:3" class="artist-link navigation-tree-item" href="/?surface=albums&artist=3&gallery_scope=all&category=main_library&category=hoard&category=new_arrivals">…</a>
+      - attempting click action
+        2 × waiting for element to be visible, enabled and stable
+          - element is not visible
+        - retrying click action
+        - waiting 20ms
+        2 × waiting for element to be visible, enabled and stable
+          - element is not visible
+        - retrying click action
+          - waiting 100ms
+        802 × waiting for element to be visible, enabled and stable
+            - element is not visible
+          - retrying click action
+            - waiting 500ms
+
+
+       at ..\actions\navigationPanelActions.js:272
+
+      270 |       throw new Error(`Expected a visible artist row at index ${index + 1} under All artists.`);
+      271 |     }
+    > 272 |     await artistLocator.click({ noWaitAfter: true, ...options });
+          |                         ^
+      273 |     return artistName;
+      274 |   }
+      275 |
+        at NavigationPanelActions.selectSidebarArtistAt (D:\a\AlbumHaven\AlbumHaven\tests\e2e\actions\navigationPanelActions.js:272:25)
+        at selectSidebarArtistAtAndVerify (D:\a\AlbumHaven\AlbumHaven\tests\e2e\helpers\allArtistsResponsivenessHelpers.js:162:5)
+        at navigationPanelActions.waitForSidebarSelection.timeout (D:\a\AlbumHaven\AlbumHaven\tests\e2e\syntheticLargeLibrary\allArtistsResponsiveness.spec.js:167:15)
+        at measureActionTime (D:\a\AlbumHaven\AlbumHaven\tests\e2e\helpers\performanceHelpers.js:179:3)
+        at D:\a\AlbumHaven\AlbumHaven\tests\e2e\syntheticLargeLibrary\allArtistsResponsiveness.spec.js:165:25
+        at runWithSelectedArtistRequestLifecycle (D:\a\AlbumHaven\AlbumHaven\tests\e2e\helpers\allArtistsResponsivenessHelpers.js:134:5)
+        at D:\a\AlbumHaven\AlbumHaven\tests\e2e\syntheticLargeLibrary\allArtistsResponsiveness.spec.js:159:25
+        at runStep (D:\a\AlbumHaven\AlbumHaven\tests\e2e\support\baseFixtures.js:147:22)
+        at D:\a\AlbumHaven\AlbumHaven\tests\e2e\syntheticLargeLibrary\allArtistsResponsiveness.spec.js:156:68
+
+  1) [synthetic-large-library] › tests\e2e\syntheticLargeLibrary\artistFamilyResponsiveness.spec.js:44:3 › FTC-SEARCH-NAV-005A synthetic-large artist family responsiveness › Neal Morse scrolling keeps each displayed artist heading unique before and after filtering 
+
+    Error: expect(received).not.toBe(expected) // Object.is equality
+
+    Expected: not "rgba(0, 0, 0, 0)"
+
+      143 |       expect(hoverState.after.transitionDuration).not.toBe('0s');
+      144 |       const combineHoverState = await artistFamilyActions.readCombineHoverState();
+2026-09-29 15:06:57,119 [INFO] music_app: Startup scan-cache hydration completed files=57980 albums=5329
+2026-09-29 15:07:02,756 [INFO] music_app: {"action": "Index request completed", "album_count": 0, "artist_count": 0, "bootstrap_mode": "fresh_preview", "covers_in_progress": false, "elapsed_ms": 469.3, "hydrate_in_progress": false, "payload_elapsed_ms": 351.08, "query": "", "scan_in_progress": false, "selected_artist": ""}
+2026-09-29 15:07:05,635 [INFO] music_app: {"action": "Postgres album search request started", "query": "Neal Morse"}
+2026-09-29 15:07:05,841 [INFO] music_app: {"action": "View data request completed", "album_count": 13, "artist_count": 7, "elapsed_ms": 206.89, "query": "Neal Morse", "selected_artist": "Neal Morse"}
+2026-09-29 15:07:12,714 [INFO] music_app: {"action": "Index request completed", "album_count": 0, "artist_count": 0, "bootstrap_mode": "fresh_preview", "covers_in_progress": false, "elapsed_ms": 630.95, "hydrate_in_progress": false, "payload_elapsed_ms": 599.42, "query": "", "scan_in_progress": false, "selected_artist": ""}
+[playwright-wrapper-failure-latched] {"phase":"tests-complete","status":"failed","total":2,"completed":2,"failed":2,"skipped":0,"errors":0}
+[playwright-wrapper-diagnostic] {"reason":"wrapper-child-lifecycle-mismatch","childExitCode":1,"childExitSignal":null,"childCloseCode":1,"childCloseSignal":null,"processError":null,"stopReason":"none","cleanupOutcome":"completed"}
+[playwright-wrapper-final-decision] {"wrapperExitCode":1,"attemptReturn":{"exitCode":1,"exitReason":"wrapper-child-lifecycle-mismatch"},"fakeDatabaseCleanup":{"status":"completed","error":null,"mode":"lock-only"},"scanAppCleanup":{"status":"not-required","error":null},"isolatedAppCleanup":{"status":"completed","error":null},"tempCleanup":{"status":"completed","error":null,"removedCount":0},"passivePortDiagnostics":[{"port":4189,"status":"completed","error":null,"ownerCount":0},{"port":4191,"status":"completed","error":null,"ownerCount":0}],"finalSummary":{"phase":"run-final","status":"failed","total":2,"completed":2,"failed":2,"skipped":0,"errors":0,"listOnly":false},"exitReason":"wrapper-child-lifecycle-mismatch"}
+    > 145 |       expect(combineHoverState.after.backgroundColor).not.toBe(combineHoverState.before.backgroundColor);
+          |                                                           ^
+      146 |       expect(combineHoverState.after.backgroundColor).toBe(hoverState.after.backgroundColor);
+      147 |       expect(combineHoverState.after.transitionProperty).toContain('background-color');
+      148 |       expect(combineHoverState.after.transitionDuration).not.toBe('0s');
+        at D:\a\AlbumHaven\AlbumHaven\tests\e2e\syntheticLargeLibrary\artistFamilyResponsiveness.spec.js:145:59
+        at runStep (D:\a\AlbumHaven\AlbumHaven\tests\e2e\support\baseFixtures.js:147:22)
+        at D:\a\AlbumHaven\AlbumHaven\tests\e2e\syntheticLargeLibrary\artistFamilyResponsiveness.spec.js:116:5
+
+  2) [synthetic-large-library] › tests\e2e\syntheticLargeLibrary\artistFamilyResponsiveness.spec.js:217:3 › FTC-SEARCH-NAV-005A synthetic-large artist family responsiveness › Neal Morse family search, filters, details, settings, and clear-search flows stay responsive on synthetic data 
+
+    Test timeout of 420000ms exceeded.
+
+    Error: locator.click: Test timeout of 420000ms exceeded.
+    Call log:
+      - waiting for locator('#sidebar-list [data-sidebar-artist][data-sidebar-artist="3"]').first()
+        - locator resolved to <a data-nav="1" data-sidebar-artist="3" data-navigation-tree-item="artists" data-navigation-tree-key="artist:3" class="artist-link navigation-tree-item" href="/?surface=albums&artist=3&gallery_scope=all&category=main_library&category=hoard&category=new_arrivals">…</a>
+      - attempting click action
+        2 × waiting for element to be visible, enabled and stable
+          - element is not visible
+        - retrying click action
+        - waiting 20ms
+        2 × waiting for element to be visible, enabled and stable
+          - element is not visible
+        - retrying click action
+          - waiting 100ms
+        801 × waiting for element to be visible, enabled and stable
+            - element is not visible
+          - retrying click action
+            - waiting 500ms
+        - waiting for element to be visible, enabled and stable
+
+
+       at ..\actions\navigationPanelActions.js:279
+
+      277 |     const selectedArtist = String(artistName || '').trim();
+      278 |     const artistLocator = this.navigationPanel.sidebarArtistByName(selectedArtist);
+    > 279 |     await artistLocator.click({ noWaitAfter: true, ...options });
+          |                         ^
+      280 |   }
+      281 |
+      282 |   async moveSidebarArtistOutsideViewport(artistName, options = {}) {
+        at NavigationPanelActions.selectSidebarArtistByName (D:\a\AlbumHaven\AlbumHaven\tests\e2e\actions\navigationPanelActions.js:279:25)
+        at action (D:\a\AlbumHaven\AlbumHaven\tests\e2e\syntheticLargeLibrary\artistFamilyResponsiveness.spec.js:249:40)
+        at measureActionTime (D:\a\AlbumHaven\AlbumHaven\tests\e2e\helpers\performanceHelpers.js:179:9)
+        at fn (D:\a\AlbumHaven\AlbumHaven\tests\e2e\syntheticLargeLibrary\artistFamilyResponsiveness.spec.js:247:7)
+        at runStep (D:\a\AlbumHaven\AlbumHaven\tests\e2e\support\baseFixtures.js:147:28)
+        at Object.step (D:\a\AlbumHaven\AlbumHaven\tests\e2e\support\baseFixtures.js:185:14)
+        at D:\a\AlbumHaven\AlbumHaven\tests\e2e\syntheticLargeLibrary\artistFamilyResponsiveness.spec.js:246:55
+
+  1) [synthetic-large-library] › tests\e2e\syntheticLargeLibrary\allArtistsResponsiveness.spec.js:493:3 › FTC-SEARCH-NAV-003A synthetic-large responsiveness › FTC-SEARCH-NAV-026 clears an Ария search after filtering to Виталий Дубинин without remounting the gallery or reducing Artist Family 
+
+    Error: Timed out after 10000 ms waiting for a local-only search clear. Observed state: {"activeRequestCount":0,"activeViewDataRequestCount":0,"cardContentChanged":false,"cardNodesChanged":false,"coverNodesChanged":false,"coverStateChanged":false,"familyControlsVisibleDuringActiveRequest":false,"galleryContentChanged":false,"galleryMutationCount":0,"galleryReplaced":false,"galleryReplacementMutationCount":0,"galleryScrollChanged":true,"initialActiveRequestCount":0,"initialInputQuery":"","initialLoaderVisible":false,"initialLocationQuery":"","initialPendingPayloadReadCount":0,"initialRuntimeQuery":"","initialRuntimeSearchContextPresent":false,"initialRuntimeSearchDraftQuery":"","initialSpinnerVisible":false,"initialUrlHasQueryParameter":false,"inputQuery":"","loaderActivated":false,"loaderVisible":false,"locationQuery":"","pendingPayloadReadCount":0,"productionObservationStable":true,"runtimeQuery":"","runtimeSearchContextPresent":false,"runtimeSearchDraftQuery":"","runtimeStateStable":true,"spinnerActivated":false,"spinnerVisible":false,"urlHasQueryParameter":false,"viewDataRequests":[],"virtualGridEvents":[{"sequence":54,"type":"scroll-event","renderGeneration":6,"scrollTop":0,"renderRafOwner":194,"measureRafOwner":0,"clientHeight":754,"pendingRenderRafOwner":194,"pendingMeasureRafOwner":0,"pendingMeasureTimeout":0,"coalescedScrollCount":0},{"sequence":55,"type":"scroll-restore-settled","renderGeneration":6,"scrollTop":0,"renderRafOwner":194,"measureRafOwner":0},{"sequence":56,"type":"measure-requested","renderGeneration":7,"scrollTop":0,"renderRafOwner":0,"measureRafOwner":197,"force":true},{"sequence":57,"type":"render-completed","renderGeneration":7,"scrollTop":0,"renderRafOwner":0,"measureRafOwner":197,"bottomSpacerHeight":0,"end":1074,"firstIndex":0,"force":true,"lastIndex":2,"rangeKey":"0:2:5:946:undefined:label|family:Виталий Дубинин:0:0:0|family:Кипелов:0:0:0","sections":[{"bottom":40,"firstBlockIndex":null,"headerHeight":54,"key":"Family","lastBlockIndex":null,"top":0},{"bottom":493,"firstBlockIndex":0,"headerHeight":54,"key":"family:Виталий Дубинин:0","lastBlockIndex":0,"top":40},{"bottom":946,"firstBlockIndex":0,"headerHeight":54,"key":"family:Кипелов:0","lastBlockIndex":0,"top":493}],"start":0,"topSpacerHeight":0,"viewportBottom":754,"viewportTop":0,"visibleRanges":"undefined:label|family:Виталий Дубинин:0:0:0|family:Кипелов:0:0:0"},{"sequence":58,"type":"measure-frame-started","renderGeneration":7,"scrollTop":0,"renderRafOwner":0,"measureRafOwner":197},{"sequence":59,"type":"measure-completed","renderGeneration":7,"scrollTop":0,"renderRafOwner":0,"measureRafOwner":197,"changed":false,"rowMeasurements":[{"blockIndex":0,"measureKeyPresent":true,"measuredHeight":null,"modeledHeight":371,"sectionKey":"family:Виталий Дубинин:0","skipped":true},{"blockIndex":0,"measureKeyPresent":true,"measuredHeight":null,"modeledHeight":371,"sectionKey":"family:Кипелов:0","skipped":true}],"topSpacerHeight":0,"bottomSpacerHeight":0},{"sequence":60,"type":"scroll-event","renderGeneration":7,"scrollTop":0,"renderRafOwner":198,"measureRafOwner":0,"clientHeight":754,"pendingRenderRafOwner":198,"pendingMeasureRafOwner":0,"pendingMeasureTimeout":0,"coalescedScrollCount":0},{"sequence":61,"type":"scroll-restore-settled","renderGeneration":7,"scrollTop":0,"renderRafOwner":198,"measureRafOwner":0},{"sequence":62,"type":"measure-requested","renderGeneration":8,"scrollTop":0,"renderRafOwner":0,"measureRafOwner":201,"force":true},{"sequence":63,"type":"render-completed","renderGeneration":8,"scrollTop":0,"renderRafOwner":0,"measureRafOwner":201,"bottomSpacerHeight":0,"end":1074,"firstIndex":0,"force":true,"lastIndex":1,"rangeKey":"0:1:5:493:undefined:label|family:Виталий Дубинин:0:0:0","sections":[{"bottom":40,"firstBlockIndex":null,"headerHeight":54,"key":"Family","lastBlockIndex":null,"top":0},{"bottom":493,"firstBlockIndex":0,"headerHeight":54,"key":"family:Виталий Дубинин:0","lastBlockIndex":0,"top":40}],"start":0,"topSpacerHeight":0,"viewportBottom":754,"viewportTop":0,"visibleRanges":"undefined:label|family:Виталий Дубинин:0:0:0"},{"sequence":64,"type":"measure-frame-started","renderGeneration":8,"scrollTop":0,"renderRafOwner":0,"measureRafOwner":201},{"sequence":65,"type":"measure-completed","renderGeneration":8,"scrollTop":0,"renderRafOwner":0,"measureRafOwner":201,"changed":false,"rowMeasurements":[{"blockIndex":0,"measureKeyPresent":true,"measuredHeight":null,"modeledHeight":371,"sectionKey":"family:Виталий Дубинин:0","skipped":true}],"topSpacerHeight":0,"bottomSpacerHeight":0},{"sequence":66,"type":"scroll-event","renderGeneration":8,"scrollTop":0,"renderRafOwner":202,"measureRafOwner":0,"clientHeight":754,"pendingRenderRafOwner":202,"pendingMeasureRafOwner":0,"pendingMeasureTimeout":0,"coalescedScrollCount":0},{"sequence":67,"type":"scroll-restore-settled","renderGeneration":8,"scrollTop":0,"renderRafOwner":202,"measureRafOwner":0},{"sequence":68,"type":"scroll-event","renderGeneration":8,"scrollTop":2,"renderRafOwner":206,"measureRafOwner":0,"clientHeight":754,"pendingRenderRafOwner":206,"pendingMeasureRafOwner":0,"pendingMeasureTimeout":6,"coalescedScrollCount":0},{"sequence":69,"type":"render-frame-started","renderGeneration":8,"scrollTop":2,"renderRafOwner":206,"measureRafOwner":0},{"sequence":70,"type":"render-skipped-unchanged-range","renderGeneration":8,"scrollTop":2,"renderRafOwner":206,"measureRafOwner":0,"bottomSpacerHeight":0,"end":1076,"firstIndex":0,"force":false,"lastIndex":1,"rangeKey":"0:1:5:493:undefined:label|family:Виталий Дубинин:0:0:0","start":0,"topSpacerHeight":0,"viewportBottom":756,"viewportTop":2,"visibleRanges":"undefined:label|family:Виталий Дубинин:0:0:0"},{"sequence":71,"type":"measure-requested","renderGeneration":8,"scrollTop":2,"renderRafOwner":0,"measureRafOwner":211,"force":true},{"sequence":72,"type":"measure-frame-started","renderGeneration":8,"scrollTop":2,"renderRafOwner":0,"measureRafOwner":211},{"sequence":73,"type":"measure-completed","renderGeneration":8,"scrollTop":2,"renderRafOwner":0,"measureRafOwner":211,"changed":false,"rowMeasurements":[{"blockIndex":0,"measureKeyPresent":true,"measuredHeight":null,"modeledHeight":371,"sectionKey":"family:Виталий Дубинин:0","skipped":true}],"topSpacerHeight":0,"bottomSpacerHeight":0}]}
+
+       at ..\poms\searchToolbar.js:771
+
+      769 |       await new Promise((resolve) => setTimeout(resolve, 25));
+      770 |     }
+    > 771 |     throw new Error(
+          |           ^
+      772 |       `Timed out after ${timeout} ms waiting for a local-only search clear. `
+      773 |       + `Observed state: ${JSON.stringify(lastObservedState)}`,
+      774 |     );
+        at SearchToolbar.waitForLocalSearchClearSettled (D:\a\AlbumHaven\AlbumHaven\tests\e2e\poms\searchToolbar.js:771:11)
+        at SearchToolbarActions.clearSearchAndObserveStableGallery (D:\a\AlbumHaven\AlbumHaven\tests\e2e\actions\searchToolbarActions.js:93:7)
+        at D:\a\AlbumHaven\AlbumHaven\tests\e2e\syntheticLargeLibrary\allArtistsResponsiveness.spec.js:556:26
+        at runStep (D:\a\AlbumHaven\AlbumHaven\tests\e2e\support\baseFixtures.js:147:22)
+        at D:\a\AlbumHaven\AlbumHaven\tests\e2e\syntheticLargeLibrary\allArtistsResponsiveness.spec.js:547:5
+
+  2) [synthetic-large-library] › tests\e2e\syntheticLargeLibrary\allArtistsResponsiveness.spec.js:617:3 › FTC-SEARCH-NAV-003A synthetic-large responsiveness › FTC-SEARCH-NAV-003A multi-family search keeps search-scoped All artists and follow-up tree selection responsive on synthetic data 
+
+    Test timeout of 420000ms exceeded.
+
+    Error: locator.scrollIntoViewIfNeeded: Test timeout of 420000ms exceeded.
+    Call log:
+      - attempting scroll into view action
+        2 × waiting for element to be stable
+          - element is not visible
+        - retrying scroll into view action
+        - waiting 20ms
+        2 × waiting for element to be stable
+          - element is not visible
+        - retrying scroll into view action
+          - waiting 100ms
+        799 × waiting for element to be stable
+            - element is not visible
+          - retrying scroll into view action
+            - waiting 500ms
+
+
+       at ..\actions\navigationPanelActions.js:373
+
+      371 |       throw new Error('clickAllArtists does not accept forced clicks; the All Artists link must be interactable through the real UI.');
+      372 |     }
+    > 373 |     await this.navigationPanel.allArtistsLink.scrollIntoViewIfNeeded();
+          |                                               ^
+      374 |     await this.navigationPanel.allArtistsLink.click({
+      375 |       noWaitAfter: true,
+      376 |       ...clickOptions,
+        at NavigationPanelActions.clickAllArtists (D:\a\AlbumHaven\AlbumHaven\tests\e2e\actions\navigationPanelActions.js:373:47)
+        at action (D:\a\AlbumHaven\AlbumHaven\tests\e2e\helpers\allArtistsResponsivenessHelpers.js:291:40)
+        at measureActionTime (D:\a\AlbumHaven\AlbumHaven\tests\e2e\helpers\performanceHelpers.js:179:9)
+        at measureSearchAllArtistsLoad (D:\a\AlbumHaven\AlbumHaven\tests\e2e\helpers\allArtistsResponsivenessHelpers.js:290:29)
+        at fn (D:\a\AlbumHaven\AlbumHaven\tests\e2e\syntheticLargeLibrary\allArtistsResponsiveness.spec.js:754:36)
+        at runStep (D:\a\AlbumHaven\AlbumHaven\tests\e2e\support\baseFixtures.js:147:28)
+        at Object.step (D:\a\AlbumHaven\AlbumHaven\tests\e2e\support\baseFixtures.js:185:14)
+        at D:\a\AlbumHaven\AlbumHaven\tests\e2e\syntheticLargeLibrary\allArtistsResponsiveness.spec.js:753:82
+
+  1) [synthetic-large-library] › tests\e2e\syntheticLargeLibrary\utilitiesResponsiveness.spec.js:21:3 › FTC-UTIL-RULES-002 synthetic-large utilities rules and sibling-tab responsiveness › FTC-UTIL-RULES-002 warmed Rules and the other utility tabs stay responsive and render their main information 
+
+    Error: rulesReadyMs hard-fail: exceeded 5400 ms; actual 6825 ms. Observed range 800 ms .. 1100 ms. Opening Utilities directly into Rules should stay below the owner-approved 5-second ceiling and within the warmed cache fast path.
+
+    expect(received).toEqual(expected) // deep equality
+
+    - Expected  - 1
+    + Received  + 3
+
+    - Array []
+    + Array [
+    +   "rulesReadyMs hard-fail: exceeded 5400 ms; actual 6825 ms. Observed range 800 ms .. 1100 ms. Opening Utilities directly into Rules should stay below the owner-approved 5-second ceiling and within the warmed cache fast path.",
+    + ]
+
+      222 |       benchmarkFailures: benchmarkEvaluation.failures,
+      223 |     });
+    > 224 |     expect(benchmarkEvaluation.failures, benchmarkEvaluation.failures.join('\n')).toEqual([]);
+          |                                                                                   ^
+      225 |   });
+      226 | });
+      227 |
+        at D:\a\AlbumHaven\AlbumHaven\tests\e2e\syntheticLargeLibrary\utilitiesResponsiveness.spec.js:224:83
+
+  1) [synthetic-large-library] › tests\e2e\syntheticLargeLibrary\selectedArtist.spec.js:26:3 › FTC-GALLERY-STARTUP-005Q synthetic-large selected-artist browse › Selected artist UI reports library_browse telemetry and timing 
+
+    Test timeout of 240000ms exceeded.
+
+    Error: locator.click: Test timeout of 240000ms exceeded.
+    Call log:
+      - waiting for locator('#sidebar-list [data-sidebar-artist]').first()
+        - locator resolved to <a data-nav="1" data-sidebar-artist="3" data-navigation-tree-item="artists" data-navigation-tree-key="artist:3" class="artist-link navigation-tree-item" href="/?surface=albums&artist=3&gallery_scope=all&category=main_library&category=hoard&category=new_arrivals">…</a>
+      - attempting click action
+        2 × waiting for element to be visible, enabled and stable
+          - element is not visible
+        - retrying click action
+        - waiting 20ms
+        2 × waiting for element to be visible, enabled and stable
+          - element is not visible
+2026-09-29 15:23:29,951 [INFO] music_app: Startup scan-cache hydration completed files=57980 albums=5329
+2026-09-29 15:23:34,511 [INFO] music_app: {"action": "Index request completed", "album_count": 0, "artist_count": 0, "bootstrap_mode": "fresh_preview", "covers_in_progress": false, "elapsed_ms": 573.3, "hydrate_in_progress": false, "payload_elapsed_ms": 439.95, "query": "", "scan_in_progress": false, "selected_artist": ""}
+2026-09-29 15:27:36,344 [INFO] music_app: {"action": "Index request completed", "album_count": 0, "artist_count": 0, "bootstrap_mode": "fresh_preview", "covers_in_progress": false, "elapsed_ms": 748.34, "hydrate_in_progress": false, "payload_elapsed_ms": 724.68, "query": "", "scan_in_progress": false, "selected_artist": ""}
+2026-09-29 15:27:39,456 [INFO] music_app: {"action": "Postgres album search request started", "query": "Devin Townsend"}
+2026-09-29 15:27:39,669 [INFO] music_app: {"action": "View data request completed", "album_count": 2, "artist_count": 2, "elapsed_ms": 213.32, "query": "Devin Townsend", "selected_artist": "Devin Townsend"}
+[playwright-wrapper-failure-latched] {"phase":"tests-complete","status":"failed","total":2,"completed":2,"failed":1,"skipped":0,"errors":0}
+[playwright-wrapper-diagnostic] {"reason":"wrapper-child-lifecycle-mismatch","childExitCode":1,"childExitSignal":null,"childCloseCode":1,"childCloseSignal":null,"processError":null,"stopReason":"none","cleanupOutcome":"completed"}
+[playwright-wrapper-final-decision] {"wrapperExitCode":1,"attemptReturn":{"exitCode":1,"exitReason":"wrapper-child-lifecycle-mismatch"},"fakeDatabaseCleanup":{"status":"completed","error":null,"mode":"lock-only"},"scanAppCleanup":{"status":"not-required","error":null},"isolatedAppCleanup":{"status":"completed","error":null},"tempCleanup":{"status":"completed","error":null,"removedCount":0},"passivePortDiagnostics":[{"port":4213,"status":"completed","error":null,"ownerCount":0},{"port":4215,"status":"completed","error":null,"ownerCount":0}],"finalSummary":{"phase":"run-final","status":"failed","total":2,"completed":2,"failed":1,"skipped":0,"errors":0,"listOnly":false},"exitReason":"wrapper-child-lifecycle-mismatch"}
+        - retrying click action
+          - waiting 100ms
+        455 × waiting for element to be visible, enabled and stable
+            - element is not visible
+          - retrying click action
+            - waiting 500ms
+
+
+       at ..\actions\navigationPanelActions.js:272
+
+      270 |       throw new Error(`Expected a visible artist row at index ${index + 1} under All artists.`);
+      271 |     }
+    > 272 |     await artistLocator.click({ noWaitAfter: true, ...options });
+          |                         ^
+      273 |     return artistName;
+      274 |   }
+      275 |
+        at NavigationPanelActions.selectSidebarArtistAt (D:\a\AlbumHaven\AlbumHaven\tests\e2e\actions\navigationPanelActions.js:272:25)
+        at navigationPanelActions.waitForSidebarSelection.timeout (D:\a\AlbumHaven\AlbumHaven\tests\e2e\syntheticLargeLibrary\selectedArtist.spec.js:45:28)
+        at measureActionTime (D:\a\AlbumHaven\AlbumHaven\tests\e2e\helpers\performanceHelpers.js:179:3)
+        at runStep (D:\a\AlbumHaven\AlbumHaven\tests\e2e\support\baseFixtures.js:147:22)
+        at D:\a\AlbumHaven\AlbumHaven\tests\e2e\syntheticLargeLibrary\selectedArtist.spec.js:42:33
+
+
+JOB 109465371569 E2E: gallery-search-visual in_progress null

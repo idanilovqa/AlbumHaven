@@ -1,7 +1,9 @@
 name: Capabilities Release Diagnostics
 
 on:
-  workflow_dispatch:
+  push:
+    branches: [2026-09-25-capabilities-audit]
+    paths: [.github/workflows/capabilities-release-diagnostics.yml]
 
 permissions:
   contents: read
@@ -21,28 +23,29 @@ jobs:
           set -euo pipefail
           echo "HEAD=$(git rev-parse HEAD)"
           echo "PARENT=$(git rev-parse HEAD^)"
-          test "$(git rev-parse HEAD^)" = "655b5f65a6dabcfd022ffe49d944131282b532ac"
+          test "$(git rev-parse HEAD^)" = "66755c7bafb10320081c681dbd95a846c4f9e625"
           test -z "$(git status --porcelain)"
       - name: Print focused source excerpts
         shell: python
         run: |
           from pathlib import Path
           targets = [
-              ("tests/js/runtime/utility-list-builders.test.js", ["saved loop layout keeps edit timestamps"]),
-              ("music_app/static/css/runtime/non-album-and-player.css", [".utility-loop-shell", ".utility-loop-player-main", ".utility-loop-timeline-wrap"]),
-              ("tests/components/buttonInteractionOutline.spec.js", ["non-green player surfaces derive computed action hover colors"]),
-              ("music_app/static/css/button-component.css", [".action-button:hover", ".ui-button:hover"]),
-              ("music_app/static/css/appearance-backgrounds.css", ["appearance-item-action-hover-background"]),
+              ("tests/js/runtime/utility-list-builders.test.js", ["saved loop layout keeps edit timestamps", "reserve the same timestamp-row height"]),
+              ("music_app/static/css/runtime/non-album-and-player.css", [".utility-loop-shell", ".utility-loop-player", ".utility-loop-timeline-wrap", "grid-template-rows: 22px 44px"]),
+              ("tests/components/buttonInteractionOutline.spec.js", ["non-green player surfaces derive computed action hover colors", "samples[0].background"]),
+              ("music_app/static/css/button-component.css", [".action-button:hover", ".ui-button:hover", ".ui-button--quiet:hover"]),
+              ("music_app/static/css/appearance-backgrounds.css", ["--appearance-item-action-hover-background", ".artist-family-panel__artist:hover"]),
               ("tests/components/searchInput.spec.js", ["Settings filter dropdown right edge joins its anchor button"]),
               ("tests/components/triggerAnchorSurface.spec.js", ["a dropdown extending both sides has mirrored left and right joins"]),
-              ("music_app/static/css/runtime/trigger-anchor.css", [".trigger-anchor-open::after", ".trigger-anchor-surface::after", "data-trigger-anchor-context='content'"]),
-              ("music_app/static/js/runtime/player-loop-playback.js", ["data-loop-action-owner", "loopActionOwner", "loop-action-owner"]),
-              ("music_app/static/js/runtime/utility-loop-playback.js", ["data-loop-action-owner", "loopActionOwner", "loop-action-owner"]),
-              ("music_app/static/js/runtime/utility-list-builders.js", ["data-loop-action-owner", "loopActionOwner", "loop-action-owner"]),
-              ("music_app/static/js/appearance-backgrounds.js", ["waveform_recent_colors", "recent"]),
-              ("music_app/services/appearance_preferences_postgres.py", ["waveform_recent_colors", "waveform"]),
-              ("tests/e2e/actions/galleryActions.js", ["scrollToAlbumUnderHeading", "data-sidebar-all-artists"]),
-              ("music_app/static/js/runtime/navigation-tree.js", ["data-sidebar-all-artists", "expanded", "collapsed"]),
+              ("music_app/static/css/runtime/trigger-anchor.css", [".trigger-anchor-surface::after", ".trigger-anchor-open::after"]),
+              ("music_app/static/js/runtime/player-loop-playback.js", ["data-loop-action-owner", "loopActionOwner"]),
+              ("music_app/static/js/runtime/utility-loop-playback.js", ["data-loop-action-owner", "loopActionOwner"]),
+              ("music_app/static/js/runtime/utility-list-builders.js", ["data-loop-action-owner", "loopActionOwner"]),
+              ("tests/e2e/actions/galleryActions.js", ["scrollToAlbumUnderHeading"]),
+              ("tests/e2e/actions/navigationPanelActions.js", ["setArtistTreeFolded", "selectSidebarArtistAt", "clickAllArtists"]),
+              ("music_app/static/js/runtime/navigation-tree.js", ["data-sidebar-all-artists", "folded", "expanded"]),
+              ("tests/e2e/phase7/poms/capabilityBoundaryPage.js", ["forbidden"]),
+              ("tests/e2e/phase7/actions/capabilityBoundaryActions.js", ["ui.forbidden", "page.goto('/admin/members')"]),
           ]
           for raw, needles in targets:
               path = Path(raw)
@@ -56,15 +59,9 @@ jobs:
                   matches=[i for i,line in enumerate(lines) if needle in line]
                   print(f"--- needle {needle!r}: {len(matches)} match(es)")
                   for i in matches[:8]:
-                      lo=max(0,i-16); hi=min(len(lines),i+36)
+                      lo=max(0,i-18); hi=min(len(lines),i+42)
                       key=(lo,hi)
                       if key in emitted: continue
                       emitted.add(key)
                       for n in range(lo,hi):
                           print(f"{n+1:05d}: {lines[n]}")
-          print("\n===== package scripts =====")
-          import json
-          pkg=json.loads(Path("package.json").read_text(encoding="utf-8"))
-          for key,value in sorted(pkg.get("scripts",{}).items()):
-              if any(word in key.lower() for word in ("test","component","e2e")):
-                  print(f"{key}: {value}")

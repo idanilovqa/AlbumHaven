@@ -9,6 +9,8 @@ export class SurfaceDismissalPage extends MobileTouchFeedbackPage {
     this.activeArtist = this.artistRail.locator('.navigation-tree-item.is-selected').first();
     this.activeAdminItem = page.locator('[data-settings-nav] .navigation-tree-item.is-selected').first();
     this.addUser = page.getByRole('link', { name: 'Add user', exact: true });
+    this.artistTreeToggle = page.getByRole('button', { name: 'Artist Tree', exact: true });
+    this.artistBackdrop = page.locator('#shell-navigation-rail-backdrop');
     this.trackOverlay = page.locator('#track-modal');
     this.trackClose = page.locator('#track-modal-close');
     this.lightboxTrigger = this.albumCover.locator('[data-open-lightbox]').first();
@@ -52,6 +54,32 @@ export class SurfaceDismissalPage extends MobileTouchFeedbackPage {
     await expect(this.trackTable).toBeVisible();
   }
 
+  async activateUncoveredArtwork(surface, input = 'touch') {
+    await expect(surface).toBeVisible();
+    await this.activatePoint(await this.pointOnBackgroundArtwork(surface), input);
+    await expect(surface).not.toBeVisible();
+    await expect(this.trackTable).toBeVisible();
+  }
+
+  async clickSettingsPosition() {
+    const box = await this.settingsButton.boundingBox();
+    await this.page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
+  }
+
+  async toggleExposedPlayer() {
+    // parity-check: allow-read-only-measurement-evaluate -- hit-test the actual exposed player and read its production playback owner.
+    const before = await this.playerPlay.evaluate(button => {
+      const box = button.getBoundingClientRect();
+      return { exposed: button.contains(document.elementFromPoint(box.left + box.width / 2, box.top + box.height / 2)),
+        paused: getPlayerPlaybackSnapshot().paused };
+    });
+    expect(before.exposed).toBe(true);
+    await this.playerPlay.tap();
+    // parity-check: allow-read-only-measurement-evaluate -- observe real playback state after the native action.
+    await expect.poll(() => this.page.evaluate(() => getPlayerPlaybackSnapshot().paused)).toBe(!before.paused);
+    await expect(this.playerPlay).toHaveAttribute('aria-label', before.paused ? 'Pause' : 'Play');
+  }
+
   async expectSelectedAccent(item) {
     await expect(item).toBeVisible();
     // parity-check: allow-read-only-measurement-evaluate -- compare the actual selected edge with its inherited theme/account token.
@@ -70,14 +98,12 @@ export class SurfaceDismissalPage extends MobileTouchFeedbackPage {
     expect(edge.color).not.toBe('rgba(0, 0, 0, 0)');
   }
 
-  async dismissSettingsDrawerWithoutOpeningAccountMenu() {
+  async openAccountMenuOutsideSettingsDrawer() {
     await this.openSettings();
     await this.settingsSectionsButton.tap();
     await this.expectSelectedAccent(this.selectedSettingsSection);
     await this.settingsButton.tap();
     await expect(this.settingsDrawer).not.toBeVisible();
-    await expect(this.settingsMenu).not.toBeVisible();
-    await this.settingsButton.tap();
     await expect(this.settingsMenu).toBeVisible();
     await this.settingsButton.tap();
   }

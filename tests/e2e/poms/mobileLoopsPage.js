@@ -105,8 +105,6 @@ export class MobileLoopsPage extends MobilePolishPage {
     await this.speed.tap();
     await this.pitch.tap();
     await expect(this.speedMenu).not.toBeVisible();
-    await expect(this.pitchMenu).not.toBeVisible();
-    await this.pitch.tap();
     await expect(this.pitchMenu).toBeVisible();
     await this.page.keyboard.press('Escape');
     await expect(this.pitchMenu).not.toBeVisible();

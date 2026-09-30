@@ -19,18 +19,30 @@ test.describe('touch artwork actions', () => {
 
   test('FTC-ALBUM-DETAILS-022 touch artwork controls open full cover and Cover Lookup without hover', { tag: '@area:album-details' }, async ({
     galleryActions,
+    navigationPanelActions,
+    globalPlayerActions,
+    page,
+    playbackEvidence,
     searchToolbarActions,
     trackModalActions,
     coverLookupActions,
     stepLogger,
   }) => {
     await galleryActions.goto('/?surface=albums');
+    await navigationPanelActions.clickAllArtists({ expectArtistQueryCleared: true });
     await galleryActions.waitForGalleryReady();
     await searchToolbarActions.search(MULTI_DISC_ALBUM, { submitWithEnter: true });
     await searchToolbarActions.waitForQuery(MULTI_DISC_ALBUM);
     await galleryActions.waitForAlbumVisible(MULTI_DISC_ALBUM);
+    const parentUrl = page.url();
     await galleryActions.clickAlbumDetailsByAlbumName(MULTI_DISC_ALBUM);
     await trackModalActions.waitForReady();
+    const initialMark = await playbackEvidence.playbackMark();
+    const selectedTrack = await trackModalActions.playTrackAt(0);
+    await globalPlayerActions.waitForCurrentTrack({ path: selectedTrack.path, trackTitle: selectedTrack.title });
+    const initialAudio = await playbackEvidence.waitForTrackPlaybackEvidence({ after: initialMark, path: selectedTrack.path });
+    expect(initialAudio.nonZeroSamples).toBeGreaterThan(0);
+    expect(initialAudio.renderedFrameDelta).toBeGreaterThan(0);
 
     await stepLogger.step('Tap visible artwork actions without a preceding hover or focus', async () => {
       await expect(trackModalActions.trackModal.artboxOverlay).toHaveCSS('opacity', '1');
@@ -43,10 +55,20 @@ test.describe('touch artwork actions', () => {
       await trackModalActions.openCoverLookup({ touch: true });
       await coverLookupActions.waitForModalReady();
       await expect(coverLookupActions.coverLookup.modalSubtitle).toContainText(MULTI_DISC_ALBUM);
-      await coverLookupActions.closeModal();
+      await coverLookupActions.backFromMobilePage();
       await expect(trackModalActions.trackModal.dialog).toBeVisible();
+      await expect(trackModalActions.trackModal.title).toContainText(MULTI_DISC_ALBUM);
     });
-    await trackModalActions.close();
+    const backMark = await playbackEvidence.playbackMark();
+    await trackModalActions.backFromMobilePage();
+    await expect(page).toHaveURL(parentUrl);
+    await galleryActions.waitForGalleryReady();
+    await globalPlayerActions.waitForCurrentTrack({ path: selectedTrack.path, trackTitle: selectedTrack.title });
+    const afterBack = await playbackEvidence.waitForTrackPlaybackEvidence({ after: backMark, path: selectedTrack.path });
+    expect(afterBack.generation).toBe(initialAudio.generation);
+    expect(afterBack.streamId).toBe(initialAudio.streamId);
+    expect(afterBack.nonZeroSamples).toBeGreaterThan(0);
+    expect(afterBack.renderedFrameDelta).toBeGreaterThan(0);
   });
 });
 
@@ -181,7 +203,7 @@ test('FTC-ALBUM-DETAILS-019 keeps all persisted layouts on the shared compact Al
     await expect(trackModalActions.trackModal.artboxOverlay).toBeVisible();
     await expect(trackModalActions.trackModal.coverLookupButton).toBeVisible();
     await expect(trackModalActions.trackModal.fastCoverFetchButton).toBeVisible();
-    await trackModalActions.close();
+    await trackModalActions.backFromMobilePage();
   });
 
   await stepLogger.step('Keep problematic status in its unlabeled column before Length', async () => {

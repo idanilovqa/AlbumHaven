@@ -31,7 +31,7 @@ test('FTC-SETTINGS-A01 shared search preserves the staged loop style and Save hy
   await settingsModalAppBarActions.openSettings();
   await utilityTabBarActions.openTab('appearance');
   await utilityAppearanceActions.waitForReady();
-  await utilityAppearanceActions.expectWebDesktopOnlyDeviceControls();
+  await utilityAppearanceActions.expectSupportedDeviceControls();
   await utilityAppearanceActions.openSection('seekbar');
   const savedStyle = await appearance.liveLoopCluster.getAttribute('data-loop-control-style');
   const otherStyle = savedStyle === 'companion' ? 'capsule' : 'companion';
@@ -47,7 +47,7 @@ test('FTC-SETTINGS-A01 shared search preserves the staged loop style and Save hy
   await appearance.sidebar.search.fill('');
   await utilityAppearanceActions.cancel();
   await expect(appearance.loopStyleButton(savedStyle)).toHaveAttribute('aria-pressed', 'true');
-  await utilityAppearanceActions.expectWebDesktopOnlyDeviceControls();
+  await utilityAppearanceActions.expectSupportedDeviceControls();
   await appearance.loopStyleButton('companion').click();
   if (savedStyle !== 'companion') await utilityAppearanceActions.save();
   await utilityAppearanceActions.openSection('backgrounds');
@@ -61,7 +61,25 @@ test('FTC-SETTINGS-A01 shared search preserves the staged loop style and Save hy
   await utilityAppearanceActions.waitForReady();
   await utilityAppearanceActions.openSection('seekbar');
   await expect(appearance.loopStyleButton('companion')).toHaveAttribute('aria-pressed', 'true');
-  await utilityAppearanceActions.expectWebDesktopOnlyDeviceControls();
+  await utilityAppearanceActions.expectSupportedDeviceControls();
+  await appearance.deviceButton('Mobile').click();
+  await appearance.customMobileMode.click();
+  await appearance.loopStyleButton('capsule').click();
+  await utilityAppearanceActions.save();
+  await expect(appearance.liveLoopCluster).toHaveAttribute('data-loop-control-style', 'companion');
+  await page.reload();
+  await galleryActions.waitForGalleryReady();
+  await expect(appearance.liveLoopCluster).toHaveAttribute('data-loop-control-style', 'companion');
+  await settingsModalAppBarActions.openSettings();
+  await utilityTabBarActions.openTab('appearance');
+  await utilityAppearanceActions.waitForReady();
+  await utilityAppearanceActions.openSection('seekbar');
+  await appearance.deviceButton('Mobile').click();
+  await expect(appearance.customMobileMode).toHaveAttribute('aria-pressed', 'true');
+  await expect(appearance.loopStyleButton('capsule')).toHaveAttribute('aria-pressed', 'true');
+  await appearance.deviceButton('Web / Desktop').click();
+  await expect(appearance.loopStyleButton('companion')).toHaveAttribute('aria-pressed', 'true');
+  await utilityAppearanceActions.expectSupportedDeviceControls();
   await appearance.editorFooter.reset.root.click();
   await expect(appearance.loopStyleButton('capsule')).toHaveAttribute('aria-pressed', 'true');
   await expect(appearance.liveLoopCluster).toHaveAttribute('data-loop-control-style', 'companion');
@@ -139,11 +157,14 @@ test(`${CASE_ID} applies every Appearance control family to real UI and preserve
       .toEqual(['Main elements', 'Player & Seekbar', 'Selection & Hover', 'Alerts', 'Album page']);
     const initialSnapshot = await utilityAppearanceActions.readAppliedStyleSnapshot();
 
-    await appearance.customizePlayerButton.click();
+    await expect(appearance.customizePlayerButton).toHaveCount(0);
+    await expect(appearance.customizePlayerHelp).toBeVisible();
+    await utilityAppearanceActions.openSection('seekbar');
     await expect(appearance.editorHeading).toHaveText('Player & Seekbar');
+    await appearance.matchPaletteButton.click();
+    await expect(appearance.matchPaletteButton).toHaveAttribute('aria-pressed', 'true');
     await utilityAppearanceActions.openSection('backgrounds');
-    await appearance.matchPlayerButton.click();
-    await expect(appearance.matchPlayerButton).toHaveAttribute('aria-pressed', 'true');
+    await expect(appearance.matchPlayerButton).toHaveCount(0);
     await utilityAppearanceActions.choosePalette('paper', 1);
     const mainSticky = await utilityAppearanceActions
       .readStickyPreviewCheckpoint(appearance.mainPreviewColumn);
@@ -329,13 +350,14 @@ test(`${CASE_ID} applies every Appearance control family to real UI and preserve
     await settingsModalAppBarActions.closeSettings();
     const galleryOptionsIdle = await galleryActions.galleryPage.readGalleryOptionsAppearance();
     expect(galleryOptionsIdle).toEqual({
-      backgroundColor: 'rgb(244, 245, 246)',
+      backgroundColor: 'rgb(255, 255, 255)',
       borderColor: 'rgb(184, 189, 197)',
       color: 'rgb(32, 33, 36)',
     });
     await galleryActions.galleryPage.galleryOptionsButton.hover();
     const galleryOptionsHover = await galleryActions.galleryPage.readGalleryOptionsAppearance();
-    expect(galleryOptionsHover.backgroundColor).toBe(INTERACTION_COLORS.itemHover);
+    // The saved Gallery surface is #FFFFFF; light hover mixes 85% of it with 15% white.
+    expect(galleryOptionsHover.backgroundColor).toBe('color(srgb 1 1 1)');
     expect(galleryOptionsHover.borderColor).toBe(INTERACTION_COLORS.itemBorder);
 
     await navigationPanelActions.selectSidebarArtistByName('Neal Morse');

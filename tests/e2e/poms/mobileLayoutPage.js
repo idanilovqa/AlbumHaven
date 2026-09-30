@@ -302,6 +302,16 @@ export class MobileLayoutPage {
     await expect(this.utilitiesPage).toBeVisible();
   }
 
+  async backOwnsHit() {
+    // parity-check: allow-read-only-measurement-evaluate -- verify the real mobile navigation target is unobscured.
+    return this.backButton.evaluate(button => {
+      const bounds = button.getBoundingClientRect();
+      return bounds.width > 0 && bounds.height > 0 && button.contains(document.elementFromPoint(
+        bounds.left + bounds.width / 2, bounds.top + bounds.height / 2,
+      ));
+    });
+  }
+
   async diagnosticState() {
     // parity-check: allow-read-only-measurement-evaluate -- capture existing view and computed geometry without mutating production state.
     return this.page.evaluate(() => {
@@ -422,4 +432,3 @@ export class MobileLayoutPage {
     return this.page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth);
   }
 }
-

@@ -19,6 +19,8 @@ export class TrackModal extends BasePage {
     this.loadingRow = page.locator(this.loadingRowSelector);
     this.trackRows = page.locator(this.trackRowSelector);
     this.closeButton = page.locator(this.closeButtonSelector);
+    this.mobilePage = page.locator('#track-modal.is-mobile-page');
+    this.mobileBackButton = page.locator('#mobile-back-button');
     this.title = page.locator(this.titleSelector);
     this.subtitle = page.locator(this.subtitleSelector);
     this.footer = page.locator(this.footerSelector);

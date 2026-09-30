@@ -23,6 +23,8 @@ export class UtilityAppearanceTab extends BasePage {
     this.editor = page.locator('.appearance-background-editor');
     this.deviceControls = page.locator('.appearance-device-controls');
     this.deviceModeControls = page.locator('[data-appearance-device-mode]');
+    this.deviceModeGroup = this.deviceControls.getByRole('group', { name: 'Appearance linking', includeHidden: true });
+    this.customMobileMode = this.deviceControls.getByRole('button', { name: 'Custom mobile', exact: true });
     this.editorHeading = this.editor.getByRole('heading', { level: 3 });
     this.navigationTree = new NavigationTree(this.sidebar.list);
     this.visibleSectionButtons = this.sidebar.list.locator('[data-utility-appearance-key]:visible');
@@ -43,6 +45,7 @@ export class UtilityAppearanceTab extends BasePage {
     this.customPlayerColorsButton = this.editor.getByRole('button', { name: 'Custom player colors', exact: true });
     this.matchPlayerButton = this.editor.getByRole('button', { name: 'Match player', exact: true });
     this.customizePlayerButton = this.editor.getByRole('button', { name: 'Customize', exact: true });
+    this.customizePlayerHelp = this.editor.getByText("You can customize your player's colors in the “Player & Seekbar” setting.", { exact: true });
     this.recentSetsHeading = this.editor.getByText('Recent sets', { exact: true });
     this.latestPlayerSetButton = this.editor.getByRole('button', { name: 'Restore latest set', exact: true });
     this.useThemeInteractionsButton = this.editor.getByRole('button', { name: 'Use theme', exact: true });

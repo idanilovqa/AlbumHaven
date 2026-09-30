@@ -1,7 +1,7 @@
 name: Encrypted mobile fixture reproduction
 on:
   push:
-    branches: [2026-09-25-mobile-layout]
+    branches: [chatgpt/mobile-fixture-session-20260930]
     paths: [.github/workflows/mobile-fixture-reproduction.yml]
 permissions:
   contents: read
@@ -34,15 +34,15 @@ jobs:
           if actual != expected:
               raise RuntimeError('Fixture checkout is not the requested immutable version')
           public_pem = b'''-----BEGIN PUBLIC KEY-----
-          MIIBojANBgkqhkiG9w0BAQEFAAOCAY8AMIIBigKCAYEAxUF2Rv0t4KqYXx1g0YOX
-          i0GCl/pB1D6ijHGjTa1A78onbMSQiTgf/G+NjrycGu+wDT9fvvsgc+UoEBkbqITK
-          5OsgJxyPRPnp82dV0GFrbZsd8yfV2QJc7f/0HMu5jHl5UJXbEpN3699DyWKpOHaN
-          3rhY9n99yN6UDVHSQVTIcvwo+hq9KbCsEHZ+T58HARORc7L1MBg0CNkxYtRWlk6d
-          vcA63pb88126NcOdoy2cXyDfiWojELxKkpnph/1pPIn+hIBjG5QgXwQT9/PkUnG9
-          BXWJyB11C5BIP2xEaBVDwzmwXxuPc0NZHCjmfnCFIEAeSGgglcd1i3bxwrfQUhIq
-          xLv52we1OeMX/yQNSuljz3DX9N81mHPcLGuttXbGFNIOO7BSNteultk665uXgT8T
-          98+C42Hkkx6iMQlTkJS+cGkmS3IGiyIV7Yfbv1PBo5NRixBzn55mz62Zsdjed0mu
-          CeNaNlD4UIWDnpFK2pBt0kayIEk85IEgMtx+T5sE+98xAgMBAAE=
+          MIIBojANBgkqhkiG9w0BAQEFAAOCAY8AMIIBigKCAYEApppZ4xes+c7wxvViknOU
+          7wi5z4PbcfLM1g8xuQD9vcQNNwF8bmAZZ4BhMMJfeEyntuIzQWzknmHxgPZTS7Iu
+          PLrVaabTTSqUE2aSO6PGsXz6ECQkX+QPfyVj0qx3kvDtz+f3R5PyxJ4AkdcA8ETp
+          FhKMPI5I7+kKEI5I5dS2t8/52aYiaTe8rXdoqnCXNC4hyMaWQ436OUWQXOp0G9Uz
+          WXRy8OnmubA14ZzIm/YI6xEsYSMHhA43w+/pNliELS2SOR4BAQsPGBjnXaqwtWEw
+          AQgfjoj5uy68AdW2Tb9f2187Rjj0xLp5lwZjZCNZOM8rC/Kk9cBo7VEm1mM1RiOw
+          8GXiW7j/iPBKVGicjCsvUo/OT6hC80cGBxaQh9fi656Xk10nkWgwF1oGI25Rxejp
+          Y4LLvrVs9l21GWTi2+Q8v0tFUVAItASISc9bL5fu3svPj8qUAB6SErsQjRhLwbt7
+          UGmoe2ZWom8r1clpf2hjlWZ99j2nUh34MRxdnmKfVKe1AgMBAAE=
           -----END PUBLIC KEY-----'''
           public_key = serialization.load_pem_public_key(public_pem)
           data = subprocess.check_output(['git', '-C', 'private-source', 'archive', '--format=tar', 'HEAD'])

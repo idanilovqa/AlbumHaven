@@ -17,6 +17,33 @@ const helperPath = path.join(
 );
 const helperSource = fs.readFileSync(helperPath, 'utf8');
 
+test('player glyph preserves the mounted SVG across audio ticks despite browser serialization', () => {
+  const { context } = loadHelper();
+  const button = new FakeElement({ attributes: { 'aria-label': 'Pause' }, disabled: true });
+  let writes = 0, rendered = '';
+  Object.defineProperty(button, 'innerHTML', {
+    get: () => rendered,
+    set(value) { writes++; rendered = value.replace(/<path ([^>]+)\/>/g, '<path $1></path>'); },
+  });
+  const renderer = context.window.ButtonComponent;
+  context.renderGlobalPlayerPlayGlyph(button, false);
+  assert.notEqual(rendered, renderer.renderIconSvg('pause', { className: 'player-transport-icon' }));
+  assert.equal(rendered, renderer.renderIconSvg('pause', { className: 'player-transport-icon' }).replace('/></svg>', '></path></svg>'));
+  for (let tick = 0; tick < 60; tick++) context.renderGlobalPlayerPlayGlyph(button, false);
+  assert.equal(writes, 1);
+  assert.equal(button.getAttribute('data-player-glyph'), 'pause');
+  context.renderGlobalPlayerPlayGlyph(button, true);
+  assert.equal(writes, 2);
+  assert.equal(button.getAttribute('data-player-glyph'), 'play');
+  assert.equal(rendered, renderer.renderIconSvg('play', { className: 'player-transport-icon' }).replace('/></svg>', '></path></svg>'));
+  context.renderGlobalPlayerPlayGlyph(button, true);
+  assert.equal(writes, 2);
+  context.renderGlobalPlayerPlayGlyph(button, false);
+  assert.equal(writes, 3);
+  assert.equal(button.getAttribute('aria-label'), 'Pause');
+  assert.equal(button.disabled, true);
+});
+
 class FakeElement {
   constructor(options = {}) {
     this.tagName = options.tagName || 'DIV';

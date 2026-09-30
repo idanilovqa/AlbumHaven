@@ -16,10 +16,11 @@ const sourcePath = path.join(
   'problematic-files-virtual-list.js',
 );
 
-function loadVirtualList({ horizontal = false } = {}) {
+function loadVirtualList({ horizontal = false, ResizeObserver } = {}) {
   const frames = [];
   const context = {
     window: {
+      ResizeObserver,
       matchMedia() {
         return { matches: horizontal };
       },
@@ -191,6 +192,7 @@ test('initial render reveals an offscreen selected row', () => {
   });
 
   virtualList.render(makeItems(706), 'album-700');
+  assert.ok(mountedKeys(list.innerHTML).includes('album-700'), 'selected row must be mounted before render returns');
   frames.shift()();
 
   assert.ok(list.scrollTop > 0);
@@ -227,4 +229,89 @@ test('dispose removes listeners and cancels later rendering', () => {
   assert.equal(list.listenerCount(), 0);
   assert.equal(list.dataset.problematicMountedCount, undefined);
   assert.equal(frames.length, 1);
+});
+
+test('a hidden list remounts its visible overscan after element resize without a window resize', () => {
+  const observers = [];
+  class ResizeObserver {
+    constructor(callback) { this.callback = callback; this.disconnected = false; observers.push(this); }
+    observe(target) { this.target = target; }
+    disconnect() { this.disconnected = true; }
+  }
+  const { api, frames } = loadVirtualList({ ResizeObserver });
+  const list = createList({ clientHeight: 0 });
+  const virtualList = api.create({
+    list,
+    renderRow: item => `<button data-problematic-album-key="${item.key}"></button>`,
+  });
+  virtualList.render(makeItems(20), '');
+  assert.equal(frames.length, 0);
+  assert.deepEqual(mountedKeys(list.innerHTML), makeItems(7).map(item => item.key));
+  assert.equal(observers.length, 1);
+  assert.equal(observers[0].target, list);
+
+  list.clientHeight = 476;
+  observers[0].callback([{ target: list }]);
+  observers[0].callback([{ target: list }]);
+  assert.equal(frames.length, 1, 'element resize notifications share one scheduled render');
+  frames.shift()();
+  assert.deepEqual(mountedKeys(list.innerHTML), makeItems(13).map(item => item.key));
+  assert.equal(list.dataset.problematicMountedCount, '13');
+
+  virtualList.dispose();
+  assert.equal(observers[0].disconnected, true);
+  observers[0].callback([{ target: list }]);
+  assert.equal(frames.length, 0, 'a late observer callback cannot revive a disposed list');
+  assert.equal(list.dataset.problematicMountedCount, undefined);
+});
+
+
+test('an unchanged scheduled range does not rewrite spacer geometry or diagnostic metadata', () => {
+  const { api, frames } = loadVirtualList();
+  const list = createList();
+  const virtualList = api.create({
+    list,
+    renderRow: item => `<button data-problematic-album-key="${item.key}"></button>`,
+  });
+  virtualList.render(makeItems(20), 'album-0');
+  const originalNodes = [...list.children];
+  let styleWrites = 0;
+  for (const spacer of list.children.filter(node => node.getAttribute('data-problematic-virtual-spacer'))) {
+    let cssText = spacer.style.cssText;
+    Object.defineProperty(spacer.style, 'cssText', {
+      get: () => cssText,
+      set(value) { styleWrites++; cssText = value; },
+    });
+  }
+  let metadataWrites = 0;
+  list.dataset = new Proxy(list.dataset, {
+    set(target, key, value) { metadataWrites++; target[key] = value; return true; },
+  });
+  list.emit('scroll');
+  frames.shift()();
+  assert.equal(styleWrites, 0);
+  assert.equal(metadataWrites, 0);
+  assert.deepEqual(list.children, originalNodes);
+});
+
+test('range observations share the production default stride and overscan', () => {
+  const { api } = loadVirtualList();
+  assert.deepEqual(JSON.parse(JSON.stringify(api.calculateRange({ count: 21, offset: 732, viewport: 696 }))), { start: 4, end: 21 });
+});
+
+test('utility navigation ownership avoids mutation records for an unchanged owner', () => {
+  const writes = [];
+  const dataset = new Proxy({}, { set(target, key, value) { writes.push([key, value]); target[key] = value; return true; } });
+  const elements = { list: { dataset }, tabs: [], overlay: { setAttribute() {} }, detail: { classList: { remove() {} } } };
+  const context = vm.createContext({ state: { utility: { activeTab: 'problematic-files' } }, getUtilityModalElements: () => elements });
+  vm.runInContext(fs.readFileSync(path.join(__dirname, '../../../music_app/static/js/runtime/utility-renderers-and-actions.js'), 'utf8'), context);
+  context.syncUtilityTabAlignment = () => {};
+  context.renderProblematicFiles = () => {};
+  context.renderUtilityLoops = () => {};
+  context.renderUtilityModalContent();
+  context.renderUtilityModalContent();
+  assert.deepEqual(writes, [['utilityNavigationOwner', 'problematic-files']]);
+  context.state.utility.activeTab = 'loops';
+  context.renderUtilityModalContent();
+  assert.deepEqual(writes, [['utilityNavigationOwner', 'problematic-files'], ['utilityNavigationOwner', 'loops']]);
 });

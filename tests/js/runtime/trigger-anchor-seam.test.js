@@ -88,3 +88,11 @@ test('open trigger preserves and shares the panel color rendered before anchor s
   assert.equal(surfaceProperties.has('--trigger-anchor-background'), false);
   assert.equal(surface.classList.contains('trigger-anchor-surface'), false);
 });
+
+
+test('capability theme observation samples the bridge interior rather than its gradient outline', () => {
+  const pageSource = fs.readFileSync(path.join(__dirname, '../../e2e/phase7/poms/capabilityPresentationPage.js'), 'utf8');
+  assert.match(pageSource, /bridgeBackground: getComputedStyle\(element, '::before'\)\.backgroundColor/);
+  assert.match(css, /\.trigger-anchor-open::before\s*\{[^}]*background:\s*var\(--trigger-anchor-background\);/s);
+  assert.match(css, /\.trigger-anchor-open::after\s*\{[^}]*background:\s*var\(--trigger-anchor-border-fill\);/s);
+});

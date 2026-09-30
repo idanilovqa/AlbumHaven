@@ -41,7 +41,7 @@ for (const mode of ['light', 'dark']) {
     await page.route(componentUrl, route => route.fulfill({
       contentType: 'text/html; charset=utf-8',
       body: `<!doctype html>
-        <html data-appearance-mode="${mode}" style="
+        <html data-appearance-mode="${mode}" data-appearance-palette="custom" style="
           --appearance-main-surface: rgb(100, 120, 140);
           --appearance-item-action-hover-background: rgb(20, 30, 40);
           --appearance-item-action-hover-border: rgb(60, 70, 80);
@@ -56,12 +56,15 @@ for (const mode of ['light', 'dark']) {
                 <button id="choice" class="gallery-view-choice" type="button">View</button>
               </div>
             </div>
+            <button id="ordinary-action" type="button">Other action</button>
             <div id="light-expected" style="background: color-mix(in srgb, rgb(100, 120, 140) 85%, white 15%)"></div>
           </body>
         </html>`,
     }));
     await page.goto(componentUrl);
     await page.addStyleTag({ path: path.join(repositoryRoot, 'music_app/static/css/gallery-main.css') });
+    await page.addStyleTag({ path: path.join(repositoryRoot, 'music_app/static/css/appearance-backgrounds.css') });
+    await page.addStyleTag({ path: path.join(repositoryRoot, 'music_app/static/css/button-component.css') });
 
     await page.locator('#action').hover();
     const action = await page.locator('#action').evaluate(element => {
@@ -81,5 +84,9 @@ for (const mode of ['light', 'dark']) {
     expect(cluster).toBe(mode === 'light' ? expectedLight : 'rgb(20, 30, 40)');
     expect(choice.background).toBe(mode === 'light' ? expectedLight : 'rgb(100, 120, 140)');
     expect(choice.color).toBe('rgb(0, 160, 80)');
+
+    await page.locator('#ordinary-action').hover();
+    await expect(page.locator('#ordinary-action')).toHaveCSS('background-color', 'rgb(20, 30, 40)');
+    await expect(page.locator('#ordinary-action')).toHaveCSS('border-color', 'rgb(60, 70, 80)');
   });
 }

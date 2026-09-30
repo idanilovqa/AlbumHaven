@@ -58,8 +58,8 @@ function syncTriggerAnchor(surface, anchor) {
   const previous = triggerAnchorBindings.get(surface);
   if (previous && previous.anchor !== anchor) clearTriggerAnchor(surface);
   const anchorContext = anchor.closest?.('.shell-main-surface, .settings-outlet') ? 'content' : 'chrome';
-  surface.dataset.triggerAnchorContext = anchorContext;
-  anchor.dataset.triggerAnchorContext = anchorContext;
+  if (surface.dataset.triggerAnchorContext !== anchorContext) surface.dataset.triggerAnchorContext = anchorContext;
+  if (anchor.dataset.triggerAnchorContext !== anchorContext) anchor.dataset.triggerAnchorContext = anchorContext;
   activateTriggerSurface(surface, () => {
     surface.hidden = true;
     anchor.setAttribute?.('aria-expanded', 'false');
@@ -79,13 +79,15 @@ function syncTriggerAnchor(surface, anchor) {
     surface.style.setProperty('--trigger-anchor-background', surfaceBackground);
     anchor.style.setProperty('--trigger-anchor-background', surfaceBackground);
   }
-  surface.classList.add('trigger-anchor-surface');
-  if (anchor.matches?.('.search-field-button')) surface.dataset.triggerAnchorSearch = 'true';
+  if (!surface.classList.contains('trigger-anchor-surface')) surface.classList.add('trigger-anchor-surface');
+  if (anchor.matches?.('.search-field-button')) {
+    if (surface.dataset.triggerAnchorSearch !== 'true') surface.dataset.triggerAnchorSearch = 'true';
+  }
   else delete surface.dataset.triggerAnchorSearch;
-  anchor.classList.add('trigger-anchor-open');
- surface.dataset.triggerAnchorEdge = geometry.edge;
-  surface.dataset.triggerAnchorSide = geometry.side;
-  anchor.dataset.triggerAnchorEdge = geometry.edge;
+  if (!anchor.classList.contains('trigger-anchor-open')) anchor.classList.add('trigger-anchor-open');
+ if (surface.dataset.triggerAnchorEdge !== geometry.edge) surface.dataset.triggerAnchorEdge = geometry.edge;
+  if (surface.dataset.triggerAnchorSide !== geometry.side) surface.dataset.triggerAnchorSide = geometry.side;
+  if (anchor.dataset.triggerAnchorEdge !== geometry.edge) anchor.dataset.triggerAnchorEdge = geometry.edge;
   for (const name of ['left', 'right', 'width', 'gap']) {
     surface.style.setProperty(`--trigger-anchor-${name}`, `${geometry[name]}px`);
   }

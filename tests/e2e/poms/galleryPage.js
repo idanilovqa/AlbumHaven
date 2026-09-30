@@ -204,7 +204,7 @@ export class GalleryPage extends BasePage {
   }
 
   get artistHeadingSelector() {
-    return '#artist-groups .artist-name, [data-gallery-bar][data-gallery-context-kind="artist"] [data-gallery-context-name], [data-gallery-bar][data-gallery-context-kind="single-artist"] [data-gallery-context-name]';
+    return '#artist-groups .artist-name, [data-gallery-bar][data-gallery-context-kind="single-artist"] [data-gallery-context-name]';
   }
 
   get artistSectionSelector() {

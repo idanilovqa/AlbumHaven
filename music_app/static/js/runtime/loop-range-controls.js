@@ -93,10 +93,9 @@ function mountLoopEditActionControl({
     if (next.reset || contextChanged || !currentCanCreate || (wasActive && !currentActive)) {
       clearTimers();
       renderEngagement(retained() && currentCanCreate);
-      // Same-song resets may recover a current hover; a new song must not inherit
-      // the previous song's pending reveal gesture.
+      // Start a fresh dwell for the current track after cancelling its predecessor's timer.
       pointerWithin = pointerWithin || Boolean(compound.matches?.(':hover'));
-      if (!contextChanged && pointerWithin && currentCanCreate) visit();
+      if (pointerWithin && currentCanCreate) visit();
     } else if ((!wasActive && currentActive) || (!wasAllowed && currentCanCreate)) {
       pointerWithin = pointerWithin || Boolean(compound.matches?.(':hover'));
       focusWithin = focusWithin || Boolean(ownerDocument?.activeElement && compound.contains?.(ownerDocument.activeElement));

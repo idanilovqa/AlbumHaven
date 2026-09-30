@@ -484,7 +484,7 @@ function syncGalleryBarSearchVisibility() {
   const committedQuery = String(state.view?.query || '').trim();
   const selectedArtist = String(state.view?.selected_artist || '').trim();
   bar.hidden = selectedArtist
-    ? draftQuery !== committedQuery
+    ? Boolean(draftQuery) && draftQuery !== committedQuery
     : Boolean(draftQuery || committedQuery);
 }
 

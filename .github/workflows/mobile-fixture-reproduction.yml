@@ -34,15 +34,15 @@ jobs:
           if actual != expected:
               raise RuntimeError('Fixture checkout is not the requested immutable version')
           public_pem = b'''-----BEGIN PUBLIC KEY-----
-          MIIBojANBgkqhkiG9w0BAQEFAAOCAY8AMIIBigKCAYEAqkGd0bsimBEcR4caJ72Z
-          w2mHDcGbyu0fY3/WyKt83HfUmnnJvWvjcgx4Xzt0v3dwL2M7AK7hYh58/l8Vg1XV
-          5LOgGZyXu41w4cdTYOwN5lPc6DcVRQJiCIE5jS7ks7ASYFASEVncNkPt9Ah9Hw+h
-          eMurUUJqdvrcGmSmT4kw+LWOtmPX0qMsQHpI6OkdpUNWE3fjX81ilaXc86xyUbmd
-          1fdLyedROUQz96X5MtbQrbv1NlsChXTgxx+ER0jS9cYSIBIHRQbvpgoH+MaATiCe
-          xdid4o4Mjn6NxB7T4QiTLldJES4SY4NpIOm/EKvQERabflALldjUxxkCLqv7+fhe
-          27LbCXBxZvDr0Z+uzQu9qudfr/J7/93TCPL39748URfJEObN+ZO+6U9KXQFa7VhT
-          q7xmpoekOm4mE1/Alw/Jf0Pmf08y0FMK1XzUAXcNpvVMfLpaKVCFysTxqhh3jHzl
-          i0zdf/Ns9UrRKJLUUQmz4nkRn6yvN3YjGgedxLT9O5yrAgMBAAE=
+          MIIBojANBgkqhkiG9w0BAQEFAAOCAY8AMIIBigKCAYEAxUF2Rv0t4KqYXx1g0YOX
+          i0GCl/pB1D6ijHGjTa1A78onbMSQiTgf/G+NjrycGu+wDT9fvvsgc+UoEBkbqITK
+          5OsgJxyPRPnp82dV0GFrbZsd8yfV2QJc7f/0HMu5jHl5UJXbEpN3699DyWKpOHaN
+          3rhY9n99yN6UDVHSQVTIcvwo+hq9KbCsEHZ+T58HARORc7L1MBg0CNkxYtRWlk6d
+          vcA63pb88126NcOdoy2cXyDfiWojELxKkpnph/1pPIn+hIBjG5QgXwQT9/PkUnG9
+          BXWJyB11C5BIP2xEaBVDwzmwXxuPc0NZHCjmfnCFIEAeSGgglcd1i3bxwrfQUhIq
+          xLv52we1OeMX/yQNSuljz3DX9N81mHPcLGuttXbGFNIOO7BSNteultk665uXgT8T
+          98+C42Hkkx6iMQlTkJS+cGkmS3IGiyIV7Yfbv1PBo5NRixBzn55mz62Zsdjed0mu
+          CeNaNlD4UIWDnpFK2pBt0kayIEk85IEgMtx+T5sE+98xAgMBAAE=
           -----END PUBLIC KEY-----'''
           public_key = serialization.load_pem_public_key(public_pem)
           data = subprocess.check_output(['git', '-C', 'private-source', 'archive', '--format=tar', 'HEAD'])

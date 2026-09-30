@@ -509,7 +509,7 @@
   color: var(--muted);
   font-size: 0.72rem;
 }
-.cover-lookup-art-source {
+.cover-lookup-art-source-row {
   color: var(--muted);
   font-size: 0.69rem;
   text-transform: uppercase;

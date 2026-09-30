@@ -535,12 +535,12 @@ function buildCaaGlyph() {
 
 function getRemoteCoverSourceLabel(source, fallback = '') {
   return ({
-    apple: 'Apple',
-    spotify: 'Spotify',
+    apple: 'Apple Music',
+    spotify: 'SPOTIFY',
     deezer: 'Deezer',
     bandcamp: 'Bandcamp',
     discogs: 'Discogs',
-    cover_art_archive: 'CAA',
+    cover_art_archive: 'Cover Art Archive',
     youtube_music: 'YouTube Music',
   })[String(source || '').trim().toLowerCase()] || String(fallback || source || '').trim();
 }
@@ -1224,7 +1224,9 @@ function renderCoverLookupDrawer({ preserveInteraction = true } = {}) {
     const status = String(task?.status || '');
     const isCompleted = isCompletedCoverLookupTask(task);
     const isNoResult = status === 'completed' && String(task?.result_kind || '') === 'no-results';
-    const foundCount = Array.isArray(task?.possible_matches) ? task.possible_matches.length : 0;
+    const foundCount = Array.isArray(task?.possible_matches)
+      ? task.possible_matches.filter(item => String(item?.art_kind || 'cover') === 'cover').length
+      : 0;
     const statusLabel = status === 'failed'
       ? 'Lookup failed'
       : status === 'canceled'
@@ -1480,7 +1482,7 @@ function buildCoverLookupCard(item, kind = 'local') {
         <span class="cover-lookup-art-meta">
           <span class="cover-lookup-art-name">${escapeHtml(item.relative_path || item.filename || item.album || (isPastedKind ? 'Pasted image' : 'Cover art'))}</span>
           <span class="cover-lookup-art-resolution">${escapeHtml(resolution)}</span>
-          ${isRemoteKind ? `<span class="cover-lookup-art-source">${sourceBadge}<span>${escapeHtml(remoteSourceLabel)}</span></span>` : ''}
+          ${isRemoteKind ? `<span class="cover-lookup-art-source-row">${sourceBadge}<span class="cover-lookup-art-source">${escapeHtml(remoteSourceLabel)}</span></span>` : ''}
           ${isOtherRemoteArt ? '' : `<span class="cover-lookup-art-action-label">${actionLabel}</span>`}
         </span>
       </div>

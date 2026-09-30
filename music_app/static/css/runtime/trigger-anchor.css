@@ -39,29 +39,30 @@
 #utility-modal .utility-tab.is-active {
   --trigger-anchor-border-fill: linear-gradient(var(--trigger-anchor-direction, to bottom),
     var(--trigger-anchor-cap) 0%,
-    color-mix(in srgb, var(--trigger-anchor-cap) 85%, var(--trigger-anchor-accent)) 20%,
-    color-mix(in srgb, var(--trigger-anchor-cap) 50%, var(--trigger-anchor-accent)) 45%,
-    color-mix(in srgb, var(--trigger-anchor-cap) 15%, var(--trigger-anchor-accent)) 70%,
-    var(--trigger-anchor-accent) 100%);
+    color-mix(in srgb, var(--trigger-anchor-cap) 85%, var(--trigger-anchor-accent)) calc((100% - var(--trigger-anchor-extension, 0px)) * 0.2),
+    color-mix(in srgb, var(--trigger-anchor-cap) 50%, var(--trigger-anchor-accent)) calc((100% - var(--trigger-anchor-extension, 0px)) * 0.45),
+    color-mix(in srgb, var(--trigger-anchor-cap) 15%, var(--trigger-anchor-accent)) calc((100% - var(--trigger-anchor-extension, 0px)) * 0.7),
+    var(--trigger-anchor-accent) calc(100% - var(--trigger-anchor-extension, 0px)));
 }
 :root .trigger-anchor-surface,
 .utility-modal-header {
-  --trigger-anchor-line-left: linear-gradient(to left, var(--trigger-anchor-accent), color-mix(in srgb, var(--trigger-anchor-accent) 65%, var(--border)) 25%, color-mix(in srgb, var(--trigger-anchor-accent) 20%, var(--border)) 65%, var(--border) 100%);
-  --trigger-anchor-line-right: linear-gradient(to right, var(--trigger-anchor-accent), color-mix(in srgb, var(--trigger-anchor-accent) 65%, var(--border)) 25%, color-mix(in srgb, var(--trigger-anchor-accent) 20%, var(--border)) 65%, var(--border) 100%);
+  --trigger-anchor-line-left: linear-gradient(to left, var(--trigger-anchor-accent) 0 5px, color-mix(in srgb, var(--trigger-anchor-accent) 65%, var(--border)) 25%, color-mix(in srgb, var(--trigger-anchor-accent) 20%, var(--border)) 65%, var(--border) 100%);
+  --trigger-anchor-line-right: linear-gradient(to right, var(--trigger-anchor-accent) 0 5px, color-mix(in srgb, var(--trigger-anchor-accent) 65%, var(--border)) 25%, color-mix(in srgb, var(--trigger-anchor-accent) 20%, var(--border)) 65%, var(--border) 100%);
 }
 :root .trigger-anchor-open {
   --trigger-anchor-cap: var(--trigger-anchor-accent);
+  --trigger-anchor-extension: calc(var(--trigger-anchor-gap, 0px) + 2px);
   transition: --trigger-anchor-cap 220ms ease;
   position: relative;
+  /* Joined controls paint above the shared menu layer (105), including its shadow. */
+  z-index: 106;
   border: 2px solid transparent !important;
   --trigger-anchor-direction: to bottom;
   border-bottom: 0 !important;
   border-radius: 8px 8px 0 0 !important;
   outline: none !important;
   box-shadow: none !important;
-  background:
-    linear-gradient(var(--trigger-anchor-background), var(--trigger-anchor-background)) padding-box,
-    var(--trigger-anchor-border-fill) border-box !important;
+  background: linear-gradient(var(--trigger-anchor-background), var(--trigger-anchor-background)) padding-box !important;
   color: var(--text, var(--appearance-ink)) !important;
 }
 :root .trigger-anchor-surface {
@@ -98,15 +99,30 @@
 @media (prefers-reduced-motion: reduce) {
   :root .trigger-anchor-surface { animation: none; transition: none; }
 }
-/* Keep the bridge outside scrollable menu contents. */
+/* One outline spans the trigger and gap: separately rasterized borders can
+   step at fractional device pixels. Keep the join outside scrollable contents. */
 :root .trigger-anchor-surface::before { display: none; }
 :root .trigger-anchor-open::after {
-  content: ''; position: absolute; left: -2px; right: -2px; top: calc(100% - 3px);
-  height: calc(var(--trigger-anchor-gap, 0px) + 3px);
-  border-inline: 2px solid var(--trigger-anchor-accent); box-sizing: border-box;
-  background: var(--trigger-anchor-background); pointer-events: none;
+  content: ''; position: absolute; left: -2px; right: -2px; top: -2px;
+  bottom: calc(-1 * var(--trigger-anchor-gap, 0px) - 2px);
+  border: 0; border-radius: inherit; z-index: -2; pointer-events: none;
+  background: var(--trigger-anchor-border-fill);
 }
-:root .trigger-anchor-open[data-trigger-anchor-edge="bottom"]::after { top: auto; bottom: calc(100% - 3px); }
+:root .trigger-anchor-open::before {
+  /* The opaque interior extends past the outline's open end. Separate image
+     clips at the same fractional pixel would otherwise leave a colored seam. */
+  content: ''; position: absolute; left: 0; right: 0; top: 0;
+  bottom: calc(-1 * var(--trigger-anchor-gap, 0px) - 4px);
+  border: 0; border-radius: 6px 6px 0 0; z-index: -1; pointer-events: none;
+  background: var(--trigger-anchor-background);
+}
+:root .trigger-anchor-open[data-trigger-anchor-edge="bottom"]::after {
+  top: calc(-1 * var(--trigger-anchor-gap, 0px) - 2px); bottom: -2px;
+}
+:root .trigger-anchor-open[data-trigger-anchor-edge="bottom"]::before {
+  top: calc(-1 * var(--trigger-anchor-gap, 0px) - 4px); bottom: 0;
+  border-radius: 0 0 6px 6px;
+}
 :root .trigger-anchor-surface { border-color: var(--border); }
 
 /* A popup's shadow must not darken the connected button or their shared join.
@@ -152,10 +168,10 @@
 /* Share the gallery divider's pixel row and thickness. */
 :root .artist-family-panel.trigger-anchor-surface {
   /* The button owns the bridge; do not expose the panel shadow above its edge. */
-  clip-path: inset(-2px -2px 100% -2px);
+  clip-path: inset(-1px 0 100% 0);
 }
 :root .artist-family-panel.trigger-anchor-surface.is-open {
-  clip-path: inset(-2px -2px 0 -2px);
+  clip-path: inset(-1px 0 0 0);
 }
 :root .artist-family-panel.trigger-anchor-surface::after {
   top: -1px;
@@ -201,6 +217,10 @@
   text-decoration: none;
   outline: 2px solid currentColor !important;
   outline-offset: -2px;
+}
+/* Ordinary switch rows keep their track-only hover treatment. */
+:root .gallery-switch:not(.artist-family-panel__combine-row .gallery-switch):hover:not(:disabled):not([aria-disabled="true"]) {
+  background: transparent !important;
 }
 :root .artist-family-panel__combine-row .gallery-switch:active:not(:disabled):not([aria-disabled="true"]) {
   background: var(--dropdown-item-hover-background, color-mix(in srgb, var(--text, #eee) 8%, var(--panel, #171717))) !important;

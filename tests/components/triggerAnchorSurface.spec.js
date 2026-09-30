@@ -3,6 +3,7 @@ const path = require('path');
 const fs = require('node:fs');
 const { renderActionButton } = require('../../music_app/static/js/button-component.js');
 const { applyFixtureAppearance } = require('./appearanceFixture.js');
+const { assertMobileRowMenuContinuity } = require('./triggerAnchorSeamFixture.js');
 
 const repositoryRoot = path.resolve(__dirname, '../..');
 const componentUrl = 'http://trigger-anchor-surface.test/';
@@ -56,7 +57,7 @@ async function mountVisualAnchor(page, name) {
   }
 }
 
-test('open anchors resynchronize after native nested scroll and resize, then clear geometry on close and reopen', async ({ page }) => {
+ test('open anchors resynchronize after native nested scroll and resize, then clear geometry on close and reopen', async ({ page }) => {
   await page.setViewportSize({ width: 900, height: 700 });
   await page.setContent(`<!doctype html><html><body>
     <div id="scroll-owner" class="shell-main-surface"><div id="scroll-content">
@@ -136,7 +137,7 @@ test('open anchors resynchronize after native nested scroll and resize, then cle
   await expect.poll(async () => (await geometry()).synchronized).toBe(true);
 });
 
-test('Artist Family opening keeps its top shadow clip stationary', async ({ page }) => {
+ test('Artist Family opening keeps its top shadow clip stationary', async ({ page }) => {
   await page.setContent(`<style>
     :root { --panel: white; --border: #526173; --player-height: 0px; }
     #anchor { position: fixed; right: 12px; top: 30px; width: 34px; height: 34px; }
@@ -189,7 +190,7 @@ test('Artist Family opening keeps its top shadow clip stationary', async ({ page
   }
 });
 
-test('a dropdown extending both sides has mirrored left and right joins', async ({ page }) => {
+ test('a dropdown extending both sides has mirrored left and right joins', async ({ page, browser }) => {
   await page.setContent(`<style>
     :root { --panel: white; --border: black; --appearance-selected-accent: black; }
     #anchor { position:absolute;left:153px;top:40px;width:34px;height:34px; }
@@ -219,6 +220,7 @@ test('a dropdown extending both sides has mirrored left and right joins', async 
     return { left, right };
   }, screenshot.toString('base64'));
   expect(corners.right).toEqual(corners.left);
+  await assertMobileRowMenuContinuity(browser);
 });
 
 const cases = [

@@ -81,10 +81,6 @@
 :root .trigger-anchor-surface[data-trigger-anchor-search="true"] {
   box-shadow: none;
 }
-.search-field-action > .search-field-button.trigger-anchor-open::after {
-  /* Overlap the menu by one pixel so fractional field edges cannot leak through. */
-  height: calc(var(--trigger-anchor-gap, 0px) + 4px);
-}
 .recent-search-popover { position: fixed; z-index: 105; }
 
 :root .search-field-control:has(input[aria-expanded="true"]) {

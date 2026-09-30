@@ -3,6 +3,10 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const vm = require('node:vm');
 const path = require('node:path');
+function classList() {
+  const names = new Set();
+  return { add: name => names.add(name), remove: name => names.delete(name), contains: name => names.has(name) };
+}
 const context = vm.createContext({});
 vm.runInContext(fs.readFileSync(path.join(__dirname, '../../../music_app/static/js/runtime/trigger-anchor.js'), 'utf8'), context);
 test('connector follows the actual trigger position within a clamped popup', () => {
@@ -19,7 +23,7 @@ test('upward dropdown joins its bottom edge to the trigger', () => {
 });
 
 test('anchored surfaces retain the trigger content context after being portaled', () => {
-  const classes = { add() {}, remove() {} };
+  const classes = classList();
   const surface = {
     hidden: false,
     dataset: {},
@@ -91,7 +95,7 @@ test('connector tracks sibling-driven trigger movement during expansion and stop
   vm.runInContext(fs.readFileSync(path.join(__dirname, '../../../music_app/static/js/runtime/trigger-anchor.js'), 'utf8'), local);
   const props = new Map();
   let left = 250;
-  const classes = () => ({ add() {}, remove() {} });
+  const classes = classList;
   const anchor = { parentElement: {}, dataset: {}, classList: classes(), style: { setProperty() {} }, getBoundingClientRect: () => ({ left, right: left + 34, top: 10, bottom: 44, width: 34 }) };
   const surface = { hidden: false, dataset: {}, classList: classes(), style: { setProperty: (key, value) => props.set(key, value) }, getBoundingClientRect: () => ({ left: 0, right: 400, top: 54, bottom: 250 }) };
   local.syncTriggerAnchor(surface, anchor);

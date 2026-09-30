@@ -1009,7 +1009,7 @@ test('FTC-NON-ALBUM-010 / FTC-NON-ALBUM-009 / FTC-NON-ALBUM-008 / FTC-NON-ALBUM-
     await tagEditorActions.waitForOpen({ expectedTrackCount: 1 });
     await tagEditorActions.selectTrackByFilename(RARITY_TRACK_FILENAME);
     await tagEditorActions.clearException();
-    await tagEditorActions.applyAndWaitForSavedFiles();
+    await tagEditorActions.applyAndWaitForSavedFiles({ savedNotificationDelivery: 'status-page' });
   });
 });
 

@@ -367,8 +367,8 @@ test('approved test-data matrix records every discovered case', () => {
   });
 
   assert.deepEqual(errors, []);
-  assert.equal(matrix.length, 333);
-  assert.equal(new Set(matrix.map(caseIdentity)).size, 333);
+  assert.equal(matrix.length, 334);
+  assert.equal(new Set(matrix.map(caseIdentity)).size, 334);
   assert.equal(matrix.every((entry) => entry.ownerApproval === 'approved'), true);
 });
 

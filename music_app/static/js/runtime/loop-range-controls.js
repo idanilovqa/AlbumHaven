@@ -93,9 +93,10 @@ function mountLoopEditActionControl({
     if (next.reset || contextChanged || !currentCanCreate || (wasActive && !currentActive)) {
       clearTimers();
       renderEngagement(retained() && currentCanCreate);
-      // A context reset must not require leaving and re-entering Play to reveal its actions.
+      // Same-song resets may recover a current hover; a new song must not inherit
+      // the previous song's pending reveal gesture.
       pointerWithin = pointerWithin || Boolean(compound.matches?.(':hover'));
-      if (pointerWithin && currentCanCreate) visit();
+      if (!contextChanged && pointerWithin && currentCanCreate) visit();
     } else if ((!wasActive && currentActive) || (!wasAllowed && currentCanCreate)) {
       pointerWithin = pointerWithin || Boolean(compound.matches?.(':hover'));
       focusWithin = focusWithin || Boolean(ownerDocument?.activeElement && compound.contains?.(ownerDocument.activeElement));

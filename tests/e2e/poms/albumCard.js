@@ -135,10 +135,30 @@ export class AlbumCard extends BasePage {
     return this.cardsByArtistAndAlbum(artistName, albumName).first();
   }
 
+  sectionByArtistHeading(artistHeading) {
+    const normalizedHeading = exactNormalizedText(artistHeading);
+    const explicitSection = this.page.locator('#artist-groups .artist-section').filter({
+      has: this.page.locator('.artist-name').filter({
+        hasText: normalizedHeading,
+      }),
+    });
+    const singleArtistContext = this.page.locator(
+      '[data-gallery-bar][data-gallery-context-kind="single-artist"]',
+    ).filter({
+      has: this.page.locator('[data-gallery-context-name]').filter({
+        hasText: normalizedHeading,
+      }),
+    });
+    const singleArtistSection = singleArtistContext
+      .locator('xpath=following::*[@id="artist-groups"][1]')
+      .locator('.artist-section')
+      .first();
+    return explicitSection.or(singleArtistSection).first();
+  }
+
   cardsByArtistAndAlbum(artistName, albumName, options = {}) {
-    return this.page.locator('#artist-groups .artist-section').filter({
-      has: this.page.locator('.artist-name').filter({ hasText: exactNormalizedText(artistName) }),
-    }).first().locator(options.visible ? '.album-card:visible' : '.album-card').filter({
+    return this.sectionByArtistHeading(artistName)
+      .locator(options.visible ? '.album-card:visible' : '.album-card').filter({
       has: this.page.locator(this.titleButtonSelector).filter({ hasText: exactNormalizedText(albumName) }),
     });
   }

@@ -248,24 +248,7 @@ export class GalleryPage extends BasePage {
   }
 
   sectionByArtistHeading(artistHeading) {
-    const normalizedHeading = exactNormalizedText(artistHeading);
-    const explicitSection = this.page.locator(this.artistSectionSelector).filter({
-      has: this.page.locator(this.artistHeadingWithinSectionSelector).filter({
-        hasText: normalizedHeading,
-      }),
-    });
-    const singleArtistContext = this.page.locator(
-      '[data-gallery-bar][data-gallery-context-kind="single-artist"]',
-    ).filter({
-      has: this.page.locator('[data-gallery-context-name]').filter({
-        hasText: normalizedHeading,
-      }),
-    });
-    const singleArtistSection = singleArtistContext
-      .locator('xpath=following::*[@id="artist-groups"][1]')
-      .locator('.artist-section')
-      .first();
-    return explicitSection.or(singleArtistSection).first();
+    return this.albumCard.sectionByArtistHeading(artistHeading);
   }
 
   headingByArtistName(artistName) {

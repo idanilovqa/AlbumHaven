@@ -222,10 +222,22 @@ function getGalleryMainContextSections() {
   const sections = typeof virtualGrid !== 'undefined' && Array.isArray(virtualGrid?.sections)
     ? virtualGrid.sections
     : [];
+  const scroll = document.getElementById('albums-scroll');
+  const labelBottoms = new Map();
+  if (scroll) {
+    const viewportTop = scroll.getBoundingClientRect().top;
+    document.querySelectorAll('[data-scroll-artist]').forEach(section => {
+      const label = section.querySelector('.artist-name');
+      if (label) labelBottoms.set(String(section.dataset.scrollArtist || '').trim(),
+        label.getBoundingClientRect().bottom - viewportTop + scroll.scrollTop);
+    });
+  }
   return sections.filter((section) => section?.kind === 'artist' || section?.group).map((section) => ({
     artist: galleryMainGroupArtist(section.group),
     albumCount: Array.isArray(section.group?.albums) ? section.group.albums.length : 0,
     top: Number(section.top || 0),
+    labelBottom: labelBottoms.get(galleryMainGroupArtist(section.group))
+      ?? Number(section.top || 0) + Number(virtualGrid?.sectionHeaderHeight || 0),
   })).filter((section) => section.artist);
 }
 
@@ -259,14 +271,14 @@ function syncGalleryMainStateFromView(previousView = {}, nextView = {}) {
   state.gallery.mainState = mainState;
 }
 
-function syncGalleryMainStateFromLocation() {
-  const url = new URL(window.location.href);
+function syncGalleryMainStateFromLocation(viewUrl) {
+  const url = new URL(viewUrl || window.location.href, window.location.href);
   const categories = url.searchParams.getAll('category');
   const visible = new Set(categories.length ? categories : ['main_library', 'new_arrivals', 'hoard']);
   const mainState = ensureGalleryMainState();
   mainState.sources = { main_library: visible.has('main_library'), new_arrivals: visible.has('new_arrivals'), hoard: visible.has('hoard') };
   mainState.view = normalizeGalleryView(url.searchParams.get('gallery_display')
-    || state.gallery.displayPreferences?.defaultGalleryDisplayMode || 'cards');
+    || (viewUrl ? 'cards' : state.gallery.displayPreferences?.defaultGalleryDisplayMode) || 'cards');
   const savedSources = window.AlbumHavenDevicePreferences?.read('gallerySources', null);
   if (!categories.length && savedSources) mainState.sources = { ...mainState.sources, ...savedSources };
   syncGalleryFamilySelection(mainState, {
@@ -426,7 +438,8 @@ function updateGalleryMainControls() {
     const checked = Boolean(preferenceArtist)
       && typeof getCombineSimilarArtistsPreference === 'function'
       && getCombineSimilarArtistsPreference(preferenceArtist);
-    button.setAttribute('aria-checked', checked ? 'true' : 'false');
+    const ariaChecked = checked ? 'true' : 'false';
+    if (button.getAttribute('aria-checked') !== ariaChecked) button.setAttribute('aria-checked', ariaChecked);
     button.disabled = !preferenceArtist;
   });
   document.querySelectorAll('[data-open-non-album-tracks]').forEach((button) => {
@@ -541,7 +554,6 @@ function updateGalleryMainChrome() {
   const summaryTotals = resolveGallerySummaryTotals(state.view, model.totals, state.gallery.mainState, model.groups);
   const context = resolveGalleryBarContext({
     scrollTop: scroll.scrollTop,
-    galleryBarBottom: bar.offsetHeight + 12,
     primaryArtist,
     artistCount: summaryTotals.artistCount,
     albumCount: summaryTotals.albumCount,
@@ -591,11 +603,15 @@ function updateGalleryMainChrome() {
   }
   const panelTitle = document.querySelector('[data-gallery-family-panel-title]');
   if (panelTitle) {
-    panelTitle.textContent = primaryArtist ? `${primaryArtist} Family` : 'Artist Family';
-    panelTitle.title = panelTitle.textContent;
+    const title = primaryArtist ? `${primaryArtist} Family` : 'Artist Family';
+    if (panelTitle.textContent !== title) panelTitle.textContent = title;
+    if (panelTitle.title !== title) panelTitle.title = title;
   }
   const panelTotal = document.querySelector('[data-gallery-family-panel-total]');
-  if (panelTotal) panelTotal.textContent = galleryMainPlural(getGalleryFamilyPanelModel().totals.albumCount, 'album');
+  if (panelTotal) {
+    const total = galleryMainPlural(getGalleryFamilyPanelModel().totals.albumCount, 'album');
+    if (panelTotal.textContent !== total) panelTotal.textContent = total;
+  }
   const panel = document.querySelector('[data-artist-family-panel]');
   if (panel) {
     panel.style.top = `${Math.round(bar.getBoundingClientRect().bottom)}px`;

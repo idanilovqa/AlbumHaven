@@ -141,9 +141,13 @@ class GalleryCoverLoadScheduler {
       if (
         task.cancelled
         || !task.consumerOwned
-        || task.generation === currentGeneration
-        || task.pendingGenerationValidation !== currentGeneration
+        || (task.generation !== currentGeneration && task.pendingGenerationValidation !== currentGeneration)
       ) return;
+      const sameGeneration = task.generation === currentGeneration;
+      const hasDetachedConsumer = [task.imageRequests, task.drainingImageRequests]
+        .some(requests => requests.some(request => !this.requestHasConnectedConsumer(request)))
+        || task.suspendedImages.some(image => image?.isConnected === false);
+      if (sameGeneration && !hasDetachedConsumer) return;
       [task.imageRequests, task.drainingImageRequests].forEach((requests) => {
         const connected = requests.filter((request) => this.requestHasConnectedConsumer(request));
         requests
@@ -163,6 +167,8 @@ class GalleryCoverLoadScheduler {
         task.pendingGenerationValidation = 0;
         return;
       }
+      // Viewport detachment does not retire an independent cache-persistence owner.
+      if (sameGeneration && (task.durabilityRequested || task.startedAsBackground)) return;
       if (task.started) {
         this.cache.recordInFlightPreemption?.(
           task.productionUrl,

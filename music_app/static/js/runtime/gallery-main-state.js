@@ -198,8 +198,8 @@ function resolveGalleryBarContext(config = {}) {
   if (Number(config.scrollTop || 0) <= 12) {
     return summaryContext;
   }
-  const threshold = Number(config.scrollTop || 0) + Number(config.galleryBarBottom || 0);
-  const current = (config.groups || []).filter((group) => Number(group.top || 0) <= threshold).at(-1);
+  const threshold = Number(config.scrollTop || 0);
+  const current = (config.groups || []).filter((group) => Number(group.labelBottom ?? group.top ?? 0) <= threshold).at(-1);
   return current
     ? { kind: 'artist', artist: current.artist, albumCount: current.albumCount }
     : summaryContext;

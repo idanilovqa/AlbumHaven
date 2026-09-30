@@ -500,9 +500,11 @@ function renderSidebar() {
     if (activeLink instanceof HTMLElement) {
       const scrollContainer = el.closest('.sidebar');
       if (!(scrollContainer instanceof HTMLElement)) return;
+      const activeRect = activeLink.getBoundingClientRect();
+      // Folded trees have zero-size rows; keep the reveal for their visible layout.
+      if (el.hidden || !(activeRect.width > 0) || !(activeRect.height > 0)) return;
       const pendingRevealArtist = String(state.ui.pendingSidebarRevealArtist || '');
-      if (pendingRevealArtist && pendingRevealArtist === String(v.selected_artist || '')) {
-        const activeRect = activeLink.getBoundingClientRect();
+      if (pendingRevealArtist && pendingRevealArtist === String(state.view.selected_artist || '')) {
         const containerRect = scrollContainer.getBoundingClientRect();
         const player = document.querySelector('.global-player');
         const playerRect = player instanceof HTMLElement ? player.getBoundingClientRect() : null;
@@ -524,7 +526,6 @@ function renderSidebar() {
         state.ui.pendingSidebarRevealArtist = '';
         return;
       }
-      const activeRect = activeLink.getBoundingClientRect();
       const containerRect = scrollContainer.getBoundingClientRect();
       const player = document.querySelector('.global-player');
       const playerRect = player instanceof HTMLElement ? player.getBoundingClientRect() : null;

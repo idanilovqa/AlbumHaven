@@ -49,7 +49,7 @@ test('shared search owns one external interaction outline with no outlined child
   );
   assert.match(
     appearanceCss,
-    /:not\(\.navigation-tree-item\):not\(\.search-field-button\):not\(\.cover-lookup-task-open\):not\(\.global-player \*\):hover[^\{]*\{[^}]*outline:/,
+    /:not\(\.navigation-tree-item\):not\(\.search-field-button\):not\(\.cover-lookup-task-open\):not\(\.global-player \*\):hover[^\{]*\{[^}]*border-color:\s*var\(--appearance-item-action-hover-border,\s*var\(--appearance-line\)\)/,
   );
 });
 

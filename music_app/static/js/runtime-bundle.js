@@ -4200,8 +4200,8 @@ function resolveGalleryBarContext(config = {}) {
   if (Number(config.scrollTop || 0) <= 12) {
     return summaryContext;
   }
-  const threshold = Number(config.scrollTop || 0) + Number(config.galleryBarBottom || 0);
-  const current = (config.groups || []).filter((group) => Number(group.top || 0) <= threshold).at(-1);
+  const threshold = Number(config.scrollTop || 0);
+  const current = (config.groups || []).filter((group) => Number(group.labelBottom ?? group.top ?? 0) <= threshold).at(-1);
   return current
     ? { kind: 'artist', artist: current.artist, albumCount: current.albumCount }
     : summaryContext;
@@ -5010,9 +5010,11 @@ function renderSidebar() {
     if (activeLink instanceof HTMLElement) {
       const scrollContainer = el.closest('.sidebar');
       if (!(scrollContainer instanceof HTMLElement)) return;
+      const activeRect = activeLink.getBoundingClientRect();
+      // Folded trees have zero-size rows; keep the reveal for their visible layout.
+      if (el.hidden || !(activeRect.width > 0) || !(activeRect.height > 0)) return;
       const pendingRevealArtist = String(state.ui.pendingSidebarRevealArtist || '');
-      if (pendingRevealArtist && pendingRevealArtist === String(v.selected_artist || '')) {
-        const activeRect = activeLink.getBoundingClientRect();
+      if (pendingRevealArtist && pendingRevealArtist === String(state.view.selected_artist || '')) {
         const containerRect = scrollContainer.getBoundingClientRect();
         const player = document.querySelector('.global-player');
         const playerRect = player instanceof HTMLElement ? player.getBoundingClientRect() : null;
@@ -5034,7 +5036,6 @@ function renderSidebar() {
         state.ui.pendingSidebarRevealArtist = '';
         return;
       }
-      const activeRect = activeLink.getBoundingClientRect();
       const containerRect = scrollContainer.getBoundingClientRect();
       const player = document.querySelector('.global-player');
       const playerRect = player instanceof HTMLElement ? player.getBoundingClientRect() : null;
@@ -5544,21 +5545,24 @@ globalThis.document?.addEventListener?.('album-haven:surface-opening', event => 
 });
 
 // The existing surface/modal owners remain authoritative. This adapter only
-// reserves the outside gesture before any target or document handler sees it.
+// reserves a real backdrop gesture before any target or document handler sees it.
 function getDismissibleForegroundSurface() {
   const modal = typeof getTopmostOpenModal === 'function' ? getTopmostOpenModal() : null;
+  const isBackdrop = target => Boolean(modal && target === modal)
+    || Boolean(target?.matches?.('#shell-navigation-rail-backdrop, .settings-nav-backdrop, .mobile-artist-info-backdrop')
+      && !target.hidden && target.getClientRects().length);
   const owner = activeTriggerSurface;
   const anchor = owner && (triggerAnchorBindings.get(owner.surface)?.anchor || owner.anchor);
   if (owner && !owner.surface.hidden && (!modal || modal === owner.surface
       || modal.contains(owner.surface) || (anchor && modal.contains(anchor)))) {
-    return { surface: owner.surface, anchor, dismiss() {
+    return { surface: owner.surface, anchor, isBackdrop, dismiss() {
       if (activeTriggerSurface !== owner) return;
       owner.close();
       if (anchor?.isConnected) anchor.focus?.({ preventScroll: true });
     } };
   }
   if (!modal) return null;
-  return { surface: modal, contains: target => target !== modal && modal.contains(target), dismiss() {
+  return { surface: modal, isBackdrop, contains: target => target !== modal && modal.contains(target), dismiss() {
     if (getTopmostOpenModal() === modal) dismissForegroundModal(modal);
   } };
 }
@@ -5822,10 +5826,22 @@ function getGalleryMainContextSections() {
   const sections = typeof virtualGrid !== 'undefined' && Array.isArray(virtualGrid?.sections)
     ? virtualGrid.sections
     : [];
+  const scroll = document.getElementById('albums-scroll');
+  const labelBottoms = new Map();
+  if (scroll) {
+    const viewportTop = scroll.getBoundingClientRect().top;
+    document.querySelectorAll('[data-scroll-artist]').forEach(section => {
+      const label = section.querySelector('.artist-name');
+      if (label) labelBottoms.set(String(section.dataset.scrollArtist || '').trim(),
+        label.getBoundingClientRect().bottom - viewportTop + scroll.scrollTop);
+    });
+  }
   return sections.filter((section) => section?.kind === 'artist' || section?.group).map((section) => ({
     artist: galleryMainGroupArtist(section.group),
     albumCount: Array.isArray(section.group?.albums) ? section.group.albums.length : 0,
     top: Number(section.top || 0),
+    labelBottom: labelBottoms.get(galleryMainGroupArtist(section.group))
+      ?? Number(section.top || 0) + Number(virtualGrid?.sectionHeaderHeight || 0),
   })).filter((section) => section.artist);
 }
 
@@ -5859,14 +5875,14 @@ function syncGalleryMainStateFromView(previousView = {}, nextView = {}) {
   state.gallery.mainState = mainState;
 }
 
-function syncGalleryMainStateFromLocation() {
-  const url = new URL(window.location.href);
+function syncGalleryMainStateFromLocation(viewUrl) {
+  const url = new URL(viewUrl || window.location.href, window.location.href);
   const categories = url.searchParams.getAll('category');
   const visible = new Set(categories.length ? categories : ['main_library', 'new_arrivals', 'hoard']);
   const mainState = ensureGalleryMainState();
   mainState.sources = { main_library: visible.has('main_library'), new_arrivals: visible.has('new_arrivals'), hoard: visible.has('hoard') };
   mainState.view = normalizeGalleryView(url.searchParams.get('gallery_display')
-    || state.gallery.displayPreferences?.defaultGalleryDisplayMode || 'cards');
+    || (viewUrl ? 'cards' : state.gallery.displayPreferences?.defaultGalleryDisplayMode) || 'cards');
   const savedSources = window.AlbumHavenDevicePreferences?.read('gallerySources', null);
   if (!categories.length && savedSources) mainState.sources = { ...mainState.sources, ...savedSources };
   syncGalleryFamilySelection(mainState, {
@@ -6026,7 +6042,8 @@ function updateGalleryMainControls() {
     const checked = Boolean(preferenceArtist)
       && typeof getCombineSimilarArtistsPreference === 'function'
       && getCombineSimilarArtistsPreference(preferenceArtist);
-    button.setAttribute('aria-checked', checked ? 'true' : 'false');
+    const ariaChecked = checked ? 'true' : 'false';
+    if (button.getAttribute('aria-checked') !== ariaChecked) button.setAttribute('aria-checked', ariaChecked);
     button.disabled = !preferenceArtist;
   });
   document.querySelectorAll('[data-open-non-album-tracks]').forEach((button) => {
@@ -6141,7 +6158,6 @@ function updateGalleryMainChrome() {
   const summaryTotals = resolveGallerySummaryTotals(state.view, model.totals, state.gallery.mainState, model.groups);
   const context = resolveGalleryBarContext({
     scrollTop: scroll.scrollTop,
-    galleryBarBottom: bar.offsetHeight + 12,
     primaryArtist,
     artistCount: summaryTotals.artistCount,
     albumCount: summaryTotals.albumCount,
@@ -6191,11 +6207,15 @@ function updateGalleryMainChrome() {
   }
   const panelTitle = document.querySelector('[data-gallery-family-panel-title]');
   if (panelTitle) {
-    panelTitle.textContent = primaryArtist ? `${primaryArtist} Family` : 'Artist Family';
-    panelTitle.title = panelTitle.textContent;
+    const title = primaryArtist ? `${primaryArtist} Family` : 'Artist Family';
+    if (panelTitle.textContent !== title) panelTitle.textContent = title;
+    if (panelTitle.title !== title) panelTitle.title = title;
   }
   const panelTotal = document.querySelector('[data-gallery-family-panel-total]');
-  if (panelTotal) panelTotal.textContent = galleryMainPlural(getGalleryFamilyPanelModel().totals.albumCount, 'album');
+  if (panelTotal) {
+    const total = galleryMainPlural(getGalleryFamilyPanelModel().totals.albumCount, 'album');
+    if (panelTotal.textContent !== total) panelTotal.textContent = total;
+  }
   const panel = document.querySelector('[data-artist-family-panel]');
   if (panel) {
     panel.style.top = `${Math.round(bar.getBoundingClientRect().bottom)}px`;
@@ -8782,6 +8802,7 @@ function toggleArtistTreeFold() {
   const settleArtistTree = () => {
     if (Boolean(state.ui.artistTreeFolded) !== isFolded) return;
     syncArtistTreeFoldVisibility();
+    if (!isFolded && state.ui.pendingSidebarRevealArtist) renderSidebar();
     if (moveFocusWithinRail && !isFolded) button?.focus?.();
   };
   scheduleArtistTreeResizeAfterTransition(settleArtistTree);
@@ -14093,6 +14114,9 @@ function renderView(options = {}) {
   }
   if (options.preserveMountedGallery !== true && !preserveMountedSelectedViewNodes) {
     renderArtistGroups(options);
+  } else if (typeof updateGalleryMainChrome === 'function') {
+    // Retained cards do not imply that search or artist context is unchanged.
+    updateGalleryMainChrome();
   }
   renderLibraryLoader(state.status);
   scheduleSidebarRender();
@@ -18899,7 +18923,13 @@ function renderProblemFilterControls(els) {
 
   if (els.problemFilterMenu) {
     els.problemFilterMenu.hidden = !state.utility.problemDropdownOpen;
-    if (state.utility.problemDropdownOpen && typeof syncTriggerAnchor === 'function') syncTriggerAnchor(els.problemFilterMenu, els.problemFilterButton);
+    if (state.utility.problemDropdownOpen && typeof syncTriggerAnchor === 'function') {
+      if (typeof activateTriggerSurface === 'function') activateTriggerSurface(els.problemFilterMenu, () => {
+        state.utility.problemDropdownOpen = false;
+        renderProblemFilterControls(els);
+      });
+      syncTriggerAnchor(els.problemFilterMenu, els.problemFilterButton);
+    }
     else if (typeof clearTriggerAnchor === 'function') clearTriggerAnchor(els.problemFilterMenu);
     els.problemFilterMenu.innerHTML = reasonTypes.length
       ? reasonTypes.map((reason) => `
@@ -20786,7 +20816,7 @@ function mountAlertsAppearanceEditor(detail) {
     return Math.min(Math.max(value, minimum), maximum);
   }
 
-  function calculateRange({ count, offset, viewport, stride, overscan }) {
+  function calculateRange({ count, offset, viewport, stride = DEFAULT_ROW_STRIDE, overscan = DEFAULT_OVERSCAN }) {
     if (!count) return { start: 0, end: 0 };
     const visibleStart = Math.floor(Math.max(0, offset) / stride);
     const visibleCount = Math.max(1, Math.ceil(Math.max(1, viewport) / stride));
@@ -20810,6 +20840,7 @@ function mountAlertsAppearanceEditor(detail) {
     let selectedKey = '';
     let frame = 0;
     let disposed = false;
+    let spacerGeometry = '';
     const mountedRows = new Map();
     const [before, after] = ['before', 'after'].map((position) => {
       const spacer = list.ownerDocument.createElement('div');
@@ -20848,8 +20879,12 @@ function mountAlertsAppearanceEditor(detail) {
       const visibleItems = items.slice(range.start, range.end);
       const keys = new Set(visibleItems.map((item) => String(item.key)));
       const focused = list.ownerDocument.activeElement;
-      before.style.cssText = `${dimension}:${beforeSize}px`;
-      after.style.cssText = `${dimension}:${afterSize}px`;
+      const nextSpacerGeometry = `${dimension}:${beforeSize}:${afterSize}`;
+      if (spacerGeometry !== nextSpacerGeometry) {
+        before.style.cssText = `${dimension}:${beforeSize}px`;
+        after.style.cssText = `${dimension}:${afterSize}px`;
+        spacerGeometry = nextSpacerGeometry;
+      }
       if (before.parentNode !== list) list.replaceChildren(before, after);
       for (const [key, row] of mountedRows) {
         if (keys.has(key)) continue;
@@ -20874,16 +20909,27 @@ function mountAlertsAppearanceEditor(detail) {
       if (focused && list.contains(focused) && list.ownerDocument.activeElement !== focused) {
         focused.focus({ preventScroll: true });
       }
-      list.dataset.problematicMountedCount = String(range.end - range.start);
-      list.dataset.problematicVirtualStart = String(range.start);
-      list.dataset.problematicVirtualEnd = String(range.end);
-      list.dataset.problematicVirtualAxis = horizontal ? 'horizontal' : 'vertical';
+      const metadata = {
+        problematicMountedCount: String(range.end - range.start),
+        problematicVirtualStart: String(range.start),
+        problematicVirtualEnd: String(range.end),
+        problematicVirtualAxis: horizontal ? 'horizontal' : 'vertical',
+      };
+      for (const [key, value] of Object.entries(metadata)) {
+        if (list.dataset[key] !== value) list.dataset[key] = value;
+      }
     };
 
     const schedule = () => {
       if (disposed || frame) return;
       frame = global.requestAnimationFrame(renderNow);
     };
+
+    // Opening the modal changes this viewport without resizing the window.
+    const resizeObserver = typeof global.ResizeObserver === 'function'
+      ? new global.ResizeObserver(schedule)
+      : null;
+    resizeObserver?.observe(list);
 
     const reveal = (key) => {
       const index = items.findIndex((item) => String(item?.key || '') === String(key || ''));
@@ -20908,7 +20954,10 @@ function mountAlertsAppearanceEditor(detail) {
       items = Array.isArray(nextItems) ? nextItems : [];
       selectedKey = String(nextSelectedKey || '');
       renderNow();
-      if (selectedKey !== previousSelectedKey) reveal(selectedKey);
+      if (selectedKey !== previousSelectedKey) {
+        reveal(selectedKey);
+        renderNow();
+      }
     };
 
     const handleKeydown = (event) => {
@@ -20936,6 +20985,7 @@ function mountAlertsAppearanceEditor(detail) {
       list.removeEventListener('scroll', schedule);
       list.removeEventListener('keydown', handleKeydown);
       global.removeEventListener?.('resize', schedule);
+      resizeObserver?.disconnect();
       if (frame) global.cancelAnimationFrame(frame);
       delete list.dataset.problematicMountedCount;
       delete list.dataset.problematicVirtualStart;
@@ -25785,12 +25835,12 @@ function buildCaaGlyph() {
 
 function getRemoteCoverSourceLabel(source, fallback = '') {
   return ({
-    apple: 'Apple',
-    spotify: 'Spotify',
+    apple: 'Apple Music',
+    spotify: 'SPOTIFY',
     deezer: 'Deezer',
     bandcamp: 'Bandcamp',
     discogs: 'Discogs',
-    cover_art_archive: 'CAA',
+    cover_art_archive: 'Cover Art Archive',
     youtube_music: 'YouTube Music',
   })[String(source || '').trim().toLowerCase()] || String(fallback || source || '').trim();
 }
@@ -26483,7 +26533,9 @@ function renderCoverLookupDrawer({ preserveInteraction = true } = {}) {
     const status = String(task?.status || '');
     const isCompleted = isCompletedCoverLookupTask(task);
     const isNoResult = status === 'completed' && String(task?.result_kind || '') === 'no-results';
-    const foundCount = Array.isArray(task?.possible_matches) ? task.possible_matches.length : 0;
+    const foundCount = Array.isArray(task?.possible_matches)
+      ? task.possible_matches.filter(item => String(item?.art_kind || 'cover') === 'cover').length
+      : 0;
     const statusLabel = status === 'failed'
       ? 'Lookup failed'
       : status === 'canceled'
@@ -26739,7 +26791,7 @@ function buildCoverLookupCard(item, kind = 'local') {
         <span class="cover-lookup-art-meta">
           <span class="cover-lookup-art-name">${escapeHtml(item.relative_path || item.filename || item.album || (isPastedKind ? 'Pasted image' : 'Cover art'))}</span>
           <span class="cover-lookup-art-resolution">${escapeHtml(resolution)}</span>
-          ${isRemoteKind ? `<span class="cover-lookup-art-source">${sourceBadge}<span>${escapeHtml(remoteSourceLabel)}</span></span>` : ''}
+          ${isRemoteKind ? `<span class="cover-lookup-art-source-row">${sourceBadge}<span class="cover-lookup-art-source">${escapeHtml(remoteSourceLabel)}</span></span>` : ''}
           ${isOtherRemoteArt ? '' : `<span class="cover-lookup-art-action-label">${actionLabel}</span>`}
         </span>
       </div>
@@ -31802,9 +31854,13 @@ class GalleryCoverLoadScheduler {
       if (
         task.cancelled
         || !task.consumerOwned
-        || task.generation === currentGeneration
-        || task.pendingGenerationValidation !== currentGeneration
+        || (task.generation !== currentGeneration && task.pendingGenerationValidation !== currentGeneration)
       ) return;
+      const sameGeneration = task.generation === currentGeneration;
+      const hasDetachedConsumer = [task.imageRequests, task.drainingImageRequests]
+        .some(requests => requests.some(request => !this.requestHasConnectedConsumer(request)))
+        || task.suspendedImages.some(image => image?.isConnected === false);
+      if (sameGeneration && !hasDetachedConsumer) return;
       [task.imageRequests, task.drainingImageRequests].forEach((requests) => {
         const connected = requests.filter((request) => this.requestHasConnectedConsumer(request));
         requests
@@ -31824,6 +31880,8 @@ class GalleryCoverLoadScheduler {
         task.pendingGenerationValidation = 0;
         return;
       }
+      // Viewport detachment does not retire an independent cache-persistence owner.
+      if (sameGeneration && (task.durabilityRequested || task.startedAsBackground)) return;
       if (task.started) {
         this.cache.recordInFlightPreemption?.(
           task.productionUrl,
@@ -35860,7 +35918,9 @@ function applyCompactPlayerMode(mode, { persist = true, transferFocus = true } =
   if (els.expand) els.expand.hidden = compactPlayerPresentation !== 'floating';
   if (persist) {
     try {
-      persistCompactPlayerMode(window.localStorage, next);
+      const storage = window.AlbumHavenDevicePreferences?.enabled
+        ? window.AlbumHavenDevicePreferences : window.localStorage;
+      persistCompactPlayerMode(storage, next);
     } catch (_error) {
       // Browser policy may deny access to the storage object itself.
     }
@@ -37569,6 +37629,16 @@ function handleUtilityBootstrapKeyDown(event) {
   const filterInput = event.target?.matches?.('input, textarea, [contenteditable="true"]');
   if (state.utility.activeTab === 'problematic-files' && filterTarget && !filterInput) {
     const els = getUtilityModalElements();
+    // On mobile this component is a page, so modal Escape capture does not own it.
+    if (event.key === 'Escape' && state.utility.problemDropdownOpen) {
+      event.preventDefault();
+      event.stopPropagation?.();
+      if (event.repeat || event.isComposing) return true;
+      state.utility.problemDropdownOpen = false;
+      renderProblemFilterControls(els);
+      els.problemFilterButton.focus();
+      return true;
+    }
     if (['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key) && !els.problemFilterButton.disabled) {
       event.preventDefault();
       if (!state.utility.problemDropdownOpen) {
@@ -39666,8 +39736,8 @@ function syncSearchClear() {
 }
 
 function handleGalleryBootstrapPopState(options = {}) {
-  if (typeof syncGalleryMainStateFromLocation === 'function') syncGalleryMainStateFromLocation();
-  fetchAndRender(getBrowserLocationHref(), false, options);
+  if (typeof syncGalleryMainStateFromLocation === 'function') syncGalleryMainStateFromLocation(options.parentViewUrl);
+  fetchAndRender(options.parentViewUrl || getBrowserLocationHref(), false, options);
 }
 
 // END js/runtime/bootstrap-gallery-event-handlers.js
@@ -39691,7 +39761,8 @@ function mobilePageDescriptor(kind, album = null) {
     subtitle, coverSrc: album && typeof albumHasDisplayCover === 'function' && albumHasDisplayCover(album) ? buildAlbumDisplayCoverUrl(album) : '', tab: kind === 'utilities' ? state.utility.activeTab : '' };
 }
 function syncMobilePageShell() {
-  const active = mobilePageState.pages.at(-1);
+  const mobile = usesMobilePageLayout();
+  const active = mobile ? mobilePageState.pages.at(-1) : null;
   const main = document.getElementById('shell-main-surface');
   const header = document.getElementById('mobile-page-header');
   const outlet = document.getElementById('mobile-page-outlet');
@@ -39704,7 +39775,8 @@ function syncMobilePageShell() {
   document.getElementById('mobile-library-button').hidden = Boolean(active);
   for (const kind of mobilePageState.originals.keys()) {
     const element = document.getElementById(MOBILE_PAGE_KINDS[kind]);
-    if (element) { element.hidden = kind !== active?.kind; element.inert = kind !== active?.kind; }
+    setMobilePagePresentation(kind, mobile);
+    if (element) { element.hidden = mobile && kind !== active?.kind; element.inert = mobile && kind !== active?.kind; }
   }
   if (active) {
     document.getElementById('mobile-page-title').textContent = active.title;
@@ -39718,7 +39790,33 @@ function syncMobilePageShell() {
   syncMobileAlbumHeader();
   syncMobileLoopHeader();
   // A page is not a modal and must never trap focus away from the persistent player.
-  if (!document.querySelector('[aria-modal="true"]:not([hidden])')?.getClientRects().length) document.body.classList.remove('modal-open');
+  const hasModal = [...document.querySelectorAll('[aria-modal="true"]:not([hidden])')]
+    .some(dialog => dialog.getClientRects().length > 0);
+  if (!hasModal) document.body.classList.remove('modal-open');
+  else if (!mobile) document.body.classList.add('modal-open');
+}
+
+// Transfer the existing surface only; descriptors and history continue to own
+// its parent stack across breakpoint changes, and closing remains owner-driven.
+function setMobilePagePresentation(kind, mobile) {
+  const element = document.getElementById(MOBILE_PAGE_KINDS[kind]);
+  const original = mobilePageState.originals.get(kind);
+  if (!element || !original || element.classList.contains('is-mobile-page') === mobile) return;
+  element.classList.toggle('is-mobile-page', mobile);
+  if (mobile) {
+    original.dialog.setAttribute('role', 'region');
+    original.dialog.removeAttribute('aria-modal');
+    original.dialog.setAttribute('aria-label', kind === 'album' ? 'Album details'
+      : mobilePageState.pages.find(page => page.kind === kind)?.title || '');
+    document.getElementById('mobile-page-outlet').appendChild(element);
+  } else {
+    for (const [name, value] of [['role', original.role], ['aria-modal', original.modal], ['aria-label', original.label]]) {
+      if (value === null) original.dialog.removeAttribute(name);
+      else original.dialog.setAttribute(name, value);
+    }
+    element.inert = false;
+    original.placeholder.before(element);
+  }
 }
 function writeMobilePageHistory(mode = 'push') {
   const url = new URL(window.location.href);
@@ -39762,9 +39860,21 @@ function resolveMobileParentScrollPosition(descriptor, previous, snapshot = {}, 
   if (!position || !Number.isFinite(position.scrollTop) || !Number.isFinite(position.scrollLeft)) return null;
   return { scrollTop: Math.max(0, position.scrollTop), scrollLeft: Math.max(0, position.scrollLeft) };
 }
+function resolveMobileParentViewUrl(descriptor, previous, snapshot = {}, viewUrl = '') {
+  const restored = Array.isArray(snapshot.mobilePages)
+    ? snapshot.mobilePages.find(page => page.kind === descriptor.kind && page.albumKey === descriptor.albumKey) : null;
+  return previous?.parentViewUrl ?? restored?.parentViewUrl ?? viewUrl;
+}
 function restoreMobileGalleryParent(descriptor) {
-  const position = descriptor?.parentScrollPosition;
+  const parentPosition = descriptor?.parentPosition;
+  const destinationPosition = window.history?.state?.albumHavenNavigationPosition;
+  const atParent = !Number.isSafeInteger(parentPosition) || !Number.isSafeInteger(destinationPosition)
+    || parentPosition === destinationPosition;
+  const position = atParent ? descriptor?.parentScrollPosition : null;
   const options = { preserveScroll: true };
+  // Root '/' can display the canonical album gallery as well as Home. Retain
+  // the owning view route, not its data, through this page's history entry.
+  if (atParent && descriptor?.parentViewUrl) options.parentViewUrl = descriptor.parentViewUrl;
   if (position) {
     options.preserveAbsoluteScroll = true;
     options.absoluteScrollPosition = position;
@@ -39785,6 +39895,8 @@ function presentMobilePage(descriptor) {
   descriptor.parentPosition = resolveMobileParentPosition(descriptor, previous, window.history.state || {});
   descriptor.parentScrollPosition = resolveMobileParentScrollPosition(descriptor, previous, window.history.state || {},
     mobilePageState.pages.length ? null : document.getElementById('albums-scroll'));
+  descriptor.parentViewUrl = resolveMobileParentViewUrl(descriptor, previous, window.history.state || {},
+    mobilePageState.pages[0]?.parentViewUrl || buildUrl(state.view));
   const active = mobilePageState.pages.at(-1);
   if (active?.kind === descriptor.kind && active.albumKey === descriptor.albumKey) {
     Object.assign(active, descriptor);
@@ -39797,12 +39909,7 @@ function presentMobilePage(descriptor) {
     element.before(placeholder);
     const dialog = element.querySelector('[role="dialog"]') || element;
     mobilePageState.originals.set(descriptor.kind, { placeholder, dialog, role: dialog.getAttribute('role'),
-      modal: dialog.getAttribute('aria-modal'), returnFocus: document.activeElement });
-    dialog.setAttribute('role', 'region');
-    dialog.removeAttribute('aria-modal');
-    dialog.setAttribute('aria-label', descriptor.kind === 'album' ? 'Album details' : descriptor.title);
-    element.classList.add('is-mobile-page');
-    outlet.appendChild(element);
+      modal: dialog.getAttribute('aria-modal'), label: dialog.getAttribute('aria-label'), returnFocus: document.activeElement });
   }
   // A changed album reuses one component; older history entries retain its key for Back/Forward.
   const previousIndex = mobilePageState.pages.findIndex(page => page.kind === descriptor.kind);
@@ -39840,11 +39947,7 @@ function cleanupMobilePage(descriptor) {
     else if (descriptor.kind === 'non-album') closeNonAlbumModal();
   } finally { mobilePageState.cleaning = false; }
   if (element && original) {
-    element.inert = false;
-    element.classList.remove('is-mobile-page');
-    if (original.role === null) original.dialog.removeAttribute('role'); else original.dialog.setAttribute('role', original.role);
-    if (original.modal === null) original.dialog.removeAttribute('aria-modal'); else original.dialog.setAttribute('aria-modal', original.modal);
-    original.dialog.removeAttribute('aria-label');
+    setMobilePagePresentation(descriptor.kind, false);
     original.placeholder.replaceWith(element);
     mobilePageState.originals.delete(descriptor.kind);
   }

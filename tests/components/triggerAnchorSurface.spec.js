@@ -137,6 +137,7 @@ test('open anchors resynchronize after native nested scroll and resize, then cle
 });
 
 test('Artist Family opening keeps its top shadow clip stationary', async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 800 });
   await page.setContent(`<style>
     :root { --panel: white; --border: #526173; --player-height: 0px; }
     #anchor { position: fixed; right: 12px; top: 30px; width: 34px; height: 34px; }
@@ -187,6 +188,23 @@ test('Artist Family opening keeps its top shadow clip stationary', async ({ page
   for (let index = 1; index < samples.length; index += 1) {
     expect(samples[index].clipBottom).toBeLessThan(samples[index - 1].clipBottom);
   }
+
+  // The phone drawer deliberately leaves room for its joined edge and shadow.
+  // Exercise both sides of the breakpoint without replacing the desktop fold.
+  await page.locator('aside').evaluate(panel => {
+    for (const animation of panel.getAnimations()) animation.finish();
+  });
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expect(page.locator('aside')).toHaveCSS('clip-path', 'inset(0px -80px -80px)');
+  const seam = await page.locator('aside').evaluate(panel => {
+    const style = getComputedStyle(panel, '::after');
+    return { top: style.top, height: style.height, width: style.getPropertyValue('--trigger-top-line-width').trim() };
+  });
+  expect(seam).toEqual({ top: '-1px', height: '2px', width: '2px' });
+  await page.setViewportSize({ width: 901, height: 844 });
+  await expect(page.locator('aside')).toHaveCSS('clip-path', 'inset(-1px 0px 0px)');
+  await page.setViewportSize({ width: 900, height: 844 });
+  await expect(page.locator('aside')).toHaveCSS('clip-path', 'inset(0px -80px -80px)');
 });
 
 test('a dropdown extending both sides has mirrored left and right joins', async ({ page }) => {
@@ -274,9 +292,11 @@ for (const [name, anchorClass, surfaceClass, context] of cases) {
     ]) {
       await page.addStyleTag({ path: path.join(repositoryRoot, 'music_app/static/css', stylesheet) });
     }
+    // Fixed fixture coordinates model a real gap; shell padding must not shift
+    // the trigger down into the panel's visible text.
     await page.addStyleTag({ content: `
       body { margin: 0; }
-      .anchor-host { position: fixed; left: 40px; top: 20px; }
+      .anchor-host { position: fixed; left: 40px; top: 20px; padding: 0; width: auto; height: auto; }
       #anchor { width: 72px; height: 34px; }
       #surface { position: fixed; left: 40px; right: auto; top: 60px; width: 220px; min-height: 80px; }
     ` });
@@ -292,6 +312,7 @@ for (const [name, anchorClass, surfaceClass, context] of cases) {
       const surfaceElement = document.getElementById('surface');
       const surface = getComputedStyle(surfaceElement);
       return {
+        gap: surfaceElement.getBoundingClientRect().top - document.getElementById('anchor').getBoundingClientRect().bottom,
         anchorBackgroundImage: anchor.backgroundImage,
         anchorSurface: anchor.getPropertyValue('--trigger-anchor-background').trim(),
         bottomBorder: anchor.borderBottomWidth,
@@ -302,6 +323,7 @@ for (const [name, anchorClass, surfaceClass, context] of cases) {
       };
     });
 
+    expect(styles.gap).toBeGreaterThan(0);
     expect(styles.anchorSurface).toBe(styles.panelSurface);
     expect(styles.anchorBackgroundImage).toContain(styles.panelSurface);
     expect(styles.bottomBorder).toBe('0px');

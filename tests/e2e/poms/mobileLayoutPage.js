@@ -100,6 +100,11 @@ export class MobileLayoutPage {
     this.saveAppearance = page.locator('#utility-modal-footer [data-editor-footer-action="primary"]');
   }
 
+  async isRetainedSurface(handle) {
+    // parity-check: allow-read-only-measurement-evaluate -- verify responsive reparenting retains the original live surface.
+    return handle.evaluate(node => node.isConnected && node === document.getElementById(node.id));
+  }
+
   async signIn(username, password) {
     await this.page.goto('/');
     await expect(this.loginForm).toBeVisible();

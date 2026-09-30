@@ -1,0 +1,70 @@
+name: Encrypted mobile fixture reproduction
+on:
+  push:
+    branches: [2026-09-25-mobile-layout]
+    paths: [.github/workflows/mobile-fixture-reproduction.yml]
+permissions:
+  contents: read
+jobs:
+  export:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          repository: idanilovqa/album-haven-test-data
+          ref: b24265ffa15241f156d0197e7167e929dd9c1f4b
+          token: ${{ secrets.ALBUM_HAVEN_FIXTURES_TOKEN }}
+          persist-credentials: false
+          path: private-source
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Install public encryption dependency
+        run: python -m pip install cryptography
+      - name: Encrypt the exact fixture checkout for the temporary repair environment
+        shell: python
+        run: |
+          import base64, hashlib, json, os, pathlib, subprocess
+          from cryptography.hazmat.primitives import hashes, serialization
+          from cryptography.hazmat.primitives.asymmetric import padding
+          from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+          expected = 'b24265ffa15241f156d0197e7167e929dd9c1f4b'
+          actual = subprocess.check_output(['git', '-C', 'private-source', 'rev-parse', 'HEAD'], text=True).strip()
+          if actual != expected:
+              raise RuntimeError('Fixture checkout is not the requested immutable version')
+          public_pem = b'''-----BEGIN PUBLIC KEY-----
+          MIIBojANBgkqhkiG9w0BAQEFAAOCAY8AMIIBigKCAYEAqkGd0bsimBEcR4caJ72Z
+          w2mHDcGbyu0fY3/WyKt83HfUmnnJvWvjcgx4Xzt0v3dwL2M7AK7hYh58/l8Vg1XV
+          5LOgGZyXu41w4cdTYOwN5lPc6DcVRQJiCIE5jS7ks7ASYFASEVncNkPt9Ah9Hw+h
+          eMurUUJqdvrcGmSmT4kw+LWOtmPX0qMsQHpI6OkdpUNWE3fjX81ilaXc86xyUbmd
+          1fdLyedROUQz96X5MtbQrbv1NlsChXTgxx+ER0jS9cYSIBIHRQbvpgoH+MaATiCe
+          xdid4o4Mjn6NxB7T4QiTLldJES4SY4NpIOm/EKvQERabflALldjUxxkCLqv7+fhe
+          27LbCXBxZvDr0Z+uzQu9qudfr/J7/93TCPL39748URfJEObN+ZO+6U9KXQFa7VhT
+          q7xmpoekOm4mE1/Alw/Jf0Pmf08y0FMK1XzUAXcNpvVMfLpaKVCFysTxqhh3jHzl
+          i0zdf/Ns9UrRKJLUUQmz4nkRn6yvN3YjGgedxLT9O5yrAgMBAAE=
+          -----END PUBLIC KEY-----'''
+          public_key = serialization.load_pem_public_key(public_pem)
+          data = subprocess.check_output(['git', '-C', 'private-source', 'archive', '--format=tar', 'HEAD'])
+          key = AESGCM.generate_key(bit_length=256)
+          nonce = os.urandom(12)
+          aad = ('AlbumHaven fixture reproduction ' + expected).encode()
+          encrypted = AESGCM(key).encrypt(nonce, data, aad)
+          wrapped = public_key.encrypt(key, padding.OAEP(mgf=padding.MGF1(hashes.SHA256()), algorithm=hashes.SHA256(), label=None))
+          out = pathlib.Path('encrypted-export')
+          out.mkdir()
+          (out / 'fixture-source.enc').write_bytes(encrypted)
+          (out / 'manifest.json').write_text(json.dumps({
+              'source_commit': expected, 'algorithm': 'AES-256-GCM+RSA-OAEP-SHA256',
+              'nonce': base64.b64encode(nonce).decode(), 'wrapped_key': base64.b64encode(wrapped).decode(),
+              'plaintext_sha256': hashlib.sha256(data).hexdigest(),
+              'ciphertext_sha256': hashlib.sha256(encrypted).hexdigest()
+          }, indent=2))
+      - name: Retain ciphertext only; never publish private fixture plaintext
+        uses: actions/upload-artifact@v4
+        with:
+          name: encrypted-fixture-source-${{ github.sha }}
+          path: encrypted-export/
+          retention-days: 1
+          if-no-files-found: error
+          compression-level: 0

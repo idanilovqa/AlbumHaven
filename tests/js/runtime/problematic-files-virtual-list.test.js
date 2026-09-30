@@ -16,10 +16,11 @@ const sourcePath = path.join(
   'problematic-files-virtual-list.js',
 );
 
-function loadVirtualList({ horizontal = false } = {}) {
+function loadVirtualList({ horizontal = false, ResizeObserver } = {}) {
   const frames = [];
   const context = {
     window: {
+      ResizeObserver,
       matchMedia() {
         return { matches: horizontal };
       },
@@ -227,4 +228,58 @@ test('dispose removes listeners and cancels later rendering', () => {
   assert.equal(list.listenerCount(), 0);
   assert.equal(list.dataset.problematicMountedCount, undefined);
   assert.equal(frames.length, 1);
+});
+
+test('viewport observer remounts hidden-to-visible rows once and releases its exact viewport', () => {
+  let notify;
+  let observed;
+  let disconnects = 0;
+  class ResizeObserver {
+    constructor(callback) { notify = callback; }
+    observe(target) { observed = target; }
+    disconnect() { disconnects += 1; }
+  }
+  const { api, frames } = loadVirtualList({ ResizeObserver });
+  const list = createList({ clientHeight: 0 });
+  const virtualList = api.create({ list, renderRow: item => `<button data-problematic-album-key="${item.key}"></button>` });
+  virtualList.render(makeItems(706), '');
+  assert.equal(observed, list);
+  assert.equal(mountedKeys(list.innerHTML).length, 7);
+  list.clientHeight = 476;
+  notify(); notify();
+  assert.equal(frames.length, 1);
+  frames.shift()();
+  assert.equal(mountedKeys(list.innerHTML).length, 13);
+  virtualList.dispose();
+  assert.equal(disconnects, 1);
+  notify();
+  assert.equal(frames.length, 0);
+});
+
+test('new offscreen selection mounts synchronously before detail consumers observe its key', () => {
+  const { api } = loadVirtualList();
+  const list = createList();
+  const virtualList = api.create({ list, renderRow: item => `<button data-problematic-album-key="${item.key}"></button>` });
+  virtualList.render(makeItems(706), 'album-700');
+  assert.ok(mountedKeys(list.innerHTML).includes('album-700'));
+  assert.ok(list.scrollTop > 0);
+});
+
+test('unchanged virtual geometry and metadata produce no redundant writes', () => {
+  const { api } = loadVirtualList();
+  const list = createList();
+  let metadataWrites = 0;
+  list.dataset = new Proxy({}, { set(target, key, value) { metadataWrites += 1; target[key] = value; return true; } });
+  const virtualList = api.create({ list, renderRow: item => `<button data-problematic-album-key="${item.key}"></button>` });
+  const items = makeItems(706);
+  virtualList.render(items, '');
+  let geometryWrites = 0;
+  for (const spacer of [list.children[0], list.children.at(-1)]) {
+    let cssText = spacer.style.cssText;
+    Object.defineProperty(spacer.style, 'cssText', { get: () => cssText, set: value => { geometryWrites += 1; cssText = value; } });
+  }
+  metadataWrites = 0;
+  virtualList.render(items, '');
+  assert.equal(metadataWrites, 0);
+  assert.equal(geometryWrites, 0);
 });

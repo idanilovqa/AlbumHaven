@@ -6,7 +6,7 @@ function harness() {
   const inside = {}, anchor = {}, background = {};
   let closes = 0;
   let active = { surface: { contains: target => target === inside },
-    anchor: { contains: target => target === anchor }, dismiss() { closes++; active = null; } };
+    anchor: { contains: target => target === anchor }, isBackdrop: target => target === background, dismiss() { closes++; active = null; } };
   const handlers = create(() => active);
   function send(type, target = background, extra = {}) {
     const event = { target, pointerId: 1, isPrimary: true, button: 0, clientX: 12, clientY: 12,
@@ -17,7 +17,7 @@ function harness() {
     return event;
   }
   return { handlers, send, inside, anchor, background, closes: () => closes,
-    setActive: value => { active = value; } };
+    setActive: value => { active = value && { isBackdrop: target => target === background, ...value }; } };
 }
 
 for (const pointerType of ['touch', 'mouse', 'pen']) {
@@ -62,7 +62,7 @@ test('outside scroll/cancel is not a tap and cannot activate background', () => 
 test('only the foreground child is dismissed by one gesture', () => {
   const h = harness();
   let parentCloses = 0;
-  const parent = { surface: { contains: () => false }, dismiss() { parentCloses++; } };
+  const parent = { surface: { contains: () => false }, isBackdrop: target => target === h.background, dismiss() { parentCloses++; } };
   h.setActive({ surface: { contains: () => false }, dismiss() { h.setActive(parent); } });
   h.send('pointerdown'); h.send('pointerup'); h.send('click');
   assert.equal(parentCloses, 0);
@@ -130,7 +130,7 @@ function boundHarness() {
     listeners.get(type)(event);
     return event;
   };
-  active = { surface: { contains: target => target === focusedItem }, dismiss() {
+  active = { surface: { contains: target => target === focusedItem }, isBackdrop: target => target === background, dismiss() {
     closes += 1;
     active = null;
     // Returning focus to the opener blurs the previously focused panel item.
@@ -164,4 +164,32 @@ test('losing window focus still clears the pending dismissal gesture', () => {
     h.send('blur', h.window);
     assert.equal(h.send('click').stopped, false);
   } finally { h.dispose(); }
+});
+
+for (const pointerType of ['mouse', 'touch', 'pen']) {
+  test(`${pointerType}: uncovered controls remain actionable outside an open surface`, () => {
+    const h = harness();
+    const player = {};
+    for (const type of ['pointerdown', 'pointerup', 'click']) {
+      assert.equal(h.send(type, player, { pointerType }).stopped, false);
+    }
+    assert.equal(h.closes(), 0);
+    assert.equal(h.send('click', player, { detail: 0 }).stopped, false);
+  });
+}
+
+test('a modal root is a backdrop but its nested controls are not', () => {
+  const h = harness();
+  const modal = {}, nested = {};
+  h.setActive({ surface: modal, contains: target => target === nested,
+    isBackdrop: target => target === modal, dismiss: () => h.setActive(null) });
+  for (const type of ['pointerdown', 'pointerup', 'click']) assert.equal(h.send(type, nested).stopped, false);
+  for (const type of ['pointerdown', 'pointerup', 'click']) assert.equal(h.send(type, modal).stopped, true);
+});
+
+test('nonblocking surfaces without a backdrop do not reserve outside activations', () => {
+  const h = harness();
+  h.setActive({ surface: { contains: () => false }, isBackdrop: undefined,
+    dismiss() { throw new Error('Ordinary outside handlers own dismissal'); } });
+  for (const type of ['pointerdown', 'pointerup', 'click']) assert.equal(h.send(type).stopped, false);
 });

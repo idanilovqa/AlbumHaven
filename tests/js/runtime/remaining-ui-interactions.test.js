@@ -6,7 +6,7 @@ const path = require('node:path');
 const repoRoot = path.join(__dirname, '..', '..', '..');
 const appearance = require(path.join(repoRoot, 'music_app', 'static', 'js', 'appearance-backgrounds.js'));
 
-test('automatic action interactions derive restrained fill and edge from the effective player background', () => {
+test('automatic action interactions keep surface fill independent while the edge follows player background', () => {
   const first = appearance.resolveActionInteractionTokens(
     { interaction_overrides: { button_hover_background: null, button_pressed: null } },
     { tokens: { control: '#303C36', player: '#112233', 'player-surface-start': '#112233' } },
@@ -17,11 +17,11 @@ test('automatic action interactions derive restrained fill and edge from the eff
   );
 
   assert.deepEqual(first, {
-    hoverBackground: 'color-mix(in srgb, #112233 14%, color-mix(in srgb, #303C36 85%, #EEEEEE))',
+    hoverBackground: 'color-mix(in srgb, #303C36 85%, #EEEEEE)',
     hoverBorder: 'color-mix(in srgb, #112233 22%, #858985)',
     pressedBackground: 'color-mix(in srgb, #303C36 75%, #000000)',
   });
-  assert.notEqual(first.hoverBackground, second.hoverBackground);
+  assert.equal(first.hoverBackground, second.hoverBackground);
   assert.notEqual(first.hoverBorder, second.hoverBorder);
 });
 
@@ -101,4 +101,10 @@ test('utility searches keep shared actions mounted and synchronize Clear after t
   const utilitySource = fs.readFileSync(path.join(repoRoot, 'music_app', 'static', 'js', 'runtime', 'utility-renderers-and-actions.js'), 'utf8');
   assert.doesNotMatch(utilityCss, /\.search-field-action:has\(> \.utility-problem-filter-button\[hidden\]\)[^{]*\{[^}]*display:\s*none/s);
   assert.match(utilitySource, /updateSearchClearAction\(els\.search\)/);
+});
+
+test('mobile-branch Combine uses the shared configured hover fill without a transparent late override', () => {
+  const css = fs.readFileSync(path.join(repoRoot, 'music_app', 'static', 'css', 'runtime', 'trigger-anchor.css'), 'utf8');
+  assert.match(css, /\.artist-family-panel__combine-row \.gallery-switch, \.ui-filter-pill\):hover[^{}]*\{\s*background: var\(--dropdown-item-hover-background/);
+  assert.doesNotMatch(css, /\.artist-family-panel__combine-row \.gallery-switch:hover[^{}]*\{\s*background: transparent/);
 });

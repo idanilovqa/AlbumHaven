@@ -28,7 +28,7 @@ function setup({ realGrouping = false } = {}) {
     const file = path.join(root, 'music_app/static/js', `${name}.js`);
     if (fs.existsSync(file)) vm.runInContext(fs.readFileSync(file, 'utf8'), context);
   }
-  for (const name of ['player-and-waveform', 'utility-list-builders', 'bootstrap-utility-event-handlers', 'utility-loaders-and-cover-lookup', 'tag-editor-and-optimistic-updates']) {
+  for (const name of ['utility-loop-playback', 'player-and-waveform', 'utility-list-builders', 'bootstrap-utility-event-handlers', 'utility-loaders-and-cover-lookup', 'tag-editor-and-optimistic-updates']) {
     vm.runInContext(read(name), context);
   }
   if (!realGrouping) context.groupUtilityLoops = () => [group(context)];
@@ -209,7 +209,7 @@ for (const phase of ['loading', 'empty']) {
     vm.runInContext(read('utility-renderers-and-actions'), context);
     const events = [];
     const detail = { classList: { add() {} }, set innerHTML(value) { events.push('replace'); } };
-    context.getUtilityModalElements = () => ({ overlay: { hidden: false }, list: {}, detail, count: {} });
+    context.getUtilityModalElements = () => ({ overlay: { hidden: false, dataset: {} }, list: {}, detail, count: {} });
     context.disposeMountedLoopActions = node => { assert.strictEqual(node, detail); events.push('dispose'); };
     context.clearUtilityLoopDragState = () => {};
     context.state.utility.loopsLoading = phase === 'loading';
@@ -223,7 +223,7 @@ test('L06 late loaded loops cannot mount controls while Settings is hidden', () 
   const context = setup();
   vm.runInContext(read('utility-renderers-and-actions'), context);
   const detail = { classList: { add() {} } };
-  context.getUtilityModalElements = () => ({ overlay: { hidden: true }, list: {}, detail, count: {} });
+  context.getUtilityModalElements = () => ({ overlay: { hidden: true, dataset: {} }, list: {}, detail, count: {} });
   context.getSelectedUtilityLoopGroup = () => group(context);
   context.renderUtilityLoopList = () => {};
   context.buildUtilityLoopDetail = () => '<section>saved panel</section>';

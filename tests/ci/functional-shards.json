@@ -32,6 +32,13 @@
             {
               "config": "playwright.config.js",
               "project": "functional",
+              "test": "tests/e2e/specs/artistTreePersistence.spec.js",
+              "case": "FTC-ARTIST-TREE-002 preserves collapsed and expanded preferences after reload",
+              "area": "gallery-search"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
               "test": "tests/e2e/specs/settingsRefactorShell.spec.js",
               "case": "FTC-SETTINGS-S01 six tabs preserve keyboard wrapping and joined Close hit testing",
               "area": "settings"
@@ -856,7 +863,7 @@
               "config": "playwright.config.js",
               "project": "functional",
               "test": "tests/e2e/specs/albumDetailsComponents.functional.spec.js",
-              "case": "FTC-ALBUM-DETAILS-022 touch artwork controls open full cover and Cover Lookup without hover",
+              "case": "touch artwork actions \u203a FTC-ALBUM-DETAILS-022 touch artwork controls open full cover and Cover Lookup without hover",
               "area": "album-details"
             },
             {

@@ -37,6 +37,7 @@
     const disposeDismissal = window.AlbumHavenSurfaceDismissal?.bind(window, () =>
       nav.classList.contains('is-settings-navigation-open') ? {
         surface: nav, anchor: drawerAnchor, dismiss: () => closeDrawer(true),
+        isBackdrop: target => target === drawerBackdrop,
       } : null);
     const onSurfaceOpening = event => { if (event.detail?.surface !== nav && !nav.contains(event.detail?.surface)) closeDrawer(false); };
     document.addEventListener('album-haven:surface-opening', onSurfaceOpening);

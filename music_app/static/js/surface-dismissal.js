@@ -7,6 +7,7 @@
     const consume = event => { event.preventDefault(); event.stopImmediatePropagation(); };
     const inside = (active, target) => active.contains ? active.contains(target)
       : active.surface.contains(target) || Boolean(active.anchor?.contains(target));
+    const backdrop = (active, target) => Boolean(active.isBackdrop?.(target));
     const reset = () => { gesture = null; suppressClick = false; };
     return {
       pointerdown(event) {
@@ -17,12 +18,13 @@
         if (!active) return;
         gesture = { active, outside: !inside(active, event.target), id: event.pointerId,
           x: event.clientX, y: event.clientY };
+        gesture.dismissOnly = gesture.outside && backdrop(active, event.target);
         // Stop underlying pointer handlers and focus, not only delegated clicks.
-        if (gesture.outside) consume(event);
+        if (gesture.dismissOnly) consume(event);
       },
       pointerup(event) {
         if (!gesture || gesture.id !== event.pointerId) return;
-        if (!gesture.outside) return;
+        if (!gesture.dismissOnly) return;
         consume(event);
         suppressClick = true;
         const started = gesture;
@@ -44,7 +46,7 @@
           consume(event); return;
         }
         const active = resolve();
-        if (active && !inside(active, event.target)) {
+        if (active && !inside(active, event.target) && backdrop(active, event.target)) {
           consume(event);
           active.dismiss();
         }

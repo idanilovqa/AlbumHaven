@@ -7,16 +7,18 @@ const playwrightCli = path.join(repoRoot, 'node_modules', '@playwright', 'test',
 const ciRoot = path.join(repoRoot, 'tests', 'ci');
 
 const surfaces = [
+  { config: 'playwright.mobile-layout.config.js', category: 'mobile', testDirectory: 'tests/e2e/mobile-layout' },
+  { config: 'playwright.mobile-feedback.config.js', category: 'mobile', testDirectory: 'tests/e2e/mobile-feedback' },
   { config: 'playwright.config.js', category: 'browserFunctional' },
   { config: 'playwright.autoplay-allowed.config.js', category: 'browserFunctional' },
   { config: 'playwright.cover-rescan.config.js', category: 'browserFunctional' },
   { config: 'playwright.lastfm-auto-timezone.config.js', category: 'browserFunctional' },
   { config: 'playwright.non-album-rescan.config.js', category: 'browserFunctional' },
-  { config: 'playwright.component.config.js', category: 'component' },
-  { config: 'playwright.synthetic-large-library.config.cjs', category: 'performance' },
-  { config: 'playwright.utility-problematic-files.config.cjs', category: 'performance' },
-  { config: 'playwright.performance.config.cjs', category: 'performance' },
-  { config: 'playwright.scan-performance.config.cjs', category: 'performance' },
+  { config: 'playwright.component.config.js', category: 'component', testDirectory: 'tests/components' },
+  { config: 'playwright.synthetic-large-library.config.cjs', category: 'performance', testDirectory: 'tests/e2e/syntheticLargeLibrary' },
+  { config: 'playwright.utility-problematic-files.config.cjs', category: 'performance', testDirectory: 'tests/e2e/utilityProblematicFiles' },
+  { config: 'playwright.performance.config.cjs', category: 'performance', testDirectory: 'tests/e2e/performance' },
+  { config: 'playwright.scan-performance.config.cjs', category: 'performance', testDirectory: 'tests/e2e/scanPerformance' },
 ];
 
 function readJson(relativePath) {
@@ -26,7 +28,7 @@ function readJson(relativePath) {
 function listSurface(surface) {
   const result = spawnSync(
     process.execPath,
-    [playwrightCli, 'test', '--list', `--config=${surface.config}`],
+    [playwrightCli, 'test', '--list', '--reporter=line', `--config=${surface.config}`],
     {
       cwd: repoRoot,
       encoding: 'utf8',
@@ -46,18 +48,30 @@ function listSurface(surface) {
 
   const totalMatch = result.stdout.match(/Total:\s+(\d+)\s+tests?/);
   if (!totalMatch) throw new Error(`Playwright discovery did not report a total for ${surface.config}`);
-  const projects = [...result.stdout.matchAll(/^\s*\[([^\]]*)\]\s*›/gm)].map((match) => match[1]);
+  const identities = [...result.stdout.matchAll(/^\s*(?:\[([^\]]*)\]\s*›\s*)?(.+?):\d+:\d+\s*›\s*(.+)$/gm)].map(match => {
+    const listedPath = match[2].replaceAll('\\', '/');
+    return {
+      config: surface.config,
+      project: match[1] || '',
+      test: listedPath.startsWith('tests/') ? listedPath : path.posix.join(surface.testDirectory || 'tests/e2e/specs', listedPath),
+      case: match[3].trim(),
+    };
+  });
+  if (identities.length !== Number(totalMatch[1])) throw new Error(`Incomplete case identity discovery for ${surface.config}`);
+  const projects = identities.map(entry => entry.project);
   return {
     config: surface.config,
     category: surface.category,
     projects: projects.length > 0 ? [...new Set(projects)] : [''],
     cases: Number(totalMatch[1]),
+    identities,
   };
 }
 
 const discovered = surfaces.map(listSurface);
 const categories = {
   browserFunctional: 0,
+  mobile: 0,
   component: 0,
   performance: 0,
   total: 0,
@@ -83,6 +97,7 @@ const inventory = {
   categories,
   ownership,
   surfaces: discovered,
+  caseIdentities: discovered.flatMap(surface => surface.identities),
 };
 
 if (process.argv.includes('--json')) {

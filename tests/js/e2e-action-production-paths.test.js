@@ -1807,6 +1807,25 @@ test('all E2E specs inherit guarded fixtures and cannot create direct browser pa
 
   const directBrowserCreation = /\bbrowser\.newPage\s*\(|\bcontext\.newPage\s*\(|\.newContext\s*\(/;
   const baseFixturesPath = path.join(e2eRoot, 'support', 'baseFixtures.js');
+  const mobileFixturesPath = path.join(e2eRoot, 'support', 'mobileFixtures.js');
+  const guardedRoots = new Set([baseFixturesPath, mobileFixturesPath]);
+  const inheritsGuardedTest = (filePath, seen = new Set()) => {
+    if (guardedRoots.has(filePath)) return true;
+    if (seen.has(filePath) || !fs.existsSync(filePath)) return false;
+    seen.add(filePath);
+    const source = fs.readFileSync(filePath, 'utf8');
+    const imports = [...source.matchAll(/import\s*\{([^}]+)\}\s*from\s*['"]([^'"]+)['"]/g)];
+    return imports.some(([, names, specifier]) => {
+      const importedTest = names.split(',').map(name => /^\s*test(?:\s+as\s+(\w+))?\s*$/.exec(name)).find(Boolean);
+      if (!importedTest || !specifier.startsWith('.')) return false;
+      const localTestName = importedTest[1] || 'test';
+      const isSpec = filePath.endsWith('.spec.js');
+      const extension = new RegExp(`${isSpec ? '(?:export\\s+)?' : 'export\\s+'}const\\s+test\\s*=\\s*${localTestName}\\.extend\\s*\\(`);
+      const usesImportedTest = (isSpec && localTestName === 'test') || extension.test(source);
+      return usesImportedTest
+        && inheritsGuardedTest(path.resolve(path.dirname(filePath), specifier), new Set(seen));
+    });
+  };
   for (const [filePath, source] of sources) {
     assert.doesNotMatch(source, /\b(?:chromium|firefox|webkit)\.launch\s*\(/, filePath);
     if (filePath === baseFixturesPath) {
@@ -1831,11 +1850,26 @@ test('all E2E specs inherit guarded fixtures and cannot create direct browser pa
       );
       const sourceOutsideFreshBrowserSession = source.slice(0, fixtureStart) + source.slice(fixtureEnd);
       assert.doesNotMatch(sourceOutsideFreshBrowserSession, directBrowserCreation, filePath);
+    } else if (filePath === mobileFixturesPath) {
+      const factoryStart = source.indexOf('export function createMobileBrowserSessions(');
+      const factoryEnd = source.indexOf('export const test = base.extend(', factoryStart);
+      assert.ok(factoryStart >= 0 && factoryEnd > factoryStart, 'mobile session ownership must remain bounded');
+      const factory = source.slice(factoryStart, factoryEnd);
+      assert.equal((factory.match(/\.newContext\s*\(/g) || []).length, 1);
+      assert.equal((factory.match(/\.newPage\s*\(/g) || []).length, 2);
+      assert.match(factory, /installContextRequestInterceptionGuard\(freshContext\)/);
+      assert.match(factory, /Promise\.allSettled\(entries\.map\(closeEntry\)\)/);
+      assert.match(factory, /AggregateError/);
+      const fixtures = source.slice(factoryEnd);
+      assert.match(fixtures, /requestInterceptionGuard:[\s\S]*installContextRequestInterceptionGuard\(context\)[\s\S]*auto: true/);
+      assert.match(fixtures, /mobileBrowserSessions: async \(\{ browser, context, requestInterceptionGuard \}/);
+      assert.match(fixtures, /finally \{ await sessions\.closeAll\(\); \}/);
+      assert.doesNotMatch(source.slice(0, factoryStart) + fixtures, directBrowserCreation, filePath);
     } else {
       assert.doesNotMatch(source, directBrowserCreation, filePath);
     }
     if (!filePath.endsWith('.spec.js')) continue;
-    assert.match(source, /from ['"]\.\.\/support\/(?:base|performance)Fixtures\.js['"]/, filePath);
+    assert.equal(inheritsGuardedTest(filePath), true, `${filePath} must inherit a guarded named test fixture`);
     assert.doesNotMatch(source, /from ['"]@playwright\/test['"]/, filePath);
   }
 
@@ -2380,7 +2414,7 @@ test('sparse optimistic POM observation atomically reads visible section count a
   )?.[0] || '';
   assert.match(
     observationMethod,
-    /sectionByArtistHeading\(artistName\)[\s\S]*await section\.evaluate[\s\S]*artistMetaText[\s\S]*\.family-artist-header > span:last-child[\s\S]*renderedIdentities[\s\S]*albumCount:\s*parseArtistAlbumCount\(observation\.artistMetaText\)/,
+    /sectionByArtistHeading\(artistName\)[\s\S]*await section\.evaluate[\s\S]*\.family-artist-header > span:last-child[\s\S]*ownsSingleArtist[\s\S]*artistMetaText[\s\S]*renderedIdentities[\s\S]*albumCount:\s*parseArtistAlbumCount\(observation\.artistMetaText\)/,
   );
   assert.doesNotMatch(
     observationMethod,
@@ -5031,7 +5065,7 @@ test('loop hover evidence moves the real mouse to target geometry without locato
   assert.match(savedHelper, /getAttribute\('data-loop-action-state'\) === 'editing'/);
   assert.match(
     savedHelper,
-    /toHaveAttribute\('data-loop-action-engaged', 'true'\)[\s\S]*toHaveCSS\('width', `\$\{style === 'companion' \? \(editing \? 88 : 58\) : \(editing \? 65 : 34\)\}px`\)[\s\S]*readLoopActionVisualSnapshot/,
+    /toHaveAttribute\('data-loop-action-engaged', 'true'\)[\s\S]*expectedWidth = style === 'companion' \? \(editing \? 88 : 58\) : \(editing \? 65 : 34\)[\s\S]*readLoopPodWidth\(entry\)[\s\S]*toBeLessThanOrEqual\(1 \/ \(64 \* 0\.8\)\)[\s\S]*readLoopActionVisualSnapshot/,
     'saved-loop hover must settle the approved style and edit-state pod width before measuring geometry',
   );
   assert.doesNotMatch(savedHelper, /waitForTimeout|timeout\s*:/);
@@ -5107,6 +5141,7 @@ test('loop creation coverage uses the shared app dialog and POM-owned inline ran
   assert.match(spec, /readLoopEditorStateByName\('Warmup Loop'\)[\s\S]*editor: false/);
   assert.match(spec, /revealCreateAnotherLoopEditorByName\('Warmup Loop'\)/);
   assert.match(expirySpec, /installLoopEditExpiryClock\(\)/);
+  assert.match(expirySpec, /pauseLoopEditExpiryClockBeforeRenewal\(\)\)\.paused\)\.toBe\(false\);\s*await globalPlayerActions\.dragLoopBoundary\('end', 0\.8\)/);
   assert.match(expirySpec, /advanceLoopEditExpiryClock\(299000\)[\s\S]*expectLoopEditorActive\(\)[\s\S]*advanceLoopEditExpiryClock\(1000\)[\s\S]*waitForAutomaticLoopEditorExpiry\(\)/);
   assert.match(expirySpec, /waitForRepeatCycle\(untouchedEditor\.loopId\)[\s\S]*advanceLoopEditExpiryClock\(13000\)[\s\S]*expectCreateAnotherLoopEditorActiveByName\(SAVED_LOOP_NAME\)[\s\S]*advanceLoopEditExpiryClock\(2000\)[\s\S]*waitForAutomaticLoopEditorExpiryByName\(SAVED_LOOP_NAME\)/);
   assert.match(spec, /dragLoopBoundaryByName\('Warmup Loop', 'start', 0\.25\)/);
@@ -5114,6 +5149,29 @@ test('loop creation coverage uses the shared app dialog and POM-owned inline ran
   assert.match(spec, /activateCreateAnotherLoopByName\('Warmup Loop'\)[\s\S]*cancelLoopNameDialog\(\)[\s\S]*activateCreateAnotherLoopByName\('Warmup Loop'\)[\s\S]*submitLoopName\('Transition Loop'\)/);
   assert.doesNotMatch(spec, /\.locator\s*\(|\.evaluate\s*\(|waitForTimeout\s*\(|page\.once\(['"]dialog['"]|page\.route\s*\(/);
   assert.doesNotMatch(expirySpec, /\.locator\s*\(|\.evaluate\s*\(|waitForTimeout\s*\(|page\.once\(['"]dialog['"]|page\.route\s*\(/);
+});
+
+test('loop expiry clock freezes only before the renewing drag and resumes after measurement', async () => {
+  const { GlobalPlayerActions } = await import(pathToFileURL(path.join(repoRoot, 'tests/e2e/actions/globalPlayerActions.js')).href);
+  const calls = [];
+  const actions = new GlobalPlayerActions({
+    readWallClockTimeMs: async () => 10000,
+    page: { clock: {
+      pauseAt: async time => calls.push(['pauseAt', time]),
+      fastForward: async duration => calls.push(['fastForward', duration]),
+      resume: async () => calls.push(['resume']),
+    } },
+  });
+  actions.expectLoopEditorActive = async () => { calls.push(['verifyActive']); return { paused: false }; };
+  assert.deepEqual(await actions.pauseLoopEditExpiryClockBeforeRenewal(), { paused: false });
+  await actions.advanceLoopEditExpiryClock(299000);
+  await actions.advanceLoopEditExpiryClock(299000);
+  await actions.advanceLoopEditExpiryClock(1000);
+  await actions.resumeLoopEditExpiryClock();
+  assert.deepEqual(calls, [
+    ['pauseAt', 11000], ['verifyActive'],
+    ['fastForward', 299000], ['fastForward', 299000], ['fastForward', 1000], ['resume'],
+  ]);
 });
 
 test('loop entry names use exact escaped matching rather than substring matching', async () => {

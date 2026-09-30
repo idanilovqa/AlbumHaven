@@ -1927,6 +1927,6 @@ function syncSearchClear() {
 }
 
 function handleGalleryBootstrapPopState(options = {}) {
-  if (typeof syncGalleryMainStateFromLocation === 'function') syncGalleryMainStateFromLocation();
-  fetchAndRender(getBrowserLocationHref(), false, options);
+  if (typeof syncGalleryMainStateFromLocation === 'function') syncGalleryMainStateFromLocation(options.parentViewUrl);
+  fetchAndRender(options.parentViewUrl || getBrowserLocationHref(), false, options);
 }

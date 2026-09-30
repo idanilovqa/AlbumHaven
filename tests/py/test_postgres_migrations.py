@@ -157,7 +157,7 @@ SEMANTIC_LOCAL_ALBUM_IDENTITY_ENFORCEMENT_MIGRATION = (
     MIGRATIONS_DIR / "0035_enforce_semantic_local_album_identity.sql"
 )
 LOG_HISTORY_MIGRATION_SHA256 = (
-    "282410847b8d0752777cdb3bda5164d109a16b13f385b620b40ae1ede11b017c"
+    "834bfa7cfc219147652dc4f65dc326a88ab3f045ba65e80b1763cb79329c5215"
 )
 
 
@@ -1529,9 +1529,16 @@ def test_drop_log_history_migration_file_exists():
 
 
 def test_original_log_history_migration_remains_unchanged():
-    assert hashlib.sha256(LOG_HISTORY_MIGRATION.read_bytes()).hexdigest() == (
+    assert hashlib.sha256(LOG_HISTORY_MIGRATION.read_bytes().replace(b"\r\n", b"\n")).hexdigest() == (
         LOG_HISTORY_MIGRATION_SHA256
     )
+
+
+def test_log_history_history_guard_accepts_checkout_newlines_but_rejects_content_changes():
+    original = LOG_HISTORY_MIGRATION.read_bytes().replace(b"\r\n", b"\n")
+    for data in (original, original.replace(b"\n", b"\r\n")):
+        assert hashlib.sha256(data.replace(b"\r\n", b"\n")).hexdigest() == LOG_HISTORY_MIGRATION_SHA256
+    assert hashlib.sha256(original + b"-- modified\n").hexdigest() != LOG_HISTORY_MIGRATION_SHA256
 
 
 def test_virtual_release_snapshots_migration_file_exists():

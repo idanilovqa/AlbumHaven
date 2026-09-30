@@ -22,6 +22,7 @@ function loadHelpers() {
     escapeHtml: value => String(value ?? ''),
   };
   vm.createContext(context);
+  vm.runInContext(readRuntime('utility-loop-playback'), context);
   vm.runInContext(readRuntime('utility-list-builders'), context);
   return context;
 }

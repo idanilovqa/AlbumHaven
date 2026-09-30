@@ -2830,7 +2830,7 @@ test('canonical same-artist reconciliation retains mounted cards without an opti
   assert.ok(initialPartnerSection, 'the selected primary family member must be attached');
   assert.match(
     initialPartnerSection.innerHTML,
-    /class="[^"]*album-title-button[^"]*"[^>]*>Partner 1<\/button>/,
+    /class="[^"]*album-title-button[^"]*"[^>]*><span data-gallery-metadata-text>Partner 1<\/span><\/button>/,
   );
   assert.deepEqual(
     JSON.parse(JSON.stringify(
@@ -2884,7 +2884,7 @@ test('canonical same-artist reconciliation retains mounted cards without an opti
   assert.ok(promotedLeadSection);
   assert.match(
     promotedLeadSection.innerHTML,
-    /class="[^"]*album-title-button[^"]*"[^>]*>Lead 1<\/button>/,
+    /class="[^"]*album-title-button[^"]*"[^>]*><span data-gallery-metadata-text>Lead 1<\/span><\/button>/,
   );
   const retainedLead = virtualGrid.sections.find((section) => (
     section.kind === 'artist'
@@ -3028,7 +3028,7 @@ test('switching Cards to No info invalidates mounted card markup without replaci
   const cardsMarkup = containerEl.innerHTML;
   const cardsRenderKey = context.getAlbumCardRenderKey(album, { displayMode: 'cards' });
   assert.match(cardsMarkup, /data-gallery-display="cards"/);
-  assert.match(cardsMarkup, /class="album-subtitle">Broadcast · 2005<\/div>/);
+  assert.match(cardsMarkup, /class="album-subtitle"><span data-gallery-metadata-text>Broadcast · 2005<\/span><\/div>/);
   assert.doesNotMatch(cardsMarkup, /class="album-year"/);
 
   context.state.gallery.mainState = context.reduceGalleryMainState(
@@ -3814,7 +3814,7 @@ test('deferred pointer render retains the scroll frame owner across a render gen
       tracks: [],
     });
 
-    assert.match(markup, /<div class="rating-row">/);
+    assert.match(markup, new RegExp(`<div class="rating-row" data-rating-value="${rating}">`));
     assert.match(
       markup,
       new RegExp(`<div class="stars" role="img" aria-label="Album rating ${rating}/10">`),
@@ -4323,6 +4323,10 @@ test('family information button survives forced render through pointerup and cli
 for (const mobile of [true, false]) {
   test(`leaving mobile Home restores gallery width before ${mobile ? 'search' : 'wide-tablet'} rendering`, () => {
     const { context, scrollEl } = createRuntimeContext();
+    context.URL = URL;
+    context.window.location = { href: 'https://albumhaven.test/?artist=Northlight' };
+    context.document.querySelector = () => null;
+    context.showMobileGalleryPinchHint = () => {};
     const grid = vm.runInContext('virtualGrid', context);
     const home = { hidden: false };
     let galleryVisible = false;

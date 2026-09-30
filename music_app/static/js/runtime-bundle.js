@@ -5238,8 +5238,8 @@ function syncTriggerAnchor(surface, anchor) {
   const previous = triggerAnchorBindings.get(surface);
   if (previous && previous.anchor !== anchor) clearTriggerAnchor(surface);
   const anchorContext = anchor.closest?.('.shell-main-surface, .settings-outlet') ? 'content' : 'chrome';
-  surface.dataset.triggerAnchorContext = anchorContext;
-  anchor.dataset.triggerAnchorContext = anchorContext;
+  if (surface.dataset.triggerAnchorContext !== anchorContext) surface.dataset.triggerAnchorContext = anchorContext;
+  if (anchor.dataset.triggerAnchorContext !== anchorContext) anchor.dataset.triggerAnchorContext = anchorContext;
   activateTriggerSurface(surface, () => {
     surface.hidden = true;
     anchor.setAttribute?.('aria-expanded', 'false');
@@ -5259,13 +5259,15 @@ function syncTriggerAnchor(surface, anchor) {
     surface.style.setProperty('--trigger-anchor-background', surfaceBackground);
     anchor.style.setProperty('--trigger-anchor-background', surfaceBackground);
   }
-  surface.classList.add('trigger-anchor-surface');
-  if (anchor.matches?.('.search-field-button')) surface.dataset.triggerAnchorSearch = 'true';
+  if (!surface.classList.contains('trigger-anchor-surface')) surface.classList.add('trigger-anchor-surface');
+  if (anchor.matches?.('.search-field-button')) {
+    if (surface.dataset.triggerAnchorSearch !== 'true') surface.dataset.triggerAnchorSearch = 'true';
+  }
   else delete surface.dataset.triggerAnchorSearch;
-  anchor.classList.add('trigger-anchor-open');
- surface.dataset.triggerAnchorEdge = geometry.edge;
-  surface.dataset.triggerAnchorSide = geometry.side;
-  anchor.dataset.triggerAnchorEdge = geometry.edge;
+  if (!anchor.classList.contains('trigger-anchor-open')) anchor.classList.add('trigger-anchor-open');
+ if (surface.dataset.triggerAnchorEdge !== geometry.edge) surface.dataset.triggerAnchorEdge = geometry.edge;
+  if (surface.dataset.triggerAnchorSide !== geometry.side) surface.dataset.triggerAnchorSide = geometry.side;
+  if (anchor.dataset.triggerAnchorEdge !== geometry.edge) anchor.dataset.triggerAnchorEdge = geometry.edge;
   for (const name of ['left', 'right', 'width', 'gap']) {
     surface.style.setProperty(`--trigger-anchor-${name}`, `${geometry[name]}px`);
   }
@@ -5870,7 +5872,7 @@ function syncGalleryBarSearchVisibility() {
   const committedQuery = String(state.view?.query || '').trim();
   const selectedArtist = String(state.view?.selected_artist || '').trim();
   bar.hidden = selectedArtist
-    ? draftQuery !== committedQuery
+    ? Boolean(draftQuery) && draftQuery !== committedQuery
     : Boolean(draftQuery || committedQuery);
 }
 
@@ -11905,7 +11907,6 @@ function attachModalEvents() {
   if (!els.overlay || els.overlay.dataset.bound === '1') return;
   els.overlay.dataset.bound = '1';
   bindOverlayPointerOrigin(els.overlay);
-  els.close?.addEventListener('click', closeTrackModal);
   els.overlay.addEventListener('click', (event) => {
     if (overlayClickStartedOnOverlay(els.overlay, event) || event.target.closest('[data-close-track-modal="1"]')) {
       closeTrackModal();
@@ -12351,10 +12352,9 @@ function mountLoopEditActionControl({
     if (next.reset || contextChanged || !currentCanCreate || (wasActive && !currentActive)) {
       clearTimers();
       renderEngagement(retained() && currentCanCreate);
-      // Same-song resets may recover a current hover; a new song must not inherit
-      // the previous song's pending reveal gesture.
+      // Start a fresh dwell for the current track after cancelling its predecessor's timer.
       pointerWithin = pointerWithin || Boolean(compound.matches?.(':hover'));
-      if (!contextChanged && pointerWithin && currentCanCreate) visit();
+      if (pointerWithin && currentCanCreate) visit();
     } else if ((!wasActive && currentActive) || (!wasAllowed && currentCanCreate)) {
       pointerWithin = pointerWithin || Boolean(compound.matches?.(':hover'));
       focusWithin = focusWithin || Boolean(ownerDocument?.activeElement && compound.contains?.(ownerDocument.activeElement));
@@ -35634,7 +35634,6 @@ function attachUtilityModalEvents() {
   if (!els.overlay || els.overlay.dataset.bound === '1') return;
   els.overlay.dataset.bound = '1';
   bindOverlayPointerOrigin(els.overlay);
-  els.close?.addEventListener('click', closeUtilityModal);
   let searchRenderTimer = null;
   const scheduleSearchRender = () => {
     clearTimeout(searchRenderTimer);

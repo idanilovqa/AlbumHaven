@@ -256,3 +256,32 @@ test('artist-tree checkpoint follows the captured trigger and rejects missing or
   assert.equal(missing.anchorOffset, null);
   assert.equal(missing.anchorVisible, false);
 });
+
+
+test('exact heading readiness rejects an optimistic GalleryBar while canonical navigation is pending', async () => {
+  const { GalleryActions } = await import(galleryActionsUrl);
+  let predicate, selectors, timeout;
+  const owner = { galleryPage: { artistHeadingSelector: '.artist',
+    waitForPageCondition: async (callback, options, args) => {
+      predicate = callback; selectors = args; timeout = options.timeout;
+    },
+  } };
+  await GalleryActions.prototype.waitForOnlyArtistHeadings.call(owner, ['Latest Artist'], { timeout: 10000 });
+  assert.equal(timeout, 10000);
+  const runtime = { view: {}, busy: true, ui: { activeViewRequestUrl: '/view-data?artist=Latest' } };
+  let headings = ['Latest Artist'];
+  const run = () => require('node:vm').runInNewContext(`(${predicate.toString()})(selectors)`, {
+    state: runtime, selectors,
+    document: { querySelectorAll: () => headings.map(textContent => ({ textContent })) },
+  });
+  assert.equal(run(), false);
+  runtime.busy = false;
+  assert.equal(run(), false, 'in-flight canonical response is still required');
+  runtime.ui.activeViewRequestUrl = '';
+  runtime.ui.pendingViewRequest = { artist: 'Latest Artist' };
+  assert.equal(run(), false, 'queued canonical navigation is still required');
+  runtime.ui.pendingViewRequest = null;
+  assert.equal(run(), true);
+  headings = ['Old Artist'];
+  assert.equal(run(), false, 'settled state still requires the exact heading');
+});

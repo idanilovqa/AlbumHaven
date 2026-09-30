@@ -90,10 +90,11 @@ test('gallery sections expose live image counts and omit empty remote and match 
 });
 
 test('provider rows include readable labels, Deezer heart, CAA, and external markers', () => {
-  for (const label of ['Apple', 'Spotify', 'Deezer', 'Bandcamp', 'Discogs', 'CAA', 'YouTube Music']) {
+  for (const label of ['Apple Music', 'SPOTIFY', 'Deezer', 'Bandcamp', 'Discogs', 'Cover Art Archive', 'YouTube Music']) {
     assert.match(source, new RegExp(`['\"]${label}['\"]`));
   }
   assert.match(source, /buildDeezerGlyph[^]*heart/s);
+  assert.match(source, /function buildCaaGlyph\(\)\s*\{\s*return '<span aria-hidden="true">CAA<\/span>';/);
   assert.match(source, /cover-lookup-external-marker/);
   assert.match(source, /String\(source \|\| ''\)\.trim\(\)\.toLowerCase\(\)/);
 });

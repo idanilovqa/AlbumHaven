@@ -1382,3 +1382,95 @@ test('family rows use available album art and retain independent pressed states'
   assert.match(html, /artist-family-panel__primary-divider/);
   assert.doesNotMatch(html, /data-open-lightbox/);
 });
+
+test('retained gallery chrome leaves unchanged Artist Family DOM untouched and still refreshes new context', () => {
+  const writes = [];
+  const tracked = (label, values) => new Proxy(values, {
+    set(target, property, value) {
+      writes.push(`${label}.${String(property)}`);
+      target[property] = value;
+      return true;
+    },
+  });
+  const title = tracked('title', { textContent: 'Lead Family', title: 'Lead Family' });
+  const total = tracked('total', { textContent: '2 albums' });
+  const checkedAttributes = { 'aria-checked': 'false' };
+  const combine = {
+    disabled: false,
+    getAttribute: name => checkedAttributes[name] ?? null,
+    setAttribute(name, value) {
+      writes.push(`combine.${name}`);
+      checkedAttributes[name] = value;
+    },
+  };
+  const panel = { style: { top: '72px' } };
+  const name = { textContent: '' };
+  const summary = { textContent: '' };
+  let barBottom = 72;
+  const bar = {
+    offsetHeight: 54,
+    getBoundingClientRect: () => ({ bottom: barBottom }),
+    querySelector: selector => selector === '[data-gallery-context-name]' ? name
+      : selector === '[data-gallery-context-summary]' ? summary : null,
+  };
+  const groups = [{ artist: 'Lead', albums: [{ key: 'one' }, { key: 'two' }] }];
+  const body = tracked('body', { dataset: tracked('body.dataset', {}) });
+  const elements = new Map([
+    ['[data-gallery-bar-instance="gallery"]', bar],
+    ['[data-gallery-family-panel-title]', title],
+    ['[data-gallery-family-panel-total]', total],
+    ['[data-gallery-family-panel-body]', body],
+    ['[data-artist-family-panel]', panel],
+  ]);
+  let combineEnabled = false;
+  let albumCount = 2;
+  const context = loadRuntime({
+    window: { innerWidth: 1440 },
+    state: { gallery: {}, ui: { searchDraftQuery: 'Lead' }, view: {
+      query: 'Lead', selected_artist: 'Lead', artist_groups: groups,
+    } },
+    getCombineSimilarArtistsPreference: () => combineEnabled,
+    document: {
+      querySelector: selector => elements.get(selector) || null,
+      querySelectorAll: selector => selector === '[data-toggle-combine-similar-artists="1"]' ? [combine] : [],
+      getElementById: id => id === 'albums-scroll' ? { scrollTop: 104 } : null,
+    },
+  });
+  const mainState = context.ensureGalleryMainState();
+  body.dataset.galleryRenderSignature = JSON.stringify({
+    filters: mainState,
+    groups: groups.map(group => [group.artist, group.albums.length]),
+  });
+  context.getFilteredGalleryMainModel = () => ({ groups, totals: { artistCount: 1, albumCount } });
+  context.getGalleryFamilyPanelGroups = () => groups;
+  context.getGalleryFamilyPanelModel = () => ({ totals: { albumCount } });
+  context.getGalleryMainContextSections = () => [];
+  context.hasGalleryArtistFamily = () => true;
+  writes.length = 0;
+
+  context.updateGalleryMainChrome();
+  context.state.view.query = '';
+  context.state.ui.searchDraftQuery = '';
+  context.updateGalleryMainChrome();
+  assert.deepEqual(writes, [], 'search clear and repeated chrome refreshes must not rewrite retained family DOM');
+  assert.equal(name.textContent, 'Lead family');
+  assert.equal(bar.hidden, false);
+
+  context.state.view.selected_artist = 'Next';
+  albumCount = 3;
+  combineEnabled = true;
+  barBottom = 80;
+  context.updateGalleryMainChrome();
+  assert.equal(name.textContent, 'Next family');
+  assert.equal(title.textContent, 'Next Family');
+  assert.equal(title.title, 'Next Family');
+  assert.equal(total.textContent, '3 albums');
+  assert.equal(checkedAttributes['aria-checked'], 'true');
+  assert.equal(panel.style.top, '80px');
+  assert.deepEqual(writes.sort(), ['combine.aria-checked', 'title.textContent', 'title.title', 'total.textContent']);
+
+  context.state.view.selected_artist = '';
+  context.updateGalleryMainControls();
+  assert.equal(combine.disabled, true, 'no selected artist disables the family switch');
+  assert.equal(checkedAttributes['aria-checked'], 'false');
+});

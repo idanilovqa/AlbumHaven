@@ -1369,3 +1369,121 @@ test('late viewport discovery promotes queued near work without adding a consume
   assert.equal(scheduler.queues.near.length, 0);
   assert.equal(scheduler.tasks.get('late-visible').imageRequests.length, 1);
 });
+test('same-generation viewport pruning cancels detached active and queued consumers before current covers', async () => {
+  const gate = deferred();
+  const starts = [];
+  const events = [];
+  const cache = {
+    normalizeProductionUrl: normalizer,
+    recordInFlightPreemption(url, reason) { events.push(`record:${url}:${reason}`); },
+    resolve(url, options = {}) {
+      starts.push(url);
+      if (url === 'current') return Promise.resolve({ displayUrl: `blob:${url}`, productionUrl: url });
+      return new Promise((resolve, reject) => {
+        options.signal.addEventListener('abort', () => {
+          events.push(`abort:${url}`);
+          reject(Object.assign(new Error('detached'), { name: 'AbortError' }));
+        }, { once: true });
+        gate.promise.then(() => resolve({ displayUrl: `blob:${url}`, productionUrl: url }));
+      });
+    },
+    async prefetch(url) { return { cached: true, productionUrl: url }; },
+  };
+  const { scheduler, committed } = createPreemptibleScheduler(cache, { maxConcurrency: 1 });
+  const activeImage = createTrackedImage('old-active');
+  const queuedImage = createTrackedImage('old-queued');
+  activeImage.isConnected = queuedImage.isConnected = true;
+  const active = scheduler.enqueue('old-active', { image: activeImage, priority: 'visible' });
+  const queued = scheduler.enqueue('old-queued', { image: queuedImage, priority: 'visible' });
+  try {
+    activeImage.isConnected = queuedImage.isConnected = false;
+    scheduler.pruneObsoleteConsumerTasks(scheduler.generation);
+    assert.deepEqual(events, ['record:old-active:render-generation-preemption', 'abort:old-active']);
+    assert.equal(scheduler.queues.visible.length, 0, 'detached queued work must never fetch');
+    const currentImage = createTrackedImage('current');
+    currentImage.isConnected = true;
+    const current = scheduler.enqueue('current', { image: currentImage, priority: 'visible' });
+    assert.equal((await current).cancelled, false);
+    assert.equal((await active).cancelled, true);
+    assert.equal((await queued).cancelled, true);
+    assert.deepEqual(starts, ['old-active', 'current']);
+    assert.deepEqual(committed, [['current', 'current', 1]]);
+    assert.equal(scheduler.activeCount, 0);
+  } finally {
+    gate.resolve();
+    await Promise.all([active, queued]);
+  }
+});
+
+test('same-generation pruning retains a shared request with a connected consumer', async () => {
+  const gate = deferred();
+  let starts = 0;
+  let signal;
+  const cache = {
+    normalizeProductionUrl: normalizer,
+    async resolve(url, options) {
+      starts += 1;
+      signal = options.signal;
+      await gate.promise;
+      return { displayUrl: `blob:${url}`, productionUrl: url };
+    },
+    async prefetch(url) { return { cached: true, productionUrl: url }; },
+  };
+  const { scheduler, committed } = createPreemptibleScheduler(cache, { maxConcurrency: 1 });
+  const detached = createTrackedImage('detached');
+  const retained = createTrackedImage('retained');
+  detached.isConnected = retained.isConnected = true;
+  const first = scheduler.enqueue('shared', { image: detached, priority: 'visible' });
+  const second = scheduler.enqueue('shared', { image: retained, priority: 'visible' });
+  try {
+    detached.isConnected = false;
+    scheduler.pruneObsoleteConsumerTasks(scheduler.generation);
+    assert.equal(signal.aborted, false);
+    assert.equal(first, second);
+    assert.equal(starts, 1);
+    gate.resolve();
+    assert.equal((await first).cancelled, false);
+    assert.deepEqual(committed, [['retained', 'shared', 1]]);
+  } finally { gate.resolve(); await first; }
+});
+
+test('same-generation pruning preserves an independent durability owner after its image detaches', async () => {
+  const imageGate = deferred();
+  const durabilityGate = deferred();
+  let signal;
+  let durabilityStarted = false;
+  const cache = {
+    normalizeProductionUrl: normalizer,
+    async resolve(url, options) {
+      signal = options.signal;
+      await imageGate.promise;
+      return { displayUrl: `blob:${url}`, productionUrl: url };
+    },
+    async prefetch(url) {
+      durabilityStarted = true;
+      await durabilityGate.promise;
+      return { cached: true, productionUrl: url };
+    },
+  };
+  const { scheduler, committed } = createPreemptibleScheduler(cache, { maxConcurrency: 1 });
+  const image = createTrackedImage('detached');
+  image.isConnected = true;
+  const visible = scheduler.enqueue('shared', { image, priority: 'visible' });
+  const durable = scheduler.enqueue('shared', { priority: 'background' });
+  try {
+    image.isConnected = false;
+    scheduler.pruneObsoleteConsumerTasks(scheduler.generation);
+    assert.equal(signal.aborted, false, 'independent cache durability must retain ownership');
+    imageGate.resolve();
+    assert.equal((await visible).cancelled, false);
+    assert.equal(durabilityStarted, true);
+    scheduler.pruneObsoleteConsumerTasks(scheduler.generation);
+    assert.equal(scheduler.tasks.has('shared'), true, 'committed image has no pending consumer but durability remains');
+    durabilityGate.resolve();
+    assert.equal((await durable).cancelled, false);
+    assert.deepEqual(committed, []);
+  } finally {
+    imageGate.resolve(); durabilityGate.resolve();
+    await Promise.all([visible, durable]);
+  }
+});

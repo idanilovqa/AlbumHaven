@@ -40,6 +40,41 @@ function loadHelper(overrides = {}) {
   return context;
 }
 
+for (const [source, label] of [['apple', 'Apple Music'], ['cover_art_archive', 'Cover Art Archive'], ['spotify', 'SPOTIFY']]) {
+  require('node:test')(`remote ${source} cover cards separate semantic labels from decorative badges`, () => {
+    const context = loadHelper({ escapeHtml: value => String(value ?? '') });
+    const markup = context.buildCoverLookupCard({ id: source, source, album: 'Provider fixture' }, 'remote');
+    const labelMatch = markup.match(/<span class="cover-lookup-art-source">([^]*?)<\/span>/);
+    assert.ok(labelMatch);
+    assert.equal(labelMatch[1], label);
+    assert.match(markup, /<span class="cover-lookup-art-source-badge [^"]+" aria-hidden="true">/);
+    assert.doesNotMatch(labelMatch[1], /<|>/);
+    const saved = context.buildCoverLookupCard({ id: source, source, album: 'Provider fixture' }, 'saved-remote');
+    assert.equal(saved.match(/<span class="cover-lookup-art-source">([^]*?)<\/span>/)[1], label);
+    assert.match(saved, /data-cover-lookup-saved-remote="1"/);
+    assert.match(saved, /data-cover-lookup-item-key="saved-remote:/);
+  });
+}
+
+require('node:test')('completed lookup counts covers while retaining every other artwork alternative', () => {
+  const { context, bodyElement } = createDrawerHarness();
+  const covers = [{ id: 'cover-default' }, ...['one', 'two', 'three'].map(id => ({ id, art_kind: 'cover' }))];
+  const alternatives = ['booklet', 'back', 'disc'].map(art_kind => ({ id: art_kind, art_kind }));
+  const matches = [...covers, ...alternatives];
+  const before = JSON.stringify(matches);
+  context.state.coverLookup.tasks = [{
+    id: 'mixed-artwork', status: 'completed', artist: 'Artist', album: 'Album', possible_matches: matches,
+  }];
+  context.renderCoverLookupDrawer();
+  assert.match(bodyElement.innerHTML, />4 covers found</);
+  assert.doesNotMatch(bodyElement.innerHTML, />7 covers found</);
+  assert.equal(JSON.stringify(matches), before);
+  assert.strictEqual(context.state.coverLookup.tasks[0].possible_matches, matches);
+  for (const alternative of alternatives) {
+    assert.match(context.buildCoverLookupCard(alternative, 'remote'), /data-cover-lookup-other-remote-art="1"/);
+  }
+});
+
 for (const interaction of ['focus', 'hover']) {
   const { context, bodyElement } = createDrawerHarness();
   const task = { id: 'cancel-transition', status: 'running', artist: 'Artist', album: 'Album' };
@@ -2390,7 +2425,10 @@ function createDrawerHarness(overrides = {}) {
 }
 
 ;(async () => {
+  const warnings = [];
   const context = loadHelper({
+    document: { getElementById: () => ({ hidden: true }) },
+    console: { ...console, warn: (...args) => warnings.push(args) },
     fetch: async () => ({
       ok: true,
       json: async () => ({
@@ -2428,6 +2466,7 @@ function createDrawerHarness(overrides = {}) {
 
   await context.loadCoverLookupTasks({ toast: false });
 
+  assert.deepEqual(warnings, [], 'successful task polling must reach idle cleanup without a caught error');
   assert.equal(
     context.state.coverLookup.modal.selectedRemoteId,
     'persisted-override-id',

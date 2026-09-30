@@ -74,3 +74,35 @@ test('an appearance save targets its edited profile even after the viewport chan
   await store.flush();
   assert.deepEqual(writes, [{ profile: 'mobile', changes: { playerAppearance: { seekbarMode: 'waveform' } } }]);
 });
+
+test('each Artist Tree write synchronously replaces prior saved status until its server response completes', async () => {
+  const status = new Map([['data-preferences-sync', 'saved']]);
+  const requests = [];
+  let acknowledge;
+  const window = {
+    innerWidth: 1440, navigator: {}, setTimeout: () => 1, clearTimeout() {}, addEventListener() {},
+    document: { documentElement: { setAttribute: (name, value) => status.set(name, value) } },
+  };
+  const shell = { contextualPaneWidthPx: 320, infoDrawerWidthPx: 360, artistTreeFolded: false };
+  const store = createStore({
+    window,
+    bootstrap: { account_id: 42, profiles: { web_desktop: { shellLayoutPreferences: shell } } },
+    fetch: async (_url, options) => {
+      requests.push(JSON.parse(options.body));
+      return new Promise(resolve => { acknowledge = () => resolve({ ok: true }); });
+    },
+  });
+  for (const folded of [true, false]) {
+    assert.equal(status.get('data-preferences-sync'), 'saved');
+    store.setItem('albumhaven.shellLayoutPreferences.v1', JSON.stringify({ ...shell, artistTreeFolded: folded }));
+    assert.equal(status.get('data-preferences-sync'), 'pending');
+    const saving = store.flush();
+    assert.equal(status.get('data-preferences-sync'), 'pending');
+    assert.deepEqual(requests.at(-1), { profile: 'web_desktop', changes: {
+      shellLayoutPreferences: { ...shell, artistTreeFolded: folded },
+    } });
+    acknowledge();
+    await saving;
+    assert.equal(status.get('data-preferences-sync'), 'saved');
+  }
+});

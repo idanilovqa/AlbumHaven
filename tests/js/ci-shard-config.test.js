@@ -36,7 +36,7 @@ test('performance shard resolver preserves the existing fixture and target mappi
   );
   assert.equal(
     selectFocusedPerformanceTargets(resolvePerformanceShard('scan-library'), ['scan-cached'], 'related').targets.length,
-    5,
+    7,
   );
   assert.throws(
     () => selectFocusedPerformanceTargets(resolvePerformanceShard('scan-library'), ['playback-start'], 'exact'),

@@ -28,7 +28,7 @@ export class CapabilityPresentationPage extends CapabilityEditorPage {
         Number.isFinite(animation.effect?.getComputedTiming().endTime)).map((animation) => animation.finished));
       const style = getComputedStyle(element);
       return { background: style.backgroundColor, backgroundImage: style.backgroundImage,
-        bridgeBackground: getComputedStyle(element, '::after').backgroundColor,
+        bridgeBackground: getComputedStyle(element, '::before').backgroundColor,
         color: style.color, opacity: Number(style.opacity),
         cursor: style.cursor, shadow: style.boxShadow, outline: style.outlineStyle };
     });

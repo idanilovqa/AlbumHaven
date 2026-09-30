@@ -469,6 +469,11 @@ export class GalleryActions {
   }
 
   async readArtistHeadingOccurrencesAcrossGallery(options = {}) {
+    if (options.expectedArtists !== undefined && (!Array.isArray(options.expectedArtists)
+      || !options.expectedArtists.length
+      || new Set(options.expectedArtists).size !== options.expectedArtists.length)) {
+      throw new Error('Complete heading inventory requires independent, nonempty unique artist identities');
+    }
     const occurrencesBySection = new Map();
     const readMountedOccurrences = async () => {
       // parity-check: allow-read-only-measurement-evaluate -- inventory mounted virtual artist sections
@@ -510,7 +515,11 @@ export class GalleryActions {
       await readMountedOccurrences();
     }
 
-    return [...occurrencesBySection.values()];
+    const occurrences = [...occurrencesBySection.values()];
+    if (options.expectedArtists !== undefined) {
+      expect(occurrences.map(({ artist }) => artist)).toEqual(options.expectedArtists);
+    }
+    return occurrences;
   }
 
   async readSectionLabels() {
@@ -533,6 +542,9 @@ export class GalleryActions {
 
   async waitForOnlyArtistHeadings(expectedArtists, options = {}) {
     await this.galleryPage.waitForPageCondition((selectors) => {
+      // The GalleryBar can show the next artist before its canonical response.
+      if (typeof state === 'undefined' || !state.view || state.busy
+          || state.ui?.activeViewRequestUrl || state.ui?.pendingViewRequest) return false;
       const headings = Array.from(document.querySelectorAll(selectors.artistHeadingSelector))
         .map((element) => (element.textContent || '').trim())
         .filter(Boolean);
@@ -608,17 +620,22 @@ export class GalleryActions {
   async waitForAlbumCountByHeading(artistName, expectedAlbumCount, options = {}) {
     await this.galleryPage.waitForPageCondition((selectors) => {
       const sections = Array.from(document.querySelectorAll(selectors.artistSectionSelector));
+      const contextName = document.querySelector(selectors.singleArtistContextSelector)
+        ?.querySelector(selectors.singleArtistContextNameSelector)?.textContent?.trim();
       const section = sections.find((element) => {
         const heading = element.querySelector(selectors.artistHeadingSelector);
         return (heading?.textContent || '').trim() === selectors.artistName;
-      });
+      }) || (sections.length === 1 && !sections[0].querySelector(selectors.artistHeadingSelector)
+        && contextName === selectors.artistName ? sections[0] : null);
       if (!(section instanceof HTMLElement)) return false;
       return section.querySelectorAll(selectors.albumCardSelector).length === selectors.expectedAlbumCount;
     }, {
       timeout: options.timeout || 30000,
     }, {
-      artistSectionSelector: '#artist-groups .artist-section',
-      artistHeadingSelector: this.galleryPage.artistHeadingSelector,
+      artistSectionSelector: this.galleryPage.artistSectionSelector,
+      singleArtistContextSelector: this.galleryPage.albumCard.singleArtistContextSelector,
+      singleArtistContextNameSelector: this.galleryPage.albumCard.singleArtistContextNameSelector,
+      artistHeadingSelector: this.galleryPage.artistHeadingWithinSectionSelector,
       albumCardSelector: this.galleryPage.albumCard.cardSelector,
       artistName,
       expectedAlbumCount: Number(expectedAlbumCount),
@@ -628,18 +645,23 @@ export class GalleryActions {
   async waitForMinimumAlbumCountByHeading(artistName, minimumAlbumCount, options = {}) {
     await this.galleryPage.waitForPageCondition((selectors) => {
       const sections = Array.from(document.querySelectorAll(selectors.artistSectionSelector));
+      const contextName = document.querySelector(selectors.singleArtistContextSelector)
+        ?.querySelector(selectors.singleArtistContextNameSelector)?.textContent?.trim();
       const section = sections.find((element) => {
         const heading = element.querySelector(selectors.artistHeadingSelector);
         return (heading?.textContent || '').trim() === selectors.artistName;
-      });
+      }) || (sections.length === 1 && !sections[0].querySelector(selectors.artistHeadingSelector)
+        && contextName === selectors.artistName ? sections[0] : null);
       if (!(section instanceof HTMLElement)) return false;
       return section.querySelectorAll(selectors.albumCardSelector).length
         >= selectors.minimumAlbumCount;
     }, {
       timeout: options.timeout || 30000,
     }, {
-      artistSectionSelector: '#artist-groups .artist-section',
-      artistHeadingSelector: this.galleryPage.artistHeadingSelector,
+      artistSectionSelector: this.galleryPage.artistSectionSelector,
+      singleArtistContextSelector: this.galleryPage.albumCard.singleArtistContextSelector,
+      singleArtistContextNameSelector: this.galleryPage.albumCard.singleArtistContextNameSelector,
+      artistHeadingSelector: this.galleryPage.artistHeadingWithinSectionSelector,
       albumCardSelector: this.galleryPage.albumCard.cardSelector,
       artistName,
       minimumAlbumCount: Number(minimumAlbumCount),
@@ -867,10 +889,14 @@ export class GalleryActions {
       .locator(this.galleryPage.albumCard.coverImageWithinCardSelector)
       .first();
     await this.galleryPage.waitForPageCondition((selectors) => {
-      const section = Array.from(document.querySelectorAll(selectors.artistSectionSelector))
-        .find((candidate) => String(
-          candidate.querySelector(selectors.artistHeadingSelector)?.textContent || '',
-        ).trim() === selectors.artistName);
+      const sections = Array.from(document.querySelectorAll(selectors.artistSectionSelector));
+      const contextName = document.querySelector(selectors.singleArtistContextSelector)
+        ?.querySelector(selectors.singleArtistContextNameSelector)?.textContent?.trim();
+      const section = sections.find((candidate) => String(
+        candidate.querySelector(selectors.artistHeadingSelector)?.textContent || '',
+      ).trim() === selectors.artistName)
+        || (sections.length === 1 && !sections[0].querySelector(selectors.artistHeadingSelector)
+          && contextName === selectors.artistName ? sections[0] : null);
       if (!(section instanceof HTMLElement)) return false;
       const card = Array.from(section.querySelectorAll(selectors.albumCardSelector))
         .find((candidate) => String(
@@ -885,8 +911,10 @@ export class GalleryActions {
     }, {
       timeout: options.timeout || 30000,
     }, {
-      artistSectionSelector: '#artist-groups .artist-section',
-      artistHeadingSelector: this.galleryPage.artistHeadingSelector,
+      artistSectionSelector: this.galleryPage.artistSectionSelector,
+      singleArtistContextSelector: this.galleryPage.albumCard.singleArtistContextSelector,
+      singleArtistContextNameSelector: this.galleryPage.albumCard.singleArtistContextNameSelector,
+      artistHeadingSelector: this.galleryPage.artistHeadingWithinSectionSelector,
       albumCardSelector: this.galleryPage.albumCardWithinSectionSelector,
       albumTitleSelector: this.galleryPage.albumTitleButtonWithinSectionSelector,
       coverImageSelector: this.galleryPage.albumCard.coverImageWithinCardSelector,
@@ -1015,6 +1043,7 @@ export class GalleryActions {
     await this.galleryPage.waitForGalleryScrollMovement(
       scrollState.scrollTop,
       Math.sign(deltaY),
+      { targetScrollTop },
     );
   }
 
@@ -1441,9 +1470,14 @@ export class GalleryActions {
       const moved = Math.abs(galleryScroll.scrollTop - selectors.beforeScrollTop)
         >= selectors.minimumScrollDelta;
       if (!moved) return false;
-      const section = Array.from(document.querySelectorAll(selectors.artistSectionSelector))
-        .find((candidate) => normalize(candidate.querySelector(selectors.artistHeadingSelector)?.textContent)
-          === normalize(selectors.artistName));
+      const sections = Array.from(document.querySelectorAll(selectors.artistSectionSelector));
+      const contextName = normalize(document.querySelector(selectors.singleArtistContextSelector)
+        ?.querySelector(selectors.singleArtistContextNameSelector)?.textContent);
+      const section = sections.find((candidate) => normalize(
+        candidate.querySelector(selectors.artistHeadingSelector)?.textContent,
+      ) === normalize(selectors.artistName))
+        || (sections.length === 1 && !sections[0].querySelector(selectors.artistHeadingSelector)
+          && contextName === normalize(selectors.artistName) ? sections[0] : null);
       const card = section instanceof HTMLElement
         ? Array.from(section.querySelectorAll(selectors.albumCardSelector)).find((candidate) => (
           normalize(candidate.querySelector(selectors.albumTitleSelector)?.textContent)
@@ -1462,6 +1496,8 @@ export class GalleryActions {
     }, {
       galleryScrollSelector: this.galleryPage.galleryScrollSelector,
       artistSectionSelector: this.galleryPage.artistSectionSelector,
+      singleArtistContextSelector: this.galleryPage.albumCard.singleArtistContextSelector,
+      singleArtistContextNameSelector: this.galleryPage.albumCard.singleArtistContextNameSelector,
       artistHeadingSelector: this.galleryPage.artistHeadingWithinSectionSelector,
       albumCardSelector: this.galleryPage.albumCardWithinSectionSelector,
       albumTitleSelector: this.galleryPage.albumTitleButtonWithinSectionSelector,

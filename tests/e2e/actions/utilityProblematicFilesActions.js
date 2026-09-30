@@ -94,6 +94,97 @@ export class UtilityProblematicFilesActions {
     });
   }
 
+  async *walkListWindows(options = {}) {
+    const tab = this.utilityProblematicFilesTab;
+    const list = tab.sidebar.list;
+    const deadline = Date.now() + (options.timeout || 30000);
+    assert.ok(await list.isVisible(), 'Problematic Files native traversal requires a visible list');
+    // parity-check: allow-read-only-measurement-evaluate -- measure the native list scroll axis without changing production state
+    const readScroll = () => list.evaluate(node => {
+      const horizontal = node.dataset.problematicVirtualAxis === 'horizontal';
+      return { horizontal, offset: horizontal ? node.scrollLeft : node.scrollTop,
+        viewport: horizontal ? node.clientWidth : node.clientHeight,
+        extent: horizontal ? node.scrollWidth : node.scrollHeight };
+    });
+    const wheelTo = async (view, target) => {
+      const bounds = await list.boundingBox();
+      assert.ok(bounds, 'Problematic Files list must be visible for native traversal');
+      await tab.page.mouse.move(bounds.x + bounds.width / 2, bounds.y + bounds.height / 2);
+      await tab.page.mouse.wheel(view.horizontal ? target - view.offset : 0,
+        view.horizontal ? 0 : target - view.offset);
+      await tab.waitForPageCondition(expected => {
+        const node = document.querySelector(expected.selector);
+        if (!node) return false;
+        const horizontal = node.dataset.problematicVirtualAxis === 'horizontal';
+        const offset = horizontal ? node.scrollLeft : node.scrollTop;
+        if (Math.abs(offset - expected.target) > 1) return false;
+        const rows = Array.from(node.querySelectorAll(expected.itemSelector));
+        if (!rows.length) return false;
+        const viewport = node.getBoundingClientRect(), first = rows[0].getBoundingClientRect(), last = rows.at(-1).getBoundingClientRect();
+        // Wait for a mounted window that covers the native viewport, not just
+        // a delivered wheel event with rows from the previous position.
+        return horizontal
+          ? first.left <= viewport.left + rows[0].offsetWidth && last.right >= viewport.right - rows.at(-1).offsetWidth
+          : first.top <= viewport.top + rows[0].offsetHeight && last.bottom >= viewport.bottom - rows.at(-1).offsetHeight;
+      }, { timeout: Math.max(1, deadline - Date.now()) }, { selector: tab.sidebarListSelector, itemSelector: tab.listItemSelector, target });
+    };
+    let view = await readScroll();
+    const originalOffset = view.offset;
+    let traversalError;
+    try {
+      if (view.offset > 1) { await wheelTo(view, 0); view = await readScroll(); }
+      while (Date.now() < deadline) {
+        yield await this.readVisibleListItems();
+        const end = Math.max(0, view.extent - view.viewport);
+        if (view.offset >= end - 1) return;
+        const target = Math.min(end, view.offset + Math.max(1, Math.floor(view.viewport * 0.8)));
+        await wheelTo(view, target);
+        view = await readScroll();
+      }
+      throw new Error('Problematic Files native traversal did not reach its boundary');
+    } catch (error) {
+      traversalError = error;
+      throw error;
+    } finally {
+      if (options.restoreScroll) {
+        try {
+          view = await readScroll();
+          if (Math.abs(view.offset - originalOffset) > 1) await wheelTo(view, originalOffset);
+        } catch (error) {
+          if (traversalError) throw new AggregateError([traversalError, error], 'Problematic Files traversal and scroll restoration failed');
+          throw error;
+        }
+      }
+    }
+  }
+
+  async revealListItemByIdentity({ key, title, meta }, options = {}) {
+    for await (const items of this.walkListWindows(options)) {
+      const matches = items.filter(item => key ? item.key === key : item.title === title && item.meta === meta);
+      assert.ok(matches.length <= 1, `Ambiguous Problematic Files identity: ${key || `${title} / ${meta}`}`);
+      if (matches.length) return matches[0];
+    }
+    throw new Error(`Exact Problematic Files identity was not found: ${key || `${title} / ${meta}`}`);
+  }
+
+  async readCompleteListItems(options = {}) {
+    const items = new Map();
+    for await (const window of this.walkListWindows({ ...options, restoreScroll: true })) {
+      for (const item of window) items.set(item.key, item);
+    }
+    assert.equal(items.size, await this.readVisibleResultCount(), 'Native inventory must match the visible complete result count');
+    return [...items.values()];
+  }
+
+  async revealListItemWithArtwork(state, options = {}) {
+    const tab = this.utilityProblematicFilesTab;
+    for await (const _items of this.walkListWindows(options)) {
+      const rows = tab.listItemsWithArtwork(state);
+      if (await rows.count()) return rows.first().getAttribute('data-problematic-album-key');
+    }
+    throw new Error(`No Problematic Files row has ${state} artwork`);
+  }
+
   async readActiveListItem() {
     const activeItem = this.utilityProblematicFilesTab.activeListItem;
     return {
@@ -352,7 +443,7 @@ export class UtilityProblematicFilesActions {
   }
 
   async readVisibleResultCount() {
-    return this.utilityProblematicFilesTab.listItems.count();
+    return Number(await this.utilityProblematicFilesTab.sidebar.count.textContent());
   }
 
   async readSearchQuery() {
@@ -726,7 +817,14 @@ export class UtilityProblematicFilesActions {
   }
 
   async prepareSelectedMutationContinuity() {
+    if (await this.utilityProblematicFilesTab.activeListItem.count() === 0) {
+      // parity-check: allow-read-only-measurement-evaluate -- identify the canonical selected row before native reveal
+      const key = await this.utilityProblematicFilesTab.page.evaluate(() => String(state.utility?.selectedProblematicKey || ''));
+      assert.ok(key, 'Mutation continuity requires an exact selected identity');
+      await this.revealListItemByIdentity({ key });
+    }
     await this.utilityProblematicFilesTab.activeListItem.scrollIntoViewIfNeeded();
+    await this.utilityProblematicFilesTab.waitForSearchProjection(await this.readSearchQuery(), { requireSettledRange: true });
     this.mutationObservation = await this.utilityProblematicFilesTab.page.evaluateHandle((selectors) => {
       const list = document.querySelector(selectors.listSelector);
       const active = document.querySelector(selectors.activeSelector);
@@ -751,7 +849,7 @@ export class UtilityProblematicFilesActions {
         if (!Array.from(document.querySelectorAll(selectors.itemSelector)).includes(active)) observer.disconnect();
       });
       observer.observe(list, { childList: true, subtree: true, characterData: true, attributes: true });
-      return { ...snapshot, observer };
+      return Object.assign(snapshot, { observer });
     }, {
       listSelector: this.utilityProblematicFilesTab.sidebarListSelector,
       activeSelector: this.utilityProblematicFilesTab.activeListItemSelector,
@@ -816,13 +914,21 @@ export class UtilityProblematicFilesActions {
   async startNavigationRenderObservation() {
     this.navigationObservation = await this.utilityProblematicFilesTab.page.evaluateHandle((selectors) => {
       const records = [];
-      const capture = () => {
+      const capture = (mutations) => {
         const detail = document.querySelector(selectors.detailSelector);
         const active = document.querySelector(selectors.activeListItemSelector);
         records.push({
           activeKey: String(active?.getAttribute('data-problematic-album-key') || ''),
+          selectedKey: String(state.utility?.selectedProblematicKey || ''),
+          runtimeKey: String(getSelectedProblematicAlbum()?.key || ''),
+          selectedRowMounted: Array.from(document.querySelector(selectors.sidebarListSelector)?.querySelectorAll(selectors.listItemSelector) || [])
+            .some(row => row.getAttribute('data-problematic-album-key') === String(state.utility?.selectedProblematicKey || '')),
+          detailMutation: mutations.some(mutation => ['childList', 'characterData'].includes(mutation.type)
+            && (detail === mutation.target || Boolean(detail?.contains(mutation.target)))),
           detailTitle: String(detail?.querySelector(selectors.detailTitleSelector)?.textContent || '').trim(),
           detailText: String(detail?.textContent || '').trim(),
+          detailRender: mutations.some(mutation => mutation.type === 'childList' && detail === mutation.target),
+          detailRenderCount: mutations.filter(mutation => mutation.type === 'childList' && detail === mutation.target).length,
           listScrollTop: Number(document.querySelector(selectors.sidebarListSelector)?.scrollTop || 0),
         });
       };
@@ -831,11 +937,12 @@ export class UtilityProblematicFilesActions {
         document.querySelector(selectors.sidebarListSelector),
       ].filter(Boolean);
       const observer = new MutationObserver(capture);
-      targets.forEach((target) => observer.observe(target, { childList: true, subtree: true, attributes: true }));
+      targets.forEach((target) => observer.observe(target, { childList: true, characterData: true, subtree: true, attributes: true }));
       return { records, observer };
     }, {
       detailSelector: this.utilityProblematicFilesTab.detailScrollerSelector,
       detailTitleSelector: this.utilityProblematicFilesTab.detailTitleSelector,
+      listItemSelector: this.utilityProblematicFilesTab.listItemSelector,
       activeListItemSelector: this.utilityProblematicFilesTab.activeListItemSelector,
       sidebarListSelector: this.utilityProblematicFilesTab.sidebarListSelector,
     });

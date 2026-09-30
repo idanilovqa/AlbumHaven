@@ -135,24 +135,25 @@ export class AlbumCard extends BasePage {
     return this.cardsByArtistAndAlbum(artistName, albumName).first();
   }
 
+  get singleArtistContextNameSelector() {
+    return '[data-gallery-context-name]';
+  }
+
+  get singleArtistContextSelector() {
+    return '[data-gallery-bar-instance="gallery"][data-gallery-context-kind="single-artist"]';
+  }
+
   sectionByArtistHeading(artistHeading) {
     const normalizedHeading = exactNormalizedText(artistHeading);
     const explicitSection = this.page.locator('#artist-groups .artist-section').filter({
-      has: this.page.locator('.artist-name').filter({
-        hasText: normalizedHeading,
-      }),
+      has: this.page.locator('.artist-name').filter({ hasText: normalizedHeading }),
     });
-    const singleArtistContext = this.page.locator(
-      '[data-gallery-bar][data-gallery-context-kind="single-artist"]',
-    ).filter({
-      has: this.page.locator('[data-gallery-context-name]').filter({
-        hasText: normalizedHeading,
-      }),
+    const singleArtistContext = this.page.locator(this.singleArtistContextSelector).filter({
+      has: this.page.locator('[data-gallery-context-name]').filter({ hasText: normalizedHeading }),
     });
     const singleArtistSection = singleArtistContext
       .locator('xpath=following::*[@id="artist-groups"][1]')
-      .locator('.artist-section')
-      .first();
+      .locator(':scope > .artist-section:only-child:not(:has(.artist-name))');
     return explicitSection.or(singleArtistSection).first();
   }
 

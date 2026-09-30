@@ -8,7 +8,7 @@
     return Math.min(Math.max(value, minimum), maximum);
   }
 
-  function calculateRange({ count, offset, viewport, stride, overscan }) {
+  function calculateRange({ count, offset, viewport, stride = DEFAULT_ROW_STRIDE, overscan = DEFAULT_OVERSCAN }) {
     if (!count) return { start: 0, end: 0 };
     const visibleStart = Math.floor(Math.max(0, offset) / stride);
     const visibleCount = Math.max(1, Math.ceil(Math.max(1, viewport) / stride));
@@ -32,6 +32,7 @@
     let selectedKey = '';
     let frame = 0;
     let disposed = false;
+    let spacerGeometry = '';
     const mountedRows = new Map();
     const [before, after] = ['before', 'after'].map((position) => {
       const spacer = list.ownerDocument.createElement('div');
@@ -70,8 +71,12 @@
       const visibleItems = items.slice(range.start, range.end);
       const keys = new Set(visibleItems.map((item) => String(item.key)));
       const focused = list.ownerDocument.activeElement;
-      before.style.cssText = `${dimension}:${beforeSize}px`;
-      after.style.cssText = `${dimension}:${afterSize}px`;
+      const nextSpacerGeometry = `${dimension}:${beforeSize}:${afterSize}`;
+      if (spacerGeometry !== nextSpacerGeometry) {
+        before.style.cssText = `${dimension}:${beforeSize}px`;
+        after.style.cssText = `${dimension}:${afterSize}px`;
+        spacerGeometry = nextSpacerGeometry;
+      }
       if (before.parentNode !== list) list.replaceChildren(before, after);
       for (const [key, row] of mountedRows) {
         if (keys.has(key)) continue;
@@ -96,16 +101,27 @@
       if (focused && list.contains(focused) && list.ownerDocument.activeElement !== focused) {
         focused.focus({ preventScroll: true });
       }
-      list.dataset.problematicMountedCount = String(range.end - range.start);
-      list.dataset.problematicVirtualStart = String(range.start);
-      list.dataset.problematicVirtualEnd = String(range.end);
-      list.dataset.problematicVirtualAxis = horizontal ? 'horizontal' : 'vertical';
+      const metadata = {
+        problematicMountedCount: String(range.end - range.start),
+        problematicVirtualStart: String(range.start),
+        problematicVirtualEnd: String(range.end),
+        problematicVirtualAxis: horizontal ? 'horizontal' : 'vertical',
+      };
+      for (const [key, value] of Object.entries(metadata)) {
+        if (list.dataset[key] !== value) list.dataset[key] = value;
+      }
     };
 
     const schedule = () => {
       if (disposed || frame) return;
       frame = global.requestAnimationFrame(renderNow);
     };
+
+    // Opening the modal changes this viewport without resizing the window.
+    const resizeObserver = typeof global.ResizeObserver === 'function'
+      ? new global.ResizeObserver(schedule)
+      : null;
+    resizeObserver?.observe(list);
 
     const reveal = (key) => {
       const index = items.findIndex((item) => String(item?.key || '') === String(key || ''));
@@ -130,7 +146,10 @@
       items = Array.isArray(nextItems) ? nextItems : [];
       selectedKey = String(nextSelectedKey || '');
       renderNow();
-      if (selectedKey !== previousSelectedKey) reveal(selectedKey);
+      if (selectedKey !== previousSelectedKey) {
+        reveal(selectedKey);
+        renderNow();
+      }
     };
 
     const handleKeydown = (event) => {
@@ -158,6 +177,7 @@
       list.removeEventListener('scroll', schedule);
       list.removeEventListener('keydown', handleKeydown);
       global.removeEventListener?.('resize', schedule);
+      resizeObserver?.disconnect();
       if (frame) global.cancelAnimationFrame(frame);
       delete list.dataset.problematicMountedCount;
       delete list.dataset.problematicVirtualStart;

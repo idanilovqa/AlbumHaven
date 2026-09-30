@@ -15,7 +15,8 @@ function mobilePageDescriptor(kind, album = null) {
     subtitle, coverSrc: album && typeof albumHasDisplayCover === 'function' && albumHasDisplayCover(album) ? buildAlbumDisplayCoverUrl(album) : '', tab: kind === 'utilities' ? state.utility.activeTab : '' };
 }
 function syncMobilePageShell() {
-  const active = mobilePageState.pages.at(-1);
+  const mobile = usesMobilePageLayout();
+  const active = mobile ? mobilePageState.pages.at(-1) : null;
   const main = document.getElementById('shell-main-surface');
   const header = document.getElementById('mobile-page-header');
   const outlet = document.getElementById('mobile-page-outlet');
@@ -28,7 +29,8 @@ function syncMobilePageShell() {
   document.getElementById('mobile-library-button').hidden = Boolean(active);
   for (const kind of mobilePageState.originals.keys()) {
     const element = document.getElementById(MOBILE_PAGE_KINDS[kind]);
-    if (element) { element.hidden = kind !== active?.kind; element.inert = kind !== active?.kind; }
+    setMobilePagePresentation(kind, mobile);
+    if (element) { element.hidden = mobile && kind !== active?.kind; element.inert = mobile && kind !== active?.kind; }
   }
   if (active) {
     document.getElementById('mobile-page-title').textContent = active.title;
@@ -42,7 +44,33 @@ function syncMobilePageShell() {
   syncMobileAlbumHeader();
   syncMobileLoopHeader();
   // A page is not a modal and must never trap focus away from the persistent player.
-  if (!document.querySelector('[aria-modal="true"]:not([hidden])')?.getClientRects().length) document.body.classList.remove('modal-open');
+  const hasModal = [...document.querySelectorAll('[aria-modal="true"]:not([hidden])')]
+    .some(dialog => dialog.getClientRects().length > 0);
+  if (!hasModal) document.body.classList.remove('modal-open');
+  else if (!mobile) document.body.classList.add('modal-open');
+}
+
+// Transfer the existing surface only; descriptors and history continue to own
+// its parent stack across breakpoint changes, and closing remains owner-driven.
+function setMobilePagePresentation(kind, mobile) {
+  const element = document.getElementById(MOBILE_PAGE_KINDS[kind]);
+  const original = mobilePageState.originals.get(kind);
+  if (!element || !original || element.classList.contains('is-mobile-page') === mobile) return;
+  element.classList.toggle('is-mobile-page', mobile);
+  if (mobile) {
+    original.dialog.setAttribute('role', 'region');
+    original.dialog.removeAttribute('aria-modal');
+    original.dialog.setAttribute('aria-label', kind === 'album' ? 'Album details'
+      : mobilePageState.pages.find(page => page.kind === kind)?.title || '');
+    document.getElementById('mobile-page-outlet').appendChild(element);
+  } else {
+    for (const [name, value] of [['role', original.role], ['aria-modal', original.modal], ['aria-label', original.label]]) {
+      if (value === null) original.dialog.removeAttribute(name);
+      else original.dialog.setAttribute(name, value);
+    }
+    element.inert = false;
+    original.placeholder.before(element);
+  }
 }
 function writeMobilePageHistory(mode = 'push') {
   const url = new URL(window.location.href);
@@ -86,9 +114,21 @@ function resolveMobileParentScrollPosition(descriptor, previous, snapshot = {}, 
   if (!position || !Number.isFinite(position.scrollTop) || !Number.isFinite(position.scrollLeft)) return null;
   return { scrollTop: Math.max(0, position.scrollTop), scrollLeft: Math.max(0, position.scrollLeft) };
 }
+function resolveMobileParentViewUrl(descriptor, previous, snapshot = {}, viewUrl = '') {
+  const restored = Array.isArray(snapshot.mobilePages)
+    ? snapshot.mobilePages.find(page => page.kind === descriptor.kind && page.albumKey === descriptor.albumKey) : null;
+  return previous?.parentViewUrl ?? restored?.parentViewUrl ?? viewUrl;
+}
 function restoreMobileGalleryParent(descriptor) {
-  const position = descriptor?.parentScrollPosition;
+  const parentPosition = descriptor?.parentPosition;
+  const destinationPosition = window.history?.state?.albumHavenNavigationPosition;
+  const atParent = !Number.isSafeInteger(parentPosition) || !Number.isSafeInteger(destinationPosition)
+    || parentPosition === destinationPosition;
+  const position = atParent ? descriptor?.parentScrollPosition : null;
   const options = { preserveScroll: true };
+  // Root '/' can display the canonical album gallery as well as Home. Retain
+  // the owning view route, not its data, through this page's history entry.
+  if (atParent && descriptor?.parentViewUrl) options.parentViewUrl = descriptor.parentViewUrl;
   if (position) {
     options.preserveAbsoluteScroll = true;
     options.absoluteScrollPosition = position;
@@ -109,6 +149,8 @@ function presentMobilePage(descriptor) {
   descriptor.parentPosition = resolveMobileParentPosition(descriptor, previous, window.history.state || {});
   descriptor.parentScrollPosition = resolveMobileParentScrollPosition(descriptor, previous, window.history.state || {},
     mobilePageState.pages.length ? null : document.getElementById('albums-scroll'));
+  descriptor.parentViewUrl = resolveMobileParentViewUrl(descriptor, previous, window.history.state || {},
+    mobilePageState.pages[0]?.parentViewUrl || buildUrl(state.view));
   const active = mobilePageState.pages.at(-1);
   if (active?.kind === descriptor.kind && active.albumKey === descriptor.albumKey) {
     Object.assign(active, descriptor);
@@ -121,12 +163,7 @@ function presentMobilePage(descriptor) {
     element.before(placeholder);
     const dialog = element.querySelector('[role="dialog"]') || element;
     mobilePageState.originals.set(descriptor.kind, { placeholder, dialog, role: dialog.getAttribute('role'),
-      modal: dialog.getAttribute('aria-modal'), returnFocus: document.activeElement });
-    dialog.setAttribute('role', 'region');
-    dialog.removeAttribute('aria-modal');
-    dialog.setAttribute('aria-label', descriptor.kind === 'album' ? 'Album details' : descriptor.title);
-    element.classList.add('is-mobile-page');
-    outlet.appendChild(element);
+      modal: dialog.getAttribute('aria-modal'), label: dialog.getAttribute('aria-label'), returnFocus: document.activeElement });
   }
   // A changed album reuses one component; older history entries retain its key for Back/Forward.
   const previousIndex = mobilePageState.pages.findIndex(page => page.kind === descriptor.kind);
@@ -164,11 +201,7 @@ function cleanupMobilePage(descriptor) {
     else if (descriptor.kind === 'non-album') closeNonAlbumModal();
   } finally { mobilePageState.cleaning = false; }
   if (element && original) {
-    element.inert = false;
-    element.classList.remove('is-mobile-page');
-    if (original.role === null) original.dialog.removeAttribute('role'); else original.dialog.setAttribute('role', original.role);
-    if (original.modal === null) original.dialog.removeAttribute('aria-modal'); else original.dialog.setAttribute('aria-modal', original.modal);
-    original.dialog.removeAttribute('aria-label');
+    setMobilePagePresentation(descriptor.kind, false);
     original.placeholder.replaceWith(element);
     mobilePageState.originals.delete(descriptor.kind);
   }

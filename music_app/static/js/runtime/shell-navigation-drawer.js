@@ -179,6 +179,7 @@ function toggleArtistTreeFold() {
   const settleArtistTree = () => {
     if (Boolean(state.ui.artistTreeFolded) !== isFolded) return;
     syncArtistTreeFoldVisibility();
+    if (!isFolded && state.ui.pendingSidebarRevealArtist) renderSidebar();
     if (moveFocusWithinRail && !isFolded) button?.focus?.();
   };
   scheduleArtistTreeResizeAfterTransition(settleArtistTree);

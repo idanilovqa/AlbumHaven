@@ -2587,7 +2587,13 @@ function renderProblemFilterControls(els) {
 
   if (els.problemFilterMenu) {
     els.problemFilterMenu.hidden = !state.utility.problemDropdownOpen;
-    if (state.utility.problemDropdownOpen && typeof syncTriggerAnchor === 'function') syncTriggerAnchor(els.problemFilterMenu, els.problemFilterButton);
+    if (state.utility.problemDropdownOpen && typeof syncTriggerAnchor === 'function') {
+      if (typeof activateTriggerSurface === 'function') activateTriggerSurface(els.problemFilterMenu, () => {
+        state.utility.problemDropdownOpen = false;
+        renderProblemFilterControls(els);
+      });
+      syncTriggerAnchor(els.problemFilterMenu, els.problemFilterButton);
+    }
     else if (typeof clearTriggerAnchor === 'function') clearTriggerAnchor(els.problemFilterMenu);
     els.problemFilterMenu.innerHTML = reasonTypes.length
       ? reasonTypes.map((reason) => `

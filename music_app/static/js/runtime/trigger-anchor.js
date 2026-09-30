@@ -200,21 +200,24 @@ globalThis.document?.addEventListener?.('album-haven:surface-opening', event => 
 });
 
 // The existing surface/modal owners remain authoritative. This adapter only
-// reserves the outside gesture before any target or document handler sees it.
+// reserves a real backdrop gesture before any target or document handler sees it.
 function getDismissibleForegroundSurface() {
   const modal = typeof getTopmostOpenModal === 'function' ? getTopmostOpenModal() : null;
+  const isBackdrop = target => Boolean(modal && target === modal)
+    || Boolean(target?.matches?.('#shell-navigation-rail-backdrop, .settings-nav-backdrop, .mobile-artist-info-backdrop')
+      && !target.hidden && target.getClientRects().length);
   const owner = activeTriggerSurface;
   const anchor = owner && (triggerAnchorBindings.get(owner.surface)?.anchor || owner.anchor);
   if (owner && !owner.surface.hidden && (!modal || modal === owner.surface
       || modal.contains(owner.surface) || (anchor && modal.contains(anchor)))) {
-    return { surface: owner.surface, anchor, dismiss() {
+    return { surface: owner.surface, anchor, isBackdrop, dismiss() {
       if (activeTriggerSurface !== owner) return;
       owner.close();
       if (anchor?.isConnected) anchor.focus?.({ preventScroll: true });
     } };
   }
   if (!modal) return null;
-  return { surface: modal, contains: target => target !== modal && modal.contains(target), dismiss() {
+  return { surface: modal, isBackdrop, contains: target => target !== modal && modal.contains(target), dismiss() {
     if (getTopmostOpenModal() === modal) dismissForegroundModal(modal);
   } };
 }

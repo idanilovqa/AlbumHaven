@@ -12,9 +12,9 @@ const css = fs.readFileSync(
   'utf8',
 );
 
-function cssRule(selector) {
+function cssRule(selector, stylesheet = css) {
   const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  return css.match(new RegExp(`${escaped}\\s*\\{([^}]*)\\}`, 's'))?.[1] || '';
+  return stylesheet.match(new RegExp(`${escaped.replace(/\r?\n/g, '\\r?\\n')}\\s*\\{([^}]*)\\}`, 's'))?.[1] || '';
 }
 
 test('cover source entry is compact, supports picker and drop, and omits redundant helper copy', () => {
@@ -90,10 +90,11 @@ test('gallery sections expose live image counts and omit empty remote and match 
 });
 
 test('provider rows include readable labels, Deezer heart, CAA, and external markers', () => {
-  for (const label of ['Apple', 'Spotify', 'Deezer', 'Bandcamp', 'Discogs', 'CAA', 'YouTube Music']) {
+  for (const label of ['Apple Music', 'SPOTIFY', 'Deezer', 'Bandcamp', 'Discogs', 'Cover Art Archive', 'YouTube Music']) {
     assert.match(source, new RegExp(`['\"]${label}['\"]`));
   }
   assert.match(source, /buildDeezerGlyph[^]*heart/s);
+  assert.match(source, /function buildCaaGlyph\(\)\s*\{\s*return '<span aria-hidden="true">CAA<\/span>';/);
   assert.match(source, /cover-lookup-external-marker/);
   assert.match(source, /String\(source \|\| ''\)\.trim\(\)\.toLowerCase\(\)/);
 });
@@ -149,20 +150,29 @@ test('manual composer expands as one surface with a borderless Add image action'
   assert.match(innerFocus, /box-shadow:\s*none/);
 });
 
-test('Find Better Art remains a solid primary action with a theme glow on hover', () => {
-  const button = cssRule('#cover-lookup-find-better-button');
-  const hover = cssRule('#cover-lookup-find-better-button:hover:not(:disabled)');
-  const pressed = cssRule('#cover-lookup-find-better-button:active:not(:disabled)');
-  assert.match(button, /background:\s*color-mix\(in srgb, var\(--appearance-primary-button/);
-  assert.match(button, /border-width:\s*2px/);
-  assert.match(button, /font-weight:\s*800/);
-  assert.match(hover, /background:\s*color-mix\(in srgb, var\(--appearance-primary-button/);
-  assert.match(hover, /box-shadow:[^;]*var\(--appearance-interaction-outline/);
-  assert.doesNotMatch(hover, /appearance-item-action-hover-background/);
-  assert.doesNotMatch(hover, /\boutline\s*:/);
-  assert.match(pressed, /transform:\s*translateY\(1px\)/);
+test('Find Better Art retains its theme-aware static halo and stronger hover without geometry changes', () => {
+  const selector = ':root #cover-lookup-modal #cover-lookup-find-better-button:not(:disabled):not([aria-disabled="true"])';
+  const button = cssRule(selector);
+  const hover = cssRule(`${selector}:is(:hover, :focus-visible)`);
+  assert.match(button, /--cover-search-accent:\s*var\(--appearance-primary-button, var\(--accent\)\)/);
+  assert.match(button, /background:\s*color-mix\(in srgb, var\(--cover-search-accent\) 8%, var\(--panel\)\)/);
+  assert.match(button, /border-color:[^;]*72%/);
+  assert.match(button, /box-shadow:\s*0 0 12px[^;]*36%[^;]*inset 0 0 0 1px[^;]*18%/);
+  assert.match(hover, /background:\s*var\(--appearance-item-action-hover-background\)/);
+  assert.match(hover, /box-shadow:\s*0 0 18px[^;]*48%[^;]*inset 0 0 0 1px[^;]*30%/);
+  assert.doesNotMatch(button + hover, /(?:^|;)\s*(?:width|height|padding|transform|animation)\s*:/);
+  assert.match(cssRule(':root #cover-lookup-modal #cover-lookup-find-better-button:is(:disabled, [aria-disabled="true"])'), /box-shadow:\s*none/);
 });
 
 test('failed lookup Retry uses the shared Button family', () => {
   assert.match(source, /class="button ui-button ui-button--secondary ui-button--small ui-button--icon cover-lookup-task-retry"/);
+});
+
+
+test('multi-state CSS extraction preserves declarations on LF and CRLF checkouts', () => {
+  const selector = '.cover-lookup-manual-open:hover:not(:disabled),\n.cover-lookup-manual-open:focus,\n.cover-lookup-manual-open:focus-visible,\n.cover-lookup-manual-open:active';
+  const lf = cssRule(selector, css.replace(/\r\n/g, '\n'));
+  const crlf = cssRule(selector, css.replace(/\r?\n/g, '\r\n'));
+  assert.match(lf, /outline:\s*none\s*!important/);
+  assert.equal(crlf.replace(/\r\n/g, '\n'), lf);
 });

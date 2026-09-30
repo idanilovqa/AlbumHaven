@@ -102,8 +102,13 @@ test('FTC-COVERS-024 manual composer preserves staged images and exclusive choic
     await coverLookupActions.selectOnlyCover(lookup.stagedCoverCardByName(pickerName));
   });
 
-  await stepLogger.step('Extract an extensionless direct image at narrow width without losing the staged choice', async () => {
+  await stepLogger.step('Hide manual composition on mobile, then extract on desktop without losing the staged choice', async () => {
     await page.setViewportSize({ width: 390, height: 844 });
+    await expect(lookup.manualUrlInput).toBeHidden();
+    await expect(lookup.manualExtractButton).toBeHidden();
+    await expect(lookup.manualDropZone).toBeHidden();
+    await page.setViewportSize({ width: 1280, height: 844 });
+    await expect(lookup.manualUrlInput).toBeVisible();
     await coverLookupActions.pasteManualUrl(imageUrl);
     await coverLookupActions.expectComposerFitsViewport();
     const extracted = await coverLookupActions.extractComposerLinks();
@@ -549,6 +554,7 @@ test('FTC-COVERS-013 partial cover results survive drawer reopen, save cancellat
       await coverLookupActions.openDrawer();
       await coverLookupActions.waitForDrawerOpen();
       await coverLookupActions.waitForTaskActive(taskTitle);
+      await coverLookupActions.expectTaskIdentity(taskTitle, PARTIAL_COVER_LOOKUP_TARGET);
       await coverLookupActions.openTask(taskTitle);
       await coverLookupActions.waitForModalReady({ timeout: 10000 });
       await coverLookupActions.waitForModalResultsReady({ timeout: 10000 });
@@ -607,7 +613,7 @@ test('FTC-COVERS-013 partial cover results survive drawer reopen, save cancellat
 
     const modal = await coverLookupActions.inspectModalComponents();
 
-    expect(modal.subtitle).toBe(taskTitle);
+    expect(modal.subtitle).toBe(Object.values(PARTIAL_COVER_LOOKUP_TARGET).join(' - '));
     expect(modal.hasFindBetterButton).toBe(true);
     expect(modal.hasSaveButton).toBe(true);
     expect(modal.hasManualInput).toBe(true);
@@ -615,11 +621,11 @@ test('FTC-COVERS-013 partial cover results survive drawer reopen, save cancellat
     expect(modal.localCards).toBeGreaterThan(0);
     expect(modal.serviceCards).toBeGreaterThan(0);
     expect(modal.openLightboxButtons).toBeGreaterThan(1);
-    expect(modal.sectionTitles).toEqual(expect.arrayContaining([
-      'Local Covers',
-      'Remote Cover Art',
-      'Possible Matches',
-    ]));
+    expect(modal.savedRemoteCards).toBe(0);
+    expect(modal.sectionTitles).toEqual([
+      `LOCAL · ${modal.localCards} image${modal.localCards === 1 ? '' : 's'}`,
+      `POSSIBLE MATCHES · ${partialCandidateIds.length} image${partialCandidateIds.length === 1 ? '' : 's'}`,
+    ]);
     expect(modal.subsectionTitles).toEqual(expect.arrayContaining([
       'From services',
     ]));

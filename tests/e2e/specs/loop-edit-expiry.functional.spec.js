@@ -78,6 +78,7 @@ test(`${CASE_ID} loop creation expires through the shared production session con
     await globalPlayerActions.resumeIfPaused();
     await globalPlayerActions.openLoopEditor();
     await globalPlayerActions.moveAwayFromLoopAction();
+    expect((await globalPlayerActions.pauseLoopEditExpiryClockBeforeRenewal()).paused).toBe(false);
     await globalPlayerActions.dragLoopBoundary('end', 0.8);
     await globalPlayerActions.advanceLoopEditExpiryClock(299000);
     await globalPlayerActions.expectLoopEditorActive();
@@ -88,6 +89,7 @@ test(`${CASE_ID} loop creation expires through the shared production session con
     expect((await globalPlayerActions.readCurrentPlaybackSummary()).paused).toBe(false);
     await globalPlayerActions.advanceLoopEditExpiryClock(1000);
     expect((await globalPlayerActions.waitForAutomaticLoopEditorExpiry()).paused).toBe(true);
+    await globalPlayerActions.resumeLoopEditExpiryClock();
   });
 
   await stepLogger.step('Remove the fixture-owned saved loop before the next independently schedulable case', async () => {

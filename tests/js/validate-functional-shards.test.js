@@ -505,6 +505,27 @@ test('functional cold-browser warmup is one read-only worker setup rather than p
   assert.match(source, /\{\s*scope:\s*['"]worker['"],\s*auto:\s*true\s*\}/);
 });
 
+test('native functional discovery preserves nested leaf titles and area tags', () => {
+  const vm = require('node:vm');
+  const reporterPath = path.join(repoRoot, 'scripts/ci/playwright-functional-list-reporter.cjs');
+  const moduleObject = { exports: {} };
+  let output = '';
+  vm.runInNewContext(fs.readFileSync(reporterPath, 'utf8'), {
+    require, module: moduleObject,
+    process: { cwd: () => repoRoot, stdout: { write(value) { output += value; } } },
+  });
+  const title = 'FTC-ALBUM-DETAILS-022 touch artwork controls open full cover and Cover Lookup without hover';
+  const file = 'tests/e2e/specs/albumDetailsComponents.functional.spec.js';
+  new moduleObject.exports().onBegin({}, { allTests: () => [{
+    title, titlePath: () => ['', 'functional', file, 'touch artwork actions', title],
+    parent: { project: () => ({ name: 'functional' }) },
+    location: { file: path.join(repoRoot, file) }, tags: ['@area:album-details'],
+  }] });
+  assert.deepEqual(loadValidator().parseListOutput(output, 'playwright.config.js'), [{
+    config: 'playwright.config.js', project: 'functional', test: file, case: title, areas: ['album-details'],
+  }]);
+});
+
 validatorTest('validator rejects a contract area missing from native Playwright tags', () => {
   const validator = loadValidator();
   const contract = readJson(shardContractPath);
@@ -1001,6 +1022,9 @@ validatorTest('read-only shard cases reuse one prepared fixture and restore once
     assert.notEqual(grepIndex, -1);
     const titlePattern = playwrightCalls[0].args[grepIndex + 1];
     assert.ok(readOnlyCases.every(({ ownedCase }) => new RegExp(titlePattern).test(ownedCase.case)));
+    assert.ok(readOnlyCases.every(({ ownedCase }) => new RegExp(titlePattern).test(
+      `functional ${ownedCase.test} nested describe ${ownedCase.case} @area:${ownedCase.area}`,
+    )), 'leaf selection must match Playwright space-delimited nested titles and area tags');
   } finally {
     fs.rmSync(runnerTemp, { recursive: true, force: true });
   }

@@ -20,7 +20,12 @@ test('connected panel masks the trigger interior seam', () => {
   );
   assert.match(
     css,
-    /\.trigger-anchor-open::after\s*\{[^}]*top:\s*calc\(100% - 3px\);[^}]*height:\s*calc\(var\(--trigger-anchor-gap, 0px\) \+ 3px\);/s,
+    // The continuous outline replaces the separately rasterized bridge stroke.
+    /\.trigger-anchor-open::after\s*\{[^}]*left:\s*-2px; right:\s*-2px; top:\s*-2px;[^}]*bottom:\s*calc\(-1 \* var\(--trigger-anchor-gap, 0px\) - 2px\);[^}]*background:\s*var\(--trigger-anchor-border-fill\);/s,
+  );
+  assert.match(
+    css,
+    /\.trigger-anchor-open::before\s*\{[^}]*bottom:\s*calc\(-1 \* var\(--trigger-anchor-gap, 0px\) - 4px\);[^}]*background:\s*var\(--trigger-anchor-background\);/s,
   );
 });
 

@@ -57,6 +57,7 @@ import { observePlaybackPcmTraffic } from '../helpers/gaplessPlaybackHelpers.js'
 import { controlLastfmProvider, readLastfmProviderState } from '../helpers/lastfmProviderHelpers.js';
 import { createWorkerAuthentication } from '../../../scripts/playwright-worker-authentication.mjs';
 import { createAppearancePreferenceIsolation } from '../helpers/appearancePreferenceIsolation.js';
+import { withArtistTreePreference } from './artistTreeStorageState.js';
 
 const ANSI = {
   cyan: '\u001b[36m',
@@ -328,6 +329,8 @@ export const test = base.extend({
   // Login/alternate-user suites opt out at file scope with test.use().
   reuseAuthentication: [true, { scope: 'worker', option: true }],
   authenticateFreshBrowserSession: [true, { option: true }],
+  // Regular tests own an expanded baseline; null exercises the product default.
+  initialArtistTreeFolded: [false, { option: true }],
 
   workerAuthentication: [async ({ browser }, use, workerInfo) => {
     await use(createWorkerAuthentication({
@@ -337,10 +340,11 @@ export const test = base.extend({
     }));
   }, { scope: 'worker' }],
 
-  storageState: async ({ reuseAuthentication, workerAuthentication }, use) => {
-    await use(reuseAuthentication
+  storageState: async ({ reuseAuthentication, workerAuthentication, baseURL, initialArtistTreeFolded }, use) => {
+    const authentication = reuseAuthentication
       ? await workerAuthentication.getStorageState()
-      : { cookies: [], origins: [] });
+      : { cookies: [], origins: [] };
+    await use(withArtistTreePreference(authentication, baseURL, initialArtistTreeFolded));
   },
 
   managedAppLifecycle: [async ({}, use) => {
@@ -352,6 +356,7 @@ export const test = base.extend({
     testArtifacts,
     authenticateFreshBrowserSession,
     storageState,
+    initialArtistTreeFolded,
   }, use, testInfo) => {
     const sessions = [];
     try {
@@ -362,7 +367,9 @@ export const test = base.extend({
             baseURL: configuredBaseUrl,
             ...(userAgent ? { userAgent } : {}),
             viewport: testInfo.project.use?.viewport || { width: 1440, height: 960 },
-            storageState: authenticateFreshBrowserSession ? storageState : { cookies: [], origins: [] },
+            storageState: authenticateFreshBrowserSession ? storageState : withArtistTreePreference(
+              { cookies: [], origins: [] }, configuredBaseUrl, initialArtistTreeFolded,
+            ),
           });
           const restoreInterceptionGuard = installContextRequestInterceptionGuard(context);
           let productionViewObserver = null;

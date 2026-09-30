@@ -549,6 +549,7 @@ test('FTC-COVERS-013 partial cover results survive drawer reopen, save cancellat
       await coverLookupActions.openDrawer();
       await coverLookupActions.waitForDrawerOpen();
       await coverLookupActions.waitForTaskActive(taskTitle);
+      await coverLookupActions.expectTaskIdentity(taskTitle, PARTIAL_COVER_LOOKUP_TARGET);
       await coverLookupActions.openTask(taskTitle);
       await coverLookupActions.waitForModalReady({ timeout: 10000 });
       await coverLookupActions.waitForModalResultsReady({ timeout: 10000 });
@@ -607,7 +608,7 @@ test('FTC-COVERS-013 partial cover results survive drawer reopen, save cancellat
 
     const modal = await coverLookupActions.inspectModalComponents();
 
-    expect(modal.subtitle).toBe(taskTitle);
+    expect(modal.subtitle).toBe(Object.values(PARTIAL_COVER_LOOKUP_TARGET).join(' - '));
     expect(modal.hasFindBetterButton).toBe(true);
     expect(modal.hasSaveButton).toBe(true);
     expect(modal.hasManualInput).toBe(true);
@@ -615,11 +616,11 @@ test('FTC-COVERS-013 partial cover results survive drawer reopen, save cancellat
     expect(modal.localCards).toBeGreaterThan(0);
     expect(modal.serviceCards).toBeGreaterThan(0);
     expect(modal.openLightboxButtons).toBeGreaterThan(1);
-    expect(modal.sectionTitles).toEqual(expect.arrayContaining([
-      'Local Covers',
-      'Remote Cover Art',
-      'Possible Matches',
-    ]));
+    expect(modal.savedRemoteCards).toBe(0);
+    expect(modal.sectionTitles).toEqual([
+      `LOCAL · ${modal.localCards} image${modal.localCards === 1 ? '' : 's'}`,
+      `POSSIBLE MATCHES · ${partialCandidateIds.length} image${partialCandidateIds.length === 1 ? '' : 's'}`,
+    ]);
     expect(modal.subsectionTitles).toEqual(expect.arrayContaining([
       'From services',
     ]));

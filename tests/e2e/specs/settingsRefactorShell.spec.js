@@ -245,9 +245,12 @@ test('FTC-SETTINGS-S03 deep Problems selection retains the mounted tree scroll a
   page, galleryActions, settingsModalAppBarActions, utilityTabBarActions, utilityProblematicFilesActions,
 }) => {
   const shell = await openProblems({ page, galleryActions, settingsModalAppBarActions, utilityTabBarActions, utilityProblematicFilesActions });
-  const count = await shell.rows.count();
+  const items = await utilityProblematicFilesActions.readCompleteListItems();
+  const count = items.length;
   expect(count).toBeGreaterThan(10);
-  const row = shell.rows.nth(count - 2);
+  const target = items[count - 2];
+  await utilityProblematicFilesActions.revealListItemByIdentity({ key: target.key });
+  const row = shell.rowByKey(target.key);
   await row.scrollIntoViewIfNeeded();
   const retained = await shell.retainTree(row);
   try {
@@ -272,7 +275,8 @@ test('FTC-SETTINGS-S04 ready and missing Problems artwork preserve selection thr
   page, galleryActions, settingsModalAppBarActions, utilityTabBarActions, utilityProblematicFilesActions,
 }) => {
   const shell = await openProblems({ page, galleryActions, settingsModalAppBarActions, utilityTabBarActions, utilityProblematicFilesActions });
-  const ready = shell.artworkRows('ready').first();
+  const readyKey = await utilityProblematicFilesActions.revealListItemWithArtwork('ready');
+  const ready = shell.rowByKey(readyKey);
   await expect(ready).toBeVisible();
   await selectRow(shell, ready);
   await expect(shell.enlarge).toBeVisible();

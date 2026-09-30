@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.9.47 - 2026-09-28
+## 0.9.47 - 2026-09-30
 
 This release includes the unreleased 0.9.46 changes below.
 
@@ -21,6 +21,14 @@ This release includes the unreleased 0.9.46 changes below.
 - Added real-user browser coverage for role and capability boundaries, denied
   controls, client restrictions, and assignment persistence against the real
   application and PostgreSQL. Added isolated demo provisioning for manual tests.
+- Kept Artist Tree selection visible after unfolding and refreshed Artist Family
+  controls without rebuilding retained gallery cards or rewriting unchanged labels.
+- Corrected cover-provider labels and cover-only result counts, and recovered
+  artwork loading after detached gallery consumers were canceled.
+- Kept Problematic Files selection and details stable across virtual scrolling
+  and resize, and restored saved-loop range and hover feedback.
+- Strengthened regression coverage and fixture cleanup for native clipboard paste,
+  notification delivery, folded-tree persistence, and saved appearance preferences.
 - Included the Cover Look Up redesign, Library Status Page, player and gallery
   improvements, account-scoped device appearance storage, and Problematic Files
   virtualization recorded under 0.9.46.

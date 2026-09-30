@@ -681,6 +681,10 @@ export class CoverLookupActions {
     expect(providerBaseURL, 'Clipboard source must be the isolated external provider').toBeTruthy();
     const sourceUrl = new URL(`/manual/${encodeURIComponent(assetId)}`, providerBaseURL);
     expect(['127.0.0.1', 'localhost']).toContain(sourceUrl.hostname);
+    // The test-owned headless context needs only this loopback provider's write
+    // permission. The provider still copies via its button; context teardown
+    // removes the permission without touching the user's system clipboard.
+    await page.context().grantPermissions(['clipboard-write'], { origin: sourceUrl.origin });
     const source = await page.context().newPage();
     const sourceRequests = observeNonLoopbackHttpRequests(source);
     try {
@@ -1063,6 +1067,13 @@ export class CoverLookupActions {
     await expect(this.coverLookup.taskStatusByTitle(taskTitle)).toHaveText(expectedStatus, {
       timeout: options.timeout || 30000,
     });
+  }
+
+  async expectTaskIdentity(taskTitle, identity) {
+    await expect(this.coverLookup.taskTitleByTitle(taskTitle)).toHaveText(identity.album);
+    await expect(this.coverLookup.taskBylineByTitle(taskTitle)).toHaveText(
+      [identity.artist, identity.year].filter(Boolean).join(' · '),
+    );
   }
 
   async waitForDrawerEmpty(options = {}) {
@@ -1456,6 +1467,7 @@ export class CoverLookupActions {
       subsectionTitles: (await this.coverLookup.subsectionTitles.allTextContents())
         .map((value) => value.trim()).filter(Boolean),
       localCards: await this.coverLookup.localCoverCards.count(),
+      savedRemoteCards: await this.coverLookup.savedRemoteCoverCards.count(),
       serviceCards: await this.coverLookup.remoteCoverCards.count(),
       openLightboxButtons: await this.coverLookup.openLightboxButtons.count(),
       hasManualInput: await manualInput.count() > 0,

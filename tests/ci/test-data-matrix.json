@@ -1,5 +1,25 @@
 [
   {
+    "config": "playwright.config.js",
+    "project": "functional",
+    "test": "tests/e2e/specs/artistTreePersistence.spec.js",
+    "case": "FTC-ARTIST-TREE-002 preserves collapsed and expanded preferences after reload",
+    "profile": "functional-core",
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [
+      "gallery:root-browse"
+    ],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "artist-tree-expanded-test-baseline",
+      "artist-tree-collapsed-reload-persistence",
+      "artist-tree-expanded-reload-persistence",
+      "isolated-browser-preferences"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
     "config": "playwright.scan-performance.config.cjs",
     "project": "scan-performance",
     "test": "tests/e2e/scanPerformance/scanPerformance.spec.js",

@@ -32,6 +32,7 @@
 }
 .is-mobile-page :is([data-close-non-album-modal], [data-close-track-modal], #track-modal-close, #utility-modal-close, [data-close-cover-lookup-modal]) { display: none !important; }
 .mobile-home { overflow: auto; min-height: 0; flex: 1; padding: 0 2px 20px; }
+.mobile-home #mobile-library-button { justify-content: flex-start; }
 .mobile-home-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 14px; }
 .mobile-home-grid[data-view="list"] { grid-template-columns: 1fr; }
 .shell-main-surface.has-mobile-home > #albums-scroll { display: none !important; }
@@ -150,6 +151,7 @@ html[data-client-profile="mobile"] :is([data-open-problematic-album-folder], [da
   }
   .is-mobile-page .utility-modal-header, .is-mobile-page .utility-tabs { display: none; }
   .is-mobile-page .utility-modal-body { display: flex; flex-direction: column; min-height: 0; overflow: visible; }
+  .is-mobile-page .utility-problem-filter-menu { left: 0; }
   .is-mobile-page .utility-sidebar { width: 100%; min-width: 0; max-height: 170px; border-right: 0; border-bottom: 1px solid var(--border); }
   .is-mobile-page:is([data-active-tab="appearance"], [data-active-tab="integrations"], [data-active-tab="rules"]) .utility-sidebar { display: none; }
   .is-mobile-page .utility-detail { padding: 0 0 16px; width: 100%; min-width: 0; overflow: visible; }
@@ -536,7 +538,7 @@ html[data-client-profile="mobile"] :is([data-open-problematic-album-folder], [da
 }
 
 /* Main-area loading and Home each occupy one complete page. */
-.shell-main-surface.has-library-loader:not(.has-mobile-page) > :not(#library-loader) { display: none !important; }
+.shell-main-surface.has-library-loader:not(.has-mobile-page) > :not(#library-loader):not(#library-status-gallery-bar) { display: none !important; }
 @media (max-width: 900px) {
   /* Reserve the hamburger's column on both rows: counts start at the title,
      never under the navigation button. Controls share the count row when roomy. */
@@ -694,7 +696,6 @@ html[data-client-profile="mobile"] :is([data-open-problematic-album-folder], [da
   }
 
   /* The existing Library Status bar was mistakenly hidden with the background gallery. */
-  .shell-main-surface.has-library-loader:not(.has-mobile-page) > #library-status-gallery-bar { display: flex !important; }
   #library-status-gallery-bar { padding: 0 0 6px; align-items: center; margin: 0; }
   #library-status-gallery-bar > .gallery-bar__context { display: flex; align-items: center; gap: 8px; }
   :root #library-loader-back-button { background: transparent; border: 0; box-shadow: none; width: 40px; height: 40px; }

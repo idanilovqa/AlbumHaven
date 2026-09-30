@@ -248,15 +248,18 @@
   removePointerListener = () => document.removeEventListener?.('pointerdown', onPointerDown);
   const closeOnLayoutChange = (event) => {
     for (const menu of document.querySelectorAll('[data-member-menu]:not([hidden])')) {
-      if (event?.type === 'scroll' && menu.contains(event.target)) continue;
+      if (['scroll', 'wheel'].includes(event?.type) && menu.contains(event.target)) continue;
       const trigger = document.querySelector(`[data-member-menu-trigger="${menu.dataset.memberMenu}"]`);
+      if (event?.type === 'wheel' && trigger?.contains(event.target)) continue;
       if (trigger) closeMenu(trigger, menu);
     }
   };
+  window.addEventListener?.('wheel', closeOnLayoutChange, { capture: true, passive: true });
   window.addEventListener?.('scroll', closeOnLayoutChange, true);
   window.addEventListener?.('resize', closeOnLayoutChange);
   removePlacementListeners = () => {
     closeOnLayoutChange();
+    window.removeEventListener?.('wheel', closeOnLayoutChange, true);
     window.removeEventListener?.('scroll', closeOnLayoutChange, true);
     window.removeEventListener?.('resize', closeOnLayoutChange);
   };

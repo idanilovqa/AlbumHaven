@@ -8,10 +8,11 @@ compositions, account capabilities, desktop audio architecture and saved data.
 The owner explicitly waives hosted review with `skip_reviews`, not tests, and
 requests two severe self-review passes and a release after all required CI passes.
 
-- Outside taps dismiss the foremost sliding panel or floating dialog only.
-  Consume pointer activation and its follow-up click so background album links,
-  navigation, form controls and the persistent player do not activate.
-  The next independent gesture works normally. Inside actions, scrolling and
+- The owner's September 30 clarification limits dismiss-only consumption to an
+  actual backdrop or dimming scrim. Its gesture cannot activate a covered control.
+  Uncovered controls, including the persistent player on desktop and mobile,
+  activate on the first gesture while a panel is open. Existing nonblocking
+  outside handlers may close their own panels. Inside actions, scrolling and
   opener toggling remain usable. A drag originating inside is not an outside tap.
 - Loading artwork is a plain square with centered loading text. Ready, missing
   and empty artwork retain their established semantics.
@@ -37,12 +38,16 @@ boundary; existing interaction/scroll and memory gates remain required.
 
 ## Authorized scenario updates
 
-The last owner request changes outside activation from switch-and-open to
-close-only. The existing mobile panel exclusivity scenario now asserts that the
-other panel is still closed after the first tap, before tapping again to open it.
-The loop speed-to-pitch scenario retains both menu assertions and now checks the
-intermediate closed state before the second tap. No timeouts, retries, playback
-checks or unrelated acceptance assertions changed.
+The September 30 clarification supersedes the earlier blanket close-only rule.
+Mobile panel exclusivity and loop speed-to-pitch scenarios exercise the first
+uncovered activation; actual Artists/Admin scrims and desktop modal backdrops
+remain dismiss-only. Exposed-player coverage checks the rendered hit target and
+actual production playback state with each relevant surface initially open.
+No timeouts, retries, playback checks or performance budgets are relaxed.
+
+Settings uses its documented mobile page region, Back and section drawer at
+narrow widths; desktop Settings navigation remains visible. S05 retains its
+narrow filter bounds, Escape focus, query, reopen and navigation hit-target checks.
 
 ## Gates
 
@@ -67,3 +72,34 @@ Existing E2E scenarios, assertions, timeouts and performance budgets are unchang
 The real-app dismissal scenarios and the complete PR pipeline still require a
 new run on the repaired head; the other failed jobs remain unresolved. This
 checkpoint is not a green-CI, full-review, coverage-audit or release claim.
+
+## Reconstructed repair verification — 2026-09-30
+
+Recovery was applied to the verified `5bfac491dabef5e96eb88af5ae603e8364af2ee0`
+baseline and reverified, rather than treating lost workspace results as current.
+The Home hamburger's painted SVG edge aligns with Recent and Top tracks while
+retaining its hitbox. Gallery context changes only after the complete scrolling
+artist label is clipped, including wrapped labels and reverse scrolling.
+
+Responsive navigation transfers the same live dialog nodes back to desktop and
+to mobile again, preserving original ARIA attributes and parent history. Closing
+on desktop retires the descriptor; narrowing must not reopen it. Canonical parent
+routes distinguish Gallery displayed at `/` from actual Home. Route and scroll
+restoration are gated to the immediate parent history position, not a destination
+skipped by browser history. Both Gallery controls and the data request use that
+same retained route. Existing local view changes do not rewrite browser history;
+a later fresh reload still honors an explicit display-mode URL override.
+
+The mobile Filters menu no longer spills four pixels past its page boundary.
+Its existing utility keyboard owner handles Escape when Settings is a page,
+closing only the dropdown and restoring anchor focus. The filter's outside-close
+owner also clears its state so the next activation reopens it correctly.
+
+Fresh focused browser results: both requested header regressions, five actual
+backdrop/exposed-action cases, FTC-SETTINGS-S05, the unchanged complete FTC-TAGS-022
+physical-tag/reopen/fresh-browser case, and FTC-ARTIST-TREE-002 pass. Each stateful
+case used a fresh isolated invocation; all final runs verified normal app,
+database-lease and PostgreSQL cleanup. Exposed-player coverage checks pause/start/
+pause with Artists, notifications and Settings initially open respectively; it
+does not claim both directions for every individual panel. Full CI and complete
+review remain required before publication.

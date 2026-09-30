@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test';
+import { test, expect } from '../support/mobileFixtures.js';
 import path from 'node:path';
 import fs from 'node:fs/promises';
 import { MobileLayoutPage } from '../poms/mobileLayoutPage.js';
@@ -70,7 +70,7 @@ test('mobile login, Home rows, artist drawer, search and right-side family panel
   expect(errors).toEqual([]);
 });
 
-test('two- and three-column cards and art-only modes persist to a fresh mobile session', async ({ page, browser }) => {
+test('two- and three-column cards and art-only modes persist to a fresh mobile session', async ({ page, mobileBrowserSessions }) => {
   const app = new MobileLayoutPage(page);
   await login(app);
   await app.browseArtist();
@@ -87,16 +87,16 @@ test('two- and three-column cards and art-only modes persist to a fresh mobile s
   await app.selectView('covers');
   expect((await saved).status()).toBe(200);
   await capture(page, '08-home-art-only');
-  const context = await browser.newContext({ baseURL: new URL(page.url()).origin, viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true });
+  const session = await mobileBrowserSessions.create({ baseURL: new URL(page.url()).origin, viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true });
   try {
-    const another = await context.newPage();
+    const another = session.page;
     const anotherApp = new MobileLayoutPage(another);
     await login(anotherApp);
     await anotherApp.browseArtist();
     await expect(anotherApp.galleryCards.first()).toHaveAttribute('data-gallery-display', 'covers');
     await anotherApp.expectGridColumns(3);
     await expect(anotherApp.zoomButton).toHaveCount(0);
-  } finally { await context.close(); }
+  } finally { await session.close(); }
 });
 
 test('album details are a page, keep the player, support Back and full artwork', async ({ page }) => {

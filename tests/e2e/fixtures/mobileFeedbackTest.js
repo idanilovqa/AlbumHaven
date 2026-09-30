@@ -1,4 +1,4 @@
-import { test as base, expect } from '@playwright/test';
+import { test as base, expect } from '../support/mobileFixtures.js';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { MobileLayoutPage } from '../poms/mobileLayoutPage.js';

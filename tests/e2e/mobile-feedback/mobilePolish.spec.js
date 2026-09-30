@@ -28,8 +28,6 @@ test('phone menus are exclusive, search is joined, gallery pinch and first-touch
   await snapshot('60-mobile-family-first-touch');
   await app.libraryButton.click();
   await expect(app.familyPanel).not.toBeVisible();
-  await expect(app.artistRail).not.toBeVisible();
-  await app.libraryButton.click();
   await expect(app.artistRail.getByRole('button', { name: 'Artists', exact: true })).toBeVisible();
   await app.closeArtistRail.click();
   await phone.artistInfo.click();
@@ -41,8 +39,6 @@ test('phone menus are exclusive, search is joined, gallery pinch and first-touch
   await phone.expectSettingsDrawerAtBodyTop();
   await app.settingsButton.click();
   await expect(app.settingsDrawer).not.toBeVisible();
-  await expect(phone.visibleAccountMenu).not.toBeVisible();
-  await app.settingsButton.click();
   await expect(phone.visibleAccountMenu).toBeVisible();
 });
 

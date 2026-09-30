@@ -25,12 +25,13 @@ for (const palette of ['black', 'parchment-pine']) {
 }
 
 
-test('a session ended in another tab blocks a mobile appearance save and allows normal sign-in', async ({ page, app, context }) => {
+test('a session ended in another tab blocks a mobile appearance save and allows normal sign-in', async ({ page, app, mobileBrowserSessions }) => {
   const appearance = new UtilityAppearanceTab(page);
   await app.openSettings();
   await app.customAppearance.click();
   await appearance.paletteButton('paper').click();
-  const otherPage = await context.newPage();
+  const otherSession = await mobileBrowserSessions.createPage();
+  const otherPage = otherSession.page;
   try {
     const other = new MobileLayoutPage(otherPage);
     await otherPage.goto('/');
@@ -40,7 +41,7 @@ test('a session ended in another tab blocks a mobile appearance save and allows 
     await app.saveAppearance.click();
     await expect(appearance.requestError).toContainText('session changed or expired');
     await expect(app.saveAppearance).toBeDisabled();
-  } finally { await otherPage.close(); }
+  } finally { await otherSession.close(); }
   await app.signIn('rendref', 'Phase Seven Owner Passphrase 2026!');
   await expect(app.home).toBeVisible();
   await app.openSettings();

@@ -163,7 +163,7 @@ test('FTC-PERMISSIONS-011 owner discovers Settings and Users through the shared 
   await menu.adminPanelMenuItem.click();
   await expect(page).toHaveURL(/\/admin\/members$/);
   await expect(page.getByRole('link', { name: 'Users', exact: true })).toHaveAttribute('aria-current', 'page');
-  await expect(page.getByRole('link', { name: 'Back to library' })).toHaveCount(0);
+  await expect(page.getByRole('link', { name: 'Back to library', exact: true })).toBeVisible();
   const members = new MembersPage(page);
   await expect(members.placeholderEntries).toHaveCount(0);
   const account = await members.openMyAccount();
@@ -272,7 +272,7 @@ test('creates, rotates, accepts, and signs in through a copied invitation', asyn
   await new InvitationPage(recipient.page).complete(LISTENER.password);
   await signIn(recipient.page, LISTENER, '/account');
   await expect(
-    recipient.page.getByRole('heading', { name: 'Password & security' }),
+    new AccountPage(recipient.page).heading,
   ).toBeVisible();
 
   const account = new AccountPage(recipient.page);
@@ -305,7 +305,7 @@ test('delivers a usable invitation through the local SMTP capture server', async
   await new InvitationPage(recipient.page).complete(SMTP_LISTENER.password);
   await signIn(recipient.page, SMTP_LISTENER, '/account');
   await expect(
-    recipient.page.getByRole('heading', { name: 'Password & security' }),
+    new AccountPage(recipient.page).heading,
   ).toBeVisible();
 });
 

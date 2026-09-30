@@ -141,10 +141,10 @@ test('cover selection saves before closing, reopens with saved artwork, and back
 });
 
 
-test('desktop tag fields, Apply and alternating track stripes work in dark and light palettes', async ({ page, app, browser, snapshot }) => {
-  const context = await browser.newContext({ baseURL: new URL(page.url()).origin, viewport: { width: 1366, height: 900 }, isMobile: false, hasTouch: false, userAgent: 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/151.0.0.0 Safari/537.36' });
+test('desktop tag fields, Apply and alternating track stripes work in dark and light palettes', async ({ page, app, mobileBrowserSessions, snapshot }) => {
+  const session = await mobileBrowserSessions.create({ baseURL: new URL(page.url()).origin, viewport: { width: 1366, height: 900 }, isMobile: false, hasTouch: false, userAgent: 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/151.0.0.0 Safari/537.36' });
   try {
-    const desktop = await context.newPage();
+    const desktop = session.page;
     const web = new MobilePolishPage(desktop), appearance = new UtilityAppearanceTab(desktop), tags = new TagEditor(desktop), details = new TrackModal(desktop);
     await web.signIn('rendref', 'Phase Seven Owner Passphrase 2026!');
     for (const palette of ['black', 'paper', 'parchment-pine']) {
@@ -174,7 +174,7 @@ test('desktop tag fields, Apply and alternating track stripes work in dark and l
       await tags.cancelButton.click();
       await desktop.keyboard.press('Escape');
     }
-  } finally { await context.close(); }
+  } finally { await session.close(); }
 });
 
 for (const reducedMotion of ['no-preference', 'reduce']) {

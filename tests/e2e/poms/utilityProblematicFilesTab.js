@@ -80,6 +80,10 @@ export class UtilityProblematicFilesTab extends BasePage {
     return item.locator(this.listItemIssuesSelector);
   }
 
+  listItemsWithArtwork(state) {
+    return this.listItems.filter({ has: this.page.locator(`[data-album-artbox-state=${JSON.stringify(state)}]`) });
+  }
+
   get listItemSelector() {
     return '[data-problematic-album-key]';
   }
@@ -99,10 +103,24 @@ export class UtilityProblematicFilesTab extends BasePage {
       if (!Number.isInteger(start) || !Number.isInteger(end)
         || start < 0 || end <= start || end > keys.length || mountedCount !== end - start) return false;
       const items = Array.from(list.querySelectorAll(expected.listItemSelector));
+      if (expected.requireSettledRange) {
+        const horizontal = list.dataset.problematicVirtualAxis === 'horizontal';
+        const stride = horizontal && items.length > 1
+          ? items[1].getBoundingClientRect().left - items[0].getBoundingClientRect().left
+          : undefined;
+        const range = window.ProblematicFilesVirtualList.calculateRange({
+          count: keys.length,
+          offset: horizontal ? list.scrollLeft : list.scrollTop,
+          viewport: horizontal ? list.clientWidth : list.clientHeight,
+          ...(stride > 0 ? { stride } : {}),
+        });
+        if (start !== range.start || end !== range.end) return false;
+      }
       return items.length === mountedCount
         && items.every((item, index) => item.getAttribute('data-problematic-album-key') === keys[start + index]);
     }, { timeout: options.timeout || 60000 }, {
       term,
+      requireSettledRange: Boolean(options.requireSettledRange),
       listSelector: this.sidebarListSelector,
       listItemSelector: this.listItemSelector,
     });

@@ -1,0 +1,233 @@
+# Bounded Windows-only I01 investigation. Not an authoritative PR gate.
+# Exact c242 source, original native fixture/toolchain/budgets, one case, zero retries.
+name: Settings I01 Native Diagnostic
+on:
+  push:
+    branches: [2026-09-30-capabilities-bundle-transfer]
+    paths: [.github/workflows/settings-i01-native-diagnostic.yml]
+permissions:
+  contents: read
+env:
+  ALBUM_HAVEN_EXPECTED_FFMPEG_VERSION: 7.1-essentials_build-www.gyan.dev
+jobs:
+  settings_i01:
+    name: Exact I01 Windows diagnostic (non-authoritative)
+    if: ${{ github.repository == 'idanilovqa/AlbumHaven' && github.event_name == 'push' && github.ref == 'refs/heads/2026-09-30-capabilities-bundle-transfer' && !github.event.deleted }}
+    runs-on: windows-2025
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      max-parallel: 1
+      matrix:
+        shard: [playback-utilities]
+    steps:
+      - name: Checkout exact diagnostic helper push
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 2
+          persist-credentials: false
+
+      - name: Verify helper parent and sole workflow addition
+        env:
+          EXPECTED_EVENT_HEAD: ${{ github.sha }}
+          EVENT_BEFORE: ${{ github.event.before }}
+          EVENT_FORCED: ${{ github.event.forced }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          function Read-Git { $output = & git @args; if ($LASTEXITCODE -ne 0) { throw "Git guard failed" }; return $output }
+          $parent = "16ed31993301ff919be1c98e05b8cce61685cbf3"
+          if ($env:EVENT_BEFORE -ne $parent -or $env:EVENT_FORCED -ne "false") { throw "Unexpected helper push ancestry" }
+          if ((Read-Git rev-parse HEAD).Trim() -ne $env:EXPECTED_EVENT_HEAD) { throw "Unexpected helper head" }
+          if ((Read-Git show -s --format=%P HEAD).Trim() -ne $parent) { throw "Unexpected helper commit parent" }
+          $changes = @(Read-Git diff --name-status --no-renames $parent HEAD)
+          if ($changes.Count -ne 1 -or $changes[0] -cne "A`t.github/workflows/settings-i01-native-diagnostic.yml") { throw "Unexpected helper changes" }
+          $remote = (Read-Git remote get-url origin).Trim()
+          if ($remote -notmatch '^https://github\.com/idanilovqa/AlbumHaven(?:\.git)?$') { throw "Unexpected source repository" }
+
+      - name: Checkout exact unchanged capabilities head
+        uses: actions/checkout@v5
+        with:
+          ref: c2427d0723862ca330d817ce997a922c90e9fa90
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Verify exact unchanged source tree
+        run: |
+          $ErrorActionPreference = "Stop"
+          function Read-Git { $output = & git @args; if ($LASTEXITCODE -ne 0) { throw "Git source guard failed" }; return $output }
+          if ((Read-Git rev-parse HEAD).Trim() -ne "c2427d0723862ca330d817ce997a922c90e9fa90") { throw "Unexpected source head" }
+          if ((Read-Git rev-parse 'HEAD^{tree}').Trim() -ne "44dc5232d453438b224308fbdbeb30c1db761517") { throw "Unexpected source tree" }
+          if (@(Read-Git status --porcelain).Count -ne 0) { throw "Source checkout is not clean" }
+          $remoteHead = @(Read-Git ls-remote origin refs/heads/2026-09-25-capabilities-audit)
+          if ($remoteHead.Count -ne 1 -or $remoteHead[0] -cne "c2427d0723862ca330d817ce997a922c90e9fa90`trefs/heads/2026-09-25-capabilities-audit") { throw "Diagnostic target is no longer the pinned candidate" }
+
+      - name: Checkout trusted fixture downloader
+        uses: actions/checkout@v5
+        with:
+          ref: a5c23fc8963f9ecc531468a61653bf2d798e8c6d
+          path: .trusted-ci
+          persist-credentials: false
+
+      - name: Verify original native CI trusted downloader
+        run: |
+          $ErrorActionPreference = "Stop"
+          function Read-TrustedGit { $output = & git -C .trusted-ci @args; if ($LASTEXITCODE -ne 0) { throw "Trusted downloader guard failed" }; return $output }
+          if ((Read-TrustedGit rev-parse HEAD).Trim() -ne "a5c23fc8963f9ecc531468a61653bf2d798e8c6d") { throw "Unexpected trusted downloader source" }
+          if ((Read-TrustedGit rev-parse 'HEAD^{tree}').Trim() -ne "5ad00ad42179e58bb300410e82f934384843a847") { throw "Unexpected trusted downloader tree" }
+          if ((Read-TrustedGit rev-parse HEAD:scripts/ci/fetch-test-fixtures.ps1).Trim() -ne "7ca7d6f217aa9bdf2ca26d106abc68061a89e920") { throw "Unexpected trusted downloader blob" }
+          if (@(Read-TrustedGit status --porcelain).Count -ne 0) { throw "Trusted downloader checkout is not clean" }
+
+      - name: Fetch functional fixture
+        env:
+          ALBUM_HAVEN_FIXTURES_TOKEN: ${{ secrets.ALBUM_HAVEN_FIXTURES_TOKEN }}
+        run: |
+          & ".trusted-ci\scripts\ci\fetch-test-fixtures.ps1" `
+            -Release fixtures-v1.0.25 `
+            -Profile functional-core `
+            -ManifestSha256 e56a515ff4073fa1c0e7e2b9a91a5217259344415c71de0b068af3615eb09e60
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: requirements.txt
+
+      - name: Install Node dependencies
+        run: npm ci
+
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+
+      - name: Resolve functional shard configuration
+        id: shard
+        run: node scripts/ci/resolve-ci-shard.cjs functional ${{ matrix.shard }}
+
+      - name: Set up pinned functional Chrome for Testing
+        id: setup_functional_chrome
+        uses: browser-actions/setup-chrome@v2
+        with:
+          chrome-version: "151.0.7922.138"
+
+      - name: Prepare writable functional fixture
+        run: |
+          $sourceRoot = [IO.Path]::GetFullPath($env:ALBUM_HAVEN_FIXTURE_ROOT)
+          $workRoot = [IO.Path]::GetFullPath((Join-Path "${{ runner.temp }}" "album-haven-e2e-functional-fixtures-${{ matrix.shard }}"))
+          $sharedRoot = Join-Path $workRoot "shared"
+          $runnerTemp = [IO.Path]::GetFullPath("${{ runner.temp }}")
+          $relativeWork = [IO.Path]::GetRelativePath($runnerTemp, $workRoot)
+          if ([string]::IsNullOrWhiteSpace($relativeWork) -or $relativeWork.StartsWith("..") -or [IO.Path]::IsPathRooted($relativeWork)) {
+            throw "Functional fixture work root must be a non-root child of RUNNER_TEMP."
+          }
+          if (-not (Test-Path -LiteralPath (Join-Path $sourceRoot "manifest.json") -PathType Leaf) -or
+              -not (Test-Path -LiteralPath (Join-Path $sourceRoot "database") -PathType Container) -or
+              -not (Test-Path -LiteralPath (Join-Path $sourceRoot "media") -PathType Container)) {
+            throw "Downloaded functional fixture is incomplete."
+          }
+          if (Test-Path -LiteralPath $workRoot) {
+            throw "Functional fixture work root must not already exist."
+          }
+          New-Item -ItemType Directory -Path $workRoot | Out-Null
+          Copy-Item -LiteralPath $sourceRoot -Destination $sharedRoot -Recurse
+          if (-not (Test-Path -LiteralPath (Join-Path $sharedRoot "manifest.json") -PathType Leaf) -or
+              -not (Test-Path -LiteralPath (Join-Path $sharedRoot "database") -PathType Container) -or
+              -not (Test-Path -LiteralPath (Join-Path $sharedRoot "media") -PathType Container)) {
+            throw "Writable functional fixture copy is incomplete."
+          }
+          "ALBUM_HAVEN_FUNCTIONAL_FIXTURE_WORK_ROOT=$workRoot" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "ALBUM_HAVEN_FUNCTIONAL_SOURCE_FIXTURE_ROOT=$sourceRoot" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "ALBUM_HAVEN_FIXTURE_ROOT=$sharedRoot" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "ALBUM_HAVEN_MEDIA_ROOT=$(Join-Path $sharedRoot 'media')" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      - name: Provision functional PostgreSQL and load fixture
+        run: |
+          if (-not (Test-Path -LiteralPath ".\scripts\ci\load-fixture-profile.py" -PathType Leaf)) {
+            throw "scripts/ci/load-fixture-profile.py is required."
+          }
+          $env:PLAYWRIGHT_PROVIDER_PORT = ([int]"${{ steps.shard.outputs.port_base }}" + 2).ToString()
+          .\scripts\ci\bootstrap-windows-postgres.ps1 `
+            -Mode Provision `
+            -ExpectedMajorVersion 17 `
+            -Pgbin $env:PGBIN `
+            -HostName 127.0.0.1 `
+            -DatabaseSuffix "f_${{ github.run_id }}_${{ github.run_attempt }}_${{ strategy.job-index }}" `
+            -StatePath "${{ runner.temp }}\album-haven-functional-${{ matrix.shard }}.state.json"
+
+      - name: Write functional foundation version manifest
+        env:
+          PLAYWRIGHT_CHROME_EXECUTABLE: ${{ steps.setup_functional_chrome.outputs.chrome-path }}
+        run: |
+          $env:PGPASSWORD = $null
+          node scripts/ci/write-foundation-version-manifest.cjs --profile=windows --output=${{ runner.temp }}\foundation-version-manifest-functional-${{ matrix.shard }}.json
+
+      - name: Validate functional shard ownership
+        run: node scripts/ci/validate-functional-shards.cjs --list
+
+      - name: Verify exact source and one-case selection
+        run: |
+          if ((git rev-parse HEAD).Trim() -ne "c2427d0723862ca330d817ce997a922c90e9fa90") { throw "Unexpected source head" }
+          node -e "const fs=require('node:fs'); const v=require('./scripts/ci/validate-functional-shards.cjs'); const c=v.selectFunctionalCases(JSON.parse(fs.readFileSync('tests/ci/functional-shards.json','utf8')),{exactCases:['FTC-SETTINGS-I01']}).selectedCases; if(c.length!==1 || c[0].test!=='tests/e2e/specs/settingsIntegrations.functional.spec.js' || c[0].case!=='FTC-SETTINGS-I01 real folder picking preserves Cancel and validates saved root membership' || c[0].config!=='playwright.config.js' || c[0].project!=='functional' || c[0].area!=='integrations') throw Error('Unexpected exact selection'); console.log(JSON.stringify(c));"
+          if ($LASTEXITCODE -ne 0) { throw "Exact case selection failed" }
+
+      - name: Run unchanged exact I01 once
+        env:
+          PLAYWRIGHT_CHROME_EXECUTABLE: ${{ steps.setup_functional_chrome.outputs.chrome-path }}
+        run: |
+          $env:PGPASSWORD = $null
+          $env:PLAYWRIGHT_PYTHON = Join-Path $env:pythonLocation "python.exe"
+          $env:ALBUM_HAVEN_FUNCTIONAL_PORT_BASE = "${{ steps.shard.outputs.port_base }}"
+          $env:ALBUM_HAVEN_FUNCTIONAL_OUTPUT_ROOT = Join-Path "${{ runner.temp }}" "${{ steps.shard.outputs.output_dir }}"
+          $env:ALBUM_HAVEN_FUNCTIONAL_BLOB_ROOT = Join-Path "${{ runner.temp }}" "functional-blobs-${{ matrix.shard }}"
+          $arguments = @("--run-shard=${{ matrix.shard }}", "--run-case=FTC-SETTINGS-I01")
+          node scripts/ci/validate-functional-shards.cjs @arguments
+
+      - name: Teardown functional PostgreSQL
+        if: ${{ always() }}
+        run: |
+          $statePath = "${{ runner.temp }}\album-haven-functional-${{ matrix.shard }}.state.json"
+          if (Test-Path -LiteralPath $statePath -PathType Leaf) {
+            .\scripts\ci\bootstrap-windows-postgres.ps1 `
+              -Mode Teardown `
+              -ExpectedMajorVersion 17 `
+              -Pgbin $env:PGBIN `
+              -HostName 127.0.0.1 `
+              -DatabaseSuffix "f_${{ github.run_id }}_${{ github.run_attempt }}_${{ strategy.job-index }}" `
+              -StatePath "${{ runner.temp }}\album-haven-functional-${{ matrix.shard }}.state.json"
+          }
+
+      - name: Upload functional foundation version manifest
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: foundation-versions-functional-${{ matrix.shard }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}\foundation-version-manifest-functional-${{ matrix.shard }}.json
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Upload functional blob
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.shard.outputs.blob_name }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}\functional-blobs-${{ matrix.shard }}
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Upload functional debug
+        if: ${{ failure() && !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: functional-debug-${{ matrix.shard }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}\${{ steps.shard.outputs.output_dir }}
+          if-no-files-found: error
+          retention-days: 7
+

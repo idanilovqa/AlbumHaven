@@ -202,3 +202,26 @@ test('B06 changing song identity cancels an idle reveal owned by the previous so
   h.tick(1000);
   assert.equal(h.revealed(), false);
 });
+
+test('B06 a new song receives a fresh reveal only after a new pointer visit', () => {
+  const h = harness();
+  h.compound.dispatch('pointerenter'); h.tick(299);
+  h.controller.update({ contextKey: 'next-song', active: false });
+  h.controller.update({ contextKey: 'next-song', busy: false });
+  h.tick(1000);
+  assert.equal(h.revealed(), false);
+  assert.equal(h.timers.size, 0);
+  h.compound.dispatch('pointerleave');
+  h.compound.dispatch('pointerenter');
+  h.tick(299); assert.equal(h.revealed(), false);
+  h.tick(1); assert.equal(h.revealed(), true);
+});
+
+test('B06 same-song reset preserves hover recovery with a fresh exact reveal deadline', () => {
+  const h = harness();
+  h.compound.dispatch('pointerenter'); h.tick(299);
+  h.controller.update({ reset: true });
+  assert.equal(h.timers.size, 1);
+  h.tick(299); assert.equal(h.revealed(), false);
+  h.tick(1); assert.equal(h.revealed(), true);
+});

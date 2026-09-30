@@ -863,7 +863,7 @@
               "config": "playwright.config.js",
               "project": "functional",
               "test": "tests/e2e/specs/albumDetailsComponents.functional.spec.js",
-              "case": "touch artwork actions \u203a FTC-ALBUM-DETAILS-022 touch artwork controls open full cover and Cover Lookup without hover",
+              "case": "FTC-ALBUM-DETAILS-022 touch artwork controls open full cover and Cover Lookup without hover",
               "area": "album-details"
             },
             {

@@ -1,10 +1,10 @@
 const { spawnSync } = require('node:child_process');
 const fs = require('node:fs');
 const path = require('node:path');
+const { discoverFunctionalCases } = require('./validate-functional-shards.cjs');
 
 const repoRoot = path.resolve(__dirname, '..', '..');
 const playwrightCli = path.join(repoRoot, 'node_modules', '@playwright', 'test', 'cli.js');
-const ciRoot = path.join(repoRoot, 'tests', 'ci');
 
 const surfaces = [
   { config: 'playwright.mobile-layout.config.js', category: 'mobile', testDirectory: 'tests/e2e/mobile-layout' },
@@ -58,17 +58,27 @@ function listSurface(surface) {
     };
   });
   if (identities.length !== Number(totalMatch[1])) throw new Error(`Incomplete case identity discovery for ${surface.config}`);
+  return describeSurface(surface, identities);
+}
+
+function describeSurface(surface, identities) {
   const projects = identities.map(entry => entry.project);
   return {
     config: surface.config,
     category: surface.category,
     projects: projects.length > 0 ? [...new Set(projects)] : [''],
-    cases: Number(totalMatch[1]),
+    cases: identities.length,
     identities,
   };
 }
 
-const discovered = surfaces.map(listSurface);
+// Functional ownership and execution use native leaf titles, not line-reporter
+// display paths (which include describe labels separated by presentation glyphs).
+const functionalCases = discoverFunctionalCases({ repoRoot });
+const discovered = surfaces.map(surface => surface.category === 'browserFunctional'
+  ? describeSurface(surface, functionalCases.filter(entry => entry.config === surface.config)
+    .map(({ config, project, test, case: title }) => ({ config, project, test, case: title })))
+  : listSurface(surface));
 const categories = {
   browserFunctional: 0,
   mobile: 0,

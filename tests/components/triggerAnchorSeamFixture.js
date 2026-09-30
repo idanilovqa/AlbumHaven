@@ -77,10 +77,18 @@ async function readJoinPixels(page) {
 }
 
 async function assertMobileRowMenuContinuity(browser) {
-  for (const deviceScaleFactor of [1, 2, 2.625]) {
-    const context = await browser.newContext({ viewport: { width: 412, height: 830 },
-      deviceScaleFactor, isMobile: true, hasTouch: true });
+  for (const deviceScaleFactor of [1.25, 1.75, 2.625]) {
+    // Native scaling also exercises device-rounded CSS border widths; context
+    // emulation alone changes image density but misses the reported edge step.
+    const executablePath = String(process.env.PLAYWRIGHT_CHROME_EXECUTABLE || '').trim();
+    const nativeBrowser = await browser.browserType().launch({
+      headless: true,
+      ...(executablePath ? { executablePath } : { channel: 'chrome' }),
+      args: [`--force-device-scale-factor=${deviceScaleFactor}`],
+    });
     try {
+      const context = await nativeBrowser.newContext({ viewport: { width: 412, height: 830 },
+        deviceScaleFactor, isMobile: true, hasTouch: true });
       for (const dark of [false, true]) for (const above of [false, true]) {
         const page = await context.newPage();
         try {
@@ -95,7 +103,7 @@ async function assertMobileRowMenuContinuity(browser) {
           await expect(page.getByRole('button', { name: 'Actions for fixture user' })).toBeFocused();
         } finally { await page.close(); }
       }
-    } finally { await context.close(); }
+    } finally { await nativeBrowser.close(); }
   }
 }
 

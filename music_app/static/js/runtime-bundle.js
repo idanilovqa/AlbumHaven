@@ -5406,16 +5406,19 @@ function syncTriggerAnchor(surface, anchor) {
   const contextOwner = anchor.closest?.('.trigger-anchor-surface, .shell-main-surface, .settings-outlet');
   const anchorContext = surface.matches?.('.mobile-settings-drawer') ? 'chrome'
     : contextOwner?.dataset?.triggerAnchorContext || (contextOwner ? 'content' : 'chrome');
-  surface.dataset.triggerAnchorContext = anchorContext;
-  anchor.dataset.triggerAnchorContext = anchorContext;
+  const contextChanged = surface.dataset.triggerAnchorContext !== anchorContext;
+  if (contextChanged) surface.dataset.triggerAnchorContext = anchorContext;
+  if (anchor.dataset.triggerAnchorContext !== anchorContext) anchor.dataset.triggerAnchorContext = anchorContext;
   activateTriggerSurface(surface, () => {
     surface.hidden = true;
     anchor.setAttribute?.('aria-expanded', 'false');
     clearTriggerAnchor(surface);
   });
   // Establish the owning surface before sampling its paint for the joined trigger.
-  surface.classList.add('trigger-anchor-surface');
-  surface.style.removeProperty?.('--trigger-anchor-background');
+  if (!surface.classList.contains('trigger-anchor-surface')) surface.classList.add('trigger-anchor-surface');
+  if (!previous || previous.anchor !== anchor || contextChanged) {
+    surface.style.removeProperty?.('--trigger-anchor-background');
+  }
   const surfaceStyle = globalThis.getComputedStyle?.(surface);
   let bounds = surface.getBoundingClientRect();
   // Side drawers animate their position, not their layout width. The joined
@@ -5438,12 +5441,14 @@ function syncTriggerAnchor(surface, anchor) {
     surface.style.setProperty('--trigger-anchor-background', surfaceBackground);
     anchor.style.setProperty('--trigger-anchor-background', surfaceBackground);
   }
-  if (anchor.matches?.('.search-field-button')) surface.dataset.triggerAnchorSearch = 'true';
+  if (anchor.matches?.('.search-field-button')) {
+    if (surface.dataset.triggerAnchorSearch !== 'true') surface.dataset.triggerAnchorSearch = 'true';
+  }
   else delete surface.dataset.triggerAnchorSearch;
-  anchor.classList.add('trigger-anchor-open');
- surface.dataset.triggerAnchorEdge = geometry.edge;
-  surface.dataset.triggerAnchorSide = geometry.side;
-  anchor.dataset.triggerAnchorEdge = geometry.edge;
+  if (!anchor.classList.contains('trigger-anchor-open')) anchor.classList.add('trigger-anchor-open');
+ if (surface.dataset.triggerAnchorEdge !== geometry.edge) surface.dataset.triggerAnchorEdge = geometry.edge;
+  if (surface.dataset.triggerAnchorSide !== geometry.side) surface.dataset.triggerAnchorSide = geometry.side;
+  if (anchor.dataset.triggerAnchorEdge !== geometry.edge) anchor.dataset.triggerAnchorEdge = geometry.edge;
   for (const name of ['left', 'right', 'width', 'gap']) {
     surface.style.setProperty(`--trigger-anchor-${name}`, `${geometry[name]}px`);
   }
@@ -5478,6 +5483,14 @@ function syncActiveTriggerSurfaces() {
 
 globalThis.addEventListener?.('resize', syncActiveTriggerSurfaces);
 globalThis.addEventListener?.('scroll', syncActiveTriggerSurfaces, true);
+// Applied account themes refresh paint; geometry-only scroll/resize updates do
+// not remove and reinstate an unchanged surface color.
+globalThis.addEventListener?.('album-haven-appearance-change', () => {
+  for (let owner = activeTriggerSurface; owner; owner = owner.parent) {
+    owner.surface.style?.removeProperty?.('--trigger-anchor-background');
+  }
+  syncActiveTriggerSurfaces();
+});
 function confinePanelTextSelection(selection, surface) {
   if (!selection?.anchorNode || !selection.focusNode || !surface.contains(selection.anchorNode)
       || surface.contains(selection.focusNode)) return;
@@ -6141,7 +6154,7 @@ function syncGalleryBarSearchVisibility() {
   const committedQuery = String(state.view?.query || '').trim();
   const selectedArtist = String(state.view?.selected_artist || '').trim();
   bar.hidden = selectedArtist
-    ? draftQuery !== committedQuery
+    ? Boolean(draftQuery) && draftQuery !== committedQuery
     : Boolean(draftQuery || committedQuery);
 }
 
@@ -12191,7 +12204,6 @@ function attachModalEvents() {
   if (!els.overlay || els.overlay.dataset.bound === '1') return;
   els.overlay.dataset.bound = '1';
   bindOverlayPointerOrigin(els.overlay);
-  els.close?.addEventListener('click', closeTrackModal);
   els.overlay.addEventListener('click', (event) => {
     if (overlayClickStartedOnOverlay(els.overlay, event) || event.target.closest('[data-close-track-modal="1"]')) {
       closeTrackModal();
@@ -36267,7 +36279,6 @@ function attachUtilityModalEvents() {
   if (!els.overlay || els.overlay.dataset.bound === '1') return;
   els.overlay.dataset.bound = '1';
   bindOverlayPointerOrigin(els.overlay);
-  els.close?.addEventListener('click', closeUtilityModal);
   let searchRenderTimer = null;
   const scheduleSearchRender = () => {
     clearTimeout(searchRenderTimer);

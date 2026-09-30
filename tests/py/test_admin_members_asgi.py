@@ -329,7 +329,30 @@ def test_members_add_and_edit_are_in_place_pages_with_back_navigation():
     assert "Send password reset email" not in edit_body
     assert "Resend welcome email" not in edit_body
     assert "Back to users" in edit_body
-    assert "modal" not in edit_body.casefold()
+    class FormPlacement(HTMLParser):
+        def __init__(self):
+            super().__init__()
+            self.stack = []
+            self.forms = []
+        def handle_starttag(self, tag, attrs):
+            attrs = dict(attrs)
+            if "data-admin-account-form" in attrs:
+                self.forms.append((tag, attrs, list(self.stack)))
+            if tag not in {"input", "br", "hr", "img", "meta", "link", "source", "wbr"}:
+                self.stack.append((tag, attrs))
+        def handle_endtag(self, tag):
+            for index in range(len(self.stack) - 1, -1, -1):
+                if self.stack[index][0] == tag:
+                    del self.stack[index:]
+                    break
+    placement = FormPlacement()
+    placement.feed(edit_body)
+    assert len(placement.forms) == 1
+    form_tag, form_attrs, ancestors = placement.forms[0]
+    assert form_tag == "form"
+    assert form_attrs.get("role") != "dialog"
+    assert not any(attrs.get("role") == "dialog" or attrs.get("aria-modal") == "true"
+                   for _tag, attrs in ancestors)
     assert '"accounts.manage": true' in edit_body
     assert '"accounts.membership.manage": true' in edit_body
     assert '"accounts.capabilities.manage": true' in edit_body
@@ -624,3 +647,29 @@ def test_admin_mail_action_validation_still_returns_client_error(action, method)
     status, body = _json_request(app, "POST", f"/admin/accounts/41/{action}", {})
     assert status == 400
     assert body == b'{"detail":"Mail action was invalid."}'
+
+
+@pytest.mark.parametrize("account_id", [7, 41])
+def test_role_guidance_is_a_static_description_with_separate_live_status(account_id):
+    app, _service = _app()
+    status, _headers, body = _get(app, f"/admin/accounts/{account_id}")
+    assert status == 200
+    class Nodes(HTMLParser):
+        def __init__(self):
+            super().__init__()
+            self.nodes = []
+        def handle_starttag(self, tag, attrs):
+            self.nodes.append((tag, dict(attrs)))
+    parsed = Nodes()
+    parsed.feed(body)
+    guidance = [attrs for tag, attrs in parsed.nodes if attrs.get("id") == "admin-role-description"]
+    assert len(guidance) == 1
+    assert guidance[0]["role"] == "note"
+    assert "aria-live" not in guidance[0]
+    role = [attrs for tag, attrs in parsed.nodes if tag == "select" and attrs.get("name") == "capability_role"]
+    assert len(role) == 1
+    assert role[0]["aria-describedby"] == "admin-role-description"
+    statuses = [attrs for _tag, attrs in parsed.nodes if "data-admin-form-status" in attrs]
+    assert len(statuses) == 1
+    assert statuses[0]["role"] == "status"
+    assert "hidden" in statuses[0]

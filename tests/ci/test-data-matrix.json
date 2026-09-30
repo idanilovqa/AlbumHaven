@@ -2456,8 +2456,8 @@
     "test": "tests/e2e/syntheticLargeLibrary/artistFamilyResponsiveness.spec.js",
     "case": "FTC-SEARCH-NAV-005A synthetic-large artist family responsiveness \u203a Neal Morse scrolling keeps each displayed artist heading unique before and after filtering",
     "profile": "synthetic-large-library",
-    "setupScope": "suite",
-    "stateMode": "read-only",
+    "setupScope": "isolated",
+    "stateMode": "global-mutation",
     "databaseScenarios": [
       "large-library:neal-morse-heading-uniqueness"
     ],
@@ -2465,9 +2465,11 @@
       "media:synthetic-large-library"
     ],
     "expectedContracts": [
-      "unique-artist-headings-before-after-filter"
+      "unique-artist-headings-before-after-filter",
+      "failure-safe-account-layout-preference-restoration"
     ],
-    "ownerApproval": "approved"
+    "ownerApproval": "approved",
+    "globalMutationReason": "The serialized synthetic-large invocation shares read-only media. This case captures its authenticated account layout profiles before mutations, records only its successful preference-field writes, waits for server-backed saves, and restores those fields in fixture teardown even after failure; session/account changes and overlapping writes are rejected."
   },
   {
     "config": "playwright.synthetic-large-library.config.cjs",
@@ -2475,8 +2477,8 @@
     "test": "tests/e2e/syntheticLargeLibrary/artistFamilyResponsiveness.spec.js",
     "case": "FTC-SEARCH-NAV-005A synthetic-large artist family responsiveness \u203a Neal Morse family search, filters, details, settings, and clear-search flows stay responsive on synthetic data",
     "profile": "synthetic-large-library",
-    "setupScope": "suite",
-    "stateMode": "read-only",
+    "setupScope": "isolated",
+    "stateMode": "global-mutation",
     "databaseScenarios": [
       "large-library:neal-morse-full-flow"
     ],
@@ -2484,9 +2486,11 @@
       "media:synthetic-large-library"
     ],
     "expectedContracts": [
-      "neal-morse-flow-responsiveness"
+      "neal-morse-flow-responsiveness",
+      "failure-safe-account-layout-preference-restoration"
     ],
-    "ownerApproval": "approved"
+    "ownerApproval": "approved",
+    "globalMutationReason": "The serialized synthetic-large invocation shares read-only media. This case captures its authenticated account layout profiles before mutations, records only its successful preference-field writes, waits for server-backed saves, and restores those fields in fixture teardown even after failure; session/account changes and overlapping writes are rejected."
   },
   {
     "config": "playwright.synthetic-large-library.config.cjs",
@@ -2978,7 +2982,7 @@
     "config": "playwright.config.js",
     "project": "functional",
     "test": "tests/e2e/specs/albumDetailsComponents.functional.spec.js",
-    "case": "touch artwork actions \u203a FTC-ALBUM-DETAILS-022 touch artwork controls open full cover and Cover Lookup without hover",
+    "case": "FTC-ALBUM-DETAILS-022 touch artwork controls open full cover and Cover Lookup without hover",
     "profile": "functional-core",
     "setupScope": "suite",
     "stateMode": "read-only",
@@ -3688,14 +3692,14 @@
     "config": "playwright.component.config.js",
     "project": "",
     "test": "tests/components/appearanceWorkspace.spec.js",
-    "case": "correcting Player surface start repairs the Main background HEX alias",
+    "case": "correcting Player surface start repairs validation across Main and Player editors",
     "profile": null,
     "setupScope": "suite",
     "stateMode": "read-only",
     "databaseScenarios": [],
     "filesystemScenarios": [],
     "expectedContracts": [
-      "correcting-player-surface-start-repairs-the-main-background-hex-alias"
+      "correcting-player-surface-start-repairs-validation-across-main-and-player-editors"
     ],
     "ownerApproval": "approved"
   },
@@ -3868,14 +3872,14 @@
     "config": "playwright.component.config.js",
     "project": "",
     "test": "tests/components/appearanceWorkspace.spec.js",
-    "case": "unsaved palette stays in five previews while editor and shared footer retain the saved theme",
+    "case": "Main palette previews across five editors and the app while Cancel and Save retain account ownership",
     "profile": null,
     "setupScope": "suite",
     "stateMode": "read-only",
     "databaseScenarios": [],
     "filesystemScenarios": [],
     "expectedContracts": [
-      "unsaved-palette-stays-in-five-previews-while-editor-and-shared-footer-retain-the-saved-theme"
+      "main-palette-previews-across-five-editors-and-the-app-while-cancel-and-save-retain-account-ownership"
     ],
     "ownerApproval": "approved"
   },
@@ -4697,14 +4701,14 @@
     "config": "playwright.component.config.js",
     "project": "",
     "test": "tests/components/appearanceWorkspace.spec.js",
-    "case": "Mobile and TV device appearance is disabled without an outer pill",
+    "case": "Mobile appearance is selectable while TV stays disabled without an outer pill",
     "profile": null,
     "setupScope": "suite",
     "stateMode": "read-only",
     "databaseScenarios": [],
     "filesystemScenarios": [],
     "expectedContracts": [
-      "Mobile and TV device appearance is disabled without an outer pill"
+      "Mobile appearance is selectable while TV stays disabled without an outer pill"
     ],
     "ownerApproval": "approved"
   },
@@ -4847,14 +4851,14 @@
     "config": "playwright.component.config.js",
     "project": "",
     "test": "tests/components/coverLookupDrawerHeader.spec.js",
-    "case": "light theme keeps the dark clear glyph through hover and focus",
+    "case": "light theme keeps the shared Clear SVG legible through hover and focus",
     "profile": null,
     "setupScope": "suite",
     "stateMode": "read-only",
     "databaseScenarios": [],
     "filesystemScenarios": [],
     "expectedContracts": [
-      "light theme keeps the dark clear glyph through hover and focus"
+      "light theme keeps the shared Clear SVG legible through hover and focus"
     ],
     "ownerApproval": "approved"
   },
@@ -4877,14 +4881,14 @@
     "config": "playwright.component.config.js",
     "project": "",
     "test": "tests/components/coverLookupDrawerHeader.spec.js",
-    "case": "dark theme retains the current clear glyph swap",
+    "case": "dark theme keeps the shared Clear SVG legible through hover and focus",
     "profile": null,
     "setupScope": "suite",
     "stateMode": "read-only",
     "databaseScenarios": [],
     "filesystemScenarios": [],
     "expectedContracts": [
-      "dark theme retains the current clear glyph swap"
+      "dark theme keeps the shared Clear SVG legible through hover and focus"
     ],
     "ownerApproval": "approved"
   },
@@ -7392,14 +7396,14 @@
     "config": "playwright.component.config.js",
     "project": "",
     "test": "tests/components/appearanceWorkspace.spec.js",
-    "case": "mount keeps unavailable devices natively disabled after load save and cancel",
+    "case": "mount preserves Mobile profile isolation and disabled TV after load save and cancel",
     "profile": null,
     "setupScope": "suite",
     "stateMode": "read-only",
     "databaseScenarios": [],
     "filesystemScenarios": [],
     "expectedContracts": [
-      "mount keeps unavailable devices natively disabled after load save and cancel"
+      "mount preserves Mobile profile isolation and disabled TV after load save and cancel"
     ],
     "ownerApproval": "approved"
   },
@@ -7407,14 +7411,14 @@
     "config": "playwright.component.config.js",
     "project": "",
     "test": "tests/components/appearanceWorkspace.spec.js",
-    "case": "mountAlerts keeps unavailable devices natively disabled after load save and cancel",
+    "case": "mountAlerts preserves Mobile profile isolation and disabled TV after load save and cancel",
     "profile": null,
     "setupScope": "suite",
     "stateMode": "read-only",
     "databaseScenarios": [],
     "filesystemScenarios": [],
     "expectedContracts": [
-      "mountAlerts keeps unavailable devices natively disabled after load save and cancel"
+      "mountAlerts preserves Mobile profile isolation and disabled TV after load save and cancel"
     ],
     "ownerApproval": "approved"
   },
@@ -7422,14 +7426,14 @@
     "config": "playwright.component.config.js",
     "project": "",
     "test": "tests/components/appearanceWorkspace.spec.js",
-    "case": "mountAlbumPage keeps unavailable devices natively disabled after load save and cancel",
+    "case": "mountAlbumPage preserves Mobile profile isolation and disabled TV after load save and cancel",
     "profile": null,
     "setupScope": "suite",
     "stateMode": "read-only",
     "databaseScenarios": [],
     "filesystemScenarios": [],
     "expectedContracts": [
-      "mountAlbumPage keeps unavailable devices natively disabled after load save and cancel"
+      "mountAlbumPage preserves Mobile profile isolation and disabled TV after load save and cancel"
     ],
     "ownerApproval": "approved"
   },
@@ -7437,14 +7441,14 @@
     "config": "playwright.component.config.js",
     "project": "",
     "test": "tests/components/appearanceWorkspace.spec.js",
-    "case": "mountSelectionAccent keeps unavailable devices natively disabled after load save and cancel",
+    "case": "mountSelectionAccent preserves Mobile profile isolation and disabled TV after load save and cancel",
     "profile": null,
     "setupScope": "suite",
     "stateMode": "read-only",
     "databaseScenarios": [],
     "filesystemScenarios": [],
     "expectedContracts": [
-      "mountSelectionAccent keeps unavailable devices natively disabled after load save and cancel"
+      "mountSelectionAccent preserves Mobile profile isolation and disabled TV after load save and cancel"
     ],
     "ownerApproval": "approved"
   },
@@ -7452,14 +7456,14 @@
     "config": "playwright.component.config.js",
     "project": "",
     "test": "tests/components/appearanceWorkspace.spec.js",
-    "case": "mountSeekbar keeps unavailable devices natively disabled after load save and cancel",
+    "case": "mountSeekbar preserves Mobile profile isolation and disabled TV after load save and cancel",
     "profile": null,
     "setupScope": "suite",
     "stateMode": "read-only",
     "databaseScenarios": [],
     "filesystemScenarios": [],
     "expectedContracts": [
-      "mountSeekbar keeps unavailable devices natively disabled after load save and cancel"
+      "mountSeekbar preserves Mobile profile isolation and disabled TV after load save and cancel"
     ],
     "ownerApproval": "approved"
   },

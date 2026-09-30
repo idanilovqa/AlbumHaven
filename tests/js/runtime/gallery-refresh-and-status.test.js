@@ -5840,3 +5840,62 @@ test('explicit search retires a resumed utility startup refresh instead of repla
   assert.equal(context.state.view.selected_artist, 'Northlight');
   assert.equal(context.state.ui.pendingViewRequest, null);
 });
+
+
+test('preserving mounted cards refreshes gallery chrome for the committed view', () => {
+  for (const options of [
+    { preserveMountedGallery: true },
+    { preserveMountedGalleryChildren: true, retainMountedSelectedViewState: { selected_artist: 'Scan Artist 001' } },
+  ]) {
+    const { context, calls, runtimeRenderView } = createContext();
+    const committedContexts = [];
+    context.state.view.query = 'Scan Artist 00';
+    context.state.view.selected_artist = 'Scan Artist 001';
+    context.updateGalleryMainChrome = () => {
+      committedContexts.push({ query: context.state.view.query, artist: context.state.view.selected_artist });
+    };
+    runtimeRenderView(options);
+    assert.equal(calls.renderArtistGroups, 0, 'the preserved cards must not be rebuilt');
+    assert.deepEqual(committedContexts, [{ query: 'Scan Artist 00', artist: 'Scan Artist 001' }]);
+  }
+});
+
+test('a normal gallery render keeps chrome ownership with the gallery renderer', () => {
+  const { context, calls, runtimeRenderView } = createContext();
+  let chromeUpdates = 0;
+  context.updateGalleryMainChrome = () => { chromeUpdates += 1; };
+  context.renderArtistGroups = () => {
+    calls.renderArtistGroups += 1;
+    context.updateGalleryMainChrome();
+  };
+  runtimeRenderView();
+  assert.equal(calls.renderArtistGroups, 1);
+  assert.equal(chromeUpdates, 1, 'normal rendering must not refresh chrome twice');
+});
+
+test('search from Scan Page refreshes committed chrome while retaining an equivalent gallery projection', async () => {
+  const { context, calls, pendingRequests, runtimeRenderView, artistGroups } = createContext();
+  const groups = [{ artist: 'Scan Artist 001', albums: [{ key: 'scan::001', name: 'Album 001' }] }];
+  const retainedCard = { albumKey: 'scan::001' };
+  artistGroups.querySelector = () => retainedCard;
+  const galleryMarkup = artistGroups.innerHTML;
+  context.state.view = { ...context.state.view, selected_artist: 'Scan Artist 001', artist_groups: groups };
+  context.openScanPage();
+  context.abandonScanPageForNavigation({ clearSelection: true });
+  context.state.ui.searchDraftQuery = 'Scan Artist 00';
+  const chrome = { hidden: true, artist: '' };
+  context.updateGalleryMainChrome = () => {
+    chrome.hidden = context.state.ui.searchDraftQuery !== context.state.view.query;
+    chrome.artist = context.state.view.selected_artist;
+  };
+  context.renderView = runtimeRenderView;
+  const result = context.fetchAndRender('/view-data?q=Scan+Artist+00');
+  pendingRequests[0].resolveWith({
+    query: 'Scan Artist 00', selected_artist: 'Scan Artist 001', artist_groups: groups,
+  });
+  assert.equal(await result, true);
+  assert.deepEqual(chrome, { hidden: false, artist: 'Scan Artist 001' });
+  assert.equal(calls.renderArtistGroups, 0);
+  assert.equal(artistGroups.innerHTML, galleryMarkup);
+  assert.equal(artistGroups.querySelector('.album-card'), retainedCard);
+});

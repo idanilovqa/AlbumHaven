@@ -44,17 +44,23 @@ test('connected trigger accents follow light palette colors', () => {
 });
 
 test('connected triggers leave the edge adjoining their surface unpainted', () => {
+  // The continuous outline and opaque inner mask own paint; the trigger still
+  // omits the border facing its popup for both opening directions.
   assert.match(
     triggerAnchorCssSource,
-    /\.trigger-anchor-open\s*\{[^}]*var\(--trigger-anchor-border-fill\) border-box !important;/s,
+    /\.trigger-anchor-open\s*\{[^}]*border-bottom:\s*0 !important;[^}]*linear-gradient\(var\(--trigger-anchor-background\), var\(--trigger-anchor-background\)\) padding-box !important;/s,
   );
   assert.match(
     triggerAnchorCssSource,
-    /\.trigger-anchor-open::after\s*\{[^}]*top:\s*calc\(100% - 3px\);[^}]*height:\s*calc\(var\(--trigger-anchor-gap, 0px\) \+ 3px\);/s,
+    /\.trigger-anchor-open::after\s*\{[^}]*background:\s*var\(--trigger-anchor-border-fill\);/s,
   );
   assert.match(
     triggerAnchorCssSource,
-    /\.trigger-anchor-open\[data-trigger-anchor-edge="bottom"\]::after\s*\{[^}]*bottom:\s*calc\(100% - 3px\);/s,
+    /\.trigger-anchor-open\[data-trigger-anchor-edge="bottom"\]\s*\{[^}]*border-top:\s*0 !important;[^}]*--trigger-anchor-direction:\s*to top;/s,
+  );
+  assert.match(
+    triggerAnchorCssSource,
+    /\.trigger-anchor-open\[data-trigger-anchor-edge="bottom"\]::before\s*\{[^}]*top:\s*calc\(-1 \* var\(--trigger-anchor-gap, 0px\) - 4px\); bottom:\s*0;/s,
   );
 });
 

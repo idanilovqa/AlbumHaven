@@ -371,6 +371,22 @@ test('approved test-data matrix records every discovered case', () => {
   assert.equal(matrix.every((entry) => entry.ownerApproval === 'approved'), true);
 });
 
+test('nested functional cases share the native leaf identity across inventory and ownership', () => {
+  const title = 'FTC-ALBUM-DETAILS-022 touch artwork controls open full cover and Cover Lookup without hover';
+  const matches = discoverInventory().caseIdentities.filter(entry => entry.case.includes('FTC-ALBUM-DETAILS-022'));
+  assert.equal(matches.length, 1);
+  assert.equal(matches[0].case, title);
+  const matrixMatches = readJson(testDataMatrixPath).filter(entry => entry.case.includes('FTC-ALBUM-DETAILS-022'));
+  assert.equal(matrixMatches.length, 1);
+  assert.equal(caseIdentity(matrixMatches[0]), caseIdentity(matches[0]));
+  const validator = require('../../scripts/ci/validate-functional-shards.cjs');
+  const selection = validator.selectFunctionalCases(readJson(functionalShardsPath), {
+    exactCases: ['FTC-ALBUM-DETAILS-022'],
+  });
+  assert.equal(selection.selectedCases.length, 1);
+  assert.equal(caseIdentity(selection.selectedCases[0]), caseIdentity(matches[0]));
+});
+
 test('problematic-files cases exclusively use the dedicated fixture surface while Rules stays synthetic-large', () => {
   const matrix = readJson(testDataMatrixPath);
   const problematicCases = matrix.filter((entry) =>

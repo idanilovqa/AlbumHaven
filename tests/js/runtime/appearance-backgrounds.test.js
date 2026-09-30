@@ -437,14 +437,15 @@ test('Artist Family panel and artist states retain Appearance palette and intera
   }
 });
 
-test('main and panel hover fill is independent of player tint and preserves explicit overrides', () => {
+test('main and panel automatic hover fill uses the approved player tint and preserves explicit overrides', () => {
   const appearance = runtime();
   const effective = player => ({ tokens: { control: '#112233', 'panel-control': '#445566', 'player-surface-start': player } });
   for (const control of ['#112233', '#445566']) {
     const first = appearance.resolveActionInteractionTokens({}, effective('#FF0000'), control);
     const second = appearance.resolveActionInteractionTokens({}, effective('#0000FF'), control);
-    assert.equal(first.hoverBackground, `color-mix(in srgb, ${control} 85%, #EEEEEE)`);
-    assert.equal(second.hoverBackground, first.hoverBackground);
+    assert.equal(first.hoverBackground, `color-mix(in srgb, #FF0000 14%, color-mix(in srgb, ${control} 85%, #EEEEEE))`);
+    assert.equal(second.hoverBackground, `color-mix(in srgb, #0000FF 14%, color-mix(in srgb, ${control} 85%, #EEEEEE))`);
+    assert.notEqual(second.hoverBackground, first.hoverBackground);
     assert.equal(first.pressedBackground, `color-mix(in srgb, ${control} 75%, #000000)`);
     assert.equal(appearance.resolveActionInteractionTokens({ interaction_overrides: { button_hover_background: '#123456' } }, effective('#FF0000'), control).hoverBackground, '#123456');
   }

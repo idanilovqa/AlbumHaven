@@ -57,6 +57,7 @@ import { observePlaybackPcmTraffic } from '../helpers/gaplessPlaybackHelpers.js'
 import { controlLastfmProvider, readLastfmProviderState } from '../helpers/lastfmProviderHelpers.js';
 import { createWorkerAuthentication } from '../../../scripts/playwright-worker-authentication.mjs';
 import { createAppearancePreferenceIsolation } from '../helpers/appearancePreferenceIsolation.js';
+import { createLayoutPreferenceIsolation, restoreLayoutPreferencesAfterTest } from '../helpers/layoutPreferenceIsolation.js';
 
 const ANSI = {
   cyan: '\u001b[36m',
@@ -321,6 +322,12 @@ const functionalBrowserWarmupFixtures = (
 );
 
 export const test = base.extend({
+  layoutPreferenceIsolation: async ({ page }, use, testInfo) => {
+    const isolation = createLayoutPreferenceIsolation(page);
+    try { await use(isolation); } finally {
+      await restoreLayoutPreferencesAfterTest(isolation, testInfo.errors);
+    }
+  },
   appearancePreferenceIsolation: async ({ page }, use) => {
     const isolation = createAppearancePreferenceIsolation(page);
     try { await use(isolation); } finally { await isolation.restore(); }

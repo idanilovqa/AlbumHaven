@@ -6,7 +6,7 @@ const path = require('node:path');
 const repoRoot = path.join(__dirname, '..', '..', '..');
 const appearance = require(path.join(repoRoot, 'music_app', 'static', 'js', 'appearance-backgrounds.js'));
 
-test('automatic action interactions keep surface fill independent while the edge follows player background', () => {
+test('automatic action interactions use approved muted player tint for hover fill and edge', () => {
   const first = appearance.resolveActionInteractionTokens(
     { interaction_overrides: { button_hover_background: null, button_pressed: null } },
     { tokens: { control: '#303C36', player: '#112233', 'player-surface-start': '#112233' } },
@@ -17,11 +17,11 @@ test('automatic action interactions keep surface fill independent while the edge
   );
 
   assert.deepEqual(first, {
-    hoverBackground: 'color-mix(in srgb, #303C36 85%, #EEEEEE)',
+    hoverBackground: 'color-mix(in srgb, #112233 14%, color-mix(in srgb, #303C36 85%, #EEEEEE))',
     hoverBorder: 'color-mix(in srgb, #112233 22%, #858985)',
     pressedBackground: 'color-mix(in srgb, #303C36 75%, #000000)',
   });
-  assert.equal(first.hoverBackground, second.hoverBackground);
+  assert.notEqual(first.hoverBackground, second.hoverBackground);
   assert.notEqual(first.hoverBorder, second.hoverBorder);
 });
 
@@ -107,4 +107,17 @@ test('mobile-branch Combine uses the shared configured hover fill without a tran
   const css = fs.readFileSync(path.join(repoRoot, 'music_app', 'static', 'css', 'runtime', 'trigger-anchor.css'), 'utf8');
   assert.match(css, /\.artist-family-panel__combine-row \.gallery-switch, \.ui-filter-pill\):hover[^{}]*\{\s*background: var\(--dropdown-item-hover-background/);
   assert.doesNotMatch(css, /\.artist-family-panel__combine-row \.gallery-switch:hover[^{}]*\{\s*background: transparent/);
+});
+
+test('quiet buttons preserve transparent hover and the configured pressed fill', () => {
+  const css = fs.readFileSync(path.join(repoRoot, 'music_app', 'static', 'css', 'button-component.css'), 'utf8');
+  assert.match(css, /\.ui-button\.ui-button--quiet:hover[^{}]*\{[^}]*background: transparent;/);
+  assert.match(css, /\.ui-button\.ui-button--quiet:active[^{}]*\{\s*background: var\(--appearance-item-action-pressed,/);
+});
+
+test('ordinary dropdown switches are excluded from the mobile Combine hover treatment', () => {
+  const appearanceCss = fs.readFileSync(path.join(repoRoot, 'music_app', 'static', 'css', 'appearance-backgrounds.css'), 'utf8');
+  assert.match(appearanceCss, /:where\(:not\(\.gallery-switch\)/);
+  const css = fs.readFileSync(path.join(repoRoot, 'music_app', 'static', 'css', 'runtime', 'trigger-anchor.css'), 'utf8');
+  assert.match(css, /\.gallery-switch:not\(\.artist-family-panel__combine-row \.gallery-switch\):hover[^{}]*\{\s*background: transparent !important;/);
 });

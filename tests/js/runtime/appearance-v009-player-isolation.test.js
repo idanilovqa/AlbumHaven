@@ -202,7 +202,7 @@ test('loop selection boundary and tint follow the effective handle color', () =>
   assert.doesNotMatch(themedSelection, /#(?:86efac|4ade80|22c55e)/i);
 });
 
-test('changing only player colors cannot change Main-elements interaction tokens', () => {
+test('player colors tint automatic action hover while preserving other Main-elements tokens', () => {
   const first = styleTarget();
   const second = styleTarget();
   const common = {
@@ -230,9 +230,21 @@ test('changing only player colors cannot change Main-elements interaction tokens
     },
   }, second.element);
 
-  const playerToken = /^--appearance-(?:player(?:-|$)|play(?:-|$)|waveform-)/;
-  const firstInteractions = [...first.values].filter(([name]) => !playerToken.test(name) && name !== '--compact-floating-edge-color');
-  const secondInteractions = [...second.values].filter(([name]) => !playerToken.test(name) && name !== '--compact-floating-edge-color');
+  // September 10's approved automatic action colors supersede full hover isolation.
+  const hoverToken = '--appearance-panel-action-hover-background';
+  const panelControl = first.values.get('--appearance-panel-control');
+  assert.equal(first.values.get(hoverToken), `color-mix(in srgb, #10251F 14%, color-mix(in srgb, ${panelControl} 85%, #EEEEEE))`);
+  assert.equal(second.values.get(hoverToken), `color-mix(in srgb, #07111F 14%, color-mix(in srgb, ${panelControl} 85%, #EEEEEE))`);
+  for (const background of ['#10251F', '#07111F']) {
+    const actions = appearance.resolveActionInteractionTokens(common, { tokens: {
+      control: panelControl, 'player-surface-start': background,
+    } });
+    assert.equal(actions.hoverBorder, `color-mix(in srgb, ${background} 22%, #858985)`);
+    assert.equal(actions.pressedBackground, `color-mix(in srgb, ${panelControl} 75%, #000000)`);
+  }
+  const playerToken = /^(?:--appearance-(?:player(?:-|$)|play(?:-|$)|waveform-)|--compact-floating-edge-color$)/;
+  const firstInteractions = [...first.values].filter(([name]) => !playerToken.test(name) && name !== hoverToken);
+  const secondInteractions = [...second.values].filter(([name]) => !playerToken.test(name) && name !== hoverToken);
   assert.deepEqual(secondInteractions, firstInteractions);
   assert.equal(first.values.get('--compact-floating-edge-color'), '#29B765');
   assert.equal(second.values.get('--compact-floating-edge-color'), '#357FB8');

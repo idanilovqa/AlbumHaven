@@ -27037,7 +27037,14 @@ function renderCoverLookupModal() {
   if (els.subtitle) {
     els.subtitle.textContent = buildCoverLookupAlbumSubtitle(album);
   }
-  const localCovers = Array.isArray(modalState.localCovers) ? modalState.localCovers : [];
+  const allLocalCovers = Array.isArray(modalState.localCovers) ? modalState.localCovers : [];
+  // Compact pages show one choice per initial artwork; desktop retains each
+  // file. Keep a draft chosen on desktop visible after the viewport narrows.
+  const compact = typeof usesMobilePageLayout === 'function' && usesMobilePageLayout();
+  const localCovers = compact ? allLocalCovers.filter(cover => !(
+    cover.duplicate_of && cover.path !== modalState.pendingLocalPath
+    && allLocalCovers.some(other => other.path === cover.duplicate_of)
+  )) : allLocalCovers;
   const pastedImages = Array.isArray(modalState.pastedImages) ? modalState.pastedImages : [];
   const manualImageAttachments = Array.isArray(modalState.manualImageAttachments)
     ? modalState.manualImageAttachments : [];
@@ -40459,6 +40466,8 @@ function initMobileNavigation() {
     promoteVisibleMobileDialogs();
     syncMobileGalleryControls();
     syncMobilePageShell();
+    const coverLookup = document.getElementById('cover-lookup-modal');
+    if (coverLookup && !coverLookup.hidden) renderCoverLookupModal();
     if (['loops', 'integrations', 'log-history', 'problematic-files'].includes(state.utility.activeTab) && mobilePageState.pages.some(page => page.kind === 'utilities')) renderUtilityModalContent();
     if (typeof syncMobileAlbumComposition === 'function') syncMobileAlbumComposition(getCurrentTrackModalAlbum());
   };

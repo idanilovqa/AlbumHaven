@@ -3217,7 +3217,7 @@ function renderLibraryWarning(data = {}, options = {}) {
     ?? Boolean(loader?.classList?.contains('is-scan-page'));
   const hidden = !model.warning || !model.dismissed || !scanPageVisible;
   if (scanNotice.hidden !== hidden) scanNotice.hidden = hidden;
-  if (libraryHealth) libraryHealth.hidden = hidden;
+  if (libraryHealth && libraryHealth.hidden !== hidden) libraryHealth.hidden = hidden;
   loader?.classList?.toggle?.('has-library-health', !hidden);
   if (hidden) return;
   const problems = health.problems || [];

@@ -9,6 +9,15 @@
 .page-gallery-bar h1 { margin: 0; }
 .page-gallery-bar > .gallery-bar__context { flex: 1; min-width: 0; }
 .page-gallery-bar__back { color: inherit; text-decoration: none; }
+/* Align desktop page actions with the title; factual subtitles have their own row. */
+@media (min-width: 901px) {
+  .page-gallery-bar { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; row-gap: 0; }
+  .page-gallery-bar > .gallery-bar__context { display: contents; }
+  .page-gallery-bar__back { grid-column: 1; grid-row: 1; display: inline-grid; place-items: center; }
+  .page-gallery-bar .gallery-bar__title { grid-column: 2; grid-row: 1; }
+  .page-gallery-bar .gallery-bar__summary { grid-column: 2; grid-row: 2; }
+  .page-gallery-bar > .gallery-bar__actions { grid-column: 3; grid-row: 1; }
+}
 .mobile-page-header { flex-shrink: 0; }
 /* Retained pages still need an exit when the window grows beyond phone width. */
 .mobile-page-header [data-mobile-back]:not([hidden]) { display: inline-grid; place-items: center; flex: 0 0 40px; }

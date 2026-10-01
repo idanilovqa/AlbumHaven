@@ -1134,7 +1134,7 @@ html .cover-lookup-drawer {
   .gallery-options-menu, .status-context-menu, .album-card-context-menu,
   .recent-search-popover, .utility-problem-filter-menu,
   .track-modal-version-context-menu, .repair-progress-card, .utility-loop-speed-menu
-):not([data-trigger-anchor-context='content']) {
+):not(:where([data-trigger-anchor-context='content'])) {
   --appearance-focus-outline: var(--appearance-focus);
   --appearance-interaction-outline: var(--appearance-panel-interaction-outline);
   --appearance-item-action-hover-background: var(--appearance-panel-action-hover-background);

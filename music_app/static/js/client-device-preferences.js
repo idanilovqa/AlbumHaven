@@ -147,6 +147,7 @@
       },
       get syncState() { return syncState; },
     };
+    if (enabled) notify(syncState);
     env.addEventListener?.('pagehide', () => { void flush(); });
     env.addEventListener?.('online', () => { void flush(); });
     return api;

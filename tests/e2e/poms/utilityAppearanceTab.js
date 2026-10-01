@@ -1,3 +1,4 @@
+import { authenticatedPageGet } from '../helpers/authenticatedPageRequest.js';
 import { BasePage } from './basePage.js';
 import { AppBar } from './appBar.js';
 import { AppConfirmDialog } from './components/appConfirmDialog.js';
@@ -8,6 +9,14 @@ import { UtilityMainBody } from './utilityMainBody.js';
 import { UtilitySidebarSection } from './utilitySidebarSection.js';
 
 export class UtilityAppearanceTab extends BasePage {
+  async readSavedPreferences() {
+    const response = await authenticatedPageGet(this.page, '/account/appearance');
+    if (!response.ok()) throw new Error(`Appearance read failed: HTTP ${response.status()}.`);
+    // Compare account preferences/revision without exposing the transport credential in assertion output.
+    const { csrf_token, ...preferences } = await response.json();
+    return preferences;
+  }
+
   async isRetainedEditor(handle) {
     // parity-check: allow-read-only-measurement-evaluate -- compare the mounted draft editor after shared search
     return handle.evaluate(node => node.isConnected && node === document.querySelector('.appearance-background-editor'));

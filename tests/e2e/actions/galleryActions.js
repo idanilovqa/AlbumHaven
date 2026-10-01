@@ -966,7 +966,7 @@ export class GalleryActions {
         lastViewportState = await this.readAlbumGalleryViewportState(
           artistName,
           albumName,
-          { year },
+          { year, detailsAction: options.detailsAction === true },
         );
         if (lastViewportState.attached && lastViewportState.intersects) return;
         if (lastViewportState.attached) {
@@ -991,7 +991,7 @@ export class GalleryActions {
           lastViewportState = await this.readAlbumGalleryViewportState(
             artistName,
             albumName,
-            { year },
+            { year, detailsAction: options.detailsAction === true },
           );
           if (lastViewportState.attached && lastViewportState.intersects) return;
           continue;
@@ -1137,7 +1137,7 @@ export class GalleryActions {
       throw new Error('Selecting an album requires an exact artist, album, and year.');
     }
 
-    await this.scrollToAlbumUnderHeading(artist, album, { ...options, year });
+    await this.scrollToAlbumUnderHeading(artist, album, { ...options, year, detailsAction: true });
     await this.galleryPage.albumCard.clickDetailsByIdentity(artist, album, year);
     return { artist, album, year };
   }
@@ -1150,7 +1150,7 @@ export class GalleryActions {
     if (!artist || !album || !year) {
       throw new Error('Selecting an album requires an exact artist, album, and year.');
     }
-    await this.scrollToAlbumUnderHeading(artist, album, { ...options, year });
+    await this.scrollToAlbumUnderHeading(artist, album, { ...options, year, detailsAction: true });
     const requestKey = await this.galleryPage.albumCard.readRequestKeyByIdentity(
       artist,
       album,

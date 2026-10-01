@@ -454,10 +454,15 @@ function updateGalleryMainControls() {
       button.removeAttribute('data-gallery-bar-action');
       button.removeAttribute('data-gallery-bar-action');
     });
+    const direction = typeof usesMobilePageLayout === 'function' && usesMobilePageLayout() ? 'down' : 'left';
+    if (viewCluster.dataset.unfoldDirection && viewCluster.dataset.unfoldDirection !== direction) {
+      UnfoldingActionButton.mount(viewCluster).close();
+    }
     UnfoldingActionButton.mount(viewCluster, {
       label: 'Gallery view',
-      direction: typeof usesMobilePageLayout === 'function' && usesMobilePageLayout() ? 'down' : 'left',
-      onOpen: () => { if (typeof activateTriggerSurface === 'function') activateTriggerSurface(viewCluster, () => UnfoldingActionButton.mount(viewCluster).close()); },
+      direction,
+      onOpen: () => { if (typeof usesMobilePageLayout === 'function' && usesMobilePageLayout()
+        && typeof activateTriggerSurface === 'function') activateTriggerSurface(viewCluster, () => UnfoldingActionButton.mount(viewCluster).close()); },
       onClose: () => { if (typeof clearTriggerAnchor === 'function') clearTriggerAnchor(viewCluster); },
       onSelect: view => transitionGalleryMain({ type: 'set-view', view }),
     }).select(mainState.view);

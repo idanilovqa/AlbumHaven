@@ -223,15 +223,21 @@ export async function expectSharedOutlineGeometry(surfaces) {
     return { y: rect.top + parseFloat(top.top), dividerY: bar.bottom - 1, height: top.height, fade: top.backgroundImage };
   });
   expect(Math.abs(join.y - join.dividerY)).toBeLessThanOrEqual(1);
+  // This is the horizontal Gallery divider, not the button/gap outline below.
   expect(join.height).toBe('1px');
   expect(join.fade).toContain('linear-gradient');
   // parity-check: allow-read-only-measurement-evaluate -- inspect interpolation and border continuity at the trigger
   const idle = await surfaces.familyTrigger.evaluate(el => {
     const s = getComputedStyle(el);
-    return { image: s.backgroundImage, top: s.borderTopWidth, shadow: s.boxShadow, transition: s.transitionProperty };
+    const outline = getComputedStyle(el, '::after');
+    const interior = getComputedStyle(el, '::before');
+    return { image: s.backgroundImage, top: s.borderTopWidth, shadow: s.boxShadow, transition: s.transitionProperty,
+      joinSideWidths: [parseFloat(interior.left) - parseFloat(outline.left),
+        parseFloat(interior.right) - parseFloat(outline.right)] };
   });
   expect(idle.image).toContain('linear-gradient');
   expect(idle.top).toBe('2px');
+  expect(idle.joinSideWidths).toEqual([2, 2]);
   expect(idle.shadow).toBe('none');
   expect(idle.transition).toContain('--trigger-anchor-cap');
 }

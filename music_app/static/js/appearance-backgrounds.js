@@ -167,7 +167,9 @@
     return {
       hoverBackground: interactions.button_hover_background
         || `color-mix(in srgb, ${playerBackground} 14%, color-mix(in srgb, ${control} 85%, #EEEEEE))`,
-      hoverBorder: `color-mix(in srgb, ${playerBackground} 22%, #858985)`,
+      hoverBorder: interactions.item_outline?.source === 'custom'
+        ? interactions.item_outline.color
+        : `color-mix(in srgb, ${playerBackground} 22%, #858985)`,
       pressedBackground: interactions.button_pressed
         || `color-mix(in srgb, ${control} 75%, #000000)`,
     };

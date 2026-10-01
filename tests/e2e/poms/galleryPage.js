@@ -471,9 +471,11 @@ export class GalleryPage extends BasePage {
     const cards = year
       ? this.albumCard.cardByIdentity(artistName, albumName, year)
       : this.albumCard.cardsByArtistAndAlbum(artistName, albumName);
-    // parity-check: allow-read-only-measurement-evaluate -- atomically measure the exact virtual album card and its gallery viewport
-    return cards.evaluateAll(
-      (cards, galleryScrollSelector) => {
+    const detailsAction = options.detailsAction === true;
+    const targets = detailsAction ? cards.locator(this.albumCard.detailsButtonWithinCardSelector) : cards;
+    // parity-check: allow-read-only-measurement-evaluate -- atomically measure the exact virtual card or intended details action against its gallery viewport
+    return targets.evaluateAll(
+      (cards, { galleryScrollSelector, detailsAction }) => {
         if (cards.length === 0) {
           return {
             attached: false,
@@ -501,13 +503,14 @@ export class GalleryPage extends BasePage {
             scrollDirection: 0,
           };
         }
-        const intersects = cardBounds.right > galleryBounds.left
-          && cardBounds.left < galleryBounds.right
-          && cardBounds.bottom > galleryBounds.top
-          && cardBounds.top < galleryBounds.bottom;
-        const scrollDirection = cardBounds.bottom <= galleryBounds.top
+        const intersects = detailsAction
+          ? cardBounds.left >= galleryBounds.left && cardBounds.right <= galleryBounds.right
+            && cardBounds.top >= galleryBounds.top && cardBounds.bottom <= galleryBounds.bottom
+          : cardBounds.right > galleryBounds.left && cardBounds.left < galleryBounds.right
+            && cardBounds.bottom > galleryBounds.top && cardBounds.top < galleryBounds.bottom;
+        const scrollDirection = (detailsAction ? cardBounds.top < galleryBounds.top : cardBounds.bottom <= galleryBounds.top)
           ? -1
-          : cardBounds.top >= galleryBounds.bottom
+          : (detailsAction ? cardBounds.bottom > galleryBounds.bottom : cardBounds.top >= galleryBounds.bottom)
             ? 1
             : 0;
         return {
@@ -518,7 +521,7 @@ export class GalleryPage extends BasePage {
           scrollDirection,
         };
       },
-      this.galleryScrollSelector,
+      { galleryScrollSelector: this.galleryScrollSelector, detailsAction },
     );
   }
 

@@ -4105,7 +4105,7 @@ test('gallery target viewport snapshot measures attached card and stable gallery
   const actions = read('tests/e2e/actions/galleryActions.js');
   assert.match(
     pom,
-    /const cards = year[\s\S]*cardByIdentity\(artistName, albumName, year\)[\s\S]*cardsByArtistAndAlbum\(artistName, albumName\)[\s\S]*return cards\.evaluateAll/,
+    /const cards = year[\s\S]*cardByIdentity\(artistName, albumName, year\)[\s\S]*cardsByArtistAndAlbum\(artistName, albumName\)[\s\S]*const targets = detailsAction \? cards\.locator\(this\.albumCard\.detailsButtonWithinCardSelector\) : cards;[\s\S]*return targets\.evaluateAll/,
   );
   assert.match(
     actions,
@@ -4398,7 +4398,7 @@ test('exact album selection delegates one retrying Playwright click to the ident
   assert.deepEqual(scrolled, [[
     'Mastodon',
     'Crack The Skye',
-    { year: '2009' },
+    { year: '2009', detailsAction: true },
   ]]);
   assert.deepEqual(identity, {
     artist: 'Mastodon',

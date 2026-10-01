@@ -1188,6 +1188,8 @@ function hasActiveCoverLookupDrawerTextSelection(body) {
 
 function hasActiveCoverLookupDrawerAction(body) {
   if (!body || typeof body.contains !== 'function') return false;
+  // Polling must not replace the anchor while a press is still a collapsed selection.
+  if (body.querySelector?.('.cover-lookup-task-open:active')) return true;
   const activeElement = typeof document !== 'undefined' ? document.activeElement : null;
   const focusedAction = activeElement && body.contains(activeElement) && activeElement.closest?.('.cover-lookup-task-actions')
     ? activeElement

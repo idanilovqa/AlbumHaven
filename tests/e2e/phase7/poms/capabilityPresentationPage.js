@@ -3,8 +3,9 @@ import { CapabilityEditorPage } from './capabilityEditorPage.js';
 export class CapabilityPresentationPage extends CapabilityEditorPage {
   constructor(page) {
     super(page);
-    this.username = page.locator('.detail-person strong');
+    this.username = page.locator('.detail-main [data-gallery-bar-instance="page"] .gallery-bar__summary');
     this.heading = page.getByRole('heading', { name: 'Edit user', exact: true });
+    this.backGlyph = this.backToUsers.locator('svg');
     this.root = page.locator('html');
     this.appBar = page.locator('.shell-app-bar');
     this.help = page.locator('#roles-only-help');

@@ -46,6 +46,13 @@ test('FTC-CAP-AUDIT-015 Admin controls stay readable and accessible in light and
     const back = await ui.backToUsers.boundingBox(), heading = await ui.heading.boundingBox();
     expect(back.x + back.width).toBeLessThanOrEqual(heading.x);
     expect(Math.abs(back.y + back.height / 2 - heading.y - heading.height / 2)).toBeLessThan(5);
+    await expect(ui.username).toHaveText(username);
+    const identity = await ui.username.boundingBox();
+    const identityGap = identity.y - heading.y - heading.height;
+    expect(identityGap).toBeGreaterThanOrEqual(0);
+    expect(identityGap).toBeLessThanOrEqual(identity.height);
+    await expect(ui.backGlyph).toHaveCSS('fill', 'none');
+    await expect(ui.backGlyph).toHaveCSS('stroke', (await ui.style(ui.heading)).color);
     for (let index = 0; index < await ui.notices.count(); index += 1) {
       const surface = await ui.style(ui.notices.nth(index));
       const message = await ui.style(ui.noticeMessages.nth(index));

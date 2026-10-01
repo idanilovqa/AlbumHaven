@@ -1,5 +1,6 @@
 import { enrollCapabilityMember } from '../actions/capabilityEditorActions.js';
 import { CapabilityPresentationPage } from '../poms/capabilityPresentationPage.js';
+import { MobileLayoutPage } from '../../poms/mobileLayoutPage.js';
 import { readThemeColorChannels } from '../../poms/settingsModalAppBar.js';
 import { test, expect } from '../support/baseFixtures.js';
 
@@ -33,13 +34,31 @@ for (const client of [
         ['View library', 'Administer users and access']);
       const username = await new CapabilityPresentationPage(administrator.page).username.innerText();
       const ui = new CapabilityPresentationPage(page);
-      await settingsModalAppBarActions.openSettings();
-      await utilityTabBarActions.openTab('appearance');
-      await utilityAppearanceActions.waitForReady();
-      await utilityAppearanceActions.openSection('backgrounds');
-      await utilityAppearanceActions.choosePalette('parchment-pine');
-      await utilityAppearanceActions.save();
-      await settingsModalAppBarActions.closeSettings();
+      if (client.name === 'mobile') {
+        const phone = new MobileLayoutPage(page);
+        const appearance = utilityAppearanceActions.utilityAppearanceTab;
+        await phone.openSettings();
+        await phone.selectUtility('appearance');
+        await utilityAppearanceActions.waitForReady();
+        await phone.selectSubsection('backgrounds');
+        await expect(appearance.deviceButton('Mobile')).toHaveAttribute('aria-pressed', 'true');
+        await expect(appearance.followMobileMode).toHaveAttribute('aria-pressed', 'true');
+        await appearance.customMobileMode.click();
+        await expect(appearance.customMobileMode).toHaveAttribute('aria-pressed', 'true');
+        await utilityAppearanceActions.choosePalette('parchment-pine');
+        await utilityAppearanceActions.save();
+        await expect(appearance.editorFooter.primary.root).toBeDisabled();
+        await phone.backButton.click();
+        await expect(phone.utilitiesPage).toBeHidden();
+      } else {
+        await settingsModalAppBarActions.openSettings();
+        await utilityTabBarActions.openTab('appearance');
+        await utilityAppearanceActions.waitForReady();
+        await utilityAppearanceActions.openSection('backgrounds');
+        await utilityAppearanceActions.choosePalette('parchment-pine');
+        await utilityAppearanceActions.save();
+        await settingsModalAppBarActions.closeSettings();
+      }
       await expect(ui.root).toHaveAttribute('data-appearance-palette', 'parchment-pine');
       await expect(ui.root).toHaveAttribute('data-appearance-mode', 'light');
       const chrome = settingsModalAppBarActions.settingsModalAppBar;
@@ -68,6 +87,12 @@ for (const client of [
       expect(contrast((await ui.style(edit)).color, popup.background)).toBeGreaterThanOrEqual(4.5);
       await edit.click();
       await expect(ui.heading).toBeVisible();
+      if (client.name === 'mobile') {
+        await expect(ui.backGlyph).toHaveCSS('width', '22px');
+        await expect(ui.backGlyph).toHaveCSS('height', '22px');
+        await expect(ui.backGlyph).toHaveCSS('stroke-width', '1.7px');
+        await expect(ui.backGlyph).toHaveCSS('fill', 'none');
+      }
     });
   });
 }

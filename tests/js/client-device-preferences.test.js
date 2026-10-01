@@ -63,6 +63,50 @@ test('anonymous contexts never claim an account preference namespace', () => {
 });
 
 
+test('bootstrap sync state is visible before a no-op preference action and needs no save', async () => {
+  for (const loadFailed of [false, true]) {
+    const status = new Map();
+    const events = [];
+    const requests = [];
+    const shell = { artistTreeFolded: false };
+    const window = {
+      innerWidth: 1440, navigator: {}, addEventListener() {},
+      CustomEvent: class { constructor(type, options) { this.type = type; this.detail = options.detail; } },
+      document: {
+        documentElement: { setAttribute: (name, value) => status.set(name, value) },
+        dispatchEvent: event => events.push(event),
+      },
+    };
+    const store = createStore({
+      window,
+      bootstrap: { account_id: 42, load_failed: loadFailed, profiles: loadFailed ? {} : {
+        web_desktop: { shellLayoutPreferences: shell },
+      } },
+      fetch: async (...args) => { requests.push(args); return { ok: true }; },
+    });
+    const expected = loadFailed ? 'unavailable' : 'saved';
+    assert.equal(status.get('data-preferences-sync'), expected);
+    assert.equal(store.syncState, expected);
+    assert.deepEqual(events.map(event => [event.type, event.detail.state]), [
+      ['album-haven:preferences-sync', expected],
+    ]);
+    if (!loadFailed) assert.equal(store.write('shellLayoutPreferences', shell), true);
+    await store.flush();
+    assert.equal(status.get('data-preferences-sync'), expected);
+    assert.equal(events.length, 1, 'Unchanged state needs no duplicate notification');
+    assert.equal(requests.length, 0, 'An initial or unchanged preference needs no synthetic save');
+  }
+});
+
+test('an anonymous store does not publish an account sync status', () => {
+  const changes = [];
+  createStore({
+    bootstrap: {},
+    window: { document: { documentElement: { setAttribute: (...args) => changes.push(args) } } },
+  });
+  assert.deepEqual(changes, []);
+});
+
 test('an appearance save targets its edited profile even after the viewport changes', async () => {
   const writes = [];
   const { store, window } = fixture(async (_url, options) => { writes.push(JSON.parse(options.body)); return { ok: true }; });
@@ -76,7 +120,7 @@ test('an appearance save targets its edited profile even after the viewport chan
 });
 
 test('each Artist Tree write synchronously replaces prior saved status until its server response completes', async () => {
-  const status = new Map([['data-preferences-sync', 'saved']]);
+  const status = new Map();
   const requests = [];
   let acknowledge;
   const window = {

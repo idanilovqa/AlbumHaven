@@ -76,6 +76,31 @@ require('node:test')('completed lookup counts covers while retaining every other
   }
 });
 
+require('node:test')('polling preserves a pressed task before selection exists and resumes after release', () => {
+  const { context, bodyElement } = createDrawerHarness();
+  const task = { id: 'pressed-task', status: 'running', artist: 'Artist', album: 'Album' };
+  context.state.coverLookup.tasks = [task];
+  context.renderCoverLookupDrawer();
+  const before = bodyElement.innerHTML;
+  const pressedTask = {};
+  let pressed = true;
+  bodyElement.contains = node => node === pressedTask;
+  bodyElement.querySelector = selector => selector === '.cover-lookup-task-open:active' && pressed ? pressedTask : null;
+  context.window.getSelection = () => ({ isCollapsed: true, rangeCount: 1 });
+  task.status = 'completed';
+  context.renderCoverLookupDrawer();
+  assert.equal(bodyElement.innerHTML, before, 'Polling must not replace the pending text-selection anchor');
+  pressed = false;
+  context.renderCoverLookupDrawer();
+  assert.match(bodyElement.innerHTML, />covers found</, 'Polling resumes when the press ends without a selection');
+
+  pressed = true;
+  context.state.coverLookup.tasks = [];
+  context.renderCoverLookupDrawer({ preserveInteraction: false });
+  assert.match(bodyElement.innerHTML, /not looking for anything at the moment/i,
+    'Explicit user removal must not be blocked by interaction preservation');
+});
+
 for (const interaction of ['focus', 'hover']) {
   const { context, bodyElement } = createDrawerHarness();
   const task = { id: 'cancel-transition', status: 'running', artist: 'Artist', album: 'Album' };
@@ -86,7 +111,7 @@ for (const interaction of ['focus', 'hover']) {
     getAttribute: () => task.id,
   };
   bodyElement.contains = (element) => element === cancelButton;
-  bodyElement.querySelector = () => interaction === 'hover' ? cancelButton : null;
+  bodyElement.querySelector = selector => selector === '.cover-lookup-task-actions :hover' && interaction === 'hover' ? cancelButton : null;
   context.document.activeElement = interaction === 'focus' ? cancelButton : null;
   const runningMarkup = bodyElement.innerHTML;
   task.cancel_requested = true;
@@ -125,7 +150,7 @@ for (const interaction of ['focus', 'hover']) {
   context.state.coverLookup.tasks = [{ id: 'finished-task', status: 'canceled' }];
   for (const actionAttribute of ['data-retry-cover-lookup-task', 'data-clear-cover-lookup-task']) {
     const hoveredAction = { closest: (selector) => selector === `[${actionAttribute}]` ? hoveredAction : null };
-    const body = { contains: () => true, querySelector: () => hoveredAction };
+    const body = { contains: () => true, querySelector: selector => selector === '.cover-lookup-task-actions :hover' ? hoveredAction : null };
     assert.equal(context.hasActiveCoverLookupDrawerAction(body), true,
       `a stale focused Cancel must not override hovered ${actionAttribute}`);
   }

@@ -38,13 +38,15 @@ ACTION_SELECTORS = MappingProxyType({
         '[data-album-card-action="move_to_library"]', '[data-album-card-action="move_to_hoard"]',
     ),
     "library.files.open_location": (
-        "#track-modal-folder", "[data-open-track-modal-folder]", "[data-open-problematic-album-folder]",
+        "#track-modal-folder", "[data-open-track-modal-folder]", "[data-open-track-modal-duplicate-folder]",
+        "[data-open-problematic-album-folder]",
         '[data-album-card-action="open-explorer"]',
     ),
     "library.versions.manage": (
         '[data-album-card-action="mark-version"]', '[data-album-card-action="unmark-version"]',
         "#version-picker-modal", '[data-save-version-picker="1"]',
     ),
+    "library.logs.read": ("[data-open-log-history-alert]",),
     "library.loops.create": ("[data-playback-control-loop-actions]",),
     "library.loops.delete": ("[data-delete-saved-loop]",),
     "library.loops.reorder": ("[data-move-utility-loop]",),

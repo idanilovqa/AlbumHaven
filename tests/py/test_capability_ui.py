@@ -124,3 +124,15 @@ def test_album_fast_cover_fetch_follows_cover_lookup_permission():
         assert selectors <= set(projection([role])["denied_selectors"])
     for surface in ("private_web", "mobile", "tv"):
         assert not selectors.intersection(projection(["owner"], surface)["denied_selectors"])
+
+
+def test_duplicate_folder_actions_share_open_location_policy_without_hiding_files_tabs():
+    selector = '[data-open-track-modal-duplicate-folder]'
+    assert selector in projection(['viewer'])['denied_selectors']
+    for surface in ('private_web', 'mobile', 'tv'):
+        value = build_capability_ui({'library.files.open_location': False}, surface)
+        assert selector in value['denied_selectors']
+        assert '[data-track-duplicate-source-index]' not in value['denied_selectors']
+    desktop = projection(['owner'])
+    assert desktop['allowed_actions']['library.files.open_location'] is True
+    assert selector not in desktop['denied_selectors']

@@ -555,6 +555,8 @@ function closeNonAlbumModal() {
 }
 
 async function openAlbumInExplorer(album) {
+  if (typeof window !== 'undefined' && window.AlbumHavenCapabilities
+    && !window.AlbumHavenCapabilities.allows('library.files.open_location')) return;
   if (!album) {
     showToast('No album payload found for File Explorer action.', 'error', 3200);
     return;

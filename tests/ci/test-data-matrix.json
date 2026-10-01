@@ -3263,6 +3263,23 @@
   {
     "config": "playwright.component.config.js",
     "project": "",
+    "test": "tests/components/coverLookupTaskCard.spec.js",
+    "case": "cover lookup task card preserves a pending text drag across polling",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "selectable-copyable-task-text",
+      "no-card-activation",
+      "polling-preserves-pending-selection-anchor"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
     "test": "tests/components/buttonInteractionOutline.spec.js",
     "case": "shared footer buttons render themed hover and keyboard-focus outlines while excluded controls stay inert",
     "profile": null,

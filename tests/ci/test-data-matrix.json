@@ -2995,7 +2995,8 @@
     ],
     "expectedContracts": [
       "touch-artwork-fullscreen",
-      "touch-cover-lookup-without-hover"
+      "touch-cover-lookup-without-hover",
+      "mobile-artwork-actions-always-visible"
     ],
     "ownerApproval": "approved"
   },
@@ -3017,6 +3018,7 @@
       "media:exact-problematic-track"
     ],
     "expectedContracts": [
+      "mobile-editorial-cover-actions-outside-artbox",
       "three-persisted-layouts",
       "shared-action-buttons",
       "action-button-hover-outline",
@@ -4262,7 +4264,9 @@
     "expectedContracts": [
       "draft-search-identity",
       "staged-style",
-      "bootstrap-style"
+      "bootstrap-style",
+      "mobile-seekbar-profile-isolation",
+      "mobile-loop-controls-unavailable"
     ],
     "mutationOwnership": {
       "databaseIdentity": "case:loop-style-search",
@@ -7541,5 +7545,6 @@
       "nested calendar dates remain clickable beyond the parent panel clipping boundary"
     ],
     "ownerApproval": "approved"
-  }
+  },
+  {"config": "playwright.component.config.js", "project": "", "test": "tests/components/coverLookupMutationBusy.spec.js", "case": "pending local cover actions remain visibly disabled on hover and re-enable normally", "profile": null, "setupScope": "suite", "stateMode": "read-only", "databaseScenarios": [], "filesystemScenarios": [], "expectedContracts": ["local-cover-mutation-exclusivity", "disabled-local-cover-action-appearance"], "ownerApproval": "approved"}
 ]

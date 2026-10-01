@@ -1,0 +1,1092 @@
+name: Recoverable bounded helper cleanup
+on:
+  push:
+    branches: [2026-09-30-mobile-bundle-transfer]
+    paths: [.github/workflows/recoverable-helper-cleanup-20261001.yml]
+permissions: {}
+concurrency:
+  group: recoverable-helper-cleanup-20261001
+  cancel-in-progress: false
+jobs:
+  validate:
+    if: github.repository == 'idanilovqa/AlbumHaven' && github.ref == 'refs/heads/2026-09-30-mobile-bundle-transfer' && github.event_name == 'push'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      artifact_id: ${{ steps.upload.outputs.artifact-id }}
+      proof_sha256: ${{ steps.check.outputs.proof_sha256 }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.sha }}
+          path: source
+          fetch-depth: 2
+          persist-credentials: false
+          submodules: false
+          lfs: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Verify exact event, final acceptance, protections and full histories
+        id: check
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: python
+        run: |
+          import base64
+          import datetime as dt
+          import hashlib
+          import json
+          import os
+          from pathlib import Path
+          import re
+          import subprocess
+          import time
+          import urllib.parse
+          import urllib.request
+          ZERO = "0" * 40
+          class Rejected(RuntimeError):
+              pass
+          def require(condition, message):
+              if not condition:
+                  raise Rejected(message)
+          def canonical(value):
+              return (json.dumps(value, sort_keys=True, separators=(",", ":")) + "\n").encode()
+          def digest(data):
+              return hashlib.sha256(data).hexdigest()
+          def oid(value):
+              return isinstance(value, str) and re.fullmatch(r"[0-9a-f]{40}", value) is not None and value != ZERO
+          def sha256(value):
+              return isinstance(value, str) and re.fullmatch(r"[0-9a-f]{64}", value) is not None
+          def refname(value, prefix):
+              require(isinstance(value, str) and value.startswith(prefix), "ref namespace mismatch")
+              require(re.fullmatch(r"[A-Za-z0-9._/-]+", value) is not None, "unsafe ref characters")
+              require(not any(x in value for x in ("..", "//", "@{")) and not value.endswith(("/", ".", ".lock")), "unsafe ref")
+              require(all(p and not p.startswith(".") and not p.endswith(".lock") for p in value.split("/")), "unsafe ref component")
+              return value
+          def timestamp(value):
+              require(isinstance(value, str), "timestamp missing")
+              result = dt.datetime.fromisoformat(value.replace("Z", "+00:00"))
+              require(result.tzinfo is not None, "timestamp must be timezone-aware")
+              return result.timestamp()
+          def ensure_fresh(binding, now=None):
+              current = time.time() if now is None else now
+              start, end = timestamp(binding["checkedAtUtc"]), timestamp(binding["validUntilUtc"])
+              require(start <= current <= end and 0 < end - start <= 900, "binding is future/stale or exceeds 15-minute window")
+              service_time = timestamp(binding["services"]["checkedAtUtc"])
+              require(start - 60 <= service_time <= start and current - service_time <= 900, "external service receipt is stale")
+          def validate_binding(scope, binding, now=None):
+              require(binding["executionApproved"] is True, "execution gate is unresolved")
+              require(binding["scopeSha256"] == digest(canonical(scope)), "reviewed scope identity changed")
+              require(binding["repository"] == scope["repository"], "repository binding changed")
+              require(binding["anchor"] == scope["anchor"] and binding["anchorDisposition"] == "retain-final-anchor", "anchor disposition changed")
+              require(oid(binding["sourceParent"]) and oid(binding["mainCommit"]), "parent/main binding unresolved")
+              expected = {r["branch"] for r in scope["candidates"]}
+              require(set(binding["tips"]) == expected and all(oid(v) for v in binding["tips"].values()), "exact candidate tips unresolved or expanded")
+              require(binding["sourceParent"] == binding["tips"][scope["anchor"]], "source parent differs from pre-workflow anchor tip")
+              expected_moves = {r["branch"]: (r["observedTip"], binding["tips"][r["branch"]]) for r in scope["candidates"]
+                                if r["observedTip"] != binding["tips"][r["branch"]]}
+              observed_moves = {}
+              for move in binding["explicitTipChanges"]:
+                  require(move["branch"] not in observed_moves and move["reviewedByRoot"] is True and bool(move["reason"]), "tip change is not explicitly reviewed")
+                  observed_moves[move["branch"]] = (move["priorObservedTip"], move["boundTip"])
+              require(observed_moves == expected_moves, "moved tips must be explicitly reconciled; never silently adopt")
+              acceptance = binding["releaseAcceptance"]
+              require(acceptance["releaseAccepted"] is True and acceptance["deploymentsAccepted"] is True and oid(acceptance["releaseCommit"]), "final release/deployment acceptance missing")
+              require(all(sha256(acceptance[k]) for k in ("releaseEvidenceSha256", "deploymentEvidenceSha256", "rootApprovalEvidenceSha256")), "acceptance evidence is unbound")
+              services = binding["services"]
+              require(services["complete"] is True and services["rootReviewed"] is True and sha256(services["receiptSha256"]), "complete reviewed service receipt missing")
+              require(services["limitationAcknowledged"] is True, "external service observation boundary is not acknowledged")
+              ensure_fresh(binding, now)
+              for service in services["sources"]:
+                  require(set(service) == {"id", "repository", "branch"} and all(isinstance(v, str) and v for v in service.values()), "invalid service source receipt")
+              require(isinstance(binding["taggerEpoch"], int) and abs(binding["taggerEpoch"] - timestamp(binding["checkedAtUtc"])) < 60, "tagger epoch is not bound to fresh review")
+              require(binding["archivePrefix"] == scope["archivePrefix"], "archive namespace changed")
+              return archive_groups(scope, binding)
+          def archive_groups(scope, binding):
+              grouped = {}
+              for candidate in scope["candidates"]:
+                  branch = candidate["branch"]
+                  if branch == scope["anchor"]:
+                      continue
+                  refname("refs/heads/" + branch, "refs/heads/")
+                  grouped.setdefault(binding["tips"][branch], []).append(branch)
+              groups = []
+              for tip, branches in sorted(grouped.items(), key=lambda row: sorted(row[1])[0]):
+                  branches.sort()
+                  tag = scope["archivePrefix"] + branches[0] + "-" + tip[:12]
+                  refname("refs/tags/" + tag, "refs/tags/")
+                  groups.append({"tip": tip, "branches": branches, "tag": tag})
+              return groups
+          def git_environment(token=None):
+              env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
+              env.update(GIT_CONFIG_NOSYSTEM="1", GIT_CONFIG_GLOBAL="/dev/null", GIT_TERMINAL_PROMPT="0", GIT_NO_REPLACE_OBJECTS="1")
+              if token:
+                  auth = base64.b64encode(("x-access-token:" + token).encode()).decode()
+                  env.update(GIT_CONFIG_COUNT="1", GIT_CONFIG_KEY_0="http.https://github.com/.extraheader",
+                             GIT_CONFIG_VALUE_0="AUTHORIZATION: basic " + auth)
+              return env
+          def git(repo, *args, data=None, token=None, hooks=None):
+              result = subprocess.run(["git", "-c", "core.hooksPath=" + (str(hooks) if hooks else "/dev/null"),
+                                       "-c", "fetch.fsckObjects=true", "-c", "transfer.fsckObjects=true", "-C", str(repo), *args],
+                                      input=data, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=git_environment(token), check=False)
+              require(result.returncode == 0, "Git " + args[0] + " failed; stop and inspect, never retry automatically")
+              return result.stdout
+          def fresh_bare(path):
+              require(not path.exists(), "history repository is not fresh")
+              path.mkdir()
+              git(path, "init", "--bare", "--object-format=sha1", ".")
+              return path
+          def full_history(repo, commit):
+              require(git(repo, "rev-parse", "--is-bare-repository").strip() == b"true", "history verifier needs a bare repository")
+              require(git(repo, "rev-parse", "--is-shallow-repository").strip() == b"false", "shallow history rejected")
+              require(not (repo / "objects/info/alternates").exists() and not (repo / "info/grafts").exists(), "external/grafted object authority rejected")
+              config = git(repo, "config", "--list").decode().lower()
+              require("promisor=" not in config and "partialclone=" not in config, "partial object history rejected")
+              require(git(repo, "for-each-ref", "--format=%(refname)", "refs/replace").strip() == b"", "replacement objects rejected")
+              require(git(repo, "cat-file", "-t", commit).strip() == b"commit", "archive target is not a commit")
+              objects = git(repo, "rev-list", "--objects", "--no-object-names", "--missing=print", commit).decode().splitlines()
+              require(objects and all(oid(value) for value in objects), "missing reachable objects")
+              git(repo, "fsck", "--full", "--strict", "--no-reflogs", commit)
+              return {"commit": commit, "objectCount": len(set(objects)), "objectSetSha256": digest(("\n".join(sorted(set(objects))) + "\n").encode()),
+                      "commitCount": int(git(repo, "rev-list", "--count", commit).strip()), "nonShallow": True, "fsck": "passed"}
+          def no_redirect_request(url, token):
+              class NoRedirect(urllib.request.HTTPRedirectHandler):
+                  def redirect_request(self, *args, **kwargs):
+                      return None
+              request = urllib.request.Request(url, headers={"Authorization": "Bearer " + token, "Accept": "application/vnd.github+json",
+                                                            "X-GitHub-Api-Version": "2022-11-28", "User-Agent": "reviewed-recoverable-cleanup"})
+              with urllib.request.build_opener(NoRedirect).open(request, timeout=30) as response:
+                  require(response.status == 200, "GitHub read failed")
+                  return json.load(response)
+          def api_get(scope, suffix, token):
+              # Every API operation is GET, only on this exact repository at the official API host.
+              require(suffix.startswith("/") and ".." not in suffix, "invalid API route")
+              return no_redirect_request("https://api.github.com/repos/" + scope["repository"] + suffix, token)
+          def paged(scope, route, token):
+              result = []
+              separator = "&" if "?" in route else "?"
+              for page in range(1, 101):
+                  rows = api_get(scope, route + separator + "per_page=100&page=" + str(page), token)
+                  require(isinstance(rows, list), "unrecognized paginated response")
+                  result.extend(rows)
+                  if len(rows) < 100:
+                      return result
+              raise Rejected("pagination was not exhausted")
+          def live_state(scope, token):
+              branches = paged(scope, "/branches", token)
+              pulls = paged(scope, "/pulls?state=open", token)
+              branch_map = {}
+              for branch in branches:
+                  name = branch["name"]
+                  require(name not in branch_map and type(branch["protected"]) is bool and oid(branch["commit"]["sha"]), "invalid/duplicate branch response")
+                  branch_map[name] = {"sha": branch["commit"]["sha"], "protected": branch["protected"]}
+              protected_by_pr = set()
+              for pull in pulls:
+                  require(pull.get("state") == "open", "open PR inventory changed shape")
+                  for side in ("head", "base"):
+                      item = pull[side]
+                      require(item.get("repo") and isinstance(item.get("ref"), str), "unknown PR repository/ref")
+                      if item["repo"]["full_name"] == scope["repository"]:
+                          protected_by_pr.add(item["ref"])
+              docs = {}
+              for candidate in scope["candidates"]:
+                  if candidate["kind"] == "merged-doc":
+                      docs[candidate["branch"]] = api_get(scope, "/pulls/" + str(candidate["pr"]), token)
+              return {"branches": branch_map, "openPrBranches": sorted(protected_by_pr), "docs": docs}
+          def guard_state(scope, binding, state, trigger, deleted=()):
+              validate_binding(scope, binding)
+              require(oid(trigger), "trigger SHA missing")
+              require(state["branches"].get("main", {}).get("sha") == binding["mainCommit"], "main moved since final review")
+              for branch, expected in scope["immutableRetainedRefs"].items():
+                  require(state["branches"].get(branch, {}).get("sha") == expected, "required retained review ref moved or disappeared")
+              services = {s["branch"] for s in binding["services"]["sources"] if s["repository"] == scope["repository"]}
+              pr_refs = set(state["openPrBranches"])
+              deleted = set(deleted)
+              allowed = {r["branch"] for r in scope["candidates"] if r["branch"] != scope["anchor"]}
+              require(deleted <= allowed, "deleted set is outside exact cleanup scope")
+              for candidate in scope["candidates"]:
+                  branch = candidate["branch"]
+                  if branch in deleted:
+                      require(branch not in state["branches"], "deleted branch reappeared; stop")
+                      continue
+                  value = state["branches"].get(branch)
+                  expected = trigger if branch == scope["anchor"] else binding["tips"][branch]
+                  require(value and value["sha"] == expected, "candidate or actual trigger tip moved")
+                  require(branch not in pr_refs and branch not in services and value["protected"] is False, "candidate is protected or used by a PR/service")
+                  require(branch not in scope["retainedBranches"] or branch == scope["anchor"], "retained branch cannot be a deletion candidate")
+                  if candidate["kind"] == "merged-doc":
+                      pull = state["docs"][branch]
+                      require(pull.get("merged") is True and pull.get("state") == "closed" and pull["base"]["ref"] == "main" and
+                              pull["head"]["ref"] == branch and pull["head"]["sha"] == expected and
+                              pull["head"]["repo"]["full_name"] == scope["repository"], "documentation PR provenance changed")
+          def remote_map(repo, scope, refs, token=None):
+              rows = git(repo, "ls-remote", scope["remote"], *sorted(refs), token=token).decode().splitlines()
+              result = {}
+              for row in rows:
+                  value, ref = row.split("\t")
+                  require(ref in refs and ref not in result and oid(value), "unexpected or duplicate advertised ref")
+                  result[ref] = value
+              return result
+          def tag_refs(group):
+              return {"refs/tags/" + group["tag"], "refs/tags/" + group["tag"] + "^{}"}
+          def verify_tag_remote(repo, scope, group, tag_oid, token=None):
+              expected = {"refs/tags/" + group["tag"]: tag_oid, "refs/tags/" + group["tag"] + "^{}": group["tip"]}
+              require(remote_map(repo, scope, set(expected), token) == expected, "archive tag object or peeled commit moved/missing")
+          def tag_bytes(scope, binding, group, env):
+              annotation = {"schemaVersion": 1, "repository": scope["repository"], "originalBranches": group["branches"],
+                            "commit": group["tip"], "scopeSha256": digest(canonical(scope)), "bindingSha256": digest(canonical(binding)),
+                            "runId": env["GITHUB_RUN_ID"], "attempt": env["GITHUB_RUN_ATTEMPT"], "triggerCommit": env["GITHUB_SHA"],
+                            "restoration": "Recreate an absent original branch from this exact commit only after approval; never overwrite a newer branch."}
+              header = ("object " + group["tip"] + "\ntype commit\ntag " + group["tag"] +
+                        "\ntagger github-actions[bot] <41898282+github-actions[bot]@users.noreply.github.com> " + str(binding["taggerEpoch"]) + " +0000\n\n")
+              return header.encode() + canonical(annotation)
+          def object_oid(kind, data):
+              return hashlib.sha1(kind.encode() + b" " + str(len(data)).encode() + b"\0" + data).hexdigest()
+          def verify_event(repo, scope, binding, env, event):
+              validate_binding(scope, binding)
+              require(env.get("GITHUB_REPOSITORY") == scope["repository"] and env.get("GITHUB_REF") == "refs/heads/" + scope["anchor"] and
+                      env.get("GITHUB_EVENT_NAME") == "push", "wrong repository/ref/event")
+              require(env.get("GITHUB_RUN_ATTEMPT") == "1" and re.fullmatch(r"[1-9][0-9]*", env.get("GITHUB_RUN_ID", "")), "run identity/replay rejected")
+              trigger = env.get("GITHUB_SHA")
+              require(oid(trigger) and event.get("before") == binding["sourceParent"] and event.get("after") == trigger and
+                      event.get("ref") == env["GITHUB_REF"] and event.get("repository", {}).get("full_name") == scope["repository"], "event parent binding mismatch")
+              require(all(event.get(k) is False for k in ("forced", "created", "deleted")), "forced/create/delete event rejected")
+              require(git(repo, "rev-parse", "HEAD").decode().strip() == trigger, "checkout is not triggering tip")
+              require(git(repo, "rev-list", "--parents", "-n", "1", trigger).decode().split() == [trigger, binding["sourceParent"]], "trigger must have one exact parent")
+              changes = git(repo, "diff", "--name-status", "--no-renames", binding["sourceParent"], trigger).decode().strip()
+              require(changes == "A\t" + scope["workflowPath"], "trigger must add only its exact workflow")
+              metadata = git(repo, "ls-tree", trigger, "--", scope["workflowPath"]).decode().split()
+              require(metadata[:2] == ["100644", "blob"], "workflow is not a regular nonexecutable file")
+          def fixed_proof(scope, binding, env):
+              return {"schemaVersion": 1, "scopeSha256": digest(canonical(scope)), "bindingSha256": digest(canonical(binding)),
+                      "repository": scope["repository"], "runId": env["GITHUB_RUN_ID"], "runAttempt": env["GITHUB_RUN_ATTEMPT"],
+                      "sourceParent": binding["sourceParent"], "actualTriggerTip": env["GITHUB_SHA"],
+                      "retainedAnchor": scope["anchor"], "anchorDisposition": "retain-final-anchor"}
+          def write_receipt(path, value):
+              data = canonical(value)
+              with path.open("wb") as output:
+                  output.write(data)
+                  output.flush()
+                  os.fsync(output.fileno())
+              return digest(data)
+          def read_proof(path, scope, binding, env, expected_digest):
+              require(path.is_file() and not path.is_symlink(), "artifact proof is not regular")
+              data = path.read_bytes()
+              require(digest(data) == expected_digest, "same-run artifact digest mismatch")
+              value = json.loads(data)
+              require(value["identity"] == fixed_proof(scope, binding, env), "wrong run/attempt/source/plan proof")
+              require(canonical(value) == data, "noncanonical proof")
+              return value
+          def verify_remote_history(root, name, scope, group, token=None, tag_oid=None):
+              repo = fresh_bare(root / name)
+              source = "refs/tags/" + group["tag"] if tag_oid else "refs/heads/" + group["branches"][0]
+              git(repo, "fetch", "--no-tags", scope["remote"], source, token=token)
+              fetched = git(repo, "rev-parse", "FETCH_HEAD").decode().strip()
+              if tag_oid:
+                  require(fetched == tag_oid and git(repo, "cat-file", "-t", fetched).strip() == b"tag", "fetched archive is not exact annotated tag object")
+                  require(git(repo, "rev-parse", fetched + "^{}").decode().strip() == group["tip"], "wrong archive peel")
+              else:
+                  require(fetched == group["tip"], "source branch moved during full fetch")
+              return repo, full_history(repo, group["tip"])
+          def validate_all(repo, root, scope, binding, env, event, token):
+              verify_event(repo, scope, binding, env, event)
+              groups = archive_groups(scope, binding)
+              guard_state(scope, binding, live_state(scope, token), env["GITHUB_SHA"])
+              receipts = []
+              for index, group in enumerate(groups):
+                  require(remote_map(repo, scope, tag_refs(group), token) == {}, "archive name already exists; never overwrite/reuse")
+                  history_repo, history = verify_remote_history(root, "validate-history-" + str(index), scope, group, token)
+                  raw_tag = tag_bytes(scope, binding, group, env)
+                  tag_oid = object_oid("tag", raw_tag)
+                  require(git(history_repo, "mktag", data=raw_tag).decode().strip() == tag_oid, "annotated tag identity invalid")
+                  for branch in group["branches"]:
+                      candidate = next(r for r in scope["candidates"] if r["branch"] == branch)
+                      if candidate["kind"] == "merged-doc":
+                          git(history_repo, "fetch", "--no-tags", scope["remote"], "refs/heads/main", token=token)
+                          require(git(history_repo, "rev-parse", "FETCH_HEAD").decode().strip() == binding["mainCommit"], "private main changed")
+                          git(history_repo, "merge-base", "--is-ancestor", group["tip"], binding["mainCommit"])
+                  receipts.append({**group, "tagObject": tag_oid, "history": history})
+              guard_state(scope, binding, live_state(scope, token), env["GITHUB_SHA"])
+              return {"identity": fixed_proof(scope, binding, env), "groups": receipts, "allTargetsRecoverable": True}
+          def check_groups(proof, scope, binding, env):
+              groups = archive_groups(scope, binding)
+              require(len(proof["groups"]) == len(groups), "archive group set mismatch")
+              for actual, expected in zip(proof["groups"], groups):
+                  require(all(actual[k] == expected[k] for k in expected), "archive source group changed")
+                  require(actual["tagObject"] == object_oid("tag", tag_bytes(scope, binding, expected, env)), "archive tag object changed")
+                  require(actual["history"]["commit"] == expected["tip"] and actual["history"]["nonShallow"] is True and
+                          actual["history"]["fsck"] == "passed" and actual["history"]["objectCount"] > 0, "incomplete history proof")
+          SCOPE = json.loads('{"anchor":"2026-09-30-mobile-bundle-transfer","archivePrefix":"archive/chatgpt-ci-recovery/2026-10-01/","candidates":[{"branch":"2026-09-18-pr3-ci-diagnostics","kind":"helper","observedTip":"b09e14db1c0f987c016da5630a100a329680c239"},{"branch":"2026-09-29-mobile-ci-repair-evidence","kind":"helper","observedTip":"ecf207c78bcdaf511ae0578a8035eeccb8f56a94"},{"branch":"2026-09-29-pr19-diagnostics","kind":"helper","observedTip":"972a78261d0d78c14db3a7ce4cf16e170c8dad50"},{"branch":"2026-09-30-mobile-bundle-transfer","kind":"helper","observedTip":"dd835ba6dfb26e6392891c58ff17f8f5a16ff5ef"},{"branch":"2026-09-30-mobile-windows-icons","kind":"helper","observedTip":"048ae55b22db078d0fee9480610a8d4df22ffae1"},{"branch":"chatgpt/mobile-fixture-session-20260930","kind":"helper","observedTip":"93838196095a8e7d87e2bd5213edd956bb679227"},{"branch":"chatgpt/pr17-ci-repair-20260929","kind":"helper","observedTip":"655b5f65a6dabcfd022ffe49d944131282b532ac"},{"branch":"chatgpt/pr17-contract-probe3-20260929","kind":"helper","observedTip":"b4ec1a51a4ca717e42f73f2b9cb362e833b800cd"},{"branch":"chatgpt/pr17-css-probe2-20260929","kind":"helper","observedTip":"f739a7014d1fa97c736af3600710f93ff08f58dc"},{"branch":"chatgpt/pr17-failure-inventory-20260929","kind":"helper","observedTip":"4d52ad57e509cda3bef00e8dcd340e70eab6686e"},{"branch":"chatgpt/pr17-focused-repair-20260929-b4ec1a5","kind":"helper","observedTip":"8b87a30e1bac482ba8931d1b9053ff1428ba0440"},{"branch":"chatgpt/pr17-release-diag-20260929","kind":"helper","observedTip":"b4ec1a51a4ca717e42f73f2b9cb362e833b800cd"},{"branch":"chatgpt/pr17-review-workspace-20260928","kind":"helper","observedTip":"48dd72990dc1ea8097164899292fe6bcf210a0d3"},{"branch":"chatgpt/pr17-run301-visual-diagnostics-20260929","kind":"helper","observedTip":"51600fc59f08698bceca15f879206d09bf86c2cb"},{"branch":"chatgpt/pr17-run304-diagnostics-20260929","kind":"helper","observedTip":"e9c0eaf8e386616075b7e8162c964d0872c80860"}],"classificationSha256":"e5101c64e5f22939eeb40b89d842a79882090434b2b3b3a5b2e03a93ab6e7ed2","immutableRetainedRefs":{"2026-09-30-capabilities-bundle-transfer":"0c2e1c088f9302f9751bd70d0f0f1c36d26042b5","codex/pr1-review-base-2026-09-10":"e0845f83552e1b0043cf435dcb82d5b959e31a05","codex/pr1-review-snapshot-2026-09-10":"4167a9072d5ef013de2f2b193fb09ea77657e37a"},"inventorySha256":"e5101c64e5f22939eeb40b89d842a79882090434b2b3b3a5b2e03a93ab6e7ed2","originalPlanSha256":"78139065d027dd47f680e6bc493ecd0eb8f893e035b493b33c3041bbe717232c","remote":"https://github.com/idanilovqa/AlbumHaven.git","repository":"idanilovqa/AlbumHaven","retainedBranches":["2026-08-30-phase-7-local-auth","2026-09-05-gallery-refactor","2026-09-05-phase-8-implementation","2026-09-08-settings-refactor","2026-09-09-cover-look-up-refactor","2026-09-17-pr3-rf456-build","2026-09-18-pr3-e2e-batch","2026-09-18-pr3-js-batch","2026-09-18-pr3-python-batch","2026-09-25-capabilities-audit","2026-09-25-mobile-layout","2026-09-25-render-demo","2026-09-26-render-mobile-feedback","2026-09-28-header-investigation","2026-09-28-header-preview","2026-09-29-render-feedback-promotion","2026-09-30-capabilities-bundle-transfer","2026-09-30-friends-listening-home","2026-09-30-mobile-bundle-transfer","codex/pr1-review-base-2026-09-10","codex/pr1-review-snapshot-2026-09-10","main"],"schemaVersion":1,"workflowPath":".github/workflows/recoverable-helper-cleanup-20261001.yml"}\n')
+          BINDING = json.loads('{"anchor":"2026-09-30-mobile-bundle-transfer","anchorDisposition":"retain-final-anchor","archivePrefix":"archive/chatgpt-ci-recovery/2026-10-01/","checkedAtUtc":"2026-10-01T16:59:42.134061+00:00","executionApproved":true,"explicitTipChanges":[{"boundTip":"ddfc455ccd626039a9eeb27bc71945eea0277892","branch":"2026-09-30-mobile-bundle-transfer","priorObservedTip":"dd835ba6dfb26e6392891c58ff17f8f5a16ff5ef","reason":"Completed, independently reviewed Render promotion workflow addition; full receipt remains in render-promotion-final/publication.json","reviewedByRoot":true}],"mainCommit":"eef9d13fd5dbd2cda3485e3c308c8494ba7d6fd4","releaseAcceptance":{"deploymentEvidenceSha256":"03ba94f93e648a31bf1ad8fae382979408c26718f88bf76629919b4f2b75d2c8","deploymentsAccepted":true,"releaseAccepted":true,"releaseCommit":"eef9d13fd5dbd2cda3485e3c308c8494ba7d6fd4","releaseEvidenceSha256":"d87105e166408fb5dea66a9f241e4e3b7a5b378b2bf552076804fa0dbca68603","rootApprovalEvidenceSha256":"db289f89747ab3ac286f48eda471b0fee1b8c972def452097a493c0d1531b7ef"},"repository":"idanilovqa/AlbumHaven","schemaVersion":1,"scopeSha256":"7d761b13d21ba9777619424a8bd705460616d936734adb2a4298fc6a26f633be","services":{"checkedAtUtc":"2026-10-01T16:59:42.134061+00:00","complete":true,"limitationAcknowledged":true,"receiptSha256":"8e06dcf498e9e5d11fff73172f02f9eb9c6d844c0e41611d6851ecd011f742e7","rootReviewed":true,"sources":[{"branch":"2026-09-25-capabilities-audit","id":"srv-das9rmfpn0mc73ffr6s0","repository":"idanilovqa/AlbumHaven"},{"branch":"2026-09-25-render-demo","id":"srv-darkpknpn0mc73cvnl1g","repository":"idanilovqa/AlbumHaven"}]},"sourceParent":"ddfc455ccd626039a9eeb27bc71945eea0277892","taggerEpoch":1790873982,"tips":{"2026-09-18-pr3-ci-diagnostics":"b09e14db1c0f987c016da5630a100a329680c239","2026-09-29-mobile-ci-repair-evidence":"ecf207c78bcdaf511ae0578a8035eeccb8f56a94","2026-09-29-pr19-diagnostics":"972a78261d0d78c14db3a7ce4cf16e170c8dad50","2026-09-30-mobile-bundle-transfer":"ddfc455ccd626039a9eeb27bc71945eea0277892","2026-09-30-mobile-windows-icons":"048ae55b22db078d0fee9480610a8d4df22ffae1","chatgpt/mobile-fixture-session-20260930":"93838196095a8e7d87e2bd5213edd956bb679227","chatgpt/pr17-ci-repair-20260929":"655b5f65a6dabcfd022ffe49d944131282b532ac","chatgpt/pr17-contract-probe3-20260929":"b4ec1a51a4ca717e42f73f2b9cb362e833b800cd","chatgpt/pr17-css-probe2-20260929":"f739a7014d1fa97c736af3600710f93ff08f58dc","chatgpt/pr17-failure-inventory-20260929":"4d52ad57e509cda3bef00e8dcd340e70eab6686e","chatgpt/pr17-focused-repair-20260929-b4ec1a5":"8b87a30e1bac482ba8931d1b9053ff1428ba0440","chatgpt/pr17-release-diag-20260929":"b4ec1a51a4ca717e42f73f2b9cb362e833b800cd","chatgpt/pr17-review-workspace-20260928":"48dd72990dc1ea8097164899292fe6bcf210a0d3","chatgpt/pr17-run301-visual-diagnostics-20260929":"51600fc59f08698bceca15f879206d09bf86c2cb","chatgpt/pr17-run304-diagnostics-20260929":"e9c0eaf8e386616075b7e8162c964d0872c80860"},"validUntilUtc":"2026-10-01T17:14:42.134061+00:00"}\n')
+
+          env = os.environ
+          token = env.get("GH_TOKEN")
+          require(bool(token), "existing transient repository token unavailable")
+          repo = Path(env["GITHUB_WORKSPACE"]) / "source"
+          root = Path(env["RUNNER_TEMP"]) / "recoverable-cleanup"
+          event = json.loads(Path(env["GITHUB_EVENT_PATH"]).read_text())
+          verify_event(repo, SCOPE, BINDING, env, event)
+
+          require(not root.exists(), "validation workspace already exists")
+          root.mkdir()
+          proof = validate_all(repo, root, SCOPE, BINDING, env, event, token)
+          output = Path(env["RUNNER_TEMP"]) / "cleanup-validated"
+          output.mkdir()
+          proof_hash = write_receipt(output / "validation.json", proof)
+          with open(env["GITHUB_OUTPUT"], "a") as stream:
+              stream.write("proof_sha256=" + proof_hash + "\n")
+          print("Read-only validation complete. No remote tag or branch change occurred.")
+
+      - uses: actions/upload-artifact@v4
+        id: upload
+        with:
+          name: cleanup-validation-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/cleanup-validated/
+          if-no-files-found: error
+          retention-days: 90
+          overwrite: false
+  archive_and_retire:
+    needs: validate
+    if: needs.validate.result == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: write
+      pull-requests: read
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.sha }}
+          path: source
+          fetch-depth: 2
+          persist-credentials: false
+          submodules: false
+          lfs: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - uses: actions/download-artifact@v4
+        with:
+          artifact-ids: ${{ needs.validate.outputs.artifact_id }}
+          path: ${{ runner.temp }}/cleanup-downloaded
+          merge-multiple: true
+      - name: Create only new annotated tags and verify fresh remote history
+        id: archive
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VALIDATION_ARTIFACT_ID: ${{ needs.validate.outputs.artifact_id }}
+          VALIDATION_SHA256: ${{ needs.validate.outputs.proof_sha256 }}
+        shell: python
+        run: |
+          import base64
+          import datetime as dt
+          import hashlib
+          import json
+          import os
+          from pathlib import Path
+          import re
+          import subprocess
+          import time
+          import urllib.parse
+          import urllib.request
+          ZERO = "0" * 40
+          class Rejected(RuntimeError):
+              pass
+          def require(condition, message):
+              if not condition:
+                  raise Rejected(message)
+          def canonical(value):
+              return (json.dumps(value, sort_keys=True, separators=(",", ":")) + "\n").encode()
+          def digest(data):
+              return hashlib.sha256(data).hexdigest()
+          def oid(value):
+              return isinstance(value, str) and re.fullmatch(r"[0-9a-f]{40}", value) is not None and value != ZERO
+          def sha256(value):
+              return isinstance(value, str) and re.fullmatch(r"[0-9a-f]{64}", value) is not None
+          def refname(value, prefix):
+              require(isinstance(value, str) and value.startswith(prefix), "ref namespace mismatch")
+              require(re.fullmatch(r"[A-Za-z0-9._/-]+", value) is not None, "unsafe ref characters")
+              require(not any(x in value for x in ("..", "//", "@{")) and not value.endswith(("/", ".", ".lock")), "unsafe ref")
+              require(all(p and not p.startswith(".") and not p.endswith(".lock") for p in value.split("/")), "unsafe ref component")
+              return value
+          def timestamp(value):
+              require(isinstance(value, str), "timestamp missing")
+              result = dt.datetime.fromisoformat(value.replace("Z", "+00:00"))
+              require(result.tzinfo is not None, "timestamp must be timezone-aware")
+              return result.timestamp()
+          def ensure_fresh(binding, now=None):
+              current = time.time() if now is None else now
+              start, end = timestamp(binding["checkedAtUtc"]), timestamp(binding["validUntilUtc"])
+              require(start <= current <= end and 0 < end - start <= 900, "binding is future/stale or exceeds 15-minute window")
+              service_time = timestamp(binding["services"]["checkedAtUtc"])
+              require(start - 60 <= service_time <= start and current - service_time <= 900, "external service receipt is stale")
+          def validate_binding(scope, binding, now=None):
+              require(binding["executionApproved"] is True, "execution gate is unresolved")
+              require(binding["scopeSha256"] == digest(canonical(scope)), "reviewed scope identity changed")
+              require(binding["repository"] == scope["repository"], "repository binding changed")
+              require(binding["anchor"] == scope["anchor"] and binding["anchorDisposition"] == "retain-final-anchor", "anchor disposition changed")
+              require(oid(binding["sourceParent"]) and oid(binding["mainCommit"]), "parent/main binding unresolved")
+              expected = {r["branch"] for r in scope["candidates"]}
+              require(set(binding["tips"]) == expected and all(oid(v) for v in binding["tips"].values()), "exact candidate tips unresolved or expanded")
+              require(binding["sourceParent"] == binding["tips"][scope["anchor"]], "source parent differs from pre-workflow anchor tip")
+              expected_moves = {r["branch"]: (r["observedTip"], binding["tips"][r["branch"]]) for r in scope["candidates"]
+                                if r["observedTip"] != binding["tips"][r["branch"]]}
+              observed_moves = {}
+              for move in binding["explicitTipChanges"]:
+                  require(move["branch"] not in observed_moves and move["reviewedByRoot"] is True and bool(move["reason"]), "tip change is not explicitly reviewed")
+                  observed_moves[move["branch"]] = (move["priorObservedTip"], move["boundTip"])
+              require(observed_moves == expected_moves, "moved tips must be explicitly reconciled; never silently adopt")
+              acceptance = binding["releaseAcceptance"]
+              require(acceptance["releaseAccepted"] is True and acceptance["deploymentsAccepted"] is True and oid(acceptance["releaseCommit"]), "final release/deployment acceptance missing")
+              require(all(sha256(acceptance[k]) for k in ("releaseEvidenceSha256", "deploymentEvidenceSha256", "rootApprovalEvidenceSha256")), "acceptance evidence is unbound")
+              services = binding["services"]
+              require(services["complete"] is True and services["rootReviewed"] is True and sha256(services["receiptSha256"]), "complete reviewed service receipt missing")
+              require(services["limitationAcknowledged"] is True, "external service observation boundary is not acknowledged")
+              ensure_fresh(binding, now)
+              for service in services["sources"]:
+                  require(set(service) == {"id", "repository", "branch"} and all(isinstance(v, str) and v for v in service.values()), "invalid service source receipt")
+              require(isinstance(binding["taggerEpoch"], int) and abs(binding["taggerEpoch"] - timestamp(binding["checkedAtUtc"])) < 60, "tagger epoch is not bound to fresh review")
+              require(binding["archivePrefix"] == scope["archivePrefix"], "archive namespace changed")
+              return archive_groups(scope, binding)
+          def archive_groups(scope, binding):
+              grouped = {}
+              for candidate in scope["candidates"]:
+                  branch = candidate["branch"]
+                  if branch == scope["anchor"]:
+                      continue
+                  refname("refs/heads/" + branch, "refs/heads/")
+                  grouped.setdefault(binding["tips"][branch], []).append(branch)
+              groups = []
+              for tip, branches in sorted(grouped.items(), key=lambda row: sorted(row[1])[0]):
+                  branches.sort()
+                  tag = scope["archivePrefix"] + branches[0] + "-" + tip[:12]
+                  refname("refs/tags/" + tag, "refs/tags/")
+                  groups.append({"tip": tip, "branches": branches, "tag": tag})
+              return groups
+          def git_environment(token=None):
+              env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
+              env.update(GIT_CONFIG_NOSYSTEM="1", GIT_CONFIG_GLOBAL="/dev/null", GIT_TERMINAL_PROMPT="0", GIT_NO_REPLACE_OBJECTS="1")
+              if token:
+                  auth = base64.b64encode(("x-access-token:" + token).encode()).decode()
+                  env.update(GIT_CONFIG_COUNT="1", GIT_CONFIG_KEY_0="http.https://github.com/.extraheader",
+                             GIT_CONFIG_VALUE_0="AUTHORIZATION: basic " + auth)
+              return env
+          def git(repo, *args, data=None, token=None, hooks=None):
+              result = subprocess.run(["git", "-c", "core.hooksPath=" + (str(hooks) if hooks else "/dev/null"),
+                                       "-c", "fetch.fsckObjects=true", "-c", "transfer.fsckObjects=true", "-C", str(repo), *args],
+                                      input=data, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=git_environment(token), check=False)
+              require(result.returncode == 0, "Git " + args[0] + " failed; stop and inspect, never retry automatically")
+              return result.stdout
+          def fresh_bare(path):
+              require(not path.exists(), "history repository is not fresh")
+              path.mkdir()
+              git(path, "init", "--bare", "--object-format=sha1", ".")
+              return path
+          def full_history(repo, commit):
+              require(git(repo, "rev-parse", "--is-bare-repository").strip() == b"true", "history verifier needs a bare repository")
+              require(git(repo, "rev-parse", "--is-shallow-repository").strip() == b"false", "shallow history rejected")
+              require(not (repo / "objects/info/alternates").exists() and not (repo / "info/grafts").exists(), "external/grafted object authority rejected")
+              config = git(repo, "config", "--list").decode().lower()
+              require("promisor=" not in config and "partialclone=" not in config, "partial object history rejected")
+              require(git(repo, "for-each-ref", "--format=%(refname)", "refs/replace").strip() == b"", "replacement objects rejected")
+              require(git(repo, "cat-file", "-t", commit).strip() == b"commit", "archive target is not a commit")
+              objects = git(repo, "rev-list", "--objects", "--no-object-names", "--missing=print", commit).decode().splitlines()
+              require(objects and all(oid(value) for value in objects), "missing reachable objects")
+              git(repo, "fsck", "--full", "--strict", "--no-reflogs", commit)
+              return {"commit": commit, "objectCount": len(set(objects)), "objectSetSha256": digest(("\n".join(sorted(set(objects))) + "\n").encode()),
+                      "commitCount": int(git(repo, "rev-list", "--count", commit).strip()), "nonShallow": True, "fsck": "passed"}
+          def no_redirect_request(url, token):
+              class NoRedirect(urllib.request.HTTPRedirectHandler):
+                  def redirect_request(self, *args, **kwargs):
+                      return None
+              request = urllib.request.Request(url, headers={"Authorization": "Bearer " + token, "Accept": "application/vnd.github+json",
+                                                            "X-GitHub-Api-Version": "2022-11-28", "User-Agent": "reviewed-recoverable-cleanup"})
+              with urllib.request.build_opener(NoRedirect).open(request, timeout=30) as response:
+                  require(response.status == 200, "GitHub read failed")
+                  return json.load(response)
+          def api_get(scope, suffix, token):
+              # Every API operation is GET, only on this exact repository at the official API host.
+              require(suffix.startswith("/") and ".." not in suffix, "invalid API route")
+              return no_redirect_request("https://api.github.com/repos/" + scope["repository"] + suffix, token)
+          def paged(scope, route, token):
+              result = []
+              separator = "&" if "?" in route else "?"
+              for page in range(1, 101):
+                  rows = api_get(scope, route + separator + "per_page=100&page=" + str(page), token)
+                  require(isinstance(rows, list), "unrecognized paginated response")
+                  result.extend(rows)
+                  if len(rows) < 100:
+                      return result
+              raise Rejected("pagination was not exhausted")
+          def live_state(scope, token):
+              branches = paged(scope, "/branches", token)
+              pulls = paged(scope, "/pulls?state=open", token)
+              branch_map = {}
+              for branch in branches:
+                  name = branch["name"]
+                  require(name not in branch_map and type(branch["protected"]) is bool and oid(branch["commit"]["sha"]), "invalid/duplicate branch response")
+                  branch_map[name] = {"sha": branch["commit"]["sha"], "protected": branch["protected"]}
+              protected_by_pr = set()
+              for pull in pulls:
+                  require(pull.get("state") == "open", "open PR inventory changed shape")
+                  for side in ("head", "base"):
+                      item = pull[side]
+                      require(item.get("repo") and isinstance(item.get("ref"), str), "unknown PR repository/ref")
+                      if item["repo"]["full_name"] == scope["repository"]:
+                          protected_by_pr.add(item["ref"])
+              docs = {}
+              for candidate in scope["candidates"]:
+                  if candidate["kind"] == "merged-doc":
+                      docs[candidate["branch"]] = api_get(scope, "/pulls/" + str(candidate["pr"]), token)
+              return {"branches": branch_map, "openPrBranches": sorted(protected_by_pr), "docs": docs}
+          def guard_state(scope, binding, state, trigger, deleted=()):
+              validate_binding(scope, binding)
+              require(oid(trigger), "trigger SHA missing")
+              require(state["branches"].get("main", {}).get("sha") == binding["mainCommit"], "main moved since final review")
+              for branch, expected in scope["immutableRetainedRefs"].items():
+                  require(state["branches"].get(branch, {}).get("sha") == expected, "required retained review ref moved or disappeared")
+              services = {s["branch"] for s in binding["services"]["sources"] if s["repository"] == scope["repository"]}
+              pr_refs = set(state["openPrBranches"])
+              deleted = set(deleted)
+              allowed = {r["branch"] for r in scope["candidates"] if r["branch"] != scope["anchor"]}
+              require(deleted <= allowed, "deleted set is outside exact cleanup scope")
+              for candidate in scope["candidates"]:
+                  branch = candidate["branch"]
+                  if branch in deleted:
+                      require(branch not in state["branches"], "deleted branch reappeared; stop")
+                      continue
+                  value = state["branches"].get(branch)
+                  expected = trigger if branch == scope["anchor"] else binding["tips"][branch]
+                  require(value and value["sha"] == expected, "candidate or actual trigger tip moved")
+                  require(branch not in pr_refs and branch not in services and value["protected"] is False, "candidate is protected or used by a PR/service")
+                  require(branch not in scope["retainedBranches"] or branch == scope["anchor"], "retained branch cannot be a deletion candidate")
+                  if candidate["kind"] == "merged-doc":
+                      pull = state["docs"][branch]
+                      require(pull.get("merged") is True and pull.get("state") == "closed" and pull["base"]["ref"] == "main" and
+                              pull["head"]["ref"] == branch and pull["head"]["sha"] == expected and
+                              pull["head"]["repo"]["full_name"] == scope["repository"], "documentation PR provenance changed")
+          def remote_map(repo, scope, refs, token=None):
+              rows = git(repo, "ls-remote", scope["remote"], *sorted(refs), token=token).decode().splitlines()
+              result = {}
+              for row in rows:
+                  value, ref = row.split("\t")
+                  require(ref in refs and ref not in result and oid(value), "unexpected or duplicate advertised ref")
+                  result[ref] = value
+              return result
+          def tag_refs(group):
+              return {"refs/tags/" + group["tag"], "refs/tags/" + group["tag"] + "^{}"}
+          def verify_tag_remote(repo, scope, group, tag_oid, token=None):
+              expected = {"refs/tags/" + group["tag"]: tag_oid, "refs/tags/" + group["tag"] + "^{}": group["tip"]}
+              require(remote_map(repo, scope, set(expected), token) == expected, "archive tag object or peeled commit moved/missing")
+          def tag_bytes(scope, binding, group, env):
+              annotation = {"schemaVersion": 1, "repository": scope["repository"], "originalBranches": group["branches"],
+                            "commit": group["tip"], "scopeSha256": digest(canonical(scope)), "bindingSha256": digest(canonical(binding)),
+                            "runId": env["GITHUB_RUN_ID"], "attempt": env["GITHUB_RUN_ATTEMPT"], "triggerCommit": env["GITHUB_SHA"],
+                            "restoration": "Recreate an absent original branch from this exact commit only after approval; never overwrite a newer branch."}
+              header = ("object " + group["tip"] + "\ntype commit\ntag " + group["tag"] +
+                        "\ntagger github-actions[bot] <41898282+github-actions[bot]@users.noreply.github.com> " + str(binding["taggerEpoch"]) + " +0000\n\n")
+              return header.encode() + canonical(annotation)
+          def object_oid(kind, data):
+              return hashlib.sha1(kind.encode() + b" " + str(len(data)).encode() + b"\0" + data).hexdigest()
+          def hook_source(scope, operation, ref, old, new):
+              require(operation in ("create-tag", "delete-branch"), "unsupported ref operation")
+              if operation == "create-tag":
+                  refname(ref, "refs/tags/" + scope["archivePrefix"])
+                  require(old == ZERO and oid(new), "invalid tag creation guard")
+                  expected = [new, new, ref, ZERO]
+              else:
+                  refname(ref, "refs/heads/")
+                  deletable = {"refs/heads/" + r["branch"] for r in scope["candidates"]
+                               if r["branch"] != scope["anchor"] and r["branch"] not in scope["retainedBranches"]}
+                  require(ref in deletable, "delete ref is outside the reviewed allowlist or is the final anchor")
+                  require(new == ZERO and oid(old), "invalid branch deletion guard")
+                  expected = ["(delete)", ZERO, ref, old]
+              return ("#!/usr/bin/env python3\nimport sys\nexpected = " + repr(expected) +
+                      "\nremote = " + repr(scope["remote"]) +
+                      "\nrows = [line.split() for line in sys.stdin.read().splitlines()]\n" +
+                      "if sys.argv[1:] != [remote, remote] or rows != [expected]:\n" +
+                      "    sys.exit('Rejected unexpected destination/operation/old OID; stop and inspect')\n")
+          def push_once(repo, scope, operation, ref, old, new, hooks, token=None, *, binding):
+              require(not hooks.exists(), "one-shot hook directory already exists")
+              hooks.mkdir()
+              path = hooks / "pre-push"
+              path.write_text(hook_source(scope, operation, ref, old, new))
+              path.chmod(0o700)
+              expected = {} if old == ZERO else {ref: old}
+              require(remote_map(repo, scope, {ref}, token) == expected, "ref changed before push")
+              ensure_fresh(binding)
+              refspec = new + ":" + ref if operation == "create-tag" else ":" + ref
+              git(repo, "push", "--porcelain", scope["remote"], refspec, token=token, hooks=hooks)
+          def verify_event(repo, scope, binding, env, event):
+              validate_binding(scope, binding)
+              require(env.get("GITHUB_REPOSITORY") == scope["repository"] and env.get("GITHUB_REF") == "refs/heads/" + scope["anchor"] and
+                      env.get("GITHUB_EVENT_NAME") == "push", "wrong repository/ref/event")
+              require(env.get("GITHUB_RUN_ATTEMPT") == "1" and re.fullmatch(r"[1-9][0-9]*", env.get("GITHUB_RUN_ID", "")), "run identity/replay rejected")
+              trigger = env.get("GITHUB_SHA")
+              require(oid(trigger) and event.get("before") == binding["sourceParent"] and event.get("after") == trigger and
+                      event.get("ref") == env["GITHUB_REF"] and event.get("repository", {}).get("full_name") == scope["repository"], "event parent binding mismatch")
+              require(all(event.get(k) is False for k in ("forced", "created", "deleted")), "forced/create/delete event rejected")
+              require(git(repo, "rev-parse", "HEAD").decode().strip() == trigger, "checkout is not triggering tip")
+              require(git(repo, "rev-list", "--parents", "-n", "1", trigger).decode().split() == [trigger, binding["sourceParent"]], "trigger must have one exact parent")
+              changes = git(repo, "diff", "--name-status", "--no-renames", binding["sourceParent"], trigger).decode().strip()
+              require(changes == "A\t" + scope["workflowPath"], "trigger must add only its exact workflow")
+              metadata = git(repo, "ls-tree", trigger, "--", scope["workflowPath"]).decode().split()
+              require(metadata[:2] == ["100644", "blob"], "workflow is not a regular nonexecutable file")
+          def fixed_proof(scope, binding, env):
+              return {"schemaVersion": 1, "scopeSha256": digest(canonical(scope)), "bindingSha256": digest(canonical(binding)),
+                      "repository": scope["repository"], "runId": env["GITHUB_RUN_ID"], "runAttempt": env["GITHUB_RUN_ATTEMPT"],
+                      "sourceParent": binding["sourceParent"], "actualTriggerTip": env["GITHUB_SHA"],
+                      "retainedAnchor": scope["anchor"], "anchorDisposition": "retain-final-anchor"}
+          def write_receipt(path, value):
+              data = canonical(value)
+              with path.open("wb") as output:
+                  output.write(data)
+                  output.flush()
+                  os.fsync(output.fileno())
+              return digest(data)
+          def read_proof(path, scope, binding, env, expected_digest):
+              require(path.is_file() and not path.is_symlink(), "artifact proof is not regular")
+              data = path.read_bytes()
+              require(digest(data) == expected_digest, "same-run artifact digest mismatch")
+              value = json.loads(data)
+              require(value["identity"] == fixed_proof(scope, binding, env), "wrong run/attempt/source/plan proof")
+              require(canonical(value) == data, "noncanonical proof")
+              return value
+          def verify_remote_history(root, name, scope, group, token=None, tag_oid=None):
+              repo = fresh_bare(root / name)
+              source = "refs/tags/" + group["tag"] if tag_oid else "refs/heads/" + group["branches"][0]
+              git(repo, "fetch", "--no-tags", scope["remote"], source, token=token)
+              fetched = git(repo, "rev-parse", "FETCH_HEAD").decode().strip()
+              if tag_oid:
+                  require(fetched == tag_oid and git(repo, "cat-file", "-t", fetched).strip() == b"tag", "fetched archive is not exact annotated tag object")
+                  require(git(repo, "rev-parse", fetched + "^{}").decode().strip() == group["tip"], "wrong archive peel")
+              else:
+                  require(fetched == group["tip"], "source branch moved during full fetch")
+              return repo, full_history(repo, group["tip"])
+          def check_groups(proof, scope, binding, env):
+              groups = archive_groups(scope, binding)
+              require(len(proof["groups"]) == len(groups), "archive group set mismatch")
+              for actual, expected in zip(proof["groups"], groups):
+                  require(all(actual[k] == expected[k] for k in expected), "archive source group changed")
+                  require(actual["tagObject"] == object_oid("tag", tag_bytes(scope, binding, expected, env)), "archive tag object changed")
+                  require(actual["history"]["commit"] == expected["tip"] and actual["history"]["nonShallow"] is True and
+                          actual["history"]["fsck"] == "passed" and actual["history"]["objectCount"] > 0, "incomplete history proof")
+          def archive_all(repo, root, scope, binding, env, proof, token, journal_path):
+              check_groups(proof, scope, binding, env)
+              journal = {"identity": fixed_proof(scope, binding, env), "groups": [], "deletions": [], "status": "archiving"}
+              write_receipt(journal_path, journal)
+              for index, group in enumerate(proof["groups"]):
+                  guard_state(scope, binding, live_state(scope, token), env["GITHUB_SHA"])
+                  require(remote_map(repo, scope, tag_refs(group), token) == {}, "archive collision detected before creation")
+                  source, history = verify_remote_history(root, "archive-source-" + str(index), scope, group, token)
+                  require(history == group["history"], "source reachable history changed")
+                  raw_tag = tag_bytes(scope, binding, group, env)
+                  tag_oid = git(source, "mktag", data=raw_tag).decode().strip()
+                  require(tag_oid == group["tagObject"], "writer tag object differs from validation")
+                  for previous in journal["groups"]:
+                      verify_tag_remote(repo, scope, previous, previous["tagObject"], token)
+                  guard_state(scope, binding, live_state(scope, token), env["GITHUB_SHA"])
+                  journal["pendingOperation"] = {"operation": "create-tag", "tag": group["tag"], "tagObject": tag_oid}
+                  write_receipt(journal_path, journal)
+                  push_once(source, scope, "create-tag", "refs/tags/" + group["tag"], ZERO, tag_oid, root / ("tag-hook-" + str(index)), token, binding=binding)
+                  verify_tag_remote(repo, scope, group, tag_oid, token)
+                  _, recovered = verify_remote_history(root, "archive-recovery-" + str(index), scope, group, token, tag_oid)
+                  require(recovered == history, "fresh remote archive history did not verify")
+                  journal["groups"].append({**group, "remoteArchiveVerified": True})
+                  journal.pop("pendingOperation")
+                  write_receipt(journal_path, journal)
+              journal["status"] = "archives-verified-before-any-deletion"
+              write_receipt(journal_path, journal)
+              return journal
+          SCOPE = json.loads('{"anchor":"2026-09-30-mobile-bundle-transfer","archivePrefix":"archive/chatgpt-ci-recovery/2026-10-01/","candidates":[{"branch":"2026-09-18-pr3-ci-diagnostics","kind":"helper","observedTip":"b09e14db1c0f987c016da5630a100a329680c239"},{"branch":"2026-09-29-mobile-ci-repair-evidence","kind":"helper","observedTip":"ecf207c78bcdaf511ae0578a8035eeccb8f56a94"},{"branch":"2026-09-29-pr19-diagnostics","kind":"helper","observedTip":"972a78261d0d78c14db3a7ce4cf16e170c8dad50"},{"branch":"2026-09-30-mobile-bundle-transfer","kind":"helper","observedTip":"dd835ba6dfb26e6392891c58ff17f8f5a16ff5ef"},{"branch":"2026-09-30-mobile-windows-icons","kind":"helper","observedTip":"048ae55b22db078d0fee9480610a8d4df22ffae1"},{"branch":"chatgpt/mobile-fixture-session-20260930","kind":"helper","observedTip":"93838196095a8e7d87e2bd5213edd956bb679227"},{"branch":"chatgpt/pr17-ci-repair-20260929","kind":"helper","observedTip":"655b5f65a6dabcfd022ffe49d944131282b532ac"},{"branch":"chatgpt/pr17-contract-probe3-20260929","kind":"helper","observedTip":"b4ec1a51a4ca717e42f73f2b9cb362e833b800cd"},{"branch":"chatgpt/pr17-css-probe2-20260929","kind":"helper","observedTip":"f739a7014d1fa97c736af3600710f93ff08f58dc"},{"branch":"chatgpt/pr17-failure-inventory-20260929","kind":"helper","observedTip":"4d52ad57e509cda3bef00e8dcd340e70eab6686e"},{"branch":"chatgpt/pr17-focused-repair-20260929-b4ec1a5","kind":"helper","observedTip":"8b87a30e1bac482ba8931d1b9053ff1428ba0440"},{"branch":"chatgpt/pr17-release-diag-20260929","kind":"helper","observedTip":"b4ec1a51a4ca717e42f73f2b9cb362e833b800cd"},{"branch":"chatgpt/pr17-review-workspace-20260928","kind":"helper","observedTip":"48dd72990dc1ea8097164899292fe6bcf210a0d3"},{"branch":"chatgpt/pr17-run301-visual-diagnostics-20260929","kind":"helper","observedTip":"51600fc59f08698bceca15f879206d09bf86c2cb"},{"branch":"chatgpt/pr17-run304-diagnostics-20260929","kind":"helper","observedTip":"e9c0eaf8e386616075b7e8162c964d0872c80860"}],"classificationSha256":"e5101c64e5f22939eeb40b89d842a79882090434b2b3b3a5b2e03a93ab6e7ed2","immutableRetainedRefs":{"2026-09-30-capabilities-bundle-transfer":"0c2e1c088f9302f9751bd70d0f0f1c36d26042b5","codex/pr1-review-base-2026-09-10":"e0845f83552e1b0043cf435dcb82d5b959e31a05","codex/pr1-review-snapshot-2026-09-10":"4167a9072d5ef013de2f2b193fb09ea77657e37a"},"inventorySha256":"e5101c64e5f22939eeb40b89d842a79882090434b2b3b3a5b2e03a93ab6e7ed2","originalPlanSha256":"78139065d027dd47f680e6bc493ecd0eb8f893e035b493b33c3041bbe717232c","remote":"https://github.com/idanilovqa/AlbumHaven.git","repository":"idanilovqa/AlbumHaven","retainedBranches":["2026-08-30-phase-7-local-auth","2026-09-05-gallery-refactor","2026-09-05-phase-8-implementation","2026-09-08-settings-refactor","2026-09-09-cover-look-up-refactor","2026-09-17-pr3-rf456-build","2026-09-18-pr3-e2e-batch","2026-09-18-pr3-js-batch","2026-09-18-pr3-python-batch","2026-09-25-capabilities-audit","2026-09-25-mobile-layout","2026-09-25-render-demo","2026-09-26-render-mobile-feedback","2026-09-28-header-investigation","2026-09-28-header-preview","2026-09-29-render-feedback-promotion","2026-09-30-capabilities-bundle-transfer","2026-09-30-friends-listening-home","2026-09-30-mobile-bundle-transfer","codex/pr1-review-base-2026-09-10","codex/pr1-review-snapshot-2026-09-10","main"],"schemaVersion":1,"workflowPath":".github/workflows/recoverable-helper-cleanup-20261001.yml"}\n')
+          BINDING = json.loads('{"anchor":"2026-09-30-mobile-bundle-transfer","anchorDisposition":"retain-final-anchor","archivePrefix":"archive/chatgpt-ci-recovery/2026-10-01/","checkedAtUtc":"2026-10-01T16:59:42.134061+00:00","executionApproved":true,"explicitTipChanges":[{"boundTip":"ddfc455ccd626039a9eeb27bc71945eea0277892","branch":"2026-09-30-mobile-bundle-transfer","priorObservedTip":"dd835ba6dfb26e6392891c58ff17f8f5a16ff5ef","reason":"Completed, independently reviewed Render promotion workflow addition; full receipt remains in render-promotion-final/publication.json","reviewedByRoot":true}],"mainCommit":"eef9d13fd5dbd2cda3485e3c308c8494ba7d6fd4","releaseAcceptance":{"deploymentEvidenceSha256":"03ba94f93e648a31bf1ad8fae382979408c26718f88bf76629919b4f2b75d2c8","deploymentsAccepted":true,"releaseAccepted":true,"releaseCommit":"eef9d13fd5dbd2cda3485e3c308c8494ba7d6fd4","releaseEvidenceSha256":"d87105e166408fb5dea66a9f241e4e3b7a5b378b2bf552076804fa0dbca68603","rootApprovalEvidenceSha256":"db289f89747ab3ac286f48eda471b0fee1b8c972def452097a493c0d1531b7ef"},"repository":"idanilovqa/AlbumHaven","schemaVersion":1,"scopeSha256":"7d761b13d21ba9777619424a8bd705460616d936734adb2a4298fc6a26f633be","services":{"checkedAtUtc":"2026-10-01T16:59:42.134061+00:00","complete":true,"limitationAcknowledged":true,"receiptSha256":"8e06dcf498e9e5d11fff73172f02f9eb9c6d844c0e41611d6851ecd011f742e7","rootReviewed":true,"sources":[{"branch":"2026-09-25-capabilities-audit","id":"srv-das9rmfpn0mc73ffr6s0","repository":"idanilovqa/AlbumHaven"},{"branch":"2026-09-25-render-demo","id":"srv-darkpknpn0mc73cvnl1g","repository":"idanilovqa/AlbumHaven"}]},"sourceParent":"ddfc455ccd626039a9eeb27bc71945eea0277892","taggerEpoch":1790873982,"tips":{"2026-09-18-pr3-ci-diagnostics":"b09e14db1c0f987c016da5630a100a329680c239","2026-09-29-mobile-ci-repair-evidence":"ecf207c78bcdaf511ae0578a8035eeccb8f56a94","2026-09-29-pr19-diagnostics":"972a78261d0d78c14db3a7ce4cf16e170c8dad50","2026-09-30-mobile-bundle-transfer":"ddfc455ccd626039a9eeb27bc71945eea0277892","2026-09-30-mobile-windows-icons":"048ae55b22db078d0fee9480610a8d4df22ffae1","chatgpt/mobile-fixture-session-20260930":"93838196095a8e7d87e2bd5213edd956bb679227","chatgpt/pr17-ci-repair-20260929":"655b5f65a6dabcfd022ffe49d944131282b532ac","chatgpt/pr17-contract-probe3-20260929":"b4ec1a51a4ca717e42f73f2b9cb362e833b800cd","chatgpt/pr17-css-probe2-20260929":"f739a7014d1fa97c736af3600710f93ff08f58dc","chatgpt/pr17-failure-inventory-20260929":"4d52ad57e509cda3bef00e8dcd340e70eab6686e","chatgpt/pr17-focused-repair-20260929-b4ec1a5":"8b87a30e1bac482ba8931d1b9053ff1428ba0440","chatgpt/pr17-release-diag-20260929":"b4ec1a51a4ca717e42f73f2b9cb362e833b800cd","chatgpt/pr17-review-workspace-20260928":"48dd72990dc1ea8097164899292fe6bcf210a0d3","chatgpt/pr17-run301-visual-diagnostics-20260929":"51600fc59f08698bceca15f879206d09bf86c2cb","chatgpt/pr17-run304-diagnostics-20260929":"e9c0eaf8e386616075b7e8162c964d0872c80860"},"validUntilUtc":"2026-10-01T17:14:42.134061+00:00"}\n')
+
+          env = os.environ
+          token = env.get("GH_TOKEN")
+          require(bool(token), "existing transient repository token unavailable")
+          repo = Path(env["GITHUB_WORKSPACE"]) / "source"
+          root = Path(env["RUNNER_TEMP"]) / "recoverable-cleanup"
+          event = json.loads(Path(env["GITHUB_EVENT_PATH"]).read_text())
+          verify_event(repo, SCOPE, BINDING, env, event)
+
+          require(not root.exists(), "writer workspace already exists")
+          root.mkdir()
+          download = Path(env["RUNNER_TEMP"]) / "cleanup-downloaded"
+          require({p.name for p in download.iterdir()} == {"validation.json"}, "validation artifact has extra/missing files")
+          require(re.fullmatch(r"[1-9][0-9]*", env.get("VALIDATION_ARTIFACT_ID", "")), "validation artifact ID missing")
+          proof = read_proof(download / "validation.json", SCOPE, BINDING, env, env["VALIDATION_SHA256"])
+          evidence = Path(env["RUNNER_TEMP"]) / "cleanup-evidence"
+          evidence.mkdir()
+          journal = archive_all(repo, root, SCOPE, BINDING, env, proof, token, evidence / "journal.json")
+          archive_hash = write_receipt(evidence / "archives-ready.json", journal)
+          with open(env["GITHUB_OUTPUT"], "a") as stream:
+              stream.write("archive_sha256=" + archive_hash + "\n")
+          print("Exact create-only annotated tags and their fresh full histories verified; no branches deleted yet.")
+
+      - uses: actions/upload-artifact@v4
+        id: recovery
+        with:
+          name: cleanup-archive-receipts-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/cleanup-evidence/archives-ready.json
+          if-no-files-found: error
+          retention-days: 90
+          overwrite: false
+      - name: Delete one exact archived branch at a time; retain actual source anchor
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ARCHIVE_ARTIFACT_ID: ${{ steps.recovery.outputs.artifact-id }}
+          ARCHIVE_SHA256: ${{ steps.archive.outputs.archive_sha256 }}
+        shell: python
+        run: |
+          import base64
+          import datetime as dt
+          import hashlib
+          import json
+          import os
+          from pathlib import Path
+          import re
+          import subprocess
+          import time
+          import urllib.parse
+          import urllib.request
+          ZERO = "0" * 40
+          class Rejected(RuntimeError):
+              pass
+          def require(condition, message):
+              if not condition:
+                  raise Rejected(message)
+          def canonical(value):
+              return (json.dumps(value, sort_keys=True, separators=(",", ":")) + "\n").encode()
+          def digest(data):
+              return hashlib.sha256(data).hexdigest()
+          def oid(value):
+              return isinstance(value, str) and re.fullmatch(r"[0-9a-f]{40}", value) is not None and value != ZERO
+          def sha256(value):
+              return isinstance(value, str) and re.fullmatch(r"[0-9a-f]{64}", value) is not None
+          def refname(value, prefix):
+              require(isinstance(value, str) and value.startswith(prefix), "ref namespace mismatch")
+              require(re.fullmatch(r"[A-Za-z0-9._/-]+", value) is not None, "unsafe ref characters")
+              require(not any(x in value for x in ("..", "//", "@{")) and not value.endswith(("/", ".", ".lock")), "unsafe ref")
+              require(all(p and not p.startswith(".") and not p.endswith(".lock") for p in value.split("/")), "unsafe ref component")
+              return value
+          def timestamp(value):
+              require(isinstance(value, str), "timestamp missing")
+              result = dt.datetime.fromisoformat(value.replace("Z", "+00:00"))
+              require(result.tzinfo is not None, "timestamp must be timezone-aware")
+              return result.timestamp()
+          def ensure_fresh(binding, now=None):
+              current = time.time() if now is None else now
+              start, end = timestamp(binding["checkedAtUtc"]), timestamp(binding["validUntilUtc"])
+              require(start <= current <= end and 0 < end - start <= 900, "binding is future/stale or exceeds 15-minute window")
+              service_time = timestamp(binding["services"]["checkedAtUtc"])
+              require(start - 60 <= service_time <= start and current - service_time <= 900, "external service receipt is stale")
+          def validate_binding(scope, binding, now=None):
+              require(binding["executionApproved"] is True, "execution gate is unresolved")
+              require(binding["scopeSha256"] == digest(canonical(scope)), "reviewed scope identity changed")
+              require(binding["repository"] == scope["repository"], "repository binding changed")
+              require(binding["anchor"] == scope["anchor"] and binding["anchorDisposition"] == "retain-final-anchor", "anchor disposition changed")
+              require(oid(binding["sourceParent"]) and oid(binding["mainCommit"]), "parent/main binding unresolved")
+              expected = {r["branch"] for r in scope["candidates"]}
+              require(set(binding["tips"]) == expected and all(oid(v) for v in binding["tips"].values()), "exact candidate tips unresolved or expanded")
+              require(binding["sourceParent"] == binding["tips"][scope["anchor"]], "source parent differs from pre-workflow anchor tip")
+              expected_moves = {r["branch"]: (r["observedTip"], binding["tips"][r["branch"]]) for r in scope["candidates"]
+                                if r["observedTip"] != binding["tips"][r["branch"]]}
+              observed_moves = {}
+              for move in binding["explicitTipChanges"]:
+                  require(move["branch"] not in observed_moves and move["reviewedByRoot"] is True and bool(move["reason"]), "tip change is not explicitly reviewed")
+                  observed_moves[move["branch"]] = (move["priorObservedTip"], move["boundTip"])
+              require(observed_moves == expected_moves, "moved tips must be explicitly reconciled; never silently adopt")
+              acceptance = binding["releaseAcceptance"]
+              require(acceptance["releaseAccepted"] is True and acceptance["deploymentsAccepted"] is True and oid(acceptance["releaseCommit"]), "final release/deployment acceptance missing")
+              require(all(sha256(acceptance[k]) for k in ("releaseEvidenceSha256", "deploymentEvidenceSha256", "rootApprovalEvidenceSha256")), "acceptance evidence is unbound")
+              services = binding["services"]
+              require(services["complete"] is True and services["rootReviewed"] is True and sha256(services["receiptSha256"]), "complete reviewed service receipt missing")
+              require(services["limitationAcknowledged"] is True, "external service observation boundary is not acknowledged")
+              ensure_fresh(binding, now)
+              for service in services["sources"]:
+                  require(set(service) == {"id", "repository", "branch"} and all(isinstance(v, str) and v for v in service.values()), "invalid service source receipt")
+              require(isinstance(binding["taggerEpoch"], int) and abs(binding["taggerEpoch"] - timestamp(binding["checkedAtUtc"])) < 60, "tagger epoch is not bound to fresh review")
+              require(binding["archivePrefix"] == scope["archivePrefix"], "archive namespace changed")
+              return archive_groups(scope, binding)
+          def archive_groups(scope, binding):
+              grouped = {}
+              for candidate in scope["candidates"]:
+                  branch = candidate["branch"]
+                  if branch == scope["anchor"]:
+                      continue
+                  refname("refs/heads/" + branch, "refs/heads/")
+                  grouped.setdefault(binding["tips"][branch], []).append(branch)
+              groups = []
+              for tip, branches in sorted(grouped.items(), key=lambda row: sorted(row[1])[0]):
+                  branches.sort()
+                  tag = scope["archivePrefix"] + branches[0] + "-" + tip[:12]
+                  refname("refs/tags/" + tag, "refs/tags/")
+                  groups.append({"tip": tip, "branches": branches, "tag": tag})
+              return groups
+          def git_environment(token=None):
+              env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
+              env.update(GIT_CONFIG_NOSYSTEM="1", GIT_CONFIG_GLOBAL="/dev/null", GIT_TERMINAL_PROMPT="0", GIT_NO_REPLACE_OBJECTS="1")
+              if token:
+                  auth = base64.b64encode(("x-access-token:" + token).encode()).decode()
+                  env.update(GIT_CONFIG_COUNT="1", GIT_CONFIG_KEY_0="http.https://github.com/.extraheader",
+                             GIT_CONFIG_VALUE_0="AUTHORIZATION: basic " + auth)
+              return env
+          def git(repo, *args, data=None, token=None, hooks=None):
+              result = subprocess.run(["git", "-c", "core.hooksPath=" + (str(hooks) if hooks else "/dev/null"),
+                                       "-c", "fetch.fsckObjects=true", "-c", "transfer.fsckObjects=true", "-C", str(repo), *args],
+                                      input=data, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=git_environment(token), check=False)
+              require(result.returncode == 0, "Git " + args[0] + " failed; stop and inspect, never retry automatically")
+              return result.stdout
+          def fresh_bare(path):
+              require(not path.exists(), "history repository is not fresh")
+              path.mkdir()
+              git(path, "init", "--bare", "--object-format=sha1", ".")
+              return path
+          def full_history(repo, commit):
+              require(git(repo, "rev-parse", "--is-bare-repository").strip() == b"true", "history verifier needs a bare repository")
+              require(git(repo, "rev-parse", "--is-shallow-repository").strip() == b"false", "shallow history rejected")
+              require(not (repo / "objects/info/alternates").exists() and not (repo / "info/grafts").exists(), "external/grafted object authority rejected")
+              config = git(repo, "config", "--list").decode().lower()
+              require("promisor=" not in config and "partialclone=" not in config, "partial object history rejected")
+              require(git(repo, "for-each-ref", "--format=%(refname)", "refs/replace").strip() == b"", "replacement objects rejected")
+              require(git(repo, "cat-file", "-t", commit).strip() == b"commit", "archive target is not a commit")
+              objects = git(repo, "rev-list", "--objects", "--no-object-names", "--missing=print", commit).decode().splitlines()
+              require(objects and all(oid(value) for value in objects), "missing reachable objects")
+              git(repo, "fsck", "--full", "--strict", "--no-reflogs", commit)
+              return {"commit": commit, "objectCount": len(set(objects)), "objectSetSha256": digest(("\n".join(sorted(set(objects))) + "\n").encode()),
+                      "commitCount": int(git(repo, "rev-list", "--count", commit).strip()), "nonShallow": True, "fsck": "passed"}
+          def no_redirect_request(url, token):
+              class NoRedirect(urllib.request.HTTPRedirectHandler):
+                  def redirect_request(self, *args, **kwargs):
+                      return None
+              request = urllib.request.Request(url, headers={"Authorization": "Bearer " + token, "Accept": "application/vnd.github+json",
+                                                            "X-GitHub-Api-Version": "2022-11-28", "User-Agent": "reviewed-recoverable-cleanup"})
+              with urllib.request.build_opener(NoRedirect).open(request, timeout=30) as response:
+                  require(response.status == 200, "GitHub read failed")
+                  return json.load(response)
+          def api_get(scope, suffix, token):
+              # Every API operation is GET, only on this exact repository at the official API host.
+              require(suffix.startswith("/") and ".." not in suffix, "invalid API route")
+              return no_redirect_request("https://api.github.com/repos/" + scope["repository"] + suffix, token)
+          def paged(scope, route, token):
+              result = []
+              separator = "&" if "?" in route else "?"
+              for page in range(1, 101):
+                  rows = api_get(scope, route + separator + "per_page=100&page=" + str(page), token)
+                  require(isinstance(rows, list), "unrecognized paginated response")
+                  result.extend(rows)
+                  if len(rows) < 100:
+                      return result
+              raise Rejected("pagination was not exhausted")
+          def live_state(scope, token):
+              branches = paged(scope, "/branches", token)
+              pulls = paged(scope, "/pulls?state=open", token)
+              branch_map = {}
+              for branch in branches:
+                  name = branch["name"]
+                  require(name not in branch_map and type(branch["protected"]) is bool and oid(branch["commit"]["sha"]), "invalid/duplicate branch response")
+                  branch_map[name] = {"sha": branch["commit"]["sha"], "protected": branch["protected"]}
+              protected_by_pr = set()
+              for pull in pulls:
+                  require(pull.get("state") == "open", "open PR inventory changed shape")
+                  for side in ("head", "base"):
+                      item = pull[side]
+                      require(item.get("repo") and isinstance(item.get("ref"), str), "unknown PR repository/ref")
+                      if item["repo"]["full_name"] == scope["repository"]:
+                          protected_by_pr.add(item["ref"])
+              docs = {}
+              for candidate in scope["candidates"]:
+                  if candidate["kind"] == "merged-doc":
+                      docs[candidate["branch"]] = api_get(scope, "/pulls/" + str(candidate["pr"]), token)
+              return {"branches": branch_map, "openPrBranches": sorted(protected_by_pr), "docs": docs}
+          def guard_state(scope, binding, state, trigger, deleted=()):
+              validate_binding(scope, binding)
+              require(oid(trigger), "trigger SHA missing")
+              require(state["branches"].get("main", {}).get("sha") == binding["mainCommit"], "main moved since final review")
+              for branch, expected in scope["immutableRetainedRefs"].items():
+                  require(state["branches"].get(branch, {}).get("sha") == expected, "required retained review ref moved or disappeared")
+              services = {s["branch"] for s in binding["services"]["sources"] if s["repository"] == scope["repository"]}
+              pr_refs = set(state["openPrBranches"])
+              deleted = set(deleted)
+              allowed = {r["branch"] for r in scope["candidates"] if r["branch"] != scope["anchor"]}
+              require(deleted <= allowed, "deleted set is outside exact cleanup scope")
+              for candidate in scope["candidates"]:
+                  branch = candidate["branch"]
+                  if branch in deleted:
+                      require(branch not in state["branches"], "deleted branch reappeared; stop")
+                      continue
+                  value = state["branches"].get(branch)
+                  expected = trigger if branch == scope["anchor"] else binding["tips"][branch]
+                  require(value and value["sha"] == expected, "candidate or actual trigger tip moved")
+                  require(branch not in pr_refs and branch not in services and value["protected"] is False, "candidate is protected or used by a PR/service")
+                  require(branch not in scope["retainedBranches"] or branch == scope["anchor"], "retained branch cannot be a deletion candidate")
+                  if candidate["kind"] == "merged-doc":
+                      pull = state["docs"][branch]
+                      require(pull.get("merged") is True and pull.get("state") == "closed" and pull["base"]["ref"] == "main" and
+                              pull["head"]["ref"] == branch and pull["head"]["sha"] == expected and
+                              pull["head"]["repo"]["full_name"] == scope["repository"], "documentation PR provenance changed")
+          def remote_map(repo, scope, refs, token=None):
+              rows = git(repo, "ls-remote", scope["remote"], *sorted(refs), token=token).decode().splitlines()
+              result = {}
+              for row in rows:
+                  value, ref = row.split("\t")
+                  require(ref in refs and ref not in result and oid(value), "unexpected or duplicate advertised ref")
+                  result[ref] = value
+              return result
+          def tag_refs(group):
+              return {"refs/tags/" + group["tag"], "refs/tags/" + group["tag"] + "^{}"}
+          def verify_tag_remote(repo, scope, group, tag_oid, token=None):
+              expected = {"refs/tags/" + group["tag"]: tag_oid, "refs/tags/" + group["tag"] + "^{}": group["tip"]}
+              require(remote_map(repo, scope, set(expected), token) == expected, "archive tag object or peeled commit moved/missing")
+          def tag_bytes(scope, binding, group, env):
+              annotation = {"schemaVersion": 1, "repository": scope["repository"], "originalBranches": group["branches"],
+                            "commit": group["tip"], "scopeSha256": digest(canonical(scope)), "bindingSha256": digest(canonical(binding)),
+                            "runId": env["GITHUB_RUN_ID"], "attempt": env["GITHUB_RUN_ATTEMPT"], "triggerCommit": env["GITHUB_SHA"],
+                            "restoration": "Recreate an absent original branch from this exact commit only after approval; never overwrite a newer branch."}
+              header = ("object " + group["tip"] + "\ntype commit\ntag " + group["tag"] +
+                        "\ntagger github-actions[bot] <41898282+github-actions[bot]@users.noreply.github.com> " + str(binding["taggerEpoch"]) + " +0000\n\n")
+              return header.encode() + canonical(annotation)
+          def object_oid(kind, data):
+              return hashlib.sha1(kind.encode() + b" " + str(len(data)).encode() + b"\0" + data).hexdigest()
+          def hook_source(scope, operation, ref, old, new):
+              require(operation in ("create-tag", "delete-branch"), "unsupported ref operation")
+              if operation == "create-tag":
+                  refname(ref, "refs/tags/" + scope["archivePrefix"])
+                  require(old == ZERO and oid(new), "invalid tag creation guard")
+                  expected = [new, new, ref, ZERO]
+              else:
+                  refname(ref, "refs/heads/")
+                  deletable = {"refs/heads/" + r["branch"] for r in scope["candidates"]
+                               if r["branch"] != scope["anchor"] and r["branch"] not in scope["retainedBranches"]}
+                  require(ref in deletable, "delete ref is outside the reviewed allowlist or is the final anchor")
+                  require(new == ZERO and oid(old), "invalid branch deletion guard")
+                  expected = ["(delete)", ZERO, ref, old]
+              return ("#!/usr/bin/env python3\nimport sys\nexpected = " + repr(expected) +
+                      "\nremote = " + repr(scope["remote"]) +
+                      "\nrows = [line.split() for line in sys.stdin.read().splitlines()]\n" +
+                      "if sys.argv[1:] != [remote, remote] or rows != [expected]:\n" +
+                      "    sys.exit('Rejected unexpected destination/operation/old OID; stop and inspect')\n")
+          def push_once(repo, scope, operation, ref, old, new, hooks, token=None, *, binding):
+              require(not hooks.exists(), "one-shot hook directory already exists")
+              hooks.mkdir()
+              path = hooks / "pre-push"
+              path.write_text(hook_source(scope, operation, ref, old, new))
+              path.chmod(0o700)
+              expected = {} if old == ZERO else {ref: old}
+              require(remote_map(repo, scope, {ref}, token) == expected, "ref changed before push")
+              ensure_fresh(binding)
+              refspec = new + ":" + ref if operation == "create-tag" else ":" + ref
+              git(repo, "push", "--porcelain", scope["remote"], refspec, token=token, hooks=hooks)
+          def verify_event(repo, scope, binding, env, event):
+              validate_binding(scope, binding)
+              require(env.get("GITHUB_REPOSITORY") == scope["repository"] and env.get("GITHUB_REF") == "refs/heads/" + scope["anchor"] and
+                      env.get("GITHUB_EVENT_NAME") == "push", "wrong repository/ref/event")
+              require(env.get("GITHUB_RUN_ATTEMPT") == "1" and re.fullmatch(r"[1-9][0-9]*", env.get("GITHUB_RUN_ID", "")), "run identity/replay rejected")
+              trigger = env.get("GITHUB_SHA")
+              require(oid(trigger) and event.get("before") == binding["sourceParent"] and event.get("after") == trigger and
+                      event.get("ref") == env["GITHUB_REF"] and event.get("repository", {}).get("full_name") == scope["repository"], "event parent binding mismatch")
+              require(all(event.get(k) is False for k in ("forced", "created", "deleted")), "forced/create/delete event rejected")
+              require(git(repo, "rev-parse", "HEAD").decode().strip() == trigger, "checkout is not triggering tip")
+              require(git(repo, "rev-list", "--parents", "-n", "1", trigger).decode().split() == [trigger, binding["sourceParent"]], "trigger must have one exact parent")
+              changes = git(repo, "diff", "--name-status", "--no-renames", binding["sourceParent"], trigger).decode().strip()
+              require(changes == "A\t" + scope["workflowPath"], "trigger must add only its exact workflow")
+              metadata = git(repo, "ls-tree", trigger, "--", scope["workflowPath"]).decode().split()
+              require(metadata[:2] == ["100644", "blob"], "workflow is not a regular nonexecutable file")
+          def fixed_proof(scope, binding, env):
+              return {"schemaVersion": 1, "scopeSha256": digest(canonical(scope)), "bindingSha256": digest(canonical(binding)),
+                      "repository": scope["repository"], "runId": env["GITHUB_RUN_ID"], "runAttempt": env["GITHUB_RUN_ATTEMPT"],
+                      "sourceParent": binding["sourceParent"], "actualTriggerTip": env["GITHUB_SHA"],
+                      "retainedAnchor": scope["anchor"], "anchorDisposition": "retain-final-anchor"}
+          def write_receipt(path, value):
+              data = canonical(value)
+              with path.open("wb") as output:
+                  output.write(data)
+                  output.flush()
+                  os.fsync(output.fileno())
+              return digest(data)
+          def read_proof(path, scope, binding, env, expected_digest):
+              require(path.is_file() and not path.is_symlink(), "artifact proof is not regular")
+              data = path.read_bytes()
+              require(digest(data) == expected_digest, "same-run artifact digest mismatch")
+              value = json.loads(data)
+              require(value["identity"] == fixed_proof(scope, binding, env), "wrong run/attempt/source/plan proof")
+              require(canonical(value) == data, "noncanonical proof")
+              return value
+          def verify_remote_history(root, name, scope, group, token=None, tag_oid=None):
+              repo = fresh_bare(root / name)
+              source = "refs/tags/" + group["tag"] if tag_oid else "refs/heads/" + group["branches"][0]
+              git(repo, "fetch", "--no-tags", scope["remote"], source, token=token)
+              fetched = git(repo, "rev-parse", "FETCH_HEAD").decode().strip()
+              if tag_oid:
+                  require(fetched == tag_oid and git(repo, "cat-file", "-t", fetched).strip() == b"tag", "fetched archive is not exact annotated tag object")
+                  require(git(repo, "rev-parse", fetched + "^{}").decode().strip() == group["tip"], "wrong archive peel")
+              else:
+                  require(fetched == group["tip"], "source branch moved during full fetch")
+              return repo, full_history(repo, group["tip"])
+          def check_groups(proof, scope, binding, env):
+              groups = archive_groups(scope, binding)
+              require(len(proof["groups"]) == len(groups), "archive group set mismatch")
+              for actual, expected in zip(proof["groups"], groups):
+                  require(all(actual[k] == expected[k] for k in expected), "archive source group changed")
+                  require(actual["tagObject"] == object_oid("tag", tag_bytes(scope, binding, expected, env)), "archive tag object changed")
+                  require(actual["history"]["commit"] == expected["tip"] and actual["history"]["nonShallow"] is True and
+                          actual["history"]["fsck"] == "passed" and actual["history"]["objectCount"] > 0, "incomplete history proof")
+          def delete_archived(repo, root, scope, binding, env, receipt, token, journal_path, artifact_id):
+              require(re.fullmatch(r"[1-9][0-9]*", artifact_id or ""), "durable archive artifact was not uploaded")
+              require(receipt["status"] == "archives-verified-before-any-deletion" and receipt["deletions"] == [], "partial/replayed deletion receipt rejected")
+              check_groups(receipt, scope, binding, env)
+              require(all(g["remoteArchiveVerified"] is True for g in receipt["groups"]), "remote archive verification missing")
+              deleted = []
+              receipt["archiveReceiptArtifactId"] = artifact_id
+              for group in receipt["groups"]:
+                  _, recovered = verify_remote_history(root, "delete-recovery-" + str(len(deleted)), scope, group, token, group["tagObject"])
+                  require(recovered == group["history"], "archive full history changed before its first deletion")
+                  for branch in group["branches"]:
+                      require(branch != scope["anchor"], "self-host anchor retirement is outside this package")
+                      for archive in receipt["groups"]:
+                          verify_tag_remote(repo, scope, archive, archive["tagObject"], token)
+                      guard_state(scope, binding, live_state(scope, token), env["GITHUB_SHA"], deleted)
+                      ref = "refs/heads/" + branch
+                      receipt["pendingOperation"] = {"operation": "delete-branch", "branch": branch, "oldOid": group["tip"]}
+                      write_receipt(journal_path, receipt)
+                      push_once(repo, scope, "delete-branch", ref, group["tip"], ZERO, root / ("delete-hook-" + str(len(deleted))), token, binding=binding)
+                      require(remote_map(repo, scope, {ref}, token) == {}, "branch deletion outcome uncertain; inspect")
+                      verify_tag_remote(repo, scope, group, group["tagObject"], token)
+                      deleted.append(branch)
+                      receipt["deletions"].append({"branch": branch, "oldOid": group["tip"], "tag": group["tag"], "tagObject": group["tagObject"]})
+                      receipt.pop("pendingOperation")
+                      write_receipt(journal_path, receipt)
+              guard_state(scope, binding, live_state(scope, token), env["GITHUB_SHA"], deleted)
+              receipt["status"] = "bounded-cleanup-complete-final-anchor-retained"
+              receipt["remaining"] = {"branch": scope["anchor"], "oldPreWorkflowParent": binding["sourceParent"],
+                                      "actualCurrentTip": env["GITHUB_SHA"], "nextStep": "Separate fresh review to archive and retire this actual final tip; do not delete the old parent as if it were current."}
+              write_receipt(journal_path, receipt)
+              return receipt
+          SCOPE = json.loads('{"anchor":"2026-09-30-mobile-bundle-transfer","archivePrefix":"archive/chatgpt-ci-recovery/2026-10-01/","candidates":[{"branch":"2026-09-18-pr3-ci-diagnostics","kind":"helper","observedTip":"b09e14db1c0f987c016da5630a100a329680c239"},{"branch":"2026-09-29-mobile-ci-repair-evidence","kind":"helper","observedTip":"ecf207c78bcdaf511ae0578a8035eeccb8f56a94"},{"branch":"2026-09-29-pr19-diagnostics","kind":"helper","observedTip":"972a78261d0d78c14db3a7ce4cf16e170c8dad50"},{"branch":"2026-09-30-mobile-bundle-transfer","kind":"helper","observedTip":"dd835ba6dfb26e6392891c58ff17f8f5a16ff5ef"},{"branch":"2026-09-30-mobile-windows-icons","kind":"helper","observedTip":"048ae55b22db078d0fee9480610a8d4df22ffae1"},{"branch":"chatgpt/mobile-fixture-session-20260930","kind":"helper","observedTip":"93838196095a8e7d87e2bd5213edd956bb679227"},{"branch":"chatgpt/pr17-ci-repair-20260929","kind":"helper","observedTip":"655b5f65a6dabcfd022ffe49d944131282b532ac"},{"branch":"chatgpt/pr17-contract-probe3-20260929","kind":"helper","observedTip":"b4ec1a51a4ca717e42f73f2b9cb362e833b800cd"},{"branch":"chatgpt/pr17-css-probe2-20260929","kind":"helper","observedTip":"f739a7014d1fa97c736af3600710f93ff08f58dc"},{"branch":"chatgpt/pr17-failure-inventory-20260929","kind":"helper","observedTip":"4d52ad57e509cda3bef00e8dcd340e70eab6686e"},{"branch":"chatgpt/pr17-focused-repair-20260929-b4ec1a5","kind":"helper","observedTip":"8b87a30e1bac482ba8931d1b9053ff1428ba0440"},{"branch":"chatgpt/pr17-release-diag-20260929","kind":"helper","observedTip":"b4ec1a51a4ca717e42f73f2b9cb362e833b800cd"},{"branch":"chatgpt/pr17-review-workspace-20260928","kind":"helper","observedTip":"48dd72990dc1ea8097164899292fe6bcf210a0d3"},{"branch":"chatgpt/pr17-run301-visual-diagnostics-20260929","kind":"helper","observedTip":"51600fc59f08698bceca15f879206d09bf86c2cb"},{"branch":"chatgpt/pr17-run304-diagnostics-20260929","kind":"helper","observedTip":"e9c0eaf8e386616075b7e8162c964d0872c80860"}],"classificationSha256":"e5101c64e5f22939eeb40b89d842a79882090434b2b3b3a5b2e03a93ab6e7ed2","immutableRetainedRefs":{"2026-09-30-capabilities-bundle-transfer":"0c2e1c088f9302f9751bd70d0f0f1c36d26042b5","codex/pr1-review-base-2026-09-10":"e0845f83552e1b0043cf435dcb82d5b959e31a05","codex/pr1-review-snapshot-2026-09-10":"4167a9072d5ef013de2f2b193fb09ea77657e37a"},"inventorySha256":"e5101c64e5f22939eeb40b89d842a79882090434b2b3b3a5b2e03a93ab6e7ed2","originalPlanSha256":"78139065d027dd47f680e6bc493ecd0eb8f893e035b493b33c3041bbe717232c","remote":"https://github.com/idanilovqa/AlbumHaven.git","repository":"idanilovqa/AlbumHaven","retainedBranches":["2026-08-30-phase-7-local-auth","2026-09-05-gallery-refactor","2026-09-05-phase-8-implementation","2026-09-08-settings-refactor","2026-09-09-cover-look-up-refactor","2026-09-17-pr3-rf456-build","2026-09-18-pr3-e2e-batch","2026-09-18-pr3-js-batch","2026-09-18-pr3-python-batch","2026-09-25-capabilities-audit","2026-09-25-mobile-layout","2026-09-25-render-demo","2026-09-26-render-mobile-feedback","2026-09-28-header-investigation","2026-09-28-header-preview","2026-09-29-render-feedback-promotion","2026-09-30-capabilities-bundle-transfer","2026-09-30-friends-listening-home","2026-09-30-mobile-bundle-transfer","codex/pr1-review-base-2026-09-10","codex/pr1-review-snapshot-2026-09-10","main"],"schemaVersion":1,"workflowPath":".github/workflows/recoverable-helper-cleanup-20261001.yml"}\n')
+          BINDING = json.loads('{"anchor":"2026-09-30-mobile-bundle-transfer","anchorDisposition":"retain-final-anchor","archivePrefix":"archive/chatgpt-ci-recovery/2026-10-01/","checkedAtUtc":"2026-10-01T16:59:42.134061+00:00","executionApproved":true,"explicitTipChanges":[{"boundTip":"ddfc455ccd626039a9eeb27bc71945eea0277892","branch":"2026-09-30-mobile-bundle-transfer","priorObservedTip":"dd835ba6dfb26e6392891c58ff17f8f5a16ff5ef","reason":"Completed, independently reviewed Render promotion workflow addition; full receipt remains in render-promotion-final/publication.json","reviewedByRoot":true}],"mainCommit":"eef9d13fd5dbd2cda3485e3c308c8494ba7d6fd4","releaseAcceptance":{"deploymentEvidenceSha256":"03ba94f93e648a31bf1ad8fae382979408c26718f88bf76629919b4f2b75d2c8","deploymentsAccepted":true,"releaseAccepted":true,"releaseCommit":"eef9d13fd5dbd2cda3485e3c308c8494ba7d6fd4","releaseEvidenceSha256":"d87105e166408fb5dea66a9f241e4e3b7a5b378b2bf552076804fa0dbca68603","rootApprovalEvidenceSha256":"db289f89747ab3ac286f48eda471b0fee1b8c972def452097a493c0d1531b7ef"},"repository":"idanilovqa/AlbumHaven","schemaVersion":1,"scopeSha256":"7d761b13d21ba9777619424a8bd705460616d936734adb2a4298fc6a26f633be","services":{"checkedAtUtc":"2026-10-01T16:59:42.134061+00:00","complete":true,"limitationAcknowledged":true,"receiptSha256":"8e06dcf498e9e5d11fff73172f02f9eb9c6d844c0e41611d6851ecd011f742e7","rootReviewed":true,"sources":[{"branch":"2026-09-25-capabilities-audit","id":"srv-das9rmfpn0mc73ffr6s0","repository":"idanilovqa/AlbumHaven"},{"branch":"2026-09-25-render-demo","id":"srv-darkpknpn0mc73cvnl1g","repository":"idanilovqa/AlbumHaven"}]},"sourceParent":"ddfc455ccd626039a9eeb27bc71945eea0277892","taggerEpoch":1790873982,"tips":{"2026-09-18-pr3-ci-diagnostics":"b09e14db1c0f987c016da5630a100a329680c239","2026-09-29-mobile-ci-repair-evidence":"ecf207c78bcdaf511ae0578a8035eeccb8f56a94","2026-09-29-pr19-diagnostics":"972a78261d0d78c14db3a7ce4cf16e170c8dad50","2026-09-30-mobile-bundle-transfer":"ddfc455ccd626039a9eeb27bc71945eea0277892","2026-09-30-mobile-windows-icons":"048ae55b22db078d0fee9480610a8d4df22ffae1","chatgpt/mobile-fixture-session-20260930":"93838196095a8e7d87e2bd5213edd956bb679227","chatgpt/pr17-ci-repair-20260929":"655b5f65a6dabcfd022ffe49d944131282b532ac","chatgpt/pr17-contract-probe3-20260929":"b4ec1a51a4ca717e42f73f2b9cb362e833b800cd","chatgpt/pr17-css-probe2-20260929":"f739a7014d1fa97c736af3600710f93ff08f58dc","chatgpt/pr17-failure-inventory-20260929":"4d52ad57e509cda3bef00e8dcd340e70eab6686e","chatgpt/pr17-focused-repair-20260929-b4ec1a5":"8b87a30e1bac482ba8931d1b9053ff1428ba0440","chatgpt/pr17-release-diag-20260929":"b4ec1a51a4ca717e42f73f2b9cb362e833b800cd","chatgpt/pr17-review-workspace-20260928":"48dd72990dc1ea8097164899292fe6bcf210a0d3","chatgpt/pr17-run301-visual-diagnostics-20260929":"51600fc59f08698bceca15f879206d09bf86c2cb","chatgpt/pr17-run304-diagnostics-20260929":"e9c0eaf8e386616075b7e8162c964d0872c80860"},"validUntilUtc":"2026-10-01T17:14:42.134061+00:00"}\n')
+
+          env = os.environ
+          token = env.get("GH_TOKEN")
+          require(bool(token), "existing transient repository token unavailable")
+          repo = Path(env["GITHUB_WORKSPACE"]) / "source"
+          root = Path(env["RUNNER_TEMP"]) / "recoverable-cleanup"
+          event = json.loads(Path(env["GITHUB_EVENT_PATH"]).read_text())
+          verify_event(repo, SCOPE, BINDING, env, event)
+
+          evidence = Path(env["RUNNER_TEMP"]) / "cleanup-evidence"
+          receipt = read_proof(evidence / "archives-ready.json", SCOPE, BINDING, env, env["ARCHIVE_SHA256"])
+          result = delete_archived(repo, root, SCOPE, BINDING, env, receipt, token, evidence / "journal.json", env["ARCHIVE_ARTIFACT_ID"])
+          print(json.dumps({"status": result["status"], "deleted": len(result["deletions"]), "remaining": result["remaining"]}, sort_keys=True))
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: cleanup-final-or-partial-receipt-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/cleanup-evidence/
+          if-no-files-found: warn
+          retention-days: 90
+          overwrite: false

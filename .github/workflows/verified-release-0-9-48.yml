@@ -1,0 +1,1019 @@
+# FINAL BINDING CANDIDATE: independent review is required before its sole Editor publication.
+# Source, exact full CI, merged-PR identity and immutable Git parents are all pinned.
+name: Publish verified Album Haven 0.9.48
+on:
+  push:
+    branches: [2026-09-30-capabilities-bundle-transfer]
+    paths: [.github/workflows/verified-release-0-9-48.yml]
+permissions: {}
+concurrency:
+  group: album-haven-release-0-9-48
+  cancel-in-progress: false
+jobs:
+  validate:
+    if: ${{ github.event_name == 'push' && github.repository == 'idanilovqa/AlbumHaven' && github.ref == 'refs/heads/2026-09-30-capabilities-bundle-transfer' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      actions: read
+    outputs:
+      artifact_id: ${{ steps.upload.outputs.artifact-id }}
+      proof_sha256: ${{ steps.validate.outputs.proof_sha256 }}
+    steps:
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Validate exact source, full native CI and release bytes
+        id: validate
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: python
+        run: |
+          """Reviewed release primitives. No command-line entry point; never imports app code."""
+          import base64
+          import hashlib
+          import json
+          import os
+          from pathlib import Path
+          import re
+          import subprocess
+          import urllib.error
+          import urllib.request
+
+          REPOSITORY = "idanilovqa/AlbumHaven"
+          REMOTE = "https://github.com/idanilovqa/AlbumHaven.git"
+          HELPER_REF = "refs/heads/2026-09-30-capabilities-bundle-transfer"
+          CANDIDATE_REF = "refs/heads/2026-09-25-mobile-layout"
+          WORKFLOW = ".github/workflows/verified-release-0-9-48.yml"
+          TAG = "v0.9.48"
+          TAG_REF = "refs/tags/" + TAG
+          ZERO = "0" * 40
+          VERSION_FILES = {"package.json", "package-lock.json", "version.py", "README.md", "CHANGELOG.md"}
+          CI_FILES = {".github/workflows/pr-gates.yml", ".github/workflows/mobile-layout-checks.yml",
+                      "scripts/ci/classify-pr-review-scope.cjs", "scripts/ci/resolve-ci-shard.cjs",
+                      "tests/ci/functional-shards.json", "tests/ci/performance-targets.json"}
+          WAIVED_JOBS = {"PR Agent Review", "Codex Review Plan", "Codex Review $" + "{{ matrix.id }}", "Codex PR Review"}
+          PR_STEPS = {
+              "PR Review Scope": ["Classify PR review scope", "Record owner-requested review waiver", "Preserve review waiver evidence"],
+              "Review Prerequisites": ["Require every applicable reviewer to succeed"],
+              "JavaScript Tests (Portable)": ["Run JavaScript tests"],
+              "Component Tests (Pinned Chrome)": ["Validate component inventory", "Run component tests"],
+              "JavaScript Tests (Windows Contract)": ["Run Windows JavaScript tests"],
+              "Python Tests": ["Collect Python test inventory", "Validate Python test inventory", "Run Python tests", "Validate Python skip policy"],
+              "E2E: Production Parity": ["Reject E2E production-path drift"],
+              "E2E: Phase 7 Auth Lifecycle": ["Run Phase 7 auth lifecycle suite"],
+              "E2E: Phase 7 Admin Management": ["Run Phase 7 admin-management suite"],
+              "Cloud Verification Gate": ["Validate trusted cloud conclusion"],
+              **{"E2E: " + s: ["Validate functional shard ownership", "Run functional shard"] for s in
+                 ("gallery-search-visual", "cover-providers", "metadata-mutations", "playback-utilities")},
+              **{"E2E Performance: " + s: ["Validate performance matrix ownership", "Run sequential isolated performance shard"] for s in
+                 ("scan-library", "utility-problematic-files", "synthetic-large-library", "playback-media")},
+          }
+          MOBILE_STEPS = {"Production app mobile verification": [
+              "Apply hash-verified editor patch when present", "Commit verified source and generated bundle on the task branch only",
+              "Focused unit and contract tests", "Run real-app mobile scenarios and capture pages", "Verify extended mobile feedback scenarios"]}
+
+
+          class Rejected(RuntimeError):
+              pass
+
+
+          def require(value, message):
+              if not value:
+                  raise Rejected(message)
+
+
+          def digest(data):
+              return hashlib.sha256(data).hexdigest()
+
+
+          def canonical(value):
+              return (json.dumps(value, sort_keys=True, separators=(",", ":")) + "\n").encode()
+
+
+          def sha(value):
+              return isinstance(value, str) and re.fullmatch(r"[0-9a-f]{40}", value) is not None and value != ZERO
+
+
+          def positive(value):
+              return type(value) is int and value > 0
+
+
+          def check_binding(plan):
+              require(plan.get("schema") == 1 and plan.get("state") == "reviewed-and-bound", "binding remains unresolved")
+              require(plan.get("repository") == REPOSITORY and plan.get("remote") == REMOTE, "wrong repository or remote")
+              require(plan.get("helper_ref") == HELPER_REF and plan.get("candidate_ref") == CANDIDATE_REF, "wrong ref scope")
+              require(plan.get("workflow_path") == WORKFLOW and plan.get("version") == "0.9.48" and plan.get("tag") == TAG, "wrong release scope")
+              for key in ("main_sha", "main_tree", "merge_base_sha", "candidate_sha", "candidate_tree", "helper_parent"):
+                  require(sha(plan.get(key)), "unresolved or invalid " + key)
+              require(plan["main_tree"] == plan["candidate_tree"], "release tree differs from tested tree")
+              require(plan["main_sha"] != plan["helper_parent"], "helper parent cannot be release target")
+              require(plan.get("review_waiver") == "owner-authorized-skip_reviews", "review waiver not bound")
+              require(plan.get("pipeline_mode") == "full" and plan.get("skip_tests") is False, "full tests are mandatory")
+              require(set(plan.get("file_sha256", {})) == VERSION_FILES | CI_FILES, "source pin inventory mismatch")
+              for value in list(plan["file_sha256"].values()) + [plan.get("notes_sha256"), plan.get("accepted_ci_sha256")]:
+                  require(isinstance(value, str) and re.fullmatch(r"[0-9a-f]{64}", value), "unresolved digest")
+              require(set(plan.get("runs", {})) == {"pr", "mobile"}, "both native workflows are required")
+              for kind, expected in (("pr", ("PR Gates", ".github/workflows/pr-gates.yml", "pull_request")),
+                                     ("mobile", ("Mobile Layout Verification", ".github/workflows/mobile-layout-checks.yml", "push"))):
+                  run = plan["runs"][kind]
+                  require(positive(run.get("id")) and positive(run.get("attempt")) and positive(run.get("workflow_id")), "CI run is not accepted")
+                  require((run.get("name"), run.get("path"), run.get("event")) == expected, "wrong native workflow")
+              require(positive(plan.get("pull_request")), "PR binding missing")
+              require(plan.get("previous_release") == {"id": 392643979, "tag": "v0.9.45", "commit": "a5c23fc8963f9ecc531468a61653bf2d798e8c6d"}, "release baseline mismatch")
+
+
+          def check_notes(plan, notes):
+              text = notes.decode("utf-8", errors="strict")
+              require(digest(notes) == plan["notes_sha256"], "accepted notes changed")
+              require(text.startswith("Album Haven 0.9.48") and "0.9.46" in text and "0.9.47" in text, "notes scope mismatch")
+              require("@@" not in text and "__BIND" not in text and "\x00" not in text and "$" + "{{" not in text, "notes contain unresolved binding or workflow expression")
+              for run in plan["runs"].values():
+                  url = "https://github.com/" + REPOSITORY + "/actions/runs/" + str(run["id"]) + "/attempts/" + str(run["attempt"])
+                  require(url in text, "notes do not identify exact accepted run attempt")
+
+
+          def check_event(plan, env, event):
+              check_binding(plan)
+              require(env.get("GITHUB_EVENT_NAME") == "push" and env.get("GITHUB_REPOSITORY") == REPOSITORY, "wrong event or repository")
+              require(env.get("GITHUB_REF") == HELPER_REF and event.get("ref") == HELPER_REF, "wrong event ref")
+              require(env.get("GITHUB_WORKFLOW_REF") == REPOSITORY + "/" + WORKFLOW + "@" + HELPER_REF and
+                      env.get("GITHUB_WORKFLOW_SHA") == env.get("GITHUB_SHA"), "wrong workflow path or source")
+              require(env.get("GITHUB_RUN_ATTEMPT") == "1", "helper reruns forbidden; inspect outcome")
+              require(re.fullmatch(r"[1-9][0-9]*", env.get("GITHUB_RUN_ID", "")) is not None and sha(env.get("GITHUB_SHA")), "invalid helper identity")
+              require(event.get("before") == plan["helper_parent"] and event.get("after") == env["GITHUB_SHA"], "helper event drift")
+              require(all(event.get(k) is False for k in ("forced", "deleted", "created")), "forced or new/deleted helper ref")
+              require(event.get("repository", {}).get("full_name") == REPOSITORY, "event repository mismatch")
+              require(event.get("repository", {}).get("default_branch") == "main", "event default branch mismatch")
+
+
+          def git(repo, *args, token=None, data=None, hooks="/dev/null"):
+              env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_") and k != "GH_TOKEN"}
+              env.update(GIT_CONFIG_NOSYSTEM="1", GIT_CONFIG_GLOBAL="/dev/null", GIT_TERMINAL_PROMPT="0")
+              if token:
+                  auth = base64.b64encode(("x-access-token:" + token).encode()).decode()
+                  env.update(GIT_CONFIG_COUNT="1", GIT_CONFIG_KEY_0="http.https://github.com/.extraheader", GIT_CONFIG_VALUE_0="AUTHORIZATION: basic " + auth)
+              result = subprocess.run(["git", "-c", "core.hooksPath=" + str(hooks), "-c", "protocol.file.allow=never",
+                                       "-c", "http.followRedirects=false", "-C", str(repo), *args], env=env,
+                                      input=data, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=90, check=False)
+              require(result.returncode == 0, "git " + args[0] + " failed or uncertain; stop and inspect")
+              return result.stdout
+
+
+          class NoRedirect(urllib.request.HTTPRedirectHandler):
+              def redirect_request(self, req, fp, code, msg, headers, newurl):
+                  return None
+
+
+          class API:
+              def __init__(self, token):
+                  require(bool(token), "transient GITHUB_TOKEN missing")
+                  self.token = token
+                  self.opener = urllib.request.build_opener(NoRedirect)
+
+              def request(self, path, method="GET", payload=None, missing=False):
+                  require((path == "" or path.startswith("/")) and not path.startswith("//") and ".." not in path, "invalid API path")
+                  require(method in ("GET", "POST") and (method == "GET" or path == "/releases"), "API write outside exact release endpoint")
+                  url = "https://api.github.com/repos/" + REPOSITORY + path
+                  request = urllib.request.Request(url, method=method, data=canonical(payload) if payload is not None else None,
+                      headers={"Authorization": "Bearer " + self.token, "Accept": "application/vnd.github+json",
+                               "X-GitHub-Api-Version": "2026-03-10", "Content-Type": "application/json"})
+                  try:
+                      with self.opener.open(request, timeout=45) as response:
+                          require(response.status == (201 if method == "POST" else 200), "unexpected API status; inspect without retry")
+                          return json.load(response)
+                  except urllib.error.HTTPError as error:
+                      if missing and method == "GET" and error.code == 404:
+                          return None
+                      raise Rejected("API " + method + " " + path + " returned " + str(error.code) + "; stop without retry") from None
+                  except (TimeoutError, OSError, ValueError) as error:
+                      raise Rejected("API " + method + " " + path + " outcome uncertain; stop without retry") from None
+
+
+          def check_source(plan, files):
+              require(set(files) == set(plan["file_sha256"]), "source inventory mismatch")
+              for path, content in files.items():
+                  require(digest(content) == plan["file_sha256"][path], "source changed: " + path)
+              package = json.loads(files["package.json"])
+              lock = json.loads(files["package-lock.json"])
+              require(package.get("version") == lock.get("version") == lock.get("packages", {}).get("", {}).get("version") == "0.9.48", "package version mismatch")
+              require(re.findall(rb'^RELEASE_VERSION = "([^"]+)"\r?$', files["version.py"], re.M) == [b"0.9.48"], "Python version mismatch")
+              require(re.findall(rb'^Current release: `([^`]+)`\r?$', files["README.md"], re.M) == [b"0.9.48"], "README version mismatch")
+              headings = re.findall(rb"^## ([0-9]+\.[0-9]+\.[0-9]+) - ", files["CHANGELOG.md"], re.M)
+              require(headings[:4] == [b"0.9.48", b"0.9.47", b"0.9.46", b"0.9.45"] and len(headings) == len(set(headings)), "changelog release range mismatch")
+
+
+          def check_jobs(plan, kind, jobs):
+              run = plan["runs"][kind]
+              required = PR_STEPS if kind == "pr" else MOBILE_STEPS
+              skipped = WAIVED_JOBS | {"Focused E2E Verification"} if kind == "pr" else set()
+              by_name = {job.get("name"): job for job in jobs}
+              require(len(by_name) == len(jobs) and set(by_name) == set(required) | skipped, "missing, extra or duplicate native jobs")
+              require(len({job.get("id") for job in jobs}) == len(jobs), "duplicate job id")
+              for name, job in by_name.items():
+                  require(positive(job.get("id")) and job.get("run_id") == run["id"] and job.get("run_attempt") == run["attempt"], "wrong job run/attempt")
+                  require(job.get("head_sha") == plan["candidate_sha"] and job.get("head_branch") == CANDIDATE_REF.removeprefix("refs/heads/"), "wrong job source")
+                  require(job.get("workflow_name") == run["name"] and job.get("status") == "completed", "incomplete or wrong workflow job")
+                  require(job.get("conclusion") == ("skipped" if name in skipped else "success"), "required test skipped/failed or review-waiver mismatch: " + name)
+                  if name in required:
+                      steps = job.get("steps", [])
+                      for expected in required[name]:
+                          found = [s for s in steps if s.get("name") == expected]
+                          require(len(found) == 1 and found[0].get("status") == "completed" and found[0].get("conclusion") == "success", "missing or unsuccessful required step: " + expected)
+
+
+          def check_ci(plan, evidence):
+              require(set(evidence) == {"pr", "mobile"}, "incomplete CI evidence")
+              for kind, entry in evidence.items():
+                  expected = plan["runs"][kind]
+                  if kind == "pr":
+                      pr = entry.get("pull_request", {})
+                      require(pr.get("number") == plan["pull_request"] and pr.get("state") == "closed" and
+                              pr.get("merged") is True and pr.get("draft") is False, "merged PR identity missing or changed")
+                      require(pr.get("merge_commit_sha") in (None, plan["main_sha"]), "PR merge commit contradicts exact Git proof")
+                      for label, expected_sha, expected_ref in (("head", plan["candidate_sha"], CANDIDATE_REF.removeprefix("refs/heads/")),
+                                                                 ("base", plan["merge_base_sha"], "main")):
+                          ref = pr.get(label, {})
+                          require(ref.get("sha") == expected_sha and ref.get("ref") == expected_ref and
+                                  ref.get("repo", {}).get("full_name") == REPOSITORY, "PR " + label + " identity mismatch")
+                  for run in (entry["latest"], entry["attempt"]):
+                      for key, value in (("id", expected["id"]), ("workflow_id", expected["workflow_id"]),
+                                         ("run_attempt", expected["attempt"]), ("name", expected["name"]),
+                                         ("path", expected["path"]), ("event", expected["event"]),
+                                         ("status", "completed"), ("conclusion", "success"), ("head_sha", plan["candidate_sha"]),
+                                         ("head_branch", CANDIDATE_REF.removeprefix("refs/heads/"))):
+                          require(run.get(key) == value, "native CI mismatch: " + kind + "/" + key)
+                      require(run.get("repository", {}).get("full_name") == REPOSITORY and run.get("head_repository", {}).get("full_name") == REPOSITORY, "untrusted CI repository")
+                      if kind == "pr":
+                          prs = run.get("pull_requests")
+                          require(type(prs) is list and (not prs or (len(prs) == 1 and prs[0].get("number") == plan["pull_request"] and
+                                  prs[0].get("head", {}).get("sha") == plan["candidate_sha"])), "CI PR identity mismatch")
+                  check_jobs(plan, kind, entry["jobs"])
+              require(digest(canonical(evidence)) == plan["accepted_ci_sha256"], "CI evidence differs from reviewed acceptance")
+
+
+          def ci_snapshot(plan, api):
+              evidence = {}
+              run_keys = ("id", "workflow_id", "run_attempt", "name", "path", "event", "status", "conclusion", "head_sha", "head_branch", "repository", "head_repository", "pull_requests")
+              job_keys = ("id", "run_id", "run_attempt", "name", "workflow_name", "status", "conclusion", "head_sha", "head_branch", "steps")
+              for kind, run in plan["runs"].items():
+                  prefix = "/actions/runs/" + str(run["id"])
+                  entry = {}
+                  for label, path in (("latest", prefix), ("attempt", prefix + "/attempts/" + str(run["attempt"]))):
+                      raw = api.request(path)
+                      entry[label] = {k: raw.get(k) for k in run_keys}
+                      for k in ("repository", "head_repository"):
+                          entry[label][k] = {"full_name": raw.get(k, {}).get("full_name")}
+                      require(type(raw.get("pull_requests")) is list, "invalid CI PR association inventory")
+                      entry[label]["pull_requests"] = [{"number": p.get("number"), "head": {"sha": p.get("head", {}).get("sha")}} for p in raw["pull_requests"]]
+                  if kind == "pr":
+                      raw_pr = api.request("/pulls/" + str(plan["pull_request"]))
+                      entry["pull_request"] = {k: raw_pr.get(k) for k in ("number", "state", "merged", "draft", "merge_commit_sha")}
+                      for label in ("head", "base"):
+                          ref = raw_pr.get(label, {})
+                          entry["pull_request"][label] = {"sha": ref.get("sha"), "ref": ref.get("ref"),
+                                                          "repo": {"full_name": ref.get("repo", {}).get("full_name")}}
+                  jobs, page, total = [], 1, None
+                  while total is None or len(jobs) < total:
+                      raw = api.request(prefix + "/attempts/" + str(run["attempt"]) + "/jobs?per_page=100&page=" + str(page))
+                      require(type(raw.get("total_count")) is int and raw["total_count"] > 0, "invalid job inventory")
+                      require(total is None or raw["total_count"] == total, "job inventory changed")
+                      total = raw["total_count"]
+                      require(raw.get("jobs") and page <= 10, "incomplete job pagination")
+                      for job in raw["jobs"]:
+                          item = {k: job.get(k) for k in job_keys}
+                          item["steps"] = [{k: s.get(k) for k in ("name", "status", "conclusion")} for s in job.get("steps", [])]
+                          jobs.append(item)
+                      page += 1
+                  require(len(jobs) == total, "ambiguous paginated job inventory")
+                  entry["jobs"] = sorted(jobs, key=lambda j: j["name"])
+                  evidence[kind] = entry
+              return evidence
+
+
+          def check_refs(plan, env, api, require_absent=True):
+              repository = api.request("")
+              require(repository.get("full_name") == REPOSITORY and repository.get("default_branch") == "main", "default branch changed")
+              for ref, expected in (("heads/main", plan["main_sha"]), (HELPER_REF.removeprefix("refs/"), env["GITHUB_SHA"]),
+                                    (CANDIDATE_REF.removeprefix("refs/"), plan["candidate_sha"])):
+                  obj = api.request("/git/ref/" + ref)
+                  require(obj.get("ref") == "refs/" + ref and obj.get("object", {}).get("type") == "commit" and obj["object"].get("sha") == expected, "ref drift: " + ref)
+              latest = api.request("/releases/latest")
+              require(latest.get("id") == plan["previous_release"]["id"] and latest.get("tag_name") == plan["previous_release"]["tag"], "latest release changed")
+              previous = api.request("/git/ref/tags/" + plan["previous_release"]["tag"]).get("object", {})
+              if previous.get("type") == "tag":
+                  require(sha(previous.get("sha")), "invalid previous tag")
+                  previous = api.request("/git/tags/" + previous["sha"]).get("object", {})
+              require(previous.get("type") == "commit" and previous.get("sha") == plan["previous_release"]["commit"], "previous release tag moved")
+              if require_absent:
+                  require(api.request("/git/ref/tags/" + TAG, missing=True) is None, "release tag already exists")
+                  check_release_absent(api)
+
+
+          def check_release_absent(api):
+              require(api.request("/releases/tags/" + TAG, missing=True) is None, "release already exists")
+              # Listing with the contents token also rejects a pre-existing draft for this tag.
+              for page in range(1, 101):
+                  rows = api.request("/releases?per_page=100&page=" + str(page))
+                  require(isinstance(rows, list), "invalid release inventory")
+                  require(not any(r.get("tag_name") == TAG for r in rows), "draft or published release already exists")
+                  if len(rows) < 100:
+                      return
+              raise Rejected("release pagination limit reached")
+
+
+          def check_objects(plan, env, repo):
+              trigger = env["GITHUB_SHA"]
+              require(git(repo, "rev-list", "--parents", "-n", "1", trigger).decode().split() == [trigger, plan["helper_parent"]], "helper must have one exact parent")
+              delta = git(repo, "diff-tree", "--no-commit-id", "--name-status", "-r", "--no-renames", plan["helper_parent"], trigger).decode()
+              require(delta == "A\t" + WORKFLOW + "\n", "trigger must add only the new workflow")
+              entry = git(repo, "ls-tree", trigger, "--", WORKFLOW).decode().split()
+              require(len(entry) == 4 and entry[0:2] == ["100644", "blob"] and entry[3] == WORKFLOW, "workflow must be a regular file")
+              for key in ("main", "candidate"):
+                  require(git(repo, "cat-file", "-t", plan[key + "_sha"]).strip() == b"commit", "source is not a commit")
+                  require(git(repo, "rev-parse", plan[key + "_sha"] + "^{tree}").decode().strip() == plan[key + "_tree"], "source tree mismatch")
+              require(git(repo, "rev-list", "--parents", "-n", "1", plan["main_sha"]).decode().split() ==
+                      [plan["main_sha"], plan["merge_base_sha"], plan["candidate_sha"]], "main must have exactly the ordered reviewed merge parents")
+              git(repo, "merge-base", "--is-ancestor", plan["candidate_sha"], plan["main_sha"])
+              git(repo, "merge-base", "--is-ancestor", plan["previous_release"]["commit"], plan["main_sha"])
+              files = {path: git(repo, "cat-file", "blob", plan["main_sha"] + ":" + path) for path in plan["file_sha256"]}
+              check_source(plan, files)
+              return files
+
+
+          def prepare_objects(plan, env, token, destination):
+              require(not destination.exists(), "object store already exists")
+              destination.mkdir()
+              git(destination, "init", "--bare", "--template=")
+              for commit in (env["GITHUB_SHA"], plan["main_sha"], plan["candidate_sha"]):
+                  git(destination, "fetch", "--no-tags", "--no-recurse-submodules", REMOTE, commit, token=token)
+              return destination
+
+
+          def make_proof(plan, env, notes, evidence):
+              check_notes(plan, notes)
+              check_ci(plan, evidence)
+              return {"schema": 1, "repository": REPOSITORY, "run_id": env["GITHUB_RUN_ID"], "run_attempt": env["GITHUB_RUN_ATTEMPT"],
+                      "trigger_sha": env["GITHUB_SHA"], "plan_sha256": digest(canonical(plan)), "notes_sha256": digest(notes), "ci": evidence}
+
+
+          def check_proof(plan, env, directory, expected_digest):
+              require(set(p.name for p in directory.iterdir()) == {"proof.json", "notes.md"}, "proof inventory mismatch")
+              require(all(p.is_file() and not p.is_symlink() for p in directory.iterdir()), "nonregular proof data")
+              raw = (directory / "proof.json").read_bytes()
+              require(digest(raw) == expected_digest, "proof hash mismatch")
+              proof = json.loads(raw)
+              notes = (directory / "notes.md").read_bytes()
+              require(proof == make_proof(plan, env, notes, proof.get("ci", {})), "proof belongs to another run, attempt, plan or source")
+              return notes
+
+
+          def tag_bytes(plan, timestamp):
+              require(re.fullmatch(r"[1-9][0-9]*", timestamp) is not None, "invalid commit timestamp")
+              return ("object " + plan["main_sha"] + "\ntype commit\ntag " + TAG +
+                      "\ntagger github-actions[bot] <41898282+github-actions[bot]@users.noreply.github.com> " + timestamp +
+                      " +0000\n\nAlbum Haven 0.9.48\n").encode()
+
+
+          def pre_push_hook(tag_oid):
+              require(sha(tag_oid), "invalid tag object")
+              expected = [TAG_REF, tag_oid, TAG_REF, ZERO]
+              return ("#!/usr/bin/env python3\nimport sys\nexpected = " + repr(expected) + "\nremote = " + repr(REMOTE) +
+                      "\nrows = [line.split() for line in sys.stdin.read().splitlines()]\n" +
+                      "if sys.argv[1:] != [remote, remote] or rows != [expected]:\n" +
+                      "    sys.stderr.write('Rejected advertised tag, destination or old OID; stop without retry\\n')\n    sys.exit(1)\n")
+
+
+          def push_tag_once(repo, plan, token, tag_oid, hooks):
+              require(not hooks.exists(), "hook directory already exists")
+              hooks.mkdir()
+              hook = hooks / "pre-push"
+              hook.write_text(pre_push_hook(tag_oid), encoding="utf-8")
+              hook.chmod(0o700)
+              git(repo, "update-ref", TAG_REF, tag_oid, ZERO)
+              git(repo, "push", "--porcelain", REMOTE, TAG_REF + ":" + TAG_REF, token=token, hooks=hooks)
+
+
+          def verify_tag(plan, api, tag_oid):
+              ref = api.request("/git/ref/tags/" + TAG)
+              require(ref.get("ref") == TAG_REF and ref.get("object", {}).get("type") == "tag" and ref["object"].get("sha") == tag_oid, "tag ref differs from prepared annotated tag")
+              tag = api.request("/git/tags/" + tag_oid)
+              require(tag.get("sha") == tag_oid and tag.get("tag") == TAG and tag.get("object", {}).get("type") == "commit" and tag["object"].get("sha") == plan["main_sha"], "tag target mismatch")
+
+
+          def release_payload(plan, notes):
+              check_notes(plan, notes)
+              return {"tag_name": TAG, "target_commitish": plan["main_sha"], "name": "Album Haven 0.9.48", "body": notes.decode(),
+                      "draft": False, "prerelease": False, "generate_release_notes": False, "make_latest": "true"}
+
+
+          def verify_release(plan, notes, release):
+              require(positive(release.get("id")), "release ID missing")
+              for key, value in release_payload(plan, notes).items():
+                  # GitHub ignores target_commitish for an existing tag; verify_tag checks
+                  # the prepared annotated object and its peeled commit before/after POST.
+                  if key not in {"generate_release_notes", "make_latest", "target_commitish"}:
+                      require(release.get(key) == value, "release response mismatch: " + key)
+              require(release.get("html_url") == "https://github.com/" + REPOSITORY + "/releases/tag/" + TAG and bool(release.get("published_at")), "release publication URL/status mismatch")
+              require(release.get("assets") == [] and not release.get("discussion_url"), "unexpected release assets/discussion")
+
+
+          def publish_once(plan, env, api, notes, tag_oid, push, receipt_path):
+              """One push and at most one POST. Every failed/uncertain mutation stops permanently."""
+              receipt = {"state": "preflight", "tag": TAG, "main_sha": plan["main_sha"], "tag_object": tag_oid}
+              def record(state):
+                  receipt["state"] = state
+                  receipt_path.write_bytes(canonical(receipt))
+                  print(canonical(receipt).decode().strip(), flush=True)
+              try:
+                  check_refs(plan, env, api)
+                  check_ci(plan, ci_snapshot(plan, api))
+                  record("tag-push-started")
+                  push()
+                  verify_tag(plan, api, tag_oid)
+                  record("tag-confirmed-release-not-created")
+                  check_refs(plan, env, api, require_absent=False)
+                  check_release_absent(api)
+                  verify_tag(plan, api, tag_oid)
+                  check_ci(plan, ci_snapshot(plan, api))
+                  record("release-post-started")
+                  release = api.request("/releases", method="POST", payload=release_payload(plan, notes))
+                  receipt["release_id"] = release.get("id")
+                  verify_release(plan, notes, release)
+                  verify_tag(plan, api, tag_oid)
+                  reread = api.request("/releases/" + str(release["id"]))
+                  verify_release(plan, notes, reread)
+                  require(api.request("/releases/latest").get("id") == release["id"], "release is not latest")
+                  # Main/helper/candidate must still be unchanged after the mutation.
+                  for ref, expected in (("heads/main", plan["main_sha"]), (HELPER_REF.removeprefix("refs/"), env["GITHUB_SHA"]), (CANDIDATE_REF.removeprefix("refs/"), plan["candidate_sha"])):
+                      require(api.request("/git/ref/" + ref).get("object", {}).get("sha") == expected, "post-publication ref drift")
+                  receipt["release_url"] = release["html_url"]
+                  record("published-and-verified")
+              except Exception as error:
+                  receipt["stopped_at"] = receipt["state"]
+                  receipt["error"] = str(error) if isinstance(error, Rejected) else type(error).__name__
+                  record("stopped-inspect-without-retry-or-cleanup")
+                  raise
+
+
+          def validation_entry(plan, notes):
+              env = os.environ
+              check_event(plan, env, json.loads(Path(env["GITHUB_EVENT_PATH"]).read_text()))
+              check_notes(plan, notes)
+              token = env["GH_TOKEN"]
+              api = API(token)
+              check_refs(plan, env, api)
+              repo = prepare_objects(plan, env, token, Path(env["RUNNER_TEMP"]) / "release-read-objects")
+              check_objects(plan, env, repo)
+              evidence = ci_snapshot(plan, api)
+              proof = make_proof(plan, env, notes, evidence)
+              check_refs(plan, env, api)
+              output = Path(env["RUNNER_TEMP"]) / "release-validated"
+              output.mkdir()
+              raw = canonical(proof)
+              (output / "proof.json").write_bytes(raw)
+              (output / "notes.md").write_bytes(notes)
+              with open(env["GITHUB_OUTPUT"], "a", encoding="utf-8") as stream:
+                  stream.write("proof_sha256=" + digest(raw) + "\n")
+
+
+          def publishing_entry(plan):
+              env = os.environ
+              check_event(plan, env, json.loads(Path(env["GITHUB_EVENT_PATH"]).read_text()))
+              require(re.fullmatch(r"[1-9][0-9]*", env.get("ARTIFACT_ID", "")) is not None, "immutable artifact ID missing")
+              notes = check_proof(plan, env, Path(env["RUNNER_TEMP"]) / "release-downloaded", env["PROOF_SHA256"])
+              token = env["GH_TOKEN"]
+              api = API(token)
+              check_refs(plan, env, api)
+              repo = prepare_objects(plan, env, token, Path(env["RUNNER_TEMP"]) / "release-write-objects")
+              check_objects(plan, env, repo)
+              timestamp = git(repo, "show", "-s", "--format=%ct", plan["main_sha"]).decode().strip()
+              raw_tag = tag_bytes(plan, timestamp)
+              tag_oid = git(repo, "mktag", data=raw_tag).decode().strip()
+              require(git(repo, "cat-file", "tag", tag_oid) == raw_tag, "tag object verification failed")
+              result = Path(env["RUNNER_TEMP"]) / "release-result"
+              result.mkdir()
+              (result / "tag-object.txt").write_bytes(raw_tag)
+              (result / "plan.json").write_bytes(canonical(plan))
+              (result / "release-payload.json").write_bytes(canonical(release_payload(plan, notes)))
+              publish_once(plan, env, api, notes, tag_oid,
+                           lambda: push_tag_once(repo, plan, token, tag_oid, Path(env["RUNNER_TEMP"]) / "release-hooks"),
+                           result / "receipt.json")
+
+          PLAN = json.loads('{"accepted_ci_sha256": "d76c7d38aa985ba2b7fc59f2489e6ee5f07f287e583e0e3da68e12e3289ad097", "candidate_ref": "refs/heads/2026-09-25-mobile-layout", "candidate_sha": "c4a36b21ea4997a4b3e220a2d4788f86dccb0088", "candidate_tree": "ed9eca961e37edd40a00308ef92b082b70b81e8c", "file_sha256": {".github/workflows/mobile-layout-checks.yml": "3dca03cbe998eaa4f9b7366aeb068e617bfcde29a61c10a82f3dfd1849446f9c", ".github/workflows/pr-gates.yml": "be9fa3c36fc7f0116a0fa7570a40347e6055287242fd32d8b391911087be6cf0", "CHANGELOG.md": "9330341887187d44fe149fa337842401ad90ae9b0e67cdf001621ef871d701be", "README.md": "5ef976c40c43e2babc9852b7bebc3e6b58202e8f6098f9364dc4199d0874b5eb", "package-lock.json": "36cb1055093afab1be56a99a35ddb816a3093c2202aed4c566522f1891dfcfdb", "package.json": "0139f3c4799e3fabd24860763336c88a90e48d818577b89919ecf5f6b6209e45", "scripts/ci/classify-pr-review-scope.cjs": "64fe24be6fc911ee20ba58ea9c70f966efd95113d935359c1b2538a957ee0c42", "scripts/ci/resolve-ci-shard.cjs": "560d33c8b26e5bde1a9e192fb9d4ee6427a9892cc8789c5bda312ed19b3d821a", "tests/ci/functional-shards.json": "177c2d96a804fe218dab7bcbe425134bfc42650c4e67036bef0bda659c2fff05", "tests/ci/performance-targets.json": "6a00cb0ed859d1b209e2a2f70a104d0bd680ad9cd966c28be76bb56d351ef7dc", "version.py": "952b88ba0084c0aebce4e7ebef75331e1a195164675140c5f5fde3ec9bee59ce"}, "helper_parent": "8a737dcd2ae965a064da989496994c82f68d1d93", "helper_ref": "refs/heads/2026-09-30-capabilities-bundle-transfer", "main_sha": "eef9d13fd5dbd2cda3485e3c308c8494ba7d6fd4", "main_tree": "ed9eca961e37edd40a00308ef92b082b70b81e8c", "merge_base_sha": "db5396be48483f80cb93d403532e90026ff1cd00", "notes_sha256": "c820365c5d1dd70620ea878f949d37cc2d3c26cb16369b58696389747b5aa857", "observed_but_NOT_accepted_runs": {"mobile": 36852442131, "pr": 36852446856}, "pipeline_mode": "full", "previous_release": {"commit": "a5c23fc8963f9ecc531468a61653bf2d798e8c6d", "id": 392643979, "tag": "v0.9.45"}, "pull_request": 19, "remote": "https://github.com/idanilovqa/AlbumHaven.git", "repository": "idanilovqa/AlbumHaven", "review_waiver": "owner-authorized-skip_reviews", "runs": {"mobile": {"attempt": 1, "event": "push", "id": 36877077064, "name": "Mobile Layout Verification", "path": ".github/workflows/mobile-layout-checks.yml", "workflow_id": 367289425}, "pr": {"attempt": 1, "event": "pull_request", "id": 36877085999, "name": "PR Gates", "path": ".github/workflows/pr-gates.yml", "workflow_id": 345734871}}, "schema": 1, "skip_tests": false, "state": "reviewed-and-bound", "tag": "v0.9.48", "version": "0.9.48", "workflow_path": ".github/workflows/verified-release-0-9-48.yml"}')
+          validation_entry(PLAN, b'Album Haven 0.9.48 combines the unreleased 0.9.46 and 0.9.47 work with the completed mobile integration.\n\n- Added responsive mobile navigation and Home, shared account/Settings navigation, and account/device layout preferences that survive reloads.\n- Kept Gallery, artwork, player controls and nested menus usable through touch input, viewport changes and dismissal of the actual dimmed backdrop.\n- Added user/access administration with named and combined roles, individual capability grants, prerequisites and revision-safe repeated saves.\n- Enforced shared UI/server boundaries for playback, editing, covers, loops, repair and administration, while preserving owned practice-loop access without full-library playback.\n- Restricted TV cover selection to provider candidates and retained Mobile/TV feature restrictions.\n- Reworked Cover Look Up and album artwork editing with staged paste/drop/file inputs, previews and ownership-safe save/delete completion.\n- Added the Library Status Page with scan phases, cancellation, failure reporting and continued library access during scans.\n- Improved player/gallery state retention, Artist Tree visibility, Artist Family controls and account-scoped appearance persistence.\n- Preserved Problematic Files selection and details across virtual scrolling and resize, and improved saved-loop range/hover feedback.\n- Expanded native regression coverage for capability boundaries, clipboard paste, notifications, saved preferences, touch interactions and real Postgres-backed flows.\n\nThe unimplemented Move music setting remains disabled. General live-music deletion and remote mapped-share opening remain documented limitations; Problematic Files cold-load optimization remains tracked work.\n\nVerification: https://github.com/idanilovqa/AlbumHaven/actions/runs/36877085999/attempts/1 and https://github.com/idanilovqa/AlbumHaven/actions/runs/36877077064/attempts/1 on the exact released source. Existing acceptance budgets remain unchanged.\n')
+      - uses: actions/upload-artifact@v4
+        id: upload
+        with:
+          name: release-0-9-48-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/release-validated/
+          if-no-files-found: error
+          retention-days: 14
+          compression-level: 0
+          overwrite: false
+  publish:
+    needs: validate
+    if: ${{ needs.validate.result == 'success' && github.event_name == 'push' && github.repository == 'idanilovqa/AlbumHaven' && github.ref == 'refs/heads/2026-09-30-capabilities-bundle-transfer' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+      actions: read
+    steps:
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - uses: actions/download-artifact@v4
+        with:
+          artifact-ids: ${{ needs.validate.outputs.artifact_id }}
+          path: ${{ runner.temp }}/release-downloaded
+          merge-multiple: true
+      - name: Recheck proof, create one annotated tag and one release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ARTIFACT_ID: ${{ needs.validate.outputs.artifact_id }}
+          PROOF_SHA256: ${{ needs.validate.outputs.proof_sha256 }}
+        shell: python
+        run: |
+          """Reviewed release primitives. No command-line entry point; never imports app code."""
+          import base64
+          import hashlib
+          import json
+          import os
+          from pathlib import Path
+          import re
+          import subprocess
+          import urllib.error
+          import urllib.request
+
+          REPOSITORY = "idanilovqa/AlbumHaven"
+          REMOTE = "https://github.com/idanilovqa/AlbumHaven.git"
+          HELPER_REF = "refs/heads/2026-09-30-capabilities-bundle-transfer"
+          CANDIDATE_REF = "refs/heads/2026-09-25-mobile-layout"
+          WORKFLOW = ".github/workflows/verified-release-0-9-48.yml"
+          TAG = "v0.9.48"
+          TAG_REF = "refs/tags/" + TAG
+          ZERO = "0" * 40
+          VERSION_FILES = {"package.json", "package-lock.json", "version.py", "README.md", "CHANGELOG.md"}
+          CI_FILES = {".github/workflows/pr-gates.yml", ".github/workflows/mobile-layout-checks.yml",
+                      "scripts/ci/classify-pr-review-scope.cjs", "scripts/ci/resolve-ci-shard.cjs",
+                      "tests/ci/functional-shards.json", "tests/ci/performance-targets.json"}
+          WAIVED_JOBS = {"PR Agent Review", "Codex Review Plan", "Codex Review $" + "{{ matrix.id }}", "Codex PR Review"}
+          PR_STEPS = {
+              "PR Review Scope": ["Classify PR review scope", "Record owner-requested review waiver", "Preserve review waiver evidence"],
+              "Review Prerequisites": ["Require every applicable reviewer to succeed"],
+              "JavaScript Tests (Portable)": ["Run JavaScript tests"],
+              "Component Tests (Pinned Chrome)": ["Validate component inventory", "Run component tests"],
+              "JavaScript Tests (Windows Contract)": ["Run Windows JavaScript tests"],
+              "Python Tests": ["Collect Python test inventory", "Validate Python test inventory", "Run Python tests", "Validate Python skip policy"],
+              "E2E: Production Parity": ["Reject E2E production-path drift"],
+              "E2E: Phase 7 Auth Lifecycle": ["Run Phase 7 auth lifecycle suite"],
+              "E2E: Phase 7 Admin Management": ["Run Phase 7 admin-management suite"],
+              "Cloud Verification Gate": ["Validate trusted cloud conclusion"],
+              **{"E2E: " + s: ["Validate functional shard ownership", "Run functional shard"] for s in
+                 ("gallery-search-visual", "cover-providers", "metadata-mutations", "playback-utilities")},
+              **{"E2E Performance: " + s: ["Validate performance matrix ownership", "Run sequential isolated performance shard"] for s in
+                 ("scan-library", "utility-problematic-files", "synthetic-large-library", "playback-media")},
+          }
+          MOBILE_STEPS = {"Production app mobile verification": [
+              "Apply hash-verified editor patch when present", "Commit verified source and generated bundle on the task branch only",
+              "Focused unit and contract tests", "Run real-app mobile scenarios and capture pages", "Verify extended mobile feedback scenarios"]}
+
+
+          class Rejected(RuntimeError):
+              pass
+
+
+          def require(value, message):
+              if not value:
+                  raise Rejected(message)
+
+
+          def digest(data):
+              return hashlib.sha256(data).hexdigest()
+
+
+          def canonical(value):
+              return (json.dumps(value, sort_keys=True, separators=(",", ":")) + "\n").encode()
+
+
+          def sha(value):
+              return isinstance(value, str) and re.fullmatch(r"[0-9a-f]{40}", value) is not None and value != ZERO
+
+
+          def positive(value):
+              return type(value) is int and value > 0
+
+
+          def check_binding(plan):
+              require(plan.get("schema") == 1 and plan.get("state") == "reviewed-and-bound", "binding remains unresolved")
+              require(plan.get("repository") == REPOSITORY and plan.get("remote") == REMOTE, "wrong repository or remote")
+              require(plan.get("helper_ref") == HELPER_REF and plan.get("candidate_ref") == CANDIDATE_REF, "wrong ref scope")
+              require(plan.get("workflow_path") == WORKFLOW and plan.get("version") == "0.9.48" and plan.get("tag") == TAG, "wrong release scope")
+              for key in ("main_sha", "main_tree", "merge_base_sha", "candidate_sha", "candidate_tree", "helper_parent"):
+                  require(sha(plan.get(key)), "unresolved or invalid " + key)
+              require(plan["main_tree"] == plan["candidate_tree"], "release tree differs from tested tree")
+              require(plan["main_sha"] != plan["helper_parent"], "helper parent cannot be release target")
+              require(plan.get("review_waiver") == "owner-authorized-skip_reviews", "review waiver not bound")
+              require(plan.get("pipeline_mode") == "full" and plan.get("skip_tests") is False, "full tests are mandatory")
+              require(set(plan.get("file_sha256", {})) == VERSION_FILES | CI_FILES, "source pin inventory mismatch")
+              for value in list(plan["file_sha256"].values()) + [plan.get("notes_sha256"), plan.get("accepted_ci_sha256")]:
+                  require(isinstance(value, str) and re.fullmatch(r"[0-9a-f]{64}", value), "unresolved digest")
+              require(set(plan.get("runs", {})) == {"pr", "mobile"}, "both native workflows are required")
+              for kind, expected in (("pr", ("PR Gates", ".github/workflows/pr-gates.yml", "pull_request")),
+                                     ("mobile", ("Mobile Layout Verification", ".github/workflows/mobile-layout-checks.yml", "push"))):
+                  run = plan["runs"][kind]
+                  require(positive(run.get("id")) and positive(run.get("attempt")) and positive(run.get("workflow_id")), "CI run is not accepted")
+                  require((run.get("name"), run.get("path"), run.get("event")) == expected, "wrong native workflow")
+              require(positive(plan.get("pull_request")), "PR binding missing")
+              require(plan.get("previous_release") == {"id": 392643979, "tag": "v0.9.45", "commit": "a5c23fc8963f9ecc531468a61653bf2d798e8c6d"}, "release baseline mismatch")
+
+
+          def check_notes(plan, notes):
+              text = notes.decode("utf-8", errors="strict")
+              require(digest(notes) == plan["notes_sha256"], "accepted notes changed")
+              require(text.startswith("Album Haven 0.9.48") and "0.9.46" in text and "0.9.47" in text, "notes scope mismatch")
+              require("@@" not in text and "__BIND" not in text and "\x00" not in text and "$" + "{{" not in text, "notes contain unresolved binding or workflow expression")
+              for run in plan["runs"].values():
+                  url = "https://github.com/" + REPOSITORY + "/actions/runs/" + str(run["id"]) + "/attempts/" + str(run["attempt"])
+                  require(url in text, "notes do not identify exact accepted run attempt")
+
+
+          def check_event(plan, env, event):
+              check_binding(plan)
+              require(env.get("GITHUB_EVENT_NAME") == "push" and env.get("GITHUB_REPOSITORY") == REPOSITORY, "wrong event or repository")
+              require(env.get("GITHUB_REF") == HELPER_REF and event.get("ref") == HELPER_REF, "wrong event ref")
+              require(env.get("GITHUB_WORKFLOW_REF") == REPOSITORY + "/" + WORKFLOW + "@" + HELPER_REF and
+                      env.get("GITHUB_WORKFLOW_SHA") == env.get("GITHUB_SHA"), "wrong workflow path or source")
+              require(env.get("GITHUB_RUN_ATTEMPT") == "1", "helper reruns forbidden; inspect outcome")
+              require(re.fullmatch(r"[1-9][0-9]*", env.get("GITHUB_RUN_ID", "")) is not None and sha(env.get("GITHUB_SHA")), "invalid helper identity")
+              require(event.get("before") == plan["helper_parent"] and event.get("after") == env["GITHUB_SHA"], "helper event drift")
+              require(all(event.get(k) is False for k in ("forced", "deleted", "created")), "forced or new/deleted helper ref")
+              require(event.get("repository", {}).get("full_name") == REPOSITORY, "event repository mismatch")
+              require(event.get("repository", {}).get("default_branch") == "main", "event default branch mismatch")
+
+
+          def git(repo, *args, token=None, data=None, hooks="/dev/null"):
+              env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_") and k != "GH_TOKEN"}
+              env.update(GIT_CONFIG_NOSYSTEM="1", GIT_CONFIG_GLOBAL="/dev/null", GIT_TERMINAL_PROMPT="0")
+              if token:
+                  auth = base64.b64encode(("x-access-token:" + token).encode()).decode()
+                  env.update(GIT_CONFIG_COUNT="1", GIT_CONFIG_KEY_0="http.https://github.com/.extraheader", GIT_CONFIG_VALUE_0="AUTHORIZATION: basic " + auth)
+              result = subprocess.run(["git", "-c", "core.hooksPath=" + str(hooks), "-c", "protocol.file.allow=never",
+                                       "-c", "http.followRedirects=false", "-C", str(repo), *args], env=env,
+                                      input=data, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=90, check=False)
+              require(result.returncode == 0, "git " + args[0] + " failed or uncertain; stop and inspect")
+              return result.stdout
+
+
+          class NoRedirect(urllib.request.HTTPRedirectHandler):
+              def redirect_request(self, req, fp, code, msg, headers, newurl):
+                  return None
+
+
+          class API:
+              def __init__(self, token):
+                  require(bool(token), "transient GITHUB_TOKEN missing")
+                  self.token = token
+                  self.opener = urllib.request.build_opener(NoRedirect)
+
+              def request(self, path, method="GET", payload=None, missing=False):
+                  require((path == "" or path.startswith("/")) and not path.startswith("//") and ".." not in path, "invalid API path")
+                  require(method in ("GET", "POST") and (method == "GET" or path == "/releases"), "API write outside exact release endpoint")
+                  url = "https://api.github.com/repos/" + REPOSITORY + path
+                  request = urllib.request.Request(url, method=method, data=canonical(payload) if payload is not None else None,
+                      headers={"Authorization": "Bearer " + self.token, "Accept": "application/vnd.github+json",
+                               "X-GitHub-Api-Version": "2026-03-10", "Content-Type": "application/json"})
+                  try:
+                      with self.opener.open(request, timeout=45) as response:
+                          require(response.status == (201 if method == "POST" else 200), "unexpected API status; inspect without retry")
+                          return json.load(response)
+                  except urllib.error.HTTPError as error:
+                      if missing and method == "GET" and error.code == 404:
+                          return None
+                      raise Rejected("API " + method + " " + path + " returned " + str(error.code) + "; stop without retry") from None
+                  except (TimeoutError, OSError, ValueError) as error:
+                      raise Rejected("API " + method + " " + path + " outcome uncertain; stop without retry") from None
+
+
+          def check_source(plan, files):
+              require(set(files) == set(plan["file_sha256"]), "source inventory mismatch")
+              for path, content in files.items():
+                  require(digest(content) == plan["file_sha256"][path], "source changed: " + path)
+              package = json.loads(files["package.json"])
+              lock = json.loads(files["package-lock.json"])
+              require(package.get("version") == lock.get("version") == lock.get("packages", {}).get("", {}).get("version") == "0.9.48", "package version mismatch")
+              require(re.findall(rb'^RELEASE_VERSION = "([^"]+)"\r?$', files["version.py"], re.M) == [b"0.9.48"], "Python version mismatch")
+              require(re.findall(rb'^Current release: `([^`]+)`\r?$', files["README.md"], re.M) == [b"0.9.48"], "README version mismatch")
+              headings = re.findall(rb"^## ([0-9]+\.[0-9]+\.[0-9]+) - ", files["CHANGELOG.md"], re.M)
+              require(headings[:4] == [b"0.9.48", b"0.9.47", b"0.9.46", b"0.9.45"] and len(headings) == len(set(headings)), "changelog release range mismatch")
+
+
+          def check_jobs(plan, kind, jobs):
+              run = plan["runs"][kind]
+              required = PR_STEPS if kind == "pr" else MOBILE_STEPS
+              skipped = WAIVED_JOBS | {"Focused E2E Verification"} if kind == "pr" else set()
+              by_name = {job.get("name"): job for job in jobs}
+              require(len(by_name) == len(jobs) and set(by_name) == set(required) | skipped, "missing, extra or duplicate native jobs")
+              require(len({job.get("id") for job in jobs}) == len(jobs), "duplicate job id")
+              for name, job in by_name.items():
+                  require(positive(job.get("id")) and job.get("run_id") == run["id"] and job.get("run_attempt") == run["attempt"], "wrong job run/attempt")
+                  require(job.get("head_sha") == plan["candidate_sha"] and job.get("head_branch") == CANDIDATE_REF.removeprefix("refs/heads/"), "wrong job source")
+                  require(job.get("workflow_name") == run["name"] and job.get("status") == "completed", "incomplete or wrong workflow job")
+                  require(job.get("conclusion") == ("skipped" if name in skipped else "success"), "required test skipped/failed or review-waiver mismatch: " + name)
+                  if name in required:
+                      steps = job.get("steps", [])
+                      for expected in required[name]:
+                          found = [s for s in steps if s.get("name") == expected]
+                          require(len(found) == 1 and found[0].get("status") == "completed" and found[0].get("conclusion") == "success", "missing or unsuccessful required step: " + expected)
+
+
+          def check_ci(plan, evidence):
+              require(set(evidence) == {"pr", "mobile"}, "incomplete CI evidence")
+              for kind, entry in evidence.items():
+                  expected = plan["runs"][kind]
+                  if kind == "pr":
+                      pr = entry.get("pull_request", {})
+                      require(pr.get("number") == plan["pull_request"] and pr.get("state") == "closed" and
+                              pr.get("merged") is True and pr.get("draft") is False, "merged PR identity missing or changed")
+                      require(pr.get("merge_commit_sha") in (None, plan["main_sha"]), "PR merge commit contradicts exact Git proof")
+                      for label, expected_sha, expected_ref in (("head", plan["candidate_sha"], CANDIDATE_REF.removeprefix("refs/heads/")),
+                                                                 ("base", plan["merge_base_sha"], "main")):
+                          ref = pr.get(label, {})
+                          require(ref.get("sha") == expected_sha and ref.get("ref") == expected_ref and
+                                  ref.get("repo", {}).get("full_name") == REPOSITORY, "PR " + label + " identity mismatch")
+                  for run in (entry["latest"], entry["attempt"]):
+                      for key, value in (("id", expected["id"]), ("workflow_id", expected["workflow_id"]),
+                                         ("run_attempt", expected["attempt"]), ("name", expected["name"]),
+                                         ("path", expected["path"]), ("event", expected["event"]),
+                                         ("status", "completed"), ("conclusion", "success"), ("head_sha", plan["candidate_sha"]),
+                                         ("head_branch", CANDIDATE_REF.removeprefix("refs/heads/"))):
+                          require(run.get(key) == value, "native CI mismatch: " + kind + "/" + key)
+                      require(run.get("repository", {}).get("full_name") == REPOSITORY and run.get("head_repository", {}).get("full_name") == REPOSITORY, "untrusted CI repository")
+                      if kind == "pr":
+                          prs = run.get("pull_requests")
+                          require(type(prs) is list and (not prs or (len(prs) == 1 and prs[0].get("number") == plan["pull_request"] and
+                                  prs[0].get("head", {}).get("sha") == plan["candidate_sha"])), "CI PR identity mismatch")
+                  check_jobs(plan, kind, entry["jobs"])
+              require(digest(canonical(evidence)) == plan["accepted_ci_sha256"], "CI evidence differs from reviewed acceptance")
+
+
+          def ci_snapshot(plan, api):
+              evidence = {}
+              run_keys = ("id", "workflow_id", "run_attempt", "name", "path", "event", "status", "conclusion", "head_sha", "head_branch", "repository", "head_repository", "pull_requests")
+              job_keys = ("id", "run_id", "run_attempt", "name", "workflow_name", "status", "conclusion", "head_sha", "head_branch", "steps")
+              for kind, run in plan["runs"].items():
+                  prefix = "/actions/runs/" + str(run["id"])
+                  entry = {}
+                  for label, path in (("latest", prefix), ("attempt", prefix + "/attempts/" + str(run["attempt"]))):
+                      raw = api.request(path)
+                      entry[label] = {k: raw.get(k) for k in run_keys}
+                      for k in ("repository", "head_repository"):
+                          entry[label][k] = {"full_name": raw.get(k, {}).get("full_name")}
+                      require(type(raw.get("pull_requests")) is list, "invalid CI PR association inventory")
+                      entry[label]["pull_requests"] = [{"number": p.get("number"), "head": {"sha": p.get("head", {}).get("sha")}} for p in raw["pull_requests"]]
+                  if kind == "pr":
+                      raw_pr = api.request("/pulls/" + str(plan["pull_request"]))
+                      entry["pull_request"] = {k: raw_pr.get(k) for k in ("number", "state", "merged", "draft", "merge_commit_sha")}
+                      for label in ("head", "base"):
+                          ref = raw_pr.get(label, {})
+                          entry["pull_request"][label] = {"sha": ref.get("sha"), "ref": ref.get("ref"),
+                                                          "repo": {"full_name": ref.get("repo", {}).get("full_name")}}
+                  jobs, page, total = [], 1, None
+                  while total is None or len(jobs) < total:
+                      raw = api.request(prefix + "/attempts/" + str(run["attempt"]) + "/jobs?per_page=100&page=" + str(page))
+                      require(type(raw.get("total_count")) is int and raw["total_count"] > 0, "invalid job inventory")
+                      require(total is None or raw["total_count"] == total, "job inventory changed")
+                      total = raw["total_count"]
+                      require(raw.get("jobs") and page <= 10, "incomplete job pagination")
+                      for job in raw["jobs"]:
+                          item = {k: job.get(k) for k in job_keys}
+                          item["steps"] = [{k: s.get(k) for k in ("name", "status", "conclusion")} for s in job.get("steps", [])]
+                          jobs.append(item)
+                      page += 1
+                  require(len(jobs) == total, "ambiguous paginated job inventory")
+                  entry["jobs"] = sorted(jobs, key=lambda j: j["name"])
+                  evidence[kind] = entry
+              return evidence
+
+
+          def check_refs(plan, env, api, require_absent=True):
+              repository = api.request("")
+              require(repository.get("full_name") == REPOSITORY and repository.get("default_branch") == "main", "default branch changed")
+              for ref, expected in (("heads/main", plan["main_sha"]), (HELPER_REF.removeprefix("refs/"), env["GITHUB_SHA"]),
+                                    (CANDIDATE_REF.removeprefix("refs/"), plan["candidate_sha"])):
+                  obj = api.request("/git/ref/" + ref)
+                  require(obj.get("ref") == "refs/" + ref and obj.get("object", {}).get("type") == "commit" and obj["object"].get("sha") == expected, "ref drift: " + ref)
+              latest = api.request("/releases/latest")
+              require(latest.get("id") == plan["previous_release"]["id"] and latest.get("tag_name") == plan["previous_release"]["tag"], "latest release changed")
+              previous = api.request("/git/ref/tags/" + plan["previous_release"]["tag"]).get("object", {})
+              if previous.get("type") == "tag":
+                  require(sha(previous.get("sha")), "invalid previous tag")
+                  previous = api.request("/git/tags/" + previous["sha"]).get("object", {})
+              require(previous.get("type") == "commit" and previous.get("sha") == plan["previous_release"]["commit"], "previous release tag moved")
+              if require_absent:
+                  require(api.request("/git/ref/tags/" + TAG, missing=True) is None, "release tag already exists")
+                  check_release_absent(api)
+
+
+          def check_release_absent(api):
+              require(api.request("/releases/tags/" + TAG, missing=True) is None, "release already exists")
+              # Listing with the contents token also rejects a pre-existing draft for this tag.
+              for page in range(1, 101):
+                  rows = api.request("/releases?per_page=100&page=" + str(page))
+                  require(isinstance(rows, list), "invalid release inventory")
+                  require(not any(r.get("tag_name") == TAG for r in rows), "draft or published release already exists")
+                  if len(rows) < 100:
+                      return
+              raise Rejected("release pagination limit reached")
+
+
+          def check_objects(plan, env, repo):
+              trigger = env["GITHUB_SHA"]
+              require(git(repo, "rev-list", "--parents", "-n", "1", trigger).decode().split() == [trigger, plan["helper_parent"]], "helper must have one exact parent")
+              delta = git(repo, "diff-tree", "--no-commit-id", "--name-status", "-r", "--no-renames", plan["helper_parent"], trigger).decode()
+              require(delta == "A\t" + WORKFLOW + "\n", "trigger must add only the new workflow")
+              entry = git(repo, "ls-tree", trigger, "--", WORKFLOW).decode().split()
+              require(len(entry) == 4 and entry[0:2] == ["100644", "blob"] and entry[3] == WORKFLOW, "workflow must be a regular file")
+              for key in ("main", "candidate"):
+                  require(git(repo, "cat-file", "-t", plan[key + "_sha"]).strip() == b"commit", "source is not a commit")
+                  require(git(repo, "rev-parse", plan[key + "_sha"] + "^{tree}").decode().strip() == plan[key + "_tree"], "source tree mismatch")
+              require(git(repo, "rev-list", "--parents", "-n", "1", plan["main_sha"]).decode().split() ==
+                      [plan["main_sha"], plan["merge_base_sha"], plan["candidate_sha"]], "main must have exactly the ordered reviewed merge parents")
+              git(repo, "merge-base", "--is-ancestor", plan["candidate_sha"], plan["main_sha"])
+              git(repo, "merge-base", "--is-ancestor", plan["previous_release"]["commit"], plan["main_sha"])
+              files = {path: git(repo, "cat-file", "blob", plan["main_sha"] + ":" + path) for path in plan["file_sha256"]}
+              check_source(plan, files)
+              return files
+
+
+          def prepare_objects(plan, env, token, destination):
+              require(not destination.exists(), "object store already exists")
+              destination.mkdir()
+              git(destination, "init", "--bare", "--template=")
+              for commit in (env["GITHUB_SHA"], plan["main_sha"], plan["candidate_sha"]):
+                  git(destination, "fetch", "--no-tags", "--no-recurse-submodules", REMOTE, commit, token=token)
+              return destination
+
+
+          def make_proof(plan, env, notes, evidence):
+              check_notes(plan, notes)
+              check_ci(plan, evidence)
+              return {"schema": 1, "repository": REPOSITORY, "run_id": env["GITHUB_RUN_ID"], "run_attempt": env["GITHUB_RUN_ATTEMPT"],
+                      "trigger_sha": env["GITHUB_SHA"], "plan_sha256": digest(canonical(plan)), "notes_sha256": digest(notes), "ci": evidence}
+
+
+          def check_proof(plan, env, directory, expected_digest):
+              require(set(p.name for p in directory.iterdir()) == {"proof.json", "notes.md"}, "proof inventory mismatch")
+              require(all(p.is_file() and not p.is_symlink() for p in directory.iterdir()), "nonregular proof data")
+              raw = (directory / "proof.json").read_bytes()
+              require(digest(raw) == expected_digest, "proof hash mismatch")
+              proof = json.loads(raw)
+              notes = (directory / "notes.md").read_bytes()
+              require(proof == make_proof(plan, env, notes, proof.get("ci", {})), "proof belongs to another run, attempt, plan or source")
+              return notes
+
+
+          def tag_bytes(plan, timestamp):
+              require(re.fullmatch(r"[1-9][0-9]*", timestamp) is not None, "invalid commit timestamp")
+              return ("object " + plan["main_sha"] + "\ntype commit\ntag " + TAG +
+                      "\ntagger github-actions[bot] <41898282+github-actions[bot]@users.noreply.github.com> " + timestamp +
+                      " +0000\n\nAlbum Haven 0.9.48\n").encode()
+
+
+          def pre_push_hook(tag_oid):
+              require(sha(tag_oid), "invalid tag object")
+              expected = [TAG_REF, tag_oid, TAG_REF, ZERO]
+              return ("#!/usr/bin/env python3\nimport sys\nexpected = " + repr(expected) + "\nremote = " + repr(REMOTE) +
+                      "\nrows = [line.split() for line in sys.stdin.read().splitlines()]\n" +
+                      "if sys.argv[1:] != [remote, remote] or rows != [expected]:\n" +
+                      "    sys.stderr.write('Rejected advertised tag, destination or old OID; stop without retry\\n')\n    sys.exit(1)\n")
+
+
+          def push_tag_once(repo, plan, token, tag_oid, hooks):
+              require(not hooks.exists(), "hook directory already exists")
+              hooks.mkdir()
+              hook = hooks / "pre-push"
+              hook.write_text(pre_push_hook(tag_oid), encoding="utf-8")
+              hook.chmod(0o700)
+              git(repo, "update-ref", TAG_REF, tag_oid, ZERO)
+              git(repo, "push", "--porcelain", REMOTE, TAG_REF + ":" + TAG_REF, token=token, hooks=hooks)
+
+
+          def verify_tag(plan, api, tag_oid):
+              ref = api.request("/git/ref/tags/" + TAG)
+              require(ref.get("ref") == TAG_REF and ref.get("object", {}).get("type") == "tag" and ref["object"].get("sha") == tag_oid, "tag ref differs from prepared annotated tag")
+              tag = api.request("/git/tags/" + tag_oid)
+              require(tag.get("sha") == tag_oid and tag.get("tag") == TAG and tag.get("object", {}).get("type") == "commit" and tag["object"].get("sha") == plan["main_sha"], "tag target mismatch")
+
+
+          def release_payload(plan, notes):
+              check_notes(plan, notes)
+              return {"tag_name": TAG, "target_commitish": plan["main_sha"], "name": "Album Haven 0.9.48", "body": notes.decode(),
+                      "draft": False, "prerelease": False, "generate_release_notes": False, "make_latest": "true"}
+
+
+          def verify_release(plan, notes, release):
+              require(positive(release.get("id")), "release ID missing")
+              for key, value in release_payload(plan, notes).items():
+                  # GitHub ignores target_commitish for an existing tag; verify_tag checks
+                  # the prepared annotated object and its peeled commit before/after POST.
+                  if key not in {"generate_release_notes", "make_latest", "target_commitish"}:
+                      require(release.get(key) == value, "release response mismatch: " + key)
+              require(release.get("html_url") == "https://github.com/" + REPOSITORY + "/releases/tag/" + TAG and bool(release.get("published_at")), "release publication URL/status mismatch")
+              require(release.get("assets") == [] and not release.get("discussion_url"), "unexpected release assets/discussion")
+
+
+          def publish_once(plan, env, api, notes, tag_oid, push, receipt_path):
+              """One push and at most one POST. Every failed/uncertain mutation stops permanently."""
+              receipt = {"state": "preflight", "tag": TAG, "main_sha": plan["main_sha"], "tag_object": tag_oid}
+              def record(state):
+                  receipt["state"] = state
+                  receipt_path.write_bytes(canonical(receipt))
+                  print(canonical(receipt).decode().strip(), flush=True)
+              try:
+                  check_refs(plan, env, api)
+                  check_ci(plan, ci_snapshot(plan, api))
+                  record("tag-push-started")
+                  push()
+                  verify_tag(plan, api, tag_oid)
+                  record("tag-confirmed-release-not-created")
+                  check_refs(plan, env, api, require_absent=False)
+                  check_release_absent(api)
+                  verify_tag(plan, api, tag_oid)
+                  check_ci(plan, ci_snapshot(plan, api))
+                  record("release-post-started")
+                  release = api.request("/releases", method="POST", payload=release_payload(plan, notes))
+                  receipt["release_id"] = release.get("id")
+                  verify_release(plan, notes, release)
+                  verify_tag(plan, api, tag_oid)
+                  reread = api.request("/releases/" + str(release["id"]))
+                  verify_release(plan, notes, reread)
+                  require(api.request("/releases/latest").get("id") == release["id"], "release is not latest")
+                  # Main/helper/candidate must still be unchanged after the mutation.
+                  for ref, expected in (("heads/main", plan["main_sha"]), (HELPER_REF.removeprefix("refs/"), env["GITHUB_SHA"]), (CANDIDATE_REF.removeprefix("refs/"), plan["candidate_sha"])):
+                      require(api.request("/git/ref/" + ref).get("object", {}).get("sha") == expected, "post-publication ref drift")
+                  receipt["release_url"] = release["html_url"]
+                  record("published-and-verified")
+              except Exception as error:
+                  receipt["stopped_at"] = receipt["state"]
+                  receipt["error"] = str(error) if isinstance(error, Rejected) else type(error).__name__
+                  record("stopped-inspect-without-retry-or-cleanup")
+                  raise
+
+
+          def validation_entry(plan, notes):
+              env = os.environ
+              check_event(plan, env, json.loads(Path(env["GITHUB_EVENT_PATH"]).read_text()))
+              check_notes(plan, notes)
+              token = env["GH_TOKEN"]
+              api = API(token)
+              check_refs(plan, env, api)
+              repo = prepare_objects(plan, env, token, Path(env["RUNNER_TEMP"]) / "release-read-objects")
+              check_objects(plan, env, repo)
+              evidence = ci_snapshot(plan, api)
+              proof = make_proof(plan, env, notes, evidence)
+              check_refs(plan, env, api)
+              output = Path(env["RUNNER_TEMP"]) / "release-validated"
+              output.mkdir()
+              raw = canonical(proof)
+              (output / "proof.json").write_bytes(raw)
+              (output / "notes.md").write_bytes(notes)
+              with open(env["GITHUB_OUTPUT"], "a", encoding="utf-8") as stream:
+                  stream.write("proof_sha256=" + digest(raw) + "\n")
+
+
+          def publishing_entry(plan):
+              env = os.environ
+              check_event(plan, env, json.loads(Path(env["GITHUB_EVENT_PATH"]).read_text()))
+              require(re.fullmatch(r"[1-9][0-9]*", env.get("ARTIFACT_ID", "")) is not None, "immutable artifact ID missing")
+              notes = check_proof(plan, env, Path(env["RUNNER_TEMP"]) / "release-downloaded", env["PROOF_SHA256"])
+              token = env["GH_TOKEN"]
+              api = API(token)
+              check_refs(plan, env, api)
+              repo = prepare_objects(plan, env, token, Path(env["RUNNER_TEMP"]) / "release-write-objects")
+              check_objects(plan, env, repo)
+              timestamp = git(repo, "show", "-s", "--format=%ct", plan["main_sha"]).decode().strip()
+              raw_tag = tag_bytes(plan, timestamp)
+              tag_oid = git(repo, "mktag", data=raw_tag).decode().strip()
+              require(git(repo, "cat-file", "tag", tag_oid) == raw_tag, "tag object verification failed")
+              result = Path(env["RUNNER_TEMP"]) / "release-result"
+              result.mkdir()
+              (result / "tag-object.txt").write_bytes(raw_tag)
+              (result / "plan.json").write_bytes(canonical(plan))
+              (result / "release-payload.json").write_bytes(canonical(release_payload(plan, notes)))
+              publish_once(plan, env, api, notes, tag_oid,
+                           lambda: push_tag_once(repo, plan, token, tag_oid, Path(env["RUNNER_TEMP"]) / "release-hooks"),
+                           result / "receipt.json")
+
+          PLAN = json.loads('{"accepted_ci_sha256": "d76c7d38aa985ba2b7fc59f2489e6ee5f07f287e583e0e3da68e12e3289ad097", "candidate_ref": "refs/heads/2026-09-25-mobile-layout", "candidate_sha": "c4a36b21ea4997a4b3e220a2d4788f86dccb0088", "candidate_tree": "ed9eca961e37edd40a00308ef92b082b70b81e8c", "file_sha256": {".github/workflows/mobile-layout-checks.yml": "3dca03cbe998eaa4f9b7366aeb068e617bfcde29a61c10a82f3dfd1849446f9c", ".github/workflows/pr-gates.yml": "be9fa3c36fc7f0116a0fa7570a40347e6055287242fd32d8b391911087be6cf0", "CHANGELOG.md": "9330341887187d44fe149fa337842401ad90ae9b0e67cdf001621ef871d701be", "README.md": "5ef976c40c43e2babc9852b7bebc3e6b58202e8f6098f9364dc4199d0874b5eb", "package-lock.json": "36cb1055093afab1be56a99a35ddb816a3093c2202aed4c566522f1891dfcfdb", "package.json": "0139f3c4799e3fabd24860763336c88a90e48d818577b89919ecf5f6b6209e45", "scripts/ci/classify-pr-review-scope.cjs": "64fe24be6fc911ee20ba58ea9c70f966efd95113d935359c1b2538a957ee0c42", "scripts/ci/resolve-ci-shard.cjs": "560d33c8b26e5bde1a9e192fb9d4ee6427a9892cc8789c5bda312ed19b3d821a", "tests/ci/functional-shards.json": "177c2d96a804fe218dab7bcbe425134bfc42650c4e67036bef0bda659c2fff05", "tests/ci/performance-targets.json": "6a00cb0ed859d1b209e2a2f70a104d0bd680ad9cd966c28be76bb56d351ef7dc", "version.py": "952b88ba0084c0aebce4e7ebef75331e1a195164675140c5f5fde3ec9bee59ce"}, "helper_parent": "8a737dcd2ae965a064da989496994c82f68d1d93", "helper_ref": "refs/heads/2026-09-30-capabilities-bundle-transfer", "main_sha": "eef9d13fd5dbd2cda3485e3c308c8494ba7d6fd4", "main_tree": "ed9eca961e37edd40a00308ef92b082b70b81e8c", "merge_base_sha": "db5396be48483f80cb93d403532e90026ff1cd00", "notes_sha256": "c820365c5d1dd70620ea878f949d37cc2d3c26cb16369b58696389747b5aa857", "observed_but_NOT_accepted_runs": {"mobile": 36852442131, "pr": 36852446856}, "pipeline_mode": "full", "previous_release": {"commit": "a5c23fc8963f9ecc531468a61653bf2d798e8c6d", "id": 392643979, "tag": "v0.9.45"}, "pull_request": 19, "remote": "https://github.com/idanilovqa/AlbumHaven.git", "repository": "idanilovqa/AlbumHaven", "review_waiver": "owner-authorized-skip_reviews", "runs": {"mobile": {"attempt": 1, "event": "push", "id": 36877077064, "name": "Mobile Layout Verification", "path": ".github/workflows/mobile-layout-checks.yml", "workflow_id": 367289425}, "pr": {"attempt": 1, "event": "pull_request", "id": 36877085999, "name": "PR Gates", "path": ".github/workflows/pr-gates.yml", "workflow_id": 345734871}}, "schema": 1, "skip_tests": false, "state": "reviewed-and-bound", "tag": "v0.9.48", "version": "0.9.48", "workflow_path": ".github/workflows/verified-release-0-9-48.yml"}')
+          publishing_entry(PLAN)
+      - uses: actions/upload-artifact@v4
+        if: ${{ always() }}
+        with:
+          name: release-receipt-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/release-result/
+          if-no-files-found: warn
+          retention-days: 14
+          overwrite: false

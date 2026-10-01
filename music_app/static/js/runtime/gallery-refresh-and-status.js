@@ -919,10 +919,15 @@ async function fetchAndRender(url, push = true, options = {}) {
       });
     }
     if (
-      requestOptions.startupRefresh
+      response.ok
+      && data?.ok !== false
       && (
-        startupHydrationTier !== 'sidebar'
-        || !String(requestOptions.startupHydrationFollowupEndpoint || '').trim()
+        (requestOptions.startupRefresh
+          && (
+            startupHydrationTier !== 'sidebar'
+            || !String(requestOptions.startupHydrationFollowupEndpoint || '').trim()
+          ))
+        || isCanonicalFullViewPayload(data, requestOptions)
       )
     ) {
       startupMetrics.completeInitialRefresh(state.view);

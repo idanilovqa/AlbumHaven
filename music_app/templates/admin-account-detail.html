@@ -1,7 +1,7 @@
+{% from "partials/page-gallery-bar.html" import page_gallery_bar %}
 {% from "components/on-page-alert.html" import on_page_alert %}
 {% from "partials/button.html" import ui_button, ui_link %}
 {% from "partials/switch.html" import ui_switch %}
-{% from "partials/gallery-bar.html" import gallery_bar %}
 <!doctype html>
 <html lang="en">
 <head>
@@ -16,10 +16,13 @@
   {% include "partials/admin-ui-assets.html" %}
   <script src="/static/js/admin-members.js" defer></script>
   {% include "partials/navigation-tree-assets.html" %}
+  <script src="/static/js/surface-dismissal.js?v={{ runtime_asset_version | default(app_version) }}" defer></script>
   <script src="/static/js/account.js" defer></script>
   <script src="/static/js/settings-navigation.js" defer></script>
   {% include "partials/appearance-bootstrap.html" %}
   <link rel="stylesheet" href="/static/css/runtime/alert-components.css">
+  <link rel="stylesheet" href="/static/css/gallery-main.css?v={{ runtime_asset_version | default(app_version) }}">
+  <link rel="stylesheet" href="/static/css/mobile-layout.css?v={{ runtime_asset_version | default(app_version) }}">
 </head>
 <body>
   {{ on_page_alert('This page could not be loaded. Please try again.', severity='error', hidden=true, class_name='settings-navigation-error', attributes={'data-settings-navigation-error': ''}) }}
@@ -30,8 +33,7 @@
     <div class="settings-outlet" data-settings-outlet>
     <script id="admin-allowed-actions" type="application/json">{{ allowed_actions.as_payload() | tojson }}</script>
     <section class="settings-main detail-main">
-      {{ gallery_bar('Edit user' if member else 'Add user', '' if member else 'The user will choose their password after opening a one-time invitation link.', 'detail-heading', back_href='/admin/members', back_label='Back to users') }}
-      {% if member %}<div class="detail-person"><span class="member-avatar" aria-hidden="true">{{ member.username[:2] | upper }}</span><span><strong>{{ member.username }}</strong><small>{{ member.contact_email }}</small></span></div>{% endif %}
+      {{ page_gallery_bar('Edit user' if member else 'Add user', member.username if member else '', back_href='/admin/members', back_label='Back to users', settings_navigation=true) }}
 
       {{ on_page_alert(severity='error', hidden=true, class_name='admin-form-error', attributes={'data-admin-form-error': ''}) }}
       {{ on_page_alert(role='status', hidden=true, class_name='admin-form-status', attributes={'data-admin-form-status': ''}) }}
@@ -51,7 +53,7 @@
         {% if not member or allowed_actions.allows('accounts.capabilities.manage') %}
         {% set is_owner = member and member.is_bootstrap_owner %}
         {% if is_owner %}
-        {{ on_page_alert('The protected owner has full access. These inherited permissions cannot be changed individually.', title='Owner · Full access', class_name='role-note') }}
+        {{ on_page_alert('The protected owner has full access. These inherited permissions cannot be changed individually.', title='Owner · Full access', severity='info', role='note', class_name='role-note', attributes={'id': 'admin-role-description'}) }}
         {% with capabilities_readonly=true %}
         {% include "partials/admin-capability-switches.html" %}
         {% endwith %}

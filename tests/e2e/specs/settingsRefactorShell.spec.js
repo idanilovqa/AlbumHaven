@@ -1,6 +1,8 @@
 import { expect, test } from '../support/baseFixtures.js';
 import { SettingsRefactorShell } from '../poms/settingsRefactorShell.js';
 import { SettingsIntegrations } from '../poms/settingsIntegrations.js';
+import { MobileLayoutPage } from '../poms/mobileLayoutPage.js';
+import { observeProblematicDetails, problemDetailExpectation, exerciseProblematicNativeJumps } from '../helpers/problematicVirtualScrollHelpers.js';
 
 async function openProblems({ page, galleryActions, settingsModalAppBarActions, utilityTabBarActions, utilityProblematicFilesActions }) {
   await galleryActions.goto();
@@ -20,13 +22,22 @@ async function selectRow(shell, row) {
 }
 
 async function expectFilterInside(shell) {
-  await expect.poll(async () => {
-    const { menu, dialog, viewport, anchor } = await shell.filterGeometry();
-    return menu.left >= Math.max(0, dialog.left) - 1
-      && menu.right <= Math.min(viewport.width, dialog.right) + 1
-      && menu.bottom <= viewport.height + 1
-      && menu.top >= anchor.bottom - 1;
-  }).toBe(true);
+  let geometry;
+  try {
+    await expect.poll(async () => {
+      geometry = await shell.filterGeometry();
+      const { menu, dialog, viewport, anchor } = geometry;
+      return menu.left >= Math.max(0, dialog.left) - 1
+        && menu.right <= Math.min(viewport.width, dialog.right) + 1
+        && menu.bottom <= viewport.height + 1
+        && menu.top >= anchor.bottom - 1;
+    }).toBe(true);
+  } catch (error) {
+    await test.info().attach('filter-boundary-geometry', {
+      body: JSON.stringify(geometry || null), contentType: 'application/json',
+    });
+    throw error;
+  }
 }
 
 test('FTC-SETTINGS-S06 searches preserve independent tab queries and unsaved editors', { tag: '@area:settings' }, async ({
@@ -244,31 +255,42 @@ test('FTC-SETTINGS-S02 combined search and Filters retain selection and keyboard
 test('FTC-SETTINGS-S03 deep Problems selection retains the mounted tree scroll and focused row', { tag: '@area:settings' }, async ({
   page, galleryActions, settingsModalAppBarActions, utilityTabBarActions, utilityProblematicFilesActions,
 }) => {
-  const shell = await openProblems({ page, galleryActions, settingsModalAppBarActions, utilityTabBarActions, utilityProblematicFilesActions });
-  const items = await utilityProblematicFilesActions.readCompleteListItems();
-  const count = items.length;
-  expect(count).toBeGreaterThan(10);
-  const target = items[count - 2];
-  await utilityProblematicFilesActions.revealListItemByIdentity({ key: target.key });
-  const row = shell.rowByKey(target.key);
-  await row.scrollIntoViewIfNeeded();
-  const retained = await shell.retainTree(row);
+  const capture = observeProblematicDetails(page);
   try {
-    expect((await retained.read()).scrollTop).toBeGreaterThan(0);
-    await selectRow(shell, row);
-    await expect(shell.rowMeta(row)).not.toBeEmpty();
-    await expect(shell.rowCount(row)).toBeHidden();
-    await expect(shell.rowArt(row)).toHaveAttribute('data-album-artbox-state', /^(ready|missing)$/);
-    for (const key of ['Enter', 'Enter']) {
-      await row.press(key);
-      await expect(row).toBeFocused();
-      const observed = await retained.read();
-      expect(observed.treeRetained).toBe(true);
-      expect(observed.rowRetained).toBe(true);
-      expect(observed.visible).toBe(true);
-      expect(Math.abs(observed.scrollDelta)).toBeLessThanOrEqual(1);
-    }
-  } finally { await retained.dispose(); }
+    const shell = await openProblems({ page, galleryActions, settingsModalAppBarActions, utilityTabBarActions, utilityProblematicFilesActions });
+    const count = Number(await shell.resultCount.textContent());
+    expect(count).toBeGreaterThan(10);
+    const summary = await capture.summary();
+    expect(summary).toHaveLength(count);
+    const items = await utilityProblematicFilesActions.readCompleteListItems();
+    expect(items.map(item => item.key)).toEqual(summary.map(item => item.key));
+    const target = items[count - 2];
+    await utilityProblematicFilesActions.revealListItemByIdentity({ key: target.key });
+    const row = shell.rowByKey(target.key);
+    await row.scrollIntoViewIfNeeded();
+    const retained = await shell.retainTree(row);
+    try {
+      expect((await retained.read()).scrollTop).toBeGreaterThan(0);
+      await selectRow(shell, row);
+      await expect.poll(async () => Boolean(await capture.detail(target.key))).toBe(true);
+      const expected = problemDetailExpectation(await capture.detail(target.key));
+      await expect(shell.heading).toHaveText(expected.title);
+      await expect(shell.rowMeta(row)).not.toBeEmpty();
+      await expect(shell.rowCount(row)).toBeHidden();
+      await expect(shell.rowArt(row)).toHaveAttribute('data-album-artbox-state', /^(ready|missing)$/);
+      for (const key of ['Enter', 'Enter']) {
+        await row.press(key);
+        await expect(row).toBeFocused();
+        const observed = await retained.read();
+        expect(observed.treeRetained).toBe(true);
+        expect(observed.rowRetained).toBe(true);
+        expect(observed.visible).toBe(true);
+        expect(Math.abs(observed.scrollDelta)).toBeLessThanOrEqual(1);
+      }
+    } finally { await retained.dispose(); }
+    const jumps = await exerciseProblematicNativeJumps({ page, shell, capture });
+    await test.info().attach('problematic-native-jumps', { body: JSON.stringify(jumps), contentType: 'application/json' });
+  } finally { await capture.dispose(); }
 });
 
 test('FTC-SETTINGS-S04 ready and missing Problems artwork preserve selection through the real lightbox lifecycle', { tag: '@area:settings' }, async ({
@@ -304,6 +326,7 @@ test('FTC-SETTINGS-S04 ready and missing Problems artwork preserve selection thr
 test('FTC-SETTINGS-S05 an open Filters surface remains inside Settings after narrow resize and reopen', { tag: '@area:settings' }, async ({
   page, galleryActions, settingsModalAppBarActions, utilityTabBarActions, utilityProblematicFilesActions,
 }) => {
+  const mobile = new MobileLayoutPage(page);
   await page.setViewportSize({ width: 1920, height: 1080 });
   const shell = await openProblems({ page, galleryActions, settingsModalAppBarActions, utilityTabBarActions, utilityProblematicFilesActions });
   await shell.filters.click();
@@ -318,15 +341,16 @@ test('FTC-SETTINGS-S05 an open Filters surface remains inside Settings after nar
   await shell.search.press('ControlOrMeta+A');
   await shell.search.press('Backspace');
   await expect(shell.search).toHaveValue('');
-  await shell.close.click();
-  await settingsModalAppBarActions.openSettings();
-  await shell.tab('rules').click();
-  await shell.tab('problematic-files').click();
+  await mobile.backButton.click();
+  await expect(shell.dialog).toBeHidden();
+  await mobile.openSettings();
+  await mobile.selectUtility('rules');
+  await mobile.selectUtility('problematic-files');
   await shell.filters.click();
   await expect(shell.filterMenu).toBeVisible();
   await expectFilterInside(shell);
-  expect((await shell.geometry()).closeOwnsHit).toBe(true);
+  expect(await mobile.backOwnsHit()).toBe(true);
   await shell.filterOptions.first().press('Escape');
-  await shell.close.click();
+  await mobile.backButton.click();
   await expect(shell.dialog).toBeHidden();
 });

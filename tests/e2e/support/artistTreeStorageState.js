@@ -1,7 +1,7 @@
 const SHELL_LAYOUT_KEY = 'albumhaven.shellLayoutPreferences.v1';
 
-// Seed the disposable browser context before its first document loads. Reloads
-// subsequently read the preference written by the real Artist Tree controls.
+// Seed only a disposable browser-owned preference before its first document.
+// Authenticated account preferences come from the production bootstrap instead.
 export function withArtistTreePreference(storageState, baseURL, folded = false) {
   const result = structuredClone(storageState);
   if (folded === null) return result;

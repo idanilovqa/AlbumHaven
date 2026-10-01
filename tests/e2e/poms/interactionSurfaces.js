@@ -1,3 +1,5 @@
+import { readNavigationSelectionPaint } from './components/navigationTree.js';
+import { readThemeColorChannels } from './settingsModalAppBar.js';
 import { expect } from '@playwright/test';
 
 // All evaluations below observe rendered state; interactions use native Playwright input.
@@ -148,26 +150,36 @@ export class InteractionSurfaces {
   }
 
   async readTagSelectionPaint(index) {
-    // parity-check: allow-read-only-measurement-evaluate -- read active list paint and the independently rendered shared NavigationTree theme reference
-    return this.tagRows.nth(index).evaluate(row => {
+    const reference = await readNavigationSelectionPaint(this.selectedTreeItem);
+    const edge = reference?.accent;
+    if (!edge || edge.content !== '""' || edge.width !== '3px' || !(parseFloat(edge.height) > 0)
+      || edge.display === 'none' || edge.visibility !== 'visible' || Number(edge.opacity) <= 0
+      || /^(?:transparent|rgba\([^)]*, 0\)|color\([^)]*\/ 0\))$/u.test(edge.backgroundColor)) {
+      throw new Error('The selected artist must render its configured 3px selection edge');
+    }
+    // parity-check: allow-read-only-measurement-evaluate -- read actual Tag Editor selection paint independently of its NavigationTree reference
+    const paint = await this.tagRows.nth(index).evaluate(row => {
       const style = getComputedStyle(row);
       const accent = getComputedStyle(row.querySelector('.tag-editor-track-accent'));
-      const tree = document.querySelector('.navigation-tree-item.is-selected');
-      if (!tree) throw new Error('The selected artist must provide the shared selection theme reference');
-      const reference = getComputedStyle(tree);
-      const expectedAccent = reference.boxShadow.match(/(?:rgba?|color)\([^)]+\)/u)?.[0];
-      if (!expectedAccent) throw new Error('The selected artist must render its configured selection accent');
       return {
         fill: style.backgroundColor,
-        expectedFill: reference.backgroundColor,
         accent: accent.backgroundColor,
-        expectedAccent,
         fillRole: style.getPropertyValue('--tag-editor-selection-fill').trim(),
+        ink: style.getPropertyValue('--text').trim(),
         expectedFillRole: style.getPropertyValue('--selection-body-background').trim(),
       };
     });
+    let expectedFill = reference.fill;
+    if (index % 2 === 1) {
+      // Owner feedback item 3 preserves alternating selected rows: 7% ink over
+      // the independently rendered navigation fill, serialized to CSS's 6 significant digits.
+      const base = readThemeColorChannels(reference.fill);
+      const ink = readThemeColorChannels(paint.ink);
+      expectedFill = `color(srgb ${base.map((channel, i) =>
+        Number(((channel * 0.93 + ink[i] * 0.07) / 255).toPrecision(6))).join(' ')})`;
+    }
+    return { ...paint, expectedFill, expectedAccent: edge.backgroundColor };
   }
-
 }
 
 export async function expectPartialCoverRow(page, surfaces) {
@@ -216,15 +228,22 @@ export async function expectSlowActivationLights(play) {
 
 export async function expectSharedOutlineGeometry(surfaces) {
   // parity-check: allow-read-only-measurement-evaluate -- measure CSS joins and gradients without altering the page
-  const join = await surfaces.familyPanel.evaluate(panel => {
-    const bar = document.querySelector('.gallery-bar').getBoundingClientRect();
+  const join = await surfaces.familyTrigger.evaluate(trigger => {
+    const owner = trigger.closest('[data-gallery-bar]');
+    if (!owner) throw new Error('Artist Family trigger has no owning GalleryBar.');
+    const panel = document.getElementById(trigger.getAttribute('aria-controls'));
+    const bar = owner.getBoundingClientRect();
+    const ownerStyle = getComputedStyle(owner);
     const rect = panel.getBoundingClientRect();
     const top = getComputedStyle(panel, '::after');
-    return { y: rect.top + parseFloat(top.top), dividerY: bar.bottom - 1, height: top.height, fade: top.backgroundImage };
+    return { y: rect.top + parseFloat(top.top), dividerY: bar.bottom - 1, height: top.height, fade: top.backgroundImage,
+      ownerVisible: bar.width > 0 && bar.height > 0 && ownerStyle.display !== 'none'
+        && ownerStyle.visibility === 'visible' };
   });
+  expect(join.ownerVisible).toBe(true);
   expect(Math.abs(join.y - join.dividerY)).toBeLessThanOrEqual(1);
-  // This is the horizontal Gallery divider, not the button/gap outline below.
-  expect(join.height).toBe('1px');
+  // Mobile's Family divider is 2px; the separate button/gap outline is checked below.
+  expect(join.height).toBe('2px');
   expect(join.fade).toContain('linear-gradient');
   // parity-check: allow-read-only-measurement-evaluate -- inspect interpolation and border continuity at the trigger
   const idle = await surfaces.familyTrigger.evaluate(el => {

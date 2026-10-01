@@ -18,6 +18,7 @@ function hideAlbumCardContextMenu() {
 }
 
 function showAlbumCardContextMenu(x, y, album) {
+  if (isMobileClient() || usesMobilePageLayout()) { hideAlbumCardContextMenu(); return; }
   const menu = ensureAlbumCardContextMenu();
   menu.style.left = `${x}px`;
   menu.style.top = `${y}px`;
@@ -373,6 +374,7 @@ function openNonAlbumModal() {
       actionsHtml: buildLooseTracksHeaderActionsHtml(),
     });
   }
+  if (typeof presentMobilePage === 'function') presentMobilePage(mobilePageDescriptor('non-album'));
   els.table.innerHTML = looseTracks.length
     ? buildNonAlbumTrackSectionsMarkup(looseTracks)
     : '<div class="utility-empty-state">No non-album tracks found in this view.</div>';
@@ -382,6 +384,7 @@ function openNonAlbumModal() {
 }
 
 function openNonAlbumTagEditor() {
+  if (typeof isMobileClient === 'function' && isMobileClient()) return;
   const tracks = getVisibleNonAlbumTracks();
   if (!tracks.length) {
     showRepairAlert('No tracks to edit.', 'error');
@@ -408,7 +411,7 @@ function bindOverlayPointerOrigin(overlay) {
   overlay.addEventListener('pointerdown', (event) => {
     overlay.dataset.pointerDownStartedOnOverlay = event.target === overlay ? '1' : '0';
   });
-  overlay.addEventListener('pointerup', () => {
+  overlay.addEventListener('click', () => {
     scheduleBrowserTimeout(() => {
       overlay.dataset.pointerDownStartedOnOverlay = '0';
     }, 0);
@@ -543,6 +546,7 @@ function overlayClickStartedOnOverlay(overlay, event) {
 }
 
 function closeNonAlbumModal() {
+  if (typeof dismissMobilePage === 'function' && dismissMobilePage('non-album')) return;
   const els = getNonAlbumModalElements();
   if (!els.overlay) return;
   els.overlay.hidden = true;

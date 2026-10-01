@@ -13,6 +13,7 @@ export class CapabilityBoundaryPage extends CapabilityPage {
     this.visibleLoopDelete = page.locator('[data-delete-saved-loop]:visible');
     this.visibleLoopReorder = page.locator('[data-move-utility-loop]:visible');
     this.coverDelete = page.locator('#cover-lookup-modal [data-delete-local-cover]');
+    this.galleryContextMenu = page.locator('#album-card-context-menu');
     this.galleryFolder = page.locator('#album-card-context-menu [data-album-card-action="open-explorer"]');
     this.galleryVersion = page.locator('#album-card-context-menu [data-album-card-action="mark-version"]');
     this.settingsDialog = page.locator('#utility-modal');

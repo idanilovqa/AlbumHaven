@@ -1793,6 +1793,52 @@ test('context guard covers existing pages and future popups, then restores every
   assert.equal(context.route(), 'original-context-route');
 });
 
+test('authenticated fixture state keeps account layout ownership while anonymous browser baselines stay explicit', async (t) => {
+  const { withArtistTreePreference } = await import('../e2e/support/artistTreeStorageState.js');
+  const source = read('tests/e2e/support/baseFixtures.js');
+  assert.match(source, /initialArtistTreeFolded: \[null, \{ option: true \}\]/);
+  const start = source.indexOf('  storageState: async');
+  const end = source.indexOf('\n  managedAppLifecycle:', start);
+  assert.ok(start >= 0 && end > start);
+  const fixture = require('node:vm').runInNewContext(
+    `({${source.slice(start, end)}}).storageState`, { withArtistTreePreference },
+  );
+  for (const reuseAuthentication of [true, false]) {
+    for (const initialArtistTreeFolded of [null, false, true]) {
+      await t.test(`${reuseAuthentication ? 'account' : 'anonymous'} / ${initialArtistTreeFolded}`, async () => {
+        const authentication = { cookies: [{ name: 'owner', value: 'fixture' }], origins: [] };
+        const before = structuredClone(authentication);
+        let loginReads = 0;
+        let useCalls = 0;
+        await fixture({
+          reuseAuthentication,
+          initialArtistTreeFolded,
+          baseURL: 'http://localhost:5000/?surface=albums',
+          workerAuthentication: {
+            async getStorageState() { loginReads += 1; return structuredClone(authentication); },
+          },
+        }, async (state) => {
+          useCalls += 1;
+          const expected = reuseAuthentication ? before : {
+            cookies: [],
+            origins: initialArtistTreeFolded === null ? [] : [{
+              origin: 'http://localhost:5000',
+              localStorage: [{
+                name: 'albumhaven.shellLayoutPreferences.v1',
+                value: JSON.stringify({ artistTreeFolded: initialArtistTreeFolded }),
+              }],
+            }],
+          };
+          assert.deepEqual(JSON.parse(JSON.stringify(state)), expected);
+        });
+        assert.equal(loginReads, reuseAuthentication ? 1 : 0);
+        assert.equal(useCalls, 1);
+        assert.deepEqual(authentication, before);
+      });
+    }
+  }
+});
+
 test('fresh browser sessions retain independent ownership and clean up every context', async (t) => {
   const { withArtistTreePreference } = await import('../e2e/support/artistTreeStorageState.js');
   const source = read('tests/e2e/support/baseFixtures.js');
@@ -1906,6 +1952,25 @@ test('all E2E specs inherit guarded fixtures and cannot create direct browser pa
 
   const directBrowserCreation = /\bbrowser\.newPage\s*\(|\bcontext\.newPage\s*\(|\.newContext\s*\(/;
   const baseFixturesPath = path.join(e2eRoot, 'support', 'baseFixtures.js');
+  const mobileFixturesPath = path.join(e2eRoot, 'support', 'mobileFixtures.js');
+  const guardedRoots = new Set([baseFixturesPath, mobileFixturesPath]);
+  const inheritsGuardedTest = (filePath, seen = new Set()) => {
+    if (guardedRoots.has(filePath)) return true;
+    if (seen.has(filePath) || !fs.existsSync(filePath)) return false;
+    seen.add(filePath);
+    const source = fs.readFileSync(filePath, 'utf8');
+    const imports = [...source.matchAll(/import\s*\{([^}]+)\}\s*from\s*['"]([^'"]+)['"]/g)];
+    return imports.some(([, names, specifier]) => {
+      const importedTest = names.split(',').map(name => /^\s*test(?:\s+as\s+(\w+))?\s*$/.exec(name)).find(Boolean);
+      if (!importedTest || !specifier.startsWith('.')) return false;
+      const localTestName = importedTest[1] || 'test';
+      const isSpec = filePath.endsWith('.spec.js');
+      const extension = new RegExp(`${isSpec ? '(?:export\\s+)?' : 'export\\s+'}const\\s+test\\s*=\\s*${localTestName}\\.extend\\s*\\(`);
+      const usesImportedTest = (isSpec && localTestName === 'test') || extension.test(source);
+      return usesImportedTest
+        && inheritsGuardedTest(path.resolve(path.dirname(filePath), specifier), new Set(seen));
+    });
+  };
   for (const [filePath, source] of sources) {
     assert.doesNotMatch(source, /\b(?:chromium|firefox|webkit)\.launch\s*\(/, filePath);
     if (filePath === baseFixturesPath) {
@@ -1930,11 +1995,26 @@ test('all E2E specs inherit guarded fixtures and cannot create direct browser pa
       );
       const sourceOutsideFreshBrowserSession = source.slice(0, fixtureStart) + source.slice(fixtureEnd);
       assert.doesNotMatch(sourceOutsideFreshBrowserSession, directBrowserCreation, filePath);
+    } else if (filePath === mobileFixturesPath) {
+      const factoryStart = source.indexOf('export function createMobileBrowserSessions(');
+      const factoryEnd = source.indexOf('export const test = base.extend(', factoryStart);
+      assert.ok(factoryStart >= 0 && factoryEnd > factoryStart, 'mobile session ownership must remain bounded');
+      const factory = source.slice(factoryStart, factoryEnd);
+      assert.equal((factory.match(/\.newContext\s*\(/g) || []).length, 1);
+      assert.equal((factory.match(/\.newPage\s*\(/g) || []).length, 2);
+      assert.match(factory, /installContextRequestInterceptionGuard\(freshContext\)/);
+      assert.match(factory, /Promise\.allSettled\(entries\.map\(closeEntry\)\)/);
+      assert.match(factory, /AggregateError/);
+      const fixtures = source.slice(factoryEnd);
+      assert.match(fixtures, /requestInterceptionGuard:[\s\S]*installContextRequestInterceptionGuard\(context\)[\s\S]*auto: true/);
+      assert.match(fixtures, /mobileBrowserSessions: async \(\{ browser, context, requestInterceptionGuard \}/);
+      assert.match(fixtures, /finally \{ await sessions\.closeAll\(\); \}/);
+      assert.doesNotMatch(source.slice(0, factoryStart) + fixtures, directBrowserCreation, filePath);
     } else {
       assert.doesNotMatch(source, directBrowserCreation, filePath);
     }
     if (!filePath.endsWith('.spec.js')) continue;
-    assert.match(source, /from ['"]\.\.\/support\/(?:base|performance)Fixtures\.js['"]/, filePath);
+    assert.equal(inheritsGuardedTest(filePath), true, `${filePath} must inherit a guarded named test fixture`);
     assert.doesNotMatch(source, /from ['"]@playwright\/test['"]/, filePath);
   }
 

@@ -374,6 +374,7 @@ test('player album resolution rejects an active queue snapshot when the requeste
 
 function loadLoopBuilderHelpers() {
   const context = {
+    ButtonComponent: require('../../../music_app/static/js/button-component.js'),
     state: {
       utility: {
         loops: [],
@@ -393,6 +394,7 @@ function loadLoopBuilderHelpers() {
         : `${wholeMinutes}:${String(Math.floor(remaining)).padStart(2, '0')}`;
     },
   };
+  context.window = context;
   vm.createContext(context);
   vm.runInContext(playbackControlClusterSource, context, { filename: playbackControlClusterPath });
   vm.runInContext(fs.readFileSync(path.join(path.dirname(helperPath), 'player-and-waveform.js'), 'utf8'), context);
@@ -6237,7 +6239,7 @@ test('Problematic Files detail renders the approved three-column compact table c
     ['Missing cover art', 'Missing year', 'Missing track number'],
   );
   assert.equal(context.lastCompactTableConfig.frame, 'outline');
-  assert.equal(context.lastCompactTableConfig.mobile, 'preserve');
+  assert.equal(context.lastCompactTableConfig.mobile, 'stack');
   assert.equal(context.lastCompactTableConfig.overflow, 'local');
   assert.equal(context.lastCompactTableConfig.columnsConfig.length, 3);
   assert.deepEqual(
@@ -6767,4 +6769,13 @@ test('immediate operation events mark the captured history stale without persist
   assert.deepEqual(persistedEntries, []);
   assert.equal(context.state.utility.logHistory.length, 0);
   assert.deepEqual(stale, ['new-activity']);
+});
+
+test('Problem exclusions distinguish empty rules from a search with no matches', () => {
+  const { context } = loadProblematicTrackNavigationHelpers();
+  const empty = context.buildUtilityRuleDetail({ key: 'problem-ignores', album_items: [], file_items: [] });
+  assert.match(empty, /No problem exclusions yet\./);
+  context.matchesUtilityRuleSearch = () => false;
+  const filtered = context.buildUtilityRuleDetail({ key: 'problem-ignores', album_items: [{ album: 'Elsewhere' }], file_items: [] });
+  assert.match(filtered, /No problem exclusions match your search\./);
 });

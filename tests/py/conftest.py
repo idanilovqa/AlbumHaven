@@ -121,11 +121,19 @@ def _process_is_running(pid: int) -> bool:
     return True
 
 
-def _report_pytest_cleanup(stage: str, *, error: OSError | None = None) -> None:
+def _report_pytest_cleanup(
+    stage: str, *, error: OSError | None = None, path: Path | None = None,
+) -> None:
     """Opt-in child-process diagnostics without filesystem paths or error messages."""
     if os.environ.get("ALBUM_HAVEN_PYTEST_CLEANUP_DIAGNOSTICS") != "1":
         return
     payload = {"stage": stage, "pid": os.getpid()}
+    if path is not None:
+        match = _PYTEST_BASETEMP_PATTERN.fullmatch(path.name)
+        payload["root_relation"] = (
+            "unrecognized" if match is None else
+            "self" if int(match.group("pid")) == os.getpid() else "other"
+        )
     if error is not None:
         payload.update(error_type=type(error).__name__, errno=error.errno,
                        winerror=getattr(error, "winerror", None))
@@ -134,23 +142,34 @@ def _report_pytest_cleanup(stage: str, *, error: OSError | None = None) -> None:
 
 def _owned_generated_pytest_root(path: Path) -> dict[str, object] | None:
     match = _PYTEST_BASETEMP_PATTERN.fullmatch(path.name)
-    if match is None or path.is_symlink() or path.parent.resolve() != _workspace_pytest_temp_root():
+    if match is None:
+        _report_pytest_cleanup("owner-name-rejected", path=path)
+        return None
+    if path.is_symlink():
+        _report_pytest_cleanup("owner-symlink-rejected", path=path)
+        return None
+    if path.parent.resolve() != _workspace_pytest_temp_root():
+        _report_pytest_cleanup("owner-parent-rejected", path=path)
         return None
     try:
         payload = json.loads((path / _PYTEST_BASETEMP_OWNER_FILE).read_text(encoding="utf-8"))
     except OSError as error:
-        _report_pytest_cleanup("owner-read-failed", error=error)
+        _report_pytest_cleanup("owner-read-failed", error=error, path=path)
         return None
     except (ValueError, TypeError):
-        _report_pytest_cleanup("owner-invalid-json")
+        _report_pytest_cleanup("owner-invalid-json", path=path)
         return None
     if not isinstance(payload, dict):
+        _report_pytest_cleanup("owner-payload-type-rejected", path=path)
         return None
     if payload.get("kind") != "album-haven-pytest-basetemp":
+        _report_pytest_cleanup("owner-kind-rejected", path=path)
         return None
     if payload.get("pid") != int(match.group("pid")):
+        _report_pytest_cleanup("owner-pid-rejected", path=path)
         return None
     if payload.get("token") != match.group("token"):
+        _report_pytest_cleanup("owner-token-rejected", path=path)
         return None
     return payload
 
@@ -163,7 +182,14 @@ def _preserve_pytest_owner_after_partial_removal(
     """Keep a failed deletion recoverable without claiming a replacement root."""
     try:
         stat = path.stat()
-        if not stat.st_ino or path.is_symlink() or (stat.st_dev, stat.st_ino) != directory_identity:
+        if not stat.st_ino:
+            _report_pytest_cleanup("restoration-inode-unavailable", path=path)
+            return False
+        if path.is_symlink():
+            _report_pytest_cleanup("restoration-symlink-rejected", path=path)
+            return False
+        if (stat.st_dev, stat.st_ino) != directory_identity:
+            _report_pytest_cleanup("restoration-identity-rejected", path=path)
             return False
         marker = path / _PYTEST_BASETEMP_OWNER_FILE
         try:
@@ -173,7 +199,7 @@ def _preserve_pytest_owner_after_partial_removal(
             # Never replace a marker written by another owner.
             return _owned_generated_pytest_root(path) == owner
     except OSError as error:
-        _report_pytest_cleanup("owner-restoration-failed", error=error)
+        _report_pytest_cleanup("owner-restoration-failed", error=error, path=path)
         return False
     return True
 
@@ -185,49 +211,62 @@ def _remove_owned_generated_pytest_root(path: Path, *, expected_owner: tuple[int
     owner_identity = (int(owner["pid"]), str(owner["token"]))
     if expected_owner is not None:
         if owner_identity != expected_owner:
+            _report_pytest_cleanup("expected-owner-rejected", path=path)
             return False
     elif _process_is_running(owner_identity[0]):
+        _report_pytest_cleanup("stale-owner-live", path=path)
         return False
     try:
         stat = path.stat()
-    except OSError:
+    except OSError as error:
+        _report_pytest_cleanup("initial-stat-failed", error=error, path=path)
         return False
     directory_identity = (stat.st_dev, stat.st_ino)
     for attempt in range(_PYTEST_ROOT_REMOVAL_ATTEMPTS):
         try:
             current = path.stat(follow_symlinks=False)
         except FileNotFoundError:
+            _report_pytest_cleanup("root-already-absent", path=path)
             return True
-        except OSError:
+        except OSError as error:
+            _report_pytest_cleanup("retry-stat-failed", error=error, path=path)
             return False
-        if (path.is_symlink() or (current.st_dev, current.st_ino) != directory_identity
-                or _owned_generated_pytest_root(path) != owner):
-            _report_pytest_cleanup("owner-revalidation-rejected")
+        if path.is_symlink():
+            _report_pytest_cleanup("revalidation-symlink-rejected", path=path)
+            return False
+        if (current.st_dev, current.st_ino) != directory_identity:
+            _report_pytest_cleanup("revalidation-identity-rejected", path=path)
+            return False
+        if _owned_generated_pytest_root(path) != owner:
+            _report_pytest_cleanup("owner-revalidation-rejected", path=path)
             return False
         try:
             shutil.rmtree(path)
         except OSError as error:
-            _report_pytest_cleanup("remove-failed", error=error)
+            _report_pytest_cleanup("remove-failed", error=error, path=path)
             if not path.exists():
                 return True
             # rmtree can remove our marker before an open Windows log blocks the
             # rest. Preserve ownership so final teardown can retry after closure.
             if not _preserve_pytest_owner_after_partial_removal(path, owner, directory_identity):
-                _report_pytest_cleanup("owner-restoration-rejected")
+                _report_pytest_cleanup("owner-restoration-rejected", path=path)
                 return False
             if attempt + 1 == _PYTEST_ROOT_REMOVAL_ATTEMPTS:
-                _report_pytest_cleanup("remove-attempts-exhausted")
+                _report_pytest_cleanup("remove-attempts-exhausted", path=path)
                 return False
         if not path.exists():
-            _report_pytest_cleanup("removed")
+            _report_pytest_cleanup("removed", path=path)
             return True
         time.sleep(0.05 * (2**attempt))
+    _report_pytest_cleanup("remove-root-survived", path=path)
     return False
 
 
 def _cleanup_stale_generated_pytest_roots() -> None:
+    _report_pytest_cleanup("phase-stale-start")
     workspace_temp = _workspace_pytest_temp_root()
     if not workspace_temp.is_dir():
+        _report_pytest_cleanup("stale-workspace-unavailable")
         return
     candidates: list[tuple[float, Path]] = []
     inspected_candidate_count = 0
@@ -236,19 +275,27 @@ def _cleanup_stale_generated_pytest_roots() -> None:
             continue
         inspected_candidate_count += 1
         if inspected_candidate_count > _MAX_PYTEST_ROOTS_INSPECTED_PER_SESSION:
+            _report_pytest_cleanup("stale-inspection-limit")
             break
         try:
-            if path.is_symlink() or not path.is_dir():
+            if path.is_symlink():
+                _report_pytest_cleanup("stale-symlink-rejected", path=path)
+                continue
+            if not path.is_dir():
+                _report_pytest_cleanup("stale-not-directory", path=path)
                 continue
             candidates.append((path.stat().st_mtime, path))
-        except OSError:
+        except OSError as error:
+            _report_pytest_cleanup("stale-inspection-failed", error=error, path=path)
             continue
     removed_count = 0
     for _modified_at, path in sorted(candidates):
         if _remove_owned_generated_pytest_root(path):
             removed_count += 1
         if removed_count >= _MAX_STALE_PYTEST_ROOTS_PER_SESSION:
+            _report_pytest_cleanup("stale-removal-limit")
             break
+    _report_pytest_cleanup("phase-stale-end")
 
 
 def _activate_pytest_session_temp(config: pytest.Config) -> Path:
@@ -286,9 +333,13 @@ def pytest_configure(config: pytest.Config) -> None:
         # this final callback runs. The removal helper still revalidates ownership.
         generated_root = Path(config.option.basetemp).resolve()
         owner_identity = (os.getpid(), generated_token)
-        config.add_cleanup(lambda: _remove_owned_generated_pytest_root(
-            generated_root, expected_owner=owner_identity,
-        ))
+
+        def cleanup_generated_root() -> None:
+            _report_pytest_cleanup("phase-config-cleanup-start", path=generated_root)
+            _remove_owned_generated_pytest_root(generated_root, expected_owner=owner_identity)
+            _report_pytest_cleanup("phase-config-cleanup-end", path=generated_root)
+
+        config.add_cleanup(cleanup_generated_root)
     config._album_haven_test_appdata = _activate_pytest_app_paths(
         Path(config.option.basetemp).resolve()
     )
@@ -315,23 +366,32 @@ def pytest_sessionstart(session: pytest.Session) -> None:
 
 def _cleanup_generated_pytest_root(config: pytest.Config) -> None:
     if not getattr(config, "_album_haven_generated_basetemp", False):
+        _report_pytest_cleanup("cleanup-not-generated")
         return
     factory = getattr(config, "_tmp_path_factory", None)
     base_temp = getattr(factory, "_basetemp", None)
     token = getattr(config, "_album_haven_generated_basetemp_token", None)
-    if base_temp is None or not isinstance(token, str):
+    if base_temp is None:
+        _report_pytest_cleanup("cleanup-basetemp-unavailable")
+        return
+    if not isinstance(token, str):
+        _report_pytest_cleanup("cleanup-token-unavailable", path=base_temp)
         return
     _remove_owned_generated_pytest_root(base_temp, expected_owner=(os.getpid(), token))
 
 
 @pytest.hookimpl(trylast=True)
 def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:
+    _report_pytest_cleanup("phase-sessionfinish-start")
     _cleanup_generated_pytest_root(session.config)
+    _report_pytest_cleanup("phase-sessionfinish-end")
 
 
 @pytest.hookimpl(trylast=True)
 def pytest_unconfigure(config: pytest.Config) -> None:
+    _report_pytest_cleanup("phase-unconfigure-start")
     _cleanup_generated_pytest_root(config)
+    _report_pytest_cleanup("phase-unconfigure-end")
 
 
 def _request_url(value: object) -> str:

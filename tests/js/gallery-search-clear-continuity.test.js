@@ -46,3 +46,11 @@ test('root searches remain hidden until both draft and committed queries clear',
   assert.deepEqual(hiddenWrites, [true, true, false]);
 });
 
+test('mobile GalleryBar remains mounted through query transitions', () => {
+  const { state, hiddenWrites, sync } = setup({ mobile: true });
+  state.ui.searchDraftQuery = 'Neal Morse';
+  sync();
+  state.ui.searchDraftQuery = '';
+  sync();
+  assert.deepEqual(hiddenWrites, [false, false]);
+});

@@ -242,12 +242,12 @@ test('player colors tint automatic action hover while preserving other Main-elem
     assert.equal(actions.hoverBorder, `color-mix(in srgb, ${background} 22%, #858985)`);
     assert.equal(actions.pressedBackground, `color-mix(in srgb, ${panelControl} 75%, #000000)`);
   }
-  assert.equal(first.values.get('--compact-floating-edge-color'), '#29B765');
-  assert.equal(second.values.get('--compact-floating-edge-color'), '#357FB8');
   const playerToken = /^(?:--appearance-(?:player(?:-|$)|play(?:-|$)|waveform-)|--compact-floating-edge-color$)/;
   const firstInteractions = [...first.values].filter(([name]) => !playerToken.test(name) && name !== hoverToken);
   const secondInteractions = [...second.values].filter(([name]) => !playerToken.test(name) && name !== hoverToken);
   assert.deepEqual(secondInteractions, firstInteractions);
+  assert.equal(first.values.get('--compact-floating-edge-color'), '#29B765');
+  assert.equal(second.values.get('--compact-floating-edge-color'), '#357FB8');
 });
 
 test('themed player boundaries preserve floating hover and focus strength', () => {
@@ -275,8 +275,10 @@ test('themed player boundaries preserve floating hover and focus strength', () =
   assert.match(floatingBoundaryRule, /box-shadow:\s*0 0 0 1px var\(--compact-floating-edge-color,/);
   assert.match(
     playerCss,
-    /\.global-player\.is-floating-compact:is\(:hover,:focus-within\)\s*\{[^}]*--compact-floating-glow-strength:\s*38%[^}]*--compact-floating-control-glow-strength:\s*48%/s,
+    /\.global-player\.is-floating-compact:is\(:hover,:focus-within\)\s*\{[^}]*--compact-floating-glow-strength:\s*38%;[^}]*--compact-floating-control-glow-strength:\s*48%/s,
   );
+  assert.match(playerCss, /\.global-player\.is-floating-compact\s*\{[^}]*--compact-floating-glow-strength:\s*24%;[^}]*--compact-floating-control-glow-strength:\s*16%;[^}]*border:\s*1px solid var\(--compact-floating-edge-color/);
+
 });
 
 test('NavigationTree, editor tabs, and Save use non-player Appearance tokens', () => {

@@ -21,6 +21,14 @@ for (const [id, profiles] of [['016', ROLE_PROFILES], ['017', CAPABILITY_PROFILE
           await settingsModalAppBarActions.openSettings();
           await utilityTabBarActions.openTab('appearance');
           await utilityAppearanceActions.waitForReady();
+          if (profile.name === 'mobile') {
+            await utilityAppearanceActions.openSection('seekbar');
+            const appearance = utilityAppearanceActions.utilityAppearanceTab;
+            await expect(appearance.deviceButton('Mobile')).toHaveAttribute('aria-pressed', 'true');
+            await expect(appearance.followMobileMode).toHaveAttribute('aria-pressed', 'true');
+            await appearance.customMobileMode.click();
+            await expect(appearance.customMobileMode).toHaveAttribute('aria-pressed', 'true');
+          }
           await utilityAppearanceActions.saveSeekbarMode('waveform');
           await settingsModalAppBarActions.closeSettings();
         }

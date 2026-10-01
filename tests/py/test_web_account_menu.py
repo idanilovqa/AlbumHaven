@@ -37,7 +37,10 @@ def test_shell_menu_uses_policy_projection_and_session_bound_csrf(monkeypatch, c
     assert calls == [
         (request, ("accounts.read",)),
         (request, ("library.loops.create",)),
+        (request, ("library.rules.read", "library.loops.read", "library.logs.read",
+                   "library.problems.read", "integration.settings.read", "library.settings.read")),
     ]
+    assert context["utility_allowed_actions"] is allowed
     assert context["playback_allowed_actions"] is allowed
     assert context["account_menu_allowed_actions"] is allowed
     assert context["account_menu_allowed_actions"].allows("accounts.read") is can_manage

@@ -1,10 +1,11 @@
 {% from "components/on-page-alert.html" import on_page_alert %}
 {% from "partials/button.html" import ui_button %}
+{% from "partials/page-gallery-bar.html" import page_gallery_bar %}
 <!doctype html>
 <html lang="en">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>Password &amp; security — Album Haven</title>
   <link rel="stylesheet" href="/static/css/account.css">
   <link rel="stylesheet" href="/static/css/admin-members.css">
@@ -12,12 +13,15 @@
   <link rel="stylesheet" href="/static/css/settings-navigation.css">
   <link rel="stylesheet" href="/static/css/app-chrome.css">
   {% include "partials/navigation-tree-assets.html" %}
+  <script src="/static/js/surface-dismissal.js?v={{ runtime_asset_version | default(app_version) }}" defer></script>
   <script src="/static/js/account.js" defer></script>
   {% include "partials/admin-ui-assets.html" %}
   <script src="/static/js/admin-members.js" defer></script>
   <script src="/static/js/settings-navigation.js" defer></script>
   {% include "partials/appearance-bootstrap.html" %}
   <link rel="stylesheet" href="/static/css/runtime/alert-components.css">
+  <link rel="stylesheet" href="/static/css/gallery-main.css?v={{ runtime_asset_version | default(app_version) }}">
+  <link rel="stylesheet" href="/static/css/mobile-layout.css?v={{ runtime_asset_version | default(app_version) }}">
 </head>
 <body>
   {{ on_page_alert('This page could not be loaded. Please try again.', severity='error', hidden=true, class_name='settings-navigation-error', attributes={'data-settings-navigation-error': ''}) }}
@@ -28,13 +32,7 @@
     {% include "partials/admin-settings-nav.html" %}
     <div class="settings-outlet" data-settings-outlet>
     <section class="account-main">
-      <header class="account-header">
-        <div class="account-avatar" aria-hidden="true">{{ profile.username[:2] | upper }}</div>
-        <div>
-          <h1>Password &amp; security</h1>
-          <p>Signed in as <strong>{{ profile.username }}</strong> · Album Haven member</p>
-        </div>
-      </header>
+      {{ page_gallery_bar('Password', profile.username, settings_navigation=true) }}
 
       {% if changed %}
       {{ on_page_alert('Your password was changed. Other sessions have been signed out.', role='status', class_name='account-notice') }}

@@ -8,57 +8,6 @@ const helperPath = path.join(__dirname, '..', '..', '..', 'music_app', 'static',
 const helperSource = fs.readFileSync(helperPath, 'utf8');
 const tagMutationSource = fs.readFileSync(path.join(path.dirname(helperPath), 'utility-list-builders.js'), 'utf8');
 
-test('initial startup readiness waits for its successful full render', async () => {
-  const { context, pendingRequests } = createContext();
-  const startup = context.fetchAndRender('/view-data', false, { startupRefresh: true });
-  assert.equal(context.startupMetrics.completed, 0);
-  pendingRequests[0].resolveWith({ artist_groups: [], initial_view_partial: false });
-  assert.equal(await startup, true);
-  assert.equal(context.startupMetrics.completed, 1);
-});
-
-test('current canonical navigation completes startup readiness and a late superseded response cannot repeat it', async () => {
-  const { context, calls, pendingRequests } = createContext();
-  const startup = context.fetchAndRender('/view-data?payload_tier=full', false, { startupRefresh: true });
-  // Model a transport that has already received the response when cancellation arrives.
-  context.state.ui.activeViewRequestController.abort = () => {};
-  const navigation = context.fetchAndRender('/view-data?artist=Current', true);
-  assert.equal(context.startupMetrics.completed, 0);
-  pendingRequests[1].resolveWith({ selected_artist: 'Current', artist_groups: [], initial_view_partial: false });
-  assert.equal(await navigation, true);
-  assert.equal(context.startupMetrics.completed, 1);
-  assert.equal(calls.renderView.length, 1);
-  pendingRequests[0].resolveWith({ selected_artist: 'Stale', artist_groups: [], initial_view_partial: false });
-  assert.equal(await startup, false);
-  assert.equal(context.startupMetrics.completed, 1);
-  assert.equal(context.state.view.selected_artist, 'Current');
-});
-
-test('a failed navigation after cancelling startup does not declare startup ready', async () => {
-  const { context, pendingRequests } = createContext();
-  const startup = context.fetchAndRender('/view-data?payload_tier=full', false, { startupRefresh: true });
-  const navigation = context.fetchAndRender('/view-data?artist=Failure', true);
-  assert.equal(await startup, false);
-  pendingRequests[1].rejectWith(new Error('navigation failed'));
-  await assert.rejects(navigation, /navigation failed/);
-  assert.equal(context.startupMetrics.completed, 0);
-});
-
-for (const [label, payload] of [
-  ['partial view', { artist_groups: [], initial_view_partial: true }],
-  ['sidebar tier', { artist_groups: [], payload_tier: 'sidebar' }],
-  ['missing gallery', { selected_artist: 'Current' }],
-  ['HTTP failure', { artist_groups: [], ok: false, status: 500 }],
-]) {
-  test(`${label} navigation cannot complete startup readiness`, async () => {
-    const { context, pendingRequests } = createContext();
-    const navigation = context.fetchAndRender('/view-data?artist=Current', true);
-    pendingRequests[0].resolveWith(payload);
-    await navigation;
-    assert.equal(context.startupMetrics.completed, 0);
-  });
-}
-
 test('a deferred gallery refresh cannot overwrite a newer optimistic tag mutation', async () => {
   const { context, calls, pendingRequests } = createContext();
   vm.runInContext(tagMutationSource, context);
@@ -809,13 +758,65 @@ test('normal selected-artist requests retain existing family reconciliation and 
   assert.equal(calls.renderRelated, 2);
 });
 
-test('fetchAndRender lets a newer tree request supersede startup hydration work', async () => {
+test('initial startup readiness waits for its successful full render', async () => {
+  const { context, pendingRequests } = createContext();
+  const startup = context.fetchAndRender('/view-data', false, { startupRefresh: true });
+  assert.equal(context.startupMetrics.completed, 0);
+  pendingRequests[0].resolveWith({ artist_groups: [], initial_view_partial: false });
+  assert.equal(await startup, true);
+  assert.equal(context.startupMetrics.completed, 1);
+});
+
+test('current canonical navigation completes startup readiness and a late superseded response cannot repeat it', async () => {
+  const { context, calls, pendingRequests } = createContext();
+  const startup = context.fetchAndRender('/view-data?payload_tier=full', false, { startupRefresh: true });
+  // Model a transport that has already received the response when cancellation arrives.
+  context.state.ui.activeViewRequestController.abort = () => {};
+  const navigation = context.fetchAndRender('/view-data?artist=Current', true);
+  assert.equal(context.startupMetrics.completed, 0);
+  pendingRequests[1].resolveWith({ selected_artist: 'Current', artist_groups: [], initial_view_partial: false });
+  assert.equal(await navigation, true);
+  assert.equal(context.startupMetrics.completed, 1);
+  assert.equal(calls.renderView.length, 1);
+  pendingRequests[0].resolveWith({ selected_artist: 'Stale', artist_groups: [], initial_view_partial: false });
+  assert.equal(await startup, false);
+  assert.equal(context.startupMetrics.completed, 1);
+  assert.equal(context.state.view.selected_artist, 'Current');
+});
+
+test('a failed navigation after cancelling startup does not declare startup ready', async () => {
+  const { context, pendingRequests } = createContext();
+  const startup = context.fetchAndRender('/view-data?payload_tier=full', false, { startupRefresh: true });
+  const navigation = context.fetchAndRender('/view-data?artist=Failure', true);
+  assert.equal(await startup, false);
+  pendingRequests[1].rejectWith(new Error('navigation failed'));
+  await assert.rejects(navigation, /navigation failed/);
+  assert.equal(context.startupMetrics.completed, 0);
+});
+
+for (const [label, payload] of [
+  ['partial view', { artist_groups: [], initial_view_partial: true }],
+  ['sidebar tier', { artist_groups: [], payload_tier: 'sidebar' }],
+  ['missing gallery', { selected_artist: 'Current' }],
+  ['HTTP failure', { artist_groups: [], ok: false, status: 500 }],
+]) {
+  test(`${label} navigation cannot complete startup readiness`, async () => {
+    const { context, pendingRequests } = createContext();
+    const navigation = context.fetchAndRender('/view-data?artist=Current', true);
+    pendingRequests[0].resolveWith(payload);
+    await navigation;
+    assert.equal(context.startupMetrics.completed, 0);
+  });
+}
+
+for (const preserveScroll of [false, true]) {
+test(`fetchAndRender transfers a superseded transition to the new request (preserveScroll: ${preserveScroll})`, async () => {
   const { context, calls, pendingRequests } = createContext();
 
   const firstPromise = context.fetchAndRender('/view-data?artist=First', false, { startupRefresh: true });
   assert.equal(pendingRequests.length, 1);
 
-  const secondPromise = context.fetchAndRender('/view-data?artist=Second', true, { startupRefresh: false });
+  const secondPromise = context.fetchAndRender('/view-data?artist=Second', true, { startupRefresh: false, preserveScroll });
   assert.equal(pendingRequests.length, 2);
   assert.equal(pendingRequests[0].options.signal.aborted, true);
 
@@ -830,11 +831,14 @@ test('fetchAndRender lets a newer tree request supersede startup hydration work'
   assert.deepEqual(calls.applyViewPayload, [{ selected_artist: 'Second' }]);
   assert.equal(context.state.view.selected_artist, 'Second');
   assert.equal(context.state.busy, false);
+  assert.equal(context.state.ui.pendingViewTransition, false);
+  assert.equal(context.state.ui.pendingViewTransitionRequestId, 0);
   assert.equal(context.state.ui.activeViewRequestController, null);
   assert.deepEqual(calls.pushBrowserViewState, [context.state.view]);
 
   await firstPromise;
 });
+}
 
 test('fetchAndRender cannot overwrite a newer locally filtered artist-family view', async () => {
   const { context, calls, pendingRequests } = createContext();
@@ -5848,6 +5852,46 @@ test('a finalization cancellation reconciles the authoritative gallery without s
   assert.equal(context.state.view.artist_groups[0].albums[0].key, 'authoritative');
   assert.deepEqual(calls.showToast, []);
 });
+
+
+test('startup hydration preserves an open Sources menu while foreground navigation closes it', async () => {
+  const { context, pendingRequests } = createContext();
+  let closes = 0;
+  context.hideGalleryOptionsMenu = () => { closes++; };
+  const startup = context.fetchAndRender('/view-data', false, { startupRefresh: true, preserveScroll: true });
+  assert.equal(closes, 0);
+  pendingRequests[0].resolveWith({ artist_groups: [] });
+  await startup;
+  const navigation = context.fetchAndRender('/view-data?artist=Northlight');
+  assert.equal(closes, 1);
+  pendingRequests[1].resolveWith({ selected_artist: 'Northlight', artist_groups: [] });
+  await navigation;
+});
+
+
+test('explicit search retires a resumed utility startup refresh instead of replaying Home', async () => {
+  const { context, calls, pendingRequests } = createContext();
+  vm.runInContext(fs.readFileSync(path.join(path.dirname(helperPath), 'utility-loaders-and-cover-lookup.js'), 'utf8'), context);
+  const deferred = {
+    url: '/view-data?surface=albums&omit_sidebar=1', push: false,
+    originatingViewStateRevision: context.state.ui.viewStateRevision,
+    options: { startupRefresh: true, startupHydrationTier: 'full', preserveScroll: true },
+  };
+  context.state.ui.deferredUtilityViewRequest = deferred;
+  assert.equal(context.resumeDeferredUtilityViewRequest(), true);
+  assert.equal(pendingRequests.length, 1);
+  const search = context.fetchAndRender('/view-data?q=Sixteen+Horizons', true);
+  assert.equal(pendingRequests[0].options.signal.aborted, true);
+  assert.equal(context.state.ui.deferredUtilityViewRequest, null);
+  pendingRequests[1].resolveWith({ query: 'Sixteen Horizons', selected_artist: 'Northlight', artist_groups: [] });
+  assert.equal(await search, true);
+  await flushMicrotasks();
+  assert.equal(calls.fetchRequests.length, 2);
+  assert.equal(context.state.view.query, 'Sixteen Horizons');
+  assert.equal(context.state.view.selected_artist, 'Northlight');
+  assert.equal(context.state.ui.pendingViewRequest, null);
+});
+
 
 test('preserving mounted cards refreshes gallery chrome for the committed view', () => {
   for (const options of [

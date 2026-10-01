@@ -53,7 +53,7 @@ function buildUtilityLoopEntry(loop) {
         ${state.utility.allowedActions?.['library.loops.delete'] === true ? window.ButtonComponent.renderActionButton({ icon: 'delete', semantic: 'destructive', ariaLabel: `Delete ${loop.name || 'Saved loop'}`, title: `Delete ${loop.name || 'Saved loop'}`, className: 'utility-loop-remove', attributes: { 'data-delete-saved-loop': loop.id || '' } }) : ''}
       </div>
       <div class="utility-loop-shell" data-utility-loop-shell="${escapeHtml(loop.id || '')}">
-        <audio class="utility-loop-audio" data-loop-audio="${escapeHtml(loop.id || '')}" data-original-src="${mediaSrc}" src="${mediaSrc}" preload="none"></audio>
+        <audio class="utility-loop-audio" data-loop-audio="${escapeHtml(loop.id || '')}" data-original-src="${mediaSrc}" data-loop-duration="${Math.max(0, Number(loop.duration_seconds) || 0)}" src="${mediaSrc}" preload="none"></audio>
         ${renderPlaybackControlCluster({
           variant: 'saved-loop',
           ownerId: `saved-loop-${String(loop.id || '')}`,
@@ -80,9 +80,13 @@ function buildUtilityLoopEntry(loop) {
           </div>
         </div>
         <button class="utility-loop-repeat ${repeatEnabled ? 'is-active' : ''}" type="button" data-toggle-loop-repeat="${escapeHtml(loop.id || '')}" aria-pressed="${repeatEnabled ? 'true' : 'false'}" aria-label="${repeatEnabled ? 'Disable repeat' : 'Enable repeat'}" title="${repeatEnabled ? 'Disable repeat' : 'Enable repeat'}">&#8635;</button>
+        ${window.ButtonComponent.renderButton({ label: 'Pitch 0', size: 'small', className: 'utility-loop-pitch-button', ariaLabel: 'Pitch shift', attributes: { 'data-loop-pitch-value-button': loop.id || '', 'aria-haspopup': 'menu', 'aria-expanded': 'false' } })}
+        <div class="utility-loop-speed-menu utility-loop-pitch-menu" data-loop-pitch-menu="${loopId}" role="menu" aria-label="Pitch shift" hidden>
+          ${Array.from({ length: 25 }, (_, index) => index - 12).map(value => `<button type="button" role="menuitemradio" aria-checked="${value === 0}" data-loop-pitch-option="${value}">${value === 0 ? 'Original pitch' : `${value > 0 ? '+' : ''}${value} semitones`}</button>`).join('')}
+        </div>
         <div class="utility-loop-speed-control" data-loop-speed-control="${escapeHtml(loop.id || '')}" aria-label="Playback speed">
           <button class="utility-loop-speed-step" type="button" data-loop-speed-step="-0.05" aria-label="Decrease speed">-</button>
-          <button class="utility-loop-speed-value" type="button" data-loop-speed-value-button="${escapeHtml(loop.id || '')}" aria-label="Playback speed">1x</button>
+          <button class="utility-loop-speed-value" type="button" data-loop-speed-value-button="${escapeHtml(loop.id || '')}" aria-label="Playback speed" aria-haspopup="menu" aria-expanded="false">1x</button>
           <button class="utility-loop-speed-step" type="button" data-loop-speed-step="0.05" aria-label="Increase speed">+</button>
           <div class="utility-loop-speed-menu" data-loop-speed-menu="${escapeHtml(loop.id || '')}" hidden>
             <button type="button" data-loop-speed-option="0.25">0.25x</button>
@@ -182,7 +186,7 @@ function buildUtilityIntegrationDetail(item) {
     const format = state.utility.foobarFormat || 'Playback Statistics XML';
     return `<div class="utility-rule-detail"><h3 class="utility-rule-title">Foobar2000</h3>
       <section class="library-settings-section"><label class="lastfm-inline-field"><span>SQLite database</span><input class="utility-search-input" type="text" placeholder="SQLite database path" disabled aria-describedby="foobar-unavailable"></label>
-      <div class="settings-integration-actions">${button({ label: 'Save', disabled: true })}</div></section>
+      <div class="settings-integration-actions">${button({ label: 'Save', variant: 'primary', disabled: true })}</div></section>
       <section class="library-settings-section"><h4>Import playback history</h4><div class="settings-integration-actions">
       ${button({ label: format, attributes: { 'data-foobar-format-trigger': '1', 'aria-haspopup': 'menu', 'aria-expanded': 'false' } })}
       ${button({ label: 'Import', disabled: true, attributes: { 'data-foobar-import': '1' } })}</div>
@@ -302,6 +306,7 @@ function buildProblemIgnoresRuleDetail(rule) {
       <div class="utility-rule-detail utility-problem-exclusions-detail">
         <h3 class="utility-rule-title">${escapeHtml(rule?.title || 'Problem exclusions')}</h3>
         <p class="utility-rule-description">${escapeHtml(rule?.description || 'Album or file problems excluded from Problematic Files.')}</p>
+        ${!albumItems.length && !fileItems.length ? `<p class="utility-detail-meta">${rule.album_items?.length || rule.file_items?.length ? 'No problem exclusions match your search.' : 'No problem exclusions yet.'}</p>` : ''}
         ${albumItems.length ? `<section class="utility-problem-exclusion-group">
           <h4 class="utility-detail-section-title">ALBUM EXCLUSIONS</h4>
           ${table(albumItems, 'Artist / Album', 'Album exclusions', 'problem-exclusions-album', 'album')}
@@ -459,7 +464,7 @@ function buildDetectedProblemsHtml(album) {
     id: 'problematic-track-problems', ariaLabel: 'Detected problems',
     columns: 'minmax(180px,1fr) minmax(160px,1fr) minmax(180px,1.2fr)',
     columnsConfig: [{ key: 'filename', label: 'Track / file' }, { key: 'reason', label: 'Problems' }, { key: 'suggested', label: 'Suggested edits' }],
-    headers: 'visible', density: 'compact', overflow: 'local', mobile: 'preserve', frame: 'outline', rows: tableRows,
+    headers: 'visible', density: 'compact', overflow: 'local', mobile: 'stack', frame: 'outline', rows: tableRows,
   }) : '';
   const separateCandidate = album?.separate_release_candidate;
   const separateKey = String(separateCandidate?.key || '');
@@ -467,7 +472,7 @@ function buildDetectedProblemsHtml(album) {
   const separateActions = separateKey ? `<label class="utility-separate-release-choice ${separateSelected ? 'is-active' : ''}">
       <input type="checkbox" data-separate-release-key="${escapeHtml(separateKey)}" ${separateSelected ? 'checked' : ''}>
       <span>Separate releases</span><small>${escapeHtml((separateCandidate.years || []).join(' / '))}</small></label>
-    ${ButtonComponent.renderButton({ label: 'Apply separate releases', className: 'utility-detail-apply', disabled: !separateSelected || !album.allowed_actions?.['library.rules.manage'], attributes: { 'data-open-separate-release-confirm': '1' } })}` : '';
+    ${ButtonComponent.renderButton({ label: 'Apply separate releases', variant: 'primary', className: 'utility-detail-apply', disabled: !separateSelected || !album.allowed_actions?.['library.rules.manage'], attributes: { 'data-open-separate-release-confirm': '1' } })}` : '';
   const selected = Object.values(state.utility.proposalSelections || {}).some(Boolean);
   return `<div class="sr-only" data-problem-exclusion-status role="status" tabindex="-1"></div>
     <div class="utility-album-problem-labels">${albumProblems}</div>
@@ -475,8 +480,8 @@ function buildDetectedProblemsHtml(album) {
     ${table ? `<div class="utility-detected-table">${table}</div>` : `<p class="utility-detail-meta">${selectedFilters.length ? 'No per-track problems match the selected filters.' : albumRows.length ? 'Only album-level problems found. No per-track problems.' : 'No per-track problems found.'}</p>`}
     ${albumProblems || tableRows.length || separateActions || getIgnoredRepairRowKeys().length ? `<div class="utility-detected-actions">
       ${separateActions}
-      ${ButtonComponent.renderButton({ label: 'Create Exception', className: 'utility-exception-action', disabled: !getIgnoredRepairRowKeys().length || !album.allowed_actions?.['library.rules.manage'], attributes: { 'data-open-exclusion-confirm': '1' } })}
-      ${tableRows.length ? ButtonComponent.renderButton({ label: selected ? 'Apply' : 'Apply All', className: 'utility-detail-apply', disabled: !album.allowed_actions?.['library.files.edit_tags'] || !getApplicableProblemSuggestions().length || Boolean(state.utility.proposalApplyBusy), attributes: { 'data-apply-problem-suggestions': '1' } }) : ''}
+      ${ButtonComponent.renderButton({ label: 'Create Exception', variant: 'primary', className: 'utility-exception-action', disabled: !getIgnoredRepairRowKeys().length || !album.allowed_actions?.['library.rules.manage'], attributes: { 'data-open-exclusion-confirm': '1' } })}
+      ${tableRows.length ? ButtonComponent.renderButton({ label: selected ? 'Apply' : 'Apply All', variant: 'primary', className: 'utility-detail-apply', disabled: !album.allowed_actions?.['library.files.edit_tags'] || !getApplicableProblemSuggestions().length || Boolean(state.utility.proposalApplyBusy), attributes: { 'data-apply-problem-suggestions': '1' } }) : ''}
     </div>` : ''}`;
 }
 function buildProblematicAlbumDetail(album) {
@@ -2582,7 +2587,13 @@ function renderProblemFilterControls(els) {
 
   if (els.problemFilterMenu) {
     els.problemFilterMenu.hidden = !state.utility.problemDropdownOpen;
-    if (state.utility.problemDropdownOpen && typeof syncTriggerAnchor === 'function') syncTriggerAnchor(els.problemFilterMenu, els.problemFilterButton);
+    if (state.utility.problemDropdownOpen && typeof syncTriggerAnchor === 'function') {
+      if (typeof activateTriggerSurface === 'function') activateTriggerSurface(els.problemFilterMenu, () => {
+        state.utility.problemDropdownOpen = false;
+        renderProblemFilterControls(els);
+      });
+      syncTriggerAnchor(els.problemFilterMenu, els.problemFilterButton);
+    }
     else if (typeof clearTriggerAnchor === 'function') clearTriggerAnchor(els.problemFilterMenu);
     els.problemFilterMenu.innerHTML = reasonTypes.length
       ? reasonTypes.map((reason) => `

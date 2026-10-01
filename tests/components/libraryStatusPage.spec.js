@@ -26,6 +26,7 @@ async function mountStatusComponent(page, status) {
   ]) {
     await page.addStyleTag({ path: path.join(root, 'music_app/static/css', file) });
   }
+  await page.addScriptTag({ path: path.join(root, 'music_app/static/js/button-component.js') });
   await page.evaluate(() => {
     window.appBootstrap = {
       getInitialView: () => ({ album_count: 1, query: '', selected_artist: '' }),

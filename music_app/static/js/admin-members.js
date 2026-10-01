@@ -69,10 +69,12 @@
   let active = true;
   let disposeMemberMenus = () => {};
   let removePlacementListeners = () => {};
+  let removeSurfaceListener = () => {};
+  let removeDismissalListener = () => {};
   const requests = typeof AbortController === 'undefined' ? null : new AbortController();
   const nativeFetch = globalThis.fetch;
   const fetch = (url, init) => nativeFetch(url, { ...init, ...(requests ? { signal: requests.signal } : {}) });
-  const cleanup = () => { active = false; requests?.abort(); disposeMemberMenus(); removePlacementListeners(); };
+  const cleanup = () => { active = false; requests?.abort(); disposeMemberMenus(); removePlacementListeners(); removeSurfaceListener(); removeDismissalListener(); };
   const navigate = (url) => {
     if (!active) return Promise.resolve(false);
     return options.navigate ? options.navigate(url) : window.location.assign(url);
@@ -233,17 +235,37 @@
     memberMenuCleanups.push(attachAccountMenu(component, { position: positionMenu, focusOnPointer: true }));
   }
   disposeMemberMenus = () => memberMenuCleanups.forEach(dispose => dispose?.());
-  const closeOnLayoutChange = (event) => {
+  removeDismissalListener = window.AlbumHavenSurfaceDismissal?.bind(window, () => {
+    const menu = document.querySelector('[data-member-menu]:not([hidden])');
+    const trigger = menu && document.querySelector(`[data-member-menu-trigger="${menu.dataset.memberMenu}"]`);
+    return menu && trigger ? { surface: menu, anchor: trigger, dismiss() {
+      closeMenu(trigger, menu); trigger.focus({ preventScroll: true });
+    } } : null;
+  }) || (() => {});
+  const ownerDocument = root.ownerDocument || root;
+  const onSurfaceOpening = event => {
     for (const menu of document.querySelectorAll('[data-member-menu]:not([hidden])')) {
-      if (event?.type === 'scroll' && menu.contains(event.target)) continue;
+      if (menu === event.detail?.surface || menu.contains(event.detail?.surface)) continue;
       const trigger = document.querySelector(`[data-member-menu-trigger="${menu.dataset.memberMenu}"]`);
       if (trigger) closeMenu(trigger, menu);
     }
   };
+  ownerDocument.addEventListener?.('album-haven:surface-opening', onSurfaceOpening);
+  removeSurfaceListener = () => ownerDocument.removeEventListener?.('album-haven:surface-opening', onSurfaceOpening);
+  const closeOnLayoutChange = (event) => {
+    for (const menu of document.querySelectorAll('[data-member-menu]:not([hidden])')) {
+      if (['scroll', 'wheel'].includes(event?.type) && menu.contains(event.target)) continue;
+      const trigger = document.querySelector(`[data-member-menu-trigger="${menu.dataset.memberMenu}"]`);
+      if (event?.type === 'wheel' && trigger?.contains(event.target)) continue;
+      if (trigger) closeMenu(trigger, menu);
+    }
+  };
+  window.addEventListener?.('wheel', closeOnLayoutChange, { capture: true, passive: true });
   window.addEventListener?.('scroll', closeOnLayoutChange, true);
   window.addEventListener?.('resize', closeOnLayoutChange);
   removePlacementListeners = () => {
     closeOnLayoutChange();
+    window.removeEventListener?.('wheel', closeOnLayoutChange, true);
     window.removeEventListener?.('scroll', closeOnLayoutChange, true);
     window.removeEventListener?.('resize', closeOnLayoutChange);
   };

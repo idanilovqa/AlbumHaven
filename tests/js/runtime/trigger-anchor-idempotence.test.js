@@ -39,9 +39,16 @@ function setup() {
   let content = true;
   anchor.closest = () => content ? {} : null;
   const surface = node('surface', { left: 0, right: 300, top: 54, bottom: 250 });
-  const context = vm.createContext({ getComputedStyle: () => ({ backgroundColor: 'rgb(237, 242, 247)' }) });
+  let background = 'rgb(237, 242, 247)';
+  const listeners = new Map();
+  const context = vm.createContext({
+    getComputedStyle: node => ({ backgroundColor: node.style.getPropertyValue('--trigger-anchor-background') || background }),
+    addEventListener: (name, callback) => listeners.set(name, callback),
+  });
   vm.runInContext(fs.readFileSync(path.join(__dirname, '../../../music_app/static/js/runtime/trigger-anchor.js'), 'utf8'), context);
-  return { anchor, surface, mutations, context, chrome: () => { content = false; } };
+  return { anchor, surface, mutations, context, chrome: () => { content = false; },
+    applyTheme(color) { background = color; listeners.get('album-haven-appearance-change')(); },
+  };
 }
 
 test('unchanged anchor synchronization leaves the mounted surface and trigger untouched', () => {
@@ -73,4 +80,20 @@ test('anchor synchronization still applies changed context, edge, side and geome
   context.clearTriggerAnchor(surface);
   assert.equal(surface.classList.contains('trigger-anchor-surface'), false);
   assert.equal(anchor.classList.contains('trigger-anchor-open'), false);
+});
+
+test('an applied theme refreshes open surface paint without losing anchor identity or geometry', () => {
+  const { anchor, surface, context, applyTheme, mutations } = setup();
+  context.syncTriggerAnchor(surface, anchor);
+  mutations.length = 0;
+  applyTheme('rgb(255, 247, 229)');
+  assert.equal(surface.style.getPropertyValue('--trigger-anchor-background'), 'rgb(255, 247, 229)');
+  assert.equal(anchor.style.getPropertyValue('--trigger-anchor-background'), 'rgb(255, 247, 229)');
+  assert.equal(surface.style.getPropertyValue('--trigger-anchor-left'), '100px');
+  assert.equal(surface.dataset.triggerAnchorContext, 'content');
+  assert.equal(surface.classList.contains('trigger-anchor-surface'), true);
+  assert.equal(mutations.some(value => value.includes('.data.') || value.endsWith('.class')), false);
+  mutations.length = 0;
+  context.syncTriggerAnchor(surface, anchor);
+  assert.deepEqual(mutations, []);
 });

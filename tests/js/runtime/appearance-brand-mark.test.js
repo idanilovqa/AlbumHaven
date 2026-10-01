@@ -28,5 +28,5 @@ test('folded Artist Tree aligns the brand mark with the compact navigation cente
 
 test('expanded Artist Tree aligns its back button and title on one centerline', () => {
   assert.match(baseLayoutCss, /\.shell-navigation-rail-header\s*\{[^}]*align-items:\s*center;[^}]*justify-content:\s*flex-start;[^}]*gap:\s*8px;/s);
-  assert.match(baseLayoutCss, /\.shell-navigation-rail-header h2\s*\{[^}]*margin-block:\s*0;/s);
+  assert.match(baseLayoutCss, /\.sidebar \.shell-navigation-rail-header h2\s*\{[^}]*margin-block:\s*0;/s);
 });

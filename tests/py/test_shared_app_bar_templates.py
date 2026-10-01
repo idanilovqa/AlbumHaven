@@ -172,7 +172,7 @@ def test_library_app_bar_owns_sources_and_aligns_search_with_gallery_body(render
 
 def test_gallery_template_hosts_exact_controls_and_album_type_defaults(render):
     shell = render().one(id="app-shell")
-    gallery_bar = shell.one(**{"data-gallery-bar": None})
+    gallery_bar = shell.one(**{"data-gallery-bar-instance": "gallery"})
     actions = gallery_bar.find_all("button", **{"data-gallery-bar-action": None})
     assert [action.attrs["data-gallery-bar-action"] for action in actions] == [
         "artist-family", "view", "album-types",
@@ -304,10 +304,12 @@ def test_search_component_appends_custom_actions_and_supports_multiple_instances
     assert custom.parent.parent is field.parent
     assert not custom.find_all("svg")
     assert len(document.find_all("button")) == 5
-    assert len(document.find_all("button", **{"data-search-submit": None})) == 2
-    clear_buttons = document.find_all("button", **{"data-search-clear": None})
-    assert len(clear_buttons) == 2
-    assert all("hidden" in button.attrs for button in clear_buttons)
+    submits = document.find_all("button", **{"data-search-submit": None})
+    assert [button.attrs["aria-label"] for button in submits] == ["Search", "Find tracks"]
+    clears = document.find_all("button", **{"data-search-clear": None})
+    assert len(clears) == 2
+    assert all("hidden" in button.attrs and button.attrs["aria-label"] == "Clear search" for button in clears)
+    assert len(submits) == 2
     assert custom.parent.children[-1] is custom
     second_field = document.one("input", id="second-search")
     assert second_field.parent.one("button", type="submit").attrs["aria-label"] == "Find tracks"

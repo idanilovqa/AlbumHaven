@@ -58,6 +58,9 @@ def persist_settings_playback_inventory(
     setup_database_url: str,
     library_root: Path,
     file_cache: dict[str, dict[str, object]],
+    *,
+    rebuild_relations: bool = False,
+    include_missing_inventory: bool = False,
 ) -> None:
     from config import PERSISTENCE_BACKEND_POSTGRES
     from music_app.services.library_roots import (
@@ -83,12 +86,14 @@ def persist_settings_playback_inventory(
             "layout_mode": "artist",
         }],
     })
-    if not file_cache:
+    if not file_cache or not include_missing_inventory:
         PostgresScanCacheAdapter(config).save_snapshot(
             config["CACHE_PATH"], file_cache, library_root_cache_identity(config), time.time(),
+            rebuild_relation_projection=rebuild_relations,
         )
         return
-    # Missing inventory is a real prior scan observation, followed by an observed
+    # Only the settings playback scenario owns this missing inventory. It is a
+    # real prior scan observation, followed by an observed
     # disappearance before ASGI starts. The application receives normal rows only.
     existing_path, existing = next(iter(file_cache.items()))
     missing_path = library_root / "Settings Navigation Fixture" / "Missing Boundary Session" / "01 - Missing Signal.mp3"
@@ -98,12 +103,16 @@ def persist_settings_playback_inventory(
                "title": "Missing Signal", "cover_path": None}
     adapter = PostgresScanCacheAdapter(config)
     root_identity = library_root_cache_identity(config)
-    adapter.save_snapshot(config["CACHE_PATH"], {**file_cache, str(missing_path): missing}, root_identity, time.time())
+    adapter.save_snapshot(
+        config["CACHE_PATH"], {**file_cache, str(missing_path): missing}, root_identity, time.time(),
+        rebuild_relation_projection=rebuild_relations,
+    )
     missing_path.unlink()
     missing_path.parent.rmdir()
     adapter.save_snapshot(
         config["CACHE_PATH"], file_cache, root_identity, time.time(),
         observed_library_root_ids={"isolated-e2e-root"},
+        rebuild_relation_projection=rebuild_relations,
     )
 
 

@@ -3,9 +3,9 @@
 {% from "partials/button.html" import ui_button %}
 <section data-capability-assignment data-prerequisites="{{ access_editor.prerequisites | tojson | forceescape }}" aria-label="Role and capability assignment">
   <input type="hidden" name="access_revision" value="{{ access_editor.revision }}">
-  <fieldset class="permission-fieldset">
+  <fieldset class="permission-fieldset" aria-describedby="admin-role-description">
     <legend>Roles</legend>
-    {{ on_page_alert('Roles add together. Admin manages users and access; Owner grants library features, not administration. Select both only when both are needed.', role='note', class_name='role-note') }}
+    {{ on_page_alert('Roles add together. Admin manages users and access; Owner grants library features, not administration. Select both only when both are needed.', role='note', class_name='role-note', attributes={'id': 'admin-role-description'}) }}
     <div class="permission-groups">
       {% for roles in access_editor.roles | batch(2) %}
       <section class="permission-group">

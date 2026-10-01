@@ -1505,12 +1505,14 @@ test('optimistic detail hydration treats a not-yet-committed Postgres album as r
 });
 
 
-function logEntryHarness({ allowed = true, activeTab = 'appearance', entryLoaded = false } = {}) {
+function logEntryHarness({ allowed = true, activeTab = 'appearance', entryLoaded = false, mobileAllowed = true } = {}) {
   const events = [];
   const permission = { allowed };
   const { context } = loadHelper({
     window: { AlbumHavenCapabilities: { allowsUtilityTab: tab => tab === 'log-history' && permission.allowed } },
     state: { utility: { activeTab, logHistory: entryLoaded ? [{ id: 'existing' }] : [] } },
+    isMobileClient: () => !mobileAllowed,
+    mobileUtilityTabAllowed: () => mobileAllowed,
   });
   vm.runInContext(fs.readFileSync(path.join(path.dirname(helperPath), 'utility-loop-playback.js'), 'utf8'), context);
   context.openUtilityModal = options => events.push(['open', options.forceLoad]);
@@ -1548,13 +1550,8 @@ test('allowed general Log History navigation retains its normal forced load with
   assert.deepEqual(h.events, [['confirm'], ['open', true]]);
 });
 
-test('Log History entry stops when its tab owner rejects a newly revoked transition', async () => {
-  const h = logEntryHarness();
-  const setTab = h.context.setUtilityActiveTab;
-  h.context.setUtilityActiveTab = (...args) => {
-    h.permission.allowed = false;
-    return setTab(...args);
-  };
+test('Log History entry stops when the client tab owner rejects the transition', async () => {
+  const h = logEntryHarness({ mobileAllowed: false });
   await h.context.openUtilityLogHistoryTab('owned-failure-event');
   assert.equal(h.context.state.utility.activeTab, 'appearance');
   assert.deepEqual(h.events, [['confirm']]);
@@ -1574,3 +1571,16 @@ for (const change of ['permission revoked', 'utility owner replaced']) {
     assert.equal(h.context.state.utility.activeTab, 'appearance');
   });
 }
+
+
+test('Log History entry stops when its tab owner rejects a newly revoked transition', async () => {
+  const h = logEntryHarness();
+  const setTab = h.context.setUtilityActiveTab;
+  h.context.setUtilityActiveTab = (...args) => {
+    h.permission.allowed = false;
+    return setTab(...args);
+  };
+  await h.context.openUtilityLogHistoryTab('owned-failure-event');
+  assert.equal(h.context.state.utility.activeTab, 'appearance');
+  assert.deepEqual(h.events, [['confirm']]);
+});

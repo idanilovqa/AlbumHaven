@@ -279,7 +279,7 @@ function keyedNavigationHarness(kind) {
     buildUtilityRuleListItem: item => `<button ${attribute}="${item.key}">${item.title}</button>`,
     buildUtilityRuleDetail: item => `<section>${item.key} detail</section>`,
   });
-  load(c, 'utility-renderers-and-actions', 'bootstrap-utility-event-handlers');
+  load(c, 'utility-loop-playback', 'utility-renderers-and-actions', 'bootstrap-utility-event-handlers');
   c.getSelectedUtilityRule = () => c.state.utility.rules.find(item => item.key === c.state.utility.selectedRuleKey);
   // Routing and the surface renderer are real; editor contents and shared row markup
   // are narrow component adapters. The DOM model permits keyed updates and models

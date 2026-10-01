@@ -102,8 +102,13 @@ test('FTC-COVERS-024 manual composer preserves staged images and exclusive choic
     await coverLookupActions.selectOnlyCover(lookup.stagedCoverCardByName(pickerName));
   });
 
-  await stepLogger.step('Extract an extensionless direct image at narrow width without losing the staged choice', async () => {
+  await stepLogger.step('Hide manual composition on mobile, then extract on desktop without losing the staged choice', async () => {
     await page.setViewportSize({ width: 390, height: 844 });
+    await expect(lookup.manualUrlInput).toBeHidden();
+    await expect(lookup.manualExtractButton).toBeHidden();
+    await expect(lookup.manualDropZone).toBeHidden();
+    await page.setViewportSize({ width: 1280, height: 844 });
+    await expect(lookup.manualUrlInput).toBeVisible();
     await coverLookupActions.pasteManualUrl(imageUrl);
     await coverLookupActions.expectComposerFitsViewport();
     const extracted = await coverLookupActions.extractComposerLinks();
@@ -886,7 +891,7 @@ test('FTC-COVERS-011 selected local art remains authoritative after rescan and a
       && candidate.image.sha256 === originalActiveCover.image.sha256
     )) || null;
     expect(reopenedActiveCover).not.toBeNull();
-    expect(reopenedActiveCover.sourcePath).toBe(selectedCoverPath);
+    expect(reopenedActiveCover.sourcePath).toBe(selectedLocalCover.sourcePath);
     expect(reopenedActiveCover.image.sha256).toBe(selectedLocalCover.image.sha256);
     expect(reopenedActiveCover.image.coverRevision).toBe(selectedPreviewRevision);
     expect(reopenedExistingCopies).toHaveLength(0);
@@ -1013,7 +1018,7 @@ test('FTC-COVERS-011 selected local art remains authoritative after rescan and a
       && candidate.image.sha256 === originalActiveCover.image.sha256
     )) || null;
     expect(activeCover).not.toBeNull();
-    expect(activeCover.sourcePath).toBe(selectedCoverPath);
+    expect(activeCover.sourcePath).toBe(selectedLocalCover.sourcePath);
     expect(activeCover.image.sha256).toBe(selectedLocalCover.image.sha256);
     expect(activeCover.image.coverRevision).toBe(selectedPreviewRevision);
     expect(existingCopies).toHaveLength(0);

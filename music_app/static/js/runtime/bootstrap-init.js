@@ -1,4 +1,4 @@
-﻿restorePlayerAppearance();
+restorePlayerAppearance();
 attachModalEvents();
 document.querySelectorAll('[data-account-menu-component]').forEach(attachAccountMenu);
 attachCoverLookupModalEvents();
@@ -113,6 +113,8 @@ if (bootstrap.startupPayloadTiers?.hydration && typeof bootstrap.startupPayloadT
 }
 renderView();
 if (typeof initGalleryMain === 'function') initGalleryMain();
+if (typeof initMobileNavigation === 'function') initMobileNavigation();
+if (typeof syncMobileHome === 'function') syncMobileHome();
 startupMetrics.markInitialRender(state.view);
 const hasAuthoritativeServerRenderedInitialView = Boolean(
   !bootstrap.partialView

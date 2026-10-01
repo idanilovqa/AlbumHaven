@@ -475,6 +475,7 @@ function renderView(options = {}) {
   const searchInput = document.getElementById('search-input');
   if (searchInput) {
     searchInput.value = String(state.ui?.searchDraftQuery ?? state.view.query ?? '');
+    if (typeof updateSearchClearAction === 'function') updateSearchClearAction(searchInput);
   }
   const searchForm = document.getElementById('search-form');
   const ensureHiddenInput = (name, values) => {
@@ -517,6 +518,8 @@ function renderView(options = {}) {
   }
   renderLibraryLoader(state.status);
   scheduleSidebarRender();
+  if (typeof syncMobileHome === 'function') syncMobileHome();
+  if (typeof syncMobileGalleryControls === 'function') syncMobileGalleryControls();
 }
 
 function hasEquivalentGalleryRenderTopology(retainedGroups, canonicalGroups) {
@@ -704,6 +707,9 @@ async function fetchAndRender(url, push = true, options = {}) {
     : null;
   if (!requestOptions.startupRefresh) {
     clearStartupHydrationFollowup();
+    // Foreground navigation supersedes a Home hydration deferred by Settings,
+    // including a resumed request that was just interrupted by this search.
+    state.ui.deferredUtilityViewRequest = null;
     state.awaitingInitialDataRefresh = false;
   }
   if (state.busy) {
@@ -780,13 +786,14 @@ async function fetchAndRender(url, push = true, options = {}) {
   if (!retainsMountedSelectedViewState) {
     renderRelated();
   }
-  if (!requestOptions.preserveScroll && requestOptions.skipPendingViewTransition !== true) {
+  if (state.ui.pendingViewTransition
+    || (!requestOptions.preserveScroll && requestOptions.skipPendingViewTransition !== true)) {
     beginPendingViewTransition(requestId);
   }
   if (!requestOptions.preserveScanPage && !state.ui.scanPageReturnContext) {
     state.ui.forceScanPageVisible = false;
   }
-  if (requestOptions.preserveGalleryOptionsMenu !== true) {
+  if (requestOptions.preserveGalleryOptionsMenu !== true && !requestOptions.startupRefresh) {
     hideGalleryOptionsMenu();
   }
   try {
@@ -1179,7 +1186,10 @@ function openScanPage() {
   suspendScanPageGalleryCoverLoads();
   state.ui.forceScanPageVisible = true;
   const searchInput = document.getElementById('search-input');
-  if (searchInput) searchInput.value = '';
+  if (searchInput) {
+    searchInput.value = '';
+    if (typeof updateSearchClearAction === 'function') updateSearchClearAction(searchInput);
+  }
   renderSidebar();
   renderRelated();
   renderLibraryLoader(state.status, { scanPageVisible: true });
@@ -1249,7 +1259,10 @@ function closeScanPage() {
   state.ui.scanPageReturnContext = null;
   if (typeof unmountLibraryStatusBar === 'function') unmountLibraryStatusBar();
   const searchInput = document.getElementById('search-input');
-  if (searchInput) searchInput.value = state.ui.searchDraftQuery;
+  if (searchInput) {
+    searchInput.value = state.ui.searchDraftQuery;
+    if (typeof updateSearchClearAction === 'function') updateSearchClearAction(searchInput);
+  }
   if (
     returnContext.url
     && typeof window !== 'undefined'

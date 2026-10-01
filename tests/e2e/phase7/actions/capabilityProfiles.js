@@ -34,7 +34,7 @@ export const UNION_PROFILES = [
 export const CLIENT_PROFILES = [
   { name: 'mobile', roles: ['Owner', 'Admin'],
     userAgent: 'Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 Mobile/15E148',
-    visible: ['play', 'covers', 'admin', 'practice', 'repair', 'scan', 'integrations', 'folder'] },
+    visible: ['play', 'covers', 'admin', 'practice', 'repair', 'scan', 'integrations'] },
   { name: 'TV', roles: ['Owner', 'Admin'],
     userAgent: 'Mozilla/5.0 (SMART-TV; Linux; Tizen 8.0) AppleWebKit/537.36 TV Safari/537.36',
     visible: ['play', 'covers', 'repair', 'scan', 'integrations', 'folder'], providerOnly: true },

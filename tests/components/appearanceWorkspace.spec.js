@@ -31,7 +31,7 @@ async function mount(page, method, options = {}) {
   ] : ['button-component.css', 'appearance-backgrounds.css'];
   if (options.appChrome) cssFiles.splice(cssFiles.indexOf('appearance-backgrounds.css'), 0, 'app-chrome.css');
   for (const file of cssFiles) await page.addStyleTag({ path: path.join(staticRoot, 'css', file) });
-  for (const file of ['button-component.js', 'runtime/alert-components.js', 'editor-page.js', 'appearance-palettes.js', 'appearance-backgrounds.js']) await page.addScriptTag({ path: path.join(staticRoot, 'js', file) });
+  for (const file of ['button-component.js', 'runtime/alert-components.js', 'editor-page.js', 'appearance-palettes.js', 'appearance-device-profiles.js', 'appearance-backgrounds.js']) await page.addScriptTag({ path: path.join(staticRoot, 'js', file) });
   await page.evaluate(async method => {
     const instance = window.AlbumHavenAppearance.instance;
     if (!await instance.load()) throw new Error('Component appearance setup must load successfully.');
@@ -407,7 +407,7 @@ test('structured HEX fields display invalid text and block Save until correction
   }
 });
 
-test('unsaved palette stays in five previews while editor and shared footer retain the saved theme', async ({ page }) => {
+test('Main palette previews across five editors and the app while Cancel and Save retain account ownership', async ({ page }) => {
   await mount(page, 'mount', { sharedFooter: true });
   const expected = await page.evaluate(() => {
     const api = window.AlbumHavenAppearance;
@@ -432,23 +432,35 @@ test('unsaved palette stays in five previews while editor and shared footer reta
         document: token(document.documentElement) };
     }, { method, previewSelector }));
   }
-  expect(samples).toEqual(samples.map(({ method }) => ({ method, editor: expected.saved,
-    footer: expected.saved, preview: expected.draft, document: expected.saved })));
+  expect(samples).toEqual(samples.map(({ method }) => ({ method, editor: expected.draft,
+    footer: expected.draft, preview: expected.draft, document: expected.draft })));
   await page.locator('#utility-modal-footer [data-background-cancel]').click();
   expect(await page.evaluate(() => window.AlbumHavenAppearance.instance.controller.getState().dirty)).toBe(false);
+  expect(await page.evaluate(() => getComputedStyle(document.documentElement).getPropertyValue('--appearance-control').trim())).toBe(expected.saved);
   await page.evaluate(() => { window.AlbumHavenAppearance.instance.mount(document.getElementById('editor')); });
   await page.locator('[data-background-palette="silver"]').click();
+  await page.evaluate(() => window.AlbumHavenAppearance.instance.unmount());
+  expect(await page.evaluate(() => getComputedStyle(document.documentElement).getPropertyValue('--appearance-control').trim())).toBe(expected.saved);
+  await page.evaluate(() => window.AlbumHavenAppearance.instance.mount(document.getElementById('editor')));
+  let persisted;
   await page.route('**/account/appearance', route => {
-    if (route.request().method() !== 'PUT') return route.fallback();
-    const { expected_revision, applied_player_set, waveform_color_updates, ...preferences } = route.request().postDataJSON();
-    return route.fulfill({ json: { ...preferences, revision: expected_revision + 1, player_recent_sets: [] } });
+    if (route.request().method() === 'PUT') {
+      const { expected_revision, applied_player_set, waveform_color_updates, ...preferences } = route.request().postDataJSON();
+      persisted = { ...preferences, revision: expected_revision + 1, player_recent_sets: [], csrf_token: 'owned-component-token' };
+    }
+    return persisted ? route.fulfill({ json: persisted }) : route.fallback();
   });
   await page.locator('#utility-modal-footer [data-background-save]').click();
+  await expect(page.locator('#utility-modal-footer [data-background-save]')).toHaveText('Save');
   await expect(page.locator('html')).toHaveAttribute('data-appearance-palette', 'silver');
   await expect(page.locator('#utility-modal-footer [data-background-save]')).toBeDisabled();
   expect(await page.evaluate(() => ['.appearance-background-editor', '#utility-modal-footer', '[data-background-preview]']
     .map(selector => getComputedStyle(document.querySelector(selector)).getPropertyValue('--appearance-control').trim())))
     .toEqual([expected.draft, expected.draft, expected.draft]);
+  expect(persisted.palette_id).toBe('silver');
+  expect(await page.evaluate(() => window.AlbumHavenAppearance.instance.load())).toBe(true);
+  await expect(page.locator('html')).toHaveAttribute('data-appearance-palette', 'silver');
+  expect(await page.evaluate(() => window.AlbumHavenAppearance.instance.controller.getState().dirty)).toBe(false);
 });
 
 for (const method of ['mount', 'mountSeekbar']) {
@@ -456,14 +468,22 @@ for (const method of ['mount', 'mountSeekbar']) {
     await mount(page, method, { saved: { palette_id: null }, sharedFooter: true });
     const expected = await page.evaluate(() => {
       const api = window.AlbumHavenAppearance;
-      const tokens = api.resolveAppearance(api.instance.controller.getState().draft).tokens;
+      const appearance = api.resolveAppearance(api.instance.controller.getState().draft);
+      const tokens = appearance.tokens;
       const rgb = value => `rgb(${value.match(/\w\w/g).map(part => parseInt(part, 16)).join(', ')})`;
-      return { ink: rgb(tokens.ink), control: rgb(tokens.control), line: rgb(tokens.line) };
+      const selected = document.createElement('span');
+      selected.style.backgroundColor = `color-mix(in srgb, ${tokens.ink} 12%, ${tokens.control})`;
+      document.body.appendChild(selected);
+      const deviceControl = getComputedStyle(selected).backgroundColor;
+      selected.remove();
+      return { ink: rgb(tokens.ink), control: rgb(tokens.control), deviceControl, line: rgb(tokens.line) };
     });
-    const input = page.locator('.appearance-background-editor input[type=text]').first();
-    await expect(input).toHaveCSS('color', expected.ink);
-    await expect(input).toHaveCSS('background-color', expected.control);
-    await expect(input).toHaveCSS('border-top-color', expected.line);
+    const themedControl = method === 'mount'
+      ? page.locator('[data-appearance-device="web_desktop"]')
+      : page.locator('.appearance-background-editor input[type=text]').first();
+    await expect(themedControl).toHaveCSS('color', expected.ink);
+    await expect(themedControl).toHaveCSS('background-color', method === 'mount' ? expected.deviceControl : expected.control);
+    await expect(themedControl).toHaveCSS('border-top-color', expected.line);
     await expect(page.locator('#utility-modal-footer [data-background-cancel]')).toHaveCSS('background-color', 'rgba(0, 0, 0, 0)');
     await expect(page.locator('#utility-modal-footer [data-background-cancel]')).toHaveCSS('color', expected.ink);
     await expect(page.locator('#utility-modal-footer [data-background-save]')).toHaveCSS('background-color', expected.control);
@@ -601,66 +621,123 @@ for (const field of ['fill', 'edge', 'handles.color']) {
   });
 }
 
-test('correcting Player surface start repairs the Main background HEX alias', async ({ page }) => {
-  await mount(page, 'mount', { saved: { player_style_override: {
+test('correcting Player surface start repairs validation across Main and Player editors', async ({ page }) => {
+  await mount(page, 'mountSeekbar', { saved: { player_style_override: {
     surface: { mode: 'gradient', angle: 0, start: '#0A2F24', end: '#0A1422' },
     controls: { fill: '#24B86B', border: '#86EFAC' },
     waveform: { fill: '#387F68', edge: '#AFD8C2' },
     handles: { color: '#AFD8C2' },
   } } });
-  await page.locator('[data-player-hex="background"]').fill('#BADHEX');
-  await expect(page.locator('[data-background-save]')).toBeDisabled();
-  await page.evaluate(() => window.AlbumHavenAppearance.instance.mountSeekbar(document.getElementById('editor'), { getSeekbarMode: () => 'waveform' }));
+  const surfaceStart = page.locator('[data-player-style-hex="surface.start"]');
   await page.locator('[data-player-tab-group="player"][data-player-tab="surface"]').click();
-  await page.locator('[data-player-style-hex="surface.start"]').fill('#345678');
+  await surfaceStart.fill('#BADHEX');
+  await expect(surfaceStart).toHaveAttribute('aria-invalid', 'true');
+  await expect(page.locator('[data-background-save]')).toBeDisabled();
+  await page.evaluate(() => window.AlbumHavenAppearance.instance.mount(document.getElementById('editor')));
+  await expect(page.locator('[data-player-hex="background"]')).toHaveCount(0);
+  await expect(page.locator('[data-background-save]')).toBeDisabled();
+  expect(await page.evaluate(() => window.AlbumHavenAppearance.instance.allowLeave(() => false))).toBe(false);
+  await page.evaluate(() => window.AlbumHavenAppearance.instance.mountSeekbar(document.getElementById('editor'), { getSeekbarMode: () => 'waveform' }));
+  await expect(surfaceStart).toHaveValue('#BADHEX');
+  await surfaceStart.fill('#345678');
+  await expect(surfaceStart).toHaveAttribute('aria-invalid', 'false');
   await expect(page.locator('[data-background-save]')).toBeEnabled();
   await page.evaluate(() => window.AlbumHavenAppearance.instance.mount(document.getElementById('editor')));
-  await expect(page.locator('[data-player-hex="background"]')).toHaveValue('#345678');
-  await expect(page.locator('[data-player-hex="background"]')).toHaveAttribute('aria-invalid', 'false');
+  await expect(page.locator('[data-background-player-summary]')).toContainText('#345678');
   await expect(page.locator('[data-background-save]')).toBeEnabled();
+  await page.locator('[data-background-cancel]').click();
+  await expect(page.locator('[data-background-save]')).toBeDisabled();
+  await page.evaluate(() => window.AlbumHavenAppearance.instance.mountSeekbar(document.getElementById('editor'), { getSeekbarMode: () => 'waveform' }));
+  await expect(surfaceStart).toHaveValue('#0A2F24');
 });
 
-test('Mobile and TV device appearance is disabled without an outer pill', async ({ page }) => {
+test('Mobile appearance is selectable while TV stays disabled without an outer pill', async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 900 });
   await mount(page, 'mountSeekbar', { sharedFooter: true });
   const controls = page.locator('.appearance-device-controls');
   const desktop = page.locator('[data-appearance-device="web_desktop"]');
-  await expect(page.locator('[data-appearance-device="mobile"]')).toBeDisabled();
-  await expect(page.locator('[data-appearance-device="tv"]')).toBeDisabled();
-  await expect(page.locator('[data-appearance-device-mode]')).toHaveCount(0);
+  const mobile = page.locator('[data-appearance-device="mobile"]');
+  const tv = page.locator('[data-appearance-device="tv"]');
+  await expect(mobile).toBeEnabled();
+  await expect(tv).toBeDisabled();
+  await expect(tv).toHaveAttribute('aria-disabled', 'true');
+  await expect(page.locator('.appearance-device-mode')).toBeHidden();
   await expect(desktop).toHaveAttribute('aria-pressed', 'true');
+  await mobile.click();
+  await expect(mobile).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.locator('[data-appearance-device-mode="follow"]')).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.locator('.appearance-device-fields')).toBeDisabled();
+  await expect(page.locator('[data-background-reset]')).toBeDisabled();
+  await page.locator('[data-appearance-device-mode="custom"]').click();
+  await expect(page.locator('.appearance-device-fields')).toBeEnabled();
+  await expect(page.locator('[data-background-reset]')).toBeEnabled();
   await expect(controls).toHaveCSS('border-style', 'none');
   await expect(controls).toHaveCSS('border-radius', '0px');
   await expect(controls).toHaveCSS('background-color', 'rgba(0, 0, 0, 0)');
 });
 
-for (const method of ['mount', 'mountAlerts', 'mountAlbumPage', 'mountSelectionAccent', 'mountSeekbar']) {
-  test(`${method} keeps unavailable devices natively disabled after load save and cancel`, async ({ page }) => {
+async function expectDisabledTv(page) {
+  const tv = page.locator('[data-appearance-device="tv"]');
+  await expect(tv).toBeDisabled();
+  await expect(tv).toHaveAttribute('aria-disabled', 'true');
+  await tv.evaluate(element => element.click());
+  await expect(page.locator('[data-appearance-device="mobile"]')).toHaveAttribute('aria-pressed', 'true');
+  await expect(tv).toHaveAttribute('aria-pressed', 'false');
+}
+
+for (const [method, section, setter, savedValue, cancelledValue] of [
+  ['mount', 'main', 'setPalette', 'paper', 'silver'],
+  ['mountAlerts', 'alerts', 'setAlertFamily', 'quiet', 'ember'],
+  ['mountAlbumPage', 'album', 'setAlbumPlayingRowAnimation', 'disabled', 'enabled'],
+  ['mountSelectionAccent', 'interaction', 'setSelectionAccent', { enabled: true, color: '#123456' }, { enabled: true, color: '#654321' }],
+  ['mountSeekbar', 'player', 'setCompactPlayerMotion', 'slow', 'normal'],
+]) {
+  test(`${method} preserves Mobile profile isolation and disabled TV after load save and cancel`, async ({ page }) => {
     await mount(page, method);
+    let persisted;
     await page.route('**/account/appearance', route => {
-      if (route.request().method() !== 'PUT') return route.fallback();
-      const { expected_revision, ...saved } = route.request().postDataJSON();
-      return route.fulfill({ json: { ...saved, revision: expected_revision + 1 } });
-    });
-    for (const stage of ['load', 'save', 'cancel']) {
-      await page.evaluate(async stage => {
-        const controller = window.AlbumHavenAppearance.instance.controller;
-        if (stage === 'load') await window.AlbumHavenAppearance.instance.load();
-        else {
-          controller.setColor('main_surface_color', stage === 'save' ? '#123456' : '#654321');
-          if (stage === 'save') await controller.save();
-          else controller.cancel();
-        }
-      }, stage);
-      for (const device of ['mobile', 'tv']) {
-        const button = page.locator(`[data-appearance-device="${device}"]`);
-        expect(await button.evaluate(element => element.disabled), `${device} after ${stage}`).toBe(true);
-        await button.evaluate(element => element.click());
-        expect(await page.evaluate(() => window.AlbumHavenAppearance.instance.controller.getState().activeDeviceProfile)).toBe('web_desktop');
-        await expect(button).toHaveAttribute('aria-pressed', 'false');
+      if (route.request().method() === 'PUT') {
+        const { expected_revision, applied_player_set, waveform_color_updates, ...saved } = route.request().postDataJSON();
+        persisted = { ...saved, revision: expected_revision + 1, csrf_token: 'owned-component-token' };
       }
-      await expect(page.locator('[data-appearance-device="web_desktop"]')).toHaveAttribute('aria-pressed', 'true');
+      return persisted ? route.fulfill({ json: persisted }) : route.fallback();
+    });
+    const baseline = await page.evaluate(() => window.AlbumHavenAppearance.instance.controller.getState().deviceProfiles);
+    await page.locator('[data-appearance-device="mobile"]').click();
+    await expectDisabledTv(page);
+    await expect(page.locator('[data-appearance-device-mode="follow"]')).toHaveAttribute('aria-pressed', 'true');
+    await expect(page.locator('.appearance-device-fields')).toBeDisabled();
+    await expect(page.locator('[data-background-reset]')).toBeDisabled();
+    const inherited = await page.evaluate(() => window.AlbumHavenAppearance.instance.controller.getState().draft);
+    await page.evaluate(({ setter, value }) => window.AlbumHavenAppearance.instance.controller[setter](value), { setter, value: savedValue });
+    expect(await page.evaluate(() => window.AlbumHavenAppearance.instance.controller.getState().draft)).toEqual(inherited);
+    await page.locator('[data-appearance-device-mode="custom"]').click();
+    await expect(page.locator('.appearance-device-fields')).toBeEnabled();
+    await page.evaluate(({ setter, value }) => window.AlbumHavenAppearance.instance.controller[setter](value), { setter, value: savedValue });
+    await expect(page.locator('[data-background-save]')).toBeEnabled();
+    await page.locator('[data-background-save]').click();
+    await expect(page.locator('[data-background-save]')).toHaveText('Save');
+    await expect(page.locator('[data-background-save]')).toBeDisabled();
+    await expectDisabledTv(page);
+    expect(persisted.device_profiles.mobile.sections[section].mode).toBe('custom');
+    expect(persisted.device_profiles.mobile.sections[section].values).not.toEqual(baseline.web_desktop.sections[section].values);
+    for (const other of Object.keys(baseline.mobile.sections).filter(key => key !== section)) {
+      expect(persisted.device_profiles.mobile.sections[other]).toEqual(baseline.mobile.sections[other]);
     }
+    const savedDraft = await page.evaluate(() => window.AlbumHavenAppearance.instance.controller.getState().draft);
+    await page.evaluate(({ setter, value }) => window.AlbumHavenAppearance.instance.controller[setter](value), { setter, value: cancelledValue });
+    await expect(page.locator('[data-background-save]')).toBeEnabled();
+    await page.locator('[data-background-cancel]').click();
+    expect(await page.evaluate(() => window.AlbumHavenAppearance.instance.controller.getState().draft)).toEqual(savedDraft);
+    await expectDisabledTv(page);
+    expect(await page.evaluate(() => window.AlbumHavenAppearance.instance.load())).toBe(true);
+    expect(await page.evaluate(() => window.AlbumHavenAppearance.instance.controller.getState().draft)).toEqual(savedDraft);
+    await expect(page.locator('[data-appearance-device-mode="custom"]')).toHaveAttribute('aria-pressed', 'true');
+    await expectDisabledTv(page);
+    await page.locator('[data-appearance-device="web_desktop"]').click();
+    expect(await page.evaluate(() => window.AlbumHavenAppearance.instance.controller.getState().deviceProfiles.web_desktop)).toEqual(baseline.web_desktop);
+    await expect(page.locator('[data-appearance-device="web_desktop"]')).toHaveAttribute('aria-pressed', 'true');
+    await expect(page.locator('[data-background-save]')).toBeDisabled();
   });
 }
 

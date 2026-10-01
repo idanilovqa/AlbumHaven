@@ -12,7 +12,7 @@ test('pending local cover actions remain visibly disabled on hover and re-enable
     </section>
   </body></html>`);
   for (const file of ['runtime/base-layout.css', 'appearance-backgrounds.css', 'button-component.css',
-    'runtime/cover-lookup-modal.css']) {
+    'runtime/cover-lookup-modal.css', 'mobile-layout.css']) {
     await page.addStyleTag({ path: path.join(root, 'music_app/static/css', file) });
   }
   const remove = page.locator('[data-delete-local-cover]');

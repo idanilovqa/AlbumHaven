@@ -3339,7 +3339,7 @@ test('track-modal cover gallery icon exposes only unseen automatic improvements'
 
   assert.match(
     cover.innerHTML,
-    /class="[^"]*\btrack-modal-cover-tool is-lookup has-unseen-automatic-improvement"/,
+    /class="[^"\n]*\btrack-modal-cover-tool is-lookup has-unseen-automatic-improvement"/,
     'an unseen automatic improvement must add the red-dot state class to the gallery icon',
   );
   assert.match(

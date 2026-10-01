@@ -68,7 +68,7 @@
   outline: none !important;
   box-shadow: none !important;
   background: linear-gradient(var(--trigger-anchor-background), var(--trigger-anchor-background)) padding-box !important;
-  color: var(--trigger-anchor-accent) !important;
+  color: var(--text, var(--appearance-ink)) !important;
 }
 :root .trigger-anchor-surface {
   border-top: 0;
@@ -138,6 +138,10 @@
 :root .trigger-anchor-surface:not(.artist-family-panel)[data-trigger-anchor-edge="bottom"] {
   clip-path: inset(-80px -80px 0 -80px);
 }
+/* Nested popups must escape the parent's shadow/anchor clipping boundary. */
+:root .trigger-anchor-surface:not(.artist-family-panel):has(.trigger-anchor-surface:not([hidden])) {
+  clip-path: none;
+}
 
 /* Selected accents stay separate from the chosen interaction color. */
 :root .trigger-anchor-open:is(:hover, :focus-visible) { --trigger-anchor-cap: var(--appearance-interaction-outline, var(--appearance-play)); }
@@ -176,8 +180,9 @@
 }
 :root .artist-family-panel.trigger-anchor-surface::after {
   top: -1px;
-  height: 1px;
-  --trigger-top-line-width: 1px;
+  height: 2px;
+  --trigger-top-line-width: 2px;
+  z-index: 2;
 }
 
 /* Suppress selection paint outside the origin before the browser draws a drag. */
@@ -204,23 +209,50 @@
   box-shadow: none !important;
   transition: background-color 150ms ease;
 }
-:root :is(.account-menu-item, .gallery-anchored-menu button, [role="menu"] [role^="menuitem"], [role="listbox"] [role="option"], .album-card-context-menu button, .status-context-menu button, .gallery-options-menu button, .utility-problem-filter-option, .utility-loop-speed-menu button, .recent-search-option, .artist-family-panel__combine-row .gallery-switch, .ui-filter-pill):hover:not(.gallery-switch):not(:disabled):not([aria-disabled="true"]) {
+:root :is(.account-menu-item, .gallery-anchored-menu button, [role="menu"] [role^="menuitem"], [role="listbox"] [role="option"], .album-card-context-menu button, .status-context-menu button, .gallery-options-menu button, .utility-problem-filter-option, .utility-loop-speed-menu button, .recent-search-option, .artist-family-panel__combine-row .gallery-switch, .ui-filter-pill):hover:not(:where(.gallery-switch)):not(:disabled):not([aria-disabled="true"]) {
   background: var(--dropdown-item-hover-background, color-mix(in srgb, var(--text, #eee) 8%, var(--panel, #171717))) !important;
 }
-:root :is(.account-menu-item, .gallery-anchored-menu button, [role="menu"] [role^="menuitem"], [role="listbox"] [role="option"], .album-card-context-menu button, .status-context-menu button, .gallery-options-menu button, .utility-problem-filter-option, .utility-loop-speed-menu button, .recent-search-option, .artist-family-panel__combine-row .gallery-switch):hover:not(.gallery-switch):not(:disabled):not([aria-disabled="true"]) {
+:root :is(.account-menu-item, .gallery-anchored-menu button, [role="menu"] [role^="menuitem"], [role="listbox"] [role="option"], .album-card-context-menu button, .status-context-menu button, .gallery-options-menu button, .utility-problem-filter-option, .utility-loop-speed-menu button, .recent-search-option, .artist-family-panel__combine-row .gallery-switch):hover:not(:where(.gallery-switch)):not(:disabled):not([aria-disabled="true"]) {
   border-color: transparent !important;
 }
 :root :is(.account-menu-item, .gallery-anchored-menu button, [role="menu"] [role^="menuitem"], [role="listbox"] [role="option"], .album-card-context-menu button, .status-context-menu button, .gallery-options-menu button, .utility-problem-filter-option, .utility-loop-speed-menu button, .recent-search-option, .artist-family-panel__combine-row .gallery-switch, .ui-filter-pill):focus-visible:not(:disabled):not([aria-disabled="true"]) {
   background: var(--dropdown-item-hover-background, color-mix(in srgb, var(--text, #eee) 8%, var(--panel, #171717))) !important;
 }
 :root :is(.account-menu-item, .gallery-anchored-menu button, [role="menu"] [role^="menuitem"], [role="listbox"] [role="option"], .album-card-context-menu button, .status-context-menu button, .gallery-options-menu button, .utility-problem-filter-option, .utility-loop-speed-menu button, .recent-search-option, .artist-family-panel__combine-row .gallery-switch):focus-visible:not(:disabled):not([aria-disabled="true"]) {
-  text-decoration: underline;
-  text-underline-offset: 3px;
+  text-decoration: none;
+  outline: 2px solid currentColor !important;
+  outline-offset: -2px;
 }
-:root .artist-family-panel__combine-row .gallery-switch:hover:not(:disabled):not([aria-disabled="true"]) {
+/* Ordinary switch rows keep their track-only hover treatment. */
+:root .gallery-switch:not(.artist-family-panel__combine-row .gallery-switch):hover:not(:disabled):not([aria-disabled="true"]) {
   background: transparent !important;
 }
+:root .artist-family-panel__combine-row .gallery-switch:hover:not(:disabled):not([aria-disabled="true"]),
 :root .artist-family-panel__combine-row .gallery-switch:active:not(:disabled):not([aria-disabled="true"]) {
   background: var(--dropdown-item-hover-background, color-mix(in srgb, var(--text, #eee) 8%, var(--panel, #171717))) !important;
   border-color: transparent !important;
+}
+
+@media (max-width: 900px) {
+  :root :is(.account-menu-item, .gallery-anchored-menu button, .gallery-anchored-menu a, .recent-search-option, .navigation-tree-item):is(:hover, :active, :focus-visible):not(:disabled):not([aria-disabled="true"]) {
+    background: var(--dropdown-item-hover-background, var(--appearance-hover)) !important; box-shadow: none !important; color: var(--text, var(--appearance-ink));
+    text-decoration: none; text-decoration-thickness: 1px; text-underline-offset: .22em;
+  }
+  :root .gallery-bar :is(.action-button, .gallery-action-button, .gallery-view-choice, .gallery-view-cluster):not(.trigger-anchor-open):is(:hover, :active) { background: transparent !important; box-shadow: none !important; }
+  :root .artist-family-panel.trigger-anchor-surface { clip-path: inset(0 -80px -80px -80px) !important; }
+}
+
+@media (max-width: 900px) {
+  :root .navigation-tree-item:is(.is-selected, .active, .is-active) {
+    background: var(--selection-body-background) !important; box-shadow: none !important;
+    color: var(--text, var(--appearance-ink)); text-decoration: none; text-underline-offset: .22em;
+  }
+  :root .in-page-tabs [role="tab"]:is(:hover, :active, :focus-visible) { background: transparent !important; }
+}
+
+/* Album Types uses the same seam position as Artist Family. The center is painted
+   with the panel color while the two outer segments retain the shared accent. */
+:root #gallery-album-types-menu.trigger-anchor-surface[data-trigger-anchor-edge="top"] { border-top-width: 0; }
+:root #gallery-album-types-menu.trigger-anchor-surface[data-trigger-anchor-edge="top"]::after {
+  top: -1px; height: 2px; --trigger-top-line-width: 2px; z-index: 2;
 }

@@ -7,6 +7,7 @@ from fastapi.responses import JSONResponse
 from starlette.concurrency import run_in_threadpool
 
 from music_app.routes.auth_asgi import _policy_config
+from music_app.routes.client_layout_asgi import load_client_layout_context
 from music_app.routes.bounded_json import JSONBodyTooLarge, read_bounded_json_object
 from music_app.services.appearance_preferences_postgres import (
     AppearanceLoopStyleForbidden,
@@ -61,7 +62,7 @@ async def load_appearance_context(request: Request) -> dict[str, object]:
                 ))
         except Exception:
             failed = True
-    return {"appearance_preferences": colors, "appearance_load_error": failed}
+    return {"appearance_preferences": colors, "appearance_load_error": failed, **await load_client_layout_context(request)}
 
 
 @router.get("/account/appearance")

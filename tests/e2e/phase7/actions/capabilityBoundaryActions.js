@@ -63,8 +63,14 @@ export async function assertCapabilityBoundary(page, profile, testInfo) {
   const card = galleryPage.albumCard.cardByIdentity('Settings Navigation Fixture', 'Boundary Arrival', '2026');
   await expect(card).toBeVisible();
   await card.click({ button: 'right' });
-  await expectControl(ui.galleryFolder, allowed.has('folder'));
-  await expectControl(ui.galleryVersion, allowed.has('repair'));
+  if (profile.name === 'mobile') {
+    await expect(ui.galleryContextMenu).toBeHidden();
+    await expect(ui.galleryFolder).toBeHidden();
+    await expect(ui.galleryVersion).toBeHidden();
+  } else {
+    await expectControl(ui.galleryFolder, allowed.has('folder'));
+    await expectControl(ui.galleryVersion, allowed.has('repair'));
+  }
   await page.keyboard.press('Escape');
   await gallery.selectAlbumDetailsByIdentity({
     artist: 'Settings Navigation Fixture', album: 'Missing Boundary Session', year: '2026',

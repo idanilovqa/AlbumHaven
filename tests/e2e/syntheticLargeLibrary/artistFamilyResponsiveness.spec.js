@@ -43,6 +43,7 @@ test.describe(`${CASE_ID} synthetic-large artist family responsiveness`, () => {
 
   test('Neal Morse scrolling keeps each displayed artist heading unique before and after filtering', async ({
     artistFamilyActions,
+    layoutPreferenceIsolation,
     artistPageSettingsActions,
     galleryActions,
     navigationPanelActions,
@@ -55,6 +56,7 @@ test.describe(`${CASE_ID} synthetic-large artist family responsiveness`, () => {
 
     requirePostgresRuntimeEnv('the Neal Morse duplicate-heading regression');
     await galleryActions.goto();
+    await layoutPreferenceIsolation.capture();
     await searchToolbarActions.waitForVisible({ timeout: 60000 });
     await navigationPanelActions.waitForSidebarPreviewHydrated({ timeout: 60000 });
     await enterAndWaitForPostgresBrowseWarmRoot(
@@ -142,8 +144,8 @@ test.describe(`${CASE_ID} synthetic-large artist family responsiveness`, () => {
       expect(hoverState.after.transitionProperty).toContain('background-color');
       expect(hoverState.after.transitionDuration).not.toBe('0s');
       const combineHoverState = await artistFamilyActions.readCombineHoverState();
-      expect(combineHoverState.after.backgroundColor).toBe(combineHoverState.before.backgroundColor);
-      expect(combineHoverState.after.backgroundColor).toBe('rgba(0, 0, 0, 0)');
+      expect(combineHoverState.after.backgroundColor).not.toBe(combineHoverState.before.backgroundColor);
+      expect(combineHoverState.after.backgroundColor).toBe(hoverState.after.backgroundColor);
       expect(combineHoverState.after.transitionProperty).toContain('background-color');
       expect(combineHoverState.after.transitionDuration).not.toBe('0s');
       await artistFamilyActions.clickChipByName(source);
@@ -216,6 +218,7 @@ test.describe(`${CASE_ID} synthetic-large artist family responsiveness`, () => {
 
   test('Neal Morse family search, filters, details, settings, and clear-search flows stay responsive on synthetic data', async ({
     artistFamilyActions,
+    layoutPreferenceIsolation,
     page,
     artistPageSettingsActions,
     galleryActions,
@@ -230,6 +233,7 @@ test.describe(`${CASE_ID} synthetic-large artist family responsiveness`, () => {
 
     requirePostgresRuntimeEnv('the Neal Morse artist-family benchmark');
     await galleryActions.goto();
+    await layoutPreferenceIsolation.capture();
     await searchToolbarActions.waitForVisible({ timeout: 60000 });
     await navigationPanelActions.waitForSidebarPreviewHydrated({ timeout: 60000 });
 

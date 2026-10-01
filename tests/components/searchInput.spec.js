@@ -306,7 +306,15 @@ for (const [name, controlClass, stylesheet, shadow] of [
     await input.click();
     await expect(control).toHaveCSS('outline-style', 'solid');
     await expect(control).toHaveCSS('outline-width', '1px');
-    await expect(control).toHaveCSS('outline-color', name === 'admin password' ? 'rgb(145, 162, 184)' : 'rgb(170, 187, 204)');
+    const muted = await control.evaluate(element => {
+      const probe = document.createElement('span');
+      probe.style.color = 'var(--muted)';
+      element.appendChild(probe);
+      const color = getComputedStyle(probe).color;
+      probe.remove();
+      return color;
+    });
+    await expect(control).toHaveCSS('outline-color', muted);
     await expect(control).toHaveCSS('outline-offset', '-1px');
     await expect(control).toHaveCSS('box-shadow', 'none');
     await button.hover();

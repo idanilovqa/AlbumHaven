@@ -31,7 +31,7 @@ test('log history retains stale status semantics and escapes failure details in 
 });
 
 test('failed saved-loop loading has one shared alert and keeps loading distinct', () => {
-  const elements = { overlay: { hidden: false }, list: { innerHTML: 'old rows' }, detail: { classList: { add() {} }, innerHTML: '' }, count: {} };
+  const elements = { overlay: { hidden: false, dataset: {} }, list: { innerHTML: 'old rows' }, detail: { classList: { add() {} }, innerHTML: '' }, count: {} };
   const context = load(['utility-renderers-and-actions'], {
     state: { utility: { loopsLoadError: '<unavailable>' } },
     getUtilityModalElements: () => elements,

@@ -1,7 +1,7 @@
 {% from "components/on-page-alert.html" import on_page_alert %}
 {% from "partials/switch.html" import ui_switch %}
 {% set capabilities_readonly = capabilities_readonly | default(false) %}
-  <fieldset class="permission-fieldset">
+  <fieldset class="permission-fieldset"{% if capabilities_readonly %} aria-describedby="admin-role-description"{% endif %}>
     <legend>Capabilities</legend>
     {% if not capabilities_readonly %}
     {{ on_page_alert('Checked, disabled switches are required by another capability or included by a selected role. Their descriptions explain why. Other switches add individual capabilities. Device restrictions still apply. Web tag editing requires both Edit and Admin. Mobile and TV never permit tag editing, deleting, or creating loops.', role='note', class_name='role-note') }}

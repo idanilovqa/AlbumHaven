@@ -329,6 +329,7 @@ test('scan gallery readiness waits for the requested visible cover population', 
     },
   };
   const navigationPanelActions = {
+    async openArtistTree() { calls.push(['open-tree']); },
     navigationPanel: {
       allArtistsLink: {
         async waitFor(options) { calls.push(['sidebar', options]); },
@@ -343,6 +344,7 @@ test('scan gallery readiness waits for the requested visible cover population', 
   });
 
   assert.deepEqual(calls, [
+    ['open-tree'],
     ['sidebar', { state: 'visible', timeout: 60000 }],
     ['card', { state: 'visible', timeout: 60000 }],
     ['covers', { minimumCount: 8, timeout: 60000 }],

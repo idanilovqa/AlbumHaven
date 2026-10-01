@@ -60,6 +60,36 @@ test('a musician starts on Loops and an owner retains the original Problems flow
   assert.equal(owner.calls.includes('load:problematic-files'), true);
 });
 
+for (const availableTabs of [[], ['loops']]) {
+  test(`denied mobile settings never present a page or load data (${availableTabs.length ? 'mobile tab denied' : 'no available tab'})`, () => {
+    const f = contextFor(availableTabs);
+    f.context.isMobileClient = () => true;
+    f.context.mobileUtilityTabAllowed = tab => tab === 'appearance';
+    f.context.presentMobileUtilityPage = () => f.calls.push('present:' + f.context.state.utility.activeTab);
+    f.context.fetch = () => assert.fail('denied mobile settings must not fetch');
+
+    f.context.openUtilityModal();
+
+    assert.equal(f.context.state.utility.activeTab, 'appearance');
+    assert.equal(f.overlay.hidden, true);
+    assert.deepEqual(f.calls, []);
+  });
+}
+
+test('mobile settings present only after both guards resolve the allowed tab', () => {
+  const f = contextFor(['loops']);
+  f.context.isMobileClient = () => true;
+  f.context.mobileUtilityTabAllowed = tab => ['appearance', 'loops'].includes(tab);
+  f.context.presentMobileUtilityPage = () => f.calls.push('present:' + f.context.state.utility.activeTab);
+  f.context.fetch = () => assert.fail('the denied starting tab must not fetch');
+
+  f.context.openUtilityModal();
+
+  assert.equal(f.context.state.utility.activeTab, 'loops');
+  assert.equal(f.overlay.hidden, false);
+  assert.deepEqual(f.calls, ['present:loops', 'render:loops', 'load:loops']);
+});
+
 test('denied programmatic tab activation and loading never submit a forbidden request', () => {
   const f = contextFor(['appearance']);
   f.context.state.utility.activeTab = 'appearance';

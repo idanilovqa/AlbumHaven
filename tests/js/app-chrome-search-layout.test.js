@@ -50,7 +50,7 @@ test('shared search owns one external interaction outline with no outlined child
   const genericHover = appearanceCss.match(
     /:not\(\.navigation-tree-item\):not\(\.search-field-button\):not\(\.cover-lookup-task-open\):not\(\.global-player \*\):hover[^\{]*\{([^}]*)\}/,
   )?.[1] || '';
-  assert.match(genericHover, /border-color:\s*var\(--appearance-item-action-hover-border/);
+  assert.match(genericHover, /border-color:\s*var\(--appearance-item-action-hover-border,\s*var\(--appearance-line\)\)/);
   assert.doesNotMatch(genericHover, /outline:/);
   assert.match(appearanceCss, /:not\(\.search-field \*\):not\(\.ui-input-action \*\):not\(\.gallery-info-button\):focus-visible\s*\{[^}]*outline:/);
 });

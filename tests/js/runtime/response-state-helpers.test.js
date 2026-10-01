@@ -1448,10 +1448,9 @@ function loadHelpers() {
     },
   }, { trackSidebarReveal: false });
 
-  assert.deepEqual(JSON.parse(JSON.stringify(context.closeArtistsDrawerCalls)), [{
-    restoreFocus: false,
-  }]);
-  assert.equal(context.syncArtistsDrawerVisibilityCalls, 0);
+  assert.deepEqual(JSON.parse(JSON.stringify(context.closeArtistsDrawerCalls)), [],
+    'a late selected-artist response must not close a drawer opened after activation');
+  assert.equal(context.syncArtistsDrawerVisibilityCalls, 1);
   assert.equal(context.state.relatedExpanded, false);
 }
 

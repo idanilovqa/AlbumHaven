@@ -5212,7 +5212,7 @@ def main() -> None:
             ensure_provider_storage_policy_cover_spec(cover_specs)
 
         configure_performance_auth_environment(args.port)
-        provision_performance_auth_owner(runtime_database_url)
+        provision_performance_auth_owner(runtime_database_url, seed_expanded_artist_tree=True)
 
         if args.prepare_only:
             print(

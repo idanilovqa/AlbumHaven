@@ -5,6 +5,7 @@ export async function waitForScanDrivenGalleryReady({
   minimumSidebarCount = 40,
   minimumVisibleCoverCount,
 }) {
+  await navigationPanelActions.openArtistTree();
   const requiredSidebarCount = sidebarHydration === 'full'
     ? Number(minimumSidebarCount || 40)
     : 1;

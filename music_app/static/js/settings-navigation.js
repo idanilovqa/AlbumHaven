@@ -14,6 +14,36 @@
     const outlet = document.querySelector('[data-settings-outlet]');
     const nav = document.querySelector('[data-settings-nav]');
     if (!host || !outlet || !nav) return null;
+    let drawerAnchor = null;
+    const drawerBackdrop = host.querySelector('[data-settings-nav-close].settings-nav-backdrop');
+    const narrow = () => Number(window.innerWidth) <= 900;
+    const closeDrawer = (returnFocus = true) => {
+      nav.classList.remove('is-settings-navigation-open');
+      nav.inert = narrow();
+      nav.setAttribute('aria-hidden', String(narrow()));
+      if (drawerBackdrop) drawerBackdrop.hidden = true;
+      drawerAnchor?.setAttribute('aria-expanded', 'false');
+      if (returnFocus && drawerAnchor?.isConnected) drawerAnchor.focus({ preventScroll: true });
+    };
+    const openDrawer = anchor => {
+      drawerAnchor = anchor;
+      document.dispatchEvent(new window.CustomEvent('album-haven:surface-opening', { detail: { surface: nav } }));
+      nav.classList.add('is-settings-navigation-open');
+      nav.inert = false; nav.setAttribute('aria-hidden', 'false');
+      anchor.setAttribute('aria-expanded', 'true');
+      if (drawerBackdrop) drawerBackdrop.hidden = false;
+      nav.querySelector('button:not([disabled]), a[href]')?.focus({ preventScroll: true });
+    };
+    const disposeDismissal = window.AlbumHavenSurfaceDismissal?.bind(window, () =>
+      nav.classList.contains('is-settings-navigation-open') ? {
+        surface: nav, anchor: drawerAnchor, dismiss: () => closeDrawer(true),
+        isBackdrop: target => target === drawerBackdrop,
+      } : null);
+    const onSurfaceOpening = event => { if (event.detail?.surface !== nav && !nav.contains(event.detail?.surface)) closeDrawer(false); };
+    document.addEventListener('album-haven:surface-opening', onSurfaceOpening);
+    const syncDrawerLayout = () => closeDrawer(false);
+    window.addEventListener('resize', syncDrawerLayout);
+    closeDrawer(false);
     const library = document.querySelector('#app-shell');
     const error = document.querySelector('[data-settings-navigation-error]');
     let currentUrl = window.location.href;
@@ -83,6 +113,7 @@
       };
     };
     const reconcileNav = (incoming, url) => {
+      closeDrawer(false);
       const incomingUser = incoming.querySelector('[data-settings-section="users"]');
       const currentUser = nav.querySelector('[data-settings-section="users"]');
       if (currentUser && !incomingUser) currentUser.remove();
@@ -96,7 +127,7 @@
       window.NavigationTree.setSelection(nav, url.pathname === '/account' ? 'account' : 'users');
     };
 
-    async function navigate(value, { historyMode = 'push', method = 'GET', body, leaveConfirmed = false } = {}) {
+    async function navigate(value, { historyMode = 'push', method = 'GET', body, leaveConfirmed = false, hierarchy = false } = {}) {
       const url = urlFor(value);
       const posting = method === 'POST' && url && isAccountPost(url.pathname);
       const returning = library && url && (url.href === libraryUrl || url.pathname === '/');
@@ -112,12 +143,20 @@
       pending = new AbortController();
       if (error) error.hidden = true;
       if (returning && !posting) {
+        closeDrawer(false);
         disposeContent();
         outlet.replaceChildren();
         host.hidden = true;
         library.hidden = false;
         document.title = libraryTitle;
         updateHistory(libraryUrl, historyMode, libraryHistoryState);
+        if (hierarchy && typeof window.AlbumHavenReturnToGallery === 'function') {
+          window.AlbumHavenReturnToGallery();
+          libraryUrl = window.location.href;
+          libraryHistoryState = window.history.state;
+          updateHistory(libraryUrl, 'none');
+          libraryTitle = document.title;
+        }
         navigationPending = false;
         return true;
       }
@@ -175,13 +214,20 @@
     }
 
     const onClick = (event) => {
+      const toggle = event.target?.closest?.('[data-settings-nav-toggle]');
+      if (toggle && host.contains(toggle) && narrow()) {
+        event.preventDefault();
+        if (nav.classList.contains('is-settings-navigation-open')) closeDrawer(); else openDrawer(toggle);
+        return;
+      }
+      if (event.target?.closest?.('[data-settings-nav-close]') && host.contains(event.target)) { event.preventDefault(); closeDrawer(); return; }
       if (event.defaultPrevented || event.button !== 0 || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return;
       const link = event.target?.closest?.('a[href]');
       if (!link || link.hasAttribute('download') || (link.target && link.target !== '_self')) return;
       const url = urlFor(link.href);
       if (!url || (!isSettingsPath(url.pathname) && !(library && !host.hidden && url.pathname === '/'))) return;
       event.preventDefault();
-      void navigate(url.href);
+      void navigate(url.href, { hierarchy: link.hasAttribute('data-settings-parent') || url.pathname === '/' });
     };
     const onSubmit = (event) => {
       const form = event.target;
@@ -235,6 +281,16 @@
       event.stopImmediatePropagation();
       void navigate(url.href, { historyMode: 'none', leaveConfirmed: true });
     };
+    const onDrawerKeydown = event => {
+      if (!narrow() || !nav.classList.contains('is-settings-navigation-open')) return;
+      if (event.key === 'Escape') { event.preventDefault(); closeDrawer(); return; }
+      if (event.key !== 'Tab') return;
+      const items = [...nav.querySelectorAll('a[href], button:not([disabled])')].filter(node => node.getClientRects().length);
+      const first = items[0], last = items.at(-1);
+      if (event.shiftKey && (document.activeElement === first || !nav.contains(document.activeElement))) { event.preventDefault(); last?.focus(); }
+      else if (!event.shiftKey && (document.activeElement === last || !nav.contains(document.activeElement))) { event.preventDefault(); first?.focus(); }
+    };
+    document.addEventListener('keydown', onDrawerKeydown);
     document.addEventListener('click', onClick);
     document.addEventListener('submit', onSubmit);
     window.addEventListener('popstate', onPopState, true);
@@ -258,6 +314,10 @@
         ++sequence;
         pending?.abort();
         disposeContent();
+        disposeDismissal?.();
+        document.removeEventListener('album-haven:surface-opening', onSurfaceOpening);
+        document.removeEventListener('keydown', onDrawerKeydown);
+        window.removeEventListener('resize', syncDrawerLayout);
         document.removeEventListener('click', onClick);
         document.removeEventListener('submit', onSubmit);
         window.removeEventListener('popstate', onPopState, true);

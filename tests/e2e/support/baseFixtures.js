@@ -58,6 +58,7 @@ import { controlLastfmProvider, readLastfmProviderState } from '../helpers/lastf
 import { createWorkerAuthentication } from '../../../scripts/playwright-worker-authentication.mjs';
 import { createAppearancePreferenceIsolation } from '../helpers/appearancePreferenceIsolation.js';
 import { withArtistTreePreference } from './artistTreeStorageState.js';
+import { createLayoutPreferenceIsolation, restoreLayoutPreferencesAfterTest } from '../helpers/layoutPreferenceIsolation.js';
 
 const ANSI = {
   cyan: '\u001b[36m',
@@ -322,6 +323,12 @@ const functionalBrowserWarmupFixtures = (
 );
 
 export const test = base.extend({
+  layoutPreferenceIsolation: async ({ page }, use, testInfo) => {
+    const isolation = createLayoutPreferenceIsolation(page);
+    try { await use(isolation); } finally {
+      await restoreLayoutPreferencesAfterTest(isolation, testInfo.errors);
+    }
+  },
   appearancePreferenceIsolation: async ({ page }, use) => {
     const isolation = createAppearancePreferenceIsolation(page);
     try { await use(isolation); } finally { await isolation.restore(); }
@@ -329,8 +336,9 @@ export const test = base.extend({
   // Login/alternate-user suites opt out at file scope with test.use().
   reuseAuthentication: [true, { scope: 'worker', option: true }],
   authenticateFreshBrowserSession: [true, { option: true }],
-  // Regular tests own an expanded baseline; null exercises the product default.
-  initialArtistTreeFolded: [false, { option: true }],
+  // Authenticated layout belongs to account bootstrap. Anonymous contexts may
+  // explicitly seed their disposable browser preference; null leaves it untouched.
+  initialArtistTreeFolded: [null, { option: true }],
 
   workerAuthentication: [async ({ browser }, use, workerInfo) => {
     await use(createWorkerAuthentication({
@@ -344,7 +352,9 @@ export const test = base.extend({
     const authentication = reuseAuthentication
       ? await workerAuthentication.getStorageState()
       : { cookies: [], origins: [] };
-    await use(withArtistTreePreference(authentication, baseURL, initialArtistTreeFolded));
+    await use(reuseAuthentication
+      ? authentication
+      : withArtistTreePreference(authentication, baseURL, initialArtistTreeFolded));
   },
 
   managedAppLifecycle: [async ({}, use) => {

@@ -13,7 +13,7 @@ function load(overrides = {}) {
     formatLogHistoryTimestamp: value => value, getDetectedBrowserTimeZone:()=> 'America/Denver',getSupportedBrowserTimeZones:()=>[],
     showRepairAlert(){}, showToast(){}, console, ...overrides };
   context.window = context; vm.createContext(context);
-  for (const file of ['button-component.js','runtime/library-settings.js','runtime/utility-list-builders.js','runtime/utility-renderers-and-actions.js'])
+  for (const file of ['button-component.js','runtime/utility-loop-playback.js','runtime/library-settings.js','runtime/utility-list-builders.js','runtime/utility-renderers-and-actions.js'])
     vm.runInContext(fs.readFileSync(path.join(root,'music_app/static/js',file),'utf8'),context);
   context.renderUtilityModalContent = overrides.renderUtilityModalContent || (() => {});
   return context;

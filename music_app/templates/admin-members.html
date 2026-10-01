@@ -1,6 +1,6 @@
+{% from "partials/page-gallery-bar.html" import page_gallery_bar %}
 {% from "components/on-page-alert.html" import on_page_alert %}
 {% from "partials/button.html" import ui_button, ui_link, action_button %}
-{% from "partials/gallery-bar.html" import gallery_bar %}
 <!doctype html>
 <html lang="en">
 <head>
@@ -15,10 +15,13 @@
   {% include "partials/admin-ui-assets.html" %}
   <script src="/static/js/admin-members.js" defer></script>
   {% include "partials/navigation-tree-assets.html" %}
+  <script src="/static/js/surface-dismissal.js?v={{ runtime_asset_version | default(app_version) }}" defer></script>
   <script src="/static/js/account.js" defer></script>
   <script src="/static/js/settings-navigation.js" defer></script>
   {% include "partials/appearance-bootstrap.html" %}
   <link rel="stylesheet" href="/static/css/runtime/alert-components.css">
+  <link rel="stylesheet" href="/static/css/gallery-main.css?v={{ runtime_asset_version | default(app_version) }}">
+  <link rel="stylesheet" href="/static/css/mobile-layout.css?v={{ runtime_asset_version | default(app_version) }}">
 </head>
 <body>
   {{ on_page_alert('This page could not be loaded. Please try again.', severity='error', hidden=true, class_name='settings-navigation-error', attributes={'data-settings-navigation-error': ''}) }}
@@ -29,7 +32,7 @@
     <div class="settings-outlet" data-settings-outlet>
     <script id="admin-allowed-actions" type="application/json">{{ allowed_actions.as_payload() | tojson }}</script>
     <section class="settings-main" data-admin-roster data-csrf-token="{{ csrf_token }}">
-      {% call gallery_bar('Users & access', 'Manage who can sign in and what they can do in ' ~ roster.library_name ~ '.', 'members-heading') %}
+      {% call page_gallery_bar('Users & access', roster.library_name, settings_navigation=true) %}
         {% if allowed_actions.allows('accounts.create') %}{{ ui_link('Add user', '/admin/accounts/new', variant='primary') }}{% endif %}
       {% endcall %}
 
@@ -53,11 +56,11 @@
         <article class="members-row" role="row">
           <div class="member-identity" role="cell">
             <span class="member-avatar" aria-hidden="true">{{ member.username[:2] | upper }}</span>
-            <span><strong>{{ member.username }}</strong><small>{{ member.contact_email }}</small></span>
+            <span><strong>{{ member.username }}</strong><small>{{ member.contact_email }}</small><small class="member-mobile-status">{{ member.account_status }}</small></span>
           </div>
           <div class="member-access" role="cell" data-label="Role / access">
             <strong>{{ member_role_label(member, listener_defaults) }}</strong>
-            <small>{% if member.is_bootstrap_owner %}Full access{% elif member.membership_role %}{{ member.capability_keys | length }} effective grants{% else %}No current-library access{% endif %}</small>
+            <small>{% if member.is_bootstrap_owner %}Full access{% elif member.membership_role %}{{ member.capability_keys | length }} effective grants{% else %}No current-library access{% endif %}</small><small class="member-mobile-status">{{ member.active_session_count }} active session{{ "" if member.active_session_count == 1 else "s" }}{% if member.invitation_delivery_status %} · Invite {{ member.invitation_delivery_status }}{% endif %}</small>
           </div>
           <div role="cell" data-label="Status"><span class="status-dot {% if member.account_status == 'Disabled' %}is-disabled{% elif member.account_status == 'Pending invitation' %}is-pending{% endif %}"></span>{{ member.account_status }}</div>
           <div role="cell" data-label="Sessions">{{ member.active_session_count }} active session{{ "" if member.active_session_count == 1 else "s" }}</div>
@@ -65,7 +68,7 @@
           <div role="cell" data-label="Actions">
             {% if can_copy_invitation or can_send_invitation or can_edit_member %}
             <div class="member-actions" data-account-menu-component>
-              {% call action_button('Actions for ' ~ member.username, class_name='member-actions-trigger', attributes={'aria-haspopup': 'menu', 'aria-expanded': 'false', 'data-account-menu-trigger': true, 'data-member-menu-trigger': member.account_id}) %}
+              {% call action_button('Actions for ' ~ member.username, class_name='member-actions-trigger', presentation='bare', attributes={'aria-haspopup': 'menu', 'aria-expanded': 'false', 'data-account-menu-trigger': true, 'data-member-menu-trigger': member.account_id}) %}
                 <svg class="action-button__icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false" fill="currentColor"><circle cx="5" cy="12" r="1.7"/><circle cx="12" cy="12" r="1.7"/><circle cx="19" cy="12" r="1.7"/></svg>
               {% endcall %}
               <div class="gallery-anchored-menu member-actions-menu" role="menu" hidden data-account-menu data-member-menu="{{ member.account_id }}">

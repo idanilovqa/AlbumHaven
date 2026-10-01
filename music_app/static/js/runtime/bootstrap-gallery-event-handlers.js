@@ -59,6 +59,13 @@ function handleGalleryBootstrapClick(event) {
     return;
   }
 
+  const albumRow = event.target.closest('.album-card[data-gallery-display="list"]');
+  if (albumRow && !event.target.closest('button, a, input, select, textarea, [role="button"]')) {
+    const trigger = albumRow.querySelector('[data-open-tracklist="1"]');
+    if (trigger) { event.preventDefault(); openTrackModalForButton(trigger); }
+    return;
+  }
+
   const relatedToggle = event.target.closest('#related-toggle');
   if (relatedToggle) {
     event.preventDefault();
@@ -501,7 +508,7 @@ function handleSidebarArtistSelectionClick(event) {
     query: state.view.query,
     selected_artist: artist,
     all_artists_active: false,
-    visible_library_categories: primaryArtistChanged
+    visible_library_categories: primaryArtistChanged && !(typeof isMobileClient === 'function' && isMobileClient())
       ? ['main_library', 'new_arrivals', 'hoard']
       : state.view.visible_library_categories,
     related_filter_artists: [],
@@ -724,7 +731,9 @@ function renderRecentSearchPopover() {
   const { input, popover } = getRecentSearchElements();
   if (!ui || !input || !popover) return;
   const queries = readRecentSearchQueries();
-  const open = Boolean(ui.recentSearchPopoverOpen && queries.length);
+  const mobileReady = typeof mobilePageState === 'undefined' || typeof usesMobilePageLayout !== 'function' || !usesMobilePageLayout()
+    || (mobilePageState.searchOpen && mobilePageState.searchSuggestionsReady && String(getRecentSearchElements().input?.value || '').trim());
+  const open = Boolean(ui.recentSearchPopoverOpen && queries.length && mobileReady);
   if (ui.recentSearchActiveIndex >= queries.length) ui.recentSearchActiveIndex = -1;
   popover.innerHTML = queries.map((query, index) => {
     const selected = open && index === ui.recentSearchActiveIndex;
@@ -745,6 +754,8 @@ function renderRecentSearchPopover() {
 function openRecentSearchPopover() {
   const ui = ensureRecentSearchState();
   if (!ui || !readRecentSearchQueries().length) return false;
+  if (typeof usesMobilePageLayout === 'function' && usesMobilePageLayout()
+      && (!mobilePageState.searchOpen || !mobilePageState.searchSuggestionsReady || !String(getRecentSearchElements().input?.value || '').trim())) return false;
   ui.recentSearchPopoverOpen = true;
   ui.recentSearchActiveIndex = -1;
   renderRecentSearchPopover();
@@ -765,7 +776,7 @@ function closeRecentSearchPopover() {
   ui.recentSearchActiveIndex = -1;
   renderRecentSearchPopover();
   if (typeof galleryMainSurfaceController !== 'undefined' && galleryMainSurfaceController?.isOpen?.('search-suggestions')) {
-    galleryMainSurfaceController.close(false);
+    closeGalleryMainSurface(false);
   }
 }
 
@@ -813,7 +824,9 @@ function handleGalleryBootstrapSearchKeyDown(event) {
   const ui = ensureRecentSearchState();
   if (!ui) return false;
   const queries = readRecentSearchQueries();
-  const open = Boolean(ui.recentSearchPopoverOpen && queries.length);
+  const mobileReady = typeof mobilePageState === 'undefined' || typeof usesMobilePageLayout !== 'function' || !usesMobilePageLayout()
+    || (mobilePageState.searchOpen && mobilePageState.searchSuggestionsReady && String(getRecentSearchElements().input?.value || '').trim());
+  const open = Boolean(ui.recentSearchPopoverOpen && queries.length && mobileReady);
   if (event.key === 'Tab') {
     closeRecentSearchPopover();
     return false;
@@ -936,7 +949,8 @@ function scheduleGallerySearchCommit(nextQuery, options = {}) {
   if (String(normalizedQuery || '').trim()) {
     state.ui.pendingSearchClearOnBlur = false;
   }
-  if (normalizedQuery === committedQuery && !shouldReselectCommittedQuery) {
+  if (normalizedQuery === committedQuery && !shouldReselectCommittedQuery
+    && !(typeof hasActiveMobilePage === 'function' && hasActiveMobilePage())) {
     clearPendingGallerySearchCommit();
     if (options.recordRecentSearch === true) recordRecentSearchQuery(normalizedQuery);
     return false;
@@ -962,6 +976,7 @@ function scheduleGallerySearchCommit(nextQuery, options = {}) {
 
 function handleGalleryBootstrapSearchSubmit(event) {
   event.preventDefault();
+  if (typeof handleMobileSearchSubmit === 'function' && handleMobileSearchSubmit()) return;
   const input = document.getElementById('search-input');
   const nextQuery = input?.value || '';
   closeRecentSearchPopover();
@@ -985,6 +1000,7 @@ function handleGalleryBootstrapSearchSubmit(event) {
 }
 
 function handleGalleryBootstrapSearchInput(nextQuery) {
+  if (typeof mobilePageState !== 'undefined') mobilePageState.searchSuggestionsReady = Boolean(String(nextQuery || '').trim());
   clearPendingSelectedArtistReconcile();
   const prewarmSearchGeneration = beginAlbumDetailPrewarmSearchSuspension();
   beginSearchWaveformPeakLoadSuspension();
@@ -1012,6 +1028,8 @@ function handleGalleryBootstrapSearchInput(nextQuery) {
 }
 
 function commitGallerySearchQuery(nextQuery, options = {}) {
+  if (typeof prepareMobileGallerySearch === 'function'
+    && !prepareMobileGallerySearch(() => commitGallerySearchQuery(nextQuery, { ...options, mobileLeaveConfirmed: true }), options.mobileLeaveConfirmed === true)) return;
   clearPendingSelectedArtistReconcile();
   clearPendingGallerySearchCommit();
   if (
@@ -1794,8 +1812,10 @@ function tryRestoreClearedSearchView(nextView, options = {}) {
     clearPendingSelectedArtistReconcile();
     state.ui.viewStateRevision = Number(state.ui.viewStateRevision || 0) + 1;
     state.ui.pendingViewRequest = null;
+    const hadPendingTransition = state.ui.pendingViewTransition;
     state.ui.pendingViewTransition = false;
     state.ui.pendingViewTransitionRequestId = 0;
+    if (hadPendingTransition) renderLibraryLoader(state.status);
     renderSidebar();
     pushBrowserViewState(nextView);
     return true;
@@ -1906,7 +1926,7 @@ function syncSearchClear() {
   }
 }
 
-function handleGalleryBootstrapPopState() {
-  if (typeof syncGalleryMainStateFromLocation === 'function') syncGalleryMainStateFromLocation();
-  fetchAndRender(getBrowserLocationHref(), false);
+function handleGalleryBootstrapPopState(options = {}) {
+  if (typeof syncGalleryMainStateFromLocation === 'function') syncGalleryMainStateFromLocation(options.parentViewUrl);
+  fetchAndRender(options.parentViewUrl || getBrowserLocationHref(), false, options);
 }

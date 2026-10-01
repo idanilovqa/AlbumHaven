@@ -579,9 +579,9 @@ let detachedGalleryBarNextSibling = null;
 function buildLibraryStatusBarHtml() {
   return `<section class="gallery-bar gallery-bar--scan" id="library-status-gallery-bar" data-gallery-bar data-gallery-bar-instance="library-status" aria-label="Library Status Page controls">
     <div class="gallery-bar__context">
-      <button class="gallery-action-button library-loader-back-button" id="library-loader-back-button" type="button" data-close-scan-page="1" aria-label="Back to previous library view"><span class="library-loader-back-icon" aria-hidden="true">&#8592;</span></button>
+      ${ButtonComponent.renderActionButton({ icon: 'back', presentation: 'bare', ariaLabel: 'Back to previous library view', className: 'gallery-action-button library-loader-back-button', attributes: { id: 'library-loader-back-button', 'data-close-scan-page': '1' } })}
       <div class="library-scan-gallery-copy">
-        <div class="gallery-bar__title"><span>Library Status Page</span></div>
+        <div class="gallery-bar__title"><span>Library State</span></div>
         <span class="gallery-bar__summary" id="library-scan-gallery-summary" aria-live="polite">Preparing status...</span>
       </div>
     </div>
@@ -673,6 +673,8 @@ function renderLibraryLoader(data = {}, options = {}) {
   const canCancelScan = shouldShow && scanPageVisible && Boolean(data.scan_in_progress);
   setDomPropertyIfChanged(loader, 'hidden', !shouldShow);
   loader.classList?.toggle('is-scan-page', scanPageVisible);
+  document.getElementById('shell-main-surface')?.classList.toggle('has-library-loader', shouldShow);
+  if (typeof syncMobileHome === 'function') syncMobileHome();
   const galleryWasHidden = scroll.hidden;
   setDomPropertyIfChanged(scroll, 'hidden', shouldShow);
   if (galleryWasHidden && !shouldShow && scroll.clientWidth > 0 && typeof virtualGrid !== 'undefined') {
@@ -760,23 +762,37 @@ function renderLibraryLoader(data = {}, options = {}) {
 }
 
 function renderRelated() {
-  if (typeof galleryMainSurfaceController !== 'undefined'
-      && galleryMainSurfaceController?.isOpen?.('artist-family')
-      && typeof closeGalleryMainSurface === 'function') {
-    closeGalleryMainSurface(false);
-  }
-  const galleryPanel = document.querySelector?.('[data-artist-family-panel]');
-  const galleryToggle = document.querySelector?.('[data-gallery-bar-action="artist-family"]');
-  const galleryBody = document.querySelector?.('[data-gallery-family-panel-body]');
-  if (galleryPanel) {
-    galleryPanel.hidden = true;
-    galleryPanel.classList.remove('is-open');
-    galleryPanel.setAttribute('aria-hidden', 'true');
-  }
-  if (galleryToggle) galleryToggle.setAttribute('aria-expanded', 'false');
-  if (galleryBody) {
-    galleryBody.innerHTML = '';
-    delete galleryBody.dataset.galleryRenderSignature;
+  const activeFamily = typeof galleryMainSurfaceController !== 'undefined'
+    ? galleryMainSurfaceController?.current?.() : null;
+  const pendingArtist = String(state.ui?.pendingSidebarSelectedArtist || '').trim();
+  // Optimistic navigation can expose the controls before its canonical payload returns.
+  // That refresh must not dismiss a panel the user has just opened for the same view.
+  const preserveFamily = activeFamily?.key === 'artist-family'
+    && typeof getGalleryFamilyContextKey === 'function'
+    && activeFamily.familyContextKey === getGalleryFamilyContextKey()
+    && (!pendingArtist || pendingArtist === String(state.view.selected_artist || '').trim())
+    && !state.ui?.pendingSidebarAllArtistsActive
+    && !state.ui?.scanPageReturnContext
+    && !state.ui?.forceScanPageVisible;
+  if (!preserveFamily) {
+    if (typeof galleryMainSurfaceController !== 'undefined'
+        && galleryMainSurfaceController?.isOpen?.('artist-family')
+        && typeof closeGalleryMainSurface === 'function') {
+      closeGalleryMainSurface(false);
+    }
+    const galleryPanel = document.querySelector?.('[data-artist-family-panel]');
+    const galleryToggle = document.querySelector?.('[data-gallery-bar-action="artist-family"]');
+    const galleryBody = document.querySelector?.('[data-gallery-family-panel-body]');
+    if (galleryPanel) {
+      galleryPanel.hidden = true;
+      galleryPanel.classList.remove('is-open');
+      galleryPanel.setAttribute('aria-hidden', 'true');
+    }
+    if (galleryToggle) galleryToggle.setAttribute('aria-expanded', 'false');
+    if (galleryBody) {
+      galleryBody.innerHTML = '';
+      delete galleryBody.dataset.galleryRenderSignature;
+    }
   }
   const box = document.getElementById('related-box');
   const toggle = document.getElementById('related-toggle');

@@ -128,10 +128,10 @@ test('tag editor selection render preserves live track buttons during a pointer 
     const attributes = {
       'data-tag-editor-track': path,
     };
-    const selectButton = { attributes: { 'aria-pressed': 'false' },
-      setAttribute(name, value) { this.attributes[name] = String(value); } };
+    const selectionAttributes = { 'aria-pressed': 'false' };
+    const selectionButton = { setAttribute(name, value) { selectionAttributes[name] = String(value); } };
     return {
-      selectButton,
+      selectionAttributes, selectionButton,
       classList: {
         toggle(name, enabled) {
           if (enabled) classes.add(name);
@@ -142,7 +142,7 @@ test('tag editor selection render preserves live track buttons during a pointer 
         return attributes[name] || '';
       },
       querySelector(selector) {
-        return selector === '.tag-editor-track-select' ? selectButton : null;
+        return selector === '.tag-editor-track-select' ? selectionButton : null;
       },
       setAttribute(name, value) {
         attributes[name] = String(value);
@@ -196,7 +196,7 @@ test('tag editor selection render preserves live track buttons during a pointer 
 
   assert.equal(list.innerHTML, 'unchanged live track buttons');
   assert.equal(elements.subtitle.textContent, 'Album - 2 files in editor - 2 selected');
-  assert.deepEqual(buttons.map((button) => button.selectButton.attributes['aria-pressed']), ['true', 'true']);
+  assert.deepEqual(buttons.map((button) => button.selectionAttributes['aria-pressed']), ['true', 'true']);
   assert.deepEqual(buttons.map((button) => button.classes.has('is-active')), [true, true]);
 });
 

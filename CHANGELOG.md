@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.9.48 - 2026-09-30
+
+- Added responsive mobile navigation and Home, with shared account and Settings
+  navigation that preserves desktop controls and restores parent routes and scroll.
+- Saved client layout preferences per account and device, including Artist Tree
+  collapse state and mobile Gallery columns, with reload and save-completion coverage.
+- Kept artwork, Gallery, player, and nested menus usable through touch input,
+  responsive layout changes, and dismissal of the actual dimmed backdrop.
+- Combined mobile Admin presentation with named roles, capability prerequisites,
+  protected-owner restrictions, and revision-safe repeated account updates.
+- Preserved native clipboard paste, exact Problematic Files identity and rendering
+  checks, retained Gallery chrome, and connected-menu paint and calendar coverage.
+
 ## 0.9.47 - 2026-09-30
 
 This release includes the unreleased 0.9.46 changes below.

@@ -41,7 +41,10 @@ const utilityHandlersPath = path.join(
   'bootstrap-utility-event-handlers.js',
 );
 
-test('cover lookup task card text can be selected and copied without activating the card', async ({
+for (const refreshWhilePressed of [false, true]) {
+test(refreshWhilePressed
+  ? 'cover lookup task card preserves a pending text drag across polling'
+  : 'cover lookup task card text can be selected and copied without activating the card', async ({
   context,
   page,
 }) => {
@@ -126,6 +129,16 @@ test('cover lookup task card text can be selected and copied without activating 
   expect(elapsedBox).not.toBeNull();
   await page.mouse.move(titleBox.x, titleBox.y + (titleBox.height / 2));
   await page.mouse.down();
+  if (refreshWhilePressed) {
+    const observation = await page.evaluate(() => {
+      const original = document.querySelector('[data-open-cover-lookup-task]');
+      const pressed = original.matches(':active');
+      const collapsed = window.getSelection()?.isCollapsed;
+      renderCoverLookupDrawer();
+      return { pressed, collapsed, preserved: original === document.querySelector('[data-open-cover-lookup-task]') };
+    });
+    expect(observation).toEqual({ pressed: true, collapsed: true, preserved: true });
+  }
   await page.mouse.move(
     elapsedBox.x + elapsedBox.width,
     elapsedBox.y + (elapsedBox.height / 2),
@@ -166,3 +179,4 @@ await expect(stopIcon).toHaveCSS('stroke-width', '1.8px');
 await expect(stopIcon).toHaveCSS('fill', 'none');
 
 });
+}

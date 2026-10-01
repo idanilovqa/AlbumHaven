@@ -641,6 +641,25 @@ test('labeled disable remains disable after cancelling its first confirmation', 
   assert.equal(payload.confirm_disable, true);
 });
 
+test('roster outside wheel closes the menu without consuming internal scrolling or anchor input', async () => {
+  const runtime = loadRosterRuntime();
+  const { menuButton, menu, copyInvite } = runtime.row;
+  await menuButton.click();
+  const wheel = runtime.windowListeners.get('wheel');
+  assert.equal(typeof wheel, 'function');
+  const preventDefault = () => assert.fail('wheel must not be consumed');
+  wheel({ type: 'wheel', target: copyInvite, preventDefault });
+  assert.equal(menu.hidden, false);
+  wheel({ type: 'wheel', target: menuButton, preventDefault });
+  assert.equal(menu.hidden, false);
+  runtime.windowListeners.get('scroll')({ type: 'scroll', target: menu });
+  assert.equal(menu.hidden, false);
+  wheel({ type: 'wheel', target: runtime.outside, preventDefault });
+  assert.equal(menu.hidden, true);
+  assert.equal(menuButton.getAttribute('aria-expanded'), 'false');
+  runtime.cleanup();
+  assert.equal(runtime.windowListeners.has('wheel'), false);
+});
 
 test('repeated edit saves do not navigate or repeat the previous mutation on a background GET', async () => {
   const destinations = [];

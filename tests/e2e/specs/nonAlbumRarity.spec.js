@@ -401,8 +401,10 @@ test('FTC-NON-ALBUM-012 renders exception groups as the approved compact track t
       expect((await tagEditorActions.readSummary()).exceptionType).toBe('Interview');
       await tagEditorActions.selectAllTracks();
       await tagEditorActions.clearException();
-      await tagEditorActions.applyAndWaitForSavedFiles({ savedNotificationDelivery: 'status-page' });
-      fixtureRestored = true;
+      await tagEditorActions.applyAndWaitForSavedFiles({
+        savedNotificationDelivery: 'status-page',
+        onSaveTaskCompleted: () => { fixtureRestored = true; },
+      });
     });
   } finally {
     if (exceptionsApplied && !fixtureRestored) {

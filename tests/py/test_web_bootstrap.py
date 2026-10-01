@@ -431,6 +431,7 @@ def test_index_renders_shell_without_legacy_flask_route_module(asgi_app, monkeyp
     assert payload["bootstrap"]["startupHydration"]["endpoint"] == "/view-data?surface=albums&payload_tier=sidebar"
     assert payload["bootstrap"]["startupHydration"]["followupEndpoint"] == "/view-data?surface=albums&omit_sidebar=1"
     assert payload["bootstrap"]["startupHydration"]["tier"] == "sidebar"
+    assert re.search(rb'<[^>]+id="library-loader"[^>]*\bhidden(?:\s|>)', body)
     loader_tag = re.search(rb'<section\b[^>]*\bid="library-loader"[^>]*>', body)
     assert loader_tag is not None
     assert re.search(rb'\shidden(?:\s|>)', loader_tag.group())
@@ -1615,7 +1616,9 @@ def test_app_js_loads_generated_runtime_bundle_after_bootstrap_payload_setup():
         "appearance-palettes.js",
         "appearance-device-profiles.js",
         "capability-ui.js",
+        "client-device-preferences.js",
         "client-layout-bootstrap.js",
+        "surface-dismissal.js",
         "button-component.js",
         "editor-page.js",
         "settings-navigation.js",

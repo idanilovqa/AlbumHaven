@@ -28,7 +28,7 @@ test('FTC-TAGS-016 tag editor backdrop closes only when no tag changes are pendi
     await tagEditorActions.waitForOpen();
   });
 
-  await stepLogger.step('Use the reorderable file list and shared footer with immediate, uniform selection', async () => {
+  await stepLogger.step('Use the reorderable file list and shared footer with immediate selection and preserved alternating shading', async () => {
     const surfaces = new InteractionSurfaces(page);
     await expect(surfaces.tagTrackList).toBeVisible();
     await expect(surfaces.tagFooter).toBeVisible();

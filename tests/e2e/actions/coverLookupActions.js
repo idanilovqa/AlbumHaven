@@ -767,6 +767,13 @@ export class CoverLookupActions {
     await this.coverLookup.waitForHidden(this.coverLookup.modal, { timeout: 30000 });
   }
 
+  async backFromMobilePage() {
+    await expect(this.coverLookup.mobilePage).toBeVisible();
+    await expect(this.coverLookup.mobileBackButton).toBeVisible();
+    await this.coverLookup.mobileBackButton.click();
+    await this.coverLookup.waitForHidden(this.coverLookup.modal, { timeout: 30000 });
+  }
+
   async openDrawer(options = {}) {
     if (await this.coverLookup.isDrawerOpen()) return;
     await this.coverLookup.drawerButton.click();

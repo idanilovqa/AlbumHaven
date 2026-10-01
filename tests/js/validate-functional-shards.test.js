@@ -505,6 +505,27 @@ test('functional cold-browser warmup is one read-only worker setup rather than p
   assert.match(source, /\{\s*scope:\s*['"]worker['"],\s*auto:\s*true\s*\}/);
 });
 
+test('native functional discovery preserves nested leaf titles and area tags', () => {
+  const vm = require('node:vm');
+  const reporterPath = path.join(repoRoot, 'scripts/ci/playwright-functional-list-reporter.cjs');
+  const moduleObject = { exports: {} };
+  let output = '';
+  vm.runInNewContext(fs.readFileSync(reporterPath, 'utf8'), {
+    require, module: moduleObject,
+    process: { cwd: () => repoRoot, stdout: { write(value) { output += value; } } },
+  });
+  const title = 'FTC-ALBUM-DETAILS-022 touch artwork controls open full cover and Cover Lookup without hover';
+  const file = 'tests/e2e/specs/albumDetailsComponents.functional.spec.js';
+  new moduleObject.exports().onBegin({}, { allTests: () => [{
+    title, titlePath: () => ['', 'functional', file, 'touch artwork actions', title],
+    parent: { project: () => ({ name: 'functional' }) },
+    location: { file: path.join(repoRoot, file) }, tags: ['@area:album-details'],
+  }] });
+  assert.deepEqual(loadValidator().parseListOutput(output, 'playwright.config.js'), [{
+    config: 'playwright.config.js', project: 'functional', test: file, case: title, areas: ['album-details'],
+  }]);
+});
+
 validatorTest('validator rejects a contract area missing from native Playwright tags', () => {
   const validator = loadValidator();
   const contract = readJson(shardContractPath);
@@ -564,7 +585,8 @@ test('functional fixtures restore one genuine worker login into every production
     /startupRelationProjectionReadiness:[\s\S]*readAuthenticatedStartupRelationProjectionReadiness/,
   );
   assert.match(source, /storageState: async \(\{ reuseAuthentication, workerAuthentication, baseURL, initialArtistTreeFolded \}, use\)/);
-  assert.match(source, /await use\(withArtistTreePreference\(authentication, baseURL, initialArtistTreeFolded\)\)/);
+  assert.match(source, /initialArtistTreeFolded: \[null, \{ option: true \}\]/);
+  assert.match(source, /await use\(reuseAuthentication\s*\? authentication\s*: withArtistTreePreference\(authentication, baseURL, initialArtistTreeFolded\)\)/);
   assert.match(source, /\? await workerAuthentication\.getStorageState\(\)\s*: \{ cookies: \[\], origins: \[\] \}/);
   assert.doesNotMatch(source, /authenticateProductionContext\(page\)/);
 });
@@ -741,9 +763,14 @@ validatorTest('gallery startup projections share one early app process before is
   assert.equal(waves[0].invocations[0], isolatedFirstWave[0]);
   assert.equal(waves[0].invocations[1].baselineMode, 'shared-setup');
   const sharedReaderNames = waves[0].invocations[1].cases.map((ownedCase) => ownedCase.case);
-  assert.equal(sharedReaderNames.length, 27);
+  assert.equal(sharedReaderNames.length, 26);
+  const artistTreeCase = 'FTC-ARTIST-TREE-002 preserves collapsed and expanded preferences after reload';
+  assert.equal(sharedReaderNames.includes(artistTreeCase), false);
+  const artistTreeInvocations = waves[1].invocations.filter(invocation => invocation.cases.some(ownedCase => ownedCase.case === artistTreeCase));
+  assert.equal(artistTreeInvocations.length, 1);
+  assert.equal(artistTreeInvocations[0].baselineMode, 'owned-mutation');
+  assert.deepEqual(artistTreeInvocations[0].cases.map(ownedCase => ownedCase.case), [artistTreeCase]);
   for (const caseName of [
-    'FTC-ARTIST-TREE-002 preserves collapsed and expanded preferences after reload',
     'FTC-SEARCH-NAV-025 keeps committed searches in an app-owned keyboard and mouse popover',
     'FTC-SEARCH-NAV-025 persists only an explicitly submitted completed query after debounced prefixes',
   ]) {
@@ -1003,6 +1030,9 @@ validatorTest('read-only shard cases reuse one prepared fixture and restore once
     assert.notEqual(grepIndex, -1);
     const titlePattern = playwrightCalls[0].args[grepIndex + 1];
     assert.ok(readOnlyCases.every(({ ownedCase }) => new RegExp(titlePattern).test(ownedCase.case)));
+    assert.ok(readOnlyCases.every(({ ownedCase }) => new RegExp(titlePattern).test(
+      `functional ${ownedCase.test} nested describe ${ownedCase.case} @area:${ownedCase.area}`,
+    )), 'leaf selection must match Playwright space-delimited nested titles and area tags');
   } finally {
     fs.rmSync(runnerTemp, { recursive: true, force: true });
   }

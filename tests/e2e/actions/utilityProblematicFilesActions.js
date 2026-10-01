@@ -917,14 +917,17 @@ export class UtilityProblematicFilesActions {
       const capture = (mutations) => {
         const detail = document.querySelector(selectors.detailSelector);
         const active = document.querySelector(selectors.activeListItemSelector);
+        const selectedKey = String(state.utility?.selectedProblematicKey || '');
+        const list = document.querySelector(selectors.sidebarListSelector);
         records.push({
           activeKey: String(active?.getAttribute('data-problematic-album-key') || ''),
-          selectedKey: String(state.utility?.selectedProblematicKey || ''),
-          runtimeKey: String(getSelectedProblematicAlbum()?.key || ''),
-          selectedRowMounted: Array.from(document.querySelector(selectors.sidebarListSelector)?.querySelectorAll(selectors.listItemSelector) || [])
-            .some(row => row.getAttribute('data-problematic-album-key') === String(state.utility?.selectedProblematicKey || '')),
+          selectedKey,
+          selectedRowMounted: Array.from(list?.querySelectorAll(selectors.listItemSelector) || [])
+            .some(row => row.getAttribute('data-problematic-album-key') === selectedKey),
           detailMutation: mutations.some(mutation => ['childList', 'characterData'].includes(mutation.type)
-            && (detail === mutation.target || Boolean(detail?.contains(mutation.target)))),
+            && (detail === mutation.target || detail?.contains(mutation.target))),
+          runtimeKey: String(typeof getSelectedProblematicAlbum === 'function'
+            ? getSelectedProblematicAlbum()?.key || '' : ''),
           detailTitle: String(detail?.querySelector(selectors.detailTitleSelector)?.textContent || '').trim(),
           detailText: String(detail?.textContent || '').trim(),
           detailRender: mutations.some(mutation => mutation.type === 'childList' && detail === mutation.target),
@@ -942,9 +945,9 @@ export class UtilityProblematicFilesActions {
     }, {
       detailSelector: this.utilityProblematicFilesTab.detailScrollerSelector,
       detailTitleSelector: this.utilityProblematicFilesTab.detailTitleSelector,
-      listItemSelector: this.utilityProblematicFilesTab.listItemSelector,
       activeListItemSelector: this.utilityProblematicFilesTab.activeListItemSelector,
       sidebarListSelector: this.utilityProblematicFilesTab.sidebarListSelector,
+      listItemSelector: this.utilityProblematicFilesTab.listItemSelector,
     });
   }
 

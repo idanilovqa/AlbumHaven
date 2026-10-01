@@ -1,0 +1,43 @@
+{
+  "schemaVersion": 1,
+  "artifact": "friends-listening-home/v002",
+  "status": "in_review",
+  "productionImplementation": false,
+  "nativeContentTree": "bf042b5d824e7aeb35a689066e0cbe0f10e8b900",
+  "nativeAppVersion": "0.9.48",
+  "nativeInputCount": 185,
+  "archiveKind": "editable_adapter_source_only",
+  "runnableSnapshotIncluded": false,
+  "files": [
+    {
+      "path": "source/fixture-data.mjs",
+      "sha256": "8e4597ec8eae6afc311b395e5a06d3d64dcfa61985fe4bc1db5ea7ed3a4e3f67",
+      "bytes": 25197
+    },
+    {
+      "path": "source/friends-app.jsx",
+      "sha256": "d81930223eb99436086d4f05d965991375f7f0ace1f30d94896722082d084f03",
+      "bytes": 32023
+    },
+    {
+      "path": "source/mock-adapter.mjs",
+      "sha256": "35d685c66a78cf4e24d4851b41acbb2e6643449a22bf30381605fadb932dd583",
+      "bytes": 3589
+    },
+    {
+      "path": "source/mock-layout.css",
+      "sha256": "9cef9669abf415e13572ee1b493e72576975e4af6b2a84f8407f995280b0f94c",
+      "bytes": 11298
+    },
+    {
+      "path": "source/native-input-manifest.json",
+      "sha256": "fba115cc2df4927a983695ba40dbe6e435c546a36131f1ab5dececcbac401509",
+      "bytes": 34272
+    },
+    {
+      "path": "source/native-layout.js",
+      "sha256": "a355184ff523c504f6b7e0a125907673e9bea861c5c24342df5537bc59bcdc6a",
+      "bytes": 12983
+    }
+  ]
+}

@@ -7772,6 +7772,23 @@
   {
     "config": "playwright.component.config.js",
     "project": "",
+    "test": "tests/components/navigationTreeReconciliation.spec.js",
+    "case": "navigation rows preserve unchanged selection and artwork attributes during reconciliation",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "unchanged-navigation-row-attributes-produce-no-mutations",
+      "changed-selection-and-artwork-labels-remain-accessible",
+      "explicit-empty-artwork-labels-and-node-identity-preserved"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
     "test": "tests/components/problematicFilesVirtualFocus.spec.js",
     "case": "scroll and resize retain focused row identity within unchanged and overlapping windows",
     "profile": null,

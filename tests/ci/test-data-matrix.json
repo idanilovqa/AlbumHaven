@@ -6055,5 +6055,21 @@
       "date-range-apply-preserves-selected-values"
     ],
     "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/coverLookupMutationBusy.spec.js",
+    "case": "pending local cover actions remain visibly disabled on hover and re-enable normally",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "local-cover-mutation-exclusivity",
+      "disabled-local-cover-action-appearance"
+    ],
+    "ownerApproval": "approved"
   }
 ]

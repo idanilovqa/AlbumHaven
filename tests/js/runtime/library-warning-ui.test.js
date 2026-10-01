@@ -68,3 +68,35 @@ test('Library warning requires acknowledgement of the current warning token', ()
   assert.equal(context.libraryWarningPresentation({ state: 'healthy' }, 'first').warning, false);
   assert.equal(renderScanWarning({ allowed_actions: { 'library.refresh': true } }, true, false), '');
 });
+
+
+test('Library Health visibility changes once per transition and stays quiet on repeated status renders', () => {
+  const context = load();
+  let hidden = true;
+  const healthWrites = [];
+  const health = {
+    get hidden() { return hidden; },
+    set hidden(value) { healthWrites.push(value); hidden = value; },
+  };
+  const notice = { hidden: true, innerHTML: '' };
+  const loader = { classList: { toggle() {} } };
+  context.document.getElementById = id => ({
+    'library-health': health, 'library-scan-warning': notice, 'library-loader': loader,
+  }[id] || null);
+  context.buildOnPageAlertHtml = () => '<div role="alert">Library warning</div>';
+  const healthy = { watcher_health: { state: 'healthy' } };
+  context.renderLibraryWarning(healthy, { scanPageVisible: false });
+  context.renderLibraryWarning(healthy, { scanPageVisible: false });
+  assert.deepEqual(healthWrites, []);
+  const warning = { watcher_health: { state: 'warning', dismissed: true, problems: [] } };
+  context.renderLibraryWarning(warning, { scanPageVisible: false });
+  assert.deepEqual(healthWrites, []);
+  context.renderLibraryWarning(warning, { scanPageVisible: true });
+  context.renderLibraryWarning(warning, { scanPageVisible: true });
+  assert.deepEqual(healthWrites, [false]);
+  assert.equal(notice.hidden, false);
+  context.renderLibraryWarning(warning, { scanPageVisible: false });
+  context.renderLibraryWarning(healthy, { scanPageVisible: false });
+  assert.deepEqual(healthWrites, [false, true]);
+  assert.equal(notice.hidden, true);
+});

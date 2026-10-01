@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import hashlib
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
 from pathlib import Path
 
 from music_app.services.library import album_to_dict
@@ -135,26 +135,17 @@ def iter_local_cover_candidates(
     return candidates
 
 
-def selected_local_cover_source(
-    candidates: list[dict[str, object]], active_path: Path | None, revision: str | None,
-) -> str | None:
-    """Find the source image of the persisted cover without inventing preference state.
-
-    Local selection promotes exact bytes to cover.jpg. The canonical file remains
-    active for playback/scanning; a matching retained source is the picker identity.
-    A stale/deleted source cannot remain selected because its bytes must still match.
-    """
-    if active_path is None:
-        return None
-    fallback = str(active_path)
-    # Identical initial files do not prove a saved picker choice. Only a
-    # persisted selection revision can identify a retained source.
-    if not revision:
-        return fallback
+def _matching_local_cover_sources(
+    candidates: list[dict[str, object]], active_path: Path, revision: str | None,
+) -> Iterator[str]:
+    """Compare content without turning initial duplicate bytes into a saved choice."""
     try:
         size = active_path.stat().st_size
+        if not revision:
+            with active_path.open("rb") as image:
+                revision = hashlib.file_digest(image, "sha256").hexdigest()
     except OSError:
-        return fallback
+        return
     for item in candidates:
         candidate = Path(str(item["path"]))
         if candidate == active_path:
@@ -165,11 +156,21 @@ def selected_local_cover_source(
             with candidate.open("rb") as image:
                 digest = hashlib.file_digest(image, "sha256").hexdigest()
             if digest == revision:
-                return str(candidate)
+                yield str(candidate)
         except OSError:
             # A file can be removed while the gallery enumerates local media.
             continue
-    return fallback
+
+
+def selected_local_cover_source(
+    candidates: list[dict[str, object]], active_path: Path | None, revision: str | None,
+) -> str | None:
+    """Retain canonical initial identity; only a saved revision identifies a source."""
+    if active_path is None:
+        return None
+    if not revision:
+        return str(active_path)
+    return next(_matching_local_cover_sources(candidates, active_path, revision), str(active_path))
 
 
 def serialize_cover_gallery_payload(
@@ -198,6 +199,11 @@ def serialize_cover_gallery_payload(
     selected_source_path = None if active_remote_cover else selected_local_cover_source(
         local_candidates, active_cover_path, active_cover_revision,
     )
+    if active_cover_path and not active_cover_revision and not active_remote_cover:
+        duplicates = set(_matching_local_cover_sources(local_candidates, active_cover_path, None))
+        for candidate in local_candidates:
+            if candidate["path"] in duplicates:
+                candidate["duplicate_of"] = str(active_cover_path)
     if active_cover_revision and not active_remote_cover:
         for candidate in local_candidates:
             if candidate.get("is_active") or candidate["path"] == selected_source_path:

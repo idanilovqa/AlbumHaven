@@ -3037,6 +3037,51 @@ function savedSourceRevisionContext({ albumRevision = 'saved-revision', saving =
   context.state.coverLookup.modal.saving = saving;
   return context;
 }
+
+require('node:test')('compact local gallery removes only verified initial duplicates and retains desktop and draft choices', () => {
+  const body = { innerHTML: '' };
+  let compact = true;
+  const context = loadHelper({
+    escapeHtml: value => String(value || ''),
+    usesMobilePageLayout: () => compact,
+    document: { getElementById: id => ({
+      'cover-lookup-modal': { hidden: false },
+      'cover-lookup-modal-body': body,
+      'cover-lookup-modal-subtitle': { textContent: '' },
+      'cover-lookup-modal-status': { textContent: '', classList: { toggle() {} } },
+    }[id] || null) },
+  });
+  context.state.coverLookup.tasks = [];
+  const modal = context.state.coverLookup.modal;
+  modal.album = { name: 'Owned album' };
+  const covers = [
+    { path: '/owned/alternate.jpg' },
+    { path: '/owned/original.jpg', duplicate_of: '/owned/cover.jpg' },
+    { path: '/owned/cover.jpg', is_active: true },
+  ];
+  context.applyCoverLookupGalleryPayload({ active_cover_path: '/owned/cover.jpg',
+    selected_source_path: '/owned/cover.jpg', local_covers: covers });
+  const observed = [];
+  context.buildCoverLookupCard = item => { observed.push(item.path); return item.path; };
+  function render() { observed.length = 0; context.renderCoverLookupModal(); return [...observed]; }
+  const initial = JSON.stringify(modal.localCovers);
+  assert.deepEqual(render(), ['/owned/alternate.jpg', '/owned/cover.jpg']);
+  assert.match(body.innerHTML, /LOCAL · 2 images/);
+  assert.equal(modal.activeLocalSelectionPath, '/owned/cover.jpg');
+  compact = false;
+  assert.deepEqual(render(), covers.map(item => item.path));
+  assert.match(body.innerHTML, /LOCAL · 3 images/);
+  modal.pendingLocalPath = '/owned/original.jpg';
+  compact = true;
+  assert.deepEqual(render(), covers.map(item => item.path), 'an existing desktop draft remains visible after narrowing');
+  assert.equal(modal.pendingLocalPath, '/owned/original.jpg');
+  modal.pendingLocalPath = '/owned/alternate.jpg';
+  assert.deepEqual(render(), ['/owned/alternate.jpg', '/owned/cover.jpg']);
+  assert.equal(modal.pendingLocalPath, '/owned/alternate.jpg');
+  assert.equal(JSON.stringify(modal.localCovers), initial, 'rendering never discards the file inventory');
+  modal.localCovers = [covers[0], covers[1]];
+  assert.deepEqual(render(), ['/owned/alternate.jpg', '/owned/original.jpg'], 'an absent canonical representative cannot hide its remaining source');
+});
 function savedSourceGallery(revision = 'saved-revision') {
   return { active_cover_path: '/owned/cover.jpg', selected_source_path: '/owned/Art/Front.jpg',
     local_covers: [

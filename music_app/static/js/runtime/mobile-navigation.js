@@ -502,6 +502,8 @@ function initMobileNavigation() {
     promoteVisibleMobileDialogs();
     syncMobileGalleryControls();
     syncMobilePageShell();
+    const coverLookup = document.getElementById('cover-lookup-modal');
+    if (coverLookup && !coverLookup.hidden) renderCoverLookupModal();
     if (['loops', 'integrations', 'log-history', 'problematic-files'].includes(state.utility.activeTab) && mobilePageState.pages.some(page => page.kind === 'utilities')) renderUtilityModalContent();
     if (typeof syncMobileAlbumComposition === 'function') syncMobileAlbumComposition(getCurrentTrackModalAlbum());
   };

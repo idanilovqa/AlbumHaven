@@ -1,0 +1,93 @@
+{% from "partials/page-gallery-bar.html" import page_gallery_bar %}
+{% from "components/on-page-alert.html" import on_page_alert %}
+{% from "partials/button.html" import ui_button, ui_link %}
+{% from "partials/switch.html" import ui_switch %}
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{ "Edit user" if member else "Add user" }} — Album Haven</title>
+  <link rel="stylesheet" href="/static/css/admin-members.css">
+  <link rel="stylesheet" href="/static/css/scrollbar.css">
+  <link rel="stylesheet" href="/static/css/account.css">
+  <link rel="stylesheet" href="/static/css/settings-navigation.css">
+  <link rel="stylesheet" href="/static/css/app-chrome.css">
+  {% include "partials/admin-ui-assets.html" %}
+  <script src="/static/js/admin-members.js" defer></script>
+  {% include "partials/navigation-tree-assets.html" %}
+  <script src="/static/js/surface-dismissal.js?v={{ runtime_asset_version | default(app_version) }}" defer></script>
+  <script src="/static/js/account.js" defer></script>
+  <script src="/static/js/settings-navigation.js" defer></script>
+  {% include "partials/appearance-bootstrap.html" %}
+  <link rel="stylesheet" href="/static/css/runtime/alert-components.css">
+  <link rel="stylesheet" href="/static/css/gallery-main.css?v={{ runtime_asset_version | default(app_version) }}">
+  <link rel="stylesheet" href="/static/css/mobile-layout.css?v={{ runtime_asset_version | default(app_version) }}">
+</head>
+<body>
+  {{ on_page_alert('This page could not be loaded. Please try again.', severity='error', hidden=true, class_name='settings-navigation-error', attributes={'data-settings-navigation-error': ''}) }}
+  <main class="settings-host settings-shell" data-settings-host>
+    {% from "partials/app-bar.html" import app_bar with context %}
+    {{ app_bar() }}
+    {% include "partials/admin-settings-nav.html" %}
+    <div class="settings-outlet" data-settings-outlet>
+    <script id="admin-allowed-actions" type="application/json">{{ allowed_actions.as_payload() | tojson }}</script>
+    <section class="settings-main detail-main">
+      {{ page_gallery_bar('Edit user' if member else 'Add user', member.username if member else '', back_href='/admin/members', back_label='Back to users', settings_navigation=true) }}
+
+      {{ on_page_alert(severity='error', hidden=true, class_name='admin-form-error', attributes={'data-admin-form-error': ''}) }}
+      {{ on_page_alert(role='status', hidden=true, class_name='admin-form-status', attributes={'data-admin-form-status': ''}) }}
+      <form class="admin-detail-form" data-admin-account-form data-mode="{{ 'edit' if member else 'create' }}"{% if member %} data-initial-active="{{ 'true' if member.is_active else 'false' }}" data-initial-library-access="{{ 'true' if member.membership_role else 'false' }}"{% endif %}>
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        {% if member %}<input type="hidden" name="account_id" value="{{ member.account_id }}">{% endif %}
+
+        {% if not member %}
+        <label class="detail-field"><span>Username</span><input name="username" type="text" autocomplete="off" required></label>
+        <label class="detail-field"><span>Email address</span><input name="contact_email" type="email" autocomplete="off" required><small>Plus-addressing remains intact.</small></label>
+        {% elif allowed_actions.allows('accounts.manage') %}
+        {{ ui_switch('Account enabled', 'is_active', checked=member.is_active, description='When disabled, the user cannot sign in.', class_name='detail-setting') }}
+        {% else %}
+        <div class="detail-setting"><span><strong>Account status</strong><small>Only an authorized administrator can change this setting.</small></span><span>{{ "Enabled" if member.is_active else "Disabled" }}</span></div>
+        {% endif %}
+
+        {% if not member or allowed_actions.allows('accounts.capabilities.manage') %}
+        {% set is_owner = member and member.is_bootstrap_owner %}
+        {% if is_owner %}
+        {{ on_page_alert('The protected owner has full access. These inherited permissions cannot be changed individually.', title='Owner · Full access', severity='info', role='note', class_name='role-note', attributes={'id': 'admin-role-description'}) }}
+        {% with capabilities_readonly=true %}
+        {% include "partials/admin-capability-switches.html" %}
+        {% endwith %}
+        {% for group_name, capabilities in capability_groups %}
+        {% for capability_key, label in capabilities %}
+        <input type="hidden" name="capability_keys" value="{{ capability_key }}">
+        {% endfor %}
+        {% endfor %}
+        {% else %}
+        {% include "partials/admin-capability-assignment.html" %}
+        {% endif %}
+        {% endif %}
+
+        {% if member %}
+        <section class="account-settings" aria-labelledby="account-settings-title">
+          <h2 id="account-settings-title">Account settings</h2>
+          {% if allowed_actions.allows('accounts.membership.manage') %}{{ ui_switch('Current library access', 'current_library_access', checked=member.is_bootstrap_owner or member.membership_role, disabled=member.is_bootstrap_owner, description='Allow this user to access ' ~ roster.library_name ~ '.', class_name='detail-setting') }}{% if member.is_bootstrap_owner %}<input type="hidden" name="current_library_access" value="on">{% endif %}{% endif %}
+          {% if member.membership_role and member.has_credential and allowed_actions.allows('accounts.password_reset.send') %}<div class="detail-setting"><span><strong>Send password reset email</strong><small>Email a link to reset the user's password.</small></span>{{ ui_button('Send email', attributes={'data-admin-action': 'reset'}) }}</div>{% endif %}
+          {% if member.is_bootstrap_owner and allowed_actions.allows('accounts.welcome.send') %}<div class="detail-setting"><span><strong>Resend welcome email</strong><small>Email the username and sign-in URL, never a password.</small></span>{{ ui_button('Resend email', attributes={'data-admin-action': 'welcome'}) }}</div>{% endif %}
+          {% if allowed_actions.allows('accounts.sessions.revoke') %}<div class="detail-setting"><span><strong>Revoke all sessions</strong><small>Sign the user out from all active sessions.</small></span>{{ ui_button('Revoke sessions', attributes={'data-admin-action': 'revoke'}) }}</div>{% endif %}
+          {% if allowed_actions.allows('accounts.manage') and not member.is_bootstrap_owner %}<div class="detail-setting is-danger"><span><strong>{{ "Disable" if member.is_active else "Enable" }} account</strong><small>{{ "Prevent the user from signing in." if member.is_active else "Allow the user to sign in with their existing password." }}</small></span>{{ ui_button(('Disable' if member.is_active else 'Enable') ~ ' account', class_name='action-button--destructive', attributes={'data-admin-action': 'toggle-active'}) }}</div>{% endif %}
+        </section>
+        {% else %}
+        {{ ui_switch('Send invitation email', 'send_invitation', checked=invitation_email_enabled, description='The user can also receive or copy a one-time invitation link later.', class_name='detail-setting') }}
+        {% endif %}
+
+
+        <footer class="detail-actions">
+          {{ ui_link('Cancel', '/admin/members') }}
+          {% if (member and allowed_actions.allows('accounts.manage') and allowed_actions.allows('accounts.membership.manage') and allowed_actions.allows('accounts.capabilities.manage')) or (not member and allowed_actions.allows('accounts.create')) %}{{ ui_button('Save changes' if member else 'Create user', variant='primary', type='submit') }}{% endif %}
+        </footer>
+      </form>
+    </section>
+    </div>
+  </main>
+</body>
+</html>

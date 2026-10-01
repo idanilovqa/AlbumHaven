@@ -8,6 +8,57 @@ const helperPath = path.join(__dirname, '..', '..', '..', 'music_app', 'static',
 const helperSource = fs.readFileSync(helperPath, 'utf8');
 const tagMutationSource = fs.readFileSync(path.join(path.dirname(helperPath), 'utility-list-builders.js'), 'utf8');
 
+test('initial startup readiness waits for its successful full render', async () => {
+  const { context, pendingRequests } = createContext();
+  const startup = context.fetchAndRender('/view-data', false, { startupRefresh: true });
+  assert.equal(context.startupMetrics.completed, 0);
+  pendingRequests[0].resolveWith({ artist_groups: [], initial_view_partial: false });
+  assert.equal(await startup, true);
+  assert.equal(context.startupMetrics.completed, 1);
+});
+
+test('current canonical navigation completes startup readiness and a late superseded response cannot repeat it', async () => {
+  const { context, calls, pendingRequests } = createContext();
+  const startup = context.fetchAndRender('/view-data?payload_tier=full', false, { startupRefresh: true });
+  // Model a transport that has already received the response when cancellation arrives.
+  context.state.ui.activeViewRequestController.abort = () => {};
+  const navigation = context.fetchAndRender('/view-data?artist=Current', true);
+  assert.equal(context.startupMetrics.completed, 0);
+  pendingRequests[1].resolveWith({ selected_artist: 'Current', artist_groups: [], initial_view_partial: false });
+  assert.equal(await navigation, true);
+  assert.equal(context.startupMetrics.completed, 1);
+  assert.equal(calls.renderView.length, 1);
+  pendingRequests[0].resolveWith({ selected_artist: 'Stale', artist_groups: [], initial_view_partial: false });
+  assert.equal(await startup, false);
+  assert.equal(context.startupMetrics.completed, 1);
+  assert.equal(context.state.view.selected_artist, 'Current');
+});
+
+test('a failed navigation after cancelling startup does not declare startup ready', async () => {
+  const { context, pendingRequests } = createContext();
+  const startup = context.fetchAndRender('/view-data?payload_tier=full', false, { startupRefresh: true });
+  const navigation = context.fetchAndRender('/view-data?artist=Failure', true);
+  assert.equal(await startup, false);
+  pendingRequests[1].rejectWith(new Error('navigation failed'));
+  await assert.rejects(navigation, /navigation failed/);
+  assert.equal(context.startupMetrics.completed, 0);
+});
+
+for (const [label, payload] of [
+  ['partial view', { artist_groups: [], initial_view_partial: true }],
+  ['sidebar tier', { artist_groups: [], payload_tier: 'sidebar' }],
+  ['missing gallery', { selected_artist: 'Current' }],
+  ['HTTP failure', { artist_groups: [], ok: false, status: 500 }],
+]) {
+  test(`${label} navigation cannot complete startup readiness`, async () => {
+    const { context, pendingRequests } = createContext();
+    const navigation = context.fetchAndRender('/view-data?artist=Current', true);
+    pendingRequests[0].resolveWith(payload);
+    await navigation;
+    assert.equal(context.startupMetrics.completed, 0);
+  });
+}
+
 test('a deferred gallery refresh cannot overwrite a newer optimistic tag mutation', async () => {
   const { context, calls, pendingRequests } = createContext();
   vm.runInContext(tagMutationSource, context);

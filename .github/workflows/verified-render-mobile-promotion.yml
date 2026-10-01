@@ -1,0 +1,546 @@
+name: Verified mobile Render promotion
+'on':
+  push:
+    branches:
+    - 2026-09-30-mobile-bundle-transfer
+    paths:
+    - .github/workflows/verified-render-mobile-promotion.yml
+permissions:
+  contents: read
+concurrency:
+  group: verified-mobile-render-promotion
+  cancel-in-progress: false
+env:
+  PROMOTION_PLAN: '{"acceptedRuns":[{"event":"pull_request","id":36877085999,"path":".github/workflows/pr-gates.yml"},{"event":"push","id":36877077064,"path":".github/workflows/mobile-layout-checks.yml"}],"bridge":"1976b32bbcf5097f454a6008c0d09e07d0e18acf","bridgeMessage":"Reconcile
+    preserved Render and staging histories for 0.9.48 [skip render]","candidate":"c359de350bf4ff0a9345586eba88a61a0329e02e","candidateMessage":"Deploy
+    verified Album Haven 0.9.48 with existing hosting overlay","excludedHistoricalWorkflows":[".github/workflows/mobile-trace-diagnostic.yml",".github/workflows/render-touch-promote.yml"],"externalServiceReceipt":{"autoDeploy":"yes","autoDeployTrigger":"commit","branch":"2026-09-25-render-demo","checkedAtUnix":1790871238,"liveCommit":"7f891227d6e092e2e6f4c65f3c87dd600887c7e2","plan":"free","serviceId":"srv-darkpknpn0mc73cvnl1g","sha256":"18dcaf07373f13dcafbda2abefa8883cb94a086bc401c5babcb6b376241c7235"},"fileCount":1972,"finalTree":"cb46b88a3abdca0c0df355e663360b5ec8e42d69","helperBranch":"2026-09-30-mobile-bundle-transfer","helperParent":"bc059fe60a6e3daee564c2f4c37bb1053475e9e2","helperPrefix":".render-promotion/","hosting":[{"bytes":1656,"git_blob":"00ef5fe930a878d82b80b7782ebfb1678d29d43d","mode":"100644","path":".github/workflows/render-demo-checks.yml","sha256":"cfdbdcfb533d3dd4a56bd85828ef75801b5f034599f58bd99f30dd022a698908"},{"bytes":3029,"git_blob":"cf3354110e52cb0602a22c3f30214398a13d3e83","mode":"100644","path":".github/workflows/render-public-preview-check.yml","sha256":"d25cedbfbc7b219660540d341a9c10df273e4fe03025fa4251cf3fc2eef2afb7"},{"bytes":5170,"git_blob":"542dca84173d8da572bb09c5861c8b7d65eb62be","mode":"100644","path":"docs/render-generated-demo.md","sha256":"d774d1eb666c66f3a9c5b85e23bf4379dcc3530f0462f0a3440ed48e56c17871"},{"bytes":15029,"git_blob":"8437ff9cf76397153de8f39a76048be985fd64c9","mode":"100644","path":"scripts/render_demo.py","sha256":"7fbaa6d68ea47c84413a245d67660f6dd0b670ca43b4071a609f0a8cd8bd917b"},{"bytes":8571,"git_blob":"0cd1f8a6e2031a80a078df36e5583c9296a1ff85","mode":"100644","path":"scripts/render_demo_smoke.py","sha256":"595a117e345a5adee9725a6f0899c754dc94b1ac368151ed511891b90be03106"},{"bytes":7144,"git_blob":"0c84cd138ff72320017f3273cec8ed9f1449973a","mode":"100644","path":"tests/py/test_render_demo_launcher.py","sha256":"61cf135be4fd6785d0c4d5fc9eab314e60370644e67f379d0f3339f025313c51"}],"identity":"Album
+    Haven deployment <41898282+github-actions[bot]@users.noreply.github.com> 1790869200 +0000","main":"eef9d13fd5dbd2cda3485e3c308c8494ba7d6fd4","mainBranch":"main","manifestSha256":"d4652ba246fda85f8c5186f6b5b8a5eeda3333521ae3687ef029376e272a30d9","previousMain":"db5396be48483f80cb93d403532e90026ff1cd00","remote":"https://github.com/idanilovqa/AlbumHaven.git","renderBranch":"2026-09-25-render-demo","renderOld":"7f891227d6e092e2e6f4c65f3c87dd600887c7e2","renderOldTree":"eb85ff6f9074c8069592e0ce40f83d69eab8c3d8","repository":"idanilovqa/AlbumHaven","schema":1,"source":"c4a36b21ea4997a4b3e220a2d4788f86dccb0088","sourceBranch":"2026-09-25-mobile-layout","sourceFileCount":1966,"sourceTree":"ed9eca961e37edd40a00308ef92b082b70b81e8c","stagingBranch":"2026-09-26-render-mobile-feedback","stagingOld":"b58b3df752aea391d0d4ae94666750837e112629","stagingOldTree":"cd0378d5cf8ea77e906373db8c4bb8acb382d281","workflowPath":".github/workflows/verified-render-mobile-promotion.yml"}'
+  PROMOTION_RUNTIME: |
+    """Trusted inline transport logic; no application or artifact-provided code executes here."""
+    import base64
+    import hashlib
+    import json
+    import os
+    from pathlib import Path
+    import re
+    import stat
+    import subprocess
+    import tempfile
+    import time
+    import urllib.request
+
+
+    class Rejected(RuntimeError):
+        pass
+
+
+    def require(value, message):
+        if not value:
+            raise Rejected(message)
+
+
+    def canonical(value):
+        return (json.dumps(value, sort_keys=True, separators=(",", ":")) + "\n").encode()
+
+
+    def digest(data):
+        return hashlib.sha256(data).hexdigest()
+
+
+    def environment(token=None, index=None):
+        env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
+        env.update(GIT_CONFIG_NOSYSTEM="1", GIT_CONFIG_GLOBAL="/dev/null", GIT_TERMINAL_PROMPT="0")
+        if index:
+            env["GIT_INDEX_FILE"] = str(index)
+        if token:
+            auth = base64.b64encode(("x-access-token:" + token).encode()).decode()
+            env.update(GIT_CONFIG_COUNT="1", GIT_CONFIG_KEY_0="http.https://github.com/.extraheader",
+                       GIT_CONFIG_VALUE_0="AUTHORIZATION: basic " + auth)
+        return env
+
+
+    def git(repo, *args, data=None, token=None, index=None, hooks="/dev/null"):
+        result = subprocess.run(["git", "-c", "core.hooksPath=" + str(hooks), "-c", "core.autocrlf=false",
+                                 "-c", "commit.gpgsign=false", "-C", str(repo), *args],
+                                input=data, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                env=environment(token, index), check=False)
+        require(result.returncode == 0, "git failed: " + args[0] + "; inspect, do not retry automatically")
+        return result.stdout
+
+
+    def entries(repo, revision):
+        result = {}
+        for row in git(repo, "ls-tree", "-rz", revision).split(b"\0"):
+            if not row:
+                continue
+            meta, raw_path = row.split(b"\t", 1)
+            mode, kind, oid = meta.decode().split()
+            path = raw_path.decode("utf-8")
+            require(mode in ("100644", "100755") and kind == "blob", "non-regular source entry")
+            require(not path.startswith("/") and all(x not in ("", ".", "..", ".git") for x in path.split("/")), "unsafe source path")
+            require(path not in result, "duplicate tree path")
+            result[path] = (mode, oid)
+        return result
+
+
+    def blobs(repo, oids):
+        unique = sorted(set(oids))
+        raw = git(repo, "cat-file", "--batch", data=("\n".join(unique) + "\n").encode())
+        result, position = {}, 0
+        for wanted in unique:
+            end = raw.index(b"\n", position)
+            oid, kind, size_text = raw[position:end].decode().split()
+            size = int(size_text)
+            require(oid == wanted and kind == "blob" and size >= 0, "invalid batch blob")
+            start = end + 1
+            data = raw[start:start + size]
+            require(len(data) == size and raw[start + size:start + size + 1] == b"\n", "truncated blob")
+            require(hashlib.sha1(b"blob " + str(size).encode() + b"\0" + data).hexdigest() == oid, "raw blob mismatch")
+            result[oid] = data
+            position = start + size + 1
+        require(position == len(raw), "unexpected batch bytes")
+        return result
+
+
+    def manifest(repo, tree_entries):
+        contents = blobs(repo, [entry[1] for entry in tree_entries.values()])
+        return [{"path": path, "mode": mode, "git_blob": oid, "bytes": len(contents[oid]),
+                 "sha256": digest(contents[oid])} for path, (mode, oid) in sorted(tree_entries.items())]
+
+
+    def verify_event(plan, env, event):
+        require(env.get("GITHUB_EVENT_NAME") == "push" and env.get("GITHUB_REPOSITORY") == plan["repository"], "wrong event/repository")
+        require(env.get("GITHUB_REF") == "refs/heads/" + plan["helperBranch"], "wrong helper branch")
+        require(env.get("GITHUB_RUN_ATTEMPT") == "1", "reruns are not authorized")
+        require(re.fullmatch(r"[1-9][0-9]*", env.get("GITHUB_RUN_ID", "")), "invalid run ID")
+        require(re.fullmatch(r"[0-9a-f]{40}", env.get("GITHUB_SHA", "")), "invalid trigger SHA")
+        require(event.get("before") == plan["helperParent"] and event.get("after") == env["GITHUB_SHA"], "wrong trigger ancestry")
+        require(event.get("ref") == env["GITHUB_REF"] and event.get("repository", {}).get("full_name") == plan["repository"], "event identity mismatch")
+        require(all(event.get(key) is False for key in ("created", "deleted", "forced")), "create/delete/forced push rejected")
+
+
+    def verify_service_receipt(plan, now):
+        receipt = plan["externalServiceReceipt"]
+        require(type(receipt["checkedAtUnix"]) is int and 0 <= now - receipt["checkedAtUnix"] <= 1800,
+                "fresh external service/config/deploy receipt is required")
+        require(re.fullmatch(r"[0-9a-f]{64}", receipt["sha256"] or ""), "external receipt is not bound")
+        require(receipt["serviceId"] == "srv-darkpknpn0mc73cvnl1g" and receipt["branch"] == plan["renderBranch"] and
+                receipt["autoDeploy"] == "yes" and receipt["autoDeployTrigger"] == "commit" and receipt["plan"] == "free" and
+                receipt["liveCommit"] == plan["renderOld"], "service/config/deploy receipt disagrees with reviewed boundary")
+
+
+    def verify_trigger(repo, plan, trigger):
+        parent = plan["helperParent"]
+        require(git(repo, "rev-list", "--parents", "-n", "1", trigger).decode().split() == [trigger, parent], "trigger needs one exact parent")
+        before, after = entries(repo, parent), entries(repo, trigger)
+        path = plan["workflowPath"]
+        require(path not in before and after.get(path, (None,))[0] == "100644", "workflow must be a new regular file")
+        require({p: v for p, v in after.items() if p != path} == before, "trigger must add only the reviewed workflow")
+
+
+    def remote_refs(repo, plan, token):
+        wanted = {"refs/heads/" + plan[k] for k in ("mainBranch", "sourceBranch", "stagingBranch", "renderBranch", "helperBranch")}
+        rows = git(repo, "ls-remote", "--exit-code", plan["remote"], *sorted(wanted), token=token).decode().splitlines()
+        result = {}
+        for row in rows:
+            oid, ref = row.split("\t")
+            require(ref in wanted and ref not in result and re.fullmatch(r"[0-9a-f]{40}", oid), "invalid remote refs")
+            result[ref] = oid
+        require(set(result) == wanted, "missing remote ref")
+        return result
+
+
+    def expected_refs(plan, trigger, staged=False, promoted=False):
+        return {"refs/heads/" + plan["mainBranch"]: plan["main"],
+                "refs/heads/" + plan["sourceBranch"]: plan["source"],
+                "refs/heads/" + plan["stagingBranch"]: plan["candidate"] if staged else plan["stagingOld"],
+                "refs/heads/" + plan["renderBranch"]: plan["candidate"] if promoted else plan["renderOld"],
+                "refs/heads/" + plan["helperBranch"]: trigger}
+
+
+    def check_refs(repo, plan, token, trigger, staged=False, promoted=False):
+        require(remote_refs(repo, plan, token) == expected_refs(plan, trigger, staged, promoted), "pinned branch moved; stop and reconcile")
+
+
+    def reconstruct(repo, plan, folder):
+        require(git(repo, "rev-list", "--parents", "-n", "1", plan["main"]).decode().split() ==
+                [plan["main"], plan["previousMain"], plan["source"]], "actual main ancestry mismatch")
+        for key, tree_key in (("main", "sourceTree"), ("source", "sourceTree"),
+                              ("stagingOld", "stagingOldTree"), ("renderOld", "renderOldTree")):
+            require(git(repo, "rev-parse", plan[key] + "^{tree}").decode().strip() == plan[tree_key], "pinned source tree mismatch")
+        main_entries, hosting_entries = entries(repo, plan["main"]), entries(repo, plan["renderOld"])
+        require(len(main_entries) == plan["sourceFileCount"], "source count mismatch")
+        expected = dict(main_entries)
+        require(len(plan["hosting"]) == 6 and len({r["path"] for r in plan["hosting"]}) == 6, "hosting allowlist must contain exactly six entries")
+        for record in plan["hosting"]:
+            path = record["path"]
+            require(path not in main_entries, "hosting overlay would replace accepted source")
+            require(hosting_entries.get(path) == (record["mode"], record["git_blob"]), "hosting blob/mode mismatch")
+            expected[path] = hosting_entries[path]
+        require(plan["workflowPath"] not in expected and not any(p.startswith(plan["helperPrefix"]) for p in expected), "helper leaked into application")
+        require(all(path not in expected for path in plan["excludedHistoricalWorkflows"]), "obsolete diagnostic workflow present")
+        records = manifest(repo, expected)
+        require(len(records) == plan["fileCount"] and digest(canonical(records)) == plan["manifestSha256"], "full raw source manifest mismatch")
+        by_path = {r["path"]: r for r in records}
+        require(all(by_path[r["path"]] == r for r in plan["hosting"]), "hosting raw bytes mismatch")
+        index = folder / "candidate.index"
+        require(not index.exists(), "temporary index already exists")
+        git(repo, "read-tree", "--empty", index=index)
+        data = b"".join(f"{mode} {oid}\t{path}".encode() + b"\0" for path, (mode, oid) in sorted(expected.items()))
+        git(repo, "update-index", "-z", "--index-info", data=data, index=index)
+        require(git(repo, "write-tree", index=index).decode().strip() == plan["finalTree"], "candidate tree mismatch")
+        for key, parents in (("bridge", [plan["stagingOld"], plan["renderOld"]]),
+                             ("candidate", [plan["bridge"], plan["main"]])):
+            raw = commit_bytes(plan["finalTree"], parents, plan["identity"], plan[key + "Message"])
+            require(git(repo, "hash-object", "-t", "commit", "-w", "--stdin", data=raw).decode().strip() == plan[key], "commit identity mismatch")
+            require(git(repo, "rev-list", "--parents", "-n", "1", plan[key]).decode().split() == [plan[key], *parents], "ordered parents mismatch")
+        for ancestor in (plan["main"], plan["stagingOld"], plan["renderOld"]):
+            git(repo, "merge-base", "--is-ancestor", ancestor, plan["candidate"])
+        return records
+
+
+    def commit_bytes(tree, parents, identity, message):
+        return ("tree " + tree + "\n" + "".join("parent " + p + "\n" for p in parents) +
+                "author " + identity + "\ncommitter " + identity + "\n\n" + message + "\n").encode()
+
+
+    def verify_native_runs(plan, token):
+        for item in plan["acceptedRuns"]:
+            request = urllib.request.Request("https://api.github.com/repos/" + plan["repository"] + "/actions/runs/" + str(item["id"]),
+                                             headers={"Authorization": "Bearer " + token, "Accept": "application/vnd.github+json"})
+            with urllib.request.urlopen(request, timeout=30) as response:
+                run = json.load(response)
+            require(run.get("id") == item["id"] and run.get("head_sha") == plan["source"] and
+                    run.get("run_attempt") == 1 and run.get("status") == "completed" and run.get("conclusion") == "success" and
+                    run.get("path") == item["path"] and run.get("event") == item["event"] and
+                    run.get("head_branch") == plan["sourceBranch"] and run.get("repository", {}).get("full_name") == plan["repository"],
+                    "complete native acceptance drifted")
+
+
+    def proof(plan, env, phase):
+        return {"schema": 1, "phase": phase, "runId": env["GITHUB_RUN_ID"], "attempt": 1,
+                "helper": env["GITHUB_SHA"], "planSha256": digest(canonical(plan)), "main": plan["main"],
+                "source": plan["source"], "candidate": plan["candidate"], "tree": plan["finalTree"],
+                "manifestSha256": plan["manifestSha256"], "fileCount": plan["fileCount"]}
+
+
+    def read_proof(folder, plan, env, phase, expected_hash):
+        observed = sorted(p.name for p in folder.iterdir())
+        require(observed == ["proof.json"], "proof artifact has unexpected entries")
+        path = folder / "proof.json"
+        require(path.is_file() and not path.is_symlink() and path.stat().st_size <= 4096, "proof must be a bounded regular file")
+        data = path.read_bytes()
+        require(digest(data) == expected_hash and data == canonical(proof(plan, env, phase)), "proof is not the exact same-run result")
+
+
+    def write_proof(folder, plan, env, phase):
+        folder.mkdir()
+        data = canonical(proof(plan, env, phase))
+        (folder / "proof.json").write_bytes(data)
+        with open(env["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
+            output.write("proof_sha256=" + digest(data) + "\n")
+            output.write("candidate=" + plan["candidate"] + "\n")
+
+
+    def verify_worktree(path, records):
+        for record in records:
+            item = path / record["path"]
+            info = item.lstat()
+            require(stat.S_ISREG(info.st_mode), "tracked path is no longer regular")
+            require(bool(info.st_mode & 0o111) == (record["mode"] == "100755"), "tracked executable mode changed")
+            data = item.read_bytes()
+            require(len(data) == record["bytes"] and digest(data) == record["sha256"], "tracked source/build output changed")
+        require(not git(path, "status", "--porcelain", "--untracked-files=no").strip(), "verification changed tracked source")
+
+
+    def push_guard(remote, ref, old, new):
+        # The normal push supplies its actual server-advertised old value to this hook.
+        # receive-pack atomically rejects any subsequent ref movement using that value.
+        return ("#!/usr/bin/env python3\nimport sys\n" +
+                "expected=" + repr([new, ref, old]) + "\nremote=" + repr(remote) + "\n" +
+                "rows=[line.split() for line in sys.stdin.read().splitlines()]\n" +
+                "ok=(len(sys.argv)==3 and sys.argv[1]==remote and sys.argv[2]==remote and len(rows)==1 " +
+                "and len(rows[0])==4 and rows[0][1:]==expected)\n" +
+                "sys.exit(0 if ok else 1)\n").encode()
+
+
+    def publish(repo, plan, token, folder, phase, trigger):
+        require(phase in ("stage", "promote"), "unknown publication phase")
+        key = "staging" if phase == "stage" else "render"
+        ref, old, new = "refs/heads/" + plan[key + "Branch"], plan[key + "Old"], plan["candidate"]
+        git(repo, "merge-base", "--is-ancestor", old, new)
+        hooks = folder / "hooks"
+        hooks.mkdir()
+        hook = hooks / "pre-push"
+        hook.write_bytes(push_guard(plan["remote"], ref, old, new))
+        hook.chmod(0o700)
+        # Reconstruction can outlive its initial observations. Revalidate all
+        # external gates at the actual write boundary, with receipt age checked last.
+        verify_native_runs(plan, token)
+        check_refs(repo, plan, token, trigger, staged=phase == "promote")
+        verify_service_receipt(plan, time.time())
+        git(repo, "push", "--porcelain", plan["remote"], new + ":" + ref, token=token, hooks=hooks)
+
+
+    def main(plan, env):
+        mode = env["PROMOTION_MODE"]
+        require(mode in ("prepare", "stage", "staging-before", "staging-after", "promote", "public-before"), "unknown mode")
+        event = json.loads(Path(env["GITHUB_EVENT_PATH"]).read_text())
+        verify_event(plan, env, event)
+        verify_service_receipt(plan, time.time())
+        token = env["GH_TOKEN"]
+        with tempfile.TemporaryDirectory(prefix="render-promotion-", dir=env["RUNNER_TEMP"]) as temp:
+            folder = Path(temp)
+            repo = folder / "objects.git"
+            git(folder, "init", "--bare", str(repo))
+            for oid in sorted({plan["main"], plan["source"], plan["stagingOld"], plan["renderOld"], plan["helperParent"], env["GITHUB_SHA"]}):
+                git(repo, "fetch", "--no-tags", plan["remote"], oid, token=token)
+            verify_trigger(repo, plan, env["GITHUB_SHA"])
+            records = reconstruct(repo, plan, folder)
+            staged = mode in ("staging-before", "staging-after", "promote", "public-before")
+            check_refs(repo, plan, token, env["GITHUB_SHA"], staged, mode == "public-before")
+            if mode == "prepare":
+                verify_native_runs(plan, token)
+                write_proof(Path(env["PROOF_OUTPUT"]), plan, env, "reconstructed")
+            elif mode in ("stage", "promote"):
+                phase = "reconstructed" if mode == "stage" else "staging-verified"
+                read_proof(Path(env["PROOF_INPUT"]), plan, env, phase, env["PROOF_SHA256"])
+                publish(repo, plan, token, folder, mode, env["GITHUB_SHA"])
+                check_refs(repo, plan, token, env["GITHUB_SHA"], True, mode == "promote")
+            else:
+                worktree = Path(env["GITHUB_WORKSPACE"])
+                require(git(worktree, "rev-parse", "HEAD").decode().strip() == plan["candidate"], "checkout is not the actual staging commit")
+                verify_worktree(worktree, records)
+                if mode == "staging-after":
+                    require(env.get("GUARD_OUTCOME") == "success" and env.get("SMOKE_OUTCOME") == "success" and env.get("BUILD_OUTCOME") == "success", "required hosting step did not succeed")
+                    write_proof(Path(env["PROOF_OUTPUT"]), plan, env, "staging-verified")
+        print("Verified Render promotion boundary:", mode)
+jobs:
+  reconstruct:
+    if: ${{ github.repository == 'idanilovqa/AlbumHaven' && github.event_name == 'push' && github.ref == 'refs/heads/2026-09-30-mobile-bundle-transfer'
+      && github.run_attempt == 1 }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      actions: read
+    outputs:
+      proof_sha256: ${{ steps.reconstruct.outputs.proof_sha256 }}
+      artifact_id: ${{ steps.proof.outputs.artifact-id }}
+    steps:
+    - name: Verify native acceptance and reconstruct exact ordered merges
+      shell: python
+      env:
+        PROMOTION_MODE: prepare
+        GH_TOKEN: ${{ github.token }}
+        PROOF_OUTPUT: ${{ runner.temp }}/reconstruction-proof
+      run: |
+        import os
+        exec(os.environ["PROMOTION_RUNTIME"])
+        main(json.loads(os.environ["PROMOTION_PLAN"]), os.environ)
+      id: reconstruct
+    - name: Retain immutable same-run proof
+      uses: actions/upload-artifact@v4
+      id: proof
+      with:
+        name: reconstruction-proof-${{ github.run_id }}
+        path: ${{ runner.temp }}/reconstruction-proof/proof.json
+        if-no-files-found: error
+        retention-days: 7
+  stage:
+    needs:
+    - reconstruct
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+      actions: read
+    steps:
+    - uses: actions/download-artifact@v4
+      with:
+        artifact-ids: ${{ needs.reconstruct.outputs.artifact_id }}
+        path: ${{ runner.temp }}/input-proof
+        merge-multiple: true
+    - name: Publish only the exact final staging commit with a normal guarded push
+      shell: python
+      env:
+        PROMOTION_MODE: stage
+        GH_TOKEN: ${{ github.token }}
+        PROOF_INPUT: ${{ runner.temp }}/input-proof
+        PROOF_SHA256: ${{ needs.reconstruct.outputs.proof_sha256 }}
+      run: |
+        import os
+        exec(os.environ["PROMOTION_RUNTIME"])
+        main(json.loads(os.environ["PROMOTION_PLAN"]), os.environ)
+  verify_staging:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_PASSWORD: isolated-ci-admin
+        ports:
+        - 5432:5432
+        options: --health-cmd "pg_isready -U postgres" --health-interval 5s --health-timeout 5s --health-retries
+          10
+    steps:
+    - name: Checkout the exact published staging commit
+      uses: actions/checkout@v5
+      with:
+        ref: c359de350bf4ff0a9345586eba88a61a0329e02e
+        persist-credentials: false
+    - name: Verify actual published staging, source bytes and old Render head
+      shell: python
+      env:
+        PROMOTION_MODE: staging-before
+        GH_TOKEN: ${{ github.token }}
+      run: |
+        import os
+        exec(os.environ["PROMOTION_RUNTIME"])
+        main(json.loads(os.environ["PROMOTION_PLAN"]), os.environ)
+    - uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+        cache: pip
+    - uses: actions/setup-node@v4
+      with:
+        node-version: '22'
+    - name: Build the production runtime bundle
+      run: node scripts/build-runtime-bundle.cjs
+      id: build
+    - name: Install dependencies
+      run: python -m pip install -r requirements.txt httpx
+    - name: Deployment guard tests
+      run: python -m unittest discover -s tests/py -p test_render_demo_launcher.py -v
+      id: guards
+    - name: Provision disposable database with a non-superuser owner
+      env:
+        PGPASSWORD: isolated-ci-admin
+      run: |
+        psql -h 127.0.0.1 -U postgres -v ON_ERROR_STOP=1 <<'SQL'
+        CREATE ROLE demo_owner LOGIN CREATEROLE PASSWORD 'isolated-ci-owner';
+        CREATE DATABASE album_haven_ci_render_demo OWNER demo_owner;
+        SQL
+    - name: Upgrade the legacy demo, repeat startup and verify normal authentication
+      run: python scripts/render_demo_smoke.py
+      id: smoke
+    - name: Bind successful unchanged hosting checks to the exact same-run staging proof
+      shell: python
+      env:
+        PROMOTION_MODE: staging-after
+        GH_TOKEN: ${{ github.token }}
+        PROOF_OUTPUT: ${{ runner.temp }}/staging-proof
+        BUILD_OUTCOME: ${{ steps.build.outcome }}
+        GUARD_OUTCOME: ${{ steps.guards.outcome }}
+        SMOKE_OUTCOME: ${{ steps.smoke.outcome }}
+      run: |
+        import os
+        exec(os.environ["PROMOTION_RUNTIME"])
+        main(json.loads(os.environ["PROMOTION_PLAN"]), os.environ)
+      id: verify
+    - name: Retain immutable same-run proof
+      uses: actions/upload-artifact@v4
+      id: proof
+      with:
+        name: staging-proof-${{ github.run_id }}
+        path: ${{ runner.temp }}/staging-proof/proof.json
+        if-no-files-found: error
+        retention-days: 7
+    needs:
+    - stage
+    permissions:
+      contents: read
+    outputs:
+      proof_sha256: ${{ steps.verify.outputs.proof_sha256 }}
+      artifact_id: ${{ steps.proof.outputs.artifact-id }}
+  promote:
+    needs:
+    - verify_staging
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+      actions: read
+    steps:
+    - uses: actions/download-artifact@v4
+      with:
+        artifact-ids: ${{ needs.verify_staging.outputs.artifact_id }}
+        path: ${{ runner.temp }}/input-proof
+        merge-multiple: true
+    - name: Promote once to the existing Render branch with a normal guarded push
+      shell: python
+      env:
+        PROMOTION_MODE: promote
+        GH_TOKEN: ${{ github.token }}
+        PROOF_INPUT: ${{ runner.temp }}/input-proof
+        PROOF_SHA256: ${{ needs.verify_staging.outputs.proof_sha256 }}
+      run: |
+        import os
+        exec(os.environ["PROMOTION_RUNTIME"])
+        main(json.loads(os.environ["PROMOTION_PLAN"]), os.environ)
+  public_preview:
+    runs-on: ubuntu-latest
+    timeout-minutes: 7
+    steps:
+    - name: Checkout the exact published staging commit
+      uses: actions/checkout@v5
+      with:
+        ref: c359de350bf4ff0a9345586eba88a61a0329e02e
+        persist-credentials: false
+    - name: Verify the promoted ref and expected public asset bytes
+      shell: python
+      env:
+        PROMOTION_MODE: public-before
+        GH_TOKEN: ${{ github.token }}
+      run: |
+        import os
+        exec(os.environ["PROMOTION_RUNTIME"])
+        main(json.loads(os.environ["PROMOTION_PLAN"]), os.environ)
+    - uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+    - name: Verify deployed public routes and exact assets without credentials
+      shell: python
+      run: |
+        import hashlib
+        import os
+        from pathlib import Path
+        import time
+        import urllib.error
+        import urllib.parse
+        import urllib.request
+
+        origin = 'https://albumhaven.onrender.com'
+        assets = ['css/mobile-layout.css', 'css/runtime/trigger-anchor.css', 'js/runtime-bundle.js']
+        expected = {asset: hashlib.sha256(Path('music_app/static', asset).read_bytes()).hexdigest() for asset in assets}
+        deadline = time.monotonic() + 300
+        attempt = 0
+        while True:
+            attempt += 1
+            try:
+                request = urllib.request.Request(origin + '/', headers={'Cache-Control': 'no-cache'})
+                with urllib.request.urlopen(request, timeout=12) as response:
+                    final = urllib.parse.urlsplit(response.url)
+                    assert response.status == 200, 'Public login failed'
+                    assert final.scheme == 'https' and final.netloc == 'albumhaven.onrender.com' and final.path == '/login', 'Unauthenticated route did not redirect to the normal login'
+                    assert b'Album Haven sign in' in response.read(1048576), 'Normal login form missing'
+                with urllib.request.urlopen(origin + '/health', timeout=12) as response:
+                    assert response.status == 200, 'Public health check failed'
+                for asset, digest in expected.items():
+                    request = urllib.request.Request(origin + '/static/' + asset + '?verification=' + os.environ['GITHUB_SHA'], headers={'Cache-Control': 'no-cache'})
+                    with urllib.request.urlopen(request, timeout=12) as response:
+                        assert response.status == 200, 'Public asset unavailable: ' + asset
+                        actual = hashlib.sha256(response.read(8388608)).hexdigest()
+                        assert actual == digest, 'Deployment has not served the verified asset yet: ' + asset
+                print('PASS: public HTTPS, normal unauthenticated login redirect, health and exact verified asset SHA256 hashes', expected)
+                break
+            except (AssertionError, urllib.error.URLError, TimeoutError) as error:
+                print('Preview readiness attempt', attempt, type(error).__name__)
+                if time.monotonic() >= deadline:
+                    raise RuntimeError('Public preview verification did not pass within its bounded deployment-readiness window') from None
+                time.sleep(10)
+    needs:
+    - promote
+    permissions:
+      contents: read

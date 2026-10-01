@@ -1,0 +1,583 @@
+name: Publish exact actual-parent mobile integration
+on:
+  push:
+    branches: [2026-09-30-mobile-bundle-transfer]
+    paths: [.github/workflows/verified-mobile-actual-integration.yml]
+permissions:
+  contents: read
+concurrency:
+  group: verified-mobile-actual-integration
+  cancel-in-progress: false
+env:
+  HELPER_PARENT: 'dad6b5b1abc2d591a96f7f4771ee8a35b60ccb19'
+jobs:
+  generate:
+    if: github.repository == 'idanilovqa/AlbumHaven' && github.ref == 'refs/heads/2026-09-30-mobile-bundle-transfer' && github.event_name == 'push'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    outputs:
+      artifact_id: ${{ steps.upload.outputs.artifact-id }}
+      proof_sha256: ${{ steps.verify.outputs.proof_sha256 }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.sha }}
+          path: objects
+          fetch-depth: 0
+          persist-credentials: false
+          submodules: false
+          lfs: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Verify all inputs and regenerate only the pinned bundle
+        id: verify
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: python
+        run: |
+          import base64
+          import hashlib
+          import json
+          import os
+          from pathlib import Path, PurePosixPath
+          import re
+          import stat
+          import subprocess
+          import sys
+          class Rejected(RuntimeError):
+              pass
+          def require(condition, message):
+              if not condition:
+                  raise Rejected(message)
+          def sha256(data):
+              return hashlib.sha256(data).hexdigest()
+          def git_blob(data):
+              return hashlib.sha1(b"blob " + str(len(data)).encode() + b"\0" + data).hexdigest()
+          def canonical_json(value):
+              return (json.dumps(value, sort_keys=True, separators=(",", ":")) + "\n").encode()
+          def canonical_path(path):
+              require(isinstance(path, str) and bool(path), "empty/non-string path")
+              require(re.fullmatch(r"[A-Za-z0-9._/@()+ -]+", path) is not None, "unsafe path characters")
+              require(not path.startswith("/") and str(PurePosixPath(path)) == path, "noncanonical path")
+              require(all(p not in ("", ".", "..", ".git") for p in path.split("/")), "unsafe path component")
+              return path
+          def verify_bytes(data, record):
+              require(len(data) == record["bytes"], "size mismatch: " + record["path"])
+              require(sha256(data) == record["sha256"], "SHA-256 mismatch: " + record["path"])
+              require(git_blob(data) == record["git_blob"], "Git blob mismatch: " + record["path"])
+          def git_env(token=None, index=None):
+              env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
+              env.update(GIT_CONFIG_NOSYSTEM="1", GIT_CONFIG_GLOBAL="/dev/null", GIT_TERMINAL_PROMPT="0")
+              if index:
+                  env["GIT_INDEX_FILE"] = str(index)
+              if token:
+                  auth = base64.b64encode(("x-access-token:" + token).encode()).decode()
+                  env.update(GIT_CONFIG_COUNT="1", GIT_CONFIG_KEY_0="http.https://github.com/.extraheader",
+                             GIT_CONFIG_VALUE_0="AUTHORIZATION: basic " + auth)
+              return env
+          def git(repo, *args, data=None, token=None, index=None, hooks=None):
+              command = ["git", "-c", "core.hooksPath=" + (str(hooks) if hooks else "/dev/null"),
+                         "-c", "core.autocrlf=false", "-c", "commit.gpgsign=false", "-C", str(repo), *args]
+              result = subprocess.run(command, input=data, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                      env=git_env(token, index), check=False)
+              require(result.returncode == 0, "git operation failed: " + args[0] + "; inspect, do not retry automatically")
+              return result.stdout
+          def tree_entries(repo, revision):
+              result = {}
+              for line in git(repo, "ls-tree", "-rz", revision).split(b"\0"):
+                  if line:
+                      metadata, path = line.split(b"\t", 1)
+                      mode, kind, oid = metadata.decode().split()
+                      result[path.decode("utf-8")] = (mode, kind, oid)
+              return result
+          def diff_records(repo, old, new):
+              pieces = git(repo, "diff", "--raw", "--no-abbrev", "--no-renames", "-z", old, new).split(b"\0")
+              require(pieces.pop() == b"" and len(pieces) % 2 == 0, "invalid diff framing")
+              result = {}
+              for metadata, path in zip(pieces[::2], pieces[1::2]):
+                  oldmode, newmode, oldoid, newoid, operation = metadata.decode().split()
+                  name = path.decode("utf-8")
+                  require(name not in result, "duplicate diff path")
+                  result[name] = (oldmode.lstrip(":"), newmode, oldoid, newoid, operation)
+              return result
+          def expected_diff(old, new):
+              changes = {}
+              for path in old.keys() | new.keys():
+                  before, after = old.get(path), new.get(path)
+                  if before != after:
+                      changes[path] = (before[0] if before else "000000", after[0] if after else "000000",
+                                       before[2] if before else "0" * 40, after[2] if after else "0" * 40,
+                                       "M" if before and after else "D" if before else "A")
+              return changes
+          def manifest_entries(records):
+              return {r["path"]: (r["mode"], "blob", r["git_blob"]) for r in records}
+          def validate_manifest(data, plan):
+              require(len(data) == plan["manifestBytes"] and sha256(data) == plan["manifestSha256"], "complete manifest identity mismatch")
+              records = json.loads(data)
+              require(canonical_json(records) == data, "noncanonical manifest")
+              require(isinstance(records, list) and len(records) == plan["fileCount"], "manifest file count mismatch")
+              paths = []
+              for record in records:
+                  path = canonical_path(record["path"])
+                  require(not path.startswith(plan["payloadPrefix"] + "/") and path != plan["workflowPath"], "helper leaked into target manifest")
+                  require(record["mode"] in ("100644", "100755"), "unapproved mode/symlink/gitlink")
+                  require(re.fullmatch(r"[0-9a-f]{40}", record["git_blob"]) is not None, "invalid blob ID")
+                  require(re.fullmatch(r"[0-9a-f]{64}", record["sha256"]) is not None, "invalid SHA-256")
+                  require(type(record["bytes"]) is int and 0 <= record["bytes"] <= plan["maxBlobBytes"], "invalid blob size")
+                  require(record["source"] in ("mobile", "main", "text", "bundle"), "invalid source class")
+                  paths.append(path)
+              require(paths == sorted(set(paths)), "manifest paths duplicated or unsorted")
+              pathset = set(paths)
+              require(all(str(p) not in pathset for path in paths for p in PurePosixPath(path).parents), "file/directory collision")
+              bundle = [r for r in records if r["source"] == "bundle"]
+              require(len(bundle) == 1 and bundle[0]["path"] == plan["bundlePath"], "generated bundle set mismatch")
+              return records
+          def verify_event(plan, environment, event):
+              require(environment.get("GITHUB_EVENT_NAME") == "push", "not a push event")
+              require(environment.get("GITHUB_REPOSITORY") == plan["repository"], "wrong repository")
+              require(environment.get("GITHUB_REF") == "refs/heads/" + plan["helperBranch"], "wrong helper ref")
+              require(environment.get("GITHUB_RUN_ATTEMPT") == "1", "reruns are disabled; inspect before a new reviewed publication")
+              require(re.fullmatch(r"[1-9][0-9]*", environment.get("GITHUB_RUN_ID", "")) is not None, "invalid run id")
+              parent = environment.get("HELPER_PARENT", "")
+              require(re.fullmatch(r"[0-9a-f]{40}", parent) is not None, "helper parent is not bound")
+              require(re.fullmatch(r"[0-9a-f]{40}", environment.get("GITHUB_SHA", "")) is not None, "invalid trigger SHA")
+              require(event.get("ref") == environment["GITHUB_REF"], "event ref mismatch")
+              require(event.get("before") == parent and event.get("after") == environment["GITHUB_SHA"], "event ancestry mismatch")
+              require(all(event.get(key) is False for key in ("forced", "deleted", "created")), "forced/create/delete push rejected")
+              require(event.get("repository", {}).get("full_name") == plan["repository"], "event repository mismatch")
+              return parent
+          def remote_refs(repo, plan, token):
+              wanted = {p["ref"] for p in plan["parents"]}
+              rows = git(repo, "ls-remote", "--exit-code", plan["remote"], *sorted(wanted), token=token).decode().splitlines()
+              result = {}
+              for row in rows:
+                  pieces = row.split("\t")
+                  require(len(pieces) == 2 and pieces[1] in wanted and pieces[1] not in result and
+                          re.fullmatch(r"[0-9a-f]{40}", pieces[0]), "invalid/ambiguous remote refs")
+                  result[pieces[1]] = pieces[0]
+              require(set(result) == wanted, "a parent ref is missing")
+              return result
+          def require_parent_refs(repo, plan, token):
+              require(remote_refs(repo, plan, token) == {p["ref"]: p["commit"] for p in plan["parents"]}, "mobile or main moved; stop and reconcile")
+          def verify_parent_objects(repo, plan):
+              require(len(plan["parents"]) == 2 and plan["parents"][0]["ref"] == plan["targetRef"] and
+                      plan["parents"][1]["ref"] == "refs/heads/main", "wrong parent order or count")
+              trees = {}
+              for parent in plan["parents"]:
+                  require(git(repo, "cat-file", "-t", parent["commit"]).strip() == b"commit", "parent is not a commit")
+                  require(git(repo, "rev-parse", parent["commit"] + "^{tree}").decode().strip() == parent["tree"], "parent tree mismatch")
+                  trees[parent["source"]] = tree_entries(repo, parent["commit"])
+              return trees
+          def verify_staging(repo, plan, environment, event):
+              parent = verify_event(plan, environment, event)
+              trigger = environment["GITHUB_SHA"]
+              require(git(repo, "rev-parse", "HEAD").decode().strip() == trigger, "checkout is not triggering commit")
+              require(git(repo, "rev-list", "--parents", "-n", "1", trigger).decode().split() == [trigger, parent], "trigger must have one exact parent")
+              changes = diff_records(repo, parent, trigger)
+              workflow = plan["workflowPath"]
+              require(set(changes) == {workflow}, "trigger changes more than the workflow")
+              require(changes[workflow][:3] == ("000000", "100644", "0" * 40) and changes[workflow][4] == "A", "workflow is not a sole regular-file addition")
+              git(repo, "merge-base", "--is-ancestor", plan["stagingBase"], parent)
+              expected = {r["path"]: ("000000", "100644", "0" * 40, r["git_blob"], "A") for r in plan["stagedFiles"]}
+              require(diff_records(repo, plan["stagingBase"], parent) == expected, "full staging delta differs from exact reviewed payload")
+              payload = {}
+              for record in plan["stagedFiles"]:
+                  data = git(repo, "cat-file", "blob", parent + ":" + record["path"])
+                  verify_bytes(data, record)
+                  require(len(data) <= 250000, "oversized transport file")
+                  payload[record["path"]] = data
+              manifest = b"".join(payload[path] for path in plan["manifestParts"])
+              return validate_manifest(manifest, plan), payload
+          def collect_blobs(repo, records, payload, plan, parent_trees):
+              parents = {source: {entry[2] for entry in tree.values() if entry[1] == "blob"}
+                         for source, tree in parent_trees.items()}
+              blobs = {}
+              for record in records:
+                  source = record["source"]
+                  if source == "bundle":
+                      continue
+                  if source in parents:
+                      require(record["git_blob"] in parents[source], "blob is not reachable in its pinned parent tree")
+                      data = git(repo, "cat-file", "blob", record["git_blob"])
+                  else:
+                      data = b"".join(payload[path] for path in record["parts"])
+                      require(b"\0" not in data, "new binary is not authorized")
+                      data.decode("utf-8", errors="strict")
+                  verify_bytes(data, record)
+                  blobs[record["git_blob"]] = data
+              return blobs
+          def construct_tree(repo, records, blobs, index, expected_tree):
+              require(not index.exists(), "temporary index already exists")
+              git(repo, "read-tree", "--empty", index=index)
+              for oid, data in blobs.items():
+                  require(git_blob(data) == oid, "raw object key mismatch")
+                  require(git(repo, "hash-object", "-w", "--stdin", data=data).decode().strip() == oid, "written object mismatch")
+              entries = b"".join((r["mode"] + " " + r["git_blob"] + "\t" + r["path"]).encode() + b"\0" for r in records)
+              git(repo, "update-index", "-z", "--index-info", data=entries, index=index)
+              tree = git(repo, "write-tree", index=index).decode().strip()
+              require(tree == expected_tree, "complete resulting tree differs from reviewed tree")
+              require(tree_entries(repo, tree) == manifest_entries(records), "resulting path/mode/blob manifest mismatch")
+              return tree
+          def build_bundle(folder, records, blobs, plan):
+              require(not folder.exists(), "isolated build folder already exists")
+              by_path = {r["path"]: r for r in records}
+              allowed = set(plan["builderInputs"])
+              require(plan["builderPath"] in allowed and plan["bundlePath"] not in allowed, "invalid build input set")
+              for path in sorted(allowed):
+                  record = by_path[path]
+                  verify_bytes(blobs[record["git_blob"]], record)
+              for path in sorted(allowed):
+                  data = blobs[by_path[path]["git_blob"]]
+                  destination = folder / path
+                  destination.parent.mkdir(parents=True, exist_ok=True)
+                  destination.write_bytes(data)
+              # Only the reviewed stdlib-only existing builder executes, with no token or Node preload flags.
+              environment = {"PATH": os.environ["PATH"], "LANG": "C.UTF-8"}
+              result = subprocess.run(["node", plan["builderPath"]], cwd=folder, env=environment,
+                                      stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False)
+              require(result.returncode == 0, "pinned bundle builder failed; stop and inspect")
+              expected_paths = allowed | {plan["bundlePath"]}
+              entries = list(folder.rglob("*"))
+              require(not any(p.is_symlink() for p in entries), "builder produced a symlink")
+              observed = {p.relative_to(folder).as_posix() for p in entries if not p.is_dir()}
+              require(observed == expected_paths, "builder wrote an unexpected path")
+              expected_directories = {str(p) for path in expected_paths for p in PurePosixPath(path).parents if str(p) != "."}
+              require({p.relative_to(folder).as_posix() for p in entries if p.is_dir()} == expected_directories,
+                      "builder wrote an unexpected directory")
+              for path in sorted(expected_paths):
+                  destination = folder / path
+                  require(stat.S_ISREG(destination.lstat().st_mode), "builder produced a nonregular file")
+                  verify_bytes(destination.read_bytes(), by_path[path])
+              return (folder / plan["bundlePath"]).read_bytes()
+          def proof_for(plan, records, environment):
+              return {"schemaVersion": 1, "repository": plan["repository"], "parents": plan["parents"],
+                      "intermediateTree": plan["intermediateTree"], "finalTree": plan["finalTree"],
+                      "intermediateComplete": False, "helperRef": environment["GITHUB_REF"],
+                      "helperParent": environment["HELPER_PARENT"], "triggerSha": environment["GITHUB_SHA"],
+                      "runId": environment["GITHUB_RUN_ID"], "runAttempt": environment["GITHUB_RUN_ATTEMPT"],
+                      "planSha256": sha256(canonical_json(plan)), "manifest": records}
+          def new_blob_records(records):
+              return {r["git_blob"]: r for r in records if r["source"] in ("text", "bundle")}
+          def write_artifact(folder, plan, records, blobs, environment):
+              require(not folder.exists(), "artifact output already exists")
+              needed = new_blob_records(records)
+              for oid, record in needed.items():
+                  verify_bytes(blobs[oid], record)
+              proof = canonical_json(proof_for(plan, records, environment))
+              (folder / "blobs").mkdir(parents=True)
+              for oid in sorted(needed):
+                  (folder / "blobs" / oid).write_bytes(blobs[oid])
+              (folder / "proof.json").write_bytes(proof)
+              return sha256(proof)
+          PLAN = json.loads('{"builderInputs":["scripts/build-runtime-bundle.cjs","music_app/static/js/runtime/session-csrf-fetch.js","music_app/static/js/runtime/bootstrap-state.js","music_app/static/js/runtime/startup-metrics-helpers.js","music_app/static/js/runtime/response-state-helpers.js","music_app/static/js/runtime/view-state-helpers.js","music_app/static/js/runtime/browser-navigation-helpers.js","music_app/static/js/runtime/browser-storage-helpers.js","music_app/static/js/runtime/browser-dialog-helpers.js","music_app/static/js/runtime/browser-viewport-helpers.js","music_app/static/js/runtime/browser-scheduling-helpers.js","music_app/static/js/runtime/view-value-helpers.js","music_app/static/js/runtime/markup-format-helpers.js","music_app/static/js/runtime/loader-status-helpers.js","music_app/static/js/runtime/status-ui-helpers.js","music_app/static/js/runtime/library-warning-ui.js","music_app/static/js/runtime/notification-ui-helpers.js","music_app/static/js/runtime/render-markup-helpers.js","music_app/static/js/runtime/alert-components.js","music_app/static/js/runtime/album-artbox.js","music_app/static/js/runtime/gallery-main-components.js","music_app/static/js/runtime/gallery-main-state.js","music_app/static/js/runtime/gallery-card-component.js","music_app/static/js/runtime/album-details-components.js","music_app/static/js/runtime/core-state-and-helpers.js","music_app/static/js/runtime/trigger-anchor.js","music_app/static/js/runtime/search-input.js","music_app/static/js/runtime/gallery-main-interactions.js","music_app/static/js/runtime/compact-player-helpers.js","music_app/static/js/runtime/player-streaming-engine.js","music_app/static/js/runtime/shell-navigation-drawer.js","music_app/static/js/runtime/account-menu.js","music_app/static/js/runtime/bootstrap-refocus-helpers.js","music_app/static/js/runtime/client-preferences-helpers.js","music_app/static/js/runtime/gallery-display-preference-helpers.js","music_app/static/js/runtime/playback-ownership-helpers.js","music_app/static/js/runtime/modal-and-overlay-helpers.js","music_app/static/js/runtime/track-modal-lightbox-helpers.js","music_app/static/js/runtime/player-waveform-peaks.js","music_app/static/js/runtime/loop-range-controls.js","music_app/static/js/runtime/playback-control-cluster.js","music_app/static/js/runtime/loop-edit-session-expiry.js","music_app/static/js/runtime/player-and-waveform.js","music_app/static/js/runtime/gallery-refresh-and-status.js","music_app/static/js/runtime/problematic-album-helpers.js","music_app/static/js/runtime/browser-log-history-store.js","music_app/static/js/runtime/utility-log-history-query.js","music_app/static/js/runtime/date-range-picker.js","music_app/static/js/runtime/utility-log-history-ui.js","music_app/static/js/runtime/compact-data-table.js","music_app/static/js/runtime/album-track-table.js","music_app/static/js/runtime/utility-list-builders.js","music_app/static/js/runtime/problem-exclusion-mutations.js","music_app/static/js/runtime/library-settings.js","music_app/static/js/runtime/cover-lookup-notification-helpers.js","music_app/static/js/runtime/appearance-backgrounds-bridge.js","music_app/static/js/runtime/problematic-files-virtual-list.js","music_app/static/js/runtime/utility-renderers-and-actions.js","music_app/static/js/runtime/utility-loop-playback.js","music_app/static/js/runtime/tag-editor-reorder.js","music_app/static/js/runtime/utility-loaders-and-cover-lookup.js","music_app/static/js/runtime/cover-lookup-modal-and-drawer.js","music_app/static/js/runtime/tag-editor-and-optimistic-updates.js","music_app/static/js/runtime/player-state-persistence-helpers.js","music_app/static/js/runtime/player-listen-session-helpers.js","music_app/static/js/runtime/gallery-cover-preview-cache.js","music_app/static/js/runtime/gallery-cover-load-scheduler.js","music_app/static/js/runtime/virtual-artist-grid.js","music_app/static/js/runtime/player-loop-playback.js","music_app/static/js/runtime/compact-player-controller.js","music_app/static/js/runtime/track-modal-and-gallery.js","music_app/static/js/runtime/bootstrap-utility-event-handlers.js","music_app/static/js/runtime/bootstrap-gallery-event-handlers.js","music_app/static/js/runtime/mobile-navigation.js","music_app/static/js/runtime/in-page-tabs.js","music_app/static/js/runtime/mobile-home.js","music_app/static/js/runtime/bootstrap-event-handlers.js","music_app/static/js/runtime/bootstrap-init.js"],"builderPath":"scripts/build-runtime-bundle.cjs","bundlePath":"music_app/static/js/runtime-bundle.js","fileCount":1965,"finalTree":"9e6d4b101726ea5f6b6eb46b5cb3aefdbe448cb9","frozenContentManifestSha256":"9c775bc66a9043c112fb171f4835deac9ad8f083bf2629475ef2d25cc68db436","heldTrigger":{"final_blob":"31b262e874c0e22ef08c351cfe231a2be841c140","final_sha256":"5aa7f84fc3e45d5e7ac7d06d48440d61c8ec80c2e567697214201ab87a338745","old_mobile_blob":"352ccd69ffa70a153489079b29be45d5ccd5068a","old_mobile_sha256":"0a9f3247fae4b4eae2a3fca47a389065e09d77207d87367f1872b3f495609afa","patch_sha256":"0e9cecc63f4381cf448c5ef932afdd6c4a87d16ff9c2bc72323d3078dc35b343","path":"tests/py/test_pytest_harness_config.py","purpose":"existing reviewed cleanup diagnostic regression and failure-only evidence; no invented no-op"},"helperBranch":"2026-09-30-mobile-bundle-transfer","independentReceiptSha256":"ed2d359a42737ba97be817b58c36963edfa5b02e31739b0edf6d408fa82bd5eb","intermediateComplete":false,"intermediateTree":"c77f67b9d4693b0b88ca81bea1c6a38fb23becdc","manifestBytes":475639,"manifestParts":[".integration-transfer/2026-10-01-mobile-actual/manifest/full-001.txt",".integration-transfer/2026-10-01-mobile-actual/manifest/full-002.txt"],"manifestSha256":"9c13387fa924eb2dbfbe474aee36c9d17aef53e814b4001adeb1a7b08f59d754","maxBlobBytes":1995416,"parents":[{"commit":"4a540bb5ae2b5ee568a4b170c560483162cdbc43","ref":"refs/heads/2026-09-25-mobile-layout","source":"mobile","tree":"501fe9581d7655d0b4560828cf50eefe8e93557d"},{"commit":"db5396be48483f80cb93d403532e90026ff1cd00","ref":"refs/heads/main","source":"main","tree":"8393a928c129277942b844a6055161e1eaa2fb04"}],"payloadPrefix":".integration-transfer/2026-10-01-mobile-actual","publicationManifestSha256":"5df3ed61e58a422b6f748ff4c5a10f0f7ef38c526a10cdb14070da2fc838ce5c","remote":"https://github.com/idanilovqa/AlbumHaven.git","repository":"idanilovqa/AlbumHaven","schemaVersion":1,"stagedFiles":[{"bytes":30663,"git_blob":"03b071b6bea6ebb2a405bf7ae3f8a4940a3e9fe7","path":".integration-transfer/2026-10-01-mobile-actual/blobs/03b071b6bea6ebb2a405bf7ae3f8a4940a3e9fe7-001.txt","sha256":"c615d60a1690f4b84f365785c4bf87fe1c5883c4f988ae93113e8b86ecbc31e9"},{"bytes":12743,"git_blob":"0613c7e87340b75f2b83fdff4f40ca0d3ac71654","path":".integration-transfer/2026-10-01-mobile-actual/blobs/0613c7e87340b75f2b83fdff4f40ca0d3ac71654-001.txt","sha256":"f5612cfef2164eb73cacd3f623a3866b903a00893990562f63580561a2bca2d2"},{"bytes":5521,"git_blob":"0ddb423896b899c9d4b613063ecec066758d5008","path":".integration-transfer/2026-10-01-mobile-actual/blobs/0ddb423896b899c9d4b613063ecec066758d5008-001.txt","sha256":"394b49430592cbdbdb5850654886ed53aa674dcf70af75f87feab4a02d2335c4"},{"bytes":9840,"git_blob":"11f573026e77d6180185ff6f9daa3f708c8468d9","path":".integration-transfer/2026-10-01-mobile-actual/blobs/11f573026e77d6180185ff6f9daa3f708c8468d9-001.txt","sha256":"704b94f9258c1eb2f7243b124f2fbf199fdb14460e1dc5b47773b0e46c5c3142"},{"bytes":21078,"git_blob":"19796f197e237bda71c89c57a4d56f922bf329fa","path":".integration-transfer/2026-10-01-mobile-actual/blobs/19796f197e237bda71c89c57a4d56f922bf329fa-001.txt","sha256":"3d099b4264005ceb2661fcacb2a05c498442def4b471d3fefa195d1e25e13fb5"},{"bytes":5442,"git_blob":"1ca2a3e0b53b3d353612e6c13bbfb162423ffc8f","path":".integration-transfer/2026-10-01-mobile-actual/blobs/1ca2a3e0b53b3d353612e6c13bbfb162423ffc8f-001.txt","sha256":"76239f29292110ed6d3bd2181364c76062c49c51ec82ef0b699cb717ff38e2ba"},{"bytes":156945,"git_blob":"1ce05f7007d88714affb00e63a41d53147a9a600","path":".integration-transfer/2026-10-01-mobile-actual/blobs/1ce05f7007d88714affb00e63a41d53147a9a600-001.txt","sha256":"afe10e9f4a182956fe7880260dff37b3efac7787b40c51432a23766360d4de51"},{"bytes":2031,"git_blob":"1e9c6b0f56090acbd3c42e2b2664c7318809cb8a","path":".integration-transfer/2026-10-01-mobile-actual/blobs/1e9c6b0f56090acbd3c42e2b2664c7318809cb8a-001.txt","sha256":"0139f3c4799e3fabd24860763336c88a90e48d818577b89919ecf5f6b6209e45"},{"bytes":8801,"git_blob":"2525fa0e805bd4e0aa7e43b92c10be47b2b78008","path":".integration-transfer/2026-10-01-mobile-actual/blobs/2525fa0e805bd4e0aa7e43b92c10be47b2b78008-001.txt","sha256":"2e71875159140c048dfaa373aee5446200ee5702e6508dae09417d36f709f543"},{"bytes":74582,"git_blob":"34928c90c0d177f1147159d5b54dba3c0bbbd866","path":".integration-transfer/2026-10-01-mobile-actual/blobs/34928c90c0d177f1147159d5b54dba3c0bbbd866-001.txt","sha256":"339f9801b0fb435a1b480ea6c981c5b30d092f022cb77356794182435e3366bc"},{"bytes":34538,"git_blob":"4111afee2bed59f11971174337dd8873f20b2ea7","path":".integration-transfer/2026-10-01-mobile-actual/blobs/4111afee2bed59f11971174337dd8873f20b2ea7-001.txt","sha256":"6488999c4ea5001191858b81e8bbed4189adf36c185c21d9c40ec3f73adf6a1e"},{"bytes":53759,"git_blob":"43199a1ad3eec3cd53b7a44a7de8757f396818cd","path":".integration-transfer/2026-10-01-mobile-actual/blobs/43199a1ad3eec3cd53b7a44a7de8757f396818cd-001.txt","sha256":"7bafcf3dfd880352f66f1f34c917c6aa63f9bffc684b6ff04c5960864cef2a8a"},{"bytes":24722,"git_blob":"4548e8930e0c6b813fab719d439ae9b655b166fe","path":".integration-transfer/2026-10-01-mobile-actual/blobs/4548e8930e0c6b813fab719d439ae9b655b166fe-001.txt","sha256":"8ced35c36e47c80907765b96d326b63c126299b00c5f57351375642b9036046c"},{"bytes":64726,"git_blob":"4774cd2727d00b574615fa4ca96dc97afe6da795","path":".integration-transfer/2026-10-01-mobile-actual/blobs/4774cd2727d00b574615fa4ca96dc97afe6da795-001.txt","sha256":"bf7ae866c6f175b62e765193797ac33964f40973b67e798367f9e6b2a0b75278"},{"bytes":14645,"git_blob":"4958eb79e1dc0d53bfb680081c332a7c4a74548a","path":".integration-transfer/2026-10-01-mobile-actual/blobs/4958eb79e1dc0d53bfb680081c332a7c4a74548a-001.txt","sha256":"1f8c5f134ec3667976c9854c018fff1af42aa04ccb0ce47270726d83a799b85c"},{"bytes":2815,"git_blob":"4975d9db11f78850c71bead7b4e5f91cdcf8eb7d","path":".integration-transfer/2026-10-01-mobile-actual/blobs/4975d9db11f78850c71bead7b4e5f91cdcf8eb7d-001.txt","sha256":"c45b8dbdbf26613fbbbc9abb7363e663b023a377d15fb5924869e8a7611777ca"},{"bytes":5310,"git_blob":"4dffc0bfef394436b15d1d936fe5f638dace92fa","path":".integration-transfer/2026-10-01-mobile-actual/blobs/4dffc0bfef394436b15d1d936fe5f638dace92fa-001.txt","sha256":"e63c3a4997545eb02495ac2273b84c6404ae492db090e8df183357b6e5c53d8c"},{"bytes":57603,"git_blob":"4f757687da635b2fc6e0e22d9d281f70cd1776a8","path":".integration-transfer/2026-10-01-mobile-actual/blobs/4f757687da635b2fc6e0e22d9d281f70cd1776a8-001.txt","sha256":"1d12737cb34bd7525bed7969a8013d335924f438f2984b5b34d20dae4af51738"},{"bytes":53585,"git_blob":"54230fb3cccda0906b3f323d88eede02ebb99c57","path":".integration-transfer/2026-10-01-mobile-actual/blobs/54230fb3cccda0906b3f323d88eede02ebb99c57-001.txt","sha256":"96aadb5434d3b6c41b56a57b501338f4bf5b4e0903c8168f8fc67012093967f2"},{"bytes":21141,"git_blob":"5a442ce0b062dc805d94344592e8edd1e7df514e","path":".integration-transfer/2026-10-01-mobile-actual/blobs/5a442ce0b062dc805d94344592e8edd1e7df514e-001.txt","sha256":"b429e4473f0338df43e02fbcc0605153760b129b16053571941e5118132f0d53"},{"bytes":2874,"git_blob":"5a4cefd1f70443c448e6957ac8ad5677c4cecd05","path":".integration-transfer/2026-10-01-mobile-actual/blobs/5a4cefd1f70443c448e6957ac8ad5677c4cecd05-001.txt","sha256":"88bc9488307abfa22b3b611429453a9da70a10e9bc9bbd6e0ff369a28d827c7f"},{"bytes":93199,"git_blob":"5d09159e8bf60bec37447dcb568cd84e913426a7","path":".integration-transfer/2026-10-01-mobile-actual/blobs/5d09159e8bf60bec37447dcb568cd84e913426a7-001.txt","sha256":"dd0eefa3b9cc49b9838031cf3bb257683d9ddc9fa0a863d985b8fd80b0a3b335"},{"bytes":8549,"git_blob":"5db61f0a387009381e1c53ec9c67f0bd5024cc4d","path":".integration-transfer/2026-10-01-mobile-actual/blobs/5db61f0a387009381e1c53ec9c67f0bd5024cc4d-001.txt","sha256":"5ef976c40c43e2babc9852b7bebc3e6b58202e8f6098f9364dc4199d0874b5eb"},{"bytes":23476,"git_blob":"5f01135bb540f75dcfd7f30010c49640a6036951","path":".integration-transfer/2026-10-01-mobile-actual/blobs/5f01135bb540f75dcfd7f30010c49640a6036951-001.txt","sha256":"dfe629c4118e2e72dc419a0dd587918c1a4648647a5a4c9bce27a2cc8f194fdf"},{"bytes":1394,"git_blob":"60b7b26a4c1f08cd823adac42ef686df29b1918a","path":".integration-transfer/2026-10-01-mobile-actual/blobs/60b7b26a4c1f08cd823adac42ef686df29b1918a-001.txt","sha256":"f69f8562590a245c3522bf410e84dec466da12acdbcddadeb03636b8858d3447"},{"bytes":6694,"git_blob":"62f7188bfb345176791b6daa67a90d5d79d8d498","path":".integration-transfer/2026-10-01-mobile-actual/blobs/62f7188bfb345176791b6daa67a90d5d79d8d498-001.txt","sha256":"6bacc0af936fd76fe5f5dc12e0ec08b1c2ae0a289d084f6200e5239eee6f86b2"},{"bytes":26501,"git_blob":"700a0f47a534340a1839d10647e275abc0699fbe","path":".integration-transfer/2026-10-01-mobile-actual/blobs/700a0f47a534340a1839d10647e275abc0699fbe-001.txt","sha256":"fb46154d513532dd37a8abf5f8af22f8368a063556f0fa6ea37699e0f5c2b095"},{"bytes":3740,"git_blob":"7112c685129e5b9db017aca824b8b8485e4e9461","path":".integration-transfer/2026-10-01-mobile-actual/blobs/7112c685129e5b9db017aca824b8b8485e4e9461-001.txt","sha256":"6f170bd620d6d448abe041a1c0fb11dbf72d9ae43b01bf8513432dee7fb4068f"},{"bytes":10337,"git_blob":"76464dd5895fd8c710639ff9d2bfa4df072ea00c","path":".integration-transfer/2026-10-01-mobile-actual/blobs/76464dd5895fd8c710639ff9d2bfa4df072ea00c-001.txt","sha256":"37b9a952d20551ef527dbe9beef4164e3387d2069cc35755f55e1bce6fb5be85"},{"bytes":22764,"git_blob":"76ac6d0018eeee7916966c660d5fc60e9e573d26","path":".integration-transfer/2026-10-01-mobile-actual/blobs/76ac6d0018eeee7916966c660d5fc60e9e573d26-001.txt","sha256":"9330341887187d44fe149fa337842401ad90ae9b0e67cdf001621ef871d701be"},{"bytes":15785,"git_blob":"7d972f837308a723570097a21290fcaeb851dadc","path":".integration-transfer/2026-10-01-mobile-actual/blobs/7d972f837308a723570097a21290fcaeb851dadc-001.txt","sha256":"5c45d39ce8a771b6e326d88245156ee327f4cbcb0b1382bad315bbeb79afd51b"},{"bytes":5195,"git_blob":"81289107a2a3fb41ce0b90ed26a4cf9174c51be9","path":".integration-transfer/2026-10-01-mobile-actual/blobs/81289107a2a3fb41ce0b90ed26a4cf9174c51be9-001.txt","sha256":"361112428e98e834129d5973165727b8c897ac40c7d6660e1400c34b38a6a2b1"},{"bytes":14115,"git_blob":"85a4b80fec5bd12fac8c8f0878c441ef41520bc9","path":".integration-transfer/2026-10-01-mobile-actual/blobs/85a4b80fec5bd12fac8c8f0878c441ef41520bc9-001.txt","sha256":"17ae2e197cc84704c3954b697c9f7e451a82ec140acf4054889296698b5a3eb9"},{"bytes":10811,"git_blob":"870992b6cb2bb7c709be8864d9f35469afc16ce6","path":".integration-transfer/2026-10-01-mobile-actual/blobs/870992b6cb2bb7c709be8864d9f35469afc16ce6-001.txt","sha256":"a6ce9ce176135b2b38a8ed048f06547fb3b36521ed5c6ad6b3b88c5de58dde72"},{"bytes":7807,"git_blob":"8ce5bedd85c0c6e62d623ca38a2d2aca827738cb","path":".integration-transfer/2026-10-01-mobile-actual/blobs/8ce5bedd85c0c6e62d623ca38a2d2aca827738cb-001.txt","sha256":"59c15aa1f4091c4d7a62027cc11ef458275dad279a5a31be16d38bc5dac56ab0"},{"bytes":18053,"git_blob":"90bc0850226444c4f7d1bf9fee5b8cc4112ee3b8","path":".integration-transfer/2026-10-01-mobile-actual/blobs/90bc0850226444c4f7d1bf9fee5b8cc4112ee3b8-001.txt","sha256":"aea7b68008dddfe8002efbf10fc3fe3f9c305aca8e8a1f36cc1f401780121c27"},{"bytes":6466,"git_blob":"917342c1bb62b36131f7596bb6be220ae93fb61e","path":".integration-transfer/2026-10-01-mobile-actual/blobs/917342c1bb62b36131f7596bb6be220ae93fb61e-001.txt","sha256":"68d7327b65fe15b3e78d27bece71032761c227d777a7b20cf51ea22301712596"},{"bytes":35458,"git_blob":"942488bddf0a62be31915006df88ebb58ee96b95","path":".integration-transfer/2026-10-01-mobile-actual/blobs/942488bddf0a62be31915006df88ebb58ee96b95-001.txt","sha256":"4b53ca262ffc101a23bc8324e5e6d34c05c0682dd7a622d742a0ef9b7cc9cc27"},{"bytes":1088,"git_blob":"98bd2b7215dd04722130596ddf1e1cd4e982fead","path":".integration-transfer/2026-10-01-mobile-actual/blobs/98bd2b7215dd04722130596ddf1e1cd4e982fead-001.txt","sha256":"d61510556637cf936476c3432e4fa8ce514aa612ac43e8ab747a46eaec062683"},{"bytes":115500,"git_blob":"9c7d8490946f17d16da58b2b37b39c820de9e8ec","path":".integration-transfer/2026-10-01-mobile-actual/blobs/9c7d8490946f17d16da58b2b37b39c820de9e8ec-001.txt","sha256":"34487f937a2456741603965b408787ae0efdbea0255a53a87822ae44df31c0b4"},{"bytes":1180,"git_blob":"a0973cfdc34ee7c05c61558f74700448de602b43","path":".integration-transfer/2026-10-01-mobile-actual/blobs/a0973cfdc34ee7c05c61558f74700448de602b43-001.txt","sha256":"952b88ba0084c0aebce4e7ebef75331e1a195164675140c5f5fde3ec9bee59ce"},{"bytes":11068,"git_blob":"a4a1ef14f7ea9aa651f81aae33d7c7ade2eeec08","path":".integration-transfer/2026-10-01-mobile-actual/blobs/a4a1ef14f7ea9aa651f81aae33d7c7ade2eeec08-001.txt","sha256":"d89f87a741821b5fb7f42cb2131979bebbf6f88947fd8e9486f6b8ae93d0dd15"},{"bytes":11284,"git_blob":"a4c69bd13977c6e6f2c837a1df23de4b913e97cb","path":".integration-transfer/2026-10-01-mobile-actual/blobs/a4c69bd13977c6e6f2c837a1df23de4b913e97cb-001.txt","sha256":"9f040029a349e7e24dc3604c5a4a31692b3b4b3f338f69c8756c04dcf91d67ad"},{"bytes":99430,"git_blob":"a5ac64183df6ff6fdf1672b9fcfadee9b04532a6","path":".integration-transfer/2026-10-01-mobile-actual/blobs/a5ac64183df6ff6fdf1672b9fcfadee9b04532a6-001.txt","sha256":"21df0e21b9a2bd51f509532a2725f2921712b0216207cff8d0fc77f54e284660"},{"bytes":47984,"git_blob":"a65b75f4686c594bf30e3f2c17aab57294907935","path":".integration-transfer/2026-10-01-mobile-actual/blobs/a65b75f4686c594bf30e3f2c17aab57294907935-001.txt","sha256":"fd9da6f597ccf53125d9dde263e1fa83532df0b62456fa6931c85da0f8768b9a"},{"bytes":50999,"git_blob":"a68cb3fd65e1775dba29db60952e68b1349f65a8","path":".integration-transfer/2026-10-01-mobile-actual/blobs/a68cb3fd65e1775dba29db60952e68b1349f65a8-001.txt","sha256":"9d2c78a7507c7003c3b09fc954ae8867d62c5076c660917efa778ab11ab8e79e"},{"bytes":14230,"git_blob":"a6f4ffd7232f30ef91570834a73cb681d048a0b8","path":".integration-transfer/2026-10-01-mobile-actual/blobs/a6f4ffd7232f30ef91570834a73cb681d048a0b8-001.txt","sha256":"62ffb3aba68599df152eeaf5aaf98c8c102f7acfc883166c132022a943180e8f"},{"bytes":3748,"git_blob":"b0a282ad8b1ddefdd2a92d3942de4e0938bb8bab","path":".integration-transfer/2026-10-01-mobile-actual/blobs/b0a282ad8b1ddefdd2a92d3942de4e0938bb8bab-001.txt","sha256":"33fbbb7e4ffbcc389924c009f0db309f9aacaa319e0c0ac9524ea66ee2b32947"},{"bytes":14810,"git_blob":"b0b25142dcb72fea2de695913fd99564a8fe7718","path":".integration-transfer/2026-10-01-mobile-actual/blobs/b0b25142dcb72fea2de695913fd99564a8fe7718-001.txt","sha256":"e771e21b7ded3330fa79f5e140765c836607e890793532046d9197453836554c"},{"bytes":19128,"git_blob":"b26fdbefa9f3cd2d0d11f8d088470a8b16955ddc","path":".integration-transfer/2026-10-01-mobile-actual/blobs/b26fdbefa9f3cd2d0d11f8d088470a8b16955ddc-001.txt","sha256":"9d0d8233ab0a916a2d09298bad18436025776cedc72ec139914827a0c3182295"},{"bytes":7647,"git_blob":"b56a9803b45e775669c7e2f56618ca8d13f898b5","path":".integration-transfer/2026-10-01-mobile-actual/blobs/b56a9803b45e775669c7e2f56618ca8d13f898b5-001.txt","sha256":"239f0892ffa945016ffd9de231dda8e70399824f5a240e85900b821bec577994"},{"bytes":63730,"git_blob":"c03f411274e3ae7691f2855f348b4c1f0b314e7b","path":".integration-transfer/2026-10-01-mobile-actual/blobs/c03f411274e3ae7691f2855f348b4c1f0b314e7b-001.txt","sha256":"f090f5f405bf98d0cdfb0cf9dd31e56582d426239517a13af0306fb383554749"},{"bytes":49235,"git_blob":"c27c514fef8ae2e9d0930fb155ad580692a77a61","path":".integration-transfer/2026-10-01-mobile-actual/blobs/c27c514fef8ae2e9d0930fb155ad580692a77a61-001.txt","sha256":"4cea5fec1803148c546e52739b55c5c130ab928581568d1c0d2ee62fa490fba3"},{"bytes":25228,"git_blob":"c33879b759d1cb4cfab214f40f20af64209b3ea9","path":".integration-transfer/2026-10-01-mobile-actual/blobs/c33879b759d1cb4cfab214f40f20af64209b3ea9-001.txt","sha256":"9f0c0f4c439cccda5271f2ff84bf13b03e11144050fe55d37314bf61664368b2"},{"bytes":64574,"git_blob":"c6e371492734b96c40075bbdd270a8aae35c2350","path":".integration-transfer/2026-10-01-mobile-actual/blobs/c6e371492734b96c40075bbdd270a8aae35c2350-001.txt","sha256":"765e28ae5d8470bf0332e6152c4c331fb260174a184aa44f9a10b5faad04bcf0"},{"bytes":9218,"git_blob":"cd0948c9080fd95e767229e52580df5e219e7710","path":".integration-transfer/2026-10-01-mobile-actual/blobs/cd0948c9080fd95e767229e52580df5e219e7710-001.txt","sha256":"7f46805bac2b2938ea3328ef9ac5c0f0d032e0b2f6831293a86f9780228e54c1"},{"bytes":96926,"git_blob":"cfb195c464d22008c8df735c59149d3b127c32df","path":".integration-transfer/2026-10-01-mobile-actual/blobs/cfb195c464d22008c8df735c59149d3b127c32df-001.txt","sha256":"89abfb5a77593710fab4d2d16c47235aea99812a02a2e8805b1404eca655d9b8"},{"bytes":31324,"git_blob":"d1be82909140818cc3781a3b821a0a0f6f477a88","path":".integration-transfer/2026-10-01-mobile-actual/blobs/d1be82909140818cc3781a3b821a0a0f6f477a88-001.txt","sha256":"5b034b9c8dbb840b6e5ea23f4ccd7a905838a08823cb3b7683b1973c457a9501"},{"bytes":21815,"git_blob":"d3a16be520817cbcdeea6ab615938dd707c3151a","path":".integration-transfer/2026-10-01-mobile-actual/blobs/d3a16be520817cbcdeea6ab615938dd707c3151a-001.txt","sha256":"c7706e3a37c3bb1238883614bda7558e79a491199dbd1e69a670af2d7eb2641a"},{"bytes":240000,"git_blob":"61e3f9fd4dbf3524de021196b95bce7f00f401be","path":".integration-transfer/2026-10-01-mobile-actual/blobs/d7244c76b55bacbca05d61b33d0ad89d0cfca90a-001.txt","sha256":"f06d7e0ce5963a886ffd013ae84e67fe780d72241a24cca8b0b21b75453960ff"},{"bytes":32592,"git_blob":"63c2ddd029dc376f28924cb71ab2d069ac1b389e","path":".integration-transfer/2026-10-01-mobile-actual/blobs/d7244c76b55bacbca05d61b33d0ad89d0cfca90a-002.txt","sha256":"4df1e0ea4960c43c489f32afe13877737e5fe4a7d6acf012edb251fc4d94d428"},{"bytes":2120,"git_blob":"d981c6f91ffd75212c79a419c480982a7010395d","path":".integration-transfer/2026-10-01-mobile-actual/blobs/d981c6f91ffd75212c79a419c480982a7010395d-001.txt","sha256":"bee06c8c456c6a74ce22f45bbe3260fc8adb1d14c46134df407c0a631064b36c"},{"bytes":14259,"git_blob":"daf698e709dfc850f10563e644901a7b81690b64","path":".integration-transfer/2026-10-01-mobile-actual/blobs/daf698e709dfc850f10563e644901a7b81690b64-001.txt","sha256":"1a342ea2aadc851955664f80f2509f82bf4af3515b3b37164c5b629bb4367cbc"},{"bytes":2269,"git_blob":"db214a90a92b3332ed8b6957a30829047b02faaa","path":".integration-transfer/2026-10-01-mobile-actual/blobs/db214a90a92b3332ed8b6957a30829047b02faaa-001.txt","sha256":"36cb1055093afab1be56a99a35ddb816a3093c2202aed4c566522f1891dfcfdb"},{"bytes":110365,"git_blob":"dd9c318b9802abe4b2f2287d3ee67208a21dafba","path":".integration-transfer/2026-10-01-mobile-actual/blobs/dd9c318b9802abe4b2f2287d3ee67208a21dafba-001.txt","sha256":"8388978dc407027a58db741cb7a4b4b2514a788b6c008bd364c5d04ca0a7c8df"},{"bytes":18795,"git_blob":"debb4b4f423dcff525c58cde28b5d9c9f3ed602d","path":".integration-transfer/2026-10-01-mobile-actual/blobs/debb4b4f423dcff525c58cde28b5d9c9f3ed602d-001.txt","sha256":"c987fa7eb8ab7f03a6245ef6aca314348d7e7a2686b9b2a21387467d3d404f1c"},{"bytes":30504,"git_blob":"e29fa680ad861c3f988affa511d5a0363f357f35","path":".integration-transfer/2026-10-01-mobile-actual/blobs/e29fa680ad861c3f988affa511d5a0363f357f35-001.txt","sha256":"122ad8ba066a370354ee63f53fe1c013f2934fc89c4d344d0e212c8b7aea20d7"},{"bytes":25533,"git_blob":"e4bfde16cdce62756cb6508cb5edef5ad5073352","path":".integration-transfer/2026-10-01-mobile-actual/blobs/e4bfde16cdce62756cb6508cb5edef5ad5073352-001.txt","sha256":"5561b453fb460af3d5a2e001bce46384759fb54fa3cabd48086189e23c23aa04"},{"bytes":47450,"git_blob":"e519d471a5373dd5bb24ab40d0447257bd36c237","path":".integration-transfer/2026-10-01-mobile-actual/blobs/e519d471a5373dd5bb24ab40d0447257bd36c237-001.txt","sha256":"7730ece3372a90b4674dddb0edf09e82143100369715057e6faf9a97f22a0574"},{"bytes":1197,"git_blob":"e57a28e6cdc64906493c2a0312d6cc1277ddf8c0","path":".integration-transfer/2026-10-01-mobile-actual/blobs/e57a28e6cdc64906493c2a0312d6cc1277ddf8c0-001.txt","sha256":"aadf3a3cf618006445e83ad4281fed0c1fb8932f0530e4af55f35f16eff49f8a"},{"bytes":69951,"git_blob":"ea0b9d3d37752befca2dc3b139fa8ec62676e66c","path":".integration-transfer/2026-10-01-mobile-actual/blobs/ea0b9d3d37752befca2dc3b139fa8ec62676e66c-001.txt","sha256":"56e813fd6a62b1a3cd0c88f838a0757da31b6fbe008b536c4977b4cd96090537"},{"bytes":240000,"git_blob":"a0e6b9f80294e3265d7782216f4482fd5575c93c","path":".integration-transfer/2026-10-01-mobile-actual/blobs/ed777cc6b5ea3cccf34d0ba3cbe273b7e6b3ecd9-001.txt","sha256":"159908598d68b1d1918c6c35bb4d65b3daf9761f0ddd498bf8647f11ad18fae7"},{"bytes":14098,"git_blob":"493f2f715498d9cd0fe96caa1159d510303cc2ca","path":".integration-transfer/2026-10-01-mobile-actual/blobs/ed777cc6b5ea3cccf34d0ba3cbe273b7e6b3ecd9-002.txt","sha256":"0c30f2964605ef642253acde9a82c6da64c0214ec97e489cc23a7a3e73ef2c55"},{"bytes":2008,"git_blob":"ee09554a792bd9362040141af2b90afdc7aea24e","path":".integration-transfer/2026-10-01-mobile-actual/blobs/ee09554a792bd9362040141af2b90afdc7aea24e-001.txt","sha256":"c70a0cfe115be23b461e62ac66af08b2db49cfed7d986195450f8bae760a861e"},{"bytes":78096,"git_blob":"f944d7e3607e154f22df772277765744eecaaf71","path":".integration-transfer/2026-10-01-mobile-actual/blobs/f944d7e3607e154f22df772277765744eecaaf71-001.txt","sha256":"39c11796619e5a35e6b7843b3e54ac9dbf9d55806c21d0bf8aecb5723b2ff95f"},{"bytes":17324,"git_blob":"f9b89166b443685a1a6c999561648adf66151009","path":".integration-transfer/2026-10-01-mobile-actual/blobs/f9b89166b443685a1a6c999561648adf66151009-001.txt","sha256":"59b87a34555bc6d5a0c596d5d786961e11ee9011a2075cd7e9fa19ebca594d50"},{"bytes":3767,"git_blob":"fa8585ed63da1e7a8ecff39a8d9ecaf79600ad94","path":".integration-transfer/2026-10-01-mobile-actual/blobs/fa8585ed63da1e7a8ecff39a8d9ecaf79600ad94-001.txt","sha256":"74f67f6044fcf50e7485e7b3a288500df18f08459c035acc1b95c1371635dd89"},{"bytes":4117,"git_blob":"fffd2e9070f951ed1ef68692687cd6d86a5f2ad6","path":".integration-transfer/2026-10-01-mobile-actual/blobs/fffd2e9070f951ed1ef68692687cd6d86a5f2ad6-001.txt","sha256":"0f695b4d4bc1d26c7ca02066d603cc6a5efa8300ca7a8a23914004ee44fcc083"},{"bytes":240000,"git_blob":"ee91b73006d95ca079328d61c4ba36a3d2be446b","path":".integration-transfer/2026-10-01-mobile-actual/manifest/full-001.txt","sha256":"6c08fda550f290bcd622b61be326717df66bc1efe3c0b73bfc2bd64e57f1e09f"},{"bytes":235639,"git_blob":"beba5b13ea9d4e3dc4770372596c3fa1a422a1b5","path":".integration-transfer/2026-10-01-mobile-actual/manifest/full-002.txt","sha256":"2522f81703dec84c1953026d7e42a7e5ff8a326666cdbb179a241f773c7847d2"}],"stagingBase":"01955baf87f99680278f13be8b5fdd064344d574","targetRef":"refs/heads/2026-09-25-mobile-layout","workflowPath":".github/workflows/verified-mobile-actual-integration.yml"}\n')
+
+          environment = os.environ
+          event = json.loads(Path(environment["GITHUB_EVENT_PATH"]).read_text())
+          verify_event(PLAN, environment, event)
+          token = environment.get("GH_TOKEN")
+          require(bool(token), "transient repository token missing")
+          repo = Path(environment["GITHUB_WORKSPACE"]) / "objects"
+          temporary = Path(environment["RUNNER_TEMP"])
+          require_parent_refs(repo, PLAN, token)
+          for parent in PLAN["parents"]:
+              git(repo, "fetch", "--no-tags", PLAN["remote"], parent["commit"], token=token)
+          parent_trees = verify_parent_objects(repo, PLAN)
+
+          records, payload = verify_staging(repo, PLAN, environment, event)
+          blobs = collect_blobs(repo, records, payload, PLAN, parent_trees)
+          bundle = build_bundle(temporary / "reviewed-bundle-source", records, blobs, PLAN)
+          blobs[git_blob(bundle)] = bundle
+          construct_tree(repo, records, blobs, temporary / "generate.index", PLAN["intermediateTree"])
+          require_parent_refs(repo, PLAN, token)
+          proof_hash = write_artifact(temporary / "integration-validated", PLAN, records, blobs, environment)
+          with open(environment["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
+              output.write("proof_sha256=" + proof_hash + "\n")
+          print("Verified complete intermediate tree and bundle; exported exact new raw blobs.")
+
+      - uses: actions/upload-artifact@v4
+        id: upload
+        with:
+          name: mobile-actual-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/integration-validated/
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 7
+          overwrite: false
+  publish:
+    needs: generate
+    if: needs.generate.result == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: 4a540bb5ae2b5ee568a4b170c560483162cdbc43
+          path: objects
+          fetch-depth: 1
+          persist-credentials: false
+          submodules: false
+          lfs: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - uses: actions/download-artifact@v4
+        with:
+          artifact-ids: ${{ needs.generate.outputs.artifact_id }}
+          path: ${{ runner.temp }}/integration-downloaded
+          merge-multiple: true
+      - name: Verify raw blobs, create exactly two parents, and push once
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ARTIFACT_ID: ${{ needs.generate.outputs.artifact_id }}
+          PROOF_SHA256: ${{ needs.generate.outputs.proof_sha256 }}
+        shell: python
+        run: |
+          import base64
+          import hashlib
+          import json
+          import os
+          from pathlib import Path, PurePosixPath
+          import re
+          import stat
+          import subprocess
+          import sys
+          class Rejected(RuntimeError):
+              pass
+          def require(condition, message):
+              if not condition:
+                  raise Rejected(message)
+          def sha256(data):
+              return hashlib.sha256(data).hexdigest()
+          def git_blob(data):
+              return hashlib.sha1(b"blob " + str(len(data)).encode() + b"\0" + data).hexdigest()
+          def canonical_json(value):
+              return (json.dumps(value, sort_keys=True, separators=(",", ":")) + "\n").encode()
+          def canonical_path(path):
+              require(isinstance(path, str) and bool(path), "empty/non-string path")
+              require(re.fullmatch(r"[A-Za-z0-9._/@()+ -]+", path) is not None, "unsafe path characters")
+              require(not path.startswith("/") and str(PurePosixPath(path)) == path, "noncanonical path")
+              require(all(p not in ("", ".", "..", ".git") for p in path.split("/")), "unsafe path component")
+              return path
+          def verify_bytes(data, record):
+              require(len(data) == record["bytes"], "size mismatch: " + record["path"])
+              require(sha256(data) == record["sha256"], "SHA-256 mismatch: " + record["path"])
+              require(git_blob(data) == record["git_blob"], "Git blob mismatch: " + record["path"])
+          def git_env(token=None, index=None):
+              env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
+              env.update(GIT_CONFIG_NOSYSTEM="1", GIT_CONFIG_GLOBAL="/dev/null", GIT_TERMINAL_PROMPT="0")
+              if index:
+                  env["GIT_INDEX_FILE"] = str(index)
+              if token:
+                  auth = base64.b64encode(("x-access-token:" + token).encode()).decode()
+                  env.update(GIT_CONFIG_COUNT="1", GIT_CONFIG_KEY_0="http.https://github.com/.extraheader",
+                             GIT_CONFIG_VALUE_0="AUTHORIZATION: basic " + auth)
+              return env
+          def git(repo, *args, data=None, token=None, index=None, hooks=None):
+              command = ["git", "-c", "core.hooksPath=" + (str(hooks) if hooks else "/dev/null"),
+                         "-c", "core.autocrlf=false", "-c", "commit.gpgsign=false", "-C", str(repo), *args]
+              result = subprocess.run(command, input=data, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                      env=git_env(token, index), check=False)
+              require(result.returncode == 0, "git operation failed: " + args[0] + "; inspect, do not retry automatically")
+              return result.stdout
+          def tree_entries(repo, revision):
+              result = {}
+              for line in git(repo, "ls-tree", "-rz", revision).split(b"\0"):
+                  if line:
+                      metadata, path = line.split(b"\t", 1)
+                      mode, kind, oid = metadata.decode().split()
+                      result[path.decode("utf-8")] = (mode, kind, oid)
+              return result
+          def diff_records(repo, old, new):
+              pieces = git(repo, "diff", "--raw", "--no-abbrev", "--no-renames", "-z", old, new).split(b"\0")
+              require(pieces.pop() == b"" and len(pieces) % 2 == 0, "invalid diff framing")
+              result = {}
+              for metadata, path in zip(pieces[::2], pieces[1::2]):
+                  oldmode, newmode, oldoid, newoid, operation = metadata.decode().split()
+                  name = path.decode("utf-8")
+                  require(name not in result, "duplicate diff path")
+                  result[name] = (oldmode.lstrip(":"), newmode, oldoid, newoid, operation)
+              return result
+          def expected_diff(old, new):
+              changes = {}
+              for path in old.keys() | new.keys():
+                  before, after = old.get(path), new.get(path)
+                  if before != after:
+                      changes[path] = (before[0] if before else "000000", after[0] if after else "000000",
+                                       before[2] if before else "0" * 40, after[2] if after else "0" * 40,
+                                       "M" if before and after else "D" if before else "A")
+              return changes
+          def manifest_entries(records):
+              return {r["path"]: (r["mode"], "blob", r["git_blob"]) for r in records}
+          def validate_manifest(data, plan):
+              require(len(data) == plan["manifestBytes"] and sha256(data) == plan["manifestSha256"], "complete manifest identity mismatch")
+              records = json.loads(data)
+              require(canonical_json(records) == data, "noncanonical manifest")
+              require(isinstance(records, list) and len(records) == plan["fileCount"], "manifest file count mismatch")
+              paths = []
+              for record in records:
+                  path = canonical_path(record["path"])
+                  require(not path.startswith(plan["payloadPrefix"] + "/") and path != plan["workflowPath"], "helper leaked into target manifest")
+                  require(record["mode"] in ("100644", "100755"), "unapproved mode/symlink/gitlink")
+                  require(re.fullmatch(r"[0-9a-f]{40}", record["git_blob"]) is not None, "invalid blob ID")
+                  require(re.fullmatch(r"[0-9a-f]{64}", record["sha256"]) is not None, "invalid SHA-256")
+                  require(type(record["bytes"]) is int and 0 <= record["bytes"] <= plan["maxBlobBytes"], "invalid blob size")
+                  require(record["source"] in ("mobile", "main", "text", "bundle"), "invalid source class")
+                  paths.append(path)
+              require(paths == sorted(set(paths)), "manifest paths duplicated or unsorted")
+              pathset = set(paths)
+              require(all(str(p) not in pathset for path in paths for p in PurePosixPath(path).parents), "file/directory collision")
+              bundle = [r for r in records if r["source"] == "bundle"]
+              require(len(bundle) == 1 and bundle[0]["path"] == plan["bundlePath"], "generated bundle set mismatch")
+              return records
+          def verify_event(plan, environment, event):
+              require(environment.get("GITHUB_EVENT_NAME") == "push", "not a push event")
+              require(environment.get("GITHUB_REPOSITORY") == plan["repository"], "wrong repository")
+              require(environment.get("GITHUB_REF") == "refs/heads/" + plan["helperBranch"], "wrong helper ref")
+              require(environment.get("GITHUB_RUN_ATTEMPT") == "1", "reruns are disabled; inspect before a new reviewed publication")
+              require(re.fullmatch(r"[1-9][0-9]*", environment.get("GITHUB_RUN_ID", "")) is not None, "invalid run id")
+              parent = environment.get("HELPER_PARENT", "")
+              require(re.fullmatch(r"[0-9a-f]{40}", parent) is not None, "helper parent is not bound")
+              require(re.fullmatch(r"[0-9a-f]{40}", environment.get("GITHUB_SHA", "")) is not None, "invalid trigger SHA")
+              require(event.get("ref") == environment["GITHUB_REF"], "event ref mismatch")
+              require(event.get("before") == parent and event.get("after") == environment["GITHUB_SHA"], "event ancestry mismatch")
+              require(all(event.get(key) is False for key in ("forced", "deleted", "created")), "forced/create/delete push rejected")
+              require(event.get("repository", {}).get("full_name") == plan["repository"], "event repository mismatch")
+              return parent
+          def remote_refs(repo, plan, token):
+              wanted = {p["ref"] for p in plan["parents"]}
+              rows = git(repo, "ls-remote", "--exit-code", plan["remote"], *sorted(wanted), token=token).decode().splitlines()
+              result = {}
+              for row in rows:
+                  pieces = row.split("\t")
+                  require(len(pieces) == 2 and pieces[1] in wanted and pieces[1] not in result and
+                          re.fullmatch(r"[0-9a-f]{40}", pieces[0]), "invalid/ambiguous remote refs")
+                  result[pieces[1]] = pieces[0]
+              require(set(result) == wanted, "a parent ref is missing")
+              return result
+          def require_parent_refs(repo, plan, token):
+              require(remote_refs(repo, plan, token) == {p["ref"]: p["commit"] for p in plan["parents"]}, "mobile or main moved; stop and reconcile")
+          def verify_parent_objects(repo, plan):
+              require(len(plan["parents"]) == 2 and plan["parents"][0]["ref"] == plan["targetRef"] and
+                      plan["parents"][1]["ref"] == "refs/heads/main", "wrong parent order or count")
+              trees = {}
+              for parent in plan["parents"]:
+                  require(git(repo, "cat-file", "-t", parent["commit"]).strip() == b"commit", "parent is not a commit")
+                  require(git(repo, "rev-parse", parent["commit"] + "^{tree}").decode().strip() == parent["tree"], "parent tree mismatch")
+                  trees[parent["source"]] = tree_entries(repo, parent["commit"])
+              return trees
+          def construct_tree(repo, records, blobs, index, expected_tree):
+              require(not index.exists(), "temporary index already exists")
+              git(repo, "read-tree", "--empty", index=index)
+              for oid, data in blobs.items():
+                  require(git_blob(data) == oid, "raw object key mismatch")
+                  require(git(repo, "hash-object", "-w", "--stdin", data=data).decode().strip() == oid, "written object mismatch")
+              entries = b"".join((r["mode"] + " " + r["git_blob"] + "\t" + r["path"]).encode() + b"\0" for r in records)
+              git(repo, "update-index", "-z", "--index-info", data=entries, index=index)
+              tree = git(repo, "write-tree", index=index).decode().strip()
+              require(tree == expected_tree, "complete resulting tree differs from reviewed tree")
+              require(tree_entries(repo, tree) == manifest_entries(records), "resulting path/mode/blob manifest mismatch")
+              return tree
+          def proof_for(plan, records, environment):
+              return {"schemaVersion": 1, "repository": plan["repository"], "parents": plan["parents"],
+                      "intermediateTree": plan["intermediateTree"], "finalTree": plan["finalTree"],
+                      "intermediateComplete": False, "helperRef": environment["GITHUB_REF"],
+                      "helperParent": environment["HELPER_PARENT"], "triggerSha": environment["GITHUB_SHA"],
+                      "runId": environment["GITHUB_RUN_ID"], "runAttempt": environment["GITHUB_RUN_ATTEMPT"],
+                      "planSha256": sha256(canonical_json(plan)), "manifest": records}
+          def new_blob_records(records):
+              return {r["git_blob"]: r for r in records if r["source"] in ("text", "bundle")}
+          def read_artifact(folder, plan, environment, proof_hash):
+              require(folder.is_dir() and not folder.is_symlink(), "artifact root invalid")
+              require({p.name for p in folder.iterdir()} == {"blobs", "proof.json"}, "artifact root has extra/missing paths")
+              require(stat.S_ISREG((folder / "proof.json").lstat().st_mode), "proof is nonregular")
+              proof_bytes = (folder / "proof.json").read_bytes()
+              require(sha256(proof_bytes) == proof_hash, "same-run proof digest mismatch")
+              proof = json.loads(proof_bytes)
+              records = validate_manifest(canonical_json(proof["manifest"]), plan)
+              require(proof_bytes == canonical_json(proof_for(plan, records, environment)), "proof belongs to another run/attempt/plan")
+              directory = folder / "blobs"
+              require(directory.is_dir() and not directory.is_symlink(), "blob directory invalid")
+              expected = new_blob_records(records)
+              require({p.name for p in directory.iterdir()} == set(expected), "artifact blob set mismatch")
+              blobs = {}
+              for oid, record in expected.items():
+                  path = directory / oid
+                  require(stat.S_ISREG(path.lstat().st_mode), "artifact blob is nonregular")
+                  blobs[oid] = path.read_bytes()
+                  verify_bytes(blobs[oid], record)
+              return records, blobs
+          def verify_existing_blobs(repo, records, parent_trees):
+              parents = {source: {entry[2] for entry in tree.values() if entry[1] == "blob"}
+                         for source, tree in parent_trees.items()}
+              for record in records:
+                  if record["source"] in parents:
+                      require(record["git_blob"] in parents[record["source"]], "existing blob not in pinned parent")
+                      verify_bytes(git(repo, "cat-file", "blob", record["git_blob"]), record)
+          def verify_merge(repo, commit, records, plan, parent_trees):
+              parents = [p["commit"] for p in plan["parents"]]
+              require(git(repo, "rev-list", "--parents", "-n", "1", commit).decode().split() == [commit, *parents], "wrong/reordered/extra merge parents")
+              require(git(repo, "rev-parse", commit + "^{tree}").decode().strip() == plan["intermediateTree"], "merge tree mismatch")
+              target = manifest_entries(records)
+              require(tree_entries(repo, commit) == target, "merge full manifest mismatch")
+              for parent in plan["parents"]:
+                  git(repo, "merge-base", "--is-ancestor", parent["commit"], commit)
+                  require(diff_records(repo, parent["commit"], commit) == expected_diff(parent_trees[parent["source"]], target), "merge parent diff mismatch")
+          def create_merge(repo, records, plan, parent_trees):
+              args = ["-c", "user.name=github-actions[bot]", "-c", "user.email=41898282+github-actions[bot]@users.noreply.github.com",
+                      "commit-tree", plan["intermediateTree"]]
+              for parent in plan["parents"]:
+                  args.extend(["-p", parent["commit"]])
+              message = b"Merge actual main into reviewed mobile integration; final reviewed test pending [skip ci][skip render]\n"
+              commit = git(repo, *args, data=message).decode().strip()
+              verify_merge(repo, commit, records, plan, parent_trees)
+              return commit
+          def pre_push_source(plan, commit):
+              expected = [commit, commit, plan["targetRef"], plan["parents"][0]["commit"]]
+              return ("#!/usr/bin/env python3\nimport sys\n"
+                      + "expected = " + repr(expected) + "\n"
+                      + "destination = " + repr(plan["remote"]) + "\n"
+                      + "rows = [line.split() for line in sys.stdin.read().splitlines()]\n"
+                      + "if sys.argv[1:] != [destination, destination] or rows != [expected]:\n"
+                      + "    sys.stderr.write('Rejected unexpected advertised target/ref/commit; inspect, do not retry\\n')\n"
+                      + "    sys.exit(1)\n")
+          def push_once(repo, plan, commit, token, hooks):
+              require(not hooks.exists(), "hook directory already exists")
+              hooks.mkdir()
+              hook = hooks / "pre-push"
+              hook.write_text(pre_push_source(plan, commit), encoding="utf-8")
+              hook.chmod(0o700)
+              require_parent_refs(repo, plan, token)
+              git(repo, "push", "--porcelain", plan["remote"], commit + ":" + plan["targetRef"], token=token, hooks=hooks)
+              expected = {plan["targetRef"]: commit, plan["parents"][1]["ref"]: plan["parents"][1]["commit"]}
+              require(remote_refs(repo, plan, token) == expected, "post-push target/main uncertain or moved; inspect, do not retry")
+          PLAN = json.loads('{"builderInputs":["scripts/build-runtime-bundle.cjs","music_app/static/js/runtime/session-csrf-fetch.js","music_app/static/js/runtime/bootstrap-state.js","music_app/static/js/runtime/startup-metrics-helpers.js","music_app/static/js/runtime/response-state-helpers.js","music_app/static/js/runtime/view-state-helpers.js","music_app/static/js/runtime/browser-navigation-helpers.js","music_app/static/js/runtime/browser-storage-helpers.js","music_app/static/js/runtime/browser-dialog-helpers.js","music_app/static/js/runtime/browser-viewport-helpers.js","music_app/static/js/runtime/browser-scheduling-helpers.js","music_app/static/js/runtime/view-value-helpers.js","music_app/static/js/runtime/markup-format-helpers.js","music_app/static/js/runtime/loader-status-helpers.js","music_app/static/js/runtime/status-ui-helpers.js","music_app/static/js/runtime/library-warning-ui.js","music_app/static/js/runtime/notification-ui-helpers.js","music_app/static/js/runtime/render-markup-helpers.js","music_app/static/js/runtime/alert-components.js","music_app/static/js/runtime/album-artbox.js","music_app/static/js/runtime/gallery-main-components.js","music_app/static/js/runtime/gallery-main-state.js","music_app/static/js/runtime/gallery-card-component.js","music_app/static/js/runtime/album-details-components.js","music_app/static/js/runtime/core-state-and-helpers.js","music_app/static/js/runtime/trigger-anchor.js","music_app/static/js/runtime/search-input.js","music_app/static/js/runtime/gallery-main-interactions.js","music_app/static/js/runtime/compact-player-helpers.js","music_app/static/js/runtime/player-streaming-engine.js","music_app/static/js/runtime/shell-navigation-drawer.js","music_app/static/js/runtime/account-menu.js","music_app/static/js/runtime/bootstrap-refocus-helpers.js","music_app/static/js/runtime/client-preferences-helpers.js","music_app/static/js/runtime/gallery-display-preference-helpers.js","music_app/static/js/runtime/playback-ownership-helpers.js","music_app/static/js/runtime/modal-and-overlay-helpers.js","music_app/static/js/runtime/track-modal-lightbox-helpers.js","music_app/static/js/runtime/player-waveform-peaks.js","music_app/static/js/runtime/loop-range-controls.js","music_app/static/js/runtime/playback-control-cluster.js","music_app/static/js/runtime/loop-edit-session-expiry.js","music_app/static/js/runtime/player-and-waveform.js","music_app/static/js/runtime/gallery-refresh-and-status.js","music_app/static/js/runtime/problematic-album-helpers.js","music_app/static/js/runtime/browser-log-history-store.js","music_app/static/js/runtime/utility-log-history-query.js","music_app/static/js/runtime/date-range-picker.js","music_app/static/js/runtime/utility-log-history-ui.js","music_app/static/js/runtime/compact-data-table.js","music_app/static/js/runtime/album-track-table.js","music_app/static/js/runtime/utility-list-builders.js","music_app/static/js/runtime/problem-exclusion-mutations.js","music_app/static/js/runtime/library-settings.js","music_app/static/js/runtime/cover-lookup-notification-helpers.js","music_app/static/js/runtime/appearance-backgrounds-bridge.js","music_app/static/js/runtime/problematic-files-virtual-list.js","music_app/static/js/runtime/utility-renderers-and-actions.js","music_app/static/js/runtime/utility-loop-playback.js","music_app/static/js/runtime/tag-editor-reorder.js","music_app/static/js/runtime/utility-loaders-and-cover-lookup.js","music_app/static/js/runtime/cover-lookup-modal-and-drawer.js","music_app/static/js/runtime/tag-editor-and-optimistic-updates.js","music_app/static/js/runtime/player-state-persistence-helpers.js","music_app/static/js/runtime/player-listen-session-helpers.js","music_app/static/js/runtime/gallery-cover-preview-cache.js","music_app/static/js/runtime/gallery-cover-load-scheduler.js","music_app/static/js/runtime/virtual-artist-grid.js","music_app/static/js/runtime/player-loop-playback.js","music_app/static/js/runtime/compact-player-controller.js","music_app/static/js/runtime/track-modal-and-gallery.js","music_app/static/js/runtime/bootstrap-utility-event-handlers.js","music_app/static/js/runtime/bootstrap-gallery-event-handlers.js","music_app/static/js/runtime/mobile-navigation.js","music_app/static/js/runtime/in-page-tabs.js","music_app/static/js/runtime/mobile-home.js","music_app/static/js/runtime/bootstrap-event-handlers.js","music_app/static/js/runtime/bootstrap-init.js"],"builderPath":"scripts/build-runtime-bundle.cjs","bundlePath":"music_app/static/js/runtime-bundle.js","fileCount":1965,"finalTree":"9e6d4b101726ea5f6b6eb46b5cb3aefdbe448cb9","frozenContentManifestSha256":"9c775bc66a9043c112fb171f4835deac9ad8f083bf2629475ef2d25cc68db436","heldTrigger":{"final_blob":"31b262e874c0e22ef08c351cfe231a2be841c140","final_sha256":"5aa7f84fc3e45d5e7ac7d06d48440d61c8ec80c2e567697214201ab87a338745","old_mobile_blob":"352ccd69ffa70a153489079b29be45d5ccd5068a","old_mobile_sha256":"0a9f3247fae4b4eae2a3fca47a389065e09d77207d87367f1872b3f495609afa","patch_sha256":"0e9cecc63f4381cf448c5ef932afdd6c4a87d16ff9c2bc72323d3078dc35b343","path":"tests/py/test_pytest_harness_config.py","purpose":"existing reviewed cleanup diagnostic regression and failure-only evidence; no invented no-op"},"helperBranch":"2026-09-30-mobile-bundle-transfer","independentReceiptSha256":"ed2d359a42737ba97be817b58c36963edfa5b02e31739b0edf6d408fa82bd5eb","intermediateComplete":false,"intermediateTree":"c77f67b9d4693b0b88ca81bea1c6a38fb23becdc","manifestBytes":475639,"manifestParts":[".integration-transfer/2026-10-01-mobile-actual/manifest/full-001.txt",".integration-transfer/2026-10-01-mobile-actual/manifest/full-002.txt"],"manifestSha256":"9c13387fa924eb2dbfbe474aee36c9d17aef53e814b4001adeb1a7b08f59d754","maxBlobBytes":1995416,"parents":[{"commit":"4a540bb5ae2b5ee568a4b170c560483162cdbc43","ref":"refs/heads/2026-09-25-mobile-layout","source":"mobile","tree":"501fe9581d7655d0b4560828cf50eefe8e93557d"},{"commit":"db5396be48483f80cb93d403532e90026ff1cd00","ref":"refs/heads/main","source":"main","tree":"8393a928c129277942b844a6055161e1eaa2fb04"}],"payloadPrefix":".integration-transfer/2026-10-01-mobile-actual","publicationManifestSha256":"5df3ed61e58a422b6f748ff4c5a10f0f7ef38c526a10cdb14070da2fc838ce5c","remote":"https://github.com/idanilovqa/AlbumHaven.git","repository":"idanilovqa/AlbumHaven","schemaVersion":1,"stagedFiles":[{"bytes":30663,"git_blob":"03b071b6bea6ebb2a405bf7ae3f8a4940a3e9fe7","path":".integration-transfer/2026-10-01-mobile-actual/blobs/03b071b6bea6ebb2a405bf7ae3f8a4940a3e9fe7-001.txt","sha256":"c615d60a1690f4b84f365785c4bf87fe1c5883c4f988ae93113e8b86ecbc31e9"},{"bytes":12743,"git_blob":"0613c7e87340b75f2b83fdff4f40ca0d3ac71654","path":".integration-transfer/2026-10-01-mobile-actual/blobs/0613c7e87340b75f2b83fdff4f40ca0d3ac71654-001.txt","sha256":"f5612cfef2164eb73cacd3f623a3866b903a00893990562f63580561a2bca2d2"},{"bytes":5521,"git_blob":"0ddb423896b899c9d4b613063ecec066758d5008","path":".integration-transfer/2026-10-01-mobile-actual/blobs/0ddb423896b899c9d4b613063ecec066758d5008-001.txt","sha256":"394b49430592cbdbdb5850654886ed53aa674dcf70af75f87feab4a02d2335c4"},{"bytes":9840,"git_blob":"11f573026e77d6180185ff6f9daa3f708c8468d9","path":".integration-transfer/2026-10-01-mobile-actual/blobs/11f573026e77d6180185ff6f9daa3f708c8468d9-001.txt","sha256":"704b94f9258c1eb2f7243b124f2fbf199fdb14460e1dc5b47773b0e46c5c3142"},{"bytes":21078,"git_blob":"19796f197e237bda71c89c57a4d56f922bf329fa","path":".integration-transfer/2026-10-01-mobile-actual/blobs/19796f197e237bda71c89c57a4d56f922bf329fa-001.txt","sha256":"3d099b4264005ceb2661fcacb2a05c498442def4b471d3fefa195d1e25e13fb5"},{"bytes":5442,"git_blob":"1ca2a3e0b53b3d353612e6c13bbfb162423ffc8f","path":".integration-transfer/2026-10-01-mobile-actual/blobs/1ca2a3e0b53b3d353612e6c13bbfb162423ffc8f-001.txt","sha256":"76239f29292110ed6d3bd2181364c76062c49c51ec82ef0b699cb717ff38e2ba"},{"bytes":156945,"git_blob":"1ce05f7007d88714affb00e63a41d53147a9a600","path":".integration-transfer/2026-10-01-mobile-actual/blobs/1ce05f7007d88714affb00e63a41d53147a9a600-001.txt","sha256":"afe10e9f4a182956fe7880260dff37b3efac7787b40c51432a23766360d4de51"},{"bytes":2031,"git_blob":"1e9c6b0f56090acbd3c42e2b2664c7318809cb8a","path":".integration-transfer/2026-10-01-mobile-actual/blobs/1e9c6b0f56090acbd3c42e2b2664c7318809cb8a-001.txt","sha256":"0139f3c4799e3fabd24860763336c88a90e48d818577b89919ecf5f6b6209e45"},{"bytes":8801,"git_blob":"2525fa0e805bd4e0aa7e43b92c10be47b2b78008","path":".integration-transfer/2026-10-01-mobile-actual/blobs/2525fa0e805bd4e0aa7e43b92c10be47b2b78008-001.txt","sha256":"2e71875159140c048dfaa373aee5446200ee5702e6508dae09417d36f709f543"},{"bytes":74582,"git_blob":"34928c90c0d177f1147159d5b54dba3c0bbbd866","path":".integration-transfer/2026-10-01-mobile-actual/blobs/34928c90c0d177f1147159d5b54dba3c0bbbd866-001.txt","sha256":"339f9801b0fb435a1b480ea6c981c5b30d092f022cb77356794182435e3366bc"},{"bytes":34538,"git_blob":"4111afee2bed59f11971174337dd8873f20b2ea7","path":".integration-transfer/2026-10-01-mobile-actual/blobs/4111afee2bed59f11971174337dd8873f20b2ea7-001.txt","sha256":"6488999c4ea5001191858b81e8bbed4189adf36c185c21d9c40ec3f73adf6a1e"},{"bytes":53759,"git_blob":"43199a1ad3eec3cd53b7a44a7de8757f396818cd","path":".integration-transfer/2026-10-01-mobile-actual/blobs/43199a1ad3eec3cd53b7a44a7de8757f396818cd-001.txt","sha256":"7bafcf3dfd880352f66f1f34c917c6aa63f9bffc684b6ff04c5960864cef2a8a"},{"bytes":24722,"git_blob":"4548e8930e0c6b813fab719d439ae9b655b166fe","path":".integration-transfer/2026-10-01-mobile-actual/blobs/4548e8930e0c6b813fab719d439ae9b655b166fe-001.txt","sha256":"8ced35c36e47c80907765b96d326b63c126299b00c5f57351375642b9036046c"},{"bytes":64726,"git_blob":"4774cd2727d00b574615fa4ca96dc97afe6da795","path":".integration-transfer/2026-10-01-mobile-actual/blobs/4774cd2727d00b574615fa4ca96dc97afe6da795-001.txt","sha256":"bf7ae866c6f175b62e765193797ac33964f40973b67e798367f9e6b2a0b75278"},{"bytes":14645,"git_blob":"4958eb79e1dc0d53bfb680081c332a7c4a74548a","path":".integration-transfer/2026-10-01-mobile-actual/blobs/4958eb79e1dc0d53bfb680081c332a7c4a74548a-001.txt","sha256":"1f8c5f134ec3667976c9854c018fff1af42aa04ccb0ce47270726d83a799b85c"},{"bytes":2815,"git_blob":"4975d9db11f78850c71bead7b4e5f91cdcf8eb7d","path":".integration-transfer/2026-10-01-mobile-actual/blobs/4975d9db11f78850c71bead7b4e5f91cdcf8eb7d-001.txt","sha256":"c45b8dbdbf26613fbbbc9abb7363e663b023a377d15fb5924869e8a7611777ca"},{"bytes":5310,"git_blob":"4dffc0bfef394436b15d1d936fe5f638dace92fa","path":".integration-transfer/2026-10-01-mobile-actual/blobs/4dffc0bfef394436b15d1d936fe5f638dace92fa-001.txt","sha256":"e63c3a4997545eb02495ac2273b84c6404ae492db090e8df183357b6e5c53d8c"},{"bytes":57603,"git_blob":"4f757687da635b2fc6e0e22d9d281f70cd1776a8","path":".integration-transfer/2026-10-01-mobile-actual/blobs/4f757687da635b2fc6e0e22d9d281f70cd1776a8-001.txt","sha256":"1d12737cb34bd7525bed7969a8013d335924f438f2984b5b34d20dae4af51738"},{"bytes":53585,"git_blob":"54230fb3cccda0906b3f323d88eede02ebb99c57","path":".integration-transfer/2026-10-01-mobile-actual/blobs/54230fb3cccda0906b3f323d88eede02ebb99c57-001.txt","sha256":"96aadb5434d3b6c41b56a57b501338f4bf5b4e0903c8168f8fc67012093967f2"},{"bytes":21141,"git_blob":"5a442ce0b062dc805d94344592e8edd1e7df514e","path":".integration-transfer/2026-10-01-mobile-actual/blobs/5a442ce0b062dc805d94344592e8edd1e7df514e-001.txt","sha256":"b429e4473f0338df43e02fbcc0605153760b129b16053571941e5118132f0d53"},{"bytes":2874,"git_blob":"5a4cefd1f70443c448e6957ac8ad5677c4cecd05","path":".integration-transfer/2026-10-01-mobile-actual/blobs/5a4cefd1f70443c448e6957ac8ad5677c4cecd05-001.txt","sha256":"88bc9488307abfa22b3b611429453a9da70a10e9bc9bbd6e0ff369a28d827c7f"},{"bytes":93199,"git_blob":"5d09159e8bf60bec37447dcb568cd84e913426a7","path":".integration-transfer/2026-10-01-mobile-actual/blobs/5d09159e8bf60bec37447dcb568cd84e913426a7-001.txt","sha256":"dd0eefa3b9cc49b9838031cf3bb257683d9ddc9fa0a863d985b8fd80b0a3b335"},{"bytes":8549,"git_blob":"5db61f0a387009381e1c53ec9c67f0bd5024cc4d","path":".integration-transfer/2026-10-01-mobile-actual/blobs/5db61f0a387009381e1c53ec9c67f0bd5024cc4d-001.txt","sha256":"5ef976c40c43e2babc9852b7bebc3e6b58202e8f6098f9364dc4199d0874b5eb"},{"bytes":23476,"git_blob":"5f01135bb540f75dcfd7f30010c49640a6036951","path":".integration-transfer/2026-10-01-mobile-actual/blobs/5f01135bb540f75dcfd7f30010c49640a6036951-001.txt","sha256":"dfe629c4118e2e72dc419a0dd587918c1a4648647a5a4c9bce27a2cc8f194fdf"},{"bytes":1394,"git_blob":"60b7b26a4c1f08cd823adac42ef686df29b1918a","path":".integration-transfer/2026-10-01-mobile-actual/blobs/60b7b26a4c1f08cd823adac42ef686df29b1918a-001.txt","sha256":"f69f8562590a245c3522bf410e84dec466da12acdbcddadeb03636b8858d3447"},{"bytes":6694,"git_blob":"62f7188bfb345176791b6daa67a90d5d79d8d498","path":".integration-transfer/2026-10-01-mobile-actual/blobs/62f7188bfb345176791b6daa67a90d5d79d8d498-001.txt","sha256":"6bacc0af936fd76fe5f5dc12e0ec08b1c2ae0a289d084f6200e5239eee6f86b2"},{"bytes":26501,"git_blob":"700a0f47a534340a1839d10647e275abc0699fbe","path":".integration-transfer/2026-10-01-mobile-actual/blobs/700a0f47a534340a1839d10647e275abc0699fbe-001.txt","sha256":"fb46154d513532dd37a8abf5f8af22f8368a063556f0fa6ea37699e0f5c2b095"},{"bytes":3740,"git_blob":"7112c685129e5b9db017aca824b8b8485e4e9461","path":".integration-transfer/2026-10-01-mobile-actual/blobs/7112c685129e5b9db017aca824b8b8485e4e9461-001.txt","sha256":"6f170bd620d6d448abe041a1c0fb11dbf72d9ae43b01bf8513432dee7fb4068f"},{"bytes":10337,"git_blob":"76464dd5895fd8c710639ff9d2bfa4df072ea00c","path":".integration-transfer/2026-10-01-mobile-actual/blobs/76464dd5895fd8c710639ff9d2bfa4df072ea00c-001.txt","sha256":"37b9a952d20551ef527dbe9beef4164e3387d2069cc35755f55e1bce6fb5be85"},{"bytes":22764,"git_blob":"76ac6d0018eeee7916966c660d5fc60e9e573d26","path":".integration-transfer/2026-10-01-mobile-actual/blobs/76ac6d0018eeee7916966c660d5fc60e9e573d26-001.txt","sha256":"9330341887187d44fe149fa337842401ad90ae9b0e67cdf001621ef871d701be"},{"bytes":15785,"git_blob":"7d972f837308a723570097a21290fcaeb851dadc","path":".integration-transfer/2026-10-01-mobile-actual/blobs/7d972f837308a723570097a21290fcaeb851dadc-001.txt","sha256":"5c45d39ce8a771b6e326d88245156ee327f4cbcb0b1382bad315bbeb79afd51b"},{"bytes":5195,"git_blob":"81289107a2a3fb41ce0b90ed26a4cf9174c51be9","path":".integration-transfer/2026-10-01-mobile-actual/blobs/81289107a2a3fb41ce0b90ed26a4cf9174c51be9-001.txt","sha256":"361112428e98e834129d5973165727b8c897ac40c7d6660e1400c34b38a6a2b1"},{"bytes":14115,"git_blob":"85a4b80fec5bd12fac8c8f0878c441ef41520bc9","path":".integration-transfer/2026-10-01-mobile-actual/blobs/85a4b80fec5bd12fac8c8f0878c441ef41520bc9-001.txt","sha256":"17ae2e197cc84704c3954b697c9f7e451a82ec140acf4054889296698b5a3eb9"},{"bytes":10811,"git_blob":"870992b6cb2bb7c709be8864d9f35469afc16ce6","path":".integration-transfer/2026-10-01-mobile-actual/blobs/870992b6cb2bb7c709be8864d9f35469afc16ce6-001.txt","sha256":"a6ce9ce176135b2b38a8ed048f06547fb3b36521ed5c6ad6b3b88c5de58dde72"},{"bytes":7807,"git_blob":"8ce5bedd85c0c6e62d623ca38a2d2aca827738cb","path":".integration-transfer/2026-10-01-mobile-actual/blobs/8ce5bedd85c0c6e62d623ca38a2d2aca827738cb-001.txt","sha256":"59c15aa1f4091c4d7a62027cc11ef458275dad279a5a31be16d38bc5dac56ab0"},{"bytes":18053,"git_blob":"90bc0850226444c4f7d1bf9fee5b8cc4112ee3b8","path":".integration-transfer/2026-10-01-mobile-actual/blobs/90bc0850226444c4f7d1bf9fee5b8cc4112ee3b8-001.txt","sha256":"aea7b68008dddfe8002efbf10fc3fe3f9c305aca8e8a1f36cc1f401780121c27"},{"bytes":6466,"git_blob":"917342c1bb62b36131f7596bb6be220ae93fb61e","path":".integration-transfer/2026-10-01-mobile-actual/blobs/917342c1bb62b36131f7596bb6be220ae93fb61e-001.txt","sha256":"68d7327b65fe15b3e78d27bece71032761c227d777a7b20cf51ea22301712596"},{"bytes":35458,"git_blob":"942488bddf0a62be31915006df88ebb58ee96b95","path":".integration-transfer/2026-10-01-mobile-actual/blobs/942488bddf0a62be31915006df88ebb58ee96b95-001.txt","sha256":"4b53ca262ffc101a23bc8324e5e6d34c05c0682dd7a622d742a0ef9b7cc9cc27"},{"bytes":1088,"git_blob":"98bd2b7215dd04722130596ddf1e1cd4e982fead","path":".integration-transfer/2026-10-01-mobile-actual/blobs/98bd2b7215dd04722130596ddf1e1cd4e982fead-001.txt","sha256":"d61510556637cf936476c3432e4fa8ce514aa612ac43e8ab747a46eaec062683"},{"bytes":115500,"git_blob":"9c7d8490946f17d16da58b2b37b39c820de9e8ec","path":".integration-transfer/2026-10-01-mobile-actual/blobs/9c7d8490946f17d16da58b2b37b39c820de9e8ec-001.txt","sha256":"34487f937a2456741603965b408787ae0efdbea0255a53a87822ae44df31c0b4"},{"bytes":1180,"git_blob":"a0973cfdc34ee7c05c61558f74700448de602b43","path":".integration-transfer/2026-10-01-mobile-actual/blobs/a0973cfdc34ee7c05c61558f74700448de602b43-001.txt","sha256":"952b88ba0084c0aebce4e7ebef75331e1a195164675140c5f5fde3ec9bee59ce"},{"bytes":11068,"git_blob":"a4a1ef14f7ea9aa651f81aae33d7c7ade2eeec08","path":".integration-transfer/2026-10-01-mobile-actual/blobs/a4a1ef14f7ea9aa651f81aae33d7c7ade2eeec08-001.txt","sha256":"d89f87a741821b5fb7f42cb2131979bebbf6f88947fd8e9486f6b8ae93d0dd15"},{"bytes":11284,"git_blob":"a4c69bd13977c6e6f2c837a1df23de4b913e97cb","path":".integration-transfer/2026-10-01-mobile-actual/blobs/a4c69bd13977c6e6f2c837a1df23de4b913e97cb-001.txt","sha256":"9f040029a349e7e24dc3604c5a4a31692b3b4b3f338f69c8756c04dcf91d67ad"},{"bytes":99430,"git_blob":"a5ac64183df6ff6fdf1672b9fcfadee9b04532a6","path":".integration-transfer/2026-10-01-mobile-actual/blobs/a5ac64183df6ff6fdf1672b9fcfadee9b04532a6-001.txt","sha256":"21df0e21b9a2bd51f509532a2725f2921712b0216207cff8d0fc77f54e284660"},{"bytes":47984,"git_blob":"a65b75f4686c594bf30e3f2c17aab57294907935","path":".integration-transfer/2026-10-01-mobile-actual/blobs/a65b75f4686c594bf30e3f2c17aab57294907935-001.txt","sha256":"fd9da6f597ccf53125d9dde263e1fa83532df0b62456fa6931c85da0f8768b9a"},{"bytes":50999,"git_blob":"a68cb3fd65e1775dba29db60952e68b1349f65a8","path":".integration-transfer/2026-10-01-mobile-actual/blobs/a68cb3fd65e1775dba29db60952e68b1349f65a8-001.txt","sha256":"9d2c78a7507c7003c3b09fc954ae8867d62c5076c660917efa778ab11ab8e79e"},{"bytes":14230,"git_blob":"a6f4ffd7232f30ef91570834a73cb681d048a0b8","path":".integration-transfer/2026-10-01-mobile-actual/blobs/a6f4ffd7232f30ef91570834a73cb681d048a0b8-001.txt","sha256":"62ffb3aba68599df152eeaf5aaf98c8c102f7acfc883166c132022a943180e8f"},{"bytes":3748,"git_blob":"b0a282ad8b1ddefdd2a92d3942de4e0938bb8bab","path":".integration-transfer/2026-10-01-mobile-actual/blobs/b0a282ad8b1ddefdd2a92d3942de4e0938bb8bab-001.txt","sha256":"33fbbb7e4ffbcc389924c009f0db309f9aacaa319e0c0ac9524ea66ee2b32947"},{"bytes":14810,"git_blob":"b0b25142dcb72fea2de695913fd99564a8fe7718","path":".integration-transfer/2026-10-01-mobile-actual/blobs/b0b25142dcb72fea2de695913fd99564a8fe7718-001.txt","sha256":"e771e21b7ded3330fa79f5e140765c836607e890793532046d9197453836554c"},{"bytes":19128,"git_blob":"b26fdbefa9f3cd2d0d11f8d088470a8b16955ddc","path":".integration-transfer/2026-10-01-mobile-actual/blobs/b26fdbefa9f3cd2d0d11f8d088470a8b16955ddc-001.txt","sha256":"9d0d8233ab0a916a2d09298bad18436025776cedc72ec139914827a0c3182295"},{"bytes":7647,"git_blob":"b56a9803b45e775669c7e2f56618ca8d13f898b5","path":".integration-transfer/2026-10-01-mobile-actual/blobs/b56a9803b45e775669c7e2f56618ca8d13f898b5-001.txt","sha256":"239f0892ffa945016ffd9de231dda8e70399824f5a240e85900b821bec577994"},{"bytes":63730,"git_blob":"c03f411274e3ae7691f2855f348b4c1f0b314e7b","path":".integration-transfer/2026-10-01-mobile-actual/blobs/c03f411274e3ae7691f2855f348b4c1f0b314e7b-001.txt","sha256":"f090f5f405bf98d0cdfb0cf9dd31e56582d426239517a13af0306fb383554749"},{"bytes":49235,"git_blob":"c27c514fef8ae2e9d0930fb155ad580692a77a61","path":".integration-transfer/2026-10-01-mobile-actual/blobs/c27c514fef8ae2e9d0930fb155ad580692a77a61-001.txt","sha256":"4cea5fec1803148c546e52739b55c5c130ab928581568d1c0d2ee62fa490fba3"},{"bytes":25228,"git_blob":"c33879b759d1cb4cfab214f40f20af64209b3ea9","path":".integration-transfer/2026-10-01-mobile-actual/blobs/c33879b759d1cb4cfab214f40f20af64209b3ea9-001.txt","sha256":"9f0c0f4c439cccda5271f2ff84bf13b03e11144050fe55d37314bf61664368b2"},{"bytes":64574,"git_blob":"c6e371492734b96c40075bbdd270a8aae35c2350","path":".integration-transfer/2026-10-01-mobile-actual/blobs/c6e371492734b96c40075bbdd270a8aae35c2350-001.txt","sha256":"765e28ae5d8470bf0332e6152c4c331fb260174a184aa44f9a10b5faad04bcf0"},{"bytes":9218,"git_blob":"cd0948c9080fd95e767229e52580df5e219e7710","path":".integration-transfer/2026-10-01-mobile-actual/blobs/cd0948c9080fd95e767229e52580df5e219e7710-001.txt","sha256":"7f46805bac2b2938ea3328ef9ac5c0f0d032e0b2f6831293a86f9780228e54c1"},{"bytes":96926,"git_blob":"cfb195c464d22008c8df735c59149d3b127c32df","path":".integration-transfer/2026-10-01-mobile-actual/blobs/cfb195c464d22008c8df735c59149d3b127c32df-001.txt","sha256":"89abfb5a77593710fab4d2d16c47235aea99812a02a2e8805b1404eca655d9b8"},{"bytes":31324,"git_blob":"d1be82909140818cc3781a3b821a0a0f6f477a88","path":".integration-transfer/2026-10-01-mobile-actual/blobs/d1be82909140818cc3781a3b821a0a0f6f477a88-001.txt","sha256":"5b034b9c8dbb840b6e5ea23f4ccd7a905838a08823cb3b7683b1973c457a9501"},{"bytes":21815,"git_blob":"d3a16be520817cbcdeea6ab615938dd707c3151a","path":".integration-transfer/2026-10-01-mobile-actual/blobs/d3a16be520817cbcdeea6ab615938dd707c3151a-001.txt","sha256":"c7706e3a37c3bb1238883614bda7558e79a491199dbd1e69a670af2d7eb2641a"},{"bytes":240000,"git_blob":"61e3f9fd4dbf3524de021196b95bce7f00f401be","path":".integration-transfer/2026-10-01-mobile-actual/blobs/d7244c76b55bacbca05d61b33d0ad89d0cfca90a-001.txt","sha256":"f06d7e0ce5963a886ffd013ae84e67fe780d72241a24cca8b0b21b75453960ff"},{"bytes":32592,"git_blob":"63c2ddd029dc376f28924cb71ab2d069ac1b389e","path":".integration-transfer/2026-10-01-mobile-actual/blobs/d7244c76b55bacbca05d61b33d0ad89d0cfca90a-002.txt","sha256":"4df1e0ea4960c43c489f32afe13877737e5fe4a7d6acf012edb251fc4d94d428"},{"bytes":2120,"git_blob":"d981c6f91ffd75212c79a419c480982a7010395d","path":".integration-transfer/2026-10-01-mobile-actual/blobs/d981c6f91ffd75212c79a419c480982a7010395d-001.txt","sha256":"bee06c8c456c6a74ce22f45bbe3260fc8adb1d14c46134df407c0a631064b36c"},{"bytes":14259,"git_blob":"daf698e709dfc850f10563e644901a7b81690b64","path":".integration-transfer/2026-10-01-mobile-actual/blobs/daf698e709dfc850f10563e644901a7b81690b64-001.txt","sha256":"1a342ea2aadc851955664f80f2509f82bf4af3515b3b37164c5b629bb4367cbc"},{"bytes":2269,"git_blob":"db214a90a92b3332ed8b6957a30829047b02faaa","path":".integration-transfer/2026-10-01-mobile-actual/blobs/db214a90a92b3332ed8b6957a30829047b02faaa-001.txt","sha256":"36cb1055093afab1be56a99a35ddb816a3093c2202aed4c566522f1891dfcfdb"},{"bytes":110365,"git_blob":"dd9c318b9802abe4b2f2287d3ee67208a21dafba","path":".integration-transfer/2026-10-01-mobile-actual/blobs/dd9c318b9802abe4b2f2287d3ee67208a21dafba-001.txt","sha256":"8388978dc407027a58db741cb7a4b4b2514a788b6c008bd364c5d04ca0a7c8df"},{"bytes":18795,"git_blob":"debb4b4f423dcff525c58cde28b5d9c9f3ed602d","path":".integration-transfer/2026-10-01-mobile-actual/blobs/debb4b4f423dcff525c58cde28b5d9c9f3ed602d-001.txt","sha256":"c987fa7eb8ab7f03a6245ef6aca314348d7e7a2686b9b2a21387467d3d404f1c"},{"bytes":30504,"git_blob":"e29fa680ad861c3f988affa511d5a0363f357f35","path":".integration-transfer/2026-10-01-mobile-actual/blobs/e29fa680ad861c3f988affa511d5a0363f357f35-001.txt","sha256":"122ad8ba066a370354ee63f53fe1c013f2934fc89c4d344d0e212c8b7aea20d7"},{"bytes":25533,"git_blob":"e4bfde16cdce62756cb6508cb5edef5ad5073352","path":".integration-transfer/2026-10-01-mobile-actual/blobs/e4bfde16cdce62756cb6508cb5edef5ad5073352-001.txt","sha256":"5561b453fb460af3d5a2e001bce46384759fb54fa3cabd48086189e23c23aa04"},{"bytes":47450,"git_blob":"e519d471a5373dd5bb24ab40d0447257bd36c237","path":".integration-transfer/2026-10-01-mobile-actual/blobs/e519d471a5373dd5bb24ab40d0447257bd36c237-001.txt","sha256":"7730ece3372a90b4674dddb0edf09e82143100369715057e6faf9a97f22a0574"},{"bytes":1197,"git_blob":"e57a28e6cdc64906493c2a0312d6cc1277ddf8c0","path":".integration-transfer/2026-10-01-mobile-actual/blobs/e57a28e6cdc64906493c2a0312d6cc1277ddf8c0-001.txt","sha256":"aadf3a3cf618006445e83ad4281fed0c1fb8932f0530e4af55f35f16eff49f8a"},{"bytes":69951,"git_blob":"ea0b9d3d37752befca2dc3b139fa8ec62676e66c","path":".integration-transfer/2026-10-01-mobile-actual/blobs/ea0b9d3d37752befca2dc3b139fa8ec62676e66c-001.txt","sha256":"56e813fd6a62b1a3cd0c88f838a0757da31b6fbe008b536c4977b4cd96090537"},{"bytes":240000,"git_blob":"a0e6b9f80294e3265d7782216f4482fd5575c93c","path":".integration-transfer/2026-10-01-mobile-actual/blobs/ed777cc6b5ea3cccf34d0ba3cbe273b7e6b3ecd9-001.txt","sha256":"159908598d68b1d1918c6c35bb4d65b3daf9761f0ddd498bf8647f11ad18fae7"},{"bytes":14098,"git_blob":"493f2f715498d9cd0fe96caa1159d510303cc2ca","path":".integration-transfer/2026-10-01-mobile-actual/blobs/ed777cc6b5ea3cccf34d0ba3cbe273b7e6b3ecd9-002.txt","sha256":"0c30f2964605ef642253acde9a82c6da64c0214ec97e489cc23a7a3e73ef2c55"},{"bytes":2008,"git_blob":"ee09554a792bd9362040141af2b90afdc7aea24e","path":".integration-transfer/2026-10-01-mobile-actual/blobs/ee09554a792bd9362040141af2b90afdc7aea24e-001.txt","sha256":"c70a0cfe115be23b461e62ac66af08b2db49cfed7d986195450f8bae760a861e"},{"bytes":78096,"git_blob":"f944d7e3607e154f22df772277765744eecaaf71","path":".integration-transfer/2026-10-01-mobile-actual/blobs/f944d7e3607e154f22df772277765744eecaaf71-001.txt","sha256":"39c11796619e5a35e6b7843b3e54ac9dbf9d55806c21d0bf8aecb5723b2ff95f"},{"bytes":17324,"git_blob":"f9b89166b443685a1a6c999561648adf66151009","path":".integration-transfer/2026-10-01-mobile-actual/blobs/f9b89166b443685a1a6c999561648adf66151009-001.txt","sha256":"59b87a34555bc6d5a0c596d5d786961e11ee9011a2075cd7e9fa19ebca594d50"},{"bytes":3767,"git_blob":"fa8585ed63da1e7a8ecff39a8d9ecaf79600ad94","path":".integration-transfer/2026-10-01-mobile-actual/blobs/fa8585ed63da1e7a8ecff39a8d9ecaf79600ad94-001.txt","sha256":"74f67f6044fcf50e7485e7b3a288500df18f08459c035acc1b95c1371635dd89"},{"bytes":4117,"git_blob":"fffd2e9070f951ed1ef68692687cd6d86a5f2ad6","path":".integration-transfer/2026-10-01-mobile-actual/blobs/fffd2e9070f951ed1ef68692687cd6d86a5f2ad6-001.txt","sha256":"0f695b4d4bc1d26c7ca02066d603cc6a5efa8300ca7a8a23914004ee44fcc083"},{"bytes":240000,"git_blob":"ee91b73006d95ca079328d61c4ba36a3d2be446b","path":".integration-transfer/2026-10-01-mobile-actual/manifest/full-001.txt","sha256":"6c08fda550f290bcd622b61be326717df66bc1efe3c0b73bfc2bd64e57f1e09f"},{"bytes":235639,"git_blob":"beba5b13ea9d4e3dc4770372596c3fa1a422a1b5","path":".integration-transfer/2026-10-01-mobile-actual/manifest/full-002.txt","sha256":"2522f81703dec84c1953026d7e42a7e5ff8a326666cdbb179a241f773c7847d2"}],"stagingBase":"01955baf87f99680278f13be8b5fdd064344d574","targetRef":"refs/heads/2026-09-25-mobile-layout","workflowPath":".github/workflows/verified-mobile-actual-integration.yml"}\n')
+
+          environment = os.environ
+          event = json.loads(Path(environment["GITHUB_EVENT_PATH"]).read_text())
+          verify_event(PLAN, environment, event)
+          token = environment.get("GH_TOKEN")
+          require(bool(token), "transient repository token missing")
+          repo = Path(environment["GITHUB_WORKSPACE"]) / "objects"
+          temporary = Path(environment["RUNNER_TEMP"])
+          require_parent_refs(repo, PLAN, token)
+          for parent in PLAN["parents"]:
+              git(repo, "fetch", "--no-tags", PLAN["remote"], parent["commit"], token=token)
+          parent_trees = verify_parent_objects(repo, PLAN)
+
+          require(re.fullmatch(r"[1-9][0-9]*", environment.get("ARTIFACT_ID", "")), "artifact ID missing")
+          records, blobs = read_artifact(temporary / "integration-downloaded", PLAN, environment, environment["PROOF_SHA256"])
+          verify_existing_blobs(repo, records, parent_trees)
+          construct_tree(repo, records, blobs, temporary / "publish.index", PLAN["intermediateTree"])
+          commit = create_merge(repo, records, PLAN, parent_trees)
+          print("Prepared reviewed intermediate commit " + commit + " with tree " + PLAN["intermediateTree"], flush=True)
+          push_once(repo, PLAN, commit, token, temporary / "integration-push-hooks")
+          print("Verified intermediate mobile merge " + commit + "; genuine final Editor change and native gates remain required.")
+

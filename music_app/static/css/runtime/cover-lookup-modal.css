@@ -535,9 +535,14 @@
 .cover-lookup-art-card:focus-within .cover-lookup-art-delete {
   opacity: 1;
 }
-.cover-lookup-art-delete:hover {
+.cover-lookup-art-delete:hover:not(:disabled) {
   border-color: rgba(252,165,165,0.72);
   color: #fff1f2;
+}
+.cover-lookup-art-card .cover-lookup-art-delete:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+  filter: grayscale(1);
 }
 .cover-lookup-empty {
   padding: 16px;

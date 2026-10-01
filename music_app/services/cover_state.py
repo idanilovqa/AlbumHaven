@@ -147,11 +147,12 @@ def selected_local_cover_source(
     if active_path is None:
         return None
     fallback = str(active_path)
+    # Identical initial files do not prove a saved picker choice. Only a
+    # persisted selection revision can identify a retained source.
+    if not revision:
+        return fallback
     try:
         size = active_path.stat().st_size
-        if not revision:
-            with active_path.open("rb") as image:
-                revision = hashlib.file_digest(image, "sha256").hexdigest()
     except OSError:
         return fallback
     for item in candidates:
@@ -194,17 +195,18 @@ def serialize_cover_gallery_payload(
         is_squareish_cover=is_squareish_cover,
         active_cover_path=None if active_remote_cover else active_cover_path,
     )
+    selected_source_path = None if active_remote_cover else selected_local_cover_source(
+        local_candidates, active_cover_path, active_cover_revision,
+    )
     if active_cover_revision and not active_remote_cover:
         for candidate in local_candidates:
-            if candidate.get("is_active"):
+            if candidate.get("is_active") or candidate["path"] == selected_source_path:
                 candidate["cover_revision"] = active_cover_revision
-                break
     return {
         "ok": True,
         "album_root": str(album_root),
         "active_cover_path": str(active_cover_path) if active_cover_path else None,
-        "selected_source_path": (None if active_remote_cover else
-                                 selected_local_cover_source(local_candidates, active_cover_path, active_cover_revision)),
+        "selected_source_path": selected_source_path,
         "remote_cover": active_remote_cover,
         "local_covers": [item for item in local_candidates if item.get("is_squareish")],
         "other_art": [item for item in local_candidates if not item.get("is_squareish")],

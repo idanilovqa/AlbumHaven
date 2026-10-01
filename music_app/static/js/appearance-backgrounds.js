@@ -873,7 +873,8 @@
         if (aggregate) { revision = response.revision; playerRecentSets = normalizePlayerSets(response.player_recent_sets); }
         saved = preference; draft = copy(saved); deviceProfiles = profileApi.normalize(response.device_profiles, appearancePreferenceSections(saved)); savedDeviceProfiles = copy(deviceProfiles); applyActiveDeviceSection(); pendingPlayerSet = null; recentColors = history; waveformColorUpdates = []; errors = {}; syncInputs(); apply(copy(saved));
         for (const [profile, mode] of submittedSeekbars) {
-          applySeekbarMode(mode, profile);
+          await applySeekbarMode(mode, profile, () => ownGeneration === generation);
+          if (ownGeneration !== generation) return false;
           seekbarModes.get(profile).saved = mode;
         }
         return true;

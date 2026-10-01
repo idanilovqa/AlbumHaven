@@ -49,6 +49,7 @@
     const enabled = Number.isSafeInteger(accountId) && accountId > 0;
     const profiles = clone(bootstrap.profiles || {});
     const pending = new Map();
+    const revisions = new Map(), savedRevisions = new Map();
     let timer = null;
     let inFlight = null;
     let syncState = bootstrap.load_failed ? 'unavailable' : 'saved';
@@ -85,36 +86,48 @@
       if (JSON.stringify(current[field]) === JSON.stringify(value)) return true;
       current[field] = clone(value);
       pending.set(selected, { ...(pending.get(selected) || {}), [field]: clone(value) });
+      revisions.set(selected, (revisions.get(selected) || 0) + 1);
       notify('pending');
       schedule();
       return true;
     };
     async function flush() {
-      if (!enabled || inFlight || !pending.size) return inFlight;
+      if (!enabled) return false;
+      const targets = new Map(revisions);
       if (timer !== null) env.clearTimeout(timer);
       timer = null;
-      const [selected, changes] = pending.entries().next().value;
-      pending.delete(selected);
-      let succeeded = false;
-      inFlight = (async () => {
-        try {
-          const response = await (options.fetch || env.fetch.bind(env))('/account/layout-preferences', {
-            method: 'PUT', credentials: 'same-origin', cache: 'no-store', keepalive: true,
-            headers: { 'Content-Type': 'application/json', Accept: 'application/json', 'X-Album-Haven-Account': String(accountId) },
-            body: JSON.stringify({ profile: selected, changes }),
-          });
-          if (!response.ok || response.redirected) throw new Error('Preferences were not saved.');
-          succeeded = true;
-          notify(pending.size ? 'pending' : 'saved');
-        } catch (_error) {
-          pending.set(selected, { ...changes, ...(pending.get(selected) || {}) });
-          notify('unsaved');
-        } finally {
-          inFlight = null;
-          if (succeeded && pending.size) schedule();
+      const isPending = selected => (savedRevisions.get(selected) || 0) < (targets.get(selected) || 0);
+      while ([...targets.keys()].some(isPending)) {
+        if (inFlight) {
+          if (!await inFlight) return false;
+          continue;
         }
-      })();
-      return inFlight;
+        const [selected, changes] = [...pending].find(([candidate]) => isPending(candidate));
+        const revision = revisions.get(selected);
+        pending.delete(selected);
+        inFlight = (async () => {
+          try {
+            const response = await (options.fetch || env.fetch.bind(env))('/account/layout-preferences', {
+              method: 'PUT', credentials: 'same-origin', cache: 'no-store', keepalive: true,
+              headers: { 'Content-Type': 'application/json', Accept: 'application/json', 'X-Album-Haven-Account': String(accountId) },
+              body: JSON.stringify({ profile: selected, changes }),
+            });
+            if (!response.ok || response.redirected) throw new Error('Preferences were not saved.');
+            savedRevisions.set(selected, revision);
+            notify(pending.size ? 'pending' : 'saved');
+            return true;
+          } catch (_error) {
+            pending.set(selected, { ...changes, ...(pending.get(selected) || {}) });
+            if (timer !== null) env.clearTimeout(timer);
+            timer = null;
+            notify('unsaved');
+            return false;
+          }
+        })();
+        try { if (!await inFlight) return false; }
+        finally { inFlight = null; }
+      }
+      return true;
     }
     const api = {
       enabled, profile, read, write, flush,

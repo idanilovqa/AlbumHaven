@@ -19,6 +19,7 @@ const helperSource = fs.readFileSync(helperPath, 'utf8');
 function loadHelper(overrides = {}) {
   const context = {
     window: {},
+    document: { getElementById: () => null },
     ButtonComponent: require(path.join(__dirname, '../../../music_app/static/js/button-component.js')),
     state: {
       coverLookup: {

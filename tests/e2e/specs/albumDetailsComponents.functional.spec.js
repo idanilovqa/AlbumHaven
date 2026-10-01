@@ -1,6 +1,7 @@
 import { expect, test as base } from '../support/baseFixtures.js';
 import { PERFORMANCE_AUTH_USERNAME } from '../support/performanceAuthentication.js';
 import { withRestoredAppearanceFixture } from '../helpers/appearanceFixture.js';
+import { MobileLayoutPage } from '../poms/mobileLayoutPage.js';
 
 const test = base.extend({
   appearanceBaseline: [async ({ context, managedAppLifecycle }, use) => {
@@ -31,7 +32,7 @@ test.describe('touch artwork actions', () => {
     await galleryActions.goto('/?surface=albums');
     await navigationPanelActions.clickAllArtists({ expectArtistQueryCleared: true });
     await galleryActions.waitForGalleryReady();
-    await searchToolbarActions.search(MULTI_DISC_ALBUM, { submitWithEnter: true });
+    await new MobileLayoutPage(page).search(MULTI_DISC_ALBUM);
     await searchToolbarActions.waitForQuery(MULTI_DISC_ALBUM);
     await galleryActions.waitForAlbumVisible(MULTI_DISC_ALBUM);
     const parentUrl = page.url();
@@ -45,7 +46,7 @@ test.describe('touch artwork actions', () => {
     expect(initialAudio.renderedFrameDelta).toBeGreaterThan(0);
 
     await stepLogger.step('Tap visible artwork actions without a preceding hover or focus', async () => {
-      await expect(trackModalActions.trackModal.artboxOverlay).toHaveCSS('opacity', '1');
+      await expect(trackModalActions.trackModal.mobileArtworkActions).toHaveCSS('opacity', '1');
       await expect(trackModalActions.trackModal.coverLookupButton).toBeVisible();
       await expect(trackModalActions.trackModal.fastCoverFetchButton).toBeVisible();
       await trackModalActions.openCoverLightbox({ touch: true });
@@ -200,7 +201,8 @@ test('FTC-ALBUM-DETAILS-019 keeps all persisted layouts on the shared compact Al
     expect(dialogBounds).not.toBeNull();
     expect(dialogBounds.width).toBeLessThanOrEqual(390);
     await expect(trackModalActions.trackModal.albumTrackTable.rows.first()).toBeVisible();
-    await expect(trackModalActions.trackModal.artboxOverlay).toBeVisible();
+    await expect(trackModalActions.trackModal.mobileArtworkActions).toBeVisible();
+    await expect(trackModalActions.trackModal.artboxCoverTools).toHaveCount(0);
     await expect(trackModalActions.trackModal.coverLookupButton).toBeVisible();
     await expect(trackModalActions.trackModal.fastCoverFetchButton).toBeVisible();
     await trackModalActions.backFromMobilePage();

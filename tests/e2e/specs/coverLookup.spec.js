@@ -891,7 +891,7 @@ test('FTC-COVERS-011 selected local art remains authoritative after rescan and a
       && candidate.image.sha256 === originalActiveCover.image.sha256
     )) || null;
     expect(reopenedActiveCover).not.toBeNull();
-    expect(reopenedActiveCover.sourcePath).toBe(selectedCoverPath);
+    expect(reopenedActiveCover.sourcePath).toBe(selectedLocalCover.sourcePath);
     expect(reopenedActiveCover.image.sha256).toBe(selectedLocalCover.image.sha256);
     expect(reopenedActiveCover.image.coverRevision).toBe(selectedPreviewRevision);
     expect(reopenedExistingCopies).toHaveLength(0);
@@ -1018,7 +1018,7 @@ test('FTC-COVERS-011 selected local art remains authoritative after rescan and a
       && candidate.image.sha256 === originalActiveCover.image.sha256
     )) || null;
     expect(activeCover).not.toBeNull();
-    expect(activeCover.sourcePath).toBe(selectedCoverPath);
+    expect(activeCover.sourcePath).toBe(selectedLocalCover.sourcePath);
     expect(activeCover.image.sha256).toBe(selectedLocalCover.image.sha256);
     expect(activeCover.image.coverRevision).toBe(selectedPreviewRevision);
     expect(existingCopies).toHaveLength(0);

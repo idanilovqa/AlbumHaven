@@ -52,6 +52,8 @@ export class TrackModal extends BasePage {
     this.removeMissingAlbumButton = this.dialog.locator('[data-remove-missing-album="1"]');
     this.artbox = this.dialog.locator('#track-modal-cover .album-artbox');
     this.artboxOverlay = this.artbox.locator('.album-artbox__overlay');
+    this.artboxCoverTools = this.artbox.locator('.track-modal-cover-tool');
+    this.mobileArtworkActions = this.mobilePage.locator('.album-artbox__overlay');
     this.body = this.dialog.locator('.track-modal-body');
     this.cover = this.dialog.locator('.track-modal-cover');
     this.main = this.dialog.locator('.track-modal-main');

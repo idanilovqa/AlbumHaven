@@ -1001,3 +1001,82 @@ test('failed sidebar preference save retains draft and authoritative saved value
     assert.equal(controller.getState().dirty, true);
   }
 });
+
+
+test('Appearance Save stays dirty and blocks navigation acknowledgement until seekbar persistence completes', async () => {
+  let acknowledge;
+  const applied = [];
+  const { controller, requests } = setup();
+  controller.setActiveSection('seekbar');
+  controller.setDeviceProfile('mobile');
+  controller.setDeviceSectionMode('custom');
+  controller.configureSeekbar('default', (mode, profile) => {
+    applied.push([profile, mode]);
+    return new Promise(resolve => { acknowledge = resolve; });
+  });
+  controller.setSeekbarMode('waveform');
+  let acknowledged = false;
+  const saving = controller.save().then(result => { acknowledged = result; return result; });
+  await Promise.resolve();
+  assert.deepEqual(applied, [['mobile', 'waveform']]);
+  assert.equal(controller.getState().saving, true);
+  assert.equal(controller.getState().dirty, true);
+  assert.equal(controller.getState().footer.status, 'Unsaved appearance changes');
+  assert.equal(acknowledged, false);
+  assert.equal(await controller.save(), false, 'Repeated Save cannot race the pending mode write');
+  assert.equal(requests.length, 1);
+  controller.setSeekbarMode('thin');
+  assert.equal(controller.getState().seekbarMode, 'waveform', 'Controls remain blocked during Save');
+  acknowledge();
+  assert.equal(await saving, true);
+  assert.equal(controller.getState().saving, false);
+  assert.equal(controller.getState().dirty, false);
+  assert.equal(controller.getState().footer.status, 'Saved to your account');
+  controller.setDeviceProfile('web_desktop');
+  assert.equal(controller.getState().seekbarMode, 'default');
+});
+
+test('partial appearance success keeps failed seekbar draft retryable for the same profile', async () => {
+  let rejectRequest;
+  const applied = [];
+  const { controller, requests } = setup();
+  controller.setActiveSection('seekbar');
+  controller.setDeviceProfile('mobile');
+  controller.setDeviceSectionMode('custom');
+  controller.configureSeekbar('default', (mode, profile) => {
+    applied.push([profile, mode]);
+    if (applied.length === 1) return new Promise((_resolve, reject) => { rejectRequest = reject; });
+    return Promise.resolve();
+  });
+  controller.setSeekbarMode('waveform');
+  const saving = controller.save();
+  await Promise.resolve();
+  rejectRequest(new Error('layout write failed'));
+  assert.equal(await saving, false);
+  assert.equal(controller.getState().seekbarMode, 'waveform');
+  assert.equal(controller.getState().dirty, true);
+  assert.equal(controller.getState().canSave, true);
+  assert.equal(controller.getState().footer.canRetry, true);
+  assert.match(controller.getState().error, /could not be saved/);
+  assert.equal(controller.getState().deviceProfiles.mobile.sections.player.mode, 'custom');
+  assert.equal(await controller.save(), true);
+  assert.deepEqual(applied, [['mobile', 'waveform'], ['mobile', 'waveform']]);
+  assert.equal(requests[1].payload.expected_revision, requests[0].payload.expected_revision + 1);
+  assert.equal(controller.getState().dirty, false);
+  controller.setDeviceProfile('web_desktop');
+  assert.equal(controller.getState().seekbarMode, 'default');
+});
+
+test('clearing Appearance during a pending seekbar write cannot acknowledge the old account draft', async () => {
+  let acknowledge;
+  const { controller } = setup();
+  controller.configureSeekbar('default', () => new Promise(resolve => { acknowledge = resolve; }));
+  controller.setSeekbarMode('waveform');
+  const saving = controller.save();
+  await Promise.resolve();
+  controller.clear();
+  acknowledge();
+  assert.equal(await saving, false);
+  assert.equal(controller.getState().loadFailed, true);
+  assert.equal(controller.getState().seekbarMode, 'default');
+});

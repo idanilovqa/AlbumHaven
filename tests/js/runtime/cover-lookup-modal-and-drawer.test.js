@@ -3027,3 +3027,41 @@ function createDrawerHarness(overrides = {}) {
   console.error(error);
   process.exitCode = 1;
 });
+
+
+function savedSourceRevisionContext({ albumRevision = 'saved-revision', saving = false, sourceToken = 1790000000000 } = {}) {
+  const context = loadHelper();
+  vm.runInContext(fs.readFileSync(path.join(path.dirname(helperPath), 'modal-and-overlay-helpers.js'), 'utf8'), context);
+  context.state.coverRefreshTokens = { '/owned/Art/Front.jpg': sourceToken };
+  context.state.coverLookup.modal.album = { cover_path: '/owned/cover.jpg', cover_revision: albumRevision };
+  context.state.coverLookup.modal.saving = saving;
+  return context;
+}
+function savedSourceGallery(revision = 'saved-revision') {
+  return { active_cover_path: '/owned/cover.jpg', selected_source_path: '/owned/Art/Front.jpg',
+    local_covers: [
+      { path: '/owned/cover.jpg', is_active: true, cover_revision: revision },
+      { path: '/owned/Art/Front.jpg', is_active: false, cover_revision: revision },
+    ] };
+}
+
+require('node:test')('confirmed saved source revision replaces its older optimistic URL token', () => {
+  const context = savedSourceRevisionContext();
+  context.applyCoverLookupGalleryPayload(savedSourceGallery());
+  assert.equal(context.state.coverRefreshTokens['/owned/Art/Front.jpg'], 'saved-revision');
+  assert.equal(new URL(context.buildCoverUrl('/owned/Art/Front.jpg', { size: 480, revision: 'saved-revision' }),
+    'http://localhost').searchParams.get('v'), 'saved-revision');
+});
+
+for (const [label, values] of [
+  ['new save in progress', { albumRevision: 'saved-revision', saving: true, sourceToken: 1790000000001 }],
+  ['new unconfirmed selection', { albumRevision: null, saving: false, sourceToken: 1790000000001 }],
+  ['new committed selection', { albumRevision: 'new-revision', sourceToken: 'new-revision' }],
+]) {
+  require('node:test')(`an older source gallery cannot replace the token of a ${label}`, () => {
+    const context = savedSourceRevisionContext(values);
+    context.applyCoverLookupGalleryPayload(savedSourceGallery());
+    assert.equal(context.state.coverRefreshTokens['/owned/Art/Front.jpg'], values.sourceToken);
+    assert.equal(context.state.coverLookup.modal.album.cover_revision, values.albumRevision);
+  });
+}

@@ -106,3 +106,59 @@ test('each Artist Tree write synchronously replaces prior saved status until its
     assert.equal(status.get('data-preferences-sync'), 'saved');
   }
 });
+
+
+test('flush acknowledges its finite profile revisions while preserving newer queued writes', async () => {
+  const requests = [], acknowledgements = [];
+  let markSecondRequest;
+  const secondRequest = new Promise(resolve => { markSecondRequest = resolve; });
+  const { store } = fixture((_url, options) => {
+    requests.push(JSON.parse(options.body));
+    if (requests.length === 2) markSecondRequest('request-started');
+    return new Promise(resolve => acknowledgements.push(resolve));
+  });
+  store.write('albumOpenMode', 'page', 'web_desktop');
+  const first = store.flush();
+  store.write('playerAppearance', { seekbarMode: 'waveform' }, 'mobile');
+  let saved = false;
+  const appearanceSave = store.flush().then(result => { saved = result; return result; });
+  store.write('albumOpenMode', 'modal', 'web_desktop');
+  acknowledgements[0]({ ok: true });
+  assert.equal(await Promise.race([secondRequest, appearanceSave.then(() => 'save-acknowledged')]), 'request-started');
+  assert.equal(saved, false);
+  assert.equal(store.syncState, 'pending');
+  assert.deepEqual(requests[1], { profile: 'mobile', changes: { playerAppearance: { seekbarMode: 'waveform' } } });
+  acknowledgements[1]({ ok: true });
+  await Promise.resolve();
+  assert.equal(await first, true);
+  assert.equal(await appearanceSave, true);
+  assert.equal(requests.length, 2, 'A completed Save must not wait for unrelated future edits');
+  assert.equal(store.syncState, 'pending');
+  const newerSave = store.flush();
+  assert.deepEqual(requests[2], { profile: 'web_desktop', changes: { albumOpenMode: 'modal' } });
+  acknowledgements[2]({ ok: true });
+  assert.equal(await newerSave, true);
+  assert.equal(store.syncState, 'saved');
+  assert.equal(store.read('albumOpenMode', null, 'web_desktop'), 'modal');
+  assert.deepEqual(store.read('playerAppearance', null, 'mobile'), { seekbarMode: 'waveform' });
+});
+
+test('failed flush reports failure and retry persists the newer profile edit', async () => {
+  const requests = [];
+  let rejectRequest;
+  const { store } = fixture((_url, options) => {
+    requests.push(JSON.parse(options.body));
+    if (requests.length === 1) return new Promise((_resolve, reject) => { rejectRequest = reject; });
+    return Promise.resolve({ ok: true });
+  });
+  store.write('playerAppearance', { seekbarMode: 'waveform' }, 'mobile');
+  const saving = store.flush();
+  store.write('playerAppearance', { seekbarMode: 'thin' }, 'mobile');
+  rejectRequest(new Error('offline'));
+  assert.equal(await saving, false);
+  assert.equal(requests.length, 1, 'A failed request must not create an unbounded retry loop');
+  assert.equal(store.syncState, 'unsaved');
+  assert.equal(await store.flush(), true);
+  assert.deepEqual(requests[1], { profile: 'mobile', changes: { playerAppearance: { seekbarMode: 'thin' } } });
+  assert.equal(store.syncState, 'saved');
+});

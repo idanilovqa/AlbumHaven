@@ -10,7 +10,7 @@ test('Artist Tree persistence scenario awaits each server save before reloading'
   let scenario;
   let folded = false;
   let pending = false;
-  let releaseSave;
+  const saveGates = [];
   let reloads = 0;
   const navigation = {
     artistTreeFoldButton: 'collapse', artistTreeNavigationButton: 'expand', layoutPreferenceSync: 'sync',
@@ -25,7 +25,7 @@ test('Artist Tree persistence scenario awaits each server save before reloading'
       assert.equal(actual, 'sync');
       assert.equal(name, 'data-preferences-sync');
       assert.equal(value, 'saved');
-      await new Promise(resolve => { releaseSave = () => { pending = false; resolve(); }; });
+      await new Promise(resolve => { saveGates.push({ folded, release: () => { pending = false; resolve(); } }); });
     },
   });
   vm.runInNewContext(source, { expect, test: (_name, _options, fn) => { scenario = fn; } });
@@ -38,12 +38,20 @@ test('Artist Tree persistence scenario awaits each server save before reloading'
     page: { reload: async () => { assert.equal(pending, false, 'reload must await persistence'); reloads += 1; } },
     stepLogger: { step: async (_name, action) => action() },
   });
-  await new Promise(resolve => setImmediate(resolve));
-  assert.equal(reloads, 0);
-  releaseSave();
-  await new Promise(resolve => setImmediate(resolve));
-  assert.equal(reloads, 1);
-  releaseSave();
+  for (const [index, gate] of [
+    { folded: false, before: 0, after: 0 },
+    { folded: true, before: 0, after: 1 },
+    { folded: false, before: 1, after: 2 },
+  ].entries()) {
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(saveGates.length, index + 1);
+    assert.equal(saveGates[index].folded, gate.folded);
+    assert.equal(reloads, gate.before, 'Reload must not precede its save acknowledgement');
+    saveGates[index].release();
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(reloads, gate.after);
+  }
   await running;
+  assert.equal(saveGates.length, 3);
   assert.equal(reloads, 2);
 });

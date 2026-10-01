@@ -16,12 +16,12 @@
 
 .compact-data-table[data-cdt-frame="outline"] {
   border: 1px solid rgba(148, 163, 184, 0.18);
-  background: transparent;
+  background: var(--appearance-table-surface, color-mix(in srgb, var(--panel, #101a29) 94%, var(--text, #f3f6fa)));
 }
 
 .compact-data-table[data-cdt-frame="inset"] {
   border: 1px solid rgba(148, 163, 184, 0.12);
-  background: rgba(15, 23, 42, 0.12);
+  background: var(--appearance-table-surface, color-mix(in srgb, var(--panel, #101a29) 94%, var(--text, #f3f6fa)));
 }
 
 .compact-data-table[data-cdt-frame="none"] {

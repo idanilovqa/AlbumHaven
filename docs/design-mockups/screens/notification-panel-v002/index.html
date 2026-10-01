@@ -1,0 +1,271 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Album Haven · Notification panel proposal</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --page: #080909;
+      --panel: #121313;
+      --control: #1b1d1d;
+      --line: #343737;
+      --ink: #f0f2f1;
+      --muted: #9da4a1;
+      --hover: color-mix(in srgb, var(--ink) 7%, var(--panel));
+      --selected: color-mix(in srgb, var(--ink) 10%, var(--panel));
+      --accent: #34ca78;
+      --info: #64a8ff;
+      --success: #52d7aa;
+      --warning: #e4b85b;
+      --error: #e77878;
+      font: 14px/1.4 Inter, "Segoe UI", sans-serif;
+    }
+    * { box-sizing: border-box; }
+    body {
+      min-height: 100vh;
+      margin: 0;
+      overflow: hidden;
+      background:
+        radial-gradient(circle at 28% 20%, #18302555, transparent 32%),
+        var(--page);
+      color: var(--ink);
+    }
+    button { font: inherit; }
+    .page-preview {
+      max-width: 920px;
+      padding: 54px;
+      opacity: .34;
+    }
+    .page-preview h1 { margin: 0 0 9px; font-size: 28px; }
+    .page-preview p { margin: 0; color: var(--muted); }
+    .album-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 18px; margin-top: 28px; }
+    .album-placeholder { aspect-ratio: 1; border-radius: 12px; background: linear-gradient(145deg, #20342b, #101212); }
+
+    .notification-panel {
+      position: fixed;
+      inset: 0 0 0 auto;
+      width: min(390px, calc(100vw - 18px));
+      display: grid;
+      grid-template-rows: auto minmax(0, 1fr) auto;
+      border-left: 1px solid var(--line);
+      background: color-mix(in srgb, var(--panel) 96%, transparent);
+      box-shadow: -18px 0 42px #0007;
+      backdrop-filter: blur(18px);
+    }
+    .panel-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 18px;
+      padding: 18px 16px 14px;
+      border-bottom: 1px solid var(--line);
+    }
+    h1 { margin: 0; font-size: 16px; line-height: 1.2; }
+    .panel-summary { margin: 4px 0 0; color: var(--muted); font-size: 12px; }
+    .header-actions, .card-actions { display: flex; align-items: center; gap: 5px; }
+
+    .ui-button {
+      min-height: 30px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+      padding: 0 9px;
+      border: 1px solid var(--line);
+      border-radius: 7px;
+      background: var(--control);
+      color: var(--ink);
+      cursor: pointer;
+    }
+    .ui-button:hover { background: var(--hover); }
+    .ui-button:focus-visible, .notification-open:focus-visible {
+      outline: 1px solid var(--accent);
+      outline-offset: 2px;
+    }
+    .ui-button--quiet { border-color: transparent; background: transparent; color: var(--muted); }
+    .ui-button--quiet:hover { border-color: transparent; background: color-mix(in srgb, var(--hover) 58%, transparent); color: var(--ink); }
+    .ui-button--icon { width: 30px; padding: 0; }
+    .ui-button--small { min-height: 26px; padding-inline: 8px; font-size: 12px; }
+    .ui-button--danger {
+      border-color: color-mix(in srgb, var(--error) 42%, var(--line));
+      background: color-mix(in srgb, var(--error) 10%, transparent);
+      color: color-mix(in srgb, var(--error) 76%, white);
+    }
+    .ui-button--danger:hover {
+      border-color: color-mix(in srgb, var(--error) 74%, var(--line));
+      background: color-mix(in srgb, var(--error) 18%, transparent);
+    }
+    .ui-button svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+
+    .notification-list {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      padding: 10px;
+      overflow: auto;
+    }
+    .notification-card {
+      position: relative;
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      align-items: start;
+      overflow: hidden;
+      border: 1px solid transparent;
+      border-radius: 9px;
+      background: transparent;
+    }
+    .notification-card:hover,
+    .notification-card:focus-within { background: var(--hover); }
+    .notification-open {
+      min-width: 0;
+      display: grid;
+      grid-template-columns: 42px minmax(0, 1fr);
+      gap: 10px;
+      padding: 10px 4px 13px 13px;
+      border: 0;
+      background: transparent;
+      color: inherit;
+      text-align: left;
+      cursor: pointer;
+    }
+    .notification-card:hover .notification-open { background: transparent; }
+    .cover {
+      width: 42px;
+      height: 42px;
+      border: 1px solid color-mix(in srgb, var(--line) 80%, transparent);
+      border-radius: 6px;
+      background: linear-gradient(145deg, #59675f, #1c2420 54%, #809888);
+      box-shadow: inset 0 0 0 1px #fff1;
+    }
+    .cover.is-purple { background: linear-gradient(145deg, #6d5978, #251d2b 56%, #9c7ea5); }
+    .cover.is-red { background: linear-gradient(145deg, #6c4848, #251818 56%, #9d6b62); }
+    .notification-copy { min-width: 0; }
+    .notification-title { display: block; overflow: hidden; font-size: 13px; font-weight: 750; text-overflow: ellipsis; white-space: nowrap; }
+    .notification-album { display: block; overflow: hidden; margin-top: 2px; color: var(--muted); font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
+    .notification-meta { display: flex; align-items: center; gap: 7px; margin-top: 7px; color: var(--muted); font-size: 11px; }
+    .status-label {
+      display: inline-flex;
+      align-items: center;
+      min-height: 19px;
+      padding: 1px 7px;
+      border: 1px solid currentColor;
+      border-radius: 999px;
+      font-size: 10px;
+      font-weight: 750;
+      line-height: 1;
+    }
+    .is-running .status-label { color: var(--info); background: color-mix(in srgb, var(--info) 9%, transparent); }
+    .is-complete .status-label { color: var(--success); background: color-mix(in srgb, var(--success) 9%, transparent); }
+    .is-failed .status-label { color: var(--error); background: color-mix(in srgb, var(--error) 9%, transparent); }
+    .card-actions { padding: 9px 8px 0 0; }
+    .notification-progress {
+      position: absolute;
+      inset: auto 8px 0;
+      height: 3px;
+      overflow: hidden;
+      border-radius: 999px 999px 0 0;
+      background: color-mix(in srgb, var(--ink) 7%, transparent);
+    }
+    .notification-progress span { display: block; width: 62%; height: 100%; border-radius: inherit; background: var(--info); }
+    .is-complete .notification-progress span { width: 100%; background: var(--success); }
+    .is-failed .notification-progress span { width: 100%; background: var(--error); }
+    .panel-note { padding: 10px 16px; border-top: 1px solid var(--line); color: var(--muted); font-size: 11px; }
+    @media (max-width: 520px) { .page-preview { display: none; } }
+  </style>
+</head>
+<body>
+  <main class="page-preview" aria-hidden="true">
+    <h1>Albums</h1>
+    <p>The application remains visible behind the notification panel.</p>
+    <div class="album-grid"><div class="album-placeholder"></div><div class="album-placeholder"></div><div class="album-placeholder"></div></div>
+  </main>
+
+  <aside class="notification-panel" aria-label="Cover lookup notifications">
+    <header class="panel-header">
+      <div>
+        <h1>Cover lookups</h1>
+        <p class="panel-summary">1 active · 2 finished</p>
+      </div>
+      <div class="header-actions">
+        <button class="ui-button ui-button--small" type="button" data-clear-completed>
+          <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M4 6h12M8 6V4h4v2M6 6l1 10h6l1-10"/></svg>
+          Clear finished
+        </button>
+        <button class="ui-button ui-button--quiet ui-button--icon" type="button" aria-label="Close notification panel">
+          <svg viewBox="0 0 20 20" aria-hidden="true"><path d="m5 5 10 10M15 5 5 15"/></svg>
+        </button>
+      </div>
+    </header>
+
+    <section class="notification-list" aria-label="Lookup activity">
+      <article class="notification-card navigation-tree-item is-running">
+        <button class="notification-open" type="button">
+          <span class="cover" aria-hidden="true"></span>
+          <span class="notification-copy">
+            <span class="notification-title">Ocean Machine: Biomech</span>
+            <span class="notification-album">Devin Townsend · 1997</span>
+            <span class="notification-meta"><span class="status-label">Searching</span><span>0:24</span></span>
+          </span>
+        </button>
+        <div class="card-actions">
+          <button class="ui-button ui-button--quiet ui-button--icon ui-button--danger" type="button" aria-label="Stop lookup">
+            <svg viewBox="0 0 20 20" aria-hidden="true"><path d="m6 6 8 8M14 6l-8 8"/></svg>
+          </button>
+        </div>
+        <div class="notification-progress" aria-label="62% complete"><span></span></div>
+      </article>
+
+      <article class="notification-card navigation-tree-item is-complete" data-finished>
+        <button class="notification-open" type="button">
+          <span class="cover is-purple" aria-hidden="true"></span>
+          <span class="notification-copy">
+            <span class="notification-title">A Change of Seasons</span>
+            <span class="notification-album">Dream Theater · 1995</span>
+            <span class="notification-meta"><span class="status-label">4 covers found</span><span>0:18</span></span>
+          </span>
+        </button>
+        <div class="card-actions">
+          <button class="ui-button ui-button--icon ui-button--danger" type="button" aria-label="Delete notification" data-dismiss>
+            <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M4 6h12M8 6V4h4v2M6 6l1 10h6l1-10"/></svg>
+          </button>
+        </div>
+        <div class="notification-progress" aria-label="Complete"><span></span></div>
+      </article>
+
+      <article class="notification-card navigation-tree-item is-failed" data-finished>
+        <button class="notification-open" type="button">
+          <span class="cover is-red" aria-hidden="true"></span>
+          <span class="notification-copy">
+            <span class="notification-title">Creeping Death</span>
+            <span class="notification-album">Metallica · 1984</span>
+            <span class="notification-meta"><span class="status-label">Lookup failed</span><span>0:11</span></span>
+          </span>
+        </button>
+        <div class="card-actions">
+          <button class="ui-button ui-button--icon" type="button" aria-label="Retry lookup" title="Retry lookup">
+            <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M15.5 7A6 6 0 1 0 16 12M15.5 7V3.5M15.5 7H12"/></svg>
+          </button>
+          <button class="ui-button ui-button--icon ui-button--danger" type="button" aria-label="Delete notification" data-dismiss>
+            <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M4 6h12M8 6V4h4v2M6 6l1 10h6l1-10"/></svg>
+          </button>
+        </div>
+        <div class="notification-progress" aria-label="Failed"><span></span></div>
+      </article>
+    </section>
+
+    <footer class="panel-note">Select a row to review its cover results. Lookups continue while this panel is closed.</footer>
+  </aside>
+
+  <script>
+    document.addEventListener('click', (event) => {
+      const dismiss = event.target.closest('[data-dismiss]');
+      if (dismiss) dismiss.closest('.notification-card')?.remove();
+      if (event.target.closest('[data-clear-completed]')) {
+        document.querySelectorAll('[data-finished]').forEach((card) => card.remove());
+      }
+    });
+  </script>
+</body>
+</html>

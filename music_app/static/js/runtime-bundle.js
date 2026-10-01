@@ -22,6 +22,15 @@
     return '';
   };
 
+  const fetchSameOriginRead = async (input, init) => {
+    try {
+      return await originalFetch(input, init);
+    } catch (error) {
+      if (error?.name !== 'TypeError') throw error;
+      return originalFetch(input, init);
+    }
+  };
+
   window.fetch = (input, init) => {
     const requestInit = init && typeof init === 'object' ? init : undefined;
     const method = String(requestInit?.method || input?.method || 'GET').toUpperCase();
@@ -31,9 +40,12 @@
     } catch (_error) {
       return originalFetch(input, init);
     }
-    if (safeMethods.has(method) || url.origin !== window.location.origin) {
-      return originalFetch(input, init);
+    if (safeMethods.has(method)) {
+      return url.origin === window.location.origin
+        ? fetchSameOriginRead(input, init)
+        : originalFetch(input, init);
     }
+    if (url.origin !== window.location.origin) return originalFetch(input, init);
     const csrfToken = readCookie(csrfCookieName);
     if (!csrfToken) {
       return originalFetch(input, init);
@@ -3022,7 +3034,7 @@ function ensureStatusContextMenu() {
   menu.innerHTML = [
     ['scan-action', 'full-rescan', 'Full Rescan'],
     ['cover-action', 'fetch-covers', 'Fetch Album Covers'],
-    ['scan-page', 'go-to-scan-page', 'Open Library/Scan'],
+    ['scan-page', 'go-to-scan-page', 'Open Library Status Page'],
   ].map(([role, action, label]) => ButtonComponent.renderButton({
     label, className: 'gallery-menu-action',
     attributes: { 'data-status-role': role, 'data-status-action': action },
@@ -3039,7 +3051,7 @@ function resolvePrimaryStatusContextAction(status = {}, options = {}) {
   if (anyBusy) {
     return {
       action: 'go-to-scan-page',
-      label: 'Go to Scan Page',
+      label: 'Go to Library Status Page',
       disabled: false,
     };
   }
@@ -3187,18 +3199,22 @@ function renderLibraryWarning(data = {}, options = {}) {
   const model = libraryWarningPresentation(health, state.ui.dismissedLibraryWarningToken);
   const scanNotice = document.getElementById('library-scan-warning');
   if (!scanNotice) return;
+  const libraryHealth = document.getElementById('library-health');
+  const loader = document.getElementById('library-loader');
   const scanPageVisible = options.scanPageVisible
-    ?? Boolean(document.getElementById('library-loader')?.classList?.contains('is-scan-page'));
+    ?? Boolean(loader?.classList?.contains('is-scan-page'));
   const hidden = !model.warning || !model.dismissed || !scanPageVisible;
   if (scanNotice.hidden !== hidden) scanNotice.hidden = hidden;
+  if (libraryHealth && libraryHealth.hidden !== hidden) libraryHealth.hidden = hidden;
+  loader?.classList?.toggle?.('has-library-health', !hidden);
   if (hidden) return;
   const problems = health.problems || [];
   const unavailable = problems.some(problem => problem.state === 'root_unavailable');
   const canRefresh = problems.some(problem => problem.allowed_actions?.['library.refresh'] === true);
   const message = unavailable
-    ? `A watched library folder became unavailable. Reconnect the drive or network share and check that the folder is accessible${canRefresh ? ', then run Full Rescan' : ''}.`
-    : `Some library changes may have been missed.${canRefresh ? ' Run a full rescan to reconcile the library.' : ''} Dismissing the alert does not resolve the warning.`;
-  const notice = buildOnPageAlertHtml({severity:'warning',title:'Library watcher needs attention',message,
+    ? `A watched library folder became unavailable. Reconnect it${canRefresh ? ', then run Full Rescan' : ''}.`
+    : `Some library changes may have been missed.${canRefresh ? ' Run Full Rescan to reconcile them.' : ''}`;
+  const notice = buildOnPageAlertHtml({severity:'warning',title:'',message,className:'on-page-alert--compact',
     actionsHtml: canRefresh
       ? ButtonComponent.renderButton({label:'Full Rescan',attributes:{'data-status-action':'full-rescan'}}) : ''});
   if (scanNotice.innerHTML !== notice) scanNotice.innerHTML = notice;
@@ -3446,11 +3462,13 @@ function syncLibraryWatcherWarning(data = {}) {
   registerFloatingNotification(libraryWatcherWarning, { origin: 'bottom-right' });
 }
 
-function buildFloatingNotificationAlertHtml(message, variant, actionsHtml = '', messageId = '') {
+function buildFloatingNotificationAlertHtml(message, variant, actionsHtml = '', messageId = '', compact = false) {
   const severity = normalizeAlertSeverity(variant);
   return buildOnPageAlertHtml({
-    severity, title: severity === 'error' ? 'Error' : severity === 'warning' ? 'Warning' : 'Update',
+    severity,
+    title: compact ? '' : severity === 'error' ? 'Error' : severity === 'warning' ? 'Warning' : 'Update',
     message, actionsHtml, messageId, role: severity === 'info' ? 'status' : 'alert',
+    className: compact ? 'on-page-alert--compact' : '',
   });
 }
 
@@ -3469,7 +3487,7 @@ function showToast(message, variant = 'success', duration = 3600, options = {}) 
     isNotificationErrorVariant(variant) ? 'is-error' : '',
     options.placement === 'top-center' ? 'is-top-center' : '',
   ].filter(Boolean).join(' ');
-  toast.innerHTML = buildFloatingNotificationAlertHtml(message, variant);
+  toast.innerHTML = buildFloatingNotificationAlertHtml(message, variant, '', '', true);
   layer.appendChild(toast);
   if (errorKey) activeErrorToasts.set(errorKey, toast);
   registerFloatingNotification(toast, { origin: options.placement === 'top-center' ? 'top-center' : 'top-right', onPlaced() {
@@ -3488,6 +3506,9 @@ function showToast(message, variant = 'success', duration = 3600, options = {}) 
 function showRepairAlert(message, variant = 'success', duration = 2000, options = {}) {
   const alert = document.getElementById('repair-alert');
   if (!alert) return;
+  const capabilities = typeof window !== 'undefined' ? window.AlbumHavenCapabilities : null;
+  const showLogHistoryLink = options.logHistoryLink === true
+    && (!capabilities || capabilities.allows('library.logs.read'));
   const actionsHtml = ButtonComponent.renderButton({
     label: 'View details', attributes: { id: 'repair-alert-log-history', 'data-open-log-history-alert': '1', hidden: true },
   }) + ButtonComponent.renderButton({
@@ -3512,17 +3533,17 @@ function showRepairAlert(message, variant = 'success', duration = 2000, options 
     messageEl.textContent = message;
   }
   if (logHistoryLink) {
-    logHistoryLink.hidden = options.logHistoryLink !== true;
-    logHistoryLink.dataset.logHistoryEntryId = options.logHistoryLink === true
+    logHistoryLink.hidden = !showLogHistoryLink;
+    logHistoryLink.dataset.logHistoryEntryId = showLogHistoryLink
       ? String(options.logHistoryEntryId || '')
       : '';
   }
-  alert.classList.toggle('has-log-history-link', options.logHistoryLink === true);
+  alert.classList.toggle('has-log-history-link', showLogHistoryLink);
   alert.classList.toggle('is-error', isNotificationErrorVariant(variant));
   alert.hidden = false;
   state.repairAlertPresentationVersion = Number(state.repairAlertPresentationVersion || 0) + 1;
   const presentationVersion = state.repairAlertPresentationVersion;
-  registerFloatingNotification(alert, { origin: options.logHistoryLink === true ? 'top-center' : 'bottom-right', abovePlayer: options.logHistoryLink !== true, onPlaced() {
+  registerFloatingNotification(alert, { origin: showLogHistoryLink ? 'top-center' : 'bottom-right', abovePlayer: !showLogHistoryLink, onPlaced() {
     scheduleBrowserAnimationFrame(() => {
       if (state.repairAlertPresentationVersion !== presentationVersion) return;
       alert.classList.add('is-visible');
@@ -3783,10 +3804,11 @@ function buildOnPageAlertHtml(config = {}) {
   const severity = normalizeAlertSeverity(config.severity);
   const title = String(config.title || '').trim();
   const message = String(config.message || '').trim();
+  const className = String(config.className || '').trim();
   const actionsHtml = String(config.actionsHtml || '');
   const role = config.role === 'status' ? 'status' : 'alert';
   const messageId = config.messageId ? ` id="${escapeAlertHtml(String(config.messageId))}"` : '';
-  return `<section class="on-page-alert on-page-alert--${severity}" role="${role}" data-on-page-alert="${severity}"><span class="on-page-alert__icon">${buildAlertIconHtml(severity)}</span><div class="on-page-alert__content"><strong class="on-page-alert__title">${escapeAlertHtml(title)}</strong><p class="on-page-alert__message"${messageId}>${escapeAlertHtml(message)}</p>${actionsHtml ? `<div class="on-page-alert__actions">${actionsHtml}</div>` : ''}</div></section>`;
+  return `<section class="on-page-alert on-page-alert--${severity}${className ? ` ${escapeAlertHtml(className)}` : ''}" role="${role}" data-on-page-alert="${severity}"><span class="on-page-alert__icon">${buildAlertIconHtml(severity)}</span><div class="on-page-alert__content">${title ? `<strong class="on-page-alert__title">${escapeAlertHtml(title)}</strong>` : ''}<p class="on-page-alert__message"${messageId}>${escapeAlertHtml(message)}</p>${actionsHtml ? `<div class="on-page-alert__actions">${actionsHtml}</div>` : ''}</div></section>`;
 }
 
 if (typeof window !== 'undefined') {
@@ -3820,11 +3842,12 @@ function buildAlbumArtboxHtml(config = {}) {
     : 'empty';
   const label = String(config.label || 'Album artwork').trim();
   const coverHtml = String(config.coverHtml || '');
+  const overlayHtml = String(config.overlayHtml || '');
   const actionHtml = String(config.actionHtml || '');
   const content = state === 'missing' || state === 'empty'
     ? buildMissingAlbumMarkHtml()
     : (coverHtml || `<span class="album-artbox__placeholder">${state === 'loading' ? 'Loading cover art' : 'No cover art'}</span>`);
-  return `<span class="album-artbox album-artbox--${state}" data-album-artbox-state="${state}" aria-label="${escapeHtml(label)}">${content}${actionHtml ? `<span class="album-artbox__action">${actionHtml}</span>` : ''}</span>`;
+  return `<span class="album-artbox album-artbox--${state}" data-album-artbox-state="${state}" aria-label="${escapeHtml(label)}">${content}${overlayHtml ? `<span class="album-artbox__overlay">${overlayHtml}</span>` : ''}${actionHtml ? `<span class="album-artbox__action">${actionHtml}</span>` : ''}</span>`;
 }
 
 function buildUtilityAlbumArtbox(album, {
@@ -3900,18 +3923,19 @@ function buildFilterPillHtml(config = {}) {
 }
 
 function buildGalleryBarHtml(config = {}) {
-  const isArtist = config.contextKind === 'artist';
+  const isSingleArtist = config.contextKind === 'single-artist';
+  const isArtist = config.contextKind === 'artist' || isSingleArtist;
   const isFamily = config.contextKind === 'family';
   const title = isArtist ? config.artist : (isFamily ? `${config.primaryArtist} family` : 'Gallery');
   const summary = isArtist
     ? galleryMainPlural(config.albumCount, 'album')
     : `${galleryMainPlural(config.artistCount, 'artist')} · ${galleryMainPlural(config.albumCount, 'album')}`;
   const info = isArtist ? `<button class="gallery-info-button" type="button" data-artist-info-trigger="1" data-artist="${escapeHtml(config.artist || '')}" aria-label="Information about ${escapeHtml(config.artist || '')}" aria-expanded="false">${buildGalleryInfoGlyphHtml()}</button>` : '';
-  return `<div class="gallery-bar__context"><div class="gallery-bar__title"><span data-gallery-context-name>${escapeHtml(title)}</span>${info}</div><span class="gallery-bar__summary" data-gallery-context-summary>${escapeHtml(summary)}</span></div>
+  return `<div class="gallery-bar__context"><div class="gallery-bar__title"><span data-gallery-context-name>${escapeHtml(title)}</span>${info}<span class="gallery-bar__artist-divider gallery-divider__line" data-gallery-context-artist-divider hidden></span><span class="gallery-bar__artist-total" data-gallery-context-inline-total hidden></span></div><span class="gallery-bar__summary" data-gallery-context-summary>${escapeHtml(summary)}</span></div>
     <div class="gallery-bar__actions">
       <button class="gallery-action-button" type="button" data-gallery-bar-action="artist-family" aria-label="Artist Family" aria-controls="artist-family-panel" aria-expanded="false"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="8" cy="8" r="3"/><circle cx="17" cy="9" r="2.5"/><path d="M3 19c.5-3.5 2.2-5.2 5-5.2s4.5 1.7 5 5.2M14 14.5c3.5-.8 5.8.8 6.5 4.5"/></svg></button>
       <div class="gallery-view-cluster unfolding-action-button" id="gallery-view-cluster-options" data-gallery-view-cluster><button class="gallery-view-choice action-button unfolding-action-button__action" type="button" tabindex="-1" data-gallery-view-choice="covers" aria-label="No info" title="No info"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="m5 17 5-5 3 3 2-2 4 4"/></svg></button><button class="gallery-view-choice action-button unfolding-action-button__action is-active" type="button" data-gallery-bar-action="view" data-gallery-view-choice="cards" aria-label="Cards" title="Cards" aria-controls="gallery-view-cluster-options" aria-expanded="false"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 15h18M7 18h6"/></svg></button></div>
-      <button class="gallery-action-button" type="button" data-gallery-bar-action="album-types" aria-label="Album types" aria-controls="gallery-album-types-menu" aria-expanded="false"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="8" cy="8" r="4"/><circle cx="8" cy="8" r="1"/><path d="M14 6h7M14 10h7M4 17h17M4 21h12"/></svg></button>
+      <button class="gallery-action-button" type="button" data-gallery-bar-action="album-types" aria-label="Album types" aria-controls="gallery-album-types-menu" aria-expanded="false"><svg viewBox="0 0 24 24" aria-hidden="true" stroke-linecap="round" stroke-linejoin="round"><path d="M5 17H4a2 2 0 0 1-2-2V6a2 2 0 0 1 1.5-1.94l8-2A2 2 0 0 1 14 4v1"/><path d="M8 20H7a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2v1"/><rect x="8" y="8" width="14" height="14" rx="2"/><path fill="currentColor" fill-rule="evenodd" stroke="none" d="M19 15a4 4 0 1 1-8 0 4 4 0 0 1 8 0Zm-3 0a1 1 0 1 0-2 0 1 1 0 0 0 2 0Z"/></svg></button>
     </div>`;
 }
 
@@ -3965,8 +3989,7 @@ function buildGalleryCardInfoHtml(config = {}) {
 
 // BEGIN js/runtime/gallery-main-state.js
 
-const GALLERY_RELEASE_TYPES = ['studio', 'live', 'demo', 'compilation', 'ep', 'single'];
-const GALLERY_INTERACTIVE_RELEASE_TYPES = ['studio', 'compilation'];
+const GALLERY_RELEASE_TYPES = ['studio', 'ep', 'live', 'demo', 'compilation', 'single'];
 const GALLERY_TRIAL_ARTIST_IMAGES = Object.freeze({
   'Neal Morse': 'https://commons.wikimedia.org/wiki/Special:Redirect/file/Neal_Morse2.jpg?width=480',
   'Devin Townsend': 'https://commons.wikimedia.org/wiki/Special:Redirect/file/Devin_Townsend_(cropped).jpg?width=480',
@@ -4000,10 +4023,6 @@ function reduceGalleryMainState(current, action = {}) {
   const next = createGalleryMainState(current || {});
   if (action.type === 'toggle-source' && Object.hasOwn(next.sources, action.source)) {
     next.sources[action.source] = !next.sources[action.source];
-  } else if (action.type === 'toggle-album-type' && GALLERY_INTERACTIVE_RELEASE_TYPES.includes(action.albumType)) {
-    next.albumTypes = next.albumTypes.includes(action.albumType)
-      ? next.albumTypes.filter((item) => item !== action.albumType)
-      : [...next.albumTypes, action.albumType];
   } else if (action.type === 'set-view') {
     next.view = normalizeGalleryView(action.view);
   } else if (action.type === 'toggle-family-artist') {
@@ -4159,8 +4178,11 @@ function reconcileGalleryMain(config = {}) {
 
 function resolveGalleryBarContext(config = {}) {
   const summaryContext = config.primaryArtist
-    ? { kind: 'family', primaryArtist: config.primaryArtist, artistCount: config.artistCount, albumCount: config.albumCount }
+    ? (config.hasFamily === false
+      ? { kind: 'single-artist', artist: config.primaryArtist, albumCount: config.albumCount }
+      : { kind: 'family', primaryArtist: config.primaryArtist, artistCount: config.artistCount, albumCount: config.albumCount })
     : { kind: 'gallery', artistCount: config.artistCount, albumCount: config.albumCount };
+  if (summaryContext.kind === 'single-artist') return summaryContext;
   if (Number(config.scrollTop || 0) <= 12) {
     return summaryContext;
   }
@@ -4210,7 +4232,6 @@ function buildGalleryCardHtml(config = {}) {
     <section class="album-card" data-gallery-display="${displayMode}"${releaseYear ? ` data-gallery-release-year="${escapeHtml(releaseYear)}"` : ''} data-gallery-card-key="${escapeHtml(config.identity || '')}" data-gallery-card-render-key="${escapeHtml(config.renderKey || '')}">
       <button class="album-card__artbox-trigger album-open-trigger cover" type="button" ${openAttributes} aria-label="${escapeHtml(config.openLabel || `Open ${config.title || 'album'} tracklist`)}">
         ${String(config.artboxHtml || '')}
-        ${releaseYear ? '<span class="gallery-card__year-frame" aria-hidden="true"></span>' : ''}
       </button>
       ${releaseYear ? `<span class="gallery-card__hover-year" aria-hidden="true">${escapeHtml(releaseYear)}</span>` : ''}
       ${displayMode === 'covers'
@@ -4417,6 +4438,7 @@ const state = {
     pendingSidebarSelectedArtist: '',
     pendingSidebarAllArtistsActive: false,
     artistsDrawerOpen: false,
+    artistTreeFolded: null,
     pendingAppRefocusSuppression: false,
     suppressNextViewportClick: false,
     suppressClickSequenceUntil: 0,
@@ -4697,6 +4719,7 @@ const state = {
       remoteCover: null,
       localCovers: [],
       pastedImages: [],
+      manualImageAttachments: [],
       otherArt: [],
       pendingLocalPath: '',
       pendingPastedImageId: '',
@@ -4841,9 +4864,11 @@ function renderSidebar() {
     if (activeLink instanceof HTMLElement) {
       const scrollContainer = el.closest('.sidebar');
       if (!(scrollContainer instanceof HTMLElement)) return;
+      const activeRect = activeLink.getBoundingClientRect();
+      // Folded trees have zero-size rows; keep the reveal for their visible layout.
+      if (el.hidden || !(activeRect.width > 0) || !(activeRect.height > 0)) return;
       const pendingRevealArtist = String(state.ui.pendingSidebarRevealArtist || '');
-      if (pendingRevealArtist && pendingRevealArtist === String(v.selected_artist || '')) {
-        const activeRect = activeLink.getBoundingClientRect();
+      if (pendingRevealArtist && pendingRevealArtist === String(state.view.selected_artist || '')) {
         const containerRect = scrollContainer.getBoundingClientRect();
         const player = document.querySelector('.global-player');
         const playerRect = player instanceof HTMLElement ? player.getBoundingClientRect() : null;
@@ -4865,7 +4890,6 @@ function renderSidebar() {
         state.ui.pendingSidebarRevealArtist = '';
         return;
       }
-      const activeRect = activeLink.getBoundingClientRect();
       const containerRect = scrollContainer.getBoundingClientRect();
       const player = document.querySelector('.global-player');
       const playerRect = player instanceof HTMLElement ? player.getBoundingClientRect() : null;
@@ -4886,10 +4910,90 @@ function setDomPropertyIfChanged(element, property, value) {
   }
 }
 
+function resolveLibraryScanPhaseStates(data = {}) {
+  const stages = ['discover', 'metadata', 'covers', 'relations'];
+  const states = Object.fromEntries(stages.map(stage => [stage, 'future']));
+  const phase = String(data.scan_phase || '').trim().toLowerCase();
+  const outcome = String(data.scan_outcome || '').trim().toLowerCase();
+  let currentStage = '';
+  if (data.relations_in_progress || (data.scan_in_progress && phase === 'finalizing')) currentStage = 'relations';
+  else if (data.covers_in_progress) currentStage = 'covers';
+  else if (data.scan_in_progress && ['discovering', 'discovery', 'enumerating', 'preparing', 'idle'].includes(phase)) currentStage = 'discover';
+  else if (data.scan_in_progress) currentStage = 'metadata';
+
+  const currentIndex = stages.indexOf(currentStage);
+  if (currentIndex >= 0) {
+    stages.forEach((stage, index) => { states[stage] = index < currentIndex ? 'complete' : index === currentIndex ? 'current' : 'future'; });
+    return states;
+  }
+  if (outcome === 'completed') return Object.fromEntries(stages.map(stage => [stage, 'complete']));
+  if (['cancelled', 'failed'].includes(outcome)) {
+    if (Number(data.scan_total || 0) > 0 || Number(data.scan_processed || 0) > 0) states.discover = 'complete';
+    if (Number(data.scan_total || 0) > 0 && Number(data.scan_processed || 0) >= Number(data.scan_total || 0)) states.metadata = 'complete';
+    if (Number(data.covers_total || 0) > 0 && Number(data.covers_processed || 0) >= Number(data.covers_total || 0)) states.covers = 'complete';
+    if (Number(data.relations_total || 0) > 0 && Number(data.relations_processed || 0) >= Number(data.relations_total || 0)) states.relations = 'complete';
+  }
+  return states;
+}
+
+let detachedGalleryBar = null;
+let detachedGalleryBarParent = null;
+let detachedGalleryBarNextSibling = null;
+
+function buildLibraryStatusBarHtml() {
+  return `<section class="gallery-bar gallery-bar--scan" id="library-status-gallery-bar" data-gallery-bar data-gallery-bar-instance="library-status" aria-label="Library Status Page controls">
+    <div class="gallery-bar__context">
+      <button class="gallery-action-button library-loader-back-button" id="library-loader-back-button" type="button" data-close-scan-page="1" aria-label="Back to previous library view"><span class="library-loader-back-icon" aria-hidden="true">&#8592;</span></button>
+      <div class="library-scan-gallery-copy">
+        <div class="gallery-bar__title"><span>Library Status Page</span></div>
+        <span class="gallery-bar__summary" id="library-scan-gallery-summary" aria-live="polite">Preparing status...</span>
+      </div>
+    </div>
+    <div class="gallery-bar__actions library-loader-actions" id="library-loader-actions" hidden>
+      <button class="button ui-button ui-button--secondary ui-button--medium library-loader-browse-button" type="button" id="library-loader-browse-button" data-browse-scanned-library="1" hidden>Browse Library</button>
+      <button class="button ui-button ui-button--quiet ui-button--medium library-loader-cancel-button" type="button" id="library-loader-cancel-button" data-cancel-library-scan="1" hidden>Cancel Scan</button>
+    </div>
+  </section>`;
+}
+
+function mountLibraryStatusBar() {
+  const mounted = document.getElementById('library-status-gallery-bar');
+  if (mounted) return mounted;
+  const galleryBar = document.querySelector?.('[data-gallery-bar-instance="gallery"]');
+  if (!galleryBar?.parentNode || typeof document.createElement !== 'function') return null;
+  if (typeof closeGalleryMainSurface === 'function') closeGalleryMainSurface(false);
+  detachedGalleryBar = galleryBar;
+  detachedGalleryBarParent = galleryBar.parentNode;
+  detachedGalleryBarNextSibling = galleryBar.nextSibling;
+  const holder = document.createElement('div');
+  holder.innerHTML = buildLibraryStatusBarHtml();
+  const statusBar = holder.firstElementChild;
+  detachedGalleryBarParent.insertBefore(statusBar, galleryBar);
+  galleryBar.remove();
+  return statusBar;
+}
+
+function unmountLibraryStatusBar() {
+  document.getElementById('library-status-gallery-bar')?.remove?.();
+  if (detachedGalleryBar && detachedGalleryBarParent) {
+    const anchor = detachedGalleryBarNextSibling?.parentNode === detachedGalleryBarParent
+      ? detachedGalleryBarNextSibling : null;
+    detachedGalleryBarParent.insertBefore(detachedGalleryBar, anchor);
+  }
+  detachedGalleryBar = null;
+  detachedGalleryBarParent = null;
+  detachedGalleryBarNextSibling = null;
+}
+
 function renderLibraryLoader(data = {}, options = {}) {
+  const scanPageVisible = Boolean(options.scanPageVisible || state.ui.scanPageReturnContext);
+  if (scanPageVisible) mountLibraryStatusBar();
+  else unmountLibraryStatusBar();
   const loader = document.getElementById('library-loader');
+  const scanSummary = document.getElementById('library-scan-gallery-summary');
   const spinner = loader?.querySelector('.library-loader-spinner');
   const title = document.getElementById('library-loader-title');
+  const readyCheck = document.getElementById('library-loader-ready-check');
   const status = document.getElementById('library-loader-status');
   const progress = document.getElementById('library-loader-progress');
   const actions = document.getElementById('library-loader-actions');
@@ -4898,13 +5002,12 @@ function renderLibraryLoader(data = {}, options = {}) {
   const backButton = document.getElementById('library-loader-back-button');
   const phaseGuide = document.getElementById('library-loader-phase-guide');
   const scroll = document.getElementById('albums-scroll');
-  if (!loader || !title || !status || !progress || !scroll || !spinner || !browseButton) return;
+  if (!loader || !title || !status || !progress || !scroll || !spinner) return;
 
   const scanBusy = Boolean(data.scan_in_progress)
     && String(data.scan_phase || '').trim().toLowerCase() !== 'finalizing';
   const relBusy = Boolean(data.relations_in_progress);
   const coverBusy = Boolean(data.covers_in_progress);
-  const scanPageVisible = Boolean(options.scanPageVisible || state.ui.scanPageReturnContext);
   if (typeof syncScanLibraryWatcherHealth === 'function') syncScanLibraryWatcherHealth(data, scanPageVisible);
   const forcedScanPageVisible = Boolean(state.ui.forceScanPageVisible) && (scanBusy || relBusy || state.awaitingInitialDataRefresh);
   const hasSearch = Boolean((state.view?.query || '').trim() || (state.view?.selected_artist || '').trim());
@@ -4939,7 +5042,7 @@ function renderLibraryLoader(data = {}, options = {}) {
   if (galleryWasHidden && !shouldShow && scroll.clientWidth > 0 && typeof virtualGrid !== 'undefined') {
     virtualGrid.onResize();
   }
-  setDomPropertyIfChanged(backButton, 'hidden', !scanPageVisible);
+  setDomPropertyIfChanged(backButton, 'hidden', false);
   setDomPropertyIfChanged(phaseGuide, 'hidden', !scanPageVisible);
   setDomPropertyIfChanged(browseButton, 'hidden', !canBrowseScanned);
   setDomPropertyIfChanged(
@@ -4966,7 +5069,7 @@ function renderLibraryLoader(data = {}, options = {}) {
   setDomPropertyIfChanged(
     actions,
     'hidden',
-    Boolean(browseButton.hidden && (!cancelButton || cancelButton.hidden)),
+    Boolean((!browseButton || browseButton.hidden) && (!cancelButton || cancelButton.hidden)),
   );
   if (!shouldShow) return;
 
@@ -4975,25 +5078,49 @@ function renderLibraryLoader(data = {}, options = {}) {
     title.textContent = 'Nothing found';
     status.textContent = 'No artists, albums, or tracks matched your search.';
     progress.innerHTML = '';
-    browseButton.hidden = true;
+    if (browseButton) browseButton.hidden = true;
     if (cancelButton) cancelButton.hidden = true;
     if (actions) actions.hidden = true;
     return;
   }
 
-  spinner.hidden = Boolean(scanPageVisible && !(scanBusy || relBusy || coverBusy));
+  const ready = scanPageVisible && !(Boolean(data.scan_in_progress) || relBusy || coverBusy || state.awaitingInitialDataRefresh || pendingViewTransition);
+  spinner.hidden = Boolean(scanPageVisible && ready);
+  setDomPropertyIfChanged(readyCheck, 'hidden', !ready);
   const lines = buildLoaderStatusLines(data, {
     scanPageVisible,
     pendingViewTransition: pendingViewTransition && !scanPageVisible,
   });
-  title.textContent = lines[0]?.title || 'Loading library';
+  title.textContent = ready
+    ? 'Your local library is ready.'
+    : (scanPageVisible && (Boolean(data.scan_in_progress) || relBusy || coverBusy)
+      ? 'Scanning the library'
+      : (lines[0]?.title || 'Loading library'));
   status.textContent = lines[0]?.detail || 'Preparing scan...';
+  if (scanSummary) scanSummary.textContent = status.textContent;
+  if (phaseGuide && scanPageVisible) {
+    const phaseStates = resolveLibraryScanPhaseStates(data);
+    phaseGuide.querySelectorAll?.('[data-scan-stage]').forEach((item) => {
+      const stateName = phaseStates[String(item.getAttribute('data-scan-stage') || '')] || 'future';
+      item.classList.toggle('is-current', stateName === 'current');
+      item.classList.toggle('is-complete', stateName === 'complete');
+      item.classList.toggle('is-future', stateName === 'future');
+    });
+  }
   progress.innerHTML = lines.slice(1).map((line) => `
     <div class="library-loader-progress-line">
       <span class="library-loader-progress-title">${escapeHtml(line.title)}</span>
       <span class="library-loader-progress-detail">${escapeHtml(line.detail)}</span>
     </div>
   `).join('');
+  if (scanPageVisible && !data.scan_in_progress && !coverBusy && !relBusy
+    && data.scan_outcome === 'failed' && String(data.last_error || '').trim()) {
+    progress.innerHTML += buildOnPageAlertHtml({
+      severity: 'error',
+      title: 'Last scan error',
+      message: data.last_error,
+    });
+  }
 }
 
 function renderRelated() {
@@ -5095,27 +5222,55 @@ function clearTriggerAnchor(surface) {
   const binding = triggerAnchorBindings.get(surface);
   if (!binding) return;
   binding.observer?.disconnect();
-  binding.resizeObserver?.disconnect();
-  binding.anchor.classList.remove('trigger-anchor-open');
-  delete binding.anchor.dataset.triggerAnchorEdge;
-  triggerAnchorBindings.delete(surface);
+ binding.resizeObserver?.disconnect();
+ binding.anchor.classList.remove('trigger-anchor-open');
+ surface.classList.remove('trigger-anchor-surface');
+ delete binding.anchor.dataset.triggerAnchorEdge;
+ delete binding.anchor.dataset.triggerAnchorContext;
+ delete surface.dataset.triggerAnchorContext;
+ delete surface.dataset.triggerAnchorEdge;
+  delete surface.dataset.triggerAnchorSide;
+  delete surface.dataset.triggerAnchorSearch;
+ binding.anchor.style.removeProperty?.('--trigger-anchor-background');
+ surface.style.removeProperty?.('--trigger-anchor-background');
+ triggerAnchorBindings.delete(surface);
 }
 
 function syncTriggerAnchor(surface, anchor) {
   if (!surface?.getBoundingClientRect || !anchor?.getBoundingClientRect || surface.hidden) return;
+  const previous = triggerAnchorBindings.get(surface);
+  if (previous && previous.anchor !== anchor) clearTriggerAnchor(surface);
+  const anchorContext = anchor.closest?.('.shell-main-surface, .settings-outlet') ? 'content' : 'chrome';
+  if (surface.dataset.triggerAnchorContext !== anchorContext) surface.dataset.triggerAnchorContext = anchorContext;
+  if (anchor.dataset.triggerAnchorContext !== anchorContext) anchor.dataset.triggerAnchorContext = anchorContext;
   activateTriggerSurface(surface, () => {
     surface.hidden = true;
     anchor.setAttribute?.('aria-expanded', 'false');
     clearTriggerAnchor(surface);
   });
-  const previous = triggerAnchorBindings.get(surface);
-  if (previous && previous.anchor !== anchor) clearTriggerAnchor(surface);
   const geometry = getTriggerAnchorGeometry(anchor.getBoundingClientRect(), surface.getBoundingClientRect());
-  surface.classList.add('trigger-anchor-surface');
-  anchor.classList.add('trigger-anchor-open');
-  surface.dataset.triggerAnchorEdge = geometry.edge;
-  surface.dataset.triggerAnchorSide = geometry.side;
-  anchor.dataset.triggerAnchorEdge = geometry.edge;
+  const surfaceStyle = globalThis.getComputedStyle?.(surface);
+  const renderedBackground = surfaceStyle?.backgroundColor?.trim();
+  const surfaceBackground = renderedBackground
+    && renderedBackground !== 'transparent'
+    && renderedBackground !== 'rgba(0, 0, 0, 0)'
+    // Connected surfaces must be opaque: otherwise the button's border paint
+    // and the page underneath the popup produce different visible colors.
+    ? renderedBackground.replace(/^(rgba\([\d.]+,\s*[\d.]+,\s*[\d.]+),\s*[\d.]+\)$/, '$1, 1)')
+    : surfaceStyle?.getPropertyValue?.('--trigger-anchor-background')?.trim();
+  if (surfaceBackground) {
+    surface.style.setProperty('--trigger-anchor-background', surfaceBackground);
+    anchor.style.setProperty('--trigger-anchor-background', surfaceBackground);
+  }
+  if (!surface.classList.contains('trigger-anchor-surface')) surface.classList.add('trigger-anchor-surface');
+  if (anchor.matches?.('.search-field-button')) {
+    if (surface.dataset.triggerAnchorSearch !== 'true') surface.dataset.triggerAnchorSearch = 'true';
+  }
+  else delete surface.dataset.triggerAnchorSearch;
+  if (!anchor.classList.contains('trigger-anchor-open')) anchor.classList.add('trigger-anchor-open');
+ if (surface.dataset.triggerAnchorEdge !== geometry.edge) surface.dataset.triggerAnchorEdge = geometry.edge;
+  if (surface.dataset.triggerAnchorSide !== geometry.side) surface.dataset.triggerAnchorSide = geometry.side;
+  if (anchor.dataset.triggerAnchorEdge !== geometry.edge) anchor.dataset.triggerAnchorEdge = geometry.edge;
   for (const name of ['left', 'right', 'width', 'gap']) {
     surface.style.setProperty(`--trigger-anchor-${name}`, `${geometry[name]}px`);
   }
@@ -5138,6 +5293,18 @@ function syncTriggerAnchor(surface, anchor) {
     if (anchor.parentElement) resizeObserver.observe(anchor.parentElement);
   }
 }
+
+function syncActiveTriggerSurfaces() {
+  const owners = [];
+  for (let owner = activeTriggerSurface; owner; owner = owner.parent) owners.push(owner);
+  owners.reverse().forEach(({ surface }) => {
+    const binding = triggerAnchorBindings.get(surface);
+    if (binding && !surface.hidden) syncTriggerAnchor(surface, binding.anchor);
+  });
+}
+
+globalThis.addEventListener?.('resize', syncActiveTriggerSurfaces);
+globalThis.addEventListener?.('scroll', syncActiveTriggerSurfaces, true);
 function confinePanelTextSelection(selection, surface) {
   if (!selection?.anchorNode || !selection.focusNode || !surface.contains(selection.anchorNode)
       || surface.contains(selection.focusNode)) return;
@@ -5193,6 +5360,33 @@ function installPanelSelectionBoundary() {
 
 // END js/runtime/trigger-anchor.js
 
+// BEGIN js/runtime/search-input.js
+
+function updateSearchClearAction(input) {
+  const clear = input?.closest?.('.search-field-control')?.querySelector?.('[data-search-clear]');
+  if (clear) clear.hidden = !input.value || input.disabled || input.readOnly;
+}
+
+document.addEventListener('input', (event) => {
+  if (event.target?.matches?.('.search-field input[type="search"]')) {
+    updateSearchClearAction(event.target);
+  }
+});
+
+document.addEventListener('click', (event) => {
+  const clear = event.target?.closest?.('[data-search-clear]');
+  if (!clear) return;
+  const input = clear.closest('.search-field-control')?.querySelector('input[type="search"]');
+  if (!input) return;
+  input.value = '';
+  input.dispatchEvent(new Event('input', { bubbles: true }));
+  input.focus();
+});
+
+document.querySelectorAll('.search-field input[type="search"]').forEach(updateSearchClearAction);
+
+// END js/runtime/search-input.js
+
 // BEGIN js/runtime/gallery-main-interactions.js
 
 function createAnchoredSurfaceController() {
@@ -5232,15 +5426,36 @@ function shouldDismissArtistInfoOverlay(config = {}) {
 }
 
 function observeArtistFamilyPanelBounds({ panel, player } = {}) {
-  if (!panel || !player || typeof ResizeObserver !== 'function') return { disconnect() {} };
-  const initialHeight = Number(player.getBoundingClientRect?.().height || 0);
-  if (initialHeight > 0) panel.style.bottom = `${initialHeight}px`;
-  const observer = new ResizeObserver((entries) => {
-    const entry = entries.find((item) => item.target === player) || entries[0];
-    panel.style.bottom = `${Math.max(0, Number(entry?.contentRect?.height || 0))}px`;
-  });
+  if (!panel || !player) return { disconnect() {} };
+  const update = () => {
+    const playerBounds = player.getBoundingClientRect?.();
+    const panelBounds = panel.getBoundingClientRect?.();
+    const style = typeof getComputedStyle === 'function' ? getComputedStyle(player) : null;
+    const opacity = Number.parseFloat(style?.opacity);
+    const visible = !player.hidden
+      && style?.display !== 'none'
+      && style?.visibility !== 'hidden'
+      && style?.visibility !== 'collapse'
+      && (!Number.isFinite(opacity) || opacity > 0)
+      && Number(playerBounds?.width || 0) > 0
+      && Number(playerBounds?.height || 0) > 0;
+    const overlapsPanel = visible
+      && Number(playerBounds.right) > Number(panelBounds?.left || 0)
+      && Number(playerBounds.left) < Number(panelBounds?.right || 0);
+    const viewportHeight = Number(
+      (typeof window !== 'undefined' && window.innerHeight)
+      || (typeof document !== 'undefined' && document.documentElement?.clientHeight)
+      || playerBounds?.bottom
+      || 0,
+    );
+    const bottom = overlapsPanel ? Math.max(0, viewportHeight - Number(playerBounds.top || 0)) : 0;
+    panel.style.bottom = `${Math.round(bottom)}px`;
+  };
+  update();
+  if (typeof ResizeObserver !== 'function') return { disconnect() {}, refresh: update };
+  const observer = new ResizeObserver(update);
   observer.observe(player);
-  return observer;
+  return { disconnect: () => observer.disconnect(), refresh: update };
 }
 
 function positionGalleryAnchoredSurface(surface, anchor, align = 'right') {
@@ -5276,6 +5491,7 @@ function positionArtistFamilyPanelEnvelope(panel, anchor) {
   panel.style.setProperty?.('--gallery-anchor-height', `${Math.round(rect.height)}px`);
   panel.style.setProperty?.('--gallery-anchor-right', `${Math.max(0, Math.round(window.innerWidth - rect.right))}px`);
   if (typeof syncTriggerAnchor === 'function') syncTriggerAnchor(panel, anchor);
+  galleryFamilyPanelObserver?.refresh?.();
 }
 
 function positionSearchSuggestionsSurface(surface) {
@@ -5373,6 +5589,11 @@ function getGalleryFamilyPanelGroups() {
   return resolvedGroups.filter((group, index) => (
     resolvedGroups.findIndex((candidate) => galleryMainGroupArtist(candidate) === galleryMainGroupArtist(group)) === index
   ));
+}
+
+function hasGalleryArtistFamily() {
+  const primaryArtist = String(state.view.selected_artist || '').trim();
+  return Boolean(primaryArtist && getGalleryFamilyPanelGroups().length > 1);
 }
 
 function getGalleryMainContextSections() {
@@ -5546,6 +5767,8 @@ function updateGalleryMainControls() {
   });
   document.querySelectorAll('[data-gallery-album-type]').forEach((button) => {
     button.setAttribute('aria-pressed', mainState.albumTypes.includes(button.dataset.galleryAlbumType) ? 'true' : 'false');
+    button.disabled = true;
+    button.setAttribute('aria-disabled', 'true');
   });
   document.querySelectorAll('[data-gallery-view-choice]').forEach((button) => {
     button.classList.toggle('is-active', button.dataset.galleryViewChoice === mainState.view);
@@ -5557,7 +5780,8 @@ function updateGalleryMainControls() {
     const checked = Boolean(preferenceArtist)
       && typeof getCombineSimilarArtistsPreference === 'function'
       && getCombineSimilarArtistsPreference(preferenceArtist);
-    button.setAttribute('aria-checked', checked ? 'true' : 'false');
+    const ariaChecked = checked ? 'true' : 'false';
+    if (button.getAttribute('aria-checked') !== ariaChecked) button.setAttribute('aria-checked', ariaChecked);
     button.disabled = !preferenceArtist;
   });
   document.querySelectorAll('[data-open-non-album-tracks]').forEach((button) => {
@@ -5644,14 +5868,27 @@ function renderGalleryFamilyPanelBody(panelBody, html) {
   }
 }
 
+function syncGalleryBarSearchVisibility() {
+  const bar = document.querySelector?.('[data-gallery-bar-instance="gallery"]');
+  if (!bar) return;
+  const draftQuery = String(state.ui?.searchDraftQuery || '').trim();
+  const committedQuery = String(state.view?.query || '').trim();
+  const selectedArtist = String(state.view?.selected_artist || '').trim();
+  bar.hidden = selectedArtist
+    ? Boolean(draftQuery) && draftQuery !== committedQuery
+    : Boolean(draftQuery || committedQuery);
+}
+
 function updateGalleryMainChrome() {
-  const bar = document.querySelector('[data-gallery-bar]');
+  const bar = document.querySelector('[data-gallery-bar-instance="gallery"]');
   const scroll = document.getElementById('albums-scroll');
   if (!bar || !scroll) return;
+  syncGalleryBarSearchVisibility();
   updateGalleryMainControls();
   const model = getFilteredGalleryMainModel();
   const primaryArtist = String(state.view.selected_artist || '').trim();
   const sections = getGalleryMainContextSections();
+  const hasFamily = hasGalleryArtistFamily();
   const summaryTotals = resolveGallerySummaryTotals(state.view, model.totals, state.gallery.mainState, model.groups);
   const context = resolveGalleryBarContext({
     scrollTop: scroll.scrollTop,
@@ -5660,10 +5897,20 @@ function updateGalleryMainChrome() {
     artistCount: summaryTotals.artistCount,
     albumCount: summaryTotals.albumCount,
     groups: sections,
+    hasFamily,
   });
   const name = bar.querySelector('[data-gallery-context-name]');
   const summary = bar.querySelector('[data-gallery-context-summary]');
   const oldInfo = bar.querySelector('[data-artist-info-trigger]');
+  const inlineDivider = bar.querySelector('[data-gallery-context-artist-divider]');
+  const inlineTotal = bar.querySelector('[data-gallery-context-inline-total]');
+  if (bar.dataset) bar.dataset.galleryContextKind = context.kind;
+  summary.hidden = false;
+  if (inlineDivider) inlineDivider.hidden = true;
+  if (inlineTotal) {
+    inlineTotal.hidden = true;
+    inlineTotal.textContent = '';
+  }
   if (context.kind === 'gallery' || context.kind === 'family') {
     name.textContent = context.kind === 'gallery' ? 'Gallery' : `${context.primaryArtist} family`;
     summary.textContent = `${galleryMainPlural(context.artistCount, 'artist')} · ${galleryMainPlural(context.albumCount, 'album')}`;
@@ -5690,11 +5937,15 @@ function updateGalleryMainChrome() {
   }
   const panelTitle = document.querySelector('[data-gallery-family-panel-title]');
   if (panelTitle) {
-    panelTitle.textContent = primaryArtist ? `${primaryArtist} Family` : 'Artist Family';
-    panelTitle.title = panelTitle.textContent;
+    const title = primaryArtist ? `${primaryArtist} Family` : 'Artist Family';
+    if (panelTitle.textContent !== title) panelTitle.textContent = title;
+    if (panelTitle.title !== title) panelTitle.title = title;
   }
   const panelTotal = document.querySelector('[data-gallery-family-panel-total]');
-  if (panelTotal) panelTotal.textContent = galleryMainPlural(getGalleryFamilyPanelModel().totals.albumCount, 'album');
+  if (panelTotal) {
+    const total = galleryMainPlural(getGalleryFamilyPanelModel().totals.albumCount, 'album');
+    if (panelTotal.textContent !== total) panelTotal.textContent = total;
+  }
   const panel = document.querySelector('[data-artist-family-panel]');
   if (panel) {
     panel.style.top = `${Math.round(bar.getBoundingClientRect().bottom)}px`;
@@ -5758,7 +6009,7 @@ function handleGalleryMainClick(event) {
   const source = event.target.closest?.('[data-gallery-source]');
   if (source) { event.preventDefault(); transitionGalleryMain({ type: 'toggle-source', source: source.dataset.gallerySource }); return true; }
   const type = event.target.closest?.('[data-gallery-album-type]');
-  if (type) { event.preventDefault(); transitionGalleryMain({ type: 'toggle-album-type', albumType: type.dataset.galleryAlbumType }); return true; }
+  if (type) { event.preventDefault(); return true; }
   const familyArtist = event.target.closest?.('[data-gallery-family-artist]');
   if (familyArtist) {
     event.preventDefault();
@@ -5926,6 +6177,64 @@ function normalizeCompactPlayerStyle(value) {
   return value === 'floating' ? 'floating' : 'docked';
 }
 
+function normalizeDockedCompactPlayerBehavior(value) {
+  return ['follow_sidebar', 'float_on_collapse', 'artbox', 'stay_docked'].includes(value) ? value : 'follow_sidebar';
+}
+
+function resolveCompactPlayerPresentation({ eligible, mode, style, behavior, artistTreeFolded } = {}) {
+  if (!eligible || mode !== 'compact') return 'expanded';
+  if (normalizeCompactPlayerStyle(style) === 'floating') return 'floating';
+  const dockBehavior = normalizeDockedCompactPlayerBehavior(behavior);
+  if (!artistTreeFolded || dockBehavior === 'stay_docked') return 'docked';
+  if (dockBehavior === 'float_on_collapse') return 'floating';
+  return dockBehavior === 'artbox' ? 'rail_artbox' : 'rail_play';
+}
+
+function resolveCompactPlayerMotion({ speed, reducedMotion } = {}) {
+  return reducedMotion ? { durationMs: 1, hoverDurationMs: 1 }
+    : { durationMs: speed === 'slow' ? 1400 : 420, hoverDurationMs: 300 };
+}
+
+function shouldDetachCompactPlayerForOverlay({ presentation, overlayActive } = {}) {
+  return Boolean(overlayActive) && ['docked', 'rail_play', 'rail_artbox'].includes(presentation);
+}
+
+function resolveCompactPlayerMetadataRevealDelay({ presentation, speed, reducedMotion } = {}) {
+  if (presentation === 'rail_artbox') return 700;
+  if (presentation !== 'rail_play') return null;
+  return resolveCompactPlayerMotion({ speed, reducedMotion }).durationMs + 700;
+}
+
+function buildCompactPlayerMetadataSummary(track) {
+  const artist = String(track?.artist || '').trim();
+  const title = String(track?.title || track?.name || '').trim();
+  const album = String(track?.album || '').trim();
+  const song = artist && title ? `${artist} - ${title}` : artist || title;
+  return song && album ? `${song} / ${album}` : song || album;
+}
+
+function resolveCompactPlayerMetadataRowMotion({ scrollWidth, clientWidth } = {}) {
+  const distance = Math.max(0, Math.ceil((Number(scrollWidth) || 0) - (Number(clientWidth) || 0)));
+  if (distance <= 1) return { overflowing: false, distance: 0, durationMs: 0 };
+  return {
+    overflowing: true,
+    distance,
+    durationMs: Math.max(3200, Math.round(distance * 24 + 1800)),
+  };
+}
+
+function useCompactPlayerRailMode({ style, behavior, artistTreeFolded } = {}) {
+  return normalizeCompactPlayerStyle(style) === 'docked'
+    && normalizeDockedCompactPlayerBehavior(behavior) === 'follow_sidebar'
+    && artistTreeFolded === true;
+}
+
+function canDragStayDockedCompactPlayer({ presentation, behavior, artistTreeFolded } = {}) {
+  return presentation === 'docked'
+    && normalizeDockedCompactPlayerBehavior(behavior) === 'stay_docked'
+    && artistTreeFolded === true;
+}
+
 function didCompactPlayerDrag({ startX, startY, currentX, currentY, threshold = 6 } = {}) {
   return Math.hypot(Number(currentX) - Number(startX), Number(currentY) - Number(startY)) >= Number(threshold);
 }
@@ -5977,6 +6286,15 @@ if (typeof module !== 'undefined' && module.exports) module.exports = {
   resolveCompactPlayerMode,
   persistCompactPlayerMode,
   normalizeCompactPlayerStyle,
+  normalizeDockedCompactPlayerBehavior,
+  canDragStayDockedCompactPlayer,
+  useCompactPlayerRailMode,
+  resolveCompactPlayerPresentation,
+  shouldDetachCompactPlayerForOverlay,
+  resolveCompactPlayerMotion,
+  resolveCompactPlayerMetadataRevealDelay,
+  buildCompactPlayerMetadataSummary,
+  resolveCompactPlayerMetadataRowMotion,
   didCompactPlayerDrag,
   clampCompactPlayerPosition,
   createCompactPlayerSessionPosition,
@@ -8025,6 +8343,8 @@ Object.defineProperty(window, '__ALBUM_HAVEN_STREAMING_DIAGNOSTICS__', {
 // BEGIN js/runtime/shell-navigation-drawer.js
 
 const MOBILE_ARTISTS_DRAWER_MEDIA_QUERY = '(max-width: 900px)';
+const ARTIST_TREE_SETTLED_EVENT = 'album-haven:artist-tree-settled';
+let cancelPendingArtistTreeResize = null;
 
 function isArtistsDrawerElement(value) {
   return Boolean(
@@ -8040,6 +8360,18 @@ function getArtistsDrawerElements() {
     button: document.getElementById('artists-drawer-button'),
     rail: document.getElementById('shell-navigation-rail'),
     backdrop: document.getElementById('shell-navigation-rail-backdrop'),
+  };
+}
+
+function getArtistTreeFoldElements() {
+  return {
+    shell: document.getElementById('app-shell'),
+    button: document.getElementById('artist-tree-fold-button'),
+    navigationButton: document.getElementById('artist-tree-navigation-button'),
+    expandedTree: document.getElementById('artist-tree-expanded'),
+    compactNavigation: document.getElementById('shell-navigation-compact'),
+    rail: document.getElementById('shell-navigation-rail'),
+    list: document.getElementById('sidebar-list'),
   };
 }
 
@@ -8086,6 +8418,114 @@ function syncArtistsDrawerVisibility() {
   }
 
   document.body?.classList?.toggle('artists-drawer-open', isOpen);
+  syncArtistTreeFoldVisibility();
+}
+
+function syncArtistTreeFoldVisibility(options = {}) {
+  const {
+    shell, button, navigationButton, expandedTree, compactNavigation, rail, list,
+  } = getArtistTreeFoldElements();
+  const canFold = !isArtistsDrawerMobileViewport() && canUseArtistsDrawerForCurrentView();
+  if (state.ui.artistTreeFolded === null || state.ui.artistTreeFolded === undefined) {
+    const savedFolded = state.ui.shellLayoutPreferences?.artistTreeFolded;
+    state.ui.artistTreeFolded = typeof savedFolded === 'boolean'
+      ? savedFolded
+      : rail?.dataset?.shellDefaultCollapsed === 'true';
+  }
+  const isFolded = Boolean(canFold && state.ui.artistTreeFolded);
+  const isTransitioning = Boolean(canFold && options.transitioning);
+  const isExpanding = Boolean(isTransitioning && !isFolded);
+  shell?.classList?.toggle('is-artist-tree-folded', isFolded);
+  rail?.classList?.toggle('is-folded', isFolded);
+  rail?.classList?.toggle('is-transitioning', isTransitioning);
+  rail?.classList?.toggle('is-expanding', isExpanding);
+  if (button) {
+    button.hidden = !canFold || isFolded;
+    button.setAttribute('aria-expanded', isFolded ? 'false' : 'true');
+    button.setAttribute('aria-label', 'Collapse Artist Tree');
+    button.setAttribute('title', 'Collapse Artist Tree');
+  }
+  if (navigationButton) {
+    navigationButton.hidden = !(isFolded || isExpanding);
+    navigationButton.setAttribute('aria-expanded', isFolded ? 'false' : 'true');
+  }
+  if (expandedTree) expandedTree.hidden = isFolded;
+  if (compactNavigation) compactNavigation.hidden = !(isFolded || isExpanding);
+  if (list) list.hidden = isFolded;
+  document.documentElement?.style?.setProperty('--compact-rail-width', isFolded ? '64px' : '240px');
+  if (typeof syncDockedCompactPresentation === 'function') syncDockedCompactPresentation();
+  return isFolded;
+}
+
+function parseCssTimeMs(value) {
+  const text = String(value || '').trim();
+  const amount = Number.parseFloat(text);
+  if (!Number.isFinite(amount)) return 0;
+  return text.endsWith('ms') ? amount : text.endsWith('s') ? amount * 1000 : 0;
+}
+
+function scheduleArtistTreeResizeAfterTransition(onSettled = null) {
+  cancelPendingArtistTreeResize?.();
+
+  const root = document.documentElement;
+  let fallbackTimer = null;
+  let settled = false;
+  const cleanup = () => {
+    root?.removeEventListener?.('transitionend', handleTransitionEnd);
+    if (fallbackTimer !== null) clearTimeout(fallbackTimer);
+    fallbackTimer = null;
+    if (cancelPendingArtistTreeResize === cleanup) cancelPendingArtistTreeResize = null;
+  };
+  const finish = () => {
+    if (settled) return;
+    settled = true;
+    cleanup();
+    onSettled?.();
+    window.dispatchEvent(new CustomEvent(ARTIST_TREE_SETTLED_EVENT, {
+      detail: { folded: Boolean(state.ui.artistTreeFolded) },
+    }));
+  };
+  const handleTransitionEnd = (event) => {
+    if (event.target === root && event.propertyName === '--compact-rail-width') finish();
+  };
+
+  root?.addEventListener?.('transitionend', handleTransitionEnd);
+  const styles = typeof window.getComputedStyle === 'function' ? window.getComputedStyle(root) : null;
+  const duration = parseCssTimeMs(styles?.getPropertyValue?.('--compact-motion-duration'));
+  fallbackTimer = setTimeout(finish, duration + 50);
+  cancelPendingArtistTreeResize = cleanup;
+}
+
+function toggleArtistTreeFold() {
+  if (isArtistsDrawerMobileViewport() || !canUseArtistsDrawerForCurrentView()) return false;
+  const activeGallerySurface = typeof galleryMainSurfaceController !== 'undefined'
+    ? galleryMainSurfaceController?.current?.()
+    : null;
+  if (activeGallerySurface?.key?.startsWith?.('artist:')
+    && typeof closeGalleryMainSurface === 'function') {
+    closeGalleryMainSurface(false);
+  }
+  const { button, navigationButton, rail } = getArtistTreeFoldElements();
+  const moveFocusWithinRail = Boolean(rail?.contains?.(document.activeElement));
+  const wasFolded = Boolean(state.ui.artistTreeFolded);
+  state.ui.artistTreeFolded = !wasFolded;
+  state.ui.shellLayoutPreferences = {
+    ...(state.ui.shellLayoutPreferences || {}),
+    artistTreeFolded: state.ui.artistTreeFolded,
+  };
+  if (typeof persistShellLayoutPreferences === 'function') persistShellLayoutPreferences();
+  const isFolded = syncArtistTreeFoldVisibility({ transitioning: true });
+  if (moveFocusWithinRail && isFolded) {
+    navigationButton?.focus?.();
+  }
+  const settleArtistTree = () => {
+    if (Boolean(state.ui.artistTreeFolded) !== isFolded) return;
+    syncArtistTreeFoldVisibility();
+    if (!isFolded && state.ui.pendingSidebarRevealArtist) renderSidebar();
+    if (moveFocusWithinRail && !isFolded) button?.focus?.();
+  };
+  scheduleArtistTreeResizeAfterTransition(settleArtistTree);
+  return isFolded;
 }
 
 function openArtistsDrawer() {
@@ -8116,6 +8556,13 @@ function toggleArtistsDrawer() {
 }
 
 function handleArtistsDrawerClick(event) {
+  const foldButton = event.target.closest('[data-toggle-artist-tree-fold="1"]');
+  if (foldButton) {
+    event.preventDefault();
+    toggleArtistTreeFold();
+    return true;
+  }
+
   const toggleButton = event.target.closest('[data-toggle-artists-drawer="1"]');
   if (toggleButton) {
     event.preventDefault();
@@ -8157,39 +8604,50 @@ function handleArtistsDrawerKeydown(event) {
 // BEGIN js/runtime/account-menu.js
 
 // Shared disclosure menu: action ownership remains with the rendered links/forms.
-function attachAccountMenu(component) {
+// Consumers may position the same menu inside a scrolling table or app bar.
+function attachAccountMenu(component, options = {}) {
   const trigger = component.querySelector('[data-account-menu-trigger]');
   const menu = component.querySelector('[data-account-menu]');
   if (!trigger || !menu) return;
+  const listeners = [];
+  const on = (target, name, callback, config) => {
+    target.addEventListener?.(name, callback, config);
+    listeners.push(() => target.removeEventListener?.(name, callback, config));
+  };
   const disabled = (item) => item.disabled || item.getAttribute('aria-disabled') === 'true';
-  const enabledItems = () => Array.from(menu.querySelectorAll('[role="menuitem"]')).filter((item) => !disabled(item));
+  const enabledItems = () => Array.from(menu.querySelectorAll('[role="menuitem"]'))
+    .filter((item) => !disabled(item) && !item.hidden);
   const close = (restoreFocus = false) => {
     menu.hidden = true;
     if (typeof clearTriggerAnchor === 'function') clearTriggerAnchor(menu);
     trigger.setAttribute('aria-expanded', 'false');
     if (restoreFocus) trigger.focus();
   };
+  const position = () => {
+    if (typeof options?.position === 'function') options.position(trigger, menu);
+    if (typeof syncTriggerAnchor === 'function') syncTriggerAnchor(menu, trigger);
+  };
   const open = (last = false, focusItem = true) => {
     if (typeof activateTriggerSurface === 'function') activateTriggerSurface(menu, () => close(false));
     menu.hidden = false;
     trigger.setAttribute('aria-expanded', 'true');
-    if (typeof syncTriggerAnchor === 'function') syncTriggerAnchor(menu, trigger);
+    position();
     const items = enabledItems();
-    if (focusItem) (last ? items[items.length - 1] : items[0])?.focus();
+    if (focusItem) (last ? items[items.length - 1] : items[0])?.focus({ preventScroll: true });
   };
-  globalThis.addEventListener?.('resize', () => {
-    if (!menu.hidden && typeof syncTriggerAnchor === 'function') syncTriggerAnchor(menu, trigger);
+  on(globalThis, 'resize', () => {
+    if (!menu.hidden) position();
   });
   const reject = (event) => {
     event.preventDefault();
     event.stopImmediatePropagation();
   };
-  trigger.addEventListener('click', (event) => {
+  on(trigger, 'click', (event) => {
     event.preventDefault();
-    if (menu.hidden) open(false, event.detail === 0);
+    if (menu.hidden) open(false, options?.focusOnPointer === true || event.detail === 0);
     else close(true);
   });
-  menu.addEventListener('click', (event) => {
+  on(menu, 'click', (event) => {
     const item = event.target?.closest?.('[role="menuitem"]');
     if (!item || !menu.contains(item)) return;
     if (disabled(item)) {
@@ -8199,7 +8657,7 @@ function attachAccountMenu(component) {
     // Restore the opener before Settings captures focus for its modal.
     close(true);
   }, true);
-  component.addEventListener('keydown', (event) => {
+  on(component, 'keydown', (event) => {
     const item = event.target?.closest?.('[role="menuitem"]');
     if (item && disabled(item) && ['Enter', ' ', 'Spacebar'].includes(event.key)) {
       reject(event);
@@ -8221,18 +8679,25 @@ function attachAccountMenu(component) {
     if (!['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) return;
     event.preventDefault();
     const items = enabledItems();
+    if (!items.length) return;
     const current = items.indexOf(document.activeElement);
     const next = event.key === 'Home' ? 0
       : event.key === 'End' ? items.length - 1
         : (current + (event.key === 'ArrowDown' ? 1 : -1) + items.length) % items.length;
-    items[next]?.focus();
+    items[next]?.focus({ preventScroll: true });
   });
-  document.addEventListener('click', (event) => {
+  const closeOutside = (event) => {
     if (!component.contains(event.target)) close();
-  });
-  component.addEventListener('focusout', (event) => {
+  };
+  on(document, 'pointerdown', closeOutside);
+  on(document, 'click', closeOutside);
+  on(component, 'focusout', (event) => {
     if (!component.contains(event.relatedTarget)) close();
   });
+  return () => {
+    close();
+    listeners.forEach(dispose => dispose());
+  };
 }
 
 // END js/runtime/account-menu.js
@@ -8428,6 +8893,7 @@ function getDefaultShellLayoutPreferences() {
   return {
     contextualPaneWidthPx: 320,
     infoDrawerWidthPx: 360,
+    artistTreeFolded: null,
   };
 }
 
@@ -8480,6 +8946,9 @@ function normalizeShellLayoutPreferences(input = {}) {
       source.infoDrawerWidthPx,
       defaults.infoDrawerWidthPx,
     ),
+    artistTreeFolded: typeof source.artistTreeFolded === 'boolean'
+      ? source.artistTreeFolded
+      : defaults.artistTreeFolded,
   };
 }
 
@@ -9365,7 +9834,7 @@ function ensureVersionPickerModal() {
         <div class="version-picker-list" data-version-picker-list></div>
       </div>
       <div class="confirm-modal-actions version-picker-actions">
-        <button type="button" class="button version-picker-cancel" data-close-version-picker="1">Cancel</button>
+        <button type="button" class="button ui-button ui-button--quiet ui-button--medium version-picker-cancel" data-close-version-picker="1">Cancel</button>
         <button type="button" class="button version-picker-save" data-save-version-picker="1">Save</button>
       </div>
     </div>
@@ -9862,6 +10331,8 @@ function closeNonAlbumModal() {
 }
 
 async function openAlbumInExplorer(album) {
+  if (typeof window !== 'undefined' && window.AlbumHavenCapabilities
+    && !window.AlbumHavenCapabilities.allows('library.files.open_location')) return;
   if (!album) {
     showToast('No album payload found for File Explorer action.', 'error', 3200);
     return;
@@ -11342,63 +11813,111 @@ function attachTrackButtons() {
   });
 }
 
+// Escape belongs to the visible foreground overlay, even when focus is behind it.
+function getTopmostOpenModal() {
+  const overlays = '.track-modal, .utility-modal, .confirm-modal, .tag-editor-modal, .cover-lookup-modal, .non-album-modal, .image-lightbox, .repair-progress-overlay';
+  const candidates = [...new Set(Array.from(document.querySelectorAll(
+    `${overlays}, [aria-modal="true"], #app-form-modal`,
+  )).map(node => node.closest(overlays) || node))];
+  const stack = node => {
+    const contexts = [];
+    for (let current = node; current; current = current.parentElement) {
+      const style = getComputedStyle(current);
+      if (style.zIndex !== 'auto' && style.zIndex !== ''
+          || ['fixed', 'sticky'].includes(style.position)
+          || Number(style.opacity) < 1
+          || style.transform && style.transform !== 'none'
+          || style.filter && style.filter !== 'none'
+          || style.isolation === 'isolate'
+          || /paint|layout|strict|content/.test(style.contain || '')) {
+        contexts.unshift({ node: current, z: Number(style.zIndex) || 0 });
+      }
+    }
+    return contexts;
+  };
+  const visible = candidates.filter(node => {
+    if (node.closest('[hidden], [inert]') || !node.getClientRects().length) return false;
+    const style = getComputedStyle(node);
+    return style.visibility !== 'hidden' && style.visibility !== 'collapse';
+  }).map(node => ({ node, stack: stack(node) }));
+  visible.sort((a, b) => {
+    let index = 0;
+    while (a.stack[index] && b.stack[index] && a.stack[index].node === b.stack[index].node) index += 1;
+    const left = a.stack[index];
+    const right = b.stack[index];
+    const order = (left?.z || 0) - (right?.z || 0);
+    if (order) return order;
+    return (left?.node || a.node).compareDocumentPosition(right?.node || b.node) & 4 ? -1 : 1;
+  });
+  return visible.at(-1)?.node || null;
+}
+
+function handleModalEscapeKeydown(event) {
+  if (event.key !== 'Escape') return;
+  const modal = getTopmostOpenModal();
+  if (!modal) return;
+  // Capture and stop immediately: closing one dialog must not expose another
+  // to this same keypress, including handlers attached directly to its controls.
+  event.stopImmediatePropagation?.();
+  if (event.defaultPrevented) return;
+  event.preventDefault?.();
+  if (event.repeat || event.isComposing) return;
+  if (modal.id === 'tag-editor-modal') {
+    if (state.tagEditor.reorder) {
+      clearTagEditorReorderCue();
+    } else if (getSelectedTagEditorPaths(state.tagEditor.tracks || []).length > 1) {
+      setTagEditorSelectedPaths([]);
+      state.tagEditor.anchorPath = '';
+      renderTagEditor({ preserveTrackList: true });
+    } else {
+      closeTagEditor();
+    }
+    return;
+  }
+  if (modal.id === 'utility-modal') {
+    if (state.utility.activeTab === 'problematic-files' && state.utility.problemDropdownOpen) {
+      const els = getUtilityModalElements();
+      state.utility.problemDropdownOpen = false;
+      els.problemFilterMenu.hidden = true;
+      els.problemFilterButton.setAttribute('aria-expanded', 'false');
+      if (typeof clearTriggerAnchor === 'function') clearTriggerAnchor(els.problemFilterMenu);
+      els.problemFilterButton.focus();
+      return;
+    }
+    if (typeof cancelActiveSavedLoopCreation === 'function' && cancelActiveSavedLoopCreation()) return;
+    const editor = typeof getBackgroundAppearanceEditor === 'function' ? getBackgroundAppearanceEditor() : null;
+    if (editor?.allowLeave(() => true) === false) return;
+    closeUtilityModal(true);
+    return;
+  }
+  const close = {
+    'track-modal': () => closeTrackModal(),
+    'image-lightbox': () => closeImageLightbox(),
+    'repair-confirm-modal': () => closeRepairConfirmModal(),
+    'tag-edit-confirm-modal': () => closeTagEditConfirmModal(),
+    'cover-lookup-modal': () => closeCoverLookupModal(),
+    'cover-lookup-delete-confirm-modal': () => closeCoverLookupDeleteConfirm(),
+    'non-album-modal': () => closeNonAlbumModal(),
+    'version-picker-modal': () => closeVersionPickerModal(),
+  }[modal.id];
+  if (close) close();
+  else {
+    // Promise-backed dialogs must settle through their own cancel actions.
+    modal.querySelector('#app-confirm-cancel, #app-form-cancel, #loop-name-cancel, #loop-delete-confirm-cancel')?.click();
+  }
+}
+
 function attachModalEvents() {
   const els = getTrackModalElements();
   if (!els.overlay || els.overlay.dataset.bound === '1') return;
   els.overlay.dataset.bound = '1';
   bindOverlayPointerOrigin(els.overlay);
-  els.close?.addEventListener('click', closeTrackModal);
   els.overlay.addEventListener('click', (event) => {
     if (overlayClickStartedOnOverlay(els.overlay, event) || event.target.closest('[data-close-track-modal="1"]')) {
       closeTrackModal();
     }
   });
-  document.addEventListener('keydown', (event) => {
-    if (event.key !== 'Escape') return;
-    const lightboxEls = getLightboxElements();
-    if (lightboxEls.overlay && !lightboxEls.overlay.hidden) {
-      closeImageLightbox();
-      return;
-    }
-    const repairConfirmEls = getRepairConfirmElements();
-    if (repairConfirmEls.overlay && !repairConfirmEls.overlay.hidden) {
-      closeRepairConfirmModal();
-      return;
-    }
-    const coverLookupEls = getCoverLookupModalElements();
-    if (coverLookupEls.overlay && !coverLookupEls.overlay.hidden) {
-      closeCoverLookupModal();
-      return;
-    }
-    const coverLookupDeleteConfirmEls = getCoverLookupDeleteConfirmElements();
-    if (coverLookupDeleteConfirmEls.overlay && !coverLookupDeleteConfirmEls.overlay.hidden) {
-      closeCoverLookupDeleteConfirm();
-      return;
-    }
-    if (!els.overlay.hidden && els.overlay.classList.contains('is-above-settings')) {
-      if (!event.defaultPrevented) closeTrackModal();
-      return;
-    }
-    const utilityEls = getUtilityModalElements();
-    if (utilityEls.overlay && !utilityEls.overlay.hidden) {
-      if (event.defaultPrevented) return;
-      if (typeof cancelActiveSavedLoopCreation === 'function'
-          && cancelActiveSavedLoopCreation()) {
-        event.preventDefault();
-        return;
-      }
-      closeUtilityModal();
-      return;
-    }
-    const nonAlbumEls = getNonAlbumModalElements();
-    if (nonAlbumEls.overlay && !nonAlbumEls.overlay.hidden) {
-      closeNonAlbumModal();
-      return;
-    }
-    if (!els.overlay.hidden) {
-      closeTrackModal();
-    }
-  });
+  document.addEventListener('keydown', handleModalEscapeKeydown, true);
   document.addEventListener('keydown', (event) => {
     const lightboxEls = getLightboxElements();
     if (!lightboxEls.overlay || lightboxEls.overlay.hidden) return;
@@ -11435,7 +11954,6 @@ function attachModalEvents() {
 const PLAYER_WAVEFORM_PEAK_COUNT = 280;
 const PLAYER_WAVEFORM_DETAIL_PEAK_COUNT = 720;
 const PLAYER_WAVEFORM_BUSY_RETRY_DELAYS_MS = Object.freeze([50, 100, 200, 400, 800]);
-const SAVED_LOOP_WAVEFORM_CACHE_LIMIT = 4;
 const playerWaveformPeakCache = new Map();
 const playerWaveformPeakProbes = new Map();
 const savedLoopWaveformPeakCache = new Map();
@@ -11511,13 +12029,17 @@ async function resumePlayerWaveformPeakLoadsAfterForegroundView(suspension) {
   return peaks;
 }
 
-function trimSavedLoopWaveformPeakCache() {
-  while (savedLoopWaveformPeakCache.size > SAVED_LOOP_WAVEFORM_CACHE_LIMIT) {
-    const oldestIdentity = savedLoopWaveformPeakCache.keys().next().value;
-    const evicted = savedLoopWaveformPeakCache.get(oldestIdentity);
-    savedLoopWaveformPeakCache.delete(oldestIdentity);
-    evicted?.controller?.abort();
+function retainSavedLoopWaveformPeaks(loopIds) {
+  const retained = new Set(loopIds.map(String));
+  for (const [identity, entry] of savedLoopWaveformPeakCache) {
+    if (retained.has(identity)) continue;
+    savedLoopWaveformPeakCache.delete(identity);
+    entry.controller.abort();
   }
+}
+
+function getCachedSavedLoopWaveformPeaks(loopId) {
+  return savedLoopWaveformPeakCache.get(String(loopId || '').trim())?.peaks || null;
 }
 
 async function loadSavedLoopWaveformPeaks(loopId) {
@@ -11525,13 +12047,11 @@ async function loadSavedLoopWaveformPeaks(loopId) {
   if (!identity || identity.length > 256) return null;
   if (savedLoopWaveformPeakCache.has(identity)) {
     const cached = savedLoopWaveformPeakCache.get(identity);
-    savedLoopWaveformPeakCache.delete(identity);
-    savedLoopWaveformPeakCache.set(identity, cached);
     return cached.promise;
   }
 
   const controller = new AbortController();
-  const entry = { controller, promise: null };
+  const entry = { controller, promise: null, peaks: null };
   entry.promise = (async () => {
     let retained = false;
     try {
@@ -11556,6 +12076,7 @@ async function loadSavedLoopWaveformPeaks(loopId) {
           PLAYER_WAVEFORM_PEAK_COUNT,
         );
         retained = Boolean(peaks);
+        entry.peaks = peaks;
         return peaks;
       }
     } catch (_error) {
@@ -11567,7 +12088,6 @@ async function loadSavedLoopWaveformPeaks(loopId) {
     }
   })();
   savedLoopWaveformPeakCache.set(identity, entry);
-  trimSavedLoopWaveformPeakCache();
   return entry.promise;
 }
 
@@ -11837,11 +12357,15 @@ function mountLoopEditActionControl({
     if (next.reset || contextChanged || !currentCanCreate || (wasActive && !currentActive)) {
       clearTimers();
       renderEngagement(retained() && currentCanCreate);
+      // Start a fresh dwell for the current track after cancelling its predecessor's timer.
+      pointerWithin = pointerWithin || Boolean(compound.matches?.(':hover'));
+      if (pointerWithin && currentCanCreate) visit();
     } else if ((!wasActive && currentActive) || (!wasAllowed && currentCanCreate)) {
       pointerWithin = pointerWithin || Boolean(compound.matches?.(':hover'));
       focusWithin = focusWithin || Boolean(ownerDocument?.activeElement && compound.contains?.(ownerDocument.activeElement));
       clearTimers();
       renderEngagement(retained() || (currentActive && pointerWithin));
+      if (pointerWithin && !currentEngaged) visit();
     } else if (retained()) renderEngagement(true);
     root.hidden = !currentCanCreate;
     const unavailable = !currentEnabled || !currentCanCreate;
@@ -11888,6 +12412,8 @@ function mountLoopEditActionControl({
   listen(touchQuery, 'change', () => { if (retained()) visit(); else leave(); });
   renderEngagement(Boolean(touchQuery?.matches));
   update({ enabled, canCreate, active, busy });
+  pointerWithin = Boolean(compound.matches?.(':hover'));
+  if (pointerWithin) visit();
   return {
     update,
     destroy() {
@@ -12263,7 +12789,7 @@ function drawCombinedLoopWaveform(canvas, waveform, progressRatio = 0) {
       return `
         <div class="playback-control-cluster playback-control-cluster--compact compact-player-transport" data-playback-control-cluster data-playback-control-variant="compact-player">
           <button class="compact-player-skip" type="button" data-playback-control-action="previous" data-compact-player-previous aria-label="Previous track">${renderPreviousIcon()}</button>
-          <button class="compact-player-play" type="button" data-playback-control-action="play-pause" data-compact-player-play aria-label="Play">&#9654;</button>
+          <button class="compact-player-play" type="button" data-playback-control-action="play-pause" data-compact-player-play aria-label="Play"><svg class="compact-player-play-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M8 5v14l12-7z"></path></svg></button>
           <button class="compact-player-skip" type="button" data-playback-control-action="next" data-compact-player-next aria-label="Next track">${renderNextIcon()}</button>
         </div>
       `;
@@ -12272,7 +12798,7 @@ function drawCombinedLoopWaveform(canvas, waveform, progressRatio = 0) {
       const owner = escapePlaybackControlAttribute(ownerId || 'global-player');
       return `
         <span class="playback-control-cluster playback-control-cluster--expanded loop-play-control-cluster player-play-cluster" data-playback-control-cluster data-playback-control-variant="expanded-player" data-loop-control-style="${style}">
-          <button class="loop-play-control-button player-play" type="button" id="player-play" data-playback-control-action="play-pause" aria-label="Play or pause">Play</button>
+          <button class="loop-play-control-button player-play" type="button" id="player-play" data-playback-control-action="play-pause" aria-label="Play or pause"><svg class="ui-icon player-transport-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M9 6.4v11.2l9-5.6-9-5.6Z"/></svg></button>
           <span class="loop-play-control-actions player-loop-actions" data-playback-control-loop-actions data-loop-action-mount="${owner}" data-loop-action-owner="${owner}"></span>
         </span>
       `;
@@ -12887,6 +13413,66 @@ const BACKGROUND_COMPLETION_VIEW_OWNERSHIP_RETRY_LIMIT = 2;
 const STATUS_POLL_FOREGROUND_IDLE_RETRY_DELAY_MS = 25;
 const STATUS_POLL_VISIBLE_MENU_BUSY_DELAY_MS = 100;
 let pendingSidebarRenderFrameId = 0;
+let libraryStatusAction = null;
+let statusReadRevision = 0;
+let statusPollSequence = 0;
+let statusPollTimer = null;
+
+function scheduleStatusPoll(delay) {
+  const dueAt = Date.now() + delay;
+  // Keep the earliest read, especially the 150/250ms action acknowledgement read.
+  if (statusPollTimer && statusPollTimer.dueAt <= dueAt) return;
+  if (statusPollTimer) clearBrowserTimeout(statusPollTimer.id);
+  const scheduled = { dueAt, id: null };
+  statusPollTimer = scheduled;
+  scheduled.id = scheduleBrowserTimeout(() => {
+    if (statusPollTimer !== scheduled) return;
+    statusPollTimer = null;
+    return pollStatus();
+  }, delay);
+}
+
+function claimLibraryStatusAction(pendingStart) {
+  libraryStatusAction = { pendingStart };
+  state.ui.scanCancellationPending = false;
+  statusReadRevision += 1;
+  // Completion retries belong to the scan that produced them, not a later intent.
+  clearPendingScanCompletionViewRefresh();
+  state.ui.pendingScanCompletionViewRefreshPromise = null;
+  state.ui.pendingCoverCompletionViewRefreshPromise = null;
+  clearPendingCoverCompletionViewRefresh();
+  return libraryStatusAction;
+}
+
+function clearPendingCoverCompletionViewRefresh() {
+  if (state.ui.pendingCoverCompletionViewRefreshRetryScheduled) {
+    clearBrowserTimeout(state.ui.pendingCoverCompletionViewRefreshRetryTimerId);
+  }
+  state.ui.pendingCoverCompletionViewRefreshRetryToken = (
+    Number(state.ui.pendingCoverCompletionViewRefreshRetryToken || 0) + 1
+  );
+  state.ui.pendingCoverCompletionViewRefreshRetryScheduled = false;
+  state.ui.pendingCoverCompletionViewRefreshRetryTimerId = 0;
+  state.ui.pendingCoverCompletionViewRefreshRetryCount = 0;
+  state.ui.pendingCoverCompletionViewRefreshRetryExhausted = false;
+  state.ui.pendingCoverCompletionViewRefresh = false;
+}
+
+function settleLibraryStatusAction(action) {
+  if (libraryStatusAction !== action) return false;
+  action.pendingStart = false;
+  statusReadRevision += 1;
+  return true;
+}
+
+function currentStatusPollDelay() {
+  const status = state.status || {};
+  const busy = status.scan_in_progress || status.relations_in_progress || status.covers_in_progress;
+  const statusMenu = document.getElementById('status-context-menu');
+  return busy && statusMenu && !statusMenu.hidden
+    ? STATUS_POLL_VISIBLE_MENU_BUSY_DELAY_MS
+    : (busy ? 1000 : 3000);
+}
 
 function readViewStateRevision() {
   return Number(state.ui?.viewStateRevision || 0);
@@ -13054,7 +13640,19 @@ function consumePendingScanCompletionViewRefresh(requestId, data, requestOptions
   return true;
 }
 
-async function dispatchPendingScanCompletionViewRefresh() {
+function dispatchPendingScanCompletionViewRefresh(shareStatusCompletion = false) {
+  if (!shareStatusCompletion) return performPendingScanCompletionViewRefresh();
+  if (!state.ui.pendingScanCompletionViewRefreshPromise) {
+    const pending = performPendingScanCompletionViewRefresh().catch(error => {
+      if (state.ui.pendingScanCompletionViewRefreshPromise === pending) state.ui.pendingScanCompletionViewRefreshPromise = null;
+      throw error;
+    });
+    state.ui.pendingScanCompletionViewRefreshPromise = pending;
+  }
+  return state.ui.pendingScanCompletionViewRefreshPromise;
+}
+
+async function performPendingScanCompletionViewRefresh() {
   if (
     !state.ui?.pendingScanCompletionViewRefresh
     || state.ui?.pendingScanCompletionViewRefreshRetryExhausted
@@ -13117,7 +13715,19 @@ async function dispatchPendingScanCompletionViewRefresh() {
   return true;
 }
 
-async function dispatchPendingCoverCompletionViewRefresh() {
+function dispatchPendingCoverCompletionViewRefresh(shareStatusCompletion = false) {
+  if (!shareStatusCompletion) return performPendingCoverCompletionViewRefresh();
+  if (!state.ui.pendingCoverCompletionViewRefreshPromise) {
+    const pending = performPendingCoverCompletionViewRefresh().catch(error => {
+      if (state.ui.pendingCoverCompletionViewRefreshPromise === pending) state.ui.pendingCoverCompletionViewRefreshPromise = null;
+      throw error;
+    });
+    state.ui.pendingCoverCompletionViewRefreshPromise = pending;
+  }
+  return state.ui.pendingCoverCompletionViewRefreshPromise;
+}
+
+async function performPendingCoverCompletionViewRefresh() {
   if (
     !state.ui?.pendingCoverCompletionViewRefresh
     || state.ui?.pendingCoverCompletionViewRefreshRetryExhausted
@@ -13305,6 +13915,9 @@ function renderView(options = {}) {
   }
   if (options.preserveMountedGallery !== true && !preserveMountedSelectedViewNodes) {
     renderArtistGroups(options);
+  } else if (typeof updateGalleryMainChrome === 'function') {
+    // Retained cards do not imply that search or artist context is unchanged.
+    updateGalleryMainChrome();
   }
   renderLibraryLoader(state.status);
   scheduleSidebarRender();
@@ -13710,10 +14323,15 @@ async function fetchAndRender(url, push = true, options = {}) {
       });
     }
     if (
-      requestOptions.startupRefresh
+      response.ok
+      && data?.ok !== false
       && (
-        startupHydrationTier !== 'sidebar'
-        || !String(requestOptions.startupHydrationFollowupEndpoint || '').trim()
+        (requestOptions.startupRefresh
+          && (
+            startupHydrationTier !== 'sidebar'
+            || !String(requestOptions.startupHydrationFollowupEndpoint || '').trim()
+          ))
+        || isCanonicalFullViewPayload(data, requestOptions)
       )
     ) {
       startupMetrics.completeInitialRefresh(state.view);
@@ -13866,6 +14484,7 @@ async function triggerLibraryRefresh(fullRescan = false) {
     return false;
   }
   const previousStatus = { ...state.status };
+  const action = claimLibraryStatusAction(true);
   state.ui.scanCancellationAcknowledged = false;
   indicator.classList.remove('is-done', 'is-idle');
   indicator.classList.add('is-busy');
@@ -13885,10 +14504,12 @@ async function triggerLibraryRefresh(fullRescan = false) {
       body: JSON.stringify({ full_rescan: Boolean(fullRescan) }),
     });
     const data = await response.json().catch(() => ({}));
+    // Reads taken before HTTP acceptance may still contain the pre-start snapshot.
+    if (!settleLibraryStatusAction(action)) return false;
     if (response.status === 409 && data?.already_running) {
       updateStatusIndicator(previousStatus);
       showToast('Library scan is already running.', 'info', 2200);
-      scheduleBrowserTimeout(pollStatus, 250);
+      scheduleStatusPoll(250);
       return false;
     }
     if (!response.ok || data?.ok === false) {
@@ -13903,9 +14524,10 @@ async function triggerLibraryRefresh(fullRescan = false) {
     }
     state.wasPollingBusy = true;
     showToast('Library scan started.', 'success', 2200);
-    scheduleBrowserTimeout(pollStatus, 250);
+    scheduleStatusPoll(250);
     return true;
   } catch (error) {
+    if (!settleLibraryStatusAction(action)) return false;
     updateStatusIndicator(previousStatus);
     indicator.classList.remove('is-busy');
     indicator.classList.add('is-done');
@@ -13977,6 +14599,7 @@ function abandonScanPageForNavigation(options = {}) {
   claimLocalViewStateNavigation();
   state.ui.scanPageReturnContext = null;
   state.ui.forceScanPageVisible = false;
+  if (typeof unmountLibraryStatusBar === 'function') unmountLibraryStatusBar();
   resumeScanPageGalleryCoverLoads();
   if (options.clearSelection === true) {
     state.view = {
@@ -14028,6 +14651,7 @@ function closeScanPage() {
   }
   state.ui.searchDraftQuery = String(returnContext.searchDraftQuery ?? state.view?.query ?? '');
   state.ui.scanPageReturnContext = null;
+  if (typeof unmountLibraryStatusBar === 'function') unmountLibraryStatusBar();
   const searchInput = document.getElementById('search-input');
   if (searchInput) searchInput.value = state.ui.searchDraftQuery;
   if (
@@ -14062,6 +14686,7 @@ async function cancelLibraryScan() {
   if (state.ui.scanCancellationPending) return false;
   const isFullRescan = String(state.status?.scan_mode || '') === 'manual_full_rescan';
   const scanLabel = isFullRescan ? 'full rescan' : 'scan';
+  const action = claimLibraryStatusAction(false);
   state.ui.scanCancellationPending = true;
   renderLibraryLoader(state.status, {
     scanPageVisible: Boolean(state.ui.scanPageReturnContext),
@@ -14072,6 +14697,7 @@ async function cancelLibraryScan() {
       headers: { Accept: 'application/json' },
     });
     const data = await response.json();
+    if (!settleLibraryStatusAction(action)) return false;
     if (!response.ok || !data?.ok) {
       throw new Error(data?.error || `Failed to cancel ${scanLabel} (${response.status}).`);
     }
@@ -14095,16 +14721,19 @@ async function cancelLibraryScan() {
       'success',
       2600,
     );
-    scheduleBrowserTimeout(pollStatus, 150);
+    scheduleStatusPoll(150);
     return Boolean(data.cancelled);
   } catch (error) {
+    if (!settleLibraryStatusAction(action)) return false;
     showToast(error?.message || `Failed to cancel ${scanLabel}.`, 'error', 3200);
     return false;
   } finally {
-    state.ui.scanCancellationPending = false;
-    renderLibraryLoader(state.status, {
-      scanPageVisible: Boolean(state.ui.scanPageReturnContext),
-    });
+    if (libraryStatusAction === action) {
+      state.ui.scanCancellationPending = false;
+      renderLibraryLoader(state.status, {
+        scanPageVisible: Boolean(state.ui.scanPageReturnContext),
+      });
+    }
   }
 }
 
@@ -14149,6 +14778,7 @@ async function browseScannedLibrarySnapshot() {
     });
     state.ui.scanPageReturnContext = null;
     state.ui.forceScanPageVisible = false;
+    if (typeof unmountLibraryStatusBar === 'function') unmountLibraryStatusBar();
     state.ui.searchDraftQuery = '';
     const searchInput = document.getElementById('search-input');
     if (searchInput) searchInput.value = '';
@@ -14214,6 +14844,7 @@ async function browseScannedLibrarySnapshot() {
     ) {
       state.ui.scanPageReturnContext = null;
       state.ui.forceScanPageVisible = false;
+      if (typeof unmountLibraryStatusBar === 'function') unmountLibraryStatusBar();
       state.ui.searchDraftQuery = '';
       const searchInput = document.getElementById('search-input');
       if (searchInput) searchInput.value = '';
@@ -14245,6 +14876,13 @@ function watcherHealthRefreshSignature(status) {
 }
 
 async function pollStatus() {
+  const sequence = ++statusPollSequence;
+  const readRevision = statusReadRevision;
+  const startedDuringPendingStart = Boolean(libraryStatusAction?.pendingStart);
+  const ownsStatus = () => sequence === statusPollSequence
+    && readRevision === statusReadRevision
+    && !startedDuringPendingStart;
+  let nextPollDelay = null;
   const knownStatus = state.status || {};
   const knownWatcherHealth = watcherHealthRefreshSignature(knownStatus);
   const hadKnownInventoryRevision = Object.prototype.hasOwnProperty.call(
@@ -14260,18 +14898,19 @@ async function pollStatus() {
   const coverScheduler = typeof galleryCoverLoadScheduler !== 'undefined'
     ? galleryCoverLoadScheduler
     : null;
-  if (
-    !knownBusy
-    && coverScheduler?.isForegroundIdle?.() === false
-    && typeof coverScheduler.whenForegroundIdle === 'function'
-  ) {
-    await coverScheduler.whenForegroundIdle();
-    scheduleBrowserTimeout(pollStatus, STATUS_POLL_FOREGROUND_IDLE_RETRY_DELAY_MS);
-    return;
-  }
   try {
+    if (
+      !knownBusy
+      && coverScheduler?.isForegroundIdle?.() === false
+      && typeof coverScheduler.whenForegroundIdle === 'function'
+    ) {
+      await coverScheduler.whenForegroundIdle();
+      if (ownsStatus()) nextPollDelay = STATUS_POLL_FOREGROUND_IDLE_RETRY_DELAY_MS;
+      return;
+    }
     const response = await fetch('/status');
     const data = await response.json();
+    if (!ownsStatus()) return;
     updateStatusIndicator(data);
     const normalizedStatus = state.status;
     const currentInventoryRevision = Number(
@@ -14296,10 +14935,12 @@ async function pollStatus() {
         // An earlier in-flight summary cannot satisfy a later status change.
         // Failed/superseded loads return null; keep the change pending for the next poll.
         const refreshedItems = await loadProblematicFiles(true);
+        if (!ownsStatus()) return;
         if (state.utility === utility && Array.isArray(refreshedItems)) {
           utility.problematicStatusSyncedRevision = requestedRefreshRevision;
         }
       } catch (problematicFilesError) {
+        if (!ownsStatus()) return;
         console.error(
           '[AlbumHaven][Watcher] Failed to refresh Problematic Files after a status change.',
           problematicFilesError,
@@ -14353,9 +14994,19 @@ async function pollStatus() {
     const wasPollingBusy = Boolean(state.wasPollingBusy);
     const wasScanFinalizing = Boolean(state.wasScanFinalizing);
     const wasCoverPollingBusy = Boolean(state.wasCoverPollingBusy);
-    state.wasPollingBusy = busyNow;
+    if (busyNow && state.ui.pendingScanCompletionViewRefreshPromise) {
+      clearPendingScanCompletionViewRefresh();
+      state.ui.pendingScanCompletionViewRefreshPromise = null;
+    }
+    if (coverBusyNow && state.ui.pendingCoverCompletionViewRefreshPromise) {
+      clearPendingCoverCompletionViewRefresh();
+      state.ui.pendingCoverCompletionViewRefreshPromise = null;
+    }
+    // Keep a terminal transition pending until its owned async effects finish.
+    // A newer idle observation can then finish it instead of losing completion.
+    if (busyNow) state.wasPollingBusy = true;
     state.wasScanFinalizing = scanFinalizing;
-    state.wasCoverPollingBusy = coverBusyNow;
+    if (coverBusyNow) state.wasCoverPollingBusy = true;
     if ((!busyNow || scanFinalizing) && !state.ui.scanPageReturnContext) {
       state.ui.forceScanPageVisible = false;
     }
@@ -14379,6 +15030,7 @@ async function pollStatus() {
         clearPendingScanCompletionViewRefresh();
       } else if (!hasPendingSidebarNavigation()) {
         await dispatchPendingScanCompletionViewRefresh();
+        if (!ownsStatus()) return;
       }
     }
     if (wasPollingBusy && !busyNow) {
@@ -14386,21 +15038,13 @@ async function pollStatus() {
         Boolean(state.ui.scanCancellationAcknowledged)
         || String(normalizedStatus.scan_outcome || '').trim().toLowerCase() === 'cancelled'
       );
-      if (state.ui.pendingScanCompletionViewRefreshRetryScheduled) {
-        clearBrowserTimeout(state.ui.pendingScanCompletionViewRefreshRetryTimerId);
+      if (!state.ui.pendingScanCompletionViewRefreshPromise) {
+        clearPendingScanCompletionViewRefresh();
+        state.ui.pendingScanCompletionViewRefresh = true;
       }
-      state.ui.pendingScanCompletionViewRefreshRetryToken = (
-        Number(state.ui.pendingScanCompletionViewRefreshRetryToken || 0) + 1
-      );
-      state.ui.pendingScanCompletionViewRefreshRetryScheduled = false;
-      state.ui.pendingScanCompletionViewRefreshRetryTimerId = 0;
-      state.ui.pendingScanCompletionViewRefreshRetryCount = 0;
-      state.ui.pendingScanCompletionViewRefreshRetryExhausted = false;
-      state.ui.pendingScanCompletionViewRefresh = true;
-      state.ui.pendingScanCompletionViewRefreshEligibleRequestId = 0;
-      state.ui.lastSuccessfulCanonicalFullViewApply = null;
       if (!hasPendingSidebarNavigation()) {
-        await dispatchPendingScanCompletionViewRefresh();
+        await dispatchPendingScanCompletionViewRefresh(true);
+        if (!ownsStatus()) return;
       }
       state.ui.scanCancellationAcknowledged = false;
       if (!normalizedStatus.last_error && !scanWasCancelled) {
@@ -14408,26 +15052,25 @@ async function pollStatus() {
       }
       state.ui.pendingInventoryMutationViewRefresh = false;
     }
+    state.wasPollingBusy = busyNow;
+    state.ui.pendingScanCompletionViewRefreshPromise = null;
     if (wasCoverPollingBusy && !coverBusyNow) {
       if (shouldAutoRefreshViewAfterCoverCompletion()) {
-        if (state.ui.pendingCoverCompletionViewRefreshRetryScheduled) {
-          clearBrowserTimeout(state.ui.pendingCoverCompletionViewRefreshRetryTimerId);
+        if (!state.ui.pendingCoverCompletionViewRefreshPromise) {
+          clearPendingCoverCompletionViewRefresh();
+          state.ui.pendingCoverCompletionViewRefresh = true;
         }
-        state.ui.pendingCoverCompletionViewRefreshRetryToken = (
-          Number(state.ui.pendingCoverCompletionViewRefreshRetryToken || 0) + 1
-        );
-        state.ui.pendingCoverCompletionViewRefreshRetryScheduled = false;
-        state.ui.pendingCoverCompletionViewRefreshRetryTimerId = 0;
-        state.ui.pendingCoverCompletionViewRefreshRetryCount = 0;
-        state.ui.pendingCoverCompletionViewRefreshRetryExhausted = false;
-        state.ui.pendingCoverCompletionViewRefresh = true;
-        await dispatchPendingCoverCompletionViewRefresh();
+        await dispatchPendingCoverCompletionViewRefresh(true);
+        if (!ownsStatus()) return;
       }
       if (state.utility.loaded) {
         await loadProblematicFiles(true);
+        if (!ownsStatus()) return;
       }
       showToast('Album covers updated.', 'success', 3200);
     }
+    state.wasCoverPollingBusy = coverBusyNow;
+    state.ui.pendingCoverCompletionViewRefreshPromise = null;
     if (
       state.ui.pendingInventoryMutationViewRefresh
       && !busyNow
@@ -14441,12 +15084,14 @@ async function pollStatus() {
           preserveScroll: true,
           restartIfSameUrl: true,
         });
+        if (!ownsStatus()) return;
         if (!refreshApplied) {
           state.ui.pendingInventoryMutationViewRefresh = true;
         } else if (typeof invalidateAllHydratedTrackModalAlbumDetails === 'function') {
           invalidateAllHydratedTrackModalAlbumDetails();
         }
       } catch (inventoryRefreshError) {
+        if (!ownsStatus()) return;
         state.ui.pendingInventoryMutationViewRefresh = true;
         console.error(
           '[AlbumHaven][Watcher] Failed to refresh the gallery after an inventory change.',
@@ -14454,18 +15099,15 @@ async function pollStatus() {
         );
       }
     }
-    const statusMenu = document.getElementById('status-context-menu');
-    const visibleStatusMenuNeedsBusySampling = Boolean(
-      (busyNow || coverBusyNow) && statusMenu && !statusMenu.hidden,
-    );
-    scheduleBrowserTimeout(
-      pollStatus,
-      visibleStatusMenuNeedsBusySampling
-        ? STATUS_POLL_VISIBLE_MENU_BUSY_DELAY_MS
-        : ((busyNow || coverBusyNow) ? 1000 : 3000),
-    );
+    nextPollDelay = currentStatusPollDelay();
   } catch (error) {
-    scheduleBrowserTimeout(pollStatus, 3000);
+    if (ownsStatus()) nextPollDelay = 3000;
+  } finally {
+    // A newer poll owns its continuation. Discarded work must not stop polling
+    // or postpone an earlier action read that is already scheduled.
+    if (sequence === statusPollSequence && (ownsStatus() || !statusPollTimer)) {
+      scheduleStatusPoll(nextPollDelay ?? currentStatusPollDelay());
+    }
   }
 }
 
@@ -15013,8 +15655,11 @@ function mountDateRangePicker(container) {
     input = root.querySelector(`[name="${button.dataset.calendarTrigger}"]`);
     month = input.value ? new Date(`${input.value}T12:00:00`) : new Date();
     popup = document.createElement('div'); popup.className = 'calendar-picker ui-scrollbar';
+    popup.setAttribute('popover', 'manual');
     popup.setAttribute('role', 'dialog'); popup.setAttribute('aria-label', button.getAttribute('aria-label'));
     container.appendChild(popup); trigger.setAttribute('aria-expanded', 'true');
+    // Keep the calendar in its form's focus/selection scope, above ancestor clipping.
+    popup.showPopover();
     popup.addEventListener('click', e => {
       const date = e.target.closest('[data-calendar-date]'), nav = e.target.closest('[data-calendar-month]');
       if (date && !date.disabled) { input.value = date.dataset.calendarDate; input.dispatchEvent(new Event('input', { bubbles: true })); close(true); }
@@ -19398,6 +20043,7 @@ async function saveUtilityLibrarySettings() {
     && owner.selectedIntegrationKey === 'library' && !getUtilityModalElements()?.overlay?.hidden;
   const renderCurrent = () => { if (ownsPresentation()) renderUtilityModalContent(); };
   if (librarySettingsState.saveBusy || librarySettingsState.allowedActions?.['library.settings.manage'] !== true) return false;
+  const statusAction = claimLibraryStatusAction(true);
   librarySettingsState.saveBusy = true;
   librarySettingsState.error = '';
   renderCurrent();
@@ -19414,18 +20060,20 @@ async function saveUtilityLibrarySettings() {
     librarySettingsState.loaded = true;
     owner.loaded = false;
     owner.problematicFiles = [];
-    if (ownsContext()) {
+    const ownsStatus = settleLibraryStatusAction(statusAction);
+    if (ownsContext() && ownsStatus) {
       if (data.status) {
         updateStatusIndicator(data.status);
         state.wasPollingBusy = Boolean(data.status.scan_in_progress || data.status.relations_in_progress);
         state.wasCoverPollingBusy = Boolean(data.status.covers_in_progress);
         renderLibraryLoader(state.status);
       }
-      scheduleBrowserTimeout(pollStatus, 250);
+      scheduleStatusPoll(250);
     }
     if (ownsPresentation()) showToast('Library settings saved. Scan started.', 'success', 3200);
     return true;
   } catch (error) {
+    settleLibraryStatusAction(statusAction);
     console.error('[AlbumHaven][LibrarySettings] Failed to save library settings.', error);
     librarySettingsState.error = error.message || 'Unable to save library settings.';
     if (ownsPresentation()) showToast(librarySettingsState.error, 'error', 3600);
@@ -19931,9 +20579,216 @@ function mountAlertsAppearanceEditor(detail) {
 
 // END js/runtime/appearance-backgrounds-bridge.js
 
+// BEGIN js/runtime/problematic-files-virtual-list.js
+
+(function registerProblematicFilesVirtualList(global) {
+  const DEFAULT_ROW_STRIDE = 68;
+  const DEFAULT_OVERSCAN = 6;
+  const MOBILE_BREAKPOINT = '(max-width: 720px)';
+  const savedOffsets = new WeakMap();
+
+  function clamp(value, minimum, maximum) {
+    return Math.min(Math.max(value, minimum), maximum);
+  }
+
+  function calculateRange({ count, offset, viewport, stride = DEFAULT_ROW_STRIDE, overscan = DEFAULT_OVERSCAN }) {
+    if (!count) return { start: 0, end: 0 };
+    const visibleStart = Math.floor(Math.max(0, offset) / stride);
+    const visibleCount = Math.max(1, Math.ceil(Math.max(1, viewport) / stride));
+    return {
+      start: clamp(visibleStart - overscan, 0, count),
+      end: clamp(visibleStart + visibleCount + overscan, 0, count),
+    };
+  }
+
+  function create({
+    list,
+    renderRow,
+    rowStride = DEFAULT_ROW_STRIDE,
+    overscan = DEFAULT_OVERSCAN,
+  }) {
+    if (!list || typeof renderRow !== 'function') {
+      throw new TypeError('Problematic Files virtualization requires a list and row renderer.');
+    }
+
+    let items = [];
+    let selectedKey = '';
+    let frame = 0;
+    let disposed = false;
+    let spacerGeometry = '';
+    const mountedRows = new Map();
+    const [before, after] = ['before', 'after'].map((position) => {
+      const spacer = list.ownerDocument.createElement('div');
+      spacer.className = 'problematic-virtual-spacer';
+      spacer.setAttribute('data-problematic-virtual-spacer', position);
+      spacer.setAttribute('aria-hidden', 'true');
+      return spacer;
+    });
+    const savedOffset = savedOffsets.get(list) || { horizontal: 0, vertical: 0 };
+    list.scrollLeft = savedOffset.horizontal;
+    list.scrollTop = savedOffset.vertical;
+
+    const isHorizontal = () => Boolean(global.matchMedia?.(MOBILE_BREAKPOINT)?.matches);
+    const getStride = (horizontal) => (
+      horizontal ? Math.min(240, Math.max(1, Number(list.clientWidth) * 0.78)) + 8 : rowStride
+    );
+
+    const renderNow = () => {
+      if (frame) global.cancelAnimationFrame(frame);
+      frame = 0;
+      if (disposed) return;
+      const horizontal = isHorizontal();
+      const stride = getStride(horizontal);
+      const offset = horizontal ? Number(list.scrollLeft) : Number(list.scrollTop);
+      const viewport = horizontal ? Number(list.clientWidth) : Number(list.clientHeight);
+      const range = calculateRange({
+        count: items.length,
+        offset,
+        viewport,
+        stride,
+        overscan,
+      });
+      const beforeSize = range.start * stride;
+      const afterSize = (items.length - range.end) * stride;
+      const dimension = horizontal ? 'width' : 'height';
+      const visibleItems = items.slice(range.start, range.end);
+      const keys = new Set(visibleItems.map((item) => String(item.key)));
+      const focused = list.ownerDocument.activeElement;
+      const nextSpacerGeometry = `${dimension}:${beforeSize}:${afterSize}`;
+      if (spacerGeometry !== nextSpacerGeometry) {
+        before.style.cssText = `${dimension}:${beforeSize}px`;
+        after.style.cssText = `${dimension}:${afterSize}px`;
+        spacerGeometry = nextSpacerGeometry;
+      }
+      if (before.parentNode !== list) list.replaceChildren(before, after);
+      for (const [key, row] of mountedRows) {
+        if (keys.has(key)) continue;
+        row.remove();
+        mountedRows.delete(key);
+      }
+      let previous = before;
+      for (const item of visibleItems) {
+        const key = String(item.key);
+        let row = mountedRows.get(key);
+        if (!row) {
+          const template = list.ownerDocument.createElement('template');
+          template.innerHTML = renderRow(item, key === selectedKey);
+          row = template.content.firstElementChild;
+          mountedRows.set(key, row);
+        }
+        if (previous.nextElementSibling !== row) list.insertBefore(row, previous.nextElementSibling);
+        previous = row;
+      }
+      if (horizontal) list.scrollLeft = offset;
+      else list.scrollTop = offset;
+      if (focused && list.contains(focused) && list.ownerDocument.activeElement !== focused) {
+        focused.focus({ preventScroll: true });
+      }
+      const metadata = {
+        problematicMountedCount: String(range.end - range.start),
+        problematicVirtualStart: String(range.start),
+        problematicVirtualEnd: String(range.end),
+        problematicVirtualAxis: horizontal ? 'horizontal' : 'vertical',
+      };
+      for (const [key, value] of Object.entries(metadata)) {
+        if (list.dataset[key] !== value) list.dataset[key] = value;
+      }
+    };
+
+    const schedule = () => {
+      if (disposed || frame) return;
+      frame = global.requestAnimationFrame(renderNow);
+    };
+
+    // Opening the modal changes this viewport without resizing the window.
+    const resizeObserver = typeof global.ResizeObserver === 'function'
+      ? new global.ResizeObserver(schedule)
+      : null;
+    resizeObserver?.observe(list);
+
+    const reveal = (key) => {
+      const index = items.findIndex((item) => String(item?.key || '') === String(key || ''));
+      if (index < 0) return;
+      const horizontal = isHorizontal();
+      const stride = getStride(horizontal);
+      const viewport = horizontal ? Number(list.clientWidth) : Number(list.clientHeight);
+      const current = horizontal ? Number(list.scrollLeft) : Number(list.scrollTop);
+      const start = index * stride;
+      const end = start + stride;
+      let next = current;
+      if (start < current) next = start;
+      else if (end > current + viewport) next = Math.max(0, end - viewport);
+      if (next === current) return;
+      if (horizontal) list.scrollLeft = next;
+      else list.scrollTop = next;
+      schedule();
+    };
+
+    const render = (nextItems, nextSelectedKey) => {
+      const previousSelectedKey = selectedKey;
+      items = Array.isArray(nextItems) ? nextItems : [];
+      selectedKey = String(nextSelectedKey || '');
+      renderNow();
+      if (selectedKey !== previousSelectedKey) {
+        reveal(selectedKey);
+        renderNow();
+      }
+    };
+
+    const handleKeydown = (event) => {
+      if (event.key !== 'Tab' || event.altKey || event.ctrlKey || event.metaKey) return;
+      const row = event.target.closest?.('[data-problematic-album-key]');
+      if (!row || !list.contains(row)) return;
+      const index = items.findIndex((item) => String(item.key) === row.getAttribute('data-problematic-album-key'));
+      const nextIndex = index + (event.shiftKey ? -1 : 1);
+      if (index < 0 || nextIndex < 0 || nextIndex >= items.length) return;
+      const key = String(items[nextIndex].key);
+      if (mountedRows.has(key)) return;
+      event.preventDefault();
+      reveal(key);
+      renderNow();
+      mountedRows.get(key)?.focus({ preventScroll: true });
+    };
+
+    const dispose = () => {
+      if (disposed) return;
+      disposed = true;
+      savedOffsets.set(list, {
+        horizontal: Number(list.scrollLeft) || 0,
+        vertical: Number(list.scrollTop) || 0,
+      });
+      list.removeEventListener('scroll', schedule);
+      list.removeEventListener('keydown', handleKeydown);
+      global.removeEventListener?.('resize', schedule);
+      resizeObserver?.disconnect();
+      if (frame) global.cancelAnimationFrame(frame);
+      delete list.dataset.problematicMountedCount;
+      delete list.dataset.problematicVirtualStart;
+      delete list.dataset.problematicVirtualEnd;
+      delete list.dataset.problematicVirtualAxis;
+    };
+
+    list.addEventListener('scroll', schedule, { passive: true });
+    list.addEventListener('keydown', handleKeydown);
+    global.addEventListener?.('resize', schedule, { passive: true });
+    return { render, reveal, dispose };
+  }
+
+  global.ProblematicFilesVirtualList = { calculateRange, create };
+}(window));
+
+// END js/runtime/problematic-files-virtual-list.js
+
 // BEGIN js/runtime/utility-renderers-and-actions.js
 
 ﻿const problematicNavigationRowContent = new WeakMap();
+
+let problematicFilesVirtualList = null;
+
+function disposeProblematicFilesVirtualList() {
+  problematicFilesVirtualList?.dispose?.();
+  problematicFilesVirtualList = null;
+}
 
 function renderProblematicFiles({ preserveProblematicTree = false } = {}) {
   const els = getUtilityModalElements();
@@ -19942,6 +20797,7 @@ function renderProblematicFiles({ preserveProblematicTree = false } = {}) {
 
   const priorListScrollTop = Number(els.list.scrollTop);
   const replaceListContents = (html) => {
+    disposeProblematicFilesVirtualList();
     const retainedScrollGeometry = els.list.querySelector?.('[data-problematic-scroll-retainer]') || null;
     els.list.innerHTML = html;
     if (retainedScrollGeometry && typeof els.list.appendChild === 'function') {
@@ -19952,14 +20808,25 @@ function renderProblematicFiles({ preserveProblematicTree = false } = {}) {
     }
   };
 
-  const mountedRows = preserveProblematicTree
+  const virtualListApi = typeof window !== 'undefined'
+    ? window.ProblematicFilesVirtualList
+    : globalThis.ProblematicFilesVirtualList;
+  const mountedRows = preserveProblematicTree && !virtualListApi?.create
     ? Array.from(els.list.querySelectorAll?.('[data-problematic-album-key]') || []) : [];
   const albumsByKey = new Map((state.utility.problematicFiles || []).map(album => [String(album.key), album]));
   const mountedItems = mountedRows.map(row => albumsByKey.get(row.getAttribute('data-problematic-album-key')));
   const retainTree = mountedRows.length > 0 && mountedItems.every(Boolean);
   const items = retainTree ? mountedItems : getFilteredProblematicAlbums();
   const renderTree = selectedKey => {
-    if (!retainTree) {
+    if (!problematicFilesVirtualList && virtualListApi?.create) {
+      problematicFilesVirtualList = virtualListApi.create({
+        list: els.list,
+        renderRow: (album, selected) => buildProblematicAlbumListItem(album, selected),
+      });
+    }
+    if (problematicFilesVirtualList) {
+      problematicFilesVirtualList.render(items, selectedKey);
+    } else if (!retainTree) {
       replaceListContents(items.map(album => buildProblematicAlbumListItem(album, album.key === selectedKey)).join(''));
     }
     Array.from(els.list.querySelectorAll?.('[data-problematic-album-key]') || []).forEach(row => {
@@ -19967,7 +20834,7 @@ function renderProblematicFiles({ preserveProblematicTree = false } = {}) {
       if (!album) return;
       const selected = album.key === selectedKey;
       const content = getProblematicAlbumNavigationOptions(album, selected);
-      if (retainTree) {
+      if (retainTree || problematicFilesVirtualList) {
         const previous = problematicNavigationRowContent.get(row);
         window.NavigationTree.updateItem(row, {
           ...content,
@@ -20534,7 +21401,8 @@ function filterUtilityAppearanceNavigation() {
   const query = String(state.utility.appearanceSearchQuery || '').trim().toLocaleLowerCase();
   let matches = 0;
   els.list?.querySelectorAll('[data-utility-appearance-key]').forEach((row) => {
-    row.hidden = !String(row.textContent || '').toLocaleLowerCase().includes(query);
+    const keywords = row.getAttribute?.('data-utility-appearance-key') === 'seekbar' ? ' compact sidebar floating edge slow motion' : '';
+    row.hidden = !(String(row.textContent || '') + keywords).toLocaleLowerCase().includes(query);
     if (!row.hidden) matches += 1;
   });
   const empty = els.list?.querySelector('[data-appearance-search-empty]');
@@ -20688,7 +21556,9 @@ function renderUtilityModalContent(options = {}) {
   if (els.search) els.search.readOnly = false;
   if (els.problemFilterButton) { els.problemFilterButton.setAttribute('aria-label', 'Filters'); els.problemFilterButton.setAttribute('title', 'Filter by problem type'); els.problemFilterButton.setAttribute('aria-haspopup', 'listbox'); els.problemFilterButton.setAttribute('aria-controls', 'utility-problem-filter-menu'); }
   const activeTab = state.utility.activeTab || 'problematic-files';
-  if (activeTab !== 'log-history' && els.list?.dataset) els.list.dataset.utilityNavigationOwner = activeTab;
+  if (activeTab !== 'problematic-files') disposeProblematicFilesVirtualList();
+  if (activeTab !== 'log-history' && els.list?.dataset
+      && els.list.dataset.utilityNavigationOwner !== activeTab) els.list.dataset.utilityNavigationOwner = activeTab;
   if (activeTab !== 'loops' && typeof disposeMountedLoopActions === 'function') disposeMountedLoopActions(els.detail);
   if (activeTab !== 'appearance' && typeof unmountAppearanceEditors === 'function') unmountAppearanceEditors();
   els.overlay?.setAttribute('data-active-tab', activeTab);
@@ -20720,6 +21590,7 @@ function renderUtilityModalContent(options = {}) {
   } else {
     renderProblematicFiles(options);
   }
+  if (typeof updateSearchClearAction === 'function') updateSearchClearAction(els.search);
 }
 
 const utilityTabAlignmentObservers = new WeakMap();
@@ -20773,40 +21644,6 @@ function disposeUtilityTabAlignment(els = getUtilityModalElements()) {
 // BEGIN js/runtime/utility-loop-playback.js
 
 const utilityLoopStereoLoads = new WeakMap();
-const utilityLoopStereoQueue = [];
-let utilityLoopStereoLoadActive = false;
-
-function drainUtilityLoopStereoQueue() {
-  const eligible = job => job.canvas.isConnected
-    && state.player.appearance?.seekbarMode === 'waveform'
-    && !state.utility.loopEditors?.[job.loopId]?.active
-    && document.querySelector(`[data-loop-stereo-waveform="${cssEscape(job.loopId)}"]`) === job.canvas;
-  for (let index = utilityLoopStereoQueue.length - 1; index >= 0; index -= 1) {
-    const job = utilityLoopStereoQueue[index];
-    if (eligible(job)) continue;
-    job.canvas.hidden = true;
-    job.canvas.parentElement?.classList.toggle('is-stereo-waveform', false);
-    utilityLoopStereoQueue.splice(index, 1);
-    utilityLoopStereoLoads.delete(job.canvas);
-  }
-  if (utilityLoopStereoLoadActive || !utilityLoopStereoQueue.length) return;
-  const job = utilityLoopStereoQueue.shift();
-  utilityLoopStereoLoadActive = true;
-  Promise.resolve(loadSavedLoopWaveformPeaks(job.loopId)).catch(() => null).then(peaks => {
-    job.entry.loading = false;
-    job.entry.peaks = peaks;
-    job.entry.retryAt = Date.now() + 5000;
-    if (eligible(job)) {
-      updateUtilityLoopStereoWaveform(job.loopId, job.audio);
-    } else {
-      job.canvas.hidden = true;
-      job.canvas.parentElement?.classList.toggle('is-stereo-waveform', false);
-    }
-  }).finally(() => {
-    utilityLoopStereoLoadActive = false;
-    drainUtilityLoopStereoQueue();
-  });
-}
 
 function updateUtilityLoopStereoWaveform(loopId, audio) {
   const canvas = document.querySelector(`[data-loop-stereo-waveform="${cssEscape(loopId)}"]`);
@@ -20814,30 +21651,42 @@ function updateUtilityLoopStereoWaveform(loopId, audio) {
   const enabled = state.player.appearance?.seekbarMode === 'waveform';
   const editing = Boolean(state.utility.loopEditors?.[loopId]?.active);
   const cached = utilityLoopStereoLoads.get(canvas);
-  const coolingDown = cached && !cached.loading && !cached.peaks && Date.now() < cached.retryAt;
-  const presented = enabled && !editing && !coolingDown;
+  const peaks = getCachedSavedLoopWaveformPeaks(loopId) || cached?.peaks;
+  const coolingDown = cached && !cached.loading && !peaks && Date.now() < cached.retryAt;
+  const presented = canvas.isConnected && enabled && !editing && !coolingDown;
   canvas.hidden = !presented;
   canvas.parentElement?.classList.toggle('is-stereo-waveform', presented);
-  if (!enabled || editing) { drainUtilityLoopStereoQueue(); return; }
-  if (cached?.peaks) {
+  if (!presented) return;
+  if (peaks) {
     const duration = Number(audio.duration) || 0;
-    drawCombinedLoopWaveform(canvas, cached.peaks, duration > 0 ? (Number(audio.currentTime) || 0) / duration : 0);
+    drawCombinedLoopWaveform(canvas, peaks, duration > 0 ? (Number(audio.currentTime) || 0) / duration : 0);
     return;
   }
-  if (cached && (cached.loading || Date.now() < cached.retryAt)) return;
+  if (cached?.loading) return;
   const entry = { peaks: null, loading: true, retryAt: 0 };
   utilityLoopStereoLoads.set(canvas, entry);
-  utilityLoopStereoQueue.push({ loopId, audio, canvas, entry });
-  drainUtilityLoopStereoQueue();
+  Promise.resolve(loadSavedLoopWaveformPeaks(loopId)).catch(() => null).then(peaks => {
+    entry.loading = false;
+    entry.peaks = peaks;
+    entry.retryAt = Date.now() + 5000;
+    if (canvas.isConnected
+        && document.querySelector(`[data-loop-stereo-waveform="${cssEscape(loopId)}"]`) === canvas) {
+      updateUtilityLoopStereoWaveform(loopId, audio);
+    } else {
+      canvas.hidden = true;
+      canvas.parentElement?.classList.toggle('is-stereo-waveform', false);
+    }
+  });
 }
 
 function refreshUtilityLoopStereoWaveforms() {
-  drainUtilityLoopStereoQueue();
+  if (state.utility.loopsLoaded && Array.isArray(state.utility.loops)) {
+    retainSavedLoopWaveformPeaks(state.utility.loops.map(loop => loop.id));
+  }
   document.querySelectorAll('[data-loop-audio]').forEach(audio => {
     updateUtilityLoopStereoWaveform(audio.getAttribute('data-loop-audio'), audio);
   });
 }
-
 function isUtilityLoopTextEntry(element) {
   if (!(element instanceof HTMLElement)) return false;
   const tagName = String(element.tagName || '').toUpperCase();
@@ -20878,6 +21727,7 @@ function collapseAllUtilityLoopGroups() {
 
 function setUtilityActiveTab(nextTab, skipAppearanceGuard = false) {
   const normalizedTab = String(nextTab || 'problematic-files');
+  if (typeof window !== 'undefined' && window.AlbumHavenCapabilities && !window.AlbumHavenCapabilities.allowsUtilityTab(normalizedTab)) return state.utility.activeTab;
   if (!skipAppearanceGuard && normalizedTab !== state.utility.activeTab && typeof confirmBackgroundAppearanceLeave === 'function' && !confirmBackgroundAppearanceLeave(() => {
     setUtilityActiveTab(normalizedTab, true);
     if (typeof loadActiveUtilityTab === 'function') loadActiveUtilityTab(true);
@@ -21850,6 +22700,34 @@ async function reorderUtilityLoops(draggedItem, targetItem, position) {
 
 // END js/runtime/utility-loop-playback.js
 
+// BEGIN js/runtime/tag-editor-reorder.js
+
+function getTagEditorReorderInsertionBefore(rows, draggedPath, clientY) {
+  const dragged = String(draggedPath || '');
+  const pointerY = Number(clientY);
+  return (Array.isArray(rows) ? rows : [])
+    .filter((row) => String(row?.path || '') !== dragged)
+    .find((row) => pointerY < Number(row?.top || 0) + (Number(row?.height || 0) / 2))
+    ?.path || null;
+}
+
+function reorderTagEditorTracksByPath(tracks, draggedPath, beforePath = null) {
+  const current = Array.isArray(tracks) ? tracks : [];
+  const dragged = String(draggedPath || '');
+  const sourceIndex = current.findIndex((track) => String(track?.path || '') === dragged);
+  if (sourceIndex < 0) return current.slice();
+  const next = current.slice();
+  const [moved] = next.splice(sourceIndex, 1);
+  const target = String(beforePath || '');
+  const targetIndex = target
+    ? next.findIndex((track) => String(track?.path || '') === target)
+    : next.length;
+  next.splice(targetIndex < 0 ? next.length : targetIndex, 0, moved);
+  return next;
+}
+
+// END js/runtime/tag-editor-reorder.js
+
 // BEGIN js/runtime/utility-loaders-and-cover-lookup.js
 
 async function loadProblematicFiles(force = false, options = {}) {
@@ -22337,6 +23215,7 @@ async function performAlbumMove(album, action, options = {}) {
 
 async function fetchUnsuccessfulAlbumCovers() {
   const previousStatus = { ...state.status };
+  const statusAction = claimLibraryStatusAction(true);
   try {
     console.log('[AlbumHaven][Covers] Starting manual bulk cover fetch.');
     startStatusIndicatorImmediately({
@@ -22370,6 +23249,7 @@ async function fetchUnsuccessfulAlbumCovers() {
     if (!response.ok || !data.ok) {
       throw new Error(data.error || 'Failed to fetch album covers');
     }
+    if (!settleLibraryStatusAction(statusAction)) return;
     if (data.queued_after_indexing) {
       updateStatusIndicator({
         ...state.status,
@@ -22384,7 +23264,7 @@ async function fetchUnsuccessfulAlbumCovers() {
         pending_cover_refresh_after_scan: true,
       });
       state.wasPollingBusy = true;
-      scheduleBrowserTimeout(pollStatus, 250);
+      scheduleStatusPoll(250);
       return;
     }
     updateStatusIndicator({
@@ -22398,13 +23278,13 @@ async function fetchUnsuccessfulAlbumCovers() {
     });
     if (data.already_running) {
       state.wasCoverPollingBusy = true;
-      scheduleBrowserTimeout(pollStatus, 250);
+      scheduleStatusPoll(250);
       return;
     }
     state.wasCoverPollingBusy = true;
-    scheduleBrowserTimeout(pollStatus, 250);
+    scheduleStatusPoll(250);
   } catch (error) {
-    updateStatusIndicator(previousStatus);
+    if (settleLibraryStatusAction(statusAction)) updateStatusIndicator(previousStatus);
     console.error('[AlbumHaven][Utilities] Failed to fetch unresolved album covers.', error);
     showToast(error.message || 'Failed to fetch album covers.', 'error', 3200);
   }
@@ -22412,6 +23292,8 @@ async function fetchUnsuccessfulAlbumCovers() {
 
 async function cancelAlbumCoverScan() {
   const previousStatus = { ...state.status };
+  const statusAction = claimLibraryStatusAction(false);
+  let cancellationStatus = null;
   try {
     console.log('[AlbumHaven][Covers] Cancelling bulk cover fetch.');
     updateStatusIndicator({
@@ -22420,6 +23302,7 @@ async function cancelAlbumCoverScan() {
       covers_current_folder: '',
       pending_cover_refresh_after_scan: false,
     });
+    cancellationStatus = state.status;
     const response = await fetch('/utilities/cancel-cover-scan', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -22434,8 +23317,11 @@ async function cancelAlbumCoverScan() {
     if (!response.ok || !data.ok) {
       throw new Error(data.error || 'Failed to cancel album cover scan');
     }
+    settleLibraryStatusAction(statusAction);
   } catch (error) {
-    updateStatusIndicator(previousStatus);
+    if (settleLibraryStatusAction(statusAction) && state.status === cancellationStatus) {
+      updateStatusIndicator(previousStatus);
+    }
     console.error('[AlbumHaven][Utilities] Failed to cancel album cover scan.', error);
     showToast(error.message || 'Failed to cancel album cover scan.', 'error', 3200);
   }
@@ -22832,6 +23718,7 @@ async function runLocalPlaylistImportAnalysis() {
 }
 
 function loadActiveUtilityTab(force = false) {
+  if (typeof window !== 'undefined' && window.AlbumHavenCapabilities && !window.AlbumHavenCapabilities.allowsUtilityTab(state.utility.activeTab)) return null;
   if (state.utility.activeTab === 'rules') {
     return loadUtilityRules(force);
   }
@@ -22956,6 +23843,12 @@ let utilityCoverLoadSuspensionToken = 0;
 function openUtilityModal({ resetSearch = true, resetSelection = true, forceLoad = true } = {}) {
   const els = getUtilityModalElements();
   if (!els.overlay) return;
+  if (typeof window !== 'undefined' && window.AlbumHavenCapabilities) {
+    const permittedTab = window.AlbumHavenCapabilities.resolveUtilityTab(state.utility.activeTab);
+    if (!permittedTab) return;
+    setUtilityActiveTab(permittedTab);
+    if (state.utility.activeTab !== permittedTab) return;
+  }
   document.getElementById('track-modal')?.classList.remove('is-above-settings');
   if (
     !utilityCoverLoadSuspensionToken
@@ -23004,10 +23897,13 @@ function openUtilityModal({ resetSearch = true, resetSelection = true, forceLoad
 }
 
 function openUtilityLogHistoryTab(entryId = '') {
+  const canOpen = () => typeof window === 'undefined' || !window.AlbumHavenCapabilities
+    || window.AlbumHavenCapabilities.allowsUtilityTab('log-history');
+  if (!canOpen()) return;
   const owner = state.utility;
   const open = () => {
-    if (state.utility !== owner) return;
-    setUtilityActiveTab('log-history', true);
+    if (state.utility !== owner || !canOpen()) return;
+    if (setUtilityActiveTab('log-history', true) !== 'log-history') return;
     openUtilityModal({ resetSearch: false, resetSelection: false, forceLoad: !entryId });
     if (!entryId) return;
     const controller = getUtilityLogHistoryController();
@@ -23808,10 +24704,10 @@ function getSelectedTagEditorPaths(tracks) {
   let selectedPaths = Array.isArray(state.tagEditor.selectedPaths)
     ? state.tagEditor.selectedPaths.map((path) => String(path || '')).filter((path) => validPaths.has(path))
     : [];
-  if (!selectedPaths.length && state.tagEditor.selectedPath && validPaths.has(String(state.tagEditor.selectedPath))) {
+  if (!Array.isArray(state.tagEditor.selectedPaths) && state.tagEditor.selectedPath && validPaths.has(String(state.tagEditor.selectedPath))) {
     selectedPaths = [String(state.tagEditor.selectedPath)];
   }
-  if (!selectedPaths.length && tracks.length) {
+  if (!Array.isArray(state.tagEditor.selectedPaths) && !selectedPaths.length && tracks.length) {
     selectedPaths = [String(tracks[0].path || '')].filter(Boolean);
   }
   state.tagEditor.selectedPaths = selectedPaths;
@@ -23848,7 +24744,7 @@ function setTagEditorSelectedPaths(paths, anchorPath = '') {
   const selectedPaths = (paths || [])
     .map((path) => String(path || ''))
     .filter((path) => path && validPaths.has(path) && !seen.has(path) && seen.add(path));
-  state.tagEditor.selectedPaths = selectedPaths.length ? selectedPaths : [getTagEditorTrackPathAt(0)].filter(Boolean);
+  state.tagEditor.selectedPaths = selectedPaths;
   state.tagEditor.selectedPath = state.tagEditor.selectedPaths[0] || '';
   state.tagEditor.anchorPath = anchorPath || state.tagEditor.anchorPath || state.tagEditor.selectedPath;
   state.tagEditor.autoNumberStatus = '';
@@ -23896,6 +24792,54 @@ function renderTagEditorArtwork(selectedPaths) {
     : '<div class="tag-editor-artwork-placeholder">No artwork</div>';
 }
 
+function stageTagEditorTrackOrder(tracks) {
+  const orderedTracks = Array.isArray(tracks) ? tracks : [];
+  orderedTracks.forEach((track, index) => {
+    const path = String(track?.path || '');
+    if (!path) return;
+    state.tagEditor.values[path] = {
+      ...(state.tagEditor.values[path] || {}),
+      track_number: String(index + 1),
+    };
+  });
+  state.tagEditor.autoNumberActive = false;
+  state.tagEditor.autoNumberAppliedSelectionSignature = '';
+  state.tagEditor.autoNumberTrackNumberSnapshots = {};
+}
+
+function applyTagEditorTrackReorder(draggedPath, beforePath = null) {
+  const previous = Array.isArray(state.tagEditor.tracks) ? state.tagEditor.tracks : [];
+  const reordered = reorderTagEditorTracksByPath(previous, draggedPath, beforePath);
+  if (reordered.every((track, index) => track === previous[index])) return false;
+  state.tagEditor.tracks = reordered;
+  stageTagEditorTrackOrder(reordered);
+  renderTagEditor();
+  syncTagEditorAutoNumberControls();
+  return true;
+}
+
+function clearTagEditorReorderCue() {
+  const list = getTagEditorElements().list;
+  list?.classList?.remove('is-reorder-end');
+  list?.querySelectorAll?.('[data-tag-editor-track]').forEach((row) => {
+    row.classList?.remove('is-reorder-before', 'is-reorder-dragged');
+  });
+  state.tagEditor.reorder = null;
+}
+
+function showTagEditorReorderCue(beforePath = null) {
+  const list = getTagEditorElements().list;
+  if (!list) return;
+  list.classList.remove('is-reorder-end');
+  list.querySelectorAll('[data-tag-editor-track]').forEach((row) => {
+    const path = String(row.getAttribute('data-tag-editor-track') || '');
+    row.classList.toggle('is-reorder-before', Boolean(beforePath) && path === String(beforePath));
+    row.classList.toggle('is-reorder-dragged', path === String(state.tagEditor.reorder?.draggedPath || ''));
+  });
+  if (!beforePath) list.classList.add('is-reorder-end');
+  if (state.tagEditor.reorder) state.tagEditor.reorder.beforePath = beforePath || null;
+}
+
 function renderTagEditor(options = {}) {
   const els = getTagEditorElements();
   if (!els.overlay || !els.list || !els.form) return;
@@ -23930,32 +24874,34 @@ function renderTagEditor(options = {}) {
       const path = String(button.getAttribute('data-tag-editor-track') || '');
       const isSelected = selectedPathSet.has(path);
       button.classList.toggle('is-active', isSelected);
-      button.setAttribute('aria-pressed', isSelected ? 'true' : 'false');
+      button.querySelector?.('.tag-editor-track-select')
+        ?.setAttribute?.('aria-pressed', isSelected ? 'true' : 'false');
     });
   } else {
     const rows = tracks.map((track) => {
       const path = String(track.path || '');
       const fileType = getFileTypeFromPath(path);
       const filename = getFilenameFromPath(path) || track.title || path;
-      const content = `
-        <button class="tag-editor-track ${selectedPathSet.has(path) ? 'is-active' : ''}" type="button" data-tag-editor-track="${escapeHtml(path)}" aria-pressed="${selectedPathSet.has(path) ? 'true' : 'false'}" title="${escapeHtml(path)}">
-          <span class="tag-editor-track-title">${escapeHtml(filename)}</span>
-          ${fileType ? `<span class="utility-repair-file-type">${escapeHtml(fileType)}</span>` : ''}
-        </button>
+      return `
+        <div class="tag-editor-track ${selectedPathSet.has(path) ? 'is-active' : ''}" role="listitem" data-tag-editor-track="${escapeHtml(path)}" title="${escapeHtml(path)}">
+          <span class="tag-editor-track-accent" aria-hidden="true"></span>
+          <button class="tag-editor-reorder-grip" type="button" draggable="true" data-tag-editor-reorder-grip="${escapeHtml(path)}" aria-label="Reorder ${escapeHtml(filename)}; use Arrow Up or Arrow Down"><span aria-hidden="true">⋮⋮</span></button>
+          <button class="tag-editor-track-select" type="button" aria-pressed="${selectedPathSet.has(path) ? 'true' : 'false'}">
+            <span class="tag-editor-track-title">${escapeHtml(filename)}</span>
+            ${fileType ? `<span class="utility-repair-file-type">${escapeHtml(fileType)}</span>` : ''}
+          </button>
+        </div>
       `;
-      return { key: path, cells: { file: content } };
     });
-    els.list.innerHTML = buildCompactDataTable({
-      id: 'tag-editor-files-table', ariaLabel: 'Files to edit',
-      columns: 'minmax(0, 1fr)', headers: 'screen-reader', density: 'compact',
-      frame: 'inset', overflow: 'none',
-      columnsConfig: [{ key: 'file', label: 'File' }], rows,
-    });
+    els.list.setAttribute('role', 'list');
+    els.list.setAttribute('aria-label', 'Files to edit');
+    els.list.innerHTML = rows.join('');
   }
 
   els.form.querySelectorAll('[data-tag-field]').forEach((input) => {
     const field = input.getAttribute('data-tag-field') || '';
     const displayValue = getTagEditorFieldDisplayValue(field, selectedPaths);
+    input.disabled = selectedPaths.length === 0;
     input.value = displayValue.value;
     input.placeholder = displayValue.mixed ? 'Mixed values' : '';
   });
@@ -23978,8 +24924,14 @@ function renderTagEditor(options = {}) {
   };
 }
 
+const MAX_COVER_LOOKUP_STAGED_IMAGES = 8;
+const MAX_COVER_LOOKUP_IMAGE_BYTES = 10 * 1024 * 1024;
+
 function revokeCoverLookupPastedImageUrls() {
-  const items = Array.isArray(state.coverLookup.modal.pastedImages) ? state.coverLookup.modal.pastedImages : [];
+  const items = [
+    ...(Array.isArray(state.coverLookup.modal.pastedImages) ? state.coverLookup.modal.pastedImages : []),
+    ...(Array.isArray(state.coverLookup.modal.manualImageAttachments) ? state.coverLookup.modal.manualImageAttachments : []),
+  ];
   items.forEach((item) => {
     const objectUrl = String(item?.object_url || '').trim();
     if (objectUrl.startsWith('blob:')) {
@@ -24006,8 +24958,19 @@ function fileToDataUrl(file) {
 }
 
 async function addPastedImageToCoverLookup(file) {
+  if (window.AlbumHavenCapabilities && !window.AlbumHavenCapabilities.allows('library.covers.upload')) return;
   if (!(file instanceof Blob) || !String(file.type || '').startsWith('image/')) {
-    return false;
+    throw new Error('Choose an image file.');
+  }
+  if (Number(file.size || 0) > MAX_COVER_LOOKUP_IMAGE_BYTES) {
+    throw new Error('Images must be 10 MB or smaller.');
+  }
+  const stagedCount = (Array.isArray(state.coverLookup.modal.pastedImages)
+    ? state.coverLookup.modal.pastedImages.length : 0)
+    + (Array.isArray(state.coverLookup.modal.manualImageAttachments)
+      ? state.coverLookup.modal.manualImageAttachments.length : 0);
+  if (stagedCount >= MAX_COVER_LOOKUP_STAGED_IMAGES) {
+    throw new Error(`You can stage up to ${MAX_COVER_LOOKUP_STAGED_IMAGES} images.`);
   }
   const dataUrl = await fileToDataUrl(file);
   if (!dataUrl) {
@@ -24026,18 +24989,69 @@ async function addPastedImageToCoverLookup(file) {
     mime_type: String(file.type || 'image/png').trim() || 'image/png',
     size_bytes: Number(file.size || 0) || 0,
   };
-  state.coverLookup.modal.pastedImages = [
+  state.coverLookup.modal.manualImageAttachments = [
+    ...(Array.isArray(state.coverLookup.modal.manualImageAttachments)
+      ? state.coverLookup.modal.manualImageAttachments : []),
     nextItem,
-    ...(Array.isArray(state.coverLookup.modal.pastedImages) ? state.coverLookup.modal.pastedImages : []),
   ];
-  state.coverLookup.modal.pendingLocalPath = '';
-  state.coverLookup.modal.selectedRemoteId = '';
-  state.coverLookup.modal.pendingPastedImageId = nextItem.id;
-  state.coverLookup.modal.statusText = 'Clipboard image added.';
+  state.coverLookup.modal.statusText = 'Image ready to extract.';
   state.coverLookup.modal.statusTone = 'neutral';
   renderCoverLookupModal();
-  syncCoverLookupSelectionUi();
   return true;
+}
+
+async function addCoverLookupFiles(files) {
+  const candidates = Array.from(files || []);
+  let added = 0;
+  for (const file of candidates) {
+    await addPastedImageToCoverLookup(file);
+    added += 1;
+  }
+  return added;
+}
+
+function removePastedImageFromCoverLookup(imageId) {
+  const id = String(imageId || '').trim();
+  const items = Array.isArray(state.coverLookup.modal.pastedImages)
+    ? state.coverLookup.modal.pastedImages : [];
+  const removed = items.find(item => String(item?.id || '') === id);
+  if (!removed) return false;
+  const objectUrl = String(removed.object_url || '').trim();
+  if (objectUrl.startsWith('blob:')) URL.revokeObjectURL(objectUrl);
+  state.coverLookup.modal.pastedImages = items.filter(item => String(item?.id || '') !== id);
+  if (String(state.coverLookup.modal.pendingPastedImageId || '') === id) {
+    state.coverLookup.modal.pendingPastedImageId = '';
+  }
+  renderCoverLookupModal();
+  return true;
+}
+
+function removeCoverLookupPendingAttachment(imageId) {
+  const id = String(imageId || '').trim();
+  const items = Array.isArray(state.coverLookup.modal.manualImageAttachments)
+    ? state.coverLookup.modal.manualImageAttachments : [];
+  const removed = items.find(item => String(item?.id || '') === id);
+  if (!removed) return false;
+  const objectUrl = String(removed.object_url || '').trim();
+  if (objectUrl.startsWith('blob:')) URL.revokeObjectURL(objectUrl);
+  state.coverLookup.modal.manualImageAttachments = items.filter(
+    item => String(item?.id || '') !== id,
+  );
+  renderCoverLookupModal();
+  return true;
+}
+
+function extractCoverLookupPendingAttachments() {
+  const attachments = Array.isArray(state.coverLookup.modal.manualImageAttachments)
+    ? state.coverLookup.modal.manualImageAttachments : [];
+  if (!attachments.length) return 0;
+  state.coverLookup.modal.pastedImages = [
+    ...attachments,
+    ...(Array.isArray(state.coverLookup.modal.pastedImages)
+      ? state.coverLookup.modal.pastedImages : []),
+  ];
+  state.coverLookup.modal.manualImageAttachments = [];
+  return attachments.length;
 }
 
 async function handleCoverLookupClipboardPaste(clipboardData) {
@@ -24339,6 +25353,9 @@ function applyCoverLookupGalleryPayload(gallery) {
 async function markCoverLookupAutomaticImprovementSeen(candidateSnapshot) {
   const snapshot = normalizeCoverLookupCandidateSnapshot(candidateSnapshot);
   const album = state.coverLookup.modal.album;
+  const session = coverLookupModalSession;
+  const albumSnapshot = album?.cover_candidate_snapshot;
+  const modalSnapshot = state.coverLookup.modal.candidateSnapshot;
   const automaticRevision = Math.max(0, Number(snapshot?.automatic_improvement_revision || 0) || 0);
   const seenRevision = Math.max(0, Number(snapshot?.seen_automatic_improvement_revision || 0) || 0);
   if (
@@ -24350,6 +25367,8 @@ async function markCoverLookupAutomaticImprovementSeen(candidateSnapshot) {
   const seenToken = `${snapshot.search_generation}:${automaticRevision}`;
   if (String(state.coverLookup.modal.seenCandidateImprovementToken || '') === seenToken) return;
   state.coverLookup.modal.seenCandidateImprovementToken = seenToken;
+  const requestOwner = {};
+  coverLookupSeenRequests.set(album, requestOwner);
   try {
     const response = await fetch('/utilities/cover-lookup/gallery/mark-seen', {
       method: 'POST',
@@ -24365,8 +25384,19 @@ async function markCoverLookupAutomaticImprovementSeen(candidateSnapshot) {
       seen_automatic_improvement_revision: automaticRevision,
       has_unseen_automatic_improvement: false,
     };
+    const ownsResource = coverLookupSeenRequests.get(album) === requestOwner;
+    const ownsModal = ownsResource && session === coverLookupModalSession
+      && state.coverLookup.modal.album === album
+      && state.coverLookup.modal.seenCandidateImprovementToken === seenToken
+      && state.coverLookup.modal.candidateSnapshot === modalSnapshot;
+    const overlay = getCoverLookupModalElements().overlay;
+    const albumIsOpen = state.coverLookup.modal.album === album && overlay && !overlay.hidden;
+    if (ownsResource && album.cover_candidate_snapshot === albumSnapshot
+        && (!albumIsOpen || ownsModal)) {
+      album.cover_candidate_snapshot = markedSnapshot;
+    }
+    if (!ownsModal) return;
     state.coverLookup.modal.candidateSnapshot = markedSnapshot;
-    album.cover_candidate_snapshot = markedSnapshot;
     if (typeof document !== 'undefined' && typeof document.querySelector === 'function') {
       const lookupButton = document.querySelector('[data-open-track-modal-cover-lookup]');
       if (lookupButton) {
@@ -24375,8 +25405,14 @@ async function markCoverLookupAutomaticImprovementSeen(candidateSnapshot) {
       }
     }
   } catch (error) {
-    state.coverLookup.modal.seenCandidateImprovementToken = '';
+    if (coverLookupSeenRequests.get(album) === requestOwner
+        && session === coverLookupModalSession && state.coverLookup.modal.album === album
+        && state.coverLookup.modal.seenCandidateImprovementToken === seenToken) {
+      state.coverLookup.modal.seenCandidateImprovementToken = '';
+    }
     console.warn('[AlbumHaven][CoverLookup] Failed to mark automatic candidate update as seen.', error);
+  } finally {
+    if (coverLookupSeenRequests.get(album) === requestOwner) coverLookupSeenRequests.delete(album);
   }
 }
 
@@ -24421,11 +25457,28 @@ function buildAppleMusicGlyph() {
 }
 
 function buildDeezerGlyph() {
+  // The compact Deezer treatment uses the approved purple heart.
   return `
     <svg viewBox="0 0 24 24" focusable="false" aria-hidden="true">
-      <path d="M4 14h2.2v6H4zm3.4-3h2.2v9H7.4zm3.4-2h2.2v11h-2.2zm3.4-3h2.2v14h-2.2zm3.4 5H20v9h-2.2z" fill="currentColor"></path>
+      <path d="M12 20.2 4.8 13A4.7 4.7 0 0 1 11.4 6.3l.6.7.6-.7A4.7 4.7 0 0 1 19.2 13Z" fill="currentColor"></path>
     </svg>
   `;
+}
+
+function buildCaaGlyph() {
+  return '<span aria-hidden="true">CAA</span>';
+}
+
+function getRemoteCoverSourceLabel(source, fallback = '') {
+  return ({
+    apple: 'Apple Music',
+    spotify: 'SPOTIFY',
+    deezer: 'Deezer',
+    bandcamp: 'Bandcamp',
+    discogs: 'Discogs',
+    cover_art_archive: 'Cover Art Archive',
+    youtube_music: 'YouTube Music',
+  })[String(source || '').trim().toLowerCase()] || String(fallback || source || '').trim();
 }
 
 function buildYouTubeMusicGlyph() {
@@ -24477,6 +25530,9 @@ function buildRemoteCoverSourceBadge(source, className = 'cover-lookup-art-sourc
   if (normalizedSource === 'discogs') {
     return `<span class="${className} is-discogs" aria-hidden="true">${buildDiscogsGlyph()}</span>`;
   }
+  if (normalizedSource === 'cover_art_archive') {
+    return `<span class="${className} is-caa" aria-hidden="true">${buildCaaGlyph()}</span>`;
+  }
   return '';
 }
 
@@ -24499,6 +25555,12 @@ function coverLookupHasManualLinks() {
   return collectManualCoverLookupUrls().length > 0;
 }
 
+function coverLookupHasManualInput() {
+  const attachments = Array.isArray(state.coverLookup.modal.manualImageAttachments)
+    ? state.coverLookup.modal.manualImageAttachments : [];
+  return attachments.length > 0 || Boolean(String(state.coverLookup.modal.manualUrlText || '').trim());
+}
+
 function syncCoverLookupManualControlsUi() {
   const input = document.getElementById('cover-lookup-pasted-urls');
   const submitButton = document.querySelector('[data-add-cover-lookup-remote="1"]');
@@ -24509,7 +25571,7 @@ function syncCoverLookupManualControlsUi() {
     input.disabled = searchControlsDisabled;
   }
   if (submitButton instanceof HTMLButtonElement) {
-    submitButton.disabled = searchControlsDisabled || !String(state.coverLookup.modal.manualUrlText || '').trim();
+    submitButton.disabled = searchControlsDisabled || !coverLookupHasManualInput();
   }
   if (findBetterButton instanceof HTMLButtonElement) {
     findBetterButton.disabled = searchControlsDisabled;
@@ -24519,6 +25581,10 @@ function syncCoverLookupManualControlsUi() {
 function syncCoverLookupSaveButton() {
   const saveButton = document.getElementById('cover-lookup-save-remote-button');
   if (!saveButton) return;
+  const localMutationPending = isCoverLookupLocalMutationPending();
+  getCoverLookupModalElements().overlay?.querySelectorAll?.('[data-delete-local-cover]').forEach(button => {
+    button.disabled = localMutationPending;
+  });
   const selectedRemoteId = String(state.coverLookup.modal.selectedRemoteId || '');
   const pendingPastedImageId = String(state.coverLookup.modal.pendingPastedImageId || '');
   const currentTask = (state.coverLookup.tasks || []).find((item) => String(item?.id || '') === String(state.coverLookup.modal.taskId || '')) || null;
@@ -24527,7 +25593,7 @@ function syncCoverLookupSaveButton() {
   const hasLocalSelection = hasPendingLocalCoverSelection();
   const hasPastedSelection = Boolean(pendingPastedImageId);
   saveButton.hidden = false;
-  saveButton.disabled = !(hasRemoteSelection || hasLocalSelection || hasPastedSelection);
+  saveButton.disabled = localMutationPending || !(hasRemoteSelection || hasLocalSelection || hasPastedSelection);
 }
 
 function isCompletedCoverLookupTask(task) {
@@ -24596,7 +25662,10 @@ function syncCoverLookupSelectionUi() {
     }
   });
   modal.querySelectorAll('[data-cover-lookup-saved-remote]').forEach((card) => {
-    const isActive = !selectedRemoteId && !pendingLocalPath && !pendingPastedImageId;
+    const isActive = !selectedRemoteId
+      && !pendingLocalPath
+      && !pendingPastedImageId
+      && !String(state.coverLookup.modal.activeLocalSelectionPath || '');
     card.classList.toggle('is-active', isActive);
     let check = card.querySelector('.cover-lookup-art-check');
     if (isActive && !check) {
@@ -24961,6 +26030,7 @@ function sanitizeCoverLookupPossibleMatches(value) {
   return value
     .filter((item) => {
       if (!item || typeof item !== 'object' || Array.isArray(item)) return false;
+      if (window.AlbumHavenCapabilities && !window.AlbumHavenCapabilities.allowsCoverCandidate(item)) return false;
       const candidateIdKey = String(item.id || '').trim().toLowerCase();
       const normalizedUrlKey = normalizeCoverLookupCandidateUrl(item.url).toLowerCase();
       if (!candidateIdKey && !normalizedUrlKey) return false;
@@ -25016,6 +26086,23 @@ function hasActiveCoverLookupDrawerTextSelection(body) {
   );
 }
 
+function hasActiveCoverLookupDrawerAction(body) {
+  if (!body || typeof body.contains !== 'function') return false;
+  const activeElement = typeof document !== 'undefined' ? document.activeElement : null;
+  const focusedAction = activeElement && body.contains(activeElement) && activeElement.closest?.('.cover-lookup-task-actions')
+    ? activeElement
+    : null;
+  const hoveredAction = body.querySelector?.('.cover-lookup-task-actions :hover');
+  return [focusedAction, hoveredAction].some((action) => {
+    if (!action) return false;
+    const cancelButton = action.closest?.('[data-cancel-cover-lookup-task]');
+    if (!cancelButton) return true;
+    const taskId = cancelButton.getAttribute('data-cancel-cover-lookup-task');
+    const task = (state.coverLookup.tasks || []).find((candidate) => String(candidate?.id || '') === taskId);
+    return ['pending', 'running'].includes(String(task?.status || ''));
+  });
+}
+
 function findCoverLookupTaskOpenForSelectionNode(node) {
   const element = typeof node?.closest === 'function' ? node : node?.parentElement;
   return element?.closest?.('.cover-lookup-task-open') || null;
@@ -25034,12 +26121,13 @@ function handleCoverLookupTaskOpenCopy(event) {
   return true;
 }
 
-function renderCoverLookupDrawer() {
+function renderCoverLookupDrawer({ preserveInteraction = true } = {}) {
   const drawer = document.getElementById('cover-lookup-drawer');
   const body = document.getElementById('cover-lookup-drawer-body');
   const badge = document.getElementById('cover-lookup-drawer-badge');
   const button = document.getElementById('cover-lookup-drawer-button');
   const clearButton = document.getElementById('cover-lookup-drawer-clear');
+  const summary = document.getElementById('cover-lookup-drawer-summary');
   if (!drawer || !body || !button || !badge) return;
   const tasks = Array.isArray(state.coverLookup.tasks) ? state.coverLookup.tasks : [];
   drawer.hidden = !state.coverLookup.drawerOpen;
@@ -25048,13 +26136,22 @@ function renderCoverLookupDrawer() {
   const pendingNotificationCount = tasks.filter((task) => isCompletedCoverLookupTask(task) && !Boolean(task?.notification_action_taken)).length;
   const terminalCount = tasks.filter((task) => isCompletedCoverLookupTask(task)).length;
   const badgeCount = activeCount + pendingNotificationCount;
+  if (summary) {
+    summary.textContent = [
+      activeCount ? `${activeCount} active` : '',
+      terminalCount ? `${terminalCount} finished` : '',
+    ].filter(Boolean).join(' · ') || 'No activity';
+  }
   badge.hidden = badgeCount <= 0;
   badge.textContent = String(badgeCount || '');
   button.classList.toggle('has-active-lookups', badgeCount > 0);
   if (clearButton) {
-    clearButton.hidden = terminalCount <= 0;
+    clearButton.hidden = false;
+    clearButton.disabled = terminalCount <= 0;
+    clearButton.setAttribute?.('aria-disabled', String(terminalCount <= 0));
   }
-  const preserveSelectedNotificationText = hasActiveCoverLookupDrawerTextSelection(body);
+  const preserveSelectedNotificationText = preserveInteraction
+    && (hasActiveCoverLookupDrawerTextSelection(body) || hasActiveCoverLookupDrawerAction(body));
   if (!tasks.length) {
     if (!preserveSelectedNotificationText) {
       body.innerHTML = '<div class="cover-lookup-drawer-empty">You\'re not looking for anything at the moment. Search for specific album art to see notifications.</div>';
@@ -25067,39 +26164,80 @@ function renderCoverLookupDrawer() {
     const status = String(task?.status || '');
     const isCompleted = isCompletedCoverLookupTask(task);
     const isNoResult = status === 'completed' && String(task?.result_kind || '') === 'no-results';
-    const statusLabel = isNoResult
-      ? 'Completed — no result'
+    const foundCount = Array.isArray(task?.possible_matches)
+      ? task.possible_matches.filter(item => String(item?.art_kind || 'cover') === 'cover').length
+      : 0;
+    const statusLabel = status === 'failed'
+      ? 'Lookup failed'
+      : status === 'canceled'
+      ? 'Canceled'
+      : isNoResult
+      ? 'No covers found'
       : isCompleted && task?.notification_action_taken
       ? 'Art chosen'
       : status === 'completed'
-        ? 'Completed'
-      : (task?.progress_label || status || 'Queued');
+        ? `${foundCount ? `${foundCount} ` : ''}covers found`
+      : status === 'pending'
+          ? 'Queued'
+          : 'Searching';
+    const taskStateClass = status === 'failed'
+      ? 'is-failed'
+      : ['pending', 'running'].includes(status)
+        ? 'is-running'
+        : 'is-completed';
     const elapsedStateClass = status === 'failed'
       ? 'is-failed'
       : isCompleted
         ? 'is-completed'
         : 'is-active';
     const elapsedLabel = getCoverLookupTaskElapsedLabel(task, Date.now());
-    const line = [task?.artist || '', task?.album || '', task?.year || ''].filter(Boolean).join(' - ');
+    const albumTitle = String(task?.album || '').trim() || 'Unknown album';
+    const albumByline = [task?.artist || '', task?.year || ''].filter(Boolean).join(' · ');
+    const openLabel = `Open Cover Look Up: ${albumTitle}${albumByline ? ` — ${albumByline}` : ''}`;
+    const coverUrl = typeof buildAlbumDisplayCoverUrl === 'function'
+      ? String(buildAlbumDisplayCoverUrl(task?.album_payload || {}) || '').trim()
+      : '';
+    const coverMarkup = coverUrl
+      ? `<img class="cover-lookup-task-cover" src="${escapeHtml(coverUrl)}" alt="">`
+      : '<span class="cover-lookup-task-cover is-placeholder" aria-hidden="true"></span>';
     return `
-      <div class="cover-lookup-task-card">
-        <div class="cover-lookup-task-open" role="button" tabindex="0" data-open-cover-lookup-task="${escapeHtml(task.id || '')}">
-          <div class="cover-lookup-task-type">COVER ART LOOK UP</div>
-          <div class="cover-lookup-task-title">${escapeHtml(line || 'Unknown album')}</div>
-          <div class="cover-lookup-task-status">${escapeHtml(statusLabel)}</div>
-          <div class="cover-lookup-task-elapsed ${elapsedStateClass}" data-cover-lookup-task-elapsed="${escapeHtml(task.id || '')}" ${elapsedLabel ? '' : 'hidden'}>${escapeHtml(elapsedLabel)}</div>
-          <div class="cover-lookup-task-progress"><span style="width:${progress}%"></span></div>
+      <div class="cover-lookup-task-card navigation-tree-item ${taskStateClass}">
+        <div class="cover-lookup-task-open" role="button" tabindex="0" aria-label="${escapeHtml(openLabel)}" data-open-cover-lookup-task="${escapeHtml(task.id || '')}">
+          ${coverMarkup}
+          <span class="cover-lookup-task-copy">
+            <span class="cover-lookup-task-title">${escapeHtml(albumTitle)}</span>
+            <span class="cover-lookup-task-byline">${escapeHtml(albumByline)}</span>
+            <span class="cover-lookup-task-meta">
+              <span class="cover-lookup-task-status-label ${taskStateClass}">${escapeHtml(statusLabel)}</span>
+              <span class="cover-lookup-task-elapsed ${elapsedStateClass}" data-cover-lookup-task-elapsed="${escapeHtml(task.id || '')}" ${elapsedLabel ? '' : 'hidden'}>${escapeHtml(elapsedLabel)}</span>
+            </span>
+          </span>
         </div>
+      <div class="cover-lookup-task-actions">
+        ${status === 'failed' && task?.album_payload
+          ? `<button class="button ui-button ui-button--secondary ui-button--small ui-button--icon cover-lookup-task-retry" type="button" data-retry-cover-lookup-task="${escapeHtml(task.id || '')}" aria-label="Retry lookup" title="Retry lookup"><svg class="ui-icon" viewBox="0 0 20 20" aria-hidden="true"><path d="M15.5 7A6 6 0 1 0 16 12M15.5 7V3.5M15.5 7H12"/></svg></button>`
+          : ''}
         ${['pending', 'running'].includes(status)
-          ? `<button class="cover-lookup-task-cancel" type="button" data-cancel-cover-lookup-task="${escapeHtml(task.id || '')}" aria-label="Stop lookup">✕</button>`
+          ? ButtonComponent.renderActionButton({
+            icon: 'close',
+            semantic: 'destructive',
+            ariaLabel: 'Stop lookup',
+            title: 'Stop lookup',
+            className: 'cover-lookup-task-cancel',
+            attributes: { 'data-cancel-cover-lookup-task': task.id || '' },
+          })
           : isCompleted
-            ? `<button class="cover-lookup-task-clear" type="button" data-clear-cover-lookup-task="${escapeHtml(task.id || '')}" aria-label="Clear notification" title="Clear notification">
-                <span class="cover-lookup-drawer-clear-glyph cover-lookup-task-clear-glyph" aria-hidden="true">
-                  <img class="cover-lookup-drawer-clear-glyph-default" src="/static/images/clear-notifications-icon-offwhite.png" alt="">
-                  <img class="cover-lookup-drawer-clear-glyph-hover" src="/static/images/clear-notifications-icon.png" alt="">
-                </span>
-              </button>`
+            ? ButtonComponent.renderActionButton({
+              icon: 'delete',
+              semantic: 'destructive',
+              ariaLabel: 'Delete notification',
+              title: 'Delete notification',
+              className: 'cover-lookup-task-clear',
+              attributes: { 'data-clear-cover-lookup-task': task.id || '' },
+            })
             : ''}
+      </div>
+      <div class="cover-lookup-task-progress" aria-hidden="true"><span style="width:${progress}%"></span></div>
       </div>
     `;
   }).join('');
@@ -25116,14 +26254,13 @@ async function clearCompletedCoverLookupTasks() {
     .map((task) => String(task?.id || '').trim())
     .filter(Boolean);
   if (!terminalTaskIds.length) {
-    showToast('There were no finished cover lookups to clear.', 'success', 2200);
     return;
   }
   const terminalTaskIdSet = new Set(terminalTaskIds);
   state.coverLookup.tasks = previousTasks.filter(
     (task) => !terminalTaskIdSet.has(String(task?.id || '').trim()),
   );
-  renderCoverLookupDrawer();
+  renderCoverLookupDrawer({ preserveInteraction: false });
   stopCoverLookupPollingIfIdle();
   try {
     const response = await fetch('/utilities/cover-lookup/tasks/clear-completed', {
@@ -25141,11 +26278,10 @@ async function clearCompletedCoverLookupTasks() {
     state.coverLookup.tasks = mergeCoverLookupTasksWithNotifications(Array.isArray(data.tasks) ? data.tasks : []);
     renderCoverLookupDrawer();
     stopCoverLookupPollingIfIdle();
-    showToast(Number(data.removed_count || 0) > 0 ? 'Finished cover lookups cleared.' : 'There were no finished cover lookups to clear.', 'success', 2200);
   } catch (error) {
     state.coverLookup.tasks = previousTasks;
     console.error('[AlbumHaven][CoverLookup] Failed to clear completed tasks.', error);
-    renderCoverLookupDrawer();
+    renderCoverLookupDrawer({ preserveInteraction: false });
     stopCoverLookupPollingIfIdle();
     showToast(error.message || 'Failed to clear completed cover lookups.', 'error', 2800);
   }
@@ -25161,7 +26297,7 @@ async function clearCoverLookupTaskNotification(taskId) {
   if (String(state.coverLookup.modal.taskId || '') === normalizedTaskId) {
     state.coverLookup.modal.taskId = '';
   }
-  renderCoverLookupDrawer();
+  renderCoverLookupDrawer({ preserveInteraction: false });
   stopCoverLookupPollingIfIdle();
   try {
     const response = await fetch(`/utilities/cover-lookup/task/${encodeURIComponent(normalizedTaskId)}/clear`, {
@@ -25183,7 +26319,7 @@ async function clearCoverLookupTaskNotification(taskId) {
   } catch (error) {
     state.coverLookup.tasks = previousTasks;
     console.error('[AlbumHaven][CoverLookup] Failed to clear notification.', error);
-    renderCoverLookupDrawer();
+    renderCoverLookupDrawer({ preserveInteraction: false });
     stopCoverLookupPollingIfIdle();
     showToast(error.message || 'Failed to clear notification.', 'error', 2800);
   }
@@ -25193,13 +26329,10 @@ function buildCoverLookupCard(item, kind = 'local') {
   const resolution = item?.resolution || ((item?.width && item?.height) ? `${item.width}x${item.height}` : 'Unknown');
   const isRemoteKind = kind === 'remote' || kind === 'saved-remote';
   const isPastedKind = kind === 'pasted';
-  const isSpotify = String(item?.source || '').trim() === 'spotify';
   const isOtherRemoteArt = isRemoteKind && String(item?.art_kind || 'cover') !== 'cover';
   const previewFallbackImageUrl = '/static/images/remote-preview-unavailable.png';
   const sourceBadge = buildRemoteCoverSourceBadge(item?.source);
-  const remoteSourceLabel = isSpotify
-    ? 'SPOTIFY'
-    : String(item?.source_label || item?.source || '').trim();
+  const remoteSourceLabel = getRemoteCoverSourceLabel(item?.source, item?.source_label);
   const imageUrl = kind === 'remote'
     ? buildRemoteCoverLookupDisplayUrl(item, item?.thumbnail_url || item?.url || '', item?.id || item?.url || '')
     : kind === 'saved-remote'
@@ -25221,7 +26354,8 @@ function buildCoverLookupCard(item, kind = 'local') {
     ? (!state.coverLookup.modal.selectedRemoteId && (
       String(state.coverLookup.modal.pendingLocalPath || '')
         ? String(state.coverLookup.modal.pendingLocalPath || '') === String(item?.path || '')
-        : String(item?.path || '') === getCoverLookupActiveLocalPath()
+        : !String(state.coverLookup.modal.pendingPastedImageId || '')
+          && String(item?.path || '') === getCoverLookupActiveLocalPath()
     ))
     : kind === 'pasted'
       ? (!String(state.coverLookup.modal.selectedRemoteId || '') && !String(state.coverLookup.modal.pendingLocalPath || '') && state.coverLookup.modal.pendingPastedImageId === String(item?.id || ''))
@@ -25229,6 +26363,7 @@ function buildCoverLookupCard(item, kind = 'local') {
       ? (
         !String(state.coverLookup.modal.selectedRemoteId || '')
         && !String(state.coverLookup.modal.pendingLocalPath || '')
+        && !String(state.coverLookup.modal.pendingPastedImageId || '')
         && !String(state.coverLookup.modal.activeLocalSelectionPath || '')
       )
       : (!isOtherRemoteArt && state.coverLookup.modal.selectedRemoteId === String(item?.id || ''));
@@ -25282,11 +26417,12 @@ function buildCoverLookupCard(item, kind = 'local') {
           </button>
           ${isActive ? '<span class="cover-lookup-art-check">&#10003;</span>' : ''}
           ${kind === 'local' ? `<button class="cover-lookup-art-delete" type="button" data-delete-local-cover="${escapeHtml(item.path || '')}" aria-label="Delete local cover art">&#128465;</button>` : ''}
+          ${isPastedKind ? `<button class="cover-lookup-art-delete" type="button" data-remove-pasted-cover="${escapeHtml(item.id || '')}" aria-label="Remove staged image">&#10005;</button>` : ''}
         </span>
         <span class="cover-lookup-art-meta">
           <span class="cover-lookup-art-name">${escapeHtml(item.relative_path || item.filename || item.album || (isPastedKind ? 'Pasted image' : 'Cover art'))}</span>
           <span class="cover-lookup-art-resolution">${escapeHtml(resolution)}</span>
-          ${isRemoteKind ? `<span class="cover-lookup-art-source">${sourceBadge}<span>${escapeHtml(remoteSourceLabel)}</span></span>` : ''}
+          ${isRemoteKind ? `<span class="cover-lookup-art-source-row">${sourceBadge}<span class="cover-lookup-art-source">${escapeHtml(remoteSourceLabel)}</span></span>` : ''}
           ${isOtherRemoteArt ? '' : `<span class="cover-lookup-art-action-label">${actionLabel}</span>`}
         </span>
       </div>
@@ -25339,6 +26475,11 @@ function restoreCoverLookupModalScrollAnchor(body, snapshot) {
   );
 }
 
+function formatCoverLookupImageCount(count) {
+  const safeCount = Math.max(0, Number(count || 0) || 0);
+  return `${safeCount} ${safeCount === 1 ? 'image' : 'images'}`;
+}
+
 function renderCoverLookupModal() {
   const els = getCoverLookupModalElements();
   if (!els.overlay || !els.body) return;
@@ -25352,6 +26493,8 @@ function renderCoverLookupModal() {
   }
   const localCovers = Array.isArray(modalState.localCovers) ? modalState.localCovers : [];
   const pastedImages = Array.isArray(modalState.pastedImages) ? modalState.pastedImages : [];
+  const manualImageAttachments = Array.isArray(modalState.manualImageAttachments)
+    ? modalState.manualImageAttachments : [];
   const otherArt = Array.isArray(modalState.otherArt) ? modalState.otherArt : [];
   const remoteCover = modalState.remoteCover && typeof modalState.remoteCover === 'object' ? modalState.remoteCover : null;
   const possibleMatches = Array.isArray(modalState.possibleMatches) ? modalState.possibleMatches : [];
@@ -25418,7 +26561,8 @@ function renderCoverLookupModal() {
   const searchControlsDisabledAttr = searchControlsDisabled ? 'disabled' : '';
   const manualInputDisabled = searchControlsDisabled;
   const manualInputDisabledAttr = manualInputDisabled ? 'disabled' : '';
-  const manualSearchDisabled = searchControlsDisabled || !String(modalState.manualUrlText || '').trim();
+  const manualSearchDisabled = searchControlsDisabled
+    || (!String(modalState.manualUrlText || '').trim() && !manualImageAttachments.length);
   const manualSearchDisabledAttr = manualSearchDisabled ? 'disabled' : '';
   const googleSearchUrl = buildCoverLookupImageSearchUrl('google', album);
   const yandexSearchUrl = buildCoverLookupImageSearchUrl('yandex', album);
@@ -25442,7 +26586,7 @@ function renderCoverLookupModal() {
         ${remoteOtherArtMatches.length ? `<div class="cover-lookup-subsection-title">OTHER COVER ART</div><div class="cover-lookup-gallery">${remoteOtherArtMatches.map((item) => buildCoverLookupCard(item, 'remote')).join('')}</div>` : ''}
         ${showCaaEmptyNotice ? `<div class="cover-lookup-subsection-title">Cover Art Archive</div><div class="cover-lookup-empty">We cannot guarantee Cover Art Archive results. Its API is flaky, you can try doing the same search later and might see good matches here</div>` : ''}
       `
-    : (taskRunning ? '' : '<div class="cover-lookup-empty">No remote matches yet.</div>');
+    : '';
   if (modalState.loading) {
     els.body.innerHTML = '<div class="cover-lookup-empty">Loading cover art gallery...</div>';
     els.body.scrollTop = 0;
@@ -25454,32 +26598,42 @@ function renderCoverLookupModal() {
   }
   els.body.innerHTML = `
     <section class="cover-lookup-section">
-      <h4 class="cover-lookup-section-title">Local Covers</h4>
+      <h4 class="cover-lookup-section-title">LOCAL · ${formatCoverLookupImageCount(localCovers.length)}</h4>
       <div class="cover-lookup-gallery">${localCovers.length ? localCovers.map((item) => buildCoverLookupCard(item, 'local')).join('') : '<div class="cover-lookup-empty">No local cover art found in this album folder.</div>'}</div>
       ${pastedImages.length ? `<div class="cover-lookup-subsection-title">PASTED IMAGES</div><div class="cover-lookup-gallery">${pastedImages.map((item) => buildCoverLookupCard(item, 'pasted')).join('')}</div>` : ''}
       ${otherArt.length ? `<div class="cover-lookup-subsection-title">Other art</div><div class="cover-lookup-gallery">${otherArt.map((item) => buildCoverLookupCard(item, 'local')).join('')}</div>` : ''}
     </section>
-    <section class="cover-lookup-section">
-      <h4 class="cover-lookup-section-title">Remote Cover Art</h4>
-      <div class="cover-lookup-gallery">${remoteCover ? buildCoverLookupCard(remoteCover, 'saved-remote') : '<div class="cover-lookup-empty">No remote cover is currently selected.</div>'}</div>
-    </section>
+    ${remoteCover ? `<section class="cover-lookup-section">
+      <h4 class="cover-lookup-section-title">REMOTE · ${formatCoverLookupImageCount(1)}</h4>
+      <div class="cover-lookup-gallery">${buildCoverLookupCard(remoteCover, 'saved-remote')}</div>
+    </section>` : ''}
     <section class="cover-lookup-section">
       <div class="cover-lookup-section-heading">
-        <h4 class="cover-lookup-section-title">Possible Matches</h4>
+        <h4 class="cover-lookup-section-title">${possibleMatches.length || taskRunning || showCaaEmptyNotice ? `POSSIBLE MATCHES · ${formatCoverLookupImageCount(possibleMatches.length)}` : 'ADD COVER ART'}</h4>
       </div>
       ${progressMarkup}
       ${possibleMatchesMarkup}
         <div class="cover-lookup-manual-add" data-cover-lookup-scroll-key="manual-add">
-        <div class="cover-lookup-manual-copy">
-          <div class="cover-lookup-manual-description">Search on the internet or manually add album links to improve cover results.</div>
-          <div class="cover-lookup-manual-note">Find Better Art will also use anything pasted here.</div>
-        </div>
+        <div class="cover-lookup-manual-divider" aria-hidden="true"></div>
+        <div class="cover-lookup-subsection-title">MANUAL SEARCH</div>
         <div class="cover-lookup-search-shortcuts">
-          <a class="cover-lookup-search-chip is-google" href="${googleSearchUrl}" target="_blank" rel="noreferrer"><span class="cover-lookup-search-chip-logo">G</span><span>Google</span></a>
-          <a class="cover-lookup-search-chip is-yandex" href="${yandexSearchUrl}" target="_blank" rel="noreferrer"><span class="cover-lookup-search-chip-logo">Y</span><span>Yandex</span></a>
+          <a class="cover-lookup-search-chip is-google" href="${googleSearchUrl}" target="_blank" rel="noreferrer"><img class="cover-lookup-search-chip-logo" src="/static/images/google.ico" alt=""><span>Google</span><span class="cover-lookup-external-marker" aria-hidden="true">↗</span></a>
+          <a class="cover-lookup-search-chip is-yandex" href="${yandexSearchUrl}" target="_blank" rel="noreferrer"><img class="cover-lookup-search-chip-logo" src="/static/images/yandex.ico" alt=""><span>Yandex</span><span class="cover-lookup-external-marker" aria-hidden="true">↗</span></a>
         </div>
-        <div class="cover-lookup-manual-row">
-          <textarea class="cover-lookup-manual-input" id="cover-lookup-pasted-urls" rows="4" placeholder="You can paste your image or direct link to the album page or jpg here" ${manualInputDisabledAttr}>${escapeHtml(modalState.manualUrlText || '')}</textarea>
+        <div class="cover-lookup-manual-row" data-cover-lookup-drop-zone="1">
+          <div class="cover-lookup-manual-content">
+            <div class="cover-lookup-manual-attachments" ${manualImageAttachments.length ? '' : 'hidden'}>
+              ${manualImageAttachments.map((item) => `
+                <span class="cover-lookup-manual-attachment" data-cover-lookup-pending-attachment="${escapeHtml(item.id || '')}" title="${escapeHtml(item.filename || 'Image')}">
+                  <img src="${escapeHtml(item.object_url || item.data_url || '')}" alt="">
+                  <button type="button" data-remove-cover-lookup-pending-attachment="${escapeHtml(item.id || '')}" aria-label="Remove ${escapeHtml(item.filename || 'image')}">×</button>
+                </span>
+              `).join('')}
+            </div>
+            <textarea class="cover-lookup-manual-input" id="cover-lookup-pasted-urls" rows="1" placeholder="Paste an image or a direct image or album link" ${manualInputDisabledAttr}>${escapeHtml(modalState.manualUrlText || '')}</textarea>
+          </div>
+          <input type="file" accept="image/*" multiple data-cover-lookup-file-input hidden ${manualInputDisabledAttr}>
+          <button class="cover-lookup-manual-open" type="button" data-choose-cover-lookup-files="1" aria-label="Add image" ${manualInputDisabledAttr}><span aria-hidden="true">+</span><span>Add image</span></button>
         </div>
         <div class="cover-lookup-manual-actions">
           <button class="button cover-lookup-manual-submit" type="button" data-add-cover-lookup-remote="1" ${manualSearchDisabledAttr}>Extract images</button>
@@ -25615,9 +26769,31 @@ function applyCoverLookupTaskUpdates(task, options = {}) {
   refreshCoverLookupAlbumArtwork(task.album_payload || state.coverLookup.modal.album || null, task.updated_albums);
 }
 
+let coverLookupGalleryRequest = 0;
+let coverLookupModalSession = 0;
+const coverLookupPendingLocalMutations = new Set();
+const coverLookupSeenRequests = new WeakMap();
+
+function isCoverLookupLocalMutationPending(album = state.coverLookup.modal.album) {
+  return coverLookupPendingLocalMutations.size > 0
+    && coverLookupPendingLocalMutations.has(buildTrackPathSignature(album));
+}
+
+async function finishCoverLookupLocalMutation(mutationKey, session) {
+  coverLookupPendingLocalMutations.delete(mutationKey);
+  if (buildTrackPathSignature(state.coverLookup.modal.album) !== mutationKey) return;
+  syncCoverLookupSaveButton();
+  const overlay = getCoverLookupModalElements().overlay;
+  if (session !== coverLookupModalSession && overlay && !overlay.hidden) {
+    await refreshCoverLookupGallery(false);
+  }
+}
+
 async function refreshCoverLookupGallery(showLoading = true) {
   const album = state.coverLookup.modal.album;
   if (!album) return;
+  const request = ++coverLookupGalleryRequest;
+  const isCurrent = () => request === coverLookupGalleryRequest;
   state.coverLookup.modal.loading = Boolean(showLoading);
   renderCoverLookupModal();
   try {
@@ -25627,15 +26803,18 @@ async function refreshCoverLookupGallery(showLoading = true) {
       body: JSON.stringify({ album, task_id: state.coverLookup.modal.taskId || '' }),
     });
     const data = await response.json().catch(() => ({}));
+    if (!isCurrent()) return;
     if (!response.ok || !data.ok) {
       throw new Error(data.error || 'Failed to load cover art gallery');
     }
     console.log('[AlbumHaven][CoverLookup] Gallery response.', data);
     applyCoverLookupGalleryPayload(data);
     await markCoverLookupAutomaticImprovementSeen(state.coverLookup.modal.candidateSnapshot);
+    if (!isCurrent()) return;
     state.coverLookup.modal.loading = false;
     renderCoverLookupModal();
   } catch (error) {
+    if (!isCurrent()) return;
     state.coverLookup.modal.loading = false;
     console.error('[AlbumHaven][CoverLookup] Failed to load gallery.', error);
     showToast(error.message || 'Failed to load cover art gallery.', 'error', 2800);
@@ -25645,6 +26824,7 @@ async function refreshCoverLookupGallery(showLoading = true) {
 async function openCoverLookupModal(album, options = {}) {
   const els = getCoverLookupModalElements();
   if (!els.overlay || !album) return;
+  coverLookupModalSession += 1;
   const matchingTask = !options.taskId
     ? (state.coverLookup.tasks || []).find((task) => buildTrackPathSignature(task?.album_payload) === buildTrackPathSignature(album))
     : null;
@@ -25654,6 +26834,7 @@ async function openCoverLookupModal(album, options = {}) {
   state.coverLookup.modal.localCovers = [];
   revokeCoverLookupPastedImageUrls();
   state.coverLookup.modal.pastedImages = [];
+  state.coverLookup.modal.manualImageAttachments = [];
   state.coverLookup.modal.otherArt = [];
   state.coverLookup.modal.pendingLocalPath = '';
   state.coverLookup.modal.pendingPastedImageId = '';
@@ -25686,6 +26867,8 @@ async function openCoverLookupModal(album, options = {}) {
 }
 
 function closeCoverLookupModal() {
+  coverLookupGalleryRequest += 1;
+  coverLookupModalSession += 1;
   const els = getCoverLookupModalElements();
   if (!els.overlay) return;
   els.overlay.hidden = true;
@@ -25696,6 +26879,7 @@ function closeCoverLookupModal() {
   state.coverLookup.modal.activeLocalSelectionPath = '';
   revokeCoverLookupPastedImageUrls();
   state.coverLookup.modal.pastedImages = [];
+  state.coverLookup.modal.manualImageAttachments = [];
   state.coverLookup.modal.manualBusy = false;
   if (els.saveRemote instanceof HTMLButtonElement) {
     els.saveRemote.hidden = false;
@@ -25711,7 +26895,7 @@ function closeCoverLookupModal() {
 
 function openCoverLookupDeleteConfirm(path) {
   const els = getCoverLookupDeleteConfirmElements();
-  if (!els.overlay || !path) return;
+  if (!els.overlay || !path || isCoverLookupLocalMutationPending()) return;
   state.coverLookup.modal.pendingDeletePath = String(path || '');
   if (els.text) {
     els.text.textContent = 'Are you sure you want to delete this local cover art?';
@@ -25807,6 +26991,7 @@ async function startCoverLookupForAlbum(album, options = {}) {
 }
 
 function selectLocalCoverFromLookup(sourcePath) {
+  if (window.AlbumHavenCapabilities?.clientSurface === 'tv') return;
   state.coverLookup.modal.pendingLocalPath = String(sourcePath || '');
   state.coverLookup.modal.pendingPastedImageId = '';
   state.coverLookup.modal.selectedRemoteId = '';
@@ -25814,22 +26999,26 @@ function selectLocalCoverFromLookup(sourcePath) {
 }
 
 async function saveLocalCoverFromLookup(sourcePath) {
+  const session = coverLookupModalSession;
   const album = state.coverLookup.modal.album;
   const taskId = String(state.coverLookup.modal.taskId || '');
-  if (!album || !sourcePath) return;
+  if (!album || !sourcePath || isCoverLookupLocalMutationPending(album)) return;
+  const mutationKey = buildTrackPathSignature(album);
   const previousAlbum = deepCloneJson(album);
   const optimisticAlbum = buildOptimisticCoverUpdatedAlbum(album, sourcePath);
-  applyOptimisticLocalCoverSelection(album, sourcePath);
-  state.coverLookup.modal.pendingLocalPath = '';
-  state.coverLookup.modal.selectedRemoteId = '';
-  markTrackModalCoverTransitionPending(album);
-  closeCoverLookupModal();
-  if (optimisticAlbum) {
-    markAlbumCoverPathsFresh([optimisticAlbum]);
-    syncCoverLookupAlbumReferences([optimisticAlbum]);
-    refreshCoverLookupAlbumArtwork(album, [optimisticAlbum], { updateTrackModal: false });
-  }
+  coverLookupPendingLocalMutations.add(mutationKey);
+  coverLookupGalleryRequest += 1;
   try {
+    applyOptimisticLocalCoverSelection(album, sourcePath);
+    state.coverLookup.modal.pendingLocalPath = '';
+    state.coverLookup.modal.selectedRemoteId = '';
+    markTrackModalCoverTransitionPending(album);
+    closeCoverLookupModal();
+    if (optimisticAlbum) {
+      markAlbumCoverPathsFresh([optimisticAlbum]);
+      syncCoverLookupAlbumReferences([optimisticAlbum]);
+      refreshCoverLookupAlbumArtwork(album, [optimisticAlbum], { updateTrackModal: false });
+    }
     const response = await fetch('/utilities/cover-lookup/local-select', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -25842,6 +27031,7 @@ async function saveLocalCoverFromLookup(sourcePath) {
     const updatedAlbums = Array.isArray(data.updated_albums) && data.updated_albums.length
       ? data.updated_albums
       : [data.updated_album].filter(Boolean);
+    if (buildTrackPathSignature(state.coverLookup.modal.album) === mutationKey) coverLookupGalleryRequest += 1;
     markAlbumCoverPathsFresh(updatedAlbums);
     if (updatedAlbums[0]) {
       await preloadCoverLookupAlbumImage(updatedAlbums[0]);
@@ -25855,6 +27045,7 @@ async function saveLocalCoverFromLookup(sourcePath) {
     }
     showToast('Local cover art selected.', 'success', 2200);
   } catch (error) {
+    if (buildTrackPathSignature(state.coverLookup.modal.album) === mutationKey) coverLookupGalleryRequest += 1;
     if (previousAlbum) {
       clearOptimisticAlbumCovers([previousAlbum]);
       markAlbumCoverPathsFresh([previousAlbum]);
@@ -25863,12 +27054,17 @@ async function saveLocalCoverFromLookup(sourcePath) {
     }
     console.error('[AlbumHaven][CoverLookup] Failed to select local cover.', error);
     showToast(error.message || 'Failed to select local cover art.', 'error', 2800);
+  } finally {
+    await finishCoverLookupLocalMutation(mutationKey, session);
   }
 }
 
 async function deleteLocalCoverFromLookup(sourcePath) {
+  const session = coverLookupModalSession;
+  const ownsModal = () => coverLookupModalSession === session;
   const album = state.coverLookup.modal.album;
-  if (!album || !sourcePath) return;
+  if (!album || !sourcePath || isCoverLookupLocalMutationPending(album)) return;
+  const mutationKey = buildTrackPathSignature(album);
   const previousLocalCovers = Array.isArray(state.coverLookup.modal.localCovers)
     ? state.coverLookup.modal.localCovers.slice()
     : [];
@@ -25876,23 +27072,25 @@ async function deleteLocalCoverFromLookup(sourcePath) {
   const remainingLocalCovers = previousLocalCovers.filter((item) => String(item?.path || '') !== String(sourcePath || ''));
   const fallbackLocalCoverPath = String(remainingLocalCovers[0]?.path || '').trim();
   const optimisticAlbum = buildOptimisticCoverDeleteUpdatedAlbum(album, sourcePath, fallbackLocalCoverPath);
-  closeCoverLookupDeleteConfirm();
-  state.coverLookup.modal.localCovers = remainingLocalCovers;
-  if (String(state.coverLookup.modal.pendingLocalPath || '') === String(sourcePath || '')) {
-    state.coverLookup.modal.pendingLocalPath = '';
-  }
-  if (String(state.coverLookup.modal.activeLocalSelectionPath || '') === String(sourcePath || '')) {
-    state.coverLookup.modal.activeLocalSelectionPath = '';
-  }
-  state.coverLookup.modal.pendingPastedImageId = '';
-  state.coverLookup.modal.selectedRemoteId = '';
-  if (optimisticAlbum) {
-    markAlbumCoverPathsFresh([optimisticAlbum]);
-    syncCoverLookupAlbumReferences([optimisticAlbum]);
-    refreshCoverLookupAlbumArtwork(album, [optimisticAlbum]);
-  }
-  renderCoverLookupModal();
+  coverLookupPendingLocalMutations.add(mutationKey);
+  coverLookupGalleryRequest += 1;
   try {
+    closeCoverLookupDeleteConfirm();
+    state.coverLookup.modal.localCovers = remainingLocalCovers;
+    if (String(state.coverLookup.modal.pendingLocalPath || '') === String(sourcePath || '')) {
+      state.coverLookup.modal.pendingLocalPath = '';
+    }
+    if (String(state.coverLookup.modal.activeLocalSelectionPath || '') === String(sourcePath || '')) {
+      state.coverLookup.modal.activeLocalSelectionPath = '';
+    }
+    state.coverLookup.modal.pendingPastedImageId = '';
+    state.coverLookup.modal.selectedRemoteId = '';
+    if (optimisticAlbum) {
+      markAlbumCoverPathsFresh([optimisticAlbum]);
+      syncCoverLookupAlbumReferences([optimisticAlbum]);
+      refreshCoverLookupAlbumArtwork(album, [optimisticAlbum]);
+    }
+    renderCoverLookupModal();
     const response = await fetch('/utilities/cover-lookup/local-delete', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -25903,33 +27101,40 @@ async function deleteLocalCoverFromLookup(sourcePath) {
       throw new Error(data.error || 'Failed to delete local cover art');
     }
     const updatedAlbums = Array.isArray(data.updated_albums) ? data.updated_albums : [data.updated_album].filter(Boolean);
+    if (buildTrackPathSignature(state.coverLookup.modal.album) === mutationKey) coverLookupGalleryRequest += 1;
     markAlbumCoverPathsFresh(updatedAlbums);
     syncCoverLookupAlbumReferences(updatedAlbums);
-    state.coverLookup.modal.pendingLocalPath = '';
-    state.coverLookup.modal.pendingPastedImageId = '';
-    state.coverLookup.modal.selectedRemoteId = '';
     refreshCoverLookupAlbumArtwork(album, updatedAlbums);
-    if (data.gallery && typeof data.gallery === 'object') {
-      applyCoverLookupGalleryPayload(data.gallery);
-      renderCoverLookupModal();
-    } else {
-      await refreshCoverLookupGallery(false);
+    if (ownsModal()) {
+      if (data.gallery && typeof data.gallery === 'object') {
+        applyCoverLookupGalleryPayload(data.gallery);
+        renderCoverLookupModal();
+      } else {
+        await refreshCoverLookupGallery(false);
+      }
     }
     showToast('Local cover art deleted.', 'success', 2200);
   } catch (error) {
-    state.coverLookup.modal.localCovers = previousLocalCovers;
+    if (buildTrackPathSignature(state.coverLookup.modal.album) === mutationKey) coverLookupGalleryRequest += 1;
+    if (ownsModal()) state.coverLookup.modal.localCovers = previousLocalCovers;
     if (previousAlbum) {
       markAlbumCoverPathsFresh([previousAlbum]);
       syncCoverLookupAlbumReferences([previousAlbum]);
       refreshCoverLookupAlbumArtwork(previousAlbum, [previousAlbum]);
     }
-    renderCoverLookupModal();
+    if (ownsModal()) renderCoverLookupModal();
     console.error('[AlbumHaven][CoverLookup] Failed to delete local cover.', error);
     showToast(error.message || 'Failed to delete local cover art.', 'error', 2800);
+  } finally {
+    await finishCoverLookupLocalMutation(mutationKey, session);
   }
 }
 
 function selectRemoteCoverFromLookup(candidateId) {
+  const selectedCandidate = (state.coverLookup.modal.possibleMatches || []).find((candidate) => (
+    String(candidate?.id || '') === String(candidateId || '')
+  ));
+  if (window.AlbumHavenCapabilities && !window.AlbumHavenCapabilities.allowsCoverCandidate(selectedCandidate)) return;
   state.coverLookup.modal.pendingLocalPath = '';
   state.coverLookup.modal.pendingPastedImageId = '';
   state.coverLookup.modal.selectedRemoteId = String(candidateId || '');
@@ -25941,9 +27146,6 @@ function selectRemoteCoverFromLookup(candidateId) {
     || '',
   );
   state.coverLookup.modal.remoteSelectionOverrideCandidateId = String(candidateId || '');
-  const selectedCandidate = (state.coverLookup.modal.possibleMatches || []).find((candidate) => (
-    String(candidate?.id || '') === String(candidateId || '')
-  ));
   state.coverLookup.modal.remoteSelectionOverrideUrl = normalizeCoverLookupCandidateUrl(
     selectedCandidate?.url,
   );
@@ -25968,6 +27170,7 @@ async function saveRemoteCoverFromLookup() {
   if (!album || (!taskId && !snapshotGeneration) || !candidateId) return;
   const previousAlbum = deepCloneJson(album);
   const selectedMatch = (state.coverLookup.modal.possibleMatches || []).find((item) => String(item?.id || '') === String(candidateId || ''));
+  if (window.AlbumHavenCapabilities && !window.AlbumHavenCapabilities.allowsCoverCandidate(selectedMatch)) return;
   try {
     if (selectedMatch) {
       applyOptimisticRemoteCoverSelection(album, selectedMatch, '');
@@ -26013,7 +27216,18 @@ async function addRemoteCoverLinksFromLookup() {
   const album = state.coverLookup.modal.album;
   const input = document.getElementById('cover-lookup-pasted-urls');
   const urls = collectManualCoverLookupUrls();
-  if (!album || !urls.length) return;
+  const attachmentCount = Array.isArray(state.coverLookup.modal.manualImageAttachments)
+    ? state.coverLookup.modal.manualImageAttachments.length : 0;
+  if (!album || (!urls.length && !attachmentCount)) return;
+  const extractedImageCount = extractCoverLookupPendingAttachments();
+  if (!urls.length) {
+    state.coverLookup.modal.statusText = extractedImageCount === 1
+      ? 'Image extracted.'
+      : `${extractedImageCount} images extracted.`;
+    state.coverLookup.modal.statusTone = 'neutral';
+    renderCoverLookupModal();
+    return;
+  }
   try {
     state.coverLookup.modal.manualBusy = true;
     renderCoverLookupModal();
@@ -26045,7 +27259,13 @@ async function addRemoteCoverLinksFromLookup() {
     }
     await loadCoverLookupTasks({ toast: false });
     renderCoverLookupModal();
-    showToast('Remote cover links added.', 'success', 2200);
+    showToast(
+      extractedImageCount
+        ? `Extracted ${extractedImageCount} image${extractedImageCount === 1 ? '' : 's'} and added remote links.`
+        : 'Remote cover links added.',
+      'success',
+      2200,
+    );
   } catch (error) {
     state.coverLookup.modal.statusText = String(error?.message || 'Nothing was found in the pasted links.');
     state.coverLookup.modal.statusTone = 'error';
@@ -26107,6 +27327,7 @@ async function savePastedCoverFromLookup(imageId) {
 }
 
 async function saveCoverFromLookup() {
+  if (isCoverLookupLocalMutationPending()) return;
   if (String(state.coverLookup.modal.selectedRemoteId || '')) {
     await saveRemoteCoverFromLookup();
     return;
@@ -26376,6 +27597,7 @@ function openTagEditor(album, options = {}) {
     anchorPath: String(tracks[0].path || ''),
     dragSelecting: false,
     dragAnchorPath: '',
+    reorder: null,
     values,
     sessionMutationClaim: claimTagEditViewMutation(album),
     autoNumberStartValue: '',
@@ -26441,6 +27663,7 @@ function autoNumberSelectedTagEditorTracks() {
 }
 
 function closeTagEditor() {
+  if (typeof clearTagEditorReorderCue === 'function') clearTagEditorReorderCue();
   const els = getTagEditorElements();
   if (!els.overlay) return;
   settleTagEditorSessionMutationClaim();
@@ -27610,24 +28833,6 @@ function hideVersionContextMenu() {
   if (menu) menu.hidden = true;
 }
 
-function buildCoverLookupButtonIcon() {
-  return `
-    <span class="track-modal-cover-tool-icon track-modal-cover-tool-icon-lookup" aria-hidden="true">
-      <img class="track-modal-cover-tool-icon-default" src="/static/images/cover-lookup-gallery-icon-offwhite.png" alt="">
-      <img class="track-modal-cover-tool-icon-hover" src="/static/images/cover-lookup-gallery-icon.png" alt="">
-    </span>
-  `;
-}
-
-function buildFastCoverFetchButtonIcon() {
-  return `
-    <span class="track-modal-cover-tool-icon track-modal-cover-tool-icon-fast-fetch" aria-hidden="true">
-      <img class="track-modal-cover-tool-icon-default" src="/static/images/quick-search-icon-offwhite.png" alt="">
-      <img class="track-modal-cover-tool-icon-hover" src="/static/images/quick-search-icon.png" alt="">
-    </span>
-  `;
-}
-
 function buildTrackModalCoverVisualHtml({
   albumName,
   localCoverPath,
@@ -27882,8 +29087,28 @@ function renderTrackModalRelease(album) {
   const coverLookupLabel = hasUnseenAutomaticImprovement
     ? 'Open cover art look up gallery; new automatic cover candidate available'
     : 'Open cover art look up gallery';
-  const coverLookupIcon = buildCoverLookupButtonIcon();
-  const fastCoverFetchIcon = buildFastCoverFetchButtonIcon();
+  const coverToolsHtml = `
+    ${ButtonComponent.renderActionButton({
+      icon: 'search',
+      ariaLabel: coverLookupLabel,
+      title: 'Cover Art Look Up',
+      className: coverLookupClass,
+      attributes: {
+        'data-open-track-modal-cover-lookup': '1',
+        'data-album-key': albumKey,
+      },
+    })}
+    ${ButtonComponent.renderActionButton({
+      icon: 'bolt',
+      ariaLabel: 'Fetch cover art now',
+      title: 'Fast Cover Fetch',
+      className: 'track-modal-cover-tool is-fast-fetch',
+      attributes: {
+        'data-track-modal-fast-cover-fetch': '1',
+        'data-album-key': albumKey,
+      },
+    })}
+  `;
   const coverSourceBadge = typeof buildTrackModalCoverSourceBadge === 'function'
     ? buildTrackModalCoverSourceBadge(album?.remote_cover_source || '')
     : '';
@@ -27955,20 +29180,13 @@ function renderTrackModalRelease(album) {
       : ' data-lightbox-gallery="visible"';
     els.cover.innerHTML = `
       <div class="track-modal-cover-shell">
-        ${renderAlbumArtbox({
-          state: 'ready',
-          label: `Album cover for ${album.name}`,
-          coverHtml: `<button class="track-modal-cover-button" type="button" data-open-lightbox="1" data-cover-src="${escapeHtml(lightboxSrc)}" data-cover-preview-src="${escapeHtml(coverSrc)}" data-cover-alt="${escapeHtml(`Album cover for ${album.name}`)}" data-album-key="${albumKey}"${lightboxGalleryAttribute}><span class="track-modal-cover-image-slot"></span></button>`,
-        })}
-        ${coverSourceBadge}
-        <div class="track-modal-cover-tools">
-          <button class="${coverLookupClass}" type="button" data-open-track-modal-cover-lookup="1" data-album-key="${albumKey}" aria-label="${coverLookupLabel}" title="Cover Art Look Up">
-            ${coverLookupIcon}
-          </button>
-          <button class="track-modal-cover-tool is-fast-fetch" type="button" data-track-modal-fast-cover-fetch="1" data-album-key="${albumKey}" aria-label="Fetch cover art now" title="Fast Cover Fetch">
-            ${fastCoverFetchIcon}
-          </button>
-        </div>
+      ${renderAlbumArtbox({
+        state: 'ready',
+        label: `Album cover for ${album.name}`,
+        coverHtml: `<button class="track-modal-cover-button" type="button" data-open-lightbox="1" data-cover-src="${escapeHtml(lightboxSrc)}" data-cover-preview-src="${escapeHtml(coverSrc)}" data-cover-alt="${escapeHtml(`Album cover for ${album.name}`)}" data-album-key="${albumKey}"${lightboxGalleryAttribute}><span class="track-modal-cover-image-slot"></span></button>`,
+        overlayHtml: coverToolsHtml,
+      })}
+      ${coverSourceBadge}
       </div>
     `;
     const coverImageSlot = typeof els.cover?.querySelector === 'function'
@@ -28028,15 +29246,11 @@ function renderTrackModalRelease(album) {
   } else {
     els.cover.innerHTML = `
       <div class="track-modal-cover-shell">
-        ${renderAlbumArtbox({ state: 'empty', label: `${album.name || 'Album'} has no cover art` })}
-        <div class="track-modal-cover-tools">
-          <button class="${coverLookupClass}" type="button" data-open-track-modal-cover-lookup="1" data-album-key="${albumKey}" aria-label="${coverLookupLabel}" title="Cover Art Look Up">
-            ${coverLookupIcon}
-          </button>
-          <button class="track-modal-cover-tool is-fast-fetch" type="button" data-track-modal-fast-cover-fetch="1" data-album-key="${albumKey}" aria-label="Fetch cover art now" title="Fast Cover Fetch">
-            ${fastCoverFetchIcon}
-          </button>
-        </div>
+      ${renderAlbumArtbox({
+        state: 'empty',
+        label: `${album.name || 'Album'} has no cover art`,
+        overlayHtml: coverToolsHtml,
+      })}
       </div>
     `;
   }
@@ -28858,6 +30072,8 @@ function persistPlayerStateForUnload(reason) {
 }
 
 function restorePlayerState() {
+  if (typeof window !== 'undefined' && window.AlbumHavenCapabilities
+    && !window.AlbumHavenCapabilities.allows('library.media.read')) return;
   if (state.player.restoredFromStorage) return;
   state.player.restoredFromStorage = true;
   const raw = getLocalStorageItem(PLAYER_STATE_STORAGE_KEY);
@@ -30300,9 +31516,13 @@ class GalleryCoverLoadScheduler {
       if (
         task.cancelled
         || !task.consumerOwned
-        || task.generation === currentGeneration
-        || task.pendingGenerationValidation !== currentGeneration
+        || (task.generation !== currentGeneration && task.pendingGenerationValidation !== currentGeneration)
       ) return;
+      const sameGeneration = task.generation === currentGeneration;
+      const hasDetachedConsumer = [task.imageRequests, task.drainingImageRequests]
+        .some(requests => requests.some(request => !this.requestHasConnectedConsumer(request)))
+        || task.suspendedImages.some(image => image?.isConnected === false);
+      if (sameGeneration && !hasDetachedConsumer) return;
       [task.imageRequests, task.drainingImageRequests].forEach((requests) => {
         const connected = requests.filter((request) => this.requestHasConnectedConsumer(request));
         requests
@@ -30322,6 +31542,8 @@ class GalleryCoverLoadScheduler {
         task.pendingGenerationValidation = 0;
         return;
       }
+      // Viewport detachment does not retire an independent cache-persistence owner.
+      if (sameGeneration && (task.durabilityRequested || task.startedAsBackground)) return;
       if (task.started) {
         this.cache.recordInFlightPreemption?.(
           task.productionUrl,
@@ -31103,6 +32325,7 @@ const MAX_PRIORITY_VISIBLE_COVER_IMAGES = 4;
 const MAX_RETAINED_ALBUM_CARD_NODES = 48;
 const MAX_VIRTUAL_GRID_DIAGNOSTIC_EVENTS = 24;
 const VIRTUAL_GRID_SCROLL_RENDER_FALLBACK_MS = 100;
+const MIN_SETTLED_GALLERY_CARD_WIDTH_RATIO = 0.94;
 
 class VirtualArtistGrid {
   constructor() {
@@ -31114,6 +32337,7 @@ class VirtualArtistGrid {
     this.columnGap = 14;
     this.rowGap = 14;
     this.sectionHeaderHeight = 54;
+    this.showArtistSectionHeaders = true;
     this.sectionMarginBottom = 28;
     this.labelHeight = 40;
     this.subsectionLabelHeight = 26;
@@ -31167,6 +32391,7 @@ class VirtualArtistGrid {
     this.onScroll = this.onScroll.bind(this);
     this.onUserScrollIntent = this.onUserScrollIntent.bind(this);
     this.onResize = this.onResize.bind(this);
+    this.onArtistTreeSettled = this.onArtistTreeSettled.bind(this);
     this.onPointerDown = this.onPointerDown.bind(this);
     this.onAlbumCardPointerGestureEnd = this.onAlbumCardPointerGestureEnd.bind(this);
     this.scrollEl.addEventListener('scroll', this.onScroll, { passive: true });
@@ -31181,6 +32406,7 @@ class VirtualArtistGrid {
       document.addEventListener('pointercancel', this.onAlbumCardPointerGestureEnd, { capture: true });
     }
     window.addEventListener('resize', this.onResize);
+    window.addEventListener('album-haven:artist-tree-settled', this.onArtistTreeSettled);
   }
 
   recordDiagnosticEvent(type, details = {}) {
@@ -31228,6 +32454,7 @@ class VirtualArtistGrid {
       document.removeEventListener('pointercancel', this.onAlbumCardPointerGestureEnd, { capture: true });
     }
     window.removeEventListener('resize', this.onResize);
+    window.removeEventListener('album-haven:artist-tree-settled', this.onArtistTreeSettled);
     if (this._scrollRestoreRaf) {
       cancelBrowserAnimationFrame(this._scrollRestoreRaf);
       this._scrollRestoreRaf = null;
@@ -31374,6 +32601,7 @@ class VirtualArtistGrid {
         albumKey: String(anchorCardTrigger.getAttribute('data-album-key') || ''),
         albumName,
         albumYear,
+        triggerKind: anchorCardTrigger.matches?.('.album-card__artbox-trigger') ? 'artbox' : 'title',
         sectionOccurrenceKey: this.getRenderedSectionOccurrenceKey(anchorCardTrigger, this.containerEl),
         offsetTop: anchorRect.top - scrollRect.top,
       };
@@ -31402,8 +32630,11 @@ class VirtualArtistGrid {
       const albumTriggers = Array.from(
         this.containerEl.querySelectorAll('[data-open-tracklist="1"][data-album-key]'),
       );
+      const matchesCapturedTrigger = (element) => !anchor.triggerKind
+        || (element.matches?.('.album-card__artbox-trigger') ? 'artbox' : 'title') === anchor.triggerKind;
       const matchingAlbumTriggers = albumTriggers.filter((element) => (
         String(element.getAttribute('data-album-key') || '') === albumKey
+        && matchesCapturedTrigger(element)
       ));
       const anchorAlbumName = String(anchor.albumName || '');
       const anchorAlbumYear = String(anchor.albumYear ?? '');
@@ -31433,6 +32664,7 @@ class VirtualArtistGrid {
         : null;
       const renamedKeyTrigger = !anchorCardTrigger && anchorAlbumName
         ? albumTriggers.find((element) => {
+          if (!matchesCapturedTrigger(element)) return false;
           if (this.getRenderedSectionOccurrenceKey(element, this.containerEl) !== sectionOccurrenceKey) {
             return false;
           }
@@ -31614,6 +32846,12 @@ class VirtualArtistGrid {
     const renderedFamilyGroups = buildDisplayGroups(familyGroups);
     const renderedFallbackGroups = buildDisplayGroups(fallbackGroups || state.view.artist_groups || []);
     const selectedFamilyCoverOwner = String(state?.view?.selected_artist || '').trim();
+    const renderedArtistGroupCount = renderedPrimaryGroups.length || renderedFamilyGroups.length
+      ? renderedPrimaryGroups.length + renderedFamilyGroups.length
+      : renderedFallbackGroups.length;
+    this.showArtistSectionHeaders = typeof options.showArtistSectionHeaders === 'boolean'
+      ? options.showArtistSectionHeaders
+      : (!selectedFamilyCoverOwner || renderedArtistGroupCount > 1);
     if (selectedFamilyCoverOwner) {
       const selectedFamilyFilterActive = Boolean(state?.view?.primary_filter_active)
         || (Array.isArray(state?.view?.related_filter_artists)
@@ -31785,12 +33023,41 @@ class VirtualArtistGrid {
     return `row:${this.columns}:${albumKey}`;
   }
 
-  recalculate() {
+  recalculate(options = {}) {
+    this.sectionHeaderHeight = this.showArtistSectionHeaders ? 54 : 0;
     const layoutConfig = this.getLayoutConfig();
     const selectedCardWidth = resolveGalleryCardWidth(layoutConfig);
     const width = Math.max(1, this.scrollEl.clientWidth - 4);
-    this.columns = Math.max(1, Math.floor((width + this.columnGap) / (selectedCardWidth + this.columnGap)));
-    this.cardTrackWidth = (width - (this.columns - 1) * this.columnGap) / this.columns;
+    const previousCardTrackWidth = Number(this.cardTrackWidth);
+    const preserveCardTrackWidth = Boolean(
+      options.preserveCardTrackWidth && Number.isFinite(previousCardTrackWidth) && previousCardTrackWidth > 0,
+    );
+    const targetCardTrackWidth = preserveCardTrackWidth
+      ? Math.min(previousCardTrackWidth, width)
+      : selectedCardWidth;
+    const preservedColumns = Math.max(
+      1,
+      Math.floor((width + this.columnGap) / (targetCardTrackWidth + this.columnGap)),
+    );
+    const largestArtistAlbumCount = this.sections.reduce((largest, section) => Math.max(
+      largest,
+      Array.isArray(section?.group?.albums) ? section.group.albums.length : 0,
+    ), 0);
+    const shouldFillSettledRow = preserveCardTrackWidth
+      && largestArtistAlbumCount > Math.max(1, Number(this.columns) || 1);
+    const minimumSettledCardWidth = selectedCardWidth * MIN_SETTLED_GALLERY_CARD_WIDTH_RATIO;
+    const settledColumns = Math.min(
+      largestArtistAlbumCount,
+      Math.max(1, Math.floor(
+        (width + this.columnGap) / (minimumSettledCardWidth + this.columnGap),
+      )),
+    );
+    if (!options.preserveColumnGeometry) {
+      this.columns = shouldFillSettledRow ? settledColumns : preservedColumns;
+      this.cardTrackWidth = shouldFillSettledRow || !preserveCardTrackWidth
+        ? (width - (this.columns - 1) * this.columnGap) / this.columns
+        : targetCardTrackWidth;
+    }
     const displayMode = resolveGalleryRendererMode(state?.gallery?.mainState?.view || state?.view?.gallery_display_mode);
     const rowGeometryKey = `${displayMode}:${this.columns}:${this.cardTrackWidth}`;
     const estimatedRowHeight = displayMode === 'covers' ? this.cardTrackWidth : this.collapsedRowHeight;
@@ -31935,9 +33202,24 @@ class VirtualArtistGrid {
     this.invalidateScrollStabilization();
   }
 
-  onResize() {
+  onArtistTreeSettled() {
+    const anchor = this.captureScrollAnchor();
+    this.onResize({ preserveCardTrackWidth: true });
+    if (anchor && !this._resetScrollAfterMeasure) {
+      this.stabilizeScrollAfterMeasurement(anchor);
+      // Reflow can virtualize the old anchor. Mount its restored row before
+      // reconciling the exact trigger offset against the new card geometry.
+      this.render(true);
+      this.stabilizeScrollAfterMeasurement(anchor);
+    }
+  }
+
+  onResize(options = {}) {
+    const artistTreeTransitioning = document.getElementById('shell-navigation-rail')
+      ?.classList?.contains?.('is-transitioning');
+    if (artistTreeTransitioning && !options.preserveCardTrackWidth) return;
     this.lastKey = '';
-    this.recalculate();
+    this.recalculate(options);
     this.render(true);
     this.scheduleMeasureRows(true);
   }
@@ -32596,7 +33878,8 @@ class VirtualArtistGrid {
       });
     }
     this.lastKey = '';
-    this.recalculate();
+    // Height reconciliation must retain the layout that produced these measurements.
+    this.recalculate({ preserveColumnGeometry: true });
     const latestScroll = this.diagnostics.latestScroll;
     const measurementRenderRafOwner = (
       Number(latestScroll?.renderGeneration || 0) === Number(this._renderGeneration || 0)
@@ -32705,7 +33988,7 @@ class VirtualArtistGrid {
 
     return `
       <section class="artist-section ${section.sectionType}">
-        ${buildFamilyArtistHeaderHtml({ artist: group.artist_display || group.artist, infoArtist: group.artist, albumCount: group.albums.length })}
+        ${this.sectionHeaderHeight > 0 ? buildFamilyArtistHeaderHtml({ artist: group.artist_display || group.artist, infoArtist: group.artist, albumCount: group.albums.length }) : ''}
         <div class="artist-rows">${topSpacer}${rowBlocks}${bottomSpacer}</div>
       </section>
     `;
@@ -32748,9 +34031,10 @@ function buildArtistSectionHtml(
 ) {
   const safeGroup = group && typeof group === 'object' ? group : {};
   const albums = Array.isArray(safeGroup.albums) ? safeGroup.albums : [];
+  const showHeader = virtualGrid.showArtistSectionHeaders;
   return `
     <section class="artist-section ${sectionType}">
-      ${buildFamilyArtistHeaderHtml({ artist: safeGroup.artist_display || safeGroup.artist || 'Artist', infoArtist: safeGroup.artist, albumCount: albums.length })}
+      ${showHeader ? buildFamilyArtistHeaderHtml({ artist: safeGroup.artist_display || safeGroup.artist || 'Artist', infoArtist: safeGroup.artist, albumCount: albums.length }) : ''}
       <div class="artist-rows">${buildArtistSectionRowsHtml(albums, columns, layoutConfig, cardTrackWidth)}</div>
     </section>
   `;
@@ -32856,10 +34140,14 @@ function getGalleryModeRenderer(mode) {
 function renderArtistGroups(options = {}) {
   const model = getFilteredGalleryMainModel();
   const modeConfig = getGalleryModeConfig(state.gallery.mainState.view);
+  const renderOptions = {
+    ...options,
+    showArtistSectionHeaders: !String(state.view.selected_artist || '').trim() || hasGalleryArtistFamily(),
+  };
   modeConfig.renderer(
     { primaryGroups: model.primaryGroups, familyGroups: model.familyGroups },
     model.fallbackGroups,
-    options,
+    renderOptions,
     modeConfig.layoutConfig,
   );
   if (
@@ -32934,6 +34222,13 @@ function updateLoopInputsFromState() {
   }
 }
 
+function renderGlobalPlayerPlayGlyph(button, paused) {
+  const icon = paused ? 'play' : 'pause';
+  if (button.getAttribute('data-player-glyph') === icon) return;
+  button.innerHTML = window.ButtonComponent.renderIconSvg(icon, { className: 'player-transport-icon' });
+  button.setAttribute('data-player-glyph', icon);
+}
+
 function updatePlayerUi() {
   const els = getPlayerElements();
   const playback = getPlayerPlaybackSnapshot();
@@ -32971,7 +34266,7 @@ function updatePlayerUi() {
     busy: state.player.saveBusy || lockedByAnotherTab,
   });
   if (els.play) {
-    els.play.textContent = playback.paused ? '\u25B6' : '\u23F8';
+    renderGlobalPlayerPlayGlyph(els.play, playback.paused);
     els.play.setAttribute('aria-label', lockedByAnotherTab ? 'Playback locked in another tab' : (playback.paused ? 'Play' : 'Pause'));
     els.play.disabled = lockedByAnotherTab || !hasTrack;
   }
@@ -33021,6 +34316,10 @@ function setCurrentPlayerTrack(track, options = {}) {
       currentTime: Number(previousPlaybackSnapshot?.currentTime) || undefined,
       duration: Number(previousPlaybackSnapshot?.duration) || undefined,
     });
+  }
+  if (track && !String(track.coverPath || '').trim() && typeof resolveAlbumForPlayerTrack === 'function') {
+    const resolvedCoverPath = String(resolveAlbumForPlayerTrack(track)?.cover_path || '').trim();
+    if (resolvedCoverPath) track = { ...track, coverPath: resolvedCoverPath };
   }
   state.player.current = track;
   if (typeof probeCachedWaveformPeaks === 'function') {
@@ -33931,11 +35230,20 @@ function disposeMountedLoopActions(container) {
 
 let compactPlayerMode = 'expanded';
 let compactPlayerStyle = 'docked';
+let dockedCompactPlayerBehavior = 'follow_sidebar';
+let compactPlayerPresentation = 'expanded';
+let compactPlayerArtClickTimer = null;
+let compactPlayerMetadataRevealTimer = null;
+let compactPlayerMetadataMeasureFrame = null;
+let compactPlayerTrackKey = null;
 let compactPlayerDrag = null;
 let compactPlayerPosition = null;
+let stayDockedPlayerPosition = null;
+let stayDockedPlayerOrigin = null;
+let stayDockedPlayerWasFolded = false;
 let compactPlayerSuppressClick = false;
 let compactPlayerPendingSelection = null;
-const FLOATING_COMPACT_PLAYER_MARGIN = 4;
+const FLOATING_COMPACT_PLAYER_MARGIN = 8;
 const FLOATING_COMPACT_PLAYER_LEFT_MARGIN = 12;
 
 function compactPlayerElements() {
@@ -33951,6 +35259,14 @@ function compactPlayerElements() {
     collapse: expanded?.querySelector("[data-ui-button-action='player-collapse']"),
     expand: compact?.querySelector("[data-ui-button-action='player-expand']"),
     cover: player?.querySelector('[data-compact-player-cover]'),
+    hoverBubble: compact?.querySelector('[data-compact-player-hover-bubble]'),
+    summary: compact?.querySelector('[data-compact-player-summary]'),
+    albumSeparator: compact?.querySelector('[data-compact-player-album-separator]'),
+    albumLink: compact?.querySelector('[data-compact-player-album]'),
+    titleRow: compact?.querySelector('[data-compact-player-title]'),
+    titleText: compact?.querySelector('[data-compact-player-title-text]'),
+    artistRow: compact?.querySelector('[data-compact-player-artist]'),
+    artistText: compact?.querySelector('[data-compact-player-artist-text]'),
     play: compactControls.playPause,
     previous: compactControls.previous,
     next: compactControls.next,
@@ -33969,22 +35285,182 @@ function getCompactPlayerStyle() {
   catch (_error) { return 'docked'; }
 }
 
+function getDockedCompactPlayerBehavior() {
+  const applied = document.documentElement.getAttribute('data-docked-compact-player-behavior');
+  if (applied) return normalizeDockedCompactPlayerBehavior(applied);
+  const bootstrap = document.getElementById('appearance-bootstrap');
+  try { return normalizeDockedCompactPlayerBehavior(JSON.parse(bootstrap?.textContent || '{}').docked_compact_player_behavior); }
+  catch (_error) { return 'follow_sidebar'; }
+}
+
+function clearCompactPlayerArtClick() {
+  window.clearTimeout(compactPlayerArtClickTimer);
+  compactPlayerArtClickTimer = null;
+}
+
+function hideCompactPlayerMetadata(els = compactPlayerElements()) {
+  window.clearTimeout(compactPlayerMetadataRevealTimer);
+  compactPlayerMetadataRevealTimer = null;
+  els.player?.classList.remove('is-compact-metadata-visible');
+  if (els.hoverBubble) {
+    els.hoverBubble.setAttribute('aria-hidden', 'true');
+    els.hoverBubble.inert = true;
+  }
+}
+
+function scheduleCompactPlayerMetadata(els = compactPlayerElements()) {
+  hideCompactPlayerMetadata(els);
+  const delay = resolveCompactPlayerMetadataRevealDelay({
+    presentation: compactPlayerPresentation,
+    speed: document.documentElement.getAttribute('data-compact-player-motion'),
+    reducedMotion: window.matchMedia?.('(prefers-reduced-motion: reduce)').matches,
+  });
+  if (delay === null || !els.summary?.textContent || els.play?.disabled) return;
+  compactPlayerMetadataRevealTimer = window.setTimeout(() => {
+    compactPlayerMetadataRevealTimer = null;
+    if (!['rail_play', 'rail_artbox'].includes(compactPlayerPresentation)) return;
+    els.player?.classList.add('is-compact-metadata-visible');
+    if (els.hoverBubble) {
+      els.hoverBubble.setAttribute('aria-hidden', 'false');
+      els.hoverBubble.inert = false;
+    }
+  }, delay);
+}
+
+function refreshCompactPlayerMetadataRows(els = compactPlayerElements()) {
+  const reducedMotion = Boolean(window.matchMedia?.('(prefers-reduced-motion: reduce)').matches);
+  for (const [row, text] of [[els.titleRow, els.titleText], [els.artistRow, els.artistText]]) {
+    if (!row || !text) continue;
+    const motion = compactPlayerPresentation === 'docked' && !reducedMotion
+      ? resolveCompactPlayerMetadataRowMotion({ scrollWidth: text.scrollWidth, clientWidth: row.clientWidth })
+      : { overflowing: false, distance: 0, durationMs: 0 };
+    row.classList.toggle('is-overflowing', motion.overflowing);
+    row.style.setProperty('--compact-player-row-pan-distance', `${motion.distance}px`);
+    row.style.setProperty('--compact-player-row-pan-duration', `${motion.durationMs}ms`);
+  }
+}
+
+function scheduleCompactPlayerMetadataRowRefresh(els = compactPlayerElements()) {
+  if (compactPlayerMetadataMeasureFrame !== null) {
+    window.cancelAnimationFrame?.(compactPlayerMetadataMeasureFrame);
+  }
+  if (typeof window.requestAnimationFrame !== 'function') {
+    refreshCompactPlayerMetadataRows(els);
+    return;
+  }
+  compactPlayerMetadataMeasureFrame = window.requestAnimationFrame(() => {
+    compactPlayerMetadataMeasureFrame = null;
+    refreshCompactPlayerMetadataRows(els);
+  });
+}
+
+function resetStayDockedPlayerPosition(els = compactPlayerElements()) {
+  stayDockedPlayerPosition = null;
+  stayDockedPlayerOrigin = null;
+  els.player?.style.setProperty('--stay-docked-drag-x', '0px');
+  els.player?.style.setProperty('--stay-docked-drag-y', '0px');
+}
+
+function cancelCompactPlayerDrag(els = compactPlayerElements()) {
+  const captureTarget = compactPlayerDrag?.captureTarget;
+  const pointerId = compactPlayerDrag?.pointerId;
+  try {
+    if (captureTarget?.hasPointerCapture?.(pointerId)) captureTarget.releasePointerCapture(pointerId);
+  } catch (_error) {}
+  compactPlayerDrag = null;
+  els.player?.classList.remove('is-compact-player-dragging');
+}
+
 function syncDockedCompactGeometry() {
-  const els = compactPlayerElements();
+  const { player } = compactPlayerElements();
   const tree = document.getElementById('shell-navigation-rail');
-  if (!els.player || !tree) return;
-  const geometry = resolveDockedCompactGeometry(tree.getBoundingClientRect());
+  if (!player || !tree) return;
+  const geometry = tree.getBoundingClientRect();
   if (geometry.width <= 0) return;
-  els.player.style.setProperty('--compact-docked-left', `${geometry.left}px`);
-  els.player.style.setProperty('--compact-docked-width', `${geometry.width}px`);
+  player.style.setProperty('--compact-docked-left', `${geometry.left}px`);
+}
+
+function syncCompactPlayerOverlayDetachment(els = compactPlayerElements()) {
+  els.player?.classList.toggle('is-overlay-detached', shouldDetachCompactPlayerForOverlay({
+    presentation: compactPlayerPresentation,
+    overlayActive: document.body?.classList?.contains('modal-open'),
+  }));
+}
+
+function syncDockedCompactPresentation(els = compactPlayerElements()) {
+  const artistTreeFolded = Boolean(document.getElementById('app-shell')?.classList?.contains('is-artist-tree-folded'));
+  const dockBehavior = getDockedCompactPlayerBehavior();
+  const basePresentation = resolveCompactPlayerPresentation({
+    eligible: compactPlayerEligible(), mode: compactPlayerMode, style: compactPlayerStyle,
+    behavior: dockBehavior, artistTreeFolded,
+  });
+  const next = document.body?.classList?.contains('modal-open') && basePresentation === 'rail_artbox'
+    ? 'rail_play'
+    : basePresentation;
+  const stayDockedFolded = canDragStayDockedCompactPlayer({
+    presentation: next, behavior: dockBehavior, artistTreeFolded,
+  });
+  const changed = next !== compactPlayerPresentation;
+  if (changed || (stayDockedPlayerWasFolded && !stayDockedFolded)) {
+    clearCompactPlayerArtClick();
+    hideCompactPlayerMetadata(els);
+    els.player?.classList.remove('is-compact-art-revealed');
+    cancelCompactPlayerDrag(els);
+  }
+  if (stayDockedPlayerWasFolded && !stayDockedFolded) resetStayDockedPlayerPosition(els);
+  stayDockedPlayerWasFolded = stayDockedFolded;
+  compactPlayerPresentation = next;
+  syncCompactPlayerOverlayDetachment(els);
+  const compact = next !== 'expanded';
+  const floating = next === 'floating';
+  const rail = next === 'rail_play' || next === 'rail_artbox';
+  document.documentElement.classList.toggle('has-follow-sidebar-compact-player', rail);
+  document.documentElement.classList.toggle('has-docked-compact-player', compact && !floating);
+  document.documentElement.classList.toggle('has-floating-compact-player', floating);
+  els.player?.classList.toggle('is-rail-compact', rail);
+  els.player?.classList.toggle('is-floating-compact', floating);
+  els.player?.classList.toggle('is-docked-compact', compact && !floating);
+  els.player?.classList.toggle('is-stay-docked-draggable', stayDockedFolded);
+  if (els.player) {
+    els.player.dataset.compactPresentation = next;
+  }
+  if (els.expand) els.expand.hidden = !floating;
+  if (els.cover) {
+    const artHidden = next === 'rail_play' && !els.player?.classList.contains('is-compact-art-revealed');
+    els.cover.inert = artHidden;
+    els.cover.tabIndex = artHidden ? -1 : 0;
+    if (changed && ((document.activeElement === els.cover && artHidden)
+      || (document.activeElement === els.expand && els.expand?.hidden))) {
+      (els.play?.disabled ? document.getElementById('artist-tree-navigation-button') : els.play)?.focus?.({ preventScroll: true });
+    }
+  }
+  document.documentElement.style.setProperty('--compact-player-width',
+    floating ? '96px' : rail ? '64px' : '240px');
+  syncDockedCompactGeometry();
+  if (floating) {
+    if (!compactPlayerPosition) resetCompactPlayerPosition();
+    else positionFloatingCompactPlayer();
+  }
+  syncCompactPlayerUi();
+}
+
+function positionFloatingCompactPlayer() {
+  if (!compactPlayerPosition) return;
+  compactPlayerPosition = clampCompactPlayerPosition({ ...compactPlayerPosition,
+    playerWidth: 105, playerHeight: 105, viewportWidth: window.innerWidth,
+    viewportHeight: window.innerHeight, margin: FLOATING_COMPACT_PLAYER_MARGIN,
+    leftMargin: FLOATING_COMPACT_PLAYER_LEFT_MARGIN });
+  const { player } = compactPlayerElements();
+  player?.style.setProperty('--compact-player-x', `${compactPlayerPosition.x}px`);
+  player?.style.setProperty('--compact-player-y', `${compactPlayerPosition.y}px`);
 }
 
 function applyCompactPlayerMode(mode, { persist = true, transferFocus = true } = {}) {
   const els = compactPlayerElements();
   const next = resolveCompactPlayerMode({ eligible: compactPlayerEligible(), persistedMode: mode });
-  const previousStyle = compactPlayerStyle;
   compactPlayerMode = next;
   compactPlayerStyle = getCompactPlayerStyle();
+  dockedCompactPlayerBehavior = getDockedCompactPlayerBehavior();
   const compact = next === 'compact';
   const outgoing = compact ? els.expanded : els.compact;
   const outgoingFocus = outgoing?.contains?.(document.activeElement) ? document.activeElement : null;
@@ -33997,6 +35473,7 @@ function applyCompactPlayerMode(mode, { persist = true, transferFocus = true } =
   els.player?.classList.toggle('is-compact', compact);
   els.player?.classList.toggle('is-floating-compact', compact && compactPlayerStyle === 'floating');
   els.player?.classList.toggle('is-docked-compact', compact && compactPlayerStyle === 'docked');
+  syncDockedCompactPresentation(els, compact);
   if (els.expanded) {
     els.expanded.hidden = false;
     els.expanded.inert = compact;
@@ -34008,18 +35485,7 @@ function applyCompactPlayerMode(mode, { persist = true, transferFocus = true } =
     els.compact.setAttribute('aria-hidden', String(!compact));
   }
   if (els.collapse) els.collapse.hidden = !compactPlayerEligible();
-  if (els.expand) els.expand.hidden = !compactPlayerEligible();
-  if (compact && compactPlayerStyle === 'docked') syncDockedCompactGeometry();
-  if (compact && compactPlayerStyle === 'floating') {
-    if (!compactPlayerPosition || previousStyle !== 'floating') resetCompactPlayerPosition();
-    else {
-      compactPlayerPosition = clampCompactPlayerPosition({ ...compactPlayerPosition, playerWidth: 96, playerHeight: 96,
-        viewportWidth: window.innerWidth, viewportHeight: window.innerHeight, margin: FLOATING_COMPACT_PLAYER_MARGIN,
-        leftMargin: FLOATING_COMPACT_PLAYER_LEFT_MARGIN });
-      els.player.style.setProperty('--compact-player-x', `${compactPlayerPosition.x}px`);
-      els.player.style.setProperty('--compact-player-y', `${compactPlayerPosition.y}px`);
-    }
-  }
+  if (els.expand) els.expand.hidden = compactPlayerPresentation !== 'floating';
   if (persist) {
     try {
       persistCompactPlayerMode(window.localStorage, next);
@@ -34027,7 +35493,6 @@ function applyCompactPlayerMode(mode, { persist = true, transferFocus = true } =
       // Browser policy may deny access to the storage object itself.
     }
   }
-  syncCompactPlayerUi();
   if (outgoingFocus && transferFocus) {
     const incoming = compact ? els.compact : els.expanded;
     const modeControl = compact ? els.expand : els.collapse;
@@ -34046,7 +35511,7 @@ function resetCompactPlayerPosition() {
   const els = compactPlayerElements();
   if (!els.player) return;
   compactPlayerPosition = createCompactPlayerSessionPosition({
-    playerWidth: 96, playerHeight: 96,
+    playerWidth: 105, playerHeight: 105,
     viewportWidth: window.innerWidth, viewportHeight: window.innerHeight, margin: FLOATING_COMPACT_PLAYER_MARGIN,
     leftMargin: FLOATING_COMPACT_PLAYER_LEFT_MARGIN,
   });
@@ -34119,18 +35584,34 @@ function syncCompactPlayerUi(snapshot = {}) {
   const track = snapshot.displayTrack || state.player.current;
   const hasTrack = snapshot.hasTrack ?? Boolean(track && (playback.src || track.src));
   const locked = snapshot.lockedByAnotherTab ?? (typeof isPlaybackLockedByAnotherTab === 'function' && isPlaybackLockedByAnotherTab());
+  const trackKey = track?.path || null;
+  if (trackKey !== compactPlayerTrackKey) {
+    clearCompactPlayerArtClick();
+    hideCompactPlayerMetadata(els);
+  }
+  compactPlayerTrackKey = trackKey;
+  if (els.titleText) els.titleText.textContent = track?.title || track?.name || 'Nothing playing';
+  if (els.artistText) els.artistText.textContent = track?.artist || '';
+  const summary = buildCompactPlayerMetadataSummary(track ? { ...track, album: '' } : null);
+  const album = String(track?.album || '').trim();
+  if (els.summary) els.summary.textContent = summary;
+  if (els.albumSeparator) els.albumSeparator.hidden = !summary || !album;
+  if (els.albumLink) {
+    els.albumLink.textContent = album;
+    els.albumLink.hidden = !album;
+  }
+  scheduleCompactPlayerMetadataRowRefresh(els);
   if (els.cover) {
     els.cover.style.backgroundImage = track?.coverPath
       ? `url("/cover?path=${encodeURIComponent(track.coverPath)}")`
       : '';
     els.cover.classList.toggle('is-idle-placeholder', !track);
-    els.cover.disabled = !track;
-    const openLabel = compactPlayerStyle === 'floating' ? 'Double-click to open album details' : 'Open album details';
+    els.cover.disabled = !track && !['docked', 'rail_artbox'].includes(compactPlayerPresentation);
+    const openLabel = compactPlayerPresentation === 'floating' ? 'Double-click to open album details' : 'Expand player; double-click or Arrow Up for album details';
     els.cover.setAttribute('aria-label', openLabel);
-    els.cover.title = openLabel;
   }
   if (els.play) {
-    els.play.textContent = playback.paused ? '▶' : '⏸';
+    els.play.querySelector('.compact-player-play-icon path')?.setAttribute('d', playback.paused ? 'M8 5v14l12-7z' : 'M6 5h4v14H6zM14 5h4v14h-4z');
     els.play.setAttribute('aria-label', playback.paused ? 'Play' : 'Pause');
     els.play.disabled = !hasTrack || locked;
   }
@@ -34147,6 +35628,16 @@ function initCompactPlayer() {
   let saved = 'expanded';
   try { saved = window.localStorage.getItem(COMPACT_PLAYER_MODE_STORAGE_KEY) || 'expanded'; } catch (_error) {}
   applyCompactPlayerMode(saved, { persist: false });
+  if (typeof MutationObserver === 'function' && document.body) {
+    new MutationObserver(() => syncDockedCompactPresentation(els))
+      .observe(document.body, { attributes: true, attributeFilter: ['class'] });
+  }
+  if (typeof ResizeObserver === 'function') {
+    const metadataResizeObserver = new ResizeObserver(() => scheduleCompactPlayerMetadataRowRefresh(els));
+    for (const row of [els.titleRow, els.artistRow]) if (row) metadataResizeObserver.observe(row);
+  }
+  const reducedMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)');
+  reducedMotion?.addEventListener?.('change', () => scheduleCompactPlayerMetadataRowRefresh(els));
   els.collapse?.addEventListener('click', (event) => applyCompactPlayerMode('compact', { transferFocus: !(event.detail > 0) }));
   els.expand?.addEventListener('click', (event) => applyCompactPlayerMode('expanded', { transferFocus: !(event.detail > 0) }));
   els.play?.addEventListener('click', () => togglePlayerPlayback());
@@ -34156,36 +35647,128 @@ function initCompactPlayer() {
     const album = resolveAlbumForPlayerTrack(state.player.current);
     if (album) openTrackModal(album, { coverLightboxGallery: false, foreground: true });
   };
+  els.albumLink?.addEventListener('click', openCurrentAlbumDetails);
   els.cover?.addEventListener('click', event => {
     if (compactPlayerSuppressClick) { event.preventDefault(); compactPlayerSuppressClick = false; return; }
-    if (!shouldOpenCompactPlayerAlbum({ style: compactPlayerStyle, eventType: event.type, detail: event.detail })) return;
+    if (compactPlayerPresentation !== 'floating') {
+      clearCompactPlayerArtClick();
+      if (event.detail === 0) applyCompactPlayerMode('expanded');
+      else if (event.detail === 1) compactPlayerArtClickTimer = window.setTimeout(() => {
+        compactPlayerArtClickTimer = null;
+        applyCompactPlayerMode('expanded', { transferFocus: false });
+      }, 300);
+      return;
+    }
+    if (!shouldOpenCompactPlayerAlbum({ style: compactPlayerPresentation, eventType: event.type, detail: event.detail })) return;
     openCurrentAlbumDetails();
   });
   els.cover?.addEventListener('dblclick', event => {
-    if (!shouldOpenCompactPlayerAlbum({ style: compactPlayerStyle, eventType: event.type, detail: event.detail })) return;
+    clearCompactPlayerArtClick();
     event.preventDefault();
     openCurrentAlbumDetails();
   });
+  els.cover?.addEventListener('keydown', event => {
+    if (['docked', 'rail_artbox'].includes(compactPlayerPresentation) && event.key === 'ArrowUp') {
+      event.preventDefault();
+      clearCompactPlayerArtClick();
+      openCurrentAlbumDetails();
+    }
+  });
+  const revealArt = visible => {
+    if (compactPlayerPresentation !== 'rail_play' || !els.cover) return;
+    els.player.classList.toggle('is-compact-art-revealed', visible);
+    if (!visible && document.activeElement === els.cover) els.play?.focus?.({ preventScroll: true });
+    els.cover.inert = !visible;
+    els.cover.tabIndex = visible ? 0 : -1;
+  };
+  els.play?.addEventListener('pointerenter', () => {
+    revealArt(true);
+    scheduleCompactPlayerMetadata(els);
+  });
+  els.compact?.addEventListener('pointerleave', () => {
+    hideCompactPlayerMetadata(els);
+    revealArt(els.compact.contains(document.activeElement) && document.activeElement?.matches?.(':focus-visible'));
+  });
+  els.compact?.addEventListener('focusin', event => {
+    if (event.target.matches?.(':focus-visible')) {
+      revealArt(true);
+      if (event.target === els.play) scheduleCompactPlayerMetadata(els);
+    }
+  });
+  els.compact?.addEventListener('focusout', event => {
+    if (!els.compact.contains(event.relatedTarget)) {
+      hideCompactPlayerMetadata(els);
+      revealArt(false);
+    }
+  });
+  window.addEventListener('pagehide', () => {
+    clearCompactPlayerArtClick();
+    hideCompactPlayerMetadata(els);
+    if (compactPlayerMetadataMeasureFrame !== null) window.cancelAnimationFrame?.(compactPlayerMetadataMeasureFrame);
+    compactPlayerMetadataMeasureFrame = null;
+  });
+  els.compact?.addEventListener('pointerdown', event => {
+    if (!els.player.classList.contains('is-stay-docked-draggable') || event.button !== 0) return;
+    if (event.target.closest?.('button, a, input, select, textarea, [role="button"], [data-compact-player-cover]')) return;
+    event.preventDefault();
+    const rect = els.player.getBoundingClientRect();
+    if (!stayDockedPlayerOrigin) stayDockedPlayerOrigin = { x: rect.x, y: rect.y };
+    const position = stayDockedPlayerPosition || { x: rect.x, y: rect.y };
+    compactPlayerDrag = {
+      kind: 'stay_docked', pointerId: event.pointerId, captureTarget: els.compact,
+      startX: event.clientX, startY: event.clientY, originX: position.x, originY: position.y,
+      playerWidth: rect.width, playerHeight: rect.height, didDrag: false,
+    };
+    els.compact.setPointerCapture?.(event.pointerId);
+  });
+  els.compact?.addEventListener('pointermove', event => {
+    if (compactPlayerDrag?.kind !== 'stay_docked' || compactPlayerDrag.pointerId !== event.pointerId) return;
+    if (!compactPlayerDrag.didDrag) {
+      compactPlayerDrag.didDrag = didCompactPlayerDrag({
+        ...compactPlayerDrag, currentX: event.clientX, currentY: event.clientY,
+      });
+      if (compactPlayerDrag.didDrag) els.player.classList.add('is-compact-player-dragging');
+    }
+    if (!compactPlayerDrag.didDrag) return;
+    event.preventDefault();
+    stayDockedPlayerPosition = clampCompactPlayerPosition({
+      x: compactPlayerDrag.originX + event.clientX - compactPlayerDrag.startX,
+      y: compactPlayerDrag.originY + event.clientY - compactPlayerDrag.startY,
+      playerWidth: compactPlayerDrag.playerWidth, playerHeight: compactPlayerDrag.playerHeight,
+      viewportWidth: window.innerWidth, viewportHeight: window.innerHeight,
+      margin: FLOATING_COMPACT_PLAYER_MARGIN,
+    });
+    els.player.style.setProperty('--stay-docked-drag-x', `${stayDockedPlayerPosition.x - stayDockedPlayerOrigin.x}px`);
+    els.player.style.setProperty('--stay-docked-drag-y', `${stayDockedPlayerPosition.y - stayDockedPlayerOrigin.y}px`);
+  });
+  const finishStayDockedDrag = event => {
+    if (compactPlayerDrag?.kind !== 'stay_docked' || compactPlayerDrag.pointerId !== event.pointerId) return;
+    cancelCompactPlayerDrag(els);
+  };
+  els.compact?.addEventListener('pointerup', finishStayDockedDrag);
+  els.compact?.addEventListener('pointercancel', finishStayDockedDrag);
   els.cover?.addEventListener('pointerdown', event => {
-    if (compactPlayerStyle !== 'floating') return;
+    if (compactPlayerPresentation !== 'floating' || event.button !== 0) return;
     compactPlayerDrag = { pointerId: event.pointerId, startX: event.clientX, startY: event.clientY,
+      kind: 'floating', captureTarget: els.cover,
       originX: compactPlayerPosition?.x || 0, originY: compactPlayerPosition?.y || 0, didDrag: false };
     els.player.classList.add('is-compact-player-dragging');
     els.cover.setPointerCapture?.(event.pointerId);
   });
   els.cover?.addEventListener('pointermove', event => {
-    if (!compactPlayerDrag || compactPlayerDrag.pointerId !== event.pointerId) return;
+    if (compactPlayerDrag?.kind !== 'floating' || compactPlayerDrag.pointerId !== event.pointerId) return;
     if (!compactPlayerDrag.didDrag) compactPlayerDrag.didDrag = didCompactPlayerDrag({ ...compactPlayerDrag, currentX: event.clientX, currentY: event.clientY });
     if (!compactPlayerDrag.didDrag) return;
     compactPlayerPosition = clampCompactPlayerPosition({ x: compactPlayerDrag.originX + event.clientX - compactPlayerDrag.startX,
-      y: compactPlayerDrag.originY + event.clientY - compactPlayerDrag.startY, playerWidth: 96, playerHeight: 96,
+      y: compactPlayerDrag.originY + event.clientY - compactPlayerDrag.startY, playerWidth: 105, playerHeight: 105,
       viewportWidth: window.innerWidth, viewportHeight: window.innerHeight, margin: FLOATING_COMPACT_PLAYER_MARGIN,
       leftMargin: FLOATING_COMPACT_PLAYER_LEFT_MARGIN });
     els.player.style.setProperty('--compact-player-x', `${compactPlayerPosition.x}px`);
     els.player.style.setProperty('--compact-player-y', `${compactPlayerPosition.y}px`);
   });
   const finishDrag = event => {
-    const completedDrag = event.type === 'pointerup' && Boolean(compactPlayerDrag?.didDrag);
+    if (compactPlayerDrag?.kind !== 'floating' || compactPlayerDrag.pointerId !== event.pointerId) return;
+    const completedDrag = event.type === 'pointerup' && Boolean(compactPlayerDrag.didDrag);
     try {
       if (compactPlayerDrag?.pointerId === event.pointerId && els.cover.hasPointerCapture?.(event.pointerId)) {
         els.cover.releasePointerCapture?.(event.pointerId);
@@ -34204,14 +35787,14 @@ function initCompactPlayer() {
       let savedMode = 'expanded';
       try { savedMode = window.localStorage.getItem(COMPACT_PLAYER_MODE_STORAGE_KEY) || 'expanded'; } catch (_error) {}
       applyCompactPlayerMode(savedMode, { persist: false });
-    } else if (compactPlayerStyle === 'floating' && compactPlayerPosition) {
-      compactPlayerPosition = clampCompactPlayerPosition({ ...compactPlayerPosition, playerWidth: 96, playerHeight: 96,
+    } else if (compactPlayerPresentation === 'floating' && compactPlayerPosition) {
+      compactPlayerPosition = clampCompactPlayerPosition({ ...compactPlayerPosition, playerWidth: 105, playerHeight: 105,
         viewportWidth: window.innerWidth, viewportHeight: window.innerHeight, margin: FLOATING_COMPACT_PLAYER_MARGIN,
         leftMargin: FLOATING_COMPACT_PLAYER_LEFT_MARGIN });
       els.player.style.setProperty('--compact-player-x', `${compactPlayerPosition.x}px`);
       els.player.style.setProperty('--compact-player-y', `${compactPlayerPosition.y}px`);
     } else if (compactPlayerStyle === 'docked') {
-      syncDockedCompactGeometry();
+      syncDockedCompactPresentation();
     }
   });
   window.addEventListener('album-haven-appearance-change', () => {
@@ -34252,7 +35835,6 @@ function attachUtilityModalEvents() {
   if (!els.overlay || els.overlay.dataset.bound === '1') return;
   els.overlay.dataset.bound = '1';
   bindOverlayPointerOrigin(els.overlay);
-  els.close?.addEventListener('click', closeUtilityModal);
   let searchRenderTimer = null;
   const scheduleSearchRender = () => {
     clearTimeout(searchRenderTimer);
@@ -34397,7 +35979,16 @@ async function handleUtilityBootstrapClick(event) {
         loadUtilityLibrarySettings(!state.utility.librarySettings?.loaded);
       }
     } else if (state.utility.activeTab !== 'appearance') {
-      loadProblematicFiles(!state.utility.loaded);
+      const navigationToken = {};
+      state.utility.problematicNavigationActiveToken = navigationToken;
+      try {
+        await loadProblematicFiles(!state.utility.loaded, { render: false });
+      } finally {
+        if (state.utility.problematicNavigationActiveToken === navigationToken) {
+          state.utility.problematicNavigationActiveToken = null;
+        }
+      }
+      if (state.utility.activeTab !== nextUtilityTab) return;
     }
     renderUtilityModalContent();
     return;
@@ -34788,6 +36379,7 @@ async function handleUtilityBootstrapClick(event) {
 
   const tagEditorTrackButton = event.target.closest('[data-tag-editor-track]');
   if (tagEditorTrackButton) {
+    if (event.target.closest('[data-tag-editor-reorder-grip]')) return;
     event.preventDefault();
     return;
   }
@@ -35023,6 +36615,16 @@ async function handleUtilityBootstrapClick(event) {
     return;
   }
 
+  const retryCoverLookupTaskButton = event.target.closest('[data-retry-cover-lookup-task]');
+  if (retryCoverLookupTaskButton) {
+    event.preventDefault();
+    event.stopPropagation();
+    const taskId = retryCoverLookupTaskButton.getAttribute('data-retry-cover-lookup-task') || '';
+    const task = (state.coverLookup.tasks || []).find((item) => String(item?.id || '') === String(taskId));
+    if (task?.album_payload) startCoverLookupForAlbum(task.album_payload, { backgroundOnly: true });
+    return;
+  }
+
   const openCoverLookupTaskButton = event.target.closest('[data-open-cover-lookup-task]');
   if (openCoverLookupTaskButton) {
     const taskId = openCoverLookupTaskButton.getAttribute('data-open-cover-lookup-task') || '';
@@ -35085,6 +36687,30 @@ async function handleUtilityBootstrapClick(event) {
   if (event.target.closest('[data-add-cover-lookup-remote="1"]')) {
     event.preventDefault();
     addRemoteCoverLinksFromLookup();
+    return;
+  }
+
+  if (event.target.closest('[data-choose-cover-lookup-files="1"]')) {
+    event.preventDefault();
+    document.querySelector('[data-cover-lookup-file-input]')?.click?.();
+    return;
+  }
+
+  const removePendingCoverAttachment = event.target.closest('[data-remove-cover-lookup-pending-attachment]');
+  if (removePendingCoverAttachment) {
+    event.preventDefault();
+    event.stopPropagation();
+    removeCoverLookupPendingAttachment(
+      removePendingCoverAttachment.getAttribute('data-remove-cover-lookup-pending-attachment'),
+    );
+    return;
+  }
+
+  const removePastedCoverButton = event.target.closest('[data-remove-pasted-cover]');
+  if (removePastedCoverButton) {
+    event.preventDefault();
+    event.stopPropagation();
+    removePastedImageFromCoverLookup(removePastedCoverButton.getAttribute('data-remove-pasted-cover'));
     return;
   }
 
@@ -35252,7 +36878,7 @@ async function handleUtilityBootstrapPaste(event) {
     return;
   }
   const target = event.target instanceof Element ? event.target : null;
-  if (!target?.closest('#cover-lookup-modal')) {
+  if (!target?.closest('[data-cover-lookup-drop-zone="1"]')) {
     return;
   }
   try {
@@ -35271,7 +36897,90 @@ async function handleUtilityBootstrapPaste(event) {
   }
 }
 
+function handleUtilityBootstrapDragStart(event) {
+  const grip = event.target?.closest?.('[data-tag-editor-reorder-grip]');
+  if (!grip) return false;
+  const draggedPath = String(grip.getAttribute('data-tag-editor-reorder-grip') || '');
+  if (!draggedPath) return false;
+  state.tagEditor.reorder = { draggedPath, beforePath: draggedPath };
+  event.dataTransfer?.setData?.('text/plain', draggedPath);
+  if (event.dataTransfer) event.dataTransfer.effectAllowed = 'move';
+  showTagEditorReorderCue(draggedPath);
+  return true;
+}
+
+function getTagEditorReorderRows(list) {
+  return Array.from(list?.querySelectorAll?.('[data-tag-editor-track]') || []).map((row) => {
+    const bounds = row.getBoundingClientRect();
+    return {
+      path: String(row.getAttribute('data-tag-editor-track') || ''),
+      top: bounds.top,
+      height: bounds.height,
+    };
+  });
+}
+
+function handleUtilityBootstrapDragOver(event) {
+  const reorder = state.tagEditor.reorder;
+  const list = event.target?.closest?.('#tag-editor-track-list');
+  if (reorder?.draggedPath && list) {
+    event.preventDefault();
+    if (event.dataTransfer) event.dataTransfer.dropEffect = 'move';
+    const beforePath = getTagEditorReorderInsertionBefore(
+      getTagEditorReorderRows(list),
+      reorder.draggedPath,
+      event.clientY,
+    );
+    showTagEditorReorderCue(beforePath);
+    return true;
+  }
+  if (!event.target?.closest?.('[data-cover-lookup-drop-zone]')) return false;
+  event.preventDefault();
+  if (event.dataTransfer) event.dataTransfer.dropEffect = 'copy';
+  return true;
+}
+
+async function handleUtilityBootstrapDrop(event) {
+  const reorder = state.tagEditor.reorder;
+  const list = event.target?.closest?.('#tag-editor-track-list');
+  if (reorder?.draggedPath) {
+    if (list) {
+      event.preventDefault();
+      applyTagEditorTrackReorder(reorder.draggedPath, reorder.beforePath);
+    }
+    clearTagEditorReorderCue();
+    return Boolean(list);
+  }
+  if (!event.target?.closest?.('[data-cover-lookup-drop-zone]')) return false;
+  event.preventDefault();
+  try {
+    await addCoverLookupFiles(event.dataTransfer?.files || []);
+  } catch (error) {
+    state.coverLookup.modal.statusText = String(error?.message || 'Unable to stage image.');
+    state.coverLookup.modal.statusTone = 'error';
+    renderCoverLookupModal();
+  }
+  return true;
+}
+
+function handleUtilityBootstrapDragEnd() {
+  if (!state.tagEditor.reorder) return false;
+  clearTagEditorReorderCue();
+  return true;
+}
+
 function handleUtilityBootstrapChange(event) {
+  const coverLookupFiles = event.target.closest('[data-cover-lookup-file-input]');
+  if (coverLookupFiles) {
+    addCoverLookupFiles(coverLookupFiles.files || [])
+      .catch((error) => {
+        state.coverLookup.modal.statusText = String(error?.message || 'Unable to stage image.');
+        state.coverLookup.modal.statusTone = 'error';
+        renderCoverLookupModal();
+      })
+      .finally(() => { coverLookupFiles.value = ''; });
+    return;
+  }
   if (handleLibrarySettingsChange(event)) {
     return;
   }
@@ -35383,6 +37092,7 @@ function handleUtilityBootstrapMouseDown(event) {
   }
 
   const trackButton = event.target.closest('[data-tag-editor-track]');
+  if (event.target.closest('[data-tag-editor-reorder-grip]')) return;
   if (!trackButton || event.button !== 0) return;
   event.preventDefault();
   const path = trackButton.getAttribute('data-tag-editor-track') || '';
@@ -35404,6 +37114,29 @@ function handleUtilityBootstrapKeyDown(event) {
     || event.metaKey
   ) {
     return false;
+  }
+  const reorderGrip = event.target?.closest?.('[data-tag-editor-reorder-grip]');
+  if (reorderGrip && ['ArrowUp', 'ArrowDown'].includes(event.key)) {
+    const path = String(reorderGrip.getAttribute('data-tag-editor-reorder-grip') || '');
+    const tracks = state.tagEditor.tracks || [];
+    const index = tracks.findIndex((track) => String(track?.path || '') === path);
+    const destination = event.key === 'ArrowUp' ? index - 1 : index + 1;
+    if (index >= 0 && destination >= 0 && destination < tracks.length) {
+      event.preventDefault();
+      const beforePath = event.key === 'ArrowUp'
+        ? String(tracks[destination]?.path || '')
+        : String(tracks[destination + 1]?.path || '') || null;
+      applyTagEditorTrackReorder(path, beforePath);
+      Array.from(document.querySelectorAll?.('[data-tag-editor-reorder-grip]') || [])
+        .find((grip) => String(grip.getAttribute('data-tag-editor-reorder-grip') || '') === path)
+        ?.focus?.();
+    }
+    return true;
+  }
+  if (event.key === 'Escape' && state.tagEditor.reorder) {
+    event.preventDefault();
+    clearTagEditorReorderCue();
+    return true;
   }
   const collapse = event.target?.closest?.('[data-utility-loop-collapse]');
   if (collapse && ['Enter', ' '].includes(event.key)) {
@@ -35428,16 +37161,6 @@ function handleUtilityBootstrapKeyDown(event) {
   const filterInput = event.target?.matches?.('input, textarea, [contenteditable="true"]');
   if (state.utility.activeTab === 'problematic-files' && filterTarget && !filterInput) {
     const els = getUtilityModalElements();
-    if (event.key === 'Escape' && state.utility.problemDropdownOpen) {
-      event.preventDefault();
-      event.stopPropagation?.();
-      state.utility.problemDropdownOpen = false;
-      els.problemFilterMenu.hidden = true;
-      els.problemFilterButton.setAttribute('aria-expanded', 'false');
-      if (typeof clearTriggerAnchor === 'function') clearTriggerAnchor(els.problemFilterMenu);
-      els.problemFilterButton.focus();
-      return true;
-    }
     if (['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key) && !els.problemFilterButton.disabled) {
       event.preventDefault();
       if (!state.utility.problemDropdownOpen) {
@@ -36474,6 +38197,9 @@ function updateGallerySearchDraftQuery(nextQuery) {
   const normalizedQuery = String(nextQuery || '');
   if (state.ui && typeof state.ui === 'object') {
     state.ui.searchDraftQuery = normalizedQuery;
+  }
+  if (typeof syncGalleryBarSearchVisibility === 'function') {
+    syncGalleryBarSearchVisibility();
   }
   return normalizedQuery;
 }
@@ -37626,6 +39352,22 @@ document.addEventListener('paste', async (event) => {
   await handleUtilityBootstrapPaste(event);
 });
 
+document.addEventListener('dragstart', (event) => {
+  handleUtilityBootstrapDragStart(event);
+});
+
+document.addEventListener('dragover', (event) => {
+  handleUtilityBootstrapDragOver(event);
+});
+
+document.addEventListener('drop', async (event) => {
+  await handleUtilityBootstrapDrop(event);
+});
+
+document.addEventListener('dragend', () => {
+  handleUtilityBootstrapDragEnd();
+});
+
 document.addEventListener('copy', (event) => {
   handleCoverLookupTaskOpenCopy(event);
 });
@@ -37663,7 +39405,8 @@ if (typeof initCompactPlayer === 'function') initCompactPlayer();
 if (typeof initPlaybackOwnershipCoordinator === 'function') {
   initPlaybackOwnershipCoordinator();
 }
-if (typeof prepareStreamingPlaybackEngine === 'function') {
+if (typeof prepareStreamingPlaybackEngine === 'function'
+    && (!window.AlbumHavenCapabilities || window.AlbumHavenCapabilities.allows('library.media.read'))) {
   void prepareStreamingPlaybackEngine().catch((error) => {
     console.error('[AlbumHaven][Playback] Failed to prepare streaming playback.', error);
   });

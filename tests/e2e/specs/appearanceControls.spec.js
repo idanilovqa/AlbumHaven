@@ -31,6 +31,7 @@ test('FTC-SETTINGS-A01 shared search preserves the staged loop style and Save hy
   await settingsModalAppBarActions.openSettings();
   await utilityTabBarActions.openTab('appearance');
   await utilityAppearanceActions.waitForReady();
+  await utilityAppearanceActions.expectWebDesktopOnlyDeviceControls();
   await utilityAppearanceActions.openSection('seekbar');
   const savedStyle = await appearance.liveLoopCluster.getAttribute('data-loop-control-style');
   const otherStyle = savedStyle === 'companion' ? 'capsule' : 'companion';
@@ -46,6 +47,7 @@ test('FTC-SETTINGS-A01 shared search preserves the staged loop style and Save hy
   await appearance.sidebar.search.fill('');
   await utilityAppearanceActions.cancel();
   await expect(appearance.loopStyleButton(savedStyle)).toHaveAttribute('aria-pressed', 'true');
+  await utilityAppearanceActions.expectWebDesktopOnlyDeviceControls();
   await appearance.loopStyleButton('companion').click();
   if (savedStyle !== 'companion') await utilityAppearanceActions.save();
   await utilityAppearanceActions.openSection('backgrounds');
@@ -59,6 +61,7 @@ test('FTC-SETTINGS-A01 shared search preserves the staged loop style and Save hy
   await utilityAppearanceActions.waitForReady();
   await utilityAppearanceActions.openSection('seekbar');
   await expect(appearance.loopStyleButton('companion')).toHaveAttribute('aria-pressed', 'true');
+  await utilityAppearanceActions.expectWebDesktopOnlyDeviceControls();
   await appearance.editorFooter.reset.root.click();
   await expect(appearance.loopStyleButton('capsule')).toHaveAttribute('aria-pressed', 'true');
   await expect(appearance.liveLoopCluster).toHaveAttribute('data-loop-control-style', 'companion');
@@ -326,13 +329,14 @@ test(`${CASE_ID} applies every Appearance control family to real UI and preserve
     await settingsModalAppBarActions.closeSettings();
     const galleryOptionsIdle = await galleryActions.galleryPage.readGalleryOptionsAppearance();
     expect(galleryOptionsIdle).toEqual({
-      backgroundColor: 'rgb(244, 245, 246)',
+      backgroundColor: 'rgb(255, 255, 255)',
       borderColor: 'rgb(184, 189, 197)',
       color: 'rgb(32, 33, 36)',
     });
     await galleryActions.galleryPage.galleryOptionsButton.hover();
     const galleryOptionsHover = await galleryActions.galleryPage.readGalleryOptionsAppearance();
-    expect(galleryOptionsHover.backgroundColor).toBe(INTERACTION_COLORS.itemHover);
+    // The saved Gallery surface is #FFFFFF; light hover mixes 85% of it with 15% white.
+    expect(galleryOptionsHover.backgroundColor).toBe('color(srgb 1 1 1)');
     expect(galleryOptionsHover.borderColor).toBe(INTERACTION_COLORS.itemBorder);
 
     await navigationPanelActions.selectSidebarArtistByName('Neal Morse');
@@ -343,11 +347,14 @@ test(`${CASE_ID} applies every Appearance control family to real UI and preserve
     const familySelected = await artistFamilyActions.artistFamily.readAppearanceCheckpoint();
     expect(familySelected.box.backgroundColor).toBe('rgb(255, 255, 255)');
     expect(familySelected.box.borderColor).toBe('rgb(184, 189, 197)');
-    expect(familySelected.primary.backgroundColor).toBe('rgb(17, 21, 23)');
-    expect(familySelected.primary.borderColor).toBe('rgb(62, 247, 128)');
+    expect(familySelected.primary.backgroundColor).toBe('color(srgb 0.294118 0.756863 0.45098 / 0.2)');
+    expect(familySelected.primary.borderColor).toBe('rgb(75, 193, 115)');
     expect(familySelected.primary.markerVisible).toBe('visible');
     expect(familySelected.firstInactive.markerVisible).toBe('hidden');
-    expect(familySelected.firstInactive.borderColor).toBe('rgb(69, 75, 79)');
+    expect(familySelected.firstInactive.borderColor).toBe('rgb(184, 189, 197)');
+    // Paper uses white cards, #F4F5F6 controls and #202124 ink; the saved play fill is #51A1C4.
+    expect(familySelected.primary.badgeBackground).toBe('color(srgb 0.877176 0.933647 0.958353)');
+    expect(familySelected.firstInactive.badgeBackground).toBe('color(srgb 0.823843 0.827765 0.832941)');
     for (const row of [familySelected.primary, familySelected.firstInactive]) {
       expect(row.height).toBe(60);
       expect(row.borderWidth).toBe('1px');
@@ -356,7 +363,6 @@ test(`${CASE_ID} applies every Appearance control family to real UI and preserve
       expect(row.thumbnailHeight).toBe(48);
       expect(row.badgeWidth).toBe(44);
       expect(row.badgeHeight).toBe(32);
-      expect(row.badgeBackground).toBe('rgb(41, 43, 47)');
     }
     const inactiveName = await artistFamilyActions.artistFamily.firstInactiveChip
       .getAttribute('data-gallery-family-artist');
@@ -365,7 +371,8 @@ test(`${CASE_ID} applies every Appearance control family to real UI and preserve
     const combineHover = await artistFamilyActions.readCombineHoverState();
     expect(familyHover.before.backgroundColor).toBe(familySelected.firstInactive.backgroundColor);
     expect(familyHover.after.backgroundColor).not.toBe(familyHover.before.backgroundColor);
-    expect(familyHover.after.backgroundColor).toBe(combineHover.after.backgroundColor);
+    expect(combineHover.after.backgroundColor).toBe(combineHover.before.backgroundColor);
+    expect(combineHover.after.backgroundColor).toBe('rgba(0, 0, 0, 0)');
     expect(familyHover.after.labelDecoration).toBe('none');
 
     await settingsModalAppBarActions.openSettings();

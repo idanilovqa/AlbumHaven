@@ -1,4 +1,4 @@
-﻿:root {
+:root {
   --player-height: 76px;
   color-scheme: light dark;
   --bg: #111827;
@@ -33,8 +33,12 @@ select,
 .shell-navigation-rail-header {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 12px;
+  justify-content: flex-start;
+  gap: 8px;
+}
+
+.sidebar .shell-navigation-rail-header h2 {
+  margin-block: 0;
 }
 .sidebar h2 { margin: 0 0 10px; font-size: 1rem; }
 .artist-list { display: flex; flex-direction: column; gap: 6px; }
@@ -136,7 +140,6 @@ input[type='search'] {
 .icon-button { width: 40px; height: 40px; padding: 0; display: inline-grid; place-items: center; text-decoration: none; }
 .album-open-trigger { cursor: pointer; }
 .album-title-button { appearance: none; border: 0; background: transparent; padding: 0; margin: 0; width: 100%; text-align: left; color: inherit; font: inherit; }
-.album-title-button:hover { color: #93c5fd; }
 .button:hover, .icon-button:hover, .play-track-button:hover { border-color: var(--accent); }
 .gallery-options-menu {
   position: fixed;
@@ -245,7 +248,7 @@ input[type='search'] {
   pointer-events: none;
 }
 .toast {
-  min-width: 280px;
+  min-width: 0;
   max-width: min(460px, calc(100vw - 32px));
   opacity: 0;
   transform: translateY(-8px);
@@ -271,7 +274,7 @@ input[type='search'] {
 #toast-layer > .toast.floating-notification-positioned,
 #repair-alert.floating-notification-positioned { width: max-content; }
 #toast-layer > .toast.floating-notification-positioned {
-  min-width: min(280px, var(--notification-available-width));
+  min-width: 0;
   max-width: min(460px, var(--notification-available-width));
   overflow-wrap: anywhere;
 }

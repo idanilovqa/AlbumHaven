@@ -35,15 +35,36 @@ function shouldDismissArtistInfoOverlay(config = {}) {
 }
 
 function observeArtistFamilyPanelBounds({ panel, player } = {}) {
-  if (!panel || !player || typeof ResizeObserver !== 'function') return { disconnect() {} };
-  const initialHeight = Number(player.getBoundingClientRect?.().height || 0);
-  if (initialHeight > 0) panel.style.bottom = `${initialHeight}px`;
-  const observer = new ResizeObserver((entries) => {
-    const entry = entries.find((item) => item.target === player) || entries[0];
-    panel.style.bottom = `${Math.max(0, Number(entry?.contentRect?.height || 0))}px`;
-  });
+  if (!panel || !player) return { disconnect() {} };
+  const update = () => {
+    const playerBounds = player.getBoundingClientRect?.();
+    const panelBounds = panel.getBoundingClientRect?.();
+    const style = typeof getComputedStyle === 'function' ? getComputedStyle(player) : null;
+    const opacity = Number.parseFloat(style?.opacity);
+    const visible = !player.hidden
+      && style?.display !== 'none'
+      && style?.visibility !== 'hidden'
+      && style?.visibility !== 'collapse'
+      && (!Number.isFinite(opacity) || opacity > 0)
+      && Number(playerBounds?.width || 0) > 0
+      && Number(playerBounds?.height || 0) > 0;
+    const overlapsPanel = visible
+      && Number(playerBounds.right) > Number(panelBounds?.left || 0)
+      && Number(playerBounds.left) < Number(panelBounds?.right || 0);
+    const viewportHeight = Number(
+      (typeof window !== 'undefined' && window.innerHeight)
+      || (typeof document !== 'undefined' && document.documentElement?.clientHeight)
+      || playerBounds?.bottom
+      || 0,
+    );
+    const bottom = overlapsPanel ? Math.max(0, viewportHeight - Number(playerBounds.top || 0)) : 0;
+    panel.style.bottom = `${Math.round(bottom)}px`;
+  };
+  update();
+  if (typeof ResizeObserver !== 'function') return { disconnect() {}, refresh: update };
+  const observer = new ResizeObserver(update);
   observer.observe(player);
-  return observer;
+  return { disconnect: () => observer.disconnect(), refresh: update };
 }
 
 function positionGalleryAnchoredSurface(surface, anchor, align = 'right') {
@@ -79,6 +100,7 @@ function positionArtistFamilyPanelEnvelope(panel, anchor) {
   panel.style.setProperty?.('--gallery-anchor-height', `${Math.round(rect.height)}px`);
   panel.style.setProperty?.('--gallery-anchor-right', `${Math.max(0, Math.round(window.innerWidth - rect.right))}px`);
   if (typeof syncTriggerAnchor === 'function') syncTriggerAnchor(panel, anchor);
+  galleryFamilyPanelObserver?.refresh?.();
 }
 
 function positionSearchSuggestionsSurface(surface) {
@@ -176,6 +198,11 @@ function getGalleryFamilyPanelGroups() {
   return resolvedGroups.filter((group, index) => (
     resolvedGroups.findIndex((candidate) => galleryMainGroupArtist(candidate) === galleryMainGroupArtist(group)) === index
   ));
+}
+
+function hasGalleryArtistFamily() {
+  const primaryArtist = String(state.view.selected_artist || '').trim();
+  return Boolean(primaryArtist && getGalleryFamilyPanelGroups().length > 1);
 }
 
 function getGalleryMainContextSections() {
@@ -349,6 +376,8 @@ function updateGalleryMainControls() {
   });
   document.querySelectorAll('[data-gallery-album-type]').forEach((button) => {
     button.setAttribute('aria-pressed', mainState.albumTypes.includes(button.dataset.galleryAlbumType) ? 'true' : 'false');
+    button.disabled = true;
+    button.setAttribute('aria-disabled', 'true');
   });
   document.querySelectorAll('[data-gallery-view-choice]').forEach((button) => {
     button.classList.toggle('is-active', button.dataset.galleryViewChoice === mainState.view);
@@ -360,7 +389,8 @@ function updateGalleryMainControls() {
     const checked = Boolean(preferenceArtist)
       && typeof getCombineSimilarArtistsPreference === 'function'
       && getCombineSimilarArtistsPreference(preferenceArtist);
-    button.setAttribute('aria-checked', checked ? 'true' : 'false');
+    const ariaChecked = checked ? 'true' : 'false';
+    if (button.getAttribute('aria-checked') !== ariaChecked) button.setAttribute('aria-checked', ariaChecked);
     button.disabled = !preferenceArtist;
   });
   document.querySelectorAll('[data-open-non-album-tracks]').forEach((button) => {
@@ -447,14 +477,27 @@ function renderGalleryFamilyPanelBody(panelBody, html) {
   }
 }
 
+function syncGalleryBarSearchVisibility() {
+  const bar = document.querySelector?.('[data-gallery-bar-instance="gallery"]');
+  if (!bar) return;
+  const draftQuery = String(state.ui?.searchDraftQuery || '').trim();
+  const committedQuery = String(state.view?.query || '').trim();
+  const selectedArtist = String(state.view?.selected_artist || '').trim();
+  bar.hidden = selectedArtist
+    ? Boolean(draftQuery) && draftQuery !== committedQuery
+    : Boolean(draftQuery || committedQuery);
+}
+
 function updateGalleryMainChrome() {
-  const bar = document.querySelector('[data-gallery-bar]');
+  const bar = document.querySelector('[data-gallery-bar-instance="gallery"]');
   const scroll = document.getElementById('albums-scroll');
   if (!bar || !scroll) return;
+  syncGalleryBarSearchVisibility();
   updateGalleryMainControls();
   const model = getFilteredGalleryMainModel();
   const primaryArtist = String(state.view.selected_artist || '').trim();
   const sections = getGalleryMainContextSections();
+  const hasFamily = hasGalleryArtistFamily();
   const summaryTotals = resolveGallerySummaryTotals(state.view, model.totals, state.gallery.mainState, model.groups);
   const context = resolveGalleryBarContext({
     scrollTop: scroll.scrollTop,
@@ -463,10 +506,20 @@ function updateGalleryMainChrome() {
     artistCount: summaryTotals.artistCount,
     albumCount: summaryTotals.albumCount,
     groups: sections,
+    hasFamily,
   });
   const name = bar.querySelector('[data-gallery-context-name]');
   const summary = bar.querySelector('[data-gallery-context-summary]');
   const oldInfo = bar.querySelector('[data-artist-info-trigger]');
+  const inlineDivider = bar.querySelector('[data-gallery-context-artist-divider]');
+  const inlineTotal = bar.querySelector('[data-gallery-context-inline-total]');
+  if (bar.dataset) bar.dataset.galleryContextKind = context.kind;
+  summary.hidden = false;
+  if (inlineDivider) inlineDivider.hidden = true;
+  if (inlineTotal) {
+    inlineTotal.hidden = true;
+    inlineTotal.textContent = '';
+  }
   if (context.kind === 'gallery' || context.kind === 'family') {
     name.textContent = context.kind === 'gallery' ? 'Gallery' : `${context.primaryArtist} family`;
     summary.textContent = `${galleryMainPlural(context.artistCount, 'artist')} · ${galleryMainPlural(context.albumCount, 'album')}`;
@@ -493,11 +546,15 @@ function updateGalleryMainChrome() {
   }
   const panelTitle = document.querySelector('[data-gallery-family-panel-title]');
   if (panelTitle) {
-    panelTitle.textContent = primaryArtist ? `${primaryArtist} Family` : 'Artist Family';
-    panelTitle.title = panelTitle.textContent;
+    const title = primaryArtist ? `${primaryArtist} Family` : 'Artist Family';
+    if (panelTitle.textContent !== title) panelTitle.textContent = title;
+    if (panelTitle.title !== title) panelTitle.title = title;
   }
   const panelTotal = document.querySelector('[data-gallery-family-panel-total]');
-  if (panelTotal) panelTotal.textContent = galleryMainPlural(getGalleryFamilyPanelModel().totals.albumCount, 'album');
+  if (panelTotal) {
+    const total = galleryMainPlural(getGalleryFamilyPanelModel().totals.albumCount, 'album');
+    if (panelTotal.textContent !== total) panelTotal.textContent = total;
+  }
   const panel = document.querySelector('[data-artist-family-panel]');
   if (panel) {
     panel.style.top = `${Math.round(bar.getBoundingClientRect().bottom)}px`;
@@ -561,7 +618,7 @@ function handleGalleryMainClick(event) {
   const source = event.target.closest?.('[data-gallery-source]');
   if (source) { event.preventDefault(); transitionGalleryMain({ type: 'toggle-source', source: source.dataset.gallerySource }); return true; }
   const type = event.target.closest?.('[data-gallery-album-type]');
-  if (type) { event.preventDefault(); transitionGalleryMain({ type: 'toggle-album-type', albumType: type.dataset.galleryAlbumType }); return true; }
+  if (type) { event.preventDefault(); return true; }
   const familyArtist = event.target.closest?.('[data-gallery-family-artist]');
   if (familyArtist) {
     event.preventDefault();

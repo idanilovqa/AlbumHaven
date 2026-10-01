@@ -112,3 +112,68 @@ def test_migration_moves_existing_rows_to_desktop_and_keys_each_account_profile(
     assert "client_profile text not null default 'desktop'" in sql
     assert "primary key (account_id, client_profile)" in sql
     assert "compact_player_style text not null default 'docked'" in sql
+
+
+def test_compact_sidebar_defaults_and_explicit_values_are_canonical():
+    from music_app.services.appearance_preferences_postgres import expand_appearance_preferences
+
+    base = {"main_surface_color": None, "panel_background_color": None}
+    defaults = expand_appearance_preferences(base)
+    assert defaults["docked_compact_player_regular_style"] is False
+    assert defaults["compact_player_motion"] == "normal"
+    assert defaults["floating_player_edge"] == {"source": "player", "color": None}
+    for behavior in ("follow_sidebar", "float_on_collapse", "artbox", "stay_docked"):
+        value = expand_appearance_preferences({
+            **base, "palette_id": None, "panel_index": 0, "player_override": None,
+            "compact_player_style": "docked", "docked_compact_player_behavior": behavior,
+            "docked_compact_player_regular_style": True,
+            "compact_player_motion": "slow",
+            "floating_player_edge": {"source": "custom", "color": "#123abc"},
+        })
+        assert value["docked_compact_player_behavior"] == behavior
+        assert value["docked_compact_player_regular_style"] is True
+        assert value["compact_player_motion"] == "slow"
+        assert value["floating_player_edge"] == {"source": "custom", "color": "#123ABC"}
+
+
+def test_compact_sidebar_optional_fields_preserve_omission_in_old_writes():
+    from music_app.services.appearance_preferences_postgres import normalize_appearance_preferences
+
+    base = {"main_surface_color": None, "panel_background_color": None}
+    for payload in (base, {**base, "compact_player_style": "floating"},
+                    {**base, "palette_id": None, "panel_index": 0, "player_override": None}):
+        value = normalize_appearance_preferences(payload)
+        assert "docked_compact_player_regular_style" not in value
+        assert "compact_player_motion" not in value
+        assert "floating_player_edge" not in value
+
+
+def test_compact_sidebar_rejects_invalid_closed_preferences():
+    import pytest
+    from music_app.services.appearance_preferences_postgres import normalize_appearance_preferences
+
+    base = {"main_surface_color": None, "panel_background_color": None,
+            "palette_id": None, "panel_index": 0, "player_override": None,
+            "compact_player_style": "docked"}
+    invalid = [
+        ("docked_compact_player_behavior", "unknown"),
+        ("docked_compact_player_regular_style", None),
+        ("docked_compact_player_regular_style", "true"),
+        ("docked_compact_player_regular_style", 1),
+        ("compact_player_motion", "fast"), ("compact_player_motion", None),
+        ("compact_player_motion", True),
+        *[("floating_player_edge", edge) for edge in (
+            None, "theme", {}, {"source": "custom"}, {"source": "theme", "color": "#123456"},
+            {"source": "player", "color": "#123456"}, {"source": "custom", "color": None},
+            {"source": "custom", "color": "#123"}, {"source": "custom", "color": "#12345678"},
+            {"source": "unknown", "color": None}, {"source": "player", "color": None, "extra": True},
+        )],
+    ]
+    for key, value in invalid:
+        with pytest.raises(ValueError):
+            normalize_appearance_preferences({**base, key: value})
+    for source in ("player", "theme"):
+        value = normalize_appearance_preferences({
+            **base, "floating_player_edge": {"source": source, "color": None},
+        })
+        assert value["floating_player_edge"] == {"source": source, "color": None}

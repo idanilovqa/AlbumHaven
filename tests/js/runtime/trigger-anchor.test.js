@@ -3,6 +3,10 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const vm = require('node:vm');
 const path = require('node:path');
+function classList() {
+  const names = new Set();
+  return { add: name => names.add(name), remove: name => names.delete(name), contains: name => names.has(name) };
+}
 const context = vm.createContext({});
 vm.runInContext(fs.readFileSync(path.join(__dirname, '../../../music_app/static/js/runtime/trigger-anchor.js'), 'utf8'), context);
 test('connector follows the actual trigger position within a clamped popup', () => {
@@ -18,6 +22,41 @@ test('upward dropdown joins its bottom edge to the trigger', () => {
   assert.equal(geometry.gap, 8);
 });
 
+test('anchored surfaces retain the trigger content context after being portaled', () => {
+  const classes = classList();
+  const surface = {
+    hidden: false,
+    dataset: {},
+    classList: classes,
+    style: { setProperty() {} },
+    getBoundingClientRect: () => ({ left: 0, right: 200, top: 50, bottom: 250 }),
+  };
+  const anchor = {
+    dataset: {},
+    classList: classes,
+    style: { setProperty() {} },
+    closest: () => ({}),
+    getBoundingClientRect: () => ({ left: 100, right: 134, top: 10, bottom: 44, width: 34 }),
+  };
+
+  context.syncTriggerAnchor(surface, anchor);
+  assert.equal(surface.dataset.triggerAnchorContext, 'content');
+  assert.equal(anchor.dataset.triggerAnchorContext, 'content');
+
+  anchor.closest = () => null;
+  context.syncTriggerAnchor(surface, anchor);
+  assert.equal(surface.dataset.triggerAnchorContext, 'chrome');
+  assert.equal(anchor.dataset.triggerAnchorContext, 'chrome');
+  anchor.matches = selector => selector === '.search-field-button';
+  context.syncTriggerAnchor(surface, anchor);
+  assert.equal(surface.dataset.triggerAnchorSearch, 'true');
+  context.clearTriggerAnchor(surface);
+  assert.equal(surface.dataset.triggerAnchorSearch, undefined);
+  anchor.matches = () => false;
+  context.syncTriggerAnchor(surface, anchor);
+  assert.equal(surface.dataset.triggerAnchorSearch, undefined);
+});
+
 test('closing and reanchoring restore the previous trigger', () => {
   const element = (rect) => {
     const classes = new Set();
@@ -26,11 +65,20 @@ test('closing and reanchoring restore the previous trigger', () => {
   const surface = element({ left: 0, right: 200, top: 50, bottom: 250 });
   const first = element({ left: 100, right: 134, top: 10, bottom: 44, width: 34 });
   const second = element({ left: 140, right: 174, top: 10, bottom: 44, width: 34 });
+  second.closest = () => ({});
   context.syncTriggerAnchor(surface, first);
   assert.equal(first.classList.contains('trigger-anchor-open'), true);
   context.syncTriggerAnchor(surface, second);
   assert.equal(first.classList.contains('trigger-anchor-open'), false);
   assert.equal(second.classList.contains('trigger-anchor-open'), true);
+  assert.equal(first.dataset.triggerAnchorContext, undefined);
+  assert.equal(surface.dataset.triggerAnchorContext, 'content');
+  assert.equal(second.dataset.triggerAnchorContext, 'content');
+  context.activateTriggerSurface({}, () => {});
+  assert.equal(surface.hidden, true, 'the reanchored popup remains registered for dismissal');
+  assert.equal(second.classList.contains('trigger-anchor-open'), false);
+  surface.hidden = false;
+  context.syncTriggerAnchor(surface, second);
   context.clearTriggerAnchor(surface);
   assert.equal(second.classList.contains('trigger-anchor-open'), false);
 });
@@ -47,7 +95,7 @@ test('connector tracks sibling-driven trigger movement during expansion and stop
   vm.runInContext(fs.readFileSync(path.join(__dirname, '../../../music_app/static/js/runtime/trigger-anchor.js'), 'utf8'), local);
   const props = new Map();
   let left = 250;
-  const classes = () => ({ add() {}, remove() {} });
+  const classes = classList;
   const anchor = { parentElement: {}, dataset: {}, classList: classes(), style: { setProperty() {} }, getBoundingClientRect: () => ({ left, right: left + 34, top: 10, bottom: 44, width: 34 }) };
   const surface = { hidden: false, dataset: {}, classList: classes(), style: { setProperty: (key, value) => props.set(key, value) }, getBoundingClientRect: () => ({ left: 0, right: 400, top: 54, bottom: 250 }) };
   local.syncTriggerAnchor(surface, anchor);

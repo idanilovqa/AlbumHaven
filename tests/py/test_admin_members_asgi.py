@@ -240,7 +240,12 @@ def test_listener_customization_badge_compares_capabilities_without_order(monkey
     status, _headers, body = _get(app, path)
 
     assert status == 200
-    assert ("Customized" in body) is (change != "same")
+    if path == "/admin/members":
+        assert ("Customized" in body) is (change != "same")
+    else:
+        retained = FormInputs(body, "additional_capability_keys").inputs
+        assert {item["value"] for item in retained if item.get("type") == "hidden"} == set(capabilities)
+        assert 'data-capability-assignment' in body
 
 
 async def _json_request_async(app, method, path, session, payload):
@@ -325,7 +330,8 @@ def test_members_add_and_edit_are_in_place_pages_with_back_navigation():
     assert edit_status == 200
     assert "Edit user" in edit_body
     assert "test.user+1" in edit_body
-    assert "Listener · Customized" in edit_body
+    assert 'data-capability-assignment' in edit_body
+    assert 'name="role_keys"' in edit_body
     assert "Send password reset email" not in edit_body
     assert "Resend welcome email" not in edit_body
     assert "Back to users" in edit_body
@@ -343,18 +349,16 @@ def test_owner_role_projects_all_inherited_permissions_and_submittable_values():
     status, _headers, body = _get(app, "/admin/accounts/7")
 
     assert status == 200
-    assert '<option value="owner" selected>Owner</option>' in body
-    assert '<option value="listener">' not in body
+    assert not FormInputs(body, "role_keys").inputs
+    assert not FormInputs(body, "additional_capability_keys").inputs
     assert "Owner · Full access" in body
-    assert "Owner includes every capability." in body
+    assert "These inherited permissions cannot be changed individually." in body
     assert "Individual permissions below override" not in body
     inputs = FormInputs(body, "capability_keys").inputs
     switches = [item for item in inputs if item.get("type") == "checkbox"]
     inherited_values = [item for item in inputs if item.get("type") == "hidden"]
     expected_keys = set(MANAGED_CAPABILITY_KEYS)
-    assert len(switches) == len(expected_keys)
-    assert {item["value"] for item in switches} == expected_keys
-    assert all("checked" in item and "disabled" in item for item in switches)
+    assert not switches
     assert len(inherited_values) == len(expected_keys)
     assert {item["value"] for item in inherited_values} == expected_keys
     assert all("disabled" not in item for item in inherited_values)
@@ -373,32 +377,33 @@ def test_owner_role_projects_all_inherited_permissions_and_submittable_values():
     assert set(service.update_calls[0]["capability_keys"]) == expected_keys
 
 
-@pytest.mark.parametrize(
-    ("path", "selected_keys"),
-    [
-        ("/admin/accounts/41", {"library.browse.read", "library.playlists.create"}),
-        ("/admin/accounts/new", {
-            "library.browse.read", "library.media.read", "library.resources.read",
-            "library.playlists.create", "library.discovery.read",
-        }),
-    ],
-)
-def test_nonowner_role_remains_listener_with_editable_explicit_permissions(path, selected_keys):
-    from music_app.services.admin_account_creation import MANAGED_CAPABILITY_KEYS
+@pytest.mark.parametrize("path", ["/admin/accounts/41", "/admin/accounts/new"])
+def test_nonowner_editor_exposes_roles_and_preserves_explicit_legacy_grants(path):
+    from music_app.services.capability_assignments import CAPABILITY_LABELS
 
     app, _service = _app()
-
     status, _headers, body = _get(app, path)
-
     assert status == 200
-    assert '<option value="listener">Listener</option>' in body
-    assert '<option value="owner"' not in body
-    assert "Individual permissions below override" in body
-    inputs = FormInputs(body, "capability_keys").inputs
-    assert len(inputs) == len(MANAGED_CAPABILITY_KEYS)
-    assert {item["value"] for item in inputs} == set(MANAGED_CAPABILITY_KEYS)
-    assert all(item["type"] == "checkbox" and "disabled" not in item for item in inputs)
-    assert {item["value"] for item in inputs if "checked" in item} == selected_keys
+    roles = FormInputs(body, "role_keys").inputs
+    assert {item["value"] for item in roles} == {"viewer", "listener", "musician", "owner", "admin"}
+    assert all(item["type"] == "checkbox" and "disabled" not in item for item in roles)
+    assert {item["value"] for item in roles if "checked" in item} == (
+        {"listener"} if path.endswith("/new") else set()
+    )
+    assert not FormInputs(body, "capability_keys").inputs
+    inputs = FormInputs(body, "additional_capability_keys").inputs
+    switches = [item for item in inputs if item["type"] == "checkbox"]
+    hidden = [item for item in inputs if item["type"] == "hidden"]
+    assert {item["value"] for item in switches} == set(CAPABILITY_LABELS)
+    if path.endswith("/new"):
+        assert not hidden
+        checked = [item for item in switches if "checked" in item]
+        assert {item["value"] for item in checked} == {"capability.view", "capability.play"}
+        assert all("disabled" in item for item in checked)
+    else:
+        assert {item["value"] for item in hidden} == {"library.browse.read", "library.playlists.create"}
+        assert {item["value"] for item in inputs if "disabled" in item} == {"capability.move"}
+        assert not any("checked" in item for item in switches)
 
 
 @pytest.mark.parametrize("membership_only", [False, True])
@@ -424,6 +429,11 @@ def test_owner_library_access_is_protected_and_submittable(membership_only):
     inputs = FormInputs(body, "current_library_access").inputs
     switches = [item for item in inputs if item.get("type") == "checkbox"]
     values = [item for item in inputs if item.get("type") == "hidden"]
+    if membership_only:
+        assert not inputs
+        assert 'data-admin-action=' not in body
+        assert "Save changes" not in body
+        return
     assert len(switches) == 1
     assert "checked" in switches[0]
     assert "disabled" in switches[0]
@@ -464,7 +474,7 @@ def test_roster_renders_invitation_menu_only_for_server_eligible_pending_account
     assert 'data-send-invitation="7"' not in body
     assert 'data-send-invitation="42"' not in body
     assert 'data-invitation-copy-fallback' in body
-    assert 'data-roster-reauth-panel' in body
+    assert 'data-roster-reauth-panel' not in body
     assert '/static/js/admin-members.js' in body
 
 

@@ -1,0 +1,29 @@
+{
+  "status": "owner-approved-design",
+  "date": "2026-09-21",
+  "artifact": "mockup.html",
+  "requirements": "requirements.md",
+  "theme": "theme.json",
+  "supersedes": "../v003/mockup.html",
+  "approval": "All A/B/C approved; owner authorized slightly higher C play and requested slow motion in Appearance",
+  "appliedAdjustment": {
+    "cPlayTop": 59,
+    "raisedBy": 3
+  },
+  "appearanceMotion": {
+    "normalMs": 420,
+    "slowMs": 1400,
+    "reducedMotionOverrides": true
+  },
+  "productionImplemented": true,
+  "productionManualAcceptance": true,
+  "sha256": "2c66293c2888102156e7de73c682be772071205cfd049b882996dc6613c7a4e0",
+  "implementationPlan": "C:/Users/Rendref/.codex/worktrees/bf02/album-haven-app/docs/superpowers/plans/2026-09-21-sidebar-player-appearance.md",
+  "implementationPlanApproval": {
+    "status": "approved",
+    "date": "2026-09-21",
+    "evidence": "Approved",
+    "implementationAuthorized": true,
+    "note": "Implementation completed in the cover-look-up UI worktree; owner reported manual acceptance on 2026-09-21. Automated E2E and review evidence are tracked in the implementation plan."
+  }
+}

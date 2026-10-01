@@ -405,6 +405,54 @@
         "A softer tonal pairing"
       ]
     ]
+  },
+  {
+    "id": "parchment-pine",
+    "name": "Parchment & Pine",
+    "desc": "Warm parchment with deep pine panels",
+    "main": "#E8E0CF",
+    "mode": "light",
+    "tokens": {
+      "ink": "#393C32",
+      "muted": "#777C6C",
+      "card": "#FFF7E5",
+      "control": "#C8B58F",
+      "line": "#C7C4B4",
+      "hover": "#393C3210",
+      "accent": "#51B67D",
+      "player": "#10251E",
+      "player-ink": "#D7E4DA",
+      "player-muted": "#8DA796",
+      "play": "#38B977",
+      "play-ink": "#083820",
+      "focus": "#81DFA9",
+      "panel-ink": "#E2F0E5",
+      "panel-muted": "#98A79B",
+      "panel-line": "#354237",
+      "panel-control": "#202422",
+      "panel-color-scheme": "dark",
+      "floating-edge": "#101512",
+      "waveform-fill": "#53BF80",
+      "waveform-edge": "#8DA796",
+      "stars": "#806019"
+    },
+    "panels": [
+      [
+        "Pine",
+        "#101512",
+        "The approved dark pine frame"
+      ],
+      [
+        "Deep Pine",
+        "#11241D",
+        "A deep green companion"
+      ],
+      [
+        "Lifted Pine",
+        "#15241B",
+        "Gently lifted pine panels"
+      ]
+    ]
   }
 ];
   const playerDefaults = {
@@ -413,6 +461,7 @@
     midnight: { player: '#131C31', 'player-ink': '#BDCBE4', play: '#B0C2E8', 'play-ink': '#131C31', 'player-accent': '#A0B6DE' },
   };
   const selectionAccents = {
+    'parchment-pine': '#51B67D',
     steelblue: '#8BAED1',
     navy: '#91B4E3', 'harbor-mint': '#52D7AA',
     powderblue: '#4F7398',
@@ -486,6 +535,16 @@
     const tokens = { ...baseTokens, ...source, 'waveform-fill': player.fill, 'waveform-edge': player.edge,
       'player-surface-start': player.background, 'player-surface-end': player.background,
       'player-surface-angle': '0deg', 'player-control-border': player.edge, 'player-handle': player.edge };
+    Object.assign(tokens, {
+      'panel-ink': source['panel-ink'] || tokens.ink,
+      'panel-muted': source['panel-muted'] || tokens.muted,
+      'panel-line': source['panel-line'] || tokens.line,
+      'panel-control': source['panel-control'] || tokens.control,
+      'panel-color-scheme': source['panel-color-scheme'] || palette?.mode || 'dark',
+      'floating-edge': source['floating-edge'] || tokens.play,
+      focus: source.focus || tokens.accent,
+      'player-muted': source['player-muted'] || tokens['player-ink'],
+    });
     if (override) {
       const style = player.style;
       const controlFill = style?.controls.fill || contrastingInk(player.background);
@@ -495,6 +554,7 @@
         'player-surface-end': (style?.surface.mode === 'solid' ? style.surface.start : style?.surface.end) || player.background,
         'player-surface-angle': style ? `${style.surface.angle}deg` : '0deg',
         'player-ink': contrastingInk(player.background),
+        'player-muted': contrastingInk(player.background),
         play: controlFill,
         'play-ink': contrastingInk(controlFill),
         'player-control-border': style?.controls.border || player.edge,

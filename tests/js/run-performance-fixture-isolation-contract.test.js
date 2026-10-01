@@ -16,6 +16,7 @@ const GENERATED_ISOLATED_TARGETS = new Set([
   'scan-add-album',
   'scan-metadata',
   'scan-page',
+  'scan-health', 'scan-error',
 ]);
 
 const OWNER_RUNTIME_ENV_KEYS = [

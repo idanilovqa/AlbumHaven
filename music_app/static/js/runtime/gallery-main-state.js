@@ -1,5 +1,4 @@
-const GALLERY_RELEASE_TYPES = ['studio', 'live', 'demo', 'compilation', 'ep', 'single'];
-const GALLERY_INTERACTIVE_RELEASE_TYPES = ['studio', 'compilation'];
+const GALLERY_RELEASE_TYPES = ['studio', 'ep', 'live', 'demo', 'compilation', 'single'];
 const GALLERY_TRIAL_ARTIST_IMAGES = Object.freeze({
   'Neal Morse': 'https://commons.wikimedia.org/wiki/Special:Redirect/file/Neal_Morse2.jpg?width=480',
   'Devin Townsend': 'https://commons.wikimedia.org/wiki/Special:Redirect/file/Devin_Townsend_(cropped).jpg?width=480',
@@ -33,10 +32,6 @@ function reduceGalleryMainState(current, action = {}) {
   const next = createGalleryMainState(current || {});
   if (action.type === 'toggle-source' && Object.hasOwn(next.sources, action.source)) {
     next.sources[action.source] = !next.sources[action.source];
-  } else if (action.type === 'toggle-album-type' && GALLERY_INTERACTIVE_RELEASE_TYPES.includes(action.albumType)) {
-    next.albumTypes = next.albumTypes.includes(action.albumType)
-      ? next.albumTypes.filter((item) => item !== action.albumType)
-      : [...next.albumTypes, action.albumType];
   } else if (action.type === 'set-view') {
     next.view = normalizeGalleryView(action.view);
   } else if (action.type === 'toggle-family-artist') {
@@ -192,8 +187,11 @@ function reconcileGalleryMain(config = {}) {
 
 function resolveGalleryBarContext(config = {}) {
   const summaryContext = config.primaryArtist
-    ? { kind: 'family', primaryArtist: config.primaryArtist, artistCount: config.artistCount, albumCount: config.albumCount }
+    ? (config.hasFamily === false
+      ? { kind: 'single-artist', artist: config.primaryArtist, albumCount: config.albumCount }
+      : { kind: 'family', primaryArtist: config.primaryArtist, artistCount: config.artistCount, albumCount: config.albumCount })
     : { kind: 'gallery', artistCount: config.artistCount, albumCount: config.albumCount };
+  if (summaryContext.kind === 'single-artist') return summaryContext;
   if (Number(config.scrollTop || 0) <= 12) {
     return summaryContext;
   }

@@ -1503,3 +1503,74 @@ test('optimistic detail hydration treats a not-yet-committed Postgres album as r
   assert.equal(context.state.utility.problematicFiles[0].detail_load_failed, undefined);
   assert.deepEqual(calls.toasts, []);
 });
+
+
+function logEntryHarness({ allowed = true, activeTab = 'appearance', entryLoaded = false } = {}) {
+  const events = [];
+  const permission = { allowed };
+  const { context } = loadHelper({
+    window: { AlbumHavenCapabilities: { allowsUtilityTab: tab => tab === 'log-history' && permission.allowed } },
+    state: { utility: { activeTab, logHistory: entryLoaded ? [{ id: 'existing' }] : [] } },
+  });
+  vm.runInContext(fs.readFileSync(path.join(path.dirname(helperPath), 'utility-loop-playback.js'), 'utf8'), context);
+  context.openUtilityModal = options => events.push(['open', options.forceLoad]);
+  context.getUtilityLogHistoryController = () => ({
+    refreshNavigation: async () => { events.push(['navigation']); },
+    selectEvent: async id => { events.push(['event', id]); return id; },
+  });
+  context.confirmBackgroundAppearanceLeave = () => { events.push(['confirm']); return true; };
+  return { context, events, permission };
+}
+
+for (const activeTab of ['appearance', 'log-history']) {
+  test(`denied failed-tag Log History entry does no navigation or data work from ${activeTab}`, async () => {
+    const h = logEntryHarness({ allowed: false, activeTab });
+    await h.context.openUtilityLogHistoryTab('owned-failure-event');
+    assert.deepEqual(h.events, []);
+    assert.equal(h.context.state.utility.activeTab, activeTab);
+  });
+}
+
+test('allowed Log History entry preserves exact-event selection and one navigation refresh', async () => {
+  const h = logEntryHarness();
+  assert.equal(await h.context.openUtilityLogHistoryTab('owned-failure-event'), 'owned-failure-event');
+  assert.equal(h.context.state.utility.activeTab, 'log-history');
+  assert.deepEqual(h.events, [['confirm'], ['open', false], ['navigation'], ['event', 'owned-failure-event']]);
+  h.events.length = 0;
+  h.context.state.utility.logHistory = [{ id: 'existing' }];
+  await h.context.openUtilityLogHistoryTab('another-event');
+  assert.deepEqual(h.events, [['open', false], ['event', 'another-event']]);
+});
+
+test('allowed general Log History navigation retains its normal forced load without an event request', () => {
+  const h = logEntryHarness();
+  h.context.openUtilityLogHistoryTab();
+  assert.deepEqual(h.events, [['confirm'], ['open', true]]);
+});
+
+test('Log History entry stops when its tab owner rejects a newly revoked transition', async () => {
+  const h = logEntryHarness();
+  const setTab = h.context.setUtilityActiveTab;
+  h.context.setUtilityActiveTab = (...args) => {
+    h.permission.allowed = false;
+    return setTab(...args);
+  };
+  await h.context.openUtilityLogHistoryTab('owned-failure-event');
+  assert.equal(h.context.state.utility.activeTab, 'appearance');
+  assert.deepEqual(h.events, [['confirm']]);
+});
+
+for (const change of ['permission revoked', 'utility owner replaced']) {
+  test(`deferred Log History navigation does not resume after ${change}`, async () => {
+    const h = logEntryHarness();
+    let deferred;
+    h.context.confirmBackgroundAppearanceLeave = callback => { deferred = callback; return false; };
+    h.context.openUtilityLogHistoryTab('owned-failure-event');
+    assert.equal(typeof deferred, 'function');
+    if (change === 'permission revoked') h.permission.allowed = false;
+    else h.context.state.utility = { activeTab: 'appearance', logHistory: [] };
+    await deferred();
+    assert.deepEqual(h.events, []);
+    assert.equal(h.context.state.utility.activeTab, 'appearance');
+  });
+}

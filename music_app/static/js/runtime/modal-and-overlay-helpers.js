@@ -58,7 +58,7 @@ function ensureVersionPickerModal() {
         <div class="version-picker-list" data-version-picker-list></div>
       </div>
       <div class="confirm-modal-actions version-picker-actions">
-        <button type="button" class="button version-picker-cancel" data-close-version-picker="1">Cancel</button>
+        <button type="button" class="button ui-button ui-button--quiet ui-button--medium version-picker-cancel" data-close-version-picker="1">Cancel</button>
         <button type="button" class="button version-picker-save" data-save-version-picker="1">Save</button>
       </div>
     </div>
@@ -555,6 +555,8 @@ function closeNonAlbumModal() {
 }
 
 async function openAlbumInExplorer(album) {
+  if (typeof window !== 'undefined' && window.AlbumHavenCapabilities
+    && !window.AlbumHavenCapabilities.allows('library.files.open_location')) return;
   if (!album) {
     showToast('No album payload found for File Explorer action.', 'error', 3200);
     return;

@@ -2078,7 +2078,7 @@ test('loop progress updates preserve the play button content until playback chan
   assert.equal(text, '▶');
 });
 
-test('five paused saved-loop rows all receive waveforms through the bounded shared peak cache', async () => {
+test('displayed saved loops load together and repaint immediately after remount', async () => {
   const ids = ['first', 'second', 'third', 'fourth', 'fifth'];
   const canvases = new Map(ids.map(id => [id, {
     hidden: true, isConnected: true, parentElement: { classList: { toggle() {} } },
@@ -2107,8 +2107,9 @@ test('five paused saved-loop rows all receive waveforms through the bounded shar
   });
 
   // The real group path refreshes every mounted row before any network response.
-  // Resolve successive admitted requests without playback or another UI refresh.
+  // All displayed rows start loading without waiting for another response.
   context.refreshUtilityLoopStereoWaveforms();
+  assert.equal(requests.length, ids.length);
   for (let wave = 0; wave < ids.length; wave += 1) {
     for (const request of requests.filter(item => !item.settled)) {
       request.settled = true;
@@ -2120,12 +2121,25 @@ test('five paused saved-loop rows all receive waveforms through the bounded shar
   }
   assert.deepEqual([...drawn].sort(), [...ids].sort(), 'paused rows must not require interaction to recover evicted loads');
   assert.ok([...canvases.values()].every(canvas => !canvas.hidden));
-  assert.equal(vm.runInContext('SAVED_LOOP_WAVEFORM_CACHE_LIMIT', context), 4);
-  assert.ok(vm.runInContext('savedLoopWaveformPeakCache.size', context) <= 4);
+  assert.equal(vm.runInContext('savedLoopWaveformPeakCache.size', context), ids.length);
+  drawn.clear();
+  for (const id of ids) {
+    canvases.get(id).isConnected = false;
+    canvases.set(id, { hidden: true, isConnected: true, parentElement: { classList: { toggle() {} } } });
+  }
+  // An uncached row comes first and remains pending while cached rows paint.
+  canvases.set('new', { hidden: true, isConnected: true, parentElement: { classList: { toggle() {} } } });
+  audios.unshift({ duration: 20, currentTime: 0, getAttribute: () => 'new' });
+  context.refreshUtilityLoopStereoWaveforms();
+  assert.equal(requests.length, ids.length + 1, 'only the new row fetches');
+  assert.deepEqual([...drawn].sort(), [...ids].sort(), 'cached rows paint synchronously despite pending download');
+  assert.ok(ids.every(id => !canvases.get(id).hidden));
+  requests.at(-1).resolve({ ok: false, status: 404 });
+  await new Promise(resolve => setImmediate(resolve));
 });
 
 for (const discarded of ['detached', 'mode-off']) {
-  test(`queued saved-loop waveform work is discarded when ${discarded}`, async () => {
+  test(`concurrent saved-loop results are not painted when ${discarded}`, async () => {
     const ids = ['active', 'queued'];
     const canvases = new Map(ids.map(id => [id, {
       hidden: true, isConnected: true, parentElement: { classList: { toggle() {} } },
@@ -2142,18 +2156,16 @@ for (const discarded of ['detached', 'mode-off']) {
       drawCombinedLoopWaveform() {},
     });
     context.refreshUtilityLoopStereoWaveforms();
-    assert.equal(requests.length, 1, 'only one background request is admitted');
+    assert.equal(requests.length, 2, 'both displayed rows load concurrently');
     if (discarded === 'detached') canvases.get('queued').isConnected = false;
     else state.player.appearance.seekbarMode = 'default';
     context.refreshUtilityLoopStereoWaveforms();
-    requests[0].resolve({ ok: true, json: async () => ({
+    for (const request of requests) request.resolve({ ok: true, json: async () => ({
       sampleCount: 280, left: Array(280).fill(0.2), right: Array(280).fill(0.4),
     }) });
     await new Promise(resolve => setImmediate(resolve));
-    assert.equal(requests.length, 1, 'discarded work must not start after the active load');
+    assert.equal(requests.length, 2, 'refresh must not duplicate pending requests');
     assert.equal(canvases.get('queued').hidden, true);
-    assert.equal(vm.runInContext('utilityLoopStereoQueue.length', context), 0);
-    assert.equal(vm.runInContext('utilityLoopStereoLoadActive', context), false);
   });
 }
 

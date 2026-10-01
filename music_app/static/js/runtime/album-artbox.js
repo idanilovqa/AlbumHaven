@@ -18,11 +18,12 @@ function buildAlbumArtboxHtml(config = {}) {
     : 'empty';
   const label = String(config.label || 'Album artwork').trim();
   const coverHtml = String(config.coverHtml || '');
+  const overlayHtml = String(config.overlayHtml || '');
   const actionHtml = String(config.actionHtml || '');
   const content = state === 'missing' || state === 'empty'
     ? buildMissingAlbumMarkHtml()
     : (coverHtml || `<span class="album-artbox__placeholder">${state === 'loading' ? 'Loading cover art' : 'No cover art'}</span>`);
-  return `<span class="album-artbox album-artbox--${state}" data-album-artbox-state="${state}" aria-label="${escapeHtml(label)}">${content}${actionHtml ? `<span class="album-artbox__action">${actionHtml}</span>` : ''}</span>`;
+  return `<span class="album-artbox album-artbox--${state}" data-album-artbox-state="${state}" aria-label="${escapeHtml(label)}">${content}${overlayHtml ? `<span class="album-artbox__overlay">${overlayHtml}</span>` : ''}${actionHtml ? `<span class="album-artbox__action">${actionHtml}</span>` : ''}</span>`;
 }
 
 function buildUtilityAlbumArtbox(album, {

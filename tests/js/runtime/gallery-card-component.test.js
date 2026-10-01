@@ -120,6 +120,7 @@ test('hover year omits unknown values and safely renders supplied release years'
     const html = context.buildGalleryCardHtml({ year: '2005', displayMode });
     assert.match(html, /class="gallery-card__hover-year"[^>]*>2005<\/span>/);
     assert.match(html, /data-gallery-release-year="2005"/);
+    assert.doesNotMatch(html, /gallery-card__year-frame/);
   }
   assert.doesNotMatch(context.buildGalleryCardHtml({ year: '<img src=x>', displayMode: 'covers' }), /<img src=x>/);
   const cards = context.buildGalleryCardHtml({ year: '2005', displayMode: 'cards' });

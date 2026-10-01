@@ -1,0 +1,44 @@
+{
+  "id": "parchment-pine",
+  "name": "Parchment & Pine",
+  "status": "owner-requested additional theme; implementation pending",
+  "source": "sidebar-player/v001/mockup.html",
+  "mode": "mixed: light content, dark navigation/player",
+  "surfaces": {
+    "main": "#e8e0cf",
+    "rail": "#101512",
+    "player": "#10251e",
+    "floatingPlayer": "#11241d",
+    "panel": "#15241b",
+    "control": "#202422"
+  },
+  "text": {
+    "main": "#393c32",
+    "muted": "#777c6c",
+    "rail": "#98a79b",
+    "railActive": "#e2f0e5",
+    "player": "#d7e4da",
+    "playerMuted": "#8da796"
+  },
+  "lines": {
+    "content": "#c7c4b4",
+    "rail": "#354237",
+    "floatingEdge": "#101512",
+    "control": "#45614c"
+  },
+  "accents": {
+    "play": "#38b977",
+    "playInk": "#083820",
+    "selection": "#51b67d",
+    "focus": "#81dfa9",
+    "transport": "#53bf80"
+  },
+  "playGlow": {
+    "rest": [
+      "0 0 16px 5px #36bf7040",
+      "0 0 34px #34b3711c"
+    ],
+    "hover": "0 0 23px 8px #36bf7055"
+  },
+  "notes": "Exact mock colors. Reuse the Appearance palette system; preserve mixed surface contrast, existing themes and player overrides. Working name is provisional."
+}

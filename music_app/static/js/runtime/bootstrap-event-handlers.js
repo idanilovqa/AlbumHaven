@@ -104,6 +104,22 @@ document.addEventListener('paste', async (event) => {
   await handleUtilityBootstrapPaste(event);
 });
 
+document.addEventListener('dragstart', (event) => {
+  handleUtilityBootstrapDragStart(event);
+});
+
+document.addEventListener('dragover', (event) => {
+  handleUtilityBootstrapDragOver(event);
+});
+
+document.addEventListener('drop', async (event) => {
+  await handleUtilityBootstrapDrop(event);
+});
+
+document.addEventListener('dragend', () => {
+  handleUtilityBootstrapDragEnd();
+});
+
 document.addEventListener('copy', (event) => {
   handleCoverLookupTaskOpenCopy(event);
 });

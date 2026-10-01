@@ -61,6 +61,10 @@ export class UtilityRulesTab extends BasePage {
     return this.exclusionRows.filter({ hasText: String(text || '').trim() }).first();
   }
 
+  exclusionReason(row) {
+    return row.locator(this.reasonColumnSelector);
+  }
+
   exclusionRowByKey(rowKey) {
     const keyLiteral = toXPathStringLiteral(rowKey);
     return this.ruleDetail.locator(

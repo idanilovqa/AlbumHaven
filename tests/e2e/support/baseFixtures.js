@@ -57,6 +57,7 @@ import { observePlaybackPcmTraffic } from '../helpers/gaplessPlaybackHelpers.js'
 import { controlLastfmProvider, readLastfmProviderState } from '../helpers/lastfmProviderHelpers.js';
 import { createWorkerAuthentication } from '../../../scripts/playwright-worker-authentication.mjs';
 import { createAppearancePreferenceIsolation } from '../helpers/appearancePreferenceIsolation.js';
+import { withArtistTreePreference } from './artistTreeStorageState.js';
 
 const ANSI = {
   cyan: '\u001b[36m',
@@ -328,6 +329,8 @@ export const test = base.extend({
   // Login/alternate-user suites opt out at file scope with test.use().
   reuseAuthentication: [true, { scope: 'worker', option: true }],
   authenticateFreshBrowserSession: [true, { option: true }],
+  // Regular tests own an expanded baseline; null exercises the product default.
+  initialArtistTreeFolded: [false, { option: true }],
 
   workerAuthentication: [async ({ browser }, use, workerInfo) => {
     await use(createWorkerAuthentication({
@@ -337,10 +340,11 @@ export const test = base.extend({
     }));
   }, { scope: 'worker' }],
 
-  storageState: async ({ reuseAuthentication, workerAuthentication }, use) => {
-    await use(reuseAuthentication
+  storageState: async ({ reuseAuthentication, workerAuthentication, baseURL, initialArtistTreeFolded }, use) => {
+    const authentication = reuseAuthentication
       ? await workerAuthentication.getStorageState()
-      : { cookies: [], origins: [] });
+      : { cookies: [], origins: [] };
+    await use(withArtistTreePreference(authentication, baseURL, initialArtistTreeFolded));
   },
 
   managedAppLifecycle: [async ({}, use) => {
@@ -352,19 +356,20 @@ export const test = base.extend({
     testArtifacts,
     authenticateFreshBrowserSession,
     storageState,
+    initialArtistTreeFolded,
   }, use, testInfo) => {
-    let session = null;
+    const sessions = [];
     try {
       await use({
-        async create() {
-          if (session) {
-            throw new Error('Only one fresh browser session may be created per test.');
-          }
+        async create({ userAgent } = {}) {
           const configuredBaseUrl = String(testInfo.project.use?.baseURL || '');
           const context = await browser.newContext({
             baseURL: configuredBaseUrl,
+            ...(userAgent ? { userAgent } : {}),
             viewport: testInfo.project.use?.viewport || { width: 1440, height: 960 },
-            storageState: authenticateFreshBrowserSession ? storageState : { cookies: [], origins: [] },
+            storageState: authenticateFreshBrowserSession ? storageState : withArtistTreePreference(
+              { cookies: [], origins: [] }, configuredBaseUrl, initialArtistTreeFolded,
+            ),
           });
           const restoreInterceptionGuard = installContextRequestInterceptionGuard(context);
           let productionViewObserver = null;
@@ -374,7 +379,7 @@ export const test = base.extend({
             await productionViewObserver.initialize();
             const configuredOrigin = configuredBaseUrl ? new URL(configuredBaseUrl).origin : '';
             const runtimeLogObserver = observePageRuntimeLogs(page, configuredOrigin);
-            session = {
+            const session = {
               context,
               page,
               runtimeLogObserver,
@@ -386,6 +391,7 @@ export const test = base.extend({
               tagEditorActions: new TagEditorActions(new TagEditor(page, testInfo)),
               trackModalActions: new TrackModalActions(new TrackModal(page, testInfo)),
             };
+            sessions.push(session);
             return session;
           } catch (error) {
             try {
@@ -399,34 +405,40 @@ export const test = base.extend({
         },
       });
     } finally {
-      if (session) {
-        session.runtimeLogObserver.stop();
-        if (didTestFail(testInfo)) {
-          testArtifacts.queueTextAttachment(
-            'fresh-browser-session-runtime-log.txt',
-            formatRuntimeLogs(session.runtimeLogObserver.snapshot()),
-          );
-          try {
-            const screenshot = await session.page.screenshot({ fullPage: true });
-            testArtifacts.queueAttachment({
-              name: 'fresh-browser-session-failure-screenshot.png',
-              body: screenshot,
-              contentType: 'image/png',
-            });
-          } catch (error) {
+      const results = await Promise.allSettled(sessions.map(async (session, index) => {
+        const artifactPrefix = index === 0 ? 'fresh-browser-session' : `fresh-browser-session-${index + 1}`;
+        try {
+          session.runtimeLogObserver.stop();
+          if (didTestFail(testInfo)) {
             testArtifacts.queueTextAttachment(
-              'fresh-browser-session-screenshot-error.txt',
-              `Failed to capture screenshot: ${error?.message || error}`,
+              `${artifactPrefix}-runtime-log.txt`,
+              formatRuntimeLogs(session.runtimeLogObserver.snapshot()),
             );
+            try {
+              const screenshot = await session.page.screenshot({ fullPage: true });
+              testArtifacts.queueAttachment({
+                name: `${artifactPrefix}-failure-screenshot.png`,
+                body: screenshot,
+                contentType: 'image/png',
+              });
+            } catch (error) {
+              testArtifacts.queueTextAttachment(
+                `${artifactPrefix}-screenshot-error.txt`,
+                `Failed to capture screenshot: ${error?.message || error}`,
+              );
+            }
+          }
+        } finally {
+          try {
+            await session.productionViewObserver.dispose();
+          } finally {
+            try { session.restoreInterceptionGuard(); }
+            finally { await session.context.close(); }
           }
         }
-        try {
-          await session.productionViewObserver.dispose();
-        } finally {
-          try { session.restoreInterceptionGuard(); }
-          finally { await session.context.close(); }
-        }
-      }
+      }));
+      const errors = results.filter((result) => result.status === 'rejected').map((result) => result.reason);
+      if (errors.length) throw new AggregateError(errors, 'Failed to clean up fresh browser sessions');
     }
   },
 

@@ -108,7 +108,7 @@
       '</nav></div><p class="selection-accent-help">The selected background remains visible when the accent is off.</p>' +
       '<div class="selection-accent-actions"><span role="status" data-selection-accent-status></span>' +
       '<button class="button" type="button" data-selection-accent-retry hidden>Try again</button>' +
-      '<button class="button" type="button" data-selection-accent-cancel>Cancel</button>' +
+    '<button class="button ui-button ui-button--quiet ui-button--medium" type="button" data-selection-accent-cancel>Cancel</button>' +
       '<button class="button" type="button" data-selection-accent-save>Save</button></div></section>';
     const editor = container.querySelector('.selection-accent-editor');
     const enabled = editor.querySelector('[data-selection-accent-enabled]');

@@ -10,7 +10,8 @@ const preference = (changes = {}) => ({
 function element() {
   const styles = new Map(), attributes = new Map(), children = new Map(), listeners = new Map();
   return {
-    styles, attributes, listeners, innerHTML: '', value: '',
+    styles, attributes, listeners, children: [], innerHTML: '', value: '',
+    insertAdjacentHTML(_position, markup) { this.innerHTML += markup; },
     style: {
       setProperty: (key, value) => styles.set(key, value),
       removeProperty: key => styles.delete(key),

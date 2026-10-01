@@ -37,10 +37,11 @@ async function mountSearchInput(page, filter = false) {
   await page.route(componentUrl, (route) => route.fulfill({
     contentType: 'text/html; charset=utf-8',
     body: `<!doctype html>
-      <html style="--muted: rgb(144, 155, 166); --appearance-search-focus: #00f; --appearance-interaction-outline: rgb(75, 193, 115); --appearance-accent: rgb(75, 193, 115); --dropdown-item-hover-background: rgb(41, 43, 47);">
+      <html style="--muted: rgb(144, 155, 166); --appearance-line: rgb(82, 97, 115); --appearance-search-focus: #00f; --appearance-interaction-outline: rgb(75, 193, 115); --appearance-accent: rgb(75, 193, 115); --dropdown-item-hover-background: rgb(41, 43, 47);">
         <body>
-          <header class="${filter ? 'utility-sidebar' : 'app-bar'}" ${filter ? 'id="utility-modal"' : ''}>
-            <form class="${filter ? 'utility-sidebar-search' : 'toolbar-left'}" onsubmit="event.preventDefault()">
+          <header class="${filter ? 'utility-sidebar' : 'app-bar'}" ${filter ? 'id="utility-modal" style="width:320px"' : ''}>
+            <form class="${filter ? 'utility-sidebar-search' : 'toolbar-left'}" onsubmit="event.preventDefault();document.body.dataset.submitted='true'">
+              ${filter ? '<div class="utility-search-row utility-problem-filter">' : ''}
               <div class="search-input-wrap search-field">
                 <div class="search-field-control ui-input-action">
                   <input
@@ -50,12 +51,13 @@ async function mountSearchInput(page, filter = false) {
                     aria-label="Search music"
                   >
                   <span class="search-field-action">
-                    <button class="search-field-button${filter ? ' utility-problem-filter-button' : ''}" type="${filter ? 'button' : 'submit'}" aria-label="${filter ? 'Filters' : 'Search'}">
-                      ${filter ? 'Filters' : 'Search'}
-                    </button>
+                    <button class="search-field-button" type="button" aria-label="Clear search" data-search-clear>Clear</button>
+                    <button class="search-field-button" type="submit" aria-label="Search" data-search-submit>Search</button>
+                    ${filter ? '<button class="search-field-button utility-problem-filter-button" type="button" aria-label="Filters">Filters</button>' : ''}
                   </span>
                 </div>
               </div>
+              ${filter ? '</div>' : ''}
             </form>
           </header>
         </body>
@@ -69,6 +71,7 @@ async function mountSearchInput(page, filter = false) {
   await page.addStyleTag({ path: path.join(repositoryRoot, 'music_app/static/css/runtime/utilities.css') });
   await page.addStyleTag({ path: searchInputCssPath });
   await page.addStyleTag({ path: appearanceCssPath });
+  await page.addScriptTag({ path: path.join(repositoryRoot, 'music_app/static/js/runtime/search-input.js') });
 }
 
 for (const filter of [false, true]) {
@@ -94,6 +97,12 @@ for (const filter of [false, true]) {
     const idleButtonBackground = await button.evaluate(element => getComputedStyle(element).backgroundColor);
 
     await page.keyboard.press('Tab');
+    await expect(page.getByRole('button', { name: 'Clear search' })).toBeFocused();
+    await page.keyboard.press('Tab');
+    if (filter) {
+      await expect(page.getByRole('button', { name: 'Search', exact: true })).toBeFocused();
+      await page.keyboard.press('Tab');
+    }
     await expect(button).toBeFocused();
     await expect(button).toHaveCSS('outline-style', 'solid');
     await expect(button).toHaveCSS('outline-width', '2px');
@@ -106,6 +115,8 @@ for (const filter of [false, true]) {
       expect(await button.evaluate(element => getComputedStyle(element).backgroundColor)).not.toBe(idleButtonBackground);
     }
     await expect(control).toHaveCSS('outline-style', 'none');
+    await page.keyboard.press('Shift+Tab');
+    if (filter) await page.keyboard.press('Shift+Tab');
     await page.keyboard.press('Shift+Tab');
     await expect(input).toBeFocused();
     await expect(control).toHaveCSS('outline-style', 'solid');
@@ -150,17 +161,132 @@ for (const filter of [false, true]) {
     });
   }
 
-  test(`${actionName}: native clear keeps input focus and its field cue`, async ({ page }) => {
+  test(`${actionName}: explicit clear is leftmost, empties the field, and restores input focus`, async ({ page }) => {
     await mountSearchInput(page, filter);
     const input = page.getByRole('searchbox');
-    const box = await input.boundingBox();
-    expect(box).not.toBeNull();
-    await input.click({ position: { x: box.width - 13, y: box.height / 2 } });
+    const actions = page.locator('.search-field-action > button');
+    await expect(actions).toHaveCount(filter ? 3 : 2);
+    await expect(actions.first()).toHaveAttribute('data-search-clear', '');
+    await page.getByRole('button', { name: 'Clear search' }).click();
     await expect(input).toHaveValue('');
     await expect(input).toBeFocused();
     await expect(page.locator('.search-field-control')).toHaveCSS('outline-style', 'solid');
+    await expect(page.getByRole('button', { name: 'Clear search' })).toBeHidden();
   });
 }
+
+test('Settings hides Search on desktop, keeps Enter submission, and shows Search on mobile', async ({ page }) => {
+  await page.setViewportSize({ width: 900, height: 700 });
+  await mountSearchInput(page, true);
+  const input = page.getByRole('searchbox');
+  const search = page.getByRole('button', { name: 'Search', exact: true });
+  await expect(search).toBeHidden();
+  await expect(page.getByRole('button', { name: 'Filters' })).toBeVisible();
+  await input.press('Enter');
+  await expect(page.locator('body')).toHaveAttribute('data-submitted', 'true');
+  await page.setViewportSize({ width: 720, height: 700 });
+  await expect(search).toBeVisible();
+});
+
+test('Settings filter dropdown right edge joins its anchor button', async ({ page }) => {
+  await mountSearchInput(page, true);
+  // Match the non-overlay scrollbar used by the desktop browser.
+  await page.addStyleTag({ content: '.utility-problem-filter-menu { scrollbar-gutter: stable; } .utility-problem-filter-menu::-webkit-scrollbar { width: 11px; height: 11px; }' });
+  await page.locator('html').evaluate((root) => {
+    root.dataset.appearanceMode = 'light';
+    root.dataset.appearancePalette = 'fixture';
+    root.style.setProperty('--appearance-panel-background', 'rgb(255, 247, 229)');
+    root.style.setProperty('--appearance-card', 'rgb(255, 247, 229)');
+  });
+  await page.addStyleTag({ path: path.join(repositoryRoot, 'music_app/static/css/runtime/trigger-anchor.css') });
+  await page.addScriptTag({ path: path.join(repositoryRoot, 'music_app/static/js/runtime/trigger-anchor.js') });
+  await page.locator('.utility-search-row').evaluate((row) => {
+    const menu = document.createElement('div');
+    menu.className = 'utility-problem-filter-menu';
+    for (let index = 0; index < 20; index += 1) {
+      const option = document.createElement('button');
+      option.className = 'utility-problem-filter-option';
+      option.textContent = `Filter option ${index + 1}`;
+      menu.append(option);
+    }
+    row.append(menu);
+    syncTriggerAnchor(menu, row.querySelector('.utility-problem-filter-button'));
+  });
+  await page.locator('.utility-sidebar').evaluate(element => {
+    element.style.transform = 'translateY(0.296875px)';
+  });
+  const geometry = await page.evaluate(() => {
+    const button = document.querySelector('.utility-problem-filter-button').getBoundingClientRect();
+    const field = document.querySelector('.search-field').getBoundingClientRect();
+    const menu = document.querySelector('.utility-problem-filter-menu').getBoundingClientRect();
+    const sidebar = document.querySelector('.utility-sidebar').getBoundingClientRect();
+    return {
+      buttonRight: button.right,
+      fieldLeft: field.left,
+      menuLeft: menu.left,
+      menuRight: menu.right,
+      sidebarRight: sidebar.right,
+    };
+  });
+  expect(geometry.menuLeft).toBeCloseTo(geometry.fieldLeft - 4, 0);
+  expect(geometry.menuRight).toBeCloseTo(geometry.buttonRight, 0);
+  await expect(page.locator('.utility-problem-filter-menu')).toHaveAttribute('data-trigger-anchor-side', 'right');
+  await expect(page.locator('.search-field-control')).toHaveCSS('border-bottom-right-radius', '0px');
+  const edgeColors = await page.evaluate(() => {
+    const button = document.querySelector('.utility-problem-filter-button');
+    const menu = document.querySelector('.utility-problem-filter-menu');
+    return {
+      connectorLeftColor: getComputedStyle(button, '::after').borderLeftColor,
+      connectorRightColor: getComputedStyle(button, '::after').borderRightColor,
+      connectorLeft: getComputedStyle(button, '::after').left,
+      connectorRight: getComputedStyle(button, '::after').right,
+      edgeOverlay: getComputedStyle(menu, '::before').display,
+      topEdgeOverlay: getComputedStyle(menu, '::after').display,
+      buttonSurface: getComputedStyle(button).getPropertyValue('--trigger-anchor-background').trim(),
+      buttonBottomBorder: getComputedStyle(button).borderBottomWidth,
+      menuSurface: getComputedStyle(menu).backgroundColor,
+      menu: getComputedStyle(menu).borderRightColor,
+    };
+  });
+  expect(edgeColors.connectorRight).toBe(edgeColors.connectorLeft);
+  expect(edgeColors.connectorRightColor).toBe(edgeColors.connectorLeftColor);
+  expect(edgeColors.edgeOverlay).toBe('none');
+  expect(edgeColors.topEdgeOverlay).toBe('none');
+  expect(edgeColors.buttonSurface).toBe(edgeColors.menuSurface);
+  expect(edgeColors.buttonBottomBorder).toBe('0px');
+  expect(await page.locator('.utility-problem-filter-menu').evaluate(menu => menu.scrollWidth <= menu.clientWidth)).toBe(true);
+  const screenshot = await page.screenshot();
+  const seam = await page.evaluate(async base64 => {
+    const image = new Image();
+    image.src = `data:image/png;base64,${base64}`;
+    await image.decode();
+    const canvas = document.createElement('canvas');
+    canvas.width = image.width;
+    canvas.height = image.height;
+    const context = canvas.getContext('2d');
+    context.drawImage(image, 0, 0);
+    const button = document.querySelector('.utility-problem-filter-button').getBoundingClientRect();
+    const menu = document.querySelector('.utility-problem-filter-menu').getBoundingClientRect();
+    const pixel = (y, x = button.left + 6) => [...context.getImageData(Math.floor(x), y, 1, 1).data];
+    return {
+      panel: pixel(Math.ceil(menu.top + 6)),
+      join: Array.from({ length: Math.ceil(menu.top + 3) - Math.floor(button.bottom - 2) },
+        (_, index) => pixel(Math.floor(button.bottom - 2) + index)),
+      acrossJoin: Array.from({ length: Math.floor(button.width) - 8 },
+        (_, index) => pixel(Math.ceil(menu.top), button.left + 4 + index)),
+    };
+  }, screenshot.toString('base64'));
+  for (const pixel of seam.join) expect(pixel).toEqual(seam.panel);
+  for (const pixel of seam.acrossJoin) expect(pixel).toEqual(seam.panel);
+  const scrollEdge = await page.locator('.utility-problem-filter-menu').evaluate(menu => {
+    const before = getComputedStyle(menu).backgroundImage;
+    menu.scrollTop = 100;
+    return { before, after: getComputedStyle(menu).backgroundImage, scrollTop: menu.scrollTop };
+  });
+  expect(scrollEdge.scrollTop).toBe(100);
+  expect(scrollEdge.after).toBe(scrollEdge.before);
+  expect(scrollEdge.after).toContain('210px');
+});
 
 for (const [name, controlClass, stylesheet, shadow] of [
   ['calendar', 'date-range-picker__control', 'date-range-picker.css', false],

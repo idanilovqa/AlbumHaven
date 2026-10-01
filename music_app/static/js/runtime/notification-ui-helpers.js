@@ -236,11 +236,13 @@ function syncLibraryWatcherWarning(data = {}) {
   registerFloatingNotification(libraryWatcherWarning, { origin: 'bottom-right' });
 }
 
-function buildFloatingNotificationAlertHtml(message, variant, actionsHtml = '', messageId = '') {
+function buildFloatingNotificationAlertHtml(message, variant, actionsHtml = '', messageId = '', compact = false) {
   const severity = normalizeAlertSeverity(variant);
   return buildOnPageAlertHtml({
-    severity, title: severity === 'error' ? 'Error' : severity === 'warning' ? 'Warning' : 'Update',
+    severity,
+    title: compact ? '' : severity === 'error' ? 'Error' : severity === 'warning' ? 'Warning' : 'Update',
     message, actionsHtml, messageId, role: severity === 'info' ? 'status' : 'alert',
+    className: compact ? 'on-page-alert--compact' : '',
   });
 }
 
@@ -259,7 +261,7 @@ function showToast(message, variant = 'success', duration = 3600, options = {}) 
     isNotificationErrorVariant(variant) ? 'is-error' : '',
     options.placement === 'top-center' ? 'is-top-center' : '',
   ].filter(Boolean).join(' ');
-  toast.innerHTML = buildFloatingNotificationAlertHtml(message, variant);
+  toast.innerHTML = buildFloatingNotificationAlertHtml(message, variant, '', '', true);
   layer.appendChild(toast);
   if (errorKey) activeErrorToasts.set(errorKey, toast);
   registerFloatingNotification(toast, { origin: options.placement === 'top-center' ? 'top-center' : 'top-right', onPlaced() {
@@ -278,6 +280,9 @@ function showToast(message, variant = 'success', duration = 3600, options = {}) 
 function showRepairAlert(message, variant = 'success', duration = 2000, options = {}) {
   const alert = document.getElementById('repair-alert');
   if (!alert) return;
+  const capabilities = typeof window !== 'undefined' ? window.AlbumHavenCapabilities : null;
+  const showLogHistoryLink = options.logHistoryLink === true
+    && (!capabilities || capabilities.allows('library.logs.read'));
   const actionsHtml = ButtonComponent.renderButton({
     label: 'View details', attributes: { id: 'repair-alert-log-history', 'data-open-log-history-alert': '1', hidden: true },
   }) + ButtonComponent.renderButton({
@@ -302,17 +307,17 @@ function showRepairAlert(message, variant = 'success', duration = 2000, options 
     messageEl.textContent = message;
   }
   if (logHistoryLink) {
-    logHistoryLink.hidden = options.logHistoryLink !== true;
-    logHistoryLink.dataset.logHistoryEntryId = options.logHistoryLink === true
+    logHistoryLink.hidden = !showLogHistoryLink;
+    logHistoryLink.dataset.logHistoryEntryId = showLogHistoryLink
       ? String(options.logHistoryEntryId || '')
       : '';
   }
-  alert.classList.toggle('has-log-history-link', options.logHistoryLink === true);
+  alert.classList.toggle('has-log-history-link', showLogHistoryLink);
   alert.classList.toggle('is-error', isNotificationErrorVariant(variant));
   alert.hidden = false;
   state.repairAlertPresentationVersion = Number(state.repairAlertPresentationVersion || 0) + 1;
   const presentationVersion = state.repairAlertPresentationVersion;
-  registerFloatingNotification(alert, { origin: options.logHistoryLink === true ? 'top-center' : 'bottom-right', abovePlayer: options.logHistoryLink !== true, onPlaced() {
+  registerFloatingNotification(alert, { origin: showLogHistoryLink ? 'top-center' : 'bottom-right', abovePlayer: !showLogHistoryLink, onPlaced() {
     scheduleBrowserAnimationFrame(() => {
       if (state.repairAlertPresentationVersion !== presentationVersion) return;
       alert.classList.add('is-visible');

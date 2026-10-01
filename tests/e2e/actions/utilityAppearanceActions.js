@@ -70,6 +70,34 @@ export class UtilityAppearanceActions {
     await expect(this.utilityAppearanceTab.documentRoot).toHaveAttribute('data-compact-player-style', normalized);
   }
 
+  async expectWebDesktopOnlyDeviceControls() {
+    const appearance = this.utilityAppearanceTab;
+    await expect(appearance.deviceButton('Web / Desktop')).toHaveAttribute('aria-pressed', 'true');
+    for (const name of ['Mobile', 'TV']) {
+      await expect(appearance.deviceButton(name)).toBeVisible();
+      await expect(appearance.deviceButton(name)).toBeDisabled();
+    }
+    await expect(appearance.deviceModeControls).toHaveCount(0);
+  }
+
+  async saveDockedCompactPlayerBehavior(behavior) {
+    const normalized = behavior === 'stay_docked' ? 'stay_docked' : 'follow_sidebar';
+    await this.saveCompactPlayerStyle('docked');
+    const button = this.utilityAppearanceTab.dockedCompactPlayerBehaviorButton(normalized);
+    await expect(button).toBeVisible({ timeout: 60000 });
+    const alreadySaved = await this.utilityAppearanceTab.documentRoot
+      .getAttribute('data-docked-compact-player-behavior') === normalized;
+    if (alreadySaved) {
+      await expect(button).toHaveAttribute('aria-pressed', 'true');
+      return;
+    }
+    await button.click();
+    await expect(button).toHaveAttribute('aria-pressed', 'true');
+    await this.save();
+    await expect(this.utilityAppearanceTab.documentRoot)
+      .toHaveAttribute('data-docked-compact-player-behavior', normalized);
+  }
+
   async openSection(key) {
     const normalized = ['backgrounds', 'seekbar', 'selection-accent', 'alerts', 'album-page'].includes(key)
       ? key

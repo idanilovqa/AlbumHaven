@@ -50,3 +50,27 @@ test('fullscreen cover uses an accessible loading status without exposing a pend
   assert.match(stylesheet, /@media\s*\(prefers-reduced-motion:\s*reduce\)[\s\S]*\.image-lightbox-loading-spinner\s*\{[\s\S]*animation:\s*none\s*;/);
   assert.match(stylesheet, /\.image-lightbox-image\[hidden\]\s*\{\s*display:\s*none\s*;/);
 });
+
+test('fullscreen cover navigation uses centered SVG chevrons instead of baseline glyphs', () => {
+  const navRule = readRule('.image-lightbox-nav');
+  const iconRule = readRule('.image-lightbox-nav svg');
+
+  assert.match(overlayShell, /id="image-lightbox-prev"[^>]*>\s*<svg[^>]*viewBox="0 0 24 24"[^>]*aria-hidden="true"[^>]*>\s*<path[^>]*d="M15 18l-6-6 6-6"/);
+  assert.match(overlayShell, /id="image-lightbox-next"[^>]*>\s*<svg[^>]*viewBox="0 0 24 24"[^>]*aria-hidden="true"[^>]*>\s*<path[^>]*d="M9 6l6 6-6 6"/);
+  assert.doesNotMatch(overlayShell, /id="image-lightbox-(?:prev|next)"[^>]*>[‹›]/);
+  assert.match(navRule, /align-items:\s*center\s*;/);
+  assert.match(navRule, /justify-content:\s*center\s*;/);
+  assert.match(iconRule, /display:\s*block\s*;/);
+  assert.match(iconRule, /width:\s*24px\s*;/);
+  assert.match(iconRule, /height:\s*24px\s*;/);
+});
+
+test('fullscreen controls keep light ink on the dark overlay in every theme', () => {
+  const overlayRule = readRule('.image-lightbox');
+  const closeRule = readRule('.image-lightbox-close');
+  const navRule = readRule('.image-lightbox-nav');
+
+  assert.match(overlayRule, /--lightbox-control-ink:\s*#f8fafc\s*;/);
+  assert.match(closeRule, /color:\s*var\(--lightbox-control-ink\)\s*;/);
+  assert.match(navRule, /color:\s*var\(--lightbox-control-ink\)\s*;/);
+});

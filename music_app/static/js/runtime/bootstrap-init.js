@@ -10,7 +10,8 @@ if (typeof initCompactPlayer === 'function') initCompactPlayer();
 if (typeof initPlaybackOwnershipCoordinator === 'function') {
   initPlaybackOwnershipCoordinator();
 }
-if (typeof prepareStreamingPlaybackEngine === 'function') {
+if (typeof prepareStreamingPlaybackEngine === 'function'
+    && (!window.AlbumHavenCapabilities || window.AlbumHavenCapabilities.allows('library.media.read'))) {
   void prepareStreamingPlaybackEngine().catch((error) => {
     console.error('[AlbumHaven][Playback] Failed to prepare streaming playback.', error);
   });

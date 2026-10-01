@@ -67,9 +67,16 @@ class FakeClassList {
     this.dispatchEvent('click', event);
   }
 
-    closest() {
-      return null;
+    closest(selector) {
+      if (selector.includes('[hidden]')) return this.hidden ? this : null;
+      return this;
     }
+
+    getClientRects() {
+      return this.hidden ? [] : [{}];
+    }
+
+    compareDocumentPosition() { return 4; }
 
     getAttribute(name) {
       if (name === 'src') return this.src;
@@ -178,6 +185,12 @@ function loadHelper(options = {}) {
     Array,
     Map,
     HTMLElement: FakeHtmlElement,
+    getComputedStyle(element) {
+      const zIndex = element.id === 'image-lightbox' ? 4600
+        : element.id === 'utility-modal' ? 112
+          : element.classList.contains('is-above-settings') ? 114 : 100;
+      return { zIndex: String(zIndex), position: 'fixed', opacity: '1', visibility: 'visible' };
+    },
     document: {
       body: {
         classList: new FakeClassList(),
@@ -186,6 +199,7 @@ function loadHelper(options = {}) {
         return elementsById[id] || null;
       },
       querySelectorAll(selector) {
+        if (selector.includes('.track-modal')) return [trackModal, utilityModal, lightboxOverlay];
         if (selector === '[data-open-tracklist="1"]') {
           return [openButton];
         }

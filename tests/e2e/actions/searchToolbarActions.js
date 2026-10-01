@@ -221,9 +221,12 @@ export class SearchToolbarActions {
 
   async dismissRecentSearchesWithFocusLoss() {
     await this.searchToolbar.input.press('Tab');
+    await expect(this.searchToolbar.clearButton).toBeFocused();
+    await this.searchToolbar.clearButton.press('Tab');
     await expect(this.searchToolbar.applyButton).toBeFocused();
     await this.searchToolbar.applyButton.press('Tab');
     await expect(this.searchToolbar.input).not.toBeFocused();
+    await expect(this.searchToolbar.clearButton).not.toBeFocused();
     await expect(this.searchToolbar.applyButton).not.toBeFocused();
     await this.expectRecentSearchesDismissed();
   }

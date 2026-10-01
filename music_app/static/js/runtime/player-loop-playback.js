@@ -55,6 +55,13 @@ function updateLoopInputsFromState() {
   }
 }
 
+function renderGlobalPlayerPlayGlyph(button, paused) {
+  const icon = paused ? 'play' : 'pause';
+  if (button.getAttribute('data-player-glyph') === icon) return;
+  button.innerHTML = window.ButtonComponent.renderIconSvg(icon, { className: 'player-transport-icon' });
+  button.setAttribute('data-player-glyph', icon);
+}
+
 function updatePlayerUi() {
   const els = getPlayerElements();
   const playback = getPlayerPlaybackSnapshot();
@@ -92,7 +99,7 @@ function updatePlayerUi() {
     busy: state.player.saveBusy || lockedByAnotherTab,
   });
   if (els.play) {
-    els.play.textContent = playback.paused ? '\u25B6' : '\u23F8';
+    renderGlobalPlayerPlayGlyph(els.play, playback.paused);
     els.play.setAttribute('aria-label', lockedByAnotherTab ? 'Playback locked in another tab' : (playback.paused ? 'Play' : 'Pause'));
     els.play.disabled = lockedByAnotherTab || !hasTrack;
   }
@@ -142,6 +149,10 @@ function setCurrentPlayerTrack(track, options = {}) {
       currentTime: Number(previousPlaybackSnapshot?.currentTime) || undefined,
       duration: Number(previousPlaybackSnapshot?.duration) || undefined,
     });
+  }
+  if (track && !String(track.coverPath || '').trim() && typeof resolveAlbumForPlayerTrack === 'function') {
+    const resolvedCoverPath = String(resolveAlbumForPlayerTrack(track)?.cover_path || '').trim();
+    if (resolvedCoverPath) track = { ...track, coverPath: resolvedCoverPath };
   }
   state.player.current = track;
   if (typeof probeCachedWaveformPeaks === 'function') {

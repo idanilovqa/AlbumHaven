@@ -101,6 +101,9 @@ function loadHelpers(overrides = {}) {
       }
     },
     pollStatus() {},
+    claimLibraryStatusAction: () => ({}),
+    settleLibraryStatusAction: () => true,
+    scheduleStatusPoll(delay) { context.scheduleBrowserTimeout(context.pollStatus, delay); },
     async fetch(url, options = {}) {
       calls.fetches.push([url, options]);
       if (url === '/library-settings' && (!options.method || options.method === 'GET')) {

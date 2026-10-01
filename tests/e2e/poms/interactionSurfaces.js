@@ -140,10 +140,34 @@ export class InteractionSurfaces {
     this.recentSearches = page.locator('#recent-search-popover');
     this.loopPlay = page.locator('[data-loop-play]:visible').first();
     this.tagEditor = page.locator('#tag-editor-modal');
-    this.tagTable = this.tagEditor.locator('.compact-data-table');
+    this.tagTrackList = this.tagEditor.getByRole('list', { name: 'Files to edit', exact: true });
     this.tagFooter = this.tagEditor.locator('.editor-footer');
     this.tagRows = this.tagEditor.locator('[data-tag-editor-track]');
+    this.tagSelectionButtons = this.tagRows.locator('.tag-editor-track-select');
+    this.tagSelectionAccents = this.tagRows.locator('.tag-editor-track-accent');
   }
+
+  async readTagSelectionPaint(index) {
+    // parity-check: allow-read-only-measurement-evaluate -- read active list paint and the independently rendered shared NavigationTree theme reference
+    return this.tagRows.nth(index).evaluate(row => {
+      const style = getComputedStyle(row);
+      const accent = getComputedStyle(row.querySelector('.tag-editor-track-accent'));
+      const tree = document.querySelector('.navigation-tree-item.is-selected');
+      if (!tree) throw new Error('The selected artist must provide the shared selection theme reference');
+      const reference = getComputedStyle(tree);
+      const expectedAccent = reference.boxShadow.match(/(?:rgba?|color)\([^)]+\)/u)?.[0];
+      if (!expectedAccent) throw new Error('The selected artist must render its configured selection accent');
+      return {
+        fill: style.backgroundColor,
+        expectedFill: reference.backgroundColor,
+        accent: accent.backgroundColor,
+        expectedAccent,
+        fillRole: style.getPropertyValue('--tag-editor-selection-fill').trim(),
+        expectedFillRole: style.getPropertyValue('--selection-body-background').trim(),
+      };
+    });
+  }
+
 }
 
 export async function expectPartialCoverRow(page, surfaces) {
@@ -199,15 +223,21 @@ export async function expectSharedOutlineGeometry(surfaces) {
     return { y: rect.top + parseFloat(top.top), dividerY: bar.bottom - 1, height: top.height, fade: top.backgroundImage };
   });
   expect(Math.abs(join.y - join.dividerY)).toBeLessThanOrEqual(1);
+  // This is the horizontal Gallery divider, not the button/gap outline below.
   expect(join.height).toBe('1px');
   expect(join.fade).toContain('linear-gradient');
   // parity-check: allow-read-only-measurement-evaluate -- inspect interpolation and border continuity at the trigger
   const idle = await surfaces.familyTrigger.evaluate(el => {
     const s = getComputedStyle(el);
-    return { image: s.backgroundImage, top: s.borderTopWidth, shadow: s.boxShadow, transition: s.transitionProperty };
+    const outline = getComputedStyle(el, '::after');
+    const interior = getComputedStyle(el, '::before');
+    return { image: s.backgroundImage, top: s.borderTopWidth, shadow: s.boxShadow, transition: s.transitionProperty,
+      joinSideWidths: [parseFloat(interior.left) - parseFloat(outline.left),
+        parseFloat(interior.right) - parseFloat(outline.right)] };
   });
   expect(idle.image).toContain('linear-gradient');
   expect(idle.top).toBe('2px');
+  expect(idle.joinSideWidths).toEqual([2, 2]);
   expect(idle.shadow).toBe('none');
   expect(idle.transition).toContain('--trigger-anchor-cap');
 }

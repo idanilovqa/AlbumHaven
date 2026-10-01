@@ -11,6 +11,8 @@ import {
   expectPostgresLibraryBrowseTelemetry,
   measureActionTime,
   measureProblematicFilesSettingsOpenWithNetworkEvidence,
+  readCompletedResponseDurationMs,
+  measureUtilityTabSwitch,
   summarizeProblematicFilesDiagnostics,
   UTILITY_PROBLEMATIC_FILES_LOCAL_BENCHMARK,
 } from '../helpers/index.js';
@@ -29,22 +31,30 @@ test.describe(`${PROBLEMATIC_CASE_ID} utility-problematic-files responsiveness`,
     page,
     settingsModalAppBarActions,
     stepLogger,
+    utilityTabBarActions,
     utilityProblematicFilesActions,
     utilityProblematicFilesLocalReport,
+    utilityRulesActions,
   }) => {
     requirePostgresRuntimeEnv('the Problematic Files benchmark');
+
+    await galleryActions.goto();
 
     const {
       coldProblematicApiMs,
       problematicResponseBytes,
-    } = await stepLogger.step('Measure the cold Problematic Files API response before app navigation', async () => {
-      const coldRequestStartedAt = performance.now();
-      const coldResponse = await page.goto(PROBLEMATIC_FILES_PATHNAME, {
-        waitUntil: 'commit',
-      });
-      expect(coldResponse, 'Expected the cold Problematic Files navigation to return a response.').toBeTruthy();
+    } = await stepLogger.step('Measure the cold native Problematic Files API response', async () => {
+      const networkEvidence = await measureProblematicFilesSettingsOpenWithNetworkEvidence(
+        page,
+        settingsModalAppBarActions,
+        utilityProblematicFilesActions,
+        { summaryPathname: PROBLEMATIC_FILES_PATHNAME, detailPathname: PROBLEMATIC_FILE_DETAIL_PATHNAME },
+      );
+      const coldResponse = networkEvidence.summaryResponse;
+      expect(coldResponse.request().resourceType()).toBe('fetch');
+      expect(coldResponse.request().method()).toBe('GET');
+      const requestDurationMs = await readCompletedResponseDurationMs(coldResponse);
       const coldResponseBody = await coldResponse.text();
-      const requestDurationMs = performance.now() - coldRequestStartedAt;
       const responseBytes = new TextEncoder().encode(coldResponseBody).byteLength;
 
       expect(
@@ -74,10 +84,11 @@ test.describe(`${PROBLEMATIC_CASE_ID} utility-problematic-files responsiveness`,
 
       await utilityProblematicFilesLocalReport.recordTimingCheckpoint({
         key: 'problematic-files-cold-api',
-        label: 'Cold Problematic Files API response ready before app navigation',
+        label: 'Cold native Problematic Files API response fully received',
         timingMs: requestDurationMs,
         details: {
-          phase: 'cold_problematic_files_api',
+          phase: 'cold_problematic_files_native_fetch',
+          measurement: 'browser-request-start-to-response-end',
           responseBytes,
         },
       });
@@ -92,6 +103,8 @@ test.describe(`${PROBLEMATIC_CASE_ID} utility-problematic-files responsiveness`,
       };
     });
 
+    // Reset frontend state after the cold fetch; the following first open retains
+    // the historical warm-server contract without reusing the loaded UI data.
     await galleryActions.goto();
 
     let problematicFilesPayload = null;
@@ -302,6 +315,65 @@ test.describe(`${PROBLEMATIC_CASE_ID} utility-problematic-files responsiveness`,
       })
     ));
 
+    await stepLogger.step('Warm the Rules tab before cached transition measurements', async () => {
+      await utilityTabBarActions.openTab('rules');
+      await utilityRulesActions.waitForReady({ timeout: 120000 });
+    });
+
+    const problematicCachedEnterMs = await stepLogger.step('Measure cached Rules to Problematic Files transition', async () => {
+      const timingMs = await measureUtilityTabSwitch(
+        'problematic-files',
+        utilityTabBarActions,
+        (options) => utilityProblematicFilesActions.waitForReady(options),
+      );
+      await utilityProblematicFilesLocalReport.recordTimingCheckpoint({
+        key: 'problematic-files-cached-enter',
+        label: 'Cached Rules to Problematic Files ready',
+        timingMs,
+      });
+      return timingMs;
+    });
+
+    const problematicMountedRowCount = await stepLogger.step('Verify the 706-row list is virtualized', async () => {
+      const mountedCount = await utilityProblematicFilesActions.readMountedListItemCount();
+      expect(mountedCount, 'Expected Problematic Files to mount a bounded virtual row window.').toBeLessThanOrEqual(60);
+      expect(mountedCount, 'Expected the virtual row window to contain visible rows.').toBeGreaterThan(0);
+      utilityProblematicFilesLocalReport.recordTextCheckpoint({
+        key: 'problematic-files-mounted-rows',
+        label: 'Problematic Files mounted virtual rows',
+        valueText: `${mountedCount} of 706 rows`,
+      });
+      return mountedCount;
+    });
+
+    const problematicCachedExitMs = await stepLogger.step('Measure cached Problematic Files to Rules transition', async () => {
+      const timingMs = await measureUtilityTabSwitch(
+        'rules',
+        utilityTabBarActions,
+        (options) => utilityRulesActions.waitForReady(options),
+      );
+      await utilityProblematicFilesLocalReport.recordTimingCheckpoint({
+        key: 'problematic-files-cached-exit',
+        label: 'Cached Problematic Files to Rules ready',
+        timingMs,
+      });
+      return timingMs;
+    });
+
+    const problematicCachedReenterMs = await stepLogger.step('Repeat cached Problematic Files entry', async () => {
+      const timingMs = await measureUtilityTabSwitch(
+        'problematic-files',
+        utilityTabBarActions,
+        (options) => utilityProblematicFilesActions.waitForReady(options),
+      );
+      await utilityProblematicFilesLocalReport.recordTimingCheckpoint({
+        key: 'problematic-files-cached-reenter',
+        label: 'Repeated cached Problematic Files ready',
+        timingMs,
+      });
+      return timingMs;
+    });
+
     await stepLogger.step('Close Settings cleanly after the Problematic Files pass', async () => {
       await settingsModalAppBarActions.closeSettings();
     });
@@ -313,6 +385,10 @@ test.describe(`${PROBLEMATIC_CASE_ID} utility-problematic-files responsiveness`,
       problematicReadyPerformanceStatus: problematicReadyOutcome.status,
       problematicReadyTargetMet: problematicReadyOutcome.targetMet,
       problematicReadyGraceUsed: problematicReadyOutcome.graceUsed,
+      problematicCachedEnterMs,
+      problematicCachedExitMs,
+      problematicCachedReenterMs,
+      problematicMountedRowCount,
       problematicIdleMemory,
       searchReadyMs,
       searchToken,

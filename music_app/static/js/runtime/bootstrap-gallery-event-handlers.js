@@ -867,6 +867,9 @@ function updateGallerySearchDraftQuery(nextQuery) {
   if (state.ui && typeof state.ui === 'object') {
     state.ui.searchDraftQuery = normalizedQuery;
   }
+  if (typeof syncGalleryBarSearchVisibility === 'function') {
+    syncGalleryBarSearchVisibility();
+  }
   return normalizedQuery;
 }
 

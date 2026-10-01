@@ -346,6 +346,9 @@ function librarySaveHarness() {
   h.c.showToast = message => toasts.push(message);
   h.c.scheduleBrowserTimeout = callback => polls.push(callback);
   h.c.pollStatus = () => {};
+  h.c.claimLibraryStatusAction = () => ({});
+  h.c.settleLibraryStatusAction = () => true;
+  h.c.scheduleStatusPoll = delay => h.c.scheduleBrowserTimeout(h.c.pollStatus, delay);
   h.c.updateStatusIndicator = status => statuses.push(status);
   h.c.renderLibraryLoader = () => {};
   h.c.console = { ...console, error() {} };

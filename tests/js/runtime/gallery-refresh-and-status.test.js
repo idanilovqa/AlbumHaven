@@ -8,6 +8,57 @@ const helperPath = path.join(__dirname, '..', '..', '..', 'music_app', 'static',
 const helperSource = fs.readFileSync(helperPath, 'utf8');
 const tagMutationSource = fs.readFileSync(path.join(path.dirname(helperPath), 'utility-list-builders.js'), 'utf8');
 
+test('initial startup readiness waits for its successful full render', async () => {
+  const { context, pendingRequests } = createContext();
+  const startup = context.fetchAndRender('/view-data', false, { startupRefresh: true });
+  assert.equal(context.startupMetrics.completed, 0);
+  pendingRequests[0].resolveWith({ artist_groups: [], initial_view_partial: false });
+  assert.equal(await startup, true);
+  assert.equal(context.startupMetrics.completed, 1);
+});
+
+test('current canonical navigation completes startup readiness and a late superseded response cannot repeat it', async () => {
+  const { context, calls, pendingRequests } = createContext();
+  const startup = context.fetchAndRender('/view-data?payload_tier=full', false, { startupRefresh: true });
+  // Model a transport that has already received the response when cancellation arrives.
+  context.state.ui.activeViewRequestController.abort = () => {};
+  const navigation = context.fetchAndRender('/view-data?artist=Current', true);
+  assert.equal(context.startupMetrics.completed, 0);
+  pendingRequests[1].resolveWith({ selected_artist: 'Current', artist_groups: [], initial_view_partial: false });
+  assert.equal(await navigation, true);
+  assert.equal(context.startupMetrics.completed, 1);
+  assert.equal(calls.renderView.length, 1);
+  pendingRequests[0].resolveWith({ selected_artist: 'Stale', artist_groups: [], initial_view_partial: false });
+  assert.equal(await startup, false);
+  assert.equal(context.startupMetrics.completed, 1);
+  assert.equal(context.state.view.selected_artist, 'Current');
+});
+
+test('a failed navigation after cancelling startup does not declare startup ready', async () => {
+  const { context, pendingRequests } = createContext();
+  const startup = context.fetchAndRender('/view-data?payload_tier=full', false, { startupRefresh: true });
+  const navigation = context.fetchAndRender('/view-data?artist=Failure', true);
+  assert.equal(await startup, false);
+  pendingRequests[1].rejectWith(new Error('navigation failed'));
+  await assert.rejects(navigation, /navigation failed/);
+  assert.equal(context.startupMetrics.completed, 0);
+});
+
+for (const [label, payload] of [
+  ['partial view', { artist_groups: [], initial_view_partial: true }],
+  ['sidebar tier', { artist_groups: [], payload_tier: 'sidebar' }],
+  ['missing gallery', { selected_artist: 'Current' }],
+  ['HTTP failure', { artist_groups: [], ok: false, status: 500 }],
+]) {
+  test(`${label} navigation cannot complete startup readiness`, async () => {
+    const { context, pendingRequests } = createContext();
+    const navigation = context.fetchAndRender('/view-data?artist=Current', true);
+    pendingRequests[0].resolveWith(payload);
+    await navigation;
+    assert.equal(context.startupMetrics.completed, 0);
+  });
+}
+
 test('a deferred gallery refresh cannot overwrite a newer optimistic tag mutation', async () => {
   const { context, calls, pendingRequests } = createContext();
   vm.runInContext(tagMutationSource, context);
@@ -5796,4 +5847,62 @@ test('a finalization cancellation reconciles the authoritative gallery without s
   assert.equal(context.state.wasScanFinalizing, false);
   assert.equal(context.state.view.artist_groups[0].albums[0].key, 'authoritative');
   assert.deepEqual(calls.showToast, []);
+});
+
+test('preserving mounted cards refreshes gallery chrome for the committed view', () => {
+  for (const options of [
+    { preserveMountedGallery: true },
+    { preserveMountedGalleryChildren: true, retainMountedSelectedViewState: { selected_artist: 'Scan Artist 001' } },
+  ]) {
+    const { context, calls, runtimeRenderView } = createContext();
+    const committedContexts = [];
+    context.state.view.query = 'Scan Artist 00';
+    context.state.view.selected_artist = 'Scan Artist 001';
+    context.updateGalleryMainChrome = () => {
+      committedContexts.push({ query: context.state.view.query, artist: context.state.view.selected_artist });
+    };
+    runtimeRenderView(options);
+    assert.equal(calls.renderArtistGroups, 0, 'the preserved cards must not be rebuilt');
+    assert.deepEqual(committedContexts, [{ query: 'Scan Artist 00', artist: 'Scan Artist 001' }]);
+  }
+});
+
+test('a normal gallery render keeps chrome ownership with the gallery renderer', () => {
+  const { context, calls, runtimeRenderView } = createContext();
+  let chromeUpdates = 0;
+  context.updateGalleryMainChrome = () => { chromeUpdates += 1; };
+  context.renderArtistGroups = () => {
+    calls.renderArtistGroups += 1;
+    context.updateGalleryMainChrome();
+  };
+  runtimeRenderView();
+  assert.equal(calls.renderArtistGroups, 1);
+  assert.equal(chromeUpdates, 1, 'normal rendering must not refresh chrome twice');
+});
+
+test('search from Scan Page refreshes committed chrome while retaining an equivalent gallery projection', async () => {
+  const { context, calls, pendingRequests, runtimeRenderView, artistGroups } = createContext();
+  const groups = [{ artist: 'Scan Artist 001', albums: [{ key: 'scan::001', name: 'Album 001' }] }];
+  const retainedCard = { albumKey: 'scan::001' };
+  artistGroups.querySelector = () => retainedCard;
+  const galleryMarkup = artistGroups.innerHTML;
+  context.state.view = { ...context.state.view, selected_artist: 'Scan Artist 001', artist_groups: groups };
+  context.openScanPage();
+  context.abandonScanPageForNavigation({ clearSelection: true });
+  context.state.ui.searchDraftQuery = 'Scan Artist 00';
+  const chrome = { hidden: true, artist: '' };
+  context.updateGalleryMainChrome = () => {
+    chrome.hidden = context.state.ui.searchDraftQuery !== context.state.view.query;
+    chrome.artist = context.state.view.selected_artist;
+  };
+  context.renderView = runtimeRenderView;
+  const result = context.fetchAndRender('/view-data?q=Scan+Artist+00');
+  pendingRequests[0].resolveWith({
+    query: 'Scan Artist 00', selected_artist: 'Scan Artist 001', artist_groups: groups,
+  });
+  assert.equal(await result, true);
+  assert.deepEqual(chrome, { hidden: false, artist: 'Scan Artist 001' });
+  assert.equal(calls.renderArtistGroups, 0);
+  assert.equal(artistGroups.innerHTML, galleryMarkup);
+  assert.equal(artistGroups.querySelector('.album-card'), retainedCard);
 });

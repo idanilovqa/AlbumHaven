@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from music_app.services.postgres_connections import pooled_connection as _connect
+
 from collections.abc import Callable, Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -14,6 +16,7 @@ from music_app.services.admin_member_mutation_postgres import (
     RecentAuthenticationRequired,
     lock_current_actor_session,
 )
+from music_app.services.admin_authority import ADMIN_LIBRARY_AUTHORITY_SQL
 from music_app.services.auth_audit_postgres import (
     InvitationAuditReason,
     SecurityAuditCategory,
@@ -30,16 +33,9 @@ from music_app.services.auth_invitation_models import (
 from music_app.services.auth_tokens import issue_opaque_token
 from music_app.services.mail_config import build_public_url
 
-try:  # pragma: no cover - exercised with the optional runtime driver.
-    import psycopg
-    from psycopg.rows import dict_row
-except ImportError:  # pragma: no cover
-    psycopg = None
-    dict_row = None
 
 
 _REQUEST_REFERENCE = re.compile(r"[A-Za-z0-9._:-]{1,128}")
-_RECENT_AUTH_WINDOW = timedelta(minutes=10)
 _FUTURE_SKEW = timedelta(minutes=5)
 
 
@@ -167,7 +163,7 @@ class PostgresAdminAccountInvitationService:
             raise ValueError("Invitation delivery choice is invalid.")
         now = _aware_utc(self._clock())
         authenticated = _aware_utc(actor_authenticated_at)
-        if authenticated > now + _FUTURE_SKEW or now - authenticated > _RECENT_AUTH_WINDOW:
+        if authenticated > now + _FUTURE_SKEW:
             raise RecentAuthenticationRequired("Recent authentication is required.")
         actor_id = _positive_id(actor_account_id)
         current_library_id = _positive_id(library_id)
@@ -228,7 +224,7 @@ def _rotate_invitation_in_transaction(
         (actor_account_id, target_account_id),
     ).fetchall()
     rows = connection.execute(
-        """
+        f"""
         with locked_accounts as (
           select id, account_kind, username_display, contact_email,
                  is_active, disabled_at
@@ -243,10 +239,7 @@ def _rotate_invitation_in_transaction(
         )
         select target.id, target.username_display, target.contact_email
         from locked_accounts actor
-        join app.bootstrap_owners authority
-          on authority.account_id = actor.id
-         and authority.owner_key = 'local-bootstrap-owner'
-        join locked_library on locked_library.owner_account_id = actor.id
+        join locked_library on true
         join locked_accounts target on target.id = %s
         join library.library_memberships membership
           on membership.account_id = target.id
@@ -258,6 +251,7 @@ def _rotate_invitation_in_transaction(
         where actor.id = %s
           and actor.is_active is true
           and actor.disabled_at is null
+          and {ADMIN_LIBRARY_AUTHORITY_SQL}
           and target.account_kind = 'managed_user'
           and target.is_active is true
           and target.disabled_at is null
@@ -404,9 +398,3 @@ def _single_id(rows: object, field: str) -> int:
         return _positive_id(value)
     except ValueError:
         raise RuntimeError(f"Managed account {field} is invalid.") from None
-
-
-def _connect(database_url: str):
-    if psycopg is None:
-        raise RuntimeError("psycopg is required for managed account invitations.")
-    return psycopg.connect(database_url, row_factory=dict_row)

@@ -42,6 +42,7 @@ def _probe_result(output: str) -> dict[str, object]:
 def _probe_environment(*, generated_root: Path) -> dict[str, str]:
     environment = os.environ.copy()
     environment[PYTEST_ROOT_ENV] = str(generated_root.resolve())
+    environment["ALBUM_HAVEN_PYTEST_CLEANUP_DIAGNOSTICS"] = "1"
     return environment
 
 
@@ -141,10 +142,16 @@ def test_two_concurrent_default_pytest_processes_use_isolated_roots_and_cleanup_
         for _ in range(2)
     ]
     results = []
+    cleanup_diagnostics = []
     for process in processes:
         stdout, stderr = process.communicate(timeout=60)
         assert process.returncode == 0, stdout + stderr
         results.append(_probe_result(stdout))
+        cleanup_diagnostics.append([
+            json.loads(line.removeprefix("PYTEST_HARNESS_CLEANUP="))
+            for line in stderr.splitlines()
+            if line.startswith("PYTEST_HARNESS_CLEANUP=")
+        ])
 
     roots = [Path(str(result["basetemp"])) for result in results]
     appdata_roots = [Path(str(result["appdata"])) for result in results]
@@ -159,7 +166,11 @@ def test_two_concurrent_default_pytest_processes_use_isolated_roots_and_cleanup_
         set(result["temp_environment"].values()) == {result["session_temp"]}
         for result in results
     )
-    assert all(not root.exists() for root in roots)
+    assert all(not root.exists() for root in roots), [
+        {"survived": root.exists(), "marker_present": (root / ".album-haven-pytest-owner.json").exists(),
+         "cleanup": diagnostics}
+        for root, diagnostics in zip(roots, cleanup_diagnostics)
+    ]
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Windows process liveness regression")
@@ -463,3 +474,19 @@ def test_explicit_root_does_not_register_a_final_generated_cleanup(tmp_path, mon
         callback()
     assert callbacks == []
     assert root.is_dir()
+
+
+def test_cleanup_diagnostics_exclude_paths_and_error_messages(monkeypatch, capsys):
+    error = PermissionError(13, "private error content", "/private/owned-root/file.log")
+    error.winerror = 32
+    monkeypatch.delenv("ALBUM_HAVEN_PYTEST_CLEANUP_DIAGNOSTICS", raising=False)
+    pytest_harness._report_pytest_cleanup("remove-failed", error=error)
+    assert capsys.readouterr().err == ""
+    monkeypatch.setenv("ALBUM_HAVEN_PYTEST_CLEANUP_DIAGNOSTICS", "1")
+    pytest_harness._report_pytest_cleanup("remove-failed", error=error)
+    output = capsys.readouterr().err
+    assert "private" not in output
+    assert json.loads(output.removeprefix("PYTEST_HARNESS_CLEANUP=")) == {
+        "stage": "remove-failed", "pid": os.getpid(), "error_type": "PermissionError",
+        "errno": 13, "winerror": 32,
+    }

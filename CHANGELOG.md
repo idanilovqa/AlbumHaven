@@ -1,5 +1,56 @@
 # Changelog
 
+## 0.9.47 - 2026-09-30
+
+This release includes the unreleased 0.9.46 changes below.
+
+- Added user and access administration with separate Viewer, Listener, Musician,
+  Owner, and Admin roles, combined roles, and individual capability grants.
+  Existing grants remain intact on ordinary saves; administrators can choose
+  to replace individual grants with the selected roles.
+- Enforced capability prerequisites and shared UI and server restrictions for
+  playback, editing, covers, loops, repair tools, and administration. Preserved
+  access to owned practice-loop audio and artwork without full-library playback.
+- Restricted TV artwork selection to provider candidates. Mobile and TV block
+  tag editing, deletion, and loop creation; TV also blocks practice and
+  administration.
+- Disabled the unimplemented Move music setting while preserving stored grants.
+- Improved Admin navigation, disabled controls, switch and checkbox feedback,
+  and light-theme alerts. Connected menus now match their originating content
+  surface, including cream content with dark Parchment & Pine chrome.
+- Added real-user browser coverage for role and capability boundaries, denied
+  controls, client restrictions, and assignment persistence against the real
+  application and PostgreSQL. Added isolated demo provisioning for manual tests.
+- Kept Artist Tree selection visible after unfolding and refreshed Artist Family
+  controls without rebuilding retained gallery cards or rewriting unchanged labels.
+- Corrected cover-provider labels and cover-only result counts, and recovered
+  artwork loading after detached gallery consumers were canceled.
+- Kept Problematic Files selection and details stable across virtual scrolling
+  and resize, and restored saved-loop range and hover feedback.
+- Strengthened regression coverage and fixture cleanup for native clipboard paste,
+  notification delivery, folded-tree persistence, and saved appearance preferences.
+- Included the Cover Look Up redesign, Library Status Page, player and gallery
+  improvements, account-scoped device appearance storage, and Problematic Files
+  virtualization recorded under 0.9.46.
+
+## 0.9.46 - 2026-09-23
+
+- Reworked Cover Look Up and album artwork controls with shared components,
+  staged paste/drop/file inputs, source previews, and failure recovery.
+- Added a Library Status Page with scan phases, cancellation, failure reporting,
+  and access to the library during scans.
+- Preserved gallery position and playback while folding the Artist Tree, and
+  refined docked, sidebar, and floating player layouts and appearance controls.
+- Added account-scoped device appearance storage while keeping Mobile and TV
+  editing disabled and preserving their saved compatibility values.
+- Unified modal Escape handling, notification actions, connected menus, and
+  Edit Tags selection and reorder behavior.
+- Virtualized the Problematic Files list while preserving search, filtering,
+  selection, and navigation. Cold-load performance optimization remains Phase 9
+  debt under an owner-approved temporary timing exception.
+- Expanded focused browser and component coverage for these interactions and
+  adopted the published v1.0.25 test fixtures.
+
 ## 0.9.45 - 2026-09-21
 
 - Reworked Settings around shared navigation, search, rules, suggestions,

@@ -410,6 +410,7 @@ async function saveUtilityLibrarySettings() {
     && owner.selectedIntegrationKey === 'library' && !getUtilityModalElements()?.overlay?.hidden;
   const renderCurrent = () => { if (ownsPresentation()) renderUtilityModalContent(); };
   if (librarySettingsState.saveBusy || librarySettingsState.allowedActions?.['library.settings.manage'] !== true) return false;
+  const statusAction = claimLibraryStatusAction(true);
   librarySettingsState.saveBusy = true;
   librarySettingsState.error = '';
   renderCurrent();
@@ -426,18 +427,20 @@ async function saveUtilityLibrarySettings() {
     librarySettingsState.loaded = true;
     owner.loaded = false;
     owner.problematicFiles = [];
-    if (ownsContext()) {
+    const ownsStatus = settleLibraryStatusAction(statusAction);
+    if (ownsContext() && ownsStatus) {
       if (data.status) {
         updateStatusIndicator(data.status);
         state.wasPollingBusy = Boolean(data.status.scan_in_progress || data.status.relations_in_progress);
         state.wasCoverPollingBusy = Boolean(data.status.covers_in_progress);
         renderLibraryLoader(state.status);
       }
-      scheduleBrowserTimeout(pollStatus, 250);
+      scheduleStatusPoll(250);
     }
     if (ownsPresentation()) showToast('Library settings saved. Scan started.', 'success', 3200);
     return true;
   } catch (error) {
+    settleLibraryStatusAction(statusAction);
     console.error('[AlbumHaven][LibrarySettings] Failed to save library settings.', error);
     librarySettingsState.error = error.message || 'Unable to save library settings.';
     if (ownsPresentation()) showToast(librarySettingsState.error, 'error', 3600);

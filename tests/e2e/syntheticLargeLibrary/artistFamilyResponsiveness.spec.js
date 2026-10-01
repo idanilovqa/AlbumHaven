@@ -142,8 +142,8 @@ test.describe(`${CASE_ID} synthetic-large artist family responsiveness`, () => {
       expect(hoverState.after.transitionProperty).toContain('background-color');
       expect(hoverState.after.transitionDuration).not.toBe('0s');
       const combineHoverState = await artistFamilyActions.readCombineHoverState();
-      expect(combineHoverState.after.backgroundColor).not.toBe(combineHoverState.before.backgroundColor);
-      expect(combineHoverState.after.backgroundColor).toBe(hoverState.after.backgroundColor);
+      expect(combineHoverState.after.backgroundColor).toBe(combineHoverState.before.backgroundColor);
+      expect(combineHoverState.after.backgroundColor).toBe('rgba(0, 0, 0, 0)');
       expect(combineHoverState.after.transitionProperty).toContain('background-color');
       expect(combineHoverState.after.transitionDuration).not.toBe('0s');
       await artistFamilyActions.clickChipByName(source);

@@ -157,7 +157,7 @@ SEMANTIC_LOCAL_ALBUM_IDENTITY_ENFORCEMENT_MIGRATION = (
     MIGRATIONS_DIR / "0035_enforce_semantic_local_album_identity.sql"
 )
 LOG_HISTORY_MIGRATION_SHA256 = (
-    "282410847b8d0752777cdb3bda5164d109a16b13f385b620b40ae1ede11b017c"
+    "834bfa7cfc219147652dc4f65dc326a88ab3f045ba65e80b1763cb79329c5215"
 )
 
 
@@ -432,8 +432,7 @@ def test_postgres_migration_filenames_are_zero_padded_sql_and_lexically_ordered(
 
     assert all(re.fullmatch(r"\d{4}_[a-z0-9_]+\.sql", name) for name in migration_names)
     assert migration_numbers == list(range(1, len(migration_numbers) + 1))
-    assert migration_names[-36:] == [
-        "0039_repair_semantic_album_reconciliation_delete_grants.sql",
+    assert migration_names[-40:] == [
         "0040_repair_ignored_repairs_delete_grant.sql",
         "0041_create_local_album_cover_candidate_snapshots.sql",
         "0042_track_distinct_cover_improvement_alerts.sql",
@@ -469,7 +468,22 @@ def test_postgres_migration_filenames_are_zero_padded_sql_and_lexically_ordered(
         "0072_measured_local_listen_sessions.sql",
         "0073_preserve_measured_listen_history.sql",
         "0074_create_saved_loop_waveform_peaks.sql",
+        "0075_appearance_device_sections.sql",
+        "0076_docked_compact_player_behavior.sql",
+        "0077_allow_parchment_pine_appearance_palette.sql",
+        "0078_add_compact_player_motion_and_floating_edge.sql",
+        "0079_docked_compact_player_regular_style.sql",
     ]
+
+
+def test_docked_compact_player_regular_style_migration_is_additive_and_default_off():
+    sql = _normalized_sql(
+        (MIGRATIONS_DIR / "0079_docked_compact_player_regular_style.sql").read_text(
+            encoding="utf-8"
+        )
+    )
+
+    assert "add column docked_compact_player_regular_style boolean not null default false" in sql
 
 
 def test_readonly_account_privilege_migration_is_upgrade_safe_and_identity_private():
@@ -1515,9 +1529,16 @@ def test_drop_log_history_migration_file_exists():
 
 
 def test_original_log_history_migration_remains_unchanged():
-    assert hashlib.sha256(LOG_HISTORY_MIGRATION.read_bytes()).hexdigest() == (
+    assert hashlib.sha256(LOG_HISTORY_MIGRATION.read_bytes().replace(b"\r\n", b"\n")).hexdigest() == (
         LOG_HISTORY_MIGRATION_SHA256
     )
+
+
+def test_log_history_history_guard_accepts_checkout_newlines_but_rejects_content_changes():
+    original = LOG_HISTORY_MIGRATION.read_bytes().replace(b"\r\n", b"\n")
+    for data in (original, original.replace(b"\n", b"\r\n")):
+        assert hashlib.sha256(data.replace(b"\r\n", b"\n")).hexdigest() == LOG_HISTORY_MIGRATION_SHA256
+    assert hashlib.sha256(original + b"-- modified\n").hexdigest() != LOG_HISTORY_MIGRATION_SHA256
 
 
 def test_virtual_release_snapshots_migration_file_exists():

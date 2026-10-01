@@ -1,4 +1,5 @@
 import { expect, test } from '../support/performanceFixtures.js';
+import { withScanPublicationPrivilegeFailure } from '../helpers/postgresPrivilegeHelpers.js';
 
 import {
   buildScanSampleMetrics,
@@ -49,6 +50,82 @@ const ORIGINAL_METADATA_ALBUM_NAME = 'Album 001';
 const STRICT_ONE_SECOND_BUDGET = Object.freeze(performanceTimingBudget('scan-interaction.responseMs'));
 
 test.describe('isolated scan performance benchmarks', () => {
+  test('FTC-OPS-003G failed scan publication retains the library and recovers after permissions return', async ({
+    appBarActions, galleryActions, globalPlayerActions, navigationPanelActions,
+    scanPageActions, scanStatusSampler, searchToolbarActions, stepLogger,
+  }) => {
+    await scanStatusSampler.start();
+    await galleryActions.goto();
+    await waitForScanDrivenGalleryReady({ galleryActions, navigationPanelActions, sidebarHydration: 'full' });
+    await searchToolbarActions.search(BACKGROUND_BROWSE_QUERY, { submitWithEnter: true });
+    await navigationPanelActions.waitForSidebarSelection(METADATA_ARTIST_NAME, { timeout: 60000 });
+    await galleryActions.waitForSelectedArtistGallery(METADATA_ARTIST_NAME, {
+      timeout: 60000, queryValue: BACKGROUND_BROWSE_QUERY, requireExclusiveView: true,
+    });
+    await galleryActions.waitForVisibleGalleryCoversLoaded({ minimumCount: 1, timeout: 60000 });
+    const priorBrowseContext = await scanPageActions.readBrowseContext();
+    const persistentPlayer = await globalPlayerActions.globalPlayer.player.elementHandle();
+    expect(persistentPlayer).not.toBeNull();
+    try {
+      await withScanPublicationPrivilegeFailure(async () => {
+        await stepLogger.step('Fail real full-scan publication without changing authentication or retained inventory', async () => {
+          await appBarActions.triggerFullRescanAndWaitForBusy();
+          await waitForStatusScanStart(scanStatusSampler, { timeoutMs: 30000 });
+          await appBarActions.openStatusMenu();
+          await appBarActions.goToScanPage({ menuAlreadyOpen: true });
+          const failedStatus = await waitForStatusIdle(scanStatusSampler, { timeoutMs: 120000, scanStartObserved: true });
+          expect(failedStatus.scan_outcome).toBe('failed');
+          expect(failedStatus.last_error).toMatch(/permission denied.*local_track_files/is);
+          await scanPageActions.expectTerminalPublicationError();
+          expect(await globalPlayerActions.globalPlayer.isConnected(persistentPlayer)).toBe(true);
+        });
+        await stepLogger.step('Restore the original gallery and keep the terminal error when returning to Status', async () => {
+          await scanPageActions.clickBack();
+          await scanPageActions.waitForDedicatedPageHidden();
+          await scanPageActions.waitForBrowseContext(priorBrowseContext);
+          await appBarActions.openStatusMenu();
+          await scanPageActions.openStatusPageFromMenu();
+          await scanPageActions.expectTerminalPublicationError();
+        });
+      });
+      await stepLogger.step('Recover through a native full rescan after restoring exactly the revoked privilege', async () => {
+        await appBarActions.triggerFullRescanAndWaitForBusy();
+        await waitForStatusScanStart(scanStatusSampler, { timeoutMs: 30000 });
+        const recoveredStatus = await waitForStatusIdle(scanStatusSampler, { timeoutMs: 120000, scanStartObserved: true });
+        expect(recoveredStatus.scan_outcome).toBe('completed');
+        expect(recoveredStatus.last_error || '').toBe('');
+        await scanPageActions.waitForDedicatedPageVisible();
+        await scanPageActions.expectTerminalErrorAbsent();
+        await scanPageActions.clickBack();
+        await scanPageActions.waitForDedicatedPageHidden();
+        await scanPageActions.waitForBrowseContext(priorBrowseContext);
+        expect(await globalPlayerActions.globalPlayer.isConnected(persistentPlayer)).toBe(true);
+      });
+    } finally {
+      await persistentPlayer.dispose();
+    }
+  });
+
+  test('FTC-OPS-003F acknowledges a naturally unavailable library root without hiding recovery status', async ({
+    appBarActions,
+    galleryActions,
+    navigationPanelActions,
+    scanPageActions,
+  }) => {
+    await galleryActions.goto();
+    await waitForScanDrivenGalleryReady({ galleryActions, navigationPanelActions, sidebarHydration: 'full' });
+    await scanPageActions.expectLibraryGalleryBarRestored();
+    await appBarActions.openStatusMenu();
+    await scanPageActions.openStatusPageFromMenu();
+    await scanPageActions.acknowledgeUnavailableRoot();
+    await scanPageActions.expectUnavailableRootWarning();
+    await scanPageActions.clickBack();
+    await scanPageActions.waitForDedicatedPageHidden();
+    await appBarActions.openStatusMenu();
+    await scanPageActions.openStatusPageFromMenu();
+    await scanPageActions.expectUnavailableRootWarning();
+  });
+
   test(`${COLD_CASE_ID} cold isolated scan captures loader, browse, and folder-threshold timings`, async ({
     appBarActions,
     galleryActions,
@@ -109,7 +186,7 @@ test.describe('isolated scan performance benchmarks', () => {
 
     await stepLogger.step('Explicitly open the Scan Page before browsing partial scan results', async () => {
       await appBarActions.openStatusMenu();
-      await appBarActions.waitForScanActionLabel('Go to Scan Page');
+      await appBarActions.waitForScanActionLabel('Go to Library Status Page');
       await appBarActions.goToScanPage({ menuAlreadyOpen: true });
       await scanPageActions.waitForDedicatedPageVisible({ timeout: 60000 });
       await scanPageActions.expectBrowseContextCleared();
@@ -176,7 +253,7 @@ test.describe('isolated scan performance benchmarks', () => {
         measureActionTime(
           async () => {
             await appBarActions.openStatusMenu();
-            await appBarActions.waitForScanActionLabel('Go to Scan Page', { timeout: 30000 });
+            await appBarActions.waitForScanActionLabel('Go to Library Status Page', { timeout: 30000 });
             await appBarActions.goToScanPage({ menuAlreadyOpen: true });
           },
           async () => {
@@ -230,7 +307,7 @@ test.describe('isolated scan performance benchmarks', () => {
 
     await stepLogger.step('Reopen Scan Page while the cold scan remains active', async () => {
       await appBarActions.openStatusMenu();
-      await appBarActions.waitForScanActionLabel('Go to Scan Page', { timeout: 30000 });
+      await appBarActions.waitForScanActionLabel('Go to Library Status Page', { timeout: 30000 });
       await appBarActions.goToScanPage({ menuAlreadyOpen: true });
       await scanPageActions.waitForDedicatedPageVisible({ timeout: 30000 });
     });
@@ -655,7 +732,7 @@ test.describe('isolated scan performance benchmarks', () => {
 
     await stepLogger.step('Open the Scan Page while the cached incremental scan remains active', async () => {
       await appBarActions.openStatusMenu();
-      await appBarActions.waitForScanActionLabel('Go to Scan Page');
+      await appBarActions.waitForScanActionLabel('Go to Library Status Page');
       await appBarActions.goToScanPage({ menuAlreadyOpen: true });
       await scanPageActions.waitForDedicatedPageVisible({ timeout: 60000 });
       await scanPageActions.waitForBrowseButton({ timeout: 60000 });
@@ -668,10 +745,8 @@ test.describe('isolated scan performance benchmarks', () => {
           await scanPageActions.clickBrowseScannedLibrary();
         },
         async () => {
-          await waitForScanDrivenGalleryReady({
-            galleryActions,
-            navigationPanelActions,
-          });
+          await galleryActions.galleryPage.albumCards.first().waitFor({ state: 'visible', timeout: 60000 });
+          await galleryActions.waitForVisibleGalleryCoversLoaded({ minimumCount: 6, timeout: 60000 });
           await scanPageActions.waitForDedicatedPageHidden({ timeout: 60000 });
           await galleryActions.waitForGalleryScrollAtStart({ timeout: 10000 });
         },
@@ -698,7 +773,10 @@ test.describe('isolated scan performance benchmarks', () => {
       STRICT_ONE_SECOND_BUDGET,
       'Cached regular-scan Browse to stable top gallery',
     ));
-    expect(await navigationPanelActions.readAllArtistsVisibleCount()).toBe(SCAN_FIXTURE.artistCount);
+    await stepLogger.step('Open Artist Tree separately and verify the complete cached sidebar', async () => {
+      await navigationPanelActions.setArtistTreeFolded(false);
+      expect(await navigationPanelActions.readAllArtistsVisibleCount()).toBe(SCAN_FIXTURE.artistCount);
+    });
 
     await stepLogger.step('Keep the busy scan indicator left click inert with no refresh request or restart message', async () => {
       const repeatedScan = await appBarActions.triggerBusyIncrementalScanAndExpectInert();
@@ -707,7 +785,7 @@ test.describe('isolated scan performance benchmarks', () => {
 
     await stepLogger.step('Keep the busy scan indicator right-click status menu available', async () => {
       await appBarActions.openStatusMenu();
-      await appBarActions.waitForScanActionLabel('Go to Scan Page');
+      await appBarActions.waitForScanActionLabel('Go to Library Status Page');
       await appBarActions.dismissStatusMenu();
     });
 
@@ -729,7 +807,7 @@ test.describe('isolated scan performance benchmarks', () => {
 
     await stepLogger.step('Open the Scan Page from Artist 001 while the metadata scan remains active', async () => {
       await appBarActions.openStatusMenu();
-      await appBarActions.waitForScanActionLabel('Go to Scan Page');
+      await appBarActions.waitForScanActionLabel('Go to Library Status Page');
       await appBarActions.goToScanPage({ menuAlreadyOpen: true });
       await scanPageActions.waitForDedicatedPageVisible({ timeout: 60000 });
       await scanPageActions.expectBrowseContextCleared();
@@ -792,7 +870,7 @@ test.describe('isolated scan performance benchmarks', () => {
 
     await stepLogger.step('Reopen Scan Page and choose Artist 002 from the retained filtered tree', async () => {
       await appBarActions.openStatusMenu();
-      await appBarActions.waitForScanActionLabel('Go to Scan Page');
+      await appBarActions.waitForScanActionLabel('Go to Library Status Page');
       await appBarActions.goToScanPage({ menuAlreadyOpen: true });
       await scanPageActions.waitForDedicatedPageVisible({ timeout: 60000 });
       await scanPageActions.expectBrowseContextCleared();
@@ -891,6 +969,7 @@ test.describe('isolated scan performance benchmarks', () => {
   test(`${SCAN_PAGE_CASE_ID} explicit Scan Page preserves and restores browse context through idle`, async ({
     appBarActions,
     galleryActions,
+    globalPlayerActions,
     navigationPanelActions,
     scanPageActions,
     scanStatusSampler,
@@ -919,6 +998,9 @@ test.describe('isolated scan performance benchmarks', () => {
       });
     });
 
+    const persistentPlayer = await globalPlayerActions.globalPlayer.player.elementHandle();
+    expect(persistentPlayer).not.toBeNull();
+    await scanPageActions.expectLibraryGalleryBarRestored();
     const priorBrowseContext = await stepLogger.step('Capture the visible query, tree, family, URL, and gallery scope', async () => (
       scanPageActions.readBrowseContext()
     ));
@@ -931,17 +1013,18 @@ test.describe('isolated scan performance benchmarks', () => {
     stepLogger.note('Generated scan fixture has no visible Artist Family; the exact absent family state remains part of the Back round trip.');
 
     const phaseObservation = await scanPageActions.startPhaseObservation();
+    const relationshipScreenshot = scanPageActions.captureRelationshipRefreshActions(
+      testInfo.outputPath('relationship-refresh-actions.png'),
+    ).then(() => ({ error: null }), (error) => ({ error }));
     await stepLogger.step('Start a background incremental scan and explicitly open its Scan Page', async () => {
       await appBarActions.triggerIncrementalScanAndWaitForBusy();
       await appBarActions.openStatusMenu();
-      await appBarActions.waitForScanActionLabel('Go to Scan Page');
+      await appBarActions.waitForScanActionLabel('Go to Library Status Page');
       await appBarActions.goToScanPage({ menuAlreadyOpen: true });
       await scanPageActions.waitForDedicatedPageVisible({ timeout: 60000 });
       await scanPageActions.expectBrowseContextCleared();
     });
-    const relationshipScreenshot = scanPageActions.captureRelationshipRefreshActions(
-      testInfo.outputPath('relationship-refresh-actions.png'),
-    );
+    expect(await globalPlayerActions.globalPlayer.isConnected(persistentPlayer)).toBe(true);
 
     let terminalStatus;
     const observedPhases = await stepLogger.step('Leave the explicit Scan Page open through scan, relation, cover, and idle phases', async () => {
@@ -956,9 +1039,11 @@ test.describe('isolated scan performance benchmarks', () => {
         requireScanStart: true,
         scanStartObserved: true,
       });
-      await scanPageActions.waitForPhaseTitle('No Active Scan Running', { timeout: 30000 });
+      await scanPageActions.waitForPhaseTitle('Your local library is ready.', { timeout: 30000 });
       await scanPageActions.waitForDedicatedPageVisible({ timeout: 30000 });
-      await relationshipScreenshot;
+      const relationshipCapture = await relationshipScreenshot;
+      if (relationshipCapture.error) throw relationshipCapture.error;
+      expect(await globalPlayerActions.globalPlayer.isConnected(persistentPlayer)).toBe(true);
       return phaseObservation.finish();
     });
     scanPageActions.expectPhaseObservation(observedPhases);
@@ -998,6 +1083,9 @@ test.describe('isolated scan performance benchmarks', () => {
       'Scan Page Back context readiness',
     );
 
+    await scanPageActions.expectLibraryGalleryBarRestored();
+    expect(await globalPlayerActions.globalPlayer.isConnected(persistentPlayer)).toBe(true);
+    await persistentPlayer.dispose();
     expectTerminalScanStatus(terminalStatus, SCAN_FIXTURE.albumCount + 1);
   });
 
@@ -1047,7 +1135,7 @@ test.describe('isolated scan performance benchmarks', () => {
       await appBarActions.triggerIncrementalScanAndWaitForBusy();
       await scanPageActions.expectCancelAbsent();
       await appBarActions.openStatusMenu();
-      await appBarActions.waitForScanActionLabel('Go to Scan Page');
+      await appBarActions.waitForScanActionLabel('Go to Library Status Page');
       await appBarActions.goToScanPage({ menuAlreadyOpen: true });
       await scanPageActions.waitForDedicatedPageVisible({ timeout: 60000 });
     });
@@ -1087,7 +1175,7 @@ test.describe('isolated scan performance benchmarks', () => {
       await appBarActions.triggerFullRescanAndWaitForBusy();
       await scanPageActions.expectCancelAbsent();
       await appBarActions.openStatusMenu();
-      await appBarActions.waitForScanActionLabel('Go to Scan Page');
+      await appBarActions.waitForScanActionLabel('Go to Library Status Page');
       await appBarActions.goToScanPage({ menuAlreadyOpen: true });
       await scanPageActions.waitForDedicatedPageVisible({ timeout: 60000 });
     });

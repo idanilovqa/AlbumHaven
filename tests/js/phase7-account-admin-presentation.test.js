@@ -63,3 +63,13 @@ test('library and direct Settings pages own one shared host and navigation entry
     assert.equal((template.match(/\/static\/js\/settings-navigation.js/g) || []).length, 1, templateName);
   }
 });
+
+test('disabled shared buttons are visibly inactive and pointer-hover checkbox outlines stay neutral', () => {
+  const buttons = readProjectFile('music_app/static/css/button-component.css');
+  assert.match(buttons, /\.ui-button:disabled,\s*\.ui-button\[aria-disabled='true'\],[^{]+\{[^}]*opacity:\s*0\.38;[^}]*cursor:\s*not-allowed;/s);
+  const appearance = readProjectFile('music_app/static/css/appearance-backgrounds.css');
+  const checkboxHover = appearance.match(/:root :is\(input\[type='checkbox'\], input\[type='radio'\]\):not\(\.global-player \*\):hover:not\(:disabled\)\s*\{([^}]*)\}/)?.[1];
+  assert.ok(checkboxHover);
+  assert.match(checkboxHover, /outline:\s*1px solid var\(--appearance-control-selected\)/);
+  assert.doesNotMatch(checkboxHover, /--appearance-accent|--appearance-interaction-outline/);
+});

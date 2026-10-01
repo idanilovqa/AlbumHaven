@@ -391,7 +391,7 @@ test('explicit selected fill overrides neutral default and reset removes the ove
   assert.equal(values.has('--selection-body-background'), false);
 });
 
- test('panel outline keeps default blue across palettes unless explicitly overridden', () => {
+ test('panel outline leaves theme defaults to CSS unless explicitly overridden', () => {
   const values = new Map();
   const root = { style: { setProperty: (k,v) => values.set(k,v), removeProperty: k => values.delete(k) } };
   const appearance = runtime();
@@ -399,7 +399,7 @@ test('explicit selected fill overrides neutral default and reset removes the ove
   for (const palette of appearance.palettes) {
     const themed = { ...preference, palette_id: palette.id };
     appearance.applyTheme(themed, root);
-    assert.equal(values.has('--appearance-selected-accent'), false, 'use the shared default blue instead of a palette accent');
+    assert.equal(values.has('--appearance-selected-accent'), false, 'use the shared theme-aware CSS default');
     appearance.applyTheme({ ...themed, interaction_overrides: { ...preference.interaction_overrides, panel_outline: '#AABBCC' } }, root);
     assert.equal(values.get('--appearance-selected-accent'), '#AABBCC');
   }
@@ -416,10 +416,20 @@ test('Artist Family panel and artist states retain Appearance palette and intera
   }
   hasMapping('.artist-family-panel)', 'background: var(--appearance-card)');
   hasMapping('.artist-family-panel)', 'border-color: var(--appearance-line)');
-  hasMapping('.artist-family-panel__artist)', 'background: var(--appearance-control)');
-  hasMapping('.artist-family-panel__artist):hover', 'background: var(--appearance-item-hover, var(--appearance-hover))');
-  hasMapping('.artist-family-panel__artist.is-active)', 'background: var(--appearance-item-selected, var(--appearance-hover))');
+  hasMapping('.artist-family-panel__artist', 'background: var(--appearance-card)');
+  hasMapping('.artist-family-panel__artist:hover', 'background: var(--appearance-card)');
+  hasMapping('.artist-family-panel__artist.is-active', 'background: var(--appearance-card)');
   hasMapping('.artist-family-panel__artist.is-active)', 'color: var(--appearance-ink)');
+  hasMapping('.artist-family-panel__artist.is-active', 'border-color: var(--appearance-play)');
+  hasMapping('.artist-family-panel__artist.is-active', 'box-shadow: 0 0 0 1px color-mix(in srgb, var(--appearance-play) 30%, transparent)');
+  hasMapping(":root[data-appearance-mode='light'] .artist-family-panel__artist:hover", 'inset 0 0 18px color-mix(in srgb, var(--appearance-play) 18%, transparent)');
+  hasMapping(":root[data-appearance-mode='light'] .artist-family-panel__artist.is-active", 'inset 0 0 18px color-mix(in srgb, var(--appearance-play) 18%, transparent)');
+  const lightActiveRules = rules.filter(rule => rule.selector.includes("[data-appearance-mode='light']") && rule.selector.includes('.artist-family-panel__artist.is-active'));
+  assert.ok(lightActiveRules.some(rule => rule.declarations.includes('background: color-mix(in srgb, #4bc173 20%, transparent)')));
+  assert.ok(lightActiveRules.some(rule => rule.declarations.includes('color: var(--appearance-play-ink, #10201a)')));
+  const lightCountRule = lightActiveRules.find(rule => rule.selector.includes('.artist-family-panel__count'));
+  assert.ok(lightCountRule?.declarations.includes('background: color-mix(in srgb, var(--appearance-card, #fff) 82%, var(--appearance-play, #4bc173))'));
+  assert.ok(lightCountRule?.declarations.includes('color: var(--appearance-play-ink, #10201a)'));
   for (const token of ['--appearance-item-action-hover-background', '--appearance-item-action-pressed']) {
     const actionRules = rules.filter(rule => rule.selector.includes(":is(button, .button, [role='button'], [data-actionable])") && rule.declarations.includes(`background: var(${token}`));
     assert.ok(actionRules.length > 0);

@@ -441,6 +441,58 @@ def test_anonymous_root_redirects_to_login(method):
     assert resolver.calls == [None]
 
 
+@pytest.mark.parametrize(
+    ("method", "route"),
+    [
+        ("GET", "/utilities/cover-lookup/tasks"),
+        ("POST", "/utilities/cover-lookup/tasks/clear-completed"),
+        ("POST", "/utilities/cover-lookup/task/private-task/clear"),
+        ("POST", "/utilities/cover-lookup/task/private-task/mark-action-taken"),
+        ("POST", "/utilities/cover-lookup/task/private-task/cancel"),
+    ],
+)
+def test_authenticated_listener_without_cover_task_capabilities_cannot_read_or_mutate_tasks(
+    monkeypatch, method, route,
+):
+    from music_app.routes import api_wave_d_asgi_routes as cover_routes
+    from music_app.services.auth_session_csrf import issue_session_csrf
+    from music_app.services.current_actor import ActorState, LibraryRelationship
+
+    actor = CurrentActor(
+        state=ActorState.ACTIVE,
+        account_id=7,
+        session_id=11,
+        current_library_id=41,
+        library_relationships=(LibraryRelationship(41, "listener", False),),
+    )
+    app, resolver = _app(actor)
+    app.include_router(cover_routes.router)
+
+    def forbidden_task_access(*_args, **_kwargs):
+        pytest.fail("Capability denial must precede task lookup and mutation")
+
+    for operation in (
+        "list_cover_lookup_tasks",
+        "clear_completed_cover_lookup_tasks",
+        "mark_cover_lookup_task_notification_action_taken",
+        "cancel_cover_lookup_task_payload",
+        "cover_lookup_result",
+    ):
+        monkeypatch.setattr(cover_routes, operation, forbidden_task_access)
+    session = "s" * 43
+    csrf = issue_session_csrf(session, app.state.auth_policy_config)
+    status, body = _request(
+        app,
+        route,
+        method=method,
+        cookie=f"__Host-album_haven_session={session}; __Host-album_haven_csrf={csrf}",
+        headers={"origin": "https://music.test", "x-album-haven-csrf": csrf},
+    )
+    assert status == 403
+    assert resolver.calls == [session]
+    assert body == b'{"detail":"Action not permitted."}'
+
+
 def test_authenticated_bootstrap_owner_reaches_private_route():
     actor = CurrentActor(
         state=__import__("music_app.services.current_actor", fromlist=["ActorState"]).ActorState.ACTIVE,
@@ -699,3 +751,55 @@ def test_loop_resource_reference_uses_policy_grammar(reference, route):
 def test_only_exact_readonly_invitation_handoff_is_public(method, path, allowed):
     from music_app.services.private_route_boundary import _is_public
     assert _is_public(method, path) is allowed
+
+
+@pytest.mark.parametrize("key,query,expected", [
+    ("capability.practice", "loop_id=owned-loop", 200),
+    ("capability.practice", "path=track.mp3", 403),
+    ("capability.practice", "loop_id=%20&path=track.mp3", 403),
+    ("capability.view", "loop_id=owned-loop", 403),
+])
+def test_saved_loop_waveform_uses_practice_authority_without_granting_track_waveforms(key, query, expected):
+    from music_app.services.current_actor import ActorState, CapabilityGrant, LibraryRelationship
+    app, _ = _app(CurrentActor(state=ActorState.ACTIVE, account_id=7, session_id=11,
+        current_library_id=41, library_relationships=(LibraryRelationship(41, "member", False),),
+        capability_grants=(CapabilityGrant(key, "library", 41),)))
+    app.add_api_route("/playback/waveform", lambda: {"waveform": True})
+    status, _ = _request(app, "/playback/waveform", query=query)
+    assert status == expected
+
+
+@pytest.mark.parametrize('path', ['/admin/members', '/admin/accounts/new', '/admin/accounts/41'])
+@pytest.mark.parametrize('destination', ['document', 'empty', None])
+def test_admin_denial_is_readable_for_navigation_but_json_for_api_clients(path, destination):
+    from music_app.services.current_actor import ActorState, LibraryRelationship
+
+    actor = CurrentActor(
+        state=ActorState.ACTIVE, account_id=7, session_id=11,
+        current_library_id=41,
+        library_relationships=(LibraryRelationship(41, 'listener', False),),
+    )
+    app, resolver = _app(actor)
+
+    async def forbidden_handler():
+        pytest.fail('Unauthorized navigation must not enter an admin route')
+
+    app.add_api_route('/admin/members', forbidden_handler, methods=['GET'])
+    app.add_api_route('/admin/accounts/new', forbidden_handler, methods=['GET'])
+    app.add_api_route('/admin/accounts/{account_id}', forbidden_handler, methods=['GET'])
+    headers = {'sec-fetch-dest': destination} if destination else {}
+    status, body, response_headers = _request(
+        app, path, cookie='__Host-album_haven_session=opaque-session',
+        headers=headers, include_headers=True,
+    )
+    assert status == 403
+    assert resolver.calls == ['opaque-session']
+    if destination == 'document':
+        assert body == b'Action not permitted.'
+        assert dict(response_headers)[b'content-type'].startswith(b'text/plain')
+        assert dict(response_headers)[b'cache-control'] == b'no-store, max-age=0'
+    else:
+        assert body == b'{"detail":"Action not permitted."}'
+        assert dict(response_headers)[b'content-type'] == b'application/json'
+    assert b'location' not in dict(response_headers)
+    assert b'set-cookie' not in dict(response_headers)

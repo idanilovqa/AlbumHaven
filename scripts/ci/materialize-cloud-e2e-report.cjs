@@ -41,11 +41,11 @@ function coverageAttemptEvidence(targetRoot, row, run, job) {
     throw new Error(`malformed Playwright report for coverage-only target ${row.target}`);
   }
   const cases = flattenSuites(report.suites);
-  const expectedCaseIds = ['FTC-OPS-003C', 'FTC-OPS-003E'];
+  const expectedCaseIds = row.coverageCaseIds;
   const actualCaseIds = cases.map((entry) => entry.testId).sort();
   if (cases.length !== expectedCaseIds.length
     || actualCaseIds.some((caseId, index) => caseId !== expectedCaseIds[index])) {
-    throw new Error(`incomplete scan-page Playwright evidence; expected ${expectedCaseIds.join(', ')}`);
+    throw new Error(`incomplete ${row.target} Playwright evidence; expected ${expectedCaseIds.join(', ')}`);
   }
   const reportFailed = report.errors.length > 0
     || Number(report.stats?.unexpected || 0) > 0

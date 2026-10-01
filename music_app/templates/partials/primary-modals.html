@@ -82,8 +82,8 @@
             data-auto-number-selected="1"
           >Auto-number</button>
         </div>
-        <button class="button" type="button" data-close-tag-editor="1">Cancel</button>
-        <button class="button confirm-modal-danger" type="button" data-open-tag-edit-confirm="1" disabled>Apply</button>
+        <button class="button ui-button ui-button--quiet ui-button--medium" type="button" data-close-tag-editor="1">Cancel</button>
+        <button class="button ui-button ui-button--primary ui-button--medium" type="button" data-open-tag-edit-confirm="1" disabled>Apply</button>
       </div>
     </div>
   </div>
@@ -126,12 +126,13 @@
       </div>
       <div class="cover-lookup-modal-body" id="cover-lookup-modal-body"></div>
       <div class="cover-lookup-modal-actions">
-        <div class="cover-lookup-modal-actions-left">
-          <button class="button" type="button" id="cover-lookup-find-better-button" data-start-cover-lookup="1">Find Better Art</button>
+        <div class="cover-lookup-search-action">
+          <button class="button ui-button ui-button--primary ui-button--medium" type="button" id="cover-lookup-find-better-button" data-start-cover-lookup="1" aria-describedby="cover-lookup-search-hint">Find Better Art</button>
+          <span id="cover-lookup-search-hint">Runs a full cover art search</span>
         </div>
         <div class="cover-lookup-modal-status" id="cover-lookup-modal-status"></div>
         <div class="cover-lookup-modal-actions-right">
-          <button class="button button-secondary" type="button" data-close-cover-lookup-modal="1">Cancel</button>
+          <button class="button ui-button ui-button--quiet ui-button--medium" type="button" data-close-cover-lookup-modal="1">Cancel</button>
           <button class="button" type="button" id="cover-lookup-save-remote-button" data-save-cover-lookup-remote="1" hidden>Save</button>
         </div>
       </div>

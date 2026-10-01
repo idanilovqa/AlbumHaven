@@ -121,13 +121,28 @@ def _process_is_running(pid: int) -> bool:
     return True
 
 
+def _report_pytest_cleanup(stage: str, *, error: OSError | None = None) -> None:
+    """Opt-in child-process diagnostics without filesystem paths or error messages."""
+    if os.environ.get("ALBUM_HAVEN_PYTEST_CLEANUP_DIAGNOSTICS") != "1":
+        return
+    payload = {"stage": stage, "pid": os.getpid()}
+    if error is not None:
+        payload.update(error_type=type(error).__name__, errno=error.errno,
+                       winerror=getattr(error, "winerror", None))
+    print("PYTEST_HARNESS_CLEANUP=" + json.dumps(payload, sort_keys=True), file=sys.stderr)
+
+
 def _owned_generated_pytest_root(path: Path) -> dict[str, object] | None:
     match = _PYTEST_BASETEMP_PATTERN.fullmatch(path.name)
     if match is None or path.is_symlink() or path.parent.resolve() != _workspace_pytest_temp_root():
         return None
     try:
         payload = json.loads((path / _PYTEST_BASETEMP_OWNER_FILE).read_text(encoding="utf-8"))
-    except (OSError, ValueError, TypeError):
+    except OSError as error:
+        _report_pytest_cleanup("owner-read-failed", error=error)
+        return None
+    except (ValueError, TypeError):
+        _report_pytest_cleanup("owner-invalid-json")
         return None
     if not isinstance(payload, dict):
         return None
@@ -157,7 +172,8 @@ def _preserve_pytest_owner_after_partial_removal(
         except FileExistsError:
             # Never replace a marker written by another owner.
             return _owned_generated_pytest_root(path) == owner
-    except OSError:
+    except OSError as error:
+        _report_pytest_cleanup("owner-restoration-failed", error=error)
         return False
     return True
 
@@ -186,19 +202,24 @@ def _remove_owned_generated_pytest_root(path: Path, *, expected_owner: tuple[int
             return False
         if (path.is_symlink() or (current.st_dev, current.st_ino) != directory_identity
                 or _owned_generated_pytest_root(path) != owner):
+            _report_pytest_cleanup("owner-revalidation-rejected")
             return False
         try:
             shutil.rmtree(path)
-        except OSError:
+        except OSError as error:
+            _report_pytest_cleanup("remove-failed", error=error)
             if not path.exists():
                 return True
             # rmtree can remove our marker before an open Windows log blocks the
             # rest. Preserve ownership so final teardown can retry after closure.
             if not _preserve_pytest_owner_after_partial_removal(path, owner, directory_identity):
+                _report_pytest_cleanup("owner-restoration-rejected")
                 return False
             if attempt + 1 == _PYTEST_ROOT_REMOVAL_ATTEMPTS:
+                _report_pytest_cleanup("remove-attempts-exhausted")
                 return False
         if not path.exists():
+            _report_pytest_cleanup("removed")
             return True
         time.sleep(0.05 * (2**attempt))
     return False

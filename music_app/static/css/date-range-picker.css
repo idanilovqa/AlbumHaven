@@ -36,7 +36,6 @@
 }
 #app-form-modal.app-form-anchored:has(.date-range-picker) .confirm-modal-dialog {
   animation: none;
-  clip-path: none;
   border-inline: 1px solid var(--border);
 }
 #app-form-modal:has(.date-range-picker) .utility-detail-meta { margin: 10px 0 0; }
@@ -55,7 +54,7 @@
 .date-range-picker__field { display: grid; gap: 6px; min-width: 0; }
 .date-range-picker__control { --ui-input-action-focus-outline: 1px solid var(--muted); --ui-input-action-focus-offset: -1px; --ui-input-action-focus-border: var(--muted); --ui-input-action-button-focus: var(--muted); display: flex; align-items: center; border: 1px solid var(--border); border-radius: 8px; background: var(--appearance-control, var(--panel-2)); padding-right: 4px; }
 .date-range-picker__control input { border: 0; background: transparent; font-size: 13px; }
-.calendar-picker { position: fixed; z-index: 140; box-sizing: border-box; padding: 10px; max-height: calc(100vh - 32px); overflow: auto; border: 1px solid var(--border); border-radius: 8px; background: var(--panel); color: var(--text); box-shadow: 0 8px 24px #0006; }
+.calendar-picker { position: fixed; inset: auto; margin: 0; z-index: 140; box-sizing: border-box; padding: 10px; max-height: calc(100vh - 32px); overflow: auto; border: 1px solid var(--border); border-radius: 8px; background: var(--panel); color: var(--text); box-shadow: 0 8px 24px #0006; }
 .calendar-picker__header { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 8px; font-size: 13px; }
 /* Keep the shared anchor edge outside the scrolling content's clipping box. */
 .calendar-picker { overflow: visible; max-height: none; }

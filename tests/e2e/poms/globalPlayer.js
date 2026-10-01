@@ -96,6 +96,11 @@ export class GlobalPlayer extends BasePage {
     });
   }
 
+  async isConnected(playerHandle) {
+    // parity-check: allow-read-only-measurement-evaluate -- verify the original player node remains mounted
+    return playerHandle.evaluate((player) => player.isConnected);
+  }
+
   get titleSelector() {
     return '#player-title';
   }

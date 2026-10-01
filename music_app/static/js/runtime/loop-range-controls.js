@@ -93,6 +93,9 @@ function mountLoopEditActionControl({
     if (next.reset || contextChanged || !currentCanCreate || (wasActive && !currentActive)) {
       clearTimers();
       renderEngagement(retained() && currentCanCreate);
+      // Start a fresh dwell for the current track after cancelling its predecessor's timer.
+      pointerWithin = pointerWithin || Boolean(compound.matches?.(':hover'));
+      if (pointerWithin && currentCanCreate) visit();
     } else if ((!wasActive && currentActive) || (!wasAllowed && currentCanCreate)) {
       pointerWithin = pointerWithin || Boolean(compound.matches?.(':hover'));
       focusWithin = focusWithin || Boolean(ownerDocument?.activeElement && compound.contains?.(ownerDocument.activeElement));

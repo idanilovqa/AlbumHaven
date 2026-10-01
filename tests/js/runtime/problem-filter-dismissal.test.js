@@ -6,9 +6,13 @@ const vm = require('node:vm');
 const { create: createDismissal } = require('../../../music_app/static/js/surface-dismissal.js');
 
 function element() {
+  const classes = new Set();
   return {
     hidden: false, dataset: {}, attributes: {},
-    classList: { add() {}, remove() {}, toggle() {} },
+    classList: {
+      contains: name => classes.has(name), add: name => classes.add(name), remove: name => classes.delete(name),
+      toggle(name, force) { if (force ?? !classes.has(name)) classes.add(name); else classes.delete(name); },
+    },
     style: { setProperty() {}, removeProperty() {} },
     getBoundingClientRect: () => ({ top: 0, bottom: 30, left: 0, right: 100, width: 100 }),
     setAttribute(name, value) { this.attributes[name] = value; },

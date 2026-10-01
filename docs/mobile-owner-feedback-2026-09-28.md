@@ -58,3 +58,13 @@ The browser suites use the production ASGI application, ordinary routes, isolate
 ## Boundaries
 
 The preview uses generated media only. Restart restoration covers the generated original/alternate artwork, not arbitrary external uploads on ephemeral storage. Existing accounts, password hashes, library identities, saved preferences, history and loops must survive startup. Home Top tracks/albums/artists remain the previously approved work-in-progress placeholders. This work does not merge main or certify a production release or native-device background audio.
+
+## Approved functional regression alignment — October 1, 2026
+
+The owner explicitly approved aligning the existing FTC-APPEARANCE-001 checks with item 25: assert the Main palette’s immediate live paint, independently read account preferences before/after the draft to prove no pre-Save write, retain other sections’ draft isolation, and verify saved paint after the existing Cancel and Discard flows. Save, reload, revision conflict, case identity, and the 240-second scenario budget remain unchanged. The Family divider stays at its existing mobile 2 px width; the button-to-dropdown outline is measured separately. No new case ID or automation counter is introduced.
+
+The owner also approved measuring item 4’s existing selection preview as its 3 px inset accent, retaining all four neutral borders and exact dimensions across off/on. The saved navigation checkpoint observes its existing visible 3 px colored edge rather than a retired shadow. Both continue to require the chosen account color; no UI or timing contract changes.
+
+The already-approved FTC-TAGS-016 alignment observes the actual reorderable file list and its separate selection buttons. Immediate selected paint, item 3’s alternating selected-row shading (even rows mix 7% theme ink over the shared selection base), the shared footer, selected/unselected row distinctions, and clean/dirty backdrop dismissal remain. The independent NavigationTree reference uses its visible 3 px rendered edge in the chosen color, shared with the Appearance observation; a missing edge is an error rather than a token-derived fallback. No runtime UI, fixture identity or scenario budget changes.
+
+The captured backdrop gesture now consults the same Tag Editor dirty-state predicate as the delegated click path. A dirty draft stays open; a clean or reverted draft closes once. Explicit Cancel/Escape and uncovered player actions retain their existing behavior.

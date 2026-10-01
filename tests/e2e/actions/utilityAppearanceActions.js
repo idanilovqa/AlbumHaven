@@ -1,3 +1,4 @@
+import { readNavigationSelectionPaint } from '../poms/components/navigationTree.js';
 import { expect } from '@playwright/test';
 
 export class UtilityAppearanceActions {
@@ -334,12 +335,17 @@ export class UtilityAppearanceActions {
       // parity-check: allow-read-only-measurement-evaluate -- read computed Appearance preview colors
       const value = await this.utilityAppearanceTab.previewState(state).evaluate((element) => {
         const style = getComputedStyle(element);
+        const rect = element.getBoundingClientRect();
         return {
           accentColor: style.accentColor,
           backgroundColor: style.backgroundColor,
           borderLeftColor: style.borderLeftColor,
           borderColor: style.borderColor,
           outlineColor: style.outlineColor,
+          boxShadow: style.boxShadow,
+          borders: [style.borderTop, style.borderRight, style.borderBottom, style.borderLeft],
+          width: rect.width,
+          height: rect.height,
         };
       });
       return [state, value];
@@ -407,8 +413,10 @@ export class UtilityAppearanceActions {
         loopSelection: read('.global-player .loop-range-selection'),
       };
     });
+    const selectedNavigation = await readNavigationSelectionPaint(this.utilityAppearanceTab.navigationTree.selectedItem);
     return {
       ...snapshot,
+      selectedAppearanceAccent: selectedNavigation?.accent || null,
       appBar: await this.utilityAppearanceTab.appBar.readAppearanceCheckpoint(),
     };
   }

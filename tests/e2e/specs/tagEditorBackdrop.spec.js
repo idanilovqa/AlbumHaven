@@ -28,17 +28,33 @@ test('FTC-TAGS-016 tag editor backdrop closes only when no tag changes are pendi
     await tagEditorActions.waitForOpen();
   });
 
-  await stepLogger.step('Use shared table and footer with immediate, uniform selection', async () => {
+  await stepLogger.step('Use the reorderable file list and shared footer with immediate selection and preserved alternating shading', async () => {
     const surfaces = new InteractionSurfaces(page);
-    await expect(surfaces.tagTable).toBeVisible();
+    await expect(surfaces.tagTrackList).toBeVisible();
     await expect(surfaces.tagFooter).toBeVisible();
+    await expect(surfaces.selectedTreeItem).toBeVisible();
     const rows = surfaces.tagRows;
     expect(await rows.count()).toBeGreaterThan(1);
     for (const index of [0, 1, 0]) {
-      await rows.nth(index).click();
-      await expect(rows.nth(index)).toHaveAttribute('aria-pressed', 'true');
+      await expect(rows.nth(index)).toHaveAttribute('role', 'listitem');
+      const selection = surfaces.tagSelectionButtons.nth(index);
+      await selection.click();
+      await expect(selection).toHaveAttribute('aria-pressed', 'true');
       await expect(rows.nth(index)).toHaveCSS('transition-duration', '0s');
-      await expect(rows.nth(index)).not.toHaveCSS('box-shadow', 'none');
+      await expect(surfaces.tagSelectionAccents.nth(index)).toBeVisible();
+      const selected = await surfaces.readTagSelectionPaint(index);
+      expect(selected.fill).toEqual(selected.expectedFill);
+      expect(selected.accent).toEqual(selected.expectedAccent);
+      expect(selected.fillRole).not.toBe('');
+      expect(selected.fillRole).toBe(selected.expectedFillRole);
+      expect(selected.fill).not.toMatch(/transparent|rgba\([^)]*, 0\)|\/ 0\)/u);
+      expect(selected.accent).not.toMatch(/transparent|rgba\([^)]*, 0\)|\/ 0\)/u);
+      const otherIndex = index === 0 ? 1 : 0;
+      await expect(surfaces.tagSelectionButtons.nth(otherIndex)).toHaveAttribute('aria-pressed', 'false');
+      await expect(rows.nth(otherIndex)).toHaveCSS('transition-duration', '0s');
+      const unselected = await surfaces.readTagSelectionPaint(otherIndex);
+      expect(unselected.fill).not.toEqual(selected.fill);
+      expect(unselected.accent).toBe('rgba(0, 0, 0, 0)');
     }
   });
 

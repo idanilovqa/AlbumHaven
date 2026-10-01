@@ -1,5 +1,6 @@
 const { test, expect } = require('@playwright/test');
 const path = require('path');
+const { applyFixtureAppearance } = require('./appearanceFixture.js');
 
 const repositoryRoot = path.resolve(__dirname, '../..');
 const componentUrl = 'http://gallery-bar-alignment.test/';
@@ -88,5 +89,24 @@ for (const mode of ['light', 'dark']) {
     await page.locator('#ordinary-action').hover();
     await expect(page.locator('#ordinary-action')).toHaveCSS('background-color', 'rgb(20, 30, 40)');
     await expect(page.locator('#ordinary-action')).toHaveCSS('border-color', 'rgb(60, 70, 80)');
+
+    // A saved explicit outline remains authoritative over the automatic neutral edge.
+    await applyFixtureAppearance(page, {
+      palette_id: mode === 'light' ? 'paper' : 'steelblue', panel_index: 0,
+      selection_accent: { enabled: true, color: '#A1B2C3' },
+      interaction_overrides: {
+        item_hover: null, item_selected: null, button_hover_background: '#27384B',
+        button_pressed: '#203246', item_outline: { source: 'custom', color: '#86B7EF' },
+      },
+    });
+    await page.locator('#action').hover();
+    await expect(page.locator('#action')).toHaveCSS('border-color', 'rgb(134, 183, 239)');
+    await page.locator('#ordinary-action').hover();
+    await expect(page.locator('#ordinary-action')).toHaveCSS('border-color', 'rgb(134, 183, 239)');
+    await page.locator('#action').focus();
+    await page.keyboard.press('Tab');
+    await page.keyboard.press('Shift+Tab');
+    await expect(page.locator('#action')).toBeFocused();
+    await expect(page.locator('#action')).toHaveCSS('outline-color', 'rgb(134, 183, 239)');
   });
 }

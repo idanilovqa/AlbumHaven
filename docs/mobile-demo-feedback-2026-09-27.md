@@ -72,3 +72,7 @@ on Render and never changes credentials, authorization, real media or integratio
 Seven known generated artifact paths may be regenerated after ephemeral hosting
 restarts, but existing metadata/order is preserved and removed loops stay removed.
 The original small eight-album fixture remains unchanged.
+
+## Desktop continuity and breakpoint repair — October 1, 2026
+
+Gallery View registers as an exclusive surface only for M05’s downward mobile disclosure. Desktop’s horizontal inline unfold preserves the existing Family panel and its frame-by-frame anchor continuity; it is not a competing popup. Changing between these presentations closes the disclosure through its component owner before reconfiguration, retiring any previous exclusive registration. M11’s mobile exclusivity, genuine competing popups, native outside/backdrop actions and the original geometry/timing checks remain unchanged. This repair does not update the historical verification counter above.

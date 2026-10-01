@@ -240,6 +240,33 @@ test('leaving the last mobile page reconciles its retained gallery parent withou
   assert.equal(calls.length, 1);
 });
 
+test('cover gallery presentation refreshes across the shared breakpoint only while open', () => {
+  let onBreakpoint, renders = 0;
+  const overlay = { hidden: false };
+  const context = load('mobile-navigation.js', {
+    URL, virtualGrid: null,
+    window: { innerWidth: 390, location: { href: 'https://example.test/' },
+      history: { state: {} }, addEventListener() {}, matchMedia: () => ({ addEventListener(_event, callback) { onBreakpoint = callback; } }) },
+    document: { getElementById: id => id === 'mobile-navigation' ? {} : id === 'cover-lookup-modal' ? overlay : null,
+      createComment: () => ({}), addEventListener() {}, documentElement: { dataset: {}, style: { setProperty() {} } } },
+    state: { utility: { activeTab: 'appearance' } },
+    renderCoverLookupModal: () => { renders += 1; },
+    galleryMainSurfaceController: null, syncMobileHome() {}, renderArtistGroups() {}, restorePlayerAppearance() {}, updatePlayerUi() {},
+  });
+  context.promoteVisibleMobileDialogs = () => {};
+  context.initMobileNavigation();
+  assert.equal(renders, 1);
+  context.window.innerWidth = 1280;
+  onBreakpoint();
+  assert.equal(renders, 2);
+  context.window.innerWidth = 390;
+  onBreakpoint();
+  assert.equal(renders, 3);
+  overlay.hidden = true;
+  onBreakpoint();
+  assert.equal(renders, 3);
+});
+
 test('mobile child-to-parent traversal does not refresh the gallery behind the parent page', () => {
   let refreshes = 0;
   const context = load('mobile-navigation.js', {

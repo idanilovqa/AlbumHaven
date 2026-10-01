@@ -522,7 +522,7 @@ test('managed cover-start assertion waits for settled toast geometry and preserv
   );
   assert.match(
     coverLookupActionsSource,
-    /observeStartedToastEntrance\(\{ timeout \}\)[\s\S]*await this\.startSearch\(\{ timeout \}\);[\s\S]*const finalVisualState = await this\.coverLookup\s*\.waitForCoverLookupStartedToastFinalState\(\{ timeout \}\);\s*await expect\(this\.coverLookup\.coverLookupStartedToast\)\.toBeVisible[\s\S]*this\.coverLookup\.searchProgress/u,
+    /observeStartedToastEntrance\(\{ timeout \}\)[\s\S]*await this\.startSearch\(\{ timeout \}\);[\s\S]*?const finalVisualState = await this\.coverLookup\s*\.waitForCoverLookupStartedToastFinalState\(\{ timeout \}\);\s*await expect\(this\.coverLookup\.coverLookupStartedToast\)\.toBeVisible\(\{ timeout \}\);[\s\S]*?await expect\(this\.coverLookup\.searchProgress\)\.toBeVisible/u,
     'finite-lived toast geometry must be captured before slower provider progress assertions',
   );
   assert.match(
@@ -753,4 +753,39 @@ test('floating alerts use approved severity, escaped messages, and shared repair
   assert.match(repair.alert.innerHTML, /data-dismiss-repair-alert="1"/);
   repair.context.showRepairAlert('<a href="#details">Details</a>', 'info', null, { html: true });
   assert.equal(repair.message.innerHTML, '<a href="#details">Details</a>');
+});
+
+
+for (const allowed of [false, true]) {
+  test(`failed-tag notification ${allowed ? 'exposes' : 'withholds'} Log History under its independent read permission`, () => {
+    const { context, alert, alertClasses, message, logHistoryLink, scheduledTimeoutCount } = createRepairAlertContext();
+    context.window = { AlbumHavenCapabilities: { allows: action => {
+      assert.equal(action, 'library.logs.read'); return allowed;
+    } } };
+    context.showRepairAlert('Failed to edit tags.', 'error', null,
+      { logHistoryLink: true, logHistoryEntryId: 'failed-edit-owned-event' });
+    assert.equal(alert.hidden, false);
+    assert.equal(message.textContent, 'Failed to edit tags.');
+    assert.equal(logHistoryLink.hidden, !allowed);
+    assert.equal(logHistoryLink.dataset.logHistoryEntryId, allowed ? 'failed-edit-owned-event' : '');
+    assert.equal(alertClasses.has('has-log-history-link'), allowed);
+    assert.equal(alertClasses.has('is-error'), true);
+    assert.match(alert.innerHTML, /data-dismiss-repair-alert="1"/u);
+    assert.equal(scheduledTimeoutCount(), 0, 'the failed-tag message must remain persistent');
+  });
+}
+
+test('a replacement failure notice clears an earlier permitted Log History action after access is revoked', () => {
+  const { context, logHistoryLink, alertClasses } = createRepairAlertContext();
+  let allowed = true;
+  context.window = { AlbumHavenCapabilities: { allows: () => allowed } };
+  const show = id => context.showRepairAlert('Failed to edit tags.', 'error', null,
+    { logHistoryLink: true, logHistoryEntryId: id });
+  show('earlier-permitted-event');
+  assert.equal(logHistoryLink.hidden, false);
+  allowed = false;
+  show('later-denied-event');
+  assert.equal(logHistoryLink.hidden, true);
+  assert.equal(logHistoryLink.dataset.logHistoryEntryId, '');
+  assert.equal(alertClasses.has('has-log-history-link'), false);
 });

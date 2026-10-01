@@ -44,6 +44,7 @@ function fileToDataUrl(file) {
 }
 
 async function addPastedImageToCoverLookup(file) {
+  if (window.AlbumHavenCapabilities && !window.AlbumHavenCapabilities.allows('library.covers.upload')) return;
   if (!(file instanceof Blob) || !String(file.type || '').startsWith('image/')) {
     throw new Error('Choose an image file.');
   }
@@ -1129,6 +1130,7 @@ function sanitizeCoverLookupPossibleMatches(value) {
   return value
     .filter((item) => {
       if (!item || typeof item !== 'object' || Array.isArray(item)) return false;
+      if (window.AlbumHavenCapabilities && !window.AlbumHavenCapabilities.allowsCoverCandidate(item)) return false;
       const candidateIdKey = String(item.id || '').trim().toLowerCase();
       const normalizedUrlKey = normalizeCoverLookupCandidateUrl(item.url).toLowerCase();
       if (!candidateIdKey && !normalizedUrlKey) return false;
@@ -1937,6 +1939,7 @@ async function refreshCoverLookupGallery(showLoading = true) {
 }
 
 async function openCoverLookupModal(album, options = {}) {
+  if (window.AlbumHavenCapabilities && !window.AlbumHavenCapabilities.allows('library.covers.lookup')) return;
   coverLookupModalSession += 1;
   if (album && typeof presentMobileCoverLookupPage === 'function') presentMobileCoverLookupPage(album);
   const els = getCoverLookupModalElements();
@@ -2109,6 +2112,7 @@ async function startCoverLookupForAlbum(album, options = {}) {
 }
 
 function selectLocalCoverFromLookup(sourcePath) {
+  if (window.AlbumHavenCapabilities?.clientSurface === 'tv') return;
   state.coverLookup.modal.pendingLocalPath = String(sourcePath || '');
   state.coverLookup.modal.pendingPastedImageId = '';
   state.coverLookup.modal.selectedRemoteId = '';
@@ -2249,6 +2253,10 @@ async function deleteLocalCoverFromLookup(sourcePath) {
 }
 
 function selectRemoteCoverFromLookup(candidateId) {
+  const selectedCandidate = (state.coverLookup.modal.possibleMatches || []).find((candidate) => (
+    String(candidate?.id || '') === String(candidateId || '')
+  ));
+  if (window.AlbumHavenCapabilities && !window.AlbumHavenCapabilities.allowsCoverCandidate(selectedCandidate)) return;
   state.coverLookup.modal.pendingLocalPath = '';
   state.coverLookup.modal.pendingPastedImageId = '';
   state.coverLookup.modal.selectedRemoteId = String(candidateId || '');
@@ -2260,9 +2268,6 @@ function selectRemoteCoverFromLookup(candidateId) {
     || '',
   );
   state.coverLookup.modal.remoteSelectionOverrideCandidateId = String(candidateId || '');
-  const selectedCandidate = (state.coverLookup.modal.possibleMatches || []).find((candidate) => (
-    String(candidate?.id || '') === String(candidateId || '')
-  ));
   state.coverLookup.modal.remoteSelectionOverrideUrl = normalizeCoverLookupCandidateUrl(
     selectedCandidate?.url,
   );
@@ -2287,6 +2292,7 @@ async function saveRemoteCoverFromLookup() {
   if (!album || (!taskId && !snapshotGeneration) || !candidateId) return;
   const previousAlbum = deepCloneJson(album);
   const selectedMatch = (state.coverLookup.modal.possibleMatches || []).find((item) => String(item?.id || '') === String(candidateId || ''));
+  if (window.AlbumHavenCapabilities && !window.AlbumHavenCapabilities.allowsCoverCandidate(selectedMatch)) return;
   try {
     if (selectedMatch) {
       applyOptimisticRemoteCoverSelection(album, selectedMatch, '');

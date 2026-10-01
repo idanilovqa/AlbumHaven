@@ -1,4 +1,7 @@
 <!doctype html>
+{% set shell_layout = bootstrap_payload.initial_view.shell_layout if bootstrap_payload and bootstrap_payload.initial_view and bootstrap_payload.initial_view.shell_layout else {} %}
+{% set shell_slots = shell_layout.slots if shell_layout and shell_layout.slots else {} %}
+{% set shell_rail = shell_slots.navigation_rail if shell_slots and shell_slots.navigation_rail else {} %}
 <html lang="en">
 <head>
   <meta charset="utf-8">
@@ -46,13 +49,10 @@
     html[data-client-layout-pending="true"] *::after { transition: none !important; animation: none !important; }
   </style>
   <script src="{{ url_for('static', filename='js/client-layout-bootstrap.js') }}?v={{ runtime_asset_version }}"></script>
-  <script>AlbumHavenClientLayoutBootstrap.capture();</script>
+  <script>AlbumHavenClientLayoutBootstrap.capture({ defaultCollapsed: {{ (shell_rail.default_collapsed | default(false)) | tojson }} });</script>
   <link rel="stylesheet" href="{{ url_for('static', filename='css/mobile-layout.css') }}?v={{ runtime_asset_version }}">
 </head>
 <body>
-  {% set shell_layout = bootstrap_payload.initial_view.shell_layout if bootstrap_payload and bootstrap_payload.initial_view and bootstrap_payload.initial_view.shell_layout else {} %}
-  {% set shell_slots = shell_layout.slots if shell_layout and shell_layout.slots else {} %}
-  {% set shell_rail = shell_slots.navigation_rail if shell_slots and shell_slots.navigation_rail else {} %}
   {% set shell_app_bar = shell_slots.app_bar if shell_slots and shell_slots.app_bar else {} %}
   {% set shell_header_surfaces = shell_app_bar.header_surfaces if shell_app_bar and shell_app_bar.header_surfaces else {} %}
   {% set shell_notifications_surface = shell_header_surfaces.notifications if shell_header_surfaces and shell_header_surfaces.notifications else {} %}

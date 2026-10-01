@@ -33,6 +33,7 @@ export class UtilityAppearanceTab extends BasePage {
     this.deviceControls = page.locator('.appearance-device-controls');
     this.deviceModeControls = page.locator('[data-appearance-device-mode]');
     this.deviceModeGroup = this.deviceControls.getByRole('group', { name: 'Appearance linking', includeHidden: true });
+    this.followMobileMode = this.deviceControls.getByRole('button', { name: 'Follow Web / Desktop', exact: true });
     this.customMobileMode = this.deviceControls.getByRole('button', { name: 'Custom mobile', exact: true });
     this.editorHeading = this.editor.getByRole('heading', { level: 3 });
     this.navigationTree = new NavigationTree(this.sidebar.list);

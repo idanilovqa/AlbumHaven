@@ -90,8 +90,11 @@ export class MembersPage {
     this.myAccountLink = this.navigation.getByRole('link', { name: 'My account', exact: true });
     this.placeholderEntries = this.navigation.getByText(/Email delivery|Security|Audit log/);
     this.capabilityRole = page.getByRole('combobox', { name: 'Capability role', exact: true });
-    this.ownerRoleOption = this.capabilityRole.getByRole('option', { name: 'Owner', exact: true });
-    this.permissions = page.getByRole('group', { name: /^(Individual|Explicit) permissions$/ });
+    this.roles = page.getByRole('group', { name: 'Roles', exact: true });
+    this.assignedRoles = this.roles.getByRole('checkbox', { checked: true });
+    this.savedStatus = page.locator('[data-admin-form-status]');
+    this.backToUsers = page.getByRole('link', { name: /Back to users/ });
+    this.permissions = page.getByRole('group', { name: 'Capabilities', exact: true });
     this.capabilitySwitches = this.permissions.getByRole('checkbox');
     this.checkedCapabilitySwitches = this.permissions.getByRole('checkbox', { checked: true });
     this.ownerFullAccess = page.getByText(/^Owner\s*·\s*Full access$/);
@@ -131,8 +134,18 @@ export class MembersPage {
     await expect(this.page.getByRole('heading', { name: 'Edit user', exact: true })).toBeVisible();
   }
 
-  async submitAccountChanges() {
+  async saveWithoutLeaving() {
+    const address = this.page.url();
     await this.saveChanges.click();
+    await expect(this.savedStatus).toHaveText('Changes saved.');
+    await expect(this.page).toHaveURL(address);
+    await expect(this.saveChanges).toBeEnabled();
+  }
+
+  async submitAccountChanges() {
+    await this.saveWithoutLeaving();
+    // Navigation is now a deliberate administrator action, never a save effect.
+    await this.backToUsers.click();
     await expect(this.page).toHaveURL(/\/admin\/members$/);
     await expect(this.page.getByRole('heading', { name: 'Users & access' })).toBeVisible();
   }

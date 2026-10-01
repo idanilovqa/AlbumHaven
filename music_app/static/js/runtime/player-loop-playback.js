@@ -88,15 +88,6 @@ function renderGlobalPlayerMetadata(els, track) {
   syncGlobalPlayerMetadataMotion(els, mobile);
 }
 
-function renderGlobalPlayerPlayGlyph(button, paused) {
-  const mobile = typeof usesMobilePageLayout === 'function' && usesMobilePageLayout();
-  const icon = paused ? 'play' : 'pause';
-  const key = `${mobile ? 'svg' : 'text'}:${icon}`;
-  if (button.getAttribute?.('data-player-glyph') === key) return;
-  if (mobile) button.innerHTML = ButtonComponent.renderIconSvg(icon);
-  else button.textContent = paused ? '\u25B6' : '\u23F8';
-  button.setAttribute('data-player-glyph', key);
-}
 
 function clampLoopTimes() {
   const duration = getPlayerDuration() || 0;
@@ -153,6 +144,13 @@ function updateLoopInputsFromState() {
   if (els.loopEndInput && document.activeElement !== els.loopEndInput) {
     els.loopEndInput.value = formatLoopTime(state.player.loopEnd, true);
   }
+}
+
+function renderGlobalPlayerPlayGlyph(button, paused) {
+  const icon = paused ? 'play' : 'pause';
+  if (button.getAttribute('data-player-glyph') === icon) return;
+  button.innerHTML = window.ButtonComponent.renderIconSvg(icon, { className: 'player-transport-icon' });
+  button.setAttribute('data-player-glyph', icon);
 }
 
 function updatePlayerUi() {
@@ -992,6 +990,7 @@ function attachSharedPlayer() {
 }
 
 function activateSharedTrackButton(btn, { restart = false, focusTimeline = false } = {}) {
+  if (window.AlbumHavenCapabilities && !window.AlbumHavenCapabilities.allows('library.media.read')) return;
   const src = btn.getAttribute('data-src');
   if (!src) return;
   if (typeof triggerAlbumTrackPlayActivation === 'function' && btn.classList?.contains('album-track-table__play')) {

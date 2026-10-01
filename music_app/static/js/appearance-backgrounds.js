@@ -915,7 +915,7 @@
         if (!seekbarConfigured) { seekbarModes.clear(); seekbarConfigured = true; }
         seekbarState();
       },
-      setSeekbarMode(mode) { if (editBlocked()) return; seekbarState().draft = normalizeSeekbarMode(mode); notify(); },
+      setSeekbarMode(mode) { if (busy() || (activeDeviceProfile !== 'tv' && editBlocked())) return; seekbarState().draft = normalizeSeekbarMode(mode); notify(); },
       setPlayerStyle, setPlayerStyleColor, restorePlayerSet, setSelectionAccent, setActionButtonOutlines, setInteractionOverrides, setItemOutline, useThemeInteractions, setDeviceProfile, setDeviceSectionMode, setActiveSection, cancel, reset, resetSection, load, save, clear,
       getMainPreview, reconcileLoopCapability, subscribe(listener) { listeners.add(listener); return () => listeners.delete(listener); } };
   }

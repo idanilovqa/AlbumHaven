@@ -399,6 +399,7 @@ export class NavigationPanelActions {
   }
 
   async waitForActiveSelectionInViewport(options = {}) {
+    await this.setArtistTreeFolded(false);
     await this.navigationPanel.waitForPageCondition((selectors) => {
       const activeLink = document.querySelector(selectors.activeSidebarLinkSelector);
       const sidebar = document.querySelector(selectors.sidebarScrollContainerSelector);

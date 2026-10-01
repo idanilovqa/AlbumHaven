@@ -187,6 +187,7 @@ test('non-green player surfaces derive computed action hover colors and bare chr
       border: getComputedStyle(element).borderColor,
     })));
     await page.mouse.move(0, 0);
+    await action.evaluate((element) => Promise.all(element.getAnimations().map((animation) => animation.finished)));
   }
   expect(samples[0].background).not.toBe(samples[1].background);
   expect(samples[0].background).not.toContain('29, 185, 84');

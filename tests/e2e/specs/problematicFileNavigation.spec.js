@@ -1,5 +1,5 @@
 import { expect, test } from '../support/baseFixtures.js';
-import { expectProblematicNavigationRecords } from '../helpers/problematicVirtualScrollHelpers.js';
+import { expectProblematicNavigationRecords } from '../helpers/problematicNavigationEvidence.js';
 import {
   changedId3Frames,
   readGeneratedMp3TagSnapshots,

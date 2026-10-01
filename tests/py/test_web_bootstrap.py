@@ -204,6 +204,8 @@ def test_runtime_asset_version_is_refreshed_for_each_html_response(
     asgi_app.state.templates = CapturingTemplates()
     request = SimpleNamespace(
         app=asgi_app,
+        scope={},
+        headers={},
         cookies={"__Host-album_haven_session": "s" * 43},
         state=SimpleNamespace(current_actor=asgi_app.state.current_actor_resolver.resolve(None)),
         client=SimpleNamespace(host="testserver"),
@@ -430,6 +432,9 @@ def test_index_renders_shell_without_legacy_flask_route_module(asgi_app, monkeyp
     assert payload["bootstrap"]["startupHydration"]["followupEndpoint"] == "/view-data?surface=albums&omit_sidebar=1"
     assert payload["bootstrap"]["startupHydration"]["tier"] == "sidebar"
     assert re.search(rb'<[^>]+id="library-loader"[^>]*\bhidden(?:\s|>)', body)
+    loader_tag = re.search(rb'<section\b[^>]*\bid="library-loader"[^>]*>', body)
+    assert loader_tag is not None
+    assert re.search(rb'\shidden(?:\s|>)', loader_tag.group())
     assert b'<div class="albums-scroll" id="albums-scroll" hidden>' not in body
     assert b'data-sidebar-artist="Broadcast"' in body
     assert payload["bootstrap"]["startupHydration"]["embeddedViewPatch"] == {
@@ -1610,6 +1615,7 @@ def test_app_js_loads_generated_runtime_bundle_after_bootstrap_payload_setup():
         "appearance-backgrounds.js",
         "appearance-palettes.js",
         "appearance-device-profiles.js",
+        "capability-ui.js",
         "client-device-preferences.js",
         "client-layout-bootstrap.js",
         "surface-dismissal.js",

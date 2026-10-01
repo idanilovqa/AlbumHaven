@@ -286,6 +286,7 @@ function handleMobilePagePopState() {
   mobilePageState.restoring = true;
   try { requested.slice(common).forEach(restoreMobilePage); }
   finally { mobilePageState.restoring = false; }
+  if (mobilePageState.pages.length < requested.length) writeMobilePageHistory('replace');
   syncMobilePageShell();
   // A background refresh may have replaced the gallery while its child was open.
   // Restore the retained parent URL through the normal gallery request owner.
@@ -550,7 +551,7 @@ function initMobileNavigation() {
   // Enforce presentation restrictions at all delegated mobile action entry points.
   document.addEventListener('click', (event) => {
     if (!isMobileClient()) return;
-    if (event.target.closest?.('[data-open-problematic-album-folder], [data-open-non-album-tag-editor], [data-open-tag-editor], [data-edit-tags], [data-edit-album-tags], [data-edit-track-tags], [data-revert-version-exception], [data-revert-problem-ignore], [data-delete-saved-loop]')) {
+    if (event.target.closest?.('[data-open-track-modal-duplicate-folder], [data-open-problematic-album-folder], [data-open-non-album-tag-editor], [data-open-tag-editor], [data-edit-tags], [data-edit-album-tags], [data-edit-track-tags], [data-revert-version-exception], [data-revert-problem-ignore], [data-delete-saved-loop]')) {
       event.preventDefault(); event.stopImmediatePropagation();
     }
   }, true);

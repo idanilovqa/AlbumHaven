@@ -172,6 +172,8 @@ def open_command(media_path: Path, **changes) -> dict[str, object]:
 
 
 def configure_authenticated_request_double(websocket: object) -> None:
+    websocket.scope = {"type": "websocket", "path": "/playback/pcm", "headers": []}
+    websocket.headers = {}
     websocket.cookies = {}
     websocket.state = SimpleNamespace()
     websocket.client = SimpleNamespace(host="testclient")

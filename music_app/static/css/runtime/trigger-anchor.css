@@ -11,11 +11,16 @@
 :root[data-appearance-mode='light'] :is(.shell-main-surface, .settings-outlet) {
   --trigger-anchor-background: var(--appearance-card);
 }
-:root[data-appearance-mode='light'] .trigger-anchor-surface[data-trigger-anchor-context='content']:is([data-anchored-surface], .artist-info-overlay) {
+/* Context is set before the connector samples the popup background. Apply the
+   content palette at that point, including mixed content/chrome themes. */
+:root [data-trigger-anchor-context='content'],
+:root[data-appearance-palette] [data-trigger-anchor-context='content'] {
   --trigger-anchor-background: var(--appearance-card);
+  --panel: var(--appearance-card);
   --text: var(--appearance-ink);
   --muted: var(--appearance-muted);
   --border: var(--appearance-line);
+  background: var(--trigger-anchor-background);
   color: var(--text);
 }
 :root .trigger-anchor-open[data-trigger-anchor-context='content'] {
@@ -204,10 +209,10 @@
   box-shadow: none !important;
   transition: background-color 150ms ease;
 }
-:root :is(.account-menu-item, .gallery-anchored-menu button, [role="menu"] [role^="menuitem"], [role="listbox"] [role="option"], .album-card-context-menu button, .status-context-menu button, .gallery-options-menu button, .utility-problem-filter-option, .utility-loop-speed-menu button, .recent-search-option, .artist-family-panel__combine-row .gallery-switch, .ui-filter-pill):hover:not(:disabled):not([aria-disabled="true"]) {
+:root :is(.account-menu-item, .gallery-anchored-menu button, [role="menu"] [role^="menuitem"], [role="listbox"] [role="option"], .album-card-context-menu button, .status-context-menu button, .gallery-options-menu button, .utility-problem-filter-option, .utility-loop-speed-menu button, .recent-search-option, .artist-family-panel__combine-row .gallery-switch, .ui-filter-pill):hover:not(.gallery-switch):not(:disabled):not([aria-disabled="true"]) {
   background: var(--dropdown-item-hover-background, color-mix(in srgb, var(--text, #eee) 8%, var(--panel, #171717))) !important;
 }
-:root :is(.account-menu-item, .gallery-anchored-menu button, [role="menu"] [role^="menuitem"], [role="listbox"] [role="option"], .album-card-context-menu button, .status-context-menu button, .gallery-options-menu button, .utility-problem-filter-option, .utility-loop-speed-menu button, .recent-search-option, .artist-family-panel__combine-row .gallery-switch):hover:not(:disabled):not([aria-disabled="true"]) {
+:root :is(.account-menu-item, .gallery-anchored-menu button, [role="menu"] [role^="menuitem"], [role="listbox"] [role="option"], .album-card-context-menu button, .status-context-menu button, .gallery-options-menu button, .utility-problem-filter-option, .utility-loop-speed-menu button, .recent-search-option, .artist-family-panel__combine-row .gallery-switch):hover:not(.gallery-switch):not(:disabled):not([aria-disabled="true"]) {
   border-color: transparent !important;
 }
 :root :is(.account-menu-item, .gallery-anchored-menu button, [role="menu"] [role^="menuitem"], [role="listbox"] [role="option"], .album-card-context-menu button, .status-context-menu button, .gallery-options-menu button, .utility-problem-filter-option, .utility-loop-speed-menu button, .recent-search-option, .artist-family-panel__combine-row .gallery-switch, .ui-filter-pill):focus-visible:not(:disabled):not([aria-disabled="true"]) {
@@ -222,6 +227,7 @@
 :root .gallery-switch:not(.artist-family-panel__combine-row .gallery-switch):hover:not(:disabled):not([aria-disabled="true"]) {
   background: transparent !important;
 }
+:root .artist-family-panel__combine-row .gallery-switch:hover:not(:disabled):not([aria-disabled="true"]),
 :root .artist-family-panel__combine-row .gallery-switch:active:not(:disabled):not([aria-disabled="true"]) {
   background: var(--dropdown-item-hover-background, color-mix(in srgb, var(--text, #eee) 8%, var(--panel, #171717))) !important;
   border-color: transparent !important;

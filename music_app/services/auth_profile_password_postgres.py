@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from music_app.services.postgres_connections import pooled_connection as _connect
+
 from collections.abc import Callable, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -23,12 +25,6 @@ from music_app.services.auth_passwords import (
 )
 from music_app.services.auth_credential_attempts_postgres import PostgresCredentialAttempts, shared_verification_capacity
 
-try:  # pragma: no cover - exercised when the optional runtime driver is present.
-    import psycopg
-    from psycopg.rows import dict_row
-except ImportError:  # pragma: no cover
-    psycopg = None
-    dict_row = None
 
 
 _DATABASE_URL_KEY = "ALBUM_HAVEN_APP_DATABASE_URL"
@@ -573,9 +569,3 @@ def _aware_utc(value: object) -> datetime:
     if not isinstance(value, datetime) or value.tzinfo is None:
         raise RuntimeError("Profile password clock is invalid.")
     return value.astimezone(timezone.utc)
-
-
-def _connect(database_url: str) -> Any:
-    if psycopg is None:
-        raise RuntimeError("psycopg is required for profile credentials.")
-    return psycopg.connect(database_url, row_factory=dict_row)

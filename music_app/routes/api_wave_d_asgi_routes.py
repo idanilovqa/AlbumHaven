@@ -45,6 +45,8 @@ from music_app.services.cover_lookup_tasks import (
     update_cover_lookup_task,
 )
 from music_app.services.cover_manual_links import add_manual_cover_candidates_from_urls
+from music_app.services.client_surfaces import client_surface_from_request
+from music_app.services.cover_provider_candidates import is_provider_lookup_match
 from music_app.services.cover_refresh_runtime import (
     cancel_cover_refresh_status,
     start_manual_cover_refresh_request,
@@ -448,6 +450,8 @@ async def utilities_cover_lookup_start(request: Request) -> JSONResponse:
     if album_error is not None:
         return _json_response(album_error)
     manual_urls = _clean_string_list(payload.get("manual_urls"))
+    if manual_urls and client_surface_from_request(request) == "tv":
+        return _json_response(({"ok": False, "error": "Manual cover links are unavailable on TV."}, 403))
     album_context = resolve_album_context(config, album or {})
     if album_context is None:
         return _json_response(({"ok": False, "error": "Album does not contain any tracks"}, 400))
@@ -494,6 +498,8 @@ async def utilities_cover_lookup_cancel(request: Request, task_id: str) -> JSONR
 
 @router.post("/utilities/cover-lookup/local-select")
 async def utilities_cover_lookup_local_select(request: Request) -> JSONResponse:
+    if client_surface_from_request(request) == "tv":
+        return _json_response(({"ok": False, "error": "Local cover selection is unavailable on TV."}, 403))
     history_scope = await history_scope_for_request(request, required=False)
     config = _app_config(request)
     logger = _app_logger(request)
@@ -951,14 +957,16 @@ async def utilities_cover_lookup_save_remote(request: Request) -> JSONResponse:
             ),
             None,
         ) if isinstance(snapshot_candidates, list) else None
-        if selected_match:
-            if not task_payload:
-                task_id, _cancel_event = create_cover_lookup_task(
-                    dict(album or {}),
-                    album_context.track_paths,
-                    internal=True,
-                )
-                task_payload = cover_lookup_result(task_id)
+    if (selected_match and client_surface_from_request(request) == "tv"
+            and not is_provider_lookup_match(selected_match)):
+        return _json_response(({"ok": False, "error": "Only provider cover candidates can be selected on TV."}, 403))
+    if selected_match and not task_payload:
+        task_id, _cancel_event = create_cover_lookup_task(
+            dict(album or {}),
+            album_context.track_paths,
+            internal=True,
+        )
+        task_payload = cover_lookup_result(task_id)
     if not task_payload:
         return _json_response(_task_not_found_response("Lookup task"))
     if not selected_match:

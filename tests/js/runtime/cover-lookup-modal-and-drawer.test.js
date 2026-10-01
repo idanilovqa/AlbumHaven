@@ -19,6 +19,7 @@ const helperSource = fs.readFileSync(helperPath, 'utf8');
 function loadHelper(overrides = {}) {
   const context = {
     document: { getElementById: () => null },
+    window: {},
     ButtonComponent: require(path.join(__dirname, '../../../music_app/static/js/button-component.js')),
     state: {
       coverLookup: {
@@ -3027,6 +3028,30 @@ function createDrawerHarness(overrides = {}) {
   console.error(error);
   process.exitCode = 1;
 });
+
+
+{
+  const { install } = require('../../../music_app/static/js/capability-ui.js');
+  const policy = install({ getElementById: () => ({ textContent: JSON.stringify({
+    allowed_actions: {}, client_surface: 'tv', denied_selectors: [],
+    cover_provider_groups: ['services', 'cover_art_archive'],
+  }) }) });
+  const context = loadHelper({ window: { AlbumHavenCapabilities: policy } });
+  const candidates = [
+    { id: 'provider', url: 'https://example.test/provider.jpg', lookup_group: 'services' },
+    { id: 'manual', url: 'https://example.test/manual.jpg', lookup_group: 'manual_links', source: 'spotify' },
+    { id: 'unknown', url: 'https://example.test/unknown.jpg' },
+  ];
+  assert.deepEqual(Array.from(context.sanitizeCoverLookupPossibleMatches(candidates), item => item.id), ['provider']);
+  const modal = context.state.coverLookup.modal;
+  modal.possibleMatches = candidates;
+  modal.selectedRemoteId = 'provider';
+  modal.pendingLocalPath = '';
+  context.selectRemoteCoverFromLookup('manual');
+  assert.equal(modal.selectedRemoteId, 'provider', 'TV must reject programmatic manual candidate selection');
+  context.selectLocalCoverFromLookup('private-cover.jpg');
+  assert.equal(modal.pendingLocalPath, '', 'TV must reject programmatic local selection');
+}
 
 
 function savedSourceRevisionContext({ albumRevision = 'saved-revision', saving = false, sourceToken = 1790000000000 } = {}) {

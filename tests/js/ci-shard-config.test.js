@@ -34,9 +34,9 @@ test('performance shard resolver preserves the existing fixture and target mappi
     selectFocusedPerformanceTargets(resolvePerformanceShard('scan-library'), ['scan-cached'], 'exact').targets,
     ['scan-cached'],
   );
-  assert.equal(
-    selectFocusedPerformanceTargets(resolvePerformanceShard('scan-library'), ['scan-cached'], 'related').targets.length,
-    7,
+  assert.deepEqual(
+    selectFocusedPerformanceTargets(resolvePerformanceShard('scan-library'), ['scan-cached'], 'related').targets,
+    ['scan-cold', 'scan-cached', 'scan-add-album', 'scan-metadata', 'scan-page', 'scan-health', 'scan-error'],
   );
   assert.throws(
     () => selectFocusedPerformanceTargets(resolvePerformanceShard('scan-library'), ['playback-start'], 'exact'),

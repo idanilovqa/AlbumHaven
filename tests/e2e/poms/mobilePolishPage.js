@@ -19,7 +19,7 @@ export class MobilePolishPage extends MobileLayoutPage {
     this.adminDrawer = this.accountHost.locator('[data-settings-nav]');
     this.adminBack = this.adminDrawer.getByRole('button', { name: 'Back to page', exact: true });
     this.adminActions = this.accountHost.locator('[data-admin-action]:not(.is-danger)');
-    this.ownerInfo = this.accountHost.locator('.admin-role-info');
+    this.ownerInfo = this.accountHost.locator('#admin-role-description[role="note"]');
     this.parentLink = this.accountBar.locator('[data-settings-parent]');
     this.usersTable = this.accountHost.getByRole('table');
     this.userActions = this.accountHost.getByRole('button', { name: 'Actions for Rendref', exact: true });
@@ -47,6 +47,7 @@ export class MobilePolishPage extends MobileLayoutPage {
 
   async expectAdminFeedback() {
     await expect(this.ownerInfo).toHaveAttribute('data-on-page-alert', 'info');
+    await expect(this.ownerInfo).not.toHaveAttribute('aria-live');
     // parity-check: allow-read-only-measurement-evaluate -- compare the shared action controls' rendered dimensions.
     const boxes = await this.adminActions.evaluateAll(nodes => nodes.map(node => ({ width: node.getBoundingClientRect().width, height: node.getBoundingClientRect().height })));
     expect(boxes.length).toBeGreaterThan(1);

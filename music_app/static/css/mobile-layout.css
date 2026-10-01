@@ -39,7 +39,7 @@
 .mobile-home-empty { padding: 32px 14px; text-align: center; }
 .mobile-preference-status { position: fixed; bottom: calc(var(--player-height) + 8px); left: 16px; right: 16px; z-index: 6500; padding: 12px; border: 1px solid var(--border); border-radius: 8px; background: var(--panel); font-size: 13px; }
 /* Keep mobile-unsupported file mutations unavailable on wide mobile clients too. */
-html[data-client-profile="mobile"] :is([data-open-problematic-album-folder], [data-open-non-album-tag-editor], [data-open-tag-editor], [data-edit-tags], [data-edit-album-tags], [data-edit-track-tags], #track-modal-edit-tags, #track-modal-folder) { display: none !important; }
+html[data-client-profile="mobile"] :is([data-open-track-modal-duplicate-folder], [data-open-problematic-album-folder], [data-open-non-album-tag-editor], [data-open-tag-editor], [data-edit-tags], [data-edit-album-tags], [data-edit-track-tags], #track-modal-edit-tags, #track-modal-folder) { display: none !important; }
 /* A button takes its surface from its containing bar, not a contrasting card. */
 .app-bar { --appearance-neutral-button-background: var(--app-control, var(--panel-2)); }
 

@@ -2,6 +2,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
+const vm = require('node:vm');
 
 const appearance = require('../../../music_app/static/js/appearance-backgrounds.js');
 
@@ -740,7 +741,7 @@ test('Item interaction tokens cover shared actionable controls without recolorin
   assert.match(css, /:is\(button, input, select, \[role='button'\], \[data-actionable\]\)[^{]*:not\(\.global-player \*\)[^{]*:focus-visible[^{}]*\{[^}]*outline:\s*1px solid var\(--appearance-interaction-outline,[^;}]+;[^}]*outline-offset:\s*1px/s);
   assert.match(css, /:root\s+:is\(button, \.button, \[role='button'\], \[data-actionable\]\)[^{]*:hover[^{}]*\{[^}]*border-color:\s*var\(--appearance-item-action-hover-border,/s);
   assert.match(css, /:root\s+:is\(button, input, select, \[role='button'\], \[data-actionable\]\)[^{]*:not\(\.global-player \*\)[^{]*:focus-visible[^{}]*\{[^}]*outline:\s*1px solid var\(--appearance-interaction-outline,/s);
-  assert.match(css, /:is\(input\[type='checkbox'\], input\[type='radio'\]\):not\(\.global-player \*\):hover:not\(:disabled\)[^{}]*\{[^}]*outline:\s*1px solid var\(--appearance-interaction-outline,/s);
+  assert.match(css, /:is\(input\[type='checkbox'\], input\[type='radio'\]\):not\(\.global-player \*\):hover:not\(:disabled\)[^{}]*\{[^}]*outline:\s*1px solid var\(--appearance-control-selected\)/s);
   assert.match(css, /:root\[data-appearance-palette\]\s+:is\(input\[type='checkbox'\], input\[type='radio'\]\)\s*\{[^}]*accent-color:\s*var\(--appearance-control-selected\)/s);
   assert.doesNotMatch(css, /:root\[data-appearance-palette\][^{]*:focus-visible\s*\{[^}]*--appearance-interaction-outline/s);
 });
@@ -829,6 +830,126 @@ for (const mode of ['gradient', 'layered_gradient', 'solid']) {
     assert.deepEqual(reloaded.getState().draft.player_style_override, expected);
   });
 }
+
+for (const liveProfile of ['tv', 'web_desktop', 'mobile']) {
+  test(`TV Follow waveform Save targets TV and isolates the ${liveProfile} live player through the bridge`, async () => {
+    const { controller, requests } = setup();
+    controller.setActiveSection('seekbar');
+    controller.setDeviceProfile('tv');
+    const stored = {
+      tv: { seekbarMode: 'default', waveformFillColor: '#123456' },
+      web_desktop: { seekbarMode: 'default', waveformFillColor: '#234567' },
+      mobile: { seekbarMode: 'thin', waveformFillColor: '#345678' },
+    };
+    const original = structuredClone(stored), writes = [], repaints = [];
+    const state = { player: { appearance: { ...stored[liveProfile] } } };
+    const host = {};
+    const context = vm.createContext({
+      state,
+      normalizePlayerAppearance: value => ({ ...value }),
+      updateWaveformAppearance: force => repaints.push(force),
+      window: {
+        addEventListener() {},
+        AlbumHavenDevicePreferences: {
+          enabled: true,
+          profile: () => liveProfile,
+          read: (field, _fallback, profile) => {
+            assert.equal(field, 'playerAppearance');
+            return stored[profile];
+          },
+          write: (field, value, profile) => {
+            writes.push({ field, value, profile });
+            stored[profile] = value;
+            return true;
+          },
+          flush: async () => true,
+        },
+        AlbumHavenAppearance: { instance: { mountSeekbar(target, options) {
+          assert.equal(target, host);
+          controller.configureSeekbar(options.getSeekbarMode('tv'), options.applySeekbarMode, options.getSeekbarMode);
+        } } },
+      },
+    });
+    vm.runInContext(fs.readFileSync(path.join(__dirname, '../../../music_app/static/js/runtime/appearance-backgrounds-bridge.js'), 'utf8'), context);
+    context.mountSeekbarAppearanceEditor({ querySelector: () => host });
+    const before = controller.getState();
+    assert.equal(before.deviceProfiles.tv.sections.player.mode, 'follow');
+    assert.equal(before.canEdit, false, 'TV theme remains in Follow mode');
+    controller.setSeekbarMode('waveform');
+    assert.equal(controller.getState().seekbarMode, 'waveform');
+    assert.equal(controller.getState().canSave, true);
+    assert.deepEqual(writes, []);
+    assert.deepEqual(repaints, []);
+    assert.deepEqual(state.player.appearance, original[liveProfile]);
+
+    assert.equal(await controller.save(), true);
+    assert.equal(requests.length, 1);
+    assert.deepEqual(requests[0].payload.device_profiles.tv, before.deviceProfiles.tv);
+    assert.deepEqual(writes, [{ field: 'playerAppearance', value: { ...original.tv, seekbarMode: 'waveform' }, profile: 'tv' }]);
+    assert.deepEqual(stored.web_desktop, original.web_desktop);
+    assert.deepEqual(stored.mobile, original.mobile);
+    assert.deepEqual(state.player.appearance, liveProfile === 'tv' ? stored.tv : original[liveProfile]);
+    assert.deepEqual(repaints, liveProfile === 'tv' ? [true] : []);
+    assert.equal(controller.getState().dirty, false);
+    assert.equal(controller.getState().activeDeviceProfile, 'tv');
+    controller.setSeekbarMode('default');
+    controller.cancel();
+    assert.equal(controller.getState().seekbarMode, 'waveform');
+    assert.equal(writes.length, 1);
+  });
+}
+
+test('TV waveform mode leaves theme mutations blocked and Mobile Follow keeps its seekbar locked', () => {
+  const { controller } = setup();
+  controller.setActiveSection('seekbar');
+  controller.setDeviceProfile('tv');
+  const before = controller.getState();
+  controller.setSeekbarMode('waveform');
+  controller.setPlayerStyleColor('handles.color', '#123456');
+  controller.setWaveformColor('fill', '#234567');
+  controller.setCompactPlayerStyle('floating');
+  controller.resetSection('seekbar');
+  assert.deepEqual(controller.getState().draft, before.draft);
+  assert.deepEqual(controller.getState().deviceProfiles, before.deviceProfiles);
+  assert.equal(controller.getState().seekbarMode, 'waveform');
+  controller.cancel();
+
+  controller.setDeviceProfile('mobile');
+  assert.equal(controller.getState().deviceProfiles.mobile.sections.player.mode, 'follow');
+  controller.setSeekbarMode('waveform');
+  assert.equal(controller.getState().seekbarMode, 'default');
+  assert.equal(controller.getState().dirty, false);
+});
+
+for (const operation of ['load', 'save']) {
+  test(`TV seekbar mode rejects edits while ${operation} is pending`, async () => {
+    let finish;
+    const pending = new Promise(resolve => { finish = resolve; });
+    const { controller } = setup({ request: () => pending });
+    if (operation === 'save') controller.setColor('main_surface_color', '#123456');
+    controller.setActiveSection('seekbar');
+    controller.setDeviceProfile('tv');
+    const inFlight = controller[operation]();
+    assert.equal(controller.getState()[operation === 'load' ? 'loading' : 'saving'], true);
+    controller.setSeekbarMode('waveform');
+    assert.equal(controller.getState().seekbarMode, 'default');
+    finish(initialAppearance());
+    assert.equal(await inFlight, true);
+    assert.equal(controller.getState().seekbarMode, 'default');
+  });
+}
+
+test('TV seekbar mode rejects edits after an appearance load failure', async () => {
+  const { controller } = setup({ request: async () => { throw new Error('Appearance unavailable'); } });
+  controller.setActiveSection('seekbar');
+  controller.setDeviceProfile('tv');
+  assert.equal(await controller.load(), false);
+  assert.equal(controller.getState().loadFailed, true);
+  controller.setSeekbarMode('waveform');
+  assert.equal(controller.getState().seekbarMode, 'default');
+  assert.equal(controller.getState().dirty, false);
+  assert.equal(await controller.save(), false);
+});
 
 test('saving a custom Mobile section returns to a clean draft and sends no derived Web profile', async () => {
   const { controller, requests } = setup();

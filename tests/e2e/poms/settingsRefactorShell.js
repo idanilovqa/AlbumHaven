@@ -76,6 +76,7 @@ export class SettingsRefactorShell extends BasePage {
   }
 
   tab(key) { return this.dialog.locator(`[data-utility-tab="${key}"]`); }
+  rowByKey(key) { return this.tree.locator(`[data-problematic-album-key=${JSON.stringify(String(key))}]`); }
   rowTitle(row) { return row.locator('.utility-list-item-title'); }
   rowMeta(row) { return row.locator('.utility-list-item-meta'); }
   rowCount(row) { return row.locator('.navigation-tree-count'); }

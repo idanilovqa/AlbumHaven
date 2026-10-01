@@ -262,15 +262,16 @@ test('FTC-SETTINGS-S03 deep Problems selection retains the mounted tree scroll a
     expect(count).toBeGreaterThan(10);
     const summary = await capture.summary();
     expect(summary).toHaveLength(count);
-    const target = summary[count - 2];
+    const items = await utilityProblematicFilesActions.readCompleteListItems();
+    expect(items.map(item => item.key)).toEqual(summary.map(item => item.key));
+    const target = items[count - 2];
     await utilityProblematicFilesActions.revealListItemByIdentity({ key: target.key });
     const row = shell.rowByKey(target.key);
     await row.scrollIntoViewIfNeeded();
     const retained = await shell.retainTree(row);
     try {
       expect((await retained.read()).scrollTop).toBeGreaterThan(0);
-      await row.click();
-      await expect(row).toHaveAttribute('aria-current', 'true');
+      await selectRow(shell, row);
       await expect.poll(async () => Boolean(await capture.detail(target.key))).toBe(true);
       const expected = problemDetailExpectation(await capture.detail(target.key));
       await expect(shell.heading).toHaveText(expected.title);

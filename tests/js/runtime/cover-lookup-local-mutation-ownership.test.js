@@ -16,7 +16,7 @@ function harness() {
   const requests = [], galleries = [], notifications = [], painted = new Map(), server = new Map();
   const context = vm.createContext({
     state: { coverRefreshTokens: {}, coverLookup: { modal: { pastedImages: [] }, tasks: [], optimisticAlbumCovers: {} } },
-    HTMLButtonElement: Button, URL, URLSearchParams, console: { log() {}, error() {}, warn() {} },
+    window: {}, HTMLButtonElement: Button, URL, URLSearchParams, console: { log() {}, error() {}, warn() {} },
     deepCloneJson: clone, persistCoverLookupNotificationTasks() {},
     getAlbumPathSignature: value => value?.tracks?.map(track => track.path).join('::') || '',
     buildCoverUrl: value => value, showToast: (...args) => notifications.push(args),
@@ -150,6 +150,7 @@ for (const outcome of ['success', 'error']) {
     await h.settle(0, outcome);
     await first;
     assert.equal(h.context.state.coverLookup.modal.saving, true);
+    assert.equal(h.context.isCoverLookupLocalMutationPending(), true);
     assert.equal(h.save.disabled, true);
     assert.equal(h.overlay.hidden, false);
     assert.strictEqual(h.context.state.coverLookup.optimisticAlbumCovers['/B/track.mp3'], optimistic);
@@ -157,6 +158,7 @@ for (const outcome of ['success', 'error']) {
     await h.settle(1);
     await second;
     assert.equal(h.context.state.coverLookup.modal.saving, false);
+    assert.equal(h.context.isCoverLookupLocalMutationPending(), false);
     assert.equal(h.painted.get('B'), 'B-settled');
   });
 }
@@ -179,6 +181,7 @@ test('local mutation claim spans image preload and releases after synchronous se
   h.context.applyOptimisticLocalCoverSelection = () => { throw new Error('Setup failed'); };
   await h.context.saveLocalCoverFromLookup('/A/newer.jpg');
   assert.equal(h.context.state.coverLookup.modal.saving, false);
+  assert.equal(h.context.isCoverLookupLocalMutationPending(), false);
   assert.equal(h.remove.disabled, false);
   assert.equal(h.notifications.at(-1)[1], 'error');
 });
@@ -254,6 +257,7 @@ test('a reopened reconciliation read cannot overwrite a subsequently admitted lo
   assert.deepEqual(clone(h.context.state.coverLookup.modal.localCovers), cards);
   assert.strictEqual(h.context.state.coverLookup.optimisticAlbumCovers['/A/track.mp3'], optimistic);
   assert.equal(h.context.state.coverLookup.modal.saving, true);
+  assert.equal(h.context.isCoverLookupLocalMutationPending(), true);
   assert.equal(h.save.disabled, true);
   await h.settle(1);
   await second;

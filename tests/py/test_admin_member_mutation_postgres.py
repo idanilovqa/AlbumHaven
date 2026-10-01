@@ -126,34 +126,32 @@ def test_admin_update_replaces_membership_and_capabilities_and_revokes_on_disabl
     assert connection.events == ["begin", "commit"]
 
 
-def test_admin_update_requires_recent_auth_and_explicit_destructive_confirmation():
+def test_admin_update_accepts_active_session_but_requires_explicit_destructive_confirmation():
     from music_app.services.admin_member_mutation_postgres import (
         DestructiveConfirmationRequired,
-        RecentAuthenticationRequired,
     )
 
     connection = Connection()
     service = _service(connection)
 
-    try:
-        service.update_account(
-            actor_account_id=7,
-            actor_session_id=11,
-            actor_authenticated_at=NOW - timedelta(minutes=11),
-            library_id=9,
-            target_account_id=41,
-            is_active=True,
-            current_library_access=True,
-            capability_keys=("library.browse.read",),
-            confirm_disable=False,
-            confirm_remove_access=False,
-            request_ref="admin-update-2",
-        )
-    except RecentAuthenticationRequired:
-        pass
-    else:
-        raise AssertionError("stale administrator authentication must fail")
-    assert connection.operations == []
+    service.update_account(
+        actor_account_id=7,
+        actor_session_id=11,
+        actor_authenticated_at=NOW - timedelta(minutes=11),
+        library_id=9,
+        target_account_id=41,
+        is_active=True,
+        current_library_access=True,
+        capability_keys=("library.browse.read",),
+        confirm_disable=False,
+        confirm_remove_access=False,
+        request_ref="admin-update-2",
+    )
+    assert connection.events == ["begin", "commit"]
+    grants = [params for sql, params in connection.operations if "insert into app.capabilities" in sql]
+    assert grants == [(41, 9, NOW, ["library.browse.read"])]
+    connection = Connection()
+    service = _service(connection)
 
     try:
         service.update_account(

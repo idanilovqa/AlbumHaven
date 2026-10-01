@@ -3518,6 +3518,9 @@ function showToast(message, variant = 'success', duration = 3600, options = {}) 
 function showRepairAlert(message, variant = 'success', duration = 2000, options = {}) {
   const alert = document.getElementById('repair-alert');
   if (!alert) return;
+  const capabilities = typeof window !== 'undefined' ? window.AlbumHavenCapabilities : null;
+  const showLogHistoryLink = options.logHistoryLink === true
+    && (!capabilities || capabilities.allows('library.logs.read'));
   const actionsHtml = ButtonComponent.renderButton({
     label: 'View details', attributes: { id: 'repair-alert-log-history', 'data-open-log-history-alert': '1', hidden: true },
   }) + ButtonComponent.renderButton({
@@ -3542,17 +3545,17 @@ function showRepairAlert(message, variant = 'success', duration = 2000, options 
     messageEl.textContent = message;
   }
   if (logHistoryLink) {
-    logHistoryLink.hidden = options.logHistoryLink !== true;
-    logHistoryLink.dataset.logHistoryEntryId = options.logHistoryLink === true
+    logHistoryLink.hidden = !showLogHistoryLink;
+    logHistoryLink.dataset.logHistoryEntryId = showLogHistoryLink
       ? String(options.logHistoryEntryId || '')
       : '';
   }
-  alert.classList.toggle('has-log-history-link', options.logHistoryLink === true);
+  alert.classList.toggle('has-log-history-link', showLogHistoryLink);
   alert.classList.toggle('is-error', isNotificationErrorVariant(variant));
   alert.hidden = false;
   state.repairAlertPresentationVersion = Number(state.repairAlertPresentationVersion || 0) + 1;
   const presentationVersion = state.repairAlertPresentationVersion;
-  registerFloatingNotification(alert, { origin: options.logHistoryLink === true ? 'top-center' : 'bottom-right', abovePlayer: options.logHistoryLink !== true, onPlaced() {
+  registerFloatingNotification(alert, { origin: showLogHistoryLink ? 'top-center' : 'bottom-right', abovePlayer: !showLogHistoryLink, onPlaced() {
     scheduleBrowserAnimationFrame(() => {
       if (state.repairAlertPresentationVersion !== presentationVersion) return;
       alert.classList.add('is-visible');
@@ -8907,39 +8910,50 @@ function handleArtistsDrawerKeydown(event) {
 // BEGIN js/runtime/account-menu.js
 
 // Shared disclosure menu: action ownership remains with the rendered links/forms.
-function attachAccountMenu(component) {
+// Consumers may position the same menu inside a scrolling table or app bar.
+function attachAccountMenu(component, options = {}) {
   const trigger = component.querySelector('[data-account-menu-trigger]');
   const menu = component.querySelector('[data-account-menu]');
   if (!trigger || !menu) return;
+  const listeners = [];
+  const on = (target, name, callback, config) => {
+    target.addEventListener?.(name, callback, config);
+    listeners.push(() => target.removeEventListener?.(name, callback, config));
+  };
   const disabled = (item) => item.disabled || item.getAttribute('aria-disabled') === 'true';
-  const enabledItems = () => Array.from(menu.querySelectorAll('[role="menuitem"]')).filter((item) => !disabled(item));
+  const enabledItems = () => Array.from(menu.querySelectorAll('[role="menuitem"]'))
+    .filter((item) => !disabled(item) && !item.hidden);
   const close = (restoreFocus = false) => {
     menu.hidden = true;
     if (typeof clearTriggerAnchor === 'function') clearTriggerAnchor(menu);
     trigger.setAttribute('aria-expanded', 'false');
     if (restoreFocus) trigger.focus();
   };
+  const position = () => {
+    if (typeof options?.position === 'function') options.position(trigger, menu);
+    if (typeof syncTriggerAnchor === 'function') syncTriggerAnchor(menu, trigger);
+  };
   const open = (last = false, focusItem = true) => {
     if (typeof activateTriggerSurface === 'function') activateTriggerSurface(menu, () => close(false));
     menu.hidden = false;
     trigger.setAttribute('aria-expanded', 'true');
-    if (typeof syncTriggerAnchor === 'function') syncTriggerAnchor(menu, trigger);
+    position();
     const items = enabledItems();
-    if (focusItem) (last ? items[items.length - 1] : items[0])?.focus();
+    if (focusItem) (last ? items[items.length - 1] : items[0])?.focus({ preventScroll: true });
   };
-  globalThis.addEventListener?.('resize', () => {
-    if (!menu.hidden && typeof syncTriggerAnchor === 'function') syncTriggerAnchor(menu, trigger);
+  on(globalThis, 'resize', () => {
+    if (!menu.hidden) position();
   });
   const reject = (event) => {
     event.preventDefault();
     event.stopImmediatePropagation();
   };
-  trigger.addEventListener('click', (event) => {
+  on(trigger, 'click', (event) => {
     event.preventDefault();
-    if (menu.hidden) open(false, event.detail === 0);
+    if (menu.hidden) open(false, options?.focusOnPointer === true || event.detail === 0);
     else close(true);
   });
-  menu.addEventListener('click', (event) => {
+  on(menu, 'click', (event) => {
     const item = event.target?.closest?.('[role="menuitem"]');
     if (!item || !menu.contains(item)) return;
     if (disabled(item)) {
@@ -8949,7 +8963,7 @@ function attachAccountMenu(component) {
     // Restore the opener before Settings captures focus for its modal.
     close(true);
   }, true);
-  component.addEventListener('keydown', (event) => {
+  on(component, 'keydown', (event) => {
     const item = event.target?.closest?.('[role="menuitem"]');
     if (item && disabled(item) && ['Enter', ' ', 'Spacebar'].includes(event.key)) {
       reject(event);
@@ -8971,18 +8985,25 @@ function attachAccountMenu(component) {
     if (!['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) return;
     event.preventDefault();
     const items = enabledItems();
+    if (!items.length) return;
     const current = items.indexOf(document.activeElement);
     const next = event.key === 'Home' ? 0
       : event.key === 'End' ? items.length - 1
         : (current + (event.key === 'ArrowDown' ? 1 : -1) + items.length) % items.length;
-    items[next]?.focus();
+    items[next]?.focus({ preventScroll: true });
   });
-  document.addEventListener('click', (event) => {
+  const closeOutside = (event) => {
     if (!component.contains(event.target)) close();
-  });
-  component.addEventListener('focusout', (event) => {
+  };
+  on(document, 'pointerdown', closeOutside);
+  on(document, 'click', closeOutside);
+  on(component, 'focusout', (event) => {
     if (!component.contains(event.relatedTarget)) close();
   });
+  return () => {
+    close();
+    listeners.forEach(dispose => dispose());
+  };
 }
 
 // END js/runtime/account-menu.js
@@ -10620,6 +10641,8 @@ function closeNonAlbumModal() {
 }
 
 async function openAlbumInExplorer(album) {
+  if (typeof window !== 'undefined' && window.AlbumHavenCapabilities
+    && !window.AlbumHavenCapabilities.allows('library.files.open_location')) return;
   if (!album) {
     showToast('No album payload found for File Explorer action.', 'error', 3200);
     return;
@@ -12662,6 +12685,7 @@ function mountLoopEditActionControl({
       focusWithin = focusWithin || Boolean(ownerDocument?.activeElement && compound.contains?.(ownerDocument.activeElement));
       clearTimers();
       renderEngagement(retained() || (currentActive && pointerWithin));
+      if (pointerWithin && !currentEngaged) visit();
     } else if (retained()) renderEngagement(true);
     root.hidden = !currentCanCreate;
     const unavailable = !currentEnabled || !currentCanCreate;
@@ -12708,6 +12732,8 @@ function mountLoopEditActionControl({
   listen(touchQuery, 'change', () => { if (retained()) visit(); else leave(); });
   renderEngagement(Boolean(touchQuery?.matches));
   update({ enabled, canCreate, active, busy });
+  pointerWithin = Boolean(compound.matches?.(':hover'));
+  if (pointerWithin) visit();
   return {
     update,
     destroy() {
@@ -13092,7 +13118,7 @@ function drawCombinedLoopWaveform(canvas, waveform, progressRatio = 0) {
       const owner = escapePlaybackControlAttribute(ownerId || 'global-player');
       return `
         <span class="playback-control-cluster playback-control-cluster--expanded loop-play-control-cluster player-play-cluster" data-playback-control-cluster data-playback-control-variant="expanded-player" data-loop-control-style="${style}">
-          <button class="loop-play-control-button player-play" type="button" id="player-play" data-playback-control-action="play-pause" aria-label="Play or pause">Play</button>
+          <button class="loop-play-control-button player-play" type="button" id="player-play" data-playback-control-action="play-pause" aria-label="Play or pause"><svg class="ui-icon player-transport-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M9 6.4v11.2l9-5.6-9-5.6Z"/></svg></button>
           <span class="loop-play-control-actions player-loop-actions" data-playback-control-loop-actions data-loop-action-mount="${owner}" data-loop-action-owner="${owner}"></span>
         </span>
       `;
@@ -15970,8 +15996,11 @@ function mountDateRangePicker(container) {
     input = root.querySelector(`[name="${button.dataset.calendarTrigger}"]`);
     month = input.value ? new Date(`${input.value}T12:00:00`) : new Date();
     popup = document.createElement('div'); popup.className = 'calendar-picker ui-scrollbar';
+    popup.setAttribute('popover', 'manual');
     popup.setAttribute('role', 'dialog'); popup.setAttribute('aria-label', button.getAttribute('aria-label'));
     container.appendChild(popup); trigger.setAttribute('aria-expanded', 'true');
+    // Keep the calendar in its form's focus/selection scope, above ancestor clipping.
+    popup.showPopover();
     popup.addEventListener('click', e => {
       const date = e.target.closest('[data-calendar-date]'), nav = e.target.closest('[data-calendar-month]');
       if (date && !date.disabled) { input.value = date.dataset.calendarDate; input.dispatchEvent(new Event('input', { bubbles: true })); close(true); }
@@ -22125,6 +22154,7 @@ function collapseAllUtilityLoopGroups() {
 function setUtilityActiveTab(nextTab, skipAppearanceGuard = false) {
   if (typeof isMobileClient === 'function' && isMobileClient() && !mobileUtilityTabAllowed(nextTab)) return false;
   const normalizedTab = String(nextTab || 'problematic-files');
+  if (typeof window !== 'undefined' && window.AlbumHavenCapabilities && !window.AlbumHavenCapabilities.allowsUtilityTab(normalizedTab)) return state.utility.activeTab;
   if (!skipAppearanceGuard && normalizedTab !== state.utility.activeTab && typeof confirmBackgroundAppearanceLeave === 'function' && !confirmBackgroundAppearanceLeave(() => {
     setUtilityActiveTab(normalizedTab, true);
     if (typeof loadActiveUtilityTab === 'function') loadActiveUtilityTab(true);
@@ -24250,6 +24280,7 @@ async function runLocalPlaylistImportAnalysis() {
 }
 
 function loadActiveUtilityTab(force = false) {
+  if (typeof window !== 'undefined' && window.AlbumHavenCapabilities && !window.AlbumHavenCapabilities.allowsUtilityTab(state.utility.activeTab)) return null;
   if (state.utility.activeTab === 'rules') {
     return loadUtilityRules(force);
   }
@@ -24373,9 +24404,15 @@ let utilityCoverLoadSuspensionToken = 0;
 
 function openUtilityModal({ resetSearch = true, resetSelection = true, forceLoad = true } = {}) {
   if (typeof isMobileClient === 'function' && isMobileClient() && !mobileUtilityTabAllowed(state.utility.activeTab)) state.utility.activeTab = 'appearance';
-  if (typeof presentMobileUtilityPage === 'function') presentMobileUtilityPage();
   const els = getUtilityModalElements();
   if (!els.overlay) return;
+  if (typeof window !== 'undefined' && window.AlbumHavenCapabilities) {
+    const permittedTab = window.AlbumHavenCapabilities.resolveUtilityTab(state.utility.activeTab);
+    if (!permittedTab) return;
+    setUtilityActiveTab(permittedTab);
+    if (state.utility.activeTab !== permittedTab) return;
+  }
+  if (typeof presentMobileUtilityPage === 'function') presentMobileUtilityPage();
   document.getElementById('track-modal')?.classList.remove('is-above-settings');
   if (
     !utilityCoverLoadSuspensionToken
@@ -24424,10 +24461,13 @@ function openUtilityModal({ resetSearch = true, resetSelection = true, forceLoad
 }
 
 function openUtilityLogHistoryTab(entryId = '') {
+  const canOpen = () => typeof window === 'undefined' || !window.AlbumHavenCapabilities
+    || window.AlbumHavenCapabilities.allowsUtilityTab('log-history');
+  if (!canOpen()) return;
   const owner = state.utility;
   const open = () => {
-    if (state.utility !== owner) return;
-    setUtilityActiveTab('log-history', true);
+    if (state.utility !== owner || !canOpen()) return;
+    if (setUtilityActiveTab('log-history', true) !== 'log-history') return;
     openUtilityModal({ resetSearch: false, resetSelection: false, forceLoad: !entryId });
     if (!entryId) return;
     const controller = getUtilityLogHistoryController();
@@ -25483,6 +25523,7 @@ function fileToDataUrl(file) {
 }
 
 async function addPastedImageToCoverLookup(file) {
+  if (window.AlbumHavenCapabilities && !window.AlbumHavenCapabilities.allows('library.covers.upload')) return;
   if (!(file instanceof Blob) || !String(file.type || '').startsWith('image/')) {
     throw new Error('Choose an image file.');
   }
@@ -26568,6 +26609,7 @@ function sanitizeCoverLookupPossibleMatches(value) {
   return value
     .filter((item) => {
       if (!item || typeof item !== 'object' || Array.isArray(item)) return false;
+      if (window.AlbumHavenCapabilities && !window.AlbumHavenCapabilities.allowsCoverCandidate(item)) return false;
       const candidateIdKey = String(item.id || '').trim().toLowerCase();
       const normalizedUrlKey = normalizeCoverLookupCandidateUrl(item.url).toLowerCase();
       if (!candidateIdKey && !normalizedUrlKey) return false;
@@ -27376,6 +27418,7 @@ async function refreshCoverLookupGallery(showLoading = true) {
 }
 
 async function openCoverLookupModal(album, options = {}) {
+  if (window.AlbumHavenCapabilities && !window.AlbumHavenCapabilities.allows('library.covers.lookup')) return;
   coverLookupModalSession += 1;
   if (album && typeof presentMobileCoverLookupPage === 'function') presentMobileCoverLookupPage(album);
   const els = getCoverLookupModalElements();
@@ -27548,6 +27591,7 @@ async function startCoverLookupForAlbum(album, options = {}) {
 }
 
 function selectLocalCoverFromLookup(sourcePath) {
+  if (window.AlbumHavenCapabilities?.clientSurface === 'tv') return;
   state.coverLookup.modal.pendingLocalPath = String(sourcePath || '');
   state.coverLookup.modal.pendingPastedImageId = '';
   state.coverLookup.modal.selectedRemoteId = '';
@@ -27688,6 +27732,10 @@ async function deleteLocalCoverFromLookup(sourcePath) {
 }
 
 function selectRemoteCoverFromLookup(candidateId) {
+  const selectedCandidate = (state.coverLookup.modal.possibleMatches || []).find((candidate) => (
+    String(candidate?.id || '') === String(candidateId || '')
+  ));
+  if (window.AlbumHavenCapabilities && !window.AlbumHavenCapabilities.allowsCoverCandidate(selectedCandidate)) return;
   state.coverLookup.modal.pendingLocalPath = '';
   state.coverLookup.modal.pendingPastedImageId = '';
   state.coverLookup.modal.selectedRemoteId = String(candidateId || '');
@@ -27699,9 +27747,6 @@ function selectRemoteCoverFromLookup(candidateId) {
     || '',
   );
   state.coverLookup.modal.remoteSelectionOverrideCandidateId = String(candidateId || '');
-  const selectedCandidate = (state.coverLookup.modal.possibleMatches || []).find((candidate) => (
-    String(candidate?.id || '') === String(candidateId || '')
-  ));
   state.coverLookup.modal.remoteSelectionOverrideUrl = normalizeCoverLookupCandidateUrl(
     selectedCandidate?.url,
   );
@@ -27726,6 +27771,7 @@ async function saveRemoteCoverFromLookup() {
   if (!album || (!taskId && !snapshotGeneration) || !candidateId) return;
   const previousAlbum = deepCloneJson(album);
   const selectedMatch = (state.coverLookup.modal.possibleMatches || []).find((item) => String(item?.id || '') === String(candidateId || ''));
+  if (window.AlbumHavenCapabilities && !window.AlbumHavenCapabilities.allowsCoverCandidate(selectedMatch)) return;
   try {
     if (selectedMatch) {
       applyOptimisticRemoteCoverSelection(album, selectedMatch, '');
@@ -30638,6 +30684,8 @@ function persistPlayerStateForUnload(reason) {
 }
 
 function restorePlayerState() {
+  if (typeof window !== 'undefined' && window.AlbumHavenCapabilities
+    && !window.AlbumHavenCapabilities.allows('library.media.read')) return;
   if (state.player.restoredFromStorage) return;
   state.player.restoredFromStorage = true;
   const raw = getLocalStorageItem(PLAYER_STATE_STORAGE_KEY);
@@ -34831,15 +34879,6 @@ function renderGlobalPlayerMetadata(els, track) {
   syncGlobalPlayerMetadataMotion(els, mobile);
 }
 
-function renderGlobalPlayerPlayGlyph(button, paused) {
-  const mobile = typeof usesMobilePageLayout === 'function' && usesMobilePageLayout();
-  const icon = paused ? 'play' : 'pause';
-  const key = `${mobile ? 'svg' : 'text'}:${icon}`;
-  if (button.getAttribute?.('data-player-glyph') === key) return;
-  if (mobile) button.innerHTML = ButtonComponent.renderIconSvg(icon);
-  else button.textContent = paused ? '\u25B6' : '\u23F8';
-  button.setAttribute('data-player-glyph', key);
-}
 
 function clampLoopTimes() {
   const duration = getPlayerDuration() || 0;
@@ -34896,6 +34935,13 @@ function updateLoopInputsFromState() {
   if (els.loopEndInput && document.activeElement !== els.loopEndInput) {
     els.loopEndInput.value = formatLoopTime(state.player.loopEnd, true);
   }
+}
+
+function renderGlobalPlayerPlayGlyph(button, paused) {
+  const icon = paused ? 'play' : 'pause';
+  if (button.getAttribute('data-player-glyph') === icon) return;
+  button.innerHTML = window.ButtonComponent.renderIconSvg(icon, { className: 'player-transport-icon' });
+  button.setAttribute('data-player-glyph', icon);
 }
 
 function updatePlayerUi() {
@@ -35735,6 +35781,7 @@ function attachSharedPlayer() {
 }
 
 function activateSharedTrackButton(btn, { restart = false, focusTimeline = false } = {}) {
+  if (window.AlbumHavenCapabilities && !window.AlbumHavenCapabilities.allows('library.media.read')) return;
   const src = btn.getAttribute('data-src');
   if (!src) return;
   if (typeof triggerAlbumTrackPlayActivation === 'function' && btn.classList?.contains('album-track-table__play')) {
@@ -40250,6 +40297,7 @@ function handleMobilePagePopState() {
   mobilePageState.restoring = true;
   try { requested.slice(common).forEach(restoreMobilePage); }
   finally { mobilePageState.restoring = false; }
+  if (mobilePageState.pages.length < requested.length) writeMobilePageHistory('replace');
   syncMobilePageShell();
   // A background refresh may have replaced the gallery while its child was open.
   // Restore the retained parent URL through the normal gallery request owner.
@@ -40514,7 +40562,7 @@ function initMobileNavigation() {
   // Enforce presentation restrictions at all delegated mobile action entry points.
   document.addEventListener('click', (event) => {
     if (!isMobileClient()) return;
-    if (event.target.closest?.('[data-open-problematic-album-folder], [data-open-non-album-tag-editor], [data-open-tag-editor], [data-edit-tags], [data-edit-album-tags], [data-edit-track-tags], [data-revert-version-exception], [data-revert-problem-ignore], [data-delete-saved-loop]')) {
+    if (event.target.closest?.('[data-open-track-modal-duplicate-folder], [data-open-problematic-album-folder], [data-open-non-album-tag-editor], [data-open-tag-editor], [data-edit-tags], [data-edit-album-tags], [data-edit-track-tags], [data-revert-version-exception], [data-revert-problem-ignore], [data-delete-saved-loop]')) {
       event.preventDefault(); event.stopImmediatePropagation();
     }
   }, true);
@@ -41084,7 +41132,8 @@ if (typeof initCompactPlayer === 'function') initCompactPlayer();
 if (typeof initPlaybackOwnershipCoordinator === 'function') {
   initPlaybackOwnershipCoordinator();
 }
-if (typeof prepareStreamingPlaybackEngine === 'function') {
+if (typeof prepareStreamingPlaybackEngine === 'function'
+    && (!window.AlbumHavenCapabilities || window.AlbumHavenCapabilities.allows('library.media.read'))) {
   void prepareStreamingPlaybackEngine().catch((error) => {
     console.error('[AlbumHaven][Playback] Failed to prepare streaming playback.', error);
   });

@@ -83,6 +83,7 @@ function collapseAllUtilityLoopGroups() {
 function setUtilityActiveTab(nextTab, skipAppearanceGuard = false) {
   if (typeof isMobileClient === 'function' && isMobileClient() && !mobileUtilityTabAllowed(nextTab)) return false;
   const normalizedTab = String(nextTab || 'problematic-files');
+  if (typeof window !== 'undefined' && window.AlbumHavenCapabilities && !window.AlbumHavenCapabilities.allowsUtilityTab(normalizedTab)) return state.utility.activeTab;
   if (!skipAppearanceGuard && normalizedTab !== state.utility.activeTab && typeof confirmBackgroundAppearanceLeave === 'function' && !confirmBackgroundAppearanceLeave(() => {
     setUtilityActiveTab(normalizedTab, true);
     if (typeof loadActiveUtilityTab === 'function') loadActiveUtilityTab(true);

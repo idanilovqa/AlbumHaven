@@ -4,9 +4,11 @@ test('FTC-ARTIST-TREE-002 preserves collapsed and expanded preferences after rel
   tag: '@area:gallery-search',
 }, async ({ galleryActions, navigationPanelActions, page, stepLogger }) => {
   const navigation = navigationPanelActions.navigationPanel;
-  await stepLogger.step('Start with the isolated expanded account preference', async () => {
+  await stepLogger.step('Expand the account preference through the normal control', async () => {
     await galleryActions.goto();
     await galleryActions.waitForGalleryReady();
+    await navigationPanelActions.setArtistTreeFolded(false);
+    await expect(navigation.layoutPreferenceSync).toHaveAttribute('data-preferences-sync', 'saved');
     await expect(navigation.artistTreeFoldButton).toBeVisible();
     expect(await navigation.readArtistTreeFoldState()).toMatchObject({ folded: false, transitioning: false });
   });

@@ -15,7 +15,7 @@ import threading
 from typing import Any, Callable
 from time import monotonic
 
-from isolatedLibraryApp import configure_isolated_environment
+from isolatedLibraryApp import configure_isolated_environment, ProviderFixtureService
 from isolatedPostgres import (
     IsolatedDatabaseOwnershipLock,
     prepare_isolated_database,
@@ -26,6 +26,7 @@ from isolatedPostgres import (
 from phase7PlaybackFixture import (
     persist_settings_playback_inventory,
     prepare_settings_playback_media,
+    prepare_settings_cover_specs,
 )
 
 
@@ -235,8 +236,9 @@ def _configure_environment(
     app_port: int,
     smtp_port: int,
     control_port: int,
+    provider_port: int | None = None,
 ) -> None:
-    configure_isolated_environment(temp_root, runtime_database_url, smtp_port)
+    configure_isolated_environment(temp_root, runtime_database_url, provider_port or app_port + 4)
     # Importing config may load repository-local .env credentials. Do it before
     # scrubbing SMTP authentication so the fake server remains fully isolated.
     import config  # noqa: F401
@@ -451,6 +453,7 @@ def main() -> None:
     parser.add_argument("--playback-media", action="store_true")
     parser.add_argument("--mobile-layout-media", action="store_true")
     parser.add_argument("--extended-mobile-media", action="store_true")
+    parser.add_argument("--provider-port", type=int)
     args = parser.parse_args()
 
     setup_database_url, runtime_database_url = resolve_isolated_database_urls()
@@ -462,6 +465,7 @@ def main() -> None:
     started_servers: list[Any] = []
     application_servers: list[tuple[Any, threading.Thread]] = []
     original_failure: BaseException | None = None
+    provider_service = None
     try:
         database_lock.acquire()
         database_owned = True
@@ -475,6 +479,7 @@ def main() -> None:
             app_port=args.port,
             smtp_port=args.smtp_port,
             control_port=args.control_port,
+            provider_port=args.provider_port,
         )
         (temp_root / "media").mkdir(parents=True, exist_ok=True)
         # Every suite owns its current normal Postgres root and inventory, even
@@ -490,6 +495,7 @@ def main() -> None:
         persist_settings_playback_inventory(
             setup_database_url, temp_root / "media", playback_inventory,
             rebuild_relations=args.extended_mobile_media,
+            include_missing_inventory=args.playback_media and not args.mobile_layout_media,
         )
 
         if args.mobile_layout_media:
@@ -505,6 +511,7 @@ def main() -> None:
             persist_settings_playback_inventory(
                 setup_database_url, temp_root / "media", playback_inventory,
                 rebuild_relations=args.extended_mobile_media,
+                include_missing_inventory=args.playback_media and not args.mobile_layout_media,
             )
 
             if args.mobile_layout_media:
@@ -522,6 +529,15 @@ def main() -> None:
         started_servers.append(smtp_server)
         _start_thread(control_server, "album-haven-phase7-control")
         started_servers.append(control_server)
+
+        if args.provider_port is not None:
+            provider_service = ProviderFixtureService(
+                args.provider_port or args.port + 4,
+                prepare_settings_cover_specs(temp_root),
+                cover_cache_path=Path(os.environ["MUSIC_COVER_CACHE_PATH"]),
+                derivative_root=temp_root / "provider-artwork",
+            )
+            provider_service.start()
 
         from music_app import create_asgi_app
 
@@ -562,6 +578,11 @@ def main() -> None:
     finally:
         application_shutdown_proven = True
         capture_cleanup_failures: list[Exception] = []
+        if provider_service is not None:
+            try:
+                provider_service.stop()
+            except Exception as exc:
+                capture_cleanup_failures.append(exc)
         capture_deadline = monotonic() + CAPTURE_HANDLER_DRAIN_TIMEOUT_SECONDS
         for server in created_servers:
             try:

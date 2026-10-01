@@ -37,8 +37,11 @@ function mountDateRangePicker(container) {
     input = root.querySelector(`[name="${button.dataset.calendarTrigger}"]`);
     month = input.value ? new Date(`${input.value}T12:00:00`) : new Date();
     popup = document.createElement('div'); popup.className = 'calendar-picker ui-scrollbar';
+    popup.setAttribute('popover', 'manual');
     popup.setAttribute('role', 'dialog'); popup.setAttribute('aria-label', button.getAttribute('aria-label'));
     container.appendChild(popup); trigger.setAttribute('aria-expanded', 'true');
+    // Keep the calendar in its form's focus/selection scope, above ancestor clipping.
+    popup.showPopover();
     popup.addEventListener('click', e => {
       const date = e.target.closest('[data-calendar-date]'), nav = e.target.closest('[data-calendar-month]');
       if (date && !date.disabled) { input.value = date.dataset.calendarDate; input.dispatchEvent(new Event('input', { bubbles: true })); close(true); }

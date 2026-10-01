@@ -105,7 +105,7 @@ test('mobile play/pause uses the shared SVG without rebuilding it every playback
   };
   const context = load('player-loop-playback.js', {
     usesMobilePageLayout: () => mobile,
-    ButtonComponent: require('../../../music_app/static/js/button-component.js'),
+    window: { ButtonComponent: require('../../../music_app/static/js/button-component.js') },
   });
   context.renderGlobalPlayerPlayGlyph(button, false);
   assert.match(button.markup, /<svg/);
@@ -117,10 +117,14 @@ test('mobile play/pause uses the shared SVG without rebuilding it every playback
   assert.equal(writes, 2);
   mobile = false;
   context.renderGlobalPlayerPlayGlyph(button, true);
-  assert.equal(button.textContent, '\u25B6');
+  assert.match(button.markup, /M9 6.4/);
+  assert.equal(writes, 2);
   mobile = true;
   context.renderGlobalPlayerPlayGlyph(button, true);
+  assert.equal(writes, 2);
+  context.renderGlobalPlayerPlayGlyph(button, false);
   assert.equal(writes, 3);
+  assert.match(button.markup, /M7.5 6.5/);
 });
 
 
@@ -523,4 +527,33 @@ test('canonical parent restoration uses one route for Gallery controls and its d
   });
   context.handleGalleryBootstrapPopState({ parentViewUrl: '/?surface=albums&artist=Northlight' });
   assert.deepEqual(calls, [['controls', '/?surface=albums&artist=Northlight'], ['data', '/?surface=albums&artist=Northlight']]);
+});
+
+for (const width of [390, 1180]) test(`mobile duplicate Folder action is unavailable at ${width}px while Files browsing stays intact`, () => {
+  const captures = [];
+  const context = load('mobile-navigation.js', {
+    URL,
+    window: { innerWidth: width, location: { href: 'https://example.test/?surface=albums' },
+      AlbumHavenDevicePreferences: { profile: () => 'mobile', read: (_key, fallback) => fallback },
+      addEventListener() {}, matchMedia: () => ({ addEventListener() {} }) },
+    document: { getElementById: id => id === 'mobile-navigation' ? {} : null, createComment: () => ({}),
+      addEventListener: (name, handler, capture) => { if (name === 'click' && capture) captures.push(handler); },
+      documentElement: { dataset: {}, style: { setProperty() {} } } },
+    state: { utility: { activeTab: 'appearance' } },
+  });
+  context.promoteVisibleMobileDialogs = () => {};
+  context.initMobileNavigation();
+  const click = selector => {
+    let prevented = false, stopped = false;
+    const event = { target: { closest: selectors => selectors.split(',').map(item => item.trim()).includes(selector) ? {} : null },
+      preventDefault() { prevented = true; }, stopImmediatePropagation() { stopped = true; } };
+    captures.forEach(handler => handler(event));
+    return { prevented, stopped };
+  };
+  assert.deepEqual(click('[data-open-track-modal-duplicate-folder]'), { prevented: true, stopped: true });
+  assert.deepEqual(click('[data-track-duplicate-source-index]'), { prevented: false, stopped: false });
+  const css = fs.readFileSync(path.join(runtime, '../../css/mobile-layout.css'), 'utf8');
+  const hidden = css.match(/html\[data-client-profile="mobile"\] :is\(([^)]+)\) \{ display: none !important; \}/)[1];
+  assert.ok(hidden.includes('[data-open-track-modal-duplicate-folder]'));
+  assert.equal(hidden.includes('[data-track-duplicate-source-index]'), false);
 });

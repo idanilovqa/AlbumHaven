@@ -94,7 +94,7 @@ test('connected dropdown surfaces follow their light content context', () => {
   );
   assert.match(
     triggerAnchorCssSource,
-    /:root\[data-appearance-mode='light'\] \.trigger-anchor-surface\[data-trigger-anchor-context='content'\]:is\(\[data-anchored-surface\], \.artist-info-overlay\)\s*\{[^}]*--trigger-anchor-background:\s*var\(--appearance-card\);[^}]*--text:\s*var\(--appearance-ink\);[^}]*--muted:\s*var\(--appearance-muted\);/,
+    /:root \[data-trigger-anchor-context='content'\],\s*:root\[data-appearance-palette\] \[data-trigger-anchor-context='content'\]\s*\{[^}]*--trigger-anchor-background:\s*var\(--appearance-card\);[^}]*--text:\s*var\(--appearance-ink\);[^}]*--muted:\s*var\(--appearance-muted\);/,
   );
   assert.match(
     triggerAnchorCssSource,
@@ -329,6 +329,9 @@ test('Combine similar artists sits in its own row directly below the Artist Fami
   assert.match(triggerAnchorCssSource, /\.artist-family-panel__combine-row \.gallery-switch, \.ui-filter-pill\):hover[^{}]*\{\s*background: var\(--dropdown-item-hover-background/);
   assert.doesNotMatch(triggerAnchorCssSource, /\.artist-family-panel__combine-row \.gallery-switch:hover[^{}]*\{\s*background: transparent/);
   assert.match(triggerAnchorCssSource, /\.artist-family-panel__combine-row \.gallery-switch:active[^}]*\{[^}]*background:\s*var\(--dropdown-item-hover-background[^}]*border-color:\s*transparent/);
+  assert.match(triggerAnchorCssSource, /\.artist-family-panel__combine-row \.gallery-switch:hover:not\(:disabled\):not\(\[aria-disabled="true"\]\),\s*:root \.artist-family-panel__combine-row \.gallery-switch:active/);
+  assert.match(triggerAnchorCssSource, /\):hover:not\(\.gallery-switch\):not\(:disabled\):not\(\[aria-disabled="true"\]\)\s*\{\s*background: var\(--dropdown-item-hover-background/);
+  assert.match(galleryMainCssSource, /\.gallery-switch, \.gallery-type-choice, \.gallery-menu-action[^}]*background:\s*transparent/);
 });
 
 test('Artist Family pills disable native dragging while the primary artist stays separated', () => {

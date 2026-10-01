@@ -63,6 +63,50 @@ test('anonymous contexts never claim an account preference namespace', () => {
 });
 
 
+test('bootstrap sync state is visible before a no-op preference action and needs no save', async () => {
+  for (const loadFailed of [false, true]) {
+    const status = new Map();
+    const events = [];
+    const requests = [];
+    const shell = { artistTreeFolded: false };
+    const window = {
+      innerWidth: 1440, navigator: {}, addEventListener() {},
+      CustomEvent: class { constructor(type, options) { this.type = type; this.detail = options.detail; } },
+      document: {
+        documentElement: { setAttribute: (name, value) => status.set(name, value) },
+        dispatchEvent: event => events.push(event),
+      },
+    };
+    const store = createStore({
+      window,
+      bootstrap: { account_id: 42, load_failed: loadFailed, profiles: loadFailed ? {} : {
+        web_desktop: { shellLayoutPreferences: shell },
+      } },
+      fetch: async (...args) => { requests.push(args); return { ok: true }; },
+    });
+    const expected = loadFailed ? 'unavailable' : 'saved';
+    assert.equal(status.get('data-preferences-sync'), expected);
+    assert.equal(store.syncState, expected);
+    assert.deepEqual(events.map(event => [event.type, event.detail.state]), [
+      ['album-haven:preferences-sync', expected],
+    ]);
+    if (!loadFailed) assert.equal(store.write('shellLayoutPreferences', shell), true);
+    await store.flush();
+    assert.equal(status.get('data-preferences-sync'), expected);
+    assert.equal(events.length, 1, 'Unchanged state needs no duplicate notification');
+    assert.equal(requests.length, 0, 'An initial or unchanged preference needs no synthetic save');
+  }
+});
+
+test('an anonymous store does not publish an account sync status', () => {
+  const changes = [];
+  createStore({
+    bootstrap: {},
+    window: { document: { documentElement: { setAttribute: (...args) => changes.push(args) } } },
+  });
+  assert.deepEqual(changes, []);
+});
+
 test('an appearance save targets its edited profile even after the viewport changes', async () => {
   const writes = [];
   const { store, window } = fixture(async (_url, options) => { writes.push(JSON.parse(options.body)); return { ok: true }; });
@@ -73,4 +117,92 @@ test('an appearance save targets its edited profile even after the viewport chan
   assert.equal(store.write('playerAppearance', {}, 'invalid'), false);
   await store.flush();
   assert.deepEqual(writes, [{ profile: 'mobile', changes: { playerAppearance: { seekbarMode: 'waveform' } } }]);
+});
+
+test('each Artist Tree write synchronously replaces prior saved status until its server response completes', async () => {
+  const status = new Map();
+  const requests = [];
+  let acknowledge;
+  const window = {
+    innerWidth: 1440, navigator: {}, setTimeout: () => 1, clearTimeout() {}, addEventListener() {},
+    document: { documentElement: { setAttribute: (name, value) => status.set(name, value) } },
+  };
+  const shell = { contextualPaneWidthPx: 320, infoDrawerWidthPx: 360, artistTreeFolded: false };
+  const store = createStore({
+    window,
+    bootstrap: { account_id: 42, profiles: { web_desktop: { shellLayoutPreferences: shell } } },
+    fetch: async (_url, options) => {
+      requests.push(JSON.parse(options.body));
+      return new Promise(resolve => { acknowledge = () => resolve({ ok: true }); });
+    },
+  });
+  for (const folded of [true, false]) {
+    assert.equal(status.get('data-preferences-sync'), 'saved');
+    store.setItem('albumhaven.shellLayoutPreferences.v1', JSON.stringify({ ...shell, artistTreeFolded: folded }));
+    assert.equal(status.get('data-preferences-sync'), 'pending');
+    const saving = store.flush();
+    assert.equal(status.get('data-preferences-sync'), 'pending');
+    assert.deepEqual(requests.at(-1), { profile: 'web_desktop', changes: {
+      shellLayoutPreferences: { ...shell, artistTreeFolded: folded },
+    } });
+    acknowledge();
+    await saving;
+    assert.equal(status.get('data-preferences-sync'), 'saved');
+  }
+});
+
+
+test('flush acknowledges its finite profile revisions while preserving newer queued writes', async () => {
+  const requests = [], acknowledgements = [];
+  let markSecondRequest;
+  const secondRequest = new Promise(resolve => { markSecondRequest = resolve; });
+  const { store } = fixture((_url, options) => {
+    requests.push(JSON.parse(options.body));
+    if (requests.length === 2) markSecondRequest('request-started');
+    return new Promise(resolve => acknowledgements.push(resolve));
+  });
+  store.write('albumOpenMode', 'page', 'web_desktop');
+  const first = store.flush();
+  store.write('playerAppearance', { seekbarMode: 'waveform' }, 'mobile');
+  let saved = false;
+  const appearanceSave = store.flush().then(result => { saved = result; return result; });
+  store.write('albumOpenMode', 'modal', 'web_desktop');
+  acknowledgements[0]({ ok: true });
+  assert.equal(await Promise.race([secondRequest, appearanceSave.then(() => 'save-acknowledged')]), 'request-started');
+  assert.equal(saved, false);
+  assert.equal(store.syncState, 'pending');
+  assert.deepEqual(requests[1], { profile: 'mobile', changes: { playerAppearance: { seekbarMode: 'waveform' } } });
+  acknowledgements[1]({ ok: true });
+  await Promise.resolve();
+  assert.equal(await first, true);
+  assert.equal(await appearanceSave, true);
+  assert.equal(requests.length, 2, 'A completed Save must not wait for unrelated future edits');
+  assert.equal(store.syncState, 'pending');
+  const newerSave = store.flush();
+  assert.deepEqual(requests[2], { profile: 'web_desktop', changes: { albumOpenMode: 'modal' } });
+  acknowledgements[2]({ ok: true });
+  assert.equal(await newerSave, true);
+  assert.equal(store.syncState, 'saved');
+  assert.equal(store.read('albumOpenMode', null, 'web_desktop'), 'modal');
+  assert.deepEqual(store.read('playerAppearance', null, 'mobile'), { seekbarMode: 'waveform' });
+});
+
+test('failed flush reports failure and retry persists the newer profile edit', async () => {
+  const requests = [];
+  let rejectRequest;
+  const { store } = fixture((_url, options) => {
+    requests.push(JSON.parse(options.body));
+    if (requests.length === 1) return new Promise((_resolve, reject) => { rejectRequest = reject; });
+    return Promise.resolve({ ok: true });
+  });
+  store.write('playerAppearance', { seekbarMode: 'waveform' }, 'mobile');
+  const saving = store.flush();
+  store.write('playerAppearance', { seekbarMode: 'thin' }, 'mobile');
+  rejectRequest(new Error('offline'));
+  assert.equal(await saving, false);
+  assert.equal(requests.length, 1, 'A failed request must not create an unbounded retry loop');
+  assert.equal(store.syncState, 'unsaved');
+  assert.equal(await store.flush(), true);
+  assert.deepEqual(requests[1], { profile: 'mobile', changes: { playerAppearance: { seekbarMode: 'thin' } } });
+  assert.equal(store.syncState, 'saved');
 });

@@ -319,7 +319,7 @@ html .cover-lookup-drawer {
 :root :is(button, .button, [role='button'], [data-actionable]):not(.utility-loop-control button):not(.utility-loop-repeat):not(.utility-loop-speed-step):not(.utility-loop-speed-value):not(.loop-edit-action):not(.loop-range-handle):not(.gallery-switch):not(.gallery-type-choice):not(.gallery-menu-action):not(.album-card *):not(.tag-editor-track):not(.tag-editor-track *):not(.track-modal-cover-button):not(.gallery-info-button):not(.navigation-tree-item):not(.search-field-button):not(.cover-lookup-task-open):not(.global-player *):hover:not(:disabled):not([aria-disabled='true']) {
   border-color: var(--appearance-item-action-hover-border, var(--appearance-line));
 }
-:root:is([data-appearance-palette], [data-appearance-item-action-hover-background]) :is(button, .button, [role='button'], [data-actionable]):not(.appearance-muted-spectrum button):not(.artist-family-panel__artist):not(.navigation-tree-item):not(.track-modal-cover-button):not(.tag-editor-track):not(.tag-editor-track *):not(.utility-list-item):not(.account-menu-item):not(.ui-button--quiet):not(.loop-edit-action):not(.loop-range-handle):not(.album-card *):not(.global-player *):hover:not(:disabled):not([aria-disabled='true']) {
+:root:is([data-appearance-palette], [data-appearance-item-action-hover-background]) :is(button, .button, [role='button'], [data-actionable]):not(.appearance-muted-spectrum button):where(:not(.gallery-switch):not(.gallery-bar__actions .gallery-action-button):not(.gallery-bar__actions .gallery-view-choice)):not(.artist-family-panel__artist):not(.navigation-tree-item):not(.track-modal-cover-button):not(.tag-editor-track):not(.tag-editor-track *):not(.utility-list-item):not(.account-menu-item):not(.ui-button--quiet):not(.loop-edit-action):not(.loop-range-handle):not(.album-card *):not(.global-player *):hover:not(:disabled):not([aria-disabled='true']) {
   background: var(--appearance-item-action-hover-background, var(--appearance-control));
 }
 :root :is(button, .button, [role='button'], [data-actionable]):not(.navigation-tree-item):not(.tag-editor-track):not(.tag-editor-track *):not(.track-modal-cover-button):not(.loop-edit-action):not(.loop-range-handle):not(.global-player *):active:not(:disabled):not([aria-disabled='true']) {
@@ -332,7 +332,7 @@ html .cover-lookup-drawer {
   --appearance-control-selected: color-mix(in srgb, var(--appearance-ink, var(--text, #eeeeee)) 45%, var(--appearance-control, var(--panel, #171717)));
 }
 :root[data-appearance-palette] :is(input[type='checkbox'], input[type='radio']) { accent-color: var(--appearance-control-selected); }
-:root :is(input[type='checkbox'], input[type='radio']):not(.global-player *):hover:not(:disabled) { outline: 1px solid var(--appearance-interaction-outline, var(--appearance-accent)); outline-offset: 1px; }
+:root :is(input[type='checkbox'], input[type='radio']):not(.global-player *):hover:not(:disabled) { outline: 1px solid var(--appearance-control-selected); outline-offset: 1px; }
 :root:is([data-appearance-palette], [data-appearance-item-action-pressed]) :is(input[type='checkbox'], input[type='radio']):not(.global-player *):active:not(:disabled) { accent-color: var(--appearance-item-action-pressed, var(--appearance-accent)); }
 :root :is(button, input, select, [role='button'], [data-actionable]):not(.loop-edit-action):not(.loop-range-handle):not(.global-player *):not(.search-field *):not(.ui-input-action *):not(.gallery-info-button):focus-visible {
   outline: 1px solid var(--appearance-interaction-outline, var(--appearance-focus-outline, var(--appearance-play, var(--appearance-accent))));
@@ -1134,7 +1134,7 @@ html .cover-lookup-drawer {
   .gallery-options-menu, .status-context-menu, .album-card-context-menu,
   .recent-search-popover, .utility-problem-filter-menu,
   .track-modal-version-context-menu, .repair-progress-card, .utility-loop-speed-menu
-) {
+):not(:where([data-trigger-anchor-context='content'])) {
   --appearance-focus-outline: var(--appearance-focus);
   --appearance-interaction-outline: var(--appearance-panel-interaction-outline);
   --appearance-item-action-hover-background: var(--appearance-panel-action-hover-background);
@@ -1241,7 +1241,6 @@ html .cover-lookup-drawer {
 :root .tag-editor-track:not(.is-active):not(:hover):nth-child(odd) { background: var(--appearance-card, var(--panel)); }
 :root .tag-editor-track:not(.is-active):not(:hover):nth-child(even) { background: color-mix(in srgb, var(--text) 7%, var(--appearance-card, var(--panel))); }
 .appearance-device-mode button[aria-pressed='true'] { border-color: currentColor; box-shadow: inset 0 0 0 1px currentColor; font-weight: 700; }
-.appearance-device-mode button[aria-pressed='true']::before { content: '✓ '; }
 
 /* Content surfaces retain their palette when moved out of the page or resized.
    Chrome drawers deliberately use the app-bar companion instead. */

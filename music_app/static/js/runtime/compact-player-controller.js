@@ -258,7 +258,9 @@ function applyCompactPlayerMode(mode, { persist = true, transferFocus = true } =
   if (els.expand) els.expand.hidden = compactPlayerPresentation !== 'floating';
   if (persist) {
     try {
-      persistCompactPlayerMode(window.localStorage, next);
+      const storage = window.AlbumHavenDevicePreferences?.enabled
+        ? window.AlbumHavenDevicePreferences : window.localStorage;
+      persistCompactPlayerMode(storage, next);
     } catch (_error) {
       // Browser policy may deny access to the storage object itself.
     }

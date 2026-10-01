@@ -74,14 +74,15 @@ test('Home loading replaces the complete page and search expands beside the logo
   await expect(phone.searchInput).toBeFocused();
   const brand = await phone.brand.boundingBox(), search = await phone.searchControl.boundingBox();
   expect(search.x).toBeGreaterThanOrEqual(brand.x + brand.width);
-  await expect.poll(async () => { const box = await phone.searchControl.boundingBox(); return box.x + box.width; }).toBeCloseTo(page.viewportSize().width - 12, 0);
-  await expect(phone.settingsButton).not.toBeVisible();
+  await expect.poll(async () => { const box = await phone.searchControl.boundingBox(); return box.x + box.width; }).toBeCloseTo((await phone.settingsButton.boundingBox()).x - 8, 0);
+  await expect(phone.settingsButton).toBeVisible();
   await phone.galleryContextName.click();
   await expect(phone.searchInput).not.toBeVisible();
   await phone.search('Northlight');
   await phone.galleryContextName.click();
-  await expect(phone.searchInput).toBeVisible();
+  await expect(phone.searchInput).not.toBeVisible();
   await expect(phone.searchInput).toHaveValue('Northlight');
+  await expect(phone.searchButton).toHaveAttribute('data-has-query', 'true');
 });
 
 test('cover selection saves before closing, reopens with saved artwork, and backdrop closes full art', async ({ page, app, snapshot }) => {
@@ -98,10 +99,11 @@ test('cover selection saves before closing, reopens with saved artwork, and back
   await expect(covers.localCoverCards).toHaveCount(2);
   await covers.inactiveLocalCoverCards.first().click();
   await expect(covers.saveRemoteButton).toBeEnabled();
+  const selectedPath = await covers.activeLocalCoverCard.getAttribute('data-select-local-cover');
   await expect(covers.activeLocalCoverCard).toHaveCSS('outline-width', '3px');
   const saveBox = await covers.saveRemoteButton.boundingBox(), findBox = await covers.findBetterButton.boundingBox();
   expect(saveBox.y).toBeCloseTo(findBox.y, 0);
-  expect(saveBox.x + saveBox.width).toBeLessThan(findBox.x);
+  expect(findBox.x + findBox.width).toBeLessThan(saveBox.x);
   expect(findBox.width).toBeLessThan(180);
   await snapshot('93-cover-selection-footer');
   const saved = page.waitForResponse(response => response.url().endsWith('/utilities/cover-lookup/local-select'));
@@ -114,7 +116,9 @@ test('cover selection saves before closing, reopens with saved artwork, and back
   await details.coverLookupButton.click();
   const reopened = await (await gallery).json();
   expect(reopened.local_covers.find(cover => cover.is_active).cover_revision).toBe(data.updated_album.cover_revision);
-  await expect(covers.activeLocalCoverCard).toBeVisible();
+  expect(reopened.selected_source_path).toBe(selectedPath);
+  await expect(covers.activeLocalCoverCard).toHaveAttribute('data-select-local-cover', selectedPath);
+  await expect(covers.localCoverCards).toHaveCount(2);
   await expect(covers.saveRemoteButton).toBeDisabled();
   await snapshot('94-cover-reopened');
   await phone.backButton.click();
@@ -124,6 +128,8 @@ test('cover selection saves before closing, reopens with saved artwork, and back
   const persisted = await (await afterReload).json();
   expect(persisted.local_covers.find(cover => cover.is_active).cover_revision).toBe(data.updated_album.cover_revision);
   expect(persisted.local_covers.map(cover => cover.cover_revision)).toEqual(reopened.local_covers.map(cover => cover.cover_revision));
+  expect(persisted.selected_source_path).toBe(selectedPath);
+  await expect(covers.activeLocalCoverCard).toHaveAttribute('data-select-local-cover', selectedPath);
   await covers.inactiveLocalCoverCards.first().click();
   await expect(covers.saveRemoteButton).toBeEnabled();
   await phone.backButton.click();
@@ -135,10 +141,10 @@ test('cover selection saves before closing, reopens with saved artwork, and back
 });
 
 
-test('desktop tag fields, Apply and alternating track stripes work in dark and light palettes', async ({ page, app, browser, snapshot }) => {
-  const context = await browser.newContext({ baseURL: new URL(page.url()).origin, viewport: { width: 1366, height: 900 }, isMobile: false, hasTouch: false, userAgent: 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/151.0.0.0 Safari/537.36' });
+test('desktop tag fields, Apply and alternating track stripes work in dark and light palettes', async ({ page, app, mobileBrowserSessions, snapshot }) => {
+  const session = await mobileBrowserSessions.create({ baseURL: new URL(page.url()).origin, viewport: { width: 1366, height: 900 }, isMobile: false, hasTouch: false, userAgent: 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/151.0.0.0 Safari/537.36' });
   try {
-    const desktop = await context.newPage();
+    const desktop = session.page;
     const web = new MobilePolishPage(desktop), appearance = new UtilityAppearanceTab(desktop), tags = new TagEditor(desktop), details = new TrackModal(desktop);
     await web.signIn('rendref', 'Phase Seven Owner Passphrase 2026!');
     for (const palette of ['black', 'paper', 'parchment-pine']) {
@@ -168,7 +174,7 @@ test('desktop tag fields, Apply and alternating track stripes work in dark and l
       await tags.cancelButton.click();
       await desktop.keyboard.press('Escape');
     }
-  } finally { await context.close(); }
+  } finally { await session.close(); }
 });
 
 for (const reducedMotion of ['no-preference', 'reduce']) {

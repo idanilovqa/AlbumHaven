@@ -69,6 +69,55 @@ export class TagEditor extends BasePage {
     this.repairAlert = page.locator('#repair-alert');
     this.repairAlertMessage = page.locator(this.repairAlertMessageSelector);
     this.repairAlertLogHistory = page.locator(this.repairAlertLogHistorySelector);
+    this.repairAlertDismiss = this.repairAlert.getByRole('button', { name: 'Dismiss repair alert', exact: true });
+  }
+
+  async readLibraryReturnState() {
+    // parity-check: allow-read-only-measurement-evaluate -- compare the canonical library view and real scroll before and after native Status navigation
+    return this.page.evaluate(() => {
+      const scroll = document.querySelector('#albums-scroll');
+      if (!scroll || typeof state === 'undefined' || !state.view) {
+        throw new Error('Saved notification delivery requires the canonical library view');
+      }
+      return {
+        url: location.href,
+        artist: String(state.view.selected_artist || ''),
+        query: String(state.view.query || ''),
+        scrollTop: scroll.scrollTop,
+      };
+    });
+  }
+
+  async readRepairAlertOverlap() {
+    // parity-check: allow-read-only-measurement-evaluate -- measure notification bounds against independently hit-tested actionable controls
+    return this.repairAlert.evaluate((alert) => {
+      const bounds = alert.getBoundingClientRect();
+      const overlaps = [];
+      const selector = 'button, a[href], input:not([type="hidden"]), select, textarea, summary, [contenteditable="true"], [tabindex]:not([tabindex="-1"]), [data-loop-range-surface], [role="button"], [role="link"], [role="tab"], [role="menuitem"], [role="checkbox"], [role="radio"], [role="switch"], [role="slider"]';
+      for (const control of document.querySelectorAll(selector)) {
+        if (alert.contains(control) || control.matches(':disabled')
+          || control.closest('[hidden], [inert], [aria-hidden="true"], [aria-disabled="true"]')) continue;
+        const style = getComputedStyle(control);
+        if (style.visibility !== 'visible' || Number(style.opacity) === 0) continue;
+        const rect = control.getBoundingClientRect();
+        const left = Math.max(0, bounds.left, rect.left);
+        const right = Math.min(innerWidth, bounds.right, rect.right);
+        const top = Math.max(0, bounds.top, rect.top);
+        const bottom = Math.min(innerHeight, bounds.bottom, rect.bottom);
+        if (right <= left || bottom <= top) continue;
+        const hit = document.elementsFromPoint((left + right) / 2, (top + bottom) / 2)
+          .find((element) => !alert.contains(element));
+        if (hit && (hit === control || control.contains(hit))) {
+          overlaps.push(control.getAttribute('aria-label') || control.textContent.trim() || control.tagName);
+        }
+      }
+      return {
+        withinViewport: bounds.width > 0 && bounds.height > 0
+          && bounds.left >= 0 && bounds.top >= 0
+          && bounds.right <= innerWidth && bounds.bottom <= innerHeight,
+        overlaps,
+      };
+    });
   }
 
   async readFormAndStripeColors() {

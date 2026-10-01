@@ -17,6 +17,33 @@ const helperPath = path.join(
 );
 const helperSource = fs.readFileSync(helperPath, 'utf8');
 
+test('player glyph preserves the mounted SVG across audio ticks despite browser serialization', () => {
+  const { context } = loadHelper();
+  const button = new FakeElement({ attributes: { 'aria-label': 'Pause' }, disabled: true });
+  let writes = 0, rendered = '';
+  Object.defineProperty(button, 'innerHTML', {
+    get: () => rendered,
+    set(value) { writes++; rendered = value.replace(/<path ([^>]+)\/>/g, '<path $1></path>'); },
+  });
+  const renderer = context.window.ButtonComponent;
+  context.renderGlobalPlayerPlayGlyph(button, false);
+  assert.notEqual(rendered, renderer.renderIconSvg('pause', { className: 'player-transport-icon' }));
+  assert.equal(rendered, renderer.renderIconSvg('pause', { className: 'player-transport-icon' }).replace('/></svg>', '></path></svg>'));
+  for (let tick = 0; tick < 60; tick++) context.renderGlobalPlayerPlayGlyph(button, false);
+  assert.equal(writes, 1);
+  assert.equal(button.getAttribute('data-player-glyph'), 'pause');
+  context.renderGlobalPlayerPlayGlyph(button, true);
+  assert.equal(writes, 2);
+  assert.equal(button.getAttribute('data-player-glyph'), 'play');
+  assert.equal(rendered, renderer.renderIconSvg('play', { className: 'player-transport-icon' }).replace('/></svg>', '></path></svg>'));
+  context.renderGlobalPlayerPlayGlyph(button, true);
+  assert.equal(writes, 2);
+  context.renderGlobalPlayerPlayGlyph(button, false);
+  assert.equal(writes, 3);
+  assert.equal(button.getAttribute('aria-label'), 'Pause');
+  assert.equal(button.disabled, true);
+});
+
 class FakeElement {
   constructor(options = {}) {
     this.tagName = options.tagName || 'DIV';
@@ -229,6 +256,7 @@ function loadHelper(overrides = {}) {
       addEventListener: () => {},
     },
     window: {
+      ButtonComponent: require('../../../music_app/static/js/button-component.js'),
       addEventListener: () => {},
     },
     fetch: async () => ({
@@ -3127,5 +3155,85 @@ for (const deleteAllowed of [true, false]) {
     assert.equal(context.state.utility.selectedLoopId, 'created');
     await context.loadUtilityLoops();
     assert.deepEqual(requests, ['/loops/create', '/utilities/loops'], 'an established grant or denial projection may reuse the cache');
+  });
+}
+
+function loadCapabilityTrackRow(actions) {
+  const effects = [];
+  const button = new FakeElement({ tagName: 'BUTTON', classNames: ['album-track-table__play'], attributes: {
+    'data-src': '/track?path=song.flac', 'data-track-path': 'song.flac', 'data-track-title': 'Song',
+  } });
+  const row = new FakeElement();
+  const album = { name: 'Album' };
+  const document = {
+    readyState: 'loading', addEventListener() {}, getSelection: () => null,
+    querySelectorAll: selector => selector === '.play-track-button' ? [button] : [],
+    getElementById: id => id === 'capability-bootstrap' ? { textContent: JSON.stringify({
+      allowed_actions: actions, denied_selectors: ['.play-track-button', '.global-player'],
+    }) } : id === 'track-modal' ? { hidden: false } : null,
+  };
+  row.ownerDocument = document;
+  row.querySelector = () => button;
+  button.closest = selector => selector === '.album-track-table__row' ? row : null;
+  button.click = () => button.dispatch('click', { isTrusted: false });
+  const { context, audio, timeline } = loadHelper({ document,
+    canStartPlaybackInThisTab: () => { effects.push('ownership'); return true; },
+    startStreamingTrack: async () => { effects.push('stream'); return { role: 'current' }; },
+    setAlbumPlaybackQueue: () => { effects.push('queue'); context.state.player.playbackQueue = { tracks: ['song.flac'] }; },
+  });
+  context.state.player.current = { path: 'song.flac', src: '/track?path=song.flac' };
+  context.state.player.playbackQueue = { tracks: ['retained.flac'] };
+  context.state.modalReleases = [album];
+  context.state.modalReleaseIndex = 0;
+  context.window.document = document;
+  if (actions !== undefined) vm.runInContext(fs.readFileSync(path.join(__dirname,
+    '../../../music_app/static/js/capability-ui.js'), 'utf8'), context);
+  vm.runInContext(fs.readFileSync(path.join(__dirname,
+    '../../../music_app/static/js/runtime/album-track-table.js'), 'utf8'), context);
+  context.usesMobilePageLayout = () => true;
+  const readPlayback = context.getPlayerPlaybackSnapshot;
+  context.getPlayerPlaybackSnapshot = () => { effects.push('snapshot'); return readPlayback(); };
+  const animate = context.triggerAlbumTrackPlayActivation;
+  context.triggerAlbumTrackPlayActivation = target => { effects.push('animation'); animate(target); };
+  context.updatePlayerUi = () => effects.push('render');
+  context.attachSharedPlayer();
+  const click = detail => row.dispatch('click', {
+    detail, target: { closest: () => null }, currentTarget: row, preventDefault() {},
+  });
+  return { context, effects, audio, timeline, click, button };
+}
+
+for (const actions of [{ 'library.media.read': false }, {}]) {
+  test(`denied mobile track clicks and direct restart have no playback effects (${Object.keys(actions).length ? 'denied' : 'missing grant'})`, async () => {
+    const f = loadCapabilityTrackRow(actions);
+    const before = JSON.stringify(f.context.state.player);
+    const queue = f.context.state.player.playbackQueue;
+    f.click(1);
+    f.click(2);
+    f.context.activateSharedTrackButton(f.button, { restart: true, focusTimeline: true });
+    await new Promise(resolve => setImmediate(resolve));
+    assert.deepEqual(f.effects, []);
+    assert.equal(JSON.stringify(f.context.state.player), before);
+    assert.strictEqual(f.context.state.player.playbackQueue, queue);
+    assert.equal(f.audio.playCalls, 0);
+    assert.deepEqual(f.timeline.focusCalls, []);
+  });
+}
+
+for (const actions of [{ 'library.media.read': true }, undefined]) {
+  test(`mobile track click resumes and double-tap restarts through shared playback (${actions ? 'allowed' : 'legacy'})`, async () => {
+    const f = loadCapabilityTrackRow(actions);
+    f.click(1);
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(f.audio.playCalls, 1, 'ordinary click resumes the loaded current track');
+    assert.equal(f.effects.includes('stream'), false);
+    f.click(2);
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(f.effects.filter(effect => effect === 'stream').length, 1);
+    assert.equal(f.effects.filter(effect => effect === 'queue').length, 1);
+    assert.ok(f.effects.includes('ownership'));
+    assert.equal(f.context.state.player.current.path, 'song.flac');
+    assert.deepEqual(f.context.state.player.playbackQueue, { tracks: ['song.flac'] });
+    assert.deepEqual(f.timeline.focusCalls, [], 'row activation must not steal timeline focus');
   });
 }

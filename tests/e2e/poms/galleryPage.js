@@ -35,6 +35,10 @@ export function hasSettledVirtualGalleryRender(args = {}) {
   const movement = gallery.scrollTop - priorPosition;
   const hasRequestedMovement = expectedDirection > 0 ? movement > 1 : movement < -1;
   const maxScrollTop = Math.max(0, gallery.scrollHeight - gallery.clientHeight);
+  if (Number.isFinite(args.targetScrollTop)) {
+    const target = Math.max(0, Math.min(maxScrollTop, args.targetScrollTop));
+    if (expectedDirection > 0 ? gallery.scrollTop < target : gallery.scrollTop > target) return false;
+  }
   const reachedRequestedBoundary = expectedDirection > 0
     ? gallery.scrollTop >= maxScrollTop - 2
     : gallery.scrollTop <= 2;
@@ -200,7 +204,7 @@ export class GalleryPage extends BasePage {
   }
 
   get artistHeadingSelector() {
-    return '#artist-groups .artist-name, [data-gallery-bar][data-gallery-context-kind="artist"] [data-gallery-context-name], [data-gallery-bar][data-gallery-context-kind="single-artist"] [data-gallery-context-name]';
+    return '#artist-groups .artist-name, [data-gallery-bar][data-gallery-context-kind="single-artist"] [data-gallery-context-name]';
   }
 
   get artistSectionSelector() {
@@ -248,11 +252,7 @@ export class GalleryPage extends BasePage {
   }
 
   sectionByArtistHeading(artistHeading) {
-    return this.page.locator(this.artistSectionSelector).filter({
-      has: this.page.locator(this.artistHeadingWithinSectionSelector).filter({
-        hasText: exactNormalizedText(artistHeading),
-      }),
-    }).first();
+    return this.albumCard.sectionByArtistHeading(artistHeading);
   }
 
   headingByArtistName(artistName) {
@@ -364,9 +364,13 @@ export class GalleryPage extends BasePage {
     // parity-check: allow-read-only-measurement-evaluate -- atomically read every mounted production-card identity and row position across current gallery sections
     return this.page.locator(this.artistSectionSelector).evaluateAll((sections, selectors) => (
       sections.flatMap((section, sectionIndex) => {
-        const groupArtist = String(
-          section.querySelector(selectors.artistHeadingSelector)?.textContent || '',
-        ).trim();
+        const heading = section.querySelector(selectors.artistHeadingSelector);
+        const contextName = sections.length === 1 && !heading
+          ? document.querySelector(selectors.singleArtistContextSelector)
+            ?.querySelector('[data-gallery-context-name]')?.textContent
+          : '';
+        const groupArtist = String(heading?.textContent || contextName || '').trim();
+        if (!groupArtist) throw new Error('Mounted album inventory requires an exact visible artist identity.');
         const sectionBounds = section.getBoundingClientRect();
         return [...section.querySelectorAll(selectors.albumCardSelector)].map(
           (card, orderIndex) => {
@@ -397,6 +401,7 @@ export class GalleryPage extends BasePage {
       albumYearSelector: this.albumCard.yearWithinCardSelector,
       albumYearPattern: VISIBLE_ALBUM_YEAR_PATTERN,
       artistHeadingSelector: this.artistHeadingWithinSectionSelector,
+      singleArtistContextSelector: this.albumCard.singleArtistContextSelector,
       trackCountSelector: this.albumCard.trackCountWithinCardSelector,
     });
   }
@@ -405,9 +410,13 @@ export class GalleryPage extends BasePage {
     const section = this.sectionByArtistHeading(artistName);
     // parity-check: allow-read-only-measurement-evaluate -- atomically read the visible production section count and expected album identities
     const observation = await section.evaluate((element, selectors) => {
-      const artistMetaText = String(
-        element.querySelector('.family-artist-header > span:last-child, .artist-meta')?.textContent || '',
-      ).trim();
+      const sectionCount = element.querySelector('.family-artist-header > span:last-child, .artist-meta');
+      const context = document.querySelector(selectors.singleArtistContextSelector);
+      const ownsSingleArtist = !element.querySelector('.artist-name')
+        && document.querySelectorAll(selectors.artistSectionSelector).length === 1
+        && String(context?.querySelector('[data-gallery-context-name]')?.textContent || '').trim() === selectors.artistName;
+      const artistMetaText = String(sectionCount?.textContent
+        || (ownsSingleArtist ? context.querySelector('[data-gallery-context-summary]')?.textContent : '') || '').trim();
       const expectedAlbums = new Set(selectors.expectedAlbumNames);
       const renderedIdentities = [...element.querySelectorAll(selectors.albumCardSelector)]
         .map((card) => ({
@@ -429,6 +438,9 @@ export class GalleryPage extends BasePage {
       albumYearSelector: this.albumCard.yearWithinCardSelector,
       albumYearPattern: VISIBLE_ALBUM_YEAR_PATTERN,
       expectedAlbumNames: expectedAlbumNames.map((album) => String(album || '').trim()),
+      artistName: String(artistName || '').trim(),
+      artistSectionSelector: this.artistSectionSelector,
+      singleArtistContextSelector: this.albumCard.singleArtistContextSelector,
     });
     return {
       albumCount: parseArtistAlbumCount(observation.artistMetaText),
@@ -459,9 +471,11 @@ export class GalleryPage extends BasePage {
     const cards = year
       ? this.albumCard.cardByIdentity(artistName, albumName, year)
       : this.albumCard.cardsByArtistAndAlbum(artistName, albumName);
-    // parity-check: allow-read-only-measurement-evaluate -- atomically measure the exact virtual album card and its gallery viewport
-    return cards.evaluateAll(
-      (cards, galleryScrollSelector) => {
+    const detailsAction = options.detailsAction === true;
+    const targets = detailsAction ? cards.locator(this.albumCard.detailsButtonWithinCardSelector) : cards;
+    // parity-check: allow-read-only-measurement-evaluate -- atomically measure the exact virtual card or intended details action against its gallery viewport
+    return targets.evaluateAll(
+      (cards, { galleryScrollSelector, detailsAction }) => {
         if (cards.length === 0) {
           return {
             attached: false,
@@ -489,13 +503,14 @@ export class GalleryPage extends BasePage {
             scrollDirection: 0,
           };
         }
-        const intersects = cardBounds.right > galleryBounds.left
-          && cardBounds.left < galleryBounds.right
-          && cardBounds.bottom > galleryBounds.top
-          && cardBounds.top < galleryBounds.bottom;
-        const scrollDirection = cardBounds.bottom <= galleryBounds.top
+        const intersects = detailsAction
+          ? cardBounds.left >= galleryBounds.left && cardBounds.right <= galleryBounds.right
+            && cardBounds.top >= galleryBounds.top && cardBounds.bottom <= galleryBounds.bottom
+          : cardBounds.right > galleryBounds.left && cardBounds.left < galleryBounds.right
+            && cardBounds.bottom > galleryBounds.top && cardBounds.top < galleryBounds.bottom;
+        const scrollDirection = (detailsAction ? cardBounds.top < galleryBounds.top : cardBounds.bottom <= galleryBounds.top)
           ? -1
-          : cardBounds.top >= galleryBounds.bottom
+          : (detailsAction ? cardBounds.bottom > galleryBounds.bottom : cardBounds.top >= galleryBounds.bottom)
             ? 1
             : 0;
         return {
@@ -506,7 +521,7 @@ export class GalleryPage extends BasePage {
           scrollDirection,
         };
       },
-      this.galleryScrollSelector,
+      { galleryScrollSelector: this.galleryScrollSelector, detailsAction },
     );
   }
 
@@ -739,6 +754,7 @@ export class GalleryPage extends BasePage {
       expectedDirection: Number(direction || 1),
       galleryScrollSelector: this.galleryScrollSelector,
       priorPosition: Number(previousScrollTop || 0),
+      targetScrollTop: options.targetScrollTop,
     });
   }
 
@@ -793,10 +809,14 @@ export class GalleryPage extends BasePage {
         )).length;
       };
       const readCount = () => {
-        const section = Array.from(document.querySelectorAll(options.artistSectionSelector))
-          .find((candidate) => normalize(
-            candidate.querySelector(options.artistHeadingWithinSectionSelector)?.textContent,
-          ) === expectedArtist);
+        const sections = Array.from(document.querySelectorAll(options.artistSectionSelector));
+        const contextName = normalize(document.querySelector(options.singleArtistContextSelector)
+          ?.querySelector('[data-gallery-context-name]')?.textContent);
+        const section = sections.find((candidate) => normalize(
+          candidate.querySelector(options.artistHeadingWithinSectionSelector)?.textContent,
+        ) === expectedArtist)
+          || (sections.length === 1 && !sections[0].querySelector('.artist-name')
+            && contextName === expectedArtist ? sections[0] : null);
         if (!(section instanceof HTMLElement)) return 0;
         return Array.from(section.querySelectorAll(options.albumCardWithinSectionSelector))
           .filter((card) => (
@@ -875,6 +895,7 @@ export class GalleryPage extends BasePage {
       artist: String(expected.artist || '').trim(),
       year: String(expected.year || '').trim(),
       artistSectionSelector: this.artistSectionSelector,
+      singleArtistContextSelector: this.albumCard.singleArtistContextSelector,
       artistHeadingWithinSectionSelector: this.artistHeadingWithinSectionSelector,
       albumCardWithinSectionSelector: this.albumCardWithinSectionSelector,
       albumTitleSelector: this.albumCard.titleButtonSelector,
@@ -936,10 +957,14 @@ export class GalleryPage extends BasePage {
       let mutationRecordCount = 0;
 
       const readSnapshot = (phase) => {
-        const section = Array.from(document.querySelectorAll(options.artistSectionSelector))
-          .find((candidate) => normalize(
-            candidate.querySelector(options.artistHeadingWithinSectionSelector)?.textContent,
-          ) === options.artist);
+        const sections = Array.from(document.querySelectorAll(options.artistSectionSelector));
+        const contextName = normalize(document.querySelector(options.singleArtistContextSelector)
+          ?.querySelector('[data-gallery-context-name]')?.textContent);
+        const section = sections.find((candidate) => normalize(
+          candidate.querySelector(options.artistHeadingWithinSectionSelector)?.textContent,
+        ) === options.artist)
+          || (sections.length === 1 && !sections[0].querySelector('.artist-name')
+            && contextName === options.artist ? sections[0] : null);
         const cards = section instanceof HTMLElement
           ? Array.from(section.querySelectorAll(options.albumCardWithinSectionSelector))
           : [];
@@ -1082,6 +1107,7 @@ export class GalleryPage extends BasePage {
       identities,
       absentIdentities,
       artistSectionSelector: this.artistSectionSelector,
+      singleArtistContextSelector: this.albumCard.singleArtistContextSelector,
       artistHeadingWithinSectionSelector: this.artistHeadingWithinSectionSelector,
       albumCardWithinSectionSelector: this.albumCardWithinSectionSelector,
       albumRowWithinSectionSelector: this.albumRowWithinSectionSelector,

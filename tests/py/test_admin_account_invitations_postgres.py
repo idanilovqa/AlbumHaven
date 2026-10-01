@@ -227,9 +227,9 @@ def test_copy_rejects_every_ineligible_authority_or_target_context(
 
 @pytest.mark.parametrize(
     "authenticated_at",
-    [NOW - timedelta(minutes=10, microseconds=1), NOW + timedelta(minutes=5, microseconds=1), datetime(2026, 9, 1, 12, 30)],
+    [NOW + timedelta(minutes=5, microseconds=1), datetime(2026, 9, 1, 12, 30)],
 )
-def test_rotation_requires_recent_aware_administrator_auth_before_connect(
+def test_rotation_rejects_future_or_naive_administrator_auth_before_connect(
     invitations, authenticated_at
 ):
     connection = Connection()
@@ -248,7 +248,9 @@ def test_rotation_locks_account_before_invitation_state_and_audits_last(invitati
     statements = [sql for sql, _params in connection.operations]
     account_lock = next(i for i, sql in enumerate(statements) if "with locked_accounts" in sql)
     authority_sql = statements[account_lock]
-    assert "join app.bootstrap_owners authority" in authority_sql
+    assert "from app.bootstrap_owners bootstrap_authority" in authority_sql
+    assert "admin_grant.capability_key = 'capability.admin'" in authority_sql
+    assert "admin_grant.revoked_at is null" in authority_sql
     assert "join library.library_memberships membership" in authority_sql
     assert "left join app.bootstrap_owners target_owner" in authority_sql
     assert "left join app.account_credentials credential" in authority_sql
@@ -260,7 +262,9 @@ def test_rotation_locks_account_before_invitation_state_and_audits_last(invitati
     assert "target_owner.account_id is null" in authority_sql
     assert "credential.account_id is null" in authority_sql
     authority_sql = statements[account_lock]
-    assert "join app.bootstrap_owners authority" in authority_sql
+    assert "from app.bootstrap_owners bootstrap_authority" in authority_sql
+    assert "admin_grant.capability_key = 'capability.admin'" in authority_sql
+    assert "admin_grant.revoked_at is null" in authority_sql
     assert "join library.library_memberships membership" in authority_sql
     assert "left join app.bootstrap_owners target_owner" in authority_sql
     assert "left join app.account_credentials credential" in authority_sql

@@ -4874,7 +4874,19 @@ class _ProviderFixtureHandler(BaseHTTPRequestHandler):
     const button = document.querySelector('button');
     const status = document.querySelector('[role="status"]');
     let png;
-    image.decode().then(() => {{
+    // Draw the loaded source at the clipboard canvas size. An eager full-size
+    // decode can fail independently of the browser's normal canvas draw path.
+    new Promise((resolve, reject) => {{
+      const loaded = () => {{
+        if (image.naturalWidth > 0 && image.naturalHeight > 0) resolve();
+        else reject(new Error('Image load failed'));
+      }};
+      if (image.complete) loaded();
+      else {{
+        image.addEventListener('load', loaded, {{ once: true }});
+        image.addEventListener('error', () => reject(new Error('Image load failed')), {{ once: true }});
+      }}
+    }}).then(() => {{
       const canvas = document.createElement('canvas');
       const scale = Math.min(1, 512 / Math.max(image.naturalWidth, image.naturalHeight));
       canvas.width = Math.max(1, Math.round(image.naturalWidth * scale));
@@ -5200,7 +5212,7 @@ def main() -> None:
             ensure_provider_storage_policy_cover_spec(cover_specs)
 
         configure_performance_auth_environment(args.port)
-        provision_performance_auth_owner(runtime_database_url)
+        provision_performance_auth_owner(runtime_database_url, seed_expanded_artist_tree=True)
 
         if args.prepare_only:
             print(

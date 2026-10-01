@@ -20,7 +20,12 @@ test('connected panel masks the trigger interior seam', () => {
   );
   assert.match(
     css,
-    /\.trigger-anchor-open::after\s*\{[^}]*top:\s*calc\(100% - 3px\);[^}]*height:\s*calc\(var\(--trigger-anchor-gap, 0px\) \+ 3px\);/s,
+    // The continuous outline replaces the separately rasterized bridge stroke.
+    /\.trigger-anchor-open::after\s*\{[^}]*left:\s*-2px; right:\s*-2px; top:\s*-2px;[^}]*bottom:\s*calc\(-1 \* var\(--trigger-anchor-gap, 0px\) - 2px\);[^}]*background:\s*var\(--trigger-anchor-border-fill\);/s,
+  );
+  assert.match(
+    css,
+    /\.trigger-anchor-open::before\s*\{[^}]*bottom:\s*calc\(-1 \* var\(--trigger-anchor-gap, 0px\) - 4px\);[^}]*background:\s*var\(--trigger-anchor-background\);/s,
   );
 });
 
@@ -82,4 +87,12 @@ test('open trigger shares the panel color after its owning theme context is appl
   assert.equal(triggerProperties.has('--trigger-anchor-background'), false);
   assert.equal(surfaceProperties.has('--trigger-anchor-background'), false);
   assert.equal(surface.classList.contains('trigger-anchor-surface'), false);
+});
+
+
+test('capability theme observation samples the bridge interior rather than its gradient outline', () => {
+  const pageSource = fs.readFileSync(path.join(__dirname, '../../e2e/phase7/poms/capabilityPresentationPage.js'), 'utf8');
+  assert.match(pageSource, /bridgeBackground: getComputedStyle\(element, '::before'\)\.backgroundColor/);
+  assert.match(css, /\.trigger-anchor-open::before\s*\{[^}]*background:\s*var\(--trigger-anchor-background\);/s);
+  assert.match(css, /\.trigger-anchor-open::after\s*\{[^}]*background:\s*var\(--trigger-anchor-border-fill\);/s);
 });

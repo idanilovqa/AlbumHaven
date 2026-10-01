@@ -32,20 +32,6 @@
 .settings-host .settings-nav-item span { width: 22px; color: var(--muted); font-size: 20px; text-align: center; }
 .settings-host .settings-nav-item.is-active { color: var(--ink); background: var(--surface-2); box-shadow: inset 3px 0 var(--green); }
 .settings-host .settings-nav-item.is-future { color: var(--muted); }
-.settings-host .detail-back:hover,
-.settings-host .detail-back:focus-visible,
-.settings-host .member-edit:hover,
-.settings-host .member-edit:focus-visible { color: var(--ink); outline: none; }
-.settings-host .members-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 24px; margin-bottom: 22px; }
-.settings-host .members-heading h1,
-.settings-host .detail-heading h1 { margin: 0; font-size: 29px; letter-spacing: -.035em; }
-.settings-host .members-heading p,
-.settings-host .detail-heading p { margin: 6px 0 0; color: var(--muted); font-size: 13px; }
-.settings-host .admin-button { min-height: 40px; padding: 0 15px; display: inline-flex; align-items: center; justify-content: center; gap: 7px; border: 1px solid var(--line); border-radius: 9px; color: var(--ink); background: transparent; font-weight: 700; text-decoration: none; cursor: pointer; }
-.settings-host .admin-button.ui-button--primary { border-color: var(--appearance-primary-button); color: var(--appearance-primary-button-ink); background: var(--appearance-primary-button); }
-.settings-host .admin-button.is-danger { border-color: #d93d45; color: var(--red); }
-.settings-host .admin-button:hover,
-.settings-host .admin-button:focus-visible { filter: brightness(1.1); outline: none; box-shadow: 0 0 0 3px rgb(86 173 255 / 14%); }
 .settings-host .admin-notice { margin: 0 0 18px; }
 .settings-host .members-table { border: 1px solid var(--line); }
 .settings-host .members-row { min-height: 78px; padding: 0 15px; display: grid; grid-template-columns: minmax(210px, 1.6fr) minmax(170px, 1.25fr) .65fr .8fr .75fr 58px; align-items: center; gap: 17px; border-bottom: 1px solid var(--line); color: var(--muted); font-size: 12px; }
@@ -62,40 +48,25 @@
 .settings-host .status-dot { width: 8px; height: 8px; margin-right: 8px; display: inline-block; border-radius: 50%; background: var(--green); }
 .settings-host .status-dot.is-pending { background: #e5aa45; }
 .settings-host .status-dot.is-disabled { background: #59687a; }
-.settings-host .member-edit,
-.settings-host .detail-back { color: var(--blue); text-decoration: none; }
+
 .settings-host .member-actions { position: relative; display: flex; justify-content: flex-end; }
 .settings-host .member-actions-trigger { width: 40px; height: 40px; min-height: 40px; min-width: 40px; padding: 0; display: inline-grid; place-items: center; }
 .settings-host .member-actions-trigger svg { width: 22px; height: 22px; }
 .member-mobile-status { display: none !important; }
-.settings-host .member-actions-menu {
-  position: fixed; z-index: 6500; width: 190px; min-width: 0; padding: 5px; overflow: auto;
-  display: grid; gap: 2px; border: 1px solid var(--line); border-radius: 9px; background: var(--surface-2);
-  box-shadow: 0 14px 32px rgb(0 0 0 / 35%);
-}
 .settings-host .member-actions-menu[hidden],
 .settings-host .invitation-copy-fallback[hidden] { display: none; }
-.settings-host .member-actions-menu button,
-.settings-host .member-actions-menu a {
-  min-height: 38px; padding: 0 11px; display: flex; align-items: center; border: 0; border-radius: 6px;
-  color: var(--ink); background: transparent; font-size: 12px; text-align: left; text-decoration: none; cursor: pointer;
-}
-.settings-host .member-actions-menu button:hover,
-.settings-host .member-actions-menu button:focus-visible,
-.settings-host .member-actions-menu a:hover,
-.settings-host .member-actions-menu a:focus-visible { outline: none; background: var(--surface-2); }
-:root .settings-host .member-actions-menu :is(button, a):focus-visible { outline: 2px solid currentColor !important; outline-offset: -2px; }
 .settings-host .invitation-copy-fallback { margin: 0 0 18px; padding: 15px; border: 1px solid var(--line); border-radius: 9px; background: var(--surface-2); }
 .settings-host .invitation-copy-fallback p { margin: 0 0 10px; color: var(--ink); font-size: 12px; }
 .settings-host .invitation-copy-fallback input[readonly] {
   width: 100%; min-height: 40px; padding: 0 11px; border: 1px solid var(--line); border-radius: 7px;
   color: var(--ink); background: var(--surface-2); font-family: ui-monospace, "Cascadia Code", monospace;
 }
-.settings-host .invitation-copy-fallback .admin-button { margin-top: 10px; }
+.settings-host .invitation-copy-fallback .ui-button { margin-top: 10px; }
 .settings-host .detail-main { width: min(970px, 100%); }
-.settings-host .detail-back { display: inline-flex; margin-bottom: 29px; font-size: 13px; }
 .settings-host .detail-heading { margin-bottom: 25px; }
-.settings-host .detail-person { margin-top: 18px; display: flex; align-items: center; gap: 13px; }
+.settings-host .roles-only-action { display: grid; justify-items: start; gap: 8px; margin-bottom: 18px; }
+.settings-host .roles-only-action p { margin: 0; color: var(--muted); font-size: 12px; line-height: 1.5; }
+.settings-host .detail-person { margin: 0 0 18px; display: flex; align-items: center; gap: 13px; }
 .settings-host .admin-detail-form { display: grid; }
 .settings-host .detail-field { margin-bottom: 14px; display: grid; grid-template-columns: 220px minmax(0, 1fr); align-items: start; gap: 18px; }
 .settings-host .detail-field > span:first-child { padding-top: 12px; font-size: 13px; font-weight: 700; }
@@ -108,18 +79,15 @@
 .settings-host .password-control { display: flex; overflow: hidden; }
 .settings-host .password-control input { min-width: 0; flex: 1; padding: 0 13px; border: 0; outline: 0; color: var(--ink); background: transparent; }
 .settings-host .password-control button { width: 70px; border: 0; border-left: 1px solid var(--line); color: var(--ink); background: transparent; cursor: pointer; }
-.settings-host .effective-access { min-height: 58px; display: flex; align-items: center; justify-content: space-between; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); font-size: 12px; }
-.settings-host .effective-access small { margin-left: 7px; color: var(--muted); }
+.settings-host .role-note { margin: 0 0 14px; }
 .settings-host .permission-fieldset { margin: 0; padding: 19px 0 20px; border: 0; border-bottom: 1px solid var(--line); }
 .settings-host .permission-fieldset legend,
 .settings-host .account-settings > h2 { color: var(--muted); font-size: 11px; font-weight: 800; letter-spacing: .09em; text-transform: uppercase; }
 .settings-host .permission-groups { display: grid; grid-template-columns: repeat(3, 1fr); gap: 28px; margin-top: 15px; }
 .settings-host .permission-group + .permission-group { padding-left: 28px; border-left: 1px solid var(--line); }
 .settings-host .permission-group h2 { margin: 0 0 7px; color: var(--muted); font-size: 11px; letter-spacing: .06em; text-transform: uppercase; }
-.settings-host .permission-group label { min-height: 25px; display: flex; align-items: center; justify-content: space-between; gap: 12px; color: var(--ink); font-size: 11px; }
-.settings-host .switch { width: 31px; height: 17px; flex: 0 0 auto; accent-color: var(--green); }
-.settings-host .switch:disabled,
-.settings-host .detail-field > select:disabled { color: var(--muted); accent-color: var(--muted); opacity: .65; cursor: not-allowed; }
+.settings-host .permission-group label { min-height: 40px; display: flex; align-items: center; justify-content: space-between; gap: 12px; color: var(--ink); font-size: 12px; }
+
 .settings-host .account-settings { padding-top: 19px; }
 .settings-host .account-settings > h2 { margin: 0 0 7px; }
 .settings-host .detail-setting { min-height: 62px; display: flex; align-items: center; justify-content: space-between; gap: 20px; border-bottom: 1px solid var(--line); }
@@ -129,11 +97,6 @@
 .settings-host .detail-actions { padding-top: 16px; display: flex; justify-content: flex-end; gap: 11px; }
 .settings-host .admin-form-error { margin: 18px 0; }
 .settings-host .admin-form-status { margin: 18px 0; }
-.settings-host .reauth-panel { margin-top: 18px; padding: 17px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface-2); }
-.settings-host .reauth-panel h2 { margin: 0; font-size: 15px; }
-.settings-host .reauth-panel p { margin: 5px 0 15px; color: var(--muted); font-size: 11px; }
-.settings-host .reauth-panel label > span:first-child { display: block; margin-bottom: 7px; color: var(--ink); font-size: 11px; font-weight: 700; }
-.settings-host .reauth-actions { margin-top: 13px; display: flex; justify-content: flex-end; gap: 9px; }
 
 @media (max-width: 980px) {
 .settings-host .members-table { overflow-x: auto; }
@@ -148,6 +111,17 @@
 .settings-host .permission-group + .permission-group { padding: 14px 0 0; border-left: 0; border-top: 1px solid var(--line); }
 }
 
+/* Disabled controls must remain visibly inactive, including hover/focus. */
+
+/* Shared GalleryBar, Switch, Button and AnchoredMenu own control presentation. */
+.settings-host .member-actions-menu { width: 220px; min-width: 0; overflow: auto; }
+.settings-host .member-actions-menu .gallery-menu-action { text-decoration: none; }
+.settings-host .gallery-switch.detail-setting { padding-inline: 0; }
+.settings-host .gallery-switch__label small { margin-top: 4px; }
+.settings-host .permission-group .gallery-switch { padding: 6px 8px; }
+.settings-host .permission-group .gallery-switch:has(input:disabled) { color: var(--muted); }
+.settings-host .role-note.on-page-alert { display: flex; }
+
 @media (max-width: 900px) {
   .settings-host .members-table { width: 100%; min-width: 0; overflow: visible; border: 1px solid var(--line); border-radius: 10px; }
   .settings-host .members-row { min-width: 0; grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr) 40px; gap: 8px; padding: 10px 8px; align-items: center; }
@@ -161,7 +135,6 @@
   .settings-host .member-mobile-status { display: block !important; color: var(--muted); font-size: 10px; line-height: 1.4; }
   .settings-host .permission-group label { color: var(--ink); min-height: 36px; font-size: 13px; line-height: 1.4; }
   .settings-host .permission-group h2, .settings-host .permission-fieldset legend { color: var(--ink); }
-  .settings-host .switch:disabled { opacity: 1; filter: grayscale(1); }
   .settings-host .detail-setting { gap: 12px; }
   .settings-host .member-actions-menu :is(button, a):is(:hover, :active, :focus-visible) { background: transparent; color: var(--ink); text-decoration: none; text-underline-offset: .22em; }
 }
@@ -169,7 +142,5 @@
 @media (max-width: 900px) {
   .settings-host .settings-outlet .page-gallery-bar { padding-top: 0; margin-bottom: 12px; }
   .settings-host .settings-nav .mobile-bar-action { display: inline-grid; width: 40px; height: 40px; flex: 0 0 40px; }
-  .settings-host .detail-setting .admin-button { flex: 0 0 140px; width: 140px; min-width: 0; min-height: 40px; padding: 0 12px; }
+  .settings-host .detail-setting > .ui-button { flex: 0 0 140px; width: 140px; min-width: 0; min-height: 40px; padding: 0 12px; }
 }
-
-.settings-host .admin-role-info { margin: 0 0 14px; }

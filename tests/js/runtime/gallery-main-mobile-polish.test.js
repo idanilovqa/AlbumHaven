@@ -139,3 +139,42 @@ test('sliding family reserves the player edge before its first touch, using its 
   observer.refresh();
   assert.equal(panel.style.bottom, '0px');
 });
+
+for (const mobile of [false, true]) test(`Gallery View ${mobile ? 'mobile popup stays exclusive' : 'desktop inline unfold retains Family'}`, () => {
+  let configured, familyCloses = 0, controlCloses = 0, mobileLayout = mobile;
+  const cluster = { dataset: {}, querySelectorAll: () => [], contains: () => false };
+  const family = { contains: () => false };
+  const document = { addEventListener() {}, querySelectorAll: () => [],
+    querySelector: selector => selector === '[data-gallery-view-cluster]' ? cluster : null };
+  const surfaces = load('trigger-anchor.js', ['activateTriggerSurface', 'clearTriggerAnchor'], { document });
+  const control = { select() {}, close() { controlCloses++; configured.onClose(); } };
+  const api = load('gallery-main-interactions.js', ['updateGalleryMainControls'], {
+    document, window: { innerWidth: mobile ? 390 : 1440 },
+    state: { gallery: { mainState: { view: 'cards', sources: {}, albumTypes: [] } }, view: { selected_artist: 'Neal Morse' } },
+    normalizeGalleryView: value => value || 'cards', usesMobilePageLayout: () => mobileLayout,
+    ...surfaces,
+    UnfoldingActionButton: { mount(_root, options) { if (options) { configured = options; cluster.dataset.unfoldDirection = options.direction; } return control; } },
+  });
+  surfaces.activateTriggerSurface(family, () => familyCloses++);
+  api.updateGalleryMainControls();
+  assert.equal(configured.direction, mobile ? 'down' : 'left');
+  configured.onOpen();
+  api.updateGalleryMainControls();
+  assert.equal(controlCloses, 0, 'same-layout updates must not close the open disclosure');
+  assert.equal(familyCloses, mobile ? 1 : 0);
+  configured.onClose();
+  assert.equal(familyCloses, mobile ? 1 : 0, 'closing an inline control must not close Family');
+  configured.onOpen();
+  mobileLayout = !mobile;
+  api.updateGalleryMainControls();
+  assert.equal(controlCloses, 1, 'a direction change must close through the prior component owner');
+  assert.equal(configured.direction, mobileLayout ? 'down' : 'left');
+  api.updateGalleryMainControls();
+  assert.equal(controlCloses, 1, 'same-layout updates must not repeat the breakpoint close');
+  const nextFamily = { contains: () => false };
+  let nextFamilyCloses = 0;
+  surfaces.activateTriggerSurface(nextFamily, () => nextFamilyCloses++);
+  assert.equal(controlCloses, 1, 'a retired view owner must not be closed again by another popup');
+  configured.onOpen();
+  assert.equal(nextFamilyCloses, mobileLayout ? 1 : 0);
+});

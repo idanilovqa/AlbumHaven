@@ -83,6 +83,7 @@ function collapseAllUtilityLoopGroups() {
 function setUtilityActiveTab(nextTab, skipAppearanceGuard = false) {
   if (typeof isMobileClient === 'function' && isMobileClient() && !mobileUtilityTabAllowed(nextTab)) return false;
   const normalizedTab = String(nextTab || 'problematic-files');
+  if (typeof window !== 'undefined' && window.AlbumHavenCapabilities && !window.AlbumHavenCapabilities.allowsUtilityTab(normalizedTab)) return state.utility.activeTab;
   if (!skipAppearanceGuard && normalizedTab !== state.utility.activeTab && typeof confirmBackgroundAppearanceLeave === 'function' && !confirmBackgroundAppearanceLeave(() => {
     setUtilityActiveTab(normalizedTab, true);
     if (typeof loadActiveUtilityTab === 'function') loadActiveUtilityTab(true);
@@ -326,6 +327,21 @@ function updateUtilityLoopAudioRate(loopId) {
   });
 }
 
+// A phone picker unfolds from its button edge; selected-option scrolling never
+// determines the surface position. Bounds exclude app chrome and the player.
+function resolveUtilityLoopMenuPlacement(anchor, menu, bounds) {
+  const above = Math.max(0, anchor.top - bounds.top);
+  const below = Math.max(0, bounds.bottom - anchor.bottom);
+  const down = below >= menu.height || below >= above;
+  const height = Math.min(menu.height, down ? below : above);
+  const width = Math.min(menu.width, Math.max(0, bounds.right - bounds.left));
+  return {
+    edge: down ? 'top' : 'bottom', height, width,
+    top: down ? anchor.bottom : anchor.top - height,
+    left: Math.max(bounds.left, Math.min(anchor.right - width, bounds.right - width)),
+  };
+}
+
 function positionUtilityLoopSpeedMenu(loopId, setting = 'speed') {
   const trigger = document.querySelector(`[data-loop-${setting}-value-button="${cssEscape(loopId || '')}"]`);
   const menu = document.querySelector(`[data-loop-${setting}-menu="${cssEscape(loopId || '')}"]`);
@@ -340,6 +356,28 @@ function positionUtilityLoopSpeedMenu(loopId, setting = 'speed') {
 
   const triggerRect = trigger.getBoundingClientRect();
   const menuRect = menu.getBoundingClientRect();
+
+  if (menu.classList.contains('is-mobile-loop-menu')) {
+    const viewport = window.visualViewport;
+    const viewportTop = viewport?.offsetTop || 0;
+    const viewportBottom = viewportTop + (viewport?.height || window.innerHeight);
+    const playerTop = document.querySelector('.global-player')?.getBoundingClientRect().top ?? viewportBottom;
+    const barBottom = document.querySelector('.app-bar')?.getBoundingClientRect().bottom || 0;
+    const left = viewport?.offsetLeft || 0;
+    const placement = resolveUtilityLoopMenuPlacement(triggerRect, menuRect, {
+      left: left + 8, right: left + (viewport?.width || window.innerWidth) - 8,
+      top: Math.max(viewportTop, barBottom) + 8, bottom: Math.min(viewportBottom, playerTop) - 8,
+    });
+    menu.style.width = `${placement.width}px`;
+    menu.style.maxHeight = `${placement.height}px`;
+    menu.style.left = `${placement.left}px`;
+    menu.style.top = `${placement.top}px`;
+    const list = menu.querySelector('.utility-loop-menu-options') || menu;
+    list.scrollTop = Math.max(0, activeOption.offsetTop - (list.clientHeight - activeOption.getBoundingClientRect().height) / 2);
+    menu.style.visibility = '';
+    if (typeof syncTriggerAnchor === 'function') syncTriggerAnchor(menu, trigger);
+    return;
+  }
 
   const padding = 8;
   const playerTop = document.querySelector('.global-player')?.getBoundingClientRect().top || window.innerHeight;
@@ -371,6 +409,8 @@ function closeUtilityLoopSettingMenu(returnFocus = false) {
   active.trigger.setAttribute('aria-expanded', 'false');
   if (typeof clearTriggerAnchor === 'function') clearTriggerAnchor(active.menu);
   active.menu.classList.remove('is-mobile-loop-menu');
+  active.menu.replaceChildren(...active.optionList.childNodes);
+  for (const name of ['width', 'max-height', 'left', 'top', 'visibility']) active.menu.style.removeProperty(name);
   if (active.parent.isConnected) active.parent.appendChild(active.menu);
   else active.menu.remove();
   if (returnFocus && active.trigger.isConnected) active.trigger.focus({ preventScroll: true });
@@ -389,8 +429,13 @@ function toggleUtilityLoopSettingMenu(loopId, setting, keyboard = false) {
   for (const [target, source] of [['--loop-menu-surface', '--appearance-card'], ['--loop-menu-ink', '--appearance-ink'], ['--loop-menu-line', '--appearance-line'], ['--loop-menu-accent', '--appearance-play']]) {
     menu.style.setProperty(target, style.getPropertyValue(source));
   }
+  // Scroll the options independently so the shared outline/bridge stays attached.
+  const optionList = document.createElement('div');
+  optionList.className = 'utility-loop-menu-options';
+  optionList.append(...menu.childNodes);
+  menu.appendChild(optionList);
   const events = new AbortController();
-  activeUtilityLoopSetting = { menu, trigger, parent, events };
+  activeUtilityLoopSetting = { menu, trigger, parent, optionList, events };
   if (typeof activateTriggerSurface === 'function') activateTriggerSurface(menu, () => closeUtilityLoopSettingMenu(false));
   menu.classList.add('is-mobile-loop-menu');
   menu.setAttribute('role', 'menu');

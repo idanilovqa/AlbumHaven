@@ -805,7 +805,8 @@ function renderUtilityModalContent(options = {}) {
   const activeTab = state.utility.activeTab || 'problematic-files';
 
   if (activeTab !== 'problematic-files') disposeProblematicFilesVirtualList();
-  if (activeTab !== 'log-history' && els.list?.dataset) els.list.dataset.utilityNavigationOwner = activeTab;
+  if (activeTab !== 'log-history' && els.list?.dataset
+      && els.list.dataset.utilityNavigationOwner !== activeTab) els.list.dataset.utilityNavigationOwner = activeTab;
   if (activeTab !== 'loops' && typeof disposeMountedLoopActions === 'function') disposeMountedLoopActions(els.detail);
   if (activeTab !== 'appearance' && typeof unmountAppearanceEditors === 'function') unmountAppearanceEditors();
   els.overlay?.setAttribute('data-active-tab', activeTab);

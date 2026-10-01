@@ -105,7 +105,7 @@ test('mobile play/pause uses the shared SVG without rebuilding it every playback
   };
   const context = load('player-loop-playback.js', {
     usesMobilePageLayout: () => mobile,
-    ButtonComponent: require('../../../music_app/static/js/button-component.js'),
+    window: { ButtonComponent: require('../../../music_app/static/js/button-component.js') },
   });
   context.renderGlobalPlayerPlayGlyph(button, false);
   assert.match(button.markup, /<svg/);
@@ -117,10 +117,14 @@ test('mobile play/pause uses the shared SVG without rebuilding it every playback
   assert.equal(writes, 2);
   mobile = false;
   context.renderGlobalPlayerPlayGlyph(button, true);
-  assert.equal(button.textContent, '\u25B6');
+  assert.match(button.markup, /M9 6.4/);
+  assert.equal(writes, 2);
   mobile = true;
   context.renderGlobalPlayerPlayGlyph(button, true);
+  assert.equal(writes, 2);
+  context.renderGlobalPlayerPlayGlyph(button, false);
   assert.equal(writes, 3);
+  assert.match(button.markup, /M7.5 6.5/);
 });
 
 
@@ -219,4 +223,337 @@ test('reloaded album remains the history parent of a subsequently opened child',
   assert.equal(history.state.mobilePages.length, 1);
   assert.equal(history.state.mobilePages[0].albumKey, 'one');
   assert.equal(context.resolveMobileParentPosition({ kind: 'cover-lookup', albumKey: 'one' }, null, history.state), 4);
+});
+
+
+test('leaving the last mobile page reconciles its retained gallery parent without resetting scroll', () => {
+  const calls = [];
+  const context = load('mobile-navigation.js', {
+    window: { history: { state: { mobilePages: [] } } },
+    handleGalleryBootstrapPopState: options => calls.push(options),
+  });
+  context.cleanupMobilePage = () => null;
+  context.syncMobilePageShell = () => {};
+  vm.runInContext("mobilePageState.pages.push({kind:'album',albumKey:'one'});", context);
+  assert.equal(context.handleMobilePagePopState(), true);
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].preserveScroll, true);
+  assert.equal(vm.runInContext('mobilePageState.pages.length', context), 0);
+  // An ordinary gallery traversal remains owned by the normal popstate handler.
+  assert.equal(context.handleMobilePagePopState(), false);
+  assert.equal(calls.length, 1);
+});
+
+test('cover gallery presentation refreshes across the shared breakpoint only while open', () => {
+  let onBreakpoint, renders = 0;
+  const overlay = { hidden: false };
+  const context = load('mobile-navigation.js', {
+    URL, virtualGrid: null,
+    window: { innerWidth: 390, location: { href: 'https://example.test/' },
+      history: { state: {} }, addEventListener() {}, matchMedia: () => ({ addEventListener(_event, callback) { onBreakpoint = callback; } }) },
+    document: { getElementById: id => id === 'mobile-navigation' ? {} : id === 'cover-lookup-modal' ? overlay : null,
+      createComment: () => ({}), addEventListener() {}, documentElement: { dataset: {}, style: { setProperty() {} } } },
+    state: { utility: { activeTab: 'appearance' } },
+    renderCoverLookupModal: () => { renders += 1; },
+    galleryMainSurfaceController: null, syncMobileHome() {}, renderArtistGroups() {}, restorePlayerAppearance() {}, updatePlayerUi() {},
+  });
+  context.promoteVisibleMobileDialogs = () => {};
+  context.initMobileNavigation();
+  assert.equal(renders, 1);
+  context.window.innerWidth = 1280;
+  onBreakpoint();
+  assert.equal(renders, 2);
+  context.window.innerWidth = 390;
+  onBreakpoint();
+  assert.equal(renders, 3);
+  overlay.hidden = true;
+  onBreakpoint();
+  assert.equal(renders, 3);
+});
+
+test('mobile child-to-parent traversal does not refresh the gallery behind the parent page', () => {
+  let refreshes = 0;
+  const context = load('mobile-navigation.js', {
+    window: { history: { state: { mobilePages: [{kind:'album',albumKey:'one'}] } } },
+    handleGalleryBootstrapPopState: () => { refreshes += 1; },
+  });
+  context.cleanupMobilePage = () => null;
+  context.syncMobilePageShell = () => {};
+  vm.runInContext("mobilePageState.pages.push({kind:'album',albumKey:'one'}, {kind:'cover-lookup',albumKey:'one'});", context);
+  assert.equal(context.handleMobilePagePopState(), true);
+  assert.equal(refreshes, 0);
+  assert.equal(vm.runInContext('mobilePageState.pages.length', context), 1);
+});
+
+test('shared gallery popstate forwards retained-scroll options to the existing request owner', () => {
+  const calls = [], options = { preserveScroll: true };
+  const context = load('bootstrap-gallery-event-handlers.js', {
+    syncGalleryMainStateFromLocation: () => calls.push('location'),
+    getBrowserLocationHref: () => 'https://example.test/?q=After+the+Rain',
+    fetchAndRender: (...args) => calls.push(args),
+  });
+  context.handleGalleryBootstrapPopState(options);
+  assert.equal(calls[0], 'location');
+  assert.equal(calls[1][0], 'https://example.test/?q=After+the+Rain');
+  assert.equal(calls[1][1], false);
+  assert.equal(calls[1][2], options);
+});
+
+test('direct or reloaded mobile Back restores the gallery when there is no traversable parent entry', () => {
+  const calls = [];
+  const context = load('mobile-navigation.js', {
+    window: { history: { state: { albumHavenNavigationPosition: 4 } } },
+    handleGalleryBootstrapPopState: options => calls.push(['parent', options.preserveScroll]),
+  });
+  context.cleanupMobilePage = () => null;
+  context.writeMobilePageHistory = mode => calls.push(['history', mode]);
+  context.syncMobilePageShell = () => calls.push(['shell']);
+  vm.runInContext("mobilePageState.pages.push({kind:'album',albumKey:'one',parentPosition:4});", context);
+  assert.equal(context.dismissMobilePage('album'), true);
+  assert.deepEqual(calls, [['history', 'replace'], ['shell'], ['parent', true]]);
+  assert.equal(vm.runInContext('mobilePageState.pages.length', context), 0);
+});
+
+test('fallback Back to another mobile page leaves its background gallery alone', () => {
+  let refreshes = 0;
+  const context = load('mobile-navigation.js', {
+    window: { history: { state: {} } },
+    handleGalleryBootstrapPopState: () => { refreshes += 1; },
+  });
+  context.cleanupMobilePage = () => null;
+  context.writeMobilePageHistory = () => {};
+  context.syncMobilePageShell = () => {};
+  vm.runInContext("mobilePageState.pages.push({kind:'album',albumKey:'one'}, {kind:'cover-lookup',albumKey:'one'});", context);
+  assert.equal(context.dismissMobilePage('cover-lookup'), true);
+  assert.equal(refreshes, 0);
+  assert.equal(vm.runInContext('mobilePageState.pages.length', context), 1);
+});
+
+
+test('mobile parent scroll position is captured once and survives reload and responsive promotion', () => {
+  const context = load('mobile-navigation.js');
+  const descriptor = {kind:'album', albumKey:'one'};
+  const initial = context.resolveMobileParentScrollPosition(descriptor, null, {}, {scrollTop:180, scrollLeft:0});
+  assert.equal(initial.scrollTop, 180);
+  const previous = {...descriptor, parentScrollPosition:initial};
+  const moved = {scrollTop:1400, scrollLeft:0};
+  assert.equal(context.resolveMobileParentScrollPosition(descriptor, previous, {}, moved).scrollTop, 180);
+  assert.equal(context.resolveMobileParentScrollPosition(descriptor, null, {mobilePages:[previous]}, moved).scrollTop, 180);
+  assert.equal(context.resolveMobileParentScrollPosition(descriptor, null, {}, null), null);
+  assert.equal(context.resolveMobileParentScrollPosition(descriptor, null, {}, {scrollTop:NaN, scrollLeft:0}), null);
+});
+
+test('mobile gallery return restores saved coordinates before refreshing through the existing request owner', () => {
+  const calls = [];
+  const position = {scrollTop:0, scrollLeft:0};
+  const context = load('mobile-navigation.js', {
+    virtualGrid: {restoreOwnedAbsoluteScrollPosition: value => { calls.push(['position',value]); return true; }, render: force => calls.push(['render',force])},
+    handleGalleryBootstrapPopState: options => calls.push(['request',options]),
+  });
+  context.restoreMobileGalleryParent({parentScrollPosition:position});
+  assert.equal(calls[0][1], position);
+  assert.deepEqual(calls[1], ['render',true]);
+  assert.equal(calls[2][1].preserveScroll,true);
+  assert.equal(calls[2][1].preserveAbsoluteScroll,true);
+  assert.equal(calls[2][1].absoluteScrollPosition,position);
+});
+
+test('both history Back and direct Back restore the root page viewport, not a hidden gallery position', () => {
+  for (const traversal of [false,true]) {
+    const calls = [];
+    const position = {scrollTop:64,scrollLeft:0};
+    const context = load('mobile-navigation.js', {
+      window:{history:{state:{mobilePages:[]}}},
+      restorePosition:position,
+    });
+    context.cleanupMobilePage = () => null;
+    context.syncMobilePageShell = () => {};
+    context.writeMobilePageHistory = () => {};
+    context.restoreMobileGalleryParent = page => calls.push(page.parentScrollPosition);
+    vm.runInContext("mobilePageState.pages.push({kind:'album',albumKey:'one',parentScrollPosition:restorePosition});",context);
+    if(traversal) context.handleMobilePagePopState();
+    else context.dismissMobilePage('album');
+    assert.equal(calls.length,1);
+    assert.equal(calls[0],position);
+  }
+});
+test('mobile page presentation round-trips the same surfaces and parent stack without closing or rewriting history', () => {
+  function node(attributes = {}) {
+    const classes = new Set();
+    return { hidden: false, inert: false, dataset: {}, slot: 'desktop', attributes: { ...attributes },
+      classList: { contains: name => classes.has(name), add: name => classes.add(name), remove: name => classes.delete(name),
+        toggle(name, on) { if (on) classes.add(name); else classes.delete(name); } },
+      getAttribute(name) { return Object.hasOwn(this.attributes, name) ? this.attributes[name] : null; },
+      setAttribute(name, value) { this.attributes[name] = value; }, removeAttribute(name) { delete this.attributes[name]; },
+      getClientRects() { return this.hidden ? [] : [{}]; },
+    };
+  }
+  const ids = ['shell-main-surface', 'mobile-page-header', 'mobile-page-outlet', 'mobile-back-button',
+    'mobile-library-button', 'mobile-page-title', 'mobile-page-summary', 'mobile-settings-actions', 'mobile-settings-button'];
+  const nodes = Object.fromEntries(ids.map(id => [id, node()]));
+  const album = nodes['track-modal'] = node({ role: 'dialog', 'aria-modal': 'true', 'aria-label': 'Original album' });
+  const settings = nodes['utility-modal'] = node({ role: 'dialog', 'aria-modal': 'true' });
+  nodes['mobile-page-outlet'].appendChild = surface => { surface.slot = 'mobile'; };
+  const body = node();
+  // Earlier hidden modal wrappers leave their inner aria-modal dialog in the DOM.
+  const hiddenEarlierDialog = node({ role: 'dialog', 'aria-modal': 'true' });
+  hiddenEarlierDialog.getClientRects = () => [];
+  let closes = 0;
+  const context = load('mobile-navigation.js', {
+    document: { body, getElementById: id => nodes[id], querySelectorAll: () =>
+      [hiddenEarlierDialog, settings, album].filter(surface => surface.getAttribute('aria-modal') === 'true' && !surface.hidden) },
+    window: { innerWidth: 390, history: { replaceState() { throw Error('resize must not replace history'); },
+      pushState() { throw Error('resize must not push history'); } } },
+  });
+  // Native Close and Escape both enter this same existing modal owner.
+  context.closeTrackModal = () => {
+    if (context.dismissMobilePage('album')) return;
+    closes++; album.hidden = true;
+  };
+  context.syncMobileAlbumHeader = context.syncMobileLoopHeader = () => {};
+  context.surfaces = { album, utilities: settings };
+  vm.runInContext(`
+    mobilePageState.pages.push({ kind: 'utilities', title: 'Settings', parentPosition: 2 },
+      { kind: 'album', title: 'Album', albumKey: 'one', parentPosition: 3 });
+    for (const [kind, dialog] of Object.entries(surfaces)) {
+      mobilePageState.originals.set(kind, { dialog, role: dialog.getAttribute('role'),
+        modal: dialog.getAttribute('aria-modal'), label: dialog.getAttribute('aria-label'),
+        placeholder: { before(element) { element.slot = 'desktop'; }, replaceWith(element) { element.slot = 'desktop'; } } });
+    }
+  `, context);
+  const initialPages = vm.runInContext('mobilePageState.pages', context);
+  for (const width of [390, 1440, 390]) {
+    context.window.innerWidth = width;
+    context.syncMobilePageShell();
+    const mobile = width <= 900;
+    assert.equal(album.slot, mobile ? 'mobile' : 'desktop');
+    assert.equal(settings.slot, mobile ? 'mobile' : 'desktop');
+    assert.equal(album.getAttribute('role'), mobile ? 'region' : 'dialog');
+    assert.equal(album.getAttribute('aria-modal'), mobile ? null : 'true');
+    assert.equal(album.getAttribute('aria-label'), mobile ? 'Album details' : 'Original album');
+    assert.equal(settings.getAttribute('aria-label'), mobile ? 'Settings' : null);
+    assert.equal(album.classList.contains('is-mobile-page'), mobile);
+    assert.equal(album.hidden, false);
+    assert.equal(settings.hidden, mobile);
+    assert.equal(settings.inert, mobile);
+    assert.equal(nodes['mobile-page-header'].hidden, !mobile);
+    assert.equal(nodes['shell-main-surface'].classList.contains('has-mobile-page'), mobile);
+    assert.equal(body.classList.contains('modal-open'), !mobile);
+    assert.equal(vm.runInContext('mobilePageState.pages', context), initialPages);
+    assert.equal(vm.runInContext('mobilePageState.pages[1].parentPosition', context), 3);
+    assert.equal(closes, 0);
+  }
+  context.window.innerWidth = 1440;
+  context.syncMobilePageShell();
+  let dismissalWrites = 0;
+  context.writeMobilePageHistory = mode => { assert.equal(mode, 'replace'); dismissalWrites++; };
+  context.closeTrackModal();
+  assert.equal(closes, 1);
+  assert.equal(dismissalWrites, 1);
+  assert.equal(album.hidden, true);
+  assert.equal(album.slot, 'desktop');
+  assert.equal(vm.runInContext("mobilePageState.originals.has('album')", context), false);
+  context.window.innerWidth = 390;
+  context.syncMobilePageShell();
+  assert.equal(album.hidden, true);
+  assert.equal(album.slot, 'desktop');
+  assert.equal(settings.slot, 'mobile');
+  assert.equal(settings.hidden, false);
+  assert.equal(vm.runInContext("mobilePageState.pages.some(page => page.kind === 'album')", context), false);
+  assert.equal(closes, 1);
+  assert.equal(dismissalWrites, 1);
+});
+
+test('canonical mobile parent route distinguishes root Gallery, Home and explicit All Artists through history', () => {
+  const context = load('mobile-navigation.js');
+  vm.runInContext(fs.readFileSync(path.join(runtime, 'view-state-helpers.js'), 'utf8'), context);
+  context.URLSearchParams = URLSearchParams;
+  const descriptor = { kind: 'album', albumKey: 'one' };
+  for (const [view, expected] of [
+    [{ surface: { active: 'albums' } }, '/?surface=albums'],
+    [{ surface: { active: 'home' } }, '/'],
+    [{ surface: { active: 'albums' }, all_artists_active: true }, '/?surface=albums&all_artists=1'],
+  ]) {
+    const url = context.buildUrl(view);
+    assert.equal(url, expected);
+    assert.equal(context.resolveMobileParentViewUrl(descriptor, null, {}, url), expected);
+    const saved = { ...descriptor, parentViewUrl: expected };
+    assert.equal(context.resolveMobileParentViewUrl(descriptor, null, { mobilePages: [saved] }, '/?q=unrelated'), expected);
+    assert.equal(context.resolveMobileParentViewUrl(descriptor, saved, {}, '/?q=unrelated'), expected);
+  }
+  assert.equal(context.resolveMobileParentViewUrl(descriptor, null,
+    { mobilePages: [{ kind: 'album', albumKey: 'other', parentViewUrl: '/?q=wrong' }] }, '/'), '/');
+});
+
+test('nested mobile presentation inherits the root canonical route without creating another history entry', () => {
+  const context = load('mobile-navigation.js', {
+    window: { innerWidth: 390, history: { state: { albumHavenNavigationPosition: 3 } } },
+    document: { getElementById: () => ({}) }, state: { view: {} },
+    buildUrl: () => { throw new Error('Nested pages must inherit the retained root route'); },
+  });
+  context.syncMobilePageShell = () => {};
+  context.writeMobilePageHistory = () => { throw new Error('Same page presentation must not push history'); };
+  vm.runInContext("mobilePageState.pages.push({kind:'album',albumKey:'one',parentViewUrl:'/?surface=albums'}, {kind:'cover-lookup',albumKey:'one'});", context);
+  assert.equal(context.presentMobilePage({ kind: 'cover-lookup', albumKey: 'one' }), true);
+  assert.equal(vm.runInContext('mobilePageState.pages[1].parentViewUrl', context), '/?surface=albums');
+});
+
+test('mobile popstate restores canonical route and scroll only at the immediate parent destination', () => {
+  for (const destination of [1, 2]) {
+    const calls = [], restored = [];
+    const context = load('mobile-navigation.js', {
+      window: { history: { state: { albumHavenNavigationPosition: destination, mobilePages: [] } } },
+      virtualGrid: { restoreOwnedAbsoluteScrollPosition: position => { restored.push(position.scrollTop); return true; }, render() {} },
+      syncGalleryMainStateFromLocation() {}, getBrowserLocationHref: () => '/?q=Gallery+A',
+      fetchAndRender: (...args) => calls.push(args),
+    });
+    vm.runInContext(fs.readFileSync(path.join(runtime, 'bootstrap-gallery-event-handlers.js'), 'utf8'), context);
+    context.cleanupMobilePage = () => null;
+    context.syncMobilePageShell = () => {};
+    vm.runInContext("mobilePageState.pages.push({kind:'album',albumKey:'one',parentPosition:2,parentViewUrl:'/?surface=albums&q=Gallery+B',parentScrollPosition:{scrollTop:800,scrollLeft:0}});", context);
+    assert.equal(context.handleMobilePagePopState(), true);
+    assert.equal(calls[0][0], destination === 2 ? '/?surface=albums&q=Gallery+B' : '/?q=Gallery+A');
+    assert.equal(calls[0][1], false);
+    assert.deepEqual(restored, destination === 2 ? [800] : []);
+  }
+});
+
+test('canonical parent restoration uses one route for Gallery controls and its data request', () => {
+  const calls = [];
+  const context = load('bootstrap-gallery-event-handlers.js', {
+    syncGalleryMainStateFromLocation: url => calls.push(['controls', url]),
+    getBrowserLocationHref: () => '/?gallery_display=list',
+    fetchAndRender: url => calls.push(['data', url]),
+  });
+  context.handleGalleryBootstrapPopState({ parentViewUrl: '/?surface=albums&artist=Northlight' });
+  assert.deepEqual(calls, [['controls', '/?surface=albums&artist=Northlight'], ['data', '/?surface=albums&artist=Northlight']]);
+});
+
+for (const width of [390, 1180]) test(`mobile duplicate Folder action is unavailable at ${width}px while Files browsing stays intact`, () => {
+  const captures = [];
+  const context = load('mobile-navigation.js', {
+    URL,
+    window: { innerWidth: width, location: { href: 'https://example.test/?surface=albums' },
+      AlbumHavenDevicePreferences: { profile: () => 'mobile', read: (_key, fallback) => fallback },
+      addEventListener() {}, matchMedia: () => ({ addEventListener() {} }) },
+    document: { getElementById: id => id === 'mobile-navigation' ? {} : null, createComment: () => ({}),
+      addEventListener: (name, handler, capture) => { if (name === 'click' && capture) captures.push(handler); },
+      documentElement: { dataset: {}, style: { setProperty() {} } } },
+    state: { utility: { activeTab: 'appearance' } },
+  });
+  context.promoteVisibleMobileDialogs = () => {};
+  context.initMobileNavigation();
+  const click = selector => {
+    let prevented = false, stopped = false;
+    const event = { target: { closest: selectors => selectors.split(',').map(item => item.trim()).includes(selector) ? {} : null },
+      preventDefault() { prevented = true; }, stopImmediatePropagation() { stopped = true; } };
+    captures.forEach(handler => handler(event));
+    return { prevented, stopped };
+  };
+  assert.deepEqual(click('[data-open-track-modal-duplicate-folder]'), { prevented: true, stopped: true });
+  assert.deepEqual(click('[data-track-duplicate-source-index]'), { prevented: false, stopped: false });
+  const css = fs.readFileSync(path.join(runtime, '../../css/mobile-layout.css'), 'utf8');
+  const hidden = css.match(/html\[data-client-profile="mobile"\] :is\(([^)]+)\) \{ display: none !important; \}/)[1];
+  assert.ok(hidden.includes('[data-open-track-modal-duplicate-folder]'));
+  assert.equal(hidden.includes('[data-track-duplicate-source-index]'), false);
 });

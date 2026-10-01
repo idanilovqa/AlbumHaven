@@ -19,11 +19,17 @@ button.navigation-tree-item[data-navigation-tree-item="panel"] {
 }
 .navigation-tree-label { min-width: 0; }
 .navigation-tree-icon { flex: 0 0 22px; text-align: center; }
-.navigation-tree-item.is-selected {
-  box-shadow: inset var(--navigation-tree-selection-accent-width, 0px) 0 var(--navigation-tree-selection-accent-color, #34ca78);
-}
-.settings-host .navigation-tree-item.is-selected {
-  box-shadow: inset var(--navigation-tree-selection-accent-width, 3px) 0 var(--navigation-tree-selection-accent-color, #34ca78);
+/* Use a real edge, independent of filled selection/focus paint. Account-owned
+   accent color/disable overrides still apply to every NavigationTree consumer. */
+.navigation-tree-item.is-selected::before {
+  content: '';
+  position: absolute;
+  inset-block: 0;
+  inset-inline-start: 0;
+  width: var(--navigation-tree-selection-accent-width, 3px);
+  background: var(--navigation-tree-selection-accent-color, var(--appearance-selected-accent, var(--accent, #34ca78)));
+  border-radius: inherit;
+  pointer-events: none;
 }
 .settings-host .settings-nav-item .navigation-tree-label {
   width: auto; color: inherit; font-size: inherit; text-align: left;

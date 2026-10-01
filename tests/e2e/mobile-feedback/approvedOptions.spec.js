@@ -94,7 +94,7 @@ test('original large album and both approved small-art choices persist with shar
   }
 });
 
-test('thin mobile progress uses real playback, seeking and saved UI choice without changing desktop', async ({ page, app, snapshot, browser }) => {
+test('thin mobile progress uses real playback, seeking and saved UI choice without changing desktop', async ({ page, app, snapshot, mobileBrowserSessions }) => {
   await app.search('Sixteen Horizons');
   await app.openAlbumBody('Sixteen Horizons');
   await app.playRow(0);
@@ -144,15 +144,15 @@ test('thin mobile progress uses real playback, seeking and saved UI choice witho
   await expect(app.playerPreview).toHaveAttribute('data-seekbar-mode', 'thin');
   await expect(app.playerPreviewKnob).not.toBeVisible();
   await snapshot('45-thin-progress-setting');
-  const context = await browser.newContext({ baseURL: new URL(page.url()).origin, viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true });
+  const session = await mobileBrowserSessions.create({ baseURL: new URL(page.url()).origin, viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true });
   try {
-    const other = new MobileLayoutPage(await context.newPage());
+    const other = new MobileLayoutPage(session.page);
     await other.signIn('rendref', 'Phase Seven Owner Passphrase 2026!');
     await expect(other.player).toHaveAttribute('data-player-seekbar-presentation', 'thin');
     await other.openSettings();
     await other.selectSubsection('seekbar');
     await expect(other.thinOption).toBeChecked();
-  } finally { await context.close(); }
+  } finally { await session.close(); }
   await page.setViewportSize({ width: 1180, height: 820 });
   await expect(app.player).toHaveAttribute('data-player-seekbar-presentation', 'regular');
 });

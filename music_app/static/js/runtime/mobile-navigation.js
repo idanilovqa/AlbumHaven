@@ -15,7 +15,8 @@ function mobilePageDescriptor(kind, album = null) {
     subtitle, coverSrc: album && typeof albumHasDisplayCover === 'function' && albumHasDisplayCover(album) ? buildAlbumDisplayCoverUrl(album) : '', tab: kind === 'utilities' ? state.utility.activeTab : '' };
 }
 function syncMobilePageShell() {
-  const active = mobilePageState.pages.at(-1);
+  const mobile = usesMobilePageLayout();
+  const active = mobile ? mobilePageState.pages.at(-1) : null;
   const main = document.getElementById('shell-main-surface');
   const header = document.getElementById('mobile-page-header');
   const outlet = document.getElementById('mobile-page-outlet');
@@ -23,11 +24,13 @@ function syncMobilePageShell() {
   main.classList.toggle('has-mobile-page', Boolean(active));
   header.hidden = !active;
   outlet.hidden = !active;
+  outlet.dataset.mobilePageKind = active?.kind || '';
   document.getElementById('mobile-back-button').hidden = !active;
   document.getElementById('mobile-library-button').hidden = Boolean(active);
   for (const kind of mobilePageState.originals.keys()) {
     const element = document.getElementById(MOBILE_PAGE_KINDS[kind]);
-    if (element) { element.hidden = kind !== active?.kind; element.inert = kind !== active?.kind; }
+    setMobilePagePresentation(kind, mobile);
+    if (element) { element.hidden = mobile && kind !== active?.kind; element.inert = mobile && kind !== active?.kind; }
   }
   if (active) {
     document.getElementById('mobile-page-title').textContent = active.title;
@@ -41,7 +44,33 @@ function syncMobilePageShell() {
   syncMobileAlbumHeader();
   syncMobileLoopHeader();
   // A page is not a modal and must never trap focus away from the persistent player.
-  if (!document.querySelector('[aria-modal="true"]:not([hidden])')?.getClientRects().length) document.body.classList.remove('modal-open');
+  const hasModal = [...document.querySelectorAll('[aria-modal="true"]:not([hidden])')]
+    .some(dialog => dialog.getClientRects().length > 0);
+  if (!hasModal) document.body.classList.remove('modal-open');
+  else if (!mobile) document.body.classList.add('modal-open');
+}
+
+// Transfer the existing surface only; descriptors and history continue to own
+// its parent stack across breakpoint changes, and closing remains owner-driven.
+function setMobilePagePresentation(kind, mobile) {
+  const element = document.getElementById(MOBILE_PAGE_KINDS[kind]);
+  const original = mobilePageState.originals.get(kind);
+  if (!element || !original || element.classList.contains('is-mobile-page') === mobile) return;
+  element.classList.toggle('is-mobile-page', mobile);
+  if (mobile) {
+    original.dialog.setAttribute('role', 'region');
+    original.dialog.removeAttribute('aria-modal');
+    original.dialog.setAttribute('aria-label', kind === 'album' ? 'Album details'
+      : mobilePageState.pages.find(page => page.kind === kind)?.title || '');
+    document.getElementById('mobile-page-outlet').appendChild(element);
+  } else {
+    for (const [name, value] of [['role', original.role], ['aria-modal', original.modal], ['aria-label', original.label]]) {
+      if (value === null) original.dialog.removeAttribute(name);
+      else original.dialog.setAttribute(name, value);
+    }
+    element.inert = false;
+    original.placeholder.before(element);
+  }
 }
 function writeMobilePageHistory(mode = 'push') {
   const url = new URL(window.location.href);
@@ -76,30 +105,65 @@ function mobileParentHistoryDelta(parentPosition, currentPosition) {
     && Number.isSafeInteger(currentPosition) && parentPosition < currentPosition
     ? parentPosition - currentPosition : null;
 }
+// Page history owns the viewport it came from. Resizing a hidden gallery can
+// otherwise replace that position with the first visible row in another section.
+function resolveMobileParentScrollPosition(descriptor, previous, snapshot = {}, scroll = null) {
+  const restored = Array.isArray(snapshot.mobilePages)
+    ? snapshot.mobilePages.find(page => page.kind === descriptor.kind && page.albumKey === descriptor.albumKey) : null;
+  const position = previous?.parentScrollPosition ?? restored?.parentScrollPosition ?? scroll;
+  if (!position || !Number.isFinite(position.scrollTop) || !Number.isFinite(position.scrollLeft)) return null;
+  return { scrollTop: Math.max(0, position.scrollTop), scrollLeft: Math.max(0, position.scrollLeft) };
+}
+function resolveMobileParentViewUrl(descriptor, previous, snapshot = {}, viewUrl = '') {
+  const restored = Array.isArray(snapshot.mobilePages)
+    ? snapshot.mobilePages.find(page => page.kind === descriptor.kind && page.albumKey === descriptor.albumKey) : null;
+  return previous?.parentViewUrl ?? restored?.parentViewUrl ?? viewUrl;
+}
+function restoreMobileGalleryParent(descriptor) {
+  const parentPosition = descriptor?.parentPosition;
+  const destinationPosition = window.history?.state?.albumHavenNavigationPosition;
+  const atParent = !Number.isSafeInteger(parentPosition) || !Number.isSafeInteger(destinationPosition)
+    || parentPosition === destinationPosition;
+  const position = atParent ? descriptor?.parentScrollPosition : null;
+  const options = { preserveScroll: true };
+  // Root '/' can display the canonical album gallery as well as Home. Retain
+  // the owning view route, not its data, through this page's history entry.
+  if (atParent && descriptor?.parentViewUrl) options.parentViewUrl = descriptor.parentViewUrl;
+  if (position) {
+    options.preserveAbsoluteScroll = true;
+    options.absoluteScrollPosition = position;
+    // Restore before the request too: equivalent responses may retain the mounted
+    // gallery. The virtual grid already owns stabilization and row materialization.
+    if (typeof virtualGrid !== 'undefined' && virtualGrid?.restoreOwnedAbsoluteScrollPosition(position)) {
+      virtualGrid.render(true);
+    }
+  }
+  handleGalleryBootstrapPopState(options);
+}
 function presentMobilePage(descriptor) {
   if (!usesMobilePageLayout() && !mobilePageState.pages.length) return false;
   const outlet = document.getElementById('mobile-page-outlet');
   const element = document.getElementById(MOBILE_PAGE_KINDS[descriptor.kind]);
   if (!outlet || !element) return false;
-  descriptor.parentPosition = resolveMobileParentPosition(descriptor,
-    mobilePageState.pages.find(page => page.kind === descriptor.kind), window.history.state || {});
+  const previous = mobilePageState.pages.find(page => page.kind === descriptor.kind);
+  descriptor.parentPosition = resolveMobileParentPosition(descriptor, previous, window.history.state || {});
+  descriptor.parentScrollPosition = resolveMobileParentScrollPosition(descriptor, previous, window.history.state || {},
+    mobilePageState.pages.length ? null : document.getElementById('albums-scroll'));
+  descriptor.parentViewUrl = resolveMobileParentViewUrl(descriptor, previous, window.history.state || {},
+    mobilePageState.pages[0]?.parentViewUrl || buildUrl(state.view));
   const active = mobilePageState.pages.at(-1);
   if (active?.kind === descriptor.kind && active.albumKey === descriptor.albumKey) {
     Object.assign(active, descriptor);
     syncMobilePageShell();
     return true;
   }
+  delete outlet.dataset.pageInteracted;
   if (!mobilePageState.originals.has(descriptor.kind)) {
     const placeholder = document.createComment(`Original ${descriptor.kind} surface`);
     element.before(placeholder);
     const dialog = element.querySelector('[role="dialog"]') || element;
     mobilePageState.originals.set(descriptor.kind, { placeholder, dialog, role: dialog.getAttribute('role'),
-      modal: dialog.getAttribute('aria-modal'), returnFocus: document.activeElement });
-    dialog.setAttribute('role', 'region');
-    dialog.removeAttribute('aria-modal');
-    dialog.setAttribute('aria-label', descriptor.kind === 'album' ? 'Album details' : descriptor.title);
-    element.classList.add('is-mobile-page');
-    outlet.appendChild(element);
+      modal: dialog.getAttribute('aria-modal'), label: dialog.getAttribute('aria-label'), returnFocus: document.activeElement });
   }
   // A changed album reuses one component; older history entries retain its key for Back/Forward.
   const previousIndex = mobilePageState.pages.findIndex(page => page.kind === descriptor.kind);
@@ -137,11 +201,7 @@ function cleanupMobilePage(descriptor) {
     else if (descriptor.kind === 'non-album') closeNonAlbumModal();
   } finally { mobilePageState.cleaning = false; }
   if (element && original) {
-    element.inert = false;
-    element.classList.remove('is-mobile-page');
-    if (original.role === null) original.dialog.removeAttribute('role'); else original.dialog.setAttribute('role', original.role);
-    if (original.modal === null) original.dialog.removeAttribute('aria-modal'); else original.dialog.setAttribute('aria-modal', original.modal);
-    original.dialog.removeAttribute('aria-label');
+    setMobilePagePresentation(descriptor.kind, false);
     original.placeholder.replaceWith(element);
     mobilePageState.originals.delete(descriptor.kind);
   }
@@ -163,6 +223,7 @@ function dismissMobilePage(kind) {
   retired.forEach(descriptor => { focus = cleanupMobilePage(descriptor); });
   writeMobilePageHistory('replace');
   syncMobilePageShell();
+  if (!mobilePageState.pages.length) restoreMobileGalleryParent(retired.at(-1));
   if (focus?.isConnected) focus.focus({ preventScroll: true });
   return true;
 }
@@ -219,12 +280,17 @@ function handleMobilePagePopState() {
       || (requested[common].tab === mobilePageState.pages[common].tab
         && String(requested[common].utilityDetail || '') === String(mobilePageState.pages[common].utilityDetail || '')
         && String(requested[common].loopSongId || '') === String(mobilePageState.pages[common].loopSongId || '')))) common += 1;
+  const parent = mobilePageState.pages[0];
   let focus;
   while (mobilePageState.pages.length > common) focus = cleanupMobilePage(mobilePageState.pages.pop());
   mobilePageState.restoring = true;
   try { requested.slice(common).forEach(restoreMobilePage); }
   finally { mobilePageState.restoring = false; }
+  if (mobilePageState.pages.length < requested.length) writeMobilePageHistory('replace');
   syncMobilePageShell();
+  // A background refresh may have replaced the gallery while its child was open.
+  // Restore the retained parent URL through the normal gallery request owner.
+  if (!requested.length) restoreMobileGalleryParent(parent);
   if (!requested.length && focus?.isConnected) requestAnimationFrame(() => focus.focus({ preventScroll: true }));
   return true;
 }
@@ -343,6 +409,22 @@ function prepareMobileGallerySearch(onConfirmed, skipAppearanceGuard = false) {
   writeMobilePageHistory();
   return true;
 }
+// The badge is a projection of the existing input, never a second query store.
+function syncMobileSearchQueryIndicator() {
+  const button = document.getElementById('mobile-search-button');
+  if (!button) return;
+  const hasQuery = Boolean(String(document.getElementById('search-input')?.value || '').trim());
+  button.setAttribute('data-has-query', String(hasQuery));
+  if (hasQuery && usesMobilePageLayout()) button.setAttribute('aria-description', 'Search query present');
+  else button.removeAttribute('aria-description');
+}
+function handleMobileSearchOutsideClick(event) {
+  if (!usesMobilePageLayout() || !mobilePageState.searchOpen) return;
+  if (document.getElementById('search-form')?.contains(event.target)
+    || document.getElementById('recent-search-popover')?.contains(event.target)) return;
+  // Capture dismissal without cancelling the same tap's Settings/page action.
+  setMobileSearchOpen(false);
+}
 function setMobileSearchOpen(open) {
   mobilePageState.searchSuggestionsReady = false;
   if (typeof closeRecentSearchPopover === 'function') closeRecentSearchPopover();
@@ -357,7 +439,12 @@ function setMobileSearchOpen(open) {
   form?.closest('.app-bar')?.classList.toggle('is-search-open', Boolean(open));
   document.getElementById('mobile-search-button')?.setAttribute('aria-expanded', String(Boolean(open)));
   const input = document.getElementById('search-input');
-  if (input && usesMobilePageLayout()) { input.inert = !open; input.setAttribute('aria-hidden', String(!open)); }
+  if (input && usesMobilePageLayout()) {
+    if (!open && document.activeElement === input) input.blur();
+    input.inert = !open;
+    input.setAttribute('aria-hidden', String(!open));
+  }
+  syncMobileSearchQueryIndicator();
   if (open) input?.focus();
 }
 function handleMobileSearchSubmit() {
@@ -410,15 +497,27 @@ function initMobileNavigation() {
         if (input) { input.inert = false; input.removeAttribute('aria-hidden'); }
         submit?.removeAttribute('aria-expanded');
       }
-      if (mobile) setMobileSearchOpen(mobilePageState.searchOpen || Boolean(document.getElementById('search-input')?.value?.trim()));
+      if (mobile) setMobileSearchOpen(mobilePageState.searchOpen);
+      else syncMobileSearchQueryIndicator();
     }
     promoteVisibleMobileDialogs();
     syncMobileGalleryControls();
     syncMobilePageShell();
+    const coverLookup = document.getElementById('cover-lookup-modal');
+    if (coverLookup && !coverLookup.hidden) renderCoverLookupModal();
     if (['loops', 'integrations', 'log-history', 'problematic-files'].includes(state.utility.activeTab) && mobilePageState.pages.some(page => page.kind === 'utilities')) renderUtilityModalContent();
     if (typeof syncMobileAlbumComposition === 'function') syncMobileAlbumComposition(getCurrentTrackModalAlbum());
   };
-  document.getElementById('mobile-page-outlet')?.addEventListener('scroll', scheduleMobileAlbumThumbnail, { passive: true });
+  const pageOutlet = document.getElementById('mobile-page-outlet');
+  pageOutlet?.addEventListener('scroll', scheduleMobileAlbumThumbnail, { passive: true });
+  const showPageScrollbar = event => {
+    if (!event.isTrusted || !usesMobilePageLayout() || mobilePageState.pages.at(-1)?.kind !== 'album') return;
+    if (event.type === 'keydown' && !['ArrowDown', 'ArrowUp', 'PageDown', 'PageUp', 'Home', 'End', ' '].includes(event.key)) return;
+    pageOutlet.dataset.pageInteracted = 'true';
+  };
+  for (const type of ['pointerdown', 'touchstart', 'wheel', 'keydown']) {
+    pageOutlet?.addEventListener(type, showPageScrollbar, { passive: true, capture: true });
+  }
   window.addEventListener('resize', scheduleMobileAlbumThumbnail, { passive: true });
   syncLayout();
   initMobileGalleryPinch();
@@ -443,9 +542,8 @@ function initMobileNavigation() {
     updatePlayerUi();
     if (typeof renderMobileHome === 'function') renderMobileHome();
   });
+  document.addEventListener('click', handleMobileSearchOutsideClick, true);
   document.addEventListener('click', (event) => {
-    if (usesMobilePageLayout() && mobilePageState.searchOpen && !form?.contains(event.target)
-      && !String(document.getElementById('search-input')?.value || '').trim()) setMobileSearchOpen(false);
     if (handleMobileSettingsClick(event)) return;
     if (event.target.closest?.('[data-mobile-back]')) navigateMobileBack();
 
@@ -453,7 +551,7 @@ function initMobileNavigation() {
   // Enforce presentation restrictions at all delegated mobile action entry points.
   document.addEventListener('click', (event) => {
     if (!isMobileClient()) return;
-    if (event.target.closest?.('[data-open-problematic-album-folder], [data-open-non-album-tag-editor], [data-open-tag-editor], [data-edit-tags], [data-edit-album-tags], [data-edit-track-tags], [data-revert-version-exception], [data-revert-problem-ignore], [data-delete-saved-loop]')) {
+    if (event.target.closest?.('[data-open-track-modal-duplicate-folder], [data-open-problematic-album-folder], [data-open-non-album-tag-editor], [data-open-tag-editor], [data-edit-tags], [data-edit-album-tags], [data-edit-track-tags], [data-revert-version-exception], [data-revert-problem-ignore], [data-delete-saved-loop]')) {
       event.preventDefault(); event.stopImmediatePropagation();
     }
   }, true);
@@ -466,8 +564,7 @@ function initMobileNavigation() {
       else if (!event.shiftKey && (document.activeElement === last || !dialog.contains(document.activeElement))) { event.preventDefault(); first?.focus(); }
       return;
     }
-    if (event.key === 'Escape' && mobilePageState.searchOpen && form?.contains(event.target)
-      && !String(document.getElementById('search-input')?.value || '').trim()) {
+    if (event.key === 'Escape' && usesMobilePageLayout() && mobilePageState.searchOpen && form?.contains(event.target)) {
       event.preventDefault(); setMobileSearchOpen(false); document.getElementById('mobile-search-button')?.focus(); return;
     }
     const settingsOpen = galleryMainSurfaceController?.current?.()?.key === 'mobile-settings';

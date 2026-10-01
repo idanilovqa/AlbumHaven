@@ -1,3 +1,4 @@
+{% include "partials/capability-bootstrap.html" %}
 <script id="client-layout-preferences-bootstrap" type="application/json">{{ client_layout_preferences | default({}) | tojson }}</script>
 <script src="/static/js/client-device-preferences.js?v={{ runtime_asset_version | default(app_version) }}"></script>
 {% set backgrounds = appearance_preferences | default({'main_surface_color': none, 'panel_background_color': none, 'palette_id': none, 'panel_index': 0, 'player_override': none}) %}

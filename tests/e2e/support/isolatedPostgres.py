@@ -79,7 +79,7 @@ def configure_performance_auth_environment(app_port: int) -> None:
     )
 
 
-def provision_performance_auth_owner(runtime_database_url: str) -> None:
+def provision_performance_auth_owner(runtime_database_url: str, *, seed_expanded_artist_tree: bool = False) -> None:
     from config import build_auth_config
     from music_app.services.auth_bootstrap_postgres import PostgresAuthBootstrapService
     from music_app.services.auth_passwords import hash_password
@@ -94,10 +94,25 @@ def provision_performance_auth_owner(runtime_database_url: str) -> None:
         argon2=config["argon2"],
         policy_version=config["argon2_policy_version"],
     )
-    PostgresAuthBootstrapService(config).reconcile_owner(
+    owner = PostgresAuthBootstrapService(config).reconcile_owner(
         encoded_hash=credential.encoded_hash,
         hash_policy_version=credential.policy_version,
     )
+
+    if seed_expanded_artist_tree:
+        # Fixture setup only, before app startup. Existing rows belong to saved
+        # preferences and survive restart unchanged.
+        with _connect(runtime_database_url) as connection:
+            connection.execute(
+                """insert into app.user_client_layout_preferences
+                       (account_id, client_profile, preferences)
+                   values (%s, 'web_desktop', %s::jsonb)
+                   on conflict (account_id, client_profile) do nothing""",
+                (owner.account_id, json.dumps({"shellLayoutPreferences": {
+                    "contextualPaneWidthPx": 320, "infoDrawerWidthPx": 360,
+                    "artistTreeFolded": False,
+                }})),
+            )
 
 
 class _ProcessIdentityState(Enum):

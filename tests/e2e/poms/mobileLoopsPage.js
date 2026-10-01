@@ -130,6 +130,30 @@ export class MobileLoopsPage extends MobilePolishPage {
     expect(box.y).toBeGreaterThanOrEqual(0);
     expect(box.x + box.width).toBeLessThanOrEqual(viewport.width);
     expect(box.y + box.height).toBeLessThanOrEqual(viewport.height);
+    const trigger = menu === this.pitchMenu ? this.pitch : this.speed;
+    await expect(trigger).toHaveClass(/trigger-anchor-open/);
+    await expect(trigger).toHaveAttribute('aria-expanded', 'true');
+    await expect(menu).toHaveClass(/trigger-anchor-surface/);
+    const anchor = await trigger.boundingBox();
+    const edge = await menu.getAttribute('data-trigger-anchor-edge');
+    if (edge === 'bottom') expect(box.y + box.height).toBeCloseTo(anchor.y, 0);
+    else {
+      expect(edge).toBe('top');
+      expect(box.y).toBeCloseTo(anchor.y + anchor.height, 0);
+    }
+    expect(box.x + box.width).toBeCloseTo(anchor.x + anchor.width, 0);
+    const bar = await this.header.boundingBox(), player = await this.player.boundingBox();
+    expect(box.y).toBeGreaterThanOrEqual(bar.y + bar.height);
+    expect(box.y + box.height).toBeLessThanOrEqual(player.y);
+    await expect(menu.locator('[aria-checked="true"]')).toBeInViewport();
+    // parity-check: allow-read-only-measurement-evaluate -- the real shared join must be short and use the popup's exact opaque color.
+    const join = await trigger.evaluate(node => ({
+      gap: parseFloat(getComputedStyle(node).getPropertyValue('--trigger-anchor-gap')),
+      color: getComputedStyle(node).getPropertyValue('--trigger-anchor-background').trim(),
+    }));
+    expect(join.gap).toBeLessThanOrEqual(1);
+    // parity-check: allow-read-only-measurement-evaluate -- compare the actual popup's sampled shared paint.
+    expect(await menu.evaluate(node => getComputedStyle(node).getPropertyValue('--trigger-anchor-background').trim())).toBe(join.color);
     // parity-check: allow-read-only-measurement-evaluate -- portal ink must keep its owning theme in hover/selected states.
     const ink = await menu.evaluate(node => getComputedStyle(node).color);
     const selected = menu.locator('[aria-checked="true"]');

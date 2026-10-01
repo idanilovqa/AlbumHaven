@@ -23,7 +23,7 @@
       nav.setAttribute('aria-hidden', String(narrow()));
       if (drawerBackdrop) drawerBackdrop.hidden = true;
       drawerAnchor?.setAttribute('aria-expanded', 'false');
-      if (returnFocus && drawerAnchor?.isConnected) drawerAnchor.focus();
+      if (returnFocus && drawerAnchor?.isConnected) drawerAnchor.focus({ preventScroll: true });
     };
     const openDrawer = anchor => {
       drawerAnchor = anchor;
@@ -32,8 +32,13 @@
       nav.inert = false; nav.setAttribute('aria-hidden', 'false');
       anchor.setAttribute('aria-expanded', 'true');
       if (drawerBackdrop) drawerBackdrop.hidden = false;
-      nav.querySelector('button:not([disabled]), a[href]')?.focus();
+      nav.querySelector('button:not([disabled]), a[href]')?.focus({ preventScroll: true });
     };
+    const disposeDismissal = window.AlbumHavenSurfaceDismissal?.bind(window, () =>
+      nav.classList.contains('is-settings-navigation-open') ? {
+        surface: nav, anchor: drawerAnchor, dismiss: () => closeDrawer(true),
+        isBackdrop: target => target === drawerBackdrop,
+      } : null);
     const onSurfaceOpening = event => { if (event.detail?.surface !== nav && !nav.contains(event.detail?.surface)) closeDrawer(false); };
     document.addEventListener('album-haven:surface-opening', onSurfaceOpening);
     const syncDrawerLayout = () => closeDrawer(false);
@@ -309,6 +314,7 @@
         ++sequence;
         pending?.abort();
         disposeContent();
+        disposeDismissal?.();
         document.removeEventListener('album-haven:surface-opening', onSurfaceOpening);
         document.removeEventListener('keydown', onDrawerKeydown);
         window.removeEventListener('resize', syncDrawerLayout);

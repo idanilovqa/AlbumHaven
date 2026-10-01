@@ -1,16 +1,80 @@
 (() => {
   'use strict';
 
+  function bindCapabilityAssignment(form) {
+    const editor = form.querySelector('[data-capability-assignment]');
+    if (!editor) return null;
+    const roleInputs = [...editor.querySelectorAll('[name="role_keys"]')];
+    const inputs = [...form.querySelectorAll('input[type="checkbox"][name="capability_keys"], input[type="checkbox"][name="additional_capability_keys"]')];
+    const direct = new Set(inputs.filter((input) => input.dataset.explicitGrant === 'true'
+      || input.dataset.explicitGrant === undefined && input.checked).map((input) => input.value));
+    editor.querySelectorAll('input[type="hidden"][name="additional_capability_keys"]').forEach((input) => direct.add(input.value));
+    const prerequisites = JSON.parse(editor.dataset?.prerequisites || '{}');
+    const labels = new Map(inputs.map((input) => [input.value, input.dataset.capabilityLabel || input.value]));
+    const summary = editor.querySelector('[data-role-summary]');
+    const rolesOnly = editor.querySelector('[data-roles-only]');
+    const retained = editor.querySelector('[data-retained-grants]');
+    let newUserDefaults = form.dataset.mode === 'create';
+    const selectedRoles = () => roleInputs.filter((input) => input.checked);
+    const sync = () => {
+      const selected = selectedRoles();
+      const inherited = new Set(selected.flatMap((input) => JSON.parse(input.dataset.roleGrants)));
+      const requiredBy = new Map();
+      for (const key of new Set([...direct, ...inherited])) {
+        for (const required of prerequisites[key] || []) {
+          if (!requiredBy.has(required)) requiredBy.set(required, []);
+          requiredBy.get(required).push(labels.get(key) || key);
+        }
+      }
+      for (const input of inputs) {
+        if (input.dataset.unavailableReason) {
+          input.checked = false;
+          input.disabled = true;
+          input.title = input.dataset.unavailableReason;
+          continue;
+        }
+        const reasons = [];
+        if (inherited.has(input.value)) reasons.push('Included by a selected role');
+        if (requiredBy.has(input.value)) reasons.push(`Required by ${requiredBy.get(input.value).join(', ')}`);
+        input.checked = direct.has(input.value) || reasons.length > 0;
+        input.disabled = reasons.length > 0;
+        input.title = reasons.join('. ');
+        const description = input.closest?.('.gallery-switch')?.querySelector('small');
+        if (description) description.textContent = input.title;
+      }
+      if (retained) retained.hidden = ![...direct].some((key) => !labels.has(key));
+      if (rolesOnly) rolesOnly.disabled = selected.length === 0;
+      if (summary) summary.textContent = selected.length
+        ? `Assigned roles: ${selected.map((input) => input.dataset.roleLabel).join(' + ')}. ${direct.size} explicit grants.`
+        : `No named roles. ${direct.size} explicit grants.`;
+    };
+    for (const input of inputs) input.addEventListener('change', () => {
+      newUserDefaults = false;
+      if (input.disabled) return;
+      if (input.checked) direct.add(input.value); else direct.delete(input.value);
+      sync();
+    });
+    for (const input of roleInputs) input.addEventListener('change', () => {
+      if (newUserDefaults && selectedRoles().length) { direct.clear(); newUserDefaults = false; }
+      sync();
+    });
+    rolesOnly?.addEventListener('click', () => { direct.clear(); newUserDefaults = false; sync(); });
+    sync();
+    return { capabilityKeys: () => [...direct].sort(), roleKeys: () => selectedRoles().map((input) => input.value) };
+  }
+
+
   function mount(root, options = {}) {
   const document = root;
   let active = true;
-  let removePointerListener = () => {};
+  let disposeMemberMenus = () => {};
   let removePlacementListeners = () => {};
   let removeSurfaceListener = () => {};
+  let removeDismissalListener = () => {};
   const requests = typeof AbortController === 'undefined' ? null : new AbortController();
   const nativeFetch = globalThis.fetch;
   const fetch = (url, init) => nativeFetch(url, { ...init, ...(requests ? { signal: requests.signal } : {}) });
-  const cleanup = () => { active = false; requests?.abort(); removePointerListener(); removePlacementListeners(); removeSurfaceListener(); };
+  const cleanup = () => { active = false; requests?.abort(); disposeMemberMenus(); removePlacementListeners(); removeSurfaceListener(); removeDismissalListener(); };
   const navigate = (url) => {
     if (!active) return Promise.resolve(false);
     return options.navigate ? options.navigate(url) : window.location.assign(url);
@@ -35,10 +99,6 @@
   const rosterError = roster?.querySelector('[data-admin-roster-error]');
   const fallback = roster?.querySelector('[data-invitation-copy-fallback]');
   const fallbackValue = roster?.querySelector('[data-invitation-copy-value]');
-  const rosterReauthPanel = roster?.querySelector('[data-roster-reauth-panel]');
-  const rosterReauthPassword = roster?.querySelector('[data-roster-reauth-password]');
-  let rosterRetry = null;
-  let rosterRetryAccountId = null;
   let fallbackAccountId = null;
   const pendingInvitationAccounts = new Set();
 
@@ -53,12 +113,8 @@
   };
 
   const finishInvitationAction = async (accountId, action) => {
-    let awaitingReauthentication = false;
-    try {
-      awaitingReauthentication = await action() === false;
-    } finally {
-      if (!awaitingReauthentication) setInvitationBusy(accountId, false);
-    }
+    try { await action(); }
+    finally { setInvitationBusy(accountId, false); }
   };
 
   const runInvitationAction = (accountId, action) => {
@@ -104,20 +160,10 @@
     body: JSON.stringify(payload),
   });
 
-  const reauthenticateRosterThen = (retry, accountId) => {
-    if (rosterRetryAccountId && rosterRetryAccountId !== accountId) setInvitationBusy(rosterRetryAccountId, false);
-    rosterRetryAccountId = accountId;
-    rosterRetry = retry;
-    if (rosterReauthPanel) rosterReauthPanel.hidden = false;
-    if (rosterReauthPassword) {
-      rosterReauthPassword.value = '';
-      rosterReauthPassword.focus();
-    }
-  };
-
   const closeMenu = (trigger, menu) => {
     menu.hidden = true;
     trigger.setAttribute('aria-expanded', 'false');
+    if (typeof clearTriggerAnchor === 'function') clearTriggerAnchor(menu);
   };
 
   const positionMenu = (trigger, menu) => {
@@ -184,47 +230,18 @@
     return value;
   };
 
-  for (const trigger of document.querySelectorAll('[data-member-menu-trigger]')) {
-    const accountId = trigger.dataset.memberMenuTrigger;
-    if (!accountId) continue;
-    const menu = document.querySelector(`[data-member-menu="${accountId}"]`);
-    if (!menu) continue;
-    trigger.addEventListener('click', () => {
-      const opening = menu.hidden;
-      menu.hidden = !opening;
-      trigger.setAttribute('aria-expanded', String(opening));
-      if (opening) {
-        if (typeof window.CustomEvent === 'function') ownerDocument.dispatchEvent?.(new window.CustomEvent('album-haven:surface-opening', { detail: { surface: menu } }));
-        positionMenu(trigger, menu);
-        menu.querySelector('[role="menuitem"]')?.focus({ preventScroll: true });
-      }
-    });
-    menu.addEventListener('keydown', (event) => {
-      if (event.key === 'Escape') {
-        closeMenu(trigger, menu);
-        trigger.focus();
-      }
-    });
-    menu.addEventListener('focusout', (event) => {
-      if (!menu.contains(event.relatedTarget) && event.relatedTarget !== trigger) {
-        closeMenu(trigger, menu);
-      }
-    });
+  const memberMenuCleanups = [];
+  for (const component of document.querySelectorAll('.member-actions[data-account-menu-component]')) {
+    memberMenuCleanups.push(attachAccountMenu(component, { position: positionMenu, focusOnPointer: true }));
   }
-
-  const onPointerDown = (event) => {
-    for (const menu of document.querySelectorAll('[data-member-menu]:not([hidden])')) {
-      const accountId = menu.dataset.memberMenu;
-      const trigger = document.querySelector(
-        `[data-member-menu-trigger="${accountId}"]`,
-      );
-      if (
-        trigger
-        && !menu.contains(event.target)
-        && !trigger.contains(event.target)
-      ) closeMenu(trigger, menu);
-    }
-  };
+  disposeMemberMenus = () => memberMenuCleanups.forEach(dispose => dispose?.());
+  removeDismissalListener = window.AlbumHavenSurfaceDismissal?.bind(window, () => {
+    const menu = document.querySelector('[data-member-menu]:not([hidden])');
+    const trigger = menu && document.querySelector(`[data-member-menu-trigger="${menu.dataset.memberMenu}"]`);
+    return menu && trigger ? { surface: menu, anchor: trigger, dismiss() {
+      closeMenu(trigger, menu); trigger.focus({ preventScroll: true });
+    } } : null;
+  }) || (() => {});
   const ownerDocument = root.ownerDocument || root;
   const onSurfaceOpening = event => {
     for (const menu of document.querySelectorAll('[data-member-menu]:not([hidden])')) {
@@ -235,31 +252,28 @@
   };
   ownerDocument.addEventListener?.('album-haven:surface-opening', onSurfaceOpening);
   removeSurfaceListener = () => ownerDocument.removeEventListener?.('album-haven:surface-opening', onSurfaceOpening);
-  document.addEventListener?.('pointerdown', onPointerDown);
-  removePointerListener = () => document.removeEventListener?.('pointerdown', onPointerDown);
   const closeOnLayoutChange = (event) => {
     for (const menu of document.querySelectorAll('[data-member-menu]:not([hidden])')) {
-      if (event?.type === 'scroll' && menu.contains(event.target)) continue;
+      if (['scroll', 'wheel'].includes(event?.type) && menu.contains(event.target)) continue;
       const trigger = document.querySelector(`[data-member-menu-trigger="${menu.dataset.memberMenu}"]`);
+      if (event?.type === 'wheel' && trigger?.contains(event.target)) continue;
       if (trigger) closeMenu(trigger, menu);
     }
   };
+  window.addEventListener?.('wheel', closeOnLayoutChange, { capture: true, passive: true });
   window.addEventListener?.('scroll', closeOnLayoutChange, true);
   window.addEventListener?.('resize', closeOnLayoutChange);
   removePlacementListeners = () => {
     closeOnLayoutChange();
+    window.removeEventListener?.('wheel', closeOnLayoutChange, true);
     window.removeEventListener?.('scroll', closeOnLayoutChange, true);
     window.removeEventListener?.('resize', closeOnLayoutChange);
   };
 
-  const copyInvitation = async (accountId, allowReauthentication = true) => {
+  const copyInvitation = async (accountId) => {
     const response = await rosterRequest(
       `/admin/accounts/${encodeURIComponent(accountId)}/invitation/copy`,
     );
-    if (response.status === 409 && allowReauthentication) {
-      reauthenticateRosterThen(() => finishInvitationAction(accountId, () => copyInvitation(accountId, false)), accountId);
-      return false;
-    }
     if (!response.ok) throw new Error('Invitation link could not be created.');
     const result = await response.json().catch(() => null);
     const invitationUrl = validatedInvitationUrl(result?.invitation_url);
@@ -272,14 +286,10 @@
     }
   };
 
-  const sendInvitation = async (accountId, allowReauthentication = true) => {
+  const sendInvitation = async (accountId) => {
     const response = await rosterRequest(
       `/admin/accounts/${encodeURIComponent(accountId)}/invitation/send`,
     );
-    if (response.status === 409 && allowReauthentication) {
-      reauthenticateRosterThen(() => finishInvitationAction(accountId, () => sendInvitation(accountId, false)), accountId);
-      return false;
-    }
     if (!response.ok) throw new Error('Invitation email could not be queued.');
     if (fallbackAccountId === accountId) clearInvitationFallback();
     announceRoster('Invitation email queued. Older invitation links no longer work.');
@@ -321,50 +331,28 @@
       }
     },
   );
-  roster?.querySelector('[data-roster-reauth-cancel]')?.addEventListener(
-    'click', () => {
-      if (rosterRetryAccountId) setInvitationBusy(rosterRetryAccountId, false);
-      rosterRetryAccountId = null;
-      rosterRetry = null;
-      if (rosterReauthPassword) rosterReauthPassword.value = '';
-      if (rosterReauthPanel) rosterReauthPanel.hidden = true;
-    },
-  );
-  roster?.querySelector('[data-roster-reauth-submit]')?.addEventListener(
-    'click', async () => {
-      try {
-        const password = rosterReauthPassword?.value || '';
-        if (!password.trim()) {
-          showRosterError('Administrator password is required.');
-          if (rosterReauthPanel) rosterReauthPanel.hidden = false;
-          rosterReauthPassword?.focus();
-          return;
-        }
-        const response = await rosterRequest('/admin/reauthenticate', {
-          password,
-        });
-        if (!response.ok) throw new Error('Reauthentication failed.');
-        if (rosterReauthPassword) rosterReauthPassword.value = '';
-        if (rosterReauthPanel) rosterReauthPanel.hidden = true;
-        const retry = rosterRetry;
-        rosterRetryAccountId = null;
-        rosterRetry = null;
-        await retry?.();
-      } catch (error) {
-        showRosterError(error.message);
-      }
-    },
-  );
-
   const form = document.querySelector('[data-admin-account-form]');
   if (!form) return cleanup;
+  const assignment = bindCapabilityAssignment(form);
   const error = form.parentElement?.querySelector('[data-admin-form-error]');
   const status = form.parentElement?.querySelector('[data-admin-form-status]');
   const submit = form.querySelector('button[type="submit"]');
-  const reauthPanel = form.querySelector('[data-reauth-panel]');
-  const reauthPassword = form.querySelector('[data-reauth-password]');
-  let pendingRetry = null;
   let completedDestination = null;
+  let busy = false;
+  let disabledBeforeRequest = [];
+  const setBusy = (value) => {
+    busy = value;
+    if (value) {
+      disabledBeforeRequest = [...form.querySelectorAll('input, button, select, textarea')]
+        .map((control) => [control, control.disabled]);
+      for (const [control] of disabledBeforeRequest) control.disabled = true;
+      form.setAttribute?.('aria-busy', 'true');
+    } else if (active) {
+      for (const [control, disabled] of disabledBeforeRequest) control.disabled = disabled;
+      disabledBeforeRequest = [];
+      form.setAttribute?.('aria-busy', 'false');
+    }
+  };
 
   const showError = (message) => {
     if (!error) return;
@@ -379,6 +367,7 @@
   };
 
   const navigateAfterMutation = async (destination, button) => {
+    if (!active) return;
     if (button) button.disabled = true;
     try {
       if (await navigate(destination) !== false) return;
@@ -389,7 +378,7 @@
     showStatus('Changes saved. The next page could not be loaded. Retry navigation to continue.');
     if (button) {
       button.disabled = false;
-      button.textContent = 'Retry navigation';
+      (button.querySelector?.('.ui-button__content') || button).textContent = 'Retry navigation';
       button.formNoValidate = true;
     }
   };
@@ -404,6 +393,11 @@
       },
       body: JSON.stringify(payload),
     });
+    if (!active) throw new Error('Account editor closed.');
+    if (response.status === 401) {
+      window.location.assign('/login');
+      throw new Error('Session expired. Sign in again.');
+    }
     if (!response.ok) {
       const result = await response.json().catch(() => ({}));
       throw new Error(result.detail || 'Account management is temporarily unavailable.');
@@ -411,20 +405,11 @@
     return response;
   };
 
-  const requireReauthentication = (retry) => {
-    if (!reauthPanel || !reauthPassword) {
-      showError('Recent authentication is required. Sign in again and retry.');
-      return;
-    }
-    pendingRetry = retry;
-    reauthPanel.hidden = false;
-    reauthPassword.value = '';
-    reauthPassword.focus();
-  };
+  form.addEventListener('change', () => { if (status) status.hidden = true; });
 
   form.addEventListener('submit', async (event) => {
     event.preventDefault();
-    if (submit?.disabled) return;
+    if (!active || busy || submit?.disabled) return;
     if (completedDestination) {
       await navigateAfterMutation(completedDestination, submit);
       return;
@@ -434,7 +419,8 @@
       return;
     }
     const data = new FormData(form);
-    if (submit) submit.disabled = true;
+    if (status) status.hidden = true;
+    setBusy(true);
     if (error) error.hidden = true;
     try {
       const csrfToken = String(data.get('csrf_token') || '');
@@ -442,8 +428,9 @@
         await requestJson('/admin/accounts', 'POST', {
           username: form.elements.username.value,
           contact_email: form.elements.contact_email.value,
-          capability_keys: data.getAll('capability_keys').map(String),
+          capability_keys: assignment ? assignment.capabilityKeys() : data.getAll('capability_keys').map(String),
           send_invitation: form.elements.send_invitation.checked,
+          ...(assignment ? { role_keys: assignment.roleKeys() } : {}),
         }, csrfToken);
         completedDestination = '/admin/members?created=1';
         await navigateAfterMutation(completedDestination, submit);
@@ -455,36 +442,42 @@
       const confirmDisable = form.dataset.initialActive === 'true' && !isActive;
       const confirmRemoveAccess = form.dataset.initialLibraryAccess === 'true' && !hasAccess;
       if (confirmDisable && !window.confirm('Disable this account and revoke all active sessions?')) {
-        if (submit) submit.disabled = false;
         return;
       }
       if (confirmRemoveAccess && !window.confirm('Remove this user from the current library?')) {
-        if (submit) submit.disabled = false;
         return;
       }
-      await requestJson(`/admin/accounts/${encodeURIComponent(accountId)}`, 'PATCH', {
+      const response = await requestJson(`/admin/accounts/${encodeURIComponent(accountId)}`, 'PATCH', {
         is_active: isActive,
         current_library_access: hasAccess,
-        capability_keys: data.getAll('capability_keys').map(String),
+        capability_keys: assignment ? assignment.capabilityKeys() : data.getAll('capability_keys').map(String),
         confirm_disable: confirmDisable,
         confirm_remove_access: confirmRemoveAccess,
+        ...(assignment ? { role_keys: assignment.roleKeys(), access_revision: String(data.get('access_revision') || '') } : {}),
       }, csrfToken);
-      completedDestination = '/admin/members';
-      await navigateAfterMutation(completedDestination, submit);
-    } catch (requestError) {
-      if (requestError.message === 'Recent authentication is required.') {
-        requireReauthentication(() => form.requestSubmit());
-        if (submit) submit.disabled = false;
-        return;
+      const saved = await response.json();
+      if (!active) return;
+      const revision = form.querySelector('[name="access_revision"]');
+      if (assignment && (!revision || !/^[a-f0-9]{64}$/.test(saved.access_revision || ''))) {
+        throw new Error('Changes were saved, but the access revision could not be refreshed. Reload this user before editing again.');
       }
-      showError(requestError.message);
-      if (submit) submit.disabled = false;
+      if (revision) revision.value = saved.access_revision;
+      form.dataset.initialActive = String(isActive);
+      form.dataset.initialLibraryAccess = String(hasAccess);
+      const toggle = form.querySelector('[data-admin-action="toggle-active"]');
+      if (toggle) (toggle.querySelector?.('.ui-button__content') || toggle).textContent = isActive ? 'Disable account' : 'Enable account';
+      showStatus('Changes saved.');
+    } catch (requestError) {
+      if (active) showError(requestError.message);
+    } finally {
+      setBusy(false);
     }
   });
 
   form.querySelectorAll?.('[data-admin-action]')?.forEach((button) => {
     let completedActionDestination = null;
     button.addEventListener('click', async () => {
+      if (!active || busy || button.disabled) return;
       if (completedActionDestination) {
         await navigateAfterMutation(completedActionDestination, button);
         return;
@@ -500,7 +493,7 @@
         const data = new FormData(form);
         const accountId = String(data.get('account_id') || '');
         const endpoint = action === 'reset' ? 'password-reset' : 'welcome';
-        button.disabled = true;
+        setBusy(true);
         if (error) error.hidden = true;
         if (status) status.hidden = true;
         try {
@@ -510,24 +503,21 @@
             {},
             String(data.get('csrf_token') || ''),
           );
+          if (!active) return;
           showStatus(action === 'reset'
             ? 'If delivery is available, a password reset email has been queued.'
             : 'If delivery is available, a welcome email has been queued.');
         } catch (requestError) {
-          if (requestError.message === 'Recent authentication is required.') {
-            requireReauthentication(() => button.click());
-            return;
-          }
-          showError(requestError.message);
+          if (active) showError(requestError.message);
         } finally {
-          button.disabled = false;
+          setBusy(false);
         }
         return;
       }
       if (action !== 'revoke' || !window.confirm('Revoke every active session for this user?')) return;
       const data = new FormData(form);
       const accountId = String(data.get('account_id') || '');
-      button.disabled = true;
+      setBusy(true);
       try {
         await requestJson(
           `/admin/accounts/${encodeURIComponent(accountId)}/sessions/revoke`,
@@ -538,59 +528,17 @@
         completedActionDestination = `/admin/accounts/${encodeURIComponent(accountId)}`;
         await navigateAfterMutation(completedActionDestination, button);
       } catch (requestError) {
-        if (requestError.message === 'Recent authentication is required.') {
-          requireReauthentication(() => button.click());
-          button.disabled = false;
-          return;
-        }
-        showError(requestError.message);
-        button.disabled = false;
+        if (active) showError(requestError.message);
+      } finally {
+        setBusy(false);
       }
     });
   });
 
-  form.querySelector('[data-reauth-cancel]')?.addEventListener('click', () => {
-    pendingRetry = null;
-    if (reauthPassword) reauthPassword.value = '';
-    if (reauthPanel) reauthPanel.hidden = true;
-  });
-
-  const reauthSubmit = form.querySelector('[data-reauth-submit]');
-  reauthPassword?.addEventListener('keydown', (event) => {
-    if (event.key !== 'Enter' || event.isComposing) return;
-    event.preventDefault();
-    if (!reauthSubmit?.disabled) reauthSubmit?.click();
-  });
-  reauthSubmit?.addEventListener('click', async (event) => {
-    const button = event.currentTarget;
-    const password = reauthPassword?.value || '';
-    if (!password) {
-      reauthPassword?.focus();
-      return;
-    }
-    const data = new FormData(form);
-    button.disabled = true;
-    try {
-      await requestJson(
-        '/admin/reauthenticate',
-        'POST',
-        { password },
-        String(data.get('csrf_token') || ''),
-      );
-      reauthPassword.value = '';
-      reauthPanel.hidden = true;
-      const retry = pendingRetry;
-      pendingRetry = null;
-      retry?.();
-    } catch (requestError) {
-      showError(requestError.message);
-    } finally {
-      button.disabled = false;
-    }
-  });
   return cleanup;
   }
   window.AlbumHavenMountAdmin = mount;
-  // Existing standalone consumers still work; the Settings controller owns mounting in the shared host.
+  window.AlbumHavenBindCapabilityAssignment = bindCapabilityAssignment;
+  // The Settings controller owns mounting in the shared host.
   if (!document.querySelector('[data-settings-host]')) mount(document);
 })();

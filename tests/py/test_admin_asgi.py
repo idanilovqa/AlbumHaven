@@ -362,9 +362,9 @@ def test_send_invitation_route_maps_unavailable_mail_config_without_leaking_deta
     ("error", "expected_status", "expected_detail"),
     [
         (
-            RecentAuthenticationRequired("stale"),
-            409,
-            "Recent authentication is required.",
+            RecentAuthenticationRequired("expired"),
+            401,
+            "Session expired. Sign in again.",
         ),
         (PermissionError("private"), 403, "Action not permitted."),
         (RuntimeError("private"), 503, "Invitation link is temporarily unavailable."),
@@ -391,9 +391,9 @@ def test_copy_invitation_route_maps_failures_without_leaking_details(
     ("error", "expected_status", "expected_detail"),
     [
         (
-            RecentAuthenticationRequired("stale"),
-            409,
-            "Recent authentication is required.",
+            RecentAuthenticationRequired("expired"),
+            401,
+            "Session expired. Sign in again.",
         ),
         (PermissionError("private"), 403, "Action not permitted."),
         (RuntimeError("private"), 503, "Invitation email is temporarily unavailable."),

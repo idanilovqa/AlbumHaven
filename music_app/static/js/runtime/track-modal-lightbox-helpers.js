@@ -40,7 +40,7 @@ function renderTrackModalLoadingState(album) {
   }
   els.cover.innerHTML = `
     <div class="track-modal-cover-shell">
-      <div class="cover-placeholder">Loading cover art...</div>
+      ${buildAlbumArtboxHtml({ state: 'loading', label: 'Loading cover art' })}
     </div>
   `;
   if (els.missingWarning) {
@@ -884,6 +884,12 @@ function handleModalEscapeKeydown(event) {
     closeUtilityModal(true);
     return;
   }
+  dismissForegroundModal(modal);
+}
+
+function dismissForegroundModal(modal) {
+  if (modal.id === 'tag-editor-modal') { closeTagEditorFromBackdrop(); return; }
+  if (modal.id === 'utility-modal') { closeUtilityModal(); return; }
   const close = {
     'track-modal': () => closeTrackModal(),
     'image-lightbox': () => closeImageLightbox(),
@@ -906,7 +912,6 @@ function attachModalEvents() {
   if (!els.overlay || els.overlay.dataset.bound === '1') return;
   els.overlay.dataset.bound = '1';
   bindOverlayPointerOrigin(els.overlay);
-  els.close?.addEventListener('click', closeTrackModal);
   els.overlay.addEventListener('click', (event) => {
     if (overlayClickStartedOnOverlay(els.overlay, event) || event.target.closest('[data-close-track-modal="1"]')) {
       closeTrackModal();

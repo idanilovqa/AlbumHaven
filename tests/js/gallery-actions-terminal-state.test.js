@@ -256,3 +256,97 @@ test('artist-tree checkpoint follows the captured trigger and rejects missing or
   assert.equal(missing.anchorOffset, null);
   assert.equal(missing.anchorVisible, false);
 });
+
+
+test('exact heading readiness rejects an optimistic GalleryBar while canonical navigation is pending', async () => {
+  const { GalleryActions } = await import(galleryActionsUrl);
+  let predicate, selectors, timeout;
+  const owner = { galleryPage: { artistHeadingSelector: '.artist',
+    waitForPageCondition: async (callback, options, args) => {
+      predicate = callback; selectors = args; timeout = options.timeout;
+    },
+  } };
+  await GalleryActions.prototype.waitForOnlyArtistHeadings.call(owner, ['Latest Artist'], { timeout: 10000 });
+  assert.equal(timeout, 10000);
+  const runtime = { view: {}, busy: true, ui: { activeViewRequestUrl: '/view-data?artist=Latest' } };
+  let headings = ['Latest Artist'];
+  const run = () => require('node:vm').runInNewContext(`(${predicate.toString()})(selectors)`, {
+    state: runtime, selectors,
+    document: { querySelectorAll: () => headings.map(textContent => ({ textContent })) },
+  });
+  assert.equal(run(), false);
+  runtime.busy = false;
+  assert.equal(run(), false, 'in-flight canonical response is still required');
+  runtime.ui.activeViewRequestUrl = '';
+  runtime.ui.pendingViewRequest = { artist: 'Latest Artist' };
+  assert.equal(run(), false, 'queued canonical navigation is still required');
+  runtime.ui.pendingViewRequest = null;
+  assert.equal(run(), true);
+  headings = ['Old Artist'];
+  assert.equal(run(), false, 'settled state still requires the exact heading');
+});
+
+function detailsViewportHarness(GalleryPage, GalleryActions, initialTitleTop = 90) {
+  let scrollTop = 1982;
+  const movements = [], clicks = [];
+  class Element {
+    constructor(bounds) { this.bounds = bounds; }
+    getBoundingClientRect() { return this.bounds(); }
+  }
+  const gallery = new Element(() => ({ left: 264, right: 1408, top: 130, bottom: 884, width: 1144, height: 754 }));
+  const card = new Element(() => ({ left: 1130, right: 1403, top: initialTitleTop - 289 + 1982 - scrollTop,
+    bottom: initialTitleTop + 107 + 1982 - scrollTop, width: 273, height: 396 }));
+  const title = new Element(() => ({ left: 1142, right: 1391, top: initialTitleTop + 1982 - scrollTop,
+    bottom: initialTitleTop + 22 + 1982 - scrollTop, width: 249, height: 22 }));
+  const evaluateAll = elements => async (measure, args) => require('node:vm').runInNewContext(
+    `(${measure.toString()})(elements, args)`, {
+      elements, args, HTMLElement: Element,
+      document: { querySelector: selector => { assert.equal(selector, '#albums-scroll'); return gallery; } },
+    },
+  );
+  const cards = {
+    first() { return this; }, count: async () => 1, evaluateAll: evaluateAll([card]),
+    locator(selector) { assert.equal(selector, '.album-title-button[data-open-tracklist="1"]'); return { evaluateAll: evaluateAll([title]) }; },
+  };
+  const pom = {
+    galleryScrollSelector: '#albums-scroll', galleryScroll: { hover: async () => {} },
+    sectionByArtistHeading: () => ({}),
+    albumCard: {
+      detailsButtonWithinCardSelector: '.album-title-button[data-open-tracklist="1"]',
+      cardByIdentity(artist, album, year) { assert.deepEqual([artist, album, year], ['ДДТ', 'Студийные записи4', '1999']); return cards; },
+      async clickDetailsByIdentity() {
+        const bounds = title.getBoundingClientRect();
+        assert.ok(bounds.top >= 130 && bounds.bottom <= 884, 'the actual details action must be fully visible before its native click');
+        clicks.push('native-title-click');
+      },
+    },
+    page: { mouse: { wheel: async (x, y) => { assert.equal(x, 0); movements.push(y); scrollTop += y; } } },
+    async waitForGalleryScrollMovement(previous, direction) { assert.equal(Math.sign(scrollTop - previous), direction); },
+  };
+  pom.readAlbumGalleryViewportState = (...args) => GalleryPage.prototype.readAlbumGalleryViewportState.call(pom, ...args);
+  const actions = new GalleryActions(pom);
+  actions.readGalleryScrollState = async () => ({ scrollTop, clientHeight: 754, maxScrollTop: 7000 });
+  return { actions, pom, movements, clicks };
+}
+
+for (const [titleTop, direction] of [[90, -1], [875, 1]]) {
+  test(`opening details uses native wheel ${direction < 0 ? 'up' : 'down'} when a partial card has a clipped title`, async () => {
+    const { GalleryPage } = await import(galleryPageUrl);
+    const { GalleryActions } = await import(galleryActionsUrl);
+    const h = detailsViewportHarness(GalleryPage, GalleryActions, titleTop);
+    const card = await h.pom.readAlbumGalleryViewportState('ДДТ', 'Студийные записи4', { year: '1999' });
+    assert.equal(card.intersects, true, 'the visible card edge is insufficient to click its title');
+    await h.actions.selectAlbumDetailsByIdentity({ artist: 'ДДТ', album: 'Студийные записи4', year: '1999' });
+    assert.deepEqual(h.movements, [direction * 566]);
+    assert.deepEqual(h.clicks, ['native-title-click']);
+  });
+}
+
+test('opening an already visible details action does not add scroll or recovery navigation', async () => {
+  const { GalleryPage } = await import(galleryPageUrl);
+  const { GalleryActions } = await import(galleryActionsUrl);
+  const h = detailsViewportHarness(GalleryPage, GalleryActions, 400);
+  await h.actions.selectAlbumDetailsByIdentity({ artist: 'ДДТ', album: 'Студийные записи4', year: '1999' });
+  assert.deepEqual(h.movements, []);
+  assert.deepEqual(h.clicks, ['native-title-click']);
+});

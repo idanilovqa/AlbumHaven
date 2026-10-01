@@ -75,12 +75,20 @@ function mountSeekbarAppearanceEditor(detail) {
     getSeekbarMode: profile => window.AlbumHavenDevicePreferences?.enabled
       ? window.AlbumHavenDevicePreferences.read('playerAppearance', {}, profile).seekbarMode || 'default'
       : state.player.appearance?.seekbarMode || 'default',
-    applySeekbarMode: (seekbarMode, profile) => {
+    applySeekbarMode: async (seekbarMode, profile, isCurrentSave = () => true) => {
       const preferences = window.AlbumHavenDevicePreferences;
       if (preferences?.enabled) {
         const appearance = normalizePlayerAppearance({ ...preferences.read('playerAppearance', {}, profile), seekbarMode });
-        preferences.write('playerAppearance', appearance, profile);
-        if (profile === preferences.profile()) { state.player.appearance = appearance; updateWaveformAppearance(true); }
+        if (!preferences.write('playerAppearance', appearance, profile) || !await preferences.flush()) {
+          throw new Error('Seekbar mode could not be saved.');
+        }
+        if (!isCurrentSave() || editor !== getBackgroundAppearanceEditor()
+          || preferences !== window.AlbumHavenDevicePreferences) return;
+        const current = normalizePlayerAppearance(preferences.read('playerAppearance', {}, profile));
+        if (profile === preferences.profile() && JSON.stringify(current) === JSON.stringify(appearance)) {
+          state.player.appearance = appearance;
+          updateWaveformAppearance(true);
+        }
         return;
       }
       state.player.appearance = normalizePlayerAppearance({ ...state.player.appearance, seekbarMode });

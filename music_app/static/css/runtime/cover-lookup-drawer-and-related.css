@@ -67,13 +67,15 @@
   box-shadow: -20px 0 48px rgba(0,0,0,0.26);
   transform: translateX(100%);
   opacity: 0;
-  transition: transform 220ms ease, opacity 220ms ease;
+  visibility: hidden;
+  transition: transform 220ms ease, opacity 220ms ease, visibility 220ms ease;
 }
 .cover-lookup-drawer[hidden] {
   display: block;
   pointer-events: none;
 }
 .cover-lookup-drawer.is-open {
+  visibility: visible;
   transform: translateX(0);
   opacity: 1;
   pointer-events: auto;

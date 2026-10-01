@@ -525,14 +525,7 @@ async function handleUtilityBootstrapClick(event) {
 
   const tagEditorOverlay = document.getElementById?.('tag-editor-modal');
   if (tagEditorOverlay && overlayClickStartedOnOverlay(tagEditorOverlay, event)) {
-    const changedUpdates = buildChangedTagEditorUpdates(
-      state.tagEditor.album,
-      state.tagEditor.tracks || [],
-      state.tagEditor.values || {},
-    );
-    if (!Object.keys(changedUpdates).length) {
-      closeTagEditor();
-    }
+    closeTagEditorFromBackdrop();
     return;
   }
 
@@ -1284,6 +1277,16 @@ function handleUtilityBootstrapKeyDown(event) {
   const filterInput = event.target?.matches?.('input, textarea, [contenteditable="true"]');
   if (state.utility.activeTab === 'problematic-files' && filterTarget && !filterInput) {
     const els = getUtilityModalElements();
+    // On mobile this component is a page, so modal Escape capture does not own it.
+    if (event.key === 'Escape' && state.utility.problemDropdownOpen) {
+      event.preventDefault();
+      event.stopPropagation?.();
+      if (event.repeat || event.isComposing) return true;
+      state.utility.problemDropdownOpen = false;
+      renderProblemFilterControls(els);
+      els.problemFilterButton.focus();
+      return true;
+    }
     if (['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key) && !els.problemFilterButton.disabled) {
       event.preventDefault();
       if (!state.utility.problemDropdownOpen) {

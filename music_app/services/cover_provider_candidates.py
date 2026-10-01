@@ -475,6 +475,18 @@ def selected_remote_image_from_lookup_match(match: dict[str, object]) -> Selecte
     )
 
 
+PROVIDER_LOOKUP_GROUPS = ("services", "cover_art_archive")
+
+
+def is_provider_lookup_match(match: Mapping[str, object]) -> bool:
+    """Classify a server-resolved task/snapshot, never a submitted candidate.
+
+    The registry owns these groups; manual links always use manual_links even
+    when their source label names a provider. Missing provenance fails closed.
+    """
+    return match.get("lookup_group") in PROVIDER_LOOKUP_GROUPS
+
+
 def build_lookup_matches_from_candidates(
     candidates: list[CoverCandidate],
     *,

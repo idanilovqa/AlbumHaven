@@ -386,3 +386,18 @@ function loadHelper({ isMobile = false, artistTreeFolded = false, savedArtistTre
   assert.equal(opened, false);
   assert.equal(context.state.ui.artistsDrawerOpen, false);
 }
+
+
+// A pending hidden-tree reveal runs only after expansion settles. Ordinary
+// expansion without a reveal must retain the user's existing scroll position.
+for (const pendingArtist of ['', 'Latest Artist']) {
+  const { context, documentElement } = loadHelper({ isMobile: false, artistTreeFolded: true });
+  context.state.ui.pendingSidebarRevealArtist = pendingArtist;
+  let renders = 0;
+  context.renderSidebar = () => { renders += 1; };
+  context.toggleArtistTreeFold();
+  assert.equal(renders, 0);
+  documentElement.dispatchEvent({ type: 'transitionend', target: documentElement,
+    propertyName: '--compact-rail-width' });
+  assert.equal(renders, pendingArtist ? 1 : 0);
+}

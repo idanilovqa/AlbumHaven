@@ -6,7 +6,7 @@ const path = require('node:path');
 const repoRoot = path.join(__dirname, '..', '..', '..');
 const appearance = require(path.join(repoRoot, 'music_app', 'static', 'js', 'appearance-backgrounds.js'));
 
-test('automatic action interactions derive restrained fill and edge from the effective player background', () => {
+test('automatic action interactions use approved muted player tint for hover fill and edge', () => {
   const first = appearance.resolveActionInteractionTokens(
     { interaction_overrides: { button_hover_background: null, button_pressed: null } },
     { tokens: { control: '#303C36', player: '#112233', 'player-surface-start': '#112233' } },
@@ -33,6 +33,26 @@ test('explicit action fill and pressed choices remain authoritative while the se
   assert.equal(tokens.hoverBackground, '#234567');
   assert.equal(tokens.pressedBackground, '#123456');
   assert.equal(tokens.hoverBorder, 'color-mix(in srgb, #112233 22%, #858985)');
+});
+
+test('explicit custom action edges stay fixed on hover and focus while automatic colors retain their formulas', () => {
+  for (const player of ['#123456', '#654321']) {
+    const effective = { tokens: { control: '#303C36', player, 'player-surface-start': player } };
+    const preference = { interaction_overrides: {
+      item_outline: { source: 'custom', color: '#86B7EF' },
+      button_hover_background: '#27384B', button_pressed: '#203246',
+    } };
+    const custom = appearance.resolveActionInteractionTokens(preference, effective);
+    assert.equal(custom.hoverBorder, '#86B7EF');
+    assert.equal(appearance.resolveInteractionOutline(preference, effective), '#86B7EF');
+    assert.equal(custom.hoverBackground, '#27384B');
+    assert.equal(custom.pressedBackground, '#203246');
+    const automatic = appearance.resolveActionInteractionTokens({ interaction_overrides: {
+      item_outline: { source: 'automatic', color: null },
+    } }, effective);
+    assert.equal(automatic.hoverBackground, `color-mix(in srgb, ${player} 14%, color-mix(in srgb, #303C36 85%, #EEEEEE))`);
+    assert.equal(automatic.hoverBorder, `color-mix(in srgb, ${player} 22%, #858985)`);
+  }
 });
 
 test('shared action CSS supports outlined and bare chrome without changing focus, destructive, or player controls', () => {
@@ -101,4 +121,23 @@ test('utility searches keep shared actions mounted and synchronize Clear after t
   const utilitySource = fs.readFileSync(path.join(repoRoot, 'music_app', 'static', 'js', 'runtime', 'utility-renderers-and-actions.js'), 'utf8');
   assert.doesNotMatch(utilityCss, /\.search-field-action:has\(> \.utility-problem-filter-button\[hidden\]\)[^{]*\{[^}]*display:\s*none/s);
   assert.match(utilitySource, /updateSearchClearAction\(els\.search\)/);
+});
+
+test('mobile-branch Combine uses the shared configured hover fill without a transparent late override', () => {
+  const css = fs.readFileSync(path.join(repoRoot, 'music_app', 'static', 'css', 'runtime', 'trigger-anchor.css'), 'utf8');
+  assert.match(css, /\.artist-family-panel__combine-row \.gallery-switch, \.ui-filter-pill\):hover[^{}]*\{\s*background: var\(--dropdown-item-hover-background/);
+  assert.doesNotMatch(css, /\.artist-family-panel__combine-row \.gallery-switch:hover[^{}]*\{\s*background: transparent/);
+});
+
+test('quiet buttons preserve transparent hover and the configured pressed fill', () => {
+  const css = fs.readFileSync(path.join(repoRoot, 'music_app', 'static', 'css', 'button-component.css'), 'utf8');
+  assert.match(css, /\.ui-button\.ui-button--quiet:hover[^{}]*\{[^}]*background: transparent;/);
+  assert.match(css, /\.ui-button\.ui-button--quiet:active[^{}]*\{\s*background: var\(--appearance-item-action-pressed,/);
+});
+
+test('ordinary dropdown switches are excluded from the mobile Combine hover treatment', () => {
+  const appearanceCss = fs.readFileSync(path.join(repoRoot, 'music_app', 'static', 'css', 'appearance-backgrounds.css'), 'utf8');
+  assert.match(appearanceCss, /:where\(:not\(\.gallery-switch\)/);
+  const css = fs.readFileSync(path.join(repoRoot, 'music_app', 'static', 'css', 'runtime', 'trigger-anchor.css'), 'utf8');
+  assert.match(css, /\.gallery-switch:not\(\.artist-family-panel__combine-row \.gallery-switch\):hover[^{}]*\{\s*background: transparent !important;/);
 });

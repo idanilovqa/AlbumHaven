@@ -179,6 +179,7 @@ function toggleArtistTreeFold() {
   const settleArtistTree = () => {
     if (Boolean(state.ui.artistTreeFolded) !== isFolded) return;
     syncArtistTreeFoldVisibility();
+    if (!isFolded && state.ui.pendingSidebarRevealArtist) renderSidebar();
     if (moveFocusWithinRail && !isFolded) button?.focus?.();
   };
   scheduleArtistTreeResizeAfterTransition(settleArtistTree);
@@ -191,10 +192,10 @@ function openArtistsDrawer() {
     return false;
   }
   const rail = document.getElementById('shell-navigation-rail');
-  if (typeof activateTriggerSurface === 'function') activateTriggerSurface(rail, () => closeArtistsDrawer({ restoreFocus: false }));
+  if (typeof activateTriggerSurface === 'function') activateTriggerSurface(rail, () => closeArtistsDrawer({ restoreFocus: false }), { anchor: document.getElementById('mobile-library-button') || document.getElementById('artists-drawer-button') });
   state.ui.artistsDrawerOpen = true;
   syncArtistsDrawerVisibility();
-  document.querySelector?.('#artist-tree-expanded [data-close-artists-drawer]')?.focus?.();
+  document.querySelector?.('#artist-tree-expanded [data-close-artists-drawer]')?.focus?.({ preventScroll: true });
   return true;
 }
 
@@ -204,7 +205,7 @@ function closeArtistsDrawer(options = {}) {
   if (typeof clearTriggerAnchor === 'function') clearTriggerAnchor(document.getElementById('shell-navigation-rail'));
   syncArtistsDrawerVisibility();
   if (wasOpen && options.restoreFocus !== false) {
-    (document.getElementById('mobile-library-button') || document.getElementById('artists-drawer-button'))?.focus?.();
+    (document.getElementById('mobile-library-button') || document.getElementById('artists-drawer-button'))?.focus?.({ preventScroll: true });
   }
   return wasOpen;
 }

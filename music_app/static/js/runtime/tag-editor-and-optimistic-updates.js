@@ -316,6 +316,15 @@ function autoNumberSelectedTagEditorTracks() {
   syncTagEditorAutoNumberControls();
 }
 
+function closeTagEditorFromBackdrop() {
+  const changedUpdates = buildChangedTagEditorUpdates(
+    state.tagEditor.album,
+    state.tagEditor.tracks || [],
+    state.tagEditor.values || {},
+  );
+  if (!Object.keys(changedUpdates).length) closeTagEditor();
+}
+
 function closeTagEditor() {
   if (typeof clearTagEditorReorderCue === 'function') clearTagEditorReorderCue();
   const els = getTagEditorElements();

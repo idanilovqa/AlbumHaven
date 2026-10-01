@@ -500,9 +500,11 @@ function renderSidebar() {
     if (activeLink instanceof HTMLElement) {
       const scrollContainer = el.closest('.sidebar');
       if (!(scrollContainer instanceof HTMLElement)) return;
+      const activeRect = activeLink.getBoundingClientRect();
+      // Folded trees have zero-size rows; keep the reveal for their visible layout.
+      if (el.hidden || !(activeRect.width > 0) || !(activeRect.height > 0)) return;
       const pendingRevealArtist = String(state.ui.pendingSidebarRevealArtist || '');
-      if (pendingRevealArtist && pendingRevealArtist === String(v.selected_artist || '')) {
-        const activeRect = activeLink.getBoundingClientRect();
+      if (pendingRevealArtist && pendingRevealArtist === String(state.view.selected_artist || '')) {
         const containerRect = scrollContainer.getBoundingClientRect();
         const player = document.querySelector('.global-player');
         const playerRect = player instanceof HTMLElement ? player.getBoundingClientRect() : null;
@@ -524,7 +526,6 @@ function renderSidebar() {
         state.ui.pendingSidebarRevealArtist = '';
         return;
       }
-      const activeRect = activeLink.getBoundingClientRect();
       const containerRect = scrollContainer.getBoundingClientRect();
       const player = document.querySelector('.global-player');
       const playerRect = player instanceof HTMLElement ? player.getBoundingClientRect() : null;
@@ -578,9 +579,9 @@ let detachedGalleryBarNextSibling = null;
 function buildLibraryStatusBarHtml() {
   return `<section class="gallery-bar gallery-bar--scan" id="library-status-gallery-bar" data-gallery-bar data-gallery-bar-instance="library-status" aria-label="Library Status Page controls">
     <div class="gallery-bar__context">
-      <button class="gallery-action-button library-loader-back-button" id="library-loader-back-button" type="button" data-close-scan-page="1" aria-label="Back to previous library view"><span class="library-loader-back-icon" aria-hidden="true">&#8592;</span></button>
+      ${ButtonComponent.renderActionButton({ icon: 'back', presentation: 'bare', ariaLabel: 'Back to previous library view', className: 'gallery-action-button library-loader-back-button', attributes: { id: 'library-loader-back-button', 'data-close-scan-page': '1' } })}
       <div class="library-scan-gallery-copy">
-        <div class="gallery-bar__title"><span>Library Status Page</span></div>
+        <div class="gallery-bar__title"><span>Library State</span></div>
         <span class="gallery-bar__summary" id="library-scan-gallery-summary" aria-live="polite">Preparing status...</span>
       </div>
     </div>

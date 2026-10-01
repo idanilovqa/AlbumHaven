@@ -167,7 +167,9 @@
     return {
       hoverBackground: interactions.button_hover_background
         || `color-mix(in srgb, ${playerBackground} 14%, color-mix(in srgb, ${control} 85%, #EEEEEE))`,
-      hoverBorder: `color-mix(in srgb, ${playerBackground} 22%, #858985)`,
+      hoverBorder: interactions.item_outline?.source === 'custom'
+        ? interactions.item_outline.color
+        : `color-mix(in srgb, ${playerBackground} 22%, #858985)`,
       pressedBackground: interactions.button_pressed
         || `color-mix(in srgb, ${control} 75%, #000000)`,
     };
@@ -871,7 +873,8 @@
         if (aggregate) { revision = response.revision; playerRecentSets = normalizePlayerSets(response.player_recent_sets); }
         saved = preference; draft = copy(saved); deviceProfiles = profileApi.normalize(response.device_profiles, appearancePreferenceSections(saved)); savedDeviceProfiles = copy(deviceProfiles); applyActiveDeviceSection(); pendingPlayerSet = null; recentColors = history; waveformColorUpdates = []; errors = {}; syncInputs(); apply(copy(saved));
         for (const [profile, mode] of submittedSeekbars) {
-          applySeekbarMode(mode, profile);
+          await applySeekbarMode(mode, profile, () => ownGeneration === generation);
+          if (ownGeneration !== generation) return false;
           seekbarModes.get(profile).saved = mode;
         }
         return true;
@@ -912,7 +915,7 @@
         if (!seekbarConfigured) { seekbarModes.clear(); seekbarConfigured = true; }
         seekbarState();
       },
-      setSeekbarMode(mode) { if (editBlocked()) return; seekbarState().draft = normalizeSeekbarMode(mode); notify(); },
+      setSeekbarMode(mode) { if (busy() || (activeDeviceProfile !== 'tv' && editBlocked())) return; seekbarState().draft = normalizeSeekbarMode(mode); notify(); },
       setPlayerStyle, setPlayerStyleColor, restorePlayerSet, setSelectionAccent, setActionButtonOutlines, setInteractionOverrides, setItemOutline, useThemeInteractions, setDeviceProfile, setDeviceSectionMode, setActiveSection, cancel, reset, resetSection, load, save, clear,
       getMainPreview, reconcileLoopCapability, subscribe(listener) { listeners.add(listener); return () => listeners.delete(listener); } };
   }

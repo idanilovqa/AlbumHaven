@@ -490,3 +490,245 @@ def test_cleanup_diagnostics_exclude_paths_and_error_messages(monkeypatch, capsy
         "stage": "remove-failed", "pid": os.getpid(), "error_type": "PermissionError",
         "errno": 13, "winerror": 32,
     }
+
+
+@pytest.mark.parametrize("relation", ["self", "other", "unrecognized"])
+def test_cleanup_diagnostics_report_only_sanitized_root_relation(monkeypatch, capsys, relation):
+    name = {
+        "self": f"pytest-{os.getpid()}-deadbeef",
+        "other": f"pytest-{os.getpid() + 1}-deadbeef",
+        "unrecognized": "private-root-name",
+    }[relation]
+    root = Path("private-parent") / name
+    error = PermissionError(13, "private error payload", str(root / "private-file"))
+    monkeypatch.delenv("ALBUM_HAVEN_PYTEST_CLEANUP_DIAGNOSTICS", raising=False)
+    pytest_harness._report_pytest_cleanup("initial-stat-failed", error=error, path=root)
+    assert capsys.readouterr().err == ""
+    monkeypatch.setenv("ALBUM_HAVEN_PYTEST_CLEANUP_DIAGNOSTICS", "1")
+    pytest_harness._report_pytest_cleanup("initial-stat-failed", error=error, path=root)
+    output = capsys.readouterr().err
+    assert "private" not in output
+    assert "deadbeef" not in output
+    assert json.loads(output.removeprefix("PYTEST_HARNESS_CLEANUP=")) == {
+        "stage": "initial-stat-failed", "pid": os.getpid(), "root_relation": relation,
+        "error_type": "PermissionError", "errno": 13, "winerror": None,
+    }
+
+
+@pytest.mark.parametrize("reason", [
+    "name", "symlink", "parent", "payload-type", "kind", "pid", "token",
+])
+def test_cleanup_guard_diagnostics_preserve_rejected_root(tmp_path, monkeypatch, capsys, reason):
+    workspace = tmp_path / "private-workspace"
+    root = workspace / f"pytest-{os.getpid()}-deadbeef"
+    if reason == "name":
+        root = workspace / "private-unrecognized-name"
+    _write_owner_marker(root, pid=os.getpid(), token="deadbeef")
+    marker = root / ".album-haven-pytest-owner.json"
+    payload = json.loads(marker.read_text(encoding="utf-8"))
+    if reason == "payload-type":
+        payload = ["private-payload"]
+    elif reason == "kind":
+        payload["kind"] = "private-kind"
+    elif reason == "pid":
+        payload["pid"] = os.getpid() + 1
+    elif reason == "token":
+        payload["token"] = "private-token"
+    marker.write_text(json.dumps(payload), encoding="utf-8")
+    original = marker.read_bytes()
+    monkeypatch.setenv("ALBUM_HAVEN_PYTEST_CLEANUP_DIAGNOSTICS", "1")
+    allowed_parent = tmp_path / "different-parent" if reason == "parent" else workspace
+    monkeypatch.setattr(pytest_harness, "_workspace_pytest_temp_root", lambda: allowed_parent.resolve())
+    real_is_symlink = Path.is_symlink
+    if reason == "symlink":
+        monkeypatch.setattr(Path, "is_symlink", lambda path: path == root or real_is_symlink(path))
+    removals = []
+    monkeypatch.setattr(pytest_harness.shutil, "rmtree", removals.append)
+    assert not pytest_harness._remove_owned_generated_pytest_root(
+        root, expected_owner=(os.getpid(), "deadbeef"),
+    )
+    assert removals == []
+    assert root.is_dir()
+    assert marker.read_bytes() == original
+    output = capsys.readouterr().err
+    assert "private" not in output
+    assert "deadbeef" not in output
+    assert json.loads(output.removeprefix("PYTEST_HARNESS_CLEANUP="))["stage"] == f"owner-{reason}-rejected"
+
+
+@pytest.mark.parametrize("mode", ["expected-owner", "live-owner", "initial-stat", "retry-stat"])
+def test_cleanup_decision_diagnostics_preserve_owned_root(tmp_path, monkeypatch, capsys, mode):
+    root = tmp_path / f"pytest-{os.getpid()}-deadbeef"
+    _write_owner_marker(root, pid=os.getpid(), token="deadbeef")
+    marker = root / ".album-haven-pytest-owner.json"
+    owner = json.loads(marker.read_text(encoding="utf-8"))
+    original = marker.read_bytes()
+    initial_stat = root.stat()
+    expected = (os.getpid() + 1, "deadbeef") if mode == "expected-owner" else (os.getpid(), "deadbeef")
+    if mode == "live-owner":
+        expected = None
+    removals = []
+    with monkeypatch.context() as patch:
+        patch.setenv("ALBUM_HAVEN_PYTEST_CLEANUP_DIAGNOSTICS", "1")
+        patch.setattr(pytest_harness, "_owned_generated_pytest_root", lambda path: owner)
+        patch.setattr(pytest_harness, "_process_is_running", lambda pid: True)
+        patch.setattr(pytest_harness.shutil, "rmtree", removals.append)
+        if mode.endswith("stat"):
+            def stat(path, *, follow_symlinks=True):
+                if mode == "initial-stat" or not follow_symlinks:
+                    raise PermissionError(13, "private error", "private-path")
+                return initial_stat
+            patch.setattr(Path, "stat", stat)
+        assert not pytest_harness._remove_owned_generated_pytest_root(root, expected_owner=expected)
+    assert removals == []
+    assert root.is_dir()
+    assert marker.read_bytes() == original
+    output = capsys.readouterr().err
+    assert "private" not in output
+    assert "deadbeef" not in output
+    event = json.loads(output.removeprefix("PYTEST_HARNESS_CLEANUP="))
+    assert event["stage"] == {
+        "expected-owner": "expected-owner-rejected", "live-owner": "stale-owner-live",
+        "initial-stat": "initial-stat-failed", "retry-stat": "retry-stat-failed",
+    }[mode]
+    assert event["root_relation"] == "self"
+
+
+def test_probe_diagnostics_distinguish_startup_and_all_teardown_phases(tmp_path):
+    completed, payload = _run_probe(generated_root=tmp_path / "generated-probes")
+    events = [
+        json.loads(line.removeprefix("PYTEST_HARNESS_CLEANUP="))
+        for line in completed.stderr.splitlines()
+        if line.startswith("PYTEST_HARNESS_CLEANUP=")
+    ]
+    phases = [event["stage"] for event in events if event["stage"].startswith("phase-")]
+    assert phases == [
+        "phase-stale-start", "phase-stale-end",
+        "phase-sessionfinish-start", "phase-sessionfinish-end",
+        "phase-unconfigure-start", "phase-unconfigure-end",
+        "phase-config-cleanup-start", "phase-config-cleanup-end",
+    ]
+    assert not Path(str(payload["basetemp"])).exists()
+    assert all(set(event) <= {"stage", "pid", "root_relation", "error_type", "errno", "winerror"} for event in events)
+
+
+def test_stale_diagnostics_distinguish_unmarked_self_from_live_peer(tmp_path, monkeypatch, capsys):
+    self_root = tmp_path / f"pytest-{os.getpid()}-deadbeef"
+    self_root.mkdir()
+    peer_root = tmp_path / f"pytest-{os.getpid() + 1}-cafebabe"
+    _write_owner_marker(peer_root, pid=os.getpid() + 1, token="cafebabe")
+    peer_marker = peer_root / ".album-haven-pytest-owner.json"
+    original = peer_marker.read_bytes()
+    monkeypatch.setenv("ALBUM_HAVEN_PYTEST_CLEANUP_DIAGNOSTICS", "1")
+    monkeypatch.setattr(pytest_harness, "_workspace_pytest_temp_root", lambda: tmp_path.resolve())
+    monkeypatch.setattr(pytest_harness, "_process_is_running", lambda pid: True)
+    removals = []
+    monkeypatch.setattr(pytest_harness.shutil, "rmtree", removals.append)
+    pytest_harness._cleanup_stale_generated_pytest_roots()
+    assert removals == []
+    assert self_root.is_dir()
+    assert peer_marker.read_bytes() == original
+    events = [json.loads(line.removeprefix("PYTEST_HARNESS_CLEANUP=")) for line in capsys.readouterr().err.splitlines()]
+    assert events[0]["stage"] == "phase-stale-start"
+    assert events[-1]["stage"] == "phase-stale-end"
+    assert {(event["stage"], event["root_relation"]) for event in events if "root_relation" in event} == {
+        ("owner-read-failed", "self"), ("stale-owner-live", "other"),
+    }
+
+
+@pytest.mark.parametrize("reason", ["inode", "symlink", "identity", "stat"])
+def test_restoration_guard_diagnostics_preserve_marker(tmp_path, monkeypatch, capsys, reason):
+    root = tmp_path / f"pytest-{os.getpid()}-deadbeef"
+    _write_owner_marker(root, pid=os.getpid(), token="deadbeef")
+    marker = root / ".album-haven-pytest-owner.json"
+    original = marker.read_bytes()
+    owner = json.loads(original)
+    identity = (root.stat().st_dev, root.stat().st_ino)
+    fake_stat = SimpleNamespace(st_dev=identity[0], st_ino=identity[1])
+    if reason == "inode":
+        fake_stat.st_ino = 0
+    elif reason == "identity":
+        fake_stat.st_ino += 1
+    real_stat = Path.stat
+    real_is_symlink = Path.is_symlink
+
+    def stat(path, **kwargs):
+        if path != root:
+            return real_stat(path, **kwargs)
+        if reason == "stat":
+            raise PermissionError(13, "private message", "private-file")
+        return fake_stat
+
+    with monkeypatch.context() as patch:
+        patch.setenv("ALBUM_HAVEN_PYTEST_CLEANUP_DIAGNOSTICS", "1")
+        patch.setattr(Path, "stat", stat)
+        patch.setattr(Path, "is_symlink", lambda path: reason == "symlink" if path == root else real_is_symlink(path))
+        assert not pytest_harness._preserve_pytest_owner_after_partial_removal(root, owner, identity)
+    assert root.is_dir()
+    assert marker.read_bytes() == original
+    output = capsys.readouterr().err
+    assert "private" not in output
+    event = json.loads(output.removeprefix("PYTEST_HARNESS_CLEANUP="))
+    assert event["stage"] == {
+        "inode": "restoration-inode-unavailable", "symlink": "restoration-symlink-rejected",
+        "identity": "restoration-identity-rejected", "stat": "owner-restoration-failed",
+    }[reason]
+
+
+@pytest.mark.parametrize("reason", ["symlink", "identity", "owner"])
+def test_revalidation_guard_diagnostics_preserve_owned_root(tmp_path, monkeypatch, capsys, reason):
+    root = tmp_path / f"pytest-{os.getpid()}-deadbeef"
+    _write_owner_marker(root, pid=os.getpid(), token="deadbeef")
+    marker = root / ".album-haven-pytest-owner.json"
+    original = marker.read_bytes()
+    owner = json.loads(original)
+    initial_stat = root.stat()
+    real_stat = Path.stat
+    real_is_symlink = Path.is_symlink
+    reads = []
+    removals = []
+
+    def read_owner(path):
+        reads.append(path)
+        return None if reason == "owner" and len(reads) > 1 else owner
+
+    def stat(path, *, follow_symlinks=True):
+        if path != root:
+            return real_stat(path, follow_symlinks=follow_symlinks)
+        if reason == "identity" and not follow_symlinks:
+            return SimpleNamespace(st_dev=initial_stat.st_dev, st_ino=initial_stat.st_ino + 1)
+        return initial_stat
+
+    with monkeypatch.context() as patch:
+        patch.setenv("ALBUM_HAVEN_PYTEST_CLEANUP_DIAGNOSTICS", "1")
+        patch.setattr(pytest_harness, "_owned_generated_pytest_root", read_owner)
+        patch.setattr(pytest_harness.shutil, "rmtree", removals.append)
+        patch.setattr(Path, "stat", stat)
+        patch.setattr(Path, "is_symlink", lambda path: reason == "symlink" if path == root else real_is_symlink(path))
+        assert not pytest_harness._remove_owned_generated_pytest_root(root, expected_owner=(os.getpid(), "deadbeef"))
+    assert removals == []
+    assert root.is_dir()
+    assert marker.read_bytes() == original
+    event = json.loads(capsys.readouterr().err.removeprefix("PYTEST_HARNESS_CLEANUP="))
+    assert event["stage"] == {
+        "symlink": "revalidation-symlink-rejected", "identity": "revalidation-identity-rejected",
+        "owner": "owner-revalidation-rejected",
+    }[reason]
+
+
+@pytest.mark.parametrize("reason", ["not-generated", "basetemp-unavailable", "token-unavailable"])
+def test_config_cleanup_prerequisite_diagnostics_do_not_remove_roots(monkeypatch, capsys, reason):
+    config = SimpleNamespace(
+        _album_haven_generated_basetemp=reason != "not-generated",
+        _album_haven_generated_basetemp_token=None if reason == "token-unavailable" else "deadbeef",
+        _tmp_path_factory=SimpleNamespace(
+            _basetemp=None if reason == "basetemp-unavailable" else Path(f"pytest-{os.getpid()}-deadbeef"),
+        ),
+    )
+    removals = []
+    monkeypatch.setenv("ALBUM_HAVEN_PYTEST_CLEANUP_DIAGNOSTICS", "1")
+    monkeypatch.setattr(pytest_harness, "_remove_owned_generated_pytest_root", lambda *args, **kwargs: removals.append(args))
+    pytest_harness._cleanup_generated_pytest_root(config)
+    assert removals == []
+    event = json.loads(capsys.readouterr().err.removeprefix("PYTEST_HARNESS_CLEANUP="))
+    assert event["stage"] == f"cleanup-{reason}"

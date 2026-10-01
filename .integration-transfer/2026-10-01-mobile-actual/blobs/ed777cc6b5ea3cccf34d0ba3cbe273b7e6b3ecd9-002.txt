@@ -1,0 +1,257 @@
+ag|move)Loop(?:Start|End|Boundary|Handle)/i);
+  assert.match(savedActions, /(?:enter|open)SavedLoop(?:Edit|Creation)|createAnotherLoop/i);
+  assert.match(savedActions, /(?:cancel|escape)[^\n]*Loop/i);
+
+  const compactLayoutStart = savedLoop.indexOf('async readCompactLayoutSnapshot(');
+  const compactLayoutEnd = savedLoop.indexOf('\n  async readLoopActionVisualSnapshot(', compactLayoutStart);
+  const compactLayoutHelper = savedLoop.slice(compactLayoutStart, compactLayoutEnd);
+  assert.match(
+    compactLayoutHelper,
+    /this\.loopActionForEntry\(entry\)\.boundingBox\(\)/,
+    'compact layout must measure the persistent action root in idle and active states',
+  );
+  assert.doesNotMatch(
+    compactLayoutHelper,
+    /this\.loopScissorsButtonForEntry\(entry\)\.boundingBox\(\)/,
+    'compact layout must not wait for the hidden idle Enter button while editing',
+  );
+  assert.match(
+    compactLayoutHelper,
+    /scissorsBounds\s*:\s*(?:action|loopAction|actionRoot)Bounds/,
+    'the stable root bounds must preserve the existing scissorsBounds result contract',
+  );
+  assert.doesNotMatch(
+    compactLayoutHelper,
+    /if \([^)]*!pitchBounds/,
+    'compact layout measurement must remain usable while edit mode intentionally hides pitch',
+  );
+  assert.match(
+    compactLayoutHelper,
+    /pitchBounds,/,
+    'idle-mode callers must still receive pitch geometry and enforce its visible placement',
+  );
+});
+
+test('loop range E2E coverage measures rendered geometry and preserves in-drag synchronization evidence', () => {
+  const spec = read('tests/e2e/specs/loops.functional.spec.js');
+  const globalPom = read('tests/e2e/poms/globalPlayer.js');
+  const globalActions = read('tests/e2e/actions/globalPlayerActions.js');
+  const savedPom = read('tests/e2e/poms/utilityLoopEntryCard.js');
+  const savedActions = read('tests/e2e/actions/utilityLoopsActions.js');
+
+  for (const source of [globalPom, savedPom]) {
+    assert.match(source, /selectionLeftFraction/);
+    assert.match(source, /selectionRightFraction/);
+    assert.match(source, /selectionStartErrorPixels/);
+    assert.match(source, /selectionEndErrorPixels/);
+    assert.match(source, /getComputedStyle\([^)]*\)\.cursor/);
+    assert.match(source, /timeWaveformOverlap/);
+    assert.match(source, /playerHeight/);
+    assert.match(source, /waveformHeight/);
+  }
+  assert.match(globalPom, /metadataWaveformGap/);
+  assert.match(globalPom, /coverCenterY/);
+  assert.match(globalPom, /playCenterY/);
+  assert.match(globalPom, /timelineCenterY/);
+  assert.match(globalPom, /mainLeftGapFromPlay/);
+  const actionVisualStart = globalPom.indexOf('async readLoopActionVisualSnapshot(');
+  const actionVisualEnd = globalPom.indexOf('\n  async readMainLoopVisualSnapshot(', actionVisualStart);
+  assert.ok(actionVisualStart >= 0 && actionVisualEnd > actionVisualStart, 'Expected the main-player visual snapshot helper.');
+  const actionVisualHelper = globalPom.slice(actionVisualStart, actionVisualEnd);
+  assert.match(
+    actionVisualHelper,
+    /this\.timeline\.boundingBox\(\)/,
+    'centerline evidence must measure the exact native 36px idle/playing timeline surface',
+  );
+  assert.doesNotMatch(actionVisualHelper, /this\.loopRangeOwner\.boundingBox\(\)/);
+  assert.match(savedPom, /pitchVisible:\s*Boolean\(pitchBox\)/);
+  assert.match(savedPom, /timestampVisible:\s*visibility\.timeSlot/);
+
+  for (const source of [globalActions, savedActions]) {
+    assert.match(
+      source,
+      /mouse\.down\(\)[\s\S]*mouse\.move\([\s\S]*const dragSnapshot = await[\s\S]*mouse\.up\(\)[\s\S]*dragSnapshot/,
+      'drag actions must retain rendered evidence before pointer-up',
+    );
+  }
+
+  assert.match(spec, /cursors\.surface\)\.toBe\('default'\)/);
+  assert.match(
+    spec,
+    /Math\.abs\(opened\.playerHeight - 100\)\)\.toBeLessThanOrEqual\(1\)/,
+  );
+  assert.match(spec, /opened\.waveformHeight\)\.toBe\(56\)/);
+  assert.doesNotMatch(spec, /opened\.playerHeight\)\.toBe\(78\)/);
+  assert.match(spec, /opened\.metadataWaveformGap\)\.toBeGreaterThanOrEqual\(3\)/);
+  assert.doesNotMatch(spec, /opened\.waveformHeight\)\.toBe\(36\)/);
+  assert.match(
+    spec,
+    /playingPlayerLayout\.coverCenterY - playingPlayerLayout\.playCenterY[\s\S]*toBeLessThanOrEqual\(1\)/,
+  );
+  assert.match(
+    spec,
+    /unavailable\.visual\.coverCenterY\)\.not\.toBeNull\(\)[\s\S]*unavailable\.visual\.coverCenterY - unavailable\.visual\.playCenterY[\s\S]*toBeLessThanOrEqual\(1\)[\s\S]*unavailable\.visual\.timelineCenterY - unavailable\.visual\.playCenterY\)[\s\S]*toBeLessThanOrEqual\(1\)[\s\S]*expectApprovedCapsuleSpacing\(unavailable\.visual\)/,
+    'the no-track placeholder keeps controls and timeline on their shared centerline',
+  );
+  assert.match(
+    spec,
+    /playingPlayerLayout\.timelineCenterY - playingPlayerLayout\.playCenterY[\s\S]*toBeLessThanOrEqual\(1\)/,
+  );
+  assert.match(
+    spec,
+    /idle\.timelineCenterY - playingPlayerLayout\.timelineCenterY[\s\S]*toBeLessThanOrEqual\(1\)/,
+  );
+  assert.match(
+    spec,
+    /idle\.mainAreaBounds\.x - playingPlayerLayout\.mainAreaBounds\.x[\s\S]*toBeLessThanOrEqual\(1\)/,
+  );
+  assert.match(spec, /approvedCapsulePlayGap = 8 \+ \(\(56 - 48\) \/ 2\)/);
+  assert.match(spec, /visual\.playBounds\.width - 48\)\)\.toBeLessThanOrEqual\(1\)/);
+  assert.match(spec, /visual\.clusterBounds\.width - 56\)\)\.toBeLessThanOrEqual\(1\)/);
+  assert.match(spec, /timelineLeftGapFromPlay - approvedCapsulePlayGap\)\)\.toBeLessThanOrEqual\(1\)/);
+  assert.match(spec, /expectApprovedCapsuleSpacing\(playingPlayerLayout\)/);
+  assert.match(spec, /expectApprovedCapsuleSpacing\(idle\)/);
+  assert.match(actionVisualHelper, /this\.expandedPlaybackControls\.root\.boundingBox\(\)/);
+  assert.match(spec, /cursors\.startHandle\)\.toBe\('grab'\)/);
+  assert.match(spec, /dragSnapshot\.cursors\.startHandle\)\.toBe\('grabbing'\)/);
+  assert.match(spec, /pitchVisible\)\.toBe\(false\)/);
+  assert.match(spec, /timestampVisible\)\.toBe\(true\)/);
+  assert.match(spec, /timeWaveformOverlap\)\.toBe\(false\)/);
+  assert.match(
+    spec,
+    /approved saved-loop two-row layout keeps the timeline below the timestamp row[\s\S]*toBeGreaterThanOrEqual\(compactLayout\.topRowBounds\.y \+ compactLayout\.topRowBounds\.height\)/,
+  );
+  assert.match(
+    spec,
+    /saved-loop timestamp row must finish before the waveform timeline begins[\s\S]*toBeLessThanOrEqual\(compactLayout\.timelineBounds\.y\)/,
+  );
+  assert.match(
+    spec,
+    /lowering the saved-loop timeline must keep it inside the compact player main area[\s\S]*toBeLessThanOrEqual\(compactLayout\.mainBounds\.y \+ compactLayout\.mainBounds\.height \+ 1\)/,
+  );
+  assert.doesNotMatch(spec, /playCenterY - compactLayout\.timelineCenterY/);
+  assert.match(spec, /selectionStartErrorPixels\)\.toBeLessThanOrEqual\(1\)/);
+  assert.match(spec, /selectionEndErrorPixels\)\.toBeLessThanOrEqual\(1\)/);
+  assert.match(spec, /selectionLeftFraction\)[\s\S]*startHandleFraction/);
+  assert.match(spec, /selectionRightFraction\)[\s\S]*endHandleFraction/);
+});
+
+test('loop action production path exposes the persistent enabled and engaged pod contract', () => {
+  const controls = read('music_app/static/js/runtime/loop-range-controls.js');
+  const player = read('music_app/static/js/runtime/player-loop-playback.js');
+  const utility = read('music_app/static/js/runtime/utility-loop-playback.js');
+  const template = read('music_app/templates/index.html');
+  const playbackControlMacro = read('music_app/templates/partials/playback-control-cluster.html');
+  const css = read('music_app/static/css/runtime/non-album-and-player.css');
+
+  assert.match(controls, /data-loop-action-pod/);
+  assert.match(controls, /data-loop-action-divider/);
+  assert.match(controls, /enabled\s*=\s*(?:true|false)/);
+  assert.match(controls, /data-loop-action-engaged/);
+  assert.match(controls, /pointerenter[^]*pointerleave[^]*focusin[^]*focusout/);
+  assert.match(controls, /Start playing the track to edit the loop/);
+  assert.match(player, /Boolean\(getPlayerPlaybackSnapshot\(\)\.src\s*\|\|\s*state\.player\.current\?\.src\)/);
+  assert.match(utility, /mountLoopEditActionControl\s*\(\s*\{[^]*enabled:\s*true/);
+  assert.match(
+    playbackControlMacro,
+    /<span class="loop-play-control-actions player-loop-actions"[^>]*data-loop-action-mount="\{\{ owner_id \}\}"[^>]*data-loop-action-owner="\{\{ owner_id \}\}"[^>]*>\s*<\/span>/,
+  );
+  assert.match(template, /playback_control_cluster\('expanded-player', owner_id='global-player'\)/);
+  assert.doesNotMatch(css, /\.loop-edit-action:disabled\s*\{[^}]*cursor:\s*(?:wait|progress)/s);
+});
+
+test('loop player production markup keeps waveform identities and one timestamp per player', () => {
+  const player = read('music_app/static/js/runtime/player-loop-playback.js');
+  const utility = read('music_app/static/js/runtime/utility-loop-playback.js');
+  const builder = read('music_app/static/js/runtime/utility-list-builders.js');
+  const template = read('music_app/templates/index.html');
+  const css = read('music_app/static/css/runtime/non-album-and-player.css');
+
+  assert.doesNotMatch(player, /drawCombinedLoopWaveform\s*\(/);
+  assert.match(utility, /drawCombinedLoopWaveform\s*\(/);
+  assert.doesNotMatch(template, /data-loop-range-time=/);
+  assert.equal((template.match(/id="player-time"/g) || []).length, 1);
+  assert.match(builder, /data-loop-pitch-value>0 pst<\/span>/);
+  assert.equal((builder.match(/data-loop-time=/g) || []).length, 1);
+  assert.doesNotMatch(builder, /data-loop-range-times|data-loop-range-time=/);
+  assert.doesNotMatch(css, /\.player-timeline-wrap\.is-waveform(?:\.is-looping)?\s+\.player-timeline\s*\{[^}]*opacity:\s*0\.0[0-9]/s);
+  assert.doesNotMatch(utility, /elements\.timeline\.hidden\s*=\s*editor\.active/);
+});
+
+test('compact-player Appearance helper enters the owning Player and Seekbar page before selecting a style', () => {
+  const actions = read('tests/e2e/actions/utilityAppearanceActions.js');
+  const start = actions.indexOf('async saveCompactPlayerStyle(');
+  const end = actions.indexOf('\n  async openSection(', start);
+  assert.ok(start >= 0 && end > start, 'Expected the compact-player Appearance action helper.');
+  const helper = actions.slice(start, end);
+
+  assert.match(
+    helper,
+    /compactPlayerStyle\.buttons\.count\(\)\s*===\s*0[^]*await this\.openSection\('seekbar'\)/,
+    'the shared compact-player control is owned by Player & Seekbar, not the Main elements landing page',
+  );
+  assert.match(
+    helper,
+    /documentRoot[^]*data-compact-player-style[^]*if \(alreadySaved\)/,
+    'an already-saved compact-player style must remain an idempotent action',
+  );
+});
+
+
+test('cover lookup observes exact displayed blob bytes without a network response', async () => {
+  const { readDisplayedBlobBytes } = await import(pathToFileURL(path.join(repoRoot, 'tests/e2e/actions/coverLookupActions.js')).href);
+  const vm = require('node:vm');
+  class Image {}
+  const element = Object.assign(new Image(), {
+    currentSrc: 'blob:http://127.0.0.1:4173/exact-displayed', complete: true, naturalWidth: 480,
+    isConnected: true, getBoundingClientRect: () => ({ width: 240, height: 240 }),
+    getAttribute: () => '/cover?path=fixture&v=upgraded', hasAttribute: () => false,
+  });
+  const expected = { currentSrc: element.currentSrc, productionSrc: element.getAttribute(), hasVisualState: false };
+  const requests = [];
+  const observe = vm.runInNewContext(`(${readDisplayedBlobBytes.toString()})`, {
+    HTMLImageElement: Image, URL, location: { origin: 'http://127.0.0.1:4173' }, Uint8Array,
+    fetch: async (url, options) => {
+      requests.push({ url, mode: options.mode });
+      return { ok: true, arrayBuffer: async () => Uint8Array.from([11, 23, 47, 255]).buffer };
+    },
+  });
+  assert.deepEqual(Array.from(await observe(element, expected)), [11, 23, 47, 255]);
+  assert.deepEqual(requests, [{ url: expected.currentSrc, mode: 'same-origin' }]);
+});
+
+for (const failure of ['network-url', 'foreign-blob', 'source-before', 'source-after', 'revision-after', 'decode-after', 'detached-after', 'hidden-after', 'read-error']) {
+  test(`cover lookup displayed blob observation rejects ${failure}`, async () => {
+    const { readDisplayedBlobBytes } = await import(pathToFileURL(path.join(repoRoot, 'tests/e2e/actions/coverLookupActions.js')).href);
+    const vm = require('node:vm');
+    class Image {}
+    let productionSrc = '/cover?path=fixture&v=upgraded';
+    const element = Object.assign(new Image(), {
+      currentSrc: 'blob:http://127.0.0.1:4173/exact-displayed', complete: true, naturalWidth: 480,
+    isConnected: true, getBoundingClientRect: () => ({ width: 240, height: 240 }),
+      getAttribute: () => productionSrc, hasAttribute: () => false,
+    });
+    if (failure === 'network-url') element.currentSrc = 'http://127.0.0.1:4173/cover?path=fixture';
+    if (failure === 'foreign-blob') element.currentSrc = 'blob:https://foreign.invalid/id';
+    const expected = { currentSrc: element.currentSrc, productionSrc, hasVisualState: false };
+    if (failure === 'source-before') element.currentSrc += '-changed';
+    let reads = 0;
+    const observe = vm.runInNewContext(`(${readDisplayedBlobBytes.toString()})`, {
+      HTMLImageElement: Image, URL, location: { origin: 'http://127.0.0.1:4173' }, Uint8Array,
+      fetch: async () => {
+        reads += 1;
+        if (failure === 'read-error') throw new Error('blob read failed');
+        return { ok: true, arrayBuffer: async () => {
+          if (failure === 'source-after') element.currentSrc += '-changed';
+          if (failure === 'revision-after') productionSrc += '-changed';
+          if (failure === 'decode-after') element.complete = false;
+          if (failure === 'detached-after') element.isConnected = false;
+          if (failure === 'hidden-after') element.getBoundingClientRect = () => ({ width: 0, height: 0 });
+          return Uint8Array.from([11, 23]).buffer;
+        } };
+      },
+    });
+    await assert.rejects(observe(element, expected), /blob|changed/i);
+    assert.equal(reads, ['network-url', 'foreign-blob', 'source-before'].includes(failure) ? 0 : 1);
+  });
+}

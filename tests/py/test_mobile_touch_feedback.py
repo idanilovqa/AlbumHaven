@@ -35,11 +35,12 @@ def test_source_falls_back_when_deleted_or_changed_even_at_same_size(tmp_path):
     assert selected_local_cover_source(rows, None, None) is None
 
 
-def test_initial_unrevisioned_media_uses_exact_bytes_not_filename(tmp_path):
+def test_initial_unrevisioned_media_retains_canonical_identity_despite_identical_sources(tmp_path):
     canonical, source = tmp_path / "cover.jpg", tmp_path / "cover-original.jpg"
     canonical.write_bytes(b"original")
     source.write_bytes(b"original")
-    assert selected_local_cover_source([candidate(canonical), candidate(source)], canonical, None) == str(source)
+    for rows in ([candidate(canonical), candidate(source)], [candidate(source), candidate(canonical)]):
+        assert selected_local_cover_source(rows, canonical, None) == str(canonical)
 
 
 def test_gallery_keeps_canonical_authority_and_exposes_picker_source(tmp_path):
@@ -57,9 +58,25 @@ def test_gallery_keeps_canonical_authority_and_exposes_picker_source(tmp_path):
     assert len(active) == 1
     assert active[0]["path"] == str(canonical)
     assert active[0]["cover_revision"] == revision
+    source_row = next(row for row in payload["local_covers"] if row["path"] == str(source))
+    assert source_row["cover_revision"] == revision
     cache["track.mp3"]["remote_cover_url"] = "https://example.test/cover.jpg"
     remote = serialize_cover_gallery_payload(album_root=tmp_path, track_paths={"track.mp3"},
         file_cache=cache, image_extensions={".jpg"}, image_dimensions=lambda _path: (32, 32),
         is_squareish_cover=lambda _width, _height: True)
     assert remote["selected_source_path"] is None
     assert not any(item["is_active"] for item in remote["local_covers"])
+
+
+def test_initial_gallery_keeps_canonical_candidate_without_claiming_a_saved_source(tmp_path):
+    canonical, source = tmp_path / "cover.jpg", tmp_path / "CD.JPG"
+    canonical.write_bytes(b"initial cover")
+    source.write_bytes(b"initial cover")
+    cache = {"track.mp3": {"cover_path": str(canonical)}}
+    payload = serialize_cover_gallery_payload(album_root=tmp_path, track_paths={"track.mp3"},
+        file_cache=cache, image_extensions={".jpg"}, image_dimensions=lambda _path: (32, 32),
+        is_squareish_cover=lambda _width, _height: True)
+    assert payload["active_cover_path"] == str(canonical)
+    assert payload["selected_source_path"] == str(canonical)
+    assert [row["path"] for row in payload["local_covers"] if row["is_active"]] == [str(canonical)]
+    assert all("cover_revision" not in row for row in payload["local_covers"])

@@ -79,17 +79,18 @@ test('FTC-NON-ALBUM-013 keeps a strongly inferred blank-Album track in Other and
       await tagEditorActions.selectTrackByFilename(INFERRED_TRACK_FILENAME);
       await tagEditorActions.clearAlbumName();
       await tagEditorActions.expectBlankAlbumCanApply();
+      // This notice is already visible beside Album Details. Acknowledge it
+      // before membership work consumes its normal two-second display lifetime.
       await tagEditorActions.applyAndWaitForSavedFiles({
-        savedNotificationDelivery: 'status-page',
-        beforeSavedNotification: async () => {
-          albumCleared = true;
-          await stepLogger.step('Show the track immediately in both Other and its inferred album', async () => {
-            const summary = await trackModalActions.waitForInteractiveSummary();
-            expect(summary.trackRows).toBe(INFERRED_TRACK_COUNT);
-            await expectDualMembership();
-          });
-        },
+        savedNotificationDelivery: 'current-view',
+        onSaveTaskCompleted: () => { albumCleared = true; },
       });
+    });
+
+    await stepLogger.step('Show the track immediately in both Other and its inferred album', async () => {
+      const summary = await trackModalActions.waitForInteractiveSummary();
+      expect(summary.trackRows).toBe(INFERRED_TRACK_COUNT);
+      await expectDualMembership();
     });
 
     await stepLogger.step('Preserve dual membership after page reload', async () => {

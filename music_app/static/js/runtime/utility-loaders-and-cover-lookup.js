@@ -483,6 +483,7 @@ async function performAlbumMove(album, action, options = {}) {
 
 async function fetchUnsuccessfulAlbumCovers() {
   const previousStatus = { ...state.status };
+  const statusAction = claimLibraryStatusAction(true);
   try {
     console.log('[AlbumHaven][Covers] Starting manual bulk cover fetch.');
     startStatusIndicatorImmediately({
@@ -516,6 +517,7 @@ async function fetchUnsuccessfulAlbumCovers() {
     if (!response.ok || !data.ok) {
       throw new Error(data.error || 'Failed to fetch album covers');
     }
+    if (!settleLibraryStatusAction(statusAction)) return;
     if (data.queued_after_indexing) {
       updateStatusIndicator({
         ...state.status,
@@ -530,7 +532,7 @@ async function fetchUnsuccessfulAlbumCovers() {
         pending_cover_refresh_after_scan: true,
       });
       state.wasPollingBusy = true;
-      scheduleBrowserTimeout(pollStatus, 250);
+      scheduleStatusPoll(250);
       return;
     }
     updateStatusIndicator({
@@ -544,13 +546,13 @@ async function fetchUnsuccessfulAlbumCovers() {
     });
     if (data.already_running) {
       state.wasCoverPollingBusy = true;
-      scheduleBrowserTimeout(pollStatus, 250);
+      scheduleStatusPoll(250);
       return;
     }
     state.wasCoverPollingBusy = true;
-    scheduleBrowserTimeout(pollStatus, 250);
+    scheduleStatusPoll(250);
   } catch (error) {
-    updateStatusIndicator(previousStatus);
+    if (settleLibraryStatusAction(statusAction)) updateStatusIndicator(previousStatus);
     console.error('[AlbumHaven][Utilities] Failed to fetch unresolved album covers.', error);
     showToast(error.message || 'Failed to fetch album covers.', 'error', 3200);
   }
@@ -558,6 +560,8 @@ async function fetchUnsuccessfulAlbumCovers() {
 
 async function cancelAlbumCoverScan() {
   const previousStatus = { ...state.status };
+  const statusAction = claimLibraryStatusAction(false);
+  let cancellationStatus = null;
   try {
     console.log('[AlbumHaven][Covers] Cancelling bulk cover fetch.');
     updateStatusIndicator({
@@ -566,6 +570,7 @@ async function cancelAlbumCoverScan() {
       covers_current_folder: '',
       pending_cover_refresh_after_scan: false,
     });
+    cancellationStatus = state.status;
     const response = await fetch('/utilities/cancel-cover-scan', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -580,8 +585,11 @@ async function cancelAlbumCoverScan() {
     if (!response.ok || !data.ok) {
       throw new Error(data.error || 'Failed to cancel album cover scan');
     }
+    settleLibraryStatusAction(statusAction);
   } catch (error) {
-    updateStatusIndicator(previousStatus);
+    if (settleLibraryStatusAction(statusAction) && state.status === cancellationStatus) {
+      updateStatusIndicator(previousStatus);
+    }
     console.error('[AlbumHaven][Utilities] Failed to cancel album cover scan.', error);
     showToast(error.message || 'Failed to cancel album cover scan.', 'error', 3200);
   }

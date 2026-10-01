@@ -1,5 +1,5 @@
 import { expect } from '@playwright/test';
-import { deliverSavedNotificationThroughStatus } from '../helpers/savedNotificationDelivery.js';
+import { acknowledgeSavedNotification, deliverSavedNotificationThroughStatus } from '../helpers/savedNotificationDelivery.js';
 
 export class TagEditorActions {
   constructor(tagEditor) {
@@ -744,11 +744,11 @@ export class TagEditorActions {
 
   async applyAndWaitForSavedFiles(options = {}) {
     const timeout = options.timeout || 60000;
-    if (options.savedNotificationDelivery && options.savedNotificationDelivery !== 'status-page') {
+    if (options.savedNotificationDelivery && !['current-view', 'status-page'].includes(options.savedNotificationDelivery)) {
       throw new Error('Unknown saved notification delivery flow');
     }
     if (options.savedNotificationDelivery && options.terminalAlertDismissalTimeout) {
-      throw new Error('Status delivery cannot replace automatic notification dismissal coverage');
+      throw new Error('Explicit delivery cannot replace automatic notification dismissal coverage');
     }
     const saveTaskStatuses = new Map();
     let editRequestCount = 0;
@@ -846,6 +846,9 @@ export class TagEditorActions {
           await deliverSavedNotificationThroughStatus(this.tagEditor,
             responseTaskCompleted ? 'Tag changes saved.' : 'Library view updated from saved files.',
             { timeout, beforeNavigation: options.beforeSavedNotification });
+        } else if (options.savedNotificationDelivery === 'current-view') {
+          await acknowledgeSavedNotification(this.tagEditor,
+            responseTaskCompleted ? 'Tag changes saved.' : 'Library view updated from saved files.', { timeout });
         } else {
           await expect(this.tagEditor.repairAlert).toBeVisible({ timeout });
         }

@@ -4,6 +4,14 @@ import { ScanPage } from '../poms/scanPage.js';
 import { AppBarActions } from '../actions/appBarActions.js';
 import { ScanPageActions } from '../actions/scanPageActions.js';
 
+export async function acknowledgeSavedNotification(tagEditor, expectedMessage, { timeout }) {
+  await expect(tagEditor.repairAlertMessage).toHaveText(expectedMessage, { timeout });
+  await expect(tagEditor.repairAlert).toBeVisible({ timeout });
+  expect(await tagEditor.readRepairAlertOverlap()).toEqual({ withinViewport: true, overlaps: [] });
+  await tagEditor.repairAlertDismiss.click();
+  await expect(tagEditor.repairAlert).toBeHidden({ timeout });
+}
+
 export async function deliverSavedNotificationThroughStatus(tagEditor, expectedMessage, { timeout, beforeNavigation }) {
   const appBar = new AppBarActions(new AppBar(tagEditor.page));
   const scan = new ScanPageActions(new ScanPage(tagEditor.page));
@@ -15,11 +23,7 @@ export async function deliverSavedNotificationThroughStatus(tagEditor, expectedM
   let deliveryError;
   try {
     await scan.openStatusPageFromMenu();
-    await expect(tagEditor.repairAlertMessage).toHaveText(expectedMessage, { timeout });
-    await expect(tagEditor.repairAlert).toBeVisible({ timeout });
-    expect(await tagEditor.readRepairAlertOverlap()).toEqual({ withinViewport: true, overlaps: [] });
-    await tagEditor.repairAlertDismiss.click();
-    await expect(tagEditor.repairAlert).toBeHidden({ timeout });
+    await acknowledgeSavedNotification(tagEditor, expectedMessage, { timeout });
   } catch (error) {
     deliveryError = error;
   }

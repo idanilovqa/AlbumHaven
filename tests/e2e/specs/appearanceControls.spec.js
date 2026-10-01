@@ -145,8 +145,10 @@ test(`${CASE_ID} applies every Appearance control family to real UI and preserve
   test.setTimeout(240000);
   const appearance = utilityAppearanceActions.utilityAppearanceTab;
   let savedSnapshot;
+  let savedBeforePreview;
+  let mainPreview;
 
-  await stepLogger.step('Open the five-page Appearance workspace and keep drafts preview-only', async () => {
+  await stepLogger.step('Preview Main live while account preferences and other drafts stay isolated', async () => {
     await galleryActions.goto();
     await galleryActions.waitForGalleryReady();
     await appearancePreferenceIsolation.capture();
@@ -155,7 +157,7 @@ test(`${CASE_ID} applies every Appearance control family to real UI and preserve
     await utilityAppearanceActions.waitForReady();
     expect((await utilityAppearanceActions.readSummary()).sectionLabels)
       .toEqual(['Main elements', 'Player & Seekbar', 'Selection & Hover', 'Alerts', 'Album page']);
-    const initialSnapshot = await utilityAppearanceActions.readAppliedStyleSnapshot();
+    savedBeforePreview = await appearance.readSavedPreferences();
 
     await expect(appearance.customizePlayerButton).toHaveCount(0);
     await expect(appearance.customizePlayerHelp).toBeVisible();
@@ -166,6 +168,12 @@ test(`${CASE_ID} applies every Appearance control family to real UI and preserve
     await utilityAppearanceActions.openSection('backgrounds');
     await expect(appearance.matchPlayerButton).toHaveCount(0);
     await utilityAppearanceActions.choosePalette('paper', 1);
+    mainPreview = await utilityAppearanceActions.readAppliedStyleSnapshot();
+    expect(mainPreview).toMatchObject({ palette: 'paper', mode: 'light',
+      tokens: { 'main-surface': '#FFFFFF', 'panel-background': '#E6E6E6' },
+      body: { backgroundColor: 'rgb(255, 255, 255)' },
+      appBar: { backgroundColor: 'rgb(230, 230, 230)' },
+    });
     const mainSticky = await utilityAppearanceActions
       .readStickyPreviewCheckpoint(appearance.mainPreviewColumn);
     expect(mainSticky.scrollTop).toBeGreaterThan(100);
@@ -184,9 +192,11 @@ test(`${CASE_ID} applies every Appearance control family to real UI and preserve
 
     await utilityAppearanceActions.choosePlayerTheme('midnight-blue');
     const beforeSave = await utilityAppearanceActions.readAppliedStyleSnapshot();
-    expect(beforeSave.palette).toBe(initialSnapshot.palette);
-    expect(beforeSave.tokens).toEqual(initialSnapshot.tokens);
-    expect(beforeSave.appBar.brandLabel).toEqual(initialSnapshot.appBar.brandLabel);
+    expect(beforeSave.palette).toBe(mainPreview.palette);
+    expect(beforeSave.tokens).toEqual(mainPreview.tokens);
+    expect(beforeSave.appBar.brandLabel).toEqual(mainPreview.appBar.brandLabel);
+    expect(beforeSave.player).toEqual(mainPreview.player);
+    expect(await appearance.readSavedPreferences()).toEqual(savedBeforePreview);
   });
 
   await stepLogger.step('Preview every alert severity and both album states without saving preview state', async () => {
@@ -272,19 +282,53 @@ test(`${CASE_ID} applies every Appearance control family to real UI and preserve
 
   await stepLogger.step('Override selection accent plus all five hover and interaction states', async () => {
     await utilityAppearanceActions.openSection('selection-accent');
+    const accentEnabled = (await utilityAppearanceActions.readPreviewStyles())['navigation-selected'];
+    expect(accentEnabled.borders).toEqual(Array(4).fill('1px solid rgb(184, 189, 197)'));
+    expect(accentEnabled.boxShadow).toMatch(/ 3px 0px 0px 0px inset$/);
     await utilityAppearanceActions.setSelectionAccentEnabled(false);
+    const accentDisabled = (await utilityAppearanceActions.readPreviewStyles())['navigation-selected'];
+    expect(accentDisabled.borders).toEqual(accentEnabled.borders);
+    expect([accentDisabled.width, accentDisabled.height]).toEqual([accentEnabled.width, accentEnabled.height]);
+    expect(accentDisabled.boxShadow).toBe(accentEnabled.boxShadow.replace(' 3px ', ' 0px '));
     await utilityAppearanceActions.setSelectionAccentEnabled(true);
+    const accentRestored = (await utilityAppearanceActions.readPreviewStyles())['navigation-selected'];
+    expect(accentRestored.borders).toEqual(accentEnabled.borders);
+    expect([accentRestored.width, accentRestored.height]).toEqual([accentEnabled.width, accentEnabled.height]);
+    expect(accentRestored.boxShadow).toBe(accentEnabled.boxShadow);
     await utilityAppearanceActions.chooseSelectionAccent('#22D3EE');
     await utilityAppearanceActions.setSelectionAccent('#A1B2C3');
     await utilityAppearanceActions.setInteractionFamily('blue');
     const preview = await utilityAppearanceActions.readPreviewStyles();
     expect(preview['navigation-hover'].backgroundColor).toBe(INTERACTION_COLORS.navigationHover);
     expect(preview['navigation-selected'].backgroundColor).toBe(INTERACTION_COLORS.navigationSelected);
-    expect(preview['navigation-selected'].borderLeftColor).toBe('rgb(161, 178, 195)');
+    expect(preview['navigation-selected'].boxShadow).toBe('rgb(161, 178, 195) 3px 0px 0px 0px inset');
+    expect(preview['navigation-selected'].borders).toEqual(accentEnabled.borders);
     expect(preview['item-hover-background'].backgroundColor).toBe(INTERACTION_COLORS.itemHover);
     expect(preview['item-outline'].borderColor).toBe(INTERACTION_COLORS.focus);
     expect(preview['item-outline'].outlineColor).toBe(INTERACTION_COLORS.focus);
     expect(preview['item-pressed'].backgroundColor).toBe(INTERACTION_COLORS.itemPressed);
+    const beforeSave = await utilityAppearanceActions.readAppliedStyleSnapshot();
+    expect(beforeSave).toMatchObject({
+      palette: mainPreview.palette,
+      mode: mainPreview.mode,
+      compactPlayerStyle: mainPreview.compactPlayerStyle,
+      alertFamily: mainPreview.alertFamily,
+      albumDetailsLayout: mainPreview.albumDetailsLayout,
+      albumPlayingRowAnimation: mainPreview.albumPlayingRowAnimation,
+      selectionAccentColor: mainPreview.selectionAccentColor,
+      selectionAccentWidth: mainPreview.selectionAccentWidth,
+      tokens: mainPreview.tokens,
+      body: mainPreview.body,
+      navigationRail: mainPreview.navigationRail,
+      player: mainPreview.player,
+      playButton: mainPreview.playButton,
+      timeline: mainPreview.timeline,
+      coverButton: mainPreview.coverButton,
+      loopSelection: mainPreview.loopSelection,
+      appBar: { backgroundColor: mainPreview.appBar.backgroundColor,
+        brandLabel: mainPreview.appBar.brandLabel },
+    });
+    expect(await appearance.readSavedPreferences()).toEqual(savedBeforePreview);
     await utilityAppearanceActions.save();
   });
 
@@ -328,7 +372,11 @@ test(`${CASE_ID} applies every Appearance control family to real UI and preserve
     expect(savedSnapshot.appBar.notificationGlyph).toMatchObject({ width: '20px', height: '20px' });
     expect(savedSnapshot.navigationRail.backgroundColor).toBe('rgb(230, 230, 230)');
     expect(savedSnapshot.selectedAppearanceItem.backgroundColor).toBe(INTERACTION_COLORS.navigationSelected);
-    expect(savedSnapshot.selectedAppearanceItem.boxShadow).toContain('rgb(161, 178, 195)');
+    expect(savedSnapshot.selectedAppearanceAccent).toMatchObject({
+      backgroundColor: 'rgb(161, 178, 195)', width: '3px', content: '""',
+      display: 'block', visibility: 'visible', opacity: '1', top: '0px', bottom: '0px', left: '0px',
+    });
+    expect(parseFloat(savedSnapshot.selectedAppearanceAccent.height)).toBeGreaterThan(0);
     expect(savedSnapshot.player.backgroundImage).toContain('137deg');
     expect(savedSnapshot.player.backgroundImage).toContain('rgb(18, 52, 86)');
     expect(savedSnapshot.player.backgroundImage).toContain('rgb(35, 69, 103)');
@@ -368,11 +416,14 @@ test(`${CASE_ID} applies every Appearance control family to real UI and preserve
     const familySelected = await artistFamilyActions.artistFamily.readAppearanceCheckpoint();
     expect(familySelected.box.backgroundColor).toBe('rgb(255, 255, 255)');
     expect(familySelected.box.borderColor).toBe('rgb(184, 189, 197)');
-    expect(familySelected.primary.backgroundColor).toBe('rgb(17, 21, 23)');
-    expect(familySelected.primary.borderColor).toBe('rgb(62, 247, 128)');
+    expect(familySelected.primary.backgroundColor).toBe('color(srgb 0.294118 0.756863 0.45098 / 0.2)');
+    expect(familySelected.primary.borderColor).toBe('rgb(75, 193, 115)');
     expect(familySelected.primary.markerVisible).toBe('visible');
     expect(familySelected.firstInactive.markerVisible).toBe('hidden');
-    expect(familySelected.firstInactive.borderColor).toBe('rgb(69, 75, 79)');
+    expect(familySelected.firstInactive.borderColor).toBe('rgb(184, 189, 197)');
+    // Paper uses white cards, #F4F5F6 controls and #202124 ink; the saved play fill is #51A1C4.
+    expect(familySelected.primary.badgeBackground).toBe('color(srgb 0.877176 0.933647 0.958353)');
+    expect(familySelected.firstInactive.badgeBackground).toBe('color(srgb 0.823843 0.827765 0.832941)');
     for (const row of [familySelected.primary, familySelected.firstInactive]) {
       expect(row.height).toBe(60);
       expect(row.borderWidth).toBe('1px');
@@ -381,7 +432,6 @@ test(`${CASE_ID} applies every Appearance control family to real UI and preserve
       expect(row.thumbnailHeight).toBe(48);
       expect(row.badgeWidth).toBe(44);
       expect(row.badgeHeight).toBe(32);
-      expect(row.badgeBackground).toBe('rgb(41, 43, 47)');
     }
     const inactiveName = await artistFamilyActions.artistFamily.firstInactiveChip
       .getAttribute('data-gallery-family-artist');
@@ -435,6 +485,10 @@ test(`${CASE_ID} applies every Appearance control family to real UI and preserve
     await expect(appearance.paletteButton('steelblue')).toHaveAttribute('aria-pressed', 'true');
     await utilityAppearanceActions.cancel();
     await expect(appearance.paletteButton('paper')).toHaveAttribute('aria-pressed', 'true');
+    const cancelled = await utilityAppearanceActions.readAppliedStyleSnapshot();
+    expect(cancelled.palette).toBe(savedSnapshot.palette);
+    expect(cancelled.tokens).toEqual(savedSnapshot.tokens);
+    expect(cancelled.appBar.brandLabel).toEqual(savedSnapshot.appBar.brandLabel);
   });
 
   await stepLogger.step('Use theme interactions, then use Cancel to restore the saved set', async () => {
@@ -479,6 +533,10 @@ test(`${CASE_ID} applies every Appearance control family to real UI and preserve
     await expect(appearance.appConfirmDialog.acceptButton).toHaveText('Discard changes');
     await appearance.appConfirmDialog.acceptButton.click();
     await utilityTabBarActions.waitForTabActive('rules');
+    const discarded = await utilityAppearanceActions.readAppliedStyleSnapshot();
+    expect(discarded.palette).toBe(savedSnapshot.palette);
+    expect(discarded.tokens).toEqual(savedSnapshot.tokens);
+    expect(discarded.appBar.brandLabel).toEqual(savedSnapshot.appBar.brandLabel);
   });
 
   await stepLogger.step('Reload and hydrate the same account-owned colors from Postgres', async () => {

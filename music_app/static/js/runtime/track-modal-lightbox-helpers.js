@@ -888,7 +888,7 @@ function handleModalEscapeKeydown(event) {
 }
 
 function dismissForegroundModal(modal) {
-  if (modal.id === 'tag-editor-modal') { closeTagEditor(); return; }
+  if (modal.id === 'tag-editor-modal') { closeTagEditorFromBackdrop(); return; }
   if (modal.id === 'utility-modal') { closeUtilityModal(); return; }
   const close = {
     'track-modal': () => closeTrackModal(),

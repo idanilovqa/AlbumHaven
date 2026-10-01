@@ -525,14 +525,7 @@ async function handleUtilityBootstrapClick(event) {
 
   const tagEditorOverlay = document.getElementById?.('tag-editor-modal');
   if (tagEditorOverlay && overlayClickStartedOnOverlay(tagEditorOverlay, event)) {
-    const changedUpdates = buildChangedTagEditorUpdates(
-      state.tagEditor.album,
-      state.tagEditor.tracks || [],
-      state.tagEditor.values || {},
-    );
-    if (!Object.keys(changedUpdates).length) {
-      closeTagEditor();
-    }
+    closeTagEditorFromBackdrop();
     return;
   }
 

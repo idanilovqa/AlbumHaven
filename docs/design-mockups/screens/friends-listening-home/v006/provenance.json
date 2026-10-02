@@ -1,0 +1,71 @@
+{
+  "schemaVersion": 2,
+  "artifact": "friends-listening-home/v006",
+  "status": "in_review",
+  "productionImplementation": false,
+  "ownerVisualApproval": "pending",
+  "archiveKind": "editable_adapter_source_only",
+  "runnableSnapshotIncluded": false,
+  "nativeContentTree": "bf042b5d824e7aeb35a689066e0cbe0f10e8b900",
+  "nativeAppVersion": "0.9.48",
+  "nativeInputCount": 185,
+  "servedNativeFilesVerified": 156,
+  "sourceOverrides": [
+    {
+      "path": "music_app/static/css/mobile-layout.css",
+      "commit": "eef9d13fd5dbd2cda3485e3c308c8494ba7d6fd4",
+      "sha256": "67a25fbc43853b44ffab91b1c1698d7bfba677c3f69ec1dbb7433a0ec493f89d"
+    }
+  ],
+  "currentEvidence": {
+    "searchProjection": 19,
+    "comparisonProjection": 116,
+    "jsdom": 29,
+    "worker": 6,
+    "browser": "NOT_RUN",
+    "browserScreenshots": 0,
+    "historicalV005UiGroups": 75
+  },
+  "files": [
+    {
+      "path": "source/comparison-view.mjs",
+      "sha256": "724c3bbe77f85369bacaeefd54a443b89f760de8ffcdaec7488bd5eef36c1766",
+      "bytes": 6052
+    },
+    {
+      "path": "source/fixture-data.mjs",
+      "sha256": "267fa84be15c9d4405006e0f7fa60dfa6e6cfb0a959a5b121af37e50eb7a8c3d",
+      "bytes": 26701
+    },
+    {
+      "path": "source/friends-app.jsx",
+      "sha256": "7755b529b70400e042d2f4c38c1c16663a0824682a4bc9252e2e2aef8099c942",
+      "bytes": 43956
+    },
+    {
+      "path": "source/listening-model.mjs",
+      "sha256": "ef7bd954d5bba85fa97ceb18d0f56b464f1519f0890355e7d69486ff63b2c9ae",
+      "bytes": 2783
+    },
+    {
+      "path": "source/mock-adapter.mjs",
+      "sha256": "6e7353b4bc1a168530b62ba9a0e55aa1212736af67ff528b127953055c199a90",
+      "bytes": 12209
+    },
+    {
+      "path": "source/mock-layout.css",
+      "sha256": "7264a9fe398435121d0377a61e15eda8e16d27611b1a29b0205b2caca0f10eed",
+      "bytes": 32245
+    },
+    {
+      "path": "source/native-input-manifest.json",
+      "sha256": "ea1bccfe5f92e126d440231eb3fbdbc1fb3e1d3dba37cf657aad3afcaea1f135",
+      "bytes": 34794
+    },
+    {
+      "path": "source/native-layout.js",
+      "sha256": "0cd7564781819a5e0a57be6de6f82ba5f10800a8a48b15fde2ec0f4c46eff736",
+      "bytes": 42162
+    }
+  ]
+}

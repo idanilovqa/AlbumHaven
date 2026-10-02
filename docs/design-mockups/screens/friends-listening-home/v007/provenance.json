@@ -1,0 +1,133 @@
+{
+  "schemaVersion": 3,
+  "artifact": "friends-listening-home/v007",
+  "status": "in_review",
+  "productionImplementation": false,
+  "ownerVisualApproval": "pending",
+  "archiveKind": "editable_adapter_source_only",
+  "runnableSnapshotIncluded": false,
+  "nativeContentTree": "bf042b5d824e7aeb35a689066e0cbe0f10e8b900",
+  "nativeAppVersion": "0.9.48",
+  "nativeInputCount": 185,
+  "servedNativeFilesVerified": 156,
+  "sourceOverrides": [
+    {
+      "path": "music_app/static/css/mobile-layout.css",
+      "commit": "eef9d13fd5dbd2cda3485e3c308c8494ba7d6fd4",
+      "sha256": "67a25fbc43853b44ffab91b1c1698d7bfba677c3f69ec1dbb7433a0ec493f89d"
+    }
+  ],
+  "currentEvidence": {
+    "searchProjection": 19,
+    "comparisonProjection": 116,
+    "focusedModels": 24,
+    "isolatedComponents": 26,
+    "exactRouteHelpers": 36,
+    "worker": 6,
+    "browser": "NOT_RUN",
+    "browserScreenshots": 0,
+    "historicalV005UiGroups": 75
+  },
+  "heldVisualProposals": [
+    "panel colors: black, blue and parchment using outer surface",
+    "Back/expand placement alternatives"
+  ],
+  "files": [
+    {
+      "path": "source/fixture-data.mjs",
+      "sha256": "267fa84be15c9d4405006e0f7fa60dfa6e6cfb0a959a5b121af37e50eb7a8c3d",
+      "bytes": 26701,
+      "deliveredPath": "mock-source/fixture-data.mjs"
+    },
+    {
+      "path": "source/friends-app.jsx",
+      "sha256": "9f882e0fe288b0f38e750f75cd1af4abc9fe3310e4e1225cfc8a3b345a1abf08",
+      "bytes": 61372,
+      "deliveredPath": "mock-source/friends-app.jsx"
+    },
+    {
+      "path": "source/mock-adapter.mjs",
+      "sha256": "6e7353b4bc1a168530b62ba9a0e55aa1212736af67ff528b127953055c199a90",
+      "bytes": 12209,
+      "deliveredPath": "mock-source/mock-adapter.mjs"
+    },
+    {
+      "path": "source/mock-layout.css",
+      "sha256": "cbd5a9c18cc4553cfac95c79bef89d51d11c45c43f5c4f9dc8004cebad7a1d9f",
+      "bytes": 45598,
+      "deliveredPath": "mock-source/mock-layout.css"
+    },
+    {
+      "path": "source/native-layout.js",
+      "sha256": "8369bb5545a2529c0d58d39b6e7d14afd184d84f2ccdf225a87fd0fcfe289204",
+      "bytes": 62658,
+      "deliveredPath": "mock-source/native-layout.js"
+    },
+    {
+      "path": "source/native-input-manifest.json",
+      "sha256": "ea1bccfe5f92e126d440231eb3fbdbc1fb3e1d3dba37cf657aad3afcaea1f135",
+      "bytes": 34794,
+      "deliveredPath": "mock-source/upstream-manifest.json"
+    },
+    {
+      "path": "source/listening-model.mjs",
+      "sha256": "ef7bd954d5bba85fa97ceb18d0f56b464f1519f0890355e7d69486ff63b2c9ae",
+      "bytes": 2783,
+      "deliveredPath": "mock-source/listening-model.mjs"
+    },
+    {
+      "path": "source/comparison-view.mjs",
+      "sha256": "5e7c1f07d7f673d89897407a482fc1228d5b6ba8dfa16edb002dc5691dc678a3",
+      "bytes": 14808,
+      "deliveredPath": "mock-source/comparison-view.mjs"
+    },
+    {
+      "path": "source/comparison-panel.jsx",
+      "sha256": "a28a3247c07da087981a0ab27a0c5d4648831ba10445ea6bb481dd4f48967ad3",
+      "bytes": 10458,
+      "deliveredPath": "mock-source/comparison-panel.jsx"
+    },
+    {
+      "path": "source/comparison-panel.css",
+      "sha256": "0529840a87079547c51d1fc39f493e4fd43c9ce42484d592bc7cefb2c3396068",
+      "bytes": 15811,
+      "deliveredPath": "mock-source/comparison-panel.css"
+    },
+    {
+      "path": "source/artist-view.mjs",
+      "sha256": "1c6e24961af063edff2c3ae81a34c010f8bf2ec22860696902eec4610d386b4b",
+      "bytes": 19653,
+      "deliveredPath": "mock-source/artist-view.mjs"
+    },
+    {
+      "path": "source/recent-history.mjs",
+      "sha256": "dc5e7d0d81d90b0b5171d3cec75f4761ac570831b2f4c5242383199a5681965d",
+      "bytes": 9078,
+      "deliveredPath": "mock-source/recent-history.mjs"
+    },
+    {
+      "path": "source/playlist-model.mjs",
+      "sha256": "04bd8c4da499e53824f340f15521c949d24e3840dc675e8cbb6a01cd7ff37938",
+      "bytes": 13177,
+      "deliveredPath": "mock-source/playlist-model.mjs"
+    },
+    {
+      "path": "source/playlist-panel.jsx",
+      "sha256": "65a5cfee8fc459d7679b80205e36a528d8716bbc01103c3f20f5a5eb6a4b35d7",
+      "bytes": 23517,
+      "deliveredPath": "mock-source/playlist-panel.jsx"
+    },
+    {
+      "path": "source/playlist-panel.css",
+      "sha256": "3680f1f73aa7b92c7f43690825dba6211f0e26982fd3519dc2b15506e1c2bbe2",
+      "bytes": 3851,
+      "deliveredPath": "mock-source/playlist-panel.css"
+    },
+    {
+      "path": "source/track-social.mjs",
+      "sha256": "5fb3823e33dd1684a166642b23c4f7a2d6b9563293aebab60a247e729f933e6e",
+      "bytes": 2537,
+      "deliveredPath": "mock-source/track-social.mjs"
+    }
+  ]
+}

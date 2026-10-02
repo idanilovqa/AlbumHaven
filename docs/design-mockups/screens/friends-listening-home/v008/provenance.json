@@ -1,0 +1,158 @@
+{
+  "schemaVersion": 4,
+  "artifact": "friends-listening-home/v008",
+  "status": "in_review",
+  "productionImplementation": false,
+  "ownerVisualApproval": "pending",
+  "archiveKind": "editable_adapter_source_only",
+  "runnableSnapshotIncluded": false,
+  "nativeContentTree": "bf042b5d824e7aeb35a689066e0cbe0f10e8b900",
+  "nativeAppVersion": "0.9.48",
+  "nativeInputCount": 185,
+  "servedNativeFilesVerified": 156,
+  "sourceOverrides": [
+    {
+      "path": "music_app/static/css/mobile-layout.css",
+      "commit": "eef9d13fd5dbd2cda3485e3c308c8494ba7d6fd4",
+      "sha256": "67a25fbc43853b44ffab91b1c1698d7bfba677c3f69ec1dbb7433a0ec493f89d"
+    }
+  ],
+  "currentEvidence": {
+    "search": 19,
+    "comparisonProjection": 116,
+    "models": 24,
+    "components": 30,
+    "routes": 42,
+    "headers": 13,
+    "proposals": 6,
+    "timestampCases": 6,
+    "timestampDeviceTimeZoneRuns": 2,
+    "sidebarFakeClockCases": 16,
+    "worker": 6
+  },
+  "browser": "NOT_RUN",
+  "currentAppScreenshots": 0,
+  "sourceSvgPreviews": 1,
+  "proposalRoute": "/?mock=proposals",
+  "heldChoices": [
+    "panel palette",
+    "Back/expand placement",
+    "alternative desktop filter composition"
+  ],
+  "files": [
+    {
+      "path": "source/artist-view.mjs",
+      "sha256": "44fefd2fc9c031c7c3a70a78f7bd2fe3cca19c0326cb0ea0263d8ee9da28284a",
+      "bytes": 23016,
+      "deliveredPath": "mock-source/artist-view.mjs"
+    },
+    {
+      "path": "source/comparison-panel.css",
+      "sha256": "0529840a87079547c51d1fc39f493e4fd43c9ce42484d592bc7cefb2c3396068",
+      "bytes": 15811,
+      "deliveredPath": "mock-source/comparison-panel.css"
+    },
+    {
+      "path": "source/comparison-panel.jsx",
+      "sha256": "a28a3247c07da087981a0ab27a0c5d4648831ba10445ea6bb481dd4f48967ad3",
+      "bytes": 10458,
+      "deliveredPath": "mock-source/comparison-panel.jsx"
+    },
+    {
+      "path": "source/comparison-view.mjs",
+      "sha256": "5e7c1f07d7f673d89897407a482fc1228d5b6ba8dfa16edb002dc5691dc678a3",
+      "bytes": 14808,
+      "deliveredPath": "mock-source/comparison-view.mjs"
+    },
+    {
+      "path": "source/fixture-data.mjs",
+      "sha256": "267fa84be15c9d4405006e0f7fa60dfa6e6cfb0a959a5b121af37e50eb7a8c3d",
+      "bytes": 26701,
+      "deliveredPath": "mock-source/fixture-data.mjs"
+    },
+    {
+      "path": "source/friends-app.jsx",
+      "sha256": "1afc023ea57f1a43479506c76a3a1910b71aa2afca011b38c05661a943a55686",
+      "bytes": 68298,
+      "deliveredPath": "mock-source/friends-app.jsx"
+    },
+    {
+      "path": "source/icon-source-preview.svg",
+      "sha256": "39f77cc053ec6c838a48f6758f753d5d30e976501e35efe102664391818fc861",
+      "bytes": 6453,
+      "deliveredPath": "mock-source/icon-source-preview.svg"
+    },
+    {
+      "path": "source/listening-model.mjs",
+      "sha256": "ef7bd954d5bba85fa97ceb18d0f56b464f1519f0890355e7d69486ff63b2c9ae",
+      "bytes": 2783,
+      "deliveredPath": "mock-source/listening-model.mjs"
+    },
+    {
+      "path": "source/mock-adapter.mjs",
+      "sha256": "6e7353b4bc1a168530b62ba9a0e55aa1212736af67ff528b127953055c199a90",
+      "bytes": 12209,
+      "deliveredPath": "mock-source/mock-adapter.mjs"
+    },
+    {
+      "path": "source/mock-layout.css",
+      "sha256": "0ff832a5e68dba4fd1ac7b537f10a25c58f3f89ce54027ea1ec58ad6c1ab375a",
+      "bytes": 54145,
+      "deliveredPath": "mock-source/mock-layout.css"
+    },
+    {
+      "path": "source/native-layout.js",
+      "sha256": "3222398346914fc123246f1eb7c9883226f451392285aa204b5c80fe5e678d54",
+      "bytes": 68324,
+      "deliveredPath": "mock-source/native-layout.js"
+    },
+    {
+      "path": "source/playlist-model.mjs",
+      "sha256": "04bd8c4da499e53824f340f15521c949d24e3840dc675e8cbb6a01cd7ff37938",
+      "bytes": 13177,
+      "deliveredPath": "mock-source/playlist-model.mjs"
+    },
+    {
+      "path": "source/playlist-panel.css",
+      "sha256": "7185445126e6c5184e344c2d53359f2fd525e95278eb58686e62eae2dfd7dc05",
+      "bytes": 4928,
+      "deliveredPath": "mock-source/playlist-panel.css"
+    },
+    {
+      "path": "source/playlist-panel.jsx",
+      "sha256": "18fcdae2399bed3c44549ae49132ab7604ad4c74e7c309e43919e54b20d361f4",
+      "bytes": 30304,
+      "deliveredPath": "mock-source/playlist-panel.jsx"
+    },
+    {
+      "path": "source/recent-history.mjs",
+      "sha256": "1f4553f00140fc4649750d9401ee371ddbb3a5a99e44084c776f11e00b9fafd0",
+      "bytes": 10418,
+      "deliveredPath": "mock-source/recent-history.mjs"
+    },
+    {
+      "path": "source/review-proposals.jsx",
+      "sha256": "3b1bf971875a446e763a16759cbdec8d158bf862442acb75c442b82b0824786f",
+      "bytes": 4862,
+      "deliveredPath": "mock-source/review-proposals.jsx"
+    },
+    {
+      "path": "source/sidebar-inactivity.mjs",
+      "sha256": "ff94e9384dd3ae48b30c654dc9be28528cd808602e8367258cccbcf4e73a0ecd",
+      "bytes": 10230,
+      "deliveredPath": "mock-source/sidebar-inactivity.mjs"
+    },
+    {
+      "path": "source/track-social.mjs",
+      "sha256": "ae4c70b83ed86cc53fba3d6a4533c186f4dfcc7b541752014af594702440394a",
+      "bytes": 2786,
+      "deliveredPath": "mock-source/track-social.mjs"
+    },
+    {
+      "path": "source/upstream-manifest.json",
+      "sha256": "ea1bccfe5f92e126d440231eb3fbdbc1fb3e1d3dba37cf657aad3afcaea1f135",
+      "bytes": 34794,
+      "deliveredPath": "mock-source/upstream-manifest.json"
+    }
+  ]
+}

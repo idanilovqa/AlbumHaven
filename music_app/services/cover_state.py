@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import hashlib
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
 from pathlib import Path
 
 from music_app.services.library import album_to_dict
@@ -135,6 +135,44 @@ def iter_local_cover_candidates(
     return candidates
 
 
+def _matching_local_cover_sources(
+    candidates: list[dict[str, object]], active_path: Path, revision: str | None,
+) -> Iterator[str]:
+    """Compare content without turning initial duplicate bytes into a saved choice."""
+    try:
+        size = active_path.stat().st_size
+        if not revision:
+            with active_path.open("rb") as image:
+                revision = hashlib.file_digest(image, "sha256").hexdigest()
+    except OSError:
+        return
+    for item in candidates:
+        candidate = Path(str(item["path"]))
+        if candidate == active_path:
+            continue
+        try:
+            if candidate.stat().st_size != size:
+                continue
+            with candidate.open("rb") as image:
+                digest = hashlib.file_digest(image, "sha256").hexdigest()
+            if digest == revision:
+                yield str(candidate)
+        except OSError:
+            # A file can be removed while the gallery enumerates local media.
+            continue
+
+
+def selected_local_cover_source(
+    candidates: list[dict[str, object]], active_path: Path | None, revision: str | None,
+) -> str | None:
+    """Retain canonical initial identity; only a saved revision identifies a source."""
+    if active_path is None:
+        return None
+    if not revision:
+        return str(active_path)
+    return next(_matching_local_cover_sources(candidates, active_path, revision), str(active_path))
+
+
 def serialize_cover_gallery_payload(
     *,
     album_root: Path,
@@ -158,15 +196,23 @@ def serialize_cover_gallery_payload(
         is_squareish_cover=is_squareish_cover,
         active_cover_path=None if active_remote_cover else active_cover_path,
     )
+    selected_source_path = None if active_remote_cover else selected_local_cover_source(
+        local_candidates, active_cover_path, active_cover_revision,
+    )
+    if active_cover_path and not active_cover_revision and not active_remote_cover:
+        duplicates = set(_matching_local_cover_sources(local_candidates, active_cover_path, None))
+        for candidate in local_candidates:
+            if candidate["path"] in duplicates:
+                candidate["duplicate_of"] = str(active_cover_path)
     if active_cover_revision and not active_remote_cover:
         for candidate in local_candidates:
-            if candidate.get("is_active"):
+            if candidate.get("is_active") or candidate["path"] == selected_source_path:
                 candidate["cover_revision"] = active_cover_revision
-                break
     return {
         "ok": True,
         "album_root": str(album_root),
         "active_cover_path": str(active_cover_path) if active_cover_path else None,
+        "selected_source_path": selected_source_path,
         "remote_cover": active_remote_cover,
         "local_covers": [item for item in local_candidates if item.get("is_squareish")],
         "other_art": [item for item in local_candidates if not item.get("is_squareish")],

@@ -39,6 +39,7 @@ from music_app.services.admin_mail_actions_postgres import (
     PostgresAdminMailActionService,
 )
 from music_app.services.policy_asgi import allowed_actions_for_request
+from music_app.services.capability_assignments import AssignmentConflict, assignment_editor, member_role_label
 
 
 router = APIRouter()
@@ -121,6 +122,7 @@ async def members_roster(request: Request) -> Response:
         roster=roster,
         created=request.query_params.get("created") == "1",
         listener_defaults=_LISTENER_DEFAULTS,
+        member_role_label=member_role_label,
         allowed_actions=_allowed_actions(request),
         invitation_email_enabled=_invitation_email_enabled(request.app),
     )
@@ -145,7 +147,7 @@ async def new_managed_account(request: Request) -> Response:
 
 @router.get("/admin/accounts/{account_id}", response_class=HTMLResponse)
 async def edit_managed_account(request: Request, account_id: int) -> Response:
-    roster = await _load_roster(request)
+    roster = await _load_roster(request, target_account_id=account_id)
     if isinstance(roster, Response):
         return roster
     member = next((item for item in roster.members if item.account_id == account_id), None)
@@ -158,7 +160,8 @@ async def edit_managed_account(request: Request, account_id: int) -> Response:
         member=member,
         capability_groups=_CAPABILITY_GROUPS,
         listener_defaults=_LISTENER_DEFAULTS,
-        allowed_actions=_allowed_actions(request, target_account_id=account_id),
+        allowed_actions=_allowed_actions(request, target_account_id=account_id,
+            protected_target=member.is_bootstrap_owner),
         invitation_email_enabled=_invitation_email_enabled(request.app),
     )
 
@@ -182,7 +185,7 @@ async def update_managed_account(request: Request, account_id: int) -> Response:
     ):
         return JSONResponse({"detail": "Action not permitted."}, status_code=403)
     try:
-        await run_in_threadpool(
+        saved = await run_in_threadpool(
             _mutation_service(request).update_account,
             actor_account_id=actor.account_id,
             actor_session_id=actor.session_id,
@@ -195,9 +198,13 @@ async def update_managed_account(request: Request, account_id: int) -> Response:
             confirm_disable=payload["confirm_disable"],
             confirm_remove_access=payload["confirm_remove_access"],
             request_ref=uuid4().hex,
+            **({"role_keys": payload["role_keys"], "access_revision": payload["access_revision"]}
+               if "role_keys" in payload else {}),
         )
+    except AssignmentConflict as exc:
+        return JSONResponse({"detail": str(exc)}, status_code=409)
     except RecentAuthenticationRequired:
-        return JSONResponse({"detail": "Recent authentication is required."}, status_code=409)
+        return JSONResponse({"detail": "Session expired. Sign in again."}, status_code=401)
     except DestructiveConfirmationRequired:
         return JSONResponse({"detail": "Explicit confirmation is required."}, status_code=409)
     except PermissionError:
@@ -206,7 +213,7 @@ async def update_managed_account(request: Request, account_id: int) -> Response:
         return JSONResponse({"detail": "Account update was invalid."}, status_code=400)
     except Exception:
         return JSONResponse({"detail": "Account update is temporarily unavailable."}, status_code=503)
-    return JSONResponse({"updated": True})
+    return JSONResponse({"updated": True, **(saved if isinstance(saved, dict) else {})})
 
 
 @router.post("/admin/accounts/{account_id}/sessions/revoke")
@@ -229,7 +236,7 @@ async def revoke_managed_account_sessions(request: Request, account_id: int) -> 
             request_ref=uuid4().hex,
         )
     except RecentAuthenticationRequired:
-        return JSONResponse({"detail": "Recent authentication is required."}, status_code=409)
+        return JSONResponse({"detail": "Session expired. Sign in again."}, status_code=401)
     except DestructiveConfirmationRequired:
         return JSONResponse({"detail": "Explicit confirmation is required."}, status_code=409)
     except PermissionError:
@@ -295,7 +302,7 @@ async def copy_managed_account_invitation(
         )
     except RecentAuthenticationRequired:
         return JSONResponse(
-            {"detail": "Recent authentication is required."}, status_code=409
+            {"detail": "Session expired. Sign in again."}, status_code=401
         )
     except PermissionError:
         return JSONResponse({"detail": "Action not permitted."}, status_code=403)
@@ -345,7 +352,7 @@ async def send_managed_account_invitation(
         )
     except RecentAuthenticationRequired:
         return JSONResponse(
-            {"detail": "Recent authentication is required."}, status_code=409
+            {"detail": "Session expired. Sign in again."}, status_code=401
         )
     except PermissionError:
         return JSONResponse({"detail": "Action not permitted."}, status_code=403)
@@ -415,7 +422,10 @@ async def create_managed_account(request: Request, background_tasks: BackgroundT
             capability_keys=payload["capability_keys"],
             send_invitation=payload["send_invitation"],
             request_ref=uuid4().hex,
+            **({"role_keys": payload["role_keys"]} if "role_keys" in payload else {}),
         )
+    except RecentAuthenticationRequired:
+        return JSONResponse({"detail": "Session expired. Sign in again."}, status_code=401)
     except PermissionError:
         return JSONResponse({"detail": "Action not permitted."}, status_code=403)
     except ManagedAccountIdentityConflict:
@@ -449,9 +459,11 @@ async def create_managed_account(request: Request, background_tasks: BackgroundT
 
 async def _json_payload(request: Request) -> dict[str, object] | None:
     payload = await _bounded_json_object(request)
-    if not isinstance(payload, dict) or set(payload) != _FIELDS:
+    if not isinstance(payload, dict) or set(payload) not in (_FIELDS, _FIELDS | {"role_keys"}):
         return None
     if not all(isinstance(payload[key], str) for key in ("username", "contact_email")):
+        return None
+    if "role_keys" in payload and not _role_selection(payload["role_keys"]):
         return None
     if not isinstance(payload["send_invitation"], bool):
         return None
@@ -463,6 +475,10 @@ async def _json_payload(request: Request) -> dict[str, object] | None:
     return payload
 
 
+def _role_selection(value: object) -> bool:
+    return isinstance(value, list) and all(isinstance(key, str) for key in value)
+
+
 async def _management_payload(request: Request) -> dict[str, object] | None:
     payload = await _bounded_json_object(request)
     expected = {
@@ -472,7 +488,13 @@ async def _management_payload(request: Request) -> dict[str, object] | None:
         "confirm_disable",
         "confirm_remove_access",
     }
-    if payload is None or set(payload) != expected:
+    if payload is None or set(payload) not in (expected, expected | {"role_keys", "access_revision"}):
+        return None
+    if "role_keys" in payload and (
+        not _role_selection(payload["role_keys"])
+        or not isinstance(payload["access_revision"], str)
+        or len(payload["access_revision"]) != 64
+    ):
         return None
     if any(
         not isinstance(payload[key], bool)
@@ -534,7 +556,7 @@ async def _queue_mail_action(request: Request, account_id: int, action: str):
         )
     except RecentAuthenticationRequired:
         return JSONResponse(
-            {"detail": "Recent authentication is required."}, status_code=409
+            {"detail": "Session expired. Sign in again."}, status_code=401
         )
     except PermissionError:
         return JSONResponse({"detail": "Action not permitted."}, status_code=403)
@@ -562,7 +584,7 @@ async def _bounded_json_object(request: Request) -> dict[str, object] | None:
     return payload if isinstance(payload, dict) else None
 
 
-async def _load_roster(request: Request):
+async def _load_roster(request: Request, *, target_account_id: int | None = None):
     actor = request.state.current_actor
     if actor.account_id is None or actor.current_library_id is None:
         return HTMLResponse("Action not permitted.", status_code=403)
@@ -571,6 +593,7 @@ async def _load_roster(request: Request):
             _members_service(request).load_roster,
             actor_account_id=actor.account_id,
             library_id=actor.current_library_id,
+            **({"target_account_id": target_account_id} if target_account_id is not None else {}),
         )
     except PermissionError:
         return HTMLResponse("Action not permitted.", status_code=403)
@@ -585,6 +608,8 @@ async def _render_admin(request: Request, template: str, **context) -> Response:
         )
     except (TypeError, ValueError):
         return HTMLResponse("Members & Access is temporarily unavailable.", status_code=503)
+    if template == "admin-account-detail.html":
+        context["access_editor"] = assignment_editor(context.get("member"), context["listener_defaults"])
     templates = getattr(request.app.state, "templates", _FALLBACK_TEMPLATES)
     response = templates.TemplateResponse(
         request,
@@ -596,9 +621,12 @@ async def _render_admin(request: Request, template: str, **context) -> Response:
     return response
 
 
-def _allowed_actions(request: Request, *, target_account_id: int | None = None):
+def _allowed_actions(request: Request, *, target_account_id: int | None = None,
+                     protected_target: bool = False):
+    actions = (("accounts.read",) if protected_target and not request.state.current_actor.is_bootstrap_owner
+               else _ADMIN_ACTIONS)
     return allowed_actions_for_request(
-        request, _ADMIN_ACTIONS, target_account_id=target_account_id
+        request, actions, target_account_id=target_account_id
     )
 
 
@@ -861,6 +889,6 @@ async def _deliver_pending_password_reset(app, delivery) -> None:
             repository=PostgresPasswordResetOutboxService(repository_config),
         )
     except Exception:
-        # The committed token and outbox row remain authoritative; send attempts
+        # The committed token and outbox row are authoritative; send attempts
         # are deliberately non-gating and ambiguous failures are terminal.
         return

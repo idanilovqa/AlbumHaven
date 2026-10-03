@@ -74,8 +74,8 @@ test(`${CASE_ID} lookup matching rejects larger false Metallica releases before 
       .toBe(Object.values(TARGET).join(' • '));
     await trackModalActions.openCoverLookup();
     await coverLookupActions.waitForModalReady();
-    taskTitle = await coverLookupActions.readModalSubtitle();
-    expect(taskTitle).toBe(Object.values(TARGET).join(' - '));
+    expect(await coverLookupActions.readModalSubtitle()).toBe(Object.values(TARGET).join(' - '));
+    taskTitle = TARGET.album;
     baselineLocalCover = await coverLookupActions.readActiveLocalCoverEvidence();
     expect(baselineLocalCover.isActive).toBe(true);
     expect(baselineLocalCover.image.naturalWidth).toBe(480);
@@ -94,7 +94,8 @@ test(`${CASE_ID} lookup matching rejects larger false Metallica releases before 
     await trackModalActions.close();
     await coverLookupActions.waitForDrawerBadgeCountAtLeast(1);
     await coverLookupActions.openDrawer();
-    await coverLookupActions.waitForTaskStatus(taskTitle, 'Completed');
+    await coverLookupActions.waitForTaskStatus(taskTitle, /^[1-9]\d* covers? found$/);
+    await coverLookupActions.expectTaskIdentity(taskTitle, TARGET);
     await coverLookupActions.openTask(taskTitle);
     await coverLookupActions.waitForModalResultsReady();
   });
@@ -110,6 +111,7 @@ test(`${CASE_ID} lookup matching rejects larger false Metallica releases before 
     );
 
     const candidates = await coverLookupActions.readRemoteCandidateSummaries();
+    await coverLookupActions.waitForTaskStatus(taskTitle, `${candidates.length} covers found`);
     const appleCandidates = candidates.filter(
       (candidate) => candidate.source.toLowerCase().includes('apple'),
     );

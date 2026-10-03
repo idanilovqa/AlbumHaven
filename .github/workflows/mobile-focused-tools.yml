@@ -1,0 +1,47 @@
+name: Mobile focused reproduction tools
+on:
+  push:
+    branches: [2026-09-25-mobile-layout]
+    paths: [.github/workflows/mobile-focused-tools.yml]
+permissions:
+  contents: read
+jobs:
+  tools:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Stage public package dependencies and the exact application checkout
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p offline/{deb,wheels}
+          git archive --format=tar HEAD | gzip -n > offline/application-source.tar.gz
+          git rev-parse HEAD > offline/source-commit.txt
+          docker run --rm -v "$PWD/offline/deb:/out" debian:trixie-slim sh -ec 'apt-get update -qq; apt-get -y --download-only install postgresql-17 postgresql-client-17 >/dev/null; cp /var/cache/apt/archives/*.deb /out/'
+          python -m pip download --dest offline/wheels --only-binary=:all: -r requirements.txt
+          npm ci --ignore-scripts
+          tar -czf offline/node-modules.tar.gz node_modules
+          python - <<'PY'
+          import hashlib, json, pathlib
+          root = pathlib.Path('offline')
+          files = sorted(p for p in root.rglob('*') if p.is_file())
+          manifest = {str(p.relative_to(root)): {'sha256': hashlib.sha256(p.read_bytes()).hexdigest(), 'bytes': p.stat().st_size} for p in files}
+          (root / 'manifest.json').write_text(json.dumps(manifest, indent=2))
+          PY
+      - name: Retain temporary reproduction inputs
+        uses: actions/upload-artifact@v4
+        with:
+          name: mobile-local-reproduction-${{ github.sha }}
+          path: offline/
+          retention-days: 1
+          if-no-files-found: error
+          compression-level: 0

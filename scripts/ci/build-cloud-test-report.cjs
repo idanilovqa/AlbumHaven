@@ -3,6 +3,11 @@ const CHILD_FIELDS = ['id', 'conclusion', 'passed', 'failed', 'skipped'];
 const CASE_STATUSES = new Set(['passed', 'failed', 'skipped', 'timedOut', 'interrupted']);
 const STEP_STATUSES = new Set(['passed', 'failed', 'skipped']);
 const PERFORMANCE_CLASSIFICATIONS = new Set(['uncalibrated', 'pass', 'target-met', 'grace-used', 'hard-fail', 'coverage-only']);
+const COVERAGE_ONLY_CASE_COUNTS = new Map(
+  require('../../tests/ci/performance-targets.json').targets
+    .filter(target => target.measurementExpected === false)
+    .map(target => [target.name, target.cases.length]),
+);
 
 function isNonNegativeInteger(value) {
   return Number.isInteger(value) && value >= 0;
@@ -35,7 +40,8 @@ function validPerformance(value) {
   if (value.measurementAvailable === false) {
     return value.classification === 'coverage-only' && ['success', 'failure'].includes(value.coverageStatus)
       && value.actualValue === null && value.units === '' && value.primaryAttempt === null
-      && value.testCount === 2 && isNonNegativeInteger(value.failed) && value.failed <= value.testCount
+      && value.testCount === COVERAGE_ONLY_CASE_COUNTS.get(value.target)
+      && isNonNegativeInteger(value.failed) && value.failed <= value.testCount
       && ((value.coverageStatus === 'success' && value.failed === 0)
         || (value.coverageStatus === 'failure' && value.failed > 0));
   }

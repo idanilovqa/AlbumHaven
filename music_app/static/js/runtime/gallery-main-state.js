@@ -1,5 +1,4 @@
-const GALLERY_RELEASE_TYPES = ['studio', 'live', 'demo', 'compilation', 'ep', 'single'];
-const GALLERY_INTERACTIVE_RELEASE_TYPES = ['studio', 'compilation'];
+const GALLERY_RELEASE_TYPES = ['studio', 'ep', 'live', 'demo', 'compilation', 'single'];
 const GALLERY_TRIAL_ARTIST_IMAGES = Object.freeze({
   'Neal Morse': 'https://commons.wikimedia.org/wiki/Special:Redirect/file/Neal_Morse2.jpg?width=480',
   'Devin Townsend': 'https://commons.wikimedia.org/wiki/Special:Redirect/file/Devin_Townsend_(cropped).jpg?width=480',
@@ -11,7 +10,7 @@ function createGalleryMainState(overrides = {}) {
   const galleryState = {
     sources: { main_library: true, new_arrivals: true, hoard: true, ...(overrides.sources || {}) },
     albumTypes: Array.isArray(overrides.albumTypes) ? overrides.albumTypes.slice() : ['studio', 'ep'],
-    view: ['cards', 'covers'].includes(overrides.view) ? overrides.view : 'cards',
+    view: normalizeGalleryView(overrides.view),
     familyArtists: Array.isArray(overrides.familyArtists) ? overrides.familyArtists.slice() : [],
   };
   if (overrides.familySelectionExplicit === true) galleryState.familySelectionExplicit = true;
@@ -20,12 +19,15 @@ function createGalleryMainState(overrides = {}) {
 }
 
 function resetGalleryMainStateForPrimaryArtist(current = {}) {
-  return createGalleryMainState({ view: current.view });
+  return createGalleryMainState({ view: current.view, ...(typeof isMobileClient === 'function' && isMobileClient() ? { sources: current.sources } : {}) });
 }
 
 function normalizeGalleryView(value) {
   const normalized = String(value || '').trim().toLowerCase();
   if (normalized === 'no info' || normalized === 'covers') return 'covers';
+  if (normalized === 'list' || normalized === 'rows') {
+    return typeof window !== 'undefined' && Number(window.innerWidth) > 900 ? 'cards' : 'list';
+  }
   return 'cards';
 }
 
@@ -33,10 +35,6 @@ function reduceGalleryMainState(current, action = {}) {
   const next = createGalleryMainState(current || {});
   if (action.type === 'toggle-source' && Object.hasOwn(next.sources, action.source)) {
     next.sources[action.source] = !next.sources[action.source];
-  } else if (action.type === 'toggle-album-type' && GALLERY_INTERACTIVE_RELEASE_TYPES.includes(action.albumType)) {
-    next.albumTypes = next.albumTypes.includes(action.albumType)
-      ? next.albumTypes.filter((item) => item !== action.albumType)
-      : [...next.albumTypes, action.albumType];
   } else if (action.type === 'set-view') {
     next.view = normalizeGalleryView(action.view);
   } else if (action.type === 'toggle-family-artist') {
@@ -192,13 +190,16 @@ function reconcileGalleryMain(config = {}) {
 
 function resolveGalleryBarContext(config = {}) {
   const summaryContext = config.primaryArtist
-    ? { kind: 'family', primaryArtist: config.primaryArtist, artistCount: config.artistCount, albumCount: config.albumCount }
+    ? (config.hasFamily === false
+      ? { kind: 'single-artist', artist: config.primaryArtist, albumCount: config.albumCount }
+      : { kind: 'family', primaryArtist: config.primaryArtist, artistCount: config.artistCount, albumCount: config.albumCount })
     : { kind: 'gallery', artistCount: config.artistCount, albumCount: config.albumCount };
+  if (summaryContext.kind === 'single-artist') return summaryContext;
   if (Number(config.scrollTop || 0) <= 12) {
     return summaryContext;
   }
-  const threshold = Number(config.scrollTop || 0) + Number(config.galleryBarBottom || 0);
-  const current = (config.groups || []).filter((group) => Number(group.top || 0) <= threshold).at(-1);
+  const threshold = Number(config.scrollTop || 0);
+  const current = (config.groups || []).filter((group) => Number(group.labelBottom ?? group.top ?? 0) <= threshold).at(-1);
   return current
     ? { kind: 'artist', artist: current.artist, albumCount: current.albumCount }
     : summaryContext;

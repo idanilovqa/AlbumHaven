@@ -7,7 +7,7 @@ import hashlib
 import hmac
 
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import JSONResponse, RedirectResponse
+from fastapi.responses import JSONResponse, PlainTextResponse, RedirectResponse
 from starlette.datastructures import QueryParams
 from starlette.responses import Response
 from starlette.routing import Match
@@ -41,6 +41,8 @@ _PRIVATE_ROUTE_ACTIONS = {
     ("POST", "/admin/reauthenticate"): "accounts.reauthenticate",
     ("GET", "/account"): "account.self.read",
     ("GET", "/account/appearance"): "account.self.appearance.read",
+    ("GET", "/account/layout-preferences"): "account.self.appearance.read",
+    ("PUT", "/account/layout-preferences"): "account.self.appearance.write",
     ("PUT", "/account/appearance"): "account.self.appearance.write",
     ("GET", "/api/account/appearance/selection-accent"): "account.self.appearance.selection_accent.read",
     ("PUT", "/api/account/appearance/selection-accent"): "account.self.appearance.selection_accent.update",
@@ -53,6 +55,7 @@ _PRIVATE_ROUTE_ACTIONS = {
     ("POST", "/account/library-warning/dismiss"): "account.self.library_warning.dismiss",
     ("GET", "/view-data"): "library.browse.read",
     ("GET", "/home-data"): "library.browse.read",
+    ("GET", "/home/recent-albums"): "library.browse.read",
     ("GET", "/album-details"): "library.browse.read",
     ("GET", "/utilities/problematic-files"): "library.problems.read",
     ("GET", "/utilities/problematic-files/detail"): "library.problems.read",
@@ -81,7 +84,7 @@ _PRIVATE_ROUTE_ACTIONS = {
     ("GET", "/virtual-artists/{virtual_artist_ref}"): "library.virtual_discography.read",
     ("GET", "/virtual-releases/{virtual_release_ref}"): "library.virtual_discography.read",
     ("GET", "/track"): "library.media.read",
-    ("GET", "/cover"): "library.media.read",
+    ("GET", "/cover"): "library.artwork.read",
     ("GET", "/loops/media/{loop_id}"): "library.loops.media.read",
     ("GET", "/loops/pitch-preview/{preview_id}"): "library.loops.media.read",
     ("GET", "/utilities/cover-lookup/remote-image"): "library.covers.remote.read",
@@ -117,10 +120,10 @@ _PRIVATE_ROUTE_ACTIONS = {
     ("POST", "/utilities/cover-lookup/start"): "library.covers.lookup",
     ("POST", "/utilities/cover-lookup/task/{task_id}/cancel"): "library.covers.lookup.cancel",
     ("POST", "/utilities/cover-lookup/local-select"): "library.covers.write",
-    ("POST", "/utilities/cover-lookup/local-delete"): "library.covers.write",
-    ("POST", "/utilities/cover-lookup/pasted-image-save"): "library.covers.write",
+    ("POST", "/utilities/cover-lookup/local-delete"): "library.covers.delete",
+    ("POST", "/utilities/cover-lookup/pasted-image-save"): "library.covers.upload",
     ("POST", "/utilities/cover-lookup/save-remote"): "library.covers.write",
-    ("POST", "/utilities/cover-lookup/add-remote"): "library.covers.write",
+    ("POST", "/utilities/cover-lookup/add-remote"): "library.covers.link",
     ("POST", "/utilities/fetch-cover"): "library.covers.fetch",
     ("POST", "/utilities/fetch-covers-unsuccessful"): "library.covers.fetch",
     ("POST", "/utilities/cancel-cover-scan"): "library.covers.fetch.cancel",
@@ -178,9 +181,13 @@ def install_private_route_boundary(app: FastAPI) -> None:
             return await call_next(request)
         route_path = _matched_route_path(app, request)
         action = private_action_for_route(request.method, route_path) or "app.access"
+        if (request.method == "GET" and route_path == "/playback/waveform"
+                and str(request.query_params.get("loop_id") or "").strip()):
+            # The route resolves this resource through the actor's owned loops.
+            action = "library.loops.media.read"
         preference_headers = (
             {"Cache-Control": "no-store, max-age=0"}
-            if route_path in {"/account/appearance", "/api/account/appearance/selection-accent"} else {}
+            if route_path in {"/account/appearance", "/account/layout-preferences", "/api/account/appearance/selection-accent"} else {}
         )
         await current_actor_from_request(request)
         resource = _private_resource(request, route_path)
@@ -188,6 +195,15 @@ def install_private_route_boundary(app: FastAPI) -> None:
             await require_action(action, resource=resource)(request)
             if route_path == '/utilities/log-history/export':
                 await require_action('library.logs.read', resource=resource)(request)
+            if route_path == "/cover":
+                if request.query_params.get("loop_id"):
+                    await require_action("library.loops.read", resource=resource)(request)
+                from music_app.services.capability_artwork import browse_artwork_response
+
+                artwork = await browse_artwork_response(request)
+                if artwork is not None:
+                    _refresh_session_csrf_cookie(request, artwork)
+                    return artwork
         except HTTPException as exc:
             if (
                 exc.status_code == 401
@@ -195,6 +211,18 @@ def install_private_route_boundary(app: FastAPI) -> None:
                 and request.url.path == "/"
             ):
                 return RedirectResponse("/login", status_code=303)
+            if (
+                exc.status_code == 403
+                and request.method == "GET"
+                and route_path in {"/admin/members", "/admin/accounts/new", "/admin/accounts/{account_id}"}
+                and request.headers.get("sec-fetch-dest") == "document"
+            ):
+                # A denied browser page must remain readable. Fetch/API clients
+                # retain the JSON error contract, and no admin handler is entered.
+                return PlainTextResponse(
+                    "Action not permitted.", status_code=403,
+                    headers={**(exc.headers or {}), "Cache-Control": "no-store, max-age=0"},
+                )
             return JSONResponse(
                 {"detail": exc.detail},
                 status_code=exc.status_code,

@@ -178,7 +178,7 @@ def test_missing_runtime_digest_never_makes_app_javascript_immutable(asgi_app):
     assert headers["cache-control"] == "no-store, max-age=0"
 
 
-def test_runtime_asset_version_is_computed_once_per_asgi_app_and_reused_by_templates(
+def test_runtime_asset_version_is_refreshed_for_each_html_response(
     tmp_path,
     monkeypatch,
 ):
@@ -188,7 +188,7 @@ def test_runtime_asset_version_is_computed_once_per_asgi_app_and_reused_by_templ
 
     def fake_runtime_asset_version(asset_paths=None):
         digest_calls.append(asset_paths)
-        return "startup-runtime-digest"
+        return f"runtime-digest-{len(digest_calls)}"
 
     monkeypatch.setattr(web_asgi, "_runtime_asset_version", fake_runtime_asset_version)
     asgi_app = create_test_asgi_app(tmp_path / "runtime-digest-app", monkeypatch)
@@ -204,6 +204,8 @@ def test_runtime_asset_version_is_computed_once_per_asgi_app_and_reused_by_templ
     asgi_app.state.templates = CapturingTemplates()
     request = SimpleNamespace(
         app=asgi_app,
+        scope={},
+        headers={},
         cookies={"__Host-album_haven_session": "s" * 43},
         state=SimpleNamespace(current_actor=asgi_app.state.current_actor_resolver.resolve(None)),
         client=SimpleNamespace(host="testserver"),
@@ -211,10 +213,10 @@ def test_runtime_asset_version_is_computed_once_per_asgi_app_and_reused_by_templ
     first_context = web_asgi._template_response(request, {})
     second_context = web_asgi._template_response(request, {})
 
-    assert digest_calls == [None]
-    assert asgi_app.state.runtime_asset_version == "startup-runtime-digest"
-    assert first_context["runtime_asset_version"] == "startup-runtime-digest"
-    assert second_context["runtime_asset_version"] == "startup-runtime-digest"
+    assert digest_calls == [None, None, None]
+    assert asgi_app.state.runtime_asset_version == "runtime-digest-3"
+    assert first_context["runtime_asset_version"] == "runtime-digest-2"
+    assert second_context["runtime_asset_version"] == "runtime-digest-3"
     assert captured_contexts == [first_context, second_context]
 
 
@@ -429,7 +431,10 @@ def test_index_renders_shell_without_legacy_flask_route_module(asgi_app, monkeyp
     assert payload["bootstrap"]["startupHydration"]["endpoint"] == "/view-data?surface=albums&payload_tier=sidebar"
     assert payload["bootstrap"]["startupHydration"]["followupEndpoint"] == "/view-data?surface=albums&omit_sidebar=1"
     assert payload["bootstrap"]["startupHydration"]["tier"] == "sidebar"
-    assert b'id="library-loader" hidden' in body
+    assert re.search(rb'<[^>]+id="library-loader"[^>]*\bhidden(?:\s|>)', body)
+    loader_tag = re.search(rb'<section\b[^>]*\bid="library-loader"[^>]*>', body)
+    assert loader_tag is not None
+    assert re.search(rb'\shidden(?:\s|>)', loader_tag.group())
     assert b'<div class="albums-scroll" id="albums-scroll" hidden>' not in body
     assert b'data-sidebar-artist="Broadcast"' in body
     assert payload["bootstrap"]["startupHydration"]["embeddedViewPatch"] == {
@@ -1609,6 +1614,11 @@ def test_app_js_loads_generated_runtime_bundle_after_bootstrap_payload_setup():
         "admin-members.js",
         "appearance-backgrounds.js",
         "appearance-palettes.js",
+        "appearance-device-profiles.js",
+        "capability-ui.js",
+        "client-device-preferences.js",
+        "client-layout-bootstrap.js",
+        "surface-dismissal.js",
         "button-component.js",
         "editor-page.js",
         "settings-navigation.js",

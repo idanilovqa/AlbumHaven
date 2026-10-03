@@ -385,12 +385,12 @@ test('Problematic Files album and track groups keep the approved separate outer 
   );
 });
 
-test('standalone outline and dividers use the exact approved blended structural palette', () => {
+test('standalone framed tables use the themed surface and approved structural palette', () => {
   const css = fs.readFileSync(componentCssPath, 'utf8');
 
   assert.match(
     css,
-    /\.compact-data-table\[data-cdt-frame="outline"\]\s*\{[^}]*border:\s*1px solid rgba\(148,\s*163,\s*184,\s*0\.18\)[^}]*background:\s*transparent/s,
+    /\.compact-data-table\[data-cdt-frame="outline"\]\s*\{[^}]*border:\s*1px solid rgba\(148,\s*163,\s*184,\s*0\.18\)[^}]*background:\s*var\(--appearance-table-surface,/s,
   );
   assert.match(
     css,

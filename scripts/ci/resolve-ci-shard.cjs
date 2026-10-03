@@ -52,7 +52,7 @@ const PERFORMANCE_SHARDS = Object.freeze({
     fixtureMode: 'generated-isolated',
     harness: 'scan',
     basePort: 4293,
-    targets: ['scan-cold', 'scan-cached', 'scan-add-album', 'scan-metadata', 'scan-page'],
+    targets: ['scan-cold', 'scan-cached', 'scan-add-album', 'scan-metadata', 'scan-page', 'scan-health', 'scan-error'],
   },
 });
 

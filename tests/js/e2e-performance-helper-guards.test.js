@@ -1330,6 +1330,52 @@ test('Problematic Files records timing classification before strict runtime-erro
   assert.match(fixture, /coverRequestId: String\(headers\['x-album-haven-cover-request-id'\] \|\| ''\)/);
 });
 
+test('completed response timing waits for the last byte and uses the relative response end', async () => {
+  const { readCompletedResponseDurationMs } = await import(pathToFileURL(
+    path.join(repoRoot, 'tests/e2e/helpers/utilityPerformanceHelpers.js'),
+  ).href);
+  let finish;
+  let finished = false;
+  const completion = new Promise((resolve) => { finish = resolve; });
+  const result = readCompletedResponseDurationMs({
+    finished: async () => { await completion; finished = true; return null; },
+    request: () => ({
+      failure: () => null,
+      timing: () => {
+        assert.equal(finished, true);
+        return { startTime: 1750000000000, responseEnd: 912.75 };
+      },
+    }),
+  });
+  finish();
+  assert.equal(await result, 912.75);
+});
+
+test('completed response timing rejects unfinished, failed and malformed samples', async () => {
+  const { readCompletedResponseDurationMs } = await import(pathToFileURL(
+    path.join(repoRoot, 'tests/e2e/helpers/utilityPerformanceHelpers.js'),
+  ).href);
+  for (const timing of [
+    undefined, {}, { startTime: 1, responseEnd: undefined },
+    { startTime: 1, responseEnd: null }, { startTime: 1, responseEnd: -1 },
+    { startTime: 1, responseEnd: NaN }, { startTime: 1, responseEnd: Infinity },
+    { startTime: 1, responseEnd: '12' }, { startTime: -1, responseEnd: 12 },
+    { startTime: NaN, responseEnd: 12 },
+  ]) {
+    await assert.rejects(readCompletedResponseDurationMs({
+      finished: async () => null,
+      request: () => ({ failure: () => null, timing: () => timing }),
+    }), /timing/i);
+  }
+  await assert.rejects(readCompletedResponseDurationMs({
+    finished: async () => new Error('transport aborted'),
+  }), /transport aborted/);
+  await assert.rejects(readCompletedResponseDurationMs({
+    finished: async () => null,
+    request: () => ({ failure: () => ({ errorText: 'net::ERR_ABORTED' }) }),
+  }), /net::ERR_ABORTED/);
+});
+
 test('broad Problematic Files benchmark retains timing classification before its direct hard assertion', () => {
   const spec = readRepoFile('tests/e2e/utilityProblematicFiles/utilitiesResponsiveness.spec.js');
   const evaluation = spec.indexOf('const problematicReadyOutcome = evaluateTimingBudget(');
@@ -1340,7 +1386,19 @@ test('broad Problematic Files benchmark retains timing classification before its
   assert.ok(retainedMetrics > evaluation);
   assert.ok(hardAssertion > retainedMetrics, 'hard failure must retain the benchmark payload before throwing');
   assert.match(spec, /problematicReadyPerformanceStatus: problematicReadyOutcome\.status/);
-  assert.match(spec, /page\.goto\(PROBLEMATIC_FILES_PATHNAME/);
+  const coldStart = spec.indexOf('Measure the cold native Problematic Files API response');
+  const coldEnd = spec.indexOf('await galleryActions.goto();', coldStart);
+  const coldBlock = spec.slice(coldStart, coldEnd);
+  assert.ok(spec.indexOf('await galleryActions.goto();') < coldStart);
+  assert.ok(coldEnd > coldStart, 'A document navigation must discard frontend state before the warm-server open.');
+  assert.match(coldBlock, /measureProblematicFilesSettingsOpenWithNetworkEvidence\(/);
+  assert.match(coldBlock, /readCompletedResponseDurationMs\(coldResponse\)/);
+  assert.match(coldBlock, /await coldResponse\.text\(\)/);
+  assert.match(coldBlock, /new TextEncoder\(\)\.encode\(coldResponseBody\)\.byteLength/);
+  assert.match(coldBlock, /projection_cache_status[^\n]+toBe\('rebuilt'\)/);
+  assert.match(coldBlock, /evaluateProblematicFilesDatasetContract\(/);
+  assert.match(coldBlock, /coldInitialDetail\.key\)\.toBe\(coldFirstSummaryItem\.key\)/);
+  assert.doesNotMatch(spec, /page\.goto\(PROBLEMATIC_FILES_PATHNAME/);
   assert.doesNotMatch(spec, /page\.request\.get/);
 });
 

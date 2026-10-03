@@ -38,6 +38,7 @@ function harness() {
     getUtilityModalElements: () => els,
     escapeHtml: (value) => String(value ?? '').replaceAll('&', '&amp;').replaceAll('"', '&quot;').replaceAll('<', '&lt;'),
     renderUtilityModalContent() {}, loadProblematicFiles() {}, loadUtilityRules() {}, loadUtilityLibrarySettings() {}, loadUtilityLoops() {}, loadUtilityLogHistory() {}, loadUtilityIntegrations() {},
+    openMobileUtilityDetail() {},
     getAvailableAlbumMoveActions: () => [],
     buildAlbumDisplayCoverUrl: (album) => album.cover_path ? `/cover?path=${encodeURIComponent(album.cover_path)}` : '',
     buildAlbumLightboxCoverUrl: (album) => album.cover_path ? `/cover?path=${encodeURIComponent(album.cover_path)}&size=original` : (album.remote_cover_url || album.remote_cover_thumbnail_url || ''),
@@ -84,12 +85,41 @@ for (const [key, start, expected] of [['ArrowRight', 5, 0], ['ArrowLeft', 0, 5],
 test('S03 Escape closes the filter dropdown and restores its anchor focus', () => {
   const { context, els } = harness();
   context.state.utility.problemDropdownOpen = true;
-  const target = { closest: (selector) => selector.includes('problem-filter') ? els.problemFilterMenu : null };
+  const modal = {
+    id: 'utility-modal', classList: { contains: () => false },
+    closest: selector => selector.includes('[hidden]') ? null : modal,
+    getClientRects: () => [{}],
+  };
+  const listeners = [];
+  context.document.querySelectorAll = () => [modal];
+  context.document.addEventListener = (type, listener, capture) => listeners.push({ type, listener, capture });
+  context.getComputedStyle = () => ({ zIndex: '100', position: 'fixed', opacity: '1', visibility: 'visible' });
+  context.getTrackModalElements = () => ({ overlay: { dataset: {}, addEventListener() {} } });
+  context.bindOverlayPointerOrigin = () => {};
+  vm.runInContext(read('music_app/static/js/runtime/track-modal-lightbox-helpers.js'), context);
+  context.attachModalEvents();
+  const target = { closest: selector => selector.includes('problem-filter') ? els.problemFilterMenu : null };
   let prevented = false;
-  context.handleUtilityBootstrapKeyDown({ key: 'Escape', target, preventDefault() { prevented = true; } });
+  const capture = listeners.find(entry => entry.type === 'keydown' && entry.capture === true);
+  capture.listener({ key: 'Escape', target, preventDefault() { prevented = true; } });
   assert.equal(context.state.utility.problemDropdownOpen, false);
   assert.equal(els.problemFilterButton.focused, true);
   assert.equal(prevented, true);
+});
+
+test('mobile Settings filter Escape closes its page-owned dropdown and restores focus without closing the page', () => {
+  const { context, els } = harness();
+  context.state.utility.problemDropdownOpen = true;
+  context.closeUtilityModal = () => { throw new Error('Filter Escape must not close Settings'); };
+  const target = { closest: selector => selector.includes('problem-filter') ? els.problemFilterMenu : null };
+  let prevented = false;
+  assert.equal(context.handleUtilityBootstrapKeyDown({ key: 'Escape', target,
+    preventDefault() { prevented = true; } }), true);
+  assert.equal(prevented, true);
+  assert.equal(context.state.utility.problemDropdownOpen, false);
+  assert.equal(els.problemFilterMenu.hidden, true);
+  assert.equal(els.problemFilterButton.getAttribute('aria-expanded'), 'false');
+  assert.equal(els.problemFilterButton.focused, true);
 });
 
 test('S01 ordinary typing and modified shortcuts do not change the active tab', () => {

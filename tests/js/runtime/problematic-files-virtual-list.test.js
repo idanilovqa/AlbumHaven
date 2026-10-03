@@ -1,0 +1,371 @@
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
+const test = require('node:test');
+const vm = require('node:vm');
+
+const sourcePath = path.join(
+  __dirname,
+  '..',
+  '..',
+  '..',
+  'music_app',
+  'static',
+  'js',
+  'runtime',
+  'problematic-files-virtual-list.js',
+);
+
+function loadVirtualList({ horizontal = false, ResizeObserver } = {}) {
+  const frames = [];
+  const context = {
+    window: {
+      ResizeObserver,
+      matchMedia() {
+        return { matches: horizontal };
+      },
+      requestAnimationFrame(callback) {
+        frames.push(callback);
+        return frames.length;
+      },
+      cancelAnimationFrame() {},
+      addEventListener() {},
+      removeEventListener() {},
+    },
+  };
+  vm.createContext(context);
+  vm.runInContext(fs.readFileSync(sourcePath, 'utf8'), context, { filename: sourcePath });
+  return { api: context.window.ProblematicFilesVirtualList, frames };
+}
+
+function createList(overrides = {}) {
+  const listeners = new Map();
+  const document = { activeElement: null };
+  class Element {
+    constructor(tagName) {
+      this.tagName = tagName;
+      this.ownerDocument = document;
+      this.children = [];
+      this.parentNode = null;
+      this.attributes = {};
+      this.dataset = {};
+      this.style = { cssText: '' };
+    }
+    setAttribute(name, value) { this.attributes[name] = String(value); }
+    getAttribute(name) { return this.attributes[name] ?? null; }
+    get firstElementChild() { return this.children[0] || null; }
+    get nextElementSibling() { return this.parentNode?.children[this.parentNode.children.indexOf(this) + 1] || null; }
+    contains(node) { return node === this || this.children.some(child => child.contains(node)); }
+    closest(selector) {
+      const attribute = selector.match(/^\[([^\]]+)\]$/)?.[1];
+      return attribute && this.getAttribute(attribute) !== null ? this : this.parentNode?.closest(selector) || null;
+    }
+    focus() { document.activeElement = this; }
+    remove() {
+      if (!this.parentNode) return;
+      if (this.contains(document.activeElement)) document.activeElement = null;
+      this.parentNode.children.splice(this.parentNode.children.indexOf(this), 1);
+      this.parentNode = null;
+    }
+    insertBefore(node, reference) {
+      if (node === reference) return node;
+      node.remove();
+      const index = reference === null ? this.children.length : this.children.indexOf(reference);
+      assert.ok(index >= 0, 'reference must belong to the parent');
+      this.children.splice(index, 0, node);
+      node.parentNode = this;
+      return node;
+    }
+    replaceChildren(...nodes) {
+      [...this.children].forEach(node => node.remove());
+      nodes.forEach(node => this.insertBefore(node, null));
+    }
+    get innerHTML() { return this.children.map(child => child.outerHTML).join(''); }
+    get outerHTML() {
+      const attributes = { ...this.attributes };
+      if (this.className) attributes.class = this.className;
+      if (this.style.cssText) attributes.style = this.style.cssText;
+      const markup = Object.entries(attributes).map(([name, value]) => ` ${name}="${value}"`).join('');
+      return `<${this.tagName}${markup}>${this.innerHTML}</${this.tagName}>`;
+    }
+  }
+  document.createElement = tagName => {
+    if (tagName !== 'template') return new Element(tagName);
+    const content = new Element('fragment');
+    return { content, set innerHTML(html) {
+      const match = html.match(/^<([a-z]+)([^>]*)><\/\1>$/);
+      assert.ok(match, 'fixture expects one empty rendered element');
+      const element = new Element(match[1]);
+      for (const [, name, value] of match[2].matchAll(/([\w-]+)="([^"]*)"/g)) element.setAttribute(name, value);
+      content.replaceChildren(element);
+    } };
+  };
+  return Object.assign(new Element('div'), {
+    clientHeight: 340,
+    clientWidth: 320,
+    dataset: {},
+    scrollLeft: 0,
+    scrollTop: 0,
+    addEventListener(type, callback) {
+      listeners.set(type, callback);
+    },
+    removeEventListener(type, callback) {
+      if (listeners.get(type) === callback) listeners.delete(type);
+    },
+    emit(type, event = {}) {
+      listeners.get(type)?.(event);
+    },
+    listenerCount() {
+      return listeners.size;
+    },
+    ...overrides,
+  });
+}
+
+function makeItems(count) {
+  return Array.from({ length: count }, (_value, index) => ({ key: `album-${index}` }));
+}
+
+function mountedKeys(html) {
+  return [...html.matchAll(/data-problematic-album-key="([^"]+)"/g)].map((match) => match[1]);
+}
+
+test('vertical window mounts a bounded overscanned subset of 706 rows', () => {
+  const { api } = loadVirtualList();
+  const list = createList();
+  const virtualList = api.create({
+    list,
+    renderRow: (item) => `<button data-problematic-album-key="${item.key}"></button>`,
+  });
+
+  virtualList.render(makeItems(706), 'album-0');
+
+  assert.deepEqual(mountedKeys(list.innerHTML), makeItems(11).map((item) => item.key));
+  assert.equal(list.dataset.problematicMountedCount, '11');
+  assert.equal(list.dataset.problematicVirtualStart, '0');
+  assert.equal(list.dataset.problematicVirtualEnd, '11');
+  assert.match(list.innerHTML, /data-problematic-virtual-spacer="after"/);
+});
+
+test('scroll schedules one range update and keeps mounted rows bounded', () => {
+  const { api, frames } = loadVirtualList();
+  const list = createList();
+  const virtualList = api.create({
+    list,
+    renderRow: (item) => `<button data-problematic-album-key="${item.key}"></button>`,
+  });
+  virtualList.render(makeItems(706), 'album-0');
+
+  list.scrollTop = 6800;
+  list.emit('scroll');
+  list.emit('scroll');
+  assert.equal(frames.length, 1);
+  frames.shift()();
+
+  const keys = mountedKeys(list.innerHTML);
+  assert.ok(keys.length <= 17);
+  assert.ok(keys.includes('album-100'));
+  assert.ok(Number(list.dataset.problematicVirtualStart) > 0);
+});
+
+test('reveal scrolls an offscreen selected row into the mounted range', () => {
+  const { api, frames } = loadVirtualList();
+  const list = createList();
+  const virtualList = api.create({
+    list,
+    renderRow: (item) => `<button data-problematic-album-key="${item.key}"></button>`,
+  });
+  virtualList.render(makeItems(706), 'album-0');
+
+  virtualList.reveal('album-700');
+  assert.ok(list.scrollTop > 0);
+  frames.shift()();
+  assert.ok(mountedKeys(list.innerHTML).includes('album-700'));
+});
+
+test('initial render reveals an offscreen selected row', () => {
+  const { api, frames } = loadVirtualList();
+  const list = createList();
+  const virtualList = api.create({
+    list,
+    renderRow: (item) => `<button data-problematic-album-key="${item.key}"></button>`,
+  });
+
+  virtualList.render(makeItems(706), 'album-700');
+  assert.ok(mountedKeys(list.innerHTML).includes('album-700'), 'selected row must be mounted before render returns');
+  frames.shift()();
+
+  assert.ok(list.scrollTop > 0);
+  assert.ok(mountedKeys(list.innerHTML).includes('album-700'));
+});
+
+test('mobile mode windows the existing horizontal strip', () => {
+  const { api } = loadVirtualList({ horizontal: true });
+  const list = createList();
+  const virtualList = api.create({
+    list,
+    renderRow: (item) => `<button data-problematic-album-key="${item.key}"></button>`,
+  });
+
+  virtualList.render(makeItems(706), 'album-0');
+
+  assert.equal(list.dataset.problematicVirtualAxis, 'horizontal');
+  assert.ok(mountedKeys(list.innerHTML).length < 20);
+  assert.match(list.innerHTML, /style="width:/);
+});
+
+test('dispose removes listeners and cancels later rendering', () => {
+  const { api, frames } = loadVirtualList();
+  const list = createList();
+  const virtualList = api.create({
+    list,
+    renderRow: (item) => `<button data-problematic-album-key="${item.key}"></button>`,
+  });
+  virtualList.render(makeItems(706), 'album-0');
+  assert.equal(list.listenerCount(), 2);
+
+  list.emit('scroll');
+  virtualList.dispose();
+  assert.equal(list.listenerCount(), 0);
+  assert.equal(list.dataset.problematicMountedCount, undefined);
+  assert.equal(frames.length, 1);
+});
+
+test('viewport observer remounts hidden-to-visible rows once and releases its exact viewport', () => {
+  let notify;
+  let observed;
+  let disconnects = 0;
+  class ResizeObserver {
+    constructor(callback) { notify = callback; }
+    observe(target) { observed = target; }
+    disconnect() { disconnects += 1; }
+  }
+  const { api, frames } = loadVirtualList({ ResizeObserver });
+  const list = createList({ clientHeight: 0 });
+  const virtualList = api.create({ list, renderRow: item => `<button data-problematic-album-key="${item.key}"></button>` });
+  virtualList.render(makeItems(706), '');
+  assert.equal(observed, list);
+  assert.equal(mountedKeys(list.innerHTML).length, 7);
+  list.clientHeight = 476;
+  notify(); notify();
+  assert.equal(frames.length, 1);
+  frames.shift()();
+  assert.equal(mountedKeys(list.innerHTML).length, 13);
+  virtualList.dispose();
+  assert.equal(disconnects, 1);
+  notify();
+  assert.equal(frames.length, 0);
+});
+
+test('new offscreen selection mounts synchronously before detail consumers observe its key', () => {
+  const { api } = loadVirtualList();
+  const list = createList();
+  const virtualList = api.create({ list, renderRow: item => `<button data-problematic-album-key="${item.key}"></button>` });
+  virtualList.render(makeItems(706), 'album-700');
+  assert.ok(mountedKeys(list.innerHTML).includes('album-700'));
+  assert.ok(list.scrollTop > 0);
+});
+
+test('unchanged virtual geometry and metadata produce no redundant writes', () => {
+  const { api } = loadVirtualList();
+  const list = createList();
+  let metadataWrites = 0;
+  list.dataset = new Proxy({}, { set(target, key, value) { metadataWrites += 1; target[key] = value; return true; } });
+  const virtualList = api.create({ list, renderRow: item => `<button data-problematic-album-key="${item.key}"></button>` });
+  const items = makeItems(706);
+  virtualList.render(items, '');
+  let geometryWrites = 0;
+  for (const spacer of [list.children[0], list.children.at(-1)]) {
+    let cssText = spacer.style.cssText;
+    Object.defineProperty(spacer.style, 'cssText', { get: () => cssText, set: value => { geometryWrites += 1; cssText = value; } });
+  }
+  metadataWrites = 0;
+  virtualList.render(items, '');
+  assert.equal(metadataWrites, 0);
+  assert.equal(geometryWrites, 0);
+});
+
+test('a hidden list remounts its visible overscan after element resize without a window resize', () => {
+  const observers = [];
+  class ResizeObserver {
+    constructor(callback) { this.callback = callback; this.disconnected = false; observers.push(this); }
+    observe(target) { this.target = target; }
+    disconnect() { this.disconnected = true; }
+  }
+  const { api, frames } = loadVirtualList({ ResizeObserver });
+  const list = createList({ clientHeight: 0 });
+  const virtualList = api.create({
+    list,
+    renderRow: item => `<button data-problematic-album-key="${item.key}"></button>`,
+  });
+  virtualList.render(makeItems(20), '');
+  assert.equal(frames.length, 0);
+  assert.deepEqual(mountedKeys(list.innerHTML), makeItems(7).map(item => item.key));
+  assert.equal(observers.length, 1);
+  assert.equal(observers[0].target, list);
+
+  list.clientHeight = 476;
+  observers[0].callback([{ target: list }]);
+  observers[0].callback([{ target: list }]);
+  assert.equal(frames.length, 1, 'element resize notifications share one scheduled render');
+  frames.shift()();
+  assert.deepEqual(mountedKeys(list.innerHTML), makeItems(13).map(item => item.key));
+  assert.equal(list.dataset.problematicMountedCount, '13');
+
+  virtualList.dispose();
+  assert.equal(observers[0].disconnected, true);
+  observers[0].callback([{ target: list }]);
+  assert.equal(frames.length, 0, 'a late observer callback cannot revive a disposed list');
+  assert.equal(list.dataset.problematicMountedCount, undefined);
+});
+
+
+test('an unchanged scheduled range does not rewrite spacer geometry or diagnostic metadata', () => {
+  const { api, frames } = loadVirtualList();
+  const list = createList();
+  const virtualList = api.create({
+    list,
+    renderRow: item => `<button data-problematic-album-key="${item.key}"></button>`,
+  });
+  virtualList.render(makeItems(20), 'album-0');
+  const originalNodes = [...list.children];
+  let styleWrites = 0;
+  for (const spacer of list.children.filter(node => node.getAttribute('data-problematic-virtual-spacer'))) {
+    let cssText = spacer.style.cssText;
+    Object.defineProperty(spacer.style, 'cssText', {
+      get: () => cssText,
+      set(value) { styleWrites++; cssText = value; },
+    });
+  }
+  let metadataWrites = 0;
+  list.dataset = new Proxy(list.dataset, {
+    set(target, key, value) { metadataWrites++; target[key] = value; return true; },
+  });
+  list.emit('scroll');
+  frames.shift()();
+  assert.equal(styleWrites, 0);
+  assert.equal(metadataWrites, 0);
+  assert.deepEqual(list.children, originalNodes);
+});
+
+test('range observations share the production default stride and overscan', () => {
+  const { api } = loadVirtualList();
+  assert.deepEqual(JSON.parse(JSON.stringify(api.calculateRange({ count: 21, offset: 732, viewport: 696 }))), { start: 4, end: 21 });
+});
+
+test('utility navigation ownership avoids mutation records for an unchanged owner', () => {
+  const writes = [];
+  const dataset = new Proxy({}, { set(target, key, value) { writes.push([key, value]); target[key] = value; return true; } });
+  const elements = { list: { dataset }, tabs: [], overlay: { setAttribute() {} }, detail: { classList: { remove() {} } } };
+  const context = vm.createContext({ state: { utility: { activeTab: 'problematic-files' } }, getUtilityModalElements: () => elements });
+  vm.runInContext(fs.readFileSync(path.join(__dirname, '../../../music_app/static/js/runtime/utility-renderers-and-actions.js'), 'utf8'), context);
+  context.syncUtilityTabAlignment = () => {};
+  context.renderProblematicFiles = () => {};
+  context.renderUtilityLoops = () => {};
+  context.renderUtilityModalContent();
+  context.renderUtilityModalContent();
+  assert.deepEqual(writes, [['utilityNavigationOwner', 'problematic-files']]);
+  context.state.utility.activeTab = 'loops';
+  context.renderUtilityModalContent();
+  assert.deepEqual(writes, [['utilityNavigationOwner', 'problematic-files'], ['utilityNavigationOwner', 'loops']]);
+});

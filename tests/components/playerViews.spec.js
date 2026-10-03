@@ -35,6 +35,7 @@ const compactControls = `
   <div class="compact-player-shell" aria-label="Compact player">
     ${renderButton({ variant: 'icon', size: 'small', className: 'compact-player-expand', ariaLabel: 'Expand player', label: '›' })}
     <button class="compact-player-cover" data-compact-player-cover type="button" aria-label="Open album details"></button>
+    <div class="compact-player-metadata"><span class="compact-player-metadata-row" data-compact-player-title><span data-compact-player-title-text>Fixture song</span></span><span class="compact-player-metadata-row" data-compact-player-artist><span data-compact-player-artist-text>Fixture artist</span></span></div>
     ${renderPlaybackControlCluster({ variant: 'compact-player' })}
   </div>`;
 
@@ -56,12 +57,12 @@ async function mountPlayer(page, mode, loopControlStyle = 'capsule') {
         :root { --app-sidebar-width: 280px; color-scheme: dark; }
         html, body { width: 100%; height: 100%; margin: 0; overflow: hidden; }
         body { background: #08101d; color: #f0fdf4; font-family: Arial, sans-serif; }
-        .global-player { --compact-docked-left: 0px; --compact-docked-width: 280px; --compact-player-x: 12px; --compact-player-y: 532px; }
+        .global-player { --compact-docked-left: 0px; --compact-player-width: ${mode === 'floating' ? '96px' : '280px'}; --compact-player-x: 12px; --compact-player-y: 532px; }
         .player-waveform-canvas { display: block; width: 100%; height: 100%; background: linear-gradient(to bottom, transparent 48%, #7cbaa4 49%, #7cbaa4 51%, transparent 52%); }
         *, *::before, *::after { animation: none !important; caret-color: transparent !important; transition: none !important; }
       </style></head>
       <body>
-        <div class="global-player shell-bottom-player ${mode === 'docked' ? 'is-compact is-docked-compact' : mode === 'floating' ? 'is-compact is-floating-compact' : ''}" data-player-view="${mode}" ${isExpanded ? `data-player-seekbar-presentation="${mode}"` : ''}>
+        <div class="global-player shell-bottom-player ${mode === 'docked' ? 'is-compact is-docked-compact' : mode === 'floating' ? 'is-compact is-floating-compact' : ''}" data-player-view="${mode}" data-compact-presentation="${isExpanded ? 'expanded' : mode}" ${isExpanded ? `data-player-seekbar-presentation="${mode}"` : ''}>
           <div class="player-shell" aria-hidden="${!isExpanded}">${expandedControls(loopControlStyle)}
             <div class="player-main">
               <div class="player-meta"><div class="player-title">Transatlantic - We All Need Some Light</div><button class="player-album-link" type="button">/ SMPTe</button></div>
@@ -81,13 +82,14 @@ async function mountPlayer(page, mode, loopControlStyle = 'capsule') {
   await page.addStyleTag({ content: fs.readFileSync(baseLayoutCssPath, 'utf8').replace(/^\uFEFF/, '') });
   await page.addStyleTag({ path: buttonCssPath });
   await page.addStyleTag({ path: playerCssPath });
+  if (mode === 'docked') await page.locator('.compact-player-expand').evaluate(element => { element.hidden = true; });
   const theme = await page.locator(':root').evaluate(element => {
     const style = getComputedStyle(element);
     return ['--success', '--panel-2', '--border'].map(name => style.getPropertyValue(name).trim());
   });
   expect(theme, 'component fixture must use the real base theme tokens').toEqual(['#34d399', '#0f172a', '#374151']);
   await page.locator('[data-playback-control-action="play-pause"]').evaluateAll(buttons => {
-    for (const button of buttons) { button.setAttribute('aria-label', 'Pause'); button.textContent = '⏸'; }
+    for (const button of buttons) { button.setAttribute('aria-label', 'Pause'); const icon = button.querySelector('.compact-player-play-icon path'); if (icon) icon.setAttribute('d', 'M6 5h4v14H6zM14 5h4v14h-4z'); else button.textContent = '⏸'; }
   });
 }
 
@@ -177,26 +179,24 @@ test('expanded regular player uses the approved centerline and seekbar-edge text
   await expect(player).toHaveScreenshot('expanded-regular-player.png', { animations: 'disabled' });
 });
 
-test('docked compact player balances expand, artwork, and transport without exposing expanded content', async ({ page }) => {
+test('tree-wide dock shows artwork, metadata, and Play without expanded content', async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 640 });
   await mountPlayer(page, 'docked');
-
   const player = page.locator('[data-player-view="docked"]');
-  const shell = player.locator('.compact-player-shell');
-  const expand = player.getByRole('button', { name: 'Expand player' });
-  const cover = player.getByRole('button', { name: 'Open album details' }).last();
+  const cover = player.locator('[data-compact-player-cover]');
   const transport = player.locator('.compact-player-transport');
-  const [playerBox, shellBox, expandBox, coverBox, transportBox] = await Promise.all([
-    player.boundingBox(), shell.boundingBox(), expand.boundingBox(), cover.boundingBox(), transport.boundingBox(),
+  const [playerBox, coverBox, transportBox] = await Promise.all([
+    player.boundingBox(), cover.boundingBox(), transport.boundingBox(),
   ]);
-
   expect(playerBox.width).toBe(280);
-  expect(playerBox.height).toBe(76);
-  for (const box of [shellBox, expandBox, coverBox, transportBox]) {
-    expect(Math.abs(centerY(box) - centerY(playerBox))).toBeLessThanOrEqual(1);
-  }
-  expect(expandBox.x).toBeLessThan(coverBox.x);
+  expect(playerBox.height).toBe(72);
+  for (const box of [coverBox, transportBox]) expect(Math.abs(centerY(box) - centerY(playerBox))).toBeLessThanOrEqual(1);
+  expect(coverBox.width).toBe(50);
   expect(coverBox.x + coverBox.width).toBeLessThan(transportBox.x);
+  await expect(player.locator('.compact-player-expand')).toBeHidden();
+  await expect(player.locator('[data-compact-player-title]')).toHaveText('Fixture song');
+  await expect(player.locator('[data-playback-control-action="previous"]')).toBeHidden();
+  await expect(player.locator('[data-playback-control-action="next"]')).toBeHidden();
   await expect(player.locator('.player-shell')).toHaveCSS('pointer-events', 'none');
   await expect(player).toHaveScreenshot('docked-compact-player.png', { animations: 'disabled' });
 });

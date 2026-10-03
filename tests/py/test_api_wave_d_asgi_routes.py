@@ -278,6 +278,24 @@ def test_asgi_wave_d_router_exports_cover_endpoint_urls_and_methods(app):
     assert route_methods["/utilities/cancel-cover-scan"] == {"POST"}
 
 
+@pytest.mark.parametrize("operation", ["clear", "mark-action-taken", "cancel"])
+def test_asgi_stale_cover_notification_id_returns_only_not_found_and_preserves_other_tasks(app, operation):
+    from music_app.services import cover_lookup_tasks
+
+    reset_cover_lookup_runtime_state()
+    track_path = (app.config["MUSIC_DIR"] / "Private Artist" / "Private Album" / "song.mp3").resolve()
+    task_id, _ = cover_lookup_tasks.create_cover_lookup_task(_album_payload(track_path), {str(track_path)})
+    before = deepcopy(cover_lookup_tasks.cover_lookup_result(task_id))
+    status, _headers, body = _run_asgi_request(
+        _make_wave_d_app(app),
+        "POST",
+        f"/utilities/cover-lookup/task/removed-notification/{operation}",
+    )
+    assert status == 404
+    assert _decode_json(body) == {"ok": False, "error": "Lookup task not found"}
+    assert cover_lookup_tasks.cover_lookup_result(task_id) == before
+
+
 def test_asgi_cover_lookup_task_list_mark_clear_and_cancel(app):
     from music_app.services import cover_lookup_tasks
 
@@ -706,11 +724,13 @@ def test_asgi_cover_lookup_gallery_reads_saved_snapshot_without_task_or_provider
         ),
     ],
 )
+@pytest.mark.parametrize("resolved_album_id", [41, None], ids=["another-album", "removed-album"])
 def test_asgi_cover_snapshot_routes_reject_client_album_id_from_another_album(
     app,
     monkeypatch,
     route_path,
     extra_payload,
+    resolved_album_id,
 ):
     from music_app.routes import api_wave_d_asgi_routes as asgi_routes
 
@@ -725,7 +745,7 @@ def test_asgi_cover_snapshot_routes_reject_client_album_id_from_another_album(
 
         def resolve_album_id_for_track_paths(self, *, track_paths):
             assert track_paths == {str(track_path)}
-            return 41
+            return resolved_album_id
 
         def get_for_album_context(self, *, album_id):
             calls.append(f"read:{album_id}")
@@ -2232,6 +2252,61 @@ def test_asgi_cover_lookup_save_remote_honors_serialized_provider_storage_policy
     queued_image = queued_calls[0]["args"][4]
     assert queued_image["source"] == source
     assert queued_image["display_only"] is expected_display_only
+
+
+def test_asgi_cover_lookup_save_remote_rejects_obsolete_snapshot_generation_before_queueing(app, monkeypatch):
+    from music_app.routes import api_wave_d_asgi_routes as asgi_routes
+
+    track_path = (app.config["MUSIC_DIR"] / "Artist" / "Album" / "song.mp3").resolve()
+    track_path.parent.mkdir(parents=True, exist_ok=True)
+    track_path.write_bytes(b"track")
+    reset_cover_lookup_runtime_state()
+    repository_reads = []
+
+    class CurrentSnapshotRepository:
+        def __init__(self, _config):
+            pass
+
+        def resolve_album_id_for_track_paths(self, *, track_paths):
+            assert track_paths == {str(track_path)}
+            return 41
+
+        def get_for_album_context(self, *, album_id):
+            repository_reads.append(album_id)
+            return {
+                "album_id": album_id,
+                "search_generation": "current-generation",
+                "status": "completed",
+                "candidates": [{
+                    "id": "same-candidate-id",
+                    "art_kind": "cover",
+                    "url": "https://private-provider.example/current-cover.jpg",
+                }],
+            }
+
+    def forbidden_save(*_args, **_kwargs):
+        pytest.fail("An obsolete snapshot must not create or queue a save task")
+
+    monkeypatch.setattr(asgi_routes, "AlbumCoverCandidateSnapshotRepository", CurrentSnapshotRepository)
+    monkeypatch.setattr(asgi_routes, "create_cover_lookup_task", forbidden_save)
+    monkeypatch.setattr(asgi_routes, "queue_cover_lookup_save_remote_task", forbidden_save)
+    status, _headers, body = _run_asgi_request(
+        _make_wave_d_app(app),
+        "POST",
+        "/utilities/cover-lookup/save-remote",
+        json_body={
+            "album": {**_album_payload(track_path), "album_id": 41},
+            "snapshot_generation": "obsolete-generation",
+            "candidate_id": "same-candidate-id",
+        },
+    )
+    assert status == 404
+    assert _decode_json(body) == {
+        "ok": False,
+        "error": "Saved cover candidate generation was not found",
+    }
+    assert repository_reads == [41]
+    assert list_cover_lookup_tasks(config=app.config) == []
 
 
 def test_asgi_cover_lookup_save_remote_queues_candidate_from_persisted_snapshot(

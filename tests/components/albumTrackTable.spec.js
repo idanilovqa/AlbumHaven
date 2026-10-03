@@ -325,7 +325,7 @@ test('per-track Play hover uses the player Play color without shifting layout', 
   expect(afterHoverBox).toEqual(beforeHoverBox);
 });
 
-test('ActionButton hover and keyboard focus share the same outline without shifting layout', async ({ page }) => {
+test('ActionButton hover uses semantic edge while keyboard focus keeps its outline without shifting layout', async ({ page }) => {
   await mountAlbumDetailsComponents(page);
 
   const action = page.getByRole('button', { name: 'Edit album tags', exact: true });
@@ -334,15 +334,15 @@ test('ActionButton hover and keyboard focus share the same outline without shift
 
   await action.hover();
   await expect(action).toHaveCSS('outline-width', '1px');
-  await expect(action).toHaveCSS('outline-color', 'rgb(114, 186, 255)');
-  const hoverOutline = await action.evaluate((element) => getComputedStyle(element).outlineColor);
+  await expect(action).toHaveCSS('outline-color', 'rgba(0, 0, 0, 0)');
+  await expect(action).toHaveCSS('border-color', 'rgb(82, 97, 114)');
   expect(await action.boundingBox()).toEqual(restingBox);
 
   await page.mouse.move(0, 0);
   await page.keyboard.press('Tab');
   await expect(action).toBeFocused();
   await expect(action).toHaveCSS('outline-width', '1px');
-  await expect(action).toHaveCSS('outline-color', hoverOutline);
+  await expect(action).toHaveCSS('outline-color', 'rgb(114, 186, 255)');
   expect(await action.boundingBox()).toEqual(restingBox);
 });
 
@@ -411,9 +411,10 @@ test('decoded Album Details artwork stays square and visible while only tracks s
         <div id="track-modal" class="track-modal"><div class="track-modal-dialog">
           <header class="track-modal-header"><div class="album-details-header"><h2>Natural Filename Order Fixture</h2></div></header>
           <div class="track-modal-body"><div id="track-modal-cover" class="track-modal-cover">
-            <div class="track-modal-cover-shell"><div class="album-artbox album-artbox--ready" data-album-artbox-state="ready">
-              <button class="track-modal-cover-button" data-open-lightbox="1"><span class="track-modal-cover-visual"><img alt="Album cover" src="${art}"></span></button>
-            </div><div class="track-modal-cover-tools"><button class="track-modal-cover-tool"><img alt="Look up" src="${art}"></button><button class="track-modal-cover-tool"><img alt="Fetch" src="${art}"></button></div></div>
+          <div class="track-modal-cover-shell"><div class="album-artbox album-artbox--ready" data-album-artbox-state="ready">
+            <button class="track-modal-cover-button" data-open-lightbox="1"><span class="track-modal-cover-visual"><img alt="Album cover" src="${art}"></span></button>
+            <span class="album-artbox__overlay"><button class="action-button" aria-label="Cover Look Up"></button><button class="action-button" aria-label="Fast fetch cover"></button></span>
+          </div></div>
           </div><main class="track-modal-main"><div class="track-modal-list" id="table-host"></div></main></div>
         </div></div></body></html>`,
     }));
@@ -440,6 +441,18 @@ test('decoded Album Details artwork stays square and visible while only tracks s
     expect(geometry.width).toBeGreaterThan(0);
     expect(geometry.width).toBeCloseTo(geometry.height, 0);
     expect(geometry.height).toBeLessThanOrEqual(geometry.coverHeight);
+    const overlayGeometry = await page.locator('.album-artbox').evaluate((artbox) => {
+      const artboxRect = artbox.getBoundingClientRect();
+      const imageRect = artbox.querySelector('img').getBoundingClientRect();
+      const overlayRect = artbox.querySelector('.album-artbox__overlay').getBoundingClientRect();
+      return {
+        artboxIsSquare: Math.abs(artboxRect.width - artboxRect.height) < 1,
+        overlayInsideImage: overlayRect.right <= imageRect.right + 1
+          && overlayRect.bottom <= imageRect.bottom + 1,
+      };
+    });
+    expect(overlayGeometry.artboxIsSquare).toBe(true);
+    expect(overlayGeometry.overlayInsideImage).toBe(true);
     expect(geometry.dialogBottom).toBeLessThanOrEqual(height);
     expect(geometry.dialogOverflow).toBe('hidden');
     if (height === 400) {

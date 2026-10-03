@@ -228,6 +228,7 @@ function settleTagEditorSessionMutationClaim(tagEditor = state.tagEditor) {
 }
 
 function openTagEditor(album, options = {}) {
+  if (typeof isMobileClient === 'function' && isMobileClient()) return false;
   const els = getTagEditorElements();
   if (!els.overlay || !album) return;
   bindOverlayPointerOrigin(els.overlay);
@@ -250,6 +251,7 @@ function openTagEditor(album, options = {}) {
     anchorPath: String(tracks[0].path || ''),
     dragSelecting: false,
     dragAnchorPath: '',
+    reorder: null,
     values,
     sessionMutationClaim: claimTagEditViewMutation(album),
     autoNumberStartValue: '',
@@ -314,7 +316,17 @@ function autoNumberSelectedTagEditorTracks() {
   syncTagEditorAutoNumberControls();
 }
 
+function closeTagEditorFromBackdrop() {
+  const changedUpdates = buildChangedTagEditorUpdates(
+    state.tagEditor.album,
+    state.tagEditor.tracks || [],
+    state.tagEditor.values || {},
+  );
+  if (!Object.keys(changedUpdates).length) closeTagEditor();
+}
+
 function closeTagEditor() {
+  if (typeof clearTagEditorReorderCue === 'function') clearTagEditorReorderCue();
   const els = getTagEditorElements();
   if (!els.overlay) return;
   settleTagEditorSessionMutationClaim();
@@ -1484,24 +1496,6 @@ function hideVersionContextMenu() {
   if (menu) menu.hidden = true;
 }
 
-function buildCoverLookupButtonIcon() {
-  return `
-    <span class="track-modal-cover-tool-icon track-modal-cover-tool-icon-lookup" aria-hidden="true">
-      <img class="track-modal-cover-tool-icon-default" src="/static/images/cover-lookup-gallery-icon-offwhite.png" alt="">
-      <img class="track-modal-cover-tool-icon-hover" src="/static/images/cover-lookup-gallery-icon.png" alt="">
-    </span>
-  `;
-}
-
-function buildFastCoverFetchButtonIcon() {
-  return `
-    <span class="track-modal-cover-tool-icon track-modal-cover-tool-icon-fast-fetch" aria-hidden="true">
-      <img class="track-modal-cover-tool-icon-default" src="/static/images/quick-search-icon-offwhite.png" alt="">
-      <img class="track-modal-cover-tool-icon-hover" src="/static/images/quick-search-icon.png" alt="">
-    </span>
-  `;
-}
-
 function buildTrackModalCoverVisualHtml({
   albumName,
   localCoverPath,
@@ -1756,8 +1750,28 @@ function renderTrackModalRelease(album) {
   const coverLookupLabel = hasUnseenAutomaticImprovement
     ? 'Open cover art look up gallery; new automatic cover candidate available'
     : 'Open cover art look up gallery';
-  const coverLookupIcon = buildCoverLookupButtonIcon();
-  const fastCoverFetchIcon = buildFastCoverFetchButtonIcon();
+  const coverToolsHtml = `
+    ${ButtonComponent.renderActionButton({
+      icon: 'search',
+      ariaLabel: coverLookupLabel,
+      title: 'Cover Art Look Up',
+      className: coverLookupClass,
+      attributes: {
+        'data-open-track-modal-cover-lookup': '1',
+        'data-album-key': albumKey,
+      },
+    })}
+    ${ButtonComponent.renderActionButton({
+      icon: 'bolt',
+      ariaLabel: 'Fetch cover art now',
+      title: 'Fast Cover Fetch',
+      className: 'track-modal-cover-tool is-fast-fetch',
+      attributes: {
+        'data-track-modal-fast-cover-fetch': '1',
+        'data-album-key': albumKey,
+      },
+    })}
+  `;
   const coverSourceBadge = typeof buildTrackModalCoverSourceBadge === 'function'
     ? buildTrackModalCoverSourceBadge(album?.remote_cover_source || '')
     : '';
@@ -1829,20 +1843,13 @@ function renderTrackModalRelease(album) {
       : ' data-lightbox-gallery="visible"';
     els.cover.innerHTML = `
       <div class="track-modal-cover-shell">
-        ${renderAlbumArtbox({
-          state: 'ready',
-          label: `Album cover for ${album.name}`,
-          coverHtml: `<button class="track-modal-cover-button" type="button" data-open-lightbox="1" data-cover-src="${escapeHtml(lightboxSrc)}" data-cover-preview-src="${escapeHtml(coverSrc)}" data-cover-alt="${escapeHtml(`Album cover for ${album.name}`)}" data-album-key="${albumKey}"${lightboxGalleryAttribute}><span class="track-modal-cover-image-slot"></span></button>`,
-        })}
-        ${coverSourceBadge}
-        <div class="track-modal-cover-tools">
-          <button class="${coverLookupClass}" type="button" data-open-track-modal-cover-lookup="1" data-album-key="${albumKey}" aria-label="${coverLookupLabel}" title="Cover Art Look Up">
-            ${coverLookupIcon}
-          </button>
-          <button class="track-modal-cover-tool is-fast-fetch" type="button" data-track-modal-fast-cover-fetch="1" data-album-key="${albumKey}" aria-label="Fetch cover art now" title="Fast Cover Fetch">
-            ${fastCoverFetchIcon}
-          </button>
-        </div>
+      ${renderAlbumArtbox({
+        state: 'ready',
+        label: `Album cover for ${album.name}`,
+        coverHtml: `<button class="track-modal-cover-button" type="button" data-open-lightbox="1" data-cover-src="${escapeHtml(lightboxSrc)}" data-cover-preview-src="${escapeHtml(coverSrc)}" data-cover-alt="${escapeHtml(`Album cover for ${album.name}`)}" data-album-key="${albumKey}"${lightboxGalleryAttribute}><span class="track-modal-cover-image-slot"></span></button>`,
+        overlayHtml: coverToolsHtml,
+      })}
+      ${coverSourceBadge}
       </div>
     `;
     const coverImageSlot = typeof els.cover?.querySelector === 'function'
@@ -1902,15 +1909,11 @@ function renderTrackModalRelease(album) {
   } else {
     els.cover.innerHTML = `
       <div class="track-modal-cover-shell">
-        ${renderAlbumArtbox({ state: 'empty', label: `${album.name || 'Album'} has no cover art` })}
-        <div class="track-modal-cover-tools">
-          <button class="${coverLookupClass}" type="button" data-open-track-modal-cover-lookup="1" data-album-key="${albumKey}" aria-label="${coverLookupLabel}" title="Cover Art Look Up">
-            ${coverLookupIcon}
-          </button>
-          <button class="track-modal-cover-tool is-fast-fetch" type="button" data-track-modal-fast-cover-fetch="1" data-album-key="${albumKey}" aria-label="Fetch cover art now" title="Fast Cover Fetch">
-            ${fastCoverFetchIcon}
-          </button>
-        </div>
+      ${renderAlbumArtbox({
+        state: 'empty',
+        label: `${album.name || 'Album'} has no cover art`,
+        overlayHtml: coverToolsHtml,
+      })}
       </div>
     `;
   }
@@ -1966,6 +1969,7 @@ function renderTrackModalRelease(album) {
       els.duplicateTabs.innerHTML = '';
     }
   }
+  if (typeof syncMobileAlbumComposition === 'function') syncMobileAlbumComposition(album);
   els.list.innerHTML = albumMissing ? '' : buildTrackListHtml(tracks, album, totalLength);
   if (els.footer) {
     els.footer.textContent = '';

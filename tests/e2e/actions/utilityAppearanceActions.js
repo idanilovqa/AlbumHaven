@@ -1,3 +1,4 @@
+import { readNavigationSelectionPaint } from '../poms/components/navigationTree.js';
 import { expect } from '@playwright/test';
 
 export class UtilityAppearanceActions {
@@ -68,6 +69,34 @@ export class UtilityAppearanceActions {
     await this.utilityAppearanceTab.editorFooter.primary.root.click();
     await expect(this.utilityAppearanceTab.editorFooter.status).toHaveText('Saved to your account', { timeout: 60000 });
     await expect(this.utilityAppearanceTab.documentRoot).toHaveAttribute('data-compact-player-style', normalized);
+  }
+
+  async expectSupportedDeviceControls() {
+    const appearance = this.utilityAppearanceTab;
+    await expect(appearance.deviceButton('Web / Desktop')).toHaveAttribute('aria-pressed', 'true');
+    await expect(appearance.deviceButton('Mobile')).toBeVisible();
+    await expect(appearance.deviceButton('Mobile')).toBeEnabled();
+    await expect(appearance.deviceButton('TV')).toBeVisible();
+    await expect(appearance.deviceButton('TV')).toBeDisabled();
+    await expect(appearance.deviceModeGroup).toBeHidden();
+  }
+
+  async saveDockedCompactPlayerBehavior(behavior) {
+    const normalized = behavior === 'stay_docked' ? 'stay_docked' : 'follow_sidebar';
+    await this.saveCompactPlayerStyle('docked');
+    const button = this.utilityAppearanceTab.dockedCompactPlayerBehaviorButton(normalized);
+    await expect(button).toBeVisible({ timeout: 60000 });
+    const alreadySaved = await this.utilityAppearanceTab.documentRoot
+      .getAttribute('data-docked-compact-player-behavior') === normalized;
+    if (alreadySaved) {
+      await expect(button).toHaveAttribute('aria-pressed', 'true');
+      return;
+    }
+    await button.click();
+    await expect(button).toHaveAttribute('aria-pressed', 'true');
+    await this.save();
+    await expect(this.utilityAppearanceTab.documentRoot)
+      .toHaveAttribute('data-docked-compact-player-behavior', normalized);
   }
 
   async openSection(key) {
@@ -306,12 +335,17 @@ export class UtilityAppearanceActions {
       // parity-check: allow-read-only-measurement-evaluate -- read computed Appearance preview colors
       const value = await this.utilityAppearanceTab.previewState(state).evaluate((element) => {
         const style = getComputedStyle(element);
+        const rect = element.getBoundingClientRect();
         return {
           accentColor: style.accentColor,
           backgroundColor: style.backgroundColor,
           borderLeftColor: style.borderLeftColor,
           borderColor: style.borderColor,
           outlineColor: style.outlineColor,
+          boxShadow: style.boxShadow,
+          borders: [style.borderTop, style.borderRight, style.borderBottom, style.borderLeft],
+          width: rect.width,
+          height: rect.height,
         };
       });
       return [state, value];
@@ -379,8 +413,10 @@ export class UtilityAppearanceActions {
         loopSelection: read('.global-player .loop-range-selection'),
       };
     });
+    const selectedNavigation = await readNavigationSelectionPaint(this.utilityAppearanceTab.navigationTree.selectedItem);
     return {
       ...snapshot,
+      selectedAppearanceAccent: selectedNavigation?.accent || null,
       appBar: await this.utilityAppearanceTab.appBar.readAppearanceCheckpoint(),
     };
   }

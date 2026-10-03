@@ -1,0 +1,14 @@
+const sourceInput=document.querySelector('#image-source');
+function resizeSourceInput(){sourceInput.style.height='36px';sourceInput.style.height=Math.min(110,Math.max(36,sourceInput.scrollHeight))+'px'}
+sourceInput.addEventListener('input',resizeSourceInput);
+const pendingImages=new Map();let imageNumber=0;
+function addPreviewImages(files){for(const file of files){if(!file.type.startsWith('image/'))continue;const id=String(++imageNumber);const url=URL.createObjectURL(file);pendingImages.set(id,url);const item=document.createElement('div');item.className='paste-preview';const img=document.createElement('img');img.src=url;img.alt=file.name||'Pasted image '+id;const remove=document.createElement('button');remove.textContent='×';remove.setAttribute('aria-label','Remove image '+id);remove.onclick=()=>{URL.revokeObjectURL(url);pendingImages.delete(id);item.remove();document.querySelector('#pasted-images').hidden=pendingImages.size===0};item.append(img,remove);document.querySelector('#pasted-images').append(item)}document.querySelector('#pasted-images').hidden=pendingImages.size===0;document.querySelector('#paste-result').textContent=pendingImages.size?pendingImages.size+' image'+(pendingImages.size===1?'':'s')+' ready to add.':''}
+sourceInput.addEventListener('paste',e=>{const images=Array.from(e.clipboardData?.files||[]).filter(f=>f.type.startsWith('image/'));if(images.length){e.preventDefault();addPreviewImages(images)}});
+sourceInput.addEventListener('dragover',e=>e.preventDefault());sourceInput.addEventListener('drop',e=>{e.preventDefault();addPreviewImages(e.dataTransfer.files)});
+document.querySelector('#image-files').addEventListener('change',e=>{addPreviewImages(e.target.files);e.target.value=''});
+document.querySelector('#addImage').onclick=()=>{if(!sourceInput.value.trim()&&!pendingImages.size){document.querySelector('#image-files').click();return}document.querySelector('#paste-result').textContent='Added to this preview. Your saved cover is unchanged.'};
+window.addEventListener('pagehide',()=>pendingImages.forEach(url=>URL.revokeObjectURL(url)));
+document.querySelectorAll('[data-provider]').forEach(button=>button.onclick=()=>{const album=lookupAlbums[activeLookupAlbum];const query=album.artist+' '+album.title+' '+album.year+' cover';toast(button.dataset.provider+' image search: '+query+' (preview only)')});
+function setFindPlacement(footer){document.body.classList.toggle('footer-action-variant',footer);document.querySelector('.footer-find').hidden=!footer;const b=document.querySelector('#toggleFindPlacement');b.textContent=footer?'Compare top action':'Compare footer action';b.setAttribute('aria-pressed',String(footer))}
+document.querySelector('#toggleFindPlacement').onclick=()=>setFindPlacement(!document.body.classList.contains('footer-action-variant'));
+setFindPlacement(new URLSearchParams(location.search).get('action')==='footer');

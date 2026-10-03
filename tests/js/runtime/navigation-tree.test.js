@@ -15,6 +15,93 @@ function harness() {
   return window.NavigationTree;
 }
 
+function observedElement(attributes = {}, classNames = [], children = {}) {
+  const attrs = new Map(Object.entries(attributes));
+  const classes = new Set(classNames);
+  const writes = [];
+  return {
+    writes,
+    classList: {
+      contains: name => classes.has(name),
+      toggle(name, selected) { selected ? classes.add(name) : classes.delete(name); },
+    },
+    getAttribute: name => attrs.get(name) ?? null,
+    setAttribute(name, value) { writes.push(['set', name, String(value)]); attrs.set(name, String(value)); },
+    removeAttribute(name) { writes.push(['remove', name]); attrs.delete(name); },
+    querySelector: selector => children[selector] || null,
+  };
+}
+
+test('repeated selected and unselected navigation rows perform no attribute writes', () => {
+  const tree = harness();
+  for (const variant of ['settings', 'wide', 'artists']) {
+    for (const selected of [false, true]) {
+      const current = variant === 'settings' ? 'page' : 'true';
+      const row = observedElement({ 'data-navigation-tree-item': variant, ...(selected ? { 'aria-current': current } : {}) });
+      tree.setItemSelected(row, selected);
+      tree.setItemSelected(row, selected);
+      assert.deepEqual(row.writes, [], `${variant} selected=${selected}`);
+    }
+  }
+});
+
+test('navigation selection repairs missing or changed aria semantics and preserves unrelated attributes', () => {
+  const tree = harness();
+  for (const variant of ['settings', 'wide', 'artists']) {
+    const row = observedElement({ 'data-navigation-tree-item': variant, href: '/album', 'data-navigation-tree-key': 'album' });
+    const expected = variant === 'settings' ? 'page' : 'true';
+    tree.setItemSelected(row, true);
+    assert.equal(row.getAttribute('aria-current'), expected);
+    assert.equal(row.classList.contains('is-selected'), true);
+    row.setAttribute('aria-current', 'incorrect');
+    row.writes.length = 0;
+    tree.setItemSelected(row, true);
+    assert.deepEqual(row.writes, [['set', 'aria-current', expected]]);
+    row.writes.length = 0;
+    tree.setItemSelected(row, false);
+    assert.deepEqual(row.writes, [['remove', 'aria-current']]);
+    assert.equal(row.getAttribute('aria-current'), null);
+    assert.equal(row.classList.contains('is-selected'), false);
+    assert.equal(row.getAttribute('href'), '/album');
+    assert.equal(row.getAttribute('data-navigation-tree-key'), 'album');
+  }
+});
+
+test('artwork labels write only changed or missing values and retain explicit empty labels', () => {
+  const tree = harness();
+  const image = observedElement({ alt: 'Original', src: '/cover' });
+  const artbox = observedElement({ 'aria-label': 'Original' });
+  const artwork = observedElement({}, [], { img: image, '.album-artbox': artbox });
+  const row = observedElement({}, [], { '.navigation-tree-artwork': artwork });
+  for (const value of ['Original', 'Changed', '', 0]) {
+    image.writes.length = 0;
+    artbox.writes.length = 0;
+    const previous = image.getAttribute('alt');
+    tree.updateItem(row, { artworkLabel: value });
+    const expected = String(value);
+    assert.equal(image.getAttribute('alt'), expected);
+    assert.equal(artbox.getAttribute('aria-label'), expected);
+    assert.deepEqual(image.writes, previous === expected ? [] : [['set', 'alt', expected]]);
+    assert.deepEqual(artbox.writes, previous === expected ? [] : [['set', 'aria-label', expected]]);
+    image.writes.length = 0;
+    artbox.writes.length = 0;
+    tree.updateItem(row, { artworkLabel: value });
+    assert.deepEqual(image.writes, []);
+    assert.deepEqual(artbox.writes, []);
+  }
+  image.removeAttribute('alt');
+  artbox.removeAttribute('aria-label');
+  tree.updateItem(row, { artworkLabel: '' });
+  assert.equal(image.getAttribute('alt'), '');
+  assert.equal(artbox.getAttribute('aria-label'), '');
+  image.writes.length = 0;
+  artbox.writes.length = 0;
+  tree.updateItem(row, {});
+  assert.deepEqual(image.writes, []);
+  assert.deepEqual(artbox.writes, []);
+  assert.equal(image.getAttribute('src'), '/cover');
+});
+
 test('shared row escapes labels and preserves selected links and counts', () => {
   const tree = harness();
   const markup = tree.renderItem({label: '<Artist & friends>', href: '/?artist=a&b=c', key: 'artist-one', selected: true, count: 0});

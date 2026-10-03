@@ -25,6 +25,13 @@ const EXPECTED_NEAL_FAMILY_ARTISTS = [
   'The Neal Morse Band',
   RESONANCE_ARTIST,
 ];
+const EXPECTED_COMPLETE_NEAL_GALLERY = [
+  FAMILY_ARTIST,
+  TRANSATLANTIC_ARTIST,
+  RESONANCE_ARTIST,
+  'Morse Portnoy George',
+  'The Neal Morse Band',
+];
 const FLOWER_KINGS_QUERY = 'flower kings';
 const FLOWER_KINGS_ARTIST = 'The Flower Kings';
 const EXPECTED_FLOWER_KINGS_SIDEBAR_ARTISTS = [
@@ -202,8 +209,11 @@ test('FTC-SEARCH-NAV-028 limits a content-matched family artist while keeping an
     await galleryActions.waitForSelectedArtistGallery(FAMILY_ARTIST);
     completeNealView = {
       albums: await galleryActions.readAlbumNamesByHeading(FAMILY_ARTIST),
-      headings: await galleryActions.readArtistHeadings(),
+      headings: (await galleryActions.readArtistHeadingOccurrencesAcrossGallery({
+        expectedArtists: EXPECTED_COMPLETE_NEAL_GALLERY,
+      })).map(({ artist }) => artist),
     };
+    expect(new Set(completeNealView.headings).size).toBe(completeNealView.headings.length);
     expect(completeNealView.albums.length).toBeGreaterThan(1);
     await searchToolbarActions.search(TRANSATLANTIC_QUERY, { submitWithEnter: true });
     await searchToolbarActions.waitForQuery(TRANSATLANTIC_QUERY);
@@ -222,7 +232,11 @@ test('FTC-SEARCH-NAV-028 limits a content-matched family artist while keeping an
     await searchToolbarActions.waitForQuery('');
     await galleryActions.waitForSelectedArtistGallery(FAMILY_ARTIST, { queryValue: '' });
     expect(await galleryActions.readAlbumNamesByHeading(FAMILY_ARTIST)).toEqual(completeNealView.albums);
-    expect(await galleryActions.readArtistHeadings()).toEqual(completeNealView.headings);
+    const restoredHeadings = (await galleryActions.readArtistHeadingOccurrencesAcrossGallery({
+      expectedArtists: EXPECTED_COMPLETE_NEAL_GALLERY,
+    })).map(({ artist }) => artist);
+    expect(restoredHeadings).toEqual(completeNealView.headings);
+    expect(new Set(restoredHeadings).size).toBe(restoredHeadings.length);
   });
 
   await stepLogger.step('Explicit Neal Morse album-title search remains narrow through same-primary selection', async () => {

@@ -1,4 +1,11 @@
-﻿const problematicNavigationRowContent = new WeakMap();
+const problematicNavigationRowContent = new WeakMap();
+
+let problematicFilesVirtualList = null;
+
+function disposeProblematicFilesVirtualList() {
+  problematicFilesVirtualList?.dispose?.();
+  problematicFilesVirtualList = null;
+}
 
 function renderProblematicFiles({ preserveProblematicTree = false } = {}) {
   const els = getUtilityModalElements();
@@ -7,6 +14,7 @@ function renderProblematicFiles({ preserveProblematicTree = false } = {}) {
 
   const priorListScrollTop = Number(els.list.scrollTop);
   const replaceListContents = (html) => {
+    disposeProblematicFilesVirtualList();
     const retainedScrollGeometry = els.list.querySelector?.('[data-problematic-scroll-retainer]') || null;
     els.list.innerHTML = html;
     if (retainedScrollGeometry && typeof els.list.appendChild === 'function') {
@@ -17,14 +25,27 @@ function renderProblematicFiles({ preserveProblematicTree = false } = {}) {
     }
   };
 
-  const mountedRows = preserveProblematicTree
+  const mobileIndex = typeof usesMobilePageLayout === 'function' && usesMobilePageLayout();
+  if (mobileIndex) disposeProblematicFilesVirtualList();
+  const virtualListApi = mobileIndex ? null : typeof window !== 'undefined'
+    ? window.ProblematicFilesVirtualList
+    : globalThis.ProblematicFilesVirtualList;
+  const mountedRows = preserveProblematicTree && !virtualListApi?.create
     ? Array.from(els.list.querySelectorAll?.('[data-problematic-album-key]') || []) : [];
   const albumsByKey = new Map((state.utility.problematicFiles || []).map(album => [String(album.key), album]));
   const mountedItems = mountedRows.map(row => albumsByKey.get(row.getAttribute('data-problematic-album-key')));
   const retainTree = mountedRows.length > 0 && mountedItems.every(Boolean);
   const items = retainTree ? mountedItems : getFilteredProblematicAlbums();
   const renderTree = selectedKey => {
-    if (!retainTree) {
+    if (!problematicFilesVirtualList && virtualListApi?.create) {
+      problematicFilesVirtualList = virtualListApi.create({
+        list: els.list,
+        renderRow: (album, selected) => buildProblematicAlbumListItem(album, selected),
+      });
+    }
+    if (problematicFilesVirtualList) {
+      problematicFilesVirtualList.render(items, selectedKey);
+    } else if (!retainTree) {
       replaceListContents(items.map(album => buildProblematicAlbumListItem(album, album.key === selectedKey)).join(''));
     }
     Array.from(els.list.querySelectorAll?.('[data-problematic-album-key]') || []).forEach(row => {
@@ -32,7 +53,7 @@ function renderProblematicFiles({ preserveProblematicTree = false } = {}) {
       if (!album) return;
       const selected = album.key === selectedKey;
       const content = getProblematicAlbumNavigationOptions(album, selected);
-      if (retainTree) {
+      if (retainTree || problematicFilesVirtualList) {
         const previous = problematicNavigationRowContent.get(row);
         window.NavigationTree.updateItem(row, {
           ...content,
@@ -80,6 +101,13 @@ function renderProblematicFiles({ preserveProblematicTree = false } = {}) {
   if (!items.length) {
     replaceListContents('<div class="utility-empty-state compact">No matching problematic albums found.</div>');
     els.detail.innerHTML = '<div class="utility-empty-state">No matching problematic albums found.</div>';
+    return;
+  }
+
+  const mobilePage = mobileIndex ? mobilePageState.pages.at(-1) : null;
+  if (mobileIndex && (mobilePage?.tab !== 'problematic-files' || !mobilePage.utilityDetail)) {
+    renderTree('');
+    els.detail.innerHTML = '';
     return;
   }
 
@@ -499,6 +527,7 @@ function bindUtilityLoopDragAndDrop() {
 }
 
 function syncUtilityLoopPanelVisibility() {
+  if (typeof getMobileLoopPage === 'function' && getMobileLoopPage()?.loopSongId) return;
   const visibleIds = new Set(getFilteredUtilityLoops().map(loop => String(loop.id)));
   const els = getUtilityModalElements();
   els.detail?.querySelectorAll('[data-utility-loop-entry]').forEach(panel => { panel.hidden = !visibleIds.has(getUtilityLoopNodeId(panel)); });
@@ -523,6 +552,11 @@ function filterUtilityLoopViews() {
   const els = getUtilityModalElements();
   const filtered = getFilteredUtilityLoops();
   if (els.count) els.count.textContent = String(filtered.length);
+  if (typeof getMobileLoopPage === 'function' && getMobileLoopPage()) {
+    renderUtilityLoopList(els, filtered);
+    syncMobileUtilityContext();
+    return;
+  }
   if (filtered.length && !filtered.some(loop => buildUtilityLoopGroupKey(loop) === state.utility.selectedLoopGroupKey)) {
     state.utility.selectedLoopGroupKey = buildUtilityLoopGroupKey(filtered[0]);
     state.utility.selectedLoopId = String(filtered[0].id);
@@ -543,6 +577,12 @@ function renderUtilityLoops() {
   if (els.overlay.hidden) return;
   els.detail.classList.add('is-loop-detail');
   const loops = state.utility.loops || [];
+  const mobilePage = typeof getMobileLoopPage === 'function' ? getMobileLoopPage() : null;
+  const mobileGroup = mobilePage ? resolveMobileLoopSongGroup(mobilePage, loops) : null;
+  if (mobilePage && mobilePage.loopSongId && !mobileGroup && state.utility.loopsLoaded
+      && !state.utility.loopsLoading && !state.utility.loopsLoadError) mobilePage.loopSongId = '';
+  els.overlay.dataset.mobileLoopView = mobilePage?.loopSongId ? 'song' : 'list';
+  if (mobilePage) pauseOtherUtilityLoopPlayback(null);
   if (els.sidebarLabel) els.sidebarLabel.textContent = 'Loops';
   const filtered = getFilteredUtilityLoops();
   els.count.textContent = String(filtered.length);
@@ -565,8 +605,9 @@ function renderUtilityLoops() {
   }
 
   if (state.utility.loopsLoadError) {
-    els.list.innerHTML = '';
-    els.detail.innerHTML = buildOnPageAlertHtml({ severity: 'error', title: 'Saved loops unavailable', message: state.utility.loopsLoadError });
+    const errorHtml = buildOnPageAlertHtml({ severity: 'error', title: 'Saved loops unavailable', message: state.utility.loopsLoadError });
+    els.list.innerHTML = mobilePage ? errorHtml : '';
+    els.detail.innerHTML = errorHtml;
     return;
   }
   if (!loops.length) {
@@ -576,7 +617,15 @@ function renderUtilityLoops() {
     return;
   }
 
-  const groupedLoops = groupUtilityLoops(filtered.length ? filtered : loops);
+  if (mobilePage && !mobileGroup) {
+    renderUtilityLoopList(els, filtered);
+    els.detail.innerHTML = '';
+    clearUtilityLoopSpaceOwner();
+    restoreMobileLoopListScroll(mobilePage);
+    return;
+  }
+  if (mobileGroup) state.utility.selectedLoopGroupKey = String(mobileGroup.key);
+  const groupedLoops = groupUtilityLoops(mobileGroup ? loops : (filtered.length ? filtered : loops));
   if (!state.utility.selectedLoopGroupKey || !groupedLoops.some((group) => String(group.key || '') === String(state.utility.selectedLoopGroupKey || ''))) {
     state.utility.selectedLoopGroupKey = String(groupedLoops[0]?.key || '');
   }
@@ -599,7 +648,8 @@ function filterUtilityAppearanceNavigation() {
   const query = String(state.utility.appearanceSearchQuery || '').trim().toLocaleLowerCase();
   let matches = 0;
   els.list?.querySelectorAll('[data-utility-appearance-key]').forEach((row) => {
-    row.hidden = !String(row.textContent || '').toLocaleLowerCase().includes(query);
+    const keywords = row.getAttribute?.('data-utility-appearance-key') === 'seekbar' ? ' compact sidebar floating edge slow motion' : '';
+    row.hidden = !(String(row.textContent || '') + keywords).toLocaleLowerCase().includes(query);
     if (!row.hidden) matches += 1;
   });
   const empty = els.list?.querySelector('[data-appearance-search-empty]');
@@ -753,7 +803,10 @@ function renderUtilityModalContent(options = {}) {
   if (els.search) els.search.readOnly = false;
   if (els.problemFilterButton) { els.problemFilterButton.setAttribute('aria-label', 'Filters'); els.problemFilterButton.setAttribute('title', 'Filter by problem type'); els.problemFilterButton.setAttribute('aria-haspopup', 'listbox'); els.problemFilterButton.setAttribute('aria-controls', 'utility-problem-filter-menu'); }
   const activeTab = state.utility.activeTab || 'problematic-files';
-  if (activeTab !== 'log-history' && els.list?.dataset) els.list.dataset.utilityNavigationOwner = activeTab;
+
+  if (activeTab !== 'problematic-files') disposeProblematicFilesVirtualList();
+  if (activeTab !== 'log-history' && els.list?.dataset
+      && els.list.dataset.utilityNavigationOwner !== activeTab) els.list.dataset.utilityNavigationOwner = activeTab;
   if (activeTab !== 'loops' && typeof disposeMountedLoopActions === 'function') disposeMountedLoopActions(els.detail);
   if (activeTab !== 'appearance' && typeof unmountAppearanceEditors === 'function') unmountAppearanceEditors();
   els.overlay?.setAttribute('data-active-tab', activeTab);
@@ -785,6 +838,8 @@ function renderUtilityModalContent(options = {}) {
   } else {
     renderProblematicFiles(options);
   }
+  if (typeof updateSearchClearAction === 'function') updateSearchClearAction(els.search);
+  if (typeof syncMobileUtilityContext === 'function') syncMobileUtilityContext();
 }
 
 const utilityTabAlignmentObservers = new WeakMap();

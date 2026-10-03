@@ -556,6 +556,50 @@ def test_add_cover_candidates_from_urls_normalizes_pasted_direct_image_before_se
     assert matches[0]["resolution"] == "1200x1200"
 
 
+def test_add_cover_candidates_from_urls_accepts_extensionless_direct_image(monkeypatch):
+    image_url = "https://encrypted-tbn0.gstatic.com/images?q=thumbnail&s=10"
+    probed_urls: list[str] = []
+
+    def fake_probe_match_candidates(**kwargs):
+        score, url, payload = kwargs["matches"][0]
+        probed_urls.append(url)
+        return [
+            CoverCandidate(
+                source=kwargs["source"],
+                url=url,
+                score=score,
+                width=300,
+                height=300,
+                matched_artist=kwargs["artist"],
+                matched_album=kwargs["album"],
+                matched_year=kwargs["year"],
+                debug_payload={"query_mode": kwargs["query_mode"], **payload},
+            )
+        ]
+
+    monkeypatch.setattr(cover_provider_runtime, "probe_match_candidates", fake_probe_match_candidates)
+    monkeypatch.setattr(
+        cover_provider_runtime,
+        "http_get_text",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("image URL must not be parsed as HTML")),
+    )
+
+    matches = cover_manual_links.add_manual_cover_candidates_from_urls(
+        [image_url],
+        target_artist="Test Artist",
+        target_album="Test Album",
+        target_edition=None,
+        target_year=2001,
+        user_agent="AlbumHavenTests/1.0",
+    )
+
+    assert probed_urls == [image_url]
+    assert len(matches) == 1
+    assert matches[0]["source"] == "direct_url"
+    assert matches[0]["url"] == image_url
+    assert matches[0]["resolution"] == "300x300"
+
+
 def test_add_cover_candidates_from_urls_expands_independent_manual_urls_in_parallel(monkeypatch):
     page_started = Event()
     image_started = Event()
@@ -574,7 +618,9 @@ def test_add_cover_candidates_from_urls_expands_independent_manual_urls_in_paral
             )
         ]
 
-    def fake_image_expansion(normalized_url, **_kwargs):
+    def fake_image_expansion(normalized_url, **kwargs):
+        if not kwargs.get("allow_unprobed_fallback", True):
+            return []
         image_started.set()
         observed_overlap.append(page_started.wait(1))
         return [
@@ -661,6 +707,11 @@ def test_manual_url_expansion_returns_on_cancellation_and_cancels_queued_nested_
         "expand_generic_manual_page_url_candidates",
         blocking_page_expansion,
     )
+    monkeypatch.setattr(
+        cover_provider_fallback_web,
+        "expand_manual_direct_image_url_candidates",
+        lambda *_args, **_kwargs: [],
+    )
     caller = Thread(target=collect_manual_matches)
     caller.start()
     try:
@@ -736,3 +787,13 @@ def test_provider_specific_pasted_candidates_use_manual_lookup_serialization(mon
         "url": "https://images.example/spotify.jpg",
         "debug_payload": {"source_label": "Debug Spotify"},
     }]
+
+
+@pytest.mark.parametrize("group,allowed", [
+    ("services", True), ("cover_art_archive", True), ("manual_links", False),
+    ("local", False), (None, False), ("spotify", False),
+])
+def test_tv_candidate_provenance_uses_registry_group_not_provider_label(group, allowed):
+    from music_app.services.cover_provider_candidates import is_provider_lookup_match
+    assert is_provider_lookup_match({"lookup_group": group, "source": "spotify", "source_label": "Spotify"}) is allowed
+    assert not is_provider_lookup_match({"source": "spotify", "image_url": "https://i.scdn.co/image/a"})

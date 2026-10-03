@@ -1525,6 +1525,8 @@ def test_asgi_open_album_location_preserves_json_statuses(app, monkeypatch):
     from music_app.routes import web_asgi
     from music_app.services.library_roots import normalize_library_root_settings
 
+    monkeypatch.setenv("DISPLAY", ":0")
+
     opened = []
     opened_calls = []
     album_dir = (Path(app.config["MUSIC_DIR"]) / "Artist" / "Album").resolve()
@@ -1560,6 +1562,7 @@ def test_asgi_open_album_location_preserves_json_statuses(app, monkeypatch):
         "POST",
         "/open-album-location",
         json_body={"album": "nope"},
+        client_host="127.0.0.1", server_host="localhost",
     )
     asgi_app.state.flask_app = _FatalFlaskBridge()
     missing_status, _missing_headers, missing_body = _run_asgi_request(
@@ -1567,12 +1570,14 @@ def test_asgi_open_album_location_preserves_json_statuses(app, monkeypatch):
         "POST",
         "/open-album-location",
         json_body={"album": {"name": "Missing"}},
+        client_host="127.0.0.1", server_host="localhost",
     )
     success_status, _success_headers, success_body = _run_asgi_request(
         asgi_app,
         "POST",
         "/open-album-location",
         json_body={"album": {"name": "Album", "tracks": [{"path": str(track_path)}]}},
+        client_host="127.0.0.1", server_host="localhost",
     )
 
     assert invalid_status == 400

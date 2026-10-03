@@ -1,6 +1,7 @@
 import { expect, test as base } from '../support/baseFixtures.js';
 import { PERFORMANCE_AUTH_USERNAME } from '../support/performanceAuthentication.js';
 import { withRestoredAppearanceFixture } from '../helpers/appearanceFixture.js';
+import { MobileLayoutPage } from '../poms/mobileLayoutPage.js';
 
 const test = base.extend({
   appearanceBaseline: [async ({ context, managedAppLifecycle }, use) => {
@@ -13,6 +14,64 @@ const PLAYBACK_ALBUM = 'Featured Signal Collection';
 const PLAYBACK_TRACK = 'Clean Signal';
 const PROBLEMATIC_ALBUM = 'Neal Morse Plays Pink Floyd';
 const PROBLEMATIC_TRACK = 'Comfortably Numb';
+
+test.describe('touch artwork actions', () => {
+  test.use({ hasTouch: true, viewport: { width: 390, height: 844 } });
+
+  test('FTC-ALBUM-DETAILS-022 touch artwork controls open full cover and Cover Lookup without hover', { tag: '@area:album-details' }, async ({
+    galleryActions,
+    navigationPanelActions,
+    globalPlayerActions,
+    page,
+    playbackEvidence,
+    searchToolbarActions,
+    trackModalActions,
+    coverLookupActions,
+    stepLogger,
+  }) => {
+    await galleryActions.goto('/?surface=albums');
+    await navigationPanelActions.clickAllArtists({ expectArtistQueryCleared: true });
+    await galleryActions.waitForGalleryReady();
+    await new MobileLayoutPage(page).search(MULTI_DISC_ALBUM);
+    await searchToolbarActions.waitForQuery(MULTI_DISC_ALBUM);
+    await galleryActions.waitForAlbumVisible(MULTI_DISC_ALBUM);
+    const parentUrl = page.url();
+    await galleryActions.clickAlbumDetailsByAlbumName(MULTI_DISC_ALBUM);
+    await trackModalActions.waitForReady();
+    const initialMark = await playbackEvidence.playbackMark();
+    const selectedTrack = await trackModalActions.playTrackAt(0);
+    await globalPlayerActions.waitForCurrentTrack({ path: selectedTrack.path, trackTitle: selectedTrack.title });
+    const initialAudio = await playbackEvidence.waitForTrackPlaybackEvidence({ after: initialMark, path: selectedTrack.path });
+    expect(initialAudio.nonZeroSamples).toBeGreaterThan(0);
+    expect(initialAudio.renderedFrameDelta).toBeGreaterThan(0);
+
+    await stepLogger.step('Tap visible artwork actions without a preceding hover or focus', async () => {
+      await expect(trackModalActions.trackModal.mobileArtworkActions).toHaveCSS('opacity', '1');
+      await expect(trackModalActions.trackModal.coverLookupButton).toBeVisible();
+      await expect(trackModalActions.trackModal.fastCoverFetchButton).toBeVisible();
+      await trackModalActions.openCoverLightbox({ touch: true });
+      await expect(trackModalActions.trackModal.lightboxImage).toBeVisible();
+      await trackModalActions.closeCoverLightbox({ touch: true });
+      await expect(trackModalActions.trackModal.dialog).toBeVisible();
+      await trackModalActions.openCoverLookup({ touch: true });
+      await coverLookupActions.waitForModalReady();
+      await expect(coverLookupActions.coverLookup.modalSubtitle).toContainText(MULTI_DISC_ALBUM);
+      await coverLookupActions.backFromMobilePage();
+      await expect(trackModalActions.trackModal.dialog).toBeVisible();
+      await expect(trackModalActions.trackModal.title).toContainText(MULTI_DISC_ALBUM);
+    });
+    const backMark = await playbackEvidence.playbackMark();
+    await trackModalActions.backFromMobilePage();
+    await expect(page).toHaveURL(parentUrl);
+    await galleryActions.waitForGalleryReady();
+    await globalPlayerActions.waitForCurrentTrack({ path: selectedTrack.path, trackTitle: selectedTrack.title });
+    const afterBack = await playbackEvidence.waitForTrackPlaybackEvidence({ after: backMark, path: selectedTrack.path });
+    expect(afterBack.generation).toBe(initialAudio.generation);
+    expect(afterBack.streamId).toBe(initialAudio.streamId);
+    expect(afterBack.nonZeroSamples).toBeGreaterThan(0);
+    expect(afterBack.renderedFrameDelta).toBeGreaterThan(0);
+  });
+});
 
 async function openAppearanceAlbumPage({
   settingsModalAppBarActions,
@@ -70,18 +129,41 @@ test('FTC-ALBUM-DETAILS-019 keeps all persisted layouts on the shared compact Al
         expect(box.height).toBeCloseTo(34, 0);
       }
       const editAction = trackModalActions.trackModal.editTagsButton;
+      const restingActionBox = await editAction.boundingBox();
+      // parity-check: allow-read-only-measurement-evaluate -- record the actual ActionButton surface before pointer hover
+      const restingBackground = await editAction.evaluate(button => getComputedStyle(button).backgroundColor);
+      const outlinesOff = await utilityAppearanceActions.utilityAppearanceTab.documentRoot
+        .getAttribute('data-action-button-outlines') === 'off';
       await editAction.hover();
-      // parity-check: allow-read-only-measurement-evaluate -- compare the real ActionButton hover border and outline
-      await expect.poll(async () => editAction.evaluate((button) => {
+      // parity-check: allow-read-only-measurement-evaluate -- inspect pointer feedback without confusing it with the keyboard-only focus outline
+      await expect.poll(async () => editAction.evaluate((button, restingBackground) => {
         const style = getComputedStyle(button);
-        return style.outlineWidth === '1px'
-          && style.outlineColor === style.borderColor
-          && style.outlineColor !== 'rgba(0, 0, 0, 0)';
-      })).toBe(true);
+        return {
+          outline: style.outlineColor,
+          borderVisible: style.borderColor !== 'rgba(0, 0, 0, 0)',
+          backgroundChanged: style.backgroundColor !== restingBackground,
+        };
+      }, restingBackground)).toEqual({
+        outline: 'rgba(0, 0, 0, 0)',
+        borderVisible: !outlinesOff,
+        backgroundChanged: true,
+      });
+      expect(await editAction.boundingBox()).toEqual(restingActionBox);
       const artbox = trackModalActions.trackModal.artbox;
       const artboxBounds = await artbox.boundingBox();
       expect(artboxBounds).not.toBeNull();
       expect(Math.abs(artboxBounds.width - artboxBounds.height)).toBeLessThanOrEqual(1);
+      await expect(trackModalActions.trackModal.artboxOverlay).toHaveCSS('opacity', '0');
+      await artbox.hover();
+      await expect(trackModalActions.trackModal.artboxOverlay).toHaveCSS('opacity', '1');
+      await expect(trackModalActions.trackModal.coverLookupButton).toBeVisible();
+      await expect(trackModalActions.trackModal.fastCoverFetchButton).toBeVisible();
+      await trackModalActions.trackModal.coverLookupButton.focus();
+      await expect(trackModalActions.trackModal.artboxOverlay).toHaveCSS('opacity', '1');
+      await expect(trackModalActions.trackModal.coverLightboxButton).toBeVisible();
+      const releasedWidth = await trackModalActions.trackModal.readArtworkReleasedWidth();
+      expect(Math.abs(releasedWidth.mainRight - releasedWidth.contentRight)).toBeLessThanOrEqual(1);
+      expect(releasedWidth.mainLeft).toBeGreaterThanOrEqual(releasedWidth.coverRight);
       await expect(trackModalActions.trackModal.albumTrackTable.root).toHaveAttribute('data-playing-animation', /^(enabled|disabled)$/);
       await expect(trackModalActions.trackModal.albumTrackTable.discHeadings).toHaveText(['CD 1', 'CD 2']);
       await expect(trackModalActions.trackModal.albumTrackTable.tables).toHaveCount(2);
@@ -119,7 +201,11 @@ test('FTC-ALBUM-DETAILS-019 keeps all persisted layouts on the shared compact Al
     expect(dialogBounds).not.toBeNull();
     expect(dialogBounds.width).toBeLessThanOrEqual(390);
     await expect(trackModalActions.trackModal.albumTrackTable.rows.first()).toBeVisible();
-    await trackModalActions.close();
+    await expect(trackModalActions.trackModal.mobileArtworkActions).toBeVisible();
+    await expect(trackModalActions.trackModal.artboxCoverTools).toHaveCount(0);
+    await expect(trackModalActions.trackModal.coverLookupButton).toBeVisible();
+    await expect(trackModalActions.trackModal.fastCoverFetchButton).toBeVisible();
+    await trackModalActions.backFromMobilePage();
   });
 
   await stepLogger.step('Keep problematic status in its unlabeled column before Length', async () => {

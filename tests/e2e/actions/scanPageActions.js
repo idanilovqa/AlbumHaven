@@ -17,6 +17,9 @@ export class ScanPageActions {
     const timeout = options.timeout || 30000;
     await this.waitForVisible({ timeout });
     await expect(this.scanPage.backButton).toBeVisible({ timeout });
+    await expect(this.scanPage.statusGalleryBar).toHaveCount(1);
+    await expect(this.scanPage.statusGalleryBar).toBeVisible({ timeout });
+    await expect(this.scanPage.libraryGalleryBar).toHaveCount(0);
   }
 
   async waitForDedicatedPageHidden(options = {}) {
@@ -40,6 +43,42 @@ export class ScanPageActions {
       this.scanPage.cancelButtonSelector,
       this.scanPage.browseButtonSelector,
     ]);
+    await this.expectLibraryGalleryBarRestored({ timeout });
+  }
+
+  async acknowledgeUnavailableRoot() {
+    await expect(this.scanPage.healthWarningToast).toBeVisible();
+    await this.scanPage.dismissHealthWarning.click();
+    await expect(this.scanPage.healthWarningToast).toBeHidden();
+  }
+
+  async openStatusPageFromMenu() {
+    await this.scanPage.openStatusPage.click();
+    await this.waitForDedicatedPageVisible();
+  }
+
+  async expectUnavailableRootWarning() {
+    await expect(this.scanPage.healthWarning).toBeVisible();
+    await expect(this.scanPage.healthWarning).toContainText('A watched library folder became unavailable.');
+    await expect(this.scanPage.healthWarning.getByRole('button', { name: 'Full Rescan', exact: true })).toBeVisible();
+  }
+
+  async expectLibraryGalleryBarRestored(options = {}) {
+    await expect(this.scanPage.statusGalleryBar).toHaveCount(0);
+    await expect(this.scanPage.libraryGalleryBar).toHaveCount(1);
+    await expect(this.scanPage.libraryGalleryBar).toBeVisible({ timeout: options.timeout || 30000 });
+  }
+
+  async expectTerminalPublicationError() {
+    await this.waitForDedicatedPageVisible();
+    await expect(this.scanPage.terminalError).toBeVisible();
+    await expect(this.scanPage.terminalError).toContainText('Last scan error');
+    await expect(this.scanPage.terminalError).toContainText(/permission denied.*local_track_files/is);
+    await this.expectCancelAbsent();
+  }
+
+  async expectTerminalErrorAbsent() {
+    await expect(this.scanPage.terminalError).toHaveCount(0);
   }
 
   async expectDedicatedScanActions(expectedCancelLabel, options = {}) {
@@ -54,13 +93,11 @@ export class ScanPageActions {
     expect(presentation.cancelBounds).not.toBeNull();
     expect(presentation.browseBounds).not.toBeNull();
     expect(
-      presentation.cancelBounds.x + presentation.cancelBounds.width,
-      'Cancel must render to the left of Browse Library.',
-    ).toBeLessThanOrEqual(presentation.browseBounds.x);
-    expect(presentation.cancelStyle.backgroundColor).toBe('rgba(127, 29, 29, 0.62)');
-    expect(presentation.cancelStyle.borderColor).toBe('rgba(239, 68, 68, 0.65)');
-    expect(presentation.browseStyle.backgroundColor)
-      .not.toBe(presentation.cancelStyle.backgroundColor);
+      presentation.browseBounds.x + presentation.browseBounds.width,
+      'Browse Library must precede quiet Cancel in the status GalleryBar.',
+    ).toBeLessThanOrEqual(presentation.cancelBounds.x);
+    await expect(this.scanPage.browseButton).toHaveClass(/\bui-button--secondary\b/);
+    await expect(this.scanPage.cancelButton).toHaveClass(/\bui-button--quiet\b/);
   }
 
   async cancelActiveScan(expectedCancelLabel, options = {}) {
@@ -87,7 +124,7 @@ export class ScanPageActions {
       const cancelPayload = await cancelResponse.json();
       expect(cancelPayload.ok).toBe(true);
       expect(cancelPayload.cancelled).toBe(true);
-      await this.waitForPhaseTitle('No Active Scan Running', { timeout });
+      await this.waitForPhaseTitle('Your local library is ready.', { timeout });
       await expect(this.scanPage.cancelButton).toBeHidden({ timeout });
       expect(cancelRequestCount).toBe(1);
     } finally {
@@ -217,6 +254,9 @@ export class ScanPageActions {
       };
       const loaderCopy = [
         String(document.querySelector(selectors.titleSelector)?.textContent || '').trim(),
+        ...Array.from(document.querySelectorAll(selectors.currentPhaseSelector))
+          .filter(visible)
+          .map((phase) => String(phase.textContent || '').trim()),
         ...Array.from(document.querySelectorAll(selectors.progressTitleSelector))
           .map((title) => String(title.textContent || '').trim()),
       ].join(' ');
@@ -228,6 +268,7 @@ export class ScanPageActions {
     }, {
       browseButtonSelector: this.scanPage.browseButtonSelector,
       cancelButtonSelector: this.scanPage.cancelButtonSelector,
+      currentPhaseSelector: this.scanPage.currentPhaseSelector,
       progressTitleSelector: `${this.scanPage.progressLineSelector} ${this.scanPage.progressTitleSelector}`,
       titleSelector: this.scanPage.titleSelector,
     });
@@ -239,10 +280,10 @@ export class ScanPageActions {
 
   expectPhaseObservation(observation) {
     const titles = Array.isArray(observation?.titles) ? observation.titles : [];
-    expect(titles).toContain('Discovering music files');
-    expect(titles).toContain('Scanning music files');
-    expect(titles).toContain('Updating cover art');
-    expect(titles).toContain('No Active Scan Running');
+    expect(titles.some((title) => ['Discovering music files', 'Discover files'].includes(title))).toBe(true);
+    expect(titles.some((title) => ['Scanning music files', 'Read tags & metadata'].includes(title))).toBe(true);
+    expect(titles.some((title) => ['Updating cover art', 'Update cover art'].includes(title))).toBe(true);
+    expect(titles).toContain('Your local library is ready.');
     expect(titles.some((title) => /artist famil|relation/i.test(title))).toBe(true);
     const relationActionSamples = Array.isArray(observation?.relationActionSamples)
       ? observation.relationActionSamples

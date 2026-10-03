@@ -1,7 +1,6 @@
 const PLAYER_WAVEFORM_PEAK_COUNT = 280;
 const PLAYER_WAVEFORM_DETAIL_PEAK_COUNT = 720;
 const PLAYER_WAVEFORM_BUSY_RETRY_DELAYS_MS = Object.freeze([50, 100, 200, 400, 800]);
-const SAVED_LOOP_WAVEFORM_CACHE_LIMIT = 4;
 const playerWaveformPeakCache = new Map();
 const playerWaveformPeakProbes = new Map();
 const savedLoopWaveformPeakCache = new Map();
@@ -77,13 +76,17 @@ async function resumePlayerWaveformPeakLoadsAfterForegroundView(suspension) {
   return peaks;
 }
 
-function trimSavedLoopWaveformPeakCache() {
-  while (savedLoopWaveformPeakCache.size > SAVED_LOOP_WAVEFORM_CACHE_LIMIT) {
-    const oldestIdentity = savedLoopWaveformPeakCache.keys().next().value;
-    const evicted = savedLoopWaveformPeakCache.get(oldestIdentity);
-    savedLoopWaveformPeakCache.delete(oldestIdentity);
-    evicted?.controller?.abort();
+function retainSavedLoopWaveformPeaks(loopIds) {
+  const retained = new Set(loopIds.map(String));
+  for (const [identity, entry] of savedLoopWaveformPeakCache) {
+    if (retained.has(identity)) continue;
+    savedLoopWaveformPeakCache.delete(identity);
+    entry.controller.abort();
   }
+}
+
+function getCachedSavedLoopWaveformPeaks(loopId) {
+  return savedLoopWaveformPeakCache.get(String(loopId || '').trim())?.peaks || null;
 }
 
 async function loadSavedLoopWaveformPeaks(loopId) {
@@ -91,13 +94,11 @@ async function loadSavedLoopWaveformPeaks(loopId) {
   if (!identity || identity.length > 256) return null;
   if (savedLoopWaveformPeakCache.has(identity)) {
     const cached = savedLoopWaveformPeakCache.get(identity);
-    savedLoopWaveformPeakCache.delete(identity);
-    savedLoopWaveformPeakCache.set(identity, cached);
     return cached.promise;
   }
 
   const controller = new AbortController();
-  const entry = { controller, promise: null };
+  const entry = { controller, promise: null, peaks: null };
   entry.promise = (async () => {
     let retained = false;
     try {
@@ -122,6 +123,7 @@ async function loadSavedLoopWaveformPeaks(loopId) {
           PLAYER_WAVEFORM_PEAK_COUNT,
         );
         retained = Boolean(peaks);
+        entry.peaks = peaks;
         return peaks;
       }
     } catch (_error) {
@@ -133,7 +135,6 @@ async function loadSavedLoopWaveformPeaks(loopId) {
     }
   })();
   savedLoopWaveformPeakCache.set(identity, entry);
-  trimSavedLoopWaveformPeakCache();
   return entry.promise;
 }
 

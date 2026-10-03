@@ -171,6 +171,13 @@ export class TrackModalActions {
     await this.waitForClosed(options);
   }
 
+  async backFromMobilePage(options = {}) {
+    await expect(this.trackModal.mobilePage).toBeVisible();
+    await expect(this.trackModal.mobileBackButton).toBeVisible();
+    await this.trackModal.mobileBackButton.click();
+    await this.waitForClosed(options);
+  }
+
   async closeForegroundWithEscape(options = {}) {
     await this.trackModal.closeButton.click({ trial: true });
     await this.trackModal.pressEscape();
@@ -601,8 +608,13 @@ export class TrackModalActions {
     };
   }
 
-  async openCoverLookup() {
-    await this.trackModal.coverLookupButton.click();
+  async openCoverLookup(options = {}) {
+    if (options.touch) await this.trackModal.coverLookupButton.tap();
+    else {
+      await this.trackModal.artbox.hover();
+      await expect(this.trackModal.artboxOverlay).toHaveCSS('opacity', '1');
+      await this.trackModal.coverLookupButton.click();
+    }
   }
 
   async openCoverLookupAndReadRequestOrder() {
@@ -669,12 +681,18 @@ export class TrackModalActions {
     );
   }
 
-  async startFastCoverFetch() {
-    await this.trackModal.fastCoverFetchButton.click();
+  async startFastCoverFetch(options = {}) {
+    if (options.touch) await this.trackModal.fastCoverFetchButton.tap();
+    else {
+      await this.trackModal.artbox.hover();
+      await expect(this.trackModal.artboxOverlay).toHaveCSS('opacity', '1');
+      await this.trackModal.fastCoverFetchButton.click();
+    }
   }
 
   async openCoverLightbox(options = {}) {
-    await this.trackModal.coverLightboxButton.click();
+    if (options.touch) await this.trackModal.coverLightboxButton.tap();
+    else await this.trackModal.coverLightboxButton.click();
     await this.trackModal.waitForVisible(this.trackModal.lightbox, { timeout: options.timeout || 15000 });
     await this.trackModal.waitForPageCondition((selector) => {
       const image = document.querySelector(selector);
@@ -760,7 +778,8 @@ export class TrackModalActions {
   }
 
   async closeCoverLightbox(options = {}) {
-    await this.trackModal.lightboxCloseButton.click();
+    if (options.touch) await this.trackModal.lightboxCloseButton.tap();
+    else await this.trackModal.lightboxCloseButton.click();
     await this.trackModal.waitForHidden(this.trackModal.lightbox, { timeout: options.timeout || 15000 });
   }
 }

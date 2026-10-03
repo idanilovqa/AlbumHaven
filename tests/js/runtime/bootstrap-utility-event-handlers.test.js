@@ -149,6 +149,8 @@ function createContext(stateOverrides = {}) {
     clearBrowserTimeout() {},
     closeRepairConfirmModal() {},
     closeUtilityModal() {},
+    closeUtilityLoopSettingMenu() {},
+    openMobileUtilityDetail() {},
     buildCompactDataTable() {
       return '';
     },
@@ -286,6 +288,13 @@ test('editing a tag field refreshes the canonical pending-change presentation', 
 
   assert.equal(context.state.tagEditor.values[path].title, 'Proposed title');
   assert.equal(calls.pendingSyncs, 1);
+});
+
+test('Problematic Files tab activation owns one settled render', () => {
+  assert.match(
+    helperSource,
+    /await loadProblematicFiles\(!state\.utility\.loaded, \{ render: false \}\);[\s\S]{0,500}renderUtilityModalContent\(\);/,
+  );
 });
 
 test('switching away from Loops clears session-only Space ownership', () => {
@@ -1175,6 +1184,7 @@ test('tag editor backdrop closes only when the editor has no changed updates', a
       },
     };
     const { context } = createContext();
+    vm.runInContext(fs.readFileSync(path.join(__dirname, '../../../music_app/static/js/runtime/tag-editor-and-optimistic-updates.js'), 'utf8'), context);
     let closeCalls = 0;
     context.document.getElementById = (id) => (id === 'tag-editor-modal' ? overlay : null);
     context.overlayClickStartedOnOverlay = (candidate, event) => (

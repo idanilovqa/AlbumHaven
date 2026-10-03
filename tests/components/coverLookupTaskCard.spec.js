@@ -10,6 +10,20 @@ const cardStylesPath = path.join(
   'runtime',
   'cover-lookup-drawer-and-related.css',
 );
+const buttonStylesPath = path.join(
+  repositoryRoot,
+  'music_app',
+  'static',
+  'css',
+  'button-component.css',
+);
+const buttonRuntimePath = path.join(
+  repositoryRoot,
+  'music_app',
+  'static',
+  'js',
+  'button-component.js',
+);
 const drawerRuntimePath = path.join(
   repositoryRoot,
   'music_app',
@@ -27,7 +41,10 @@ const utilityHandlersPath = path.join(
   'bootstrap-utility-event-handlers.js',
 );
 
-test('cover lookup task card text can be selected and copied without activating the card', async ({
+for (const refreshWhilePressed of [false, true]) {
+test(refreshWhilePressed
+  ? 'cover lookup task card preserves a pending text drag across polling'
+  : 'cover lookup task card text can be selected and copied without activating the card', async ({
   context,
   page,
 }) => {
@@ -51,6 +68,7 @@ test('cover lookup task card text can be selected and copied without activating 
   }));
   await page.goto(`${componentOrigin}/cover-lookup-task-card`);
   await page.addStyleTag({ path: cardStylesPath });
+  await page.addStyleTag({ path: buttonStylesPath });
   await page.evaluate(() => {
     window.state = {
       coverLookup: {
@@ -86,6 +104,7 @@ test('cover lookup task card text can be selected and copied without activating 
     window.formatCoverLookupTaskElapsedLabel = () => 'Took 20m 25s';
     window.scheduleBrowserTimeout = (callback, delay) => window.setTimeout(callback, delay);
   });
+  await page.addScriptTag({ path: buttonRuntimePath });
   await page.addScriptTag({ path: drawerRuntimePath });
   await page.addScriptTag({ path: utilityHandlersPath });
   await page.evaluate(() => {
@@ -97,7 +116,7 @@ test('cover lookup task card text can be selected and copied without activating 
   });
 
   const card = page.getByRole('button', {
-    name: /cover art look up metallica - kill 'em all - 1983 completed took 20m 25s/i,
+    name: /open cover look up: kill 'em all — metallica · 1983/i,
   });
   await expect(card).toBeVisible();
   await card.hover();
@@ -110,6 +129,16 @@ test('cover lookup task card text can be selected and copied without activating 
   expect(elapsedBox).not.toBeNull();
   await page.mouse.move(titleBox.x, titleBox.y + (titleBox.height / 2));
   await page.mouse.down();
+  if (refreshWhilePressed) {
+    const observation = await page.evaluate(() => {
+      const original = document.querySelector('[data-open-cover-lookup-task]');
+      const pressed = original.matches(':active');
+      const collapsed = window.getSelection()?.isCollapsed;
+      renderCoverLookupDrawer();
+      return { pressed, collapsed, preserved: original === document.querySelector('[data-open-cover-lookup-task]') };
+    });
+    expect(observation).toEqual({ pressed: true, collapsed: true, preserved: true });
+  }
   await page.mouse.move(
     elapsedBox.x + elapsedBox.width,
     elapsedBox.y + (elapsedBox.height / 2),
@@ -118,13 +147,36 @@ test('cover lookup task card text can be selected and copied without activating 
   await page.mouse.up();
 
   const selectedText = await page.evaluate(() => window.getSelection()?.toString().trim() || '');
-  expect(selectedText).toContain("Metallica - Kill 'Em All - 1983");
-  expect(selectedText).toContain('Completed');
+  expect(selectedText).toContain("Kill 'Em All");
+  expect(selectedText).toContain('Metallica · 1983');
+  expect(selectedText).toContain('covers found');
   expect(selectedText).toContain('Took 20m 25s');
   await page.keyboard.press('ControlOrMeta+C');
   await expect.poll(async () => {
     const clipboardText = await page.evaluate(() => navigator.clipboard.readText());
     return clipboardText.replaceAll('\r\n', '\n');
-  }).toBe(selectedText.replaceAll('\r\n', '\n'));
-  await expect.poll(() => page.evaluate(() => state.coverLookup.drawerOpen)).toBe(true);
+ }).toBe(selectedText.replaceAll('\r\n', '\n'));
+await expect.poll(() => page.evaluate(() => state.coverLookup.drawerOpen)).toBe(true);
+
+await page.evaluate(() => {
+  window.getSelection()?.removeAllRanges();
+  state.coverLookup.tasks = [{
+    id: 'running-cover-lookup',
+    status: 'running',
+    artist: 'Metallica',
+    album: "Kill 'Em All",
+    year: 1983,
+    progress: 50,
+  }];
+  renderCoverLookupDrawer();
 });
+
+const stopButton = page.getByRole('button', { name: 'Stop lookup', exact: true });
+const stopIcon = stopButton.locator('svg');
+await expect(stopButton).toBeVisible();
+await expect(stopIcon).toHaveClass(/action-button__icon/);
+await expect(stopIcon).toHaveCSS('stroke-width', '1.8px');
+await expect(stopIcon).toHaveCSS('fill', 'none');
+
+});
+}

@@ -4865,7 +4865,50 @@ class _ProviderFixtureHandler(BaseHTTPRequestHandler):
   <meta property="og:title" content="{album}">
   <meta property="og:description" content="{album} by {artist}. Released {year}.">
   <meta property="og:image" content="{cover_url}">
-</head><body><img src="{cover_url}" alt="{album} by {artist}"></body></html>""".encode("utf-8")
+</head><body>
+  <img src="/manual/{cover_id}/cover.jpg" alt="{album} by {artist}">
+  <button type="button" disabled>Copy image</button>
+  <p role="status">Preparing image</p>
+  <script>
+    const image = document.querySelector('img');
+    const button = document.querySelector('button');
+    const status = document.querySelector('[role="status"]');
+    let png;
+    // Draw the loaded source at the clipboard canvas size. An eager full-size
+    // decode can fail independently of the browser's normal canvas draw path.
+    new Promise((resolve, reject) => {{
+      const loaded = () => {{
+        if (image.naturalWidth > 0 && image.naturalHeight > 0) resolve();
+        else reject(new Error('Image load failed'));
+      }};
+      if (image.complete) loaded();
+      else {{
+        image.addEventListener('load', loaded, {{ once: true }});
+        image.addEventListener('error', () => reject(new Error('Image load failed')), {{ once: true }});
+      }}
+    }}).then(() => {{
+      const canvas = document.createElement('canvas');
+      const scale = Math.min(1, 512 / Math.max(image.naturalWidth, image.naturalHeight));
+      canvas.width = Math.max(1, Math.round(image.naturalWidth * scale));
+      canvas.height = Math.max(1, Math.round(image.naturalHeight * scale));
+      canvas.getContext('2d').drawImage(image, 0, 0, canvas.width, canvas.height);
+      return new Promise(resolve => canvas.toBlob(resolve, 'image/png'));
+    }}).then(blob => {{
+      if (!blob) throw new Error('Image conversion failed');
+      png = blob;
+      button.disabled = false;
+      status.textContent = 'Image ready';
+    }}).catch(() => {{ status.textContent = 'Image preparation failed'; }});
+    button.addEventListener('click', async () => {{
+      try {{
+        await navigator.clipboard.write([new ClipboardItem({{ 'image/png': png }})]);
+        status.textContent = 'Image copied';
+      }} catch {{
+        status.textContent = 'Image copy failed';
+      }}
+    }});
+  </script>
+</body></html>""".encode("utf-8")
         self._send_payload(payload, "text/html; charset=utf-8", include_body=include_body)
 
     def _serve_manual_image(self, cover_id: str, image_name: str, *, include_body: bool) -> None:
@@ -5169,7 +5212,7 @@ def main() -> None:
             ensure_provider_storage_policy_cover_spec(cover_specs)
 
         configure_performance_auth_environment(args.port)
-        provision_performance_auth_owner(runtime_database_url)
+        provision_performance_auth_owner(runtime_database_url, seed_expanded_artist_tree=True)
 
         if args.prepare_only:
             print(

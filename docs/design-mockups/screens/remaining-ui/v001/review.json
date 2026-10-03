@@ -1,0 +1,429 @@
+{
+  "requests": [],
+  "approvals": [
+    {
+      "scope": "Final remaining-ui/v001 visual artifacts and review corrections. Full-page.html approves only Artist Tree compacting and gallery reflow; preserve the actual main app look, chrome, gallery presentation and player.",
+      "manifest": "approved-artifacts.json",
+      "quote": "Okay, all mocks approved. Write the implementation plan with all the proper references and describing all the use cases that came up in this chat",
+      "at": "2026-09-10T06:58:58.2266005Z",
+      "actor": "user"
+    }
+  ],
+  "title": "Remaining UI component board",
+  "version": "v001",
+  "slug": "remaining-ui",
+  "history": [
+    {
+      "event": "created_for_review",
+      "at": "2026-09-09T21:10:14.3400569Z",
+      "actor": "agent"
+    },
+    {
+      "event": "owner_refinement",
+      "summary": "Album Details: click artwork to open full size; remove dedicated full-size icon.",
+      "at": "2026-09-09T22:19:19.729281Z",
+      "actor": "user"
+    },
+    {
+      "summary": "Preserve current modal width, table geometry and total-length strip; no unrequested visual deviations from prior approved designs.",
+      "at": "2026-09-09T22:23:03.0811041Z",
+      "actor": "user",
+      "event": "owner_refinement"
+    },
+    {
+      "actor": "user",
+      "at": "2026-09-09T22:24:07.0882924Z",
+      "event": "owner_refinement",
+      "summary": "Cover Look Up: click whole card to select artwork; remove Select button."
+    },
+    {
+      "actor": "user",
+      "event": "owner_refinement",
+      "summary": "Style LOCAL COVERS, REMOTE COVERS and POSSIBLE MATCHES as uppercase section headers.",
+      "at": "2026-09-09T22:25:23.1445704Z"
+    },
+    {
+      "summary": "Hide Remote Covers and Possible Matches, including their headings, when their respective image lists are empty.",
+      "actor": "user",
+      "event": "owner_refinement",
+      "at": "2026-09-09T22:26:31.7680222Z"
+    },
+    {
+      "actor": "user",
+      "at": "2026-09-09T22:28:38.5910294Z",
+      "summary": "Always show LOCAL COVERS; display No local cover art. when empty.",
+      "event": "owner_refinement"
+    },
+    {
+      "at": "2026-09-09T22:29:56.8239349Z",
+      "actor": "user",
+      "event": "owner_refinement",
+      "summary": "Rename View lookup to Open Cover Look Up; notification card activation opens its specific album lookup."
+    },
+    {
+      "at": "2026-09-09T22:31:51.6422581Z",
+      "actor": "user",
+      "summary": "Promote Find Better Art to dominant action before cover results; remove section/footer duplicates.",
+      "event": "owner_refinement"
+    },
+    {
+      "event": "owner_refinement",
+      "summary": "Add named source icons for Apple, Spotify, Deezer, Bandcamp, Discogs, CAA and YouTube Music; add completed Nothing found preview.",
+      "actor": "user",
+      "at": "2026-09-09T22:35:35.184178Z"
+    },
+    {
+      "at": "2026-09-09T22:38:46.5217974Z",
+      "event": "owner_refinement",
+      "summary": "Simplify automatic provider search; compact growing image input; unified solid buttons; compare primary Find Better Art at top or footer.",
+      "actor": "user"
+    },
+    {
+      "at": "2026-09-09T22:41:44.1424918Z",
+      "event": "owner_refinement",
+      "summary": "Artist Tree only folded rail; separate from Settings; stronger icon treatment and expanded/folded infographic.",
+      "actor": "user"
+    },
+    {
+      "event": "owner_refinement",
+      "actor": "user",
+      "at": "2026-09-09T22:43:55.938428Z",
+      "summary": "Keep existing Edit Tags filename list styling; retain only added row drag/reorder."
+    },
+    {
+      "event": "owner_refinement",
+      "actor": "user",
+      "at": "2026-09-09T22:45:51.7280183Z",
+      "summary": "Preserve drag-across multi-file selection; use dedicated grips for reordering."
+    },
+    {
+      "event": "owner_refinement",
+      "actor": "user",
+      "summary": "Remove internal horizontal dividers from action-required popups.",
+      "at": "2026-09-09T22:47:02.6682459Z"
+    },
+    {
+      "at": "2026-09-09T22:47:50.2909737Z",
+      "summary": "Size compact alerts to content; remove unused horizontal space after messages.",
+      "actor": "user",
+      "event": "owner_refinement"
+    },
+    {
+      "event": "owner_refinement",
+      "at": "2026-09-09T22:52:02.2571386Z",
+      "actor": "user",
+      "summary": "Embed device scope in existing Appearance tab and editor flow."
+    },
+    {
+      "at": "2026-09-09T22:54:34.6195529Z",
+      "actor": "user",
+      "summary": "Use app anchored dropdown styling instead of native select.",
+      "event": "owner_refinement"
+    },
+    {
+      "actor": "user",
+      "at": "2026-09-09T22:56:59.7790525Z",
+      "event": "owner_refinement",
+      "summary": "Match search outline to the whole input and show search, clear and filter actions."
+    },
+    {
+      "event": "owner_refinement",
+      "actor": "user",
+      "summary": "Audit current button colors and compare three unified primary families.",
+      "at": "2026-09-09T22:58:53.2699495Z"
+    },
+    {
+      "actor": "user",
+      "summary": "Replace monochrome source icons with recognizable brand-color service logos.",
+      "at": "2026-09-09T23:01:31.0295717Z",
+      "event": "owner_refinement"
+    },
+    {
+      "event": "owner_refinement",
+      "actor": "user",
+      "at": "2026-09-09T23:09:47.6209788Z",
+      "summary": "Add Library Scan state mocks grounded in empty-library app inspection and production state logic."
+    },
+    {
+      "event": "owner_refinement",
+      "at": "2026-09-10T01:37:46.5811948Z",
+      "summary": "Use shared anchored Dropdown for Library status context menu.",
+      "actor": "user"
+    },
+    {
+      "summary": "Align source-service rows across cover cards regardless of title wrapping.",
+      "actor": "user",
+      "event": "owner_refinement",
+      "at": "2026-09-10T05:15:25.0787289Z"
+    },
+    {
+      "summary": "Show live image counts on all cover subsection headings.",
+      "at": "2026-09-10T05:16:41.6872785Z",
+      "actor": "user",
+      "event": "owner_refinement"
+    },
+    {
+      "actor": "user",
+      "at": "2026-09-10T05:18:03.5342968Z",
+      "event": "owner_refinement",
+      "summary": "Suppress insertion carets on all non-editable UI; preserve editable field carets and keyboard focus."
+    },
+    {
+      "event": "owner_refinement",
+      "at": "2026-09-10T05:19:41.2950749Z",
+      "actor": "user",
+      "summary": "Remove redundant helper line below artwork paste input."
+    },
+    {
+      "actor": "user",
+      "at": "2026-09-10T05:23:13.1436048Z",
+      "summary": "Reject invented expanded tree and green rail; restore current flat Artist Tree with header collapse and neutral folded rail.",
+      "event": "owner_refinement"
+    },
+    {
+      "event": "owner_refinement",
+      "summary": "Remove hover outlines from drag handles.",
+      "at": "2026-09-10T05:24:44.5840292Z",
+      "actor": "user"
+    },
+    {
+      "summary": "Move Edit Tags selection accent to whole-row left edge before drag grip.",
+      "event": "owner_refinement",
+      "at": "2026-09-10T05:25:29.7580707Z",
+      "actor": "user"
+    },
+    {
+      "event": "owner_refinement",
+      "at": "2026-09-10T05:26:13.5329361Z",
+      "summary": "Use lightweight borderless tree pictogram integrated into folded rail.",
+      "actor": "user"
+    },
+    {
+      "event": "owner_refinement",
+      "actor": "user",
+      "at": "2026-09-10T05:27:04.4548506Z",
+      "summary": "Move collapse before Artists; use a slim borderless chevron."
+    },
+    {
+      "summary": "Edit Tags form is component conversion only; preserve existing production layout, fields and behavior. Simplified mock is not a replacement design.",
+      "event": "owner_refinement",
+      "actor": "user",
+      "at": "2026-09-10T05:27:38.7699127Z"
+    },
+    {
+      "at": "2026-09-10T05:28:49.7061236Z",
+      "summary": "Reduce discard-confirmation width and internal spacing.",
+      "actor": "user",
+      "event": "owner_refinement"
+    },
+    {
+      "at": "2026-09-10T05:32:23.1643804Z",
+      "event": "owner_refinement",
+      "summary": "Mobile/TV Follow Web/Desktop or Customize; neutral device selector; preserve current Appearance layout/navigation.",
+      "actor": "user"
+    },
+    {
+      "at": "2026-09-10T05:38:23.1598019Z",
+      "summary": "Rework Scan as FullPage content only, with spinner/progress map and revised actions; preserve shell/player.",
+      "event": "owner_refinement",
+      "actor": "user"
+    },
+    {
+      "actor": "user",
+      "at": "2026-09-10T05:40:22.6992333Z",
+      "event": "owner_refinement",
+      "summary": "Strengthen Find Better Art/Save fill; use trailing Google/Yandex logos and external-link treatment."
+    },
+    {
+      "summary": "Keep all reached scan steps bright, including earlier circles and connectors.",
+      "event": "owner_refinement",
+      "at": "2026-09-10T05:41:39.410876Z",
+      "actor": "user"
+    },
+    {
+      "summary": "Use neutral styling without fading anchor accents for select-input dropdowns.",
+      "at": "2026-09-10T05:42:31.4169714Z",
+      "event": "owner_refinement",
+      "actor": "user"
+    },
+    {
+      "event": "owner_refinement",
+      "actor": "user",
+      "at": "2026-09-10T05:43:22.193027Z",
+      "summary": "Redesign checkbox/radio controls with neutral selected, hover, focus and disabled styling instead of green."
+    },
+    {
+      "at": "2026-09-10T05:44:13.2100751Z",
+      "actor": "user",
+      "event": "owner_refinement",
+      "summary": "Reject bright primary fills; use solid dark-neutral charcoal affirming actions."
+    },
+    {
+      "at": "2026-09-10T05:45:04.9657363Z",
+      "event": "owner_refinement",
+      "summary": "Try muted gray-green consistently on mock action buttons; preserve playback green.",
+      "actor": "user"
+    },
+    {
+      "event": "owner_refinement",
+      "at": "2026-09-10T05:46:00.4543901Z",
+      "summary": "Move clear X to rightmost search-action position.",
+      "actor": "user"
+    },
+    {
+      "event": "owner_requirement",
+      "actor": "user",
+      "summary": "Apply the shown shared scrollbar style globally to every scrollable app surface during implementation.",
+      "at": "2026-09-10T05:46:52.0157351Z"
+    },
+    {
+      "event": "owner_refinement",
+      "summary": "Replace modal-like status specimen with a visibly open dropdown at app-bar scale.",
+      "actor": "user",
+      "at": "2026-09-10T05:56:51.1375374Z"
+    },
+    {
+      "summary": "Use subtle theme-player hover tint on action buttons; remove bright Cancel outline; preserve player controls.",
+      "event": "owner_refinement",
+      "at": "2026-09-10T05:59:05.4020857Z",
+      "actor": "user"
+    },
+    {
+      "actor": "user",
+      "at": "2026-09-10T06:02:17.977772Z",
+      "summary": "Correct search specimens: filter button belongs to Search with filters; clear remains rightmost.",
+      "event": "owner_refinement"
+    },
+    {
+      "actor": "user",
+      "summary": "Neutral status dropdown interaction; remove border across connected trigger.",
+      "event": "owner_refinement",
+      "at": "2026-09-10T06:04:05.6135394Z"
+    },
+    {
+      "event": "owner_refinement",
+      "actor": "user",
+      "at": "2026-09-10T06:05:32.0334061Z",
+      "summary": "Restore current bordered Library status button and resting-state preview."
+    },
+    {
+      "at": "2026-09-10T06:06:41.9347326Z",
+      "actor": "user",
+      "summary": "Per-tab Mobile/TV inheritance; hide editor details while following Web/Desktop.",
+      "event": "owner_refinement"
+    },
+    {
+      "summary": "Keep destructive and error interactions red; prevent green/player hover outlines.",
+      "event": "owner_refinement",
+      "actor": "user",
+      "at": "2026-09-10T06:08:05.002685Z"
+    },
+    {
+      "at": "2026-09-10T06:09:55.8432572Z",
+      "actor": "user",
+      "summary": "Fix Edit Tags final-position drop target and insertion marker.",
+      "event": "owner_refinement"
+    },
+    {
+      "at": "2026-09-10T06:12:05.795976Z",
+      "event": "owner_refinement",
+      "summary": "Reuse established settings-branch tab styles.",
+      "actor": "user"
+    },
+    {
+      "event": "owner_refinement",
+      "actor": "user",
+      "summary": "Add matching in-context action/icon button showcase.",
+      "at": "2026-09-10T06:14:19.4885292Z"
+    },
+    {
+      "summary": "Remove generic green hover outline from all dropdown rows, including select options.",
+      "at": "2026-09-10T06:15:32.8501003Z",
+      "actor": "user",
+      "event": "owner_refinement"
+    },
+    {
+      "at": "2026-09-10T06:16:42.4666004Z",
+      "actor": "user",
+      "event": "owner_refinement",
+      "summary": "Center dropdown chevron using SVG geometry."
+    },
+    {
+      "actor": "user",
+      "event": "owner_refinement",
+      "summary": "Fix missing border token causing invisible dropdown top edge.",
+      "at": "2026-09-10T06:18:09.8801738Z"
+    },
+    {
+      "actor": "user",
+      "summary": "Replace generic bright-green hover with shared muted player-derived tokens; record app-wide requirement.",
+      "at": "2026-09-10T06:19:16.3458104Z",
+      "event": "owner_refinement"
+    },
+    {
+      "actor": "user",
+      "event": "owner_refinement",
+      "summary": "Remove tab gaps; preserve existing settings tab design.",
+      "at": "2026-09-10T06:20:05.0232095Z"
+    },
+    {
+      "actor": "user",
+      "at": "2026-09-10T06:28:45.9364175Z",
+      "event": "owner_refinement",
+      "summary": "Restore Browse Library shared hover transition."
+    },
+    {
+      "summary": "Align dropdown and app-bar divider positions and line thickness.",
+      "actor": "user",
+      "at": "2026-09-10T06:30:15.6950307Z",
+      "event": "owner_refinement"
+    },
+    {
+      "summary": "Use a many-branched bare tree symbol for Artist Tree instead of a pine.",
+      "actor": "user",
+      "event": "owner_refinement",
+      "at": "2026-09-10T06:31:28.2531381Z"
+    },
+    {
+      "at": "2026-09-10T06:32:42.4157108Z",
+      "actor": "user",
+      "summary": "Add user-selectable outlined versus bare action-button preview.",
+      "event": "owner_refinement"
+    },
+    {
+      "event": "owner_refinement",
+      "summary": "Add full-page Artist Tree folding and responsive gallery mock.",
+      "actor": "user",
+      "at": "2026-09-10T06:34:58.8036264Z"
+    },
+    {
+      "event": "approved",
+      "summary": "All final mocks approved; implementation plan requested.",
+      "at": "2026-09-10T06:58:58.2266005Z",
+      "actor": "user"
+    },
+    {
+      "event": "approval_scope_clarification",
+      "summary": "Preserve the overall real main-page look; full-page mock is only a folding/reflow reference, not a redesign.",
+      "at": "2026-09-10T06:58:58.2266005Z",
+      "actor": "user"
+    }
+  ],
+  "artifactType": "screen",
+  "source": {
+    "currentAppScreenshots": [
+      "references/album-details.png",
+      "references/cover-lookup.png",
+      "references/notifications.png"
+    ],
+    "promptPath": "prompt.md",
+    "kind": "local_mockup",
+    "path": "index.html"
+  },
+  "status": "approved",
+  "schemaVersion": 1,
+  "createdAt": "2026-09-09T21:10:14.3369202Z",
+  "implementation": {
+    "implementedAt": null
+  }
+}

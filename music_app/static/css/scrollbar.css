@@ -3,24 +3,28 @@
   --scrollbar-thumb: color-mix(in srgb, var(--text, #eee) 18%, transparent);
   --scrollbar-thumb-hover: color-mix(in srgb, var(--text, #eee) 30%, transparent);
 }
-:is(.ui-scrollbar, .gallery-scrollbar, #utility-modal, #utility-modal *, #app-form-modal, #app-form-modal *) {
+:is(body, body *, .ui-scrollbar, .gallery-scrollbar) {
   scrollbar-width: thin;
   scrollbar-color: var(--scrollbar-thumb) transparent;
 }
-:is(.ui-scrollbar, .gallery-scrollbar, #utility-modal, #utility-modal *, #app-form-modal, #app-form-modal *)::-webkit-scrollbar {
+:is(body, body *, .ui-scrollbar, .gallery-scrollbar)::-webkit-scrollbar {
   width: 10px;
   height: 10px;
 }
-:is(.ui-scrollbar, .gallery-scrollbar, #utility-modal, #utility-modal *, #app-form-modal, #app-form-modal *)::-webkit-scrollbar-track,
-:is(.ui-scrollbar, .gallery-scrollbar, #utility-modal, #utility-modal *, #app-form-modal, #app-form-modal *)::-webkit-scrollbar-corner {
+:is(body, body *, .ui-scrollbar, .gallery-scrollbar)::-webkit-scrollbar-track,
+:is(body, body *, .ui-scrollbar, .gallery-scrollbar)::-webkit-scrollbar-corner {
   background: transparent;
 }
-:is(.ui-scrollbar, .gallery-scrollbar, #utility-modal, #utility-modal *, #app-form-modal, #app-form-modal *)::-webkit-scrollbar-thumb {
+:is(body, body *, .ui-scrollbar, .gallery-scrollbar)::-webkit-scrollbar-thumb {
   border: 3px solid transparent;
   border-radius: 99px;
   background: var(--scrollbar-thumb);
   background-clip: padding-box;
 }
-:is(.ui-scrollbar, .gallery-scrollbar, #utility-modal, #utility-modal *, #app-form-modal, #app-form-modal *)::-webkit-scrollbar-thumb:hover {
+:is(body, body *, .ui-scrollbar, .gallery-scrollbar)::-webkit-scrollbar-thumb:hover {
   background-color: var(--scrollbar-thumb-hover);
+}
+
+@media (forced-colors: active) {
+  :is(body, body *, .ui-scrollbar, .gallery-scrollbar) { scrollbar-color: auto; }
 }

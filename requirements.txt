@@ -8,7 +8,7 @@ pillow
 imageio-ffmpeg==0.6.0
 ytmusicapi
 pytest
-psycopg[binary]
+psycopg[binary,pool]
 zstandard
 argon2-cffi
 aiosmtplib

@@ -101,6 +101,9 @@ function loadHelpers(overrides = {}) {
       }
     },
     pollStatus() {},
+    claimLibraryStatusAction: () => ({}),
+    settleLibraryStatusAction: () => true,
+    scheduleStatusPoll(delay) { context.scheduleBrowserTimeout(context.pollStatus, delay); },
     async fetch(url, options = {}) {
       calls.fetches.push([url, options]);
       if (url === '/library-settings' && (!options.method || options.method === 'GET')) {
@@ -757,4 +760,14 @@ test('automatic move switches are UI-only and reveal destinations only while ena
   assert.equal(context.serializeLibrarySettingsDraft(context.getLibrarySettingsDraft()).move_policy.auto_move_rated_to_main, undefined);
   owner.allowedActions['library.settings.manage'] = false;
   assert.match(render(), /disabled/);
+});
+
+test('mobile Library path actions remain read-only despite server manage permission', () => {
+  const { context, calls } = loadHelpers({ isMobileClient: () => true });
+  const event = { target: { closest: () => ({}) }, preventDefault() {} };
+  assert.equal(context.handleLibrarySettingsClick(event), true);
+  assert.equal(calls.fetches.length, 0);
+  assert.equal(context.librarySettingsReadOnlyClient(), true);
+  context.isMobileClient = () => false;
+  assert.equal(context.librarySettingsReadOnlyClient(), false);
 });

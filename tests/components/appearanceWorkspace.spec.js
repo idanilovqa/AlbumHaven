@@ -25,12 +25,13 @@ async function mount(page, method, options = {}) {
   </body></html>` }));
   await page.route('**/account/appearance', route => route.fulfill({ json: { ...saved, csrf_token: 'owned-component-token' } }));
   await page.goto(appearanceUrl);
-  const cssFiles = options.utilityShell ? [
+  const cssFiles = (options.utilityShell || options.appChrome) ? [
     'runtime/base-layout.css', 'runtime/utilities.css', 'runtime/non-album-and-player.css',
     'runtime/shell-persistent-player.css', 'navigation-tree.css', 'appearance-backgrounds.css', 'button-component.css',
   ] : ['button-component.css', 'appearance-backgrounds.css'];
+  if (options.appChrome) cssFiles.splice(cssFiles.indexOf('appearance-backgrounds.css'), 0, 'app-chrome.css');
   for (const file of cssFiles) await page.addStyleTag({ path: path.join(staticRoot, 'css', file) });
-  for (const file of ['button-component.js', 'runtime/alert-components.js', 'editor-page.js', 'appearance-palettes.js', 'appearance-backgrounds.js']) await page.addScriptTag({ path: path.join(staticRoot, 'js', file) });
+  for (const file of ['button-component.js', 'runtime/alert-components.js', 'editor-page.js', 'appearance-palettes.js', 'appearance-device-profiles.js', 'appearance-backgrounds.js']) await page.addScriptTag({ path: path.join(staticRoot, 'js', file) });
   await page.evaluate(async method => {
     const instance = window.AlbumHavenAppearance.instance;
     if (!await instance.load()) throw new Error('Component appearance setup must load successfully.');
@@ -118,6 +119,19 @@ test('custom controls keep opaque action pods while the player surface remains n
   for (const component of ['pod', 'tail', 'idle']) expect(paint[component], component).toBe('rgb(7, 24, 39)');
 });
 
+test('Appearance detail remains vertical-only when its content fits the available width', async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await mount(page, 'mountSeekbar', { utilityShell: true });
+  await page.locator('#editor').evaluate(editor => {
+    const detail = document.createElement('main');
+    detail.className = 'utility-detail';
+    editor.classList.remove('utility-detail');
+    editor.replaceWith(detail);
+    detail.append(editor);
+  });
+  await expect(page.locator('#utility-modal .utility-detail')).toHaveCSS('overflow-x', 'hidden');
+});
+
 for (const width of [900, 901, 1024, 1280]) {
   test(`Album page workspace fits the production Utilities shell at ${width}px`, async ({ page }) => {
     await page.setViewportSize({ width, height: 900 });
@@ -139,6 +153,172 @@ for (const width of [900, 901, 1024, 1280]) {
   });
 }
 
+test('tables resolve their surface locally inside dark panels on a light page', async ({ page }) => {
+  await page.setContent(`<html style="--appearance-card:#fff7e5;--appearance-ink:#202124">
+    <div class="compact-data-table" data-cdt-frame="outline">Light content table</div>
+    <section style="--appearance-card:#14221b;--appearance-ink:#e8f2eb">
+      <div class="compact-data-table" data-cdt-frame="outline">Dark Settings table</div>
+      <div class="compact-data-table" data-cdt-frame="inset">Dark inset table</div>
+    </section></html>`);
+  for (const file of ['runtime/compact-data-table.css', 'appearance-backgrounds.css']) {
+    await page.addStyleTag({ path: path.join(staticRoot, 'css', file) });
+  }
+  const colors = await page.locator('.compact-data-table').evaluateAll(tables => tables.map(table => {
+    const canvas = document.createElement('canvas');
+    const context = canvas.getContext('2d');
+    context.fillStyle = getComputedStyle(table).backgroundColor;
+    context.fillRect(0, 0, 1, 1);
+    return [...context.getImageData(0, 0, 1, 1).data].slice(0, 3);
+  }));
+  expect(Math.min(...colors[0])).toBeGreaterThan(200);
+  for (const dark of colors.slice(1)) expect(Math.max(...dark)).toBeLessThan(65);
+});
+
+for (const palette of ['black', 'parchment-pine']) {
+  test(`dark ${palette} tables stay close to the panel rather than washed-out grey`, async ({ page }) => {
+    await page.setContent(`<html data-appearance-mode="${palette === 'black' ? 'dark' : 'light'}" data-appearance-palette="${palette}"
+      style="--appearance-card:#333;--appearance-ink:#eee;--appearance-panel-background:#101814;--appearance-panel-control:#303830;--appearance-panel-ink:#eee;--panel:#101814;--text:#eee">
+      <section class="utility-modal-dialog"><div class="album-track-table"><div class="compact-data-table" data-cdt-frame="outline"><div class="compact-data-table-header">Track</div></div></div></section></html>`);
+    for (const file of ['runtime/compact-data-table.css', 'runtime/album-track-table.css', 'appearance-backgrounds.css']) {
+      await page.addStyleTag({ path: path.join(staticRoot, 'css', file) });
+    }
+    const colors = await page.locator('.compact-data-table, .compact-data-table-header').evaluateAll(elements => elements.map(element => {
+      const context = document.createElement('canvas').getContext('2d');
+      context.fillStyle = getComputedStyle(element).backgroundColor;
+      context.fillRect(0, 0, 1, 1);
+      return [...context.getImageData(0, 0, 1, 1).data].slice(0, 3);
+    }));
+    for (const color of colors) expect(Math.max(...color)).toBeLessThan(36);
+  });
+}
+
+for (const palette of ['black', 'parchment-pine']) {
+  test(`dark table bodies and headers exactly match their owning panel in ${palette}`, async ({ page }) => {
+    const table = `<div class="compact-data-table" data-cdt-frame="outline"><div class="compact-data-table-header">Header</div><div class="compact-data-table-row">Row</div></div>`;
+    await page.setContent(`<html data-appearance-mode="${palette === 'black' ? 'dark' : 'light'}" data-appearance-palette="${palette}" style="--appearance-card:#333;--appearance-ink:#eee;--appearance-panel-background:#101814;--panel:#303030;--text:#eee">
+      <section class="utility-modal-dialog">
+        <div class="album-track-table">${table}</div>
+        <div class="utility-detected-table">${table}</div>
+        <div class="utility-problem-exclusions-detail">${table}</div>
+      </section></html>`);
+    for (const file of ['runtime/compact-data-table.css', 'runtime/album-track-table.css', 'runtime/utilities.css', 'appearance-backgrounds.css']) {
+      await page.addStyleTag({ path: path.join(staticRoot, 'css', file) });
+    }
+    await expect(page.locator('.utility-modal-dialog')).toHaveCSS('background-color', 'rgb(16, 24, 20)');
+    const surfaces = page.locator('.compact-data-table, .compact-data-table-header');
+    for (let index = 0; index < 6; index += 1) {
+      await expect(surfaces.nth(index)).toHaveCSS('background-color', 'rgb(16, 24, 20)');
+    }
+  });
+}
+
+test('light Problematic Files tables share the album-details table presentation', async ({ page }) => {
+  const table = `<div class="compact-data-table" data-cdt-frame="inset">
+    <div class="compact-data-table-header"><span role="columnheader">Track / file</span></div>
+    <div class="compact-data-table-row">Example track</div></div>`;
+  await page.setContent(`<html data-appearance-mode="light" style="--appearance-card:#f5f0e4;--appearance-ink:#202124;--appearance-muted:#505762;--appearance-line:#9aabbc;--panel:#f5f0e4;--text:#202124;--muted:#505762">
+    <div class="album-track-table">${table}</div>
+    <div class="utility-detected-table">${table}</div>
+    <div class="utility-track-problem-table">${table}</div></html>`);
+  for (const file of ['runtime/compact-data-table.css', 'runtime/album-track-table.css', 'runtime/utilities.css', 'appearance-backgrounds.css']) {
+    await page.addStyleTag({ path: path.join(staticRoot, 'css', file) });
+  }
+  const read = element => {
+    const table = getComputedStyle(element);
+    const header = getComputedStyle(element.querySelector('.compact-data-table-header'));
+    const label = getComputedStyle(element.querySelector('[role="columnheader"]'));
+    return { background: table.backgroundColor, border: table.borderTopColor, radius: table.borderTopLeftRadius,
+      header: header.backgroundColor, headerRadius: header.borderTopLeftRadius, ink: label.color };
+  };
+  const tables = page.locator('.compact-data-table');
+  const reference = await tables.first().evaluate(read);
+  for (let index = 1; index < 3; index += 1) {
+    expect(await tables.nth(index).evaluate(read)).toEqual(reference);
+  }
+  const rows = page.locator('.compact-data-table-row');
+  await rows.first().hover();
+  const hover = await rows.first().evaluate(element => getComputedStyle(element).backgroundColor);
+  for (let index = 1; index < 3; index += 1) {
+    await rows.nth(index).hover();
+    await expect(rows.nth(index)).toHaveCSS('background-color', hover);
+  }
+  await page.locator('html').evaluate(element => element.dataset.appearanceMode = 'dark');
+  await page.mouse.move(0, 0);
+  await expect(tables.nth(1)).toHaveCSS('border-top-left-radius', '8px');
+  const darkSurface = await tables.nth(1).evaluate(element => getComputedStyle(element).backgroundColor);
+  await expect(tables.nth(1).locator('.compact-data-table-header')).toHaveCSS('background-color', darkSurface);
+});
+
+async function mountArtistFamilyCards(page, appearanceMode) {
+  await page.setContent(`<!doctype html><html data-appearance-palette="fixture" data-appearance-mode="${appearanceMode}"><body>
+    <button class="ui-filter-pill artist-family-panel__artist">
+      <span class="artist-family-panel__marker"></span>
+      <span class="artist-family-panel__name">Default artist</span>
+      <span class="artist-family-panel__count">2</span>
+    </button>
+    <button class="ui-filter-pill artist-family-panel__artist is-active">
+      <span class="artist-family-panel__marker"></span>
+      <span class="artist-family-panel__name">Active artist</span>
+      <span class="artist-family-panel__count">4</span>
+    </button>
+  </body></html>`);
+  for (const file of ['gallery-main.css', 'appearance-backgrounds.css', 'button-component.css']) {
+    await page.addStyleTag({ path: path.join(staticRoot, 'css', file) });
+  }
+  await page.locator('html').evaluate(element => {
+    element.style.setProperty('--appearance-card', 'rgb(17, 17, 17)');
+    element.style.setProperty('--appearance-control', 'rgb(20, 80, 45)');
+    element.style.setProperty('--appearance-item-hover', 'rgb(24, 110, 55)');
+    element.style.setProperty('--appearance-item-selected', 'rgb(28, 130, 65)');
+    element.style.setProperty('--appearance-play', 'rgb(75, 193, 115)');
+    element.style.setProperty('--appearance-play-ink', 'rgb(8, 56, 32)');
+    element.style.setProperty('--appearance-interaction-outline', 'rgb(200, 100, 50)');
+  });
+}
+
+test('light Artist Family selection uses a translucent green fill through hover and focus', async ({ page }) => {
+  await mountArtistFamilyCards(page, 'light');
+  await page.locator('html').evaluate(root => root.style.setProperty('--appearance-card', 'rgb(255, 247, 229)'));
+  const cards = page.locator('.artist-family-panel__artist');
+  const unselected = cards.nth(0);
+  const selected = cards.nth(1);
+  const selectedName = selected.locator('.artist-family-panel__name');
+  const selectedCount = selected.locator('.artist-family-panel__count');
+
+  await expect(unselected).toHaveCSS('background-color', 'rgb(255, 247, 229)');
+  await expect(selected).toHaveCSS('background-color', 'color(srgb 0.294118 0.756863 0.45098 / 0.2)');
+  await expect(selected).toHaveCSS('border-color', 'rgb(75, 193, 115)');
+  await expect(selectedName).toHaveCSS('color', 'rgb(8, 56, 32)');
+  await expect(selectedCount).toHaveCSS('background-color', 'color(srgb 0.872941 0.93051 0.817569)');
+  await expect(selectedCount).toHaveCSS('color', 'rgb(8, 56, 32)');
+  await expect(selected.locator('.artist-family-panel__marker')).toHaveCSS('visibility', 'visible');
+
+  await unselected.hover();
+  await expect(unselected).toHaveCSS('background-color', 'rgb(255, 247, 229)');
+  await selected.hover();
+  await expect(selected).toHaveCSS('background-color', 'color(srgb 0.294118 0.756863 0.45098 / 0.2)');
+  await page.mouse.down();
+  await expect(selected).toHaveCSS('background-color', 'color(srgb 0.294118 0.756863 0.45098 / 0.2)');
+  await page.mouse.up();
+  await page.mouse.move(500, 500);
+  await page.keyboard.press('Shift+Tab');
+  await page.keyboard.press('Tab');
+  await expect(selected).toBeFocused();
+  await expect(selected).toHaveCSS('background-color', 'color(srgb 0.294118 0.756863 0.45098 / 0.2)');
+  await expect(selected).toHaveCSS('border-color', 'rgb(200, 100, 50)');
+});
+
+test('dark Artist Family selection keeps the border-only treatment', async ({ page }) => {
+  await mountArtistFamilyCards(page, 'dark');
+  const cards = page.locator('.artist-family-panel__artist');
+  const unselected = cards.nth(0);
+  const selected = cards.nth(1);
+
+  await expect(unselected).toHaveCSS('background-color', 'rgb(17, 17, 17)');
+  await expect(selected).toHaveCSS('background-color', 'rgb(17, 17, 17)');
+  await expect(selected).toHaveCSS('border-color', 'rgb(75, 193, 115)');
+});
+
 for (const palette of [null, 'steelblue']) {
   test(`Selection swatches retain their own colors during hover and press with palette ${palette}`, async ({ page }) => {
     await page.setViewportSize({ width: 1280, height: 1000 });
@@ -149,11 +329,12 @@ for (const palette of [null, 'steelblue']) {
       const rgb = `rgb(${hex.slice(1).match(/../g).map(part => parseInt(part, 16)).join(', ')})`;
       await swatch.hover();
       await expect.soft(swatch).toHaveCSS('background-color', rgb, { timeout: 800 });
-      await expect(swatch).toHaveCSS('outline-width', '1px');
+      await expect(swatch).toHaveCSS('border-top-width', '1px');
       await page.mouse.down();
       try { await expect.soft(swatch).toHaveCSS('background-color', rgb, { timeout: 800 }); }
       finally { await page.mouse.up(); }
       await expect(swatch).toHaveAttribute('aria-pressed', 'true');
+      await expect(swatch).toHaveCSS('outline-width', '2px');
     }
   });
 }
@@ -189,12 +370,15 @@ for (const action of ['theme', 'reset']) {
     }, action);
     const effective = await page.evaluate(() => {
       const api = window.AlbumHavenAppearance;
-      const resolved = api.resolveAppearance(api.instance.controller.getState().draft);
+      const draft = api.instance.controller.getState().draft;
+      const resolved = api.resolveAppearance(draft);
       const tokens = resolved.tokens;
+      const actions = api.resolveActionInteractionTokens(draft, resolved);
       const toRgb = value => { const probe = document.createElement('span'); probe.style.backgroundColor = value; document.body.append(probe); const result = getComputedStyle(probe).backgroundColor; probe.remove(); return result; };
-      return { hover: toRgb(tokens.hover), selected: toRgb(`color-mix(in srgb, ${tokens.ink} 10%, ${resolved.panel})`), control: toRgb(tokens.control) };
+      return { hover: toRgb(tokens.hover), selected: toRgb(`color-mix(in srgb, ${tokens.ink} 10%, ${resolved.panel})`),
+        actionHover: toRgb(actions.hoverBackground), actionPressed: toRgb(actions.pressedBackground) };
     });
-    for (const [index, state] of selectors.entries()) await expect(page.locator(`[data-preview-state="${state}"]`)).toHaveCSS('background-color', index === 1 ? effective.selected : index === 0 ? effective.hover : effective.control);
+    for (const [index, state] of selectors.entries()) await expect(page.locator(`[data-preview-state="${state}"]`)).toHaveCSS('background-color', [effective.hover, effective.selected, effective.actionHover, effective.actionPressed][index]);
     expect(await page.evaluate(() => document.documentElement.style.cssText)).toBe(before);
     await page.evaluate(() => window.AlbumHavenAppearance.instance.controller.cancel());
     await expect(page.locator('[data-preview-state="navigation-hover"]')).toHaveCSS('background-color', 'rgb(255, 17, 34)');
@@ -223,7 +407,7 @@ test('structured HEX fields display invalid text and block Save until correction
   }
 });
 
-test('unsaved palette stays in five previews while editor and shared footer retain the saved theme', async ({ page }) => {
+test('Main palette previews across five editors and the app while Cancel and Save retain account ownership', async ({ page }) => {
   await mount(page, 'mount', { sharedFooter: true });
   const expected = await page.evaluate(() => {
     const api = window.AlbumHavenAppearance;
@@ -248,23 +432,35 @@ test('unsaved palette stays in five previews while editor and shared footer reta
         document: token(document.documentElement) };
     }, { method, previewSelector }));
   }
-  expect(samples).toEqual(samples.map(({ method }) => ({ method, editor: expected.saved,
-    footer: expected.saved, preview: expected.draft, document: expected.saved })));
+  expect(samples).toEqual(samples.map(({ method }) => ({ method, editor: expected.draft,
+    footer: expected.draft, preview: expected.draft, document: expected.draft })));
   await page.locator('#utility-modal-footer [data-background-cancel]').click();
   expect(await page.evaluate(() => window.AlbumHavenAppearance.instance.controller.getState().dirty)).toBe(false);
+  expect(await page.evaluate(() => getComputedStyle(document.documentElement).getPropertyValue('--appearance-control').trim())).toBe(expected.saved);
   await page.evaluate(() => { window.AlbumHavenAppearance.instance.mount(document.getElementById('editor')); });
   await page.locator('[data-background-palette="silver"]').click();
+  await page.evaluate(() => window.AlbumHavenAppearance.instance.unmount());
+  expect(await page.evaluate(() => getComputedStyle(document.documentElement).getPropertyValue('--appearance-control').trim())).toBe(expected.saved);
+  await page.evaluate(() => window.AlbumHavenAppearance.instance.mount(document.getElementById('editor')));
+  let persisted;
   await page.route('**/account/appearance', route => {
-    if (route.request().method() !== 'PUT') return route.fallback();
-    const { expected_revision, applied_player_set, waveform_color_updates, ...preferences } = route.request().postDataJSON();
-    return route.fulfill({ json: { ...preferences, revision: expected_revision + 1, player_recent_sets: [] } });
+    if (route.request().method() === 'PUT') {
+      const { expected_revision, applied_player_set, waveform_color_updates, ...preferences } = route.request().postDataJSON();
+      persisted = { ...preferences, revision: expected_revision + 1, player_recent_sets: [], csrf_token: 'owned-component-token' };
+    }
+    return persisted ? route.fulfill({ json: persisted }) : route.fallback();
   });
   await page.locator('#utility-modal-footer [data-background-save]').click();
+  await expect(page.locator('#utility-modal-footer [data-background-save]')).toHaveText('Save');
   await expect(page.locator('html')).toHaveAttribute('data-appearance-palette', 'silver');
   await expect(page.locator('#utility-modal-footer [data-background-save]')).toBeDisabled();
   expect(await page.evaluate(() => ['.appearance-background-editor', '#utility-modal-footer', '[data-background-preview]']
     .map(selector => getComputedStyle(document.querySelector(selector)).getPropertyValue('--appearance-control').trim())))
     .toEqual([expected.draft, expected.draft, expected.draft]);
+  expect(persisted.palette_id).toBe('silver');
+  expect(await page.evaluate(() => window.AlbumHavenAppearance.instance.load())).toBe(true);
+  await expect(page.locator('html')).toHaveAttribute('data-appearance-palette', 'silver');
+  expect(await page.evaluate(() => window.AlbumHavenAppearance.instance.controller.getState().dirty)).toBe(false);
 });
 
 for (const method of ['mount', 'mountSeekbar']) {
@@ -272,15 +468,24 @@ for (const method of ['mount', 'mountSeekbar']) {
     await mount(page, method, { saved: { palette_id: null }, sharedFooter: true });
     const expected = await page.evaluate(() => {
       const api = window.AlbumHavenAppearance;
-      const tokens = api.resolveAppearance(api.instance.controller.getState().draft).tokens;
+      const appearance = api.resolveAppearance(api.instance.controller.getState().draft);
+      const tokens = appearance.tokens;
       const rgb = value => `rgb(${value.match(/\w\w/g).map(part => parseInt(part, 16)).join(', ')})`;
-      return { ink: rgb(tokens.ink), control: rgb(tokens.control), line: rgb(tokens.line) };
+      const selected = document.createElement('span');
+      selected.style.backgroundColor = `color-mix(in srgb, ${tokens.ink} 12%, ${tokens.control})`;
+      document.body.appendChild(selected);
+      const deviceControl = getComputedStyle(selected).backgroundColor;
+      selected.remove();
+      return { ink: rgb(tokens.ink), control: rgb(tokens.control), deviceControl, line: rgb(tokens.line) };
     });
-    const input = page.locator('.appearance-background-editor input[type=text]').first();
-    await expect(input).toHaveCSS('color', expected.ink);
-    await expect(input).toHaveCSS('background-color', expected.control);
-    await expect(input).toHaveCSS('border-top-color', expected.line);
-    await expect(page.locator('#utility-modal-footer [data-background-cancel]')).toHaveCSS('background-color', expected.control);
+    const themedControl = method === 'mount'
+      ? page.locator('[data-appearance-device="web_desktop"]')
+      : page.locator('.appearance-background-editor input[type=text]').first();
+    await expect(themedControl).toHaveCSS('color', expected.ink);
+    await expect(themedControl).toHaveCSS('background-color', method === 'mount' ? expected.deviceControl : expected.control);
+    await expect(themedControl).toHaveCSS('border-top-color', expected.line);
+    await expect(page.locator('#utility-modal-footer [data-background-cancel]')).toHaveCSS('background-color', 'rgba(0, 0, 0, 0)');
+    await expect(page.locator('#utility-modal-footer [data-background-cancel]')).toHaveCSS('color', expected.ink);
     await expect(page.locator('#utility-modal-footer [data-background-save]')).toHaveCSS('background-color', expected.control);
     await expect(page.locator('#utility-modal-footer [data-background-save]')).toHaveCSS('color', expected.ink);
     expect(await page.evaluate(() => document.documentElement.style.getPropertyValue('--appearance-ink'))).toBe('');
@@ -416,24 +621,125 @@ for (const field of ['fill', 'edge', 'handles.color']) {
   });
 }
 
-test('correcting Player surface start repairs the Main background HEX alias', async ({ page }) => {
-  await mount(page, 'mount', { saved: { player_style_override: {
+test('correcting Player surface start repairs validation across Main and Player editors', async ({ page }) => {
+  await mount(page, 'mountSeekbar', { saved: { player_style_override: {
     surface: { mode: 'gradient', angle: 0, start: '#0A2F24', end: '#0A1422' },
     controls: { fill: '#24B86B', border: '#86EFAC' },
     waveform: { fill: '#387F68', edge: '#AFD8C2' },
     handles: { color: '#AFD8C2' },
   } } });
-  await page.locator('[data-player-hex="background"]').fill('#BADHEX');
-  await expect(page.locator('[data-background-save]')).toBeDisabled();
-  await page.evaluate(() => window.AlbumHavenAppearance.instance.mountSeekbar(document.getElementById('editor'), { getSeekbarMode: () => 'waveform' }));
+  const surfaceStart = page.locator('[data-player-style-hex="surface.start"]');
   await page.locator('[data-player-tab-group="player"][data-player-tab="surface"]').click();
-  await page.locator('[data-player-style-hex="surface.start"]').fill('#345678');
+  await surfaceStart.fill('#BADHEX');
+  await expect(surfaceStart).toHaveAttribute('aria-invalid', 'true');
+  await expect(page.locator('[data-background-save]')).toBeDisabled();
+  await page.evaluate(() => window.AlbumHavenAppearance.instance.mount(document.getElementById('editor')));
+  await expect(page.locator('[data-player-hex="background"]')).toHaveCount(0);
+  await expect(page.locator('[data-background-save]')).toBeDisabled();
+  expect(await page.evaluate(() => window.AlbumHavenAppearance.instance.allowLeave(() => false))).toBe(false);
+  await page.evaluate(() => window.AlbumHavenAppearance.instance.mountSeekbar(document.getElementById('editor'), { getSeekbarMode: () => 'waveform' }));
+  await expect(surfaceStart).toHaveValue('#BADHEX');
+  await surfaceStart.fill('#345678');
+  await expect(surfaceStart).toHaveAttribute('aria-invalid', 'false');
   await expect(page.locator('[data-background-save]')).toBeEnabled();
   await page.evaluate(() => window.AlbumHavenAppearance.instance.mount(document.getElementById('editor')));
-  await expect(page.locator('[data-player-hex="background"]')).toHaveValue('#345678');
-  await expect(page.locator('[data-player-hex="background"]')).toHaveAttribute('aria-invalid', 'false');
+  await expect(page.locator('[data-background-player-summary]')).toContainText('#345678');
   await expect(page.locator('[data-background-save]')).toBeEnabled();
+  await page.locator('[data-background-cancel]').click();
+  await expect(page.locator('[data-background-save]')).toBeDisabled();
+  await page.evaluate(() => window.AlbumHavenAppearance.instance.mountSeekbar(document.getElementById('editor'), { getSeekbarMode: () => 'waveform' }));
+  await expect(surfaceStart).toHaveValue('#0A2F24');
 });
+
+test('Mobile appearance is selectable while TV stays disabled without an outer pill', async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await mount(page, 'mountSeekbar', { sharedFooter: true });
+  const controls = page.locator('.appearance-device-controls');
+  const desktop = page.locator('[data-appearance-device="web_desktop"]');
+  const mobile = page.locator('[data-appearance-device="mobile"]');
+  const tv = page.locator('[data-appearance-device="tv"]');
+  await expect(mobile).toBeEnabled();
+  await expect(tv).toBeDisabled();
+  await expect(tv).toHaveAttribute('aria-disabled', 'true');
+  await expect(page.locator('.appearance-device-mode')).toBeHidden();
+  await expect(desktop).toHaveAttribute('aria-pressed', 'true');
+  await mobile.click();
+  await expect(mobile).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.locator('[data-appearance-device-mode="follow"]')).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.locator('.appearance-device-fields')).toBeDisabled();
+  await expect(page.locator('[data-background-reset]')).toBeDisabled();
+  await page.locator('[data-appearance-device-mode="custom"]').click();
+  await expect(page.locator('.appearance-device-fields')).toBeEnabled();
+  await expect(page.locator('[data-background-reset]')).toBeEnabled();
+  await expect(controls).toHaveCSS('border-style', 'none');
+  await expect(controls).toHaveCSS('border-radius', '0px');
+  await expect(controls).toHaveCSS('background-color', 'rgba(0, 0, 0, 0)');
+});
+
+async function expectDisabledTv(page) {
+  const tv = page.locator('[data-appearance-device="tv"]');
+  await expect(tv).toBeDisabled();
+  await expect(tv).toHaveAttribute('aria-disabled', 'true');
+  await tv.evaluate(element => element.click());
+  await expect(page.locator('[data-appearance-device="mobile"]')).toHaveAttribute('aria-pressed', 'true');
+  await expect(tv).toHaveAttribute('aria-pressed', 'false');
+}
+
+for (const [method, section, setter, savedValue, cancelledValue] of [
+  ['mount', 'main', 'setPalette', 'paper', 'silver'],
+  ['mountAlerts', 'alerts', 'setAlertFamily', 'quiet', 'ember'],
+  ['mountAlbumPage', 'album', 'setAlbumPlayingRowAnimation', 'disabled', 'enabled'],
+  ['mountSelectionAccent', 'interaction', 'setSelectionAccent', { enabled: true, color: '#123456' }, { enabled: true, color: '#654321' }],
+  ['mountSeekbar', 'player', 'setCompactPlayerMotion', 'slow', 'normal'],
+]) {
+  test(`${method} preserves Mobile profile isolation and disabled TV after load save and cancel`, async ({ page }) => {
+    await mount(page, method);
+    let persisted;
+    await page.route('**/account/appearance', route => {
+      if (route.request().method() === 'PUT') {
+        const { expected_revision, applied_player_set, waveform_color_updates, ...saved } = route.request().postDataJSON();
+        persisted = { ...saved, revision: expected_revision + 1, csrf_token: 'owned-component-token' };
+      }
+      return persisted ? route.fulfill({ json: persisted }) : route.fallback();
+    });
+    const baseline = await page.evaluate(() => window.AlbumHavenAppearance.instance.controller.getState().deviceProfiles);
+    await page.locator('[data-appearance-device="mobile"]').click();
+    await expectDisabledTv(page);
+    await expect(page.locator('[data-appearance-device-mode="follow"]')).toHaveAttribute('aria-pressed', 'true');
+    await expect(page.locator('.appearance-device-fields')).toBeDisabled();
+    await expect(page.locator('[data-background-reset]')).toBeDisabled();
+    const inherited = await page.evaluate(() => window.AlbumHavenAppearance.instance.controller.getState().draft);
+    await page.evaluate(({ setter, value }) => window.AlbumHavenAppearance.instance.controller[setter](value), { setter, value: savedValue });
+    expect(await page.evaluate(() => window.AlbumHavenAppearance.instance.controller.getState().draft)).toEqual(inherited);
+    await page.locator('[data-appearance-device-mode="custom"]').click();
+    await expect(page.locator('.appearance-device-fields')).toBeEnabled();
+    await page.evaluate(({ setter, value }) => window.AlbumHavenAppearance.instance.controller[setter](value), { setter, value: savedValue });
+    await expect(page.locator('[data-background-save]')).toBeEnabled();
+    await page.locator('[data-background-save]').click();
+    await expect(page.locator('[data-background-save]')).toHaveText('Save');
+    await expect(page.locator('[data-background-save]')).toBeDisabled();
+    await expectDisabledTv(page);
+    expect(persisted.device_profiles.mobile.sections[section].mode).toBe('custom');
+    expect(persisted.device_profiles.mobile.sections[section].values).not.toEqual(baseline.web_desktop.sections[section].values);
+    for (const other of Object.keys(baseline.mobile.sections).filter(key => key !== section)) {
+      expect(persisted.device_profiles.mobile.sections[other]).toEqual(baseline.mobile.sections[other]);
+    }
+    const savedDraft = await page.evaluate(() => window.AlbumHavenAppearance.instance.controller.getState().draft);
+    await page.evaluate(({ setter, value }) => window.AlbumHavenAppearance.instance.controller[setter](value), { setter, value: cancelledValue });
+    await expect(page.locator('[data-background-save]')).toBeEnabled();
+    await page.locator('[data-background-cancel]').click();
+    expect(await page.evaluate(() => window.AlbumHavenAppearance.instance.controller.getState().draft)).toEqual(savedDraft);
+    await expectDisabledTv(page);
+    expect(await page.evaluate(() => window.AlbumHavenAppearance.instance.load())).toBe(true);
+    expect(await page.evaluate(() => window.AlbumHavenAppearance.instance.controller.getState().draft)).toEqual(savedDraft);
+    await expect(page.locator('[data-appearance-device-mode="custom"]')).toHaveAttribute('aria-pressed', 'true');
+    await expectDisabledTv(page);
+    await page.locator('[data-appearance-device="web_desktop"]').click();
+    expect(await page.evaluate(() => window.AlbumHavenAppearance.instance.controller.getState().deviceProfiles.web_desktop)).toEqual(baseline.web_desktop);
+    await expect(page.locator('[data-appearance-device="web_desktop"]')).toHaveAttribute('aria-pressed', 'true');
+    await expect(page.locator('[data-background-save]')).toBeDisabled();
+  });
+}
 
 test('actual Utilities close-button MouseEvent keeps the dirty editor until discard is accepted', async ({ page }) => {
   await mount(page, 'mountSeekbar');
@@ -463,4 +769,230 @@ test('actual Utilities close-button MouseEvent keeps the dirty editor until disc
   await page.evaluate(() => window.resolveAppearanceLeave(true));
   await expect(page.locator('#utility-modal')).toBeHidden();
   expect(await page.evaluate(() => window.AlbumHavenAppearance.instance.controller.getState().dirty)).toBe(false);
+});
+
+test('Parchment & Pine renders dark rail controls while preserving the light main theme', async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await mount(page, 'mount', { appChrome: true });
+  await page.evaluate(() => {
+    document.body.insertAdjacentHTML('beforeend', '<aside class="shell-navigation-rail"><h2>Artist Tree</h2><a href="#artist" class="artist-link navigation-tree-item">Artist</a><button class="ui-button ui-button--secondary">Tree control</button></aside><section class="shell-main-surface"><h2>Albums</h2></section>');
+    const api = window.AlbumHavenAppearance;
+    api.applyTheme({ ...api.instance.controller.getState().saved, palette_id: 'parchment-pine', interaction_overrides: {
+      ...api.instance.controller.getState().saved.interaction_overrides,
+      item_hover: null, item_selected: null, button_hover_background: null, button_pressed: null,
+    } }, document.documentElement);
+  });
+  const rail = page.locator('.shell-navigation-rail');
+  const artist = rail.locator('.artist-link');
+  await expect(rail).toHaveCSS('background-color', 'rgb(16, 21, 18)');
+  await expect(rail.locator('h2')).toHaveCSS('color', 'rgb(226, 240, 229)');
+  await expect(rail.locator('.ui-button')).toHaveCSS('background-color', 'rgb(32, 36, 34)');
+  await expect(rail.locator('.ui-button')).toHaveCSS('color', 'rgb(226, 240, 229)');
+  await expect(page.locator('.shell-main-surface')).toHaveCSS('background-color', 'rgb(232, 224, 207)');
+  await expect(page.locator('.shell-main-surface h2')).toHaveCSS('color', 'rgb(57, 60, 50)');
+  const contrast = locator => locator.evaluate(element => {
+      const style = getComputedStyle(element);
+      const canvas = document.createElement('canvas');
+      canvas.width = canvas.height = 1;
+      const context = canvas.getContext('2d');
+      const color = (...layers) => {
+        context.clearRect(0, 0, 1, 1);
+        for (const layer of layers) {
+          context.fillStyle = layer;
+          context.fillRect(0, 0, 1, 1);
+        }
+        return '#' + Array.from(context.getImageData(0, 0, 1, 1).data).slice(0, 3)
+          .map(channel => channel.toString(16).padStart(2, '0')).join('');
+      };
+      const background = color(getComputedStyle(element.closest('.shell-navigation-rail')).backgroundColor, style.backgroundColor);
+      return window.AlbumHavenAppearance.contrastRatio(color(style.color), background);
+  });
+  for (const selected of [false, true]) {
+    await artist.evaluate((element, active) => element.classList.toggle('is-selected', active), selected);
+    await artist.hover();
+    await expect(artist).toHaveCSS('color', 'rgb(226, 240, 229)');
+    await expect.poll(() => contrast(artist)).toBeGreaterThanOrEqual(4.5);
+  }
+  const control = rail.locator('.ui-button');
+  await control.hover();
+  await expect.poll(() => contrast(control)).toBeGreaterThanOrEqual(4.5);
+  await page.mouse.down();
+  try {
+    await expect.poll(() => contrast(control)).toBeGreaterThanOrEqual(4.5);
+  } finally {
+    await page.mouse.up();
+  }
+  await page.evaluate(() => {
+    const api = window.AlbumHavenAppearance;
+    const saved = api.instance.controller.getState().saved;
+    api.applyTheme({ ...saved, palette_id: 'parchment-pine', interaction_overrides: {
+      ...saved.interaction_overrides, button_hover_background: '#123456', button_pressed: '#234567',
+    } }, document.documentElement);
+  });
+  await control.hover();
+  await expect(control).toHaveCSS('background-color', 'rgb(18, 52, 86)');
+  await page.mouse.down();
+  try {
+    await expect(control).toHaveCSS('background-color', 'rgb(35, 69, 103)');
+  } finally {
+    await page.mouse.up();
+  }
+  await page.mouse.move(0, 0);
+  for (const source of ['automatic', 'theme', 'custom']) {
+    await page.evaluate(source => {
+      const api = window.AlbumHavenAppearance;
+      const saved = api.instance.controller.getState().saved;
+      api.applyTheme({ ...saved, palette_id: 'parchment-pine', interaction_overrides: {
+        ...saved.interaction_overrides,
+        item_outline: { source, color: source === 'custom' ? '#ABCDEF' : null },
+      } }, document.documentElement);
+    }, source);
+    await page.keyboard.press('Tab');
+    await control.focus();
+    await expect(control).toHaveCSS('outline-color', source === 'custom' ? 'rgb(171, 205, 239)' : 'rgb(129, 223, 169)');
+    await expect(control).not.toHaveCSS('outline-style', 'none');
+  }
+  await control.evaluate(element => element.blur());
+  const colors = await page.evaluate(() => {
+    const root = getComputedStyle(document.documentElement);
+    const rail = getComputedStyle(document.querySelector('.shell-navigation-rail'));
+    return {
+      main: root.getPropertyValue('--appearance-main-surface').trim(),
+      mainInk: root.getPropertyValue('--appearance-ink').trim(),
+      railInk: rail.getPropertyValue('--appearance-ink').trim(),
+      railMuted: rail.getPropertyValue('--appearance-muted').trim(),
+      railLine: rail.getPropertyValue('--appearance-line').trim(),
+      railControl: rail.getPropertyValue('--appearance-control').trim(),
+      scheme: rail.colorScheme,
+    };
+  });
+  expect(colors).toEqual({
+    main: '#E8E0CF', mainInk: '#393C32', railInk: '#E2F0E5',
+    railMuted: '#98A79B', railLine: '#354237', railControl: '#202422', scheme: 'dark',
+  });
+  await page.evaluate(() => {
+    const api = window.AlbumHavenAppearance;
+    api.applyTheme({ ...api.instance.controller.getState().saved, palette_id: 'paper' }, document.documentElement);
+  });
+  expect(await page.locator('.shell-navigation-rail').evaluate(rail => {
+    const root = getComputedStyle(document.documentElement);
+    const style = getComputedStyle(rail);
+    return ['ink', 'muted', 'line', 'control'].every(role =>
+      style.getPropertyValue('--appearance-' + role).trim() === root.getPropertyValue('--appearance-' + role).trim());
+  })).toBe(true);
+});
+
+
+test('Player preview surround matches the Settings page surface in light themes', async ({ page }) => {
+  await mount(page, 'mountSeekbar', {
+    utilityShell: true,
+    saved: { palette_id: 'silver', panel_index: 0 },
+  });
+
+  const colors = await page.locator('.player-preview-dock').evaluate((dock) => ({
+    page: getComputedStyle(document.querySelector('.utility-modal-body')).backgroundColor,
+    dock: getComputedStyle(dock).backgroundColor,
+    shield: getComputedStyle(dock, '::before').backgroundColor,
+  }));
+
+  expect(colors.dock).toBe(colors.page);
+  expect(colors.shield).toBe(colors.page);
+});
+
+test('docked player regular style checkbox persists and resets with Appearance', async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 1100 });
+  await mount(page, 'mountSeekbar', { utilityShell: true });
+  const checkbox = page.getByLabel('Keep regular player style when docked');
+  await expect(checkbox).not.toBeChecked();
+  await checkbox.check();
+  await expect(checkbox).toBeChecked();
+
+  let persisted;
+  await page.route('**/account/appearance', async route => {
+    if (route.request().method() !== 'PUT') return route.fallback();
+    persisted = route.request().postDataJSON();
+    return route.fulfill({ json: { ...persisted, revision: persisted.expected_revision + 1, player_recent_sets: [] } });
+  });
+  await page.locator('[data-background-save]').click();
+  expect(persisted.docked_compact_player_regular_style).toBe(true);
+  await expect(page.locator('html')).toHaveAttribute('data-docked-compact-player-regular-style', 'true');
+
+  await page.locator('[data-background-reset]').click();
+  await expect(checkbox).not.toBeChecked();
+  await page.getByRole('button', { name: 'Floating', exact: true }).click();
+  await expect(checkbox).toBeDisabled();
+});
+
+test('sidebar Appearance controls preview locally and persist through Save reload Cancel and Reset', async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 1100 });
+  await mount(page, 'mountSeekbar', { utilityShell: true, saved: { palette_id: 'parchment-pine' } });
+  const root = page.locator('html');
+  const preview = page.locator('[data-player-live-preview]');
+  const behavior = value => page.locator('button[data-docked-compact-player-behavior="' + value + '"]');
+  const motion = value => page.locator('button[data-compact-player-motion="' + value + '"]');
+  const source = value => page.locator('button[data-floating-player-edge-source="' + value + '"]');
+  const edge = locator => locator.evaluate(element => getComputedStyle(element).getPropertyValue('--compact-floating-edge-color').trim());
+  const savedEdge = await edge(root);
+  for (const value of ['follow_sidebar', 'float_on_collapse', 'artbox']) {
+    await behavior(value).click();
+    await expect(behavior(value)).toHaveAttribute('aria-pressed', 'true');
+  }
+  await motion('slow').click();
+  await expect(preview).toHaveAttribute('data-compact-player-motion', 'slow');
+  await expect(root).toHaveAttribute('data-compact-player-motion', 'normal');
+  await behavior('float_on_collapse').click();
+  await source('theme').click();
+  expect(await edge(preview)).toBe('#101512');
+  await source('player').click();
+  expect(await edge(preview)).toBe(savedEdge);
+  await source('custom').click();
+  const color = page.getByLabel('Custom floating player edge color', { exact: true });
+  await expect(color).toBeEnabled();
+  await color.evaluate(input => { input.value = '#345678'; input.dispatchEvent(new Event('input', { bubbles: true })); });
+  expect(await edge(preview)).toBe('#345678');
+  expect(await edge(root)).toBe(savedEdge);
+  await page.locator('[data-background-cancel]').click();
+  await expect(motion('normal')).toHaveAttribute('aria-pressed', 'true');
+  await expect(behavior('follow_sidebar')).toHaveAttribute('aria-pressed', 'true');
+  await expect(source('player')).toHaveAttribute('aria-pressed', 'true');
+  expect(await edge(preview)).toBe(savedEdge);
+
+  await behavior('float_on_collapse').click();
+  await motion('slow').click();
+  await source('custom').click();
+  await color.evaluate(input => { input.value = '#345678'; input.dispatchEvent(new Event('input', { bubbles: true })); });
+  await behavior('artbox').click();
+  await expect(source('custom')).toBeDisabled();
+  await expect(source('custom')).toHaveAttribute('aria-pressed', 'true');
+  let persisted;
+  const persistRoute = route => {
+    if (route.request().method() !== 'PUT') return route.fallback();
+    const { expected_revision, applied_player_set, waveform_color_updates, ...preferences } = route.request().postDataJSON();
+    persisted = { ...preferences, revision: expected_revision + 1, player_recent_sets: [] };
+    return route.fulfill({ json: persisted });
+  };
+  await page.route('**/account/appearance', persistRoute);
+  await page.locator('[data-background-save]').click();
+  await expect(root).toHaveAttribute('data-docked-compact-player-behavior', 'artbox');
+  await expect(root).toHaveAttribute('data-compact-player-motion', 'slow');
+  expect(await edge(root)).toBe('#345678');
+  await expect(page.locator('[data-background-save]')).toBeDisabled();
+  expect(persisted.floating_player_edge).toEqual({ source: 'custom', color: '#345678' });
+
+  await mount(page, 'mountSeekbar', { utilityShell: true, saved: persisted });
+  await page.route('**/account/appearance', persistRoute);
+  await expect(behavior('artbox')).toHaveAttribute('aria-pressed', 'true');
+  await expect(motion('slow')).toHaveAttribute('aria-pressed', 'true');
+  await expect(source('custom')).toHaveAttribute('aria-pressed', 'true');
+  expect(await edge(root)).toBe('#345678');
+  await page.locator('[data-background-reset]').click();
+  await expect(behavior('follow_sidebar')).toHaveAttribute('aria-pressed', 'true');
+  await expect(motion('normal')).toHaveAttribute('aria-pressed', 'true');
+  await expect(source('player')).toHaveAttribute('aria-pressed', 'true');
+  await expect(root).toHaveAttribute('data-compact-player-motion', 'slow');
+  expect(await edge(root)).toBe('#345678');
+  await page.locator('[data-background-save]').click();
+  await expect(root).toHaveAttribute('data-compact-player-motion', 'normal');
+  await expect(root).toHaveAttribute('data-docked-compact-player-behavior', 'follow_sidebar');
+  expect(await edge(root)).toBe(savedEdge);
 });

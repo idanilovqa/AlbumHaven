@@ -64,6 +64,7 @@ function getDefaultShellLayoutPreferences() {
   return {
     contextualPaneWidthPx: 320,
     infoDrawerWidthPx: 360,
+    artistTreeFolded: null,
   };
 }
 
@@ -116,6 +117,9 @@ function normalizeShellLayoutPreferences(input = {}) {
       source.infoDrawerWidthPx,
       defaults.infoDrawerWidthPx,
     ),
+    artistTreeFolded: typeof source.artistTreeFolded === 'boolean'
+      ? source.artistTreeFolded
+      : defaults.artistTreeFolded,
   };
 }
 
@@ -134,7 +138,7 @@ function normalizePlayerAppearance(input = {}) {
     ? String(input.waveformEdgeColor)
     : defaults.waveformEdgeColor;
   return {
-    seekbarMode: mode === 'waveform' ? 'waveform' : 'default',
+    seekbarMode: ['default', 'waveform', 'thin'].includes(mode) ? mode : 'default',
     waveformFillColor: fill,
     waveformEdgeColor: edge,
   };

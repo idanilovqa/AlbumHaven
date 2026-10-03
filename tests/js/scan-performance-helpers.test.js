@@ -183,6 +183,28 @@ function sequentialSampler(statuses) {
   };
 }
 
+test('production sample projection preserves failed and recovered terminal outcomes', async () => {
+  const fixtureRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'scan-terminal-outcome-'));
+  const samplesPath = path.join(fixtureRoot, 'status.jsonl');
+  try {
+    for (const outcome of ['failed', 'completed']) {
+      const error = outcome === 'failed' ? 'permission denied for table local_track_files' : '';
+      fs.writeFileSync(samplesPath, `${JSON.stringify({
+        recordedAtEpochMs: 1000,
+        status: { scan_in_progress: false, scan_outcome: outcome, last_error: error },
+      })}\n`, 'utf8');
+      const sampler = createScanStatusSampler({ samplesPath });
+      const snapshot = await sampler.snapshot();
+      assert.equal(snapshot.samples[0].scanOutcome, outcome);
+      const terminal = await waitForStatusIdle(sampler);
+      assert.equal(terminal.scan_outcome, outcome);
+      assert.equal(terminal.last_error, error);
+    }
+  } finally {
+    fs.rmSync(fixtureRoot, { recursive: true, force: true });
+  }
+});
+
 test('scan status waiters consume only the newest production sample', async () => {
   const idle = {
     scanInProgress: false,
@@ -230,7 +252,7 @@ test('scan status waiters consume only the newest production sample', async () =
   assert.equal(completed.album_total, 1001);
 });
 
-test('scan start waiter ignores an older completed scan retained in sampler history', async () => {
+test('scan start waiter ignores an older completed scan retained in sampler history', async (t) => {
   const oldActive = {
     scanInProgress: true,
     scanMode: 'background',
@@ -259,7 +281,11 @@ test('scan start waiter ignores an older completed scan retained in sampler hist
     },
   };
 
-  const started = await waitForStatusScanStart(sampler, { timeoutMs: 100, pollMs: 1 });
+  t.mock.timers.enable({ apis: ['Date', 'setTimeout'], now: 1000 });
+  const waiting = waitForStatusScanStart(sampler, { timeoutMs: 100, pollMs: 1 });
+  await new Promise(resolve => setImmediate(resolve));
+  t.mock.timers.tick(1);
+  const started = await waiting;
 
   assert.equal(started.album_total, 1001);
   assert.equal(readCount, 2);
@@ -303,6 +329,7 @@ test('scan gallery readiness waits for the requested visible cover population', 
     },
   };
   const navigationPanelActions = {
+    async openArtistTree() { calls.push(['open-tree']); },
     navigationPanel: {
       allArtistsLink: {
         async waitFor(options) { calls.push(['sidebar', options]); },
@@ -317,6 +344,7 @@ test('scan gallery readiness waits for the requested visible cover population', 
   });
 
   assert.deepEqual(calls, [
+    ['open-tree'],
     ['sidebar', { state: 'visible', timeout: 60000 }],
     ['card', { state: 'visible', timeout: 60000 }],
     ['covers', { minimumCount: 8, timeout: 60000 }],

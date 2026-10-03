@@ -10,7 +10,9 @@ const preference = (changes = {}) => ({
 function element() {
   const styles = new Map(), attributes = new Map(), children = new Map(), listeners = new Map();
   return {
-    styles, attributes, listeners, innerHTML: '', value: '',
+    styles, attributes, listeners, dataset: {}, children: [], innerHTML: '', value: '',
+    appendChild(child) { this.children.push(child); return child; },
+    insertAdjacentHTML(_position, markup) { this.innerHTML += markup; },
     style: {
       setProperty: (key, value) => styles.set(key, value),
       removeProperty: key => styles.delete(key),
@@ -29,13 +31,14 @@ function element() {
   };
 }
 
-async function mounted(method, initial = preference(), saveResponse) {
+async function mounted(method, initial = preference(), saveResponse, client = {}) {
   const root = element(), host = element();
   const document = {
-    documentElement: root, addEventListener() {},
+    documentElement: root, addEventListener() {}, createElement: () => element(),
     getElementById: id => id === 'appearance-bootstrap' ? { textContent: JSON.stringify(initial) } : null,
   };
   const window = {
+    ...client,
     location: { href: 'https://music.test/', origin: 'https://music.test' },
     addEventListener() {}, confirm: () => true,
     fetch: async (_url, options) => {
@@ -55,6 +58,42 @@ async function mounted(method, initial = preference(), saveResponse) {
     preview: host.querySelector('.appearance-background-editor').querySelector(method === 'mount' ? '[data-background-preview]' : '[data-player-live-preview]'),
   };
 }
+
+test('responsive appearance retains Main elements live preview across sections until Cancel', async () => {
+  let breakpointChanged;
+  const { instance, root } = await mounted('mount', preference(), undefined, {
+    AlbumHavenDevicePreferences: { profile: () => 'mobile' },
+    matchMedia: () => ({ addEventListener: (_event, listener) => { breakpointChanged = listener; } }),
+  });
+  instance.controller.setDeviceSectionMode('custom');
+  instance.controller.setPalette('paper');
+  instance.controller.setActiveSection('album-page');
+  assert.equal(instance.controller.getState().dirty, true);
+  breakpointChanged();
+  assert.equal(root.getAttribute('data-appearance-palette'), 'paper');
+  instance.controller.cancel();
+  assert.equal(root.getAttribute('data-appearance-palette'), 'steelblue');
+});
+
+test('an open appearance editor follows the client profile across the breakpoint', async () => {
+  let profile = 'web_desktop', breakpointChanged;
+  const { instance } = await mounted('mount', preference(), undefined, {
+    AlbumHavenDevicePreferences: { profile: () => profile },
+    matchMedia: () => ({ addEventListener: (_event, listener) => { breakpointChanged = listener; } }),
+  });
+  profile = 'mobile';
+  breakpointChanged();
+  assert.equal(instance.controller.getState().activeDeviceProfile, 'mobile');
+  instance.controller.setDeviceSectionMode('custom');
+  instance.controller.setPalette('paper');
+  profile = 'web_desktop';
+  breakpointChanged();
+  assert.equal(instance.controller.getState().activeDeviceProfile, 'web_desktop');
+  assert.equal(instance.controller.getState().draft.palette_id, 'steelblue');
+  profile = 'mobile';
+  breakpointChanged();
+  assert.equal(instance.controller.getState().draft.palette_id, 'paper', 'resizing retains the mobile draft');
+});
 
 function assertEditorTheme(preview, draft) {
   const effective = api.resolveAppearance(draft);
@@ -76,7 +115,7 @@ function assertSavedEditor(editor) {
 for (const method of ['mount', 'mountSeekbar']) {
   const name = method === 'mount' ? 'Backgrounds' : 'Seekbar';
 
-  test(`${name} preview follows draft palettes while the editor inherits the saved app`, async () => {
+  test(`${name} preview follows draft palettes; only Main elements recolors the app`, async () => {
     const { instance, root, editor, preview } = await mounted(method);
     const savedRoot = [...root.styles];
     assertEditorTheme(preview, preference());
@@ -89,8 +128,14 @@ for (const method of ['mount', 'mountSeekbar']) {
         assertEditorTheme(preview, draft);
         assertSavedEditor(editor);
         assert.ok(api.contrastRatio(preview.styles.get('--appearance-ink'), preview.styles.get('--appearance-main-surface')) >= 4.5);
-        assert.deepEqual([...root.styles], savedRoot, 'Draft editor theme must not recolor the saved app');
-        assert.equal(root.getAttribute('data-appearance-palette'), 'steelblue');
+        if (method === 'mount') {
+          assert.equal(root.getAttribute('data-appearance-palette'), palette_id);
+          assert.equal(root.styles.get('--appearance-main-surface'), api.resolveAppearance(draft).main);
+        } else {
+          assert.deepEqual([...root.styles], savedRoot, 'Player drafts stay in their preview');
+          assert.equal(root.getAttribute('data-appearance-palette'), 'steelblue');
+        }
+        assert.equal(instance.controller.getState().saved.palette_id, 'steelblue');
       }
     }
   });
@@ -108,7 +153,7 @@ for (const method of ['mount', 'mountSeekbar']) {
     assert.deepEqual([...root.styles], savedRoot);
   });
 
-  test(`${name} Reset pins default preview tokens and successful Save alone updates the app`, async () => {
+  test(`${name} Reset previews defaults and only successful Save persists the draft`, async () => {
     let finishSave;
     const pending = new Promise(resolve => { finishSave = resolve; });
     const saved = preference({ palette_id: 'paper', panel_index: 1 });
@@ -117,14 +162,18 @@ for (const method of ['mount', 'mountSeekbar']) {
     instance.controller.reset();
     assertEditorTheme(preview, preference({ palette_id: null }));
     assertSavedEditor(editor);
-    assert.deepEqual([...root.styles], savedRoot, 'Default draft must override inherited saved light tokens locally');
+    if (method === 'mount') assert.equal(root.getAttribute('data-appearance-palette'), null);
+    else assert.deepEqual([...root.styles], savedRoot);
+    assert.equal(instance.controller.getState().saved.palette_id, 'paper');
     instance.controller.setPalette('black');
     instance.controller.setPanelIndex(2);
     const draft = preference({ palette_id: 'black', panel_index: 2 });
     const saving = instance.controller.save();
     assertEditorTheme(preview, draft);
     assertSavedEditor(editor);
-    assert.deepEqual([...root.styles], savedRoot, 'Pending Save cannot apply draft tokens to the app');
+    if (method === 'mount') assert.equal(root.getAttribute('data-appearance-palette'), 'black');
+    else assert.deepEqual([...root.styles], savedRoot);
+    assert.equal(instance.controller.getState().saved.palette_id, 'paper');
     finishSave(draft);
     assert.equal(await saving, true);
     assertEditorTheme(preview, draft);
@@ -280,3 +329,45 @@ for (const method of ['mount', 'mountSeekbar', 'mountSelectionAccent', 'mountAle
     assert.equal(notice.innerHTML, '');
   });
 }
+
+test('seekbar drafts stay with their device profile and save through retained callbacks after resize', async () => {
+  let profile = 'mobile', breakpointChanged;
+  const { instance, host } = await mounted('mount', preference(), undefined, {
+    AlbumHavenDevicePreferences: { profile: () => profile },
+    matchMedia: () => ({ addEventListener: (_event, listener) => { breakpointChanged = listener; } }),
+  });
+  const applied = [];
+  instance.mountSeekbar(host, {
+    getSeekbarMode: selected => selected === 'mobile' ? 'thin' : 'default',
+    applySeekbarMode: (mode, selected) => applied.push([selected, mode]),
+  });
+  instance.controller.setDeviceSectionMode('custom');
+  instance.controller.setSeekbarMode('waveform');
+  profile = 'web_desktop';
+  breakpointChanged();
+  assert.equal(instance.controller.getState().seekbarMode, 'default');
+  assert.equal(instance.controller.getState().dirty, true);
+  assert.equal(await instance.controller.save(), true);
+  assert.deepEqual(applied, [['mobile', 'waveform']]);
+  assert.equal(instance.controller.getState().dirty, false);
+  profile = 'mobile';
+  breakpointChanged();
+  assert.equal(instance.controller.getState().seekbarMode, 'waveform');
+  instance.controller.setSeekbarMode('thin');
+  profile = 'web_desktop';
+  breakpointChanged();
+  instance.controller.cancel();
+  profile = 'mobile';
+  breakpointChanged();
+  assert.equal(instance.controller.getState().seekbarMode, 'waveform');
+});
+
+
+test('leaving Main elements restores saved colors without persisting its live preview', async () => {
+  const { instance, root } = await mounted('mount');
+  instance.controller.setPalette('paper');
+  assert.equal(root.getAttribute('data-appearance-palette'), 'paper');
+  instance.unmount();
+  assert.equal(root.getAttribute('data-appearance-palette'), 'steelblue');
+  assert.equal(instance.controller.getState().saved.palette_id, 'steelblue');
+});

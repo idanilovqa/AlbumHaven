@@ -4,7 +4,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
 const api = require('../../../music_app/static/js/appearance-backgrounds.js');
-const defaults = () => ({main_surface_color:null,panel_background_color:null,palette_id:null,panel_index:0,player_override:null,compact_player_style:'docked',album_details_layout:'classic_bar',album_playing_row_animation:'enabled',alert_family:'ember',loop_control_style:'capsule'});
+const defaults = () => ({main_surface_color:null,panel_background_color:null,palette_id:null,panel_index:0,player_override:null,compact_player_style:'docked',docked_compact_player_behavior:'follow_sidebar',docked_compact_player_regular_style:false,compact_player_motion:'normal',floating_player_edge:{source:'player',color:null},album_details_layout:'classic_bar',album_playing_row_animation:'enabled',alert_family:'ember',loop_control_style:'capsule',action_button_outlines:true,device_profiles:{}});
 const custom = () => ({...defaults(),palette_id:'steelblue',player_override:{background:'#14283B',fill:'#8BAED1',edge:'#B9CADD'}});
 function setup(options={}) {
   const requests=[],applied=[];
@@ -155,7 +155,7 @@ for(const [from,to] of [
   const {controller}=setup(); controller.setPlayerColor('background','#112233'); controller.setPlayerColor('fill','#345678');
   const before=controller.getState().draft; let guards=0,renders=0;
   const context=vm.createContext({state:{utility:{appearanceKey:from},coverLookup:{}},document:{querySelectorAll:()=>[]},console,
-    confirmBackgroundAppearanceLeave:()=>{guards++;return false;},renderUtilityModalContent:()=>{renders++;}});
+    closeUtilityLoopSettingMenu(){},confirmBackgroundAppearanceLeave:()=>{guards++;return false;},renderUtilityModalContent:()=>{renders++;}});
   vm.runInContext(fs.readFileSync(path.join(__dirname,'../../../music_app/static/js/runtime/bootstrap-utility-event-handlers.js'),'utf8'),context);
   const button={getAttribute:()=>to};
   await context.handleUtilityBootstrapClick({target:{closest:selector=>selector==='[data-utility-appearance-key]'?button:null},preventDefault(){}});
@@ -202,7 +202,7 @@ test('browser recovery uses the exact previously persisted pair only on explicit
   }
 });
 
-test('actual Seekbar renderer supplies its color editor host to the shared instance with lazy recovery',()=>{
+test('actual Seekbar renderer supplies its color editor host to the shared instance with lazy recovery',async()=>{
   const {controller}=setup(); controller.setPlayerColor('background','#112233');
   const host={id:'waveform-editor-host'},mounts=[];
   let storageReads=0,unmounts=0;
@@ -219,6 +219,19 @@ test('actual Seekbar renderer supplies its color editor host to the shared insta
   assert.equal(typeof mounts[0].options.getLegacyColors,'function');
   assert.equal(typeof mounts[0].options.getSeekbarMode,'function');
   assert.equal(mounts[0].options.getSeekbarMode(),'waveform');
+  const profileWrites = [];
+  context.window.AlbumHavenDevicePreferences = {
+    enabled: true, profile: () => 'web_desktop',
+    read: (_field, fallback, profile) => profile === 'mobile' ? { seekbarMode: 'thin' } : fallback,
+    write: (field, value, profile) => profileWrites.push({ field, value, profile }),
+    flush: async () => true,
+  };
+  context.normalizePlayerAppearance = value => value;
+  assert.equal(mounts[0].options.getSeekbarMode('web_desktop'), 'default');
+  assert.equal(mounts[0].options.getSeekbarMode('mobile'), 'thin');
+  await mounts[0].options.applySeekbarMode('waveform', 'mobile');
+  assert.equal(profileWrites[0].profile, 'mobile');
+  assert.equal(profileWrites[0].value.seekbarMode, 'waveform');
   assert.equal(storageReads,0,'Rendering must not inspect previous browser colors');
   assert.equal(unmounts,1);
   assert.equal(controller.getState().draft.player_override.background,'#112233');
@@ -386,4 +399,117 @@ test('Custom player colors creates an editable structured set on the Player & Se
   });
   assert.equal(controller.getState().dirty,true);
   assert.equal(controller.getState().canSave,true);
+});
+
+
+test('seekbar bridge persists the exact profile before acknowledging reload or updating its live player', async () => {
+  const { createStore } = require('../../../music_app/static/js/client-device-preferences.js');
+  const durable = { mobile: { playerAppearance: { seekbarMode: 'default' } }, web_desktop: { playerAppearance: { seekbarMode: 'default' } } };
+  let acknowledge, options, paints = 0;
+  const environment = { innerWidth: 390, navigator: {}, setTimeout: () => 1, clearTimeout() {}, addEventListener() {} };
+  const store = createStore({ window: environment, bootstrap: { account_id: 12, profiles: durable }, fetch: (_url, request) => {
+    const body = JSON.parse(request.body);
+    return new Promise(resolve => { acknowledge = () => { Object.assign(durable[body.profile], body.changes); resolve({ ok: true }); }; });
+  } });
+  const context = vm.createContext({ window: {
+    AlbumHavenDevicePreferences: store, addEventListener() {},
+    AlbumHavenAppearance: { instance: { mountSeekbar(_host, supplied) { options = supplied; } } },
+  }, state: { player: { appearance: { seekbarMode: 'default' } } }, normalizePlayerAppearance: value => value,
+    updateWaveformAppearance() { paints++; } });
+  vm.runInContext(fs.readFileSync(path.join(__dirname, '../../../music_app/static/js/runtime/appearance-backgrounds-bridge.js'), 'utf8'), context);
+  context.mountSeekbarAppearanceEditor({ querySelector: () => ({}) });
+  let acknowledged = false;
+  const saving = options.applySeekbarMode('waveform', 'mobile').then(() => { acknowledged = true; });
+  assert.equal(acknowledged, false);
+  assert.equal(context.state.player.appearance.seekbarMode, 'default');
+  assert.equal(paints, 0);
+  assert.equal(durable.mobile.playerAppearance.seekbarMode, 'default');
+  acknowledge();
+  await saving;
+  const reloaded = createStore({ window: environment, bootstrap: { account_id: 12, profiles: durable } });
+  assert.equal(reloaded.read('playerAppearance', {}, 'mobile').seekbarMode, 'waveform');
+  assert.equal(reloaded.read('playerAppearance', {}, 'web_desktop').seekbarMode, 'default');
+  assert.equal(context.state.player.appearance.seekbarMode, 'waveform');
+  assert.equal(paints, 1);
+});
+
+test('seekbar bridge rejects unsuccessful account persistence without changing live playback mode', async () => {
+  let options, paints = 0;
+  const writes = [];
+  const context = vm.createContext({ window: {
+    AlbumHavenDevicePreferences: { enabled: true, profile: () => 'mobile', read: () => ({ seekbarMode: 'default' }),
+      write: (...args) => { writes.push(args); return true; }, flush: async () => false },
+    addEventListener() {}, AlbumHavenAppearance: { instance: { mountSeekbar(_host, supplied) { options = supplied; } } },
+  }, state: { player: { appearance: { seekbarMode: 'default' } } }, normalizePlayerAppearance: value => value,
+    updateWaveformAppearance() { paints++; } });
+  vm.runInContext(fs.readFileSync(path.join(__dirname, '../../../music_app/static/js/runtime/appearance-backgrounds-bridge.js'), 'utf8'), context);
+  context.mountSeekbarAppearanceEditor({ querySelector: () => ({}) });
+  await assert.rejects(options.applySeekbarMode('waveform', 'mobile'), /could not be saved/);
+  assert.equal(writes[0][2], 'mobile');
+  assert.equal(context.state.player.appearance.seekbarMode, 'default');
+  assert.equal(paints, 0);
+});
+
+
+test('seekbar acknowledgement does not repaint an older mode over a newer queued profile edit', async () => {
+  const { createStore } = require('../../../music_app/static/js/client-device-preferences.js');
+  const acknowledgements = [], requests = [];
+  let options;
+  const store = createStore({
+    window: { innerWidth: 390, navigator: {}, setTimeout: () => 1, clearTimeout() {}, addEventListener() {} },
+    bootstrap: { account_id: 12, profiles: { mobile: { playerAppearance: { seekbarMode: 'default' } } } },
+    fetch: (_url, request) => {
+      requests.push(JSON.parse(request.body));
+      return new Promise(resolve => acknowledgements.push(resolve));
+    },
+  });
+  const context = vm.createContext({ window: {
+    AlbumHavenDevicePreferences: store, addEventListener() {},
+    AlbumHavenAppearance: { instance: { mountSeekbar(_host, supplied) { options = supplied; } } },
+  }, state: { player: { appearance: { seekbarMode: 'default' } } }, normalizePlayerAppearance: value => value,
+    updateWaveformAppearance() {} });
+  vm.runInContext(fs.readFileSync(path.join(__dirname, '../../../music_app/static/js/runtime/appearance-backgrounds-bridge.js'), 'utf8'), context);
+  context.mountSeekbarAppearanceEditor({ querySelector: () => ({}) });
+  let saved = false;
+  const saving = options.applySeekbarMode('waveform', 'mobile').then(() => { saved = true; });
+  const newerSave = options.applySeekbarMode('thin', 'mobile');
+  acknowledgements[0]({ ok: true });
+  await saving;
+  assert.equal(saved, true);
+  assert.equal(context.state.player.appearance.seekbarMode, 'default', 'An older acknowledgement must not repaint over the newer owner');
+  assert.equal(requests[1].changes.playerAppearance.seekbarMode, 'thin');
+  acknowledgements[1]({ ok: true });
+  await newerSave;
+  assert.equal(context.state.player.appearance.seekbarMode, 'thin');
+});
+
+
+test('cleared Appearance controller cannot repaint through its real bridge after layout persistence settles', async () => {
+  const { createStore } = require('../../../music_app/static/js/client-device-preferences.js');
+  const { controller } = setup();
+  let acknowledge, paints = 0;
+  const preferences = createStore({
+    window: { innerWidth: 1440, navigator: {}, setTimeout: () => 1, clearTimeout() {}, addEventListener() {} },
+    bootstrap: { account_id: 12, profiles: { web_desktop: { playerAppearance: { seekbarMode: 'default' } } } },
+    fetch: () => new Promise(resolve => { acknowledge = () => resolve({ ok: true }); }),
+  });
+  const instance = { controller, mountSeekbar(_host, options) {
+    controller.configureSeekbar('default', options.applySeekbarMode, options.getSeekbarMode);
+  } };
+  const context = vm.createContext({ window: { AlbumHavenDevicePreferences: preferences,
+    addEventListener() {}, AlbumHavenAppearance: { instance } },
+    state: { player: { appearance: { seekbarMode: 'default' } } }, normalizePlayerAppearance: value => value,
+    updateWaveformAppearance() { paints++; } });
+  vm.runInContext(fs.readFileSync(path.join(__dirname, '../../../music_app/static/js/runtime/appearance-backgrounds-bridge.js'), 'utf8'), context);
+  context.mountSeekbarAppearanceEditor({ querySelector: () => ({}) });
+  controller.setSeekbarMode('waveform');
+  const saving = controller.save();
+  await Promise.resolve();
+  assert.equal(typeof acknowledge, 'function', 'The layout request must already be pending');
+  controller.clear();
+  acknowledge();
+  assert.equal(await saving, false);
+  assert.equal(controller.getState().loadFailed, true);
+  assert.equal(context.state.player.appearance.seekbarMode, 'default');
+  assert.equal(paints, 0, 'An expired account draft must not paint the live player');
 });

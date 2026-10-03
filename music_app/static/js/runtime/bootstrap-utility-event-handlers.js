@@ -23,7 +23,8 @@ async function handleUtilityBootstrapClick(event) {
     openUtilityLogHistoryTab(selectedLogHistoryId);
     return;
   }
-  if (!event.target.closest('.utility-loop-speed-control')) {
+  if (!event.target.closest('.utility-loop-speed-control, .utility-loop-speed-menu, [data-loop-pitch-value-button]')) {
+    closeUtilityLoopSettingMenu(false);
     document.querySelectorAll('.utility-loop-speed-menu').forEach((menu) => {
       menu.hidden = true;
     });
@@ -44,6 +45,10 @@ async function handleUtilityBootstrapClick(event) {
   const utilitiesButton = event.target.closest('[data-open-utilities="1"]');
   if (utilitiesButton) {
     event.preventDefault();
+    // The general Settings entry starts at Appearance; explicit utility routes
+    // and browser-history restoration still choose their requested section.
+    if (typeof usesMobilePageLayout === 'function' && usesMobilePageLayout()
+        && setUtilityActiveTab('appearance') !== 'appearance') return;
     openUtilityModal();
     return;
   }
@@ -67,7 +72,16 @@ async function handleUtilityBootstrapClick(event) {
         loadUtilityLibrarySettings(!state.utility.librarySettings?.loaded);
       }
     } else if (state.utility.activeTab !== 'appearance') {
-      loadProblematicFiles(!state.utility.loaded);
+      const navigationToken = {};
+      state.utility.problematicNavigationActiveToken = navigationToken;
+      try {
+        await loadProblematicFiles(!state.utility.loaded, { render: false });
+      } finally {
+        if (state.utility.problematicNavigationActiveToken === navigationToken) {
+          state.utility.problematicNavigationActiveToken = null;
+        }
+      }
+      if (state.utility.activeTab !== nextUtilityTab) return;
     }
     renderUtilityModalContent();
     return;
@@ -78,7 +92,7 @@ async function handleUtilityBootstrapClick(event) {
   if (utilityLogHistoryButton || logAction) {
     event.preventDefault();
     try {
-      if (utilityLogHistoryButton) await selectUtilityLogHistoryEvent(utilityLogHistoryButton.getAttribute('data-utility-log-history-id'));
+      if (utilityLogHistoryButton) { openMobileUtilityDetail(utilityLogHistoryButton.getAttribute('data-utility-log-history-id')); await selectUtilityLogHistoryEvent(utilityLogHistoryButton.getAttribute('data-utility-log-history-id')); }
       else await handleUtilityLogHistoryAction(logAction.getAttribute('data-log-history-action'));
     } catch (error) { showToast(error.message || 'Unable to load log history.', 'error', 3200); }
     return;
@@ -149,8 +163,12 @@ async function handleUtilityBootstrapClick(event) {
   if (problematicAlbumButton) {
     event.preventDefault();
     const selectedKey = problematicAlbumButton.getAttribute('data-problematic-album-key') || '';
+    openMobileUtilityDetail(selectedKey);
     if (state.utility.selectedProblematicKey === selectedKey && getSelectedProblematicAlbum()?.detail_loaded
-        && !state.utility.focusedTrackPath && state.utility.showRepairedDisplay) return;
+        && !state.utility.focusedTrackPath && state.utility.showRepairedDisplay) {
+      if (typeof usesMobilePageLayout === 'function' && usesMobilePageLayout()) renderUtilityModalContent();
+      return;
+    }
     state.utility.selectedProblematicKey = selectedKey;
     state.utility.focusedTrackPath = '';
     state.utility.proposalSelections = {};
@@ -268,6 +286,10 @@ async function handleUtilityBootstrapClick(event) {
   if (utilityLoopItemButton) {
     event.preventDefault();
     state.utility.loopSuppressClick = false;
+    if (typeof getMobileLoopPage === 'function' && getMobileLoopPage()) {
+      const loop = (state.utility.loops || []).find(item => String(item.id) === utilityLoopItemButton.getAttribute('data-utility-loop-id'));
+      if (loop) openMobileLoopSong(buildUtilityLoopGroupKey(loop));
+    }
     return;
   }
 
@@ -279,6 +301,7 @@ async function handleUtilityBootstrapClick(event) {
       return;
     }
     const groupKey = utilityLoopButton.getAttribute('data-utility-loop-group-key') || '';
+    if (typeof getMobileLoopPage === 'function' && getMobileLoopPage()) { openMobileLoopSong(groupKey); return; }
     const sameGroup = groupKey === String(state.utility.selectedLoopGroupKey || '');
     const now = Date.now();
     const isDoubleClickCandidate = String(state.utility.lastLoopGroupClickKey || '') === String(groupKey)
@@ -318,6 +341,10 @@ async function handleUtilityBootstrapClick(event) {
   if (utilityLoopSpeedValueButton) {
     event.preventDefault();
     const loopId = utilityLoopSpeedValueButton.getAttribute('data-loop-speed-value-button') || '';
+    if (typeof usesMobilePageLayout === 'function' && usesMobilePageLayout()) {
+      toggleUtilityLoopSettingMenu(loopId, 'speed', event.detail === 0);
+      return;
+    }
     const menu = document.querySelector(`[data-loop-speed-menu="${cssEscape(loopId)}"]`);
     if (menu) {
       updateUtilityLoopAudioRate(loopId);
@@ -355,11 +382,28 @@ async function handleUtilityBootstrapClick(event) {
     const loopId = menu?.getAttribute('data-loop-speed-menu') || '';
     const audio = document.querySelector(`[data-loop-audio="${cssEscape(loopId)}"]`);
     if (audio) {
-      const next = Math.max(0.25, Math.min(1.5, Math.round((Number(utilityLoopSpeedOptionButton.getAttribute('data-loop-speed-option') || 1) || 1) * 4) / 4));
+      const next = Math.max(0.25, Math.min(2, Math.round((Number(utilityLoopSpeedOptionButton.getAttribute('data-loop-speed-option') || 1) || 1) * 4) / 4));
       audio.dataset.speed = String(next);
       updateUtilityLoopAudioRate(loopId);
     }
     if (menu) menu.hidden = true;
+    closeUtilityLoopSettingMenu(true);
+    return;
+  }
+
+  const pitchTrigger = event.target.closest('[data-loop-pitch-value-button]');
+  if (pitchTrigger && typeof usesMobilePageLayout === 'function' && usesMobilePageLayout()) {
+    event.preventDefault();
+    toggleUtilityLoopSettingMenu(pitchTrigger.dataset.loopPitchValueButton, 'pitch', event.detail === 0);
+    return;
+  }
+  const pitchOption = event.target.closest('[data-loop-pitch-option]');
+  if (pitchOption) {
+    event.preventDefault();
+    const loopId = pitchOption.closest('[data-loop-pitch-menu]')?.dataset.loopPitchMenu;
+    const pitch = Number(pitchOption.dataset.loopPitchOption);
+    closeUtilityLoopSettingMenu(true);
+    if (loopId && Number.isInteger(pitch) && pitch >= -12 && pitch <= 12) void renderUtilityLoopPitchPreview(loopId, pitch);
     return;
   }
 
@@ -458,6 +502,7 @@ async function handleUtilityBootstrapClick(event) {
 
   const tagEditorTrackButton = event.target.closest('[data-tag-editor-track]');
   if (tagEditorTrackButton) {
+    if (event.target.closest('[data-tag-editor-reorder-grip]')) return;
     event.preventDefault();
     return;
   }
@@ -480,14 +525,7 @@ async function handleUtilityBootstrapClick(event) {
 
   const tagEditorOverlay = document.getElementById?.('tag-editor-modal');
   if (tagEditorOverlay && overlayClickStartedOnOverlay(tagEditorOverlay, event)) {
-    const changedUpdates = buildChangedTagEditorUpdates(
-      state.tagEditor.album,
-      state.tagEditor.tracks || [],
-      state.tagEditor.values || {},
-    );
-    if (!Object.keys(changedUpdates).length) {
-      closeTagEditor();
-    }
+    closeTagEditorFromBackdrop();
     return;
   }
 
@@ -693,6 +731,16 @@ async function handleUtilityBootstrapClick(event) {
     return;
   }
 
+  const retryCoverLookupTaskButton = event.target.closest('[data-retry-cover-lookup-task]');
+  if (retryCoverLookupTaskButton) {
+    event.preventDefault();
+    event.stopPropagation();
+    const taskId = retryCoverLookupTaskButton.getAttribute('data-retry-cover-lookup-task') || '';
+    const task = (state.coverLookup.tasks || []).find((item) => String(item?.id || '') === String(taskId));
+    if (task?.album_payload) startCoverLookupForAlbum(task.album_payload, { backgroundOnly: true });
+    return;
+  }
+
   const openCoverLookupTaskButton = event.target.closest('[data-open-cover-lookup-task]');
   if (openCoverLookupTaskButton) {
     const taskId = openCoverLookupTaskButton.getAttribute('data-open-cover-lookup-task') || '';
@@ -755,6 +803,30 @@ async function handleUtilityBootstrapClick(event) {
   if (event.target.closest('[data-add-cover-lookup-remote="1"]')) {
     event.preventDefault();
     addRemoteCoverLinksFromLookup();
+    return;
+  }
+
+  if (event.target.closest('[data-choose-cover-lookup-files="1"]')) {
+    event.preventDefault();
+    document.querySelector('[data-cover-lookup-file-input]')?.click?.();
+    return;
+  }
+
+  const removePendingCoverAttachment = event.target.closest('[data-remove-cover-lookup-pending-attachment]');
+  if (removePendingCoverAttachment) {
+    event.preventDefault();
+    event.stopPropagation();
+    removeCoverLookupPendingAttachment(
+      removePendingCoverAttachment.getAttribute('data-remove-cover-lookup-pending-attachment'),
+    );
+    return;
+  }
+
+  const removePastedCoverButton = event.target.closest('[data-remove-pasted-cover]');
+  if (removePastedCoverButton) {
+    event.preventDefault();
+    event.stopPropagation();
+    removePastedImageFromCoverLookup(removePastedCoverButton.getAttribute('data-remove-pasted-cover'));
     return;
   }
 
@@ -922,7 +994,7 @@ async function handleUtilityBootstrapPaste(event) {
     return;
   }
   const target = event.target instanceof Element ? event.target : null;
-  if (!target?.closest('#cover-lookup-modal')) {
+  if (!target?.closest('[data-cover-lookup-drop-zone="1"]')) {
     return;
   }
   try {
@@ -941,7 +1013,90 @@ async function handleUtilityBootstrapPaste(event) {
   }
 }
 
+function handleUtilityBootstrapDragStart(event) {
+  const grip = event.target?.closest?.('[data-tag-editor-reorder-grip]');
+  if (!grip) return false;
+  const draggedPath = String(grip.getAttribute('data-tag-editor-reorder-grip') || '');
+  if (!draggedPath) return false;
+  state.tagEditor.reorder = { draggedPath, beforePath: draggedPath };
+  event.dataTransfer?.setData?.('text/plain', draggedPath);
+  if (event.dataTransfer) event.dataTransfer.effectAllowed = 'move';
+  showTagEditorReorderCue(draggedPath);
+  return true;
+}
+
+function getTagEditorReorderRows(list) {
+  return Array.from(list?.querySelectorAll?.('[data-tag-editor-track]') || []).map((row) => {
+    const bounds = row.getBoundingClientRect();
+    return {
+      path: String(row.getAttribute('data-tag-editor-track') || ''),
+      top: bounds.top,
+      height: bounds.height,
+    };
+  });
+}
+
+function handleUtilityBootstrapDragOver(event) {
+  const reorder = state.tagEditor.reorder;
+  const list = event.target?.closest?.('#tag-editor-track-list');
+  if (reorder?.draggedPath && list) {
+    event.preventDefault();
+    if (event.dataTransfer) event.dataTransfer.dropEffect = 'move';
+    const beforePath = getTagEditorReorderInsertionBefore(
+      getTagEditorReorderRows(list),
+      reorder.draggedPath,
+      event.clientY,
+    );
+    showTagEditorReorderCue(beforePath);
+    return true;
+  }
+  if (!event.target?.closest?.('[data-cover-lookup-drop-zone]')) return false;
+  event.preventDefault();
+  if (event.dataTransfer) event.dataTransfer.dropEffect = 'copy';
+  return true;
+}
+
+async function handleUtilityBootstrapDrop(event) {
+  const reorder = state.tagEditor.reorder;
+  const list = event.target?.closest?.('#tag-editor-track-list');
+  if (reorder?.draggedPath) {
+    if (list) {
+      event.preventDefault();
+      applyTagEditorTrackReorder(reorder.draggedPath, reorder.beforePath);
+    }
+    clearTagEditorReorderCue();
+    return Boolean(list);
+  }
+  if (!event.target?.closest?.('[data-cover-lookup-drop-zone]')) return false;
+  event.preventDefault();
+  try {
+    await addCoverLookupFiles(event.dataTransfer?.files || []);
+  } catch (error) {
+    state.coverLookup.modal.statusText = String(error?.message || 'Unable to stage image.');
+    state.coverLookup.modal.statusTone = 'error';
+    renderCoverLookupModal();
+  }
+  return true;
+}
+
+function handleUtilityBootstrapDragEnd() {
+  if (!state.tagEditor.reorder) return false;
+  clearTagEditorReorderCue();
+  return true;
+}
+
 function handleUtilityBootstrapChange(event) {
+  const coverLookupFiles = event.target.closest('[data-cover-lookup-file-input]');
+  if (coverLookupFiles) {
+    addCoverLookupFiles(coverLookupFiles.files || [])
+      .catch((error) => {
+        state.coverLookup.modal.statusText = String(error?.message || 'Unable to stage image.');
+        state.coverLookup.modal.statusTone = 'error';
+        renderCoverLookupModal();
+      })
+      .finally(() => { coverLookupFiles.value = ''; });
+    return;
+  }
   if (handleLibrarySettingsChange(event)) {
     return;
   }
@@ -1053,6 +1208,7 @@ function handleUtilityBootstrapMouseDown(event) {
   }
 
   const trackButton = event.target.closest('[data-tag-editor-track]');
+  if (event.target.closest('[data-tag-editor-reorder-grip]')) return;
   if (!trackButton || event.button !== 0) return;
   event.preventDefault();
   const path = trackButton.getAttribute('data-tag-editor-track') || '';
@@ -1074,6 +1230,29 @@ function handleUtilityBootstrapKeyDown(event) {
     || event.metaKey
   ) {
     return false;
+  }
+  const reorderGrip = event.target?.closest?.('[data-tag-editor-reorder-grip]');
+  if (reorderGrip && ['ArrowUp', 'ArrowDown'].includes(event.key)) {
+    const path = String(reorderGrip.getAttribute('data-tag-editor-reorder-grip') || '');
+    const tracks = state.tagEditor.tracks || [];
+    const index = tracks.findIndex((track) => String(track?.path || '') === path);
+    const destination = event.key === 'ArrowUp' ? index - 1 : index + 1;
+    if (index >= 0 && destination >= 0 && destination < tracks.length) {
+      event.preventDefault();
+      const beforePath = event.key === 'ArrowUp'
+        ? String(tracks[destination]?.path || '')
+        : String(tracks[destination + 1]?.path || '') || null;
+      applyTagEditorTrackReorder(path, beforePath);
+      Array.from(document.querySelectorAll?.('[data-tag-editor-reorder-grip]') || [])
+        .find((grip) => String(grip.getAttribute('data-tag-editor-reorder-grip') || '') === path)
+        ?.focus?.();
+    }
+    return true;
+  }
+  if (event.key === 'Escape' && state.tagEditor.reorder) {
+    event.preventDefault();
+    clearTagEditorReorderCue();
+    return true;
   }
   const collapse = event.target?.closest?.('[data-utility-loop-collapse]');
   if (collapse && ['Enter', ' '].includes(event.key)) {
@@ -1098,13 +1277,13 @@ function handleUtilityBootstrapKeyDown(event) {
   const filterInput = event.target?.matches?.('input, textarea, [contenteditable="true"]');
   if (state.utility.activeTab === 'problematic-files' && filterTarget && !filterInput) {
     const els = getUtilityModalElements();
+    // On mobile this component is a page, so modal Escape capture does not own it.
     if (event.key === 'Escape' && state.utility.problemDropdownOpen) {
       event.preventDefault();
       event.stopPropagation?.();
+      if (event.repeat || event.isComposing) return true;
       state.utility.problemDropdownOpen = false;
-      els.problemFilterMenu.hidden = true;
-      els.problemFilterButton.setAttribute('aria-expanded', 'false');
-      if (typeof clearTriggerAnchor === 'function') clearTriggerAnchor(els.problemFilterMenu);
+      renderProblemFilterControls(els);
       els.problemFilterButton.focus();
       return true;
     }

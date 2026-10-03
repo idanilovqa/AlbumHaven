@@ -14,7 +14,8 @@ function buildAlbumDetailsHeaderHtml(config = {}) {
   if (variant === 'copy') {
     const title = escapeHtml(config.title || '');
     const subtitle = escapeHtml(config.subtitle || '');
-    return `<header class="album-details-header" data-album-details-layout="classic_bar" data-album-details-variant="copy"><div class="album-details-header__identity"><div class="album-details-header__copy"><h3 class="album-details-header__primary" id="${titleId}">${title}</h3><div class="album-details-header__secondary" id="${subtitleId}">${subtitle}</div></div></div>${actionHtml ? `<div class="album-details-header__actions">${actionHtml}</div>` : ''}</header>`;
+    const eyebrow = escapeHtml(config.eyebrow || '');
+    return `<header class="album-details-header" data-album-details-layout="classic_bar" data-album-details-variant="copy"><div class="album-details-header__identity"><div class="album-details-header__copy">${eyebrow ? `<div class="album-details-header__eyebrow">${eyebrow}</div>` : ''}<h3 class="album-details-header__primary" id="${titleId}">${title}</h3><div class="album-details-header__secondary" id="${subtitleId}">${subtitle}</div></div></div>${actionHtml ? `<div class="album-details-header__actions">${actionHtml}</div>` : ''}</header>`;
   }
   const artist = escapeHtml(config.artist || '');
   const album = escapeHtml(config.album || 'Album');
@@ -109,4 +110,90 @@ function buildMissingAlbumDetailsHtml(config = {}) {
     message,
     actionsHtml: `${removeButton}${keepButton}`,
   });
+}
+
+/* Inline album metadata and the pinned Gallery Bar never own visible identity
+   simultaneously. A taller wrapped identity must finish scrolling out too. */
+function resolveMobileAlbumHeaderState({ albumPage, hasInlineIdentity, hasCover,
+  viewportTop, coverBottom, identityBottom } = {}) {
+  const bodyOwnsIdentity = Boolean(albumPage && hasInlineIdentity
+    && (!Number.isFinite(identityBottom) || identityBottom > viewportTop + 1
+      || (hasCover && Number.isFinite(coverBottom) && coverBottom > viewportTop + 1)));
+  return {
+    bodyOwnsIdentity,
+    showCover: Boolean(albumPage && hasCover && !bodyOwnsIdentity
+      && Number.isFinite(coverBottom) && coverBottom <= viewportTop + 1),
+  };
+}
+
+/* Both approved small layouts reuse the live artwork, actions and track table.
+   Relocate the existing action nodes, rather than duplicating their state/handlers. */
+function syncMobileAlbumComposition(album) {
+  const overlay = document.getElementById('track-modal');
+  const cover = document.getElementById('track-modal-cover');
+  const body = cover?.closest('.track-modal-body');
+  if (!overlay || !cover || !body || !album) return;
+  const mobile = overlay.classList.contains('is-mobile-page') && usesMobilePageLayout();
+  const layout = normalizeAlbumDetailsLayout(document.documentElement.getAttribute('data-album-details-layout'));
+  const inline = mobile && layout !== 'classic_bar';
+  overlay.dataset.mobileAlbumLayout = mobile ? layout : '';
+  let overview = body.querySelector('.mobile-album-overview');
+  let identity = body.querySelector('.mobile-album-identity');
+  if (inline && !overview) {
+    overview = document.createElement('div');
+    overview.className = 'mobile-album-overview';
+    cover.before(overview);
+    overview.appendChild(cover);
+  }
+  if (inline && !identity) {
+    identity = document.createElement('div');
+    identity.className = 'mobile-album-identity';
+  }
+  // Classic/desktop keeps the copy outside its retired overview; reattach on return.
+  if (inline && identity.parentElement !== overview) overview.appendChild(identity);
+  if (identity) {
+    identity.hidden = !inline;
+    if (inline) {
+      const centered = layout === 'editorial_canvas';
+      const artist = album.album_artist || album.artist || '';
+      identity.innerHTML = buildAlbumDetailsHeaderHtml({
+        variant: 'copy', titleId: 'mobile-album-identity-title', subtitleId: 'mobile-album-identity-summary',
+        title: album.name || 'Album',
+        eyebrow: centered ? [artist, album.year].filter(Boolean).join(' • ') : artist,
+        subtitle: centered ? '' : [album.year, album.total_duration_display].filter(Boolean).join(' • '),
+      });
+      // B has exactly two visible lines. Keep the shared header builder unchanged.
+      identity.querySelector('.album-details-header__secondary').hidden = centered;
+    }
+  }
+  const freshActions = cover.querySelector('.album-artbox__overlay');
+  const previousActions = overview?.querySelector('.mobile-album-actions');
+  if (inline) {
+    // A cover refresh creates a new overlay; retire the old, relocated one.
+    if (freshActions && previousActions && freshActions !== previousActions) previousActions.remove();
+    const actions = freshActions || previousActions;
+    if (String(album.inventory_status || '').toLowerCase() === 'missing') actions?.remove();
+    else if (actions) {
+      actions.classList.add('mobile-album-actions');
+      overview.appendChild(actions);
+    }
+  } else if (overview) {
+    const actions = freshActions || previousActions;
+    if (freshActions && previousActions && freshActions !== previousActions) previousActions.remove();
+    if (actions) {
+      actions.classList.remove('mobile-album-actions');
+      cover.querySelector('.album-artbox')?.appendChild(actions);
+    }
+    // The one Back control returns to its shared bar when leaving the inline layout.
+    const back = overview.querySelector('#mobile-back-button');
+    if (back) document.getElementById('mobile-page-header')?.prepend(back);
+    overview.before(cover);
+    if (identity) overview.before(identity);
+    overview.remove();
+  }
+  if (mobile) {
+    const descriptor = mobilePageState.pages.find(page => page.kind === 'album');
+    if (descriptor) Object.assign(descriptor, mobilePageDescriptor('album', album));
+    syncMobilePageShell();
+  }
 }

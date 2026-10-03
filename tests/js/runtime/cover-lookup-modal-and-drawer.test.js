@@ -18,6 +18,9 @@ const helperSource = fs.readFileSync(helperPath, 'utf8');
 
 function loadHelper(overrides = {}) {
   const context = {
+    document: { getElementById: () => null },
+    window: {},
+    ButtonComponent: require(path.join(__dirname, '../../../music_app/static/js/button-component.js')),
     state: {
       coverLookup: {
         modal: {
@@ -38,15 +41,158 @@ function loadHelper(overrides = {}) {
   return context;
 }
 
+for (const [source, label] of [['apple', 'Apple Music'], ['cover_art_archive', 'Cover Art Archive'], ['spotify', 'SPOTIFY']]) {
+  require('node:test')(`remote ${source} cover cards separate semantic labels from decorative badges`, () => {
+    const context = loadHelper({ escapeHtml: value => String(value ?? '') });
+    const markup = context.buildCoverLookupCard({ id: source, source, album: 'Provider fixture' }, 'remote');
+    const labelMatch = markup.match(/<span class="cover-lookup-art-source">([^]*?)<\/span>/);
+    assert.ok(labelMatch);
+    assert.equal(labelMatch[1], label);
+    assert.match(markup, /<span class="cover-lookup-art-source-badge [^"]+" aria-hidden="true">/);
+    assert.doesNotMatch(labelMatch[1], /<|>/);
+    const saved = context.buildCoverLookupCard({ id: source, source, album: 'Provider fixture' }, 'saved-remote');
+    assert.equal(saved.match(/<span class="cover-lookup-art-source">([^]*?)<\/span>/)[1], label);
+    assert.match(saved, /data-cover-lookup-saved-remote="1"/);
+    assert.match(saved, /data-cover-lookup-item-key="saved-remote:/);
+  });
+}
+
+require('node:test')('completed lookup counts covers while retaining every other artwork alternative', () => {
+  const { context, bodyElement } = createDrawerHarness();
+  const covers = [{ id: 'cover-default' }, ...['one', 'two', 'three'].map(id => ({ id, art_kind: 'cover' }))];
+  const alternatives = ['booklet', 'back', 'disc'].map(art_kind => ({ id: art_kind, art_kind }));
+  const matches = [...covers, ...alternatives];
+  const before = JSON.stringify(matches);
+  context.state.coverLookup.tasks = [{
+    id: 'mixed-artwork', status: 'completed', artist: 'Artist', album: 'Album', possible_matches: matches,
+  }];
+  context.renderCoverLookupDrawer();
+  assert.match(bodyElement.innerHTML, />4 covers found</);
+  assert.doesNotMatch(bodyElement.innerHTML, />7 covers found</);
+  assert.equal(JSON.stringify(matches), before);
+  assert.strictEqual(context.state.coverLookup.tasks[0].possible_matches, matches);
+  for (const alternative of alternatives) {
+    assert.match(context.buildCoverLookupCard(alternative, 'remote'), /data-cover-lookup-other-remote-art="1"/);
+  }
+});
+
+require('node:test')('polling preserves a pressed task before selection exists and resumes after release', () => {
+  const { context, bodyElement } = createDrawerHarness();
+  const task = { id: 'pressed-task', status: 'running', artist: 'Artist', album: 'Album' };
+  context.state.coverLookup.tasks = [task];
+  context.renderCoverLookupDrawer();
+  const before = bodyElement.innerHTML;
+  const pressedTask = {};
+  let pressed = true;
+  bodyElement.contains = node => node === pressedTask;
+  bodyElement.querySelector = selector => selector === '.cover-lookup-task-open:active' && pressed ? pressedTask : null;
+  context.window.getSelection = () => ({ isCollapsed: true, rangeCount: 1 });
+  task.status = 'completed';
+  context.renderCoverLookupDrawer();
+  assert.equal(bodyElement.innerHTML, before, 'Polling must not replace the pending text-selection anchor');
+  pressed = false;
+  context.renderCoverLookupDrawer();
+  assert.match(bodyElement.innerHTML, />covers found</, 'Polling resumes when the press ends without a selection');
+
+  pressed = true;
+  context.state.coverLookup.tasks = [];
+  context.renderCoverLookupDrawer({ preserveInteraction: false });
+  assert.match(bodyElement.innerHTML, /not looking for anything at the moment/i,
+    'Explicit user removal must not be blocked by interaction preservation');
+});
+
+for (const interaction of ['focus', 'hover']) {
+  const { context, bodyElement } = createDrawerHarness();
+  const task = { id: 'cancel-transition', status: 'running', artist: 'Artist', album: 'Album' };
+  context.state.coverLookup.tasks = [task];
+  context.renderCoverLookupDrawer();
+  const cancelButton = {
+    closest: (selector) => selector === '.cover-lookup-task-actions' ? {} : cancelButton,
+    getAttribute: () => task.id,
+  };
+  bodyElement.contains = (element) => element === cancelButton;
+  bodyElement.querySelector = selector => selector === '.cover-lookup-task-actions :hover' && interaction === 'hover' ? cancelButton : null;
+  context.document.activeElement = interaction === 'focus' ? cancelButton : null;
+  const runningMarkup = bodyElement.innerHTML;
+  task.cancel_requested = true;
+  context.renderCoverLookupDrawer();
+  assert.equal(bodyElement.innerHTML, runningMarkup, `${interaction}: preserve a still-running Cancel action`);
+
+  task.status = 'canceled';
+  context.renderCoverLookupDrawer();
+  assert.match(bodyElement.innerHTML, />Canceled</, `${interaction}: terminal poll must retire the stale Cancel action`);
+  assert.doesNotMatch(bodyElement.innerHTML, /data-cancel-cover-lookup-task=/);
+}
+
+{
+  const { context, bodyElement } = createDrawerHarness();
+  const task = { id: 'selected-transition', status: 'running', artist: 'Artist', album: 'Album' };
+  context.state.coverLookup.tasks = [task];
+  context.renderCoverLookupDrawer();
+  const selectedMarkup = bodyElement.innerHTML;
+  const selectedNode = {};
+  bodyElement.contains = (node) => node === selectedNode;
+  context.window.getSelection = () => ({ isCollapsed: false, rangeCount: 1, anchorNode: selectedNode, focusNode: selectedNode });
+  task.status = 'canceled';
+  context.renderCoverLookupDrawer();
+  assert.equal(bodyElement.innerHTML, selectedMarkup, 'terminal polling must preserve an independent text selection');
+  context.window.getSelection = () => ({ isCollapsed: true, rangeCount: 0 });
+  context.renderCoverLookupDrawer();
+  assert.match(bodyElement.innerHTML, />Canceled</);
+}
+
+{
+  const staleCancel = {
+    closest: (selector) => selector === '.cover-lookup-task-actions' ? {} : staleCancel,
+    getAttribute: () => 'finished-task',
+  };
+  const context = loadHelper({ document: { activeElement: staleCancel } });
+  context.state.coverLookup.tasks = [{ id: 'finished-task', status: 'canceled' }];
+  for (const actionAttribute of ['data-retry-cover-lookup-task', 'data-clear-cover-lookup-task']) {
+    const hoveredAction = { closest: (selector) => selector === `[${actionAttribute}]` ? hoveredAction : null };
+    const body = { contains: () => true, querySelector: selector => selector === '.cover-lookup-task-actions :hover' ? hoveredAction : null };
+    assert.equal(context.hasActiveCoverLookupDrawerAction(body), true,
+      `a stale focused Cancel must not override hovered ${actionAttribute}`);
+  }
+}
+
+{
+  const hoveredAction = {};
+  const focusedAction = { closest: (selector) => selector === '.cover-lookup-task-actions' ? {} : null };
+  const context = loadHelper({ document: { activeElement: null } });
+  const body = {
+    contains: () => false,
+    querySelector: (selector) => (
+      selector === '.cover-lookup-task-actions :hover' ? hoveredAction : null
+    ),
+  };
+
+  assert.equal(context.hasActiveCoverLookupDrawerAction(body), true);
+
+  context.document.activeElement = focusedAction;
+  body.contains = (element) => element === focusedAction;
+  body.querySelector = () => null;
+  assert.equal(context.hasActiveCoverLookupDrawerAction(body), true);
+}
+
 function createDrawerHarness(overrides = {}) {
+  const drawerClasses = new Set();
   const drawerElement = {
     hidden: false,
-    classList: { toggle: () => {} },
+    classList: { contains: name => drawerClasses.has(name),
+      toggle: (name, enabled) => enabled ? drawerClasses.add(name) : drawerClasses.delete(name) },
   };
   const bodyElement = { innerHTML: '' };
   const badgeElement = { hidden: false, textContent: '' };
   const buttonElement = { classList: { toggle: () => {} } };
-  const clearElement = { hidden: false };
+  const clearElement = {
+    hidden: false,
+    disabled: false,
+    attributes: {},
+    setAttribute(name, value) {
+      this.attributes[name] = String(value);
+    },
+  };
   const modalElement = { hidden: true };
   const intervalCalls = [];
   const clearedIntervals = [];
@@ -89,6 +235,33 @@ function createDrawerHarness(overrides = {}) {
     clearedIntervals,
   };
 }
+
+(async () => {
+  for (const clearAll of [false, true]) {
+    let resolveFetch;
+    const { context, bodyElement } = createDrawerHarness({
+      fetch: () => new Promise((resolve) => { resolveFetch = resolve; }),
+      console: { error: () => {} },
+    });
+    context.state.coverLookup.tasks = [{
+      id: 'rollback-task', status: 'completed', artist: 'Artist', album: 'Restored Album',
+    }];
+    context.renderCoverLookupDrawer();
+    context.hasActiveCoverLookupDrawerAction = () => true;
+    context.hasActiveCoverLookupDrawerTextSelection = () => true;
+    const pending = clearAll
+      ? context.clearCompletedCoverLookupTasks()
+      : context.clearCoverLookupTaskNotification('rollback-task');
+    assert.match(bodyElement.innerHTML, /not looking for anything at the moment/i);
+    resolveFetch({ ok: false, json: async () => ({ ok: false, error: 'Delete failed' }) });
+    await pending;
+    assert.equal(context.state.coverLookup.tasks[0].id, 'rollback-task');
+    assert.match(bodyElement.innerHTML, /Restored Album/);
+  }
+})().catch((error) => {
+  console.error(error);
+  process.exitCode = 1;
+});
 
 {
   const image = { removeCalled: 0, remove() { this.removeCalled += 1; } };
@@ -270,7 +443,7 @@ function createDrawerHarness(overrides = {}) {
 
   assert.match(
     bodyElement.innerHTML,
-    /<div class="cover-lookup-task-open" role="button" tabindex="0" data-open-cover-lookup-task="completed-task">/,
+    /<div class="cover-lookup-task-open" role="button" tabindex="0" aria-label="Open Cover Look Up: Kill Em All — Metallica · 1983" data-open-cover-lookup-task="completed-task">/,
     'the clickable card text should use a default-selectable surface',
   );
   assert.doesNotMatch(
@@ -575,7 +748,7 @@ function createDrawerHarness(overrides = {}) {
   await context.loadCoverLookupTasks({ toast: false });
 
   assert.equal(context.state.coverLookup.tasks[0].notification_action_taken, true);
-  assert.match(bodyElement.innerHTML, /Art chosen/);
+  assert.match(bodyElement.innerHTML, /Lookup failed/);
 })().catch((error) => {
   console.error(error);
   process.exitCode = 1;
@@ -1978,6 +2151,53 @@ function createDrawerHarness(overrides = {}) {
   context.renderCoverLookupDrawer();
 
   assert.equal(clearElement.hidden, false);
+  assert.equal(clearElement.disabled, false);
+  assert.equal(clearElement.attributes['aria-disabled'], 'false');
+})().catch((error) => {
+  console.error(error);
+  process.exitCode = 1;
+});
+
+;(async () => {
+  await Promise.resolve();
+  const toastCalls = [];
+  const { context, clearElement } = createDrawerHarness({
+    showToast: (...args) => toastCalls.push(args),
+  });
+
+  context.state.coverLookup.tasks = [];
+  context.renderCoverLookupDrawer();
+
+  assert.equal(clearElement.hidden, false);
+  assert.equal(clearElement.disabled, true);
+  assert.equal(clearElement.attributes['aria-disabled'], 'true');
+  await context.clearCompletedCoverLookupTasks();
+  assert.deepEqual(toastCalls, []);
+})().catch((error) => {
+  console.error(error);
+  process.exitCode = 1;
+});
+
+;(async () => {
+  await Promise.resolve();
+  const toastCalls = [];
+  const { context } = createDrawerHarness({
+    fetch: async () => ({
+      ok: true,
+      json: async () => ({ ok: true, removed_count: 0, tasks: [] }),
+    }),
+    showToast: (...args) => toastCalls.push(args),
+  });
+  context.state.coverLookup.tasks = [{
+    id: 'completed-task',
+    status: 'completed',
+    notification_action_taken: false,
+  }];
+
+  await context.clearCompletedCoverLookupTasks();
+
+  assert.deepEqual(context.state.coverLookup.tasks, []);
+  assert.deepEqual(toastCalls, []);
 })().catch((error) => {
   console.error(error);
   process.exitCode = 1;
@@ -2233,7 +2453,10 @@ function createDrawerHarness(overrides = {}) {
 }
 
 ;(async () => {
+  const warnings = [];
   const context = loadHelper({
+    document: { getElementById: () => ({ hidden: true }) },
+    console: { ...console, warn: (...args) => warnings.push(args) },
     fetch: async () => ({
       ok: true,
       json: async () => ({
@@ -2271,6 +2494,7 @@ function createDrawerHarness(overrides = {}) {
 
   await context.loadCoverLookupTasks({ toast: false });
 
+  assert.deepEqual(warnings, [], 'successful task polling must reach idle cleanup without a caught error');
   assert.equal(
     context.state.coverLookup.modal.selectedRemoteId,
     'persisted-override-id',
@@ -2481,11 +2705,48 @@ function createDrawerHarness(overrides = {}) {
 
   context.renderCoverLookupDrawer();
 
-  assert.match(bodyElement.innerHTML, /Completed — no result/);
+  assert.match(bodyElement.innerHTML, /No covers found/);
 })().catch((error) => {
   console.error(error);
   process.exitCode = 1;
 });
+
+{
+  const { context, bodyElement } = createDrawerHarness();
+  for (const notificationActionTaken of [false, true]) {
+    context.state.coverLookup.tasks = [{
+      id: 'canceled-task',
+      status: 'canceled',
+      album: 'Canceled Album',
+      artist: 'Canceled Artist',
+      notification_action_taken: notificationActionTaken,
+    }];
+
+    context.renderCoverLookupDrawer();
+
+    assert.match(bodyElement.innerHTML, /cover-lookup-task-status-label[^>]*>Canceled<\/span>/);
+    assert.match(bodyElement.innerHTML, /data-clear-cover-lookup-task="canceled-task"/);
+    assert.doesNotMatch(bodyElement.innerHTML, /data-cancel-cover-lookup-task=/);
+    assert.match(bodyElement.innerHTML, /aria-label="Open Cover Look Up: Canceled Album — Canceled Artist"/);
+  }
+}
+
+{
+  const context = loadHelper({
+    escapeHtml: (value) => String(value || ''),
+    getCoverLookupActiveLocalPath: () => '',
+  });
+  const savedCover = { id: 'saved-cover', url: 'https://covers.example/saved.jpg' };
+  const stagedCover = { id: 'staged-cover', filename: 'staged.png', object_url: 'blob:staged-cover' };
+  assert.match(context.buildCoverLookupCard(savedCover, 'saved-remote'), /cover-lookup-art-card is-active/);
+
+  context.state.coverLookup.modal.pendingPastedImageId = stagedCover.id;
+  assert.match(context.buildCoverLookupCard(stagedCover, 'pasted'), /cover-lookup-art-card is-active/);
+  assert.doesNotMatch(context.buildCoverLookupCard(savedCover, 'saved-remote'), /cover-lookup-art-card is-active/);
+
+  context.state.coverLookup.modal.pendingPastedImageId = '';
+  assert.match(context.buildCoverLookupCard(savedCover, 'saved-remote'), /cover-lookup-art-card is-active/);
+}
 
 ;(async () => {
   await Promise.resolve();
@@ -2512,6 +2773,7 @@ function createDrawerHarness(overrides = {}) {
       artist: 'Failed Artist',
       album: 'Failed Album',
       progress: 100,
+      album_payload: { key: 'failed-album' },
     },
   ];
 
@@ -2529,6 +2791,8 @@ function createDrawerHarness(overrides = {}) {
     bodyElement.innerHTML,
     /cover-lookup-task-elapsed[^"]*\bis-failed\b[^"]*"[^>]*data-cover-lookup-task-elapsed="failed-task"/,
   );
+  assert.match(bodyElement.innerHTML, /data-retry-cover-lookup-task="failed-task"[^>]*aria-label="Retry lookup"[^]*?<svg/);
+  assert.match(bodyElement.innerHTML, /data-clear-cover-lookup-task="failed-task"/);
 })().catch((error) => {
   console.error(error);
   process.exitCode = 1;
@@ -2615,6 +2879,26 @@ function createDrawerHarness(overrides = {}) {
   context.renderCoverLookupDrawer();
 
   assert.match(bodyElement.innerHTML, /data-clear-cover-lookup-task="completed-task"/);
+
+  context.state.coverLookup.tasks = [
+    {
+      id: 'running-task',
+      status: 'running',
+      artist: 'Artist',
+      album: 'Album',
+      year: 2001,
+      progress: 50,
+    },
+  ];
+
+  context.renderCoverLookupDrawer();
+
+  assert.match(bodyElement.innerHTML, /data-cancel-cover-lookup-task="running-task"/);
+  assert.match(
+    bodyElement.innerHTML,
+    /class="ui-icon action-button__icon ui-icon--close"/,
+    'the running-task stop action must use the shared stroked close icon',
+  );
 }
 
 {
@@ -2753,6 +3037,8 @@ function createDrawerHarness(overrides = {}) {
     },
   ];
 
+  context.renderCoverLookupDrawer();
+  context.hasActiveCoverLookupDrawerAction = () => true;
   const pending = context.clearCoverLookupTaskNotification('completed-task');
 
   assert.equal(context.state.coverLookup.tasks.length, 0);
@@ -2767,3 +3053,110 @@ function createDrawerHarness(overrides = {}) {
   console.error(error);
   process.exitCode = 1;
 });
+
+
+{
+  const { install } = require('../../../music_app/static/js/capability-ui.js');
+  const policy = install({ getElementById: () => ({ textContent: JSON.stringify({
+    allowed_actions: {}, client_surface: 'tv', denied_selectors: [],
+    cover_provider_groups: ['services', 'cover_art_archive'],
+  }) }) });
+  const context = loadHelper({ window: { AlbumHavenCapabilities: policy } });
+  const candidates = [
+    { id: 'provider', url: 'https://example.test/provider.jpg', lookup_group: 'services' },
+    { id: 'manual', url: 'https://example.test/manual.jpg', lookup_group: 'manual_links', source: 'spotify' },
+    { id: 'unknown', url: 'https://example.test/unknown.jpg' },
+  ];
+  assert.deepEqual(Array.from(context.sanitizeCoverLookupPossibleMatches(candidates), item => item.id), ['provider']);
+  const modal = context.state.coverLookup.modal;
+  modal.possibleMatches = candidates;
+  modal.selectedRemoteId = 'provider';
+  modal.pendingLocalPath = '';
+  context.selectRemoteCoverFromLookup('manual');
+  assert.equal(modal.selectedRemoteId, 'provider', 'TV must reject programmatic manual candidate selection');
+  context.selectLocalCoverFromLookup('private-cover.jpg');
+  assert.equal(modal.pendingLocalPath, '', 'TV must reject programmatic local selection');
+}
+
+
+function savedSourceRevisionContext({ albumRevision = 'saved-revision', saving = false, sourceToken = 1790000000000 } = {}) {
+  const context = loadHelper();
+  vm.runInContext(fs.readFileSync(path.join(path.dirname(helperPath), 'modal-and-overlay-helpers.js'), 'utf8'), context);
+  context.state.coverRefreshTokens = { '/owned/Art/Front.jpg': sourceToken };
+  context.state.coverLookup.modal.album = { cover_path: '/owned/cover.jpg', cover_revision: albumRevision };
+  context.state.coverLookup.modal.saving = saving;
+  return context;
+}
+
+require('node:test')('compact local gallery removes only verified initial duplicates and retains desktop and draft choices', () => {
+  const body = { innerHTML: '' };
+  let compact = true;
+  const context = loadHelper({
+    escapeHtml: value => String(value || ''),
+    usesMobilePageLayout: () => compact,
+    document: { getElementById: id => ({
+      'cover-lookup-modal': { hidden: false },
+      'cover-lookup-modal-body': body,
+      'cover-lookup-modal-subtitle': { textContent: '' },
+      'cover-lookup-modal-status': { textContent: '', classList: { toggle() {} } },
+    }[id] || null) },
+  });
+  context.state.coverLookup.tasks = [];
+  const modal = context.state.coverLookup.modal;
+  modal.album = { name: 'Owned album' };
+  const covers = [
+    { path: '/owned/alternate.jpg' },
+    { path: '/owned/original.jpg', duplicate_of: '/owned/cover.jpg' },
+    { path: '/owned/cover.jpg', is_active: true },
+  ];
+  context.applyCoverLookupGalleryPayload({ active_cover_path: '/owned/cover.jpg',
+    selected_source_path: '/owned/cover.jpg', local_covers: covers });
+  const observed = [];
+  context.buildCoverLookupCard = item => { observed.push(item.path); return item.path; };
+  function render() { observed.length = 0; context.renderCoverLookupModal(); return [...observed]; }
+  const initial = JSON.stringify(modal.localCovers);
+  assert.deepEqual(render(), ['/owned/alternate.jpg', '/owned/cover.jpg']);
+  assert.match(body.innerHTML, /LOCAL · 2 images/);
+  assert.equal(modal.activeLocalSelectionPath, '/owned/cover.jpg');
+  compact = false;
+  assert.deepEqual(render(), covers.map(item => item.path));
+  assert.match(body.innerHTML, /LOCAL · 3 images/);
+  modal.pendingLocalPath = '/owned/original.jpg';
+  compact = true;
+  assert.deepEqual(render(), covers.map(item => item.path), 'an existing desktop draft remains visible after narrowing');
+  assert.equal(modal.pendingLocalPath, '/owned/original.jpg');
+  modal.pendingLocalPath = '/owned/alternate.jpg';
+  assert.deepEqual(render(), ['/owned/alternate.jpg', '/owned/cover.jpg']);
+  assert.equal(modal.pendingLocalPath, '/owned/alternate.jpg');
+  assert.equal(JSON.stringify(modal.localCovers), initial, 'rendering never discards the file inventory');
+  modal.localCovers = [covers[0], covers[1]];
+  assert.deepEqual(render(), ['/owned/alternate.jpg', '/owned/original.jpg'], 'an absent canonical representative cannot hide its remaining source');
+});
+function savedSourceGallery(revision = 'saved-revision') {
+  return { active_cover_path: '/owned/cover.jpg', selected_source_path: '/owned/Art/Front.jpg',
+    local_covers: [
+      { path: '/owned/cover.jpg', is_active: true, cover_revision: revision },
+      { path: '/owned/Art/Front.jpg', is_active: false, cover_revision: revision },
+    ] };
+}
+
+require('node:test')('confirmed saved source revision replaces its older optimistic URL token', () => {
+  const context = savedSourceRevisionContext();
+  context.applyCoverLookupGalleryPayload(savedSourceGallery());
+  assert.equal(context.state.coverRefreshTokens['/owned/Art/Front.jpg'], 'saved-revision');
+  assert.equal(new URL(context.buildCoverUrl('/owned/Art/Front.jpg', { size: 480, revision: 'saved-revision' }),
+    'http://localhost').searchParams.get('v'), 'saved-revision');
+});
+
+for (const [label, values] of [
+  ['new save in progress', { albumRevision: 'saved-revision', saving: true, sourceToken: 1790000000001 }],
+  ['new unconfirmed selection', { albumRevision: null, saving: false, sourceToken: 1790000000001 }],
+  ['new committed selection', { albumRevision: 'new-revision', sourceToken: 'new-revision' }],
+]) {
+  require('node:test')(`an older source gallery cannot replace the token of a ${label}`, () => {
+    const context = savedSourceRevisionContext(values);
+    context.applyCoverLookupGalleryPayload(savedSourceGallery());
+    assert.equal(context.state.coverRefreshTokens['/owned/Art/Front.jpg'], values.sourceToken);
+    assert.equal(context.state.coverLookup.modal.album.cover_revision, values.albumRevision);
+  });
+}

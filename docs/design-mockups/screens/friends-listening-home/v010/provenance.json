@@ -1,0 +1,172 @@
+{
+  "version": "v010",
+  "sourceCommit": "83ffdb1b55f2a6586daf0039b1a430ebd0db464a",
+  "archiveKind": "exact_editable_adapter_inputs",
+  "completeProjectIncluded": false,
+  "files": [
+    {
+      "path": "source/artist-view.mjs",
+      "deliveredPath": "mock-source/artist-view.mjs",
+      "bytes": 30725,
+      "sha256": "67bd1f8a9525d0c29542e73e2ca6407b6d0dc6bf34002ac590e17bd08de57cf6",
+      "gitBlobSha": "c797390fa40bacd92601182248f361ddb62216bb"
+    },
+    {
+      "path": "source/comparison-panel.css",
+      "deliveredPath": "mock-source/comparison-panel.css",
+      "bytes": 18036,
+      "sha256": "328543cbf97068c477d903c7db5ab762bc4f72e54d89ee982269f96b75567da3",
+      "gitBlobSha": "c721ed9048c0fe6557dc98f73b50179d8f539961"
+    },
+    {
+      "path": "source/comparison-panel.jsx",
+      "deliveredPath": "mock-source/comparison-panel.jsx",
+      "bytes": 10827,
+      "sha256": "9680af84f4bb9d8de56d7eb31745b43ab643cb4bdfab1f5a6b11fc6e4c39f210",
+      "gitBlobSha": "16fce32b4dc17deae38aec7b61a483747f186962"
+    },
+    {
+      "path": "source/comparison-view.mjs",
+      "deliveredPath": "mock-source/comparison-view.mjs",
+      "bytes": 17792,
+      "sha256": "4764d797a652c780732781e63cc7ec7bc1569469a896a4648c72a6a42c8c1ffb",
+      "gitBlobSha": "906fd3a11b71d0dee9b6d103c09203e83c330b54"
+    },
+    {
+      "path": "source/fixture-data.mjs",
+      "deliveredPath": "mock-source/fixture-data.mjs",
+      "bytes": 26701,
+      "sha256": "267fa84be15c9d4405006e0f7fa60dfa6e6cfb0a959a5b121af37e50eb7a8c3d",
+      "gitBlobSha": "ad1e43d261fe6520a786cfd59f2e2841d8d4ad85"
+    },
+    {
+      "path": "source/friends-app.jsx",
+      "deliveredPath": "mock-source/friends-app.jsx",
+      "bytes": 84823,
+      "sha256": "1fd9a69558d29a2c02cc580c9ef467931ffd25e26014a79f64f635efe9a89418",
+      "gitBlobSha": "3fba301371defce68a25795ea1cddc88315a22a5"
+    },
+    {
+      "path": "source/icon-source-preview.svg",
+      "deliveredPath": "mock-source/icon-source-preview.svg",
+      "bytes": 9037,
+      "sha256": "e324d1b58c58d3a97706a4b83a52f0c5cd81c5520988425f23497cf7f5f2a9e2",
+      "gitBlobSha": "83b054de8cb3bb5d03598be8b1f4a2763a10fb39"
+    },
+    {
+      "path": "source/listening-model.mjs",
+      "deliveredPath": "mock-source/listening-model.mjs",
+      "bytes": 2783,
+      "sha256": "ef7bd954d5bba85fa97ceb18d0f56b464f1519f0890355e7d69486ff63b2c9ae",
+      "gitBlobSha": "7d1c6032f273222eed61f0417432ce6b56c07c5b"
+    },
+    {
+      "path": "source/mock-adapter.mjs",
+      "deliveredPath": "mock-source/mock-adapter.mjs",
+      "bytes": 12209,
+      "sha256": "6e7353b4bc1a168530b62ba9a0e55aa1212736af67ff528b127953055c199a90",
+      "gitBlobSha": "60ba3af5fbbb3bf8b891c36a36fbd1516a2242c5"
+    },
+    {
+      "path": "source/mock-layout.css",
+      "deliveredPath": "mock-source/mock-layout.css",
+      "bytes": 73038,
+      "sha256": "4664bb8a5546e7767e4fbab984398629899b7b96754ad2075c5395520d019421",
+      "gitBlobSha": "7770302236ad9fe4b1def5dc21e98208373760a8"
+    },
+    {
+      "path": "source/native-layout.js",
+      "deliveredPath": "mock-source/native-layout.js",
+      "bytes": 94633,
+      "sha256": "0edbe64df262059f0a839430e29784e514b8b471ae95599ea8949323945b4325",
+      "gitBlobSha": "675c5b66201a4bca7587beaf283fc73795cbffc1"
+    },
+    {
+      "path": "source/playlist-model.mjs",
+      "deliveredPath": "mock-source/playlist-model.mjs",
+      "bytes": 14429,
+      "sha256": "eea0d38194c6a5920ce45eb0f6c3143afa23f0d328459a40e798eee9888b893d",
+      "gitBlobSha": "f1b7d687f903ba9f01f597da5e751591d6ad7690"
+    },
+    {
+      "path": "source/playlist-panel.css",
+      "deliveredPath": "mock-source/playlist-panel.css",
+      "bytes": 6061,
+      "sha256": "881d47689ac77542182fe3b08c8090d4ea430d25273821700bf5ff4eb6039bae",
+      "gitBlobSha": "1d3c717b1ebbec384de2eb2e54c91d39dd0f1a72"
+    },
+    {
+      "path": "source/playlist-panel.jsx",
+      "deliveredPath": "mock-source/playlist-panel.jsx",
+      "bytes": 33615,
+      "sha256": "c7ffda3d34dc253700c6760719586fc15dc72a72100a6bdc4792c15d2ec77a98",
+      "gitBlobSha": "94a3811cd4f62f3de2ec052134e71f52a2a2ba85"
+    },
+    {
+      "path": "source/recent-history.mjs",
+      "deliveredPath": "mock-source/recent-history.mjs",
+      "bytes": 10418,
+      "sha256": "1f4553f00140fc4649750d9401ee371ddbb3a5a99e44084c776f11e00b9fafd0",
+      "gitBlobSha": "9c2f7b1d551d5e0b8838fe5935ffb7d5a5e07a7b"
+    },
+    {
+      "path": "source/review-proposals.jsx",
+      "deliveredPath": "mock-source/review-proposals.jsx",
+      "bytes": 4960,
+      "sha256": "d2a17375b34f0775c01b20f1f4c01a2e7ac59ca46e87ca0323a780601b056866",
+      "gitBlobSha": "c913e581646babc8e7a64b985a1ed2ceed24d763"
+    },
+    {
+      "path": "source/sidebar-inactivity.mjs",
+      "deliveredPath": "mock-source/sidebar-inactivity.mjs",
+      "bytes": 10230,
+      "sha256": "ff94e9384dd3ae48b30c654dc9be28528cd808602e8367258cccbcf4e73a0ecd",
+      "gitBlobSha": "e416e82e54e0365126a079f23293e662e98465e2"
+    },
+    {
+      "path": "source/track-social.mjs",
+      "deliveredPath": "mock-source/track-social.mjs",
+      "bytes": 8141,
+      "sha256": "b09a13ed779c94b30ed183d0258622b3bf5dbce769962c3b6aea7a3d86278dfc",
+      "gitBlobSha": "5fe1132fac8e667013e9c7bd70716fcf1b073303"
+    },
+    {
+      "path": "source/upstream-manifest.json",
+      "deliveredPath": "mock-source/upstream-manifest.json",
+      "bytes": 34794,
+      "sha256": "ea1bccfe5f92e126d440231eb3fbdbc1fb3e1d3dba37cf657aad3afcaea1f135",
+      "gitBlobSha": "147d49eecf2897067ab184558d302e933b57aee9"
+    }
+  ],
+  "sourceFreezeSha256": "02dcfa6c06fe0816853b0c4b0b8e403201f0f9c177e5c99280192ca5d6fcff1b",
+  "sourceReviewSha256": "83faf8662fc2dfb457cbca06cd37f9ccb30c251d1a1b70b2004f8aeeb02d8601",
+  "checks": {
+    "search": 19,
+    "comparisonProjection": 116,
+    "models": 24,
+    "components": 37,
+    "routes": 68,
+    "headers": 21,
+    "proposals": 7,
+    "sharedView": 9,
+    "mobileComposition": 9,
+    "affection": 11,
+    "frequency": 18,
+    "interface": 19,
+    "recentDeselection": 13,
+    "playlistExpansion": 16,
+    "artistBottom": 4,
+    "artistRightColumn": 9,
+    "comparisonLatest": 7,
+    "expandedReturnSourceContract": true,
+    "timestampCases": 6,
+    "timestampDeviceTimeZoneRuns": 2,
+    "sidebarFakeClockCases": 16,
+    "worker": 6
+  },
+  "browser": "NOT_RUN",
+  "appScreenshots": 0,
+  "ownerVisualApproval": "pending",
+  "sourceModifiedDuringArchive": false,
+  "productionImplementation": false
+}

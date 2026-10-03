@@ -1,0 +1,202 @@
+{
+  "version": "v011",
+  "sourceCommit": "ff2e28fab7ff2987de73267fe8421f17d6e4190e",
+  "archiveKind": "exact_editable_adapter_inputs",
+  "completeProjectIncluded": false,
+  "files": [
+    {
+      "path": "source/README.md",
+      "deliveredPath": "mock-source/README.md",
+      "bytes": 12849,
+      "sha256": "3922224bcded0a3e3796fa9e57e10044e31dd430df4abb2ad5da4dfadcd9b9b7",
+      "gitBlobSha": "a31f61720bbcfd0dab08bf3c638a3a93374d216e"
+    },
+    {
+      "path": "source/artist-view.mjs",
+      "deliveredPath": "mock-source/artist-view.mjs",
+      "bytes": 32276,
+      "sha256": "d3c67f626c5dfca791b6549556608c2d25aaf6b78d84079ff16082e3315f7f83",
+      "gitBlobSha": "81c95df9bb82fe5ed7d909b508cd7e6cd7d24f8d"
+    },
+    {
+      "path": "source/comparison-panel.css",
+      "deliveredPath": "mock-source/comparison-panel.css",
+      "bytes": 21563,
+      "sha256": "a08d41b73ededcc6973784b25c95539e2aa7ce8f43d477e3c2998f9bfbba10e7",
+      "gitBlobSha": "73d6f984978705503b045ffa49d6c89c57347e6c"
+    },
+    {
+      "path": "source/comparison-panel.jsx",
+      "deliveredPath": "mock-source/comparison-panel.jsx",
+      "bytes": 11832,
+      "sha256": "ce858971cc9bf280b9a9da879411506bc0b75c0712951be2f3fba9af2a22a23c",
+      "gitBlobSha": "2b6e486563cf55f91433a7d1ac35f5865c834dc6"
+    },
+    {
+      "path": "source/comparison-view.mjs",
+      "deliveredPath": "mock-source/comparison-view.mjs",
+      "bytes": 23719,
+      "sha256": "668f2819ac949773eff4e58039b6c172be310cfb39086ed4dec657bb2d553ba2",
+      "gitBlobSha": "8f4bdac420a28f6633f346791fe2e5ae4ffe0066"
+    },
+    {
+      "path": "source/fixture-data.mjs",
+      "deliveredPath": "mock-source/fixture-data.mjs",
+      "bytes": 26701,
+      "sha256": "267fa84be15c9d4405006e0f7fa60dfa6e6cfb0a959a5b121af37e50eb7a8c3d",
+      "gitBlobSha": "ad1e43d261fe6520a786cfd59f2e2841d8d4ad85"
+    },
+    {
+      "path": "source/friends-app.jsx",
+      "deliveredPath": "mock-source/friends-app.jsx",
+      "bytes": 96964,
+      "sha256": "bcf9804740dd113f7925bf6738230c597b501688488129c725bcbae4853df73f",
+      "gitBlobSha": "944e9e351dd08d36a24f1951efe457d8a2ec7aa5"
+    },
+    {
+      "path": "source/icon-source-preview.svg",
+      "deliveredPath": "mock-source/icon-source-preview.svg",
+      "bytes": 517497,
+      "sha256": "db1d97e7ec58a0bd84778bb6c8955c679673c8c05669721210cd4beabb67aff2",
+      "gitBlobSha": "a9c5f9265d2d5bc3257c2475d2a7f27ccac7b5ee"
+    },
+    {
+      "path": "source/listening-model.mjs",
+      "deliveredPath": "mock-source/listening-model.mjs",
+      "bytes": 2783,
+      "sha256": "ef7bd954d5bba85fa97ceb18d0f56b464f1519f0890355e7d69486ff63b2c9ae",
+      "gitBlobSha": "7d1c6032f273222eed61f0417432ce6b56c07c5b"
+    },
+    {
+      "path": "source/mock-adapter.mjs",
+      "deliveredPath": "mock-source/mock-adapter.mjs",
+      "bytes": 12209,
+      "sha256": "6e7353b4bc1a168530b62ba9a0e55aa1212736af67ff528b127953055c199a90",
+      "gitBlobSha": "60ba3af5fbbb3bf8b891c36a36fbd1516a2242c5"
+    },
+    {
+      "path": "source/mock-layout.css",
+      "deliveredPath": "mock-source/mock-layout.css",
+      "bytes": 78155,
+      "sha256": "493719ce2a754e306f9efc93b01e1f272c390b9d56e22f7e9d7ee2be3c1406f3",
+      "gitBlobSha": "be85d87d74a074d406fb7243cbd3201828c37102"
+    },
+    {
+      "path": "source/native-layout.js",
+      "deliveredPath": "mock-source/native-layout.js",
+      "bytes": 104009,
+      "sha256": "21601b900264b9d2dae90e630cfe8992eaba01056e41904fba125d4239385c13",
+      "gitBlobSha": "65e89a44df15e364ce779f4ac9ff5a3af64cd53e"
+    },
+    {
+      "path": "source/notification-icon.mjs",
+      "deliveredPath": "mock-source/notification-icon.mjs",
+      "bytes": 18156,
+      "sha256": "756b56a3a90fed29e07fb605e6c1ea290ece8b1a225bd483530b91951c361ac7",
+      "gitBlobSha": "15441fcefa3b4ad774d96b41bb597162b932d813"
+    },
+    {
+      "path": "source/playlist-model.mjs",
+      "deliveredPath": "mock-source/playlist-model.mjs",
+      "bytes": 14429,
+      "sha256": "eea0d38194c6a5920ce45eb0f6c3143afa23f0d328459a40e798eee9888b893d",
+      "gitBlobSha": "f1b7d687f903ba9f01f597da5e751591d6ad7690"
+    },
+    {
+      "path": "source/playlist-panel.css",
+      "deliveredPath": "mock-source/playlist-panel.css",
+      "bytes": 6450,
+      "sha256": "ca2e1d7125996229a04c145f5e38252ddab9b38bccb3f487438d817b3326e93c",
+      "gitBlobSha": "b623f65170956a078658a7b54ea908276437500e"
+    },
+    {
+      "path": "source/playlist-panel.jsx",
+      "deliveredPath": "mock-source/playlist-panel.jsx",
+      "bytes": 33615,
+      "sha256": "c7ffda3d34dc253700c6760719586fc15dc72a72100a6bdc4792c15d2ec77a98",
+      "gitBlobSha": "94a3811cd4f62f3de2ec052134e71f52a2a2ba85"
+    },
+    {
+      "path": "source/recent-history.mjs",
+      "deliveredPath": "mock-source/recent-history.mjs",
+      "bytes": 10418,
+      "sha256": "1f4553f00140fc4649750d9401ee371ddbb3a5a99e44084c776f11e00b9fafd0",
+      "gitBlobSha": "9c2f7b1d551d5e0b8838fe5935ffb7d5a5e07a7b"
+    },
+    {
+      "path": "source/recent-view-icons.mjs",
+      "deliveredPath": "mock-source/recent-view-icons.mjs",
+      "bytes": 4762,
+      "sha256": "68d28820ed3bb2bd808ef6e886a1a7779f854a7316fd484f9edf29997d436b35",
+      "gitBlobSha": "49af28e7e0d3e4a1596629458f41b281f9c23431"
+    },
+    {
+      "path": "source/review-proposals.jsx",
+      "deliveredPath": "mock-source/review-proposals.jsx",
+      "bytes": 5669,
+      "sha256": "0d240f62a3d980e89b97ee22e45bd9fe8e0753281d598a71f9a956a1b2469f1d",
+      "gitBlobSha": "5e1a612dbd7de29349548dd66b631b63fef2ba5d"
+    },
+    {
+      "path": "source/sidebar-inactivity.mjs",
+      "deliveredPath": "mock-source/sidebar-inactivity.mjs",
+      "bytes": 10230,
+      "sha256": "ff94e9384dd3ae48b30c654dc9be28528cd808602e8367258cccbcf4e73a0ecd",
+      "gitBlobSha": "e416e82e54e0365126a079f23293e662e98465e2"
+    },
+    {
+      "path": "source/statistics-icon.mjs",
+      "deliveredPath": "mock-source/statistics-icon.mjs",
+      "bytes": 62999,
+      "sha256": "01faed29acba2384e6e1d6100acd2fa36b38a43b3c4a249c3cc5b9a459bf856f",
+      "gitBlobSha": "a64bb09eb666a9b9990a8351168fa6f07eb7d166"
+    },
+    {
+      "path": "source/track-social.mjs",
+      "deliveredPath": "mock-source/track-social.mjs",
+      "bytes": 8141,
+      "sha256": "b09a13ed779c94b30ed183d0258622b3bf5dbce769962c3b6aea7a3d86278dfc",
+      "gitBlobSha": "5fe1132fac8e667013e9c7bd70716fcf1b073303"
+    },
+    {
+      "path": "source/upstream-manifest.json",
+      "deliveredPath": "mock-source/upstream-manifest.json",
+      "bytes": 34794,
+      "sha256": "ea1bccfe5f92e126d440231eb3fbdbc1fb3e1d3dba37cf657aad3afcaea1f135",
+      "gitBlobSha": "147d49eecf2897067ab184558d302e933b57aee9"
+    },
+    {
+      "path": "source/widget-motion.mjs",
+      "deliveredPath": "mock-source/widget-motion.mjs",
+      "bytes": 5755,
+      "sha256": "3a1a07a4e7b6be2b70756b35050b1c11f7be8661100ccf00ae4506a02c93d48b",
+      "gitBlobSha": "6250e298185e9036320c3984759107220a738808"
+    }
+  ],
+  "sourceFreezeSha256": "9ba5bc432a847a72faff8afaca19b1e1cda4a143fe29e4f199ee57565f22905b",
+  "sourceReviewSha256": "9e2f8ce1cb90ef33f84dba84ac20ba04c96b851032ba5fb586d753a8166ebfa2",
+  "checks": {
+    "iconActionButton": 8,
+    "statisticsSourcePixelMismatch": 0,
+    "otherIconPartsPixelMismatch": 0,
+    "neutralStatisticsThemeRenders": 4,
+    "modeBellThemeRenders": 12,
+    "history": 7,
+    "modalFocus": 19,
+    "motion": 25,
+    "comparison": 8,
+    "interface": 10,
+    "routes": 71,
+    "sharedViewGroups": 9,
+    "nativeOwnerGroups": 5,
+    "retainedModelGroups": 24,
+    "repeatRebuildByteEqual": true,
+    "build": "passed",
+    "Worker": 6
+  },
+  "browser": "NOT_RUN",
+  "appScreenshots": 0,
+  "ownerVisualApproval": "pending",
+  "sourceModifiedDuringArchive": false,
+  "productionImplementation": false
+}

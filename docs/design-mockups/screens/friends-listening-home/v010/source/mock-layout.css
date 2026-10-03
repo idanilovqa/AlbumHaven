@@ -1,0 +1,781 @@
+/* Review-only composition. Native components/tokens remain the source of truth. */
+.mock-native-button{display:contents}
+.mock-bar-action .action-button__icon svg{display:block;width:18px;height:18px;stroke:currentColor;stroke-width:1.6;fill:none;stroke-linecap:round;stroke-linejoin:round}
+#mock-feature-actions{display:flex;align-items:center;gap:8px}
+.mock-header-actions{display:flex;align-items:center;justify-content:flex-end;gap:7px;flex-wrap:nowrap;flex:none}
+.mock-header-actions .action-button,#mock-recent-expand .action-button,.mock-module-header .action-button{width:34px;height:34px;min-width:34px;min-height:34px;flex-basis:34px}
+#mock-heading{flex:0 0 auto;min-width:0}
+.mock-profile-header{display:flex;align-items:center;gap:12px;padding:10px 0 15px;min-width:0}
+.mock-profile-copy{flex:1;min-width:0}
+.mock-profile-name{display:flex;align-items:center;gap:8px;min-width:0}
+.mock-profile-name h1{font-size:1.06rem;margin:0;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.mock-profile-copy p{font-size:.76rem;color:var(--muted);margin:3px 0 0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.mock-friend-label{font-size:.73rem;color:var(--muted);flex:none}
+.mock-avatar{width:38px;height:38px;object-fit:cover;border-radius:50%;flex:none}
+#mock-workspace{display:grid;grid-template-columns:minmax(0,1.35fr) minmax(330px,1fr);grid-template-rows:minmax(320px,1.15fr) minmax(185px,.85fr);gap:12px;min-height:0;flex:1;padding-bottom:8px}
+#mock-workspace[hidden],#mock-heading[hidden],#mock-single-custom[hidden],#mock-recent-body[hidden],#mock-full-album-tools[hidden],#mock-modal-page-action[hidden],.mock-module[hidden],#mock-recent-controls[hidden],#mock-recent-expand[hidden]{display:none!important}
+.mock-module{display:flex;flex-direction:column;min-width:0;min-height:0;overflow:hidden;border:1px solid color-mix(in srgb,var(--border) 70%,transparent);border-radius:14px;background:color-mix(in srgb,var(--panel) 96%,var(--text) 4%)}
+#mock-activity{grid-column:1;grid-row:1/3}
+#mock-album-panel{grid-column:2;grid-row:1}
+#mock-artist-panel{grid-column:2;grid-row:2}
+.mock-module-header{display:flex;align-items:center;justify-content:space-between;min-height:44px;padding:7px 12px;gap:8px;flex:none;border-bottom:1px solid var(--border)}
+.mock-module-header>strong{font-size:.79rem;font-weight:600;white-space:nowrap}
+#mock-album-native-actions,#mock-album-native-actions>.album-details-header__actions{display:contents}
+#mock-recent-body{flex:1;min-height:0;overflow:auto;overscroll-behavior:contain;padding:12px}
+.mock-recent-view [data-gallery-bar-instance=gallery]{flex:0 0 auto;flex-wrap:wrap;gap:6px 12px;margin:0!important;padding:10px 12px!important;border-bottom:1px solid var(--border);background:transparent}
+.mock-recent-view [data-gallery-bar-instance=gallery]>.gallery-bar__context{flex:1;min-width:0}
+.mock-recent-view [data-gallery-bar-instance=gallery] .gallery-bar__actions{display:flex;flex-wrap:nowrap;gap:7px;margin-left:auto}
+.mock-recent-view [data-gallery-bar-instance=gallery] .gallery-bar__title{font-size:.95rem}
+.mock-recent-view [data-gallery-bar-instance=gallery] .gallery-bar__summary{font-size:.69rem}
+#mock-recent-controls{display:flex;align-items:center;justify-content:space-between;gap:14px;flex:1 0 100%;min-width:0}
+#mock-recent-tabs .in-page-tabs{gap:19px}
+#mock-recent-tabs .in-page-tabs>[role=tab]{font-size:.79rem;padding:8px 0}
+.mock-select{display:flex;align-items:center;gap:7px;font-size:.72rem;color:var(--muted);min-width:0}
+.mock-select select{font:inherit;color:var(--text);background:var(--panel);border:1px solid var(--border);border-radius:6px;padding:5px 7px;min-height:30px;max-width:100%}
+.mock-flat-gallery>.album-row{gap:16px;margin-bottom:16px}
+.mock-flat-gallery .album-card{min-width:0}
+/* Recent album selection persists when focus moves into its information panels. */
+#mock-album-native-actions[hidden]{display:none!important}
+:is(#mock-recent-content,#mobile-home-albums) .album-card[data-mock-recent-album-selected=true]{border-color:var(--navigation-tree-selection-accent-color,var(--appearance-selected-accent,var(--accent)));background:var(--selection-body-background,var(--panel-2))}
+:is(#mock-recent-content,#mobile-home-albums) .album-card[data-mock-recent-album-selected=true] :is(.gallery-card-info,.album-body){background:var(--selection-body-background,var(--panel-2))}
+:is(#mock-recent-content,#mobile-home-albums) .album-card[data-mock-recent-album-selected=true]::after{inset:0 auto 0 0;width:var(--navigation-tree-selection-accent-width,3px);border:0;border-radius:0;background:var(--navigation-tree-selection-accent-color,var(--appearance-selected-accent,var(--accent)));box-shadow:none;z-index:3}
+.mock-small-gallery{margin-top:18px}
+.mock-small-gallery .gallery-card-info{font-size:.75rem}
+.mock-card-listen-metrics{font-size:.71rem;color:var(--muted);border-top:1px solid var(--border);padding-top:6px;margin-top:6px;font-variant-numeric:tabular-nums}
+.mock-small-gallery .mock-card-listen-metrics{font-size:.68rem}
+.mock-recent-composition .album-track-table{padding:0;background:transparent}
+.mock-recent-composition .compact-data-table,.mock-comparison-column .compact-data-table{--cdt-mobile-min-width:0}
+.mock-count-cell{text-align:right!important;font-variant-numeric:tabular-nums;font-size:.76rem;white-space:nowrap}
+.mock-artist-tree{display:flex;flex-direction:column;gap:3px}
+.mock-artist-tree .navigation-tree-item--wide{display:flex;align-items:center;gap:10px;width:100%;padding:8px 10px;min-height:58px;text-align:left;text-decoration:none;font:inherit;border:0;border-radius:9px;background:transparent;color:var(--text);cursor:pointer}
+.mock-artist-tree .navigation-tree-label{flex:1;min-width:0;text-align:left}
+.mock-artist-tree .utility-list-item-title{display:block;font-size:.85rem}
+.mock-artist-tree .utility-list-item-meta{display:block;font-size:.73rem;color:var(--muted)}
+.mock-artist-tree .navigation-tree-item.is-selected{background:var(--selection-body-background,var(--panel-2))}
+.mock-artist-tree .navigation-tree-item.is-selected::before{content:'';position:absolute;left:0;top:7px;bottom:7px;width:var(--navigation-tree-selection-accent-width,3px);background:var(--navigation-tree-selection-accent-color,var(--accent));border-radius:2px}
+#track-modal[data-mock-placement=embedded]{position:relative!important;inset:auto!important;display:flex;width:100%;height:auto;flex:1;min-height:0;padding:0!important;background:transparent!important;z-index:1!important}
+#track-modal[data-mock-placement=embedded][hidden]{display:none!important}
+#track-modal[data-mock-placement=embedded]>.track-modal-dialog{display:grid!important;grid-template-columns:110px minmax(0,1fr)!important;grid-template-rows:auto auto minmax(0,1fr)!important;gap:10px!important;width:100%!important;max-width:none!important;max-height:100%!important;height:100%;margin:0;padding:12px!important;border:0!important;border-radius:0!important;box-shadow:none!important;background:transparent!important;overflow:auto}
+#track-modal[data-mock-placement=embedded] .track-modal-cover{grid-column:1!important;grid-row:1!important;width:110px;height:110px;max-width:110px;align-self:start;container-type:normal}
+#track-modal[data-mock-placement=embedded]>.track-modal-dialog>.track-modal-header{grid-column:2!important;grid-row:1!important;min-width:0;padding:0;align-self:start}
+#track-modal[data-mock-placement=embedded]>.track-modal-dialog>.track-modal-tabs{grid-column:1/-1!important;grid-row:2!important}
+#track-modal[data-mock-placement=embedded] .track-modal-main{grid-column:1/-1!important;grid-row:3!important;padding-top:0!important;min-width:0}
+#track-modal[data-mock-placement=embedded] .album-details-header__primary{font-size:1.13rem}
+#mock-album-preferences:empty{display:none}
+#mock-album-preferences{padding:7px 12px 0;flex:none}
+#mock-artist-panel>.artist-info-overlay[data-mock-placement=embedded]{position:static!important;inset:auto!important;width:100%!important;max-width:none!important;display:block!important;max-height:none!important;flex:1;min-height:0;margin:0;padding:12px;border:0;border-radius:0;box-shadow:none;background:transparent;overflow:auto;z-index:auto!important}
+#mock-artist-panel .artist-info-overlay__image{width:88px!important;height:88px!important}
+#mock-artist-panel .mobile-artist-info-close{display:none}
+#mock-single-custom{flex:1;min-height:0;overflow:auto;padding-bottom:12px}
+#shell-main-surface[data-mock-mode=album]>#albums-scroll,#shell-main-surface[data-mock-mode=album]>[data-gallery-bar-instance=gallery],#shell-main-surface[data-mock-mode=compare]>#albums-scroll,#shell-main-surface[data-mock-mode=compare]>[data-gallery-bar-instance=gallery],.mock-recent-view #albums-scroll{display:none!important}
+.mock-full-album-tools{flex:none;padding:0 0 8px}
+.mock-full-header{display:flex;align-items:center;gap:10px;min-height:44px;font-size:.8rem;color:var(--muted)}
+.mock-full-header>.mock-header-actions{margin-left:auto}
+.mock-native-link{border:0;padding:0;background:none;color:inherit;font:inherit;cursor:pointer;text-align:left}
+.mock-native-link:hover{text-decoration:underline}
+.mock-native-link:focus-visible{outline:2px solid var(--appearance-interaction-outline,var(--accent));outline-offset:3px}
+.mock-comparison-filters{display:flex;align-items:center;justify-content:space-between;gap:15px;padding:0 0 8px}
+.mock-comparison-options{display:flex;justify-content:space-between;align-items:center;gap:10px;padding:4px 0 10px}
+.mock-comparison-columns{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:18px;align-items:start}
+.mock-comparison-column{min-width:0}
+.mock-comparison-album{padding:10px 0;border-bottom:1px solid var(--border)}
+.mock-comparison-album .album-row{margin:0;gap:0}
+.mock-comparison-album .album-card{min-width:0}
+.mock-missing{opacity:.4}
+.mock-artist-cell{display:flex;align-items:center;gap:9px;width:100%;padding:0;border:0;background:transparent;color:var(--text);font:inherit;text-align:left;cursor:pointer}
+.mock-artist-cell>.album-artbox{width:36px;height:36px;flex:0 0 36px;border-radius:6px;overflow:hidden}
+.mock-empty{padding:26px 14px;text-align:center;color:var(--muted);font-size:.86rem}
+.mock-empty h2{font-size:1rem;color:var(--text)}
+.mock-muted{color:var(--muted);font-size:.73rem;line-height:1.5}
+.mock-person{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:10px 0;border-bottom:1px solid var(--border)}
+.mock-person:last-child{border:0}
+.mock-person-name{display:flex;align-items:center;gap:10px;padding:5px 0;border:0;background:none;color:var(--text);font:inherit;text-align:left;cursor:pointer;min-width:0}
+.mock-person-name small{display:block;color:var(--muted);font-size:.73rem;margin-top:3px}
+.mock-person-actions{display:flex;align-items:center;gap:6px;flex-wrap:wrap;justify-content:flex-end}
+.mock-switch{display:flex;justify-content:space-between;align-items:center;gap:14px;font-size:.82rem}
+.mock-switch input{accent-color:var(--accent)}
+.mock-settings,.mock-friends-menu{display:grid;gap:16px}
+.mock-settings p{font-size:.77rem;color:var(--muted);line-height:1.5;margin:0}
+.mock-friends-menu>.mock-native-button{display:block}
+.mock-profile-editor{display:grid;gap:14px}
+.mock-profile-editor label{display:grid;gap:6px;font-size:.8rem}
+.mock-profile-editor input:not([type=file]),.mock-profile-editor textarea{width:100%;font:inherit;color:var(--text);background:var(--panel);border:1px solid var(--border);border-radius:7px;padding:9px;box-sizing:border-box;resize:vertical}
+.mock-avatar-editor{display:flex;gap:16px;align-items:center}
+.mock-avatar-editor>.mock-avatar{width:70px;height:70px}
+.mock-avatar-presets{display:flex;gap:9px}
+.mock-avatar-choice{border:1px solid var(--border);border-radius:50%;padding:2px;background:transparent;cursor:pointer}
+.mock-avatar-choice img{display:block;width:36px;height:36px;border-radius:50%;object-fit:cover}
+.mock-request{text-align:center;font-size:.86rem;line-height:1.5}
+.mock-request>.mock-avatar{width:64px;height:64px}
+.mock-request h3{margin:8px 0}
+.mock-dialog-actions{display:flex;gap:7px;justify-content:center;flex-wrap:wrap;margin-top:16px}
+#app-form-modal[data-mock-dialog=profile]>.confirm-modal-dialog{width:min(480px,calc(100vw - 32px));max-width:480px}
+#app-form-modal[data-mock-dialog=request]>.confirm-modal-dialog{width:min(390px,calc(100vw - 32px));max-width:390px}
+#app-form-modal[data-mock-dialog=people]>.confirm-modal-dialog{width:min(560px,calc(100vw - 32px));max-width:560px}
+#app-form-modal[data-mock-dialog=friends]>.confirm-modal-dialog,#app-form-modal[data-mock-dialog=albumSettings]>.confirm-modal-dialog{max-width:360px}
+.mock-notifications{border-bottom:1px solid var(--border);padding-bottom:12px;margin-bottom:12px}
+.mock-notifications h4{margin:0 0 8px;font-size:.8rem}
+.mock-notifications p{font-size:.77rem;color:var(--muted)}
+#shell-main-surface:not([data-mock-mode=gallery])>.mobile-pinch-hint{display:none!important}
+@media(max-width:900px){
+  .mock-profile-header{gap:9px;padding:8px 0 12px}
+  .mock-profile-name{gap:5px}
+  .mock-profile-name h1{font-size:.98rem}
+  .mock-profile-copy p{font-size:.72rem}
+  .mock-friend-label{font-size:.67rem}
+  #shell-main-surface[data-mock-mode=home],#shell-main-surface[data-mock-mode=profile]{overflow:auto!important;display:block}
+  #mock-workspace{display:flex;flex-direction:column;overflow:visible;gap:12px}
+  #mock-activity{height:66dvh;min-height:380px;flex:none}
+  #mock-album-panel{height:55dvh;min-height:340px;flex:none}
+  #mock-artist-panel{height:auto;min-height:230px;max-height:40dvh;flex:none}
+  #mock-recent-body{padding:10px}
+  .mock-recent-view [data-gallery-bar-instance=gallery]{padding:8px 10px!important}
+  .mock-recent-view [data-gallery-bar-instance=gallery] .gallery-bar__actions{gap:5px}
+  #mock-recent-controls{gap:10px}
+  #mock-recent-tabs .in-page-tabs{gap:15px}
+  #mock-recent-period .mock-select>span{position:absolute;width:1px;height:1px;clip:rect(0 0 0 0);overflow:hidden}
+  .mock-select{font-size:.69rem;gap:5px}
+  .mock-select select{padding:5px;min-height:30px}
+  .mock-comparison-columns{gap:10px}
+  .mock-comparison-options{gap:7px}
+  .mock-comparison-column .album-track-table{font-size:.7rem}
+  .mock-comparison-column .compact-data-table{--cdt-gap:3px;--cdt-row-padding:5px 3px}
+  .mock-comparison-column .compact-data-table [data-cdt-column=title]{overflow-wrap:anywhere}
+  .mock-comparison-column .mock-count-cell{font-size:.68rem}
+  .mock-artist-cell{gap:5px;font-size:.73rem}
+  .mock-artist-cell>.album-artbox{width:28px;height:28px;flex-basis:28px}
+  .mock-person{align-items:flex-start}
+  .mock-person-actions{max-width:45%}
+}
+/* Recent is a consumer-owned header layout; ordinary native Gallery is unchanged. */
+:root{--mock-action-size:34px}
+.mock-bar-action,.mock-module-header .action-button,#mock-recent-expand .action-button{width:var(--mock-action-size);height:var(--mock-action-size);min-width:var(--mock-action-size);min-height:var(--mock-action-size);flex-basis:var(--mock-action-size)}
+.mock-recent-view [data-gallery-bar-instance=gallery]{display:flex!important}
+.mock-recent-view [data-gallery-bar-instance=gallery]>.gallery-bar__context{display:block!important}
+#track-modal[data-mock-placement=embedded] .album-details-header{margin-top:0!important;padding-top:0!important;align-self:start;align-items:flex-start}
+#track-modal[data-mock-placement=embedded] .album-details-header__primary{margin-top:0!important}
+@media(max-width:900px){
+  :root{--mock-action-size:40px}
+  .mock-recent-view [data-gallery-bar-instance=gallery] .gallery-bar__title{display:flex;align-items:center;min-height:40px;gap:5px;white-space:nowrap}
+  .mock-recent-view [data-gallery-bar-instance=gallery] .gallery-bar__title>[data-gallery-context-name]{white-space:nowrap;font-size:.88rem}
+  .mock-recent-view [data-gallery-bar-instance=gallery] #mobile-library-button{position:static!important;flex:0 0 40px}
+  .mock-recent-view [data-gallery-bar-instance=gallery]>.gallery-bar__actions{align-self:center;grid-column:auto;grid-row:auto}
+  .mock-comparison-column .album-track-table .compact-data-table{--cdt-columns:28px minmax(0,1fr) 38px 42px!important}
+}
+#track-modal[data-mock-placement=embedded] .album-details-header[data-album-details-layout=editorial_canvas] .album-details-header__identity{grid-row:1;padding-top:0}
+.mock-recent-composition .album-track-table,.mock-comparison-column .album-track-table{font-size:.82rem}
+.mock-card-listen-metrics{display:flex;flex-wrap:wrap;gap:3px 9px}
+/* Use the existing GalleryCard Rows variant at desktop comparison widths too. */
+.mock-comparison-album .album-card[data-gallery-display=list]{display:grid;grid-template-columns:80px minmax(0,1fr);align-items:center;min-height:98px;border-radius:14px;overflow:hidden;border-left:3px solid var(--appearance-selected-accent,#34ca78)}
+.mock-comparison-album .album-card[data-gallery-display=list]>.cover{width:72px;height:72px;aspect-ratio:1;margin:8px;border-radius:9px}
+.mock-comparison-album .album-card[data-gallery-display=list] .album-body{padding:8px 12px;min-width:0}
+.mock-comparison-album .album-card[data-gallery-display=list] .album-title{font-size:.88rem;margin:0 0 4px}
+.mock-comparison-album .album-card[data-gallery-display=list] .album-meta-row{font-size:.74rem}
+.mock-comparison-album .album-card[data-gallery-display=list] .chip-row{margin-top:4px;font-size:.69rem}
+.mock-comparison-album .mock-card-listen-metrics{display:grid;grid-template-columns:1fr;gap:3px;min-height:2.4em;font-size:.7rem}
+@media(max-width:900px){
+  .mock-comparison-album .album-card[data-gallery-display=list]{grid-template-columns:45px minmax(0,1fr);min-height:130px}
+  .mock-comparison-album .album-card[data-gallery-display=list]>.cover{width:39px;height:39px;margin:3px;border-radius:6px}
+  .mock-comparison-album .album-card[data-gallery-display=list] .album-body{padding:6px}
+  .mock-comparison-album .album-card[data-gallery-display=list] .album-title{font-size:.73rem}
+  .mock-comparison-album .album-card[data-gallery-display=list] .album-meta-row,.mock-comparison-album .album-card[data-gallery-display=list] .chip-row{font-size:.65rem}
+  .mock-comparison-album .album-card[data-gallery-display=list] .album-subtitle{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+}
+.mock-comparison-albums[data-view=cards]{display:grid;grid-template-columns:repeat(auto-fit,minmax(138px,1fr));gap:12px}
+.mock-comparison-albums[data-view=cards]>.mock-comparison-album{min-width:0;border:0;padding:10px 0 0}
+
+/* Full/page and embedded consumers top-align the native identity. Give its
+   existing square art shell a definite inline size after removing stretch. */
+#track-modal[data-mock-placement=embedded] .track-modal-cover-shell{width:100%;height:auto;aspect-ratio:1;max-width:100%}
+
+.mock-full-album-tools{order:-1}
+@media(max-width:900px){
+ .mock-comparison-album .album-subtitle{font-size:.69rem!important}
+ .mock-comparison-album .mock-card-listen-metrics{grid-template-columns:1fr;gap:3px;font-size:.68rem}
+}
+
+/* Phone Home is the unchanged 0.9.48 composite, populated in its native slots. */
+#mock-mobile-profile-actions[hidden]{display:none!important}
+#mock-mobile-profile-actions{display:inline-flex;align-items:center;margin-left:6px}
+.mock-native-home-content{min-width:0;text-align:left;padding-top:10px}
+.mock-native-home-content .compact-data-table{--cdt-mobile-min-width:0}
+.mock-native-home-content .album-track-table{font-size:.8rem}
+@media(max-width:900px){
+ .mock-native-home #shell-main-surface{display:flex!important;overflow:hidden!important}
+ .mock-native-home #mock-workspace,.mock-native-home #mock-heading{display:none!important}
+ .mock-native-home .mobile-home{display:block;flex:1;min-height:0}
+ .mock-native-home-content .mock-card-listen-metrics{display:block;font-size:.61rem;line-height:1.4}
+ .mock-native-home-content .mock-card-listen-metrics>span{display:block}
+}
+
+@media(max-width:900px){
+ .mock-native-home [data-gallery-bar-instance=gallery] .gallery-bar__title{display:flex;align-items:center;gap:6px}
+ .mock-native-home #mock-mobile-profile-actions{display:contents}
+}
+
+/* Keep the native 40px navigation target in its existing grid column while
+   centering it against the actual name/Edit row, including wrapped names. */
+@media(max-width:900px){
+ .mock-native-home [data-gallery-bar-instance=gallery] .gallery-bar__title{position:relative}
+ .mock-native-home [data-gallery-bar-instance=gallery] #mobile-library-button{left:-46px;top:50%;transform:translateY(-50%)}
+}
+
+@media(max-width:900px){
+ .mock-native-home .mobile-home{display:flex;flex-direction:column;overflow:hidden}
+ .mock-native-home #mobile-home-recent{flex:1;min-height:0;overflow:auto;overscroll-behavior:contain}
+ .mock-native-home #mobile-home-tabs{position:sticky;top:0;z-index:2;background:var(--appearance-main-surface,var(--bg))}
+}
+
+#mock-full-artist-tools[hidden]{display:none!important}
+#mock-full-artist-tools{order:-1}
+.artist-info-overlay[data-mock-placement=embedded] [data-artist-info-full-page]{display:none!important}
+#shell-main-surface>.artist-info-overlay[data-mock-placement=full]{position:static!important;inset:auto!important;width:100%!important;max-width:none!important;max-height:none!important;flex:1;min-height:0;overflow:auto;border:0;border-radius:0;box-shadow:none;background:transparent;padding:12px 0;z-index:auto!important}
+.artist-info-overlay[data-mock-placement=full]>.mobile-artist-info-close{display:none!important}
+
+/* v004: native card geometry and metadata are untouched. The only appended
+   content lives after the native metadata grid, below its own divider. */
+.mock-fluid-gallery{display:grid;grid-template-columns:repeat(auto-fill,minmax(190px,1fr));gap:16px;align-content:start}
+.mock-fluid-gallery[data-view=list]{grid-template-columns:1fr}
+.mock-small-gallery .mock-fluid-gallery{grid-template-columns:repeat(auto-fill,minmax(138px,1fr))}
+.mock-card-listen-metrics{grid-column:1/-1;grid-row:5;font-size:.76rem;font-weight:600;color:var(--text);padding-top:8px;margin-top:4px}
+.mock-card-listen-metrics>span:first-child{color:var(--appearance-selected-accent,var(--accent))}
+.mock-card-listen-metrics>span:last-child{color:var(--text)}
+#mock-workspace{grid-template-columns:minmax(0,1fr) minmax(0,0fr);transition:grid-template-columns 240ms ease;padding-bottom:0}
+#mock-workspace[data-has-selection=true]{grid-template-columns:minmax(0,1.35fr) minmax(330px,1fr)}
+#mock-workspace[data-has-selection=false]{column-gap:0}
+#mock-workspace[data-has-selection=true]>#mock-album-panel,#mock-workspace[data-has-selection=true]>#mock-artist-panel{animation:mock-panel-reveal 240ms ease both}
+@keyframes mock-panel-reveal{from{opacity:0;transform:translateX(24px)}to{opacity:1;transform:none}}
+@media(prefers-reduced-motion:reduce){#mock-workspace{transition:none}#mock-workspace[data-has-selection=true]>#mock-album-panel,#mock-workspace[data-has-selection=true]>#mock-artist-panel{animation:none}}
+#mock-friends-page[hidden],#mock-album-settings-action[hidden]{display:none!important}
+#mock-friends-page{flex:1;min-height:0;overflow:auto;padding:0 4px 16px}
+#mock-friends-page>.mock-full-header{position:sticky;top:0;background:var(--panel);z-index:2}
+#mock-friends-page h1{font-size:1rem;margin:0}
+#mock-friends-page .mock-friends-menu{padding:14px 0}
+#mock-album-settings-action{margin-left:auto;flex:none;align-self:start}
+#mock-mobile-period{display:none}
+.mock-settings h3{font-size:.9rem;margin:0}
+#app-form-modal[data-mock-dialog=friends]>.confirm-modal-dialog{width:min(390px,calc(100vw - 32px));max-width:390px}
+@media(max-width:900px){
+ #mock-mobile-period{display:flex;align-items:center;margin-left:auto;flex:none}
+ #mobile-home-tabs{flex:1;min-width:0}
+ #mock-mobile-period .mock-select>span{position:absolute;clip:rect(0 0 0 0);width:1px;height:1px;overflow:hidden}
+ .mock-native-home .mobile-home{padding-bottom:0}
+ .mock-native-home-content .mock-card-listen-metrics{font-size:.69rem;line-height:1.45;grid-column:1/-1;grid-row:5;display:grid;gap:3px}
+ .mock-fluid-gallery{grid-template-columns:repeat(var(--mobile-gallery-columns,3),minmax(0,1fr));gap:12px}
+ #track-modal .compact-data-table:has([data-mock-count]){--cdt-mobile-min-width:0}
+}
+
+.mobile-album-actions>#mock-album-settings-action{display:contents}
+
+.mock-full-album #mobile-page-header [hidden]{display:none!important}
+@media(max-width:900px){
+ #track-modal .compact-data-table[data-mock-friend-statistics=true]{--cdt-columns:28px minmax(65px,1fr) 16px 64px 80px 44px!important;--cdt-gap:4px;--cdt-row-padding:8px 6px}
+ #track-modal .compact-data-table[data-mock-friend-statistics=true] .mock-count-cell{font-size:.7rem}
+}
+/* Gallery/Recent extend behind the fixed native player. Trailing inset lets
+   the final card/row scroll fully above it without reserving a dead strip. */
+body.mock-native-home .shell-layout,body.mock-recent-view .shell-layout,.shell-layout:has(#shell-main-surface[data-mock-mode=gallery]){height:100dvh}
+body.mock-native-home #mobile-home-recent,body.mock-recent-view #mock-recent-body,#shell-main-surface[data-mock-mode=gallery] #albums-scroll{padding-bottom:calc(var(--player-height) + 12px)}
+body.mock-multi-view #mock-album-panel .track-modal-dialog,body.mock-multi-view #mock-artist-panel>.artist-info-overlay{padding-bottom:12px!important}
+#shell-main-surface:not([data-mock-mode=gallery])>#albums-scroll{display:none!important}
+#shell-main-surface[data-mock-mode=friends]>[data-gallery-bar-instance=gallery]{display:none!important}
+.artist-info-overlay[data-mock-placement=full] [data-artist-info-full-page]{display:none!important}
+
+#mock-album-panel{container-type:inline-size}
+.mock-stats-scroll-note{display:none}
+@container(max-width:480px){
+ #track-modal[data-mock-placement=embedded] .compact-data-table{--cdt-columns:28px minmax(60px,1fr) 16px 70px 50px!important;--cdt-gap:4px;--cdt-row-padding:7px 6px}
+ #track-modal[data-mock-placement=embedded] .compact-data-table[data-mock-friend-statistics=true]{--cdt-columns:28px minmax(110px,1fr) 16px 70px 90px 50px!important;overflow-x:auto}
+ #track-modal[data-mock-placement=embedded] .compact-data-table[data-mock-friend-statistics=true]>[role=row]{min-width:390px}
+ #mock-album-panel .mock-stats-scroll-note:not(:empty){display:block;margin:4px 0 7px;color:var(--muted);font-size:.7rem}
+}
+
+.mock-recent-view [data-gallery-view-choice=covers],.mock-native-home [data-gallery-view-choice=covers]{display:none!important}
+
+/* v005: native checkbox, tablist, ActionButton and AlbumArtbox extensions. */
+.mock-statistics-checkbox{margin:4px 0;font-size:.85rem;font-weight:500;cursor:pointer}
+.mock-statistics-checkbox input{flex:none}
+.mock-track-with-art{display:flex;align-items:center;gap:8px;min-width:0}
+.mock-track-with-art>.album-track-table__title{min-width:0;flex:1}
+.mock-track-art{width:32px;height:32px;flex:0 0 32px;display:block}
+.mock-track-art>.album-artbox{width:100%;height:100%;border-radius:5px;overflow:hidden;display:block}
+.mock-track-art img{width:100%;height:100%;object-fit:cover;display:block}
+@media(max-width:900px){
+ .gallery-bar__home-tabs.mock-home-sections-row:not([hidden]){display:flex;align-items:center;gap:12px}
+ .mock-home-sections-row>#mobile-recents-navigation{flex:1;min-width:0}
+ #mock-mobile-period select{max-width:140px}
+ #mock-mobile-profile-actions .action-button--bare{flex:none}
+}
+
+/* Native loader visibility is the single loading truth; no timer or second state. */
+#image-lightbox:has(#image-lightbox-loading:not([hidden])) .image-lightbox-navigation{display:none}
+#image-lightbox{touch-action:pan-y pinch-zoom}
+
+/* The phone Home filter never appears before its native section-row host exists. */
+#mock-mobile-period[hidden]{display:none!important}
+
+/* v006 comparison uses native controls and identity renderers with local state. */
+.mock-comparison-identity{position:relative;z-index:5}
+.mock-overlapping-avatars{display:flex;align-items:center;width:58px;flex:0 0 58px;isolation:isolate}
+.mock-overlapping-avatars .mock-avatar{border:2px solid var(--panel);box-sizing:border-box}
+.mock-overlapping-avatars .mock-avatar+ .mock-avatar{margin-left:-18px;z-index:1}
+.mock-comparison-view{display:inline-flex;--unfolding-action-size:var(--mock-action-size)}
+.mock-comparison-view svg{display:block;width:18px;height:18px;fill:none;stroke:currentColor;stroke-width:1.8}
+.mock-common-only{display:flex;align-items:center;gap:7px;font-size:.8rem;cursor:pointer}
+.mock-sort-heading.ui-button{border:0;background:transparent;padding:5px 2px;color:inherit;font:inherit;min-width:0;max-width:100%;white-space:normal;text-align:inherit;box-shadow:none}
+.mock-sort-heading.ui-button[aria-pressed=true]{color:var(--appearance-selected-accent,var(--accent))}
+.mock-sort-heading .ui-button__content{white-space:normal;overflow-wrap:normal;gap:3px}
+.mock-sort-heading:focus-visible{outline:1px solid var(--appearance-interaction-outline,var(--accent));outline-offset:2px}
+.mock-comparison-column-headings{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:18px;position:sticky;top:0;z-index:2;background:var(--bg);padding:6px 0 9px;border-bottom:1px solid var(--border);font-size:.86rem;font-weight:600}
+.mock-comparison-column-headings>[role=columnheader]{padding:0 10px}
+.mock-comparison-sign{font-size:1.05rem;font-weight:700;line-height:1.15;text-align:center;font-variant-numeric:tabular-nums}
+.mock-comparison-sign[data-relation=greater]{color:var(--appearance-selected-accent,var(--accent))}
+.mock-comparison-sign[data-relation=less]{color:var(--accent)}
+.mock-comparison-sign[data-relation=equal],.mock-comparison-sign[data-relation=missing],.mock-missing-value{color:var(--muted)}
+.mock-comparison-column[data-side=left] [data-track-row-path],.mock-comparison-column[data-side=left] [data-cdt-row-key],.mock-comparison-album{position:relative}
+.mock-boundary-comparison{position:absolute;right:-18px;top:50%;transform:translateY(-50%);width:18px;display:flex;flex-direction:column;align-items:center;gap:3px;z-index:1}
+.mock-comparison-album>.mock-boundary-comparison{top:auto;bottom:9px;transform:none}
+.mock-comparison-column[data-side=left] .compact-data-table{overflow:visible}
+.mock-shared-comparison{--cdt-mobile-min-width:0;--cdt-gap:4px;--cdt-row-padding:8px 6px}
+.mock-shared-comparison[data-comparison-kind=tracks]{--cdt-columns:28px minmax(92px,1fr) 44px 16px 60px 40px!important}
+.mock-shared-comparison[data-comparison-kind=artists],.mock-shared-comparison[data-comparison-kind=albums]{--cdt-columns:minmax(120px,1fr) 52px 18px 64px!important}
+.mock-shared-comparison [data-cdt-column=yours],.mock-shared-comparison [data-cdt-column=friend]{text-align:right;font-variant-numeric:tabular-nums;min-width:0}
+.mock-shared-comparison [role=columnheader] .mock-sort-heading{font-size:.72rem;font-weight:600;line-height:1.25;text-align:right}
+.mock-shared-comparison [data-cdt-column=comparison]{display:flex;flex-direction:column;justify-content:center;gap:7px;min-width:0}
+.mock-shared-comparison [data-cdt-column=artist] .mock-artist-cell{font-size:.8rem}
+.mock-paired-value{display:flex;flex-direction:column;justify-content:center;min-height:22px;font-size:.77rem}
+.mock-paired-value+ .mock-paired-value{margin-top:7px}
+.mock-paired-value small{font-size:.58rem;color:var(--muted);line-height:1.25}
+.mock-shared-comparison[data-comparison-kind=albums] [data-cdt-column=comparison]{gap:19px}
+.mock-shared-comparison [data-cdt-column=album]{min-width:0}
+.mock-shared-comparison .album-card{width:100%;min-width:0;max-width:100%;margin:0}
+.mock-shared-comparison .album-card[data-gallery-display=list]{grid-template-columns:48px minmax(0,1fr)}
+.mock-shared-comparison .album-card[data-gallery-display=list]>.cover{width:48px;height:48px;align-self:start}
+.mock-shared-comparison .album-card[data-gallery-display=list] .album-body{padding:4px 6px;min-width:0}
+.mock-shared-comparison .album-title{font-size:.76rem}
+.mock-shared-comparison .album-meta-row{font-size:.68rem}
+.mock-shared-comparison .chip-row{font-size:.62rem}
+.mock-shared-comparison .album-track-table__title{font-size:.78rem}
+@media(max-width:900px){
+ .mock-shared-comparison-host .album-track-table{font-size:.76rem}
+ .mock-shared-comparison-host .mock-track-art{width:28px;height:28px;flex-basis:28px}
+ .mock-shared-comparison-host .mock-track-with-art{gap:6px}
+ .mock-shared-comparison-host .album-track-table__title{min-width:0}
+ .mock-comparison-identity .mock-profile-copy{min-width:0}
+ .mock-comparison-identity .mock-profile-name h1{font-size:.95rem}
+}
+
+.mock-shared-comparison[data-comparison-kind=albums] .mock-paired-value{height:42px}
+.mock-shared-comparison[data-comparison-kind=albums] .mock-paired-value small{white-space:normal;min-height:2.4em;line-height:1.2;display:flex;align-items:center;justify-content:flex-end}
+.mock-shared-comparison[data-comparison-kind=albums] [data-cdt-column=comparison]{gap:7px}
+.mock-shared-comparison[data-comparison-kind=albums] .mock-comparison-sign{height:42px;display:flex;align-items:center;justify-content:center}
+
+/* v007 profile name edits reuse the native dialog title and image viewer. */
+.mock-profile-title-button{appearance:none;border:0;background:transparent;padding:0;color:inherit;font:inherit;text-align:left;cursor:text}
+.mock-profile-title-label{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}
+.mock-profile-title-input{width:100%;max-width:100%;box-sizing:border-box;border:0;border-bottom:1px solid var(--border);background:transparent;color:inherit;font:inherit;padding:0 0 3px}
+.mock-profile-title-button:focus-visible,.mock-avatar-open:focus-visible{outline:2px solid var(--appearance-interaction-outline,var(--accent));outline-offset:3px}
+.mock-avatar-open{border:0;background:transparent;padding:0;border-radius:50%;cursor:zoom-in;line-height:0}
+.mock-avatar-editor>.mock-avatar-open>.mock-avatar{width:70px;height:70px}
+
+/* Single Recent remains a native page. Selected modular panels stop above the player. */
+body.mock-multi-view .shell-layout{height:calc(100dvh - var(--player-height))}
+body.mock-multi-view #mock-workspace{padding-bottom:12px}
+body.mock-multi-view #mock-recent-body{padding-bottom:12px}
+#mock-workspace[data-has-selection=false]>#mock-activity{border:0;border-radius:0;background:transparent}
+.mock-module-header>strong,.mock-recent-view [data-gallery-bar-instance=gallery] .gallery-bar__title{font-size:1.06rem;font-weight:600}
+.mock-full-album #mobile-page-header[data-album-identity-in-body=true] .mobile-page-context{visibility:hidden;pointer-events:none}
+#track-modal[data-mock-placement=embedded] #track-modal-close{display:none!important}
+.mock-selected-track{background:var(--selection-body-background,var(--panel-2))!important;box-shadow:inset 3px 0 var(--navigation-tree-selection-accent-color,var(--accent))}
+
+.mock-plays-heading.ui-button{border:0;background:transparent;color:inherit;font:inherit;padding:0;min-height:24px;box-shadow:none;text-align:right}
+.mock-plays-heading .ui-button__content{justify-content:flex-end}
+#mock-album-preferences{display:none}
+#app-form-modal[data-mock-dialog=friends]>.confirm-modal-dialog{width:min(520px,calc(100vw - 32px));max-width:520px}
+@media(max-width:900px){#track-modal .compact-data-table[data-mock-friend-statistics=true]{--cdt-columns:28px minmax(70px,1fr) 16px 88px 44px!important}}
+@container(max-width:480px){#track-modal[data-mock-placement=embedded] .compact-data-table[data-mock-friend-statistics=true]{--cdt-columns:28px minmax(70px,1fr) 16px 92px 50px!important}#track-modal[data-mock-placement=embedded] .compact-data-table[data-mock-friend-statistics=true]>[role=row]{min-width:0}}
+
+/* v007 native choice trigger and common Recent header. */
+.mock-choice-trigger{display:inline-flex;box-sizing:border-box;align-items:center;justify-content:space-between;gap:12px;min-width:120px;border:1px solid var(--appearance-line,var(--border))}
+.mock-choice-trigger.ui-button.mock-choice-trigger--slim{min-width:0;min-height:26px;padding:5px 8px;gap:8px;font-size:.76rem}
+:root .mock-choice-trigger.trigger-anchor-open{border-width:1px!important;border-bottom-width:1px!important}
+.mock-native-choice{display:inline-flex;max-width:100%;min-width:0}
+.mock-choice-chevron{display:block;width:16px;height:16px;flex:none;fill:none;stroke:currentColor;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round}
+.mock-period-summary{display:flex;align-items:center;justify-content:flex-end;gap:12px;min-width:0;flex-wrap:wrap}
+.mock-listens-summary{font-size:.76rem;color:var(--muted);font-variant-numeric:tabular-nums;white-space:nowrap}
+.mock-recent-view [data-gallery-bar-instance=gallery]{border-bottom:0}
+.mock-recent-view [data-gallery-bar-instance=gallery] .in-page-tabs{border-bottom:0}
+#mock-workspace[data-has-selection=false] [data-gallery-bar-instance=gallery]{padding-left:0!important;padding-right:0!important}
+#mock-album-placeholder[hidden],#mock-artist-placeholder[hidden]{display:none}
+@media(max-width:900px){.mock-period-summary{gap:5px}.mock-listens-summary{font-size:.66rem}.mock-choice-trigger{min-width:105px}.mock-period-summary .ui-button{font-size:.72rem}}
+
+.mock-home-sections-row{display:flex;align-items:center;justify-content:space-between;gap:12px;flex:1 0 100%}
+.mock-home-sections-row[hidden]{display:none!important}
+#gallery-view-cluster-options[hidden]{display:none!important}
+.mock-artist-columns{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:9px 10px;color:var(--muted);font-size:.78rem;font-weight:600}
+.mock-artist-list[data-view=icons] .mock-artist-tree{display:grid;grid-template-columns:repeat(auto-fill,minmax(120px,1fr));gap:16px}
+.mock-artist-list[data-view=icons] .navigation-tree-item--wide{display:flex;flex-direction:column;justify-content:flex-start;text-align:center;height:100%;padding:12px 8px}
+.mock-artist-list[data-view=icons] .navigation-tree-artwork{width:76px;height:76px;flex:0 0 76px;border-radius:50%;overflow:hidden}
+.mock-artist-list[data-view=icons] .navigation-tree-artwork>.album-artbox{width:100%;height:100%;border-radius:inherit}
+.mock-artist-list[data-view=icons] .navigation-tree-label{text-align:center;flex:none}
+.mock-artist-list[data-view=icons] .utility-list-item-meta{display:none}
+.mock-artist-list[data-view=icons] .navigation-tree-count{align-self:center;margin-inline:0;text-align:center;font-size:.72rem;line-height:1.4;font-weight:400}
+.mock-selected-artist-albums{margin-top:18px;padding-top:12px;animation:mock-artists-albums-reveal 240ms ease both}
+.mock-selected-artist-albums h3{font-size:.88rem;margin:0 0 12px}
+@keyframes mock-artists-albums-reveal{from{opacity:0;transform:translateY(18px)}to{opacity:1;transform:none}}
+.mock-listen-time{font-size:.74rem;color:var(--muted);font-variant-numeric:tabular-nums;white-space:nowrap}
+.mock-history-summary{font-size:.76rem;color:var(--muted);padding:8px 0}
+.compact-data-table[data-mock-time-column=true]:not([data-mock-track-layout=compact]){min-width:430px}
+.mock-recent-track-album{display:none}
+/* Recent keeps the native table/row owners. Size its full wrapper chain to
+   the actual containing block, including narrow phone main bodies.
+   Borders and row padding consume that width instead of extending it. */
+.album-track-table[data-mock-track-layout=compact],
+.album-track-table[data-mock-track-layout=compact] :is(.album-track-table__frame,.album-track-table__disc,.compact-data-table,.compact-data-table-body,.compact-data-table-header,.compact-data-table-row){box-sizing:border-box;inline-size:100%;max-inline-size:100%;min-inline-size:0}
+.compact-data-table[data-mock-track-layout=compact]{--cdt-columns:var(--mock-recent-mobile-columns)!important;--cdt-gap:4px;--cdt-row-padding:8px 4px;--cdt-mobile-min-width:0;min-width:0}
+.compact-data-table[data-mock-track-layout=compact] :is([role=columnheader],[role=cell]){min-inline-size:0;max-inline-size:100%;box-sizing:border-box}
+.compact-data-table[data-mock-track-layout=compact] .mock-track-with-art{gap:6px;align-items:center}
+.compact-data-table[data-mock-track-layout=compact] .mock-track-art{align-self:center}
+.compact-data-table[data-mock-track-layout=compact] .album-track-table__title{min-inline-size:0;overflow:visible;text-overflow:clip;white-space:normal;overflow-wrap:anywhere;line-height:1.3;font-size:.78rem;font-weight:500}
+.compact-data-table[data-mock-track-layout=compact] .mock-recent-track-artist{font-size:.72rem;font-weight:500;font-style:normal;line-height:1.3;color:var(--appearance-ink,var(--text))}
+.compact-data-table[data-mock-track-layout=compact] .mock-recent-track-album{display:block;font-size:.7rem;font-weight:400;font-style:italic;line-height:1.3;color:var(--appearance-muted,var(--muted))}
+.compact-data-table[data-mock-track-layout=compact] .mock-listen-time{display:block;white-space:normal;overflow-wrap:anywhere;font-size:.65rem;font-weight:400;font-style:normal;line-height:1.35;margin-top:3px}
+.compact-data-table[data-mock-track-layout=compact] [data-cdt-column=number]{justify-self:center}
+.compact-data-table[data-mock-track-layout=compact] :is([data-cdt-column=count],[data-cdt-column=duration]){white-space:normal;overflow-wrap:anywhere}
+.compact-data-table[data-mock-track-layout=compact] .track-duration{white-space:normal;overflow-wrap:anywhere}
+.compact-data-table[data-mock-track-layout=compact] [role=columnheader][data-cdt-column=listenTime][hidden]{display:none}
+#mock-recent-body{view-transition-name:mock-recent}
+#track-modal[data-mock-placement]{view-transition-name:mock-album}
+[data-artist-info-overlay][data-mock-placement]{view-transition-name:mock-artist}
+::view-transition-group(mock-recent),::view-transition-group(mock-album),::view-transition-group(mock-artist){animation-duration:240ms;animation-timing-function:ease-in-out}
+@media(prefers-reduced-motion:reduce){.mock-selected-artist-albums{animation:none}#mock-recent-body,#track-modal[data-mock-placement],[data-artist-info-overlay][data-mock-placement]{view-transition-name:none}}
+.mock-full-album #mobile-page-header[data-album-identity-in-body=true]>.gallery-bar__context{visibility:hidden;pointer-events:none}
+
+#mock-album-native-page-actions,#mock-album-native-page-actions>.album-details-header__actions{display:contents}
+#mock-album-page-actions{display:flex;align-items:center;justify-content:flex-end;gap:7px;margin-left:auto}
+#mock-album-page-actions .action-button{width:var(--mock-action-size);height:var(--mock-action-size);min-width:var(--mock-action-size);min-height:var(--mock-action-size)}
+#mock-album-settings-action{display:contents;margin-left:0;align-self:auto}
+#mock-album-page-actions #track-modal-close,#mock-album-actions #track-modal-close{display:none!important}
+
+/* Embedded Details uses the native stacked/compact identity and live slots. */
+#mock-album-panel #track-modal[data-mock-placement=embedded]>.track-modal-dialog{display:grid!important;grid-template-columns:110px minmax(0,1fr)!important;grid-template-rows:auto auto minmax(0,1fr)!important;align-content:stretch;overflow:hidden}
+#mock-album-panel #track-modal[data-mock-placement=embedded] .track-modal-body{display:contents!important}
+#mock-album-panel #track-modal[data-mock-placement=embedded] .track-modal-cover{grid-column:1!important;grid-row:1!important;width:110px!important;height:110px!important;align-self:start;margin:0!important}
+#mock-album-panel #track-modal[data-mock-placement=embedded]>.track-modal-dialog>.track-modal-header{grid-column:2!important;grid-row:1!important;align-self:start;display:block!important;min-width:0;position:static!important}
+#mock-album-panel #track-modal[data-mock-placement=embedded] .album-details-header{display:block!important;text-align:left}
+#mock-album-panel #track-modal[data-mock-placement=embedded] .album-details-header__primary{font-size:1rem!important;line-height:1.25}
+#mock-album-panel #track-modal[data-mock-placement=embedded] .track-modal-main{grid-column:1/-1!important;grid-row:3!important;display:flex!important;flex-direction:column;min-height:0;height:100%;padding:0!important}
+#mock-album-panel #track-modal[data-mock-placement=embedded] .track-modal-list{flex:1;min-height:0;max-height:none!important;overflow:auto}
+
+#mock-artist-page{flex:1;min-height:0;overflow:auto}#mock-artist-page[hidden]{display:none!important}
+.mock-artist-page-host{min-height:100%;--mock-artist-player-clearance:12px}
+.mock-artist-name-link{cursor:pointer}.mock-artist-name-link:hover strong{text-decoration:underline}
+#mock-artist-heading{min-width:0}#mock-artist-heading strong{font-size:1.06rem}#mock-artist-heading p{font-size:.7rem;color:var(--muted);margin:3px 0 0}
+#mock-full-artist-tools .mock-artist-view__identity strong{font-size:1.06rem;color:var(--text)}
+#mock-full-artist-tools .mock-artist-view__identity p{font-size:.76rem;margin:4px 0;color:var(--muted)}
+
+.mock-artist-name-link .ui-button{padding:0;border:0;background:transparent;box-shadow:none;color:inherit;font-size:1.06rem;font-weight:600;text-align:left}
+.mock-artist-name-link small{display:block;font-size:.7rem;color:var(--muted);margin-top:3px}
+[data-mock-album-statistics-settings]{margin-top:16px}
+
+.mock-track-love-cell{display:flex;align-items:center;justify-content:center}
+.mock-track-love.action-button{width:28px;height:28px;min-width:28px;min-height:28px;flex:0 0 28px}
+.mock-track-love .action-button__content,.mock-track-love .action-button__icon{width:18px;height:18px;flex:0 0 18px;overflow:visible}
+.mock-track-love svg{display:block;width:18px;height:18px;overflow:visible;fill:none;stroke:currentColor;stroke-width:1.6;stroke-linecap:round;stroke-linejoin:round}
+.mock-track-love[data-love-state=none]{color:var(--muted)}
+.mock-track-love:hover,.mock-track-love:focus-visible,.mock-track-love[data-love-state=loved],.mock-track-love[data-love-state=obsessed]{color:#f15d75}
+.mock-track-love[data-love-state=loved] .mock-heart-outline,.mock-track-love[data-love-state=obsessed] .mock-heart-outline{fill:currentColor}
+.mock-track-love .mock-love-flame{fill:#fb8c24;stroke:#a9470a;stroke-width:.7}
+.mock-track-love .mock-love-flame-core{fill:#ffdc69;stroke:none}
+.mock-track-love[data-love-state=obsessed] .mock-heart-outline{fill:#ef405b;stroke:#98213c;stroke-width:1.2}
+.mock-love-breaking .mock-heart-outline{animation:mock-heart-return var(--mock-love-break-duration,400ms) ease var(--mock-love-break-delay,0ms) both}
+.mock-heart-break-half{fill:#ef405b;stroke:#98213c;stroke-width:1.2;transform-box:view-box;transform-origin:12px 12px;animation-duration:var(--mock-love-break-duration,400ms);animation-delay:var(--mock-love-break-delay,0ms);animation-timing-function:ease-out;animation-fill-mode:both}
+.mock-heart-break-left{clip-path:polygon(0 0,52% 0,45% 34%,57% 47%,44% 61%,52% 100%,0 100%);animation-name:mock-heart-break-left}
+.mock-heart-break-right{clip-path:polygon(52% 0,100% 0,100% 100%,52% 100%,44% 61%,57% 47%,45% 34%);animation-name:mock-heart-break-right}
+@keyframes mock-heart-break-left{0%{transform:translate(-1px,0);opacity:1}65%{transform:translate(-5px,2px) rotate(-18deg);opacity:1}100%{transform:translate(-6px,4px) rotate(-22deg);opacity:0}}
+@keyframes mock-heart-break-right{0%{transform:translate(1px,0);opacity:1}65%{transform:translate(5px,2px) rotate(18deg);opacity:1}100%{transform:translate(6px,4px) rotate(22deg);opacity:0}}
+@keyframes mock-heart-return{0%,72%{opacity:0}100%{opacity:1}}
+@media(prefers-reduced-motion:reduce){.mock-love-breaking .mock-heart-outline{animation:none;opacity:0}.mock-heart-break-half{animation:none;opacity:1}.mock-heart-break-left{transform:translate(-2px,0)}.mock-heart-break-right{transform:translate(2px,0)}}
+.mock-global-popularity{font-size:.76rem;color:var(--muted);font-variant-numeric:tabular-nums;margin:8px 0}
+
+#mock-playlist-content{flex:1;min-width:0;min-height:0;overflow:hidden}#mock-playlist-content[hidden],#mock-playlist-sidebar[hidden],#mock-playlist-header-actions[hidden],#sidebar-list[hidden]{display:none!important}
+#mock-playlist-header-actions{display:contents}#mock-playlist-rail-action .action-button{width:40px;height:40px;min-width:40px;min-height:40px}
+#mock-sidebar-mode-actions{gap:8px}
+.mock-playlist-view [data-gallery-bar-instance=gallery]{flex:none;border:0;margin:0;padding:12px 18px}
+.mock-playlist-view [data-gallery-bar-instance=gallery]>.gallery-bar__context{display:block!important}
+.mock-playlist-view [data-gallery-bar-action],.mock-playlist-view [data-gallery-view-cluster],.mock-playlist-view .gallery-bar__home-tabs{display:none!important}
+#mock-album-playback-actions{display:contents}
+.mock-playlist-view #mock-activity{overflow:hidden}
+@media(max-width:900px){#shell-main-surface[data-mock-mode=playlist]{overflow:auto!important;display:block}.mock-playlist-view #mock-activity{height:calc(100dvh - var(--player-height) - 90px);min-height:380px}}
+
+#track-modal .compact-data-table[data-mock-statistics-v007=true]{--cdt-columns:28px minmax(140px,1fr) 16px 32px 92px 108px 50px!important;--cdt-gap:8px;--cdt-mobile-min-width:540px;overflow-x:auto}
+#track-modal .compact-data-table[data-mock-statistics-v007=true]>[role=row]{min-width:540px}
+#track-modal .mock-cover-with-plays{height:auto!important;aspect-ratio:auto!important}
+.mock-album-global-plays{font-size:.71rem;line-height:1.35;margin:7px 0 0}
+
+.cover-lookup-drawer-glyph svg{display:block;width:22px;height:22px;fill:none;stroke:currentColor;stroke-width:1.6;stroke-linecap:round;stroke-linejoin:round}
+.mock-bar-action[aria-pressed=true]{color:var(--appearance-selected-accent,var(--accent));background:var(--selection-body-background,var(--panel-2))}
+#player-artist,[data-compact-player-artist]{cursor:pointer}#player-artist:focus-visible,[data-compact-player-artist]:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+
+#mock-gallery-back{display:inline-flex;align-items:center;float:left;margin-right:8px}#mock-gallery-back[hidden]{display:none!important}
+
+/* Keep native hit targets and one row; narrow embedded bars scroll locally. */
+#mock-album-header{min-width:0;overflow:hidden}
+#mock-album-header>#mock-album-heading{flex:1 1 auto;min-width:64px;overflow:hidden;text-overflow:ellipsis}
+#mock-album-header>#mock-album-actions{flex:0 1 auto;min-width:0;max-width:calc(100% - 72px);margin-left:auto;justify-content:flex-start;overflow-x:auto;overflow-y:hidden;scrollbar-width:thin}
+#mock-album-actions>.mock-native-button,#mock-album-actions .action-button,#mock-album-actions>.album-details-header__actions{flex-shrink:0}
+
+#mock-album-page-actions[hidden]{display:none!important}
+.mobile-album-overview>#mock-album-page-actions{grid-column:1/-1;grid-row:3;min-width:0;max-width:100%;width:100%;margin:0;justify-content:flex-start;overflow-x:auto;overflow-y:hidden;scrollbar-width:thin}
+
+/* v008: native GalleryBar owns the single desktop Home identity/action row.
+   This leaves the native phone Recent/News and Period composition untouched. */
+@media(min-width:901px){
+ .mock-recent-view [data-gallery-bar-instance=gallery]{align-items:flex-start}
+ .mock-recent-view [data-gallery-bar-instance=gallery]>.gallery-bar__actions{align-items:center;min-height:34px}
+ .mock-recent-view [data-gallery-bar-instance=gallery].mock-home-header>.gallery-bar__context{display:block!important}
+ .mock-home-header>.gallery-bar__context>:not(#mock-heading):not(#mock-gallery-back){display:none!important}
+ .mock-home-header .mock-profile-header{padding:0;align-items:flex-start}
+ .mock-home-header .mock-profile-name{min-height:34px}
+ .mock-home-header .mock-avatar{margin-top:0}
+ .mock-home-header .mock-profile-copy p{margin-top:0}
+ .mock-home-header .mock-profile-header>.mock-header-actions:empty{display:none}
+ .mock-recent-view #mock-recent-period .mock-period-summary{flex-wrap:nowrap;gap:9px}
+}
+#mock-album-panel #track-modal[data-mock-placement=embedded]>.track-modal-dialog>.track-modal-header{border-bottom:0}
+#mock-album-panel #track-modal[data-mock-placement=embedded] .mock-album-global-plays{margin-top:2px}
+
+/* Native editorial identity has no empty action row after page actions rehost. */
+@media(min-width:901px){
+ #track-modal[data-mock-placement=full] .album-details-header[data-album-details-layout=editorial_canvas] .album-details-header__identity{grid-row:1;padding-top:0}
+}
+.mock-recent-view-glyph{display:block;width:18px;height:18px;fill:none;stroke:currentColor;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round}
+#mock-recent-view-action[hidden]{display:none!important}
+#mock-comparison-view-action{display:inline-flex}
+@media(max-width:900px){:is(.mock-native-home,.mock-recent-view) .gallery-bar__title>:is(#mock-recent-view-action,#mock-profile-actions){display:inline-flex;flex:none;align-self:center;overflow:visible}.mock-native-home .gallery-bar__title>#mock-recent-view-action{margin-left:auto}}
+#mock-album-table-controls.mock-album-table-playback{display:flex;align-items:center;gap:7px;padding:0 0 8px;flex:none}
+.mock-playback-controls .action-button{color:#34d399;border-color:transparent;background:transparent;box-shadow:none}
+:root[data-appearance-player]:not([data-appearance-native-controls]) .mock-playback-controls .action-button{color:var(--appearance-play,#34d399)}
+.mock-playback-controls .action-button[aria-pressed=true]{background:color-mix(in srgb,currentColor 12%,transparent)}
+
+.mock-plays-heading.ui-button{cursor:pointer;min-height:30px;padding:5px 8px;border-radius:6px}
+
+/* The native side rail is a vertical surface switcher. */
+#shell-navigation-compact{flex-direction:column;align-items:center;justify-content:flex-start;gap:7px}
+#mock-playlist-rail-action{display:contents}
+@media(min-width:901px){#mock-sidebar-mode-actions{display:none!important}}
+@media(max-width:900px){
+ #mock-sidebar-mode-actions{flex:none}
+ /* Explicit shared variant on the existing native Artists and Playlists
+    buttons. The button owns icon and label, including its outlined hit box. */
+ #artist-tree-expanded .sidebar-top .mock-sidebar-mode-button{display:inline-flex;width:max-content;max-width:100%;min-width:40px;height:40px;min-height:40px;padding:0 12px;flex:0 0 auto;aspect-ratio:auto;border:1px solid var(--appearance-panel-line,var(--border));border-radius:9px;background:transparent}
+ #artist-tree-expanded .mock-sidebar-mode-button .action-button__content{display:flex;align-items:center;justify-content:center;gap:8px;width:max-content;height:auto;flex:0 0 auto}
+ #artist-tree-expanded .mock-sidebar-mode-button .action-button__icon{display:block;width:22px;height:22px;flex:0 0 22px}
+ #artist-tree-expanded .mock-sidebar-mode-button svg{display:block;width:22px;height:22px;flex:0 0 22px}
+ #artist-tree-expanded .mock-sidebar-mode-button .mock-action-label{font-size:14px;font-weight:600}
+ #artist-tree-expanded .sidebar-top .mock-sidebar-mode-button[aria-pressed=false]{width:40px;min-width:40px;padding-inline:0;justify-content:center}
+ #artist-tree-expanded .mock-sidebar-mode-button .mock-action-label[hidden]{display:none}
+}
+/* Content mode and main-page selection are distinct: only a selected page accents its switch. */
+:root :is(#artist-tree-navigation-button,[data-mobile-artists-mode],#mock-playlist-rail-action .action-button,#mock-sidebar-mode-actions .action-button)[data-mock-target-selected=true]{color:var(--navigation-tree-selection-accent-color,var(--accent));background:var(--selection-body-background,var(--panel-2))}
+:root :is(#artist-tree-navigation-button,[data-mobile-artists-mode],#mock-playlist-rail-action .action-button,#mock-sidebar-mode-actions .action-button)[data-mock-target-selected=false]:not(:hover):not(:active){color:var(--text);background:transparent}
+#shell-navigation-rail[data-mock-sidebar-mode=playlists] .sidebar-top{margin-bottom:4px;padding-block:8px}
+
+#shell-navigation-rail[data-mock-sidebar-mode=playlists] #sidebar-list{display:none!important}
+
+.mock-playback-controls .action-button__icon svg{display:block;width:18px;height:18px;fill:none;stroke:currentColor;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round}
+
+/* Gallery Back and native navigation each reserve their own 40px layout space. */
+@media(max-width:900px){
+ #shell-main-surface[data-mock-mode=gallery] [data-gallery-bar-instance=gallery]:has(#mock-gallery-back:not([hidden]):not(:empty)) #mock-gallery-back{grid-column:1;grid-row:1;float:none;margin:0;width:40px;min-width:40px;align-self:center}
+ #shell-main-surface[data-mock-mode=gallery] [data-gallery-bar-instance=gallery]:has(#mock-gallery-back:not([hidden]):not(:empty)) .gallery-bar__title{grid-column:2 / -1;grid-row:1;display:flex;align-items:center;min-width:0;min-height:40px}
+ #shell-main-surface[data-mock-mode=gallery] [data-gallery-bar-instance=gallery]:has(#mock-gallery-back:not([hidden]):not(:empty)) #mobile-library-button{position:static;transform:none;flex:0 0 40px}
+ #shell-main-surface[data-mock-mode=gallery] [data-gallery-bar-instance=gallery]:has(#mock-gallery-back:not([hidden]):not(:empty)) [data-gallery-context-name]{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+}
+
+/* Playlist uses the same native header row with a two-line title/subtitle. */
+@media(max-width:900px){
+ .mock-playlist-view [data-gallery-bar-instance=gallery]{display:flex!important;align-items:center;flex-wrap:nowrap;gap:8px;padding:8px 10px!important;min-width:0}
+ .mock-playlist-view [data-gallery-bar-instance=gallery]>.gallery-bar__context{display:grid!important;grid-template-columns:auto minmax(0,1fr);align-items:center;column-gap:8px;row-gap:2px;flex:1;min-width:0}
+ .mock-playlist-view [data-gallery-bar-instance=gallery] #mock-gallery-back{grid-column:1;grid-row:1 / span 2;align-self:center}
+ .mock-playlist-view [data-gallery-bar-instance=gallery] .gallery-bar__title{display:block;grid-column:2;grid-row:1;min-height:0;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+ .mock-playlist-view [data-gallery-bar-instance=gallery] [data-gallery-context-name]{white-space:nowrap;font-size:1rem;overflow:hidden;text-overflow:ellipsis}
+ .mock-playlist-view [data-gallery-bar-instance=gallery] #mobile-library-button{display:none}
+ .mock-playlist-view [data-gallery-bar-instance=gallery] .gallery-bar__summary{display:block;grid-column:2;grid-row:2;font-size:.72rem;line-height:1.25;margin:0;color:var(--muted)}
+}
+.mock-person{position:relative;border-radius:9px;transition:background 120ms ease;isolation:isolate}
+.mock-person.is-selected,.mock-person:has(.mock-person-navigation:active){background:var(--selection-body-background,var(--panel-2))}
+.mock-person.is-selected::before{content:'';position:absolute;inset-block:0;inset-inline-start:0;width:var(--navigation-tree-selection-accent-width,3px);background:var(--navigation-tree-selection-accent-color,var(--accent));border-radius:inherit;pointer-events:none}
+.mock-person-navigation{border-radius:9px;user-select:none;padding-inline:8px}
+.mock-person-actions{position:relative;padding-right:8px}
+@media(prefers-reduced-motion:reduce){.mock-person{transition:none}}
+/* The shared header frame below owns the right edge in every route. */
+.mock-proposals{display:grid;gap:20px;padding-bottom:24px}
+.mock-proposals-heading h1{font-size:1.3rem}.mock-proposals h2{font-size:1rem;margin:0}.mock-proposals h3{font-size:.9rem}
+.mock-proposals p{font-size:.82rem;line-height:1.5;color:var(--muted)}
+.mock-proposals>.mock-module{padding-bottom:14px}.mock-proposals>.mock-module>a,.mock-proposal-copy{margin:12px}
+.mock-proposal-options{display:grid;gap:18px;padding:14px}
+.mock-proposal-native-header{display:flex;gap:8px;align-items:center;min-height:46px;padding:8px 12px;background:var(--panel);border-radius:10px}
+.mock-proposal-native-header>strong{flex:1}
+.mock-proposal-filter-group,.mock-proposal-filter-popover,.mock-proposal-filter-drawer{display:flex;flex-wrap:wrap;gap:8px;justify-content:flex-end;align-items:center}
+.mock-proposal-filter-popover,.mock-proposal-filter-drawer{padding:12px;margin-top:8px;border:1px solid var(--border);border-radius:10px;background:var(--panel)}
+#mock-proposal-notice{padding:8px 12px;font-size:.8rem;border-bottom:1px solid var(--border);flex:none}#mock-proposal-notice a{margin-left:12px}
+body[data-mock-proposal=panel-color] .mock-module{background:var(--appearance-panel-background,var(--app-chrome));color:var(--appearance-panel-ink,var(--text));--text:var(--appearance-panel-ink,var(--appearance-ink));--muted:var(--appearance-panel-muted,var(--appearance-muted));--border:var(--appearance-panel-line,var(--appearance-line))}
+
+/* Both Artist information densities consume the same native overlay/content. */
+.mock-shared-artist-info[data-mock-placement]{display:flow-root!important}
+.mock-shared-artist-info[data-mock-placement]>header{display:contents!important}
+.mock-shared-artist-info[data-mock-placement]>header>div:not(.artist-info-overlay__image){display:none}
+.mock-shared-artist-info[data-mock-placement] .artist-info-overlay__image{float:inline-start;width:176px!important;height:auto!important;aspect-ratio:1;margin:0 14px 9px 0!important;max-width:36%}
+.mock-shared-artist-info[data-mock-placement] .artist-info-overlay__body{display:contents!important;overflow:visible!important}
+.mock-shared-artist-info[data-mock-placement] [data-artist-info-summary]{display:block!important;white-space:pre-line;overflow:visible!important;margin:0!important;line-height:1.5;-webkit-line-clamp:unset}
+.mock-shared-artist-info[data-mock-placement] .artist-info-overlay__links{display:none}
+.mock-artist-details{margin:0 0 8px;line-height:1.4;font-size:.83rem}
+.mock-artist-details>strong{display:block;color:var(--text)}
+.mock-artist-details>.mock-global-popularity{display:block;margin:3px 0 0;font-size:.77rem}
+#mock-artist-panel .mock-shared-artist-info[data-mock-placement] .artist-info-overlay__image{width:88px!important;height:88px!important;max-width:32%;margin-right:12px!important}
+#mock-workspace[data-has-selection=true]>#mock-activity>[data-gallery-bar-instance=gallery]{border-bottom:1px solid var(--border)}
+/* Let normal album contents determine dialog height; only the table scrolls at the viewport cap. */
+#track-modal[data-mock-placement=modal]>.track-modal-dialog{width:min(1180px,calc(100vw - 32px));height:auto;max-height:calc(100dvh - 32px - env(safe-area-inset-top) - env(safe-area-inset-bottom))}
+#track-modal[data-mock-placement=modal] .track-modal-list{max-height:none}
+#track-modal[data-mock-placement=modal] .track-modal-main{display:flex;flex-direction:column;min-height:0}
+#track-modal[data-mock-placement=modal] .track-modal-cover{align-self:start;container-type:normal}
+#track-modal[data-mock-placement=modal] .track-modal-cover-shell{width:100%;height:auto;aspect-ratio:1}
+
+:root #shell-main-surface [data-artist-info-overlay][hidden],:root #mock-artist-panel [data-artist-info-overlay][hidden],:root [data-artist-info-overlay].mock-shared-artist-info[hidden]{display:none!important}
+
+#mock-artist-page{overflow:hidden}.mock-artist-page-host{height:100%;min-height:0}
+
+/* Selection and focus remain native tree states in the circle presentation. */
+:root .mock-artist-list[data-view=icons] .navigation-tree-item.is-selected{background:var(--selection-body-background)!important}
+:root .mock-artist-list[data-view=icons] .navigation-tree-item.is-selected::before{inset-block:0;inset-inline-start:0;width:var(--navigation-tree-selection-accent-width,3px);background:var(--navigation-tree-selection-accent-color,var(--appearance-selected-accent,var(--accent)));border-radius:inherit}
+/* The existing Recent body owns scrolling, including its side gutters. */
+.compact-data-table[data-mock-recent-tracks=true]{overflow:visible}
+body.mock-native-home #mobile-home-recent,body.mock-recent-view #mock-recent-body{overscroll-behavior-y:auto;scroll-padding-bottom:calc(var(--player-height) + 12px)}
+body.mock-multi-view #mock-recent-body{scroll-padding-bottom:12px}
+@media(max-width:900px){
+ body.mock-native-home #shell-main-surface,body.mock-native-home #mobile-home{padding-inline:0}
+ body.mock-native-home #mobile-home>[data-gallery-bar-instance=gallery]{margin-inline:14px}
+ body.mock-native-home #mobile-home-recent{padding-inline:14px;scrollbar-width:thin}
+ body.mock-recent-view #shell-main-surface[data-mock-mode=recent]{padding-inline:0}
+ body.mock-recent-view #shell-main-surface[data-mock-mode=recent]>#mock-recent-body{padding-inline:22px;scrollbar-width:thin}
+ body.mock-recent-view #shell-main-surface[data-mock-mode=recent]>[data-gallery-bar-instance=gallery]{padding-inline:22px!important}
+}
+#mock-album-config-action[hidden]{display:none!important}
+
+/* Compact choices retain the native menu, placement and focus owner. */
+:root:has(.mock-choice-trigger--slim[aria-expanded="true"]) .settings-foobar-format-menu .gallery-menu-action{min-height:32px;padding:7px 10px;font-size:.8rem;white-space:normal}
+:root:has(.mock-choice-trigger--slim[aria-expanded="true"]) .settings-foobar-format-menu .ui-button__content{white-space:normal;text-align:left;justify-content:flex-start;overflow-wrap:anywhere}
+
+@media(max-width:900px){
+ #mock-mobile-period{flex:0 1 auto;min-width:0}
+ #mock-mobile-period .mock-period-summary{flex-wrap:nowrap;min-width:0}
+ .mock-period-summary>.mock-native-choice{flex:0 1 auto;min-width:0}
+ .mock-period-summary .mock-choice-trigger--slim{min-width:0;max-width:100%}
+ .mock-period-summary .mock-choice-trigger--slim .ui-button__content{display:block;min-width:0;overflow:hidden;text-overflow:ellipsis}
+ .mock-choice-trigger--slim .mock-choice-chevron{flex-shrink:0}
+}
+
+@media(min-width:901px){.mock-home-sections-row>#mock-recent-period{margin-left:auto;flex:0 1 auto;min-width:0}.mock-home-sections-row .mock-period-summary{flex-wrap:nowrap}}
+@media(max-width:900px){.mock-choice-trigger.ui-button.mock-choice-trigger--slim{min-height:30px;height:30px;padding:4px 8px;gap:6px}}
+
+/* v010: the same native Gallery bar and Playlist body become a single page. */
+body.mock-playlist-expanded .shell-layout{height:calc(100dvh - var(--player-height))}
+body.mock-playlist-expanded #shell-main-surface{display:flex!important;flex-direction:column;overflow:hidden!important;padding-bottom:12px}
+.mock-playlist-view #mock-gallery-back:empty{display:none!important}
+@media(max-width:900px){
+ .mock-playlist-view [data-gallery-bar-instance=gallery]>.gallery-bar__context:has(#mock-gallery-back:empty){grid-template-columns:minmax(0,1fr)}
+ .mock-playlist-view [data-gallery-bar-instance=gallery]>.gallery-bar__context:has(#mock-gallery-back:empty) .gallery-bar__title,
+ .mock-playlist-view [data-gallery-bar-instance=gallery]>.gallery-bar__context:has(#mock-gallery-back:empty) .gallery-bar__summary{grid-column:1}
+}
+
+#mock-playlist-expand[hidden]{display:none!important}
+#mock-playlist-expand .action-button{width:34px;height:34px;min-width:34px;min-height:34px;flex-basis:34px}
+
+#mock-full-artist-tools .mock-full-header>div:not(.mock-header-actions){min-width:0}
+#mock-full-artist-tools .mock-artist-view__identity strong{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+
+/* Native Gallery identity is an explicit Artist-page link, independent of tree preference. */
+[data-gallery-context-name][data-mock-gallery-artist-page]{cursor:pointer;border-radius:4px}
+[data-gallery-context-name][data-mock-gallery-artist-page]:focus-visible{outline:2px solid var(--accent);outline-offset:3px}
+
+/* Shared Artist metadata uses native Label anatomy and an explicit mock link. */
+.mock-shared-artist-info[data-mock-placement] .mock-artist-details{display:flex;align-items:flex-start;gap:8px 12px;flex-wrap:wrap;margin-block-end:10px}
+.mock-shared-artist-info[data-mock-placement] .mock-artist-labels{display:flex;flex:1 1 140px;align-items:center;gap:5px;flex-wrap:wrap;min-width:0}
+.mock-shared-artist-info[data-mock-placement] .mock-artist-labels .alert-label{white-space:normal;overflow-wrap:anywhere}
+.mock-shared-artist-info[data-mock-placement] .mock-artist-country{font-weight:700}
+.mock-shared-artist-info[data-mock-placement] .mock-artist-details>.mock-artist-global-plays{margin:0 0 0 auto;max-width:100%;font-size:.9rem;line-height:1.45;text-align:right;font-weight:750}
+.mock-shared-artist-info[data-mock-placement] .mock-artist-global-plays[hidden]{display:none!important}
+.mock-shared-artist-info[data-mock-placement] [data-mock-lastfm-artist]{color:var(--link,var(--accent));text-decoration:underline;text-underline-offset:3px;overflow-wrap:anywhere}
+
+/* v010 preview header frame. Native gallery-main.css owns the 32px desktop
+   appbar gutter; the later mobile-layout.css owns its 12px phone counterpart.
+   Share that
+   contract with page headers and let module surfaces extend by their own
+   border + padding. Do not align buttons by icon glyphs or measure the DOM. */
+.shell-layout:has(#shell-main-surface[data-mock-mode]) {
+  --mock-header-action-end: max(32px, env(safe-area-inset-right, 0px));
+  --mock-header-panel-border: 1px;
+  --mock-header-panel-padding: 12px;
+  --mock-header-surface-end: max(0px, calc(var(--mock-header-action-end) - var(--mock-header-panel-padding) - var(--mock-header-panel-border)));
+  --mock-header-surface-outset: calc(var(--mock-header-action-end) - var(--mock-header-surface-end));
+}
+.shell-layout:has(#shell-main-surface[data-mock-mode]) > .app-bar {
+  padding-inline-end: var(--mock-header-action-end);
+}
+.shell-layout #shell-main-surface[data-mock-mode] {
+  margin-inline-end: var(--mock-header-surface-end);
+  padding-inline-end: var(--mock-header-surface-outset);
+}
+/* The workspace fills the shared frame. Its interior left-column headers
+   retain their own grid column instead of reaching through a neighbor. */
+#shell-main-surface[data-mock-mode] > #mock-workspace,
+#shell-main-surface[data-mock-mode] > #mock-artist-page {
+  margin-inline-end: calc(-1 * var(--mock-header-surface-outset));
+}
+#mock-workspace > .mock-module > .mock-module-header,
+#mock-artist-page .mock-module-header {
+  padding-inline-end: var(--mock-header-panel-padding);
+}
+#mock-workspace > #mock-activity > [data-gallery-bar-instance=gallery] {
+  padding-inline-end: var(--mock-header-panel-padding) !important;
+}
+/* The borderless single-panel case spends the entire frame inset on the
+   header, so selecting or clearing an album cannot move the action guide. */
+#mock-workspace[data-has-selection=false] > #mock-activity > [data-gallery-bar-instance=gallery] {
+  padding-inline-end: var(--mock-header-surface-outset) !important;
+}
+#shell-main-surface[data-mock-mode] > [data-gallery-bar-instance=gallery] {
+  padding-inline-end: 0 !important;
+}
+#mock-artist-page .mock-artist-view__header {
+  padding-inline-end: var(--mock-header-surface-outset);
+}
+@media (max-width:900px) {
+  .shell-layout:has(#shell-main-surface[data-mock-mode]) {
+    --mock-header-action-end: max(12px, env(safe-area-inset-right, 0px));
+    --mock-header-panel-padding: min(12px, calc(var(--mock-header-action-end) - var(--mock-header-panel-border)));
+  }
+  /* Phone Home and expanded Recent already put body gutters inside their
+     scroller; their independent headers consume the same action inset. */
+  body.mock-native-home .shell-layout #shell-main-surface,
+  body.mock-recent-view .shell-layout #shell-main-surface[data-mock-mode=recent] { padding-inline-end:0; }
+  body.mock-native-home #mobile-home > [data-gallery-bar-instance=gallery] { margin-inline-end:var(--mock-header-surface-outset); }
+  body.mock-recent-view #shell-main-surface[data-mock-mode=recent] > [data-gallery-bar-instance=gallery] { padding-inline-end:var(--mock-header-surface-outset) !important; }
+  /* Native inline Album identity has an absolutely positioned header. Its
+     right inset is relative to the same main surface, not the viewport. */
+  #shell-main-surface[data-mock-mode=album] > #mobile-page-header[data-inline-album-layout=true] { inset-inline-end:var(--mock-header-surface-outset); inline-size:auto; }
+  #shell-main-surface[data-mock-mode=album] .mobile-album-overview > #mock-album-page-actions { justify-content:safe flex-end; }
+}
+
+/* Expanded pages use one bare return action to the left of their identity.
+   The shared Gallery portal is re-used; module Expand stays on the right. */
+#mock-gallery-back:empty{display:none!important}
+#shell-main-surface[data-mock-mode=recent] [data-gallery-bar-instance=gallery]>.gallery-bar__context{
+  display:grid!important;grid-template-columns:auto minmax(0,1fr);column-gap:8px;align-items:center;
+}
+#shell-main-surface[data-mock-mode=recent] #mock-gallery-back{grid-column:1;grid-row:1 / span 2;float:none;margin:0;align-self:center}
+#shell-main-surface[data-mock-mode=recent] .gallery-bar__context>.gallery-bar__title{grid-column:2;grid-row:1;min-width:0}
+#shell-main-surface[data-mock-mode=recent] .gallery-bar__context>.gallery-bar__summary{grid-column:2;grid-row:2;min-width:0}
+#shell-main-surface[data-mock-mode=recent] .gallery-bar__context>#mock-heading{grid-column:2;grid-row:1 / span 2;min-width:0}
+#shell-main-surface[data-mock-mode=recent] [data-gallery-bar-instance=gallery] #mobile-library-button{display:none}

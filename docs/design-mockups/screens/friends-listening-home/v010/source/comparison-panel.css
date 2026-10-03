@@ -1,0 +1,142 @@
+/* v007 comparison-only layer. Load after mock-layout.css; never style the sidebar. */
+.mock-comparison-v007{--mock-comparison-blue:#72bfff;--mock-comparison-gap:18px;min-width:0}
+.mock-comparison-v007 .mock-comparison-options{width:100%;max-width:none;box-sizing:border-box;margin-inline:0;padding-block:3px 18px}
+.mock-comparison-v007 .mock-comparison-centered{width:min(100%,var(--mock-comparison-content-width));max-width:100%;margin-inline:auto}
+.mock-comparison-v007 .mock-comparison-column-headings{position:static;border:0;box-shadow:none;background:transparent;padding:0 0 8px;gap:var(--mock-comparison-gap)}
+.mock-comparison-v007 .mock-comparison-column-headings>[data-comparison-heading]{padding-inline:10px;min-width:0}
+.mock-comparison-v007 .mock-comparison-column-headings>[data-comparison-heading=friend]{text-align:right}
+.mock-comparison-v007 .mock-comparison-columns{gap:var(--mock-comparison-gap);align-items:start}
+.mock-comparison-v007 .mock-sort-heading{font-size:.82rem}
+
+/* Joined, noninteractive comparison mark; the glow stays below the numbers. */
+.mock-comparison-v007 .mock-comparison-joined{position:relative;display:inline-flex;align-items:center;justify-content:center;isolation:isolate;box-sizing:border-box;width:44px;min-width:44px;height:22px;border:1px solid color-mix(in srgb,var(--mock-comparison-blue) 34%,transparent);border-radius:999px;background:color-mix(in srgb,var(--panel) 90%,var(--mock-comparison-blue));color:var(--mock-comparison-blue);box-shadow:0 0 10px color-mix(in srgb,var(--mock-comparison-blue) 12%,transparent),inset 0 1px 0 color-mix(in srgb,var(--mock-comparison-blue) 12%,transparent);font-size:.94rem;font-weight:650;line-height:1;pointer-events:none}
+.mock-comparison-v007 .mock-comparison-joined::before{content:"";position:absolute;inset:2px 3px;border-radius:inherit;background:linear-gradient(110deg,transparent,color-mix(in srgb,var(--mock-comparison-blue) 9%,transparent),transparent);z-index:-1}
+.mock-comparison-v007 .mock-comparison-joined[data-relation=missing]{color:var(--muted);background:var(--panel);border-color:var(--border);box-shadow:none}
+.mock-comparison-v007 .mock-comparison-joined[data-relation=equal]{color:color-mix(in srgb,var(--mock-comparison-blue) 70%,var(--text));box-shadow:none}
+
+/* The album table has exactly three visible columns and one native identity. */
+.mock-comparison-v007 .mock-comparison-album-table{--cdt-columns:minmax(220px,1fr) minmax(140px,156px) minmax(140px,156px)!important;--cdt-gap:0;--cdt-row-padding:9px 10px;--cdt-mobile-min-width:0;background:transparent;border:0}
+.mock-comparison-v007 .mock-comparison-album-table .compact-data-table-header{padding-block:3px 9px;border:0;background:transparent}
+.mock-comparison-v007 .mock-comparison-album-table .compact-data-table-row{min-height:100px;border-radius:9px}
+/* Native row feedback honors the chosen appearance color. Selected/playing
+   rows retain their own paint; keyboard focus adds an unmistakable outline. */
+.mock-comparison-v007 .compact-data-table-row:not(.mock-selected-track):not(.is-selected):not([aria-selected=true]):not(.album-track-table__row--playing):is(:hover,:focus-within){background:var(--appearance-item-hover,color-mix(in srgb,var(--appearance-ink,white) 5%,transparent))}
+.mock-comparison-v007 .compact-data-table-row:has(:focus-visible){outline:2px solid var(--appearance-interaction-outline,var(--text));outline-offset:-2px}
+.mock-comparison-v007 .mock-comparison-album-table [data-cdt-column=album]{min-width:0;padding-right:18px}
+.mock-comparison-v007 .mock-comparison-album-table [role=columnheader][data-cdt-column=yours]{padding-right:28px;text-align:right}
+.mock-comparison-v007 .mock-comparison-album-table [role=columnheader][data-cdt-column=friend]{padding-left:28px;text-align:left}
+.mock-comparison-v007 .mock-comparison-album-table [role=columnheader][data-cdt-column=friend] .mock-sort-heading{text-align:left}
+.mock-comparison-v007 .mock-comparison-album-identity-cell{display:flex;align-items:center;gap:11px;min-width:0}
+.mock-comparison-v007 .mock-comparison-rank{width:18px;flex:0 0 18px;text-align:right;color:var(--muted);font-size:.76rem;font-variant-numeric:tabular-nums}
+.mock-comparison-v007 .mock-comparison-album-identity.album-card[data-gallery-display=list]{display:grid;grid-template-columns:54px minmax(0,1fr);align-items:center;gap:12px;width:100%;min-width:0;min-height:0;margin:0;border:0;border-radius:0;background:transparent;overflow:visible;box-shadow:none}
+.mock-comparison-v007 .mock-comparison-album-identity.album-card[data-gallery-display=list]>.cover{width:54px;height:54px;min-width:0;aspect-ratio:1;margin:0;border-radius:8px;align-self:center}
+/* The native card aura otherwise spans the identity column and makes a second
+   bright patch at its far edge. Keep it centered on the real cover only. */
+.mock-comparison-v007 .mock-comparison-album-identity.album-card[data-gallery-display=list]::before{inset:50% auto auto -14px;translate:0 -50%;width:82px;height:82px}
+.mock-comparison-v007 .mock-comparison-album-identity.album-card[data-gallery-display=list] .album-body{display:flex;flex-direction:column;gap:4px;min-width:0;min-height:0;padding:0;background:transparent;box-shadow:none}
+.mock-comparison-v007 .mock-comparison-album-identity .album-title{min-width:0;margin:0;font-size:.87rem;line-height:1.28}
+.mock-comparison-v007 .mock-comparison-album-identity .album-title-button{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;text-align:left}
+.mock-comparison-v007 .mock-comparison-album-identity .album-meta-row{display:flex;flex-direction:column;gap:2px;font-size:.73rem;line-height:1.25;color:var(--muted)}
+.mock-comparison-v007 .mock-comparison-artist{display:block;align-self:flex-start;max-width:100%;padding:0;border:0;background:transparent;color:inherit;font:inherit;text-align:left;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;cursor:pointer}
+.mock-comparison-v007 .mock-comparison-artist:hover{text-decoration:underline;color:var(--text)}
+.mock-comparison-v007 .mock-comparison-artist:focus-visible{outline:2px solid var(--appearance-interaction-outline,var(--text));outline-offset:2px;border-radius:2px}
+.mock-comparison-v007 .mock-comparison-year{font-size:.68rem;font-variant-numeric:tabular-nums}
+.mock-comparison-v007 .mock-comparison-album-values{display:grid;gap:3px;min-width:0}
+.mock-comparison-v007 .mock-comparison-metric{position:relative;display:flex;align-items:center;justify-content:space-between;gap:7px;height:24px;font-size:.82rem;font-variant-numeric:tabular-nums;line-height:1.2}
+.mock-comparison-v007 [data-metric-side=left] .mock-comparison-metric{padding-right:28px}
+.mock-comparison-v007 [data-metric-side=right] .mock-comparison-metric{flex-direction:row-reverse;padding-left:28px}
+.mock-comparison-v007 .mock-comparison-metric>small{color:var(--muted);font-size:.64rem;white-space:nowrap}
+.mock-comparison-v007 .mock-comparison-number{font-weight:650}
+.mock-comparison-v007 .mock-comparison-rating{font-size:.85rem;font-weight:600;white-space:nowrap;font-variant-numeric:tabular-nums}
+.mock-comparison-v007 .mock-comparison-rating>small{color:var(--muted);font-size:.65rem;font-weight:400}
+.mock-comparison-v007 .mock-comparison-metric>.mock-comparison-joined{position:absolute;right:-22px;top:1px;z-index:1}
+.mock-comparison-v007 .mock-comparison-album-table .mock-comparison-joined{height:22px}
+
+/* Keep the two native track/artist tables beside their common center. Native
+   playback buttons, row IDs and duration renderers are retained unchanged. */
+.mock-comparison-v007 .mock-comparison-facing-table{--cdt-gap:8px;--cdt-row-padding:7px 10px;overflow:visible}
+.mock-comparison-v007 .mock-comparison-facing-table[data-comparison-kind=artists][data-comparison-side=left]{--cdt-columns:minmax(0,1fr) 58px!important}
+.mock-comparison-v007 .mock-comparison-facing-table[data-comparison-kind=artists][data-comparison-side=right]{--cdt-columns:58px minmax(0,1fr)!important}
+.mock-comparison-v007 .mock-comparison-facing-table[data-comparison-kind=tracks][data-comparison-side=left]{--cdt-columns:30px minmax(0,1fr) 36px 44px 56px!important}
+.mock-comparison-v007 .mock-comparison-facing-table[data-comparison-kind=tracks][data-comparison-side=right]{--cdt-columns:56px 30px minmax(0,1fr) 36px 44px!important}
+.mock-comparison-v007 .mock-comparison-love-cell{display:flex;align-items:center;justify-content:center;min-width:0;text-align:center}
+.mock-comparison-v007 .mock-comparison-love-cell [data-mock-track-love]{flex:0 0 auto}
+.mock-comparison-v007 .mock-comparison-affection{display:inline-flex;align-items:center;justify-content:center;min-width:0}
+.mock-comparison-v007 .mock-track-love-indicator{display:inline-flex;align-items:center;justify-content:center;width:28px;height:28px;flex:0 0 28px;cursor:default}
+.mock-comparison-v007 .mock-track-love-indicator[data-love-state=none],.mock-comparison-v007 .mock-track-love-indicator[data-love-state=unknown]{color:var(--muted)}
+.mock-comparison-v007 .mock-comparison-affection-stack{display:flex;flex-direction:column;gap:3px;max-width:100%}
+.mock-comparison-v007 .mock-comparison-affection-stack>small{display:block;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--muted);font-size:.52rem;line-height:1.2;font-weight:400}
+.mock-comparison-v007 .mock-comparison-person-values{display:flex;flex-direction:column;align-items:center;gap:3px}
+.mock-comparison-v007 .mock-comparison-facing-table .compact-data-table-row{position:relative;min-height:50px;box-sizing:border-box}
+.mock-comparison-v007 .mock-comparison-facing-table .compact-data-table-header{min-height:30px;box-sizing:border-box}
+.mock-comparison-v007 .mock-comparison-facing-table [data-cdt-column=count]{font-variant-numeric:tabular-nums;font-weight:600;overflow:visible}
+.mock-comparison-v007 .mock-comparison-facing-table[data-comparison-side=left] [data-cdt-column=count]{text-align:right;padding-right:16px}
+.mock-comparison-v007 .mock-comparison-facing-table[data-comparison-side=right] [data-cdt-column=count]{text-align:left!important;padding-left:16px}
+.mock-comparison-v007 .mock-boundary-comparison{position:absolute;right:-33px;top:50%;width:48px;transform:translateY(-50%);gap:0;z-index:3;pointer-events:none}
+.mock-comparison-v007 .mock-boundary-comparison>.mock-comparison-joined{width:48px;min-width:48px}
+.mock-comparison-v007 .mock-comparison-facing-table .album-track-table__title{min-width:0;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+.mock-comparison-v007 .mock-comparison-facing-table .mock-artist-cell{min-width:0;width:100%}
+.mock-comparison-v007 .mock-comparison-facing-table .mock-artist-cell>span:last-child{overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+
+/* One fixed native-card geometry for every album, even when ratings are unknown
+   or titles are long. The opposite stable album ID receives the red highlight. */
+.mock-comparison-v007 .mock-comparison-cards{max-width:1200px;margin-inline:auto}
+.mock-comparison-v007 .mock-comparison-cards .mock-comparison-albums[data-view=cards]{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:12px;align-items:start}
+.mock-comparison-v007 .mock-comparison-cards .mock-comparison-album{min-width:0;padding:0;border:0}
+.mock-comparison-v007 .mock-comparison-gallery-card.album-card{display:flex;flex-direction:column;width:100%;min-width:0;max-width:none;height:auto;box-sizing:border-box;margin:0;border:1px solid var(--border);border-radius:12px;overflow:hidden;transition:border-color 150ms ease,box-shadow 150ms ease}
+.mock-comparison-v007 .mock-comparison-gallery-card.album-card>.cover{width:100%;height:auto;aspect-ratio:1;flex:0 0 auto;overflow:hidden;border-radius:0;margin:0}
+.mock-comparison-v007 .mock-comparison-gallery-card.album-card .album-body{display:grid;grid-template-columns:minmax(0,1fr);grid-template-rows:36px 16px 22px 20px 44px;align-content:start;gap:7px;box-sizing:border-box;min-height:0;padding:11px 10px;height:194px;flex:0 0 194px}
+.mock-comparison-v007 .mock-comparison-gallery-card .album-title{grid-column:1;grid-row:1;margin:0;font-size:.84rem;line-height:1.3;min-height:2.6em;max-height:2.6em;overflow:hidden}
+.mock-comparison-v007 .mock-comparison-gallery-card .album-title-button{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;line-height:1.3;max-height:2.6em;white-space:normal;overflow:hidden;text-overflow:ellipsis}
+.mock-comparison-v007 .mock-comparison-gallery-card .album-meta-row{grid-column:1;grid-row:2;display:block;min-width:0;font-size:.72rem;line-height:1.3}
+.mock-comparison-v007 .mock-comparison-gallery-card .album-subtitle{display:block;max-width:100%;font-size:inherit;line-height:inherit;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.mock-comparison-v007 .mock-comparison-gallery-card [data-gallery-metadata-text]{animation:none;transform:none}
+.mock-comparison-v007 .mock-comparison-card-rating{grid-column:1;grid-row:3;display:flex;align-items:center;justify-content:space-between;gap:8px;height:22px;font-size:.75rem}
+.mock-comparison-v007 .mock-comparison-card-rating>small{color:var(--muted);font-size:.65rem}
+.mock-comparison-v007 .mock-comparison-gallery-card .chip-row{display:flex;justify-content:space-between;grid-column:1;grid-row:4;margin:0;min-width:0;align-items:center;font-size:.65rem;line-height:1.2}
+.mock-comparison-v007 .mock-comparison-gallery-card .mock-card-listen-metrics{display:flex;flex-direction:column;justify-content:center;gap:4px;margin:0;padding-top:6px;min-height:0;height:44px;box-sizing:border-box;font-size:.65rem;line-height:1.2;border-top:1px solid var(--border)}
+.mock-comparison-v007 .mock-comparison-gallery-card .mock-card-listen-metrics strong{font-weight:650;font-variant-numeric:tabular-nums}
+.mock-comparison-v007 [data-comparison-highlighted=true] .mock-comparison-gallery-card{border-color:#ed737a;box-shadow:0 0 0 2px color-mix(in srgb,#ed737a 70%,transparent),0 0 18px color-mix(in srgb,#ed737a 18%,transparent)}
+.mock-comparison-v007 [data-comparison-highlighted=true] .mock-comparison-gallery-card .album-body{background:color-mix(in srgb,var(--panel) 89%,#ed737a)}
+.mock-comparison-v007 .mock-comparison-cards .mock-boundary-comparison,
+.mock-comparison-v007 .mock-comparison-cards .mock-comparison-sign{display:none}
+
+/* Preserve the existing one-identity phone table contract. */
+@media(max-width:900px){
+  .mock-comparison-v007 .mock-comparison-options{padding-bottom:12px;gap:12px}
+  .mock-comparison-v007 .mock-comparison-centered{width:100%}
+  .mock-comparison-v007 .mock-comparison-album-table{--cdt-columns:minmax(0,1fr) minmax(69px,88px) minmax(69px,88px)!important;--cdt-row-padding:9px 2px;--cdt-gap:0}
+  .mock-comparison-v007 .mock-comparison-album-table .compact-data-table-row{min-height:102px}
+  .mock-comparison-v007 .mock-comparison-album-table [data-cdt-column=album]{padding-right:8px}
+  .mock-comparison-v007 .mock-comparison-rank{display:none}
+  .mock-comparison-v007 .mock-comparison-album-identity-cell{gap:0}
+  .mock-comparison-v007 .mock-comparison-album-identity.album-card[data-gallery-display=list]{grid-template-columns:38px minmax(0,1fr);gap:7px}
+  .mock-comparison-v007 .mock-comparison-album-identity.album-card[data-gallery-display=list]>.cover{width:38px;height:38px}
+  .mock-comparison-v007 .mock-comparison-album-identity.album-card[data-gallery-display=list]::before{width:66px;height:66px}
+  .mock-comparison-v007 .mock-comparison-album-identity .album-title{font-size:.73rem}
+  .mock-comparison-v007 .mock-comparison-album-identity .album-title-button{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;white-space:normal;max-height:2.56em;overflow:hidden}
+  .mock-comparison-v007 .mock-comparison-album-identity .album-meta-row{font-size:.63rem}
+  .mock-comparison-v007 .mock-comparison-year{font-size:.59rem}
+  .mock-comparison-v007 .mock-comparison-album-values{gap:5px}
+  .mock-comparison-v007 .mock-comparison-metric{height:25px;gap:1px;flex-direction:column-reverse;align-items:flex-end;justify-content:center;font-size:.75rem}
+  .mock-comparison-v007 [data-metric-side=left] .mock-comparison-metric{padding-right:16px}
+  .mock-comparison-v007 [data-metric-side=right] .mock-comparison-metric{padding-left:16px;flex-direction:column-reverse;align-items:flex-start}
+  .mock-comparison-v007 .mock-comparison-metric>small{font-size:.5rem}
+  .mock-comparison-v007 .mock-comparison-rating{font-size:.74rem}
+  .mock-comparison-v007 .mock-comparison-rating>small{font-size:.55rem}
+  .mock-comparison-v007 .mock-comparison-joined{width:26px;min-width:26px;height:21px;font-size:.79rem;position:relative}
+  .mock-comparison-v007 .mock-comparison-metric>.mock-comparison-joined{right:-13px;top:0}
+  .mock-comparison-v007 .mock-comparison-album-table .mock-comparison-joined{height:21px}
+  .mock-comparison-v007 .mock-comparison-album-table [role=columnheader][data-cdt-column=yours]{padding-right:16px}
+  .mock-comparison-v007 .mock-comparison-album-table [role=columnheader][data-cdt-column=friend]{padding-left:16px}
+  .mock-comparison-v007 .mock-shared-comparison [role=columnheader] .mock-sort-heading{font-size:.65rem}
+  .mock-comparison-v007 .mock-shared-comparison[data-comparison-kind=tracks]{--cdt-columns:26px minmax(60px,1fr) 40px 22px 48px 36px!important;--cdt-gap:3px}
+  .mock-comparison-v007 .mock-shared-comparison[data-comparison-kind=artists]{--cdt-columns:minmax(95px,1fr) 45px 24px 62px!important;--cdt-gap:3px}
+  .mock-comparison-v007 .mock-shared-comparison [data-cdt-column=comparison]{align-items:center}
+  .mock-comparison-v007 .mock-shared-comparison [data-cdt-column=friend]{text-align:left!important}
+  .mock-comparison-v007 .mock-shared-comparison [data-cdt-column=friend] .mock-sort-heading{text-align:left}
+}
+@media(prefers-reduced-motion:reduce){
+  .mock-comparison-v007 .mock-comparison-gallery-card.album-card,
+  .mock-comparison-v007 .mock-comparison-gallery-card .album-body{transition:none}
+}

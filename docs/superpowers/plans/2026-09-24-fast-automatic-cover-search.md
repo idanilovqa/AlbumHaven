@@ -89,6 +89,29 @@ This change reuses that owner; it does not add a JSON fallback or claim the
 lookup cache has been migrated. A lookup-cache persistence migration is not
 part of this approved resolver correction.
 
+### October 3 integrated verification and sandbox deployment
+
+Independent focused integration verification passed 244 tests with 30 unrelated
+cases deselected and two existing Pillow deprecation warnings in 11.64 seconds.
+The JavaScript verification passed 370 tests. This evidence supplements the
+earlier provider gate; it does not replace required acceptance or release gates.
+
+Sandbox3 was deployed at code commit `2ecf7de2` using the official deployment
+runbook and this feature worktree. The public endpoint
+`https://sandbox3.albumhaven.org/login` returned HTTP 200 with the Album Haven
+sign-in page; `/bootstrap-data` returned HTTP 401. The deployment task was running,
+with port 5003 owned by reloader PID 22256 and application worker PID 2496.
+These are observations at verification time, not persistent process identities.
+
+An initial Windows `pythonw` spawned-stream startup failure was corrected locally
+in the deployment repository's `serve.py` and `test_deploy.py`, with five passing
+tests and two review passes. The production deployment path remained unchanged.
+
+No production cover pass was started. The supported endpoint uses the installed
+application code; an independent worker was unsafe because of full-snapshot
+writes and process-local coordination. Manual acceptance, E2E, CI, release, and
+live production cover throughput remain open. No checklist or counter changed.
+
 ### October 3 search-only smoke evidence
 
 Read-only provider searches using isolated sandbox3 configuration measured Rush

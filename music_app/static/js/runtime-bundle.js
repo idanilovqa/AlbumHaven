@@ -33823,6 +33823,10 @@ class VirtualArtistGrid {
   onUserScrollIntent(event) {
     if (event?.type === 'pointerdown' && event.target !== this.scrollEl) return;
     this.invalidateScrollStabilization();
+    if (this._scrollRestoreRaf) {
+      cancelBrowserAnimationFrame(this._scrollRestoreRaf);
+      this._scrollRestoreRaf = null;
+    }
   }
 
   onArtistTreeSettled() {

@@ -45,12 +45,14 @@ test('app-bar search keeps the native clear control close to the search action',
 test('shared search owns one external interaction outline with no outlined child seam', () => {
   assert.match(
     searchInputCss,
-    /:root \.search-field \.search-field-control\s*>\s*input\[type='search'\]:focus-visible,\s*:root \.search-field \.search-field-action\s*>\s*\.search-field-button:focus-visible\s*\{[^}]*border:\s*0;[^}]*outline:\s*none;[^}]*box-shadow:\s*none;/,
+    /:root \.search-field \.search-field-control > input\[type='search'\]:focus-visible,\s*:root \.search-field \.search-field-action > \.search-field-button:focus-visible\s*\{[^}]*border:\s*0;[^}]*outline:\s*none;[^}]*box-shadow:\s*none;/,
   );
-  assert.match(
-    appearanceCss,
-    /:not\(\.navigation-tree-item\):not\(\.search-field-button\):not\(\.cover-lookup-task-open\):not\(\.global-player \*\):hover[^\{]*\{[^}]*border-color:/,
-  );
+  const genericHover = appearanceCss.match(
+    /:not\(\.navigation-tree-item\):not\(\.search-field-button\):not\(\.cover-lookup-task-open\):not\(\.global-player \*\):hover[^\{]*\{([^}]*)\}/,
+  )?.[1] || '';
+  assert.match(genericHover, /border-color:\s*var\(--appearance-item-action-hover-border,\s*var\(--appearance-line\)\)/);
+  assert.doesNotMatch(genericHover, /outline:/);
+  assert.match(appearanceCss, /:not\(\.search-field \*\):not\(\.ui-input-action \*\):not\(\.gallery-info-button\):focus-visible\s*\{[^}]*outline:/);
 });
 
 test('narrow library search aligns to the main panel outer edge', () => {

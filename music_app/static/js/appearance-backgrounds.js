@@ -167,7 +167,9 @@
     return {
       hoverBackground: interactions.button_hover_background
         || `color-mix(in srgb, ${playerBackground} 14%, color-mix(in srgb, ${control} 85%, #EEEEEE))`,
-      hoverBorder: `color-mix(in srgb, ${playerBackground} 22%, #858985)`,
+      hoverBorder: interactions.item_outline?.source === 'custom'
+        ? interactions.item_outline.color
+        : `color-mix(in srgb, ${playerBackground} 22%, #858985)`,
       pressedBackground: interactions.button_pressed
         || `color-mix(in srgb, ${control} 75%, #000000)`,
     };
@@ -257,8 +259,8 @@
       else style.removeProperty('--appearance-' + token);
     }
     if (themed) {
-      style.setProperty('--appearance-primary-button', effective.tokens.control);
-      style.setProperty('--appearance-primary-button-ink', effective.tokens.ink);
+      style.setProperty('--appearance-primary-button', effective.tokens['primary-button']);
+      style.setProperty('--appearance-primary-button-ink', effective.tokens['primary-button-ink']);
     } else {
       style.removeProperty('--appearance-primary-button');
       style.removeProperty('--appearance-primary-button-ink');
@@ -337,8 +339,8 @@
     editor.style.setProperty('--appearance-main-surface', effective.main);
     editor.style.setProperty('--appearance-panel-background', effective.panel);
     for (const [token, color] of Object.entries(effective.tokens)) editor.style.setProperty('--appearance-' + token, color);
-    editor.style.setProperty('--appearance-primary-button', effective.tokens.control);
-    editor.style.setProperty('--appearance-primary-button-ink', effective.tokens.ink);
+    editor.style.setProperty('--appearance-primary-button', effective.tokens['primary-button']);
+    editor.style.setProperty('--appearance-primary-button-ink', effective.tokens['primary-button-ink']);
     const interactions = value.interaction_overrides || {};
     editor.style.setProperty('--appearance-selected-accent', interactions.panel_outline || '#55C7FF');
     editor.style.setProperty('--selection-body-background', interactions.item_selected
@@ -392,6 +394,21 @@
     return Object.fromEntries(Object.entries(appearanceSectionFields).map(([section, fields]) => [section,
       Object.fromEntries(fields.map(field => [field, copy(preference[field])]))]));
   }
+  function resolveClientAppearance(preference, clientProfile = 'web_desktop', profileSet = null) {
+    const normalized = normalizePreferences(preference);
+    if (!['mobile', 'tv'].includes(clientProfile)) return normalized;
+    const profiles = profileSet || normalized.device_profiles || {};
+    const resolved = { ...normalized };
+    for (const [section, fields] of Object.entries(appearanceSectionFields)) {
+      const candidate = profiles[clientProfile]?.sections?.[section];
+      if (candidate?.mode !== 'custom') continue;
+      for (const field of fields) {
+        if (section === 'player' && field === 'loop_control_style') continue;
+        if (Object.hasOwn(candidate.values || {}, field)) resolved[field] = copy(candidate.values[field]);
+      }
+    }
+    return normalizePreferences(resolved);
+  }
   function createController({ initial = empty(), request, apply = () => {}, loopCreateAllowed = false }) {
     let aggregate = isAggregate(initial), revision = aggregate && Number.isInteger(initial.revision) ? initial.revision : 0;
     let playerRecentSets = aggregate ? normalizePlayerSets(initial.player_recent_sets) : [], pendingPlayerSet = null, activeSection = 'backgrounds';
@@ -438,7 +455,18 @@
     let recentColors = normalizeRecentColors(initial.waveform_recent_colors), waveformColorUpdates = [];
     let loading = false, saving = false, error = '', loadFailed = false, generation = 0;
     const listeners = new Set(), busy = () => loading || saving || loadFailed;
-    let savedSeekbarMode = 'default', draftSeekbarMode = 'default', applySeekbarMode = () => {}, seekbarConfigured = false;
+    const editBlocked = () => busy() || (activeDeviceProfile !== 'web_desktop'
+      && deviceProfiles[activeDeviceProfile].sections[appearanceSectionKeys[activeSection]]?.mode !== 'custom');
+    let applySeekbarMode = () => {}, readSeekbarMode = () => 'default', seekbarConfigured = false;
+    const seekbarModes = new Map();
+    const normalizeSeekbarMode = mode => ['default', 'waveform', 'thin'].includes(mode) ? mode : 'default';
+    const seekbarState = () => {
+      if (!seekbarModes.has(activeDeviceProfile)) {
+        const mode = normalizeSeekbarMode(readSeekbarMode(activeDeviceProfile));
+        seekbarModes.set(activeDeviceProfile, { saved: mode, draft: mode });
+      }
+      return seekbarModes.get(activeDeviceProfile);
+    };
     const mayChangeLoopStyle = () => (typeof loopCreateAllowed === 'function' ? loopCreateAllowed() : loopCreateAllowed) === true;
     const syncInputs = (preserveErrors = false) => {
       const next = Object.fromEntries(keys.map(key => [key, draft[key] || defaults[key]]));
@@ -470,7 +498,7 @@
     };
     const getState = () => {
       const comparable = comparableDraftState();
-      const dirty = draftSeekbarMode !== savedSeekbarMode
+      const dirty = [...seekbarModes.values()].some(mode => mode.draft !== mode.saved)
         || stableJson(comparable.baseDraft) !== stableJson(saved)
         || stableJson(persistedDeviceProfiles(comparable.profiles)) !== stableJson(persistedDeviceProfiles(savedDeviceProfiles))
         || Object.keys(errors).length > 0
@@ -483,7 +511,7 @@
         }
       }
       const canSave = dirty && !busy() && !Object.keys(errors).length;
-      return { seekbarMode: draftSeekbarMode, saved: copy(saved), draft: copy(draft), revision, activeSection, activeDeviceProfile, deviceProfiles: copy(deviceProfiles), playerRecentSets: copy(playerRecentSets), errors: { ...errors }, inputValues: { ...inputValues }, effective,
+      return { canEdit: !editBlocked(), seekbarMode: seekbarState().draft, saved: copy(saved), draft: copy(draft), revision, activeSection, activeDeviceProfile, deviceProfiles: copy(deviceProfiles), playerRecentSets: copy(playerRecentSets), errors: { ...errors }, inputValues: { ...inputValues }, effective,
         recentColors: [...recentColors], waveformColorUpdates: [...waveformColorUpdates], loading, saving, dirty, canSave, error, loadFailed, warnings, canChangeLoopStyle: mayChangeLoopStyle(),
         footer: { dirty, canSave, canRetry: dirty && Boolean(error), status: dirty ? 'Unsaved appearance changes' : 'Saved to your account' } };
     };
@@ -502,7 +530,7 @@
     };
     const setColor = (key, value) => {
       if (!keys.includes(key)) throw new TypeError('Unknown appearance field.');
-      if (busy()) return;
+      if (editBlocked()) return;
       inputValues[key] = value === null ? defaults[key] : String(value);
       try { draft[key] = normalizeColor(value); if (isCanonical(draft)) { draft.palette_id = null; draft.panel_index = 0; } delete errors[key]; error = ''; }
       catch (failure) { errors[key] = failure.message; }
@@ -511,9 +539,9 @@
     const setPalette = id => {
       const selectedPalette = id === null ? null : palettes.find(palette => palette.id === id);
       if (id !== null && !selectedPalette) throw new TypeError('Unknown palette.');
-      if (busy()) return;
+      if (editBlocked()) return;
       promote(); draft = { ...draft, ...empty(), palette_id: id, panel_index: 0 };
-      if (aggregate && selectedPalette) {
+      if (aggregate && selectedPalette && activeDeviceProfile === 'web_desktop') {
         draft.selection_accent = {
           enabled: draft.selection_accent?.enabled !== false,
           color: selectedPalette.selectionAccent,
@@ -523,12 +551,12 @@
     };
     const setPanelIndex = index => {
       if (!Number.isInteger(index) || index < 0 || index > (draft.palette_id ? 2 : 0)) throw new TypeError('Unknown panel companion.');
-      if (busy()) return;
+      if (editBlocked()) return;
       promote(); draft.panel_index = index; error = ''; syncInputs(true); notify();
     };
     const setPlayerMode = mode => {
       if (!['palette', 'custom'].includes(mode)) throw new TypeError('Unknown player mode.');
-      if (busy()) return;
+      if (editBlocked()) return;
       promote();
       if (mode === 'palette') clearPlayerStyleErrors();
       if (aggregate) {
@@ -549,16 +577,16 @@
     };
     const setCompactPlayerStyle = style => {
       if (!['docked', 'floating'].includes(style)) throw new TypeError('Unknown compact player style.');
-      if (busy()) return;
+      if (editBlocked()) return;
       promote(); draft.compact_player_style = style; error = ''; notify();
     };
     const setDockedCompactPlayerBehavior = behavior => {
       if (!['follow_sidebar', 'float_on_collapse', 'artbox', 'stay_docked'].includes(behavior)) throw new TypeError('Unknown docked compact player behavior.');
-      if (busy()) return;
+      if (editBlocked()) return;
       promote(); draft.docked_compact_player_behavior = behavior; error = ''; notify();
     };
     const setDockedCompactPlayerRegularStyle = enabled => {
-      if (busy()) return;
+      if (editBlocked()) return;
       promote();
       draft.docked_compact_player_regular_style = enabled === true;
       error = '';
@@ -566,17 +594,17 @@
     };
     const setCompactPlayerMotion = value => {
       if (!['normal', 'slow'].includes(value)) throw new TypeError('Unknown compact player motion.');
-      if (busy()) return;
+      if (editBlocked()) return;
       promote(); draft.compact_player_motion = value; error = ''; notify();
     };
     const setFloatingPlayerEdge = value => {
       const edge = normalizeFloatingPlayerEdge(value);
-      if (busy()) return;
+      if (editBlocked()) return;
       promote(); draft.floating_player_edge = edge; error = ''; notify();
     };
     const setLoopControlStyle = style => {
       if (!['capsule', 'companion'].includes(style)) throw new TypeError('Unknown loop control style.');
-      if (busy() || !mayChangeLoopStyle()) return;
+      if (editBlocked() || !mayChangeLoopStyle()) return;
       promoteAggregate(); draft.loop_control_style = style; error = ''; notify();
     };
     const reconcileLoopCapability = () => {
@@ -603,23 +631,23 @@
     };
     const setAlbumDetailsLayout = layout => {
       if (!['classic_bar', 'stacked_bar', 'editorial_canvas'].includes(layout)) throw new TypeError('Unknown Album Details layout.');
-      if (busy()) return;
+      if (editBlocked()) return;
       promoteAggregate(); draft.album_details_layout = layout; error = ''; notify();
     };
     const setAlbumPlayingRowAnimation = value => {
       if (!['enabled', 'disabled'].includes(value)) throw new TypeError('Unknown playing-row animation.');
-      if (busy()) return;
+      if (editBlocked()) return;
       promoteAggregate(); draft.album_playing_row_animation = value; error = ''; notify();
     };
     const setAlertFamily = family => {
       if (!['ember', 'signal', 'quiet'].includes(family)) throw new TypeError('Unknown alert family.');
-      if (busy()) return;
+      if (editBlocked()) return;
       promoteAggregate(); draft.alert_family = family; error = ''; notify();
     };
     const rememberColor = color => { waveformColorUpdates = [color, ...waveformColorUpdates.filter(item => item !== color)].slice(0, 5); };
     const setPlayerColor = (field, value, { recordRecent = true } = {}) => {
       if (!['background', 'fill', 'edge'].includes(field)) throw new TypeError('Unknown player color.');
-      if (busy()) return;
+      if (editBlocked()) return;
       promote(); const key = 'player_' + field; inputValues[key] = String(value);
       try {
         const color = normalizeColor(value); if (color === null) throw new TypeError('A player color is required.');
@@ -640,7 +668,7 @@
         setPlayerColor(field, value, { recordRecent });
         return;
       }
-      if (busy()) return;
+      if (editBlocked()) return;
       promote(); const key = 'player_' + field; inputValues[key] = String(value);
       try {
         const color = normalizeColor(value); if (color === null) throw new TypeError('A waveform color is required.');
@@ -656,7 +684,7 @@
       if (!pair || typeof pair !== 'object' || Array.isArray(pair) || Object.keys(pair).length !== 2 || !['fill', 'edge'].every(field => Object.hasOwn(pair, field))) throw new TypeError('Both previous waveform colors are required.');
       const fill = normalizeColor(pair.fill), edge = normalizeColor(pair.edge);
       if (fill === null || edge === null) throw new TypeError('Both previous waveform colors are required.');
-      if (busy()) return;
+      if (editBlocked()) return;
       promote();
       if (aggregate || Object.hasOwn(draft, 'player_style_override')) {
         const style = effectivePlayerStyle(getState());
@@ -670,7 +698,7 @@
       error = ''; syncInputs(true); notify();
     };
     const setPlayerStyle = (value, { preserveColorErrors = false } = {}) => {
-      if (busy()) return;
+      if (editBlocked()) return;
       const style = normalizePlayerOverride(value);
       if (!style || !Object.hasOwn(style, 'surface')) throw new TypeError('A complete player style is required.');
       promoteAggregate(); draft.player_style_override = style; pendingPlayerSet = copy(style);
@@ -683,7 +711,7 @@
     };
     const setPlayerStyleColor = (path, value) => {
       if (!playerStyleColorPaths.includes(path)) throw new TypeError('Unknown player style color.');
-      if (busy()) return;
+      if (editBlocked()) return;
       const key = 'player_style_' + path; inputValues[key] = String(value);
       try {
         const style = effectivePlayerStyle(getState());
@@ -696,21 +724,21 @@
     };
     const restorePlayerSet = value => setPlayerStyle(value);
     const setSelectionAccent = value => {
-      if (busy()) return;
+      if (editBlocked()) return;
       if (!value || typeof value !== 'object' || typeof value.enabled !== 'boolean') throw new TypeError('Invalid selection accent.');
       promoteAggregate(); draft.selection_accent = { enabled: value.enabled, color: normalizeColor(value.color) }; error = ''; notify();
     };
     const setActionButtonOutlines = enabled => {
-      if (busy()) return;
+      if (editBlocked()) return;
       promoteAggregate(); draft.action_button_outlines = enabled !== false; error = ''; notify();
     };
     const setInteractionOverrides = value => {
-      if (busy()) return;
+      if (editBlocked()) return;
       if (!value || typeof value !== 'object' || Array.isArray(value)) throw new TypeError('Invalid interaction overrides.');
       promoteAggregate(); draft.interaction_overrides = normalizeInteractionOverrides(value); error = ''; notify();
     };
     const setItemOutline = (source, color = null) => {
-      if (busy()) return;
+      if (editBlocked()) return;
       const normalized = normalizeItemOutline({ source, color });
       promoteAggregate();
       draft.interaction_overrides = { ...draft.interaction_overrides, item_outline: normalized };
@@ -749,6 +777,14 @@
       applySectionToDraft(section, profileApi.resolveSection(deviceProfiles, activeDeviceProfile, section));
       syncInputs(true);
     };
+    const getMainPreview = () => {
+      const profiles = copy(savedDeviceProfiles);
+      for (const profile of profileApi.profiles) profiles[profile].sections.main = copy(deviceProfiles[profile].sections.main);
+      if (activeSection === 'backgrounds' && (activeDeviceProfile === 'web_desktop' || profiles[activeDeviceProfile].sections.main.mode === 'custom')) {
+        profiles[activeDeviceProfile].sections.main.values = copySectionFromDraft('main');
+      }
+      return { ...copy(saved), ...profiles.web_desktop.sections.main.values, device_profiles: persistedDeviceProfiles(profiles) };
+    };
     const setDeviceProfile = profile => {
       if (!profileApi.profiles.includes(profile) || profile === activeDeviceProfile) return;
       const section = appearanceSectionKeys[activeSection];
@@ -756,7 +792,7 @@
       applyActiveDeviceSection(); error = ''; notify();
     };
     const setDeviceSectionMode = mode => {
-      if (activeDeviceProfile === 'web_desktop') return;
+      if (busy() || activeDeviceProfile === 'web_desktop') return;
       promoteAggregate();
       const section = appearanceSectionKeys[activeSection];
       captureActiveDeviceSection();
@@ -769,14 +805,14 @@
       captureActiveDeviceSection(); restoreBaseSection(previousSection);
       activeSection = value; applyActiveDeviceSection(); notify();
     };
-    const cancel = () => { if (loading || saving) return; draftSeekbarMode = savedSeekbarMode; draft = copy(saved); deviceProfiles = copy(savedDeviceProfiles); pendingPlayerSet = null; errors = {}; waveformColorUpdates = []; error = ''; applyActiveDeviceSection(); syncInputs(); notify(); };
+    const cancel = () => { if (loading || saving) return; seekbarModes.forEach(mode => { mode.draft = mode.saved; }); draft = copy(saved); deviceProfiles = copy(savedDeviceProfiles); pendingPlayerSet = null; errors = {}; waveformColorUpdates = []; error = ''; applyActiveDeviceSection(); syncInputs(); notify(); };
     const reset = () => {
-      if (busy()) return;
+      if (editBlocked()) return;
       draft = isCanonical(draft) ? { ...canonicalEmpty(), player_override: draft.player_override ? { ...draft.player_override } : null, loop_control_style: draft.loop_control_style || 'capsule' } : empty();
       keys.forEach(key => delete errors[key]); error = ''; syncInputs(true); notify();
     };
     const resetSection = (section = activeSection) => {
-      if (busy()) return;
+      if (editBlocked()) return;
       if (!aggregate) { reset(); return; }
       if (section === 'backgrounds') {
         Object.assign(draft, empty(), { palette_id: null, panel_index: 0 });
@@ -828,6 +864,7 @@
           ...(waveformColorUpdates.length ? { waveform_color_updates: [...waveformColorUpdates] } : {}),
         }
         : { ...copy(draft), ...(waveformColorUpdates.length ? { waveform_color_updates: [...waveformColorUpdates] } : {}) };
+      const submittedSeekbars = [...seekbarModes].filter(([, mode]) => mode.draft !== mode.saved).map(([profile, mode]) => [profile, mode.draft]);
       saving = true; error = ''; notify();
       try {
         const response = await request('PUT', submitted);
@@ -835,7 +872,11 @@
         if (ownGeneration !== generation) return false;
         if (aggregate) { revision = response.revision; playerRecentSets = normalizePlayerSets(response.player_recent_sets); }
         saved = preference; draft = copy(saved); deviceProfiles = profileApi.normalize(response.device_profiles, appearancePreferenceSections(saved)); savedDeviceProfiles = copy(deviceProfiles); applyActiveDeviceSection(); pendingPlayerSet = null; recentColors = history; waveformColorUpdates = []; errors = {}; syncInputs(); apply(copy(saved));
-        if (draftSeekbarMode !== savedSeekbarMode) { applySeekbarMode(draftSeekbarMode); savedSeekbarMode = draftSeekbarMode; }
+        for (const [profile, mode] of submittedSeekbars) {
+          await applySeekbarMode(mode, profile, () => ownGeneration === generation);
+          if (ownGeneration !== generation) return false;
+          seekbarModes.get(profile).saved = mode;
+        }
         return true;
       } catch (failure) {
         if (ownGeneration === generation) {
@@ -863,15 +904,20 @@
       } finally { if (ownGeneration === generation) { saving = false; applyActiveDeviceSection(); notify(); } }
     };
     const clear = (message = '') => {
+      seekbarModes.clear(); seekbarConfigured = false;
       ++generation; saved = isCanonical(saved) ? canonicalEmpty() : empty(); draft = copy(saved); errors = {};
       recentColors = []; waveformColorUpdates = []; playerRecentSets = []; pendingPlayerSet = null; revision = 0;
       error = typeof message === 'string' ? message : ''; loading = false; saving = false; loadFailed = true; syncInputs(); notify();
     };
     return { getState, setColor, setPalette, setPanelIndex, setPlayerMode, setCompactPlayerStyle, setDockedCompactPlayerBehavior, setDockedCompactPlayerRegularStyle, setCompactPlayerMotion, setFloatingPlayerEdge, setLoopControlStyle, setAlbumDetailsLayout, setAlbumPlayingRowAnimation, setAlertFamily, setPlayerColor, setWaveformColor, restoreWaveformColors,
-      configureSeekbar(mode, applyMode) { if (!seekbarConfigured) { savedSeekbarMode = draftSeekbarMode = mode === 'waveform' ? 'waveform' : 'default'; seekbarConfigured = true; } applySeekbarMode = applyMode; },
-      setSeekbarMode(mode) { if (busy()) return; draftSeekbarMode = mode === 'waveform' ? 'waveform' : 'default'; notify(); },
+      configureSeekbar(mode, applyMode, readMode = () => mode) {
+        readSeekbarMode = readMode; applySeekbarMode = applyMode;
+        if (!seekbarConfigured) { seekbarModes.clear(); seekbarConfigured = true; }
+        seekbarState();
+      },
+      setSeekbarMode(mode) { if (busy() || (activeDeviceProfile !== 'tv' && editBlocked())) return; seekbarState().draft = normalizeSeekbarMode(mode); notify(); },
       setPlayerStyle, setPlayerStyleColor, restorePlayerSet, setSelectionAccent, setActionButtonOutlines, setInteractionOverrides, setItemOutline, useThemeInteractions, setDeviceProfile, setDeviceSectionMode, setActiveSection, cancel, reset, resetSection, load, save, clear,
-      reconcileLoopCapability, subscribe(listener) { listeners.add(listener); return () => listeners.delete(listener); } };
+      getMainPreview, reconcileLoopCapability, subscribe(listener) { listeners.add(listener); return () => listeners.delete(listener); } };
   }
   function colorField(field, label) {
     return `<div class="background-color-field"><label for="appearance-player-${field}-hex">${label}</label>
@@ -916,8 +962,12 @@
     const tracks = [['1', 'Mystery Train', '6:53'], ['2', 'My New World', '16:20'], ['3', 'We All Need Some Light', '5:45'], ['4', 'Duel With The Devil', '26:43']];
     return `<div class="appearance-album-preview__table"><div class="appearance-album-preview__table-head"><span></span><b>#</b><strong>Track</strong><em>Length</em></div>${tracks.map(([number, title, length], index) => `<div class="appearance-album-preview__track${index === 0 ? ' is-playing' : ''}"><button type="button" tabindex="-1" aria-label="Play ${title}">▶</button><b>${number}</b><strong>${title}</strong><em>${length}</em></div>`).join('')}<div class="appearance-album-preview__total"><strong>Total Length: 1h 17m 13s</strong></div></div>`;
   }
-  function albumPageMarkup() {
-    const layouts = [
+  function albumPageMarkup({ mobile = false } = {}) {
+    const layouts = mobile ? [
+      ['classic_bar', 'Large cover', 'Full-width artwork with album information in the Gallery Bar.'],
+      ['stacked_bar', 'Compact cover', 'Small artwork beside the album information.'],
+      ['editorial_canvas', 'Centered cover', 'Medium artwork centered above the album information.'],
+    ] : [
       ['classic_bar', 'Classic Bar', 'Album information stays in the app bar.'],
       ['stacked_bar', 'Stacked Bar', 'Identity and metadata use two header lines.'],
       ['editorial_canvas', 'Editorial Canvas', 'Art and large album identity lead the page.'],
@@ -969,12 +1019,10 @@
       <section aria-labelledby="appearance-panel-label"><h4 id="appearance-panel-label"><span>2</span>App bar &amp; panels</h4><p class="background-help" data-background-panel-help></p><div class="background-companions" data-background-companions></div>
       <p class="background-help">App bar, artist tree, menus, floating panels, and dialogs.</p></section>
       <section class="background-player-section" aria-labelledby="appearance-player-label"><h4 id="appearance-player-label"><span>3</span>Player &amp; waveform</h4><p class="background-help">One color group for your player and waveform.</p>
-      <div class="background-player-modes" role="group" aria-label="Player color mode"><button type="button" data-background-player-mode="palette" aria-pressed="true">Match player</button><button type="button" data-background-player-mode="custom" data-utility-appearance-key="seekbar" aria-pressed="false">Customize</button></div>
-      <p class="background-help" data-background-player-help></p><div class="background-player-fields" data-background-player-fields hidden>${colorField('background', 'Player background')}<small>Player text and buttons adapt to the background.</small></div>
-      <button class="button button-secondary background-editor-link" type="button" data-utility-appearance-key="seekbar">Edit waveform in Seekbar</button><p class="background-field-error" data-background-other-errors hidden></p><div class="background-player-summary" data-background-player-summary></div><p class="background-help">Waveform fill and edge stay with this group. Edit those colors in Seekbar.</p></section>
-      <p class="background-help">Player overrides are edited in Player &amp; Seekbar and remain visible in this preview.</p>
-      <p class="background-help">Save applies every pending Appearance change. Cancel restores the saved set.</p></div>
-      <aside class="background-preview-column"><div class="background-preview-heading">Preview <small>Changes apply after Save</small></div>
+      <p class="background-help">You can customize your player's colors in the “Player &amp; Seekbar” setting.</p>
+      <p class="background-field-error" data-background-other-errors hidden></p><div class="background-player-summary" data-background-player-summary></div></section>
+      <p class="background-help">Main elements preview across the app. Save keeps your changes; Cancel restores your saved appearance.</p></div>
+      <aside class="background-preview-column"><div class="background-preview-heading">Preview <small>Save to keep changes</small></div>
       <div class="background-preview" data-background-preview aria-label="Appearance preview"><div class="background-preview-bar"><span aria-hidden="true">♫</span><span class="background-preview-search">Search your library</span><span aria-hidden="true">A</span></div>
       <div class="background-preview-body"><div class="background-preview-tree"><strong>Artists</strong><span>All artists</span><span>Coastal Lines</span><span>Northbound</span><span>Slow Seasons</span></div>
       <div class="background-preview-content"><strong>Your library</strong><div class="background-preview-card"><div aria-hidden="true">♫</div><small>Still Water</small><span class="background-preview-stars" aria-label="5 stars">★★★★★</span></div><div class="background-preview-floating">Album options<span>View album</span><span>Album details</span></div></div></div>
@@ -987,22 +1035,22 @@
   function loopControlStyleMarkup() {
     return `<h4>Loop controls</h4><div class="background-player-modes" role="group" aria-label="Loop control style">${[['capsule', 'A · Joined capsule'], ['companion', 'B · Companion button']].map(([value, label]) => ButtonComponent.renderButton({ label, attributes: { 'data-loop-control-style-choice': value, 'aria-pressed': 'false' } })).join('')}</div>`;
   }
-  function seekbarMarkup(seekbarMode = 'default', { loopCreateAllowed = false } = {}) {
+  function seekbarMarkup(seekbarMode = 'default', { loopCreateAllowed = false, mobile = false } = {}) {
     const waveformSelected = seekbarMode === 'waveform';
     return `<section class="appearance-background-editor appearance-seekbar-editor" aria-labelledby="appearance-waveform-title">
       <h3 id="appearance-waveform-title">Player &amp; Seekbar</h3><p class="background-intro">Adjust relative colors without changing the real stereo waveform, loop selection, or handle behavior.</p>
-      <div class="player-preview-dock"><div class="player-live-preview" data-player-live-preview aria-label="Player color preview">
+      <div class="player-preview-dock"><div class="player-live-preview" data-player-live-preview data-mobile-player-preview="${mobile}" data-seekbar-mode="${seekbarMode}" aria-label="Player color preview">
         <div class="player-preview-cover" data-player-preview-cover aria-hidden="true">♫</div>
-        <div class="player-preview-transport" aria-hidden="true"><span>▶</span><small>✂</small></div>
-        <div class="player-preview-main"><div class="player-preview-meta"><span><strong data-player-preview-title>Still Water</strong><span data-player-preview-album> / Coastal Lines</span></span><time data-player-preview-time>1:42 / 4:12</time></div>
+        <div class="player-preview-transport" aria-hidden="true"><span>${mobile ? ButtonComponent.renderIconSvg('play') : '▶'}</span><small>✂</small></div>
+        <div class="player-preview-main"><div class="player-preview-meta">${mobile ? '<span data-player-preview-artist>Coastal Lines</span>' : ''}<span class="player-preview-track-meta"><strong data-player-preview-title>Still Water</strong><span data-player-preview-album>${mobile ? 'Coastal Lines' : ' / Coastal Lines'}</span></span><time data-player-preview-time>1:42 / 4:12</time></div>
           ${waveformSelected ? `<svg class="player-preview-waveform" viewBox="0 0 600 42" preserveAspectRatio="none" role="img" aria-label="Stereo waveform using the selected colors">
             <g class="player-preview-unplayed"><path class="player-preview-channel is-left" d="M0 10 L20 8 L40 5 L60 9 L80 3 L100 7 L120 4 L140 8 L160 2 L180 6 L200 4 L220 9 L240 5 L260 7 L280 3 L300 8 L320 4 L340 6 L360 2 L380 7 L400 5 L420 9 L440 4 L460 6 L480 3 L500 8 L520 5 L540 7 L560 4 L580 8 L600 10 L580 12 L560 16 L540 13 L520 15 L500 12 L480 17 L460 14 L440 16 L420 11 L400 15 L380 13 L360 18 L340 14 L320 16 L300 12 L280 17 L260 13 L240 15 L220 11 L200 16 L180 14 L160 18 L140 12 L120 16 L100 13 L80 17 L60 11 L40 15 L20 12 Z"/><path class="player-preview-channel is-right" d="M0 31 L20 28 L40 25 L60 30 L80 24 L100 27 L120 23 L140 29 L160 25 L180 22 L200 28 L220 24 L240 30 L260 26 L280 23 L300 28 L320 25 L340 21 L360 27 L380 24 L400 29 L420 23 L440 26 L460 22 L480 28 L500 24 L520 30 L540 25 L560 27 L580 24 L600 31 L580 34 L560 36 L540 33 L520 38 L500 34 L480 37 L460 32 L440 36 L420 33 L400 39 L380 35 L360 37 L340 31 L320 36 L300 34 L280 39 L260 35 L240 37 L220 32 L200 38 L180 34 L160 37 L140 33 L120 39 L100 35 L80 38 L60 32 L40 37 L20 34 Z"/></g>
             <g class="player-preview-played"><path class="player-preview-channel is-left" d="M0 10 L20 8 L40 5 L60 9 L80 3 L100 7 L120 4 L140 8 L160 2 L180 6 L200 4 L220 9 L240 5 L260 7 L280 3 L300 8 L320 4 L340 6 L360 2 L380 7 L400 5 L420 9 L440 4 L460 6 L480 3 L500 8 L520 5 L540 7 L560 4 L580 8 L600 10 L580 12 L560 16 L540 13 L520 15 L500 12 L480 17 L460 14 L440 16 L420 11 L400 15 L380 13 L360 18 L340 14 L320 16 L300 12 L280 17 L260 13 L240 15 L220 11 L200 16 L180 14 L160 18 L140 12 L120 16 L100 13 L80 17 L60 11 L40 15 L20 12 Z"/><path class="player-preview-channel is-right" d="M0 31 L20 28 L40 25 L60 30 L80 24 L100 27 L120 23 L140 29 L160 25 L180 22 L200 28 L220 24 L240 30 L260 26 L280 23 L300 28 L320 25 L340 21 L360 27 L380 24 L400 29 L420 23 L440 26 L460 22 L480 28 L500 24 L520 30 L540 25 L560 27 L580 24 L600 31 L580 34 L560 36 L540 33 L520 38 L500 34 L480 37 L460 32 L440 36 L420 33 L400 39 L380 35 L360 37 L340 31 L320 36 L300 34 L280 39 L260 35 L240 37 L220 32 L200 38 L180 34 L160 37 L140 33 L120 39 L100 35 L80 38 L60 32 L40 37 L20 34 Z"/></g><line class="player-preview-playhead" x1="246" x2="246" y1="0" y2="42"/><circle class="player-preview-playhead-dot" cx="246" cy="21" r="2.5"/><g class="player-preview-loop-handles" aria-hidden="true"><line x1="145" x2="145" y1="0" y2="42"/><line x1="475" x2="475" y1="0" y2="42"/></g>
-          </svg>` : ''}${waveformSelected ? '' : `<div class="player-preview-seekbar" aria-label="Default seekbar preview"><span></span></div>`}
+          </svg>` : ''}${waveformSelected ? '' : `<div class="player-preview-seekbar" aria-label="${seekbarMode === 'thin' ? 'Thin progress line' : 'Default seekbar'} preview"><span></span></div>`}
         </div>
       </div>
       </div>
-      <section class="player-seekbar-mode" aria-labelledby="appearance-seekbar-style-label"><h4 id="appearance-seekbar-style-label">Seekbar style</h4><p class="background-help">Choose the player seekbar style. Changes apply after Save.</p><div class="appearance-section player-seekbar-options"><label class="appearance-option"><input type="radio" name="seekbar-mode" value="default" ${waveformSelected ? '' : 'checked'} data-appearance-seekbar-mode="default"><span>Default seekbar</span></label><label class="appearance-option"><input type="radio" name="seekbar-mode" value="waveform" ${waveformSelected ? 'checked' : ''} data-appearance-seekbar-mode="waveform"><span>Waveform seekbar</span></label></div></section>
+      <section class="player-seekbar-mode" aria-labelledby="appearance-seekbar-style-label"><h4 id="appearance-seekbar-style-label">Seekbar style</h4><p class="background-help">Choose the player seekbar style. Changes apply after Save.</p><div class="appearance-section player-seekbar-options"><label class="appearance-option"><input type="radio" name="seekbar-mode" value="default" ${seekbarMode === 'default' ? 'checked' : ''} data-appearance-seekbar-mode="default"><span>Default seekbar</span></label><label class="appearance-option"><input type="radio" name="seekbar-mode" value="waveform" ${waveformSelected ? 'checked' : ''} data-appearance-seekbar-mode="waveform"><span>Waveform seekbar</span></label>${mobile ? `<label class="appearance-option"><input type="radio" name="seekbar-mode" value="thin" ${seekbarMode === 'thin' ? 'checked' : ''} data-appearance-seekbar-mode="thin"><span>Thin progress line</span></label>` : ''}</div></section>
       <div class="player-editor-workspace">
         <div class="player-editor-controls">
           <section class="player-theme-suggestions" aria-labelledby="appearance-player-themes-label"><h4 id="appearance-player-themes-label">Player themes</h4><p class="background-help">Choose a complete starting style, then adjust any individual color below.</p><div class="player-theme-grid">${playerThemes.map(theme => `<button type="button" class="player-theme-card" data-player-theme="${theme.id}" aria-pressed="false" title="${theme.description}" style="--theme-surface-start:${theme.style.surface.start};--theme-surface-end:${theme.style.surface.end};--theme-surface-angle:${theme.style.surface.angle}deg;--theme-control:${theme.style.controls.fill};--theme-wave-fill:${theme.style.waveform.fill};--theme-wave-edge:${theme.style.waveform.edge}"><span class="player-theme-swatch"><i></i><b></b></span><strong>${theme.name}</strong></button>`).join('')}</div></section>
@@ -1032,6 +1080,7 @@
     if (window.AlbumHavenAppearance?.instance) return window.AlbumHavenAppearance.instance;
     const root = document.documentElement;
     let initial = empty(), csrfToken = '', loaded = false, mounted = null, unsubscribe = null, sessionGeneration = 0;
+    let remountEditor = null;
     let activePlayerTab = 'surface', activeWaveformTab = 'waveform', loopCreateAllowed = false;
     try {
       const bootstrap = JSON.parse(document.getElementById('appearance-bootstrap')?.textContent || '{}');
@@ -1047,8 +1096,10 @@
       };
     }
     catch (_failure) { /* Missing or invalid bootstrap never applies untrusted CSS. */ }
-    let savedPlayerColors = null;
-    const applySavedTheme = preference => {
+    let savedPlayerColors = null, controller = null;
+    const applySavedTheme = sourcePreference => {
+      const profile = window.AlbumHavenDevicePreferences?.profile?.() || 'web_desktop';
+      const preference = resolveClientAppearance(sourcePreference, profile);
       applyTheme(preference, root);
       savedPlayerColors = !nativePlayerComponents(preference).waveform && (preference.palette_id || preference.player_override || preference.player_style_override) ? resolveAppearance({ ...preference, player_override: preference.player_style_override || preference.player_override }).player : null;
       if (typeof window.CustomEvent === 'function') window.dispatchEvent?.(new window.CustomEvent('album-haven-appearance-change'));
@@ -1074,7 +1125,10 @@
       if (method === 'GET') csrfToken = typeof data.csrf_token === 'string' ? data.csrf_token : '';
       return data;
     };
-    const controller = createController({ initial, request, apply: applySavedTheme, loopCreateAllowed: () => loopCreateAllowed });
+    controller = createController({ initial, request, apply: applySavedTheme, loopCreateAllowed: () => loopCreateAllowed });
+    controller.setDeviceProfile(window.AlbumHavenDevicePreferences?.profile?.() || 'web_desktop');
+    const applyEditorPreview = () => applySavedTheme(mounted ? controller.getMainPreview() : controller.getState().saved);
+    controller.subscribe(applyEditorPreview);
     const load = async () => { const result = await controller.load(); if (result) loaded = true; return result; };
     let footerDispose = null, mountedFooter = null, restoreFooterTheme = null;
     const mountSharedFooter = (localHost, options) => {
@@ -1090,38 +1144,70 @@
         });
         localHost.remove(); dialogHost.hidden = false;
       }
-      footerDispose = window.EditorPage?.mountFooter?.(mountedFooter, { status: 'Saved to your account', ...options }) || null;
+      footerDispose = window.EditorPage?.mountFooter?.(mountedFooter, { status: 'Saved to your account', ...options, resetLabel: isPhoneEditor() ? 'Reset' : options.resetLabel }) || null;
+      mountedFooter.querySelector('[data-background-reset]')?.setAttribute('aria-label', options.resetLabel || 'Reset');
       return mountedFooter;
     };
     const unmount = () => {
-      unsubscribe?.(); unsubscribe = null; footerDispose?.(); footerDispose = null; mounted = null;
+      unsubscribe?.(); unsubscribe = null; footerDispose?.(); footerDispose = null; mounted = null; remountEditor = null;
       restoreFooterTheme?.(); restoreFooterTheme = null;
       if (mountedFooter?.id === 'utility-modal-footer') { mountedFooter.innerHTML = ''; mountedFooter.hidden = true; }
       mountedFooter = null;
+      applySavedTheme(controller.getState().saved);
     };
+    const isPhoneEditor = () => window.AlbumHavenDevicePreferences?.profile?.() === 'mobile';
     const mountDeviceProfileControls = editor => {
+      const fields = document.createElement('fieldset');
+      fields.className = 'appearance-device-fields';
+      while (editor.firstChild) fields.appendChild(editor.firstChild);
+      editor.appendChild(fields);
       editor.insertAdjacentHTML('afterbegin', `<section class="appearance-device-controls" aria-label="Appearance device profile">
         <div class="appearance-device-selector" role="group" aria-label="Device profile">
           <button type="button" data-appearance-device="web_desktop" class="button ui-button ui-button--secondary ui-button--small">Web / Desktop</button>
-        <button type="button" data-appearance-device="mobile" class="button ui-button ui-button--secondary ui-button--small" disabled aria-disabled="true" title="Mobile appearance is not available in this stack">Mobile</button>
-        <button type="button" data-appearance-device="tv" class="button ui-button ui-button--secondary ui-button--small" disabled aria-disabled="true" title="TV appearance is not available in this stack">TV</button>
-      </div>
+          <button type="button" data-appearance-device="mobile" class="button ui-button ui-button--secondary ui-button--small">Mobile</button>
+          <button type="button" data-appearance-device="tv" class="button ui-button ui-button--secondary ui-button--small" disabled aria-disabled="true" title="TV appearance is not available in this stack">TV</button>
+        </div>
+        <div class="appearance-device-mode" role="group" aria-label="Appearance linking" hidden>
+          <button type="button" class="button" data-appearance-device-mode="follow">Follow Web / Desktop</button>
+          <button type="button" class="button" data-appearance-device-mode="custom">Custom mobile</button>
+        </div>
+        <p class="appearance-device-help" data-appearance-device-help hidden></p>
       </section>`);
-    const controls = editor.querySelector('.appearance-device-controls');
-    controls.addEventListener('click', event => {
-      const device = event.target.closest('[data-appearance-device]');
-      if (device && !device.disabled) controller.setDeviceProfile(device.getAttribute('data-appearance-device'));
-    });
-    return state => {
-      controls.querySelectorAll('[data-appearance-device]').forEach(button => {
-        const profile = button.getAttribute('data-appearance-device');
-        button.disabled = profile !== 'web_desktop' || state.loading || state.saving || state.loadFailed;
-        button.setAttribute('aria-pressed', String(profile === state.activeDeviceProfile));
+      const controls = editor.querySelector('.appearance-device-controls');
+      controls.addEventListener('click', event => {
+        const device = event.target.closest('[data-appearance-device]');
+        if (device && !device.disabled && (!isPhoneEditor() || device.dataset.appearanceDevice === 'mobile')) controller.setDeviceProfile(device.getAttribute('data-appearance-device'));
+        const mode = event.target.closest('[data-appearance-device-mode]');
+        if (mode && !mode.disabled) controller.setDeviceSectionMode(mode.getAttribute('data-appearance-device-mode'));
       });
-    };
+      return state => {
+        const busy = state.loading || state.saving || state.loadFailed;
+        controls.querySelectorAll('[data-appearance-device]').forEach(button => {
+          const profile = button.getAttribute('data-appearance-device');
+          button.disabled = profile === 'tv' || busy || (isPhoneEditor() && profile !== 'mobile');
+          button.hidden = isPhoneEditor() && profile !== 'mobile';
+          button.setAttribute('aria-disabled', String(button.disabled));
+          button.setAttribute('aria-pressed', String(profile === state.activeDeviceProfile));
+        });
+        const mobile = state.activeDeviceProfile === 'mobile';
+        const section = appearanceSectionKeys[state.activeSection];
+        const mode = state.deviceProfiles.mobile.sections[section]?.mode || 'follow';
+        controls.querySelector('.appearance-device-mode').hidden = !mobile;
+        controls.querySelectorAll('[data-appearance-device-mode]').forEach(button => {
+          button.disabled = busy;
+          button.setAttribute('aria-pressed', String(button.getAttribute('data-appearance-device-mode') === mode));
+        });
+        const help = controls.querySelector('[data-appearance-device-help]');
+        help.hidden = !mobile;
+        help.textContent = mode === 'follow' ? 'This section follows Web / Desktop. Choose Custom mobile to make it different.' : 'Only the mobile profile changes. Other sections can still follow Web / Desktop.';
+        fields.disabled = busy || (mobile && mode === 'follow');
+        fields.inert = fields.disabled;
+        fields.setAttribute('aria-disabled', String(fields.disabled));
+        editor.dataset.appearanceReadOnly = String(mobile && mode === 'follow');
+      };
     };
     const mount = host => {
-      unmount(); host.innerHTML = editorMarkup(); mounted = host.querySelector('.appearance-background-editor');
+      unmount(); remountEditor = () => mount(host); host.innerHTML = editorMarkup(); mounted = host.querySelector('.appearance-background-editor');
       controller.setActiveSection('backgrounds');
       const editor = mounted, find = selector => editor.querySelector(selector);
       const syncDeviceProfile = mountDeviceProfileControls(editor);
@@ -1153,20 +1239,11 @@
         preview.style.setProperty('--preview-main', effective.main); preview.style.setProperty('--preview-panels', effective.panel);
         preview.style.setProperty('--preview-floating', !palette && !preference.panel_background_color ? '#1F2937' : effective.panel);
         for (const [token, value] of Object.entries(effective.tokens)) preview.style.setProperty('--preview-' + token, value);
-        const custom = Boolean(preference.player_style_override || preference.player_override);
-        editor.querySelectorAll('[data-background-player-mode]').forEach(button => button.setAttribute('aria-pressed', String((button.getAttribute('data-background-player-mode') === 'custom') === custom)));
-        find('[data-background-player-fields]').hidden = !custom;
-        find('[data-background-player-help]').textContent = custom ? 'Your background, waveform fill and edge stay together when you change palettes.' : 'The palette sets your player background, waveform fill and edge together.';
-        for (const field of ['background']) {
-          const key = 'player_' + field, picker = find(`[data-player-picker="${field}"]`), hex = find(`[data-player-hex="${field}"]`);
-          picker.value = effective.player[field]; if (hex.value !== state.inputValues[key]) hex.value = state.inputValues[key];
-          hex.setAttribute('aria-invalid', String(Boolean(state.errors[key]))); find(`[data-player-error="${field}"]`).textContent = state.errors[key] || '';
-        }
         const otherErrors = find('[data-background-other-errors]'); otherErrors.hidden = !state.errors.player_fill && !state.errors.player_edge; otherErrors.textContent = 'Fix the waveform color errors in Seekbar before saving.';
         find('[data-background-player-summary]').innerHTML = ['background', 'fill', 'edge'].map(field => { const color = effective.player[field]; return `<span><i style="background:${color}"></i>${({ background: 'Background', fill: 'Fill', edge: 'Edge' })[field]} <b>${color}</b></span>`; }).join('');
         syncAppearanceAlert(find('[data-background-warning]'), state.warnings.length ? `Low contrast: ${state.warnings.join('; ')}. Some text may be hard to read. You can still save these colors.` : '', 'warning');
         syncAppearanceAlert(find('[data-background-request-error]'), state.error);
-        footerFind('[data-background-reset]').disabled = disabled;
+        footerFind('[data-background-reset]').disabled = !state.canEdit;
         footerFind('[data-background-cancel]').disabled = state.loading || state.saving || !state.dirty;
         footerFind('[data-background-save]').disabled = !state.canSave; footerFind('[data-background-save]').textContent = state.saving ? 'Saving…' : 'Save';
         footerFind('[data-background-retry]').hidden = !state.loadFailed; footerFind('[data-background-retry]').disabled = state.loading || state.saving;
@@ -1189,7 +1266,7 @@
       unsubscribe = controller.subscribe(sync); sync(controller.getState()); if (!loaded) void load(); return unmount;
     };
     const mountAlerts = host => {
-      unmount(); host.innerHTML = alertsMarkup(); mounted = host.querySelector('.appearance-alerts');
+      unmount(); remountEditor = () => mountAlerts(host); host.innerHTML = alertsMarkup(); mounted = host.querySelector('.appearance-alerts');
     controller.setActiveSection('alerts');
     const editor = mounted, find = selector => editor.querySelector(selector);
     const syncDeviceProfile = mountDeviceProfileControls(editor);
@@ -1225,7 +1302,7 @@
         find('[data-alert-preview-small-expanded]').innerHTML = AlertComponent.buildSmallAlertHtml({ severity: previewSeverity, message: smallMessage, className: 'appearance-alert-preview__small-expanded' });
         syncAppearanceAlert(find('[data-background-request-error]'), state.error);
         const findFooter = selector => footerHost.querySelector(selector);
-        findFooter('[data-background-reset]').disabled = disabled;
+        findFooter('[data-background-reset]').disabled = !state.canEdit;
         findFooter('[data-background-cancel]').disabled = state.loading || state.saving || !state.dirty;
         const saveButton = findFooter('[data-background-save]'); saveButton.disabled = !state.canSave; (saveButton.querySelector('.ui-button__content') || saveButton).textContent = state.saving ? 'Saving…' : 'Save';
         findFooter('[data-background-retry]').hidden = !state.loadFailed;
@@ -1239,7 +1316,7 @@
       unsubscribe = controller.subscribe(sync); sync(controller.getState()); if (!loaded) void load(); return unmount;
     };
     const mountAlbumPage = host => {
-      unmount(); host.innerHTML = albumPageMarkup(); mounted = host.querySelector('.appearance-album-page');
+      unmount(); remountEditor = () => mountAlbumPage(host); host.innerHTML = albumPageMarkup({ mobile: isPhoneEditor() }); mounted = host.querySelector('.appearance-album-page');
     controller.setActiveSection('album-page');
     const editor = mounted;
     const syncDeviceProfile = mountDeviceProfileControls(editor);
@@ -1270,7 +1347,7 @@
         preview.setAttribute('data-album-playing-row-animation', state.draft.album_playing_row_animation || 'enabled');
         syncAppearanceAlert(editor.querySelector('[data-background-request-error]'), state.error);
         const findFooter = selector => footerHost.querySelector(selector);
-        findFooter('[data-background-reset]').disabled = disabled;
+        findFooter('[data-background-reset]').disabled = !state.canEdit;
         findFooter('[data-background-cancel]').disabled = state.loading || state.saving || !state.dirty;
         const saveButton = findFooter('[data-background-save]'); saveButton.disabled = !state.canSave; (saveButton.querySelector('.ui-button__content') || saveButton).textContent = state.saving ? 'Saving…' : 'Save';
         findFooter('[data-background-retry]').hidden = !state.loadFailed;
@@ -1285,7 +1362,7 @@
       unsubscribe = controller.subscribe(sync); sync(controller.getState()); if (!loaded) void load(); return unmount;
     };
     const mountSelectionAccent = host => {
-      unmount(); host.innerHTML = selectionAccentMarkup(); mounted = host.querySelector('.appearance-background-editor');
+      unmount(); remountEditor = () => mountSelectionAccent(host); host.innerHTML = selectionAccentMarkup(); mounted = host.querySelector('.appearance-background-editor');
     controller.setActiveSection('selection-accent');
     const editor = mounted, find = selector => editor.querySelector(selector);
     const syncDeviceProfile = mountDeviceProfileControls(editor);
@@ -1325,7 +1402,7 @@
         preview.style.setProperty('--navigation-tree-selection-accent-color', accent.color);
         preview.style.setProperty('--navigation-tree-selection-accent-width', accent.enabled ? '3px' : '0px');
         syncAppearanceAlert(find('[data-background-request-error]'), state.error);
-        footerFind('[data-background-reset]').disabled = disabled;
+        footerFind('[data-background-reset]').disabled = !state.canEdit;
         footerFind('[data-background-cancel]').disabled = state.loading || state.saving || !state.dirty;
         footerFind('[data-background-save]').disabled = !state.canSave;
         footerFind('[data-background-retry]').hidden = !state.loadFailed; footerFind('[data-background-retry]').disabled = state.loading || state.saving;
@@ -1355,9 +1432,10 @@
       unsubscribe = controller.subscribe(sync); sync(controller.getState()); if (!loaded) void load(); return unmount;
     };
     const mountSeekbar = (host, { getLegacyColors = () => null, getSeekbarMode = () => 'default', applySeekbarMode = () => {} } = {}) => {
-      controller.configureSeekbar(getSeekbarMode(), applySeekbarMode);
-      const waveformSelected = controller.getState().seekbarMode === 'waveform';
-      unmount(); host.innerHTML = seekbarMarkup(waveformSelected ? 'waveform' : 'default', { loopCreateAllowed }); mounted = host.querySelector('.appearance-background-editor');
+      controller.configureSeekbar(getSeekbarMode(controller.getState().activeDeviceProfile), applySeekbarMode, getSeekbarMode);
+      const selectedMode = controller.getState().seekbarMode;
+      const waveformSelected = selectedMode === 'waveform';
+      unmount(); remountEditor = () => mountSeekbar(host, { getLegacyColors, getSeekbarMode, applySeekbarMode }); host.innerHTML = seekbarMarkup(selectedMode, { loopCreateAllowed, mobile: isPhoneEditor() }); mounted = host.querySelector('.appearance-background-editor');
     controller.setActiveSection('seekbar');
     const editor = mounted, find = selector => editor.querySelector(selector);
     const syncDeviceProfile = mountDeviceProfileControls(editor);
@@ -1373,7 +1451,7 @@
       find('.background-status').hidden = true;
     const sync = state => {
       if (mounted !== editor) return;
-        if ((state.seekbarMode === 'waveform') !== waveformSelected) {
+        if (state.seekbarMode !== selectedMode) {
           const restoreModeFocus = editor.contains?.(document.activeElement)
             && document.activeElement?.hasAttribute?.('data-appearance-seekbar-mode');
           mountSeekbar(host, { getLegacyColors, getSeekbarMode, applySeekbarMode });
@@ -1417,7 +1495,10 @@
         const liveAlbum = document.getElementById?.('player-album-link')?.textContent?.trim();
         const liveTime = document.getElementById?.('player-time')?.textContent?.trim();
         if (liveTitle) find('[data-player-preview-title]').textContent = liveTitle;
-        if (liveAlbum) find('[data-player-preview-album]').textContent = ` / ${liveAlbum}`;
+        if (liveAlbum) find('[data-player-preview-album]').textContent = isPhoneEditor() ? liveAlbum : ` / ${liveAlbum}`;
+        const artistPreview = find('[data-player-preview-artist]');
+        const liveArtist = document.getElementById?.('player-artist')?.textContent?.trim();
+        if (artistPreview && liveArtist) artistPreview.textContent = liveArtist;
         if (liveTime) find('[data-player-preview-time]').textContent = liveTime;
         const liveCover = document.getElementById?.('player-cover-button');
         if (liveCover?.style?.backgroundImage) find('[data-player-preview-cover]').style.backgroundImage = liveCover.style.backgroundImage;
@@ -1479,7 +1560,7 @@
           hiddenWaveformErrors ? 'Select Waveform seekbar above to correct its color errors before saving. Your entered values are retained.' : '',
         ].filter(Boolean).join(' ');
         syncAppearanceAlert(find('[data-background-request-error]'), state.error);
-        footerFind('[data-background-reset]').disabled = disabled;
+        footerFind('[data-background-reset]').disabled = !state.canEdit;
         footerFind('[data-background-cancel]').disabled = state.loading || state.saving || !state.dirty;
         const saveButton = footerFind('[data-background-save]'); saveButton.disabled = !state.canSave; (saveButton.querySelector('.ui-button__content') || saveButton).textContent = state.saving ? 'Saving…' : 'Save';
         footerFind('[data-background-retry]').hidden = !state.loadFailed; footerFind('[data-background-retry]').disabled = state.loading || state.saving;
@@ -1566,12 +1647,20 @@
     });
     window.addEventListener('pagehide', () => clearSession());
     window.addEventListener('pageshow', event => { if (event.persisted) { clearSession(); void load(); } });
+    window.matchMedia?.('(max-width: 900px)')?.addEventListener?.('change', () => {
+      const profile = window.AlbumHavenDevicePreferences?.profile?.() || 'web_desktop';
+      const previous = controller.getState();
+      controller.setDeviceProfile(profile);
+      // Retain each editor's integration callbacks as its responsive markup changes.
+      if (profile !== previous.activeDeviceProfile) remountEditor?.();
+      applyEditorPreview();
+    });
     return { controller, mount, mountSeekbar, mountSelectionAccent, mountAlerts, mountAlbumPage, unmount, allowLeave, clearSession, load,
       setLoopCreateAllowed(value) { const next = value === true; if (next === loopCreateAllowed) return; loopCreateAllowed = next; controller.reconcileLoopCapability(); },
       getSavedLoopControlStyle: () => controller.getState().saved.loop_control_style === 'companion' ? 'companion' : 'capsule',
       getSavedPlayerColors: () => savedPlayerColors ? { ...savedPlayerColors } : null };
   }
-  const api = { normalizeColor, normalizeInteractionOverrides, resolveInteractionOutline, resolveActionInteractionTokens, derivePairedPlayerColor, setPlayerStylePath, colorToRgb, contrastRatio, applyTheme, clearTheme, createController, installBrowser, palettes, playerThemes, editorMarkup, seekbarMarkup, selectionAccentMarkup, alertsMarkup, albumPageMarkup, resolveAppearance, selectionAccentColors, brightAccentColors, interactionColorFamilies, interactionControlsMarkup, getSavedPlayerColors: () => api.instance?.getSavedPlayerColors() || null };
+  const api = { resolveClientAppearance, normalizeColor, normalizeInteractionOverrides, resolveInteractionOutline, resolveActionInteractionTokens, derivePairedPlayerColor, setPlayerStylePath, colorToRgb, contrastRatio, applyTheme, clearTheme, createController, installBrowser, palettes, playerThemes, editorMarkup, seekbarMarkup, selectionAccentMarkup, alertsMarkup, albumPageMarkup, resolveAppearance, selectionAccentColors, brightAccentColors, interactionColorFamilies, interactionControlsMarkup, getSavedPlayerColors: () => api.instance?.getSavedPlayerColors() || null };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   if (scope && scope.document) { scope.AlbumHavenAppearance = api; api.instance = installBrowser(scope, scope.document); }
 })(typeof window !== 'undefined' ? window : null);

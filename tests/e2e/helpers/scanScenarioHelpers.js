@@ -5,6 +5,7 @@ export async function waitForScanDrivenGalleryReady({
   minimumSidebarCount = 40,
   minimumVisibleCoverCount,
 }) {
+  await navigationPanelActions.openArtistTree();
   const requiredSidebarCount = sidebarHydration === 'full'
     ? Number(minimumSidebarCount || 40)
     : 1;
@@ -14,7 +15,13 @@ export async function waitForScanDrivenGalleryReady({
       minimumSidebarCount: Math.max(0, requiredSidebarCount - 1),
     });
   } else {
-    await navigationPanelActions.waitForSidebarPreviewHydrated({ timeout: 60000 });
+    if (typeof navigationPanelActions.setArtistTreeFolded === 'function') {
+      await navigationPanelActions.setArtistTreeFolded(false);
+    }
+    await navigationPanelActions.navigationPanel.allArtistsLink.waitFor({
+      state: 'visible',
+      timeout: 60000,
+    });
   }
   await galleryActions.galleryPage.albumCards.first().waitFor({
     state: 'visible',

@@ -38,8 +38,11 @@
     item.classList.toggle(settings ? 'is-active' : 'active', Boolean(selected));
     if (wide) item.classList.toggle('is-active', Boolean(selected));
     item.classList.toggle('is-selected', Boolean(selected));
-    if (selected) item.setAttribute('aria-current', settings ? 'page' : 'true');
-    else item.removeAttribute('aria-current');
+    const current = selected ? (settings ? 'page' : 'true') : null;
+    if (item.getAttribute('aria-current') !== current) {
+      if (current === null) item.removeAttribute('aria-current');
+      else item.setAttribute('aria-current', current);
+    }
   }
   function updateItem(item, { label = '', subtitle = '', year = '', count = null, artworkHtml, artworkLabel } = {}) {
     for (const [selector, value] of [
@@ -53,8 +56,13 @@
     const artwork = item.querySelector?.('.navigation-tree-artwork');
     if (artwork && artworkHtml !== undefined) artwork.innerHTML = artworkHtml;
     if (artwork && artworkLabel !== undefined) {
-      artwork.querySelector?.('img')?.setAttribute?.('alt', artworkLabel);
-      artwork.querySelector?.('.album-artbox')?.setAttribute?.('aria-label', artworkLabel);
+      const label = String(artworkLabel);
+      for (const [selector, attribute] of [['img', 'alt'], ['.album-artbox', 'aria-label']]) {
+        const element = artwork.querySelector?.(selector);
+        if (element && element.getAttribute(attribute) !== label) {
+          element.setAttribute(attribute, label);
+        }
+      }
     }
   }
   function setSelection(root, key) {

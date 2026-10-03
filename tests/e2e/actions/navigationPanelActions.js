@@ -5,6 +5,16 @@ export class NavigationPanelActions {
     this.navigationPanel = navigationPanel;
   }
 
+  async openArtistTree() {
+    const mobileButton = this.navigationPanel.mobileArtistTreeButton;
+    if (await mobileButton.isVisible()) {
+      if (await mobileButton.getAttribute('aria-expanded') !== 'true') await mobileButton.click();
+      await expect(this.navigationPanel.artistRail).toHaveAttribute('aria-hidden', 'false');
+      return;
+    }
+    await this.setArtistTreeFolded(false);
+  }
+
   async setArtistTreeFolded(folded) {
     const expectedFolded = Boolean(folded);
     const current = await this.navigationPanel.readArtistTreeFoldState();
@@ -264,7 +274,7 @@ export class NavigationPanelActions {
   }
 
   async selectSidebarArtistAt(index, options = {}) {
-    await this.setArtistTreeFolded(false);
+    await this.openArtistTree();
     const artistLocator = this.navigationPanel.sidebarArtists.nth(index);
     const artistName = await artistLocator.getAttribute('data-sidebar-artist');
     if (!artistName) {
@@ -275,13 +285,14 @@ export class NavigationPanelActions {
   }
 
   async selectSidebarArtistByName(artistName, options = {}) {
-    await this.setArtistTreeFolded(false);
+    await this.openArtistTree();
     const selectedArtist = String(artistName || '').trim();
     const artistLocator = this.navigationPanel.sidebarArtistByName(selectedArtist);
     await artistLocator.click({ noWaitAfter: true, ...options });
   }
 
   async moveSidebarArtistOutsideViewport(artistName, options = {}) {
+    await this.openArtistTree();
     const selectedArtist = String(artistName || '').trim();
     const targetArtist = this.navigationPanel.sidebarArtistByName(selectedArtist);
     if (await targetArtist.count() !== 1) {
@@ -344,6 +355,7 @@ export class NavigationPanelActions {
 
   async selectMountedFamilyArtistAndObserveTransition(artistName, options = {}) {
     const selectedArtist = String(artistName || '').trim();
+    await this.openArtistTree();
     const observation = await this.navigationPanel.startMountedFamilySelectionObservation();
     try {
       await this.selectSidebarArtistByName(selectedArtist, options);
@@ -362,7 +374,6 @@ export class NavigationPanelActions {
   }
 
   async clickAllArtists(options = {}) {
-    await this.setArtistTreeFolded(false);
     const {
       expectArtistQueryCleared = false,
       waitTimeout,
@@ -373,6 +384,7 @@ export class NavigationPanelActions {
     if (force !== undefined) {
       throw new Error('clickAllArtists does not accept forced clicks; the All Artists link must be interactable through the real UI.');
     }
+    await this.openArtistTree();
     await this.navigationPanel.allArtistsLink.scrollIntoViewIfNeeded();
     await this.navigationPanel.allArtistsLink.click({
       noWaitAfter: true,
@@ -387,6 +399,7 @@ export class NavigationPanelActions {
   }
 
   async waitForActiveSelectionInViewport(options = {}) {
+    await this.setArtistTreeFolded(false);
     await this.navigationPanel.waitForPageCondition((selectors) => {
       const activeLink = document.querySelector(selectors.activeSidebarLinkSelector);
       const sidebar = document.querySelector(selectors.sidebarScrollContainerSelector);

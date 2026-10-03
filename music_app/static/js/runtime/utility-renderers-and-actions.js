@@ -1,4 +1,4 @@
-﻿const problematicNavigationRowContent = new WeakMap();
+const problematicNavigationRowContent = new WeakMap();
 
 let problematicFilesVirtualList = null;
 
@@ -25,7 +25,9 @@ function renderProblematicFiles({ preserveProblematicTree = false } = {}) {
     }
   };
 
-  const virtualListApi = typeof window !== 'undefined'
+  const mobileIndex = typeof usesMobilePageLayout === 'function' && usesMobilePageLayout();
+  if (mobileIndex) disposeProblematicFilesVirtualList();
+  const virtualListApi = mobileIndex ? null : typeof window !== 'undefined'
     ? window.ProblematicFilesVirtualList
     : globalThis.ProblematicFilesVirtualList;
   const mountedRows = preserveProblematicTree && !virtualListApi?.create
@@ -99,6 +101,13 @@ function renderProblematicFiles({ preserveProblematicTree = false } = {}) {
   if (!items.length) {
     replaceListContents('<div class="utility-empty-state compact">No matching problematic albums found.</div>');
     els.detail.innerHTML = '<div class="utility-empty-state">No matching problematic albums found.</div>';
+    return;
+  }
+
+  const mobilePage = mobileIndex ? mobilePageState.pages.at(-1) : null;
+  if (mobileIndex && (mobilePage?.tab !== 'problematic-files' || !mobilePage.utilityDetail)) {
+    renderTree('');
+    els.detail.innerHTML = '';
     return;
   }
 
@@ -518,6 +527,7 @@ function bindUtilityLoopDragAndDrop() {
 }
 
 function syncUtilityLoopPanelVisibility() {
+  if (typeof getMobileLoopPage === 'function' && getMobileLoopPage()?.loopSongId) return;
   const visibleIds = new Set(getFilteredUtilityLoops().map(loop => String(loop.id)));
   const els = getUtilityModalElements();
   els.detail?.querySelectorAll('[data-utility-loop-entry]').forEach(panel => { panel.hidden = !visibleIds.has(getUtilityLoopNodeId(panel)); });
@@ -542,6 +552,11 @@ function filterUtilityLoopViews() {
   const els = getUtilityModalElements();
   const filtered = getFilteredUtilityLoops();
   if (els.count) els.count.textContent = String(filtered.length);
+  if (typeof getMobileLoopPage === 'function' && getMobileLoopPage()) {
+    renderUtilityLoopList(els, filtered);
+    syncMobileUtilityContext();
+    return;
+  }
   if (filtered.length && !filtered.some(loop => buildUtilityLoopGroupKey(loop) === state.utility.selectedLoopGroupKey)) {
     state.utility.selectedLoopGroupKey = buildUtilityLoopGroupKey(filtered[0]);
     state.utility.selectedLoopId = String(filtered[0].id);
@@ -562,6 +577,12 @@ function renderUtilityLoops() {
   if (els.overlay.hidden) return;
   els.detail.classList.add('is-loop-detail');
   const loops = state.utility.loops || [];
+  const mobilePage = typeof getMobileLoopPage === 'function' ? getMobileLoopPage() : null;
+  const mobileGroup = mobilePage ? resolveMobileLoopSongGroup(mobilePage, loops) : null;
+  if (mobilePage && mobilePage.loopSongId && !mobileGroup && state.utility.loopsLoaded
+      && !state.utility.loopsLoading && !state.utility.loopsLoadError) mobilePage.loopSongId = '';
+  els.overlay.dataset.mobileLoopView = mobilePage?.loopSongId ? 'song' : 'list';
+  if (mobilePage) pauseOtherUtilityLoopPlayback(null);
   if (els.sidebarLabel) els.sidebarLabel.textContent = 'Loops';
   const filtered = getFilteredUtilityLoops();
   els.count.textContent = String(filtered.length);
@@ -584,8 +605,9 @@ function renderUtilityLoops() {
   }
 
   if (state.utility.loopsLoadError) {
-    els.list.innerHTML = '';
-    els.detail.innerHTML = buildOnPageAlertHtml({ severity: 'error', title: 'Saved loops unavailable', message: state.utility.loopsLoadError });
+    const errorHtml = buildOnPageAlertHtml({ severity: 'error', title: 'Saved loops unavailable', message: state.utility.loopsLoadError });
+    els.list.innerHTML = mobilePage ? errorHtml : '';
+    els.detail.innerHTML = errorHtml;
     return;
   }
   if (!loops.length) {
@@ -595,7 +617,15 @@ function renderUtilityLoops() {
     return;
   }
 
-  const groupedLoops = groupUtilityLoops(filtered.length ? filtered : loops);
+  if (mobilePage && !mobileGroup) {
+    renderUtilityLoopList(els, filtered);
+    els.detail.innerHTML = '';
+    clearUtilityLoopSpaceOwner();
+    restoreMobileLoopListScroll(mobilePage);
+    return;
+  }
+  if (mobileGroup) state.utility.selectedLoopGroupKey = String(mobileGroup.key);
+  const groupedLoops = groupUtilityLoops(mobileGroup ? loops : (filtered.length ? filtered : loops));
   if (!state.utility.selectedLoopGroupKey || !groupedLoops.some((group) => String(group.key || '') === String(state.utility.selectedLoopGroupKey || ''))) {
     state.utility.selectedLoopGroupKey = String(groupedLoops[0]?.key || '');
   }
@@ -773,8 +803,10 @@ function renderUtilityModalContent(options = {}) {
   if (els.search) els.search.readOnly = false;
   if (els.problemFilterButton) { els.problemFilterButton.setAttribute('aria-label', 'Filters'); els.problemFilterButton.setAttribute('title', 'Filter by problem type'); els.problemFilterButton.setAttribute('aria-haspopup', 'listbox'); els.problemFilterButton.setAttribute('aria-controls', 'utility-problem-filter-menu'); }
   const activeTab = state.utility.activeTab || 'problematic-files';
+
   if (activeTab !== 'problematic-files') disposeProblematicFilesVirtualList();
-  if (activeTab !== 'log-history' && els.list?.dataset) els.list.dataset.utilityNavigationOwner = activeTab;
+  if (activeTab !== 'log-history' && els.list?.dataset
+      && els.list.dataset.utilityNavigationOwner !== activeTab) els.list.dataset.utilityNavigationOwner = activeTab;
   if (activeTab !== 'loops' && typeof disposeMountedLoopActions === 'function') disposeMountedLoopActions(els.detail);
   if (activeTab !== 'appearance' && typeof unmountAppearanceEditors === 'function') unmountAppearanceEditors();
   els.overlay?.setAttribute('data-active-tab', activeTab);
@@ -807,6 +839,7 @@ function renderUtilityModalContent(options = {}) {
     renderProblematicFiles(options);
   }
   if (typeof updateSearchClearAction === 'function') updateSearchClearAction(els.search);
+  if (typeof syncMobileUtilityContext === 'function') syncMobileUtilityContext();
 }
 
 const utilityTabAlignmentObservers = new WeakMap();

@@ -1,7 +1,9 @@
 import { authenticatedPageGet, authenticatedPagePut } from './authenticatedPageRequest.js';
 
+// Recent colors are account-owned response metadata. The production API merges
+// explicit color updates; it does not replace that history during restoration.
 const FIELDS = ['main_surface_color', 'panel_background_color', 'palette_id', 'panel_index',
-  'player_override', 'compact_player_style',
+ 'player_override', 'compact_player_style',
   'docked_compact_player_behavior', 'docked_compact_player_regular_style', 'compact_player_motion', 'floating_player_edge',
  'album_details_layout', 'album_playing_row_animation', 'alert_family',
  'interaction_overrides', 'selection_accent', 'player_style_override',

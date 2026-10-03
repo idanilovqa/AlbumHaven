@@ -35,6 +35,7 @@ test('sidebar selection actions unfold the Artist Tree before using its links', 
     async click() { calls.push('named-click'); },
   };
   const actions = new NavigationPanelActions({
+    mobileArtistTreeButton: { async isVisible() { return false; } },
     sidebarArtists: { nth() { return indexedArtist; } },
     sidebarArtistByName() { return namedArtist; },
     allArtistsLink: {
@@ -1827,6 +1828,151 @@ test('context guard covers existing pages and future popups, then restores every
   assert.equal(context.route(), 'original-context-route');
 });
 
+test('authenticated fixture state keeps account layout ownership while anonymous browser baselines stay explicit', async (t) => {
+  const { withArtistTreePreference } = await import('../e2e/support/artistTreeStorageState.js');
+  const source = read('tests/e2e/support/baseFixtures.js');
+  assert.match(source, /initialArtistTreeFolded: \[null, \{ option: true \}\]/);
+  const start = source.indexOf('  storageState: async');
+  const end = source.indexOf('\n  managedAppLifecycle:', start);
+  assert.ok(start >= 0 && end > start);
+  const fixture = require('node:vm').runInNewContext(
+    `({${source.slice(start, end)}}).storageState`, { withArtistTreePreference },
+  );
+  for (const reuseAuthentication of [true, false]) {
+    for (const initialArtistTreeFolded of [null, false, true]) {
+      await t.test(`${reuseAuthentication ? 'account' : 'anonymous'} / ${initialArtistTreeFolded}`, async () => {
+        const authentication = { cookies: [{ name: 'owner', value: 'fixture' }], origins: [] };
+        const before = structuredClone(authentication);
+        let loginReads = 0;
+        let useCalls = 0;
+        await fixture({
+          reuseAuthentication,
+          initialArtistTreeFolded,
+          baseURL: 'http://localhost:5000/?surface=albums',
+          workerAuthentication: {
+            async getStorageState() { loginReads += 1; return structuredClone(authentication); },
+          },
+        }, async (state) => {
+          useCalls += 1;
+          const expected = reuseAuthentication ? before : {
+            cookies: [],
+            origins: initialArtistTreeFolded === null ? [] : [{
+              origin: 'http://localhost:5000',
+              localStorage: [{
+                name: 'albumhaven.shellLayoutPreferences.v1',
+                value: JSON.stringify({ artistTreeFolded: initialArtistTreeFolded }),
+              }],
+            }],
+          };
+          assert.deepEqual(JSON.parse(JSON.stringify(state)), expected);
+        });
+        assert.equal(loginReads, reuseAuthentication ? 1 : 0);
+        assert.equal(useCalls, 1);
+        assert.deepEqual(authentication, before);
+      });
+    }
+  }
+});
+
+test('fresh browser sessions retain independent ownership and clean up every context', async (t) => {
+  const { withArtistTreePreference } = await import('../e2e/support/artistTreeStorageState.js');
+  const source = read('tests/e2e/support/baseFixtures.js');
+  const start = source.indexOf('  freshBrowserSession: async');
+  const end = source.indexOf('\n  startupRelationProjectionReadiness:', start);
+  const fixtureSource = source.slice(start, end);
+  for (const failure of [null, 'initialize', 'dispose', 'artifact']) {
+    await t.test(failure || 'normal teardown', async () => {
+      const sessions = [];
+      const attachments = [];
+      const dependencyNames = [
+        'GalleryActions', 'GalleryPage', 'CoverLookupActions', 'CoverLookup',
+        'SearchToolbarActions', 'SearchToolbar', 'TagEditorActions', 'TagEditor',
+        'TrackModalActions', 'TrackModal',
+      ];
+      const dependencies = Object.fromEntries(dependencyNames.map((name) => [name, class {}]));
+      Object.assign(dependencies, {
+        URL,
+        withArtistTreePreference,
+        installContextRequestInterceptionGuard: (context) => {
+          context.guarded = true;
+          return () => { context.restored = true; };
+        },
+        getProductionViewObserver: (page) => ({
+          async initialize() {
+            if (failure === 'initialize' && page.context.id === 2) throw new Error('initialize failed');
+          },
+          async dispose() {
+            page.context.disposed = true;
+            if (failure === 'dispose' && page.context.id === 1) throw new Error('dispose failed');
+          },
+        }),
+        observePageRuntimeLogs: (page) => ({
+          stop() { page.context.stopped = true; },
+          snapshot() { return []; },
+        }),
+        didTestFail: () => true,
+        formatRuntimeLogs: () => 'logs',
+      });
+      const fixture = require('node:vm').runInNewContext(
+        `({${fixtureSource}}).freshBrowserSession`, dependencies,
+      );
+      const execution = fixture({
+        browser: {
+          async newContext(options) {
+            const context = {
+              id: sessions.length + 1, options,
+              async newPage() {
+                assert.equal(this.guarded, true);
+                return { context: this, screenshot: async () => Buffer.from('screenshot') };
+              },
+              async close() { this.closed = true; },
+            };
+            sessions.push(context);
+            return context;
+          },
+        },
+        testArtifacts: {
+          queueTextAttachment(name) {
+            attachments.push(name);
+            if (failure === 'artifact') throw new Error('artifact failed');
+          },
+          queueAttachment({ name }) { attachments.push(name); },
+        },
+        authenticateFreshBrowserSession: false,
+        initialArtistTreeFolded: false,
+        storageState: { cookies: [{ name: 'owner' }], origins: [] },
+      }, async (factory) => {
+        const first = await factory.create();
+        const second = await factory.create();
+        assert.notEqual(first.context, second.context);
+        assert.notEqual(first.page, second.page);
+        assert.equal(first.context.closed, undefined, 'first identity remains usable');
+        for (const session of sessions) {
+          assert.equal(session.options.storageState.cookies.length, 0);
+          assert.deepEqual(session.options.storageState.origins, [{
+            origin: 'http://localhost:5000',
+            localStorage: [{ name: 'albumhaven.shellLayoutPreferences.v1', value: '{"artistTreeFolded":false}' }],
+          }]);
+        }
+      }, { project: { use: { baseURL: 'http://localhost:5000' } } });
+      if (failure) await assert.rejects(execution, /initialize failed|Failed to clean up fresh browser sessions/);
+      else await execution;
+      assert.equal(sessions.length, 2);
+      for (const session of sessions) {
+        assert.equal(session.disposed, true);
+        assert.equal(session.restored, true);
+        assert.equal(session.closed, true);
+        if (failure !== 'initialize' || session.id !== 2) assert.equal(session.stopped, true);
+      }
+      if (!failure) {
+        assert.equal(new Set(attachments).size, 4, 'each session retains its own failure evidence');
+        assert.ok(attachments.includes('fresh-browser-session-runtime-log.txt'));
+        assert.ok(attachments.includes('fresh-browser-session-2-runtime-log.txt'));
+      }
+    });
+  }
+});
+
 test('all E2E specs inherit guarded fixtures and cannot create direct browser pages', () => {
   const e2eRoot = path.join(repoRoot, 'tests/e2e');
   const sources = [];
@@ -1841,6 +1987,25 @@ test('all E2E specs inherit guarded fixtures and cannot create direct browser pa
 
   const directBrowserCreation = /\bbrowser\.newPage\s*\(|\bcontext\.newPage\s*\(|\.newContext\s*\(/;
   const baseFixturesPath = path.join(e2eRoot, 'support', 'baseFixtures.js');
+  const mobileFixturesPath = path.join(e2eRoot, 'support', 'mobileFixtures.js');
+  const guardedRoots = new Set([baseFixturesPath, mobileFixturesPath]);
+  const inheritsGuardedTest = (filePath, seen = new Set()) => {
+    if (guardedRoots.has(filePath)) return true;
+    if (seen.has(filePath) || !fs.existsSync(filePath)) return false;
+    seen.add(filePath);
+    const source = fs.readFileSync(filePath, 'utf8');
+    const imports = [...source.matchAll(/import\s*\{([^}]+)\}\s*from\s*['"]([^'"]+)['"]/g)];
+    return imports.some(([, names, specifier]) => {
+      const importedTest = names.split(',').map(name => /^\s*test(?:\s+as\s+(\w+))?\s*$/.exec(name)).find(Boolean);
+      if (!importedTest || !specifier.startsWith('.')) return false;
+      const localTestName = importedTest[1] || 'test';
+      const isSpec = filePath.endsWith('.spec.js');
+      const extension = new RegExp(`${isSpec ? '(?:export\\s+)?' : 'export\\s+'}const\\s+test\\s*=\\s*${localTestName}\\.extend\\s*\\(`);
+      const usesImportedTest = (isSpec && localTestName === 'test') || extension.test(source);
+      return usesImportedTest
+        && inheritsGuardedTest(path.resolve(path.dirname(filePath), specifier), new Set(seen));
+    });
+  };
   for (const [filePath, source] of sources) {
     assert.doesNotMatch(source, /\b(?:chromium|firefox|webkit)\.launch\s*\(/, filePath);
     if (filePath === baseFixturesPath) {
@@ -1851,7 +2016,7 @@ test('all E2E specs inherit guarded fixtures and cannot create direct browser pa
       const freshBrowserSessionFixture = source.slice(fixtureStart, fixtureEnd);
       assert.match(
         freshBrowserSessionFixture,
-        /freshBrowserSession: async \(\{\s*browser,\s*testArtifacts,\s*authenticateFreshBrowserSession,\s*storageState,\s*\}, use, testInfo\)[\s\S]*browser\.newContext\([\s\S]*storageState: authenticateFreshBrowserSession \? storageState : \{ cookies: \[\], origins: \[\] \}[\s\S]*installContextRequestInterceptionGuard\(context\)[\s\S]*context\.newPage\(\)[\s\S]*new GalleryActions\(new GalleryPage\(page, testInfo\)\)[\s\S]*new CoverLookupActions\(new CoverLookup\(page, testInfo\)\)[\s\S]*new TrackModalActions\(new TrackModal\(page, testInfo\)\)[\s\S]*restoreInterceptionGuard\(\)[\s\S]*context\.close\(\)[\s\S]*session\.restoreInterceptionGuard\(\)[\s\S]*session\.context\.close\(\)/,
+        /freshBrowserSession: async \(\{\s*browser,\s*testArtifacts,\s*authenticateFreshBrowserSession,\s*storageState,\s*initialArtistTreeFolded,\s*\}, use, testInfo\)[\s\S]*browser\.newContext\([\s\S]*storageState: authenticateFreshBrowserSession \? storageState : withArtistTreePreference\(\s*\{ cookies: \[\], origins: \[\] \}, configuredBaseUrl, initialArtistTreeFolded,\s*\)[\s\S]*installContextRequestInterceptionGuard\(context\)[\s\S]*context\.newPage\(\)[\s\S]*new GalleryActions\(new GalleryPage\(page, testInfo\)\)[\s\S]*new CoverLookupActions\(new CoverLookup\(page, testInfo\)\)[\s\S]*new TrackModalActions\(new TrackModal\(page, testInfo\)\)[\s\S]*restoreInterceptionGuard\(\)[\s\S]*context\.close\(\)[\s\S]*session\.restoreInterceptionGuard\(\)[\s\S]*session\.context\.close\(\)/,
       );
       assert.equal(
         (freshBrowserSessionFixture.match(/\.newContext\s*\(/g) || []).length,
@@ -1865,11 +2030,26 @@ test('all E2E specs inherit guarded fixtures and cannot create direct browser pa
       );
       const sourceOutsideFreshBrowserSession = source.slice(0, fixtureStart) + source.slice(fixtureEnd);
       assert.doesNotMatch(sourceOutsideFreshBrowserSession, directBrowserCreation, filePath);
+    } else if (filePath === mobileFixturesPath) {
+      const factoryStart = source.indexOf('export function createMobileBrowserSessions(');
+      const factoryEnd = source.indexOf('export const test = base.extend(', factoryStart);
+      assert.ok(factoryStart >= 0 && factoryEnd > factoryStart, 'mobile session ownership must remain bounded');
+      const factory = source.slice(factoryStart, factoryEnd);
+      assert.equal((factory.match(/\.newContext\s*\(/g) || []).length, 1);
+      assert.equal((factory.match(/\.newPage\s*\(/g) || []).length, 2);
+      assert.match(factory, /installContextRequestInterceptionGuard\(freshContext\)/);
+      assert.match(factory, /Promise\.allSettled\(entries\.map\(closeEntry\)\)/);
+      assert.match(factory, /AggregateError/);
+      const fixtures = source.slice(factoryEnd);
+      assert.match(fixtures, /requestInterceptionGuard:[\s\S]*installContextRequestInterceptionGuard\(context\)[\s\S]*auto: true/);
+      assert.match(fixtures, /mobileBrowserSessions: async \(\{ browser, context, requestInterceptionGuard \}/);
+      assert.match(fixtures, /finally \{ await sessions\.closeAll\(\); \}/);
+      assert.doesNotMatch(source.slice(0, factoryStart) + fixtures, directBrowserCreation, filePath);
     } else {
       assert.doesNotMatch(source, directBrowserCreation, filePath);
     }
     if (!filePath.endsWith('.spec.js')) continue;
-    assert.match(source, /from ['"]\.\.\/support\/(?:base|performance)Fixtures\.js['"]/, filePath);
+    assert.equal(inheritsGuardedTest(filePath), true, `${filePath} must inherit a guarded named test fixture`);
     assert.doesNotMatch(source, /from ['"]@playwright\/test['"]/, filePath);
   }
 
@@ -2080,11 +2260,11 @@ test('album identity locators share the single-artist GalleryBar section fallbac
 
   assert.match(
     albumCard,
-    /import \{ artistSectionByName \} from '\.\/artistSectionLocator\.js';[\s\S]*artistSectionByName\(this\.page, artistName\)/,
+    /sectionByArtistHeading\(artistHeading\) \{[\s\S]*explicitSection\.or\(singleArtistSection\)\.first\(\)/,
   );
   assert.match(
     galleryPage,
-    /import \{ artistSectionByName \} from '\.\/artistSectionLocator\.js';[\s\S]*sectionByArtistHeading\(artistHeading\) \{[\s\S]*return artistSectionByName\(this\.page, artistHeading\);/,
+    /sectionByArtistHeading\(artistHeading\) \{[\s\S]*return this\.albumCard\.sectionByArtistHeading\(artistHeading\);/,
   );
 });
 
@@ -2438,7 +2618,7 @@ test('sparse optimistic POM observation atomically reads visible section count a
   )?.[0] || '';
   assert.match(
     observationMethod,
-    /sectionByArtistHeading\(artistName\)[\s\S]*await section\.evaluate[\s\S]*artistMetaText[\s\S]*\.family-artist-header > span:last-child[\s\S]*renderedIdentities[\s\S]*albumCount:\s*parseArtistAlbumCount\(observation\.artistMetaText\)/,
+    /sectionByArtistHeading\(artistName\)[\s\S]*await section\.evaluate[\s\S]*\.family-artist-header > span:last-child[\s\S]*ownsSingleArtist[\s\S]*artistMetaText[\s\S]*renderedIdentities[\s\S]*albumCount:\s*parseArtistAlbumCount\(observation\.artistMetaText\)/,
   );
   assert.doesNotMatch(
     observationMethod,
@@ -4064,7 +4244,7 @@ test('gallery target viewport snapshot measures attached card and stable gallery
   const actions = read('tests/e2e/actions/galleryActions.js');
   assert.match(
     pom,
-    /const cards = year[\s\S]*cardByIdentity\(artistName, albumName, year\)[\s\S]*cardsByArtistAndAlbum\(artistName, albumName\)[\s\S]*return cards\.evaluateAll/,
+    /const cards = year[\s\S]*cardByIdentity\(artistName, albumName, year\)[\s\S]*cardsByArtistAndAlbum\(artistName, albumName\)[\s\S]*const targets = detailsAction \? cards\.locator\(this\.albumCard\.detailsButtonWithinCardSelector\) : cards;[\s\S]*return targets\.evaluateAll/,
   );
   assert.match(
     actions,
@@ -4357,7 +4537,7 @@ test('exact album selection delegates one retrying Playwright click to the ident
   assert.deepEqual(scrolled, [[
     'Mastodon',
     'Crack The Skye',
-    { year: '2009' },
+    { year: '2009', detailsAction: true },
   ]]);
   assert.deepEqual(identity, {
     artist: 'Mastodon',
@@ -5089,7 +5269,7 @@ test('loop hover evidence moves the real mouse to target geometry without locato
   assert.match(savedHelper, /getAttribute\('data-loop-action-state'\) === 'editing'/);
   assert.match(
     savedHelper,
-    /toHaveAttribute\('data-loop-action-engaged', 'true'\)[\s\S]*toHaveCSS\('width', `\$\{style === 'companion' \? \(editing \? 88 : 58\) : \(editing \? 65 : 34\)\}px`\)[\s\S]*readLoopActionVisualSnapshot/,
+    /toHaveAttribute\('data-loop-action-engaged', 'true'\)[\s\S]*expectedWidth = style === 'companion' \? \(editing \? 88 : 58\) : \(editing \? 65 : 34\)[\s\S]*readLoopPodWidth\(entry\)[\s\S]*toBeLessThanOrEqual\(1 \/ \(64 \* 0\.8\)\)[\s\S]*readLoopActionVisualSnapshot/,
     'saved-loop hover must settle the approved style and edit-state pod width before measuring geometry',
   );
   assert.doesNotMatch(savedHelper, /waitForTimeout|timeout\s*:/);
@@ -5165,6 +5345,7 @@ test('loop creation coverage uses the shared app dialog and POM-owned inline ran
   assert.match(spec, /readLoopEditorStateByName\('Warmup Loop'\)[\s\S]*editor: false/);
   assert.match(spec, /revealCreateAnotherLoopEditorByName\('Warmup Loop'\)/);
   assert.match(expirySpec, /installLoopEditExpiryClock\(\)/);
+  assert.match(expirySpec, /pauseLoopEditExpiryClockBeforeRenewal\(\)\)\.paused\)\.toBe\(false\);\s*await globalPlayerActions\.dragLoopBoundary\('end', 0\.8\)/);
   assert.match(expirySpec, /advanceLoopEditExpiryClock\(299000\)[\s\S]*expectLoopEditorActive\(\)[\s\S]*advanceLoopEditExpiryClock\(1000\)[\s\S]*waitForAutomaticLoopEditorExpiry\(\)/);
   assert.match(expirySpec, /waitForRepeatCycle\(untouchedEditor\.loopId\)[\s\S]*advanceLoopEditExpiryClock\(13000\)[\s\S]*expectCreateAnotherLoopEditorActiveByName\(SAVED_LOOP_NAME\)[\s\S]*advanceLoopEditExpiryClock\(2000\)[\s\S]*waitForAutomaticLoopEditorExpiryByName\(SAVED_LOOP_NAME\)/);
   assert.match(spec, /dragLoopBoundaryByName\('Warmup Loop', 'start', 0\.25\)/);
@@ -5172,6 +5353,29 @@ test('loop creation coverage uses the shared app dialog and POM-owned inline ran
   assert.match(spec, /activateCreateAnotherLoopByName\('Warmup Loop'\)[\s\S]*cancelLoopNameDialog\(\)[\s\S]*activateCreateAnotherLoopByName\('Warmup Loop'\)[\s\S]*submitLoopName\('Transition Loop'\)/);
   assert.doesNotMatch(spec, /\.locator\s*\(|\.evaluate\s*\(|waitForTimeout\s*\(|page\.once\(['"]dialog['"]|page\.route\s*\(/);
   assert.doesNotMatch(expirySpec, /\.locator\s*\(|\.evaluate\s*\(|waitForTimeout\s*\(|page\.once\(['"]dialog['"]|page\.route\s*\(/);
+});
+
+test('loop expiry clock freezes only before the renewing drag and resumes after measurement', async () => {
+  const { GlobalPlayerActions } = await import(pathToFileURL(path.join(repoRoot, 'tests/e2e/actions/globalPlayerActions.js')).href);
+  const calls = [];
+  const actions = new GlobalPlayerActions({
+    readWallClockTimeMs: async () => 10000,
+    page: { clock: {
+      pauseAt: async time => calls.push(['pauseAt', time]),
+      fastForward: async duration => calls.push(['fastForward', duration]),
+      resume: async () => calls.push(['resume']),
+    } },
+  });
+  actions.expectLoopEditorActive = async () => { calls.push(['verifyActive']); return { paused: false }; };
+  assert.deepEqual(await actions.pauseLoopEditExpiryClockBeforeRenewal(), { paused: false });
+  await actions.advanceLoopEditExpiryClock(299000);
+  await actions.advanceLoopEditExpiryClock(299000);
+  await actions.advanceLoopEditExpiryClock(1000);
+  await actions.resumeLoopEditExpiryClock();
+  assert.deepEqual(calls, [
+    ['pauseAt', 11000], ['verifyActive'],
+    ['fastForward', 299000], ['fastForward', 299000], ['fastForward', 1000], ['resume'],
+  ]);
 });
 
 test('loop entry names use exact escaped matching rather than substring matching', async () => {

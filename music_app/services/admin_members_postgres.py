@@ -2,18 +2,16 @@
 
 from __future__ import annotations
 
+from music_app.services.postgres_connections import pooled_connection as _connect
+
 from collections.abc import Callable, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Iterator
 
-try:  # pragma: no cover - exercised when the optional runtime driver is present.
-    import psycopg
-    from psycopg.rows import dict_row
-except ImportError:  # pragma: no cover
-    psycopg = None
-    dict_row = None
+from music_app.services.admin_authority import ADMIN_LIBRARY_AUTHORITY_SQL
+
 
 
 @dataclass(frozen=True, slots=True)
@@ -31,6 +29,7 @@ class AdminMemberSummary:
     has_credential: bool
     account_status: str
     invitation_delivery_status: str | None
+    access_assignment: Mapping[str, object] | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -62,27 +61,26 @@ class PostgresAdminMembersService:
         *,
         actor_account_id: object,
         library_id: object,
+        target_account_id: object = None,
     ) -> AdminMembersRoster:
         actor_id = _positive_id(actor_account_id)
         current_library_id = _positive_id(library_id)
         now = _aware_utc(self._clock())
+        target_id = _positive_id(target_account_id) if target_account_id is not None else None
+        target_filter = "and account.id = %s" if target_id is not None else ""
         try:
             with self._operation() as connection:
                 rows = connection.execute(
-                    """
+                    f"""
                     with authority as (
-                      select library.libraries.id as library_id,
-                             library.libraries.name as library_name,
-                             actor.id as owner_account_id
-                      from app.bootstrap_owners
-                      join app.accounts actor
-                        on actor.id = app.bootstrap_owners.account_id
-                       and actor.is_active is true and actor.disabled_at is null
-                      join library.libraries
-                        on library.libraries.id = %s
-                       and library.libraries.owner_account_id = actor.id
-                      where app.bootstrap_owners.account_id = %s
-                        and app.bootstrap_owners.owner_key = 'local-bootstrap-owner'
+                      select locked_library.id as library_id,
+                             locked_library.name as library_name,
+                             locked_library.owner_account_id as owner_account_id
+                      from library.libraries locked_library
+                      join app.accounts actor on actor.is_active is true
+                        and actor.disabled_at is null
+                      where locked_library.id = %s and actor.id = %s
+                        and {ADMIN_LIBRARY_AUTHORITY_SQL}
                     )
                     select authority.library_id, authority.library_name,
                            account.id as account_id,
@@ -90,6 +88,8 @@ class PostgresAdminMembersService:
                            account.is_active, account.disabled_at,
                            (owner.account_id is not null) as is_bootstrap_owner,
                            membership.membership_role,
+                           account.metadata -> 'library_access_assignments_v1'
+                             -> authority.library_id::text as access_assignment,
                            coalesce(capability.capability_keys, array[]::text[])
                              as capability_keys,
                            welcome.delivery_status as welcome_status,
@@ -154,10 +154,11 @@ class PostgresAdminMembersService:
                       where account_id = account.id and revoked_at is null
                         and idle_expires_at > %s and absolute_expires_at > %s
                     ) session on true
+                    where true {target_filter}
                     order by (owner.account_id is not null) desc,
                              account.username_normalized, account.id
                     """,
-                    (current_library_id, actor_id, now, now),
+                    (current_library_id, actor_id, now, now, *((target_id,) if target_id is not None else ())),
                 ).fetchall()
             if not rows:
                 raise PermissionError("Members & Access is not permitted.")
@@ -205,6 +206,7 @@ def _member(value: object) -> AdminMemberSummary:
         is_active=is_active,
         is_bootstrap_owner=row.get("is_bootstrap_owner") is True,
         membership_role=_optional_text(row.get("membership_role")),
+        access_assignment=row.get("access_assignment") if isinstance(row.get("access_assignment"), Mapping) else None,
         capability_keys=tuple(sorted(set(capabilities))),
         welcome_status=_optional_text(row.get("welcome_status")),
         active_session_count=active_count,
@@ -257,9 +259,3 @@ def _aware_utc(value: object) -> datetime:
 
 def _optional_datetime(value: object) -> datetime | None:
     return None if value is None else _aware_utc(value)
-
-
-def _connect(database_url: str):
-    if psycopg is None:
-        raise RuntimeError("psycopg is required for Members & Access.")
-    return psycopg.connect(database_url, row_factory=dict_row)

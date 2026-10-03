@@ -4,6 +4,8 @@ export class CoverLookup extends BasePage {
   constructor(page, testInfo = null) {
     super(page, testInfo);
     this.modal = page.locator(this.modalSelector);
+    this.mobilePage = page.locator('#cover-lookup-modal.is-mobile-page');
+    this.mobileBackButton = page.locator('#mobile-back-button');
     this.modalDialog = page.locator(this.modalDialogSelector);
     this.modalBody = page.locator(this.modalBodySelector);
     this.modalSubtitle = page.locator(this.modalSubtitleSelector);
@@ -32,7 +34,8 @@ export class CoverLookup extends BasePage {
       .locator('[data-select-local-cover]:not([data-cover-lookup-local-active])');
     this.remoteCoverCards = this.modalBody.locator('[data-select-remote-cover]');
     this.firstRemoteCoverCard = this.remoteCoverCards.first();
-    this.savedRemoteCoverCard = this.modalBody.locator('[data-cover-lookup-saved-remote]').first();
+    this.savedRemoteCoverCards = this.modalBody.locator('[data-cover-lookup-saved-remote]');
+    this.savedRemoteCoverCard = this.savedRemoteCoverCards.first();
     this.openLightboxButtons = this.modalBody.locator('[data-cover-lookup-open-lightbox]');
     this.activeLocalCoverImage = this.modalBody
       .locator('[data-cover-lookup-local-active] .cover-lookup-art-preview-image')
@@ -133,6 +136,18 @@ export class CoverLookup extends BasePage {
 
   get drawerCloseButtonSelector() {
     return '[data-close-cover-lookup-drawer="1"]';
+  }
+
+  async notificationActionDimensions() {
+    const dimensions = [];
+    for (const button of [this.drawerClearCompletedButton, this.drawerCloseButton]) {
+      // parity-check: allow-read-only-measurement-evaluate -- compare the shared notification action hit targets and glyph boxes.
+      dimensions.push(await button.evaluate(node => {
+        const box = node.getBoundingClientRect(), glyph = node.querySelector('svg').getBoundingClientRect();
+        return { width: box.width, height: box.height, glyphWidth: glyph.width, glyphHeight: glyph.height };
+      }));
+    }
+    return dimensions;
   }
 
   get drawerClearCompletedButtonSelector() {
@@ -433,6 +448,10 @@ export class CoverLookup extends BasePage {
 
   taskStatusByTitle(taskTitle) {
     return this.taskCardByTitle(taskTitle).locator(this.taskStatusWithinCardSelector).first();
+  }
+
+  taskBylineByTitle(taskTitle) {
+    return this.taskCardByTitle(taskTitle).locator('.cover-lookup-task-byline');
   }
 
   taskTitleByTitle(taskTitle) {

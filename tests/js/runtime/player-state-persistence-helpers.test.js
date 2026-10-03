@@ -1382,3 +1382,77 @@ test('restore keeps saved loop boundaries but never re-enters loop edit mode', a
   assert.equal(context.state.player.loopStart, 20);
   assert.equal(context.state.player.loopEnd, 40);
 });
+
+function loadCapabilityPlayerRestore(actions, paused) {
+  const effects = [], events = new Map();
+  const track = { src: '/track?path=saved.flac', path: 'saved.flac', title: 'Saved', durationSeconds: 120 };
+  const raw = JSON.stringify({ track, currentTime: 17, paused, playbackQueue: null });
+  const document = { readyState: 'loading', addEventListener() {}, querySelectorAll: () => [],
+    getElementById: id => id === 'capability-bootstrap' ? { textContent: JSON.stringify({ allowed_actions: actions }) } : null };
+  const context = loadHelper({ document,
+    window: { document, addEventListener: (name, callback) => events.set(name, callback) },
+    getLocalStorageItem: () => { effects.push('read'); return raw; },
+    canRestoreActivePlayback: () => { effects.push('ownership'); return true; },
+    startStreamingTrack: async (_track, options) => { effects.push(['stream', options.autoplay, options.startSeconds]); return { generation: 1, streamId: 1 }; },
+    setCurrentPlayerTrack: value => { effects.push('track'); context.state.player.current = value; },
+    updatePlayerUi: () => effects.push('render'),
+  });
+  if (actions !== undefined) vm.runInContext(fs.readFileSync(path.join(__dirname,
+    '../../../music_app/static/js/capability-ui.js'), 'utf8'), context);
+  context.persistPlayerState = () => effects.push('persist');
+  return { context, effects, events, track };
+}
+
+for (const paused of [true, false]) for (const actions of [{ 'library.media.read': false }, {}]) {
+  test(`denied saved ${paused ? 'paused' : 'playing'} track cannot restore state or claim ownership (${Object.keys(actions).length ? 'denied' : 'missing grant'})`, async () => {
+    const f = loadCapabilityPlayerRestore(actions, paused);
+    const before = JSON.stringify(f.context.state.player);
+    f.context.restorePlayerState();
+    f.events.get('pageshow')?.();
+    await new Promise(resolve => setImmediate(resolve));
+    assert.deepEqual(f.effects, []);
+    assert.equal(JSON.stringify(f.context.state.player), before);
+    assert.equal(f.events.has('pageshow'), false);
+  });
+}
+
+for (const paused of [true, false]) for (const actions of [{ 'library.media.read': true }, undefined]) {
+  test(`saved ${paused ? 'paused' : 'playing'} track retains existing restore timing (${actions ? 'granted' : 'legacy'})`, async () => {
+    const f = loadCapabilityPlayerRestore(actions, paused);
+    f.context.restorePlayerState();
+    assert.equal(f.events.has('pageshow'), !paused);
+    if (!paused) {
+      assert.equal(f.effects.some(effect => Array.isArray(effect) && effect[0] === 'stream'), false);
+      f.events.get('pageshow')();
+    }
+    await new Promise(resolve => setImmediate(resolve));
+    assert.deepEqual(f.effects.filter(Array.isArray), [['stream', !paused, 17]]);
+    assert.equal(f.effects.includes('ownership'), !paused);
+    assert.equal(f.context.state.player.current.path, f.track.path);
+    assert.equal(f.context.state.player.restoredFromStorage, true);
+    assert.equal(f.context.state.player.playbackQueue, null);
+  });
+}
+
+test('bootstrap attach cannot restore denied media before the later engine preparation guard', async () => {
+  const f = loadCapabilityPlayerRestore({ 'library.media.read': false }, false);
+  vm.runInContext(fs.readFileSync(path.join(__dirname,
+    '../../../music_app/static/js/runtime/player-loop-playback.js'), 'utf8'), f.context);
+  f.context.getPlayerElements = () => ({});
+  f.context.setCurrentPlayerTrack = value => { assert.equal(value, null); };
+  f.context.updatePlayerUi = () => {};
+  for (const name of ['restorePlayerAppearance', 'attachModalEvents', 'attachAccountMenu', 'attachCoverLookupModalEvents',
+    'attachCoverLookupDeleteConfirmEvents', 'attachUtilityModalEvents', 'attachRepairConfirmEvents']) f.context[name] = () => {};
+  const attach = f.context.attachPlayerEvents;
+  const order = [];
+  f.context.attachPlayerEvents = () => { order.push('attach'); attach(); };
+  f.context.initPlaybackOwnershipCoordinator = () => order.push('coordinator');
+  f.context.prepareStreamingPlaybackEngine = () => { assert.fail('denied media must not prepare the engine'); };
+  const bootstrap = fs.readFileSync(path.join(__dirname,
+    '../../../music_app/static/js/runtime/bootstrap-init.js'), 'utf8');
+  vm.runInContext(bootstrap.slice(0, bootstrap.indexOf('const bootstrapSearchParams')), f.context);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(order, ['attach', 'coordinator']);
+  assert.deepEqual(f.effects, []);
+  assert.equal(f.context.state.player.restoredFromStorage, false);
+});

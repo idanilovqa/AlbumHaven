@@ -125,9 +125,13 @@ test('tag editor selection render preserves live track buttons during a pointer 
   const paths = ['C:\\Music\\Album\\01.mp3', 'C:\\Music\\Album\\02.mp3'];
   const buttons = paths.map((path) => {
     const classes = new Set();
-    const attributes = { 'data-tag-editor-track': path };
+    const attributes = {
+      'data-tag-editor-track': path,
+    };
     const selectionAttributes = { 'aria-pressed': 'false' };
+    const selectionButton = { setAttribute(name, value) { selectionAttributes[name] = String(value); } };
     return {
+      selectionAttributes, selectionButton,
       classList: {
         toggle(name, enabled) {
           if (enabled) classes.add(name);
@@ -138,16 +142,13 @@ test('tag editor selection render preserves live track buttons during a pointer 
         return attributes[name] || '';
       },
       querySelector(selector) {
-        return selector === '.tag-editor-track-select'
-          ? { setAttribute(name, value) { selectionAttributes[name] = String(value); } }
-          : null;
+        return selector === '.tag-editor-track-select' ? selectionButton : null;
       },
       setAttribute(name, value) {
         attributes[name] = String(value);
       },
       classes,
       attributes,
-      selectionAttributes,
     };
   });
   const list = {

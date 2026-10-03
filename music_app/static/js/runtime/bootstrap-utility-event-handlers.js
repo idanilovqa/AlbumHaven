@@ -23,7 +23,8 @@ async function handleUtilityBootstrapClick(event) {
     openUtilityLogHistoryTab(selectedLogHistoryId);
     return;
   }
-  if (!event.target.closest('.utility-loop-speed-control')) {
+  if (!event.target.closest('.utility-loop-speed-control, .utility-loop-speed-menu, [data-loop-pitch-value-button]')) {
+    closeUtilityLoopSettingMenu(false);
     document.querySelectorAll('.utility-loop-speed-menu').forEach((menu) => {
       menu.hidden = true;
     });
@@ -44,6 +45,10 @@ async function handleUtilityBootstrapClick(event) {
   const utilitiesButton = event.target.closest('[data-open-utilities="1"]');
   if (utilitiesButton) {
     event.preventDefault();
+    // The general Settings entry starts at Appearance; explicit utility routes
+    // and browser-history restoration still choose their requested section.
+    if (typeof usesMobilePageLayout === 'function' && usesMobilePageLayout()
+        && setUtilityActiveTab('appearance') !== 'appearance') return;
     openUtilityModal();
     return;
   }
@@ -87,7 +92,7 @@ async function handleUtilityBootstrapClick(event) {
   if (utilityLogHistoryButton || logAction) {
     event.preventDefault();
     try {
-      if (utilityLogHistoryButton) await selectUtilityLogHistoryEvent(utilityLogHistoryButton.getAttribute('data-utility-log-history-id'));
+      if (utilityLogHistoryButton) { openMobileUtilityDetail(utilityLogHistoryButton.getAttribute('data-utility-log-history-id')); await selectUtilityLogHistoryEvent(utilityLogHistoryButton.getAttribute('data-utility-log-history-id')); }
       else await handleUtilityLogHistoryAction(logAction.getAttribute('data-log-history-action'));
     } catch (error) { showToast(error.message || 'Unable to load log history.', 'error', 3200); }
     return;
@@ -158,8 +163,12 @@ async function handleUtilityBootstrapClick(event) {
   if (problematicAlbumButton) {
     event.preventDefault();
     const selectedKey = problematicAlbumButton.getAttribute('data-problematic-album-key') || '';
+    openMobileUtilityDetail(selectedKey);
     if (state.utility.selectedProblematicKey === selectedKey && getSelectedProblematicAlbum()?.detail_loaded
-        && !state.utility.focusedTrackPath && state.utility.showRepairedDisplay) return;
+        && !state.utility.focusedTrackPath && state.utility.showRepairedDisplay) {
+      if (typeof usesMobilePageLayout === 'function' && usesMobilePageLayout()) renderUtilityModalContent();
+      return;
+    }
     state.utility.selectedProblematicKey = selectedKey;
     state.utility.focusedTrackPath = '';
     state.utility.proposalSelections = {};
@@ -277,6 +286,10 @@ async function handleUtilityBootstrapClick(event) {
   if (utilityLoopItemButton) {
     event.preventDefault();
     state.utility.loopSuppressClick = false;
+    if (typeof getMobileLoopPage === 'function' && getMobileLoopPage()) {
+      const loop = (state.utility.loops || []).find(item => String(item.id) === utilityLoopItemButton.getAttribute('data-utility-loop-id'));
+      if (loop) openMobileLoopSong(buildUtilityLoopGroupKey(loop));
+    }
     return;
   }
 
@@ -288,6 +301,7 @@ async function handleUtilityBootstrapClick(event) {
       return;
     }
     const groupKey = utilityLoopButton.getAttribute('data-utility-loop-group-key') || '';
+    if (typeof getMobileLoopPage === 'function' && getMobileLoopPage()) { openMobileLoopSong(groupKey); return; }
     const sameGroup = groupKey === String(state.utility.selectedLoopGroupKey || '');
     const now = Date.now();
     const isDoubleClickCandidate = String(state.utility.lastLoopGroupClickKey || '') === String(groupKey)
@@ -327,6 +341,10 @@ async function handleUtilityBootstrapClick(event) {
   if (utilityLoopSpeedValueButton) {
     event.preventDefault();
     const loopId = utilityLoopSpeedValueButton.getAttribute('data-loop-speed-value-button') || '';
+    if (typeof usesMobilePageLayout === 'function' && usesMobilePageLayout()) {
+      toggleUtilityLoopSettingMenu(loopId, 'speed', event.detail === 0);
+      return;
+    }
     const menu = document.querySelector(`[data-loop-speed-menu="${cssEscape(loopId)}"]`);
     if (menu) {
       updateUtilityLoopAudioRate(loopId);
@@ -364,11 +382,28 @@ async function handleUtilityBootstrapClick(event) {
     const loopId = menu?.getAttribute('data-loop-speed-menu') || '';
     const audio = document.querySelector(`[data-loop-audio="${cssEscape(loopId)}"]`);
     if (audio) {
-      const next = Math.max(0.25, Math.min(1.5, Math.round((Number(utilityLoopSpeedOptionButton.getAttribute('data-loop-speed-option') || 1) || 1) * 4) / 4));
+      const next = Math.max(0.25, Math.min(2, Math.round((Number(utilityLoopSpeedOptionButton.getAttribute('data-loop-speed-option') || 1) || 1) * 4) / 4));
       audio.dataset.speed = String(next);
       updateUtilityLoopAudioRate(loopId);
     }
     if (menu) menu.hidden = true;
+    closeUtilityLoopSettingMenu(true);
+    return;
+  }
+
+  const pitchTrigger = event.target.closest('[data-loop-pitch-value-button]');
+  if (pitchTrigger && typeof usesMobilePageLayout === 'function' && usesMobilePageLayout()) {
+    event.preventDefault();
+    toggleUtilityLoopSettingMenu(pitchTrigger.dataset.loopPitchValueButton, 'pitch', event.detail === 0);
+    return;
+  }
+  const pitchOption = event.target.closest('[data-loop-pitch-option]');
+  if (pitchOption) {
+    event.preventDefault();
+    const loopId = pitchOption.closest('[data-loop-pitch-menu]')?.dataset.loopPitchMenu;
+    const pitch = Number(pitchOption.dataset.loopPitchOption);
+    closeUtilityLoopSettingMenu(true);
+    if (loopId && Number.isInteger(pitch) && pitch >= -12 && pitch <= 12) void renderUtilityLoopPitchPreview(loopId, pitch);
     return;
   }
 
@@ -490,14 +525,7 @@ async function handleUtilityBootstrapClick(event) {
 
   const tagEditorOverlay = document.getElementById?.('tag-editor-modal');
   if (tagEditorOverlay && overlayClickStartedOnOverlay(tagEditorOverlay, event)) {
-    const changedUpdates = buildChangedTagEditorUpdates(
-      state.tagEditor.album,
-      state.tagEditor.tracks || [],
-      state.tagEditor.values || {},
-    );
-    if (!Object.keys(changedUpdates).length) {
-      closeTagEditor();
-    }
+    closeTagEditorFromBackdrop();
     return;
   }
 
@@ -1249,6 +1277,16 @@ function handleUtilityBootstrapKeyDown(event) {
   const filterInput = event.target?.matches?.('input, textarea, [contenteditable="true"]');
   if (state.utility.activeTab === 'problematic-files' && filterTarget && !filterInput) {
     const els = getUtilityModalElements();
+    // On mobile this component is a page, so modal Escape capture does not own it.
+    if (event.key === 'Escape' && state.utility.problemDropdownOpen) {
+      event.preventDefault();
+      event.stopPropagation?.();
+      if (event.repeat || event.isComposing) return true;
+      state.utility.problemDropdownOpen = false;
+      renderProblemFilterControls(els);
+      els.problemFilterButton.focus();
+      return true;
+    }
     if (['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key) && !els.problemFilterButton.disabled) {
       event.preventDefault();
       if (!state.utility.problemDropdownOpen) {

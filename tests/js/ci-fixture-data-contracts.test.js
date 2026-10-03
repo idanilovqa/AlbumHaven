@@ -4,7 +4,6 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { execFileSync } = require('node:child_process');
 const test = require('node:test');
-const { discoverComponentCases } = require('../../scripts/ci/validate-foundation-gates.cjs');
 
 const repoRoot = path.resolve(__dirname, '..', '..');
 const ciContractRoot = path.join(repoRoot, 'tests', 'ci');
@@ -23,6 +22,8 @@ const fixtureProfiles = [
 ];
 
 const configuredPlaywrightSurfaces = [
+  'playwright.mobile-layout.config.js',
+  'playwright.mobile-feedback.config.js',
   'playwright.config.js',
   'playwright.autoplay-allowed.config.js',
   'playwright.component.config.js',
@@ -37,6 +38,12 @@ const configuredPlaywrightSurfaces = [
 
 function readJson(filePath) {
   return JSON.parse(fs.readFileSync(filePath, 'utf8'));
+}
+
+let discoveredInventory;
+function discoverInventory() {
+  if (!discoveredInventory) discoveredInventory = JSON.parse(execFileSync(process.execPath, [inventoryCommandPath, '--json'], { cwd: repoRoot, encoding: 'utf8' }));
+  return discoveredInventory;
 }
 
 function caseIdentity(entry) {
@@ -64,7 +71,7 @@ function validateTestDataMatrix(matrix, options = {}) {
     }
     if (
       typeof entry.project !== 'string'
-      || (entry.project.trim() === '' && entry.config !== 'playwright.component.config.js')
+      || (entry.project.trim() === '' && !['playwright.component.config.js', 'playwright.mobile-layout.config.js', 'playwright.mobile-feedback.config.js'].includes(entry.config))
     ) {
       errors.push(`${location} must declare project`);
     }
@@ -351,25 +358,34 @@ test('fixture manifest schema pins v1 and all five fixture profiles', () => {
 
 test('approved test-data matrix records every discovered case', () => {
   const matrix = readJson(testDataMatrixPath);
-  const componentCases = new Set(discoverComponentCases(repoRoot).map((line) => {
-    const match = line.trim().match(/^([^:]+):\d+:\d+\s+›\s+(.+)$/u);
-    assert.ok(match, `Unexpected component discovery line: ${line}`);
-    return caseIdentity({
-      config: 'playwright.component.config.js',
-      project: '',
-      test: `tests/components/${match[1]}`,
-      case: match[2],
-    });
-  }));
+  const inventory = discoverInventory();
+  const allCases = new Set(inventory.caseIdentities.map(caseIdentity));
   const errors = validateTestDataMatrix(matrix, {
     expectedConfigs: configuredPlaywrightSurfaces,
-    expectedCases: componentCases,
+    expectedCases: allCases,
   });
 
   assert.deepEqual(errors, []);
-  assert.equal(matrix.length, 332);
-  assert.equal(new Set(matrix.map(caseIdentity)).size, 332);
+  assert.equal(matrix.length, inventory.categories.total);
+  assert.deepEqual([...new Set(matrix.map(caseIdentity))].sort(), [...allCases].sort());
+  assert.equal(new Set(matrix.map(caseIdentity)).size, inventory.categories.total);
   assert.equal(matrix.every((entry) => entry.ownerApproval === 'approved'), true);
+});
+
+test('nested functional cases share the native leaf identity across inventory and ownership', () => {
+  const title = 'FTC-ALBUM-DETAILS-022 touch artwork controls open full cover and Cover Lookup without hover';
+  const matches = discoverInventory().caseIdentities.filter(entry => entry.case.includes('FTC-ALBUM-DETAILS-022'));
+  assert.equal(matches.length, 1);
+  assert.equal(matches[0].case, title);
+  const matrixMatches = readJson(testDataMatrixPath).filter(entry => entry.case.includes('FTC-ALBUM-DETAILS-022'));
+  assert.equal(matrixMatches.length, 1);
+  assert.equal(caseIdentity(matrixMatches[0]), caseIdentity(matches[0]));
+  const validator = require('../../scripts/ci/validate-functional-shards.cjs');
+  const selection = validator.selectFunctionalCases(readJson(functionalShardsPath), {
+    exactCases: ['FTC-ALBUM-DETAILS-022'],
+  });
+  assert.equal(selection.selectedCases.length, 1);
+  assert.equal(caseIdentity(selection.selectedCases[0]), caseIdentity(matches[0]));
 });
 
 test('problematic-files cases exclusively use the dedicated fixture surface while Rules stays synthetic-large', () => {
@@ -444,13 +460,16 @@ test('matrix validation rejects omitted special Playwright configurations', () =
   );
 });
 
-test('matrix validation permits an implicit empty project only for component cases', () => {
+test('matrix validation permits an implicit empty project only for the exact unnamed configurations', () => {
   const componentEntry = validEntry({
     config: 'playwright.component.config.js',
     project: '',
     profile: null,
   });
   assert.deepEqual(validateTestDataMatrix([componentEntry]), []);
+  for (const config of ['playwright.mobile-layout.config.js', 'playwright.mobile-feedback.config.js']) {
+    assert.deepEqual(validateTestDataMatrix([{ ...componentEntry, config }]), []);
+  }
 
   const errors = validateTestDataMatrix([validEntry({ project: '' })]);
   assert.equal(errors.includes('entry 0 must declare project'), true);
@@ -488,7 +507,7 @@ test('matrix validation rejects mutation assigned to shared or duplicate data', 
   assert.equal(errors.includes('duplicate mutation ownership: album:mutable-example::media/mutable-example'), true);
 });
 
-test('functional shard contract owns all 120 browser-functional cases exactly once', () => {
+test('functional shard contract owns all 121 browser-functional cases exactly once', () => {
   const matrix = readJson(testDataMatrixPath);
   const expectedCases = new Set(
     matrix
@@ -504,7 +523,7 @@ test('functional shard contract owns all 120 browser-functional cases exactly on
   const contract = readJson(functionalShardsPath);
   const errors = validateFunctionalShards(contract, expectedCases);
 
-  assert.equal(expectedCases.size, 120);
+  assert.equal(expectedCases.size, 121);
   assert.deepEqual(errors, []);
   assert.equal(contract.shards.length, 4);
   assert.equal(contract.shards.every((shard) => shard.invocations.length > 0), true);
@@ -631,6 +650,10 @@ test('tracked E2E fixture sources contain only approved images and intentional p
   const fixtureRoot = path.join(repoRoot, 'tests', 'e2e', 'fixtures');
   const approvedImages = new Map();
   const intentionalDataFiles = new Map([
+    ['tests/e2e/fixtures/mobileFeedbackTest.js', [
+      'tests/e2e/mobile-feedback/appearanceRecovery.spec.js',
+      'tests/e2e/mobile-feedback/mobileHeaderRegression.spec.js',
+    ]],
     ['tests/e2e/fixtures/idleMemoryBudget.json', [
       'tests/e2e/performance/idleMemory.spec.js',
       'tests/e2e/support/isolatedLibraryApp.py',
@@ -700,22 +723,19 @@ test('idle-memory fixture uses the owner-approved shared local and CI limits', (
 });
 
 test('read-only inventory command reports complete discovery and ownership totals', () => {
-  const output = execFileSync(process.execPath, [inventoryCommandPath, '--json'], {
-    cwd: repoRoot,
-    encoding: 'utf8',
-  });
-  const inventory = JSON.parse(output);
+  const inventory = discoverInventory();
 
-  assert.equal(inventory.configuredSurfaces, 10);
+  assert.equal(inventory.configuredSurfaces, 12);
   assert.deepEqual(inventory.categories, {
-    browserFunctional: 120,
-    component: 184,
+    browserFunctional: 121,
+    component: 189,
+    mobile: 74,
     performance: 28,
-    total: 332,
+    total: 412,
   });
   assert.deepEqual(inventory.ownership, {
-    testDataMatrix: 332,
-    functionalShards: 120,
+    testDataMatrix: 412,
+    functionalShards: 121,
     performanceTargets: 28,
   });
 });

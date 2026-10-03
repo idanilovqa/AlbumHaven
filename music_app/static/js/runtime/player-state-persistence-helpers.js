@@ -217,6 +217,8 @@ function persistPlayerStateForUnload(reason) {
 }
 
 function restorePlayerState() {
+  if (typeof window !== 'undefined' && window.AlbumHavenCapabilities
+    && !window.AlbumHavenCapabilities.allows('library.media.read')) return;
   if (state.player.restoredFromStorage) return;
   state.player.restoredFromStorage = true;
   const raw = getLocalStorageItem(PLAYER_STATE_STORAGE_KEY);

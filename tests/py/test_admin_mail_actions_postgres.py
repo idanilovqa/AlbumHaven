@@ -153,7 +153,7 @@ def test_welcome_resend_remains_bootstrap_owner_only_for_managed_accounts():
     assert result.accepted is True
     assert result.welcome_outbox_id is None
     authority_sql = next(
-        sql for sql, _ in connection.operations if "with locked_accounts" in sql
+        sql for sql, _ in connection.operations if "target.account_kind as target_account_kind" in sql
     )
     assert "account_kind" in authority_sql
     assert not any(
@@ -188,26 +188,21 @@ def test_admin_password_reset_returns_only_a_redacted_internal_delivery():
     assert any("password_reset_queued" in sql for sql in statements)
 
 
-def test_mail_actions_reject_stale_authentication_before_database_work():
-    from music_app.services.admin_member_mutation_postgres import (
-        RecentAuthenticationRequired,
-    )
-
+def test_mail_actions_accept_older_authentication_after_validating_locked_session():
     connection = Connection()
-    try:
-        _service(connection).queue_welcome(
-            actor_account_id=7,
-            actor_session_id=11,
-            actor_authenticated_at=NOW - timedelta(minutes=11),
-            library_id=9,
-            target_account_id=41,
-            request_ref="welcome-resend-3",
-        )
-    except RecentAuthenticationRequired:
-        pass
-    else:
-        raise AssertionError("stale administrator authentication must fail")
-    assert connection.operations == []
+    result = _service(connection).queue_welcome(
+        actor_account_id=7,
+        actor_session_id=11,
+        actor_authenticated_at=NOW - timedelta(minutes=11),
+        library_id=9,
+        target_account_id=41,
+        request_ref="welcome-resend-3",
+    )
+    assert result.accepted is True
+    assert result.welcome_outbox_id == 71
+    assert any("from app.account_sessions" in sql and "for update" in sql
+               for sql, _ in connection.operations)
+    assert connection.events == ["begin", "commit"]
 
 
 def test_inactive_target_has_ambiguous_success_without_issuing_mail_or_token():

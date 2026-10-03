@@ -49,7 +49,7 @@ test('framed tables use a contrasting shade derived from the active theme', () =
   }
   assert.match(
     albumTrackTableCss,
-    /\.album-track-table \.compact-data-table,\s*[^\{]+\{[^}]*background:\s*var\(--appearance-table-surface,/s,
+    /\.album-track-table \.compact-data-table,\s*:root\[data-appearance-mode=\x27light\x27\] :is\(\.utility-detected-table, \.utility-track-problem-table\) \.compact-data-table\s*\{[^}]*background:\s*var\(--appearance-table-surface,/s,
   );
 });
 

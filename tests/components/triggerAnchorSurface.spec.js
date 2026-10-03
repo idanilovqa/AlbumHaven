@@ -3,6 +3,7 @@ const path = require('path');
 const fs = require('node:fs');
 const { renderActionButton } = require('../../music_app/static/js/button-component.js');
 const { applyFixtureAppearance } = require('./appearanceFixture.js');
+const { assertMobileRowMenuContinuity } = require('./triggerAnchorSeamFixture.js');
 
 const repositoryRoot = path.resolve(__dirname, '../..');
 const componentUrl = 'http://trigger-anchor-surface.test/';
@@ -56,7 +57,7 @@ async function mountVisualAnchor(page, name) {
   }
 }
 
-test('open anchors resynchronize after native nested scroll and resize, then clear geometry on close and reopen', async ({ page }) => {
+ test('open anchors resynchronize after native nested scroll and resize, then clear geometry on close and reopen', async ({ page }) => {
   await page.setViewportSize({ width: 900, height: 700 });
   await page.setContent(`<!doctype html><html><body>
     <div id="scroll-owner" class="shell-main-surface"><div id="scroll-content">
@@ -137,6 +138,7 @@ test('open anchors resynchronize after native nested scroll and resize, then cle
 });
 
 test('Artist Family opening keeps its top shadow clip stationary', async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 800 });
   await page.setContent(`<style>
     :root { --panel: white; --border: #526173; --player-height: 0px; }
     #anchor { position: fixed; right: 12px; top: 30px; width: 34px; height: 34px; }
@@ -187,9 +189,26 @@ test('Artist Family opening keeps its top shadow clip stationary', async ({ page
   for (let index = 1; index < samples.length; index += 1) {
     expect(samples[index].clipBottom).toBeLessThan(samples[index - 1].clipBottom);
   }
+
+  // The phone drawer deliberately leaves room for its joined edge and shadow.
+  // Exercise both sides of the breakpoint without replacing the desktop fold.
+  await page.locator('aside').evaluate(panel => {
+    for (const animation of panel.getAnimations()) animation.finish();
+  });
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expect(page.locator('aside')).toHaveCSS('clip-path', 'inset(0px -80px -80px)');
+  const seam = await page.locator('aside').evaluate(panel => {
+    const style = getComputedStyle(panel, '::after');
+    return { top: style.top, height: style.height, width: style.getPropertyValue('--trigger-top-line-width').trim() };
+  });
+  expect(seam).toEqual({ top: '-1px', height: '2px', width: '2px' });
+  await page.setViewportSize({ width: 901, height: 844 });
+  await expect(page.locator('aside')).toHaveCSS('clip-path', 'inset(-1px 0px 0px)');
+  await page.setViewportSize({ width: 900, height: 844 });
+  await expect(page.locator('aside')).toHaveCSS('clip-path', 'inset(0px -80px -80px)');
 });
 
-test('a dropdown extending both sides has mirrored left and right joins', async ({ page }) => {
+ test('a dropdown extending both sides has mirrored left and right joins', async ({ page, browser }) => {
   await page.setContent(`<style>
     :root { --panel: white; --border: black; --appearance-selected-accent: black; }
     #anchor { position:absolute;left:153px;top:40px;width:34px;height:34px; }
@@ -219,6 +238,7 @@ test('a dropdown extending both sides has mirrored left and right joins', async 
     return { left, right };
   }, screenshot.toString('base64'));
   expect(corners.right).toEqual(corners.left);
+  await assertMobileRowMenuContinuity(browser);
 });
 
 const cases = [
@@ -274,9 +294,11 @@ for (const [name, anchorClass, surfaceClass, context] of cases) {
     ]) {
       await page.addStyleTag({ path: path.join(repositoryRoot, 'music_app/static/css', stylesheet) });
     }
+    // Fixed fixture coordinates model a real gap; shell padding must not shift
+    // the trigger down into the panel's visible text.
     await page.addStyleTag({ content: `
       body { margin: 0; }
-      .anchor-host { position: fixed; left: 40px; top: 20px; }
+      .anchor-host { position: fixed; left: 40px; top: 20px; padding: 0; width: auto; height: auto; }
       #anchor { width: 72px; height: 34px; }
       #surface { position: fixed; left: 40px; right: auto; top: 60px; width: 220px; min-height: 80px; }
     ` });
@@ -292,6 +314,7 @@ for (const [name, anchorClass, surfaceClass, context] of cases) {
       const surfaceElement = document.getElementById('surface');
       const surface = getComputedStyle(surfaceElement);
       return {
+        gap: surfaceElement.getBoundingClientRect().top - document.getElementById('anchor').getBoundingClientRect().bottom,
         anchorBackgroundImage: anchor.backgroundImage,
         anchorSurface: anchor.getPropertyValue('--trigger-anchor-background').trim(),
         bottomBorder: anchor.borderBottomWidth,
@@ -302,6 +325,7 @@ for (const [name, anchorClass, surfaceClass, context] of cases) {
       };
     });
 
+    expect(styles.gap).toBeGreaterThan(0);
     expect(styles.anchorSurface).toBe(styles.panelSurface);
     expect(styles.anchorBackgroundImage).toContain(styles.panelSurface);
     expect(styles.bottomBorder).toBe('0px');
@@ -348,3 +372,17 @@ for (const [name, anchorClass, surfaceClass, context] of cases) {
     expect(styles.panelClipPath).toBe('inset(0px -80px -80px)');
   });
 }
+
+test('nested calendar dates remain clickable beyond the parent panel clipping boundary', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await mountVisualAnchor(page, 'Log History Period');
+  await page.evaluate(() => mountDateRangePicker(document.getElementById('date-content')));
+  await page.getByRole('button', { name: 'Choose to date', exact: true }).click();
+  const calendar = page.getByRole('dialog', { name: 'Choose to date', exact: true });
+  await calendar.getByRole('button', { name: 'Next month', exact: true }).click();
+  await calendar.getByRole('button', { name: 'Previous month', exact: true }).click();
+  await calendar.locator('[data-calendar-date="2026-09-28"]').click();
+  await expect(page.getByRole('textbox', { name: 'To date', exact: true })).toHaveValue('2026-09-28');
+  await expect(calendar).toHaveCount(0);
+  await expect(page.locator('#surface')).toHaveCSS('clip-path', 'inset(0px -80px -80px)');
+});

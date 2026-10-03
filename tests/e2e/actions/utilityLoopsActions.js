@@ -403,7 +403,10 @@ export class UtilityLoopsActions {
       .toHaveAttribute('data-loop-action-engaged', 'true');
     const style = await entryCard.controlStyleForEntry(entry).getAttribute('data-loop-control-style');
     const editing = await entryCard.loopActionForEntry(entry).getAttribute('data-loop-action-state') === 'editing';
-    await expect(entryCard.loopPodForEntry(entry)).toHaveCSS('width', `${style === 'companion' ? (editing ? 88 : 58) : (editing ? 65 : 34)}px`);
+    const expectedWidth = style === 'companion' ? (editing ? 88 : 58) : (editing ? 65 : 34);
+    // One CSS layout quantum, accounting for the saved-loop 0.8 scale.
+    await expect.poll(async () => Math.abs((await entryCard.readLoopPodWidth(entry)) - expectedWidth))
+      .toBeLessThanOrEqual(1 / (64 * 0.8));
     return entryCard.readLoopActionVisualSnapshot(entry);
   }
 

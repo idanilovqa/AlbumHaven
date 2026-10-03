@@ -1,5 +1,6 @@
 const { test, expect } = require('@playwright/test');
 const path = require('path');
+const { applyFixtureAppearance } = require('./appearanceFixture.js');
 
 const repositoryRoot = path.resolve(__dirname, '../..');
 const componentUrl = 'http://gallery-bar-alignment.test/';
@@ -41,7 +42,7 @@ for (const mode of ['light', 'dark']) {
     await page.route(componentUrl, route => route.fulfill({
       contentType: 'text/html; charset=utf-8',
       body: `<!doctype html>
-        <html data-appearance-mode="${mode}" style="
+        <html data-appearance-mode="${mode}" data-appearance-palette="custom" style="
           --appearance-main-surface: rgb(100, 120, 140);
           --appearance-item-action-hover-background: rgb(20, 30, 40);
           --appearance-item-action-hover-border: rgb(60, 70, 80);
@@ -56,12 +57,15 @@ for (const mode of ['light', 'dark']) {
                 <button id="choice" class="gallery-view-choice" type="button">View</button>
               </div>
             </div>
+            <button id="ordinary-action" type="button">Other action</button>
             <div id="light-expected" style="background: color-mix(in srgb, rgb(100, 120, 140) 85%, white 15%)"></div>
           </body>
         </html>`,
     }));
     await page.goto(componentUrl);
     await page.addStyleTag({ path: path.join(repositoryRoot, 'music_app/static/css/gallery-main.css') });
+    await page.addStyleTag({ path: path.join(repositoryRoot, 'music_app/static/css/appearance-backgrounds.css') });
+    await page.addStyleTag({ path: path.join(repositoryRoot, 'music_app/static/css/button-component.css') });
 
     await page.locator('#action').hover();
     const action = await page.locator('#action').evaluate(element => {
@@ -81,5 +85,28 @@ for (const mode of ['light', 'dark']) {
     expect(cluster).toBe(mode === 'light' ? expectedLight : 'rgb(20, 30, 40)');
     expect(choice.background).toBe(mode === 'light' ? expectedLight : 'rgb(100, 120, 140)');
     expect(choice.color).toBe('rgb(0, 160, 80)');
+
+    await page.locator('#ordinary-action').hover();
+    await expect(page.locator('#ordinary-action')).toHaveCSS('background-color', 'rgb(20, 30, 40)');
+    await expect(page.locator('#ordinary-action')).toHaveCSS('border-color', 'rgb(60, 70, 80)');
+
+    // A saved explicit outline remains authoritative over the automatic neutral edge.
+    await applyFixtureAppearance(page, {
+      palette_id: mode === 'light' ? 'paper' : 'steelblue', panel_index: 0,
+      selection_accent: { enabled: true, color: '#A1B2C3' },
+      interaction_overrides: {
+        item_hover: null, item_selected: null, button_hover_background: '#27384B',
+        button_pressed: '#203246', item_outline: { source: 'custom', color: '#86B7EF' },
+      },
+    });
+    await page.locator('#action').hover();
+    await expect(page.locator('#action')).toHaveCSS('border-color', 'rgb(134, 183, 239)');
+    await page.locator('#ordinary-action').hover();
+    await expect(page.locator('#ordinary-action')).toHaveCSS('border-color', 'rgb(134, 183, 239)');
+    await page.locator('#action').focus();
+    await page.keyboard.press('Tab');
+    await page.keyboard.press('Shift+Tab');
+    await expect(page.locator('#action')).toBeFocused();
+    await expect(page.locator('#action')).toHaveCSS('outline-color', 'rgb(134, 183, 239)');
   });
 }

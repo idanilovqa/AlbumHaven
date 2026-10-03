@@ -587,3 +587,29 @@ test('compact metadata row motion ignores rounding and scales with real overflow
     scrollWidth: 200, clientWidth: 100,
   })), { overflowing: true, distance: 100, durationMs: 4200 });
 });
+
+for (const enabled of [true, false]) {
+  test(`compact mode reload uses the same ${enabled ? 'device' : 'browser'} preference owner as writes`, t => {
+    const browserValues = new Map(), deviceValues = new Map();
+    const storage = values => ({ getItem: key => values.get(key) || null, setItem: (key, value) => values.set(key, value) });
+    const mount = () => {
+      const { context, controls } = loadQueueController(t);
+      const element = () => ({ dataset: {}, hidden: false, style: { setProperty() {} }, classList: { toggle() {}, add() {}, remove() {} }, setAttribute() {}, addEventListener() {}, querySelector() { return null; } });
+      Object.assign(controls, { player: element(), expanded: element(), compact: element(), collapse: element(), expand: element() });
+      controls.previous.addEventListener = controls.next.addEventListener = () => {};
+      context.document = { documentElement: { ...element(), getAttribute: () => 'docked' }, getElementById: () => null };
+      context.window = { setTimeout, clearTimeout, innerWidth: 1200, innerHeight: 800,
+        localStorage: storage(browserValues), AlbumHavenDevicePreferences: { ...storage(deviceValues), enabled }, addEventListener() {} };
+      context.initCompactPlayer();
+      return { context, controls };
+    };
+    const first = mount();
+    first.context.applyCompactPlayerMode('compact');
+    assert.deepEqual([... (enabled ? browserValues : deviceValues)], [], 'the other preference store must remain untouched');
+    assert.equal((enabled ? deviceValues : browserValues).size, 1);
+    const reloaded = mount();
+    assert.equal(reloaded.controls.expanded.inert, true, 'fresh initialization restores the saved compact mode');
+    reloaded.context.applyCompactPlayerMode('expanded');
+    assert.equal(mount().controls.expanded.inert, false);
+  });
+}

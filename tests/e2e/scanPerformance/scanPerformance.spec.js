@@ -745,10 +745,8 @@ test.describe('isolated scan performance benchmarks', () => {
           await scanPageActions.clickBrowseScannedLibrary();
         },
         async () => {
-          await waitForScanDrivenGalleryReady({
-            galleryActions,
-            navigationPanelActions,
-          });
+          await galleryActions.galleryPage.albumCards.first().waitFor({ state: 'visible', timeout: 60000 });
+          await galleryActions.waitForVisibleGalleryCoversLoaded({ minimumCount: 6, timeout: 60000 });
           await scanPageActions.waitForDedicatedPageHidden({ timeout: 60000 });
           await galleryActions.waitForGalleryScrollAtStart({ timeout: 10000 });
         },
@@ -775,7 +773,10 @@ test.describe('isolated scan performance benchmarks', () => {
       STRICT_ONE_SECOND_BUDGET,
       'Cached regular-scan Browse to stable top gallery',
     ));
-    expect(await navigationPanelActions.readAllArtistsVisibleCount()).toBe(SCAN_FIXTURE.artistCount);
+    await stepLogger.step('Open Artist Tree separately and verify the complete cached sidebar', async () => {
+      await navigationPanelActions.setArtistTreeFolded(false);
+      expect(await navigationPanelActions.readAllArtistsVisibleCount()).toBe(SCAN_FIXTURE.artistCount);
+    });
 
     await stepLogger.step('Keep the busy scan indicator left click inert with no refresh request or restart message', async () => {
       const repeatedScan = await appBarActions.triggerBusyIncrementalScanAndExpectInert();

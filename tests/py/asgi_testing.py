@@ -162,12 +162,14 @@ async def run_asgi_request_async(
     headers: dict[str, str] | None = None,
     json_body: Any = None,
     body: bytes = b"",
+    client_host: str = "testclient",
+    server_host: str = "testserver",
 ) -> tuple[int, dict[str, str], bytes]:
     if hasattr(getattr(app, "state", None), "runtime_asset_version"):
         configure_test_bootstrap_actor(app)
     query_string = urlencode(query or {}, doseq=True).encode("ascii")
     request_body = body
-    request_headers = [(b"host", b"testserver")]
+    request_headers = [(b"host", server_host.encode("ascii"))]
     for key, value in (headers or {}).items():
         request_headers.append((key.lower().encode("latin1"), value.encode("latin1")))
     if hasattr(getattr(app, "state", None), "runtime_asset_version"):
@@ -187,7 +189,7 @@ async def run_asgi_request_async(
                 )
             )
         if method.upper() not in {"GET", "HEAD", "OPTIONS"} and b"origin" not in present:
-            request_headers.append((b"origin", b"http://testserver"))
+            request_headers.append((b"origin", f"http://{server_host}".encode("ascii")))
         if method.upper() not in {"GET", "HEAD", "OPTIONS"} and b"x-album-haven-csrf" not in present:
             request_headers.append((b"x-album-haven-csrf", csrf.encode("ascii")))
     if json_body is not None:
@@ -221,8 +223,8 @@ async def run_asgi_request_async(
             "raw_path": path.encode("ascii"),
             "query_string": query_string,
             "headers": request_headers,
-            "client": ("testclient", 50000),
-            "server": ("testserver", 80),
+            "client": (client_host, 50000),
+            "server": (server_host, 80),
         },
         receive,
         send,

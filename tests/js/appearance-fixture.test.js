@@ -97,6 +97,7 @@ function loadAlbumDetailsSpec(withRestoredAppearanceFixture) {
   const register = (title, _options, callback) => cases.set(title, callback);
   register.setTimeout = () => {};
   register.describe = (_title, callback) => callback();
+  register.describe.configure = () => {};
   register.use = () => {};
   const context = { test: register, base: { extend(values) { Object.assign(fixtures, values); return register; } },
     expect() {}, PERFORMANCE_AUTH_USERNAME: 'authenticated-fixture', withRestoredAppearanceFixture };

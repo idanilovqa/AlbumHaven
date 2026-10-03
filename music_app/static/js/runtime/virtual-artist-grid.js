@@ -1003,8 +1003,17 @@ class VirtualArtistGrid {
         : targetCardTrackWidth;
     }
     const displayMode = resolveGalleryRendererMode(state?.gallery?.mainState?.view || state?.view?.gallery_display_mode);
+    const mobileGeometry = window.AlbumHavenClientLayout?.resolveMobileGalleryGeometry({
+      viewportWidth: window.innerWidth, availableWidth: width, mode: displayMode,
+      columns: window.AlbumHavenDevicePreferences?.read('mobileGridColumns', 3), gap: this.columnGap,
+    });
+    if (mobileGeometry) {
+      this.columns = mobileGeometry.columns;
+      this.cardTrackWidth = mobileGeometry.cardTrackWidth;
+    }
     const rowGeometryKey = `${displayMode}:${this.columns}:${this.cardTrackWidth}`;
-    const estimatedRowHeight = displayMode === 'covers' ? this.cardTrackWidth : this.collapsedRowHeight;
+    const estimatedRowHeight = mobileGeometry?.estimatedRowHeight
+      || (displayMode === 'covers' ? this.cardTrackWidth : this.collapsedRowHeight);
     let offsetTop = 0;
     this.sectionByKey = new Map();
     this.sections.forEach((section) => {
@@ -1344,6 +1353,7 @@ class VirtualArtistGrid {
   }
 
   activateGalleryCoverImages(rootEl = this.containerEl) {
+    if (typeof syncGalleryCardMetadataMotion === 'function') syncGalleryCardMetadataMotion(rootEl);
     if (!rootEl || typeof rootEl.querySelectorAll !== 'function') return;
     rootEl.querySelectorAll('img[data-gallery-cover-src]').forEach((image) => {
       if (!(image instanceof HTMLImageElement)) return;
@@ -2087,6 +2097,8 @@ function getGalleryModeRenderer(mode) {
 }
 
 function renderArtistGroups(options = {}) {
+  // Home hides the gallery; restore its visibility before measuring virtual rows.
+  if (typeof syncMobileHome === 'function') syncMobileHome();
   const model = getFilteredGalleryMainModel();
   const modeConfig = getGalleryModeConfig(state.gallery.mainState.view);
   const renderOptions = {

@@ -1,15 +1,48 @@
 [
   {
+    "config": "playwright.config.js",
+    "project": "functional",
+    "test": "tests/e2e/specs/artistTreePersistence.spec.js",
+    "case": "FTC-ARTIST-TREE-002 preserves collapsed and expanded preferences after reload",
+    "profile": "functional-core",
+    "setupScope": "isolated",
+    "stateMode": "owned-mutation",
+    "executionWave": 2,
+    "databaseScenarios": [
+      "account-layout:artist-tree-persistence"
+    ],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "artist-tree-expanded-test-baseline",
+      "artist-tree-collapsed-reload-persistence",
+      "artist-tree-expanded-reload-persistence",
+      "account-preference-save-completion"
+    ],
+    "mutationOwnership": {
+      "databaseIdentity": "case:artist-tree-persistence",
+      "filesystemCopy": "media/cases/artist-tree-persistence"
+    },
+    "ownerApproval": "approved"
+  },
+  {
     "config": "playwright.scan-performance.config.cjs",
     "project": "scan-performance",
     "test": "tests/e2e/scanPerformance/scanPerformance.spec.js",
-    "case": "isolated scan performance benchmarks › FTC-OPS-003G failed scan publication retains the library and recovers after permissions return",
+    "case": "isolated scan performance benchmarks \u203a FTC-OPS-003G failed scan publication retains the library and recovers after permissions return",
     "profile": "scan-library",
     "setupScope": "isolated",
     "stateMode": "global-mutation",
-    "databaseScenarios": ["scan:publication-permission-failure"],
-    "filesystemScenarios": ["media-copy:scan-error"],
-    "expectedContracts": ["failed-publication-retains-library", "durable-terminal-error", "native-full-scan-recovery"],
+    "databaseScenarios": [
+      "scan:publication-permission-failure"
+    ],
+    "filesystemScenarios": [
+      "media-copy:scan-error"
+    ],
+    "expectedContracts": [
+      "failed-publication-retains-library",
+      "durable-terminal-error",
+      "native-full-scan-recovery"
+    ],
     "globalMutationReason": "Revokes only the unique runtime role INSERT privilege on local_track_files inside its owned database, restoring it in finally before recovery.",
     "ownerApproval": "approved"
   },
@@ -2431,8 +2464,8 @@
     "test": "tests/e2e/syntheticLargeLibrary/artistFamilyResponsiveness.spec.js",
     "case": "FTC-SEARCH-NAV-005A synthetic-large artist family responsiveness \u203a Neal Morse scrolling keeps each displayed artist heading unique before and after filtering",
     "profile": "synthetic-large-library",
-    "setupScope": "suite",
-    "stateMode": "read-only",
+    "setupScope": "isolated",
+    "stateMode": "global-mutation",
     "databaseScenarios": [
       "large-library:neal-morse-heading-uniqueness"
     ],
@@ -2440,9 +2473,11 @@
       "media:synthetic-large-library"
     ],
     "expectedContracts": [
-      "unique-artist-headings-before-after-filter"
+      "unique-artist-headings-before-after-filter",
+      "failure-safe-account-layout-preference-restoration"
     ],
-    "ownerApproval": "approved"
+    "ownerApproval": "approved",
+    "globalMutationReason": "The serialized synthetic-large invocation shares read-only media. This case captures its authenticated account layout profiles before mutations, records only its successful preference-field writes, waits for server-backed saves, and restores those fields in fixture teardown even after failure; session/account changes and overlapping writes are rejected."
   },
   {
     "config": "playwright.synthetic-large-library.config.cjs",
@@ -2450,8 +2485,8 @@
     "test": "tests/e2e/syntheticLargeLibrary/artistFamilyResponsiveness.spec.js",
     "case": "FTC-SEARCH-NAV-005A synthetic-large artist family responsiveness \u203a Neal Morse family search, filters, details, settings, and clear-search flows stay responsive on synthetic data",
     "profile": "synthetic-large-library",
-    "setupScope": "suite",
-    "stateMode": "read-only",
+    "setupScope": "isolated",
+    "stateMode": "global-mutation",
     "databaseScenarios": [
       "large-library:neal-morse-full-flow"
     ],
@@ -2459,9 +2494,11 @@
       "media:synthetic-large-library"
     ],
     "expectedContracts": [
-      "neal-morse-flow-responsiveness"
+      "neal-morse-flow-responsiveness",
+      "failure-safe-account-layout-preference-restoration"
     ],
-    "ownerApproval": "approved"
+    "ownerApproval": "approved",
+    "globalMutationReason": "The serialized synthetic-large invocation shares read-only media. This case captures its authenticated account layout profiles before mutations, records only its successful preference-field writes, waits for server-backed saves, and restores those fields in fixture teardown even after failure; session/account changes and overlapping writes are rejected."
   },
   {
     "config": "playwright.synthetic-large-library.config.cjs",
@@ -2846,7 +2883,7 @@
     "config": "playwright.scan-performance.config.cjs",
     "project": "scan-performance",
     "test": "tests/e2e/scanPerformance/scanPerformance.spec.js",
-      "case": "isolated scan performance benchmarks \u203a FTC-OPS-003E dedicated Scan Page cancels regular and full scans",
+    "case": "isolated scan performance benchmarks \u203a FTC-OPS-003E dedicated Scan Page cancels regular and full scans",
     "profile": "scan-library",
     "setupScope": "isolated",
     "stateMode": "global-mutation",
@@ -2860,26 +2897,34 @@
       "regular-scan-cancellation",
       "full-scan-cancellation"
     ],
-      "globalMutationReason": "Cancels the process-global scan worker in both regular and full modes.",
-      "ownerApproval": "approved"
+    "globalMutationReason": "Cancels the process-global scan worker in both regular and full modes.",
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.scan-performance.config.cjs",
+    "project": "scan-performance",
+    "test": "tests/e2e/scanPerformance/scanPerformance.spec.js",
+    "case": "isolated scan performance benchmarks \u203a FTC-OPS-003F acknowledges a naturally unavailable library root without hiding recovery status",
+    "profile": "scan-library",
+    "setupScope": "isolated",
+    "stateMode": "owned-mutation",
+    "databaseScenarios": [
+      "scan:unavailable-root-health"
+    ],
+    "filesystemScenarios": [
+      "media-copy:scan-health",
+      "prestart:remove-owned-empty-root"
+    ],
+    "expectedContracts": [
+      "warning-acknowledgment-preserves-recovery",
+      "status-gallerybar-mount-restoration"
+    ],
+    "mutationOwnership": {
+      "databaseIdentity": "case:scan-health",
+      "filesystemCopy": "media/cases/scan-health"
     },
-    {
-      "config": "playwright.scan-performance.config.cjs",
-      "project": "scan-performance",
-      "test": "tests/e2e/scanPerformance/scanPerformance.spec.js",
-      "case": "isolated scan performance benchmarks \u203a FTC-OPS-003F acknowledges a naturally unavailable library root without hiding recovery status",
-      "profile": "scan-library",
-      "setupScope": "isolated",
-      "stateMode": "owned-mutation",
-      "databaseScenarios": ["scan:unavailable-root-health"],
-      "filesystemScenarios": ["media-copy:scan-health", "prestart:remove-owned-empty-root"],
-      "expectedContracts": ["warning-acknowledgment-preserves-recovery", "status-gallerybar-mount-restoration"],
-      "mutationOwnership": {
-        "databaseIdentity": "case:scan-health",
-        "filesystemCopy": "media/cases/scan-health"
-      },
-      "ownerApproval": "approved"
-    },
+    "ownerApproval": "approved"
+  },
   {
     "config": "playwright.config.js",
     "project": "functional",
@@ -2966,7 +3011,8 @@
     ],
     "expectedContracts": [
       "touch-artwork-fullscreen",
-      "touch-cover-lookup-without-hover"
+      "touch-cover-lookup-without-hover",
+      "mobile-artwork-actions-always-visible"
     ],
     "ownerApproval": "approved"
   },
@@ -2988,6 +3034,7 @@
       "media:exact-problematic-track"
     ],
     "expectedContracts": [
+      "mobile-editorial-cover-actions-outside-artbox",
       "three-persisted-layouts",
       "shared-action-buttons",
       "action-button-hover-outline",
@@ -3216,6 +3263,23 @@
   {
     "config": "playwright.component.config.js",
     "project": "",
+    "test": "tests/components/coverLookupTaskCard.spec.js",
+    "case": "cover lookup task card preserves a pending text drag across polling",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "selectable-copyable-task-text",
+      "no-card-activation",
+      "polling-preserves-pending-selection-anchor"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
     "test": "tests/components/buttonInteractionOutline.spec.js",
     "case": "shared footer buttons render themed hover and keyboard-focus outlines while excluded controls stay inert",
     "profile": null,
@@ -3239,9 +3303,19 @@
     "setupScope": "isolated",
     "stateMode": "owned-mutation",
     "executionWave": 2,
-    "databaseScenarios": ["gallery-search:artist-tree-fold", "playback:artist-tree-fold"],
-    "filesystemScenarios": ["audio-copy:artist-tree-fold"],
-    "expectedContracts": ["artist-tree-reflow", "browse-state-preservation", "persistent-player-node", "reduced-motion-fold"],
+    "databaseScenarios": [
+      "gallery-search:artist-tree-fold",
+      "playback:artist-tree-fold"
+    ],
+    "filesystemScenarios": [
+      "audio-copy:artist-tree-fold"
+    ],
+    "expectedContracts": [
+      "artist-tree-reflow",
+      "browse-state-preservation",
+      "persistent-player-node",
+      "reduced-motion-fold"
+    ],
     "mutationOwnership": {
       "databaseIdentity": "case:artist-tree-fold",
       "filesystemCopy": "media/cases/artist-tree-fold"
@@ -3280,21 +3354,246 @@
     ],
     "ownerApproval": "approved"
   },
-  { "config": "playwright.component.config.js", "project": "", "test": "tests/components/searchInput.spec.js", "case": "Search: typing owns the field cue; keyboard action focus owns only its button", "profile": null, "setupScope": "suite", "stateMode": "read-only", "databaseScenarios": [], "filesystemScenarios": [], "expectedContracts": ["search-field-cue", "keyboard-action-focus"], "ownerApproval": "approved" },
-  { "config": "playwright.component.config.js", "project": "", "test": "tests/components/searchInput.spec.js", "case": "Search: joined suggestions and open anchors retain their own boundary", "profile": null, "setupScope": "suite", "stateMode": "read-only", "databaseScenarios": [], "filesystemScenarios": [], "expectedContracts": ["search-suggestions-boundary", "open-anchor-boundary"], "ownerApproval": "approved" },
-  { "config": "playwright.component.config.js", "project": "", "test": "tests/components/searchInput.spec.js", "case": "Search: pointer-down has no field glow before click after typing=false", "profile": null, "setupScope": "suite", "stateMode": "read-only", "databaseScenarios": [], "filesystemScenarios": [], "expectedContracts": ["pointer-focus-ownership", "search-field-cue"], "ownerApproval": "approved" },
-  { "config": "playwright.component.config.js", "project": "", "test": "tests/components/searchInput.spec.js", "case": "Search: pointer-down has no field glow before click after typing=true", "profile": null, "setupScope": "suite", "stateMode": "read-only", "databaseScenarios": [], "filesystemScenarios": [], "expectedContracts": ["pointer-focus-ownership", "search-field-cue"], "ownerApproval": "approved" },
-  { "config": "playwright.component.config.js", "project": "", "test": "tests/components/searchInput.spec.js", "case": "Search: explicit clear is leftmost, empties the field, and restores input focus", "profile": null, "setupScope": "suite", "stateMode": "read-only", "databaseScenarios": [], "filesystemScenarios": [], "expectedContracts": ["explicit-clear-focus", "search-field-cue"], "ownerApproval": "approved" },
-  { "config": "playwright.component.config.js", "project": "", "test": "tests/components/searchInput.spec.js", "case": "Filters: typing owns the field cue; keyboard action focus owns only its button", "profile": null, "setupScope": "suite", "stateMode": "read-only", "databaseScenarios": [], "filesystemScenarios": [], "expectedContracts": ["filter-field-cue", "keyboard-action-focus"], "ownerApproval": "approved" },
-  { "config": "playwright.component.config.js", "project": "", "test": "tests/components/searchInput.spec.js", "case": "Filters: joined suggestions and open anchors retain their own boundary", "profile": null, "setupScope": "suite", "stateMode": "read-only", "databaseScenarios": [], "filesystemScenarios": [], "expectedContracts": ["filter-suggestions-boundary", "open-anchor-boundary"], "ownerApproval": "approved" },
-  { "config": "playwright.component.config.js", "project": "", "test": "tests/components/searchInput.spec.js", "case": "Filters: pointer-down has no field glow before click after typing=false", "profile": null, "setupScope": "suite", "stateMode": "read-only", "databaseScenarios": [], "filesystemScenarios": [], "expectedContracts": ["pointer-focus-ownership", "filter-field-cue"], "ownerApproval": "approved" },
-  { "config": "playwright.component.config.js", "project": "", "test": "tests/components/searchInput.spec.js", "case": "Filters: pointer-down has no field glow before click after typing=true", "profile": null, "setupScope": "suite", "stateMode": "read-only", "databaseScenarios": [], "filesystemScenarios": [], "expectedContracts": ["pointer-focus-ownership", "filter-field-cue"], "ownerApproval": "approved" },
-  { "config": "playwright.component.config.js", "project": "", "test": "tests/components/searchInput.spec.js", "case": "Filters: explicit clear is leftmost, empties the field, and restores input focus", "profile": null, "setupScope": "suite", "stateMode": "read-only", "databaseScenarios": [], "filesystemScenarios": [], "expectedContracts": ["explicit-clear-focus", "filter-field-cue"], "ownerApproval": "approved" },
-  { "config": "playwright.component.config.js", "project": "", "test": "tests/components/searchInput.spec.js", "case": "calendar shares input, action press, and keyboard focus ownership", "profile": null, "setupScope": "suite", "stateMode": "read-only", "databaseScenarios": [], "filesystemScenarios": [], "expectedContracts": ["calendar-input-focus", "shared-action-press"], "ownerApproval": "approved" },
-  { "config": "playwright.component.config.js", "project": "", "test": "tests/components/searchInput.spec.js", "case": "library path shares input, action press, and keyboard focus ownership", "profile": null, "setupScope": "suite", "stateMode": "read-only", "databaseScenarios": [], "filesystemScenarios": [], "expectedContracts": ["library-path-focus", "shared-action-press"], "ownerApproval": "approved" },
-  { "config": "playwright.component.config.js", "project": "", "test": "tests/components/searchInput.spec.js", "case": "account password shares input, action press, and keyboard focus ownership", "profile": null, "setupScope": "suite", "stateMode": "read-only", "databaseScenarios": [], "filesystemScenarios": [], "expectedContracts": ["account-password-focus", "shared-action-press"], "ownerApproval": "approved" },
-  { "config": "playwright.component.config.js", "project": "", "test": "tests/components/searchInput.spec.js", "case": "admin password shares input, action press, and keyboard focus ownership", "profile": null, "setupScope": "suite", "stateMode": "read-only", "databaseScenarios": [], "filesystemScenarios": [], "expectedContracts": ["admin-password-focus", "shared-action-press"], "ownerApproval": "approved" },
-  { "config": "playwright.component.config.js", "project": "", "test": "tests/components/searchInput.spec.js", "case": "ordinary entry fields share a muted focus edge across themes and page styles", "profile": null, "setupScope": "suite", "stateMode": "read-only", "databaseScenarios": [], "filesystemScenarios": [], "expectedContracts": ["ordinary-input-focus-edge", "theme-parity"], "ownerApproval": "approved" },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/searchInput.spec.js",
+    "case": "Search: typing owns the field cue; keyboard action focus owns only its button",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "search-field-cue",
+      "keyboard-action-focus"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/searchInput.spec.js",
+    "case": "Search: joined suggestions and open anchors retain their own boundary",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "search-suggestions-boundary",
+      "open-anchor-boundary"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/searchInput.spec.js",
+    "case": "Search: pointer-down has no field glow before click after typing=false",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "pointer-focus-ownership",
+      "search-field-cue"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/searchInput.spec.js",
+    "case": "Search: pointer-down has no field glow before click after typing=true",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "pointer-focus-ownership",
+      "search-field-cue"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/searchInput.spec.js",
+    "case": "Search: explicit clear is leftmost, empties the field, and restores input focus",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "explicit-clear-focus",
+      "search-field-cue"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/searchInput.spec.js",
+    "case": "Filters: typing owns the field cue; keyboard action focus owns only its button",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "filter-field-cue",
+      "keyboard-action-focus"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/searchInput.spec.js",
+    "case": "Filters: joined suggestions and open anchors retain their own boundary",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "filter-suggestions-boundary",
+      "open-anchor-boundary"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/searchInput.spec.js",
+    "case": "Filters: pointer-down has no field glow before click after typing=false",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "pointer-focus-ownership",
+      "filter-field-cue"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/searchInput.spec.js",
+    "case": "Filters: pointer-down has no field glow before click after typing=true",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "pointer-focus-ownership",
+      "filter-field-cue"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/searchInput.spec.js",
+    "case": "Filters: explicit clear is leftmost, empties the field, and restores input focus",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "explicit-clear-focus",
+      "filter-field-cue"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/searchInput.spec.js",
+    "case": "calendar shares input, action press, and keyboard focus ownership",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "calendar-input-focus",
+      "shared-action-press"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/searchInput.spec.js",
+    "case": "library path shares input, action press, and keyboard focus ownership",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "library-path-focus",
+      "shared-action-press"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/searchInput.spec.js",
+    "case": "account password shares input, action press, and keyboard focus ownership",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "account-password-focus",
+      "shared-action-press"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/searchInput.spec.js",
+    "case": "admin password shares input, action press, and keyboard focus ownership",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "admin-password-focus",
+      "shared-action-press"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/searchInput.spec.js",
+    "case": "ordinary entry fields share a muted focus edge across themes and page styles",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "ordinary-input-focus-edge",
+      "theme-parity"
+    ],
+    "ownerApproval": "approved"
+  },
   {
     "config": "playwright.component.config.js",
     "project": "",
@@ -3663,14 +3962,14 @@
     "config": "playwright.component.config.js",
     "project": "",
     "test": "tests/components/appearanceWorkspace.spec.js",
-    "case": "correcting Player surface start repairs the Main background HEX alias",
+    "case": "correcting Player surface start repairs validation across Main and Player editors",
     "profile": null,
     "setupScope": "suite",
     "stateMode": "read-only",
     "databaseScenarios": [],
     "filesystemScenarios": [],
     "expectedContracts": [
-      "correcting-player-surface-start-repairs-the-main-background-hex-alias"
+      "correcting-player-surface-start-repairs-validation-across-main-and-player-editors"
     ],
     "ownerApproval": "approved"
   },
@@ -3843,14 +4142,14 @@
     "config": "playwright.component.config.js",
     "project": "",
     "test": "tests/components/appearanceWorkspace.spec.js",
-    "case": "unsaved palette stays in five previews while editor and shared footer retain the saved theme",
+    "case": "Main palette previews across five editors and the app while Cancel and Save retain account ownership",
     "profile": null,
     "setupScope": "suite",
     "stateMode": "read-only",
     "databaseScenarios": [],
     "filesystemScenarios": [],
     "expectedContracts": [
-      "unsaved-palette-stays-in-five-previews-while-editor-and-shared-footer-retain-the-saved-theme"
+      "main-palette-previews-across-five-editors-and-the-app-while-cancel-and-save-retain-account-ownership"
     ],
     "ownerApproval": "approved"
   },
@@ -4233,7 +4532,9 @@
     "expectedContracts": [
       "draft-search-identity",
       "staged-style",
-      "bootstrap-style"
+      "bootstrap-style",
+      "mobile-seekbar-profile-isolation",
+      "mobile-loop-controls-unavailable"
     ],
     "mutationOwnership": {
       "databaseIdentity": "case:loop-style-search",
@@ -4672,14 +4973,14 @@
     "config": "playwright.component.config.js",
     "project": "",
     "test": "tests/components/appearanceWorkspace.spec.js",
-    "case": "Mobile and TV device appearance is disabled without an outer pill",
+    "case": "Mobile appearance is selectable while TV stays disabled without an outer pill",
     "profile": null,
     "setupScope": "suite",
     "stateMode": "read-only",
     "databaseScenarios": [],
     "filesystemScenarios": [],
     "expectedContracts": [
-      "Mobile and TV device appearance is disabled without an outer pill"
+      "Mobile appearance is selectable while TV stays disabled without an outer pill"
     ],
     "ownerApproval": "approved"
   },
@@ -4822,14 +5123,14 @@
     "config": "playwright.component.config.js",
     "project": "",
     "test": "tests/components/coverLookupDrawerHeader.spec.js",
-    "case": "light theme keeps the dark clear glyph through hover and focus",
+    "case": "light theme keeps the shared Clear SVG legible through hover and focus",
     "profile": null,
     "setupScope": "suite",
     "stateMode": "read-only",
     "databaseScenarios": [],
     "filesystemScenarios": [],
     "expectedContracts": [
-      "light theme keeps the dark clear glyph through hover and focus"
+      "light theme keeps the shared Clear SVG legible through hover and focus"
     ],
     "ownerApproval": "approved"
   },
@@ -4852,14 +5153,14 @@
     "config": "playwright.component.config.js",
     "project": "",
     "test": "tests/components/coverLookupDrawerHeader.spec.js",
-    "case": "dark theme retains the current clear glyph swap",
+    "case": "dark theme keeps the shared Clear SVG legible through hover and focus",
     "profile": null,
     "setupScope": "suite",
     "stateMode": "read-only",
     "databaseScenarios": [],
     "filesystemScenarios": [],
     "expectedContracts": [
-      "dark theme retains the current clear glyph swap"
+      "dark theme keeps the shared Clear SVG legible through hover and focus"
     ],
     "ownerApproval": "approved"
   },
@@ -5884,17 +6185,1497 @@
     "ownerApproval": "approved"
   },
   {
+    "config": "playwright.mobile-layout.config.js",
+    "project": "",
+    "test": "tests/e2e/mobile-layout/mobileLayout.spec.js",
+    "case": "mobile login, Home rows, artist drawer, search and right-side family panel",
+    "profile": null,
+    "setupScope": "isolated",
+    "stateMode": "global-mutation",
+    "databaseScenarios": [
+      "generated:phase7-mobile-reset"
+    ],
+    "filesystemScenarios": [
+      "generated:mobile-layout-media"
+    ],
+    "expectedContracts": [
+      "mobile login, Home rows, artist drawer, search and right-side family panel"
+    ],
+    "ownerApproval": "approved",
+    "globalMutationReason": "The generated mobile suite owns its isolated Postgres database, temporary media and browser contexts; its phase7 fixture resets application rows before each case."
+  },
+  {
+    "config": "playwright.mobile-layout.config.js",
+    "project": "",
+    "test": "tests/e2e/mobile-layout/mobileLayout.spec.js",
+    "case": "two- and three-column cards and art-only modes persist to a fresh mobile session",
+    "profile": null,
+    "setupScope": "isolated",
+    "stateMode": "global-mutation",
+    "databaseScenarios": [
+      "generated:phase7-mobile-reset"
+    ],
+    "filesystemScenarios": [
+      "generated:mobile-layout-media"
+    ],
+    "expectedContracts": [
+      "two- and three-column cards and art-only modes persist to a fresh mobile session"
+    ],
+    "ownerApproval": "approved",
+    "globalMutationReason": "The generated mobile suite owns its isolated Postgres database, temporary media and browser contexts; its phase7 fixture resets application rows before each case."
+  },
+  {
+    "config": "playwright.mobile-layout.config.js",
+    "project": "",
+    "test": "tests/e2e/mobile-layout/mobileLayout.spec.js",
+    "case": "album details are a page, keep the player, support Back and full artwork",
+    "profile": null,
+    "setupScope": "isolated",
+    "stateMode": "global-mutation",
+    "databaseScenarios": [
+      "generated:phase7-mobile-reset"
+    ],
+    "filesystemScenarios": [
+      "generated:mobile-layout-media"
+    ],
+    "expectedContracts": [
+      "album details are a page, keep the player, support Back and full artwork"
+    ],
+    "ownerApproval": "approved",
+    "globalMutationReason": "The generated mobile suite owns its isolated Postgres database, temporary media and browser contexts; its phase7 fixture resets application rows before each case."
+  },
+  {
+    "config": "playwright.mobile-layout.config.js",
+    "project": "",
+    "test": "tests/e2e/mobile-layout/mobileLayout.spec.js",
+    "case": "Appearance and Integrations use pages and restricted utilities are absent",
+    "profile": null,
+    "setupScope": "isolated",
+    "stateMode": "global-mutation",
+    "databaseScenarios": [
+      "generated:phase7-mobile-reset"
+    ],
+    "filesystemScenarios": [
+      "generated:mobile-layout-media"
+    ],
+    "expectedContracts": [
+      "Appearance and Integrations use pages and restricted utilities are absent"
+    ],
+    "ownerApproval": "approved",
+    "globalMutationReason": "The generated mobile suite owns its isolated Postgres database, temporary media and browser contexts; its phase7 fixture resets application rows before each case."
+  },
+  {
+    "config": "playwright.mobile-layout.config.js",
+    "project": "",
+    "test": "tests/e2e/mobile-layout/mobileLayout.spec.js",
+    "case": "narrow phones do not overflow and wide tablets retain desktop geometry",
+    "profile": null,
+    "setupScope": "isolated",
+    "stateMode": "global-mutation",
+    "databaseScenarios": [
+      "generated:phase7-mobile-reset"
+    ],
+    "filesystemScenarios": [
+      "generated:mobile-layout-media"
+    ],
+    "expectedContracts": [
+      "narrow phones do not overflow and wide tablets retain desktop geometry"
+    ],
+    "ownerApproval": "approved",
+    "globalMutationReason": "The generated mobile suite owns its isolated Postgres database, temporary media and browser contexts; its phase7 fixture resets application rows before each case."
+  },
+  {
+    "config": "playwright.mobile-layout.config.js",
+    "project": "",
+    "test": "tests/e2e/mobile-layout/mobileLayout.spec.js",
+    "case": "mobile appearance can be customized, saved and linked back without changing the base profile",
+    "profile": null,
+    "setupScope": "isolated",
+    "stateMode": "global-mutation",
+    "databaseScenarios": [
+      "generated:phase7-mobile-reset"
+    ],
+    "filesystemScenarios": [
+      "generated:mobile-layout-media"
+    ],
+    "expectedContracts": [
+      "mobile appearance can be customized, saved and linked back without changing the base profile"
+    ],
+    "ownerApproval": "approved",
+    "globalMutationReason": "The generated mobile suite owns its isolated Postgres database, temporary media and browser contexts; its phase7 fixture resets application rows before each case."
+  },
+  {
+    "config": "playwright.mobile-layout.config.js",
+    "project": "",
+    "test": "tests/e2e/mobile-layout/mobileLayout.spec.js",
+    "case": "real local playback continues across pages and player artwork opens its album",
+    "profile": null,
+    "setupScope": "isolated",
+    "stateMode": "global-mutation",
+    "databaseScenarios": [
+      "generated:phase7-mobile-reset"
+    ],
+    "filesystemScenarios": [
+      "generated:mobile-layout-media"
+    ],
+    "expectedContracts": [
+      "real local playback continues across pages and player artwork opens its album"
+    ],
+    "ownerApproval": "approved",
+    "globalMutationReason": "The generated mobile suite owns its isolated Postgres database, temporary media and browser contexts; its phase7 fixture resets application rows before each case."
+  },
+  {
+    "config": "playwright.mobile-feedback.config.js",
+    "project": "",
+    "test": "tests/e2e/mobile-feedback/appearanceRecovery.spec.js",
+    "case": "mobile appearance retains an offline draft and saves after reconnection in black",
+    "profile": null,
+    "setupScope": "isolated",
+    "stateMode": "global-mutation",
+    "databaseScenarios": [
+      "generated:phase7-mobile-reset"
+    ],
+    "filesystemScenarios": [
+      "generated:extended-mobile-media"
+    ],
+    "expectedContracts": [
+      "mobile appearance retains an offline draft and saves after reconnection in black"
+    ],
+    "ownerApproval": "approved",
+    "globalMutationReason": "The generated mobile suite owns its isolated Postgres database, temporary media and browser contexts; its phase7 fixture resets application rows before each case."
+  },
+  {
+    "config": "playwright.mobile-feedback.config.js",
+    "project": "",
+    "test": "tests/e2e/mobile-feedback/appearanceRecovery.spec.js",
+    "case": "mobile appearance retains an offline draft and saves after reconnection in parchment-pine",
+    "profile": null,
+    "setupScope": "isolated",
+    "stateMode": "global-mutation",
+    "databaseScenarios": [
+      "generated:phase7-mobile-reset"
+    ],
+    "filesystemScenarios": [
+      "generated:extended-mobile-media"
+    ],
+    "expectedContracts": [
+      "mobile appearance retains an offline draft and saves after reconnection in parchment-pine"
+    ],
+    "ownerApproval": "approved",
+    "globalMutationReason": "The generated mobile suite owns its isolated Postgres database, temporary media and browser contexts; its phase7 fixture resets application rows before each case."
+  },
+  {
+    "config": "playwright.mobile-feedback.config.js",
+    "project": "",
+    "test": "tests/e2e/mobile-feedback/appearanceRecovery.spec.js",
+    "case": "a session ended in another tab blocks a mobile appearance save and allows normal sign-in",
+    "profile": null,
+    "setupScope": "isolated",
+    "stateMode": "global-mutation",
+    "databaseScenarios": [
+      "generated:phase7-mobile-reset"
+    ],
+    "filesystemScenarios": [
+      "generated:extended-mobile-media"
+    ],
+    "expectedContracts": [
+      "a session ended in another tab blocks a mobile appearance save and allows normal sign-in"
+    ],
+    "ownerApproval": "approved",
+    "globalMutationReason": "The generated mobile suite owns its isolated Postgres database, temporary media and browser contexts; its phase7 fixture resets application rows before each case."
+  },
+  {
+    "config": "playwright.mobile-feedback.config.js",
+    "project": "",
+    "test": "tests/e2e/mobile-feedback/approvedOptions.spec.js",
+    "case": "approved Home A has account identity, disabled News, keyboard tabs and no gallery controls",
+    "profile": null,
+    "setupScope": "isolated",
+    "stateMode": "global-mutation",
+    "databaseScenarios": [
+      "generated:phase7-mobile-reset"
+    ],
+    "filesystemScenarios": [
+      "generated:extended-mobile-media"
+    ],
+    "expectedContracts": [
+      "approved Home A has account identity, disabled News, keyboard tabs and no gallery controls"
+    ],
+    "ownerApproval": "approved",
+    "globalMutationReason": "The generated mobile suite owns its isolated Postgres database, temporary media and browser contexts; its phase7 fixture resets application rows before each case."
+  },
+  {
+    "config": "playwright.mobile-feedback.config.js",
+    "project": "",
+    "test": "tests/e2e/mobile-feedback/approvedOptions.spec.js",
+    "case": "original large album and both approved small-art choices persist with shared header and scroll identity",
+    "profile": null,
+    "setupScope": "isolated",
+    "stateMode": "global-mutation",
+    "databaseScenarios": [
+      "generated:phase7-mobile-reset"
+    ],
+    "filesystemScenarios": [
+      "generated:extended-mobile-media"
+    ],
+    "expectedContracts": [
+      "original large album and both approved small-art choices persist with shared header and scroll identity"
+    ],
+    "ownerApproval": "approved",
+    "globalMutationReason": "The generated mobile suite owns its isolated Postgres database, temporary media and browser contexts; its phase7 fixture resets application rows before each case."
+  },
+  {
+    "config": "playwright.mobile-feedback.config.js",
+    "project": "",
+    "test": "tests/e2e/mobile-feedback/approvedOptions.spec.js",
+    "case": "thin mobile progress uses real playback, seeking and saved UI choice without changing desktop",
+    "profile": null,
+    "setupScope": "isolated",
+    "stateMode": "global-mutation",
+    "databaseScenarios": [
+      "generated:phase7-mobile-reset"
+    ],
+    "filesystemScenarios": [
+      "generated:extended-mobile-media"
+    ],
+    "expectedContracts": [
+      "thin mobile progress uses real playback, seeking and saved UI choice without changing desktop"
+    ],
+    "ownerApproval": "approved",
+    "globalMutationReason": "The generated mobile suite owns its isolated Postgres database, temporary media and browser contexts; its phase7 fixture resets application rows before each case."
+  },
+  {
+    "config": "playwright.mobile-feedback.config.js",
+    "project": "",
+    "test": "tests/e2e/mobile-feedback/approvedOptions.spec.js",
+    "case": "hamburger menus precede the name in Gallery, Settings and Password headers",
+    "profile": null,
+    "setupScope": "isolated",
+    "stateMode": "global-mutation",
+    "databaseScenarios": [
+      "generated:phase7-mobile-reset"
+    ],
+    "filesystemScenarios": [
+      "generated:extended-mobile-media"
+    ],
+    "expectedContracts": [
+      "hamburger menus precede the name in Gallery, Settings and Password headers"
+    ],
+    "ownerApproval": "approved",
+    "globalMutationReason": "The generated mobile suite owns its isolated Postgres database, temporary media and browser contexts; its phase7 fixture resets application rows before each case."
+  },
+  {
+    "config": "playwright.mobile-feedback.config.js",
+    "project": "",
+    "test": "tests/e2e/mobile-feedback/approvedOptions.spec.js",
+    "case": "empty mobile player keeps its centered message beside the disabled transport",
+    "profile": null,
+    "setupScope": "isolated",
+    "stateMode": "global-mutation",
+    "databaseScenarios": [
+      "generated:phase7-mobile-reset"
+    ],
+    "filesystemScenarios": [
+      "generated:extended-mobile-media"
+    ],
+    "expectedContracts": [
+      "empty mobile player keeps its centered message beside the disabled transport"
+    ],
+    "ownerApproval": "approved",
+    "globalMutationReason": "The generated mobile suite owns its isolated Postgres database, temporary media and browser contexts; its phase7 fixture resets application rows before each case."
+  },
+  {
+    "config": "playwright.mobile-feedback.config.js",
+    "project": "",
+    "test": "tests/e2e/mobile-feedback/approvedOptions.spec.js",
+    "case": "relocated album actions retain cover lookup and Back without changing the selected layout",
+    "profile": null,
+    "setupScope": "isolated",
+    "stateMode": "global-mutation",
+    "databaseScenarios": [
+      "generated:phase7-mobile-reset"
+    ],
+    "filesystemScenarios": [
+      "generated:extended-mobile-media"
+    ],
+    "expectedContracts": [
+      "relocated album actions retain cover lookup and Back without changing the selected layout"
+    ],
+    "ownerApproval": "approved",
+    "globalMutationReason": "The generated mobile suite owns its isolated Postgres database, temporary media and browser contexts; its phase7 fixture resets application rows before each case."
+  },
+  {
+    "config": "playwright.mobile-feedback.config.js",
+    "project": "",
+    "test": "tests/e2e/mobile-feedback/approvedOptions.spec.js",
+    "case": "switching through original artwork restores each approved overview without reloading",
+    "profile": null,
+    "setupScope": "isolated",
+    "stateMode": "global-mutation",
+    "databaseScenarios": [
+      "generated:phase7-mobile-reset"
+    ],
+    "filesystemScenarios": [
+      "generated:extended-mobile-media"
+    ],
+    "expectedContracts": [
+      "switching through original artwork restores each approved overview without reloading"
+    ],
+    "ownerApproval": "approved",
+    "globalMutationReason": "The generated mobile suite owns its isolated Postgres database, temporary media and browser contexts; its phase7 fixture resets application rows before each case."
+  },
+  {
+    "config": "playwright.mobile-feedback.config.js",
+    "project": "",
+    "test": "tests/e2e/mobile-feedback/mobileFeedback.spec.js",
+    "case": "row-body opens the sixteen-track album; scrolling shows a bar thumbnail; search leaves details",
+    "profile": null,
+    "setupScope": "isolated",
+    "stateMode": "global-mutation",
+    "databaseScenarios": [
+      "generated:phase7-mobile-reset"
+    ],
+    "filesystemScenarios": [
+      "generated:extended-mobile-media"
+    ],
+    "expectedContracts": [
+      "row-body opens the sixteen-track album; scrolling shows a bar thumbnail; search leaves details"
+    ],
+    "ownerApproval": "approved",
+    "globalMutationReason": "The generated mobile suite owns its isolated Postgres database, temporary media and browser contexts; its phase7 fixture resets application rows before each case."
+  },
+  {
+    "config": "playwright.mobile-feedback.config.js",
+    "project": "",
+    "test": "tests/e2e/mobile-feedback/mobileFeedback.spec.js",
+    "case": "single expanding search and zoom support 1/2/3 columns; Rows disappears at desktop width",
+    "profile": null,
+    "setupScope": "isolated",
+    "stateMode": "global-mutation",
+    "databaseScenarios": [
+      "generated:phase7-mobile-reset"
+    ],
+    "filesystemScenarios": [
+      "generated:extended-mobile-media"
+    ],
+    "expectedContracts": [
+      "single expanding search and zoom support 1/2/3 columns; Rows disappears at desktop width"
+    ],
+    "ownerApproval": "approved",
+    "globalMutationReason": "The generated mobile suite owns its isolated Postgres database, temporary media and browser contexts; its phase7 fixture resets application rows before each case."
+  },
+  {
+    "config": "playwright.mobile-feedback.config.js",
+    "project": "",
+    "test": "tests/e2e/mobile-feedback/mobileFeedback.spec.js",
+    "case": "owner Settings drawer exposes real sections; subsections include Library and Scrobbling",
+    "profile": null,
+    "setupScope": "isolated",
+    "stateMode": "global-mutation",
+    "databaseScenarios": [
+      "generated:phase7-mobile-reset"
+    ],
+    "filesystemScenarios": [
+      "generated:extended-mobile-media"
+    ],
+    "expectedContracts": [
+      "owner Settings drawer exposes real sections; subsections include Library and Scrobbling"
+    ],
+    "ownerApproval": "approved",
+    "globalMutationReason": "The generated mobile suite owns its isolated Postgres database, temporary media and browser contexts; its phase7 fixture resets application rows before each case."
+  },
+  {
+    "config": "playwright.mobile-feedback.config.js",
+    "project": "",
+    "test": "tests/e2e/mobile-feedback/mobileFeedback.spec.js",
+    "case": "mobile Appearance stays on Mobile, follows saved desktop, uses a page surface and pins player preview",
+    "profile": null,
+    "setupScope": "isolated",
+    "stateMode": "global-mutation",
+    "databaseScenarios": [
+      "generated:phase7-mobile-reset"
+    ],
+    "filesystemScenarios": [
+      "generated:extended-mobile-media"
+    ],
+    "expectedContracts": [
+      "mobile Appearance stays on Mobile, follows saved desktop, uses a page surface and pins player preview"
+    ],
+    "ownerApproval": "approved",
+    "globalMutationReason": "The generated mobile suite owns its isolated Postgres database, temporary media and browser contexts; its phase7 fixture resets application rows before each case."
+  },
+  {
+    "config": "playwright.mobile-feedback.config.js",
+    "project": "",
+    "test": "tests/e2e/mobile-feedback/mobileFeedback.spec.js",
+    "case": "Cover Look Up has one header, two candidates, pinned action and artwork controls below the image",
+    "profile": null,
+    "setupScope": "isolated",
+    "stateMode": "global-mutation",
+    "databaseScenarios": [
+      "generated:phase7-mobile-reset"
+    ],
+    "filesystemScenarios": [
+      "generated:extended-mobile-media"
+    ],
+    "expectedContracts": [
+      "Cover Look Up has one header, two candidates, pinned action and artwork controls below the image"
+    ],
+    "ownerApproval": "approved",
+    "globalMutationReason": "The generated mobile suite owns its isolated Postgres database, temporary media and browser contexts; its phase7 fixture resets application rows before each case."
+  },
+  {
+    "config": "playwright.mobile-feedback.config.js",
+    "project": "",
+    "test": "tests/e2e/mobile-feedback/mobileFeedback.spec.js",
+    "case": "long related family stays narrow and All Artists follows the top scrolled artist",
+    "profile": null,
+    "setupScope": "isolated",
+    "stateMode": "global-mutation",
+    "databaseScenarios": [
+      "generated:phase7-mobile-reset"
+    ],
+    "filesystemScenarios": [
+      "generated:extended-mobile-media"
+    ],
+    "expectedContracts": [
+      "long related family stays narrow and All Artists follows the top scrolled artist"
+    ],
+    "ownerApproval": "approved",
+    "globalMutationReason": "The generated mobile suite owns its isolated Postgres database, temporary media and browser contexts; its phase7 fixture resets application rows before each case."
+  },
+  {
+    "config": "playwright.mobile-feedback.config.js",
+    "project": "",
+    "test": "tests/e2e/mobile-feedback/mobileHeader.spec.js",
+    "case": "mobile Home tabs and long Gallery headers use compact aligned rows in black",
+    "profile": null,
+    "setupScope": "isolated",
+    "stateMode": "global-mutation",
+    "databaseScenarios": [
+      "generated:phase7-mobile-reset"
+    ],
+    "filesystemScenarios": [
+      "generated:extended-mobile-media"
+    ],
+    "expectedContracts": [
+      "mobile Home tabs and long Gallery headers use compact aligned rows in black"
+    ],
+    "ownerApproval": "approved",
+    "globalMutationReason": "The generated mobile suite owns its isolated Postgres database, temporary media and browser contexts; its phase7 fixture resets application rows before each case."
+  },
+  {
+    "config": "playwright.mobile-feedback.config.js",
+    "project": "",
+    "test": "tests/e2e/mobile-feedback/mobileHeader.spec.js",
+    "case": "mobile Home tabs and long Gallery headers use compact aligned rows in parchment-pine",
+    "profile": null,
+    "setupScope": "isolated",
+    "stateMode": "global-mutation",
+    "databaseScenarios": [
+      "generated:phase7-mobile-reset"
+    ],
+    "filesystemScenarios": [
+      "generated:extended-mobile-media"
+    ],
+    "expectedContracts": [
+      "mobile Home tabs and long Gallery headers use compact aligned rows in parchment-pine"
+    ],
+    "ownerApproval": "approved",
+    "globalMutationReason": "The generated mobile suite owns its isolated Postgres database, temporary media and browser contexts; its phase7 fixture resets application rows before each case."
+  },
+  {
+    "config": "playwright.mobile-feedback.config.js",
+    "project": "",
+    "test": "tests/e2e/mobile-feedback/mobileHeaderRegression.spec.js",
+    "case": "Home hamburger glyph aligns with Recent and Top tracks text at narrow phone widths",
+    "profile": null,
+    "setupScope": "isolated",
+    "stateMode": "global-mutation",
+    "databaseScenarios": [
+      "generated:phase7-mobile-reset"
+    ],
+    "filesystemScenarios": [
+      "generated:extended-mobile-media"
+    ],
+    "expectedContracts": [
+      "Home hamburger glyph aligns with Recent and Top tracks text at narrow phone widths"
+    ],
+    "ownerApproval": "approved",
+    "globalMutationReason": "The generated mobile suite owns its isolated Postgres database, temporary media and browser contexts; its phase7 fixture resets application rows before each case."
+  },
+  {
+    "config": "playwright.mobile-feedback.config.js",
+    "project": "",
+    "test": "tests/e2e/mobile-feedback/mobileHeaderRegression.spec.js",
+    "case": "Gallery sticky artist follows complete plain and wrapped label occlusion in both scroll directions",
+    "profile": null,
+    "setupScope": "isolated",
+    "stateMode": "global-mutation",
+    "databaseScenarios": [
+      "generated:phase7-mobile-reset"
+    ],
+    "filesystemScenarios": [
+      "generated:extended-mobile-media"
+    ],
+    "expectedContracts": [
+      "Gallery sticky artist follows complete plain and wrapped label occlusion in both scroll directions"
+    ],
+    "ownerApproval": "approved",
+    "globalMutationReason": "The generated mobile suite owns its isolated Postgres database, temporary media and browser contexts; its phase7 fixture resets application rows before each case."
+  },
+  {
+    "config": "playwright.mobile-feedback.config.js",
+    "project": "",
+    "test": "tests/e2e/mobile-feedback/mobileLoops.spec.js",
+    "case": "compact saved-loop players fit phones and operate pitch/speed in black",
+    "profile": null,
+    "setupScope": "isolated",
+    "stateMode": "global-mutation",
+    "databaseScenarios": [
+      "generated:phase7-mobile-reset"
+    ],
+    "filesystemScenarios": [
+      "generated:extended-mobile-media"
+    ],
+    "expectedContracts": [
+      "compact saved-loop players fit phones and operate pitch/speed in black"
+    ],
+    "ownerApproval": "approved",
+    "globalMutationReason": "The generated mobile suite owns its isolated Postgres database, temporary media and browser contexts; its phase7 fixture resets application rows before each case."
+  },
+  {
+    "config": "playwright.mobile-feedback.config.js",
+    "project": "",
+    "test": "tests/e2e/mobile-feedback/mobileLoops.spec.js",
+    "case": "compact saved-loop players fit phones and operate pitch/speed in parchment-pine",
+    "profile": null,
+    "setupScope": "isolated",
+    "stateMode": "global-mutation",
+    "databaseScenarios": [
+      "generated:phase7-mobile-reset"
+    ],
+    "filesystemScenarios": [
+      "generated:extended-mobile-media"
+    ],
+    "expectedContracts": [
+      "compact saved-loop players fit phones and operate pitch/speed in parchment-pine"
+    ],
+    "ownerApproval": "approved",
+    "globalMutationReason": "The generated mobile suite owns its isolated Postgres database, temporary media and browser contexts; its phase7 fixture resets application rows before each case."
+  },
+  {
+    "config": "playwright.mobile-feedback.config.js",
+    "project": "",
+    "test": "tests/e2e/mobile-feedback/mobileLoops.spec.js",
+    "case": "regular desktop saved-loop blocks retain inline controls and the same four clips",
+    "profile": null,
+    "setupScope": "isolated",
+    "stateMode": "global-mutation",
+    "databaseScenarios": [
+      "generated:phase7-mobile-reset"
+    ],
+    "filesystemScenarios": [
+      "generated:extended-mobile-media"
+    ],
+    "expectedContracts": [
+      "regular desktop saved-loop blocks retain inline controls and the same four clips"
+    ],
+    "ownerApproval": "approved",
+    "globalMutationReason": "The generated mobile suite owns its isolated Postgres database, temporary media and browser contexts; its phase7 fixture resets application rows before each case."
+  },
+  {
+    "config": "playwright.mobile-feedback.config.js",
+    "project": "",
+    "test": "tests/e2e/mobile-feedback/mobileLoops.spec.js",
+    "case": "mobile loop index filters before opening a song, and Back retains the list in black",
+    "profile": null,
+    "setupScope": "isolated",
+    "stateMode": "global-mutation",
+    "databaseScenarios": [
+      "generated:phase7-mobile-reset"
+    ],
+    "filesystemScenarios": [
+      "generated:extended-mobile-media"
+    ],
+    "expectedContracts": [
+      "mobile loop index filters before opening a song, and Back retains the list in black"
+    ],
+    "ownerApproval": "approved",
+    "globalMutationReason": "The generated mobile suite owns its isolated Postgres database, temporary media and browser contexts; its phase7 fixture resets application rows before each case."
+  },
+  {
+    "config": "playwright.mobile-feedback.config.js",
+    "project": "",
+    "test": "tests/e2e/mobile-feedback/mobileLoops.spec.js",
+    "case": "mobile loop index filters before opening a song, and Back retains the list in parchment-pine",
+    "profile": null,
+    "setupScope": "isolated",
+    "stateMode": "global-mutation",
+    "databaseScenarios": [
+      "generated:phase7-mobile-reset"
+    ],
+    "filesystemScenarios": [
+      "generated:extended-mobile-media"
+    ],
+    "expectedContracts": [
+      "mobile loop index filters before opening a song, and Back retains the list in parchment-pine"
+    ],
+    "ownerApproval": "approved",
+    "globalMutationReason": "The generated mobile suite owns its isolated Postgres database, temporary media and browser contexts; its phase7 fixture resets application rows before each case."
+  },
+  {
+    "config": "playwright.mobile-feedback.config.js",
+    "project": "",
+    "test": "tests/e2e/mobile-feedback/mobileLoops.spec.js",
+    "case": "an unavailable saved-loop deep link returns to the usable mobile index",
+    "profile": null,
+    "setupScope": "isolated",
+    "stateMode": "global-mutation",
+    "databaseScenarios": [
+      "generated:phase7-mobile-reset"
+    ],
+    "filesystemScenarios": [
+      "generated:extended-mobile-media"
+    ],
+    "expectedContracts": [
+      "an unavailable saved-loop deep link returns to the usable mobile index"
+    ],
+    "ownerApproval": "approved",
+    "globalMutationReason": "The generated mobile suite owns its isolated Postgres database, temporary media and browser contexts; its phase7 fixture resets application rows before each case."
+  },
+  {
+    "config": "playwright.mobile-feedback.config.js",
+    "project": "",
+    "test": "tests/e2e/mobile-feedback/mobilePolish.spec.js",
+    "case": "phone menus are exclusive, search is joined, gallery pinch and first-touch panel scrolling work",
+    "profile": null,
+    "setupScope": "isolated",
+    "stateMode": "global-mutation",
+    "databaseScenarios": [
+      "generated:phase7-mobile-reset"
+    ],
+    "filesystemScenarios": [
+      "generated:extended-mobile-media"
+    ],
+    "expectedContracts": [
+      "phone menus are exclusive, search is joined, gallery pinch and first-touch panel scrolling work"
+    ],
+    "ownerApproval": "approved",
+    "globalMutationReason": "The generated mobile suite owns its isolated Postgres database, temporary media and browser contexts; its phase7 fixture resets application rows before each case."
+  },
+  {
+    "config": "playwright.mobile-feedback.config.js",
+    "project": "",
+    "test": "tests/e2e/mobile-feedback/mobilePolish.spec.js",
+    "case": "Admin is a readable phone table and header Back exits the hierarchy after Loops, Users and Password",
+    "profile": null,
+    "setupScope": "isolated",
+    "stateMode": "global-mutation",
+    "databaseScenarios": [
+      "generated:phase7-mobile-reset"
+    ],
+    "filesystemScenarios": [
+      "generated:extended-mobile-media"
+    ],
+    "expectedContracts": [
+      "Admin is a readable phone table and header Back exits the hierarchy after Loops, Users and Password"
+    ],
+    "ownerApproval": "approved",
+    "globalMutationReason": "The generated mobile suite owns its isolated Postgres database, temporary media and browser contexts; its phase7 fixture resets application rows before each case."
+  },
+  {
+    "config": "playwright.mobile-feedback.config.js",
+    "project": "",
+    "test": "tests/e2e/mobile-feedback/mobilePolish.spec.js",
+    "case": "Follow mode locks every phone editor and Rules uses the page-bar navigation dropdown",
+    "profile": null,
+    "setupScope": "isolated",
+    "stateMode": "global-mutation",
+    "databaseScenarios": [
+      "generated:phase7-mobile-reset"
+    ],
+    "filesystemScenarios": [
+      "generated:extended-mobile-media"
+    ],
+    "expectedContracts": [
+      "Follow mode locks every phone editor and Rules uses the page-bar navigation dropdown"
+    ],
+    "ownerApproval": "approved",
+    "globalMutationReason": "The generated mobile suite owns its isolated Postgres database, temporary media and browser contexts; its phase7 fixture resets application rows before each case."
+  },
+  {
+    "config": "playwright.mobile-feedback.config.js",
+    "project": "",
+    "test": "tests/e2e/mobile-feedback/mobilePolish.spec.js",
+    "case": "phone track tap pauses, double tap restarts, and generated saved loops really play",
+    "profile": null,
+    "setupScope": "isolated",
+    "stateMode": "global-mutation",
+    "databaseScenarios": [
+      "generated:phase7-mobile-reset"
+    ],
+    "filesystemScenarios": [
+      "generated:extended-mobile-media"
+    ],
+    "expectedContracts": [
+      "phone track tap pauses, double tap restarts, and generated saved loops really play"
+    ],
+    "ownerApproval": "approved",
+    "globalMutationReason": "The generated mobile suite owns its isolated Postgres database, temporary media and browser contexts; its phase7 fixture resets application rows before each case."
+  },
+  {
+    "config": "playwright.mobile-feedback.config.js",
+    "project": "",
+    "test": "tests/e2e/mobile-feedback/mobileTouchFeedback.spec.js",
+    "case": "phone touch boundaries, shared drawers and compact footer in black",
+    "profile": null,
+    "setupScope": "isolated",
+    "stateMode": "global-mutation",
+    "databaseScenarios": [
+      "generated:phase7-mobile-reset"
+    ],
+    "filesystemScenarios": [
+      "generated:extended-mobile-media"
+    ],
+    "expectedContracts": [
+      "phone touch boundaries, shared drawers and compact footer in black"
+    ],
+    "ownerApproval": "approved",
+    "globalMutationReason": "The generated mobile suite owns its isolated Postgres database, temporary media and browser contexts; its phase7 fixture resets application rows before each case."
+  },
+  {
+    "config": "playwright.mobile-feedback.config.js",
+    "project": "",
+    "test": "tests/e2e/mobile-feedback/mobileTouchFeedback.spec.js",
+    "case": "phone touch boundaries, shared drawers and compact footer in parchment-pine",
+    "profile": null,
+    "setupScope": "isolated",
+    "stateMode": "global-mutation",
+    "databaseScenarios": [
+      "generated:phase7-mobile-reset"
+    ],
+    "filesystemScenarios": [
+      "generated:extended-mobile-media"
+    ],
+    "expectedContracts": [
+      "phone touch boundaries, shared drawers and compact footer in parchment-pine"
+    ],
+    "ownerApproval": "approved",
+    "globalMutationReason": "The generated mobile suite owns its isolated Postgres database, temporary media and browser contexts; its phase7 fixture resets application rows before each case."
+  },
+  {
+    "config": "playwright.mobile-feedback.config.js",
+    "project": "",
+    "test": "tests/e2e/mobile-feedback/mobileTouchFeedback.spec.js",
+    "case": "album ratings precede tracks on one line; scrolled identity is top-aligned and initial scrollbars wait for touch",
+    "profile": null,
+    "setupScope": "isolated",
+    "stateMode": "global-mutation",
+    "databaseScenarios": [
+      "generated:phase7-mobile-reset"
+    ],
+    "filesystemScenarios": [
+      "generated:extended-mobile-media"
+    ],
+    "expectedContracts": [
+      "album ratings precede tracks on one line; scrolled identity is top-aligned and initial scrollbars wait for touch"
+    ],
+    "ownerApproval": "approved",
+    "globalMutationReason": "The generated mobile suite owns its isolated Postgres database, temporary media and browser contexts; its phase7 fixture resets application rows before each case."
+  },
+  {
+    "config": "playwright.mobile-feedback.config.js",
+    "project": "",
+    "test": "tests/e2e/mobile-feedback/mobileTouchFeedback.spec.js",
+    "case": "mobile search retains query, reserves Settings and restores collapsed state at 390px",
+    "profile": null,
+    "setupScope": "isolated",
+    "stateMode": "global-mutation",
+    "databaseScenarios": [
+      "generated:phase7-mobile-reset"
+    ],
+    "filesystemScenarios": [
+      "generated:extended-mobile-media"
+    ],
+    "expectedContracts": [
+      "mobile search retains query, reserves Settings and restores collapsed state at 390px"
+    ],
+    "ownerApproval": "approved",
+    "globalMutationReason": "The generated mobile suite owns its isolated Postgres database, temporary media and browser contexts; its phase7 fixture resets application rows before each case."
+  },
+  {
+    "config": "playwright.mobile-feedback.config.js",
+    "project": "",
+    "test": "tests/e2e/mobile-feedback/mobileTouchFeedback.spec.js",
+    "case": "mobile search retains query, reserves Settings and restores collapsed state at 320px",
+    "profile": null,
+    "setupScope": "isolated",
+    "stateMode": "global-mutation",
+    "databaseScenarios": [
+      "generated:phase7-mobile-reset"
+    ],
+    "filesystemScenarios": [
+      "generated:extended-mobile-media"
+    ],
+    "expectedContracts": [
+      "mobile search retains query, reserves Settings and restores collapsed state at 320px"
+    ],
+    "ownerApproval": "approved",
+    "globalMutationReason": "The generated mobile suite owns its isolated Postgres database, temporary media and browser contexts; its phase7 fixture resets application rows before each case."
+  },
+  {
+    "config": "playwright.mobile-feedback.config.js",
+    "project": "",
+    "test": "tests/e2e/mobile-feedback/mobileTouchFeedback.spec.js",
+    "case": "gallery counts retain the family-name column across narrow and roomy phones in black",
+    "profile": null,
+    "setupScope": "isolated",
+    "stateMode": "global-mutation",
+    "databaseScenarios": [
+      "generated:phase7-mobile-reset"
+    ],
+    "filesystemScenarios": [
+      "generated:extended-mobile-media"
+    ],
+    "expectedContracts": [
+      "gallery counts retain the family-name column across narrow and roomy phones in black"
+    ],
+    "ownerApproval": "approved",
+    "globalMutationReason": "The generated mobile suite owns its isolated Postgres database, temporary media and browser contexts; its phase7 fixture resets application rows before each case."
+  },
+  {
+    "config": "playwright.mobile-feedback.config.js",
+    "project": "",
+    "test": "tests/e2e/mobile-feedback/mobileTouchFeedback.spec.js",
+    "case": "gallery counts retain the family-name column across narrow and roomy phones in parchment-pine",
+    "profile": null,
+    "setupScope": "isolated",
+    "stateMode": "global-mutation",
+    "databaseScenarios": [
+      "generated:phase7-mobile-reset"
+    ],
+    "filesystemScenarios": [
+      "generated:extended-mobile-media"
+    ],
+    "expectedContracts": [
+      "gallery counts retain the family-name column across narrow and roomy phones in parchment-pine"
+    ],
+    "ownerApproval": "approved",
+    "globalMutationReason": "The generated mobile suite owns its isolated Postgres database, temporary media and browser contexts; its phase7 fixture resets application rows before each case."
+  },
+  {
+    "config": "playwright.mobile-feedback.config.js",
+    "project": "",
+    "test": "tests/e2e/mobile-feedback/mobileTouchFeedback.spec.js",
+    "case": "Find Better Art glows without expanding its footer on phone and desktop in black",
+    "profile": null,
+    "setupScope": "isolated",
+    "stateMode": "global-mutation",
+    "databaseScenarios": [
+      "generated:phase7-mobile-reset"
+    ],
+    "filesystemScenarios": [
+      "generated:extended-mobile-media"
+    ],
+    "expectedContracts": [
+      "Find Better Art glows without expanding its footer on phone and desktop in black"
+    ],
+    "ownerApproval": "approved",
+    "globalMutationReason": "The generated mobile suite owns its isolated Postgres database, temporary media and browser contexts; its phase7 fixture resets application rows before each case."
+  },
+  {
+    "config": "playwright.mobile-feedback.config.js",
+    "project": "",
+    "test": "tests/e2e/mobile-feedback/mobileTouchFeedback.spec.js",
+    "case": "Find Better Art glows without expanding its footer on phone and desktop in parchment-pine",
+    "profile": null,
+    "setupScope": "isolated",
+    "stateMode": "global-mutation",
+    "databaseScenarios": [
+      "generated:phase7-mobile-reset"
+    ],
+    "filesystemScenarios": [
+      "generated:extended-mobile-media"
+    ],
+    "expectedContracts": [
+      "Find Better Art glows without expanding its footer on phone and desktop in parchment-pine"
+    ],
+    "ownerApproval": "approved",
+    "globalMutationReason": "The generated mobile suite owns its isolated Postgres database, temporary media and browser contexts; its phase7 fixture resets application rows before each case."
+  },
+  {
+    "config": "playwright.mobile-feedback.config.js",
+    "project": "",
+    "test": "tests/e2e/mobile-feedback/ownerFeedback.spec.js",
+    "case": "owner feedback: readable mobile controls, ratings, menus and appearance in black",
+    "profile": null,
+    "setupScope": "isolated",
+    "stateMode": "global-mutation",
+    "databaseScenarios": [
+      "generated:phase7-mobile-reset"
+    ],
+    "filesystemScenarios": [
+      "generated:extended-mobile-media"
+    ],
+    "expectedContracts": [
+      "owner feedback: readable mobile controls, ratings, menus and appearance in black"
+    ],
+    "ownerApproval": "approved",
+    "globalMutationReason": "The generated mobile suite owns its isolated Postgres database, temporary media and browser contexts; its phase7 fixture resets application rows before each case."
+  },
+  {
+    "config": "playwright.mobile-feedback.config.js",
+    "project": "",
+    "test": "tests/e2e/mobile-feedback/ownerFeedback.spec.js",
+    "case": "owner feedback: readable mobile controls, ratings, menus and appearance in paper",
+    "profile": null,
+    "setupScope": "isolated",
+    "stateMode": "global-mutation",
+    "databaseScenarios": [
+      "generated:phase7-mobile-reset"
+    ],
+    "filesystemScenarios": [
+      "generated:extended-mobile-media"
+    ],
+    "expectedContracts": [
+      "owner feedback: readable mobile controls, ratings, menus and appearance in paper"
+    ],
+    "ownerApproval": "approved",
+    "globalMutationReason": "The generated mobile suite owns its isolated Postgres database, temporary media and browser contexts; its phase7 fixture resets application rows before each case."
+  },
+  {
+    "config": "playwright.mobile-feedback.config.js",
+    "project": "",
+    "test": "tests/e2e/mobile-feedback/ownerFeedback.spec.js",
+    "case": "owner feedback: readable mobile controls, ratings, menus and appearance in parchment-pine",
+    "profile": null,
+    "setupScope": "isolated",
+    "stateMode": "global-mutation",
+    "databaseScenarios": [
+      "generated:phase7-mobile-reset"
+    ],
+    "filesystemScenarios": [
+      "generated:extended-mobile-media"
+    ],
+    "expectedContracts": [
+      "owner feedback: readable mobile controls, ratings, menus and appearance in parchment-pine"
+    ],
+    "ownerApproval": "approved",
+    "globalMutationReason": "The generated mobile suite owns its isolated Postgres database, temporary media and browser contexts; its phase7 fixture resets application rows before each case."
+  },
+  {
+    "config": "playwright.mobile-feedback.config.js",
+    "project": "",
+    "test": "tests/e2e/mobile-feedback/ownerFeedback.spec.js",
+    "case": "Home loading replaces the complete page and search expands beside the logo",
+    "profile": null,
+    "setupScope": "isolated",
+    "stateMode": "global-mutation",
+    "databaseScenarios": [
+      "generated:phase7-mobile-reset"
+    ],
+    "filesystemScenarios": [
+      "generated:extended-mobile-media"
+    ],
+    "expectedContracts": [
+      "Home loading replaces the complete page and search expands beside the logo"
+    ],
+    "ownerApproval": "approved",
+    "globalMutationReason": "The generated mobile suite owns its isolated Postgres database, temporary media and browser contexts; its phase7 fixture resets application rows before each case."
+  },
+  {
+    "config": "playwright.mobile-feedback.config.js",
+    "project": "",
+    "test": "tests/e2e/mobile-feedback/ownerFeedback.spec.js",
+    "case": "cover selection saves before closing, reopens with saved artwork, and backdrop closes full art",
+    "profile": null,
+    "setupScope": "isolated",
+    "stateMode": "global-mutation",
+    "databaseScenarios": [
+      "generated:phase7-mobile-reset"
+    ],
+    "filesystemScenarios": [
+      "generated:extended-mobile-media"
+    ],
+    "expectedContracts": [
+      "cover selection saves before closing, reopens with saved artwork, and backdrop closes full art"
+    ],
+    "ownerApproval": "approved",
+    "globalMutationReason": "The generated mobile suite owns its isolated Postgres database, temporary media and browser contexts; its phase7 fixture resets application rows before each case."
+  },
+  {
+    "config": "playwright.mobile-feedback.config.js",
+    "project": "",
+    "test": "tests/e2e/mobile-feedback/ownerFeedback.spec.js",
+    "case": "desktop tag fields, Apply and alternating track stripes work in dark and light palettes",
+    "profile": null,
+    "setupScope": "isolated",
+    "stateMode": "global-mutation",
+    "databaseScenarios": [
+      "generated:phase7-mobile-reset"
+    ],
+    "filesystemScenarios": [
+      "generated:extended-mobile-media"
+    ],
+    "expectedContracts": [
+      "desktop tag fields, Apply and alternating track stripes work in dark and light palettes"
+    ],
+    "ownerApproval": "approved",
+    "globalMutationReason": "The generated mobile suite owns its isolated Postgres database, temporary media and browser contexts; its phase7 fixture resets application rows before each case."
+  },
+  {
+    "config": "playwright.mobile-feedback.config.js",
+    "project": "",
+    "test": "tests/e2e/mobile-feedback/ownerFeedback.spec.js",
+    "case": "mobile pinch hint appears once and respects no-preference motion",
+    "profile": null,
+    "setupScope": "isolated",
+    "stateMode": "global-mutation",
+    "databaseScenarios": [
+      "generated:phase7-mobile-reset"
+    ],
+    "filesystemScenarios": [
+      "generated:extended-mobile-media"
+    ],
+    "expectedContracts": [
+      "mobile pinch hint appears once and respects no-preference motion"
+    ],
+    "ownerApproval": "approved",
+    "globalMutationReason": "The generated mobile suite owns its isolated Postgres database, temporary media and browser contexts; its phase7 fixture resets application rows before each case."
+  },
+  {
+    "config": "playwright.mobile-feedback.config.js",
+    "project": "",
+    "test": "tests/e2e/mobile-feedback/ownerFeedback.spec.js",
+    "case": "mobile pinch hint appears once and respects reduce motion",
+    "profile": null,
+    "setupScope": "isolated",
+    "stateMode": "global-mutation",
+    "databaseScenarios": [
+      "generated:phase7-mobile-reset"
+    ],
+    "filesystemScenarios": [
+      "generated:extended-mobile-media"
+    ],
+    "expectedContracts": [
+      "mobile pinch hint appears once and respects reduce motion"
+    ],
+    "ownerApproval": "approved",
+    "globalMutationReason": "The generated mobile suite owns its isolated Postgres database, temporary media and browser contexts; its phase7 fixture resets application rows before each case."
+  },
+  {
+    "config": "playwright.mobile-feedback.config.js",
+    "project": "",
+    "test": "tests/e2e/mobile-feedback/responsiveTransitions.spec.js",
+    "case": "appearance drafts and page navigation survive phone/desktop transitions in black",
+    "profile": null,
+    "setupScope": "isolated",
+    "stateMode": "global-mutation",
+    "databaseScenarios": [
+      "generated:phase7-mobile-reset"
+    ],
+    "filesystemScenarios": [
+      "generated:extended-mobile-media"
+    ],
+    "expectedContracts": [
+      "appearance drafts and page navigation survive phone/desktop transitions in black"
+    ],
+    "ownerApproval": "approved",
+    "globalMutationReason": "The generated mobile suite owns its isolated Postgres database, temporary media and browser contexts; its phase7 fixture resets application rows before each case."
+  },
+  {
+    "config": "playwright.mobile-feedback.config.js",
+    "project": "",
+    "test": "tests/e2e/mobile-feedback/responsiveTransitions.spec.js",
+    "case": "appearance drafts and page navigation survive phone/desktop transitions in parchment-pine",
+    "profile": null,
+    "setupScope": "isolated",
+    "stateMode": "global-mutation",
+    "databaseScenarios": [
+      "generated:phase7-mobile-reset"
+    ],
+    "filesystemScenarios": [
+      "generated:extended-mobile-media"
+    ],
+    "expectedContracts": [
+      "appearance drafts and page navigation survive phone/desktop transitions in parchment-pine"
+    ],
+    "ownerApproval": "approved",
+    "globalMutationReason": "The generated mobile suite owns its isolated Postgres database, temporary media and browser contexts; its phase7 fixture resets application rows before each case."
+  },
+  {
+    "config": "playwright.mobile-feedback.config.js",
+    "project": "",
+    "test": "tests/e2e/mobile-feedback/settingsFeedback.spec.js",
+    "case": "Settings menus, empty Rules, and read-only Library use black",
+    "profile": null,
+    "setupScope": "isolated",
+    "stateMode": "global-mutation",
+    "databaseScenarios": [
+      "generated:phase7-mobile-reset"
+    ],
+    "filesystemScenarios": [
+      "generated:extended-mobile-media"
+    ],
+    "expectedContracts": [
+      "Settings menus, empty Rules, and read-only Library use black"
+    ],
+    "ownerApproval": "approved",
+    "globalMutationReason": "The generated mobile suite owns its isolated Postgres database, temporary media and browser contexts; its phase7 fixture resets application rows before each case."
+  },
+  {
+    "config": "playwright.mobile-feedback.config.js",
+    "project": "",
+    "test": "tests/e2e/mobile-feedback/settingsFeedback.spec.js",
+    "case": "Settings menus, empty Rules, and read-only Library use paper",
+    "profile": null,
+    "setupScope": "isolated",
+    "stateMode": "global-mutation",
+    "databaseScenarios": [
+      "generated:phase7-mobile-reset"
+    ],
+    "filesystemScenarios": [
+      "generated:extended-mobile-media"
+    ],
+    "expectedContracts": [
+      "Settings menus, empty Rules, and read-only Library use paper"
+    ],
+    "ownerApproval": "approved",
+    "globalMutationReason": "The generated mobile suite owns its isolated Postgres database, temporary media and browser contexts; its phase7 fixture resets application rows before each case."
+  },
+  {
+    "config": "playwright.mobile-feedback.config.js",
+    "project": "",
+    "test": "tests/e2e/mobile-feedback/settingsFeedback.spec.js",
+    "case": "Settings menus, empty Rules, and read-only Library use parchment-pine",
+    "profile": null,
+    "setupScope": "isolated",
+    "stateMode": "global-mutation",
+    "databaseScenarios": [
+      "generated:phase7-mobile-reset"
+    ],
+    "filesystemScenarios": [
+      "generated:extended-mobile-media"
+    ],
+    "expectedContracts": [
+      "Settings menus, empty Rules, and read-only Library use parchment-pine"
+    ],
+    "ownerApproval": "approved",
+    "globalMutationReason": "The generated mobile suite owns its isolated Postgres database, temporary media and browser contexts; its phase7 fixture resets application rows before each case."
+  },
+  {
+    "config": "playwright.mobile-feedback.config.js",
+    "project": "",
+    "test": "tests/e2e/mobile-feedback/settingsFeedback.spec.js",
+    "case": "Logs cards open Recent activity, export, and preserve Back and Forward",
+    "profile": null,
+    "setupScope": "isolated",
+    "stateMode": "global-mutation",
+    "databaseScenarios": [
+      "generated:phase7-mobile-reset"
+    ],
+    "filesystemScenarios": [
+      "generated:extended-mobile-media"
+    ],
+    "expectedContracts": [
+      "Logs cards open Recent activity, export, and preserve Back and Forward"
+    ],
+    "ownerApproval": "approved",
+    "globalMutationReason": "The generated mobile suite owns its isolated Postgres database, temporary media and browser contexts; its phase7 fixture resets application rows before each case."
+  },
+  {
+    "config": "playwright.mobile-feedback.config.js",
+    "project": "",
+    "test": "tests/e2e/mobile-feedback/settingsFeedback.spec.js",
+    "case": "Problematic Files uses black cards with persistent detail navigation",
+    "profile": null,
+    "setupScope": "isolated",
+    "stateMode": "global-mutation",
+    "databaseScenarios": [
+      "generated:phase7-mobile-reset"
+    ],
+    "filesystemScenarios": [
+      "generated:extended-mobile-media"
+    ],
+    "expectedContracts": [
+      "Problematic Files uses black cards with persistent detail navigation"
+    ],
+    "ownerApproval": "approved",
+    "globalMutationReason": "The generated mobile suite owns its isolated Postgres database, temporary media and browser contexts; its phase7 fixture resets application rows before each case."
+  },
+  {
+    "config": "playwright.mobile-feedback.config.js",
+    "project": "",
+    "test": "tests/e2e/mobile-feedback/settingsFeedback.spec.js",
+    "case": "Problematic Files uses paper cards with persistent detail navigation",
+    "profile": null,
+    "setupScope": "isolated",
+    "stateMode": "global-mutation",
+    "databaseScenarios": [
+      "generated:phase7-mobile-reset"
+    ],
+    "filesystemScenarios": [
+      "generated:extended-mobile-media"
+    ],
+    "expectedContracts": [
+      "Problematic Files uses paper cards with persistent detail navigation"
+    ],
+    "ownerApproval": "approved",
+    "globalMutationReason": "The generated mobile suite owns its isolated Postgres database, temporary media and browser contexts; its phase7 fixture resets application rows before each case."
+  },
+  {
+    "config": "playwright.mobile-feedback.config.js",
+    "project": "",
+    "test": "tests/e2e/mobile-feedback/settingsFeedback.spec.js",
+    "case": "Problematic Files uses parchment-pine cards with persistent detail navigation",
+    "profile": null,
+    "setupScope": "isolated",
+    "stateMode": "global-mutation",
+    "databaseScenarios": [
+      "generated:phase7-mobile-reset"
+    ],
+    "filesystemScenarios": [
+      "generated:extended-mobile-media"
+    ],
+    "expectedContracts": [
+      "Problematic Files uses parchment-pine cards with persistent detail navigation"
+    ],
+    "ownerApproval": "approved",
+    "globalMutationReason": "The generated mobile suite owns its isolated Postgres database, temporary media and browser contexts; its phase7 fixture resets application rows before each case."
+  },
+  {
+    "config": "playwright.mobile-feedback.config.js",
+    "project": "",
+    "test": "tests/e2e/mobile-feedback/settingsFeedback.spec.js",
+    "case": "Loop pickers align their selection and repeat keeps its selected paint",
+    "profile": null,
+    "setupScope": "isolated",
+    "stateMode": "global-mutation",
+    "databaseScenarios": [
+      "generated:phase7-mobile-reset"
+    ],
+    "filesystemScenarios": [
+      "generated:extended-mobile-media"
+    ],
+    "expectedContracts": [
+      "Loop pickers align their selection and repeat keeps its selected paint"
+    ],
+    "ownerApproval": "approved",
+    "globalMutationReason": "The generated mobile suite owns its isolated Postgres database, temporary media and browser contexts; its phase7 fixture resets application rows before each case."
+  },
+  {
+    "config": "playwright.mobile-feedback.config.js",
+    "project": "",
+    "test": "tests/e2e/mobile-feedback/settingsInteractions.spec.js",
+    "case": "mobile date filter validates, cancels, applies and exports in black",
+    "profile": null,
+    "setupScope": "isolated",
+    "stateMode": "global-mutation",
+    "databaseScenarios": [
+      "generated:phase7-mobile-reset"
+    ],
+    "filesystemScenarios": [
+      "generated:extended-mobile-media"
+    ],
+    "expectedContracts": [
+      "mobile date filter validates, cancels, applies and exports in black"
+    ],
+    "ownerApproval": "approved",
+    "globalMutationReason": "The generated mobile suite owns its isolated Postgres database, temporary media and browser contexts; its phase7 fixture resets application rows before each case."
+  },
+  {
+    "config": "playwright.mobile-feedback.config.js",
+    "project": "",
+    "test": "tests/e2e/mobile-feedback/settingsInteractions.spec.js",
+    "case": "mobile date filter validates, cancels, applies and exports in paper",
+    "profile": null,
+    "setupScope": "isolated",
+    "stateMode": "global-mutation",
+    "databaseScenarios": [
+      "generated:phase7-mobile-reset"
+    ],
+    "filesystemScenarios": [
+      "generated:extended-mobile-media"
+    ],
+    "expectedContracts": [
+      "mobile date filter validates, cancels, applies and exports in paper"
+    ],
+    "ownerApproval": "approved",
+    "globalMutationReason": "The generated mobile suite owns its isolated Postgres database, temporary media and browser contexts; its phase7 fixture resets application rows before each case."
+  },
+  {
+    "config": "playwright.mobile-feedback.config.js",
+    "project": "",
+    "test": "tests/e2e/mobile-feedback/settingsInteractions.spec.js",
+    "case": "mobile date filter validates, cancels, applies and exports in parchment-pine",
+    "profile": null,
+    "setupScope": "isolated",
+    "stateMode": "global-mutation",
+    "databaseScenarios": [
+      "generated:phase7-mobile-reset"
+    ],
+    "filesystemScenarios": [
+      "generated:extended-mobile-media"
+    ],
+    "expectedContracts": [
+      "mobile date filter validates, cancels, applies and exports in parchment-pine"
+    ],
+    "ownerApproval": "approved",
+    "globalMutationReason": "The generated mobile suite owns its isolated Postgres database, temporary media and browser contexts; its phase7 fixture resets application rows before each case."
+  },
+  {
+    "config": "playwright.mobile-feedback.config.js",
+    "project": "",
+    "test": "tests/e2e/mobile-feedback/settingsInteractions.spec.js",
+    "case": "mobile Problematic Files search, filters and exact exceptions survive reload while Rules remains read-only",
+    "profile": null,
+    "setupScope": "isolated",
+    "stateMode": "global-mutation",
+    "databaseScenarios": [
+      "generated:phase7-mobile-reset"
+    ],
+    "filesystemScenarios": [
+      "generated:extended-mobile-media"
+    ],
+    "expectedContracts": [
+      "mobile Problematic Files search, filters and exact exceptions survive reload while Rules remains read-only"
+    ],
+    "ownerApproval": "approved",
+    "globalMutationReason": "The generated mobile suite owns its isolated Postgres database, temporary media and browser contexts; its phase7 fixture resets application rows before each case."
+  },
+  {
+    "config": "playwright.mobile-feedback.config.js",
+    "project": "",
+    "test": "tests/e2e/mobile-feedback/settingsInteractions.spec.js",
+    "case": "mobile Library Refresh reloads saved settings and remains read-only after resizing",
+    "profile": null,
+    "setupScope": "isolated",
+    "stateMode": "global-mutation",
+    "databaseScenarios": [
+      "generated:phase7-mobile-reset"
+    ],
+    "filesystemScenarios": [
+      "generated:extended-mobile-media"
+    ],
+    "expectedContracts": [
+      "mobile Library Refresh reloads saved settings and remains read-only after resizing"
+    ],
+    "ownerApproval": "approved",
+    "globalMutationReason": "The generated mobile suite owns its isolated Postgres database, temporary media and browser contexts; its phase7 fixture resets application rows before each case."
+  },
+  {
+    "config": "playwright.mobile-feedback.config.js",
+    "project": "",
+    "test": "tests/e2e/mobile-feedback/surfaceDismissal.spec.js",
+    "case": "touch distinguishes real backdrops from uncovered actions; themed selection in black",
+    "profile": null,
+    "setupScope": "isolated",
+    "stateMode": "global-mutation",
+    "databaseScenarios": [
+      "generated:phase7-mobile-reset"
+    ],
+    "filesystemScenarios": [
+      "generated:extended-mobile-media"
+    ],
+    "expectedContracts": [
+      "touch distinguishes real backdrops from uncovered actions; themed selection in black"
+    ],
+    "ownerApproval": "approved",
+    "globalMutationReason": "The generated mobile suite owns its isolated Postgres database, temporary media and browser contexts; its phase7 fixture resets application rows before each case."
+  },
+  {
+    "config": "playwright.mobile-feedback.config.js",
+    "project": "",
+    "test": "tests/e2e/mobile-feedback/surfaceDismissal.spec.js",
+    "case": "touch distinguishes real backdrops from uncovered actions; themed selection in parchment-pine",
+    "profile": null,
+    "setupScope": "isolated",
+    "stateMode": "global-mutation",
+    "databaseScenarios": [
+      "generated:phase7-mobile-reset"
+    ],
+    "filesystemScenarios": [
+      "generated:extended-mobile-media"
+    ],
+    "expectedContracts": [
+      "touch distinguishes real backdrops from uncovered actions; themed selection in parchment-pine"
+    ],
+    "ownerApproval": "approved",
+    "globalMutationReason": "The generated mobile suite owns its isolated Postgres database, temporary media and browser contexts; its phase7 fixture resets application rows before each case."
+  },
+  {
+    "config": "playwright.mobile-feedback.config.js",
+    "project": "",
+    "test": "tests/e2e/mobile-feedback/surfaceDismissal.spec.js",
+    "case": "outside mouse activates uncovered family content but dismisses a real desktop modal backdrop",
+    "profile": null,
+    "setupScope": "isolated",
+    "stateMode": "global-mutation",
+    "databaseScenarios": [
+      "generated:phase7-mobile-reset"
+    ],
+    "filesystemScenarios": [
+      "generated:extended-mobile-media"
+    ],
+    "expectedContracts": [
+      "outside mouse activates uncovered family content but dismisses a real desktop modal backdrop"
+    ],
+    "ownerApproval": "approved",
+    "globalMutationReason": "The generated mobile suite owns its isolated Postgres database, temporary media and browser contexts; its phase7 fixture resets application rows before each case."
+  },
+  {
+    "config": "playwright.mobile-feedback.config.js",
+    "project": "",
+    "test": "tests/e2e/mobile-feedback/surfaceDismissal.spec.js",
+    "case": "an uncovered loop play button activates on the first tap while a dropdown is open",
+    "profile": null,
+    "setupScope": "isolated",
+    "stateMode": "global-mutation",
+    "databaseScenarios": [
+      "generated:phase7-mobile-reset"
+    ],
+    "filesystemScenarios": [
+      "generated:extended-mobile-media"
+    ],
+    "expectedContracts": [
+      "an uncovered loop play button activates on the first tap while a dropdown is open"
+    ],
+    "ownerApproval": "approved",
+    "globalMutationReason": "The generated mobile suite owns its isolated Postgres database, temporary media and browser contexts; its phase7 fixture resets application rows before each case."
+  },
+  {
+    "config": "playwright.mobile-feedback.config.js",
+    "project": "",
+    "test": "tests/e2e/mobile-feedback/surfaceDismissal.spec.js",
+    "case": "mobile player taps work outside the Artists scrim and open notification and Settings surfaces",
+    "profile": null,
+    "setupScope": "isolated",
+    "stateMode": "global-mutation",
+    "databaseScenarios": [
+      "generated:phase7-mobile-reset"
+    ],
+    "filesystemScenarios": [
+      "generated:extended-mobile-media"
+    ],
+    "expectedContracts": [
+      "mobile player taps work outside the Artists scrim and open notification and Settings surfaces"
+    ],
+    "ownerApproval": "approved",
+    "globalMutationReason": "The generated mobile suite owns its isolated Postgres database, temporary media and browser contexts; its phase7 fixture resets application rows before each case."
+  },
+  {
     "config": "playwright.component.config.js",
     "project": "",
     "test": "tests/components/appearanceWorkspace.spec.js",
-    "case": "mount keeps unavailable devices natively disabled after load save and cancel",
+    "case": "mount preserves Mobile profile isolation and disabled TV after load save and cancel",
     "profile": null,
     "setupScope": "suite",
     "stateMode": "read-only",
     "databaseScenarios": [],
     "filesystemScenarios": [],
     "expectedContracts": [
-      "mount keeps unavailable devices natively disabled after load save and cancel"
+      "mount preserves Mobile profile isolation and disabled TV after load save and cancel"
     ],
     "ownerApproval": "approved"
   },
@@ -5902,14 +7683,14 @@
     "config": "playwright.component.config.js",
     "project": "",
     "test": "tests/components/appearanceWorkspace.spec.js",
-    "case": "mountAlerts keeps unavailable devices natively disabled after load save and cancel",
+    "case": "mountAlerts preserves Mobile profile isolation and disabled TV after load save and cancel",
     "profile": null,
     "setupScope": "suite",
     "stateMode": "read-only",
     "databaseScenarios": [],
     "filesystemScenarios": [],
     "expectedContracts": [
-      "mountAlerts keeps unavailable devices natively disabled after load save and cancel"
+      "mountAlerts preserves Mobile profile isolation and disabled TV after load save and cancel"
     ],
     "ownerApproval": "approved"
   },
@@ -5917,14 +7698,14 @@
     "config": "playwright.component.config.js",
     "project": "",
     "test": "tests/components/appearanceWorkspace.spec.js",
-    "case": "mountAlbumPage keeps unavailable devices natively disabled after load save and cancel",
+    "case": "mountAlbumPage preserves Mobile profile isolation and disabled TV after load save and cancel",
     "profile": null,
     "setupScope": "suite",
     "stateMode": "read-only",
     "databaseScenarios": [],
     "filesystemScenarios": [],
     "expectedContracts": [
-      "mountAlbumPage keeps unavailable devices natively disabled after load save and cancel"
+      "mountAlbumPage preserves Mobile profile isolation and disabled TV after load save and cancel"
     ],
     "ownerApproval": "approved"
   },
@@ -5932,14 +7713,14 @@
     "config": "playwright.component.config.js",
     "project": "",
     "test": "tests/components/appearanceWorkspace.spec.js",
-    "case": "mountSelectionAccent keeps unavailable devices natively disabled after load save and cancel",
+    "case": "mountSelectionAccent preserves Mobile profile isolation and disabled TV after load save and cancel",
     "profile": null,
     "setupScope": "suite",
     "stateMode": "read-only",
     "databaseScenarios": [],
     "filesystemScenarios": [],
     "expectedContracts": [
-      "mountSelectionAccent keeps unavailable devices natively disabled after load save and cancel"
+      "mountSelectionAccent preserves Mobile profile isolation and disabled TV after load save and cancel"
     ],
     "ownerApproval": "approved"
   },
@@ -5947,14 +7728,14 @@
     "config": "playwright.component.config.js",
     "project": "",
     "test": "tests/components/appearanceWorkspace.spec.js",
-    "case": "mountSeekbar keeps unavailable devices natively disabled after load save and cancel",
+    "case": "mountSeekbar preserves Mobile profile isolation and disabled TV after load save and cancel",
     "profile": null,
     "setupScope": "suite",
     "stateMode": "read-only",
     "databaseScenarios": [],
     "filesystemScenarios": [],
     "expectedContracts": [
-      "mountSeekbar keeps unavailable devices natively disabled after load save and cancel"
+      "mountSeekbar preserves Mobile profile isolation and disabled TV after load save and cancel"
     ],
     "ownerApproval": "approved"
   },
@@ -5991,6 +7772,23 @@
   {
     "config": "playwright.component.config.js",
     "project": "",
+    "test": "tests/components/navigationTreeReconciliation.spec.js",
+    "case": "navigation rows preserve unchanged selection and artwork attributes during reconciliation",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "unchanged-navigation-row-attributes-produce-no-mutations",
+      "changed-selection-and-artwork-labels-remain-accessible",
+      "explicit-empty-artwork-labels-and-node-identity-preserved"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
     "test": "tests/components/problematicFilesVirtualFocus.spec.js",
     "case": "scroll and resize retain focused row identity within unchanged and overlapping windows",
     "profile": null,
@@ -6017,5 +7815,39 @@
       "native Tab and ShiftTab traverse past the initial window and leave at the true ends"
     ],
     "ownerApproval": "approved"
-  }
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/triggerAnchorSurface.spec.js",
+    "case": "nested calendar dates remain clickable beyond the parent panel clipping boundary",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "nested calendar dates remain clickable beyond the parent panel clipping boundary"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/calendarPicker.spec.js",
+    "case": "calendar days remain clickable above the anchored form and Escape closes only the calendar",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "native-calendar-day-selection-outside-parent-clip",
+      "calendar-focus-restoration",
+      "nested-Escape-preserves-date-range-form",
+      "date-range-apply-preserves-selected-values"
+    ],
+    "ownerApproval": "approved"
+  },
+  {"config": "playwright.component.config.js", "project": "", "test": "tests/components/coverLookupMutationBusy.spec.js", "case": "pending local cover actions remain visibly disabled on hover and re-enable normally", "profile": null, "setupScope": "suite", "stateMode": "read-only", "databaseScenarios": [], "filesystemScenarios": [], "expectedContracts": ["local-cover-mutation-exclusivity", "disabled-local-cover-action-appearance"], "ownerApproval": "approved"}
 ]

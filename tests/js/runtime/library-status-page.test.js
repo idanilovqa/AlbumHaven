@@ -51,7 +51,7 @@ test('mount and unmount replace the GalleryBar and restore the same node', () =>
       createElement() {
         return {
           set innerHTML(value) {
-            assert.match(value, /Library Status Page/);
+            assert.match(value, /Library State/);
             statusBar = { parentNode: null, remove() { parent.remove(this); statusBar = null; } };
             this.firstElementChild = statusBar;
           },
@@ -60,6 +60,8 @@ test('mount and unmount replace the GalleryBar and restore the same node', () =>
     },
   };
   vm.createContext(context);
+  vm.runInContext(fs.readFileSync(path.join(root, 'music_app/static/js/button-component.js'), 'utf8'), context);
+  context.ButtonComponent = context.window.ButtonComponent;
   vm.runInContext(runtime, context);
 
   const mounted = context.mountLibraryStatusBar();
@@ -76,8 +78,16 @@ test('mount and unmount replace the GalleryBar and restore the same node', () =>
 test('runtime Library Status bar uses shared GalleryBar structure and exact labels', () => {
   assert.match(runtime, /data-gallery-bar-instance="library-status"/);
   assert.match(runtime, /aria-label="Library Status Page controls"/);
-  assert.match(runtime, />Library Status Page</);
-  assert.match(runtime, /data-close-scan-page="1"/);
+  assert.match(runtime, />Library State</);
+  const context = vm.createContext({ window: {}, appBootstrap: { getInitialView: () => ({}) } });
+  vm.runInContext(fs.readFileSync(path.join(root, 'music_app/static/js/button-component.js'), 'utf8'), context);
+  context.ButtonComponent = context.window.ButtonComponent;
+  vm.runInContext(runtime, context);
+  const html = context.buildLibraryStatusBarHtml();
+  assert.match(html, /data-close-scan-page="1"/);
+  assert.match(html, /id="library-loader-back-button"/);
+  assert.match(html, /aria-label="Back to previous library view"/);
+  assert.match(html, /action-button--bare/);
   assert.match(runtime, /data-cancel-library-scan="1"/);
   assert.match(navigation, /Open Library Status Page/);
   assert.match(navigation, /Go to Library Status Page/);

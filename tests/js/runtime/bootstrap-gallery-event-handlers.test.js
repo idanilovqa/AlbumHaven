@@ -3808,7 +3808,8 @@ test('native clear does not retain a query-filtered selected-artist group over t
   assert.deepEqual(calls.renderLibraryLoader, []);
 });
 
-test('cold direct-loaded Signal 1/1 clear preserves a complete cached root and mounted gallery without a request', () => {
+for (const pendingTransition of [false, true]) {
+test(`cold direct-loaded Signal 1/1 clear preserves a complete cached root and mounted gallery without a request (pending transition: ${pendingTransition})`, () => {
   const cachedRootSidebar = [
     { artist: 'Earlier Artist', count: 4 },
     { artist: 'Signal', count: 1 },
@@ -3873,6 +3874,7 @@ test('cold direct-loaded Signal 1/1 clear preserves a complete cached root and m
       : '/view-data?artist=Signal&gallery_scope=all';
   };
 
+  context.state.ui.pendingViewTransition = pendingTransition;
   context.syncSearchClear();
 
   assert.equal(context.state.ui.pendingSearchClearOnBlur, true);
@@ -3904,9 +3906,11 @@ test('cold direct-loaded Signal 1/1 clear preserves a complete cached root and m
   assert.deepEqual(calls.renderView, []);
   assert.deepEqual(calls.buildApiUrl, []);
   assert.deepEqual(calls.fetchAndRender, []);
-  assert.deepEqual(calls.renderLibraryLoader, []);
+  assert.equal(calls.renderLibraryLoader.length, pendingTransition ? 1 : 0);
+  assert.equal(context.state.ui.pendingViewTransition, false);
   assert.equal(context.state.ui.pendingSearchClearOnBlur, false);
 });
+}
 
 test('native clear preserves an intentionally family-filtered mounted gallery and the complete family controls', () => {
   const cachedRootSidebar = [

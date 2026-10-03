@@ -43,6 +43,7 @@ test.describe(`${CASE_ID} synthetic-large artist family responsiveness`, () => {
 
   test('Neal Morse scrolling keeps each displayed artist heading unique before and after filtering', async ({
     artistFamilyActions,
+    layoutPreferenceIsolation,
     artistPageSettingsActions,
     galleryActions,
     navigationPanelActions,
@@ -55,6 +56,7 @@ test.describe(`${CASE_ID} synthetic-large artist family responsiveness`, () => {
 
     requirePostgresRuntimeEnv('the Neal Morse duplicate-heading regression');
     await galleryActions.goto();
+    await layoutPreferenceIsolation.capture();
     await searchToolbarActions.waitForVisible({ timeout: 60000 });
     await navigationPanelActions.waitForSidebarPreviewHydrated({ timeout: 60000 });
     await enterAndWaitForPostgresBrowseWarmRoot(
@@ -216,6 +218,7 @@ test.describe(`${CASE_ID} synthetic-large artist family responsiveness`, () => {
 
   test('Neal Morse family search, filters, details, settings, and clear-search flows stay responsive on synthetic data', async ({
     artistFamilyActions,
+    layoutPreferenceIsolation,
     page,
     artistPageSettingsActions,
     galleryActions,
@@ -230,6 +233,7 @@ test.describe(`${CASE_ID} synthetic-large artist family responsiveness`, () => {
 
     requirePostgresRuntimeEnv('the Neal Morse artist-family benchmark');
     await galleryActions.goto();
+    await layoutPreferenceIsolation.capture();
     await searchToolbarActions.waitForVisible({ timeout: 60000 });
     await navigationPanelActions.waitForSidebarPreviewHydrated({ timeout: 60000 });
 

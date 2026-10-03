@@ -4,6 +4,7 @@ function getPlayerElements() {
     coverButton: document.getElementById('player-cover-button'),
     play: document.getElementById('player-play'),
     title: document.getElementById('player-title'),
+    artist: document.getElementById('player-artist'),
     albumLink: document.getElementById('player-album-link'),
     waveformCanvas: document.getElementById('player-waveform-canvas'),
     timeline: document.getElementById('player-timeline'),
@@ -194,8 +195,15 @@ function clearWaveformCanvas() {
 }
 
 const playerTextTransitions = new WeakMap();
+function resolvePlayerSeekbarPresentation({ isWaveform, seekbarMode, viewportWidth } = {}) {
+  if (isWaveform) return 'waveform';
+  return seekbarMode === 'thin' && Number(viewportWidth) > 0 && Number(viewportWidth) <= 900
+    ? 'thin' : 'regular';
+}
 function setPlayerSeekbarPresentation(isWaveform) {
-  const mode = isWaveform ? 'waveform' : 'regular';
+  const mode = resolvePlayerSeekbarPresentation({
+    isWaveform, seekbarMode: state.player.appearance?.seekbarMode, viewportWidth: window.innerWidth,
+  });
   const player = getPlayerElements().player;
   const previousMode = player?.getAttribute('data-player-seekbar-presentation');
   const animateText = previousMode && previousMode !== mode

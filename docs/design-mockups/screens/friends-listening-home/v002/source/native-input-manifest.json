@@ -1,0 +1,933 @@
+{
+  "tree": "bf042b5d824e7aeb35a689066e0cbe0f10e8b900",
+  "version": "0.9.48",
+  "archiveSha256": "c556fb30760e616efcaf6c6ac9c04d0e238fbf650a67edaca89a61a812b7e805",
+  "files": [
+    {
+      "path": "music_app/static/app.js",
+      "sha256": "e3cdd61996f9ca0cb25eb3358d6cab2a4266ec40781c5dc9bc3b6241edf42047",
+      "bytes": 16112
+    },
+    {
+      "path": "music_app/static/styles.css",
+      "sha256": "2d59ae2fbe189aa6ce64c90ecf2362ea141cb5e119a9734c132847d38de58bf9",
+      "bytes": 376
+    },
+    {
+      "path": "music_app/static/css/player.css",
+      "sha256": "32eedf86a38162558eb8d82d2d2c822d578f7e1dba0eda7d4b0c60dbaf10e3e9",
+      "bytes": 12290
+    },
+    {
+      "path": "music_app/static/css/admin-members.css",
+      "sha256": "d89f87a741821b5fb7f42cb2131979bebbf6f88947fd8e9486f6b8ae93d0dd15",
+      "bytes": 11068
+    },
+    {
+      "path": "music_app/static/css/button-component.css",
+      "sha256": "d4c3c2ae473d21a664f4e064c0ccd7d5d36d5d4a41a686fe627a1ac8e6a768d0",
+      "bytes": 8857
+    },
+    {
+      "path": "music_app/static/css/date-range-picker.css",
+      "sha256": "6f170bd620d6d448abe041a1c0fb11dbf72d9ae43b01bf8513432dee7fb4068f",
+      "bytes": 3740
+    },
+    {
+      "path": "music_app/static/css/account.css",
+      "sha256": "d927a62bd270aadcc9f6f6f69df40e6049bea2bd29f9adaa5abe14b6fee8cf3e",
+      "bytes": 4861
+    },
+    {
+      "path": "music_app/static/css/navigation-tree.css",
+      "sha256": "01dc3fdbc2925fd6cb3f5debdef908cf70c2c6b38d5c64760d537d764ea49592",
+      "bytes": 5288
+    },
+    {
+      "path": "music_app/static/css/scrollbar.css",
+      "sha256": "48c5d5eda4dc80c234bc3e4a550e4662ad5862bda6ecc5d9895823b7d57561b9",
+      "bytes": 1152
+    },
+    {
+      "path": "music_app/static/css/app-chrome.css",
+      "sha256": "f9e5fbc2b8d06272df7cd3d328857c473b645ec04eddcac59e799045afb3a633",
+      "bytes": 11758
+    },
+    {
+      "path": "music_app/static/css/settings-navigation.css",
+      "sha256": "496f73f5e80958587591a904f51ac80da304be381cbaa80adbdef223f5c4cb54",
+      "bytes": 875
+    },
+    {
+      "path": "music_app/static/css/utilities.css",
+      "sha256": "8691bc3835edcd64bb1b411bdd7387b04decdaa3960f2bf926de7c29a500de75",
+      "bytes": 25986
+    },
+    {
+      "path": "music_app/static/css/unfolding-action-button.css",
+      "sha256": "a0ff1544d1d2f07ab30af567aababf6054300e2a923ac9b98907f9b3aa5ad44c",
+      "bytes": 3912
+    },
+    {
+      "path": "music_app/static/css/gallery.css",
+      "sha256": "dcaa0e244cd20c40da0d75e3be1008860f489ef3e2b4cf9a58c11f06aa51ada5",
+      "bytes": 290
+    },
+    {
+      "path": "music_app/static/css/gallery-main.css",
+      "sha256": "949d068aa7115525bf0df59491bb707d2d7a7263a6b8ae8b2baebcf473c086ad",
+      "bytes": 22839
+    },
+    {
+      "path": "music_app/static/css/modals.css",
+      "sha256": "49f727840cf7824052d9ead92ba41cdbd4e7a53a1bec9af3c4ab8978164752c5",
+      "bytes": 13740
+    },
+    {
+      "path": "music_app/static/css/appearance-backgrounds.css",
+      "sha256": "89abfb5a77593710fab4d2d16c47235aea99812a02a2e8805b1404eca655d9b8",
+      "bytes": 96926
+    },
+    {
+      "path": "music_app/static/css/base.css",
+      "sha256": "bb98c2b68ed461b1b83f1e1cc10d217cd2aab1221c8acabce0fc78bad5a64ef4",
+      "bytes": 12281
+    },
+    {
+      "path": "music_app/static/css/password-recovery.css",
+      "sha256": "358dc5d6420e39898cb3b51858a3174b3f25eb0ac34b1507510287c7b3db4c7e",
+      "bytes": 2743
+    },
+    {
+      "path": "music_app/static/css/mobile-layout.css",
+      "sha256": "339f9801b0fb435a1b480ea6c981c5b30d092f022cb77356794182435e3366bc",
+      "bytes": 74582
+    },
+    {
+      "path": "music_app/static/css/search-input.css",
+      "sha256": "d8243ee24c7715c14ef3050e39f661796027735301be6a12247dbf3fd341e5f0",
+      "bytes": 3564
+    },
+    {
+      "path": "music_app/static/css/login.css",
+      "sha256": "4415a19d2b2b8dbeaf3030135fe9e8b5f0e9661741bb892bded1269669a7dbcf",
+      "bytes": 3827
+    },
+    {
+      "path": "music_app/static/js/appearance-backgrounds.js",
+      "sha256": "afe10e9f4a182956fe7880260dff37b3efac7787b40c51432a23766360d4de51",
+      "bytes": 156945
+    },
+    {
+      "path": "music_app/static/js/selection-accent.js",
+      "sha256": "25a5f377c96df7e916933341fb8cee20019ccaf1225376cb6aff80faf4bd532b",
+      "bytes": 11988
+    },
+    {
+      "path": "music_app/static/js/admin-members.js",
+      "sha256": "dfe629c4118e2e72dc419a0dd587918c1a4648647a5a4c9bce27a2cc8f194fdf",
+      "bytes": 23476
+    },
+    {
+      "path": "music_app/static/js/unfolding-action-button.js",
+      "sha256": "217c668647eb059461ef5ab3be064a6e3660b4fe75fa7457b4250b73526e7716",
+      "bytes": 5312
+    },
+    {
+      "path": "music_app/static/js/capability-ui.js",
+      "sha256": "4966e0f686e2f186b043dbe06bfc12505fa289db7d9c649412c48033e4076bbc",
+      "bytes": 3449
+    },
+    {
+      "path": "music_app/static/js/surface-dismissal.js",
+      "sha256": "f0cc624c0c0ab49d8a18ce7a640d466396c3f1e53588ee731af3ed6b6b7fbf59",
+      "bytes": 3160
+    },
+    {
+      "path": "music_app/static/js/editor-page.js",
+      "sha256": "eb87e16445bbfab18fb731b80131de714764d918d450eeb0a48b58640c3a7cd3",
+      "bytes": 2742
+    },
+    {
+      "path": "music_app/static/js/settings-navigation.js",
+      "sha256": "cfd34d27632b6bb4e97461da62324e7a4024222a32cb4483755fbf579f0acc96",
+      "bytes": 16645
+    },
+    {
+      "path": "music_app/static/js/client-layout-bootstrap.js",
+      "sha256": "a6ce9ce176135b2b38a8ed048f06547fb3b36521ed5c6ad6b3b88c5de58dde72",
+      "bytes": 10811
+    },
+    {
+      "path": "music_app/static/js/client-device-preferences.js",
+      "sha256": "3612c7d0c80cb018b6246e1a4408ffc3c67554c312ddf900fd83309b67acfb22",
+      "bytes": 7977
+    },
+    {
+      "path": "music_app/static/js/runtime-bundle.js",
+      "sha256": "a7b432d06e88b982848869fa314826407ce90499f5f5a6cfea00ecc238708978",
+      "bytes": 1800580
+    },
+    {
+      "path": "music_app/static/js/login.js",
+      "sha256": "47090db7b5e328480084d9bb06c4bdbe1c5725facdd6a31f1ae833b003ae97d7",
+      "bytes": 822
+    },
+    {
+      "path": "music_app/static/js/button-component.js",
+      "sha256": "3eabb1e05d73cba1292bdeece909cd47a891ce7b838c22c7fa5628e1471dc0f7",
+      "bytes": 5924
+    },
+    {
+      "path": "music_app/static/js/appearance-palettes.js",
+      "sha256": "b8cdb22b779c4d29a82f5093a7378f8d9a25d4c34892a69d77d194028888d936",
+      "bytes": 18188
+    },
+    {
+      "path": "music_app/static/js/appearance-device-profiles.js",
+      "sha256": "5fec55eca6cfbbfccefd7df15d6ca15cb0572bfda37e938a2fb1fe985a5c2a64",
+      "bytes": 2707
+    },
+    {
+      "path": "music_app/static/js/account.js",
+      "sha256": "32a61f35d5a4be4b901a8f3ae98292c01d486ab0ced409bab834ca1f9d385007",
+      "bytes": 1828
+    },
+    {
+      "path": "music_app/static/js/password-recovery.js",
+      "sha256": "d9fe953569548d18c7e3491c692052ca8ca591268e042816f6fd02829a99b9a5",
+      "bytes": 369
+    },
+    {
+      "path": "music_app/static/js/navigation-tree.js",
+      "sha256": "4521a8d050d56584719ec810c978ef2b01a9f7efdbb6ab3f962940f4a4599d95",
+      "bytes": 4742
+    },
+    {
+      "path": "music_app/static/images/cover-lookup-gallery-icon-offwhite.png",
+      "sha256": "b861db14e5af0769b6693e3605df4da401a77bd540637874c8c4cc965d1b7e59",
+      "bytes": 228410
+    },
+    {
+      "path": "music_app/static/images/cover-lookup-notification-icon-offwhite.png",
+      "sha256": "ca9d39b4084c259bbb29f5e870c524a0fd31a4bde3da02fd9ba595360632663f",
+      "bytes": 220948
+    },
+    {
+      "path": "music_app/static/images/remote-preview-unavailable.png",
+      "sha256": "c3cddd5848e12b82feb902f9d41ab31e37cec5de47d2e07ba836769aca6ff87b",
+      "bytes": 1995416
+    },
+    {
+      "path": "music_app/static/images/yandex.ico",
+      "sha256": "9a8c4ab2a3a2451c6f1b31af29eeeced47745013711f641eafa80828a2b251de",
+      "bytes": 1662
+    },
+    {
+      "path": "music_app/static/images/quick-search-icon.png",
+      "sha256": "3feec4719c0117b828218922ba8431fea8e43ee4651e346e21d1731eb5028d65",
+      "bytes": 1130109
+    },
+    {
+      "path": "music_app/static/images/loading-idea.png",
+      "sha256": "51e89bd5bab24db40a79a842ad07e66e80f34e14342dc10ec49701e801891fe8",
+      "bytes": 1604223
+    },
+    {
+      "path": "music_app/static/images/google.ico",
+      "sha256": "6da5620880159634213e197fafca1dde0272153be3e4590818533fab8d040770",
+      "bytes": 5430
+    },
+    {
+      "path": "music_app/static/images/cover-lookup-notification-icon.png",
+      "sha256": "01124815f26c21287d2e523360221e9d1115b37741292ee8d36af93d8a198739",
+      "bytes": 841732
+    },
+    {
+      "path": "music_app/static/images/quick-search-icon-offwhite.png",
+      "sha256": "03835c89f54dd361d7ea1c8e84957e6bc16edbef914be4badad44716de13d831",
+      "bytes": 224427
+    },
+    {
+      "path": "music_app/static/images/clear-notifications-icon-offwhite.png",
+      "sha256": "540609d22836a11fbd702b42a40fc321cdab8f2671586b98f827312ad1831c14",
+      "bytes": 186292
+    },
+    {
+      "path": "music_app/static/images/album-haven-cloud-vinyl.png",
+      "sha256": "febbc15f861cc64c87b4f1161feb5c9876832cc8ab4f516ac7b31c84cc6a69d1",
+      "bytes": 86249
+    },
+    {
+      "path": "music_app/static/images/cover-lookup-gallery-icon.png",
+      "sha256": "e8ec0d92219608836aa47cdcd8beb93ea7c7e20f40d664c1b64d35327e639585",
+      "bytes": 1163993
+    },
+    {
+      "path": "music_app/static/images/clear-notifications-icon.png",
+      "sha256": "cfc82fb8f3faea067131de9a062254ff4d4669f6867cc01727020a5fa5f988e5",
+      "bytes": 394167
+    },
+    {
+      "path": "music_app/static/css/runtime/base-layout.css",
+      "sha256": "8e263c91b4b344dc5ee4287945998d049f15e6edbb0a2cc71f510f4459592a73",
+      "bytes": 10685
+    },
+    {
+      "path": "music_app/static/css/runtime/compact-data-table.css",
+      "sha256": "7a926586a7cc487e679f5b27499009716481331644a45bef819f4cc085ec7ae3",
+      "bytes": 3351
+    },
+    {
+      "path": "music_app/static/css/runtime/non-album-and-player.css",
+      "sha256": "56e813fd6a62b1a3cd0c88f838a0757da31b6fbe008b536c4977b4cd96090537",
+      "bytes": 69951
+    },
+    {
+      "path": "music_app/static/css/runtime/alert-components.css",
+      "sha256": "214229ddcc2a265bdacee60130a0c8bc7f5ce4168e09068c7aece3e62e465a5e",
+      "bytes": 9061
+    },
+    {
+      "path": "music_app/static/css/runtime/utilities.css",
+      "sha256": "b61d277367feaa11b8e26319527709c8933df1eec16035fef80470c8ee5bf057",
+      "bytes": 49931
+    },
+    {
+      "path": "music_app/static/css/runtime/account-menu.css",
+      "sha256": "33dc4fbd4c7003a67716825c38fa9ddacb9b288f14067d3abf6301166cb29541",
+      "bytes": 1364
+    },
+    {
+      "path": "music_app/static/css/runtime/cover-lookup-drawer-and-related.css",
+      "sha256": "555fa2789aa96ff84c00afc86012c06730986f5e896dc992c47eb97fe3967e18",
+      "bytes": 16784
+    },
+    {
+      "path": "music_app/static/css/runtime/trigger-anchor.css",
+      "sha256": "5c45d39ce8a771b6e326d88245156ee327f4cbcb0b1382bad315bbeb79afd51b",
+      "bytes": 15785
+    },
+    {
+      "path": "music_app/static/css/runtime/album-artbox-and-gallery-card.css",
+      "sha256": "b2194d0422a348b3f1310ca087c4b6df6b83766ebdbcf20215fcb1d77f57410b",
+      "bytes": 2724
+    },
+    {
+      "path": "music_app/static/css/runtime/album-details-components.css",
+      "sha256": "2f0f5b45bf6d9c95d0b86090d39589718ada83f0265e90582612d706ebb467b4",
+      "bytes": 3185
+    },
+    {
+      "path": "music_app/static/css/runtime/album-track-table.css",
+      "sha256": "75b515a02c1ae3cc3e0ebb1312fe4e04853f9fa6e29a2fee6cb4f96e8c8408f5",
+      "bytes": 11144
+    },
+    {
+      "path": "music_app/static/css/runtime/cover-lookup-modal.css",
+      "sha256": "5f5138087f6ef59670961cd35dfe4f748e5f4968c1c11186b0788478d34d5dbc",
+      "bytes": 18741
+    },
+    {
+      "path": "music_app/static/css/runtime/shell-persistent-player.css",
+      "sha256": "6d1385a07dd71ca66927dfc7e17ffeb3c0249614cca90cf91cd3ccdd0b62ce6b",
+      "bytes": 1781
+    },
+    {
+      "path": "music_app/static/css/runtime/track-modal-and-lightbox.css",
+      "sha256": "e77bfe927bff8777ac6f9c8e182ca03222c371492f9c9b362d2f0f09a6049c57",
+      "bytes": 17191
+    },
+    {
+      "path": "music_app/static/js/utilities/problematic-tab.js",
+      "sha256": "f62978d7edf2098110777f497946f0df607ec1ca77ceec80bf2eea05e1e39b73",
+      "bytes": 6879
+    },
+    {
+      "path": "music_app/static/js/utilities/appearance-tab.js",
+      "sha256": "4a8cdebad34bfc74fe5c1754a36bb6865b3cda10cd031ca6618cc5d4cc49072b",
+      "bytes": 2328
+    },
+    {
+      "path": "music_app/static/js/utilities/rules-tab.js",
+      "sha256": "f40d45324d474863a34413fe32cb44f4a962c17330003ad05540dd8bef1d32ee",
+      "bytes": 3564
+    },
+    {
+      "path": "music_app/static/js/utilities/loops-tab.js",
+      "sha256": "d6bff27d2e30a2760c0e8d8ac8dcb172de3be9d86dd4a006bcc628aac8ab6178",
+      "bytes": 10680
+    },
+    {
+      "path": "music_app/static/js/utilities/shell.js",
+      "sha256": "c2b73dfe8581a5f1b3af501a8a5fa47125933e643f431bc2add79c462c9bd6bd",
+      "bytes": 13510
+    },
+    {
+      "path": "music_app/static/js/audio-worklets/gapless-playback-processor.js",
+      "sha256": "3c3e779351be2328de76b0a4e34eba0120c1d0dd9441ca719362dbf5cc257ad1",
+      "bytes": 33860
+    },
+    {
+      "path": "music_app/static/js/runtime/gallery-main-interactions.js",
+      "sha256": "b0be7db95b60700c360199d3b557c6b0136bb2738cf74a2d01d5d5f9c5f5decf",
+      "bytes": 43926
+    },
+    {
+      "path": "music_app/static/js/runtime/alert-components.js",
+      "sha256": "6075915d75752f9cc3b4806966711dd5ea53e39f7d9a8f0df9007e10afe7ecf8",
+      "bytes": 4379
+    },
+    {
+      "path": "music_app/static/js/runtime/gallery-card-component.js",
+      "sha256": "dc0307aa6f6a02e5420cd3b0dac0300eadffb294ec63c45c12b910d984259626",
+      "bytes": 3552
+    },
+    {
+      "path": "music_app/static/js/runtime/track-modal-and-gallery.js",
+      "sha256": "c5abe41aba7f6f1d3a84c0d7df14873f903729600e17f33ccc6e0dcff4a3ad9f",
+      "bytes": 3824
+    },
+    {
+      "path": "music_app/static/js/runtime/album-artbox.js",
+      "sha256": "6f9dbf2ece46f96e21bab83c534d3d0fe74f3de63ae749ecab07775e46ae8c28",
+      "bytes": 3720
+    },
+    {
+      "path": "music_app/static/js/runtime/loader-status-helpers.js",
+      "sha256": "19d6f76566d285903f9fe27173425b7a8e4227883bed683e9d3b0102f5d778bf",
+      "bytes": 4088
+    },
+    {
+      "path": "music_app/static/js/runtime/album-details-components.js",
+      "sha256": "690d636bb5e8345fdb5691a2a7c9fec363b28d773e556e2f64c9e56475b991ff",
+      "bytes": 11154
+    },
+    {
+      "path": "music_app/static/js/runtime/session-csrf-fetch.js",
+      "sha256": "ac52945ffcc9772b2cfb0509d09c1793ef1bb5ef8293b0fb7a098c49839792ed",
+      "bytes": 1877
+    },
+    {
+      "path": "music_app/static/js/runtime/trigger-anchor.js",
+      "sha256": "6084b00f4d85801c31a870626418bd44c0ac8ef23ef86f591e220eaea433c804",
+      "bytes": 12345
+    },
+    {
+      "path": "music_app/static/js/runtime/gallery-main-state.js",
+      "sha256": "fd99f2058bbc73d1d9e14af3a63ea758eb6699e157a2de23cd22d72955b105d4",
+      "bytes": 12165
+    },
+    {
+      "path": "music_app/static/js/runtime/library-settings.js",
+      "sha256": "37a643e9790b1ac82231952a8462f516497e184562181233422e51985fbfeeaf",
+      "bytes": 38311
+    },
+    {
+      "path": "music_app/static/js/runtime/render-markup-helpers.js",
+      "sha256": "c7aa705ea0217483045e028d4dd330801cf3878681ba5a11c0db3b43b916300a",
+      "bytes": 7827
+    },
+    {
+      "path": "music_app/static/js/runtime/in-page-tabs.js",
+      "sha256": "34f4015cf119561c5a254b3598d7d32b920b16851f5d1f044e8b752a6190eada",
+      "bytes": 2175
+    },
+    {
+      "path": "music_app/static/js/runtime/utility-loop-playback.js",
+      "sha256": "1d12737cb34bd7525bed7969a8013d335924f438f2984b5b34d20dae4af51738",
+      "bytes": 57603
+    },
+    {
+      "path": "music_app/static/js/runtime/gallery-main-components.js",
+      "sha256": "012cecdcdcb373d56d6ebf2d5b16879a98dadd1453b253615b53620372d30114",
+      "bytes": 10584
+    },
+    {
+      "path": "music_app/static/js/runtime/gallery-refresh-and-status.js",
+      "sha256": "dffa3b7ea848717f63b9a9cbcc8844d7bb0e1b6346fe0491d7524341daa2d8d2",
+      "bytes": 65735
+    },
+    {
+      "path": "music_app/static/js/runtime/view-value-helpers.js",
+      "sha256": "b813205d2adf79cea6b04b85cf3d316dedb5e38c9720bed2251af5475bbbef56",
+      "bytes": 4315
+    },
+    {
+      "path": "music_app/static/js/runtime/tag-editor-reorder.js",
+      "sha256": "18ce10f86d39975b91b8d7f10dabb192d244cf6e827e3165fab38af755a1a1fe",
+      "bytes": 1010
+    },
+    {
+      "path": "music_app/static/js/runtime/date-range-picker.js",
+      "sha256": "801addcf8e7ed1a68fa97633b0b64156909a31cf99b4aa0fbb8c5bbb1650d2ed",
+      "bytes": 6447
+    },
+    {
+      "path": "music_app/static/js/runtime/player-waveform-peaks.js",
+      "sha256": "42aacfaacd92aa7843b2aa3f0652d220f3461af43fa09b49e5337b491bb91381",
+      "bytes": 11985
+    },
+    {
+      "path": "music_app/static/js/runtime/utility-list-builders.js",
+      "sha256": "07817aa8df6ea01425e5b0ccd701f52f7ed485d24dc112c11b7261aef887e1bc",
+      "bytes": 137080
+    },
+    {
+      "path": "music_app/static/js/runtime/bootstrap-gallery-event-handlers.js",
+      "sha256": "d4832b10b80400b4dfffe1809ea0b40682a70953cdbaa9c152127c4b37a975fb",
+      "bytes": 71780
+    },
+    {
+      "path": "music_app/static/js/runtime/album-track-table.js",
+      "sha256": "59acf085ba17fbc4a296a0ac6abd2e477aaf18d63c0d4c1a8d46968bf53fb085",
+      "bytes": 8312
+    },
+    {
+      "path": "music_app/static/js/runtime/browser-log-history-store.js",
+      "sha256": "593cf60722c9e4849cce59cab2235bec50a434a6fa67637004a14502b9f58134",
+      "bytes": 9045
+    },
+    {
+      "path": "music_app/static/js/runtime/loop-edit-session-expiry.js",
+      "sha256": "8332d9c680336cee6e83b1c9140f04cd8094dc25decfbc6cb3759e67a3513f8a",
+      "bytes": 4677
+    },
+    {
+      "path": "music_app/static/js/runtime/problematic-files-virtual-list.js",
+      "sha256": "50724483216d8d681eeb07e2e2d37d4d6b9a43391c08fe585c5404ce283604af",
+      "bytes": 7753
+    },
+    {
+      "path": "music_app/static/js/runtime/playback-control-cluster.js",
+      "sha256": "978128387cb06b1096c84cd340eb633a1bedde9c3c2e5aa2c4fad650f71afebb",
+      "bytes": 4844
+    },
+    {
+      "path": "music_app/static/js/runtime/view-state-helpers.js",
+      "sha256": "d4ede47867efb8ef18e542fd1bcb85d773e5b1f37e920834592b466d27b9c182",
+      "bytes": 8744
+    },
+    {
+      "path": "music_app/static/js/runtime/bootstrap-utility-event-handlers.js",
+      "sha256": "9a02cbef54e8433c112c9632ac2275ea35a8e1a2c9e96db83e8c8a989c3b68bd",
+      "bytes": 59781
+    },
+    {
+      "path": "music_app/static/js/runtime/gallery-cover-preview-cache.js",
+      "sha256": "2b9513234628ee47f01c2e1fd78f9dd52a6c33b109ea4d7d71046d10df16a94c",
+      "bytes": 28499
+    },
+    {
+      "path": "music_app/static/js/runtime/utility-log-history-query.js",
+      "sha256": "5a6a2d3270a48823354d8618887b8bd9c05612f1a3e67883158aa9add3f948fa",
+      "bytes": 9191
+    },
+    {
+      "path": "music_app/static/js/runtime/compact-player-helpers.js",
+      "sha256": "bfdf38c68e581fa7bcc94ffdbfc1d9a509f966cffce434fbcbb504bcb56d4b11",
+      "bytes": 5825
+    },
+    {
+      "path": "music_app/static/js/runtime/player-state-persistence-helpers.js",
+      "sha256": "d0dc86402e0846a507c58f61e0450724b91cce33e18af448ab30cb9e8a349e24",
+      "bytes": 13597
+    },
+    {
+      "path": "music_app/static/js/runtime/player-and-waveform.js",
+      "sha256": "d678b4287bd5b7eabaf2311389c62d8e5981f56f9c87ac35f01b63be8fd65301",
+      "bytes": 18142
+    },
+    {
+      "path": "music_app/static/js/runtime/bootstrap-refocus-helpers.js",
+      "sha256": "e59050361bab9e3dca88506919d1545b78833de1e984d867a419fb15af59959e",
+      "bytes": 5085
+    },
+    {
+      "path": "music_app/static/js/runtime/tag-editor-and-optimistic-updates.js",
+      "sha256": "5d00df2e03e9f1ecb71ad89bfce7476e6dd774159973ce96cdf352324d7d5464",
+      "bytes": 100409
+    },
+    {
+      "path": "music_app/static/js/runtime/utility-loaders-and-cover-lookup.js",
+      "sha256": "dd0eefa3b9cc49b9838031cf3bb257683d9ddc9fa0a863d985b8fd80b0a3b335",
+      "bytes": 93199
+    },
+    {
+      "path": "music_app/static/js/runtime/search-input.js",
+      "sha256": "b3574ab847f2b091acd9b73c39008d1e5d30c10bd37cbadc2c0d10218420486a",
+      "bytes": 972
+    },
+    {
+      "path": "music_app/static/js/runtime/appearance-backgrounds-bridge.js",
+      "sha256": "0aa1de9ea4a2c397e0c005c80c21872f6879be48f15f7bde655a3d4aed6216f6",
+      "bytes": 6080
+    },
+    {
+      "path": "music_app/static/js/runtime/browser-scheduling-helpers.js",
+      "sha256": "2f85cd29d85df4eb72befb84f5a8b31c5fc499cd664cecd443f7489d81c3ce6e",
+      "bytes": 921
+    },
+    {
+      "path": "music_app/static/js/runtime/virtual-artist-grid.js",
+      "sha256": "a5ab1f4b608b0ba6247d4415672bf2a4cf50192ecaaa4f9f0f6605e495ea9c82",
+      "bytes": 89584
+    },
+    {
+      "path": "music_app/static/js/runtime/client-preferences-helpers.js",
+      "sha256": "cc402fea817d9632a13f1b1a2a61817d5ea13d1a7a49c57ce6cfbdbc286f17dc",
+      "bytes": 9476
+    },
+    {
+      "path": "music_app/static/js/runtime/browser-viewport-helpers.js",
+      "sha256": "e0ea53283cb43fcb5094ff436c252ec48562e6219953c9ddc63f8b74bdf3c84a",
+      "bytes": 797
+    },
+    {
+      "path": "music_app/static/js/runtime/bootstrap-init.js",
+      "sha256": "62ffb3aba68599df152eeaf5aaf98c8c102f7acfc883166c132022a943180e8f",
+      "bytes": 14230
+    },
+    {
+      "path": "music_app/static/js/runtime/utility-renderers-and-actions.js",
+      "sha256": "2f144366c504d068cac983515ebb1ebf6dcaa483680d531ee65b0c8665e0069d",
+      "bytes": 44480
+    },
+    {
+      "path": "music_app/static/js/runtime/compact-player-controller.js",
+      "sha256": "cb61d3ff672d3ac981adc8f39bfcd87549ef9c030b479675c6a5b91d5b117f7f",
+      "bytes": 28789
+    },
+    {
+      "path": "music_app/static/js/runtime/player-listen-session-helpers.js",
+      "sha256": "378212407a1f852cb38d681a1034f9514d4aa7bee448297d530f5ebadcf3a715",
+      "bytes": 18049
+    },
+    {
+      "path": "music_app/static/js/runtime/cover-lookup-modal-and-drawer.js",
+      "sha256": "34487f937a2456741603965b408787ae0efdbea0255a53a87822ae44df31c0b4",
+      "bytes": 115500
+    },
+    {
+      "path": "music_app/static/js/runtime/track-modal-lightbox-helpers.js",
+      "sha256": "cb44f66bab715dbd14fb8c513cc806b44bc39c56681cfda6a8dc597c7e791a42",
+      "bytes": 39372
+    },
+    {
+      "path": "music_app/static/js/runtime/compact-data-table.js",
+      "sha256": "f624c46de8c2be79233350807816e91c39be4701ae94053a140363c5bae178c0",
+      "bytes": 5490
+    },
+    {
+      "path": "music_app/static/js/runtime/account-menu.js",
+      "sha256": "d552c6f93afe3a1d19466376df921c32a747534943b611bebf3e9d99296f26ce",
+      "bytes": 3777
+    },
+    {
+      "path": "music_app/static/js/runtime/notification-ui-helpers.js",
+      "sha256": "9da799a32b73220b9c5b55573f469526d3dc3c8b3b64ec9db6cc7a0f56abc365",
+      "bytes": 17959
+    },
+    {
+      "path": "music_app/static/js/runtime/browser-dialog-helpers.js",
+      "sha256": "53dd8bb0e5b96ffe166d6ecf52409e63df9ce48d29cca7552474ba15772cecc2",
+      "bytes": 16118
+    },
+    {
+      "path": "music_app/static/js/runtime/player-streaming-engine.js",
+      "sha256": "06cf9ee73bb17f9f58f42349abbc82f74baac3969c017b9f56b5729527cf5f92",
+      "bytes": 79595
+    },
+    {
+      "path": "music_app/static/js/runtime/status-ui-helpers.js",
+      "sha256": "6821268f18ef6b1ee96a13eb813e65f144421b35667c3f5eee83bd5cc19c75f1",
+      "bytes": 11460
+    },
+    {
+      "path": "music_app/static/js/runtime/gallery-display-preference-helpers.js",
+      "sha256": "c92991eac818837491ceba1f145df7077940af52a3fd9bca1b6d2e1a8543183a",
+      "bytes": 13594
+    },
+    {
+      "path": "music_app/static/js/runtime/core-state-and-helpers.js",
+      "sha256": "a23a3710354d94ea2e544197fd3707171c15c8959368bba6f66caf08b7e7973c",
+      "bytes": 32079
+    },
+    {
+      "path": "music_app/static/js/runtime/cover-lookup-notification-helpers.js",
+      "sha256": "27d29e344211b92c4b1eca09e185fcc7ae18866e93b47d7d4f4bd2ca3697c127",
+      "bytes": 4232
+    },
+    {
+      "path": "music_app/static/js/runtime/response-state-helpers.js",
+      "sha256": "dc04a52190f2a5cb56a75b616deaea95e27f7438cbb8fad003c43fc1e3e44d9d",
+      "bytes": 69799
+    },
+    {
+      "path": "music_app/static/js/runtime/browser-storage-helpers.js",
+      "sha256": "538a6ee5f762f2781ae012c0e78d900a78ad06209ae08a87d179016e373e4003",
+      "bytes": 2094
+    },
+    {
+      "path": "music_app/static/js/runtime/startup-metrics-helpers.js",
+      "sha256": "d75aaebcbf99cec9829763f3417c361349e84e8ee0aec6722a832c7ca5b53e1e",
+      "bytes": 4199
+    },
+    {
+      "path": "music_app/static/js/runtime/player-loop-playback.js",
+      "sha256": "7730ece3372a90b4674dddb0edf09e82143100369715057e6faf9a97f22a0574",
+      "bytes": 47450
+    },
+    {
+      "path": "music_app/static/js/runtime/utility-log-history-ui.js",
+      "sha256": "0df7db41e9f9c36c86c9a84228d8248e8a842b1f7eeba217dcf55219fa2e8cd4",
+      "bytes": 14675
+    },
+    {
+      "path": "music_app/static/js/runtime/markup-format-helpers.js",
+      "sha256": "dde8e0bd881dfe49912d2b3ddd157c261cd0d8b57e3dd59d3daaca9549190b64",
+      "bytes": 1110
+    },
+    {
+      "path": "music_app/static/js/runtime/problematic-album-helpers.js",
+      "sha256": "7c478207904a9317b2f823ecab7912a7da0fdf22e49404a32bc7df2f906e21bc",
+      "bytes": 4745
+    },
+    {
+      "path": "music_app/static/js/runtime/bootstrap-event-handlers.js",
+      "sha256": "148d6b9e45898827e36049e59e9b35445731970fd5c38bc38de76f0e3a51173f",
+      "bytes": 4273
+    },
+    {
+      "path": "music_app/static/js/runtime/browser-navigation-helpers.js",
+      "sha256": "b036c59bcb1b00b0a8c70f0504ab451c3fa121ff047603403ff00821b8d887a0",
+      "bytes": 689
+    },
+    {
+      "path": "music_app/static/js/runtime/library-warning-ui.js",
+      "sha256": "23e112a15d4395ea454cff1654d0c1ea62a18eefe3abfd2f9b5b5953fc691711",
+      "bytes": 1954
+    },
+    {
+      "path": "music_app/static/js/runtime/bootstrap-state.js",
+      "sha256": "34148190cd6d237b2e5aeec5de452aad6d1af4f74d05e433e38120956b8b02d1",
+      "bytes": 4260
+    },
+    {
+      "path": "music_app/static/js/runtime/modal-and-overlay-helpers.js",
+      "sha256": "9d2c78a7507c7003c3b09fc954ae8867d62c5076c660917efa778ab11ab8e79e",
+      "bytes": 50999
+    },
+    {
+      "path": "music_app/static/js/runtime/mobile-home.js",
+      "sha256": "e94e68b39eab4ceae136095607a40fd28c36e43061203a4b67e957d798edbb66",
+      "bytes": 3242
+    },
+    {
+      "path": "music_app/static/js/runtime/shell-navigation-drawer.js",
+      "sha256": "1900b937f23c242df39a82f1009017b597cfcab74bd7abc0886e91594b29d0be",
+      "bytes": 10038
+    },
+    {
+      "path": "music_app/static/js/runtime/loop-range-controls.js",
+      "sha256": "1e23a4afcac5f9ac92b03a96450d044a77253d6f2b1c594631b28634235df22a",
+      "bytes": 22156
+    },
+    {
+      "path": "music_app/static/js/runtime/problem-exclusion-mutations.js",
+      "sha256": "b1de9c244ed93aa34b96448200e2120042dc15d4def1f40e78b5ec06e552597e",
+      "bytes": 21041
+    },
+    {
+      "path": "music_app/static/js/runtime/gallery-cover-load-scheduler.js",
+      "sha256": "4ac9e393b179bd0e81f746dbd9c13b8edf0d1127854f059a634e069f8711c676",
+      "bytes": 25546
+    },
+    {
+      "path": "music_app/static/js/runtime/playback-ownership-helpers.js",
+      "sha256": "e2f42f3c896f3fd050af12c507365e8f9ac1b42351be1e09823b1147d815208e",
+      "bytes": 10228
+    },
+    {
+      "path": "music_app/static/js/runtime/mobile-navigation.js",
+      "sha256": "4cea5fec1803148c546e52739b55c5c130ab928581568d1c0d2ee62fa490fba3",
+      "bytes": 49235
+    },
+    {
+      "path": "music_app/static/images/icons/loop-scissors-mask.png",
+      "sha256": "e42f45968f1ddf142ec1e0cd5bb84a018b07f6bf7a66ccfd9b665a3d009d38eb",
+      "bytes": 205867
+    },
+    {
+      "path": "music_app/static/images/icons/TABLER-LICENSE.txt",
+      "sha256": "b740a1d46122672da62833e97f7e7c8a13fa85cbc7445b584b297cc00dde93db",
+      "bytes": 1073
+    },
+    {
+      "path": "music_app/static/images/icons/tabler-folder-open.svg",
+      "sha256": "bdf240ac645a3b0c891564273d82b654ae12c701c206a1b705a37f34ab0caa81",
+      "bytes": 374
+    },
+    {
+      "path": "music_app/static/images/icons/loop-cancel-mask.png",
+      "sha256": "a7d8ada687ea0298609e153e1c9f7373273d76dbb19ead41fc4414932c3a0fe8",
+      "bytes": 180275
+    },
+    {
+      "path": "music_app/static/images/icons/tabler-tag.svg",
+      "sha256": "393d5e5c7d27a335a5278238790e0a3cd8cd23e5e6b6dc8ceda2b03ef2121909",
+      "bytes": 418
+    },
+    {
+      "path": "music_app/static/images/icons/tabler-x.svg",
+      "sha256": "f953711096eea8d5c282d91241c19ecdff5442a9f86c3b65454998a7e0a01632",
+      "bytes": 243
+    },
+    {
+      "path": "music_app/templates/account-invitation.html",
+      "sha256": "5592d802f1019350532927c7d54b641bf44a3854fc99a07f9933443975a51914",
+      "bytes": 1539
+    },
+    {
+      "path": "music_app/templates/admin-account-detail.html",
+      "sha256": "59c15aa1f4091c4d7a62027cc11ef458275dad279a5a31be16d38bc5dac56ab0",
+      "bytes": 7807
+    },
+    {
+      "path": "music_app/templates/password-recovery.html",
+      "sha256": "6a72d3dcf599e308fdcb84725d013e5ea3257c42bd4623feb04c9451f3e46193",
+      "bytes": 1681
+    },
+    {
+      "path": "music_app/templates/admin-members.html",
+      "sha256": "239f0892ffa945016ffd9de231dda8e70399824f5a240e85900b821bec577994",
+      "bytes": 7647
+    },
+    {
+      "path": "music_app/templates/login.html",
+      "sha256": "1fe6d4d7b92806abfa6dd81ad720c8451e7bbfdebf90e14c0e8a7969be03abf0",
+      "bytes": 1803
+    },
+    {
+      "path": "music_app/templates/index.html",
+      "sha256": "6488999c4ea5001191858b81e8bbed4189adf36c185c21d9c40ec3f73adf6a1e",
+      "bytes": 34538
+    },
+    {
+      "path": "music_app/templates/password-reset.html",
+      "sha256": "8c752ad84a58268a257d4caea9d19d1c0fed7c8131dda8e633725ebe529c8136",
+      "bytes": 2249
+    },
+    {
+      "path": "music_app/templates/account.html",
+      "sha256": "6bacc0af936fd76fe5f5dc12e0ec08b1c2ae0a289d084f6200e5239eee6f86b2",
+      "bytes": 6694
+    },
+    {
+      "path": "music_app/templates/components/on-page-alert.html",
+      "sha256": "4222ce7038796ff300ec47f0d0ca5057ee9d7e06340c175cf302ca17238523a5",
+      "bytes": 1449
+    },
+    {
+      "path": "music_app/templates/components/navigation-tree.html",
+      "sha256": "23ae37648341dc24ead88460c703b81692731d14cd4e1b8321d48a5e39b47276",
+      "bytes": 1368
+    },
+    {
+      "path": "music_app/templates/components/navigation-tree-item.html",
+      "sha256": "2c3d9a509b747b54af714a33913c3012314229dec41b739b3bda11e1d01cab29",
+      "bytes": 80
+    },
+    {
+      "path": "music_app/templates/partials/button.html",
+      "sha256": "e59ba80d702b10252e08fa140c7e3b34d02d361c881ec0f6270147956ae3fe38",
+      "bytes": 2676
+    },
+    {
+      "path": "music_app/templates/partials/appearance-bootstrap.html",
+      "sha256": "74f67f6044fcf50e7485e7b3a288500df18f08459c035acc1b95c1371635dd89",
+      "bytes": 3767
+    },
+    {
+      "path": "music_app/templates/partials/admin-capability-switches.html",
+      "sha256": "bee06c8c456c6a74ce22f45bbe3260fc8adb1d14c46134df407c0a631064b36c",
+      "bytes": 2120
+    },
+    {
+      "path": "music_app/templates/partials/admin-settings-nav.html",
+      "sha256": "cbc39e731df41276c87629cc707d95e9f799c100242d04e679643da8908d9f9d",
+      "bytes": 1436
+    },
+    {
+      "path": "music_app/templates/partials/confirm-modals.html",
+      "sha256": "d8d48794fff983165e10bdf89fd06e32a27452e4644daf95e48f5232f05085a7",
+      "bytes": 5798
+    },
+    {
+      "path": "music_app/templates/partials/account-menu.html",
+      "sha256": "5657524d954012bf40906ee0e5549e404820ccdefde41cb844ced29fe5293360",
+      "bytes": 2336
+    },
+    {
+      "path": "music_app/templates/partials/switch.html",
+      "sha256": "7d103438408e72bc710be1fb0b5c28f3541674369fdc3bea6bfc5e30a18bbfc3",
+      "bytes": 934
+    },
+    {
+      "path": "music_app/templates/partials/gallery-bar.html",
+      "sha256": "7d2f6b3a662bc6a12549943c5c2a419228fb562450f4bc3f56f7ca0667ed0325",
+      "bytes": 854
+    },
+    {
+      "path": "music_app/templates/partials/playback-control-cluster.html",
+      "sha256": "b4a9701216540b6b737aeb4e5cc0ab43ab10c42abf7b951aa1dc47e1e3f34e5a",
+      "bytes": 2086
+    },
+    {
+      "path": "music_app/templates/partials/navigation-tree-assets.html",
+      "sha256": "648d9cebcadcbd3a592731398f3703f2a31dc081f6d9d7a50d5af54ded5a328b",
+      "bytes": 633
+    },
+    {
+      "path": "music_app/templates/partials/primary-modals.html",
+      "sha256": "1372546a7839dcf60ab9a452889f0e94b3a27f89da4de51ca610ba4d1a7e4c56",
+      "bytes": 10258
+    },
+    {
+      "path": "music_app/templates/partials/search-input.html",
+      "sha256": "10250025722256889a291aa00e601d3953d2528cd0652434150f594380e440bd",
+      "bytes": 2470
+    },
+    {
+      "path": "music_app/templates/partials/overlay-shells.html",
+      "sha256": "e88bfcf889f5d43c2186676ee04e8e92270f9a5c5a0d4bc31e6e1018e6b4fc0d",
+      "bytes": 1594
+    },
+    {
+      "path": "music_app/templates/partials/capability-bootstrap.html",
+      "sha256": "02fd1298e74cc600f2e40f406903918f0b7d2871ec9fb05c161e3db2d7dead24",
+      "bytes": 1211
+    },
+    {
+      "path": "music_app/templates/partials/admin-capability-assignment.html",
+      "sha256": "c45b8dbdbf26613fbbbc9abb7363e663b023a377d15fb5924869e8a7611777ca",
+      "bytes": 2815
+    },
+    {
+      "path": "music_app/templates/partials/admin-ui-assets.html",
+      "sha256": "6b816b68f2b78234ff08cd4719277f883a80f627deaa344f643d4b0415facf9c",
+      "bytes": 262
+    },
+    {
+      "path": "music_app/templates/partials/app-bar.html",
+      "sha256": "d6ff2b5d962183bb57335823402df673f959688c59243a5befbf3f6a7206d9ac",
+      "bytes": 1864
+    },
+    {
+      "path": "music_app/templates/partials/page-gallery-bar.html",
+      "sha256": "39a7b16ec309a29e5daf0d85085f6049f03b4c261e9711858a4916b60f4705d9",
+      "bytes": 1243
+    }
+  ],
+  "independentReview": "two passes cleared per integrator and retained review record"
+}

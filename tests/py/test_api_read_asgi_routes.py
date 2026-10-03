@@ -29,6 +29,147 @@ def _make_asgi_app():
     return asgi_app
 
 
+def _home_actor(*, account_id=41, library_id=73, grants=("capability.view",), bootstrap=False):
+    from music_app.services.current_actor import (
+        ActorState, CapabilityGrant, CurrentActor, LibraryRelationship,
+    )
+
+    return CurrentActor(
+        state=ActorState.ACTIVE,
+        account_id=account_id,
+        session_id=8,
+        is_bootstrap_owner=bootstrap,
+        current_library_id=library_id,
+        library_relationships=(
+            (LibraryRelationship(library_id, "member", False),)
+            if library_id is not None else ()
+        ),
+        capability_grants=tuple(
+            CapabilityGrant(key, "library", library_id)
+            for key in grants if library_id is not None
+        ),
+    )
+
+
+def _install_home_actor(asgi_app, actor):
+    class Resolver:
+        def resolve(self, _token):
+            return actor
+
+    asgi_app.state.current_actor_resolver = Resolver()
+
+
+def test_home_read_uses_authenticated_scope_ignores_identity_hints_and_is_not_cacheable(
+    asgi_app, monkeypatch,
+):
+    from music_app.routes import api_read_asgi_routes as routes
+
+    received = []
+    _install_home_actor(asgi_app, _home_actor())
+    monkeypatch.setattr(routes, "_hydrate_cached_library_for_asgi", lambda _request: None)
+    monkeypatch.setattr(routes, "_log_view_data_request_from_asgi", lambda *_args: None)
+    monkeypatch.setattr(
+        routes, "select_runtime_persistence_adapter",
+        lambda *_args: SimpleNamespace(effective_backend="memory"),
+    )
+
+    def build(**kwargs):
+        received.append((kwargs["account_id"], kwargs["library_id"]))
+        assert callable(kwargs["allowed_actions_for_album"])
+        return {"recent_local_albums": [], "recent_not_local_albums": []}
+
+    monkeypatch.setattr(routes, "build_home_payload", build)
+    for actor in (_home_actor(), _home_actor(account_id=42)):
+        _install_home_actor(asgi_app, actor)
+        status, headers, body = _run_asgi_request(
+            asgi_app, "GET", "/home-data",
+            query={"account_id": "1", "library_id": "999", "timezone": "Pacific/Kiritimati"},
+        )
+        assert status == 200
+        assert {value.strip() for value in headers["cache-control"].split(",")} >= {
+            "private", "no-store",
+        }
+        assert _decode_json(body) == {
+            "recent_local_albums": [], "recent_not_local_albums": [],
+        }
+    assert received == [(41, 73), (42, 73)]
+
+
+@pytest.mark.parametrize("case,expected_status", [
+    ("anonymous", 401), ("no_browse_grant", 403),
+    ("no_library", 403), ("bootstrap_without_library", 403),
+])
+def test_home_read_denies_before_private_payload_build(
+    asgi_app, monkeypatch, case, expected_status,
+):
+    from music_app.routes import api_read_asgi_routes as routes
+    from music_app.services.current_actor import CapabilityGrant, CurrentActor
+    from dataclasses import replace
+
+    actor = {
+        "anonymous": CurrentActor.anonymous(),
+        "no_browse_grant": _home_actor(grants=()),
+        "no_library": replace(
+            _home_actor(library_id=None),
+            capability_grants=(CapabilityGrant("capability.view", "global", None),),
+        ),
+        "bootstrap_without_library": _home_actor(library_id=None, bootstrap=True),
+    }[case]
+    _install_home_actor(asgi_app, actor)
+
+    def forbidden(*_args, **_kwargs):
+        raise AssertionError("Denied Home requests must not read private listening data")
+
+    monkeypatch.setattr(routes, "build_home_payload", forbidden)
+    status, _headers, _body = _run_asgi_request(asgi_app, "GET", "/home-data")
+    assert status == expected_status
+
+
+@pytest.mark.parametrize("grants,expected_play", [
+    (("capability.view",), False), (("capability.view", "capability.play"), True),
+])
+def test_home_allowed_actions_use_current_actor_and_exact_album_resource(
+    asgi_app, monkeypatch, grants, expected_play,
+):
+    from music_app.routes import api_read_asgi_routes as routes
+    from music_app.services.policy import ResourceScope
+    from music_app.services.policy_evaluator import PolicyEvaluationConstraints
+
+    _install_home_actor(asgi_app, _home_actor(grants=grants))
+    contexts = []
+
+    def constraints(context):
+        contexts.append(context)
+        return PolicyEvaluationConstraints(
+            deployment_allowed=not (
+                context.action == "library.media.read"
+                and context.resource == ResourceScope("album", "202")
+            ),
+        )
+
+    asgi_app.state.policy_constraint_resolver = constraints
+    monkeypatch.setattr(routes, "_hydrate_cached_library_for_asgi", lambda _request: None)
+    monkeypatch.setattr(routes, "_log_view_data_request_from_asgi", lambda *_args: None)
+    monkeypatch.setattr(routes, "select_runtime_persistence_adapter", lambda *_args: SimpleNamespace(effective_backend="memory"))
+
+    def build(**kwargs):
+        project = kwargs["allowed_actions_for_album"]
+        allowed = project({"id": 201, "key": "album-201"})
+        blocked = project({"id": 202, "key": "album-202"})
+        assert allowed.allows("library.browse.read")
+        assert allowed.allows("library.media.read") is expected_play
+        assert blocked.allows("library.browse.read")
+        assert not blocked.allows("library.media.read")
+        return {"recent_local_albums": [], "recent_not_local_albums": []}
+
+    monkeypatch.setattr(routes, "build_home_payload", build)
+    status, _headers, _body = _run_asgi_request(asgi_app, "GET", "/home-data")
+    assert status == 200
+    scoped = [context for context in contexts if context.resource is not None]
+    assert {context.resource for context in scoped} == {ResourceScope("album", "201"), ResourceScope("album", "202")}
+    assert all(context.actor.account_id == 41 and context.library_id == 73 for context in scoped)
+
+
 def test_asgi_read_routes_register_natively(asgi_app):
     route_paths = _collect_route_paths(asgi_app)
     for route_path in (
@@ -1220,8 +1361,15 @@ def test_asgi_home_data_uses_postgres_root_sidebar_as_authoritative_state(app, a
             "categories": ["main_library", "new_arrivals"],
         }
     ]
-    assert len(threadpool_calls) == 1
-    threadpool_function, threadpool_args, threadpool_kwargs = threadpool_calls[0]
+    assert len(threadpool_calls) == 3
+    assert threadpool_calls[0][0] is asgi_read_routes._hydrate_cached_library_for_asgi
+    assert len(threadpool_calls[0][1]) == 1
+    assert threadpool_calls[0][2] == {}
+    assert threadpool_calls[1][0] is fake_build_home_payload
+    assert threadpool_calls[1][1] == ()
+    assert threadpool_calls[1][2]["account_id"] == 1
+    assert threadpool_calls[1][2]["library_id"] == 1
+    threadpool_function, threadpool_args, threadpool_kwargs = threadpool_calls[2]
     assert threadpool_function.__name__ == "build_root_sidebar_payload"
     assert threadpool_args == ()
     assert threadpool_kwargs["query_params"].get("gallery_display") == "covers"
@@ -1315,7 +1463,9 @@ def test_asgi_home_data_omit_sidebar_keeps_postgres_counts_without_readding_side
             "categories": ["main_library", "new_arrivals"],
         }
     ]
-    assert threadpool_functions == ["build_root_counts_payload"]
+    assert threadpool_functions == [
+        "<lambda>", "fake_build_home_payload", "build_root_counts_payload",
+    ]
 
 
 def test_asgi_home_data_preserves_transient_sidebar_while_scan_is_active(app, asgi_app, monkeypatch):

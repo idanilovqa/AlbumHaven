@@ -8,7 +8,7 @@ import logging
 import time
 from collections.abc import Iterable, Mapping
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse
 from starlette.concurrency import run_in_threadpool
 
@@ -41,6 +41,8 @@ from music_app.services.library_watch_health import LibraryWatchHealthService
 from music_app.services.library_warning_dismissals import PostgresLibraryWarningDismissals, warning_token
 from music_app.routes.bounded_json import read_bounded_json_object, JSONBodyTooLarge
 from music_app.services.policy_asgi import allowed_actions_for_request
+from music_app.services.current_actor_asgi import current_actor_from_request
+from music_app.services.policy import ResourceScope
 from music_app.services.listen_through import (
     apply_album_preference_overlay,
     default_album_preference_overlay,
@@ -775,11 +777,28 @@ def _query_requires_file_backed_search_semantics(query: str) -> bool:
 
 @router.get("/home-data")
 async def home_data(request: Request) -> JSONResponse:
-    _hydrate_cached_library_for_asgi(request)
+    actor = await current_actor_from_request(request)
+    if not actor.is_authenticated:
+        raise HTTPException(401, "Authentication required.", headers={"Cache-Control": "private, no-store"})
+    if (any(type(value) is not int or value <= 0 for value in (actor.account_id, actor.current_library_id))
+            or not any(relationship.library_id == actor.current_library_id
+                       for relationship in actor.library_relationships)):
+        raise HTTPException(403, "Action not permitted.", headers={"Cache-Control": "private, no-store"})
     request_started_at = time.perf_counter()
+    await run_in_threadpool(_hydrate_cached_library_for_asgi, request)
+
+    def album_actions(album):
+        return allowed_actions_for_request(
+            request, ("library.browse.read", "library.media.read"),
+            resource=ResourceScope("album", str(album["id"])),
+        )
     library_state = _library_state(request)
     browse_state = resolve_active_scan_browse_state(library_state)
-    payload = build_home_payload(
+    payload = await run_in_threadpool(
+        build_home_payload,
+        account_id=actor.account_id,
+        library_id=actor.current_library_id,
+        allowed_actions_for_album=album_actions,
         query_args=_AsgiQueryArgs(request.query_params),
         config=_app_config(request),
         logger=_app_logger(request),
@@ -820,7 +839,7 @@ async def home_data(request: Request) -> JSONResponse:
                 }
             )
     _log_view_data_request_from_asgi(request, payload, request_started_at)
-    return JSONResponse(payload)
+    return JSONResponse(payload, headers={"Cache-Control": "private, no-store"})
 
 
 @router.get("/album-details")

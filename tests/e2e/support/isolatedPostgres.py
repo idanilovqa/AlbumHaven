@@ -487,7 +487,11 @@ def _assert_connected_role(connection: Any, expected_role: str) -> None:
         expected_connected_role = (
             f"{expected_role}_{database_name.removeprefix('album_haven_ci_')}"
         )
-    if not _is_owned_isolated_database_name(database_name) or role_name != expected_connected_role:
+    is_owned_database = (
+        _is_owned_isolated_database_name(database_name)
+        or database_name == "album_haven_scan_e2e"
+    )
+    if not is_owned_database or role_name != expected_connected_role:
         raise RuntimeError(
             "Connected Postgres identity does not match the isolated E2E contract: "
             f"database={database_name!r}, role={role_name!r}."

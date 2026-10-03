@@ -4,11 +4,11 @@
 .gallery-bar { position: relative; z-index: 60; min-height: 54px; display: flex; align-items: center; justify-content: space-between; gap: 16px; flex: 0 0 auto; border-bottom: 0; background: transparent; border-radius: 8px; padding: 0; margin-bottom: 14px; }
 .gallery-bar[hidden] { display: none; }
 .gallery-bar__context { flex: 1 1 auto; min-width: 0; }
-.gallery-bar__title { display: flex; align-items: center; gap: 6px; min-width: 0; font-size: 1.08rem; font-weight: 750; }
+.gallery-bar__title { margin: 0; display: flex; align-items: center; gap: 6px; min-width: 0; font-size: 1.08rem; font-weight: 750; }
 .gallery-bar__title > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .gallery-bar__artist-divider { flex: 1 1 auto; min-width: 24px; overflow: visible !important; }
 .gallery-bar__artist-total { flex: 0 0 auto; color: var(--muted); font-size: .72rem; font-weight: 500; letter-spacing: .08em; text-transform: uppercase; }
-.gallery-bar__summary { display: block; margin-top: 2px; color: var(--muted); font-size: .72rem; }
+.gallery-bar__summary { display: block; margin: 2px 0 0; color: var(--muted); font-size: .72rem; }
 .gallery-bar__actions { flex: 0 0 auto; display: flex; align-items: center; gap: 8px; --gallery-toolbar-button-background: var(--appearance-control, var(--panel)); }
 .gallery-bar__actions :is(.gallery-view-cluster, .gallery-view-choice) { background: var(--gallery-toolbar-button-background); }
 .gallery-action-button { width: 34px; height: 34px; padding: 0; border: 1px solid var(--border); border-radius: 8px; background: var(--gallery-toolbar-button-background, var(--appearance-control, var(--panel))); color: var(--text); cursor: pointer; }
@@ -37,11 +37,25 @@
 .gallery-anchored-menu[hidden] { display: none; }
 .gallery-menu-title { display: block; padding: 7px 8px; color: var(--muted); font-size: .66rem; letter-spacing: .12em; text-transform: uppercase; }
 .gallery-switch, .gallery-type-choice, .gallery-menu-action { width: 100%; min-height: 40px; display: flex; align-items: center; gap: 10px; padding: 0 8px; border: 0; border-radius: 7px; background: transparent; color: inherit; text-align: left; cursor: pointer; }
-.gallery-switch:hover, .gallery-type-choice:hover, .gallery-menu-action:hover { background: var(--dropdown-item-hover-background, var(--appearance-item-hover, color-mix(in srgb, var(--panel) 82%, white 8%))); }
+.gallery-type-choice:hover, .gallery-menu-action:hover { background: var(--dropdown-item-hover-background, var(--appearance-item-hover, color-mix(in srgb, var(--panel) 82%, white 8%))); }
 .gallery-switch:focus-visible, .gallery-type-choice:focus-visible, .gallery-menu-action:focus-visible { outline: 2px solid var(--appearance-interaction-outline, var(--appearance-focus-outline, var(--appearance-play, #55c7ff))); outline-offset: 1px; }
-.gallery-switch__track { width: 36px; height: 20px; display: flex; margin-left: auto; padding: 2px; border-radius: 999px; background: #58615f; }
-.gallery-switch[aria-checked="true"] .gallery-switch__track { justify-content: flex-end; background: var(--appearance-play, #4bc173); }
-.gallery-switch__knob { width: 16px; height: 16px; border-radius: 50%; background: white; box-shadow: 0 1px 4px #0008; }
+.gallery-switch__track { width: 36px; height: 20px; flex: 0 0 36px; display: flex; margin-left: auto; padding: 2px; border-radius: 999px; background: #58615f; transition: background-color 150ms ease; }
+.gallery-switch[aria-checked="true"] .gallery-switch__track,
+.gallery-switch__input:checked + .gallery-switch__track { background: var(--appearance-play, #4bc173); }
+.gallery-switch[aria-checked="true"] .gallery-switch__knob,
+.gallery-switch__input:checked + .gallery-switch__track .gallery-switch__knob { transform: translateX(16px); }
+.gallery-switch__knob { width: 16px; height: 16px; border-radius: 50%; background: white; box-shadow: 0 1px 4px #0008; transition: transform 150ms ease; }
+.gallery-switch__control { position: relative; width: 36px; height: 20px; flex: 0 0 36px; margin-left: auto; }
+.gallery-switch__control > .gallery-switch__input { position: absolute; inset: 0; width: 100%; height: 100%; margin: 0; opacity: 0; z-index: 1; cursor: pointer; }
+.gallery-switch__input:focus-visible + .gallery-switch__track { outline: 2px solid var(--appearance-interaction-outline, var(--appearance-accent, #55c7ff)); outline-offset: 2px; }
+.gallery-switch:has(.gallery-switch__input:disabled) { color: var(--appearance-muted, var(--muted)); cursor: not-allowed; background: transparent; }
+.gallery-switch__input:disabled { cursor: not-allowed; }
+.gallery-switch__input:disabled + .gallery-switch__track { background: var(--appearance-muted, #79818b); opacity: .55; }
+.gallery-switch__label { min-width: 0; white-space: normal; }
+.gallery-switch__label small { display: block; color: var(--appearance-muted, var(--muted)); }
+@media (prefers-reduced-motion: reduce) {
+  .gallery-switch__track, .gallery-switch__knob { transition: none; }
+}
 /* Sources keep plain rows; shared dropdown rules own hover. */
 #gallery-sources-menu .gallery-switch { border: 0; border-radius: 0; background: transparent; }
 #gallery-sources-menu .gallery-switch:focus-visible .gallery-switch__track { outline: 2px solid var(--appearance-interaction-outline, var(--appearance-play, #55c7ff)); outline-offset: 2px; }

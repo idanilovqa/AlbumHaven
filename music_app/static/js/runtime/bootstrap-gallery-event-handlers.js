@@ -550,6 +550,7 @@ function handleSidebarArtistSelectionClick(event) {
   if (!isUnrelatedFamilyTransition && tryRenderOptimisticSidebarArtistSelection(nextView, {
     forceFetch: primaryArtistChanged && galleryFiltersWereCustomized,
   })) {
+    resumeScanPageGalleryCoverLoads();
     return true;
   }
   if (isUnrelatedFamilyTransition) {

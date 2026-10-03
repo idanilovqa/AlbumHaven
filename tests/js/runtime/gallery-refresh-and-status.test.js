@@ -6,6 +6,8 @@ const vm = require('node:vm');
 
 const helperPath = path.join(__dirname, '..', '..', '..', 'music_app', 'static', 'js', 'runtime', 'gallery-refresh-and-status.js');
 const helperSource = fs.readFileSync(helperPath, 'utf8');
+const galleryEventHandlersPath = path.join(path.dirname(helperPath), 'bootstrap-gallery-event-handlers.js');
+const galleryEventHandlersSource = fs.readFileSync(galleryEventHandlersPath, 'utf8');
 const tagMutationSource = fs.readFileSync(path.join(path.dirname(helperPath), 'utility-list-builders.js'), 'utf8');
 
 test('a deferred gallery refresh cannot overwrite a newer optimistic tag mutation', async () => {
@@ -4600,6 +4602,90 @@ test('Scan Page navigation keeps hidden cover work suspended until the replaceme
   assert.equal(await replacement, true);
   assert.equal(context.state.ui.scanPageCoverLoadSuspensionToken, 0);
   assert.deepEqual(coverLoadCalls, [['suspend'], ['resume', 41]]);
+});
+
+test('Scan Page cached sidebar navigation resumes hidden cover work after its optimistic replacement renders', () => {
+  const { context, calls } = createContext();
+  const coverLoadCalls = [];
+  context.state.gallery = {
+    menuOpen: false,
+    mainState: {},
+    sidebarArtistsOverride: null,
+    sidebarShowAllArtistsOverride: true,
+  };
+  context.state.view = {
+    ...context.state.view,
+    query: '',
+    selected_artist: 'Neal Morse',
+    all_artists_active: false,
+    artists_sidebar: [
+      { artist: 'Neal Morse', count: 1 },
+      { artist: 'The Neal Morse Band', count: 1 },
+    ],
+    related_artists: ['The Neal Morse Band'],
+    related_filter_artists: [],
+    primary_filter_active: false,
+    primary_artist_groups: [{ artist: 'Neal Morse', albums: [{ key: 'sola-scriptura' }] }],
+    family_artist_groups: [{ artist: 'The Neal Morse Band', albums: [{ key: 'innocence-and-danger' }] }],
+    artist_groups: [
+      { artist: 'Neal Morse', albums: [{ key: 'sola-scriptura' }] },
+      { artist: 'The Neal Morse Band', albums: [{ key: 'innocence-and-danger' }] },
+    ],
+  };
+  context.virtualGrid = {
+    suspendSelectedArtistCoverLoadsForUserAction() {
+      coverLoadCalls.push('suspend');
+      return 41;
+    },
+    resumeSelectedArtistCoverLoadsAfterUserAction(token) {
+      coverLoadCalls.push(`resume:${token}`);
+      return true;
+    },
+  };
+  context.hideVersionContextMenu = () => {};
+  context.closeArtistsDrawer = () => {};
+  context.clearPendingSelectedArtistReconcile = () => {};
+  context.clearPendingGallerySearchCommit = () => {};
+  context.updateGallerySearchDraftQuery = (query) => {
+    context.state.ui.searchDraftQuery = query;
+  };
+  context.closeRecentSearchPopover = () => {};
+  context.releaseAlbumDetailPrewarmSearchSuspension = () => {};
+  context.releasePendingSearchWaveformPeakLoadSuspension = () => {};
+  context.resetGalleryMainStateForPrimaryArtist = (mainState) => mainState;
+  context.deepCloneJson = (value) => JSON.parse(JSON.stringify(value));
+  context.resolveSidebarArtists = (view, override) => override || view.artists_sidebar || [];
+  context.renderView = (options) => {
+    calls.renderView.push(options);
+    coverLoadCalls.push('render');
+  };
+  vm.runInContext(galleryEventHandlersSource, context, { filename: galleryEventHandlersPath });
+
+  context.openScanPage();
+  coverLoadCalls.length = 0;
+  const sidebarArtistLink = {
+    getAttribute(name) {
+      return name === 'data-sidebar-artist' ? 'The Neal Morse Band' : '';
+    },
+    closest() {
+      return null;
+    },
+    classList: { add() {} },
+    setAttribute() {},
+  };
+  const handled = context.handleSidebarArtistSelectionClick({
+    preventDefault() {},
+    target: {
+      closest(selector) {
+        return selector === '[data-sidebar-artist]' ? sidebarArtistLink : null;
+      },
+    },
+  });
+
+  assert.equal(handled, true);
+  assert.equal(calls.fetchRequests.length, 0);
+  assert.equal(context.state.ui.scanPageCoverLoadSuspensionToken, 0);
+  assert.deepEqual(coverLoadCalls, ['render', 'resume:41']);
 });
 
 test('abandonScanPageForNavigation discards Back restoration and neutralizes selection state before navigation', () => {

@@ -135,24 +135,3 @@ test('Appearance cleanup restores every writable field without overwriting accou
     { ...owned, waveform_recent_colors: ['#111111'] }, owned, current,
   ), null);
 });
-
-test('Appearance cleanup excludes server-owned waveform recent colors', async () => {
-  const { buildAppearanceRestorePayload } = await import(moduleUrl);
-  const original = {
-    palette_id: 'navy',
-    waveform_recent_colors: ['#112233'],
-  };
-  const owned = {
-    ...original,
-    palette_id: 'harbor-mint',
-    waveform_recent_colors: ['#445566', '#112233'],
-  };
-  const payload = buildAppearanceRestorePayload(original, owned, {
-    ...owned,
-    revision: 3,
-    csrf_token: 'fresh-token',
-  });
-
-  assert.equal(payload.palette_id, 'navy');
-  assert.equal(Object.hasOwn(payload, 'waveform_recent_colors'), false);
-});

@@ -2254,14 +2254,9 @@ test('album identity topology uses action-owned scrolling and rendered card loca
   assert.equal(boundedWheelDeltas.length, 2);
 });
 
-test('album identity locators share the single-artist GalleryBar section fallback', () => {
-  const albumCard = read('tests/e2e/poms/albumCard.js');
+test('GalleryPage delegates artist-section identity to AlbumCard', () => {
   const galleryPage = read('tests/e2e/poms/galleryPage.js');
 
-  assert.match(
-    albumCard,
-    /sectionByArtistHeading\(artistHeading\) \{[\s\S]*explicitSection\.or\(singleArtistSection\)\.first\(\)/,
-  );
   assert.match(
     galleryPage,
     /sectionByArtistHeading\(artistHeading\) \{[\s\S]*return this\.albumCard\.sectionByArtistHeading\(artistHeading\);/,

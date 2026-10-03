@@ -131,8 +131,8 @@ export class AlbumCard extends BasePage {
     });
   }
 
-  cardByArtistAndAlbum(artistName, albumName) {
-    return this.cardsByArtistAndAlbum(artistName, albumName).first();
+  cardByArtistAndAlbum(artistName, albumName, options = {}) {
+    return this.cardsByArtistAndAlbum(artistName, albumName, options).first();
   }
 
   get singleArtistContextNameSelector() {

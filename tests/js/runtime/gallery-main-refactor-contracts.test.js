@@ -64,14 +64,18 @@ test('connected triggers leave the edge adjoining their surface unpainted', () =
   );
 });
 
-test('Gallery toolbar buttons use the appearance control surface', () => {
+test('Gallery toolbar buttons keep the main surface on mobile and use the control surface on desktop', () => {
   assert.match(
     galleryMainCssSource,
-    /\.gallery-bar__actions\s*\{[^}]*--gallery-toolbar-button-background:\s*var\(--appearance-control,\s*var\(--panel\)\)/,
+    /\.gallery-bar__actions\s*\{[^}]*--gallery-toolbar-button-background:\s*var\(--appearance-main-surface,\s*var\(--panel\)\)/,
   );
   assert.match(
     galleryMainCssSource,
-    /\.gallery-action-button\s*\{[^}]*background:\s*var\(--gallery-toolbar-button-background,\s*var\(--appearance-control,\s*var\(--panel\)\)\)/,
+    /\.gallery-action-button\s*\{[^}]*background:\s*var\(--gallery-toolbar-button-background,\s*var\(--appearance-main-surface,\s*var\(--panel\)\)\)/,
+  );
+  assert.match(
+    galleryMainCssSource,
+    /@media \(min-width: 901px\)\s*\{[\s\S]*?\.gallery-bar__actions\s*\{[^}]*--gallery-toolbar-button-background:\s*var\(--appearance-control,\s*var\(--panel\)\)[^}]*\}[\s\S]*?\.gallery-action-button\s*\{[^}]*background:\s*var\(--gallery-toolbar-button-background,\s*var\(--appearance-control,\s*var\(--panel\)\)\)[^}]*\}/,
   );
   assert.match(
     galleryMainCssSource,

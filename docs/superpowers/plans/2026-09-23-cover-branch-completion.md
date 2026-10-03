@@ -1,5 +1,53 @@
 # Cover branch completion
 
+## Current integration checkpoint — October 3, 2026
+
+Current `origin/main` (`eef9d13f`, release 0.9.48) is merged at `2e016251`.
+That merge includes the separately completed mobile-layout and Admin/capability
+branches. Conflict reconciliation intentionally favors their mobile and
+capability behavior while retaining this branch's approved desktop/web visual
+work. Commit `6b285822` restores the merged mobile/shared styles and reapplies
+only the three required desktop rules. No Admin or capability behavior is
+overridden by the remaining branch diff.
+
+Post-merge repairs are committed separately: `de537f8a` resumes suspended cover
+loads after cached Scan Page replacements render and removes duplicate tests;
+`8bb3f5c1` accepts the documented dedicated `album_haven_scan_e2e` database only
+with its exact expected role. The current application delta against
+`origin/main` is 27 files with 439 additions and 61 deletions. Excluded local
+restart artifacts and the mock-preview PID remain untracked.
+
+The test-data checkout's two local 706-fixture commits are already represented
+in released source `b24265f`; that released source differs only by eight stricter
+fixture assertions. The stale local fixture branch therefore has no unpublished
+fixture content to promote for this release. The private owner checkout contains
+broad unrelated interleaved edits; no whole file is owned by this branch, so it
+remains untouched.
+
+Focused integration evidence is green: CSS contracts 111/111; Scan Page runtime
+147/147; duplicate-test selections exit 0; E2E production parity passes; and
+the database-identity selection passes 74 Python tests, including wrong-role
+rejection. FTC-OPS-017 then passed unchanged on its single diagnostic rerun:
+cached browse 531 ms, stable 544 ms, and search 446.4 ms, each below the original
+1000/1000/1200 ms hard ceilings. The reporter finalized, metrics and functional
+checks completed, and the policy result is `passed`; the earlier
+`reporter-finalization` record contained no measurements and was a transient
+pre-measurement harness failure.
+
+Post-integration review found and repaired three Important issues: the desktop
+Gallery toolbar surface is now scoped above 900 px so merged mobile styling wins;
+the shared AlbumCard locator now forwards `{ visible: true }` and cannot settle
+cover readiness on a hidden stale card; and the established visible Artist Family
+Combine-row hover assertion is restored. The two new RED contracts failed for
+the intended missing behavior, then passed together at 75/75 after the fixes.
+
+Release metadata is now prepared for 0.9.49 because 0.9.48 is already on
+`origin/main`. Remaining work: final post-integration review and focused checks,
+commit and push the application branch, open a new application PR with
+`skip_reviews` and without `skip_tests`, collect and fix the complete native CI
+failure inventory, merge only after the full pipeline is green, publish 0.9.49,
+then synchronize and deploy the verified release under the deployment runbook.
+
 ## Current verification checkpoint — September 23, 2026
 
 All introduced acceptance scenarios are now green, including real full-app FTC-OPS-003G failure/recovery and the released-706 Problematic Files case under its approved temporary performance ceilings. Three complete local review passes are finished; no completion push, PR or hosted CI run has started.
@@ -86,7 +134,7 @@ The owner has authorized the following continuation. No final local review has c
 - [x] Full local review pass 1: entire relevant branch diff, including tests, shared ownership boundaries, security, accessibility, and unnecessary code; eight validated product findings fixed and focused-verified.
 - [x] Full local review pass 2: entire resulting relevant diff reassessed; 13 EOF-whitespace findings fixed and branch-wide `git diff --check` made clean.
 - [x] Full local review pass 3: entire resulting relevant diff reassessed across security, trust boundaries, migration compatibility, accessibility/state ownership, bundle parity and CI evidence integrity; two stale 19-target test labels corrected, with no remaining validated finding.
-- [x] Bump the version to0.9.46 and update all release documentation for the verified branch outcome.
+- [x] Bump the original completion candidate to 0.9.46; after integrating released 0.9.48, prepare the final candidate as 0.9.49 and update release documentation.
 - [x] Reconcile historical documents for tasks worked in this worktree; move the two fully completed documents under `docs/history/` and repair their references while leaving unfinished plans active.
 - [ ] Commit verified review fixes, push, open a new draft PR, and attach it to this task. Apply and verify `skip_reviews` and the absence of `skip_tests` before marking the PR ready, so the native pipeline starts with the intended waiver.
 - [ ] Run the complete native PR pipeline with `skip_reviews` and without `skip_tests`; collect the complete genuine test failure inventory for the current candidate head. Preserve the explicit owner waiver without recording hosted review coverage.
@@ -137,7 +185,7 @@ The local handoff and requested pause completed at `9f770e967fcc6fc734b2064e1fcc
 
 The approved instrumented diagnostic is now complete and recorded above; it does not replace the failed uninstrumented acceptance result. The pending decision concerns the proposed projection-local cache optimization; the previously requested diagnostic has already been approved and executed. No review pass or CI gate was completed by the diagnostic.
 
-### Transferable local handoff checkpoint
+### Historical transferable local handoff checkpoint — superseded October 3
 
 Final local handoff commit `9f770e967fcc6fc734b2064e1fccddce6eb4223c` includes verified v1.0.25 pins and two backend files (`library_browse_postgres.py` and its tests). Backend focused evidence:21 failing regressions became21 passing; the related112 checks passed, including an independent native `Path.name` oracle. This does not establish an end-to-end latency improvement. Pin contracts passed45/45 and the released manifest passed strict loader validation for all three active profiles. The historical instruction to stop after this commit was fulfilled; current continuation is recorded above.
 
@@ -151,7 +199,15 @@ Final local handoff commit `9f770e967fcc6fc734b2064e1fccddce6eb4223c` includes v
 
 ## Current release checkpoint
 
-Local review is complete3/3 and the checklist is18/22. Version0.9.46, release documentation, two history moves, all validated local-review fixes, temporary2000/1400ms performance contracts, and their single-attempt released-706 canonical pass are committed or ready for the final review-fix commit. `P9-PERF-001` remains open to restore the original1200ms cold ceiling or obtain explicit owner disposition. Next: push the branch, open and attach a new PR, apply `skip_reviews`, verify `skip_tests` is absent, run complete native CI, fix its full failure inventory, rerun full CI until green, then publish through the applicable release gates.
+The original local review is complete 3/3 and the checklist is 18/22. Current
+`origin/main` 0.9.48 is integrated, post-merge repairs and duplicate-test cleanup
+are committed, FTC-OPS-017 passes its unchanged contract, and 0.9.49 release
+metadata is prepared. `P9-PERF-001` remains open to restore the original 1200 ms
+Problematic Files cold ceiling or obtain explicit owner disposition. Next:
+complete post-integration review and focused verification, commit and push, open
+and attach a new PR, apply `skip_reviews`, verify `skip_tests` is absent, run the
+complete native CI, fix its full failure inventory, rerun until green, then
+publish through the applicable release gates.
 
 ### Normal-database evidence
 

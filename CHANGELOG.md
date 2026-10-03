@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.9.49 - 2026-10-03
+
+- Preserved the released 0.9.48 mobile layout and Admin capability behavior while
+  reconciling the approved desktop Gallery, player, and appearance presentation.
+- Resumed deferred Gallery cover loading only after cached Scan Page navigation
+  finishes rendering its replacement view.
+- Preserved decoded album-card artwork ahead of pending virtual-window placeholders
+  and kept loop action pods from shrinking in constrained layouts.
+- Corrected scan-performance database identity propagation and retained focused
+  regression coverage for production locators, provider labels, and navigation.
+
 ## 0.9.48 - 2026-09-30
 
 - Added responsive mobile navigation and Home, with shared account and Settings

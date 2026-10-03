@@ -212,6 +212,7 @@ def _non_album_candidates_sql() -> str:
           join library.local_track_files
             on library.local_track_files.track_id = library.local_tracks.id
           where library.local_track_files.scan_cache_stale is false
+            and (%(track_id_count)s = 0 or library.local_tracks.id = any(%(track_ids)s::bigint[]))
             and {stored_non_album_predicate}
 
           union
@@ -223,6 +224,7 @@ def _non_album_candidates_sql() -> str:
           join library.local_track_files
             on library.local_track_files.track_id = library.local_tracks.id
           where library.local_track_files.scan_cache_stale is false
+            and (%(track_id_count)s = 0 or library.local_tracks.id = any(%(track_ids)s::bigint[]))
             and {scanned_exception_predicate}
 
           union

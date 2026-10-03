@@ -171,3 +171,74 @@ def test_build_cover_refresh_jobs_marks_upgrade_candidates_for_refetch(tmp_path:
     assert cache_stub.queries == ["cache-key"]
     assert len(jobs) == 1
     assert jobs[0]["needs_cover_fetch"] is True
+
+
+def test_build_cover_refresh_jobs_checks_shared_cover_and_lookup_once(tmp_path: Path, monkeypatch):
+    folder = tmp_path / "Artist" / "Album"
+    folder.mkdir(parents=True)
+    cover = folder / "cover.jpg"
+    cover.write_bytes(b"cover")
+    tracks = [folder / f"0{index}.mp3" for index in (1, 2)]
+    cache = _CoverCacheStub()
+    checked: list[Path] = []
+    monkeypatch.setattr(
+        cover_refresh_planning,
+        "local_cover_requires_upgrade_check",
+        lambda path, _cache_entry: checked.append(path) or False,
+    )
+
+    jobs = cover_refresh_planning.build_cover_refresh_jobs(
+        {str(track): {"album_artist": "Artist", "album": "Album", "cover_path": str(cover)} for track in tracks},
+        require_missing_cover=True,
+        cover_cache=cache,
+    )
+
+    assert jobs == []
+    assert len(cache.queries) == 1
+    assert checked == [cover]
+
+
+def test_build_cover_refresh_jobs_keeps_missing_track_cover_semantics(tmp_path: Path, monkeypatch):
+    folder = tmp_path / "Artist" / "Album"
+    folder.mkdir(parents=True)
+    cover = folder / "cover.jpg"
+    cover.write_bytes(b"cover")
+    monkeypatch.setattr(cover_refresh_planning, "local_cover_requires_upgrade_check", lambda *_args: False)
+
+    jobs = cover_refresh_planning.build_cover_refresh_jobs(
+        {
+            str(folder / "01.mp3"): {"album_artist": "Artist", "album": "Album", "cover_path": str(cover)},
+            str(folder / "02.mp3"): {"album_artist": "Artist", "album": "Album", "cover_path": None},
+        },
+        require_missing_cover=True,
+    )
+
+    assert len(jobs) == 1
+    assert jobs[0]["needs_cover_fetch"] is True
+
+
+def test_build_cover_refresh_jobs_rechecks_when_album_query_identity_changes(tmp_path: Path, monkeypatch):
+    folder = tmp_path / "Artist" / "Album"
+    folder.mkdir(parents=True)
+    cover = folder / "cover.jpg"
+    cover.write_bytes(b"cover")
+    cache = _CoverCacheStub()
+    checked: list[Path] = []
+    monkeypatch.setattr(
+        cover_refresh_planning,
+        "local_cover_requires_upgrade_check",
+        lambda path, _cache_entry: checked.append(path) or False,
+    )
+
+    jobs = cover_refresh_planning.build_cover_refresh_jobs(
+        {
+            str(folder / "01.mp3"): {"album_artist": "Artist", "album": "Album", "cover_path": str(cover)},
+            str(folder / "02.mp3"): {"album_artist": "Artist", "album": "Album", "year": 2001, "cover_path": str(cover)},
+        },
+        require_missing_cover=True,
+        cover_cache=cache,
+    )
+
+    assert jobs == []
+    assert len(set(cache.queries)) == 2
+    assert checked == [cover, cover]

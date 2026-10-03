@@ -15,6 +15,7 @@ def build_cover_refresh_jobs(
 ) -> list[dict[str, object]]:
     jobs_by_folder: dict[str, dict[str, object]] = {}
     skipped_folders: list[dict[str, object]] = []
+    cover_needs_fetch: dict[tuple[str, str | None], bool] = {}
 
     for raw_path, entry in file_cache.items():
         try:
@@ -58,17 +59,27 @@ def build_cover_refresh_jobs(
 
         cover_value = str(entry.get("cover_path") or "").strip()
         cover_path = Path(cover_value) if cover_value else None
-        cache_entry = None
-        if cover_cache is not None and job.get("artist") and job.get("album"):
-            cache_entry = cover_cache.get(
-                cover_query_key(
-                    str(job.get("artist") or "").strip(),
-                    str(job.get("album") or "").strip(),
-                    str(job.get("edition") or "").strip() or None,
-                    job.get("year") if isinstance(job.get("year"), int) else None,
-                )
+        if cover_path is None:
+            job["needs_cover_fetch"] = True
+            continue
+        cache_key = (
+            cover_query_key(
+                str(job.get("artist") or "").strip(),
+                str(job.get("album") or "").strip(),
+                str(job.get("edition") or "").strip() or None,
+                job.get("year") if isinstance(job.get("year"), int) else None,
             )
-        if cover_path is None or not cover_path.exists() or local_cover_requires_upgrade_check(cover_path, cache_entry):
+            if cover_cache is not None and job.get("artist") and job.get("album")
+            else None
+        )
+        decision_key = (cover_value, cache_key)
+        if decision_key not in cover_needs_fetch:
+            cache_entry = cover_cache.get(cache_key) if cache_key is not None else None
+            cover_needs_fetch[decision_key] = (
+                not cover_path.exists()
+                or local_cover_requires_upgrade_check(cover_path, cache_entry)
+            )
+        if cover_needs_fetch[decision_key]:
             job["needs_cover_fetch"] = True
 
     jobs: list[dict[str, object]] = []

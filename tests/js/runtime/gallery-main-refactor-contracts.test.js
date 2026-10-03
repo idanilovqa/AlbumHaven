@@ -137,6 +137,21 @@ function requireContract(context, name) {
   return context[name];
 }
 
+test('search gallery hides artist information while retaining headings and album counts', () => {
+  const context = loadRuntime({ state: { view: { query: 'Neal Morse' } } });
+  const config = { artist: 'Neal Morse', artistCount: 1, albumCount: 3, contextKind: 'artist' };
+  for (const render of [context.buildGalleryBarHtml, context.buildFamilyArtistHeaderHtml]) {
+    const html = render(config);
+    assert.doesNotMatch(html, /data-artist-info-trigger/);
+    assert.match(html, /Neal Morse/);
+    assert.match(html, /3 albums/);
+    context.state.view.query = '';
+    assert.match(render(config), /data-artist-info-trigger/);
+    context.state.view.query = 'Neal Morse';
+  }
+  assert.doesNotThrow(() => context.openGalleryArtistInfo(null));
+});
+
 function plain(value) {
   return JSON.parse(JSON.stringify(value));
 }

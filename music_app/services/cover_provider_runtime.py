@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from contextlib import nullcontext
+
 import logging
 import time
 from collections.abc import Callable
@@ -18,6 +20,11 @@ from music_app.services import cover_provider_youtube_music
 from music_app.services import music_identity_matching
 from music_app.services.app_logging import log_app_event
 from music_app.services.cover_provider_candidates import CoverCandidate, normalize_remote_image_url
+from music_app.services.cover_provider_deadline import (
+    AutomaticCoverDeadlineExceeded,
+    AutomaticCoverSearchFailed,
+    automatic_cover_budget_active,
+)
 from music_app.services.cover_workflow import decode_image_bytes, write_remote_cover_bytes_as_authoritative_cover
 from music_app.services.covers import measure_image_sharpness
 from music_app.services.musicbrainz_http import get_json as musicbrainz_get_json
@@ -261,12 +268,18 @@ def probe_match_candidates(
             for probe_index, probe_url in enumerate(candidate_probe_urls, start=1):
                 if callable(should_cancel) and should_cancel():
                     break
-                metrics = probe_candidate_metrics(
-                    probe_url,
-                    user_agent=user_agent,
-                    service=source,
-                    context=f"probe:{query_mode}:{artist} - {album}",
-                )
+                try:
+                    metrics = probe_candidate_metrics(
+                        probe_url,
+                        user_agent=user_agent,
+                        service=source,
+                        context=f"probe:{query_mode}:{artist} - {album}",
+                    )
+                except (AutomaticCoverDeadlineExceeded, AutomaticCoverSearchFailed):
+                    if candidates and automatic_cover_budget_active():
+                        candidates[-1].debug_payload["automatic_probe_interrupted"] = True
+                        return candidates
+                    raise
                 if callable(should_cancel) and should_cancel():
                     break
                 if metrics:
@@ -373,6 +386,8 @@ def probe_match_candidates(
                 debug_payload=candidate_debug_payload,
             )
         )
+        if automatic_cover_budget_active() and cover_candidate_is_acceptable(candidates[-1]):
+            break
         if (
             source == "apple"
             and use_score_cutoff
@@ -500,22 +515,36 @@ def search_youtube_music_candidates(
     edition: str | None,
     year: int | None,
     user_agent: str,
+    *,
+    build_query_variants=None,
+    automatic: bool = False,
+    max_queries: int | None = None,
 ) -> list[CoverCandidate]:
-    return cover_provider_youtube_music.search_youtube_music_candidates(
-        artist,
-        album,
-        edition,
-        year,
-        user_agent,
-        client_getter=lambda **_kwargs: youtube_music_client(),
-        build_query_variants=cover_provider_matching.build_query_variants,
-        match_score=cover_provider_matching.match_score,
-        parse_year=cover_provider_matching.parse_year,
-        probe_match_candidates=probe_match_candidates,
-        dedupe_candidates=cover_provider_matching.dedupe_candidates,
-        log_event=log_app_event,
-        logger=LOGGER,
+    client_context = (
+        cover_provider_youtube_music.automatic_youtube_music_client()
+        if automatic else nullcontext(None)
     )
+    with client_context as automatic_client:
+        return cover_provider_youtube_music.search_youtube_music_candidates(
+            artist,
+            album,
+            edition,
+            year,
+            user_agent,
+            client_getter=(
+                (lambda **_kwargs: automatic_client)
+                if automatic else (lambda **_kwargs: youtube_music_client())
+            ),
+            build_query_variants=build_query_variants or cover_provider_matching.build_query_variants,
+            automatic=automatic,
+            max_queries=max_queries,
+            match_score=cover_provider_matching.match_score,
+            parse_year=cover_provider_matching.parse_year,
+            probe_match_candidates=probe_match_candidates,
+            dedupe_candidates=cover_provider_matching.dedupe_candidates,
+            log_event=log_app_event,
+            logger=LOGGER,
+        )
 
 
 def spotify_request_json(

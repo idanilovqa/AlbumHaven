@@ -488,6 +488,10 @@ function syncGalleryBarSearchVisibility() {
 }
 
 function updateGalleryMainChrome() {
+  const isSearch = Boolean(String(state.view.query || '').trim());
+  if (isSearch && galleryMainSurfaceController?.current?.()?.surface?.matches?.('.artist-info-overlay')) {
+    closeGalleryMainSurface(false);
+  }
   const bar = document.querySelector('[data-gallery-bar]');
   const scroll = document.getElementById('albums-scroll');
   if (!bar || !scroll) return;
@@ -526,7 +530,8 @@ function updateGalleryMainChrome() {
   } else {
     name.textContent = context.artist;
     summary.textContent = galleryMainPlural(context.albumCount, 'album');
-    if (!oldInfo) name.insertAdjacentHTML('afterend', `<button class="gallery-info-button" type="button" data-artist-info-trigger="1" data-artist="${escapeHtml(context.artist)}" aria-label="Information about ${escapeHtml(context.artist)}" aria-expanded="false">${buildGalleryInfoGlyphHtml()}</button>`);
+    if (isSearch) oldInfo?.remove();
+    else if (!oldInfo) name.insertAdjacentHTML('afterend', `<button class="gallery-info-button" type="button" data-artist-info-trigger="1" data-artist="${escapeHtml(context.artist)}" aria-label="Information about ${escapeHtml(context.artist)}" aria-expanded="false">${buildGalleryInfoGlyphHtml()}</button>`);
     else {
       oldInfo.dataset.artist = context.artist;
       oldInfo.setAttribute('aria-label', `Information about ${context.artist}`);
@@ -585,6 +590,7 @@ function transitionGalleryMain(action) {
 }
 
 function openGalleryArtistInfo(anchor) {
+  if (String(state.view.query || '').trim()) return;
   const artist = String(anchor.dataset.artist || '').trim();
   const group = getGalleryMainGroups().find((candidate) => String(candidate.artist_display || candidate.artist || '') === artist) || {};
   const overlay = document.querySelector('[data-artist-info-overlay]');

@@ -15,6 +15,13 @@ import urllib.parse
 import urllib.request
 from collections.abc import Callable
 
+from music_app.services.cover_provider_deadline import (
+    AutomaticCoverDeadlineExceeded,
+    AutomaticCoverSearchFailed,
+    automatic_cover_budget_active,
+    remaining_automatic_cover_seconds,
+)
+
 try:
     import certifi
 except ImportError:
@@ -129,8 +136,9 @@ def _http_get_bytes(
         headers=headers,
     )
     ssl_context = _http_ssl_context()
+    request_timeout = remaining_automatic_cover_seconds(15.0)
     try:
-        with urllib.request.urlopen(request, timeout=15, context=ssl_context) as response:
+        with urllib.request.urlopen(request, timeout=request_timeout, context=ssl_context) as response:
             _HTTP_TRACE_LOCAL.last_url = str(getattr(response, "url", url) or url)
             payload = response.read()
             elapsed_ms = (time.perf_counter() - started_at) * 1000
@@ -195,6 +203,8 @@ def _http_get_bytes(
                 rate_limit_remaining=rate_limit_remaining,
                 rate_limit_total=rate_limit_total,
             )
+        if automatic_cover_budget_active() and (int(getattr(exc, "code", 0) or 0) == 429 or int(getattr(exc, "code", 0) or 0) >= 500):
+            raise AutomaticCoverSearchFailed() from exc
         return None
     except urllib.error.URLError as exc:
         elapsed_ms = (time.perf_counter() - started_at) * 1000
@@ -225,8 +235,16 @@ def _http_get_bytes(
                 reason=str(reason),
                 timeout=bool(is_timeout),
             )
+        if is_timeout and automatic_cover_budget_active():
+            raise AutomaticCoverDeadlineExceeded() from exc
+        if automatic_cover_budget_active():
+            raise AutomaticCoverSearchFailed() from exc
         return None
     except Exception as exc:
+        if isinstance(exc, TimeoutError) and automatic_cover_budget_active():
+            raise AutomaticCoverDeadlineExceeded() from exc
+        if automatic_cover_budget_active():
+            raise AutomaticCoverSearchFailed() from exc
         elapsed_ms = (time.perf_counter() - started_at) * 1000
         if service == "apple":
             append_trace(
@@ -291,7 +309,7 @@ def _http_get_json(
         musicbrainz_kwargs = {
             "context": context,
             "extra_headers": extra_headers,
-            "timeout": 15.0,
+            "timeout": remaining_automatic_cover_seconds(15.0),
         }
         if callable(should_cancel):
             musicbrainz_kwargs["should_cancel"] = should_cancel
@@ -422,6 +440,7 @@ def _http_get_json_via_curl(
             url=url,
         )
         return None
+    request_timeout = remaining_automatic_cover_seconds(25.0)
     try:
         completed = subprocess.run(
             [
@@ -430,7 +449,7 @@ def _http_get_json_via_curl(
                 "--show-error",
                 "--location",
                 "--max-time",
-                "20",
+                f"{min(20.0, request_timeout):g}",
                 "--header",
                 f"User-Agent: {user_agent}",
                 "--header",
@@ -440,7 +459,7 @@ def _http_get_json_via_curl(
             capture_output=True,
             text=True,
             check=False,
-            timeout=25,
+            timeout=request_timeout,
             creationflags=_NO_WINDOW_CREATION_FLAGS,
         )
     except Exception as exc:
@@ -502,6 +521,7 @@ def _http_get_json_via_subprocess(
 ) -> dict | None:
     active_logger = logger or _DEFAULT_LOGGER
     emit_app_event = app_event_logger or _noop_app_event_logger
+    request_timeout = remaining_automatic_cover_seconds(30.0)
     helper_code = r"""
 import json, ssl, sys, urllib.request
 try:
@@ -516,17 +536,17 @@ if certifi is not None:
     context = ssl.create_default_context(cafile=certifi.where())
 else:
     context = ssl.create_default_context()
-with urllib.request.urlopen(req, timeout=20, context=context) as resp:
+with urllib.request.urlopen(req, timeout=float(sys.argv[3]), context=context) as resp:
     payload = json.load(resp)
 print(json.dumps(payload))
 """
     try:
         completed = subprocess.run(
-            [sys.executable, "-c", helper_code, str(url or ""), str(user_agent or "")],
+            [sys.executable, "-c", helper_code, str(url or ""), str(user_agent or ""), f"{min(20.0, request_timeout):g}"],
             capture_output=True,
             text=True,
             check=False,
-            timeout=30,
+            timeout=request_timeout,
             creationflags=_NO_WINDOW_CREATION_FLAGS,
         )
     except Exception as exc:

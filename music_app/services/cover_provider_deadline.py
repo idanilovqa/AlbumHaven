@@ -1,10 +1,57 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping
+from contextlib import contextmanager
+from contextvars import ContextVar
 import time
 
 
 DEFAULT_COVER_LOOKUP_PROVIDER_DEADLINE_SECONDS = 120.0
+
+
+class AutomaticCoverDeadlineExceeded(TimeoutError):
+    """An automatic cover provider exhausted its bounded lookup time."""
+
+
+class AutomaticCoverSearchFailed(RuntimeError):
+    """A transient automatic lookup failure that must not be negative-cached."""
+
+
+_AUTOMATIC_COVER_DEADLINE: ContextVar[float | None] = ContextVar(
+    "automatic_cover_deadline", default=None,
+)
+
+
+@contextmanager
+def automatic_cover_budget(seconds: float):
+    existing = _AUTOMATIC_COVER_DEADLINE.get()
+    deadline = time.perf_counter() + max(0.0, seconds)
+    if existing is not None:
+        deadline = min(existing, deadline)
+    token = _AUTOMATIC_COVER_DEADLINE.set(deadline)
+    try:
+        yield
+    finally:
+        _AUTOMATIC_COVER_DEADLINE.reset(token)
+
+
+def remaining_automatic_cover_seconds(default: float) -> float:
+    deadline = _AUTOMATIC_COVER_DEADLINE.get()
+    if deadline is None:
+        return default
+    remaining = deadline - time.perf_counter()
+    if remaining <= 0:
+        raise AutomaticCoverDeadlineExceeded()
+    return min(default, remaining)
+
+
+def automatic_cover_budget_expired() -> bool:
+    deadline = _AUTOMATIC_COVER_DEADLINE.get()
+    return deadline is not None and time.perf_counter() >= deadline
+
+
+def automatic_cover_budget_active() -> bool:
+    return _AUTOMATIC_COVER_DEADLINE.get() is not None
 
 
 def cover_lookup_provider_deadline_seconds(config: object) -> float:

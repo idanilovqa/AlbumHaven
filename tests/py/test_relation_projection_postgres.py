@@ -205,6 +205,7 @@ def _compilation_rows(*, is_compilation=True):
             "featured_kind": "featured_member",
             "track_file_id": track_file_id,
             "library_root_id": 11,
+            "root_kind": "main_library",
             "root_path": "C:/Music",
             "relative_path": relative_path,
             "private_path": f"C:/Music/{relative_path}",
@@ -237,6 +238,13 @@ def test_relation_source_fingerprint_is_order_independent_and_source_sensitive()
 
     changed = deepcopy(rows)
     changed[1]["album_artist"] = "Morse Portnoy and George"
+    assert projection.relation_source_fingerprint(rows) != projection.relation_source_fingerprint(changed)
+
+
+def test_relation_source_fingerprint_changes_with_root_category():
+    rows = _compilation_rows()
+    changed = deepcopy(rows)
+    changed[0]["root_kind"] = "hoarding_library"
     assert projection.relation_source_fingerprint(rows) != projection.relation_source_fingerprint(changed)
 
 
@@ -705,13 +713,14 @@ def test_v4_ready_metadata_forces_corrected_alias_builder_rebuild(monkeypatch):
     assert result["builder_version"] == projection.RELATION_PROJECTION_BUILDER_VERSION
 
 
-def test_v7_ready_metadata_forces_ost_classifier_rebuild():
+@pytest.mark.parametrize("old_version", ["local-relation-builder-v7", "local-relation-builder-v9"])
+def test_old_ready_metadata_forces_corrected_folder_evidence_rebuild(old_version):
     fingerprint = projection.relation_source_fingerprint(_morse_rows())
     scan_cache = {
         "relation_views": _complete_relation_views(),
         projection.RELATION_PROJECTION_METADATA_KEY: {
             "status": "ready",
-            "builder_version": "local-relation-builder-v7",
+            "builder_version": old_version,
             "source_fingerprint": fingerprint,
             "built_from_fingerprint": fingerprint,
         },

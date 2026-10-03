@@ -993,6 +993,7 @@ function normalizeViewPayload(payload, fallbackView = null) {
       source.initial_view_partial,
       initialViewPartialFallback,
     ),
+    gallery_page: isRuntimePlainObject(source.gallery_page) ? { ...source.gallery_page } : null,
     ...(selectedArtistFamilyDisplayMode ? { selected_artist_family_display_mode: selectedArtistFamilyDisplayMode } : {}),
     ...(playbackContext ? { playback_context: playbackContext } : {}),
   };

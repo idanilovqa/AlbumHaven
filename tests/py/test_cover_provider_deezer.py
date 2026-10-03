@@ -5,6 +5,28 @@ import urllib.parse
 from music_app.services.cover_provider_candidates import CoverCandidate, build_lookup_matches_from_candidates
 
 
+def test_automatic_deezer_issues_at_most_two_album_queries():
+    from music_app.services import cover_provider_deezer as deezer
+
+    calls = []
+    result = deezer.search_deezer_cover(
+        "Artist", "Album", None, 2001, "AlbumHavenTests/1.0",
+        automatic=True, max_queries=2,
+        http_get_json=lambda url, *_args, **_kwargs: calls.append(url) or {"data": []},
+        build_query_variants=lambda *_args: [
+            ("Artist", "Album", None, 2001),
+            ("Normalized Artist", "Album", None, 2001),
+        ],
+        match_score=lambda **_kwargs: 0.0,
+        parse_year=lambda _value: 2001,
+        select_largest_candidate=lambda **_kwargs: None,
+    )
+
+    assert result is None
+    assert len(calls) == 2
+    assert "Normalized" in urllib.parse.unquote(calls[1])
+
+
 def test_candidate_urls_upgrade_cover_medium_and_dedupe_originals():
     from music_app.services import cover_provider_deezer as deezer
 

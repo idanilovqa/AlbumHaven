@@ -107,6 +107,8 @@ def search_deezer_cover(
     year: int | None,
     user_agent: str,
     *,
+    automatic: bool = False,
+    max_queries: int | None = None,
     http_get_json: HttpGetJson | None = None,
     build_query_variants: QueryVariants,
     match_score: MatchScore,
@@ -116,17 +118,20 @@ def search_deezer_cover(
     getter = http_get_json or cover_provider_http._http_get_json
     seen_queries: set[str] = set()
     for query_artist, query_album, query_edition, query_year in build_query_variants(artist, album, edition, year):
-        for query_text, enforce_year, query_mode in _build_deezer_queries(
+        queries = _build_deezer_queries(
             query_artist,
             query_album,
             query_edition,
             query_year,
             native_artist=artist,
             native_album=album,
-        ):
+        )
+        for query_text, enforce_year, query_mode in (queries[:1] if automatic else queries):
             normalized_query = " ".join(query_text.split()).strip()
             if not normalized_query or normalized_query in seen_queries:
                 continue
+            if max_queries is not None and len(seen_queries) >= max_queries:
+                return None
             seen_queries.add(normalized_query)
             data = getter(_search_url(normalized_query, limit=10), user_agent, service="deezer", context=f"search:{normalized_query}")
             if not data:

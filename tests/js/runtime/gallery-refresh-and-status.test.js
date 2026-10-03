@@ -8,6 +8,91 @@ const helperPath = path.join(__dirname, '..', '..', '..', 'music_app', 'static',
 const helperSource = fs.readFileSync(helperPath, 'utf8');
 const tagMutationSource = fs.readFileSync(path.join(path.dirname(helperPath), 'utility-list-builders.js'), 'utf8');
 
+test('progressive gallery merges missing and live artist albums without duplicates', () => {
+  const { context } = createContext();
+  const groups = context.mergeGalleryPageGroups(
+    [{ artist: 'Artist', albums: [{ key: 'missing' }, { key: 'same', preview_only: true }] }],
+    [{ artist: 'Artist', albums: [{ key: 'same', preview_only: false }, { key: 'new' }] }],
+  );
+  assert.deepEqual(JSON.parse(JSON.stringify(groups)), [{ artist: 'Artist', albums: [
+    { key: 'missing' }, { key: 'same', preview_only: false }, { key: 'new' },
+  ] }]);
+});
+
+test('root gallery requests bounded pages and appends continuation albums', async () => {
+  const { context, calls, pendingRequests } = createContext();
+  const first = context.fetchAndRender('/view-data?category=hoard', false);
+  assert.match(calls.fetchRequests[0].url, /payload_tier=sidebar/);
+  pendingRequests[0].resolveWith({
+    artist_groups: [{ artist: 'A', albums: [{ key: 'a' }] }],
+    primary_artist_groups: [{ artist: 'A', albums: [{ key: 'a' }] }],
+    gallery_page: { offset: 0, next_offset: 6 }, artist_count: 30, album_count: 100,
+  });
+  assert.equal(await first, true);
+  const next = context.fetchAndRender('/view-data?category=hoard&gallery_offset=6', false, { appendGalleryPage: true, preserveScroll: true });
+  pendingRequests[1].resolveWith({
+    artist_groups: [{ artist: 'B', albums: [{ key: 'b' }] }],
+    primary_artist_groups: [{ artist: 'B', albums: [{ key: 'b' }] }],
+    gallery_page: { offset: 6, next_offset: null }, artist_count: 30, album_count: 100,
+  });
+  assert.equal(await next, true);
+  assert.equal(context.state.view.artist_groups.length, 2);
+  assert.equal(context.state.view.album_count, 100);
+  assert.equal(context.state.view.gallery_page.next_offset, null);
+});
+
+test('progressive pages retain authoritative artist order and update live group metadata', () => {
+  const { context } = createContext();
+  const result = context.mergeGalleryPageGroups(
+    [{ artist: 'A', albums: [{ key: 'a' }] }, { artist: 'Z', artist_display: 'missing', albums: [{ key: 'missing' }] }],
+    [{ artist: 'G', albums: [{ key: 'g' }] }, { artist: 'Z', artist_display: 'live', albums: [{ key: 'z' }] }],
+    [{ artist: 'A' }, { artist: 'G' }, { artist: 'Z' }],
+  );
+  assert.deepEqual(Array.from(result, (group) => group.artist), ['A', 'G', 'Z']);
+  assert.equal(result[2].artist_display, 'live');
+  assert.deepEqual(Array.from(result[2].albums, (album) => album.key), ['missing', 'z']);
+});
+
+test('progressive pages merge missing and live releases in chronological display order', () => {
+  const { context } = createContext();
+  const groups = context.mergeGalleryPageGroups(
+    [{ artist: 'Artist', albums: [{ key: 'missing', name: 'Recent', year: 2020 }] }],
+    [{ artist: 'Artist', albums: [{ key: 'live', name: 'Early', year: 1990 }] }],
+  );
+  assert.deepEqual(Array.from(groups[0].albums, (album) => album.key), ['live', 'missing']);
+});
+
+test('progressive loading waits for scrolling and stops when artist or search navigation owns the view', () => {
+  const { context } = createContext();
+  const requests = [];
+  const scroll = { scrollTop: 0, clientHeight: 500, scrollHeight: 2000 };
+  context.document.getElementById = () => scroll;
+  context.state.view = { gallery_page: { next_offset: 6 }, loaded_library_categories: ['hoard'] };
+  context.buildApiUrl = (view) => `/view-data?category=${view.visible_library_categories[0]}`;
+  context.fetchAndRender = (...args) => requests.push(args);
+  context.loadNextGalleryPage();
+  assert.equal(requests.length, 0);
+  scroll.scrollTop = 1200;
+  context.loadNextGalleryPage();
+  assert.equal(requests.length, 1);
+  assert.equal(requests[0][0], '/view-data?category=hoard&gallery_offset=6');
+  context.state.view.query = 'Morse';
+  context.loadNextGalleryPage();
+  context.state.view.query = '';
+  context.state.view.selected_artist = 'Morse';
+  context.loadNextGalleryPage();
+  assert.equal(requests.length, 1);
+});
+
+test('authoritative initial gallery pages reconcile scans without claiming continuation pages are complete snapshots', () => {
+  const { context } = createContext();
+  const page = { gallery_page: { offset: 0, next_offset: 6 }, artist_count: 30, album_count: 100,
+    artist_groups: [], initial_view_partial: true, payload_tier: 'sidebar' };
+  assert.equal(context.isCanonicalFullViewPayload(page), true);
+  assert.equal(context.isCanonicalFullViewPayload(page, { startupRefresh: true }), false);
+  assert.equal(context.isCanonicalFullViewPayload({ ...page, gallery_page: { offset: 6, next_offset: 12 } }), false);
+});
+
 test('a deferred gallery refresh cannot overwrite a newer optimistic tag mutation', async () => {
   const { context, calls, pendingRequests } = createContext();
   vm.runInContext(tagMutationSource, context);
@@ -157,6 +242,7 @@ function createContext() {
 
   const context = {
     AbortController,
+    URLSearchParams,
     HTMLFormElement: function HTMLFormElement() {},
     HTMLImageElement: function HTMLImageElement() {},
     Promise,
@@ -413,6 +499,7 @@ function createContext() {
 
   vm.createContext(context);
   vm.runInContext(helperSource, context, { filename: helperPath });
+  vm.runInContext(fs.readFileSync(path.join(path.dirname(helperPath), 'gallery-display-preference-helpers.js'), 'utf8'), context);
   const runtimeRenderView = context.renderView;
   context.renderView = function renderViewStub(options) {
     calls.renderView.push(options);
@@ -1946,7 +2033,7 @@ test('fetchAndRender schedules a full startup followup after sidebar-only hydrat
   scheduledTimeouts[0].callback();
   await flushMicrotasks();
   assert.equal(pendingRequests.length, 2);
-  assert.equal(pendingRequests[1].url, '/view-data');
+  assert.equal(pendingRequests[1].url, '/view-data?payload_tier=sidebar');
   pendingRequests[1].resolveWith({ artist_groups: [{ artist: 'Broadcast' }], album_count: 1 });
   await flushMicrotasks();
   await flushMicrotasks();
@@ -2004,7 +2091,7 @@ test('fetchAndRender still schedules the full startup followup when sidebar hydr
   scheduledTimeouts[0].callback();
   await flushMicrotasks();
   assert.equal(pendingRequests.length, 2);
-  assert.equal(pendingRequests[1].url, '/view-data');
+  assert.equal(pendingRequests[1].url, '/view-data?payload_tier=sidebar');
 
   pendingRequests[1].resolveWith({
     artist_groups: [{ artist: 'Broadcast', albums: [{ key: 'tender-buttons' }] }],
@@ -2154,7 +2241,7 @@ test('dispatchStartupHydrationFollowup retries a queued startup followup when th
   await flushMicrotasks();
 
   assert.equal(pendingRequests.length, 1);
-  assert.equal(pendingRequests[0].url, '/view-data');
+  assert.equal(pendingRequests[0].url, '/view-data?payload_tier=sidebar');
 });
 
 test('dispatchStartupHydrationFollowup keeps the queued startup followup visible until the full fetch begins', async () => {
@@ -2176,7 +2263,7 @@ test('dispatchStartupHydrationFollowup keeps the queued startup followup visible
 
   assert.equal(context.state.ui.pendingStartupHydrationFollowup, null);
   assert.equal(pendingRequests.length, 1);
-  assert.equal(pendingRequests[0].url, '/view-data');
+  assert.equal(pendingRequests[0].url, '/view-data?payload_tier=sidebar');
 });
 
 test('dispatchStartupHydrationFollowup does not age out a required current-generation full hydration', async () => {
@@ -2212,7 +2299,7 @@ test('dispatchStartupHydrationFollowup does not age out a required current-gener
   await flushMicrotasks();
 
   assert.equal(pendingRequests.length, 1);
-  assert.equal(pendingRequests[0].url, '/view-data');
+  assert.equal(pendingRequests[0].url, '/view-data?payload_tier=sidebar');
   assert.equal(context.state.awaitingInitialDataRefresh, true);
 
   pendingRequests[0].resolveWith({
@@ -2424,7 +2511,7 @@ test('browseScannedLibrarySnapshot requests the albums surface when the root she
 
   const browsePromise = context.browseScannedLibrarySnapshot();
   assert.equal(pendingRequests.length, 1);
-  assert.equal(pendingRequests[0].url, '/view-data?surface=albums');
+  assert.equal(pendingRequests[0].url, '/view-data?surface=albums&payload_tier=sidebar');
 
   pendingRequests[0].resolveWith({
     surface: {
@@ -2449,7 +2536,7 @@ test('browseScannedLibrarySnapshot restarts an in-flight identical browse reques
 
   assert.equal(pendingRequests.length, 2);
   assert.equal(pendingRequests[0].options.signal.aborted, true);
-  assert.equal(pendingRequests[1].url, '/view-data?surface=albums');
+  assert.equal(pendingRequests[1].url, '/view-data?surface=albums&payload_tier=sidebar');
 
   pendingRequests[1].resolveWith({
     surface: {
@@ -3193,7 +3280,7 @@ test('pollStatus refreshes the current loaded gallery when a background scan com
   }
 
   assert.equal(pendingRequests.length, 3);
-  assert.equal(pendingRequests[2].url, '/view-data?surface=albums');
+  assert.equal(pendingRequests[2].url, '/view-data?surface=albums&payload_tier=sidebar');
   pendingRequests[2].resolveWith({
     artist_groups: [
       { artist: 'Broadcast', albums: [{ key: 'tender-buttons' }, { key: 'spell-blanket' }] },
@@ -3207,9 +3294,9 @@ test('pollStatus refreshes the current loaded gallery when a background scan com
   assert.equal(context.state.awaitingInitialDataRefresh, false);
   assert.equal(context.state.view.album_count, 2);
   assert.deepEqual(calls.fetchRequests.map((request) => request.url), [
-    '/view-data?surface=albums',
+    '/view-data?surface=albums&payload_tier=sidebar',
     '/status',
-    '/view-data?surface=albums',
+    '/view-data?surface=albums&payload_tier=sidebar',
   ]);
   assert.deepEqual(calls.showToast, [{
     message: 'Library scan complete.',
@@ -3246,7 +3333,7 @@ test('pollStatus refreshes the loaded gallery when targeted inventory revision a
   }
 
   assert.equal(pendingRequests.length, 2);
-  assert.equal(pendingRequests[1].url, '/view-data?surface=albums');
+  assert.equal(pendingRequests[1].url, '/view-data?surface=albums&payload_tier=sidebar');
   pendingRequests[1].resolveWith({
     artist_groups: [{
       artist: 'Broadcast',
@@ -3260,7 +3347,7 @@ test('pollStatus refreshes the loaded gallery when targeted inventory revision a
   assert.equal(context.state.view.artist_groups[0].albums[0].missing_from_library, true);
   assert.deepEqual(calls.fetchRequests.map((request) => request.url), [
     '/status',
-    '/view-data?surface=albums',
+    '/view-data?surface=albums&payload_tier=sidebar',
   ]);
   assert.equal(
     calls.hydratedAlbumDetailInvalidations,
@@ -3794,7 +3881,7 @@ test('an older scan dispatcher failure cannot schedule a retry after a newer com
   context.state.ui.pendingScanCompletionViewRefreshRetryToken = 10;
 
   const olderDispatch = context.dispatchPendingScanCompletionViewRefresh();
-  assert.equal(pendingRequests[0].url, '/view-data?surface=albums');
+  assert.equal(pendingRequests[0].url, '/view-data?surface=albums&payload_tier=sidebar');
 
   context.state.wasPollingBusy = true;
   context.state.wasCoverPollingBusy = false;
@@ -3812,7 +3899,7 @@ test('an older scan dispatcher failure cannot schedule a retry after a newer com
   for (let attempt = 0; attempt < 5 && pendingRequests.length < 3; attempt += 1) {
     await flushMicrotasks();
   }
-  assert.equal(pendingRequests[2].url, '/view-data?surface=albums');
+  assert.equal(pendingRequests[2].url, '/view-data?surface=albums&payload_tier=sidebar');
   pendingRequests[2].resolveWith({
     artist_groups: [{ artist: 'Broadcast', albums: [{ key: 'newer-scan-result' }] }],
     album_count: 1,
@@ -4077,7 +4164,7 @@ test('retry timer waits for an unrelated active request to settle without aborti
     await flushMicrotasks();
   }
   assert.equal(pendingRequests.length, 3);
-  assert.equal(pendingRequests[2].url, '/view-data?surface=albums');
+  assert.equal(pendingRequests[2].url, '/view-data?surface=albums&payload_tier=sidebar');
   pendingRequests[2].resolveWith({
     artist_groups: [{ artist: 'Broadcast', albums: [{ key: 'post-scan-result' }] }],
     album_count: 1,
@@ -4174,7 +4261,7 @@ test('a later scan completion recovers an exhausted deferred gallery refresh', a
   for (let attempt = 0; attempt < 5 && pendingRequests.length < 2; attempt += 1) {
     await flushMicrotasks();
   }
-  assert.equal(pendingRequests[1].url, '/view-data?surface=albums');
+  assert.equal(pendingRequests[1].url, '/view-data?surface=albums&payload_tier=sidebar');
   pendingRequests[1].resolveWith({
     artist_groups: [{ artist: 'Broadcast', albums: [{ key: 'durable-after-later-scan' }] }],
     album_count: 1,
@@ -4219,7 +4306,7 @@ test('pollStatus replaces queued startup hydration with the current view after s
   }
 
   assert.equal(pendingRequests.length, 2);
-  assert.equal(pendingRequests[1].url, '/view-data?surface=albums');
+  assert.equal(pendingRequests[1].url, '/view-data?surface=albums&payload_tier=sidebar');
   pendingRequests[1].resolveWith({
     artist_groups: [{ artist: 'Broadcast', albums: [{ key: 'spell-blanket' }] }],
     album_count: 1,
@@ -4232,7 +4319,7 @@ test('pollStatus replaces queued startup hydration with the current view after s
   assert.equal(context.state.view.album_count, 1);
   assert.deepEqual(calls.fetchRequests.map((request) => request.url), [
     '/status',
-    '/view-data?surface=albums',
+    '/view-data?surface=albums&payload_tier=sidebar',
   ]);
 });
 
@@ -4969,7 +5056,7 @@ test('scan finalization releases and previews the gallery without reporting back
   );
   assert.deepEqual(
     pendingRequests.map((request) => request.url),
-    ['/status', '/view-data?surface=albums'],
+    ['/status', '/view-data?surface=albums&payload_tier=sidebar'],
     'An idle finalization edge must dispatch its gallery preview immediately.',
   );
   pendingRequests[1].resolveWith({

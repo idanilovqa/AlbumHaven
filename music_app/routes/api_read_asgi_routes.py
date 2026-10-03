@@ -559,6 +559,7 @@ def view_data(request: Request) -> JSONResponse:
 
 def _is_postgres_root_sidebar_request(request: Request) -> bool:
     allowed_root_sidebar_params = {
+        "gallery_offset",
         "payload_tier",
         "surface",
         "gallery_scope",

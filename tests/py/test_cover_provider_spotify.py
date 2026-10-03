@@ -32,6 +32,31 @@ def _config(**overrides):
     return SimpleNamespace(**values)
 
 
+def test_automatic_spotify_issues_at_most_two_album_queries_without_artist_fallback(spotify):
+    calls = []
+    result = spotify.search_spotify(
+        "Artist", "Album", None, 2001, "AlbumHavenTests/1.0",
+        automatic=True, max_queries=2,
+        config=_config(), api_enabled=lambda: True,
+        global_rate_limit_active=lambda: False,
+        reset_rate_limit_state=lambda: None,
+        rate_limited=lambda: False,
+        search_timed_out=lambda _started: False,
+        build_query_variants=lambda *_args: [
+            ("Artist", "Album", None, 2001),
+            ("Normalized Artist", "Album", None, 2001),
+        ],
+        collect_album_matches=lambda query, **_kwargs: (calls.append(query) or [], []),
+        collect_artist_album_matches=lambda *_args, **_kwargs: pytest.fail("automatic artist graph is too slow"),
+        select_largest_candidate=lambda **_kwargs: None,
+        log_event=None,
+    )
+
+    assert result is None
+    assert len(calls) == 2
+    assert "Normalized Artist" in calls[1]
+
+
 def test_access_token_uses_client_credentials_headers_and_cache(spotify, monkeypatch):
     requests: list[dict[str, object]] = []
 

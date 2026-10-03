@@ -7,15 +7,16 @@
   1,200×1,200; otherwise use the best matched smaller cover; try Bandcamp only
   when all four return no valid cover. Keep deeper page searches in Find Better
   Art.
-- [ ] Owner reviews this written design and the operational replacement plan.
+- [x] Owner approves this written design and the operational replacement plan
+  (September 24, 2026).
 - [ ] Record the focused test plan, add failing tests, implement, and verify.
-- [ ] Owner approves stopping the currently running slow cover worker before
-  its in-memory cache changes are published.
+- [x] Owner explicitly directs stopping the slow cover worker, fixing automatic
+  search, resuming the cover-only pass, and reporting measured speed.
 
 This is a performance correction to the approved multi-root delivery, not a
 new UI or a move feature. A separate HTTPS review server serves the current
-multi-root build on port 5001. The old cover-only runner remains live until an
-explicitly approved replacement.
+multi-root build on port 5001. The old cover-only runner was stopped with owner
+approval; recovery and replacement are in progress.
 
 ## Evidence and design choice
 
@@ -72,17 +73,20 @@ claiming a speedup.
 
 ## Transition and recovery
 
-The current runner writes individual cover images during the loop but updates
-the scan cache and saves the lookup cache after the loop. Stopping it now may
-lose in-memory metadata, not the image files. Do not stop or replace its exact
-PID without the owner's pending approval.
+The old runner wrote individual cover images during the loop but updated the
+scan cache and saved the lookup cache only after the loop. The owner directed
+an immediate stop on September 24. Its exact PID 44676 exited after reporting
+265 processed jobs and 156 downloads; no direct child remained, and the
+separate port-5001 review server still served its login page. In-memory cache
+metadata from that partial pass may be lost; written image files must be
+preserved and reconciled rather than assumed published.
 
-After the new resolver passes focused tests, inventory covers written since the
-old run began, verify they are inside authorized album folders, and reconcile
-their paths/revisions through the existing scan-cache owner. Do not delete or
-overwrite them. Only then stop the exact old worker if approved, verify its
-process tree exited, and run a replacement cover-only pass against the already
-published 159,545-file inventory. Do not repeat the full library scan.
+Before the replacement pass, inventory covers written since the old run began,
+verify they are inside authorized album folders, and reconcile their
+paths/revisions through the existing scan-cache owner. Do not delete or
+overwrite them. After the new resolver passes focused tests, run a replacement
+cover-only pass against the already published 159,545-file inventory. Do not
+repeat the full library scan.
 Checkpoint updated cover metadata and lookup-cache state in bounded batches so
 a later interruption does not discard the entire pass. Replanning must skip
 already satisfactory local/user-owned art and retain no-match visibility.

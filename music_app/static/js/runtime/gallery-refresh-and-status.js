@@ -91,6 +91,9 @@ function readActiveScanCompletionPreviewRequestId() {
 }
 
 function isCanonicalFullViewPayload(data, requestOptions = {}) {
+  if (data?.gallery_page?.offset === 0 && !data.query && !data.selected_artist
+    && Number.isInteger(data.artist_count) && Number.isInteger(data.album_count)
+    && Array.isArray(data.artist_groups)) return requestOptions.startupRefresh !== true;
   const payloadTier = String(data?.payload_tier || '').trim().toLowerCase();
   const startupHydrationTier = String(
     requestOptions.startupHydrationTier || '',
@@ -578,6 +581,42 @@ function dispatchStartupHydrationFollowup(followup, delayMs = 0) {
   Promise.resolve().then(runDispatch);
 }
 
+function mergeGalleryPageGroups(previousGroups, pageGroups, orderedArtists = []) {
+  const groups = new Map((previousGroups || []).map((group) => [group.artist, { ...group, albums: [...(group.albums || [])] }]));
+  for (const group of pageGroups || []) {
+    const existing = groups.get(group.artist);
+    if (!existing) groups.set(group.artist, group);
+    else {
+      const albums = new Map(existing.albums.filter((album) => album.key).map((album) => [album.key, album]));
+      const unkeyed = existing.albums.filter((album) => !album.key);
+      for (const album of group.albums || []) {
+        if (album.key) albums.set(album.key, album);
+        else unkeyed.push(album);
+      }
+      Object.assign(existing, group, { albums: [...albums.values(), ...unkeyed].sort(compareDisplayGroupAlbums) });
+    }
+  }
+  // The full sidebar owns canonical ordering, including missing-only artists.
+  const order = new Map(orderedArtists.map((artist, index) => [artist.artist, index]));
+  return [...groups.values()].sort((left, right) =>
+    (order.get(left.artist) ?? order.size) - (order.get(right.artist) ?? order.size));
+}
+
+function loadNextGalleryPage() {
+  const page = state.view.gallery_page;
+  const scroll = document.getElementById('albums-scroll');
+  if (!page || page.next_offset == null || state.busy || state.view.query || state.view.selected_artist || !scroll) return;
+  if (scroll.scrollTop + scroll.clientHeight < scroll.scrollHeight - scroll.clientHeight) return;
+  const categories = state.view.loaded_library_categories || state.view.visible_library_categories;
+  if (typeof activeGallerySourceCategories === 'function' && state.gallery.mainState
+    && !gallerySourceScopesEqual(activeGallerySourceCategories(state.gallery.mainState), categories)) return;
+  const url = `${buildApiUrl({ ...state.view, visible_library_categories: categories }, { payloadTier: 'sidebar' })}&gallery_offset=${page.next_offset}`;
+  fetchAndRender(url, false, {
+    appendGalleryPage: true, preserveScroll: true, preserveSidebarState: true,
+    preserveGalleryBrowseLocationState: true, skipPendingViewTransition: true,
+  });
+}
+
 async function fetchAndRender(url, push = true, options = {}) {
   const requestOptions = (options && typeof options === 'object') ? options : {};
   const albumDetailPrewarmSearchGeneration = state.ui?.albumDetailPrewarmSearchSuspended
@@ -589,9 +628,18 @@ async function fetchAndRender(url, push = true, options = {}) {
   }
   const canInterruptCurrent = requestOptions.interruptCurrent !== false;
   const restartIfSameUrl = requestOptions.restartIfSameUrl === true;
-  const apiUrl = url.startsWith('/view-data') || url.startsWith('/home-data')
+  let apiUrl = url.startsWith('/view-data') || url.startsWith('/home-data')
     ? url
     : buildApiUrl(parseBrowserUrlState(url));
+  if (apiUrl.startsWith('/view-data')) {
+    const params = new URLSearchParams(apiUrl.split('?')[1] || '');
+    const rootKeys = new Set(['surface', 'gallery_scope', 'gallery_display', 'gallery_display_mode', 'gallery_scale_percent', 'category', 'payload_tier', 'gallery_offset', 'omit_sidebar']);
+    if ([...params.keys()].every((key) => rootKeys.has(key)) && ['', 'albums', 'library'].includes(params.get('surface') || '')) {
+      params.set('payload_tier', 'sidebar');
+      params.delete('omit_sidebar');
+      apiUrl = `/view-data?${params}`;
+    }
+  }
   const encodedCommittedQuery = String(
     apiUrl.match(/(?:[?&])q=([^&]*)/)?.[1] || ''
   ).replace(/\+/g, ' ');
@@ -734,6 +782,7 @@ async function fetchAndRender(url, push = true, options = {}) {
       if (!shouldApplyResponse) return false;
     }
     const startupHydrationTier = String(requestOptions.startupHydrationTier || 'full');
+    if (data.gallery_page) state.awaitingInitialDataRefresh = false;
     if (
       requestOptions.startupRefresh
       && startupHydrationTier !== 'sidebar'
@@ -774,7 +823,12 @@ async function fetchAndRender(url, push = true, options = {}) {
             : {}
         ),
       }
-      : data;
+      : (requestOptions.appendGalleryPage && data.gallery_page
+        ? { ...data,
+          artist_groups: mergeGalleryPageGroups(state.view.artist_groups, data.artist_groups, state.view.artists_sidebar),
+          primary_artist_groups: mergeGalleryPageGroups(state.view.primary_artist_groups, data.primary_artist_groups, state.view.artists_sidebar),
+        }
+        : data);
     const responseApplyOptions = retainedMountedSelectedViewState
       ? {
         ...requestOptions,
@@ -835,6 +889,7 @@ async function fetchAndRender(url, push = true, options = {}) {
       requestOptions.startupRefresh
       && (
         startupHydrationTier !== 'sidebar'
+        || data.gallery_page
         || !String(requestOptions.startupHydrationFollowupEndpoint || '').trim()
       )
     ) {
@@ -843,6 +898,7 @@ async function fetchAndRender(url, push = true, options = {}) {
     if (
       requestOptions.startupRefresh
       && startupHydrationTier === 'sidebar'
+      && !data.gallery_page
       && String(requestOptions.startupHydrationFollowupEndpoint || '').trim()
     ) {
       queueStartupHydrationFollowup(
@@ -851,6 +907,14 @@ async function fetchAndRender(url, push = true, options = {}) {
           startupHydrationTier: 'full',
         },
       );
+    }
+    if (data.gallery_page) {
+      const scroll = document.getElementById('albums-scroll');
+      if (scroll && !scroll.dataset.progressiveGallery) {
+        scroll.dataset.progressiveGallery = 'true';
+        scroll.addEventListener('scroll', loadNextGalleryPage, { passive: true });
+      }
+      if (scroll) scheduleBrowserTimeout(loadNextGalleryPage, 50);
     }
     if (state.ui.activeViewRequestPush) pushBrowserViewState(state.view);
     recordSuccessfulCanonicalFullViewApply(data, requestOptions);

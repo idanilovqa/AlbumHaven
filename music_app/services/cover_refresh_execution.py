@@ -278,6 +278,8 @@ def run_cover_jobs(
     job_results: list[dict[str, object]] = []
     miss_reasons = {
         "remote_search_returned_no_candidate",
+        "remote_search_timed_out",
+        "remote_search_failed",
         "candidate_download_failed",
         "candidate_decode_failed",
         "write_returned_no_file",
@@ -375,9 +377,9 @@ def run_cover_jobs(
         album = str(job.get("album") or "")
         cover_value = str(cover_path) if cover_path else None
         written_revision: str | None = None
-        if downloaded:
+        if cover_path:
             written_path = Path(str(detail.get("written_path") or cover_value or "").strip())
-            if written_path.is_file():
+            if written_path.is_file() and written_path.resolve().is_relative_to(Path(folder).resolve()):
                 written_revision = cover_revision_for_path(written_path)
                 detail["cover_revision"] = written_revision
         has_cover = bool(cover_value)
@@ -450,13 +452,22 @@ def run_cover_jobs(
                 continue
             if reason == "automatic_write_blocked_by_user_selection":
                 continue
+            if not downloaded and (
+                str(job.get("cover_selection_origin") or "").strip().casefold() == "user"
+                or str(entry.get("cover_selection_origin") or "").strip().casefold() == "user"
+            ):
+                # Finding a file beside an album is not a new user selection.
+                # Only the guarded writer may publish a user-owned improvement.
+                continue
             desired_selection_origin = (
                 "user"
                 if str(job.get("cover_selection_origin") or "").strip().casefold()
                 == "user"
                 else "automatic"
             )
-            local_cover_changed = entry.get("cover_path") != cover_value
+            local_cover_changed = entry.get("cover_path") != cover_value or bool(
+                written_revision and entry.get("cover_revision") != written_revision
+            )
             if downloaded:
                 local_cover_changed = local_cover_changed or any(
                     (
@@ -480,13 +491,18 @@ def run_cover_jobs(
                 entry["remote_cover_album_url"] = None
                 entry["remote_cover_width"] = None
                 entry["remote_cover_height"] = None
-                if downloaded:
+                if written_revision:
                     entry["cover_revision"] = written_revision
+                if downloaded:
                     entry["cover_selection_origin"] = desired_selection_origin
                 changed = True
 
         library_state["covers_current_folder"] = str(folder)
         library_state["covers_processed"] = index
+        # Image selections are committed by the guarded writer per album. Keep
+        # lookup outcomes durable too, without republishing the entire inventory.
+        if index % 25 == 0:
+            cover_cache.save()
         flush_log_handlers_debounced(logger, min_interval_seconds=2.0)
 
     effective_job_workers = max(1, min(int(job_workers or 1), len(jobs) or 1))

@@ -11,9 +11,18 @@ from music_app.services import cover_provider_deezer
 from music_app.services import cover_provider_fallback_web
 from music_app.services import cover_provider_http
 from music_app.services import cover_provider_spotify
+from music_app.services import cover_provider_bandcamp
+from music_app.services import cover_provider_runtime
 from music_app.services import cover_provider_cache
 from music_app.services import cover_provider_apple
 from music_app.services import cover_provider_matching
+from music_app.services.cover_provider_deadline import (
+    AutomaticCoverDeadlineExceeded,
+    AutomaticCoverSearchFailed,
+    automatic_cover_budget,
+    automatic_cover_budget_active,
+    remaining_automatic_cover_seconds,
+)
 from music_app.services.app_logging import log_app_event
 from music_app.services.cover_provider_candidates import (
     CoverCandidate,
@@ -52,6 +61,8 @@ SuspiciousCacheEntry = Callable[..., bool]
 
 _LOGGER = logging.getLogger(__name__)
 _MIN_AUTHORITATIVE_COVER_EDGE = cover_provider_matching.MIN_AUTHORITATIVE_COVER_EDGE
+_AUTOMATIC_PROVIDER_BUDGET_SECONDS = 7.0
+_AUTOMATIC_ALBUM_BUDGET_SECONDS = 30.0
 _APPLE_SUFFICIENT_COVER_EDGE = cover_provider_apple._APPLE_SUFFICIENT_COVER_EDGE
 _APPLE_MAX_PROBE_CONTENDERS = cover_provider_apple._APPLE_MAX_PROBE_CONTENDERS
 _NEGATIVE_CACHE_TTL_SECONDS = cover_provider_cache._NEGATIVE_CACHE_TTL_SECONDS
@@ -218,12 +229,18 @@ def _probe_match_candidates(
             metrics = None
             successful_url = ""
             for probe_index, probe_url in enumerate(candidate_probe_urls, start=1):
-                metrics = _probe_candidate_metrics(
-                    probe_url,
-                    user_agent=user_agent,
-                    service=source,
-                    context=f"probe:{query_mode}:{artist} - {album}",
-                )
+                try:
+                    metrics = _probe_candidate_metrics(
+                        probe_url,
+                        user_agent=user_agent,
+                        service=source,
+                        context=f"probe:{query_mode}:{artist} - {album}",
+                    )
+                except (AutomaticCoverDeadlineExceeded, AutomaticCoverSearchFailed):
+                    if candidates and automatic_cover_budget_active():
+                        candidates[-1].debug_payload["automatic_probe_interrupted"] = True
+                        return candidates
+                    raise
                 if metrics:
                     successful_url = probe_url
                     if probe_index > 1:
@@ -326,6 +343,12 @@ def _probe_match_candidates(
                 debug_payload=candidate_debug_payload,
             )
         )
+        if automatic_cover_budget_active() and cover_provider_matching.cover_candidate_is_acceptable(
+            candidates[-1],
+            apple_sufficient_cover_edge=_APPLE_SUFFICIENT_COVER_EDGE,
+            min_authoritative_cover_edge=_MIN_AUTHORITATIVE_COVER_EDGE,
+        ):
+            break
         if (
             source == "apple"
             and use_score_cutoff
@@ -399,8 +422,10 @@ def _search_apple(
         edition,
         year,
         user_agent,
-        allow_web_fallback=allow_web_fallback,
-        build_query_variants=cover_provider_matching.build_query_variants,
+        allow_web_fallback=False,
+        api_only=True,
+        max_queries=2,
+        build_query_variants=_automatic_query_variants,
         match_score=cover_provider_matching.match_score,
         parse_year=cover_provider_matching.parse_year,
         similarity=cover_provider_matching.similarity,
@@ -424,10 +449,71 @@ def _search_deezer(artist: str, album: str, edition: str | None, year: int | Non
         year,
         user_agent,
         http_get_json=_http_get_json,
-        build_query_variants=cover_provider_matching.build_query_variants,
+        build_query_variants=_automatic_query_variants,
+        automatic=True,
+        max_queries=2,
         match_score=cover_provider_matching.match_score,
         parse_year=cover_provider_matching.parse_year,
         select_largest_candidate=_select_largest_candidate,
+    )
+
+
+def _automatic_query_variants(
+    artist: str,
+    album: str,
+    edition: str | None,
+    year: int | None,
+) -> list[tuple[str, str, str | None, int | None]]:
+    variants = cover_provider_matching.build_query_variants(artist, album, edition, year)
+    exact = (artist, album, edition, year)
+    normalized = next((variant for variant in variants[1:] if variant != exact), None)
+    if normalized:
+        normalized = (normalized[0], normalized[1], normalized[2] or None, normalized[3])
+    retry = normalized or ((artist, album, edition, None) if year is not None else None)
+    return [exact, retry] if retry else [exact]
+
+
+def _search_youtube_music(artist: str, album: str, edition: str | None, year: int | None, user_agent: str) -> CoverCandidate | None:
+    candidates = cover_provider_runtime.search_youtube_music_candidates(
+        artist, album, edition, year, user_agent,
+        build_query_variants=_automatic_query_variants,
+        automatic=True,
+        max_queries=2,
+    )
+    return max(candidates, key=cover_provider_matching.primary_fallback_rank, default=None)
+
+
+def _search_bandcamp(
+    artist: str,
+    album: str,
+    edition: str | None,
+    year: int | None,
+    user_agent: str,
+    *,
+    deadline_at: float | None = None,
+) -> CoverCandidate | None:
+    def bounded_call(callback, *args, **kwargs):
+        if deadline_at is None:
+            return callback(*args, **kwargs)
+        with automatic_cover_budget(max(0.0, deadline_at - time.perf_counter())):
+            return callback(*args, **kwargs)
+
+    return cover_provider_bandcamp.search_bandcamp_cover(
+        artist, album, edition, year, user_agent,
+        http_get_text=lambda *args, **kwargs: bounded_call(cover_provider_runtime.http_get_text, *args, **kwargs),
+        match_score=cover_provider_matching.match_score,
+        similarity=cover_provider_matching.similarity,
+        normalize=cover_provider_matching.normalize,
+        parse_year=cover_provider_matching.parse_year,
+        extract_og_image=cover_provider_fallback_web.extract_og_image,
+        extract_meta_content=cover_provider_apple.extract_apple_meta_content,
+        probe_match_candidates=cover_provider_runtime.probe_match_candidates,
+        select_largest_candidate=_select_largest_candidate,
+        fetch_musicbrainz_bandcamp_context=lambda *args, **kwargs: bounded_call(
+            cover_provider_runtime.fetch_musicbrainz_bandcamp_context, *args, **kwargs,
+        ),
+        should_cancel=(lambda: time.perf_counter() >= deadline_at) if deadline_at is not None else None,
+        canonical_album_title=cover_provider_matching.canonical_album_title,
     )
 
 
@@ -532,12 +618,22 @@ def _search_spotify(artist: str, album: str, edition: str | None, year: int | No
         reset_rate_limit_state=cover_provider_spotify.reset_spotify_rate_limit_state,
         rate_limited=cover_provider_spotify.spotify_rate_limited,
         search_timed_out=cover_provider_spotify.spotify_search_timed_out,
-        build_query_variants=cover_provider_matching.build_query_variants,
+        build_query_variants=_automatic_query_variants,
+        automatic=True,
+        max_queries=2,
         collect_album_matches=_spotify_collect_album_matches,
         collect_artist_album_matches=_spotify_collect_artist_album_matches,
         select_largest_candidate=_select_largest_candidate,
         log_event=log_app_event,
     )
+
+
+def _run_automatic_provider(resolver, args: tuple[object, ...], budget_seconds: float):
+    with automatic_cover_budget(budget_seconds):
+        candidate = resolver(*args)
+        if not candidate or not (candidate.debug_payload or {}).get("automatic_probe_interrupted"):
+            remaining_automatic_cover_seconds(float("inf"))
+        return candidate
 
 
 def search_primary_remote_cover(
@@ -551,6 +647,7 @@ def search_primary_remote_cover(
     has_local_cover: bool,
     candidate_callback: Callable[..., object] | None = None,
     logger=None,
+    enabled_provider_groups: object = None,
 ) -> tuple[CoverCandidate | None, list[dict[str, object]]]:
     resolver_trace: list[dict[str, object]] = []
     primary_resolvers: list[tuple[str, str, object]] = [
@@ -567,13 +664,16 @@ def search_primary_remote_cover(
             ),
         ),
         ("deezer", "_search_deezer", _search_deezer),
+        ("youtube_music", "_search_youtube_music", _search_youtube_music),
         ("spotify", "_search_spotify", _search_spotify),
     ]
     enabled_service_names = normalize_enabled_music_services(Config.ENABLED_MUSIC_SERVICES)
+    effective_groups = Config.COVER_PROVIDER_GROUPS if enabled_provider_groups is None else enabled_provider_groups
     primary_resolvers = [
         item
         for item in primary_resolvers
-        if not enabled_service_names or item[0] in enabled_service_names
+        if cover_provider_group_enabled(effective_groups, "music_services")
+        and (not enabled_service_names or item[0] in enabled_service_names)
     ]
     primary_resolvers = cover_provider_matching.order_provider_items(
         primary_resolvers,
@@ -582,13 +682,41 @@ def search_primary_remote_cover(
     )
     primary_candidates: list[CoverCandidate] = []
     effective_logger = logger or _LOGGER
+    album_deadline = time.perf_counter() + _AUTOMATIC_ALBUM_BUDGET_SECONDS
     for _provider_name, resolver_name, resolver in primary_resolvers:
         started_at = time.perf_counter()
+        budget_seconds = min(_AUTOMATIC_PROVIDER_BUDGET_SECONDS, album_deadline - started_at)
+        if budget_seconds <= 0:
+            resolver_trace.append({"resolver": resolver_name, "elapsed_ms": 0.0, "status": "timeout"})
+            break
         apple_trace_enabled = resolver_name == "_search_apple"
         if apple_trace_enabled:
             cover_provider_apple.begin_apple_request_trace()
         try:
-            candidate = resolver(artist, album, edition, year, user_agent)
+            candidate = _run_automatic_provider(
+                resolver, (artist, album, edition, year, user_agent), budget_seconds,
+            )
+        except AutomaticCoverDeadlineExceeded:
+            elapsed_ms = round((time.perf_counter() - started_at) * 1000, 2)
+            resolver_trace.append({
+                "resolver": resolver_name,
+                "elapsed_ms": elapsed_ms,
+                "status": "timeout",
+            })
+            if apple_trace_enabled:
+                apple_trace = cover_provider_apple.finish_apple_request_trace()
+                if apple_trace:
+                    resolver_trace[-1]["apple_http_trace"] = apple_trace
+            candidate = None
+        except AutomaticCoverSearchFailed:
+            resolver_trace.append({
+                "resolver": resolver_name,
+                "elapsed_ms": round((time.perf_counter() - started_at) * 1000, 2),
+                "status": "failed",
+            })
+            if apple_trace_enabled:
+                cover_provider_apple.finish_apple_request_trace()
+            candidate = None
         except Exception as exc:
             elapsed_ms = round((time.perf_counter() - started_at) * 1000, 2)
             resolver_trace.append({
@@ -658,6 +786,37 @@ def search_primary_remote_cover(
                 return candidate, resolver_trace
 
     if not primary_candidates:
+        if cover_provider_group_enabled(effective_groups, "bandcamp"):
+            started_at = time.perf_counter()
+            budget_seconds = min(_AUTOMATIC_PROVIDER_BUDGET_SECONDS, album_deadline - started_at)
+            try:
+                if budget_seconds <= 0:
+                    raise AutomaticCoverDeadlineExceeded()
+                bandcamp_deadline = started_at + budget_seconds
+                bandcamp_candidate = _run_automatic_provider(
+                    lambda a, b, e, y, ua: _search_bandcamp(
+                        a, b, e, y, ua, deadline_at=bandcamp_deadline,
+                    ),
+                    (artist, album, edition, year, user_agent),
+                    budget_seconds,
+                )
+                status = "matched" if bandcamp_candidate else "no_candidate"
+            except AutomaticCoverDeadlineExceeded:
+                bandcamp_candidate = None
+                status = "timeout"
+            except AutomaticCoverSearchFailed:
+                bandcamp_candidate = None
+                status = "failed"
+            except Exception as exc:
+                effective_logger.warning("Bandcamp cover resolver failed artist=%r album=%r error=%r", artist, album, exc)
+                bandcamp_candidate = None
+                status = "exception"
+            resolver_trace.append({
+                "resolver": "_search_bandcamp",
+                "elapsed_ms": round((time.perf_counter() - started_at) * 1000, 2),
+                "status": status,
+            })
+            return bandcamp_candidate, resolver_trace
         return None, resolver_trace
     return cover_provider_matching.select_primary_cover_candidate(
         primary_candidates,
@@ -776,7 +935,10 @@ def ensure_best_cover_for_folder(
         "local_sharpness": round(local_sharpness, 4),
         "reason": "",
     }
-    if not cover_provider_group_enabled(enabled_provider_groups, "music_services"):
+    if not (
+        cover_provider_group_enabled(enabled_provider_groups, "music_services")
+        or cover_provider_group_enabled(enabled_provider_groups, "bandcamp")
+    ):
         detail["reason"] = "remote_provider_group_disabled"
         detail["elapsed_ms"] = round((time.perf_counter() - fetch_started_at) * 1000, 2)
         return local_cover, False, detail
@@ -790,6 +952,11 @@ def ensure_best_cover_for_folder(
             year,
             detail["reason"],
         )
+        return local_cover, False, detail
+
+    if local_cover and not force_search and not user_controls_cover and not local_cover_requires_upgrade_check(local_cover):
+        detail["reason"] = "satisfactory_local_cover_present"
+        detail["elapsed_ms"] = round((time.perf_counter() - fetch_started_at) * 1000, 2)
         return local_cover, False, detail
 
     cache_key = cover_provider_cache.cover_query_key(artist, album, edition, year)
@@ -909,12 +1076,16 @@ def ensure_best_cover_for_folder(
         has_local_cover=local_cover is not None,
         candidate_callback=candidate_callback,
         logger=effective_logger,
+        enabled_provider_groups=enabled_provider_groups,
     )
     detail["resolver_trace"] = resolver_trace
     if not candidate:
-        detail["reason"] = "remote_search_returned_no_candidate"
+        timed_out = any(item.get("status") == "timeout" for item in resolver_trace)
+        failed = any(item.get("status") in {"failed", "exception"} for item in resolver_trace)
+        detail["reason"] = "remote_search_timed_out" if timed_out else "remote_search_failed" if failed else "remote_search_returned_no_candidate"
         detail["elapsed_ms"] = round((time.perf_counter() - fetch_started_at) * 1000, 2)
-        cache.set(cache_key, {"updated_at": now, "missing": True})
+        if not timed_out and not failed:
+            cache.set(cache_key, {"updated_at": now, "missing": True})
         return local_cover, False, detail
     detail["source"] = candidate.source
     detail["candidate_url"] = candidate.url

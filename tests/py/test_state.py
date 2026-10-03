@@ -1966,7 +1966,9 @@ def test_progress_percent_helpers_use_provided_state_without_flask_context():
     assert state_module.relations_percent_for_state({"relations_processed": 1, "relations_total": 0}) == 0
 
 
-def test_run_cover_jobs_updates_cache_and_state(config, logger, library_state, monkeypatch):
+@pytest.mark.parametrize("downloaded", [True, False])
+@pytest.mark.parametrize("existing_path", [True, False])
+def test_run_cover_jobs_updates_cache_and_state(config, logger, library_state, monkeypatch, downloaded, existing_path):
     track_path = (config["MUSIC_DIR"] / "Artist" / "Album" / "song.mp3").resolve()
     cover_path = track_path.parent / "cover.jpg"
     track_path.parent.mkdir(parents=True, exist_ok=True)
@@ -1985,7 +1987,8 @@ def test_run_cover_jobs_updates_cache_and_state(config, logger, library_state, m
             "disc_number": 1,
             "artist": "Artist",
             "duration_seconds": 0,
-            "cover_path": None,
+            "cover_path": str(cover_path) if existing_path else None,
+            "cover_revision": "stale-revision",
         }
     }
     library_state["covers_in_progress"] = True
@@ -1997,7 +2000,7 @@ def test_run_cover_jobs_updates_cache_and_state(config, logger, library_state, m
         "execute_cover_job",
         lambda **kwargs: (
             cover_path,
-            True,
+            downloaded,
             {"artist": "Artist", "album": "Album", "written_path": str(cover_path), "elapsed_ms": 5},
         ),
     )
@@ -2040,19 +2043,60 @@ def test_run_cover_jobs_updates_cache_and_state(config, logger, library_state, m
     )
 
     assert result["changed"] is True
-    assert result["downloaded"] == 1
-    assert result["downloaded_paths"] == [str(cover_path)]
+    assert result["downloaded"] == int(downloaded)
+    assert result["downloaded_paths"] == ([str(cover_path)] if downloaded else [])
     assert library_state["file_cache"][str(track_path)]["cover_path"] == str(cover_path)
+    assert library_state["file_cache"][str(track_path)]["cover_revision"] == cover_refresh_execution.cover_revision_for_path(cover_path)
     assert library_state["albums"] == [{"key": "album-1", "cover_path": str(cover_path)}]
     assert library_state["covers_in_progress"] is False
     assert saved and saved[0][0] is config
 
 
+def test_run_cover_jobs_checkpoints_lookup_cache_before_interrupted_batch(config, logger, monkeypatch):
+    completed = []
+    checkpoints = []
+    runtime_state = {}
+
+    def execute(**kwargs):
+        if len(completed) == 25:
+            raise KeyboardInterrupt()
+        completed.append(kwargs["job"])
+        return None, False, {"reason": "remote_search_returned_no_candidate"}
+
+    monkeypatch.setattr(cover_refresh_execution, "execute_cover_job", execute)
+    monkeypatch.setattr(
+        cover_refresh_execution,
+        "AlbumCoverCandidateSnapshotRepository",
+        lambda _config: type("Repository", (), {"resolve_album_id_for_track_paths": lambda self, **kwargs: None})(),
+    )
+    cache = type("Cache", (), {"save": lambda self: checkpoints.append(len(completed))})()
+    with pytest.raises(KeyboardInterrupt):
+        cover_refresh_execution.run_cover_jobs(
+            get_state=lambda: runtime_state,
+            config=config,
+            logger=logger,
+            cache_lock=threading.Lock(),
+            jobs=[{"folder": config["MUSIC_DIR"], "artist": "Artist", "album": "Album", "track_paths": []} for _ in range(26)],
+            file_cache={},
+            separate_release_keys=set(),
+            image_extensions={".jpg"},
+            user_agent="Album Haven Test",
+            cover_cache=cache,
+        )
+    assert checkpoints == [25]
+
+
+@pytest.mark.parametrize("reason", [
+    "automatic_write_blocked_by_user_selection",
+    "satisfactory_local_cover_present",
+    "user_controlled_improvement_available",
+])
 def test_run_cover_jobs_preserves_user_controlled_linked_cover_fields_when_write_is_blocked(
     config,
     logger,
     library_state,
     monkeypatch,
+    reason,
 ):
     track_path = (config["MUSIC_DIR"] / "Artist" / "Album" / "song.mp3").resolve()
     cover_path = track_path.parent / "cover.jpg"
@@ -2061,6 +2105,7 @@ def test_run_cover_jobs_preserves_user_controlled_linked_cover_fields_when_write
     cover_path.write_bytes(b"user-controlled-cover")
     original_entry = {
         "path": str(track_path),
+        "title": "Song",
         "album": "Album",
         "album_artist": "Artist",
         "cover_path": str(cover_path),
@@ -2091,7 +2136,7 @@ def test_run_cover_jobs_preserves_user_controlled_linked_cover_fields_when_write
             {
                 "artist": "Artist",
                 "album": "Album",
-                "reason": "automatic_write_blocked_by_user_selection",
+                "reason": reason,
             },
         ),
     )
@@ -2128,11 +2173,15 @@ def test_run_cover_jobs_preserves_user_controlled_linked_cover_fields_when_write
     assert file_cache[str(track_path)] == original_entry
 
 
+@pytest.mark.parametrize("failure_reason", [
+    "candidate_download_failed", "remote_search_timed_out", "remote_search_failed",
+])
 def test_run_cover_jobs_owns_automatic_candidate_publishers_per_album(
     config,
     logger,
     library_state,
     monkeypatch,
+    failure_reason,
 ):
     events: list[tuple[object, ...]] = []
 
@@ -2199,6 +2248,7 @@ def test_run_cover_jobs_owns_automatic_candidate_publishers_per_album(
             "album": album,
             "album_artist": "Artist",
             "cover_path": str(cover_path) if not should_fail else None,
+            "cover_revision": cover_refresh_execution.cover_revision_for_path(cover_path) if not should_fail else None,
             "cover_selection_origin": "automatic" if not should_fail else None,
         }
         jobs.append(
@@ -2226,7 +2276,7 @@ def test_run_cover_jobs_owns_automatic_candidate_publishers_per_album(
             }
         )
         if job["should_fail"]:
-            return None, False, {"reason": "candidate_download_failed"}
+            return None, False, {"reason": failure_reason}
         return Path(file_cache[job["track_paths"][0]]["cover_path"]), False, {
             "reason": "remote_not_better_than_local"
         }

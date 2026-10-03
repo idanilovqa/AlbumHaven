@@ -153,6 +153,67 @@ def test_collect_apple_matches_logs_no_payload():
     assert raw_results == []
 
 
+def test_collect_apple_matches_api_only_never_fetches_album_pages():
+    from music_app.services import cover_provider_apple as apple
+
+    def fail_page_fetch(*_args, **_kwargs):
+        raise AssertionError("automatic Apple lookup must not fetch album pages")
+
+    matches, raw_results = apple.collect_apple_matches(
+        "Test Artist Test Album", "Test Artist", "Test Album", None, 2001,
+        "AlbumHavenTests/1.0", enforce_year=True, api_only=True,
+        http_get_json=lambda *_args, **_kwargs: {"results": [{
+            "artistName": "Test Artist", "collectionName": "Test Album",
+            "releaseDate": "2001-01-01",
+            "artworkUrl100": "https://is1-ssl.mzstatic.com/image/thumb/Music/v4/api/100x100bb.jpg",
+            "collectionViewUrl": "https://music.apple.com/us/album/test/1",
+        }]},
+        http_get_text=fail_page_fetch, match_score=lambda **_kwargs: 0.95,
+        parse_year=lambda _value: 2001,
+        probe_candidate_metrics=lambda *_args, **_kwargs: None,
+        extract_og_image=lambda _html: None,
+        album_name_in_alt=lambda *_args: False,
+    )
+    assert len(raw_results) == 1
+    assert len(matches) == 1
+    assert matches[0][2]["variant"] == "api-artwork"
+
+
+def test_search_apple_api_only_limits_queries_and_skips_artist_and_web_discovery():
+    from music_app.services import cover_provider_apple as apple
+
+    queries = []
+
+    def collect(query_text, *_args, **_kwargs):
+        queries.append(query_text)
+        return [], []
+
+    def forbidden(*_args, **_kwargs):
+        raise AssertionError("automatic Apple search must stay within the album API")
+
+    result = apple.search_apple(
+        "Artist", "Album", None, 2001, "AlbumHavenTests/1.0",
+        allow_web_fallback=False, api_only=True, max_queries=2,
+        build_query_variants=lambda *_args: [
+            ("Artist", "Album", None, 2001),
+            ("Artist", "Album deluxe", None, 2001),
+        ],
+        match_score=lambda **_kwargs: 0.0, parse_year=lambda _value: 2001,
+        similarity=lambda *_args: 1.0,
+        probe_candidate_metrics=lambda *_args, **_kwargs: None,
+        select_largest_candidate=forbidden,
+        extract_og_image=lambda _html: None,
+        album_name_in_alt=lambda *_args: False,
+        collect_matches=collect,
+        collect_artist_lookup_matches=forbidden,
+        collect_web_matches=forbidden,
+        log_miss=lambda *_args, **_kwargs: None,
+    )
+
+    assert result is None
+    assert len(queries) == 2
+
+
 def test_collect_apple_matches_returns_raw_results_probes_sufficient_api_and_fetches_top_two_pages():
     from music_app.services import cover_provider_apple as apple
 

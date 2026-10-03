@@ -98,9 +98,17 @@ an unverified-certificate HTTPS request returned the login page with HTTP 200.
 The review server was left running for owner manual acceptance. This does not
 prove the owner accepted the feature or that the missing-cover pass finished.
 
-The current one-worker cover pass must not be restarted merely to raise
-concurrency. `run_cover_jobs` writes individual cover files during the pass, but
-publishes the updated scan cache and saves the cover lookup cache after the job
-loop. Interrupting it now could discard in-memory metadata for completed jobs
-and require rework; let the existing pass finish unless the owner approves an
-explicit recovery plan.
+The owner subsequently approved stopping the slow cover worker and replacing
+its automatic search. That worker exited at 265 processed jobs / 156 downloads;
+written covers must be preserved. The approved recovery and bounded automatic
+resolver are tracked in
+`2026-09-24-fast-automatic-cover-search.md` and its companion design. The worker
+must not resume until focused verification and recovery complete. Do not repeat
+the full music scan merely to restart covers.
+
+The owner also approved gallery/search performance corrections and Main-only
+folder-derived Artist Family evidence. Follow
+`2026-09-24-gallery-performance-and-family-corrections.md` for progressive
+loading, source-filtered totals, hidden artist information during search, and
+source-style search regressions. These corrections do not mark manual
+acceptance, E2E, full CI, or publication complete.

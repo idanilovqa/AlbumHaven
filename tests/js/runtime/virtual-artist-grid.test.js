@@ -4038,6 +4038,19 @@ test('rating row component derives star size and score reservation from its rend
   );
 });
 
+test('artist search cards preserve mixed-source styling and hover actions', () => {
+  const { context } = createRuntimeContext();
+  context.state.view.query = 'Neal Morse';
+  const markup = context.albumCardHtml({
+    key: 'neal-morse::test', name: 'Test Album', album_artist: 'Neal Morse',
+    root_provenance: { categories: ['main_library', 'hoard', 'new_arrivals'] }, tracks: [],
+  });
+  assert.match(markup, /data-library-sources="main hoard new_arrivals"/);
+  assert.match(markup, /--library-source-gradient:conic-gradient/);
+  assert.match(markup, /aria-label="Hoard"/);
+  assert.match(markup, /aria-label="New Arrivals"/);
+});
+
 test('missing album card renders an accessible bottom-right small alert', () => {
   const { context } = createRuntimeContext();
   const markup = context.albumCardHtml({

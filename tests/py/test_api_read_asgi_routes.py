@@ -817,7 +817,7 @@ def test_asgi_view_data_scan_guard_preserves_postgres_root_sidebar_routing(
         asgi_app,
         "GET",
         "/view-data",
-        query={"payload_tier": "sidebar", "surface": "library"},
+        query={"payload_tier": "sidebar", "surface": "library", "gallery_offset": "6"},
     )
 
     assert status == 200
@@ -825,7 +825,7 @@ def test_asgi_view_data_scan_guard_preserves_postgres_root_sidebar_routing(
         "payload_tier": "sidebar",
         "view_data_source": "postgres_library_browse",
     }
-    assert repository_calls == [{"payload_tier": "sidebar", "surface": "library"}]
+    assert repository_calls == [{"payload_tier": "sidebar", "surface": "library", "gallery_offset": "6"}]
 
 
 def test_asgi_view_and_home_routes_hydrate_and_log_through_explicit_asgi_dependencies(app, asgi_app, monkeypatch):

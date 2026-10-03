@@ -59,7 +59,7 @@ _SIMPLE_NUMBER_WORDS = {
     "nine": 9,
     "ten": 10,
 }
-AUTOMATIC_PRIMARY_PROVIDER_ORDER = ("apple", "deezer", "spotify")
+AUTOMATIC_PRIMARY_PROVIDER_ORDER = ("apple", "deezer", "youtube_music", "spotify")
 EARLY_MANUAL_PRIMARY_PROVIDER_ORDER = ("apple", "deezer")
 MANUAL_PRIMARY_PROVIDER_ORDER = ("apple", "deezer", "youtube_music", "spotify")
 APPLE_SUFFICIENT_COVER_EDGE = 1200

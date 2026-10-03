@@ -1,0 +1,617 @@
+name: Publish exact Gallery runtime and lifecycle repair
+on:
+  push:
+    branches: [2026-09-30-mobile-bundle-transfer]
+    paths: [.github/workflows/verified-gallery-runtime-lifecycle-repair.yml]
+permissions:
+  contents: read
+concurrency:
+  group: verified-gallery-runtime-lifecycle-repair
+  cancel-in-progress: false
+env:
+  HELPER_PARENT: 'f7920702c52122aa286a27c2417140b5bcbe56e6'
+jobs:
+  validate:
+    if: github.repository == 'idanilovqa/AlbumHaven' && github.ref == 'refs/heads/2026-09-30-mobile-bundle-transfer' && github.event_name == 'push'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    outputs:
+      artifact_id: ${{ steps.upload.outputs.artifact-id }}
+      proof_sha256: ${{ steps.verify.outputs.proof_sha256 }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.sha }}
+          path: target
+          fetch-depth: 0
+          persist-credentials: false
+          submodules: false
+          lfs: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Verify exact transport, archive and target guards
+        id: verify
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: python
+        run: |
+          import base64
+          import binascii
+          import hashlib
+          import io
+          import json
+          import os
+          from pathlib import Path, PurePosixPath
+          import re
+          import stat
+          import subprocess
+          import sys
+          import tarfile
+          SCOPES = {'idanilovqa/AlbumHaven': {'private': False, 'count': 2, 'helper': '2026-09-30-mobile-bundle-transfer', 'label': 'gallery-runtime-lifecycle', 'finalTree': '356b0de2104785867b5eead544a1aa027e750e4a', 'targetHead': '31828be1d758ad93b7eedc64414b91e69b97ad61', 'baseTree': '9649fd63ffd313f03f698f8803a8071979bd9e2c', 'helperBase': '23444d7c0f8fc5ffb57bb1fba02d79ecabb44501', 'helperBaseTree': 'e5ccd2aa012edc7d765f86710274e116ef102986', 'files': [{'path': 'music_app/static/js/runtime-bundle.js', 'operation': 'modify', 'mode': '100644', 'bytes': 1800913, 'sha256': 'b567a2083ee5103527cd48c8780c36196b5c68dbd728684fb6cb77aacecc6580', 'gitBlobSha': '76c51a5f2e72a3d59b57e5182af97aff27357641', 'baseBytes': 1800777, 'baseSha256': 'dbc1afeb84a379e8813903b7ebddc216b228bf31f311317097ed43d830a8ec56', 'expectedBaseBlobSha': '1ff662fa4c1f62bbe8167be097de6a6de3c76949'}, {'path': 'tests/js/managed-app-lifecycle.test.js', 'operation': 'modify', 'mode': '100644', 'bytes': 13987, 'sha256': '6716287d644d8bd16b2843ea56ea573be02cfb44f3c30e72c33f142eff05369a', 'gitBlobSha': 'ab2ae7a4f0bda3179080fd8db9eb311e92af8598', 'baseBytes': 13885, 'baseSha256': 'd9ee39431576b1cf9eff2202a7b076d301cb32c4dc1473f8b2ea683750880a72', 'expectedBaseBlobSha': '5ce2dbb2641054d2a00793ea5c37e4282d780bdb'}], 'proposalSha256': 'fad993af2cf9a35215a0b33fd7746c5b89a564406c00c52651f7d485b62050b2', 'codeDiffSha256': '5c71caf4332868e492cd449765a02cc3bc80bb2bcfe328bad4961087365fa6c1', 'independentReceiptSha256': '3c560e4894c41a1ca696e5faf9ab1c80a4ae67b6616cb9b2d46552f36f58d12b', 'secondIndependentReceiptSha256': '4f060fc6f93cb8cc96d7a738ba1a602b8d6747291455f5a053627ac3f06f2a3a'}}
+          class Rejected(RuntimeError):
+              pass
+          def require(condition, message):
+              if not condition:
+                  raise Rejected(message)
+          def sha256(data):
+              return hashlib.sha256(data).hexdigest()
+          def git_blob(data):
+              return hashlib.sha1(b"blob " + str(len(data)).encode() + b"\0" + data).hexdigest()
+          def canonical_json(value):
+              return (json.dumps(value, sort_keys=True, separators=(",", ":")) + "\n").encode()
+          def canonical_path(path):
+              require(isinstance(path, str) and bool(path), "empty/non-string path")
+              require(re.fullmatch(r"[A-Za-z0-9._/-]+", path) is not None, "unsafe path characters")
+              require(not path.startswith("/") and str(PurePosixPath(path)) == path, "noncanonical path")
+              require(all(p not in ("", ".", "..", ".git") for p in path.split("/")), "unsafe path component")
+              return path
+          def verify_bytes(data, record):
+              require(len(data) == record["bytes"], "size mismatch: " + record["path"])
+              require(sha256(data) == record["sha256"], "SHA-256 mismatch: " + record["path"])
+              require(git_blob(data) == record["gitBlobSha"], "Git blob mismatch: " + record["path"])
+          def deterministic_tar(files):
+              output = io.BytesIO()
+              with tarfile.open(fileobj=output, mode="w", format=tarfile.USTAR_FORMAT) as archive:
+                  for path, data in sorted(files.items()):
+                      member = tarfile.TarInfo(canonical_path(path))
+                      member.size = len(data)
+                      member.mode = 0o644
+                      member.type = tarfile.REGTYPE
+                      archive.addfile(member, io.BytesIO(data))
+              return output.getvalue()
+          def verify_scope(plan):
+              repository = plan.get("repository")
+              require(repository in SCOPES, "unreviewed repository")
+              scope = SCOPES[repository]
+              require(plan.get("repositoryPrivate") is scope["private"], "wrong repository visibility")
+              require(plan.get("targetBranch") == "2026-09-30-friends-listening-home", "wrong target branch")
+              require(plan.get("helperBranch") == scope["helper"], "wrong helper branch")
+              require(plan.get("scopeLabel") == scope["label"], "wrong helper scope label")
+              require(plan.get("workflowPath") == ".github/workflows/verified-gallery-runtime-lifecycle-repair.yml", "wrong workflow path")
+              require(plan.get("chunkPrefix") == ".integration-repair-transfer/gallery-runtime-lifecycle-20261003", "wrong chunk namespace")
+              require(plan.get("remote") == "https://github.com/" + repository + ".git", "wrong remote")
+              for key in ("finalTree", "targetHead", "baseTree", "helperBase", "helperBaseTree", "proposalSha256",
+                          "codeDiffSha256", "independentReceiptSha256", "secondIndependentReceiptSha256"):
+                  require(plan.get(key) == scope[key], "wrong reviewed " + key)
+              return scope
+          def decode_chunks(chunks, plan):
+              verify_scope(plan)
+              expected = plan["chunks"]
+              require(len(expected) == len({r["path"] for r in expected}), "duplicate chunk manifest path")
+              require([r["path"] for r in expected] == [plan["chunkPrefix"] + "/part-" + str(i).zfill(3) + ".b64" for i in range(1, len(expected) + 1)], "noncanonical chunk sequence")
+              require(set(chunks) == {r["path"] for r in expected}, "chunk path set mismatch")
+              encoded = bytearray()
+              for record in expected:
+                  chunk = chunks[record["path"]]
+                  require(len(chunk) <= 230001, "oversized chunk")
+                  verify_bytes(chunk, record)
+                  require(chunk.endswith(b"\n") and b"\n" not in chunk[:-1], "noncanonical chunk newline")
+                  encoded.extend(chunk[:-1])
+              try:
+                  payload = base64.b64decode(encoded, validate=True)
+              except (binascii.Error, ValueError) as exc:
+                  raise Rejected("invalid base64") from exc
+              require(base64.b64encode(payload) == encoded, "noncanonical base64")
+              return payload
+          def verify_archive(payload, plan):
+              scope = verify_scope(plan)
+              require(len(payload) == plan["archiveBytes"], "archive size mismatch")
+              require(sha256(payload) == plan["archiveSha256"], "archive SHA-256 mismatch")
+              expected = {canonical_path(r["path"]): r for r in plan["files"]}
+              require(len(expected) == len(plan["files"]) == scope["count"], "wrong unique helper file count")
+              require(plan["files"] == scope["files"], "modified-file records differ from reviewed original/final identities")
+              require(all(r.get("operation") == "modify" and r.get("mode") == "100644" and
+                          r.get("expectedBaseBlobSha") and r.get("baseBytes") and r.get("baseSha256") and
+                          "binary" not in r for r in plan["files"]), "only the two reviewed UTF-8 modifications are allowed")
+              files = {}
+              try:
+                  with tarfile.open(fileobj=io.BytesIO(payload), mode="r:") as archive:
+                      for member in archive:
+                          path = canonical_path(member.name)
+                          require(path in expected and path not in files, "extra or duplicate archive path")
+                          require(member.type == tarfile.REGTYPE and not member.pax_headers, "nonregular archive member")
+                          require(member.mode == 0o644 and member.uid == member.gid == member.mtime == 0,
+                                  "unexpected archive metadata")
+                          require(not member.uname and not member.gname and not member.linkname, "unexpected archive name/link")
+                          require(member.size == expected[path]["bytes"], "archive member size mismatch")
+                          data = archive.extractfile(member).read()
+                          verify_bytes(data, expected[path])
+                          try:
+                              text = data.decode("utf-8", errors="strict")
+                          except UnicodeError as exc:
+                              raise Rejected("repair payload is not UTF-8") from exc
+                          require(text.encode("utf-8") == data and "\0" not in text, "non-text repair payload")
+                          files[path] = data
+              except (tarfile.TarError, OSError) as exc:
+                  raise Rejected("invalid tar archive") from exc
+              require(set(files) == set(expected), "missing archive paths")
+              require(deterministic_tar(files) == payload, "noncanonical archive or trailing data")
+              return files
+          def git_env(token=None):
+              # Do not inherit configuration that could redirect a remote, a hook or object store.
+              env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
+              env.update(GIT_CONFIG_NOSYSTEM="1", GIT_CONFIG_GLOBAL="/dev/null", GIT_TERMINAL_PROMPT="0")
+              if token:
+                  auth = base64.b64encode(("x-access-token:" + token).encode()).decode()
+                  env.update(GIT_CONFIG_COUNT="1", GIT_CONFIG_KEY_0="http.https://github.com/.extraheader",
+                             GIT_CONFIG_VALUE_0="AUTHORIZATION: basic " + auth)
+              return env
+          def git(repo, *args, data=None, token=None, hooks=None):
+              command = ["git", "-c", "core.hooksPath=" + (str(hooks) if hooks else "/dev/null"),
+                         "-c", "core.autocrlf=false", "-c", "commit.gpgsign=false", "-C", str(repo), *args]
+              result = subprocess.run(command, input=data, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                      env=git_env(token), check=False)
+              require(result.returncode == 0, "git operation failed: " + args[0] + "; inspect, do not retry automatically")
+              return result.stdout
+          def git_tree(repo, revision):
+              result = {}
+              for line in git(repo, "ls-tree", "-rz", revision).split(b"\0"):
+                  if not line:
+                      continue
+                  metadata, path = line.split(b"\t", 1)
+                  mode, kind, oid = metadata.decode().split()
+                  result[path.decode("utf-8")] = (mode, kind, oid)
+              return result
+          def diff_records(repo, old, new=None, cached=False):
+              args = ["diff", "--raw", "--no-abbrev", "--no-renames", "-z"]
+              if cached:
+                  args.append("--cached")
+              args.append(old)
+              if new:
+                  args.append(new)
+              pieces = git(repo, *args).split(b"\0")
+              require(pieces.pop() == b"", "invalid diff framing")
+              require(len(pieces) % 2 == 0, "invalid diff shape")
+              result = {}
+              for metadata, path in zip(pieces[::2], pieces[1::2]):
+                  oldmode, newmode, oldoid, newoid, operation = metadata.decode().split()
+                  name = path.decode("utf-8")
+                  require(name not in result, "duplicate diff path")
+                  result[name] = (oldmode.lstrip(":"), newmode, oldoid, newoid, operation)
+              return result
+          def expected_changes(records):
+              return {r["path"]: ("100644" if r.get("expectedBaseBlobSha") else "000000", "100644",
+                                  r.get("expectedBaseBlobSha", "0" * 40), r["gitBlobSha"],
+                                  "M" if r.get("expectedBaseBlobSha") else "A") for r in records}
+          def verify_target_base(repo, plan):
+              head = plan["targetHead"]
+              require(git(repo, "rev-parse", head + "^{tree}").decode().strip() == plan["baseTree"], "base tree changed")
+              tree = git_tree(repo, head)
+              for record in plan["files"]:
+                  path = record["path"]
+                  canonical_path(path)
+                  for parent in PurePosixPath(path).parents:
+                      require(str(parent) not in tree, "target path has a non-directory ancestor")
+                  if "expectedBaseBlobSha" in record:
+                      require(tree.get(path) == ("100644", "blob", record["expectedBaseBlobSha"]), "original target blob changed")
+                      old = git(repo, "cat-file", "blob", head + ":" + path)
+                      require(len(old) == record["baseBytes"] and sha256(old) == record["baseSha256"], "original target bytes changed")
+                  else:
+                      require(path not in tree and not any(p.startswith(path + "/") for p in tree), "new target path already exists")
+          def verify_event(plan, environment, event):
+              scope = verify_scope(plan)
+              require(environment.get("GITHUB_EVENT_NAME") == "push", "not a push event")
+              require(environment.get("GITHUB_REPOSITORY") == plan["repository"], "wrong repository")
+              require(environment.get("GITHUB_REF") == "refs/heads/" + plan["helperBranch"], "wrong helper ref")
+              require(environment.get("GITHUB_RUN_ATTEMPT") == "1", "reruns require investigation; automatic replay is disabled")
+              require(re.fullmatch(r"[1-9][0-9]*", environment.get("GITHUB_RUN_ID", "")) is not None, "invalid run id")
+              parent = environment.get("HELPER_PARENT", "")
+              require(re.fullmatch(r"[0-9a-f]{40}", parent) is not None, "helper parent is not bound")
+              require(re.fullmatch(r"[0-9a-f]{40}", environment.get("GITHUB_SHA", "")) is not None, "invalid trigger SHA")
+              require(event.get("ref") == environment["GITHUB_REF"], "event ref mismatch")
+              require(event.get("before") == parent and event.get("after") == environment["GITHUB_SHA"], "event ancestry mismatch")
+              require(all(event.get(key) is False for key in ("forced", "deleted", "created")), "forced/create/delete push rejected")
+              require(event.get("repository", {}).get("full_name") == plan["repository"] and
+                      event["repository"].get("private") is scope["private"], "event repository/private guard failed")
+              return parent
+          def remote_oid(repo, plan, token):
+              ref = "refs/heads/" + plan["targetBranch"]
+              lines = git(repo, "ls-remote", "--exit-code", plan["remote"], ref, token=token).decode().splitlines()
+              require(len(lines) == 1, "target ref is missing or ambiguous")
+              parts = lines[0].split("\t")
+              require(len(parts) == 2 and parts[1] == ref and re.fullmatch(r"[0-9a-f]{40}", parts[0]), "invalid remote ref")
+              return parts[0]
+          def require_remote_base(repo, plan, token):
+              require(remote_oid(repo, plan, token) == plan["targetHead"], "target branch moved; stop and inspect")
+          def proof_for(plan, environment):
+              return {"schemaVersion": 1, "repository": plan["repository"], "targetBranch": plan["targetBranch"],
+                      "targetHead": plan["targetHead"], "baseTree": plan["baseTree"], "finalTree": plan["finalTree"],
+                      "helperBase": plan["helperBase"], "helperBaseTree": plan["helperBaseTree"],
+                      "helperRef": environment["GITHUB_REF"], "helperParent": environment["HELPER_PARENT"],
+                      "triggerSha": environment["GITHUB_SHA"], "runId": environment["GITHUB_RUN_ID"],
+                      "runAttempt": environment["GITHUB_RUN_ATTEMPT"], "planSha256": sha256(canonical_json(plan)),
+                      "proposalSha256": plan["proposalSha256"], "codeDiffSha256": plan["codeDiffSha256"],
+                      "independentReceiptSha256": plan["independentReceiptSha256"],
+                      "secondIndependentReceiptSha256": plan["secondIndependentReceiptSha256"],
+                      "archiveSha256": plan["archiveSha256"], "files": plan["files"]}
+          def validate_transport(repo, plan, environment, event, token):
+              parent = verify_event(plan, environment, event)
+              trigger = environment["GITHUB_SHA"]
+              require(git(repo, "rev-parse", "HEAD").decode().strip() == trigger, "checkout is not triggering commit")
+              require(git(repo, "rev-list", "--parents", "-n", "1", trigger).decode().split() == [trigger, parent], "trigger must have one exact parent")
+              workflow = plan["workflowPath"]
+              changes = diff_records(repo, parent, trigger)
+              require(set(changes) == {workflow}, "trigger changes more than the workflow")
+              require(changes[workflow][0:3] == ("000000", "100644", "0" * 40) and changes[workflow][4] == "A", "workflow must be a sole regular-file addition")
+              require(git(repo, "rev-parse", plan["helperBase"] + "^{tree}").decode().strip() == plan["helperBaseTree"],
+                      "retained helper base tree changed")
+              git(repo, "merge-base", "--is-ancestor", plan["helperBase"], parent)
+              require(diff_records(repo, plan["helperBase"], parent) == expected_changes(plan["chunks"]), "helper delta is not the exact chunk manifest")
+              verify_target_base(repo, plan)
+              require_remote_base(repo, plan, token)
+              chunks = {r["path"]: git(repo, "cat-file", "blob", parent + ":" + r["path"]) for r in plan["chunks"]}
+              payload = decode_chunks(chunks, plan)
+              verify_archive(payload, plan)
+              # No output files have been created before every input and target guard passes.
+              return payload, canonical_json(proof_for(plan, environment))
+          def write_validation_output(payload, proof, output):
+              require(not output.exists(), "validation output already exists")
+              output.mkdir()
+              (output / "payload.tar").write_bytes(payload)
+              (output / "proof.json").write_bytes(proof)
+          PLAN = json.loads('{"archiveBytes":1822720,"archiveSha256":"c33f7cd26701475130140426c278687e7e8f118c95f9072210061f780a7fd156","baseTree":"9649fd63ffd313f03f698f8803a8071979bd9e2c","chunkPrefix":".integration-repair-transfer/gallery-runtime-lifecycle-20261003","chunks":[{"bytes":230001,"gitBlobSha":"ce943786cd35de147bd6b1e70e5ce019904f762b","path":".integration-repair-transfer/gallery-runtime-lifecycle-20261003/part-001.b64","sha256":"533a50920707e46905c78897f1ee20f2195255587be3433aa0b8247d08d62295"},{"bytes":230001,"gitBlobSha":"fba2704ecec877d5e5262b500f194dea2501dbc8","path":".integration-repair-transfer/gallery-runtime-lifecycle-20261003/part-002.b64","sha256":"1816e9e192997533826ea54df41c941d99bb50c6dacdecd29cdb32c483959e3a"},{"bytes":230001,"gitBlobSha":"41c32795f5e607245ccf2ea02771537928ce73e1","path":".integration-repair-transfer/gallery-runtime-lifecycle-20261003/part-003.b64","sha256":"ae1089a43a7d652d123d8a8ee2f22d2af8edbedf49af1fa712f29bc5d7d26155"},{"bytes":230001,"gitBlobSha":"1a39b6913229ca80d6e03597e10f99c1c8ce6786","path":".integration-repair-transfer/gallery-runtime-lifecycle-20261003/part-004.b64","sha256":"0e3d2580ab9b25eafa30e5fc121d6aedb176b021ef2ebeafe1ffd058d0bdec73"},{"bytes":230001,"gitBlobSha":"d108f40ac22761ec5887dd51eec344c5436c5b2b","path":".integration-repair-transfer/gallery-runtime-lifecycle-20261003/part-005.b64","sha256":"fa4bbb672645f73910fb22a544f5dae2285e777356b3eb27c9bed53973f9fd72"},{"bytes":230001,"gitBlobSha":"0c8e0617f5656d002c141d927d56279fc1fed01d","path":".integration-repair-transfer/gallery-runtime-lifecycle-20261003/part-006.b64","sha256":"f79b49cf18b7cefbb3ed11470b6de4fbb8ee138729971197922d21d659b83491"},{"bytes":230001,"gitBlobSha":"aa84476b44107955ebff117e1a3023b9a76dc344","path":".integration-repair-transfer/gallery-runtime-lifecycle-20261003/part-007.b64","sha256":"1680f2c6e99d79bf3a78128e0269f61e7ebd443502b522827d21cbc0429ff44b"},{"bytes":230001,"gitBlobSha":"43b40cf59ddd28a16dc36b3cc1de26fcee83fd10","path":".integration-repair-transfer/gallery-runtime-lifecycle-20261003/part-008.b64","sha256":"6b3a592eac89cc7da4fa044604f2df26bb9452050afec6baca9711d5cc756081"},{"bytes":230001,"gitBlobSha":"8b596548fe59dd0d4d39968e1a70af7815cba0a8","path":".integration-repair-transfer/gallery-runtime-lifecycle-20261003/part-009.b64","sha256":"51bb93ee745334866390d9afa11c994c36288a6abfca7b51b2035149d6433fd6"},{"bytes":230001,"gitBlobSha":"88284f3a2a82959a43f6d51e44510e8adf500712","path":".integration-repair-transfer/gallery-runtime-lifecycle-20261003/part-010.b64","sha256":"1aee4c50a0dae6c23d6df0958b5d0bd36ee1c308c53c4fe04087b79584cdf7d4"},{"bytes":130297,"gitBlobSha":"269b7330f74d8dd928d7c45a5f3d9b5d120fd224","path":".integration-repair-transfer/gallery-runtime-lifecycle-20261003/part-011.b64","sha256":"48cb33cd5669c17726093d0f38de5a7bd1476a0b864acb8be860131be078b9cf"}],"codeDiffSha256":"5c71caf4332868e492cd449765a02cc3bc80bb2bcfe328bad4961087365fa6c1","files":[{"baseBytes":1800777,"baseSha256":"dbc1afeb84a379e8813903b7ebddc216b228bf31f311317097ed43d830a8ec56","bytes":1800913,"expectedBaseBlobSha":"1ff662fa4c1f62bbe8167be097de6a6de3c76949","gitBlobSha":"76c51a5f2e72a3d59b57e5182af97aff27357641","mode":"100644","operation":"modify","path":"music_app/static/js/runtime-bundle.js","sha256":"b567a2083ee5103527cd48c8780c36196b5c68dbd728684fb6cb77aacecc6580"},{"baseBytes":13885,"baseSha256":"d9ee39431576b1cf9eff2202a7b076d301cb32c4dc1473f8b2ea683750880a72","bytes":13987,"expectedBaseBlobSha":"5ce2dbb2641054d2a00793ea5c37e4282d780bdb","gitBlobSha":"ab2ae7a4f0bda3179080fd8db9eb311e92af8598","mode":"100644","operation":"modify","path":"tests/js/managed-app-lifecycle.test.js","sha256":"6716287d644d8bd16b2843ea56ea573be02cfb44f3c30e72c33f142eff05369a"}],"finalTree":"356b0de2104785867b5eead544a1aa027e750e4a","helperBase":"23444d7c0f8fc5ffb57bb1fba02d79ecabb44501","helperBaseTree":"e5ccd2aa012edc7d765f86710274e116ef102986","helperBranch":"2026-09-30-mobile-bundle-transfer","independentReceiptSha256":"3c560e4894c41a1ca696e5faf9ab1c80a4ae67b6616cb9b2d46552f36f58d12b","proposalSha256":"fad993af2cf9a35215a0b33fd7746c5b89a564406c00c52651f7d485b62050b2","remote":"https://github.com/idanilovqa/AlbumHaven.git","repository":"idanilovqa/AlbumHaven","repositoryPrivate":false,"schemaVersion":3,"scopeLabel":"gallery-runtime-lifecycle","secondIndependentReceiptSha256":"4f060fc6f93cb8cc96d7a738ba1a602b8d6747291455f5a053627ac3f06f2a3a","targetBranch":"2026-09-30-friends-listening-home","targetHead":"31828be1d758ad93b7eedc64414b91e69b97ad61","workflowPath":".github/workflows/verified-gallery-runtime-lifecycle-repair.yml"}\n')
+
+          environment = os.environ
+          event = json.loads(Path(environment["GITHUB_EVENT_PATH"]).read_text())
+          verify_event(PLAN, environment, event)
+          token = environment.get("GH_TOKEN")
+          require(bool(token), "transient repository token missing")
+          repo = Path(environment["GITHUB_WORKSPACE"]) / "target"
+          temporary = Path(environment["RUNNER_TEMP"])
+
+          # The retained helper and target are divergent histories. Fetch the exact target
+          # read-only; do not assume checkout's helper ancestry contains its objects.
+          git(repo, "fetch", "--no-tags", "--no-recurse-submodules", PLAN["remote"], PLAN["targetHead"], token=token)
+          payload, proof = validate_transport(repo, PLAN, environment, event, token)
+          write_validation_output(payload, proof, temporary / "repair-validated")
+          with open(environment["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
+              output.write("proof_sha256=" + sha256(proof) + "\n")
+          print("Verified " + str(len(PLAN["files"])) + " frozen files and all target/ancestry guards; artifact prepared.")
+
+      - uses: actions/upload-artifact@v4
+        id: upload
+        with:
+          name: gallery-runtime-lifecycle-repair-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/repair-validated/
+          if-no-files-found: error
+          retention-days: 7
+          compression-level: 0
+          overwrite: false
+  publish:
+    needs: validate
+    if: needs.validate.result == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: 31828be1d758ad93b7eedc64414b91e69b97ad61
+          path: target
+          fetch-depth: 1
+          persist-credentials: false
+          submodules: false
+          lfs: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - uses: actions/download-artifact@v4
+        with:
+          artifact-ids: ${{ needs.validate.outputs.artifact_id }}
+          path: ${{ runner.temp }}/repair-downloaded
+          merge-multiple: true
+      - name: Verify artifact and publish one atomic repair commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ARTIFACT_ID: ${{ needs.validate.outputs.artifact_id }}
+          PROOF_SHA256: ${{ needs.validate.outputs.proof_sha256 }}
+        shell: python
+        run: |
+          import base64
+          import binascii
+          import hashlib
+          import io
+          import json
+          import os
+          from pathlib import Path, PurePosixPath
+          import re
+          import stat
+          import subprocess
+          import sys
+          import tarfile
+          SCOPES = {'idanilovqa/AlbumHaven': {'private': False, 'count': 2, 'helper': '2026-09-30-mobile-bundle-transfer', 'label': 'gallery-runtime-lifecycle', 'finalTree': '356b0de2104785867b5eead544a1aa027e750e4a', 'targetHead': '31828be1d758ad93b7eedc64414b91e69b97ad61', 'baseTree': '9649fd63ffd313f03f698f8803a8071979bd9e2c', 'helperBase': '23444d7c0f8fc5ffb57bb1fba02d79ecabb44501', 'helperBaseTree': 'e5ccd2aa012edc7d765f86710274e116ef102986', 'files': [{'path': 'music_app/static/js/runtime-bundle.js', 'operation': 'modify', 'mode': '100644', 'bytes': 1800913, 'sha256': 'b567a2083ee5103527cd48c8780c36196b5c68dbd728684fb6cb77aacecc6580', 'gitBlobSha': '76c51a5f2e72a3d59b57e5182af97aff27357641', 'baseBytes': 1800777, 'baseSha256': 'dbc1afeb84a379e8813903b7ebddc216b228bf31f311317097ed43d830a8ec56', 'expectedBaseBlobSha': '1ff662fa4c1f62bbe8167be097de6a6de3c76949'}, {'path': 'tests/js/managed-app-lifecycle.test.js', 'operation': 'modify', 'mode': '100644', 'bytes': 13987, 'sha256': '6716287d644d8bd16b2843ea56ea573be02cfb44f3c30e72c33f142eff05369a', 'gitBlobSha': 'ab2ae7a4f0bda3179080fd8db9eb311e92af8598', 'baseBytes': 13885, 'baseSha256': 'd9ee39431576b1cf9eff2202a7b076d301cb32c4dc1473f8b2ea683750880a72', 'expectedBaseBlobSha': '5ce2dbb2641054d2a00793ea5c37e4282d780bdb'}], 'proposalSha256': 'fad993af2cf9a35215a0b33fd7746c5b89a564406c00c52651f7d485b62050b2', 'codeDiffSha256': '5c71caf4332868e492cd449765a02cc3bc80bb2bcfe328bad4961087365fa6c1', 'independentReceiptSha256': '3c560e4894c41a1ca696e5faf9ab1c80a4ae67b6616cb9b2d46552f36f58d12b', 'secondIndependentReceiptSha256': '4f060fc6f93cb8cc96d7a738ba1a602b8d6747291455f5a053627ac3f06f2a3a'}}
+          class Rejected(RuntimeError):
+              pass
+          def require(condition, message):
+              if not condition:
+                  raise Rejected(message)
+          def sha256(data):
+              return hashlib.sha256(data).hexdigest()
+          def git_blob(data):
+              return hashlib.sha1(b"blob " + str(len(data)).encode() + b"\0" + data).hexdigest()
+          def canonical_json(value):
+              return (json.dumps(value, sort_keys=True, separators=(",", ":")) + "\n").encode()
+          def canonical_path(path):
+              require(isinstance(path, str) and bool(path), "empty/non-string path")
+              require(re.fullmatch(r"[A-Za-z0-9._/-]+", path) is not None, "unsafe path characters")
+              require(not path.startswith("/") and str(PurePosixPath(path)) == path, "noncanonical path")
+              require(all(p not in ("", ".", "..", ".git") for p in path.split("/")), "unsafe path component")
+              return path
+          def verify_bytes(data, record):
+              require(len(data) == record["bytes"], "size mismatch: " + record["path"])
+              require(sha256(data) == record["sha256"], "SHA-256 mismatch: " + record["path"])
+              require(git_blob(data) == record["gitBlobSha"], "Git blob mismatch: " + record["path"])
+          def deterministic_tar(files):
+              output = io.BytesIO()
+              with tarfile.open(fileobj=output, mode="w", format=tarfile.USTAR_FORMAT) as archive:
+                  for path, data in sorted(files.items()):
+                      member = tarfile.TarInfo(canonical_path(path))
+                      member.size = len(data)
+                      member.mode = 0o644
+                      member.type = tarfile.REGTYPE
+                      archive.addfile(member, io.BytesIO(data))
+              return output.getvalue()
+          def verify_scope(plan):
+              repository = plan.get("repository")
+              require(repository in SCOPES, "unreviewed repository")
+              scope = SCOPES[repository]
+              require(plan.get("repositoryPrivate") is scope["private"], "wrong repository visibility")
+              require(plan.get("targetBranch") == "2026-09-30-friends-listening-home", "wrong target branch")
+              require(plan.get("helperBranch") == scope["helper"], "wrong helper branch")
+              require(plan.get("scopeLabel") == scope["label"], "wrong helper scope label")
+              require(plan.get("workflowPath") == ".github/workflows/verified-gallery-runtime-lifecycle-repair.yml", "wrong workflow path")
+              require(plan.get("chunkPrefix") == ".integration-repair-transfer/gallery-runtime-lifecycle-20261003", "wrong chunk namespace")
+              require(plan.get("remote") == "https://github.com/" + repository + ".git", "wrong remote")
+              for key in ("finalTree", "targetHead", "baseTree", "helperBase", "helperBaseTree", "proposalSha256",
+                          "codeDiffSha256", "independentReceiptSha256", "secondIndependentReceiptSha256"):
+                  require(plan.get(key) == scope[key], "wrong reviewed " + key)
+              return scope
+          def verify_archive(payload, plan):
+              scope = verify_scope(plan)
+              require(len(payload) == plan["archiveBytes"], "archive size mismatch")
+              require(sha256(payload) == plan["archiveSha256"], "archive SHA-256 mismatch")
+              expected = {canonical_path(r["path"]): r for r in plan["files"]}
+              require(len(expected) == len(plan["files"]) == scope["count"], "wrong unique helper file count")
+              require(plan["files"] == scope["files"], "modified-file records differ from reviewed original/final identities")
+              require(all(r.get("operation") == "modify" and r.get("mode") == "100644" and
+                          r.get("expectedBaseBlobSha") and r.get("baseBytes") and r.get("baseSha256") and
+                          "binary" not in r for r in plan["files"]), "only the two reviewed UTF-8 modifications are allowed")
+              files = {}
+              try:
+                  with tarfile.open(fileobj=io.BytesIO(payload), mode="r:") as archive:
+                      for member in archive:
+                          path = canonical_path(member.name)
+                          require(path in expected and path not in files, "extra or duplicate archive path")
+                          require(member.type == tarfile.REGTYPE and not member.pax_headers, "nonregular archive member")
+                          require(member.mode == 0o644 and member.uid == member.gid == member.mtime == 0,
+                                  "unexpected archive metadata")
+                          require(not member.uname and not member.gname and not member.linkname, "unexpected archive name/link")
+                          require(member.size == expected[path]["bytes"], "archive member size mismatch")
+                          data = archive.extractfile(member).read()
+                          verify_bytes(data, expected[path])
+                          try:
+                              text = data.decode("utf-8", errors="strict")
+                          except UnicodeError as exc:
+                              raise Rejected("repair payload is not UTF-8") from exc
+                          require(text.encode("utf-8") == data and "\0" not in text, "non-text repair payload")
+                          files[path] = data
+              except (tarfile.TarError, OSError) as exc:
+                  raise Rejected("invalid tar archive") from exc
+              require(set(files) == set(expected), "missing archive paths")
+              require(deterministic_tar(files) == payload, "noncanonical archive or trailing data")
+              return files
+          def git_env(token=None):
+              # Do not inherit configuration that could redirect a remote, a hook or object store.
+              env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
+              env.update(GIT_CONFIG_NOSYSTEM="1", GIT_CONFIG_GLOBAL="/dev/null", GIT_TERMINAL_PROMPT="0")
+              if token:
+                  auth = base64.b64encode(("x-access-token:" + token).encode()).decode()
+                  env.update(GIT_CONFIG_COUNT="1", GIT_CONFIG_KEY_0="http.https://github.com/.extraheader",
+                             GIT_CONFIG_VALUE_0="AUTHORIZATION: basic " + auth)
+              return env
+          def git(repo, *args, data=None, token=None, hooks=None):
+              command = ["git", "-c", "core.hooksPath=" + (str(hooks) if hooks else "/dev/null"),
+                         "-c", "core.autocrlf=false", "-c", "commit.gpgsign=false", "-C", str(repo), *args]
+              result = subprocess.run(command, input=data, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                      env=git_env(token), check=False)
+              require(result.returncode == 0, "git operation failed: " + args[0] + "; inspect, do not retry automatically")
+              return result.stdout
+          def git_tree(repo, revision):
+              result = {}
+              for line in git(repo, "ls-tree", "-rz", revision).split(b"\0"):
+                  if not line:
+                      continue
+                  metadata, path = line.split(b"\t", 1)
+                  mode, kind, oid = metadata.decode().split()
+                  result[path.decode("utf-8")] = (mode, kind, oid)
+              return result
+          def diff_records(repo, old, new=None, cached=False):
+              args = ["diff", "--raw", "--no-abbrev", "--no-renames", "-z"]
+              if cached:
+                  args.append("--cached")
+              args.append(old)
+              if new:
+                  args.append(new)
+              pieces = git(repo, *args).split(b"\0")
+              require(pieces.pop() == b"", "invalid diff framing")
+              require(len(pieces) % 2 == 0, "invalid diff shape")
+              result = {}
+              for metadata, path in zip(pieces[::2], pieces[1::2]):
+                  oldmode, newmode, oldoid, newoid, operation = metadata.decode().split()
+                  name = path.decode("utf-8")
+                  require(name not in result, "duplicate diff path")
+                  result[name] = (oldmode.lstrip(":"), newmode, oldoid, newoid, operation)
+              return result
+          def expected_changes(records):
+              return {r["path"]: ("100644" if r.get("expectedBaseBlobSha") else "000000", "100644",
+                                  r.get("expectedBaseBlobSha", "0" * 40), r["gitBlobSha"],
+                                  "M" if r.get("expectedBaseBlobSha") else "A") for r in records}
+          def verify_target_base(repo, plan):
+              head = plan["targetHead"]
+              require(git(repo, "rev-parse", head + "^{tree}").decode().strip() == plan["baseTree"], "base tree changed")
+              tree = git_tree(repo, head)
+              for record in plan["files"]:
+                  path = record["path"]
+                  canonical_path(path)
+                  for parent in PurePosixPath(path).parents:
+                      require(str(parent) not in tree, "target path has a non-directory ancestor")
+                  if "expectedBaseBlobSha" in record:
+                      require(tree.get(path) == ("100644", "blob", record["expectedBaseBlobSha"]), "original target blob changed")
+                      old = git(repo, "cat-file", "blob", head + ":" + path)
+                      require(len(old) == record["baseBytes"] and sha256(old) == record["baseSha256"], "original target bytes changed")
+                  else:
+                      require(path not in tree and not any(p.startswith(path + "/") for p in tree), "new target path already exists")
+          def verify_event(plan, environment, event):
+              scope = verify_scope(plan)
+              require(environment.get("GITHUB_EVENT_NAME") == "push", "not a push event")
+              require(environment.get("GITHUB_REPOSITORY") == plan["repository"], "wrong repository")
+              require(environment.get("GITHUB_REF") == "refs/heads/" + plan["helperBranch"], "wrong helper ref")
+              require(environment.get("GITHUB_RUN_ATTEMPT") == "1", "reruns require investigation; automatic replay is disabled")
+              require(re.fullmatch(r"[1-9][0-9]*", environment.get("GITHUB_RUN_ID", "")) is not None, "invalid run id")
+              parent = environment.get("HELPER_PARENT", "")
+              require(re.fullmatch(r"[0-9a-f]{40}", parent) is not None, "helper parent is not bound")
+              require(re.fullmatch(r"[0-9a-f]{40}", environment.get("GITHUB_SHA", "")) is not None, "invalid trigger SHA")
+              require(event.get("ref") == environment["GITHUB_REF"], "event ref mismatch")
+              require(event.get("before") == parent and event.get("after") == environment["GITHUB_SHA"], "event ancestry mismatch")
+              require(all(event.get(key) is False for key in ("forced", "deleted", "created")), "forced/create/delete push rejected")
+              require(event.get("repository", {}).get("full_name") == plan["repository"] and
+                      event["repository"].get("private") is scope["private"], "event repository/private guard failed")
+              return parent
+          def remote_oid(repo, plan, token):
+              ref = "refs/heads/" + plan["targetBranch"]
+              lines = git(repo, "ls-remote", "--exit-code", plan["remote"], ref, token=token).decode().splitlines()
+              require(len(lines) == 1, "target ref is missing or ambiguous")
+              parts = lines[0].split("\t")
+              require(len(parts) == 2 and parts[1] == ref and re.fullmatch(r"[0-9a-f]{40}", parts[0]), "invalid remote ref")
+              return parts[0]
+          def require_remote_base(repo, plan, token):
+              require(remote_oid(repo, plan, token) == plan["targetHead"], "target branch moved; stop and inspect")
+          def proof_for(plan, environment):
+              return {"schemaVersion": 1, "repository": plan["repository"], "targetBranch": plan["targetBranch"],
+                      "targetHead": plan["targetHead"], "baseTree": plan["baseTree"], "finalTree": plan["finalTree"],
+                      "helperBase": plan["helperBase"], "helperBaseTree": plan["helperBaseTree"],
+                      "helperRef": environment["GITHUB_REF"], "helperParent": environment["HELPER_PARENT"],
+                      "triggerSha": environment["GITHUB_SHA"], "runId": environment["GITHUB_RUN_ID"],
+                      "runAttempt": environment["GITHUB_RUN_ATTEMPT"], "planSha256": sha256(canonical_json(plan)),
+                      "proposalSha256": plan["proposalSha256"], "codeDiffSha256": plan["codeDiffSha256"],
+                      "independentReceiptSha256": plan["independentReceiptSha256"],
+                      "secondIndependentReceiptSha256": plan["secondIndependentReceiptSha256"],
+                      "archiveSha256": plan["archiveSha256"], "files": plan["files"]}
+          def verify_artifact(folder, plan, environment, proof_hash):
+              require(folder.is_dir() and not folder.is_symlink(), "artifact root is not a regular directory")
+              entries = list(folder.iterdir())
+              require({p.name for p in entries} == {"payload.tar", "proof.json"}, "artifact file set mismatch")
+              require(all(stat.S_ISREG(p.lstat().st_mode) for p in entries), "artifact contains nonregular files")
+              proof = (folder / "proof.json").read_bytes()
+              require(sha256(proof) == proof_hash, "artifact proof hash mismatch")
+              require(proof == canonical_json(proof_for(plan, environment)), "artifact proof belongs to another plan/run/attempt")
+              return verify_archive((folder / "payload.tar").read_bytes(), plan)
+          def verify_staged(repo, plan):
+              require(diff_records(repo, plan["targetHead"], cached=True) == expected_changes(plan["files"]), "staged path/mode/blob set mismatch")
+              require(git(repo, "write-tree").decode().strip() == plan["finalTree"], "complete staged tree mismatch")
+          def stage_reviewed_files(repo, files, plan):
+              require(git(repo, "rev-parse", "HEAD").decode().strip() == plan["targetHead"], "checkout is not pinned target")
+              require(git(repo, "status", "--porcelain=v1", "-z", "--untracked-files=all") == b"", "target checkout is not clean")
+              require(git(repo, "ls-files", "--others", "-z") == b"", "target checkout has untracked or ignored files")
+              verify_target_base(repo, plan)
+              require(set(files) == {r["path"] for r in plan["files"]}, "write path set mismatch")
+              # Validate all data and every existing ancestor before writing any reviewed file.
+              for record in plan["files"]:
+                  verify_bytes(files[record["path"]], record)
+                  current = repo
+                  for component in PurePosixPath(record["path"]).parts[:-1]:
+                      current /= component
+                      if current.exists() or current.is_symlink():
+                          require(stat.S_ISDIR(current.lstat().st_mode), "unsafe destination ancestor")
+                  destination = repo / record["path"]
+                  if "expectedBaseBlobSha" in record:
+                      require(destination.exists() and stat.S_ISREG(destination.lstat().st_mode), "nonregular original destination")
+                      original = destination.read_bytes()
+                      require(len(original) == record["baseBytes"] and sha256(original) == record["baseSha256"], "original worktree bytes changed")
+                  else:
+                      require(not destination.exists() and not destination.is_symlink(), "new destination already exists")
+              for record in plan["files"]:
+                  path = record["path"]
+                  destination = repo / path
+                  destination.parent.mkdir(parents=True, exist_ok=True)
+                  destination.write_bytes(files[path])
+                  destination.chmod(0o644)
+                  # Bypass attributes, filters and line ending transforms to preserve frozen bytes.
+                  oid = git(repo, "hash-object", "-w", "--stdin", data=files[path]).decode().strip()
+                  require(oid == record["gitBlobSha"], "written blob changed")
+                  git(repo, "update-index", "--add", "--cacheinfo", "100644," + oid + "," + path)
+              verify_staged(repo, plan)
+          def pre_push_source(plan, commit):
+              # This is the only installed hook. Git passes its own advertised old OID on stdin.
+              expected = [commit, commit, "refs/heads/" + plan["targetBranch"], plan["targetHead"]]
+              return ("#!/usr/bin/env python3\nimport sys\n"
+                      + "expected = " + repr(expected) + "\n"
+                      + "destination = " + repr(plan["remote"]) + "\n"
+                      + "rows = [line.split() for line in sys.stdin.read().splitlines()]\n"
+                      + "if sys.argv[1:] != [destination, destination] or rows != [expected]:\n"
+                      + "    sys.stderr.write('Rejected changed target/ref/commit at pre-push; inspect, do not retry\\n')\n"
+                      + "    sys.exit(1)\n")
+          def commit_reviewed(repo, plan):
+              verify_staged(repo, plan)
+              message = "Fix Gallery runtime parity and managed lifecycle test clock"
+              git(repo, "-c", "user.name=github-actions[bot]", "-c",
+                  "user.email=41898282+github-actions[bot]@users.noreply.github.com", "commit", "-m", message)
+              commit = git(repo, "rev-parse", "HEAD").decode().strip()
+              require(git(repo, "rev-list", "--parents", "-n", "1", commit).decode().split() == [commit, plan["targetHead"]], "unexpected publication parent")
+              require(diff_records(repo, plan["targetHead"], commit) == expected_changes(plan["files"]), "committed path/mode/blob mismatch")
+              require(git(repo, "rev-parse", commit + "^{tree}").decode().strip() == plan["finalTree"], "committed tree mismatch")
+              return commit
+          def push_once(repo, plan, commit, token, hooks):
+              require(not hooks.exists(), "hook directory already exists")
+              hooks.mkdir()
+              hook = hooks / "pre-push"
+              hook.write_text(pre_push_source(plan, commit), encoding="utf-8")
+              hook.chmod(0o700)
+              require_remote_base(repo, plan, token)
+              # A normal, single-ref non-force push. The hook pins the server's advertised old OID.
+              git(repo, "push", "--porcelain", plan["remote"], commit + ":refs/heads/" + plan["targetBranch"], token=token, hooks=hooks)
+              require(remote_oid(repo, plan, token) == commit, "publication outcome uncertain; inspect remote, do not retry")
+              return commit
+          PLAN = json.loads('{"archiveBytes":1822720,"archiveSha256":"c33f7cd26701475130140426c278687e7e8f118c95f9072210061f780a7fd156","baseTree":"9649fd63ffd313f03f698f8803a8071979bd9e2c","chunkPrefix":".integration-repair-transfer/gallery-runtime-lifecycle-20261003","chunks":[{"bytes":230001,"gitBlobSha":"ce943786cd35de147bd6b1e70e5ce019904f762b","path":".integration-repair-transfer/gallery-runtime-lifecycle-20261003/part-001.b64","sha256":"533a50920707e46905c78897f1ee20f2195255587be3433aa0b8247d08d62295"},{"bytes":230001,"gitBlobSha":"fba2704ecec877d5e5262b500f194dea2501dbc8","path":".integration-repair-transfer/gallery-runtime-lifecycle-20261003/part-002.b64","sha256":"1816e9e192997533826ea54df41c941d99bb50c6dacdecd29cdb32c483959e3a"},{"bytes":230001,"gitBlobSha":"41c32795f5e607245ccf2ea02771537928ce73e1","path":".integration-repair-transfer/gallery-runtime-lifecycle-20261003/part-003.b64","sha256":"ae1089a43a7d652d123d8a8ee2f22d2af8edbedf49af1fa712f29bc5d7d26155"},{"bytes":230001,"gitBlobSha":"1a39b6913229ca80d6e03597e10f99c1c8ce6786","path":".integration-repair-transfer/gallery-runtime-lifecycle-20261003/part-004.b64","sha256":"0e3d2580ab9b25eafa30e5fc121d6aedb176b021ef2ebeafe1ffd058d0bdec73"},{"bytes":230001,"gitBlobSha":"d108f40ac22761ec5887dd51eec344c5436c5b2b","path":".integration-repair-transfer/gallery-runtime-lifecycle-20261003/part-005.b64","sha256":"fa4bbb672645f73910fb22a544f5dae2285e777356b3eb27c9bed53973f9fd72"},{"bytes":230001,"gitBlobSha":"0c8e0617f5656d002c141d927d56279fc1fed01d","path":".integration-repair-transfer/gallery-runtime-lifecycle-20261003/part-006.b64","sha256":"f79b49cf18b7cefbb3ed11470b6de4fbb8ee138729971197922d21d659b83491"},{"bytes":230001,"gitBlobSha":"aa84476b44107955ebff117e1a3023b9a76dc344","path":".integration-repair-transfer/gallery-runtime-lifecycle-20261003/part-007.b64","sha256":"1680f2c6e99d79bf3a78128e0269f61e7ebd443502b522827d21cbc0429ff44b"},{"bytes":230001,"gitBlobSha":"43b40cf59ddd28a16dc36b3cc1de26fcee83fd10","path":".integration-repair-transfer/gallery-runtime-lifecycle-20261003/part-008.b64","sha256":"6b3a592eac89cc7da4fa044604f2df26bb9452050afec6baca9711d5cc756081"},{"bytes":230001,"gitBlobSha":"8b596548fe59dd0d4d39968e1a70af7815cba0a8","path":".integration-repair-transfer/gallery-runtime-lifecycle-20261003/part-009.b64","sha256":"51bb93ee745334866390d9afa11c994c36288a6abfca7b51b2035149d6433fd6"},{"bytes":230001,"gitBlobSha":"88284f3a2a82959a43f6d51e44510e8adf500712","path":".integration-repair-transfer/gallery-runtime-lifecycle-20261003/part-010.b64","sha256":"1aee4c50a0dae6c23d6df0958b5d0bd36ee1c308c53c4fe04087b79584cdf7d4"},{"bytes":130297,"gitBlobSha":"269b7330f74d8dd928d7c45a5f3d9b5d120fd224","path":".integration-repair-transfer/gallery-runtime-lifecycle-20261003/part-011.b64","sha256":"48cb33cd5669c17726093d0f38de5a7bd1476a0b864acb8be860131be078b9cf"}],"codeDiffSha256":"5c71caf4332868e492cd449765a02cc3bc80bb2bcfe328bad4961087365fa6c1","files":[{"baseBytes":1800777,"baseSha256":"dbc1afeb84a379e8813903b7ebddc216b228bf31f311317097ed43d830a8ec56","bytes":1800913,"expectedBaseBlobSha":"1ff662fa4c1f62bbe8167be097de6a6de3c76949","gitBlobSha":"76c51a5f2e72a3d59b57e5182af97aff27357641","mode":"100644","operation":"modify","path":"music_app/static/js/runtime-bundle.js","sha256":"b567a2083ee5103527cd48c8780c36196b5c68dbd728684fb6cb77aacecc6580"},{"baseBytes":13885,"baseSha256":"d9ee39431576b1cf9eff2202a7b076d301cb32c4dc1473f8b2ea683750880a72","bytes":13987,"expectedBaseBlobSha":"5ce2dbb2641054d2a00793ea5c37e4282d780bdb","gitBlobSha":"ab2ae7a4f0bda3179080fd8db9eb311e92af8598","mode":"100644","operation":"modify","path":"tests/js/managed-app-lifecycle.test.js","sha256":"6716287d644d8bd16b2843ea56ea573be02cfb44f3c30e72c33f142eff05369a"}],"finalTree":"356b0de2104785867b5eead544a1aa027e750e4a","helperBase":"23444d7c0f8fc5ffb57bb1fba02d79ecabb44501","helperBaseTree":"e5ccd2aa012edc7d765f86710274e116ef102986","helperBranch":"2026-09-30-mobile-bundle-transfer","independentReceiptSha256":"3c560e4894c41a1ca696e5faf9ab1c80a4ae67b6616cb9b2d46552f36f58d12b","proposalSha256":"fad993af2cf9a35215a0b33fd7746c5b89a564406c00c52651f7d485b62050b2","remote":"https://github.com/idanilovqa/AlbumHaven.git","repository":"idanilovqa/AlbumHaven","repositoryPrivate":false,"schemaVersion":3,"scopeLabel":"gallery-runtime-lifecycle","secondIndependentReceiptSha256":"4f060fc6f93cb8cc96d7a738ba1a602b8d6747291455f5a053627ac3f06f2a3a","targetBranch":"2026-09-30-friends-listening-home","targetHead":"31828be1d758ad93b7eedc64414b91e69b97ad61","workflowPath":".github/workflows/verified-gallery-runtime-lifecycle-repair.yml"}\n')
+
+          environment = os.environ
+          event = json.loads(Path(environment["GITHUB_EVENT_PATH"]).read_text())
+          verify_event(PLAN, environment, event)
+          token = environment.get("GH_TOKEN")
+          require(bool(token), "transient repository token missing")
+          repo = Path(environment["GITHUB_WORKSPACE"]) / "target"
+          temporary = Path(environment["RUNNER_TEMP"])
+
+          require(re.fullmatch(r"[1-9][0-9]*", environment.get("ARTIFACT_ID", "")), "artifact ID missing")
+          files = verify_artifact(temporary / "repair-downloaded", PLAN, environment, environment["PROOF_SHA256"])
+          require_remote_base(repo, PLAN, token)
+          stage_reviewed_files(repo, files, PLAN)
+          commit = commit_reviewed(repo, PLAN)
+          print("Prepared atomic repair commit " + commit + " with tree " + PLAN["finalTree"], flush=True)
+          push_once(repo, PLAN, commit, token, temporary / "repair-push-hooks")
+          print("Verified exact repair commit " + commit + "; complete native PR CI remains required.")
+

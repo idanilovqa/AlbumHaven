@@ -1,0 +1,661 @@
+name: Publish exact reviewed Friends v010-v011 public archive
+on:
+  push:
+    branches: [2026-09-30-mobile-bundle-transfer]
+    paths: [.github/workflows/verified-friends-v010-v011-public-archive.yml]
+permissions:
+  contents: read
+concurrency:
+  group: verified-friends-v010-v011-public-archive
+  cancel-in-progress: false
+env:
+  HELPER_PARENT: 'addf8d1e7188fafec6c78f8c804ef9a667385cb3'
+jobs:
+  validate:
+    if: github.repository == 'idanilovqa/AlbumHaven' && github.ref == 'refs/heads/2026-09-30-mobile-bundle-transfer' && github.event_name == 'push'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    outputs:
+      artifact_id: ${{ steps.upload.outputs.artifact-id }}
+      proof_sha256: ${{ steps.verify.outputs.proof_sha256 }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.sha }}
+          path: target
+          fetch-depth: 0
+          persist-credentials: false
+          submodules: false
+          lfs: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Verify exact transport, archive and target guards
+        id: verify
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: python
+        run: |
+          import base64
+          import binascii
+          import hashlib
+          import io
+          import json
+          import os
+          from pathlib import Path, PurePosixPath
+          import re
+          import stat
+          import subprocess
+          import sys
+          import tarfile
+          import xml.etree.ElementTree as ET
+          SCOPES = {'idanilovqa/AlbumHaven': {'private': False, 'count': 47, 'binary': 0, 'helper': '2026-09-30-mobile-bundle-transfer', 'label': 'public', 'finalTree': 'a73e6ef9d3670b93e4d8fce1383331a1480eeb53'}}
+          class Rejected(RuntimeError):
+              pass
+          def require(condition, message):
+              if not condition:
+                  raise Rejected(message)
+          def sha256(data):
+              return hashlib.sha256(data).hexdigest()
+          def git_blob(data):
+              return hashlib.sha1(b"blob " + str(len(data)).encode() + b"\0" + data).hexdigest()
+          def canonical_json(value):
+              return (json.dumps(value, sort_keys=True, separators=(",", ":")) + "\n").encode()
+          def canonical_path(path):
+              require(isinstance(path, str) and bool(path), "empty/non-string path")
+              require(re.fullmatch(r"[A-Za-z0-9._/-]+", path) is not None, "unsafe path characters")
+              require(not path.startswith("/") and str(PurePosixPath(path)) == path, "noncanonical path")
+              require(all(p not in ("", ".", "..", ".git") for p in path.split("/")), "unsafe path component")
+              return path
+          def verify_bytes(data, record):
+              require(len(data) == record["bytes"], "size mismatch: " + record["path"])
+              require(sha256(data) == record["sha256"], "SHA-256 mismatch: " + record["path"])
+              require(git_blob(data) == record["gitBlobSha"], "Git blob mismatch: " + record["path"])
+          def deterministic_tar(files):
+              output = io.BytesIO()
+              with tarfile.open(fileobj=output, mode="w", format=tarfile.USTAR_FORMAT) as archive:
+                  for path, data in sorted(files.items()):
+                      member = tarfile.TarInfo(canonical_path(path))
+                      member.size = len(data)
+                      member.mode = 0o644
+                      member.type = tarfile.REGTYPE
+                      archive.addfile(member, io.BytesIO(data))
+              return output.getvalue()
+          def verify_scope(plan):
+              repository = plan.get("repository")
+              require(repository in SCOPES, "unreviewed repository")
+              scope = SCOPES[repository]
+              require(plan.get("repositoryPrivate") is scope["private"], "wrong repository visibility")
+              require(plan.get("targetBranch") == "2026-09-30-friends-listening-home", "wrong target branch")
+              require(plan.get("helperBranch") == scope["helper"], "wrong helper branch")
+              require(plan.get("scopeLabel") == scope["label"], "wrong helper scope label")
+              require(plan.get("workflowPath") == ".github/workflows/verified-friends-v010-v011-" + scope["label"] + "-archive.yml", "wrong workflow path")
+              require(plan.get("chunkPrefix") == ".friends-artifact-transfer/v010-v011-" + scope["label"], "wrong chunk namespace")
+              require(plan.get("finalTree") == scope["finalTree"], "wrong exact final tree")
+              require(plan.get("remote") == "https://github.com/" + repository + ".git", "wrong remote")
+              require(plan.get("proposalSha256") == "18ce04afb9117693ab82818d7c7f64a0600616593b9edfe34192559da13e935f", "wrong reviewed proposal")
+              require(plan.get("independentReceiptSha256") == "a4b81e28ccfbff7483a6373cbb15f0c86c8ec90dfdce3f6f4263831e483e6ea8", "wrong reviewed content receipt")
+              return scope
+          def decode_chunks(chunks, plan):
+              verify_scope(plan)
+              expected = plan["chunks"]
+              require(len(expected) == len({r["path"] for r in expected}), "duplicate chunk manifest path")
+              require([r["path"] for r in expected] == [plan["chunkPrefix"] + "/part-" + str(i).zfill(3) + ".b64" for i in range(1, len(expected) + 1)], "noncanonical chunk sequence")
+              require(set(chunks) == {r["path"] for r in expected}, "chunk path set mismatch")
+              encoded = bytearray()
+              for record in expected:
+                  chunk = chunks[record["path"]]
+                  require(len(chunk) <= 230001, "oversized chunk")
+                  verify_bytes(chunk, record)
+                  require(chunk.endswith(b"\n") and b"\n" not in chunk[:-1], "noncanonical chunk newline")
+                  encoded.extend(chunk[:-1])
+              try:
+                  payload = base64.b64decode(encoded, validate=True)
+              except (binascii.Error, ValueError) as exc:
+                  raise Rejected("invalid base64") from exc
+              require(base64.b64encode(payload) == encoded, "noncanonical base64")
+              return payload
+          def verify_archive(payload, plan):
+              scope = verify_scope(plan)
+              require(len(payload) == plan["archiveBytes"], "archive size mismatch")
+              require(sha256(payload) == plan["archiveSha256"], "archive SHA-256 mismatch")
+              expected = {canonical_path(r["path"]): r for r in plan["files"]}
+              require(len(expected) == len(plan["files"]) == scope["count"], "wrong unique helper file count")
+              require(all(r.get("operation") == "add" and r.get("mode") == "100644" and
+                          "expectedBaseBlobSha" not in r and isinstance(r.get("binary"), bool)
+                          for r in plan["files"]), "helper accepts only reviewed regular-file additions")
+              prefix = "docs/design-mockups/screens/friends-listening-home/"
+              versions = ("v011/",) if scope["private"] else ("v010/", "v011/")
+              require(all(any(path.startswith(prefix + version) for version in versions) for path in expected),
+                      "path is outside reviewed version scope")
+              require(sum(r["binary"] for r in plan["files"]) == scope["binary"], "wrong frozen binary count")
+              if scope["private"]:
+                  require(sum(r["binary"] and r["path"].endswith(".png") for r in plan["files"]) == 24 and
+                          sum(r["binary"] and r["path"].endswith(".jpg") for r in plan["files"]) == 1,
+                          "wrong PNG/JPEG scope")
+                  require({r["path"] for r in plan["files"] if not r["binary"]} ==
+                          {prefix + "v011/qa/icon-source-preview.svg"}, "wrong private UTF-8 asset scope")
+              files = {}
+              try:
+                  with tarfile.open(fileobj=io.BytesIO(payload), mode="r:") as archive:
+                      for member in archive:
+                          path = canonical_path(member.name)
+                          require(path in expected and path not in files, "extra or duplicate archive path")
+                          require(member.type == tarfile.REGTYPE and not member.pax_headers, "nonregular archive member")
+                          require(member.mode == 0o644 and member.uid == member.gid == member.mtime == 0,
+                                  "unexpected archive metadata")
+                          require(not member.uname and not member.gname and not member.linkname, "unexpected archive name/link")
+                          require(member.size == expected[path]["bytes"], "archive member size mismatch")
+                          data = archive.extractfile(member).read()
+                          verify_bytes(data, expected[path])
+                          if expected[path]["binary"]:
+                              if path.endswith(".png"):
+                                  require(data.startswith(b"\x89PNG\r\n\x1a\n"), "PNG is not binary PNG")
+                              else:
+                                  require(path.endswith(".jpg") and data.startswith(b"\xff\xd8\xff") and data.endswith(b"\xff\xd9"), "JPEG signature mismatch")
+                          else:
+                              try:
+                                  text = data.decode("utf-8", errors="strict")
+                              except UnicodeError as exc:
+                                  raise Rejected("nonbinary payload is not UTF-8") from exc
+                              require(text.encode("utf-8") == data, "UTF-8 round trip changed bytes")
+                              if path.endswith(".svg"):
+                                  require(b"<!DOCTYPE" not in data.upper() and b"<!ENTITY" not in data.upper(), "SVG declarations are forbidden")
+                                  try:
+                                      root = ET.fromstring(data)
+                                  except ET.ParseError as exc:
+                                      raise Rejected("invalid SVG XML") from exc
+                                  require(root.tag == "{http://www.w3.org/2000/svg}svg", "not an SVG document")
+                          files[path] = data
+              except (tarfile.TarError, OSError) as exc:
+                  raise Rejected("invalid tar archive") from exc
+              require(set(files) == set(expected), "missing archive paths")
+              require(deterministic_tar(files) == payload, "noncanonical archive or trailing data")
+              return files
+          def git_env(token=None):
+              # Do not inherit configuration that could redirect a remote, a hook or object store.
+              env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
+              env.update(GIT_CONFIG_NOSYSTEM="1", GIT_CONFIG_GLOBAL="/dev/null", GIT_TERMINAL_PROMPT="0")
+              if token:
+                  auth = base64.b64encode(("x-access-token:" + token).encode()).decode()
+                  env.update(GIT_CONFIG_COUNT="1", GIT_CONFIG_KEY_0="http.https://github.com/.extraheader",
+                             GIT_CONFIG_VALUE_0="AUTHORIZATION: basic " + auth)
+              return env
+          def git(repo, *args, data=None, token=None, hooks=None):
+              command = ["git", "-c", "core.hooksPath=" + (str(hooks) if hooks else "/dev/null"),
+                         "-c", "core.autocrlf=false", "-c", "commit.gpgsign=false", "-C", str(repo), *args]
+              result = subprocess.run(command, input=data, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                      env=git_env(token), check=False)
+              require(result.returncode == 0, "git operation failed: " + args[0] + "; inspect, do not retry automatically")
+              return result.stdout
+          def git_tree(repo, revision):
+              result = {}
+              for line in git(repo, "ls-tree", "-rz", revision).split(b"\0"):
+                  if not line:
+                      continue
+                  metadata, path = line.split(b"\t", 1)
+                  mode, kind, oid = metadata.decode().split()
+                  result[path.decode("utf-8")] = (mode, kind, oid)
+              return result
+          def diff_records(repo, old, new=None, cached=False):
+              args = ["diff", "--raw", "--no-abbrev", "--no-renames", "-z"]
+              if cached:
+                  args.append("--cached")
+              args.append(old)
+              if new:
+                  args.append(new)
+              pieces = git(repo, *args).split(b"\0")
+              require(pieces.pop() == b"", "invalid diff framing")
+              require(len(pieces) % 2 == 0, "invalid diff shape")
+              result = {}
+              for metadata, path in zip(pieces[::2], pieces[1::2]):
+                  oldmode, newmode, oldoid, newoid, operation = metadata.decode().split()
+                  name = path.decode("utf-8")
+                  require(name not in result, "duplicate diff path")
+                  result[name] = (oldmode.lstrip(":"), newmode, oldoid, newoid, operation)
+              return result
+          def expected_changes(records):
+              return {r["path"]: ("100644" if r.get("expectedBaseBlobSha") else "000000", "100644",
+                                  r.get("expectedBaseBlobSha", "0" * 40), r["gitBlobSha"],
+                                  "M" if r.get("expectedBaseBlobSha") else "A") for r in records}
+          def verify_target_base(repo, plan):
+              head = plan["targetHead"]
+              require(git(repo, "rev-parse", head + "^{tree}").decode().strip() == plan["baseTree"], "base tree changed")
+              tree = git_tree(repo, head)
+              for record in plan["files"]:
+                  path = record["path"]
+                  canonical_path(path)
+                  for parent in PurePosixPath(path).parents:
+                      require(str(parent) not in tree, "target path has a non-directory ancestor")
+                  if "expectedBaseBlobSha" in record:
+                      require(tree.get(path) == ("100644", "blob", record["expectedBaseBlobSha"]), "original target blob changed")
+                      old = git(repo, "cat-file", "blob", head + ":" + path)
+                      require(len(old) == record["baseBytes"] and sha256(old) == record["baseSha256"], "original target bytes changed")
+                  else:
+                      require(path not in tree and not any(p.startswith(path + "/") for p in tree), "new target path already exists")
+          def verify_event(plan, environment, event):
+              scope = verify_scope(plan)
+              require(environment.get("GITHUB_EVENT_NAME") == "push", "not a push event")
+              require(environment.get("GITHUB_REPOSITORY") == plan["repository"], "wrong repository")
+              require(environment.get("GITHUB_REF") == "refs/heads/" + plan["helperBranch"], "wrong helper ref")
+              require(environment.get("GITHUB_RUN_ATTEMPT") == "1", "reruns require investigation; automatic replay is disabled")
+              require(re.fullmatch(r"[1-9][0-9]*", environment.get("GITHUB_RUN_ID", "")) is not None, "invalid run id")
+              parent = environment.get("HELPER_PARENT", "")
+              require(re.fullmatch(r"[0-9a-f]{40}", parent) is not None, "helper parent is not bound")
+              require(re.fullmatch(r"[0-9a-f]{40}", environment.get("GITHUB_SHA", "")) is not None, "invalid trigger SHA")
+              require(event.get("ref") == environment["GITHUB_REF"], "event ref mismatch")
+              require(event.get("before") == parent and event.get("after") == environment["GITHUB_SHA"], "event ancestry mismatch")
+              require(all(event.get(key) is False for key in ("forced", "deleted", "created")), "forced/create/delete push rejected")
+              require(event.get("repository", {}).get("full_name") == plan["repository"] and
+                      event["repository"].get("private") is scope["private"], "event repository/private guard failed")
+              return parent
+          def remote_oid(repo, plan, token):
+              ref = "refs/heads/" + plan["targetBranch"]
+              lines = git(repo, "ls-remote", "--exit-code", plan["remote"], ref, token=token).decode().splitlines()
+              require(len(lines) == 1, "target ref is missing or ambiguous")
+              parts = lines[0].split("\t")
+              require(len(parts) == 2 and parts[1] == ref and re.fullmatch(r"[0-9a-f]{40}", parts[0]), "invalid remote ref")
+              return parts[0]
+          def require_remote_base(repo, plan, token):
+              require(remote_oid(repo, plan, token) == plan["targetHead"], "target branch moved; stop and inspect")
+          def proof_for(plan, environment):
+              return {"schemaVersion": 1, "repository": plan["repository"], "targetBranch": plan["targetBranch"],
+                      "targetHead": plan["targetHead"], "baseTree": plan["baseTree"], "finalTree": plan["finalTree"],
+                      "helperBase": plan["helperBase"], "helperBaseTree": plan["helperBaseTree"],
+                      "helperRef": environment["GITHUB_REF"], "helperParent": environment["HELPER_PARENT"],
+                      "triggerSha": environment["GITHUB_SHA"], "runId": environment["GITHUB_RUN_ID"],
+                      "runAttempt": environment["GITHUB_RUN_ATTEMPT"], "planSha256": sha256(canonical_json(plan)),
+                      "proposalSha256": plan["proposalSha256"], "independentReceiptSha256": plan["independentReceiptSha256"],
+                      "archiveSha256": plan["archiveSha256"], "files": plan["files"]}
+          def validate_transport(repo, plan, environment, event, token):
+              parent = verify_event(plan, environment, event)
+              trigger = environment["GITHUB_SHA"]
+              require(git(repo, "rev-parse", "HEAD").decode().strip() == trigger, "checkout is not triggering commit")
+              require(git(repo, "rev-list", "--parents", "-n", "1", trigger).decode().split() == [trigger, parent], "trigger must have one exact parent")
+              workflow = plan["workflowPath"]
+              changes = diff_records(repo, parent, trigger)
+              require(set(changes) == {workflow}, "trigger changes more than the workflow")
+              require(changes[workflow][0:3] == ("000000", "100644", "0" * 40) and changes[workflow][4] == "A", "workflow must be a sole regular-file addition")
+              require(git(repo, "rev-parse", plan["helperBase"] + "^{tree}").decode().strip() == plan["helperBaseTree"],
+                      "retained helper base tree changed")
+              git(repo, "merge-base", "--is-ancestor", plan["helperBase"], parent)
+              require(diff_records(repo, plan["helperBase"], parent) == expected_changes(plan["chunks"]), "helper delta is not the exact chunk manifest")
+              verify_target_base(repo, plan)
+              require_remote_base(repo, plan, token)
+              chunks = {r["path"]: git(repo, "cat-file", "blob", parent + ":" + r["path"]) for r in plan["chunks"]}
+              payload = decode_chunks(chunks, plan)
+              verify_archive(payload, plan)
+              # No output files have been created before every input and target guard passes.
+              return payload, canonical_json(proof_for(plan, environment))
+          def write_validation_output(payload, proof, output):
+              require(not output.exists(), "validation output already exists")
+              output.mkdir()
+              (output / "payload.tar").write_bytes(payload)
+              (output / "proof.json").write_bytes(proof)
+          PLAN = json.loads('{"archiveBytes":1720320,"archiveSha256":"c5019a9e9f3896560c12d457a39e7a002cd31fd811087082cf4b814ed6c3729e","baseTree":"1d75997e1bb0b370282faf3c134e8397ffb363ab","baseTreeReceiptSha256":"8888988448b01d9c03b234aa4c6da798160aa41fec23053d271e2ad8eb8626df","chunkPrefix":".friends-artifact-transfer/v010-v011-public","chunks":[{"bytes":230001,"gitBlobSha":"5959f48234a42eab43739c06b34be26427e9798f","path":".friends-artifact-transfer/v010-v011-public/part-001.b64","sha256":"4b89047f7fe81de349e16e4b3fb597184c9a1194de3380de68fb2b529ba429f8"},{"bytes":230001,"gitBlobSha":"a6224c721a1c9efa216715c1e367e8f8af6089ca","path":".friends-artifact-transfer/v010-v011-public/part-002.b64","sha256":"b01d351a2512fd06392409865fd61d4fcbcf86d06de5eab165c2a25cfad8f74a"},{"bytes":230001,"gitBlobSha":"c32c3863cdb98a0bae8e7bf2a331b5af3cfecb89","path":".friends-artifact-transfer/v010-v011-public/part-003.b64","sha256":"b13dde527734fce0eb031b5d83adfe847b1349339605dd9032830c0cb32a8149"},{"bytes":230001,"gitBlobSha":"524f224001d09b3044424d50a1f9aad3d60cae80","path":".friends-artifact-transfer/v010-v011-public/part-004.b64","sha256":"c6fdcfa93177e6c56148f0c5d96bfe6b5131582af2e4692f04f8a47206b4fb5c"},{"bytes":230001,"gitBlobSha":"269ec783eab5a695066d8d8f823caf60bd9f8f5a","path":".friends-artifact-transfer/v010-v011-public/part-005.b64","sha256":"9ef120a7893d9d6b35fac64943f0c9f5b6b7377b901f0745eaff6919479b8551"},{"bytes":230001,"gitBlobSha":"9743393baa52f3be98a768bce06284c92403445f","path":".friends-artifact-transfer/v010-v011-public/part-006.b64","sha256":"b1025ba59eaca37d1191adb3e5cb108459756f9fe1940d8fbab56f8b22a5a2a0"},{"bytes":230001,"gitBlobSha":"c6e037d03c827a847abd691b1047caa32c3bc709","path":".friends-artifact-transfer/v010-v011-public/part-007.b64","sha256":"ad23866920aae9d7746e048b07d10287d12a563f44a1778c2d775c06d5695eef"},{"bytes":230001,"gitBlobSha":"b9f25159b3b89ad57102ee0e3f4bb28ad6c6afcd","path":".friends-artifact-transfer/v010-v011-public/part-008.b64","sha256":"50993373c5b821d8162a3c2fc9df61f6768a6ec626a30319e38e927c21332725"},{"bytes":230001,"gitBlobSha":"2d9d7990bbc3821e4fdfd66aa0a14e7ecee88e24","path":".friends-artifact-transfer/v010-v011-public/part-009.b64","sha256":"172002b677873559b3ca484c79f949b2e7f585121af60cbc377d533043e29c0b"},{"bytes":223761,"gitBlobSha":"167edd48fe7cea9fbf65e2e8a08888891a0bea31","path":".friends-artifact-transfer/v010-v011-public/part-010.b64","sha256":"c4b68bceaa46132d6254365503fc1cd85e265db508630340296b4e0a9a6e4c4e"}],"files":[{"binary":false,"bytes":2289,"gitBlobSha":"70cdfd60ca3c2a9c91fe0836dc48ebaecc452c1b","mode":"100644","operation":"add","path":"docs/design-mockups/screens/friends-listening-home/v010/README.md","sha256":"12b17ef846d8d5928b1938a4947fd29026db993d7f9ebcd7ebc7acb6e1e036f6","transport":"native_exact_blob_helper"},{"binary":false,"bytes":6463,"gitBlobSha":"2e93fbe2a8941f332169d26a766b56ef29f9ee04","mode":"100644","operation":"add","path":"docs/design-mockups/screens/friends-listening-home/v010/provenance.json","sha256":"88ad7321fff3ab6f930e96ac8fbb0614fd24b1debe3bfe04d776d54adead547e","transport":"native_exact_blob_helper"},{"binary":false,"bytes":30725,"gitBlobSha":"c797390fa40bacd92601182248f361ddb62216bb","mode":"100644","operation":"add","path":"docs/design-mockups/screens/friends-listening-home/v010/source/artist-view.mjs","sha256":"67bd1f8a9525d0c29542e73e2ca6407b6d0dc6bf34002ac590e17bd08de57cf6","transport":"native_exact_blob_helper"},{"binary":false,"bytes":18036,"gitBlobSha":"c721ed9048c0fe6557dc98f73b50179d8f539961","mode":"100644","operation":"add","path":"docs/design-mockups/screens/friends-listening-home/v010/source/comparison-panel.css","sha256":"328543cbf97068c477d903c7db5ab762bc4f72e54d89ee982269f96b75567da3","transport":"native_exact_blob_helper"},{"binary":false,"bytes":10827,"gitBlobSha":"16fce32b4dc17deae38aec7b61a483747f186962","mode":"100644","operation":"add","path":"docs/design-mockups/screens/friends-listening-home/v010/source/comparison-panel.jsx","sha256":"9680af84f4bb9d8de56d7eb31745b43ab643cb4bdfab1f5a6b11fc6e4c39f210","transport":"native_exact_blob_helper"},{"binary":false,"bytes":17792,"gitBlobSha":"906fd3a11b71d0dee9b6d103c09203e83c330b54","mode":"100644","operation":"add","path":"docs/design-mockups/screens/friends-listening-home/v010/source/comparison-view.mjs","sha256":"4764d797a652c780732781e63cc7ec7bc1569469a896a4648c72a6a42c8c1ffb","transport":"native_exact_blob_helper"},{"binary":false,"bytes":26701,"gitBlobSha":"ad1e43d261fe6520a786cfd59f2e2841d8d4ad85","mode":"100644","operation":"add","path":"docs/design-mockups/screens/friends-listening-home/v010/source/fixture-data.mjs","sha256":"267fa84be15c9d4405006e0f7fa60dfa6e6cfb0a959a5b121af37e50eb7a8c3d","transport":"native_exact_blob_helper"},{"binary":false,"bytes":84823,"gitBlobSha":"3fba301371defce68a25795ea1cddc88315a22a5","mode":"100644","operation":"add","path":"docs/design-mockups/screens/friends-listening-home/v010/source/friends-app.jsx","sha256":"1fd9a69558d29a2c02cc580c9ef467931ffd25e26014a79f64f635efe9a89418","transport":"native_exact_blob_helper"},{"binary":false,"bytes":9037,"gitBlobSha":"83b054de8cb3bb5d03598be8b1f4a2763a10fb39","mode":"100644","operation":"add","path":"docs/design-mockups/screens/friends-listening-home/v010/source/icon-source-preview.svg","sha256":"e324d1b58c58d3a97706a4b83a52f0c5cd81c5520988425f23497cf7f5f2a9e2","transport":"native_exact_blob_helper"},{"binary":false,"bytes":2783,"gitBlobSha":"7d1c6032f273222eed61f0417432ce6b56c07c5b","mode":"100644","operation":"add","path":"docs/design-mockups/screens/friends-listening-home/v010/source/listening-model.mjs","sha256":"ef7bd954d5bba85fa97ceb18d0f56b464f1519f0890355e7d69486ff63b2c9ae","transport":"native_exact_blob_helper"},{"binary":false,"bytes":12209,"gitBlobSha":"60ba3af5fbbb3bf8b891c36a36fbd1516a2242c5","mode":"100644","operation":"add","path":"docs/design-mockups/screens/friends-listening-home/v010/source/mock-adapter.mjs","sha256":"6e7353b4bc1a168530b62ba9a0e55aa1212736af67ff528b127953055c199a90","transport":"native_exact_blob_helper"},{"binary":false,"bytes":73038,"gitBlobSha":"7770302236ad9fe4b1def5dc21e98208373760a8","mode":"100644","operation":"add","path":"docs/design-mockups/screens/friends-listening-home/v010/source/mock-layout.css","sha256":"4664bb8a5546e7767e4fbab984398629899b7b96754ad2075c5395520d019421","transport":"native_exact_blob_helper"},{"binary":false,"bytes":94633,"gitBlobSha":"675c5b66201a4bca7587beaf283fc73795cbffc1","mode":"100644","operation":"add","path":"docs/design-mockups/screens/friends-listening-home/v010/source/native-layout.js","sha256":"0edbe64df262059f0a839430e29784e514b8b471ae95599ea8949323945b4325","transport":"native_exact_blob_helper"},{"binary":false,"bytes":14429,"gitBlobSha":"f1b7d687f903ba9f01f597da5e751591d6ad7690","mode":"100644","operation":"add","path":"docs/design-mockups/screens/friends-listening-home/v010/source/playlist-model.mjs","sha256":"eea0d38194c6a5920ce45eb0f6c3143afa23f0d328459a40e798eee9888b893d","transport":"native_exact_blob_helper"},{"binary":false,"bytes":6061,"gitBlobSha":"1d3c717b1ebbec384de2eb2e54c91d39dd0f1a72","mode":"100644","operation":"add","path":"docs/design-mockups/screens/friends-listening-home/v010/source/playlist-panel.css","sha256":"881d47689ac77542182fe3b08c8090d4ea430d25273821700bf5ff4eb6039bae","transport":"native_exact_blob_helper"},{"binary":false,"bytes":33615,"gitBlobSha":"94a3811cd4f62f3de2ec052134e71f52a2a2ba85","mode":"100644","operation":"add","path":"docs/design-mockups/screens/friends-listening-home/v010/source/playlist-panel.jsx","sha256":"c7ffda3d34dc253700c6760719586fc15dc72a72100a6bdc4792c15d2ec77a98","transport":"native_exact_blob_helper"},{"binary":false,"bytes":10418,"gitBlobSha":"9c2f7b1d551d5e0b8838fe5935ffb7d5a5e07a7b","mode":"100644","operation":"add","path":"docs/design-mockups/screens/friends-listening-home/v010/source/recent-history.mjs","sha256":"1f4553f00140fc4649750d9401ee371ddbb3a5a99e44084c776f11e00b9fafd0","transport":"native_exact_blob_helper"},{"binary":false,"bytes":4960,"gitBlobSha":"c913e581646babc8e7a64b985a1ed2ceed24d763","mode":"100644","operation":"add","path":"docs/design-mockups/screens/friends-listening-home/v010/source/review-proposals.jsx","sha256":"d2a17375b34f0775c01b20f1f4c01a2e7ac59ca46e87ca0323a780601b056866","transport":"native_exact_blob_helper"},{"binary":false,"bytes":10230,"gitBlobSha":"e416e82e54e0365126a079f23293e662e98465e2","mode":"100644","operation":"add","path":"docs/design-mockups/screens/friends-listening-home/v010/source/sidebar-inactivity.mjs","sha256":"ff94e9384dd3ae48b30c654dc9be28528cd808602e8367258cccbcf4e73a0ecd","transport":"native_exact_blob_helper"},{"binary":false,"bytes":8141,"gitBlobSha":"5fe1132fac8e667013e9c7bd70716fcf1b073303","mode":"100644","operation":"add","path":"docs/design-mockups/screens/friends-listening-home/v010/source/track-social.mjs","sha256":"b09a13ed779c94b30ed183d0258622b3bf5dbce769962c3b6aea7a3d86278dfc","transport":"native_exact_blob_helper"},{"binary":false,"bytes":34794,"gitBlobSha":"147d49eecf2897067ab184558d302e933b57aee9","mode":"100644","operation":"add","path":"docs/design-mockups/screens/friends-listening-home/v010/source/upstream-manifest.json","sha256":"ea1bccfe5f92e126d440231eb3fbdbc1fb3e1d3dba37cf657aad3afcaea1f135","transport":"native_exact_blob_helper"},{"binary":false,"bytes":2311,"gitBlobSha":"df1252b2f7dad6fdf5ecdb5c1b34f5cfee745429","mode":"100644","operation":"add","path":"docs/design-mockups/screens/friends-listening-home/v011/README.md","sha256":"2a306ea72730836192a7694203394aa486c81e265ff50717018a1b5b1613f225","transport":"native_exact_blob_helper"},{"binary":false,"bytes":7774,"gitBlobSha":"081a2f32d763601062e7c6f70aba03dd3ccec7f1","mode":"100644","operation":"add","path":"docs/design-mockups/screens/friends-listening-home/v011/provenance.json","sha256":"ce042d6455f46ea1f452c4217e5001a1c612ccb68a4b9515ff5644879450e673","transport":"native_exact_blob_helper"},{"binary":false,"bytes":12849,"gitBlobSha":"a31f61720bbcfd0dab08bf3c638a3a93374d216e","mode":"100644","operation":"add","path":"docs/design-mockups/screens/friends-listening-home/v011/source/README.md","sha256":"3922224bcded0a3e3796fa9e57e10044e31dd430df4abb2ad5da4dfadcd9b9b7","transport":"native_exact_blob_helper"},{"binary":false,"bytes":32276,"gitBlobSha":"81c95df9bb82fe5ed7d909b508cd7e6cd7d24f8d","mode":"100644","operation":"add","path":"docs/design-mockups/screens/friends-listening-home/v011/source/artist-view.mjs","sha256":"d3c67f626c5dfca791b6549556608c2d25aaf6b78d84079ff16082e3315f7f83","transport":"native_exact_blob_helper"},{"binary":false,"bytes":21563,"gitBlobSha":"73d6f984978705503b045ffa49d6c89c57347e6c","mode":"100644","operation":"add","path":"docs/design-mockups/screens/friends-listening-home/v011/source/comparison-panel.css","sha256":"a08d41b73ededcc6973784b25c95539e2aa7ce8f43d477e3c2998f9bfbba10e7","transport":"native_exact_blob_helper"},{"binary":false,"bytes":11832,"gitBlobSha":"2b6e486563cf55f91433a7d1ac35f5865c834dc6","mode":"100644","operation":"add","path":"docs/design-mockups/screens/friends-listening-home/v011/source/comparison-panel.jsx","sha256":"ce858971cc9bf280b9a9da879411506bc0b75c0712951be2f3fba9af2a22a23c","transport":"native_exact_blob_helper"},{"binary":false,"bytes":23719,"gitBlobSha":"8f4bdac420a28f6633f346791fe2e5ae4ffe0066","mode":"100644","operation":"add","path":"docs/design-mockups/screens/friends-listening-home/v011/source/comparison-view.mjs","sha256":"668f2819ac949773eff4e58039b6c172be310cfb39086ed4dec657bb2d553ba2","transport":"native_exact_blob_helper"},{"binary":false,"bytes":26701,"gitBlobSha":"ad1e43d261fe6520a786cfd59f2e2841d8d4ad85","mode":"100644","operation":"add","path":"docs/design-mockups/screens/friends-listening-home/v011/source/fixture-data.mjs","sha256":"267fa84be15c9d4405006e0f7fa60dfa6e6cfb0a959a5b121af37e50eb7a8c3d","transport":"native_exact_blob_helper"},{"binary":false,"bytes":96964,"gitBlobSha":"944e9e351dd08d36a24f1951efe457d8a2ec7aa5","mode":"100644","operation":"add","path":"docs/design-mockups/screens/friends-listening-home/v011/source/friends-app.jsx","sha256":"bcf9804740dd113f7925bf6738230c597b501688488129c725bcbae4853df73f","transport":"native_exact_blob_helper"},{"binary":false,"bytes":517497,"gitBlobSha":"a9c5f9265d2d5bc3257c2475d2a7f27ccac7b5ee","mode":"100644","operation":"add","path":"docs/design-mockups/screens/friends-listening-home/v011/source/icon-source-preview.svg","sha256":"db1d97e7ec58a0bd84778bb6c8955c679673c8c05669721210cd4beabb67aff2","transport":"native_exact_blob_helper"},{"binary":false,"bytes":2783,"gitBlobSha":"7d1c6032f273222eed61f0417432ce6b56c07c5b","mode":"100644","operation":"add","path":"docs/design-mockups/screens/friends-listening-home/v011/source/listening-model.mjs","sha256":"ef7bd954d5bba85fa97ceb18d0f56b464f1519f0890355e7d69486ff63b2c9ae","transport":"native_exact_blob_helper"},{"binary":false,"bytes":12209,"gitBlobSha":"60ba3af5fbbb3bf8b891c36a36fbd1516a2242c5","mode":"100644","operation":"add","path":"docs/design-mockups/screens/friends-listening-home/v011/source/mock-adapter.mjs","sha256":"6e7353b4bc1a168530b62ba9a0e55aa1212736af67ff528b127953055c199a90","transport":"native_exact_blob_helper"},{"binary":false,"bytes":78155,"gitBlobSha":"be85d87d74a074d406fb7243cbd3201828c37102","mode":"100644","operation":"add","path":"docs/design-mockups/screens/friends-listening-home/v011/source/mock-layout.css","sha256":"493719ce2a754e306f9efc93b01e1f272c390b9d56e22f7e9d7ee2be3c1406f3","transport":"native_exact_blob_helper"},{"binary":false,"bytes":104009,"gitBlobSha":"65e89a44df15e364ce779f4ac9ff5a3af64cd53e","mode":"100644","operation":"add","path":"docs/design-mockups/screens/friends-listening-home/v011/source/native-layout.js","sha256":"21601b900264b9d2dae90e630cfe8992eaba01056e41904fba125d4239385c13","transport":"native_exact_blob_helper"},{"binary":false,"bytes":18156,"gitBlobSha":"15441fcefa3b4ad774d96b41bb597162b932d813","mode":"100644","operation":"add","path":"docs/design-mockups/screens/friends-listening-home/v011/source/notification-icon.mjs","sha256":"756b56a3a90fed29e07fb605e6c1ea290ece8b1a225bd483530b91951c361ac7","transport":"native_exact_blob_helper"},{"binary":false,"bytes":14429,"gitBlobSha":"f1b7d687f903ba9f01f597da5e751591d6ad7690","mode":"100644","operation":"add","path":"docs/design-mockups/screens/friends-listening-home/v011/source/playlist-model.mjs","sha256":"eea0d38194c6a5920ce45eb0f6c3143afa23f0d328459a40e798eee9888b893d","transport":"native_exact_blob_helper"},{"binary":false,"bytes":6450,"gitBlobSha":"b623f65170956a078658a7b54ea908276437500e","mode":"100644","operation":"add","path":"docs/design-mockups/screens/friends-listening-home/v011/source/playlist-panel.css","sha256":"ca2e1d7125996229a04c145f5e38252ddab9b38bccb3f487438d817b3326e93c","transport":"native_exact_blob_helper"},{"binary":false,"bytes":33615,"gitBlobSha":"94a3811cd4f62f3de2ec052134e71f52a2a2ba85","mode":"100644","operation":"add","path":"docs/design-mockups/screens/friends-listening-home/v011/source/playlist-panel.jsx","sha256":"c7ffda3d34dc253700c6760719586fc15dc72a72100a6bdc4792c15d2ec77a98","transport":"native_exact_blob_helper"},{"binary":false,"bytes":10418,"gitBlobSha":"9c2f7b1d551d5e0b8838fe5935ffb7d5a5e07a7b","mode":"100644","operation":"add","path":"docs/design-mockups/screens/friends-listening-home/v011/source/recent-history.mjs","sha256":"1f4553f00140fc4649750d9401ee371ddbb3a5a99e44084c776f11e00b9fafd0","transport":"native_exact_blob_helper"},{"binary":false,"bytes":4762,"gitBlobSha":"49af28e7e0d3e4a1596629458f41b281f9c23431","mode":"100644","operation":"add","path":"docs/design-mockups/screens/friends-listening-home/v011/source/recent-view-icons.mjs","sha256":"68d28820ed3bb2bd808ef6e886a1a7779f854a7316fd484f9edf29997d436b35","transport":"native_exact_blob_helper"},{"binary":false,"bytes":5669,"gitBlobSha":"5e1a612dbd7de29349548dd66b631b63fef2ba5d","mode":"100644","operation":"add","path":"docs/design-mockups/screens/friends-listening-home/v011/source/review-proposals.jsx","sha256":"0d240f62a3d980e89b97ee22e45bd9fe8e0753281d598a71f9a956a1b2469f1d","transport":"native_exact_blob_helper"},{"binary":false,"bytes":10230,"gitBlobSha":"e416e82e54e0365126a079f23293e662e98465e2","mode":"100644","operation":"add","path":"docs/design-mockups/screens/friends-listening-home/v011/source/sidebar-inactivity.mjs","sha256":"ff94e9384dd3ae48b30c654dc9be28528cd808602e8367258cccbcf4e73a0ecd","transport":"native_exact_blob_helper"},{"binary":false,"bytes":62999,"gitBlobSha":"a64bb09eb666a9b9990a8351168fa6f07eb7d166","mode":"100644","operation":"add","path":"docs/design-mockups/screens/friends-listening-home/v011/source/statistics-icon.mjs","sha256":"01faed29acba2384e6e1d6100acd2fa36b38a43b3c4a249c3cc5b9a459bf856f","transport":"native_exact_blob_helper"},{"binary":false,"bytes":8141,"gitBlobSha":"5fe1132fac8e667013e9c7bd70716fcf1b073303","mode":"100644","operation":"add","path":"docs/design-mockups/screens/friends-listening-home/v011/source/track-social.mjs","sha256":"b09a13ed779c94b30ed183d0258622b3bf5dbce769962c3b6aea7a3d86278dfc","transport":"native_exact_blob_helper"},{"binary":false,"bytes":34794,"gitBlobSha":"147d49eecf2897067ab184558d302e933b57aee9","mode":"100644","operation":"add","path":"docs/design-mockups/screens/friends-listening-home/v011/source/upstream-manifest.json","sha256":"ea1bccfe5f92e126d440231eb3fbdbc1fb3e1d3dba37cf657aad3afcaea1f135","transport":"native_exact_blob_helper"},{"binary":false,"bytes":5755,"gitBlobSha":"6250e298185e9036320c3984759107220a738808","mode":"100644","operation":"add","path":"docs/design-mockups/screens/friends-listening-home/v011/source/widget-motion.mjs","sha256":"3a1a07a4e7b6be2b70756b35050b1c11f7be8661100ccf00ae4506a02c93d48b","transport":"native_exact_blob_helper"}],"finalTree":"a73e6ef9d3670b93e4d8fce1383331a1480eeb53","helperBase":"103c9b90bee8cf5dcdbc6d5573daf9602c276791","helperBaseReceiptSha256":"cb3a95505813d5bfc4376d9a41ca48e038379ee1b8ac79fe9a823efb5e010a38","helperBaseTree":"e3e2bccd178e4f5f19ef12136f09fcac6cfc084d","helperBranch":"2026-09-30-mobile-bundle-transfer","independentReceiptSha256":"a4b81e28ccfbff7483a6373cbb15f0c86c8ec90dfdce3f6f4263831e483e6ea8","proposalSha256":"18ce04afb9117693ab82818d7c7f64a0600616593b9edfe34192559da13e935f","remote":"https://github.com/idanilovqa/AlbumHaven.git","repository":"idanilovqa/AlbumHaven","repositoryPrivate":false,"schemaVersion":2,"scopeLabel":"public","targetBranch":"2026-09-30-friends-listening-home","targetHead":"9af747a7d15f779d293d31aad711079f5d234083","workflowPath":".github/workflows/verified-friends-v010-v011-public-archive.yml"}\n')
+
+          environment = os.environ
+          event = json.loads(Path(environment["GITHUB_EVENT_PATH"]).read_text())
+          verify_event(PLAN, environment, event)
+          token = environment.get("GH_TOKEN")
+          require(bool(token), "transient repository token missing")
+          repo = Path(environment["GITHUB_WORKSPACE"]) / "target"
+          temporary = Path(environment["RUNNER_TEMP"])
+
+          # The retained helper and target are divergent histories. Fetch the exact target
+          # read-only; do not assume checkout's helper ancestry contains its objects.
+          git(repo, "fetch", "--no-tags", "--no-recurse-submodules", PLAN["remote"], PLAN["targetHead"], token=token)
+          payload, proof = validate_transport(repo, PLAN, environment, event, token)
+          write_validation_output(payload, proof, temporary / "friends-validated")
+          with open(environment["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
+              output.write("proof_sha256=" + sha256(proof) + "\n")
+          print("Verified " + str(len(PLAN["files"])) + " frozen files and all target/ancestry guards; artifact prepared.")
+
+      - uses: actions/upload-artifact@v4
+        id: upload
+        with:
+          name: friends-v010-v011-public-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/friends-validated/
+          if-no-files-found: error
+          retention-days: 7
+          compression-level: 0
+          overwrite: false
+  publish:
+    needs: validate
+    if: needs.validate.result == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: 9af747a7d15f779d293d31aad711079f5d234083
+          path: target
+          fetch-depth: 1
+          persist-credentials: false
+          submodules: false
+          lfs: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - uses: actions/download-artifact@v4
+        with:
+          artifact-ids: ${{ needs.validate.outputs.artifact_id }}
+          path: ${{ runner.temp }}/friends-downloaded
+          merge-multiple: true
+      - name: Verify artifact and publish one exact archival commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ARTIFACT_ID: ${{ needs.validate.outputs.artifact_id }}
+          PROOF_SHA256: ${{ needs.validate.outputs.proof_sha256 }}
+        shell: python
+        run: |
+          import base64
+          import binascii
+          import hashlib
+          import io
+          import json
+          import os
+          from pathlib import Path, PurePosixPath
+          import re
+          import stat
+          import subprocess
+          import sys
+          import tarfile
+          import xml.etree.ElementTree as ET
+          SCOPES = {'idanilovqa/AlbumHaven': {'private': False, 'count': 47, 'binary': 0, 'helper': '2026-09-30-mobile-bundle-transfer', 'label': 'public', 'finalTree': 'a73e6ef9d3670b93e4d8fce1383331a1480eeb53'}}
+          class Rejected(RuntimeError):
+              pass
+          def require(condition, message):
+              if not condition:
+                  raise Rejected(message)
+          def sha256(data):
+              return hashlib.sha256(data).hexdigest()
+          def git_blob(data):
+              return hashlib.sha1(b"blob " + str(len(data)).encode() + b"\0" + data).hexdigest()
+          def canonical_json(value):
+              return (json.dumps(value, sort_keys=True, separators=(",", ":")) + "\n").encode()
+          def canonical_path(path):
+              require(isinstance(path, str) and bool(path), "empty/non-string path")
+              require(re.fullmatch(r"[A-Za-z0-9._/-]+", path) is not None, "unsafe path characters")
+              require(not path.startswith("/") and str(PurePosixPath(path)) == path, "noncanonical path")
+              require(all(p not in ("", ".", "..", ".git") for p in path.split("/")), "unsafe path component")
+              return path
+          def verify_bytes(data, record):
+              require(len(data) == record["bytes"], "size mismatch: " + record["path"])
+              require(sha256(data) == record["sha256"], "SHA-256 mismatch: " + record["path"])
+              require(git_blob(data) == record["gitBlobSha"], "Git blob mismatch: " + record["path"])
+          def deterministic_tar(files):
+              output = io.BytesIO()
+              with tarfile.open(fileobj=output, mode="w", format=tarfile.USTAR_FORMAT) as archive:
+                  for path, data in sorted(files.items()):
+                      member = tarfile.TarInfo(canonical_path(path))
+                      member.size = len(data)
+                      member.mode = 0o644
+                      member.type = tarfile.REGTYPE
+                      archive.addfile(member, io.BytesIO(data))
+              return output.getvalue()
+          def verify_scope(plan):
+              repository = plan.get("repository")
+              require(repository in SCOPES, "unreviewed repository")
+              scope = SCOPES[repository]
+              require(plan.get("repositoryPrivate") is scope["private"], "wrong repository visibility")
+              require(plan.get("targetBranch") == "2026-09-30-friends-listening-home", "wrong target branch")
+              require(plan.get("helperBranch") == scope["helper"], "wrong helper branch")
+              require(plan.get("scopeLabel") == scope["label"], "wrong helper scope label")
+              require(plan.get("workflowPath") == ".github/workflows/verified-friends-v010-v011-" + scope["label"] + "-archive.yml", "wrong workflow path")
+              require(plan.get("chunkPrefix") == ".friends-artifact-transfer/v010-v011-" + scope["label"], "wrong chunk namespace")
+              require(plan.get("finalTree") == scope["finalTree"], "wrong exact final tree")
+              require(plan.get("remote") == "https://github.com/" + repository + ".git", "wrong remote")
+              require(plan.get("proposalSha256") == "18ce04afb9117693ab82818d7c7f64a0600616593b9edfe34192559da13e935f", "wrong reviewed proposal")
+              require(plan.get("independentReceiptSha256") == "a4b81e28ccfbff7483a6373cbb15f0c86c8ec90dfdce3f6f4263831e483e6ea8", "wrong reviewed content receipt")
+              return scope
+          def verify_archive(payload, plan):
+              scope = verify_scope(plan)
+              require(len(payload) == plan["archiveBytes"], "archive size mismatch")
+              require(sha256(payload) == plan["archiveSha256"], "archive SHA-256 mismatch")
+              expected = {canonical_path(r["path"]): r for r in plan["files"]}
+              require(len(expected) == len(plan["files"]) == scope["count"], "wrong unique helper file count")
+              require(all(r.get("operation") == "add" and r.get("mode") == "100644" and
+                          "expectedBaseBlobSha" not in r and isinstance(r.get("binary"), bool)
+                          for r in plan["files"]), "helper accepts only reviewed regular-file additions")
+              prefix = "docs/design-mockups/screens/friends-listening-home/"
+              versions = ("v011/",) if scope["private"] else ("v010/", "v011/")
+              require(all(any(path.startswith(prefix + version) for version in versions) for path in expected),
+                      "path is outside reviewed version scope")
+              require(sum(r["binary"] for r in plan["files"]) == scope["binary"], "wrong frozen binary count")
+              if scope["private"]:
+                  require(sum(r["binary"] and r["path"].endswith(".png") for r in plan["files"]) == 24 and
+                          sum(r["binary"] and r["path"].endswith(".jpg") for r in plan["files"]) == 1,
+                          "wrong PNG/JPEG scope")
+                  require({r["path"] for r in plan["files"] if not r["binary"]} ==
+                          {prefix + "v011/qa/icon-source-preview.svg"}, "wrong private UTF-8 asset scope")
+              files = {}
+              try:
+                  with tarfile.open(fileobj=io.BytesIO(payload), mode="r:") as archive:
+                      for member in archive:
+                          path = canonical_path(member.name)
+                          require(path in expected and path not in files, "extra or duplicate archive path")
+                          require(member.type == tarfile.REGTYPE and not member.pax_headers, "nonregular archive member")
+                          require(member.mode == 0o644 and member.uid == member.gid == member.mtime == 0,
+                                  "unexpected archive metadata")
+                          require(not member.uname and not member.gname and not member.linkname, "unexpected archive name/link")
+                          require(member.size == expected[path]["bytes"], "archive member size mismatch")
+                          data = archive.extractfile(member).read()
+                          verify_bytes(data, expected[path])
+                          if expected[path]["binary"]:
+                              if path.endswith(".png"):
+                                  require(data.startswith(b"\x89PNG\r\n\x1a\n"), "PNG is not binary PNG")
+                              else:
+                                  require(path.endswith(".jpg") and data.startswith(b"\xff\xd8\xff") and data.endswith(b"\xff\xd9"), "JPEG signature mismatch")
+                          else:
+                              try:
+                                  text = data.decode("utf-8", errors="strict")
+                              except UnicodeError as exc:
+                                  raise Rejected("nonbinary payload is not UTF-8") from exc
+                              require(text.encode("utf-8") == data, "UTF-8 round trip changed bytes")
+                              if path.endswith(".svg"):
+                                  require(b"<!DOCTYPE" not in data.upper() and b"<!ENTITY" not in data.upper(), "SVG declarations are forbidden")
+                                  try:
+                                      root = ET.fromstring(data)
+                                  except ET.ParseError as exc:
+                                      raise Rejected("invalid SVG XML") from exc
+                                  require(root.tag == "{http://www.w3.org/2000/svg}svg", "not an SVG document")
+                          files[path] = data
+              except (tarfile.TarError, OSError) as exc:
+                  raise Rejected("invalid tar archive") from exc
+              require(set(files) == set(expected), "missing archive paths")
+              require(deterministic_tar(files) == payload, "noncanonical archive or trailing data")
+              return files
+          def git_env(token=None):
+              # Do not inherit configuration that could redirect a remote, a hook or object store.
+              env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
+              env.update(GIT_CONFIG_NOSYSTEM="1", GIT_CONFIG_GLOBAL="/dev/null", GIT_TERMINAL_PROMPT="0")
+              if token:
+                  auth = base64.b64encode(("x-access-token:" + token).encode()).decode()
+                  env.update(GIT_CONFIG_COUNT="1", GIT_CONFIG_KEY_0="http.https://github.com/.extraheader",
+                             GIT_CONFIG_VALUE_0="AUTHORIZATION: basic " + auth)
+              return env
+          def git(repo, *args, data=None, token=None, hooks=None):
+              command = ["git", "-c", "core.hooksPath=" + (str(hooks) if hooks else "/dev/null"),
+                         "-c", "core.autocrlf=false", "-c", "commit.gpgsign=false", "-C", str(repo), *args]
+              result = subprocess.run(command, input=data, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                      env=git_env(token), check=False)
+              require(result.returncode == 0, "git operation failed: " + args[0] + "; inspect, do not retry automatically")
+              return result.stdout
+          def git_tree(repo, revision):
+              result = {}
+              for line in git(repo, "ls-tree", "-rz", revision).split(b"\0"):
+                  if not line:
+                      continue
+                  metadata, path = line.split(b"\t", 1)
+                  mode, kind, oid = metadata.decode().split()
+                  result[path.decode("utf-8")] = (mode, kind, oid)
+              return result
+          def diff_records(repo, old, new=None, cached=False):
+              args = ["diff", "--raw", "--no-abbrev", "--no-renames", "-z"]
+              if cached:
+                  args.append("--cached")
+              args.append(old)
+              if new:
+                  args.append(new)
+              pieces = git(repo, *args).split(b"\0")
+              require(pieces.pop() == b"", "invalid diff framing")
+              require(len(pieces) % 2 == 0, "invalid diff shape")
+              result = {}
+              for metadata, path in zip(pieces[::2], pieces[1::2]):
+                  oldmode, newmode, oldoid, newoid, operation = metadata.decode().split()
+                  name = path.decode("utf-8")
+                  require(name not in result, "duplicate diff path")
+                  result[name] = (oldmode.lstrip(":"), newmode, oldoid, newoid, operation)
+              return result
+          def expected_changes(records):
+              return {r["path"]: ("100644" if r.get("expectedBaseBlobSha") else "000000", "100644",
+                                  r.get("expectedBaseBlobSha", "0" * 40), r["gitBlobSha"],
+                                  "M" if r.get("expectedBaseBlobSha") else "A") for r in records}
+          def verify_target_base(repo, plan):
+              head = plan["targetHead"]
+              require(git(repo, "rev-parse", head + "^{tree}").decode().strip() == plan["baseTree"], "base tree changed")
+              tree = git_tree(repo, head)
+              for record in plan["files"]:
+                  path = record["path"]
+                  canonical_path(path)
+                  for parent in PurePosixPath(path).parents:
+                      require(str(parent) not in tree, "target path has a non-directory ancestor")
+                  if "expectedBaseBlobSha" in record:
+                      require(tree.get(path) == ("100644", "blob", record["expectedBaseBlobSha"]), "original target blob changed")
+                      old = git(repo, "cat-file", "blob", head + ":" + path)
+                      require(len(old) == record["baseBytes"] and sha256(old) == record["baseSha256"], "original target bytes changed")
+                  else:
+                      require(path not in tree and not any(p.startswith(path + "/") for p in tree), "new target path already exists")
+          def verify_event(plan, environment, event):
+              scope = verify_scope(plan)
+              require(environment.get("GITHUB_EVENT_NAME") == "push", "not a push event")
+              require(environment.get("GITHUB_REPOSITORY") == plan["repository"], "wrong repository")
+              require(environment.get("GITHUB_REF") == "refs/heads/" + plan["helperBranch"], "wrong helper ref")
+              require(environment.get("GITHUB_RUN_ATTEMPT") == "1", "reruns require investigation; automatic replay is disabled")
+              require(re.fullmatch(r"[1-9][0-9]*", environment.get("GITHUB_RUN_ID", "")) is not None, "invalid run id")
+              parent = environment.get("HELPER_PARENT", "")
+              require(re.fullmatch(r"[0-9a-f]{40}", parent) is not None, "helper parent is not bound")
+              require(re.fullmatch(r"[0-9a-f]{40}", environment.get("GITHUB_SHA", "")) is not None, "invalid trigger SHA")
+              require(event.get("ref") == environment["GITHUB_REF"], "event ref mismatch")
+              require(event.get("before") == parent and event.get("after") == environment["GITHUB_SHA"], "event ancestry mismatch")
+              require(all(event.get(key) is False for key in ("forced", "deleted", "created")), "forced/create/delete push rejected")
+              require(event.get("repository", {}).get("full_name") == plan["repository"] and
+                      event["repository"].get("private") is scope["private"], "event repository/private guard failed")
+              return parent
+          def remote_oid(repo, plan, token):
+              ref = "refs/heads/" + plan["targetBranch"]
+              lines = git(repo, "ls-remote", "--exit-code", plan["remote"], ref, token=token).decode().splitlines()
+              require(len(lines) == 1, "target ref is missing or ambiguous")
+              parts = lines[0].split("\t")
+              require(len(parts) == 2 and parts[1] == ref and re.fullmatch(r"[0-9a-f]{40}", parts[0]), "invalid remote ref")
+              return parts[0]
+          def require_remote_base(repo, plan, token):
+              require(remote_oid(repo, plan, token) == plan["targetHead"], "target branch moved; stop and inspect")
+          def proof_for(plan, environment):
+              return {"schemaVersion": 1, "repository": plan["repository"], "targetBranch": plan["targetBranch"],
+                      "targetHead": plan["targetHead"], "baseTree": plan["baseTree"], "finalTree": plan["finalTree"],
+                      "helperBase": plan["helperBase"], "helperBaseTree": plan["helperBaseTree"],
+                      "helperRef": environment["GITHUB_REF"], "helperParent": environment["HELPER_PARENT"],
+                      "triggerSha": environment["GITHUB_SHA"], "runId": environment["GITHUB_RUN_ID"],
+                      "runAttempt": environment["GITHUB_RUN_ATTEMPT"], "planSha256": sha256(canonical_json(plan)),
+                      "proposalSha256": plan["proposalSha256"], "independentReceiptSha256": plan["independentReceiptSha256"],
+                      "archiveSha256": plan["archiveSha256"], "files": plan["files"]}
+          def verify_artifact(folder, plan, environment, proof_hash):
+              require(folder.is_dir() and not folder.is_symlink(), "artifact root is not a regular directory")
+              entries = list(folder.iterdir())
+              require({p.name for p in entries} == {"payload.tar", "proof.json"}, "artifact file set mismatch")
+              require(all(stat.S_ISREG(p.lstat().st_mode) for p in entries), "artifact contains nonregular files")
+              proof = (folder / "proof.json").read_bytes()
+              require(sha256(proof) == proof_hash, "artifact proof hash mismatch")
+              require(proof == canonical_json(proof_for(plan, environment)), "artifact proof belongs to another plan/run/attempt")
+              return verify_archive((folder / "payload.tar").read_bytes(), plan)
+          def verify_staged(repo, plan):
+              require(diff_records(repo, plan["targetHead"], cached=True) == expected_changes(plan["files"]), "staged path/mode/blob set mismatch")
+              require(git(repo, "write-tree").decode().strip() == plan["finalTree"], "complete staged tree mismatch")
+          def stage_reviewed_files(repo, files, plan):
+              require(git(repo, "rev-parse", "HEAD").decode().strip() == plan["targetHead"], "checkout is not pinned target")
+              require(git(repo, "status", "--porcelain=v1", "-z", "--untracked-files=all") == b"", "target checkout is not clean")
+              require(git(repo, "ls-files", "--others", "-z") == b"", "target checkout has untracked or ignored files")
+              verify_target_base(repo, plan)
+              require(set(files) == {r["path"] for r in plan["files"]}, "write path set mismatch")
+              # Validate all data and every existing ancestor before writing any reviewed file.
+              for record in plan["files"]:
+                  verify_bytes(files[record["path"]], record)
+                  current = repo
+                  for component in PurePosixPath(record["path"]).parts[:-1]:
+                      current /= component
+                      if current.exists() or current.is_symlink():
+                          require(stat.S_ISDIR(current.lstat().st_mode), "unsafe destination ancestor")
+                  destination = repo / record["path"]
+                  if "expectedBaseBlobSha" in record:
+                      require(destination.exists() and stat.S_ISREG(destination.lstat().st_mode), "nonregular original destination")
+                      original = destination.read_bytes()
+                      require(len(original) == record["baseBytes"] and sha256(original) == record["baseSha256"], "original worktree bytes changed")
+                  else:
+                      require(not destination.exists() and not destination.is_symlink(), "new destination already exists")
+              for record in plan["files"]:
+                  path = record["path"]
+                  destination = repo / path
+                  destination.parent.mkdir(parents=True, exist_ok=True)
+                  destination.write_bytes(files[path])
+                  destination.chmod(0o644)
+                  # Bypass attributes, filters and line ending transforms to preserve frozen bytes.
+                  oid = git(repo, "hash-object", "-w", "--stdin", data=files[path]).decode().strip()
+                  require(oid == record["gitBlobSha"], "written blob changed")
+                  git(repo, "update-index", "--add", "--cacheinfo", "100644," + oid + "," + path)
+              verify_staged(repo, plan)
+          def pre_push_source(plan, commit):
+              # This is the only installed hook. Git passes its own advertised old OID on stdin.
+              expected = [commit, commit, "refs/heads/" + plan["targetBranch"], plan["targetHead"]]
+              return ("#!/usr/bin/env python3\nimport sys\n"
+                      + "expected = " + repr(expected) + "\n"
+                      + "destination = " + repr(plan["remote"]) + "\n"
+                      + "rows = [line.split() for line in sys.stdin.read().splitlines()]\n"
+                      + "if sys.argv[1:] != [destination, destination] or rows != [expected]:\n"
+                      + "    sys.stderr.write('Rejected changed target/ref/commit at pre-push; inspect, do not retry\\n')\n"
+                      + "    sys.exit(1)\n")
+          def commit_reviewed(repo, plan):
+              verify_staged(repo, plan)
+              message = "Archive reviewed Friends v010 and v011 records [skip ci][skip render]"
+              git(repo, "-c", "user.name=github-actions[bot]", "-c",
+                  "user.email=41898282+github-actions[bot]@users.noreply.github.com", "commit", "-m", message)
+              commit = git(repo, "rev-parse", "HEAD").decode().strip()
+              require(git(repo, "rev-list", "--parents", "-n", "1", commit).decode().split() == [commit, plan["targetHead"]], "unexpected publication parent")
+              require(diff_records(repo, plan["targetHead"], commit) == expected_changes(plan["files"]), "committed path/mode/blob mismatch")
+              require(git(repo, "rev-parse", commit + "^{tree}").decode().strip() == plan["finalTree"], "committed tree mismatch")
+              return commit
+          def push_once(repo, plan, commit, token, hooks):
+              require(not hooks.exists(), "hook directory already exists")
+              hooks.mkdir()
+              hook = hooks / "pre-push"
+              hook.write_text(pre_push_source(plan, commit), encoding="utf-8")
+              hook.chmod(0o700)
+              require_remote_base(repo, plan, token)
+              # A normal, single-ref non-force push. The hook pins the server's advertised old OID.
+              git(repo, "push", "--porcelain", plan["remote"], commit + ":refs/heads/" + plan["targetBranch"], token=token, hooks=hooks)
+              require(remote_oid(repo, plan, token) == commit, "publication outcome uncertain; inspect remote, do not retry")
+              return commit
+          PLAN = json.loads('{"archiveBytes":1720320,"archiveSha256":"c5019a9e9f3896560c12d457a39e7a002cd31fd811087082cf4b814ed6c3729e","baseTree":"1d75997e1bb0b370282faf3c134e8397ffb363ab","baseTreeReceiptSha256":"8888988448b01d9c03b234aa4c6da798160aa41fec23053d271e2ad8eb8626df","chunkPrefix":".friends-artifact-transfer/v010-v011-public","chunks":[{"bytes":230001,"gitBlobSha":"5959f48234a42eab43739c06b34be26427e9798f","path":".friends-artifact-transfer/v010-v011-public/part-001.b64","sha256":"4b89047f7fe81de349e16e4b3fb597184c9a1194de3380de68fb2b529ba429f8"},{"bytes":230001,"gitBlobSha":"a6224c721a1c9efa216715c1e367e8f8af6089ca","path":".friends-artifact-transfer/v010-v011-public/part-002.b64","sha256":"b01d351a2512fd06392409865fd61d4fcbcf86d06de5eab165c2a25cfad8f74a"},{"bytes":230001,"gitBlobSha":"c32c3863cdb98a0bae8e7bf2a331b5af3cfecb89","path":".friends-artifact-transfer/v010-v011-public/part-003.b64","sha256":"b13dde527734fce0eb031b5d83adfe847b1349339605dd9032830c0cb32a8149"},{"bytes":230001,"gitBlobSha":"524f224001d09b3044424d50a1f9aad3d60cae80","path":".friends-artifact-transfer/v010-v011-public/part-004.b64","sha256":"c6fdcfa93177e6c56148f0c5d96bfe6b5131582af2e4692f04f8a47206b4fb5c"},{"bytes":230001,"gitBlobSha":"269ec783eab5a695066d8d8f823caf60bd9f8f5a","path":".friends-artifact-transfer/v010-v011-public/part-005.b64","sha256":"9ef120a7893d9d6b35fac64943f0c9f5b6b7377b901f0745eaff6919479b8551"},{"bytes":230001,"gitBlobSha":"9743393baa52f3be98a768bce06284c92403445f","path":".friends-artifact-transfer/v010-v011-public/part-006.b64","sha256":"b1025ba59eaca37d1191adb3e5cb108459756f9fe1940d8fbab56f8b22a5a2a0"},{"bytes":230001,"gitBlobSha":"c6e037d03c827a847abd691b1047caa32c3bc709","path":".friends-artifact-transfer/v010-v011-public/part-007.b64","sha256":"ad23866920aae9d7746e048b07d10287d12a563f44a1778c2d775c06d5695eef"},{"bytes":230001,"gitBlobSha":"b9f25159b3b89ad57102ee0e3f4bb28ad6c6afcd","path":".friends-artifact-transfer/v010-v011-public/part-008.b64","sha256":"50993373c5b821d8162a3c2fc9df61f6768a6ec626a30319e38e927c21332725"},{"bytes":230001,"gitBlobSha":"2d9d7990bbc3821e4fdfd66aa0a14e7ecee88e24","path":".friends-artifact-transfer/v010-v011-public/part-009.b64","sha256":"172002b677873559b3ca484c79f949b2e7f585121af60cbc377d533043e29c0b"},{"bytes":223761,"gitBlobSha":"167edd48fe7cea9fbf65e2e8a08888891a0bea31","path":".friends-artifact-transfer/v010-v011-public/part-010.b64","sha256":"c4b68bceaa46132d6254365503fc1cd85e265db508630340296b4e0a9a6e4c4e"}],"files":[{"binary":false,"bytes":2289,"gitBlobSha":"70cdfd60ca3c2a9c91fe0836dc48ebaecc452c1b","mode":"100644","operation":"add","path":"docs/design-mockups/screens/friends-listening-home/v010/README.md","sha256":"12b17ef846d8d5928b1938a4947fd29026db993d7f9ebcd7ebc7acb6e1e036f6","transport":"native_exact_blob_helper"},{"binary":false,"bytes":6463,"gitBlobSha":"2e93fbe2a8941f332169d26a766b56ef29f9ee04","mode":"100644","operation":"add","path":"docs/design-mockups/screens/friends-listening-home/v010/provenance.json","sha256":"88ad7321fff3ab6f930e96ac8fbb0614fd24b1debe3bfe04d776d54adead547e","transport":"native_exact_blob_helper"},{"binary":false,"bytes":30725,"gitBlobSha":"c797390fa40bacd92601182248f361ddb62216bb","mode":"100644","operation":"add","path":"docs/design-mockups/screens/friends-listening-home/v010/source/artist-view.mjs","sha256":"67bd1f8a9525d0c29542e73e2ca6407b6d0dc6bf34002ac590e17bd08de57cf6","transport":"native_exact_blob_helper"},{"binary":false,"bytes":18036,"gitBlobSha":"c721ed9048c0fe6557dc98f73b50179d8f539961","mode":"100644","operation":"add","path":"docs/design-mockups/screens/friends-listening-home/v010/source/comparison-panel.css","sha256":"328543cbf97068c477d903c7db5ab762bc4f72e54d89ee982269f96b75567da3","transport":"native_exact_blob_helper"},{"binary":false,"bytes":10827,"gitBlobSha":"16fce32b4dc17deae38aec7b61a483747f186962","mode":"100644","operation":"add","path":"docs/design-mockups/screens/friends-listening-home/v010/source/comparison-panel.jsx","sha256":"9680af84f4bb9d8de56d7eb31745b43ab643cb4bdfab1f5a6b11fc6e4c39f210","transport":"native_exact_blob_helper"},{"binary":false,"bytes":17792,"gitBlobSha":"906fd3a11b71d0dee9b6d103c09203e83c330b54","mode":"100644","operation":"add","path":"docs/design-mockups/screens/friends-listening-home/v010/source/comparison-view.mjs","sha256":"4764d797a652c780732781e63cc7ec7bc1569469a896a4648c72a6a42c8c1ffb","transport":"native_exact_blob_helper"},{"binary":false,"bytes":26701,"gitBlobSha":"ad1e43d261fe6520a786cfd59f2e2841d8d4ad85","mode":"100644","operation":"add","path":"docs/design-mockups/screens/friends-listening-home/v010/source/fixture-data.mjs","sha256":"267fa84be15c9d4405006e0f7fa60dfa6e6cfb0a959a5b121af37e50eb7a8c3d","transport":"native_exact_blob_helper"},{"binary":false,"bytes":84823,"gitBlobSha":"3fba301371defce68a25795ea1cddc88315a22a5","mode":"100644","operation":"add","path":"docs/design-mockups/screens/friends-listening-home/v010/source/friends-app.jsx","sha256":"1fd9a69558d29a2c02cc580c9ef467931ffd25e26014a79f64f635efe9a89418","transport":"native_exact_blob_helper"},{"binary":false,"bytes":9037,"gitBlobSha":"83b054de8cb3bb5d03598be8b1f4a2763a10fb39","mode":"100644","operation":"add","path":"docs/design-mockups/screens/friends-listening-home/v010/source/icon-source-preview.svg","sha256":"e324d1b58c58d3a97706a4b83a52f0c5cd81c5520988425f23497cf7f5f2a9e2","transport":"native_exact_blob_helper"},{"binary":false,"bytes":2783,"gitBlobSha":"7d1c6032f273222eed61f0417432ce6b56c07c5b","mode":"100644","operation":"add","path":"docs/design-mockups/screens/friends-listening-home/v010/source/listening-model.mjs","sha256":"ef7bd954d5bba85fa97ceb18d0f56b464f1519f0890355e7d69486ff63b2c9ae","transport":"native_exact_blob_helper"},{"binary":false,"bytes":12209,"gitBlobSha":"60ba3af5fbbb3bf8b891c36a36fbd1516a2242c5","mode":"100644","operation":"add","path":"docs/design-mockups/screens/friends-listening-home/v010/source/mock-adapter.mjs","sha256":"6e7353b4bc1a168530b62ba9a0e55aa1212736af67ff528b127953055c199a90","transport":"native_exact_blob_helper"},{"binary":false,"bytes":73038,"gitBlobSha":"7770302236ad9fe4b1def5dc21e98208373760a8","mode":"100644","operation":"add","path":"docs/design-mockups/screens/friends-listening-home/v010/source/mock-layout.css","sha256":"4664bb8a5546e7767e4fbab984398629899b7b96754ad2075c5395520d019421","transport":"native_exact_blob_helper"},{"binary":false,"bytes":94633,"gitBlobSha":"675c5b66201a4bca7587beaf283fc73795cbffc1","mode":"100644","operation":"add","path":"docs/design-mockups/screens/friends-listening-home/v010/source/native-layout.js","sha256":"0edbe64df262059f0a839430e29784e514b8b471ae95599ea8949323945b4325","transport":"native_exact_blob_helper"},{"binary":false,"bytes":14429,"gitBlobSha":"f1b7d687f903ba9f01f597da5e751591d6ad7690","mode":"100644","operation":"add","path":"docs/design-mockups/screens/friends-listening-home/v010/source/playlist-model.mjs","sha256":"eea0d38194c6a5920ce45eb0f6c3143afa23f0d328459a40e798eee9888b893d","transport":"native_exact_blob_helper"},{"binary":false,"bytes":6061,"gitBlobSha":"1d3c717b1ebbec384de2eb2e54c91d39dd0f1a72","mode":"100644","operation":"add","path":"docs/design-mockups/screens/friends-listening-home/v010/source/playlist-panel.css","sha256":"881d47689ac77542182fe3b08c8090d4ea430d25273821700bf5ff4eb6039bae","transport":"native_exact_blob_helper"},{"binary":false,"bytes":33615,"gitBlobSha":"94a3811cd4f62f3de2ec052134e71f52a2a2ba85","mode":"100644","operation":"add","path":"docs/design-mockups/screens/friends-listening-home/v010/source/playlist-panel.jsx","sha256":"c7ffda3d34dc253700c6760719586fc15dc72a72100a6bdc4792c15d2ec77a98","transport":"native_exact_blob_helper"},{"binary":false,"bytes":10418,"gitBlobSha":"9c2f7b1d551d5e0b8838fe5935ffb7d5a5e07a7b","mode":"100644","operation":"add","path":"docs/design-mockups/screens/friends-listening-home/v010/source/recent-history.mjs","sha256":"1f4553f00140fc4649750d9401ee371ddbb3a5a99e44084c776f11e00b9fafd0","transport":"native_exact_blob_helper"},{"binary":false,"bytes":4960,"gitBlobSha":"c913e581646babc8e7a64b985a1ed2ceed24d763","mode":"100644","operation":"add","path":"docs/design-mockups/screens/friends-listening-home/v010/source/review-proposals.jsx","sha256":"d2a17375b34f0775c01b20f1f4c01a2e7ac59ca46e87ca0323a780601b056866","transport":"native_exact_blob_helper"},{"binary":false,"bytes":10230,"gitBlobSha":"e416e82e54e0365126a079f23293e662e98465e2","mode":"100644","operation":"add","path":"docs/design-mockups/screens/friends-listening-home/v010/source/sidebar-inactivity.mjs","sha256":"ff94e9384dd3ae48b30c654dc9be28528cd808602e8367258cccbcf4e73a0ecd","transport":"native_exact_blob_helper"},{"binary":false,"bytes":8141,"gitBlobSha":"5fe1132fac8e667013e9c7bd70716fcf1b073303","mode":"100644","operation":"add","path":"docs/design-mockups/screens/friends-listening-home/v010/source/track-social.mjs","sha256":"b09a13ed779c94b30ed183d0258622b3bf5dbce769962c3b6aea7a3d86278dfc","transport":"native_exact_blob_helper"},{"binary":false,"bytes":34794,"gitBlobSha":"147d49eecf2897067ab184558d302e933b57aee9","mode":"100644","operation":"add","path":"docs/design-mockups/screens/friends-listening-home/v010/source/upstream-manifest.json","sha256":"ea1bccfe5f92e126d440231eb3fbdbc1fb3e1d3dba37cf657aad3afcaea1f135","transport":"native_exact_blob_helper"},{"binary":false,"bytes":2311,"gitBlobSha":"df1252b2f7dad6fdf5ecdb5c1b34f5cfee745429","mode":"100644","operation":"add","path":"docs/design-mockups/screens/friends-listening-home/v011/README.md","sha256":"2a306ea72730836192a7694203394aa486c81e265ff50717018a1b5b1613f225","transport":"native_exact_blob_helper"},{"binary":false,"bytes":7774,"gitBlobSha":"081a2f32d763601062e7c6f70aba03dd3ccec7f1","mode":"100644","operation":"add","path":"docs/design-mockups/screens/friends-listening-home/v011/provenance.json","sha256":"ce042d6455f46ea1f452c4217e5001a1c612ccb68a4b9515ff5644879450e673","transport":"native_exact_blob_helper"},{"binary":false,"bytes":12849,"gitBlobSha":"a31f61720bbcfd0dab08bf3c638a3a93374d216e","mode":"100644","operation":"add","path":"docs/design-mockups/screens/friends-listening-home/v011/source/README.md","sha256":"3922224bcded0a3e3796fa9e57e10044e31dd430df4abb2ad5da4dfadcd9b9b7","transport":"native_exact_blob_helper"},{"binary":false,"bytes":32276,"gitBlobSha":"81c95df9bb82fe5ed7d909b508cd7e6cd7d24f8d","mode":"100644","operation":"add","path":"docs/design-mockups/screens/friends-listening-home/v011/source/artist-view.mjs","sha256":"d3c67f626c5dfca791b6549556608c2d25aaf6b78d84079ff16082e3315f7f83","transport":"native_exact_blob_helper"},{"binary":false,"bytes":21563,"gitBlobSha":"73d6f984978705503b045ffa49d6c89c57347e6c","mode":"100644","operation":"add","path":"docs/design-mockups/screens/friends-listening-home/v011/source/comparison-panel.css","sha256":"a08d41b73ededcc6973784b25c95539e2aa7ce8f43d477e3c2998f9bfbba10e7","transport":"native_exact_blob_helper"},{"binary":false,"bytes":11832,"gitBlobSha":"2b6e486563cf55f91433a7d1ac35f5865c834dc6","mode":"100644","operation":"add","path":"docs/design-mockups/screens/friends-listening-home/v011/source/comparison-panel.jsx","sha256":"ce858971cc9bf280b9a9da879411506bc0b75c0712951be2f3fba9af2a22a23c","transport":"native_exact_blob_helper"},{"binary":false,"bytes":23719,"gitBlobSha":"8f4bdac420a28f6633f346791fe2e5ae4ffe0066","mode":"100644","operation":"add","path":"docs/design-mockups/screens/friends-listening-home/v011/source/comparison-view.mjs","sha256":"668f2819ac949773eff4e58039b6c172be310cfb39086ed4dec657bb2d553ba2","transport":"native_exact_blob_helper"},{"binary":false,"bytes":26701,"gitBlobSha":"ad1e43d261fe6520a786cfd59f2e2841d8d4ad85","mode":"100644","operation":"add","path":"docs/design-mockups/screens/friends-listening-home/v011/source/fixture-data.mjs","sha256":"267fa84be15c9d4405006e0f7fa60dfa6e6cfb0a959a5b121af37e50eb7a8c3d","transport":"native_exact_blob_helper"},{"binary":false,"bytes":96964,"gitBlobSha":"944e9e351dd08d36a24f1951efe457d8a2ec7aa5","mode":"100644","operation":"add","path":"docs/design-mockups/screens/friends-listening-home/v011/source/friends-app.jsx","sha256":"bcf9804740dd113f7925bf6738230c597b501688488129c725bcbae4853df73f","transport":"native_exact_blob_helper"},{"binary":false,"bytes":517497,"gitBlobSha":"a9c5f9265d2d5bc3257c2475d2a7f27ccac7b5ee","mode":"100644","operation":"add","path":"docs/design-mockups/screens/friends-listening-home/v011/source/icon-source-preview.svg","sha256":"db1d97e7ec58a0bd84778bb6c8955c679673c8c05669721210cd4beabb67aff2","transport":"native_exact_blob_helper"},{"binary":false,"bytes":2783,"gitBlobSha":"7d1c6032f273222eed61f0417432ce6b56c07c5b","mode":"100644","operation":"add","path":"docs/design-mockups/screens/friends-listening-home/v011/source/listening-model.mjs","sha256":"ef7bd954d5bba85fa97ceb18d0f56b464f1519f0890355e7d69486ff63b2c9ae","transport":"native_exact_blob_helper"},{"binary":false,"bytes":12209,"gitBlobSha":"60ba3af5fbbb3bf8b891c36a36fbd1516a2242c5","mode":"100644","operation":"add","path":"docs/design-mockups/screens/friends-listening-home/v011/source/mock-adapter.mjs","sha256":"6e7353b4bc1a168530b62ba9a0e55aa1212736af67ff528b127953055c199a90","transport":"native_exact_blob_helper"},{"binary":false,"bytes":78155,"gitBlobSha":"be85d87d74a074d406fb7243cbd3201828c37102","mode":"100644","operation":"add","path":"docs/design-mockups/screens/friends-listening-home/v011/source/mock-layout.css","sha256":"493719ce2a754e306f9efc93b01e1f272c390b9d56e22f7e9d7ee2be3c1406f3","transport":"native_exact_blob_helper"},{"binary":false,"bytes":104009,"gitBlobSha":"65e89a44df15e364ce779f4ac9ff5a3af64cd53e","mode":"100644","operation":"add","path":"docs/design-mockups/screens/friends-listening-home/v011/source/native-layout.js","sha256":"21601b900264b9d2dae90e630cfe8992eaba01056e41904fba125d4239385c13","transport":"native_exact_blob_helper"},{"binary":false,"bytes":18156,"gitBlobSha":"15441fcefa3b4ad774d96b41bb597162b932d813","mode":"100644","operation":"add","path":"docs/design-mockups/screens/friends-listening-home/v011/source/notification-icon.mjs","sha256":"756b56a3a90fed29e07fb605e6c1ea290ece8b1a225bd483530b91951c361ac7","transport":"native_exact_blob_helper"},{"binary":false,"bytes":14429,"gitBlobSha":"f1b7d687f903ba9f01f597da5e751591d6ad7690","mode":"100644","operation":"add","path":"docs/design-mockups/screens/friends-listening-home/v011/source/playlist-model.mjs","sha256":"eea0d38194c6a5920ce45eb0f6c3143afa23f0d328459a40e798eee9888b893d","transport":"native_exact_blob_helper"},{"binary":false,"bytes":6450,"gitBlobSha":"b623f65170956a078658a7b54ea908276437500e","mode":"100644","operation":"add","path":"docs/design-mockups/screens/friends-listening-home/v011/source/playlist-panel.css","sha256":"ca2e1d7125996229a04c145f5e38252ddab9b38bccb3f487438d817b3326e93c","transport":"native_exact_blob_helper"},{"binary":false,"bytes":33615,"gitBlobSha":"94a3811cd4f62f3de2ec052134e71f52a2a2ba85","mode":"100644","operation":"add","path":"docs/design-mockups/screens/friends-listening-home/v011/source/playlist-panel.jsx","sha256":"c7ffda3d34dc253700c6760719586fc15dc72a72100a6bdc4792c15d2ec77a98","transport":"native_exact_blob_helper"},{"binary":false,"bytes":10418,"gitBlobSha":"9c2f7b1d551d5e0b8838fe5935ffb7d5a5e07a7b","mode":"100644","operation":"add","path":"docs/design-mockups/screens/friends-listening-home/v011/source/recent-history.mjs","sha256":"1f4553f00140fc4649750d9401ee371ddbb3a5a99e44084c776f11e00b9fafd0","transport":"native_exact_blob_helper"},{"binary":false,"bytes":4762,"gitBlobSha":"49af28e7e0d3e4a1596629458f41b281f9c23431","mode":"100644","operation":"add","path":"docs/design-mockups/screens/friends-listening-home/v011/source/recent-view-icons.mjs","sha256":"68d28820ed3bb2bd808ef6e886a1a7779f854a7316fd484f9edf29997d436b35","transport":"native_exact_blob_helper"},{"binary":false,"bytes":5669,"gitBlobSha":"5e1a612dbd7de29349548dd66b631b63fef2ba5d","mode":"100644","operation":"add","path":"docs/design-mockups/screens/friends-listening-home/v011/source/review-proposals.jsx","sha256":"0d240f62a3d980e89b97ee22e45bd9fe8e0753281d598a71f9a956a1b2469f1d","transport":"native_exact_blob_helper"},{"binary":false,"bytes":10230,"gitBlobSha":"e416e82e54e0365126a079f23293e662e98465e2","mode":"100644","operation":"add","path":"docs/design-mockups/screens/friends-listening-home/v011/source/sidebar-inactivity.mjs","sha256":"ff94e9384dd3ae48b30c654dc9be28528cd808602e8367258cccbcf4e73a0ecd","transport":"native_exact_blob_helper"},{"binary":false,"bytes":62999,"gitBlobSha":"a64bb09eb666a9b9990a8351168fa6f07eb7d166","mode":"100644","operation":"add","path":"docs/design-mockups/screens/friends-listening-home/v011/source/statistics-icon.mjs","sha256":"01faed29acba2384e6e1d6100acd2fa36b38a43b3c4a249c3cc5b9a459bf856f","transport":"native_exact_blob_helper"},{"binary":false,"bytes":8141,"gitBlobSha":"5fe1132fac8e667013e9c7bd70716fcf1b073303","mode":"100644","operation":"add","path":"docs/design-mockups/screens/friends-listening-home/v011/source/track-social.mjs","sha256":"b09a13ed779c94b30ed183d0258622b3bf5dbce769962c3b6aea7a3d86278dfc","transport":"native_exact_blob_helper"},{"binary":false,"bytes":34794,"gitBlobSha":"147d49eecf2897067ab184558d302e933b57aee9","mode":"100644","operation":"add","path":"docs/design-mockups/screens/friends-listening-home/v011/source/upstream-manifest.json","sha256":"ea1bccfe5f92e126d440231eb3fbdbc1fb3e1d3dba37cf657aad3afcaea1f135","transport":"native_exact_blob_helper"},{"binary":false,"bytes":5755,"gitBlobSha":"6250e298185e9036320c3984759107220a738808","mode":"100644","operation":"add","path":"docs/design-mockups/screens/friends-listening-home/v011/source/widget-motion.mjs","sha256":"3a1a07a4e7b6be2b70756b35050b1c11f7be8661100ccf00ae4506a02c93d48b","transport":"native_exact_blob_helper"}],"finalTree":"a73e6ef9d3670b93e4d8fce1383331a1480eeb53","helperBase":"103c9b90bee8cf5dcdbc6d5573daf9602c276791","helperBaseReceiptSha256":"cb3a95505813d5bfc4376d9a41ca48e038379ee1b8ac79fe9a823efb5e010a38","helperBaseTree":"e3e2bccd178e4f5f19ef12136f09fcac6cfc084d","helperBranch":"2026-09-30-mobile-bundle-transfer","independentReceiptSha256":"a4b81e28ccfbff7483a6373cbb15f0c86c8ec90dfdce3f6f4263831e483e6ea8","proposalSha256":"18ce04afb9117693ab82818d7c7f64a0600616593b9edfe34192559da13e935f","remote":"https://github.com/idanilovqa/AlbumHaven.git","repository":"idanilovqa/AlbumHaven","repositoryPrivate":false,"schemaVersion":2,"scopeLabel":"public","targetBranch":"2026-09-30-friends-listening-home","targetHead":"9af747a7d15f779d293d31aad711079f5d234083","workflowPath":".github/workflows/verified-friends-v010-v011-public-archive.yml"}\n')
+
+          environment = os.environ
+          event = json.loads(Path(environment["GITHUB_EVENT_PATH"]).read_text())
+          verify_event(PLAN, environment, event)
+          token = environment.get("GH_TOKEN")
+          require(bool(token), "transient repository token missing")
+          repo = Path(environment["GITHUB_WORKSPACE"]) / "target"
+          temporary = Path(environment["RUNNER_TEMP"])
+
+          require(re.fullmatch(r"[1-9][0-9]*", environment.get("ARTIFACT_ID", "")), "artifact ID missing")
+          files = verify_artifact(temporary / "friends-downloaded", PLAN, environment, environment["PROOF_SHA256"])
+          require_remote_base(repo, PLAN, token)
+          stage_reviewed_files(repo, files, PLAN)
+          commit = commit_reviewed(repo, PLAN)
+          print("Prepared exact archive commit " + commit + " with tree " + PLAN["finalTree"], flush=True)
+          push_once(repo, PLAN, commit, token, temporary / "friends-push-hooks")
+          print("Verified exact archival commit " + commit + "; visual/production approval remains pending.")
+

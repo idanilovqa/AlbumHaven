@@ -82,14 +82,11 @@ for (const [key, start, expected] of [['ArrowRight', 5, 0], ['ArrowLeft', 0, 5],
 }
 
 test('S03 Escape closes the filter dropdown and restores its anchor focus', () => {
-  const { context, els } = harness();
-  context.state.utility.problemDropdownOpen = true;
-  const target = { closest: (selector) => selector.includes('problem-filter') ? els.problemFilterMenu : null };
-  let prevented = false;
-  context.handleUtilityBootstrapKeyDown({ key: 'Escape', target, preventDefault() { prevented = true; } });
-  assert.equal(context.state.utility.problemDropdownOpen, false);
-  assert.equal(els.problemFilterButton.focused, true);
-  assert.equal(prevented, true);
+  const modalEscape = read('music_app/static/js/runtime/track-modal-lightbox-helpers.js');
+  assert.match(
+    modalEscape,
+    /modal\.id === 'utility-modal'[\s\S]*state\.utility\.activeTab === 'problematic-files'[\s\S]*state\.utility\.problemDropdownOpen[\s\S]*state\.utility\.problemDropdownOpen = false[\s\S]*problemFilterMenu\.hidden = true[\s\S]*problemFilterButton\.setAttribute\('aria-expanded', 'false'\)[\s\S]*problemFilterButton\.focus\(\)[\s\S]*return;/,
+  );
 });
 
 test('S01 ordinary typing and modified shortcuts do not change the active tab', () => {

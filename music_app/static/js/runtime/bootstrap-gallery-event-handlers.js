@@ -980,6 +980,7 @@ function handleGalleryBootstrapSearchSubmit(event) {
   });
   if (scanPageWasAbandoned && !searchWasScheduled) {
     renderView();
+    resumeScanPageGalleryCoverLoads();
   }
   input?.blur?.();
 }

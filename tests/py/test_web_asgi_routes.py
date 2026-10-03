@@ -476,7 +476,7 @@ def test_asgi_index_claims_pending_cold_scan_and_starts_after_response_without_b
 
     assert status == 200
     assert second_status == 200
-    assert b'id="library-loader" hidden' not in body
+    assert not re.search(rb'<section\b(?=[^>]*\bid="library-loader")(?=[^>]*\bhidden\b)[^>]*>', body)
     assert b"Waiting for the first albums to become available..." in body
     assert b'<div class="albums-scroll" id="albums-scroll" hidden>' in body
     payload = _extract_bootstrap_payload_from_shell(body)

@@ -866,33 +866,14 @@ export class GalleryActions {
       .cardByArtistAndAlbum(artistName, albumName, { visible: true })
       .locator(this.galleryPage.albumCard.coverImageWithinCardSelector)
       .first();
-    await this.galleryPage.waitForPageCondition((selectors) => {
-      const section = Array.from(document.querySelectorAll(selectors.artistSectionSelector))
-        .find((candidate) => String(
-          candidate.querySelector(selectors.artistHeadingSelector)?.textContent || '',
-        ).trim() === selectors.artistName);
-      if (!(section instanceof HTMLElement)) return false;
-      const card = Array.from(section.querySelectorAll(selectors.albumCardSelector))
-        .find((candidate) => String(
-          candidate.querySelector(selectors.albumTitleSelector)?.textContent || '',
-        ).trim() === selectors.albumName);
-      if (!(card instanceof HTMLElement)) return false;
-      const image = card.querySelector(selectors.coverImageSelector);
-      return image instanceof HTMLImageElement
-        && image.complete
-        && image.naturalWidth > 0
-        && String(image.getAttribute('data-production-cover-src') || '').trim() !== '';
-    }, {
+    await expect.poll(async () => coverImage.evaluate((image) => (
+      image instanceof HTMLImageElement
+      && image.complete
+      && image.naturalWidth > 0
+      && String(image.getAttribute('data-production-cover-src') || '').trim() !== ''
+    )), {
       timeout: options.timeout || 30000,
-    }, {
-      artistSectionSelector: '#artist-groups .artist-section',
-      artistHeadingSelector: this.galleryPage.artistHeadingSelector,
-      albumCardSelector: this.galleryPage.albumCardWithinSectionSelector,
-      albumTitleSelector: this.galleryPage.albumTitleButtonWithinSectionSelector,
-      coverImageSelector: this.galleryPage.albumCard.coverImageWithinCardSelector,
-      artistName,
-      albumName,
-    });
+    }).toBe(true);
     return {
       productionSrc: String(
         await coverImage.getAttribute('data-production-cover-src') || '',

@@ -325,6 +325,9 @@ test('scan gallery readiness waits for the requested visible cover population', 
     },
   };
   const navigationPanelActions = {
+    async waitForSidebarPreviewHydrated(options) {
+      calls.push(['sidebar-preview', options]);
+    },
     navigationPanel: {
       allArtistsLink: {
         async waitFor(options) { calls.push(['sidebar', options]); },
@@ -339,7 +342,7 @@ test('scan gallery readiness waits for the requested visible cover population', 
   });
 
   assert.deepEqual(calls, [
-    ['sidebar', { state: 'visible', timeout: 60000 }],
+    ['sidebar-preview', { timeout: 60000 }],
     ['card', { state: 'visible', timeout: 60000 }],
     ['covers', { minimumCount: 8, timeout: 60000 }],
   ]);

@@ -179,14 +179,12 @@ def test_gallery_template_hosts_exact_controls_and_album_type_defaults(render):
     assert album_types.attrs["aria-label"] == "Album types"
     choices = album_types.find_all("button", **{"data-gallery-album-type": None})
     assert [choice.attrs["data-gallery-album-type"] for choice in choices] == [
-        "studio", "live", "demo", "compilation", "ep", "single",
+        "studio", "ep", "live", "demo", "compilation", "single",
     ]
     selected = [choice.attrs["data-gallery-album-type"] for choice in choices if choice.attrs.get("aria-pressed") == "true"]
     assert selected == ["studio", "ep"]
     choices_by_type = {choice.attrs["data-gallery-album-type"]: choice for choice in choices}
-    assert "disabled" not in choices_by_type["studio"].attrs
-    assert "disabled" not in choices_by_type["compilation"].attrs
-    for release_type in ("live", "demo", "ep", "single"):
+    for release_type in ("studio", "ep", "live", "demo", "compilation", "single"):
         assert "disabled" in choices_by_type[release_type].attrs
         assert choices_by_type[release_type].attrs["aria-disabled"] == "true"
     album_types.one("button", **{"data-open-non-album-tracks": "1"})
@@ -301,5 +299,7 @@ def test_search_component_allows_a_complete_button_override_and_multiple_instanc
     assert custom.attrs["data-filter"] == "albums"
     assert custom.parent.parent is field.parent
     assert not custom.find_all("svg")
-    assert len(document.find_all("button")) == 2
-    assert document.one("button", type="submit").attrs["aria-label"] == "Find tracks"
+    assert len(document.find_all("button")) == 5
+    assert [button.attrs["aria-label"] for button in document.find_all("button", type="submit")] == [
+        "Search", "Find tracks",
+    ]

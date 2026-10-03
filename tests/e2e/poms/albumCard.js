@@ -1,4 +1,5 @@
 import { parseVisibleAlbumMetadata } from '../helpers/visibleAlbumMetadata.js';
+import { artistSectionByName } from './artistSectionLocator.js';
 import { BasePage } from './basePage.js';
 import { SmallAlert } from './components/smallAlert.js';
 
@@ -136,9 +137,8 @@ export class AlbumCard extends BasePage {
   }
 
   cardsByArtistAndAlbum(artistName, albumName, options = {}) {
-    return this.page.locator('#artist-groups .artist-section').filter({
-      has: this.page.locator('.artist-name').filter({ hasText: exactNormalizedText(artistName) }),
-    }).first().locator(options.visible ? '.album-card:visible' : '.album-card').filter({
+    return artistSectionByName(this.page, artistName)
+      .locator(options.visible ? '.album-card:visible' : '.album-card').filter({
       has: this.page.locator(this.titleButtonSelector).filter({ hasText: exactNormalizedText(albumName) }),
     });
   }

@@ -35,6 +35,7 @@ $Browser = 'chrome'
 $PerformanceContract = 'ci'
 function Write-CiJob {}
 function Set-ClearedRuntimeSelectors {}
+function Import-DatabaseEnvironmentExports {}
 function Prepare-PerformanceFixture {}
 function Get-SafeTargetPort { return 5200 }
 function Wait-TargetPortsClear { Write-Output 'PORTS_CLEAR' }
@@ -106,6 +107,11 @@ test('performance profile runner prepares one isolated fixture before compatible
   assert.match(source, /Get-NetTCPConnection/);
   assert.match(source, /0\.\.6/, 'teardown must audit every app/provider diagnostic port in the target block');
   assert.match(source, /&\s*\$bootstrap\s+@provisionArguments\s+-SkipFixtureLoad/, 'database provisioning must not also prepare the profile fixture');
+  assert.match(
+    source,
+    /&\s*\$bootstrap\s+@provisionArguments\s+-SkipFixtureLoad[\s\S]{0,300}Import-DatabaseEnvironmentExports\s+-Path\s+\$GithubEnv/,
+    'the shard must import the database identities provisioned into GITHUB_ENV before fixture preparation',
+  );
   const targetLoopIndex = source.search(/foreach\s*\(\$target\s+in\s+\$targetNames\)\s*\{\s*\$targetIndex\s*\+=\s*1/i);
   const provisionIndex = source.search(/&\s*\$bootstrap\s+@provisionArguments\s+-SkipFixtureLoad/i);
   const teardownIndex = source.search(/&\s*\$bootstrap\s+`[\s\S]*-Mode\s+Teardown/i);

@@ -14,10 +14,7 @@ export async function waitForScanDrivenGalleryReady({
       minimumSidebarCount: Math.max(0, requiredSidebarCount - 1),
     });
   } else {
-    await navigationPanelActions.navigationPanel.allArtistsLink.waitFor({
-      state: 'visible',
-      timeout: 60000,
-    });
+    await navigationPanelActions.waitForSidebarPreviewHydrated({ timeout: 60000 });
   }
   await galleryActions.galleryPage.albumCards.first().waitFor({
     state: 'visible',

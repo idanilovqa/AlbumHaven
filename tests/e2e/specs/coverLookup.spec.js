@@ -161,7 +161,7 @@ test('FTC-COVERS-022 cover gallery loading starts before the task list responds'
     await coverLookupActions.waitForModalResultsReady();
     const candidates = await coverLookupActions.readRemoteCandidateSummaries();
     appleCandidate = candidates.find(
-      (candidate) => candidate.source.toLocaleLowerCase() === 'apple music',
+      (candidate) => candidate.source.toLocaleLowerCase() === 'apple',
     );
     expect(appleCandidate?.id).toBeTruthy();
     await coverLookupActions.waitForCandidateImageFixtureBlocked();
@@ -607,7 +607,7 @@ test('FTC-COVERS-013 partial cover results survive drawer reopen, save cancellat
 
     const modal = await coverLookupActions.inspectModalComponents();
 
-    expect(modal.subtitle).toBe(taskTitle);
+    expect(modal.subtitle).toBe(Object.values(PARTIAL_COVER_LOOKUP_TARGET).join(' - '));
     expect(modal.hasFindBetterButton).toBe(true);
     expect(modal.hasSaveButton).toBe(true);
     expect(modal.hasManualInput).toBe(true);
@@ -669,7 +669,7 @@ test('FTC-COVERS-019 Spotify stays linked while a downloadable provider reopens 
       (candidate) => candidate.source.toLocaleLowerCase() === 'spotify',
     );
     appleCandidate = candidates.find(
-      (candidate) => candidate.source.toLocaleLowerCase() === 'apple music',
+      (candidate) => candidate.source.toLocaleLowerCase() === 'apple',
     );
     expect(spotifyCandidate?.id).toBeTruthy();
     expect(appleCandidate?.id).toBeTruthy();
@@ -1108,7 +1108,7 @@ test('FTC-COVERS-017 manual lookup progressively retains provider alternatives',
     expect(completedCandidateIds.length).toBeLessThanOrEqual(24);
     expect(completedCandidates.every((candidate) => candidate.source.length > 0)).toBe(true);
     expect(completedCandidates.some((candidate) => candidate.source === 'Discogs')).toBe(true);
-    expect(completedCandidates.some((candidate) => candidate.source === 'Cover Art Archive')).toBe(true);
+    expect(completedCandidates.some((candidate) => candidate.source === 'CAA')).toBe(true);
     const discogsGroup = await coverLookupActions.readProviderGroupSummary('discogs');
     const archiveGroup = await coverLookupActions.readProviderGroupSummary('cover_art_archive');
     expect(discogsGroup.cards).toBeGreaterThanOrEqual(1);
@@ -1201,7 +1201,7 @@ test('FTC-COVERS-020 provider deadline keeps candidates found by earlier service
     await coverLookupActions.waitForModalSearchCompleted();
     await coverLookupActions.waitForRemoteCandidateCountAtLeast(1);
     const candidates = await coverLookupActions.readRemoteCandidateSummaries();
-    expect(candidates.some((candidate) => candidate.source === 'Apple Music')).toBe(true);
+    expect(candidates.some((candidate) => candidate.source === 'Apple')).toBe(true);
     const evidence = await coverLookupActions.readProviderFixtureEvidence();
     expect(evidence.apple_search_requests).toBeGreaterThan(0);
     expect(evidence.manual_page_requests).toBeGreaterThan(0);

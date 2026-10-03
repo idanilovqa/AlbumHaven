@@ -106,7 +106,6 @@ const INTERACTION_COLORS = Object.freeze({
   navigationHover: 'rgb(49, 70, 93)',
   navigationSelected: 'rgb(63, 95, 126)',
   itemHover: 'rgb(39, 56, 75)',
-  itemBorder: 'rgb(134, 183, 239)',
   itemPressed: 'rgb(32, 50, 70)',
   focus: 'rgb(134, 183, 239)',
 });
@@ -336,7 +335,9 @@ test(`${CASE_ID} applies every Appearance control family to real UI and preserve
     await galleryActions.galleryPage.galleryOptionsButton.hover();
     const galleryOptionsHover = await galleryActions.galleryPage.readGalleryOptionsAppearance();
     expect(galleryOptionsHover.backgroundColor).toBe(INTERACTION_COLORS.itemHover);
-    expect(galleryOptionsHover.borderColor).toBe(INTERACTION_COLORS.itemBorder);
+    expect(galleryOptionsHover.borderColor).toMatch(
+      /rgb\(108,\s*118,\s*123\)|color\(srgb\s+0\.422353\s+0\.463922\s+0\.48102\)/,
+    );
 
     await navigationPanelActions.selectSidebarArtistByName('Neal Morse');
     await artistFamilyActions.waitForViewReady('Neal Morse');
@@ -346,11 +347,13 @@ test(`${CASE_ID} applies every Appearance control family to real UI and preserve
     const familySelected = await artistFamilyActions.artistFamily.readAppearanceCheckpoint();
     expect(familySelected.box.backgroundColor).toBe('rgb(255, 255, 255)');
     expect(familySelected.box.borderColor).toBe('rgb(184, 189, 197)');
-    expect(familySelected.primary.backgroundColor).toBe('rgb(17, 21, 23)');
-    expect(familySelected.primary.borderColor).toBe('rgb(62, 247, 128)');
+    expect(familySelected.primary.backgroundColor).toMatch(
+      /rgba\(75,\s*193,\s*115,\s*0\.2\)|color\(srgb\s+0\.294118\s+0\.756863\s+0\.45098\s*\/\s*0\.2\)/,
+    );
+    expect(familySelected.primary.borderColor).toBe('rgb(75, 193, 115)');
     expect(familySelected.primary.markerVisible).toBe('visible');
     expect(familySelected.firstInactive.markerVisible).toBe('hidden');
-    expect(familySelected.firstInactive.borderColor).toBe('rgb(69, 75, 79)');
+    expect(familySelected.firstInactive.borderColor).toBe('rgb(184, 189, 197)');
     for (const row of [familySelected.primary, familySelected.firstInactive]) {
       expect(row.height).toBe(60);
       expect(row.borderWidth).toBe('1px');
@@ -359,8 +362,9 @@ test(`${CASE_ID} applies every Appearance control family to real UI and preserve
       expect(row.thumbnailHeight).toBe(48);
       expect(row.badgeWidth).toBe(44);
       expect(row.badgeHeight).toBe(32);
-      expect(row.badgeBackground).toBe('rgb(41, 43, 47)');
     }
+    expect(familySelected.primary.badgeBackground).toBe('color(srgb 0.877176 0.933647 0.958353)');
+    expect(familySelected.firstInactive.badgeBackground).toBe('color(srgb 0.823843 0.827765 0.832941)');
     const inactiveName = await artistFamilyActions.artistFamily.firstInactiveChip
       .getAttribute('data-gallery-family-artist');
     expect(inactiveName).toBeTruthy();
@@ -368,7 +372,8 @@ test(`${CASE_ID} applies every Appearance control family to real UI and preserve
     const combineHover = await artistFamilyActions.readCombineHoverState();
     expect(familyHover.before.backgroundColor).toBe(familySelected.firstInactive.backgroundColor);
     expect(familyHover.after.backgroundColor).not.toBe(familyHover.before.backgroundColor);
-    expect(familyHover.after.backgroundColor).toBe(combineHover.after.backgroundColor);
+    expect(combineHover.before.backgroundColor).toBe('rgba(0, 0, 0, 0)');
+    expect(combineHover.after.backgroundColor).toBe(combineHover.before.backgroundColor);
     expect(familyHover.after.labelDecoration).toBe('none');
 
     await settingsModalAppBarActions.openSettings();

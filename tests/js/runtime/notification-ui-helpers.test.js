@@ -522,7 +522,7 @@ test('managed cover-start assertion waits for settled toast geometry and preserv
   );
   assert.match(
     coverLookupActionsSource,
-    /await this\.startSearch\(\);\s*const finalVisualState = await this\.coverLookup\s*\.waitForCoverLookupStartedToastFinalState\(\{ timeout \}\);\s*await expect\(this\.coverLookup\.coverLookupStartedToast\)\.toBeVisible/u,
+    /await this\.startSearch\(\{ timeout \}\);[\s\S]*const finalVisualState = await this\.coverLookup[\s\S]*\.waitForCoverLookupStartedToastFinalState\(\{ timeout \}\);\s*await expect\(this\.coverLookup\.coverLookupStartedToast\)\.toBeVisible/u,
     'finite-lived toast geometry must be captured before slower provider progress assertions',
   );
   assert.match(

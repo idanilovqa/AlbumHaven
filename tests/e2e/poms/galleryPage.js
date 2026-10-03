@@ -1,5 +1,6 @@
 import { VISIBLE_ALBUM_YEAR_PATTERN } from '../helpers/visibleAlbumMetadata.js';
 import { AlbumCard } from './albumCard.js';
+import { artistSectionByName } from './artistSectionLocator.js';
 import { BasePage } from './basePage.js';
 import { authenticatedPageGet } from '../helpers/authenticatedPageRequest.js';
 import {
@@ -248,11 +249,7 @@ export class GalleryPage extends BasePage {
   }
 
   sectionByArtistHeading(artistHeading) {
-    return this.page.locator(this.artistSectionSelector).filter({
-      has: this.page.locator(this.artistHeadingWithinSectionSelector).filter({
-        hasText: exactNormalizedText(artistHeading),
-      }),
-    }).first();
+    return artistSectionByName(this.page, artistHeading);
   }
 
   headingByArtistName(artistName) {

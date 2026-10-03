@@ -62,7 +62,7 @@ test(`${CASE_ID} lookup matching rejects larger false Metallica releases before 
   thirdPartyRequestEvidence,
   trackModalActions,
 }) => {
-  let taskTitle = '';
+  const taskTitle = TARGET.album;
   let baselineLocalCover;
   let baselineFullSizeCover;
 
@@ -74,8 +74,8 @@ test(`${CASE_ID} lookup matching rejects larger false Metallica releases before 
       .toBe(Object.values(TARGET).join(' • '));
     await trackModalActions.openCoverLookup();
     await coverLookupActions.waitForModalReady();
-    taskTitle = await coverLookupActions.readModalSubtitle();
-    expect(taskTitle).toBe(Object.values(TARGET).join(' - '));
+    expect(await coverLookupActions.readModalSubtitle())
+      .toBe(Object.values(TARGET).join(' - '));
     baselineLocalCover = await coverLookupActions.readActiveLocalCoverEvidence();
     expect(baselineLocalCover.isActive).toBe(true);
     expect(baselineLocalCover.image.naturalWidth).toBe(480);

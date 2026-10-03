@@ -3645,6 +3645,52 @@ test('deferred pointer render retains the scroll frame owner across a render gen
   assert.equal(virtualGrid.albumCardNodeCache.size, 48, 'decoded detached-card retention must stay bounded');
   assert.equal(virtualGrid.albumCardNodeCache.has('decoded-0'), false, 'the oldest decoded card should be evicted first');
 
+  const createCachedCard = (key, decoded) => {
+    const image = new context.HTMLImageElement();
+    image.complete = decoded;
+    image.naturalWidth = decoded ? 480 : 0;
+    if (!decoded) {
+      image.setAttribute('data-cover-visual-state', 'pending');
+      image.setAttribute('data-gallery-cover-loading', '1');
+    }
+    return {
+      getAttribute(name) {
+        if (name === 'data-gallery-card-key') return key;
+        if (name === 'data-gallery-card-render-key') return 'same-render';
+        return '';
+      },
+      querySelector(selector) {
+        return selector === '.cover img' || selector === 'img[data-production-cover-src]'
+          ? image
+          : null;
+      },
+    };
+  };
+  const decodedCards = Array.from(
+    { length: 10 },
+    (_value, index) => createCachedCard(`decoded-priority-${index}`, true),
+  );
+  virtualGrid.albumCardNodeCache.clear();
+  virtualGrid.rememberRenderedAlbumCards({ querySelectorAll() { return decodedCards; } });
+  const pendingCards = Array.from(
+    { length: 48 },
+    (_value, index) => createCachedCard(`pending-deep-${index}`, false),
+  );
+  virtualGrid.rememberRenderedAlbumCards({ querySelectorAll() { return pendingCards; } });
+  assert.equal(virtualGrid.albumCardNodeCache.size, 48, 'mixed detached-card retention must stay bounded');
+  decodedCards.forEach((_card, index) => {
+    assert.equal(
+      virtualGrid.albumCardNodeCache.has(`decoded-priority-${index}`),
+      true,
+      'queued deep-window placeholders must not evict a decoded navigation return window',
+    );
+  });
+  assert.equal(
+    virtualGrid.albumCardNodeCache.has('pending-deep-0'),
+    false,
+    'the oldest pending node should yield before a decoded node',
+  );
+
   const inFlightImage = new context.HTMLImageElement();
   inFlightImage.complete = false;
   inFlightImage.naturalWidth = 0;

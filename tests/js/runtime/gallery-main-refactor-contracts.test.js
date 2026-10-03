@@ -58,14 +58,14 @@ test('connected triggers leave the edge adjoining their surface unpainted', () =
   );
 });
 
-test('Gallery toolbar buttons use the surrounding main surface', () => {
+test('Gallery toolbar buttons use the appearance control surface', () => {
   assert.match(
     galleryMainCssSource,
-    /\.gallery-bar__actions\s*\{[^}]*--gallery-toolbar-button-background:\s*var\(--appearance-main-surface,\s*var\(--panel\)\)/,
+    /\.gallery-bar__actions\s*\{[^}]*--gallery-toolbar-button-background:\s*var\(--appearance-control,\s*var\(--panel\)\)/,
   );
   assert.match(
     galleryMainCssSource,
-    /\.gallery-action-button\s*\{[^}]*background:\s*var\(--gallery-toolbar-button-background,\s*var\(--appearance-main-surface,\s*var\(--panel\)\)\)/,
+    /\.gallery-action-button\s*\{[^}]*background:\s*var\(--gallery-toolbar-button-background,\s*var\(--appearance-control,\s*var\(--panel\)\)\)/,
   );
   assert.match(
     galleryMainCssSource,

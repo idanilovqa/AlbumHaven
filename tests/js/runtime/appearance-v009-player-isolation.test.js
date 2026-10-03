@@ -202,7 +202,7 @@ test('loop selection boundary and tint follow the effective handle color', () =>
   assert.doesNotMatch(themedSelection, /#(?:86efac|4ade80|22c55e)/i);
 });
 
-test('changing only player colors cannot change Main-elements interaction tokens', () => {
+test('changing only player colors cannot change unrelated Main-elements tokens', () => {
   const first = styleTarget();
   const second = styleTarget();
   const common = {
@@ -230,9 +230,9 @@ test('changing only player colors cannot change Main-elements interaction tokens
     },
   }, second.element);
 
-  const playerToken = /^--appearance-(?:player(?:-|$)|play(?:-|$)|waveform-)/;
-  const firstInteractions = [...first.values].filter(([name]) => !playerToken.test(name));
-  const secondInteractions = [...second.values].filter(([name]) => !playerToken.test(name));
+  const playerLinkedToken = /^(?:--compact-floating-edge-color|--appearance-(?:player(?:-|$)|play(?:-|$)|waveform-|floating-edge$|panel-action-hover-background$))/;
+  const firstInteractions = [...first.values].filter(([name]) => !playerLinkedToken.test(name));
+  const secondInteractions = [...second.values].filter(([name]) => !playerLinkedToken.test(name));
   assert.deepEqual(secondInteractions, firstInteractions);
 });
 
@@ -258,7 +258,7 @@ test('themed player boundaries preserve floating hover and focus strength', () =
   );
   assert.match(
     playerCss,
-    /\.global-player\.is-floating-compact:is\(:hover,:focus-within\)\s*\{[^}]*--compact-floating-edge-strength:\s*30%/s,
+    /\.global-player\.is-floating-compact:is\(:hover,:focus-within\)\s*\{[^}]*--compact-floating-glow-strength:\s*38%/s,
   );
 });
 

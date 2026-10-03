@@ -264,6 +264,7 @@ export class NavigationPanelActions {
   }
 
   async selectSidebarArtistAt(index, options = {}) {
+    await this.setArtistTreeFolded(false);
     const artistLocator = this.navigationPanel.sidebarArtists.nth(index);
     const artistName = await artistLocator.getAttribute('data-sidebar-artist');
     if (!artistName) {
@@ -274,6 +275,7 @@ export class NavigationPanelActions {
   }
 
   async selectSidebarArtistByName(artistName, options = {}) {
+    await this.setArtistTreeFolded(false);
     const selectedArtist = String(artistName || '').trim();
     const artistLocator = this.navigationPanel.sidebarArtistByName(selectedArtist);
     await artistLocator.click({ noWaitAfter: true, ...options });
@@ -360,6 +362,7 @@ export class NavigationPanelActions {
   }
 
   async clickAllArtists(options = {}) {
+    await this.setArtistTreeFolded(false);
     const {
       expectArtistQueryCleared = false,
       waitTimeout,

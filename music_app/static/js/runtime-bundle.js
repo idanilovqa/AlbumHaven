@@ -14341,6 +14341,14 @@ async function fetchAndRender(url, push = true, options = {}) {
         resumePlayerWaveformPeakLoadsAfterForegroundView(waveformPeakLoadSuspension),
       ).catch(() => {});
     }
+    if (
+      !state.busy
+      && !state.ui.pendingViewRequest
+      && !state.ui.scanPageReturnContext
+      && !state.ui.forceScanPageVisible
+    ) {
+      resumeScanPageGalleryCoverLoads();
+    }
   }
 }
 
@@ -14467,7 +14475,6 @@ function abandonScanPageForNavigation(options = {}) {
   state.ui.scanPageReturnContext = null;
   state.ui.forceScanPageVisible = false;
   if (typeof unmountLibraryStatusBar === 'function') unmountLibraryStatusBar();
-  resumeScanPageGalleryCoverLoads();
   if (options.clearSelection === true) {
     state.view = {
       ...state.view,
@@ -33216,9 +33223,14 @@ class VirtualArtistGrid {
       this.albumCardNodeCache.delete(cacheKey);
       this.albumCardNodeCache.set(cacheKey, card);
       while (this.albumCardNodeCache.size > MAX_RETAINED_ALBUM_CARD_NODES) {
-        const oldestIdentity = this.albumCardNodeCache.keys().next().value;
-        if (!oldestIdentity) break;
-        this.albumCardNodeCache.delete(oldestIdentity);
+        const oldestPendingIdentity = [...this.albumCardNodeCache.entries()].find(([, cachedCard]) => {
+          const cachedCover = cachedCard?.querySelector?.('.cover img');
+          return cachedCover instanceof HTMLImageElement
+            && (!cachedCover.complete || Number(cachedCover.naturalWidth || 0) <= 0);
+        })?.[0];
+        const evictionIdentity = oldestPendingIdentity || this.albumCardNodeCache.keys().next().value;
+        if (!evictionIdentity) break;
+        this.albumCardNodeCache.delete(evictionIdentity);
       }
     });
   }
@@ -38024,6 +38036,7 @@ function handleGalleryBootstrapSearchSubmit(event) {
   });
   if (scanPageWasAbandoned && !searchWasScheduled) {
     renderView();
+    resumeScanPageGalleryCoverLoads();
   }
   input?.blur?.();
 }

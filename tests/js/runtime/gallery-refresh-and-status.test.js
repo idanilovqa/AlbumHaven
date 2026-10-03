@@ -4516,6 +4516,37 @@ test('Scan Page suspends hidden gallery cover work until the user leaves it', ()
   assert.deepEqual(coverLoadCalls, [['suspend'], ['resume', 41]]);
 });
 
+test('Scan Page navigation keeps hidden cover work suspended until the replacement view settles', async () => {
+  const { context, pendingRequests } = createContext();
+  const coverLoadCalls = [];
+  context.virtualGrid = {
+    suspendSelectedArtistCoverLoadsForUserAction() {
+      coverLoadCalls.push(['suspend']);
+      return 41;
+    },
+    resumeSelectedArtistCoverLoadsAfterUserAction(token) {
+      coverLoadCalls.push(['resume', token]);
+      return true;
+    },
+  };
+
+  context.openScanPage();
+  context.abandonScanPageForNavigation({ clearSelection: true });
+
+  assert.deepEqual(coverLoadCalls, [['suspend']]);
+  const replacement = context.fetchAndRender('/view-data?q=Replacement', false);
+  assert.deepEqual(coverLoadCalls, [['suspend']]);
+  pendingRequests[0].resolveWith({
+    query: 'Replacement',
+    artist_groups: [],
+    album_count: 0,
+  });
+
+  assert.equal(await replacement, true);
+  assert.equal(context.state.ui.scanPageCoverLoadSuspensionToken, 0);
+  assert.deepEqual(coverLoadCalls, [['suspend'], ['resume', 41]]);
+});
+
 test('abandonScanPageForNavigation discards Back restoration and neutralizes selection state before navigation', () => {
   const { context, calls, searchInput } = createContext();
   const aborts = [];

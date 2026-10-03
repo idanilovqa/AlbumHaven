@@ -974,6 +974,14 @@ async function fetchAndRender(url, push = true, options = {}) {
         resumePlayerWaveformPeakLoadsAfterForegroundView(waveformPeakLoadSuspension),
       ).catch(() => {});
     }
+    if (
+      !state.busy
+      && !state.ui.pendingViewRequest
+      && !state.ui.scanPageReturnContext
+      && !state.ui.forceScanPageVisible
+    ) {
+      resumeScanPageGalleryCoverLoads();
+    }
   }
 }
 
@@ -1100,7 +1108,6 @@ function abandonScanPageForNavigation(options = {}) {
   state.ui.scanPageReturnContext = null;
   state.ui.forceScanPageVisible = false;
   if (typeof unmountLibraryStatusBar === 'function') unmountLibraryStatusBar();
-  resumeScanPageGalleryCoverLoads();
   if (options.clearSelection === true) {
     state.view = {
       ...state.view,

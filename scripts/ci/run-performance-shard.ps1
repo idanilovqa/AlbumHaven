@@ -70,6 +70,24 @@ function Set-ClearedRuntimeSelectors {
     }
 }
 
+function Import-DatabaseEnvironmentExports([string]$Path) {
+    $requiredNames = @('PGPASSFILE', 'DATABASE_MIGRATOR_URL', 'DATABASE_APP_URL')
+    $exports = @{}
+    foreach ($line in (Get-Content -LiteralPath $Path)) {
+        $separator = $line.IndexOf('=')
+        if ($separator -le 0) { continue }
+        $name = $line.Substring(0, $separator)
+        if ($name -notin $requiredNames) { continue }
+        $exports[$name] = $line.Substring($separator + 1)
+    }
+    foreach ($name in $requiredNames) {
+        if (-not $exports.ContainsKey($name) -or [string]::IsNullOrWhiteSpace($exports[$name])) {
+            throw "PostgreSQL provisioning did not export $name."
+        }
+        Set-Item -LiteralPath "Env:$name" -Value $exports[$name]
+    }
+}
+
 function Wait-TargetPortsClear([int]$AppPort) {
     $ports = @(0..6 | ForEach-Object { $AppPort + $_ })
     for ($attempt = 0; $attempt -lt 40; $attempt += 1) {
@@ -164,6 +182,7 @@ try {
         PythonPath = $PythonPath
     }
     & $bootstrap @provisionArguments -SkipFixtureLoad
+    Import-DatabaseEnvironmentExports -Path $GithubEnv
 
     $env:PGPASSWORD = $null
     $env:PLAYWRIGHT_PYTHON = $PythonPath

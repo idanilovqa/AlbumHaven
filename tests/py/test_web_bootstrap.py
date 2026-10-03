@@ -429,7 +429,7 @@ def test_index_renders_shell_without_legacy_flask_route_module(asgi_app, monkeyp
     assert payload["bootstrap"]["startupHydration"]["endpoint"] == "/view-data?surface=albums&payload_tier=sidebar"
     assert payload["bootstrap"]["startupHydration"]["followupEndpoint"] == "/view-data?surface=albums&omit_sidebar=1"
     assert payload["bootstrap"]["startupHydration"]["tier"] == "sidebar"
-    assert b'id="library-loader" hidden' in body
+    assert re.search(rb'<section\b(?=[^>]*\bid="library-loader")(?=[^>]*\bhidden\b)[^>]*>', body)
     assert b'<div class="albums-scroll" id="albums-scroll" hidden>' not in body
     assert b'data-sidebar-artist="Broadcast"' in body
     assert payload["bootstrap"]["startupHydration"]["embeddedViewPatch"] == {
@@ -1609,7 +1609,9 @@ def test_app_js_loads_generated_runtime_bundle_after_bootstrap_payload_setup():
         "admin-members.js",
         "appearance-backgrounds.js",
         "appearance-palettes.js",
+        "appearance-device-profiles.js",
         "button-component.js",
+        "client-layout-bootstrap.js",
         "editor-page.js",
         "settings-navigation.js",
         "navigation-tree.js",

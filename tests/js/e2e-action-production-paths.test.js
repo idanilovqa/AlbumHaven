@@ -24,6 +24,40 @@ test('Artist Tree folding waits for the shell transition to settle', async () =>
   assert.equal(result.transitioning, false);
 });
 
+test('sidebar selection actions unfold the Artist Tree before using its links', async () => {
+  const { NavigationPanelActions } = await import(pathToFileURL(path.join(repoRoot, 'tests/e2e/actions/navigationPanelActions.js')).href);
+  const calls = [];
+  const indexedArtist = {
+    async getAttribute() { calls.push('indexed-read'); return 'Indexed Artist'; },
+    async click() { calls.push('indexed-click'); },
+  };
+  const namedArtist = {
+    async click() { calls.push('named-click'); },
+  };
+  const actions = new NavigationPanelActions({
+    sidebarArtists: { nth() { return indexedArtist; } },
+    sidebarArtistByName() { return namedArtist; },
+    allArtistsLink: {
+      async scrollIntoViewIfNeeded() { calls.push('all-scroll'); },
+      async click() { calls.push('all-click'); },
+    },
+  });
+  actions.setArtistTreeFolded = async (folded) => {
+    assert.equal(folded, false);
+    calls.push('unfold');
+  };
+
+  await actions.selectSidebarArtistAt(0);
+  await actions.selectSidebarArtistByName('Named Artist');
+  await actions.clickAllArtists();
+
+  assert.deepEqual(calls, [
+    'unfold', 'indexed-read', 'indexed-click',
+    'unfold', 'named-click',
+    'unfold', 'all-scroll', 'all-click',
+  ]);
+});
+
 test('cover toast entrance observation is cancelled when native search fails', async () => {
   const { CoverLookupActions } = await import(pathToFileURL(path.join(repoRoot, 'tests/e2e/actions/coverLookupActions.js')).href);
   const calls = [];
@@ -2038,6 +2072,30 @@ test('album identity topology uses action-owned scrolling and rendered card loca
     /with 2 of 2 production wheel actions/,
   );
   assert.equal(boundedWheelDeltas.length, 2);
+});
+
+test('album identity locators share the single-artist GalleryBar section fallback', () => {
+  const albumCard = read('tests/e2e/poms/albumCard.js');
+  const galleryPage = read('tests/e2e/poms/galleryPage.js');
+
+  assert.match(
+    albumCard,
+    /import \{ artistSectionByName \} from '\.\/artistSectionLocator\.js';[\s\S]*artistSectionByName\(this\.page, artistName\)/,
+  );
+  assert.match(
+    galleryPage,
+    /import \{ artistSectionByName \} from '\.\/artistSectionLocator\.js';[\s\S]*sectionByArtistHeading\(artistHeading\) \{[\s\S]*return artistSectionByName\(this\.page, artistHeading\);/,
+  );
+});
+
+test('album cover readiness keeps artist ownership in the shared card locator', () => {
+  const galleryActions = read('tests/e2e/actions/galleryActions.js');
+  const methodStart = galleryActions.indexOf('async waitForAlbumCoverReadyUnderHeading(');
+  const methodEnd = galleryActions.indexOf('\n  async scrollToAlbumUnderHeading(', methodStart);
+  const methodSource = galleryActions.slice(methodStart, methodEnd);
+
+  assert.match(methodSource, /cardByArtistAndAlbum\(artistName, albumName, \{ visible: true \}\)/);
+  assert.doesNotMatch(methodSource, /querySelectorAll\(selectors\.artistSectionSelector\)/);
 });
 
 test('mounted topology allows only the edited-card-sized trailing virtual boundary change', async () => {

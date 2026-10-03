@@ -388,6 +388,7 @@ test('shared scissors CSS overlays an attached pod and never uses a waiting curs
     __dirname, '..', '..', '..', 'music_app', 'static', 'css', 'runtime', 'non-album-and-player.css',
   ), 'utf8');
   assert.match(css, /\.loop-edit-action-pod\s*\{[^}]*position:\s*relative/s);
+  assert.match(css, /\.loop-edit-action-pod\s*\{[^}]*flex-shrink:\s*0/s);
   assert.match(css, /\.loop-play-control-actions\s*\{[^}]*position:\s*absolute/s);
   assert.match(css, /\.loop-edit-action-divider\s*\{[^}]*(?:width:\s*1px|border-left:)/s);
   assert.match(css, /\.loop-edit-actions\s*\{[^}]*opacity:\s*0/s);

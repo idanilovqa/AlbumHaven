@@ -1398,6 +1398,73 @@ test('row measurement stabilization retains absolute coordinates after rendered 
   );
 });
 
+for (const userScroll of [false, true]) {
+  test(`a pending anchor refresh ${userScroll ? 'yields to newer wheel scrolling' : 'retains programmatic reflow restoration'}`, () => {
+    const { context, scrollEl } = createRuntimeContext();
+    const virtualGrid = vm.runInContext('virtualGrid', context);
+    const groups = [{
+      artist: 'Scroll Artist',
+      albums: Array.from({ length: 24 }, (_value, index) => ({
+        key: `scroll-album-${index}`,
+        name: `Scroll Album ${index}`,
+        album_artist: 'Scroll Artist',
+        tracks: [],
+      })),
+    }];
+    virtualGrid.render = () => {};
+    virtualGrid.primeVisibleCoverImages = () => {};
+    virtualGrid.setGroups(groups, [], null);
+
+    const scheduledFrames = new Map();
+    let nextFrameId = 1;
+    context.scheduleBrowserAnimationFrame = (callback) => {
+      nextFrameId += 1;
+      scheduledFrames.set(nextFrameId, callback);
+      return nextFrameId;
+    };
+    context.cancelBrowserAnimationFrame = (frameId) => scheduledFrames.delete(frameId);
+    scrollEl.scrollTop = 900;
+    let anchorContentTop = 940;
+    const anchorTrigger = context.createAlbumTitleButton(
+      'scroll-album-9',
+      {},
+      virtualGrid.getRenderedSectionKey(virtualGrid.sections[0]),
+      'Scroll Album 9',
+    );
+    anchorTrigger.getBoundingClientRect = () => ({
+      top: anchorContentTop - scrollEl.scrollTop,
+      bottom: anchorContentTop - scrollEl.scrollTop + 300,
+    });
+    context.__albumTitleButtons = [anchorTrigger];
+    virtualGrid.render = () => { anchorContentTop = 1060; };
+
+    virtualGrid.setGroups(groups, [], null, { preserveScroll: true });
+    virtualGrid.render = () => {};
+    assert.equal(scrollEl.scrollTop, 1020, 'The immediate refresh must retain the visible anchor');
+    assert.equal(anchorTrigger.getBoundingClientRect().top, 40);
+    scrollEl.dispatchEvent({ type: 'scroll' });
+    anchorContentTop += 24;
+
+    if (userScroll) {
+      scrollEl.dispatchEvent({ type: 'wheel' });
+      scrollEl.scrollTop = 1400;
+      scrollEl.dispatchEvent({ type: 'scroll' });
+    }
+    for (const [frameId, callback] of [...scheduledFrames]) {
+      if (scheduledFrames.delete(frameId)) callback();
+    }
+
+    assert.equal(
+      scrollEl.scrollTop,
+      userScroll ? 1400 : 1044,
+      userScroll
+        ? 'The queued refresh must not overwrite the newer user scroll'
+        : 'A programmatic scroll event must retain next-frame anchor restoration after reflow',
+    );
+    virtualGrid.destroy();
+  });
+}
+
 test('a newer user scroll invalidates a pending absolute setGroups restoration', () => {
   const { context, scrollEl } = createRuntimeContext();
   const virtualGrid = vm.runInContext('virtualGrid', context);

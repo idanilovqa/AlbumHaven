@@ -1,3 +1,4 @@
+import { authenticatedPageGet } from '../helpers/authenticatedPageRequest.js';
 import { BasePage } from './basePage.js';
 import { AppBar } from './appBar.js';
 import { AppConfirmDialog } from './components/appConfirmDialog.js';
@@ -8,6 +9,14 @@ import { UtilityMainBody } from './utilityMainBody.js';
 import { UtilitySidebarSection } from './utilitySidebarSection.js';
 
 export class UtilityAppearanceTab extends BasePage {
+  async readSavedPreferences() {
+    const response = await authenticatedPageGet(this.page, '/account/appearance');
+    if (!response.ok()) throw new Error(`Appearance read failed: HTTP ${response.status()}.`);
+    // Compare account preferences/revision without exposing the transport credential in assertion output.
+    const { csrf_token, ...preferences } = await response.json();
+    return preferences;
+  }
+
   async isRetainedEditor(handle) {
     // parity-check: allow-read-only-measurement-evaluate -- compare the mounted draft editor after shared search
     return handle.evaluate(node => node.isConnected && node === document.querySelector('.appearance-background-editor'));
@@ -21,8 +30,15 @@ export class UtilityAppearanceTab extends BasePage {
     this.mainBody = new UtilityMainBody(page, testInfo);
     this.detailScroller = this.mainBody.detail;
     this.editor = page.locator('.appearance-background-editor');
+    this.deviceControls = page.locator('.appearance-device-controls');
+    this.deviceModeControls = page.locator('[data-appearance-device-mode]');
+    this.deviceModeGroup = this.deviceControls.getByRole('group', { name: 'Appearance linking', includeHidden: true });
+    this.followMobileMode = this.deviceControls.getByRole('button', { name: 'Follow Web / Desktop', exact: true });
+    this.customMobileMode = this.deviceControls.getByRole('button', { name: 'Custom mobile', exact: true });
     this.editorHeading = this.editor.getByRole('heading', { level: 3 });
     this.navigationTree = new NavigationTree(this.sidebar.list);
+    this.visibleSectionButtons = this.sidebar.list.locator('[data-utility-appearance-key]:visible');
+    this.searchEmpty = this.sidebar.list.locator('[data-appearance-search-empty]');
     this.seekbarModeInputs = page.locator(this.seekbarModeSelector);
     this.colorInputs = page.locator('[data-appearance-color]');
     this.compactPlayerStyle = new CompactPlayerStyleControl(
@@ -39,6 +55,7 @@ export class UtilityAppearanceTab extends BasePage {
     this.customPlayerColorsButton = this.editor.getByRole('button', { name: 'Custom player colors', exact: true });
     this.matchPlayerButton = this.editor.getByRole('button', { name: 'Match player', exact: true });
     this.customizePlayerButton = this.editor.getByRole('button', { name: 'Customize', exact: true });
+    this.customizePlayerHelp = this.editor.getByText("You can customize your player's colors in the “Player & Seekbar” setting.", { exact: true });
     this.recentSetsHeading = this.editor.getByText('Recent sets', { exact: true });
     this.latestPlayerSetButton = this.editor.getByRole('button', { name: 'Restore latest set', exact: true });
     this.useThemeInteractionsButton = this.editor.getByRole('button', { name: 'Use theme', exact: true });
@@ -70,6 +87,10 @@ export class UtilityAppearanceTab extends BasePage {
 
   compactStyleButton(style) {
     return this.compactPlayerStyle.button(style);
+  }
+
+  deviceButton(name) {
+    return this.deviceControls.getByRole('button', { name, exact: true });
   }
 
   dockedCompactPlayerBehaviorButton(behavior) {

@@ -102,6 +102,7 @@ def _app(*, actor=None, deployment="self_hosted"):
     resolver.resolve = lambda _token: resolver.actor
     app.state.current_actor_resolver = resolver
     app.state.appearance_preferences_repository = repository
+    app.state.client_layout_preferences_repository = SimpleNamespace(load_profiles=lambda **_kwargs: {})
     app.state.config = {"ALBUM_HAVEN_DEPLOYMENT_MODE": deployment}
     app.state.auth_policy_config = {
         "hmac": {"secret": "test-appearance-policy-key-32-bytes-minimum", "key_version": 1},
@@ -277,6 +278,68 @@ def test_storage_failure_is_retryable_without_exposing_database_details_or_succe
     assert repository.rows == {}
 
 
+@pytest.mark.parametrize("profiles", [
+    {"watch": {}},
+    {"mobile": {"sections": {"player": {"mode": "inherit", "values": {}}}}},
+    {"tv": {"sections": {"main": {"mode": "custom", "values": {
+        "main_surface_color": "not-a-color",
+    }}}}},
+])
+def test_invalid_device_profiles_return_bad_request_before_database_access(profiles):
+    from music_app.services.appearance_preferences_postgres import PostgresAppearancePreferencesRepository
+
+    app, _repository, _resolver = _app()
+    connections = []
+
+    def connect(_url):
+        connections.append(True)
+        raise RuntimeError("Database must not be accessed for an invalid preference.")
+
+    app.state.appearance_preferences_repository = PostgresAppearancePreferencesRepository(
+        {"ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://unused"}, connect=connect,
+    )
+    payload = {
+        **{key: value for key, value in AGGREGATE_APPEARANCE.items()
+           if key not in {"revision", "player_recent_sets"}},
+        "expected_revision": 7, "device_profiles": profiles, "action_button_outlines": True,
+    }
+    status, headers, body = _request(app, "PUT", payload)
+    assert status == 400
+    assert decode_json(body) == {"error": "invalid_appearance"}
+    assert "no-store" in headers["cache-control"]
+    assert connections == []
+
+
+def test_device_profile_route_preserves_omitted_fields_and_reports_storage_outage():
+    app, repository, _resolver = _app()
+    profiles = {"mobile": {"sections": {"player": {
+        "mode": "custom", "values": {"compact_player_style": "floating"},
+    }}}}
+    payload = {
+        **{key: value for key, value in AGGREGATE_APPEARANCE.items()
+           if key not in {"revision", "player_recent_sets"}},
+        "expected_revision": 7, "device_profiles": profiles, "action_button_outlines": True,
+    }
+    captured = []
+
+    def save(**kwargs):
+        captured.append(kwargs["device_profiles"])
+        raise RuntimeError("private database connection details")
+
+    repository.save_device_profiles = save
+    status, headers, body = _request(app, "PUT", payload)
+    assert captured == [profiles]
+    assert "compact_player_motion" not in captured[0]["mobile"]["sections"]["player"]["values"]
+    assert status == 503
+    assert decode_json(body) == {"error": "appearance_unavailable"}
+    assert "no-store" in headers["cache-control"]
+
+
+def _expected_layout_context(account_id):
+    return {"client_layout_preferences": {"account_id": account_id, "profiles": {},
+        "load_failed": False, "client_surface_class": "private_web"}}
+
+
 def _shell_request(app, actor):
     request = Request({"type": "http", "app": app, "headers": []})
     request.state.current_actor = actor
@@ -292,8 +355,8 @@ def test_shell_hydration_uses_each_requests_actor_and_does_not_reuse_another_the
     first = asyncio.run(load_appearance_context(_shell_request(app, _actor(41))))
     second = asyncio.run(load_appearance_context(_shell_request(app, _actor(52))))
 
-    assert first == {"appearance_preferences": {**CUSTOM, **EXTENDED_DEFAULTS, "loop_control_style": "capsule"}, "appearance_load_error": False}
-    assert second == {"appearance_preferences": {**DEFAULTS, **EXTENDED_DEFAULTS, "loop_control_style": "capsule"}, "appearance_load_error": False}
+    assert first == {**_expected_layout_context(41), "appearance_preferences": {**CUSTOM, **EXTENDED_DEFAULTS, "loop_control_style": "capsule"}, "appearance_load_error": False}
+    assert second == {**_expected_layout_context(52), "appearance_preferences": {**DEFAULTS, **EXTENDED_DEFAULTS, "loop_control_style": "capsule"}, "appearance_load_error": False}
     assert repository.reads == [41, 52]
 
 
@@ -306,7 +369,7 @@ def test_public_or_expired_session_hydration_returns_defaults_without_loading_ac
 
     context = asyncio.run(load_appearance_context(_shell_request(app, actor)))
 
-    assert context == {"appearance_preferences": {**DEFAULTS, **EXTENDED_DEFAULTS, "loop_control_style": "capsule"}, "appearance_load_error": False}
+    assert context == {**_expected_layout_context(None), "appearance_preferences": {**DEFAULTS, **EXTENDED_DEFAULTS, "loop_control_style": "capsule"}, "appearance_load_error": False}
     assert repository.reads == []
 
 
@@ -318,7 +381,7 @@ def test_shell_storage_failure_returns_explicit_retry_state_and_defaults():
 
     context = asyncio.run(load_appearance_context(_shell_request(app, _actor())))
 
-    assert context == {"appearance_preferences": {**DEFAULTS, **EXTENDED_DEFAULTS, "loop_control_style": "capsule"}, "appearance_load_error": True}
+    assert context == {**_expected_layout_context(41), "appearance_preferences": {**DEFAULTS, **EXTENDED_DEFAULTS, "loop_control_style": "capsule"}, "appearance_load_error": True}
 
 
 def test_direct_account_settings_embeds_its_authenticated_theme_before_body_rendering():

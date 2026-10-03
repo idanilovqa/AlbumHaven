@@ -1394,7 +1394,6 @@ function applyViewPayload(payload, options = {}) {
   const nextSelectedArtist = String(nextView.selected_artist || '').trim();
   const selectionChanged = previousSelectedArtist !== nextSelectedArtist;
   const previousHadRelatedArtists = Array.isArray(previousView.related_artists) && previousView.related_artists.length > 0;
-  const allArtistsChanged = Boolean(previousView.all_artists_active) !== Boolean(nextView.all_artists_active);
   const navigationRailContentKindChanged = (
     getRuntimeNavigationRailContentKind(previousView) !== getRuntimeNavigationRailContentKind(nextView)
   );
@@ -1418,11 +1417,9 @@ function applyViewPayload(payload, options = {}) {
   }
   if (
     state.ui?.artistsDrawerOpen
-    && (
-      selectionChanged
-      || allArtistsChanged
-      || navigationRailContentKindChanged
-    )
+    // Explicit navigation closes its drawer at activation. A later search
+    // response must not dismiss a drawer the user has opened since that request.
+    && navigationRailContentKindChanged
     && typeof closeArtistsDrawer === 'function'
   ) {
     closeArtistsDrawer({ restoreFocus: false });

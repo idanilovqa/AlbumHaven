@@ -2,21 +2,20 @@
 
 from __future__ import annotations
 
+from music_app.services.postgres_connections import pooled_connection as _connect
+
 from collections.abc import Callable, Mapping
 from datetime import datetime, timezone
 from typing import Any
 
-from music_app.services.admin_account_creation import CreatedAccount
+from music_app.services.admin_account_creation import CreatedAccount, _capabilities
+from music_app.services.admin_authority import ADMIN_LIBRARY_AUTHORITY_SQL, lock_admin_accounts
+from music_app.services.capability_assignments import CapabilityAssignment, store_assignment
+from music_app.services.capabilities import CAPABILITY_KEYS
 from music_app.services.admin_member_mutation_postgres import lock_current_actor_session
 from music_app.services.auth_invitation_models import InvitationDelivery
 from music_app.services.auth_tokens import IssuedOpaqueToken
 
-try:  # pragma: no cover - exercised with the optional runtime driver.
-    import psycopg
-    from psycopg.rows import dict_row
-except ImportError:  # pragma: no cover
-    psycopg = None
-    dict_row = None
 
 
 _IDENTITY_CONSTRAINTS = frozenset(
@@ -60,9 +59,14 @@ class PostgresAdminAccountRepository:
         invitation_expires_at: datetime | None,
         created_at: datetime,
         request_ref: str,
+        assignment: CapabilityAssignment | None = None,
     ) -> CreatedAccount:
         _positive_id(actor_account_id)
         _positive_id(library_id)
+        capability_keys = _capabilities(capability_keys)
+        if assignment is not None and (not isinstance(assignment, CapabilityAssignment)
+                                       or assignment.effective_keys != capability_keys):
+            raise ValueError("Managed account assignment is invalid.")
         created_at = _aware_utc(created_at)
         if invitation is None and invitation_expires_at is not None:
             raise ValueError("Managed account invitation expiry is invalid.")
@@ -75,23 +79,17 @@ class PostgresAdminAccountRepository:
         try:
             with self._connect(self._database_url) as connection:
                 with connection.transaction():
+                    lock_admin_accounts(connection, actor_account_id, actor_account_id)
                     authority = connection.execute(
-                        """
-                        select owner.account_id as actor_account_id,
-                               library.id as library_id
-                        from app.bootstrap_owners owner
-                        join app.accounts account
-                          on account.id = owner.account_id
-                         and account.is_active is true
-                         and account.disabled_at is null
-                        join library.libraries library
-                          on library.id = %s
-                         and library.owner_account_id = account.id
-                        where owner.account_id = %s
-                          and owner.owner_key = 'local-bootstrap-owner'
-                        for update of account, library
-                        """,
-                        (library_id, actor_account_id),
+                        f"""
+                        select actor.id as actor_account_id, locked_library.id as library_id
+                        from app.accounts actor
+                        join library.libraries locked_library on locked_library.id = %s
+                        where actor.id = %s and actor.is_active is true
+                          and actor.disabled_at is null
+                          and {ADMIN_LIBRARY_AUTHORITY_SQL}
+                        for update of actor, locked_library
+                        """, (library_id, actor_account_id),
                     ).fetchall()
                     if len(authority) != 1:
                         raise PermissionError(
@@ -130,15 +128,19 @@ class PostgresAdminAccountRepository:
                         """,
                         (library_id, account_id),
                     )
-                    for capability_key in capability_keys:
-                        connection.execute(
-                            """
-                            insert into app.capabilities (
-                              account_id, capability_key, scope_kind, scope_id
-                            ) values (%s, %s, 'library', %s)
-                            """,
-                            (account_id, capability_key, library_id),
+                    connection.execute(
+                        """
+                        insert into app.capabilities (
+                          account_id, capability_key, scope_kind, scope_id
                         )
+                        select %s, granted.capability_key, 'library', %s
+                        from unnest(%s::text[]) as granted(capability_key)
+                        """,
+                        (account_id, library_id, list(capability_keys)),
+                    )
+                    if assignment is not None:
+                        store_assignment(connection, account_id=account_id, library_id=library_id,
+                                         assignment=assignment)
                     invitation_delivery = None
                     if invitation is not None:
                         token_id = _returned_id(
@@ -222,9 +224,3 @@ def _returned_id(rows: object) -> int:
     row = rows[0]
     value = row.get("id") if isinstance(row, Mapping) else None
     return _positive_id(value)
-
-
-def _connect(database_url: str):
-    if psycopg is None:
-        raise RuntimeError("psycopg is required for account creation.")
-    return psycopg.connect(database_url, row_factory=dict_row)

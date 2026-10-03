@@ -57,7 +57,7 @@ test('shared Button CSS centers content on both axes and EditorFooter composes t
   assert.match(css, /\.ui-button:focus-visible\s*\{[^}]*outline-color:\s*var\(--appearance-interaction-outline,/s);
   assert.match(css, /:root \.ui-button\.ui-button--quiet\s*\{[^}]*border-color:\s*var\(--appearance-line,[^}]*background:\s*transparent/s);
   assert.match(css, /:root \.ui-button\.ui-button--quiet:hover:not\(:disabled\):not\(\[aria-disabled='true'\]\)\s*\{[^}]*background:\s*transparent/s);
-  assert.match(css, /:root \.ui-button\.ui-button--quiet:active:not\(:disabled\):not\(\[aria-disabled='true'\]\)\s*\{[^}]*background:\s*transparent/s);
+  assert.match(css, /:root \.ui-button\.ui-button--quiet:active:not\(:disabled\):not\(\[aria-disabled='true'\]\)\s*\{[^}]*background:\s*var\(--appearance-item-action-pressed,/s);
   assert.match(editor, /ButtonComponent\.renderButton/);
   assert.match(editor, /label:\s*secondary\.label \|\| 'Cancel'[\s\S]*quiet:\s*true/);
   assert.doesNotMatch(editor, /<button/);

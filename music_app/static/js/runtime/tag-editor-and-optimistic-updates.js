@@ -228,6 +228,7 @@ function settleTagEditorSessionMutationClaim(tagEditor = state.tagEditor) {
 }
 
 function openTagEditor(album, options = {}) {
+  if (typeof isMobileClient === 'function' && isMobileClient()) return false;
   const els = getTagEditorElements();
   if (!els.overlay || !album) return;
   bindOverlayPointerOrigin(els.overlay);
@@ -313,6 +314,15 @@ function autoNumberSelectedTagEditorTracks() {
   state.tagEditor.autoNumberTrackNumberSnapshots = trackNumberSnapshots;
   renderTagEditor({ preserveTrackList: true });
   syncTagEditorAutoNumberControls();
+}
+
+function closeTagEditorFromBackdrop() {
+  const changedUpdates = buildChangedTagEditorUpdates(
+    state.tagEditor.album,
+    state.tagEditor.tracks || [],
+    state.tagEditor.values || {},
+  );
+  if (!Object.keys(changedUpdates).length) closeTagEditor();
 }
 
 function closeTagEditor() {
@@ -1959,6 +1969,7 @@ function renderTrackModalRelease(album) {
       els.duplicateTabs.innerHTML = '';
     }
   }
+  if (typeof syncMobileAlbumComposition === 'function') syncMobileAlbumComposition(album);
   els.list.innerHTML = albumMissing ? '' : buildTrackListHtml(tracks, album, totalLength);
   if (els.footer) {
     els.footer.textContent = '';

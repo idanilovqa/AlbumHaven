@@ -3,12 +3,14 @@ from __future__ import annotations
 
 from pathlib import Path
 import time
+import shutil
 
 from isolatedLibraryApp import generate_playback_start_fixture_audio
 
 
 def prepare_settings_playback_media(library_root: Path) -> dict[str, dict[str, object]]:
     from music_app.services.metadata import FILE_METADATA_SCHEMA_VERSION
+    from PIL import Image
 
     artist = "Settings Navigation Fixture"
     album = "Uninterrupted Session"
@@ -19,8 +21,10 @@ def prepare_settings_playback_media(library_root: Path) -> dict[str, dict[str, o
         duration_seconds=180,
         frequency_hz=440,
     ).resolve()
+    cover = track.parent / "cover.png"
+    Image.new("RGB", (32, 32), (40, 120, 180)).save(cover)
     stat = track.stat()
-    return {
+    inventory = {
         str(track): {
             "path": str(track),
             "mtime": stat.st_mtime,
@@ -35,18 +39,28 @@ def prepare_settings_playback_media(library_root: Path) -> dict[str, dict[str, o
             "disc_number_raw": "1",
             "duration_seconds": 180,
             "duration_display": "3:00",
-            "cover_path": None,
+            "cover_path": str(cover),
             "library_root_id": "isolated-e2e-root",
             "library_root_category": "main_library",
             "metadata_schema_version": FILE_METADATA_SCHEMA_VERSION,
         }
     }
+    arrival = library_root / artist / "Boundary Arrival" / "01 - Arrival Signal.mp3"
+    arrival.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(track, arrival)
+    inventory[str(arrival)] = {**inventory[str(track)], "path": str(arrival),
+        "album": "Boundary Arrival", "title": "Arrival Signal", "cover_path": None}
+    return inventory
+
 
 
 def persist_settings_playback_inventory(
     setup_database_url: str,
     library_root: Path,
     file_cache: dict[str, dict[str, object]],
+    *,
+    rebuild_relations: bool = False,
+    include_missing_inventory: bool = False,
 ) -> None:
     from config import PERSISTENCE_BACKEND_POSTGRES
     from music_app.services.library_roots import (
@@ -72,6 +86,48 @@ def persist_settings_playback_inventory(
             "layout_mode": "artist",
         }],
     })
-    PostgresScanCacheAdapter(config).save_snapshot(
-        config["CACHE_PATH"], file_cache, library_root_cache_identity(config), time.time(),
+    if not file_cache or not include_missing_inventory:
+        PostgresScanCacheAdapter(config).save_snapshot(
+            config["CACHE_PATH"], file_cache, library_root_cache_identity(config), time.time(),
+            rebuild_relation_projection=rebuild_relations,
+        )
+        return
+    # Only the settings playback scenario owns this missing inventory. It is a
+    # real prior scan observation, followed by an observed
+    # disappearance before ASGI starts. The application receives normal rows only.
+    existing_path, existing = next(iter(file_cache.items()))
+    missing_path = library_root / "Settings Navigation Fixture" / "Missing Boundary Session" / "01 - Missing Signal.mp3"
+    missing_path.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(existing_path, missing_path)
+    missing = {**existing, "path": str(missing_path), "album": "Missing Boundary Session",
+               "title": "Missing Signal", "cover_path": None}
+    adapter = PostgresScanCacheAdapter(config)
+    root_identity = library_root_cache_identity(config)
+    adapter.save_snapshot(
+        config["CACHE_PATH"], {**file_cache, str(missing_path): missing}, root_identity, time.time(),
+        rebuild_relation_projection=rebuild_relations,
     )
+    missing_path.unlink()
+    missing_path.parent.rmdir()
+    adapter.save_snapshot(
+        config["CACHE_PATH"], file_cache, root_identity, time.time(),
+        observed_library_root_ids={"isolated-e2e-root"},
+        rebuild_relation_projection=rebuild_relations,
+    )
+
+
+def prepare_settings_cover_specs(temp_root: Path) -> list[dict[str, object]]:
+    from PIL import Image
+
+    covers = temp_root / "provider-covers"
+    covers.mkdir(parents=True, exist_ok=True)
+    specs = []
+    for name, color in (("phase7-provider", (180, 60, 40)), ("phase7-manual", (40, 180, 80))):
+        path = covers / f"{name}.jpg"
+        Image.new("RGB", (1024, 1024), color).save(path)
+        specs.append({"cover_id": name, "staged_path": str(path),
+                      "other_art_staged_path": str(path), "width": 1024, "height": 1024,
+                      "artist": "Settings Navigation Fixture", "album": "Uninterrupted Session",
+                      "year": 2026,
+                      "candidate_fixture_mode": "manual-source" if name == "phase7-manual" else ""})
+    return specs

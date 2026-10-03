@@ -417,6 +417,7 @@ function loadHelper(options = {}) {
   };
 
   vm.createContext(context);
+  vm.runInContext(fs.readFileSync(path.join(path.dirname(helperPath), 'album-artbox.js'), 'utf8'), context);
   vm.runInContext(helperSource, context, { filename: helperPath });
 
   return {

@@ -483,6 +483,7 @@ async function performAlbumMove(album, action, options = {}) {
 
 async function fetchUnsuccessfulAlbumCovers() {
   const previousStatus = { ...state.status };
+  const statusAction = claimLibraryStatusAction(true);
   try {
     console.log('[AlbumHaven][Covers] Starting manual bulk cover fetch.');
     startStatusIndicatorImmediately({
@@ -516,6 +517,7 @@ async function fetchUnsuccessfulAlbumCovers() {
     if (!response.ok || !data.ok) {
       throw new Error(data.error || 'Failed to fetch album covers');
     }
+    if (!settleLibraryStatusAction(statusAction)) return;
     if (data.queued_after_indexing) {
       updateStatusIndicator({
         ...state.status,
@@ -530,7 +532,7 @@ async function fetchUnsuccessfulAlbumCovers() {
         pending_cover_refresh_after_scan: true,
       });
       state.wasPollingBusy = true;
-      scheduleBrowserTimeout(pollStatus, 250);
+      scheduleStatusPoll(250);
       return;
     }
     updateStatusIndicator({
@@ -544,13 +546,13 @@ async function fetchUnsuccessfulAlbumCovers() {
     });
     if (data.already_running) {
       state.wasCoverPollingBusy = true;
-      scheduleBrowserTimeout(pollStatus, 250);
+      scheduleStatusPoll(250);
       return;
     }
     state.wasCoverPollingBusy = true;
-    scheduleBrowserTimeout(pollStatus, 250);
+    scheduleStatusPoll(250);
   } catch (error) {
-    updateStatusIndicator(previousStatus);
+    if (settleLibraryStatusAction(statusAction)) updateStatusIndicator(previousStatus);
     console.error('[AlbumHaven][Utilities] Failed to fetch unresolved album covers.', error);
     showToast(error.message || 'Failed to fetch album covers.', 'error', 3200);
   }
@@ -558,6 +560,8 @@ async function fetchUnsuccessfulAlbumCovers() {
 
 async function cancelAlbumCoverScan() {
   const previousStatus = { ...state.status };
+  const statusAction = claimLibraryStatusAction(false);
+  let cancellationStatus = null;
   try {
     console.log('[AlbumHaven][Covers] Cancelling bulk cover fetch.');
     updateStatusIndicator({
@@ -566,6 +570,7 @@ async function cancelAlbumCoverScan() {
       covers_current_folder: '',
       pending_cover_refresh_after_scan: false,
     });
+    cancellationStatus = state.status;
     const response = await fetch('/utilities/cancel-cover-scan', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -580,8 +585,11 @@ async function cancelAlbumCoverScan() {
     if (!response.ok || !data.ok) {
       throw new Error(data.error || 'Failed to cancel album cover scan');
     }
+    settleLibraryStatusAction(statusAction);
   } catch (error) {
-    updateStatusIndicator(previousStatus);
+    if (settleLibraryStatusAction(statusAction) && state.status === cancellationStatus) {
+      updateStatusIndicator(previousStatus);
+    }
     console.error('[AlbumHaven][Utilities] Failed to cancel album cover scan.', error);
     showToast(error.message || 'Failed to cancel album cover scan.', 'error', 3200);
   }
@@ -978,6 +986,7 @@ async function runLocalPlaylistImportAnalysis() {
 }
 
 function loadActiveUtilityTab(force = false) {
+  if (typeof window !== 'undefined' && window.AlbumHavenCapabilities && !window.AlbumHavenCapabilities.allowsUtilityTab(state.utility.activeTab)) return null;
   if (state.utility.activeTab === 'rules') {
     return loadUtilityRules(force);
   }
@@ -1100,8 +1109,16 @@ function resumeDeferredUtilityViewRequest() {
 let utilityCoverLoadSuspensionToken = 0;
 
 function openUtilityModal({ resetSearch = true, resetSelection = true, forceLoad = true } = {}) {
+  if (typeof isMobileClient === 'function' && isMobileClient() && !mobileUtilityTabAllowed(state.utility.activeTab)) state.utility.activeTab = 'appearance';
   const els = getUtilityModalElements();
   if (!els.overlay) return;
+  if (typeof window !== 'undefined' && window.AlbumHavenCapabilities) {
+    const permittedTab = window.AlbumHavenCapabilities.resolveUtilityTab(state.utility.activeTab);
+    if (!permittedTab) return;
+    setUtilityActiveTab(permittedTab);
+    if (state.utility.activeTab !== permittedTab) return;
+  }
+  if (typeof presentMobileUtilityPage === 'function') presentMobileUtilityPage();
   document.getElementById('track-modal')?.classList.remove('is-above-settings');
   if (
     !utilityCoverLoadSuspensionToken
@@ -1150,10 +1167,13 @@ function openUtilityModal({ resetSearch = true, resetSelection = true, forceLoad
 }
 
 function openUtilityLogHistoryTab(entryId = '') {
+  const canOpen = () => typeof window === 'undefined' || !window.AlbumHavenCapabilities
+    || window.AlbumHavenCapabilities.allowsUtilityTab('log-history');
+  if (!canOpen()) return;
   const owner = state.utility;
   const open = () => {
-    if (state.utility !== owner) return;
-    setUtilityActiveTab('log-history', true);
+    if (state.utility !== owner || !canOpen()) return;
+    if (setUtilityActiveTab('log-history', true) !== 'log-history') return;
     openUtilityModal({ resetSearch: false, resetSelection: false, forceLoad: !entryId });
     if (!entryId) return;
     const controller = getUtilityLogHistoryController();
@@ -1316,6 +1336,7 @@ async function submitPendingLastfmScrobbles() {
 
 function closeUtilityModal(skipAppearanceGuard = false) {
   if (skipAppearanceGuard !== true && typeof confirmBackgroundAppearanceLeave === 'function' && !confirmBackgroundAppearanceLeave(() => closeUtilityModal(true))) return;
+  if (typeof dismissMobilePage === 'function' && dismissMobilePage('utilities')) return;
   if (typeof unmountAppearanceEditors === 'function') unmountAppearanceEditors();
   if (typeof disposeMountedLoopActions === 'function') disposeMountedLoopActions(getUtilityModalElements()?.detail);
   const els = getUtilityModalElements();

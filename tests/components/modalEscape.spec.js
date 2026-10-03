@@ -94,3 +94,28 @@ test('nested stacking contexts outrank a child dialog with a larger local z-inde
   await expect(page.locator('#app-confirm-modal')).toBeVisible();
   await expect(page.locator('#track-modal')).toBeVisible();
 });
+
+test('Settings filter consumes first Escape and returns focus before the next closes Settings', async ({ page }) => {
+  await page.addScriptTag({ path: path.join(root, 'music_app/static/js/runtime/bootstrap-utility-event-handlers.js') });
+  await page.evaluate(() => {
+    document.getElementById('tag-editor-modal').hidden = true;
+    document.body.insertAdjacentHTML('beforeend', `<section id="utility-modal" class="utility-modal" style="z-index:200">
+      <div role="dialog" aria-modal="true">
+        <button id="utility-problem-filter-button" aria-expanded="true">Filter</button>
+        <div id="utility-problem-filter-menu"><button data-problem-filter-value="missing">Missing tags</button></div>
+      </div></section>`);
+    state.utility = { activeTab: 'problematic-files', problemDropdownOpen: true };
+    window.resumeDeferredUtilityViewRequest = () => {};
+    document.addEventListener('keydown', handleUtilityBootstrapKeyDown);
+  });
+  await page.locator('[data-problem-filter-value]').focus();
+  await page.keyboard.press('Escape');
+  await expect(page.locator('#utility-problem-filter-menu')).toBeHidden();
+  await expect(page.locator('#utility-problem-filter-button')).toBeFocused();
+  await expect(page.locator('#utility-problem-filter-button')).toHaveAttribute('aria-expanded', 'false');
+  await expect(page.locator('#utility-modal')).toBeVisible();
+  await expect(page.locator('#track-modal')).toBeVisible();
+  await page.keyboard.press('Escape');
+  await expect(page.locator('#utility-modal')).toBeHidden();
+  await expect(page.locator('#track-modal')).toBeVisible();
+});

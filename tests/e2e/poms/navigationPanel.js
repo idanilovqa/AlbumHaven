@@ -23,8 +23,11 @@ export class NavigationPanel extends BasePage {
     this.allArtistsCount = page.locator(this.allArtistsCountSelector);
     this.activeSidebarLink = page.locator(this.activeSidebarLinkSelector);
     this.activeAllArtistsLink = page.locator(this.activeAllArtistsSelector);
+    this.layoutPreferenceSync = page.locator('html');
     this.artistTreeFoldButton = page.getByRole('button', { name: 'Collapse Artist Tree', exact: true });
     this.artistTreeNavigationButton = page.getByRole('button', { name: 'Artist Tree', exact: true });
+    this.artistRail = page.locator('#shell-navigation-rail');
+    this.mobileArtistTreeButton = page.locator('#mobile-library-button');
   }
 
   async readArtistTreeFoldState() {
@@ -34,6 +37,7 @@ export class NavigationPanel extends BasePage {
       const main = document.getElementById('shell-main-surface');
       return {
         folded: shell.classList.contains('is-artist-tree-folded'),
+        transitioning: Boolean(rail?.classList.contains('is-transitioning')),
         mainWidth: main?.getBoundingClientRect().width || 0,
         railWidth: rail?.getBoundingClientRect().width || 0,
       };

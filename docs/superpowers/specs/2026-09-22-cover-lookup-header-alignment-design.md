@@ -48,4 +48,3 @@ Rendered component coverage will verify:
 - the light theme displays the dark clear icon by default;
 - the dark theme retains its current default icon behavior; and
 - hover/focus continues to expose the intended alternate icon.
-

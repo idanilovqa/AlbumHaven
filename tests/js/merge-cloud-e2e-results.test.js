@@ -40,6 +40,11 @@ function exactInventory() {
       target: target.name,
       measurementExpected: target.measurementExpected !== false,
       fixtureMode: target.fixtureMode,
+      coverageCaseIds: {
+        'scan-page': ['FTC-OPS-003C', 'FTC-OPS-003E'],
+        'scan-health': ['FTC-OPS-003F'],
+        'scan-error': ['FTC-OPS-003G'],
+      }[target.name] || [],
     })),
   };
 }
@@ -126,8 +131,8 @@ function performanceArtifact(row, index) {
       fingerprint: fingerprint(),
       ...(coverageOnly ? {
         measurementAvailable: false, coverageOnly: true, attemptCount: 1,
-        attempts: [], series: [], testCount: 2,
-        cases: ['FTC-OPS-003C', 'FTC-OPS-003E'].map((testId, caseIndex) => ({
+        attempts: [], series: [], testCount: row.target === 'scan-page' ? 2 : 1,
+        cases: (row.target === 'scan-error' ? ['FTC-OPS-003G'] : row.target === 'scan-health' ? ['FTC-OPS-003F'] : ['FTC-OPS-003C', 'FTC-OPS-003E']).map((testId, caseIndex) => ({
           testId, name: `${testId} scan-page coverage`, status: 'passed', durationMs: 100 + caseIndex,
           steps: [{ title: 'Exercise Scan Page contract', status: 'passed', durationMs: 20 }],
           stackSummary: '', finalScreenshot: null,
@@ -198,6 +203,7 @@ function scanPageRow() {
   return {
     target: 'scan-page', artifactName: `performance-result-scan-page-${RUN_ATTEMPT}`,
     childId: 'performance:scan-page', measurementExpected: false, fixtureMode: 'generated-isolated',
+    coverageCaseIds: ['FTC-OPS-003C', 'FTC-OPS-003E'],
   };
 }
 
@@ -262,11 +268,67 @@ function writeCoverageTarget(root, {
   return targetRoot;
 }
 
+mergerTest('every registered coverage-only target materializes its own functional cases', () => {
+  const { performanceArtifact: materialize } = require(materializerPath);
+  const expected = {
+    'scan-page': ['FTC-OPS-003C', 'FTC-OPS-003E'],
+    'scan-health': ['FTC-OPS-003F'],
+    'scan-error': ['FTC-OPS-003G'],
+  };
+  const { buildExpectedCloudE2EInventory } = require(mergerPath);
+  const registered = buildExpectedCloudE2EInventory({ runAttempt: RUN_ATTEMPT })
+    .performance.filter(row => row.measurementExpected === false);
+  assert.deepEqual(registered.map(row => row.target).sort(), Object.keys(expected).sort());
+  for (const row of registered) {
+    const { target } = row;
+    const root = fs.mkdtempSync(path.join(require('node:os').tmpdir(), 'cloud-coverage-'));
+    try {
+      writeCoverageTarget(root, { report: scanPagePlaywrightReport({ caseIds: expected[target] }) });
+      if (target !== 'scan-page') fs.renameSync(path.join(root, 'scan-page'), path.join(root, target));
+      fs.writeFileSync(path.join(root, target, 'ci-job.json'), JSON.stringify({
+        target, runAttempt: RUN_ATTEMPT, conclusion: 'success', blocking: false,
+      }));
+      const artifact = materialize(root, row, {
+        runId: RUN_ID, runAttempt: RUN_ATTEMPT, generatedAt: GENERATED_AT,
+      }, fingerprint());
+      assert.deepEqual(artifact.payload.cases.map(entry => entry.testId), expected[target]);
+      assert.equal(artifact.payload.testCount, expected[target].length);
+      assert.equal(artifact.payload.coverageOnly, true);
+      assert.deepEqual(artifact.payload.attempts, []);
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  }
+});
+
+mergerTest('sample generator keeps the functional IDs for every coverage-only target', () => {
+  let input;
+  const samplePath = path.join(repoRoot, 'scripts/ci/generate-cloud-e2e-report-sample.cjs');
+  require('node:vm').runInNewContext(fs.readFileSync(samplePath, 'utf8'), {
+    __dirname: path.dirname(samplePath), Buffer, process: { stdout: { write() {} } },
+    require(name) {
+      if (name === './merge-cloud-e2e-results.cjs') return {
+        ...require(mergerPath),
+        mergeCloudE2EResults(value) { input = value; return { pagesFiles: {} }; },
+      };
+      return require(name);
+    },
+  }, { filename: samplePath });
+  const cases = Object.fromEntries(input.resultArtifacts
+    .filter(row => row.payload.coverageOnly)
+    .map(row => [row.payload.target, Array.from(row.payload.cases, entry => entry.testId)]));
+  assert.deepEqual(cases, {
+    'scan-page': ['FTC-OPS-003C', 'FTC-OPS-003E'],
+    'scan-health': ['FTC-OPS-003F'],
+    'scan-error': ['FTC-OPS-003G'],
+  });
+});
+
 test('cloud E2E merger module exists', () => {
   assert.equal(mergerExists, true, 'Missing scripts/ci/merge-cloud-e2e-results.cjs');
 });
 
-mergerTest('expected child inventory is exactly four functional shards and 19 performance targets', () => {
+mergerTest('expected child inventory is exactly four functional shards and 21 performance targets', () => {
   const { buildExpectedCloudE2EInventory } = require(mergerPath);
   const expected = exactInventory();
   const actual = buildExpectedCloudE2EInventory({
@@ -276,19 +338,19 @@ mergerTest('expected child inventory is exactly four functional shards and 19 pe
   });
 
   assert.equal(actual.functional.length, 4);
-  assert.equal(actual.performance.length, 19);
+  assert.equal(actual.performance.length, 21);
   assert.deepEqual(actual, expected);
   assert.equal(new Set([
     ...actual.functional.map((row) => row.childId),
     ...actual.performance.map((row) => row.childId),
-  ]).size, 23);
-  assert.deepEqual(actual.performance.filter((row) => !row.measurementExpected).map((row) => row.target), ['scan-page']);
+  ]).size, 25);
+  assert.deepEqual(actual.performance.filter((row) => !row.measurementExpected).map((row) => row.target), ['scan-page', 'scan-health', 'scan-error']);
 
   const driftedContract = clone(performanceContract);
   driftedContract.targets.find((target) => target.name === 'idle-memory').measurementExpected = false;
   assert.throws(() => buildExpectedCloudE2EInventory({
     functionalContract, performanceContract: driftedContract, runAttempt: RUN_ATTEMPT,
-  }), /only scan-page as coverage-only/i);
+  }), /only scan-page, scan-health, and scan-error as coverage-only/i);
 });
 
 mergerTest('Playwright JSON materialization keeps steps and only the final failed PNG', () => {
@@ -861,7 +923,7 @@ mergerTest('public merger output drops raw reporter internals and validates as a
   assert.equal(retainedHistory.length, 18);
   assert.equal(retainedHistory.every((entry) => entry.attempts[0].attempt === 1), true);
   assert.deepEqual(validateCloudTestReport(report), []);
-  assert.equal(report.verificationEvidence.children.length, 23);
+  assert.equal(report.verificationEvidence.children.length, 25);
   assert.equal(report.verificationEvidence.children.every((child) => (
     child.kind === 'functional' || child.kind === 'performance'
   )), true);
@@ -878,12 +940,12 @@ mergerTest('authenticated inventory retains structured E2E results for 14 days a
   const report = mergeCloudE2EResults(sampleInput());
   const inventory = report.authenticatedInventory;
 
-  assert.equal(inventory.structuredReports.length, 23);
+  assert.equal(inventory.structuredReports.length, 25);
   assert.equal(inventory.debugArtifacts.length, 2);
   assert.equal(inventory.structuredReports.every((entry) => entry.retentionDays === 14), true);
   assert.equal(inventory.debugArtifacts.every((entry) => entry.retentionDays === 7), true);
   assert.equal(new Set([
     ...inventory.structuredReports.map((entry) => entry.name),
     ...inventory.debugArtifacts.map((entry) => entry.name),
-  ]).size, 25);
+  ]).size, 27);
 });

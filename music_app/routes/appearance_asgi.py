@@ -7,6 +7,7 @@ from fastapi.responses import JSONResponse
 from starlette.concurrency import run_in_threadpool
 
 from music_app.routes.auth_asgi import _policy_config
+from music_app.routes.client_layout_asgi import load_client_layout_context
 from music_app.routes.bounded_json import JSONBodyTooLarge, read_bounded_json_object
 from music_app.services.appearance_preferences_postgres import (
     AppearanceLoopStyleForbidden,
@@ -14,6 +15,7 @@ from music_app.services.appearance_preferences_postgres import (
     PostgresAppearancePreferencesRepository,
     appearance_client_profile,
     expand_appearance_preferences,
+    normalize_appearance_device_profiles,
     normalize_appearance_preferences,
     resolve_appearance_device_profile,
 )
@@ -60,7 +62,7 @@ async def load_appearance_context(request: Request) -> dict[str, object]:
                 ))
         except Exception:
             failed = True
-    return {"appearance_preferences": colors, "appearance_load_error": failed}
+    return {"appearance_preferences": colors, "appearance_load_error": failed, **await load_client_layout_context(request)}
 
 
 @router.get("/account/appearance")
@@ -108,6 +110,11 @@ async def put_appearance(request: Request) -> JSONResponse:
             raise ValueError("Invalid expected revision.")
         if not aggregate and expected_revision is not None:
             raise ValueError("Unexpected revision.")
+        if device_profile_write:
+            normalize_appearance_device_profiles(
+                device_profiles,
+                base_preferences={**colors, "action_button_outlines": action_button_outlines},
+            )
     except JSONBodyTooLarge:
         return JSONResponse(
             {"error": "appearance_payload_too_large"},

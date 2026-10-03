@@ -721,6 +721,7 @@ def _is_file_backed_selected_artist_complex_request(request: Request) -> bool:
 def _is_postgres_root_album_browse_request(request: Request) -> bool:
     allowed_root_album_browse_params = {
         "surface",
+        "all_artists",
         "gallery_scope",
         "gallery_display",
         "gallery_display_mode",

@@ -64,6 +64,29 @@ test('public evidence accepts only functional and performance E2E children', () 
   }
 });
 
+test('coverage-only summaries require each registered target exact case count', () => {
+  const { validateEvidence } = require(builderPath);
+  const targets = require('../ci/performance-targets.json').targets
+    .filter(target => target.measurementExpected === false);
+  for (const target of targets) {
+    const input = sampleInput();
+    input.expectedChildIds[1] = `performance:${target.name}`;
+    input.children[1] = {
+      id: `performance:${target.name}`, conclusion: 'success',
+      passed: target.cases.length, failed: 0, skipped: 0,
+    };
+    input.performance = [{
+      target: target.name, classification: 'coverage-only', blocking: false,
+      measurementAvailable: false, coverageStatus: 'success', actualValue: null,
+      units: '', primaryAttempt: null, testCount: target.cases.length, failed: 0,
+      historyPath: `performance/${target.name}/`,
+    }];
+    assert.deepEqual(validateEvidence(input), [], target.name);
+    input.performance[0].testCount += 1;
+    assert.match(validateEvidence(input).join('\n'), /malformed performance summary/, target.name);
+  }
+});
+
 test('evidence rejects missing, duplicate, mismatched, malformed, and duplicate artifact inputs', () => {
   const { validateEvidence } = require(builderPath);
   const missing = sampleInput();

@@ -149,6 +149,8 @@ function createContext(stateOverrides = {}) {
     clearBrowserTimeout() {},
     closeRepairConfirmModal() {},
     closeUtilityModal() {},
+    closeUtilityLoopSettingMenu() {},
+    openMobileUtilityDetail() {},
     buildCompactDataTable() {
       return '';
     },
@@ -1182,6 +1184,7 @@ test('tag editor backdrop closes only when the editor has no changed updates', a
       },
     };
     const { context } = createContext();
+    vm.runInContext(fs.readFileSync(path.join(__dirname, '../../../music_app/static/js/runtime/tag-editor-and-optimistic-updates.js'), 'utf8'), context);
     let closeCalls = 0;
     context.document.getElementById = (id) => (id === 'tag-editor-modal' ? overlay : null);
     context.overlayClickStartedOnOverlay = (candidate, event) => (

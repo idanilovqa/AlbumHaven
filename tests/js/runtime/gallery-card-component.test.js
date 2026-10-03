@@ -61,7 +61,7 @@ test('GalleryCardInfo keeps artist and year together with ten-point rating, trac
     title: 'SMPTe', artist: 'Transatlantic', year: '2000', ratingHtml, trackCount: 5, lengthDisplay: '1h 17m',
   });
   assert.match(infoHtml, /SMPTe/);
-  assert.match(infoHtml, /class="album-subtitle">Transatlantic · 2000<\/div>/);
+  assert.match(infoHtml, /class="album-subtitle"><span data-gallery-metadata-text>Transatlantic · 2000<\/span><\/div>/);
   assert.doesNotMatch(infoHtml, /class="album-year"/);
   assert.match(infoHtml, /5 tracks/);
   assert.match(infoHtml, /1h 17m/);
@@ -125,5 +125,5 @@ test('hover year omits unknown values and safely renders supplied release years'
   assert.doesNotMatch(context.buildGalleryCardHtml({ year: '<img src=x>', displayMode: 'covers' }), /<img src=x>/);
   const cards = context.buildGalleryCardHtml({ year: '2005', displayMode: 'cards' });
   assert.doesNotMatch(cards, /gallery-card__hover-year|gallery-card__year-frame|data-gallery-release-year/);
-  assert.match(cards, />2005<\/div>/);
+  assert.match(cards, /<span data-gallery-metadata-text>2005<\/span><\/div>/);
 });

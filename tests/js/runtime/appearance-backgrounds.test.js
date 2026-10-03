@@ -425,14 +425,28 @@ test('Artist Family panel and artist states retain Appearance palette and intera
   hasMapping(":root[data-appearance-mode='light'] .artist-family-panel__artist:hover", 'inset 0 0 18px color-mix(in srgb, var(--appearance-play) 18%, transparent)');
   hasMapping(":root[data-appearance-mode='light'] .artist-family-panel__artist.is-active", 'inset 0 0 18px color-mix(in srgb, var(--appearance-play) 18%, transparent)');
   const lightActiveRules = rules.filter(rule => rule.selector.includes("[data-appearance-mode='light']") && rule.selector.includes('.artist-family-panel__artist.is-active'));
-  assert.ok(lightActiveRules.some(rule => rule.declarations.includes('background: var(--appearance-play, #4bc173)')));
+  assert.ok(lightActiveRules.some(rule => rule.declarations.includes('background: color-mix(in srgb, #4bc173 20%, transparent)')));
   assert.ok(lightActiveRules.some(rule => rule.declarations.includes('color: var(--appearance-play-ink, #10201a)')));
   const lightCountRule = lightActiveRules.find(rule => rule.selector.includes('.artist-family-panel__count'));
-  assert.ok(lightCountRule?.declarations.includes('background: var(--appearance-play-ink, #10201a)'));
-  assert.ok(lightCountRule?.declarations.includes('color: var(--appearance-play, #4bc173)'));
+  assert.ok(lightCountRule?.declarations.includes('background: color-mix(in srgb, var(--appearance-card, #fff) 82%, var(--appearance-play, #4bc173))'));
+  assert.ok(lightCountRule?.declarations.includes('color: var(--appearance-play-ink, #10201a)'));
   for (const token of ['--appearance-item-action-hover-background', '--appearance-item-action-pressed']) {
     const actionRules = rules.filter(rule => rule.selector.includes(":is(button, .button, [role='button'], [data-actionable])") && rule.declarations.includes(`background: var(${token}`));
     assert.ok(actionRules.length > 0);
     assert.ok(actionRules.every(rule => rule.selector.includes(':not(.artist-family-panel__artist)')), 'Artist Family navigation rows must not inherit generic action fills');
+  }
+});
+
+test('main and panel automatic hover fill uses the approved player tint and preserves explicit overrides', () => {
+  const appearance = runtime();
+  const effective = player => ({ tokens: { control: '#112233', 'panel-control': '#445566', 'player-surface-start': player } });
+  for (const control of ['#112233', '#445566']) {
+    const first = appearance.resolveActionInteractionTokens({}, effective('#FF0000'), control);
+    const second = appearance.resolveActionInteractionTokens({}, effective('#0000FF'), control);
+    assert.equal(first.hoverBackground, `color-mix(in srgb, #FF0000 14%, color-mix(in srgb, ${control} 85%, #EEEEEE))`);
+    assert.equal(second.hoverBackground, `color-mix(in srgb, #0000FF 14%, color-mix(in srgb, ${control} 85%, #EEEEEE))`);
+    assert.notEqual(second.hoverBackground, first.hoverBackground);
+    assert.equal(first.pressedBackground, `color-mix(in srgb, ${control} 75%, #000000)`);
+    assert.equal(appearance.resolveActionInteractionTokens({ interaction_overrides: { button_hover_background: '#123456' } }, effective('#FF0000'), control).hoverBackground, '#123456');
   }
 });

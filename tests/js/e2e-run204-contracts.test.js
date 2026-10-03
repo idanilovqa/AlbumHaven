@@ -28,16 +28,29 @@ test('mutation continuity captures the surviving artist/year metadata before the
     document: { querySelector: selector => selector === '.list' ? list : selected, querySelectorAll: () => items },
     MutationObserver: class { observe() {} disconnect() {} },
   });
+  const calls = [];
   const actions = new Actions({
-    activeListItem: { scrollIntoViewIfNeeded: async () => {} },
+    activeListItem: {
+      count: async () => { calls.push('selected-count'); return 1; },
+      scrollIntoViewIfNeeded: async () => { calls.push('reveal-selected'); },
+    },
+    searchSection: { searchInput: { inputValue: async () => { calls.push('read-query'); return 'Artist'; } } },
+    waitForSearchProjection: async (query, options) => {
+      calls.push('settle-projection');
+      assert.equal(query, 'Artist');
+      assert.deepEqual({ ...options }, { requireSettledRange: true });
+    },
     sidebarListSelector: '.list', activeListItemSelector: '.selected', listItemSelector: '.item',
     listItemTitleSelector: '.title', listItemMetaSelector: '.meta',
     page: { async evaluateHandle(callback, selectors) {
+      calls.push('observe');
       const snapshot = callback(selectors);
       return { evaluate: async read => read(snapshot), dispose: async () => {} };
     } },
   });
   const snapshot = await actions.prepareSelectedMutationContinuity();
+  assert.deepEqual(calls, ['selected-count', 'reveal-selected', 'read-query', 'settle-projection', 'observe']);
+  assert.equal(snapshot.removedKey, 'selected-album');
   assert.equal(snapshot.previousKey, 'prior-album');
   assert.equal(snapshot.previousTitle, 'Prior album');
   assert.equal(snapshot.previousMeta, 'Artist · 2026');

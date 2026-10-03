@@ -4,6 +4,7 @@ const { test, expect } = require('@playwright/test');
 const root = path.resolve(__dirname, '../..');
 const { renderPlaybackControlCluster } = require(path.join(root, 'music_app/static/js/runtime/playback-control-cluster.js'));
 const { renderButton } = require(path.join(root, 'music_app/static/js/button-component.js'));
+const { applyFixtureAppearance } = require('./appearanceFixture.js');
 const url = 'http://sidebar-player-component.test/';
 const player = page => page.locator('.global-player');
 const cover = page => page.locator('[data-compact-player-cover]');
@@ -13,10 +14,14 @@ const rail = page => page.locator('#shell-navigation-rail');
 
 async function mount(page, {
   behavior = 'follow_sidebar', speed = 'normal', reduced = false, forceCompact = true,
-  regularStyle = false, appearanceMode = 'dark',
+  regularStyle = false, appearanceMode = 'dark', visual = false,
 } = {}) {
   await page.setViewportSize({ width: 1200, height: 800 });
   await page.emulateMedia({ reducedMotion: reduced ? 'reduce' : 'no-preference' });
+  if (visual) await page.route('**/cover?path=component-artwork', route => route.fulfill({
+    contentType: 'image/svg+xml',
+    body: '<svg xmlns="http://www.w3.org/2000/svg" width="240" height="240" viewBox="0 0 240 240"><rect width="240" height="240" fill="#19394e"/><circle cx="160" cy="72" r="48" fill="#f5b953"/><path d="M0 210 88 70 170 210ZM70 240 184 100 240 180V240Z" fill="#55b5a1"/><path d="M0 212H240V240H0Z" fill="#17303e"/></svg>',
+  }));
   await page.route(url, route => route.fulfill({
     contentType: 'text/html',
       body: '<!doctype html><html data-appearance-mode="' + appearanceMode + '" data-appearance-player="custom" data-compact-player-style="docked" data-docked-compact-player-behavior="' + behavior
@@ -65,6 +70,13 @@ async function mount(page, {
       return true;
     };
   });
+  if (visual) {
+    await applyFixtureAppearance(page, {
+      palette_id: appearanceMode === 'light' ? 'paper' : 'harbor-mint', panel_index: 0,
+      docked_compact_player_behavior: behavior, docked_compact_player_regular_style: regularStyle,
+    });
+    await page.evaluate(() => { window.state.player.current.coverPath = 'component-artwork'; });
+  }
   for (const file of ['client-preferences-helpers.js', 'compact-player-helpers.js', 'playback-control-cluster.js',
     'compact-player-controller.js', 'shell-navigation-drawer.js']) {
     await page.addScriptTag({ path: path.join(root, 'music_app/static/js/runtime', file) });
@@ -106,6 +118,62 @@ async function settle(page) {
       .map(animation => animation.finished.catch(() => {})));
   });
 }
+
+for (const [variant, behavior, presentation] of [
+  ['A', 'follow_sidebar', 'rail_play'],
+  ['B', 'float_on_collapse', 'floating'],
+  ['C', 'artbox', 'rail_artbox'],
+]) {
+  test(`sidebar player ${variant} preserves its collapsed visual presentation @visual`, async ({ page }) => {
+    await mount(page, { behavior, visual: true });
+    await fold(page, presentation);
+    await page.locator('#outside').hover();
+    await settle(page);
+    // Include the overflowing artwork, controls, glow and nearby rail, not just the wrapper.
+    const screenshotOptions = { animations: 'disabled', clip: { x: 0, y: 540, width: 460, height: 260 } };
+    await expect(page).toHaveScreenshot(`sidebar-player-${variant}-collapsed.png`, screenshotOptions);
+
+    if (variant === 'A') {
+      await play(page).hover();
+      await expect(player(page)).toHaveClass(/is-compact-art-revealed/);
+      await expect(bubble(page)).toHaveAttribute('aria-hidden', 'false');
+      await settle(page);
+      await expect(page).toHaveScreenshot('sidebar-player-A-artwork-and-metadata.png', screenshotOptions);
+    }
+    if (variant === 'C') {
+      await page.evaluate(() => document.body.classList.add('modal-open'));
+      await expect(player(page)).toHaveAttribute('data-compact-presentation', 'rail_play');
+      await expect(player(page)).toHaveClass(/is-overlay-detached/);
+      await play(page).hover();
+      await expect(player(page)).toHaveClass(/is-compact-art-revealed/);
+      await expect(bubble(page)).toHaveAttribute('aria-hidden', 'false');
+      await settle(page);
+      await expect(page).toHaveScreenshot('sidebar-player-C-detached-artwork.png', screenshotOptions);
+      await page.evaluate(() => document.body.classList.remove('modal-open'));
+      await expect(player(page)).toHaveAttribute('data-compact-presentation', 'rail_artbox');
+      await page.locator('#outside').focus();
+      await page.locator('#outside').hover();
+      await settle(page);
+      await expect(page).toHaveScreenshot(`sidebar-player-${variant}-collapsed.png`, screenshotOptions);
+    }
+  });
+}
+
+test('light regular docked player visually restores its divider after detachment @visual', async ({ page }) => {
+  await mount(page, { regularStyle: true, appearanceMode: 'light', visual: true });
+  await page.locator('#outside').hover();
+  await settle(page);
+  const screenshotOptions = { animations: 'disabled', clip: { x: 0, y: 540, width: 460, height: 260 } };
+  await expect(page).toHaveScreenshot('sidebar-player-light-regular-docked.png', screenshotOptions);
+  await page.evaluate(() => document.body.classList.add('modal-open'));
+  await expect(player(page)).toHaveClass(/is-overlay-detached/);
+  await settle(page);
+  await expect(page).toHaveScreenshot('sidebar-player-light-regular-detached.png', screenshotOptions);
+  await page.evaluate(() => document.body.classList.remove('modal-open'));
+  await expect(player(page)).not.toHaveClass(/is-overlay-detached/);
+  await settle(page);
+  await expect(page).toHaveScreenshot('sidebar-player-light-regular-docked.png', screenshotOptions);
+});
 
 test('regular style gives only the docked presentation the player surface and separator', async ({ page }) => {
   await mount(page, { regularStyle: true });

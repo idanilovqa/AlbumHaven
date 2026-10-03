@@ -383,6 +383,72 @@ test('shared scissors reconciles async activation from live hover and focus owne
   assert.equal(focusedRoot.getAttribute('data-loop-action-engaged'), 'false');
 });
 
+test('shared scissors rearms its hover dwell after a track change without another pointer entry', () => {
+  const { context, tick } = loadSharedControls();
+  const root = createActionRoot();
+  const controller = context.mountLoopEditActionControl({ root, contextKey: 'first-track' });
+  root.dispatch('pointerenter');
+  root.dispatch('pointerdown');
+  tick(100);
+  controller.update({ contextKey: 'second-track' });
+  tick(299);
+  assert.equal(root.getAttribute('data-loop-action-engaged'), 'false');
+  tick(1);
+  assert.equal(root.getAttribute('data-loop-action-engaged'), 'true');
+  root.dispatch('pointerleave');
+  assert.equal(root.getAttribute('data-loop-action-engaged'), 'false');
+  controller.destroy();
+});
+
+test('shared scissors cancels a replacement track dwell on pointer leave, revocation, and disposal', () => {
+  for (const stop of ['pointerleave', 'revoke', 'destroy']) {
+    const { context, tick } = loadSharedControls();
+    const root = createActionRoot();
+    const controller = context.mountLoopEditActionControl({ root, contextKey: 'first-track' });
+    root.dispatch('pointerenter');
+    tick(100);
+    controller.update({ contextKey: 'second-track' });
+    tick(100);
+    if (stop === 'pointerleave') root.dispatch('pointerleave');
+    if (stop === 'revoke') controller.update({ canCreate: false });
+    if (stop === 'destroy') controller.destroy();
+    tick(500);
+    assert.equal(root.getAttribute('data-loop-action-engaged'), 'false', stop);
+    if (stop === 'revoke') assert.equal(root.hidden, true);
+    controller.destroy();
+  }
+});
+
+test('shared scissors rearms idle hover after capability restoration without exposing revoked actions', () => {
+  const { context, tick } = loadSharedControls();
+  const root = createActionRoot();
+  const controller = context.mountLoopEditActionControl({ root });
+  root.dispatch('pointerenter');
+  controller.update({ canCreate: false });
+  tick(300);
+  assert.equal(root.hidden, true);
+  assert.equal(root.getAttribute('data-loop-action-engaged'), 'false');
+  controller.update({ canCreate: true });
+  assert.equal(root.hidden, false);
+  tick(299);
+  assert.equal(root.getAttribute('data-loop-action-engaged'), 'false');
+  tick(1);
+  assert.equal(root.getAttribute('data-loop-action-engaged'), 'true');
+  controller.destroy();
+});
+
+test('shared scissors mounted under a stationary pointer starts the normal hover dwell', () => {
+  const { context, tick } = loadSharedControls();
+  const root = createActionRoot();
+  root.hovered = true;
+  const controller = context.mountLoopEditActionControl({ root });
+  tick(299);
+  assert.equal(root.getAttribute('data-loop-action-engaged'), 'false');
+  tick(1);
+  assert.equal(root.getAttribute('data-loop-action-engaged'), 'true');
+  controller.destroy();
+});
+
 test('shared scissors CSS overlays an attached pod and never uses a waiting cursor', () => {
   const css = fs.readFileSync(path.join(
     __dirname, '..', '..', '..', 'music_app', 'static', 'css', 'runtime', 'non-album-and-player.css',

@@ -57,4 +57,3 @@ The page body uses a status workspace rather than a centered loader stack.
 - Contract coverage proves the new header and dropdown wording.
 - Rendering coverage proves the green ready check, conditional health section, compact shared alert, and responsive state/health layout.
 - Focused browser/component coverage verifies that gallery context and controls never appear on the Library Status Page.
-

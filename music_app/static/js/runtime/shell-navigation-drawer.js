@@ -67,6 +67,8 @@ function syncArtistsDrawerVisibility() {
     rail.classList.toggle('is-mobile-drawer', isDrawerVisible);
     rail.classList.toggle('is-mobile-drawer-open', isOpen);
     rail.setAttribute('aria-hidden', isDrawerVisible && !isOpen ? 'true' : 'false');
+    rail.inert = isDrawerVisible && !isOpen;
+    document.getElementById('mobile-library-button')?.setAttribute('aria-expanded', String(isOpen));
   }
 
   if (isArtistsDrawerElement(backdrop)) {
@@ -177,6 +179,7 @@ function toggleArtistTreeFold() {
   const settleArtistTree = () => {
     if (Boolean(state.ui.artistTreeFolded) !== isFolded) return;
     syncArtistTreeFoldVisibility();
+    if (!isFolded && state.ui.pendingSidebarRevealArtist) renderSidebar();
     if (moveFocusWithinRail && !isFolded) button?.focus?.();
   };
   scheduleArtistTreeResizeAfterTransition(settleArtistTree);
@@ -188,17 +191,21 @@ function openArtistsDrawer() {
     syncArtistsDrawerVisibility();
     return false;
   }
+  const rail = document.getElementById('shell-navigation-rail');
+  if (typeof activateTriggerSurface === 'function') activateTriggerSurface(rail, () => closeArtistsDrawer({ restoreFocus: false }), { anchor: document.getElementById('mobile-library-button') || document.getElementById('artists-drawer-button') });
   state.ui.artistsDrawerOpen = true;
   syncArtistsDrawerVisibility();
+  document.querySelector?.('#artist-tree-expanded [data-close-artists-drawer]')?.focus?.({ preventScroll: true });
   return true;
 }
 
 function closeArtistsDrawer(options = {}) {
   const wasOpen = Boolean(state.ui.artistsDrawerOpen);
   state.ui.artistsDrawerOpen = false;
+  if (typeof clearTriggerAnchor === 'function') clearTriggerAnchor(document.getElementById('shell-navigation-rail'));
   syncArtistsDrawerVisibility();
   if (wasOpen && options.restoreFocus !== false) {
-    document.getElementById('artists-drawer-button')?.focus?.();
+    (document.getElementById('mobile-library-button') || document.getElementById('artists-drawer-button'))?.focus?.({ preventScroll: true });
   }
   return wasOpen;
 }

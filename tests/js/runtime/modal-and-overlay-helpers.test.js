@@ -131,6 +131,8 @@ function loadHelper() {
   };
   const rafQueue = [];
   const context = {
+    isMobileClient: () => false,
+    usesMobilePageLayout: () => false,
     Date: { now() { return context.__now; } },
     __now: 1800000,
     Image: FakePreloader,
@@ -1209,4 +1211,71 @@ test('legacy Gallery options no longer owns source switches or New Arrivals navi
   assert.match(menu.innerHTML, /Move to Hoard/);
   assert.match(menu.innerHTML, /data-album-card-action="move_to_library"/);
   assert.match(menu.innerHTML, /Move to Main Library/);
+}
+
+
+test('album context menus are unavailable for narrow layouts and wide mobile clients', () => {
+  for (const [mobile, narrow] of [[true, false], [false, true]]) {
+    const { context } = loadHelper();
+    context.isMobileClient = () => mobile;
+    context.usesMobilePageLayout = () => narrow;
+    context.ensureAlbumCardContextMenu = () => { throw new Error('Mobile must not build desktop actions'); };
+    context.showAlbumCardContextMenu(10, 20, { key: 'generated' });
+  }
+});
+
+test('backdrop tap retains its pointer origin through delayed touch click, but image drag does not close', () => {
+  const { context } = loadHelper();
+  const handlers = {}, timers = [];
+  const overlay = { dataset: {}, addEventListener: (event, callback) => { handlers[event] = callback; } };
+  context.scheduleBrowserTimeout = callback => timers.push(callback);
+  context.bindOverlayPointerOrigin(overlay);
+  handlers.pointerdown({ target: overlay });
+  assert.equal(context.overlayClickStartedOnOverlay(overlay, { target: overlay }), true);
+  handlers.click();
+  timers.splice(0).forEach(callback => callback());
+  assert.equal(context.overlayClickStartedOnOverlay(overlay, { target: overlay }), false);
+  handlers.pointerdown({ target: {} });
+  assert.equal(context.overlayClickStartedOnOverlay(overlay, { target: overlay }), false);
+});
+
+for (const allowed of [false, true, undefined]) {
+  test(`duplicate Folder actions use the shared location capability for delegated and direct entry (${allowed === undefined ? 'legacy' : allowed ? 'allowed' : 'denied'})`, async () => {
+    const requests = [], captures = [];
+    const album = { key: 'duplicate-album', tracks: [{ path: 'owned-duplicate.flac' }] };
+    const folder = {};
+    const document = {
+      readyState: 'loading',
+      addEventListener: (name, handler, capture) => { if (name === 'click' && capture) captures.push(handler); },
+      getElementById: id => id === 'capability-bootstrap' ? { textContent: JSON.stringify({
+        allowed_actions: { 'library.files.open_location': allowed },
+        denied_selectors: allowed ? [] : ['[data-open-track-modal-duplicate-folder]'],
+      }) } : null,
+    };
+    const context = vm.createContext({ window: { document }, document, console,
+      fetch: async (url, options) => { requests.push({ url, album: JSON.parse(options.body).album });
+        return { ok: true, json: async () => ({ ok: true }) }; },
+      showToast: () => assert.fail('location capability denial must not report a server error'),
+      hideVersionContextMenu() {}, resolveTrackModalDuplicateSourceAlbum: () => album,
+    });
+    if (allowed !== undefined) vm.runInContext(fs.readFileSync(path.join(__dirname,
+      '../../../music_app/static/js/capability-ui.js'), 'utf8'), context);
+    vm.runInContext(helperSource, context);
+    vm.runInContext(bootstrapGalleryHandlersSource, context);
+    let stopped = false;
+    const event = { target: { closest: selector => selector === '[data-open-track-modal-duplicate-folder="1"]'
+      || selector === '[data-open-track-modal-duplicate-folder]' ? folder : null },
+      preventDefault() {}, stopImmediatePropagation() { stopped = true; } };
+    captures.forEach(handler => handler(event));
+    if (!stopped) context.handleGalleryBootstrapClick(event);
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(stopped, allowed === false);
+    assert.equal(requests.length, allowed === false ? 0 : 1);
+    await context.openAlbumInExplorer(album);
+    assert.equal(requests.length, allowed === false ? 0 : 2);
+    for (const request of requests) {
+      assert.equal(request.url, '/open-album-location');
+      assert.deepEqual(request.album, album);
+    }
+  });
 }

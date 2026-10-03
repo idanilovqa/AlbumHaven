@@ -2,18 +2,16 @@
 
 from __future__ import annotations
 
+from music_app.services.postgres_connections import pooled_connection as _connect
+
 from collections.abc import Callable, Mapping
 import json
 import re
 from typing import Any
 
 try:
-    import psycopg
-    from psycopg.rows import dict_row
     from psycopg.types.json import Jsonb
 except ImportError:  # pragma: no cover - diagnostics without the optional driver
-    psycopg = None
-    dict_row = None
     Jsonb = None
 
 
@@ -974,9 +972,3 @@ class PostgresAppearancePreferencesRepository:
                 raise RuntimeError("Appearance preferences were not saved.")
             saved = _preferences(row)
         return saved
-
-
-def _connect(database_url: str):
-    if psycopg is None:
-        raise RuntimeError("psycopg is required for appearance preferences.")
-    return psycopg.connect(database_url, row_factory=dict_row)

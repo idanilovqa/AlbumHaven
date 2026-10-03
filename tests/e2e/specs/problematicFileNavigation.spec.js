@@ -1,4 +1,5 @@
 import { expect, test } from '../support/baseFixtures.js';
+import { expectProblematicNavigationRecords } from '../helpers/problematicNavigationEvidence.js';
 import {
   changedId3Frames,
   readGeneratedMp3TagSnapshots,
@@ -90,6 +91,8 @@ test('FTC-UTIL-PROBLEMS-011 opens the exact problematic track from album details
 }) => {
   let fullProblematicAlbumCount = 0;
   let unrelatedAlbumTitle = '';
+  let unrelatedAlbumKey = '';
+  let targetAlbumKey = '';
   let targetTrackPath = '';
 
   await stepLogger.step('Open the persisted album directly without loading Settings first', async () => {
@@ -118,12 +121,12 @@ test('FTC-UTIL-PROBLEMS-011 opens the exact problematic track from album details
     await trackModalActions.close();
     await settingsModalAppBarActions.openSettings();
     await utilityProblematicFilesActions.waitForReady({ requirePopulated: true });
-    const fullProblematicAlbums = await utilityProblematicFilesActions.readVisibleListItems();
+    const fullProblematicAlbums = await utilityProblematicFilesActions.readCompleteListItems();
     fullProblematicAlbumCount = fullProblematicAlbums.length;
     expect(fullProblematicAlbumCount).toBeGreaterThan(9);
     await utilityProblematicFilesActions.search(PROBLEMATIC_TRACK);
     await utilityProblematicFilesActions.waitForSearchResults(PROBLEMATIC_TRACK);
-    const filteredProblematicAlbums = await utilityProblematicFilesActions.readVisibleListItems();
+    const filteredProblematicAlbums = await utilityProblematicFilesActions.readCompleteListItems();
     expect(filteredProblematicAlbums.length).toBeLessThan(fullProblematicAlbumCount);
     expect(filteredProblematicAlbums.find((album) => (
       album.meta === `${ALBUM_ARTIST} · ${ALBUM_YEAR}`
@@ -132,8 +135,11 @@ test('FTC-UTIL-PROBLEMS-011 opens the exact problematic track from album details
       title: ALBUM,
       meta: `${ALBUM_ARTIST} · ${ALBUM_YEAR}`,
     });
+    targetAlbumKey = filteredProblematicAlbums.find(album => album.title === ALBUM && album.meta === `${ALBUM_ARTIST} · ${ALBUM_YEAR}`).key;
     const filteredKeys = new Set(filteredProblematicAlbums.map((album) => album.key));
-    unrelatedAlbumTitle = fullProblematicAlbums.find((album) => !filteredKeys.has(album.key))?.title || '';
+    const unrelatedAlbum = fullProblematicAlbums.find((album) => !filteredKeys.has(album.key));
+    unrelatedAlbumTitle = unrelatedAlbum?.title || '';
+    unrelatedAlbumKey = unrelatedAlbum?.key || '';
     expect(unrelatedAlbumTitle).not.toBe('');
     await utilityProblematicFilesActions.waitForTargetAlbumBelowSidebarViewport(ALBUM, {
       minimumResultCount: 9,
@@ -156,18 +162,18 @@ test('FTC-UTIL-PROBLEMS-011 opens the exact problematic track from album details
     await utilityProblematicFilesActions.waitForActiveAlbumInSidebarViewport(ALBUM);
     expect(await utilityProblematicFilesActions.readSearchQuery()).toBe('');
     expect(await utilityProblematicFilesActions.readVisibleResultCount()).toBe(fullProblematicAlbumCount);
+    const targetKey = (await utilityProblematicFilesActions.readActiveListItem()).key;
+    await utilityProblematicFilesActions.revealListItemByIdentity({ key: unrelatedAlbumKey });
     expect(await utilityProblematicFilesActions.waitForAlbumInSidebarList(unrelatedAlbumTitle)).toBe(
       unrelatedAlbumTitle,
     );
+    await utilityProblematicFilesActions.revealListItemByIdentity({ key: targetKey });
+    await utilityProblematicFilesActions.utilityProblematicFilesTab.activeListItem.scrollIntoViewIfNeeded();
+    await utilityProblematicFilesActions.waitForActiveAlbumInSidebarViewport(ALBUM);
     const detail = await utilityProblematicFilesActions.readSelectedDetailSummary();
     expect(detail.title).toBe(ALBUM);
     const navigationRecords = await utilityProblematicFilesActions.finishNavigationRenderObservation();
-    const meaningfulDetailRenders = navigationRecords.filter((record) => record.detailTitle || record.detailText);
-    expect(meaningfulDetailRenders).toHaveLength(1);
-    expect(meaningfulDetailRenders[0]).toMatchObject({
-      detailTitle: ALBUM,
-    });
-    expect(meaningfulDetailRenders[0].activeKey).not.toBe('');
+    expectProblematicNavigationRecords(navigationRecords, targetAlbumKey, ALBUM);
   });
 
   await stepLogger.step('Keep the exact target track row inside the visible detail viewport', async () => {

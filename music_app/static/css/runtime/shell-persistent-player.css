@@ -59,8 +59,8 @@
 }
 
 @media (max-width: 720px) {
-  #utility-modal[data-active-tab="problematic-files"] .utility-modal-dialog,
-  #utility-modal[data-active-tab="rules"] .utility-modal-dialog {
+  #utility-modal:not(.is-mobile-page)[data-active-tab="problematic-files"] .utility-modal-dialog,
+  #utility-modal:not(.is-mobile-page)[data-active-tab="rules"] .utility-modal-dialog {
     height: calc(100dvh - var(--player-height) - 48px);
     max-height: calc(100dvh - var(--player-height) - 48px);
   }

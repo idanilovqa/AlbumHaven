@@ -28,7 +28,8 @@
     const appearance = options.appearance && typeof options.appearance === 'object'
       ? options.appearance
       : {};
-    const artistTreeFolded = desktop && shell.artistTreeFolded === true;
+    const artistTreeFolded = desktop && (typeof shell.artistTreeFolded === 'boolean'
+      ? shell.artistTreeFolded : options.defaultCollapsed === true);
     const savedPlayerMode = readStorage(options.storage, COMPACT_PLAYER_MODE_KEY);
     const compactPlayerMode = desktop && savedPlayerMode === 'compact' ? 'compact' : 'expanded';
     const style = appearance.compact_player_style === 'floating' ? 'floating' : 'docked';
@@ -79,7 +80,7 @@
     return Math.max(0, surfaceWidth - padding);
   }
 
-  function capture() {
+  function capture(options = {}) {
     const documentObject = globalObject.document;
     const root = documentObject?.documentElement;
     if (!root) return null;
@@ -88,12 +89,14 @@
       appearance = JSON.parse(documentObject.getElementById('appearance-bootstrap')?.textContent || '{}');
     } catch (_error) {}
     let storage = null;
-    try { storage = globalObject.localStorage; } catch (_error) {}
+    try { storage = globalObject.AlbumHavenDevicePreferences?.enabled
+      ? globalObject.AlbumHavenDevicePreferences : globalObject.localStorage; } catch (_error) {}
     const layout = resolveClientLayoutPreferences({
       storage,
       href: globalObject.location?.href,
       viewportWidth: globalObject.innerWidth,
       appearance,
+      defaultCollapsed: options.defaultCollapsed,
     });
     layout.compactPlayerStyle = appearance.compact_player_style === 'floating' ? 'floating' : 'docked';
     layout.dockedCompactPlayerBehavior = ['follow_sidebar', 'float_on_collapse', 'artbox', 'stay_docked']
@@ -179,7 +182,15 @@
 
       const gallery = documentObject.getElementById('albums-scroll');
       const availableWidth = Math.max(1, measureStartupGalleryWidth(gallery, documentObject) - 4);
-      const geometry = resolveStartupGalleryGeometry({
+      const preferences = globalObject.AlbumHavenDevicePreferences;
+      const mobileGeometry = globalObject.AlbumHavenClientLayout?.resolveMobileGalleryGeometry?.({
+        availableWidth,
+        viewportWidth: globalObject.innerWidth,
+        mode: preferences?.read?.('galleryDisplayPreferences', {})?.defaultGalleryDisplayMode || 'cards',
+        columns: preferences?.read?.('mobileGridColumns', 2),
+        gap: 14,
+      });
+      const geometry = mobileGeometry || resolveStartupGalleryGeometry({
         availableWidth,
         scalePercent: layout.galleryScalePercent,
       });

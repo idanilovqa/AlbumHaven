@@ -787,3 +787,13 @@ def test_provider_specific_pasted_candidates_use_manual_lookup_serialization(mon
         "url": "https://images.example/spotify.jpg",
         "debug_payload": {"source_label": "Debug Spotify"},
     }]
+
+
+@pytest.mark.parametrize("group,allowed", [
+    ("services", True), ("cover_art_archive", True), ("manual_links", False),
+    ("local", False), (None, False), ("spotify", False),
+])
+def test_tv_candidate_provenance_uses_registry_group_not_provider_label(group, allowed):
+    from music_app.services.cover_provider_candidates import is_provider_lookup_match
+    assert is_provider_lookup_match({"lookup_group": group, "source": "spotify", "source_label": "Spotify"}) is allowed
+    assert not is_provider_lookup_match({"source": "spotify", "image_url": "https://i.scdn.co/image/a"})

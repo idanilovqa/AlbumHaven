@@ -121,7 +121,10 @@ def test_repository_creates_pending_account_and_optionally_links_invitation_outb
     assert any("insert into app.accounts" in sql and "is_active" in sql for sql in statements)
     assert all("insert into app.account_credentials" not in sql for sql in statements)
     assert any("insert into library.library_memberships" in sql for sql in statements)
-    assert sum("insert into app.capabilities" in sql for sql in statements) == 2
+    grants = [(sql, params) for sql, params in connection.operations if "insert into app.capabilities" in sql]
+    assert len(grants) == 1
+    assert "from unnest(%s::text[])" in grants[0][0]
+    assert grants[0][1] == (41, 23, ["library.browse.read", "library.media.read"])
     token_indexes = [i for i, sql in enumerate(statements) if "insert into app.account_invitation_tokens" in sql]
     outbox_indexes = [i for i, sql in enumerate(statements) if "insert into app.mail_outbox" in sql]
     assert len(token_indexes) == int(with_invitation)

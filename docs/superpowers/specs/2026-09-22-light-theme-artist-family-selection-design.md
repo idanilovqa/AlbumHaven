@@ -42,4 +42,3 @@ Automated style coverage will verify:
 - hover and focus preserve the selected fill;
 - an unselected light-theme card is unchanged; and
 - the equivalent selected card in dark mode remains border-only.
-

@@ -12,7 +12,7 @@ function getTriggerAnchorGeometry(anchor, surface) {
 }
 
 let activeTriggerSurface = null;
-function activateTriggerSurface(surface, close) {
+function activateTriggerSurface(surface, close, options = {}) {
   for (let owner = activeTriggerSurface; owner; owner = owner.parent) {
     if (owner.surface === surface) return;
   }
@@ -21,7 +21,8 @@ function activateTriggerSurface(surface, close) {
     activeTriggerSurface = previous.parent || null;
     previous.close();
   }
-  activeTriggerSurface = { surface, close, parent: activeTriggerSurface };
+  activeTriggerSurface = { surface, close, anchor: options.anchor, parent: activeTriggerSurface };
+  if (typeof CustomEvent === 'function') surface.ownerDocument?.dispatchEvent?.(new CustomEvent('album-haven:surface-opening', { detail: { surface } }));
 }
 
 const triggerAnchorBindings = new WeakMap();
@@ -55,18 +56,34 @@ function clearTriggerAnchor(surface) {
 
 function syncTriggerAnchor(surface, anchor) {
   if (!surface?.getBoundingClientRect || !anchor?.getBoundingClientRect || surface.hidden) return;
-  const anchorContext = anchor.closest?.('.shell-main-surface, .settings-outlet') ? 'content' : 'chrome';
-  surface.dataset.triggerAnchorContext = anchorContext;
-  anchor.dataset.triggerAnchorContext = anchorContext;
+  const previous = triggerAnchorBindings.get(surface);
+  if (previous && previous.anchor !== anchor) clearTriggerAnchor(surface);
+  const contextOwner = anchor.closest?.('.trigger-anchor-surface, .shell-main-surface, .settings-outlet');
+  const anchorContext = surface.matches?.('.mobile-settings-drawer') ? 'chrome'
+    : contextOwner?.dataset?.triggerAnchorContext || (contextOwner ? 'content' : 'chrome');
+  const contextChanged = surface.dataset.triggerAnchorContext !== anchorContext;
+  if (contextChanged) surface.dataset.triggerAnchorContext = anchorContext;
+  if (anchor.dataset.triggerAnchorContext !== anchorContext) anchor.dataset.triggerAnchorContext = anchorContext;
   activateTriggerSurface(surface, () => {
     surface.hidden = true;
     anchor.setAttribute?.('aria-expanded', 'false');
     clearTriggerAnchor(surface);
   });
-  const previous = triggerAnchorBindings.get(surface);
-  if (previous && previous.anchor !== anchor) clearTriggerAnchor(surface);
-  const geometry = getTriggerAnchorGeometry(anchor.getBoundingClientRect(), surface.getBoundingClientRect());
+  // Establish the owning surface before sampling its paint for the joined trigger.
+  if (!surface.classList.contains('trigger-anchor-surface')) surface.classList.add('trigger-anchor-surface');
+  if (!previous || previous.anchor !== anchor || contextChanged) {
+    surface.style.removeProperty?.('--trigger-anchor-background');
+  }
   const surfaceStyle = globalThis.getComputedStyle?.(surface);
+  let bounds = surface.getBoundingClientRect();
+  // Side drawers animate their position, not their layout width. The joined
+  // outline belongs to the final layout box, not the in-flight transform.
+  if (surface.matches?.('.artist-family-panel') && surfaceStyle?.transform && surfaceStyle.transform !== 'none') {
+    const transform = new DOMMatrixReadOnly(surfaceStyle.transform);
+    bounds = { left: bounds.left - transform.m41, right: bounds.right - transform.m41,
+      top: bounds.top - transform.m42, bottom: bounds.bottom - transform.m42 };
+  }
+  const geometry = getTriggerAnchorGeometry(anchor.getBoundingClientRect(), bounds);
   const renderedBackground = surfaceStyle?.backgroundColor?.trim();
   const surfaceBackground = renderedBackground
     && renderedBackground !== 'transparent'
@@ -79,13 +96,14 @@ function syncTriggerAnchor(surface, anchor) {
     surface.style.setProperty('--trigger-anchor-background', surfaceBackground);
     anchor.style.setProperty('--trigger-anchor-background', surfaceBackground);
   }
-  surface.classList.add('trigger-anchor-surface');
-  if (anchor.matches?.('.search-field-button')) surface.dataset.triggerAnchorSearch = 'true';
+  if (anchor.matches?.('.search-field-button')) {
+    if (surface.dataset.triggerAnchorSearch !== 'true') surface.dataset.triggerAnchorSearch = 'true';
+  }
   else delete surface.dataset.triggerAnchorSearch;
-  anchor.classList.add('trigger-anchor-open');
- surface.dataset.triggerAnchorEdge = geometry.edge;
-  surface.dataset.triggerAnchorSide = geometry.side;
-  anchor.dataset.triggerAnchorEdge = geometry.edge;
+  if (!anchor.classList.contains('trigger-anchor-open')) anchor.classList.add('trigger-anchor-open');
+ if (surface.dataset.triggerAnchorEdge !== geometry.edge) surface.dataset.triggerAnchorEdge = geometry.edge;
+  if (surface.dataset.triggerAnchorSide !== geometry.side) surface.dataset.triggerAnchorSide = geometry.side;
+  if (anchor.dataset.triggerAnchorEdge !== geometry.edge) anchor.dataset.triggerAnchorEdge = geometry.edge;
   for (const name of ['left', 'right', 'width', 'gap']) {
     surface.style.setProperty(`--trigger-anchor-${name}`, `${geometry[name]}px`);
   }
@@ -120,6 +138,14 @@ function syncActiveTriggerSurfaces() {
 
 globalThis.addEventListener?.('resize', syncActiveTriggerSurfaces);
 globalThis.addEventListener?.('scroll', syncActiveTriggerSurfaces, true);
+// Applied account themes refresh paint; geometry-only scroll/resize updates do
+// not remove and reinstate an unchanged surface color.
+globalThis.addEventListener?.('album-haven-appearance-change', () => {
+  for (let owner = activeTriggerSurface; owner; owner = owner.parent) {
+    owner.surface.style?.removeProperty?.('--trigger-anchor-background');
+  }
+  syncActiveTriggerSurfaces();
+});
 function confinePanelTextSelection(selection, surface) {
   if (!selection?.anchorNode || !selection.focusNode || !surface.contains(selection.anchorNode)
       || surface.contains(selection.focusNode)) return;
@@ -147,6 +173,7 @@ function installPanelSelectionBoundary() {
   };
   document.addEventListener('pointerdown', event => {
     release();
+    if (event.pointerType === 'touch') { gestureOrigin = null; return; }
     gestureOrigin = event.button === 0 ? event.target.closest?.('.trigger-anchor-surface, .artist-info-overlay, [role="dialog"], [role="menu"]') : null;
     origin = event.button === 0 ? event.target.closest?.('.artist-info-overlay, .trigger-anchor-surface, .album-track-table, [role=dialog]') : null;
     if (origin) {
@@ -171,4 +198,42 @@ function installPanelSelectionBoundary() {
   document.addEventListener('pointerup', () => { confine(); release(); }, true);
   document.addEventListener('pointercancel', () => { gestureOrigin = null; release(); }, true);
   globalThis.addEventListener?.('blur', () => { gestureOrigin = null; release(); });
+}
+
+// Standalone Settings pages participate without depending on the library bundle.
+globalThis.document?.addEventListener?.('album-haven:surface-opening', event => {
+  const surface = event.detail?.surface;
+  if (!surface) return;
+  while (activeTriggerSurface && activeTriggerSurface.surface !== surface
+      && !activeTriggerSurface.surface.contains?.(surface)) {
+    const previous = activeTriggerSurface;
+    activeTriggerSurface = previous.parent || null;
+    previous.close();
+  }
+});
+
+// The existing surface/modal owners remain authoritative. This adapter only
+// reserves a real backdrop gesture before any target or document handler sees it.
+function getDismissibleForegroundSurface() {
+  const modal = typeof getTopmostOpenModal === 'function' ? getTopmostOpenModal() : null;
+  const isBackdrop = target => Boolean(modal && target === modal)
+    || Boolean(target?.matches?.('#shell-navigation-rail-backdrop, .settings-nav-backdrop, .mobile-artist-info-backdrop')
+      && !target.hidden && target.getClientRects().length);
+  const owner = activeTriggerSurface;
+  const anchor = owner && (triggerAnchorBindings.get(owner.surface)?.anchor || owner.anchor);
+  if (owner && !owner.surface.hidden && (!modal || modal === owner.surface
+      || modal.contains(owner.surface) || (anchor && modal.contains(anchor)))) {
+    return { surface: owner.surface, anchor, isBackdrop, dismiss() {
+      if (activeTriggerSurface !== owner) return;
+      owner.close();
+      if (anchor?.isConnected) anchor.focus?.({ preventScroll: true });
+    } };
+  }
+  if (!modal) return null;
+  return { surface: modal, isBackdrop, contains: target => target !== modal && modal.contains(target), dismiss() {
+    if (getTopmostOpenModal() === modal) dismissForegroundModal(modal);
+  } };
+}
+if (typeof window !== 'undefined' && globalThis.AlbumHavenSurfaceDismissal) {
+  globalThis.AlbumHavenSurfaceDismissal.bind(window, getDismissibleForegroundSurface);
 }

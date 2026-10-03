@@ -1,5 +1,20 @@
 import { measureActionTime } from './performanceHelpers.js';
 
+export async function readCompletedResponseDurationMs(response) {
+  const completionError = await response.finished();
+  if (completionError) throw completionError;
+  const request = response.request();
+  const failure = request.failure();
+  if (failure) throw new Error(`Network request failed: ${failure.errorText}`);
+  const timing = request.timing();
+  if (!Number.isFinite(timing?.startTime) || timing.startTime < 0
+    || !Number.isFinite(timing?.responseEnd) || timing.responseEnd < 0) {
+    throw new Error('Completed response must provide finite, nonnegative network timing.');
+  }
+  // Playwright responseEnd is already relative to the epoch-valued startTime.
+  return timing.responseEnd;
+}
+
 export async function waitForUtilitiesBenchmarkWarmRoot(galleryActions, navigationPanelActions) {
   const timeout = 120000;
   await navigationPanelActions.waitForSidebarFullyHydrated({ timeout });

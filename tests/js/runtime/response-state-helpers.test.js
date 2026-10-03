@@ -354,6 +354,7 @@ function loadHelpers() {
   })));
   assert.deepEqual(normalized, {
     artist_groups: [{ artist: 'Broadcast' }],
+    gallery_page: null,
     primary_artist_groups: [],
     family_artist_groups: [],
     artists_sidebar: [],
@@ -644,6 +645,7 @@ function loadHelpers() {
   })));
   assert.deepEqual(normalized, {
     view: {
+      gallery_page: null,
       artist_groups: [],
       primary_artist_groups: [],
       family_artist_groups: [],
@@ -1448,10 +1450,9 @@ function loadHelpers() {
     },
   }, { trackSidebarReveal: false });
 
-  assert.deepEqual(JSON.parse(JSON.stringify(context.closeArtistsDrawerCalls)), [{
-    restoreFocus: false,
-  }]);
-  assert.equal(context.syncArtistsDrawerVisibilityCalls, 0);
+  assert.deepEqual(JSON.parse(JSON.stringify(context.closeArtistsDrawerCalls)), [],
+    'a late selected-artist response must not close a drawer opened after activation');
+  assert.equal(context.syncArtistsDrawerVisibilityCalls, 1);
   assert.equal(context.state.relatedExpanded, false);
 }
 

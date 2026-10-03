@@ -240,7 +240,12 @@ def test_listener_customization_badge_compares_capabilities_without_order(monkey
     status, _headers, body = _get(app, path)
 
     assert status == 200
-    assert ("Customized" in body) is (change != "same")
+    if path == "/admin/members":
+        assert ("Customized" in body) is (change != "same")
+    else:
+        retained = FormInputs(body, "additional_capability_keys").inputs
+        assert {item["value"] for item in retained if item.get("type") == "hidden"} == set(capabilities)
+        assert 'data-capability-assignment' in body
 
 
 async def _json_request_async(app, method, path, session, payload):
@@ -325,11 +330,35 @@ def test_members_add_and_edit_are_in_place_pages_with_back_navigation():
     assert edit_status == 200
     assert "Edit user" in edit_body
     assert "test.user+1" in edit_body
-    assert "Listener · Customized" in edit_body
+    assert 'data-capability-assignment' in edit_body
+    assert 'name="role_keys"' in edit_body
     assert "Send password reset email" not in edit_body
     assert "Resend welcome email" not in edit_body
     assert "Back to users" in edit_body
-    assert "modal" not in edit_body.casefold()
+    class FormPlacement(HTMLParser):
+        def __init__(self):
+            super().__init__()
+            self.stack = []
+            self.forms = []
+        def handle_starttag(self, tag, attrs):
+            attrs = dict(attrs)
+            if "data-admin-account-form" in attrs:
+                self.forms.append((tag, attrs, list(self.stack)))
+            if tag not in {"input", "br", "hr", "img", "meta", "link", "source", "wbr"}:
+                self.stack.append((tag, attrs))
+        def handle_endtag(self, tag):
+            for index in range(len(self.stack) - 1, -1, -1):
+                if self.stack[index][0] == tag:
+                    del self.stack[index:]
+                    break
+    placement = FormPlacement()
+    placement.feed(edit_body)
+    assert len(placement.forms) == 1
+    form_tag, form_attrs, ancestors = placement.forms[0]
+    assert form_tag == "form"
+    assert form_attrs.get("role") != "dialog"
+    assert not any(attrs.get("role") == "dialog" or attrs.get("aria-modal") == "true"
+                   for _tag, attrs in ancestors)
     assert '"accounts.manage": true' in edit_body
     assert '"accounts.membership.manage": true' in edit_body
     assert '"accounts.capabilities.manage": true' in edit_body
@@ -343,18 +372,16 @@ def test_owner_role_projects_all_inherited_permissions_and_submittable_values():
     status, _headers, body = _get(app, "/admin/accounts/7")
 
     assert status == 200
-    assert '<option value="owner" selected>Owner</option>' in body
-    assert '<option value="listener">' not in body
+    assert not FormInputs(body, "role_keys").inputs
+    assert not FormInputs(body, "additional_capability_keys").inputs
     assert "Owner · Full access" in body
-    assert "Owner includes every capability." in body
+    assert "These inherited permissions cannot be changed individually." in body
     assert "Individual permissions below override" not in body
     inputs = FormInputs(body, "capability_keys").inputs
     switches = [item for item in inputs if item.get("type") == "checkbox"]
     inherited_values = [item for item in inputs if item.get("type") == "hidden"]
     expected_keys = set(MANAGED_CAPABILITY_KEYS)
-    assert len(switches) == len(expected_keys)
-    assert {item["value"] for item in switches} == expected_keys
-    assert all("checked" in item and "disabled" in item for item in switches)
+    assert not switches
     assert len(inherited_values) == len(expected_keys)
     assert {item["value"] for item in inherited_values} == expected_keys
     assert all("disabled" not in item for item in inherited_values)
@@ -373,32 +400,33 @@ def test_owner_role_projects_all_inherited_permissions_and_submittable_values():
     assert set(service.update_calls[0]["capability_keys"]) == expected_keys
 
 
-@pytest.mark.parametrize(
-    ("path", "selected_keys"),
-    [
-        ("/admin/accounts/41", {"library.browse.read", "library.playlists.create"}),
-        ("/admin/accounts/new", {
-            "library.browse.read", "library.media.read", "library.resources.read",
-            "library.playlists.create", "library.discovery.read",
-        }),
-    ],
-)
-def test_nonowner_role_remains_listener_with_editable_explicit_permissions(path, selected_keys):
-    from music_app.services.admin_account_creation import MANAGED_CAPABILITY_KEYS
+@pytest.mark.parametrize("path", ["/admin/accounts/41", "/admin/accounts/new"])
+def test_nonowner_editor_exposes_roles_and_preserves_explicit_legacy_grants(path):
+    from music_app.services.capability_assignments import CAPABILITY_LABELS
 
     app, _service = _app()
-
     status, _headers, body = _get(app, path)
-
     assert status == 200
-    assert '<option value="listener">Listener</option>' in body
-    assert '<option value="owner"' not in body
-    assert "Individual permissions below override" in body
-    inputs = FormInputs(body, "capability_keys").inputs
-    assert len(inputs) == len(MANAGED_CAPABILITY_KEYS)
-    assert {item["value"] for item in inputs} == set(MANAGED_CAPABILITY_KEYS)
-    assert all(item["type"] == "checkbox" and "disabled" not in item for item in inputs)
-    assert {item["value"] for item in inputs if "checked" in item} == selected_keys
+    roles = FormInputs(body, "role_keys").inputs
+    assert {item["value"] for item in roles} == {"viewer", "listener", "musician", "owner", "admin"}
+    assert all(item["type"] == "checkbox" and "disabled" not in item for item in roles)
+    assert {item["value"] for item in roles if "checked" in item} == (
+        {"listener"} if path.endswith("/new") else set()
+    )
+    assert not FormInputs(body, "capability_keys").inputs
+    inputs = FormInputs(body, "additional_capability_keys").inputs
+    switches = [item for item in inputs if item["type"] == "checkbox"]
+    hidden = [item for item in inputs if item["type"] == "hidden"]
+    assert {item["value"] for item in switches} == set(CAPABILITY_LABELS)
+    if path.endswith("/new"):
+        assert not hidden
+        checked = [item for item in switches if "checked" in item]
+        assert {item["value"] for item in checked} == {"capability.view", "capability.play"}
+        assert all("disabled" in item for item in checked)
+    else:
+        assert {item["value"] for item in hidden} == {"library.browse.read", "library.playlists.create"}
+        assert {item["value"] for item in inputs if "disabled" in item} == {"capability.move"}
+        assert not any("checked" in item for item in switches)
 
 
 @pytest.mark.parametrize("membership_only", [False, True])
@@ -424,6 +452,11 @@ def test_owner_library_access_is_protected_and_submittable(membership_only):
     inputs = FormInputs(body, "current_library_access").inputs
     switches = [item for item in inputs if item.get("type") == "checkbox"]
     values = [item for item in inputs if item.get("type") == "hidden"]
+    if membership_only:
+        assert not inputs
+        assert 'data-admin-action=' not in body
+        assert "Save changes" not in body
+        return
     assert len(switches) == 1
     assert "checked" in switches[0]
     assert "disabled" in switches[0]
@@ -464,7 +497,7 @@ def test_roster_renders_invitation_menu_only_for_server_eligible_pending_account
     assert 'data-send-invitation="7"' not in body
     assert 'data-send-invitation="42"' not in body
     assert 'data-invitation-copy-fallback' in body
-    assert 'data-roster-reauth-panel' in body
+    assert 'data-roster-reauth-panel' not in body
     assert '/static/js/admin-members.js' in body
 
 
@@ -624,3 +657,44 @@ def test_admin_mail_action_validation_still_returns_client_error(action, method)
     status, body = _json_request(app, "POST", f"/admin/accounts/41/{action}", {})
     assert status == 400
     assert body == b'{"detail":"Mail action was invalid."}'
+
+
+@pytest.mark.parametrize("account_id,field_label", [(7, "Capabilities"), (41, "Roles")])
+def test_role_guidance_is_a_static_description_with_separate_live_status(account_id, field_label):
+    app, _service = _app()
+    status, _headers, body = _get(app, f"/admin/accounts/{account_id}")
+    assert status == 200
+    class Nodes(HTMLParser):
+        def __init__(self):
+            super().__init__()
+            self.nodes = []
+            self.fieldsets = []
+            self.in_legend = False
+        def handle_starttag(self, tag, attrs):
+            attributes = dict(attrs)
+            self.nodes.append((tag, attributes))
+            if tag == "fieldset":
+                self.fieldsets.append({"attrs": attributes, "legend": ""})
+            if tag == "legend":
+                self.in_legend = True
+        def handle_endtag(self, tag):
+            if tag == "legend":
+                self.in_legend = False
+        def handle_data(self, data):
+            if self.in_legend:
+                self.fieldsets[-1]["legend"] += data
+    parsed = Nodes()
+    parsed.feed(body)
+    guidance = [attrs for tag, attrs in parsed.nodes if attrs.get("id") == "admin-role-description"]
+    assert len(guidance) == 1
+    assert guidance[0]["role"] == "note"
+    assert "aria-live" not in guidance[0]
+    described_fields = [field for field in parsed.fieldsets
+                        if field["attrs"].get("aria-describedby") == "admin-role-description"]
+    assert len(described_fields) == 1
+    assert described_fields[0]["legend"].strip() == field_label
+    assert "permission-fieldset" in described_fields[0]["attrs"]["class"].split()
+    statuses = [attrs for _tag, attrs in parsed.nodes if "data-admin-form-status" in attrs]
+    assert len(statuses) == 1
+    assert statuses[0]["role"] == "status"
+    assert "hidden" in statuses[0]

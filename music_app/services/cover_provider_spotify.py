@@ -248,7 +248,12 @@ def spotify_request_json(
         payload_bytes=len(payload or b""),
     )
     try:
-        return json.loads(payload.decode("utf-8"))
+        decoded = json.loads(payload.decode("utf-8"))
+        if automatic_cover_budget_active() and (not isinstance(decoded, dict) or decoded.get("error")):
+            raise AutomaticCoverSearchFailed()
+        return decoded
+    except AutomaticCoverSearchFailed:
+        raise
     except Exception as exc:
         verbose = getattr(active_logger, "verbose", None)
         if callable(verbose):
@@ -262,6 +267,8 @@ def spotify_request_json(
             error_type=type(exc).__name__,
             error=str(exc),
         )
+        if automatic_cover_budget_active():
+            raise AutomaticCoverSearchFailed() from exc
         return None
 
 
@@ -310,6 +317,8 @@ def spotify_access_token(
             has_payload=bool(payload),
             payload_keys=sorted((payload or {}).keys()) if isinstance(payload, dict) else [],
         )
+        if automatic_cover_budget_active():
+            raise AutomaticCoverSearchFailed()
         return None
     _emit(log_event, "Spotify token acquired", expires_in_seconds=expires_in)
     with _SPOTIFY_TOKEN_CACHE_LOCK:
@@ -427,6 +436,12 @@ def spotify_collect_album_matches(
         "limit": 10,
         "market": config.SPOTIFY_MARKET,
     })
+    if automatic_cover_budget_active() and data is not None and (
+        not isinstance(data, dict)
+        or not isinstance(data.get("albums"), dict)
+        or not isinstance(data["albums"].get("items"), list)
+    ):
+        raise AutomaticCoverSearchFailed()
     items = (((data or {}).get("albums") or {}).get("items") or [])
     matches, raw_results = spotify_album_matches_from_items(
         items if isinstance(items, list) else [],

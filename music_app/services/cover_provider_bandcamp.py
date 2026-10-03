@@ -10,6 +10,11 @@ from threading import Event
 
 from music_app.services.app_logging import log_app_event
 from music_app.services.cover_provider_candidates import CoverCandidate, dedupe_cover_candidates
+from music_app.services.cover_provider_deadline import (
+    AutomaticCoverDeadlineExceeded,
+    AutomaticCoverSearchFailed,
+    automatic_cover_budget_active,
+)
 from music_app.services import music_identity_matching
 from music_app.services.runtime_shutdown import create_daemon_executor
 
@@ -554,6 +559,7 @@ def _build_bandcamp_label_catalog_matches(
         "label_account_urls": [],
     }
     linked_future = None
+    discovery_failure: Exception | None = None
     pending = {musicbrainz_future, direct_future}
     while pending and not stopped():
         completed, pending = wait(
@@ -576,6 +582,7 @@ def _build_bandcamp_label_catalog_matches(
                 try:
                     context_result = future.result()
                 except Exception as exc:
+                    discovery_failure = exc
                     _emit(
                         log_event,
                         logger,
@@ -607,6 +614,7 @@ def _build_bandcamp_label_catalog_matches(
                 try:
                     discovery_matches = future.result()
                 except Exception as exc:
+                    discovery_failure = exc
                     _emit(
                         log_event,
                         logger,
@@ -669,6 +677,10 @@ def _build_bandcamp_label_catalog_matches(
         guessed_accounts=guessed_account_urls[:12],
         used_bing_search=False,
     )
+    if discovery_failure is not None and automatic_cover_budget_active():
+        if isinstance(discovery_failure, TimeoutError):
+            raise AutomaticCoverDeadlineExceeded() from discovery_failure
+        raise AutomaticCoverSearchFailed() from discovery_failure
     return []
 
 

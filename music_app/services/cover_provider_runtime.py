@@ -277,7 +277,8 @@ def probe_match_candidates(
                     )
                 except (AutomaticCoverDeadlineExceeded, AutomaticCoverSearchFailed):
                     if candidates and automatic_cover_budget_active():
-                        candidates[-1].debug_payload["automatic_probe_interrupted"] = True
+                        for candidate in candidates:
+                            candidate.debug_payload["automatic_probe_interrupted"] = True
                         return candidates
                     raise
                 if callable(should_cancel) and should_cancel():

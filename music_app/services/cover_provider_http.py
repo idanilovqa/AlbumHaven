@@ -339,6 +339,9 @@ def _http_get_json(
             blocked_reason=str(meta.get("blocked_reason") or ""),
             retry_after_seconds=float(meta.get("retry_after_seconds") or 0.0),
         )
+        if automatic_cover_budget_active() and meta.get("status") != "http_404":
+            remaining_automatic_cover_seconds(float("inf"))
+            raise AutomaticCoverSearchFailed()
         return None
 
     attempts = 2 if service == "discogs" else 1
@@ -351,9 +354,13 @@ def _http_get_json(
             context=context,
             extra_headers=extra_headers,
         )
+        if payload == b"" and automatic_cover_budget_active():
+            raise AutomaticCoverSearchFailed()
         if payload:
             try:
                 decoded = json.loads(payload.decode("utf-8"))
+                if automatic_cover_budget_active() and not isinstance(decoded, dict):
+                    raise AutomaticCoverSearchFailed()
                 if service == "deezer":
                     data_items = decoded.get("data") if isinstance(decoded, dict) else None
                     emit_app_event(
@@ -371,7 +378,11 @@ def _http_get_json(
                         has_error=isinstance(decoded, dict) and bool(decoded.get("error")),
                         error=decoded.get("error") if isinstance(decoded, dict) else None,
                     )
+                    if automatic_cover_budget_active() and decoded.get("error"):
+                        raise AutomaticCoverSearchFailed()
                 return decoded if isinstance(decoded, dict) else None
+            except AutomaticCoverSearchFailed:
+                raise
             except Exception as exc:
                 _log_verbose(
                     active_logger,
@@ -394,6 +405,8 @@ def _http_get_json(
                         error_type=type(exc).__name__,
                         error=str(exc),
                     )
+                if automatic_cover_budget_active():
+                    raise AutomaticCoverSearchFailed() from exc
                 return None
         if service == "deezer":
             emit_app_event(

@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+from contextlib import nullcontext
 from threading import Event, Thread
 import time
+
+import pytest
 
 from music_app.services import cover_provider_apple
 from music_app.services import cover_provider_fallback_web
@@ -34,6 +37,92 @@ def _probe_from_matches(**kwargs) -> list[CoverCandidate]:
             )
         )
     return candidates
+
+
+@pytest.mark.parametrize("stage", ["musicbrainz", "direct", "linked"])
+@pytest.mark.parametrize("failure", [ConnectionError, TimeoutError])
+@pytest.mark.parametrize("automatic", [True, False])
+def test_automatic_discovery_failure_is_retryable(stage, failure, automatic):
+    from music_app.services import cover_provider_bandcamp as bandcamp
+    from music_app.services.cover_provider_deadline import (
+        AutomaticCoverDeadlineExceeded,
+        AutomaticCoverSearchFailed,
+        automatic_cover_budget,
+    )
+
+    failed = Event()
+
+    def get_text(url, *_args, **_kwargs):
+        failing_account = "linkedartist" if stage == "linked" else "testartist"
+        if stage != "musicbrainz" and failing_account in url and not failed.is_set():
+            failed.set()
+            raise failure("transient discovery failure")
+        return None
+
+    def get_context(*_args, **_kwargs):
+        if stage == "musicbrainz":
+            raise failure("transient discovery failure")
+        return {"artist_account_urls": ["https://linkedartist.bandcamp.com"]}
+
+    expected = AutomaticCoverDeadlineExceeded if failure is TimeoutError else AutomaticCoverSearchFailed
+    with automatic_cover_budget(5.0) if automatic else nullcontext():
+        with pytest.raises(expected) if automatic else nullcontext():
+            candidates = bandcamp.search_bandcamp_cover_candidates(
+                "Test Artist", "Test Album", None, 2001, "AlbumHavenTests/1.0",
+                http_get_text=get_text,
+                match_score=lambda **_kwargs: 0.93,
+                similarity=cover_provider_matching.similarity,
+                normalize=cover_provider_matching.normalize,
+                parse_year=cover_provider_matching.parse_year,
+                extract_og_image=cover_provider_fallback_web.extract_og_image,
+                extract_meta_content=cover_provider_apple.extract_apple_meta_content,
+                probe_match_candidates=_probe_from_matches,
+                fetch_musicbrainz_bandcamp_context=get_context,
+                log_event=None,
+                logger=_logger(),
+            )
+    if not automatic:
+        assert candidates == []
+
+
+def test_automatic_discovery_keeps_match_after_musicbrainz_failure():
+    from music_app.services import cover_provider_bandcamp as bandcamp
+    from music_app.services.cover_provider_deadline import automatic_cover_budget
+
+    discovery_failed = Event()
+
+    def get_context(*_args, **_kwargs):
+        raise ConnectionError("MusicBrainz unavailable")
+
+    def get_text(url, *_args, **_kwargs):
+        assert discovery_failed.wait(1.0)
+        if url.endswith("/album/test-album"):
+            return (
+                '<meta property="og:title" content="Test Album | Test Artist">'
+                '<meta property="og:description" content="Test Album by Test Artist">'
+                '<meta property="og:image" content="https://f4.bcbits.com/img/a123_5.jpg">'
+            )
+        return None
+
+    with automatic_cover_budget(5.0):
+        candidates = bandcamp.search_bandcamp_cover_candidates(
+            "Test Artist", "Test Album", None, 2001, "AlbumHavenTests/1.0",
+            http_get_text=get_text,
+            match_score=lambda **_kwargs: 0.93,
+            similarity=cover_provider_matching.similarity,
+            normalize=cover_provider_matching.normalize,
+            parse_year=cover_provider_matching.parse_year,
+            extract_og_image=cover_provider_fallback_web.extract_og_image,
+            extract_meta_content=cover_provider_apple.extract_apple_meta_content,
+            probe_match_candidates=_probe_from_matches,
+            fetch_musicbrainz_bandcamp_context=get_context,
+            log_event=lambda _config, _logger, action, **_fields: (
+                discovery_failed.set() if action == "Bandcamp MusicBrainz discovery failed" else None
+            ),
+            logger=_logger(),
+        )
+    assert len(candidates) == 1
+    assert candidates[0].url == "https://f4.bcbits.com/img/a123_10.jpg"
 
 
 def test_candidate_url_upgrades_mid_size_bcbits_images():

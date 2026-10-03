@@ -39,6 +39,21 @@
 - [ ] Add bounded waits and fallback at the existing automatic resolver seam.
 - [ ] Run focused tests and confirm provider failures, skips, and no-matches remain distinct.
 
+October 3 provider-failure correction: regressions first reproduced lost
+Deezer HTTP-200 errors, malformed/empty response payloads, Apple/Deezer/Spotify
+missing result lists, Spotify missing tokens, MusicBrainz dependency failures,
+and swallowed Bandcamp discovery-future failures. Automatic failures now remain
+retryable rather than becoming negative-cache entries. Bandcamp preserves valid
+matches despite another discovery path failing. Both image-probe paths preserve
+all earlier valid candidates when a later probe expires, including a higher-ranked
+candidate other than the last one. Manual behavior and valid empty-result lists
+remain unchanged. The final focused deadline, Bandcamp, automatic resolver,
+HTTP, Deezer, planning, Apple, Spotify and MusicBrainz gate passed 185 tests in
+9.59 seconds (two existing Pillow deprecation warnings). This evidence does not
+establish live throughput or satisfy manual acceptance, E2E, review, CI or
+publication gates. No task checkbox or progress counter changed; remaining
+task-level acceptance stays open.
+
 ### Task 3: Recover interrupted cover writes and checkpoint progress
 
 **Files:** `music_app/services/cover_refresh_planning.py`, `music_app/services/cover_refresh_execution.py`, `music_app/services/cover_provider_cache.py`, `tests/py/test_cover_refresh_planning.py`, `tests/py/test_state.py`.
@@ -73,3 +88,12 @@ the pre-existing `CoverSearchCache` still uses its legacy JSON implementation.
 This change reuses that owner; it does not add a JSON fallback or claim the
 lookup cache has been migrated. A lookup-cache persistence migration is not
 part of this approved resolver correction.
+
+### October 3 search-only smoke evidence
+
+Read-only provider searches using isolated sandbox3 configuration measured Rush
+in 4.194 seconds (Apple candidate, 1498 x 1498) and Spock's Beard in 12.571
+seconds (no candidate, including a 7.06164-second Bandcamp timeout). These were
+search-only samples, with no album or database writes. Production cover-pass
+throughput in jobs per minute remains unverified; these measurements do not
+complete manual acceptance, E2E, CI, review, or publication gates.

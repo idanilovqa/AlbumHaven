@@ -11,6 +11,7 @@ from config import Config
 from music_app.services import cover_provider_http, cover_provider_matching
 from music_app.services import music_identity_matching
 from music_app.services.app_logging import log_app_event
+from music_app.services.cover_provider_deadline import AutomaticCoverSearchFailed, automatic_cover_budget_active
 from music_app.services.cover_provider_candidates import (
     CoverCandidate,
     dedupe_cover_candidates,
@@ -899,6 +900,10 @@ def collect_apple_matches(
     query = urllib.parse.quote(query_text)
     url = _apple_api_url(f"search?term={query}&entity=album&limit=20")
     data = getter(url, user_agent, service="apple", context=f"search:{query_text}")
+    if automatic_cover_budget_active() and data is not None and (
+        not isinstance(data, dict) or not isinstance(data.get("results"), list)
+    ):
+        raise AutomaticCoverSearchFailed()
     if _canceled(should_cancel):
         return [], []
     if not data:

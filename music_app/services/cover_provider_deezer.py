@@ -8,6 +8,7 @@ from collections.abc import Callable
 from music_app.services.app_logging import log_app_event
 from music_app.services.cover_provider_candidates import CoverCandidate, dedupe_cover_candidates, normalize_remote_image_url
 from music_app.services import cover_provider_http
+from music_app.services.cover_provider_deadline import AutomaticCoverSearchFailed
 
 _LOGGER = logging.getLogger(__name__)
 _DEEZER_ARTWORK_SIZES = (2000, 1800, 1500, 1400, 1200, 1000)
@@ -134,6 +135,10 @@ def search_deezer_cover(
                 return None
             seen_queries.add(normalized_query)
             data = getter(_search_url(normalized_query, limit=10), user_agent, service="deezer", context=f"search:{normalized_query}")
+            if automatic and data is not None and (
+                not isinstance(data, dict) or not isinstance(data.get("data"), list)
+            ):
+                raise AutomaticCoverSearchFailed()
             if not data:
                 continue
             matches: list[tuple[float, str, dict]] = []

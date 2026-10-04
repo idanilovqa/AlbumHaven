@@ -1828,6 +1828,7 @@ def test_postgres_library_browse_builds_selected_artist_payload_from_direct_memb
     assert first_album["preview_only"] is False
     assert first_album["tracks"] == [
         {
+            "track_id": 1003,
             "key": "broadcast-noise-01",
                 "track_ref": "broadcast-noise-01",
                 "title": "Long Was the Year",
@@ -1846,7 +1847,7 @@ def test_postgres_library_browse_builds_selected_artist_payload_from_direct_memb
             "duration_display": "3m 35s",
                 "path": r"D:\Music\Broadcast\Noise\01.flac",
                 "track_scrobble_count": 0,
-                "track_preference_overlay": {"rating": None, "love_tier": None},
+                "track_preference_overlay": {"rating": None, "love_tier": "off"},
                 "is_problematic": False,
             }
         ]
@@ -7410,6 +7411,7 @@ def test_postgres_album_payloads_by_track_paths_applies_separate_release_split_t
             "total_duration_display": "2m 00s",
                 "tracks": [
                     {
+                        "track_id": 9001,
                         "key": "split-1999-01",
                         "track_ref": "split-1999-01",
                         "title": "1999 Track",
@@ -7429,7 +7431,7 @@ def test_postgres_album_payloads_by_track_paths_applies_separate_release_split_t
                         "duration_display": "2m 00s",
                         "path": requested_path,
                         "track_scrobble_count": 0,
-                        "track_preference_overlay": {"rating": None, "love_tier": None},
+                        "track_preference_overlay": {"rating": None, "love_tier": "off"},
                     }
                 ],
             "open_directory_paths": [r"D:\Music\Split Artist\Split Album\1999"],
@@ -7573,6 +7575,7 @@ def test_postgres_album_payloads_by_track_paths_excludes_exception_track_and_kee
             "total_duration_display": "2m 02s",
             "tracks": [
                 {
+                    "track_id": 9602,
                     "key": "exception-album-02",
                     "track_ref": "exception-album-02",
                     "title": "Remain Editable",
@@ -7592,7 +7595,7 @@ def test_postgres_album_payloads_by_track_paths_excludes_exception_track_and_kee
                     "duration_display": "2m 02s",
                     "path": sibling_path,
                     "track_scrobble_count": 0,
-                    "track_preference_overlay": {"rating": None, "love_tier": None},
+                    "track_preference_overlay": {"rating": None, "love_tier": "off"},
                 }
             ],
             "open_directory_paths": [r"D:\Synthetic Music\Exception Artist\Exception Album"],

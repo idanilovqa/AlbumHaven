@@ -2839,7 +2839,10 @@ def test_asgi_cover_refresh_routes_preserve_manual_payloads_and_cancel_status(ap
         fake_cover_file_cache_snapshot_for_state,
     )
 
-    def fake_refresh_unsuccessful_cover_artwork_for_state(library_state, config, logger, *, force_search):
+    prepared_request = object()
+
+    def fake_refresh_unsuccessful_cover_artwork_for_state(library_state, config, logger, *, force_search, prepared=None):
+        assert prepared is prepared_request
         unsuccessful_refresh_calls.append(
             {
                 "library_state": library_state,
@@ -2868,7 +2871,7 @@ def test_asgi_cover_refresh_routes_preserve_manual_payloads_and_cancel_status(ap
             }
         )
         kwargs["start_background_refresh"](force=True, scan_mode="manual")
-        kwargs["refresh_unsuccessful_cover_artwork"](force_search=True)
+        kwargs["refresh_unsuccessful_cover_artwork"](force_search=True, prepared=prepared_request)
         return {
             "started": True,
             "already_running": False,

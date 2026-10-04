@@ -160,3 +160,108 @@ file_cache = {
 ## Self-review
 
 PREP-1 covers normalization/probe ownership and image/aggregation semantics; PREP-2 covers request reuse, standalone compatibility, cancellation and cleanup; PREP-3 covers generated measurements and evidence. Prepared context is request-scoped. No concurrency, schema, cache authority or live-operation scope was added. This document does not start implementation.
+
+## October 4 synthetic preparation measurement
+
+Baseline: `cb35c5b28c708a163d061d399cc2abc155bbf4f5`; changed source: uncommitted preparation implementation on that baseline.
+Windows 10 build 26200; Python 3.11.16, MSC v.1942 AMD64.
+
+Each revision ran in a separate process, sequentially. Each scenario generated 10,000 folders with 12 tracks per folder (120,000 tracks), warmed up once, then recorded five samples. Provider/cache lookups and upgrade decisions used in-memory stubs; caller existence checks returned true without filesystem access. This measures warm synthetic CPU work, not cold media storage or production throughput. Host timing noise affects elapsed comparisons.
+
+| Scenario | Baseline samples (seconds) | Changed samples (seconds) | Median before → after |
+| --- | --- | --- | --- |
+| shared_identity | 19.140476, 24.934293, 24.490248, 19.601963, 19.380434 | 6.970272, 6.502923, 7.137380, 7.477881, 5.556806 | 19.601963 → 6.970272 |
+| late_year | 11.562452, 14.152394, 13.970636, 12.237863, 13.866212 | 6.666479, 8.040163, 7.124316, 6.050466, 8.443758 | 13.866212 → 7.124316 |
+| late_missing | 10.086752, 7.605973, 13.225422, 12.793655, 12.511724 | 6.033998, 5.264902, 6.039404, 6.072593, 4.644495 | 12.511724 → 6.033998 |
+
+Normalization calls fell from 120,000 to 10,000 for shared identities, 120,000 to 20,000 when the last track adds a year, and 110,000 to 10,000 when the last track lacks a cover. Upgrade decisions and cache lookups remained 10,000 / 20,000 / 10,000. Redundant caller-side existence checks fell from those same counts to zero; the stub excluded the helper's own filesystem work.
+
+Each scenario returned 10,000 jobs. Full ordered-job serialization hashes matched before and after:
+
+- Shared identity and late missing: `b9d780312ea2d792b6ee4668710fb3a02539136e7e26f88b903fc994ba227002`.
+- Late year: `8f7e3bbd74a6a5aa3fe273ee7a51aa69bdae662e915c477b45f7487ff9ac174b`.
+
+A separate generated one-album captured-callback run exercised the actual manual orchestration with a stub executor: planning calls 2 → 1, lookup-cache instances 2 → 1, supplied snapshots 1 → 1, executions 1 → 1, and final cover generation 2 → 1. It performed no provider work.
+
+All four commands exited 0; the observed benchmark launcher/child PIDs exited. Scripts and full JSON evidence remain locally under `.tmp/benchmark_cover_preparation.py`, `.tmp/benchmark_cover_submission.py`, and `.tmp/cover-preparation-benchmark-20261004.json`.
+
+Measured source SHA-256:
+- Planner: `D320D3B12196B98E87C97ADFA4A555114566002C098B0EDDE7F5F9D739DF857F`.
+- Runtime: `4695E01532AAB9E4E6DCFDA61BB8F6D3131689E2FE298938B79FDBDF100BA044`.
+
+These measurements do not close review, concurrency-safety, manual acceptance, E2E, CI or release gates. A later reservation/progress locking correction requires focused verification; no live preparation-time reduction has been measured.
+
+## October 4 focused verification after reservation locking
+
+The first test-author run established 10 failures, 3 passes and 19 deselections
+in 1.87 seconds: repeated normalization, duplicate caller probes and duplicate
+manual preparation. The review's reservation/start-progress race tests then
+established 3 failures and 1 pass. Implementation now uses the existing cache
+lock for manual reservation, prepared validation plus progress startup, owned
+error cleanup, API cancellation and shutdown cancellation. Provider and database
+work remain outside that critical section.
+
+- [x] PREP-1 implemented and focused planner regressions pass.
+- [x] PREP-2 implemented; normal, competing-start, stale-generation, cancellation,
+  standalone and focused callback-forwarding cases pass.
+- [x] PREP-3 synthetic samples, operation counts and ordered-output checks recorded.
+- [x] Verify explicit empty-prepared and planning/submission-error cleanup cases,
+  including preservation of a newer generation's progress.
+- [x] Independent complete-diff review and root confirmation of the final checkpoint.
+
+Latest sequential commands used the sandbox3 virtualenv interpreter without
+loading sandbox configuration or accessing live data:
+
+```powershell
+python -m pytest tests/py/test_cover_refresh_planning.py tests/py/test_cover_refresh_runtime.py -q --tb=short
+```
+
+Result: 35 passed in 2.01 seconds, exit 0.
+
+```powershell
+python -m pytest tests/py/test_state.py::test_refresh_unsuccessful_cover_artwork_for_state_uses_explicit_dependencies_without_flask_context tests/py/test_state.py::test_refresh_unsuccessful_cover_artwork_for_state_uses_configured_bulk_cover_limits tests/py/test_state.py::test_refresh_library_for_state_threads_explicit_manual_cover_refresh_dependencies tests/py/test_state.py::test_refresh_library_for_state_runs_without_flask_context tests/py/test_api_wave_d_asgi_routes.py::test_asgi_cover_refresh_routes_preserve_manual_payloads_and_cancel_status tests/py/test_runtime_shutdown.py -k 'refresh_unsuccessful_cover_artwork_for_state or refresh_library_for_state_threads_explicit or refresh_library_for_state_runs_without or asgi_cover_refresh_routes_preserve or request_runtime_shutdown' -q --tb=short
+```
+
+Result: 10 passed, 14 deselected in 4.88 seconds, exit 0. Neither command reported
+warnings; both exited before the pytest lane was released. The implementation
+owner reread the complete preparation diff; this self-review does not replace
+the independent review checkpoint. Terminal execution progress ownership belongs
+to the adjacent recovery unit and needs its separate test evidence. The benchmark
+above predates the locking correction; its source hashes identify that measurement.
+
+Five additional isolated runtime cases passed (5 passed, 21 deselected in 0.78
+seconds): planning and submission failures with the same or a newer generation,
+and direct execution of an empty prepared request. The test author released the
+pytest lane afterward. The root reviewer reread the complete preparation source
+and tests after the reservation-lock correction and reported no new finding;
+final overall verification and the recorded delivery/release gates remain open.
+
+## Final independent commit checkpoint
+
+Subsequent fresh root verification passed 40 planner/runtime tests in 2.28
+seconds, and 10 state/API/shutdown tests with 152 unrelated cases deselected in
+4.12 seconds. Both commands exited 0, sequentially, and the pytest lane was
+released. Iterative root and independent complete relevant-diff review found no
+remaining actionable findings. The independent review checkbox above is now
+complete; earlier detailed task instructions remain historical, not a second
+progress counter. No numeric progress counter is maintained here.
+
+Changed files (10):
+
+- `music_app/services/cover_refresh_planning.py`
+- `music_app/services/cover_refresh_runtime.py`
+- `music_app/services/state.py`
+- `music_app/services/runtime_shutdown.py`
+- `music_app/routes/api_wave_d_asgi_routes.py`
+- `tests/py/test_cover_refresh_planning.py`
+- `tests/py/test_cover_refresh_runtime.py`
+- `tests/py/test_runtime_shutdown.py`
+- `tests/py/test_api_wave_d_asgi_routes.py`
+- `docs/plans/2026-10-04-cover-preparation-implementation.md`
+
+Direct task time, skill/process overhead and total slice elapsed time were not
+fully captured and remain unknown. Synthetic measurements above remain scoped
+to their recorded source hashes; final live preparation throughput is unverified.
+Manual acceptance, E2E, hosted CI, live verification and release gates remain
+open. No active-pass inspection, deployment, restart or new scan was performed
+for this checkpoint.

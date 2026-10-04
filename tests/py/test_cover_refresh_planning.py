@@ -2,6 +2,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+from PIL import Image
+
 from music_app.services import cover_refresh_planning
 
 
@@ -181,6 +184,12 @@ def test_build_cover_refresh_jobs_checks_shared_cover_and_lookup_once(tmp_path: 
     tracks = [folder / f"0{index}.mp3" for index in (1, 2)]
     cache = _CoverCacheStub()
     checked: list[Path] = []
+    identities = []
+    original_key = cover_refresh_planning.cover_query_key
+    def counted_key(*identity):
+        identities.append(identity)
+        return original_key(*identity)
+    monkeypatch.setattr(cover_refresh_planning, "cover_query_key", counted_key)
     monkeypatch.setattr(
         cover_refresh_planning,
         "local_cover_requires_upgrade_check",
@@ -196,6 +205,7 @@ def test_build_cover_refresh_jobs_checks_shared_cover_and_lookup_once(tmp_path: 
     assert jobs == []
     assert len(cache.queries) == 1
     assert checked == [cover]
+    assert identities == [("Artist", "Album", None, None)]
 
 
 def test_build_cover_refresh_jobs_keeps_missing_track_cover_semantics(tmp_path: Path, monkeypatch):
@@ -224,6 +234,12 @@ def test_build_cover_refresh_jobs_rechecks_when_album_query_identity_changes(tmp
     cover.write_bytes(b"cover")
     cache = _CoverCacheStub()
     checked: list[Path] = []
+    identities = []
+    original_key = cover_refresh_planning.cover_query_key
+    def counted_key(*identity):
+        identities.append(identity)
+        return original_key(*identity)
+    monkeypatch.setattr(cover_refresh_planning, "cover_query_key", counted_key)
     monkeypatch.setattr(
         cover_refresh_planning,
         "local_cover_requires_upgrade_check",
@@ -242,3 +258,50 @@ def test_build_cover_refresh_jobs_rechecks_when_album_query_identity_changes(tmp
     assert jobs == []
     assert len(set(cache.queries)) == 2
     assert checked == [cover, cover]
+    assert identities == [("Artist", "Album", None, None), ("Artist", "Album", None, 2001)]
+
+
+@pytest.mark.parametrize("kind,needs_fetch", [("missing", True), ("corrupt", True), ("disappearing", True), ("small", True), ("adequate", False)])
+def test_planner_uses_one_owned_existence_probe_per_cover(tmp_path, monkeypatch, kind, needs_fetch):
+    cover = tmp_path / "cover.jpg"
+    if kind == "corrupt":
+        cover.write_bytes(b"not an image")
+    elif kind != "missing":
+        Image.new("RGB", (1199 if kind == "small" else 1200, 1200)).save(cover)
+    probes = []
+    original_exists = Path.exists
+    def counted_exists(path):
+        if path == cover:
+            probes.append(path)
+            if kind == "disappearing" and len(probes) == 1:
+                cover.unlink()
+                return True
+        return original_exists(path)
+    monkeypatch.setattr(Path, "exists", counted_exists)
+    jobs = cover_refresh_planning.build_cover_refresh_jobs(
+        {str(tmp_path / f"{i}.mp3"): {"album_artist": "Artist", "album": "Album", "cover_path": str(cover)} for i in range(3)},
+        require_missing_cover=True,
+    )
+    assert bool(jobs) is needs_fetch
+    assert probes == [cover]
+
+
+@pytest.mark.parametrize("shared_cover", [True, False])
+def test_planner_memoizes_query_independently_of_cover_path(tmp_path, monkeypatch, shared_cover):
+    identities, checked = [], []
+    original_key = cover_refresh_planning.cover_query_key
+    def counted_key(*identity):
+        identities.append(identity)
+        return original_key(*identity)
+    monkeypatch.setattr(cover_refresh_planning, "cover_query_key", counted_key)
+    monkeypatch.setattr(cover_refresh_planning, "local_cover_requires_upgrade_check", lambda path, entry: checked.append(path) or False)
+    entries = {}
+    for index in range(2):
+        folder = tmp_path / str(index)
+        folder.mkdir()
+        cover = tmp_path / ("shared.jpg" if shared_cover else f"{index}.jpg")
+        cover.write_bytes(b"cover")
+        entries[str(folder / "song.mp3")] = {"album_artist": "Artist", "album": f"Album {index}" if shared_cover else "Album", "cover_path": str(cover)}
+    assert cover_refresh_planning.build_cover_refresh_jobs(entries, require_missing_cover=True, cover_cache=_CoverCacheStub()) == []
+    assert len(identities) == (2 if shared_cover else 1)
+    assert len(checked) == 2

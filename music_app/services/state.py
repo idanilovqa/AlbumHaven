@@ -17,6 +17,7 @@ from music_app.services.cover_refresh_jobs import (
     select_manual_track_cover_refresh_jobs,
 )
 from music_app.services.cover_refresh_runtime import (
+    PreparedCoverRefresh,
     refresh_cover_artwork_for_track_paths_request,
     refresh_cover_artwork_request,
     refresh_unsuccessful_cover_artwork_request,
@@ -683,6 +684,7 @@ def refresh_unsuccessful_cover_artwork_for_state(
     logger: object,
     *,
     force_search: bool = False,
+    prepared: PreparedCoverRefresh | None = None,
 ) -> dict[str, object]:
     return refresh_unsuccessful_cover_artwork_request(
         get_state=lambda: library_state,
@@ -691,6 +693,7 @@ def refresh_unsuccessful_cover_artwork_for_state(
         logger=logger,
         log_app_event=log_app_event,
         force_search=force_search,
+        prepared=prepared,
         select_manual_bulk_cover_refresh_jobs=select_manual_bulk_cover_refresh_jobs,
         build_cover_jobs=build_cover_refresh_jobs,
         run_cover_jobs=run_cover_jobs,
@@ -821,6 +824,7 @@ def refresh_library_for_state(
         ),
         refresh_relation_views=refresh_relation_views,
         start_manual_cover_refresh=lambda *, force_search=False: start_manual_cover_refresh_request(
+            cache_lock=_CACHE_LOCK,
             config=config,
             logger=logger,
             get_state=lambda: library_state,
@@ -833,11 +837,12 @@ def refresh_library_for_state(
             ),
             get_file_cache_snapshot=lambda: cover_file_cache_snapshot_for_state(library_state),
             submit_cover_job=_COVER_EXECUTOR.submit,
-            refresh_unsuccessful_cover_artwork=lambda *, force_search=False: refresh_unsuccessful_cover_artwork_for_state(
+            refresh_unsuccessful_cover_artwork=lambda *, force_search=False, prepared=None: refresh_unsuccessful_cover_artwork_for_state(
                 library_state,
                 config,
                 logger,
                 force_search=force_search,
+                prepared=prepared,
             ),
             force_search=force_search,
         ),

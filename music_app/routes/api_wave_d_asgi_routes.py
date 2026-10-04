@@ -1216,6 +1216,7 @@ async def utilities_fetch_covers_unsuccessful(request: Request) -> JSONResponse:
     force_search = bool(payload.get("force_search")) if isinstance(payload, dict) else False
     try:
         start_result = start_manual_cover_refresh_request(
+            cache_lock=state_service._CACHE_LOCK,
             config=config,
             logger=logger,
             get_state=lambda: library_state,
@@ -1231,11 +1232,12 @@ async def utilities_fetch_covers_unsuccessful(request: Request) -> JSONResponse:
             get_file_cache_snapshot=lambda: state_service.cover_file_cache_snapshot_for_state(library_state),
             submit_cover_job=state_service._COVER_EXECUTOR.submit,
             refresh_unsuccessful_cover_artwork=(
-                lambda force_search=False: state_service.refresh_unsuccessful_cover_artwork_for_state(
+                lambda force_search=False, prepared=None: state_service.refresh_unsuccessful_cover_artwork_for_state(
                     library_state,
                     config,
                     logger,
                     force_search=force_search,
+                    prepared=prepared,
                 )
             ),
             force_search=force_search,
@@ -1273,4 +1275,4 @@ async def utilities_fetch_covers_unsuccessful(request: Request) -> JSONResponse:
 
 @router.post("/utilities/cancel-cover-scan")
 async def utilities_cancel_cover_scan(request: Request) -> JSONResponse:
-    return JSONResponse({"ok": True, **cancel_cover_refresh_status(get_state=lambda: _library_state(request))})
+    return JSONResponse({"ok": True, **cancel_cover_refresh_status(get_state=lambda: _library_state(request), cache_lock=state_service._CACHE_LOCK)})

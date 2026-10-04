@@ -16,6 +16,7 @@ def build_cover_refresh_jobs(
     jobs_by_folder: dict[str, dict[str, object]] = {}
     skipped_folders: list[dict[str, object]] = []
     cover_needs_fetch: dict[tuple[str, str | None], bool] = {}
+    query_keys: dict[tuple[str, str, str | None, int | None], str] = {}
 
     for raw_path, entry in file_cache.items():
         try:
@@ -62,22 +63,22 @@ def build_cover_refresh_jobs(
         if cover_path is None:
             job["needs_cover_fetch"] = True
             continue
-        cache_key = (
-            cover_query_key(
+        cache_key = None
+        if cover_cache is not None and job.get("artist") and job.get("album"):
+            identity = (
                 str(job.get("artist") or "").strip(),
                 str(job.get("album") or "").strip(),
                 str(job.get("edition") or "").strip() or None,
                 job.get("year") if isinstance(job.get("year"), int) else None,
             )
-            if cover_cache is not None and job.get("artist") and job.get("album")
-            else None
-        )
+            if identity not in query_keys:
+                query_keys[identity] = cover_query_key(*identity)
+            cache_key = query_keys[identity]
         decision_key = (cover_value, cache_key)
         if decision_key not in cover_needs_fetch:
             cache_entry = cover_cache.get(cache_key) if cache_key is not None else None
             cover_needs_fetch[decision_key] = (
-                not cover_path.exists()
-                or local_cover_requires_upgrade_check(cover_path, cache_entry)
+                local_cover_requires_upgrade_check(cover_path, cache_entry)
             )
         if cover_needs_fetch[decision_key]:
             job["needs_cover_fetch"] = True

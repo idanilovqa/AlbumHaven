@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import pytest
+import threading
 
 from music_app.services import cover_refresh_runtime
 
@@ -32,6 +33,7 @@ def test_start_manual_cover_refresh_queues_after_indexing(runtime_config, logger
     library_state = {"scan_in_progress": True}
 
     result = cover_refresh_runtime.start_manual_cover_refresh(
+        cache_lock=threading.Lock(),
         config=runtime_config,
         logger=logger,
         get_state=lambda: library_state,
@@ -59,6 +61,7 @@ def test_start_manual_cover_refresh_starts_background_scan_when_index_missing(ru
     library_state = {}
 
     result = cover_refresh_runtime.start_manual_cover_refresh(
+        cache_lock=threading.Lock(),
         config=runtime_config,
         logger=logger,
         get_state=lambda: library_state,
@@ -75,19 +78,21 @@ def test_start_manual_cover_refresh_starts_background_scan_when_index_missing(ru
 
 def test_start_manual_cover_refresh_returns_direct_status_snapshot(runtime_config, logger):
     submitted = []
+    invoked = []
     library_state = {
         "albums": [{"key": "album-1"}],
         "file_cache": {"track-1": {"album": "Album"}},
     }
 
     result = cover_refresh_runtime.start_manual_cover_refresh(
+        cache_lock=threading.Lock(),
         config=runtime_config,
         logger=logger,
         get_state=lambda: library_state,
         start_background_refresh=lambda **kwargs: None,
         build_cover_jobs=lambda **kwargs: [{"folder": "Artist/Album"}],
         submit_cover_job=lambda *args: submitted.append(args),
-        refresh_manual_cover_artwork_worker=lambda force_search: None,
+        refresh_manual_cover_artwork_worker=lambda force_search, prepared: invoked.append((force_search, prepared)),
         force_search=True,
     )
 
@@ -102,6 +107,11 @@ def test_start_manual_cover_refresh_returns_direct_status_snapshot(runtime_confi
     assert submitted[0][1] is True
     assert library_state["covers_in_progress"] is True
     assert library_state["covers_current_folder"] == "Artist/Album"
+    callback, *args = submitted[0]
+    callback(*args)
+    assert invoked[0][0] is True
+    assert invoked[0][1][0].library_state is library_state
+    assert invoked[0][1][1] == [{"folder": "Artist/Album"}]
 
 
 def test_start_manual_cover_refresh_request_builds_jobs_from_snapshot(runtime_config, logger, monkeypatch):
@@ -120,6 +130,7 @@ def test_start_manual_cover_refresh_request_builds_jobs_from_snapshot(runtime_co
     )
 
     result = cover_refresh_runtime.start_manual_cover_refresh_request(
+        cache_lock=threading.Lock(),
         config=runtime_config,
         logger=logger,
         get_state=lambda: library_state,
@@ -168,6 +179,7 @@ def test_start_manual_cover_refresh_request_queues_with_explicit_dependencies_ou
     )
 
     result = cover_refresh_runtime.start_manual_cover_refresh_request(
+        cache_lock=threading.Lock(),
         config=runtime_config,
         logger=logger,
         get_state=lambda: library_state,
@@ -441,3 +453,210 @@ def test_refresh_unsuccessful_cover_artwork_request_uses_bumped_cover_generation
     assert executed[0]["job_workers"] == 2
     assert len(logged) == 1
     assert logged[0]["mode"] == "manual-bulk"
+
+
+@pytest.mark.parametrize("failure_stage", ["planning", "submission"])
+@pytest.mark.parametrize("newer_request", [False, True])
+def test_manual_preparation_failure_cleans_only_owned_request(runtime_config, logger, failure_stage, newer_request):
+    state = {"albums": [{"key": "album"}], "file_cache": {"track": {"album": "Album"}}, "cover_generation": 2}
+    lock = threading.Lock()
+    newer = {"cover_generation": 4, "covers_in_progress": True, "covers_current_folder": "Newer/Album", "covers_processed": 17, "covers_total": 99, "covers_downloaded": 8}
+    def fail():
+        assert not lock.locked(), "Planning and executor submission must not hold runtime lock"
+        if newer_request:
+            with lock:
+                state.update(newer)
+        raise RuntimeError("isolated preparation failure")
+    def plan(**_kwargs):
+        if failure_stage == "planning":
+            fail()
+        return [{"folder": "Artist/Album"}]
+    def submit(*_args):
+        if failure_stage == "submission":
+            fail()
+        pytest.fail("Failed planning must not submit")
+    with pytest.raises(RuntimeError, match="isolated preparation failure"):
+        cover_refresh_runtime.start_manual_cover_refresh(
+            config=runtime_config, logger=logger, get_state=lambda: state, cache_lock=lock,
+            start_background_refresh=lambda **kw: pytest.fail("Unexpected scan"),
+            build_cover_jobs=plan, submit_cover_job=submit,
+            refresh_manual_cover_artwork_worker=lambda force_search, prepared: None,
+        )
+    if newer_request:
+        assert {key: state[key] for key in newer} == newer
+    else:
+        assert state["cover_generation"] == 3
+        assert state["covers_in_progress"] is False
+        assert state["covers_current_folder"] == ""
+        assert state["covers_total"] == state["covers_processed"] == state["covers_downloaded"] == 0
+
+
+def test_empty_prepared_manual_refresh_finishes_without_provider_execution(runtime_config, logger):
+    state = {"cover_generation": 2, "scan_generation": 4, "covers_in_progress": True}
+    context = cover_refresh_runtime.build_cover_refresh_context(get_state=lambda: state, config=runtime_config)
+    logged = []
+    result = cover_refresh_runtime.execute_cover_refresh_request(
+        context=context, cache_lock=threading.Lock(), jobs=[],
+        run_cover_jobs=lambda **kw: pytest.fail("Empty prepared job list must not run providers"),
+        log_cover_refresh_completion=lambda **kw: logged.append(kw),
+        config=runtime_config, logger=logger, log_app_event=lambda *args, **kw: None,
+        mode="manual-bulk", force_search=True, allow_apple_web_fallback=True,
+        allow_apple_web_fallback_when_has_cover=False, include_job_results_when_empty=True,
+        prepared_get_state=lambda: state,
+    )
+    assert result == {"changed": False, "processed": 0, "downloaded": 0, "failed": 0, "job_results": []}
+    assert state["cover_generation"] == 2
+    assert state["covers_in_progress"] is False
+    assert len(logged) == 1
+    assert logged[0]["jobs"] == []
+
+
+def test_manual_preparation_reservation_rechecks_competing_start(runtime_config, logger):
+
+    submitted, results, errors = [], [], []
+    lock = threading.Lock()
+    observed_idle = threading.Event()
+    competitor_done = threading.Event()
+
+    class InterleavedState(dict):
+        armed = True
+
+        def get(self, key, default=None):
+            value = super().get(key, default)
+            if key == "covers_in_progress" and self.armed:
+                self.armed = False
+                observed_idle.set()
+                # Without the shared lock, let the competing request reserve
+                # between this idle observation and this caller's reservation.
+                if not lock.locked():
+                    assert competitor_done.wait(5), "Competing request did not finish"
+            return value
+
+    state = InterleavedState(albums=[{"key": "album"}], file_cache={"track": {"album": "Album"}}, cover_generation=2)
+
+    def start():
+        return cover_refresh_runtime.start_manual_cover_refresh(
+            config=runtime_config, logger=logger, get_state=lambda: state,
+            start_background_refresh=lambda **kw: pytest.fail("Unexpected scan"),
+            build_cover_jobs=lambda **kw: [{"folder": "Artist/Album"}],
+            submit_cover_job=lambda *args: submitted.append(args),
+            refresh_manual_cover_artwork_worker=lambda force_search, prepared: None,
+            cache_lock=lock,
+        )
+
+    def compete():
+        try:
+            assert observed_idle.wait(5), "First request never observed idle"
+            results.append(start())
+        except BaseException as exc:
+            errors.append(exc)
+        finally:
+            competitor_done.set()
+
+    thread = threading.Thread(target=compete)
+    thread.start()
+    try:
+        results.append(start())
+    finally:
+        thread.join(5)
+    assert not thread.is_alive()
+    assert errors == []
+    assert sum(bool(item["started"]) for item in results) == 1
+    assert len(submitted) == 1
+    assert state["cover_generation"] == 3
+
+
+@pytest.mark.parametrize("invalidate", ["cancel", "newer"])
+def test_prepared_manual_start_preserves_change_after_validation(runtime_config, logger, monkeypatch, invalidate):
+    state = {"albums": [{"key": "album"}], "file_cache": {"track": {"album": "Album"}}, "scan_generation": 4, "cover_generation": 2, "covers_in_progress": True}
+    context = cover_refresh_runtime.build_cover_refresh_context(get_state=lambda: state, config=runtime_config)
+    jobs = [{"folder": "Artist/Album", "track_paths": ["track"]}]
+    lock = threading.Lock()
+    original_execute = cover_refresh_runtime.execute_cover_refresh_request
+    expected = {}
+    executions = []
+
+    def interleave(**kwargs):
+        with lock:
+            cover_refresh_runtime.cancel_cover_refresh_status(get_state=lambda: state)
+            if invalidate == "newer":
+                state.update(cover_generation=state["cover_generation"] + 1, covers_in_progress=True, covers_total=99, covers_processed=17, covers_downloaded=8, covers_current_folder="Newer/Album")
+            expected.update(state)
+        return original_execute(**kwargs)
+
+    monkeypatch.setattr(cover_refresh_runtime, "execute_cover_refresh_request", interleave)
+    result = cover_refresh_runtime.refresh_unsuccessful_cover_artwork_request(
+        get_state=lambda: state, cache_lock=lock, config=runtime_config, logger=logger,
+        log_app_event=lambda *args, **kw: None, force_search=True,
+        select_manual_bulk_cover_refresh_jobs=lambda **kw: pytest.fail("Must reuse prepared jobs"),
+        build_cover_jobs=lambda *args, **kw: pytest.fail("Must reuse prepared jobs"),
+        run_cover_jobs=lambda **kw: executions.append(kw) or {"changed": False, "processed": 1},
+        log_cover_refresh_completion=lambda **kw: None,
+        bulk_negative_cache_ttl_seconds=321, job_workers=2, prepared=(context, jobs),
+    )
+    assert executions == []
+    assert state == expected
+    assert result["processed"] == 0
+
+
+@pytest.mark.parametrize("invalidate", [None, "cancel", "scan", "newer"])
+def test_manual_submission_reuses_preparation_and_rejects_stale_work(runtime_config, logger, monkeypatch, invalidate):
+    state = {"albums": [{"key": "album"}], "file_cache": {"track": {"album": "Album"}}, "scan_generation": 4, "cover_generation": 2}
+    snapshot = {"track": {"album": "Snapshot", "cover_selection_origin": "user"}}
+    jobs = [{"folder": "Artist/Album", "track_paths": ["track"], "cover_selection_origin": "user"}]
+    planned, submitted, executed, snapshots = [], [], [], []
+    def plan_snapshot(**kwargs):
+        planned.append(kwargs["cover_cache"])
+        assert kwargs["get_file_cache_snapshot"]() == snapshot
+        return jobs
+    monkeypatch.setattr(cover_refresh_runtime, "build_cover_jobs_for_snapshot", plan_snapshot)
+    def execute(**kwargs):
+        executed.append(kwargs)
+        return {"changed": False, "processed": 1, "downloaded": 0, "failed": 0, "job_results": []}
+    def refresh(**kwargs):
+        return cover_refresh_runtime.refresh_unsuccessful_cover_artwork_request(
+            get_state=lambda: state, cache_lock=threading.Lock(), config=runtime_config, logger=logger,
+            log_app_event=lambda *args, **kw: None,
+            select_manual_bulk_cover_refresh_jobs=lambda **kw: planned.append(kw["cover_cache"]) or jobs,
+            build_cover_jobs=lambda *args, **kw: jobs, run_cover_jobs=execute,
+            log_cover_refresh_completion=lambda **kw: None,
+            bulk_negative_cache_ttl_seconds=321, job_workers=2, **kwargs,
+        )
+    result = cover_refresh_runtime.start_manual_cover_refresh_request(
+        cache_lock=threading.Lock(), config=runtime_config, logger=logger, get_state=lambda: state,
+        start_background_refresh=lambda **kwargs: pytest.fail("unexpected scan"),
+        get_file_cache_snapshot=lambda: snapshots.append(True) or snapshot,
+        submit_cover_job=lambda *args: submitted.append(args),
+        refresh_unsuccessful_cover_artwork=refresh, force_search=True,
+    )
+    assert result["queued_count"] == 1
+    assert result["current_folder"] == jobs[0]["folder"]
+    reserved_generation = state["cover_generation"]
+    if invalidate == "cancel":
+        cover_refresh_runtime.cancel_cover_refresh_status(get_state=lambda: state)
+    elif invalidate == "scan":
+        state["scan_generation"] += 1
+    elif invalidate == "newer":
+        state.update(cover_generation=reserved_generation + 1, covers_total=99, covers_processed=17, covers_current_folder="Newer/Album")
+    expected_generation = state["cover_generation"]
+    callback, *args = submitted[0]
+    callback(*args)
+    assert len(planned) == 1
+    assert len(snapshots) == 1
+    assert state["cover_generation"] == expected_generation
+    if invalidate:
+        assert executed == []
+        if invalidate == "newer":
+            assert state["covers_in_progress"] is True
+            assert state["covers_total"] == 99
+            assert state["covers_processed"] == 17
+            assert state["covers_current_folder"] == "Newer/Album"
+        else:
+            assert state["covers_in_progress"] is False
+    else:
+        assert len(executed) == 1
+        assert executed[0]["jobs"] is jobs
+        assert executed[0]["file_cache"] == snapshot
+        assert executed[0]["cover_cache"] is planned[0]
+        assert executed[0]["force_search"] is True
+        assert executed[0]["job_workers"] == 2

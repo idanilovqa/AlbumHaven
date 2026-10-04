@@ -736,6 +736,89 @@ def test_same_art_upgrade_requires_expected_user_origin_and_cover_revision(
     assert "blocked_by_expected_cover_state" in normalized_sql
 
 
+@pytest.mark.parametrize("expected", [(None, None), ("automatic", None), (None, "old"), ("automatic", "old")])
+@pytest.mark.parametrize("blocked", [False, True])
+def test_explicit_expected_cover_state_guards_partial_and_null_baselines(monkeypatch, expected, blocked):
+    from music_app.services import scan_cache_persistence
+
+    class ExpectedConnection(FakeConnection):
+        def execute(self, sql, params=None):
+            cursor = super().execute(sql, params)
+            if "updated_albums" in _normalized_sql(sql):
+                return FakeCursor([{
+                    "input_path_count": 1, "resolved_path_count": 1,
+                    "selected_album_count": 1, "album_track_file_count": 1,
+                    "album_rows_updated": 0 if blocked else 1,
+                    "track_file_rows_updated": 0 if blocked else 1,
+                    "blocked_by_expected_cover_state": blocked,
+                }])
+            return cursor
+
+    monkeypatch.setattr(scan_cache_persistence, "Jsonb", None)
+    connection = ExpectedConnection()
+    adapter = scan_cache_persistence.PostgresScanCacheAdapter(
+        {"ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://isolated-test"},
+        connect=lambda _url: connection,
+    )
+    guards = []
+    result = adapter.persist_cover_selection(
+        track_paths={"C:/Generated/song.mp3"}, selected_cover_path=Path("C:/Generated/cover.jpg"),
+        cover_revision="new", cover_selection_origin="automatic",
+        expected_cover_state=expected, commit_guard=lambda commit: (guards.append(True), commit()),
+    )
+    sql, params = next((sql, params) for sql, params in connection.executed if "updated_albums" in sql)
+    assert params["expected_cover_selection_origin"] == (expected[0] or "")
+    assert params["expected_cover_revision"] == (expected[1] or "")
+    assert "blocked_by_expected_cover_state" in sql
+    assert "%(expected_cover_selection_origin)s" in sql
+    assert "%(expected_cover_revision)s" in sql
+    revision_writes = [sql for sql, _ in connection.executed if "cover_mutation_revision" in sql and "update library.libraries" in _normalized_sql(sql)]
+    assert len(revision_writes) == (0 if blocked else 1)
+    assert guards == ([] if blocked else [True])
+    assert result == ({"album_rows_updated": 0, "track_file_rows_updated": 0, "blocked_by_expected_cover_state": True} if blocked else {"album_rows_updated": 1, "track_file_rows_updated": 1})
+
+
+@pytest.mark.parametrize("expected", [(), (None,), (None, None, None), "automatic", [None, None], ("invalid", None), (123, None), (None, 123)])
+def test_explicit_expected_cover_state_rejects_invalid_input_before_connect(expected):
+    from music_app.services.scan_cache_persistence import PostgresScanCacheAdapter
+
+    def reject_connect(_url):
+        pytest.fail("Invalid expected state must not reach the database")
+
+    adapter = PostgresScanCacheAdapter({"ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://isolated-test"}, connect=reject_connect)
+    with pytest.raises(ValueError):
+        adapter.persist_cover_selection(track_paths={"C:/Generated/song.mp3"}, selected_cover_path=Path("C:/Generated/cover.jpg"), cover_revision="new", expected_cover_state=expected)
+
+
+@pytest.mark.parametrize("legacy", [{"expected_cover_selection_origin": "automatic"}, {"expected_cover_revision": "old"}, {"expected_cover_selection_origin": "automatic", "expected_cover_revision": "old"}])
+def test_explicit_expected_cover_state_rejects_legacy_argument_mix(legacy):
+    from music_app.services.scan_cache_persistence import PostgresScanCacheAdapter
+    adapter = PostgresScanCacheAdapter({"ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://isolated-test"}, connect=lambda _url: pytest.fail("Invalid mixed guards must not connect"))
+    with pytest.raises(ValueError):
+        adapter.persist_cover_selection(track_paths={"C:/Generated/song.mp3"}, selected_cover_path=Path("C:/Generated/cover.jpg"), cover_revision="new", expected_cover_state=(None, None), **legacy)
+
+
+@pytest.mark.parametrize("expected", [(None, None), ("automatic", None), (None, "old"), ("automatic", "old")])
+def test_cache_wrapper_forwards_explicit_expected_cover_state(monkeypatch, expected):
+    from music_app.services import cache
+    calls = []
+    adapter = SimpleNamespace(persist_cover_selection=lambda **kwargs: calls.append(kwargs) or {"album_rows_updated": 1})
+    monkeypatch.setattr(cache, "_select_runtime_scan_cache_adapter", lambda _config: adapter)
+    result = cache.persist_cover_selection_for_tracks_for_config({}, {"generated-track"}, Path("generated-cover"), expected_cover_state=expected)
+    assert result == {"album_rows_updated": 1}
+    assert calls[0]["expected_cover_state"] == expected
+    assert "expected_cover_selection_origin" not in calls[0]
+    assert "expected_cover_revision" not in calls[0]
+
+
+@pytest.mark.parametrize("legacy", [{"expected_cover_selection_origin": "automatic"}, {"expected_cover_revision": "old"}, {"expected_cover_selection_origin": "invalid", "expected_cover_revision": "old"}])
+def test_legacy_expected_cover_state_still_rejects_partial_or_invalid_values(legacy):
+    from music_app.services.scan_cache_persistence import PostgresScanCacheAdapter
+    adapter = PostgresScanCacheAdapter({"ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://isolated-test"}, connect=lambda _url: pytest.fail("Invalid legacy guard must not connect"))
+    with pytest.raises(ValueError):
+        adapter.persist_cover_selection(track_paths={"C:/Generated/song.mp3"}, selected_cover_path=Path("C:/Generated/cover.jpg"), cover_revision="new", **legacy)
+
+
 def test_postgres_cover_selection_invokes_commit_guard_after_mutation_before_exit(monkeypatch):
     from music_app.services import scan_cache_persistence
     from music_app.services.scan_cache_persistence import PostgresScanCacheAdapter
@@ -803,6 +886,30 @@ def test_postgres_cover_selection_invokes_commit_guard_after_mutation_before_exi
         "guard-exit",
         "transaction-exit",
     ]
+
+
+def test_postgres_cover_selection_guard_exception_rolls_back_transaction(monkeypatch):
+    from music_app.services import scan_cache_persistence
+
+    class GuardFailure(RuntimeError):
+        pass
+
+    class Connection(FakeConnection):
+        def execute(self, sql, params=None):
+            cursor = super().execute(sql, params)
+            if "updated_albums" in sql:
+                return FakeCursor([{"input_path_count": 1, "resolved_path_count": 1, "selected_album_count": 1, "album_track_file_count": 1, "album_rows_updated": 1, "track_file_rows_updated": 1}])
+            return cursor
+
+    monkeypatch.setattr(scan_cache_persistence, "Jsonb", None)
+    connection = Connection()
+    adapter = scan_cache_persistence.PostgresScanCacheAdapter({"ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://isolated-test"}, connect=lambda _url: connection)
+    def reject_commit(_commit):
+        raise GuardFailure("Selection changed before commit")
+    with pytest.raises(GuardFailure, match="Selection changed"):
+        adapter.persist_cover_selection(track_paths={"C:/Generated/song.mp3"}, selected_cover_path=Path("C:/Generated/cover.jpg"), cover_revision="new", expected_cover_state=(None, None), commit_guard=reject_commit)
+    assert connection.commit_calls == 0
+    assert connection.exit_exc_type is GuardFailure
 
 
 def test_postgres_cover_selection_accepts_full_album_update_from_partial_track_match(monkeypatch):

@@ -532,6 +532,7 @@ def persist_cover_selection_for_tracks_for_config(
     clear_selection: bool = False,
     expected_cover_selection_origin: str | None = None,
     expected_cover_revision: str | None = None,
+    expected_cover_state: tuple[str | None, str | None] | None = None,
     commit_guard: Callable[[Callable[[], object]], object] | None = None,
     logger=None,
 ) -> dict[str, object]:
@@ -558,6 +559,8 @@ def persist_cover_selection_for_tracks_for_config(
     if expected_cover_selection_origin is not None or expected_cover_revision is not None:
         persistence_options["expected_cover_selection_origin"] = expected_cover_selection_origin
         persistence_options["expected_cover_revision"] = expected_cover_revision
+    if expected_cover_state is not None:
+        persistence_options["expected_cover_state"] = expected_cover_state
     if commit_guard is not None:
         persistence_options["commit_guard"] = commit_guard
     return adapter.persist_cover_selection(

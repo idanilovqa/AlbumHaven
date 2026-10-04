@@ -113,12 +113,69 @@ best-effort and logs a warning while retaining checkpoint and retry state.
 Only these three delivery checkboxes changed; there is no numeric progress
 counter in this plan. Task 3 and all live/acceptance/release gates remain open.
 
-Further Task 3 work remains separate: recovered nondownloaded image metadata
-currently waits for final snapshot publication; assess guarded per-album
-persistence before changing that boundary. Full preplanning reconciliation is
-not established by the existing recovery tests. Do not mark Task 3 complete
-based on lookup hardening alone. Preparation performance has its own October 4
-written design; new move workflows remain outside this cover delivery.
+The next Task 3 unit addresses recovered nondownloaded image metadata that
+previously waited for final snapshot publication; its scoped result follows.
+Full preplanning reconciliation is not established by these recovery tests.
+Do not mark Task 3 complete based on lookup hardening or queued-result recovery
+alone. Preparation performance has its own October 4 written design; new move
+workflows remain outside this cover delivery.
+
+### October 4 recovered-selection durability delivery
+
+The owner explicitly approved implementing the remaining recovered-cover metadata
+durability gap. Reuse the existing guarded per-album Postgres selection owner;
+do not save the full library snapshot for each recovered album or add a storage
+authority. This unit concerns recovered results from queued cover jobs, not an
+unbounded scan of satisfactory covers omitted from the queue.
+
+- Outcome: a changed, nondownloaded local selection is committed before its
+  runtime entries are published, so later interruption cannot lose that commit.
+- Preconditions: existing file within the authorized job folder; owned track
+  membership; current generation and user/concurrent selection guards. Reject
+  unsafe, user-controlled, or stale selections rather than overriding them.
+- Acceptance: a recovered result persists before final snapshot publication;
+  persistence failure does not publish the recovered runtime state; interruption
+  after that album preserves the committed selection; containment and manual
+  selection protections remain intact. Do not count reconciliation as a download.
+- Compatibility/rollback: reuse the existing selection repository and schema;
+  revert source only. No live repair, new cover pass, deployment, or restart.
+- Checkpoint: separate failing tests, minimal implementation, focused checks,
+  two complete relevant-diff review passes, and a scoped commit. Manual/live,
+  E2E, review-first CI, and publication gates remain open.
+
+- [x] Prove interrupted recovered-selection durability and guard regressions
+  with generated files and fake persistence boundaries.
+- [x] Persist recovered selection at the existing serialized per-album boundary.
+- [x] Verify error/containment/ownership cases and complete independent review
+  of this scoped implementation; real-Postgres and broader acceptance remain open.
+
+October 4 scoped verification: the final recovery selection passed 46 tests
+(45 deselected) in 5.93 seconds; the nullable expected-state/cache selection
+passed 45 tests (66 deselected) in 2.15 seconds. Both commands exited 0.
+Separate RED runs established lock-order, runtime-replacement, containment,
+nullable-guard, redundant-snapshot, and stale-progress defects before their
+repairs. The real adapter with a fake connection also verifies that a raised
+commit guard propagates the exception without calling commit; this is not a
+live PostgreSQL transaction or reload test.
+
+Changed local recovery commits before runtime publication and does not count as
+a download. Expected-state guards cover partial or entirely absent origin and
+revision. Unsafe or mixed-baseline recovery reports a conflict and warning.
+Already durable recovered/downloaded selections no longer republish the whole
+inventory. The remaining legacy no-cover clearing path reads both mutation
+revisions, waits for persistence outside the cache lock, and rechecks runtime
+identity, generations, and baseline before its guarded commit. It does not
+reconcile pre-existing database/runtime divergence.
+
+Complete relevant-diff review covered the adapter, forwarding wrapper, execution
+owner, and their tests. Repeated review repaired both post-result and pre-result
+progress writes: sequential and parallel old jobs now preserve a newer request's
+progress, and returned download counts belong to the completed batch. The final
+independent pass found no remaining actionable finding. No live files, database,
+provider pass, deployment, or worker restart participated in this verification.
+Only the three scoped delivery checkboxes above changed; Task 3, full preplanning
+reconciliation, real-Postgres durability proof, manual acceptance, E2E, hosted
+review, CI, and publication remain open.
 
 Focused red/green tests cover recovery of a newly discovered local cover and a
 changed image at the same path, preserving its content revision without counting
@@ -133,6 +190,28 @@ the pre-existing `CoverSearchCache` still uses its legacy JSON implementation.
 This change reuses that owner; it does not add a JSON fallback or claim the
 lookup cache has been migrated. A lookup-cache persistence migration is not
 part of this approved resolver correction.
+
+### October 4 final recovery commit checkpoint
+
+Final root verification passed 91 recovery/nullable/cache tests with 111
+unrelated cases deselected in 4.09 seconds, exit 0. Iterative complete relevant
+diff review by the root and independent reviewers found no remaining actionable
+findings. This closes only this recovery unit's focused verification and review;
+manual acceptance, real-Postgres proof, E2E, hosted CI, live measurement and release
+remain open. No new cover pass or deployment was performed for this checkpoint.
+
+Changed files (6):
+
+- `music_app/services/cache.py`
+- `music_app/services/scan_cache_persistence.py`
+- `music_app/services/cover_refresh_execution.py`
+- `tests/py/test_state.py`
+- `tests/py/test_scan_cache_persistence.py`
+- `docs/superpowers/plans/2026-09-24-fast-automatic-cover-search.md`
+
+Direct task time, skill/process overhead and total slice elapsed time were not
+fully captured and remain unknown; test duration above is not total task time.
+This evidence adds no checkbox transition or numeric progress change.
 
 ### October 3 integrated verification and sandbox deployment
 

@@ -32,11 +32,108 @@ from music_app.services.cover_provider_candidates import (
 )
 from music_app.services.library import build_albums_from_file_cache
 from music_app.services.library_roots import library_root_cache_identity
+from music_app.services.scan_cache_persistence import select_scan_cache_adapter
 
 StateGetter = Callable[[], dict[str, object]]
 
 _SLOW_COVER_FETCH_LOG_THRESHOLD_MS = 8000
 _LOGGER = logging.getLogger(__name__)
+
+_COVER_SELECTION_FIELDS = (
+    "cover_path", "cover_revision", "cover_selection_origin", "remote_cover_url",
+    "remote_cover_thumbnail_url", "remote_cover_source", "remote_cover_source_label",
+    "remote_cover_album_url", "remote_cover_width", "remote_cover_height",
+)
+
+
+def _cover_selection_values(entry: Mapping[str, object]) -> tuple[object, ...]:
+    return tuple(entry.get(field) for field in _COVER_SELECTION_FIELDS)
+
+
+def _recover_existing_cover_selection(
+    *, config, job, cover_path, file_cache, get_state, library_state,
+    cache_lock, scan_generation, cover_generation,
+) -> tuple[bool, bool]:
+    """Commit recovered artwork before publishing its cover fields to runtime."""
+    folder = Path(job["folder"]).resolve()
+    selected = cover_path.resolve()
+    paths = {str(path) for path in job.get("track_paths") or []}
+    entries = {path: file_cache[path] for path in paths if isinstance(file_cache.get(path), dict)}
+    if str(job.get("cover_selection_origin") or "").strip().casefold() == "user":
+        return False, False
+    if any(str(entry.get("cover_selection_origin") or "").strip().casefold() == "user" for entry in entries.values()):
+        return False, False
+    if not paths or len(entries) != len(paths):
+        return False, True
+    if not selected.is_relative_to(folder) or not selected.is_file():
+        return False, True
+    if any(not Path(path).resolve().is_relative_to(folder) for path in paths):
+        return False, True
+
+    baseline = {path: _cover_selection_values(entry) for path, entry in entries.items()}
+    expected_states = {
+        (str(entry.get("cover_selection_origin") or "").strip().casefold(),
+         str(entry.get("cover_revision") or ""))
+        for entry in entries.values()
+    }
+    if len(expected_states) != 1:
+        return False, True
+    expected_origin, expected_revision = next(iter(expected_states))
+
+    def state_is_current() -> bool:
+        current = get_state()
+        if current is not library_state:
+            return False
+        if cover_generation is not None and int(current.get("cover_generation") or 0) != cover_generation:
+            return False
+        if scan_generation is not None:
+            if current.get("scan_in_progress") or int(current.get("scan_generation") or 0) != scan_generation:
+                return False
+        current_entries = current.get("file_cache") or {}
+        return all(
+            isinstance(current_entries.get(path), dict)
+            and _cover_selection_values(current_entries[path]) == values
+            for path, values in baseline.items()
+        )
+
+    def recover() -> tuple[bool, bool]:
+        with cache_lock:
+            if not state_is_current():
+                return False, True
+            revision = cover_revision_for_path(selected)
+            if all(entry.get("cover_path") == str(selected) and entry.get("cover_revision") == revision for entry in entries.values()):
+                return False, False
+
+        def commit_current(commit_action):
+            with cache_lock:
+                paths_still_owned = (
+                    Path(job["folder"]).resolve() == folder
+                    and cover_path.resolve() == selected
+                    and selected.resolve().is_relative_to(folder)
+                    and all(Path(path).resolve().is_relative_to(folder) for path in paths)
+                )
+                if not state_is_current() or not paths_still_owned or not selected.is_file() or cover_revision_for_path(selected) != revision:
+                    raise RuntimeError("Recovered cover selection changed before commit.")
+                result = commit_action()
+                selection = dict.fromkeys(_COVER_SELECTION_FIELDS)
+                selection.update(cover_path=str(selected), cover_revision=revision, cover_selection_origin="automatic")
+                current_entries = library_state["file_cache"]
+                for path, entry in entries.items():
+                    entry.update(selection)
+                    current_entries[path].update(selection)
+                return result
+
+        result = persist_cover_selection_for_tracks_for_config(
+            config, paths, selected, cover_revision=revision,
+            cover_selection_origin="automatic", reject_if_user_controlled=True,
+            expected_cover_state=(expected_origin or None, expected_revision or None),
+            commit_guard=commit_current,
+        )
+        if result.get("blocked_by_user_selection") or result.get("blocked_by_expected_cover_state"):
+            return False, True
+        return True, False
+
+    return run_serialized_cover_selection(folder, recover)
 
 
 def _automatic_candidate_payload(candidate: object) -> dict[str, object]:
@@ -272,8 +369,12 @@ def run_cover_jobs(
 ) -> dict[str, object]:
     library_state = get_state()
     changed = False
+    selection_conflict = False
+    runtime_cover_updates: dict[str, tuple[tuple[object, ...], dict[str, object]]] = {}
+    needs_snapshot = False
     failed = 0
     skipped = 0
+    downloaded_count = 0
     downloaded_paths: list[str] = []
     job_results: list[dict[str, object]] = []
     miss_reasons = {
@@ -285,6 +386,14 @@ def run_cover_jobs(
         "write_returned_no_file",
         "exception_during_cover_fetch",
     }
+
+    def owns_progress() -> bool:
+        current = get_state()
+        return (
+            current is library_state
+            and (cover_generation is None or int(current.get("cover_generation") or 0) == cover_generation)
+            and (scan_generation is None or int(current.get("scan_generation") or 0) == scan_generation)
+        )
     candidate_publishers: dict[int, object] = {}
     candidate_callbacks: dict[int, Callable[..., object]] = {}
 
@@ -371,7 +480,7 @@ def run_cover_jobs(
             )
 
     def apply_job_result(index: int, job: dict[str, object], cover_path: Path | None, downloaded: bool, detail: dict[str, object]) -> None:
-        nonlocal changed, failed, skipped
+        nonlocal changed, failed, skipped, downloaded_count, selection_conflict, needs_snapshot
         folder = job["folder"]
         artist = str(job.get("artist") or "")
         album = str(job.get("album") or "")
@@ -401,7 +510,10 @@ def run_cover_jobs(
         if reason == "remote_provider_group_disabled":
             skipped += 1
         elif downloaded:
-            library_state["covers_downloaded"] = int(library_state.get("covers_downloaded") or 0) + 1
+            downloaded_count += 1
+            with cache_lock:
+                if owns_progress():
+                    library_state["covers_downloaded"] = int(library_state.get("covers_downloaded") or 0) + 1
             written_path = str(detail.get("written_path") or cover_value or "").strip()
             if written_path:
                 downloaded_paths.append(written_path)
@@ -446,7 +558,28 @@ def run_cover_jobs(
                 resolver_trace=detail.get("resolver_trace"),
             )
 
+        recovering_selection = bool(cover_path and not downloaded)
+        if recovering_selection:
+            recovered, conflict = _recover_existing_cover_selection(
+                config=config, job=job, cover_path=Path(cover_path),
+                file_cache=file_cache, get_state=get_state, library_state=library_state,
+                cache_lock=cache_lock, scan_generation=scan_generation,
+                cover_generation=cover_generation,
+            )
+            changed = changed or recovered
+            selection_conflict = selection_conflict or conflict
+            if conflict:
+                detail["recovery_conflict"] = True
+                detail["reason"] = "recovered_cover_selection_conflict"
+                log_app_event(
+                    config, logger if callable(getattr(logger, "log", None)) else _LOGGER,
+                    "Existing cover metadata recovery skipped because selection could not be verified",
+                    level="warning", reason="recovered_cover_selection_conflict",
+                )
+
         for track_path in job.get("track_paths") or []:
+            if recovering_selection:
+                continue
             entry = file_cache.get(str(track_path))
             if not isinstance(entry, dict):
                 continue
@@ -483,6 +616,11 @@ def run_cover_jobs(
                     )
                 )
             if local_cover_changed:
+                previous_selection = _cover_selection_values(entry)
+                if not downloaded and not cover_path:
+                    # Keep legacy clearing private until its snapshot commits.
+                    entry = dict(entry)
+                    needs_snapshot = True
                 entry["cover_path"] = cover_value
                 entry["remote_cover_url"] = None
                 entry["remote_cover_thumbnail_url"] = None
@@ -495,10 +633,16 @@ def run_cover_jobs(
                     entry["cover_revision"] = written_revision
                 if downloaded:
                     entry["cover_selection_origin"] = desired_selection_origin
+                runtime_cover_updates[str(track_path)] = (
+                    previous_selection,
+                    {field: entry.get(field) for field in _COVER_SELECTION_FIELDS},
+                )
                 changed = True
 
-        library_state["covers_current_folder"] = str(folder)
-        library_state["covers_processed"] = index
+        with cache_lock:
+            if owns_progress():
+                library_state["covers_current_folder"] = str(folder)
+                library_state["covers_processed"] = index
         # Image selections are committed by the guarded writer per album. Keep
         # lookup outcomes durable too, without republishing the entire inventory.
         if index % 25 == 0:
@@ -540,7 +684,9 @@ def run_cover_jobs(
             completed = 0
             for future in as_completed(future_map):
                 _index, job = future_map[future]
-                library_state["covers_processed"] = completed
+                with cache_lock:
+                    if owns_progress():
+                        library_state["covers_processed"] = completed
                 cover_path, downloaded, detail = future.result()
                 settle_candidate_publisher(job, detail)
                 completed += 1
@@ -591,8 +737,10 @@ def run_cover_jobs(
                 len(job.get("track_paths") or []),
                 force_search,
             )
-            library_state["covers_current_folder"] = str(folder)
-            library_state["covers_processed"] = index
+            with cache_lock:
+                if owns_progress():
+                    library_state["covers_current_folder"] = str(folder)
+                    library_state["covers_processed"] = index
             cover_path, downloaded, detail = execute_cover_job(
                 job=job,
                 image_extensions=image_extensions,
@@ -613,28 +761,79 @@ def run_cover_jobs(
     flush_log_handlers(logger)
 
     if changed:
-        with cache_lock:
-            current_state = get_state()
-            if scan_generation is None or (
-                not current_state.get("scan_in_progress")
-                and int(current_state.get("scan_generation") or 0) == scan_generation
-            ):
-                current_state["file_cache"] = file_cache
-                current_state["albums"] = build_albums_from_file_cache(file_cache, separate_release_keys)
-                save_cache_to_disk_for_config(
-                    config,
-                    config["CACHE_PATH"],
-                    file_cache,
-                    library_root_cache_identity(config),
-                    float(current_state.get("last_scan") or time.time()),
-                )
+        snapshot = None
+        snapshot_options = {}
+        if needs_snapshot and not selection_conflict:
+            adapter = select_scan_cache_adapter(config)
+            snapshot_options = {
+                "expected_cover_mutation_revision": adapter.load_cover_mutation_revision(),
+                "expected_inventory_mutation_revision": adapter.load_inventory_mutation_revision(),
+            }
 
-    library_state["covers_current_folder"] = ""
-    library_state["covers_in_progress"] = False
+        def publication_is_current() -> bool:
+            current = get_state()
+            return (
+                current is library_state
+                and (cover_generation is None or int(current.get("cover_generation") or 0) == cover_generation)
+                and (scan_generation is None or (
+                    not current.get("scan_in_progress")
+                    and int(current.get("scan_generation") or 0) == scan_generation
+                ))
+            )
+
+        with cache_lock:
+            if publication_is_current():
+                current_entries = library_state.get("file_cache") or {}
+                accepted_updates = {}
+                for path, (baseline, selection) in runtime_cover_updates.items():
+                    entry = current_entries.get(path)
+                    if not isinstance(entry, dict):
+                        selection_conflict = True
+                        continue
+                    current_selection = _cover_selection_values(entry)
+                    if current_selection not in (baseline, _cover_selection_values(selection)):
+                        selection_conflict = True
+                        continue
+                    accepted_updates[path] = selection
+                    if selection.get("cover_path") is not None:
+                        entry.update(selection)
+                if needs_snapshot and not selection_conflict:
+                    baseline_entries = {path: dict(entry) for path, entry in current_entries.items()}
+                    snapshot = {path: dict(entry) for path, entry in current_entries.items()}
+                    for path, selection in accepted_updates.items():
+                        snapshot[path].update(selection)
+                library_state["albums"] = build_albums_from_file_cache(current_entries, separate_release_keys)
+
+        if snapshot is not None:
+            def commit_snapshot(commit_action):
+                with cache_lock:
+                    if not publication_is_current() or library_state.get("file_cache") != baseline_entries:
+                        raise RuntimeError("Cover snapshot publication changed before commit.")
+                    result = commit_action()
+                    for path, selection in accepted_updates.items():
+                        library_state["file_cache"][path].update(selection)
+                    library_state["albums"] = build_albums_from_file_cache(
+                        library_state["file_cache"], separate_release_keys,
+                    )
+                    return result
+
+            # Preserve the legacy clearing path. Revision guards reject concurrent
+            # DB changes; pre-existing DB/runtime divergence is not reconciled here.
+            save_cache_to_disk_for_config(
+                config, config["CACHE_PATH"], snapshot,
+                library_root_cache_identity(config),
+                float(library_state.get("last_scan") or time.time()),
+                publication_commit_guard=commit_snapshot, **snapshot_options,
+            )
+
+    with cache_lock:
+        if owns_progress():
+            library_state["covers_current_folder"] = ""
+            library_state["covers_in_progress"] = False
     return {
         "changed": changed,
         "processed": len(job_results),
-        "downloaded": int(library_state.get("covers_downloaded") or 0),
+        "downloaded": downloaded_count,
         "skipped": skipped,
         "failed": failed,
         "downloaded_paths": downloaded_paths,

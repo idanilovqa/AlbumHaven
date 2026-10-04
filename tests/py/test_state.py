@@ -2022,6 +2022,21 @@ def test_run_cover_jobs_updates_cache_and_state(config, logger, library_state, m
         lambda _config: "root-identity",
     )
 
+    recovery_commits = []
+    def persist_recovered_selection(_config, paths, selected, **options):
+        assert downloaded is False
+        assert paths == {str(track_path)}
+        assert selected == cover_path
+        assert options["reject_if_user_controlled"] is True
+        assert options["expected_cover_state"] == (None, "stale-revision")
+        def commit():
+            recovery_commits.append(options["cover_revision"])
+            return {"updated": True}
+        return options["commit_guard"](commit)
+    monkeypatch.setattr(
+        cover_refresh_execution, "persist_cover_selection_for_tracks_for_config", persist_recovered_selection,
+    )
+
     result = cover_refresh_execution.run_cover_jobs(
         get_state=lambda: library_state,
         config=config,
@@ -2049,7 +2064,463 @@ def test_run_cover_jobs_updates_cache_and_state(config, logger, library_state, m
     assert library_state["file_cache"][str(track_path)]["cover_revision"] == cover_refresh_execution.cover_revision_for_path(cover_path)
     assert library_state["albums"] == [{"key": "album-1", "cover_path": str(cover_path)}]
     assert library_state["covers_in_progress"] is False
-    assert saved and saved[0][0] is config
+    assert saved == []
+    assert len(recovery_commits) == int(not downloaded)
+
+
+@pytest.fixture
+def recovered_cover_case(config, logger, library_state, monkeypatch):
+    folder = config["MUSIC_DIR"] / "Artist" / "Recovered"
+    folder.mkdir(parents=True)
+    cover = folder / "cover.jpg"
+    cover.write_bytes(b"recovered-cover-bytes")
+    tracks = [str(folder / "01.mp3"), str(folder / "02.mp3")]
+    entries = {
+        path: {"path": path, "title": Path(path).stem, "artist": "Artist",
+               "album_artist": "Artist", "album": "Recovered",
+               "cover_path": None, "cover_revision": "old-revision",
+               "cover_selection_origin": "automatic"}
+        for path in tracks
+    }
+    library_state.update(file_cache=entries, covers_in_progress=True)
+    job = {"folder": folder, "artist": "Artist", "album": "Recovered",
+           "track_paths": tracks, "cover_selection_origin": "automatic"}
+    monkeypatch.setattr(
+        cover_refresh_execution, "AlbumCoverCandidateSnapshotRepository",
+        lambda _config: SimpleNamespace(resolve_album_id_for_track_paths=lambda **_kwargs: None),
+    )
+    monkeypatch.setattr(
+        cover_refresh_execution, "execute_cover_job",
+        lambda **_kwargs: (cover, False, {"reason": "satisfactory_local_cover_present"}),
+    )
+    def reject_snapshot(*_args, **_kwargs):
+        raise AssertionError("Recovery must not reach final snapshot publication in this case")
+    monkeypatch.setattr(cover_refresh_execution, "save_cache_to_disk_for_config", reject_snapshot)
+    monkeypatch.setattr(cover_refresh_execution, "library_root_cache_identity", lambda _config: "isolated-root")
+    return SimpleNamespace(
+        cover=cover, tracks=tracks, entries=entries, job=job, state=library_state,
+        kwargs=dict(get_state=lambda: library_state, config=config, logger=logger,
+                    cache_lock=threading.Lock(), jobs=[job], file_cache=entries,
+                    separate_release_keys=set(), image_extensions={".jpg"},
+                    user_agent="AlbumHavenTests/1.0",
+                    cover_cache=SimpleNamespace(save=lambda: None)),
+    )
+
+
+@pytest.mark.parametrize("downloaded", [False, True])
+def test_recovered_cover_durable_batch_does_not_republish_inventory(recovered_cover_case, monkeypatch, downloaded):
+    case = recovered_cover_case
+    commits = []
+    def persist(*_args, **options):
+        options["commit_guard"](lambda: commits.append(True))
+        return {"album_rows_updated": 1, "track_file_rows_updated": 2}
+    monkeypatch.setattr(cover_refresh_execution, "persist_cover_selection_for_tracks_for_config", persist)
+    if downloaded:
+        monkeypatch.setattr(cover_refresh_execution, "execute_cover_job", lambda **kw: (case.cover, True, {"reason": "downloaded", "written_revision": cover_refresh_execution.cover_revision_for_path(case.cover)}))
+    result = cover_refresh_execution.run_cover_jobs(**case.kwargs)
+    assert result["changed"] is True
+    assert commits == ([] if downloaded else [True])
+    assert all(entry["cover_path"] == str(case.cover) for entry in case.state["file_cache"].values())
+
+
+@pytest.mark.parametrize("invalidate", [None, "identity", "cover_generation", "scan_generation", "selection"])
+def test_recovered_cover_legacy_clear_publishes_without_cache_lock_and_rechecks_commit(recovered_cover_case, monkeypatch, invalidate):
+    case = recovered_cover_case
+    for entry in case.entries.values():
+        entry["cover_path"] = str(case.cover.parent / "missing.jpg")
+    worker_entries = {path: dict(entry) for path, entry in case.entries.items()}
+    case.kwargs.update(file_cache=worker_entries, cover_generation=2, scan_generation=4)
+    case.state.update(cover_generation=2, scan_generation=4)
+    current = [case.state]
+    case.kwargs["get_state"] = lambda: current[0]
+    commits = []
+    snapshots = []
+    monkeypatch.setattr(cover_refresh_execution, "execute_cover_job", lambda **kw: (None, False, {"reason": "no_match"}))
+    adapter = SimpleNamespace(load_cover_mutation_revision=lambda: 11, load_inventory_mutation_revision=lambda: 7)
+    monkeypatch.setattr(cover_refresh_execution, "select_scan_cache_adapter", lambda _config: adapter, raising=False)
+    def save(_config, _path, entries, _identity, _last_scan, **options):
+        assert not case.kwargs["cache_lock"].locked(), "Database publication cannot wait while holding runtime cache lock"
+        assert options["expected_cover_mutation_revision"] == 11
+        assert options["expected_inventory_mutation_revision"] == 7
+        snapshots.append(entries)
+        if invalidate == "identity":
+            current[0] = dict(case.state)
+        elif invalidate in {"cover_generation", "scan_generation"}:
+            case.state[invalidate] += 1
+        elif invalidate == "selection":
+            case.entries[case.tracks[0]].update(cover_path="user-selected.jpg", cover_selection_origin="user")
+        guard = options["publication_commit_guard"]
+        def commit():
+            assert case.kwargs["cache_lock"].locked()
+            commits.append(True)
+        guard(commit)
+    monkeypatch.setattr(cover_refresh_execution, "save_cache_to_disk_for_config", save)
+    if invalidate:
+        with pytest.raises(RuntimeError):
+            cover_refresh_execution.run_cover_jobs(**case.kwargs)
+        assert commits == []
+    else:
+        result = cover_refresh_execution.run_cover_jobs(**case.kwargs)
+        assert result["changed"] is True
+        assert commits == [True]
+        assert all(entry["cover_path"] is None for entry in case.state["file_cache"].values())
+    assert len(snapshots) == 1
+
+
+@pytest.mark.parametrize("same_path", [False, True])
+def test_recovered_cover_selection_commits_before_memory_and_survives_interruption(
+    recovered_cover_case, monkeypatch, same_path,
+):
+    case = recovered_cover_case
+    if same_path:
+        for entry in case.entries.values():
+            entry["cover_path"] = str(case.cover)
+    baseline = {path: dict(entry) for path, entry in case.entries.items()}
+    committed = {}
+
+    def persist(_config, track_paths, selected_cover_path, **options):
+        assert case.entries == baseline
+        assert track_paths == set(case.tracks)
+        assert selected_cover_path == case.cover
+        assert options["reject_if_user_controlled"] is True
+        assert options["cover_selection_origin"] == "automatic"
+        assert options["cover_revision"] == cover_refresh_execution.cover_revision_for_path(case.cover)
+        def commit():
+            committed.update({path: {"cover_path": str(selected_cover_path),
+                                     "cover_revision": options["cover_revision"]}
+                              for path in track_paths})
+            return {"updated": True}
+        guard = options.get("commit_guard")
+        return guard(commit) if guard else commit()
+
+    calls = []
+    def execute(**_kwargs):
+        if calls:
+            raise KeyboardInterrupt()
+        calls.append(True)
+        return case.cover, False, {"reason": "satisfactory_local_cover_present"}
+
+    monkeypatch.setattr(cover_refresh_execution, "persist_cover_selection_for_tracks_for_config", persist)
+    monkeypatch.setattr(cover_refresh_execution, "execute_cover_job", execute)
+    case.kwargs["jobs"] = [case.job, dict(case.job)]
+    with pytest.raises(KeyboardInterrupt):
+        cover_refresh_execution.run_cover_jobs(**case.kwargs)
+
+    assert set(committed) == set(case.tracks)
+    for path in case.tracks:
+        assert case.entries[path]["cover_path"] == committed[path]["cover_path"]
+        assert case.entries[path]["cover_revision"] == committed[path]["cover_revision"]
+    assert case.state["covers_downloaded"] == 0
+    assert case.cover.read_bytes() == b"recovered-cover-bytes"
+
+
+def test_recovered_cover_persistence_failure_leaves_memory_unchanged(recovered_cover_case, monkeypatch):
+    case = recovered_cover_case
+    baseline = {path: dict(entry) for path, entry in case.entries.items()}
+
+    def fail_persistence(*_args, **_kwargs):
+        raise RuntimeError("isolated recovery commit failed")
+
+    monkeypatch.setattr(
+        cover_refresh_execution, "persist_cover_selection_for_tracks_for_config", fail_persistence,
+    )
+    with pytest.raises(RuntimeError, match="isolated recovery commit failed"):
+        cover_refresh_execution.run_cover_jobs(**case.kwargs)
+
+    assert case.entries == baseline
+    assert case.state["file_cache"] == baseline
+    assert case.cover.read_bytes() == b"recovered-cover-bytes"
+
+
+@pytest.mark.parametrize("blocked_flag", ["blocked_by_user_selection", "blocked_by_expected_cover_state"])
+def test_recovered_cover_respects_persistence_selection_guard(recovered_cover_case, monkeypatch, blocked_flag):
+    case = recovered_cover_case
+    baseline = {path: dict(entry) for path, entry in case.entries.items()}
+    attempts = []
+
+    def block_persistence(*_args, **options):
+        attempts.append(options)
+        return {blocked_flag: True, "updated": False}
+
+    monkeypatch.setattr(
+        cover_refresh_execution, "persist_cover_selection_for_tracks_for_config", block_persistence,
+    )
+    result = cover_refresh_execution.run_cover_jobs(**case.kwargs)
+
+    assert len(attempts) == 1
+    assert attempts[0]["reject_if_user_controlled"] is True
+    assert result["changed"] is False
+    assert case.entries == baseline
+    assert case.state["file_cache"] == baseline
+    assert case.cover.read_bytes() == b"recovered-cover-bytes"
+
+
+def test_recovered_cover_heterogeneous_baseline_reports_conflict(recovered_cover_case, monkeypatch):
+    case = recovered_cover_case
+    # Distinct persisted revisions cannot share one exact expected-state guard.
+    case.entries[case.tracks[1]]["cover_revision"] = "other-revision"
+    baseline = {path: dict(entry) for path, entry in case.entries.items()}
+    events = []
+    monkeypatch.setattr(cover_refresh_execution, "persist_cover_selection_for_tracks_for_config", lambda *_args, **_kwargs: pytest.fail("Heterogeneous selection must not persist"))
+    monkeypatch.setattr(cover_refresh_execution, "log_app_event", lambda *_args, **kwargs: events.append(kwargs))
+    result = cover_refresh_execution.run_cover_jobs(**case.kwargs)
+    assert result["changed"] is False
+    assert case.entries == baseline
+    assert result["job_results"][0]["recovery_conflict"] is True
+    assert result["job_results"][0]["reason"] == "recovered_cover_selection_conflict"
+    assert any(event.get("level") == "warning" and event.get("reason") == "recovered_cover_selection_conflict" for event in events)
+
+
+@pytest.mark.parametrize("escape", ["cover", "track", "resolved_cover"])
+def test_recovered_cover_rejects_paths_outside_album(recovered_cover_case, monkeypatch, escape):
+    case = recovered_cover_case
+    outside = case.cover.parent.parent / "outside.jpg"
+    outside.write_bytes(b"unrelated-art")
+    returned_cover = case.cover
+    if escape == "cover":
+        returned_cover = outside
+    elif escape == "track":
+        external_track = str(outside.with_suffix(".mp3"))
+        case.entries[external_track] = dict(case.entries[case.tracks[0]], path=external_track)
+        case.job["track_paths"].append(external_track)
+    else:
+        original_resolve = Path.resolve
+        def resolve_alias(path, *args, **kwargs):
+            return outside if path == case.cover else original_resolve(path, *args, **kwargs)
+        monkeypatch.setattr(Path, "resolve", resolve_alias)
+    baseline = {path: dict(entry) for path, entry in case.entries.items()}
+    monkeypatch.setattr(
+        cover_refresh_execution, "execute_cover_job",
+        lambda **_kwargs: (returned_cover, False, {"reason": "satisfactory_local_cover_present"}),
+    )
+    def reject_persistence(*_args, **_kwargs):
+        pytest.fail("Out-of-album recovery must not call persistence")
+    monkeypatch.setattr(cover_refresh_execution, "persist_cover_selection_for_tracks_for_config", reject_persistence)
+
+    result = cover_refresh_execution.run_cover_jobs(**case.kwargs)
+
+    assert result["changed"] is False
+    assert case.entries == baseline
+    assert outside.read_bytes() == b"unrelated-art"
+
+
+@pytest.mark.parametrize("mutation", ["image", "cover_generation", "scan_generation", "runtime_selection"])
+def test_recovered_cover_rechecks_state_at_persistence_commit(recovered_cover_case, monkeypatch, mutation):
+    case = recovered_cover_case
+    case.state["cover_generation"] = 8
+    case.state["scan_generation"] = 4
+    case.kwargs.update(cover_generation=8, scan_generation=4)
+    baseline = {path: dict(entry) for path, entry in case.entries.items()}
+    committed = []
+    attempts = []
+
+    def persist(_config, paths, selected, **options):
+        attempts.append(options)
+        assert options["expected_cover_state"] == ("automatic", "old-revision")
+        if mutation == "image":
+            case.cover.write_bytes(b"newer-uncommitted-image")
+        elif mutation == "cover_generation":
+            case.state["cover_generation"] += 1
+        elif mutation == "scan_generation":
+            case.state["scan_generation"] += 1
+        else:
+            case.state["file_cache"][case.tracks[0]].update(
+                cover_selection_origin="user", cover_revision="new-user-revision",
+                remote_cover_url="https://images.example/user-choice.jpg",
+            )
+        def commit():
+            committed.append(selected)
+            return {"updated": True}
+        return options["commit_guard"](commit)
+
+    monkeypatch.setattr(cover_refresh_execution, "persist_cover_selection_for_tracks_for_config", persist)
+    with pytest.raises(RuntimeError, match="Recovered cover selection changed before commit"):
+        cover_refresh_execution.run_cover_jobs(**case.kwargs)
+
+    assert len(attempts) == 1
+    assert committed == []
+    if mutation == "runtime_selection":
+        baseline[case.tracks[0]].update(
+            cover_selection_origin="user", cover_revision="new-user-revision",
+            remote_cover_url="https://images.example/user-choice.jpg",
+        )
+    assert case.entries == baseline
+
+
+@pytest.mark.parametrize("protected_mode", ["user_owned", "concurrent_user"])
+@pytest.mark.parametrize("downloaded_success", [False, True])
+def test_recovered_cover_stays_visible_when_later_selection_is_protected(
+    recovered_cover_case, monkeypatch, protected_mode, downloaded_success,
+):
+    case = recovered_cover_case
+    protected_folder = case.cover.parent.parent / "Protected"
+    protected_folder.mkdir()
+    protected_cover = protected_folder / "chosen.jpg"
+    protected_cover.write_bytes(b"user-chosen-art")
+    protected_track = str(protected_folder / "song.mp3")
+    protected_entry = {
+        "path": protected_track, "title": "Protected song", "artist": "Artist",
+        "album_artist": "Artist", "album": "Protected", "cover_path": str(protected_cover),
+        "cover_revision": "user-revision", "cover_selection_origin": "user",
+        "remote_cover_url": "https://images.example/chosen.jpg",
+    }
+    case.entries[protected_track] = dict(protected_entry)
+    worker_entries = {path: dict(entry) for path, entry in case.entries.items()}
+    if protected_mode == "concurrent_user":
+        worker_entries[protected_track].update(
+            cover_path=None, cover_revision="previous-automatic", cover_selection_origin="automatic",
+        )
+        # The user change occurs after the detached worker snapshot was prepared.
+    case.state["albums"] = cover_refresh_execution.build_albums_from_file_cache(case.entries, set())
+    protected_job = {
+        "folder": protected_folder, "artist": "Artist", "album": "Protected",
+        "track_paths": [protected_track],
+        "cover_selection_origin": worker_entries[protected_track]["cover_selection_origin"],
+    }
+    case.kwargs.update(jobs=[case.job, protected_job], file_cache=worker_entries)
+    commits = []
+
+    def persist(_config, paths, selected, **options):
+        if paths == {protected_track}:
+            return {"blocked_by_user_selection": True}
+        def commit():
+            commits.append(selected)
+            return {"updated": True}
+        return options["commit_guard"](commit)
+
+    def execute(**kwargs):
+        selected = protected_cover if kwargs["job"] is protected_job else case.cover
+        if downloaded_success and kwargs["job"] is case.job:
+            # The download executor returns only after its guarded image commit.
+            commits.append(selected)
+            return selected, True, {"reason": "cover_written", "written_path": str(selected)}
+        return selected, False, {"reason": "satisfactory_local_cover_present"}
+
+    def save_snapshot(_config, _path, entries, *_args, **_kwargs):
+        assert entries[protected_track] == protected_entry
+
+    monkeypatch.setattr(cover_refresh_execution, "persist_cover_selection_for_tracks_for_config", persist)
+    monkeypatch.setattr(cover_refresh_execution, "execute_cover_job", execute)
+    monkeypatch.setattr(cover_refresh_execution, "save_cache_to_disk_for_config", save_snapshot)
+    result = cover_refresh_execution.run_cover_jobs(**case.kwargs)
+
+    assert commits == [case.cover]
+    assert result["downloaded"] == int(downloaded_success)
+    assert result["changed"] is True
+    assert case.state["file_cache"][case.tracks[0]]["cover_path"] == str(case.cover)
+    assert case.state["file_cache"][protected_track] == protected_entry
+    albums = {album.name: album for album in case.state["albums"]}
+    assert albums["Recovered"].cover_path == case.cover
+    assert albums["Protected"].cover_path == protected_cover
+    assert albums["Protected"].cover_selection_origin == "user"
+    assert protected_cover.read_bytes() == b"user-chosen-art"
+
+
+def test_recovered_cover_takes_database_lock_before_runtime_cache_lock(recovered_cover_case, monkeypatch):
+    case = recovered_cover_case
+    lock = case.kwargs["cache_lock"]
+    commits = []
+
+    def persist(_config, _paths, selected, **options):
+        assert not lock.locked(), "Waiting for the database must not hold the runtime cache lock"
+        def commit():
+            assert lock.locked(), "The guarded commit must hold the runtime cache lock"
+            commits.append(selected)
+        # The real adapter discards the guard return and exits its transaction.
+        options["commit_guard"](commit)
+        return {"album_rows_updated": 1, "track_file_rows_updated": len(case.tracks)}
+
+    monkeypatch.setattr(cover_refresh_execution, "persist_cover_selection_for_tracks_for_config", persist)
+    monkeypatch.setattr(cover_refresh_execution, "save_cache_to_disk_for_config", lambda *_args: None)
+    cover_refresh_execution.run_cover_jobs(**case.kwargs)
+    assert commits == [case.cover]
+
+
+def test_recovered_cover_rechecks_resolved_containment_before_commit(recovered_cover_case, monkeypatch):
+    case = recovered_cover_case
+    outside = case.cover.parent.parent / "outside.jpg"
+    outside.write_bytes(case.cover.read_bytes())
+    baseline = {path: dict(entry) for path, entry in case.entries.items()}
+    original_resolve = Path.resolve
+    redirected = []
+    commits = []
+
+    def resolve_alias(path, *args, **kwargs):
+        if redirected and path == case.cover:
+            return outside
+        return original_resolve(path, *args, **kwargs)
+
+    def persist(_config, _paths, selected, **options):
+        redirected.append(True)
+        options["commit_guard"](lambda: commits.append(selected))
+        return {"album_rows_updated": 1, "track_file_rows_updated": len(case.tracks)}
+
+    monkeypatch.setattr(Path, "resolve", resolve_alias)
+    monkeypatch.setattr(cover_refresh_execution, "persist_cover_selection_for_tracks_for_config", persist)
+    with pytest.raises(RuntimeError, match="Recovered cover selection changed before commit"):
+        cover_refresh_execution.run_cover_jobs(**case.kwargs)
+    assert commits == []
+    assert case.entries == baseline
+
+
+def test_recovered_cover_batch_does_not_publish_download_into_replacement_runtime(recovered_cover_case, monkeypatch):
+    case = recovered_cover_case
+    replacement_entries = {path: dict(entry) for path, entry in case.entries.items()}
+    replacement = dict(case.state, file_cache=replacement_entries, albums=[])
+    current = [case.state]
+    case.kwargs["get_state"] = lambda: current[0]
+    snapshots = []
+
+    def execute(**_kwargs):
+        current[0] = replacement
+        return case.cover, True, {"reason": "cover_written", "written_path": str(case.cover)}
+
+    monkeypatch.setattr(cover_refresh_execution, "execute_cover_job", execute)
+    monkeypatch.setattr(cover_refresh_execution, "save_cache_to_disk_for_config", lambda *_args: snapshots.append(True))
+    baseline = {path: dict(entry) for path, entry in replacement_entries.items()}
+    cover_refresh_execution.run_cover_jobs(**case.kwargs)
+    assert replacement_entries == baseline
+    assert replacement["albums"] == []
+    assert snapshots == []
+
+
+@pytest.mark.parametrize("parallel", [False, True])
+def test_recovered_cover_pre_result_progress_preserves_newer_request(recovered_cover_case, monkeypatch, parallel):
+    case = recovered_cover_case
+    case.state.update(cover_generation=2, covers_downloaded=0)
+    case.kwargs["cover_generation"] = 2
+    newer = {"cover_generation": 3, "covers_current_folder": "Newer/Album", "covers_in_progress": True, "covers_downloaded": 8, "covers_processed": 17, "covers_total": 99}
+    monkeypatch.setattr(cover_refresh_execution, "execute_cover_job", lambda **kw: (None, False, {"reason": "no_match"}))
+    if parallel:
+        case.kwargs.update(job_workers=2, jobs=[case.job, dict(case.job)])
+        def completed_after_new_request(futures):
+            case.state.update(newer)
+            yield from futures
+        monkeypatch.setattr(cover_refresh_execution, "as_completed", completed_after_new_request)
+    else:
+        original_verbose = case.kwargs["logger"].verbose
+        def verbose(message, *args, **kwargs):
+            original_verbose(message, *args, **kwargs)
+            if message.startswith("Cover fetch queue item"):
+                case.state.update(newer)
+        monkeypatch.setattr(case.kwargs["logger"], "verbose", verbose)
+    cover_refresh_execution.run_cover_jobs(**case.kwargs)
+    assert {key: case.state[key] for key in newer} == newer
+
+
+def test_recovered_cover_completion_preserves_newer_request_progress(recovered_cover_case, monkeypatch):
+    case = recovered_cover_case
+    case.state.update(cover_generation=2, covers_downloaded=0)
+    case.kwargs["cover_generation"] = 2
+    newer = {"cover_generation": 3, "covers_current_folder": "Newer/Album", "covers_in_progress": True, "covers_downloaded": 8, "covers_processed": 17, "covers_total": 99}
+    def complete_old_job(**_kwargs):
+        case.state.update(newer)
+        return None, False, {"reason": "no_match"}
+    monkeypatch.setattr(cover_refresh_execution, "execute_cover_job", complete_old_job)
+    result = cover_refresh_execution.run_cover_jobs(**case.kwargs)
+    assert result["processed"] == 1
+    assert result["downloaded"] == 0
+    assert {key: case.state[key] for key in newer} == newer
 
 
 def test_run_cover_jobs_checkpoints_lookup_cache_before_interrupted_batch(config, logger, monkeypatch):
@@ -2612,9 +3083,7 @@ def test_run_cover_jobs_uses_explicit_dependencies_without_request_context(confi
     ).hexdigest()
     assert library_state["albums"] == [{"key": "album-1", "cover_path": str(cover_path)}]
     assert library_state["covers_in_progress"] is False
-    assert saved and saved[0][0] is config
-    assert saved[0][3] == "root-identity"
-    assert saved[0][4] == 456.0
+    assert saved == []
     assert logger.verbose_messages
 
 
@@ -2694,7 +3163,8 @@ def test_run_cover_jobs_aborts_when_cover_generation_changes(config, logger, lib
     assert called == []
     assert result["changed"] is False
     assert result["processed"] == 0
-    assert library_state["covers_in_progress"] is False
+    assert library_state["covers_in_progress"] is True
+    assert library_state["cover_generation"] == 8
 
 def test_scan_relation_callback_forwards_inventory_revision_to_publication(config, logger, library_state, monkeypatch):
     published = []

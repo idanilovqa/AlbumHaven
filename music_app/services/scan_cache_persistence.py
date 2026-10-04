@@ -149,6 +149,7 @@ class ScanCacheAdapter(Protocol):
         clear_selection: bool = False,
         expected_cover_selection_origin: str | None = None,
         expected_cover_revision: str | None = None,
+        expected_cover_state: tuple[str | None, str | None] | None = None,
         commit_guard: Callable[[Callable[[], object]], object] | None = None,
     ) -> dict[str, object]:
         ...
@@ -537,6 +538,7 @@ class PostgresScanCacheAdapter:
         clear_selection: bool = False,
         expected_cover_selection_origin: str | None = None,
         expected_cover_revision: str | None = None,
+        expected_cover_state: tuple[str | None, str | None] | None = None,
         commit_guard: Callable[[Callable[[], object]], object] | None = None,
     ) -> dict[str, object]:
         normalized_track_paths = sorted(
@@ -558,7 +560,20 @@ class PostgresScanCacheAdapter:
             "automatic",
         }:
             raise ValueError("expected_cover_selection_origin must be 'user' or 'automatic'.")
-        if (normalized_expected_origin is None) != (normalized_expected_revision is None):
+        if expected_cover_state is not None:
+            if expected_cover_selection_origin is not None or expected_cover_revision is not None:
+                raise ValueError("Explicit expected cover state cannot be combined with legacy expected fields.")
+            if (
+                not isinstance(expected_cover_state, tuple)
+                or len(expected_cover_state) != 2
+                or any(value is not None and not isinstance(value, str) for value in expected_cover_state)
+            ):
+                raise ValueError("Explicit expected cover state requires a pair of nullable strings.")
+            normalized_expected_origin = (expected_cover_state[0] or "").strip().casefold()
+            normalized_expected_revision = (expected_cover_state[1] or "").strip()
+            if normalized_expected_origin not in {"", "user", "automatic"}:
+                raise ValueError("Expected cover selection origin must be empty, 'user' or 'automatic'.")
+        elif (normalized_expected_origin is None) != (normalized_expected_revision is None):
             raise ValueError(
                 "Expected cover state requires both selection origin and cover revision."
             )
@@ -591,7 +606,7 @@ class PostgresScanCacheAdapter:
         with self._connect_to_database() as connection:
             connection.execute(_inventory_publication_advisory_lock_sql())
             _ensure_bootstrap_context(connection)
-            expected_cover_state_guard = normalized_expected_origin is not None
+            expected_cover_state_guard = expected_cover_state is not None or normalized_expected_origin is not None
             if not reject_if_user_controlled and not expected_cover_state_guard:
                 connection.execute(_increment_cover_mutation_revision_sql())
             result_row = _first_row(

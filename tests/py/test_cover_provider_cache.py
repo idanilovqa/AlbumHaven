@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 
 from music_app.services import cover_provider_cache
@@ -71,23 +72,38 @@ def test_cover_search_cache_get_and_set_use_shallow_copies_and_ignore_malformed_
 def test_cover_search_cache_save_failure_keeps_dirty_for_retry(tmp_path, monkeypatch, caplog):
     cache_path = (tmp_path / "cover_search_cache.json").resolve()
     cache = CoverSearchCache(cache_path)
+    previous = {"url": "https://images.example/previous.jpg"}
+    cache.set("artist::album", previous)
+    cache.save()
+    previous_bytes = cache_path.read_bytes()
     cache.set("artist::album", {"url": "https://images.example/cover.jpg"})
-    original_write_text = Path.write_text
+    original_replace = os.replace
+    attempted_sources = []
 
-    def raise_permission_error(self: Path, *_args, **_kwargs) -> int:
-        if self == cache_path:
+    def raise_permission_error(source, destination, *args, **kwargs):
+        if Path(destination) == cache_path:
+            attempted_sources.append(Path(source))
+            assert Path(source).parent == cache_path.parent
+            assert Path(source) != cache_path
+            assert json.loads(Path(source).read_text(encoding="utf-8"))["queries"]["artist::album"] == {
+                "url": "https://images.example/cover.jpg",
+            }
             raise PermissionError("locked")
-        return original_write_text(self, *_args, **_kwargs)
+        return original_replace(source, destination, *args, **kwargs)
 
-    monkeypatch.setattr(Path, "write_text", raise_permission_error)
+    monkeypatch.setattr(os, "replace", raise_permission_error)
 
     with caplog.at_level("WARNING"):
         cache.save()
 
     assert "Cover search cache write skipped" in caplog.text
     assert cache._dirty is True
+    assert attempted_sources
+    assert cache_path.read_bytes() == previous_bytes
+    assert CoverSearchCache(cache_path).get("artist::album") == previous
+    assert set(tmp_path.iterdir()) == {cache_path}
 
-    monkeypatch.setattr(Path, "write_text", original_write_text)
+    monkeypatch.setattr(os, "replace", original_replace)
 
     cache.save()
 
@@ -100,6 +116,84 @@ def test_cover_search_cache_save_failure_keeps_dirty_for_retry(tmp_path, monkeyp
                 "url": "https://images.example/cover.jpg",
             },
         },
+    }
+    assert CoverSearchCache(cache_path).get("artist::album") == {
+        "url": "https://images.example/cover.jpg",
+    }
+    assert set(tmp_path.iterdir()) == {cache_path}
+
+
+def test_cover_search_cache_publishes_complete_checkpoint_by_atomic_replace(tmp_path, monkeypatch):
+    cache_path = tmp_path / "cover_search_cache.json"
+    cache = CoverSearchCache(cache_path)
+    cache.set("old", {"status": "no_match"})
+    cache.save()
+    previous_bytes = cache_path.read_bytes()
+    cache.set("new", {"url": "https://images.example/new.jpg"})
+    original_replace = os.replace
+    replacements = []
+
+    def observe_replace(source, destination, *args, **kwargs):
+        if Path(destination) == cache_path:
+            assert cache_path.read_bytes() == previous_bytes
+            assert Path(source).parent == cache_path.parent
+            assert Path(source) != cache_path
+            staged = json.loads(Path(source).read_text(encoding="utf-8"))
+            assert set(staged["queries"]) == {"old", "new"}
+            replacements.append(Path(source))
+        return original_replace(source, destination, *args, **kwargs)
+
+    monkeypatch.setattr(os, "replace", observe_replace)
+    cache.save()
+
+    assert len(replacements) == 1
+    reloaded = CoverSearchCache(cache_path)
+    assert reloaded.get("old") == {"status": "no_match"}
+    assert reloaded.get("new") == {"url": "https://images.example/new.jpg"}
+    assert cache._dirty is False
+    assert set(tmp_path.iterdir()) == {cache_path}
+    cache.save()
+    assert len(replacements) == 1
+
+
+def test_cover_search_cache_cleanup_permission_failure_preserves_checkpoint(tmp_path, monkeypatch, caplog):
+    cache_path = tmp_path / "cover_search_cache.json"
+    cache = CoverSearchCache(cache_path)
+    cache.set("old", {"status": "no_match"})
+    cache.save()
+    previous_bytes = cache_path.read_bytes()
+    cache.set("new", {"url": "https://images.example/new.jpg"})
+    original_replace = os.replace
+    original_unlink = Path.unlink
+    owned_temporary_paths = []
+
+    def deny_replace(source, destination, *args, **kwargs):
+        if Path(destination) == cache_path:
+            owned_temporary_paths.append(Path(source))
+            raise PermissionError("checkpoint locked")
+        return original_replace(source, destination, *args, **kwargs)
+
+    def deny_owned_cleanup(self, *args, **kwargs):
+        if self in owned_temporary_paths:
+            raise PermissionError("temporary checkpoint locked")
+        return original_unlink(self, *args, **kwargs)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(os, "replace", deny_replace)
+        patch.setattr(Path, "unlink", deny_owned_cleanup)
+        with caplog.at_level("WARNING"):
+            cache.save()
+
+    assert cache._dirty is True
+    assert cache_path.read_bytes() == previous_bytes
+    assert CoverSearchCache(cache_path).get("old") == {"status": "no_match"}
+    assert CoverSearchCache(cache_path).get("new") is None
+    assert "Cover search cache write skipped" in caplog.text
+    assert "cleanup" in caplog.text.casefold()
+    assert len(owned_temporary_paths) == 1
+    assert owned_temporary_paths[0].exists()
+    assert json.loads(owned_temporary_paths[0].read_text(encoding="utf-8"))["queries"]["new"] == {
+        "url": "https://images.example/new.jpg",
     }
 
 

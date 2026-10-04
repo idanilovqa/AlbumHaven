@@ -75,6 +75,51 @@ task-level acceptance stays open.
 
 ## Recovery verification progress
 
+### October 4 recovery hardening delivery
+
+Owner requested completion of interrupted-cover recovery while the existing
+cover pass finishes unchanged. The first narrow Task 3 delivery protects the
+previous lookup checkpoint if a subsequent save is interrupted or fails.
+
+- Outcome: save through a same-directory temporary file and atomic replacement
+  at the existing `CoverSearchCache.save` owner; retain dirty state on failure.
+- Prerequisites: existing approved recovery/checkpoint design and unchanged
+  cache format. This hardens the legacy owner; it adds no persistence fallback
+  and does not migrate lookup data or authorize a new JSON store.
+- Acceptance: successful save/reload, failed replacement preserves the previous
+  checkpoint, a later save retries pending updates, and ordinary failure paths
+  clean up their owned temporary file. Existing permission-error behavior stays.
+- Compatibility/rollback: unchanged reader and JSON shape; revert source only.
+  Atomic replacement does not promise cross-process merging or power-loss
+  durability. A process killed before replacement may leave its temporary file.
+- Checkpoint: isolated focused tests and independent relevant-diff review before
+  a scoped commit. No deployment, live data access, scan, restart, or publication.
+
+- [x] Separate test author proves failed-replacement regression with generated
+  temporary data and verifies the existing successful reload contract.
+- [x] Implementation owner reuses an adequate existing atomic-write helper or
+  uses a same-directory standard-library temporary file and replacement.
+- [x] Separate verification and review confirm preservation, retry, cleanup,
+  compatibility, and unchanged permission handling.
+
+Verification: the initial atomic-replacement tests failed twice as expected;
+first review then reproduced denied temporary-file cleanup as a separate failing
+regression. After both fixes, independent focused verification passed 10 tests
+in 1.76 seconds: `tests/py/test_cover_provider_cache.py` and
+`tests/py/test_state.py::test_run_cover_jobs_checkpoints_lookup_cache_before_interrupted_batch`.
+No pytest warnings were reported. The complete second relevant-diff review found
+no actionable findings; scoped diff checks passed. Permission-denied cleanup is
+best-effort and logs a warning while retaining checkpoint and retry state.
+Only these three delivery checkboxes changed; there is no numeric progress
+counter in this plan. Task 3 and all live/acceptance/release gates remain open.
+
+Further Task 3 work remains separate: recovered nondownloaded image metadata
+currently waits for final snapshot publication; assess guarded per-album
+persistence before changing that boundary. Full preplanning reconciliation is
+not established by the existing recovery tests. Do not mark Task 3 complete
+based on lookup hardening alone. Preparation performance has its own October 4
+written design; new move workflows remain outside this cover delivery.
+
 Focused red/green tests cover recovery of a newly discovered local cover and a
 changed image at the same path, preserving its content revision without counting
 a download. Nondownloaded user-owned selections retain their paths and linked

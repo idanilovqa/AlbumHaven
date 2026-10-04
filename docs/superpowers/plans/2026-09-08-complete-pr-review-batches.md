@@ -208,3 +208,33 @@ current-head review and release suites remain the hosted publication gate.
 - [ ] Launch the native PR review-first pipeline. Privately collect per-unit
   usage, collect all reviewer findings, hold tests for repairs, and require every
   complete current-head suite to pass before normal merge and publication.
+
+## PR #22 CI follow-up: image-format classification
+
+The PR #22 Codex review planner rejected
+`docs/design-mockups/components/library-provenance/v001/screenshots/a-dark-cards.png`:
+the file contains JPEG bytes despite its PNG filename. This is a planner input
+classification failure, not an application-test failure. PR Agent independently
+failed because review credits were unavailable; downstream tests were skipped
+by the required review-first gate, so no test failure inventory exists yet.
+
+The repair is limited to PNG/JPEG image classification and extraction. Determine
+each before/after blob's supported image format from its bytes and retain those
+exact bytes with the matching artifact extension. Preserve all image assignments,
+Git identities, manifest verification and fail-closed unsupported-binary behavior.
+Do not rename or re-encode the source mockup, omit image review, change review
+scope, or bypass either required reviewer.
+
+Acceptance covers JPEG bytes under a PNG filename, mixed PNG/JPEG before/after
+blobs, native `.jpg`/`.jpeg` inputs, and rejection of malformed or truncated image
+inputs. Complete item-to-batch coverage and extracted-byte verification remain
+required. The mixed-format regression reproduced `Unsupported binary review
+input: image.png`; the existing unsupported-binary case passed. Final focused
+GREEN evidence: the focused suite passed 15 tests with zero failures or skips
+in 86.365 seconds. Fresh independent JPEG, truncated-image, and unsupported-binary
+checks exited successfully (session 25336); their timing was not recorded.
+Three complete scoped review passes found no remaining actionable findings, and
+`git diff --check` passed. The full 105-file branch review remains outstanding.
+CI remains blocked by unavailable API review credits; no downstream CI test
+failure inventory exists yet. This follow-up
+changes no existing completion checkbox or numeric progress counter.

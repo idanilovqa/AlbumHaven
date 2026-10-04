@@ -135,8 +135,11 @@ function isPng(bytes) { return bytes.length >= 24 && bytes.subarray(0, 8).equals
 function fileKind(file, blobMap) {
   const entries = [['left', file.oldBlob, file.oldMode], ['right', file.newBlob, file.newMode]].filter(entry => entry[1]);
   const blobs = entries.map(([side, blob, mode]) => ({ side, blob, mode, bytes: blobMap.get(blob) }));
-  if (file.path.toLowerCase().endsWith('.png') && blobs.every(entry => entry.mode !== '120000' && isPng(entry.bytes))) {
-    return { kind: 'image', images: blobs.map(({ side, blob }) => ({ side, blob, path: 'images/' + blob + '.png' })) };
+  const imageExtension = bytes => isPng(bytes) ? 'png'
+    : bytes.length >= 24 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff
+      && bytes[bytes.length - 2] === 0xff && bytes[bytes.length - 1] === 0xd9 ? 'jpg' : null;
+  if (/\.(png|jpe?g)$/i.test(file.path) && blobs.every(entry => entry.mode !== '120000' && imageExtension(entry.bytes))) {
+    return { kind: 'image', images: blobs.map(({ side, blob, bytes }) => ({ side, blob, path: 'images/' + blob + '.' + imageExtension(bytes) })) };
   }
   for (const entry of blobs) {
     if (entry.bytes.includes(0)) throw new Error('Unsupported binary review input: ' + file.path);

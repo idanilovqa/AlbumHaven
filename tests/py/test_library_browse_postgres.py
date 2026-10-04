@@ -6202,7 +6202,7 @@ def test_postgres_selected_artist_payload_suppresses_family_without_contributing
     assert payload["family_artist_groups"] == []
 
 
-def test_postgres_album_detail_payload_loads_tracks_for_album_key():
+def test_postgres_album_detail_payload_loads_tracks_for_album_key(monkeypatch):
     import music_app.services.album_details as album_details_module
     from music_app.services.library_browse_postgres import PostgresLibraryBrowseRepository
 
@@ -6262,12 +6262,12 @@ def test_postgres_album_detail_payload_loads_tracks_for_album_key():
         },
         connect=lambda _database_url: FakeConnection(),
     )
-    album_details_module.build_scrobbled_play_count_lookup = lambda *_args, **_kwargs: (_ for _ in ()).throw(
+    monkeypatch.setattr(album_details_module, "build_scrobbled_play_count_lookup", lambda *_args, **_kwargs: (_ for _ in ()).throw(
         AssertionError("Postgres album detail payload should use prehydrated scrobble counts.")
-    )
-    album_details_module.build_track_preference_overlay_lookup = lambda *_args, **_kwargs: (_ for _ in ()).throw(
-        AssertionError("Postgres album detail payload should use prehydrated track preferences.")
-    )
+    ))
+    monkeypatch.setattr(album_details_module, "build_track_preference_overlay_lookup", lambda *_args, **_kwargs: (_ for _ in ()).throw(
+        AssertionError("Unscoped album detail must not query private track preferences.")
+    ))
 
     payload = repository.build_album_detail_payload(
         "3::to the power of three",
@@ -6291,14 +6291,14 @@ def test_postgres_album_detail_payload_loads_tracks_for_album_key():
         "has_unseen_automatic_improvement": True,
     }
     assert payload["track_rows"][0]["track_stats"]["scrobble_count"] == 0
-    assert payload["track_rows"][0]["track_preference"]["allowed_actions"]["can_rate"] is True
+    assert payload["track_rows"][0]["track_preference"]["allowed_actions"]["can_rate"] is False
     assert payload["gallery_list_block"]["track_rows_source"] == "inline"
     assert executed[1] == {"album_key": "3::to the power of three"}
     sql = str(executed[0])
     assert "where library.local_albums.album_key = %(album_key)s" in sql
     assert "library.local_track_files.private_path as file_private_path" in sql
     assert "coalesce(scrobble_counts.scrobble_count, 0) as track_scrobble_count" in sql
-    assert "track_preferences.rating as track_preference_rating" in sql
+    assert "track_preferences.rating as track_preference_rating" not in sql
     assert "local_album_cover_candidate_snapshots" in sql
 
 

@@ -186,6 +186,8 @@ def install_private_route_boundary(app: FastAPI) -> None:
             # The route resolves this resource through the actor's owned loops.
             action = "library.loops.media.read"
         preference_headers = (
+            {"Cache-Control": "private, no-store"}
+            if route_path in {"/album-details", "/track-preferences"} else
             {"Cache-Control": "no-store, max-age=0"}
             if route_path in {"/account/appearance", "/account/layout-preferences", "/api/account/appearance/selection-accent"} else {}
         )
@@ -236,6 +238,8 @@ def install_private_route_boundary(app: FastAPI) -> None:
                 headers=preference_headers,
             )
         response = await call_next(request)
+        if route_path in {"/album-details", "/track-preferences"}:
+            response.headers.update(preference_headers)
         if request.method.upper() in _READ_METHODS:
             _refresh_session_csrf_cookie(request, response)
         return response

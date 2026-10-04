@@ -3016,6 +3016,19 @@ def test_asgi_root_album_browse_postgres_selection_rejects_unsupported_requests(
         }
 
 
+@pytest.fixture(autouse=True)
+def _album_detail_inventory_context_for_route_units(request, monkeypatch):
+    # Only the existing album-detail unit cases fake inventory. The new real
+    # route module obtains provenance through the actual inventory owner.
+    name = getattr(request.node, "originalname", None) or request.node.name
+    if name.startswith("test_asgi_album_details_") or name.startswith("test_asgi_active_scan_album_details_"):
+        monkeypatch.setattr(
+            "music_app.services.library_inventory_postgres.PostgresLibraryInventoryRepository.load_inventory_library_id",
+            lambda _self: 1,
+            raising=False,
+        )
+
+
 def test_asgi_album_details_preserves_statuses_and_client_surface(app, monkeypatch):
     from music_app.routes import api_read_asgi_routes as asgi_read_routes
 
@@ -3034,7 +3047,7 @@ def test_asgi_album_details_preserves_statuses_and_client_surface(app, monkeypat
         hydrate_calls.append(True)
         return False
 
-    def fake_build_album_detail_payload(album_key, *, client_surface_class, config, library_state):
+    def fake_build_album_detail_payload(album_key, *, client_surface_class, config, library_state, **taste_scope):
         assert config["MUSIC_DIR"] == app.config["MUSIC_DIR"]
         assert library_state is not None
         detail_calls.append((album_key, client_surface_class))
@@ -3105,7 +3118,7 @@ def test_asgi_album_details_uses_postgres_repository_when_library_browse_is_post
         def __init__(self, config):
             assert config["MUSIC_DIR"] == app.config["MUSIC_DIR"]
 
-        def build_album_detail_payload(self, album_key, *, client_surface_class=None):
+        def build_album_detail_payload(self, album_key, *, client_surface_class=None, **taste_scope):
             postgres_calls.append((album_key, client_surface_class))
             if album_key == "missing::album":
                 return None
@@ -3185,7 +3198,7 @@ def test_asgi_album_details_uses_transient_runtime_album_during_active_scan(
     def fail_hydrate(*_args, **_kwargs):
         raise AssertionError("Active-scan album details must not hydrate durable library state")
 
-    def fake_build_album_detail_payload(album_key, *, client_surface_class, config, library_state):
+    def fake_build_album_detail_payload(album_key, *, client_surface_class, config, library_state, **taste_scope):
         assert config is app.config
         assert library_state is not asgi_app.state.library_state
         assert library_state["albums"] is preview_browse_snapshot["albums"]
@@ -3275,7 +3288,7 @@ def test_asgi_active_scan_album_details_prefers_postgres_for_existing_committed_
         def __init__(self, config):
             assert config is app.config
 
-        def build_album_detail_payload(self, album_key, *, client_surface_class=None):
+        def build_album_detail_payload(self, album_key, *, client_surface_class=None, **taste_scope):
             postgres_calls.append((album_key, client_surface_class))
             return {
                 "key": album_key,
@@ -3376,6 +3389,7 @@ def test_asgi_album_details_overlays_app_rating_on_transient_scan_payload(
         client_surface_class,
         config,
         library_state,
+        **taste_scope,
     ):
         assert album_key == "rated-album"
         assert client_surface_class == "tv"
@@ -3447,7 +3461,7 @@ def test_asgi_album_details_uses_postgres_repository_for_regular_album_keys_with
         def __init__(self, config):
             assert config is app.config
 
-        def build_album_detail_payload(self, album_key, *, client_surface_class=None):
+        def build_album_detail_payload(self, album_key, *, client_surface_class=None, **taste_scope):
             postgres_calls.append((album_key, client_surface_class))
             return {"key": album_key, "surface": client_surface_class, "source": "postgres_repo"}
 
@@ -3544,7 +3558,7 @@ def test_asgi_album_details_uses_query_inputs_without_flask_bridge(app, asgi_app
     def fail_test_request_context(*_args, **_kwargs):
         raise AssertionError("ASGI album-details route must not enter Flask test_request_context")
 
-    def fake_build_album_detail_payload(album_key, *, client_surface_class, config, library_state):
+    def fake_build_album_detail_payload(album_key, *, client_surface_class, config, library_state, **taste_scope):
         assert config["MUSIC_DIR"] == app.config["MUSIC_DIR"]
         assert library_state is not None
         detail_calls.append((album_key, client_surface_class))
@@ -3684,8 +3698,11 @@ def test_asgi_album_details_invokes_track_overlay_seams_without_flask_bridge(app
         scrobble_calls.append(list(track_refs))
         return {normalized_track_ref: 7}
 
-    def fake_track_preference_lookup(config, *, client_surface_class=None, track_refs=None):
+    def fake_track_preference_lookup(config, *, client_surface_class=None, track_refs=None, **taste_scope):
         assert config["MUSIC_DIR"] == app.config["MUSIC_DIR"]
+        assert taste_scope["account_id"] == 1
+        assert taste_scope["library_id"] == 1
+        assert taste_scope["require_active_paths"] is True
         preference_calls.append((client_surface_class, list(track_refs or [])))
         return {
             normalized_track_ref: {

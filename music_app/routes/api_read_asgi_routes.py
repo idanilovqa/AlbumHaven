@@ -37,6 +37,9 @@ from music_app.services.page_resource_seams import (
 from music_app.services.album_details import build_album_detail_payload
 from music_app.services.album_ratings_postgres import PostgresAlbumRatingsService
 from music_app.services.library_browse_postgres import PostgresLibraryBrowseRepository
+from music_app.services.library_inventory_postgres import PostgresLibraryInventoryRepository
+from music_app.services.track_preferences import track_preference_scope
+from music_app.services.track_preferences_postgres import TrackPreferenceScopeError
 from music_app.services.library_watch_health import LibraryWatchHealthService
 from music_app.services.library_warning_dismissals import PostgresLibraryWarningDismissals, warning_token
 from music_app.routes.bounded_json import read_bounded_json_object, JSONBodyTooLarge
@@ -860,25 +863,49 @@ async def album_details(request: Request) -> JSONResponse:
         or request.headers.get("X-Album-Haven-Client-Surface")
         or request.headers.get("X-Album-Haven-Client-Surface-Class")
     )
+    try:
+        account_id, library_id = track_preference_scope(await current_actor_from_request(request))
+    except TrackPreferenceScopeError as exc:
+        return JSONResponse({"ok": False, "error": str(exc)}, status_code=403)
+
+    def preference_action_resolver(track_id: int) -> bool:
+        return allowed_actions_for_request(
+            request, ("library.track_preferences.manage",),
+            resource=ResourceScope("track", str(track_id)),
+        ).allows("library.track_preferences.manage")
+
+    taste_scope = {
+        "account_id": account_id, "library_id": library_id,
+        "preference_action_resolver": preference_action_resolver,
+    }
     browse_state = resolve_active_scan_browse_state(_library_state(request))
 
     if _should_use_postgres_album_detail_path(request, browse_state=browse_state):
-        payload = PostgresLibraryBrowseRepository(_app_config(request)).build_album_detail_payload(
-            album_key,
-            client_surface_class=client_surface_class,
-        )
+        try:
+            payload = await run_in_threadpool(
+                PostgresLibraryBrowseRepository(_app_config(request)).build_album_detail_payload,
+                album_key, client_surface_class=client_surface_class, **taste_scope,
+            )
+        except TrackPreferenceScopeError as exc:
+            return JSONResponse({"ok": False, "error": str(exc)}, status_code=403)
         if payload is None:
             return JSONResponse({"ok": False, "error": "Album not found"}, status_code=404)
         _project_missing_album_actions_for_request(request, payload)
         return JSONResponse({"ok": True, "album": payload})
 
     _hydrate_cached_library_for_asgi(request)
-    payload = build_album_detail_payload(
-        album_key,
-        client_surface_class=client_surface_class,
-        config=_app_config(request),
-        library_state=browse_state,
+    inventory_library_id = await run_in_threadpool(
+        PostgresLibraryInventoryRepository(_app_config(request)).load_inventory_library_id,
     )
+    try:
+        payload = await run_in_threadpool(
+            build_album_detail_payload, album_key,
+            client_surface_class=client_surface_class, config=_app_config(request),
+            library_state=browse_state, inventory_library_id=inventory_library_id,
+            **taste_scope,
+        )
+    except TrackPreferenceScopeError as exc:
+        return JSONResponse({"ok": False, "error": str(exc)}, status_code=403)
     if payload is None:
         return JSONResponse({"ok": False, "error": "Album not found"}, status_code=404)
     if browse_state.get("scan_in_progress"):

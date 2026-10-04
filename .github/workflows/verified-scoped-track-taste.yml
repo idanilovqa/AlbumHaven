@@ -1,0 +1,639 @@
+name: Publish exact scoped track-taste slice
+on:
+  push:
+    branches: [2026-09-30-mobile-bundle-transfer]
+    paths: [.github/workflows/verified-scoped-track-taste.yml]
+permissions:
+  contents: read
+concurrency:
+  group: verified-scoped-track-taste
+  cancel-in-progress: false
+env:
+  HELPER_PARENT: '72a829b38abd660bfddd136ae5f8b96179599c14'
+jobs:
+  validate:
+    if: github.repository == 'idanilovqa/AlbumHaven' && github.ref == 'refs/heads/2026-09-30-mobile-bundle-transfer' && github.event_name == 'push'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    outputs:
+      artifact_id: ${{ steps.upload.outputs.artifact-id }}
+      proof_sha256: ${{ steps.verify.outputs.proof_sha256 }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.sha }}
+          path: target
+          fetch-depth: 0
+          persist-credentials: false
+          submodules: false
+          lfs: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Verify exact transport, archive and target guards
+        id: verify
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: python
+        run: |
+          import base64
+          import binascii
+          import hashlib
+          import io
+          import json
+          import os
+          from pathlib import Path, PurePosixPath
+          import re
+          import stat
+          import subprocess
+          import sys
+          import tarfile
+          SCOPES = {'idanilovqa/AlbumHaven': {'private': False, 'count': 22, 'helper': '2026-09-30-mobile-bundle-transfer', 'label': 'scoped-track-taste', 'finalTree': 'd5c7743acc5cefbba7fc4ac045129833ce20876b', 'targetHead': 'd644d9bc9ba7ee8d6037f4807bfa9dbfc69469de', 'baseTree': '356b0de2104785867b5eead544a1aa027e750e4a', 'mainHead': 'eef9d13fd5dbd2cda3485e3c308c8494ba7d6fd4', 'helperBase': 'a4a0ff8b0ca82318935c8610ce6fe5e100451f5c', 'helperBaseTree': '0fa6fbae12c02d1e1229946d31d646bd7170c292', 'files': [{'path': 'migrations/postgres/0081_scope_track_preferences_by_library.sql', 'operation': 'add', 'mode': '100644', 'bytes': 360, 'sha256': '90e9ebdc18257df4f85df8da2a6e312fdda81b844dfed6f856792d345eed1d23', 'gitBlobSha': 'f2b8f113fb6d7af8ed03104fe928cc65ee57d6ae'}, {'path': 'music_app/routes/api_read_asgi_routes.py', 'operation': 'modify', 'mode': '100644', 'bytes': 51538, 'sha256': 'c5c021727364b5dfba7d747f3aae4276fff958adf36ff1cc4c3c07d450dd5b4c', 'gitBlobSha': 'e14f9e657ff10ccc66de717e894e01a94e07ac78', 'expectedBaseBlobSha': '6c3a0cefd601e0eb7d113558a6bf1f2fb32c5c16', 'baseBytes': 50036, 'baseSha256': '529a400ac10c8f594f0c6324dc695c2b3defa0b94ef94b225abe18ef631901fa'}, {'path': 'music_app/routes/api_wave_b_asgi_routes.py', 'operation': 'modify', 'mode': '100644', 'bytes': 46193, 'sha256': '9f60f583ce9012975c57899b9f49e01461bf6eeae78899744f57e661d3eab015', 'gitBlobSha': 'dc7e53e6de26356406bad7694cd83eae956a5b2e', 'expectedBaseBlobSha': '4aec3cd115dba888cd3a1bc1e020d1f7f93724fa', 'baseBytes': 44793, 'baseSha256': '07d52e8cd8aebf1434e5ad981bab47de2ef293be019640fa1b93e7698d009d00'}, {'path': 'music_app/services/album_details.py', 'operation': 'modify', 'mode': '100644', 'bytes': 11307, 'sha256': '26345b048d4605e528aa57dd3510beb69a1c106bac749741efb058e2b60a2c7a', 'gitBlobSha': '8784f41fcb8d8c62f3e260f851f564a0f780fc4e', 'expectedBaseBlobSha': 'c2442a5911a4a2f399842ac810e3dba973819a72', 'baseBytes': 9273, 'baseSha256': 'c27e2d8cfc53769bbd1b519c59aff56ef573472d57a57a46a63460aaebc19083'}, {'path': 'music_app/services/library_browse_postgres.py', 'operation': 'modify', 'mode': '100644', 'bytes': 326293, 'sha256': '0984b283b91105d1c50773f92797badf257043f4e5427bdab373ddc259f09bee', 'gitBlobSha': '5e98661a5f5919371e180f1c74273b441cc2ff86', 'expectedBaseBlobSha': '26734a38bc955c8762e7222cbf914b33af7587a5', 'baseBytes': 326596, 'baseSha256': 'a641cd405497fec5e8839c5568ef1bb791db97a4ffa16c9c461dedd51fa7b9cb'}, {'path': 'music_app/services/library_inventory_postgres.py', 'operation': 'modify', 'mode': '100644', 'bytes': 18854, 'sha256': '3f69ff43dd3898dde75ad540b007dc1830fb364389fd9de76a9dc211daea3a8a', 'gitBlobSha': 'd1f9e944a8e1b568c08964a1a4590bd24d38330e', 'expectedBaseBlobSha': '0ba8954f7cea82b2465700fdd5111d5bef535401', 'baseBytes': 18297, 'baseSha256': 'f135ca6a0312e5b24839d9da026c93e13d5cb228413188244f14cbb3d74b72cc'}, {'path': 'music_app/services/private_route_boundary.py', 'operation': 'modify', 'mode': '100644', 'bytes': 21390, 'sha256': 'ce0ac3e41a88d28ffd0d666a5f01f9df86c531058eab4bfc9b4a2d99fc6b62bd', 'gitBlobSha': '092261fc9207eebfef99a96f6191a85d593238b7', 'expectedBaseBlobSha': '5a442ce0b062dc805d94344592e8edd1e7df514e', 'baseBytes': 21141, 'baseSha256': 'b429e4473f0338df43e02fbcc0605153760b129b16053571941e5118132f0d53'}, {'path': 'music_app/services/track_preferences.py', 'operation': 'modify', 'mode': '100644', 'bytes': 11499, 'sha256': '231c1af3045274cac9f3d85952c63b03c58547c576287e3166bee191087c3b21', 'gitBlobSha': '86cbc816d84a86ab0871a4f7e3b9764617feaa15', 'expectedBaseBlobSha': '5ab3f65ad618c992560fdfbdfc9be97f668df35d', 'baseBytes': 12143, 'baseSha256': 'eed0594bc194ecab62e1b7a80058019a247bace05eb8889540caba4f4e027c11'}, {'path': 'music_app/services/track_preferences_postgres.py', 'operation': 'modify', 'mode': '100644', 'bytes': 12882, 'sha256': '70b954107b388383a53f12b94d92870677d140e606c3ff443caebdf68aff1074', 'gitBlobSha': '8e6eb28b317ed30fe52f85b9d13dae36722ae506', 'expectedBaseBlobSha': 'cb9f60162d4a7dc40aadfcb892b2b3e58f0ea409', 'baseBytes': 8804, 'baseSha256': 'afdfb0c1648ce37cf6612204abe8eebc9986a7770d5ba754a09093c4db827d63'}, {'path': 'scripts/migrate_app_data_to_postgres.py', 'operation': 'modify', 'mode': '100644', 'bytes': 181226, 'sha256': '7f3d37f026ed31a33dc741bc637d3f239978eef000b46f84580ff744f8462702', 'gitBlobSha': '6390415c6a3a1835ea7bcdecbcb812654910756c', 'expectedBaseBlobSha': 'f681c7ac78b96d6746effdfed3be7171ec058c62', 'baseBytes': 181262, 'baseSha256': '4a0b251dc8bed26384e40fc7f67280262ab3b0ea64fe6257897fb64853e4a3c1'}, {'path': 'tests/py/test_album_details.py', 'operation': 'modify', 'mode': '100644', 'bytes': 9063, 'sha256': '1f3f283e86f98faf61f1508a1f443c5afb2e419b459f645d653f40ed73a17478', 'gitBlobSha': 'f86bcc1b3f7474772876d288008152e6ac9bb0e5', 'expectedBaseBlobSha': 'fe1f50508f2c38d2803c1d0e9d5c237b4b779d1e', 'baseBytes': 9061, 'baseSha256': 'def286c48f1bc4016f7654255f43be3bbddae24a2dc1e9c0268d20eb065ad05e'}, {'path': 'tests/py/test_api_read_asgi_routes.py', 'operation': 'modify', 'mode': '100644', 'bytes': 176228, 'sha256': '11958f4a48291774efd36a8189e932b88136a48795ba9f57b9fa9e8b77774939', 'gitBlobSha': '95b91fa77f5fc607cd91021ba4cbe9554c788ec3', 'expectedBaseBlobSha': '162407ceb5effe31a8c117dea6ab272dad75aa0c', 'baseBytes': 175287, 'baseSha256': '6f56f279cbece3b32958dd4a5fb5737f6b3e882245913643683c9c58f60821ae'}, {'path': 'tests/py/test_api_wave_b_asgi_routes.py', 'operation': 'modify', 'mode': '100644', 'bytes': 88337, 'sha256': '0c0b0dc928c543802b13c688e80df227b8ad1bfa7017d63f28d49c8aa1e7a749', 'gitBlobSha': 'cdc9882210ae6162f8583ab0b3bd02896d5e1c5e', 'expectedBaseBlobSha': '05f3b0a609e97d6b37953c8e1a7e549782dd5eb9', 'baseBytes': 88119, 'baseSha256': '715b9ca3aefdee17ea66b04a57bb979d3fc6c393b090982b8a132ab4be186456'}, {'path': 'tests/py/test_library_browse_postgres.py', 'operation': 'modify', 'mode': '100644', 'bytes': 480967, 'sha256': '38dba588ca99600bc9785de73a6b47ccb9964ffc096c0351c555dadbc8f3adb9', 'gitBlobSha': 'a9d4870e069aaf5fbd402f03e0b11d6b51c7a4b7', 'expectedBaseBlobSha': '4611ae557c61d5191bf19b964beaed3c77af3518', 'baseBytes': 480913, 'baseSha256': '1c8e7544ec53d448bc55380c29e73bd3c6ea007fb7d5b9e0cc61824b65c3850d'}, {'path': 'tests/py/test_migrate_app_data_to_postgres.py', 'operation': 'modify', 'mode': '100644', 'bytes': 170522, 'sha256': '844458ac46595906fa0843a31d60e70ee33b19e530744a027e2b4cf90acc69da', 'gitBlobSha': '468c9dbcac662f247142890825346ad5499d1d1b', 'expectedBaseBlobSha': '993fcf053eafd09666d7cd47143fbeb1ca7cea71', 'baseBytes': 170505, 'baseSha256': 'db08c4f136c0c602a0567e5d7a163930a0de7637c6e0f990b9ceefd3aa1d91db'}, {'path': 'tests/py/test_postgres_migrations.py', 'operation': 'modify', 'mode': '100644', 'bytes': 116904, 'sha256': 'ce9d62834dd980148a866c2f97b0a667a211b3c7c8ee8ab4e5d65b7f5d5c1fd2', 'gitBlobSha': '7b7dd0a238a51e4a93ec8955317e31f0e1defa19', 'expectedBaseBlobSha': '62cf86398bd45c472179368a035dace73d148087', 'baseBytes': 116849, 'baseSha256': 'fecfd43c2e31671ab8aa7a0e3831f55d43b123961c90dc41cff15d7f2d2d2945'}, {'path': 'tests/py/test_track_preferences_postgres.py', 'operation': 'add', 'mode': '100644', 'bytes': 19029, 'sha256': '8c40b2b0078a38f0fb2ae7b94a3d9c8035d051aaccdae0647a4128cd879f0c0c', 'gitBlobSha': 'b78a798de506d3a5222f38b2b8df713f30dda3fb'}, {'path': 'tests/py/test_track_preferences_scoped_asgi.py', 'operation': 'add', 'mode': '100644', 'bytes': 24405, 'sha256': 'a3b29b0622ad1d470b52df90ecc05c842532274480c83bed35337636a3550e4e', 'gitBlobSha': 'd641eb3770d55d8e58aa3daf15bc6103ebd60b49'}, {'path': 'tests/py/test_track_preferences_store.py', 'operation': 'modify', 'mode': '100644', 'bytes': 4422, 'sha256': 'c1aed2e482976533b070d20472f2c9389d9160a278bf763e5e9d698fbc38f2b3', 'gitBlobSha': '031491b45d683a7a632b008fcce100def74864b3', 'expectedBaseBlobSha': '9e680da0af9102c754686307b562cc6f86486070', 'baseBytes': 17174, 'baseSha256': 'd3f9d8749e99619300a0008c2ba3c84286682893e52a12e0c7205914577f7292'}, {'path': 'tests/py/test_track_taste_album_details.py', 'operation': 'add', 'mode': '100644', 'bytes': 10097, 'sha256': 'dd0f2742094bb293d77e2cdbb3274ba467febca2e34532f7c55b0a1b7184b4cb', 'gitBlobSha': 'c1d830299b033a7294ce01faafffd8d6a9468f36'}, {'path': 'tests/py/test_track_taste_migration_live.py', 'operation': 'add', 'mode': '100644', 'bytes': 7428, 'sha256': '6a22ea9152fb919af5e17ed3e9a72ae3bb9a0c63f8f808ab9b1318800e1d6013', 'gitBlobSha': '7b93a2858d3e8a26af6382197b6e5744eb88153c'}, {'path': 'tests/py/track_taste_testing.py', 'operation': 'add', 'mode': '100644', 'bytes': 18959, 'sha256': 'e27a21a0b552b9634f0e11e3728edf98f6d07575f596390548ebdafaae7ee79c', 'gitBlobSha': 'fae6fa79c39769103a7ae1f219026279f18539b5'}], 'proposalSha256': 'b5025fcbe0104d84181ec17daca0861a45ee2bc048a9ddf54cea3335ef32b8ca', 'publicFilesSha256': '0703803966d40e297280061b7eb185b5962767e311bab5a280fee2ee5de4e1c3', 'runtimeManifestSha256': 'a8a92e75279cdc00a86b4e2509f8813c717ef7ababc50aa346e804ee6aca7e8f', 'testManifestSha256': '8276c295b69a80fbe8cc8525ef6d3affbafd2e3159480758d5c65257da8f83f6', 'independentReceiptSha256': '651caad4ad951c9095f6cf37fd52de2f104731353c727404b8e21ec24cc39ca6', 'secondIndependentReceiptSha256': 'ac86101f4fd71ca378a809b216eb392be0e9f5a28a7532d4102a42fa303d3ab0'}}
+          class Rejected(RuntimeError):
+              pass
+          def require(condition, message):
+              if not condition:
+                  raise Rejected(message)
+          def sha256(data):
+              return hashlib.sha256(data).hexdigest()
+          def git_blob(data):
+              return hashlib.sha1(b"blob " + str(len(data)).encode() + b"\0" + data).hexdigest()
+          def canonical_json(value):
+              return (json.dumps(value, sort_keys=True, separators=(",", ":")) + "\n").encode()
+          def canonical_path(path):
+              require(isinstance(path, str) and bool(path), "empty/non-string path")
+              require(re.fullmatch(r"[A-Za-z0-9._/-]+", path) is not None, "unsafe path characters")
+              require(not path.startswith("/") and str(PurePosixPath(path)) == path, "noncanonical path")
+              require(all(p not in ("", ".", "..", ".git") for p in path.split("/")), "unsafe path component")
+              return path
+          def verify_bytes(data, record):
+              require(len(data) == record["bytes"], "size mismatch: " + record["path"])
+              require(sha256(data) == record["sha256"], "SHA-256 mismatch: " + record["path"])
+              require(git_blob(data) == record["gitBlobSha"], "Git blob mismatch: " + record["path"])
+          def deterministic_tar(files):
+              output = io.BytesIO()
+              with tarfile.open(fileobj=output, mode="w", format=tarfile.USTAR_FORMAT) as archive:
+                  for path, data in sorted(files.items()):
+                      member = tarfile.TarInfo(canonical_path(path))
+                      member.size = len(data)
+                      member.mode = 0o644
+                      member.type = tarfile.REGTYPE
+                      archive.addfile(member, io.BytesIO(data))
+              return output.getvalue()
+          def verify_scope(plan):
+              repository = plan.get("repository")
+              require(repository in SCOPES, "unreviewed repository")
+              scope = SCOPES[repository]
+              require(plan.get("repositoryPrivate") is scope["private"], "wrong repository visibility")
+              require(plan.get("targetBranch") == "2026-09-30-friends-listening-home", "wrong target branch")
+              require(plan.get("helperBranch") == scope["helper"], "wrong helper branch")
+              require(plan.get("scopeLabel") == scope["label"], "wrong helper scope label")
+              require(plan.get("workflowPath") == ".github/workflows/verified-scoped-track-taste.yml", "wrong workflow path")
+              require(plan.get("chunkPrefix") == ".implementation-transfer/scoped-track-taste-20261004", "wrong chunk namespace")
+              require(plan.get("remote") == "https://github.com/" + repository + ".git", "wrong remote")
+              for key in ("finalTree", "targetHead", "baseTree", "mainHead", "helperBase", "helperBaseTree", "proposalSha256",
+                          "publicFilesSha256", "runtimeManifestSha256", "testManifestSha256", "independentReceiptSha256", "secondIndependentReceiptSha256"):
+                  require(plan.get(key) == scope[key], "wrong reviewed " + key)
+              return scope
+          def decode_chunks(chunks, plan):
+              verify_scope(plan)
+              expected = plan["chunks"]
+              require(len(expected) == len({r["path"] for r in expected}), "duplicate chunk manifest path")
+              require([r["path"] for r in expected] == [plan["chunkPrefix"] + "/part-" + str(i).zfill(3) + ".b64" for i in range(1, len(expected) + 1)], "noncanonical chunk sequence")
+              require(set(chunks) == {r["path"] for r in expected}, "chunk path set mismatch")
+              encoded = bytearray()
+              for record in expected:
+                  chunk = chunks[record["path"]]
+                  require(len(chunk) <= 230001, "oversized chunk")
+                  verify_bytes(chunk, record)
+                  require(chunk.endswith(b"\n") and b"\n" not in chunk[:-1], "noncanonical chunk newline")
+                  encoded.extend(chunk[:-1])
+              try:
+                  payload = base64.b64decode(encoded, validate=True)
+              except (binascii.Error, ValueError) as exc:
+                  raise Rejected("invalid base64") from exc
+              require(base64.b64encode(payload) == encoded, "noncanonical base64")
+              return payload
+          def verify_archive(payload, plan):
+              scope = verify_scope(plan)
+              require(len(payload) == plan["archiveBytes"], "archive size mismatch")
+              require(sha256(payload) == plan["archiveSha256"], "archive SHA-256 mismatch")
+              expected = {canonical_path(r["path"]): r for r in plan["files"]}
+              require(len(expected) == len(plan["files"]) == scope["count"], "wrong unique helper file count")
+              require(plan["files"] == scope["files"], "modified-file records differ from reviewed original/final identities")
+              require(sum(r.get("operation") == "modify" for r in plan["files"]) == 16 and
+                      sum(r.get("operation") == "add" for r in plan["files"]) == 6, "wrong reviewed modification/addition counts")
+              for record in plan["files"]:
+                  require(record.get("mode") == "100644" and "binary" not in record, "only reviewed regular UTF-8 files allowed")
+                  base_keys = ("expectedBaseBlobSha", "baseBytes", "baseSha256")
+                  if record["operation"] == "modify":
+                      require(all(record.get(key) for key in base_keys), "modification lacks original identity")
+                  else:
+                      require(record["operation"] == "add" and not any(key in record for key in base_keys), "addition carries original identity")
+              files = {}
+              try:
+                  with tarfile.open(fileobj=io.BytesIO(payload), mode="r:") as archive:
+                      for member in archive:
+                          path = canonical_path(member.name)
+                          require(path in expected and path not in files, "extra or duplicate archive path")
+                          require(member.type == tarfile.REGTYPE and not member.pax_headers, "nonregular archive member")
+                          require(member.mode == 0o644 and member.uid == member.gid == member.mtime == 0,
+                                  "unexpected archive metadata")
+                          require(not member.uname and not member.gname and not member.linkname, "unexpected archive name/link")
+                          require(member.size == expected[path]["bytes"], "archive member size mismatch")
+                          data = archive.extractfile(member).read()
+                          verify_bytes(data, expected[path])
+                          try:
+                              text = data.decode("utf-8", errors="strict")
+                          except UnicodeError as exc:
+                              raise Rejected("repair payload is not UTF-8") from exc
+                          require(text.encode("utf-8") == data and "\0" not in text, "non-text repair payload")
+                          files[path] = data
+              except (tarfile.TarError, OSError) as exc:
+                  raise Rejected("invalid tar archive") from exc
+              require(set(files) == set(expected), "missing archive paths")
+              require(deterministic_tar(files) == payload, "noncanonical archive or trailing data")
+              return files
+          def git_env(token=None):
+              # Do not inherit configuration that could redirect a remote, a hook or object store.
+              env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
+              env.update(GIT_CONFIG_NOSYSTEM="1", GIT_CONFIG_GLOBAL="/dev/null", GIT_TERMINAL_PROMPT="0")
+              if token:
+                  auth = base64.b64encode(("x-access-token:" + token).encode()).decode()
+                  env.update(GIT_CONFIG_COUNT="1", GIT_CONFIG_KEY_0="http.https://github.com/.extraheader",
+                             GIT_CONFIG_VALUE_0="AUTHORIZATION: basic " + auth)
+              return env
+          def git(repo, *args, data=None, token=None, hooks=None):
+              command = ["git", "-c", "core.hooksPath=" + (str(hooks) if hooks else "/dev/null"),
+                         "-c", "core.autocrlf=false", "-c", "commit.gpgsign=false", "-C", str(repo), *args]
+              result = subprocess.run(command, input=data, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                      env=git_env(token), check=False)
+              require(result.returncode == 0, "git operation failed: " + args[0] + "; inspect, do not retry automatically")
+              return result.stdout
+          def git_tree(repo, revision):
+              result = {}
+              for line in git(repo, "ls-tree", "-rz", revision).split(b"\0"):
+                  if not line:
+                      continue
+                  metadata, path = line.split(b"\t", 1)
+                  mode, kind, oid = metadata.decode().split()
+                  result[path.decode("utf-8")] = (mode, kind, oid)
+              return result
+          def diff_records(repo, old, new=None, cached=False):
+              args = ["diff", "--raw", "--no-abbrev", "--no-renames", "-z"]
+              if cached:
+                  args.append("--cached")
+              args.append(old)
+              if new:
+                  args.append(new)
+              pieces = git(repo, *args).split(b"\0")
+              require(pieces.pop() == b"", "invalid diff framing")
+              require(len(pieces) % 2 == 0, "invalid diff shape")
+              result = {}
+              for metadata, path in zip(pieces[::2], pieces[1::2]):
+                  oldmode, newmode, oldoid, newoid, operation = metadata.decode().split()
+                  name = path.decode("utf-8")
+                  require(name not in result, "duplicate diff path")
+                  result[name] = (oldmode.lstrip(":"), newmode, oldoid, newoid, operation)
+              return result
+          def expected_changes(records):
+              return {r["path"]: ("100644" if r.get("expectedBaseBlobSha") else "000000", "100644",
+                                  r.get("expectedBaseBlobSha", "0" * 40), r["gitBlobSha"],
+                                  "M" if r.get("expectedBaseBlobSha") else "A") for r in records}
+          def verify_target_base(repo, plan):
+              head = plan["targetHead"]
+              require(git(repo, "rev-parse", head + "^{tree}").decode().strip() == plan["baseTree"], "base tree changed")
+              tree = git_tree(repo, head)
+              for record in plan["files"]:
+                  path = record["path"]
+                  canonical_path(path)
+                  for parent in PurePosixPath(path).parents:
+                      require(str(parent) not in tree, "target path has a non-directory ancestor")
+                  if "expectedBaseBlobSha" in record:
+                      require(tree.get(path) == ("100644", "blob", record["expectedBaseBlobSha"]), "original target blob changed")
+                      old = git(repo, "cat-file", "blob", head + ":" + path)
+                      require(len(old) == record["baseBytes"] and sha256(old) == record["baseSha256"], "original target bytes changed")
+                  else:
+                      require(path not in tree and not any(p.startswith(path + "/") for p in tree), "new target path already exists")
+          def verify_event(plan, environment, event):
+              scope = verify_scope(plan)
+              require(environment.get("GITHUB_EVENT_NAME") == "push", "not a push event")
+              require(environment.get("GITHUB_REPOSITORY") == plan["repository"], "wrong repository")
+              require(environment.get("GITHUB_REF") == "refs/heads/" + plan["helperBranch"], "wrong helper ref")
+              require(environment.get("GITHUB_RUN_ATTEMPT") == "1", "reruns require investigation; automatic replay is disabled")
+              require(re.fullmatch(r"[1-9][0-9]*", environment.get("GITHUB_RUN_ID", "")) is not None, "invalid run id")
+              parent = environment.get("HELPER_PARENT", "")
+              require(re.fullmatch(r"[0-9a-f]{40}", parent) is not None, "helper parent is not bound")
+              require(re.fullmatch(r"[0-9a-f]{40}", environment.get("GITHUB_SHA", "")) is not None, "invalid trigger SHA")
+              require(event.get("ref") == environment["GITHUB_REF"], "event ref mismatch")
+              require(event.get("before") == parent and event.get("after") == environment["GITHUB_SHA"], "event ancestry mismatch")
+              require(all(event.get(key) is False for key in ("forced", "deleted", "created")), "forced/create/delete push rejected")
+              require(event.get("repository", {}).get("full_name") == plan["repository"] and
+                      event["repository"].get("private") is scope["private"], "event repository/private guard failed")
+              return parent
+          def remote_oid(repo, plan, token, branch=None):
+              selected = plan["targetBranch"] if branch is None else branch
+              require(selected in (plan["targetBranch"], "main"), "unreviewed read ref")
+              ref = "refs/heads/" + selected
+              lines = git(repo, "ls-remote", "--exit-code", plan["remote"], ref, token=token).decode().splitlines()
+              require(len(lines) == 1, "target ref is missing or ambiguous")
+              parts = lines[0].split("\t")
+              require(len(parts) == 2 and parts[1] == ref and re.fullmatch(r"[0-9a-f]{40}", parts[0]), "invalid remote ref")
+              return parts[0]
+          def require_remote_base(repo, plan, token):
+              require(remote_oid(repo, plan, token) == plan["targetHead"], "target branch moved; stop and inspect")
+              require(remote_oid(repo, plan, token, "main") == plan["mainHead"], "main advanced; reconcile migration and source guards")
+          def proof_for(plan, environment):
+              return {"schemaVersion": 1, "repository": plan["repository"], "targetBranch": plan["targetBranch"],
+                      "targetHead": plan["targetHead"], "baseTree": plan["baseTree"], "finalTree": plan["finalTree"],
+                      "helperBase": plan["helperBase"], "helperBaseTree": plan["helperBaseTree"],
+                      "helperRef": environment["GITHUB_REF"], "helperParent": environment["HELPER_PARENT"],
+                      "triggerSha": environment["GITHUB_SHA"], "runId": environment["GITHUB_RUN_ID"],
+                      "runAttempt": environment["GITHUB_RUN_ATTEMPT"], "planSha256": sha256(canonical_json(plan)),
+                      "proposalSha256": plan["proposalSha256"], "publicFilesSha256": plan["publicFilesSha256"],
+                      "runtimeManifestSha256": plan["runtimeManifestSha256"], "testManifestSha256": plan["testManifestSha256"],
+                      "mainHead": plan["mainHead"],
+                      "independentReceiptSha256": plan["independentReceiptSha256"],
+                      "secondIndependentReceiptSha256": plan["secondIndependentReceiptSha256"],
+                      "archiveSha256": plan["archiveSha256"], "files": plan["files"]}
+          def validate_transport(repo, plan, environment, event, token):
+              parent = verify_event(plan, environment, event)
+              trigger = environment["GITHUB_SHA"]
+              require(git(repo, "rev-parse", "HEAD").decode().strip() == trigger, "checkout is not triggering commit")
+              require(git(repo, "rev-list", "--parents", "-n", "1", trigger).decode().split() == [trigger, parent], "trigger must have one exact parent")
+              workflow = plan["workflowPath"]
+              changes = diff_records(repo, parent, trigger)
+              require(set(changes) == {workflow}, "trigger changes more than the workflow")
+              require(changes[workflow][0:3] == ("000000", "100644", "0" * 40) and changes[workflow][4] == "A", "workflow must be a sole regular-file addition")
+              require(git(repo, "rev-parse", plan["helperBase"] + "^{tree}").decode().strip() == plan["helperBaseTree"],
+                      "retained helper base tree changed")
+              git(repo, "merge-base", "--is-ancestor", plan["helperBase"], parent)
+              require(diff_records(repo, plan["helperBase"], parent) == expected_changes(plan["chunks"]), "helper delta is not the exact chunk manifest")
+              verify_target_base(repo, plan)
+              require_remote_base(repo, plan, token)
+              chunks = {r["path"]: git(repo, "cat-file", "blob", parent + ":" + r["path"]) for r in plan["chunks"]}
+              payload = decode_chunks(chunks, plan)
+              verify_archive(payload, plan)
+              # No output files have been created before every input and target guard passes.
+              return payload, canonical_json(proof_for(plan, environment))
+          def write_validation_output(payload, proof, output):
+              require(not output.exists(), "validation output already exists")
+              output.mkdir()
+              (output / "payload.tar").write_bytes(payload)
+              (output / "proof.json").write_bytes(proof)
+          PLAN = json.loads('{"archiveBytes":1832960,"archiveSha256":"e5f7efaa86e3237afd125c509909db3ebb4e702e90e4a9ef1537a459240b98d3","baseTree":"356b0de2104785867b5eead544a1aa027e750e4a","chunkPrefix":".implementation-transfer/scoped-track-taste-20261004","chunks":[{"bytes":230001,"gitBlobSha":"af7f5d8994b7a39f33bfe93c4debefe0959e3f0d","path":".implementation-transfer/scoped-track-taste-20261004/part-001.b64","sha256":"fabf3b094e8e40641266d22f52b94a570d96e10b94e5a317ab4b594de8851a5d"},{"bytes":230001,"gitBlobSha":"0b02bfd564c2359b114aec42191c8a3eb7bc1c94","path":".implementation-transfer/scoped-track-taste-20261004/part-002.b64","sha256":"15a1c430cfd55d727e6861746b5798910be8bb90434203b49e8190164a514061"},{"bytes":230001,"gitBlobSha":"b432efa792f8f5096fa538497001c8ebdc79f35d","path":".implementation-transfer/scoped-track-taste-20261004/part-003.b64","sha256":"84cc52e7ab1d7b90c42395bd5d3b1a4c02e2e0407b301c68e8a5802be3fed40c"},{"bytes":230001,"gitBlobSha":"f4ee2437ba7b9bb07b4d3ab14e13d5b1fff129f5","path":".implementation-transfer/scoped-track-taste-20261004/part-004.b64","sha256":"d4ecb571b29b4202a77c68ad8ba9119dfe6e1c5dc9dc50ca6bd74c7e28fa2cfd"},{"bytes":230001,"gitBlobSha":"93aa07d187a6c7b16274a9598e9737bda696bc00","path":".implementation-transfer/scoped-track-taste-20261004/part-005.b64","sha256":"01cfbea492a04ed6f4d82ef2ba3cee66b3e84f8d7f36e5998a837966ed6d5486"},{"bytes":230001,"gitBlobSha":"99a8ceae578eae74153faf46e975b4b763cb4b49","path":".implementation-transfer/scoped-track-taste-20261004/part-006.b64","sha256":"cacd8c3e3f913d094fb57412887ecf464b7362567c96478643df072e3767ec01"},{"bytes":230001,"gitBlobSha":"9970bbd93f8f1ded95fe17ec0c89f3d3231c9f7b","path":".implementation-transfer/scoped-track-taste-20261004/part-007.b64","sha256":"47059b2a0cd8a74b2d097b820ff1e0a468833815c3751440866d6f5398843a93"},{"bytes":230001,"gitBlobSha":"b15aaa10231a1c0e926107a55a3bda50ef7eb62d","path":".implementation-transfer/scoped-track-taste-20261004/part-008.b64","sha256":"0d888122d1cae6cbc7b84cdbf27dc94bc89b5303266425b3b7dbed3b63a45c80"},{"bytes":230001,"gitBlobSha":"b73687ba2ffbd8b07a1c59f6ae53a9842415e9c1","path":".implementation-transfer/scoped-track-taste-20261004/part-009.b64","sha256":"fa04d2f10431f00c3237a5c9d684959ee08a899545b5ac57d3c681fc5963d69f"},{"bytes":230001,"gitBlobSha":"0b9e7a13a3e6537a0095c18483a01716dc572c1b","path":".implementation-transfer/scoped-track-taste-20261004/part-010.b64","sha256":"47b7761fb0e04d4cfcaea88ea550dc58ca098c33d6f5669d79cb3e99edfdf0bd"},{"bytes":143949,"gitBlobSha":"22742f3cfe25c99019c5db1ed27c7b893e54d105","path":".implementation-transfer/scoped-track-taste-20261004/part-011.b64","sha256":"6d93f8dce1d2af4c893ccb6b1e193f5def92f6200d4b8142bb99ccea336e4645"}],"files":[{"bytes":360,"gitBlobSha":"f2b8f113fb6d7af8ed03104fe928cc65ee57d6ae","mode":"100644","operation":"add","path":"migrations/postgres/0081_scope_track_preferences_by_library.sql","sha256":"90e9ebdc18257df4f85df8da2a6e312fdda81b844dfed6f856792d345eed1d23"},{"baseBytes":50036,"baseSha256":"529a400ac10c8f594f0c6324dc695c2b3defa0b94ef94b225abe18ef631901fa","bytes":51538,"expectedBaseBlobSha":"6c3a0cefd601e0eb7d113558a6bf1f2fb32c5c16","gitBlobSha":"e14f9e657ff10ccc66de717e894e01a94e07ac78","mode":"100644","operation":"modify","path":"music_app/routes/api_read_asgi_routes.py","sha256":"c5c021727364b5dfba7d747f3aae4276fff958adf36ff1cc4c3c07d450dd5b4c"},{"baseBytes":44793,"baseSha256":"07d52e8cd8aebf1434e5ad981bab47de2ef293be019640fa1b93e7698d009d00","bytes":46193,"expectedBaseBlobSha":"4aec3cd115dba888cd3a1bc1e020d1f7f93724fa","gitBlobSha":"dc7e53e6de26356406bad7694cd83eae956a5b2e","mode":"100644","operation":"modify","path":"music_app/routes/api_wave_b_asgi_routes.py","sha256":"9f60f583ce9012975c57899b9f49e01461bf6eeae78899744f57e661d3eab015"},{"baseBytes":9273,"baseSha256":"c27e2d8cfc53769bbd1b519c59aff56ef573472d57a57a46a63460aaebc19083","bytes":11307,"expectedBaseBlobSha":"c2442a5911a4a2f399842ac810e3dba973819a72","gitBlobSha":"8784f41fcb8d8c62f3e260f851f564a0f780fc4e","mode":"100644","operation":"modify","path":"music_app/services/album_details.py","sha256":"26345b048d4605e528aa57dd3510beb69a1c106bac749741efb058e2b60a2c7a"},{"baseBytes":326596,"baseSha256":"a641cd405497fec5e8839c5568ef1bb791db97a4ffa16c9c461dedd51fa7b9cb","bytes":326293,"expectedBaseBlobSha":"26734a38bc955c8762e7222cbf914b33af7587a5","gitBlobSha":"5e98661a5f5919371e180f1c74273b441cc2ff86","mode":"100644","operation":"modify","path":"music_app/services/library_browse_postgres.py","sha256":"0984b283b91105d1c50773f92797badf257043f4e5427bdab373ddc259f09bee"},{"baseBytes":18297,"baseSha256":"f135ca6a0312e5b24839d9da026c93e13d5cb228413188244f14cbb3d74b72cc","bytes":18854,"expectedBaseBlobSha":"0ba8954f7cea82b2465700fdd5111d5bef535401","gitBlobSha":"d1f9e944a8e1b568c08964a1a4590bd24d38330e","mode":"100644","operation":"modify","path":"music_app/services/library_inventory_postgres.py","sha256":"3f69ff43dd3898dde75ad540b007dc1830fb364389fd9de76a9dc211daea3a8a"},{"baseBytes":21141,"baseSha256":"b429e4473f0338df43e02fbcc0605153760b129b16053571941e5118132f0d53","bytes":21390,"expectedBaseBlobSha":"5a442ce0b062dc805d94344592e8edd1e7df514e","gitBlobSha":"092261fc9207eebfef99a96f6191a85d593238b7","mode":"100644","operation":"modify","path":"music_app/services/private_route_boundary.py","sha256":"ce0ac3e41a88d28ffd0d666a5f01f9df86c531058eab4bfc9b4a2d99fc6b62bd"},{"baseBytes":12143,"baseSha256":"eed0594bc194ecab62e1b7a80058019a247bace05eb8889540caba4f4e027c11","bytes":11499,"expectedBaseBlobSha":"5ab3f65ad618c992560fdfbdfc9be97f668df35d","gitBlobSha":"86cbc816d84a86ab0871a4f7e3b9764617feaa15","mode":"100644","operation":"modify","path":"music_app/services/track_preferences.py","sha256":"231c1af3045274cac9f3d85952c63b03c58547c576287e3166bee191087c3b21"},{"baseBytes":8804,"baseSha256":"afdfb0c1648ce37cf6612204abe8eebc9986a7770d5ba754a09093c4db827d63","bytes":12882,"expectedBaseBlobSha":"cb9f60162d4a7dc40aadfcb892b2b3e58f0ea409","gitBlobSha":"8e6eb28b317ed30fe52f85b9d13dae36722ae506","mode":"100644","operation":"modify","path":"music_app/services/track_preferences_postgres.py","sha256":"70b954107b388383a53f12b94d92870677d140e606c3ff443caebdf68aff1074"},{"baseBytes":181262,"baseSha256":"4a0b251dc8bed26384e40fc7f67280262ab3b0ea64fe6257897fb64853e4a3c1","bytes":181226,"expectedBaseBlobSha":"f681c7ac78b96d6746effdfed3be7171ec058c62","gitBlobSha":"6390415c6a3a1835ea7bcdecbcb812654910756c","mode":"100644","operation":"modify","path":"scripts/migrate_app_data_to_postgres.py","sha256":"7f3d37f026ed31a33dc741bc637d3f239978eef000b46f84580ff744f8462702"},{"baseBytes":9061,"baseSha256":"def286c48f1bc4016f7654255f43be3bbddae24a2dc1e9c0268d20eb065ad05e","bytes":9063,"expectedBaseBlobSha":"fe1f50508f2c38d2803c1d0e9d5c237b4b779d1e","gitBlobSha":"f86bcc1b3f7474772876d288008152e6ac9bb0e5","mode":"100644","operation":"modify","path":"tests/py/test_album_details.py","sha256":"1f3f283e86f98faf61f1508a1f443c5afb2e419b459f645d653f40ed73a17478"},{"baseBytes":175287,"baseSha256":"6f56f279cbece3b32958dd4a5fb5737f6b3e882245913643683c9c58f60821ae","bytes":176228,"expectedBaseBlobSha":"162407ceb5effe31a8c117dea6ab272dad75aa0c","gitBlobSha":"95b91fa77f5fc607cd91021ba4cbe9554c788ec3","mode":"100644","operation":"modify","path":"tests/py/test_api_read_asgi_routes.py","sha256":"11958f4a48291774efd36a8189e932b88136a48795ba9f57b9fa9e8b77774939"},{"baseBytes":88119,"baseSha256":"715b9ca3aefdee17ea66b04a57bb979d3fc6c393b090982b8a132ab4be186456","bytes":88337,"expectedBaseBlobSha":"05f3b0a609e97d6b37953c8e1a7e549782dd5eb9","gitBlobSha":"cdc9882210ae6162f8583ab0b3bd02896d5e1c5e","mode":"100644","operation":"modify","path":"tests/py/test_api_wave_b_asgi_routes.py","sha256":"0c0b0dc928c543802b13c688e80df227b8ad1bfa7017d63f28d49c8aa1e7a749"},{"baseBytes":480913,"baseSha256":"1c8e7544ec53d448bc55380c29e73bd3c6ea007fb7d5b9e0cc61824b65c3850d","bytes":480967,"expectedBaseBlobSha":"4611ae557c61d5191bf19b964beaed3c77af3518","gitBlobSha":"a9d4870e069aaf5fbd402f03e0b11d6b51c7a4b7","mode":"100644","operation":"modify","path":"tests/py/test_library_browse_postgres.py","sha256":"38dba588ca99600bc9785de73a6b47ccb9964ffc096c0351c555dadbc8f3adb9"},{"baseBytes":170505,"baseSha256":"db08c4f136c0c602a0567e5d7a163930a0de7637c6e0f990b9ceefd3aa1d91db","bytes":170522,"expectedBaseBlobSha":"993fcf053eafd09666d7cd47143fbeb1ca7cea71","gitBlobSha":"468c9dbcac662f247142890825346ad5499d1d1b","mode":"100644","operation":"modify","path":"tests/py/test_migrate_app_data_to_postgres.py","sha256":"844458ac46595906fa0843a31d60e70ee33b19e530744a027e2b4cf90acc69da"},{"baseBytes":116849,"baseSha256":"fecfd43c2e31671ab8aa7a0e3831f55d43b123961c90dc41cff15d7f2d2d2945","bytes":116904,"expectedBaseBlobSha":"62cf86398bd45c472179368a035dace73d148087","gitBlobSha":"7b7dd0a238a51e4a93ec8955317e31f0e1defa19","mode":"100644","operation":"modify","path":"tests/py/test_postgres_migrations.py","sha256":"ce9d62834dd980148a866c2f97b0a667a211b3c7c8ee8ab4e5d65b7f5d5c1fd2"},{"bytes":19029,"gitBlobSha":"b78a798de506d3a5222f38b2b8df713f30dda3fb","mode":"100644","operation":"add","path":"tests/py/test_track_preferences_postgres.py","sha256":"8c40b2b0078a38f0fb2ae7b94a3d9c8035d051aaccdae0647a4128cd879f0c0c"},{"bytes":24405,"gitBlobSha":"d641eb3770d55d8e58aa3daf15bc6103ebd60b49","mode":"100644","operation":"add","path":"tests/py/test_track_preferences_scoped_asgi.py","sha256":"a3b29b0622ad1d470b52df90ecc05c842532274480c83bed35337636a3550e4e"},{"baseBytes":17174,"baseSha256":"d3f9d8749e99619300a0008c2ba3c84286682893e52a12e0c7205914577f7292","bytes":4422,"expectedBaseBlobSha":"9e680da0af9102c754686307b562cc6f86486070","gitBlobSha":"031491b45d683a7a632b008fcce100def74864b3","mode":"100644","operation":"modify","path":"tests/py/test_track_preferences_store.py","sha256":"c1aed2e482976533b070d20472f2c9389d9160a278bf763e5e9d698fbc38f2b3"},{"bytes":10097,"gitBlobSha":"c1d830299b033a7294ce01faafffd8d6a9468f36","mode":"100644","operation":"add","path":"tests/py/test_track_taste_album_details.py","sha256":"dd0f2742094bb293d77e2cdbb3274ba467febca2e34532f7c55b0a1b7184b4cb"},{"bytes":7428,"gitBlobSha":"7b93a2858d3e8a26af6382197b6e5744eb88153c","mode":"100644","operation":"add","path":"tests/py/test_track_taste_migration_live.py","sha256":"6a22ea9152fb919af5e17ed3e9a72ae3bb9a0c63f8f808ab9b1318800e1d6013"},{"bytes":18959,"gitBlobSha":"fae6fa79c39769103a7ae1f219026279f18539b5","mode":"100644","operation":"add","path":"tests/py/track_taste_testing.py","sha256":"e27a21a0b552b9634f0e11e3728edf98f6d07575f596390548ebdafaae7ee79c"}],"finalTree":"d5c7743acc5cefbba7fc4ac045129833ce20876b","helperBase":"a4a0ff8b0ca82318935c8610ce6fe5e100451f5c","helperBaseTree":"0fa6fbae12c02d1e1229946d31d646bd7170c292","helperBranch":"2026-09-30-mobile-bundle-transfer","independentReceiptSha256":"651caad4ad951c9095f6cf37fd52de2f104731353c727404b8e21ec24cc39ca6","mainHead":"eef9d13fd5dbd2cda3485e3c308c8494ba7d6fd4","proposalSha256":"b5025fcbe0104d84181ec17daca0861a45ee2bc048a9ddf54cea3335ef32b8ca","publicFilesSha256":"0703803966d40e297280061b7eb185b5962767e311bab5a280fee2ee5de4e1c3","remote":"https://github.com/idanilovqa/AlbumHaven.git","repository":"idanilovqa/AlbumHaven","repositoryPrivate":false,"runtimeManifestSha256":"a8a92e75279cdc00a86b4e2509f8813c717ef7ababc50aa346e804ee6aca7e8f","schemaVersion":4,"scopeLabel":"scoped-track-taste","secondIndependentReceiptSha256":"ac86101f4fd71ca378a809b216eb392be0e9f5a28a7532d4102a42fa303d3ab0","targetBranch":"2026-09-30-friends-listening-home","targetHead":"d644d9bc9ba7ee8d6037f4807bfa9dbfc69469de","testManifestSha256":"8276c295b69a80fbe8cc8525ef6d3affbafd2e3159480758d5c65257da8f83f6","workflowPath":".github/workflows/verified-scoped-track-taste.yml"}\n')
+
+          environment = os.environ
+          event = json.loads(Path(environment["GITHUB_EVENT_PATH"]).read_text())
+          verify_event(PLAN, environment, event)
+          token = environment.get("GH_TOKEN")
+          require(bool(token), "transient repository token missing")
+          repo = Path(environment["GITHUB_WORKSPACE"]) / "target"
+          temporary = Path(environment["RUNNER_TEMP"])
+
+          # The retained helper and target are divergent histories. Fetch the exact target
+          # read-only; do not assume checkout's helper ancestry contains its objects.
+          git(repo, "fetch", "--no-tags", "--no-recurse-submodules", PLAN["remote"], PLAN["targetHead"], token=token)
+          payload, proof = validate_transport(repo, PLAN, environment, event, token)
+          write_validation_output(payload, proof, temporary / "taste-validated")
+          with open(environment["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
+              output.write("proof_sha256=" + sha256(proof) + "\n")
+          print("Verified " + str(len(PLAN["files"])) + " frozen files and all target/ancestry guards; artifact prepared.")
+
+      - uses: actions/upload-artifact@v4
+        id: upload
+        with:
+          name: scoped-track-taste-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/taste-validated/
+          if-no-files-found: error
+          retention-days: 7
+          compression-level: 0
+          overwrite: false
+  publish:
+    needs: validate
+    if: needs.validate.result == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: d644d9bc9ba7ee8d6037f4807bfa9dbfc69469de
+          path: target
+          fetch-depth: 1
+          persist-credentials: false
+          submodules: false
+          lfs: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - uses: actions/download-artifact@v4
+        with:
+          artifact-ids: ${{ needs.validate.outputs.artifact_id }}
+          path: ${{ runner.temp }}/taste-downloaded
+          merge-multiple: true
+      - name: Verify artifact and publish one atomic scoped-taste commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ARTIFACT_ID: ${{ needs.validate.outputs.artifact_id }}
+          PROOF_SHA256: ${{ needs.validate.outputs.proof_sha256 }}
+        shell: python
+        run: |
+          import base64
+          import binascii
+          import hashlib
+          import io
+          import json
+          import os
+          from pathlib import Path, PurePosixPath
+          import re
+          import stat
+          import subprocess
+          import sys
+          import tarfile
+          SCOPES = {'idanilovqa/AlbumHaven': {'private': False, 'count': 22, 'helper': '2026-09-30-mobile-bundle-transfer', 'label': 'scoped-track-taste', 'finalTree': 'd5c7743acc5cefbba7fc4ac045129833ce20876b', 'targetHead': 'd644d9bc9ba7ee8d6037f4807bfa9dbfc69469de', 'baseTree': '356b0de2104785867b5eead544a1aa027e750e4a', 'mainHead': 'eef9d13fd5dbd2cda3485e3c308c8494ba7d6fd4', 'helperBase': 'a4a0ff8b0ca82318935c8610ce6fe5e100451f5c', 'helperBaseTree': '0fa6fbae12c02d1e1229946d31d646bd7170c292', 'files': [{'path': 'migrations/postgres/0081_scope_track_preferences_by_library.sql', 'operation': 'add', 'mode': '100644', 'bytes': 360, 'sha256': '90e9ebdc18257df4f85df8da2a6e312fdda81b844dfed6f856792d345eed1d23', 'gitBlobSha': 'f2b8f113fb6d7af8ed03104fe928cc65ee57d6ae'}, {'path': 'music_app/routes/api_read_asgi_routes.py', 'operation': 'modify', 'mode': '100644', 'bytes': 51538, 'sha256': 'c5c021727364b5dfba7d747f3aae4276fff958adf36ff1cc4c3c07d450dd5b4c', 'gitBlobSha': 'e14f9e657ff10ccc66de717e894e01a94e07ac78', 'expectedBaseBlobSha': '6c3a0cefd601e0eb7d113558a6bf1f2fb32c5c16', 'baseBytes': 50036, 'baseSha256': '529a400ac10c8f594f0c6324dc695c2b3defa0b94ef94b225abe18ef631901fa'}, {'path': 'music_app/routes/api_wave_b_asgi_routes.py', 'operation': 'modify', 'mode': '100644', 'bytes': 46193, 'sha256': '9f60f583ce9012975c57899b9f49e01461bf6eeae78899744f57e661d3eab015', 'gitBlobSha': 'dc7e53e6de26356406bad7694cd83eae956a5b2e', 'expectedBaseBlobSha': '4aec3cd115dba888cd3a1bc1e020d1f7f93724fa', 'baseBytes': 44793, 'baseSha256': '07d52e8cd8aebf1434e5ad981bab47de2ef293be019640fa1b93e7698d009d00'}, {'path': 'music_app/services/album_details.py', 'operation': 'modify', 'mode': '100644', 'bytes': 11307, 'sha256': '26345b048d4605e528aa57dd3510beb69a1c106bac749741efb058e2b60a2c7a', 'gitBlobSha': '8784f41fcb8d8c62f3e260f851f564a0f780fc4e', 'expectedBaseBlobSha': 'c2442a5911a4a2f399842ac810e3dba973819a72', 'baseBytes': 9273, 'baseSha256': 'c27e2d8cfc53769bbd1b519c59aff56ef573472d57a57a46a63460aaebc19083'}, {'path': 'music_app/services/library_browse_postgres.py', 'operation': 'modify', 'mode': '100644', 'bytes': 326293, 'sha256': '0984b283b91105d1c50773f92797badf257043f4e5427bdab373ddc259f09bee', 'gitBlobSha': '5e98661a5f5919371e180f1c74273b441cc2ff86', 'expectedBaseBlobSha': '26734a38bc955c8762e7222cbf914b33af7587a5', 'baseBytes': 326596, 'baseSha256': 'a641cd405497fec5e8839c5568ef1bb791db97a4ffa16c9c461dedd51fa7b9cb'}, {'path': 'music_app/services/library_inventory_postgres.py', 'operation': 'modify', 'mode': '100644', 'bytes': 18854, 'sha256': '3f69ff43dd3898dde75ad540b007dc1830fb364389fd9de76a9dc211daea3a8a', 'gitBlobSha': 'd1f9e944a8e1b568c08964a1a4590bd24d38330e', 'expectedBaseBlobSha': '0ba8954f7cea82b2465700fdd5111d5bef535401', 'baseBytes': 18297, 'baseSha256': 'f135ca6a0312e5b24839d9da026c93e13d5cb228413188244f14cbb3d74b72cc'}, {'path': 'music_app/services/private_route_boundary.py', 'operation': 'modify', 'mode': '100644', 'bytes': 21390, 'sha256': 'ce0ac3e41a88d28ffd0d666a5f01f9df86c531058eab4bfc9b4a2d99fc6b62bd', 'gitBlobSha': '092261fc9207eebfef99a96f6191a85d593238b7', 'expectedBaseBlobSha': '5a442ce0b062dc805d94344592e8edd1e7df514e', 'baseBytes': 21141, 'baseSha256': 'b429e4473f0338df43e02fbcc0605153760b129b16053571941e5118132f0d53'}, {'path': 'music_app/services/track_preferences.py', 'operation': 'modify', 'mode': '100644', 'bytes': 11499, 'sha256': '231c1af3045274cac9f3d85952c63b03c58547c576287e3166bee191087c3b21', 'gitBlobSha': '86cbc816d84a86ab0871a4f7e3b9764617feaa15', 'expectedBaseBlobSha': '5ab3f65ad618c992560fdfbdfc9be97f668df35d', 'baseBytes': 12143, 'baseSha256': 'eed0594bc194ecab62e1b7a80058019a247bace05eb8889540caba4f4e027c11'}, {'path': 'music_app/services/track_preferences_postgres.py', 'operation': 'modify', 'mode': '100644', 'bytes': 12882, 'sha256': '70b954107b388383a53f12b94d92870677d140e606c3ff443caebdf68aff1074', 'gitBlobSha': '8e6eb28b317ed30fe52f85b9d13dae36722ae506', 'expectedBaseBlobSha': 'cb9f60162d4a7dc40aadfcb892b2b3e58f0ea409', 'baseBytes': 8804, 'baseSha256': 'afdfb0c1648ce37cf6612204abe8eebc9986a7770d5ba754a09093c4db827d63'}, {'path': 'scripts/migrate_app_data_to_postgres.py', 'operation': 'modify', 'mode': '100644', 'bytes': 181226, 'sha256': '7f3d37f026ed31a33dc741bc637d3f239978eef000b46f84580ff744f8462702', 'gitBlobSha': '6390415c6a3a1835ea7bcdecbcb812654910756c', 'expectedBaseBlobSha': 'f681c7ac78b96d6746effdfed3be7171ec058c62', 'baseBytes': 181262, 'baseSha256': '4a0b251dc8bed26384e40fc7f67280262ab3b0ea64fe6257897fb64853e4a3c1'}, {'path': 'tests/py/test_album_details.py', 'operation': 'modify', 'mode': '100644', 'bytes': 9063, 'sha256': '1f3f283e86f98faf61f1508a1f443c5afb2e419b459f645d653f40ed73a17478', 'gitBlobSha': 'f86bcc1b3f7474772876d288008152e6ac9bb0e5', 'expectedBaseBlobSha': 'fe1f50508f2c38d2803c1d0e9d5c237b4b779d1e', 'baseBytes': 9061, 'baseSha256': 'def286c48f1bc4016f7654255f43be3bbddae24a2dc1e9c0268d20eb065ad05e'}, {'path': 'tests/py/test_api_read_asgi_routes.py', 'operation': 'modify', 'mode': '100644', 'bytes': 176228, 'sha256': '11958f4a48291774efd36a8189e932b88136a48795ba9f57b9fa9e8b77774939', 'gitBlobSha': '95b91fa77f5fc607cd91021ba4cbe9554c788ec3', 'expectedBaseBlobSha': '162407ceb5effe31a8c117dea6ab272dad75aa0c', 'baseBytes': 175287, 'baseSha256': '6f56f279cbece3b32958dd4a5fb5737f6b3e882245913643683c9c58f60821ae'}, {'path': 'tests/py/test_api_wave_b_asgi_routes.py', 'operation': 'modify', 'mode': '100644', 'bytes': 88337, 'sha256': '0c0b0dc928c543802b13c688e80df227b8ad1bfa7017d63f28d49c8aa1e7a749', 'gitBlobSha': 'cdc9882210ae6162f8583ab0b3bd02896d5e1c5e', 'expectedBaseBlobSha': '05f3b0a609e97d6b37953c8e1a7e549782dd5eb9', 'baseBytes': 88119, 'baseSha256': '715b9ca3aefdee17ea66b04a57bb979d3fc6c393b090982b8a132ab4be186456'}, {'path': 'tests/py/test_library_browse_postgres.py', 'operation': 'modify', 'mode': '100644', 'bytes': 480967, 'sha256': '38dba588ca99600bc9785de73a6b47ccb9964ffc096c0351c555dadbc8f3adb9', 'gitBlobSha': 'a9d4870e069aaf5fbd402f03e0b11d6b51c7a4b7', 'expectedBaseBlobSha': '4611ae557c61d5191bf19b964beaed3c77af3518', 'baseBytes': 480913, 'baseSha256': '1c8e7544ec53d448bc55380c29e73bd3c6ea007fb7d5b9e0cc61824b65c3850d'}, {'path': 'tests/py/test_migrate_app_data_to_postgres.py', 'operation': 'modify', 'mode': '100644', 'bytes': 170522, 'sha256': '844458ac46595906fa0843a31d60e70ee33b19e530744a027e2b4cf90acc69da', 'gitBlobSha': '468c9dbcac662f247142890825346ad5499d1d1b', 'expectedBaseBlobSha': '993fcf053eafd09666d7cd47143fbeb1ca7cea71', 'baseBytes': 170505, 'baseSha256': 'db08c4f136c0c602a0567e5d7a163930a0de7637c6e0f990b9ceefd3aa1d91db'}, {'path': 'tests/py/test_postgres_migrations.py', 'operation': 'modify', 'mode': '100644', 'bytes': 116904, 'sha256': 'ce9d62834dd980148a866c2f97b0a667a211b3c7c8ee8ab4e5d65b7f5d5c1fd2', 'gitBlobSha': '7b7dd0a238a51e4a93ec8955317e31f0e1defa19', 'expectedBaseBlobSha': '62cf86398bd45c472179368a035dace73d148087', 'baseBytes': 116849, 'baseSha256': 'fecfd43c2e31671ab8aa7a0e3831f55d43b123961c90dc41cff15d7f2d2d2945'}, {'path': 'tests/py/test_track_preferences_postgres.py', 'operation': 'add', 'mode': '100644', 'bytes': 19029, 'sha256': '8c40b2b0078a38f0fb2ae7b94a3d9c8035d051aaccdae0647a4128cd879f0c0c', 'gitBlobSha': 'b78a798de506d3a5222f38b2b8df713f30dda3fb'}, {'path': 'tests/py/test_track_preferences_scoped_asgi.py', 'operation': 'add', 'mode': '100644', 'bytes': 24405, 'sha256': 'a3b29b0622ad1d470b52df90ecc05c842532274480c83bed35337636a3550e4e', 'gitBlobSha': 'd641eb3770d55d8e58aa3daf15bc6103ebd60b49'}, {'path': 'tests/py/test_track_preferences_store.py', 'operation': 'modify', 'mode': '100644', 'bytes': 4422, 'sha256': 'c1aed2e482976533b070d20472f2c9389d9160a278bf763e5e9d698fbc38f2b3', 'gitBlobSha': '031491b45d683a7a632b008fcce100def74864b3', 'expectedBaseBlobSha': '9e680da0af9102c754686307b562cc6f86486070', 'baseBytes': 17174, 'baseSha256': 'd3f9d8749e99619300a0008c2ba3c84286682893e52a12e0c7205914577f7292'}, {'path': 'tests/py/test_track_taste_album_details.py', 'operation': 'add', 'mode': '100644', 'bytes': 10097, 'sha256': 'dd0f2742094bb293d77e2cdbb3274ba467febca2e34532f7c55b0a1b7184b4cb', 'gitBlobSha': 'c1d830299b033a7294ce01faafffd8d6a9468f36'}, {'path': 'tests/py/test_track_taste_migration_live.py', 'operation': 'add', 'mode': '100644', 'bytes': 7428, 'sha256': '6a22ea9152fb919af5e17ed3e9a72ae3bb9a0c63f8f808ab9b1318800e1d6013', 'gitBlobSha': '7b93a2858d3e8a26af6382197b6e5744eb88153c'}, {'path': 'tests/py/track_taste_testing.py', 'operation': 'add', 'mode': '100644', 'bytes': 18959, 'sha256': 'e27a21a0b552b9634f0e11e3728edf98f6d07575f596390548ebdafaae7ee79c', 'gitBlobSha': 'fae6fa79c39769103a7ae1f219026279f18539b5'}], 'proposalSha256': 'b5025fcbe0104d84181ec17daca0861a45ee2bc048a9ddf54cea3335ef32b8ca', 'publicFilesSha256': '0703803966d40e297280061b7eb185b5962767e311bab5a280fee2ee5de4e1c3', 'runtimeManifestSha256': 'a8a92e75279cdc00a86b4e2509f8813c717ef7ababc50aa346e804ee6aca7e8f', 'testManifestSha256': '8276c295b69a80fbe8cc8525ef6d3affbafd2e3159480758d5c65257da8f83f6', 'independentReceiptSha256': '651caad4ad951c9095f6cf37fd52de2f104731353c727404b8e21ec24cc39ca6', 'secondIndependentReceiptSha256': 'ac86101f4fd71ca378a809b216eb392be0e9f5a28a7532d4102a42fa303d3ab0'}}
+          class Rejected(RuntimeError):
+              pass
+          def require(condition, message):
+              if not condition:
+                  raise Rejected(message)
+          def sha256(data):
+              return hashlib.sha256(data).hexdigest()
+          def git_blob(data):
+              return hashlib.sha1(b"blob " + str(len(data)).encode() + b"\0" + data).hexdigest()
+          def canonical_json(value):
+              return (json.dumps(value, sort_keys=True, separators=(",", ":")) + "\n").encode()
+          def canonical_path(path):
+              require(isinstance(path, str) and bool(path), "empty/non-string path")
+              require(re.fullmatch(r"[A-Za-z0-9._/-]+", path) is not None, "unsafe path characters")
+              require(not path.startswith("/") and str(PurePosixPath(path)) == path, "noncanonical path")
+              require(all(p not in ("", ".", "..", ".git") for p in path.split("/")), "unsafe path component")
+              return path
+          def verify_bytes(data, record):
+              require(len(data) == record["bytes"], "size mismatch: " + record["path"])
+              require(sha256(data) == record["sha256"], "SHA-256 mismatch: " + record["path"])
+              require(git_blob(data) == record["gitBlobSha"], "Git blob mismatch: " + record["path"])
+          def deterministic_tar(files):
+              output = io.BytesIO()
+              with tarfile.open(fileobj=output, mode="w", format=tarfile.USTAR_FORMAT) as archive:
+                  for path, data in sorted(files.items()):
+                      member = tarfile.TarInfo(canonical_path(path))
+                      member.size = len(data)
+                      member.mode = 0o644
+                      member.type = tarfile.REGTYPE
+                      archive.addfile(member, io.BytesIO(data))
+              return output.getvalue()
+          def verify_scope(plan):
+              repository = plan.get("repository")
+              require(repository in SCOPES, "unreviewed repository")
+              scope = SCOPES[repository]
+              require(plan.get("repositoryPrivate") is scope["private"], "wrong repository visibility")
+              require(plan.get("targetBranch") == "2026-09-30-friends-listening-home", "wrong target branch")
+              require(plan.get("helperBranch") == scope["helper"], "wrong helper branch")
+              require(plan.get("scopeLabel") == scope["label"], "wrong helper scope label")
+              require(plan.get("workflowPath") == ".github/workflows/verified-scoped-track-taste.yml", "wrong workflow path")
+              require(plan.get("chunkPrefix") == ".implementation-transfer/scoped-track-taste-20261004", "wrong chunk namespace")
+              require(plan.get("remote") == "https://github.com/" + repository + ".git", "wrong remote")
+              for key in ("finalTree", "targetHead", "baseTree", "mainHead", "helperBase", "helperBaseTree", "proposalSha256",
+                          "publicFilesSha256", "runtimeManifestSha256", "testManifestSha256", "independentReceiptSha256", "secondIndependentReceiptSha256"):
+                  require(plan.get(key) == scope[key], "wrong reviewed " + key)
+              return scope
+          def verify_archive(payload, plan):
+              scope = verify_scope(plan)
+              require(len(payload) == plan["archiveBytes"], "archive size mismatch")
+              require(sha256(payload) == plan["archiveSha256"], "archive SHA-256 mismatch")
+              expected = {canonical_path(r["path"]): r for r in plan["files"]}
+              require(len(expected) == len(plan["files"]) == scope["count"], "wrong unique helper file count")
+              require(plan["files"] == scope["files"], "modified-file records differ from reviewed original/final identities")
+              require(sum(r.get("operation") == "modify" for r in plan["files"]) == 16 and
+                      sum(r.get("operation") == "add" for r in plan["files"]) == 6, "wrong reviewed modification/addition counts")
+              for record in plan["files"]:
+                  require(record.get("mode") == "100644" and "binary" not in record, "only reviewed regular UTF-8 files allowed")
+                  base_keys = ("expectedBaseBlobSha", "baseBytes", "baseSha256")
+                  if record["operation"] == "modify":
+                      require(all(record.get(key) for key in base_keys), "modification lacks original identity")
+                  else:
+                      require(record["operation"] == "add" and not any(key in record for key in base_keys), "addition carries original identity")
+              files = {}
+              try:
+                  with tarfile.open(fileobj=io.BytesIO(payload), mode="r:") as archive:
+                      for member in archive:
+                          path = canonical_path(member.name)
+                          require(path in expected and path not in files, "extra or duplicate archive path")
+                          require(member.type == tarfile.REGTYPE and not member.pax_headers, "nonregular archive member")
+                          require(member.mode == 0o644 and member.uid == member.gid == member.mtime == 0,
+                                  "unexpected archive metadata")
+                          require(not member.uname and not member.gname and not member.linkname, "unexpected archive name/link")
+                          require(member.size == expected[path]["bytes"], "archive member size mismatch")
+                          data = archive.extractfile(member).read()
+                          verify_bytes(data, expected[path])
+                          try:
+                              text = data.decode("utf-8", errors="strict")
+                          except UnicodeError as exc:
+                              raise Rejected("repair payload is not UTF-8") from exc
+                          require(text.encode("utf-8") == data and "\0" not in text, "non-text repair payload")
+                          files[path] = data
+              except (tarfile.TarError, OSError) as exc:
+                  raise Rejected("invalid tar archive") from exc
+              require(set(files) == set(expected), "missing archive paths")
+              require(deterministic_tar(files) == payload, "noncanonical archive or trailing data")
+              return files
+          def git_env(token=None):
+              # Do not inherit configuration that could redirect a remote, a hook or object store.
+              env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
+              env.update(GIT_CONFIG_NOSYSTEM="1", GIT_CONFIG_GLOBAL="/dev/null", GIT_TERMINAL_PROMPT="0")
+              if token:
+                  auth = base64.b64encode(("x-access-token:" + token).encode()).decode()
+                  env.update(GIT_CONFIG_COUNT="1", GIT_CONFIG_KEY_0="http.https://github.com/.extraheader",
+                             GIT_CONFIG_VALUE_0="AUTHORIZATION: basic " + auth)
+              return env
+          def git(repo, *args, data=None, token=None, hooks=None):
+              command = ["git", "-c", "core.hooksPath=" + (str(hooks) if hooks else "/dev/null"),
+                         "-c", "core.autocrlf=false", "-c", "commit.gpgsign=false", "-C", str(repo), *args]
+              result = subprocess.run(command, input=data, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                      env=git_env(token), check=False)
+              require(result.returncode == 0, "git operation failed: " + args[0] + "; inspect, do not retry automatically")
+              return result.stdout
+          def git_tree(repo, revision):
+              result = {}
+              for line in git(repo, "ls-tree", "-rz", revision).split(b"\0"):
+                  if not line:
+                      continue
+                  metadata, path = line.split(b"\t", 1)
+                  mode, kind, oid = metadata.decode().split()
+                  result[path.decode("utf-8")] = (mode, kind, oid)
+              return result
+          def diff_records(repo, old, new=None, cached=False):
+              args = ["diff", "--raw", "--no-abbrev", "--no-renames", "-z"]
+              if cached:
+                  args.append("--cached")
+              args.append(old)
+              if new:
+                  args.append(new)
+              pieces = git(repo, *args).split(b"\0")
+              require(pieces.pop() == b"", "invalid diff framing")
+              require(len(pieces) % 2 == 0, "invalid diff shape")
+              result = {}
+              for metadata, path in zip(pieces[::2], pieces[1::2]):
+                  oldmode, newmode, oldoid, newoid, operation = metadata.decode().split()
+                  name = path.decode("utf-8")
+                  require(name not in result, "duplicate diff path")
+                  result[name] = (oldmode.lstrip(":"), newmode, oldoid, newoid, operation)
+              return result
+          def expected_changes(records):
+              return {r["path"]: ("100644" if r.get("expectedBaseBlobSha") else "000000", "100644",
+                                  r.get("expectedBaseBlobSha", "0" * 40), r["gitBlobSha"],
+                                  "M" if r.get("expectedBaseBlobSha") else "A") for r in records}
+          def verify_target_base(repo, plan):
+              head = plan["targetHead"]
+              require(git(repo, "rev-parse", head + "^{tree}").decode().strip() == plan["baseTree"], "base tree changed")
+              tree = git_tree(repo, head)
+              for record in plan["files"]:
+                  path = record["path"]
+                  canonical_path(path)
+                  for parent in PurePosixPath(path).parents:
+                      require(str(parent) not in tree, "target path has a non-directory ancestor")
+                  if "expectedBaseBlobSha" in record:
+                      require(tree.get(path) == ("100644", "blob", record["expectedBaseBlobSha"]), "original target blob changed")
+                      old = git(repo, "cat-file", "blob", head + ":" + path)
+                      require(len(old) == record["baseBytes"] and sha256(old) == record["baseSha256"], "original target bytes changed")
+                  else:
+                      require(path not in tree and not any(p.startswith(path + "/") for p in tree), "new target path already exists")
+          def verify_event(plan, environment, event):
+              scope = verify_scope(plan)
+              require(environment.get("GITHUB_EVENT_NAME") == "push", "not a push event")
+              require(environment.get("GITHUB_REPOSITORY") == plan["repository"], "wrong repository")
+              require(environment.get("GITHUB_REF") == "refs/heads/" + plan["helperBranch"], "wrong helper ref")
+              require(environment.get("GITHUB_RUN_ATTEMPT") == "1", "reruns require investigation; automatic replay is disabled")
+              require(re.fullmatch(r"[1-9][0-9]*", environment.get("GITHUB_RUN_ID", "")) is not None, "invalid run id")
+              parent = environment.get("HELPER_PARENT", "")
+              require(re.fullmatch(r"[0-9a-f]{40}", parent) is not None, "helper parent is not bound")
+              require(re.fullmatch(r"[0-9a-f]{40}", environment.get("GITHUB_SHA", "")) is not None, "invalid trigger SHA")
+              require(event.get("ref") == environment["GITHUB_REF"], "event ref mismatch")
+              require(event.get("before") == parent and event.get("after") == environment["GITHUB_SHA"], "event ancestry mismatch")
+              require(all(event.get(key) is False for key in ("forced", "deleted", "created")), "forced/create/delete push rejected")
+              require(event.get("repository", {}).get("full_name") == plan["repository"] and
+                      event["repository"].get("private") is scope["private"], "event repository/private guard failed")
+              return parent
+          def remote_oid(repo, plan, token, branch=None):
+              selected = plan["targetBranch"] if branch is None else branch
+              require(selected in (plan["targetBranch"], "main"), "unreviewed read ref")
+              ref = "refs/heads/" + selected
+              lines = git(repo, "ls-remote", "--exit-code", plan["remote"], ref, token=token).decode().splitlines()
+              require(len(lines) == 1, "target ref is missing or ambiguous")
+              parts = lines[0].split("\t")
+              require(len(parts) == 2 and parts[1] == ref and re.fullmatch(r"[0-9a-f]{40}", parts[0]), "invalid remote ref")
+              return parts[0]
+          def require_remote_base(repo, plan, token):
+              require(remote_oid(repo, plan, token) == plan["targetHead"], "target branch moved; stop and inspect")
+              require(remote_oid(repo, plan, token, "main") == plan["mainHead"], "main advanced; reconcile migration and source guards")
+          def proof_for(plan, environment):
+              return {"schemaVersion": 1, "repository": plan["repository"], "targetBranch": plan["targetBranch"],
+                      "targetHead": plan["targetHead"], "baseTree": plan["baseTree"], "finalTree": plan["finalTree"],
+                      "helperBase": plan["helperBase"], "helperBaseTree": plan["helperBaseTree"],
+                      "helperRef": environment["GITHUB_REF"], "helperParent": environment["HELPER_PARENT"],
+                      "triggerSha": environment["GITHUB_SHA"], "runId": environment["GITHUB_RUN_ID"],
+                      "runAttempt": environment["GITHUB_RUN_ATTEMPT"], "planSha256": sha256(canonical_json(plan)),
+                      "proposalSha256": plan["proposalSha256"], "publicFilesSha256": plan["publicFilesSha256"],
+                      "runtimeManifestSha256": plan["runtimeManifestSha256"], "testManifestSha256": plan["testManifestSha256"],
+                      "mainHead": plan["mainHead"],
+                      "independentReceiptSha256": plan["independentReceiptSha256"],
+                      "secondIndependentReceiptSha256": plan["secondIndependentReceiptSha256"],
+                      "archiveSha256": plan["archiveSha256"], "files": plan["files"]}
+          def verify_artifact(folder, plan, environment, proof_hash):
+              require(folder.is_dir() and not folder.is_symlink(), "artifact root is not a regular directory")
+              entries = list(folder.iterdir())
+              require({p.name for p in entries} == {"payload.tar", "proof.json"}, "artifact file set mismatch")
+              require(all(stat.S_ISREG(p.lstat().st_mode) for p in entries), "artifact contains nonregular files")
+              proof = (folder / "proof.json").read_bytes()
+              require(sha256(proof) == proof_hash, "artifact proof hash mismatch")
+              require(proof == canonical_json(proof_for(plan, environment)), "artifact proof belongs to another plan/run/attempt")
+              return verify_archive((folder / "payload.tar").read_bytes(), plan)
+          def verify_staged(repo, plan):
+              require(diff_records(repo, plan["targetHead"], cached=True) == expected_changes(plan["files"]), "staged path/mode/blob set mismatch")
+              require(git(repo, "write-tree").decode().strip() == plan["finalTree"], "complete staged tree mismatch")
+          def stage_reviewed_files(repo, files, plan):
+              require(git(repo, "rev-parse", "HEAD").decode().strip() == plan["targetHead"], "checkout is not pinned target")
+              require(git(repo, "status", "--porcelain=v1", "-z", "--untracked-files=all") == b"", "target checkout is not clean")
+              require(git(repo, "ls-files", "--others", "-z") == b"", "target checkout has untracked or ignored files")
+              verify_target_base(repo, plan)
+              require(set(files) == {r["path"] for r in plan["files"]}, "write path set mismatch")
+              # Validate all data and every existing ancestor before writing any reviewed file.
+              for record in plan["files"]:
+                  verify_bytes(files[record["path"]], record)
+                  current = repo
+                  for component in PurePosixPath(record["path"]).parts[:-1]:
+                      current /= component
+                      if current.exists() or current.is_symlink():
+                          require(stat.S_ISDIR(current.lstat().st_mode), "unsafe destination ancestor")
+                  destination = repo / record["path"]
+                  if "expectedBaseBlobSha" in record:
+                      require(destination.exists() and stat.S_ISREG(destination.lstat().st_mode), "nonregular original destination")
+                      original = destination.read_bytes()
+                      require(len(original) == record["baseBytes"] and sha256(original) == record["baseSha256"], "original worktree bytes changed")
+                  else:
+                      require(not destination.exists() and not destination.is_symlink(), "new destination already exists")
+              for record in plan["files"]:
+                  path = record["path"]
+                  destination = repo / path
+                  destination.parent.mkdir(parents=True, exist_ok=True)
+                  destination.write_bytes(files[path])
+                  destination.chmod(0o644)
+                  # Bypass attributes, filters and line ending transforms to preserve frozen bytes.
+                  oid = git(repo, "hash-object", "-w", "--stdin", data=files[path]).decode().strip()
+                  require(oid == record["gitBlobSha"], "written blob changed")
+                  git(repo, "update-index", "--add", "--cacheinfo", "100644," + oid + "," + path)
+              verify_staged(repo, plan)
+          def pre_push_source(plan, commit):
+              # This is the only installed hook. Git passes its own advertised old OID on stdin.
+              expected = [commit, commit, "refs/heads/" + plan["targetBranch"], plan["targetHead"]]
+              return ("#!/usr/bin/env python3\nimport sys\n"
+                      + "expected = " + repr(expected) + "\n"
+                      + "destination = " + repr(plan["remote"]) + "\n"
+                      + "rows = [line.split() for line in sys.stdin.read().splitlines()]\n"
+                      + "if sys.argv[1:] != [destination, destination] or rows != [expected]:\n"
+                      + "    sys.stderr.write('Rejected changed target/ref/commit at pre-push; inspect, do not retry\\n')\n"
+                      + "    sys.exit(1)\n")
+          def commit_reviewed(repo, plan):
+              verify_staged(repo, plan)
+              message = "Implement actor and library scoped track preferences"
+              git(repo, "-c", "user.name=github-actions[bot]", "-c",
+                  "user.email=41898282+github-actions[bot]@users.noreply.github.com", "commit", "-m", message)
+              commit = git(repo, "rev-parse", "HEAD").decode().strip()
+              require(git(repo, "rev-list", "--parents", "-n", "1", commit).decode().split() == [commit, plan["targetHead"]], "unexpected publication parent")
+              require(diff_records(repo, plan["targetHead"], commit) == expected_changes(plan["files"]), "committed path/mode/blob mismatch")
+              require(git(repo, "rev-parse", commit + "^{tree}").decode().strip() == plan["finalTree"], "committed tree mismatch")
+              return commit
+          def push_once(repo, plan, commit, token, hooks):
+              require(not hooks.exists(), "hook directory already exists")
+              hooks.mkdir()
+              hook = hooks / "pre-push"
+              hook.write_text(pre_push_source(plan, commit), encoding="utf-8")
+              hook.chmod(0o700)
+              require_remote_base(repo, plan, token)
+              # A normal, single-ref non-force push. The hook pins the server's advertised old OID.
+              git(repo, "push", "--porcelain", plan["remote"], commit + ":refs/heads/" + plan["targetBranch"], token=token, hooks=hooks)
+              require(remote_oid(repo, plan, token) == commit, "publication outcome uncertain; inspect remote, do not retry")
+              return commit
+          PLAN = json.loads('{"archiveBytes":1832960,"archiveSha256":"e5f7efaa86e3237afd125c509909db3ebb4e702e90e4a9ef1537a459240b98d3","baseTree":"356b0de2104785867b5eead544a1aa027e750e4a","chunkPrefix":".implementation-transfer/scoped-track-taste-20261004","chunks":[{"bytes":230001,"gitBlobSha":"af7f5d8994b7a39f33bfe93c4debefe0959e3f0d","path":".implementation-transfer/scoped-track-taste-20261004/part-001.b64","sha256":"fabf3b094e8e40641266d22f52b94a570d96e10b94e5a317ab4b594de8851a5d"},{"bytes":230001,"gitBlobSha":"0b02bfd564c2359b114aec42191c8a3eb7bc1c94","path":".implementation-transfer/scoped-track-taste-20261004/part-002.b64","sha256":"15a1c430cfd55d727e6861746b5798910be8bb90434203b49e8190164a514061"},{"bytes":230001,"gitBlobSha":"b432efa792f8f5096fa538497001c8ebdc79f35d","path":".implementation-transfer/scoped-track-taste-20261004/part-003.b64","sha256":"84cc52e7ab1d7b90c42395bd5d3b1a4c02e2e0407b301c68e8a5802be3fed40c"},{"bytes":230001,"gitBlobSha":"f4ee2437ba7b9bb07b4d3ab14e13d5b1fff129f5","path":".implementation-transfer/scoped-track-taste-20261004/part-004.b64","sha256":"d4ecb571b29b4202a77c68ad8ba9119dfe6e1c5dc9dc50ca6bd74c7e28fa2cfd"},{"bytes":230001,"gitBlobSha":"93aa07d187a6c7b16274a9598e9737bda696bc00","path":".implementation-transfer/scoped-track-taste-20261004/part-005.b64","sha256":"01cfbea492a04ed6f4d82ef2ba3cee66b3e84f8d7f36e5998a837966ed6d5486"},{"bytes":230001,"gitBlobSha":"99a8ceae578eae74153faf46e975b4b763cb4b49","path":".implementation-transfer/scoped-track-taste-20261004/part-006.b64","sha256":"cacd8c3e3f913d094fb57412887ecf464b7362567c96478643df072e3767ec01"},{"bytes":230001,"gitBlobSha":"9970bbd93f8f1ded95fe17ec0c89f3d3231c9f7b","path":".implementation-transfer/scoped-track-taste-20261004/part-007.b64","sha256":"47059b2a0cd8a74b2d097b820ff1e0a468833815c3751440866d6f5398843a93"},{"bytes":230001,"gitBlobSha":"b15aaa10231a1c0e926107a55a3bda50ef7eb62d","path":".implementation-transfer/scoped-track-taste-20261004/part-008.b64","sha256":"0d888122d1cae6cbc7b84cdbf27dc94bc89b5303266425b3b7dbed3b63a45c80"},{"bytes":230001,"gitBlobSha":"b73687ba2ffbd8b07a1c59f6ae53a9842415e9c1","path":".implementation-transfer/scoped-track-taste-20261004/part-009.b64","sha256":"fa04d2f10431f00c3237a5c9d684959ee08a899545b5ac57d3c681fc5963d69f"},{"bytes":230001,"gitBlobSha":"0b9e7a13a3e6537a0095c18483a01716dc572c1b","path":".implementation-transfer/scoped-track-taste-20261004/part-010.b64","sha256":"47b7761fb0e04d4cfcaea88ea550dc58ca098c33d6f5669d79cb3e99edfdf0bd"},{"bytes":143949,"gitBlobSha":"22742f3cfe25c99019c5db1ed27c7b893e54d105","path":".implementation-transfer/scoped-track-taste-20261004/part-011.b64","sha256":"6d93f8dce1d2af4c893ccb6b1e193f5def92f6200d4b8142bb99ccea336e4645"}],"files":[{"bytes":360,"gitBlobSha":"f2b8f113fb6d7af8ed03104fe928cc65ee57d6ae","mode":"100644","operation":"add","path":"migrations/postgres/0081_scope_track_preferences_by_library.sql","sha256":"90e9ebdc18257df4f85df8da2a6e312fdda81b844dfed6f856792d345eed1d23"},{"baseBytes":50036,"baseSha256":"529a400ac10c8f594f0c6324dc695c2b3defa0b94ef94b225abe18ef631901fa","bytes":51538,"expectedBaseBlobSha":"6c3a0cefd601e0eb7d113558a6bf1f2fb32c5c16","gitBlobSha":"e14f9e657ff10ccc66de717e894e01a94e07ac78","mode":"100644","operation":"modify","path":"music_app/routes/api_read_asgi_routes.py","sha256":"c5c021727364b5dfba7d747f3aae4276fff958adf36ff1cc4c3c07d450dd5b4c"},{"baseBytes":44793,"baseSha256":"07d52e8cd8aebf1434e5ad981bab47de2ef293be019640fa1b93e7698d009d00","bytes":46193,"expectedBaseBlobSha":"4aec3cd115dba888cd3a1bc1e020d1f7f93724fa","gitBlobSha":"dc7e53e6de26356406bad7694cd83eae956a5b2e","mode":"100644","operation":"modify","path":"music_app/routes/api_wave_b_asgi_routes.py","sha256":"9f60f583ce9012975c57899b9f49e01461bf6eeae78899744f57e661d3eab015"},{"baseBytes":9273,"baseSha256":"c27e2d8cfc53769bbd1b519c59aff56ef573472d57a57a46a63460aaebc19083","bytes":11307,"expectedBaseBlobSha":"c2442a5911a4a2f399842ac810e3dba973819a72","gitBlobSha":"8784f41fcb8d8c62f3e260f851f564a0f780fc4e","mode":"100644","operation":"modify","path":"music_app/services/album_details.py","sha256":"26345b048d4605e528aa57dd3510beb69a1c106bac749741efb058e2b60a2c7a"},{"baseBytes":326596,"baseSha256":"a641cd405497fec5e8839c5568ef1bb791db97a4ffa16c9c461dedd51fa7b9cb","bytes":326293,"expectedBaseBlobSha":"26734a38bc955c8762e7222cbf914b33af7587a5","gitBlobSha":"5e98661a5f5919371e180f1c74273b441cc2ff86","mode":"100644","operation":"modify","path":"music_app/services/library_browse_postgres.py","sha256":"0984b283b91105d1c50773f92797badf257043f4e5427bdab373ddc259f09bee"},{"baseBytes":18297,"baseSha256":"f135ca6a0312e5b24839d9da026c93e13d5cb228413188244f14cbb3d74b72cc","bytes":18854,"expectedBaseBlobSha":"0ba8954f7cea82b2465700fdd5111d5bef535401","gitBlobSha":"d1f9e944a8e1b568c08964a1a4590bd24d38330e","mode":"100644","operation":"modify","path":"music_app/services/library_inventory_postgres.py","sha256":"3f69ff43dd3898dde75ad540b007dc1830fb364389fd9de76a9dc211daea3a8a"},{"baseBytes":21141,"baseSha256":"b429e4473f0338df43e02fbcc0605153760b129b16053571941e5118132f0d53","bytes":21390,"expectedBaseBlobSha":"5a442ce0b062dc805d94344592e8edd1e7df514e","gitBlobSha":"092261fc9207eebfef99a96f6191a85d593238b7","mode":"100644","operation":"modify","path":"music_app/services/private_route_boundary.py","sha256":"ce0ac3e41a88d28ffd0d666a5f01f9df86c531058eab4bfc9b4a2d99fc6b62bd"},{"baseBytes":12143,"baseSha256":"eed0594bc194ecab62e1b7a80058019a247bace05eb8889540caba4f4e027c11","bytes":11499,"expectedBaseBlobSha":"5ab3f65ad618c992560fdfbdfc9be97f668df35d","gitBlobSha":"86cbc816d84a86ab0871a4f7e3b9764617feaa15","mode":"100644","operation":"modify","path":"music_app/services/track_preferences.py","sha256":"231c1af3045274cac9f3d85952c63b03c58547c576287e3166bee191087c3b21"},{"baseBytes":8804,"baseSha256":"afdfb0c1648ce37cf6612204abe8eebc9986a7770d5ba754a09093c4db827d63","bytes":12882,"expectedBaseBlobSha":"cb9f60162d4a7dc40aadfcb892b2b3e58f0ea409","gitBlobSha":"8e6eb28b317ed30fe52f85b9d13dae36722ae506","mode":"100644","operation":"modify","path":"music_app/services/track_preferences_postgres.py","sha256":"70b954107b388383a53f12b94d92870677d140e606c3ff443caebdf68aff1074"},{"baseBytes":181262,"baseSha256":"4a0b251dc8bed26384e40fc7f67280262ab3b0ea64fe6257897fb64853e4a3c1","bytes":181226,"expectedBaseBlobSha":"f681c7ac78b96d6746effdfed3be7171ec058c62","gitBlobSha":"6390415c6a3a1835ea7bcdecbcb812654910756c","mode":"100644","operation":"modify","path":"scripts/migrate_app_data_to_postgres.py","sha256":"7f3d37f026ed31a33dc741bc637d3f239978eef000b46f84580ff744f8462702"},{"baseBytes":9061,"baseSha256":"def286c48f1bc4016f7654255f43be3bbddae24a2dc1e9c0268d20eb065ad05e","bytes":9063,"expectedBaseBlobSha":"fe1f50508f2c38d2803c1d0e9d5c237b4b779d1e","gitBlobSha":"f86bcc1b3f7474772876d288008152e6ac9bb0e5","mode":"100644","operation":"modify","path":"tests/py/test_album_details.py","sha256":"1f3f283e86f98faf61f1508a1f443c5afb2e419b459f645d653f40ed73a17478"},{"baseBytes":175287,"baseSha256":"6f56f279cbece3b32958dd4a5fb5737f6b3e882245913643683c9c58f60821ae","bytes":176228,"expectedBaseBlobSha":"162407ceb5effe31a8c117dea6ab272dad75aa0c","gitBlobSha":"95b91fa77f5fc607cd91021ba4cbe9554c788ec3","mode":"100644","operation":"modify","path":"tests/py/test_api_read_asgi_routes.py","sha256":"11958f4a48291774efd36a8189e932b88136a48795ba9f57b9fa9e8b77774939"},{"baseBytes":88119,"baseSha256":"715b9ca3aefdee17ea66b04a57bb979d3fc6c393b090982b8a132ab4be186456","bytes":88337,"expectedBaseBlobSha":"05f3b0a609e97d6b37953c8e1a7e549782dd5eb9","gitBlobSha":"cdc9882210ae6162f8583ab0b3bd02896d5e1c5e","mode":"100644","operation":"modify","path":"tests/py/test_api_wave_b_asgi_routes.py","sha256":"0c0b0dc928c543802b13c688e80df227b8ad1bfa7017d63f28d49c8aa1e7a749"},{"baseBytes":480913,"baseSha256":"1c8e7544ec53d448bc55380c29e73bd3c6ea007fb7d5b9e0cc61824b65c3850d","bytes":480967,"expectedBaseBlobSha":"4611ae557c61d5191bf19b964beaed3c77af3518","gitBlobSha":"a9d4870e069aaf5fbd402f03e0b11d6b51c7a4b7","mode":"100644","operation":"modify","path":"tests/py/test_library_browse_postgres.py","sha256":"38dba588ca99600bc9785de73a6b47ccb9964ffc096c0351c555dadbc8f3adb9"},{"baseBytes":170505,"baseSha256":"db08c4f136c0c602a0567e5d7a163930a0de7637c6e0f990b9ceefd3aa1d91db","bytes":170522,"expectedBaseBlobSha":"993fcf053eafd09666d7cd47143fbeb1ca7cea71","gitBlobSha":"468c9dbcac662f247142890825346ad5499d1d1b","mode":"100644","operation":"modify","path":"tests/py/test_migrate_app_data_to_postgres.py","sha256":"844458ac46595906fa0843a31d60e70ee33b19e530744a027e2b4cf90acc69da"},{"baseBytes":116849,"baseSha256":"fecfd43c2e31671ab8aa7a0e3831f55d43b123961c90dc41cff15d7f2d2d2945","bytes":116904,"expectedBaseBlobSha":"62cf86398bd45c472179368a035dace73d148087","gitBlobSha":"7b7dd0a238a51e4a93ec8955317e31f0e1defa19","mode":"100644","operation":"modify","path":"tests/py/test_postgres_migrations.py","sha256":"ce9d62834dd980148a866c2f97b0a667a211b3c7c8ee8ab4e5d65b7f5d5c1fd2"},{"bytes":19029,"gitBlobSha":"b78a798de506d3a5222f38b2b8df713f30dda3fb","mode":"100644","operation":"add","path":"tests/py/test_track_preferences_postgres.py","sha256":"8c40b2b0078a38f0fb2ae7b94a3d9c8035d051aaccdae0647a4128cd879f0c0c"},{"bytes":24405,"gitBlobSha":"d641eb3770d55d8e58aa3daf15bc6103ebd60b49","mode":"100644","operation":"add","path":"tests/py/test_track_preferences_scoped_asgi.py","sha256":"a3b29b0622ad1d470b52df90ecc05c842532274480c83bed35337636a3550e4e"},{"baseBytes":17174,"baseSha256":"d3f9d8749e99619300a0008c2ba3c84286682893e52a12e0c7205914577f7292","bytes":4422,"expectedBaseBlobSha":"9e680da0af9102c754686307b562cc6f86486070","gitBlobSha":"031491b45d683a7a632b008fcce100def74864b3","mode":"100644","operation":"modify","path":"tests/py/test_track_preferences_store.py","sha256":"c1aed2e482976533b070d20472f2c9389d9160a278bf763e5e9d698fbc38f2b3"},{"bytes":10097,"gitBlobSha":"c1d830299b033a7294ce01faafffd8d6a9468f36","mode":"100644","operation":"add","path":"tests/py/test_track_taste_album_details.py","sha256":"dd0f2742094bb293d77e2cdbb3274ba467febca2e34532f7c55b0a1b7184b4cb"},{"bytes":7428,"gitBlobSha":"7b93a2858d3e8a26af6382197b6e5744eb88153c","mode":"100644","operation":"add","path":"tests/py/test_track_taste_migration_live.py","sha256":"6a22ea9152fb919af5e17ed3e9a72ae3bb9a0c63f8f808ab9b1318800e1d6013"},{"bytes":18959,"gitBlobSha":"fae6fa79c39769103a7ae1f219026279f18539b5","mode":"100644","operation":"add","path":"tests/py/track_taste_testing.py","sha256":"e27a21a0b552b9634f0e11e3728edf98f6d07575f596390548ebdafaae7ee79c"}],"finalTree":"d5c7743acc5cefbba7fc4ac045129833ce20876b","helperBase":"a4a0ff8b0ca82318935c8610ce6fe5e100451f5c","helperBaseTree":"0fa6fbae12c02d1e1229946d31d646bd7170c292","helperBranch":"2026-09-30-mobile-bundle-transfer","independentReceiptSha256":"651caad4ad951c9095f6cf37fd52de2f104731353c727404b8e21ec24cc39ca6","mainHead":"eef9d13fd5dbd2cda3485e3c308c8494ba7d6fd4","proposalSha256":"b5025fcbe0104d84181ec17daca0861a45ee2bc048a9ddf54cea3335ef32b8ca","publicFilesSha256":"0703803966d40e297280061b7eb185b5962767e311bab5a280fee2ee5de4e1c3","remote":"https://github.com/idanilovqa/AlbumHaven.git","repository":"idanilovqa/AlbumHaven","repositoryPrivate":false,"runtimeManifestSha256":"a8a92e75279cdc00a86b4e2509f8813c717ef7ababc50aa346e804ee6aca7e8f","schemaVersion":4,"scopeLabel":"scoped-track-taste","secondIndependentReceiptSha256":"ac86101f4fd71ca378a809b216eb392be0e9f5a28a7532d4102a42fa303d3ab0","targetBranch":"2026-09-30-friends-listening-home","targetHead":"d644d9bc9ba7ee8d6037f4807bfa9dbfc69469de","testManifestSha256":"8276c295b69a80fbe8cc8525ef6d3affbafd2e3159480758d5c65257da8f83f6","workflowPath":".github/workflows/verified-scoped-track-taste.yml"}\n')
+
+          environment = os.environ
+          event = json.loads(Path(environment["GITHUB_EVENT_PATH"]).read_text())
+          verify_event(PLAN, environment, event)
+          token = environment.get("GH_TOKEN")
+          require(bool(token), "transient repository token missing")
+          repo = Path(environment["GITHUB_WORKSPACE"]) / "target"
+          temporary = Path(environment["RUNNER_TEMP"])
+
+          require(re.fullmatch(r"[1-9][0-9]*", environment.get("ARTIFACT_ID", "")), "artifact ID missing")
+          files = verify_artifact(temporary / "taste-downloaded", PLAN, environment, environment["PROOF_SHA256"])
+          require_remote_base(repo, PLAN, token)
+          stage_reviewed_files(repo, files, PLAN)
+          commit = commit_reviewed(repo, PLAN)
+          print("Prepared atomic scoped-taste commit " + commit + " with tree " + PLAN["finalTree"], flush=True)
+          push_once(repo, PLAN, commit, token, temporary / "taste-push-hooks")
+          print("Verified exact scoped-taste commit " + commit + "; complete native PR CI remains required.")
+

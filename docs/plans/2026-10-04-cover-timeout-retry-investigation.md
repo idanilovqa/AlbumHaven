@@ -3,6 +3,46 @@
 Owner authorized investigation, fixes, and a targeted retry of unsuccessful cover
 lookups. Never convert an incomplete provider search into a definitive no-match.
 
+## Approved authoritative selected-cover propagation
+
+Fix false failures where a valid authoritative selected image is in a parent CD
+folder or another existing folder. Carry a distinct `selected_cover_path` from
+one fresh batch canonical-selection read at cover-pass snapshot preparation,
+through cover-job planning and the provider. The value is pass-only: do not store
+a long-lived runtime hydration alias, because manual selections and cross-folder
+album updates do not share one runtime publication seam. Reuse the scoped
+Postgres read contract and refresh each pass, including fallback callers.
+Do not repurpose physical track-file `cover_path`, add per-job database
+queries, or change catalog identity. Decode an explicit selected image before
+counting it as retained or comparing quality. Missing/corrupt explicit selections
+remain missing; do not substitute unrelated folder artwork for them.
+
+Regression scope: snapshot/physical-path separation, parent-CD and cross-folder
+selection, valid retained outcomes, improved different artwork offered without
+replacement, invalid selections, and unchanged mixed-album/concurrent-selection
+guards. Use fixture files and fake persistence/transport only. Preserve existing
+generation checks and guarded writes. Source-only rollback; focused RED/GREEN
+and independent full-diff review before any commit. No live database/media,
+deployment, push, commit or operational retry belongs to this slice.
+
+Implementation uses one set-based adapter query per preparation, with deduplicated
+positive album IDs, bootstrap-owner/library scope, live files and active roots.
+Missing authority aborts preparation; an authoritative row with no cover remains
+valid. `selected_cover_path` and `selected_cover_origin` exist only in the pass
+snapshot. Physical path/origin/revision tuples remain unchanged and form the
+concurrency baseline from preparation through result application. Changed
+authority is explicitly reported; only a valid current selection may be retained.
+Provider blocked-write, unsuccessful-write and exception exits cannot substitute
+unrelated folder artwork for an invalid explicit selection.
+
+Focused proof (2026-10-05): initial propagation RED 7 failures; concurrent-state
+RED 3; blocked-write fallback RED 2; pass-snapshot RED 1; preparation-race,
+origin-separation and exception regressions RED 5, then missing-authority RED 1.
+Final focused verification: **108 passed, 197 deselected, 3 existing warnings in
+7.48s**, exit 0, in the root's final verification (process/session 36831). This includes complete runtime/planning test files plus relevant
+snapshot, provider, executor and recovery guards. No live provider, database or
+media operations. Final independent full-diff review reported no remaining findings.
+
 ## Approved bounded Spotify cooldown retry
 
 The owner approved one bounded deferred Spotify-only retry after ordinary jobs

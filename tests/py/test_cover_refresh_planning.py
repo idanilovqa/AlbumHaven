@@ -26,6 +26,30 @@ class _CoverCacheStub:
         return self.entries.get(key)
 
 
+def test_cover_jobs_carry_selected_cover_without_replacing_physical_path(tmp_path, monkeypatch):
+    selected = tmp_path / "Artwork" / "selected.jpg"
+    physical = tmp_path / "Album" / "folder.jpg"
+    entry = {"album_artist": "Artist", "album": "Album", "album_id": 12,
+             "cover_selection_origin": "automatic", "selected_cover_origin": "user", "cover_path": str(physical),
+             "selected_cover_path": str(selected)}
+    monkeypatch.setattr(cover_refresh_planning, "local_cover_requires_upgrade_check", lambda *_args: False)
+    jobs = cover_refresh_planning.build_cover_refresh_jobs({str(tmp_path / "Album" / "01.mp3"): entry})
+    assert jobs[0]["selected_cover_path"] == str(selected)
+    assert jobs[0]["cover_selection_origin"] == "user"
+    assert entry["cover_selection_origin"] == "automatic"
+    assert entry["cover_path"] == str(physical)
+
+
+def test_conflicting_album_ids_do_not_supply_selected_cover_to_folder_job(tmp_path, monkeypatch):
+    selected = str(tmp_path / "selected.jpg")
+    entries = {str(tmp_path / "Album" / f"{index}.mp3"): {
+        "album_artist": "Artist", "album": "Album", "album_id": index,
+        "cover_selection_origin": "user", "selected_cover_path": selected,
+    } for index in (12, 13)}
+    monkeypatch.setattr(cover_refresh_planning, "local_cover_requires_upgrade_check", lambda *_args: False)
+    assert cover_refresh_planning.build_cover_refresh_jobs(entries)[0]["selected_cover_path"] is None
+
+
 def test_build_cover_refresh_jobs_groups_folder_tracks_and_logs_summary(tmp_path: Path):
     logger = _LoggerStub()
     album_folder = tmp_path / "Artist" / "Album"

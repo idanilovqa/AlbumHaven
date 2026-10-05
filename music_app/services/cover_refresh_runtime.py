@@ -6,6 +6,28 @@ from dataclasses import dataclass
 import time
 
 from music_app.services.cover_provider_cache import CoverSearchCache
+from music_app.services.scan_cache_persistence import select_scan_cache_adapter
+
+
+def cover_pass_file_cache_snapshot(file_cache, config):
+    """Read canonical selection once per pass without retaining a runtime alias."""
+    snapshot = {path: dict(entry) for path, entry in file_cache.items()}
+    album_ids = {
+        entry["album_id"] for entry in snapshot.values()
+        if type(entry.get("album_id")) is int and entry["album_id"] > 0
+    }
+    selections = select_scan_cache_adapter(config).load_cover_selections(album_ids) if album_ids else {}
+    if album_ids - selections.keys():
+        raise RuntimeError("Cover refresh could not verify canonical selection authority for every album.")
+    for entry in snapshot.values():
+        entry.pop("selected_cover_path", None)
+        entry.pop("selected_cover_origin", None)
+        if type(entry.get("album_id")) is int and entry["album_id"] > 0:
+            selection = selections.get(entry["album_id"])
+            entry["selected_cover_path"] = selection.get("selected_cover_path") if selection else None
+            if selection:
+                entry["selected_cover_origin"] = selection.get("cover_selection_origin")
+    return snapshot
 
 StateGetter = Callable[[], dict[str, object]]
 ExecutorSubmitter = Callable[..., object]
@@ -121,7 +143,7 @@ def build_cover_refresh_context(
         library_state["covers_finished_monotonic"] = None
     return CoverRefreshContext(
         library_state=library_state,
-        file_cache=dict(library_state.get("file_cache") or {}),
+        file_cache=cover_pass_file_cache_snapshot(library_state.get("file_cache") or {}, config),
         separate_release_keys=set(library_state.get("separate_release_keys") or set()),
         cover_cache=CoverSearchCache(config["COVER_CACHE_PATH"]),
         image_extensions=config["IMAGE_EXTENSIONS"],
@@ -430,6 +452,7 @@ def start_manual_cover_refresh(
             get_file_cache_snapshot() if get_file_cache_snapshot is not None
             else {path: dict(entry) for path, entry in (library_state.get("file_cache") or {}).items()}
         )
+        file_cache = cover_pass_file_cache_snapshot(file_cache, config)
         context = CoverRefreshContext(
             library_state=library_state,
             file_cache=file_cache,

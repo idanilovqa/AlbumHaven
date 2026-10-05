@@ -36,6 +36,8 @@ def build_cover_refresh_jobs(
                 "year": None,
                 "album_id": None,
                 "cover_selection_origin": None,
+                "selected_cover_path": (str(entry.get("selected_cover_path") or "").strip() or None)
+                if isinstance(entry.get("album_id"), int) and entry["album_id"] > 0 else None,
                 "needs_cover_fetch": False,
             },
         )
@@ -52,13 +54,15 @@ def build_cover_refresh_jobs(
             job["year"] = entry.get("year")
         if job.get("album_id") is None and isinstance(entry.get("album_id"), int):
             job["album_id"] = entry.get("album_id")
-        stored_origin = str(entry.get("cover_selection_origin") or "").strip().casefold()
+        if entry.get("album_id") != job.get("album_id") or (str(entry.get("selected_cover_path") or "").strip() or None) != job.get("selected_cover_path"):
+            job["selected_cover_path"] = None
+        stored_origin = str(entry.get("selected_cover_origin", entry.get("cover_selection_origin")) or "").strip().casefold()
         if stored_origin == "user" or (
             stored_origin == "automatic" and job.get("cover_selection_origin") != "user"
         ):
             job["cover_selection_origin"] = stored_origin
 
-        cover_value = str(entry.get("cover_path") or "").strip()
+        cover_value = str(entry.get("selected_cover_path") or entry.get("cover_path") or "").strip()
         cover_path = Path(cover_value) if cover_value else None
         if cover_path is None:
             job["needs_cover_fetch"] = True

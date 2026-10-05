@@ -6,6 +6,34 @@ import threading
 from music_app.services import cover_refresh_runtime
 
 
+def test_cover_pass_snapshot_refreshes_selection_once_without_runtime_alias(monkeypatch):
+    from types import SimpleNamespace
+
+    current = {12: {"selected_cover_path": "parent/selected.jpg", "cover_selection_origin": "user"}}
+    calls = []
+    def load(album_ids):
+        calls.append(album_ids)
+        return current
+    monkeypatch.setattr(cover_refresh_runtime, "select_scan_cache_adapter", lambda _config: SimpleNamespace(load_cover_selections=load))
+    cache = {"disc1/a": {"album_id": 12, "cover_path": None, "cover_selection_origin": "automatic"}, "disc2/b": {"album_id": 12, "cover_path": "physical.jpg"}}
+    first = cover_refresh_runtime.cover_pass_file_cache_snapshot(cache, {})
+    assert calls == [{12}]
+    assert first["disc1/a"]["selected_cover_path"] == "parent/selected.jpg"
+    assert first["disc1/a"]["selected_cover_origin"] == "user"
+    assert first["disc1/a"]["cover_selection_origin"] == "automatic"
+    assert first["disc2/b"]["cover_path"] == "physical.jpg"
+    assert "selected_cover_path" not in cache["disc1/a"]
+    current[12] = {"selected_cover_path": "changed.jpg", "cover_selection_origin": "user"}
+    second = cover_refresh_runtime.cover_pass_file_cache_snapshot(cache, {})
+    assert second["disc2/b"]["selected_cover_path"] == "changed.jpg"
+    assert len(calls) == 2
+    cache["foreign"] = {"album_id": 99, "selected_cover_path": "stale.jpg"}
+    with pytest.raises(RuntimeError, match="canonical selection authority"):
+        cover_refresh_runtime.cover_pass_file_cache_snapshot(cache, {})
+    current[99] = {"selected_cover_path": None, "cover_selection_origin": None}
+    assert cover_refresh_runtime.cover_pass_file_cache_snapshot(cache, {})["foreign"]["selected_cover_path"] is None
+
+
 class LoggerStub:
     def __init__(self) -> None:
         self.messages: list[tuple[str, tuple[object, ...]]] = []

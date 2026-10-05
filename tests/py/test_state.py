@@ -80,11 +80,15 @@ def test_state_tests_do_not_depend_on_flask_runtime_helpers():
     assert not [term for term in forbidden_terms if term in source]
 
 
-def test_execute_cover_job_returns_local_cover_when_remote_lookup_raises(tmp_path: Path, monkeypatch):
+@pytest.mark.parametrize("selected", [None, "valid", "missing"])
+def test_execute_cover_job_returns_local_cover_when_remote_lookup_raises(tmp_path: Path, monkeypatch, selected):
     folder = tmp_path / "Artist" / "Album"
     folder.mkdir(parents=True)
     cover_path = folder / "cover.jpg"
     cover_path.write_bytes(b"cover")
+    selected_path = tmp_path / "selected.png"
+    if selected == "valid":
+        pytest.importorskip("PIL.Image").new("RGB", (400, 400), "red").save(selected_path)
 
     monkeypatch.setattr(
         cover_refresh_execution.cover_refresh_provider,
@@ -99,6 +103,7 @@ def test_execute_cover_job_returns_local_cover_when_remote_lookup_raises(tmp_pat
             "album": "Album",
             "edition": "",
             "year": 1999,
+            "selected_cover_path": str(selected_path) if selected else None,
         },
         image_extensions={".jpg"},
         user_agent="Album Haven Test",
@@ -109,7 +114,7 @@ def test_execute_cover_job_returns_local_cover_when_remote_lookup_raises(tmp_pat
         negative_cache_ttl_seconds=None,
     )
 
-    assert resolved_cover == cover_path
+    assert resolved_cover == (selected_path if selected == "valid" else None if selected else cover_path)
     assert downloaded is False
     assert detail["artist"] == "Artist"
     assert detail["album"] == "Album"
@@ -2336,6 +2341,62 @@ def test_cover_jobs_defer_spotify_once_after_ordinary_jobs(recovered_cover_case,
         assert pending["spotify_retry_deferred"] is True
     if retry_at < 100:
         assert pending["spotify_retry_attempted"] is True
+
+
+@pytest.mark.parametrize("origin", ["user", "automatic"])
+def test_retained_authoritative_cover_does_not_recover_physical_metadata(recovered_cover_case, monkeypatch, origin):
+    case = recovered_cover_case
+    selected = case.cover.parent.parent / "selected.jpg"
+    selected.write_bytes(case.cover.read_bytes())
+    case.job.update(selected_cover_path=str(selected), album_id=12, cover_selection_origin=origin)
+    for entry in case.entries.values():
+        entry.update(selected_cover_path=str(selected), album_id=12, cover_selection_origin=origin)
+    baseline = {path: dict(entry) for path, entry in case.entries.items()}
+    monkeypatch.setattr(cover_refresh_execution, "execute_cover_job", lambda **_kwargs: (selected, False, {"reason": "remote_search_failed"}))
+    monkeypatch.setattr(cover_refresh_execution, "_recover_existing_cover_selection", lambda **_kwargs: pytest.fail("Canonical selection is not folder recovery"))
+    result = cover_refresh_execution.run_cover_jobs(**case.kwargs)
+    assert result["skipped"] == 1
+    assert result["failed"] == 0
+    assert result["changed"] is False
+    assert case.entries == baseline
+
+
+@pytest.mark.parametrize("change", ["valid_selection", "missing_selection", "generation", "before_execution"])
+def test_retained_selection_rechecks_current_authority(recovered_cover_case, monkeypatch, change):
+    case = recovered_cover_case
+    case.job.update(selected_cover_path=str(case.cover), album_id=12, cover_selection_origin="user")
+    case.kwargs["cover_generation"] = 1
+    case.state["cover_generation"] = 1
+    for entry in case.entries.values():
+        entry.update(selected_cover_path=str(case.cover), album_id=12, cover_selection_origin="user")
+    new_cover = case.cover.parent.parent / "new-selection.png"
+    if change in {"valid_selection", "before_execution"}:
+        pytest.importorskip("PIL.Image").new("RGB", (400, 400), "blue").save(new_cover)
+    case.kwargs["file_cache"] = {path: dict(entry) for path, entry in case.entries.items()}
+    if change == "before_execution":
+        for entry in case.entries.values():
+            entry.update(cover_path=str(new_cover), cover_revision="new-revision")
+    changed_entries = {}
+
+    def execute(**_kwargs):
+        if change == "generation":
+            case.state["cover_generation"] = 2
+        else:
+            for entry in case.entries.values():
+                entry.update(cover_path=str(new_cover), cover_revision="new-revision")
+        changed_entries.update({path: dict(entry) for path, entry in case.entries.items()})
+        return case.cover, False, {"reason": "remote_search_failed"}
+
+    monkeypatch.setattr(cover_refresh_execution, "execute_cover_job", execute)
+    monkeypatch.setattr(cover_refresh_execution, "_recover_existing_cover_selection", lambda **_kwargs: pytest.fail("Do not recover a concurrent selection"))
+    result = cover_refresh_execution.run_cover_jobs(**case.kwargs)
+    assert result["changed"] is False
+    assert case.entries == changed_entries
+    assert result["job_results"][0]["reason"] == "selected_cover_changed_during_fetch"
+    valid = change in {"valid_selection", "before_execution"}
+    assert result["job_results"][0]["cover_path"] == (str(new_cover) if valid else None)
+    assert result["failed"] == int(not valid)
+    assert result["skipped"] == int(valid)
 
 
 def test_recovered_cover_heterogeneous_baseline_reports_conflict(recovered_cover_case, monkeypatch):

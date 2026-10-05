@@ -894,6 +894,22 @@ def _should_replace_local_cover(
     return False, "remote_not_better_than_local"
 
 
+def validated_selected_cover_path(value: str | None) -> Path | None:
+    if not value:
+        return None
+    try:
+        selected = Path(value)
+        decoded = decode_image_bytes(selected.read_bytes())
+        if decoded is not None:
+            image, width, height = decoded
+            image.close()
+            if width > 0 and height > 0:
+                return selected
+    except OSError:
+        pass
+    return None
+
+
 def ensure_best_cover_for_folder(
     folder: Path,
     artist: str,
@@ -918,6 +934,7 @@ def ensure_best_cover_for_folder(
     decode_image_func: DecodeImage = decode_image_bytes,
     write_cover_func: WriteCover = _write_cover_jpg,
     suspicious_cache_entry_func: SuspiciousCacheEntry = suspicious_positive_cache_entry,
+    selected_cover_path: str | None = None,
     logger=None,
 ) -> tuple[Path | None, bool, dict[str, object]]:
     effective_logger = logger or _LOGGER
@@ -928,7 +945,10 @@ def ensure_best_cover_for_folder(
         reject_if_user_controlled and normalized_cover_selection_origin == "user"
     )
     fetch_started_at = time.perf_counter()
-    local_cover = find_cover_image(folder, image_extensions)
+    local_cover = (
+        validated_selected_cover_path(selected_cover_path)
+        if selected_cover_path else find_cover_image(folder, image_extensions)
+    )
     local_area = image_area(local_cover) if local_cover else 0
     local_sharpness = image_sharpness(local_cover) if local_cover else 0.0
     local_cover_stem = cover_stem(local_cover) if local_cover else ""
@@ -1265,7 +1285,8 @@ def ensure_best_cover_for_folder(
                     (time.perf_counter() - fetch_started_at) * 1000,
                     2,
                 )
-                return local_cover or find_cover_image(folder, image_extensions), False, detail
+                retained_cover = local_cover if selected_cover_path else local_cover or find_cover_image(folder, image_extensions)
+                return retained_cover, False, detail
         else:
             written = write_action()
         if written:
@@ -1290,6 +1311,7 @@ def ensure_best_cover_for_folder(
             return written, True, detail
         detail["reason"] = "write_returned_no_file"
         detail["elapsed_ms"] = round((time.perf_counter() - fetch_started_at) * 1000, 2)
-        return local_cover or find_cover_image(folder, image_extensions), False, detail
+        retained_cover = local_cover if selected_cover_path else local_cover or find_cover_image(folder, image_extensions)
+        return retained_cover, False, detail
     finally:
         img.close()

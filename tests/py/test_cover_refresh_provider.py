@@ -14,6 +14,57 @@ from music_app.services.cover_provider_candidates import CoverCandidate
 from music_app.services.cover_provider_cache import CoverSearchCache
 
 
+@pytest.mark.parametrize("location", ["parent", "other"])
+@pytest.mark.parametrize("valid", [True, False, None])
+def test_protected_selected_artwork_outside_folder_is_validated_and_retained(tmp_path, location, valid):
+    from types import SimpleNamespace
+
+    image = pytest.importorskip("PIL.Image")
+    folder = tmp_path / "Album" / "CD1"
+    folder.mkdir(parents=True)
+    selected = (folder.parent if location == "parent" else tmp_path) / "selected.png"
+    if valid:
+        image.new("RGB", (500, 500), "red").save(selected)
+    elif valid is False:
+        selected.write_bytes(b"corrupt image")
+    image.new("RGB", (300, 300), "blue").save(folder / "cover.png")
+    path, downloaded, detail = cover_refresh_provider.ensure_best_cover_for_folder(
+        folder, "Artist", "Album", None, 2001, {".png"},
+        SimpleNamespace(get=lambda _key: {}, set=lambda *_args: None), "Tests/1.0",
+        cover_selection_origin="user", reject_if_user_controlled=True,
+        selected_cover_path=str(selected),
+        search_remote_cover_func=lambda **_kwargs: (None, [{"resolver": "_search_apple", "status": "failed"}]),
+    )
+    assert path == (selected if valid else None)
+    assert downloaded is False
+    assert detail["local_area"] == (250000 if valid else 0)
+    assert detail["reason"] == "remote_search_failed"
+
+
+@pytest.mark.parametrize("guard_result", [False, None])
+def test_invalid_selection_does_not_fall_back_after_unsuccessful_write(tmp_path, guard_result):
+    from types import SimpleNamespace
+
+    image = pytest.importorskip("PIL.Image")
+    folder = tmp_path / "Album"
+    folder.mkdir()
+    image.new("RGB", (300, 300), "blue").save(folder / "cover.png")
+    raw = io.BytesIO()
+    image.new("RGB", (1600, 1600), "red").save(raw, format="PNG")
+    candidate = CoverCandidate(source="apple", url="https://images.example/cover.png", width=1600, height=1600, score=0.99, matched_artist="Artist", matched_album="Album")
+    selected, downloaded, detail = cover_refresh_provider.ensure_best_cover_for_folder(
+        folder, "Artist", "Album", None, 2001, {".png"},
+        SimpleNamespace(get=lambda _key: {}, set=lambda *_args: None), "Tests/1.0",
+        selected_cover_path=str(tmp_path / "missing.png"),
+        automatic_write_guard=lambda *_args, **_kwargs: guard_result,
+        search_remote_cover_func=lambda *_args, **_kwargs: (candidate, []),
+        http_get_bytes_func=lambda *_args, **_kwargs: raw.getvalue(),
+    )
+    assert selected is None
+    assert downloaded is False
+    assert detail["reason"] == ("automatic_write_blocked_by_user_selection" if guard_result is False else "write_returned_no_file")
+
+
 def test_automatic_write_guard_receives_final_encoded_cover_revision(tmp_path):
     image_module = pytest.importorskip("PIL.Image")
     raw = io.BytesIO()
@@ -806,15 +857,20 @@ def test_cover_refresh_suppresses_external_search_for_manual_only_and_offline_po
     assert detail["reason"] == "remote_provider_group_disabled"
 
 
+@pytest.mark.parametrize("external_selection", [False, True])
 def test_user_controlled_cover_publishes_improvement_without_writing_bytes(
     tmp_path,
     monkeypatch,
+    external_selection,
 ):
     folder = tmp_path / "Artist" / "Album"
     folder.mkdir(parents=True)
-    current_cover = folder / "cover.jpg"
+    current_cover = (tmp_path if external_selection else folder) / "cover.jpg"
     original_bytes = b"user-selected-cover"
     current_cover.write_bytes(original_bytes)
+    if external_selection:
+        pytest.importorskip("PIL.Image").new("RGB", (400, 400), "red").save(current_cover)
+        original_bytes = current_cover.read_bytes()
     candidate = CoverCandidate(
         source="cover_art_archive",
         url="https://images.example/improvement.jpg",
@@ -856,6 +912,7 @@ def test_user_controlled_cover_publishes_improvement_without_writing_bytes(
         cover_selection_origin="user",
         reject_if_user_controlled=True,
         candidate_callback=publish_candidate,
+        selected_cover_path=str(current_cover) if external_selection else None,
         search_remote_cover_func=fake_search,
         decode_image_func=lambda _raw: (DecodedImage(), 1600, 1600),
         write_cover_func=lambda *_args: (_ for _ in ()).throw(

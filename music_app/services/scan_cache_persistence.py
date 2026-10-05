@@ -204,6 +204,22 @@ class PostgresScanCacheAdapter:
             _ensure_bootstrap_context(connection)
             return _load_cover_mutation_revision(connection)
 
+    def load_cover_selections(self, album_ids: set[int]) -> dict[int, dict[str, object]]:
+        if not album_ids:
+            return {}
+        with self._connect_to_database() as connection:
+            rows = connection.execute(_load_cover_selections_sql(), {
+                "album_ids": sorted(album_ids), "source": _SOURCE,
+            }).fetchall()
+        return {
+            int(payload["album_id"]): {
+                "selected_cover_path": str(payload.get("cover_path") or "").strip() or None,
+                "cover_selection_origin": str(payload.get("cover_selection_origin") or "").strip() or None,
+            }
+            for row in rows
+            if (payload := _row_mapping(row))
+        }
+
     def load_inventory_mutation_revision(self) -> int:
         with self._connect_to_database() as connection:
             _ensure_bootstrap_context(connection)
@@ -5090,6 +5106,28 @@ def _load_targeted_album_memberships_sql() -> str:
         join library.local_artists
           on library.local_artists.id = library.local_albums.artist_id
          and library.local_artists.library_id = bootstrap_context.library_id;
+    """
+
+
+def _load_cover_selections_sql() -> str:
+    return """
+        select album.id as album_id, album.cover_path,
+               album.metadata ->> 'cover_selection_origin' as cover_selection_origin
+        from library.local_albums album
+        join library.libraries lib on lib.id = album.library_id
+        join app.bootstrap_owners owner on owner.account_id = lib.owner_account_id
+        where owner.owner_key = 'local-bootstrap-owner'
+          and lib.name = 'Local Library' and lib.library_kind = 'local'
+          and album.id = any(%(album_ids)s::bigint[])
+          and exists (
+            select 1 from library.local_tracks track
+            join library.local_track_files file on file.track_id = track.id
+            join library.library_roots root on root.id = file.library_root_id
+              and root.library_id = album.library_id and root.is_active is true
+            where track.album_id = album.id and track.library_id = album.library_id
+              and file.scan_cache_stale is false
+              and file.metadata #>> '{scan_cache,source}' = %(source)s
+          );
     """
 
 

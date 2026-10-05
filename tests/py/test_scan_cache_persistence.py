@@ -20,6 +20,26 @@ class FakeCursor:
         return self._rows[0] if self._rows else None
 
 
+def test_cover_selection_batch_read_is_scoped_and_one_query(monkeypatch):
+    from contextlib import nullcontext
+    from music_app.services.scan_cache_persistence import PostgresScanCacheAdapter
+
+    calls = []
+    def execute(sql, params):
+        calls.append((sql, params))
+        return FakeCursor([{"album_id": 12, "cover_path": "parent/selected.jpg", "cover_selection_origin": "user"}])
+    adapter = PostgresScanCacheAdapter({})
+    monkeypatch.setattr(adapter, "_connect_to_database", lambda: nullcontext(SimpleNamespace(execute=execute)))
+    assert adapter.load_cover_selections({12, 99}) == {12: {"selected_cover_path": "parent/selected.jpg", "cover_selection_origin": "user"}}
+    assert len(calls) == 1
+    sql, params = calls[0]
+    assert params["album_ids"] == [12, 99]
+    for scope in ("owner.account_id = lib.owner_account_id", "owner.owner_key = 'local-bootstrap-owner'", "lib.library_kind = 'local'", "root.library_id = album.library_id", "root.is_active is true", "track.library_id = album.library_id", "file.scan_cache_stale is false"):
+        assert scope in sql
+    assert adapter.load_cover_selections(set()) == {}
+    assert len(calls) == 1
+
+
 def test_load_separate_release_keys_accepts_dict_rows():
     from music_app.services.scan_cache_persistence import _load_separate_release_keys
 
@@ -2332,7 +2352,8 @@ def test_postgres_scan_cache_adapter_splits_featured_track_artists_into_featured
     }
 
 
-def test_postgres_scan_cache_adapter_loads_snapshot_without_file_cache_json(monkeypatch):
+@pytest.mark.parametrize("physical_cover", [None, "C:/Music/Broadcast/Tender Buttons/folder.jpg"])
+def test_postgres_scan_cache_adapter_loads_snapshot_without_file_cache_json(monkeypatch, physical_cover):
     from music_app.services import scan_cache_persistence
     from music_app.services.scan_cache_persistence import PostgresScanCacheAdapter
 
@@ -2349,7 +2370,7 @@ def test_postgres_scan_cache_adapter_loads_snapshot_without_file_cache_json(monk
         "disc_number_raw": "1",
         "artist": "Broadcast",
         "duration_seconds": 178,
-        "cover_path": None,
+        "cover_path": physical_cover,
         "local_cover_width": None,
         "local_cover_height": None,
         "remote_cover_url": None,
@@ -2381,6 +2402,8 @@ def test_postgres_scan_cache_adapter_loads_snapshot_without_file_cache_json(monk
             {
                 "private_path": file_entry["path"],
                 "file_entry": file_entry,
+                "cover_path": "C:/Artwork/selected.jpg",
+                "cover_selection_origin": "user",
             }
         ],
     )
@@ -2401,6 +2424,8 @@ def test_postgres_scan_cache_adapter_loads_snapshot_without_file_cache_json(monk
     assert list(file_cache) == [file_entry["path"]]
     assert file_cache[file_entry["path"]]["album"] == "Tender Buttons"
     assert file_cache[file_entry["path"]]["size"] == 12345
+    assert "selected_cover_path" not in file_cache[file_entry["path"]]
+    assert file_cache[file_entry["path"]]["cover_path"] == physical_cover
     load_file_entries = [
         params for sql, params in connection.executed if "metadata #>> '{scan_cache,source}' = %(source)s" in sql
     ]

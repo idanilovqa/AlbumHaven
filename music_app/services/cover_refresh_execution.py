@@ -306,6 +306,8 @@ def execute_cover_job(
                 stored_origin if stored_origin in {"user", "automatic"} else "automatic"
             )
             provider_kwargs["reject_if_user_controlled"] = True
+        if "selected_cover_path" in job:
+            provider_kwargs["selected_cover_path"] = job["selected_cover_path"]
         effective_candidate_callback = candidate_callback or job.get("candidate_callback")
         if callable(effective_candidate_callback):
             provider_kwargs["candidate_callback"] = effective_candidate_callback
@@ -347,7 +349,8 @@ def execute_cover_job(
     except Exception as exc:
         _LOGGER.warning("Cover refresh failed for %s: %s", folder, exc)
         return (
-            find_cover_image(folder, image_extensions),
+            (cover_refresh_provider.validated_selected_cover_path(str(job["selected_cover_path"]))
+             if job.get("selected_cover_path") else find_cover_image(folder, image_extensions)),
             False,
             {
                 "artist": artist,
@@ -411,6 +414,12 @@ def run_cover_jobs(
         )
     candidate_publishers: dict[int, object] = {}
     candidate_callbacks: dict[int, Callable[..., object]] = {}
+    selected_cover_baselines = {
+        id(job): {str(path): _cover_selection_values(entry)
+                  for path in job.get("track_paths") or []
+                  if isinstance(entry := file_cache.get(str(path)), dict)}
+        for job in jobs if job.get("selected_cover_path")
+    }
 
     for job in jobs:
         album_id = job.get("album_id")
@@ -499,6 +508,32 @@ def run_cover_jobs(
         folder = job["folder"]
         artist = str(job.get("artist") or "")
         album = str(job.get("album") or "")
+        retained_selection = bool(
+            cover_path and not downloaded and job.get("selected_cover_path")
+            and Path(str(job["selected_cover_path"])) == Path(cover_path)
+        )
+        selection_changed = False
+        if retained_selection:
+            paths = {str(path) for path in job.get("track_paths") or []}
+            current_entries = get_state().get("file_cache") or {}
+            baseline = selected_cover_baselines.get(id(job), {})
+            same_album = bool(paths) and all(
+                isinstance(current_entries.get(path), dict)
+                and current_entries[path].get("album_id") == job.get("album_id")
+                for path in paths
+            )
+            if not owns_progress() or not same_album or set(baseline) != paths or any(
+                _cover_selection_values(current_entries[path]) != baseline[path] for path in paths
+            ):
+                selection_changed = True
+                selection_conflict = True
+                cover_path = None
+                if owns_progress() and same_album:
+                    current_paths = {str(current_entries[path].get("cover_path") or "") for path in paths}
+                    if len(current_paths) == 1:
+                        cover_path = cover_refresh_provider.validated_selected_cover_path(current_paths.pop())
+                detail["reason"] = "selected_cover_changed_during_fetch"
+                detail["selection_conflict"] = True
         cover_value = str(cover_path) if cover_path else None
         written_revision: str | None = None
         if cover_path:
@@ -577,7 +612,7 @@ def run_cover_jobs(
                 resolver_trace=detail.get("resolver_trace"),
             )
 
-        recovering_selection = bool(cover_path and not downloaded)
+        recovering_selection = bool(cover_path and not downloaded and not retained_selection)
         if recovering_selection:
             recovered, conflict = _recover_existing_cover_selection(
                 config=config, job=job, cover_path=Path(cover_path),
@@ -597,7 +632,7 @@ def run_cover_jobs(
                 )
 
         for track_path in job.get("track_paths") or []:
-            if recovering_selection:
+            if recovering_selection or retained_selection or selection_changed:
                 continue
             entry = file_cache.get(str(track_path))
             if not isinstance(entry, dict):

@@ -7878,7 +7878,7 @@
       "FTC-GALLERY-STARTUP-005U"
     ],
     "ownerApproval": "approved",
-    "case": "FTC-GALLERY-STARTUP-005U synthetic paired search calibration Devin submit first expected album visible"
+    "case": "FTC-GALLERY-STARTUP-005U synthetic paired search calibration › Devin submit first expected album visible"
   },
   {
     "config": "playwright.synthetic-large-library.config.cjs",
@@ -7893,6 +7893,7 @@
       "FTC-GALLERY-STARTUP-005U"
     ],
     "ownerApproval": "approved",
-    "case": "FTC-GALLERY-STARTUP-005U synthetic paired search calibration Neal Morse submit first expected album visible"
+    "case": "FTC-GALLERY-STARTUP-005U synthetic paired search calibration › Neal Morse submit first expected album visible"
   }
 ]
+

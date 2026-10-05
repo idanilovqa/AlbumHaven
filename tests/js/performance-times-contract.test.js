@@ -136,7 +136,7 @@ test('checked-in timing authority contains the approved local and CI triplets', 
     },
     'search-browse.searchBrowseReadyMs': {
       local: [800, 400, 1200],
-      ci: [2000, 400, 2400],
+      ci: [800, 400, 1200],
     },
     'artist-family.treeNealSelectionMs': {
       local: [450, 200, 650],
@@ -244,6 +244,6 @@ test('CI differs from local for exactly the five owner-approved metrics', () => 
     'app-open-all-artists.visibleUiReadyMs',
     'artist-family.treeNealSelectionMs',
     'playback-start.maximumStartMs',
-    'search-browse.searchBrowseReadyMs',
   ].sort());
 });
+

@@ -798,12 +798,12 @@ mergerTest('recovered history retains every attempt and uses the first passing a
     attempts: [
       performanceAttempt(1, {
         status: 'failed', classification: 'hard-fail', actualValue: 2600,
-        targetMs: 2000, graceMs: 400, hardCeilingMs: 2400,
+        targetMs: 800, graceMs: 400, hardCeilingMs: 1200,
         failureCategory: 'timing-hard-ceiling',
       }),
       performanceAttempt(2, {
         status: 'passed', classification: 'grace-used', actualValue: 2250,
-        targetMs: 2000, graceMs: 400, hardCeilingMs: 2400,
+        targetMs: 800, graceMs: 400, hardCeilingMs: 1200,
         failureCategory: null,
       }),
     ],
@@ -949,3 +949,4 @@ mergerTest('authenticated inventory retains structured E2E results for 14 days a
     ...inventory.debugArtifacts.map((entry) => entry.name),
   ]).size, 27);
 });
+

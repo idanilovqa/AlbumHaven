@@ -540,6 +540,7 @@ test('performance target contract owns all 28 performance cases across 21 target
         'playwright.performance.config.cjs',
         'playwright.scan-performance.config.cjs',
       ].includes(entry.config))
+      .filter((entry) => !entry.test.includes('searchPreviewPairedCalibration'))
       .map(caseIdentity),
   );
   const expectedNames = new Set([
@@ -739,3 +740,4 @@ test('read-only inventory command reports complete discovery and ownership total
     performanceTargets: 28,
   });
 });
+

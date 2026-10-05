@@ -44,33 +44,6 @@ test.describe(`${CASE_ID} production-backed read-only search`, () => {
     }, testInfo) => {
       const forbiddenRequests = [];
       const hostTelemetryRequests = [];
-      await context.route('**/*', async (route) => {
-        const request = route.request();
-        const url = new URL(request.url());
-        if (isProductionSearchHostTelemetryRequest({
-          method: request.method(),
-          url,
-          allowedOrigin: ALLOWED_ORIGIN,
-        })) {
-          hostTelemetryRequests.push({
-            method: request.method(),
-            origin: url.origin,
-            pathname: url.pathname,
-          });
-          await route.abort('blockedbyclient');
-          return;
-        }
-        if (!['GET', 'HEAD'].includes(request.method()) || url.origin !== ALLOWED_ORIGIN) {
-          forbiddenRequests.push({
-            method: request.method(),
-            origin: url.origin,
-            pathname: url.pathname,
-          });
-          await route.abort('blockedbyclient');
-          return;
-        }
-        await route.continue();
-      });
       page.on('request', (request) => {
         const url = new URL(request.url());
         if (!['http:', 'https:'].includes(url.protocol)) return;

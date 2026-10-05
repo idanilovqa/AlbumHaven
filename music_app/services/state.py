@@ -422,6 +422,8 @@ def refresh_relation_views_for_state(
     expected_inventory_mutation_revision: int | None = None,
     publication_state: dict[str, object] | None = None,
 ) -> None:
+    if config.get("SHARED_LIBRARY_BROWSE_ONLY") is True:
+        raise RuntimeError("Shared browsing cannot rebuild library relations")
     guarded_live_repair = (
         expected_scan_generation is not None
         and publication_state is None
@@ -901,6 +903,8 @@ def start_background_refresh_for_state(
     scan_mode: str = "background",
     accepted_state_updates: Mapping[str, object] | None = None,
 ) -> bool:
+    if config.get("SHARED_LIBRARY_BROWSE_ONLY") is True:
+        raise RuntimeError("Shared browsing cannot start a library scan")
     with _CACHE_LOCK:
         if library_state.get("scan_in_progress"):
             return False

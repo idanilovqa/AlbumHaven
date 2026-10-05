@@ -161,6 +161,9 @@ def ensure_relation_projection_ready(
             duration_ms=(perf_counter() - started_at) * 1000,
         )
 
+    if config.get("SHARED_LIBRARY_BROWSE_ONLY") is True:
+        raise RuntimeError("Shared browsing cannot rebuild a stale relation projection: " + reason)
+
     try:
         for attempt in range(_PROJECTION_READY_MAX_ATTEMPTS):
             phase_timings_ms = {

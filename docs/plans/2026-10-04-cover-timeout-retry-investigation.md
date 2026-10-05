@@ -141,9 +141,25 @@ automatic-search failure for all request errors; manual behavior, timeout and
 with 21 controls passing, then 75 passing Spotify/deadline cases. Two independent
 scoped review passes found no remaining findings. Not yet deployed or retried.
 
-Shared HTTP classification still needs endpoint-aware investigation: an expected
-Bandcamp guessed-URL404 is not equivalent to Apple's logged search-endpoint404.
-Spotify's fix does not close that separate remaining investigation.
+Shared HTTP investigation reproduced the same false-negative boundary for
+automatic denied requests and Apple API errors. The responsible HTTP handler
+now raises the existing search-failure signal for 401/403, and for Apple API
+client errors identified by existing caller-owned search/artist API contexts.
+Expected Bandcamp discovery and alternate-artwork 404/410 misses remain empty;
+manual behavior, existing timeout/429/server-error handling and retry counts are
+unchanged. The transport-stub regression produced 24 expected RED failures with
+25 compatibility controls passing. Focused HTTP/deadline verification then passed
+111 tests in 10.67 seconds; the test process exited. Two complete root scoped
+reviews traced actual Apple caller contexts, error propagation and compatibility
+controls without remaining findings. No provider traffic or deployment occurred.
+
+The private targeted-retry inventory offers 2,930 conservative review targets:
+2,820 directly mapped incomplete/error outcomes, all 65 fast jobs whose exact
+reason was unretained, and 45 additional retained-cover jobs with uniquely linked
+Deezer artwork403 evidence. The 79 no-candidate jobs lack explicit Deezer403
+linkage; prior negative-cache effects are unknown. This inventory is diagnostic
+evidence, not a runnable authorization marker; revalidate current ownership,
+catalog identities and manual selections before retry. No new pass has started.
 
 ## Bandcamp scheduling evidence (retained)
 

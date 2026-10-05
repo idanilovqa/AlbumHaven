@@ -203,7 +203,17 @@ def _http_get_bytes(
                 rate_limit_remaining=rate_limit_remaining,
                 rate_limit_total=rate_limit_total,
             )
-        if automatic_cover_budget_active() and (int(getattr(exc, "code", 0) or 0) == 429 or int(getattr(exc, "code", 0) or 0) >= 500):
+        status = int(getattr(exc, "code", 0) or 0)
+        apple_api_request = service == "apple" and context.startswith((
+            "search:", "artist-search:", "artist-id-search:", "artist-lookup:",
+        ))
+        # API failures and denied requests cannot establish a no-match result.
+        # Discovery pages and alternate artwork sizes may legitimately be absent.
+        if automatic_cover_budget_active() and (
+            status in (401, 403, 429)
+            or status >= 500
+            or (apple_api_request and 400 <= status < 500)
+        ):
             raise AutomaticCoverSearchFailed() from exc
         return None
     except urllib.error.URLError as exc:

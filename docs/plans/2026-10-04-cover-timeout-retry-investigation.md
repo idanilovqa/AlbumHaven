@@ -3,6 +3,56 @@
 Owner authorized investigation, fixes, and a targeted retry of unsuccessful cover
 lookups. Never convert an incomplete provider search into a definitive no-match.
 
+## Approved bounded Spotify cooldown retry
+
+The owner approved one bounded deferred Spotify-only retry after ordinary jobs
+finish. Preserve provider order and early acceptance. Immediately before a queued
+Spotify transport sends, recheck the latest shared cooldown and retain its expiry.
+Only unresolved, no-accepted-candidate outcomes explicitly dependent on that
+cooldown enter the deferred set. Successful jobs and other provider work are not
+repeated. At the deferred pass, eligible jobs get at most one Spotify-only retry;
+future cooldowns remain explicitly deferred with their retry time. Never wait for
+an arbitrarily distant expiry or keep the pass alive indefinitely.
+
+Acceptance uses fake clocks and transport/provider stubs: queued-send race,
+ordinary-before-deferred order, expiry extension, one retry maximum, no successful
+job replay, selected-artwork protection, and one final counter/event per album.
+A partial Spotify-only no-match cannot replace an incomplete whole-search cache
+result; retain original resolver evidence. Reuse the current executor, cache and
+guarded writer; no new durable worker, schema, UI or JSON persistence. Rollback is
+source-only. Focused RED/GREEN and independent complete review precede any commit;
+no live providers, database, deployment, operational retry or push is authorized
+by this implementation unit.
+
+Implementation steps (Python, current provider/executor interfaces):
+
+- [x] Reproduce queued Spotify sends after a newly extended cooldown in
+  `test_cover_provider_spotify.py`; add expiry-bearing failure classification
+  in `cover_provider_spotify.py` and preserve manual no-result behavior.
+- [x] Reproduce expiry propagation and Spotify-only search selection in provider
+  tests; update `cover_refresh_provider.py` without changing normal resolver order
+  or early acceptance. Carry initial incomplete trace into the partial retry so
+  no negative whole-search result is written.
+- [x] Reproduce bounded deferred execution, future-expiry reporting and exactly
+  one final job result in `test_state.py`; update `cover_refresh_execution.py`
+  with an in-memory deferred list processed only after the ordinary queue.
+- [ ] Run focused tests sequentially, inspect complete diff twice, and hand off
+  source/tests/documentation for independent review. Do not commit or push.
+
+Focused evidence: queued-send regression failed before repair; Spotify tests then
+passed 26/26. Provider/executor regressions reproduced missing expiry propagation
+and deferred work. Review regressions reproduced lost first-429 quota logging,
+manual queued-request incompatibility, and non-monotonic finalized progress (10
+failures); all were repaired. A conclusive Spotify retry now supersedes only its
+own earlier cooldown failure, copying the historical trace and retaining previous
+status/reason/expiry. Other providers' incomplete outcomes remain authoritative;
+only a genuinely complete all-provider no-match may populate the negative cache.
+Final focused verification: 102 passed, 64 deselected, one existing Pillow
+deprecation warning, 4.42 seconds. Serial/parallel jobs finalize exactly once;
+new cooldowns after the single retry remain deferred with the latest expiry.
+Transport and provider dependencies were stubbed. Final independent review is
+pending; this is not operational retry evidence or release authorization.
+
 ## Evidence and delivery boundary
 
 The October 3 executor completed 7,936 jobs: 4,705 downloads, 2,740 retained-cover

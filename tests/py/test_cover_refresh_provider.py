@@ -527,6 +527,59 @@ def test_bandcamp_does_not_run_when_a_smaller_primary_cover_exists(monkeypatch):
     ]
 
 
+@pytest.mark.parametrize("only_spotify", [False, True])
+def test_spotify_cooldown_trace_preserves_expiry_and_partial_scope(monkeypatch, only_spotify):
+    from music_app.services.cover_provider_spotify import SpotifyCooldown
+
+    calls = []
+    for provider in ("_search_apple", "_search_deezer", "_search_youtube_music", "_search_bandcamp"):
+        monkeypatch.setattr(cover_refresh_provider, provider, lambda *_args, _name=provider, **_kwargs: calls.append(_name))
+    monkeypatch.setattr(cover_refresh_provider, "_search_spotify", lambda *_args, **_kwargs: (
+        (_ for _ in ()).throw(SpotifyCooldown(212.0))
+    ))
+    candidate, trace = cover_refresh_provider.search_primary_remote_cover(
+        "Artist", "Album", None, 2001, "Tests/1.0",
+        allow_apple_web_fallback=False, has_local_cover=False, only_spotify=only_spotify,
+    )
+    assert candidate is None
+    spotify_trace = next(item for item in trace if item["resolver"] == "_search_spotify")
+    assert spotify_trace["status"] == "failed"
+    assert spotify_trace["reason"] == "spotify_cooldown"
+    assert spotify_trace["retry_at"] == 212.0
+    assert calls == ([] if only_spotify else ["_search_apple", "_search_deezer", "_search_youtube_music", "_search_bandcamp"])
+
+
+@pytest.mark.parametrize("initial_status", ["timeout", "failed", "no_candidate"])
+def test_spotify_only_retry_does_not_negative_cache_partial_search(tmp_path, monkeypatch, initial_status):
+    from types import SimpleNamespace
+    from music_app.services import cover_refresh_execution
+
+    writes = []
+    cache = SimpleNamespace(get=lambda _key: {}, set=lambda *args: writes.append(args))
+    previous = [{"resolver": "_search_apple", "status": initial_status},
+                {"resolver": "_search_spotify", "status": "failed", "reason": "spotify_cooldown", "retry_at": 1.0}]
+    monkeypatch.setattr(cover_refresh_provider, "_search_spotify", lambda *_args, **_kwargs: None)
+    for provider in ("_search_apple", "_search_deezer", "_search_youtube_music", "_search_bandcamp"):
+        monkeypatch.setattr(cover_refresh_provider, provider, lambda *_args, **_kwargs: pytest.fail("Only Spotify may repeat"))
+    path, downloaded, detail = cover_refresh_execution.execute_cover_job(
+        job={"folder": tmp_path, "artist": "Artist", "album": "Album"},
+        image_extensions={".jpg"}, user_agent="Tests/1.0", cover_cache=cache,
+        force_search=True, allow_apple_web_fallback=False,
+        allow_apple_web_fallback_when_has_cover=True, negative_cache_ttl_seconds=None,
+        spotify_retry_trace=previous,
+    )
+    assert path is None and downloaded is False
+    expected_reason = {"timeout": "remote_search_timed_out", "failed": "remote_search_failed", "no_candidate": "remote_search_returned_no_candidate"}[initial_status]
+    assert detail["reason"] == expected_reason
+    assert detail["resolver_trace"][0] == previous[0]
+    assert detail["resolver_trace"][1] == {**previous[1], "status": "superseded", "previous_status": "failed"}
+    assert previous[1]["status"] == "failed"
+    assert detail["resolver_trace"][-1]["status"] == "no_candidate"
+    assert len(writes) == int(initial_status == "no_candidate")
+    if writes:
+        assert writes[0][1]["missing"] is True
+
+
 def test_automatic_timeout_is_reported_separately_from_no_match(monkeypatch):
     from music_app.services.cover_provider_deadline import AutomaticCoverDeadlineExceeded
 

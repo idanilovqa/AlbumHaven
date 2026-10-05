@@ -2287,6 +2287,57 @@ def test_run_cover_jobs_logs_fast_terminal_outcome(recovered_cover_case, monkeyp
     assert not any(action == "Cover fetch slow" for action, _fields in events)
 
 
+@pytest.mark.parametrize("retry_at", [99.0, 200.0])
+@pytest.mark.parametrize("renew_cooldown", [False, True])
+@pytest.mark.parametrize("workers", [1, 2])
+def test_cover_jobs_defer_spotify_once_after_ordinary_jobs(recovered_cover_case, monkeypatch, retry_at, renew_cooldown, workers):
+    from music_app.services import cover_provider_spotify
+
+    case = recovered_cover_case
+    case.job["track_paths"] = []
+    case.kwargs["jobs"] = [case.job, {**case.job, "album": "Already successful"}]
+    case.kwargs["job_workers"] = workers
+    calls, events = [], []
+    progress = []
+    trace = [{"resolver": "_search_spotify", "status": "failed", "reason": "spotify_cooldown", "retry_at": retry_at}]
+    latest_expiry = [retry_at]
+
+    def execute(**kwargs):
+        album = kwargs["job"]["album"]
+        retry = kwargs.get("spotify_retry_trace") is not None
+        calls.append((album, retry))
+        if album == "Already successful":
+            return case.cover, True, {"reason": "downloaded", "elapsed_ms": 1.0}
+        if retry and renew_cooldown:
+            latest_expiry[0] = 300.0
+        return None, False, {"reason": "remote_search_failed", "elapsed_ms": 1.0, "resolver_trace": trace}
+
+    monkeypatch.setattr(cover_refresh_execution, "execute_cover_job", execute)
+    monkeypatch.setattr(cover_provider_spotify, "spotify_cooldown_until", lambda: latest_expiry[0])
+    monkeypatch.setattr(cover_refresh_execution.time, "time", lambda: 100.0)
+    def record_event(_config, _logger, action, **fields):
+        events.append((action, fields))
+        if action == "Cover fetch outcome":
+            progress.append(case.state.get("covers_processed", 0))
+    monkeypatch.setattr(cover_refresh_execution, "log_app_event", record_event)
+    result = cover_refresh_execution.run_cover_jobs(**case.kwargs)
+
+    assert sorted(calls[:2]) == [("Already successful", False), ("Recovered", False)]
+    assert calls[2:] == ([("Recovered", True)] if retry_at < 100 else [])
+    assert result["processed"] == 2
+    assert result["downloaded"] == 1
+    assert result["failed"] == 1
+    assert progress == [0, 1]
+    assert len([event for action, event in events if action == "Cover fetch outcome"]) == 2
+    pending = next(item for item in result["job_results"] if item.get("reason") == "remote_search_failed")
+    if latest_expiry[0] > 100:
+        assert result["spotify_deferred"] == 1
+        assert result["spotify_retry_at"] == latest_expiry[0]
+        assert pending["spotify_retry_deferred"] is True
+    if retry_at < 100:
+        assert pending["spotify_retry_attempted"] is True
+
+
 def test_recovered_cover_heterogeneous_baseline_reports_conflict(recovered_cover_case, monkeypatch):
     case = recovered_cover_case
     # Distinct persisted revisions cannot share one exact expected-state guard.

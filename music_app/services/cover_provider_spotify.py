@@ -47,6 +47,17 @@ SelectCandidate = Callable[..., CoverCandidate | None]
 DedupeCandidates = Callable[[list[CoverCandidate]], list[CoverCandidate]]
 
 
+class SpotifyCooldown(AutomaticCoverSearchFailed):
+    def __init__(self, retry_at: float):
+        super().__init__("Spotify cooldown is active")
+        self.retry_at = retry_at
+
+
+def spotify_cooldown_until() -> float:
+    with _SPOTIFY_REQUEST_PACING_LOCK:
+        return float(_SPOTIFY_REQUEST_PACING.get("rate_limited_until") or 0.0)
+
+
 def reset_spotify_rate_limit_state() -> None:
     _SPOTIFY_RATE_LIMIT_LOCAL.hit_429 = False
 
@@ -63,6 +74,9 @@ def spotify_wait_for_request_slot() -> None:
     wait_seconds = 0.0
     with _SPOTIFY_REQUEST_PACING_LOCK:
         now = time.time()
+        retry_at = float(_SPOTIFY_REQUEST_PACING.get("rate_limited_until") or 0.0)
+        if automatic_cover_budget_active() and retry_at > now:
+            raise SpotifyCooldown(retry_at)
         next_allowed_at = float(_SPOTIFY_REQUEST_PACING.get("next_allowed_at") or 0.0)
         if next_allowed_at > now:
             wait_seconds = next_allowed_at - now
@@ -181,6 +195,11 @@ def spotify_request_json(
         method=method.upper(),
     )
     spotify_wait_for_request_slot()
+    retry_at = spotify_cooldown_until()
+    if automatic_cover_budget_active() and retry_at > time.time():
+        mark_spotify_rate_limited()
+        _emit(log_event, "Spotify request deferred during cooldown", context=context, retry_at=retry_at)
+        raise SpotifyCooldown(retry_at)
     request_timeout = remaining_automatic_cover_seconds(20.0)
     _emit(
         log_event,
@@ -206,6 +225,7 @@ def spotify_request_json(
         ):
             raise AutomaticCoverDeadlineExceeded() from exc
         error_body = ""
+        cooldown_until = 0.0
         if isinstance(exc, urllib.error.HTTPError):
             if int(getattr(exc, "code", 0) or 0) == 429:
                 mark_spotify_rate_limited()
@@ -215,6 +235,7 @@ def spotify_request_json(
                 except Exception:
                     retry_after_seconds = 0.0
                 spotify_apply_retry_after(retry_after_seconds or 5.0)
+                cooldown_until = spotify_cooldown_until()
             try:
                 error_body = exc.read().decode("utf-8", errors="replace")
             except Exception:
@@ -231,8 +252,13 @@ def spotify_request_json(
             error_type=type(exc).__name__,
             error=str(exc),
             error_body=error_body[:500],
+            status=getattr(exc, "code", None),
+            **({"retry_at": cooldown_until, "retry_after_seconds": max(0.0, cooldown_until - time.time())}
+               if cooldown_until else {}),
         )
         if automatic_cover_budget_active():
+            if cooldown_until:
+                raise SpotifyCooldown(cooldown_until) from exc
             raise AutomaticCoverSearchFailed() from exc
         return None
     _emit(
@@ -593,9 +619,10 @@ def search_spotify(
             artist=artist,
             album=album,
             year=year,
+            retry_at=spotify_cooldown_until(),
         )
         if automatic:
-            raise AutomaticCoverSearchFailed()
+            raise SpotifyCooldown(spotify_cooldown_until())
         return None
     reset_rate_limit_state()
     started_at = time.perf_counter()

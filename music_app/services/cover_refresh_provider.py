@@ -649,6 +649,7 @@ def search_primary_remote_cover(
     candidate_callback: Callable[..., object] | None = None,
     logger=None,
     enabled_provider_groups: object = None,
+    only_spotify: bool = False,
 ) -> tuple[CoverCandidate | None, list[dict[str, object]]]:
     resolver_trace: list[dict[str, object]] = []
     primary_resolvers: list[tuple[str, str, object]] = [
@@ -675,6 +676,7 @@ def search_primary_remote_cover(
         for item in primary_resolvers
         if cover_provider_group_enabled(effective_groups, "music_services")
         and (not enabled_service_names or item[0] in enabled_service_names)
+        and (not only_spotify or item[0] == "spotify")
     ]
     primary_resolvers = cover_provider_matching.order_provider_items(
         primary_resolvers,
@@ -708,6 +710,13 @@ def search_primary_remote_cover(
                 apple_trace = cover_provider_apple.finish_apple_request_trace()
                 if apple_trace:
                     resolver_trace[-1]["apple_http_trace"] = apple_trace
+            candidate = None
+        except cover_provider_spotify.SpotifyCooldown as exc:
+            resolver_trace.append({
+                "resolver": resolver_name,
+                "elapsed_ms": round((time.perf_counter() - started_at) * 1000, 2),
+                "status": "failed", "reason": "spotify_cooldown", "retry_at": exc.retry_at,
+            })
             candidate = None
         except AutomaticCoverSearchFailed:
             resolver_trace.append({
@@ -787,7 +796,7 @@ def search_primary_remote_cover(
                 return candidate, resolver_trace
 
     if not primary_candidates:
-        if cover_provider_group_enabled(effective_groups, "bandcamp"):
+        if not only_spotify and cover_provider_group_enabled(effective_groups, "bandcamp"):
             started_at = time.perf_counter()
             budget_seconds = min(_AUTOMATIC_PROVIDER_BUDGET_SECONDS, album_deadline - started_at)
             try:

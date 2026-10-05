@@ -114,6 +114,17 @@ def test_access_token_missing_credentials_logs_and_skips_request(spotify):
     ]
 
 
+def test_queued_automatic_request_rechecks_latest_spotify_cooldown(spotify, monkeypatch):
+    from music_app.services.cover_provider_deadline import AutomaticCoverSearchFailed, automatic_cover_budget
+
+    monkeypatch.setattr(spotify.time, "time", lambda: 200.0)
+    monkeypatch.setattr(spotify, "spotify_wait_for_request_slot", lambda: spotify.spotify_apply_retry_after(12.0))
+    monkeypatch.setattr(spotify.urllib.request, "urlopen", lambda *_args, **_kwargs: pytest.fail("Cooldown must prevent transport"))
+    with automatic_cover_budget(30.0), pytest.raises(AutomaticCoverSearchFailed) as failure:
+        spotify.spotify_request_json("https://api.spotify.com/v1/search", method="GET", headers={}, log_event=None)
+    assert failure.value.retry_at == 212.0
+
+
 def test_request_json_marks_thread_local_and_global_cooldown_on_429(spotify, monkeypatch):
     class Headers:
         def get(self, name):
@@ -146,6 +157,31 @@ def test_request_json_marks_thread_local_and_global_cooldown_on_429(spotify, mon
     with spotify._SPOTIFY_REQUEST_PACING_LOCK:
         assert spotify._SPOTIFY_REQUEST_PACING["rate_limited_until"] == pytest.approx(207.0)
     assert "Spotify API request failed" in events
+
+
+def test_automatic_429_logs_failure_body_and_cooldown_before_deferral(spotify, monkeypatch):
+    from music_app.services.cover_provider_deadline import AutomaticCoverSearchFailed, automatic_cover_budget
+
+    error = urllib.error.HTTPError("https://api.spotify.com/v1/search", 429, "quota", {"Retry-After": "7"}, BytesIO(b'{"error":"quota"}'))
+    events = []
+    monkeypatch.setattr(spotify.time, "time", lambda: 200.0)
+    monkeypatch.setattr(spotify.urllib.request, "urlopen", lambda *_args, **_kwargs: (_ for _ in ()).throw(error))
+    with automatic_cover_budget(30), pytest.raises(AutomaticCoverSearchFailed):
+        spotify.spotify_request_json(error.url, method="GET", headers={}, log_event=lambda _config, _logger, action, **fields: events.append((action, fields)))
+    failure = next(fields for action, fields in events if action == "Spotify API request failed")
+    assert failure["error_body"] == '{"error":"quota"}'
+    assert failure["status"] == 429
+    assert failure["retry_at"] == 207.0
+    assert failure["retry_after_seconds"] == 7.0
+
+
+def test_manual_queued_request_preserves_transport_behavior(spotify, monkeypatch):
+    from contextlib import closing
+
+    monkeypatch.setattr(spotify.time, "time", lambda: 200.0)
+    monkeypatch.setattr(spotify, "spotify_wait_for_request_slot", lambda: spotify.spotify_apply_retry_after(12.0))
+    monkeypatch.setattr(spotify.urllib.request, "urlopen", lambda *_args, **_kwargs: closing(BytesIO(b'{"ok":true}')))
+    assert spotify.spotify_request_json("https://api.spotify.com/v1/search", method="GET", headers={}, log_event=None) == {"ok": True}
 
 
 @pytest.mark.parametrize("status", [400, 401, 403, 404, 429, 500])

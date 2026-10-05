@@ -1,0 +1,201 @@
+name: Verified Friends Native Checkout Export
+
+on:
+  push:
+    branches: [2026-09-30-mobile-bundle-transfer]
+    paths:
+      - .github/workflows/verified-friends-checkout-export.yml
+      - .github/scripts/verified-friends-checkout-export.py
+
+permissions:
+  contents: read
+
+concurrency:
+  group: friends-pinned-checkout-export
+  cancel-in-progress: false
+
+jobs:
+  export:
+    name: Export pinned native checkout
+    if: github.repository == 'idanilovqa/AlbumHaven' && github.event_name == 'push' && github.ref == 'refs/heads/2026-09-30-mobile-bundle-transfer' && github.run_attempt == 1
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - name: Require fresh isolated paths
+        shell: bash
+        run: |
+          set -euo pipefail
+          test ! -e "$GITHUB_WORKSPACE/control"
+          test ! -L "$GITHUB_WORKSPACE/control"
+          test ! -e "$GITHUB_WORKSPACE/source"
+          test ! -L "$GITHUB_WORKSPACE/source"
+          test ! -e "$RUNNER_TEMP/friends-native-export"
+          test ! -L "$RUNNER_TEMP/friends-native-export"
+      - name: Checkout helper control commit
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5 resolved via Editor
+        with:
+          repository: idanilovqa/AlbumHaven
+          ref: ${{ github.sha }}
+          path: control
+          fetch-depth: 2
+          fetch-tags: false
+          persist-credentials: false
+          submodules: false
+          lfs: false
+          set-safe-directory: false
+          show-progress: false
+      - name: Checkout exact source commit
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5 resolved via Editor
+        with:
+          repository: idanilovqa/AlbumHaven
+          ref: d2777b7f827916f6ff458e987a232b754448928c
+          path: source
+          fetch-depth: 1
+          fetch-tags: false
+          persist-credentials: false
+          submodules: false
+          lfs: false
+          set-safe-directory: false
+          show-progress: false
+      - name: Verify staged exporter then sanitize source
+        shell: bash
+        run: |
+          set -euo pipefail
+          env -i PATH=/usr/bin:/bin HOME=/nonexistent LANG=C LC_ALL=C \
+            GITHUB_REPOSITORY="$GITHUB_REPOSITORY" GITHUB_REF="$GITHUB_REF" \
+            GITHUB_EVENT_NAME="$GITHUB_EVENT_NAME" GITHUB_EVENT_PATH="$GITHUB_EVENT_PATH" \
+            GITHUB_SHA="$GITHUB_SHA" GITHUB_RUN_ID="$GITHUB_RUN_ID" \
+            GITHUB_RUN_ATTEMPT="$GITHUB_RUN_ATTEMPT" GITHUB_WORKFLOW_REF="$GITHUB_WORKFLOW_REF" \
+            GITHUB_WORKFLOW_SHA="$GITHUB_WORKFLOW_SHA" \
+            /usr/bin/python3 -I - "$GITHUB_WORKSPACE/control" \
+            "$GITHUB_WORKSPACE/source" "$RUNNER_TEMP/friends-native-export" <<'FRIENDS_BOOTSTRAP_PY'
+          """Verify the exact staged producer before executing any helper checkout code."""
+          import configparser
+          import hashlib
+          import os
+          from pathlib import Path
+          import stat
+          import resource
+          import tempfile
+          import subprocess
+          import sys
+          
+          PARENT = '278ad75b3e7a30153e680ab01afaddefe4fe1832'
+          REPOSITORY = 'idanilovqa/AlbumHaven'
+          BRANCH = '2026-09-30-mobile-bundle-transfer'
+          WORKFLOW = '.github/workflows/verified-friends-checkout-export.yml'
+          PRODUCER = '.github/scripts/verified-friends-checkout-export.py'
+          PRODUCER_SHA256 = '125dd5c21fd9af0c88aef38fa286b952d81082431ae276eb33aa41cb51130722'
+          PRODUCER_BLOB = '953d02824a1b52a55e49dc9aea9d36efb2a87069'
+          
+          
+          def require(value):
+              if not value:
+                  raise ValueError('bootstrap contract')
+          
+          
+          def read_file(path):
+              before = path.lstat()
+              require(stat.S_ISREG(before.st_mode) and before.st_nlink == 1)
+              fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+              with os.fdopen(fd, 'rb') as source:
+                  info = os.fstat(source.fileno())
+                  require(stat.S_ISREG(info.st_mode) and info.st_nlink == 1 and info.st_size <= 1024*1024)
+                  data = source.read(1024*1024+1)
+                  require(len(data) == info.st_size)
+                  return data
+          
+          
+          def main():
+              require(len(sys.argv) == 4)
+              control, source, out = [Path(arg).absolute() for arg in sys.argv[1:]]
+              for root in (control, source):
+                  require(root.is_dir() and all(not item.is_symlink() for item in [root, *root.parents]))
+              require(control != source and control not in source.parents and source not in control.parents)
+              require(os.environ.get('GITHUB_REPOSITORY') == REPOSITORY
+                      and os.environ.get('GITHUB_REF') == 'refs/heads/'+BRANCH
+                      and os.environ.get('GITHUB_EVENT_NAME') == 'push'
+                      and os.environ.get('GITHUB_RUN_ATTEMPT') == '1')
+              parser = configparser.RawConfigParser(strict=True, interpolation=None)
+              parser.read_string(read_file(control/'.git/config').decode('ascii'))
+              require(not parser.defaults() and set(parser.sections()) <= {'core', 'gc', 'remote "origin"', 'http "https://github.com/"'})
+              core = dict(parser.items('core'))
+              require(core.get('repositoryformatversion') == '0' and core.get('bare') == 'false'
+                      and core.get('filemode') == 'true'
+                      and set(core) <= {'repositoryformatversion', 'bare', 'filemode', 'logallrefupdates'}
+                      and core.get('logallrefupdates', 'true') == 'true')
+              if parser.has_section('gc'):
+                  require(dict(parser.items('gc')) == {'auto': '0'})
+              if parser.has_section('http "https://github.com/"'):
+                  require(not dict(parser.items('http "https://github.com/"')))
+              if parser.has_section('remote "origin"'):
+                  remote = dict(parser.items('remote "origin"'))
+                  require(set(remote) == {'url', 'fetch'} and remote['fetch'] == '+refs/heads/*:refs/remotes/origin/*'
+                          and remote['url'] in ('https://github.com/'+REPOSITORY, 'https://github.com/'+REPOSITORY+'.git'))
+              env = {'PATH': '/usr/bin:/bin', 'HOME': '/nonexistent', 'LANG': 'C', 'LC_ALL': 'C',
+                     'GIT_CONFIG_NOSYSTEM': '1', 'GIT_CONFIG_GLOBAL': '/dev/null', 'GIT_CONFIG_SYSTEM': '/dev/null',
+                     'GIT_TERMINAL_PROMPT': '0', 'GIT_ALLOW_PROTOCOL': '', 'GIT_PROTOCOL_FROM_USER': '0',
+                     'GIT_NO_LAZY_FETCH': '1', 'GIT_NO_REPLACE_OBJECTS': '1', 'GIT_OPTIONAL_LOCKS': '0'}
+              def child_limits():
+                  resource.setrlimit(resource.RLIMIT_AS, (512*1024*1024, 512*1024*1024))
+                  resource.setrlimit(resource.RLIMIT_CPU, (60, 60))
+                  resource.setrlimit(resource.RLIMIT_FSIZE, (1024*1024+1, 1024*1024+1))
+              def git(*args):
+                  with tempfile.TemporaryFile() as output:
+                      subprocess.run(['/usr/bin/git', '--no-pager', '-c', 'protocol.allow=never',
+                                      '-c', 'core.hooksPath=/dev/null', '-c', 'core.fsmonitor=false',
+                                      '-C', str(control), *args], env=env, stdin=subprocess.DEVNULL,
+                                     stdout=output, stderr=subprocess.DEVNULL, timeout=60,
+                                     preexec_fn=child_limits, check=True)
+                      require(output.tell() <= 1024*1024)
+                      output.seek(0)
+                      return output.read(1024*1024+1)
+              head = os.environ['GITHUB_SHA']
+              require(len(head) == 40 and all(char in '0123456789abcdef' for char in head))
+              require(git('rev-parse', 'HEAD') == (head+'\n').encode())
+              commit = git('cat-file', 'commit', head)
+              parents = [row[7:].decode() for row in commit.split(b'\n\n', 1)[0].splitlines() if row.startswith(b'parent ')]
+              require(parents == [PARENT])
+              delta = b''.join(b'A\0'+path.encode()+b'\0' for path in sorted((WORKFLOW, PRODUCER)))
+              require(git('diff-tree', '--no-commit-id', '--name-status', '-r', '-z', PARENT, head) == delta)
+              script = control/PRODUCER
+              for path in (script, control/WORKFLOW):
+                  require(all(not item.is_symlink() for item in [path, *path.parents]))
+                  relative = path.relative_to(control).as_posix()
+                  data = read_file(path)
+                  blob = hashlib.sha1(b'blob '+str(len(data)).encode()+b'\0'+data).hexdigest()
+                  require(git('ls-tree', PARENT, '--', relative) == b'')
+                  require(git('ls-tree', '-z', 'HEAD', '--', relative) ==
+                          b'100644 blob '+blob.encode()+b'\t'+relative.encode()+b'\0')
+                  if relative == PRODUCER:
+                      require(blob == PRODUCER_BLOB and hashlib.sha256(data).hexdigest() == PRODUCER_SHA256)
+              clean = {key: os.environ[key] for key in ('GITHUB_REPOSITORY', 'GITHUB_REF', 'GITHUB_EVENT_NAME',
+                       'GITHUB_EVENT_PATH', 'GITHUB_SHA', 'GITHUB_RUN_ID', 'GITHUB_RUN_ATTEMPT',
+                       'GITHUB_WORKFLOW_REF', 'GITHUB_WORKFLOW_SHA')}
+              clean.update({'PATH': '/usr/bin:/bin', 'HOME': '/nonexistent', 'LANG': 'C', 'LC_ALL': 'C',
+                            'FRIENDS_PRODUCER_SHA256': PRODUCER_SHA256, 'FRIENDS_PRODUCER_BLOB': PRODUCER_BLOB})
+              subprocess.run(['/usr/bin/python3', '-I', str(script), '--control', str(control),
+                              '--source', str(source), '--out', str(out)], env=clean,
+                             stdin=subprocess.DEVNULL, timeout=480, check=True)
+          
+          
+          if __name__ == '__main__':
+              try:
+                  main()
+              except (OSError, ValueError, KeyError, configparser.Error, subprocess.SubprocessError):
+                  raise SystemExit('Staged checkout exporter rejected before artifact admission') from None
+          FRIENDS_BOOTSTRAP_PY
+      - name: Upload exact sanitized artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4 resolved via Editor
+        with:
+          name: friends-checkout-d2777b7f-${{ github.run_id }}-1
+          path: |
+            ${{ runner.temp }}/friends-native-export/checkout.tar
+            ${{ runner.temp }}/friends-native-export/proof.json
+          compression-level: 0
+          retention-days: 1
+          if-no-files-found: error
+          overwrite: false
+          include-hidden-files: false

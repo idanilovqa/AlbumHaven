@@ -11,6 +11,56 @@ import pytest
 from music_app.services import metadata
 
 
+@pytest.mark.parametrize("subtitle_tag", ["subtitle", "discsubtitle", "TSST"])
+def test_track_and_disc_subtitles_do_not_split_album_editions(monkeypatch, tmp_path, subtitle_tag):
+    from music_app.services.library import build_albums_from_file_cache
+
+    entries = {}
+    for number, subtitle in enumerate(["First Movement", "Second Movement"], start=1):
+        path = tmp_path / f"{number:02d}.mp3"
+        path.touch()
+        tags = {
+            "album": ["Fixture Album"], "albumartist": ["Fixture Artist"],
+            "artist": ["Fixture Artist"], "title": [f"Track {number}"],
+            "tracknumber": [str(number)], "date": ["2001"],
+            subtitle_tag: [subtitle],
+        }
+        monkeypatch.setattr(metadata, "MutagenFile", lambda _path, tags=tags: SimpleNamespace(tags=tags))
+        entry = metadata.read_metadata_for_file(path)
+        assert entry["edition"] is None
+        assert metadata.read_tags(path)[subtitle_tag.lower()] == [subtitle]
+        entries[str(path)] = entry
+
+    albums = build_albums_from_file_cache(entries)
+    assert len(albums) == 1
+    assert len(albums[0].tracks) == 2
+
+
+@pytest.mark.parametrize("edition_tag", ["edition", "album edition", "albumedition", "version", "VERSION", "TIT3"])
+def test_explicit_and_legacy_editions_still_split_albums(monkeypatch, tmp_path, edition_tag):
+    from music_app.services.library import build_albums_from_file_cache
+
+    entries = {}
+    for number, edition in enumerate(["Original", "Deluxe"], start=1):
+        path = tmp_path / f"{number:02d}.mp3"
+        path.touch()
+        tags = {
+            "album": ["Fixture Album"], "albumartist": ["Fixture Artist"],
+            "artist": ["Fixture Artist"], "title": [f"Track {number}"],
+            "tracknumber": [str(number)], "date": ["2001"],
+            edition_tag: [edition], "discsubtitle": ["Disc subtitle"],
+        }
+        monkeypatch.setattr(metadata, "MutagenFile", lambda _path, tags=tags: SimpleNamespace(tags=tags))
+        entry = metadata.read_metadata_for_file(path)
+        assert entry["edition"] == edition
+        assert metadata.read_tags(path)[edition_tag.lower()] == [edition]
+        entries[str(path)] = entry
+
+    albums = build_albums_from_file_cache(entries)
+    assert len(albums) == 2
+    assert {album.edition for album in albums} == {"Original", "Deluxe"}
+
+
 @pytest.mark.parametrize(
     ("entry", "expected"),
     [

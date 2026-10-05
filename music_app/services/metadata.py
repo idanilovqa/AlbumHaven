@@ -559,7 +559,7 @@ def read_metadata_for_file(path: Path) -> dict[str, object]:
     duration_seconds = safe_int(tags.get("duration_seconds"))
     year = extract_year(tags)
     release_date = extract_release_date(tags)
-    edition = first_tag(tags, ["edition", "album edition", "albumedition", "version", "subtitle", "discsubtitle"]) or first_custom_tag(tags, ["edition", "album edition", "albumedition"])
+    edition = first_tag(tags, ["edition", "album edition", "albumedition", "version"]) or first_custom_tag(tags, ["edition", "album edition", "albumedition"])
     album_rating = extract_album_rating(tags)
     exception_type = normalize_exception_value(first_custom_tag(tags, NON_ALBUM_EXCEPTION_TAG_NAMES))
     return {

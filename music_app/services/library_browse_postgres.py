@@ -2885,7 +2885,9 @@ def _duplicate_candidate_ids_from_index(index: list[tuple[int, str, object]], al
     })
 
 
-def _duplicate_sources_from_rows(rows: list[object]) -> dict[str, dict[str, object]]:
+def _duplicate_sources_from_rows(
+    rows: list[object], *, file_entries_by_path: Mapping[str, dict[str, object]] | None = None,
+) -> dict[str, dict[str, object]]:
     """Use the domain's physical-container identity for every read projection."""
     from music_app.models.library import Album, Track
     from music_app.services.library import _link_duplicate_album_sources, get_album_duplicate_sources
@@ -2893,9 +2895,14 @@ def _duplicate_sources_from_rows(rows: list[object]) -> dict[str, dict[str, obje
     albums = {}
     seen_paths = set()
     rows_by_path = {}
+    file_entries_by_path = file_entries_by_path or {}
     for row in rows:
         payload = _row_mapping(row)
-        entry = _problematic_file_entry_from_row(payload)
+        entry = file_entries_by_path.get(str(payload.get("file_private_path") or "").strip())
+        if entry is None:
+            entry = _problematic_file_entry_from_row(payload)
+        else:
+            entry = dict(entry)
         if payload.get("file_entry_is_object") is not True and not _row_json_mapping(payload.get("file_entry")):
             entry.update(album=None, album_artist=None, year=None)
         key = str(payload.get("album_key") or "")
@@ -3079,7 +3086,11 @@ def _problematic_album_projection_payloads(rows: list[object]) -> list[dict[str,
             }
         )
     projected_albums = list(albums.values())
-    duplicates = _duplicate_sources_from_rows(rows)
+    duplicates = _duplicate_sources_from_rows(rows, file_entries_by_path={
+        str(entry["path"]): entry
+        for album in albums.values()
+        for entry in album["_file_entries"]
+    })
     for album in projected_albums:
         duplicate_result = duplicates.get(str(album.get("_persisted_album_key") or album.get("key")), {})
         sources = _duplicate_sources_for_projected_album(album, duplicate_result)

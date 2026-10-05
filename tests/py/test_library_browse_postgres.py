@@ -47,6 +47,15 @@ class _NoopSearchSnapshotConnection:
 
 
 @pytest.fixture(autouse=True)
+def default_empty_inventory_fingerprint(monkeypatch):
+    import music_app.services.library_browse_postgres as browse
+
+    original = browse._duplicate_inventory_fingerprint
+    monkeypatch.setattr(browse, "_duplicate_inventory_fingerprint", lambda _connection: {})
+    return original
+
+
+@pytest.fixture(autouse=True)
 def default_empty_relation_alias_projection(monkeypatch):
     from music_app.services.library_browse_postgres import PostgresLibraryBrowseRepository
 
@@ -1176,9 +1185,14 @@ def test_postgres_root_counts_preserve_alias_deduplication_and_category_filters(
 
 
 def test_postgres_root_sidebar_reads_one_repeatable_read_snapshot_and_rolls_it_back(
-    monkeypatch, default_empty_missing_album_projection,
+    monkeypatch, default_empty_missing_album_projection, default_empty_inventory_fingerprint,
 ):
     from music_app.services.library_browse_postgres import PostgresLibraryBrowseRepository
+
+    monkeypatch.setattr(
+        "music_app.services.library_browse_postgres._duplicate_inventory_fingerprint",
+        default_empty_inventory_fingerprint,
+    )
 
     connections = []
     read_connections = []
@@ -7571,6 +7585,7 @@ def test_postgres_album_payloads_by_track_paths_excludes_exception_track_and_kee
         {
             "key": "exception-artist-exception-album",
             "album_ref": "exception-artist-exception-album",
+            "_persisted_album_key": "exception-artist-exception-album",
             "name": "Exception Album",
             "album_artist": "Exception Artist",
             "artists": ["Exception Artist"],
@@ -7833,7 +7848,8 @@ def test_postgres_library_browse_builds_problematic_files_projection_from_rows()
     assert "library.ignored_repairs" in candidate_sql
     assert "library.separate_releases" in candidate_sql
     assert "scan_file_entry_is_object" in candidate_sql
-    detail_sql = str(executed[8])
+    assert "select distinct albums.id as album_id" in str(executed[8])
+    detail_sql = str(executed[10])
     assert "library.ignored_repairs" in detail_sql
     assert "library.separate_releases" in detail_sql
     from music_app.services.utils import (
@@ -7845,7 +7861,7 @@ def test_postgres_library_browse_builds_problematic_files_projection_from_rows()
         "mojibake_candidate_pattern": MOJIBAKE_CANDIDATE_PATTERN,
         "encoding_candidate_chars": MOJIBAKE_ENCODING_CANDIDATE_CHARS,
     }
-    assert executed[9] == {"album_key": "broken-album"}
+    assert executed[11] == {"album_ids": [101]}
 
 
 def test_problematic_album_detail_explains_album_tag_problem_with_value_and_field():
@@ -8144,7 +8160,8 @@ def test_problematic_candidate_sql_groups_canonical_track_order_and_overincludes
     assert "as effective_track_number" in order_rows_sql
     assert "from library.local_track_files" in order_rows_sql
     assert "library.local_track_files.metadata" not in order_rows_sql
-    assert "library.local_track_files.private_path" not in order_rows_sql
+    # Physical-container identity needs the directory, not path-derived track numbers.
+    assert "as source_directory" in order_rows_sql
     assert "library.local_track_files.scan_file_track_number" not in order_rows_sql
     assert "regexp_match(" not in order_rows_sql
     assert "library.local_tracks.track_number is null" in order_rows_sql
@@ -8313,8 +8330,12 @@ def test_empty_non_album_candidate_cache_does_not_request_unrestricted_inventory
 
 
 @pytest.mark.parametrize("changed_versions", ["override_versions", "root_versions"])
-def test_inventory_cache_observes_late_commits_with_unchanged_max_timestamp_and_count(monkeypatch, changed_versions):
+def test_inventory_cache_observes_late_commits_with_unchanged_max_timestamp_and_count(
+    monkeypatch, changed_versions, default_empty_inventory_fingerprint,
+):
     import music_app.services.library_browse_postgres as browse
+
+    monkeypatch.setattr(browse, "_duplicate_inventory_fingerprint", default_empty_inventory_fingerprint)
 
     repository = browse.PostgresLibraryBrowseRepository({"ALBUM_HAVEN_APP_DATABASE_URL": "late-commit-cache-test"})
     browse.invalidate_postgres_utility_projection_cache()
@@ -8355,8 +8376,12 @@ def test_inventory_cache_observes_late_commits_with_unchanged_max_timestamp_and_
     browse.invalidate_postgres_utility_projection_cache()
 
 
-def test_inventory_fingerprint_reads_ordered_mvcc_versions_not_only_max_timestamps():
+def test_inventory_fingerprint_reads_ordered_mvcc_versions_not_only_max_timestamps(
+    monkeypatch, default_empty_inventory_fingerprint,
+):
     import music_app.services.library_browse_postgres as browse
+
+    monkeypatch.setattr(browse, "_duplicate_inventory_fingerprint", default_empty_inventory_fingerprint)
 
     class Connection:
         sql = ""
@@ -8493,17 +8518,18 @@ def test_problematic_candidate_sql_conservatively_overincludes_only_strong_encod
     )[1].split("selected_albums as", 1)[0]
 
     assert "ignored_repair" not in candidate_sql
-    assert "octet_length(" not in candidate_sql
+    # Unicode titles conservatively widen duplicate identity candidates; they do
+    # not by themselves establish a text-encoding problem.
+    encoding_rows_sql = candidate_sql.split("duplicate_album_ids as (", 1)[0]
+    assert "octet_length(" not in encoding_rows_sql
     assert candidate_sql.count("translate(") >= 4
     assert candidate_sql.count("~ %(mojibake_candidate_pattern)s::text") >= 2
     assert candidate_sql.count("mod(ascii(candidate_character.value), 256) = 0") >= 2
     assert "position('??'" in candidate_sql
     assert "in ('', 'unknown', 'unknown artist', 'unknown album', 'none', 'null')" in candidate_sql
     assert "library.local_track_files.scan_file_entry_is_object is true" in summary_sql
-    assert (
-        "group by active_problem_rows.album_id, active_problem_rows.track_id "
-        "having count(*) > 1"
-    ) in candidate_sql
+    assert "having count(distinct source_directory) > 1" in candidate_sql
+    assert "identity_candidates.file_year = candidate.file_year" in candidate_sql
     assert "relational_file_candidate_ids" not in candidate_sql
     assert "duplicate_track_ids" not in candidate_sql
     assert "duplicate_candidate_ids as" not in candidate_sql
@@ -10435,7 +10461,7 @@ def test_postgres_library_browse_ignores_e2e_seed_env_and_queries_product_tables
     assert detail_payload is not None
     assert detail_payload["key"] == "product-album"
     assert detail_payload["detail_loaded"] is True
-    assert len(executed) == 5
+    assert len(executed) == 6
     assert all(
         "library.local_track_files" in sql
         for sql, _params in executed
@@ -10446,7 +10472,8 @@ def test_postgres_library_browse_ignores_e2e_seed_env_and_queries_product_tables
     assert executed[1][0] == "SET LOCAL work_mem = '16MB'"
     assert executed[2][0] == "SET LOCAL jit = off"
     assert executed[3][1]["mojibake_candidate_pattern"]
-    assert executed[4][1]["album_key"] == "product-album"
+    assert "select distinct albums.id as album_id" in executed[4][0]
+    assert executed[5][1] == {"album_ids": [101]}
 
 
 def test_postgres_library_browse_builds_utility_rules_projection_from_rows():
@@ -12026,7 +12053,11 @@ def test_postgres_search_batch_loads_private_album_rating_overlays(monkeypatch):
             return False
 
         def execute(self, sql, params=None):
-            assert str(sql).startswith("SET TRANSACTION")
+            assert (
+                str(sql).startswith("SET TRANSACTION")
+                or "select distinct albums.id as album_id" in str(sql)
+                or sql == browse_module._problematic_files_sql(duplicate_candidates=True)
+            )
             return _InventoryCursor()
 
     _install_recording_album_ratings_service(monkeypatch)

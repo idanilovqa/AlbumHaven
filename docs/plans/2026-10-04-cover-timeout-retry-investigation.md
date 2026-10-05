@@ -26,6 +26,67 @@ Task 2 of the fast-automatic-cover-search plan, not its overall completion.
 
 ## Pending
 
+### Outcome accounting and request-error follow-up
+
+The retained completion messages reconcile exactly to 7,936 unique jobs:
+4,705 downloaded, 2,740 skipped, and 491 failed. Structured per-job evidence
+attributes the 2,519 timeout outcomes to 371 failed and 2,148 skipped jobs;
+the 79 no-candidate outcomes comprise 36 failed and 43 skipped jobs. These
+dimensions must not be added together. Remaining attribution is under audit;
+provider-attempt counts alone cannot classify the remaining failed albums.
+
+Spotify HTTP classification is a separate narrow bug-fix candidate: automatic
+request handling currently raises search failure for rate-limit/server/network
+errors but returns no result for other HTTP errors. Reproduce whether rejected
+requests or authorization errors can become a false no-match before changing
+that boundary. Acceptance: HTTP failures remain incomplete searches, a valid
+empty response remains no-match, and existing manual behavior, provider fallback,
+deadlines and retry count are preserved. Use transport-stub focused regressions,
+two scoped reviews and a separate commit; no live retry or publication implied.
+
+Edition compatibility investigation confirms that historical app-written MP3
+editions and external track subtitles both use TIT3. Raw tags cannot distinguish
+their authorship. Native non-ID3 VERSION values and explicit edition tags must
+remain intact. Do not globally strip TIT3 or merge persisted catalog identities;
+the exact affected-record repair and future inference policy remain design-gated.
+
+### Nine-folder diagnosis and proposed repair
+
+Read-only audit inspected all 107 indexed paths in the nine rejected folders;
+all paths exist and none of their cache rows is stale. Private per-folder proof:
+`album-haven-internal/tmp/nine-cover-folder-audit-20261004.md`.
+
+- Three catalog identity defects: Art Zoyd's Le Mariage uses each track's TIT3
+  subtitle as an album edition; I Monster's Neveroddoreven uses two track-remix
+  subtitles; Art Zoyd's Symphonie uses TSST disc/set subtitles despite matching
+  album tags and MusicBrainz album ID. These are not duplicate physical albums.
+- Three genuine tag conflicts: Pepel/Pesni dlya radio share a folder; Apollo 13
+  includes one Apollo 13 Score track and conflicting years; The Mask Of Zorro
+  includes one track tagged Tina Arena / In Deep. Do not rewrite these tags or
+  infer that a combined release is incorrect without owner review.
+- Three missing/empty-file splits: Archspire has two valid nonempty MP3s with
+  no tags; Deep Forest's Comparsa and Pacifique each include one physically
+  present zero-byte alternate filename, alongside the tagged original files.
+
+The folder planner selects one identity for all tracks in a physical folder.
+Targeted persistence rejects multiple authoritative album IDs before invoking
+the physical artwork commit callback. This is a local identity/persistence
+failure, not a provider no-match. Preserve the guard; per-album jobs sharing the
+same cover filename would still overwrite one another.
+
+Current Problematic Files has no cross-album folder-identity reason. Exact live
+account-scoped flags/exclusions were not queried and remain unverified.
+
+Proposed design, awaiting exact owner approval: correct edition interpretation
+without losing genuine existing editions; expose Empty audio file and Mixed
+album metadata in one folder through existing Problematic Files surfaces and
+permissions; reject ambiguous destinations before provider calls. Do not delete
+files, rewrite music tags or merge catalog records as part of diagnosis.
+Existing edition writes use the version tag, so compatibility must be designed
+before removing subtitle/version fallbacks. A targeted catalog repair requires
+its own reviewed scope and retained pre-change evidence. No product or data fix
+has yet been applied for these nine cases; existing checkboxes remain unchanged.
+
 MusicBrainz follow-up delivery: reproduce stale automatic request timeouts after
 queue/rate-slot waits and retries, then re-clamp each request to the existing
 absolute budget. Make automatic slot/backoff waits cancellation-aware without
@@ -50,7 +111,37 @@ and one automatic candidate snapshot still marked running. These aggregate count
 are not proof of successful per-album persistence or file existence. Production and
 maintenance service state must be checked afresh before a retry.
 
-## Bandcamp scheduling evidence
+## October 5 request-error evidence
+
+Private log audit reconciles all completion identities and preserves exact source
+lines in `album-haven-internal/tmp/cover-run-audit-20261004/REPORT.md` and adjacent
+diagnostic artifacts. Within the 491 failed jobs: 371 timeout, 63 provider error,
+36 no-candidate, four exceptions, four protected-cover improvement outcomes, and
+13 unretained individual reasons. Slow-only detailed logging leaves 65 fast jobs
+without exact reason attribution (13 failed, 52 skipped). Do not guess those
+reasons from adjacent interleaved provider messages.
+
+Deezer returned 10,035 successful search responses but 4,219 artwork HTTP403s,
+all at synthesized 2000-pixel URLs. A bounded header-only check of one exact
+logged artwork confirmed 403 at 2000 pixels and 200/image/jpeg at 1000 pixels.
+The automatic single-cover path discards the provider URL in favor of the
+synthesized URL with no fallback. Regression repair is pending; manual behavior
+and the existing image-quality/identity checks must remain unchanged.
+
+Spotify recorded one quota-exhausted HTTP429 and 2,805 cooldown skips, not 2,805
+HTTP failures. The retained log omits the actual Retry-After header. A separate
+classification regression reproduced four automatic failures: HTTP400/401/403/404
+were returned as empty results. The narrow correction raises the existing
+automatic-search failure for all request errors; manual behavior, timeout and
+429 cooldown handling remain unchanged. Focused verification: four RED failures
+with 21 controls passing, then 75 passing Spotify/deadline cases. Two independent
+scoped review passes found no remaining findings. Not yet deployed or retried.
+
+Shared HTTP classification still needs endpoint-aware investigation: an expected
+Bandcamp guessed-URL404 is not equivalent to Apple's logged search-endpoint404.
+Spotify's fix does not close that separate remaining investigation.
+
+## Bandcamp scheduling evidence (retained)
 
 The automatic direct-account worker previously stopped after guessed album URLs;
 catalog discovery waited for both that worker and MusicBrainz. A stalled

@@ -232,11 +232,7 @@ def spotify_request_json(
             error=str(exc),
             error_body=error_body[:500],
         )
-        if automatic_cover_budget_active() and (
-            not isinstance(exc, urllib.error.HTTPError)
-            or int(getattr(exc, "code", 0) or 0) == 429
-            or int(getattr(exc, "code", 0) or 0) >= 500
-        ):
+        if automatic_cover_budget_active():
             raise AutomaticCoverSearchFailed() from exc
         return None
     _emit(

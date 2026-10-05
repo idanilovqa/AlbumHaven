@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import urllib.error
+from contextlib import nullcontext
+from io import BytesIO
 from types import SimpleNamespace
 
 import pytest
@@ -144,6 +146,41 @@ def test_request_json_marks_thread_local_and_global_cooldown_on_429(spotify, mon
     with spotify._SPOTIFY_REQUEST_PACING_LOCK:
         assert spotify._SPOTIFY_REQUEST_PACING["rate_limited_until"] == pytest.approx(207.0)
     assert "Spotify API request failed" in events
+
+
+@pytest.mark.parametrize("status", [400, 401, 403, 404, 429, 500])
+@pytest.mark.parametrize("automatic", [False, True])
+def test_request_json_http_errors_are_not_automatic_no_matches(spotify, monkeypatch, status, automatic):
+    from music_app.services.cover_provider_deadline import AutomaticCoverSearchFailed, automatic_cover_budget
+
+    error = urllib.error.HTTPError(
+        "https://api.spotify.com/v1/search", status, "Request rejected", {},
+        BytesIO(b'{"error":{"message":"Request rejected"}}'),
+    )
+
+    def reject_request(*_args, **_kwargs):
+        raise error
+
+    monkeypatch.setattr(spotify.urllib.request, "urlopen", reject_request)
+    with automatic_cover_budget(5.0) if automatic else nullcontext():
+        if automatic:
+            with pytest.raises(AutomaticCoverSearchFailed):
+                spotify.spotify_request_json(error.url, method="GET", headers={}, log_event=None)
+        else:
+            assert spotify.spotify_request_json(error.url, method="GET", headers={}, log_event=None) is None
+
+
+def test_request_json_valid_empty_automatic_search_remains_successful(spotify, monkeypatch):
+    from music_app.services.cover_provider_deadline import automatic_cover_budget
+
+    monkeypatch.setattr(
+        spotify.urllib.request, "urlopen",
+        lambda *_args, **_kwargs: BytesIO(b'{"albums":{"items":[]}}'),
+    )
+    with automatic_cover_budget(5.0):
+        assert spotify.spotify_request_json(
+            "https://api.spotify.com/v1/search", method="GET", headers={}, log_event=None,
+        ) == {"albums": {"items": []}}
 
 
 def test_market_is_sent_to_search_artist_albums_and_album_link_fetch(spotify, monkeypatch):

@@ -115,6 +115,76 @@ test('gallery target classification rejects an attached DOM match without canoni
   );
 });
 
+test('gallery boundary waits for advertised continuation before reversing', async () => {
+  const { GalleryActions } = await import(galleryActionsUrl);
+  let scrollTop = 720;
+  let reads = 0;
+  const movements = [];
+  const target = { count: async () => Number(scrollTop === 960) };
+  const actions = new GalleryActions({
+    sectionByArtistHeading: () => ({ getByRole: () => ({ first: () => target }) }),
+    async waitForGalleryScrollMovement(previous, direction) {
+      assert.equal(Math.sign(scrollTop - previous), direction);
+    },
+  });
+  actions.readGalleryScrollState = async () => {
+    const continued = reads++ > 0;
+    return {
+      scrollTop, clientHeight: 320, maxScrollTop: continued ? 960 : 720,
+      pagination: { busy: false, page: { offset: continued ? 18 : 12, next_offset: continued ? null : 18 } },
+    };
+  };
+  actions.scrollGalleryBy = async (delta) => { movements.push(delta); scrollTop += delta; };
+  actions.readAlbumGalleryViewportState = async () => ({
+    attached: scrollTop === 960, intersects: scrollTop === 960,
+  });
+  await actions.scrollToAlbumUnderHeading('E2E Rarity Artist', 'Fixture', { maxAttempts: 1, timeout: 1000 });
+  assert.deepEqual(movements, [240]);
+});
+
+test('stalled gallery continuation fails within the supplied timeout without reversing', async () => {
+  const { GalleryActions } = await import(galleryActionsUrl);
+  const actions = new GalleryActions({
+    sectionByArtistHeading: () => ({ getByRole: () => ({ first: () => ({ count: async () => 0 }) }) }),
+  });
+  actions.readGalleryScrollState = async () => ({
+    scrollTop: 720, clientHeight: 320, maxScrollTop: 720,
+    pagination: { busy: false, page: { offset: 12, next_offset: 18 } },
+  });
+  actions.scrollGalleryBy = async () => assert.fail('Must not reverse while another page is advertised');
+  await assert.rejects(
+    actions.scrollToAlbumUnderHeading('E2E Rarity Artist', 'Fixture', { timeout: 25 }),
+    /Expected advertised gallery continuation to settle/,
+  );
+});
+
+test('gallery navigation surfaces observed continuation failure', async () => {
+  const { GalleryActions } = await import(galleryActionsUrl);
+  const actions = new GalleryActions({
+    galleryScroll: { evaluate: async () => ({ scrollTop: 0, maxScrollTop: 0, clientHeight: 320 }) },
+    productionViewObserver: { read: () => ({ latestGalleryPageError: 'HTTP 500 for continuation' }) },
+  });
+  await assert.rejects(actions.readGalleryScrollState(), /HTTP 500 for continuation/);
+});
+
+test('upward gallery navigation starting at top reverses to find a later album', async () => {
+  const { GalleryActions } = await import(galleryActionsUrl);
+  let scrollTop = 0;
+  const movements = [];
+  const target = { count: async () => Number(scrollTop === 240) };
+  const actions = new GalleryActions({
+    sectionByArtistHeading: () => ({ getByRole: () => ({ first: () => target }) }),
+    async waitForGalleryScrollMovement(previous, direction) {
+      assert.equal(Math.sign(scrollTop - previous), direction);
+    },
+  });
+  actions.readGalleryScrollState = async () => ({ scrollTop, clientHeight: 320, maxScrollTop: 720 });
+  actions.scrollGalleryBy = async (delta) => { movements.push(delta); scrollTop += delta; };
+  actions.readAlbumGalleryViewportState = async () => ({ attached: true, intersects: true });
+  await actions.scrollToAlbumUnderHeading('Artist', 'Album', { direction: -1, maxAttempts: 1 });
+  assert.deepEqual(movements, [240]);
+});
+
 test('canonical detached album above the viewport is found by reversing at the gallery boundary', async () => {
   const { GalleryActions } = await import(galleryActionsUrl);
   let scrollTop = 720;

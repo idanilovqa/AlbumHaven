@@ -30,6 +30,83 @@ class FakePage {
   }
 }
 
+test('production view observer retains current gallery continuation without full-view authority', async () => {
+  const { ProductionViewObserver } = await import(observerUrl);
+  const page = new FakePage();
+  const observer = new ProductionViewObserver(page, page);
+  const current = request('http://127.0.0.1/view-data?payload_tier=sidebar&gallery_offset=12');
+  page.emit('request', current);
+  page.emit('response', response(current, { payload_tier: 'sidebar', gallery_page: { offset: 12, next_offset: 18 } }));
+  page.emit('requestfinished', current);
+  await flushPromises();
+  assert.deepEqual(observer.read().latestGalleryPage, { offset: 12, next_offset: 18 });
+  assert.equal(observer.read().latestFullPayload, null);
+});
+
+test('production gallery continuation rejects stale filter and document responses', async () => {
+  const { ProductionViewObserver } = await import(observerUrl);
+  const page = new FakePage();
+  const observer = new ProductionViewObserver(page, page);
+  const older = request('http://127.0.0.1/view-data?payload_tier=sidebar&gallery_offset=12');
+  const newer = request('http://127.0.0.1/view-data?q=Neal');
+  page.emit('request', older);
+  page.emit('request', newer);
+  page.emit('response', response(newer, { payload_tier: 'full' }));
+  page.emit('response', response(older, { payload_tier: 'sidebar', gallery_page: { offset: 12, next_offset: 18 } }));
+  await flushPromises();
+  assert.equal(observer.read().latestGalleryPage, null);
+  page.emit('documentcommitted');
+  page.emit('response', response(older, { gallery_page: { offset: 12, next_offset: 18 } }));
+  await flushPromises();
+  assert.equal(observer.read().latestGalleryPage, null);
+});
+
+test('unrelated surface and sidebar-only responses preserve gallery continuation', async () => {
+  const { ProductionViewObserver } = await import(observerUrl);
+  const page = new FakePage();
+  const observer = new ProductionViewObserver(page, page);
+  const gallery = request('http://127.0.0.1/view-data?surface=albums&payload_tier=sidebar');
+  page.emit('request', gallery);
+  page.emit('response', response(gallery, { gallery_page: { offset: 12, next_offset: 18 } }));
+  page.emit('requestfinished', gallery);
+  await flushPromises();
+  const sidebar = request('http://127.0.0.1/view-data?surface=artists&payload_tier=sidebar');
+  page.emit('request', sidebar);
+  assert.equal(observer.read().galleryBusy, false);
+  page.emit('response', response(sidebar, { artists_sidebar: [] }));
+  page.emit('requestfinished', sidebar);
+  await flushPromises();
+  assert.deepEqual(observer.read().latestGalleryPage, { offset: 12, next_offset: 18 });
+});
+
+for (const failure of ['HTTP 500', 'invalid JSON', 'requestfailed']) {
+  test(`gallery continuation surfaces ${failure} instead of exhaustion`, async () => {
+    const { ProductionViewObserver } = await import(observerUrl);
+    const page = new FakePage();
+    const observer = new ProductionViewObserver(page, page);
+    const current = request('http://127.0.0.1/view-data?surface=albums&payload_tier=sidebar&gallery_offset=18');
+    page.emit('request', current);
+    if (failure === 'requestfailed') page.emit('requestfailed', current);
+    else {
+      page.emit('response', response(current, null, failure === 'HTTP 500'
+        ? { ok: false, status: 500 }
+        : { json: async () => { throw new Error('invalid JSON'); } }));
+      page.emit('requestfinished', current);
+    }
+    await flushPromises();
+    assert.match(observer.read().latestGalleryPageError, failure === 'requestfailed' ? /Request failed/ : new RegExp(failure));
+    assert.equal(observer.read().galleryBusy, false);
+    page.emit('request', request('http://127.0.0.1/view-data?q=New'));
+    page.emit('response', response(current, null, { ok: false, status: 500 }));
+    page.emit('requestfailed', current);
+    await flushPromises();
+    assert.equal(observer.read().latestGalleryPageError, null, 'old failures must not poison the newer filter');
+    page.emit('documentcommitted');
+    page.emit('requestfailed', current);
+    assert.equal(observer.read().latestGalleryPageError, null, 'old failures must not poison the newer document');
+  });
+}
+
 function request(url, method = 'GET') {
   return {
     method: () => method,

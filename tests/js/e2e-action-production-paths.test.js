@@ -568,19 +568,25 @@ test('stable search clearing establishes user focus before observing network act
   );
 });
 
-test('Scan Page phase observation reads visible current phase cards, not static future labels', async () => {
+test('Scan Page phase observation reads current titles without nested subprogress or hidden future labels', async () => {
   const vm = require('node:vm');
   const { ScanPage } = await import(pathToFileURL(path.join(repoRoot, 'tests/e2e/poms/scanPage.js')).href);
   const { ScanPageActions } = await import(pathToFileURL(path.join(repoRoot, 'tests/e2e/actions/scanPageActions.js')).href);
   class Element {
     constructor(textContent = '') { this.textContent = textContent; this.hidden = false; }
     getBoundingClientRect() { return { width: this.hidden ? 0 : 100, height: this.hidden ? 0 : 30 }; }
+    querySelector(selector) { return selector === 'strong' ? this.title || null : null; }
   }
   const loader = new Element();
   const title = new Element('Scanning the library');
   const cancel = new Element();
   const browse = new Element();
-  const stages = ['Discover files', 'Read tags & metadata', 'Update cover art', 'Refresh artist relations'].map((label) => new Element(label));
+  const stageTitles = ['Discover files', 'Read tags & metadata', 'Update cover art', 'Refresh artist relations'];
+  const stages = stageTitles.map((label) => {
+    const stage = new Element(`${label}elapsed 1s · 180 of 1001 albums`);
+    stage.title = new Element(label);
+    return stage;
+  });
   let currentStage = stages[0];
   let inspect;
   let disconnected = false;
@@ -612,11 +618,13 @@ test('Scan Page phase observation reads visible current phase cards, not static 
   for (const stage of stages.slice(1)) { currentStage = stage; inspect(); }
   title.textContent = 'Your local library is ready.';
   currentStage = new Element('Hidden future phase');
+  currentStage.title = new Element('Hidden future phase');
   currentStage.hidden = true;
   inspect();
   const result = await observation.finish();
   assert.ok(disconnected);
-  for (const stage of stages) assert.ok(result.titles.includes(stage.textContent), `Missing active phase: ${stage.textContent}`);
+  for (const label of stageTitles) assert.ok(result.titles.includes(label), `Missing active phase: ${label}`);
+  assert.ok(result.titles.every((label) => !label.includes('180 of 1001 albums')));
   assert.ok(!result.titles.includes('Hidden future phase'));
   assert.ok(result.relationActionSamples.length > 0);
   const actions = new ScanPageActions(scanPage);

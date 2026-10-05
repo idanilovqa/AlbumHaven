@@ -930,6 +930,7 @@ export class GalleryActions {
   }
 
   async scrollToAlbumUnderHeading(artistName, albumName, options = {}) {
+    const deadline = Date.now() + Number(options.timeout || 30000);
     const maxScrollActions = options.maxAttempts === undefined
       ? null
       : Math.max(1, Math.floor(Number(options.maxAttempts) || 1));
@@ -938,6 +939,7 @@ export class GalleryActions {
     let scrollActions = 0;
     let waitedAtBoundary = false;
     let reversedAtBoundary = false;
+    let initialScrollTop = null;
     const year = String(options.year || '').trim();
     const reconcileBoundary = async (boundaryDirection) => {
       if (options.waitAtBoundary !== true || waitedAtBoundary) return false;
@@ -1000,12 +1002,29 @@ export class GalleryActions {
         }
       }
       const scrollState = await this.readGalleryScrollState();
+      initialScrollTop ??= scrollState.scrollTop;
       const reachedBoundary = direction > 0
         ? scrollState.scrollTop >= scrollState.maxScrollTop - 2
         : scrollState.scrollTop <= 2;
       if (reachedBoundary) {
+        if (direction > 0 && (
+          scrollState.pagination?.busy || scrollState.pagination?.page?.next_offset != null
+        )) {
+          await expect.poll(async () => {
+            const current = await this.readGalleryScrollState();
+            return !current.pagination?.busy && (
+              current.maxScrollTop > scrollState.maxScrollTop + 2
+              || current.pagination?.page?.offset !== scrollState.pagination?.page?.offset
+              || current.pagination?.page?.next_offset == null
+            );
+          }, {
+            timeout: Math.max(1, deadline - Date.now()),
+            message: 'Expected advertised gallery continuation to settle before reversing scroll direction',
+          }).toBe(true);
+          continue;
+        }
         if (await reconcileBoundary(direction)) continue;
-        if (!reversedAtBoundary && scrollState.maxScrollTop > 2) {
+        if (!reversedAtBoundary && (direction < 0 || initialScrollTop > 2) && scrollState.maxScrollTop > 2) {
           direction = -direction;
           reversedAtBoundary = true;
           continue;
@@ -1547,11 +1566,22 @@ export class GalleryActions {
 
   async readGalleryScrollState() {
     // parity-check: allow-read-only-measurement-evaluate gallery scroll metrics only
-    return this.galleryPage.galleryScroll.evaluate((galleryScroll) => ({
+    const metrics = await this.galleryPage.galleryScroll.evaluate((galleryScroll) => ({
       scrollTop: galleryScroll.scrollTop,
       clientHeight: galleryScroll.clientHeight,
       maxScrollTop: Math.max(0, galleryScroll.scrollHeight - galleryScroll.clientHeight),
     }));
+    const observation = this.galleryPage.productionViewObserver.read();
+    if (observation.latestGalleryPageError) {
+      throw new Error(`Production gallery continuation failed: ${observation.latestGalleryPageError}`);
+    }
+    return {
+      ...metrics,
+      pagination: {
+        page: observation.latestGalleryPage,
+        busy: observation.galleryBusy,
+      },
+    };
   }
 
   async readVirtualGridDiagnostics() {

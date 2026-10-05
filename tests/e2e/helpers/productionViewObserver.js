@@ -4,6 +4,8 @@ function readViewDataRequest(request, sequence) {
   const requestUrl = new URL(request.url());
   if (!['/view-data', '/home-data'].includes(requestUrl.pathname)) return null;
   return {
+    gallery: requestUrl.pathname === '/view-data'
+      && ['', 'albums', 'library'].includes(requestUrl.searchParams.get('surface') || ''),
     full: String(requestUrl.searchParams.get('payload_tier') || '').trim().toLowerCase() !== 'sidebar',
     sequence,
     url: request.url(),
@@ -135,6 +137,9 @@ export class ProductionViewObserver {
     this.events = events;
     this.activeRequests = new Map();
     this.latestFullPayload = null;
+    this.latestGalleryPage = null;
+    this.latestGalleryPageError = null;
+    this.latestGalleryRequestSequence = 0;
     this.latestFullPayloadError = null;
     this.latestFullRequestSequence = 0;
     this.latestFullRequestUrl = '';
@@ -155,6 +160,9 @@ export class ProductionViewObserver {
       this.authorityGeneration += 1;
       this.activeRequests.clear();
       this.latestFullPayload = null;
+      this.latestGalleryPage = null;
+      this.latestGalleryPageError = null;
+      this.latestGalleryRequestSequence = 0;
       this.latestFullPayloadError = null;
       this.latestFullRequestSequence = 0;
       this.latestFullRequestUrl = '';
@@ -187,6 +195,11 @@ export class ProductionViewObserver {
       if (!detail) return;
       detail.documentGeneration = this.documentGeneration;
       this.nextRequestSequence = detail.sequence;
+      if (detail.gallery) {
+        this.latestGalleryRequestSequence = detail.sequence;
+        this.latestGalleryPage = null;
+        this.latestGalleryPageError = null;
+      }
       this.requestDetails.set(request, detail);
       this.activeRequests.set(request, detail);
       this.stateRevision += 1;
@@ -244,8 +257,13 @@ export class ProductionViewObserver {
           });
         return;
       }
-      if (!detail?.full) return;
+      if (!detail || (!detail.full && !detail.gallery)) return;
       if (!response.ok()) {
+        if (detail.gallery && detail.documentGeneration === this.documentGeneration
+          && detail.sequence === this.latestGalleryRequestSequence) {
+          this.latestGalleryPageError = `HTTP ${response.status()} for ${detail.url}`;
+          this.stateRevision += 1;
+        }
         if (detail.documentGeneration === this.documentGeneration
           && detail.sequence === this.latestFullRequestSequence) {
           this.latestFullPayloadError = `HTTP ${response.status()} for ${detail.url}`;
@@ -257,6 +275,11 @@ export class ProductionViewObserver {
       this.stateRevision += 1;
       const payloadRead = Promise.resolve(response.json())
         .then((payload) => {
+          if (detail.gallery && detail.documentGeneration === this.documentGeneration
+            && detail.sequence === this.latestGalleryRequestSequence) {
+            this.latestGalleryPage = payload?.gallery_page || null;
+          }
+          if (!detail.full) return;
           if (detail.documentGeneration !== this.documentGeneration
               || detail.sequence !== this.latestFullRequestSequence) return;
           const payloadTier = String(payload?.payload_tier || 'full').trim().toLowerCase();
@@ -268,6 +291,10 @@ export class ProductionViewObserver {
           this.latestFullPayloadError = null;
         })
         .catch((error) => {
+          if (detail.gallery && detail.documentGeneration === this.documentGeneration
+              && detail.sequence === this.latestGalleryRequestSequence) {
+            this.latestGalleryPageError = String(error?.message || error || 'Unable to parse gallery continuation');
+          }
           if (detail.documentGeneration === this.documentGeneration
               && detail.sequence === this.latestFullRequestSequence) {
             this.latestFullPayloadError = String(error?.message || error || 'Unable to parse production view payload');
@@ -290,6 +317,11 @@ export class ProductionViewObserver {
     events.on('requestfailed', (request) => {
       const detail = this.requestDetails.get(request);
       finishRequest(request);
+      if (detail?.gallery && detail.documentGeneration === this.documentGeneration
+          && detail.sequence === this.latestGalleryRequestSequence) {
+        this.latestGalleryPageError = `Request failed for ${detail.url}`;
+        this.stateRevision += 1;
+      }
       if (detail?.full && detail.documentGeneration === this.documentGeneration
           && detail.sequence === this.latestFullRequestSequence) {
         this.latestFullPayloadError = `Request failed for ${detail.url}`;
@@ -315,6 +347,10 @@ export class ProductionViewObserver {
       activeRequestCount: this.activeRequests.size,
       activeRequestUrl: String(activeRequest?.url || ''),
       latestFullPayload: this.latestFullPayload,
+      latestGalleryPage: this.latestGalleryPage,
+      latestGalleryPageError: this.latestGalleryPageError,
+      galleryBusy: [...this.activeRequests.values()].some((detail) => detail.gallery)
+        || this.pendingPayloadReads.has(this.latestGalleryRequestSequence),
       latestFullPayloadError: this.latestFullPayloadError,
       latestFullRequestUrl: this.latestFullRequestUrl,
       latestCompletedSaveTaskPayload: this.latestCompletedSaveTaskPayload,

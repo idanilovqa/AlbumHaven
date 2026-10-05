@@ -744,7 +744,13 @@ def run_cover_jobs(
         with cache_lock:
             if owns_progress():
                 library_state["covers_current_folder"] = str(folder)
-                library_state["covers_processed"] = len(job_results)
+                # Progress is queue position, not terminal-result count.  Jobs
+                # deferred during a provider cooldown are intentionally absent
+                # from job_results until their retry phase, so using its length
+                # makes the UI under-report while the queue is advancing.
+                library_state["covers_processed"] = max(
+                    int(library_state.get("covers_processed") or 0), index
+                )
         # Image selections are committed by the guarded writer per album. Keep
         # lookup outcomes durable too, without republishing the entire inventory.
         if index % 25 == 0:
@@ -845,7 +851,9 @@ def run_cover_jobs(
             with cache_lock:
                 if owns_progress():
                     library_state["covers_current_folder"] = str(folder)
-                    library_state["covers_processed"] = len(job_results)
+                    library_state["covers_processed"] = max(
+                        int(library_state.get("covers_processed") or 0), index
+                    )
             cover_path, downloaded, detail = execute_cover_job(
                 job=job,
                 image_extensions=image_extensions,

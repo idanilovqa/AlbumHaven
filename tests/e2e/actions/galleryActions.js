@@ -937,6 +937,7 @@ export class GalleryActions {
     let lastViewportState = null;
     let scrollActions = 0;
     let waitedAtBoundary = false;
+    let reversedAtBoundary = false;
     const year = String(options.year || '').trim();
     const reconcileBoundary = async (boundaryDirection) => {
       if (options.waitAtBoundary !== true || waitedAtBoundary) return false;
@@ -952,6 +953,7 @@ export class GalleryActions {
         && classification.reason === 'canonical match awaiting virtual attachment'
       ) {
         direction = -boundaryDirection;
+        reversedAtBoundary = true;
         return true;
       }
       await this.waitForAlbumVisibleUnderHeading(artistName, albumName, options);
@@ -1003,6 +1005,11 @@ export class GalleryActions {
         : scrollState.scrollTop <= 2;
       if (reachedBoundary) {
         if (await reconcileBoundary(direction)) continue;
+        if (!reversedAtBoundary && scrollState.maxScrollTop > 2) {
+          direction = -direction;
+          reversedAtBoundary = true;
+          continue;
+        }
         break;
       }
       if (maxScrollActions !== null && scrollActions >= maxScrollActions) break;

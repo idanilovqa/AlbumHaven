@@ -1,5 +1,14 @@
 # Sandbox3 manual-test handoff
 
+## Metadata gallery navigation repair: CI run 37268310174
+
+- Outcome: let the shared gallery helper find virtualized albums above the current viewport when its initial downward search reaches the lower boundary. A single bounded reversal uses the existing native wheel path; the opposite boundary still fails for an absent album.
+- Included cases: FTC-TAGS-010, FTC-TAGS-011, FTC-TAGS-012, FTC-TAGS-013, FTC-TAGS-022 and FTC-TAGS-025. All six retained traces failed with zero scroll actions during final topology checks or editor reopening. Earlier selection and mutation succeeded; the evidence does not establish missing fixtures.
+- Compatibility and acceptance: preserve fixtures, assertions, timeouts, attached-but-clipped handling and application behavior. No DOM mutation, runtime change or persistence change. Existing checklist items remain open; no completion counts change.
+- Focused evidence: the two new default-navigation regressions failed before the repair. Afterwards, `node --test tests/js/gallery-actions-terminal-state.test.js` passed all 16 tests, with 0 failures and 0 skips, in 989.9425 ms.
+- Checkpoint: independent review and all six real-browser reruns remain pending. Helper unit results do not establish that CI is resolved. The complete native PR pipeline remains required. Rollback is source-only reversion of the helper and its regressions; no deployment or service changes are included.
+
+
 ## Approved FTC-GALLERY-031 flow correction
 
 - Outcome and checklist: align FTC-GALLERY-031 with the September 24 gallery

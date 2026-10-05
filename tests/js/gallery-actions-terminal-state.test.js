@@ -147,6 +147,32 @@ test('canonical detached album above the viewport is found by reversing at the g
   assert.equal(scrollTop, 240);
 });
 
+for (const present of [true, false]) {
+  test(`default gallery navigation reverses once from bottom and ${present ? 'finds an earlier virtual album' : 'fails for an absent album'}`, async () => {
+    const { GalleryActions } = await import(galleryActionsUrl);
+    let scrollTop = 720;
+    const movements = [];
+    const target = { count: async () => Number(present && scrollTop <= 240) };
+    const actions = new GalleryActions({
+      sectionByArtistHeading: () => ({ getByRole: () => ({ first: () => target }) }),
+      async waitForGalleryScrollMovement(previous, direction) {
+        assert.equal(Math.sign(scrollTop - previous), direction);
+      },
+    });
+    actions.readGalleryScrollState = async () => ({ scrollTop, maxScrollTop: 720, clientHeight: 320 });
+    actions.scrollGalleryBy = async delta => {
+      movements.push(delta);
+      assert.ok(movements.length <= 3, 'navigation must stop at the opposite boundary');
+      scrollTop = Math.max(0, Math.min(720, scrollTop + delta));
+    };
+    actions.readAlbumGalleryViewportState = async () => ({ attached: true, intersects: true });
+    const navigation = actions.scrollToAlbumUnderHeading('E2E Rarity Artist', 'Fixture Album');
+    if (present) await navigation;
+    else await assert.rejects(navigation, /Expected album/);
+    assert.deepEqual(movements, present ? [-240, -240] : [-240, -240, -240]);
+  });
+}
+
 test('gallery target classification throws immediately for an idle canonical mismatch with observed state', async () => {
   const { classifyGalleryAlbumTargetState } = await import(galleryActionsUrl);
   const snapshot = settledSnapshot({

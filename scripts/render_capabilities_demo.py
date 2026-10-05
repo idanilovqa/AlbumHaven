@@ -91,13 +91,19 @@ def assert_ownership(connection) -> bool:
 
 
 def migrate(connection) -> None:
+    from scripts.migration_compat import source_indicator_ledger
+
     files = sorted((ROOT / 'migrations' / 'postgres').glob('[0-9]*.sql'))
     if not files:
         raise RuntimeError('Migrations are missing.')
     ledger = connection.execute("select to_regclass('ops.schema_migrations')").fetchone()[0]
     applied = dict(connection.execute('select migration_name, checksum from ops.schema_migrations').fetchall()) if ledger else {}
+    checksums = {path.name: hashlib.sha256(path.read_bytes()).hexdigest() for path in files}
+    applied = source_indicator_ledger(applied, checksums)
+    if set(applied) - checksums.keys():
+        raise RuntimeError('Applied migrations are absent from this source checkout')
     for path in files:
-        checksum = hashlib.sha256(path.read_bytes()).hexdigest()
+        checksum = checksums[path.name]
         if path.name in applied:
             if applied[path.name] != checksum:
                 raise ValueError('Migration checksum changed: ' + path.name)

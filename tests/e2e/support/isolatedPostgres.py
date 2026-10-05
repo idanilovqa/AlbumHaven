@@ -16,6 +16,8 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import unquote, urlparse
 
+from scripts.migration_compat import source_indicator_ledger
+
 if os.name == "nt":
     import msvcrt
 else:
@@ -517,8 +519,12 @@ def apply_all_migrations(setup_database_url: str) -> None:
                 "select migration_name, checksum from ops.schema_migrations"
             ).fetchall()
         }
+        checksums = {path.name: hashlib.sha256(path.read_bytes()).hexdigest() for path in migration_paths}
+        applied = source_indicator_ledger(applied, checksums)
+        if set(applied) - checksums.keys():
+            raise RuntimeError('Applied migrations are absent from this source checkout')
         for migration_path in migration_paths:
-            checksum = hashlib.sha256(migration_path.read_bytes()).hexdigest()
+            checksum = checksums[migration_path.name]
             if migration_path.name in applied:
                 if applied[migration_path.name] != checksum:
                     raise RuntimeError(f"Migration checksum mismatch: {migration_path.name}")

@@ -2,6 +2,7 @@
 from contextlib import contextmanager
 from copy import deepcopy
 import hashlib
+from pathlib import Path
 
 import pytest
 from tests.e2e.support import isolatedPostgres as isolated
@@ -111,3 +112,31 @@ def test_migration_and_ledger_insert_roll_back_together(migration_store):
         isolated.apply_all_migrations('owned-test-url')
     assert connection.applied == []
     assert list(connection.ledger) == [first.name]
+
+
+@pytest.mark.parametrize('source_name,applied_name', [
+    ('0082_library_source_indicators.sql', '0080_library_source_indicators.sql'),
+    ('0080_library_source_indicators.sql', '0082_library_source_indicators.sql'),
+])
+def test_source_indicator_rename_skips_sql_and_preserves_ledger(migration_store, source_name, applied_name):
+    connection, first, second = migration_store
+    actual_root = Path(__file__).resolve().parents[2] / 'migrations' / 'postgres'
+    actual = next(actual_root.glob('*_library_source_indicators.sql'))
+    first.with_name(source_name).write_bytes(actual.read_bytes())
+    connection.ledger_exists = True
+    connection.ledger = {p.name: hashlib.sha256(p.read_bytes()).hexdigest() for p in (first, second)}
+    connection.ledger[applied_name] = hashlib.sha256(actual.read_bytes()).hexdigest()
+    before = connection.ledger.copy()
+    isolated.apply_all_migrations('owned-test-url')
+    assert connection.applied == []
+    assert connection.ledger == before
+
+
+def test_unknown_migration_identity_fails_before_sql(migration_store):
+    connection, first, second = migration_store
+    connection.ledger_exists = True
+    connection.ledger = {p.name: hashlib.sha256(p.read_bytes()).hexdigest() for p in (first, second)}
+    connection.ledger['9999_unknown.sql'] = 'unknown'
+    with pytest.raises(RuntimeError, match='absent'):
+        isolated.apply_all_migrations('owned-test-url')
+    assert connection.applied == []

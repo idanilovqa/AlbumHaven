@@ -1,5 +1,18 @@
 # Postgres Migrations
 
+`0082_library_source_indicators.sql` is the byte-identical canonical name for
+the historical `0080_library_source_indicators.sql` collision. The only accepted
+alias checksum is `e1a292e50a08e4043d2ce3ceda13b87ad90462deb898590c147bab492a01b5e1`.
+Isolated/demo migration readers resolve this alias in memory, without replaying
+SQL or changing historical ledger rows. Other unknown identities and checksum
+conflicts remain errors. Fresh databases record the canonical filename.
+
+Existing sandbox deployments require the checksum-aware deployment controller
+before using this checkout. Keep that controller during rollback to older
+checkouts; its reverse alias is independent of the selected source. The alias
+does not authorize rollback across other missing migrations, ledger rewriting,
+or automatic reconciliation of incomplete production history.
+
 This directory contains repo-owned Postgres SQL migrations for Album Haven.
 
 Migration `0065_native_player_component_provenance.sql` permits an optional

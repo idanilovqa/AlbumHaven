@@ -7,7 +7,7 @@ This is an initial-build checkpoint, not release approval. Use the isolated
 
 Use the normal private-node configuration and existing credentials, without
 committing `.env`. Apply the repository's ordered PostgreSQL migrations through
-the migrator role (including `0080_library_source_indicators.sql`), then run:
+the migrator role (including canonical `0082_library_source_indicators.sql`), then run:
 
 ```powershell
 node scripts/build-runtime-bundle.cjs

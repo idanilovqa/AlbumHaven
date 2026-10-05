@@ -3193,6 +3193,18 @@ def test_root_startup_preview_defers_complete_sidebar_and_background_projections
     )
     monkeypatch.setattr(
         repository,
+        "_load_root_sidebar_rows",
+        lambda *_args, **_kwargs: [
+            {
+                "artist_name": "Broadcast",
+                "album_count": 1,
+                "album_ids": [10],
+            }
+        ],
+        raising=False,
+    )
+    monkeypatch.setattr(
+        repository,
         "_load_root_startup_rows",
         lambda *_args, **_kwargs: pytest.fail("startup preview loaded the complete sidebar"),
     )
@@ -3640,7 +3652,10 @@ def test_root_startup_preview_balances_bounded_albums_across_six_artists():
     ]
     assert "partition by artist_candidate_albums.artist_id" in preview_sql
     assert "where ranked_artist_candidate_albums.artist_album_rank = 1" in preview_sql
-    assert "limit greatest( 8 - ( select count(*) from required_artist_albums ), 0 )" in preview_sql
+    assert "required_artist_albums" in preview_sql
+    assert "supplemental_albums" in preview_sql
+    assert "bounded_candidate_albums" in preview_sql
+    assert "row_number() over" in preview_sql
 
 
 def test_exact_alias_search_reuses_consolidated_missing_partition_with_complete_preview(

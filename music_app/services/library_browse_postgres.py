@@ -533,6 +533,13 @@ class PostgresLibraryBrowseRepository:
             support_state = self._inventory_repository.load_support_state(
                 connection=connection,
             )
+            sidebar_rows = _canonicalize_artist_rows(
+                self._load_root_sidebar_rows(
+                    view_state,
+                    connection=connection,
+                ),
+                root_alias_to_canonical,
+            )
             preview_rows = _canonicalize_artist_rows(
                 self._load_root_startup_preview_rows(
                     view_state,
@@ -558,7 +565,23 @@ class PostgresLibraryBrowseRepository:
                 if callable(close):
                     close()
 
-        artists_sidebar = _artists_sidebar_from_groups(preview_artist_groups)
+        sidebar_displays, sidebar_sort_values, sidebar_counts, _ = _root_sidebar_aggregate(
+            sidebar_rows,
+        )
+        artists_sidebar = [
+            {
+                "artist": sidebar_displays[artist_key],
+                "artist_display": sidebar_displays[artist_key],
+                "count": sidebar_counts[artist_key],
+            }
+            for artist_key in sorted(
+                sidebar_counts,
+                key=lambda key: (
+                    sidebar_sort_values.get(key, sidebar_displays[key]).casefold(),
+                    sidebar_displays[key].casefold(),
+                ),
+            )
+        ]
         album_count = sum(
             len(group.get("albums") or []) for group in preview_artist_groups
         )

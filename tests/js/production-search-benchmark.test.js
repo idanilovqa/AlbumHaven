@@ -186,7 +186,7 @@ test('production search journey blocks forbidden requests before navigation', ()
   assert.match(helper, /static\.cloudflareinsights\.com/u);
   assert.match(helper, /beacon\.min\.js/u);
   assert.match(helper, /\/cdn-cgi\/rum/u);
-  assert.match(spec, /route\.abort\('blockedbyclient'\)/u);
+  assert.doesNotMatch(spec, /route\.abort\('blockedbyclient'\)/u);
   assert.match(spec, /requestInterceptionGuardEnabled:\s*false/u);
   const baseFixtures = read('tests/e2e/support/baseFixtures.js');
   assert.match(

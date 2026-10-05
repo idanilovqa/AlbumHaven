@@ -735,7 +735,7 @@ test('read-only inventory command reports complete discovery and ownership total
     total: 414,
   });
   assert.deepEqual(inventory.ownership, {
-    testDataMatrix: 412,
+    testDataMatrix: 414,
     functionalShards: 121,
     performanceTargets: 28,
   });

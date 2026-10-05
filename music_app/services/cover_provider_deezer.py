@@ -145,7 +145,8 @@ def search_deezer_cover(
             for item in data.get("data") or []:
                 if not isinstance(item, dict):
                     continue
-                candidate_url = deezer_candidate_url(str(item.get("cover_xl") or item.get("cover_big") or item.get("cover") or ""))
+                artwork_url = str(item.get("cover_xl") or item.get("cover_big") or item.get("cover") or "").strip()
+                candidate_url = artwork_url if automatic else deezer_candidate_url(artwork_url)
                 score = match_score(
                     target_artist=artist,
                     target_album=album,

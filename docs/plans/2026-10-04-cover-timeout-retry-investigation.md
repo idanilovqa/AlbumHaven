@@ -125,8 +125,12 @@ Deezer returned 10,035 successful search responses but 4,219 artwork HTTP403s,
 all at synthesized 2000-pixel URLs. A bounded header-only check of one exact
 logged artwork confirmed 403 at 2000 pixels and 200/image/jpeg at 1000 pixels.
 The automatic single-cover path discards the provider URL in favor of the
-synthesized URL with no fallback. Regression repair is pending; manual behavior
-and the existing image-quality/identity checks must remain unchanged.
+synthesized URL with no fallback. The automatic path now uses the supplied
+highest existing cover URL; manual synthesis and existing image-quality/identity
+checks remain unchanged. The regression failed before the fix (one failure,
+1.87 seconds); all nine Deezer tests then passed in 1.15 seconds. The exact test
+process audit was clear. Root and independent complete scoped reviews found no
+remaining findings; this is not a deployed fix or operational retry result.
 
 Spotify recorded one quota-exhausted HTTP429 and 2,805 cooldown skips, not 2,805
 HTTP failures. The retained log omits the actual Retry-After header. A separate

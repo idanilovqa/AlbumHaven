@@ -9329,6 +9329,46 @@ def _normal_problematic_product_row(*, album_key="product-album", album_title="P
     }
 
 
+@pytest.mark.parametrize("track_key, is_duplicate", [("product-track", True), ("", False)])
+def test_problematic_same_track_files_keep_duplicate_reason_scoped_to_album(track_key, is_duplicate):
+    from music_app.services.library_browse_postgres import (
+        _problematic_album_projection_payloads,
+        _problematic_album_summary_payload,
+        _problematic_album_detail_payload,
+    )
+
+    duplicate = _normal_problematic_product_row()
+    duplicate["track_key"] = track_key
+    duplicate["duplicate_file_count"] = 2
+    second = {**duplicate, "file_private_path": duplicate["file_private_path"].replace("01.flac", "copy.flac")}
+    second["file_entry"] = {**duplicate["file_entry"], "path": second["file_private_path"]}
+    sibling = _normal_problematic_product_row(album_key="other", album_title="Other")
+    sibling.update(album_id=102, track_id=502, track_key="other-track")
+    albums = _problematic_album_projection_payloads([duplicate, second, sibling])
+    assert len(albums) == 2
+    for album, expected in zip(albums, (is_duplicate, False)):
+        assert album["has_duplicate_files"] is expected
+        for payload in (_problematic_album_summary_payload(album), _problematic_album_detail_payload(album)):
+            assert ("Duplicate files" in payload["problem_reasons"]) is expected
+
+
+def test_problematic_duplicate_count_does_not_leak_between_separated_years():
+    from music_app.services.library_browse_postgres import _problematic_album_projection_payloads
+
+    rows = []
+    for year in (2001, 2002):
+        row = _normal_problematic_product_row()
+        row["album_release_year"] = year
+        row["duplicate_file_count"] = 2
+        row["separate_release_keys"] = ["product artist::product album"]
+        row["file_private_path"] = rf"D:\Music\Product Artist\Product Album {year}\01.flac"
+        row["file_entry"].update(path=row["file_private_path"], year=str(year))
+        rows.append(row)
+    albums = _problematic_album_projection_payloads(rows)
+    assert len(albums) == 2
+    assert all(not album["has_duplicate_files"] for album in albums)
+
+
 def _healthy_problematic_order_rows(
     track_numbers,
     *,

@@ -1,5 +1,6 @@
 """Real SQL proof on an explicitly provisioned, uniquely owned verification DB."""
 import os
+import re
 from pathlib import Path
 import uuid
 
@@ -24,7 +25,12 @@ def database():
         isolatedPostgres.SETUP_DATABASE_ENV: setup,
         isolatedPostgres.RUNTIME_DATABASE_ENV: runtime,
     })
-    assert isolatedPostgres._database_name(setup).startswith("album_haven_ci_mrverify_")
+    name = isolatedPostgres._database_name(setup)
+    if not (
+        name.startswith("album_haven_ci_mrverify_")
+        or re.fullmatch(r"album_haven_ci_py_contract_[0-9]+_[0-9]+", name)
+    ):
+        raise RuntimeError("Requires an owned Appearance verification or CI persistent-contract database")
     lock = isolatedPostgres.IsolatedDatabaseOwnershipLock(database_url=setup)
     lock.acquire()
     try:
@@ -86,7 +92,7 @@ def test_live_source_migration_is_idempotent_and_constraint_rejects_invalid_json
 
     setup, runtime = database
     account_id, repository = account
-    migration = Path(__file__).resolve().parents[2] / "migrations/postgres/0080_library_source_indicators.sql"
+    migration = Path(__file__).resolve().parents[2] / "migrations/postgres/0082_library_source_indicators.sql"
     for _ in range(2):
         with isolatedPostgres._connect(setup) as connection:
             connection.execute(migration.read_text(encoding="utf-8"))

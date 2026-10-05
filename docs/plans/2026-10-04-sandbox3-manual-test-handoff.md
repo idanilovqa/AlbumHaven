@@ -1,5 +1,17 @@
 # Sandbox3 manual-test handoff
 
+## Isolated CI duplicate and live-fixture repair
+
+- Outcome: preserve same-track physical-file duplicate reasons alongside multi-root duplicate sources; execute the eight existing source-appearance and multi-root live contracts in CI.
+- Scope: CI Python checklist item; shared problematic projection, focused parity/isolation regression, existing CI persistent database wiring and narrowly validated live-fixture ownership.
+- Prerequisites: migration identity repair and exclusive pytest lane. No production or sandbox database is permitted.
+- Acceptance: unchanged live duplicate assertion; summary/detail parity; unrelated albums remain unflagged; eight live instances execute without skips; unowned database names are rejected before connecting.
+- Compatibility/rollback: additive duplicate classification and reuse of CI-owned provisioning; revert these changes without modifying persisted application data or test expectations.
+- Checkpoint: focused RED/GREEN and two complete reviews before root integration; complete hosted CI remains required before merge/publication. No local full suite or deployment belongs to this repair.
+- Verification: same-track and separated-year regressions each failed before their corrections; CI ownership configuration failed for the intended persistent lane before repair. Final focused verification passed 35 tests. The unchanged live duplicate contract passed 1/1 and all eight formerly skipped live instances passed 8/8, with zero skips/failures/errors (private evidence: `tmp/ci22-inventory/live-duplicate.xml` and `live-eight.xml`).
+- Isolation: localhost PostgreSQL 18 disposable databases `album_haven_ci_py_ci22dup_20261004_2320` and `album_haven_ci_py_contract_20261004_2320` used existing bootstrap provisioning and exact state-bound teardown. Final audit found zero matching databases, six matching roles removed, zero matching connections, no owned process, and no remaining state/password files. Production and sandbox3 were not used.
+- Review: two complete relevant-diff passes; the first tightened negative coverage for missing track keys and explicit album count, the second found no remaining validated issue. Persistent fixtures retain UUID-owned row cleanup, role checks, loopback/same-database validation and ownership locks; CI exports only its already provisioned persistent contract database. Hosted CI and independent integration review remain pending.
+
 ## Current repair evidence
 
 - Appearance and component-inventory focused verification: 100/100 Node tests passed; complete CI and independent review remain pending.
@@ -69,6 +81,11 @@ on 5003. Production is currently running on 5000, while the ordinary sandbox3 ta
 is disabled. This differs from the original maintenance handover. Deployment must
 not restore obsolete task state or start concurrent cover writers.
 
-The normal deployment controller provisions isolated sandbox data. The owner has
-been asked to choose an isolated current-production copy, existing sandbox data,
-or production data with production stopped. No choice has yet been assumed.
+The normal deployment controller provisions isolated sandbox data. The owner
+selected a multi-root-preserving production copy. Physical
+preflight found approximately 1.91 TB of indexed media versus 1.61 TB free on C:;
+the complete copy cannot fit in the current slot. K: has about 4.41 TB free but
+requires an explicitly approved storage-boundary extension. A follow-up choice
+is pending between catalog plus copied covers (no playback/moves/scanning of
+uncopied audio), complete media on suitable storage, or exclusive production
+database/media use with production stopped. No import or service switch occurred.

@@ -327,6 +327,8 @@ jobs:
           "ALBUM_HAVEN_SCAN_PERFORMANCE_SETUP_DATABASE_URL=$env:PYTEST_DESTRUCTIVE_SETUP_DATABASE_URL" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
           "ALBUM_HAVEN_SCAN_PERFORMANCE_DATABASE_URL=$env:PYTEST_DESTRUCTIVE_DATABASE_URL" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
           "ALBUM_HAVEN_POSTGRES_CONTRACT_DATABASE_URL=$env:DATABASE_APP_URL" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "ALBUM_HAVEN_APPEARANCE_VERIFY_SETUP_DATABASE_URL=$env:DATABASE_MIGRATOR_URL" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "ALBUM_HAVEN_APPEARANCE_VERIFY_DATABASE_URL=$env:DATABASE_APP_URL" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
 
       - name: Collect Python test inventory
         run: |

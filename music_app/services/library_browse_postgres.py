@@ -3095,7 +3095,11 @@ def _problematic_album_projection_payloads(rows: list[object]) -> list[dict[str,
         duplicate_result = duplicates.get(str(album.get("_persisted_album_key") or album.get("key")), {})
         sources = _duplicate_sources_for_projected_album(album, duplicate_result)
         album.update(duplicate_result)
-        album.update(duplicate_sources=sources, has_duplicate_files=bool(sources))
+        track_keys = [track["key"] for track in album["tracks"] if track["key"]]
+        album.update(
+            duplicate_sources=sources,
+            has_duplicate_files=bool(sources) or len(track_keys) != len(set(track_keys)),
+        )
         album["root_provenance"] = _duplicate_provenance_for_projected_album(album, duplicate_result)
         album["tracks"].sort(
             key=lambda track: (

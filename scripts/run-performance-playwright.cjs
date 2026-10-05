@@ -470,6 +470,24 @@ PERFORMANCE_TARGETS['scan-health'] = {
   },
 };
 
+PERFORMANCE_TARGETS['paired-search-calibration'] = {
+  kind: 'synthetic',
+  fixtureProfile: 'synthetic-large-library',
+  fixtureMode: PRELOADED_RELEASE_FIXTURE_MODE,
+  coverageClass: 'real-app-library-browse-load',
+  coverageDescription: 'Isolated synthetic paired-search timing evidence for production correlation.',
+  specPath: 'tests/e2e/syntheticLargeLibrary/searchPreviewPairedCalibration.spec.js',
+  aliasNames: ['paired-search-calibration'],
+  casePatterns: [
+    'FTC-GALLERY-STARTUP-005U synthetic paired search calibration Devin submit to first expected album visible',
+    'FTC-GALLERY-STARTUP-005U synthetic paired search calibration Neal Morse submit to first expected album visible',
+  ],
+  measurementExpected: false,
+  env: {
+    ALBUM_HAVEN_PERSISTENCE_LIBRARY_BROWSE: 'postgres',
+  },
+};
+
 PERFORMANCE_TARGETS['scan-error'] = {
   ...PERFORMANCE_TARGETS['scan-page'],
   coverageDescription: 'Real failed scan publication, retained library, and recovery using an isolated runtime-role privilege fault.',
@@ -2435,7 +2453,7 @@ function runSequentialPerformanceSuite(options) {
 
 function printUsage() {
   console.log('Usage: npm run test:e2e:performance -- [--group all|idle-memory|playback-start|gapless-playback|real-app|scan] [--test <name-or-path>] [--repeat-count <n>] [--headed|--headless] [--browser chromium|chrome|edge] [--grep <pattern>]');
-    console.log('Known names: idle-memory, playback-start, gapless-playback, all-artists, artist-family, search-all-artists, utility-problematic-files, utility-rules, selected-artist, search-browse, root-album-browse, app-open-all-artists, problematic-files-focused, rules-focused, scan-cold, scan-cached, scan-add-album, scan-metadata, scan-page, scan-health, scan-error');
+    console.log('Known names: idle-memory, playback-start, gapless-playback, all-artists, artist-family, paired-search-calibration, search-all-artists, utility-problematic-files, utility-rules, selected-artist, search-browse, root-album-browse, app-open-all-artists, problematic-files-focused, rules-focused, scan-cold, scan-cached, scan-add-album, scan-metadata, scan-page, scan-health, scan-error');
   console.log('Known groups: all, idle-memory, playback-start, gapless-playback, real-app, scan');
   console.log('Coverage classes: real-app-isolated-postgres-memory, real-app-isolated-postgres-playback, real-app-library-browse-load, scanner-index-cache.');
   console.log('The performance runner defaults to headless mode; pass --headed to keep the browser visible.');

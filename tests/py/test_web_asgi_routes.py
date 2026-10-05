@@ -117,7 +117,13 @@ def _extract_bootstrap_payload_from_shell(body: bytes) -> dict[str, object]:
 
 
 def _configure_selected_postgres_empty_root_bootstrap(monkeypatch, web_asgi) -> None:
-    def fake_build_postgres_root_startup_view(*, config, query_args):
+    def fake_build_postgres_root_startup_view(
+        *,
+        config,
+        query_args,
+        library_state=None,
+    ):
+        del library_state
         initial_view = web_asgi._build_empty_initial_view(
             config=config,
             query_raw=str(query_args.get("q") or "").strip(),
@@ -501,6 +507,45 @@ def test_asgi_index_claims_pending_cold_scan_and_starts_after_response_without_b
             "scan_mode": "background",
         }
     ]
+
+
+def test_asgi_index_does_not_cold_scan_when_a_filter_hides_existing_inventory(
+    monkeypatch,
+):
+    from music_app.routes import web_asgi
+
+    _configure_selected_postgres_empty_root_bootstrap(monkeypatch, web_asgi)
+    refresh_calls = []
+    monkeypatch.setattr(
+        web_asgi.state_service,
+        "start_background_refresh_for_state",
+        lambda *args, **kwargs: refresh_calls.append((args, kwargs)),
+    )
+    asgi_app = _make_asgi_app()
+    library_state = asgi_app.state.library_state
+    library_state.update(
+        {
+            "albums": [{"key": "existing-album"}],
+            "file_cache": {
+                "C:/Music/Existing Artist/Existing Album/01 Existing.mp3": {}
+            },
+            "scan_in_progress": False,
+            "cold_scan_pending": False,
+            "cold_scan_handoff_status": "idle",
+        }
+    )
+
+    status, _headers, _body = _run_asgi_request(
+        asgi_app,
+        "GET",
+        "/",
+        query={"category": "hoard"},
+    )
+
+    assert status == 200
+    assert refresh_calls == []
+    assert library_state["cold_scan_pending"] is False
+    assert library_state["cold_scan_handoff_status"] == "idle"
 
 
 @pytest.mark.parametrize(

@@ -450,7 +450,9 @@ function setMobileSearchOpen(open) {
 function handleMobileSearchSubmit() {
   if (!usesMobilePageLayout()) return false;
   if (!mobilePageState.searchOpen) { setMobileSearchOpen(true); return true; }
-  if (!String(document.getElementById('search-input')?.value || '').trim()) { setMobileSearchOpen(false); return true; }
+  if (!String(document.getElementById('search-input')?.value || '').trim()) {
+    setMobileSearchOpen(false);
+  }
   return false;
 }
 function hasActiveMobilePage() { return mobilePageState.pages.length > 0; }

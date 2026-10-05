@@ -448,12 +448,183 @@ export class GalleryPage extends BasePage {
     };
   }
 
-  readViewGenerationState() {
+  async readViewGenerationState() {
     const observation = this.productionViewObserver.read();
+    // parity-check: allow-read-only-measurement-evaluate -- correlate production request and render generations
+    const browserState = await this.page.evaluate(() => ({
+      nowMs: performance.now(),
+      query: new URL(location.href).searchParams.get('q') || '',
+      renderGeneration: Number(
+        globalThis.__ALBUM_HAVEN_VIRTUAL_GRID__?.latestRender?.renderGeneration || 0,
+      ),
+    }));
     return {
+      nowMs: browserState.nowMs,
+      query: browserState.query,
+      renderGeneration: browserState.renderGeneration,
+      requestGeneration: Number(observation.requestGeneration || 0),
       revision: Number(observation.stateRevision || 0),
       settled: Number(observation.activeRequestCount || 0) === 0
         && Number(observation.pendingPayloadReadCount || 0) === 0,
+    };
+  }
+
+  async startSearchPreviewFirstVisibleObservation(expectedQuery, options = {}) {
+    const observationHandle = await this.page.evaluateHandle((settings) => {
+      const gallery = document.querySelector('#artist-groups');
+      if (!(gallery instanceof HTMLElement)) {
+        throw new Error('Search first-visible observation requires the mounted gallery.');
+      }
+      const normalize = (value) => String(value || '').replace(/\s+/gu, ' ').trim();
+      const currentRenderGeneration = () => Number(
+        globalThis.__ALBUM_HAVEN_VIRTUAL_GRID__?.latestRender?.renderGeneration || 0,
+      );
+      let baselineRenderGeneration = currentRenderGeneration();
+      let armed = false;
+      let disposed = false;
+      let framePending = false;
+      let expectedKey = '';
+      let expectedWaiter = null;
+      let expectedTimer = 0;
+      const confirmedPaints = new Map();
+
+      const cardKey = (artist, album) => `${normalize(artist)}\u0000${normalize(album)}`;
+      const queryMatches = () => (
+        normalize(new URL(location.href).searchParams.get('q')) === settings.expectedQuery
+      );
+      const readVisibleCards = () => {
+        const sections = Array.from(gallery.querySelectorAll(settings.artistSectionSelector));
+        const contextArtist = normalize(document.querySelector(settings.singleArtistContextSelector)
+          ?.querySelector('[data-gallery-context-name]')?.textContent);
+        return sections.flatMap((section) => {
+          const artist = normalize(
+            section.querySelector(settings.artistHeadingSelector)?.textContent,
+          ) || (sections.length === 1 ? contextArtist : '');
+          if (!artist) return [];
+          return Array.from(section.querySelectorAll(settings.albumCardSelector)).flatMap((card) => {
+            const album = normalize(card.querySelector(settings.albumTitleSelector)?.textContent);
+            const rect = card.getBoundingClientRect();
+            const style = getComputedStyle(card);
+            const visible = Boolean(
+              album
+              && rect.width > 0
+              && rect.height > 0
+              && rect.right > 0
+              && rect.bottom > 0
+              && rect.left < innerWidth
+              && rect.top < innerHeight
+              && style.display !== 'none'
+              && style.visibility !== 'hidden'
+            );
+            return visible ? [{ album, artist, key: cardKey(artist, album) }] : [];
+          });
+        });
+      };
+      const finishExpected = () => {
+        const timing = confirmedPaints.get(expectedKey);
+        if (!timing || !expectedWaiter) return;
+        clearTimeout(expectedTimer);
+        observer.disconnect();
+        expectedWaiter.resolve(timing);
+        expectedWaiter = null;
+      };
+      const schedulePaintConfirmation = () => {
+        if (!armed || disposed || framePending) return;
+        framePending = true;
+        requestAnimationFrame(() => {
+          framePending = false;
+          if (
+            disposed
+            || !queryMatches()
+            || currentRenderGeneration() <= baselineRenderGeneration
+          ) return;
+          const domReadyAtMs = performance.now();
+          const candidates = readVisibleCards();
+          requestAnimationFrame(() => {
+            if (
+              disposed
+              || !queryMatches()
+              || currentRenderGeneration() <= baselineRenderGeneration
+            ) return;
+            const paintedAtMs = performance.now();
+            const stillVisible = new Set(readVisibleCards().map((card) => card.key));
+            for (const candidate of candidates) {
+              if (!stillVisible.has(candidate.key) || confirmedPaints.has(candidate.key)) continue;
+              confirmedPaints.set(candidate.key, { domReadyAtMs, paintedAtMs });
+            }
+            finishExpected();
+          });
+        });
+      };
+      const observer = new MutationObserver(schedulePaintConfirmation);
+      observer.observe(gallery, {
+        attributes: true,
+        childList: true,
+        characterData: true,
+        subtree: true,
+      });
+
+      return {
+        arm() {
+          observer.takeRecords();
+          confirmedPaints.clear();
+          baselineRenderGeneration = currentRenderGeneration();
+          armed = true;
+          return performance.now();
+        },
+        dispose() {
+          disposed = true;
+          clearTimeout(expectedTimer);
+          observer.disconnect();
+        },
+        readExpectedPaint(expected) {
+          expectedKey = cardKey(expected.artist, expected.album);
+          if (!expectedKey.replace('\u0000', '')) {
+            throw new Error('Search first-visible observation requires an expected artist and album.');
+          }
+          const timing = confirmedPaints.get(expectedKey);
+          if (timing) {
+            observer.disconnect();
+            return timing;
+          }
+          schedulePaintConfirmation();
+          return new Promise((resolve, reject) => {
+            expectedWaiter = { reject, resolve };
+            expectedTimer = setTimeout(() => {
+              observer.disconnect();
+              expectedWaiter = null;
+              reject(new Error(
+                `Expected search card was not confirmed painted within ${settings.timeout} ms.`,
+              ));
+            }, settings.timeout);
+          });
+        },
+      };
+    }, {
+      albumCardSelector: this.albumCardWithinSectionSelector,
+      albumTitleSelector: this.albumCard.titleButtonSelector,
+      artistHeadingSelector: this.artistHeadingWithinSectionSelector,
+      artistSectionSelector: this.artistSectionSelector,
+      expectedQuery: String(expectedQuery || '').trim(),
+      singleArtistContextSelector: this.albumCard.singleArtistContextSelector,
+      timeout: Number(options.timeout || 120000),
+    });
+    let disposed = false;
+    return {
+      // parity-check: allow-read-only-measurement-evaluate -- arm the browser-local search paint observer
+      arm: () => observationHandle.evaluate((observation) => observation.arm()),
+      // parity-check: allow-read-only-measurement-evaluate -- read the first browser-confirmed paint for the canonical preview card
+      readExpectedPaint: (expectedCard) => observationHandle.evaluate(
+        (observation, expected) => observation.readExpectedPaint(expected),
+        expectedCard,
+      ),
+      dispose: async () => {
+        if (disposed) return;
+        disposed = true;
+        // parity-check: allow-read-only-measurement-evaluate -- disconnect the browser-local measurement observer
+        await observationHandle.evaluate((observation) => observation.dispose());
+        await observationHandle.dispose();
+      },
     };
   }
 

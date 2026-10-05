@@ -43,6 +43,23 @@ test('mobile Settings consumes only server-authorized section actions', () => {
   assert.equal(context.mobileUtilityTabAllowed('__proto__', {}), false);
 });
 
+test('submitting an open mobile search with an empty draft still reaches gallery submission', () => {
+  const closes = [];
+  const context = load('mobile-navigation.js', {
+    usesMobilePageLayout: () => true,
+    document: {
+      getElementById(id) {
+        return id === 'search-input' ? { value: '' } : null;
+      },
+    },
+  });
+  vm.runInContext('mobilePageState.searchOpen = true', context);
+  context.setMobileSearchOpen = (open) => closes.push(open);
+
+  assert.equal(context.handleMobileSearchSubmit(), false);
+  assert.deepEqual(closes, [false]);
+});
+
 test('single mobile track-body activation uses the real play control and excludes nested actions', () => {
   const calls = [];
   const button = { disabled: false, dataset: { trackPath: '/generated/track.mp3' }, click() { calls.push('play'); } };

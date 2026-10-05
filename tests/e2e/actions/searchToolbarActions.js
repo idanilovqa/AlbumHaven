@@ -29,6 +29,16 @@ export class SearchToolbarActions {
     }
   }
 
+  async submitPreparedQueryWithEnter(query, options = {}) {
+    const normalizedQuery = String(query || '').trim();
+    await this.searchToolbar.input.fill(normalizedQuery);
+    await expect(this.searchToolbar.input).toHaveValue(normalizedQuery);
+    if (typeof options.recordSubmissionBoundary === 'function') {
+      await options.recordSubmissionBoundary();
+    }
+    await this.searchToolbar.input.press('Enter');
+  }
+
   async settleDebouncedPrefixesThenSubmit(query, prefixes, options = {}) {
     const completedQuery = String(query || '');
     for (const prefix of prefixes) {

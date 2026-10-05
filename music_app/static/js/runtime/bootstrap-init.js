@@ -1,3 +1,5 @@
+const STARTUP_PREVIEW_HYDRATION_DELAY_MS = 5000;
+
 restorePlayerAppearance();
 attachModalEvents();
 document.querySelectorAll('[data-account-menu-component]').forEach(attachAccountMenu);
@@ -102,7 +104,10 @@ if (shouldStartImmediateHydration) {
   startupMetrics.beginInitialRefresh();
 }
 if (shouldApplyEmbeddedSidebarHydration) {
-  applyViewPayload(embeddedStartupViewPatch, { trackSidebarReveal: false });
+  applyViewPayload({
+    ...state.view,
+    ...embeddedStartupViewPatch,
+  }, { trackSidebarReveal: false });
 }
 embeddedStartupViewPatch = null;
 if (startupHydration && typeof startupHydration === 'object') {
@@ -111,7 +116,22 @@ if (startupHydration && typeof startupHydration === 'object') {
 if (bootstrap.startupPayloadTiers?.hydration && typeof bootstrap.startupPayloadTiers.hydration === 'object') {
   bootstrap.startupPayloadTiers.hydration.embeddedViewPatch = null;
 }
-renderView();
+if (shouldTreatStartupPreviewAsVisibleReady) {
+  const startupPreviewGroups = (
+    Array.isArray(state.view?.primary_artist_groups) && state.view.primary_artist_groups.length
+  ) || (
+    Array.isArray(state.view?.family_artist_groups) && state.view.family_artist_groups.length
+  )
+    ? [
+      ...(Array.isArray(state.view.primary_artist_groups) ? state.view.primary_artist_groups : []),
+      ...(Array.isArray(state.view.family_artist_groups) ? state.view.family_artist_groups : []),
+    ]
+    : (Array.isArray(state.view?.artist_groups) ? state.view.artist_groups : []);
+  rebuildAlbumIndex(startupPreviewGroups);
+  renderView({ preserveMountedGallery: true });
+} else {
+  renderView();
+}
 if (typeof initGalleryMain === 'function') initGalleryMain();
 if (typeof initMobileNavigation === 'function') initMobileNavigation();
 if (typeof syncMobileHome === 'function') syncMobileHome();
@@ -204,7 +224,33 @@ if (shouldStartImmediateHydration) {
     galleryDisplayPreferenceResolutionOptions,
   );
   if (immediateHydrationEndpoint) {
+    const hydrationOriginQuery = String(state.view?.query || '').trim();
+    const hydrationOriginArtist = String(state.view?.selected_artist || '').trim();
+    const hydrationOriginRevision = typeof readViewStateRevision === 'function'
+      ? readViewStateRevision()
+      : null;
+    const shouldDelayRootStartupHydration = Boolean(
+      shouldTreatStartupPreviewAsVisibleReady
+      && !hydrationOriginQuery
+      && !hydrationOriginArtist
+    );
     const runHydration = () => {
+      if (
+        (
+          shouldDelayRootStartupHydration
+          && state.awaitingInitialDataRefresh !== true
+        )
+        || String(state.view?.query || '').trim() !== hydrationOriginQuery
+        || String(state.view?.selected_artist || '').trim() !== hydrationOriginArtist
+        || (
+          hydrationOriginRevision !== null
+          && typeof readViewStateRevision === 'function'
+          && readViewStateRevision() !== hydrationOriginRevision
+        )
+      ) {
+        state.awaitingInitialDataRefresh = false;
+        return;
+      }
       fetchAndRender(immediateHydrationEndpoint, false, {
         startupRefresh: true,
         preserveScroll: true,
@@ -212,15 +258,25 @@ if (shouldStartImmediateHydration) {
         startupHydrationFollowupEndpoint: resolvedStartupHydrationFollowupEndpoint,
       });
     };
+    const scheduleHydration = () => {
+      if (
+        shouldDelayRootStartupHydration
+        && typeof scheduleBrowserTimeout === 'function'
+      ) {
+        scheduleBrowserTimeout(runHydration, STARTUP_PREVIEW_HYDRATION_DELAY_MS);
+        return;
+      }
+      runHydration();
+    };
     if (
-      shouldTreatStartupPreviewAsVisibleReady
+      shouldDelayRootStartupHydration
       && typeof scheduleBrowserAnimationFrame === 'function'
     ) {
       scheduleBrowserAnimationFrame(() => {
-        scheduleBrowserAnimationFrame(runHydration);
+        scheduleBrowserAnimationFrame(scheduleHydration);
       });
     } else {
-      runHydration();
+      scheduleHydration();
     }
   }
 }

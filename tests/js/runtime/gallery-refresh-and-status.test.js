@@ -269,7 +269,7 @@ function createContext() {
           options,
           resolveWith(payload) {
             resolve({
-              ok: payload?.ok !== false,
+              ok: payload?.responseOk ?? (payload?.ok !== false),
               status: payload?.status || 200,
               async json() {
                 return payload;
@@ -434,6 +434,38 @@ function createContext() {
     scanIndicator,
   };
 }
+
+test('fetchAndRender rejects JSON HTTP errors without applying their payload', async () => {
+  const { context, calls, pendingRequests } = createContext();
+  const request = context.fetchAndRender('/view-data?q=failed', false);
+
+  pendingRequests[0].resolveWith({
+    responseOk: false,
+    ok: true,
+    status: 503,
+    error: 'Search unavailable',
+    artist_groups: [{ artist: 'Stale', albums: [{ key: 'stale' }] }],
+  });
+
+  await assert.rejects(request, /Search unavailable/);
+  assert.equal(calls.applyViewPayload.length, 0);
+});
+
+test('fetchAndRender rejects JSON application errors without applying their payload', async () => {
+  const { context, calls, pendingRequests } = createContext();
+  const request = context.fetchAndRender('/view-data?q=failed', false);
+
+  pendingRequests[0].resolveWith({
+    responseOk: true,
+    ok: false,
+    status: 200,
+    error: 'Search failed',
+    artist_groups: [{ artist: 'Stale', albums: [{ key: 'stale' }] }],
+  });
+
+  await assert.rejects(request, /Search failed/);
+  assert.equal(calls.applyViewPayload.length, 0);
+});
 
 function createArtistFamilyOwnershipContext() {
   const fixture = createContext();
@@ -806,7 +838,11 @@ for (const [label, payload] of [
     const { context, pendingRequests } = createContext();
     const navigation = context.fetchAndRender('/view-data?artist=Current', true);
     pendingRequests[0].resolveWith(payload);
-    await navigation;
+    if (payload.status >= 400) {
+      await assert.rejects(navigation, /View request failed: 500/);
+    } else {
+      await navigation;
+    }
     assert.equal(context.startupMetrics.completed, 0);
   });
 }

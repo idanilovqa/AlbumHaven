@@ -805,6 +805,9 @@ async function fetchAndRender(url, push = true, options = {}) {
       signal: controller?.signal,
     });
     const data = await response.json();
+    if (!response.ok || data?.ok === false) {
+      throw new Error(data?.error || `View request failed: ${response.status}`);
+    }
     markStartupFollowup('payload_received', requestOptions, {
       endpoint: apiUrl,
       artistCount: Number(data?.artist_count || 0),

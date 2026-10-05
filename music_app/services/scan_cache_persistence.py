@@ -39,6 +39,7 @@ from music_app.services.relation_projection_postgres import (
     relation_projection_advisory_lock_sql,
     relation_projection_structure_complete,
     relation_source_fingerprint,
+    replace_artist_search_projection_in_transaction,
 )
 
 try:  # pragma: no cover - exercised only when the optional runtime driver exists.
@@ -1589,6 +1590,12 @@ class PostgresScanCacheAdapter:
                 else {}
             )
             if rebuild_relation_projection:
+                projection_metadata = build_ready_relation_projection_metadata(
+                    source_fingerprint,
+                    reason="queued_cache_update",
+                    duration_ms=(perf_counter() - publication_started_at) * 1000,
+                    source_row_count=len(relation_source_rows),
+                )
                 replace_artist_family_projection_in_transaction(
                     connection,
                     relation_views_payload,
@@ -1596,11 +1603,13 @@ class PostgresScanCacheAdapter:
                         resolved_relations_last_built
                     ),
                 )
-                projection_metadata = build_ready_relation_projection_metadata(
-                    source_fingerprint,
-                    reason="queued_cache_update",
-                    duration_ms=(perf_counter() - publication_started_at) * 1000,
-                    source_row_count=len(relation_source_rows),
+                replace_artist_search_projection_in_transaction(
+                    connection,
+                    relation_views_payload,
+                    metadata=projection_metadata,
+                    relations_last_built=_float_or_zero(
+                        resolved_relations_last_built
+                    ),
                 )
                 committed_relation_state = {
                     "relation_views": deserialize_relation_views(
@@ -2132,19 +2141,26 @@ def _commit_structural_relation_projection(
         raise RuntimeError("Relation projection builder returned an incomplete projection.")
     relations_last_built = datetime.now(timezone.utc).timestamp()
     relation_views_payload = serialize_relation_views(relation_views)
-    replace_artist_family_projection_in_transaction(
-        connection,
-        relation_views_payload,
-        relations_last_built=relations_last_built,
-    )
-    next_scan_cache["relation_views"] = relation_views_payload
-    next_scan_cache["relations_last_built"] = relations_last_built
-    next_scan_cache[RELATION_PROJECTION_METADATA_KEY] = build_ready_relation_projection_metadata(
+    projection_metadata = build_ready_relation_projection_metadata(
         source_fingerprint,
         reason="structural_tag_edit",
         duration_ms=0.0,
         source_row_count=len(relation_source_rows),
     )
+    replace_artist_family_projection_in_transaction(
+        connection,
+        relation_views_payload,
+        relations_last_built=relations_last_built,
+    )
+    replace_artist_search_projection_in_transaction(
+        connection,
+        relation_views_payload,
+        metadata=projection_metadata,
+        relations_last_built=relations_last_built,
+    )
+    next_scan_cache["relation_views"] = relation_views_payload
+    next_scan_cache["relations_last_built"] = relations_last_built
+    next_scan_cache[RELATION_PROJECTION_METADATA_KEY] = projection_metadata
     connection.execute(_save_scan_snapshot_sql(), {"scan_cache": _jsonb(next_scan_cache)})
     return {
         "relation_views": deserialize_relation_views(relation_views_payload),

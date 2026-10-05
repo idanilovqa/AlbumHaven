@@ -406,14 +406,14 @@ test(`${CASE_ID} applies every Appearance control family to real UI and preserve
     await settingsModalAppBarActions.closeSettings();
     const galleryOptionsIdle = await galleryActions.galleryPage.readGalleryOptionsAppearance();
     expect(galleryOptionsIdle).toEqual({
-      backgroundColor: 'rgb(255, 255, 255)',
+      backgroundColor: 'rgb(244, 245, 246)',
       borderColor: 'rgb(184, 189, 197)',
       color: 'rgb(32, 33, 36)',
     });
     await galleryActions.galleryPage.galleryOptionsButton.hover();
     const galleryOptionsHover = await galleryActions.galleryPage.readGalleryOptionsAppearance();
-    // The saved Gallery surface is #FFFFFF; light hover mixes 85% of it with 15% white.
-    expect(galleryOptionsHover.backgroundColor).toBe('color(srgb 1 1 1)');
+    // The desktop Gallery control is #F4F5F6; light hover mixes 85% of it with 15% white.
+    expect(galleryOptionsHover.backgroundColor).toBe('color(srgb 0.963333 0.966667 0.97)');
     expect(galleryOptionsHover.borderColor).toBe(INTERACTION_COLORS.itemBorder);
 
     await navigationPanelActions.selectSidebarArtistByName('Neal Morse');

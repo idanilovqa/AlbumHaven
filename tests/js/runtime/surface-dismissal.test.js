@@ -130,14 +130,16 @@ function boundHarness() {
     listeners.get(type)(event);
     return event;
   };
-  active = { surface: { contains: target => target === focusedItem }, isBackdrop: target => target === background, dismiss() {
+  const openSurface = () => { active = { surface: { contains: target => target === focusedItem }, isBackdrop: target => target === background, dismiss() {
     closes += 1;
     active = null;
     // Returning focus to the opener blurs the previously focused panel item.
     // Capture listeners on window observe that blur even though window stays focused.
     send('blur', focusedItem);
-  } };
-  return { send, window, background, dispose, closes: () => closes };
+  } }; };
+  openSurface();
+  return { send, window, background, dispose, closes: () => closes,
+    closeSurface: () => { active = null; }, openSurface };
 }
 
 for (const pointerType of ['touch', 'mouse', 'pen']) {
@@ -157,12 +159,32 @@ for (const pointerType of ['touch', 'mouse', 'pen']) {
   });
 }
 
-test('losing window focus still clears the pending dismissal gesture', () => {
+test('the first backdrop click after losing window focus only restores app focus', () => {
   const h = boundHarness();
   try {
-    h.send('pointerdown'); h.send('pointerup');
     h.send('blur', h.window);
-    assert.equal(h.send('click').stopped, false);
+    for (const type of ['pointerdown', 'pointerup', 'click']) {
+      const event = h.send(type);
+      assert.equal(event.prevented, true, type);
+      assert.equal(event.stopped, true, type);
+    }
+    assert.equal(h.closes(), 0, 'refocusing the app must not dismiss the modal');
+
+    for (const type of ['pointerdown', 'pointerup', 'click']) h.send(type);
+    assert.equal(h.closes(), 1, 'the next deliberate backdrop click dismisses normally');
+  } finally { h.dispose(); }
+});
+
+test('window refocus without an active surface does not reserve a later modal backdrop click', () => {
+  const h = boundHarness();
+  try {
+    h.closeSurface();
+    h.send('blur', h.window);
+    h.send('pointerdown');
+    h.openSurface();
+
+    for (const type of ['pointerdown', 'pointerup', 'click']) h.send(type);
+    assert.equal(h.closes(), 1, 'the later modal must dismiss on its first deliberate backdrop click');
   } finally { h.dispose(); }
 });
 

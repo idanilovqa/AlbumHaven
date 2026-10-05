@@ -51,6 +51,29 @@ export function evaluateMountedAlbumWindowTransition({
   };
 }
 
+export function resolveSearchPreviewExpectedCard(payload, expectedQuery, expectedArtist = '') {
+  const query = String(expectedQuery || '').trim();
+  const artistName = String(expectedArtist || '').trim();
+  const payloadQuery = String(payload?.query || '').trim();
+  const payloadTier = String(payload?.payload_tier || '').trim();
+  if (payloadQuery !== query || payloadTier !== 'search_preview') {
+    throw new Error(`Expected an exact search_preview payload for query "${query}".`);
+  }
+  const groups = [
+    ...(Array.isArray(payload?.primary_artist_groups) ? payload.primary_artist_groups : []),
+    ...(Array.isArray(payload?.family_artist_groups) ? payload.family_artist_groups : []),
+    ...(Array.isArray(payload?.artist_groups) ? payload.artist_groups : []),
+  ];
+  for (const group of groups) {
+    const artist = String(group?.artist_display || group?.artist || '').trim();
+    const album = String(group?.albums?.[0]?.name || group?.albums?.[0]?.title || '').trim();
+    if (artist && album && (!artistName || artist === artistName)) return { album, artist };
+  }
+  throw new Error(
+    `The exact search_preview payload for query "${query}" had no expected card for "${artistName}".`,
+  );
+}
+
 export function readVisibleGalleryCoverReadiness(selectors) {
   const toRect = (rect) => ({
     left: Number(rect.left || 0),
@@ -765,7 +788,7 @@ export class GalleryActions {
         });
         retryRequiresScrollReset = false;
       }
-      const generationBefore = this.galleryPage.readViewGenerationState();
+      const generationBefore = await this.galleryPage.readViewGenerationState();
       if (!generationBefore.settled) {
         lastGeneration = { before: generationBefore, after: null };
         await new Promise((resolve) => setTimeout(resolve, 25));
@@ -789,7 +812,7 @@ export class GalleryActions {
           });
         }
       }
-      const generationAfter = this.galleryPage.readViewGenerationState();
+      const generationAfter = await this.galleryPage.readViewGenerationState();
       lastGeneration = { before: generationBefore, after: generationAfter };
       if (
         generationBefore.revision !== generationAfter.revision
@@ -882,27 +905,55 @@ export class GalleryActions {
     );
   }
 
+  async readStatusPayload() {
+    return this.galleryPage.readStatusPayload();
+  }
+
+  async waitForStatusResult(resolveStatus, options = {}) {
+    let resolvedResult = null;
+    let lastError = null;
+    try {
+      await expect.poll(async () => {
+        try {
+          resolvedResult = await resolveStatus(await this.readStatusPayload());
+          lastError = null;
+          return true;
+        } catch (error) {
+          lastError = error;
+          return false;
+        }
+      }, {
+        intervals: options.intervals || [250, 500, 1000],
+        timeout: Number(options.timeout || 30000),
+      }).toBe(true);
+    } catch (error) {
+      throw lastError || error;
+    }
+    return resolvedResult;
+  }
+
+  async waitForFirstAlbumVisibleUnderHeading(artistName, options = {}) {
+    const albumName = String(options.album || '').trim();
+    const card = albumName
+      ? this.galleryPage.albumCard.cardByArtistAndAlbum(artistName, albumName).first()
+      : this.galleryPage.firstAlbumCardByArtistName(artistName);
+    await expect(card).toBeVisible({
+      timeout: Number(options.timeout || 30000),
+    });
+  }
+
   async waitForAlbumCoverReadyUnderHeading(artistName, albumName, options = {}) {
     await this.waitForAlbumVisibleUnderHeading(artistName, albumName, options);
-    const coverImage = this.galleryPage.albumCard
-      .cardByArtistAndAlbum(artistName, albumName, { visible: true })
-      .locator(this.galleryPage.albumCard.coverImageWithinCardSelector)
-      .first();
-    // parity-check: allow-read-only-measurement-evaluate -- poll the resolved image's decode and production-source state
-    await expect.poll(async () => coverImage.evaluate((image) => (
-      image instanceof HTMLImageElement
-        && image.complete
-        && image.naturalWidth > 0
-        && String(image.getAttribute('data-production-cover-src') || '').trim() !== ''
-    )), {
+    let readyImage = null;
+    await expect.poll(async () => {
+      const checkpoint = await this.galleryPage.albumCard
+        .readCoverImageReadinessByArtistAndAlbum(artistName, albumName);
+      if (checkpoint.ready) readyImage = checkpoint;
+      return checkpoint.ready;
+    }, {
       timeout: options.timeout || 30000,
     }).toBe(true);
-    return {
-      productionSrc: String(
-        await coverImage.getAttribute('data-production-cover-src') || '',
-      ).trim(),
-      renderedSrc: String(await coverImage.getAttribute('src') || '').trim(),
-    };
+    return readyImage;
   }
 
   async scrollToAlbumUnderHeading(artistName, albumName, options = {}) {
@@ -1071,6 +1122,125 @@ export class GalleryActions {
 
   async clickAlbumDetailsByArtistAndAlbum(artistName, albumName) {
     await this.galleryPage.albumCard.detailsButtonByArtistAndAlbum(artistName, albumName).click();
+  }
+
+  async measureSyntheticSearchPreviewFirstVisible(searchToolbarActions, query, options = {}) {
+    const expectedQuery = String(query || '').trim();
+    const expectedArtist = String(options.expectedArtist || '').trim();
+    const timeout = Number(options.timeout || 120000);
+    const generationBefore = await this.galleryPage.readViewGenerationState();
+    const firstVisibleObservation = await this.galleryPage
+      .startSearchPreviewFirstVisibleObservation(expectedQuery, { timeout });
+    try {
+    const responsePromise = this.galleryPage.page.waitForResponse((response) => {
+      if (response.request().method() !== 'GET' || !response.ok()) return false;
+      const url = new URL(response.url());
+      return url.pathname === '/view-data'
+        && String(url.searchParams.get('q') || '').trim() === expectedQuery
+        && String(url.searchParams.get('payload_tier') || '').trim() === 'search_preview';
+    }, { timeout });
+    const fullHydrationResponsePromise = this.galleryPage.page.waitForResponse((response) => {
+      if (response.request().method() !== 'GET' || !response.ok()) return false;
+      const url = new URL(response.url());
+      const payloadTier = String(url.searchParams.get('payload_tier') || '').trim();
+      return url.pathname === '/view-data'
+        && String(url.searchParams.get('q') || '').trim() === expectedQuery
+        && payloadTier !== 'search_preview'
+        && payloadTier !== 'sidebar';
+    }, { timeout });
+    let submittedAtMs = 0;
+    await searchToolbarActions.submitPreparedQueryWithEnter(expectedQuery, {
+      recordSubmissionBoundary: async () => {
+        submittedAtMs = await firstVisibleObservation.arm();
+      },
+    });
+    const response = await responsePromise;
+    const payload = await response.json();
+    const expectedCard = resolveSearchPreviewExpectedCard(payload, expectedQuery, expectedArtist);
+    const directMatches = Array.isArray(payload?.search_context?.result_groups?.direct_matches)
+      ? payload.search_context.result_groups.direct_matches
+      : [];
+    if (!directMatches.some((artist) => String(artist || '').trim() === expectedCard.artist)) {
+      throw new Error(`Expected a direct search-preview match for "${expectedCard.artist}".`);
+    }
+    const previewFirstVisibleTiming = await firstVisibleObservation.readExpectedPaint(expectedCard);
+    const previewDomReadyAtMs = previewFirstVisibleTiming.domReadyAtMs;
+    const previewPaintAtMs = previewFirstVisibleTiming.paintedAtMs;
+    let generationAfter = null;
+    await expect.poll(async () => {
+      generationAfter = await this.galleryPage.readViewGenerationState();
+      return Boolean(
+        generationAfter.requestGeneration > generationBefore.requestGeneration
+        && generationAfter.renderGeneration > generationBefore.renderGeneration
+        && generationAfter.query === expectedQuery
+      );
+    }, { timeout }).toBe(true);
+    await this.waitForFirstAlbumVisibleUnderHeading(expectedCard.artist, {
+      album: expectedCard.album,
+      timeout,
+    });
+    // parity-check: allow-read-only-measurement-evaluate -- browser resource, DOM-ready, and next-paint timestamps
+    const previewTiming = await this.galleryPage.page.evaluate(({ minimumStartMs, url }) => {
+      const entries = performance.getEntriesByName(url)
+        .filter((entry) => entry.entryType === 'resource' && entry.startTime >= minimumStartMs)
+        .sort((left, right) => right.startTime - left.startTime);
+      const entry = entries[0];
+      if (!entry || !(entry.responseEnd >= entry.startTime)) {
+        throw new Error('Search preview resource timing is unavailable.');
+      }
+      return {
+        durationMs: entry.duration,
+        responseEndAtMs: entry.responseEnd,
+      };
+    }, { minimumStartMs: submittedAtMs, url: response.url() });
+    const previewGeneration = generationAfter;
+
+    const fullHydrationResponse = await fullHydrationResponsePromise;
+    const fullHydrationPayload = await fullHydrationResponse.json();
+    if (
+      String(fullHydrationPayload?.query || '').trim() !== expectedQuery
+      || String(fullHydrationPayload?.payload_tier || 'full').trim() !== 'full'
+    ) {
+      throw new Error(`Expected an exact full hydration payload for query "${expectedQuery}".`);
+    }
+    let fullHydrationGeneration = null;
+    await expect.poll(async () => {
+      fullHydrationGeneration = await this.galleryPage.readViewGenerationState();
+      return Boolean(
+        fullHydrationGeneration.requestGeneration >= previewGeneration.requestGeneration
+        && fullHydrationGeneration.renderGeneration > previewGeneration.renderGeneration
+        && fullHydrationGeneration.query === expectedQuery
+        && fullHydrationGeneration.settled
+      );
+    }, { timeout }).toBe(true);
+    await this.waitForFirstAlbumVisibleUnderHeading(expectedCard.artist, {
+      album: expectedCard.album,
+      timeout,
+    });
+    // parity-check: allow-read-only-measurement-evaluate -- full-hydration next-paint timestamp
+    const fullHydrationPaintAtMs = await this.galleryPage.page.evaluate(() => new Promise((resolve) => {
+      requestAnimationFrame(() => requestAnimationFrame(() => resolve(performance.now())));
+    }));
+    const completedAtMs = previewPaintAtMs;
+    return {
+      completedAtMs,
+      elapsedMs: Math.max(0, completedAtMs - submittedAtMs),
+      expectedCard,
+      directPreviewMatch: true,
+      fullHydrationGeneration,
+      fullHydrationPaintAtMs,
+      generationAfter,
+      generationBefore,
+      previewDomReadyAtMs,
+      previewPaintAtMs,
+      previewResponseEndAtMs: previewTiming.responseEndAtMs,
+      responseDurationMs: previewTiming.durationMs,
+      responseUrl: response.url(),
+      submittedAtMs,
+    };
+    } finally {
+      await firstVisibleObservation.dispose();
+    }
   }
 
   async readVisibleAlbumLabelsByName(albumName) {

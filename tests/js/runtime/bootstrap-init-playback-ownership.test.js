@@ -719,6 +719,8 @@ test('bootstrap init restores a root albums follow-up hydration endpoint when th
 test('bootstrap init preserves the sidebar hydration request when an embedded startup sidebar patch is present', () => {
   const scheduledTimeouts = [];
   const appliedViews = [];
+  const indexedGroups = [];
+  const renderOptions = [];
   let fetchedEndpoint = null;
   let fetchedOptions = null;
   const runtimeBootstrap = {
@@ -766,6 +768,9 @@ test('bootstrap init preserves the sidebar hydration request when an embedded st
       view: {
         selected_artist: '',
         query: '',
+        artist_groups: [{ artist: 'Broadcast', albums: [{ key: 'album-1' }] }],
+        primary_artist_groups: [{ artist: 'Broadcast', albums: [{ key: 'album-1' }] }],
+        family_artist_groups: [],
       },
     },
     appBootstrap: {
@@ -802,7 +807,12 @@ test('bootstrap init preserves the sidebar hydration request when an embedded st
       beginInitialRefresh() {},
       markInitialRender() {},
     },
-    renderView() {},
+    rebuildAlbumIndex(groups) {
+      indexedGroups.push(groups);
+    },
+    renderView(options) {
+      renderOptions.push(options);
+    },
     updateStatusIndicator() {},
     renderLibraryLoader() {},
     scheduleBrowserTimeout(callback, delayMs) {
@@ -845,12 +855,20 @@ test('bootstrap init preserves the sidebar hydration request when an embedded st
   vm.createContext(context);
   vm.runInContext(helperSource, context, { filename: helperPath });
 
-  assert.deepEqual(appliedViews, [
+  assert.deepEqual(JSON.parse(JSON.stringify(appliedViews)), [
     {
       selected_artist: '',
       query: '',
+      artist_groups: [{ artist: 'Broadcast', albums: [{ key: 'album-1' }] }],
+      primary_artist_groups: [{ artist: 'Broadcast', albums: [{ key: 'album-1' }] }],
+      family_artist_groups: [],
     },
     {
+      selected_artist: '',
+      query: '',
+      artist_groups: [{ artist: 'Broadcast', albums: [{ key: 'album-1' }] }],
+      primary_artist_groups: [{ artist: 'Broadcast', albums: [{ key: 'album-1' }] }],
+      family_artist_groups: [],
       artists_sidebar: [
         { artist: 'Broadcast', count: 1 },
         { artist: 'Stereolab', count: 2 },
@@ -859,10 +877,20 @@ test('bootstrap init preserves the sidebar hydration request when an embedded st
       payload_tier: 'sidebar',
     },
   ]);
-  assert.equal(scheduledTimeouts.length, 1);
-  assert.equal(scheduledTimeouts[0].delayMs, 500);
+  assert.deepEqual(JSON.parse(JSON.stringify(indexedGroups)), [[
+    { artist: 'Broadcast', albums: [{ key: 'album-1' }] },
+  ]]);
+  assert.deepEqual(JSON.parse(JSON.stringify(renderOptions)), [
+    { preserveMountedGallery: true },
+  ]);
+  assert.deepEqual(
+    scheduledTimeouts.map(({ delayMs }) => delayMs),
+    [500, 5000],
+  );
   assert.equal(runtimeBootstrap.startupHydration.embeddedViewPatch, null);
   assert.equal(runtimeBootstrap.startupPayloadTiers.hydration.embeddedViewPatch, null);
+  assert.equal(fetchedEndpoint, null);
+  scheduledTimeouts[1].callback();
   assert.equal(fetchedEndpoint, '/view-data?payload_tier=sidebar');
   assert.deepEqual(JSON.parse(JSON.stringify(fetchedOptions)), {
     startupRefresh: true,
@@ -872,7 +900,140 @@ test('bootstrap init preserves the sidebar hydration request when an embedded st
   });
 });
 
+function createDelayedStartupHydrationHarness() {
+  const scheduledTimeouts = [];
+  const fetchedEndpoints = [];
+  const runtimeBootstrap = {
+    startupPayloadTiers: {
+      hydration: {
+        embeddedViewPatch: {
+          artists_sidebar: [{ artist: 'Broadcast', count: 1 }],
+        },
+      },
+    },
+    startupHydration: {
+      required: true,
+      endpoint: '/view-data?payload_tier=sidebar',
+      followupEndpoint: '/view-data',
+      tier: 'sidebar',
+      embeddedViewPatch: {
+        artists_sidebar: [{ artist: 'Broadcast', count: 1 }],
+        artist_count: 1,
+        payload_tier: 'sidebar',
+      },
+    },
+  };
+  const context = {
+    window: {
+      location: { href: 'http://localhost:5000/' },
+      addEventListener() {},
+    },
+    document: {
+      visibilityState: 'visible',
+      addEventListener() {},
+      querySelectorAll() { return []; },
+      getElementById() { return null; },
+    },
+    URL,
+    state: {
+      busy: false,
+      awaitingInitialDataRefresh: false,
+      ui: { viewStateRevision: 0 },
+      view: {
+        selected_artist: '',
+        query: '',
+        artist_groups: [{ artist: 'Broadcast', albums: [{ key: 'album-1' }] }],
+        primary_artist_groups: [{ artist: 'Broadcast', albums: [{ key: 'album-1' }] }],
+        family_artist_groups: [],
+      },
+    },
+    appBootstrap: {
+      getBootstrap() { return runtimeBootstrap; },
+      releasePayloadViewState() {},
+    },
+    normalizeBootstrapRuntimeStatePayload(payload) {
+      return { view: payload.initial_view, bootstrap: payload.bootstrap };
+    },
+    resolveGalleryDisplayPreferenceViewState(view) { return view; },
+    applyViewPayload(view) {
+      context.state.view = { ...context.state.view, ...view };
+    },
+    readViewStateRevision() { return context.state.ui.viewStateRevision; },
+    suppressRefocusViewportInteraction() {},
+    suppressRefocusViewportClick() {},
+    noteViewportRefocusHoverIntent() {},
+    noteViewportRefocusWheelIntent() {},
+    shouldRunImmediateStartupHydration() { return true; },
+    restorePlayerAppearance() {},
+    startupMetrics: {
+      beginInitialRefresh() {},
+      markInitialRender() {},
+    },
+    rebuildAlbumIndex() {},
+    renderView() {},
+    updateStatusIndicator() {},
+    renderLibraryLoader() {},
+    scheduleBrowserTimeout(callback, delayMs) {
+      scheduledTimeouts.push({ callback, delayMs });
+      return scheduledTimeouts.length;
+    },
+    pollStatus() {},
+    fetchAndRender(endpoint) { fetchedEndpoints.push(endpoint); },
+    isEffectivelyEmptyView() { return false; },
+    hideVersionContextMenu() {},
+    hideStatusContextMenu() {},
+    showVersionContextMenu() {},
+    showStatusContextMenu() {},
+    hideAlbumCardContextMenu() {},
+    showAlbumCardContextMenu() {},
+    getIndexedAlbum() { return null; },
+    handleViewportRefocusVisibilityChange() {},
+    persistPlayerState() {},
+    flushListenSessionOnUnload() {},
+    armViewportRefocusSuppression() {},
+    initPlaybackOwnershipCoordinator() {},
+    attachModalEvents() {},
+    attachCoverLookupModalEvents() {},
+    attachCoverLookupDeleteConfirmEvents() {},
+    attachUtilityModalEvents() {},
+    attachRepairConfirmEvents() {},
+    attachPlayerEvents() {},
+    showToast() {},
+    updatePlayerUi() {},
+    console,
+  };
+
+  vm.createContext(context);
+  vm.runInContext(helperSource, context, { filename: helperPath });
+  return { context, fetchedEndpoints, scheduledTimeouts };
+}
+
+test('delayed startup hydration yields to cover-display/source work without aborting it', () => {
+  const { context, fetchedEndpoints, scheduledTimeouts } = createDelayedStartupHydrationHarness();
+  assert.equal(context.state.awaitingInitialDataRefresh, true);
+
+  context.state.view.gallery_display_mode = 'covers';
+  context.state.awaitingInitialDataRefresh = false;
+  scheduledTimeouts.find(({ delayMs }) => delayMs === 5000).callback();
+
+  assert.deepEqual(fetchedEndpoints, []);
+  assert.equal(context.state.awaitingInitialDataRefresh, false);
+});
+
+test('delayed startup hydration clears readiness when cached artist navigation supersedes it', () => {
+  const { context, fetchedEndpoints, scheduledTimeouts } = createDelayedStartupHydrationHarness();
+  assert.equal(context.state.awaitingInitialDataRefresh, true);
+
+  context.state.ui.viewStateRevision += 1;
+  context.state.view.selected_artist = 'Broadcast';
+  scheduledTimeouts.find(({ delayMs }) => delayMs === 5000).callback();
+
+  assert.deepEqual(fetchedEndpoints, []);
+  assert.equal(context.state.awaitingInitialDataRefresh, false);
+});
+
 test('bootstrap init still queues the embedded sidebar-first hydration request while busy', () => {
+  const scheduledTimeouts = [];
   let fetchedEndpoint = null;
   let fetchedOptions = null;
   const context = {
@@ -944,11 +1105,13 @@ test('bootstrap init still queues the embedded sidebar-first hydration request w
       beginInitialRefresh() {},
       markInitialRender() {},
     },
+    rebuildAlbumIndex() {},
     renderView() {},
     updateStatusIndicator() {},
     renderLibraryLoader() {},
-    scheduleBrowserTimeout() {
-      return 0;
+    scheduleBrowserTimeout(callback, delayMs) {
+      scheduledTimeouts.push({ callback, delayMs });
+      return delayMs;
     },
     pollStatus() {},
     fetchAndRender(endpoint, push, options) {
@@ -986,6 +1149,11 @@ test('bootstrap init still queues the embedded sidebar-first hydration request w
   vm.createContext(context);
   vm.runInContext(helperSource, context, { filename: helperPath });
 
+  assert.deepEqual(
+    scheduledTimeouts.map(({ delayMs }) => delayMs),
+    [500, 5000],
+  );
+  scheduledTimeouts[1].callback();
   assert.equal(fetchedEndpoint, '/view-data?payload_tier=sidebar');
   assert.deepEqual(JSON.parse(JSON.stringify(fetchedOptions)), {
     startupRefresh: true,

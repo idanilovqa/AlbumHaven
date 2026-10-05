@@ -48,7 +48,7 @@ def _stub_relation_projection_startup(monkeypatch):
     class _TargetedRepositoryStub:
         backend = "postgres"
 
-    def ensure_ready(runtime):
+    def ensure_ready(runtime, **_kwargs):
         runtime.library_state["relation_projection_ready"] = True
         runtime.library_state["relation_projection_rebuild_reason"] = "healthy"
         return {"ready": True, "relation_views": runtime.library_state.get("relation_views", {})}
@@ -74,6 +74,13 @@ def _stub_relation_projection_startup(monkeypatch):
         "load_exception_overrides",
         lambda _config: {},
     )
+
+
+@pytest.fixture(autouse=True)
+def _preserve_process_global_executors(monkeypatch):
+    from music_app.services import runtime_shutdown
+
+    monkeypatch.setattr(runtime_shutdown, "request_runtime_shutdown", lambda _runtime: None)
 
 
 @pytest.fixture
@@ -506,11 +513,221 @@ def test_create_asgi_app_lifespan_starts_retry_worker_and_shutdown(monkeypatch):
         assert runtime.library_state is asgi_app.state.library_state
 
 
-def test_create_asgi_app_lifespan_gates_startup_on_relation_projection_readiness(monkeypatch):
-    from music_app import create_asgi_app
-    from music_app.services import lastfm_retry, runtime_shutdown, state
+def test_create_asgi_app_lifespan_requests_warmup_stop_before_worker_shutdown(
+    monkeypatch,
+):
+    import music_app
+    from music_app.services import lastfm_retry, runtime_shutdown
 
     calls = []
+
+    class WarmupHandle:
+        async def stop(self):
+            calls.append("warmup-stop")
+
+    monkeypatch.setattr(
+        music_app,
+        "_start_library_warmup",
+        lambda *_args, **_kwargs: WarmupHandle(),
+    )
+    monkeypatch.setattr(lastfm_retry, "start_lastfm_retry_worker", lambda _runtime: None)
+    monkeypatch.setattr(
+        lastfm_retry,
+        "stop_lastfm_retry_worker",
+        lambda _runtime: calls.append("lastfm-stop"),
+    )
+    monkeypatch.setattr(
+        runtime_shutdown,
+        "request_runtime_shutdown",
+        lambda _runtime: calls.append("runtime-stop"),
+    )
+
+    assert _run_asgi_lifespan(music_app.create_asgi_app()) == [
+        {"type": "lifespan.startup.complete"},
+        {"type": "lifespan.shutdown.complete"},
+    ]
+    assert calls == ["warmup-stop", "lastfm-stop", "runtime-stop"]
+
+
+def test_create_asgi_app_lifespan_starts_and_stops_cover_preview_backfill(
+    monkeypatch,
+):
+    import music_app
+    from music_app.services import cover_preview_backfill
+
+    calls = []
+
+    class FakeBackfill:
+        def __init__(self, config, *, logger):
+            calls.append(("create", config, logger))
+
+        def start(self):
+            calls.append(("start",))
+
+        def stop(self):
+            calls.append(("stop",))
+
+        def note_foreground_activity(self):
+            calls.append(("activity",))
+
+    monkeypatch.setattr(
+        cover_preview_backfill,
+        "CoverPreviewBackfill",
+        FakeBackfill,
+    )
+
+    asgi_app = music_app.create_asgi_app()
+    messages = _run_asgi_lifespan(asgi_app)
+
+    assert messages == [
+        {"type": "lifespan.startup.complete"},
+        {"type": "lifespan.shutdown.complete"},
+    ]
+    assert [call[0] for call in calls] == ["create", "start", "stop"]
+    assert calls[0][1] is asgi_app.state.config
+    assert calls[0][2] is asgi_app.state.logger
+
+
+def test_dynamic_request_notifies_cover_preview_backfill(monkeypatch):
+    import music_app
+
+    asgi_app = music_app.create_asgi_app()
+    activities = []
+    asgi_app.state.cover_preview_backfill = type(
+        "Backfill",
+        (),
+        {"note_foreground_activity": lambda self: activities.append("activity")},
+    )()
+
+    status, _headers, _body = run_asgi_request(asgi_app, "GET", "/status")
+
+    assert status == 200
+    assert activities == ["activity"]
+
+
+def test_library_warmup_stop_during_postgres_prewarm_skips_relation_projection():
+    from music_app import _start_library_warmup
+
+    prewarm_started = threading.Event()
+    release_prewarm = threading.Event()
+    stop_returned = threading.Event()
+    stop_errors = []
+    relation_calls = []
+    existing_thread_ids = {thread.ident for thread in threading.enumerate()}
+    runtime = types.SimpleNamespace(
+        config={"ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://album_haven_app@localhost/app"},
+        logger=logging.getLogger("test-library-warmup-stop"),
+        library_state={},
+    )
+
+    def prewarm(_database_url):
+        prewarm_started.set()
+        assert release_prewarm.wait(timeout=5)
+
+    handle = _start_library_warmup(
+        runtime,
+        lambda _runtime: (_ for _ in ()).throw(AssertionError("hydrate must not run")),
+        lambda _runtime: relation_calls.append("relations"),
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("scan must not start")
+        ),
+        prewarm,
+    )
+    assert prewarm_started.wait(timeout=2)
+    warmup_thread = next(
+        thread
+        for thread in threading.enumerate()
+        if thread.name == "albumhaven-library-warmup"
+        and thread.ident not in existing_thread_ids
+    )
+
+    def request_stop():
+        try:
+            handle.request_stop()
+        except BaseException as exc:
+            stop_errors.append(exc)
+        finally:
+            stop_returned.set()
+
+    stop_request = threading.Thread(target=request_stop, daemon=True)
+    stop_request.start()
+    request_was_nonblocking = stop_returned.wait(timeout=1)
+    release_prewarm.set()
+
+    warmup_thread.join(timeout=2)
+    stop_request.join(timeout=2)
+    assert request_was_nonblocking, "request_stop blocked on the warmup worker"
+    assert not warmup_thread.is_alive()
+    assert stop_errors == []
+    assert relation_calls == []
+
+
+def test_create_asgi_app_lifespan_starts_when_background_relation_projection_fails(monkeypatch):
+    from config import Config
+    from music_app import create_asgi_app
+    from music_app.services import lastfm_retry, postgres_connections, state
+
+    monkeypatch.setattr(state, "hydrate_runtime_library_state_on_startup", lambda _runtime: True)
+    monkeypatch.setattr(
+        state,
+        "ensure_runtime_relation_projection_ready",
+        lambda _runtime, **_kwargs: (_ for _ in ()).throw(RuntimeError("projection failed")),
+    )
+    retry_calls = []
+
+    monkeypatch.setattr(
+        Config,
+        "ALBUM_HAVEN_APP_DATABASE_URL",
+        "postgresql://album_haven_app@localhost/app",
+    )
+    monkeypatch.setattr(
+        postgres_connections,
+        "prewarm_connection_pool",
+        lambda _database_url: None,
+    )
+    monkeypatch.setattr(
+        lastfm_retry,
+        "start_lastfm_retry_worker",
+        lambda _runtime: retry_calls.append("started"),
+    )
+
+    assert _run_asgi_lifespan(create_asgi_app()) == [
+        {"type": "lifespan.startup.complete"},
+        {"type": "lifespan.shutdown.complete"},
+    ]
+    assert retry_calls == ["started"]
+
+
+def test_postgres_lifespan_cancels_relation_projection_warmup_before_shutdown(monkeypatch):
+    import music_app
+    from config import Config
+    from music_app import create_asgi_app
+    from music_app.services import lastfm_retry, postgres_connections, runtime_shutdown, state
+
+    calls = []
+    projection_started = threading.Event()
+    projection_finished = threading.Event()
+    shutdown_requested = threading.Event()
+    original_request_stop = music_app._LibraryWarmupHandle.request_stop
+
+    def request_stop(handle):
+        shutdown_requested.set()
+        original_request_stop(handle)
+
+    def warm_projection(_runtime, *, cancel_requested):
+        calls.append("relations")
+        projection_started.set()
+        try:
+            assert cancel_requested.wait(timeout=5)
+        finally:
+            projection_finished.set()
+        raise InterruptedError("relation projection readiness cancelled")
+
+    monkeypatch.setattr(
+        Config,
+        "ALBUM_HAVEN_APP_DATABASE_URL",
+        "postgresql://album_haven_app@localhost/app",
+    )
     monkeypatch.setattr(
         state,
         "hydrate_runtime_library_state_on_startup",
@@ -519,7 +736,18 @@ def test_create_asgi_app_lifespan_gates_startup_on_relation_projection_readiness
     monkeypatch.setattr(
         state,
         "ensure_runtime_relation_projection_ready",
-        lambda _runtime: calls.append("relations") or {"ready": True},
+        warm_projection,
+    )
+    monkeypatch.setattr(
+        state,
+        "start_background_refresh_for_state",
+        lambda *_args, **_kwargs: calls.append("scan"),
+    )
+    monkeypatch.setattr(
+        postgres_connections,
+        "prewarm_connection_pool",
+        lambda database_url: calls.append(("prewarm", database_url)),
+        raising=False,
     )
     monkeypatch.setattr(
         lastfm_retry,
@@ -528,32 +756,94 @@ def test_create_asgi_app_lifespan_gates_startup_on_relation_projection_readiness
     )
     monkeypatch.setattr(lastfm_retry, "stop_lastfm_retry_worker", lambda _runtime: None)
     monkeypatch.setattr(runtime_shutdown, "request_runtime_shutdown", lambda _runtime: None)
+    monkeypatch.setattr(music_app._LibraryWarmupHandle, "request_stop", request_stop)
 
-    assert _run_asgi_lifespan(create_asgi_app())[0] == {"type": "lifespan.startup.complete"}
-    assert calls == ["hydrate", "relations", "lastfm"]
+    asgi_app = create_asgi_app()
+
+    messages = []
+    lifespan_finished = threading.Event()
+
+    def run_lifespan():
+        try:
+            messages.extend(_run_asgi_lifespan(asgi_app))
+        finally:
+            lifespan_finished.set()
+
+    lifespan_thread = threading.Thread(target=run_lifespan)
+    lifespan_thread.start()
+    try:
+        assert projection_started.wait(timeout=2)
+        assert shutdown_requested.wait(timeout=2)
+        assert lifespan_finished.wait(timeout=2)
+        assert calls == [
+            ("prewarm", "postgresql://album_haven_app@localhost/app"),
+            "relations",
+            "lastfm",
+        ]
+        assert asgi_app.state.library_warmup_thread is not None
+        assert asgi_app.state.library_warmup_thread.daemon is True
+        assert projection_finished.is_set()
+    finally:
+        lifespan_thread.join(timeout=2)
+
+    assert projection_finished.is_set()
+    assert not lifespan_thread.is_alive()
+    assert messages == [
+        {"type": "lifespan.startup.complete"},
+        {"type": "lifespan.shutdown.complete"},
+    ]
 
 
-def test_create_asgi_app_lifespan_fails_before_retry_start_when_relation_projection_fails(monkeypatch):
+def test_postgres_lifespan_logs_pool_prewarm_failure_and_continues_relations(
+    monkeypatch,
+    caplog,
+):
+    from config import Config
     from music_app import create_asgi_app
-    from music_app.services import lastfm_retry, state
+    from music_app.services import lastfm_retry, postgres_connections, runtime_shutdown, state
 
-    monkeypatch.setattr(state, "hydrate_runtime_library_state_on_startup", lambda _runtime: True)
+    calls = []
+    database_url = "postgresql://album_haven_app@localhost/app"
+
+    def fail_prewarm(url):
+        calls.append(("prewarm", url))
+        raise RuntimeError("pool unavailable")
+
+    monkeypatch.setattr(Config, "ALBUM_HAVEN_APP_DATABASE_URL", database_url)
+    monkeypatch.setattr(
+        postgres_connections,
+        "prewarm_connection_pool",
+        fail_prewarm,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        state,
+        "hydrate_runtime_library_state_on_startup",
+        lambda _runtime: calls.append("hydrate") or True,
+    )
     monkeypatch.setattr(
         state,
         "ensure_runtime_relation_projection_ready",
-        lambda _runtime: (_ for _ in ()).throw(RuntimeError("projection failed")),
+        lambda _runtime, **_kwargs: calls.append("relations"),
     )
-    retry_calls = []
     monkeypatch.setattr(
-        lastfm_retry,
-        "start_lastfm_retry_worker",
-        lambda _runtime: retry_calls.append("started"),
+        state,
+        "start_background_refresh_for_state",
+        lambda *_args, **_kwargs: calls.append("scan"),
     )
+    monkeypatch.setattr(lastfm_retry, "start_lastfm_retry_worker", lambda _runtime: None)
+    monkeypatch.setattr(lastfm_retry, "stop_lastfm_retry_worker", lambda _runtime: None)
+    monkeypatch.setattr(runtime_shutdown, "request_runtime_shutdown", lambda _runtime: None)
 
-    with pytest.raises(RuntimeError, match="projection failed"):
-        _run_asgi_lifespan(create_asgi_app())
+    with caplog.at_level(logging.ERROR):
+        messages = _run_asgi_lifespan(create_asgi_app())
 
-    assert retry_calls == []
+    assert messages == [
+        {"type": "lifespan.startup.complete"},
+        {"type": "lifespan.shutdown.complete"},
+    ]
+    assert calls == [("prewarm", database_url), "relations"]
+    assert "Postgres connection pool prewarm failed." in caplog.text
 
 
 def test_create_asgi_app_lifespan_marks_empty_startup_scan_pending_without_starting_it(monkeypatch):
@@ -621,7 +911,7 @@ def test_create_asgi_app_lifespan_schedules_only_incomplete_hydrated_metadata_re
     monkeypatch.setattr(
         state,
         "ensure_runtime_relation_projection_ready",
-        lambda _runtime: {"ready": True},
+        lambda _runtime, **_kwargs: {"ready": True},
     )
     monkeypatch.setattr(
         state,
@@ -712,6 +1002,15 @@ def test_empty_postgres_startup_submits_one_scan_and_keeps_root_and_status_avail
         web_asgi,
         "PostgresLibraryBrowseRepository",
         lambda _config: types.SimpleNamespace(
+            build_root_startup_preview_payload=lambda **_kwargs: {
+                "artists_sidebar": [],
+                "artist_groups": [],
+                "artist_count": 0,
+                "album_count": 0,
+                "selected_artist": "",
+                "payload_tier": "sidebar",
+                "gallery_display_mode": "covers",
+            },
             build_root_sidebar_payload=lambda **_kwargs: {
                 "artists_sidebar": [],
                 "artist_count": 0,
@@ -730,11 +1029,12 @@ def test_empty_postgres_startup_submits_one_scan_and_keeps_root_and_status_avail
         {"type": "lifespan.shutdown.complete"},
     ]
     assert submissions == []
-    assert asgi_app.state.library_state["cold_scan_pending"] is True
+    assert asgi_app.state.library_state["cold_scan_pending"] is False
     root_status, _root_headers, root_body = _run_asgi_http_get(asgi_app, "/")
     status_status, _status_headers, status_body = _run_asgi_http_get(asgi_app, "/status")
 
     assert root_status == 200
+    assert asgi_app.state.library_state["cold_scan_handoff_status"] == "started"
     assert b"window.__ALBUM_HAVEN_BOOTSTRAP_PAYLOAD__" in root_body
     assert b'"scanInProgress": true' in root_body
     assert b'"scanPhase": "discovering"' in root_body
@@ -804,15 +1104,19 @@ def test_create_asgi_app_lifespan_does_not_start_duplicate_or_masked_scan(
         assert asgi_app.state.library_state[key] == value
 
 
-def test_create_asgi_app_lifespan_propagates_startup_hydration_exception(monkeypatch):
+def test_create_asgi_app_lifespan_reports_background_hydration_exception_without_blocking_startup(
+    monkeypatch,
+):
     from music_app import create_asgi_app
     from music_app.services import lastfm_retry, state
 
     failure = RuntimeError("strict Postgres query failed")
+    hydration_attempted = threading.Event()
     retry_calls = []
     scan_calls = []
 
     def fail_hydration(_app):
+        hydration_attempted.set()
         raise failure
 
     monkeypatch.setattr(state, "hydrate_runtime_library_state_on_startup", fail_hydration)
@@ -825,11 +1129,12 @@ def test_create_asgi_app_lifespan_propagates_startup_hydration_exception(monkeyp
 
     asgi_app = create_asgi_app()
 
-    with pytest.raises(RuntimeError) as raised:
-        _run_asgi_lifespan(asgi_app)
-
-    assert raised.value is failure
-    assert retry_calls == []
+    assert _run_asgi_lifespan(asgi_app) == [
+        {"type": "lifespan.startup.complete"},
+        {"type": "lifespan.shutdown.complete"},
+    ]
+    assert hydration_attempted.wait(timeout=2)
+    assert len(retry_calls) == 1
     assert scan_calls == []
 
 

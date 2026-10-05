@@ -1,6 +1,26 @@
 # Cover branch completion
 
-## Current integration checkpoint — October 3, 2026
+## October 5 continuation evidence
+
+Cover display previews now use shared album-adjacent storage at
+`<album-directory>/.album-haven/cover_variants/...`; the app data directory and
+browser storage are not used for these files. A single throttled
+`CoverPreviewBackfill` worker enumerates distinct Postgres album cover paths,
+continues across rescans, pauses after foreground request activity, and stops
+cooperatively during ASGI shutdown. Existing foreground and interactive cover
+requests retain their priority lanes. Focused preview, route, queue, lifecycle,
+and shutdown tests pass.
+
+The startup preview balancing query now counts distinct `(library_id, album_id)`
+pairs when several selected artists share an album, preserving the eight unique
+album limit. Database identity status keeps the successful opaque identity for
+60 seconds and refreshes the catalog count after expiry; transient failures are
+still retried on the next request. The paired production/synthetic calibration
+run `paired-search-20261005-143219-9c009206` remains the authoritative search
+evidence: Devin 1059.2 ms production / 322.3 ms synthetic, Neal Morse 768.5 ms
+production / 194.2 ms synthetic.
+
+## Current integration checkpoint — October 4, 2026
 
 Current `origin/main` (`eef9d13f`, release 0.9.48) is merged at `2e016251`.
 That merge includes the separately completed mobile-layout and Admin/capability
@@ -13,9 +33,14 @@ overridden by the remaining branch diff.
 Post-merge repairs are committed separately: `de537f8a` resumes suspended cover
 loads after cached Scan Page replacements render and removes duplicate tests;
 `8bb3f5c1` accepts the documented dedicated `album_haven_scan_e2e` database only
-with its exact expected role. The current application delta against
-`origin/main` is 27 files with 439 additions and 61 deletions. Excluded local
-restart artifacts and the mock-preview PID remain untracked.
+with its exact expected role. The last pushed head remains `91b334fc`;
+artist-search, migration, startup, and pass-3 review repairs after that head
+remain local working-tree changes. Against `origin/main`, the settled candidate
+has 74 tracked files with 6,438 additions and 654 deletions, plus five intended
+untracked source files totaling 479 added lines. The exact delivery manifest is
+therefore 79 files, 6,917 additions, and 654 deletions. Local
+`.codex-restart/**` diagnostics and the mock-preview PID are excluded from those
+totals and from the delivery manifest.
 
 The test-data checkout's two local 706-fixture commits are already represented
 in released source `b24265f`; that released source differs only by eight stricter
@@ -47,6 +72,163 @@ commit and push the application branch, open a new application PR with
 `skip_reviews` and without `skip_tests`, collect and fix the complete native CI
 failure inventory, merge only after the full pipeline is green, publish 0.9.49,
 then synchronize and deploy the verified release under the deployment runbook.
+
+### Artist-search performance delivery
+
+Outcome: show the first expected album for `Devin` and `Neal Morse` within an
+800 ms target, 400 ms grace band, and 1200 ms hard ceiling on the real production
+dataset. The measured interval starts immediately before explicit submission by
+Enter or the search button; it does not include a measured type-ahead debounce.
+Typing remains explicit-submit only. The clear X changes only the input until an
+empty query is submitted. Clicking a recent-search suggestion submits it
+immediately. The interval ends after the exact search response has a later
+request generation, its album is visible in a later render generation, and the
+current query is exact.
+
+Included acceptance work: preserve complete multi-alias artist previews, raw
+metadata and path-derived non-album matches, all-stale missing-album detection,
+active-album suppression, category filtering, and the existing single
+repeatable-read snapshot. Synthetic performance remains a fast regression gate.
+Immediately after satisfactory real-data Devin and Neal Morse behavior, run the
+equivalent synthetic benchmark and calibrate its documented expectations against
+that paired journey. Synthetic timings are correlated evidence, not a claim that
+synthetic absolute latency equals production data. They do not replace paired
+real-data evidence.
+
+Prerequisite `0067_add_scanned_exception_candidate_index.sql` was absent from
+the production migration ledger even though release 0.9.48 contains the file.
+The production runbook skips automatic historical migration replay because the
+ledger contains renumbered and incomplete history. The owner authorized an
+online application on October 3. The exact migration checksum now matches the
+ledger, the partial index is valid and ready, and no app restart occurred.
+
+Implementation boundary: consolidate missing-album text matching into the
+existing broad search SQL and return active-preview and all-stale partitions
+from the same snapshot. Keep the standalone missing-album loader for root browse,
+details, Problematic Files, and rollback. Do not add a cross-request process
+cache in this delivery; its invalidation contract would require a separate
+database-owned projection revision and technical design.
+
+Acceptance cases: focused RED/GREEN contracts must cover album, artist,
+featured/raw credit, alias, track-title, filename/stem, wildcard and backslash
+matching; mixed active/stale exclusion; category filtering after complete-row
+hydration; selected-artist reuse without a second missing query; no private-path
+payload leak; and one-snapshot consistency. Final evidence requires paired
+real-data server profiles and the unchanged visible-result performance E2E.
+
+Compatibility and rollback: this delivery now includes four unreleased upgrade
+migrations. Apply them before deploying the matching application code. `0081`
+restores the narrow runtime `DELETE` grant used by root-setting replacement;
+revoke it only after rolling back that writer. `0082` replaces the missing-album
+removal function while preserving relation readiness; rolling it back means
+reapplying the `0063` function and accepting a relation rebuild, and it cannot
+restore inventory rows already removed by a confirmed operation. `0083` adds an
+online concurrent trigram index and therefore runs outside a transaction; its
+rollback is `DROP INDEX CONCURRENTLY`, after which the same search remains
+correct but may be slower. `0084` transactionally adds the artist-search
+projection table, canonical-scope B-tree, replacement function, and grants. Roll
+back application code
+before dropping those objects so a current relation-ready marker cannot direct
+the old process to a missing projection table. The existing live-SQL path
+remains the runtime fallback when projection readiness is absent, stale, or
+incompatible. None of `0081`–`0084` is committed or released from this branch
+yet. Retained artifacts do not prove the production migration-ledger state for
+any of the four, so release rollout must verify each filename and checksum
+rather than infer application from a working sandbox.
+
+The owner explicitly approved applying production migration `0084`, including
+the projection table and the bounded `SECURITY DEFINER` replacement function
+grant executable by `album_haven_app`. That approval does not waive the
+deployment runbook or exact filename/checksum validation.
+
+October 4 continuation checkpoint: production-backed sandbox1 now uses
+nonblocking Postgres startup, a narrow healthy projection probe, pooled login
+and pre-auth connections, first-keystroke cover-load suspension, request-local
+lazy alias normalization, and a narrowed relation-alias snapshot read. A
+nonlocking session-read experiment was discarded after it produced no measured
+browser gain and weakened strict revocation ordering; all authenticated requests
+retain the existing exclusive account/session locks. Focused evidence is green:
+95/95 gallery-handler JavaScript tests and 15/15 adjacent search
+snapshot/category tests. Direct Devin preview profiling fell
+from 194ms and about54k calls to 133ms and about15.7k calls before the narrowed
+alias JSON read; a later local authenticated HTTP sample was154ms total with a
+141ms route.
+
+Retained October browser evidence does not yet measure the new first-visible
+contract. The two retained October 3 probes waited for the applied query to be
+idle and therefore measured full settlement: `measure-real-search-current`
+recorded Devin at 1814.6ms and Neal Morse at 2479.6ms; its network-instrumented
+companion recorded 1608.5ms and 2506.6ms. They used the production-backed
+sandbox path. Their stdout SHA-256 values are respectively
+`8715e5b487baf07f538c22670d576a0e0b5cea2887b210fc2066ca8db7b3782b`
+and `a42a6f12f9537bbbdd90a286c42377e1c9e82dde136df591c96c3021ccef66ea`.
+They are useful diagnostics, but are not samples for the new
+submit-through-first-visible-album metric. The previously noted 1051.6ms and
+935.9ms pair has no retained artifact and is removed from the evidence record.
+The first-visible baseline, range, and sample count remain unknown until the
+paired Devin and Neal Morse acceptance test produces retained metrics. Server
+logs separately show preview-route variability; those route durations are not
+browser measurements and are not substituted for the missing sample. Do not
+retry for a passing sample. The current owner-approved 800 ms target, 400 ms
+grace, and 1200 ms hard ceiling supersede the earlier 1000 ms ceiling; the
+historical executed values above remain history. The remaining responsible design is a database-owned normalized
+artist alias/search projection, published atomically with relation readiness and
+joined from the same repeatable-read snapshot. The owner approved that
+schema/projection change on October 4, 2026; stale or absent readiness must fall
+back to live SQL. A process-local cache remains
+out of scope because another production-backed process can invalidate the shared
+projection without notifying this app instance.
+
+October 4 pass-3 release checkpoint: the candidate is still unreleased. The
+changelog now says `Unreleased`; no staging, commit, push, PR, hosted CI, merge,
+tag, publication, or deployment is claimed. The Render demo migration runner
+now validates nontransactional `0083` before ledgering it and, after a failed
+concurrent build, drops only the named invalid index concurrently before
+rethrowing so the next startup can retry. Its focused RED failed because no
+cleanup occurred; GREEN passed, and the focused Render test file passed 32/32.
+The existing live `0082` success test already checks the blocked unhealthy-root
+path, album/track/file deletion, one revision increment, byte-for-byte retention
+of the relation views/projection/build metadata, and retained `ready` status, so
+no duplicate test was added. A local attempt skipped because dedicated isolated
+Postgres URLs are not configured; that skip is not recorded as passing live
+evidence. The first-visible benchmark formatter now reports null and blank
+baseline/range values as unavailable rather than `0 ms`; its RED reproduced the
+false zero and the focused benchmark file passed 14/14 after the fix.
+
+The later staging manifest is all tracked candidate changes plus only these five
+currently untracked source files:
+`migrations/postgres/0081_grant_move_policy_settings_delete.sql`,
+`migrations/postgres/0082_preserve_relations_for_missing_album_removal.sql`,
+`migrations/postgres/0083_add_album_raw_artist_search_index.sql`,
+`migrations/postgres/0084_create_local_artist_search_projection.sql`, and
+`tests/py/test_nontransactional_postgres_migrations.py`. Exclude every
+`.codex-restart/**` diagnostic and
+`docs/design-mockups/screens/remaining-ui/v001/preview.pid`; do not add ignore
+rules for either class. Before any future commit, verify the cached diff contains
+none of those excluded paths.
+
+October 4 cold-search continuation: the first production-backed `Devin`
+preview still spent `56,500.41 ms` in the server. An instrumented real-data
+profile located `98,600 ms` under `_load_live_relation_alias_maps`, including
+rebuilding relation views from all `407,331` source rows. The ready `0084`
+projection had no exact `Devin` key, and the preview path treated that valid
+partial miss as proof that it must rebuild the live alias graph. The repaired
+path checks the database projection's current readiness metadata in the same
+repeatable-read snapshot and lets the bounded broad search handle partial
+queries. It retains the live rebuild only when the projection is absent,
+stale, or incompatible. Focused RED reproduced the 407k-row fallback; focused
+GREEN passed 5/5 current, stale, and exact-projection cases.
+
+After a clean sandbox1 restart against the production database, the cold
+`Devin` preview route completed in `209.87 ms` and full hydration in
+`341.09 ms`. Direct real-data previews completed in `425.77 ms` for `Devin`
+and `349.96 ms` for `Neal Morse`. A normal Enter-submission browser diagnostic
+measured first visible results at `1,093.5 ms` for `Devin` (`grace-used`) and
+`767.5 ms` for `Neal Morse` (`target-met`). The authoritative paired run has
+not passed yet. Cloudflare injected one Insights script request and three RUM
+posts, which the benchmark's forbidden-request assertion recorded, and the
+fresh second browser waited 120 seconds for initial gallery-cover readiness
+before submitting `Neal Morse`. Synthetic calibration therefore has not run.
 
 ## Current verification checkpoint — September 23, 2026
 

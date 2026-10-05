@@ -61,6 +61,8 @@ function createContext(options = {}) {
     albumDetailPrewarms: [],
     galleryFocusGlows: [],
     missingAlbumRemovalConfirms: [],
+    resumeScanPageGalleryCoverLoads: 0,
+    showToast: [],
   };
   const cachedRootView = options.cachedRootView || null;
   const cachedSelectedArtistView = options.cachedSelectedArtistView || null;
@@ -144,6 +146,12 @@ function createContext(options = {}) {
     resumePlayerWaveformPeakLoadsAfterForegroundView(suspension) {
       calls.waveformPeakLoadResumptions.push(suspension);
       return Promise.resolve(null);
+    },
+    resumeScanPageGalleryCoverLoads() {
+      calls.resumeScanPageGalleryCoverLoads += 1;
+    },
+    showToast(message, level, durationMs, runtimeOptions) {
+      calls.showToast.push({ message, level, durationMs, runtimeOptions });
     },
     hideGalleryOptionsMenu() {
       calls.hideGalleryOptionsMenu += 1;
@@ -505,6 +513,11 @@ test('openNonAlbumTagEditor hands every displayed loose track to Edit Tags', () 
   assert.deepEqual({ ...calls[1].options }, { tracksMode: 'all' });
 });
 
+function submitSearch(context, query) {
+  context.document.getElementById('search-input').value = query;
+  context.handleGalleryBootstrapSearchSubmit({ preventDefault() {} });
+}
+
 function createAllArtistsEvent() {
   const button = {};
   let prevented = false;
@@ -782,6 +795,26 @@ test('handleGalleryBootstrapClick restores the cached root browse view before re
   assert.equal(calls.suspendSelectedArtistCoverLoadsForUserAction, 1);
   assert.equal(context.state.gallery.sidebarArtistsOverride, null);
   assert.equal(context.state.ui.pendingSidebarAllArtistsActive, true);
+});
+
+test('All Artists abandons a pending search draft and releases every search suspension before navigation', () => {
+  const { context, calls } = createContext({ searchInputValue: 'draft query' });
+  context.state.view.query = 'committed query';
+  context.handleGalleryBootstrapSearchInput('draft query');
+  context.state.ui.recentSearchPopoverOpen = true;
+
+  context.handleGalleryBootstrapClick(createAllArtistsEvent().event);
+
+  assert.equal(context.state.ui.pendingSearchCommitTimer, 0);
+  assert.equal(context.state.ui.searchDraftQuery, 'committed query');
+  assert.equal(context.document.getElementById('search-input').value, 'committed query');
+  assert.equal(context.state.ui.recentSearchPopoverOpen, false);
+  assert.equal(context.state.ui.albumDetailPrewarmSearchSuspended, false);
+  assert.equal(context.state.ui.pendingSearchCoverLoadSuspensionToken, null);
+  assert.equal(context.state.ui.pendingSearchWaveformPeakLoadSuspension, null);
+  assert.deepEqual(calls.resumeSelectedArtistCoverLoadsAfterUserAction, [9]);
+  assert.deepEqual(calls.waveformPeakLoadResumptions, [{ id: 1 }]);
+  assert.equal(calls.fetchAndRender.length, 1);
 });
 
 test('handleGalleryBootstrapClick preserves the artist scroll anchor when toggling similar artists', () => {
@@ -1923,12 +1956,17 @@ test('search submit abandons Scan Page before dispatching an unfiltered query re
     'abandonScanPageForNavigation',
     'fetchAndRender',
   ]);
-  assert.equal(calls.buildApiUrl.length, 1);
+  assert.equal(calls.buildApiUrl.length, 2);
   assert.equal(calls.buildApiUrl[0].query, 'Broadcast');
   assert.equal(calls.buildApiUrl[0].selected_artist, '');
   assert.equal(calls.buildApiUrl[0].all_artists_active, false);
   assert.deepEqual(JSON.parse(JSON.stringify(calls.buildApiUrl[0].related_filter_artists)), []);
   assert.equal(calls.buildApiUrl[0].primary_filter_active, false);
+  assert.deepEqual(calls.buildApiUrl[1], calls.buildApiUrl[0]);
+  assert.deepEqual(calls.buildApiUrlOptions, [{
+    omitSidebar: true,
+    payloadTier: 'search_preview',
+  }, {}]);
   assert.equal(calls.fetchAndRender.length, 1);
 });
 
@@ -2070,7 +2108,7 @@ test('same-query commit cancels cached selected-artist reconcile before its stal
   );
 });
 
-test('edited search draft invalidates cached selected-artist reconcile before debounce commits', () => {
+test('edited search draft invalidates cached selected-artist reconcile before explicit submission', () => {
   const { context, calls } = createContext();
   const selectedArtist = 'Neal Morse';
   context.state.view = {
@@ -2092,7 +2130,7 @@ test('edited search draft invalidates cached selected-artist reconcile before de
 
   assert.equal(staleReconcile.cleared, true);
   assert.equal(context.state.ui.pendingSelectedArtistReconcileTimer, 0);
-  assert.equal(calls.fetchAndRender.length, 1);
+  assert.equal(calls.fetchAndRender.length, 0);
 });
 
 test('search focus cancels cached selected-artist reconcile before browser input dispatch can race it', () => {
@@ -2687,7 +2725,7 @@ test('explicit All artists selection clears captured family filters before an im
   context.state.ui.preSearchViewOrigin = 'interactive';
 
   context.handleGalleryBootstrapClick(createAllArtistsEvent().event);
-  context.handleGalleryBootstrapSearchSubmit(createSubmitEvent());
+  submitSearch(context, '');
 
   const clearedView = calls.buildApiUrl.at(-1);
   assert.equal(clearedView.query, '');
@@ -2797,7 +2835,7 @@ test('direct artist category search captures its origin but an unselected result
   context.state.ui.pageEntryBrowseContextPending = true;
 
   context.handleGalleryBootstrapSearchInput('Joseph');
-  calls.scheduledSearchCommits.at(-1).callback();
+  submitSearch(context, 'Joseph');
 
   assert.equal(context.state.ui.preSearchViewOrigin, 'interactive');
   assert.deepEqual(JSON.parse(JSON.stringify(context.state.ui.preSearchView)), {
@@ -2817,18 +2855,24 @@ test('direct artist category search captures its origin but an unselected result
     }],
   };
   context.handleGalleryBootstrapSearchInput('');
+  submitSearch(context, '');
 
-  assert.equal(calls.buildApiUrl.length, 2);
+  assert.equal(calls.buildApiUrl.length, 3);
   assert.deepEqual(
     JSON.parse(JSON.stringify(calls.buildApiUrl[0].visible_library_categories)),
     ['main_library'],
   );
-  assert.equal(calls.buildApiUrl[1].surface.active, 'albums');
-  assert.equal(calls.buildApiUrl[1].surface_request, 'albums');
-  assert.equal(calls.buildApiUrl[1].query, '');
-  assert.equal(calls.buildApiUrl[1].selected_artist, '');
-  assert.equal(calls.buildApiUrl[1].gallery_scope, '');
-  assert.deepEqual(JSON.parse(JSON.stringify(calls.buildApiUrl[1].visible_library_categories)), []);
+  assert.deepEqual(calls.buildApiUrl[1], calls.buildApiUrl[0]);
+  assert.deepEqual(calls.buildApiUrlOptions.slice(0, 2), [{
+    omitSidebar: true,
+    payloadTier: 'search_preview',
+  }, {}]);
+  assert.equal(calls.buildApiUrl[2].surface.active, 'albums');
+  assert.equal(calls.buildApiUrl[2].surface_request, 'albums');
+  assert.equal(calls.buildApiUrl[2].query, '');
+  assert.equal(calls.buildApiUrl[2].selected_artist, '');
+  assert.equal(calls.buildApiUrl[2].gallery_scope, '');
+  assert.deepEqual(JSON.parse(JSON.stringify(calls.buildApiUrl[2].visible_library_categories)), []);
   assert.deepEqual(JSON.parse(JSON.stringify(calls.fetchAndRender.at(-1))), {
     url: '/view-data?artist=&gallery_scope=all&omit_sidebar=1',
     push: true,
@@ -2838,7 +2882,7 @@ test('direct artist category search captures its origin but an unselected result
   });
 });
 
-test('handleGalleryBootstrapSearchInput commits the debounced draft without persisting recent history', () => {
+test('search input stages a draft and explicit submission commits it', () => {
   const { context, calls } = createContext({ searchInputValue: 'Neal Morse' });
 
   context.handleGalleryBootstrapSearchInput('Neal Morse');
@@ -2847,13 +2891,12 @@ test('handleGalleryBootstrapSearchInput commits the debounced draft without pers
   assert.equal(context.state.ui.albumDetailPrewarmSearchSuspended, true);
   assert.equal(context.state.ui.searchDraftQuery, 'Neal Morse');
   assert.deepEqual(calls.fetchAndRender, []);
-  assert.equal(calls.scheduledSearchCommits.length, 1);
-  assert.equal(calls.scheduledSearchCommits[0].delay, 150);
+  assert.equal(calls.scheduledSearchCommits.length, 0);
   assert.deepEqual(calls.setSessionStorageItem, []);
 
-  calls.scheduledSearchCommits[0].callback();
+  submitSearch(context, 'Neal Morse');
 
-  assert.deepEqual(calls.buildApiUrl, [{
+  const expectedSearchView = {
     query: 'Neal Morse',
     selected_artist: '',
     all_artists_active: false,
@@ -2861,15 +2904,305 @@ test('handleGalleryBootstrapSearchInput commits the debounced draft without pers
     visible_library_categories: ['main_library', 'hoard', 'new_arrivals'],
     related_filter_artists: [],
     primary_filter_active: false,
-  }]);
+  };
+  assert.deepEqual(calls.buildApiUrl, [expectedSearchView, expectedSearchView]);
+  assert.deepEqual(calls.buildApiUrlOptions, [{
+    omitSidebar: true,
+    payloadTier: 'search_preview',
+  }, {}]);
   assert.deepEqual(JSON.parse(JSON.stringify(calls.fetchAndRender)), [{
     url: '/view-data?artist=&gallery_scope=all&omit_sidebar=1',
     push: true,
   }]);
-  assert.deepEqual(calls.setSessionStorageItem, []);
+  assert.deepEqual(JSON.parse(calls.setSessionStorageItem[0].value), ['Neal Morse']);
 });
 
-test('search input suspends optional waveform work through debounce and reuses one pending token', () => {
+test('submitted search paints a preview before hydrating the full family', async () => {
+  const { context, calls } = createContext({
+    searchInputValue: 'Neal Morse',
+    useProductionBuildApiUrl: true,
+    fetchAndRenderResult: true,
+  });
+
+  context.handleGalleryBootstrapSearchInput('Neal Morse');
+  submitSearch(context, 'Neal Morse');
+  await Promise.resolve();
+  await Promise.resolve();
+
+  assert.equal(calls.fetchAndRender.length, 2);
+  const previewRequest = new URL(calls.fetchAndRender[0].url, 'http://localhost');
+  assert.equal(previewRequest.searchParams.get('q'), 'Neal Morse');
+  assert.equal(previewRequest.searchParams.get('payload_tier'), 'search_preview');
+  assert.equal(previewRequest.searchParams.get('omit_sidebar'), '1');
+  assert.equal(calls.fetchAndRender[0].push, true);
+
+  const hydrationRequest = new URL(calls.fetchAndRender[1].url, 'http://localhost');
+  assert.equal(hydrationRequest.searchParams.get('q'), 'Neal Morse');
+  assert.equal(hydrationRequest.searchParams.has('payload_tier'), false);
+  assert.equal(hydrationRequest.searchParams.has('omit_sidebar'), false);
+  assert.equal(calls.fetchAndRender[1].push, false);
+  assert.deepEqual(JSON.parse(JSON.stringify(calls.fetchAndRender[1].runtimeOptions)), {
+    preserveScroll: true,
+    skipPendingViewTransition: true,
+  });
+});
+
+test('search input suspends cover loads immediately and reuses the token through submit', async () => {
+  let resolveRequest;
+  const request = new Promise((resolve) => {
+    resolveRequest = resolve;
+  });
+  const { context, calls } = createContext({ fetchAndRenderResult: request });
+
+  context.handleGalleryBootstrapSearchInput('Neal');
+
+  assert.equal(calls.suspendSelectedArtistCoverLoadsForUserAction, 1);
+  assert.deepEqual(calls.resumeSelectedArtistCoverLoadsAfterUserAction, []);
+
+  context.handleGalleryBootstrapSearchInput('Neal Morse');
+  assert.equal(calls.suspendSelectedArtistCoverLoadsForUserAction, 1);
+
+  submitSearch(context, 'Neal Morse');
+  assert.equal(calls.suspendSelectedArtistCoverLoadsForUserAction, 1);
+  assert.deepEqual(calls.resumeSelectedArtistCoverLoadsAfterUserAction, []);
+
+  resolveRequest(true);
+  await request;
+  await Promise.resolve();
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.deepEqual(calls.resumeSelectedArtistCoverLoadsAfterUserAction, [9]);
+});
+
+test('search input releases its cover suspension when the preview is not applied', async () => {
+  const { context, calls } = createContext({ fetchAndRenderResult: false });
+
+  context.handleGalleryBootstrapSearchInput('Devin');
+  submitSearch(context, 'Devin');
+  await Promise.resolve();
+  await Promise.resolve();
+
+  assert.equal(calls.suspendSelectedArtistCoverLoadsForUserAction, 1);
+  assert.deepEqual(calls.resumeSelectedArtistCoverLoadsAfterUserAction, [9]);
+  assert.deepEqual(calls.showToast, []);
+});
+
+test('canceling or clearing a pending search draft releases its cover suspension', () => {
+  const { context, calls } = createContext();
+
+  context.handleGalleryBootstrapSearchInput('Devin');
+  context.handleGalleryBootstrapSearchInput('');
+
+  assert.equal(calls.suspendSelectedArtistCoverLoadsForUserAction, 1);
+  assert.deepEqual(calls.resumeSelectedArtistCoverLoadsAfterUserAction, [9]);
+
+  context.state.view.query = 'Neal Morse';
+  context.handleGalleryBootstrapSearchInput('Different');
+  context.handleGalleryBootstrapSearchInput('Neal Morse');
+
+  assert.equal(calls.suspendSelectedArtistCoverLoadsForUserAction, 2);
+  assert.deepEqual(calls.resumeSelectedArtistCoverLoadsAfterUserAction, [9, 10]);
+});
+
+test('abandoning an unsubmitted search draft on blur releases every search suspension', async () => {
+  const { context, calls } = createContext();
+
+  context.handleGalleryBootstrapSearchInput('Devin');
+  context.handleGalleryBootstrapSearchBlur();
+  await Promise.resolve();
+
+  assert.equal(context.state.ui.albumDetailPrewarmSearchSuspended, false);
+  assert.deepEqual(calls.resumeSelectedArtistCoverLoadsAfterUserAction, [9]);
+  assert.deepEqual(calls.waveformPeakLoadResumptions, [{ id: 1 }]);
+});
+
+test('sidebar navigation releases every suspension owned by an abandoned search draft', async () => {
+  const { context, calls } = createContext({ searchInputValue: 'Devin' });
+  const artists = [{ artist: 'A.C.T', count: 1 }, { artist: 'Broadcast', count: 1 }];
+  context.state.view.artists_sidebar = artists;
+
+  context.handleGalleryBootstrapSearchInput('Devin');
+  context.handleSidebarArtistSelectionClick(createImmediateSidebarArtistEvent(artists, 'Broadcast').event);
+  await Promise.resolve();
+
+  assert.equal(context.state.ui.pendingSearchCommitTimer, 0);
+  assert.equal(context.state.ui.albumDetailPrewarmSearchSuspended, false);
+  assert.deepEqual(calls.resumeSelectedArtistCoverLoadsAfterUserAction, [9]);
+  assert.deepEqual(calls.waveformPeakLoadResumptions, [{ id: 1 }]);
+});
+
+test('canceled mobile Appearance leave releases search suspensions and confirmation reacquires them', async () => {
+  const { context, calls } = createContext({ searchInputValue: 'Devin' });
+  let confirmedSearch = null;
+  context.prepareMobileGallerySearch = (onConfirmed, skipAppearanceGuard) => {
+    if (!skipAppearanceGuard) {
+      confirmedSearch = onConfirmed;
+      return false;
+    }
+    return true;
+  };
+
+  context.handleGalleryBootstrapSearchInput('Devin');
+  submitSearch(context, 'Devin');
+  await Promise.resolve();
+
+  assert.equal(typeof confirmedSearch, 'function');
+  assert.equal(context.state.ui.albumDetailPrewarmSearchSuspended, false);
+  assert.deepEqual(calls.resumeSelectedArtistCoverLoadsAfterUserAction, [9]);
+  assert.deepEqual(calls.waveformPeakLoadResumptions, [{ id: 1 }]);
+
+  confirmedSearch();
+
+  assert.equal(context.state.ui.albumDetailPrewarmSearchSuspended, true);
+  assert.equal(calls.suspendSelectedArtistCoverLoadsForUserAction, 2);
+  assert.deepEqual(calls.waveformPeakLoadSuspensions, [{ id: 1 }, { id: 2 }]);
+  assert.equal(calls.fetchAndRender.length, 1);
+});
+
+test('confirmed mobile blank-search exits release exactly one cover suspension token', () => {
+  const scenarios = [
+    {
+      name: 'no-op',
+      configure(context) {
+        context.state.view.query = '';
+        context.state.view.selected_artist = 'A.C.T';
+      },
+      expectedRequests: 0,
+    },
+    {
+      name: 'cached restore',
+      configure(context) {
+        context.state.view.query = 'Devin';
+        context.state.view.selected_artist = '';
+        context.state.ui.preSearchView = {
+          selected_artist: '',
+          related_filter_artists: [],
+          primary_filter_active: false,
+        };
+        context.tryRestoreClearedSearchView = () => true;
+      },
+      expectedRequests: 0,
+    },
+    {
+      name: 'network clear',
+      configure(context) {
+        context.state.view.query = 'Devin';
+        context.state.view.selected_artist = '';
+        context.state.ui.preSearchView = {
+          selected_artist: '',
+          related_filter_artists: [],
+          primary_filter_active: false,
+        };
+        context.tryRestoreClearedSearchView = () => false;
+      },
+      expectedRequests: 1,
+    },
+  ];
+
+  for (const scenario of scenarios) {
+    const { context, calls } = createContext();
+    scenario.configure(context);
+
+    context.commitGallerySearchQuery('', { mobileLeaveConfirmed: true });
+
+    assert.deepEqual(calls.resumeSelectedArtistCoverLoadsAfterUserAction, [9], scenario.name);
+    assert.equal(context.state.ui.pendingSearchCoverLoadSuspensionToken, null, scenario.name);
+    assert.equal(calls.fetchAndRender.length, scenario.expectedRequests, scenario.name);
+  }
+});
+
+for (const rejectedStage of ['preview', 'hydration']) {
+  test(`${rejectedStage} rejection reports the failed search stage and keeps a usable preview`, async () => {
+    const { context, calls } = createContext({
+      searchInputValue: 'Devin',
+      fetchAndRenderResult(requestNumber) {
+        if (rejectedStage === 'preview' || requestNumber === 2) {
+          return Promise.reject(new Error(`${rejectedStage} failed`));
+        }
+        context.state.view.artist_groups = [{ artist: 'Devin Townsend', albums: [{ key: 'ocean-machine' }] }];
+        return Promise.resolve(true);
+      },
+    });
+
+    context.handleGalleryBootstrapSearchInput('Devin');
+    submitSearch(context, 'Devin');
+    await new Promise((resolve) => setImmediate(resolve));
+
+    assert.equal(calls.fetchAndRender.length, rejectedStage === 'preview' ? 1 : 2);
+    assert.equal(calls.showToast.length, 1);
+    assert.equal(calls.showToast[0].level, 'error');
+    assert.match(
+      calls.showToast[0].message,
+      rejectedStage === 'preview' ? /preview failed/i : /full search results failed/i,
+    );
+    assert.match(calls.showToast[0].message, /retry/i);
+    if (rejectedStage === 'hydration') {
+      assert.deepEqual(JSON.parse(JSON.stringify(context.state.view.artist_groups)), [{
+        artist: 'Devin Townsend',
+        albums: [{ key: 'ocean-machine' }],
+      }]);
+    }
+  });
+}
+
+test('failed search preview restores the prior view and same-query submit retries preview', async () => {
+  const previousGroups = [{ artist: 'Broadcast', albums: [{ key: 'tender-buttons' }] }];
+  const { context, calls } = createContext({
+    searchInputValue: 'Devin',
+    useProductionBuildApiUrl: true,
+    fetchAndRenderResult(requestNumber) {
+      if (requestNumber === 1) return Promise.reject(new Error('preview failed'));
+      return Promise.resolve(true);
+    },
+  });
+  context.state.view.artist_groups = previousGroups;
+
+  context.handleGalleryBootstrapSearchInput('Devin');
+  submitSearch(context, 'Devin');
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(context.state.view.query, '');
+  assert.deepEqual(
+    JSON.parse(JSON.stringify(context.state.view.artist_groups)),
+    previousGroups,
+  );
+
+  context.handleGalleryBootstrapSearchSubmit(createSubmitEvent());
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(calls.fetchAndRender.length, 3);
+  assert.equal(
+    new URL(calls.fetchAndRender[1].url, 'http://localhost').searchParams.get('payload_tier'),
+    'search_preview',
+  );
+});
+
+test('failed search hydration same-query submit retries only full hydration', async () => {
+  const { context, calls } = createContext({
+    searchInputValue: 'Devin',
+    useProductionBuildApiUrl: true,
+    fetchAndRenderResult(requestNumber) {
+      if (requestNumber === 2) return Promise.reject(new Error('hydration failed'));
+      return Promise.resolve(true);
+    },
+  });
+
+  context.handleGalleryBootstrapSearchInput('Devin');
+  submitSearch(context, 'Devin');
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(calls.fetchAndRender.length, 2);
+
+  context.handleGalleryBootstrapSearchSubmit(createSubmitEvent());
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(calls.fetchAndRender.length, 3);
+  const retryRequest = new URL(calls.fetchAndRender[2].url, 'http://localhost');
+  assert.equal(retryRequest.searchParams.has('payload_tier'), false);
+  assert.equal(retryRequest.searchParams.has('omit_sidebar'), false);
+  assert.equal(calls.fetchAndRender[2].push, false);
+});
+
+test('search input suspends optional waveform work through draft updates and reuses one token', () => {
   const { context, calls } = createContext();
 
   context.handleGalleryBootstrapSearchInput('Neal');
@@ -2895,6 +3228,21 @@ test('same-query search input immediately releases its waveform intent suspensio
   assert.equal(context.state.ui.pendingSearchWaveformPeakLoadSuspension, null);
 });
 
+test('same-query explicit submit releases every no-op search suspension', () => {
+  const { context, calls } = createContext({ searchInputValue: 'Devin' });
+  context.state.view.query = 'Devin';
+
+  context.handleGalleryBootstrapSearchInput('Devin');
+  submitSearch(context, 'Devin');
+
+  assert.equal(context.state.ui.albumDetailPrewarmSearchSuspended, false);
+  assert.equal(context.state.ui.pendingSearchCoverLoadSuspensionToken, null);
+  assert.equal(context.state.ui.pendingSearchWaveformPeakLoadSuspension, null);
+  assert.deepEqual(calls.resumeSelectedArtistCoverLoadsAfterUserAction, [9]);
+  assert.deepEqual(calls.waveformPeakLoadResumptions, [{ id: 1 }, { id: 2 }]);
+  assert.deepEqual(calls.fetchAndRender, []);
+});
+
 test('handleGalleryBootstrapSearchSubmit persists an explicitly submitted query in recent history', () => {
   const { context, calls } = createContext({ searchInputValue: 'Neal Morse' });
 
@@ -2904,7 +3252,7 @@ test('handleGalleryBootstrapSearchSubmit persists an explicitly submitted query 
   assert.deepEqual(JSON.parse(calls.setSessionStorageItem[0].value), ['Neal Morse']);
 });
 
-test('debounced search abandons Scan Page only when the pending commit dispatches', () => {
+test('draft search abandons Scan Page only when explicitly submitted', () => {
   const { context, calls } = createContext({ searchInputValue: 'Broadcast' });
   context.state.view = {
     ...context.state.view,
@@ -2927,10 +3275,10 @@ test('debounced search abandons Scan Page only when the pending commit dispatche
   context.handleGalleryBootstrapSearchInput('Broadcast');
 
   assert.deepEqual(calls.abandonScanPageForNavigation, []);
-  assert.equal(calls.scheduledSearchCommits.length, 1);
+  assert.equal(calls.scheduledSearchCommits.length, 0);
   assert.equal(context.state.ui.scanPageReturnContext !== null, true);
 
-  calls.scheduledSearchCommits[0].callback();
+  submitSearch(context, 'Broadcast');
 
   assert.deepEqual(JSON.parse(JSON.stringify(calls.abandonScanPageForNavigation)), [{
     clearSelection: true,
@@ -2960,7 +3308,7 @@ test('search begun at the canonical root records that origin for an exact-search
   };
 
   context.handleGalleryBootstrapSearchInput('The Neal Morse Band');
-  calls.scheduledSearchCommits.at(-1).callback();
+  submitSearch(context, 'The Neal Morse Band');
 
   assert.equal(context.state.ui.preSearchViewOrigin, 'canonical_root');
   assert.deepEqual(JSON.parse(JSON.stringify(context.state.ui.preSearchView)), {
@@ -3057,6 +3405,36 @@ test('recordRecentSearchQuery keeps the new query in memory when session storage
   assert.deepEqual(JSON.parse(JSON.stringify(context.readRecentSearchQueries())), ['Joseph']);
 });
 
+test('native clear changes only the input draft until empty search submission', () => {
+  const { context, calls } = createContext({ searchInputValue: '' });
+  context.state.view.query = 'Neal Morse';
+
+  context.syncSearchClear();
+  context.handleGalleryBootstrapSearchBlur();
+
+  assert.equal(context.state.ui.searchDraftQuery, '');
+  assert.equal(context.state.ui.pendingSearchClearOnBlur, false);
+  assert.deepEqual(calls.scheduledSearchCommits, []);
+  assert.deepEqual(calls.buildApiUrl, []);
+  assert.deepEqual(calls.fetchAndRender, []);
+});
+
+test('selecting a recent search immediately submits that query', () => {
+  const { context, calls } = createContext();
+  context.recordRecentSearchQuery('Devin Townsend');
+
+  const selected = context.selectRecentSearchQuery('Devin Townsend');
+
+  assert.equal(selected, true);
+  assert.equal(context.state.ui.searchDraftQuery, 'Devin Townsend');
+  assert.equal(calls.fetchAndRender.length, 1);
+  assert.equal(calls.buildApiUrl[0].query, 'Devin Townsend');
+  assert.deepEqual(calls.buildApiUrlOptions[0], {
+    omitSidebar: true,
+    payloadTier: 'search_preview',
+  });
+});
+
 test('search Enter owns submission before gallery focus can activate an album card', () => {
   const { context } = createContext({ searchInputValue: 'Featured Signal Collection' });
   let prevented = 0;
@@ -3086,20 +3464,16 @@ test('search Enter owns submission before gallery focus can activate an album ca
   assert.equal(submitted, 1);
 });
 
-test('handleGalleryBootstrapSearchInput does not capture a blank query when its debounce commits', () => {
+test('handleGalleryBootstrapSearchInput does not capture a blank query before explicit submission', () => {
   const { context, calls } = createContext({ searchInputValue: '   ' });
 
   context.handleGalleryBootstrapSearchInput('   ');
 
   assert.equal(calls.scheduledSearchCommits.length, 0);
   assert.deepEqual(calls.setSessionStorageItem, []);
-
-
-
-  assert.deepEqual(calls.setSessionStorageItem, []);
 });
 
-test('debounced interactive-origin no-match clear restores the cached root and refreshes it from the full albums endpoint', () => {
+test('submitted interactive-origin no-match clear restores the cached root and refreshes it from the full albums endpoint', () => {
   const cachedRootGroups = [{
     artist: 'A.C.T',
     albums: [{ key: 'last-epic' }],
@@ -3148,6 +3522,7 @@ test('debounced interactive-origin no-match clear restores the cached root and r
   context.state.ui.recentSearchesLoaded = true;
 
   context.handleGalleryBootstrapSearchInput('');
+  submitSearch(context, '');
 
   assert.equal(context.state.ui.recentSearchPopoverOpen, false);
   assert.equal(calls.scheduledSearchCommits.length, 0);
@@ -3173,27 +3548,7 @@ test('debounced interactive-origin no-match clear restores the cached root and r
   );
 });
 
-test('syncSearchClear waits for blur before committing a native search clear', () => {
-  const { context, calls } = createContext({ searchInputValue: '' });
-  context.state.view = {
-    query: 'Neal Morse',
-    selected_artist: '',
-    all_artists_active: false,
-    gallery_scope: 'all',
-    visible_library_categories: ['main_library', 'hoard', 'new_arrivals'],
-    related_filter_artists: [],
-    primary_filter_active: false,
-    primary_artist_groups: [{ artist: 'Neal Morse', artist_display: 'Neal Morse' }],
-  };
-
-  context.syncSearchClear();
-
-  assert.equal(context.state.ui.pendingSearchClearOnBlur, true);
-  assert.deepEqual(calls.buildApiUrl, []);
-  assert.deepEqual(calls.fetchAndRender, []);
-});
-
-test('handleGalleryBootstrapSearchBlur commits the same cleared-search view as Apply', () => {
+test('empty explicit submission commits the same cleared-search view as Apply', () => {
   const { context, calls } = createContext({ searchInputValue: '' });
   context.state.view = {
     surface: { active: 'albums' },
@@ -3209,6 +3564,8 @@ test('handleGalleryBootstrapSearchBlur commits the same cleared-search view as A
   context.state.ui.pendingSearchClearOnBlur = true;
 
   context.handleGalleryBootstrapSearchBlur();
+  assert.deepEqual(calls.buildApiUrl, []);
+  submitSearch(context, '');
 
   assert.equal(calls.buildApiUrl.length, 1);
   assert.equal(calls.buildApiUrl[0].surface.active, 'albums');
@@ -3282,6 +3639,7 @@ test('native clear reloads the full selected-artist gallery when the search has 
   context.state.ui.preSearchViewOrigin = 'canonical_root';
   context.state.ui.pendingSearchClearOnBlur = true;
   context.handleGalleryBootstrapSearchBlur();
+  submitSearch(context, '');
 
   assert.deepEqual(calls.applyViewPayload, []);
   assert.equal(context.state.view.artist_groups, mountedGalleryGroups);
@@ -3341,6 +3699,7 @@ test('canonical search clear keeps browse scope for a retained artist request bu
   blankClear.context.state.ui.pendingSearchClearOnBlur = true;
 
   blankClear.context.handleGalleryBootstrapSearchBlur();
+  submitSearch(blankClear.context, '');
 
   assert.deepEqual(blankClear.calls.getReusableRootBrowseView, [{
     query: '',
@@ -3395,6 +3754,7 @@ test('canonical search clear keeps browse scope for a retained artist request bu
   retainedArtistClear.context.state.ui.pendingSearchClearOnBlur = true;
 
   retainedArtistClear.context.handleGalleryBootstrapSearchBlur();
+  submitSearch(retainedArtistClear.context, '');
 
   assert.deepEqual(retainedArtistClear.calls.getReusableRootBrowseView, [{
     query: '',
@@ -3476,6 +3836,7 @@ test('native exact-artist 10/10 clear restores the cached root around the comple
   context.state.ui.preSearchViewOrigin = 'canonical_root';
   context.state.ui.pendingSearchClearOnBlur = true;
   context.handleGalleryBootstrapSearchBlur();
+  submitSearch(context, '');
 
   assert.equal(calls.applyViewPayload.length, 1);
   assert.equal(calls.applyViewPayload[0].payload.query, '');
@@ -3556,6 +3917,7 @@ test('native exact-artist clear uses the selected-gallery completion denominator
   context.state.ui.pendingSearchClearOnBlur = true;
 
   context.handleGalleryBootstrapSearchBlur();
+  submitSearch(context, '');
 
   assert.equal(calls.applyViewPayload.length, 1);
   assert.equal(calls.applyViewPayload[0].payload.query, '');
@@ -3635,6 +3997,7 @@ test('native exact-artist clear restores the captured sidebar preview instead of
   context.state.ui.pendingSearchClearOnBlur = true;
 
   context.handleGalleryBootstrapSearchBlur();
+  submitSearch(context, '');
 
   assert.equal(calls.applyViewPayload.length, 1);
   assert.deepEqual(
@@ -3710,6 +4073,7 @@ test('native exact-artist clear fetches when a query-scoped denominator understa
   context.state.ui.pendingSearchClearOnBlur = true;
 
   context.handleGalleryBootstrapSearchBlur();
+  submitSearch(context, '');
 
   assert.deepEqual(calls.applyViewPayload, []);
   assert.equal(context.state.view.query, 'query match');
@@ -3792,6 +4156,7 @@ test('native clear does not retain a query-filtered selected-artist group over t
   context.state.ui.pendingSearchClearOnBlur = true;
 
   context.handleGalleryBootstrapSearchBlur();
+  submitSearch(context, '');
 
   assert.equal(context.state.view.query, 'Joseph');
   assert.equal(context.state.view.selected_artist, 'Neal Morse');
@@ -3877,9 +4242,10 @@ test(`cold direct-loaded Signal 1/1 clear preserves a complete cached root and m
   context.state.ui.pendingViewTransition = pendingTransition;
   context.syncSearchClear();
 
-  assert.equal(context.state.ui.pendingSearchClearOnBlur, true);
+  assert.equal(context.state.ui.pendingSearchClearOnBlur, false);
 
   context.handleGalleryBootstrapSearchBlur();
+  submitSearch(context, '');
 
   assert.equal(calls.applyViewPayload.length, 1);
   const restoredPayload = calls.applyViewPayload[0].payload;
@@ -3983,6 +4349,7 @@ test('native clear preserves an intentionally family-filtered mounted gallery an
 
   context.syncSearchClear();
   context.handleGalleryBootstrapSearchBlur();
+  submitSearch(context, '');
 
   assert.equal(calls.applyViewPayload.length, 1);
   assert.equal(calls.applyViewPayload[0].payload.query, '');
@@ -4029,7 +4396,7 @@ test('native clear restores the captured pre-search artist tree when no reusable
   };
 
   context.handleGalleryBootstrapSearchInput('Aria');
-  calls.scheduledSearchCommits.at(-1).callback();
+  submitSearch(context, 'Aria');
 
   const mountedFamilyGroups = [{
     artist: 'Vitaliy Dubinin',
@@ -4055,6 +4422,7 @@ test('native clear restores the captured pre-search artist tree when no reusable
 
   context.syncSearchClear();
   context.handleGalleryBootstrapSearchBlur();
+  submitSearch(context, '');
 
   assert.equal(context.state.view.query, '');
   assert.equal(context.state.view.selected_artist, 'Aria');
@@ -4113,9 +4481,10 @@ test('syncSearchClear injects the selected artist into a cached preview sidebar 
 
   context.syncSearchClear();
 
-  assert.equal(context.state.ui.pendingSearchClearOnBlur, true);
+  assert.equal(context.state.ui.pendingSearchClearOnBlur, false);
 
   context.handleGalleryBootstrapSearchBlur();
+  submitSearch(context, '');
 
   assert.deepEqual(JSON.parse(JSON.stringify(calls.applyViewPayload)), [{
     payload: {

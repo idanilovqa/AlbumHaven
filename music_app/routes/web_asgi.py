@@ -22,6 +22,7 @@ from music_app.routes.appearance_asgi import load_appearance_context
 from music_app.services.app_logging import log_app_event
 from music_app.services.auth_session_csrf import issue_session_csrf
 from music_app.services.covers import (
+    display_cover_variant_cache_root,
     find_existing_cover_display_variant,
     normalize_cover_variant_priority,
     normalize_cover_variant_size,
@@ -182,11 +183,10 @@ def _runtime_asset_version(asset_paths: tuple[Path, ...] | None = None) -> str:
     if asset_paths is None:
         static_root = Path(__file__).resolve().parent.parent / "static"
         runtime_stylesheets = tuple(sorted((static_root / "css").rglob("*.css")))
+        runtime_javascript = tuple(sorted((static_root / "js").rglob("*.js")))
         asset_paths = (
             static_root / "app.js",
-            static_root / "js" / "runtime-bundle.js",
-            static_root / "js" / "navigation-tree.js",
-            static_root / "js" / "audio-worklets" / "gapless-playback-processor.js",
+            *runtime_javascript,
             *runtime_stylesheets,
         )
     digest = hashlib.sha256()
@@ -521,10 +521,12 @@ def _build_postgres_root_startup_view(
     *,
     config: dict[str, object],
     query_args: Any,
+    library_state: dict[str, object],
 ) -> tuple[dict[str, object], dict[str, object] | None, float]:
     payload_started_at = time.perf_counter()
-    payload = PostgresLibraryBrowseRepository(config).build_root_sidebar_payload(
+    payload = PostgresLibraryBrowseRepository(config).build_root_startup_preview_payload(
         query_params=query_args,
+        library_state=library_state,
     )
     initial_view = build_initial_view_preview(payload)
     preview_sidebar = [
@@ -535,9 +537,6 @@ def _build_postgres_root_startup_view(
     embedded_view_patch = None
     if preview_sidebar:
         embedded_view_patch = {
-            "artist_groups": list(initial_view.get("artist_groups") or []),
-            "primary_artist_groups": list(initial_view.get("primary_artist_groups") or []),
-            "family_artist_groups": list(initial_view.get("family_artist_groups") or []),
             "artists_sidebar": preview_sidebar,
             "artist_count": int(payload.get("artist_count") or len(preview_sidebar)),
             "album_count": int(payload.get("album_count") or 0),
@@ -616,6 +615,7 @@ def _build_bootstrap_payload(
             ) = _build_postgres_root_startup_view(
                 config=config,
                 query_args=query_args,
+                library_state=library_state,
             )
             if library_state.get("cold_scan_pending") and int(initial_view.get("album_count") or 0) == 0:
                 preview_mode = "empty_shell"
@@ -706,9 +706,6 @@ def _build_bootstrap_payload(
         allow_sidebar_followup_fetch=True,
     )
     bootstrap_payload = {
-        "startup_payload": {
-            "first_paint_view": initial_view,
-        },
         "initial_view": initial_view,
         "bootstrap": {
             "coverCacheToken": COVER_CACHE_PROCESS_TOKEN,
@@ -752,7 +749,10 @@ def _build_bootstrap_payload(
                     "previewMode": preview_mode,
                     "includesGalleryMarkup": render_gallery_markup,
                 },
-                "hydration": startup_hydration,
+                "hydration": {
+                    **startup_hydration,
+                    "embeddedViewPatch": None,
+                },
             },
             "startupHydration": startup_hydration,
         },
@@ -860,9 +860,6 @@ async def index(request: Request) -> Response:
     query_raw = query_args.get("q", "").strip()
     selected_artist = query_args.get("artist", "").strip()
     refreshed = query_args.get("refreshed") == "1"
-    cold_scan_waiting = bool(library_state.get("cold_scan_pending")) or str(
-        library_state.get("cold_scan_handoff_status") or "idle"
-    ) == "claimed"
     bootstrap_payload, payload_elapsed_ms, startup_preview = await run_in_threadpool(
         _build_bootstrap_payload,
         query_args=query_args,
@@ -874,6 +871,21 @@ async def index(request: Request) -> Response:
         refreshed=refreshed,
         request_started_epoch_ms=request_started_epoch_ms,
     )
+    initial_view = bootstrap_payload.get("initial_view") or {}
+    if (
+        _request_targets_home_root_surface(query_args, query_raw, selected_artist)
+        and int(initial_view.get("album_count") or 0) == 0
+        and not library_state.get("last_error")
+        and not library_state.get("scan_in_progress")
+    ):
+        with request.app.state.cold_scan_handoff_lock:
+            if str(library_state.get("cold_scan_handoff_status") or "idle") == "idle":
+                library_state["cold_scan_pending"] = True
+                library_state["cold_scan_handoff_status"] = "pending"
+                library_state["cold_scan_handoff_error"] = ""
+    cold_scan_waiting = bool(library_state.get("cold_scan_pending")) or str(
+        library_state.get("cold_scan_handoff_status") or "idle"
+    ) == "claimed"
     initial_view_partial = bool(bootstrap_payload["bootstrap"]["partialView"])
     startup_preview_mode = str(
         bootstrap_payload["bootstrap"].get("startupPreview", {}).get("mode") or "empty_shell"
@@ -1142,13 +1154,14 @@ def _cover_response(request: Request, path: str, size: str | None) -> Response:
         return _not_found()
     requested_size = normalize_cover_variant_size(size)
     if requested_size > 0:
+        cache_root = display_cover_variant_cache_root(resolved)
         request_priority = normalize_cover_variant_priority(
             request.headers.get("x-album-haven-cover-priority")
         )
         try:
             cached_variant = find_existing_cover_display_variant(
                 resolved,
-                cache_root=Path(config["DATA_DIR"]),
+                cache_root=cache_root,
                 max_size=requested_size,
             )
             if cached_variant is not None:
@@ -1156,7 +1169,7 @@ def _cover_response(request: Request, path: str, size: str | None) -> Response:
             else:
                 resolved = resolve_cover_display_variant(
                     resolved,
-                    cache_root=Path(config["DATA_DIR"]),
+                    cache_root=cache_root,
                     max_size=requested_size,
                     priority=request_priority,
                 )

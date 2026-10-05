@@ -140,6 +140,7 @@ def _app(actor_override=None, *, invitation_enabled=True, member_library_role="m
     app = FastAPI()
     service = Service(member_library_role=member_library_role)
     app.state.admin_members_service = service
+    app.state.runtime_asset_version = "admin-runtime-digest"
     app.state.admin_member_mutation_service = service
     app.state.admin_reauthentication_service = service
     app.state.admin_mail_action_service = service
@@ -311,6 +312,8 @@ def test_members_roster_renders_operational_state_without_credentials_or_paths()
     assert "Disabled" in body
     assert "encoded_hash" not in body
     assert "root_path" not in body
+    assert '/static/js/admin-members.js?v=admin-runtime-digest' in body
+    assert '/static/js/settings-navigation.js?v=admin-runtime-digest' in body
     assert service.calls == [{"actor_account_id": 7, "library_id": 9}]
 
 
@@ -327,6 +330,8 @@ def test_members_add_and_edit_are_in_place_pages_with_back_navigation():
     assert 'name="password"' not in new_body
     assert "Back to users" in new_body
     assert "Plus-addressing remains intact." in new_body
+    assert '/static/js/admin-members.js?v=admin-runtime-digest' in new_body
+    assert '/static/js/settings-navigation.js?v=admin-runtime-digest' in new_body
     assert edit_status == 200
     assert "Edit user" in edit_body
     assert "test.user+1" in edit_body
@@ -335,6 +340,8 @@ def test_members_add_and_edit_are_in_place_pages_with_back_navigation():
     assert "Send password reset email" not in edit_body
     assert "Resend welcome email" not in edit_body
     assert "Back to users" in edit_body
+    assert '/static/js/admin-members.js?v=admin-runtime-digest' in edit_body
+    assert '/static/js/settings-navigation.js?v=admin-runtime-digest' in edit_body
     class FormPlacement(HTMLParser):
         def __init__(self):
             super().__init__()

@@ -575,7 +575,8 @@ test('summarizePerformanceTargets exposes the Phase 6 coverage classifications',
   assert.equal(classesByTarget['scan-add-album'], 'scanner-index-cache');
   assert.equal(classesByTarget['scan-metadata'], 'scanner-index-cache');
   assert.equal(classesByTarget['scan-page'], 'scanner-index-cache');
-  assert.equal(summary.filter((target) => target.coverageClass === 'real-app-library-browse-load').length, 11);
+  assert.equal(summary.filter((target) => target.coverageClass === 'real-app-library-browse-load').length, 12);
+  assert.equal(classesByTarget['paired-search-calibration'], 'real-app-library-browse-load');
 });
 
 test('idle-memory preserves its report contract while using the isolated Postgres target class', () => {

@@ -1,7 +1,7 @@
 {
   "playback-start.maximumStartMs": { "local": { "targetMs": 900, "graceMs": 200, "hardCeilingMs": 1100 }, "ci": { "targetMs": 1800, "graceMs": 200, "hardCeilingMs": 2000 } },
   "gapless-playback.playbackBoundaryMs": { "local": { "targetMs": 4600, "graceMs": 400, "hardCeilingMs": 5000 }, "ci": { "targetMs": 4600, "graceMs": 400, "hardCeilingMs": 5000 } },
-  "search-browse.searchBrowseReadyMs": { "local": { "targetMs": 800, "graceMs": 400, "hardCeilingMs": 1200 }, "ci": { "targetMs": 2000, "graceMs": 400, "hardCeilingMs": 2400 } },
+  "search-browse.searchBrowseReadyMs": { "local": { "targetMs": 800, "graceMs": 400, "hardCeilingMs": 1200 }, "ci": { "targetMs": 800, "graceMs": 400, "hardCeilingMs": 1200 } },
   "selected-artist.selectedArtistApiMs": { "local": { "targetMs": 1800, "graceMs": 400, "hardCeilingMs": 2200 }, "ci": { "targetMs": 1800, "graceMs": 400, "hardCeilingMs": 2200 } },
   "selected-artist.albumDetailsOpenMs": { "local": { "targetMs": 1000, "graceMs": 400, "hardCeilingMs": 1400 }, "ci": { "targetMs": 1000, "graceMs": 400, "hardCeilingMs": 1400 } },
   "root-album-browse.rootAlbumBrowseApiMs": { "local": { "targetMs": 6000, "graceMs": 400, "hardCeilingMs": 6400 }, "ci": { "targetMs": 6000, "graceMs": 400, "hardCeilingMs": 6400 } },

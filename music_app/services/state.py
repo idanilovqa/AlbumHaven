@@ -284,11 +284,21 @@ def hydrate_runtime_library_state_on_startup(app) -> bool:
     return hydrated
 
 
-def ensure_runtime_relation_projection_ready(app) -> dict[str, object]:
+def ensure_runtime_relation_projection_ready(
+    app,
+    *,
+    cancel_requested=None,
+) -> dict[str, object]:
     library_state = app.library_state
     library_state["relation_projection_ready"] = False
     try:
-        result = ensure_relation_projection_ready(app.config, logger=app.logger)
+        result = ensure_relation_projection_ready(
+            app.config,
+            logger=app.logger,
+            cancel_requested=cancel_requested,
+        )
+    except InterruptedError:
+        raise
     except Exception as exc:
         library_state["last_error"] = str(exc)
         library_state["relation_projection_rebuild_reason"] = "startup_rebuild_failed"

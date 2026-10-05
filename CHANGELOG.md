@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.9.49 - 2026-10-03
+## 0.9.49 - Unreleased
 
 - Preserved the released 0.9.48 mobile layout and Admin capability behavior while
   reconciling the approved desktop Gallery, player, and appearance presentation.
@@ -10,6 +10,21 @@
   and kept loop action pods from shrinking in constrained layouts.
 - Corrected scan-performance database identity propagation and retained focused
   regression coverage for production locators, provider labels, and navigation.
+- Added a database-owned normalized artist-search projection with
+  revision/readiness checks and the existing live-query fallback, preserving
+  multi-alias, raw-metadata, path-derived, active, stale, and category-filtered
+  results.
+- Preserved ready relation metadata when confirmed missing-album cleanup deletes
+  stale inventory, while still advancing the inventory mutation revision.
+- Added safe nontransactional migration handling for the concurrent
+  artist-search index: validate before ledgering, remove only the named invalid
+  index after failure, and leave the next startup able to retry.
+- Added explicit Devin and Neal Morse submit-to-first-visible performance budgets
+  without treating their still-uncollected baseline and range as zero
+  milliseconds.
+- Replaced the production-search database's reversible unsalted identity digest
+  with a versioned, domain-separated HMAC proof that exposes neither database
+  identifiers nor authentication secrets.
 
 ## 0.9.48 - 2026-09-30
 

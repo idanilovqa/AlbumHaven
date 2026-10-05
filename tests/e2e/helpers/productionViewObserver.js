@@ -316,6 +316,7 @@ export class ProductionViewObserver {
       activeRequestUrl: String(activeRequest?.url || ''),
       latestFullPayload: this.latestFullPayload,
       latestFullPayloadError: this.latestFullPayloadError,
+      requestGeneration: this.latestFullRequestSequence,
       latestFullRequestUrl: this.latestFullRequestUrl,
       latestCompletedSaveTaskPayload: this.latestCompletedSaveTaskPayload,
       completedCanonicalMutationPayloads: [...this.completedCanonicalMutationPayloads],

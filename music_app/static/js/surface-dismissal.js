@@ -4,6 +4,7 @@
   function create(resolve) {
     let gesture = null;
     let suppressClick = false;
+    let refocusPending = false;
     const consume = event => { event.preventDefault(); event.stopImmediatePropagation(); };
     const inside = (active, target) => active.contains ? active.contains(target)
       : active.surface.contains(target) || Boolean(active.anchor?.contains(target));
@@ -19,6 +20,8 @@
         gesture = { active, outside: !inside(active, event.target), id: event.pointerId,
           x: event.clientX, y: event.clientY };
         gesture.dismissOnly = gesture.outside && backdrop(active, event.target);
+        gesture.refocusOnly = gesture.dismissOnly && refocusPending;
+        refocusPending = false;
         // Stop underlying pointer handlers and focus, not only delegated clicks.
         if (gesture.dismissOnly) consume(event);
       },
@@ -29,7 +32,8 @@
         suppressClick = true;
         const started = gesture;
         gesture = null;
-        if (Math.hypot(event.clientX - started.x, event.clientY - started.y) <= 8) {
+        if (!started.refocusOnly
+            && Math.hypot(event.clientX - started.x, event.clientY - started.y) <= 8) {
           // Preserve the pending click guard while the owner's close callback may
           // synchronously click an internal Cancel button to settle a promise.
           started.active.dismiss();
@@ -46,14 +50,20 @@
           consume(event); return;
         }
         const active = resolve();
+        if (refocusPending) {
+          refocusPending = false;
+          if (active && !inside(active, event.target) && backdrop(active, event.target)) {
+            consume(event); return;
+          }
+        }
         if (active && !inside(active, event.target) && backdrop(active, event.target)) {
           consume(event);
           active.dismiss();
         }
       },
       pointercancel: reset,
-      keydown: reset,
-      blur: reset,
+      keydown() { refocusPending = false; reset(); },
+      blur() { reset(); refocusPending = Boolean(resolve()); },
     };
   }
   function bind(window, resolve) {

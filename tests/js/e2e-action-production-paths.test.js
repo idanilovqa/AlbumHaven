@@ -2263,14 +2263,54 @@ test('GalleryPage delegates artist-section identity to AlbumCard', () => {
   );
 });
 
-test('album cover readiness keeps artist ownership in the shared card locator', () => {
+test('album cover readiness polls one atomic shared-card image checkpoint', () => {
   const galleryActions = read('tests/e2e/actions/galleryActions.js');
+  const albumCard = read('tests/e2e/poms/albumCard.js');
   const methodStart = galleryActions.indexOf('async waitForAlbumCoverReadyUnderHeading(');
   const methodEnd = galleryActions.indexOf('\n  async scrollToAlbumUnderHeading(', methodStart);
   const methodSource = galleryActions.slice(methodStart, methodEnd);
 
-  assert.match(methodSource, /cardByArtistAndAlbum\(artistName, albumName, \{ visible: true \}\)/);
+  assert.match(
+    methodSource,
+    /expect\.poll\([\s\S]*readCoverImageReadinessByArtistAndAlbum\(artistName, albumName\)[\s\S]*\.toBe\(true\)/,
+  );
+  assert.doesNotMatch(methodSource, /toHaveJSProperty|toHaveAttribute/);
   assert.doesNotMatch(methodSource, /querySelectorAll\(selectors\.artistSectionSelector\)/);
+  const checkpointStart = albumCard.indexOf('async readCoverImageReadinessByArtistAndAlbum(');
+  const checkpointEnd = albumCard.indexOf('\n  get singleArtistContextNameSelector(', checkpointStart);
+  const checkpointSource = albumCard.slice(checkpointStart, checkpointEnd);
+  assert.match(checkpointSource, /cardsByArtistAndAlbum\(artistName, albumName, \{ visible: true \}\)/);
+  assert.match(checkpointSource, /evaluateAll\(/);
+  assert.match(checkpointSource, /resolvedImages\.length !== 1/);
+  assert.match(checkpointSource, /image\.complete\s*&&\s*image\.naturalWidth > 0/);
+  assert.match(checkpointSource, /data-production-cover-src/);
+  assert.match(checkpointSource, /data-cover-visual-state/);
+  assert.match(checkpointSource, /visualState\s*===\s*'ready'/);
+  assert.match(checkpointSource, /sourceCoherent/);
+  assert.match(checkpointSource, /currentSrc/);
+  assert.match(checkpointSource, /renderedSrc/);
+});
+
+test('search-preview expected card comes from the exact response payload', async () => {
+  const { resolveSearchPreviewExpectedCard } = await import(pathToFileURL(
+    path.join(repoRoot, 'tests/e2e/actions/galleryActions.js'),
+  ).href);
+
+  assert.deepEqual(resolveSearchPreviewExpectedCard({
+    query: 'Neal Morse',
+    payload_tier: 'search_preview',
+    primary_artist_groups: [{
+      artist: 'Neal Morse',
+      albums: [{ name: 'Sola Scriptura' }],
+    }],
+  }, 'Neal Morse'), {
+    album: 'Sola Scriptura',
+    artist: 'Neal Morse',
+  });
+  assert.throws(
+    () => resolveSearchPreviewExpectedCard({ query: 'Other', artist_groups: [] }, 'Neal Morse'),
+    /exact search_preview payload/i,
+  );
 });
 
 test('mounted topology allows only the edited-card-sized trailing virtual boundary change', async () => {

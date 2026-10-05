@@ -15,7 +15,7 @@ from music_app.services.gallery_display import (
 from music_app.services.gallery_scope import normalize_visible_categories
 from music_app.services.library import strip_private_album_preference_overlays
 from music_app.services.navigation_tree import render_navigation_tree_item
-from music_app.services.page_resource_seams import build_album_page_seam
+from music_app.services.page_resource_seams import build_album_ref_seam
 from music_app.services.persistence_selection import select_runtime_persistence_adapter
 from music_app.services.playlist_read_seams import resolve_active_view_surface
 
@@ -104,7 +104,7 @@ def _build_initial_album_preview(album: dict[str, object], *, public_safe: bool 
     cover_preview_url = build_startup_cover_url(source_album) if cover_path else ""
     return {
         "key": source_album.get("key"),
-        **build_album_page_seam(source_album.get("key")),
+        **build_album_ref_seam(source_album.get("key")),
         "name": source_album.get("name"),
         "album_artist": source_album.get("album_artist"),
         "artists": list(source_album.get("artists") or []),

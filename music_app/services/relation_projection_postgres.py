@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from hashlib import sha256
 import json
+from threading import Event, Thread
 from time import perf_counter
 from typing import Any
 
@@ -11,6 +13,7 @@ from music_app.services.artist_family_postgres import (
     replace_artist_family_projection_in_transaction,
 )
 from music_app.services.cache import serialize_relation_views
+from music_app.services.library_inventory_postgres import local_inventory_identity_key
 from music_app.services.relation_projection_builder import (
     build_postgres_relation_views,
 )
@@ -25,10 +28,56 @@ except ImportError:  # pragma: no cover - keeps the module importable without ps
     Jsonb = None
 
 
-RELATION_PROJECTION_BUILDER_VERSION = "local-relation-builder-v9"
+RELATION_PROJECTION_BUILDER_VERSION = "local-relation-builder-v10"
 RELATION_PROJECTION_METADATA_KEY = "relation_projection"
 _APP_DATABASE_URL_KEY = "ALBUM_HAVEN_APP_DATABASE_URL"
 _PROJECTION_READY_MAX_ATTEMPTS = 3
+_ARTIST_SEARCH_PROJECTION_ROWS_KEY = "_artist_search_projection_rows"
+
+
+def _raise_if_projection_cancelled(cancel_requested: object | None) -> None:
+    if cancel_requested is not None and cancel_requested.is_set():
+        raise InterruptedError("Relation projection readiness was cancelled.")
+
+
+@contextmanager
+def _cancel_active_connection_on_request(
+    connection: Any,
+    cancel_requested: object | None,
+):
+    if cancel_requested is None:
+        yield connection
+        return
+    _raise_if_projection_cancelled(cancel_requested)
+    finished = Event()
+
+    def cancel_active_connection() -> None:
+        while not finished.wait(0.05):
+            if not cancel_requested.is_set():
+                continue
+            cancel = getattr(connection, "cancel", None)
+            if callable(cancel):
+                cancel()
+            return
+
+    watcher = Thread(
+        target=cancel_active_connection,
+        name="albumhaven-relation-projection-cancel",
+        daemon=True,
+    )
+    watcher.start()
+    try:
+        yield connection
+    except Exception as exc:
+        if cancel_requested.is_set():
+            raise InterruptedError(
+                "Relation projection readiness was cancelled."
+            ) from exc
+        raise
+    finally:
+        finished.set()
+        watcher.join(timeout=0.2)
+    _raise_if_projection_cancelled(cancel_requested)
 
 
 def relation_projection_structure_complete(relation_views: object) -> bool:
@@ -68,6 +117,54 @@ def relation_projection_stale_reason(scan_cache: object) -> str:
     if not source_fingerprint or source_fingerprint != built_from_fingerprint:
         return "source_fingerprint_changed"
     return ""
+
+
+def artist_search_projection_stale_reason(scan_cache: object) -> str:
+    if not isinstance(scan_cache, Mapping):
+        return "missing_artist_search_projection"
+    relation_views = scan_cache.get("relation_views")
+    metadata = scan_cache.get(RELATION_PROJECTION_METADATA_KEY)
+    stored_rows = scan_cache.get(_ARTIST_SEARCH_PROJECTION_ROWS_KEY)
+    if not isinstance(relation_views, Mapping) or not isinstance(metadata, Mapping):
+        return "missing_artist_search_projection"
+    if not isinstance(stored_rows, list):
+        return "missing_artist_search_projection"
+
+    expected_rows = _artist_search_projection_rows(relation_views)
+    actual_rows = sorted(
+        (
+            {
+                "normalized_artist_key": _text_value(row, "normalized_artist_key"),
+                "canonical_artist_name": _text_value(row, "canonical_artist_name"),
+            }
+            for row in stored_rows
+        ),
+        key=lambda row: row["normalized_artist_key"],
+    )
+    if actual_rows != expected_rows:
+        return (
+            "missing_artist_search_projection"
+            if expected_rows and not actual_rows
+            else "artist_search_projection_changed"
+        )
+
+    expected_builder_version = str(metadata.get("builder_version") or "")
+    expected_source_fingerprint = str(metadata.get("source_fingerprint") or "")
+    expected_relations_last_built = scan_cache.get("relations_last_built")
+    if any(
+        _text_value(row, "builder_version") != expected_builder_version
+        or _text_value(row, "source_fingerprint") != expected_source_fingerprint
+        or _row_mapping(row).get("relations_last_built") != expected_relations_last_built
+        for row in stored_rows
+    ):
+        return "artist_search_projection_changed"
+    return ""
+
+
+def relation_projection_readiness_stale_reason(scan_cache: object) -> str:
+    return relation_projection_stale_reason(scan_cache) or artist_search_projection_stale_reason(
+        scan_cache
+    )
 
 
 def relation_source_fingerprint(rows: list[object]) -> str:
@@ -138,6 +235,7 @@ def ensure_relation_projection_ready(
     *,
     logger: object | None = None,
     connect: Callable[[str], Any] | None = None,
+    cancel_requested: object | None = None,
 ) -> dict[str, object]:
     database_url = str(config.get(_APP_DATABASE_URL_KEY) or "").strip()
     if not database_url:
@@ -147,9 +245,10 @@ def ensure_relation_projection_ready(
     phase_timings_ms: dict[str, float] = {}
     source_row_count = 0
     with connector(database_url) as connection:
-        snapshot_row = _first_row(connection.execute(_load_scan_cache_sql()))
-    scan_cache = _scan_cache_from_row(snapshot_row)
-    reason = relation_projection_stale_reason(scan_cache)
+        with _cancel_active_connection_on_request(connection, cancel_requested):
+            snapshot_row = _first_row(connection.execute(_load_relation_projection_sql()))
+    scan_cache = _relation_projection_scan_cache_from_row(snapshot_row)
+    reason = relation_projection_readiness_stale_reason(scan_cache)
     if not reason:
         metadata = dict(scan_cache.get(RELATION_PROJECTION_METADATA_KEY) or {})
         return _projection_result(
@@ -162,28 +261,37 @@ def ensure_relation_projection_ready(
 
     try:
         for attempt in range(_PROJECTION_READY_MAX_ATTEMPTS):
+            _raise_if_projection_cancelled(cancel_requested)
             phase_timings_ms = {
                 "source_load": 0.0,
                 "fingerprint": 0.0,
                 "pure_build": 0.0,
                 "family_link_replacement": 0.0,
+                "search_projection_replacement": 0.0,
                 "snapshot_publication": 0.0,
             }
             source_connection = connector(database_url)
             try:
-                baseline_snapshot_row = _first_row(
-                    source_connection.execute(_load_scan_cache_sql())
-                )
-                baseline_scan_cache = _scan_cache_from_row(baseline_snapshot_row)
-                baseline_metadata = dict(
-                    baseline_scan_cache.get(RELATION_PROJECTION_METADATA_KEY) or {}
-                )
-                phase_started_at = perf_counter()
-                rows = list(source_connection.execute(load_relation_source_rows_sql()).fetchall())
+                with _cancel_active_connection_on_request(
+                    source_connection,
+                    cancel_requested,
+                ):
+                    baseline_snapshot_row = _first_row(
+                        source_connection.execute(_load_scan_cache_sql())
+                    )
+                    baseline_scan_cache = _scan_cache_from_row(baseline_snapshot_row)
+                    baseline_metadata = dict(
+                        baseline_scan_cache.get(RELATION_PROJECTION_METADATA_KEY) or {}
+                    )
+                    phase_started_at = perf_counter()
+                    rows = list(
+                        source_connection.execute(load_relation_source_rows_sql()).fetchall()
+                    )
                 phase_timings_ms["source_load"] = (
                     perf_counter() - phase_started_at
                 ) * 1000
                 source_row_count = len(rows)
+                _raise_if_projection_cancelled(cancel_requested)
                 phase_started_at = perf_counter()
                 source_fingerprint = relation_source_fingerprint(rows)
                 phase_timings_ms["fingerprint"] = (
@@ -196,6 +304,7 @@ def ensure_relation_projection_ready(
                 ) * 1000
                 if not relation_projection_structure_complete(relation_views):
                     raise RuntimeError("Relation projection builder returned an incomplete projection.")
+                _raise_if_projection_cancelled(cancel_requested)
             finally:
                 close_source_connection = getattr(source_connection, "close", None)
                 if callable(close_source_connection):
@@ -203,72 +312,89 @@ def ensure_relation_projection_ready(
 
             retry_with_current_sources = False
             with connector(database_url) as connection:
-                connection.execute(relation_projection_advisory_lock_sql())
-                locked_snapshot_row = _first_row(connection.execute(_load_scan_cache_sql()))
-                locked_scan_cache = _scan_cache_from_row(locked_snapshot_row)
-                locked_metadata = dict(
-                    locked_scan_cache.get(RELATION_PROJECTION_METADATA_KEY) or {}
-                )
-                baseline_publication_identity = (
-                    str(baseline_metadata.get("status") or ""),
-                    str(baseline_metadata.get("builder_version") or ""),
-                    str(baseline_metadata.get("source_fingerprint") or ""),
-                    str(baseline_metadata.get("built_from_fingerprint") or ""),
-                )
-                locked_publication_identity = (
-                    str(locked_metadata.get("status") or ""),
-                    str(locked_metadata.get("builder_version") or ""),
-                    str(locked_metadata.get("source_fingerprint") or ""),
-                    str(locked_metadata.get("built_from_fingerprint") or ""),
-                )
-                if (
-                    str(locked_metadata.get("status") or "") == "stale"
-                    and locked_publication_identity != baseline_publication_identity
-                ):
-                    retry_with_current_sources = True
-                else:
-                    locked_reason = relation_projection_stale_reason(locked_scan_cache)
-                    if not locked_reason:
-                        return _projection_result(
-                            locked_scan_cache.get("relation_views"),
-                            locked_metadata,
-                            startup_rebuilt=False,
-                            reason="healthy",
-                            duration_ms=(perf_counter() - started_at) * 1000,
+                with _cancel_active_connection_on_request(connection, cancel_requested):
+                    connection.execute(relation_projection_advisory_lock_sql())
+                    locked_snapshot_row = _first_row(connection.execute(_load_scan_cache_sql()))
+                    locked_scan_cache = _scan_cache_from_row(locked_snapshot_row)
+                    locked_metadata = dict(
+                        locked_scan_cache.get(RELATION_PROJECTION_METADATA_KEY) or {}
+                    )
+                    baseline_publication_identity = (
+                        str(baseline_metadata.get("status") or ""),
+                        str(baseline_metadata.get("builder_version") or ""),
+                        str(baseline_metadata.get("source_fingerprint") or ""),
+                        str(baseline_metadata.get("built_from_fingerprint") or ""),
+                    )
+                    locked_publication_identity = (
+                        str(locked_metadata.get("status") or ""),
+                        str(locked_metadata.get("builder_version") or ""),
+                        str(locked_metadata.get("source_fingerprint") or ""),
+                        str(locked_metadata.get("built_from_fingerprint") or ""),
+                    )
+                    if (
+                        str(locked_metadata.get("status") or "") == "stale"
+                        and locked_publication_identity != baseline_publication_identity
+                    ):
+                        retry_with_current_sources = True
+                    else:
+                        locked_reason = relation_projection_readiness_stale_reason(
+                            locked_scan_cache
                         )
-                    reason = locked_reason
-                    scan_cache = locked_scan_cache
-                    duration_ms = (perf_counter() - started_at) * 1000
-                    metadata = build_ready_relation_projection_metadata(
-                        source_fingerprint,
-                        reason=reason,
-                        duration_ms=duration_ms,
-                        source_row_count=source_row_count,
-                        phase_timings_ms=phase_timings_ms,
-                    )
-                    relations_last_built = datetime.now(timezone.utc).timestamp()
-                    next_scan_cache = dict(scan_cache)
-                    next_scan_cache["relation_views"] = serialize_relation_views(relation_views)
-                    next_scan_cache["relations_last_built"] = relations_last_built
-                    next_scan_cache[RELATION_PROJECTION_METADATA_KEY] = metadata
-                    phase_started_at = perf_counter()
-                    replace_artist_family_projection_in_transaction(
-                        connection,
-                        relation_views,
-                        relations_last_built=relations_last_built,
-                    )
-                    phase_timings_ms["family_link_replacement"] = (
-                        perf_counter() - phase_started_at
-                    ) * 1000
-                    phase_started_at = perf_counter()
-                    connection.execute(
-                        _save_scan_cache_sql(),
-                        {"scan_cache": _jsonb(next_scan_cache)},
-                    )
-                    phase_timings_ms["snapshot_publication"] = (
-                        perf_counter() - phase_started_at
-                    ) * 1000
-                    duration_ms = (perf_counter() - started_at) * 1000
+                        if not locked_reason:
+                            return _projection_result(
+                                locked_scan_cache.get("relation_views"),
+                                locked_metadata,
+                                startup_rebuilt=False,
+                                reason="healthy",
+                                duration_ms=(perf_counter() - started_at) * 1000,
+                            )
+                        reason = locked_reason
+                        scan_cache = locked_scan_cache
+                        duration_ms = (perf_counter() - started_at) * 1000
+                        metadata = build_ready_relation_projection_metadata(
+                            source_fingerprint,
+                            reason=reason,
+                            duration_ms=duration_ms,
+                            source_row_count=source_row_count,
+                            phase_timings_ms=phase_timings_ms,
+                        )
+                        relations_last_built = datetime.now(timezone.utc).timestamp()
+                        next_scan_cache = {
+                            key: value
+                            for key, value in scan_cache.items()
+                            if key != _ARTIST_SEARCH_PROJECTION_ROWS_KEY
+                        }
+                        next_scan_cache["relation_views"] = serialize_relation_views(relation_views)
+                        next_scan_cache["relations_last_built"] = relations_last_built
+                        next_scan_cache[RELATION_PROJECTION_METADATA_KEY] = metadata
+                        phase_started_at = perf_counter()
+                        replace_artist_family_projection_in_transaction(
+                            connection,
+                            relation_views,
+                            relations_last_built=relations_last_built,
+                        )
+                        phase_timings_ms["family_link_replacement"] = (
+                            perf_counter() - phase_started_at
+                        ) * 1000
+                        phase_started_at = perf_counter()
+                        replace_artist_search_projection_in_transaction(
+                            connection,
+                            relation_views,
+                            metadata=metadata,
+                            relations_last_built=relations_last_built,
+                        )
+                        phase_timings_ms["search_projection_replacement"] = (
+                            perf_counter() - phase_started_at
+                        ) * 1000
+                        phase_started_at = perf_counter()
+                        connection.execute(
+                            _save_scan_cache_sql(),
+                            {"scan_cache": _jsonb(next_scan_cache)},
+                        )
+                        phase_timings_ms["snapshot_publication"] = (
+                            perf_counter() - phase_started_at
+                        ) * 1000
+                        duration_ms = (perf_counter() - started_at) * 1000
             if not retry_with_current_sources:
                 break
             reason = "source_fingerprint_changed"
@@ -276,6 +402,8 @@ def ensure_relation_projection_ready(
                 raise RuntimeError(
                     "Relation projection sources changed during all bounded publication attempts."
                 )
+    except InterruptedError:
+        raise
     except Exception as exc:
         _persist_failed_projection_status(
             database_url,
@@ -298,7 +426,8 @@ def ensure_relation_projection_ready(
             "Relation projection startup readiness ready=true rebuilt=true "
             "reason=%s builder_version=%s source_row_count=%d duration_ms=%.2f "
             "source_load=%.2f fingerprint=%.2f pure_build=%.2f "
-            "family_link_replacement=%.2f snapshot_publication=%.2f",
+            "family_link_replacement=%.2f search_projection_replacement=%.2f "
+            "snapshot_publication=%.2f",
             reason,
             RELATION_PROJECTION_BUILDER_VERSION,
             source_row_count,
@@ -307,6 +436,7 @@ def ensure_relation_projection_ready(
             phase_timings_ms["fingerprint"],
             phase_timings_ms["pure_build"],
             phase_timings_ms["family_link_replacement"],
+            phase_timings_ms["search_projection_replacement"],
             phase_timings_ms["snapshot_publication"],
         )
     return _projection_result(
@@ -318,6 +448,73 @@ def ensure_relation_projection_ready(
         source_row_count=source_row_count,
         phase_timings_ms=phase_timings_ms,
     )
+
+
+def replace_artist_search_projection_in_transaction(
+    connection: Any,
+    relation_views: Mapping[str, object],
+    *,
+    metadata: Mapping[str, object],
+    relations_last_built: float,
+) -> int:
+    rows = _artist_search_projection_rows(relation_views)
+    builder_version = str(metadata.get("builder_version") or "").strip()
+    source_fingerprint = str(metadata.get("source_fingerprint") or "").strip()
+    if not builder_version or not source_fingerprint:
+        raise RuntimeError("Ready projection metadata is required for search publication.")
+    result = _first_row(
+        connection.execute(
+            _replace_artist_search_projection_sql(),
+            {
+                "rows": _jsonb(rows),
+                "builder_version": builder_version,
+                "source_fingerprint": source_fingerprint,
+                "relations_last_built": relations_last_built,
+            },
+        )
+    )
+    replacement_count = int(_row_mapping(result).get("replacement_row_count") or 0)
+    if replacement_count != len(rows):
+        raise RuntimeError(
+            "Artist-search projection replacement count did not match input "
+            f"({replacement_count}/{len(rows)})."
+        )
+    return replacement_count
+
+
+def _artist_search_projection_rows(
+    relation_views: Mapping[str, object],
+) -> list[dict[str, str]]:
+    identity_to_canonical: dict[str, str] = {}
+    alias_to_canonical = relation_views.get("alias_to_canonical")
+    if isinstance(alias_to_canonical, Mapping):
+        for alias, canonical in alias_to_canonical.items():
+            normalized_key = local_inventory_identity_key(alias)
+            canonical_name = str(canonical or "").strip()
+            if normalized_key and canonical_name:
+                identity_to_canonical.setdefault(normalized_key, canonical_name)
+    canonical_to_aliases = relation_views.get("canonical_to_aliases")
+    if isinstance(canonical_to_aliases, Mapping):
+        for canonical, aliases in canonical_to_aliases.items():
+            canonical_name = str(canonical or "").strip()
+            if not canonical_name:
+                continue
+            canonical_key = local_inventory_identity_key(canonical_name)
+            if canonical_key:
+                identity_to_canonical.setdefault(canonical_key, canonical_name)
+            if not isinstance(aliases, (list, tuple, set)):
+                continue
+            for alias in aliases:
+                normalized_key = local_inventory_identity_key(alias)
+                if normalized_key:
+                    identity_to_canonical.setdefault(normalized_key, canonical_name)
+    return [
+        {
+            "normalized_artist_key": normalized_key,
+            "canonical_artist_name": identity_to_canonical[normalized_key],
+        }
+        for normalized_key in sorted(identity_to_canonical)
+    ]
 
 
 def _projection_result(
@@ -376,7 +573,7 @@ def _persist_failed_projection_status(
             connection.execute(relation_projection_advisory_lock_sql())
             locked_snapshot_row = _first_row(connection.execute(_load_scan_cache_sql()))
             locked_scan_cache = _scan_cache_from_row(locked_snapshot_row)
-            if not relation_projection_stale_reason(locked_scan_cache):
+            if not relation_projection_readiness_stale_reason(locked_scan_cache):
                 return
             connection.execute(
                 _merge_failed_projection_status_sql(),
@@ -410,8 +607,25 @@ def _first_row(cursor: object) -> object | None:
 
 
 def _scan_cache_from_row(row: object | None) -> dict[str, object]:
-    payload = _row_mapping(row).get("scan_cache") if row is not None else None
-    return dict(payload) if isinstance(payload, Mapping) else {}
+    row_mapping = _row_mapping(row) if row is not None else {}
+    payload = row_mapping.get("scan_cache")
+    scan_cache = dict(payload) if isinstance(payload, Mapping) else {}
+    scan_cache[_ARTIST_SEARCH_PROJECTION_ROWS_KEY] = row_mapping.get(
+        "artist_search_projection"
+    )
+    return scan_cache
+
+
+def _relation_projection_scan_cache_from_row(row: object | None) -> dict[str, object]:
+    row_mapping = _row_mapping(row) if row is not None else {}
+    return {
+        "relation_views": row_mapping.get("relation_views"),
+        RELATION_PROJECTION_METADATA_KEY: row_mapping.get(RELATION_PROJECTION_METADATA_KEY),
+        "relations_last_built": row_mapping.get("relations_last_built"),
+        _ARTIST_SEARCH_PROJECTION_ROWS_KEY: row_mapping.get(
+            "artist_search_projection"
+        ),
+    }
 
 
 def _text_value(row: object, key: str) -> str:
@@ -453,7 +667,64 @@ def _load_scan_cache_sql() -> str:
           where app.bootstrap_owners.owner_key = 'local-bootstrap-owner'
           limit 1
         )
-        select library.libraries.metadata -> 'scan_cache' as scan_cache
+        select
+          library.libraries.metadata -> 'scan_cache' as scan_cache,
+          coalesce(
+            (
+              select jsonb_agg(
+                jsonb_build_object(
+                  'normalized_artist_key', search_projection.normalized_artist_key,
+                  'canonical_artist_name', search_projection.canonical_artist_name,
+                  'builder_version', search_projection.builder_version,
+                  'source_fingerprint', search_projection.source_fingerprint,
+                  'relations_last_built', search_projection.relations_last_built
+                )
+                order by search_projection.normalized_artist_key
+              )
+              from library.local_artist_search_projection as search_projection
+              where search_projection.library_id = library.libraries.id
+            ),
+            '[]'::jsonb
+          ) as artist_search_projection
+        from library.libraries
+        join bootstrap_context on bootstrap_context.library_id = library.libraries.id
+        limit 1;
+    """
+
+
+def _load_relation_projection_sql() -> str:
+    return """
+        with bootstrap_context as (
+          select library.libraries.id as library_id
+          from app.bootstrap_owners
+          join library.libraries
+            on library.libraries.owner_account_id = app.bootstrap_owners.account_id
+           and library.libraries.name = 'Local Library'
+           and library.libraries.library_kind = 'local'
+          where app.bootstrap_owners.owner_key = 'local-bootstrap-owner'
+          limit 1
+        )
+        select
+          library.libraries.metadata #> '{scan_cache,relation_views}' as relation_views,
+          library.libraries.metadata #> '{scan_cache,relation_projection}' as relation_projection,
+          library.libraries.metadata #> '{scan_cache,relations_last_built}' as relations_last_built,
+          coalesce(
+            (
+              select jsonb_agg(
+                jsonb_build_object(
+                  'normalized_artist_key', search_projection.normalized_artist_key,
+                  'canonical_artist_name', search_projection.canonical_artist_name,
+                  'builder_version', search_projection.builder_version,
+                  'source_fingerprint', search_projection.source_fingerprint,
+                  'relations_last_built', search_projection.relations_last_built
+                )
+                order by search_projection.normalized_artist_key
+              )
+              from library.local_artist_search_projection as search_projection
+              where search_projection.library_id = library.libraries.id
+            ),
+            '[]'::jsonb
+          ) as artist_search_projection
         from library.libraries
         join bootstrap_context on bootstrap_context.library_id = library.libraries.id
         limit 1;
@@ -477,6 +748,17 @@ def _save_scan_cache_sql() -> str:
                updated_at = now()
         from bootstrap_context
         where library.libraries.id = bootstrap_context.library_id;
+    """
+
+
+def _replace_artist_search_projection_sql() -> str:
+    return """
+        select library.replace_local_artist_search_projection(
+          %(rows)s::jsonb,
+          %(builder_version)s::text,
+          %(source_fingerprint)s::text,
+          %(relations_last_built)s::double precision
+        ) as replacement_row_count;
     """
 
 

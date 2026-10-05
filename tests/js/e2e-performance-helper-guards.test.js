@@ -398,6 +398,10 @@ test('artist-family benchmark keeps browser mechanics outside the scenario spec'
 
   assert.doesNotMatch(spec, /\b(?:async\s+)?function\s+[A-Za-z_$][\w$]*\s*\(/);
   assert.doesNotMatch(spec, /page\.(?:addInitScript|locator|waitForFunction)\s*\(/);
+  assert.match(
+    spec,
+    /const searchGalleryReadyMs[\s\S]*?measureActionTime\(\s*async \(\) => \{\},[\s\S]*?await galleryActions\.waitForAlbumVisibleUnderHeading\(\s*EXPECTED_FAMILY\.resonance,\s*RESONANCE_ALBUM/,
+  );
   assert.doesNotMatch(spec, /\b(?:localStorage|sessionStorage)\b/);
   assert.match(artistFamilyActions, /async waitForViewReady\(/);
   assert.match(artistFamilyActions, /async waitForPrimaryAndRelatedFilterActive\(/);

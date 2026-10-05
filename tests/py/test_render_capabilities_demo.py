@@ -1,4 +1,5 @@
 """Deployment safety/unit checks; not a substitute for hosted app verification."""
+from contextlib import contextmanager
 import importlib.util
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -100,6 +101,192 @@ class Result:
 class Connection:
     def __init__(self, answers): self.answers = iter(answers)
     def execute(self, _sql): return Result(next(self.answers))
+
+
+class MigrationConnection:
+    def __init__(
+        self,
+        *,
+        index_state="ready",
+        fail_first_concurrent=False,
+        preserve_mismatch_after_create=False,
+    ):
+        self.index_state = index_state
+        self.fail_first_concurrent = fail_first_concurrent
+        self.preserve_mismatch_after_create = preserve_mismatch_after_create
+        self.transaction_depth = 0
+        self.events = []
+        self.ledger = []
+        self.applied = {}
+
+    @contextmanager
+    def transaction(self):
+        self.events.append("transaction:begin")
+        self.transaction_depth += 1
+        try:
+            yield
+        finally:
+            self.transaction_depth -= 1
+            self.events.append("transaction:end")
+
+    def execute(self, sql, parameters=None):
+        query = " ".join(str(sql).split()).casefold()
+        if "to_regclass('ops.schema_migrations')" in query:
+            return Result([("ops.schema_migrations",)])
+        if query.startswith("select migration_name, checksum"):
+            return Result(list(self.applied.items()))
+        if "ordinary migration" in query:
+            assert self.transaction_depth == 1
+            self.events.append("ordinary")
+            return Result([])
+        if "create index concurrently" in query:
+            assert self.transaction_depth == 0
+            self.events.append("concurrent")
+            if self.fail_first_concurrent:
+                self.fail_first_concurrent = False
+                self.index_state = "mismatched"
+                raise RuntimeError("concurrent index build failed")
+            if self.index_state == "missing":
+                self.index_state = (
+                    "mismatched" if self.preserve_mismatch_after_create else "ready"
+                )
+            return Result([])
+        if "album_haven_0083_index_contract_v1" in query:
+            assert parameters is None
+            self.events.append("validate:" + self.index_state)
+            return Result([(self.index_state,)])
+        if query == (
+            "drop index concurrently if exists "
+            "library.local_albums_normalized_raw_artists_trgm_idx"
+        ):
+            assert self.transaction_depth == 0
+            self.events.append("drop-mismatched")
+            self.index_state = "missing"
+            return Result([])
+        if query.startswith("insert into ops.schema_migrations"):
+            self.events.append("ledger:" + parameters[0])
+            self.ledger.append(parameters[0])
+            self.applied[parameters[0]] = parameters[1]
+            return Result([])
+        raise AssertionError(f"Unexpected SQL: {sql}")
+
+
+def _write_migration_runner_fixture(tmp_path):
+    migration_root = tmp_path / "migrations" / "postgres"
+    migration_root.mkdir(parents=True)
+    (migration_root / "0082_preserve_relations_for_missing_album_removal.sql").write_text(
+        "select 'ordinary migration';",
+        encoding="utf-8",
+    )
+    (migration_root / "0083_add_album_raw_artist_search_index.sql").write_text(
+        "create index concurrently if not exists "
+        "local_albums_normalized_raw_artists_trgm_idx "
+        "on library.local_albums using gin ((lower(metadata::text)) library.gin_trgm_ops);",
+        encoding="utf-8",
+    )
+    verifier = (
+        tmp_path
+        / "scripts"
+        / "postgres"
+        / "verify_0083_album_raw_artist_index.sql"
+    )
+    verifier.parent.mkdir(parents=True)
+    verifier.write_text(
+        "-- album_haven_0083_index_contract_v1\nselect 'ready';\n",
+        encoding="utf-8",
+    )
+
+
+def test_capabilities_demo_runs_only_0083_outside_transaction_and_ledgers_after_validation(
+    tmp_path,
+    monkeypatch,
+):
+    _write_migration_runner_fixture(tmp_path)
+    connection = MigrationConnection()
+    monkeypatch.setattr(demo, "ROOT", tmp_path)
+
+    demo.migrate(connection)
+
+    assert connection.ledger == [
+        "0082_preserve_relations_for_missing_album_removal.sql",
+        "0083_add_album_raw_artist_search_index.sql",
+    ]
+    assert connection.events.index("ordinary") < connection.events.index(
+        "ledger:0082_preserve_relations_for_missing_album_removal.sql"
+    )
+    concurrent = connection.events.index("concurrent")
+    postvalidation = connection.events.index("validate:ready", concurrent)
+    assert concurrent < postvalidation
+    assert postvalidation < connection.events.index(
+        "ledger:0083_add_album_raw_artist_search_index.sql"
+    )
+
+
+def test_capabilities_demo_refuses_to_ledger_invalid_0083_index(tmp_path, monkeypatch):
+    _write_migration_runner_fixture(tmp_path)
+    connection = MigrationConnection(
+        index_state="mismatched",
+        preserve_mismatch_after_create=True,
+    )
+    monkeypatch.setattr(demo, "ROOT", tmp_path)
+
+    with pytest.raises(RuntimeError, match="0083.*nonconforming"):
+        demo.migrate(connection)
+
+    assert "0083_add_album_raw_artist_search_index.sql" not in connection.ledger
+
+
+def test_capabilities_demo_drops_only_failed_0083_index_before_retry(
+    tmp_path,
+    monkeypatch,
+):
+    _write_migration_runner_fixture(tmp_path)
+    connection = MigrationConnection(fail_first_concurrent=True)
+    monkeypatch.setattr(demo, "ROOT", tmp_path)
+
+    with pytest.raises(RuntimeError, match="concurrent index build failed"):
+        demo.migrate(connection)
+
+    assert connection.events.count("drop-mismatched") == 1
+    assert "0083_add_album_raw_artist_search_index.sql" not in connection.ledger
+
+    demo.migrate(connection)
+
+    concurrent_positions = [
+        index for index, event in enumerate(connection.events) if event == "concurrent"
+    ]
+    assert len(concurrent_positions) == 2
+    assert connection.events.index("drop-mismatched") < concurrent_positions[1]
+    assert connection.ledger == [
+        "0082_preserve_relations_for_missing_album_removal.sql",
+        "0083_add_album_raw_artist_search_index.sql",
+    ]
+
+
+@pytest.mark.parametrize(
+    "wrong_dimension",
+    ["table", "expression", "access-method", "opclass", "uniqueness", "predicate"],
+)
+def test_capabilities_demo_rebuilds_same_name_wrong_0083_index_before_ledger(
+    tmp_path,
+    monkeypatch,
+    wrong_dimension,
+):
+    _write_migration_runner_fixture(tmp_path)
+    connection = MigrationConnection(index_state="mismatched")
+    monkeypatch.setattr(demo, "ROOT", tmp_path)
+
+    demo.migrate(connection)
+
+    assert wrong_dimension
+    prevalidation = connection.events.index("validate:mismatched")
+    assert connection.events[prevalidation : prevalidation + 4] == [
+        "validate:mismatched",
+        "drop-mismatched",
+        "concurrent",
+        "validate:ready",
+    ]
+    assert connection.ledger[-1] == "0083_add_album_raw_artist_search_index.sql"
 
 
 def test_empty_database_is_eligible_for_initial_seed():

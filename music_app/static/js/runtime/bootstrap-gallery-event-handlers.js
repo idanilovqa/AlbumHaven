@@ -268,6 +268,14 @@ function handleGalleryBootstrapClick(event) {
   const allArtistsLink = event.target.closest('[data-sidebar-all-artists="1"]');
   if (allArtistsLink) {
     event.preventDefault();
+    const activeSearchQuery = String(state.view?.query || '').trim();
+    clearPendingGallerySearchCommit();
+    updateGallerySearchDraftQuery(activeSearchQuery);
+    state.ui.pendingSearchClearOnBlur = false;
+    const searchInput = document.getElementById('search-input');
+    if (searchInput) searchInput.value = activeSearchQuery;
+    closeRecentSearchPopover();
+    releasePendingGallerySearchSuspensions();
     let coverLoadSuspensionToken = 0;
     if (
       typeof virtualGrid !== 'undefined'
@@ -495,10 +503,7 @@ function handleSidebarArtistSelectionClick(event) {
     const searchInput = document.getElementById('search-input');
     if (searchInput) searchInput.value = activeSearchQuery;
     closeRecentSearchPopover();
-    releaseAlbumDetailPrewarmSearchSuspension(
-      Number(state.ui.albumDetailPrewarmSearchGeneration || 0),
-    );
-    releasePendingSearchWaveformPeakLoadSuspension();
+    releasePendingGallerySearchSuspensions();
     state.gallery.mainState = resetGalleryMainStateForPrimaryArtist(
       state.gallery.mainState || {},
     );
@@ -787,6 +792,9 @@ function selectRecentSearchQuery(query) {
   if (!input || !value) return false;
   input.value = value;
   closeRecentSearchPopover();
+  beginAlbumDetailPrewarmSearchSuspension();
+  beginSearchCoverLoadSuspension();
+  beginSearchWaveformPeakLoadSuspension();
   scheduleGallerySearchCommit(value, {
     immediate: true,
     recordRecentSearch: true,
@@ -912,6 +920,42 @@ function releaseAlbumDetailPrewarmSearchSuspension(generation) {
   state.ui.albumDetailPrewarmSearchSuspended = false;
 }
 
+function beginSearchCoverLoadSuspension() {
+  if (!state.ui || typeof state.ui !== 'object') return null;
+  const pendingToken = state.ui.pendingSearchCoverLoadSuspensionToken;
+  if (pendingToken !== null && pendingToken !== undefined) return pendingToken;
+  if (
+    typeof virtualGrid === 'undefined'
+    || !virtualGrid
+    || typeof virtualGrid.suspendSelectedArtistCoverLoadsForUserAction !== 'function'
+  ) {
+    return null;
+  }
+  const token = virtualGrid.suspendSelectedArtistCoverLoadsForUserAction();
+  state.ui.pendingSearchCoverLoadSuspensionToken = token;
+  return token;
+}
+
+function takePendingSearchCoverLoadSuspension() {
+  if (!state.ui || typeof state.ui !== 'object') return null;
+  const token = state.ui.pendingSearchCoverLoadSuspensionToken;
+  state.ui.pendingSearchCoverLoadSuspensionToken = null;
+  return token === undefined ? null : token;
+}
+
+function releasePendingSearchCoverLoadSuspension() {
+  const token = takePendingSearchCoverLoadSuspension();
+  if (
+    token === null
+    || typeof virtualGrid === 'undefined'
+    || !virtualGrid
+    || typeof virtualGrid.resumeSelectedArtistCoverLoadsAfterUserAction !== 'function'
+  ) {
+    return;
+  }
+  virtualGrid.resumeSelectedArtistCoverLoadsAfterUserAction(token);
+}
+
 function beginSearchWaveformPeakLoadSuspension() {
   if (!state.ui || typeof state.ui !== 'object') return null;
   if (state.ui.pendingSearchWaveformPeakLoadSuspension) {
@@ -936,9 +980,21 @@ function releasePendingSearchWaveformPeakLoadSuspension() {
   ).catch(() => {});
 }
 
+function releasePendingGallerySearchSuspensions() {
+  releaseAlbumDetailPrewarmSearchSuspension(
+    Number(state.ui?.albumDetailPrewarmSearchGeneration || 0),
+  );
+  releasePendingSearchCoverLoadSuspension();
+  releasePendingSearchWaveformPeakLoadSuspension();
+}
+
 function scheduleGallerySearchCommit(nextQuery, options = {}) {
   const normalizedQuery = updateGallerySearchDraftQuery(nextQuery);
   const committedQuery = String(state.view?.query || '');
+  const retriesFailedSearch = Boolean(
+    options.immediate
+    && state.ui?.failedGallerySearch?.query === normalizedQuery
+  );
   const selectedArtistSource = String(
     state.view?.search_context?.selected_artist_source || ''
   ).trim().toLowerCase();
@@ -951,9 +1007,11 @@ function scheduleGallerySearchCommit(nextQuery, options = {}) {
     state.ui.pendingSearchClearOnBlur = false;
   }
   if (normalizedQuery === committedQuery && !shouldReselectCommittedQuery
+    && !retriesFailedSearch
     && !(typeof hasActiveMobilePage === 'function' && hasActiveMobilePage())) {
     clearPendingGallerySearchCommit();
     if (options.recordRecentSearch === true) recordRecentSearchQuery(normalizedQuery);
+    releasePendingGallerySearchSuspensions();
     return false;
   }
   clearPendingGallerySearchCommit();
@@ -981,6 +1039,9 @@ function handleGalleryBootstrapSearchSubmit(event) {
   const input = document.getElementById('search-input');
   const nextQuery = input?.value || '';
   closeRecentSearchPopover();
+  beginAlbumDetailPrewarmSearchSuspension();
+  beginSearchCoverLoadSuspension();
+  beginSearchWaveformPeakLoadSuspension();
   const scanPageIsVisible = Boolean(
     state.ui.scanPageReturnContext
     || state.ui.forceScanPageVisible
@@ -1004,12 +1065,21 @@ function handleGalleryBootstrapSearchSubmit(event) {
 function handleGalleryBootstrapSearchInput(nextQuery) {
   if (typeof mobilePageState !== 'undefined') mobilePageState.searchSuggestionsReady = Boolean(String(nextQuery || '').trim());
   clearPendingSelectedArtistReconcile();
+  clearPendingGallerySearchCommit();
   const prewarmSearchGeneration = beginAlbumDetailPrewarmSearchSuspension();
   beginSearchWaveformPeakLoadSuspension();
   if (typeof cancelTrackModalAlbumDetailsPrewarms === 'function') {
     cancelTrackModalAlbumDetailsPrewarms();
   }
   const normalizedQuery = updateGallerySearchDraftQuery(nextQuery);
+  if (
+    String(normalizedQuery || '').trim()
+    && normalizedQuery !== String(state.view?.query || '')
+  ) {
+    beginSearchCoverLoadSuspension();
+  } else {
+    releasePendingSearchCoverLoadSuspension();
+  }
   const ui = ensureRecentSearchState();
   if (ui && !String(normalizedQuery || '').trim()) {
     closeRecentSearchPopover();
@@ -1021,17 +1091,23 @@ function handleGalleryBootstrapSearchInput(nextQuery) {
     renderRecentSearchPopover();
   }
   if (normalizedQuery === String(state.view?.query || '')) {
-    clearPendingGallerySearchCommit();
     releaseAlbumDetailPrewarmSearchSuspension(prewarmSearchGeneration);
     releasePendingSearchWaveformPeakLoadSuspension();
-    return;
   }
-  scheduleGallerySearchCommit(normalizedQuery, { immediate: !normalizedQuery.trim() });
 }
 
 function commitGallerySearchQuery(nextQuery, options = {}) {
+  const mobileLeaveConfirmed = options.mobileLeaveConfirmed === true;
+  if (mobileLeaveConfirmed) {
+    beginAlbumDetailPrewarmSearchSuspension();
+    beginSearchCoverLoadSuspension();
+    beginSearchWaveformPeakLoadSuspension();
+  }
   if (typeof prepareMobileGallerySearch === 'function'
-    && !prepareMobileGallerySearch(() => commitGallerySearchQuery(nextQuery, { ...options, mobileLeaveConfirmed: true }), options.mobileLeaveConfirmed === true)) return;
+    && !prepareMobileGallerySearch(() => commitGallerySearchQuery(nextQuery, { ...options, mobileLeaveConfirmed: true }), mobileLeaveConfirmed)) {
+    releasePendingGallerySearchSuspensions();
+    return;
+  }
   clearPendingSelectedArtistReconcile();
   clearPendingGallerySearchCommit();
   if (
@@ -1044,11 +1120,18 @@ function commitGallerySearchQuery(nextQuery, options = {}) {
     abandonScanPageForNavigation({ clearSelection: true });
   }
   const normalizedQuery = String(nextQuery || '');
+  const failedSearch = state.ui?.failedGallerySearch;
+  const failedSearchStage = failedSearch?.query === normalizedQuery
+    ? String(failedSearch.stage || '')
+    : '';
+  const retriesHydration = failedSearchStage === 'hydration';
+  state.ui.failedGallerySearch = null;
   updateGallerySearchDraftQuery(normalizedQuery);
   if (options.recordRecentSearch === true) {
     recordRecentSearchQuery(normalizedQuery);
   }
   if (!String(normalizedQuery || '').trim()) {
+    releasePendingSearchCoverLoadSuspension();
     const effectiveSelectedArtist = resolveEffectiveSearchSelectedArtist(state.view);
     if (
       !String(state.view.query || '').trim()
@@ -1157,6 +1240,7 @@ function commitGallerySearchQuery(nextQuery, options = {}) {
     }
     return;
   }
+  const previousView = state.view;
   const next = {
     ...withActiveGallerySources(state.view, state.gallery.mainState),
     query: normalizedQuery,
@@ -1168,25 +1252,26 @@ function commitGallerySearchQuery(nextQuery, options = {}) {
   state.gallery.sidebarArtistsOverride = null;
   state.gallery.sidebarShowAllArtistsOverride = null;
   state.ui.pendingSearchClearOnBlur = false;
-  let coverLoadSuspensionToken = 0;
-  if (
-    typeof virtualGrid !== 'undefined'
-    && virtualGrid
-    && typeof virtualGrid.suspendSelectedArtistCoverLoadsForUserAction === 'function'
-  ) {
-    coverLoadSuspensionToken = virtualGrid.suspendSelectedArtistCoverLoadsForUserAction();
+  let coverLoadSuspensionToken = takePendingSearchCoverLoadSuspension();
+  if (coverLoadSuspensionToken === null) {
+    beginSearchCoverLoadSuspension();
+    coverLoadSuspensionToken = takePendingSearchCoverLoadSuspension();
   }
-  applyViewPayload({
-    ...next,
-    related_artists: [],
-    primary_artist_groups: [],
-    family_artist_groups: [],
-  }, {
-    trackSidebarReveal: false,
-  });
-  renderRelated();
+  if (!retriesHydration) {
+    applyViewPayload({
+      ...next,
+      related_artists: [],
+      primary_artist_groups: [],
+      family_artist_groups: [],
+    }, {
+      trackSidebarReveal: false,
+    });
+    renderRelated();
+  }
   const resumeCoverLoads = () => {
     if (
+      coverLoadSuspensionToken !== null
+      &&
       typeof virtualGrid !== 'undefined'
       && virtualGrid
       && typeof virtualGrid.resumeSelectedArtistCoverLoadsAfterUserAction === 'function'
@@ -1194,10 +1279,59 @@ function commitGallerySearchQuery(nextQuery, options = {}) {
       virtualGrid.resumeSelectedArtistCoverLoadsAfterUserAction(coverLoadSuspensionToken);
     }
   };
-  Promise.resolve(fetchAndRender(buildApiUrl(next), true)).then(
-    resumeCoverLoads,
-    resumeCoverLoads,
-  );
+  const previewUrl = buildApiUrl(next, {
+    omitSidebar: true,
+    payloadTier: 'search_preview',
+  });
+  const hydrationUrl = buildApiUrl(next);
+  let activeSearchStage = retriesHydration ? 'hydration' : 'preview';
+  const handleSearchFailure = () => {
+    const previewFailed = activeSearchStage === 'preview';
+    state.ui.failedGallerySearch = {
+      query: normalizedQuery,
+      stage: activeSearchStage,
+    };
+    if (previewFailed && String(state.view?.query || '') === normalizedQuery) {
+      applyViewPayload(previousView, { trackSidebarReveal: false });
+      renderRelated();
+    }
+    if (typeof showToast === 'function') {
+      showToast(
+        previewFailed
+          ? 'Search preview failed. Retry the search.'
+          : 'Search preview loaded, but full search results failed to load. Retry the search.',
+        'error',
+        4800,
+        { errorKey: `gallery-search-${activeSearchStage}-failed` },
+      );
+    }
+  };
+  const runHydration = () => Promise.resolve(fetchAndRender(hydrationUrl, false, {
+    preserveScroll: true,
+    skipPendingViewTransition: true,
+  }));
+  if (retriesHydration) {
+    void runHydration().then(
+      resumeCoverLoads,
+      (error) => {
+        resumeCoverLoads();
+        throw error;
+      },
+    ).catch(handleSearchFailure);
+    return;
+  }
+  void Promise.resolve(fetchAndRender(previewUrl, true)).then(
+    (previewApplied) => {
+      resumeCoverLoads();
+      if (previewApplied !== true) return false;
+      activeSearchStage = 'hydration';
+      return runHydration();
+    },
+    (error) => {
+      resumeCoverLoads();
+      throw error;
+    },
+  ).catch(handleSearchFailure);
 }
 
 function resolveEffectiveSearchSelectedArtist(view) {
@@ -1893,16 +2027,10 @@ function handleGalleryBootstrapSearchBlur() {
   const input = document.getElementById('search-input');
   if (!input) return;
   closeRecentSearchPopover();
-  if (!state.ui.pendingSearchClearOnBlur) return;
-  if (String(input.value || '').trim()) {
-    state.ui.pendingSearchClearOnBlur = false;
-    return;
+  state.ui.pendingSearchClearOnBlur = false;
+  if (String(state.ui.searchDraftQuery || '') !== String(state.view?.query || '')) {
+    releasePendingGallerySearchSuspensions();
   }
-  if (!String(state.view.query || '').trim()) {
-    state.ui.pendingSearchClearOnBlur = false;
-    return;
-  }
-  scheduleGallerySearchCommit('', { immediate: true });
 }
 
 function handleGalleryBootstrapAlbumsScroll() {
@@ -1921,11 +2049,10 @@ function syncSearchClear() {
   const input = document.getElementById('search-input');
   if (!input) return;
   const normalizedQuery = updateGallerySearchDraftQuery(input.value || '');
-  const cleared = !normalizedQuery.trim();
-  state.ui.pendingSearchClearOnBlur = Boolean(cleared && String(state.view.query || '').trim());
-  if (cleared) {
-    scheduleGallerySearchCommit('', { immediate: false });
-  }
+  state.ui.pendingSearchClearOnBlur = false;
+  clearPendingGallerySearchCommit();
+  releasePendingGallerySearchSuspensions();
+  if (!normalizedQuery.trim()) closeRecentSearchPopover();
 }
 
 function handleGalleryBootstrapPopState(options = {}) {

@@ -135,6 +135,46 @@ export class AlbumCard extends BasePage {
     return this.cardsByArtistAndAlbum(artistName, albumName, options).first();
   }
 
+  async readCoverImageReadinessByArtistAndAlbum(artistName, albumName) {
+    const images = this.cardsByArtistAndAlbum(artistName, albumName, { visible: true })
+      .first()
+      .locator(this.coverImageWithinCardSelector);
+    // parity-check: allow-read-only-measurement-evaluate -- atomically read one resolved production cover image
+    return images.evaluateAll((resolvedImages) => {
+      if (resolvedImages.length !== 1) return { ready: false };
+      const [image] = resolvedImages;
+      const productionSrc = String(
+        image.getAttribute('data-production-cover-src') || '',
+      ).trim();
+      const renderedSrc = String(image.getAttribute('src') || '').trim();
+      const currentSrc = String(image.currentSrc || '').trim();
+      const visualState = String(
+        image.getAttribute('data-cover-visual-state') || '',
+      ).trim();
+      const resolveSource = (value) => (value ? new URL(value, document.baseURI).href : '');
+      const resolvedProductionSrc = resolveSource(productionSrc);
+      const resolvedRenderedSrc = resolveSource(renderedSrc);
+      const resolvedCurrentSrc = resolveSource(currentSrc);
+      const sourceCoherent = Boolean(
+        resolvedProductionSrc
+        && resolvedRenderedSrc === resolvedProductionSrc
+        && (!resolvedCurrentSrc || resolvedCurrentSrc === resolvedProductionSrc)
+      );
+      return {
+        currentSrc,
+        productionSrc,
+        ready: image instanceof HTMLImageElement
+          && image.complete
+          && image.naturalWidth > 0
+          && visualState === 'ready'
+          && sourceCoherent,
+        renderedSrc,
+        sourceCoherent,
+        visualState,
+      };
+    });
+  }
+
   get singleArtistContextNameSelector() {
     return '[data-gallery-context-name]';
   }

@@ -54,6 +54,7 @@ from music_app.services.view_payloads import (
     project_missing_album_actions,
 )
 from music_app.services.client_surfaces import resolve_client_surface_class
+from music_app.services.database_identity import load_database_identity_status
 from config import PERSISTENCE_BACKEND_POSTGRES
 
 router = APIRouter()
@@ -183,6 +184,33 @@ def _app_logger(request: Request):
 
 def _library_state(request: Request) -> dict[str, object]:
     return request.app.state.library_state
+
+
+def _load_application_database_identity_status(request: Request) -> dict[str, object]:
+    with request.app.state.database_identity_status_lock:
+        cached = request.app.state.database_identity_status
+        expires_at = getattr(request.app.state, "database_identity_expires_at", 0.0)
+        if isinstance(cached, Mapping) and time.monotonic() < expires_at:
+            return dict(cached)
+        auth_policy_config = getattr(request.app.state, "auth_policy_config", None)
+        identity_hmac_config = (
+            auth_policy_config.get("hmac")
+            if isinstance(auth_policy_config, Mapping)
+            else None
+        )
+        loaded = load_database_identity_status(
+            _app_config(request),
+            hmac_config=(
+                identity_hmac_config
+                if isinstance(identity_hmac_config, Mapping)
+                else None
+            ),
+        )
+        status = dict(loaded) if isinstance(loaded, Mapping) else {"ready": False}
+        if status.get("ready") is True:
+            request.app.state.database_identity_status = status
+            request.app.state.database_identity_expires_at = time.monotonic() + 60.0
+        return dict(status)
 
 
 class _AsgiQueryArgs:
@@ -390,6 +418,10 @@ async def status(request: Request) -> JSONResponse:
             )
         except Exception:
             logging.getLogger(__name__).warning('Operational history revision is unavailable')
+    payload["database_identity"] = await run_in_threadpool(
+        _load_application_database_identity_status,
+        request,
+    )
     payload["allowed_actions"] = allowed_actions_for_request(request, ("library.loops.create",)).as_payload()
     return JSONResponse(payload)
 
@@ -631,6 +663,7 @@ def _unsupported_postgres_selected_artist_browse_response(request: Request) -> J
 def _is_postgres_album_search_request(request: Request) -> bool:
     allowed_search_params = {
         "q",
+        "payload_tier",
         "surface",
         "all_artists",
         "gallery_scope",
@@ -644,6 +677,9 @@ def _is_postgres_album_search_request(request: Request) -> bool:
         return False
     query = str(request.query_params.get("q") or "").strip()
     if not query or _query_requires_file_backed_search_semantics(query):
+        return False
+    payload_tier = str(request.query_params.get("payload_tier") or "").strip().casefold()
+    if payload_tier not in {"", "search_preview"}:
         return False
     if str(request.query_params.get("surface") or "").strip().casefold() != "albums":
         return False

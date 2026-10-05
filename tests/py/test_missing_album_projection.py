@@ -210,9 +210,114 @@ def test_missing_album_sql_requires_every_known_file_to_be_stale():
 
     assert "library.local_albums" in sql
     assert "library.local_track_files" in sql
-    assert "bool_and" in sql
     assert "scan_cache_stale" in sql
     assert "min(" in sql and "stale_marked_at" in sql
+    assert "bool_and" in sql
+
+
+def test_search_loader_keeps_sql_wildcard_escape_semantics_and_alias_scope():
+    from music_app.services.library_browse_postgres import (
+        PostgresLibraryBrowseRepository,
+        _root_sidebar_view_state,
+    )
+
+    calls = []
+
+    class Cursor:
+        def fetchall(self):
+            return []
+
+    class Connection:
+        def execute(self, sql, params):
+            calls.append((sql, params))
+            return Cursor()
+
+    repository = PostgresLibraryBrowseRepository(
+        {"ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://fixture"}
+    )
+    repository._load_search_rows(
+        r"100\%\_\\Mix",
+        _root_sidebar_view_state({}),
+        alias_to_canonical={"Stage Alias": "Canonical Artist"},
+        canonical_to_aliases={"Canonical Artist": ["Canonical Artist", "Stage Alias"]},
+        connection=Connection(),
+    )
+
+    assert len(calls) == 1
+    _sql, params = calls[0]
+    assert params["query_like"] == r"%100\%\_\\Mix%"
+    assert params["search_artist_keys"] == []
+
+    calls.clear()
+    repository._load_search_rows(
+        "Stage Alias",
+        _root_sidebar_view_state({}),
+        alias_to_canonical={"Stage Alias": "Canonical Artist"},
+        canonical_to_aliases={"Canonical Artist": ["Canonical Artist", "Stage Alias"]},
+        connection=Connection(),
+    )
+    assert calls[0][1]["search_artist_keys"] == ["canonical artist", "stage alias"]
+
+
+def test_search_artist_key_expansion_normalizes_only_matching_families(monkeypatch):
+    from music_app.services import library_browse_postgres as browse_module
+
+    aliases = {
+        **{f"Unrelated Alias {index}": f"Unrelated Canonical {index}" for index in range(100)},
+        "Needle Alias": "Needle Canonical",
+    }
+    canonicals = {
+        canonical: [alias]
+        for alias, canonical in aliases.items()
+    }
+    original = browse_module.local_inventory_identity_key
+    normalized = []
+
+    def record(value):
+        normalized.append(value)
+        return original(value)
+
+    monkeypatch.setattr(browse_module, "local_inventory_identity_key", record)
+
+    keys = browse_module._missing_album_search_artist_keys(
+        "Needle",
+        aliases,
+        canonicals,
+    )
+
+    assert keys == ["needle alias", "needle canonical"]
+    assert set(normalized) == {"Needle Alias", "Needle Canonical"}
+    assert len(normalized) == 2
+
+
+def test_query_filter_still_excludes_wrong_category_and_partly_active_missing_albums():
+    from music_app.services.library_browse_postgres import _missing_album_projection_payloads
+
+    matching = _missing_row(album_key="matching", track_id=1)
+    matching["album_title"] = "Needle Session"
+    matching["file_library_root_category"] = "main_library"
+    wrong_category = _missing_row(album_key="wrong-category", track_id=2)
+    wrong_category["album_title"] = "Needle Session"
+    wrong_category["file_library_root_category"] = "hoard"
+    partly_active_stale = _missing_row(album_key="partly-active", track_id=3)
+    partly_active_stale["album_title"] = "Needle Session"
+    partly_active_stale["file_library_root_category"] = "main_library"
+    partly_active_live = _missing_row(
+        album_key="partly-active",
+        track_id=4,
+        stale=False,
+        stale_marked_at="",
+    )
+    partly_active_live["album_title"] = "Needle Session"
+    partly_active_live["file_library_root_category"] = "main_library"
+
+    albums = _missing_album_projection_payloads(
+        [matching, wrong_category, partly_active_stale, partly_active_live],
+        view_state={"visible_library_categories": ["main_library"]},
+        query="Needle",
+    )
+
+    assert [album["key"] for album in albums] == ["matching"]
 
 
 def test_missing_album_detail_has_no_playback_or_file_actions():

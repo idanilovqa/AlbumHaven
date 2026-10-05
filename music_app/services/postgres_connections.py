@@ -19,13 +19,17 @@ _pools = {}
 _lock = Lock()
 
 
-def pooled_connection(database_url: str):
+def pooled_connection(database_url: str, *, workload: str = "default"):
     if not isinstance(database_url, str) or not database_url.strip():
         raise RuntimeError("Postgres configuration is required.")
+    normalized_workload = str(workload or "").strip()
+    if not normalized_workload:
+        raise RuntimeError("Postgres pool workload is required.")
     if ConnectionPool is None:
         raise RuntimeError("psycopg pool support is required; install the application requirements.")
+    pool_key = (database_url, normalized_workload)
     with _lock:
-        pool = _pools.get(database_url)
+        pool = _pools.get(pool_key)
         if pool is None:
             pool = ConnectionPool(
                 conninfo=database_url,
@@ -34,10 +38,16 @@ def pooled_connection(database_url: str):
                 kwargs={"row_factory": dict_row, "connect_timeout": 15},
                 open=True,
             )
-            _pools[database_url] = pool
+            _pools[pool_key] = pool
     # The pool commits or rolls back before returning a connection; no retry of
     # an application mutation is introduced here.
     return pool.connection()
+
+
+def prewarm_connection_pool(database_url: str) -> None:
+    for workload in ("default", "browse"):
+        with pooled_connection(database_url, workload=workload):
+            pass
 
 
 def close_pools() -> None:

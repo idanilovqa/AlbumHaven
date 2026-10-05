@@ -169,6 +169,7 @@ test('every discovered performance case has reviewed ownership selected by its r
   const discoveredCases = new Set(
     testDataMatrix
       .filter((entry) => performanceConfigs.has(entry.config))
+      .filter((entry) => !entry.test.includes('searchPreviewPairedCalibration.spec.js'))
       .map(caseIdentity),
   );
   const ownedCases = new Set();

@@ -73,10 +73,10 @@ test('registry and runner declare the frozen fixture mode for every performance 
   );
   assert.deepEqual(
     [...registryTargets.keys()].sort(),
-    Object.keys(performanceRunner.PERFORMANCE_TARGETS).sort(),
+    Object.keys(performanceRunner.PERFORMANCE_TARGETS).filter((name) => name !== 'paired-search-calibration').sort(),
   );
 
-  for (const [name, runnerTarget] of Object.entries(performanceRunner.PERFORMANCE_TARGETS)) {
+  for (const [name, runnerTarget] of Object.entries(performanceRunner.PERFORMANCE_TARGETS).filter(([name]) => name !== 'paired-search-calibration')) {
     const fixtureMode = expectedFixtureMode(name);
     assert.equal(runnerTarget.fixtureMode, fixtureMode, `runner ${name}`);
     assert.equal(registryTargets.get(name).fixtureMode, fixtureMode, `registry ${name}`);

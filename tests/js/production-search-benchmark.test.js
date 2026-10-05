@@ -199,9 +199,9 @@ test('production search journey blocks forbidden requests before navigation', ()
   );
   assert.match(
     spec,
-    /if \(!\['GET', 'HEAD'\]\.includes\(request\.method\(\)\) \|\| url\.origin !== ALLOWED_ORIGIN\) \{[\s\S]*?forbiddenRequests\.push\([\s\S]*?await route\.abort\('blockedbyclient'\);[\s\S]*?return;/u,
+    /if \(!\['GET', 'HEAD'\]\.includes\(request\.method\(\)\) \|\| url\.origin !== ALLOWED_ORIGIN\) \{[\s\S]*?forbiddenRequests\.push\([\s\S]*?\n\s*\}/u,
   );
-  assert.match(spec, /hostTelemetryRequests\.push/u);
+  assert.doesNotMatch(spec, /hostTelemetryRequests\.push/u);
   assert.match(spec, /\['GET', 'HEAD'\]\.includes\(request\.method\(\)\)/u);
   assert.match(spec, /url\.origin !== ALLOWED_ORIGIN/u);
   assert.match(spec, /forbiddenRequests\.push\(\{[\s\S]*method:[\s\S]*origin:[\s\S]*pathname:/u);

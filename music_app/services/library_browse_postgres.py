@@ -7222,7 +7222,7 @@ def _selected_artist_preview_sql(
               supplemental_albums.album_key
             limit greatest(
               {normalized_limit} - (
-                select count(distinct (library_id, album_id)) from required_artist_albums
+                select count(*) from required_artist_albums
               ),
               0
             )

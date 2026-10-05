@@ -1,5 +1,25 @@
 # Sandbox3 manual-test handoff
 
+## Focused functional runner PowerShell selection
+
+- Outcome: let the supported isolated functional runner provision and tear down
+  using installed PowerShell 7, with Windows PowerShell retained as fallback.
+- Scope: local runner executable choice, focused regression and local-run guide;
+  existing four-case hydration/warning/detail verification remains unchanged.
+- Evidence: Windows PowerShell cannot resolve `Get-FileHash` on this host;
+  PowerShell 7 provides it and completed the checksum-pinned v1.0.25 download.
+  The runner hardcodes Windows PowerShell for its bootstrap child even when
+  launched from PowerShell 7. No app, service or database was started.
+- Acceptance: prefer available `pwsh.exe`; retain the existing absolute Windows
+  PowerShell fallback; fail before provisioning if neither exists; preserve all
+  bootstrap arguments, secret filtering and teardown through the same selected
+  executable. Reuse the runner's existing executable resolver.
+- Compatibility/rollback: no schema or acceptance-contract changes; reverting
+  executable selection restores previous behavior. Existing services are not
+  restarted. No test timeout, retry or expectation changes are allowed.
+- Checkpoint: focused RED/GREEN and two independent review passes before the
+  original four functional cases run; hosted CI still gates publication.
+
 ## Isolated CI duplicate and live-fixture repair
 
 - Outcome: preserve same-track physical-file duplicate reasons alongside multi-root duplicate sources; execute the eight existing source-appearance and multi-root live contracts in CI.

@@ -243,6 +243,15 @@ def test_asgi_index_and_news_render_current_template_shell(app, monkeypatch):
         web_asgi,
         "PostgresLibraryBrowseRepository",
         lambda _config: SimpleNamespace(
+            build_root_startup_preview_payload=lambda **_kwargs: {
+                "artists_sidebar": [],
+                "artist_groups": [],
+                "artist_count": 0,
+                "album_count": 0,
+                "selected_artist": "",
+                "payload_tier": "sidebar",
+                "gallery_display_mode": "covers",
+            },
             build_root_sidebar_payload=lambda **_kwargs: {
                 "artists_sidebar": [{"artist": "Broadcast", "artist_display": "Broadcast", "count": 1}],
                 "artist_count": 1,

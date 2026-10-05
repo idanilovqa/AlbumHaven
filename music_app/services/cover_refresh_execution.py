@@ -508,8 +508,10 @@ def run_cover_jobs(
 
         reason = str(detail.get("reason") or "")
         if reason == "remote_provider_group_disabled":
+            terminal_category = "skipped"
             skipped += 1
         elif downloaded:
+            terminal_category = "downloaded"
             downloaded_count += 1
             with cache_lock:
                 if owns_progress():
@@ -518,6 +520,7 @@ def run_cover_jobs(
             if written_path:
                 downloaded_paths.append(written_path)
         elif not has_cover:
+            terminal_category = "failed"
             failed += 1
             if reason in miss_reasons and callable(getattr(logger, "log", None)):
                 log_app_event(
@@ -535,6 +538,7 @@ def run_cover_jobs(
                     resolver_trace=detail.get("resolver_trace"),
                 )
         else:
+            terminal_category = "skipped"
             skipped += 1
 
         elapsed_ms = float(detail.get("elapsed_ms") or 0.0)
@@ -639,6 +643,22 @@ def run_cover_jobs(
                 )
                 changed = True
 
+        log_app_event(
+            config, logger if callable(getattr(logger, "log", None)) else _LOGGER,
+            "Cover fetch outcome",
+            level="info",
+            album_id=job.get("album_id"),
+            artist=artist,
+            album=album,
+            folder=str(folder),
+            reason=str(detail.get("reason") or ""),
+            terminal_category=terminal_category,
+            downloaded=downloaded,
+            has_cover=has_cover,
+            force_search=force_search,
+            elapsed_ms=elapsed_ms,
+            resolver_trace=detail.get("resolver_trace") or [],
+        )
         with cache_lock:
             if owns_progress():
                 library_state["covers_current_folder"] = str(folder)

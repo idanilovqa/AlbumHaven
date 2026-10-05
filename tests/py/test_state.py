@@ -2255,6 +2255,38 @@ def test_recovered_cover_respects_persistence_selection_guard(recovered_cover_ca
     assert case.cover.read_bytes() == b"recovered-cover-bytes"
 
 
+@pytest.mark.parametrize("downloaded,has_cover,reason,category", [
+    (True, True, "downloaded", "downloaded"),
+    (False, False, "remote_search_failed", "failed"),
+    (False, True, "satisfactory_local_cover_present", "skipped"),
+    (False, False, "remote_provider_group_disabled", "skipped"),
+])
+def test_run_cover_jobs_logs_fast_terminal_outcome(recovered_cover_case, monkeypatch, downloaded, has_cover, reason, category):
+    case = recovered_cover_case
+    case.job["track_paths"] = []
+    trace = [{"resolver": "_search_apple", "status": "failed", "elapsed_ms": 1.5}]
+    events = []
+    monkeypatch.setattr(cover_refresh_execution, "execute_cover_job", lambda **_kwargs: (
+        case.cover if has_cover else None, downloaded,
+        {"reason": reason, "elapsed_ms": 2.5, "resolver_trace": trace},
+    ))
+    monkeypatch.setattr(cover_refresh_execution, "_recover_existing_cover_selection", lambda **_kwargs: (False, False))
+    monkeypatch.setattr(cover_refresh_execution, "log_app_event", lambda _config, _logger, action, **fields: events.append((action, fields)))
+
+    result = cover_refresh_execution.run_cover_jobs(**case.kwargs)
+
+    outcomes = [fields for action, fields in events if action == "Cover fetch outcome"]
+    assert len(outcomes) == 1
+    assert outcomes[0] == {
+        "level": "info", "album_id": None, "artist": "Artist", "album": "Recovered",
+        "folder": str(case.cover.parent), "reason": reason, "terminal_category": category,
+        "downloaded": downloaded, "has_cover": has_cover, "force_search": False,
+        "elapsed_ms": 2.5, "resolver_trace": trace,
+    }
+    assert result[category] == 1
+    assert not any(action == "Cover fetch slow" for action, _fields in events)
+
+
 def test_recovered_cover_heterogeneous_baseline_reports_conflict(recovered_cover_case, monkeypatch):
     case = recovered_cover_case
     # Distinct persisted revisions cannot share one exact expected-state guard.
@@ -2262,13 +2294,17 @@ def test_recovered_cover_heterogeneous_baseline_reports_conflict(recovered_cover
     baseline = {path: dict(entry) for path, entry in case.entries.items()}
     events = []
     monkeypatch.setattr(cover_refresh_execution, "persist_cover_selection_for_tracks_for_config", lambda *_args, **_kwargs: pytest.fail("Heterogeneous selection must not persist"))
-    monkeypatch.setattr(cover_refresh_execution, "log_app_event", lambda *_args, **kwargs: events.append(kwargs))
+    monkeypatch.setattr(cover_refresh_execution, "log_app_event", lambda _config, _logger, action, **kwargs: events.append({"action": action, **kwargs}))
     result = cover_refresh_execution.run_cover_jobs(**case.kwargs)
     assert result["changed"] is False
     assert case.entries == baseline
     assert result["job_results"][0]["recovery_conflict"] is True
     assert result["job_results"][0]["reason"] == "recovered_cover_selection_conflict"
     assert any(event.get("level") == "warning" and event.get("reason") == "recovered_cover_selection_conflict" for event in events)
+    outcomes = [event for event in events if event["action"] == "Cover fetch outcome"]
+    assert len(outcomes) == 1
+    assert outcomes[0]["reason"] == "recovered_cover_selection_conflict"
+    assert outcomes[0]["terminal_category"] == "skipped"
 
 
 @pytest.mark.parametrize("escape", ["cover", "track", "resolved_cover"])

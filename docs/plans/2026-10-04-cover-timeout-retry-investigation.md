@@ -26,6 +26,29 @@ Task 2 of the fast-automatic-cover-search plan, not its overall completion.
 
 ## Pending
 
+### Approved complete outcome recording
+
+Owner approved the proposed Problematic Files categories and shared-browsing
+safety guard, and explicitly requires the next cover pass to record fast-job
+reasons as well as slow jobs. Narrow delivery: one structured final event for
+every completed cover job using the existing private logging seam, with job
+identity, terminal category, reason, provider trace and elapsed time. Record after
+recovery/conflict classification so the event describes the final result. Preserve
+existing cover decisions, counters, authentication and Postgres data authority;
+do not introduce file-backed application state. Acceptance covers fast download,
+failed and skipped jobs plus recovery-conflict final reason. Focused RED/GREEN,
+two scoped reviews, then commit and full CI; deployment/retry remain separately
+verified operations. Rollback is source-only.
+
+Implemented `Cover fetch outcome` after per-job recovery/application, retaining
+legacy slow/warning events and unchanged counter semantics. Five regressions
+failed before implementation; 50 focused executor/recovery cases passed afterward
+in 7.95 seconds (45 unrelated cases deselected). Fast download/failure/skip and
+provider-disabled results each have exactly one final event; recovery conflicts
+log their final reason. Two complete root scoped reviews found no remaining
+findings. No deployment or retry yet. Total implementation/process time was not
+recorded. Deployment must retain INFO-level private logs for the complete pass.
+
 ### Outcome accounting and request-error follow-up
 
 The retained completion messages reconcile exactly to 7,936 unique jobs:
@@ -112,6 +135,19 @@ are not proof of successful per-album persistence or file existence. Production 
 maintenance service state must be checked afresh before a retry.
 
 ## October 5 request-error evidence
+
+Follow-up exact-folder verbose-log audit recovered 27 of the original 65 missing
+job reasons: 16 remote-not-better, six local-noncover-better, and five negative-cache
+TTL results. Two of those cached misses were failed Swan Lake CD2/CD3 jobs with
+an explicit 12-hour TTL. Current unrecorded final reasons: 11 failed and 27 skipped.
+The original structured-only counts below are retained as historical evidence.
+All 63 attributed provider failures have Spotify failed and four other providers
+no-candidate; cooldown evidence is uniquely folder-attributable for 43 identities
+and shared across same-identity folders for 20. All four failed exceptions are
+inventory guards (Archspire, Art Zoyd Symphonie, Apollo 13, Mask Of Zorro), not
+read-only replacements. Four explicit protected-cover outcomes had candidates
+but no returned local cover; remote versus missing/inaccessible user selection
+still needs read-only persistence inspection. Never override that protection.
 
 Private log audit reconciles all completion identities and preserves exact source
 lines in `album-haven-internal/tmp/cover-run-audit-20261004/REPORT.md` and adjacent

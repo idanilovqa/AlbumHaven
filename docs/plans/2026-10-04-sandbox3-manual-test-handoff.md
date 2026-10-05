@@ -54,6 +54,16 @@ it does not claim current performance verification or authorize a budget change.
 
 ## Latest owner decisions
 
+- Owner explicitly approved both outstanding designs: the listed Problematic
+  Files error categories, and an app-level shared-browsing guard against automatic
+  library writes/rebuilds while production is running. Browsing, playback and
+  preferences remain available; scan/cover/move/tag operations require exclusive
+  maintenance. This approves implementation, not a claim of completed deployment.
+- Approved diagnostic categories: rate limit/quota with retry time when known,
+  authorization, bad request, server/network error, timeout, empty audio file,
+  and mixed album metadata. Keep no-candidate separate; clear errors only after
+  verified recovery. No automatic deletion, tag rewrite or catalog merge implied.
+
 - Owner approved correcting FTC-GALLERY-031 to leave search and open the explicit
   artist view before the existing artist-info selection/drag checks. Preserve the
   approved hidden-info-during-search behavior and assert that absence.

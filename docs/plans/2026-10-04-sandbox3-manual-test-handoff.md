@@ -1,5 +1,13 @@
 # Sandbox3 manual-test handoff
 
+## Status payload expected-contract repair: CI run 37268310174
+
+- Exact local reproduction: `tests/py/test_view_payloads.py::test_build_status_payload_reflects_current_state_counters` failed with 30 identical fields and five additional cover-progress defaults (1 failed in 6.58 seconds).
+- Scope: add only those five approved defaults to the expected dictionary: elapsed and estimated remaining seconds are `None`, run mode and outcome are `unknown`, phase is `preparing`. Preserve exact dictionary equality and every existing assertion. No product behavior or public contract changes.
+- Focused verification: `python -m pytest tests/py/test_view_payloads.py -k build_status_payload -q --tb=short` passed 3 tests, with 127 deselected, in 5.10 seconds. Post-run process audit found no remaining Python/pytest process matching the test run.
+- Checkpoint: independent review and the complete native PR pipeline remain required. Source-only rollback reverts the expected-dictionary additions; no deployment, schema or service changes are included.
+
+
 ## Metadata gallery navigation repair: CI run 37268310174
 
 - Outcome: let the shared gallery helper find virtualized albums above the current viewport when its initial downward search reaches the lower boundary. A single bounded reversal uses the existing native wheel path; the opposite boundary still fails for an absent album.

@@ -1,5 +1,81 @@
 # Sandbox3 manual-test handoff
 
+## Approved FTC-GALLERY-031 flow correction
+
+- Outcome and checklist: align FTC-GALLERY-031 with the September 24 gallery
+  plan's hidden-artist-information-during-search contract. Owner approval is
+  recorded below; this is a test-flow correction, not a product/UI change.
+- Prerequisites: retain fixtures-v1.0.25 and the supported isolated functional
+  runner; retain every startup, search, hover, selection and drag assertion and
+  the existing timeouts.
+- Acceptance: search exposes neither the artist-info trigger nor overlay. Clear
+  search through the existing action, wait for the empty query and gallery,
+  select Neal Morse through the existing sidebar locator, and require its
+  selected state before the unchanged info selection/drag checks.
+- Compatibility/rollback: no runtime, schema or fixture changes; reverting the
+  test and this contract restores the previous test flow only.
+- Checkpoint: exact local case, cleanup audit, two independent reviews, then
+  parent-approved coherent commit for PR22. Preserve `skip_reviews`, never add
+  `skip_tests`; the complete native pipeline remains mandatory. No push, merge,
+  publication or service changes are authorized by this section.
+
+Focused verification passed 1/1 in 53.7 seconds through
+`scripts/run-functional-e2e-local.ps1 -Case "FTC-GALLERY-031 preserves startup
+totals, search suggestions, covers and hover-year interactions"` with the retained
+v1.0.25 distribution. The wrapper returned authoritative pass/exit 0; all 1,497
+fixture files were unchanged. Final independent audit found zero owned processes,
+zero listeners on 54509/54511, zero disposable database
+`album_haven_ci_local_6d03f060e483`, and zero associated roles. The runner removed
+its temporary directory; stdout/stderr evidence remains in the private
+`tmp/ci22-gallery031-20261004` directory. Two complete root review passes reported
+no actionable findings. Full native CI and owner acceptance remain required.
+
+## Original performance failure selections
+
+Read-only evidence: run `37218749498`, job `111484666798`
+(`E2E Performance: synthetic-large-library`). Its exact failed targets were
+`all-artists`, `root-album-browse`, and `app-open-all-artists`:
+
+- `FTC-GALLERY-STARTUP-005A`: `All Artists round-trip reports synthetic-data
+  responsiveness and memory timings` in `allArtistsResponsiveness.spec.js`.
+  Three retained attempts reported selection 893 ms against 800 ms, then first
+  albums 15,517 ms and 17,789 ms against 3,900 ms. Budgets remain unchanged.
+- `FTC-GALLERY-STARTUP-005S`: `Root album browse UI reports library_browse
+  telemetry and timing` in `rootAlbumBrowse.spec.js`.
+- `FTC-GALLERY-STARTUP-005T`: `App open renders All Artists UI and explicit full
+  root browse uses library_browse` in `appOpenAllArtists.spec.js`.
+  Both 005S and 005T received `sidebar` instead of required `full` at
+  `performanceHelpers.js:47`. The hosted log masks the word `root`; exact titles
+  and filenames above are confirmed against the source, not guessed selections.
+
+The other original performance jobs (scan-library, utility-problematic-files,
+playback-media) succeeded. This records the original failure inventory only;
+it does not claim current performance verification or authorize a budget change.
+
+## Latest owner decisions
+
+- Owner approved correcting FTC-GALLERY-031 to leave search and open the explicit
+  artist view before the existing artist-info selection/drag checks. Preserve the
+  approved hidden-info-during-search behavior and assert that absence.
+- Owner rejected copying the production database or music library, including a
+  full copy on K:. Use production database/media directly for sandbox3. Production
+  may keep serving its published UI against that shared data. This supersedes the
+  earlier copy proposal and pending media-choice notes below.
+- Preserve existing production code/configuration and prevent overlapping scans
+  or cover-writing jobs. Verify current service and schema compatibility before
+  replacing maintenance; do not replay incomplete historical migrations. This
+  decision is not merge/publication approval. No copy, deployment or service
+  change was made when recording it.
+- Owner also approved clearing read-only attributes on the 27 identified cover
+  files for eligible replacement. Exact targets and original attributes must be
+  revalidated; manual artwork selections remain protected.
+- Owner requested exact diagnosis of the nine multi-album folder failures, a
+  search/persistence fix if defective, and a Problematic Files category if needed.
+  Classification and design remain evidence-driven; do not label all nine as
+  duplicates based solely on multiple persisted IDs.
+
+Existing delivery checkboxes remain open; no checklist count changed.
+
 ## Problematic separate-release detail identity repair
 
 - Outcome: resolve the exact summary identity when a separate release's canonical

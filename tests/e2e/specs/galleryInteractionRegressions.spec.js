@@ -104,6 +104,16 @@ test(GALLERY_CASE,{tag:'@area:gallery-search'},async({page,context,galleryAction
     await ui.cards.first().hover();
     await expect(ui.yearWithin(ui.cards.first())).not.toBeVisible();
   });
+  await stepLogger.step('Search hides artist information; explicit artist navigation restores it',async()=>{
+    await expect(ui.info).not.toBeVisible();
+    await expect(ui.infoPanel).not.toBeVisible();
+    await searchToolbarActions.clearSearch({submitWithEnter:true});
+    await searchToolbarActions.waitForQuery('');
+    await galleryActions.waitForGalleryReady();
+    await ui.nealSidebar.click();
+    await galleryActions.waitForGalleryReady();
+    await expect(ui.nealSidebar).toHaveAttribute('aria-current','true');
+  });
   await stepLogger.step('Info text has visible selection during drag and cannot select gallery cards',async()=>{
     await ui.info.click(); await expect(ui.infoPanel).toBeVisible();
     const text=ui.infoSummary;

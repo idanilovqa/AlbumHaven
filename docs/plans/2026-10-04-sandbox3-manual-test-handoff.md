@@ -25,7 +25,23 @@
 - Query cost: separate-release detail adds one compact album-identity read (key,
   title, canonical artist, edition), with no track/file join or metadata payload.
   Existing duplicate inventory/cache and final exact projected-key filtering are
-  unchanged. Browser verification and two independent reviews remain pending.
+  unchanged. Two complete independent reviews found no remaining actionable
+  findings before the unchanged browser rerun.
+- Browser rerun on `0b5efcc5`: FTC-UTIL-PROBLEMS-013 passed in 1.9 minutes,
+  including the previously failing detail step in 3.447 seconds;
+  FTC-UTIL-PROBLEMS-007 passed in 2.3 minutes, with its mutation step taking
+  24.446 seconds. Expectations were unchanged. Both wrapper and runner exited 0.
+  Evidence: private `tmp/ci22-details-1791167780955/functional.log`.
+- Rerun cleanup: the exact disposable database, all three owned roles, owned
+  processes, and listeners on ports 35340/35342 were verified absent. Original
+  failure traces remain retained for comparison.
+- FTC-GALLERY-031 test-flow correction remains pending exact owner approval:
+  the September 24 design hides artist information during search, conflicting
+  with the retained failing search-state trigger step. FTC-GALLERY-033 passed
+  in the original four-case run. No expectation or test-flow change is approved
+  by this checkpoint.
+- Media-mode choice remains pending. No deployment, push, or full CI occurred;
+  delivery checkboxes remain open and progress counters are unchanged.
 
 ## Focused functional runner PowerShell selection
 

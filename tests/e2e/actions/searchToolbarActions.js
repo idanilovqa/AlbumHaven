@@ -14,7 +14,10 @@ export class SearchToolbarActions {
 
   async search(query, options = {}) {
     await this.searchToolbar.input.fill(query);
-    if (options.submitWithEnter) {
+    // Search submission is explicit in the product flow. Keep the helper's
+    // default aligned with that contract; callers that need draft-only input
+    // can opt out explicitly.
+    if (options.submitWithEnter !== false) {
       if (typeof options.recordSubmissionBoundary === 'function') {
         await options.recordSubmissionBoundary();
       }

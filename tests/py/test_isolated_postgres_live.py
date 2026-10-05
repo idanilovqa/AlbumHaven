@@ -3689,6 +3689,8 @@ def test_live_phase6_browse_queries_use_bounded_production_plans_and_search_inde
                 "query_like": "%joseph%",
                 "category_count": 0,
                 "visible_categories": [],
+                "include_missing": True,
+                "search_artist_keys": [],
             }
             search_before_plan = connection.execute(
                 "explain (analyze, buffers, format json) " + _search_preview_sql(),

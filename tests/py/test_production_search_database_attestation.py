@@ -32,6 +32,7 @@ class _Connection:
                     "database_oid": "16384",
                     "server_address": "127.0.0.1",
                     "server_port": "5432",
+                "catalog_album_count": 0,
                 }
             )
         return _Result(None)

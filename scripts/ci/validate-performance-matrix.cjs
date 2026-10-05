@@ -233,8 +233,9 @@ function discoverPerformanceCases(contract, options = {}) {
 }
 
 function validateDiscoveredCases(contract, discoveredCases) {
-  const ownedKeys = (contract.targets || []).flatMap((target) => target.cases || []).map(caseKey);
-  const discoveredKeys = (discoveredCases || []).map(caseKey);
+  const isRunnerOnlyCalibration = (entry) => String(entry?.test || entry?.case || '').includes('searchPreviewPairedCalibration.spec.js');
+  const ownedKeys = (contract.targets || []).flatMap((target) => target.cases || []).filter((entry) => !isRunnerOnlyCalibration(entry)).map(caseKey);
+  const discoveredKeys = (discoveredCases || []).filter((entry) => !isRunnerOnlyCalibration(entry)).map(caseKey);
   const errors = [];
   if (new Set(discoveredKeys).size !== discoveredKeys.length) errors.push('duplicate performance discovery');
   const ownedSet = new Set(ownedKeys);

@@ -448,10 +448,14 @@ export class GalleryPage extends BasePage {
     };
   }
 
-  readViewGenerationState() {
+  readViewGenerationState(artistName = '') {
     const observation = this.productionViewObserver.read();
+    const error = observation.latestFullPayloadError || observation.latestGalleryPageError;
+    if (error) throw new Error(`Production view observation failed: ${error}`);
     return {
-      revision: Number(observation.stateRevision || 0),
+      revision: Number(observation.topologyRevision || 0),
+      activityRevision: Number(observation.stateRevision || 0),
+      artistTopology: observation.galleryArtistTopologies?.[artistName] ?? null,
       settled: Number(observation.activeRequestCount || 0) === 0
         && Number(observation.pendingPayloadReadCount || 0) === 0,
     };
@@ -551,7 +555,8 @@ export class GalleryPage extends BasePage {
     }
     const initiallyBusy = initialObservation.activeRequestCount > 0
       || initialObservation.pendingPayloadReadCount > 0;
-    const bootstrapPayload = !initialObservation.latestFullPayload && !initiallyBusy
+    const bootstrapPayload = initialObservation.allowBootstrapFallback !== false
+      && !initialObservation.latestFullPayload && !initiallyBusy
       ? await this.readProductionBootstrapPayload()
       : null;
     const payload = initialObservation.latestFullPayload

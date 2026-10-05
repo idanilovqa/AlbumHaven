@@ -22,6 +22,37 @@ def test_automatic_cover_budget_clamps_network_timeout():
         assert 0 < remaining_automatic_cover_seconds(15.0) <= 5.0
 
 
+def test_typed_automatic_search_failure_retains_safe_provider_classification():
+    """Automatic failures carry durable, non-sensitive recovery metadata."""
+    from music_app.services.cover_provider_deadline import AutomaticCoverSearchFailed
+
+    failure = AutomaticCoverSearchFailed(
+        category="quota",
+        provider="spotify",
+        http_status=429,
+        retry_at=212.5,
+    )
+
+    assert failure.category == "quota"
+    assert failure.provider == "spotify"
+    assert failure.http_status == 429
+    assert failure.retry_at == 212.5
+    assert not hasattr(failure, "response_body")
+    assert not hasattr(failure, "url")
+    assert not hasattr(failure, "private_path")
+
+
+def test_automatic_search_failure_remains_backward_compatible_without_details():
+    from music_app.services.cover_provider_deadline import AutomaticCoverSearchFailed
+
+    failure = AutomaticCoverSearchFailed()
+
+    assert failure.category is None
+    assert failure.provider is None
+    assert failure.http_status is None
+    assert failure.retry_at is None
+
+
 def test_expired_automatic_cover_budget_raises_before_network_request():
     from music_app.services.cover_provider_deadline import (
         AutomaticCoverDeadlineExceeded,

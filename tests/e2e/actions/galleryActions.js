@@ -765,22 +765,33 @@ export class GalleryActions {
         });
         retryRequiresScrollReset = false;
       }
-      const generationBefore = this.galleryPage.readViewGenerationState();
+      const generationBefore = this.galleryPage.readViewGenerationState(artistName);
       if (!generationBefore.settled) {
         lastGeneration = { before: generationBefore, after: null };
         await new Promise((resolve) => setTimeout(resolve, 25));
         continue;
       }
       const renderedCards = new Map();
+      let sampledArtistTopology;
+      let invalidSample = false;
       for (const identity of expected) {
+        if (Date.now() >= deadline) break;
         await this.scrollToAlbumUnderHeading(artistName, identity.album, {
           waitAtBoundary: options.waitAtBoundary === true,
           year: identity.year,
+          timeout: Math.max(1, deadline - Date.now()),
         });
+        const sampleBefore = this.galleryPage.readViewGenerationState(artistName);
         const windowIdentities = await this.galleryPage.readRenderedAlbumIdentities(
           artistName,
           expectedAlbumNames,
         );
+        const sampleAfter = this.galleryPage.readViewGenerationState(artistName);
+        invalidSample ||= !sampleBefore.settled || !sampleAfter.settled
+          || sampleBefore.activityRevision !== sampleAfter.activityRevision
+          || sampleBefore.revision !== sampleAfter.revision
+          || (sampledArtistTopology !== undefined && sampledArtistTopology !== sampleAfter.artistTopology);
+        sampledArtistTopology = sampleAfter.artistTopology;
         for (const renderedIdentity of windowIdentities) {
           const topologyKey = `${renderedIdentity.album}\u0000${renderedIdentity.year}`;
           renderedCards.set(topologyKey, {
@@ -789,11 +800,13 @@ export class GalleryActions {
           });
         }
       }
-      const generationAfter = this.galleryPage.readViewGenerationState();
+      const generationAfter = this.galleryPage.readViewGenerationState(artistName);
       lastGeneration = { before: generationBefore, after: generationAfter };
       if (
         generationBefore.revision !== generationAfter.revision
         || !generationAfter.settled
+        || invalidSample
+        || Date.now() > deadline
       ) {
         retryRequiresScrollReset = true;
         await new Promise((resolve) => setTimeout(resolve, 25));
@@ -834,7 +847,7 @@ export class GalleryActions {
     ) {
       const deltaY = reachableTarget - scrollState.scrollTop;
       const direction = deltaY < 0 ? -1 : 1;
-      await this.scrollGalleryBy(deltaY);
+      await this.scrollGalleryBy(deltaY, { timeout: Math.max(1, deadline - Date.now()) });
       await this.galleryPage.waitForGalleryScrollMovement(
         scrollState.scrollTop,
         direction,
@@ -931,6 +944,10 @@ export class GalleryActions {
 
   async scrollToAlbumUnderHeading(artistName, albumName, options = {}) {
     const deadline = Date.now() + Number(options.timeout || 30000);
+    const remaining = () => {
+      if (Date.now() >= deadline) throw new Error(`Timed out scrolling to album "${albumName}" under "${artistName}".`);
+      return Math.max(1, deadline - Date.now());
+    };
     const maxScrollActions = options.maxAttempts === undefined
       ? null
       : Math.max(1, Math.floor(Number(options.maxAttempts) || 1));
@@ -958,10 +975,11 @@ export class GalleryActions {
         reversedAtBoundary = true;
         return true;
       }
-      await this.waitForAlbumVisibleUnderHeading(artistName, albumName, options);
+      await this.waitForAlbumVisibleUnderHeading(artistName, albumName, { ...options, timeout: remaining() });
       return true;
     };
     while (true) {
+      remaining();
       const section = this.galleryPage.sectionByArtistHeading(artistName);
       const target = year
         ? this.galleryPage.albumCard.cardByIdentity(artistName, albumName, year).first()
@@ -986,10 +1004,12 @@ export class GalleryActions {
           if (maxScrollActions !== null && scrollActions >= maxScrollActions) break;
           await this.scrollGalleryBy(
             targetDirection * Math.max(240, Math.round(scrollState.clientHeight * 0.75)),
+            { timeout: remaining() },
           );
           await this.galleryPage.waitForGalleryScrollMovement(
             scrollState.scrollTop,
             targetDirection,
+            { timeout: remaining() },
           );
           scrollActions += 1;
           lastViewportState = await this.readAlbumGalleryViewportState(
@@ -1032,8 +1052,8 @@ export class GalleryActions {
         break;
       }
       if (maxScrollActions !== null && scrollActions >= maxScrollActions) break;
-      await this.scrollGalleryBy(direction * Math.max(240, Math.round(scrollState.clientHeight * 0.75)));
-      await this.galleryPage.waitForGalleryScrollMovement(scrollState.scrollTop, direction);
+      await this.scrollGalleryBy(direction * Math.max(240, Math.round(scrollState.clientHeight * 0.75)), { timeout: remaining() });
+      await this.galleryPage.waitForGalleryScrollMovement(scrollState.scrollTop, direction, { timeout: remaining() });
       scrollActions += 1;
     }
     if (lastViewportState?.attached && !lastViewportState.intersects) {
@@ -1558,9 +1578,9 @@ export class GalleryActions {
     });
   }
 
-  async scrollGalleryBy(deltaY) {
+  async scrollGalleryBy(deltaY, options = {}) {
     if (!Number.isFinite(deltaY) || Math.abs(deltaY) < 1) return;
-    await this.galleryPage.galleryScroll.hover();
+    await this.galleryPage.galleryScroll.hover(options);
     await this.galleryPage.page.mouse.wheel(0, deltaY);
   }
 

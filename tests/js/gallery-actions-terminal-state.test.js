@@ -18,6 +18,126 @@ const galleryPageUrl = pathToFileURL(path.join(
   'galleryPage.js',
 )).href;
 
+test('gallery scrolling enforces its deadline even while the gallery keeps moving', async () => {
+  const { GalleryActions } = await import(galleryActionsUrl);
+  let scrollTop = 0;
+  let actionsCount = 0;
+  const actions = new GalleryActions({
+    sectionByArtistHeading: () => ({ getByRole: () => ({ first: () => ({ count: async () => 0 }) }) }),
+    async waitForGalleryScrollMovement(_previous, _direction, { timeout }) {
+      assert.ok(timeout > 0 && timeout <= 20, 'Movement receives the remaining caller budget');
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    },
+  });
+  actions.readGalleryScrollState = async () => ({ scrollTop, maxScrollTop: 100000, clientHeight: 320 });
+  actions.scrollGalleryBy = async () => { scrollTop += 240; actionsCount += 1; };
+  await assert.rejects(actions.scrollToAlbumUnderHeading('Artist', 'Missing', { timeout: 20 }), /Timed out/);
+  assert.equal(actionsCount, 1);
+});
+
+test('topology sampling tolerates navigation activity but keeps exact rendered identities', async () => {
+  const { GalleryActions } = await import(galleryActionsUrl);
+  const expected = [{ album: 'Album', year: '2002' }];
+  let activity = 1;
+  let navigations = 0;
+  const actions = new GalleryActions({
+    readViewGenerationState: () => ({ revision: 7, activityRevision: activity, artistTopology: 'current', settled: true }),
+    readRenderedAlbumIdentities: async () => expected,
+  });
+  actions.readGalleryScrollState = async () => ({ scrollTop: 42, maxScrollTop: 100 });
+  actions.scrollToAlbumUnderHeading = async (_artist, _album, options) => {
+    assert.ok(options.timeout > 0 && options.timeout <= 100);
+    navigations += 1;
+    activity += 4;
+  };
+  const result = await actions.waitForAlbumIdentityTopology('Artist', expected, { timeout: 100 });
+  assert.deepEqual(result.identities, expected);
+  assert.equal(navigations, 1);
+  assert.equal(result.scroll.scrollTop, 42);
+});
+
+test('gallery generation distinguishes activity from authority and surfaces observer errors', async () => {
+  const { GalleryPage } = await import(galleryPageUrl);
+  let observation = { stateRevision: 29, topologyRevision: 2, galleryArtistTopologies: { Artist: 'identity' } };
+  const page = Object.create(GalleryPage.prototype);
+  page.productionViewObserver = { read: () => observation };
+  const initial = page.readViewGenerationState('Artist');
+  observation = { ...observation, stateRevision: 57 };
+  const current = page.readViewGenerationState('Artist');
+  assert.equal(current.revision, initial.revision);
+  assert.notEqual(current.activityRevision, initial.activityRevision);
+  assert.equal(current.artistTopology, 'identity');
+  observation.latestGalleryPageError = 'failed continuation';
+  assert.throws(() => page.readViewGenerationState('Artist'), /failed continuation/);
+});
+
+test('gallery target state does not resurrect bootstrap authority after a view request', async () => {
+  const { GalleryPage } = await import(galleryPageUrl);
+  const page = Object.create(GalleryPage.prototype);
+  page.productionViewObserver = { read: () => ({ allowBootstrapFallback: false, activeRequestCount: 0, pendingPayloadReadCount: 0, stateRevision: 1 }) };
+  page.readProductionBootstrapPayload = async () => assert.fail('Old bootstrap must not become fresh authority');
+  page.page = { locator: () => ({ count: async () => 0 }), url: () => 'http://localhost/' };
+  page.albumCard = { detailsButtonByArtistAndAlbum: () => ({ count: async () => 0 }) };
+  page.libraryLoader = { isVisible: async () => false };
+  page.artistHeadings = { allTextContents: async () => [] };
+  const state = await page.readAlbumTargetState({ artist: 'Artist', album: 'Album' });
+  assert.equal(state.canonicalMatch, false);
+});
+
+for (const change of ['DOM activity', 'replacement', 'artist split']) {
+  test(`topology sampling retries ${change} without accepting a mixed window`, async () => {
+    const { GalleryActions } = await import(galleryActionsUrl);
+    const expected = [{ album: 'Album', year: '2002' }, { album: 'Album', year: '2014' }];
+    let activityRevision = 1;
+    let revision = 1;
+    let artistTopology = 'original';
+    let reads = 0;
+    let resets = 0;
+    const actions = new GalleryActions({
+      readViewGenerationState: () => ({ revision, activityRevision, artistTopology, settled: true }),
+      readRenderedAlbumIdentities: async () => {
+        reads += 1;
+        if (reads === (change === 'DOM activity' ? 1 : 2)) {
+          if (change === 'DOM activity') activityRevision += 1;
+          if (change === 'replacement') revision += 1;
+          if (change === 'artist split') artistTopology = 'split';
+        }
+        return expected;
+      },
+    });
+    actions.readGalleryScrollState = async () => ({ scrollTop: 42 });
+    actions.scrollToAlbumUnderHeading = async () => {};
+    actions.restoreGalleryScrollPosition = async (position) => { assert.equal(position, 42); resets += 1; };
+    const result = await actions.waitForAlbumIdentityTopology('Artist', expected, { timeout: 500 });
+    assert.deepEqual(result.identities, expected);
+    assert.equal(resets, 1);
+    assert.equal(reads, 4);
+  });
+}
+
+test('topology sampling cannot accept exact identities after its deadline', async () => {
+  const { GalleryActions } = await import(galleryActionsUrl);
+  const expected = [{ album: 'Album', year: '2002' }];
+  const actions = new GalleryActions({
+    readViewGenerationState: () => ({ revision: 1, settled: true }),
+    readRenderedAlbumIdentities: async () => expected,
+  });
+  actions.readGalleryScrollState = async () => ({ scrollTop: 42 });
+  actions.scrollToAlbumUnderHeading = async () => new Promise((resolve) => setTimeout(resolve, 25));
+  await assert.rejects(actions.waitForAlbumIdentityTopology('Artist', expected, { timeout: 20 }), /Timed out/);
+});
+
+test('gallery wheel hover receives the caller deadline', async () => {
+  const { GalleryActions } = await import(galleryActionsUrl);
+  const events = [];
+  const actions = new GalleryActions({
+    galleryScroll: { hover: async (options) => events.push(options) },
+    page: { mouse: { wheel: async (x, y) => events.push([x, y]) } },
+  });
+  await actions.scrollGalleryBy(240, { timeout: 17 });
+  assert.deepEqual(events, [{ timeout: 17 }, [0, 240]]);
+});
+
 function settledSnapshot(overrides = {}) {
   return {
     activeLoader: false,

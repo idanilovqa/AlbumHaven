@@ -2087,17 +2087,11 @@ test('album identity topology uses action-owned scrolling and rendered card loca
   let modeledScrollTop = 9134;
   let generationReadCount = 0;
   let renderedWindowReadCount = 0;
-  const generationStates = [
-    { revision: 1, settled: true },
-    { revision: 2, settled: true },
-    { revision: 2, settled: true },
-    { revision: 2, settled: true },
-  ];
   const galleryPage = {
-    readViewGenerationState() {
-      const generation = generationStates[generationReadCount];
+    readViewGenerationState(artistName) {
+      assert.equal(artistName, 'E2E Rarity Artist');
       generationReadCount += 1;
-      return generation;
+      return { revision: renderedWindowReadCount < expected.length ? 1 : 2, settled: true };
     },
     async readRenderedAlbumIdentities(artistName, expectedAlbumNames) {
       assert.equal(artistName, 'E2E Rarity Artist');
@@ -2152,10 +2146,11 @@ test('album identity topology uses action-owned scrolling and rendered card loca
   );
   assert.deepEqual(topology.identities, expected);
   assert.equal(topology.scroll.scrollTop, 9134);
-  assert.equal(generationReadCount, 4);
+  assert.equal(generationReadCount, 4 + expected.length * 4);
   assert.equal(renderedWindowReadCount, expected.length * 2);
   assert.deepEqual(resets, [{ from: 10000, to: 9134 }]);
-  assert.deepEqual(scrolls, [expected, expected].flatMap((attempt) => (
+  for (const { options } of scrolls) assert.ok(options.timeout > 0 && options.timeout <= 30000);
+  assert.deepEqual(scrolls.map(({ options: { timeout, ...options }, ...scroll }) => ({ ...scroll, options })), [expected, expected].flatMap((attempt) => (
     attempt.map((identity) => ({
       artistName: 'E2E Rarity Artist',
       albumName: identity.album,
@@ -2176,11 +2171,11 @@ test('album identity topology uses action-owned scrolling and rendered card loca
   );
   assert.match(
     galleryActions,
-    /waitForAlbumIdentityTopology[\s\S]*retryRequiresScrollReset[\s\S]*restoreGalleryScrollPosition\(scroll\.scrollTop[\s\S]*readViewGenerationState\(\)[\s\S]*new Map\(\)[\s\S]*scrollToAlbumUnderHeading\(artistName, identity\.album,[\s\S]*year: identity\.year[\s\S]*readRenderedAlbumIdentities[\s\S]*generationBefore\.revision !== generationAfter\.revision/,
+    /waitForAlbumIdentityTopology[\s\S]*retryRequiresScrollReset[\s\S]*restoreGalleryScrollPosition\(scroll\.scrollTop[\s\S]*readViewGenerationState\(artistName\)[\s\S]*new Map\(\)[\s\S]*scrollToAlbumUnderHeading\(artistName, identity\.album,[\s\S]*year: identity\.year[\s\S]*readRenderedAlbumIdentities[\s\S]*generationBefore\.revision !== generationAfter\.revision/,
   );
   assert.match(
     galleryActions,
-    /restoreGalleryScrollPosition[\s\S]*maxScrollActions[\s\S]*Math\.min\(target, scrollState\.maxScrollTop\)[\s\S]*scrollActions < maxScrollActions[\s\S]*scrollGalleryBy\(deltaY\)[\s\S]*waitForGalleryScrollMovement/,
+    /restoreGalleryScrollPosition[\s\S]*maxScrollActions[\s\S]*Math\.min\(target, scrollState\.maxScrollTop\)[\s\S]*scrollActions < maxScrollActions[\s\S]*scrollGalleryBy\(deltaY, \{ timeout:[\s\S]*waitForGalleryScrollMovement/,
   );
   const clampedResetActions = new GalleryActions({
     async waitForGalleryScrollMovement() {},

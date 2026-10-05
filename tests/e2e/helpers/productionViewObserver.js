@@ -3,9 +3,14 @@ import { CDPDocumentEvents } from './cdpDocumentEvents.js';
 function readViewDataRequest(request, sequence) {
   const requestUrl = new URL(request.url());
   if (!['/view-data', '/home-data'].includes(requestUrl.pathname)) return null;
+  const scopeParams = new URLSearchParams(requestUrl.searchParams);
+  for (const key of ['payload_tier', 'gallery_offset', 'omit_sidebar']) scopeParams.delete(key);
+  scopeParams.sort();
   return {
     gallery: requestUrl.pathname === '/view-data'
       && ['', 'albums', 'library'].includes(requestUrl.searchParams.get('surface') || ''),
+    append: Number(requestUrl.searchParams.get('gallery_offset') || 0) > 0,
+    scope: `${requestUrl.pathname}?${scopeParams}`,
     full: String(requestUrl.searchParams.get('payload_tier') || '').trim().toLowerCase() !== 'sidebar',
     sequence,
     url: request.url(),
@@ -153,10 +158,18 @@ export class ProductionViewObserver {
     this.pendingPayloadReads = new Set();
     this.requestDetails = new WeakMap();
     this.stateRevision = 0;
+    this.topologyRevision = 0;
+    this.galleryScope = null;
+    this.galleryArtistTopologies = new Map();
+    this.allowBootstrapFallback = true;
 
     this.documentGeneration = 0;
     const resetDocumentObservation = () => {
       this.documentGeneration += 1;
+      this.topologyRevision += 1;
+      this.galleryArtistTopologies.clear();
+      this.galleryScope = null;
+      this.allowBootstrapFallback = true;
       this.authorityGeneration += 1;
       this.activeRequests.clear();
       this.latestFullPayload = null;
@@ -195,7 +208,24 @@ export class ProductionViewObserver {
       if (!detail) return;
       detail.documentGeneration = this.documentGeneration;
       this.nextRequestSequence = detail.sequence;
+      this.allowBootstrapFallback = false;
+      const galleryScopeChanged = detail.gallery
+        && this.galleryScope !== null && this.galleryScope !== detail.scope;
+      if (detail.full || (detail.gallery && !detail.append) || galleryScopeChanged) {
+        this.topologyRevision += 1;
+        this.galleryArtistTopologies.clear();
+        this.latestFullPayload = null;
+        this.latestFullRequestSequence = 0;
+        this.latestFullPayloadRead = null;
+        this.latestFullPayloadError = null;
+      }
       if (detail.gallery) {
+        if (galleryScopeChanged) {
+          this.authorityGeneration += 1;
+          this.latestCompletedSaveTaskPayload = null;
+          this.completedCanonicalMutationPayloads = [];
+        }
+        this.galleryScope = detail.scope;
         this.latestGalleryRequestSequence = detail.sequence;
         this.latestGalleryPage = null;
         this.latestGalleryPageError = null;
@@ -238,8 +268,12 @@ export class ProductionViewObserver {
                 && currentIdentities.every((identity) => acceptedIdentities.has(identity));
             });
             if (existingIndex >= 0) {
+              if (JSON.stringify(this.completedCanonicalMutationPayloads[existingIndex].updated_albums) !== JSON.stringify(payload.updated_albums)) {
+                this.topologyRevision += 1;
+              }
               this.completedCanonicalMutationPayloads[existingIndex] = payload;
             } else {
+              this.topologyRevision += 1;
               this.completedCanonicalMutationPayloads.push(payload);
             }
             this.latestCompletedSaveTaskPayload = payload;
@@ -278,6 +312,12 @@ export class ProductionViewObserver {
           if (detail.gallery && detail.documentGeneration === this.documentGeneration
             && detail.sequence === this.latestGalleryRequestSequence) {
             this.latestGalleryPage = payload?.gallery_page || null;
+            for (const group of payload?.artist_groups || []) {
+              this.galleryArtistTopologies.set(String(group.artist || group.artist_display || '').trim(),
+                JSON.stringify((group.albums || []).map((album) => [
+                  album.key, album.name || album.title, album.year, album.track_count_preview,
+                ])));
+            }
           }
           if (!detail.full) return;
           if (detail.documentGeneration !== this.documentGeneration
@@ -357,6 +397,9 @@ export class ProductionViewObserver {
       completedCanonicalMutationPayloads: [...this.completedCanonicalMutationPayloads],
       pendingPayloadReadCount: this.pendingPayloadReads.size,
       stateRevision: this.stateRevision,
+      topologyRevision: this.topologyRevision,
+      galleryArtistTopologies: Object.fromEntries(this.galleryArtistTopologies),
+      allowBootstrapFallback: this.allowBootstrapFallback,
     };
   }
 

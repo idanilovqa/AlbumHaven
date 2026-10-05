@@ -107,6 +107,66 @@ for (const failure of ['HTTP 500', 'invalid JSON', 'requestfailed']) {
   });
 }
 
+test('topology authority separates append activity, replacement, and canonical saves', async () => {
+  const { ProductionViewObserver } = await import(observerUrl);
+  const page = new FakePage();
+  const observer = new ProductionViewObserver(page, page);
+  async function deliver(url, payload) {
+    const req = request(url);
+    page.emit('request', req);
+    page.emit('response', response(req, payload));
+    page.emit('requestfinished', req);
+    await flushPromises();
+  }
+  const group = { artist: 'Rarity Artist', albums: [{ name: 'Album', year: 2002 }] };
+  await deliver('http://localhost/view-data?surface=albums', { artist_groups: [group] });
+  const original = observer.read();
+  assert.equal(typeof original.topologyRevision, 'number');
+  await deliver('http://localhost/view-data?surface=albums&payload_tier=sidebar&gallery_offset=6', {
+    artist_groups: [{ artist: 'Other', albums: [] }], gallery_page: { offset: 6, next_offset: 12 },
+  });
+  assert.equal(observer.read().topologyRevision, original.topologyRevision);
+  assert.equal(observer.read().galleryArtistTopologies['Rarity Artist'], original.galleryArtistTopologies['Rarity Artist']);
+  assert.ok(observer.read().stateRevision > original.stateRevision);
+  await deliver('http://localhost/view-data?surface=albums&payload_tier=sidebar&gallery_offset=12', {
+    artist_groups: [{ ...group, albums: [...group.albums, { name: 'Album', year: 2014 }] }],
+  });
+  assert.notEqual(observer.read().galleryArtistTopologies['Rarity Artist'], original.galleryArtistTopologies['Rarity Artist']);
+  await deliver('http://localhost/utilities/save-task/save1', completedSaveTaskPayload({ key: 'new', name: 'New Album' }));
+  const saved = observer.read();
+  assert.ok(saved.topologyRevision > original.topologyRevision);
+  await deliver('http://localhost/utilities/save-task/save1', { ...completedSaveTaskPayload({ key: 'new', name: 'New Album' }), elapsed_ms: 100 });
+  assert.equal(observer.read().topologyRevision, saved.topologyRevision, 'Repeated completed polls are not new authority');
+  await deliver('http://localhost/view-data?surface=albums&payload_tier=sidebar', { artist_groups: [] });
+  assert.ok(observer.read().topologyRevision > saved.topologyRevision);
+  assert.equal(observer.read().latestFullPayload, null, 'A replacement cannot retain pre-save full authority');
+  assert.equal(observer.read().allowBootstrapFallback, false);
+  const replaced = observer.read().topologyRevision;
+  page.emit('documentcommitted');
+  assert.ok(observer.read().topologyRevision > replaced);
+});
+
+for (const offset of [0, 12]) {
+test(`sidebar scope change at offset ${offset} rejects delayed full responses and foreign-filter mutation authority`, async () => {
+  const { ProductionViewObserver } = await import(observerUrl);
+  const page = new FakePage();
+  const observer = new ProductionViewObserver(page, page);
+  const full = request('http://localhost/view-data?surface=albums&q=old');
+  page.emit('request', full);
+  const save = request('http://localhost/utilities/save-task/old');
+  page.emit('request', save);
+  page.emit('response', response(save, completedSaveTaskPayload({ key: 'old', name: 'Old' })));
+  page.emit('requestfinished', save);
+  await flushPromises();
+  page.emit('request', request(`http://localhost/view-data?surface=albums&payload_tier=sidebar&q=new&gallery_offset=${offset}`));
+  page.emit('response', response(full, { artist_groups: [{ artist: 'Old', albums: [] }] }));
+  page.emit('requestfinished', full);
+  await flushPromises();
+  assert.equal(observer.read().latestFullPayload, null);
+  assert.deepEqual(observer.read().completedCanonicalMutationPayloads, []);
+});
+}
+
 function request(url, method = 'GET') {
   return {
     method: () => method,

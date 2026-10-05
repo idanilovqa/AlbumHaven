@@ -14,7 +14,26 @@ class AutomaticCoverDeadlineExceeded(TimeoutError):
 
 
 class AutomaticCoverSearchFailed(RuntimeError):
-    """A transient automatic lookup failure that must not be negative-cached."""
+    """A transient automatic lookup failure that must not be negative-cached.
+
+    The optional fields are deliberately limited to sanitized recovery metadata;
+    callers must not attach response bodies, URLs, credentials, or local paths.
+    """
+
+    def __init__(
+        self,
+        message: str | None = None,
+        *,
+        category: str | None = None,
+        provider: str | None = None,
+        http_status: int | None = None,
+        retry_at: float | None = None,
+    ) -> None:
+        super().__init__(message or "automatic cover provider failed")
+        self.category = category
+        self.provider = provider
+        self.http_status = http_status
+        self.retry_at = retry_at
 
 
 _AUTOMATIC_COVER_DEADLINE: ContextVar[float | None] = ContextVar(

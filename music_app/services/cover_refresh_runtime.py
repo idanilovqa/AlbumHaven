@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from contextlib import nullcontext
 from dataclasses import dataclass
+import time
 
 from music_app.services.cover_provider_cache import CoverSearchCache
 
@@ -33,8 +34,38 @@ class CoverRefreshContext:
 PreparedCoverRefresh = tuple[CoverRefreshContext, list[dict[str, object]]]
 
 
+def build_cover_progress_status(library_state: dict[str, object], *, now=None) -> dict[str, object]:
+    """Project monotonic run timing without inventing estimates for older workers."""
+    now = time.monotonic() if now is None else now
+    started = library_state.get("covers_started_monotonic")
+    execution = library_state.get("covers_execution_started_monotonic")
+    finished = library_state.get("covers_finished_monotonic")
+    elapsed = max(0.0, (finished or now) - started) if started is not None else None
+    processed = int(library_state.get("covers_processed") or 0)
+    total = int(library_state.get("covers_total") or 0)
+    remaining = None
+    if library_state.get("covers_in_progress") and execution is not None and processed > 0 and total >= processed:
+        remaining = max(0.0, (finished or now) - execution) / processed * (total - processed)
+    return {
+        "covers_elapsed_seconds": elapsed,
+        "covers_estimated_remaining_seconds": remaining,
+        "covers_run_mode": library_state.get("covers_run_mode") or "unknown",
+        "covers_outcome": library_state.get("covers_outcome") or "unknown",
+        "covers_phase": ("preparing" if execution is None else "fetching")
+        if library_state.get("covers_in_progress") else ("finished" if finished is not None else "idle"),
+    }
+
+
 def _reset_cover_refresh_progress(library_state: dict[str, object], *, in_progress: bool) -> None:
+    if in_progress:
+        library_state["covers_started_monotonic"] = time.monotonic()
+        library_state["covers_execution_started_monotonic"] = None
+        library_state["covers_finished_monotonic"] = None
+        library_state["covers_run_mode"] = "unknown"
+    else:
+        library_state["covers_finished_monotonic"] = time.monotonic()
     library_state["covers_in_progress"] = in_progress
+    library_state["covers_outcome"] = "running" if in_progress else "cancelled"
     library_state["covers_processed"] = 0
     library_state["covers_total"] = 0
     library_state["covers_downloaded"] = 0
@@ -43,7 +74,10 @@ def _reset_cover_refresh_progress(library_state: dict[str, object], *, in_progre
 
 def _handle_cover_refresh_failure(library_state: dict[str, object], exc: Exception) -> None:
     library_state["last_error"] = str(exc)
-    _reset_cover_refresh_progress(library_state, in_progress=False)
+    library_state["covers_in_progress"] = False
+    library_state["covers_finished_monotonic"] = time.monotonic()
+    library_state["covers_outcome"] = "failed"
+    library_state["covers_current_folder"] = ""
 
 
 def _empty_cover_refresh_result(*, include_job_results: bool = False) -> dict[str, object]:
@@ -65,6 +99,7 @@ def _start_cover_refresh_progress(
     current_folder: str = "",
 ) -> None:
     library_state["covers_in_progress"] = True
+    library_state["covers_outcome"] = "running"
     library_state["covers_processed"] = 0
     library_state["covers_total"] = queued_count
     library_state["covers_downloaded"] = 0
@@ -80,6 +115,10 @@ def build_cover_refresh_context(
     library_state = get_state()
     if bump_cover_generation:
         library_state["cover_generation"] = int(library_state.get("cover_generation") or 0) + 1
+    if bump_cover_generation or not library_state.get("covers_in_progress"):
+        library_state["covers_started_monotonic"] = time.monotonic()
+        library_state["covers_execution_started_monotonic"] = None
+        library_state["covers_finished_monotonic"] = None
     return CoverRefreshContext(
         library_state=library_state,
         file_cache=dict(library_state.get("file_cache") or {}),
@@ -149,6 +188,10 @@ def execute_cover_refresh_request(
             _start_cover_refresh_progress(current, queued_count=len(jobs))
     else:
         _start_cover_refresh_progress(context.library_state, queued_count=len(jobs))
+    with cache_lock:
+        if int(context.library_state.get("cover_generation") or 0) == context.cover_generation:
+            context.library_state["covers_execution_started_monotonic"] = time.monotonic()
+            context.library_state["covers_run_mode"] = mode
     if not jobs:
         log_cover_refresh_completion(
             config=config,
@@ -167,32 +210,47 @@ def execute_cover_refresh_request(
         )
         if prepared_get_state is None:
             context.library_state["covers_in_progress"] = False
+            context.library_state["covers_finished_monotonic"] = time.monotonic()
+            context.library_state["covers_outcome"] = "completed"
         else:
             with cache_lock:
                 current = prepared_get_state()
                 if current is context.library_state and current.get("cover_generation") == context.cover_generation:
                     current["covers_in_progress"] = False
+                    current["covers_finished_monotonic"] = time.monotonic()
+                    current["covers_outcome"] = "completed"
         return _empty_cover_refresh_result(include_job_results=include_job_results_when_empty)
 
-    result = run_cover_jobs(
-        get_state=lambda: context.library_state,
-        config=config,
-        logger=logger,
-        cache_lock=cache_lock,
-        jobs=jobs,
-        file_cache=context.file_cache,
-        separate_release_keys=context.separate_release_keys,
-        image_extensions=context.image_extensions,
-        user_agent=context.user_agent,
-        cover_cache=context.cover_cache,
-        scan_generation=context.scan_generation if mode == "background" else None,
-        cover_generation=context.cover_generation if mode != "background" else None,
-        force_search=force_search,
-        allow_apple_web_fallback=allow_apple_web_fallback,
-        allow_apple_web_fallback_when_has_cover=allow_apple_web_fallback_when_has_cover,
-        negative_cache_ttl_seconds=negative_cache_ttl_seconds,
-        job_workers=job_workers,
-    )
+    result = None
+    try:
+        result = run_cover_jobs(
+            get_state=lambda: context.library_state,
+            config=config,
+            logger=logger,
+            cache_lock=cache_lock,
+            jobs=jobs,
+            file_cache=context.file_cache,
+            separate_release_keys=context.separate_release_keys,
+            image_extensions=context.image_extensions,
+            user_agent=context.user_agent,
+            cover_cache=context.cover_cache,
+            scan_generation=context.scan_generation if mode == "background" else None,
+            cover_generation=context.cover_generation if mode != "background" else None,
+            force_search=force_search,
+            allow_apple_web_fallback=allow_apple_web_fallback,
+            allow_apple_web_fallback_when_has_cover=allow_apple_web_fallback_when_has_cover,
+            negative_cache_ttl_seconds=negative_cache_ttl_seconds,
+            job_workers=job_workers,
+        )
+    finally:
+        with cache_lock:
+            if (
+                int(context.library_state.get("cover_generation") or 0) == context.cover_generation
+                and int(context.library_state.get("scan_generation") or 0) == context.scan_generation
+            ):
+                context.library_state["covers_finished_monotonic"] = time.monotonic()
+                context.library_state["covers_in_progress"] = False
+                context.library_state["covers_outcome"] = "completed" if result is not None else "failed"
     log_cover_refresh_completion(
         config=config,
         logger=logger,
@@ -298,10 +356,11 @@ def start_background_cover_refresh(
         return
     library_state["cover_generation"] = int(library_state.get("cover_generation") or 0) + 1
     _reset_cover_refresh_progress(library_state, in_progress=True)
+    library_state["covers_run_mode"] = "background"
     try:
         submit_cover_job(refresh_cover_artwork_worker)
-    except Exception:
-        _reset_cover_refresh_progress(library_state, in_progress=False)
+    except Exception as exc:
+        _handle_cover_refresh_failure(library_state, exc)
         raise
 
 
@@ -355,6 +414,7 @@ def start_manual_cover_refresh(
             generation = library_state["cover_generation"]
             scan_generation = int(library_state.get("scan_generation") or 0)
             _reset_cover_refresh_progress(library_state, in_progress=True)
+            library_state["covers_run_mode"] = "manual-bulk"
     if needs_indexing:
         if start_indexing:
             start_background_refresh(force=True, scan_mode="background")
@@ -381,10 +441,10 @@ def start_manual_cover_refresh(
             cover_generation=generation,
         )
         jobs = build_cover_jobs(file_cache=file_cache, require_missing_cover=True, cover_cache=context.cover_cache)
-    except Exception:
+    except Exception as exc:
         with cache_lock:
             if get_state() is library_state and library_state.get("cover_generation") == generation:
-                _reset_cover_refresh_progress(library_state, in_progress=False)
+                _handle_cover_refresh_failure(library_state, exc)
         raise
     with cache_lock:
         if (
@@ -406,6 +466,8 @@ def start_manual_cover_refresh(
         _start_cover_refresh_progress(library_state, queued_count=len(jobs), current_folder=first_folder)
         if not jobs:
             library_state["covers_in_progress"] = False
+            library_state["covers_finished_monotonic"] = time.monotonic()
+            library_state["covers_outcome"] = "completed"
             return {
                 "started": True,
                 "already_running": False,
@@ -419,10 +481,10 @@ def start_manual_cover_refresh(
             bool(force_search),
             (context, jobs),
         )
-    except Exception:
+    except Exception as exc:
         with cache_lock:
             if get_state() is library_state and library_state.get("cover_generation") == generation:
-                _reset_cover_refresh_progress(library_state, in_progress=False)
+                _handle_cover_refresh_failure(library_state, exc)
         raise
     return {
         "started": True,
@@ -477,6 +539,8 @@ def cancel_cover_refresh(get_state: StateGetter, *, cache_lock=None) -> bool:
         library_state["cover_generation"] = int(library_state.get("cover_generation") or 0) + 1
         library_state["covers_in_progress"] = False
         library_state["covers_current_folder"] = ""
+        library_state["covers_finished_monotonic"] = time.monotonic()
+        library_state["covers_outcome"] = "cancelled"
         return True
 
 

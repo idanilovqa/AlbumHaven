@@ -2829,7 +2829,7 @@ function buildScanEstimateParts(data = {}) {
     parts.push(`elapsed ${formatDurationCompact(elapsedSeconds)}`);
   }
   if (albumFoldersTotal > 0) {
-    parts.push(`${albumFoldersProcessed} of ${albumFoldersTotal} album folders`);
+    parts.push(`${albumFoldersProcessed} of ${albumFoldersTotal} albums`);
   }
   return parts;
 }
@@ -2884,11 +2884,13 @@ function buildLoaderStatusLines(data, options = {}) {
       detail: `${Number(data.relations_processed || 0)} of ${Number(data.relations_total || 0)} artists (${data.relations_source || 'local'})`,
     });
   }
-  if (data.covers_in_progress) {
+  if (data.covers_in_progress || (!data.scan_in_progress && data.covers_phase === 'finished')) {
     const currentFolder = String(data.covers_current_folder || '').split(/[\\/]/).pop();
     lines.push({
-      title: 'Updating cover art',
-      detail: `${Number(data.covers_processed || 0)} of ${Number(data.covers_total || 0)} folders checked${currentFolder ? ` - ${currentFolder}` : ''}`,
+      title: data.covers_in_progress ? 'Fetching covers'
+        : data.covers_outcome === 'failed' ? 'Cover search failed'
+        : data.covers_outcome === 'cancelled' ? 'Cover search cancelled' : 'Cover search finished',
+      detail: buildCoverProgressDetail(data, currentFolder),
     });
   }
   if (!lines.length) {
@@ -2901,6 +2903,31 @@ function buildLoaderStatusLines(data, options = {}) {
     });
   }
   return lines;
+}
+
+function buildCoverProgressDetail(data, currentAlbum = '') {
+  if (data.status_connection_lost) return 'Progress unavailable — reconnecting. Last reported counts may be outdated.';
+  const total = Number(data.covers_total);
+  const processed = Number(data.covers_processed);
+  const known = Number.isFinite(total) && total > 0 && Number.isFinite(processed) && processed >= 0;
+  const parts = [data.covers_phase === 'preparing' ? 'Preparing cover search' : known
+    ? `${processed} of ${total} albums checked (${Math.min(100, Math.round(processed / total * 100))}%)`
+    : data.covers_outcome === 'completed' && total === 0 ? 'No albums needed a cover search' : 'Progress unavailable'];
+  if (Number.isFinite(Number(data.covers_downloaded)) && data.covers_downloaded != null) {
+    parts.push(`${Number(data.covers_downloaded)} covers fetched`);
+  }
+  if (data.covers_outcome === 'failed') parts.unshift('Cover search failed');
+  if (data.covers_outcome === 'cancelled') parts.unshift('Cover search cancelled');
+  if (data.covers_elapsed_seconds != null && Number.isFinite(Number(data.covers_elapsed_seconds))) {
+    parts.push(`elapsed ${formatDurationCompact(data.covers_elapsed_seconds)}`);
+  }
+  const eta = Number(data.covers_estimated_remaining_seconds);
+  if (data.covers_in_progress) {
+    parts.push(data.covers_estimated_remaining_seconds != null && Number.isFinite(eta) && eta >= 0
+      ? `ETA ${formatDurationCompact(eta)}` : 'ETA calculating…');
+  }
+  if (currentAlbum) parts.push(currentAlbum);
+  return parts.join(' · ');
 }
 
 // END js/runtime/loader-status-helpers.js
@@ -5265,7 +5292,7 @@ function renderLibraryLoader(data = {}, options = {}) {
   title.textContent = ready
     ? 'Your local library is ready.'
     : (scanPageVisible && (Boolean(data.scan_in_progress) || relBusy || coverBusy)
-      ? 'Scanning the library'
+      ? (coverBusy && !data.scan_in_progress ? 'Fetching covers' : 'Scanning the library')
       : (lines[0]?.title || 'Loading library'));
   status.textContent = lines[0]?.detail || 'Preparing scan...';
   if (scanSummary) scanSummary.textContent = status.textContent;
@@ -5276,6 +5303,25 @@ function renderLibraryLoader(data = {}, options = {}) {
       item.classList.toggle('is-current', stateName === 'current');
       item.classList.toggle('is-complete', stateName === 'complete');
       item.classList.toggle('is-future', stateName === 'future');
+      const stage = String(item.getAttribute('data-scan-stage') || '');
+      let detail = '';
+      if ((data.covers_in_progress || data.covers_phase === 'finished') && !data.scan_in_progress && String(data.covers_run_mode || '').startsWith('manual') && ['discover', 'metadata', 'relations'].includes(stage) && !data.relations_in_progress) {
+        detail = 'Not needed for this cover-only run';
+        item.classList.remove('is-complete');
+      } else if (stage === 'covers' && (data.covers_in_progress || (!data.scan_in_progress && data.covers_phase === 'finished'))) {
+        detail = buildCoverProgressDetail(data);
+      } else if (stage === 'relations' && data.relations_in_progress) {
+        detail = `${Number(data.relations_processed || 0)} of ${Number(data.relations_total || 0)} artists`;
+      } else if (['discover', 'metadata'].includes(stage) && data.scan_in_progress) {
+        detail = buildScanEstimateParts(data).join(' · ');
+      }
+      let subprogress = item.querySelector?.('[data-stage-progress]');
+      if (!subprogress && detail && typeof document.createElement === 'function') {
+        subprogress = document.createElement('span');
+        subprogress.setAttribute('data-stage-progress', '');
+        item.appendChild(subprogress);
+      }
+      if (subprogress) subprogress.textContent = detail;
     });
   }
   progress.innerHTML = lines.slice(1).map((line) => `
@@ -14453,7 +14499,7 @@ function mergeGalleryPageGroups(previousGroups, pageGroups, orderedArtists = [])
 function loadNextGalleryPage() {
   const page = state.view.gallery_page;
   const scroll = document.getElementById('albums-scroll');
-  if (!page || page.next_offset == null || state.busy || state.view.query || state.view.selected_artist || !scroll) return;
+  if (!page || page.next_offset == null || state.busy || state.awaitingInitialDataRefresh || state.view.query || state.view.selected_artist || !scroll) return;
   if (scroll.scrollTop + scroll.clientHeight < scroll.scrollHeight - scroll.clientHeight) return;
   const categories = state.view.loaded_library_categories || state.view.visible_library_categories;
   if (typeof activeGallerySourceCategories === 'function' && state.gallery.mainState
@@ -14479,7 +14525,7 @@ async function fetchAndRender(url, push = true, options = {}) {
   let apiUrl = url.startsWith('/view-data') || url.startsWith('/home-data')
     ? url
     : buildApiUrl(parseBrowserUrlState(url));
-  if (apiUrl.startsWith('/view-data')) {
+  if (apiUrl.startsWith('/view-data') && !requestOptions.startupRefresh) {
     const params = new URLSearchParams(apiUrl.split('?')[1] || '');
     const rootKeys = new Set(['surface', 'gallery_scope', 'gallery_display', 'gallery_display_mode', 'gallery_scale_percent', 'category', 'payload_tier', 'gallery_offset', 'omit_sidebar']);
     if ([...params.keys()].every((key) => rootKeys.has(key)) && ['', 'albums', 'library'].includes(params.get('surface') || '')) {
@@ -14634,7 +14680,7 @@ async function fetchAndRender(url, push = true, options = {}) {
       if (!shouldApplyResponse) return false;
     }
     const startupHydrationTier = String(requestOptions.startupHydrationTier || 'full');
-    if (data.gallery_page) state.awaitingInitialDataRefresh = false;
+    if (data.gallery_page && !requestOptions.startupRefresh) state.awaitingInitialDataRefresh = false;
     if (
       requestOptions.startupRefresh
       && startupHydrationTier !== 'sidebar'
@@ -14744,7 +14790,6 @@ async function fetchAndRender(url, push = true, options = {}) {
         (requestOptions.startupRefresh
           && (
             startupHydrationTier !== 'sidebar'
-            || data.gallery_page
             || !String(requestOptions.startupHydrationFollowupEndpoint || '').trim()
           ))
         || isCanonicalFullViewPayload(data, requestOptions)
@@ -14755,7 +14800,6 @@ async function fetchAndRender(url, push = true, options = {}) {
     if (
       requestOptions.startupRefresh
       && startupHydrationTier === 'sidebar'
-      && !data.gallery_page
       && String(requestOptions.startupHydrationFollowupEndpoint || '').trim()
     ) {
       queueStartupHydrationFollowup(
@@ -15340,9 +15384,10 @@ async function pollStatus() {
       return;
     }
     const response = await fetch('/status');
+    if (response.ok === false) throw new Error(`Status unavailable (${response.status})`);
     const data = await response.json();
     if (!ownsStatus()) return;
-    updateStatusIndicator(data);
+    updateStatusIndicator({ ...data, status_connection_lost: false });
     const normalizedStatus = state.status;
     const currentInventoryRevision = Number(
       normalizedStatus.inventory_mutation_revision || 0,
@@ -15532,7 +15577,13 @@ async function pollStatus() {
     }
     nextPollDelay = currentStatusPollDelay();
   } catch (error) {
-    if (ownsStatus()) nextPollDelay = 3000;
+    if (ownsStatus()) {
+      nextPollDelay = 3000;
+      state.status = { ...state.status, status_connection_lost: true };
+      if (typeof renderLibraryLoader === 'function') {
+        renderLibraryLoader(state.status);
+      }
+    }
   } finally {
     // A newer poll owns its continuation. Discarded work must not stop polling
     // or postpone an earlier action read that is already scheduled.

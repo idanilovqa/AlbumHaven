@@ -28,6 +28,39 @@ def logger():
     return LoggerStub()
 
 
+@pytest.mark.parametrize("failure_phase", ["preparation", "submission"])
+def test_manual_admission_exceptions_report_failed_not_cancelled(runtime_config, logger, failure_phase):
+    state = {"albums": [{"key": "album"}], "file_cache": {"track": {"album": "Album"}}}
+
+    def fail(*args, **kwargs):
+        raise RuntimeError("admission failed")
+
+    with pytest.raises(RuntimeError, match="admission failed"):
+        cover_refresh_runtime.start_manual_cover_refresh(
+            config=runtime_config, logger=logger, cache_lock=threading.Lock(),
+            get_state=lambda: state, start_background_refresh=lambda **kwargs: None,
+            build_cover_jobs=fail if failure_phase == "preparation" else lambda **kwargs: [{"folder": "Artist/Album"}],
+            submit_cover_job=fail, refresh_manual_cover_artwork_worker=lambda *args: None,
+        )
+    assert state["covers_in_progress"] is False
+    assert state["covers_outcome"] == "failed"
+
+
+def test_background_submission_exception_reports_failed_not_cancelled():
+    state = {}
+
+    def fail(*args):
+        raise RuntimeError("submission failed")
+
+    with pytest.raises(RuntimeError, match="submission failed"):
+        cover_refresh_runtime.start_background_cover_refresh(
+            get_state=lambda: state, submit_cover_job=fail,
+            refresh_cover_artwork_worker=lambda: None,
+        )
+    assert state["covers_in_progress"] is False
+    assert state["covers_outcome"] == "failed"
+
+
 def test_start_manual_cover_refresh_queues_after_indexing(runtime_config, logger):
     background_calls = []
     library_state = {"scan_in_progress": True}
@@ -286,7 +319,7 @@ def test_run_background_cover_refresh_worker_runs_supplied_callback():
     assert calls == ["refreshed"]
 
 
-def test_run_manual_cover_refresh_worker_resets_status_on_failure():
+def test_run_manual_cover_refresh_worker_preserves_completed_progress_on_failure():
     library_state = {
         "covers_in_progress": True,
         "covers_processed": 5,
@@ -303,9 +336,10 @@ def test_run_manual_cover_refresh_worker_resets_status_on_failure():
 
     assert library_state["last_error"] == "boom"
     assert library_state["covers_in_progress"] is False
-    assert library_state["covers_processed"] == 0
-    assert library_state["covers_total"] == 0
-    assert library_state["covers_downloaded"] == 0
+    assert library_state["covers_processed"] == 5
+    assert library_state["covers_total"] == 7
+    assert library_state["covers_downloaded"] == 3
+    assert library_state["covers_outcome"] == "failed"
     assert library_state["covers_current_folder"] == ""
 
 
@@ -325,7 +359,7 @@ def test_refresh_cover_artwork_request_runs_background_jobs_with_runtime_context
 
     cover_refresh_runtime.refresh_cover_artwork_request(
         get_state=lambda: library_state,
-        cache_lock=object(),
+        cache_lock=threading.Lock(),
         config=runtime_config,
         logger=logger,
         log_app_event=lambda *args, **kwargs: None,
@@ -372,7 +406,7 @@ def test_refresh_cover_artwork_for_track_paths_request_logs_no_jobs_found(runtim
 
     result = cover_refresh_runtime.refresh_cover_artwork_for_track_paths_request(
         get_state=lambda: library_state,
-        cache_lock=object(),
+        cache_lock=threading.Lock(),
         config=runtime_config,
         logger=logger,
         log_app_event=lambda *args, **kwargs: None,
@@ -416,7 +450,7 @@ def test_refresh_unsuccessful_cover_artwork_request_uses_bumped_cover_generation
 
     result = cover_refresh_runtime.refresh_unsuccessful_cover_artwork_request(
         get_state=lambda: library_state,
-        cache_lock=object(),
+        cache_lock=threading.Lock(),
         config=runtime_config,
         logger=logger,
         log_app_event=lambda *args, **kwargs: None,
@@ -488,7 +522,9 @@ def test_manual_preparation_failure_cleans_only_owned_request(runtime_config, lo
         assert state["cover_generation"] == 3
         assert state["covers_in_progress"] is False
         assert state["covers_current_folder"] == ""
-        assert state["covers_total"] == state["covers_processed"] == state["covers_downloaded"] == 0
+        assert state["covers_total"] == (1 if failure_stage == "submission" else 0)
+        assert state["covers_processed"] == state["covers_downloaded"] == 0
+        assert state["covers_outcome"] == "failed"
 
 
 def test_empty_prepared_manual_refresh_finishes_without_provider_execution(runtime_config, logger):

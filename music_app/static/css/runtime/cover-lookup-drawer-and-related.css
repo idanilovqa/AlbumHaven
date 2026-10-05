@@ -549,6 +549,10 @@
   text-align: left;
 }
 .library-loader.is-scan-page .library-status-workspace { margin: 0 auto; }
+.library-loader.is-scan-page:not(.has-library-health) {
+  justify-content: center;
+  align-items: center;
+}
 .library-loader.is-scan-page.has-library-health .library-status-workspace {
   grid-template-columns: minmax(0, 1.2fr) minmax(280px, 0.8fr);
 }

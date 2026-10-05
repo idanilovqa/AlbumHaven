@@ -765,15 +765,15 @@ function loadHelpers(origin = 'http://localhost:5000') {
     },
     {
       title: 'Scan timing',
-      detail: 'ETA 32s | elapsed 16s | 2 of 5 album folders',
+      detail: 'ETA 32s | elapsed 16s | 2 of 5 albums',
     },
     {
       title: 'Linking artist families',
       detail: '2 of 5 artists (cache)',
     },
     {
-      title: 'Updating cover art',
-      detail: '1 of 3 folders checked - Dots and Loops',
+      title: 'Fetching covers',
+      detail: '1 of 3 albums checked (33%) · ETA calculating… · Dots and Loops',
     },
   ]);
 }

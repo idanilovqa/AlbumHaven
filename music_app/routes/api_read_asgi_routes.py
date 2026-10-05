@@ -407,8 +407,11 @@ def _state_percent(library_state: dict[str, object], *, processed_key: str, tota
 
 
 def _build_status_payload_from_state(library_state: dict[str, object]) -> dict[str, object]:
+    from music_app.services.cover_refresh_runtime import build_cover_progress_status
+
     browse_state = resolve_active_scan_browse_state(library_state)
     return {
+        **build_cover_progress_status(library_state),
         "scan_in_progress": bool(library_state.get("scan_in_progress")),
         "scan_generation": int(library_state.get("scan_generation") or 0),
         "scan_processed": int(library_state.get("scan_processed") or 0),

@@ -53,6 +53,26 @@ The page body uses a status workspace rather than a centered loader stack.
 
 ## Verification
 
+### October 4 owner-approved progress repair
+
+This repair retains the existing JavaScript/Jinja implementation under the explicit
+no-React-migration compatibility contract above. It does not authorize a new UI
+migration. Preserve all four stage cards and their order; place each stage's
+subprogress inside its existing card. Cover-only work says Fetching covers, with
+completed albums/total and percentage, separate downloaded-cover count, elapsed
+time including preparation, and an explicitly estimated remaining duration when
+measurable. Missing progress or connection failures must not appear as 0/0.
+Stages omitted by a cover-only run say Not needed. Center the Library State block
+only when no Library Health content is present. Existing multi-section layout,
+Back, browse, cancellation and accessibility behavior remain unchanged.
+
+Delivery acceptance: cover-only and full-scan progress, preparation and unknown ETA,
+completion versus submission counters, disconnected status, conditional centering,
+and all existing cards. Add focused contract/rendering tests before implementation.
+Manual acceptance and the required E2E, review, CI and publication gates remain open.
+Deployment/restart of the maintenance process is separately owner-controlled;
+source edits alone cannot change its loaded request allowlist.
+
 - Unit coverage proves the Library Status Page bar is absent from the initial gallery DOM, mounted on open, removed on close, and replaced by the original GalleryBar.
 - Contract coverage proves the new header and dropdown wording.
 - Rendering coverage proves the green ready check, conditional health section, compact shared alert, and responsive state/health layout.

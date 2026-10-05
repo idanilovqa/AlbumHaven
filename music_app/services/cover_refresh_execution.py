@@ -642,7 +642,7 @@ def run_cover_jobs(
         with cache_lock:
             if owns_progress():
                 library_state["covers_current_folder"] = str(folder)
-                library_state["covers_processed"] = index
+                library_state["covers_processed"] = int(library_state.get("covers_processed") or 0) + 1
         # Image selections are committed by the guarded writer per album. Keep
         # lookup outcomes durable too, without republishing the entire inventory.
         if index % 25 == 0:
@@ -740,7 +740,7 @@ def run_cover_jobs(
             with cache_lock:
                 if owns_progress():
                     library_state["covers_current_folder"] = str(folder)
-                    library_state["covers_processed"] = index
+                    library_state["covers_processed"] = index - 1
             cover_path, downloaded, detail = execute_cover_job(
                 job=job,
                 image_extensions=image_extensions,

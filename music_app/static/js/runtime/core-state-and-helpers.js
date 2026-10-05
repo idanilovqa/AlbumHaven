@@ -732,7 +732,7 @@ function renderLibraryLoader(data = {}, options = {}) {
   title.textContent = ready
     ? 'Your local library is ready.'
     : (scanPageVisible && (Boolean(data.scan_in_progress) || relBusy || coverBusy)
-      ? 'Scanning the library'
+      ? (coverBusy && !data.scan_in_progress ? 'Fetching covers' : 'Scanning the library')
       : (lines[0]?.title || 'Loading library'));
   status.textContent = lines[0]?.detail || 'Preparing scan...';
   if (scanSummary) scanSummary.textContent = status.textContent;
@@ -743,6 +743,25 @@ function renderLibraryLoader(data = {}, options = {}) {
       item.classList.toggle('is-current', stateName === 'current');
       item.classList.toggle('is-complete', stateName === 'complete');
       item.classList.toggle('is-future', stateName === 'future');
+      const stage = String(item.getAttribute('data-scan-stage') || '');
+      let detail = '';
+      if ((data.covers_in_progress || data.covers_phase === 'finished') && !data.scan_in_progress && String(data.covers_run_mode || '').startsWith('manual') && ['discover', 'metadata', 'relations'].includes(stage) && !data.relations_in_progress) {
+        detail = 'Not needed for this cover-only run';
+        item.classList.remove('is-complete');
+      } else if (stage === 'covers' && (data.covers_in_progress || (!data.scan_in_progress && data.covers_phase === 'finished'))) {
+        detail = buildCoverProgressDetail(data);
+      } else if (stage === 'relations' && data.relations_in_progress) {
+        detail = `${Number(data.relations_processed || 0)} of ${Number(data.relations_total || 0)} artists`;
+      } else if (['discover', 'metadata'].includes(stage) && data.scan_in_progress) {
+        detail = buildScanEstimateParts(data).join(' · ');
+      }
+      let subprogress = item.querySelector?.('[data-stage-progress]');
+      if (!subprogress && detail && typeof document.createElement === 'function') {
+        subprogress = document.createElement('span');
+        subprogress.setAttribute('data-stage-progress', '');
+        item.appendChild(subprogress);
+      }
+      if (subprogress) subprogress.textContent = detail;
     });
   }
   progress.innerHTML = lines.slice(1).map((line) => `

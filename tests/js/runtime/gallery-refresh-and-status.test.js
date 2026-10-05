@@ -2059,6 +2059,51 @@ test('fetchAndRender ignores an identical in-flight request instead of issuing a
   assert.equal(context.state.ui.activeViewRequestPush, false);
 });
 
+test('startup gallery page remains partial until the configured full followup applies', async () => {
+  const { context, calls, pendingRequests } = createContext();
+  context.state.awaitingInitialDataRefresh = true;
+  const getElementById = context.document.getElementById;
+  const scroll = { scrollTop: 0, clientHeight: 500, scrollHeight: 500, dataset: {}, addEventListener() {} };
+  context.document.getElementById = id => id === 'albums-scroll' ? scroll : getElementById(id);
+  const scheduledTimeouts = [];
+  context.scheduleBrowserTimeout = (callback, delayMs) => {
+    scheduledTimeouts.push({ callback, delayMs });
+    return scheduledTimeouts.length;
+  };
+  const sidebar = context.fetchAndRender('/view-data?surface=albums&payload_tier=sidebar', false, {
+    startupRefresh: true,
+    startupHydrationTier: 'sidebar',
+    startupHydrationFollowupEndpoint: '/view-data?surface=albums&omit_sidebar=1',
+  });
+  pendingRequests[0].resolveWith({
+    artists_sidebar: [{ artist: 'Broadcast', count: 3 }],
+    artist_groups: [{ artist: 'Broadcast', albums: [{ key: 'preview' }] }],
+    artist_count: 10, album_count: 30,
+    payload_tier: 'sidebar', initial_view_partial: true,
+    gallery_page: { offset: 0, next_offset: 6 },
+  });
+  await sidebar;
+  assert.equal(context.startupMetrics.completed, 0);
+  assert.equal(context.state.awaitingInitialDataRefresh, true);
+  context.loadNextGalleryPage();
+  assert.equal(pendingRequests.length, 1, 'Automatic continuation must not cancel the configured startup followup');
+  const followup = scheduledTimeouts.find(timer => timer.delayMs === 350);
+  assert.ok(followup, 'The configured full followup must survive initial page metadata');
+  followup.callback();
+  await flushMicrotasks();
+  assert.equal(pendingRequests[1].url, '/view-data?surface=albums&omit_sidebar=1');
+  pendingRequests[1].resolveWith({
+    artist_groups: [{ artist: 'Broadcast', albums: [{ key: 'complete' }] }],
+    artist_count: 10, album_count: 30, payload_tier: 'full', initial_view_partial: false,
+  });
+  await flushMicrotasks();
+  await flushMicrotasks();
+  assert.equal(context.startupMetrics.completed, 1);
+  assert.equal(context.state.awaitingInitialDataRefresh, false);
+  assert.equal(calls.applyViewPayload.at(-1).payload_tier, 'full');
+  assert.equal(calls.applyViewPayload.at(-1).initial_view_partial, false);
+});
+
 test('fetchAndRender schedules a full startup followup after sidebar-only hydration', async () => {
   const { context, calls, pendingRequests } = createContext();
   const scheduledTimeouts = [];
@@ -2088,7 +2133,7 @@ test('fetchAndRender schedules a full startup followup after sidebar-only hydrat
   scheduledTimeouts[0].callback();
   await flushMicrotasks();
   assert.equal(pendingRequests.length, 2);
-  assert.equal(pendingRequests[1].url, '/view-data?payload_tier=sidebar');
+  assert.equal(pendingRequests[1].url, '/view-data');
   pendingRequests[1].resolveWith({ artist_groups: [{ artist: 'Broadcast' }], album_count: 1 });
   await flushMicrotasks();
   await flushMicrotasks();
@@ -2146,7 +2191,7 @@ test('fetchAndRender still schedules the full startup followup when sidebar hydr
   scheduledTimeouts[0].callback();
   await flushMicrotasks();
   assert.equal(pendingRequests.length, 2);
-  assert.equal(pendingRequests[1].url, '/view-data?payload_tier=sidebar');
+  assert.equal(pendingRequests[1].url, '/view-data');
 
   pendingRequests[1].resolveWith({
     artist_groups: [{ artist: 'Broadcast', albums: [{ key: 'tender-buttons' }] }],
@@ -2296,7 +2341,7 @@ test('dispatchStartupHydrationFollowup retries a queued startup followup when th
   await flushMicrotasks();
 
   assert.equal(pendingRequests.length, 1);
-  assert.equal(pendingRequests[0].url, '/view-data?payload_tier=sidebar');
+  assert.equal(pendingRequests[0].url, '/view-data');
 });
 
 test('dispatchStartupHydrationFollowup keeps the queued startup followup visible until the full fetch begins', async () => {
@@ -2318,7 +2363,7 @@ test('dispatchStartupHydrationFollowup keeps the queued startup followup visible
 
   assert.equal(context.state.ui.pendingStartupHydrationFollowup, null);
   assert.equal(pendingRequests.length, 1);
-  assert.equal(pendingRequests[0].url, '/view-data?payload_tier=sidebar');
+  assert.equal(pendingRequests[0].url, '/view-data');
 });
 
 test('dispatchStartupHydrationFollowup does not age out a required current-generation full hydration', async () => {
@@ -2354,7 +2399,7 @@ test('dispatchStartupHydrationFollowup does not age out a required current-gener
   await flushMicrotasks();
 
   assert.equal(pendingRequests.length, 1);
-  assert.equal(pendingRequests[0].url, '/view-data?payload_tier=sidebar');
+  assert.equal(pendingRequests[0].url, '/view-data');
   assert.equal(context.state.awaitingInitialDataRefresh, true);
 
   pendingRequests[0].resolveWith({

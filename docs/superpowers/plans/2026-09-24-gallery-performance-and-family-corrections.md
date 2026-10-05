@@ -48,4 +48,40 @@ No files are moved and no cover images are overwritten by this slice. Reuse Post
 
 ## Delivery checkpoint
 
+### October 4 startup hydration regression repair
+
+CI exposed startup views remaining at the sidebar tier: automatic root pagination
+downgraded the configured full followup, while page metadata suppressed that
+followup entirely. This repair restores the configured sidebar-to-full startup
+sequence and preserves ordinary root navigation/continuation pagination. It is
+part of the existing warm-up-continuation checklist item, not a new feature.
+Acceptance requires a real-shaped initial sidebar page to remain incomplete
+until its full followup applies, the followup URL to retain `omit_sidebar`, and
+ordinary root requests to retain bounded pages. Existing E2E expectations and
+performance budgets remain unchanged. Compatibility preserves the server's
+existing hydration contract; rollback is limited to this request/readiness
+repair. Review, full hosted CI, and manual acceptance remain merge checkpoints.
+
+Restoring full startup hydration can increase startup payload and rendering cost
+relative to a permanently partial root page. Focused runtime tests prove request
+and readiness behavior only; the unchanged browser performance suite must measure
+that cost before release. No new timing allowance is authorized.
+
+Regression proof: the new sidebar-page case first failed because startup was
+marked complete (`1` rather than `0`); the existing full-followup case failed
+because its URL was downgraded to `payload_tier=sidebar`. The narrow runtime
+repair excludes startup requests from automatic pagination and preserves the
+configured full followup despite initial page metadata. Five existing startup
+unit expectations now require the full URL their test contracts name; no E2E
+expectation changed. Focused verification passed 161/161 tests, zero failures or
+skips, in 1.107 seconds using
+`node --test --test-concurrency=1 tests/js/runtime/gallery-refresh-and-status.test.js tests/js/runtime/bootstrap-init-playback-ownership.test.js`.
+The adversarial follow-up pass found that initial page metadata also cleared
+startup ownership and allowed an automatic continuation to cancel the queued
+full request. An additive assertion reproduced that failure. Startup pages now
+retain the awaiting flag, and automatic continuation waits for startup to
+finish. The final green run above includes that regression and existing ordinary
+root paging and continuation checks. Browser
+startup costs and the complete hosted suite are still unverified.
+
 Keep these changes on the current unmerged multi-root branch for owner manual acceptance. Full applicable review, CI, E2E, and publication gates remain required before release. Do not mark those gates complete from focused tests alone.

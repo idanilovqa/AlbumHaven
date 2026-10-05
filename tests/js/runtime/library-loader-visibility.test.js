@@ -313,7 +313,7 @@ test('renderLibraryLoader keeps the scan title through finalizing, cover, and re
       state.ui.scanPageReturnContext = { view: state.view };
       renderLibraryLoader(scanStatus, { scanPageVisible: true });
     `, context);
-    assert.equal(title.textContent, 'Scanning the library');
+    assert.equal(title.textContent, status.covers_in_progress ? 'Fetching covers' : 'Scanning the library');
   }
 });
 
@@ -381,7 +381,7 @@ test('buildLoaderStatusLines exposes cover and relation work on the explicit Sca
     relations_total: 9,
   });
 
-  assert.equal(coverLines[0].title, 'Updating cover art');
+  assert.equal(coverLines[0].title, 'Fetching covers');
   assert.equal(relationLines[0].title, 'Building artist families');
 });
 

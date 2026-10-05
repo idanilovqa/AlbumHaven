@@ -125,6 +125,62 @@ def test_automatic_discovery_keeps_match_after_musicbrainz_failure():
     assert candidates[0].url == "https://f4.bcbits.com/img/a123_10.jpg"
 
 
+@pytest.mark.parametrize("automatic", [True, False])
+@pytest.mark.parametrize("catalog_match", [True, False])
+@pytest.mark.parametrize("stalled", [True, False])
+def test_known_account_catalog_does_not_wait_for_musicbrainz_in_automatic_search(automatic, catalog_match, stalled):
+    from music_app.services import cover_provider_bandcamp as bandcamp
+    from music_app.services.cover_provider_deadline import automatic_cover_budget
+
+    catalog_requested = Event()
+    discovery_finished = Event()
+    catalog_calls = []
+    deadline = time.perf_counter() + 0.5
+
+    def get_context(*_args, **kwargs):
+        try:
+            while stalled and not kwargs["should_cancel"]():
+                time.sleep(0.001)
+            return {}
+        finally:
+            discovery_finished.set()
+
+    def get_text(url, *_args, **_kwargs):
+        if url == "https://testartist.bandcamp.com/":
+            catalog_calls.append(url)
+            catalog_requested.set()
+            return '<a href="/album/test-album-2">Test Album</a>'
+        if catalog_match and url.endswith("/album/test-album-2"):
+            return (
+                '<meta property="og:title" content="Test Album | Test Artist">'
+                '<meta property="og:description" content="Test Album by Test Artist">'
+                '<meta property="og:image" content="https://f4.bcbits.com/img/a123_5.jpg">'
+            )
+        return None
+
+    with automatic_cover_budget(0.5) if automatic else nullcontext():
+        candidates = bandcamp.search_bandcamp_cover_candidates(
+            "Test Artist", "Test Album", None, 2001, "AlbumHavenTests/1.0",
+            http_get_text=get_text,
+            match_score=lambda **_kwargs: 0.93,
+            similarity=cover_provider_matching.similarity,
+            normalize=cover_provider_matching.normalize,
+            parse_year=cover_provider_matching.parse_year,
+            extract_og_image=cover_provider_fallback_web.extract_og_image,
+            extract_meta_content=cover_provider_apple.extract_apple_meta_content,
+            probe_match_candidates=_probe_from_matches,
+            fetch_musicbrainz_bandcamp_context=get_context,
+            should_cancel=lambda: time.perf_counter() >= deadline,
+            log_event=None, logger=_logger(),
+        )
+    assert discovery_finished.wait(1.0)
+    assert catalog_requested.is_set() is (automatic or not stalled)
+    assert len(catalog_calls) <= 1
+    assert bool(candidates) is (catalog_match and (automatic or not stalled))
+    if candidates:
+        assert candidates[0].url == "https://f4.bcbits.com/img/a123_10.jpg"
+
+
 def test_candidate_url_upgrades_mid_size_bcbits_images():
     from music_app.services import cover_provider_bandcamp as bandcamp
 

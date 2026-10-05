@@ -9,6 +9,11 @@ import urllib.error
 import urllib.request
 from collections.abc import Callable
 
+from music_app.services.cover_provider_deadline import (
+    automatic_cover_budget_active,
+    remaining_automatic_cover_seconds,
+)
+
 _MIN_REQUEST_INTERVAL_SECONDS = 1.05
 _MAX_ATTEMPTS = 3
 _SUCCESS_CACHE_TTL_SECONDS = 60 * 60 * 6
@@ -81,13 +86,29 @@ def _mark_request_complete() -> None:
         _NEXT_ALLOWED_AT_MONOTONIC = time.monotonic() + _MIN_REQUEST_INTERVAL_SECONDS
 
 
-def _wait_for_slot() -> None:
+def _wait_for_delay(delay: float, should_cancel: Callable[[], bool] | None = None) -> bool:
+    if not automatic_cover_budget_active():
+        time.sleep(delay)
+        return True
+    end = time.monotonic() + delay
+    while True:
+        if callable(should_cancel) and should_cancel():
+            return False
+        remaining = remaining_automatic_cover_seconds(float("inf"))
+        delay = end - time.monotonic()
+        if delay <= 0:
+            return True
+        time.sleep(min(delay, remaining, 0.05))
+
+
+def _wait_for_slot(should_cancel: Callable[[], bool] | None = None) -> bool:
     while True:
         with _STATE_LOCK:
             delay = max(0.0, _NEXT_ALLOWED_AT_MONOTONIC - time.monotonic())
         if delay <= 0:
-            return
-        time.sleep(delay)
+            return True
+        if not _wait_for_delay(delay, should_cancel):
+            return False
 
 
 def _block_reason_from_http_error(status_code: int, body: bytes) -> str:
@@ -170,12 +191,15 @@ def get_json(
         for attempt in range(1, _MAX_ATTEMPTS + 1):
             if callable(should_cancel) and should_cancel():
                 return None, {"status": "canceled", "cache_hit": False, "attempt": attempt}
-            _wait_for_slot()
+            slot_ready = _wait_for_slot(should_cancel) if automatic_cover_budget_active() else _wait_for_slot()
+            if slot_ready is False:
+                return None, {"status": "canceled", "cache_hit": False, "attempt": attempt}
             if callable(should_cancel) and should_cancel():
                 return None, {"status": "canceled", "cache_hit": False, "attempt": attempt}
             request = urllib.request.Request(url, headers=headers)
+            request_timeout = remaining_automatic_cover_seconds(float(timeout or 15.0))
             try:
-                with urllib.request.urlopen(request, timeout=float(timeout or 15.0)) as response:
+                with urllib.request.urlopen(request, timeout=request_timeout) as response:
                     payload = json.loads(response.read().decode("utf-8"))
                 _mark_request_complete()
                 if callable(should_cancel) and should_cancel():
@@ -200,8 +224,10 @@ def get_json(
                     _set_cached_value(url, accept, None)
                     return None, {"status": "blocked", "cache_hit": False, "attempt": attempt, "blocked_reason": block_reason}
                 if _is_retryable_http_status(int(getattr(exc, "code", 0) or 0)) and attempt < _MAX_ATTEMPTS:
-                    time.sleep(_backoff_delay(attempt))
+                    if not _wait_for_delay(_backoff_delay(attempt), should_cancel):
+                        return None, {"status": "canceled", "cache_hit": False, "attempt": attempt}
                     continue
+                remaining_automatic_cover_seconds(float("inf"))
                 _set_cached_value(url, accept, None)
                 return None, {"status": f"http_{int(getattr(exc, 'code', 0) or 0)}", "cache_hit": False, "attempt": attempt}
             except (urllib.error.URLError, ssl.SSLError, TimeoutError, socket.timeout) as exc:
@@ -214,8 +240,10 @@ def get_json(
                     _set_cached_value(url, accept, None)
                     return None, {"status": "blocked", "cache_hit": False, "attempt": attempt, "blocked_reason": block_reason}
                 if attempt < _MAX_ATTEMPTS:
-                    time.sleep(_backoff_delay(attempt))
+                    if not _wait_for_delay(_backoff_delay(attempt), should_cancel):
+                        return None, {"status": "canceled", "cache_hit": False, "attempt": attempt}
                     continue
+                remaining_automatic_cover_seconds(float("inf"))
                 _set_cached_value(url, accept, None)
                 return None, {"status": "connection_error", "cache_hit": False, "attempt": attempt}
             except Exception as exc:
@@ -228,8 +256,10 @@ def get_json(
                     _set_cached_value(url, accept, None)
                     return None, {"status": "blocked", "cache_hit": False, "attempt": attempt, "blocked_reason": block_reason}
                 if attempt < _MAX_ATTEMPTS:
-                    time.sleep(_backoff_delay(attempt))
+                    if not _wait_for_delay(_backoff_delay(attempt), should_cancel):
+                        return None, {"status": "canceled", "cache_hit": False, "attempt": attempt}
                     continue
+                remaining_automatic_cover_seconds(float("inf"))
                 _set_cached_value(url, accept, None)
                 return None, {"status": type(exc).__name__, "cache_hit": False, "attempt": attempt}
 

@@ -112,3 +112,28 @@ folder-derived Artist Family evidence. Follow
 loading, source-filtered totals, hidden artist information during search, and
 source-style search regressions. These corrections do not mark manual
 acceptance, E2E, full CI, or publication complete.
+
+### October 4 CI contract reconciliation
+
+PR22 run `37218749498` at `f4cc9bc1` reported the same 15 JavaScript
+failures on portable and Windows runners. Twelve canonical Appearance object
+assertions omitted the approved `library_source_indicators` defaults
+(`card_colors=false`, `hover_outline_colors=false`, `icons=true`). The two
+test-owned defaults now include that additive field without removing any
+existing save, cancel, session, compatibility, or recent-color assertion.
+
+The remaining three JavaScript failures and the component prerequisite failure
+shared stale discovery accounting. The four existing `librarySourceCard.spec.js`
+cases implement the approved design's individual hover/focus labels, independent
+duplicate warning, and neutral Main segment in dark/light mixed-source frames.
+They are now registered explicitly in the test-data matrix; exact component
+and complete inventory counts advance from 189/412 to 193/416. No component
+assertion, fixture isolation contract, or execution gate was weakened.
+
+Focused verification passed 100/100 tests, zero failures/skips, in 46.218 seconds:
+`node --test --test-concurrency=1 tests/js/runtime/appearance-palettes.test.js tests/js/runtime/appearance-waveform-recents.test.js tests/js/ci-fixture-data-contracts.test.js tests/js/validate-foundation-gates.test.js`.
+The initial sandbox run passed 96/100; four discovery checks could not open
+Playwright's transform-cache files (`EPERM`). Repeating the same focused scope
+with cache access passed, including exact discovery and ownership checks.
+Component execution and the full hosted pipeline remain required; the earlier
+failed manifest upload was downstream of inventory validation.

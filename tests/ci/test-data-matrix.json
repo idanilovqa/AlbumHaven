@@ -1,5 +1,57 @@
 [
   {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/librarySourceCard.spec.js",
+    "case": "artwork hover reveals icons but only the individual action expands its label",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": ["source-icons-on-artwork-hover", "individual-action-label-expansion"],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/librarySourceCard.spec.js",
+    "case": "disabling source icons preserves the independently focusable duplicate warning",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": ["hidden-source-icons", "independent-duplicate-warning-focus"],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/librarySourceCard.spec.js",
+    "case": "mixed sources keep the neutral Main segment in the dark colored frame",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": ["mixed-source-card-and-hover-frame", "dark-theme-neutral-main-segment"],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/librarySourceCard.spec.js",
+    "case": "mixed sources keep the neutral Main segment in the light colored frame",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": ["mixed-source-card-and-hover-frame", "light-theme-neutral-main-segment"],
+    "ownerApproval": "approved"
+  },
+  {
     "config": "playwright.config.js",
     "project": "functional",
     "test": "tests/e2e/specs/artistTreePersistence.spec.js",

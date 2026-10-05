@@ -30,6 +30,7 @@ from music_app.services.cover_provider_candidates import (
     CoverCandidate,
     cover_candidate_to_lookup_match,
 )
+from music_app.services.cover_provider_outcomes_postgres import persist_cover_provider_outcomes
 from music_app.services.library import build_albums_from_file_cache
 from music_app.services.library_roots import library_root_cache_identity
 from music_app.services.scan_cache_persistence import select_scan_cache_adapter
@@ -546,6 +547,36 @@ def run_cover_jobs(
         detail["has_cover"] = has_cover
         detail["cover_path"] = cover_value
         job_results.append(detail)
+        if config and job.get("album_id") is not None:
+            provider_outcomes = {}
+            for trace_item in detail.get("resolver_trace") or []:
+                if not isinstance(trace_item, Mapping):
+                    continue
+                provider = str(trace_item.get("resolver") or "").strip("_").lower()
+                status = str(trace_item.get("status") or "").lower()
+                reason = str(trace_item.get("reason") or "").lower()
+                if not provider:
+                    continue
+                provider_outcomes[provider] = {
+                    "category": "recovered" if status == "matched" else ("no_candidate" if status == "no_candidate" else ("timeout" if "timeout" in reason else (
+                        "rate_limit_quota" if "quota" in reason or "429" in reason else "server_network"
+                    ))),
+                    "http_status": trace_item.get("http_status"),
+                    "retry_at": trace_item.get("retry_at"),
+                }
+            if provider_outcomes:
+                try:
+                    persist_cover_provider_outcomes(
+                        config,
+                        album_id=job.get("album_id"),
+                        album_key=job.get("album_key"),
+                        outcomes=provider_outcomes,
+                    )
+                except Exception as exc:
+                    logger.warning(
+                        "Automatic provider outcome persistence failed album_id=%s error=%r",
+                        job.get("album_id"), exc,
+                    )
 
         logger.verbose(
             "Cover fetch processed artist=%r album=%r folder=%r downloaded=%s has_cover=%s",

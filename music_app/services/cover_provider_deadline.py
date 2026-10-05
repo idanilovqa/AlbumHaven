@@ -36,6 +36,35 @@ class AutomaticCoverSearchFailed(RuntimeError):
         self.retry_at = retry_at
 
 
+def classify_automatic_provider_failure(
+    http_status: int | None,
+    *,
+    provider: str,
+    timed_out: bool = False,
+    retry_at: float | None = None,
+) -> dict[str, object]:
+    """Return sanitized, durable classification metadata for an automatic failure."""
+    status = int(http_status) if http_status is not None else None
+    if timed_out:
+        category = "timeout"
+    elif status == 429:
+        category = "rate_limit_quota"
+    elif status in (401, 403):
+        category = "authorization"
+    elif status is not None and 400 <= status < 500:
+        category = "bad_request"
+    elif status is not None and status >= 500:
+        category = "server_network"
+    else:
+        category = "server_network"
+    return {
+        "category": category,
+        "provider": str(provider or "unknown").strip().lower() or "unknown",
+        "http_status": status,
+        "retry_at": retry_at,
+    }
+
+
 _AUTOMATIC_COVER_DEADLINE: ContextVar[float | None] = ContextVar(
     "automatic_cover_deadline", default=None,
 )

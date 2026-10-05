@@ -53,6 +53,16 @@ def test_automatic_search_failure_remains_backward_compatible_without_details():
     assert failure.retry_at is None
 
 
+def test_classify_automatic_provider_failure_uses_safe_categories():
+    from music_app.services.cover_provider_deadline import classify_automatic_provider_failure
+
+    assert classify_automatic_provider_failure(429, provider="spotify")["category"] == "rate_limit_quota"
+    assert classify_automatic_provider_failure(401, provider="deezer")["category"] == "authorization"
+    assert classify_automatic_provider_failure(422, provider="deezer")["category"] == "bad_request"
+    assert classify_automatic_provider_failure(503, provider="deezer")["category"] == "server_network"
+    assert classify_automatic_provider_failure(None, provider="deezer", timed_out=True)["category"] == "timeout"
+
+
 def test_expired_automatic_cover_budget_raises_before_network_request():
     from music_app.services.cover_provider_deadline import (
         AutomaticCoverDeadlineExceeded,

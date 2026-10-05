@@ -18,6 +18,7 @@ from collections.abc import Callable
 from music_app.services.cover_provider_deadline import (
     AutomaticCoverDeadlineExceeded,
     AutomaticCoverSearchFailed,
+    classify_automatic_provider_failure,
     automatic_cover_budget_active,
     remaining_automatic_cover_seconds,
 )
@@ -214,7 +215,8 @@ def _http_get_bytes(
             or status >= 500
             or (apple_api_request and 400 <= status < 500)
         ):
-            raise AutomaticCoverSearchFailed() from exc
+            failure = classify_automatic_provider_failure(status, provider=service)
+            raise AutomaticCoverSearchFailed(**failure) from exc
         return None
     except urllib.error.URLError as exc:
         elapsed_ms = (time.perf_counter() - started_at) * 1000
@@ -248,13 +250,15 @@ def _http_get_bytes(
         if is_timeout and automatic_cover_budget_active():
             raise AutomaticCoverDeadlineExceeded() from exc
         if automatic_cover_budget_active():
-            raise AutomaticCoverSearchFailed() from exc
+            failure = classify_automatic_provider_failure(None, provider=service)
+            raise AutomaticCoverSearchFailed(**failure) from exc
         return None
     except Exception as exc:
         if isinstance(exc, TimeoutError) and automatic_cover_budget_active():
             raise AutomaticCoverDeadlineExceeded() from exc
         if automatic_cover_budget_active():
-            raise AutomaticCoverSearchFailed() from exc
+            failure = classify_automatic_provider_failure(None, provider=service)
+            raise AutomaticCoverSearchFailed(**failure) from exc
         elapsed_ms = (time.perf_counter() - started_at) * 1000
         if service == "apple":
             append_trace(

@@ -2260,9 +2260,40 @@ class PostgresLibraryBrowseRepository:
                 )
                 return list(cursor.fetchall())
             if normalized_album_key is not None:
+                candidate_keys = [normalized_album_key]
+                if normalized_album_key != str(album_key or "").strip():
+                    # Separate-release keys use canonical album metadata, which
+                    # can differ from the durable persisted artist credit.
+                    identities = active_connection.execute("""
+                        select albums.album_key, albums.title as album_title,
+                          coalesce(nullif(albums.metadata ->> 'album_artist', ''),
+                                   artists.name, '') as album_artist,
+                          albums.metadata ->> 'edition' as album_edition
+                        from app.bootstrap_owners owners
+                        join library.libraries libraries
+                          on libraries.owner_account_id = owners.account_id
+                          and libraries.name = 'Local Library'
+                          and libraries.library_kind = 'local'
+                        join library.local_albums albums
+                          on albums.library_id = libraries.id
+                        left join library.local_artists artists
+                          on artists.id = albums.artist_id
+                          and artists.library_id = albums.library_id
+                        where owners.owner_key = 'local-bootstrap-owner'
+                    """, {}).fetchall()
+                    candidate_keys = [
+                        str(identity["album_key"])
+                        for row in identities
+                        if (identity := _row_mapping(row))
+                        and _album_separate_release_key(
+                            str(identity.get("album_artist") or ""),
+                            str(identity.get("album_title") or ""),
+                            identity.get("album_edition"),
+                        ) == normalized_album_key
+                    ]
                 cursor = active_connection.execute(
                     _problematic_files_sql(duplicate_candidates=True),
-                    {"album_ids": _load_duplicate_candidate_album_ids(active_connection, [normalized_album_key], repository=self)},
+                    {"album_ids": _load_duplicate_candidate_album_ids(active_connection, candidate_keys, repository=self)},
                 )
                 return list(cursor.fetchall())
             cursor = active_connection.execute(

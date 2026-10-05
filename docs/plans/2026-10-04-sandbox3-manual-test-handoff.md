@@ -1,5 +1,32 @@
 # Sandbox3 manual-test handoff
 
+## Problematic separate-release detail identity repair
+
+- Outcome: resolve the exact summary identity when a separate release's canonical
+  artist differs from its persisted album credit; repair FTC-UTIL-PROBLEMS-013/007
+  without changing their acceptance contracts.
+- Scope: CI functional/detail checklist; detail-only candidate resolution and
+  focused summary-to-loader regression. Preserve the shared duplicate resolver.
+- Prerequisites: retained HTTP 200 summary / HTTP 404 detail evidence, completed
+  isolated-run cleanup, and exclusive focused pytest lane.
+- Acceptance: composite persisted credit resolves canonical summary key; exact
+  projected year remains authoritative; wrong year/title and other owner/library
+  candidates cannot leak. Load compact scoped album identity fields before full
+  file metadata, retaining existing physical-container duplicate validation.
+- Compatibility/rollback: no schema, persisted-data, public payload, UI, timeout,
+  or test-flow change. Revert the detail resolver and its regression together.
+- Checkpoint: focused RED/GREEN, two complete independent reviews, then unchanged
+  focused browser cases; full hosted CI and existing release gates remain open.
+- Verification: the new real-loader regression failed for both existing years
+  with `detail is None` before repair. After repair, 135 focused problematic-file
+  and duplicate-identity tests passed (220 unrelated cases deselected), including
+  absent year/title and foreign-library negatives. Scope is guarded at the SQL
+  connection boundary; no live database isolation test was run in this slice.
+- Query cost: separate-release detail adds one compact album-identity read (key,
+  title, canonical artist, edition), with no track/file join or metadata payload.
+  Existing duplicate inventory/cache and final exact projected-key filtering are
+  unchanged. Browser verification and two independent reviews remain pending.
+
 ## Focused functional runner PowerShell selection
 
 - Outcome: let the supported isolated functional runner provision and tear down
@@ -19,6 +46,36 @@
   restarted. No test timeout, retry or expectation changes are allowed.
 - Checkpoint: focused RED/GREEN and two independent review passes before the
   original four functional cases run; hosted CI still gates publication.
+- Verification: new resolver regression failed before the repair; all eight
+  focused runner tests passed afterward. Two independent reviews completed
+  before browser execution. The repair was committed as `2fcc7909`.
+- Fixture provenance: authenticated repository acquisition verified release
+  `fixtures-v1.0.25`, manifest SHA256
+  `e56a515ff4073fa1c0e7e2b9a91a5217259344415c71de0b068af3615eb09e60`
+  and its archive checksum. Existing v1.0.22 files were not replaced. A new
+  task-owned distribution envelope supplied the supported local runner.
+- Unchanged four-case result: FTC-UTIL-PROBLEMS-013 and -007 failed their
+  60-second selected-detail waits. The -013 trace shows list HTTP 200 followed
+  by selected album detail HTTP 404 (`Problematic album not found.`), with
+  the UI displaying `Album details unavailable`. FTC-GALLERY-031 passed its
+  original startup hydration/totals contract and subsequent search/hover cases,
+  then failed at line 108 waiting for `[data-artist-info-trigger]` until the
+  unchanged 180-second test timeout. FTC-GALLERY-033 passed in 38.6 seconds.
+- Evidence: private `tmp/ci22-functional-1791165159050/functional.log`; retained
+  output and blob artifacts beneath
+  `tmp/ci22-functional-1791165159050/runner-temp/album-haven-functional-local-fed481ec6185-gallery_search_visual/`.
+  Failure output waves `wave-01-01-playwright-config-js`,
+  `wave-01-02-playwright-config-js` and `wave-01-03-playwright-config-js` retain
+  page snapshots and full traces containing 319, 326 and 192 screenshot
+  resources respectively. No waits, expectations or E2E scenarios were edited.
+- Cleanup: ordinary failure exit 1, not cleanup-failure exit 2. Exact disposable
+  database `album_haven_ci_local_fed481ec6185` and all three suffixed roles have
+  independent zero-count verification. Ports 54196/54198 have no listeners;
+  original owned app/browser/runner processes exited. The numeric runner PID
+  was later reused by the audit's own `rtk.exe`, distinguished by executable
+  and creation time. Runtime fixture copies, state and password files were
+  removed; failure evidence and downloaded source fixtures remain. Existing
+  PostgreSQL 18 stayed running; production and sandbox services were untouched.
 
 ## Isolated CI duplicate and live-fixture repair
 

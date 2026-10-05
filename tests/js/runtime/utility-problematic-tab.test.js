@@ -94,6 +94,26 @@ function loadHelper(stateOverrides = {}) {
   return { calls, context };
 }
 
+test('physical warning filters retain every affected album and track exclusions in counts', () => {
+  const { context } = loadHelper();
+  const mixed = 'Mixed album metadata in one folder';
+  const empty = 'Empty audio file';
+  const items = [
+    { key: 'mixed-first', problem_reasons: [mixed] },
+    { key: 'mixed-second', problem_reasons: [mixed] },
+    { key: 'empty', problem_reasons: [empty] },
+    { key: 'both', problem_reasons: [mixed, empty] },
+  ];
+  const filtered = (filters) => items.filter((item) => context.problematicAlbumMatchesFilters(item, filters));
+  assert.deepEqual(filtered([mixed]).map((item) => item.key), ['mixed-first', 'mixed-second', 'both']);
+  assert.equal(filtered([empty]).length, 2);
+  assert.deepEqual(filtered([mixed, empty]).map((item) => item.key), ['both']);
+  items[3].problem_reasons = [mixed];
+  assert.equal(filtered([empty]).length, 1);
+  assert.equal(filtered([mixed]).length, 3);
+  assert.equal(filtered([mixed, empty]).length, 0);
+});
+
 test('applying a problem filter preserves the selected album when it still matches', () => {
   const { context, calls } = loadHelper({
     problematicFiles: [

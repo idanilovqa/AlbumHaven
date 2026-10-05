@@ -3366,6 +3366,8 @@ def _problematic_file_entry_from_row(row_payload: Mapping[str, object]) -> dict[
         "path": track_path,
         "mtime": file_entry.get("mtime"),
         "size": file_entry.get("size"),
+        "_physical_file_size": row_payload.get("file_size"),
+        "_mixed_album_folder": row_payload.get("file_mixed_album_folder") is True,
         "album": required_text_value("album", "file_album", row_payload.get("album_title")),
         "album_artist": required_text_value(
             "album_artist",
@@ -3415,6 +3417,8 @@ def _album_file_year_mismatch(album: Mapping[str, object]) -> bool:
 
 
 _PROBLEM_REASON_IDENTITY_CODES = {
+    "Empty audio file": "empty-audio-file",
+    "Mixed album metadata in one folder": "mixed-album-folder",
     "Missing artist": "missing-artist",
     "Missing album": "missing-album",
     "Missing track title": "missing-track-title",
@@ -3568,6 +3572,11 @@ def _problematic_album_reasons(album: Mapping[str, object]) -> list[str]:
 
     for entry in file_entries:
         path = str(entry.get("path") or "")
+        for reason in _physical_file_problem_reasons(entry):
+            if not _problem_reason_is_ignored(
+                ignored_repair_keys, path, reason, scope="file",
+            ):
+                add(reason)
         for field_name, label in (
             ("album", "Album"),
             ("title", "Track title"),
@@ -3916,6 +3925,15 @@ def _problematic_encoding_repair_preview(
     return result if include_preview_rows else {**result, "preview_rows": []}
 
 
+def _physical_file_problem_reasons(entry: Mapping[str, object]) -> Iterable[str]:
+    # Cached scan entries can synthesize size=0 when the canonical size is unknown.
+    size = entry.get("_physical_file_size")
+    if type(size) is int and size == 0:
+        yield "Empty audio file"
+    if entry.get("_mixed_album_folder") is True:
+        yield "Mixed album metadata in one folder"
+
+
 def _iter_problematic_track_reasons(
     album: Mapping[str, object],
     *,
@@ -3983,6 +4001,8 @@ def _iter_problematic_track_reasons(
                 if reason_fields is not None:
                     reason_fields[reason] = field
 
+        for reason in _physical_file_problem_reasons(entry):
+            add(reason, "problem-file")
         for field_name, label in (
             ("album", "Album"),
             ("title", "Track title"),
@@ -7419,6 +7439,105 @@ def _problematic_files_sql(
         raise ValueError("Problematic candidate query modes require candidate_summary=True.")
     if candidate_ids_only and selected_album_ids:
         raise ValueError("Problematic candidate query modes are mutually exclusive.")
+    inventory_physical_context = candidate_summary and not selected_album_ids
+    physical_scope_ctes = ""
+    physical_scope_join = ""
+    if not inventory_physical_context:
+        physical_scope_ctes = r"""
+        physical_seed_folders as materialized (
+          select distinct selected_albums.library_id, seed_files.library_root_id,
+            regexp_replace(case when library.local_path_style(seed_files.private_path) = 'windows'
+              then replace(library.local_path_key(seed_files.private_path), chr(92), '/')
+              else library.local_path_key(seed_files.private_path) end, '/[^/]*$', '') as physical_parent
+          from selected_albums
+          join library.local_tracks seed_tracks
+            on seed_tracks.album_id = selected_albums.id
+           and seed_tracks.library_id = selected_albums.library_id
+          join library.local_track_files seed_files on seed_files.track_id = seed_tracks.id
+          join library.library_roots seed_roots
+            on seed_roots.id = seed_files.library_root_id
+           and seed_roots.library_id = selected_albums.library_id
+           and seed_roots.is_active is true
+          where seed_files.scan_cache_stale is false
+        ),
+        physical_scope_file_ids as materialized (
+          select distinct scoped_files.id
+          from physical_seed_folders
+          join lateral (
+            select id, track_id, private_path
+            from library.local_track_files
+            where library_root_id = physical_seed_folders.library_root_id
+              and regexp_replace(case when library.local_path_style(private_path) = 'windows'
+                then replace(library.local_path_key(private_path), chr(92), '/')
+                else library.local_path_key(private_path) end, '/[^/]*$', '')
+                = physical_seed_folders.physical_parent
+              and scan_cache_stale is false
+            offset 0
+          ) scoped_files on true
+          join library.local_tracks scoped_tracks on scoped_tracks.id = scoped_files.track_id
+          where scoped_tracks.library_id = physical_seed_folders.library_id
+        ),
+        """
+        physical_scope_join = "join physical_scope_file_ids on physical_scope_file_ids.id = library.local_track_files.id"
+    # This context precedes album selection: an off-page album can share the
+    # selected file's folder. Root identity and immediate parent remain distinct.
+    physical_file_ctes = r"""
+        active_problem_rows as materialized (
+          select library.local_track_files.id as file_id,
+            library.local_tracks.album_id, library.local_tracks.library_id,
+            library.local_track_files.library_root_id,
+            library.local_track_files.file_size_bytes as file_size,
+            regexp_replace(
+              case when library.local_path_style(library.local_track_files.private_path) = 'windows'
+                then replace(library.local_path_key(library.local_track_files.private_path), chr(92), '/')
+                else library.local_path_key(library.local_track_files.private_path) end,
+              '/[^/]*$', ''
+            ) as physical_parent,
+            regexp_replace(replace(library.local_track_files.private_path, chr(92), '/'), '/[^/]*$', '') as source_directory,
+            library.local_track_files.track_id,
+            coalesce(nullif(library.local_tracks.disc_number, 0), 1) as disc_number,
+            case when library.local_tracks.track_number > 0
+              then library.local_tracks.track_number end as effective_track_number,
+            (library.local_tracks.scan_title_problem_candidate is true
+              or library.local_tracks.track_number is null
+              or library.local_tracks.track_number <= 0) as track_problem,
+            (library.local_track_files.scan_file_entry_is_object is true
+              and (library.local_track_files.scan_file_text_mojibake_candidate is true
+                or library.local_track_files.scan_file_metadata_problem_candidate is true)) as file_problem,
+            nullif(lower(btrim(library.local_track_files.scan_file_album)), '') as file_album,
+            nullif(lower(btrim(library.local_track_files.scan_file_album_artist)), '') as file_album_artist,
+            nullif(btrim(coalesce(library.local_track_files.scan_file_year, '')), '') as file_year
+          from library.local_track_files
+          __PHYSICAL_SCOPE_JOIN__
+          join library.local_tracks
+            on library.local_tracks.id = library.local_track_files.track_id
+          join bootstrap_context on bootstrap_context.library_id = library.local_tracks.library_id
+          join library.library_roots roots
+            on roots.id = library.local_track_files.library_root_id
+           and roots.library_id = library.local_tracks.library_id
+           and roots.is_active is true
+          where library.local_track_files.scan_cache_stale is false
+            and library.local_path_key(library.local_track_files.private_path) <> ''
+        ),
+        mixed_physical_folders as (
+          select library_id, library_root_id, physical_parent
+          from active_problem_rows
+          group by library_id, library_root_id, physical_parent
+          having count(distinct album_id) > 1
+        ),
+        physical_file_context as materialized (
+          select files.*,
+            mixed.library_id is not null as file_mixed_album_folder
+          from active_problem_rows files
+          left join mixed_physical_folders mixed
+            on mixed.library_id = files.library_id
+           and mixed.library_root_id = files.library_root_id
+           and mixed.physical_parent = files.physical_parent
+        ),
+    """
+    physical_file_ctes = physical_scope_ctes + physical_file_ctes.replace(
+        "__PHYSICAL_SCOPE_JOIN__", physical_scope_join,
+    )
     candidate_ctes = ""
     selected_album_join = ""
     selected_album_filter = (
@@ -7447,42 +7566,6 @@ def _problematic_files_sql(
             "coalesce(nullif(library.local_albums.metadata ->> 'album_artist', ''), library.local_artists.name, '')",
         )
         candidate_ctes = """
-        active_problem_rows as materialized (
-          select
-            library.local_tracks.album_id,
-            regexp_replace(replace(library.local_track_files.private_path, chr(92), '/'), '/[^/]*$', '') as source_directory,
-            library.local_track_files.track_id,
-            coalesce(nullif(library.local_tracks.disc_number, 0), 1) as disc_number,
-            case
-              when library.local_tracks.track_number > 0
-                then library.local_tracks.track_number
-            end as effective_track_number,
-            (
-              library.local_tracks.scan_title_problem_candidate is true
-              or library.local_tracks.track_number is null
-              or library.local_tracks.track_number <= 0
-            ) as track_problem,
-            (
-              library.local_track_files.scan_file_entry_is_object is true
-              and (
-                library.local_track_files.scan_file_text_mojibake_candidate is true
-                or library.local_track_files.scan_file_metadata_problem_candidate is true
-              )
-            ) as file_problem,
-            nullif(lower(btrim(library.local_track_files.scan_file_album)), '') as file_album,
-            nullif(lower(btrim(library.local_track_files.scan_file_album_artist)), '') as file_album_artist,
-            nullif(btrim(coalesce(library.local_track_files.scan_file_year, '')), '') as file_year
-          from library.local_track_files
-          join library.local_tracks
-            on library.local_tracks.id = library.local_track_files.track_id
-          where library.local_track_files.scan_cache_stale is false
-            and (
-              (select count(*) = 1 from library.libraries)
-              or library.local_tracks.library_id = (
-                select library_id from bootstrap_context
-              )
-            )
-        ),
         duplicate_album_ids as (
           select distinct candidate.album_id
           from active_problem_rows candidate
@@ -7656,6 +7739,10 @@ def _problematic_files_sql(
         candidate_album_ids as (
           select active_candidate_ids.album_id from active_candidate_ids
           union
+          select physical_file_context.album_id from physical_file_context
+          where physical_file_context.file_size = 0
+             or physical_file_context.file_mixed_album_folder
+          union
           select required_text_missing_album_ids.album_id
           from required_text_missing_album_ids
           union
@@ -7690,6 +7777,7 @@ def _problematic_files_sql(
               where app.bootstrap_owners.owner_key = 'local-bootstrap-owner'
               limit 1
             ),
+            {physical_file_ctes}
             {candidate_ctes_sql}
             select candidate_album_ids.album_id
             from candidate_album_ids;
@@ -7728,6 +7816,8 @@ def _problematic_files_sql(
         active_track_file_projection = """
             library.local_track_files.track_id,
             library.local_track_files.private_path,
+            library.local_track_files.id as file_id,
+            library.local_track_files.file_size_bytes as file_size,
             library.local_track_files.library_root_id as file_library_root_id,
             (select root_kind from library.library_roots where id = library.local_track_files.library_root_id) as file_library_root_category,
             library.local_track_files.scan_file_entry_is_object as file_entry_is_object,
@@ -7764,6 +7854,8 @@ def _problematic_files_sql(
           selected_albums.album_root_provenance,
         """
         file_result_projection = """
+          active_track_files.file_size,
+          active_track_files.file_mixed_album_folder,
           active_track_files.file_entry_is_object,
           active_track_files.file_album,
           active_track_files.file_album_artist,
@@ -7790,6 +7882,8 @@ def _problematic_files_sql(
         active_track_file_projection = """
             library.local_track_files.track_id,
             library.local_track_files.private_path,
+            physical_file_context.file_size,
+            physical_file_context.file_mixed_album_folder,
             library.local_track_files.library_root_id as file_library_root_id,
             library.local_track_files.metadata ->> 'library_root_category' as file_library_root_category,
             library.local_track_files.metadata,
@@ -7802,6 +7896,8 @@ def _problematic_files_sql(
         """
         album_result_projection = "selected_albums.metadata as album_metadata,"
         file_result_projection = """
+          active_track_files.file_size,
+          active_track_files.file_mixed_album_folder,
           active_track_files.metadata #> '{scan_cache,file_entry}' as file_entry,
           active_track_files.file_text_mojibake_candidate,
           active_track_files.exception_type,
@@ -7811,7 +7907,7 @@ def _problematic_files_sql(
     if candidate_summary:
         selected_active_track_file_rows_sql = f"""
         selected_active_track_file_rows as materialized (
-          select selected_track_file.*
+          select selected_track_file.*, physical_file_context.file_mixed_album_folder
           from selected_tracks
           cross join lateral (
             select
@@ -7838,6 +7934,8 @@ def _problematic_files_sql(
               and library.local_track_files.scan_cache_stale is false
             offset 0
           ) selected_track_file
+          join physical_file_context
+            on physical_file_context.file_id = selected_track_file.file_id
         ),
         """
     else:
@@ -7846,6 +7944,8 @@ def _problematic_files_sql(
           select
             {active_track_file_projection}
           from library.local_track_files
+          join physical_file_context
+            on physical_file_context.file_id = library.local_track_files.id
           join selected_tracks
             on selected_tracks.id = library.local_track_files.track_id
           left join lateral (
@@ -7929,6 +8029,7 @@ def _problematic_files_sql(
           where app.bootstrap_owners.owner_key = 'local-bootstrap-owner'
           limit 1
         ),
+        {physical_file_ctes if inventory_physical_context else ''}
         {candidate_ctes}
         {initial_selection_name} as (
           select
@@ -7940,6 +8041,7 @@ def _problematic_files_sql(
           {selected_album_filter}
         ),
         {complete_container_ctes}
+        {physical_file_ctes if not inventory_physical_context else ''}
         selected_tracks as (
           select
             library.local_tracks.id,

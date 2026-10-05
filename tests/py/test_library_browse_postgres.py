@@ -1284,7 +1284,7 @@ def test_postgres_root_sidebar_reads_one_repeatable_read_snapshot_and_rolls_it_b
     fingerprint_reads = [(command, params) for command, params in connection.commands if "transaction_timestamp() as observed_at" in command]
     assert len(fingerprint_reads) == 3
     assert all(params == {} for _command, params in fingerprint_reads)
-    identity_reads = [(command, params) for command, params in connection.commands if "files.scan_file_album" in command]
+    identity_reads = [(command, params) for command, params in connection.commands if "files.scan_file_album as album" in command]
     assert len(identity_reads) == 1
     assert identity_reads[0][1] == {}
     assert "separate_release_rollup" in connection.commands[6][0]
@@ -8104,11 +8104,16 @@ def test_problematic_files_summary_sql_prefilters_a_safe_superset_without_changi
     assert "not coalesce((library.local_albums.metadata ->> 'is_compilation')::boolean, false)" in summary_sql
     assert "library.local_track_files.scan_file_year as file_year" in summary_sql
     assert "library.local_track_files.scan_cache_stale is false" in summary_sql
-    assert summary_sql.count("(select count(*) = 1 from library.libraries)") == 2
+    # The shared physical-file context always enforces bootstrap/root ownership;
+    # only the independent required-text candidate scan retains its fast path.
+    assert "join bootstrap_context on bootstrap_context.library_id = library.local_tracks.library_id" in summary_sql
+    assert "roots.library_id = library.local_tracks.library_id" in summary_sql
+    assert "roots.is_active is true" in summary_sql
+    assert summary_sql.count("(select count(*) = 1 from library.libraries)") == 1
     assert summary_sql.count(
         "or library.local_tracks.library_id = ("
         " select library_id from bootstrap_context )"
-    ) == 2
+    ) == 1
     assert "library.ignored_repairs" in summary_sql
     summary_result_sql = summary_sql.rsplit(
         "select selected_albums.id as album_id",

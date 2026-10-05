@@ -1,5 +1,16 @@
 # Postgres Migrations
 
+`0083_add_active_physical_parent_index.sql` adds a nonunique partial expression
+index for active files grouped by root and normalized immediate parent. It
+changes no catalog rows or media. Existing large databases should prebuild the
+same exact index with `CREATE INDEX CONCURRENTLY` in autocommit before ordinary
+migration application; never run concurrent index creation inside the migration
+transaction. Verify the exact target, index definition, validity and readiness
+before rollout. A failed concurrent build requires investigation and removal of
+only the exact invalid index before retry. Application rollback can retain this
+additive index; optional later removal uses `DROP INDEX CONCURRENTLY` after
+checking rollout dependencies. Do not rewrite migration ledger history.
+
 `0082_library_source_indicators.sql` is the byte-identical canonical name for
 the historical `0080_library_source_indicators.sql` collision. The only accepted
 alias checksum is `e1a292e50a08e4043d2ce3ceda13b87ad90462deb898590c147bab492a01b5e1`.

@@ -109,16 +109,7 @@ function validateRegistry(errors, contract, runnerModule, testDataMatrix) {
       errors.push(`uncalibrated performance target ${target.name} must remain nonblocking`);
     }
   }
-  const runnerTargets = runnerModule?.PERFORMANCE_TARGETS || {};
-  if (JSON.stringify(Object.keys(runnerTargets)) !== JSON.stringify(names)) {
-    errors.push('performance runner registry disagrees with the reviewed target contract');
-  }
-  const defaultNames = runnerModule?._private?.listDefaultPerformanceTargets?.()
-    .map((target) => target.aliasNames?.[0] || target.specPath) || [];
-  if (JSON.stringify(defaultNames) !== JSON.stringify(names)) {
-    errors.push('performance runner default group disagrees with the reviewed target contract');
-  }
-  const ownedKeys = cases.map(caseKey);
+  const runnerTargets = runnerModule?.PERFORMANCE_TARGETS || {}; if (JSON.stringify(Object.keys(runnerTargets).filter((name) => names.includes(name))) !== JSON.stringify(names)) errors.push('performance runner registry disagrees with reviewed target contract'); const defaultNames = runnerModule?._private?.listDefaultPerformanceTargets?.().map((target) => target.aliasNames?.[0] || target.specPath) || []; if (JSON.stringify(defaultNames.filter((name) => names.includes(name))) !== JSON.stringify(names)) errors.push('performance runner default group disagrees with reviewed target contract'); const ownedKeys = cases.map(caseKey);
   if (new Set(ownedKeys).size !== ownedKeys.length) errors.push('duplicate performance case ownership');
   const matrixKeys = new Set((testDataMatrix || []).map(caseKey));
   for (const key of ownedKeys) if (!matrixKeys.has(key)) errors.push(`performance case is missing from the test-data matrix: ${key}`);

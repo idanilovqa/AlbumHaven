@@ -27,7 +27,7 @@ const PERFORMANCE_SHARDS = Object.freeze({
     targets: [
       'idle-memory', 'all-artists', 'artist-family', 'search-all-artists', 'utility-rules',
       'selected-artist', 'search-browse', 'root-album-browse', 'app-open-all-artists',
-      'rules-focused',
+      'rules-focused', 'paired-search-calibration',
     ],
   },
   'utility-problematic-files': {

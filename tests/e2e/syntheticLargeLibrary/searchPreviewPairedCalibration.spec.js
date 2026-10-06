@@ -31,6 +31,8 @@ test.describe(`${CASE_ID} synthetic paired search calibration`, () => {
         .toBeGreaterThan(result.generationBefore.requestGeneration);
       expect(result.generationAfter.renderGeneration)
         .toBeGreaterThan(result.generationBefore.renderGeneration);
+      expectTimingBudget(expect, result.elapsedMs, SEARCH_BROWSE_BUDGET,
+        `${scenario.query} submit to first expected album visible`);
       await testInfo.attach('synthetic-paired-search-metrics', {
         body: Buffer.from(JSON.stringify({
           caseId: CASE_ID,

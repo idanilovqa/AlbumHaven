@@ -355,7 +355,7 @@ def test_live_0082_missing_album_removal_preserves_ready_relation_metadata(
             """
             update library.libraries
             set metadata = jsonb_set(
-                metadata,
+                coalesce(metadata, '{}'::jsonb),
                 '{scan_cache,relation_projection,status}',
                 '"ready"'::jsonb,
                 true

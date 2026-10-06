@@ -242,6 +242,7 @@ def test_live_artist_search_projection_requires_matching_stale_authority(
 ):
     """Artist lookup may reuse stale data only when its authority still matches."""
     setup_url, runtime_url = _dedicated_database_urls_or_skip(monkeypatch)
+    isolatedPostgres.reset_application_tables(setup_url)
     isolatedPostgres.prepare_isolated_database(setup_url, runtime_url)
     isolatedPostgres.seed_bootstrap_owner_and_library(setup_url)
     fingerprint = "a" * 64

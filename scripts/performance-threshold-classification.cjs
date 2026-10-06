@@ -80,7 +80,7 @@ function classifyPerformanceThreshold(contract = {}) {
     || (targetWasDeclared && (targetMaximum === null || targetMaximum > hardCeiling))
     || (units === 'ms' && graceWasDeclared && (
       graceMs === null
-      || graceMs < 200
+      || graceMs < (contract.metricId === 'search-preview.syntheticFirstVisibleMs' ? 100 : 200)
       || (graceMs > 400 && !isTemporaryColdProblematicApiException(
         contract.metricId, targetMaximum, graceMs, hardCeiling,
       ))

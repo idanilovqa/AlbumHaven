@@ -117,6 +117,7 @@ const PERFORMANCE_GROUPS = Object.freeze({
     'scan-metadata',
     'scan-page',
     'scan-health',
+    'paired-search-calibration',
     'scan-error',
   ],
   'idle-memory': [
@@ -148,6 +149,7 @@ const PERFORMANCE_GROUPS = Object.freeze({
     'scan-metadata',
     'scan-page',
     'scan-health',
+    'paired-search-calibration',
     'scan-error',
   ],
 });
@@ -482,6 +484,7 @@ PERFORMANCE_TARGETS['paired-search-calibration'] = {
     'FTC-GALLERY-STARTUP-005U synthetic paired search calibration Devin submit to first expected album visible',
     'FTC-GALLERY-STARTUP-005U synthetic paired search calibration Neal Morse submit to first expected album visible',
   ],
+  reportId: 'pairedSearchCalibrationLocal',
   measurementExpected: true,
   env: {
     ALBUM_HAVEN_PERSISTENCE_LIBRARY_BROWSE: 'postgres',

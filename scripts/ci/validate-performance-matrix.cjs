@@ -3,8 +3,8 @@ const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 const { PERFORMANCE_SHARDS } = require('./resolve-ci-shard.cjs');
 
-const EXPECTED_TARGET_COUNT = 21;
-const EXPECTED_CASE_COUNT = 28;
+const EXPECTED_TARGET_COUNT = 22;
+const EXPECTED_CASE_COUNT = 30;
 const MATRIX_FIELDS = ['shard', 'fixtureProfile', 'fixtureMode', 'harness', 'basePort', 'targets'];
 const CALIBRATION_POLICY = Object.freeze({
   evidenceMode: 'retained-cohorts',
@@ -22,7 +22,7 @@ const CALIBRATION_POLICY = Object.freeze({
   exceptionsRequireOwnerApproval: true,
 });
 const SHARD_DEFINITIONS = Object.freeze([
-  { shard: 'synthetic-large-library', fixtureProfile: 'synthetic-large-library', fixtureMode: 'preloaded-release', harness: 'managed-app', basePort: '4173', targets: 'idle-memory,all-artists,artist-family,search-all-artists,utility-rules,selected-artist,search-browse,root-album-browse,app-open-all-artists,rules-focused' },
+  { shard: 'synthetic-large-library', fixtureProfile: 'synthetic-large-library', fixtureMode: 'preloaded-release', harness: 'managed-app', basePort: '4173', targets: 'idle-memory,all-artists,artist-family,search-all-artists,utility-rules,selected-artist,search-browse,root-album-browse,app-open-all-artists,rules-focused,paired-search-calibration' },
   { shard: 'utility-problematic-files', fixtureProfile: 'utility-problematic-files', fixtureMode: 'preloaded-release', harness: 'managed-app', basePort: '4253', targets: 'utility-problematic-files,problematic-files-focused' },
   { shard: 'playback-media', fixtureProfile: 'playback-media', fixtureMode: 'generated-isolated', harness: 'managed-app', basePort: '4213', targets: 'playback-start,gapless-playback' },
   { shard: 'scan-library', fixtureProfile: 'scan-library', fixtureMode: 'generated-isolated', harness: 'scan', basePort: '4293', targets: 'scan-cold,scan-cached,scan-add-album,scan-metadata,scan-page,scan-health,scan-error' },
@@ -68,7 +68,7 @@ function parseStaticPerformanceMatrixRaw(workflow) {
       basePort: String(config.basePort),
       targets: config.targets.join(','),
     };
-    for (let slot = 1; slot <= 10; slot += 1) row[`target${slot}`] = config.targets[slot - 1] || 'none';
+    for (let slot = 1; slot <= 11; slot += 1) row[`target${slot}`] = config.targets[slot - 1] || 'none';
     return row;
   });
 }
@@ -138,14 +138,14 @@ function validateShardRows(errors, rawRows, contract) {
         errors.push(`performance shard ${row.shard} contains incompatible fixture or harness target ${name}`);
       }
     }
-    for (let slot = names.length + 1; slot <= 10; slot += 1) {
+    for (let slot = names.length + 1; slot <= 11; slot += 1) {
       if (row[`target${slot}`] !== 'none') errors.push(`performance shard ${row.shard} must fill unused artifact slots with none`);
     }
   }
   const registered = (contract.targets || []).map((target) => target.name);
   if (owned.length !== registered.length || new Set(owned).size !== registered.length
     || registered.some((name) => !owned.includes(name))) {
-    errors.push('all 21 performance targets must be owned exactly once across four profile runners');
+    errors.push('all 22 performance targets must be owned exactly once across four profile runners');
   }
 }
 
@@ -187,7 +187,7 @@ function validateWorkflowContract(workflow, contract, runnerModule, testDataMatr
     || job.indexOf('Fetch immutable performance fixture') > job.indexOf('Validate performance matrix ownership')) {
     errors.push('secret-bearing fixture fetch must precede pull-request executable code');
   }
-  for (let slot = 1; slot <= 10; slot += 1) {
+  for (let slot = 1; slot <= 11; slot += 1) {
     const expression = `\\$\\{\\{\\s*steps\\.shard\\.outputs\\.target${slot}\\s*\\}\\}`;
     const resultPattern = new RegExp(`name:\\s*performance-result-${expression}-\\$\\{\\{\\s*github\\.run_attempt\\s*\\}\\}`);
     const diagnosticsPattern = new RegExp(`name:\\s*performance-diagnostics-${expression}-\\$\\{\\{\\s*github\\.run_attempt\\s*\\}\\}`);

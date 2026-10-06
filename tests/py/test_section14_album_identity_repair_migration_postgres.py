@@ -711,7 +711,13 @@ def test_live_section14_album_identity_repair_merges_both_corruptions(
             )
             for migration_path in migration_paths:
                 if migration_path.name > MIGRATION_PATH.name:
-                    connection.execute(migration_path.read_text(encoding="utf-8"))
+                    migration_sql = migration_path.read_text(encoding="utf-8")
+                    if migration_path.name == "0083_add_album_raw_artist_search_index.sql":
+                        isolatedPostgres._apply_nontransactional_migration(
+                            connection, migration_sql, migration_path.name
+                        )
+                    else:
+                        connection.execute(migration_sql)
             semantic_identity_index = connection.execute(
                 """
                 select indexes.indisunique as is_unique

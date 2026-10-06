@@ -3,6 +3,22 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 
+test('synthetic search enforces the owner-approved 500 ms boundary', async () => {
+  const { performanceTimingBudget, evaluateTimingBudget, defineTimingBudget } =
+    await import('../../tests/e2e/helpers/timingBudget.js');
+  const budget = performanceTimingBudget('search-preview.syntheticFirstVisibleMs');
+  assert.equal(budget.targetMaximum, 400);
+  assert.equal(budget.graceMs, 100);
+  assert.equal(budget.hardCeiling, 500);
+  for (const [actual, status] of [[400, 'target-met'], [447, 'grace-used'],
+    [500, 'grace-used'], [501, 'hard-fail']]) {
+    assert.equal(evaluateTimingBudget(actual, budget).status, status);
+  }
+  assert.throws(() => defineTimingBudget({
+    metricId: 'unrelated.metric', targetMaximum: 400, graceMs: 100, hardCeiling: 500,
+  }), /grace/i);
+});
+
 function listSpecFiles(root) {
   return fs.readdirSync(root, { withFileTypes: true }).flatMap((entry) => {
     const entryPath = path.join(root, entry.name);

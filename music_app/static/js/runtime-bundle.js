@@ -11375,10 +11375,6 @@ function renderTrackModalLoadingState(album) {
     els.duplicateTabs.hidden = true;
     els.duplicateTabs.innerHTML = '';
   }
-  if (els.tabs) {
-    els.tabs.hidden = true;
-    els.tabs.innerHTML = '';
-  }
   els.list.innerHTML = '<li class="track-modal-loading-row">Loading album details...</li>';
   if (els.footer) {
     els.footer.hidden = true;

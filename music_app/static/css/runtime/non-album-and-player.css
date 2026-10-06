@@ -935,6 +935,8 @@ border-radius: 8px;
 pointer-events: none;
 }
 .player-timeline {
+  touch-action: none;
+  -webkit-tap-highlight-color: transparent;
 position: absolute;
 left: 0;
 right: 0;

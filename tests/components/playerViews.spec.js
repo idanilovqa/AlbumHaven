@@ -93,6 +93,16 @@ async function mountPlayer(page, mode, loopControlStyle = 'capsule') {
   });
 }
 
+test('mobile thin seek surface keeps touch dragging under player control', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await mountPlayer(page, 'regular');
+  await page.locator('.global-player').evaluate(element => element.setAttribute('data-player-seekbar-presentation', 'thin'));
+  await page.addStyleTag({ path: path.join(repositoryRoot, 'music_app/static/css/mobile-layout.css') });
+  const timeline = page.getByRole('slider', { name: 'Seek' });
+  await expect(timeline).toHaveCSS('touch-action', 'none');
+  await expect(timeline).toHaveCSS('-webkit-tap-highlight-color', 'rgba(0, 0, 0, 0)');
+});
+
 for (const mode of ['docked', 'floating']) {
   test(`compact cover CSS accepts quoted paths in ${mode} mode`, async ({ page }) => {
     await page.setViewportSize({ width: 1280, height: 640 });

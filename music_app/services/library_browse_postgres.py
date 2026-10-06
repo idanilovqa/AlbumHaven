@@ -7019,7 +7019,7 @@ def _artist_search_projection_authority_sql() -> str:
         )
         select (
           to_regclass('library.local_artist_search_projection') is not null
-          and bootstrap_context.projection_status = 'ready'
+          and bootstrap_context.projection_status in ('ready', 'stale')
           and bootstrap_context.builder_version = %(builder_version)s
           and bootstrap_context.source_fingerprint <> ''
           and bootstrap_context.source_fingerprint =
@@ -7058,7 +7058,7 @@ def _projected_artist_match_sql() -> str:
              library.local_artist_search_projection.library_id
         where library.local_artist_search_projection.normalized_artist_key =
               %(artist_key)s
-          and bootstrap_context.projection_status = 'ready'
+          and bootstrap_context.projection_status in ('ready', 'stale')
           and bootstrap_context.builder_version = %(builder_version)s
           and bootstrap_context.source_fingerprint <> ''
           and bootstrap_context.source_fingerprint =
@@ -7093,7 +7093,7 @@ from library.local_artist_search_projection
 join bootstrap_context
   on bootstrap_context.library_id = library.local_artist_search_projection.library_id
 where library.local_artist_search_projection.canonical_artist_name = %(canonical_artist_name)s
-  and bootstrap_context.projection_status = 'ready'
+  and bootstrap_context.projection_status in ('ready', 'stale')
   and bootstrap_context.builder_version = %(builder_version)s
   and bootstrap_context.source_fingerprint <> ''
   and bootstrap_context.source_fingerprint = bootstrap_context.built_from_fingerprint

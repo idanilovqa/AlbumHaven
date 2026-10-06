@@ -349,6 +349,20 @@ def test_live_0082_missing_album_removal_preserves_ready_relation_metadata(
             """,
             (inventory_ids["file_id"],),
         )
+        # File-cache staleness is independent from the persisted relation
+        # projection authority that this repair must preserve.
+        connection.execute(
+            """
+            update library.libraries
+            set metadata = jsonb_set(
+                metadata,
+                '{scan_cache,relation_projection,status}',
+                '"ready"'::jsonb,
+                true
+            )
+            where library_kind = 'local'
+            """
+        )
         before = connection.execute(metadata_sql).fetchone()
 
     assert before["readiness_status"] == "ready"

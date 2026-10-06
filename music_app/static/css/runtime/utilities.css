@@ -1904,3 +1904,16 @@
   #utility-modal.is-mobile-page .utility-detected-table .compact-data-table { height: auto; min-height: 0; align-content: start; }
   #utility-modal.is-mobile-page .utility-detected-actions { position: sticky; bottom: 0; z-index: 2; margin-top: 12px; padding: 10px 0 calc(10px + env(safe-area-inset-bottom, 0px)); background: color-mix(in srgb, var(--appearance-panel-background, var(--panel)) 94%, transparent); }
 }
+/* Suggested edits are toggles: neutral until selected, explicit when active. */
+.utility-detected-table .utility-problem-suggestion:not([aria-pressed="true"]) {
+  border-color: color-mix(in srgb, var(--appearance-line, var(--border)) 76%, transparent);
+  background: color-mix(in srgb, var(--appearance-panel-background, var(--panel)) 88%, transparent);
+  color: var(--appearance-muted, var(--muted));
+  box-shadow: none;
+}
+.utility-detected-table .utility-problem-suggestion[aria-pressed="true"] {
+  border-color: var(--appearance-primary-button, var(--accent));
+  background: color-mix(in srgb, var(--appearance-primary-button, var(--accent)) 20%, var(--appearance-panel-background, var(--panel)));
+  color: var(--appearance-primary-button-ink, var(--text));
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--appearance-primary-button, var(--accent)) 28%, transparent);
+}

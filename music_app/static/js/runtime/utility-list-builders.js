@@ -481,7 +481,7 @@ function buildDetectedProblemsHtml(album) {
     ${albumProblems || tableRows.length || separateActions || getIgnoredRepairRowKeys().length ? `<div class="utility-detected-actions">
       ${separateActions}
       ${ButtonComponent.renderButton({ label: 'Create Exception', variant: 'primary', className: 'utility-exception-action', disabled: !getIgnoredRepairRowKeys().length || !album.allowed_actions?.['library.rules.manage'], attributes: { 'data-open-exclusion-confirm': '1' } })}
-      ${tableRows.length ? ButtonComponent.renderButton({ label: selected ? 'Apply' : 'Apply All', variant: 'primary', className: 'utility-detail-apply', disabled: !album.allowed_actions?.['library.files.edit_tags'] || !getApplicableProblemSuggestions().length || Boolean(state.utility.proposalApplyBusy), attributes: { 'data-apply-problem-suggestions': '1' } }) : ''}
+  ${tableRows.length ? ButtonComponent.renderButton({ label: selected ? 'Apply selected edits' : 'Select edits to apply', variant: 'primary', className: 'utility-detail-apply', disabled: !selected || !album.allowed_actions?.['library.files.edit_tags'] || !getApplicableProblemSuggestions().length || Boolean(state.utility.proposalApplyBusy), attributes: { 'data-apply-problem-suggestions': '1' } }) : ''}
     </div>` : ''}`;
 }
 function buildProblematicAlbumDetail(album) {

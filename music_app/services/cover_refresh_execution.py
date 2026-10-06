@@ -757,14 +757,14 @@ def run_cover_jobs(
             cover_cache.save()
         flush_log_handlers_debounced(logger, min_interval_seconds=2.0)
 
-    def finish_or_defer(job, cover_path, downloaded, detail):
+    def finish_or_defer(index, job, cover_path, downloaded, detail):
         cooldowns = [item for item in detail.get("resolver_trace") or []
                      if item.get("resolver") == "_search_spotify" and item.get("reason") == "spotify_cooldown"]
         if not downloaded and cooldowns and detail.get("reason") in {"remote_search_failed", "remote_search_timed_out"}:
-            deferred_jobs.append((job, cover_path, detail))
+            deferred_jobs.append((index, job, cover_path, detail))
             return
         settle_candidate_publisher(job, detail)
-        apply_job_result(len(job_results) + 1, job, cover_path, downloaded, detail)
+        apply_job_result(index, job, cover_path, downloaded, detail)
 
     effective_job_workers = max(1, min(int(job_workers or 1), len(jobs) or 1))
     if effective_job_workers > 1:
@@ -800,8 +800,32 @@ def run_cover_jobs(
             }
             for future in as_completed(future_map):
                 _index, job = future_map[future]
-                cover_path, downloaded, detail = future.result()
-                finish_or_defer(job, cover_path, downloaded, detail)
+                try:
+                    cover_path, downloaded, detail = future.result()
+                except Exception as exc:
+                # A guarded persistence failure or provider exception belongs to
+                # this album only. Record it as a terminal outcome and continue
+                # the queue instead of aborting the entire cover pass.
+                    logger.warning(
+                    "Cover job failed album_id=%s folder=%r error=%r",
+                    job.get("album_id"),
+                    str(job.get("folder") or ""),
+                    exc,
+                )
+                    finish_or_defer(
+                        _index,
+                        job,
+                        None,
+                        False,
+                        {
+                            "reason": "exception",
+                            "error_type": type(exc).__name__,
+                            "error": str(exc),
+                            "resolver_trace": [],
+                        },
+                    )
+                    continue
+                finish_or_defer(_index, job, cover_path, downloaded, detail)
     else:
         for index, job in enumerate(jobs, start=1):
             current_state = get_state()
@@ -867,9 +891,9 @@ def run_cover_jobs(
                 config=config,
                 candidate_callback=candidate_callbacks.get(id(job)),
             )
-            finish_or_defer(job, cover_path, downloaded, detail)
+            finish_or_defer(index, job, cover_path, downloaded, detail)
 
-    for job, cover_path, detail in deferred_jobs:
+    for index, job, cover_path, detail in deferred_jobs:
         retry_at = cover_provider_spotify.spotify_cooldown_until()
         downloaded = False
         if retry_at <= time.time() and owns_progress() and not get_state().get("scan_in_progress"):
@@ -891,7 +915,7 @@ def run_cover_jobs(
             detail["spotify_retry_deferred"] = True
             detail["spotify_retry_at"] = retry_at
         settle_candidate_publisher(job, detail)
-        apply_job_result(len(job_results) + 1, job, cover_path, downloaded, detail)
+        apply_job_result(index, job, cover_path, downloaded, detail)
 
     cover_cache.save()
     flush_log_handlers(logger)

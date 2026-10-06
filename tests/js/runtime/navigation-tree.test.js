@@ -115,7 +115,7 @@ test('shared row escapes labels and preserves selected links and counts', () => 
 
 test('panel rows retain descriptive metadata without an artwork column',()=>{
   const html=harness().renderItem({variant:'panel',action:true,label:'Loop created',subtitle:'Album Haven',year:'Sep 9, 10:42'});
-  assert.match(html,/utility-list-item-meta[^>]*>Album Haven · Sep 9, 10:42/);
+  assert.match(html,/utility-list-item-meta[^>]*>[\s\S]*utility-list-item-subtitle[^>]*>Album Haven<\/span>[\s\S]*utility-list-item-year[^>]*>Sep 9, 10:42<\/span>/);
   assert.doesNotMatch(html,/navigation-tree-artwork/);
 });
 

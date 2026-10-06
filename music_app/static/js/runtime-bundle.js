@@ -12003,11 +12003,54 @@ function getTrackModalLightboxSourceAlbumKey(button) {
 }
 
 let imageLightboxReturnFocus = null;
+let imageLightboxHistoryOpen = false;
+let imageLightboxHistoryClosing = false;
+
+function handleImageLightboxPopState() {
+  if (!imageLightboxHistoryOpen) return false;
+  imageLightboxHistoryOpen = false;
+  imageLightboxHistoryClosing = false;
+  closeImageLightbox();
+  return true;
+}
+
+function bindLightboxSwipe(overlay) {
+  if (overlay.dataset.swipeBound === '1') return;
+  overlay.dataset.swipeBound = '1';
+  let start = null;
+  overlay.addEventListener('touchstart', event => {
+    start = !overlay.hidden && typeof usesMobilePageLayout === 'function'
+      && usesMobilePageLayout() && state.lightbox.zoom <= 1 && event.touches.length === 1
+      ? { x: event.touches[0].clientX, y: event.touches[0].clientY } : null;
+  }, { passive: true });
+  overlay.addEventListener('touchmove', event => {
+    if (event.touches.length !== 1 || state.lightbox.zoom > 1) start = null;
+  }, { passive: true });
+  overlay.addEventListener('touchcancel', () => { start = null; }, { passive: true });
+  overlay.addEventListener('touchend', event => {
+    const origin = start;
+    start = null;
+    if (!origin || overlay.hidden || state.lightbox.zoom > 1 || event.touches.length) return;
+    const end = event.changedTouches[0];
+    const dx = end.clientX - origin.x;
+    const dy = end.clientY - origin.y;
+    if (Math.abs(dx) < 48 || Math.abs(dx) < Math.abs(dy) * 1.5) return;
+    event.preventDefault();
+    stepLightbox(dx < 0 ? 1 : -1);
+  }, { passive: false });
+}
 
 function openImageLightbox(src, alt, options = {}) {
   const els = getLightboxElements();
   if (!els.overlay || !els.image || !src) return;
   if (els.overlay.hidden) imageLightboxReturnFocus = document.activeElement;
+  if (els.overlay.hidden && typeof usesMobilePageLayout === 'function' && usesMobilePageLayout()
+      && typeof window !== 'undefined' && window.history?.pushState) {
+    window.history.pushState({ ...window.history.state, imageLightbox: true }, '');
+    imageLightboxHistoryOpen = true;
+    imageLightboxHistoryClosing = false;
+  }
+  bindLightboxSwipe(els.overlay);
   bindOverlayPointerOrigin(els.overlay);
   state.lightbox.sourceAlbumKey = String(options.sourceAlbumKey || '');
   state.lightbox.items = Array.isArray(options.items) ? options.items.filter(Boolean) : [];
@@ -12045,6 +12088,13 @@ function openImageLightbox(src, alt, options = {}) {
 }
 
 function closeImageLightbox() {
+  if (imageLightboxHistoryOpen) {
+    if (!imageLightboxHistoryClosing) {
+      imageLightboxHistoryClosing = true;
+      window.history.back();
+    }
+    return;
+  }
   const els = getLightboxElements();
   if (!els.overlay || !els.image) return;
   els.overlay.hidden = true;
@@ -16985,7 +17035,7 @@ function buildDetectedProblemsHtml(album) {
     ${albumProblems || tableRows.length || separateActions || getIgnoredRepairRowKeys().length ? `<div class="utility-detected-actions">
       ${separateActions}
       ${ButtonComponent.renderButton({ label: 'Create Exception', variant: 'primary', className: 'utility-exception-action', disabled: !getIgnoredRepairRowKeys().length || !album.allowed_actions?.['library.rules.manage'], attributes: { 'data-open-exclusion-confirm': '1' } })}
-      ${tableRows.length ? ButtonComponent.renderButton({ label: selected ? 'Apply' : 'Apply All', variant: 'primary', className: 'utility-detail-apply', disabled: !album.allowed_actions?.['library.files.edit_tags'] || !getApplicableProblemSuggestions().length || Boolean(state.utility.proposalApplyBusy), attributes: { 'data-apply-problem-suggestions': '1' } }) : ''}
+  ${tableRows.length ? ButtonComponent.renderButton({ label: selected ? 'Apply selected edits' : 'Select edits to apply', variant: 'primary', className: 'utility-detail-apply', disabled: !selected || !album.allowed_actions?.['library.files.edit_tags'] || !getApplicableProblemSuggestions().length || Boolean(state.utility.proposalApplyBusy), attributes: { 'data-apply-problem-suggestions': '1' } }) : ''}
     </div>` : ''}`;
 }
 function buildProblematicAlbumDetail(album) {
@@ -39124,11 +39174,23 @@ function scheduleGallerySearchCommit(nextQuery, options = {}) {
   return true;
 }
 
+function revealArtistTreeForSearch() {
+  if (typeof usesMobilePageLayout === 'function' && usesMobilePageLayout()) {
+    if (typeof openArtistsDrawer === 'function') openArtistsDrawer();
+    return;
+  }
+  const shell = document.getElementById('app-shell');
+  if (shell?.classList?.contains('is-artist-tree-folded') && typeof toggleArtistTreeFold === 'function') {
+    toggleArtistTreeFold();
+  }
+}
+
 function handleGalleryBootstrapSearchSubmit(event) {
   event.preventDefault();
   if (typeof handleMobileSearchSubmit === 'function' && handleMobileSearchSubmit()) return;
   const input = document.getElementById('search-input');
   const nextQuery = input?.value || '';
+  if (String(nextQuery).trim()) revealArtistTreeForSearch();
   closeRecentSearchPopover();
   beginAlbumDetailPrewarmSearchSuspension();
   beginSearchCoverLoadSuspension();
@@ -40381,7 +40443,9 @@ function dismissMobilePage(kind) {
   writeMobilePageHistory('replace');
   syncMobilePageShell();
   if (!mobilePageState.pages.length) restoreMobileGalleryParent(retired.at(-1));
-  if (focus?.isConnected) focus.focus({ preventScroll: true });
+  // Returning to the gallery should not leave the originating artbox visibly
+  // selected after a pointer/back navigation.
+  if (focus?.isConnected) focus.blur();
   return true;
 }
 function navigateMobileBack() {
@@ -40448,7 +40512,7 @@ function handleMobilePagePopState() {
   // A background refresh may have replaced the gallery while its child was open.
   // Restore the retained parent URL through the normal gallery request owner.
   if (!requested.length) restoreMobileGalleryParent(parent);
-  if (!requested.length && focus?.isConnected) requestAnimationFrame(() => focus.focus({ preventScroll: true }));
+  if (!requested.length && focus?.isConnected) requestAnimationFrame(() => focus.blur());
   return true;
 }
 function syncMobileUtilityContext() {
@@ -41193,6 +41257,9 @@ document.addEventListener('mouseover', (event) => {
   if (handleUtilityBootstrapMouseOver(event)) return;
   handleGalleryBootstrapMouseOver(event);
 });
+document.addEventListener('mousemove', (event) => {
+  if (handleUtilityBootstrapMouseOver(event)) event.preventDefault();
+});
 
 document.addEventListener('mouseup', (event) => {
   handleUtilityBootstrapMouseUp(event);
@@ -41260,6 +41327,7 @@ searchInput?.addEventListener('input', () => {
 });
 
 window.addEventListener('popstate', () => {
+  if (typeof handleImageLightboxPopState === 'function' && handleImageLightboxPopState()) return;
   if (typeof handleMobilePagePopState === 'function' && handleMobilePagePopState()) return;
   handleGalleryBootstrapPopState();
 });

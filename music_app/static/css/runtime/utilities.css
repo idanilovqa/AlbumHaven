@@ -401,12 +401,30 @@
 }
 .utility-list-item-title {
   font-weight: 700;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .utility-list-item-meta,
 .utility-list-item-issues {
+  display: flex;
+  min-width: 0;
+  align-items: baseline;
+  gap: 4px;
   margin-top: 4px;
   color: var(--muted);
   font-size: 0.86rem;
+}
+.utility-list-item-subtitle {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.utility-list-item-year {
+  flex: 0 0 auto;
+  white-space: nowrap;
 }
 .utility-list-item-badge {
   display: inline-block;

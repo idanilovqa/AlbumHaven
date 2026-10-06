@@ -161,7 +161,7 @@ export class ProductionViewObserver {
     this.topologyRevision = 0;
     this.galleryScope = null;
     this.galleryArtistTopologies = new Map();
-    this.allowBootstrapFallback = true;
+    this.allowBootstrapFallback = false;
 
     this.documentGeneration = 0;
     const resetDocumentObservation = () => {
@@ -169,7 +169,7 @@ export class ProductionViewObserver {
       this.topologyRevision += 1;
       this.galleryArtistTopologies.clear();
       this.galleryScope = null;
-      this.allowBootstrapFallback = true;
+      this.allowBootstrapFallback = false;
       this.authorityGeneration += 1;
       this.activeRequests.clear();
       this.latestFullPayload = null;

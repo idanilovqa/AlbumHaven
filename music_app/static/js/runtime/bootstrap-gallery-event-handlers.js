@@ -1033,11 +1033,23 @@ function scheduleGallerySearchCommit(nextQuery, options = {}) {
   return true;
 }
 
+function revealArtistTreeForSearch() {
+  if (typeof usesMobilePageLayout === 'function' && usesMobilePageLayout()) {
+    if (typeof openArtistsDrawer === 'function') openArtistsDrawer();
+    return;
+  }
+  const shell = document.getElementById('app-shell');
+  if (shell?.classList?.contains('is-artist-tree-folded') && typeof toggleArtistTreeFold === 'function') {
+    toggleArtistTreeFold();
+  }
+}
+
 function handleGalleryBootstrapSearchSubmit(event) {
   event.preventDefault();
   if (typeof handleMobileSearchSubmit === 'function' && handleMobileSearchSubmit()) return;
   const input = document.getElementById('search-input');
   const nextQuery = input?.value || '';
+  if (String(nextQuery).trim()) revealArtistTreeForSearch();
   closeRecentSearchPopover();
   beginAlbumDetailPrewarmSearchSuspension();
   beginSearchCoverLoadSuspension();

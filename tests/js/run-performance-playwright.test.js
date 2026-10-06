@@ -410,10 +410,12 @@ test('resolveRequestedTargets defaults to the approved performance suite when no
       'scan-add-album',
       'scan-metadata',
     'scan-page',
-    'scan-health', 'scan-error',
+    'scan-health',
+    'paired-search-calibration',
+    'scan-error',
     ]
   );
-  assert.equal(targets.length, 21);
+  assert.equal(targets.length, 22);
 });
 test('resolveRequestedTargets rejects an unknown performance group', () => {
   assert.throws(() => _private.resolveRequestedTargets({
@@ -2656,7 +2658,7 @@ test('runSequentialPerformanceSuite executes the default approved performance ta
   });
 
   assert.equal(exitCode, 0);
-  assert.equal(calls.length, 21);
+  assert.equal(calls.length, 22);
   assert.equal(calls.every((call) => call.options.windowsHide === true), true);
   assert.equal(
     calls.every((call) => call.options.maxBuffer >= 64 * 1024 * 1024),
@@ -2668,7 +2670,7 @@ test('runSequentialPerformanceSuite executes the default approved performance ta
   );
   assert.deepEqual(
     calls.map((call) => call.args[1]),
-    new Array(21).fill('test'),
+    new Array(22).fill('test'),
   );
   assert.equal(calls[3].args.includes('--real-app-port=5001'), true);
   assert.equal(calls[4].args.includes('--real-app-port=5011'), true);
@@ -2913,7 +2915,7 @@ test('runSequentialPerformanceSuite keeps fixed per-invocation timeouts even aft
   });
 
   assert.equal(exitCode, 0);
-  assert.equal(calls.length, 21);
+  assert.equal(calls.length, 22);
   for (const call of calls) {
     assert.equal(call.args.some((arg) => String(arg).startsWith('--run-timeout-ms=')), false);
   }

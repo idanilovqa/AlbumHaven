@@ -292,7 +292,7 @@ function validatePerformanceTargets(contract, expectedCases, expectedNames) {
 
   const defaults = contract.targets.filter((target) => target.defaultMember === true);
   const omissions = contract.targets.filter((target) => target.defaultMember === false);
-  if (defaults.length !== 21) errors.push('default performance group must expose all 21 targets');
+  if (defaults.length !== 22) errors.push('default performance group must expose all 22 targets');
   if (omissions.length !== 0) errors.push('default performance group must not omit a reviewed target');
   return errors;
 }
@@ -530,7 +530,7 @@ test('functional shard contract owns all 121 browser-functional cases exactly on
   assert.equal(contract.workersPerInvocation, 1);
 });
 
-test('performance target contract owns all 28 performance cases across 21 targets', () => {
+test('performance target contract owns all 30 performance cases across 22 targets', () => {
   const matrix = readJson(testDataMatrixPath);
   const expectedCases = new Set(
     matrix
@@ -568,10 +568,10 @@ test('performance target contract owns all 28 performance cases across 21 target
   const contract = readJson(performanceTargetsPath);
   const errors = validatePerformanceTargets(contract, expectedCases, expectedNames);
 
-  assert.equal(expectedCases.size, 28);
+  assert.equal(expectedCases.size, 30);
   assert.deepEqual(errors, []);
-  assert.equal(contract.targets.length, 21);
-  assert.equal(contract.targets.filter((target) => target.defaultMember).length, 21);
+  assert.equal(contract.targets.length, 22);
+  assert.equal(contract.targets.filter((target) => target.defaultMember).length, 22);
   assert.equal(
     contract.targets
       .filter((target) => target.calibrationState !== 'approved')
@@ -737,7 +737,7 @@ test('read-only inventory command reports complete discovery and ownership total
   assert.deepEqual(inventory.ownership, {
     testDataMatrix: 414,
     functionalShards: 121,
-    performanceTargets: 28,
+    performanceTargets: 30,
   });
 });
 

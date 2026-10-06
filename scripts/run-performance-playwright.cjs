@@ -149,7 +149,6 @@ const PERFORMANCE_GROUPS = Object.freeze({
     'scan-metadata',
     'scan-page',
     'scan-health',
-    'paired-search-calibration',
     'scan-error',
   ],
 });

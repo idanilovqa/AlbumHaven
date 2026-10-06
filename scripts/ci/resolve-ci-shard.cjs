@@ -101,7 +101,7 @@ function outputEntries(kind, config) {
     ['base_port', config.basePort],
     ['targets', config.targets.join(',')],
   ];
-  for (let index = 0; index < 10; index += 1) {
+  for (let index = 0; index < 11; index += 1) {
     entries.push([`target${index + 1}`, config.targets[index] || 'none']);
   }
   return entries;

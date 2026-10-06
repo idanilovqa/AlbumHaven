@@ -328,7 +328,7 @@ test('cloud E2E merger module exists', () => {
   assert.equal(mergerExists, true, 'Missing scripts/ci/merge-cloud-e2e-results.cjs');
 });
 
-mergerTest('expected child inventory is exactly four functional shards and 21 performance targets', () => {
+mergerTest('expected child inventory is exactly four functional shards and 22 performance targets', () => {
   const { buildExpectedCloudE2EInventory } = require(mergerPath);
   const expected = exactInventory();
   const actual = buildExpectedCloudE2EInventory({
@@ -338,7 +338,7 @@ mergerTest('expected child inventory is exactly four functional shards and 21 pe
   });
 
   assert.equal(actual.functional.length, 4);
-  assert.equal(actual.performance.length, 21);
+  assert.equal(actual.performance.length, 22);
   assert.deepEqual(actual, expected);
   assert.equal(new Set([
     ...actual.functional.map((row) => row.childId),

@@ -1898,3 +1898,4 @@
 .library-settings-move-policy-row .gallery-switch { padding-inline: 0; font: inherit; text-align: left; }
 .library-settings-move-policy-row .gallery-switch:disabled { opacity: .45; cursor: default; background: transparent; }
 .library-settings-move-policy-row [data-library-policy-value] { color: var(--muted); overflow-wrap: anywhere; }
+@media (max-width: 720px) { .utility-problem-exclusions-detail .compact-data-table[data-cdt-mobile="stack"] [data-cdt-column="action"] { grid-column: 1 / -1; grid-row: 3; justify-self: stretch; padding-top: 8px; } .utility-problem-exclusions-detail .compact-data-table[data-cdt-mobile="stack"] [data-cdt-column="action"] .utility-rule-revert { width: 100%; } }

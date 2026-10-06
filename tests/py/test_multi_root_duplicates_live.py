@@ -20,6 +20,7 @@ def inventory(database):
     album_ids = []
     artist_id = None
     release_keys = []
+    root_ids = {}
     try:
         with isolatedPostgres._connect(setup) as connection:
             owner = connection.execute("select account_id from app.bootstrap_owners where owner_key = 'local-bootstrap-owner'").fetchone()
@@ -38,6 +39,11 @@ def inventory(database):
                 library_id = created_library_id
             else:
                 library_id = library["id"]
+            for root_kind in ("main_library_roots", "hoarding_library_roots", "new_arrivals_roots"):
+                root_ids[root_kind] = connection.execute(
+                    "insert into library.library_roots(library_id, root_path, root_kind, is_active) values(%s,%s,%s,true) returning id",
+                    (library_id, f"C:/multi-root-verification/{prefix}/{root_kind}", root_kind),
+                ).fetchone()["id"]
             artist_name = prefix + " Artist"
             title = prefix + " Album"
             artist_id = connection.execute("insert into library.local_artists(library_id,artist_key,name) values(%s,%s,%s) returning id", (library_id, prefix, artist_name)).fetchone()["id"]
@@ -56,7 +62,7 @@ def inventory(database):
                     track_id = connection.execute("insert into library.local_tracks(library_id,album_id,artist_id,track_key,title,disc_number,track_number,duration_seconds) values(%s,%s,%s,%s,%s,1,%s,%s) returning id", (library_id, album_id, artist_id, key + f"::{number}", f"Track {number}", number, 100 + number)).fetchone()["id"]
                     track_ids.append(track_id)
                     entry = {"path": path, "title": f"Track {number}", "album": title, "album_artist": artist_name, "artist": artist_name, "year": year, "edition": label, "disc_number": 1, "track_number": number, "duration_seconds": 100 + number, "library_root_category": category}
-                    connection.execute("insert into library.local_track_files(track_id,private_path,metadata) values(%s,%s,%s)", (track_id, path, Jsonb({"library_root_category": category, "scan_cache": {"file_entry": entry}})))
+                    connection.execute("insert into library.local_track_files(track_id,library_root_id,private_path,metadata) values(%s,%s,%s,%s)", (track_id, root_ids[category], path, Jsonb({"library_root_category": category, "scan_cache": {"file_entry": entry}})))
         def add_track(label, relative_path, *, year=2002, scan_tags=True, category="new_arrivals_roots"):
             path = str(Path(paths["main"][0]).parent / relative_path)
             with isolatedPostgres._connect(setup) as connection:
@@ -64,7 +70,7 @@ def inventory(database):
                 track_id = connection.execute("insert into library.local_tracks(library_id,album_id,artist_id,track_key,title,disc_number,track_number,duration_seconds) values(%s,%s,%s,%s,'Extra',2,2,120) returning id", (library_id, album_id, artist_id, prefix + "::extra::" + uuid.uuid4().hex)).fetchone()["id"]
                 track_ids.append(track_id)
                 entry = {"path": path, "title": "Extra", "album": title, "album_artist": artist_name, "artist": artist_name, "year": year, "disc_number": 2, "track_number": 2, "library_root_category": category}
-                connection.execute("insert into library.local_track_files(track_id,private_path,metadata) values(%s,%s,%s)", (track_id, path, Jsonb({"library_root_category": category, "scan_cache": {"file_entry": entry}} if scan_tags else {})))
+                connection.execute("insert into library.local_track_files(track_id,library_root_id,private_path,metadata) values(%s,%s,%s,%s)", (track_id, root_ids[category], path, Jsonb({"library_root_category": category, "scan_cache": {"file_entry": entry}} if scan_tags else {})))
             return path
 
         def separate(label):

@@ -18,6 +18,10 @@ def physical_catalog(request):
     if not os.environ.get("ALBUM_HAVEN_SCAN_PERFORMANCE_DATABASE_URL"):
         pytest.skip("A pre-provisioned isolated Postgres database is required.")
     setup_url, runtime_url = isolatedPostgres.resolve_isolated_database_urls()
+    # The Python job provisions a pristine database without loading a fixture.
+    # Prepare the application schemas here so this contract owns its bootstrap
+    # data instead of assuming an unrelated E2E fixture was loaded first.
+    isolatedPostgres.prepare_isolated_database(setup_url, runtime_url)
     # EXPLAIN's owned dense fixture needs ANALYZE inside the same uncommitted
     # transaction. Ordinary SQL contracts continue to exercise runtime grants.
     fixture_mode = getattr(request, "param", None)

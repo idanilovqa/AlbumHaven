@@ -433,7 +433,6 @@ def test_postgres_migration_filenames_are_zero_padded_sql_and_lexically_ordered(
     assert all(re.fullmatch(r"\d{4}_[a-z0-9_]+\.sql", name) for name in migration_names)
     assert migration_numbers == list(range(1, len(migration_numbers) + 1))
     assert migration_names[-43:] == [
-        "0040_repair_ignored_repairs_delete_grant.sql",
         "0041_create_local_album_cover_candidate_snapshots.sql",
         "0042_track_distinct_cover_improvement_alerts.sql",
         "0043_create_local_track_waveform_peaks.sql",
@@ -476,6 +475,7 @@ def test_postgres_migration_filenames_are_zero_padded_sql_and_lexically_ordered(
         "0080_user_client_layout_preferences.sql",
         "0081_grant_move_policy_settings_delete.sql",
         "0082_library_source_indicators.sql",
+        "0083_add_active_physical_parent_index.sql",
     ]
 
 

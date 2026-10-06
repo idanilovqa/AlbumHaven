@@ -161,7 +161,7 @@ function runPairedSearchCalibration(options = {}, dependencies = {}) {
     windowsHide: true,
   });
   if (productionResult.error) throw productionResult.error;
-  if (productionResult.status !== 0) return { status: productionResult.status ?? 1, runId };
+  const productionStatus = productionResult.status ?? 1;
 
   const syntheticResult = spawnSync(process.execPath, [
     path.join(repoRoot, 'scripts', 'run-performance-playwright.cjs'),
@@ -174,7 +174,7 @@ function runPairedSearchCalibration(options = {}, dependencies = {}) {
     windowsHide: true,
   });
   if (syntheticResult.error) throw syntheticResult.error;
-  if (syntheticResult.status !== 0) return { status: syntheticResult.status ?? 1, runId };
+  const syntheticStatus = syntheticResult.status ?? 1;
 
   const combined = buildCombinedArtifact({
     runId,
@@ -185,7 +185,11 @@ function runPairedSearchCalibration(options = {}, dependencies = {}) {
   writeJson(combinedPath, combined);
   removeFile(productionPath);
   removeFile(syntheticPath);
-  return { status: 0, runId, artifactPath: combinedPath };
+  return {
+    status: productionStatus === 0 && syntheticStatus === 0 ? 0 : 1,
+    runId,
+    artifactPath: combinedPath,
+  };
 }
 
 module.exports = {

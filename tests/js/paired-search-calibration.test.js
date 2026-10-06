@@ -89,7 +89,7 @@ test('combined artifact keeps the production and synthetic contracts', () => {
   assert.doesNotMatch(JSON.stringify(combined.cases[0].synthetic), /budget|target|grace|ceiling|classification/iu);
 });
 
-test('orchestrator runs production first, skips synthetic on failure, and shares one run ID', () => {
+test('orchestrator always runs synthetic after production and shares one run ID', () => {
   const calls = [];
   const writes = [];
   const dependencies = {
@@ -135,7 +135,7 @@ test('orchestrator runs production first, skips synthetic on failure, and shares
     return { status: 23 };
   };
   const failed = runPairedSearchCalibration({ repoRoot: root, baseEnv: {} }, dependencies);
-  assert.equal(failed.status, 23);
-  assert.equal(calls.length, 1);
-  assert.equal(writes.length, 0);
+  assert.equal(failed.status, 1);
+  assert.equal(calls.length, 2);
+  assert.equal(writes.length, 1);
 });

@@ -1,0 +1,66 @@
+/* Consumer-only spacing; native table, artbox, navigation and button owners remain intact. */
+.mock-playlist-panel { display:flex; flex-direction:column; min-width:0; min-height:0; height:100%; color:var(--text); }
+.mock-playlist-header { display:flex; flex:none; align-items:center; justify-content:space-between; gap:16px; padding:16px 18px 10px; }
+.mock-playlist-header h1 { margin:0; font-size:1.06rem; line-height:1.2; }
+.mock-playlist-header p { margin:5px 0 0; font-size:12px; color:var(--muted); }
+.mock-playlist-actions { display:flex; align-items:center; gap:6px; flex:none; margin:0 0 8px; }
+.mock-playlist-filters { display:flex; flex:none; align-items:end; justify-content:flex-end; flex-wrap:wrap; gap:10px 12px; padding:8px 18px; }
+.mock-playlist-filter { display:grid; align-content:start; gap:4px; min-width:0; margin:0; font-size:12px; }
+.mock-playlist-filter > span:first-child { color:var(--muted); padding-inline:1px; }
+.mock-playlist-filter .ui-button { max-width:100%; }
+.mock-playlist-filter-note { text-align:right; flex:none; padding:0 18px 10px; margin:0; color:var(--muted); font-size:11px; line-height:1.45; }
+.mock-playlist-filter-entry { display:flex; flex:none; align-items:center; justify-content:flex-end; min-width:0; padding:0; }
+.mock-playlist-local-header-actions { display:flex; align-items:center; flex:none; }
+.mock-playlist-filter-toggle[aria-expanded="true"] { color:var(--appearance-selected-accent,var(--accent)); background:var(--selection-body-background,var(--panel-2)); }
+.mock-playlist-filter-row { flex:none; min-width:0; padding:8px 18px 10px; background:transparent; border-bottom:1px solid var(--appearance-line,var(--border)); }
+.gallery-bar:has(#mock-playlist-header-actions [data-mock-playlist-filters-trigger][aria-expanded="true"]),.mock-playlist-header:has([data-mock-playlist-filters-trigger][aria-expanded="true"]) { margin-bottom:0!important; border-bottom:0!important; border-end-start-radius:0; border-end-end-radius:0; }
+.mock-playlist-filter-row[hidden] { display:none!important; }
+.mock-playlist-filter-row .mock-playlist-filters { padding:0; gap:8px 12px; }
+.mock-playlist-filter-row .mock-playlist-filter-note { padding:6px 0 0; }
+#app-form-modal[data-mock-playlist-filters] .confirm-modal-dialog { width:min(420px,calc(100vw - 24px)); max-width:calc(100vw - 24px); }
+.mock-playlist-filters-dialog .mock-playlist-filters { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:12px; padding:0; }
+.mock-playlist-filters-dialog .mock-playlist-filter .ui-button { width:100%; justify-content:space-between; }
+.mock-playlist-filters-dialog .mock-playlist-filter-note { padding:12px 0 0; }
+.mock-playlist-scroll-body { overflow:auto; min-height:0; min-width:0; padding:0 18px max(24px,var(--mock-player-clearance,24px)); }
+.mock-playlist-return-note { color:var(--muted); font-size:12px; line-height:1.5; margin:8px 0; }
+.mock-playlist-table-host { min-width:0; }
+.mock-playlist-table-host .compact-data-table { --cdt-mobile-min-width:0; }
+.mock-playlist-table-host > [hidden] { display:none !important; }
+.mock-playlist-panel [data-mock-playlist-exiting] { pointer-events:none; animation:mock-playlist-row-exit 420ms ease var(--mock-playlist-exit-delay,0ms) forwards; }
+@keyframes mock-playlist-row-exit { 0%,85% { opacity:1; } 100% { opacity:0; } }
+@media(prefers-reduced-motion:reduce) { .mock-playlist-panel [data-mock-playlist-exiting] { animation:none; } }
+.mock-playlist-panel [data-mock-playlist-track]:focus-visible { outline:2px solid var(--accent,#8bbfff); outline-offset:-2px; }
+.mock-playlist-panel .mock-track-art { width:34px; height:34px; flex:0 0 34px; }
+.mock-playlist-panel .mock-track-art .album-artbox { width:100%; height:100%; }
+.mock-playlist-panel .mock-playlist-current .album-track-table__title { color:var(--appearance-selected-accent,var(--accent)); }
+.mock-playlist-sidebar { min-width:0; padding:4px 8px; }
+.mock-playlist-sidebar section + section { margin-top:10px; }
+.mock-playlist-section-label { margin:4px 0 2px; color:var(--muted); font-size:11px; font-weight:500; }
+.mock-playlist-sidebar .mock-playlist-section-toggle { display:flex; align-items:center; gap:6px; min-height:30px; margin:0; padding:4px; border:0; border-radius:5px; color:inherit; background:transparent; font:inherit; }
+.mock-playlist-section-toggle::after { content:''; flex:1; height:1px; margin-inline-start:3px; background:var(--border); opacity:.65; }
+.mock-playlist-section-toggle .mock-playlist-section-chevron { flex:0 0 14px; font-size:1rem; font-weight:800; line-height:1; transform:rotate(90deg); }
+.mock-playlist-section-toggle[aria-expanded="false"] .mock-playlist-section-chevron { transform:rotate(0); }
+.mock-playlist-sidebar section > [hidden] { display:none !important; }
+.mock-playlist-sidebar-empty { color:var(--muted); font-size:12px; line-height:1.5; margin:4px; }
+.mock-playlist-sidebar .navigation-tree-item { width:100%; text-align:start; }
+.mock-playlist-sidebar .navigation-tree-artwork { width:38px; height:38px; flex:0 0 38px; }
+.mock-playlist-sidebar .navigation-tree-artwork .album-artbox { width:100%; height:100%; }
+@media(max-width:600px) {
+  .mock-playlist-header { padding:14px 10px 8px; gap:8px; }
+  .mock-playlist-actions { gap:3px; }
+  .mock-playlist-filters { padding:8px 10px; gap:8px; }
+  .mock-playlist-filter-note { padding-inline:10px; }
+  .mock-playlist-scroll-body { padding-inline:8px; }
+  .mock-playlist-panel .mock-track-art { width:28px; height:28px; flex-basis:28px; }
+}
+
+.mock-playlist-toolbar{display:flex;align-items:center;justify-content:space-between;gap:12px;min-width:0;margin-bottom:8px}
+.mock-playlist-toolbar>.mock-playlist-actions{margin:0;flex:none}
+.mock-playlist-filter-content{min-width:0}
+.mock-playlist-filter-content .mock-playlist-filters{padding-inline:0}
+.mock-playlist-next-help{font-size:.75rem;line-height:1.35;color:var(--muted);margin:0 0 8px}
+@media(max-width:900px){.mock-playlist-toolbar{gap:8px}.mock-playlist-toolbar .mock-playlist-action,.mock-playlist-filter-toggle{width:40px;height:40px;min-width:40px;min-height:40px;flex-basis:40px}}
+
+.mock-playlist-reset{display:inline-flex;align-self:end}
+.mock-playlist-reset .action-button{width:30px;min-width:30px;height:26px;min-height:26px;flex-basis:30px}
+@media(max-width:900px){.mock-playlist-reset .action-button{height:30px;min-height:30px}.mock-playlist-filters-dialog .mock-playlist-reset{grid-column:1/-1;justify-self:start}}

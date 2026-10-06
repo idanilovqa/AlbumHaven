@@ -32,6 +32,9 @@ function buildFilterPillHtml(config = {}) {
 }
 
 function buildGalleryBarHtml(config = {}) {
+  if (config.contextKind === 'recent') {
+    return `<div class="gallery-bar__context"><div class="gallery-bar__title"><span>${escapeHtml(config.title || 'Recent')}</span></div></div><div class="gallery-bar__actions">${String(config.actionsHtml || '')}</div>`;
+  }
   const isSingleArtist = config.contextKind === 'single-artist';
   const isArtist = config.contextKind === 'artist' || isSingleArtist;
   const isFamily = config.contextKind === 'family';
@@ -91,5 +94,8 @@ function buildGalleryCardInfoHtml(config = {}) {
   const title = config.openAttributes
     ? `<button class="album-open-trigger album-title-button" type="button" ${config.openAttributes}><span data-gallery-metadata-text>${escapeHtml(config.title || '')}</span></button>`
     : escapeHtml(config.title || '');
-  return `<div class="album-body gallery-card-info"><h3 class="album-title">${title}</h3><div class="album-meta-row"><div class="album-subtitle"><span data-gallery-metadata-text>${escapeHtml(metadata)}</span></div></div>${String(config.ratingHtml || '')}<div class="chip-row"><span class="track-count">${count} track${count === 1 ? '' : 's'}</span><span class="album-length">${escapeHtml(config.lengthDisplay || '')}</span></div></div>`;
+  const summary = config.listeningSummaryHtml === undefined
+    ? `<div class="chip-row"><span class="track-count">${count} track${count === 1 ? '' : 's'}</span><span class="album-length">${escapeHtml(config.lengthDisplay || '')}</span></div>`
+    : String(config.listeningSummaryHtml || '');
+  return `<div class="album-body gallery-card-info"><h3 class="album-title">${title}</h3><div class="album-meta-row"><div class="album-subtitle"><span data-gallery-metadata-text>${escapeHtml(metadata)}</span></div></div>${String(config.ratingHtml || '')}${summary}</div>`;
 }

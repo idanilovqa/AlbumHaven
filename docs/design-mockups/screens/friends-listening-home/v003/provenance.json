@@ -1,0 +1,46 @@
+{
+  "schemaVersion": 1,
+  "artifact": "friends-listening-home/v003",
+  "status": "in_review",
+  "productionImplementation": false,
+  "nativeContentTree": "bf042b5d824e7aeb35a689066e0cbe0f10e8b900",
+  "nativeAppVersion": "0.9.48",
+  "nativeInputCount": 185,
+  "acceptedMobileHomeReference": "eef9d13fd5dbd2cda3485e3c308c8494ba7d6fd4",
+  "nativeProvenanceLimit": "The historical 185-file snapshot is distinct from the accepted-main phone Home reference.",
+  "archiveKind": "editable_adapter_source_only",
+  "runnableSnapshotIncluded": false,
+  "ownerVisualApproval": "pending",
+  "files": [
+    {
+      "path": "source/fixture-data.mjs",
+      "bytes": 25197,
+      "sha256": "8e4597ec8eae6afc311b395e5a06d3d64dcfa61985fe4bc1db5ea7ed3a4e3f67"
+    },
+    {
+      "path": "source/friends-app.jsx",
+      "bytes": 35946,
+      "sha256": "e86a5049ea88d57f1cc2536b92e45c9bd5e1fd37242b1d7140cece82dfedae21"
+    },
+    {
+      "path": "source/mock-adapter.mjs",
+      "bytes": 3795,
+      "sha256": "76fb5b2df7be86c394274d80295ca849439fdb2317e4183378c46af60e0397bb"
+    },
+    {
+      "path": "source/mock-layout.css",
+      "bytes": 22830,
+      "sha256": "152670936177b609510d078db8357aebb697d4c94ab830982f483d4782a5c05d"
+    },
+    {
+      "path": "source/native-input-manifest.json",
+      "bytes": 34272,
+      "sha256": "fba115cc2df4927a983695ba40dbe6e435c546a36131f1ab5dececcbac401509"
+    },
+    {
+      "path": "source/native-layout.js",
+      "bytes": 27194,
+      "sha256": "81da4d49f86e1d5e6caefc112588ba5901185c7e2ba6d015fcc5d0e4db1bb085"
+    }
+  ]
+}

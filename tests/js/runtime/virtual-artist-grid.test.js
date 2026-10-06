@@ -1398,6 +1398,73 @@ test('row measurement stabilization retains absolute coordinates after rendered 
   );
 });
 
+for (const userScroll of [false, true]) {
+  test(`a pending anchor refresh ${userScroll ? 'yields to newer wheel scrolling' : 'retains programmatic reflow restoration'}`, () => {
+    const { context, scrollEl } = createRuntimeContext();
+    const virtualGrid = vm.runInContext('virtualGrid', context);
+    const groups = [{
+      artist: 'Scroll Artist',
+      albums: Array.from({ length: 24 }, (_value, index) => ({
+        key: `scroll-album-${index}`,
+        name: `Scroll Album ${index}`,
+        album_artist: 'Scroll Artist',
+        tracks: [],
+      })),
+    }];
+    virtualGrid.render = () => {};
+    virtualGrid.primeVisibleCoverImages = () => {};
+    virtualGrid.setGroups(groups, [], null);
+
+    const scheduledFrames = new Map();
+    let nextFrameId = 1;
+    context.scheduleBrowserAnimationFrame = (callback) => {
+      nextFrameId += 1;
+      scheduledFrames.set(nextFrameId, callback);
+      return nextFrameId;
+    };
+    context.cancelBrowserAnimationFrame = (frameId) => scheduledFrames.delete(frameId);
+    scrollEl.scrollTop = 900;
+    let anchorContentTop = 940;
+    const anchorTrigger = context.createAlbumTitleButton(
+      'scroll-album-9',
+      {},
+      virtualGrid.getRenderedSectionKey(virtualGrid.sections[0]),
+      'Scroll Album 9',
+    );
+    anchorTrigger.getBoundingClientRect = () => ({
+      top: anchorContentTop - scrollEl.scrollTop,
+      bottom: anchorContentTop - scrollEl.scrollTop + 300,
+    });
+    context.__albumTitleButtons = [anchorTrigger];
+    virtualGrid.render = () => { anchorContentTop = 1060; };
+
+    virtualGrid.setGroups(groups, [], null, { preserveScroll: true });
+    virtualGrid.render = () => {};
+    assert.equal(scrollEl.scrollTop, 1020, 'The immediate refresh must retain the visible anchor');
+    assert.equal(anchorTrigger.getBoundingClientRect().top, 40);
+    scrollEl.dispatchEvent({ type: 'scroll' });
+    anchorContentTop += 24;
+
+    if (userScroll) {
+      scrollEl.dispatchEvent({ type: 'wheel' });
+      scrollEl.scrollTop = 1400;
+      scrollEl.dispatchEvent({ type: 'scroll' });
+    }
+    for (const [frameId, callback] of [...scheduledFrames]) {
+      if (scheduledFrames.delete(frameId)) callback();
+    }
+
+    assert.equal(
+      scrollEl.scrollTop,
+      userScroll ? 1400 : 1044,
+      userScroll
+        ? 'The queued refresh must not overwrite the newer user scroll'
+        : 'A programmatic scroll event must retain next-frame anchor restoration after reflow',
+    );
+    virtualGrid.destroy();
+  });
+}
+
 test('a newer user scroll invalidates a pending absolute setGroups restoration', () => {
   const { context, scrollEl } = createRuntimeContext();
   const virtualGrid = vm.runInContext('virtualGrid', context);
@@ -4351,3 +4418,152 @@ for (const mobile of [true, false]) {
     assert.ok(grid.cardTrackWidth > 200, `expected a readable card, received ${grid.cardTrackWidth}px`);
   });
 }
+
+test('G03 retired grid callbacks leave a sequential replacement layout and scheduler untouched', () => {
+  const { context, scrollEl, containerEl, topSpacerEl, bottomSpacerEl } = createRuntimeContext();
+  const gridA = vm.runInContext('virtualGrid', context);
+  const frames = new Map();
+  let nextFrame = 0, domWrites = 0, scrollWrites = 0, viewportReads = 0, cacheDestroys = 0;
+  context.scheduleBrowserAnimationFrame = callback => {
+    frames.set(++nextFrame, callback);
+    return nextFrame;
+  };
+  context.cancelBrowserAnimationFrame = id => {
+    context.canceledBrowserAnimationFrames.push(id);
+    frames.delete(id);
+  };
+  const runFrame = id => {
+    const callback = frames.get(id);
+    assert.equal(typeof callback, 'function', 'the real grid scheduled this callback');
+    frames.delete(id);
+    callback();
+  };
+  for (const [object, key] of [[containerEl, 'innerHTML'], [topSpacerEl.style, 'height'], [bottomSpacerEl.style, 'height']]) {
+    let value = object[key];
+    Object.defineProperty(object, key, {
+      get: () => value,
+      set(next) { domWrites += 1; value = next; },
+    });
+  }
+  for (const key of ['scrollTop', 'scrollLeft']) {
+    let value = scrollEl[key];
+    Object.defineProperty(scrollEl, key, {
+      get: () => value,
+      set(next) { scrollWrites += 1; value = next; },
+    });
+  }
+  Object.defineProperty(scrollEl, 'clientWidth', { get() { viewportReads += 1; return 980; } });
+  const rect = scrollEl.getBoundingClientRect;
+  scrollEl.getBoundingClientRect = () => { viewportReads += 1; return rect(); };
+  // The existing harness owns scheduler spies; this cache collaborator only
+  // records destroy calls. No cover request or pending cover-task race is modeled.
+  context.galleryCoverPreviewCache = { destroy() { cacheDestroys += 1; } };
+  let measuredRow = null;
+  const query = containerEl.querySelectorAll.bind(containerEl);
+  containerEl.querySelectorAll = selector => selector === '.album-row[data-section-key][data-block-index]'
+    ? (measuredRow ? [measuredRow] : []) : query(selector);
+  const groups = label => [{ artist: 'Lifetime Artist', albums: Array.from({ length: 6 }, (_, index) => ({
+    key: `lifetime-${index}`, name: `${label} Album ${index}`, album_artist: 'Lifetime Artist', tracks: [],
+  })) }];
+  const groupsA = groups('A'), groupsB = groups('B');
+  gridA.setGroups(groupsA, [], [], { preserveScroll: true });
+  const sectionA = gridA.sections[0];
+  measuredRow = createMeasuredRow(sectionA.sectionKey, 0, { rowHeight: 318 });
+  runFrame(gridA._measureRaf);
+  assert.ok(measuredRow.rowMeasureCalls > 0, 'live A measurement reaches real row geometry');
+  assert.equal(sectionA.blockHeights[0], 318);
+  const beforeResize = domWrites;
+  gridA.onResize();
+  assert.ok(domWrites > beforeResize, 'live A resize reaches the real renderer');
+  const pointer = { pointerId: 73, target: { closest: () => containerEl } };
+  gridA.onPointerDown(pointer);
+  const beforePointer = domWrites;
+  gridA.render(true);
+  assert.equal(domWrites, beforePointer, 'live pointer gesture defers real DOM work');
+  gridA.onAlbumCardPointerGestureEnd(pointer);
+  runFrame(gridA._albumCardPointerReleaseRaf);
+  assert.ok(domWrites > beforePointer, 'live pointer release resumes the real renderer');
+  const beforeScroll = context.__scheduledBrowserTimeouts.length;
+  gridA.onScroll();
+  assert.ok(context.__scheduledBrowserTimeouts.length > beforeScroll, 'live scroll starts its actual timer work');
+  gridA.onPointerDown(pointer);
+  gridA.render(true);
+  gridA.onAlbumCardPointerGestureEnd(pointer);
+  const retired = {
+    measure: frames.get(gridA._measureRaf), resize: gridA.onResize, scroll: gridA.onScroll,
+    tree: gridA.onArtistTreeSettled, pointer: frames.get(gridA._albumCardPointerReleaseRaf),
+    scrollFrame: frames.get(gridA._raf), timers: context.__scheduledBrowserTimeouts.map(entry => entry.callback),
+  };
+  for (const callback of [retired.measure, retired.pointer, retired.scrollFrame]) assert.equal(typeof callback, 'function');
+  assert.notEqual(sectionA.measuredBlockKeys[1], sectionA.blockMeasureKeys[1], 'A has not measured the second real row');
+  const tokenA = gridA.suspendSelectedArtistCoverLoadsForUserAction();
+  assert.ok(tokenA > 0);
+  gridA.destroy();
+  assert.equal(cacheDestroys, 1);
+  assert.equal(context.galleryCoverSchedulerResumes, 1, 'first retirement releases A suspension');
+
+  const gridB = vm.runInContext('new VirtualArtistGrid()', context);
+  gridB.setGroups(groupsB, [], [], { preserveScroll: true });
+  const sectionB = gridB.sections[0];
+  assert.equal(sectionB.sectionKey, sectionA.sectionKey, 'the replacement uses the shared Gallery section identity');
+  measuredRow = createMeasuredRow(sectionB.sectionKey, 1, { rowHeight: 286 });
+  runFrame(gridB._measureRaf);
+  assert.equal(sectionB.blockHeights[1], 286, 'live B reconciles its own row');
+  assert.match(containerEl.innerHTML, /B Album/);
+  scrollEl.scrollTop = 150;
+  const tokenB = gridB.suspendSelectedArtistCoverLoadsForUserAction();
+  assert.ok(tokenB > 0);
+  const snapshot = () => ({
+    rowReads: measuredRow.rowMeasureCalls, viewportReads, domWrites, scrollWrites,
+    scrollTop: scrollEl.scrollTop, scrollLeft: scrollEl.scrollLeft,
+    frameRequests: nextFrame, pendingFrames: frames.size,
+    frameCancels: context.canceledBrowserAnimationFrames.length,
+    timerRequests: context.__scheduledBrowserTimeouts.length, timerCancels: context.clearedBrowserTimeouts.length,
+    coverGeneration: context.galleryCoverSchedulerGeneration,
+    coverReconciliations: context.galleryCoverFamilyPrefetchReconciliations.length,
+    coverEnqueues: context.galleryCoverSchedulerEnqueues.length,
+    coverSuspends: context.galleryCoverSchedulerSuspends.length, coverResumes: context.galleryCoverSchedulerResumes,
+    cacheDestroys, indexedName: context.getIndexedAlbum('lifetime-0')?.name,
+  });
+  const current = snapshot();
+  retired.measure(); // Baseline reaches this retained real-grid RAF without a metadata-handle prerequisite.
+  assert.equal(measuredRow.rowMeasureCalls, current.rowReads, 'retired measurement RAF must not read replacement rows');
+  assert.deepEqual(snapshot(), current, 'retired measurement cannot alter shared layout, scroll or scheduling');
+  for (const [label, callback] of [
+    ['resize', retired.resize], ['scroll', retired.scroll], ['Artist Tree', retired.tree],
+    ['pointer release', retired.pointer], ['scroll frame', retired.scrollFrame],
+    ...retired.timers.map((callback, index) => [`scroll timer ${index}`, callback]),
+  ]) {
+    callback();
+    assert.deepEqual(snapshot(), current, `retired ${label} callback has no shared effects`);
+  }
+  gridA.setGroups(groupsA, [], [], { preserveScroll: true });
+  assert.equal(gridA.suspendSelectedArtistCoverLoadsForUserAction(), 0, 'A cannot acquire another shared suspension');
+  assert.equal(gridA.resumeSelectedArtistCoverLoadsAfterUserAction(tokenA), false);
+  assert.equal(gridA.resumeSelectedArtistCoverLoadsAfterUserAction(0, { force: true }), false);
+  gridA.destroy();
+  assert.deepEqual(snapshot(), current, 'late A owner entries cannot replace B data or release B resources');
+
+  const beforeLiveB = snapshot();
+  gridB.onResize(); gridB.onArtistTreeSettled();
+  assert.ok(viewportReads > beforeLiveB.viewportReads, 'live B still reads viewport geometry');
+  assert.ok(domWrites > beforeLiveB.domWrites, 'live B still renders after resize and Artist Tree settlement');
+  gridB.onScroll();
+  assert.ok(context.__scheduledBrowserTimeouts.length > beforeLiveB.timerRequests);
+  runFrame(gridB._raf);
+  gridB.onPointerDown(pointer);
+  const beforeBPointer = domWrites;
+  gridB.render(true);
+  assert.equal(domWrites, beforeBPointer);
+  gridB.onAlbumCardPointerGestureEnd(pointer);
+  runFrame(gridB._albumCardPointerReleaseRaf);
+  assert.ok(domWrites > beforeBPointer, 'B pointer-release callback remains live');
+  measuredRow = createMeasuredRow(sectionB.sectionKey, 0, { rowHeight: 292 });
+  gridB.scheduleMeasureRows(true); runFrame(gridB._measureRaf);
+  assert.ok(measuredRow.rowMeasureCalls > 0);
+  assert.equal(sectionB.blockHeights[0], 292, 'B still owns measurement reconciliation after stale A delivery');
+  assert.equal(gridB.resumeSelectedArtistCoverLoadsAfterUserAction(tokenB), true);
+  assert.equal(context.galleryCoverSchedulerResumes, 2, 'only B releases its current suspension');
+  gridB.destroy();
+  assert.equal(cacheDestroys, 2, 'B retains its own teardown');
+});

@@ -75,13 +75,29 @@
         error.hidden = false;
       }
     };
-    const updateHistory = (url, mode, stateSnapshot = null) => {
+    const updateHistory = (url, mode, stateSnapshot) => {
       const position = historyPosition(window.history.state) ?? currentPosition;
       if (mode === 'push') window.history.pushState({ ...stateSnapshot, [historyPositionKey]: position + 1 }, '', url);
-      else if (mode === 'replace') window.history.replaceState({ ...window.history.state, [historyPositionKey]: position }, '', url);
+      else if (mode === 'replace') {
+        // Settings POST omits its snapshot; public replacement supplies one.
+        const snapshot = stateSnapshot === undefined ? window.history.state : stateSnapshot;
+        window.history.replaceState({ ...snapshot, [historyPositionKey]: position }, '', url);
+      }
       currentPosition = historyPosition(window.history.state) ?? position;
       currentHistoryState = window.history.state;
       currentUrl = url;
+    };
+    const commitLibraryHistory = (url, mode, stateSnapshot) => {
+      // A cached library selection can commit without starting another fetch.
+      // Its history entry still supersedes any older Settings response/body.
+      ++sequence;
+      navigationPending = false;
+      pending?.abort();
+      pending = null;
+      updateHistory(new URL(url, window.location.href).href, mode, stateSnapshot);
+      libraryUrl = currentUrl;
+      libraryHistoryState = currentHistoryState;
+      libraryTitle = document.title;
     };
     const restoreHistory = () => {
       const position = historyPosition(window.history.state);
@@ -297,17 +313,15 @@
     if (!host.hidden) mountContent();
     return {
       navigate,
+      writeLibraryHistory(value, stateSnapshot, { mode } = {}) {
+        const url = urlFor(value);
+        if (destroyed || restoringPosition !== null || !url
+          || url.protocol !== window.location.protocol || (mode !== 'push' && mode !== 'replace')) return;
+        commitLibraryHistory(url.href, mode, stateSnapshot ?? null);
+      },
       pushLibraryHistory(url, stateSnapshot) {
-        // A cached library selection can commit without starting another fetch.
-        // Its history entry still supersedes any older Settings response/body.
-        ++sequence;
-        navigationPending = false;
-        pending?.abort();
-        pending = null;
-        updateHistory(new URL(url, window.location.href).href, 'push', stateSnapshot);
-        libraryUrl = currentUrl;
-        libraryHistoryState = currentHistoryState;
-        libraryTitle = document.title;
+        // Native callers commit their view before writing and ignore the result.
+        commitLibraryHistory(url, 'push', stateSnapshot);
       },
       destroy() {
         destroyed = true;

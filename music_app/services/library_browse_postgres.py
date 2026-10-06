@@ -929,6 +929,9 @@ class PostgresLibraryBrowseRepository:
         album_key: object,
         *,
         client_surface_class: object = None,
+        account_id: int | None = None,
+        library_id: int | None = None,
+        preference_action_resolver: Callable[[int], bool] | None = None,
     ) -> dict[str, object] | None:
         normalized_album_key = str(album_key or "").strip()
         if not normalized_album_key:
@@ -973,8 +976,11 @@ class PostgresLibraryBrowseRepository:
         return _attach_album_detail_track_rows(
             detail_album,
             client_surface_class=client_surface_class,
-            config=None,
+            config=self._config,
             viewer_opinion_preferences={},
+            account_id=account_id, library_id=library_id,
+            inventory_library_id=first_row_payload.get("library_id"),
+            preference_action_resolver=preference_action_resolver,
         )
 
     def build_non_album_detail_payload(
@@ -5110,6 +5116,7 @@ def _selected_artist_album_payloads(rows: list[object], artist_display: str) -> 
             track_metadata = _row_json_mapping(row_payload.get("track_metadata"))
             track_ids_by_album[album_identity].add(track_identity)
             track_payload = {
+                "track_id": track_id,
                 "key": track_key,
                 "track_ref": track_key,
                 "title": str(row_payload.get("track_title") or "").strip(),
@@ -5134,8 +5141,8 @@ def _selected_artist_album_payloads(rows: list[object], artist_display: str) -> 
                 "path": row_payload.get("file_private_path"),
                 "track_scrobble_count": int(row_payload.get("track_scrobble_count") or 0),
                 "track_preference_overlay": {
-                    "rating": row_payload.get("track_preference_rating"),
-                    "love_tier": row_payload.get("track_preference_love_tier"),
+                    "rating": None,
+                    "love_tier": "off",
                 },
             }
             if exception_type:
@@ -5795,16 +5802,6 @@ def _album_detail_sql() -> str:
           from (select * from legacy_scrobble_counts union all select * from measured_scrobble_counts) counts
           group by track_key
         ),
-        track_preferences as (
-          select
-            app.track_preferences.track_key,
-            app.track_preferences.rating,
-            app.track_preferences.love_tier
-          from app.track_preferences
-          join bootstrap_context
-            on bootstrap_context.library_id = app.track_preferences.library_id
-           and bootstrap_context.account_id = app.track_preferences.account_id
-        ),
         ignored_repair_rollup as (
           select
             library.local_track_files.private_path as file_private_path,
@@ -5862,6 +5859,7 @@ def _album_detail_sql() -> str:
                 cover_candidate_snapshots.seen_automatic_improvement_revision
             )
           end as cover_candidate_snapshot,
+          library.local_tracks.library_id,
           library.local_tracks.id as track_id,
           library.local_tracks.track_key,
           library.local_tracks.title as track_title,
@@ -5883,9 +5881,7 @@ def _album_detail_sql() -> str:
             ignored_repair_rollup.ignored_repair_keys,
             array[]::text[]
           ) as ignored_repair_keys,
-          coalesce(scrobble_counts.scrobble_count, 0) as track_scrobble_count,
-          track_preferences.rating as track_preference_rating,
-          track_preferences.love_tier as track_preference_love_tier
+          coalesce(scrobble_counts.scrobble_count, 0) as track_scrobble_count
         from library.local_albums
         join bootstrap_context
           on bootstrap_context.library_id = library.local_albums.library_id
@@ -5922,8 +5918,6 @@ def _album_detail_sql() -> str:
         ) exception_override on true
         left join scrobble_counts
           on scrobble_counts.track_key = library.local_tracks.track_key
-        left join track_preferences
-          on track_preferences.track_key = library.local_tracks.track_key
         left join ignored_repair_rollup
           on ignored_repair_rollup.file_private_path = library.local_track_files.private_path
         where library.local_albums.album_key = %(album_key)s

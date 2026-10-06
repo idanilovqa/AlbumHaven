@@ -90,6 +90,7 @@ def allowed_actions_for_request(
     actions: Iterable[str],
     *,
     target_account_id: int | None = None,
+    resource: ResourceScope | None = None,
 ) -> AllowedActions:
     """Project UI actions through the same evaluator used by route authority."""
 
@@ -112,6 +113,7 @@ def allowed_actions_for_request(
             action=action,
             library_id=_library_scope(actor, action, None),
             target_account_id=target_account_id,
+            resource=resource,
             deployment_mode=_deployment_mode(request),
             request_origin=_request_origin(request),
             client_surface_class=client_surface_from_request(request),

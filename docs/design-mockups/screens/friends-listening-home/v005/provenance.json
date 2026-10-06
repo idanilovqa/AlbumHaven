@@ -1,0 +1,54 @@
+{
+  "schemaVersion": 1,
+  "artifact": "friends-listening-home/v005",
+  "status": "in_review",
+  "productionImplementation": false,
+  "ownerVisualApproval": "pending",
+  "archiveKind": "editable_adapter_source_only",
+  "runnableSnapshotIncluded": false,
+  "nativeContentTree": "bf042b5d824e7aeb35a689066e0cbe0f10e8b900",
+  "nativeAppVersion": "0.9.48",
+  "nativeInputCount": 185,
+  "servedNativeFilesVerified": 156,
+  "sourceOverrides": [
+    {
+      "path": "music_app/static/css/mobile-layout.css",
+      "commit": "eef9d13fd5dbd2cda3485e3c308c8494ba7d6fd4",
+      "sha256": "67a25fbc43853b44ffab91b1c1698d7bfba677c3f69ec1dbb7433a0ec493f89d"
+    }
+  ],
+  "uiGroups": 75,
+  "hostingWorkerTests": 6,
+  "files": [
+    {
+      "path": "source/fixture-data.mjs",
+      "sha256": "8e4597ec8eae6afc311b395e5a06d3d64dcfa61985fe4bc1db5ea7ed3a4e3f67",
+      "bytes": 25197
+    },
+    {
+      "path": "source/friends-app.jsx",
+      "sha256": "ea4cab0da97fef53a96fff9f41ae8833f50f1aecf4f51f57b6ad99b9967976db",
+      "bytes": 39242
+    },
+    {
+      "path": "source/mock-adapter.mjs",
+      "sha256": "6e7353b4bc1a168530b62ba9a0e55aa1212736af67ff528b127953055c199a90",
+      "bytes": 12209
+    },
+    {
+      "path": "source/mock-layout.css",
+      "sha256": "a785d9e9ecb9c843f49aff1dadca636c6d463f31d054817dc1db7aff2198b799",
+      "bytes": 27283
+    },
+    {
+      "path": "source/native-input-manifest.json",
+      "sha256": "ea1bccfe5f92e126d440231eb3fbdbc1fb3e1d3dba37cf657aad3afcaea1f135",
+      "bytes": 34794
+    },
+    {
+      "path": "source/native-layout.js",
+      "sha256": "a654e9b75370b9c4ceb1cf0168bf1c6de25f24af4b683d8165b98233f020bb91",
+      "bytes": 42162
+    }
+  ]
+}

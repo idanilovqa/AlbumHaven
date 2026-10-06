@@ -373,6 +373,18 @@
     overflow: auto;
   }
 }
+.utility-detected-actions .utility-detail-apply.ui-button--primary:not(:disabled):not([aria-disabled="true"]) {
+  border-color: var(--appearance-primary-button, #2fbd72);
+  background: var(--appearance-primary-button, #2fbd72);
+  color: var(--appearance-primary-button-ink, #06130b);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--appearance-primary-button, #2fbd72) 34%, transparent), 0 0 16px color-mix(in srgb, var(--appearance-primary-button, #2fbd72) 28%, transparent);
+}
+.utility-detected-actions .utility-detail-apply.ui-button--primary:hover:not(:disabled):not([aria-disabled="true"]),
+.utility-detected-actions .utility-detail-apply.ui-button--primary:focus-visible:not(:disabled):not([aria-disabled="true"]) {
+  border-color: color-mix(in srgb, var(--appearance-primary-button, #2fbd72) 82%, white);
+  background: color-mix(in srgb, var(--appearance-primary-button, #2fbd72) 86%, white);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--appearance-primary-button, #2fbd72) 42%, transparent), 0 0 22px color-mix(in srgb, var(--appearance-primary-button, #2fbd72) 42%, transparent);
+}
 .utility-list-item.is-dragging {
   opacity: 0.55;
 }

@@ -3937,6 +3937,9 @@ function buildFilterPillHtml(config = {}) {
 }
 
 function buildGalleryBarHtml(config = {}) {
+  if (config.contextKind === 'recent') {
+    return `<div class="gallery-bar__context"><div class="gallery-bar__title"><span>${escapeHtml(config.title || 'Recent')}</span></div></div><div class="gallery-bar__actions">${String(config.actionsHtml || '')}</div>`;
+  }
   const isSingleArtist = config.contextKind === 'single-artist';
   const isArtist = config.contextKind === 'artist' || isSingleArtist;
   const isFamily = config.contextKind === 'family';
@@ -3996,7 +3999,10 @@ function buildGalleryCardInfoHtml(config = {}) {
   const title = config.openAttributes
     ? `<button class="album-open-trigger album-title-button" type="button" ${config.openAttributes}><span data-gallery-metadata-text>${escapeHtml(config.title || '')}</span></button>`
     : escapeHtml(config.title || '');
-  return `<div class="album-body gallery-card-info"><h3 class="album-title">${title}</h3><div class="album-meta-row"><div class="album-subtitle"><span data-gallery-metadata-text>${escapeHtml(metadata)}</span></div></div>${String(config.ratingHtml || '')}<div class="chip-row"><span class="track-count">${count} track${count === 1 ? '' : 's'}</span><span class="album-length">${escapeHtml(config.lengthDisplay || '')}</span></div></div>`;
+  const summary = config.listeningSummaryHtml === undefined
+    ? `<div class="chip-row"><span class="track-count">${count} track${count === 1 ? '' : 's'}</span><span class="album-length">${escapeHtml(config.lengthDisplay || '')}</span></div>`
+    : String(config.listeningSummaryHtml || '');
+  return `<div class="album-body gallery-card-info"><h3 class="album-title">${title}</h3><div class="album-meta-row"><div class="album-subtitle"><span data-gallery-metadata-text>${escapeHtml(metadata)}</span></div></div>${String(config.ratingHtml || '')}${summary}</div>`;
 }
 
 // END js/runtime/gallery-main-components.js
@@ -4242,6 +4248,9 @@ function resolveGallerySummaryTotals(view, mountedTotals, filterState, groups) {
 // BEGIN js/runtime/gallery-card-component.js
 
 function buildGalleryCardHtml(config = {}) {
+  const interaction = config.interaction === undefined ? 'native' : config.interaction;
+  if (!['native', 'controlled', 'none'].includes(interaction)) throw new TypeError('Unknown GalleryCard interaction.');
+  if (interaction !== 'native') return buildControlledGalleryCardHtml(config);
   const displayMode = ['list', 'cards', 'covers'].includes(config.displayMode) ? config.displayMode : 'cards';
   const releaseYear = displayMode === 'covers' ? String(config.year ?? '').trim() : '';
   const openAttributes = `data-open-tracklist="1" data-album-key="${escapeHtml(config.albumKey || '')}" data-album-version-key="${escapeHtml(config.albumVersionKey || '')}" data-album="${escapeHtml(config.albumFallback || '')}"`;
@@ -4258,16 +4267,36 @@ function buildGalleryCardHtml(config = {}) {
   `;
 }
 
+
+function buildControlledGalleryCardHtml(config) {
+  const ref = typeof config.actionRef === 'string' && config.actionRef.trim() ? config.actionRef : '';
+  const can = intent => config.interaction === 'controlled' && ref !== '' && config.actions?.[intent] === true;
+  const attributes = intent => ({ 'data-gallery-card-intent': intent, 'data-gallery-card-ref': ref });
+  const title = String(config.title || 'album');
+  const artbox = String(config.artboxHtml || '');
+  const artwork = can('select')
+    ? `<button class="album-card__artbox-trigger cover" type="button" data-gallery-card-intent="select" data-gallery-card-ref="${escapeHtml(ref)}" aria-label="${escapeHtml(`Select ${title}`)}" aria-pressed="false">${artbox}</button>`
+    : `<div class="album-card__artbox-trigger cover">${artbox}</div>`;
+  const open = can('open') ? ButtonComponent.renderButton({
+    label: 'Open', ariaLabel: `Open ${title}`, size: 'small', attributes: attributes('open'),
+  }) : '';
+  const play = can('play') ? ButtonComponent.renderActionButton({
+    ariaLabel: `Play ${title}`, icon: 'play', presentation: 'bare', attributes: attributes('play'),
+  }) : '';
+  return `<section class="album-card" data-gallery-display="cards" data-gallery-card-interaction="${config.interaction}" data-gallery-card-key="${escapeHtml(config.identity || '')}" data-gallery-card-render-key="${escapeHtml(config.renderKey || '')}">${artwork}${buildGalleryCardInfoHtml({ ...config, openAttributes: '' })}${open || play ? `<div class="gallery-card__actions">${open}${play}</div>` : ''}</section>`;
+}
+
 let galleryCardMetadataMotion = null;
 function syncGalleryCardMetadataMotion(root) {
   const mobile = typeof usesMobilePageLayout === 'function' && usesMobilePageLayout();
-  if (!mobile) { galleryCardMetadataMotion?.dispose(); galleryCardMetadataMotion = null; return; }
-  if (!root?.querySelectorAll || typeof ResizeObserver !== 'function') return;
+  if (!mobile) { galleryCardMetadataMotion?.dispose(); return null; }
+  if (typeof root?.querySelectorAll !== 'function' || typeof ResizeObserver !== 'function') return galleryCardMetadataMotion;
   if (!galleryCardMetadataMotion) {
     const rows = new Map();
     const reduced = window.matchMedia('(prefers-reduced-motion: reduce)');
     let frame = 0, disposed = false;
     const refresh = () => {
+      if (disposed) return;
       frame = 0;
       for (const [row, text] of rows) {
         if (!row.isConnected) { observer.unobserve(row); observer.unobserve(text); rows.delete(row); continue; }
@@ -4281,8 +4310,9 @@ function syncGalleryCardMetadataMotion(root) {
     const observer = new ResizeObserver(schedule);
     reduced.addEventListener('change', schedule);
     document.fonts?.ready.then(schedule);
-    galleryCardMetadataMotion = {
+    const controller = {
       update(root) {
+        if (disposed) return;
         root.querySelectorAll('.album-card [data-gallery-metadata-text]').forEach(text => {
           const row = text.parentElement, previous = rows.get(row);
           if (previous === text) return;
@@ -4292,15 +4322,20 @@ function syncGalleryCardMetadataMotion(root) {
         schedule();
       },
       dispose() {
+        if (disposed) return;
         disposed = true;
         if (frame) cancelAnimationFrame(frame);
+        frame = 0;
         observer.disconnect(); reduced.removeEventListener('change', schedule);
         for (const row of rows.keys()) row.classList.remove('is-card-text-overflowing');
         rows.clear();
+        if (galleryCardMetadataMotion === controller) galleryCardMetadataMotion = null;
       },
     };
+    galleryCardMetadataMotion = controller;
   }
   galleryCardMetadataMotion.update(root);
+  return galleryCardMetadataMotion;
 }
 
 // END js/runtime/gallery-card-component.js
@@ -4508,6 +4543,329 @@ function syncMobileAlbumComposition(album) {
 }
 
 // END js/runtime/album-details-components.js
+
+// BEGIN js/runtime/dashboard.js
+
+/* Controlled placement of existing widgets; their components retain content ownership. */
+const Dashboard = (() => {
+  const mountedRoots = new WeakSet();
+  const sizePaths = {
+    full: 'M8 3H3v5m13-5h5v5M3 16v5h5m13-5v5h-5',
+    widget: 'M3 8h5V3m8 0v5h5M8 21v-5H3m18 0h-5v5',
+  };
+
+  function mount(root, options = {}) {
+    if (!(root instanceof HTMLElement) || mountedRoots.has(root)
+      || !Array.isArray(options.widgets) || typeof options.onSizeIntent !== 'function') {
+      throw new TypeError('Dashboard requires an unowned root, widgets and onSizeIntent.');
+    }
+    const keys = new Set();
+    const owners = new Set([root]);
+    // Validate the complete input before adding any controls or attributes.
+    const widgets = options.widgets.map((descriptor) => {
+      if (!descriptor || typeof descriptor.key !== 'string' || !descriptor.key.trim()
+        || keys.has(descriptor.key)) {
+        throw new TypeError('Dashboard widget keys must be nonempty and unique.');
+      }
+      const { key, element, header, body } = descriptor;
+      const nodes = [element, header, body];
+      if (nodes.some(node => !(node instanceof HTMLElement) || owners.has(node))
+        || new Set(nodes).size !== nodes.length || element.parentNode !== root
+        || !element.contains(header) || !element.contains(body)
+        || header.contains(body) || body.contains(header)) {
+        throw new TypeError('Dashboard widgets require distinct existing element, header and body owners.');
+      }
+      keys.add(key);
+      nodes.forEach(node => owners.add(node));
+      return { key, element, header, body };
+    });
+    const onSizeIntent = options.onSizeIntent;
+    const attributes = [
+      [root, 'data-dashboard'],
+      [root, 'data-dashboard-layout'],
+      [root, 'data-dashboard-expanded-key'],
+      ...widgets.map(widget => [widget.element, 'data-dashboard-widget-state']),
+    ].map(([element, name]) => ({ element, name, previous: element.getAttribute(name) }));
+    let expandedKey = null;
+    let disposed = false;
+    const controls = widgets.length > 1 ? widgets.map((widget) => {
+      const holder = root.ownerDocument.createElement('div');
+      holder.innerHTML = ButtonComponent.renderActionButton({
+        ariaLabel: 'Full size',
+        title: 'Full size',
+        iconClass: 'dashboard__size-icon',
+        attributes: { 'aria-expanded': 'false' },
+      });
+      const button = holder.firstElementChild;
+      button.querySelector('.dashboard__size-icon').innerHTML = `<svg class="ui-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="${sizePaths.full}"/></svg>`;
+      const path = button.querySelector('path');
+      const parent = widget.header.querySelector('.gallery-bar__actions, .album-details-header__actions') || widget.header;
+      const onClick = (event) => {
+        if (disposed) return;
+        event.preventDefault();
+        event.stopPropagation();
+        onSizeIntent(widget.key, expandedKey === widget.key ? null : widget.key);
+      };
+      return { widget, button, path, parent, onClick };
+    }) : [];
+
+    function update(state = {}) {
+      if (disposed) return;
+      const nextKey = state.expandedKey;
+      if (nextKey !== null && !keys.has(nextKey)) {
+        throw new TypeError('Dashboard expandedKey must be null or an existing widget key.');
+      }
+      // A sole widget already occupies the full container in every controlled state.
+      expandedKey = widgets.length === 1 ? null : nextKey;
+      root.setAttribute('data-dashboard-layout', widgets.length === 1 ? 'single' : expandedKey === null ? 'ordinary' : 'expanded');
+      if (expandedKey === null) root.removeAttribute('data-dashboard-expanded-key');
+      else root.setAttribute('data-dashboard-expanded-key', expandedKey);
+      widgets.forEach((widget) => {
+        const state = widgets.length === 1 ? 'fill' : expandedKey === null ? 'ordinary'
+          : widget.key === expandedKey ? 'expanded' : 'suppressed';
+        widget.element.setAttribute('data-dashboard-widget-state', state);
+      });
+      controls.forEach(({ widget, button, path }) => {
+        const expanded = widget.key === expandedKey;
+        const label = expanded ? 'Widget size' : 'Full size';
+        button.setAttribute('aria-label', label);
+        button.setAttribute('title', label);
+        button.setAttribute('aria-expanded', String(expanded));
+        path.setAttribute('d', expanded ? sizePaths.widget : sizePaths.full);
+      });
+    }
+
+    function dispose() {
+      if (disposed) return;
+      disposed = true;
+      controls.forEach(({ button, onClick }) => {
+        button.removeEventListener('click', onClick);
+        button.remove();
+      });
+      attributes.forEach(({ element, name, previous }) => {
+        if (previous === null) element.removeAttribute(name);
+        else element.setAttribute(name, previous);
+      });
+      mountedRoots.delete(root);
+    }
+
+    mountedRoots.add(root);
+    root.setAttribute('data-dashboard', 'true');
+    controls.forEach(({ button, parent, onClick }) => {
+      parent.appendChild(button);
+      button.addEventListener('click', onClick);
+    });
+    update({ expandedKey: null });
+    return { update, dispose };
+  }
+
+  return { mount };
+})();
+
+// END js/runtime/dashboard.js
+
+// BEGIN js/runtime/home-recent.js
+
+const HomeRecent = (() => {
+  function canOpen(row) {
+    return row.row_kind === 'local_album' && row.local_match_state === 'matched_local'
+      && typeof row.album_ref === 'string' && row.album_ref.trim() !== ''
+      && row.allowed_actions?.can_open_album === true;
+  }
+
+  function artworkUrl(row) {
+    for (const value of [row.remote_cover_thumbnail_url, row.remote_cover_url]) {
+      if (typeof value !== 'string' || !/^https?:\/\//i.test(value)) continue;
+      try {
+        const url = new URL(value);
+        if (['http:', 'https:'].includes(url.protocol) && !url.username && !url.password) return value;
+      } catch (_error) { /* Invalid supplied artwork falls back to the native empty state. */ }
+    }
+    return '';
+  }
+
+  function listeningSummary(row) {
+    const facts = [];
+    const count = (value, label) => {
+      if (Number.isInteger(value) && value >= 0) facts.push(`${value} ${label}${value === 1 ? '' : 's'}`);
+    };
+    count(row.listen_event_count, 'listen event');
+    count(row.listened_track_count, 'listened track');
+    if (Number.isInteger(row.album_track_count) && row.album_track_count >= 0) {
+      facts.push(`${row.album_track_count} total track${row.album_track_count === 1 ? '' : 's'}`);
+    }
+    if (typeof row.listened_duration_seconds === 'number' && Number.isFinite(row.listened_duration_seconds) && row.listened_duration_seconds >= 0) {
+      facts.push(`${formatDurationCompact(row.listened_duration_seconds)} listened`);
+    }
+    const timestamp = row.last_listened_at;
+    const time = typeof timestamp === 'string' && Number.isFinite(Date.parse(timestamp))
+      ? `<time datetime="${escapeHtml(timestamp)}">${escapeHtml(new Date(timestamp).toLocaleString())}</time>` : '';
+    return `<div class="chip-row">${facts.map(fact => `<span>${escapeHtml(fact)}</span>`).join('')}${time ? `<span>Last listened ${time}</span>` : ''}</div>`;
+  }
+
+  function cardHtml(entry) {
+    const { row, key, local, uniqueRef } = entry;
+    const open = local && uniqueRef && canOpen(row);
+    const url = !local && row.row_kind === 'external_album' ? artworkUrl(row) : '';
+    const label = `${typeof row.name === 'string' ? row.name : 'Album'} artwork`;
+    return buildGalleryCardHtml({
+      identity: key,
+      title: typeof row.name === 'string' ? row.name : '',
+      artist: typeof row.album_artist === 'string' ? row.album_artist : '',
+      interaction: open ? 'controlled' : 'none',
+      actionRef: open ? row.album_ref : '',
+      actions: { select: open, open, play: open && row.allowed_actions.can_play_album === true },
+      artboxHtml: buildAlbumArtboxHtml({
+        state: url ? 'ready' : 'empty', label,
+        coverHtml: url ? `<img src="${escapeHtml(url)}" alt="" loading="lazy" decoding="async">` : '',
+      }),
+      listeningSummaryHtml: listeningSummary(row),
+    });
+  }
+
+  function mount(element, options = {}) {
+    if (!(element instanceof Element)) throw new TypeError('HomeRecent requires a widget element.');
+    const { onSelectAlbum, onOpenAlbum, onPlayAlbum, onRetry } = options;
+    if (![onSelectAlbum, onOpenAlbum, onPlayAlbum, onRetry].every(callback => typeof callback === 'function')) {
+      throw new TypeError('HomeRecent requires select, open, play and retry callbacks.');
+    }
+    const document = element.ownerDocument;
+    const header = document.createElement('header');
+    header.className = 'gallery-bar home-recent__header';
+    header.innerHTML = buildGalleryBarHtml({ contextKind: 'recent', title: 'Recent' });
+    const body = document.createElement('div');
+    body.className = 'home-recent__body gallery-scrollbar';
+    const statusElement = document.createElement('div');
+    statusElement.className = 'home-recent__status';
+    const localRows = document.createElement('div');
+    localRows.className = 'home-recent__rows';
+    const external = document.createElement('section');
+    external.className = 'home-recent__external';
+    const externalTitle = document.createElement('h3');
+    externalTitle.textContent = 'Not local listens';
+    const externalRows = document.createElement('div');
+    externalRows.className = 'home-recent__rows';
+    external.append(externalTitle, externalRows);
+    body.append(statusElement, localRows, external);
+    element.classList.add('home-recent');
+    element.append(header, body);
+
+    let disposed = false, status = 'loading';
+    let current = new Map();
+    const callbacks = { select: onSelectAlbum, open: onOpenAlbum, play: onPlayAlbum };
+
+    function showStatus(nextStatus) {
+      current.clear();
+      localRows.replaceChildren();
+      externalRows.replaceChildren();
+      localRows.hidden = true;
+      external.hidden = true;
+      externalTitle.textContent = '';
+      const messages = {
+        loading: 'Loading recent listens…',
+        empty: 'No recent listens.',
+        error: 'Recent listens could not be loaded.',
+        denied: 'Recent listens are unavailable.',
+      };
+      statusElement.hidden = false;
+      statusElement.innerHTML = buildOnPageAlertHtml({
+        severity: nextStatus === 'error' ? 'error' : 'info',
+        role: nextStatus === 'error' ? 'alert' : 'status',
+        message: messages[nextStatus],
+        actionsHtml: nextStatus === 'error' ? ButtonComponent.renderButton({
+          label: 'Retry', attributes: { 'data-home-recent-retry': 'true' },
+        }) : '',
+      });
+    }
+
+    function update({ status: requestedStatus, payload, selectedAlbumRef = null } = {}) {
+      if (disposed) return;
+      status = ['loading', 'ready', 'error', 'denied'].includes(requestedStatus) ? requestedStatus : 'error';
+      const local = payload?.recent_local_albums, notLocal = payload?.recent_not_local_albums;
+      if (status === 'ready' && (!Array.isArray(local) || !Array.isArray(notLocal)
+        || ![...local, ...notLocal].every(row => row && typeof row === 'object' && !Array.isArray(row)))) status = 'error';
+      if (status !== 'ready') { showStatus(status); return; }
+      if (!local.length && !notLocal.length) { showStatus('empty'); return; }
+
+      const previous = current;
+      current = new Map();
+      const refCounts = new Map();
+      for (const row of local) refCounts.set(row.album_ref, (refCounts.get(row.album_ref) || 0) + 1);
+      function renderRows(rows, container, isLocal) {
+        const occurrences = new Map();
+        rows.forEach((row, index) => {
+          const identity = isLocal
+            ? (typeof row.album_ref === 'string' && row.album_ref.trim() ? row.album_ref : `missing:${index}`)
+            : JSON.stringify([row.name, row.album_artist]);
+          const occurrence = occurrences.get(identity) || 0;
+          occurrences.set(identity, occurrence + 1);
+          const key = JSON.stringify([isLocal ? 'local' : 'external', identity, occurrence]);
+          const entry = { row, key, local: isLocal, uniqueRef: refCounts.get(row.album_ref) === 1 };
+          const html = cardHtml(entry), old = previous.get(key);
+          let card = old?.element;
+          if (!card || old.html !== html) {
+            const holder = document.createElement('div');
+            holder.innerHTML = html;
+            const rendered = holder.firstElementChild;
+            if (card) {
+              card.innerHTML = rendered.innerHTML;
+              card.setAttribute('data-gallery-card-interaction', rendered.getAttribute('data-gallery-card-interaction'));
+            } else card = rendered;
+          }
+          const select = card.querySelector('[data-gallery-card-intent="select"]');
+          if (select) select.setAttribute('aria-pressed', row.album_ref === selectedAlbumRef ? 'true' : 'false');
+          if (container.children[index] !== card) container.insertBefore(card, container.children[index] || null);
+          current.set(key, { ...entry, element: card, html });
+        });
+      }
+      renderRows(local, localRows, true);
+      renderRows(notLocal, externalRows, false);
+      for (const [key, entry] of previous) if (!current.has(key)) entry.element.remove();
+      statusElement.replaceChildren();
+      statusElement.hidden = true;
+      localRows.hidden = local.length === 0;
+      external.hidden = notLocal.length === 0;
+      externalTitle.textContent = notLocal.length ? 'Not local listens' : '';
+    }
+
+    function onClick(event) {
+      if (disposed) return;
+      const target = event.target instanceof Element ? event.target : event.target?.parentElement;
+      const retry = target?.closest('[data-home-recent-retry]');
+      if (retry && statusElement.contains(retry)) {
+        event.preventDefault(); event.stopPropagation();
+        if (status === 'error') onRetry();
+        return;
+      }
+      const control = target?.closest('[data-gallery-card-intent]');
+      if (!control || !body.contains(control)) return;
+      event.preventDefault(); event.stopPropagation();
+      if (status !== 'ready') return;
+      const card = control.closest('.album-card');
+      const entry = card && current.get(card.getAttribute('data-gallery-card-key'));
+      const intent = control.getAttribute('data-gallery-card-intent');
+      const ref = control.getAttribute('data-gallery-card-ref');
+      if (!entry || entry.element !== card || !entry.local || !entry.uniqueRef || !canOpen(entry.row)
+        || ref !== entry.row.album_ref || !Object.prototype.hasOwnProperty.call(callbacks, intent)) return;
+      if (intent === 'play' && entry.row.allowed_actions.can_play_album !== true) return;
+      callbacks[intent](ref);
+    }
+    body.addEventListener('click', onClick);
+    showStatus('loading');
+    return {
+      element, header, body, update,
+      dispose() {
+        if (disposed) return;
+        disposed = true;
+        current.clear();
+        body.removeEventListener('click', onClick);
+      },
+    };
+  }
+  return { mount };
+})();
+
+// END js/runtime/home-recent.js
 
 // BEGIN js/runtime/core-state-and-helpers.js
 
@@ -32968,6 +33326,8 @@ class VirtualArtistGrid {
     this.columns = 1;
     this.cardTrackWidth = CARD_GALLERY_LAYOUT_CONFIG.cardMinWidth;
     this.lastKey = '';
+    this._destroyed = false;
+    this._metadataMotion = null;
     this._raf = null;
     this._scrollRenderFallbackTimer = 0;
     this._measureRaf = null;
@@ -33055,6 +33415,10 @@ class VirtualArtistGrid {
   }
 
   destroy() {
+    if (this._destroyed) return;
+    this._destroyed = true;
+    this._metadataMotion?.dispose();
+    this._metadataMotion = null;
     this._renderGeneration += 1;
     this.scrollEl.removeEventListener('scroll', this.onScroll);
     this.scrollEl.removeEventListener('wheel', this.onUserScrollIntent);
@@ -33105,6 +33469,7 @@ class VirtualArtistGrid {
   }
 
   onPointerDown(event) {
+    if (this._destroyed) return;
     const target = event?.target;
     const closest = typeof target?.closest === 'function'
       ? target.closest('[data-open-tracklist="1"][data-album-key], .album-card, .family-artist-header [data-artist-info-trigger]')
@@ -33134,6 +33499,7 @@ class VirtualArtistGrid {
     this._activeAlbumCardPointerId = null;
     if (this._albumCardPointerReleaseRaf) return;
     this._albumCardPointerReleaseRaf = scheduleBrowserAnimationFrame(() => {
+      if (this._destroyed) return;
       this._albumCardPointerReleaseRaf = 0;
       if (this._albumCardPointerGestureActive) return;
       const deferredRender = this._deferredPointerGestureRender;
@@ -33150,6 +33516,7 @@ class VirtualArtistGrid {
   }
 
   suspendSelectedArtistCoverLoadsForUserAction() {
+    if (this._destroyed) return 0;
     if (typeof galleryCoverLoadScheduler === 'undefined') return 0;
     this._nextCoverLoadUserActionToken += 1;
     const token = this._nextCoverLoadUserActionToken;
@@ -33362,6 +33729,7 @@ class VirtualArtistGrid {
   }
 
   restoreOwnedAbsoluteScrollPosition(position) {
+    if (this._destroyed) return false;
     if (
       !this.scrollEl
       || !Number.isFinite(Number(position?.scrollTop))
@@ -33394,6 +33762,7 @@ class VirtualArtistGrid {
   }
 
   setGroups(primaryGroups, familyGroups, fallbackGroups = null, options = {}, layoutConfig = null) {
+    if (this._destroyed) return;
     const supersededScrollRenderRafOwner = Number(this._raf || 0);
     this._renderGeneration += 1;
     const renderGeneration = this._renderGeneration;
@@ -33766,6 +34135,7 @@ class VirtualArtistGrid {
   }
 
   onScroll() {
+    if (this._destroyed) return;
     const ownsPendingAbsoluteRestore = Boolean(
       this._absoluteScrollRestore,
     );
@@ -33830,6 +34200,7 @@ class VirtualArtistGrid {
   }
 
   onArtistTreeSettled() {
+    if (this._destroyed) return;
     const anchor = this.captureScrollAnchor();
     this.onResize({ preserveCardTrackWidth: true });
     if (anchor && !this._resetScrollAfterMeasure) {
@@ -33842,6 +34213,7 @@ class VirtualArtistGrid {
   }
 
   onResize(options = {}) {
+    if (this._destroyed) return;
     const artistTreeTransitioning = document.getElementById('shell-navigation-rail')
       ?.classList?.contains?.('is-transitioning');
     if (artistTreeTransitioning && !options.preserveCardTrackWidth) return;
@@ -33852,6 +34224,7 @@ class VirtualArtistGrid {
   }
 
   render(force = false, options = {}) {
+    if (this._destroyed) return;
     if (this._albumCardPointerGestureActive || this._albumCardPointerReleaseRaf) {
       this._deferredPointerGestureRender = {
         force: Boolean(force),
@@ -34027,7 +34400,10 @@ class VirtualArtistGrid {
   }
 
   activateGalleryCoverImages(rootEl = this.containerEl) {
-    if (typeof syncGalleryCardMetadataMotion === 'function') syncGalleryCardMetadataMotion(rootEl);
+    if (this._destroyed) return;
+    if (typeof syncGalleryCardMetadataMotion === 'function') {
+      this._metadataMotion = syncGalleryCardMetadataMotion(rootEl);
+    }
     if (!rootEl || typeof rootEl.querySelectorAll !== 'function') return;
     rootEl.querySelectorAll('img[data-gallery-cover-src]').forEach((image) => {
       if (!(image instanceof HTMLImageElement)) return;
@@ -34369,6 +34745,7 @@ class VirtualArtistGrid {
   }
 
   scheduleMeasureRows(force = false) {
+    if (this._destroyed) return;
     if (!force && !this.isScrollSettled) {
       this.recordDiagnosticEvent('measure-request-skipped-scrolling', { force: false });
       return;
@@ -34382,6 +34759,7 @@ class VirtualArtistGrid {
     }
     let measureRafOwner = 0;
     measureRafOwner = scheduleBrowserAnimationFrame(() => {
+      if (this._destroyed) return;
       this._activeMeasureRafOwner = measureRafOwner;
       this._measureRaf = null;
       this.recordDiagnosticEvent('measure-frame-started', { measureRafOwner });

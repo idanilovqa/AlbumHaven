@@ -28,6 +28,8 @@ const RUNTIME_SCRIPT_PATHS = [
   'js/runtime/gallery-main-state.js',
   'js/runtime/gallery-card-component.js',
   'js/runtime/album-details-components.js',
+  'js/runtime/dashboard.js',
+  'js/runtime/home-recent.js',
   'js/runtime/core-state-and-helpers.js',
   'js/runtime/trigger-anchor.js',
   'js/runtime/search-input.js',

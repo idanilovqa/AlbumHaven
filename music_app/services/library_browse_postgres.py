@@ -565,7 +565,7 @@ class PostgresLibraryBrowseRepository:
                 if callable(close):
                     close()
 
-        sidebar_displays, sidebar_sort_values, sidebar_counts, _ = _root_sidebar_aggregate(
+        sidebar_displays, sidebar_sort_values, sidebar_counts, album_count = _root_sidebar_aggregate(
             sidebar_rows,
         )
         artists_sidebar = [
@@ -582,9 +582,6 @@ class PostgresLibraryBrowseRepository:
                 ),
             )
         ]
-        album_count = sum(
-            len(group.get("albums") or []) for group in preview_artist_groups
-        )
         payload = {
             "surface": _build_view_surface_payload("albums"),
             "shell_layout": _build_shell_layout_payload(

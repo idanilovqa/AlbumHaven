@@ -354,3 +354,87 @@ Two initial verification commands referenced nonexistent test filenames and ran
 no tests; the corrected existing-file command supplied the evidence above.
 Only the two implementation checkboxes are complete; no numeric progress counter
 exists. Operational audit and retry remain pending, recorded in private OPERATION.md.
+
+## Approved cross-instance writer ownership (October 6)
+
+The owner approved shared production Postgres/media across branch hostnames,
+existing-task-table ownership, caller-generated tokens, no automatic takeover,
+crash quiescence proof, and a compatible production rollout through normal gates.
+Production must remain available for browsing. Routine production shutdown is
+not the coordination model. This approval settles the ownership design;
+implementation, acceptance and fresh-retry gates remain open.
+No new external API, permission grant, UI or schema is part of the foundation.
+
+### COORD-F: durable ownership foundation
+
+Outcome: an internal Postgres repository can atomically reserve one library's
+writer slot. This unit does not integrate writers or make shared operation safe.
+Prerequisite: verify migration 0028's scoped unique index and runtime privileges
+in the isolated test database; verify deployed compatibility before activation.
+
+Create `music_app/services/library_operation_postgres.py` with
+`PostgresLibraryOperationRepository(config, connect=...)`. Resolve the existing
+bootstrap library from the configured database, as current repository adapters
+do. Its internal interface is:
+
+```python
+claim(*, owner_token: str, owner_identity: dict, operation: str) -> bool
+release(*, owner_token: str) -> bool
+read_owner() -> dict | None
+```
+
+Use `ops.cover_lookup_tasks` with source family `library_writer_ownership_v1`
+and constant task key `library-writer`. Store the token, operation and owner
+identity in metadata; keep `album_key` and selected path null and provider payload
+empty. Owner identity records host, PID, process-start identity and instance ID;
+these are private diagnostic evidence, not credentials or a liveness oracle.
+The existing library/source-family/task-key index owns uniqueness. Existing
+notification cleanup excludes this family, and album-key remapping cannot match
+its null album key. Do not reuse notification upserts or process-local revisions.
+
+Claim uses one conditional insert/upsert: insert active ownership when absent,
+or replace only an explicitly released row. An active row rejects every claim,
+including the same token. Worker handoffs carry the token without reacquiring it.
+Commit the short transaction before returning success. Release conditionally
+marks only the active row with the matching token released; stale/missing tokens
+return false. `read_owner` returns active ownership metadata or null. Do not add
+expiry predicates, timeout takeover, process-local authority or a long-held DB
+transaction. Reject empty tokens/operation and incomplete owner identity.
+Require a positive integer PID (not a boolean), and reject invalid release tokens
+before opening a connection. Missing bootstrap-library context raises an explicit
+error for claim, release and read; it must not look like contention or an empty slot.
+
+Database failures propagate without starting work or clearing ownership. If
+commit acknowledgement is lost, the caller reads through a new connection and
+compares its already-generated token before deciding whether it owns the slot.
+An inconclusive read blocks work. Connection loss after a successful claim leaves
+the durable active row intact. Only explicit release permits another writer.
+
+- [x] COORD-F1: Author and observe failing repository tests for competing claims,
+  release/reclaim, stale-token rejection, namespace isolation, old active rows,
+  and lost commit acknowledgement. Use isolated Postgres only.
+- [x] COORD-F2: Implement the repository with short parameterized transactions;
+  pass the same focused tests and inspect the complete diff twice.
+- [ ] COORD-F3: Complete independent review and required full native CI; record
+  its separate merge/publish checkpoint. Keep runtime activation absent.
+
+Compatibility/rollback: no schema changes, no callers until integration, no
+notification behavior change. Revert the unused source module to roll back the
+foundation. Do not delete an active ownership row as a rollback shortcut.
+Author tests in `tests/py/test_library_operation_postgres.py`; run only after
+the root grants the global pytest lane:
+`rtk python -m pytest tests/py/test_library_operation_postgres.py -q`.
+Missing isolated database configuration is a setup prerequisite, not a pass.
+
+October 6 focused foundation evidence: the dedicated isolated Postgres run first
+observed all 29 cases RED in 6.43 seconds with the implementation absent. After
+adding the 117-line repository, the same 29 cases passed in 12.70 seconds with
+zero skips and native pytest/launcher exit 0, verified by the root against stdout.
+Two complete local review passes covered the entire source and test files,
+approved ownership contract, migration 0028 conflict index, notification cleanup,
+validation, short transactions, lost commit acknowledgement, stale release and
+fixture isolation. Both passes found no validated findings; no review edits or
+additional test execution occurred. This closes COORD-F1/F2 only. COORD-F3's
+required full native CI and separate merge/publish checkpoint remain open; there
+was no new commit or push during focused verification. The foundation remains unused, and every COORD-I
+integration, acceptance, rollout and activation gate remains open.

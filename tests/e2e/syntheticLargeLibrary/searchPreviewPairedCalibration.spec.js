@@ -1,6 +1,6 @@
 import { expect, test } from '../support/baseFixtures.js';
 import { expectTimingBudget, performanceTimingBudget } from '../helpers/index.js';
-const SEARCH_BROWSE_BUDGET = Object.freeze(performanceTimingBudget('search-browse.searchBrowseReadyMs'));
+const SEARCH_BROWSE_BUDGET = Object.freeze(performanceTimingBudget('search-preview.syntheticFirstVisibleMs'));
 
 const CASE_ID = 'FTC-GALLERY-STARTUP-005U';
 const SEARCHES = Object.freeze([

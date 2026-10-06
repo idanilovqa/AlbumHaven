@@ -482,7 +482,7 @@ PERFORMANCE_TARGETS['paired-search-calibration'] = {
     'FTC-GALLERY-STARTUP-005U synthetic paired search calibration Devin submit to first expected album visible',
     'FTC-GALLERY-STARTUP-005U synthetic paired search calibration Neal Morse submit to first expected album visible',
   ],
-  measurementExpected: false,
+  measurementExpected: true,
   env: {
     ALBUM_HAVEN_PERSISTENCE_LIBRARY_BROWSE: 'postgres',
   },

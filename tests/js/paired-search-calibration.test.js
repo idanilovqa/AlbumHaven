@@ -69,7 +69,7 @@ test('phase artifacts require one sanitized record for each paired search case',
   );
 });
 
-test('combined artifact keeps the production contract and leaves synthetic timings unthresholded', () => {
+test('combined artifact keeps the production and synthetic contracts', () => {
   const combined = buildCombinedArtifact({
     runId: RUN_ID,
     production: phaseArtifact('production', productionCases),

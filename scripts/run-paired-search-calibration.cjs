@@ -90,7 +90,7 @@ function buildCombinedArtifact({ runId, production, synthetic, generatedAt }) {
     runId: normalizedRunId,
     generatedAt,
     productionBudget: { ...PRODUCTION_BUDGET },
-    syntheticThresholdStatus: 'unthresholded-pending-paired-samples',
+    syntheticThresholdStatus: 'thresholded-synthetic-search-budget',
     cases: PAIRED_SEARCH_CASES.map((scenario, index) => {
       const productionCase = productionArtifact.cases[index];
       const syntheticCase = syntheticArtifact.cases[index];

@@ -412,14 +412,14 @@ test('paired search calibration has isolated identical synthetic cases and one o
   assert.match(spec, /for \(const scenario of SEARCHES\)/u);
   assert.match(spec, /galleryActions\.goto\('\/\?surface=albums'\)/u);
   assert.match(spec, /\{ expectedArtist: scenario\.expectedArtist, timeout: 120000 \}/u);
-  assert.doesNotMatch(spec, /evaluateArtistFamilyLocalBenchmark|PRODUCTION_SEARCH_FIRST_VISIBLE_BUDGET|hardCeiling|targetMs|graceMs/u);
+  assert.match(spec, /performanceTimingBudget.*syntheticFirstVisibleMs/u);
   assert.doesNotMatch(
     artistFamilySpec,
     /DEVIN_SEARCH_QUERY|DEVIN_ARTIST|devinSearchResultsReady|nealMorseSearchResultsReady|devin-search-results-ready|neal-morse-search-results-ready/u,
   );
   assert.match(
     runner,
-    /PERFORMANCE_TARGETS\['paired-search-calibration'\]\s*=\s*\{[\s\S]*measurementExpected:\s*false/u,
+    /PERFORMANCE_TARGETS\['paired-search-calibration'\]\s*=\s*\{[\s\S]*measurementExpected:\s*true/u,
   );
   assert.equal(
     packageJson.scripts['test:e2e:performance:paired-search-calibration'],
@@ -427,8 +427,8 @@ test('paired search calibration has isolated identical synthetic cases and one o
   );
   assert.match(docs, /npm run test:e2e:performance:paired-search-calibration/u);
   assert.match(docs, /production[^\n]*first/iu);
-  assert.match(docs, /synthetic[^\n]*(?:skip|does not run)[^\n]*production[^\n]*fail/iu);
-  assert.match(docs, /no synthetic threshold/iu);
+  assert.match(docs, /synthetic.*500 ms.*fail/iu);
+  assert.match(docs, /400 ms target.*100 ms grace.*500 ms hard ceiling/iu);
 });
 
 test('retained production search artifacts exclude payloads and full artist arrays', () => {

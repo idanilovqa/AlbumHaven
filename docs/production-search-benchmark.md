@@ -58,6 +58,6 @@ The orchestrator runs the production benchmark first. The synthetic phase does n
 
 The command writes one combined JSON artifact under `test-results/paired-search-calibration/<run-id>/paired-search-calibration.json`. It contains the two queries, expected artists, sanitized submit-to-first-visible timings, production classifications, and per-case synthetic-to-production ratios. It excludes response payloads, artist arrays, authentication data, database identity values, and local paths.
 
-The production contract remains an 800 ms target plus 400 ms grace, with results above 1200 ms failing. The synthetic results have no synthetic threshold or pass/fail classification. Collect paired samples before proposing any synthetic target, grace band, or hard ceiling.
+The production contract remains an 800 ms target plus 400 ms grace, with results above 1200 ms failing. Synthetic results use a 400 ms target, 100 ms grace band, and 500 ms hard ceiling; results above 500 ms fail.
 
 Synthetic data provides deterministic regression coverage. The production run proves the user-visible target against the owner's real library.

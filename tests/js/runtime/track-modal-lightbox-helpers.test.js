@@ -528,6 +528,48 @@ function lightboxFocusHarness() {
   return { ...result, close, next, trigger, keydown };
 }
 
+test('mobile artwork owns one history entry and Back closes only the lightbox', () => {
+  const { context, lightboxOverlay } = lightboxFocusHarness();
+  context.usesMobilePageLayout = () => true;
+  const parent = { mobilePages: [{ kind: 'album', albumKey: 'album-a' }] };
+  const history = { state: parent, pushes: 0, backs: 0,
+    pushState(value) { this.state = value; this.pushes += 1; },
+    back() { this.backs += 1; },
+  };
+  context.window = { history };
+  context.openImageLightbox('/cover.png', 'Cover');
+  assert.equal(history.pushes, 1);
+  assert.deepEqual(history.state.mobilePages, parent.mobilePages);
+  context.openImageLightbox('/other.png', 'Other');
+  assert.equal(history.pushes, 1);
+  context.closeImageLightbox();
+  assert.equal(history.backs, 1);
+  history.state = parent;
+  assert.equal(context.handleImageLightboxPopState(), true);
+  assert.equal(lightboxOverlay.hidden, true);
+  assert.equal(history.backs, 1);
+  assert.equal(context.handleImageLightboxPopState(), false);
+});
+
+test('mobile artwork swipe changes albums once and ignores vertical, pinch and zoom gestures', () => {
+  const { context, lightboxOverlay } = lightboxFocusHarness();
+  context.usesMobilePageLayout = () => true;
+  context.openImageLightbox('/cover.png', 'Cover');
+  const swipe = (start, end, zoom = 1) => {
+    context.state.lightbox.zoom = zoom;
+    lightboxOverlay.dispatchEvent('touchstart', { touches: start });
+    lightboxOverlay.dispatchEvent('touchend', { touches: [], changedTouches: [end] });
+  };
+  const point = (clientX, clientY) => ({ clientX, clientY });
+  swipe([point(200, 100)], point(100, 105));
+  swipe([point(100, 100)], point(200, 105));
+  swipe([point(100, 100)], point(105, 200));
+  swipe([point(100, 100)], point(110, 100));
+  swipe([point(100, 100), point(200, 100)], point(200, 100));
+  swipe([point(100, 100)], point(200, 100), 2);
+  assert.deepEqual(context.stepLightboxCalls, [1, -1]);
+});
+
 test('S05 opening artwork focuses lightbox Close and closing restores its original trigger', () => {
   const { context, close, trigger } = lightboxFocusHarness();
   context.openImageLightbox('/cover.png', 'Test artwork');

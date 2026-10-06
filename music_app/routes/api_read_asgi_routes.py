@@ -679,7 +679,7 @@ def _is_postgres_album_search_request(request: Request) -> bool:
     if not query or _query_requires_file_backed_search_semantics(query):
         return False
     payload_tier = str(request.query_params.get("payload_tier") or "").strip().casefold()
-    if payload_tier not in {"", "search_preview"}:
+    if payload_tier not in {"", "search_preview", "full"}:
         return False
     if str(request.query_params.get("surface") or "").strip().casefold() != "albums":
         return False

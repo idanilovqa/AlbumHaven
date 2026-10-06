@@ -2660,6 +2660,19 @@ def test_postgres_album_search_request_allows_search_preview_tier(app, asgi_app,
     assert asgi_read_routes._is_postgres_album_search_request(request) is True
 
 
+def test_postgres_album_search_request_allows_full_hydration_tier(app, asgi_app, monkeypatch):
+    from starlette.requests import Request
+    from music_app.routes import api_read_asgi_routes as asgi_read_routes
+
+    app.config["ALBUM_HAVEN_APP_DATABASE_URL"] = "postgresql://album_haven_app@localhost/app"
+    app.config["PERSISTENCE_BACKENDS"] = {"library_browse": "postgres"}
+    request = Request({
+        "type": "http", "method": "GET", "path": "/view-data",
+        "query_string": b"q=Neal+Morse&surface=albums&omit_sidebar=1&payload_tier=full",
+        "headers": [], "app": asgi_app,
+    })
+
+    assert asgi_read_routes._is_postgres_album_search_request(request) is True
 def test_postgres_selected_artist_request_allows_query_context(app, asgi_app, monkeypatch):
     from starlette.requests import Request
     from music_app.routes import api_read_asgi_routes as asgi_read_routes

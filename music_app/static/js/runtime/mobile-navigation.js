@@ -224,7 +224,9 @@ function dismissMobilePage(kind) {
   writeMobilePageHistory('replace');
   syncMobilePageShell();
   if (!mobilePageState.pages.length) restoreMobileGalleryParent(retired.at(-1));
-  if (focus?.isConnected) focus.focus({ preventScroll: true });
+  // Returning to the gallery should not leave the originating artbox visibly
+  // selected after a pointer/back navigation.
+  if (focus?.isConnected) focus.blur();
   return true;
 }
 function navigateMobileBack() {
@@ -291,7 +293,7 @@ function handleMobilePagePopState() {
   // A background refresh may have replaced the gallery while its child was open.
   // Restore the retained parent URL through the normal gallery request owner.
   if (!requested.length) restoreMobileGalleryParent(parent);
-  if (!requested.length && focus?.isConnected) requestAnimationFrame(() => focus.focus({ preventScroll: true }));
+  if (!requested.length && focus?.isConnected) requestAnimationFrame(() => focus.blur());
   return true;
 }
 function syncMobileUtilityContext() {

@@ -81,7 +81,9 @@ def test_live_section14_album_identity_repair_merges_both_corruptions(
                     break
                 migration_sql = migration_path.read_text(encoding="utf-8")
                 if migration_path.name == "0083_add_album_raw_artist_search_index.sql":
-                    isolatedPostgres._apply_nontransactional_migration(connection, migration_sql)
+                    isolatedPostgres._apply_nontransactional_migration(
+                        connection, migration_sql, migration_path.name
+                    )
                 else:
                     connection.execute(migration_sql)
         isolatedPostgres.seed_bootstrap_owner_and_library(setup_url)

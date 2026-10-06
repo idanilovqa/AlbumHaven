@@ -228,6 +228,72 @@ def _dedicated_database_urls_or_skip(monkeypatch: pytest.MonkeyPatch) -> tuple[s
     return setup_url, runtime_url
 
 
+@pytest.mark.parametrize(
+    ("status", "built_from_fingerprint", "expected"),
+    [
+        ("ready", "a" * 64, "Devin Townsend"),
+        ("stale", "a" * 64, "Devin Townsend"),
+        ("stale", "b" * 64, ""),
+        ("stale", "", ""),
+    ],
+)
+def test_live_artist_search_projection_requires_matching_stale_authority(
+    monkeypatch, status, built_from_fingerprint, expected
+):
+    """Artist lookup may reuse stale data only when its authority still matches."""
+    setup_url, runtime_url = _dedicated_database_urls_or_skip(monkeypatch)
+    isolatedPostgres.prepare_isolated_database(setup_url, runtime_url)
+    isolatedPostgres.seed_bootstrap_owner_and_library(setup_url)
+    fingerprint = "a" * 64
+    builder_version = "local-relation-builder-v10"
+    with isolatedPostgres._connect(setup_url) as connection:
+        library_id = connection.execute(
+            """
+            select library.libraries.id
+            from library.libraries
+            join app.bootstrap_owners
+              on app.bootstrap_owners.account_id = library.libraries.owner_account_id
+            where app.bootstrap_owners.owner_key = 'local-bootstrap-owner'
+              and library.libraries.name = 'Local Library'
+            """
+        ).fetchone()["id"]
+        connection.execute(
+            """
+            insert into library.local_artist_search_projection
+              (library_id, normalized_artist_key, canonical_artist_name,
+               builder_version, source_fingerprint, relations_last_built)
+            values (%s, 'devin', 'Devin Townsend', %s, %s, extract(epoch from now()))
+            on conflict (library_id, normalized_artist_key) do update set
+              canonical_artist_name = excluded.canonical_artist_name,
+              builder_version = excluded.builder_version,
+              source_fingerprint = excluded.source_fingerprint
+            """,
+            (library_id, builder_version, fingerprint),
+        )
+        connection.execute(
+            """
+            update library.libraries
+            set metadata = jsonb_set(
+              coalesce(metadata, '{}'::jsonb),
+              '{scan_cache,relation_projection}',
+              jsonb_build_object(
+                'status', %s,
+                'builder_version', %s,
+                'source_fingerprint', %s,
+                'built_from_fingerprint', %s
+              ), true)
+            where id = %s
+            """,
+            (status, builder_version, fingerprint, built_from_fingerprint, library_id),
+        )
+    from music_app.services.library_browse_postgres import PostgresLibraryBrowseRepository
+
+    repository = PostgresLibraryBrowseRepository(
+        {"ALBUM_HAVEN_APP_DATABASE_URL": runtime_url}
+    )
+    assert repository._load_projected_artist_match("Devin") == expected
+
+
 def _drop_application_schemas(setup_url: str) -> None:
     with isolatedPostgres._connect(setup_url) as connection:
         isolatedPostgres._assert_connected_role(connection, isolatedPostgres.SETUP_ROLE)
@@ -3690,7 +3756,7 @@ def test_live_phase6_browse_queries_use_bounded_production_plans_and_search_inde
                 "category_count": 0,
                 "visible_categories": [],
                 "include_missing": True,
-                "search_artist_keys": [],
+                "search_artist_keys": ["joseph search probe"],
             }
             search_before_plan = connection.execute(
                 "explain (analyze, buffers, format json) " + _search_preview_sql(),

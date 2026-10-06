@@ -1899,3 +1899,8 @@
 .library-settings-move-policy-row .gallery-switch:disabled { opacity: .45; cursor: default; background: transparent; }
 .library-settings-move-policy-row [data-library-policy-value] { color: var(--muted); overflow-wrap: anywhere; }
 @media (max-width: 720px) { .utility-problem-exclusions-detail .compact-data-table[data-cdt-mobile="stack"] [data-cdt-column="action"] { grid-column: 1 / -1; grid-row: 3; justify-self: stretch; padding-top: 8px; } .utility-problem-exclusions-detail .compact-data-table[data-cdt-mobile="stack"] [data-cdt-column="action"] .utility-rule-revert { width: 100%; } }
+@media (max-width: 900px) {
+  #utility-modal.is-mobile-page .utility-detected-table { flex: none; height: auto; min-height: 0; overflow-x: auto; }
+  #utility-modal.is-mobile-page .utility-detected-table .compact-data-table { height: auto; min-height: 0; align-content: start; }
+  #utility-modal.is-mobile-page .utility-detected-actions { position: sticky; bottom: 0; z-index: 2; margin-top: 12px; padding: 10px 0 calc(10px + env(safe-area-inset-bottom, 0px)); background: color-mix(in srgb, var(--appearance-panel-background, var(--panel)) 94%, transparent); }
+}

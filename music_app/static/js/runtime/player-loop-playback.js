@@ -240,6 +240,8 @@ function setCurrentPlayerTrack(track, options = {}) {
     if (resolvedCoverPath) track = { ...track, coverPath: resolvedCoverPath };
   }
   state.player.current = track;
+  state.player.timelineDragging = false;
+  state.player.timelineDragPreviewSeconds = null;
   if (typeof probeCachedWaveformPeaks === 'function') {
     const cachedWaveformProbe = probeCachedWaveformPeaks(
       String(track?.path || ''),
@@ -1069,12 +1071,14 @@ function attachPlayerEvents() {
     state.player.timelineDragging = true;
     state.player.timelineDragPreviewSeconds = next;
     if (els.timeline) els.timeline.value = String(next);
+    updatePlayerUi();
   });
   document.addEventListener('pointermove', (event) => {
     if (!state.player.timelineDragging) return;
     const next = getTimelineSecondsFromClientX(event.clientX);
     state.player.timelineDragPreviewSeconds = next;
     if (els.timeline) els.timeline.value = String(next);
+    updatePlayerUi();
   });
   document.addEventListener('pointerup', () => {
     if (state.player.timelineDragging) {
@@ -1083,6 +1087,12 @@ function attachPlayerEvents() {
     }
     state.player.timelineDragging = false;
     state.player.timelineDragPreviewSeconds = null;
+  });
+  document.addEventListener('pointercancel', () => {
+    if (!state.player.timelineDragging) return;
+    state.player.timelineDragging = false;
+    state.player.timelineDragPreviewSeconds = null;
+    updatePlayerUi();
   });
   document.addEventListener('keydown', handlePlayerKeyboardSeek);
   document.addEventListener('keydown', handlePlayerKeyboardPlayback, { capture: true });

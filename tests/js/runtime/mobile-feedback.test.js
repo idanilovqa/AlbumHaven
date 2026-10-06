@@ -574,3 +574,14 @@ for (const width of [390, 1180]) test(`mobile duplicate Folder action is unavail
   assert.ok(hidden.includes('[data-open-track-modal-duplicate-folder]'));
   assert.equal(hidden.includes('[data-track-duplicate-source-index]'), false);
 });
+
+test('mobile action controls preserve a 40px touch target at phone width', () => { const css = fs.readFileSync(path.join(runtime, '../../css/mobile-layout.css'), 'utf8'); const actionRule = css.match(/\.mobile-bar-action\s*\{[^}]*flex:\s*0\s+0\s+40px[^}]*\}/)?.[0] || ''; assert.notEqual(actionRule, ''); }); test('mobile gallery geometry keeps requested one, two, and three-column taps within the viewport', () => {
+  for (const [viewportWidth, availableWidth] of [[320, 296], [390, 366], [480, 456]]) {
+    for (const columns of [1, 2, 3]) {
+      const geometry = preferences.resolveMobileGalleryGeometry({ viewportWidth, availableWidth, columns, gap: 12 });
+      assert.equal(geometry.columns, columns);
+      assert.ok(geometry.cardTrackWidth >= 0);
+      assert.ok(geometry.cardTrackWidth * columns + 12 * (columns - 1) <= availableWidth);
+    }
+  }
+});

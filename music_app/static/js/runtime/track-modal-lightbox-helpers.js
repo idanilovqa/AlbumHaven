@@ -111,14 +111,19 @@ function clearTrackModalRenderedState() {
   }
 }
 
-function openTrackModalShell(album) {
+function openTrackModalShell(album, releaseSet = getAlbumReleaseSet(album)) {
   if (typeof presentMobileAlbumPage === 'function') presentMobileAlbumPage(album);
   const els = getTrackModalElements();
   if (!els.overlay || !album) return;
-  state.modalReleases = [album];
-  state.modalReleaseIndex = 0;
+  state.modalReleases = Array.isArray(releaseSet?.releases) && releaseSet.releases.length
+    ? releaseSet.releases
+    : [album];
+  state.modalReleaseIndex = Number.isInteger(releaseSet?.selectedIndex)
+    ? Math.max(0, Math.min(releaseSet.selectedIndex, state.modalReleases.length - 1))
+    : 0;
   hideVersionContextMenu();
   renderTrackModalLoadingState(album);
+  if (typeof renderTrackModalTabs === 'function') renderTrackModalTabs(els);
   els.overlay.hidden = false;
   document.body.classList.add('modal-open');
 }
@@ -545,7 +550,7 @@ function openTrackModal(album, options = {}) {
     const albumKey = getAlbumRequestKey(albumWithPlaybackContext);
     const loadToken = invalidatePendingTrackModalLoad();
     state.ui.pendingTrackModalLoadAlbumKey = albumKey;
-    openTrackModalShell(albumWithPlaybackContext);
+    openTrackModalShell(albumWithPlaybackContext, options.releaseSet);
     const coverLoadSuspensionToken = suspendGalleryCoverLoadsForTrackModal();
     const detailsPromise = loadTrackModalAlbumDetails(albumKey);
     detailsPromise.then((hydratedAlbum) => {

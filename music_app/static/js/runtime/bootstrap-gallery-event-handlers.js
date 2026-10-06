@@ -1035,7 +1035,9 @@ function scheduleGallerySearchCommit(nextQuery, options = {}) {
 
 function revealArtistTreeForSearch() {
   if (typeof usesMobilePageLayout === 'function' && usesMobilePageLayout()) {
-    if (typeof openArtistsDrawer === 'function') openArtistsDrawer();
+    const button = document.querySelector('.mobile-artists-mode-button');
+    button?.setAttribute('data-search-results', 'true');
+    button?.setAttribute('aria-description', 'Search results available in Artists');
     return;
   }
   const shell = document.getElementById('app-shell');
@@ -1049,7 +1051,12 @@ function handleGalleryBootstrapSearchSubmit(event) {
   if (typeof handleMobileSearchSubmit === 'function' && handleMobileSearchSubmit()) return;
   const input = document.getElementById('search-input');
   const nextQuery = input?.value || '';
+  const mobileArtistsButton = document?.querySelector?.('.mobile-artists-mode-button');
   if (String(nextQuery).trim()) revealArtistTreeForSearch();
+  else {
+    mobileArtistsButton?.removeAttribute('data-search-results');
+    mobileArtistsButton?.removeAttribute('aria-description');
+  }
   closeRecentSearchPopover();
   beginAlbumDetailPrewarmSearchSuspension();
   beginSearchCoverLoadSuspension();
@@ -1132,6 +1139,8 @@ function commitGallerySearchQuery(nextQuery, options = {}) {
     abandonScanPageForNavigation({ clearSelection: true });
   }
   const normalizedQuery = String(nextQuery || '');
+  const searchGeneration = Number(state.ui.gallerySearchGeneration || 0) + 1;
+  state.ui.gallerySearchGeneration = searchGeneration;
   const failedSearch = state.ui?.failedGallerySearch;
   const failedSearchStage = failedSearch?.query === normalizedQuery
     ? String(failedSearch.stage || '')
@@ -1269,17 +1278,6 @@ function commitGallerySearchQuery(nextQuery, options = {}) {
     beginSearchCoverLoadSuspension();
     coverLoadSuspensionToken = takePendingSearchCoverLoadSuspension();
   }
-  if (!retriesHydration) {
-    applyViewPayload({
-      ...next,
-      related_artists: [],
-      primary_artist_groups: [],
-      family_artist_groups: [],
-    }, {
-      trackSidebarReveal: false,
-    });
-    renderRelated();
-  }
   const resumeCoverLoads = () => {
     if (
       coverLoadSuspensionToken !== null
@@ -1296,14 +1294,16 @@ function commitGallerySearchQuery(nextQuery, options = {}) {
     payloadTier: 'search_preview',
   });
   const hydrationUrl = buildApiUrl(next);
+  state.view = { ...state.view, query: normalizedQuery };
   let activeSearchStage = retriesHydration ? 'hydration' : 'preview';
   const handleSearchFailure = () => {
+    if (state.ui.gallerySearchGeneration !== searchGeneration) return;
     const previewFailed = activeSearchStage === 'preview';
     state.ui.failedGallerySearch = {
       query: normalizedQuery,
       stage: activeSearchStage,
     };
-    if (previewFailed && String(state.view?.query || '') === normalizedQuery) {
+    if (String(state.view?.query || '') === normalizedQuery) {
       applyViewPayload(previousView, { trackSidebarReveal: false });
       renderRelated();
     }
@@ -1318,9 +1318,10 @@ function commitGallerySearchQuery(nextQuery, options = {}) {
       );
     }
   };
-  const runHydration = () => Promise.resolve(fetchAndRender(hydrationUrl, false, {
+  const runHydration = () => Promise.resolve(fetchAndRender(hydrationUrl, true, {
     preserveScroll: true,
     skipPendingViewTransition: true,
+    shouldApplyResponse: () => state.ui.gallerySearchGeneration === searchGeneration,
   }));
   if (retriesHydration) {
     void runHydration().then(
@@ -1332,10 +1333,18 @@ function commitGallerySearchQuery(nextQuery, options = {}) {
     ).catch(handleSearchFailure);
     return;
   }
-  void Promise.resolve(fetchAndRender(previewUrl, true)).then(
-    (previewApplied) => {
+  const previewRequest = fetchAndRender(previewUrl, true, {
+    shouldApplyResponse: () => false,
+    preserveMountedGallery: true,
+  });
+  const previewRequestId = state.ui.activeViewRequestId;
+  const previewViewRevision = state.ui.viewStateRevision;
+  void Promise.resolve(previewRequest).then(
+    () => {
       resumeCoverLoads();
-      if (previewApplied !== true) return false;
+      if (state.ui.gallerySearchGeneration !== searchGeneration) return false;
+      if (state.ui.activeViewRequestId !== previewRequestId
+        || state.ui.viewStateRevision !== previewViewRevision) return false;
       activeSearchStage = 'hydration';
       return runHydration();
     },

@@ -463,3 +463,25 @@ The presence of a native `button`, `input`, or `select` is not itself a duplicat
 Read-only classification evidence: `partials/primary-modals.html`, `partials/confirm-modals.html`, `runtime/cover-lookup-modal-and-drawer.js`, `runtime/cover-lookup-modal.css`, `runtime/utilities.css`, `account.html`/`account.css`, `admin-members.html`, `admin-account-detail.html`/`admin-members.css`, `login.html`/`login.css`, and the three recovery/invitation templates plus `password-recovery.css`. The private component catalog explicitly permits ordinary semantic HTML and unique composition. Shared password-toggle behavior is textually duplicated in `account.js` and `admin-members.js`, but `settings-navigation.js` mounts exactly the appropriate page controller; this is not evidence of double activation or a reason to introduce a shallow helper without a wider ownership benefit.
 
 Existing verification seams (located, not executed by this classification): `tests/js/phase7-account-admin-presentation.test.js`; runtime `account.test.js`, `admin-members.test.js`, `login.test.js`, `password-recovery.test.js`, `remaining-ui-interactions.test.js`, `remaining-ui-dialogs.test.js`; `tests/py/test_auth_login_ui.py`; phase7 `adminManagement.spec.js` and `persistentSettings.spec.js`; existing cover/Settings/Appearance functional cases. No runtime changes or tests were made during classification. No safe mandatory duplicate conversion was established; the small unused account-style candidate and outstanding rendered checks remain separate follow-ups, not completed adoption.
+## Phase 9 mobile interaction coverage follow-up
+
+The branch has responsive Chromium coverage and focused runtime tests, but real mobile behavior remains a separate completion item. Add a dedicated mobile-device project using Playwright device profiles (iPhone/Android), `hasTouch`, and real touch input. Cover these cases through the normal application path:
+
+- taps on album rows, track rows, nested actions, player controls, Gallery Bar actions, and settings drawer entries;
+- horizontal album/artwork swipes, vertical scrolling, pinch/zoom cancellation, and gesture interruption;
+- mobile Back and browser history across Gallery, album details, full artwork, settings, and nested utility pages;
+- narrow phone versus wide-tablet layout selection, 1/2/3-column gallery geometry, safe-area/footer placement, keyboard-visible layout, and orientation changes;
+- touch target size, focus transfer, dismissal ownership, and prevention of background actions while a mobile surface is open.
+
+Keep the existing unit and isolated-browser contracts. Add the device project and its functional cases before Phase 9 is declared complete; physical-device acceptance for browser-specific back gestures, safe areas, and virtual keyboards remains a manual gate.
+
+
+### October 5 local mobile follow-up
+
+Outcome: reuse Home InPageTabs for album editions on desktop and mobile; show known editions during detail hydration; keep mobile seek feedback continuous and discard an outgoing track drag on cancellation or track change. This continues the owner-approved cover branch and does not change playback architecture, schemas, credentials, or media. Rollback is the source commit and rebuilt runtime bundle. Checkpoint: local commit and authenticated port-5004 build only; do not push or merge PR #21.
+
+Acceptance cases: first-open edition tabs, edition selection and keyboard navigation, mobile spacing, fractional drag feedback without repeated decoder seeks, cancelled touch without seeking, and track promotion without stale progress. Atomic search retains the mounted gallery until full results arrive; clear-search and superseded-response guards remain enforced.
+
+Read-only source diagnosis: both compared albums are 44.1-kHz stereo 320-kbit MP3. Question Mark tracks 1/2 expose FFmpeg Skip Samples metadata (1105 samples); Joseph Part Two tracks 15/16 do not. Decoded Everlasting tail and Dawning head contain approximately 18.77 ms and 8.56 ms below -60 dB respectively; the compared Question Mark boundary contains none. This demonstrates source padding but does not prove the entire audible mobile pause is source-only. No media trimming or decoder-contract changes were made.
+
+Focused verification: 315 runtime cases passed; the playing-row accent component case passed in Chrome. Physical Android touch/gapless acceptance and the prior complete CI failure batch remain pending.

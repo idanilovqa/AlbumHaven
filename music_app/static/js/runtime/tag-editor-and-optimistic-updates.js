@@ -1439,14 +1439,22 @@ function renderTrackModalTabs(els) {
     return;
   }
   els.tabs.hidden = false;
-  els.tabs.innerHTML = releases.map((release, index) => {
-    const showVersionMenu = isPlainDuplicateVersionTab(release, index, releases);
-    return `
-      <span class="track-modal-tab-wrap">
-        <button class="track-modal-tab ${index === state.modalReleaseIndex ? 'is-active' : ''}" type="button" data-track-tab-index="${index}" ${showVersionMenu ? `data-version-context-key="${escapeHtml(release.key || '')}"` : ''}>${escapeHtml(release.tabLabel)}</button>
-      </span>
-    `;
-  }).join('');
+  const restoreTabFocus = els.tabs.contains?.(document.activeElement);
+  els.tabs.innerHTML = buildInPageTabsHtml({
+    id: 'album-edition-tabs',
+    label: 'Album editions',
+    selectedKey: String(state.modalReleaseIndex),
+    tabs: releases.map((release, index) => ({ key: String(index), label: release.tabLabel })),
+  });
+  const tablist = els.tabs.querySelector('.in-page-tabs');
+  tablist?.querySelectorAll('[data-in-page-tab]').forEach((button, index) => {
+    button.dataset.trackTabIndex = String(index);
+    if (isPlainDuplicateVersionTab(releases[index], index, releases)) {
+      button.dataset.versionContextKey = releases[index].key || '';
+    }
+  });
+  mountInPageTabs(tablist);
+  if (restoreTabFocus) tablist?.querySelector('[aria-selected="true"]')?.focus();
   renderVersionContextMenu();
 }
 

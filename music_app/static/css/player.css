@@ -190,6 +190,8 @@
   pointer-events: none;
 }
 .player-timeline {
+  touch-action: none;
+  -webkit-tap-highlight-color: transparent;
   accent-color: #34d399;
 }
 .player-timeline-wrap.is-waveform .player-waveform-canvas {

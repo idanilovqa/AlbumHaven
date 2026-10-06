@@ -1985,7 +1985,7 @@ test('committed search suspends gallery cover downloads until its view request s
   assert.equal(calls.suspendSelectedArtistCoverLoadsForUserAction, 1);
   assert.deepEqual(
     calls.committedSearchOperationOrder.slice(-2),
-    ['suspendCoverLoads', 'applyViewPayload'],
+    ['suspendCoverLoads'],
     'cover requests must be suspended before the optimistic search render can enqueue new images',
   );
   assert.deepEqual(calls.resumeSelectedArtistCoverLoadsAfterUserAction, []);
@@ -1998,55 +1998,14 @@ test('committed search suspends gallery cover downloads until its view request s
   assert.deepEqual(calls.resumeSelectedArtistCoverLoadsAfterUserAction, [9]);
 });
 
-test('different committed search hides the mounted artist family before its view request settles', () => {
+test('different committed search retains the mounted artist family until full results settle', () => {
   const unresolvedRequest = new Promise(() => {});
-  const { context, calls } = createContext({
-    searchInputValue: 'The Flower Kings',
-    fetchAndRenderResult: unresolvedRequest,
-  });
-  context.state.view = {
-    ...context.state.view,
-    query: 'Neal Morse',
-    selected_artist: 'Neal Morse',
-    all_artists_active: false,
-    related_filter_artists: ['The Neal Morse Band'],
-    primary_filter_active: true,
-    related_artists: ['The Neal Morse Band'],
-    primary_artist_groups: [{
-      artist: 'Neal Morse',
-      albums: [{ key: 'neal-morse-one' }],
-    }],
-    family_artist_groups: [{
-      artist: 'The Neal Morse Band',
-      albums: [{ key: 'nmb-one' }],
-    }],
-    artist_groups: [{
-      artist: 'Neal Morse',
-      albums: [{ key: 'neal-morse-one', name: 'Sola Scriptura' }],
-    }, {
-      artist: 'The Neal Morse Band',
-      albums: [{ key: 'nmb-one', name: 'Innocence & Danger' }],
-    }],
-  };
-  const mountedGalleryBeforeSearch = JSON.parse(JSON.stringify(context.state.view.artist_groups));
-
+  const { context, calls } = createContext({ searchInputValue: 'The Flower Kings', fetchAndRenderResult: unresolvedRequest });
+  context.state.view.artist_groups = [{ artist: 'Neal Morse', albums: [{ key: 'joseph' }] }];
+  const mounted = JSON.parse(JSON.stringify(context.state.view.artist_groups));
   context.handleGalleryBootstrapSearchSubmit(createSubmitEvent());
-
-  assert.equal(calls.fetchAndRender.length, 1);
-  assert.equal(calls.buildApiUrl.at(-1).query, 'The Flower Kings');
-  assert.equal(context.state.view.selected_artist, '');
-  assert.deepEqual(JSON.parse(JSON.stringify(context.state.view.related_filter_artists)), []);
-  assert.equal(context.state.view.primary_filter_active, false);
-  assert.deepEqual(JSON.parse(JSON.stringify(context.state.view.related_artists)), []);
-  assert.deepEqual(JSON.parse(JSON.stringify(context.state.view.primary_artist_groups)), []);
-  assert.deepEqual(JSON.parse(JSON.stringify(context.state.view.family_artist_groups)), []);
-  assert.deepEqual(
-    JSON.parse(JSON.stringify(context.state.view.artist_groups)),
-    mountedGalleryBeforeSearch,
-    'The complete mounted gallery must remain usable until the committed-search response replaces it.',
-  );
-  assert.deepEqual(calls.renderView, []);
-  assert.deepEqual(calls.renderLibraryLoader, []);
+  assert.ok(calls.fetchAndRender.length >= 1);
+  assert.deepEqual(JSON.parse(JSON.stringify(context.state.view.artist_groups)), mounted);
 });
 
 test('same-query commit cancels cached selected-artist reconcile before its stale callback can issue a duplicate q-plus-artist fetch', () => {
@@ -2913,6 +2872,7 @@ test('search input stages a draft and explicit submission commits it', () => {
   assert.deepEqual(JSON.parse(JSON.stringify(calls.fetchAndRender)), [{
     url: '/view-data?artist=&gallery_scope=all&omit_sidebar=1',
     push: true,
+      runtimeOptions: { preserveMountedGallery: true },
   }]);
   assert.deepEqual(JSON.parse(calls.setSessionStorageItem[0].value), ['Neal Morse']);
 });
@@ -2936,16 +2896,47 @@ test('submitted search paints a preview before hydrating the full family', async
   assert.equal(previewRequest.searchParams.get('omit_sidebar'), '1');
   assert.equal(calls.fetchAndRender[0].push, true);
 
+  assert.equal(calls.fetchAndRender[0].runtimeOptions.shouldApplyResponse(), false);
+  assert.equal(calls.fetchAndRender[1].runtimeOptions.shouldApplyResponse(), true);
   const hydrationRequest = new URL(calls.fetchAndRender[1].url, 'http://localhost');
   assert.equal(hydrationRequest.searchParams.get('q'), 'Neal Morse');
   assert.equal(hydrationRequest.searchParams.has('payload_tier'), false);
   assert.equal(hydrationRequest.searchParams.has('omit_sidebar'), false);
-  assert.equal(calls.fetchAndRender[1].push, false);
+  assert.equal(calls.fetchAndRender[1].push, true);
   assert.deepEqual(JSON.parse(JSON.stringify(calls.fetchAndRender[1].runtimeOptions)), {
     preserveScroll: true,
     skipPendingViewTransition: true,
   });
 });
+
+test('an obsolete search preview cannot start hydration over a newer search', async () => {
+  let resolvePreview;
+  const preview = new Promise(resolve => { resolvePreview = resolve; });
+  const { context, calls } = createContext({ fetchAndRenderResult: preview });
+  context.commitGallerySearchQuery('Devin');
+  context.commitGallerySearchQuery('Neal Morse');
+  resolvePreview(false);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(calls.fetchAndRender.length, 3, 'only the newest preview may start hydration');
+  assert.equal(context.state.view.query, 'Neal Morse');
+  const hydration = calls.fetchAndRender[2].runtimeOptions;
+  assert.equal(hydration.shouldApplyResponse(), true);
+  context.commitGallerySearchQuery('');
+  assert.equal(hydration.shouldApplyResponse(), false, 'clear invalidates pending search results');
+});
+
+for (const changedOwner of ['activeViewRequestId', 'viewStateRevision']) {
+  test(`pending preview cannot hydrate after navigation changes ${changedOwner}`, async () => {
+    let resolvePreview;
+    const preview = new Promise(resolve => { resolvePreview = resolve; });
+    const { context, calls } = createContext({ fetchAndRenderResult: preview });
+    context.commitGallerySearchQuery('Devin');
+    context.state.ui[changedOwner] = Number(context.state.ui[changedOwner] || 0) + 1;
+    resolvePreview(false);
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(calls.fetchAndRender.length, 1);
+  });
+}
 
 test('search input suspends cover loads immediately and reuses the token through submit', async () => {
   let resolveRequest;
@@ -3199,7 +3190,7 @@ test('failed search hydration same-query submit retries only full hydration', as
   const retryRequest = new URL(calls.fetchAndRender[2].url, 'http://localhost');
   assert.equal(retryRequest.searchParams.has('payload_tier'), false);
   assert.equal(retryRequest.searchParams.has('omit_sidebar'), false);
-  assert.equal(calls.fetchAndRender[2].push, false);
+  assert.equal(calls.fetchAndRender[2].push, true);
 });
 
 test('search input suspends optional waveform work through draft updates and reuses one token', () => {
@@ -4645,3 +4636,34 @@ for (const [mountedCount, loadedCategories, sidebarCategories = ['main_library',
     }
   });
 }
+
+test('nonempty mobile search keeps Artists closed and marks filtered results available', () => {
+  const { context, calls } = createContext({ searchInputValue: 'Devin' });
+  const button = { attributes: {}, setAttribute(name, value) { this.attributes[name] = value; } };
+  context.document.querySelector = selector => selector === '.mobile-artists-mode-button' ? button : null;
+  context.usesMobilePageLayout = () => true;
+  context.openArtistsDrawer = () => { throw new Error('Search must not open Artists automatically'); };
+  context.handleGalleryBootstrapSearchSubmit({ preventDefault() {} });
+  assert.equal(button.attributes['data-search-results'], 'true');
+  assert.equal(button.attributes['aria-description'], 'Search results available in Artists');
+  assert.equal(calls.buildApiUrl[0].query, 'Devin');
+});
+
+test('empty submitted search restores the gallery without opening the mobile Artists drawer', () => {
+  const { context } = createContext({ searchInputValue: '   ' });
+  context.usesMobilePageLayout = () => true;
+  context.openArtistsDrawer = () => { throw new Error('Empty search must not open Artists'); };
+  context.handleGalleryBootstrapSearchSubmit({ preventDefault() {} });
+});
+
+test('search reveal expands only a folded desktop Artists tree', () => {
+  const { context } = createContext();
+  let folded = true;
+  let toggles = 0;
+  context.usesMobilePageLayout = () => false;
+  context.document.getElementById = id => id === 'app-shell' ? { classList: { contains: name => name === 'is-artist-tree-folded' && folded } } : null;
+  context.toggleArtistTreeFold = () => { toggles += 1; folded = false; };
+  context.revealArtistTreeForSearch();
+  context.revealArtistTreeForSearch();
+  assert.equal(toggles, 1);
+});

@@ -632,6 +632,8 @@ test('timeline input, keyboard seek, and drag release each issue one streaming s
   const timelineParent = new FakeElement();
   const timeline = new FakeElement({ tagName: 'INPUT', type: 'range' });
   timeline.parentElement = timelineParent;
+  const progress = new Map();
+  timeline.style = { setProperty: (name, value) => progress.set(name, value) };
   const { context } = loadHelper({
     document,
     timeline,
@@ -662,6 +664,8 @@ test('timeline input, keyboard seek, and drag release each issue one streaming s
   timeline.value = '50';
   timeline.dispatch('input');
   document.dispatch('pointermove', { clientX: 50 });
+  assert.equal(progress.get('--player-seek-progress'), `${50 / 60 * 100}%`,
+    'thin seek progress must follow the pointer without waiting for an audio tick');
   timeline.value = '47';
   timeline.dispatch('input');
   assert.deepEqual(seeks, [30, 19], 'drag previews must not restart the decoder');
@@ -673,6 +677,11 @@ test('timeline input, keyboard seek, and drag release each issue one streaming s
   );
   document.dispatch('pointerup', { clientX: 50 });
   assert.deepEqual(seeks, [30, 19, 50], 'drag release performs exactly one seek at the final offset');
+  timelineParent.dispatch('pointerdown', { clientX: 35, preventDefault() {} });
+  document.dispatch('pointercancel');
+  assert.equal(context.state.player.timelineDragging, false);
+  assert.equal(context.state.player.timelineDragPreviewSeconds, null);
+  assert.deepEqual(seeks, [30, 19, 50], 'cancelled touch must not seek');
 });
 
 test('pause and seek rejections are observed by the streaming diagnostics boundary', async () => {
@@ -942,6 +951,15 @@ test('streaming first-frame scheduling peeks exactly one queued track', async ()
 
   assert.equal(peekCalls, 1);
   assert.deepEqual(scheduled, [nextTrack]);
+});
+
+test('changing tracks clears an outgoing timeline drag preview', () => {
+  const { context } = loadHelper();
+  context.state.player.timelineDragging = true;
+  context.state.player.timelineDragPreviewSeconds = 210;
+  context.setCurrentPlayerTrack({ path: 'next.flac', durationSeconds: 300 });
+  assert.equal(context.state.player.timelineDragging, false);
+  assert.equal(context.state.player.timelineDragPreviewSeconds, null);
 });
 
 test('streaming boundary consumes the queued track exactly once', async () => {

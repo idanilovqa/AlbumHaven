@@ -757,6 +757,18 @@ test('revision reload preserves a speculative detail request promoted to foregro
   assert.equal(await foreground, album);
 });
 
+test('opening a preview album renders all known edition tabs before details resolve', () => {
+  const album = { key: 'alpha', name: 'Album', preview_only: true, tracks: [] };
+  const { context } = loadHelper({ onFetchAlbumDetails: () => new Promise(() => {}) });
+  let rendered = [];
+  context.renderTrackModalTabs = () => {
+    rendered = Array.from(context.state.modalReleases, release => release.key);
+  };
+  context.openTrackModal(album);
+  assert.deepEqual(rendered, ['alpha', 'beta']);
+  assert.deepEqual(context.renderTrackModalReleaseCalls, []);
+});
+
 async function run() {
   {
     const { context, trackModal } = loadHelper();
@@ -2421,3 +2433,34 @@ test('switching a preview edition hydrates tracks without reordering or relabeli
   assert.equal(context.state.modalReleaseIndex, 1);
   assert.equal(context.renderTrackModalReleaseAlbums.at(-1).tracks[0].path, 'edition-track');
 });
+
+for (const interruption of ['cancel', 'pinch', 'zoom', 'close', 'remaining-touch', 'desktop']) {
+  test(`mobile artwork swipe does not navigate after ${interruption}`, () => {
+    const { context, lightboxOverlay } = lightboxFocusHarness();
+    context.usesMobilePageLayout = () => interruption !== 'desktop';
+    context.openImageLightbox('/cover.png', 'Cover');
+    const point = (x, y) => ({ clientX: x, clientY: y });
+    lightboxOverlay.dispatchEvent('touchstart', { touches: [point(200, 100)] });
+    if (interruption === 'cancel') lightboxOverlay.dispatchEvent('touchcancel', {});
+    if (interruption === 'pinch') {
+      lightboxOverlay.dispatchEvent('touchmove', { touches: [point(180, 100), point(240, 100)] });
+      lightboxOverlay.dispatchEvent('touchmove', { touches: [point(150, 100)] });
+    }
+    if (interruption === 'zoom') {
+      context.state.lightbox.zoom = 2;
+      lightboxOverlay.dispatchEvent('touchmove', { touches: [point(150, 100)] });
+      context.state.lightbox.zoom = 1;
+    }
+    if (interruption === 'close') context.closeImageLightbox();
+    let prevented = 0;
+    const end = {
+      touches: interruption === 'remaining-touch' ? [point(240, 100)] : [],
+      changedTouches: [point(80, 100)],
+      preventDefault() { prevented += 1; },
+    };
+    lightboxOverlay.dispatchEvent('touchend', end);
+    lightboxOverlay.dispatchEvent('touchend', { ...end, touches: [] });
+    assert.deepEqual(context.stepLightboxCalls, []);
+    assert.equal(prevented, 0, 'rejected gestures retain native scrolling');
+  });
+}

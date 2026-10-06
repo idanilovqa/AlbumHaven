@@ -25,7 +25,8 @@ const helperPath = path.join(
   'runtime',
   'tag-editor-and-optimistic-updates.js',
 );
-const helperSource = fs.readFileSync(helperPath, 'utf8');
+const helperSource = fs.readFileSync(path.join(path.dirname(helperPath), 'in-page-tabs.js'), 'utf8')
+  + '\n' + fs.readFileSync(helperPath, 'utf8');
 const albumUiComponentSources = [
   'alert-components.js',
   'album-artbox.js',
@@ -118,6 +119,24 @@ function loadHelper(albums, overrides = {}) {
   vm.runInContext(helperSource, context, { filename: helperPath });
   return context;
 }
+
+test('album editions render the same keyboard tab component as Home', () => {
+  const context = loadHelper([], { escapeHtml: value => String(value) });
+  context.state.modalReleases = [
+    { key: 'original', tabLabel: 'Original - 1998' },
+    { key: 'remix', tabLabel: 'Anniversary Remix - 2018' },
+  ];
+  context.state.modalReleaseIndex = 1;
+  context.renderVersionContextMenu = () => {};
+  const tabs = { hidden: true, innerHTML: '', querySelector: () => null };
+  context.renderTrackModalTabs({ tabs });
+  assert.equal(tabs.hidden, false);
+  assert.match(tabs.innerHTML, /class="in-page-tabs"/);
+  assert.match(tabs.innerHTML, /role="tablist" aria-label="Album editions"/);
+  assert.match(tabs.innerHTML, /data-in-page-tab="1" aria-selected="true" tabindex="0"/);
+  assert.match(tabs.innerHTML, /Original - 1998/);
+  assert.match(tabs.innerHTML, /Anniversary Remix - 2018/);
+});
 
 test('buildPlayerTrackPayload carries numeric duration_seconds into durationSeconds', () => {
   const context = loadHelper([]);

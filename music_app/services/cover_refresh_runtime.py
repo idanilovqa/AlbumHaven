@@ -17,8 +17,9 @@ def cover_pass_file_cache_snapshot(file_cache, config):
         if type(entry.get("album_id")) is int and entry["album_id"] > 0
     }
     selections = select_scan_cache_adapter(config).load_cover_selections(album_ids) if album_ids else {}
-    if album_ids - selections.keys():
-        raise RuntimeError("Cover refresh could not verify canonical selection authority for every album.")
+    # An album without a persisted selection has no canonical override yet.
+    # Treat that as an unselected album instead of aborting the whole refresh;
+    # explicit rows still supply the authoritative path and origin below.
     for entry in snapshot.values():
         entry.pop("selected_cover_path", None)
         entry.pop("selected_cover_origin", None)

@@ -28,8 +28,8 @@ def test_cover_pass_snapshot_refreshes_selection_once_without_runtime_alias(monk
     assert second["disc2/b"]["selected_cover_path"] == "changed.jpg"
     assert len(calls) == 2
     cache["foreign"] = {"album_id": 99, "selected_cover_path": "stale.jpg"}
-    with pytest.raises(RuntimeError, match="canonical selection authority"):
-        cover_refresh_runtime.cover_pass_file_cache_snapshot(cache, {})
+    missing = cover_refresh_runtime.cover_pass_file_cache_snapshot(cache, {})
+    assert missing["foreign"]["selected_cover_path"] is None
     current[99] = {"selected_cover_path": None, "cover_selection_origin": None}
     assert cover_refresh_runtime.cover_pass_file_cache_snapshot(cache, {})["foreign"]["selected_cover_path"] is None
 

@@ -1906,9 +1906,9 @@
 }
 /* Suggested edits are toggles: neutral until selected, explicit when active. */
 .utility-detected-table .utility-problem-suggestion:not([aria-pressed="true"]) {
-  border-color: color-mix(in srgb, var(--appearance-line, var(--border)) 76%, transparent);
-  background: color-mix(in srgb, var(--appearance-panel-background, var(--panel)) 88%, transparent);
-  color: var(--appearance-muted, var(--muted));
+  border-color: color-mix(in srgb, var(--alert-edge, var(--accent)) 78%, var(--appearance-line, var(--border)));
+  background: color-mix(in srgb, var(--alert-tint, var(--panel)) 42%, var(--appearance-panel-background, var(--panel)));
+  color: var(--alert-ink, var(--text));
   box-shadow: none;
 }
 .utility-detected-table .utility-problem-suggestion[aria-pressed="true"] {

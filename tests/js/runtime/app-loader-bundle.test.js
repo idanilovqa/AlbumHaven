@@ -59,6 +59,8 @@ const expectedRuntimeOrder = [
   'gallery-main-state.js',
   'gallery-card-component.js',
   'album-details-components.js',
+  'dashboard.js',
+  'home-recent.js',
   'core-state-and-helpers.js',
   'trigger-anchor.js',
   'search-input.js',

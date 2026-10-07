@@ -1944,6 +1944,7 @@ def test_asgi_cover_lookup_add_remote_merges_existing_candidates_and_remote_imag
     track_path = (app.config["MUSIC_DIR"] / "Artist" / "Album" / "song.mp3").resolve()
     track_path.parent.mkdir(parents=True, exist_ok=True)
     track_path.write_bytes(b"track")
+    app.library_state["file_cache"][str(track_path)] = {"path": str(track_path)}
     extraction_calls: list[dict[str, object]] = []
     fetch_calls: list[dict[str, object]] = []
     log_calls: list[dict[str, object]] = []
@@ -2117,6 +2118,7 @@ def test_asgi_cover_lookup_save_remote_queues_selected_candidate(app, monkeypatc
     track_path = (app.config["MUSIC_DIR"] / "Artist" / "Album" / "song.mp3").resolve()
     track_path.parent.mkdir(parents=True, exist_ok=True)
     track_path.write_bytes(b"track")
+    app.library_state["file_cache"][str(track_path)] = {"path": str(track_path)}
     queued_calls: list[dict[str, object]] = []
     update_calls: list[dict[str, object]] = []
     reset_cover_lookup_runtime_state()
@@ -2212,6 +2214,7 @@ def test_asgi_cover_lookup_save_remote_honors_serialized_provider_storage_policy
     track_path = (app.config["MUSIC_DIR"] / "Artist" / source / "song.mp3").resolve()
     track_path.parent.mkdir(parents=True, exist_ok=True)
     track_path.write_bytes(b"track")
+    app.library_state["file_cache"][str(track_path)] = {"path": str(track_path)}
     candidate = cover_candidate_to_lookup_match(
         CoverCandidate(
             source=source,
@@ -2333,6 +2336,7 @@ def test_asgi_cover_lookup_save_remote_queues_candidate_from_persisted_snapshot(
     track_path = (app.config["MUSIC_DIR"] / "Artist" / "Album" / "song.mp3").resolve()
     track_path.parent.mkdir(parents=True, exist_ok=True)
     track_path.write_bytes(b"track")
+    app.library_state["file_cache"][str(track_path)] = {"path": str(track_path)}
     queued_calls: list[dict[str, object]] = []
     repository_calls: list[int] = []
     reset_cover_lookup_runtime_state()
@@ -2407,6 +2411,7 @@ def test_asgi_cover_lookup_save_remote_uses_requested_snapshot_candidate_when_ta
     track_path = (app.config["MUSIC_DIR"] / "Artist" / "Album" / "song.mp3").resolve()
     track_path.parent.mkdir(parents=True, exist_ok=True)
     track_path.write_bytes(b"track")
+    app.library_state["file_cache"][str(track_path)] = {"path": str(track_path)}
     queued_calls: list[dict[str, object]] = []
     reset_cover_lookup_runtime_state()
     task_id, _ = cover_lookup_tasks.create_cover_lookup_task(
@@ -2489,6 +2494,7 @@ def test_asgi_cover_lookup_save_remote_keeps_action_taken_through_background_com
     track_path = (app.config["MUSIC_DIR"] / "Artist" / "Album" / "song.mp3").resolve()
     track_path.parent.mkdir(parents=True, exist_ok=True)
     track_path.write_bytes(b"track")
+    app.library_state["file_cache"][str(track_path)] = {"path": str(track_path)}
     reset_cover_lookup_runtime_state()
     task_id, _ = cover_lookup_tasks.create_cover_lookup_task(_album_payload(track_path), {str(track_path)})
     cover_lookup_tasks.update_cover_lookup_task(
@@ -2553,6 +2559,7 @@ def test_asgi_cover_lookup_save_remote_failure_remains_unactioned_and_not_bulk_c
     track_path = (app.config["MUSIC_DIR"] / "Artist" / "Album" / "song.mp3").resolve()
     track_path.parent.mkdir(parents=True, exist_ok=True)
     track_path.write_bytes(b"track")
+    app.library_state["file_cache"][str(track_path)] = {"path": str(track_path)}
     reset_cover_lookup_runtime_state()
     task_id, _ = cover_lookup_tasks.create_cover_lookup_task(_album_payload(track_path), {str(track_path)})
     original_lookup_completed_at = "2026-05-18T05:00:00+00:00"
@@ -2696,6 +2703,7 @@ def test_asgi_cover_lookup_save_remote_rejects_unsafe_album_roots_before_queuein
     for track_path in (lp_one, lp_two, traversal_target, cross_root_track, mixed_album_track):
         track_path.parent.mkdir(parents=True, exist_ok=True)
         track_path.write_bytes(b"track")
+        app.library_state["file_cache"][str(track_path)] = {"path": str(track_path)}
     valid_album = {
         "name": "Test Album",
         "album_artist": "Test Artist",

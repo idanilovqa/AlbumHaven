@@ -4497,6 +4497,8 @@ def _persist_structural_album_tag_edit_sql(
                library.local_album_featured_artists.album_id
           cross join destination_album
           where not exists (select 1 from inserted_destination_album)
+             or library.local_album_featured_artists.metadata ->> 'source'
+                  is distinct from %(source)s
           on conflict (library_id, album_id, artist_id, featured_kind) do nothing
           returning library.local_album_featured_artists.id
         ),

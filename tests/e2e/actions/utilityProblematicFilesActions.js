@@ -337,16 +337,7 @@ export class UtilityProblematicFilesActions {
   }
 
   async readDetectedTrackRows() {
-    return this.utilityProblematicFilesTab.detailTrackRows.evaluateAll(rows => rows.map(row => {
-      const path = String(row.getAttribute('data-problematic-track-path') || '');
-      return {
-        filename: path.split(/[\\/]/).pop(),
-        path,
-        reasons: Array.from(row.querySelectorAll(
-          '[role="cell"][data-cdt-column="reason"] [data-problem-exclusion-scope="file"]',
-        )).map(reason => String(reason.textContent || '').trim()).filter(Boolean),
-      };
-    }));
+    return this.utilityProblematicFilesTab.readDetectedTrackRows();
   }
   async waitForNoSearchResults(searchTerm, options = {}) {
     await this.utilityProblematicFilesTab.waitForPageCondition((expected) => {

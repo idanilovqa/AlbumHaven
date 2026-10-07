@@ -2470,6 +2470,23 @@ def test_live_partial_album_split_clones_album_state_and_moves_only_selected_tra
                     "album_key": source_album["album_key"],
                 },
             )
+            connection.execute(
+                """
+                with scan_guest as (
+                  insert into library.local_artists (
+                    library_id, artist_key, name, sort_name
+                  ) values (
+                    %(library_id)s, 'scan only guest', 'Scan Only Guest', 'Scan Only Guest'
+                  ) returning id
+                )
+                insert into library.local_album_featured_artists (
+                  library_id, album_id, artist_id, featured_kind, metadata
+                ) select %(library_id)s, %(album_id)s, id, 'featured_member',
+                         '{"source":"runtime_scan_cache"}'::jsonb
+                  from scan_guest
+                """,
+                {"library_id": source_album["library_id"], "album_id": source_album["id"]},
+            )
             before_tracks = connection.execute(
                 """
                 select
@@ -2558,6 +2575,16 @@ def test_live_partial_album_split_clones_album_state_and_moves_only_selected_tra
                 order by library.local_albums.title
                 """
             ).fetchall()
+            scan_only_memberships = connection.execute(
+                """
+                select album.title
+                from library.local_album_featured_artists credit
+                join library.local_albums album on album.id = credit.album_id
+                join library.local_artists artist on artist.id = credit.artist_id
+                where artist.artist_key = 'scan only guest'
+                order by album.title
+                """
+            ).fetchall()
 
         assert len(albums) == 2
         albums_by_title = {str(row["title"]): dict(row) for row in albums}
@@ -2591,6 +2618,7 @@ def test_live_partial_album_split_clones_album_state_and_moves_only_selected_tra
             ("Source Album", "Split Guest", "featured_member"),
         ]
         assert all(row["metadata"]["source"] == "owner" for row in featured)
+        assert [row["title"] for row in scan_only_memberships] == ["Source Album"]
 
         destination_cover_path = (
             music_dir / "Split Artist" / "Destination Album" / "destination-cover.jpg"

@@ -1803,7 +1803,7 @@ async function pollStatus() {
       try {
         // An earlier in-flight summary cannot satisfy a later status change.
         // Failed/superseded loads return null; keep the change pending for the next poll.
-        const refreshedItems = await loadProblematicFiles(true);
+        const refreshedItems = await loadProblematicFiles(true, { preserveSelectedDetail: true });
         if (!ownsStatus()) return;
         if (state.utility === utility && Array.isArray(refreshedItems)) {
           utility.problematicStatusSyncedRevision = requestedRefreshRevision;

@@ -3615,7 +3615,8 @@ function watcherRefreshFixture() {
     watcher_health: { state: 'healthy', problems: [] },
   };
   fixture.refreshes = [];
-  fixture.context.loadProblematicFiles = async force => {
+  fixture.context.loadProblematicFiles = async (force, options) => {
+    assert.equal(options?.preserveSelectedDetail, true);
     fixture.refreshes.push(force);
     return [];
   };

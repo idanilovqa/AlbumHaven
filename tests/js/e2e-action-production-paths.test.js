@@ -8,6 +8,18 @@ const { pathToFileURL } = require('node:url');
 
 const repoRoot = path.join(__dirname, '..', '..');
 
+test('gallery readiness does not confuse absence-blocking membership with applied target proof', async () => {
+  const { classifyGalleryAlbumTargetState } = await import(pathToFileURL(path.join(repoRoot, 'tests/e2e/actions/galleryActions.js')).href);
+  const snapshot = { canonicalApplied: true, canonicalInventoryComplete: true,
+    canonicalMatch: true, attachedMatch: true, canonicalReadyMatch: false };
+  assert.deepEqual(classifyGalleryAlbumTargetState(snapshot), {
+    status: 'retryable', reason: 'canonical membership awaiting applied evidence',
+  });
+  assert.equal(classifyGalleryAlbumTargetState({ ...snapshot, canonicalReadyMatch: true }).status, 'ready');
+  assert.equal(classifyGalleryAlbumTargetState({ ...snapshot, canonicalMatch: false, attachedMatch: false,
+    canonicalInventoryComplete: false }).reason, 'incomplete canonical inventory');
+});
+
 test('Artist Tree folding waits for the shell transition to settle', async () => {
   const { NavigationPanelActions } = await import(pathToFileURL(path.join(repoRoot, 'tests/e2e/actions/navigationPanelActions.js')).href);
   let reads = 0;
@@ -6041,4 +6053,201 @@ test('paged gallery scroll keeps strict default behavior without an extent callb
   };
   await pom.waitForGalleryScrollMovement(6226, 1);
   assert.equal(calls, 1);
+});
+
+
+test('gallery traversal waits for a pending root page before treating the loaded boundary as the end', async () => {
+  const { GalleryActions } = await import(pathToFileURL(path.join(repoRoot, 'tests/e2e/actions/galleryActions.js')).href);
+  let pageArrived = false;
+  let boundaryWaits = 0;
+  const target = { count: async () => pageArrived ? 1 : 0 };
+  const actions = new GalleryActions({
+    sectionByArtistHeading: () => ({ getByRole: () => ({ first: () => target }) }),
+    async waitForRootGalleryBoundaryProgress(previous) {
+      boundaryWaits += 1;
+      assert.equal(previous.maxScrollTop, 600);
+      assert.equal(previous.pageCursor, 'next-page');
+      pageArrived = true;
+    },
+  });
+  actions.readGalleryScrollState = async () => ({ scrollTop: 600, clientHeight: 600, maxScrollTop: 600, hasMore: true, pageCursor: 'next-page' });
+  actions.readAlbumGalleryViewportState = async () => ({ attached: true, intersects: true, scrollDirection: 0 });
+  actions.scrollGalleryBy = async () => assert.fail('an in-flight page must settle before another native wheel');
+  await actions.scrollToAlbumUnderHeading('Mastodon', 'Crack The Skye Fixture 09');
+  assert.equal(boundaryWaits, 1);
+});
+
+test('root gallery boundary settlement keeps its original bounded timeout and observes only real page progress', async () => {
+  const { GalleryPage } = await import(pathToFileURL(path.join(repoRoot, 'tests/e2e/poms/galleryPage.js')).href);
+  const owner = {
+    galleryScrollSelector: '#albums-scroll',
+    async waitForPageCondition(callback, options, args) {
+      assert.equal(options.timeout, 5000);
+      const gallery = { scrollHeight: 1200, clientHeight: 600 };
+      const context = { document: { querySelector: () => gallery }, state: { view: { gallery_page: { has_more: true, next_cursor: 'next-page' } } } };
+      const predicate = require('node:vm').runInNewContext(`(${callback.toString()})`, context);
+      assert.equal(predicate(args), false);
+      context.state.view.gallery_page.next_cursor = 'following-page';
+      assert.equal(predicate(args), true);
+      context.state.view.gallery_page.next_cursor = 'next-page';
+      gallery.scrollHeight = 1800;
+      assert.equal(predicate(args), true);
+      gallery.scrollHeight = 1200;
+      context.state.view.gallery_page.has_more = false;
+      assert.equal(predicate(args), true);
+    },
+  };
+  await GalleryPage.prototype.waitForRootGalleryBoundaryProgress.call(owner, { maxScrollTop: 600, pageCursor: 'next-page' });
+});
+
+
+test('partial canonical gallery inventory remains unresolved until native traversal finds or exhausts it', async () => {
+  const { classifyGalleryAlbumTargetState } = await import(pathToFileURL(path.join(repoRoot, 'tests/e2e/actions/galleryActions.js')).href);
+  const snapshot = { expectedArtist: 'Mastodon', expectedAlbum: 'Later album',
+    canonicalApplied: true, canonicalInventoryComplete: false,
+    canonicalMatch: false, attachedMatch: false };
+  assert.deepEqual(classifyGalleryAlbumTargetState(snapshot), {
+    status: 'retryable', reason: 'incomplete canonical inventory',
+  });
+  assert.deepEqual(classifyGalleryAlbumTargetState({ ...snapshot, canonicalMatch: true, attachedMatch: true }), {
+    status: 'ready', reason: 'expected album attached',
+  });
+  assert.throws(() => classifyGalleryAlbumTargetState({ ...snapshot, canonicalInventoryComplete: true }),
+    /Settled gallery cannot satisfy/);
+});
+
+test('global album absence traverses real root page boundaries within the original deadline', async () => {
+  const { GalleryActions } = await import(pathToFileURL(path.join(repoRoot, 'tests/e2e/actions/galleryActions.js')).href);
+  const calls = [];
+  let scrollTop = 0;
+  let complete = false;
+  const owner = {
+    galleryPage: {
+      async readAlbumTargetState() {
+        return { busy: false, activeLoader: false, pendingViewTransition: false,
+          startupHydrating: false, canonicalApplied: true,
+          canonicalInventoryComplete: complete, canonicalMatch: false, attachedMatch: false,
+          inputQuery: '', locationQuery: '', expectedQuery: '' };
+      },
+      async waitForGalleryScrollMovement(prior, direction, options) {
+        calls.push('settle');
+        assert.equal(prior, 0);
+        assert.equal(direction, 1);
+        assert.equal(options.deadline, 6000);
+      },
+      async waitForRootGalleryBoundaryProgress(previous, options) {
+        calls.push('page');
+        assert.equal(previous.scrollTop, 6000);
+        assert.equal(options.deadline, 31000);
+        complete = true;
+      },
+    },
+    async readGalleryScrollState() {
+      return { scrollTop, clientHeight: 800, maxScrollTop: 6000,
+        hasMore: !complete, pageCursor: 'next-page' };
+    },
+    async scrollGalleryBy(delta) {
+      calls.push('wheel');
+      assert.equal(delta, 6000, 'Exhaustive absence must reach the loaded native boundary in one wheel action');
+      scrollTop = 6000;
+    },
+  };
+  const method = require('node:vm').runInNewContext(
+    `(async function ${GalleryActions.prototype.expectAlbumAbsentFromSettledGallery.toString().replace(/^async\s+/u, '')})`,
+    {
+      Date: { now: () => 1000 },
+      expect: {
+        poll(read, options) {
+          assert.equal(options.timeout, 30000);
+          return { async toEqual(expected) {
+            let actual;
+            for (let attempt = 0; attempt < 4; attempt += 1) {
+              actual = await read();
+              if (JSON.stringify(actual) === JSON.stringify(expected)) return;
+            }
+            assert.equal(JSON.stringify(actual), JSON.stringify(expected));
+          } };
+        },
+      },
+    },
+  );
+  await method.call(owner, { artist: 'Mastodon', album: 'Absent album' });
+  assert.deepEqual(calls, ['wheel', 'settle', 'page']);
+});
+
+
+test('gallery visibility preserves its caller deadline through partial inventory traversal', async () => {
+  const { GalleryActions, classifyGalleryAlbumTargetState } = await import(pathToFileURL(path.join(repoRoot, 'tests/e2e/actions/galleryActions.js')).href);
+  const method = require('node:vm').runInNewContext(
+    `(async function ${GalleryActions.prototype.waitForAlbumVisibleUnderHeading.toString().replace(/^async\s+/u, '')})`,
+    { Date: { now: () => 1000 }, classifyGalleryAlbumTargetState },
+  );
+  let traversed = false;
+  await method.call({
+    galleryPage: { async readAlbumTargetState() {
+      return { canonicalApplied: true, canonicalInventoryComplete: traversed,
+        canonicalMatch: traversed, attachedMatch: traversed };
+    } },
+    async scrollToAlbumUnderHeading(_artist, _album, options) {
+      traversed = true;
+      assert.equal(options.deadline, 1100);
+      assert.equal(options.timeout, 100);
+    },
+  }, 'Mastodon', 'Later album', { deadline: 1100 });
+  assert.equal(traversed, true);
+});
+
+
+for (const canonicalMatch of [true, false]) {
+  test(`partial gallery traversal rechecks canonical membership before success (match: ${canonicalMatch})`, async () => {
+    const { GalleryActions, classifyGalleryAlbumTargetState } = await import(pathToFileURL(path.join(repoRoot, 'tests/e2e/actions/galleryActions.js')).href);
+    const method = require('node:vm').runInNewContext(
+      `(async function ${GalleryActions.prototype.waitForAlbumVisibleUnderHeading.toString().replace(/^async\s+/u, '')})`,
+      { Date: { now: () => 1000 }, classifyGalleryAlbumTargetState },
+    );
+    let reads = 0;
+    let traversals = 0;
+    const request = method.call({
+      galleryPage: { async readAlbumTargetState() {
+        reads += 1;
+        return { canonicalApplied: true, canonicalInventoryComplete: reads > 1,
+          canonicalMatch: reads > 1 && canonicalMatch, attachedMatch: reads > 1 };
+      } },
+      async scrollToAlbumUnderHeading(_artist, _album, options) {
+        traversals += 1;
+        assert.equal(options.deadline, 1100);
+      },
+    }, 'Mastodon', 'Later album', { deadline: 1100 });
+    if (canonicalMatch) await request;
+    else await assert.rejects(request, /Settled gallery cannot satisfy/);
+    assert.equal(traversals, 1);
+    assert.equal(reads, 2);
+  });
+}
+
+
+test('direct gallery traversal preserves finite deadlines across boundary reconciliation', async () => {
+  const { GalleryActions, classifyGalleryAlbumTargetState } = await import(pathToFileURL(path.join(repoRoot, 'tests/e2e/actions/galleryActions.js')).href);
+  for (const supplied of [{ timeout: 100 }, { deadline: 1100 }, {}]) {
+    let now = 1000;
+    const stop = new Error('boundary inspected');
+    const method = require('node:vm').runInNewContext(
+      `(async function ${GalleryActions.prototype.scrollToAlbumUnderHeading.toString().replace(/^async\s+/u, '')})`,
+      { Date: { now: () => now }, classifyGalleryAlbumTargetState },
+    );
+    await assert.rejects(method.call({
+      galleryPage: {
+        sectionByArtistHeading: () => ({ getByRole: () => ({ first: () => ({ count: async () => 0 }) }) }),
+        readAlbumTargetState: async () => ({ busy: true }),
+      },
+      async readGalleryScrollState() {
+        now = 1050;
+        return { scrollTop: 600, maxScrollTop: 600, hasMore: false };
+      },
+      async waitForAlbumVisibleUnderHeading(_artist, _album, options) {
+        assert.equal(options.deadline, supplied.timeout || supplied.deadline ? 1100 : undefined);
+        throw stop;
+      },
+    }, 'Mastodon', 'Later album', { ...supplied, waitAtBoundary: true }), error => error === stop);
+  }
 });

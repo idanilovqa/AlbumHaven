@@ -17,7 +17,7 @@ test('mutation continuity captures the surviving artist/year metadata before the
   class Element {}
   const previous = new Element();
   previous.getAttribute = () => 'prior-album';
-  previous.querySelector = selector => ({ textContent: selector === '.title' ? ' Prior album ' : ' Artist · 2026 ' });
+  previous.querySelector = selector => ({ textContent: { '.title': ' Prior album ', '.subtitle': ' Artist ', '.year': ' 2026 ' }[selector] });
   const selected = new Element();
   selected.getAttribute = () => 'selected-album';
   const items = [previous, selected];
@@ -42,6 +42,7 @@ test('mutation continuity captures the surviving artist/year metadata before the
     },
     sidebarListSelector: '.list', activeListItemSelector: '.selected', listItemSelector: '.item',
     listItemTitleSelector: '.title', listItemMetaSelector: '.meta',
+    listItemSubtitleSelector: '.subtitle', listItemYearSelector: '.year',
     page: { async evaluateHandle(callback, selectors) {
       calls.push('observe');
       const snapshot = callback(selectors);

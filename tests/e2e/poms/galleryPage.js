@@ -6,7 +6,8 @@ import {
   getProductionViewObserver,
   hasAppliedCanonicalArtistSurface,
   hasStableDomEvidence,
-  readCanonicalAlbumTargetEvidence,
+  matchesAccumulatedRootProjection,
+  readAppliedAlbumTargetEvidence,
 } from '../helpers/productionViewObserver.js';
 
 function exactNormalizedText(value) {
@@ -731,6 +732,34 @@ export class GalleryPage extends BasePage {
     );
   }
 
+  async readAppliedGalleryProjection() {
+    // parity-check: allow-read-only-measurement-evaluate -- inspect the applied production projection and pure family-reuse diagnostic without fetching or mutating it
+    return this.page.evaluate(() => {
+      const view = state.view || {};
+      return {
+        artist_groups: view.artist_groups,
+        primary_artist_groups: view.primary_artist_groups,
+        family_artist_groups: view.family_artist_groups,
+        gallery_page: view.gallery_page,
+        query: view.query,
+        selected_artist: view.selected_artist,
+        gallery_scope: view.gallery_scope,
+        visible_library_categories: view.visible_library_categories,
+        related_filter_artists: view.related_filter_artists,
+        primary_filter_active: view.primary_filter_active,
+        busy: Boolean(state.busy),
+        pendingViewTransition: Boolean(state.ui?.pendingViewTransition),
+        viewRevision: Number(state.ui?.viewStateRevision || 0),
+        surface: typeof resolveViewSurface === 'function' ? resolveViewSurface(view) : String(view.surface_request || 'albums'),
+        locationQuery: new URL(window.location.href).searchParams.get('q') || '',
+        locationArtist: new URL(window.location.href).searchParams.get('artist') || '',
+        authoritativeMountedFamily: Boolean(view.selected_artist)
+          && typeof buildOptimisticSidebarArtistSelectionGroups === 'function'
+          && buildOptimisticSidebarArtistSelectionGroups(view.selected_artist)?.skipFetch === true,
+      };
+    });
+  }
+
   async readStatusPayload() {
     const response = await authenticatedPageGet(this.page, '/status');
     if (!response.ok()) {
@@ -744,10 +773,18 @@ export class GalleryPage extends BasePage {
     if (observation.latestFullPayloadError) {
       throw new Error(`Production view observation failed: ${observation.latestFullPayloadError}`);
     }
-    if (!observation.latestFullPayload) {
-      throw new Error('Expected an observed production view response before reading browse telemetry.');
+    if (observation.latestFullPayload) return observation.latestFullPayload;
+    const idle = observation.activeRequestCount === 0 && observation.pendingPayloadReadCount === 0;
+    const location = observation.onlyRootContinuationsPending ? new URL(this.page.url()) : null;
+    const rootContinuation = location && !['q', 'artist', 'playlist'].some(key => location.searchParams.get(key))
+      && (!location.searchParams.get('surface') || location.searchParams.get('surface') === 'albums');
+    if (idle || rootContinuation) {
+      const bootstrap = await this.readProductionBootstrapPayload();
+      const payload = bootstrap?.startup_payload?.first_paint_view || bootstrap?.initial_view;
+      if (payload && ['full', 'gallery_page'].includes(String(payload.payload_tier || 'full'))
+          && (idle || (payload.gallery_page && !payload.query && !payload.selected_artist))) return payload;
     }
-    return observation.latestFullPayload;
+    throw new Error('Expected an observed production view response or settled SSR payload before reading browse telemetry.');
   }
 
   async readAlbumTargetState(expected = {}) {
@@ -766,19 +803,24 @@ export class GalleryPage extends BasePage {
       || null;
     const input = this.page.locator('#search-input');
     const inputQuery = await input.count() ? await input.inputValue() : '';
-    const canonicalQuery = String(inputQuery || '').trim();
     const expectedQuery = expected.query === undefined
-      ? canonicalQuery
+      ? String(inputQuery || '').trim()
       : String(expected.query || '').trim();
     const expectedArtist = String(expected.artist || '').trim();
     const expectedAlbum = String(expected.album || '').trim();
-    const canonicalEvidence = readCanonicalAlbumTargetEvidence({
+    const projection = await this.readAppliedGalleryProjection();
+    const targetLocation = new URL(this.page.url());
+    const rootLocation = !['q', 'artist', 'playlist'].some(key => targetLocation.searchParams.get(key));
+    const rootBootstrap = projection.gallery_page && rootLocation && !matchesAccumulatedRootProjection(payload, projection)
+      ? await this.readProductionBootstrapPayload() : null;
+    const canonicalEvidence = readAppliedAlbumTargetEvidence({
       ...initialObservation,
       latestFullPayload: payload,
-    }, {
+    }, projection, rootLocation ? rootBootstrap?.startup_payload?.first_paint_view || rootBootstrap?.initial_view : null, {
       album: expectedAlbum,
       artist: expectedArtist,
     });
+    const canonicalQuery = canonicalEvidence.canonicalQuery;
     const initialAttachedMatch = await this.albumCard
       .detailsButtonByArtistAndAlbum(expectedArtist, expectedAlbum)
       .count() > 0;
@@ -813,12 +855,18 @@ export class GalleryPage extends BasePage {
     if (finalObservation.latestFullPayloadError) {
       throw new Error(`Production view observation failed: ${finalObservation.latestFullPayloadError}`);
     }
-    const observationChanged = finalObservation.stateRevision !== initialObservation.stateRevision;
+    const finalProjection = await this.readAppliedGalleryProjection();
+    const observationChanged = finalObservation.stateRevision !== initialObservation.stateRevision
+      || finalProjection.viewRevision !== projection.viewRevision
+      || finalProjection.query !== projection.query
+      || finalProjection.selected_artist !== projection.selected_artist;
     const domChanged = !hasStableDomEvidence(
       { attachedArtists, attachedMatch: initialAttachedMatch },
       { attachedArtists: finalAttachedArtists, attachedMatch: finalAttachedMatch },
     );
     const busy = initiallyBusy
+      || projection.busy || projection.pendingViewTransition
+      || finalProjection.busy || finalProjection.pendingViewTransition
       || finalObservation.activeRequestCount > 0
       || finalObservation.pendingPayloadReadCount > 0
       || observationChanged
@@ -839,7 +887,9 @@ export class GalleryPage extends BasePage {
       attachedMatch: finalAttachedMatch,
       busy,
       canonicalApplied,
+      canonicalInventoryComplete: canonicalEvidence.canonicalInventoryComplete,
       canonicalMatch: canonicalEvidence.canonicalMatch,
+      canonicalReadyMatch: canonicalEvidence.canonicalReadyMatch,
       canonicalSource: canonicalEvidence.canonicalSource,
       canonicalQuery,
       expectedAlbum,
@@ -950,6 +1000,24 @@ export class GalleryPage extends BasePage {
     return this.page.evaluate(readDecodedProductionCardWindow, {
       ...selectors,
       snapshot: true,
+    });
+  }
+
+  async waitForRootGalleryBoundaryProgress(previous, options = {}) {
+    const timeout = Math.min(5000, (options.deadline ?? Date.now() + 5000) - Date.now());
+    if (timeout <= 0) throw new Error('Root gallery boundary exceeded its original deadline.');
+    await this.waitForPageCondition(({ galleryScrollSelector, previousMaxScrollTop, cursor }) => {
+      const gallery = document.querySelector(galleryScrollSelector);
+      const page = state.view?.gallery_page;
+      return Boolean(gallery) && (
+        Math.max(0, gallery.scrollHeight - gallery.clientHeight) > previousMaxScrollTop + 2
+        || !page?.has_more
+        || String(page.next_cursor || '') !== cursor
+      );
+    }, { timeout }, {
+      galleryScrollSelector: this.galleryScrollSelector,
+      previousMaxScrollTop: previous.maxScrollTop,
+      cursor: previous.pageCursor,
     });
   }
 

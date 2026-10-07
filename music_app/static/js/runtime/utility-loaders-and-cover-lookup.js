@@ -50,16 +50,39 @@ async function loadProblematicFiles(force = false, options = {}) {
       const { summaryItems, initialDetail, operationalItems } = validateProblematicSummaryPayload(data);
       const stateCommitStartedAt = getProblematicUtilityNow();
       initialDetailKey = String(initialDetail?.key || '').trim();
+      const selectedKey = String(state.utility.selectedProblematicKey || '');
+      const selectedDetail = options.preserveSelectedDetail === true
+        ? state.utility.problematicFiles.find(item => item.key === selectedKey && item.detail_loaded === true)
+        : null;
+      const selectedSummary = selectedDetail && selectedKey !== initialDetailKey
+        ? summaryItems.find(item => item.key === selectedKey) : null;
       state.utility.problematicFiles = summaryItems.map((item) => {
-        if (!initialDetailKey || String(item?.key || '').trim() !== initialDetailKey) return item;
-        initialDetailMerged = true;
-        return { ...item, ...initialDetail, detail_loaded: true };
+        if (initialDetailKey && String(item?.key || '').trim() === initialDetailKey) {
+          initialDetailMerged = true;
+          return { ...item, ...initialDetail, detail_loaded: true };
+        }
+        return item === selectedSummary ? selectedDetail : item;
       });
       state.utility.libraryWatchHealthProblems = operationalItems;
       state.utility.detailLoadPromises = {};
       state.utility.loaded = true;
       loadSucceeded = true;
       stateCommitMs = roundProblematicUtilityMs(getProblematicUtilityNow() - stateCommitStartedAt);
+      if (selectedSummary) {
+        const detailRequest = loadProblematicAlbumDetail(selectedKey, true, { render: false });
+        const detailRequestToken = Number(state.utility.problematicDetailRequestToken || 0);
+        const refreshedDetail = await detailRequest;
+        if (Number(state.utility.problematicSummaryRequestToken || 0) !== requestToken) return null;
+        if (!refreshedDetail) {
+          const stillOwnsDetail = Number(state.utility.problematicDetailRequestToken || 0) === detailRequestToken;
+          // Discard retained stale detail, but never replace a newer navigation result.
+          state.utility.problematicFiles = state.utility.problematicFiles.map(item => (
+            item.key === selectedKey && (item === selectedDetail || stillOwnsDetail)
+              ? { ...selectedSummary, detail_load_failed: stillOwnsDetail && state.utility.selectedProblematicKey === selectedKey }
+              : item
+          ));
+        }
+      }
       return state.utility.problematicFiles;
     } catch (error) {
       if (Number(state.utility.problematicSummaryRequestToken || 0) !== requestToken) return null;

@@ -14813,3 +14813,31 @@ def test_non_album_visible_alias_expansion_preserves_separate_collision_preceden
     assert lookups[3] is lookups[4]
     assert lookups[3]["signal lead"] == "Second"
     assert lookups[0] is not lookups[3]
+
+
+@pytest.mark.parametrize("roles", [
+    ("owner", "featured_member", "featured_track_artist"),
+    ("featured_track_artist",),
+])
+def test_exact_artist_full_search_excludes_guest_only_primary_albums(monkeypatch, missing_album_browse_repository, roles):
+    repository = missing_album_browse_repository
+    rows = []
+    for album_id, role in enumerate(roles, 1):
+        row = _browse_album_row(artist='Control Signal Lead', album_id=album_id, album_key=role, title=role)
+        row['album_featured_artists'] = [{
+            'artist_id': 2, 'artist_name': 'Control Signal Partner',
+            'artist_sort_name': 'Control Signal Partner', 'featured_kind': role,
+        }]
+        rows.append(row)
+    monkeypatch.setattr(repository, '_load_exact_artist_match', lambda *_args, **_kwargs: 'Control Signal Partner')
+    monkeypatch.setattr(repository, '_load_search_rows', lambda *_args, **_kwargs: rows)
+    selected_rows = []
+
+    def selected_payload(**kwargs):
+        selected_rows.extend(kwargs['_selected_artist_preview_rows'])
+        return {'selected_artist': 'Control Signal Partner', 'primary_artist_groups': [],
+                'family_artist_groups': [], 'search_context': {}}
+
+    monkeypatch.setattr(repository, 'build_selected_artist_payload', selected_payload)
+    repository.build_search_payload(query_params={'q': 'Control Signal Partner'})
+    assert [row['album_key'] for row in selected_rows] == [role for role in roles if role != 'featured_track_artist']

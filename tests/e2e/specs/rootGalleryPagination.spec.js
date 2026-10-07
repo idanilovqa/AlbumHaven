@@ -54,16 +54,16 @@ test(CASE, { tag: '@area:gallery-search' }, async ({ page, galleryActions, testA
     .toEqual(initial.artists_sidebar.map(item => item.artist));
 
   // parity-check: allow-read-only-measurement-evaluate -- inspect the live loaded occurrence inventory without changing runtime state
-  const readLoaded = () => page.evaluate(() => ({
+  const readLoaded = () => page.evaluate(headingSelector => ({
     groups: state.view.artist_groups.map(group => ({ artist: group.artist, keys: group.albums.map(album => album.key) })),
     artistCount: state.view.artist_count, albumCount: state.view.album_count,
     hasMore: state.view.gallery_page.has_more,
     displayed: getFilteredGalleryMainModel().groups.map(group => ({
       artist: group.artist, label: group.artist_display || group.artist, keys: group.albums.map(album => album.key),
     })),
-    headings: [...document.querySelectorAll('#artist-groups .family-artist-header[data-scroll-artist]')]
+    headings: [...document.querySelectorAll(headingSelector)]
       .map(heading => heading.getAttribute('data-scroll-artist')),
-  }));
+  }), ui.artistHeadingSelector);
   const expectCanonicalDisplay = snapshot => {
     expect(snapshot.displayed.map(({ artist, keys }) => ({ artist, keys }))).toEqual(snapshot.groups);
     expect(snapshot.groups.map(group => group.artist))

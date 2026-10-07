@@ -59,6 +59,82 @@ export function hasAppliedCanonicalArtistSurface(
   );
 }
 
+export function isRootGalleryContinuationUrl(value) {
+  if (!URL.canParse(value)) return false;
+  const url = new URL(value);
+  return url.pathname === '/view-data' && Boolean(url.searchParams.get('gallery_cursor'))
+    && !['q', 'artist', 'playlist'].some(key => url.searchParams.get(key))
+    && (!url.searchParams.get('surface') || url.searchParams.get('surface') === 'albums');
+}
+
+export function hasCompleteCanonicalAlbumInventory(payload) {
+  return Boolean(payload) && String(payload.payload_tier || 'full').trim().toLowerCase() === 'full';
+}
+
+export function matchesAccumulatedRootProjection(payload, projection, allowLaterPage = false) {
+  if (!payload?.gallery_page?.revision || !projection?.gallery_page) return false;
+  if (payload.query || payload.selected_artist || projection.query || projection.selected_artist
+      || projection.busy || projection.pendingViewTransition || projection.surface !== 'albums') return false;
+  const page = payload.gallery_page;
+  const applied = projection.gallery_page;
+  return page.revision === applied.revision && (allowLaterPage || (page.next_cursor === applied.next_cursor
+    && page.has_more === applied.has_more))
+    && String(payload.gallery_scope || 'all') === String(projection.gallery_scope || 'all')
+    && JSON.stringify(payload.visible_library_categories || [])
+      === JSON.stringify(projection.visible_library_categories || [])
+    && Array.isArray(projection.artist_groups);
+}
+
+export function readAppliedAlbumTargetEvidence(observation, projection, bootstrap, expected) {
+  const payload = observation.latestFullPayload;
+  const rootAnchor = matchesAccumulatedRootProjection(payload, projection) ? payload
+    : matchesAccumulatedRootProjection(bootstrap, projection, true) ? bootstrap : null;
+  const observed = readCanonicalAlbumTargetEvidence(observation, expected);
+  const applied = readCanonicalAlbumTargetEvidence({ latestFullPayload: projection }, expected);
+  const settled = projection && !projection.busy && !projection.pendingViewTransition && projection.surface === 'albums';
+  const sameFilters = payload && settled
+    && String(payload.gallery_scope || 'all') === String(projection.gallery_scope || 'all')
+    && ['visible_library_categories', 'related_filter_artists'].every(key => JSON.stringify([...(payload[key] || [])].sort()) === JSON.stringify([...(projection[key] || [])].sort()))
+    && Boolean(payload.primary_filter_active) === Boolean(projection.primary_filter_active);
+  const sameQuery = String(payload?.query || '') === String(projection?.query || '');
+  const sameScope = sameFilters && sameQuery
+    && String(payload.selected_artist || '') === String(projection.selected_artist || '');
+  const localSelection = sameFilters && (sameQuery || (!projection.query && projection.selected_artist
+    && !projection.locationQuery && projection.locationArtist === projection.selected_artist));
+  const inventory = (view) => {
+    const groups = new Map();
+    for (const field of ['artist_groups', 'primary_artist_groups', 'family_artist_groups']) {
+      for (const group of view?.[field] || []) {
+        const artist = String(group.artist || group.artist_display || '').trim();
+        const albums = groups.get(artist) || new Set();
+        for (const album of group.albums || []) albums.add(String(album.key || album.name || album.title || ''));
+        groups.set(artist, albums);
+      }
+    }
+    return groups;
+  };
+  const sourceGroups = inventory(payload);
+  const appliedGroups = inventory(projection);
+  const familyScope = localSelection && projection.authoritativeMountedFamily === true
+    && Boolean(projection.selected_artist);
+  const completeFamily = familyScope && appliedGroups.size > 0 && [...appliedGroups].every(([artist, albums]) => {
+    const sourceAlbums = sourceGroups.get(artist);
+    return sourceAlbums?.size === albums.size && [...albums].every(album => sourceAlbums.has(album));
+  });
+  const sourceMatch = rootAnchor
+    ? readCanonicalAlbumTargetEvidence({ latestFullPayload: rootAnchor }, expected).canonicalMatch
+    : observed.canonicalMatch && (!familyScope || appliedGroups.has(String(expected.artist || '').trim()));
+  const acceptedScope = Boolean(rootAnchor || sameScope || localSelection);
+  return {
+    ...(acceptedScope ? applied : observed),
+    canonicalMatch: Boolean(sourceMatch || applied.canonicalMatch),
+    canonicalReadyMatch: Boolean(acceptedScope && applied.canonicalMatch && (rootAnchor || sourceMatch)),
+    canonicalInventoryComplete: Boolean(rootAnchor ? projection.gallery_page.has_more === false
+      : (sameScope || completeFamily) && observed.canonicalInventoryComplete),
+    canonicalQuery: String((acceptedScope ? projection?.query : payload?.query) || ''),
+  };
+}
+
 export function readCanonicalArtistGroups(payload = {}) {
   const groupsByArtist = new Map();
   for (const field of ['artist_groups', 'primary_artist_groups', 'family_artist_groups']) {
@@ -123,6 +199,7 @@ export function readCanonicalAlbumTargetEvidence(observation = {}, expected = {}
   ].filter(Boolean))];
 
   return {
+    canonicalInventoryComplete: hasCompleteCanonicalAlbumInventory(observation.latestFullPayload),
     canonicalMatch: fullMatch || completedSaveTaskMatch,
     canonicalSource: completedSaveTaskMatch
       ? 'completed-save-task'
@@ -147,7 +224,7 @@ export class ProductionViewObserver {
     this.nextRequestSequence = 0;
     this.nextSaveTaskRequestSequence = 0;
     this.latestSaveTaskRequestSequence = 0;
-    this.pendingPayloadReads = new Set();
+    this.pendingPayloadReads = new Map();
     this.requestDetails = new WeakMap();
     this.stateRevision = 0;
 
@@ -211,7 +288,7 @@ export class ProductionViewObserver {
       if (detail?.kind === 'save-task') {
         if (!response.ok()) return;
         const pendingRead = `save-task:${detail.sequence}`;
-        this.pendingPayloadReads.add(pendingRead);
+        this.pendingPayloadReads.set(pendingRead, detail);
         this.stateRevision += 1;
         Promise.resolve(response.json())
           .then((payload) => {
@@ -255,15 +332,15 @@ export class ProductionViewObserver {
         }
         return;
       }
-      this.pendingPayloadReads.add(detail.sequence);
+      this.pendingPayloadReads.set(detail.sequence, detail);
       this.stateRevision += 1;
       const payloadRead = Promise.resolve(response.json())
         .then((payload) => {
           if (detail.documentGeneration !== this.documentGeneration
               || detail.sequence !== this.latestFullRequestSequence) return;
           const payloadTier = String(payload?.payload_tier || 'full').trim().toLowerCase();
-          if (payloadTier !== 'full') {
-            this.latestFullPayloadError = `Expected full production view payload, received ${payloadTier || 'unknown'}`;
+          if (!['full', 'gallery_page'].includes(payloadTier)) {
+            this.latestFullPayloadError = `Expected authoritative production view payload, received ${payloadTier || 'unknown'}`;
             return;
           }
           this.latestFullPayload = payload;
@@ -316,6 +393,9 @@ export class ProductionViewObserver {
     return {
       activeRequestCount: this.activeRequests.size,
       activeRequestUrl: String(activeRequest?.url || ''),
+      onlyRootContinuationsPending: this.activeRequests.size > 0
+        && [...this.activeRequests.values()].every(detail => isRootGalleryContinuationUrl(detail.url))
+        && [...this.pendingPayloadReads.values()].every(detail => isRootGalleryContinuationUrl(detail.url)),
       latestFullPayload: this.latestFullPayload,
       latestFullPayloadError: this.latestFullPayloadError,
       requestGeneration: this.latestFullRequestSequence,

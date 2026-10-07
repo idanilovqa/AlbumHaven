@@ -225,17 +225,19 @@ test(WARNING_CASE,{tag:'@area:gallery-search'},async({page,galleryActions,search
       await expect(ui.warning).toBeVisible();
       await page.getByRole('button',{name:'Back to previous library view'}).click();
     });
-    await stepLogger.step('Searching with active watcher health shows only the selection loader',async()=>{
-      const observation=await ui.observeSelectionLoader();
+    await stepLogger.step('Searching with active watcher health retains the gallery without a blocking warning',async()=>{
+      const observation=await ui.observeSearchContinuity('Neal Morse');
       let evidence;
       try {
         await searchToolbarActions.search('Neal Morse',{submitWithEnter:true});
         await searchToolbarActions.waitForQuery('Neal Morse');
         await galleryActions.waitForGalleryReady();
-      } finally { evidence=await ui.finishSelectionLoaderObservation(observation); }
-      expect(evidence.selections).toBeGreaterThan(0);
+      } finally { evidence=await ui.finishSearchContinuity(observation); }
+      expect(evidence.pendingRequests).toBeGreaterThan(0);
+      expect(evidence.samples).toBeGreaterThan(0);
+      expect(evidence.hiddenGallery).toBe(0);
+      expect(evidence.blockingLoader).toBe(0);
       expect(evidence.warningExposures).toBe(0);
-      expect(evidence.missingSpinners).toBe(0);
       await expect(ui.scanWarning).toBeHidden();
       await expect(ui.warning).toBeVisible();
       await searchToolbarActions.clearSearch({ submitWithEnter: true });

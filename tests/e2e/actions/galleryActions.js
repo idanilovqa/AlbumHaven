@@ -272,6 +272,7 @@ export function classifyGalleryAlbumTargetState(snapshot = {}) {
     [String(snapshot.canonicalQuery || '').trim() !== expectedQuery, 'canonical query mismatch'],
     [Boolean(snapshot.startupHydrating), 'startup hydration'],
     [snapshot.canonicalApplied === false, 'canonical result not applied'],
+    [Boolean(snapshot.canonicalMatch) && snapshot.canonicalReadyMatch === false, 'canonical membership awaiting applied evidence'],
     [Boolean(snapshot.canonicalMatch) && !snapshot.attachedMatch, 'canonical match awaiting virtual attachment'],
   ];
   const retryable = retryableChecks.find(([matches]) => matches);
@@ -280,6 +281,9 @@ export function classifyGalleryAlbumTargetState(snapshot = {}) {
   }
   if (snapshot.canonicalMatch && snapshot.attachedMatch) {
     return { status: 'ready', reason: 'expected album attached' };
+  }
+  if (snapshot.canonicalInventoryComplete === false) {
+    return { status: 'retryable', reason: 'incomplete canonical inventory' };
   }
 
   const observedState = { ...snapshot };
@@ -897,7 +901,7 @@ export class GalleryActions {
 
   async waitForAlbumVisibleUnderHeading(artistName, albumName, options = {}) {
     const timeout = Number(options.timeout || 30000);
-    const deadline = Date.now() + timeout;
+    const deadline = options.deadline ?? Date.now() + timeout;
     let lastSnapshot = null;
     while (Date.now() <= deadline) {
       lastSnapshot = await this.galleryPage.readAlbumTargetState({
@@ -907,12 +911,14 @@ export class GalleryActions {
       });
       const classification = classifyGalleryAlbumTargetState(lastSnapshot);
       if (classification.status === 'ready') return;
-      if (classification.reason === 'canonical match awaiting virtual attachment') {
+      if (['canonical match awaiting virtual attachment', 'incomplete canonical inventory'].includes(classification.reason)) {
         await this.scrollToAlbumUnderHeading(artistName, albumName, {
           ...options,
           waitAtBoundary: true,
           timeout: Math.max(1, deadline - Date.now()),
+          deadline,
         });
+        if (classification.reason === 'incomplete canonical inventory') continue;
         return;
       }
       await new Promise((resolve) => setTimeout(resolve, 25));
@@ -975,6 +981,7 @@ export class GalleryActions {
   }
 
   async scrollToAlbumUnderHeading(artistName, albumName, options = {}) {
+    const traversalDeadline = options.deadline ?? (options.timeout ? Date.now() + Number(options.timeout) : Infinity);
     const maxScrollActions = options.maxAttempts === undefined
       ? null
       : Math.max(1, Math.floor(Number(options.maxAttempts) || 1));
@@ -984,12 +991,14 @@ export class GalleryActions {
     let waitedAtBoundary = false;
     const year = String(options.year || '').trim();
     const scrollAndWait = async (scrollState, scrollDirection) => {
-      const deadline = Date.now() + 5000;
+      const deadline = Math.min(traversalDeadline, Date.now() + 5000);
       const wheel = async () => {
         if (maxScrollActions !== null && scrollActions >= maxScrollActions) {
           throw new Error('Gallery traversal exhausted its native scroll action limit.');
         }
-        await this.scrollGalleryBy(scrollDirection * Math.max(240, Math.round(scrollState.clientHeight * 0.75)));
+        await this.scrollGalleryBy(scrollDirection * Math.max(240, Math.round(scrollState.clientHeight * 0.75)), {
+          timeout: Math.max(1, deadline - Date.now()),
+        });
         scrollActions += 1;
       };
       await wheel();
@@ -999,7 +1008,11 @@ export class GalleryActions {
         onExtentExpanded: wheel,
       });
     };
-    const reconcileBoundary = async (boundaryDirection) => {
+    const reconcileBoundary = async (boundaryDirection, scrollState) => {
+      if (boundaryDirection > 0 && scrollState.hasMore) {
+        await this.galleryPage.waitForRootGalleryBoundaryProgress(scrollState, { deadline: traversalDeadline });
+        return true;
+      }
       if (options.waitAtBoundary !== true || waitedAtBoundary) return false;
       waitedAtBoundary = true;
       const targetState = await this.galleryPage.readAlbumTargetState({
@@ -1015,10 +1028,14 @@ export class GalleryActions {
         direction = -boundaryDirection;
         return true;
       }
-      await this.waitForAlbumVisibleUnderHeading(artistName, albumName, options);
+      await this.waitForAlbumVisibleUnderHeading(artistName, albumName, {
+        ...options,
+        deadline: Number.isFinite(traversalDeadline) ? traversalDeadline : undefined,
+      });
       return true;
     };
     while (true) {
+      if (Date.now() >= traversalDeadline) throw new Error('Gallery traversal exceeded its original deadline.');
       const section = this.galleryPage.sectionByArtistHeading(artistName);
       const target = year
         ? this.galleryPage.albumCard.cardByIdentity(artistName, albumName, year).first()
@@ -1037,7 +1054,7 @@ export class GalleryActions {
             ? scrollState.scrollTop >= scrollState.maxScrollTop - 2
             : scrollState.scrollTop <= 2;
           if (reachedBoundary) {
-            if (await reconcileBoundary(targetDirection)) continue;
+            if (await reconcileBoundary(targetDirection, scrollState)) continue;
             break;
           }
           if (maxScrollActions !== null && scrollActions >= maxScrollActions) break;
@@ -1056,7 +1073,7 @@ export class GalleryActions {
         ? scrollState.scrollTop >= scrollState.maxScrollTop - 2
         : scrollState.scrollTop <= 2;
       if (reachedBoundary) {
-        if (await reconcileBoundary(direction)) continue;
+        if (await reconcileBoundary(direction, scrollState)) continue;
         break;
       }
       if (maxScrollActions !== null && scrollActions >= maxScrollActions) break;
@@ -1717,18 +1734,20 @@ export class GalleryActions {
     });
   }
 
-  async scrollGalleryBy(deltaY) {
+  async scrollGalleryBy(deltaY, options = {}) {
     if (!Number.isFinite(deltaY) || Math.abs(deltaY) < 1) return;
-    await this.galleryPage.galleryScroll.hover();
+    await this.galleryPage.galleryScroll.hover(options);
     await this.galleryPage.page.mouse.wheel(0, deltaY);
   }
 
   async readGalleryScrollState() {
-    // parity-check: allow-read-only-measurement-evaluate gallery scroll metrics only
+    // parity-check: allow-read-only-measurement-evaluate -- read gallery geometry and the actual loaded-page boundary without changing application state
     return this.galleryPage.galleryScroll.evaluate((galleryScroll) => ({
       scrollTop: galleryScroll.scrollTop,
       clientHeight: galleryScroll.clientHeight,
       maxScrollTop: Math.max(0, galleryScroll.scrollHeight - galleryScroll.clientHeight),
+      hasMore: Boolean(state.view?.gallery_page?.has_more),
+      pageCursor: String(state.view?.gallery_page?.next_cursor || ''),
     }));
   }
 
@@ -1920,13 +1939,32 @@ export class GalleryActions {
   }
 
   async expectAlbumAbsentFromSettledGallery(expected) {
+    const deadline = Date.now() + 30000;
     await expect.poll(async () => {
       const snapshot = await this.galleryPage.readAlbumTargetState(expected);
+      const settled = !snapshot.busy && !snapshot.activeLoader && !snapshot.pendingViewTransition
+        && !snapshot.startupHydrating && snapshot.canonicalApplied
+        && snapshot.inputQuery === snapshot.expectedQuery
+        && snapshot.locationQuery === snapshot.expectedQuery;
+      if (settled && snapshot.canonicalInventoryComplete === false) {
+        const scroll = await this.readGalleryScrollState();
+        if (scroll.hasMore && Date.now() < deadline) {
+          if (scroll.scrollTop >= scroll.maxScrollTop - 2) {
+            await this.galleryPage.waitForRootGalleryBoundaryProgress(scroll, { deadline });
+          } else {
+            const stepDeadline = Math.min(deadline, Date.now() + 5000);
+            const wheel = () => this.scrollGalleryBy(scroll.maxScrollTop - scroll.scrollTop, {
+              timeout: Math.max(1, stepDeadline - Date.now()),
+            });
+            await wheel();
+            await this.galleryPage.waitForGalleryScrollMovement(scroll.scrollTop, 1, {
+              deadline: stepDeadline, previousMaxScrollTop: scroll.maxScrollTop, onExtentExpanded: wheel,
+            });
+          }
+        }
+      }
       return {
-        settled: !snapshot.busy && !snapshot.activeLoader && !snapshot.pendingViewTransition
-          && !snapshot.startupHydrating && snapshot.canonicalApplied
-          && snapshot.inputQuery === snapshot.expectedQuery
-          && snapshot.locationQuery === snapshot.expectedQuery,
+        settled: settled && snapshot.canonicalInventoryComplete,
         canonicalMatch: snapshot.canonicalMatch,
         attachedMatch: snapshot.attachedMatch,
       };

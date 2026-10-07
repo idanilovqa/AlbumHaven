@@ -1564,6 +1564,16 @@ function buildOptimisticSidebarArtistSelectionGroups(artist) {
     : hasAuthoritativeMountedFamilyContext;
   if (matchedSelectedArtistGroupIndex >= 0) {
     const optimisticMatchedSelectedArtistGroup = deepCloneJson(matchedSelectedArtistGroup);
+    const selectedAlbumKeys = new Set(
+      (matchedSelectedArtistGroup.albums || []).map((album) => album.key),
+    );
+    const hasUnresolvedAlbumMembership = currentSelectedArtistGroups.some((group) => (
+      (group.albums || []).some((album) => (
+        !selectedAlbumKeys.has(album.key)
+        && Array.isArray(album.artists)
+        && album.artists.includes(normalizedArtist)
+      ))
+    ));
     const familyGroups = currentSelectedArtistGroups
       .filter((_, index) => index !== matchedSelectedArtistGroupIndex)
       .map((group) => deepCloneJson(group));
@@ -1579,7 +1589,12 @@ function buildOptimisticSidebarArtistSelectionGroups(artist) {
       primaryGroups: [optimisticMatchedSelectedArtistGroup],
       familyGroups,
       relatedArtists,
-      skipFetch: canReuseCurrentSelectedArtistFamilyContext,
+      skipFetch: canReuseCurrentSelectedArtistFamilyContext && !hasUnresolvedAlbumMembership && (
+        Boolean(query) || (
+          optimisticMatchedSelectedArtistGroup.albums?.length
+          === readSidebarAlbumCount(state.view?.artists_sidebar, normalizedArtist)
+        )
+      ),
     };
   }
   const currentArtistGroups = Array.isArray(state.view?.artist_groups)

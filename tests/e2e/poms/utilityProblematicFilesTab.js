@@ -213,6 +213,20 @@ export class UtilityProblematicFilesTab extends BasePage {
     return row.locator('[role="cell"][data-cdt-column="filename"]');
   }
 
+  async readDetectedTrackRows() {
+    // parity-check: allow-read-only-measurement-evaluate -- read one atomic snapshot of rendered track identities and reasons
+    return this.detailTrackRows.evaluateAll(rows => rows.map(row => {
+      const path = String(row.getAttribute('data-problematic-track-path') || '');
+      return {
+        filename: path.split(/[\\/]/).pop(),
+        path,
+        reasons: Array.from(row.querySelectorAll(
+          '[role="cell"][data-cdt-column="reason"] [data-problem-exclusion-scope="file"]',
+        )).map(reason => String(reason.textContent || '').trim()).filter(Boolean),
+      };
+    }));
+  }
+
   reasonsForTrackRow(row) {
     return row
       .locator('[role="cell"][data-cdt-column="reason"]')

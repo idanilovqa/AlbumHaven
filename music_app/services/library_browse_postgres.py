@@ -1622,7 +1622,8 @@ class PostgresLibraryBrowseRepository:
                         str(_row_mapping(row).get("artist_name") or "")
                     )
                     == exact_artist_key
-                ] or None
+                    and _row_mapping(row).get("featured_kind") != "featured_track_artist"
+                ]
             delegated_params = _clone_query_params_mapping(params)
             delegated_params["artist"] = exact_artist_match
             if "surface" not in delegated_params:

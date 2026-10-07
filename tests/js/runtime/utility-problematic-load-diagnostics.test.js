@@ -1636,3 +1636,107 @@ test('invalidated problematic summary finalizer never clears a newer promise own
   assert.equal(context.state.utility.loadPromise, replacement);
   assert.equal(context.state.utility.loading, true);
 });
+
+for (const completion of ['fresh', 'selection-changed', 'failed']) {
+  test(`status summary refresh keeps selected problem controls until detail is ${completion}`, async () => {
+    const pendingDetail = createDeferred();
+    let detailRequests = 0;
+    const detail = { key: 'album-1', name: 'Fresh detail', detail_loaded: true,
+      tracks: [], repair_preview_rows: [], track_problem_rows: [], problematic_track_paths: [] };
+    const { context } = loadHelper({
+      async fetch(url) {
+        if (String(url).includes('/detail?')) {
+          detailRequests += 1;
+          return pendingDetail.promise;
+        }
+        return { ok: true, status: 200, async json() { return { items: [
+          { key: 'album-1', name: 'New summary', detail_loaded: false },
+          { key: 'album-2', name: 'Other album', detail_loaded: false },
+        ] }; } };
+      },
+    });
+    Object.assign(context.state.utility, {
+      loaded: true, selectedProblematicKey: 'album-1',
+      problematicFiles: [{ ...detail, name: 'Existing detail' }],
+      problemExclusionSelections: { 'missing-year': true }, proposalSelections: {},
+    });
+    const refresh = context.loadProblematicFiles(true, { preserveSelectedDetail: true });
+    for (let turn = 0; turn < 12; turn += 1) await Promise.resolve();
+    assert.equal(context.state.utility.problematicFiles[0].detail_loaded, true,
+      'background summary must not replace visible controls with a loading placeholder');
+    assert.equal(detailRequests, 1, 'retained detail must still be refreshed');
+    context.state.utility.proposalSelections['repair-artist'] = true;
+    if (completion === 'selection-changed') context.state.utility.selectedProblematicKey = 'album-2';
+    pendingDetail.resolve({ ok: completion !== 'failed', status: completion === 'failed' ? 500 : 200,
+      async json() { return completion === 'failed' ? { error: 'Unavailable' } : detail; } });
+    await refresh;
+    assert.equal(context.state.utility.problemExclusionSelections['missing-year'], true);
+    assert.equal(context.state.utility.proposalSelections['repair-artist'], true);
+    const refreshed = context.state.utility.problematicFiles[0];
+    if (completion === 'fresh') {
+      assert.equal(refreshed.name, 'Fresh detail');
+      assert.equal(refreshed.detail_loaded, true);
+    } else {
+      assert.equal(refreshed.detail_loaded, false, 'obsolete or failed detail must not remain usable');
+      assert.equal(context.state.utility.selectedProblematicKey, completion === 'selection-changed' ? 'album-2' : 'album-1');
+    }
+  });
+}
+
+test('status summary refresh removes deleted selected albums without fetching obsolete detail', async () => {
+  const requested = [];
+  const { context } = loadHelper({ async fetch(url) {
+    requested.push(url);
+    return { ok: true, status: 200, async json() { return { items: [] }; } };
+  } });
+  Object.assign(context.state.utility, { loaded: true, selectedProblematicKey: 'removed',
+    problematicFiles: [{ key: 'removed', detail_loaded: true }] });
+  await context.loadProblematicFiles(true, { preserveSelectedDetail: true });
+  assert.equal(context.state.utility.problematicFiles.length, 0);
+  assert.deepEqual(requested, ['/utilities/problematic-files']);
+});
+
+for (const freshFirst of [true, false]) {
+  test(`obsolete status refresh cannot discard fresh detail after A to B to A (fresh first: ${freshFirst})`, async () => {
+    const oldA = createDeferred(), pendingB = createDeferred(), freshA = createDeferred();
+    let requestsA = 0;
+    const detail = (key, name) => ({ key, name, detail_loaded: true,
+      tracks: [], repair_preview_rows: [], track_problem_rows: [], problematic_track_paths: [] });
+    const response = body => ({ ok: true, status: 200, async json() { return body; } });
+    const { context } = loadHelper({ async fetch(url) {
+      if (String(url).includes('album_key=album-a')) return ++requestsA === 1 ? oldA.promise : freshA.promise;
+      if (String(url).includes('album_key=album-b')) return pendingB.promise;
+      return response({ items: [
+        { key: 'album-a', detail_loaded: false }, { key: 'album-b', detail_loaded: false },
+      ] });
+    } });
+    Object.assign(context.state.utility, { loaded: true, selectedProblematicKey: 'album-a',
+      problematicFiles: [detail('album-a', 'Existing A')] });
+    const refresh = context.loadProblematicFiles(true, { preserveSelectedDetail: true });
+    for (let turn = 0; turn < 12; turn += 1) await Promise.resolve();
+    assert.equal(requestsA, 1);
+    context.state.utility.selectedProblematicKey = 'album-b';
+    const loadB = context.loadProblematicAlbumDetail('album-b', true);
+    await Promise.resolve();
+    context.state.utility.selectedProblematicKey = 'album-a';
+    const loadA = context.loadProblematicAlbumDetail('album-a', true);
+    await Promise.resolve();
+    if (freshFirst) {
+      freshA.resolve(response(detail('album-a', 'Fresh A')));
+      await loadA;
+    }
+    oldA.resolve(response(detail('album-a', 'Obsolete A')));
+    await refresh;
+    if (!freshFirst) {
+      const pending = context.state.utility.problematicFiles.find(item => item.key === 'album-a');
+      assert.equal(pending.detail_load_failed, false, 'obsolete failure must not replace the new pending request');
+      freshA.resolve(response(detail('album-a', 'Fresh A')));
+      await loadA;
+    }
+    pendingB.resolve(response(detail('album-b', 'Obsolete B')));
+    await loadB;
+    const current = context.state.utility.problematicFiles.find(item => item.key === 'album-a');
+    assert.equal(current.name, 'Fresh A');
+    assert.equal(current.detail_loaded, true);
+  });
+}

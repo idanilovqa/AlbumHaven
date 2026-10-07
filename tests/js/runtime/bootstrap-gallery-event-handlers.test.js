@@ -1728,6 +1728,70 @@ test('tree selection preserves search while promoting a visible family group to 
   assert.equal(calls.stopCoverLookupPollingIfIdle, 1);
 });
 
+test('retained artist search fetches shared ownership even when mounted member count matches', () => {
+  const { context, calls } = createContext();
+  const lead = 'Control Signal Lead';
+  const partner = 'Control Signal Partner';
+  const sharedOwner = `${lead} / ${partner}`;
+  const sharedAlbum = {
+    key: 'shared-release', name: 'Non-Compilation Cross-Credits',
+    album_artist: sharedOwner, artists: [lead, partner, sharedOwner],
+  };
+  context.state.view = {
+    ...context.state.view,
+    query: lead,
+    selected_artist: lead,
+    all_artists_active: false,
+    related_artists: [partner, sharedOwner],
+    related_filter_artists: [],
+    primary_filter_active: false,
+    artists_sidebar: [{ artist: partner, count: 1 }],
+    primary_artist_groups: [{ artist: lead, albums: [sharedAlbum] }],
+    family_artist_groups: [
+      { artist: partner, albums: [{ key: 'partner-solo', artists: [partner] }] },
+      { artist: sharedOwner, albums: [sharedAlbum] },
+    ],
+    search_context: {
+      artist_name_match_artists: [lead],
+      direct_match_artists: [lead],
+      related_match_artists: [],
+    },
+  };
+  context.handleSidebarArtistSelectionClick(createSidebarArtistEvent(partner).event);
+  assert.equal(calls.fetchAndRender.length, 1);
+  assert.equal(context.state.view.query, lead);
+});
+
+for (const authoritativeCount of [1, undefined]) {
+  test(`sidebar family selection fetches shared albums missing from a mounted member (count ${authoritativeCount})`, () => {
+    const { context, calls } = createContext();
+    const lead = 'Control Signal Lead';
+    const partner = 'Control Signal Partner';
+    const sharedOwner = `${lead} / ${partner}`;
+    const sharedAlbum = { key: 'shared-release', name: 'Non-Compilation Cross-Credits' };
+    context.state.view = {
+      ...context.state.view,
+      query: '',
+      payload_tier: 'full',
+      initial_view_partial: false,
+      selected_artist: lead,
+      all_artists_active: false,
+      related_artists: [partner, sharedOwner],
+      related_filter_artists: [],
+      primary_filter_active: false,
+      artists_sidebar: [{ artist: lead, count: 1 }, { artist: partner, count: authoritativeCount }],
+      primary_artist_groups: [{ artist: lead, albums: [sharedAlbum] }],
+      family_artist_groups: [
+        { artist: partner, albums: [] },
+        { artist: sharedOwner, albums: [sharedAlbum] },
+      ],
+    };
+    assert.equal(context.buildOptimisticSidebarArtistSelectionGroups(partner).skipFetch, false);
+    context.handleSidebarArtistSelectionClick(createSidebarArtistEvent(partner).event);
+    assert.equal(calls.fetchAndRender.length, 1);
+  });
+}
+
 test('no-query sidebar family selection reuses the complete mounted family without fetch or reconcile', () => {
   const { context, calls } = createContext();
   const sidebarArtists = [

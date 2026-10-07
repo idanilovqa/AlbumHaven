@@ -14,24 +14,31 @@ let floatingNotificationFrame = null;
 function findClearNotificationPosition(size, preferred, viewport, obstacles, gap = 8) {
   const left = viewport.left + gap, top = viewport.top + gap;
   const right = viewport.right - gap, bottom = viewport.bottom - gap;
-  if (size.width > right - left || size.height > bottom - top) return null;
+  const minimumWidth = size.minWidth ?? size.width;
+  if (minimumWidth > right - left || size.height > bottom - top) return null;
   const clamp = (value, min, max) => Math.max(min, Math.min(value, max));
   const ys = new Set([clamp(preferred.top, top, bottom - size.height), top, bottom - size.height]);
   obstacles.forEach(rect => {
     ys.add(clamp(rect.top - gap - size.height, top, bottom - size.height));
     ys.add(clamp(rect.bottom + gap, top, bottom - size.height));
   });
-  let best = null, distance = Infinity;
+  let best = null, bestWidth = 0, distance = Infinity;
   for (const y of ys) {
     const intervals = obstacles.filter(rect => y < rect.bottom + gap && y + size.height > rect.top - gap)
       .map(rect => [Math.max(left, rect.left - gap), Math.min(right, rect.right + gap)])
       .filter(([start, end]) => end > start).sort((a, b) => a[0] - b[0]);
     let start = left;
     const consider = end => {
-      if (end - start < size.width) return;
-      const x = clamp(preferred.left, start, end - size.width);
+      const width = Math.min(size.width, end - start);
+      if (width < minimumWidth) return;
+      const x = clamp(preferred.left, start, end - width);
       const nextDistance = (x - preferred.left) ** 2 + (y - preferred.top) ** 2;
-      if (nextDistance < distance) { distance = nextDistance; best = { left: x, top: y }; }
+      if (width > bestWidth || (width === bestWidth && nextDistance < distance)) {
+        bestWidth = width;
+        distance = nextDistance;
+        best = { left: x, top: y };
+        if (size.minWidth !== undefined) best.width = width;
+      }
     };
     for (const [blockedStart, blockedEnd] of intervals) {
       consider(blockedStart);
@@ -78,7 +85,7 @@ function placeFloatingNotifications() {
     if (node.style.getPropertyValue('--notification-available-width') !== availableWidth) {
       node.style.setProperty('--notification-available-width', availableWidth);
     }
-    const size = { width: node.offsetWidth, height: node.offsetHeight };
+    let size = { width: node.offsetWidth, height: node.offsetHeight };
     const centered = entry.origin === 'top-center';
     const bottom = entry.origin === 'bottom-right';
     const playerHeight = entry.abovePlayer ? parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--player-height')) || 0 : 0;
@@ -86,7 +93,24 @@ function placeFloatingNotifications() {
       left: centered ? viewport.left + (viewport.right - viewport.left - size.width) / 2 : viewport.right - size.width - 16,
       top: bottom ? viewport.bottom - size.height - playerHeight - 12 : viewport.top + 14,
     };
-    const position = findClearNotificationPosition(size, preferred, viewport, obstacles);
+    let position = findClearNotificationPosition(size, preferred, viewport, obstacles);
+    if (!position) {
+      const alert = node.querySelector?.('.on-page-alert');
+      const actions = Array.from(node.querySelectorAll?.('.on-page-alert__actions .ui-button') || []);
+      if (alert && actions.length) {
+        const style = getComputedStyle(alert);
+        const minimumWidth = Math.max(...actions.map(action => action.offsetWidth))
+          + ['paddingLeft', 'paddingRight', 'borderLeftWidth', 'borderRightWidth']
+            .reduce((total, property) => total + (parseFloat(style[property]) || 0), 0);
+        const reflow = findClearNotificationPosition({ ...size, minWidth: minimumWidth }, preferred, viewport, obstacles);
+        if (reflow && reflow.width < size.width) {
+          // One bounded reflow uses the existing responsive alert; check its actual wrapped height.
+          node.style.setProperty('--notification-available-width', `${reflow.width}px`);
+          size = { width: node.offsetWidth, height: node.offsetHeight };
+          position = findClearNotificationPosition(size, preferred, viewport, obstacles);
+        }
+      }
+    }
     if (!position) {
       node.setAttribute('data-notification-deferred', '');
       continue;

@@ -130,6 +130,97 @@ def test_suggested_tag_apply_revalidates_scoped_target_and_physical_tags_before_
     assert reads == ([] if scenario == 'foreign' else [track_path])
 
 
+
+def test_suggested_tag_apply_hydrates_verified_proposal_without_mutating_shared_state(
+    app, asgi_app, monkeypatch, tmp_path,
+):
+    from music_app.routes import api_wave_a_asgi_routes as routes
+    from music_app.services import metadata
+    from music_app.services.problem_suggestions import build_problem_suggestions
+
+    source = tmp_path / "proposal-track.flac"
+    source.write_bytes(b"fixture metadata source")
+    track_path = str(source)
+    sibling_path = str(tmp_path / "sibling.flac")
+    stat = source.stat()
+    entry = {
+        "path": track_path, "mtime": stat.st_mtime, "size": stat.st_size,
+        "artist": "Jos\u00c3\u00a9", "album": "Album", "album_artist": "Artist",
+        "title": "Song", "disc_number": 1, "track_number": 1, "year": 2008,
+    }
+    proposal = next(item for item in build_problem_suggestions(track_path, entry)
+                    if item["field"] == "artist")
+    updates = {track_path: {"artist": "Jos\u00e9"}}
+    app.config["ALBUM_HAVEN_APP_DATABASE_URL"] = "postgresql://album_haven_app@localhost/app"
+    app.config["PERSISTENCE_BACKENDS"] = {"library_browse": "postgres"}
+    shared_state = asgi_app.state.library_state
+    shared_cache = {"unrelated": {"title": "Unrelated track"}}
+    shared_state["file_cache"] = shared_cache
+    original_state = dict(shared_state)
+    events = []
+
+    class Repository:
+        def __init__(self, _config):
+            pass
+
+        def build_problem_suggestion_entries_by_paths(self, paths):
+            assert paths == {track_path}
+            return {track_path: entry}
+
+        def _load_relation_alias_maps(self):
+            return {"alias_to_canonical": {}}
+
+        def build_problematic_file_detail_payload(self, album_key):
+            assert album_key == "album-alpha"
+            events.append("eligibility")
+            return {"suggested_edits": [proposal]}
+
+        def build_album_payloads_by_track_paths(self, paths):
+            assert paths == {track_path}
+            events.append("albums")
+            return [{"tracks": [{"path": track_path}, {"path": sibling_path}]}]
+
+        def build_track_file_entries_by_paths(self, paths):
+            assert paths == {track_path, sibling_path}
+            events.append("entries")
+            return {track_path: entry, sibling_path: {"path": sibling_path}}
+
+    def read_physical(path, _fields):
+        assert str(path) == track_path
+        events.append("physical")
+        return entry
+
+    def inspect_validated_request(**kwargs):
+        try:
+            events.append("handler")
+            request_state = kwargs["get_state"]()
+            assert request_state is not shared_state
+            verified = kwargs["validate_proposals"](request_state, kwargs["updates"])
+            assert verified == updates
+            assert request_state["file_cache"][sibling_path] == {"path": sibling_path}
+            assert request_state["file_cache"][track_path] == entry
+            assert request_state["file_cache"] is not shared_cache
+            return {"ok": True, "changed_count": 0}
+        finally:
+            kwargs["structural_tag_edit_reservation"].release()
+
+    monkeypatch.setattr(routes, "PostgresLibraryBrowseRepository", Repository)
+    monkeypatch.setattr(metadata, "read_editable_tag_values", read_physical)
+    monkeypatch.setattr(routes, "handle_edit_tags_request", inspect_validated_request)
+    status, _, body = _run_asgi_request(asgi_app, "POST", "/utilities/edit-tags", json_body={
+        "confirmed": True, "proposal_ids": [proposal["id"]],
+        "album": {"key": "album-alpha", "name": "Album", "album_artist": "Artist",
+                  "tracks": [{"path": track_path}]},
+        "updates": updates,
+    })
+    assert status == 200
+    assert _decode_json(body)["ok"] is True
+    assert events == ["handler", "physical", "eligibility", "albums", "entries"]
+    assert shared_state == original_state
+    assert shared_state["file_cache"] is shared_cache
+    assert shared_cache == {"unrelated": {"title": "Unrelated track"}}
+
+
 def _complete_mocked_edit_tags_save_task(**kwargs):
     from music_app.services.save_tasks import update_save_task
     from music_app.services.exception_overrides import set_track_exception_overrides
@@ -4870,6 +4961,20 @@ def test_waiting_structural_edit_does_not_block_unrelated_async_request(
     blocker = save_tasks_module.acquire_structural_tag_edit_reservation(
         resource_keys
     )
+    class Repository:
+        def __init__(self, _config):
+            pass
+
+        def build_album_payloads_by_track_paths(self, paths):
+            assert paths == {track_path}
+            return [{"tracks": [{"path": track_path}]}]
+
+        def build_track_file_entries_by_paths(self, paths):
+            assert paths == {track_path}
+            return {track_path: {"path": track_path}}
+
+    monkeypatch.setattr(asgi_routes, "PostgresLibraryBrowseRepository", Repository)
+
     blocker_released = Event()
     waiting_handler_entered = Event()
 

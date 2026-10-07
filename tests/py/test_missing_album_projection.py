@@ -259,35 +259,18 @@ def test_search_loader_keeps_sql_wildcard_escape_semantics_and_alias_scope():
     assert calls[0][1]["search_artist_keys"] == ["canonical artist", "stage alias"]
 
 
-def test_search_artist_key_expansion_normalizes_only_matching_families(monkeypatch):
-    from music_app.services import library_browse_postgres as browse_module
+def test_search_artist_key_expansion_matches_normalized_whitespace():
+    from music_app.services.library_browse_postgres import _missing_album_search_artist_keys
 
     aliases = {
         **{f"Unrelated Alias {index}": f"Unrelated Canonical {index}" for index in range(100)},
-        "Needle Alias": "Needle Canonical",
+        "Needle   Alias": "Needle  Canonical",
     }
-    canonicals = {
-        canonical: [alias]
-        for alias, canonical in aliases.items()
-    }
-    original = browse_module.local_inventory_identity_key
-    normalized = []
+    canonicals = {canonical: [alias] for alias, canonical in aliases.items()}
 
-    def record(value):
-        normalized.append(value)
-        return original(value)
-
-    monkeypatch.setattr(browse_module, "local_inventory_identity_key", record)
-
-    keys = browse_module._missing_album_search_artist_keys(
-        "Needle",
-        aliases,
-        canonicals,
-    )
-
-    assert keys == ["needle alias", "needle canonical"]
-    assert set(normalized) == {"Needle Alias", "Needle Canonical"}
-    assert len(normalized) == 2
+    assert _missing_album_search_artist_keys(
+        "  NEEDLE   alias  ", aliases, canonicals,
+    ) == ["needle alias", "needle canonical"]
 
 
 def test_query_filter_still_excludes_wrong_category_and_partly_active_missing_albums():

@@ -1690,10 +1690,13 @@ async def utilities_edit_tags(request: Request) -> JSONResponse:
         request,
         payload,
     )
-    if postgres_exception_only or (
+    needs_postgres_edit_state = postgres_exception_only or (
         _is_selected_postgres_library_browse_request(request)
         and _has_edit_tags_media_write_fields(payload)
-    ):
+    )
+    if needs_postgres_edit_state:
+        get_state = lambda: dict(library_state)
+    if needs_postgres_edit_state and "proposal_ids" not in payload:
         try:
             postgres_edit_state = await run_in_threadpool(
                 _postgres_exception_only_edit_state, request, payload
@@ -1794,6 +1797,10 @@ async def utilities_edit_tags(request: Request) -> JSONResponse:
             eligible_ids = {row["id"] for row in (detail or {}).get("suggested_edits", [])}
             if not set(payload["proposal_ids"]).issubset(eligible_ids):
                 raise ValueError("Suggestions are no longer eligible")
+            # Reject stale or out-of-scope proposals before hydrating edit inventory.
+            # The handler invokes this validation while holding the edit reservation.
+            if needs_postgres_edit_state:
+                st.update(_postgres_exception_only_edit_state(request, payload))
             previous_entries = st.get("file_cache") or {}
             st["file_cache"] = {**previous_entries, **{
                 path: {**(previous_entries.get(path) or {}), **entry}

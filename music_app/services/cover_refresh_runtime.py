@@ -292,20 +292,23 @@ def run_background_cover_refresh_worker(
     *,
     get_state: StateGetter,
     refresh_cover_artwork: RefreshRunner,
+    cache_lock=None,
 ) -> None:
-    library_state = get_state()
-    cover_generation = int(library_state.get("cover_generation") or 0)
-    scan_generation = int(library_state.get("scan_generation") or 0)
+    with cache_lock if cache_lock is not None else nullcontext():
+        library_state = get_state()
+        cover_generation = int(library_state.get("cover_generation") or 0)
+        scan_generation = int(library_state.get("scan_generation") or 0)
     try:
         refresh_cover_artwork()
     except Exception as exc:
-        current = get_state()
-        if (
-            current is library_state
-            and int(current.get("cover_generation") or 0) == cover_generation
-            and int(current.get("scan_generation") or 0) == scan_generation
-        ):
-            _handle_cover_refresh_failure(current, exc)
+        with cache_lock if cache_lock is not None else nullcontext():
+            current = get_state()
+            if (
+                current is library_state
+                and int(current.get("cover_generation") or 0) == cover_generation
+                and int(current.get("scan_generation") or 0) == scan_generation
+            ):
+                _handle_cover_refresh_failure(current, exc)
         raise
 
 
@@ -363,11 +366,13 @@ def build_background_cover_refresh_runner(
     *,
     get_state: StateGetter,
     refresh_cover_artwork: RefreshRunner,
+    cache_lock=None,
 ) -> Callable[[], None]:
     def _runner() -> None:
         run_background_cover_refresh_worker(
             get_state=get_state,
             refresh_cover_artwork=refresh_cover_artwork,
+            cache_lock=cache_lock,
         )
 
     return _runner
@@ -417,6 +422,7 @@ def start_background_cover_refresh_request(
     submit_cover_job: ExecutorSubmitter,
     refresh_cover_artwork: RefreshRunner,
     app=None,
+    cache_lock=None,
 ) -> None:
     start_background_cover_refresh(
         get_state=get_state,
@@ -424,6 +430,7 @@ def start_background_cover_refresh_request(
         refresh_cover_artwork_worker=build_background_cover_refresh_runner(
             get_state=get_state,
             refresh_cover_artwork=refresh_cover_artwork,
+            cache_lock=cache_lock,
         ),
         app=app,
     )

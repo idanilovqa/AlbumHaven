@@ -851,6 +851,7 @@ def refresh_library_for_state(
         ),
         start_background_cover_refresh=lambda: start_background_cover_refresh_request(
             get_state=lambda: library_state,
+            cache_lock=_CACHE_LOCK,
             submit_cover_job=_COVER_EXECUTOR.submit,
             refresh_cover_artwork=lambda: refresh_cover_artwork_request(
                 get_state=lambda: library_state,

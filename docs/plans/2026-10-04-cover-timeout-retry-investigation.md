@@ -667,3 +667,22 @@ The unchanged native family E2E rerun, full CI, deployment of current repairs,
 owner acceptance, authorized cover retry, and all COORD integration/activation
 gates remain open. No push, deployment, new cover pass, or gate waiver accompanies
 this checkpoint commit.
+
+## October 6 background worker lock verification
+
+This supersedes the preceding unverified wrapper-lock checkpoint only. Background
+workers now capture ownership and perform the identity/cover-generation/
+scan-generation failure check and status update under the supplied cache lock.
+The refresh callback runs outside the lock; normal state wiring supplies
+`_CACHE_LOCK`. Original exceptions still propagate, and success behavior is unchanged.
+
+Retained evidence in `C:/temp/pr22-local-1855858`: `cover-worker-lock-red-v1`
+records 3 failed and 16 passed in 4.12 seconds, native exit 1. After repair,
+`cover-worker-lock-green-v1` records the complete cover-runtime file: 48 passed
+in 3.08 seconds, native exit 0. Both prefixes retain stdout, stderr, exit and
+process-audit artifacts. The root verified the evidence; two independent full
+scoped reviews found no validated findings. No tests were rerun for this commit.
+
+Scan failure propagation and accepted-child/whole-operation coordination remain
+pending. This scoped commit does not enable UI scans or shared writers, deploy a
+build, start a cover pass, complete CI, or close COORD/release/acceptance gates.

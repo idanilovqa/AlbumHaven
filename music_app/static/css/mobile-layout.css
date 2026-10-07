@@ -773,3 +773,7 @@ html[data-client-profile="mobile"] :is([data-open-track-modal-duplicate-folder],
 @media (max-width: 900px) {
   #cover-lookup-modal.is-mobile-page .cover-lookup-section + .cover-lookup-section { margin-top: 20px; }
 }
+
+@media (max-width: 900px) {
+  .global-player[data-player-seekbar-presentation="thin"] { touch-action: pan-y pinch-zoom; }
+}

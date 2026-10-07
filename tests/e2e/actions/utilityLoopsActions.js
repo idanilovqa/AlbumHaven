@@ -393,12 +393,7 @@ export class UtilityLoopsActions {
       : target === 'cancel'
         ? entryCard.loopCancelButtonForEntry(entry)
         : entryCard.loopScissorsButtonForEntry(entry);
-    const bounds = await locator.boundingBox();
-    if (!bounds) throw new Error(`Expected the ${target} loop action for ${JSON.stringify(name)} to have rendered bounds.`);
-    await this.utilityLoopsTab.page.mouse.move(
-      bounds.x + (bounds.width / 2),
-      bounds.y + (bounds.height / 2),
-    );
+    await locator.hover();
     await expect(entryCard.loopActionForEntry(entry))
       .toHaveAttribute('data-loop-action-engaged', 'true');
     const style = await entryCard.controlStyleForEntry(entry).getAttribute('data-loop-control-style');

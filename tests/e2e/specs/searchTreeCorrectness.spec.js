@@ -35,9 +35,9 @@ const EXPECTED_COMPLETE_NEAL_GALLERY = [
 const FLOWER_KINGS_QUERY = 'flower kings';
 const FLOWER_KINGS_ARTIST = 'The Flower Kings';
 const EXPECTED_FLOWER_KINGS_SIDEBAR_ARTISTS = [
+  FLOWER_KINGS_ARTIST,
   'Agents Of Mercy',
   'Roine Stolt',
-  FLOWER_KINGS_ARTIST,
 ];
 const UNRELATED_ARTIST = 'Album Haven Last.fm Fixture';
 const RECENT_SEARCH_QUERY = 'Joseph';
@@ -177,7 +177,12 @@ test('FTC-SEARCH-NAV-002 keeps every projected family artist in the tree for a n
           numeric: true,
           sensitivity: 'base',
         })),
-    ).toEqual(EXPECTED_FLOWER_KINGS_SIDEBAR_ARTISTS);
+    ).toEqual([...EXPECTED_FLOWER_KINGS_SIDEBAR_ARTISTS].sort((left, right) => left.localeCompare(right, 'en', {
+      numeric: true,
+      sensitivity: 'base',
+    })));
+    expect(await navigationPanelActions.readSidebarArtistNames())
+      .toEqual(await galleryActions.readArtistHeadings());
     expect(await galleryActions.readAlbumNamesByHeading(FLOWER_KINGS_ARTIST))
       .not.toHaveLength(0);
   });
@@ -381,7 +386,7 @@ test('FTC-SEARCH-NAV-026 clears Neal Morse search without remounting the selecte
   });
 });
 
-test('FTC-SEARCH-NAV-002, FTC-SEARCH-NAV-003, and FTC-SEARCH-NAV-026 keep one-family search narrow, alphabetical, and selected through full-tree restoration', { tag: '@area:gallery-search' }, async ({
+test('FTC-SEARCH-NAV-002, FTC-SEARCH-NAV-003, and FTC-SEARCH-NAV-026 keep one-family search narrow, gallery-ordered, and selected through full-tree restoration', { tag: '@area:gallery-search' }, async ({
   artistFamilyActions,
   galleryActions,
   navigationPanelActions,
@@ -419,10 +424,15 @@ test('FTC-SEARCH-NAV-002, FTC-SEARCH-NAV-003, and FTC-SEARCH-NAV-026 keep one-fa
     expect(albums.length).toBeGreaterThan(0);
   });
 
-  await stepLogger.step('Display the one-family search tree alphabetically instead of relevance order', async () => {
-    const alphabeticalState = await navigationPanelActions.readSidebarAlphabeticalState();
-    expect(alphabeticalState.displayedNames.length).toBeGreaterThan(1);
-    expect(alphabeticalState.displayedNames).toEqual(alphabeticalState.alphabeticalNames);
+  await stepLogger.step('Display the one-family search tree in the same order as the gallery', async () => {
+    await artistFamilyActions.waitForViewReady(ONE_FAMILY_QUERY, { queryValue: ONE_FAMILY_QUERY });
+    await artistFamilyActions.expand();
+    const displayedNames = await navigationPanelActions.readSidebarArtistNames();
+    expect(displayedNames.length).toBeGreaterThan(1);
+    await galleryActions.readArtistHeadingOccurrencesAcrossGallery({ expectedArtists: displayedNames });
+    const scroll = await galleryActions.readGalleryScrollState();
+    await galleryActions.scrollGalleryBy(-scroll.scrollTop);
+    await galleryActions.waitForGalleryScrollAtStart();
   });
 
   await stepLogger.step('Clear the query while retaining the best-match selection and gallery in the restored full tree', async () => {

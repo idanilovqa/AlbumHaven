@@ -225,7 +225,7 @@ test(WARNING_CASE,{tag:'@area:gallery-search'},async({page,galleryActions,search
       await expect(ui.warning).toBeVisible();
       await page.getByRole('button',{name:'Back to previous library view'}).click();
     });
-    await stepLogger.step('Searching with active watcher health retains the gallery without a blocking warning',async()=>{
+    await stepLogger.step('Searching replaces previous results with a loading state without a blocking warning',async()=>{
       const observation=await ui.observeSearchContinuity('Neal Morse');
       let evidence;
       try {
@@ -235,10 +235,12 @@ test(WARNING_CASE,{tag:'@area:gallery-search'},async({page,galleryActions,search
       } finally { evidence=await ui.finishSearchContinuity(observation); }
       expect(evidence.pendingRequests).toBeGreaterThan(0);
       expect(evidence.samples).toBeGreaterThan(0);
-      expect(evidence.hiddenGallery).toBe(0);
+      expect(evidence.pendingSearchSamples).toBeGreaterThan(0);
+      expect(evidence.previousGalleryVisible).toBe(0);
+      expect(evidence.missingSearchLoader).toBe(0);
       expect(evidence.blockingLoader).toBe(0);
       expect(evidence.searching).toBeGreaterThan(0);
-      await expect(page.locator('#library-loader')).toBeHidden();
+      await expect(ui.loader).toBeHidden();
       expect(evidence.warningExposures).toBe(0);
       await expect(ui.scanWarning).toBeHidden();
       await expect(ui.warning).toBeVisible();

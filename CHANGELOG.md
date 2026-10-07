@@ -1,6 +1,29 @@
 # Changelog
 
-## 0.9.49 - Unreleased
+## 0.9.49 - 2026-10-07
+
+- Improved authenticated startup with bounded initial gallery loading, accurate
+  global artist and album totals, and the complete artist sidebar.
+- Kept artist ordering stable after search and clearing, expanded folder-derived
+  artist families, and prevented stale search responses from replacing newer views.
+- Replaced previous gallery results with a compact Searching indicator while a
+  submitted search is pending.
+- Added persistent album-adjacent cover previews, throttled preview backfill,
+  and full-size artwork preloading when album details open.
+- Displayed linked album editions immediately using the shared tabs on desktop
+  and mobile, and retained filtered mobile artist navigation after search.
+- Improved Problematic Files layout, year visibility, truncation, suggestion
+  selection feedback, and continuous drag selection across displayed suggestions.
+- Corrected MP3 gapless boundaries using encoder metadata while preserving
+  intentional silence, and reused successful decoder compatibility checks to
+  reduce repeated seek preparation.
+- Improved mobile artwork navigation and playback seeking, and prevented stray
+  text carets outside focused editable controls.
+- Made horizontal drags near the thin player's playhead take precedence over
+  adjacent Play-button hits while preserving normal taps and cancelled gestures.
+- Prevented late Problematic Files responses from replacing playback controls
+  in another active utility tab, and refreshed Last.fm log history after failed
+  connection attempts.
 
 - Preserved the released 0.9.48 mobile layout and Admin capability behavior while
   reconciling the approved desktop Gallery, player, and appearance presentation.

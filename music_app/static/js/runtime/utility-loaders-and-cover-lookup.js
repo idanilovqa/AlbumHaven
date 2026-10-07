@@ -1,5 +1,5 @@
 async function loadProblematicFiles(force = false, options = {}) {
-  const shouldRender = options.render !== false;
+  const shouldRender = () => options.render !== false && state.utility.activeTab === 'problematic-files';
   const navigationOwnsRendering = () => Boolean(
     state.utility.problematicNavigationActiveToken,
   );
@@ -13,13 +13,13 @@ async function loadProblematicFiles(force = false, options = {}) {
     return result;
   }
   if (state.utility.loaded && !force) {
-    if (shouldRender && !navigationOwnsRendering()) renderUtilityModalContent();
+    if (shouldRender() && !navigationOwnsRendering()) renderUtilityModalContent();
     return;
   }
   state.utility.loading = true;
   const requestToken = Number(state.utility.problematicSummaryRequestToken || 0) + 1;
   state.utility.problematicSummaryRequestToken = requestToken;
-  if (shouldRender && !navigationOwnsRendering()) renderUtilityModalContent();
+  if (shouldRender() && !navigationOwnsRendering()) renderUtilityModalContent();
   let requestPromise = null;
   requestPromise = (async () => {
     const startedAt = getProblematicUtilityNow();
@@ -104,7 +104,7 @@ async function loadProblematicFiles(force = false, options = {}) {
       }
       if (stillOwner) {
         const renderStartedAt = getProblematicUtilityNow();
-        if (shouldRender && !navigationOwnsRendering()) {
+        if (shouldRender() && !navigationOwnsRendering()) {
           renderUtilityModalContent();
           await waitForProblematicUtilityRenderFrame();
         }

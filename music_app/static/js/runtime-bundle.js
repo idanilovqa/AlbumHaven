@@ -5232,10 +5232,10 @@ function renderLibraryLoader(data = {}, options = {}) {
   setDomPropertyIfChanged(loader, 'hidden', !shouldShow);
   loader.classList?.toggle('is-scan-page', scanPageVisible);
   loader.classList?.toggle('is-searching', searching);
-  document.getElementById('shell-main-surface')?.classList.toggle('has-library-loader', shouldShow && !searching);
+  document.getElementById('shell-main-surface')?.classList.toggle('has-library-loader', shouldShow);
   if (typeof syncMobileHome === 'function') syncMobileHome();
   const galleryWasHidden = scroll.hidden;
-  setDomPropertyIfChanged(scroll, 'hidden', shouldShow && !searching);
+  setDomPropertyIfChanged(scroll, 'hidden', shouldShow);
   if (galleryWasHidden && !shouldShow && scroll.clientWidth > 0 && typeof virtualGrid !== 'undefined') {
     virtualGrid.onResize();
   }
@@ -16484,6 +16484,7 @@ function getUtilityLogHistoryController() {
     },
     onAccepted: ({ query, items, page, navigationOnly, publishNavigation }) => {
       if (state.utility !== owner) return;
+      if (!navigationOnly && page.snapshot) owner.logHistoryLoaded = true;
       if (!navigationOnly) owner.allowedActions = { ...(owner.allowedActions || {}),
         'library.logs.read': page.allowed_actions?.['library.logs.read'] === true,
         'library.logs.export': page.allowed_actions?.['library.logs.export'] === true };
@@ -16502,7 +16503,6 @@ function getUtilityLogHistoryController() {
       owner.logHistoryLoading = value.loading;
       owner.logHistoryRevision = value.revision;
       owner.selectedLogHistoryId = value.selectedEventId;
-      if (value.snapshot) owner.logHistoryLoaded = true;
       const nextPresentation = [value.query, value.snapshot, value.items, value.selectedEventId, value.temporaryRowId, value.loading, value.error, value.stale, value.refreshRequired, value.periodLabel, owner.logHistory, owner.allowedActions];
       if (presentation && presentation.every((item, index) => item === nextPresentation[index])) return;
       presentation = nextPresentation;
@@ -23742,7 +23742,7 @@ function reorderTagEditorTracksByPath(tracks, draggedPath, beforePath = null) {
 // BEGIN js/runtime/utility-loaders-and-cover-lookup.js
 
 async function loadProblematicFiles(force = false, options = {}) {
-  const shouldRender = options.render !== false;
+  const shouldRender = () => options.render !== false && state.utility.activeTab === 'problematic-files';
   const navigationOwnsRendering = () => Boolean(
     state.utility.problematicNavigationActiveToken,
   );
@@ -23756,13 +23756,13 @@ async function loadProblematicFiles(force = false, options = {}) {
     return result;
   }
   if (state.utility.loaded && !force) {
-    if (shouldRender && !navigationOwnsRendering()) renderUtilityModalContent();
+    if (shouldRender() && !navigationOwnsRendering()) renderUtilityModalContent();
     return;
   }
   state.utility.loading = true;
   const requestToken = Number(state.utility.problematicSummaryRequestToken || 0) + 1;
   state.utility.problematicSummaryRequestToken = requestToken;
-  if (shouldRender && !navigationOwnsRendering()) renderUtilityModalContent();
+  if (shouldRender() && !navigationOwnsRendering()) renderUtilityModalContent();
   let requestPromise = null;
   requestPromise = (async () => {
     const startedAt = getProblematicUtilityNow();
@@ -23847,7 +23847,7 @@ async function loadProblematicFiles(force = false, options = {}) {
       }
       if (stillOwner) {
         const renderStartedAt = getProblematicUtilityNow();
-        if (shouldRender && !navigationOwnsRendering()) {
+        if (shouldRender() && !navigationOwnsRendering()) {
           renderUtilityModalContent();
           await waitForProblematicUtilityRenderFrame();
         }
@@ -36350,6 +36350,30 @@ function attachPlayerEvents() {
 
   if (typeof mountGlobalPlayerLoopControls === 'function') mountGlobalPlayerLoopControls();
 
+  let thinSeekGesture = null;
+  let suppressThinSeekClick = false;
+  els.player?.addEventListener('pointerdown', (event) => {
+    if (thinSeekGesture || event.isPrimary === false || (event.button != null && event.button !== 0)) return;
+    suppressThinSeekClick = false;
+    if (Number(window.innerWidth) > 900 || els.player.getAttribute('data-player-seekbar-presentation') !== 'thin'
+      || !state.player.current || state.player.loopActive || state.player.timelineDragging) return;
+    if (event.target === els.timeline || els.timeline?.parentElement?.contains?.(event.target)) return;
+    const control = event.target?.closest?.('button, a, input, select, textarea');
+    if (control && control !== els.play) return;
+    const rect = els.timeline?.getBoundingClientRect();
+    const duration = getPlayerDuration();
+    if (!rect || !(rect.width > 0) || !(duration > 0)) return;
+    const headX = rect.left + (Number(els.timeline.value) || 0) / duration * rect.width;
+    if (Math.abs(event.clientX - headX) > 28) return;
+    if (control !== els.play && (event.clientY < rect.top - 12 || event.clientY > rect.top + rect.height + 12)) return;
+    thinSeekGesture = { pointerId: event.pointerId, x: event.clientX, y: event.clientY, track: getTrackIdentity(state.player.current), claimed: false };
+  }, { capture: true });
+  els.player?.addEventListener('click', (event) => {
+    if (!suppressThinSeekClick || event.detail === 0) return;
+    suppressThinSeekClick = false;
+    event.preventDefault();
+    event.stopImmediatePropagation();
+  }, { capture: true });
   els.player?.addEventListener('pointerdown', claimGlobalPlayerSpaceOwnership);
   els.player?.addEventListener('focusin', claimGlobalPlayerSpaceOwnership);
   els.play?.addEventListener('click', () => togglePlayerPlayback());
@@ -36368,7 +36392,7 @@ function attachPlayerEvents() {
     setPlayerPlaybackHead(next);
   });
   els.timeline?.parentElement?.addEventListener('pointerdown', (event) => {
-    if (state.player.loopActive || event.target?.closest('.player-loop-handle')) return;
+    if (thinSeekGesture || state.player.loopActive || event.target?.closest('.player-loop-handle')) return;
     if (!state.player.current) return;
     const next = getTimelineSecondsFromClientX(event.clientX);
     event.preventDefault();
@@ -36378,13 +36402,48 @@ function attachPlayerEvents() {
     updatePlayerUi();
   });
   document.addEventListener('pointermove', (event) => {
+    if (thinSeekGesture) {
+      if (event.pointerId !== thinSeekGesture.pointerId) return;
+      if (getTrackIdentity(state.player.current) !== thinSeekGesture.track || state.player.loopActive) {
+        if (thinSeekGesture.claimed) {
+          state.player.timelineDragging = false;
+          state.player.timelineDragPreviewSeconds = null;
+          updatePlayerUi();
+        }
+        thinSeekGesture = null;
+        return;
+      }
+      if (!thinSeekGesture.claimed) {
+        const dx = Math.abs(event.clientX - thinSeekGesture.x);
+        const dy = Math.abs(event.clientY - thinSeekGesture.y);
+        if (dy > 8 && dy >= dx) { thinSeekGesture = null; return; }
+        if (dx < 8 || dx <= dy * 1.25) return;
+        thinSeekGesture.claimed = true;
+        state.player.timelineDragging = true;
+        suppressThinSeekClick = true;
+        els.player.setPointerCapture?.(event.pointerId);
+      }
+      event.preventDefault();
+    }
     if (!state.player.timelineDragging) return;
     const next = getTimelineSecondsFromClientX(event.clientX);
     state.player.timelineDragPreviewSeconds = next;
     if (els.timeline) els.timeline.value = String(next);
     updatePlayerUi();
   });
-  document.addEventListener('pointerup', () => {
+  document.addEventListener('pointerup', (event) => {
+    if (thinSeekGesture) {
+      if (event.pointerId !== thinSeekGesture.pointerId) return;
+      const gesture = thinSeekGesture;
+      thinSeekGesture = null;
+      if (!gesture.claimed) return;
+      if (getTrackIdentity(state.player.current) !== gesture.track || state.player.loopActive) {
+        state.player.timelineDragging = false;
+        state.player.timelineDragPreviewSeconds = null;
+        updatePlayerUi();
+        return;
+      }
+    }
     if (state.player.timelineDragging) {
       const next = Number(state.player.timelineDragPreviewSeconds);
       if (Number.isFinite(next)) setPlayerPlaybackHead(next);
@@ -36392,7 +36451,10 @@ function attachPlayerEvents() {
     state.player.timelineDragging = false;
     state.player.timelineDragPreviewSeconds = null;
   });
-  document.addEventListener('pointercancel', () => {
+  document.addEventListener('pointercancel', (event) => {
+    if (thinSeekGesture && event.pointerId !== thinSeekGesture.pointerId) return;
+    thinSeekGesture = null;
+    suppressThinSeekClick = false;
     if (!state.player.timelineDragging) return;
     state.player.timelineDragging = false;
     state.player.timelineDragPreviewSeconds = null;

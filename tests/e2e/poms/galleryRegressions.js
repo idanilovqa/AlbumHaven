@@ -15,6 +15,7 @@ export class GalleryRegressions {
     this.year=this.yearCard.locator('.gallery-card__hover-year');
     this.infoSummary=page.locator('[data-artist-info-overlay] [data-artist-info-summary]');
     this.cards=page.locator('.album-card');
+    this.loader=page.locator('#library-loader');
     this.sidebarArtists=page.locator('#sidebar-list [data-sidebar-artist]');
     this.view=page.locator('[data-gallery-view-cluster]');
     this.noInfo=page.getByRole('button',{name:'No info',exact:true});
@@ -74,13 +75,17 @@ export class GalleryRegressions {
         const gallery = document.getElementById('artist-groups');
         const scroll = document.getElementById('albums-scroll');
         const loader = document.getElementById('library-loader');
-        const evidence = { samples: 0, hiddenGallery: 0, blockingLoader: 0, searching: 0, warningExposures: 0 };
+        const evidence = { samples: 0, pendingSearchSamples: 0, previousGalleryVisible: 0, missingSearchLoader: 0, blockingLoader: 0, searching: 0, warningExposures: 0 };
         const visible = element => Boolean(element?.getClientRects().length) && !element.hidden
           && element.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true });
         let frame;
         const inspect = () => {
           evidence.samples += 1;
-          if (!visible(scroll) || !visible(gallery) || !gallery.querySelector('.album-card')) evidence.hiddenGallery += 1;
+          if (state.ui.pendingGallerySearch) {
+            evidence.pendingSearchSamples += 1;
+            if (visible(scroll) && visible(gallery)) evidence.previousGalleryVisible += 1;
+            if (!visible(loader) || !loader.classList.contains('is-searching')) evidence.missingSearchLoader += 1;
+          }
           if (visible(loader)) {
             if (loader.classList.contains('is-searching') && document.getElementById('library-loader-title')?.textContent === 'Searching') evidence.searching += 1;
             else evidence.blockingLoader += 1;

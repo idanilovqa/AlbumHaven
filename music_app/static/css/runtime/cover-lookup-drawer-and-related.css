@@ -636,16 +636,15 @@
   }
 }
 
-/* Search progress overlays the retained gallery without blocking navigation. */
+/* Submitted searches replace the old results with a compact loading state. */
 .library-loader.is-searching {
-  position: absolute;
-  inset: 0;
   min-height: 0;
-  z-index: 2;
-  pointer-events: none;
-  background: transparent;
+  background: #000;
 }
-
-.shell-main-surface:has(> .library-loader.is-searching) { position: relative; }
+.library-loader.is-searching .library-loader-spinner {
+  width: 28px;
+  height: 28px;
+  border-width: 3px;
+}
 .library-loader.is-searching .library-status-workspace > :not(.library-status-state),
 .library-loader.is-searching .library-status-state > :not(.library-loader-state-heading) { display: none; }

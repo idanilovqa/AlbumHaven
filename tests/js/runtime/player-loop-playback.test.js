@@ -3255,3 +3255,64 @@ for (const actions of [{ 'library.media.read': true }, undefined]) {
     assert.deepEqual(f.timeline.focusCalls, [], 'row activation must not steal timeline focus');
   });
 }
+
+test('thin mobile Play hit area yields horizontal playhead drag but preserves taps and vertical intent', () => {
+  const seeks = [];
+  const listeners = new Map();
+  const document = { activeElement: null, querySelectorAll: () => [],
+    addEventListener(name, handler) { const entries = listeners.get(name) || []; entries.push(handler); listeners.set(name, entries); },
+    dispatch(name, event = {}) { for (const handler of listeners.get(name) || []) handler(event); },
+  };
+  const { context, timeline, playButton } = loadHelper({ document,
+    getTrackIdentity: track => track?.src || '',
+    getPlayerPlaybackSnapshot: () => ({ currentTime: 54, duration: 60, paused: false, ended: false, src: '/track?path=song.flac' }),
+    seekStreamingPlayback: seconds => seeks.push(seconds),
+  });
+  context.window.innerWidth = 390;
+  context.player.setAttribute('data-player-seekbar-presentation', 'thin');
+  timeline.rectangle = { left: 0, top: 70, width: 390, height: 24 };
+  timeline.value = '54';
+  timeline.parentElement = new FakeElement();
+  context.attachPlayerEvents();
+  playButton.closest = () => playButton;
+  const down = () => { timeline.value = '54'; context.player.dispatch('pointerdown', { pointerId: 7, isPrimary: true, button: 0, clientX: 350, clientY: 76, target: playButton, preventDefault() { throw new Error('Pointer down must preserve taps'); } }); };
+  down();
+  assert.notEqual(context.state.player.timelineDragging, true);
+  document.dispatch('pointermove', { pointerId: 7, clientX: 315, clientY: 77, preventDefault() {} });
+  assert.equal(context.state.player.timelineDragging, true);
+  context.player.dispatch('pointerdown', { pointerId: 8, isPrimary: false });
+  timeline.parentElement.dispatch('pointerdown', { pointerId: 8, clientX: 10, preventDefault() { throw new Error('Second finger must not start native timeline drag'); } });
+  assert.deepEqual(seeks, []);
+  document.dispatch('pointerup', { pointerId: 7 });
+  assert.equal(seeks.length, 1);
+  let suppressed = false;
+  context.player.dispatch('click', { pointerId: 7, preventDefault() { suppressed = true; }, stopImmediatePropagation() {} });
+  assert.equal(suppressed, true);
+  down();
+  document.dispatch('pointerup', { pointerId: 7 });
+  suppressed = false;
+  context.player.dispatch('click', { pointerId: 7, preventDefault() { suppressed = true; }, stopImmediatePropagation() {} });
+  assert.equal(suppressed, false);
+  down();
+  document.dispatch('pointermove', { pointerId: 7, clientX: 352, clientY: 99, preventDefault() { throw new Error('Vertical movement belongs to browser'); } });
+  document.dispatch('pointerup', { pointerId: 7 });
+  assert.equal(seeks.length, 1);
+  down();
+  document.dispatch('pointermove', { pointerId: 8, clientX: 315, clientY: 77 });
+  assert.notEqual(context.state.player.timelineDragging, true, 'other fingers cannot claim the gesture');
+  document.dispatch('pointermove', { pointerId: 7, clientX: 315, clientY: 77, preventDefault() {} });
+  document.dispatch('pointercancel', { pointerId: 7 });
+  assert.equal(context.state.player.timelineDragging, false);
+  assert.equal(seeks.length, 1, 'cancel never commits a seek');
+  down();
+  document.dispatch('pointermove', { pointerId: 7, clientX: 315, clientY: 77, preventDefault() {} });
+  context.state.player.current = { src: '/track?path=next.flac' };
+  document.dispatch('pointerup', { pointerId: 7 });
+  assert.equal(context.state.player.timelineDragging, false);
+  assert.equal(seeks.length, 1, 'release cannot seek a replacement track');
+  down();
+  document.dispatch('pointermove', { pointerId: 7, clientX: 315, clientY: 77, preventDefault() {} });
+  context.state.player.current = { ...context.state.player.current, title: 'Hydrated title' };
+  document.dispatch('pointerup', { pointerId: 7 });
+  assert.equal(seeks.length, 2, 'same-track metadata hydration preserves the gesture');
+});

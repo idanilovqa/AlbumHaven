@@ -1740,3 +1740,25 @@ for (const freshFirst of [true, false]) {
     assert.equal(current.detail_loaded, true);
   });
 }
+
+test('a pending Problematic Files response cannot rerender a different active tab', async () => {
+  const responseReady = createDeferred();
+  const { context, calls } = loadHelper({
+    async fetch() {
+      await responseReady.promise;
+      return { ok: true, status: 200, async json() {
+        return { items: [{ key: 'late-album', name: 'Late Album', detail_loaded: false }] };
+      } };
+    },
+  });
+  const pending = context.loadProblematicFiles(true);
+  assert.equal(calls.renders, 1);
+  context.state.utility.activeTab = 'loops';
+  responseReady.resolve();
+  await pending;
+  assert.equal(context.state.utility.problematicFiles[0].key, 'late-album');
+  assert.equal(context.state.utility.loaded, true);
+  assert.equal(calls.renders, 1, 'late completion must not replace the active loop player DOM');
+  await context.loadProblematicFiles();
+  assert.equal(calls.renders, 1, 'cached background reads must not replace the active loop player DOM');
+});

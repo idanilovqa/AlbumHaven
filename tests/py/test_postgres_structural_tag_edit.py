@@ -1028,7 +1028,7 @@ def test_live_postgres_structural_split_persists_projected_owner_without_rewriti
             connection.execute(
                 """insert into library.local_album_featured_artists
                    (library_id,album_id,artist_id,featured_kind,metadata)
-                   values(%s,%s,%s,%s,'{"source":"scan_cache"}'::jsonb)""",
+                   values(%s,%s,%s,%s,'{"source":"runtime_scan_cache"}'::jsonb)""",
                 (library_id, source_id, artist_id, kind),
             )
         existing_id = None

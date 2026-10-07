@@ -271,6 +271,9 @@ for (const method of ['waitForReady', 'waitForSelectedDetailSelection']) {
 }
 test('detected track rows are read atomically across a concurrent detail refresh', async () => {
   const { UtilityProblematicFilesActions } = await import(actionsUrl);
+  const { UtilityProblematicFilesTab } = await import(pathToFileURL(
+    path.resolve(__dirname, '../e2e/poms/utilityProblematicFilesTab.js'),
+  ).href);
   const expected = Array.from({ length: 3 }, (_, index) => ({
     filename: `${index + 1}.mp3`, path: `C:/fixture/${index + 1}.mp3`,
     reasons: ['Missing track number'],
@@ -281,6 +284,7 @@ test('detected track rows are read atomically across a concurrent detail refresh
     querySelectorAll: () => [{ textContent: ' Missing track number ' }],
   }));
   const owner = { utilityProblematicFilesTab: {
+    readDetectedTrackRows: UtilityProblematicFilesTab.prototype.readDetectedTrackRows,
     detailTrackRows: {
       count: async () => refreshed ? 0 : nodes.length,
       nth: index => ({ getAttribute: async () => { refreshed = true; return expected[index].path; } }),

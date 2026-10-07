@@ -954,7 +954,7 @@ for (const query of ['', 'Scan Artist 00']) {
   }
 }
 
-test('searching loader retains the gallery and clears without a blocking surface', () => {
+test('searching loader hides previous gallery until the search settles', () => {
   const { context, loader, spinner, title, scroll } = createLoaderRenderFixture();
   vm.runInContext(`
     state.ui.pendingViewTransition = true;
@@ -964,7 +964,7 @@ test('searching loader retains the gallery and clears without a blocking surface
   assert.equal(loader.hidden, false);
   assert.equal(spinner.hidden, false);
   assert.equal(title.textContent, 'Searching');
-  assert.equal(scroll.hidden, false);
+  assert.equal(scroll.hidden, true, 'previous results must not remain visible during submitted search');
   assert.equal(loader.classList.contains('is-searching'), true);
   vm.runInContext(`
     state.ui.pendingViewTransition = false;

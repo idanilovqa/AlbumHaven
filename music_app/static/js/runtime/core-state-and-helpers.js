@@ -675,10 +675,10 @@ function renderLibraryLoader(data = {}, options = {}) {
   setDomPropertyIfChanged(loader, 'hidden', !shouldShow);
   loader.classList?.toggle('is-scan-page', scanPageVisible);
   loader.classList?.toggle('is-searching', searching);
-  document.getElementById('shell-main-surface')?.classList.toggle('has-library-loader', shouldShow && !searching);
+  document.getElementById('shell-main-surface')?.classList.toggle('has-library-loader', shouldShow);
   if (typeof syncMobileHome === 'function') syncMobileHome();
   const galleryWasHidden = scroll.hidden;
-  setDomPropertyIfChanged(scroll, 'hidden', shouldShow && !searching);
+  setDomPropertyIfChanged(scroll, 'hidden', shouldShow);
   if (galleryWasHidden && !shouldShow && scroll.clientWidth > 0 && typeof virtualGrid !== 'undefined') {
     virtualGrid.onResize();
   }

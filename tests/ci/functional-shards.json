@@ -281,7 +281,7 @@
               "config": "playwright.config.js",
               "project": "functional",
               "test": "tests/e2e/specs/searchTreeCorrectness.spec.js",
-              "case": "FTC-SEARCH-NAV-002, FTC-SEARCH-NAV-003, and FTC-SEARCH-NAV-026 keep one-family search narrow, alphabetical, and selected through full-tree restoration",
+              "case": "FTC-SEARCH-NAV-002, FTC-SEARCH-NAV-003, and FTC-SEARCH-NAV-026 keep one-family search narrow, gallery-ordered, and selected through full-tree restoration",
               "area": "gallery-search"
             },
             {

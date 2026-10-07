@@ -74,14 +74,17 @@ export class GalleryRegressions {
         const gallery = document.getElementById('artist-groups');
         const scroll = document.getElementById('albums-scroll');
         const loader = document.getElementById('library-loader');
-        const evidence = { samples: 0, hiddenGallery: 0, blockingLoader: 0, warningExposures: 0 };
+        const evidence = { samples: 0, hiddenGallery: 0, blockingLoader: 0, searching: 0, warningExposures: 0 };
         const visible = element => Boolean(element?.getClientRects().length) && !element.hidden
           && element.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true });
         let frame;
         const inspect = () => {
           evidence.samples += 1;
           if (!visible(scroll) || !visible(gallery) || !gallery.querySelector('.album-card')) evidence.hiddenGallery += 1;
-          if (visible(loader)) evidence.blockingLoader += 1;
+          if (visible(loader)) {
+            if (loader.classList.contains('is-searching') && document.getElementById('library-loader-title')?.textContent === 'Searching') evidence.searching += 1;
+            else evidence.blockingLoader += 1;
+          }
           if ([...loader.querySelectorAll('[role="alert"]')].some(visible)) evidence.warningExposures += 1;
         };
         const sample = () => { inspect(); frame = requestAnimationFrame(sample); };

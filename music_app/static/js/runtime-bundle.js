@@ -1879,6 +1879,7 @@ function applyLocalRelatedFilterState(nextRelatedArtists, options = {}) {
   // their payload arrives later.
   state.ui.viewStateRevision = Number(state.ui.viewStateRevision || 0) + 1;
   state.ui.pendingViewTransition = false;
+  state.ui.pendingGallerySearch = false;
   state.ui.pendingViewTransitionRequestId = 0;
 
   return mergeViewPayload({
@@ -3700,14 +3701,6 @@ function resolveSidebarArtistCount(view = {}, sidebarArtists = []) {
   return sidebarArtists.length;
 }
 
-function usesCanonicalSidebarArtistOrder(view = {}, options = {}) {
-  const selectedArtist = resolveSidebarSelectedArtist(view, options);
-  const allArtistsActive = Object.prototype.hasOwnProperty.call(options, 'allArtistsActiveOverride')
-    ? Boolean(options.allArtistsActiveOverride)
-    : Boolean(resolveSidebarSurface(view) === 'albums' && (view.all_artists_active || (!view.query && !selectedArtist)));
-  return allArtistsActive && !view.query && !selectedArtist;
-}
-
 function buildSidebarHtml(view = {}, sidebarArtists = [], options = {}) {
   const activeSurface = resolveSidebarSurface(view);
   const showAllArtistsLink = Object.prototype.hasOwnProperty.call(options, 'showAllArtistsOverride')
@@ -3724,13 +3717,7 @@ function buildSidebarHtml(view = {}, sidebarArtists = [], options = {}) {
     label: 'All artists', href: '/?surface=albums', key: 'all-artists', count: artistCount,
     selected: allArtistsActive, attributes: { 'data-nav': '1', 'data-sidebar-all-artists': '1' },
   }) : '';
-  const displayedSidebarArtists = [...sidebarArtists];
-  if (!usesCanonicalSidebarArtistOrder(view, options)) displayedSidebarArtists.sort((left, right) => {
-    const leftLabel = String(left?.artist_display || left?.artist || '');
-    const rightLabel = String(right?.artist_display || right?.artist || '');
-    return leftLabel.localeCompare(rightLabel, 'en', { numeric: true, sensitivity: 'base' });
-  });
-  html += displayedSidebarArtists.map(item => renderItem({
+  html += sidebarArtists.map(item => renderItem({
     label: item.artist_display || item.artist, key: 'artist:' + item.artist,
     count: item.count, selected: item.artist === selectedArtist,
     href: buildUrl({
@@ -3753,8 +3740,7 @@ function buildSidebarStructureSignature(sidebarArtists = [], options = {}) {
     String(item?.artist_display || item?.artist || ''),
     String(item?.count ?? ''),
   ].join('\u001f')).join('\u001e');
-  const artistOrder = usesCanonicalSidebarArtistOrder(options.view || {}, options) ? 'canonical' : 'natural';
-  return `${showAllArtistsLink}\u001d${artistOrder}\u001d${artistSignature}`;
+  return `${showAllArtistsLink}\u001d${artistSignature}`;
 }
 
 function applySidebarSelectionMarkup(container, options = {}) {
@@ -5219,6 +5205,7 @@ function renderLibraryLoader(data = {}, options = {}) {
   const forcedScanPageVisible = Boolean(state.ui.forceScanPageVisible) && (scanBusy || relBusy || state.awaitingInitialDataRefresh);
   const hasSearch = Boolean((state.view?.query || '').trim() || (state.view?.selected_artist || '').trim());
   const pendingViewTransition = Boolean(state.ui.pendingViewTransition);
+  const searching = pendingViewTransition && state.ui.pendingGallerySearch === true && !scanPageVisible;
   const isLoadingState = scanBusy || relBusy || state.awaitingInitialDataRefresh || pendingViewTransition;
   const shouldShow = shouldShowLibraryLoader(state.view, data, {
     scanPageVisible,
@@ -5244,10 +5231,11 @@ function renderLibraryLoader(data = {}, options = {}) {
   const canCancelScan = shouldShow && scanPageVisible && Boolean(data.scan_in_progress);
   setDomPropertyIfChanged(loader, 'hidden', !shouldShow);
   loader.classList?.toggle('is-scan-page', scanPageVisible);
-  document.getElementById('shell-main-surface')?.classList.toggle('has-library-loader', shouldShow);
+  loader.classList?.toggle('is-searching', searching);
+  document.getElementById('shell-main-surface')?.classList.toggle('has-library-loader', shouldShow && !searching);
   if (typeof syncMobileHome === 'function') syncMobileHome();
   const galleryWasHidden = scroll.hidden;
-  setDomPropertyIfChanged(scroll, 'hidden', shouldShow);
+  setDomPropertyIfChanged(scroll, 'hidden', shouldShow && !searching);
   if (galleryWasHidden && !shouldShow && scroll.clientWidth > 0 && typeof virtualGrid !== 'undefined') {
     virtualGrid.onResize();
   }
@@ -5290,6 +5278,16 @@ function renderLibraryLoader(data = {}, options = {}) {
     if (browseButton) browseButton.hidden = true;
     if (cancelButton) cancelButton.hidden = true;
     if (actions) actions.hidden = true;
+    return;
+  }
+
+  if (searching) {
+    spinner.hidden = false;
+    title.textContent = 'Searching';
+    status.textContent = '';
+    progress.innerHTML = '';
+    if (actions) actions.hidden = true;
+    setDomPropertyIfChanged(readyCheck, 'hidden', true);
     return;
   }
 
@@ -8784,7 +8782,12 @@ function syncArtistsDrawerVisibility() {
     rail.classList.toggle('is-mobile-drawer-open', isOpen);
     rail.setAttribute('aria-hidden', isDrawerVisible && !isOpen ? 'true' : 'false');
     rail.inert = isDrawerVisible && !isOpen;
-    document.getElementById('mobile-library-button')?.setAttribute('aria-expanded', String(isOpen));
+    const mobileLibraryButton = document.getElementById('mobile-library-button');
+    mobileLibraryButton?.setAttribute('aria-expanded', String(isOpen));
+    if (isOpen) {
+      mobileLibraryButton?.removeAttribute('data-search-results');
+      mobileLibraryButton?.removeAttribute('aria-description');
+    }
   }
 
   if (isArtistsDrawerElement(backdrop)) {
@@ -11928,10 +11931,27 @@ function queueVisibleTrackModalAlbumDetailsPrewarm(containerEl, scrollEl, limit 
   });
 }
 
+let trackModalArtworkPreload = null;
+
+function preloadTrackModalArtwork(album) {
+  if (typeof Image !== 'function' || typeof buildAlbumLightboxCoverUrl !== 'function') return;
+  const source = buildAlbumLightboxCoverUrl(album);
+  if (!source || trackModalArtworkPreload?.source === source) return;
+  const image = new Image();
+  trackModalArtworkPreload = { source, image };
+  image.fetchPriority = 'low';
+  image.decoding = 'async';
+  image.onerror = () => {
+    if (trackModalArtworkPreload?.image === image) trackModalArtworkPreload = null;
+  };
+  image.src = source;
+}
+
 function openTrackModal(album, options = {}) {
   if (album && typeof presentMobileAlbumPage === 'function') presentMobileAlbumPage(album);
   const els = getTrackModalElements();
   if (!els.overlay || !album) return;
+  preloadTrackModalArtwork(album);
   if (options.foreground && document.getElementById('utility-modal')?.hidden === false) {
     els.overlay.classList.add('is-above-settings');
   }
@@ -14088,7 +14108,8 @@ function shouldAutoRefreshViewAfterCoverCompletion() {
   return false;
 }
 
-function beginPendingViewTransition(requestId) {
+function beginPendingViewTransition(requestId, options = {}) {
+  state.ui.pendingGallerySearch = options.showSearchProgress === true;
   state.ui.pendingViewTransition = true;
   state.ui.pendingViewTransitionRequestId = Number(requestId || 0);
   // Keep the current gallery mounted while the replacement payload is loading.
@@ -14109,9 +14130,11 @@ function finishPendingViewTransition(requestId, options = {}) {
   ) {
     return false;
   }
+  const wasSearching = state.ui.pendingGallerySearch === true;
   state.ui.pendingViewTransition = false;
+  state.ui.pendingGallerySearch = false;
   state.ui.pendingViewTransitionRequestId = 0;
-  if (options.restoreCurrentGallery === true) {
+  if (wasSearching || options.restoreCurrentGallery === true) {
     renderLibraryLoader({
       ...(state.status || {}),
       transition_in_progress: false,
@@ -14866,9 +14889,9 @@ async function fetchAndRender(url, push = true, options = {}) {
   if (!retainsMountedSelectedViewState) {
     renderRelated();
   }
-  if (state.ui.pendingViewTransition
+  if (requestOptions.showSearchProgress || state.ui.pendingViewTransition
     || (!requestOptions.preserveScroll && requestOptions.skipPendingViewTransition !== true)) {
-    beginPendingViewTransition(requestId);
+    beginPendingViewTransition(requestId, requestOptions);
   }
   if (!requestOptions.preserveScanPage && !state.ui.scanPageReturnContext) {
     state.ui.forceScanPageVisible = false;
@@ -17364,7 +17387,7 @@ function buildDetectedProblemsHtml(album) {
     ${albumProblems || tableRows.length || separateActions || getIgnoredRepairRowKeys().length ? `<div class="utility-detected-actions">
       ${separateActions}
       ${ButtonComponent.renderButton({ label: 'Create Exception', variant: 'primary', className: 'utility-exception-action', disabled: !getIgnoredRepairRowKeys().length || !album.allowed_actions?.['library.rules.manage'], attributes: { 'data-open-exclusion-confirm': '1' } })}
-  ${tableRows.length ? ButtonComponent.renderButton({ label: selected ? 'Apply selected edits' : 'Select edits to apply', variant: 'primary', className: 'utility-detail-apply', disabled: !selected || !album.allowed_actions?.['library.files.edit_tags'] || !getApplicableProblemSuggestions().length || Boolean(state.utility.proposalApplyBusy), attributes: { 'data-apply-problem-suggestions': '1' } }) : ''}
+      ${tableRows.length ? ButtonComponent.renderButton({ label: 'Apply', variant: 'primary', className: 'utility-detail-apply', disabled: !selected || !album.allowed_actions?.['library.files.edit_tags'] || !getApplicableProblemSuggestions().length || Boolean(state.utility.proposalApplyBusy), attributes: { 'data-apply-problem-suggestions': '1' } }) : ''}
     </div>` : ''}`;
 }
 function buildProblematicAlbumDetail(album) {
@@ -19853,11 +19876,19 @@ function toggleProblemSuggestion(id, { selected } = {}) {
   return true;
 }
 
-function extendProblemSuggestionRange(type, startIndex, endIndex, selected = true) {
-  const visible = getVisibleProblemSuggestions();
+function getDraggableProblemSuggestions() {
+  const proposals = new Map(getVisibleProblemSuggestions().map(item => [item.id, item]));
+  return Array.from(document.querySelectorAll('[data-problem-suggestion-id]'))
+    .filter(button => !button.disabled)
+    .map(button => proposals.get(button.getAttribute('data-problem-suggestion-id')))
+    .filter(Boolean);
+}
+
+function extendProblemSuggestionRange(startIndex, endIndex, selected = true) {
+  const visible = getDraggableProblemSuggestions();
   const from = Math.min(startIndex, endIndex), to = Math.max(startIndex, endIndex);
   if (!Number.isInteger(from) || !Number.isInteger(to) || from < 0 || to >= visible.length) return false;
-  visible.slice(from, to + 1).filter(item => item.type === type).forEach(item => toggleProblemSuggestion(item.id, { selected }));
+  visible.slice(from, to + 1).forEach(item => toggleProblemSuggestion(item.id, { selected }));
   return true;
 }
 
@@ -19874,7 +19905,7 @@ function syncProblemSuggestionSelection() {
   const apply = document.querySelector?.('[data-apply-problem-suggestions]');
   if (apply) {
     const label = apply.querySelector?.('.ui-button__content') || apply;
-    label.textContent = Object.values(state.utility.proposalSelections || {}).some(Boolean) ? 'Apply selected edits' : 'Select edits to apply';
+    label.textContent = 'Apply';
     ButtonComponent.setDisabled(apply, !getSelectedProblematicAlbum()?.allowed_actions?.['library.files.edit_tags'] || !getApplicableProblemSuggestions().length || Boolean(state.utility.proposalApplyBusy));
   }
 }
@@ -38252,11 +38283,11 @@ function handleUtilityBootstrapMouseDown(event) {
   if (suggestion && event.button === 0 && !suggestion.disabled) {
     event.preventDefault();
     const id = suggestion.getAttribute('data-problem-suggestion-id');
-    const visible = getVisibleProblemSuggestions();
+    const visible = getDraggableProblemSuggestions();
     const index = visible.findIndex(item => item.id === id);
     if (index < 0) return;
     const selected = !state.utility.proposalSelections?.[id];
-    state.utility.proposalDrag = { type: visible[index].type, startIndex: index, selected };
+    state.utility.proposalDrag = { startIndex: index, selected };
     state.utility.proposalSuppressClick = true;
     toggleProblemSuggestion(id, { selected });
     suggestion.focus?.();
@@ -38430,10 +38461,10 @@ function handleUtilityBootstrapMouseOver(event) {
   if (state.utility.proposalDrag) {
     const suggestion = event.target.closest('[data-problem-suggestion-id]');
     const drag = state.utility.proposalDrag;
-    const visible = getVisibleProblemSuggestions();
+    const visible = getDraggableProblemSuggestions();
     const index = visible.findIndex(item => item.id === suggestion?.getAttribute('data-problem-suggestion-id'));
-    if (index >= 0 && visible[index].type === drag.type) {
-      extendProblemSuggestionRange(drag.type, drag.startIndex, index, drag.selected);
+    if (index >= 0) {
+      extendProblemSuggestionRange(drag.startIndex, index, drag.selected);
       syncProblemSuggestionSelection();
     }
     return;
@@ -39611,7 +39642,7 @@ function scheduleGallerySearchCommit(nextQuery, options = {}) {
 
 function revealArtistTreeForSearch() {
   if (typeof usesMobilePageLayout === 'function' && usesMobilePageLayout()) {
-    const button = document.querySelector('.mobile-artists-mode-button');
+    const button = document.getElementById('mobile-library-button');
     button?.setAttribute('data-search-results', 'true');
     button?.setAttribute('aria-description', 'Search results available in Artists');
     return;
@@ -39632,7 +39663,7 @@ function handleGalleryBootstrapSearchSubmit(event) {
   }
   const input = document.getElementById('search-input');
   const nextQuery = input?.value || '';
-  const mobileArtistsButton = document?.querySelector?.('.mobile-artists-mode-button');
+  const mobileArtistsButton = document?.getElementById?.('mobile-library-button');
   if (String(nextQuery).trim()) revealArtistTreeForSearch();
   else {
     mobileArtistsButton?.removeAttribute('data-search-results');
@@ -39905,6 +39936,7 @@ function commitGallerySearchQuery(nextQuery, options = {}) {
     preserveScroll: String(previousView.query || '') === normalizedQuery,
     restartIfSameUrl: true,
     skipPendingViewTransition: true,
+    showSearchProgress: true,
     shouldApplyResponse: () => state.ui.gallerySearchGeneration === searchGeneration,
     ...(retriesHydration ? {} : { searchPreviewUrl: previewUrl }),
   });
@@ -40548,6 +40580,7 @@ function tryRestoreClearedSearchView(nextView, options = {}) {
     state.ui.pendingViewRequest = null;
     const hadPendingTransition = state.ui.pendingViewTransition;
     state.ui.pendingViewTransition = false;
+    state.ui.pendingGallerySearch = false;
     state.ui.pendingViewTransitionRequestId = 0;
     if (hadPendingTransition) renderLibraryLoader(state.status);
     renderSidebar();

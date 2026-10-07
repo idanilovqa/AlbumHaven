@@ -530,10 +530,27 @@ function queueVisibleTrackModalAlbumDetailsPrewarm(containerEl, scrollEl, limit 
   });
 }
 
+let trackModalArtworkPreload = null;
+
+function preloadTrackModalArtwork(album) {
+  if (typeof Image !== 'function' || typeof buildAlbumLightboxCoverUrl !== 'function') return;
+  const source = buildAlbumLightboxCoverUrl(album);
+  if (!source || trackModalArtworkPreload?.source === source) return;
+  const image = new Image();
+  trackModalArtworkPreload = { source, image };
+  image.fetchPriority = 'low';
+  image.decoding = 'async';
+  image.onerror = () => {
+    if (trackModalArtworkPreload?.image === image) trackModalArtworkPreload = null;
+  };
+  image.src = source;
+}
+
 function openTrackModal(album, options = {}) {
   if (album && typeof presentMobileAlbumPage === 'function') presentMobileAlbumPage(album);
   const els = getTrackModalElements();
   if (!els.overlay || !album) return;
+  preloadTrackModalArtwork(album);
   if (options.foreground && document.getElementById('utility-modal')?.hidden === false) {
     els.overlay.classList.add('is-above-settings');
   }

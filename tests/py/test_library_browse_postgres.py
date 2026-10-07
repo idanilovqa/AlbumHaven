@@ -14841,3 +14841,9 @@ def test_exact_artist_full_search_excludes_guest_only_primary_albums(monkeypatch
     monkeypatch.setattr(repository, 'build_selected_artist_payload', selected_payload)
     repository.build_search_payload(query_params={'q': 'Control Signal Partner'})
     assert [row['album_key'] for row in selected_rows] == [role for role in roles if role != 'featured_track_artist']
+
+def test_root_startup_membership_materializes_shared_eligibility_once():
+    from music_app.services import library_browse_postgres as browse
+    sql = browse._root_gallery_membership_sql()
+    assert browse._eligible_album_tracks_cte_sql(materialized=True, aggregate_tracks=False) in sql
+    assert 'eligible_album_tracks as not materialized' not in sql

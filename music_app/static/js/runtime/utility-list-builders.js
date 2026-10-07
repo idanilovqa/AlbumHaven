@@ -481,7 +481,7 @@ function buildDetectedProblemsHtml(album) {
     ${albumProblems || tableRows.length || separateActions || getIgnoredRepairRowKeys().length ? `<div class="utility-detected-actions">
       ${separateActions}
       ${ButtonComponent.renderButton({ label: 'Create Exception', variant: 'primary', className: 'utility-exception-action', disabled: !getIgnoredRepairRowKeys().length || !album.allowed_actions?.['library.rules.manage'], attributes: { 'data-open-exclusion-confirm': '1' } })}
-  ${tableRows.length ? ButtonComponent.renderButton({ label: selected ? 'Apply selected edits' : 'Select edits to apply', variant: 'primary', className: 'utility-detail-apply', disabled: !selected || !album.allowed_actions?.['library.files.edit_tags'] || !getApplicableProblemSuggestions().length || Boolean(state.utility.proposalApplyBusy), attributes: { 'data-apply-problem-suggestions': '1' } }) : ''}
+      ${tableRows.length ? ButtonComponent.renderButton({ label: 'Apply', variant: 'primary', className: 'utility-detail-apply', disabled: !selected || !album.allowed_actions?.['library.files.edit_tags'] || !getApplicableProblemSuggestions().length || Boolean(state.utility.proposalApplyBusy), attributes: { 'data-apply-problem-suggestions': '1' } }) : ''}
     </div>` : ''}`;
 }
 function buildProblematicAlbumDetail(album) {
@@ -2970,11 +2970,19 @@ function toggleProblemSuggestion(id, { selected } = {}) {
   return true;
 }
 
-function extendProblemSuggestionRange(type, startIndex, endIndex, selected = true) {
-  const visible = getVisibleProblemSuggestions();
+function getDraggableProblemSuggestions() {
+  const proposals = new Map(getVisibleProblemSuggestions().map(item => [item.id, item]));
+  return Array.from(document.querySelectorAll('[data-problem-suggestion-id]'))
+    .filter(button => !button.disabled)
+    .map(button => proposals.get(button.getAttribute('data-problem-suggestion-id')))
+    .filter(Boolean);
+}
+
+function extendProblemSuggestionRange(startIndex, endIndex, selected = true) {
+  const visible = getDraggableProblemSuggestions();
   const from = Math.min(startIndex, endIndex), to = Math.max(startIndex, endIndex);
   if (!Number.isInteger(from) || !Number.isInteger(to) || from < 0 || to >= visible.length) return false;
-  visible.slice(from, to + 1).filter(item => item.type === type).forEach(item => toggleProblemSuggestion(item.id, { selected }));
+  visible.slice(from, to + 1).forEach(item => toggleProblemSuggestion(item.id, { selected }));
   return true;
 }
 
@@ -2991,7 +2999,7 @@ function syncProblemSuggestionSelection() {
   const apply = document.querySelector?.('[data-apply-problem-suggestions]');
   if (apply) {
     const label = apply.querySelector?.('.ui-button__content') || apply;
-    label.textContent = Object.values(state.utility.proposalSelections || {}).some(Boolean) ? 'Apply selected edits' : 'Select edits to apply';
+    label.textContent = 'Apply';
     ButtonComponent.setDisabled(apply, !getSelectedProblematicAlbum()?.allowed_actions?.['library.files.edit_tags'] || !getApplicableProblemSuggestions().length || Boolean(state.utility.proposalApplyBusy));
   }
 }

@@ -438,6 +438,11 @@
   flex: 0 0 auto;
   white-space: nowrap;
 }
+#utility-modal[data-active-tab="problematic-files"] .utility-list-item-year::before {
+  content: "\2022";
+  margin-right: 4px;
+  font-weight: 900;
+}
 .utility-list-item-badge {
   display: inline-block;
   margin-top: 8px;
@@ -1954,7 +1959,9 @@
 }
 .utility-detected-table .utility-problem-suggestion[aria-pressed="true"] {
   border-color: var(--appearance-primary-button, var(--accent));
-  background: color-mix(in srgb, var(--appearance-primary-button, var(--accent)) 20%, var(--appearance-panel-background, var(--panel)));
+  background: color-mix(in srgb, var(--appearance-primary-button, var(--accent)) 48%, var(--appearance-panel-background, var(--panel)));
   color: var(--appearance-primary-button-ink, var(--text));
-  box-shadow: 0 0 0 2px color-mix(in srgb, var(--appearance-primary-button, var(--accent)) 28%, transparent);
+  box-shadow: 0 0 0 1px var(--appearance-primary-button, var(--accent)),
+    inset 0 0 12px color-mix(in srgb, var(--appearance-primary-button, var(--accent)) 35%, transparent),
+    0 0 12px color-mix(in srgb, var(--appearance-primary-button, var(--accent)) 45%, transparent);
 }

@@ -2955,6 +2955,7 @@ test('search input stages a draft and explicit submission commits it', () => {
     runtimeOptions: {
       preserveScroll: false,
       skipPendingViewTransition: true,
+      showSearchProgress: true,
       searchPreviewUrl: '/view-data?artist=&gallery_scope=all&omit_sidebar=1',
       restartIfSameUrl: true,
     },
@@ -2990,6 +2991,7 @@ test('submitted search loads preview and full family under one atomic request ow
   assert.deepEqual(JSON.parse(JSON.stringify(calls.fetchAndRender[0].runtimeOptions)), {
     preserveScroll: false,
     skipPendingViewTransition: true,
+    showSearchProgress: true,
     searchPreviewUrl: previewRequest.pathname + previewRequest.search,
     restartIfSameUrl: true,
   });
@@ -4727,7 +4729,8 @@ for (const [mountedCount, loadedCategories, sidebarCategories = ['main_library',
 test('nonempty mobile search keeps Artists closed and marks filtered results available', () => {
   const { context, calls } = createContext({ searchInputValue: 'Devin' });
   const button = { attributes: {}, setAttribute(name, value) { this.attributes[name] = value; } };
-  context.document.querySelector = selector => selector === '.mobile-artists-mode-button' ? button : null;
+  const originalGetElementById = context.document.getElementById.bind(context.document);
+  context.document.getElementById = id => id === 'mobile-library-button' ? button : originalGetElementById(id);
   context.usesMobilePageLayout = () => true;
   context.openArtistsDrawer = () => { throw new Error('Search must not open Artists automatically'); };
   context.handleGalleryBootstrapSearchSubmit({ preventDefault() {} });

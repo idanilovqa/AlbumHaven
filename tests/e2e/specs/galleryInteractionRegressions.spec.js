@@ -237,6 +237,8 @@ test(WARNING_CASE,{tag:'@area:gallery-search'},async({page,galleryActions,search
       expect(evidence.samples).toBeGreaterThan(0);
       expect(evidence.hiddenGallery).toBe(0);
       expect(evidence.blockingLoader).toBe(0);
+      expect(evidence.searching).toBeGreaterThan(0);
+      await expect(page.locator('#library-loader')).toBeHidden();
       expect(evidence.warningExposures).toBe(0);
       await expect(ui.scanWarning).toBeHidden();
       await expect(ui.warning).toBeVisible();

@@ -227,7 +227,8 @@ function shouldAutoRefreshViewAfterCoverCompletion() {
   return false;
 }
 
-function beginPendingViewTransition(requestId) {
+function beginPendingViewTransition(requestId, options = {}) {
+  state.ui.pendingGallerySearch = options.showSearchProgress === true;
   state.ui.pendingViewTransition = true;
   state.ui.pendingViewTransitionRequestId = Number(requestId || 0);
   // Keep the current gallery mounted while the replacement payload is loading.
@@ -248,9 +249,11 @@ function finishPendingViewTransition(requestId, options = {}) {
   ) {
     return false;
   }
+  const wasSearching = state.ui.pendingGallerySearch === true;
   state.ui.pendingViewTransition = false;
+  state.ui.pendingGallerySearch = false;
   state.ui.pendingViewTransitionRequestId = 0;
-  if (options.restoreCurrentGallery === true) {
+  if (wasSearching || options.restoreCurrentGallery === true) {
     renderLibraryLoader({
       ...(state.status || {}),
       transition_in_progress: false,
@@ -1005,9 +1008,9 @@ async function fetchAndRender(url, push = true, options = {}) {
   if (!retainsMountedSelectedViewState) {
     renderRelated();
   }
-  if (state.ui.pendingViewTransition
+  if (requestOptions.showSearchProgress || state.ui.pendingViewTransition
     || (!requestOptions.preserveScroll && requestOptions.skipPendingViewTransition !== true)) {
-    beginPendingViewTransition(requestId);
+    beginPendingViewTransition(requestId, requestOptions);
   }
   if (!requestOptions.preserveScanPage && !state.ui.scanPageReturnContext) {
     state.ui.forceScanPageVisible = false;

@@ -23,11 +23,14 @@ body {
   overflow: hidden;
   caret-color: transparent;
 }
-input,
-textarea,
-select,
-[contenteditable="true"] {
-  caret-color: auto;
+:root * {
+  caret-color: transparent !important;
+}
+:root :is(input:not([type]), input[type="text"], input[type="search"], input[type="email"], input[type="password"], input[type="tel"], input[type="url"], input[type="number"], textarea):focus:not(:read-only),
+:root [contenteditable="true"]:focus,
+:root [contenteditable="true"]:focus *,
+:root [contenteditable="plaintext-only"]:focus {
+  caret-color: auto !important;
 }
 .sidebar-top { margin-bottom: 12px; }
 .shell-navigation-rail-header {

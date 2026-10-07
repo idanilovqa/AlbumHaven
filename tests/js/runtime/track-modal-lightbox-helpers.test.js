@@ -441,6 +441,28 @@ async function flushMicrotasks() {
   await new Promise((resolve) => setImmediate(resolve));
 }
 
+test('opening Album Details preloads full artwork once without waiting and retries failed loads', () => {
+  const { context, trackModal } = loadHelper();
+  const images = [];
+  context.Image = class { constructor() { images.push(this); } };
+  context.buildAlbumLightboxCoverUrl = album => album.fullCover || '';
+  const album = { key: 'alpha', name: 'Alpha', tracks: [], fullCover: '/cover/full?revision=1' };
+  context.openTrackModal(album);
+  assert.equal(trackModal.hidden, false);
+  assert.equal(images.length, 1);
+  assert.equal(images[0].src, album.fullCover);
+  assert.equal(images[0].fetchPriority, 'low');
+  context.openTrackModal(album);
+  assert.equal(images.length, 1);
+  images[0].onerror();
+  context.openTrackModal(album);
+  assert.equal(images.length, 2);
+  context.openTrackModal({ ...album, fullCover: '/cover/full?revision=2' });
+  assert.equal(images.length, 3);
+  context.openTrackModal({ ...album, fullCover: '' });
+  assert.equal(images.length, 3);
+});
+
 test('player Album Details takes foreground without closing Settings or its draft', () => {
   const { context, trackModal, utilityModal, documentListeners } = loadHelper({ utilityLoaded: true });
   const draft = { title: 'Unsaved appearance' };

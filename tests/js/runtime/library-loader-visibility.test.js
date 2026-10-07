@@ -953,3 +953,25 @@ for (const query of ['', 'Scan Artist 00']) {
     });
   }
 }
+
+test('searching loader retains the gallery and clears without a blocking surface', () => {
+  const { context, loader, spinner, title, scroll } = createLoaderRenderFixture();
+  vm.runInContext(`
+    state.ui.pendingViewTransition = true;
+    state.ui.pendingGallerySearch = true;
+    renderLibraryLoader({ transition_in_progress: true });
+  `, context);
+  assert.equal(loader.hidden, false);
+  assert.equal(spinner.hidden, false);
+  assert.equal(title.textContent, 'Searching');
+  assert.equal(scroll.hidden, false);
+  assert.equal(loader.classList.contains('is-searching'), true);
+  vm.runInContext(`
+    state.ui.pendingViewTransition = false;
+    state.ui.pendingGallerySearch = false;
+    renderLibraryLoader({ transition_in_progress: false });
+  `, context);
+  assert.equal(loader.hidden, true);
+  assert.equal(scroll.hidden, false);
+  assert.equal(loader.classList.contains('is-searching'), false);
+});

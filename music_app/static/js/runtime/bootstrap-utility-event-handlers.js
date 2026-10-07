@@ -1143,11 +1143,11 @@ function handleUtilityBootstrapMouseDown(event) {
   if (suggestion && event.button === 0 && !suggestion.disabled) {
     event.preventDefault();
     const id = suggestion.getAttribute('data-problem-suggestion-id');
-    const visible = getVisibleProblemSuggestions();
+    const visible = getDraggableProblemSuggestions();
     const index = visible.findIndex(item => item.id === id);
     if (index < 0) return;
     const selected = !state.utility.proposalSelections?.[id];
-    state.utility.proposalDrag = { type: visible[index].type, startIndex: index, selected };
+    state.utility.proposalDrag = { startIndex: index, selected };
     state.utility.proposalSuppressClick = true;
     toggleProblemSuggestion(id, { selected });
     suggestion.focus?.();
@@ -1321,10 +1321,10 @@ function handleUtilityBootstrapMouseOver(event) {
   if (state.utility.proposalDrag) {
     const suggestion = event.target.closest('[data-problem-suggestion-id]');
     const drag = state.utility.proposalDrag;
-    const visible = getVisibleProblemSuggestions();
+    const visible = getDraggableProblemSuggestions();
     const index = visible.findIndex(item => item.id === suggestion?.getAttribute('data-problem-suggestion-id'));
-    if (index >= 0 && visible[index].type === drag.type) {
-      extendProblemSuggestionRange(drag.type, drag.startIndex, index, drag.selected);
+    if (index >= 0) {
+      extendProblemSuggestionRange(drag.startIndex, index, drag.selected);
       syncProblemSuggestionSelection();
     }
     return;

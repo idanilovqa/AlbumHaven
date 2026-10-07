@@ -216,3 +216,146 @@ def test_probe_cancellation_reaps_its_exact_process(monkeypatch, cancellation_ki
             await task
         assert process.kills == process.waits == 1
     asyncio.run(run())
+
+
+@pytest.fixture
+def counted_gapless_probe(monkeypatch, tmp_path):
+    from music_app.services import mp3_gapless
+
+    media = tmp_path / "track.mp3"
+    executable = tmp_path / "ffmpeg.exe"
+    media.write_bytes(b"owned media identity")
+    executable.write_bytes(b"owned decoder identity")
+    executable.chmod(0o755)
+    info = mp3_gapless.Mp3GaplessInfo(44100, 132300, 576, 1000)
+    monkeypatch.setattr(mp3_gapless, "read_mp3_gapless_info", lambda _path: info)
+    calls = []
+    state = {"output": b"#codec_id 0: mp3\n", "exit_code": 0, "blocked": False}
+
+    async def launch(*_args, **_kwargs):
+        class Process:
+            returncode = None
+
+            def __init__(self):
+                self.stdout = asyncio.StreamReader()
+                if not state["blocked"]:
+                    self.stdout.feed_data(state["output"])
+                    self.stdout.feed_eof()
+
+            def kill(self):
+                self.returncode = -9
+                self.stdout.feed_eof()
+
+            async def wait(self):
+                if self.returncode is None:
+                    self.returncode = state["exit_code"]
+                return self.returncode
+
+        process = Process()
+        calls.append(process)
+        return process
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", launch)
+    return media, executable, info, calls, state
+
+
+@pytest.mark.parametrize("native_skip", [False, True])
+def test_repeated_seek_reuses_successful_gapless_probe(counted_gapless_probe, native_skip):
+    from music_app.services.mp3_gapless import ignored_mp3_gapless_info
+    media, executable, info, calls, state = counted_gapless_probe
+    if native_skip:
+        state["output"] += b"Skip Samples\n"
+
+    async def run():
+        for _ in range(3):
+            assert await ignored_mp3_gapless_info(media, str(executable)) == (None if native_skip else info)
+    asyncio.run(run())
+    assert len(calls) == 1, "Repeated seeks must not relaunch an unchanged compatibility probe"
+
+
+@pytest.mark.parametrize("changed", ["media", "decoder"])
+def test_gapless_probe_cache_invalidates_changed_identity(counted_gapless_probe, changed):
+    from music_app.services.mp3_gapless import ignored_mp3_gapless_info
+    media, executable, info, calls, _state = counted_gapless_probe
+
+    async def run():
+        assert await ignored_mp3_gapless_info(media, str(executable)) == info
+        assert await ignored_mp3_gapless_info(media, str(executable)) == info
+        (media if changed == "media" else executable).write_bytes(b"changed longer identity content")
+        assert await ignored_mp3_gapless_info(media, str(executable)) == info
+    asyncio.run(run())
+    assert len(calls) == 2
+
+
+def test_failed_and_cancelled_gapless_probes_are_retried(counted_gapless_probe):
+    from music_app.services.mp3_gapless import ignored_mp3_gapless_info
+    media, executable, info, calls, state = counted_gapless_probe
+
+    async def run():
+        state["exit_code"] = 1
+        with pytest.raises(RuntimeError, match="probe failed"):
+            await ignored_mp3_gapless_info(media, str(executable))
+        state.update(exit_code=0, blocked=True)
+        task = asyncio.create_task(ignored_mp3_gapless_info(media, str(executable)))
+        while len(calls) < 2:
+            await asyncio.sleep(0)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        assert calls[-1].returncode == -9
+        state["blocked"] = False
+        assert await ignored_mp3_gapless_info(media, str(executable)) == info
+        assert await ignored_mp3_gapless_info(media, str(executable)) == info
+    asyncio.run(run())
+    assert len(calls) == 3
+
+
+def test_gapless_probe_cache_is_bounded(counted_gapless_probe):
+    from music_app.services.mp3_gapless import ignored_mp3_gapless_info
+    media, executable, info, calls, _state = counted_gapless_probe
+
+    async def run():
+        for index in range(129):
+            candidate = media.with_name(f"track-{index}.mp3")
+            candidate.write_bytes(b"owned media identity")
+            assert await ignored_mp3_gapless_info(candidate, str(executable)) == info
+        assert await ignored_mp3_gapless_info(media.with_name("track-128.mp3"), str(executable)) == info
+        assert len(calls) == 129
+        assert await ignored_mp3_gapless_info(media.with_name("track-0.mp3"), str(executable)) == info
+    asyncio.run(run())
+    assert len(calls) == 130
+
+
+def test_cached_gapless_probe_still_honors_cancellation(counted_gapless_probe):
+    from music_app.services.mp3_gapless import ignored_mp3_gapless_info
+    media, executable, info, calls, _state = counted_gapless_probe
+
+    async def run():
+        assert await ignored_mp3_gapless_info(media, str(executable)) == info
+        cancelled = asyncio.Event()
+        cancelled.set()
+        with pytest.raises(asyncio.CancelledError):
+            await ignored_mp3_gapless_info(media, str(executable), cancel_event=cancelled)
+    asyncio.run(run())
+    assert len(calls) == 1
+
+
+def test_identity_recheck_cancellation_survives_missing_identity(counted_gapless_probe, monkeypatch):
+    import music_app.services.mp3_gapless as gapless
+    media, executable, _info, calls, _state = counted_gapless_probe
+
+    async def run():
+        cancelled = asyncio.Event()
+        identities = iter((("owned identity",), None))
+
+        def identity(_path, _executable):
+            result = next(identities)
+            if result is None:
+                cancelled.set()
+            return result
+
+        monkeypatch.setattr(gapless, "_probe_identity", identity)
+        with pytest.raises(asyncio.CancelledError):
+            await gapless.ignored_mp3_gapless_info(media, str(executable), cancel_event=cancelled)
+    asyncio.run(run())
+    assert len(calls) == 1

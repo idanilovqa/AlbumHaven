@@ -1045,7 +1045,7 @@ function scheduleGallerySearchCommit(nextQuery, options = {}) {
 
 function revealArtistTreeForSearch() {
   if (typeof usesMobilePageLayout === 'function' && usesMobilePageLayout()) {
-    const button = document.querySelector('.mobile-artists-mode-button');
+    const button = document.getElementById('mobile-library-button');
     button?.setAttribute('data-search-results', 'true');
     button?.setAttribute('aria-description', 'Search results available in Artists');
     return;
@@ -1066,7 +1066,7 @@ function handleGalleryBootstrapSearchSubmit(event) {
   }
   const input = document.getElementById('search-input');
   const nextQuery = input?.value || '';
-  const mobileArtistsButton = document?.querySelector?.('.mobile-artists-mode-button');
+  const mobileArtistsButton = document?.getElementById?.('mobile-library-button');
   if (String(nextQuery).trim()) revealArtistTreeForSearch();
   else {
     mobileArtistsButton?.removeAttribute('data-search-results');
@@ -1339,6 +1339,7 @@ function commitGallerySearchQuery(nextQuery, options = {}) {
     preserveScroll: String(previousView.query || '') === normalizedQuery,
     restartIfSameUrl: true,
     skipPendingViewTransition: true,
+    showSearchProgress: true,
     shouldApplyResponse: () => state.ui.gallerySearchGeneration === searchGeneration,
     ...(retriesHydration ? {} : { searchPreviewUrl: previewUrl }),
   });
@@ -1982,6 +1983,7 @@ function tryRestoreClearedSearchView(nextView, options = {}) {
     state.ui.pendingViewRequest = null;
     const hadPendingTransition = state.ui.pendingViewTransition;
     state.ui.pendingViewTransition = false;
+    state.ui.pendingGallerySearch = false;
     state.ui.pendingViewTransitionRequestId = 0;
     if (hadPendingTransition) renderLibraryLoader(state.status);
     renderSidebar();

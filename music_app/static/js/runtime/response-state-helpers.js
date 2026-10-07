@@ -1540,6 +1540,7 @@ function applyLocalRelatedFilterState(nextRelatedArtists, options = {}) {
   // their payload arrives later.
   state.ui.viewStateRevision = Number(state.ui.viewStateRevision || 0) + 1;
   state.ui.pendingViewTransition = false;
+  state.ui.pendingGallerySearch = false;
   state.ui.pendingViewTransitionRequestId = 0;
 
   return mergeViewPayload({

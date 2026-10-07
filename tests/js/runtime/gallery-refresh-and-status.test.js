@@ -45,12 +45,14 @@ test(`new search resets the viewport only when full results apply (equivalent to
   context.commitGallerySearchQuery('transatlantic');
   assert.equal(pendingRequests.length, 2);
   assert.equal(context.state.view, previousView);
-  assert.equal(context.state.ui.pendingViewTransition, undefined);
+  assert.equal(context.state.ui.pendingViewTransition, true);
+  assert.equal(context.state.ui.pendingGallerySearch, true);
   assert.equal(renders.length, 0, 'pending search must keep the existing viewport');
   pendingRequests[1].resolveWith({ query: 'transatlantic', payload_tier: 'search_preview', artist_groups: [] });
   await new Promise(resolve => setImmediate(resolve));
   assert.equal(calls.applyViewPayload.length, 0);
   assert.equal(renders.length, 0, 'preview must not reset the existing viewport');
+  assert.equal(context.state.ui.pendingGallerySearch, true, 'preview must not dismiss Searching');
   pendingRequests[0].resolveWith({
     query: 'transatlantic', selected_artist: nextGroups[0].artist, payload_tier: 'full',
     artist_groups: nextGroups, primary_artist_groups: nextGroups, family_artist_groups: [],
@@ -59,6 +61,7 @@ test(`new search resets the viewport only when full results apply (equivalent to
   assert.equal(renders.length, 1, 'the completed new query must reach the viewport renderer');
   assert.equal(renders[0].preserveScroll, false, 'new results must start at the primary artist');
   assert.equal(context.state.view.payload_tier, 'full');
+  assert.equal(context.state.ui.pendingGallerySearch, false);
 });
 }
 
@@ -6580,3 +6583,17 @@ for (const change of ['category', 'scope', 'startup']) {
     assert.equal(f.context.state.view.artist_groups[0].albums.length, 50);
   });
 }
+
+test('search progress belongs to the latest request and clears on failure', async () => {
+  const { context, pendingRequests } = createContext();
+  const first = context.fetchAndRender('/view-data?q=Devin', false, { showSearchProgress: true, preserveScroll: true });
+  assert.equal(context.state.ui.pendingGallerySearch, true);
+  const second = context.fetchAndRender('/view-data?q=Neal', false, { showSearchProgress: true, preserveScroll: true });
+  pendingRequests[0].resolveWith({ query: 'Devin' });
+  await first;
+  assert.equal(context.state.ui.pendingGallerySearch, true, 'superseded completion must not dismiss the current search');
+  pendingRequests[1].rejectWith(new Error('search failed'));
+  await assert.rejects(second, /search failed/);
+  assert.equal(context.state.ui.pendingGallerySearch, false);
+  assert.equal(context.state.ui.pendingViewTransition, false);
+});

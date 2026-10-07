@@ -6527,7 +6527,7 @@ def _root_gallery_membership_sql() -> str:
             on library.libraries.owner_account_id = app.bootstrap_owners.account_id
            and library.libraries.name = 'Local Library' and library.libraries.library_kind = 'local'
           where app.bootstrap_owners.owner_key = 'local-bootstrap-owner' limit 1
-        ), {_eligible_album_tracks_cte_sql(materialized=False, aggregate_tracks=False)}
+        ), {_eligible_album_tracks_cte_sql(materialized=True, aggregate_tracks=False)}
         select distinct artist.id as artist_id, artist.name as artist_name,
           artist.sort_name as artist_sort_name, album.id as album_id, album.album_key,
           album.title as album_title, album.release_year as album_release_year

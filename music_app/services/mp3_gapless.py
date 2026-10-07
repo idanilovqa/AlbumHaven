@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import asyncio
+from collections import OrderedDict
 from dataclasses import dataclass
 import math
 from pathlib import Path
+import shutil
 
 from music_app.services.ffmpeg_runtime import hidden_subprocess_creation_flags
 
@@ -95,11 +97,38 @@ def read_mp3_gapless_info(path: Path) -> Mp3GaplessInfo | None:
     return info if info.first_sample < info.end_sample else None
 
 
+_probe_cache: OrderedDict[tuple, Mp3GaplessInfo | None] = OrderedDict()
+
+
+def _probe_identity(path: Path, executable: str) -> tuple | None:
+    decoder = shutil.which(executable)
+    if decoder is None:
+        return None
+    try:
+        identities = []
+        for candidate in (path, Path(decoder)):
+            resolved = candidate.resolve(strict=True)
+            stat = resolved.stat()
+            identities.append((str(resolved), stat.st_dev, stat.st_ino, stat.st_size,
+                               stat.st_mtime_ns, stat.st_ctime_ns))
+        return tuple(identities)
+    except OSError:
+        return None
+
+
 async def ignored_mp3_gapless_info(
     path: Path, executable: str, *, cancel_event: asyncio.Event | None = None,
 ) -> Mp3GaplessInfo | None:
     if cancel_event is not None and cancel_event.is_set():
         raise asyncio.CancelledError
+    if path.suffix.lower() != ".mp3":
+        return None
+    identity = await asyncio.to_thread(_probe_identity, path, executable)
+    if cancel_event is not None and cancel_event.is_set():
+        raise asyncio.CancelledError
+    if identity is not None and identity in _probe_cache:
+        _probe_cache.move_to_end(identity)
+        return _probe_cache[identity]
     info = await asyncio.to_thread(read_mp3_gapless_info, path)
     if info is None:
         return None
@@ -140,4 +169,13 @@ async def ignored_mp3_gapless_info(
                 pass
             await process.wait()
         await asyncio.gather(*tasks, return_exceptions=True)
-    return None if b"Skip Samples" in output else info
+    result = None if b"Skip Samples" in output else info
+    current_identity = await asyncio.to_thread(_probe_identity, path, executable) if identity is not None else None
+    if cancel_event is not None and cancel_event.is_set():
+        raise asyncio.CancelledError
+    if identity is not None and identity == current_identity:
+        _probe_cache[identity] = result
+        _probe_cache.move_to_end(identity)
+        while len(_probe_cache) > 128:
+            _probe_cache.popitem(last=False)
+    return result

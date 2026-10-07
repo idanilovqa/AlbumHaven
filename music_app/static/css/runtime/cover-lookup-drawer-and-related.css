@@ -635,3 +635,17 @@
     grid-template-columns: 1fr;
   }
 }
+
+/* Search progress overlays the retained gallery without blocking navigation. */
+.library-loader.is-searching {
+  position: absolute;
+  inset: 0;
+  min-height: 0;
+  z-index: 2;
+  pointer-events: none;
+  background: transparent;
+}
+
+.shell-main-surface:has(> .library-loader.is-searching) { position: relative; }
+.library-loader.is-searching .library-status-workspace > :not(.library-status-state),
+.library-loader.is-searching .library-status-state > :not(.library-loader-state-heading) { display: none; }

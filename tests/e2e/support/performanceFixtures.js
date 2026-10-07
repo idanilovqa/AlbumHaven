@@ -2,6 +2,7 @@ import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 
 import { expect, test as base } from './baseFixtures.js';
+import { loadSyntheticSearchInventory } from '../helpers/syntheticSearchInventory.js';
 import { selectedPerformanceContractName } from '../helpers/timingBudget.js';
 import { buildPerformanceAttemptTerminalEvidence } from '../helpers/performanceAttemptTerminalEvidence.js';
 
@@ -664,6 +665,9 @@ async function useSyntheticPerformanceReportFixture({ page, performanceReport },
 }
 
 export const test = base.extend({
+  syntheticSearchInventory: [async ({}, use) => {
+    await use(await loadSyntheticSearchInventory());
+  }, { scope: 'worker' }],
   startupRelationProjectionReadiness: [
     async ({}, use) => use(null),
     { scope: 'worker', auto: true },

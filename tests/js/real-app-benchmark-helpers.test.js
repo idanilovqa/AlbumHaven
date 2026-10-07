@@ -259,3 +259,175 @@ test('startup runtime failure guard rejects console and network failures', async
     { kind: 'httpresponse', type: '500', text: 'GET 500 /view-data' },
   ], 'startup benchmark'));
 });
+
+function buildPagedPostgresRootView() {
+  return {
+    ...buildPostgresRootView('gallery_page'),
+    initial_view_partial: false,
+    artist_count: 2,
+    album_count: 3,
+    artists_sidebar: [{ artist: 'Alpha', count: 2 }, { artist: 'Beta', count: 1 }],
+    artist_groups: [{ artist: 'Alpha', albums: [{ key: 'alpha/first', preview_only: true }] }],
+    gallery_page: {
+      page_size: 1,
+      has_more: true,
+      next_cursor: Buffer.from(JSON.stringify([1, 'a'.repeat(64), 1])).toString('base64url'),
+      revision: 'a'.repeat(64),
+    },
+  };
+}
+
+test('startup authority accepts a bounded complete gallery page with authoritative sidebar and totals', async () => {
+  const { expectRootBrowseStartupAuthorityEvidence, parseProductionBootstrapPayload } =
+    await import('../../tests/e2e/helpers/realAppBenchmarkHelpers.js');
+  const initialView = buildPagedPostgresRootView();
+  const bootstrapPayload = parseProductionBootstrapPayload(buildBootstrapDocument(initialView, {
+    startupPreview: { mode: 'full_view' },
+    startupHydration: { required: false, tier: 'full' },
+  }));
+  const evidence = expectRootBrowseStartupAuthorityEvidence({
+    rootBrowsePayloads: [], bootstrapPayloads: [bootstrapPayload],
+  });
+  assert.equal(evidence.kind, 'paged-root-bootstrap');
+  assert.equal(evidence.payload, bootstrapPayload.startup_payload.first_paint_view);
+});
+
+test('startup authority accepts a complete root page response without requiring full hydration', async () => {
+  const { expectRootBrowseStartupAuthorityEvidence } =
+    await import('../../tests/e2e/helpers/realAppBenchmarkHelpers.js');
+  const payload = buildPagedPostgresRootView();
+  assert.equal(expectRootBrowseStartupAuthorityEvidence({ rootBrowsePayloads: [payload] }).kind,
+    'paged-root-view-data');
+});
+
+test('paged startup authority rejects partial pages, incomplete metadata and unbounded hydration', async () => {
+  const { expectRootBrowseStartupAuthorityEvidence } =
+    await import('../../tests/e2e/helpers/realAppBenchmarkHelpers.js');
+  for (const invalidate of [
+    (view) => { view.initial_view_partial = true; },
+    (view) => { view.artists_sidebar.pop(); },
+    (view) => { view.album_count = 0; },
+    (view) => { view.gallery_page.page_size = 101; },
+    (view) => { view.gallery_page.next_cursor = null; },
+    (view) => { view.gallery_page.next_cursor = 'invalid'; },
+    (view) => { view.gallery_page.revision = ''; },
+    (view) => { view.artist_groups[0].albums.push({ key: 'extra' }); },
+  ]) {
+    const payload = buildPagedPostgresRootView();
+    invalidate(payload);
+    assert.throws(() => expectRootBrowseStartupAuthorityEvidence({ rootBrowsePayloads: [payload] }));
+  }
+});
+test('startup entry recognizes bounded root paint only with the complete sidebar metadata', async () => {
+  const { readLibraryStartupEntrySnapshot } =
+    await import('../../tests/e2e/helpers/realAppBenchmarkHelpers.js');
+  withRenderedPostgresSidebarPreview(({ selectors }) => {
+    global.state.view = {
+      ...buildPagedPostgresRootView(),
+      artist_count: 128,
+      album_count: 128,
+      artists_sidebar: Array.from({ length: 128 }, (_, index) => ({ artist: `Artist ${index}`, count: 1 })),
+    };
+    const originalQuerySelector = global.document.querySelector;
+    global.document.querySelector = (selector) => selector === selectors.activeAllArtistsCountSelector
+      ? { textContent: '128' } : originalQuerySelector(selector);
+    const snapshot = readLibraryStartupEntrySnapshot(selectors);
+    assert.equal(snapshot.startupMode, 'postgres-paged-root');
+    assert.equal(snapshot.visibleSidebarArtistCount, 40);
+    assert.equal(snapshot.runtimeSidebarArtistCount, 128);
+    assert.equal(snapshot.visibleAllArtistsCount, 128);
+    global.state.view.artists_sidebar.pop();
+    assert.equal(readLibraryStartupEntrySnapshot(selectors), false);
+  });
+});
+
+test('manual paged startup evidence requires synchronized authoritative artist totals', async () => {
+  const { expectManualStartupEntryPath } =
+    await import('../../tests/e2e/helpers/realAppBenchmarkHelpers.js');
+  const snapshot = {
+    startupMode: 'postgres-paged-root',
+    runtimePostgresBrowse: true,
+    runtimePayloadTier: 'gallery_page',
+    runtimeSidebarArtistCount: 128,
+    runtimeArtistCount: 128,
+    visibleSidebarArtistCount: 40,
+    visibleAllArtistsCount: 128,
+    firstGalleryPaintSectionCount: 1,
+  };
+  assert.doesNotThrow(() => expectManualStartupEntryPath(snapshot, 'paged startup'));
+  assert.throws(() => expectManualStartupEntryPath({ ...snapshot, runtimeSidebarArtistCount: 40 }, 'paged startup'));
+  assert.throws(() => expectManualStartupEntryPath({ ...snapshot, visibleAllArtistsCount: 40 }, 'paged startup'));
+});
+
+test('paged authority distinguishes an accumulated runtime from one bounded response', async () => {
+  const { expectPagedRootBrowseAuthority } = await import('../../tests/e2e/helpers/realAppBenchmarkHelpers.js');
+  const payload = buildPagedPostgresRootView();
+  payload.artist_groups[0].albums.push({ key: 'alpha/second', preview_only: true });
+  payload.gallery_page.next_cursor = Buffer.from(JSON.stringify([1, payload.gallery_page.revision, 2])).toString('base64url');
+  assert.throws(() => expectPagedRootBrowseAuthority(payload));
+  assert.doesNotThrow(() => expectPagedRootBrowseAuthority(payload, { accumulated: true }));
+  payload.gallery_page.next_cursor = Buffer.from(JSON.stringify([1, payload.gallery_page.revision, 3])).toString('base64url');
+  assert.throws(() => expectPagedRootBrowseAuthority(payload, { accumulated: true }));
+});
+
+test('startup authority keeps bootstrap evidence separate from cursor continuation responses', async () => {
+  const { collectRootBrowseStartupAuthorityEvidence, expectRootBrowseStartupAuthorityEvidence } = await import('../../tests/e2e/helpers/realAppBenchmarkHelpers.js');
+  let listener;
+  const page = { on: (_event, callback) => { listener = callback; }, off: () => {} };
+  const initialView = buildPagedPostgresRootView();
+  const document = buildBootstrapDocument(initialView, {
+    startupPreview: { mode: 'full_view' }, startupHydration: { required: false, tier: 'full' },
+  });
+  const evidence = await collectRootBrowseStartupAuthorityEvidence(page, async () => {
+    listener({ url: () => 'http://localhost/?surface=albums', request: () => ({ resourceType: () => 'document' }), text: async () => document });
+    listener({ url: () => 'http://localhost/view-data?surface=albums&gallery_cursor=next&omit_sidebar=1',
+      request: () => ({ resourceType: () => 'fetch' }), json: async () => { throw new Error('A continuation cannot replace initial authority'); } });
+  });
+  assert.deepEqual(evidence.rootBrowsePayloads, []);
+  assert.equal(expectRootBrowseStartupAuthorityEvidence(evidence).kind, 'paged-root-bootstrap');
+});
+
+
+test('paged root wire summaries reject track payloads, including empty arrays', async () => {
+  const { expectRootBrowseStartupAuthorityEvidence } = await import('../../tests/e2e/helpers/realAppBenchmarkHelpers.js');
+  for (const tracks of [[], [{ title: 'Unexpected hydration' }], null, {}]) {
+    const payload = buildPagedPostgresRootView();
+    payload.artist_groups[0].albums[0].tracks = tracks;
+    assert.throws(() => expectRootBrowseStartupAuthorityEvidence({ rootBrowsePayloads: [payload] }));
+  }
+});
+
+test('embedded root previews allow empty tracks without relaxing page bounds', async () => {
+  const { expectRootBrowseStartupAuthorityEvidence, parseProductionBootstrapPayload } =
+    await import('../../tests/e2e/helpers/realAppBenchmarkHelpers.js');
+  const payload = buildPagedPostgresRootView();
+  const check = () => expectRootBrowseStartupAuthorityEvidence({ bootstrapPayloads: [
+    parseProductionBootstrapPayload(buildBootstrapDocument(payload, {
+      startupPreview: { mode: 'full_view' },
+      startupHydration: { tier: 'full', required: false },
+    })),
+  ] });
+  assert.doesNotThrow(check);
+  payload.artist_groups[0].albums[0].tracks = [];
+  assert.doesNotThrow(check);
+  for (const tracks of [[{ title: 'Unexpected hydration' }], null, {}, '', false]) {
+    payload.artist_groups[0].albums[0].tracks = tracks;
+    assert.throws(check);
+  }
+  payload.artist_groups[0].albums[0].tracks = [];
+  payload.artist_groups[0].albums.push({ key: 'unexpected-second', preview_only: true, tracks: [] });
+  payload.gallery_page.next_cursor = Buffer.from(JSON.stringify([1, payload.gallery_page.revision, 2])).toString('base64url');
+  assert.throws(check);
+});
+
+test('paged root runtime summaries allow only omitted or empty track arrays', async () => {
+  const { expectPagedRootBrowseAuthority } = await import('../../tests/e2e/helpers/realAppBenchmarkHelpers.js');
+  const payload = buildPagedPostgresRootView();
+  assert.doesNotThrow(() => expectPagedRootBrowseAuthority(payload, { accumulated: true }));
+  payload.artist_groups[0].albums[0].tracks = [];
+  assert.doesNotThrow(() => expectPagedRootBrowseAuthority(payload, { accumulated: true }));
+  for (const tracks of [[{ title: 'Unexpected hydration' }], null, {}, '', false]) {
+    payload.artist_groups[0].albums[0].tracks = tracks;
+    assert.throws(() => expectPagedRootBrowseAuthority(payload, { accumulated: true }));
+  }
+});

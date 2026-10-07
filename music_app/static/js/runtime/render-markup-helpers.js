@@ -58,6 +58,14 @@ function resolveSidebarArtistCount(view = {}, sidebarArtists = []) {
   return sidebarArtists.length;
 }
 
+function usesCanonicalSidebarArtistOrder(view = {}, options = {}) {
+  const selectedArtist = resolveSidebarSelectedArtist(view, options);
+  const allArtistsActive = Object.prototype.hasOwnProperty.call(options, 'allArtistsActiveOverride')
+    ? Boolean(options.allArtistsActiveOverride)
+    : Boolean(resolveSidebarSurface(view) === 'albums' && (view.all_artists_active || (!view.query && !selectedArtist)));
+  return allArtistsActive && !view.query && !selectedArtist;
+}
+
 function buildSidebarHtml(view = {}, sidebarArtists = [], options = {}) {
   const activeSurface = resolveSidebarSurface(view);
   const showAllArtistsLink = Object.prototype.hasOwnProperty.call(options, 'showAllArtistsOverride')
@@ -74,7 +82,8 @@ function buildSidebarHtml(view = {}, sidebarArtists = [], options = {}) {
     label: 'All artists', href: '/?surface=albums', key: 'all-artists', count: artistCount,
     selected: allArtistsActive, attributes: { 'data-nav': '1', 'data-sidebar-all-artists': '1' },
   }) : '';
-  const displayedSidebarArtists = [...sidebarArtists].sort((left, right) => {
+  const displayedSidebarArtists = [...sidebarArtists];
+  if (!usesCanonicalSidebarArtistOrder(view, options)) displayedSidebarArtists.sort((left, right) => {
     const leftLabel = String(left?.artist_display || left?.artist || '');
     const rightLabel = String(right?.artist_display || right?.artist || '');
     return leftLabel.localeCompare(rightLabel, 'en', { numeric: true, sensitivity: 'base' });
@@ -102,7 +111,8 @@ function buildSidebarStructureSignature(sidebarArtists = [], options = {}) {
     String(item?.artist_display || item?.artist || ''),
     String(item?.count ?? ''),
   ].join('\u001f')).join('\u001e');
-  return `${showAllArtistsLink}\u001d${artistSignature}`;
+  const artistOrder = usesCanonicalSidebarArtistOrder(options.view || {}, options) ? 'canonical' : 'natural';
+  return `${showAllArtistsLink}\u001d${artistOrder}\u001d${artistSignature}`;
 }
 
 function applySidebarSelectionMarkup(container, options = {}) {

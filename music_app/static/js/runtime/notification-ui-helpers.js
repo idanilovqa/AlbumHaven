@@ -88,7 +88,7 @@ function placeFloatingNotifications() {
     };
     const position = findClearNotificationPosition(size, preferred, viewport, obstacles);
     if (!position) {
-      if (!entry.presented) node.setAttribute('data-notification-deferred', '');
+      node.setAttribute('data-notification-deferred', '');
       continue;
     }
     for (const [key, value] of Object.entries(position)) {

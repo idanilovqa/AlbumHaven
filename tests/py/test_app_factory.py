@@ -54,6 +54,7 @@ def _stub_relation_projection_startup(monkeypatch):
         return {"ready": True, "relation_views": runtime.library_state.get("relation_views", {})}
 
     monkeypatch.setattr(state, "ensure_runtime_relation_projection_ready", ensure_ready)
+    monkeypatch.setattr(state, "recover_runtime_library_persistence_on_startup", lambda _runtime: None)
     monkeypatch.setattr(
         scan_cache_persistence,
         "select_scan_cache_adapter",
@@ -522,6 +523,9 @@ def test_create_asgi_app_lifespan_requests_warmup_stop_before_worker_shutdown(
     calls = []
 
     class WarmupHandle:
+        def request_stop(self):
+            pass
+
         async def stop(self):
             calls.append("warmup-stop")
 
@@ -663,6 +667,10 @@ def test_library_warmup_stop_during_postgres_prewarm_skips_relation_projection()
 
 
 def test_create_asgi_app_lifespan_starts_when_background_relation_projection_fails(monkeypatch):
+    monkeypatch.setattr(
+        "music_app.services.state.hydrate_runtime_scan_metadata_on_startup",
+        lambda _runtime: None,
+    )
     from config import Config
     from music_app import create_asgi_app
     from music_app.services import lastfm_retry, postgres_connections, state
@@ -699,6 +707,10 @@ def test_create_asgi_app_lifespan_starts_when_background_relation_projection_fai
 
 
 def test_postgres_lifespan_cancels_relation_projection_warmup_before_shutdown(monkeypatch):
+    monkeypatch.setattr(
+        "music_app.services.state.hydrate_runtime_scan_metadata_on_startup",
+        lambda _runtime: None,
+    )
     import music_app
     from config import Config
     from music_app import create_asgi_app
@@ -758,6 +770,12 @@ def test_postgres_lifespan_cancels_relation_projection_warmup_before_shutdown(mo
     monkeypatch.setattr(runtime_shutdown, "request_runtime_shutdown", lambda _runtime: None)
     monkeypatch.setattr(music_app._LibraryWarmupHandle, "request_stop", request_stop)
 
+    # This case owns relation-worker cancellation; unrelated cover I/O must
+    # not contact the deliberately nonexistent database or delay teardown.
+    from music_app.services.cover_preview_backfill import CoverPreviewBackfill
+    monkeypatch.setattr(CoverPreviewBackfill, "start", lambda _self: None)
+    monkeypatch.setattr(CoverPreviewBackfill, "stop", lambda _self: None)
+
     asgi_app = create_asgi_app()
 
     messages = []
@@ -802,6 +820,7 @@ def test_postgres_lifespan_logs_pool_prewarm_failure_and_continues_relations(
     from music_app import create_asgi_app
     from music_app.services import lastfm_retry, postgres_connections, runtime_shutdown, state
 
+    monkeypatch.setattr(state, "hydrate_runtime_scan_metadata_on_startup", lambda _runtime: None)
     calls = []
     database_url = "postgresql://album_haven_app@localhost/app"
 
@@ -931,7 +950,8 @@ def test_create_asgi_app_lifespan_schedules_only_incomplete_hydrated_metadata_re
     assert scan_calls == expected_scan_calls
 
 
-def test_empty_postgres_startup_submits_one_scan_and_keeps_root_and_status_available(monkeypatch):
+@pytest.mark.parametrize("root_query", [{}, {"surface": "albums"}], ids=["home", "albums"])
+def test_empty_postgres_startup_submits_one_scan_and_keeps_root_and_status_available(monkeypatch, root_query):
     from config import Config
     from music_app import create_asgi_app
     from music_app.routes import web_asgi
@@ -967,6 +987,10 @@ def test_empty_postgres_startup_submits_one_scan_and_keeps_root_and_status_avail
                 }
             )
 
+    monkeypatch.setattr(
+        "music_app.routes.api_read_asgi_routes.load_database_identity_status",
+        lambda *_args, **_kwargs: {},
+    )
     submissions = []
     monkeypatch.setattr(
         Config,
@@ -1030,7 +1054,7 @@ def test_empty_postgres_startup_submits_one_scan_and_keeps_root_and_status_avail
     ]
     assert submissions == []
     assert asgi_app.state.library_state["cold_scan_pending"] is False
-    root_status, _root_headers, root_body = _run_asgi_http_get(asgi_app, "/")
+    root_status, _root_headers, root_body = run_asgi_request(asgi_app, "GET", "/", query=root_query)
     status_status, _status_headers, status_body = _run_asgi_http_get(asgi_app, "/status")
 
     assert root_status == 200
@@ -1407,3 +1431,124 @@ def test_route_method_collection_uses_prefixed_nested_paths():
     synthetic_app = types.SimpleNamespace(router=types.SimpleNamespace(routes=[nested_mount]))
 
     assert _collect_route_methods(synthetic_app) == {"/api/status": {"GET"}}
+
+
+def test_postgres_warmup_loads_scan_timestamp_without_inventory_hydration():
+    import asyncio
+    from music_app import _start_library_warmup
+
+    completed = threading.Event()
+    calls = []
+    runtime = types.SimpleNamespace(
+        config={"ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://test/isolated"},
+        logger=logging.getLogger("test-metadata-only-warmup"),
+        library_state={"last_scan": 0.0, "file_cache": {}},
+    )
+
+    def load_metadata(app):
+        calls.append("metadata")
+        app.library_state["last_scan"] = 1609459200.0
+
+    def ensure_relations(app, **_options):
+        calls.append("relations")
+        assert app.library_state["last_scan"] == 1609459200.0
+        completed.set()
+
+    def unexpected_inventory_hydration(_app):
+        raise AssertionError("PostgreSQL startup must not load full inventory")
+
+    handle = _start_library_warmup(
+        runtime, unexpected_inventory_hydration, ensure_relations,
+        unexpected_inventory_hydration, lambda _url: None,
+        hydrate_metadata=load_metadata,
+    )
+    try:
+        assert completed.wait(5)
+        assert calls == ["metadata", "relations"]
+        assert runtime.library_state["file_cache"] == {}
+    finally:
+        asyncio.run(handle.stop())
+
+
+def test_postgres_warmup_metadata_failure_does_not_skip_relation_initialization():
+    import asyncio
+    from music_app import _start_library_warmup
+
+    completed = threading.Event()
+    runtime = types.SimpleNamespace(
+        config={"ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://test/isolated"},
+        logger=logging.getLogger("test-metadata-failure-warmup"), library_state={},
+    )
+
+    def broken_metadata(_runtime):
+        raise RuntimeError("metadata unavailable")
+
+    handle = _start_library_warmup(
+        runtime, lambda _app: None, lambda *_args, **_kwargs: completed.set(),
+        lambda _app: None, lambda _url: None, hydrate_metadata=broken_metadata,
+    )
+    try:
+        assert completed.wait(2), "Optional timestamp failure must not skip relation initialization"
+    finally:
+        asyncio.run(handle.stop())
+
+
+def test_postgres_warmup_runs_recovery_before_metadata_without_full_hydration():
+    from types import SimpleNamespace
+    from unittest.mock import Mock
+    from music_app import _start_library_warmup
+
+    calls = []
+    runtime = SimpleNamespace(config={"ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://isolated/test"}, logger=Mock())
+    handle = _start_library_warmup(
+        runtime,
+        lambda _runtime: calls.append("full_hydrate"),
+        lambda _runtime, **_kwargs: calls.append("relations"),
+        lambda *_args, **_kwargs: calls.append("scan"),
+        lambda _url: calls.append("prewarm"),
+        hydrate_metadata=lambda _runtime: calls.append("metadata"),
+        recover_persistence=lambda _runtime: calls.append("recovery"),
+    )
+    handle._worker.join(timeout=2)
+    assert not handle._worker.is_alive()
+    assert calls == ["prewarm", "recovery", "metadata", "relations"]
+
+def test_lifespan_compiles_templates_without_rendering_before_first_request(monkeypatch):
+    from jinja2 import DictLoader, Template
+    from music_app import create_asgi_app
+
+    app = create_asgi_app()
+    environment = app.state.templates.env
+    environment.loader = DictLoader({
+        "index.html": "{% include 'fragment.html' %}",
+        "fragment.html": "{{ viewer }}",
+    })
+    def unexpected_render(*_args, **_kwargs):
+        raise AssertionError("Startup must compile templates without rendering request data")
+    with monkeypatch.context() as startup_patch:
+        startup_patch.setattr(Template, "render", unexpected_render)
+        assert _run_asgi_lifespan(app) == [
+            {"type": "lifespan.startup.complete"},
+            {"type": "lifespan.shutdown.complete"},
+        ]
+    def unexpected_compile(*_args, **_kwargs):
+        raise AssertionError("First request should reuse templates compiled at startup")
+    monkeypatch.setattr(environment, "compile", unexpected_compile)
+    assert environment.get_template("index.html").render(viewer="first viewer") == "first viewer"
+
+
+def test_lifespan_template_warmup_preserves_template_reload():
+    from jinja2 import DictLoader
+    from music_app import create_asgi_app
+
+    app = create_asgi_app()
+    environment = app.state.templates.env
+    source = {"index.html": "before"}
+    environment.loader = DictLoader(source)
+    assert environment.auto_reload is True
+    assert _run_asgi_lifespan(app)[0] == {"type": "lifespan.startup.complete"}
+    before = environment.get_template("index.html")
+    source["index.html"] = "after"
+    after = environment.get_template("index.html")
+    assert after is not before
+    assert after.render() == "after"

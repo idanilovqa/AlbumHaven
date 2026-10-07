@@ -17,7 +17,7 @@ const validatorTest = validatorExists ? test : test.skip;
 const { FUNCTIONAL_SHARDS } = require('../../scripts/ci/resolve-ci-shard.cjs');
 
 const EXPECTED_SHARD_COUNTS = new Map([
-  ['gallery-search-visual', 47],
+  ['gallery-search-visual', 49],
   ['cover-providers', 20],
   ['metadata-mutations', 14],
   ['playback-utilities', 40],
@@ -110,7 +110,7 @@ function functionalJobSource() {
   return { workflow, job: workflow.slice(start, end) };
 }
 
-test('functional shard contract pins the approved four-way 121-case assignment', () => {
+test('functional shard contract pins the approved four-way 123-case assignment', () => {
   const contract = readJson(shardContractPath);
   assert.equal(contract.browser, 'chrome');
   assert.equal(contract.workersPerInvocation, 1);
@@ -124,7 +124,7 @@ test('functional shard contract pins the approved four-way 121-case assignment',
     assert.ok(shard.invocations.length > 0, `${shard.name} must not be empty`);
     assert.ok(shard.suitePrerequisites.length > 0, `${shard.name} must declare prerequisites`);
   }
-  assert.equal(total, 121);
+  assert.equal(total, 123);
   for (const ownedCase of ownedCases(contract)) {
     assert.match(ownedCase.area, /^[a-z]+(?:-[a-z]+)*$/, ownedCase.case);
   }
@@ -763,7 +763,7 @@ validatorTest('gallery startup projections share one early app process before is
   assert.equal(waves[0].invocations[0], isolatedFirstWave[0]);
   assert.equal(waves[0].invocations[1].baselineMode, 'shared-setup');
   const sharedReaderNames = waves[0].invocations[1].cases.map((ownedCase) => ownedCase.case);
-  assert.equal(sharedReaderNames.length, 26);
+  assert.equal(sharedReaderNames.length, 27);
   const artistTreeCase = 'FTC-ARTIST-TREE-002 preserves collapsed and expanded preferences after reload';
   assert.equal(sharedReaderNames.includes(artistTreeCase), false);
   const artistTreeInvocations = waves[1].invocations.filter(invocation => invocation.cases.some(ownedCase => ownedCase.case === artistTreeCase));
@@ -914,7 +914,7 @@ validatorTest('all four shards use explicit effect-compatible wave budgets', () 
   const contract = readJson(shardContractPath);
   const matrix = readJson(path.join(repoRoot, 'tests', 'ci', 'test-data-matrix.json'));
   const expected = new Map([
-    ['gallery-search-visual', { cases: 47, waves: [1, 2] }],
+    ['gallery-search-visual', { cases: 49, waves: [1, 2] }],
     ['cover-providers', { cases: 20, waves: [1, 2] }],
     ['metadata-mutations', { cases: 14, waves: [1, 2, 3] }],
     ['playback-utilities', { cases: 40, waves: [1, 2, 3, 4] }],

@@ -26,6 +26,12 @@ def app(tmp_path, monkeypatch):
         def __init__(self, config):
             self.config = config
 
+        def intent_lease(self):
+            return self
+
+        def release(self):
+            pass
+
         def prepare_intent(self, *, library_root_identity, changes):
             assert library_root_identity == "test-root"
             assert changes
@@ -3331,9 +3337,17 @@ def test_asgi_edit_tags_mixed_media_write_requires_refresh_without_legacy_fragme
         def upsert_exception_overrides(self, values):
             saved_overrides.append(dict(values))
 
-    class FailingPostgresBrowseRepository:
+    class InventoryOnlyPostgresBrowseRepository:
         def __init__(self, _config):
-            raise AssertionError("mixed media-write edit-tags must not instantiate Postgres projection")
+            pass
+
+        def build_album_payloads_by_track_paths(self, paths):
+            assert set(paths) == {track_path}
+            return [{"tracks": [{"path": track_path}]}]
+
+        def build_track_file_entries_by_paths(self, paths):
+            assert set(paths) == {track_path}
+            return {track_path: dict(app.library_state["file_cache"][track_path])}
 
     def fake_media_worker(path, repairs):
         media_jobs.append((path, dict(repairs)))
@@ -3369,7 +3383,7 @@ def test_asgi_edit_tags_mixed_media_write_requires_refresh_without_legacy_fragme
     monkeypatch.setattr("music_app.services.rule_state_postgres.psycopg", FakeRuleStatePsycopg())
     monkeypatch.setattr("music_app.services.library_browse_postgres.psycopg", FakeLibraryBrowsePsycopg())
     monkeypatch.setattr(exception_overrides_module, "RuleStatePostgresAdapter", FakeExceptionOverridesAdapter)
-    monkeypatch.setattr(asgi_routes, "PostgresLibraryBrowseRepository", FailingPostgresBrowseRepository, raising=False)
+    monkeypatch.setattr(asgi_routes, "PostgresLibraryBrowseRepository", InventoryOnlyPostgresBrowseRepository, raising=False)
     monkeypatch.setattr(asgi_routes, "_apply_repairs_worker", fake_media_worker)
     monkeypatch.setattr(asgi_routes, "_update_cache_entry_after_repairs", fake_update_cache_entry_after_repairs)
     monkeypatch.setattr(asgi_routes, "_build_affected_album_dicts", fail_legacy_album_builder)
@@ -3432,9 +3446,17 @@ def test_asgi_edit_tags_selected_postgres_targeted_inventory_save_task_completio
         }
     }
 
-    class FailingPostgresBrowseRepository:
+    class InventoryOnlyPostgresBrowseRepository:
         def __init__(self, _config):
-            raise AssertionError("selected media-write edit-tags save tasks must not instantiate Postgres fragments")
+            pass
+
+        def build_album_payloads_by_track_paths(self, paths):
+            assert set(paths) == {track_path}
+            return [{"tracks": [{"path": track_path}]}]
+
+        def build_track_file_entries_by_paths(self, paths):
+            assert set(paths) == {track_path}
+            return {track_path: dict(app.library_state["file_cache"][track_path])}
 
     def fake_media_worker(path, repairs):
         return path, True, ["title"]
@@ -3461,7 +3483,7 @@ def test_asgi_edit_tags_selected_postgres_targeted_inventory_save_task_completio
         finally:
             kwargs["structural_tag_edit_reservation"].release()
 
-    monkeypatch.setattr(asgi_routes, "PostgresLibraryBrowseRepository", FailingPostgresBrowseRepository, raising=False)
+    monkeypatch.setattr(asgi_routes, "PostgresLibraryBrowseRepository", InventoryOnlyPostgresBrowseRepository, raising=False)
     monkeypatch.setattr(asgi_routes, "_apply_repairs_worker", fake_media_worker)
     monkeypatch.setattr(asgi_routes, "_update_cache_entry_after_repairs", fake_update_cache_entry_after_repairs)
     monkeypatch.setattr(asgi_routes, "_build_affected_album_dicts", lambda *_args, **_kwargs: [])
@@ -4611,9 +4633,11 @@ def test_asgi_bridge_finalize_default_problematic_matcher_uses_explicit_dependen
     assert observed["logger"] is sentinel_logger
 
 
+@pytest.mark.parametrize("unrelated_exception", ["", "Interview", "Non-album rarity"])
 def test_asgi_bridge_clear_exception_restores_postgres_album_membership(
     app,
     monkeypatch,
+    unrelated_exception,
 ):
     from music_app.routes import api_wave_a_asgi_routes as asgi_routes
 
@@ -4646,6 +4670,7 @@ def test_asgi_bridge_clear_exception_restores_postgres_album_membership(
             }
         },
         updated_file_cache={
+            "unrelated.flac": {"album": "Other", "exception_type": unrelated_exception},
             track_path: {
                 "path": track_path,
                 "album": "Album",
@@ -5322,3 +5347,110 @@ def test_disjoint_non_album_media_writes_overlap(
 
     assert len(entered) == 2
     assert all(result[0] == 200 for result in results)
+
+
+def test_postgres_media_edit_hydrates_selected_inventory_when_runtime_cache_is_empty(app, asgi_app, monkeypatch):
+    from music_app.routes import api_wave_a_asgi_routes as routes
+
+    track_path = "C:/Music/Artist/Album/selected.flac"
+    app.config["ALBUM_HAVEN_APP_DATABASE_URL"] = "postgresql://unused@localhost/test"
+    app.library_state["file_cache"] = {}
+    app.library_state["albums"] = []
+    selected_entry = {"path": track_path, "title": "Original", "album": "Album"}
+
+    class Repository:
+        def __init__(self, config):
+            pass
+
+        def build_track_file_entries_by_paths(self, paths):
+            assert set(paths) == {track_path}
+            return {track_path: dict(selected_entry)}
+
+        def build_album_payloads_by_track_paths(self, paths):
+            return [{"key": "artist-album", "tracks": [dict(selected_entry)]}]
+
+    def handle(**options):
+        try:
+            assert options["get_state"]()["file_cache"][track_path] == selected_entry
+            return {"ok": True}
+        finally:
+            options["structural_tag_edit_reservation"].release()
+
+    monkeypatch.setattr(routes, "PostgresLibraryBrowseRepository", Repository)
+    monkeypatch.setattr(routes, "handle_edit_tags_request", handle)
+    monkeypatch.setattr(routes, "_edit_tags_queue_finalize_save_task_builder", lambda *args: lambda **kwargs: None)
+    status, _, body = _run_asgi_request(asgi_app, "POST", "/utilities/edit-tags", json_body={
+        "confirmed": True,
+        "album": {"tracks": [{"path": track_path}]},
+        "updates": {track_path: {"title": "Changed"}},
+    })
+    assert status == 200, body
+    assert app.library_state["file_cache"] == {}
+
+
+@pytest.mark.parametrize("selected_cached", [False, True])
+def test_postgres_blank_album_edit_hydrates_siblings_for_inferred_membership(app, asgi_app, monkeypatch, selected_cached):
+    from music_app.routes import api_wave_a_asgi_routes as routes
+    from music_app.services.non_album_view_payloads import infer_blank_album_membership
+
+    entries = {
+        f"C:/Music/Artist/Album/{number:02d} - Song.mp3": {
+            "path": f"C:/Music/Artist/Album/{number:02d} - Song.mp3",
+            "title": f"Song {number}", "album": "Album", "artist": "Artist",
+            "album_artist": "Artist", "track_number": number,
+        }
+        for number in range(1, 19)
+    }
+    selected_path = list(entries)[1]
+    app.config["ALBUM_HAVEN_APP_DATABASE_URL"] = "postgresql://unused@localhost/test"
+    original_cache = {selected_path: dict(entries[selected_path])} if selected_cached else {}
+    app.library_state["file_cache"] = original_cache
+
+    class Repository:
+        def __init__(self, config):
+            pass
+
+        def build_album_payloads_by_track_paths(self, paths):
+            assert set(paths) == {selected_path}
+            return [{"tracks": list(entries.values())}]
+
+        def build_track_file_entries_by_paths(self, paths):
+            return {path: dict(entries[path]) for path in paths}
+
+    observed_entries = {}
+
+    def handle(**options):
+        try:
+            observed_entries.update(options["get_state"]()["file_cache"])
+            return {"ok": True}
+        finally:
+            options["structural_tag_edit_reservation"].release()
+
+    monkeypatch.setattr(routes, "PostgresLibraryBrowseRepository", Repository)
+    monkeypatch.setattr(routes, "handle_edit_tags_request", handle)
+    monkeypatch.setattr(routes, "_edit_tags_queue_finalize_save_task_builder", lambda *args: lambda **kwargs: None)
+    status, _, body = _run_asgi_request(asgi_app, "POST", "/utilities/edit-tags", json_body={
+        "confirmed": True, "album": {"tracks": [{"path": selected_path}]},
+        "updates": {selected_path: {"album": ""}},
+    })
+    assert status == 200, body
+    assert len(observed_entries) == 18
+    cleared = {**observed_entries[selected_path], "album": ""}
+    assert infer_blank_album_membership(cleared, observed_entries.values()) == "Album"
+    assert app.library_state["file_cache"] == original_cache
+
+
+def test_edit_tag_reservation_releases_intent_and_structural_owners_even_on_failure():
+    from music_app.routes import api_wave_a_asgi_routes as asgi_routes
+    releases = []
+    def fail_release():
+        releases.append("intent")
+        raise RuntimeError("session lost")
+    reservation = asgi_routes._EditTagsReservation(
+        SimpleNamespace(release=fail_release),
+        SimpleNamespace(release=lambda: releases.append("structural")),
+    )
+    with pytest.raises(RuntimeError, match="session lost"):
+        reservation.release()
+    reservation.release()
+    assert releases == ["intent", "structural"]

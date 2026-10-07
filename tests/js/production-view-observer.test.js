@@ -139,6 +139,24 @@ test('DOM evidence stability rejects attachment and applied-artist changes durin
   ), true);
 });
 
+test('a concurrent search preview cannot replace the observed complete payload', async () => {
+  const { ProductionViewObserver } = await import(observerUrl);
+  const page = new FakePage();
+  const observer = new ProductionViewObserver(page, page);
+  const fullRequest = request('http://127.0.0.1/view-data?q=Neal');
+  const previewRequest = request('http://127.0.0.1/view-data?q=Neal&payload_tier=search_preview');
+  page.emit('request', fullRequest);
+  page.emit('request', previewRequest);
+  page.emit('response', response(fullRequest, { payload_tier: 'full', query: 'Neal' }));
+  page.emit('requestfinished', fullRequest);
+  page.emit('response', response(previewRequest, { payload_tier: 'search_preview', query: 'Neal' }));
+  page.emit('requestfinished', previewRequest);
+  await flushPromises();
+  assert.equal(observer.read().latestFullPayload?.payload_tier, 'full');
+  assert.equal(observer.read().latestFullPayloadError, null);
+  assert.equal(observer.read().activeRequestCount, 0);
+});
+
 test('production view observer ignores sidebar payloads and retains the latest full request payload', async () => {
   const { ProductionViewObserver } = await import(observerUrl);
   const page = new FakePage();

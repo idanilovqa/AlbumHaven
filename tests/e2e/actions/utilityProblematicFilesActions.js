@@ -11,6 +11,7 @@ export class UtilityProblematicFilesActions {
   async waitForReady(options = {}) {
     const timeout = options.timeout || 60000;
     await this.utilityProblematicFilesTab.waitForPageCondition((expected) => {
+      if (typeof state !== 'undefined' && state.utility?.loading) return false;
       const isVisible = (element) => Boolean(element && (
         element.offsetWidth
         || element.offsetHeight
@@ -84,12 +85,14 @@ export class UtilityProblematicFilesActions {
       elements.map((element) => ({
         key: String(element.getAttribute('data-problematic-album-key') || ''),
         title: String(element.querySelector(selectors.titleSelector)?.textContent || '').trim(),
-        meta: String(element.querySelector(selectors.metaSelector)?.textContent || '').trim(),
+        meta: [selectors.subtitleSelector, selectors.yearSelector]
+          .map(selector => String(element.querySelector(selector)?.textContent || '').trim()).filter(Boolean).join(' · '),
         issues: String(element.querySelector(selectors.issuesSelector)?.textContent || '').trim(),
       })).filter((item) => item.key)
     ), {
       titleSelector: this.utilityProblematicFilesTab.listItemTitleSelector,
-      metaSelector: this.utilityProblematicFilesTab.listItemMetaSelector,
+      subtitleSelector: this.utilityProblematicFilesTab.listItemSubtitleSelector,
+      yearSelector: this.utilityProblematicFilesTab.listItemYearSelector,
       issuesSelector: this.utilityProblematicFilesTab.listItemIssuesSelector,
     });
   }
@@ -190,7 +193,7 @@ export class UtilityProblematicFilesActions {
     return {
       key: (await activeItem.getAttribute('data-problematic-album-key')) || '',
       title: ((await this.utilityProblematicFilesTab.titleForListItem(activeItem).textContent()) || '').trim(),
-      meta: ((await this.utilityProblematicFilesTab.metaForListItem(activeItem).textContent()) || '').trim(),
+      meta: await this.utilityProblematicFilesTab.readListItemMeta(activeItem),
     };
   }
 
@@ -301,7 +304,7 @@ export class UtilityProblematicFilesActions {
 
   async waitForSelectedDetailSelection({ expectedKey = '', expectedTitle = '' } = {}, options = {}) {
     await this.utilityProblematicFilesTab.waitForPageCondition((expected) => {
-      if (typeof state === 'undefined') return false;
+      if (typeof state === 'undefined' || state.utility?.loading) return false;
       if (expected.key && String(state.utility?.selectedProblematicKey || '') !== expected.key) {
         return false;
       }
@@ -334,21 +337,17 @@ export class UtilityProblematicFilesActions {
   }
 
   async readDetectedTrackRows() {
-    const rows = this.utilityProblematicFilesTab.detailTrackRows;
-    const result = [];
-    for (let index = 0; index < await rows.count(); index += 1) {
-      const row = rows.nth(index);
-      result.push({
-        filename: String(await row.getAttribute('data-problematic-track-path') || '').split(/[\\/]/).pop(),
-        path: String(await row.getAttribute('data-problematic-track-path') || ''),
-        reasons: (await this.utilityProblematicFilesTab.reasonsForTrackRow(row).allTextContents())
-          .map((reason) => String(reason || '').trim())
-          .filter(Boolean),
-      });
-    }
-    return result;
+    return this.utilityProblematicFilesTab.detailTrackRows.evaluateAll(rows => rows.map(row => {
+      const path = String(row.getAttribute('data-problematic-track-path') || '');
+      return {
+        filename: path.split(/[\\/]/).pop(),
+        path,
+        reasons: Array.from(row.querySelectorAll(
+          '[role="cell"][data-cdt-column="reason"] [data-problem-exclusion-scope="file"]',
+        )).map(reason => String(reason.textContent || '').trim()).filter(Boolean),
+      };
+    }));
   }
-
   async waitForNoSearchResults(searchTerm, options = {}) {
     await this.utilityProblematicFilesTab.waitForPageCondition((expected) => {
       if (typeof state === 'undefined') return false;
@@ -837,7 +836,8 @@ export class UtilityProblematicFilesActions {
         removedKey: String(active.getAttribute('data-problematic-album-key') || ''),
         previousKey: String(items[removedIndex - 1].getAttribute('data-problematic-album-key') || ''),
         previousTitle: String(items[removedIndex - 1].querySelector(selectors.titleSelector)?.textContent || '').trim(),
-        previousMeta: String(items[removedIndex - 1].querySelector(selectors.metaSelector)?.textContent || '').trim(),
+        previousMeta: [selectors.subtitleSelector, selectors.yearSelector]
+          .map(selector => String(items[removedIndex - 1].querySelector(selector)?.textContent || '').trim()).filter(Boolean).join(' · '),
         order: items.map((item) => String(item.getAttribute('data-problematic-album-key') || '')),
         text: items.map((item) => String(item.textContent || '').trim()),
         nodes: items,
@@ -855,7 +855,8 @@ export class UtilityProblematicFilesActions {
       activeSelector: this.utilityProblematicFilesTab.activeListItemSelector,
       itemSelector: this.utilityProblematicFilesTab.listItemSelector,
       titleSelector: this.utilityProblematicFilesTab.listItemTitleSelector,
-      metaSelector: this.utilityProblematicFilesTab.listItemMetaSelector,
+      subtitleSelector: this.utilityProblematicFilesTab.listItemSubtitleSelector,
+      yearSelector: this.utilityProblematicFilesTab.listItemYearSelector,
     });
     // parity-check: allow-read-only-measurement-evaluate -- read the retained MutationObserver snapshot without changing application state
     return this.mutationObservation.evaluate((snapshot) => ({

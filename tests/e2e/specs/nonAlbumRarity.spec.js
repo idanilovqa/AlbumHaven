@@ -425,9 +425,11 @@ test('FTC-NON-ALBUM-012 renders exception groups as the approved compact track t
 });
 
 test('FTC-NON-ALBUM-011 permits a nonempty Album rename from post-rarity Problematic Files', { tag: '@area:album-details' }, async ({
+  appBarActions,
   artistPageSettingsActions,
   galleryActions,
   navigationPanelActions,
+  scanPageActions,
   searchToolbarActions,
   settingsModalAppBarActions,
   stepLogger,
@@ -479,10 +481,16 @@ test('FTC-NON-ALBUM-011 permits a nonempty Album rename from post-rarity Problem
       await tagEditorActions.selectTrackByFilename(RARITY_TRACK_FILENAME);
       expect((await tagEditorActions.readSummary()).exceptionType).toBe('Non-album rarity');
       await tagEditorActions.setAlbumName(PROBLEMATIC_FILES_RENAME_ALBUM);
-      await tagEditorActions.applyAndWaitForSavedFiles({
-        savedNotificationDelivery: 'status-page',
-        beforeSavedNotification: () => settingsModalAppBarActions.closeSettings({ timeout: 10000 }),
-      });
+      // Acknowledge the normal two-second notice before navigating away.
+      await tagEditorActions.applyAndWaitForSavedFiles({ savedNotificationDelivery: 'current-view' });
+      const previousLibraryState = await tagEditorActions.tagEditor.readLibraryReturnState();
+      await settingsModalAppBarActions.closeSettings({ timeout: 10000 });
+      await appBarActions.openStatusMenu();
+      await scanPageActions.openStatusPageFromMenu();
+      await scanPageActions.clickBack();
+      await scanPageActions.waitForDedicatedPageHidden({ timeout: 10000 });
+      await expect.poll(() => tagEditorActions.tagEditor.readLibraryReturnState(), { timeout: 10000 })
+        .toEqual(previousLibraryState);
     });
 
     await stepLogger.step('Read the renamed Album from Loose Tracks and restore the fixture', async () => {
@@ -596,18 +604,16 @@ test('FTC-NON-ALBUM-014 clears Album durably and refreshes Problematic Files', {
       await tagEditorActions.clearAlbumName();
       await tagEditorActions.clearException();
       await tagEditorActions.expectBlankAlbumCanApply();
-      await tagEditorActions.applyAndWaitForSavedFiles({
-        savedNotificationDelivery: 'status-page',
-        beforeSavedNotification: async () => {
-          await utilityProblematicFilesActions.openTagEditor();
-          await tagEditorActions.waitForOpen({ expectedTrackCount: 1 });
-          expect((await tagEditorActions.readSummary()).trackFilenames).toEqual([
-            SIBLING_TRACK_FILENAME,
-          ]);
-          await tagEditorActions.close();
-          await settingsModalAppBarActions.closeSettings({ timeout: 10000 });
-        },
-      });
+      // Settings already exposes the saved notice. Acknowledge it before the
+      // sibling-editor journey consumes its normal two-second display lifetime.
+      await tagEditorActions.applyAndWaitForSavedFiles({ savedNotificationDelivery: 'current-view' });
+      await utilityProblematicFilesActions.openTagEditor();
+      await tagEditorActions.waitForOpen({ expectedTrackCount: 1 });
+      expect((await tagEditorActions.readSummary()).trackFilenames).toEqual([
+        SIBLING_TRACK_FILENAME,
+      ]);
+      await tagEditorActions.close();
+      await settingsModalAppBarActions.closeSettings({ timeout: 10000 });
     });
 
     await stepLogger.step('Persist a blank physical Album tag and expose that blank when reopened', async () => {

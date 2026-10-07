@@ -268,7 +268,7 @@ function validatePerformanceTargets(contract, expectedCases, expectedNames) {
       if (!Number.isFinite(target.targetMs) || target.targetMs <= 0) {
         errors.push(`${name} must declare a positive target`);
       }
-      if (!Number.isFinite(target.graceMs) || target.graceMs < 200 || target.graceMs > 400) {
+      if (!Number.isFinite(target.graceMs) || target.graceMs < (name === 'paired-search-calibration' ? 100 : 200) || target.graceMs > 400) {
         errors.push(`${name} must declare grace from 200 through 400 ms`);
       }
       if (target.ceilingMs !== target.targetMs + target.graceMs) {
@@ -507,7 +507,7 @@ test('matrix validation rejects mutation assigned to shared or duplicate data', 
   assert.equal(errors.includes('duplicate mutation ownership: album:mutable-example::media/mutable-example'), true);
 });
 
-test('functional shard contract owns all 121 browser-functional cases exactly once', () => {
+test('functional shard contract owns all 123 browser-functional cases exactly once', () => {
   const matrix = readJson(testDataMatrixPath);
   const expectedCases = new Set(
     matrix
@@ -523,7 +523,7 @@ test('functional shard contract owns all 121 browser-functional cases exactly on
   const contract = readJson(functionalShardsPath);
   const errors = validateFunctionalShards(contract, expectedCases);
 
-  assert.equal(expectedCases.size, 121);
+  assert.equal(expectedCases.size, 123);
   assert.deepEqual(errors, []);
   assert.equal(contract.shards.length, 4);
   assert.equal(contract.shards.every((shard) => shard.invocations.length > 0), true);
@@ -540,7 +540,6 @@ test('performance target contract owns all 30 performance cases across 22 target
         'playwright.performance.config.cjs',
         'playwright.scan-performance.config.cjs',
       ].includes(entry.config))
-      .filter((entry) => !entry.test.includes('searchPreviewPairedCalibration'))
       .map(caseIdentity),
   );
   const expectedNames = new Set([
@@ -554,6 +553,7 @@ test('performance target contract owns all 30 performance cases across 22 target
     'utility-rules',
     'selected-artist',
     'search-browse',
+    'paired-search-calibration',
     'root-album-browse',
     'app-open-all-artists',
     'problematic-files-focused',
@@ -728,15 +728,15 @@ test('read-only inventory command reports complete discovery and ownership total
 
   assert.equal(inventory.configuredSurfaces, 12);
   assert.deepEqual(inventory.categories, {
-    browserFunctional: 121,
-    component: 189,
+    browserFunctional: 123,
+    component: 191,
     mobile: 74,
     performance: 30,
-    total: 414,
+    total: 418,
   });
   assert.deepEqual(inventory.ownership, {
-    testDataMatrix: 414,
-    functionalShards: 121,
+    testDataMatrix: 418,
+    functionalShards: 123,
     performanceTargets: 30,
   });
 });

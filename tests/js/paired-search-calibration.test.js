@@ -1,3 +1,7 @@
+const fs = require('node:fs');
+const vm = require('node:vm');
+const { pathToFileURL } = require('node:url');
+const { expect } = require('@playwright/test');
 const assert = require('node:assert/strict');
 const path = require('node:path');
 const test = require('node:test');
@@ -139,3 +143,66 @@ test('orchestrator always runs synthetic after production and shares one run ID'
   assert.equal(calls.length, 2);
   assert.equal(writes.length, 1);
 });
+
+for (const elapsedMs of [350, 550]) {
+  test(`paired search publishes native metrics before enforcing ${elapsedMs} ms timing`, async () => {
+    const timing = await import(pathToFileURL(path.join(root, 'tests/e2e/helpers/timingBudget.js')));
+    const scenarios = [];
+    const register = (title, run) => scenarios.push({ title, run });
+    register.describe = (_title, define) => define();
+    const source = fs.readFileSync(path.join(root,
+      'tests/e2e/syntheticLargeLibrary/searchPreviewPairedCalibration.spec.js'), 'utf8');
+    vm.runInNewContext(source.replace(/^import .*?;\r?\n/gmu, ''), {
+      ...timing, Buffer, test: register,
+      expect: (actual, message) => actual === page
+        ? { not: { toHaveURL: async () => {} } }
+        : expect(actual, message),
+    });
+    const page = {};
+    assert.equal(scenarios.length, 2);
+    for (const scenario of scenarios) {
+      const reports = [];
+      const attachments = [];
+      const syntheticSearchInventory = {
+        Devin: ['seed-devin-primary', 'seed-devin-family'],
+        'Neal Morse': Array.from({ length: 13 }, (_, index) => `seed-neal-${index}`),
+      };
+      const operation = scenario.run({
+        page,
+        syntheticSearchInventory,
+        performanceReport: { publishRun: (payload) => reports.push(payload) },
+        searchToolbarActions: { waitForVisible: async () => {} },
+        galleryActions: {
+          goto: async () => {}, waitForGalleryReady: async () => {},
+          measureSyntheticSearchPreviewFirstVisible: async (_toolbar, query, options) => {
+            assert.deepEqual(Array.from(options.expectedAlbumKeys || []), syntheticSearchInventory[query],
+              'The benchmark must supply the independent seeded inventory before measuring');
+            return {
+              elapsedMs, directPreviewMatch: true,
+              generationBefore: { requestGeneration: 1, renderGeneration: 1 },
+              generationAfter: { requestGeneration: 2, renderGeneration: 2 },
+            };
+          },
+        },
+      }, { attach: async (name, payload) => attachments.push({ name, ...payload }) });
+      if (elapsedMs > 500) await assert.rejects(operation, /HARD FAIL/u);
+      else await operation;
+      assert.equal(reports.length, 1, 'native reporter needs a standard metrics payload');
+      assert.equal(reports[0].reportId, 'pairedSearchCalibrationLocal');
+      const validation = reports[0].rawMetrics.benchmarkValidation;
+      assert.equal(validation.functionalChecksComplete, true);
+      assert.equal(validation.nonTimingChecksComplete, true);
+      assert.deepEqual(Array.from(validation.expectedMetricIds), ['search-preview.syntheticFirstVisibleMs']);
+      assert.equal(validation.results.length, 1);
+      const metric = validation.results[0];
+      assert.equal(metric.actual, elapsedMs);
+      assert.equal(metric.targetMaximum, 400);
+      assert.equal(metric.graceMs, 100);
+      assert.equal(metric.hardCeiling, 500);
+      assert.equal(metric.passed, elapsedMs <= 500);
+      assert.equal(attachments.length, 1);
+      assert.equal(attachments[0].name, 'synthetic-paired-search-metrics');
+      assert.equal(JSON.parse(attachments[0].body).submitToFirstVisibleMs, elapsedMs);
+    }
+  });
+}

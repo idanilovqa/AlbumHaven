@@ -209,8 +209,9 @@ test('notification owner ignores occluded background controls, retries deferred 
   occupied = true;
   resizes();
   callbacks.shift()();
-  assert.equal(attributes.has('data-notification-deferred'), false,
-    'a notification that was already presented must retain its last visible placement');
+  assert.equal(attributes.has('data-notification-deferred'), true,
+    'a persistent warning must defer when a new editor leaves no space, rather than intercept its controls');
+  assert.equal(node.isConnected, true, 'deferring must retain the warning for later presentation');
   occupied = false;
   intrinsicWidth = 358;
   context.window.visualViewport = { offsetLeft: 50, offsetTop: 0, width: 195, height: 200 };
@@ -219,6 +220,7 @@ test('notification owner ignores occluded background controls, retries deferred 
   assert.equal(styles.get('--notification-available-width'), '179px');
   assert.equal(node.offsetWidth, 179, 'the host must apply the visual width before reading notification geometry');
   assert.equal(attributes.has('data-notification-deferred'), false);
+  assert.equal(shown, 1, 'the warning must reappear without restarting notification delivery');
   assert.match(baseLayoutSource, /#toast-layer > \.toast\.floating-notification-positioned\s*\{[^}]*min-width:\s*0/u);
   context.unregisterFloatingNotification(node);
   assert.equal(disconnected, 2);

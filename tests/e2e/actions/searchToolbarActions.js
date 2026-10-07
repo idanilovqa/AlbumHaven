@@ -17,7 +17,7 @@ export class SearchToolbarActions {
     // Search submission is explicit in the product flow. Keep the helper's
     // default aligned with that contract; callers that need draft-only input
     // can opt out explicitly.
-    if (options.submitWithEnter !== false) {
+    if (options.submitWithEnter !== false && !options.clickApply) {
       if (typeof options.recordSubmissionBoundary === 'function') {
         await options.recordSubmissionBoundary();
       }
@@ -47,11 +47,11 @@ export class SearchToolbarActions {
     for (const prefix of prefixes) {
       const typedPrefix = String(prefix || '');
       await this.searchToolbar.input.fill(typedPrefix);
-      await this.waitForQuery(typedPrefix, options);
+      await expect(this.searchToolbar.input).toHaveValue(typedPrefix);
     }
     if (await this.searchToolbar.input.inputValue() !== completedQuery) {
       await this.searchToolbar.input.fill(completedQuery);
-      await this.waitForQuery(completedQuery, options);
+      await expect(this.searchToolbar.input).toHaveValue(completedQuery);
     }
     await this.searchToolbar.input.press('Enter');
     await this.waitForQuery(completedQuery, options);
@@ -81,11 +81,12 @@ export class SearchToolbarActions {
     }
   }
 
-  async clearSearchByInputDebounce(options = {}) {
+  async clearSearchWithEnter(options = {}) {
     await this.searchToolbar.input.fill('');
     await expect(this.searchToolbar.recentSearchPopover).toBeHidden({
       timeout: options.popoverTimeout || 1000,
     });
+    await this.searchToolbar.input.press('Enter');
     await this.waitForQuery('', options);
   }
 

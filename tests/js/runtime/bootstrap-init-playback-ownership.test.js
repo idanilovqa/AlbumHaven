@@ -12,7 +12,7 @@ const loaderHelperSource = fs.readFileSync(loaderHelperPath, 'utf8');
 const viewValueHelperPath = path.join(__dirname, '..', '..', '..', 'music_app', 'static', 'js', 'runtime', 'view-value-helpers.js');
 const viewValueHelperSource = fs.readFileSync(viewValueHelperPath, 'utf8');
 
-test('bootstrap init prepares streaming and observes preparation rejection without native restore retries', async () => {
+for (const unloadBeforeIdle of [false, true]) test(`bootstrap idle playback preparation honors unload=${unloadBeforeIdle}`, async () => {
   const unloadOrder = [];
   const calls = {
     initPlaybackOwnershipCoordinator: 0,
@@ -28,10 +28,12 @@ test('bootstrap init prepares streaming and observes preparation rejection witho
   const documentListeners = {};
   const preparationFailure = new Error('worklet preparation rejected');
   const observedErrors = [];
+  let idleWarmup;
   let initialLoaderState = null;
   const context = {
     window: {
       location: { href: 'http://localhost:5000/' },
+      requestIdleCallback(callback) { idleWarmup = callback; },
       addEventListener(name, handler) {
         windowListeners[name] = handler;
       },
@@ -166,9 +168,13 @@ test('bootstrap init prepares streaming and observes preparation rejection witho
   await new Promise((resolve) => setImmediate(resolve));
 
   assert.equal(calls.initPlaybackOwnershipCoordinator, 1);
-  assert.equal(calls.prepareStreamingPlaybackEngine, 1);
-  assert.equal(observedErrors.length, 1);
-  assert.equal(observedErrors[0].includes(preparationFailure), true);
+  assert.equal(calls.prepareStreamingPlaybackEngine, 0, 'audio engine must not block initial rendering');
+  assert.equal(typeof idleWarmup, 'function');
+  if (!unloadBeforeIdle) idleWarmup();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(calls.prepareStreamingPlaybackEngine, unloadBeforeIdle ? 0 : 1);
+  assert.equal(observedErrors.length, unloadBeforeIdle ? 0 : 1);
+  if (!unloadBeforeIdle) assert.equal(observedErrors[0].includes(preparationFailure), true);
   assert.equal(typeof calls.visibilitychange, 'function');
   calls.visibilitychange();
   assert.ok(windowListeners.focus);
@@ -192,6 +198,9 @@ test('bootstrap init prepares streaming and observes preparation rejection witho
   assert.deepEqual(calls.setLoopActive, [false], 'pageshow is a no-op after loop edit mode is cleared');
 
   windowListeners.pagehide();
+  idleWarmup();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(calls.prepareStreamingPlaybackEngine, unloadBeforeIdle ? 0 : 1, 'queued warmup must not reopen playback after unload');
   windowListeners.pageshow({ persisted: true });
   windowListeners.beforeunload();
   await new Promise((resolve) => setImmediate(resolve));
@@ -454,6 +463,7 @@ test('bootstrap init preserves startup hydration tier while applying resolved ga
   const context = {
     window: {
       location: { href: 'http://localhost:5000/' },
+      requestIdleCallback() {},
       addEventListener() {},
     },
     document: {
@@ -749,6 +759,7 @@ test('bootstrap init preserves the sidebar hydration request when an embedded st
   const context = {
     window: {
       location: { href: 'http://localhost:5000/' },
+      requestIdleCallback() {},
       addEventListener() {},
     },
     document: {
@@ -926,6 +937,7 @@ function createDelayedStartupHydrationHarness() {
   const context = {
     window: {
       location: { href: 'http://localhost:5000/' },
+      requestIdleCallback() {},
       addEventListener() {},
     },
     document: {
@@ -1039,6 +1051,7 @@ test('bootstrap init still queues the embedded sidebar-first hydration request w
   const context = {
     window: {
       location: { href: 'http://localhost:5000/' },
+      requestIdleCallback() {},
       addEventListener() {},
     },
     document: {
@@ -1306,11 +1319,13 @@ test('bootstrap init completes a fully rendered startup exactly once after paint
   assert.equal(scheduledAnimationFrames.length, 0);
 });
 
-test('bootstrap init hydrates a populated partial startup while scan work continues', () => {
+for (const pagedRoot of [false, true]) {
+test(`bootstrap init hydrates partial startup but keeps complete root pages bounded (paged: ${pagedRoot})`, () => {
   const scheduledAnimationFrames = [];
   const completedViews = [];
   let initialRefreshBegins = 0;
   let fetchedEndpoint = null;
+  let pageChecks = 0;
   const context = {
     window: {
       location: { href: 'http://localhost:5000/?artist=Broadcast' },
@@ -1327,10 +1342,13 @@ test('bootstrap init hydrates a populated partial startup while scan work contin
       },
     },
     URL,
+    isPagedRootGallery: () => pagedRoot,
+    loadNextRootGalleryPage: () => { pageChecks += 1; },
     state: {
       ui: {},
       view: {
-        selected_artist: 'Broadcast',
+        selected_artist: pagedRoot ? '' : 'Broadcast',
+        ...(pagedRoot ? { gallery_page: { revision: 'r1', next_cursor: 'next', has_more: true } } : {}),
         query: '',
         artist_count: 3,
         album_count: 1,
@@ -1433,8 +1451,20 @@ test('bootstrap init hydrates a populated partial startup while scan work contin
   vm.runInContext(viewValueHelperSource, context, { filename: viewValueHelperPath });
   vm.runInContext(helperSource, context, { filename: helperPath });
 
-  assert.equal(initialRefreshBegins, 1);
-  assert.equal(fetchedEndpoint, '/view-data?artist=Broadcast');
-  assert.equal(completedViews.length, 0);
-  assert.equal(scheduledAnimationFrames.length, 0);
+  if (pagedRoot) {
+    assert.equal(initialRefreshBegins, 0);
+    assert.equal(fetchedEndpoint, null, 'complete root page must not trigger full hydration');
+    assert.equal(context.state.awaitingInitialDataRefresh, false);
+    scheduledAnimationFrames.splice(0).forEach(frame => frame());
+    assert.equal(pageChecks, 0, "startup geometry must wait for the write frame");
+    while (scheduledAnimationFrames.length) scheduledAnimationFrames.shift()();
+    assert.equal(pageChecks, 1, 'only the bounded viewport fill runs after initial render');
+    assert.equal(completedViews.length, 1);
+  } else {
+    assert.equal(initialRefreshBegins, 1);
+    assert.equal(fetchedEndpoint, '/view-data?artist=Broadcast');
+    assert.equal(completedViews.length, 0);
+    assert.equal(scheduledAnimationFrames.length, 0);
+  }
 });
+}

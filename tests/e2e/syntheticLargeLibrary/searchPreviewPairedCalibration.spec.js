@@ -1,5 +1,5 @@
-import { expect, test } from '../support/baseFixtures.js';
-import { expectTimingBudget, performanceTimingBudget } from '../helpers/index.js';
+import { expect, test } from '../support/performanceFixtures.js';
+import { evaluateTimingBudget, expectTimingBudgetOutcome, performanceTimingBudget } from '../helpers/index.js';
 const SEARCH_BROWSE_BUDGET = Object.freeze(performanceTimingBudget('search-preview.syntheticFirstVisibleMs'));
 
 const CASE_ID = 'FTC-GALLERY-STARTUP-005U';
@@ -13,7 +13,9 @@ test.describe(`${CASE_ID} synthetic paired search calibration`, () => {
     test(`${scenario.query} submit to first expected album visible`, async ({
       galleryActions,
       page,
+      performanceReport,
       searchToolbarActions,
+      syntheticSearchInventory,
     }, testInfo) => {
       await galleryActions.goto('/?surface=albums');
       await searchToolbarActions.waitForVisible({ timeout: 120000 });
@@ -22,7 +24,11 @@ test.describe(`${CASE_ID} synthetic paired search calibration`, () => {
       const result = await galleryActions.measureSyntheticSearchPreviewFirstVisible(
         searchToolbarActions,
         scenario.query,
-        { expectedArtist: scenario.expectedArtist, timeout: 120000 },
+        {
+          expectedArtist: scenario.expectedArtist,
+          expectedAlbumKeys: syntheticSearchInventory[scenario.query],
+          timeout: 120000,
+        },
       );
 
       expect(result.directPreviewMatch, `${scenario.query} must be a direct search-preview match.`)
@@ -31,8 +37,34 @@ test.describe(`${CASE_ID} synthetic paired search calibration`, () => {
         .toBeGreaterThan(result.generationBefore.requestGeneration);
       expect(result.generationAfter.renderGeneration)
         .toBeGreaterThan(result.generationBefore.renderGeneration);
-      expectTimingBudget(expect, result.elapsedMs, SEARCH_BROWSE_BUDGET,
-        `${scenario.query} submit to first expected album visible`);
+      await expect(page).not.toHaveURL(/\/login(?:\?|$)/u);
+      const outcome = evaluateTimingBudget(result.elapsedMs, SEARCH_BROWSE_BUDGET);
+      performanceReport.publishRun({
+        reportId: 'pairedSearchCalibrationLocal',
+        caseId: CASE_ID,
+        title: `${scenario.query} paired search calibration`,
+        rawMetrics: {
+          benchmarkValidation: {
+            selectedContract: outcome.contractName,
+            functionalChecksComplete: true,
+            nonTimingChecksComplete: true,
+            expectedMetricIds: [outcome.metricId],
+            results: [{
+              key: scenario.query,
+              metricId: outcome.metricId,
+              contractName: outcome.contractName,
+              units: 'ms',
+              actual: outcome.actualMs,
+              targetMaximum: outcome.targetMaximum,
+              graceMs: outcome.graceMs,
+              hardCeiling: outcome.hardCeiling,
+              allowedMaximum: outcome.hardCeiling,
+              performanceStatus: outcome.status,
+              passed: outcome.passed,
+            }],
+          },
+        },
+      });
       await testInfo.attach('synthetic-paired-search-metrics', {
         body: Buffer.from(JSON.stringify({
           caseId: CASE_ID,
@@ -42,7 +74,8 @@ test.describe(`${CASE_ID} synthetic paired search calibration`, () => {
         })),
         contentType: 'application/json',
       });
-      await expect(page).not.toHaveURL(/\/login(?:\?|$)/u);
+      expectTimingBudgetOutcome(expect, outcome,
+        `${scenario.query} submit to first expected album visible`);
     });
   }
 });

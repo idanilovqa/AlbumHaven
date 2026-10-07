@@ -438,7 +438,7 @@ def test_postgres_migration_filenames_are_zero_padded_sql_and_lexically_ordered(
 
     assert all(re.fullmatch(r"\d{4}_[a-z0-9_]+\.sql", name) for name in migration_names)
     assert migration_numbers == list(range(1, len(migration_numbers) + 1))
-    assert migration_names[-45:] == [
+    assert migration_names[-46:] == [
         "0040_repair_ignored_repairs_delete_grant.sql",
         "0041_create_local_album_cover_candidate_snapshots.sql",
         "0042_track_distinct_cover_improvement_alerts.sql",
@@ -484,6 +484,7 @@ def test_postgres_migration_filenames_are_zero_padded_sql_and_lexically_ordered(
         "0082_preserve_relations_for_missing_album_removal.sql",
         "0083_add_album_raw_artist_search_index.sql",
         "0084_create_local_artist_search_projection.sql",
+        "0085_add_stale_track_file_candidate_index.sql",
     ]
 
 
@@ -2985,3 +2986,11 @@ def test_tag_edit_intents_migration_creates_recoverable_least_privilege_journal(
     assert "grant select on table library.tag_edit_intents to album_haven_readonly" not in sql
     assert "grant delete" not in sql
     assert "grant all" not in sql
+
+
+def test_missing_album_candidate_index_matches_generated_stale_predicate():
+    sql = _normalized_sql((MIGRATIONS_DIR / "0085_add_stale_track_file_candidate_index.sql").read_text(encoding="utf-8"))
+    assert "create index if not exists local_track_files_stale_track_id_idx" in sql
+    assert "on library.local_track_files (track_id) where scan_cache_stale is true" in sql
+    assert "update " not in sql and "delete " not in sql
+    assert "grant " not in sql

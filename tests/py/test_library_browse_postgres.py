@@ -294,6 +294,46 @@ def _browse_album_row(*, artist: str, album_id: int, album_key: str, title: str)
     }
 
 
+def test_family_preview_reuses_membership_snapshots_without_changing_results(monkeypatch):
+    from music_app.services import library_browse_postgres as browse
+    from music_app.services import selected_artist_membership as membership
+
+    artists = ["Alpha", "Beta", "Alpha & Beta"]
+    rows = [
+        _browse_album_row(artist=artist, album_id=index, album_key=f"family-{index}", title=f"Album {index}")
+        for index, artist in enumerate(["Alpha Alias", "Beta", "Alpha & Beta"], start=1)
+    ]
+    rows[-1]["album_metadata"]["artists"] = ["Alpha", "Beta"]
+    aliases = {"Alpha Alias": "Alpha"}
+    canonical_aliases = {"Alpha": ["Alpha", "Alpha Alias"], "Beta": ["Beta"]}
+    original_builder = browse._membership_build_artist_membership_groups
+
+    def uncached_builder(*args, **kwargs):
+        kwargs.pop("matches_group_artist_for_album", None)
+        return original_builder(*args, **kwargs)
+
+    with monkeypatch.context() as reference_patch:
+        reference_patch.setattr(browse, "_membership_build_artist_membership_groups", uncached_builder)
+        expected = browse._selected_artist_family_groups_from_preview_rows(
+            artists, rows, alias_to_canonical=aliases, canonical_to_aliases=canonical_aliases,
+        )
+
+    snapshots = []
+    original_snapshot = membership._album_group_membership_snapshot
+
+    def record_snapshot(album, alias_map):
+        snapshots.append(album.key)
+        return original_snapshot(album, alias_map)
+
+    monkeypatch.setattr(membership, "_album_group_membership_snapshot", record_snapshot)
+    actual = browse._selected_artist_family_groups_from_preview_rows(
+        artists, rows, alias_to_canonical=aliases, canonical_to_aliases=canonical_aliases,
+    )
+    assert actual == expected
+    assert expected
+    assert len(snapshots) == len(rows)
+
+
 def _partitioned_search_rows(active_rows=(), missing_rows=()):
     class SearchRows(list):
         pass
@@ -317,7 +357,7 @@ def test_live_0082_missing_album_removal_preserves_ready_relation_metadata(
     fixture.seed(item)
     metadata_sql = """
         select
-          (metadata ->> 'inventory_mutation_revision')::bigint as revision,
+          coalesce((metadata ->> 'inventory_mutation_revision')::bigint, 0) as revision,
           encode(convert_to(coalesce(
             (metadata #> '{scan_cache,relation_views}')::text, 'null'
           ), 'UTF8'), 'hex') as relation_views_bytes,
@@ -2706,7 +2746,12 @@ def _assert_search_reloads_snapshot_when_ready_runtime_relation_maps_are_stale(
         ),
     )
     monkeypatch.setattr(repository, "_load_non_album_entries", lambda **_kwargs: [])
-    monkeypatch.setattr(repository, "queue_settings_projection_prewarm", lambda: None)
+    prewarm_requests = []
+    monkeypatch.setattr(
+        repository,
+        "queue_settings_projection_prewarm",
+        lambda: prewarm_requests.append(True),
+    )
     monkeypatch.setattr(
         artist_family_postgres,
         "load_selected_artist_family_projection",
@@ -2737,6 +2782,7 @@ def _assert_search_reloads_snapshot_when_ready_runtime_relation_maps_are_stale(
 
     assert projection_loads == [connection]
     assert payload["selected_artist"] == "Current Canonical"
+    assert len(prewarm_requests) == (0 if payload_tier == "search_preview" else 1)
     expected_artists = ["Current Canonical"]
     if payload_tier != "search_preview":
         expected_artists.append("Current Sibling")
@@ -2807,8 +2853,12 @@ def test_stale_projected_exact_alias_defers_to_current_exact_artist_sql(monkeypa
     assert delegated[0]["_connection"] is connection
 
 
+@pytest.mark.parametrize(
+    "stale_reason", ["source_fingerprint_changed", "projection_not_ready"]
+)
 def test_stale_full_exact_search_loads_live_relation_aliases_before_delegating(
     monkeypatch,
+    stale_reason,
 ):
     from music_app.services.library_browse_postgres import PostgresLibraryBrowseRepository
 
@@ -2827,8 +2877,13 @@ def test_stale_full_exact_search_loads_live_relation_aliases_before_delegating(
             "canonical_to_aliases": {
                 "Stale Canonical": ["Stale Canonical", "Alias"],
             },
-            "projection_stale_reason": "source_fingerprint_changed",
+            "projection_stale_reason": stale_reason,
         },
+    )
+    monkeypatch.setattr(
+        repository,
+        "_artist_search_projection_is_authoritative",
+        lambda **_kwargs: False,
     )
     monkeypatch.setattr(
         repository,
@@ -3096,7 +3151,8 @@ def test_exact_artist_fallback_sql_constrains_identity_before_album_expansion():
     assert sql.index(identity_filter) < sql.index(track_expansion)
 
 
-def test_postgres_exact_search_keeps_selected_family_with_outside_sidebar_match(monkeypatch):
+@pytest.mark.parametrize("outside_match", [False, True])
+def test_postgres_exact_search_preserves_family_with_outside_sidebar_match(monkeypatch, outside_match):
     from music_app.services.library_browse_postgres import PostgresLibraryBrowseRepository
 
     repository = PostgresLibraryBrowseRepository(
@@ -3120,6 +3176,8 @@ def test_postgres_exact_search_keeps_selected_family_with_outside_sidebar_match(
         "album_title": "Signal Song",
         "album_metadata": {"album_artist": "Outside Match"},
     }]
+    if not outside_match:
+        search_rows = search_rows[:1]
     delegated = []
     monkeypatch.setattr(
         repository,
@@ -3145,6 +3203,7 @@ def test_postgres_exact_search_keeps_selected_family_with_outside_sidebar_match(
             "family_artist_groups": [{"artist": "Signal Family", "albums": []}],
             "related_filter_base_primary_groups": [{"artist": "Signal Artist", "albums": []}],
             "related_filter_base_family_groups": [{"artist": "Signal Family", "albums": []}],
+            "related_artists": ["Signal Family"],
             "search_context": {},
         },
     )
@@ -3155,20 +3214,73 @@ def test_postgres_exact_search_keeps_selected_family_with_outside_sidebar_match(
     assert len(preview_rows) == 1
     assert preview_rows[0]["artist_name"] == "Signal Artist"
     assert preview_rows[0]["album_key"] == "signal-artist::signal-album"
-    assert [group["artist"] for group in payload["family_artist_groups"]] == [
-        "Signal Family"
-    ]
+    expected_family = ["Signal Family"]
+    assert [group["artist"] for group in payload["family_artist_groups"]] == expected_family
+    assert payload["related_artists"] == ["Signal Family"]
     assert [group["artist"] for group in payload["related_filter_base_family_groups"]] == [
         "Signal Family"
     ]
     assert [group["artist"] for group in payload["artist_groups"]] == [
-        "Signal Artist",
-        "Signal Family",
+        "Signal Artist", *expected_family,
     ]
     assert [item["artist"] for item in payload["artists_sidebar"]] == [
-        "Signal Artist",
-        "Outside Match",
+        "Signal Artist", "Signal Family", *(["Outside Match"] if outside_match else []),
     ]
+    assert payload["show_all_artists_sidebar_link"] is outside_match
+
+
+@pytest.mark.parametrize("with_alias", [False, True])
+def test_root_startup_preview_selects_the_canonical_sidebar_prefix(monkeypatch, with_alias):
+    from music_app.services import library_browse_postgres as browse
+    from music_app.services.library_browse_postgres import PostgresLibraryBrowseRepository
+
+    names = ["東京", "Élan", "[Stömb]", "2Cellos", "10 Years", "...And Oceans", "-", "(Sandy) Alex G", "& Co", "#4", "#2"]
+    expected = sorted(names, key=lambda name: (name.casefold(), name.casefold()))
+    aliases = {"Alias Number": "#2"} if with_alias else {}
+    if with_alias:
+        names.append("Alias Number")
+    rows = [_browse_album_row(artist=name, album_id=index, album_key=f"album-{index}", title="Album")
+            for index, name in enumerate(names, start=1)]
+    for row in rows:
+        row["album_count"] = 1
+        row["sort_name"] = row["artist_sort_name"] = "Custom Reverse Sort"
+    repository = PostgresLibraryBrowseRepository(
+        {"ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://album_haven_app@localhost/app"},
+        connect=lambda _url: _NoopSearchSnapshotConnection(),
+        album_ratings_service=_EmptyAlbumRatingsService(),
+    )
+    monkeypatch.setattr(repository, "_load_relation_alias_maps", lambda **_kwargs: {
+        "alias_to_canonical": aliases, "canonical_to_aliases": {"#2": ["#2", "Alias Number"]} if with_alias else {},
+    })
+    monkeypatch.setattr(repository._inventory_repository, "load_support_state", lambda **_kwargs: {"ignored_version_keys": [], "manual_version_links": {}})
+    monkeypatch.setattr(repository, "_load_root_sidebar_rows", lambda *_args, **_kwargs: rows)
+    requested = []
+    def preview(_view_state, *, candidate_artists=None, **_kwargs):
+        requested.append(candidate_artists)
+        return [row for row in rows if row["artist_name"] in (candidate_artists or names[:6])]
+    monkeypatch.setattr(repository, "_load_root_startup_preview_rows", preview)
+    monkeypatch.setattr(repository, "_apply_private_album_rating_overlays", lambda *_args, **_kwargs: None)
+
+    payload = repository.build_root_startup_preview_payload()
+    assert requested == [["#2", "Alias Number", *expected[1:6]] if with_alias else expected[:6]]
+    assert [item["artist"] for item in payload["artists_sidebar"]] == expected
+    assert [group["artist"] for group in payload["artist_groups"]] == expected[:6]
+    full_groups = browse._root_album_browse_artist_groups(browse._canonicalize_artist_rows(rows, aliases))
+    browse._merge_missing_albums_into_artist_groups(full_groups, [], alias_to_canonical=aliases)
+    assert [group["artist"] for group in full_groups] == [item["artist"] for item in payload["artists_sidebar"]]
+
+
+def test_root_startup_known_artist_prefix_keeps_bounded_balanced_preview(monkeypatch):
+    from music_app.services.library_browse_postgres import PostgresLibraryBrowseRepository, _SEARCH_PREVIEW_ALBUM_LIMIT
+
+    repository = PostgresLibraryBrowseRepository({"ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://album_haven_app@localhost/app"})
+    calls = []
+    monkeypatch.setattr(repository, "_load_selected_artist_preview_rows", lambda *args, **kwargs: calls.append((args, kwargs)) or [])
+    connection = object()
+    repository._load_root_startup_preview_rows({}, candidate_artists=["#2", "-"], connection=connection)
+    assert calls == [((["#2", "-"], {}), {
+        "album_limit": _SEARCH_PREVIEW_ALBUM_LIMIT, "balance_across_artists": True, "connection": connection,
+    })]
 
 
 def test_root_startup_preview_defers_complete_sidebar_and_background_projections(monkeypatch):
@@ -5910,6 +6022,101 @@ def test_current_projected_partial_search_preview_skips_live_alias_rebuild(monke
     ]
 
 
+@pytest.mark.parametrize(
+    ("query", "artist"),
+    [("Devin", "Devin Townsend"), ("Neal Morse", "Neal Morse")],
+)
+@pytest.mark.parametrize("preview", [True, False])
+def test_matching_stale_projection_search_skips_live_alias_rebuild(
+    monkeypatch, query, artist, preview
+):
+    from music_app.services import library_browse_postgres as browse_module
+
+    connection = _NoopSearchSnapshotConnection()
+    repository = browse_module.PostgresLibraryBrowseRepository(
+        {"ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://album_haven_app@localhost/app"},
+        connect=lambda _database_url: connection,
+        album_ratings_service=_EmptyAlbumRatingsService(),
+    )
+    monkeypatch.setattr(repository, "_load_projected_artist_match", lambda *_a, **_k: "")
+    monkeypatch.setattr(
+        repository,
+        "_load_relation_alias_maps",
+        lambda **_kwargs: {
+            "alias_to_canonical": {},
+            "canonical_to_aliases": {},
+            "projection_stale_reason": "projection_not_ready",
+        },
+    )
+    monkeypatch.setattr(
+        repository,
+        "_load_exact_artist_match",
+        lambda *_args, **_kwargs: pytest.fail(
+            "matching projection must not enter exact-match fallback"
+        ),
+    )
+    monkeypatch.setattr(repository, "queue_settings_projection_prewarm", lambda: None)
+
+    monkeypatch.setattr(
+        repository,
+        "_artist_search_projection_is_authoritative",
+        lambda **_kwargs: True,
+    )
+    monkeypatch.setattr(
+        repository,
+        "_load_live_relation_alias_maps",
+        lambda **_kwargs: pytest.fail(
+            "a current database-owned projection must prove a partial miss without rebuilding 407k rows"
+        ),
+    )
+    monkeypatch.setattr(
+        repository,
+        "_load_search_rows",
+        lambda *_args, **_kwargs: [
+            _browse_album_row(
+                artist=artist,
+                album_id=1,
+                album_key="devin-townsend-one",
+                title="One",
+            )
+        ],
+    )
+    monkeypatch.setattr(repository, "_load_non_album_entries", lambda **_kwargs: [])
+    monkeypatch.setattr(
+        repository._inventory_repository,
+        "load_support_state",
+        lambda **_kwargs: {"ignored_version_keys": [], "manual_version_links": {}},
+    )
+    monkeypatch.setattr(
+        browse_module,
+        "_selected_artist_family_context_from_state",
+        lambda *_args, **_kwargs: {
+            "family_artists": [],
+            "relation_views": {},
+            "alias_to_canonical": {},
+            "canonical_to_aliases": {},
+        },
+    )
+    monkeypatch.setattr(
+        browse_module,
+        "_queue_display_cover_variants_for_groups",
+        lambda *_args, **_kwargs: None,
+    )
+
+    payload = repository.build_search_payload(
+        query_params={
+            "surface": "albums",
+            "q": query,
+            "payload_tier": "search_preview" if preview else "full",
+            "omit_sidebar": "1",
+        },
+        library_state={},
+    )
+
+    assert payload["query"] == query
+    assert [group["artist"] for group in payload["artist_groups"]] == [artist]
+
+
 def test_projected_artist_match_requires_current_ready_metadata():
     from music_app.services.library_browse_postgres import PostgresLibraryBrowseRepository
 
@@ -6849,8 +7056,10 @@ def test_postgres_search_payload_uses_exact_artist_fast_path(monkeypatch):
     assert payload["selected_artist"] == "Neal Morse"
     assert payload["query"] == "Neal Morse"
     assert [group["artist"] for group in payload["artist_groups"]] == ["Neal Morse", "Cosmic Cathedral"]
-    assert [item["artist"] for item in payload["artists_sidebar"]] == ["Neal Morse", "Transatlantic"]
-    assert payload["artist_count"] == 2
+    assert [item["artist"] for item in payload["artists_sidebar"]] == [
+        "Neal Morse", "Cosmic Cathedral", "Transatlantic",
+    ]
+    assert payload["artist_count"] == 3
     assert queued_covers == [
         ("covers/neal.jpg", str(Path("covers") / ".album-haven"), 480),
         ("covers/transatlantic.jpg", str(Path("covers") / ".album-haven"), 480),
@@ -14208,6 +14417,47 @@ def test_selected_artist_missing_album_search_preserves_featured_artist_matches(
     assert missing["_file_entries"] == []
 
 
+@pytest.mark.parametrize(
+    ("query", "expected_keys"),
+    [
+        ("Signal Family Lead", ["signal family lead"]),
+        ("Signal  Family Lead", ["signal family lead"]),
+        ("Signal Family Alias", ["signal family alias", "signal family lead"]),
+        ("Unrelated", []),
+        ("Signal%Lead", ["signal family lead"]),
+        ("Signal_Family Lead", []),
+    ],
+)
+def test_full_search_artist_keys_share_collapsed_identity_without_rewriting_display(query, expected_keys):
+    from music_app.services import library_browse_postgres as browse_module
+
+    class Cursor:
+        def fetchall(self):
+            return []
+
+    class Connection:
+        def execute(self, _sql, params):
+            self.params = params
+            return Cursor()
+
+    connection = Connection()
+    repository = browse_module.PostgresLibraryBrowseRepository(
+        {"ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://album_haven_app@localhost/app"},
+    )
+    canonical = "Signal  Family Lead"
+    aliases = [canonical, "Signal  Family Alias"] if "Alias" in query else [canonical]
+    repository._load_search_rows(
+        query,
+        browse_module._root_sidebar_view_state({"category": ["main_library", "new_arrivals", "hoard"]}),
+        alias_to_canonical={alias: canonical for alias in aliases},
+        canonical_to_aliases={canonical: aliases},
+        include_missing=True,
+        connection=connection,
+    )
+    assert connection.params["search_artist_keys"] == expected_keys
+    assert connection.params["query_like"] == f"%{query}%"
+
+
 def test_active_only_search_preview_skips_missing_artist_key_expansion(monkeypatch):
     from music_app.services import library_browse_postgres as browse_module
 
@@ -14459,3 +14709,107 @@ def test_selected_artist_query_family_excludes_guest_albums_without_broadening_s
     assert family_loads[0][1] is True
     assert payload["selected_artist"] == "Ayreon"
     assert payload["search_context"]["committed_query"] == "Simone Simons"
+
+
+@pytest.mark.parametrize("raw_album,expected", [("", ""), (None, "Inferred Album")])
+def test_track_inventory_preserves_raw_blank_album_before_inferred_membership(monkeypatch, raw_album, expected):
+    from music_app.services.library_browse_postgres import PostgresLibraryBrowseRepository
+
+    track_path = "C:/Music/Artist/Inferred Album/02 - Song.mp3"
+    file_entry = {"path": track_path}
+    if raw_album is not None:
+        file_entry["album"] = raw_album
+    repository = PostgresLibraryBrowseRepository(
+        {"ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://test/isolated"},
+        connect=lambda _url: None,
+        album_ratings_service=_EmptyAlbumRatingsService(),
+    )
+    monkeypatch.setattr(repository, "_load_album_rows_by_track_paths", lambda _paths: [{
+        "file_private_path": track_path, "album_title": "Inferred Album",
+        "track_title": "Song", "file_entry": file_entry,
+    }])
+
+    entries = repository.build_track_file_entries_by_paths({track_path})
+    assert entries[track_path]["album"] == expected
+
+
+class _CountingAliasMap(dict):
+    def __init__(self, values):
+        super().__init__(values)
+        self.iterations = 0
+
+    def items(self):
+        self.iterations += 1
+        return super().items()
+
+
+def test_expanded_artist_batch_reuses_first_match_lookup_without_changing_output():
+    from music_app.services import library_browse_postgres as browse_module
+    from music_app.services.library_inventory_postgres import local_inventory_identity_key
+
+    aliases = {
+        "Signal  Lead": "First",
+        "signal lead": "Second",
+        "Ghost": None,
+        "Guest": "Guest Canonical",
+        "Morse, Portnoy & George": "Credit Canonical",
+    }
+    reverse = {"First": ["First Alias", " first  alias "], "Second": ["Second Alias"]}
+    artists = ["SIGNAL LEAD", "signal lead", "GHOST", "Unknown", "GUEST", "Morse Portnoy & George"]
+    expected = []
+    seen = set()
+    for artist in artists:
+        for value in browse_module._expanded_artist_names(artist, aliases, reverse):
+            key = local_inventory_identity_key(value)
+            if key not in seen:
+                seen.add(key)
+                expected.append(value)
+    assert expected == ["First", "First Alias", "Second", "Second Alias", "GHOST", "Unknown", "Guest Canonical", "Morse Portnoy & George"]
+
+    counted = _CountingAliasMap(aliases)
+    assert browse_module._expanded_artist_name_list(artists, counted, reverse) == expected
+    assert counted.iterations == 1, "Normalized misses must share one first-match lookup per batch"
+    counted["Signal  Lead"] = "Fresh First"
+    assert browse_module._expanded_artist_name_list(["SIGNAL LEAD"], counted, reverse) == ["Fresh First"]
+    assert counted.iterations == 2, "A later batch must see changed aliases rather than a global cache"
+
+    exact = _CountingAliasMap(aliases)
+    assert browse_module._expanded_artist_name_list([], exact, reverse) == []
+    assert browse_module._expanded_artist_name_list(["signal lead", "Guest"], exact, reverse) == ["Second", "Second Alias", "Guest Canonical"]
+    assert exact.iterations == 0, "Empty and exact-only batches do not need a fallback map"
+    assert browse_module._expanded_artist_name_list(["Ghost"], exact, reverse) == ["Ghost"]
+    assert exact.iterations == 1, "An exact key mapped to None must retain normalized fallback semantics"
+
+
+def test_non_album_visible_alias_expansion_preserves_separate_collision_precedence(monkeypatch):
+    from music_app.services import library_browse_postgres as browse_module
+
+    aliases = _CountingAliasMap({"Signal  Lead": "First", "signal lead": "Second"})
+    lookups = []
+    original = browse_module._canonical_artist_name
+
+    def record_lookup(artist, alias_to_canonical, *, normalized_alias_to_canonical=None):
+        lookups.append(normalized_alias_to_canonical)
+        return original(artist, alias_to_canonical, normalized_alias_to_canonical=normalized_alias_to_canonical)
+
+    monkeypatch.setattr(browse_module, "_canonical_artist_name", record_lookup)
+    rows = [
+        _inventory_non_album_candidate(
+            track_id=index, title=f"Loose {index}", private_path=rf"D:\Music\SIGNAL LEAD\Loose {index}.flac",
+            track_number=index, raw_album_artist="SIGNAL LEAD",
+        )
+        for index in (1, 2)
+    ]
+    entries = browse_module._non_album_entries_from_inventory_candidates(
+        rows, visible_library_categories=[], alias_to_canonical=aliases, canonical_to_aliases={},
+        visible_artist_names=["SIGNAL LEAD", "Other Visible", "Third Visible"],
+    )
+    assert len(entries) == 2
+    assert [entry["album_artist"] for entry in entries] == ["Second", "Second"]
+    assert aliases.iterations == 2, "Build each distinct collision-policy lookup only once"
+    assert len(lookups) == 5
+    assert lookups[0] is lookups[1] is lookups[2]
+    assert lookups[0]["signal lead"] == "First"
+    assert lookups[3] is lookups[4]
+    assert lookups[3]["signal lead"] == "Second"
+    assert lookups[0] is not lookups[3]

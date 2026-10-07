@@ -1279,3 +1279,16 @@ for (const allowed of [false, true, undefined]) {
     }
   });
 }
+
+
+test('paged root loose tracks remain visible outside the loaded artist window', () => {
+  const { context } = loadHelper();
+  const track = { artist: 'Later Artist', title: 'Loose track' };
+  context.state.view = {
+    selected_artist: '', gallery_page: { has_more: true, next_cursor: 'next' },
+    artist_groups: [{ artist: 'First Artist', albums: [] }],
+    artists_sidebar: [{ artist: 'First Artist' }, { artist: 'Later Artist' }],
+    non_album_tracks: [track],
+  };
+  assert.deepEqual(Array.from(context.getVisibleNonAlbumTracks()), [track]);
+});

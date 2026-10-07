@@ -482,7 +482,7 @@ def test_waveform_route_returns_scoped_saved_loop_cache_hit_without_rebuilding(
             "file_size_bytes": saved_loop_path.stat().st_size,
             "modified_at_ns": saved_loop_path.stat().st_mtime_ns,
             "sample_count": 280,
-            "analyzer_version": "waveform-peaks-v2",
+            "analyzer_version": "waveform-peaks-v3",
         }
     ]
 

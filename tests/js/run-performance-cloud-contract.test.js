@@ -155,7 +155,7 @@ function runArtistFamilyCiPolicy(t, attempts) {
 
 test('performance runner mirrors the reviewed target inventory and approved fixture profiles', () => {
   const contractTargets = new Map(performanceContract.targets.map((target) => [target.name, target]));
-  const runnerTargets = new Map(Object.entries(performanceRunner.PERFORMANCE_TARGETS).filter(([name]) => name !== 'paired-search-calibration'));
+  const runnerTargets = new Map(Object.entries(performanceRunner.PERFORMANCE_TARGETS));
 
   assert.deepEqual([...runnerTargets.keys()].sort(), [...contractTargets.keys()].sort());
   for (const [name, contractTarget] of contractTargets) {
@@ -169,7 +169,6 @@ test('every discovered performance case has reviewed ownership selected by its r
   const discoveredCases = new Set(
     testDataMatrix
       .filter((entry) => performanceConfigs.has(entry.config))
-      .filter((entry) => !entry.test.includes('searchPreviewPairedCalibration.spec.js'))
       .map(caseIdentity),
   );
   const ownedCases = new Set();

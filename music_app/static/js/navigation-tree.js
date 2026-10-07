@@ -47,11 +47,26 @@
   function updateItem(item, { label = '', subtitle = '', year = '', count = null, artworkHtml, artworkLabel } = {}) {
     for (const [selector, value] of [
       ['.utility-list-item-title', label],
-      ['.utility-list-item-meta', subtitle + (year ? ' · ' + year : '')],
       ['.navigation-tree-count', count === null ? '' : count],
     ]) {
       const field = item.querySelector?.(selector);
       if (field && field.textContent !== String(value)) field.textContent = String(value);
+    }
+    const meta = item.querySelector?.('.utility-list-item-meta');
+    if (meta) {
+      for (const [className, value] of [['utility-list-item-subtitle', subtitle], ['utility-list-item-year', year]]) {
+        let field = meta.querySelector(`.${className}`);
+        if (!value) {
+          field?.remove();
+          continue;
+        }
+        if (!field) {
+          field = document.createElement('span');
+          field.className = className;
+          meta.insertBefore(field, className === 'utility-list-item-subtitle' ? meta.firstChild : null);
+        }
+        if (field.textContent !== String(value)) field.textContent = String(value);
+      }
     }
     const artwork = item.querySelector?.('.navigation-tree-artwork');
     if (artwork && artworkHtml !== undefined) artwork.innerHTML = artworkHtml;

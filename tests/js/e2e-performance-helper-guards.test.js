@@ -390,6 +390,14 @@ test('app-open specs share strict production startup-authority evidence', () => 
   }
 });
 
+test('artist-family benchmark explicitly submits the empty query before awaiting restored browse', () => {
+  const spec = readRepoFile('tests/e2e/syntheticLargeLibrary/artistFamilyResponsiveness.spec.js');
+  const clearStep = spec.slice(spec.indexOf('const clearSearchReadyMs ='), spec.indexOf('const finalIdleMemory ='));
+  assert.match(clearStep, /clearSearch\(\{ submitWithEnter: true \}\)/);
+  assert.match(clearStep, /waitForQuery\('', \{ timeout: 60000 \}\)/);
+  assert.match(clearStep, /waitForUrlWithoutQueryParameter\('q', \{ timeout: 10000 \}\)/);
+});
+
 test('artist-family benchmark keeps browser mechanics outside the scenario spec', () => {
   const spec = readRepoFile('tests/e2e/syntheticLargeLibrary/artistFamilyResponsiveness.spec.js');
   const artistFamilyActions = readRepoFile('tests/e2e/actions/artistFamilyActions.js');

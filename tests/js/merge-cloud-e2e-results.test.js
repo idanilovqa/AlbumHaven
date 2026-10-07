@@ -343,7 +343,7 @@ mergerTest('expected child inventory is exactly four functional shards and 22 pe
   assert.equal(new Set([
     ...actual.functional.map((row) => row.childId),
     ...actual.performance.map((row) => row.childId),
-  ]).size, 25);
+  ]).size, 26);
   assert.deepEqual(actual.performance.filter((row) => !row.measurementExpected).map((row) => row.target), ['scan-page', 'scan-health', 'scan-error']);
 
   const driftedContract = clone(performanceContract);
@@ -920,10 +920,10 @@ mergerTest('public merger output drops raw reporter internals and validates as a
   assert.doesNotMatch(serializedPublic, /retainedArtifacts|baseURL|privateCall|runtime\.log|trace\.zip/i);
   assert.doesNotMatch(serializedPublic, /C:\\Users|C:\\runner|127\.0\.0\.1:5001/i);
   const retainedHistory = JSON.parse(report.pagesFiles['performance-history.json']);
-  assert.equal(retainedHistory.length, 18);
+  assert.equal(retainedHistory.length, 19);
   assert.equal(retainedHistory.every((entry) => entry.attempts[0].attempt === 1), true);
   assert.deepEqual(validateCloudTestReport(report), []);
-  assert.equal(report.verificationEvidence.children.length, 25);
+  assert.equal(report.verificationEvidence.children.length, 26);
   assert.equal(report.verificationEvidence.children.every((child) => (
     child.kind === 'functional' || child.kind === 'performance'
   )), true);
@@ -940,13 +940,13 @@ mergerTest('authenticated inventory retains structured E2E results for 14 days a
   const report = mergeCloudE2EResults(sampleInput());
   const inventory = report.authenticatedInventory;
 
-  assert.equal(inventory.structuredReports.length, 25);
+  assert.equal(inventory.structuredReports.length, 26);
   assert.equal(inventory.debugArtifacts.length, 2);
   assert.equal(inventory.structuredReports.every((entry) => entry.retentionDays === 14), true);
   assert.equal(inventory.debugArtifacts.every((entry) => entry.retentionDays === 7), true);
   assert.equal(new Set([
     ...inventory.structuredReports.map((entry) => entry.name),
     ...inventory.debugArtifacts.map((entry) => entry.name),
-  ]).size, 27);
+  ]).size, 28);
 });
 

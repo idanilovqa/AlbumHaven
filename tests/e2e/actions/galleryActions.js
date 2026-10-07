@@ -51,6 +51,24 @@ export function evaluateMountedAlbumWindowTransition({
   };
 }
 
+export function isCompleteSearchPaint(payload, paint, seededAlbumKeys) {
+  const groups = ['artist_groups', 'primary_artist_groups', 'family_artist_groups']
+    .flatMap(field => Array.isArray(payload?.[field]) ? payload[field] : []);
+  const expectedKeys = [...new Set(groups.flatMap(group => group.albums || [])
+    .map(album => String(album.key || '').trim()).filter(Boolean))].sort();
+  const seededKeys = seededAlbumKeys === undefined ? null
+    : [...new Set((Array.isArray(seededAlbumKeys) ? seededAlbumKeys : [])
+      .map(key => String(key || '').trim()).filter(Boolean))].sort();
+  return expectedKeys.length > 0
+    && (seededKeys === null || (seededKeys.length > 0
+      && JSON.stringify(expectedKeys) === JSON.stringify(seededKeys)))
+    && String(payload?.payload_tier || 'full') === 'full'
+    && paint?.payloadTier === 'full'
+    && paint.partial === false
+    && String(paint.query || '').trim() === String(payload.query || '').trim()
+    && JSON.stringify(paint.albumKeys) === JSON.stringify(expectedKeys);
+}
+
 export function resolveSearchPreviewExpectedCard(payload, expectedQuery, expectedArtist = '') {
   const query = String(expectedQuery || '').trim();
   const artistName = String(expectedArtist || '').trim();
@@ -965,6 +983,22 @@ export class GalleryActions {
     let scrollActions = 0;
     let waitedAtBoundary = false;
     const year = String(options.year || '').trim();
+    const scrollAndWait = async (scrollState, scrollDirection) => {
+      const deadline = Date.now() + 5000;
+      const wheel = async () => {
+        if (maxScrollActions !== null && scrollActions >= maxScrollActions) {
+          throw new Error('Gallery traversal exhausted its native scroll action limit.');
+        }
+        await this.scrollGalleryBy(scrollDirection * Math.max(240, Math.round(scrollState.clientHeight * 0.75)));
+        scrollActions += 1;
+      };
+      await wheel();
+      await this.galleryPage.waitForGalleryScrollMovement(scrollState.scrollTop, scrollDirection, {
+        deadline,
+        previousMaxScrollTop: scrollState.maxScrollTop,
+        onExtentExpanded: wheel,
+      });
+    };
     const reconcileBoundary = async (boundaryDirection) => {
       if (options.waitAtBoundary !== true || waitedAtBoundary) return false;
       waitedAtBoundary = true;
@@ -1007,14 +1041,7 @@ export class GalleryActions {
             break;
           }
           if (maxScrollActions !== null && scrollActions >= maxScrollActions) break;
-          await this.scrollGalleryBy(
-            targetDirection * Math.max(240, Math.round(scrollState.clientHeight * 0.75)),
-          );
-          await this.galleryPage.waitForGalleryScrollMovement(
-            scrollState.scrollTop,
-            targetDirection,
-          );
-          scrollActions += 1;
+          await scrollAndWait(scrollState, targetDirection);
           lastViewportState = await this.readAlbumGalleryViewportState(
             artistName,
             albumName,
@@ -1033,9 +1060,7 @@ export class GalleryActions {
         break;
       }
       if (maxScrollActions !== null && scrollActions >= maxScrollActions) break;
-      await this.scrollGalleryBy(direction * Math.max(240, Math.round(scrollState.clientHeight * 0.75)));
-      await this.galleryPage.waitForGalleryScrollMovement(scrollState.scrollTop, direction);
-      scrollActions += 1;
+      await scrollAndWait(scrollState, direction);
     }
     if (lastViewportState?.attached && !lastViewportState.intersects) {
       throw new Error(
@@ -1125,6 +1150,14 @@ export class GalleryActions {
   }
 
   async measureSyntheticSearchPreviewFirstVisible(searchToolbarActions, query, options = {}) {
+    if (!Array.isArray(options.expectedAlbumKeys) || options.expectedAlbumKeys.length === 0
+        || options.expectedAlbumKeys.some(key => typeof key !== 'string' || !key.trim())) {
+      throw new Error('Synthetic search requires a nonempty independently seeded album inventory.');
+    }
+    return this.measureSearchPreviewFirstVisible(searchToolbarActions, query, options);
+  }
+
+  async measureSearchPreviewFirstVisible(searchToolbarActions, query, options = {}) {
     const expectedQuery = String(query || '').trim();
     const expectedArtist = String(options.expectedArtist || '').trim();
     const timeout = Number(options.timeout || 120000);
@@ -1164,6 +1197,12 @@ export class GalleryActions {
       throw new Error(`Expected a direct search-preview match for "${expectedCard.artist}".`);
     }
     const previewFirstVisibleTiming = await firstVisibleObservation.readExpectedPaint(expectedCard);
+    if (previewFirstVisibleTiming.initialVisibleCardCount > 0) {
+      expect(
+        previewFirstVisibleTiming.minimumVisibleCardCount,
+        'A populated gallery must remain visible until complete search results paint.',
+      ).toBeGreaterThan(0);
+    }
     const previewDomReadyAtMs = previewFirstVisibleTiming.domReadyAtMs;
     const previewPaintAtMs = previewFirstVisibleTiming.paintedAtMs;
     let generationAfter = null;
@@ -1203,12 +1242,14 @@ export class GalleryActions {
     ) {
       throw new Error(`Expected an exact full hydration payload for query "${expectedQuery}".`);
     }
+    expect(isCompleteSearchPaint(fullHydrationPayload, previewFirstVisibleTiming.result, options.expectedAlbumKeys),
+      'The first visible search paint must contain the complete full-result album inventory.').toBe(true);
     let fullHydrationGeneration = null;
     await expect.poll(async () => {
       fullHydrationGeneration = await this.galleryPage.readViewGenerationState();
       return Boolean(
         fullHydrationGeneration.requestGeneration >= previewGeneration.requestGeneration
-        && fullHydrationGeneration.renderGeneration > previewGeneration.renderGeneration
+        && fullHydrationGeneration.renderGeneration >= previewGeneration.renderGeneration
         && fullHydrationGeneration.query === expectedQuery
         && fullHydrationGeneration.settled
       );
@@ -1217,11 +1258,9 @@ export class GalleryActions {
       album: expectedCard.album,
       timeout,
     });
-    // parity-check: allow-read-only-measurement-evaluate -- full-hydration next-paint timestamp
-    const fullHydrationPaintAtMs = await this.galleryPage.page.evaluate(() => new Promise((resolve) => {
-      requestAnimationFrame(() => requestAnimationFrame(() => resolve(performance.now())));
-    }));
-    const completedAtMs = previewPaintAtMs;
+    // The observer captured this paint in-browser; Node polling must not add to it.
+    const fullHydrationPaintAtMs = previewPaintAtMs;
+    const completedAtMs = fullHydrationPaintAtMs;
     return {
       completedAtMs,
       elapsedMs: Math.max(0, completedAtMs - submittedAtMs),

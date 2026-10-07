@@ -3,7 +3,15 @@ async function loadProblematicFiles(force = false, options = {}) {
   const navigationOwnsRendering = () => Boolean(
     state.utility.problematicNavigationActiveToken,
   );
-  if (state.utility.loading) return state.utility.loadPromise;
+  if (state.utility.loading) {
+    const pendingLoad = state.utility.loadPromise;
+    const result = await pendingLoad;
+    if (pendingLoad && !state.utility.loaded
+      && pendingLoad.problematicSummaryRequestToken !== Number(state.utility.problematicSummaryRequestToken || 0)) {
+      return loadProblematicFiles(force, options);
+    }
+    return result;
+  }
   if (state.utility.loaded && !force) {
     if (shouldRender && !navigationOwnsRendering()) renderUtilityModalContent();
     return;
@@ -12,7 +20,8 @@ async function loadProblematicFiles(force = false, options = {}) {
   const requestToken = Number(state.utility.problematicSummaryRequestToken || 0) + 1;
   state.utility.problematicSummaryRequestToken = requestToken;
   if (shouldRender && !navigationOwnsRendering()) renderUtilityModalContent();
-  state.utility.loadPromise = (async () => {
+  let requestPromise = null;
+  requestPromise = (async () => {
     const startedAt = getProblematicUtilityNow();
     let requestMs = 0;
     let parseMs = 0;
@@ -64,9 +73,13 @@ async function loadProblematicFiles(force = false, options = {}) {
       return null;
     } finally {
       const stillOwner = Number(state.utility.problematicSummaryRequestToken || 0) === requestToken;
-      if (stillOwner) {
+      // A mutation can invalidate payload ownership while this request still
+      // owns the loading slot. Release that slot without touching a newer load.
+      if (state.utility.loadPromise === requestPromise) {
         state.utility.loading = false;
         state.utility.loadPromise = null;
+      }
+      if (stillOwner) {
         const renderStartedAt = getProblematicUtilityNow();
         if (shouldRender && !navigationOwnsRendering()) {
           renderUtilityModalContent();
@@ -88,7 +101,9 @@ async function loadProblematicFiles(force = false, options = {}) {
       }
     }
   })();
-  return state.utility.loadPromise;
+  requestPromise.problematicSummaryRequestToken = requestToken;
+  state.utility.loadPromise = requestPromise;
+  return requestPromise;
 }
 
 async function loadProblematicAlbumDetail(albumKey, force = false, options = {}) {

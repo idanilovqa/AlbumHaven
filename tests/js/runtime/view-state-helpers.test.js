@@ -1417,3 +1417,51 @@ function loadHelpers(origin = 'http://localhost:5000') {
     assert.equal(scanPage.hidden, true);
   }
 }
+
+{
+  const context = loadHelpers();
+  const names = ['#2', '#4', '& Co', '(Sandy) Alex G', '-', '...And Oceans',
+    '10 Years', '2Cellos', '[Stömb]', 'A', 'a', 'Élan', '«Отпетые Мошенники»', '東京'];
+  const artists = names.map(artist => ({ artist, artist_display: artist, count: 1 }));
+  const rootView = { surface: { active: 'albums' }, selected_artist: '', query: '', all_artists_active: true };
+  assert.notEqual(
+    context.buildSidebarStructureSignature(artists, { view: rootView }),
+    context.buildSidebarStructureSignature(artists, { view: { ...rootView, selected_artist: '#2', all_artists_active: false } }),
+    'The same sidebar items must rebuild when navigation changes their ordering mode',
+  );
+  for (const initial_view_partial of [false, true]) {
+    const html = context.buildSidebarHtml({
+      surface: { active: 'albums' }, selected_artist: '', query: '',
+      all_artists_active: true, initial_view_partial,
+      artist_groups: artists.slice(0, initial_view_partial ? 6 : artists.length),
+    }, artists);
+    const positions = names.map(name => html.indexOf(`data-sidebar-artist="${name.replace(/&/g, '&amp;')}"`));
+    assert.ok(positions.every(position => position >= 0));
+    assert.deepEqual(positions, [...positions].sort((left, right) => left - right),
+      'All artists must keep the canonical gallery order, including during startup preview');
+    assert.deepEqual(artists.map(item => item.artist), names, 'Rendering must not mutate the payload');
+  }
+}
+
+{
+  const { buildApiUrl } = loadHelpers();
+  const root = { surface_request: 'albums', query: '', selected_artist: '' };
+  assert.equal(new URL(buildApiUrl(root), 'https://localhost').searchParams.get('gallery_page_size'), '50');
+  for (const scoped of [{ ...root, query: 'Neal Morse' }, { ...root, selected_artist: 'Neal Morse' }]) {
+    assert.equal(new URL(buildApiUrl(scoped), 'https://localhost').searchParams.has('gallery_page_size'), false);
+  }
+}
+
+{
+  const { buildApiUrl } = loadHelpers();
+  for (const extra of [{ search_filters: { genre: ['Rock'] } }, { search_filters: { duration: { min_seconds: 0 } } }, { related_filter_artists: ['Family'] }, { primary_filter_active: true }]) {
+    const url = new URL(buildApiUrl({ surface_request: 'albums', ...extra }), 'https://localhost');
+    assert.equal(url.searchParams.has('gallery_page_size'), false, 'unsupported root filters keep their full-result API');
+  }
+}
+
+{
+  const { buildApiUrl } = loadHelpers();
+  const url = new URL(buildApiUrl({ surface_request: 'albums' }, { omitSidebar: true }), 'https://localhost');
+  assert.equal(url.searchParams.get('gallery_page_size'), '50', 'All artists must request a bounded page even when reusing sidebar state');
+}

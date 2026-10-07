@@ -14,6 +14,7 @@ export class GalleryRegressions {
     this.year=this.yearCard.locator('.gallery-card__hover-year');
     this.infoSummary=page.locator('[data-artist-info-overlay] [data-artist-info-summary]');
     this.cards=page.locator('.album-card');
+    this.sidebarArtists=page.locator('#sidebar-list [data-sidebar-artist]');
     this.view=page.locator('[data-gallery-view-cluster]');
     this.noInfo=page.getByRole('button',{name:'No info',exact:true});
     this.cardsView=page.getByRole('button',{name:'Cards',exact:true});
@@ -35,6 +36,27 @@ export class GalleryRegressions {
     this.libraryCheck=page.locator('#scan-indicator .status-check');
     this.library=page.getByRole('button',{name:'Library status',exact:true});
     this.openScan=page.locator('[data-status-action="go-to-scan-page"]:visible');
+  }
+  async captureVisibleGalleryAnchor() {
+    // parity-check: allow-read-only-measurement-evaluate -- retain a visible card at the native continuation boundary, without changing DOM or app state
+    return this.page.evaluateHandle(() => {
+      const scroll = document.getElementById('albums-scroll');
+      const bounds = scroll.getBoundingClientRect();
+      const element = [...document.querySelectorAll('#artist-groups .album-card')].find(card => {
+        const rect = card.getBoundingClientRect();
+        return rect.top < bounds.bottom && rect.bottom > bounds.top;
+      });
+      return { element, top: element?.getBoundingClientRect().top, scrollTop: scroll.scrollTop,
+        loadedCount: state.view.artist_groups.reduce((count, group) => count + group.albums.length, 0) };
+    });
+  }
+  async readGalleryAnchorContinuity(anchor) {
+    // parity-check: allow-read-only-measurement-evaluate -- read card identity and compensate only for native wheel movement
+    return anchor.evaluate(saved => ({
+      connected: saved.element.isConnected,
+      drift: saved.element.getBoundingClientRect().top - saved.top
+        + document.getElementById('albums-scroll').scrollTop - saved.scrollTop,
+    }));
   }
   cover(card) { return card.locator('img').first(); }
   async observeSelectionLoader() {

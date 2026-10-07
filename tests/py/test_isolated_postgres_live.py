@@ -242,9 +242,7 @@ def test_live_artist_search_projection_requires_matching_stale_authority(
 ):
     """Artist lookup may reuse stale data only when its authority still matches."""
     setup_url, runtime_url = _dedicated_database_urls_or_skip(monkeypatch)
-    isolatedPostgres.reset_application_tables(setup_url)
     isolatedPostgres.prepare_isolated_database(setup_url, runtime_url)
-    isolatedPostgres.seed_bootstrap_owner_and_library(setup_url)
     fingerprint = "a" * 64
     builder_version = "local-relation-builder-v10"
     with isolatedPostgres._connect(setup_url) as connection:
@@ -275,13 +273,13 @@ def test_live_artist_search_projection_requires_matching_stale_authority(
             """
             update library.libraries
             set metadata = jsonb_set(
-              coalesce(metadata, '{}'::jsonb),
+              jsonb_set(coalesce(metadata, '{}'::jsonb), '{scan_cache}', coalesce(metadata -> 'scan_cache', '{}'::jsonb)),
               '{scan_cache,relation_projection}',
               jsonb_build_object(
-                'status', %s,
-                'builder_version', %s,
-                'source_fingerprint', %s,
-                'built_from_fingerprint', %s
+                'status', %s::text,
+                'builder_version', %s::text,
+                'source_fingerprint', %s::text,
+                'built_from_fingerprint', %s::text
               ), true)
             where id = %s
             """,
@@ -3763,7 +3761,7 @@ def test_live_phase6_browse_queries_use_bounded_production_plans_and_search_inde
                 "explain (analyze, buffers, format json) " + _search_preview_sql(),
                 production_params,
             ).fetchone()["QUERY PLAN"]
-            assert int(search_before_plan[0]["Plan"]["Actual Rows"]) == 2
+            assert int(search_before_plan[0]["Plan"]["Actual Rows"]) == 1
 
             connection.execute(migration_sql)
             connection.execute(migration_sql)
@@ -3789,7 +3787,7 @@ def test_live_phase6_browse_queries_use_bounded_production_plans_and_search_inde
                     180,
                     750.0,
                 ),
-                "normalized_search": (_search_preview_sql(), production_params, 2, 250.0),
+                "normalized_search": (_search_preview_sql(), production_params, 1, 250.0),
                 "problematic_files": (
                     _problematic_files_sql(candidate_summary=True),
                     {
@@ -3935,8 +3933,10 @@ def test_live_phase6_browse_queries_use_bounded_production_plans_and_search_inde
         expected_rows = load_rows()
         assert [row["artist_name"] for row in expected_rows] == [
             "Joseph Search Probe",
-            "Plain Featured Artist",
         ]
+        assert {credit["artist_name"] for credit in expected_rows[0]["album_featured_artists"]} == {
+            "Joseph Search Probe", "Plain Featured Artist"
+        }
         assert {row["album_title"] for row in expected_rows} == {"Joseph Search Album"}
         assert {row["track_count"] for row in expected_rows} == {1}
         assert {row["total_duration_seconds"] for row in expected_rows} == {245}
@@ -5744,3 +5744,26 @@ def test_live_appearance_fixture_restores_exact_row_or_absence_and_rolls_back(mo
                 assert [item for item in after if item["row"]["account_id"] != account_id or item["row"]["client_profile"] != "desktop"] == [item for item in before if item["row"]["account_id"] != account_id or item["row"]["client_profile"] != "desktop"]
     finally:
         isolatedPostgres.reset_application_tables(setup_url)
+
+
+@pytest.mark.parametrize("disconnect", [False, True], ids=["release", "session-disconnect"])
+def test_live_tag_edit_lease_excludes_recovery_across_connections(watcher_repair_inventory, disconnect):
+    from music_app.services.tag_edit_intents_postgres import PostgresTagEditIntentRepository
+    repository = PostgresTagEditIntentRepository(watcher_repair_inventory.config)
+    lease = repository.intent_lease()
+    try:
+        intent_id = lease.prepare_intent(library_root_identity="lease-test-root", changes=[{"path": "isolated-track.flac", "old_values": {"title": "Old"}, "requested_values": {"title": "New"}}])
+        with repository.claim_unfinished_intent(intent_id, library_root_identity="lease-test-root") as claimed:
+            assert claimed is None
+        if disconnect:
+            lease._connection.close()
+        lease.release()
+        with repository.claim_unfinished_intent(intent_id, library_root_identity="lease-test-root") as claimed:
+            assert claimed["id"] == intent_id
+            with repository.claim_unfinished_intent(intent_id, library_root_identity="lease-test-root") as competing:
+                assert competing is None
+            repository.mark_terminal(intent_id, status="completed")
+        with repository.claim_unfinished_intent(intent_id, library_root_identity="lease-test-root") as claimed:
+            assert claimed is None
+    finally:
+        lease.release()

@@ -111,6 +111,7 @@ Use lowercase, zero-padded filenames and apply them in lexical order:
 0082_preserve_relations_for_missing_album_removal.sql
 0083_add_album_raw_artist_search_index.sql
 0084_create_local_artist_search_projection.sql
+0085_add_stale_track_file_candidate_index.sql
 ```
 
 Section 3 owns the first baseline schema migration. Do not add future-feature reservation schemas here. Phase 6 migration files should stay current-stack scoped and target app-owned durable data for `album_haven_core`.
@@ -187,7 +188,7 @@ Its B-tree covers the library-and-canonical-name scope lookup in normalized-key
 order. The runtime role can read the table and invoke only the bounded
 replacement function; it has no direct table-write privileges.
 
-`0081` through `0084` are unreleased branch migrations. Their presence in a
+`0081` through `0085` are unreleased branch migrations. Their presence in a
 working checkout or sandbox does not establish that a deployment ledger has
 recorded them. Release rollout must apply and checksum them in lexical order
 before starting the matching application version. Run `0083` outside an
@@ -207,3 +208,7 @@ table. Keep the live-SQL fallback for absent, stale, or incompatible projection
 readiness throughout rollout and rollback.
 
 Set `PGPASSFILE` when passwordless local automation is required. Keep migration SQL idempotent and review query plans for index-sensitive changes.
+
+Migration `0085_add_stale_track_file_candidate_index.sql` indexes the generated stale-file predicate used by missing-album discovery. It avoids scanning every active file when the stale set is empty or small. The partial index is maintained by PostgreSQL as files become stale or return; it changes no rows, result semantics, or privileges. Older application versions remain compatible. Rollback removes only this index through a subsequent migration.
+
+This ordinary transactional index build allows reads but temporarily blocks writes to the track-file table. Apply it during a controlled migration window before starting application writers.

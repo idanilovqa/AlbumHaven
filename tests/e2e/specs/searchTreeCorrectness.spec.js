@@ -228,7 +228,7 @@ test('FTC-SEARCH-NAV-028 limits a content-matched family artist while keeping an
     await galleryActions.waitForSelectedArtistGallery(FAMILY_ARTIST, { queryValue: TRANSATLANTIC_QUERY });
     expect(await galleryActions.readAlbumNamesByHeading(FAMILY_ARTIST)).toEqual([TRANSATLANTIC_NEAL_ALBUM]);
     expect(await galleryActions.readArtistHeadings()).toEqual([FAMILY_ARTIST]);
-    await searchToolbarActions.clearSearch();
+    await searchToolbarActions.clearSearch({ submitWithEnter: true });
     await searchToolbarActions.waitForQuery('');
     await galleryActions.waitForSelectedArtistGallery(FAMILY_ARTIST, { queryValue: '' });
     expect(await galleryActions.readAlbumNamesByHeading(FAMILY_ARTIST)).toEqual(completeNealView.albums);
@@ -339,6 +339,7 @@ test('FTC-SEARCH-NAV-026 clears Neal Morse search without remounting the selecte
       minimumDecodedCovers: 1,
     });
     const transition = await searchToolbarActions.clearSearchAndObserveStableGallery({
+      submitWithEnter: true,
       expectedViewDataRequestCount: 1,
       minimumViewDataRequestCount: 0,
     });
@@ -609,7 +610,7 @@ test('FTC-SEARCH-NAV-002, FTC-SEARCH-NAV-003, and FTC-SEARCH-NAV-026 keep one-fa
 
   await stepLogger.step('Clear the no-selection search naturally and restore the nonempty canonical root at its top', async () => {
     await searchToolbarActions.openRecentSearches();
-    await searchToolbarActions.clearSearchByInputDebounce();
+    await searchToolbarActions.clearSearchWithEnter();
     await searchToolbarActions.waitForDefaultRootUrl();
     await navigationPanelActions.waitForAllArtistsVisibility(true);
     await navigationPanelActions.waitForSidebarArtistNames(rootSnapshot.names);
@@ -650,6 +651,7 @@ test('FTC-SEARCH-NAV-026 keeps a cold direct-loaded selected gallery mounted thr
       WHITESPACE_DISPLAY_ARTIST,
     );
     const transition = await searchToolbarActions.clearSearchAndObserveStableGallery({
+      submitWithEnter: true,
       expectedViewDataRequestCount: 1,
     });
     expect(transition).toEqual(expect.objectContaining({

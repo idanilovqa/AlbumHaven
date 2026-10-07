@@ -194,11 +194,31 @@ function proposalContext() {
   return context;
 }
 
-test('P09 Apply All targets only the eligible visible suggestions', () => {
+test('P09 suggested edits require explicit selection even when eligible suggestions are visible', () => {
   const context = proposalContext();
   assert.equal(typeof context.getApplicableProblemSuggestions, 'function');
   context.state.utility.selectedProblemFilters = ['Missing year'];
-  assert.deepEqual(Array.from(context.getApplicableProblemSuggestions(), item => item.id), ['year-1', 'year-2']);
+  assert.deepEqual(Array.from(context.getApplicableProblemSuggestions()), []);
+});
+
+test('P09 selection refresh disables Apply again after the last suggestion is deselected', () => {
+  const context = proposalContext();
+  context.state.utility.problematicFiles[0].allowed_actions = { 'library.files.edit_tags': true };
+  const label = { textContent: '' };
+  const apply = { disabled: false, querySelector: () => label };
+  context.document = { querySelectorAll: () => [], querySelector: () => apply };
+  context.ButtonComponent = { setDisabled: (button, disabled) => { button.disabled = disabled; } };
+  context.syncProblemSuggestionSelection();
+  assert.equal(apply.disabled, true);
+  assert.equal(label.textContent, 'Select edits to apply');
+  context.toggleProblemSuggestion('year-1');
+  context.syncProblemSuggestionSelection();
+  assert.equal(apply.disabled, false);
+  assert.equal(label.textContent, 'Apply selected edits');
+  context.toggleProblemSuggestion('year-1');
+  context.syncProblemSuggestionSelection();
+  assert.equal(apply.disabled, true);
+  assert.equal(label.textContent, 'Select edits to apply');
 });
 
 test('P09 explicit selection never falls back to Apply All when its proposals are hidden', () => {
@@ -309,6 +329,14 @@ function confirmationContext() {
   };
   return { context, modal, requests };
 }
+
+test('P09 opening Apply without selected suggestions cannot open confirmation', () => {
+  const { context, modal, requests } = confirmationContext();
+  context.openProblemSuggestionsConfirm();
+  assert.equal(modal.overlay.hidden, true);
+  assert.equal(context.state.utility.pendingProblemSuggestions, undefined);
+  assert.deepEqual(requests, []);
+});
 
 test('P09 opening Apply confirms exact values and makes no request before acceptance', () => {
   const { context, modal, requests } = confirmationContext();
@@ -438,7 +466,10 @@ for (const action of ['exclusion', 'suggestion']) {
     album.allowed_actions = { [permission]: true };
     const sync = action === 'exclusion' ? context.syncProblemExclusionSelection : context.syncProblemSuggestionSelection;
     if (action === 'exclusion') context.state.utility.problemExclusionSelections = { 'year-problem': true };
-    else album.suggested_edits = [{ id: 'year-suggestion', field: 'year', original: null, corrected: 2008 }];
+    else {
+      album.suggested_edits = [{ id: 'year-suggestion', field: 'year', original: null, corrected: 2008 }];
+      context.state.utility.proposalSelections = { 'year-suggestion': true };
+    }
     sync();
     assert.equal(button.disabled, false, 'authorized selection enables the native button');
     assert.notEqual(button.getAttribute('aria-disabled'), 'true', 'accessible state must not keep the enabled button inert');

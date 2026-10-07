@@ -4,7 +4,9 @@ function readViewDataRequest(request, sequence) {
   const requestUrl = new URL(request.url());
   if (!['/view-data', '/home-data'].includes(requestUrl.pathname)) return null;
   return {
-    full: String(requestUrl.searchParams.get('payload_tier') || '').trim().toLowerCase() !== 'sidebar',
+    full: !['sidebar', 'search_preview'].includes(
+      String(requestUrl.searchParams.get('payload_tier') || '').trim().toLowerCase(),
+    ),
     sequence,
     url: request.url(),
   };

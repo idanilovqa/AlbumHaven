@@ -155,10 +155,16 @@ export class AlbumCard extends BasePage {
       const resolvedProductionSrc = resolveSource(productionSrc);
       const resolvedRenderedSrc = resolveSource(renderedSrc);
       const resolvedCurrentSrc = resolveSource(currentSrc);
+      const productionUrl = resolvedProductionSrc ? new URL(resolvedProductionSrc) : null;
+      const renderedUrl = resolvedRenderedSrc ? new URL(resolvedRenderedSrc) : null;
+      const committedProductionBlob = renderedUrl?.protocol === 'blob:'
+        && renderedUrl.origin === new URL(document.baseURI).origin
+        && productionUrl?.origin === renderedUrl.origin
+        && productionUrl.pathname === '/cover';
       const sourceCoherent = Boolean(
         resolvedProductionSrc
-        && resolvedRenderedSrc === resolvedProductionSrc
-        && (!resolvedCurrentSrc || resolvedCurrentSrc === resolvedProductionSrc)
+        && (resolvedRenderedSrc === resolvedProductionSrc || committedProductionBlob)
+        && (!resolvedCurrentSrc || resolvedCurrentSrc === resolvedRenderedSrc)
       );
       return {
         currentSrc,

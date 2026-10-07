@@ -3,7 +3,6 @@ import { expect, test } from '../support/performanceFixtures.js';
 import {
   buildBenchmarkValidationPayload,
   evaluateAppOpenAllArtistsLocalBenchmark,
-  expectPostgresLibraryBrowseTelemetry,
   logBenchmarkTimingResults,
   partitionAuthenticatedCoverPreemptionRuntimeLogs,
   readGalleryCoverPreemptionSnapshot,
@@ -15,6 +14,7 @@ import {
 import {
   collectRootBrowseStartupAuthorityEvidence,
   expectManualStartupEntryPath,
+  expectPagedRootBrowseAuthority,
   expectNoUnexpectedRuntimeFailures,
   expectRootBrowseStartupAuthorityEvidence,
   readRuntimeView,
@@ -50,7 +50,7 @@ test.describe(`${CASE_ID} synthetic-large app-open All Artists UI`, () => {
     const visibleAllArtistsCount = await navigationPanelActions.readAllArtistsVisibleCount();
     const visibleArtistHeadings = await galleryActions.readArtistHeadings();
 
-    await stepLogger.step('Assert the app-open path exposes a valid startup entry path and then hydrates into All Artists', async () => {
+    await stepLogger.step('Assert the app-open path exposes a valid startup entry path and then displays All Artists', async () => {
       expectManualStartupEntryPath(startupEntryState, 'the app-open benchmark');
       expectRootBrowseStartupAuthorityEvidence(startupAuthorityEvidence);
       expect(runtimeView, 'Expected the app-open runtime view to be available after visible readiness.').toBeTruthy();
@@ -83,7 +83,7 @@ test.describe(`${CASE_ID} synthetic-large app-open All Artists UI`, () => {
       },
     });
 
-    const fullSidebarProof = await stepLogger.step('Wait for strict full sidebar hydration proof after visible readiness', async () => (
+    const fullSidebarProof = await stepLogger.step('Wait for complete sidebar metadata rendering after visible readiness', async () => (
       awaitFullSidebarProof()
     ));
     const fullRuntimeView = await readRuntimeView(page);
@@ -97,9 +97,11 @@ test.describe(`${CASE_ID} synthetic-large app-open All Artists UI`, () => {
       preemptions: coverPreemptionAfter.preemptions,
     };
 
-    await stepLogger.step('Assert app-open full sidebar proof came from library_browse', async () => {
+    await stepLogger.step('Assert app-open bounded gallery and complete sidebar came from library_browse', async () => {
       expect(fullRuntimeView, 'Expected the full app-open runtime view to be available after full-sidebar readiness.').toBeTruthy();
-      expectPostgresLibraryBrowseTelemetry(fullRuntimeView, 'full');
+      expectPagedRootBrowseAuthority(fullRuntimeView, { accumulated: true });
+      expect(fullSidebarArtistCount).toBe(fullRuntimeView.artist_count);
+      expect(sidebarArtistNames).toEqual(fullRuntimeView.artists_sidebar.map(item => item.artist));
       expect(fullSidebarArtistCount).toBe(fullVisibleAllArtistsCount);
       expect(sidebarArtistNames.length).toBeGreaterThan(0);
     });

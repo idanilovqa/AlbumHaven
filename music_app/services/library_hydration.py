@@ -342,6 +342,18 @@ def hydrate_library_state_from_disk(
     strict_scan_cache_load: bool = False,
     record_file_error: Callable[..., None] | None = None,
 ) -> bool:
+    if config.get("SHARED_LIBRARY_BROWSE_ONLY") is True:
+        validate_cache = False
+        ensure_relations = False
+        strict_scan_cache_load = True
+        from music_app.services.relation_projection_postgres import relation_projection_structure_complete
+
+        if library_state.get("albums") and (
+            not relation_projection_structure_complete(library_state.get("relation_views"))
+            or not library_state["relation_views"].get("artists")
+        ):
+            raise RuntimeError("Shared browsing requires an existing complete relation projection")
+
     def _relations_missing(state: dict[str, object]) -> bool:
         relation_views = state.get("relation_views", {}) or {}
         return not relation_views.get("artists")
@@ -363,6 +375,11 @@ def hydrate_library_state_from_disk(
         config["CACHE_PATH"],
         root_identity,
     )
+    if config.get("SHARED_LIBRARY_BROWSE_ONLY") is True and file_cache and (
+        not relation_projection_structure_complete(relation_views)
+        or not relation_views.get("artists")
+    ):
+        raise RuntimeError("Shared browsing requires an existing complete relation projection")
     exception_overrides_loader = load_exception_overrides
     exception_overrides = exception_overrides_loader(config) if exception_overrides_loader is not None else {}
     if disk_error:

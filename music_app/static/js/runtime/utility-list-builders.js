@@ -2102,8 +2102,32 @@ async function watchSaveTask(taskId, context = {}) {
             && !mutationWasSuperseded()
           ) {
             try {
+              let refreshView = state.view;
+              const originSearch = context.originatingSearchContext;
+              const originalOwner = String(originalAlbum?.album_artist || '').trim().toLowerCase();
+              const splitAlbums = Array.isArray(context.optimisticAlbums) ? context.optimisticAlbums : [];
+              const restoresAllSearchResults = Boolean(
+                canReconcileOriginView()
+                && structuralTagEditRequiresMountedGalleryChildReplacement
+                && originSearch?.selected_artist_source === 'auto_top_match'
+                && !(originSearch.artist_name_match_artists || []).length
+                && originalOwner
+                && splitAlbums.some(album => String(album?.album_artist || '').trim().toLowerCase() === originalOwner)
+                && splitAlbums.some(album => {
+                  const owner = String(album?.album_artist || '').trim().toLowerCase();
+                  return owner && owner !== originalOwner;
+                })
+                && originatingViewRequestUrl
+                && String(state.view.query || '').trim()
+                && parseBrowserUrlState(originatingViewRequestUrl).query === state.view.query
+                && !state.view.primary_filter_active
+                && !(state.view.related_filter_artists || []).length
+              );
+              if (restoresAllSearchResults) {
+                refreshView = { ...state.view, selected_artist: '', all_artists_active: true };
+              }
               viewRefreshed = await fetchAndRender(
-                buildApiUrl(state.view),
+                buildApiUrl(refreshView),
                 false,
                 {
                   ...currentViewRenderOptions(),
@@ -2115,6 +2139,11 @@ async function watchSaveTask(taskId, context = {}) {
                   shouldApplyResponse: () => !mutationWasSuperseded(),
                 },
               );
+              if (viewRefreshed && restoresAllSearchResults && canReconcileOriginView()) {
+                window.history.replaceState(
+                  { ...window.history.state, ...state.view }, '', buildUrl(state.view),
+                );
+              }
               if (viewRefreshed && finalizedAlbums.length) {
                 modalUpdatedAlbums = enrichFinalizedAlbumsWithCanonicalVisibleProjections(
                   finalizedAlbums,
@@ -2927,7 +2956,7 @@ function getVisibleProblemSuggestions(album = getSelectedProblematicAlbum()) {
 function getApplicableProblemSuggestions() {
   const visible = getVisibleProblemSuggestions();
   const selections = state.utility.proposalSelections || {};
-  return Object.values(selections).some(Boolean) ? visible.filter(proposal => selections[proposal.id]) : visible;
+  return visible.filter(proposal => selections[proposal.id]);
 }
 
 function toggleProblemSuggestion(id, { selected } = {}) {
@@ -2962,7 +2991,7 @@ function syncProblemSuggestionSelection() {
   const apply = document.querySelector?.('[data-apply-problem-suggestions]');
   if (apply) {
     const label = apply.querySelector?.('.ui-button__content') || apply;
-    label.textContent = Object.values(state.utility.proposalSelections || {}).some(Boolean) ? 'Apply' : 'Apply All';
+    label.textContent = Object.values(state.utility.proposalSelections || {}).some(Boolean) ? 'Apply selected edits' : 'Select edits to apply';
     ButtonComponent.setDisabled(apply, !getSelectedProblematicAlbum()?.allowed_actions?.['library.files.edit_tags'] || !getApplicableProblemSuggestions().length || Boolean(state.utility.proposalApplyBusy));
   }
 }

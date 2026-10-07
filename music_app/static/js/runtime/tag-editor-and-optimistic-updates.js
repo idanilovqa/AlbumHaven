@@ -723,6 +723,7 @@ async function confirmManualTagEdit() {
   const originatingViewRequestUrl = typeof buildApiUrl === 'function'
     ? String(buildApiUrl(state.view) || '').trim()
     : '';
+  const originatingSearchContext = { ...(state.view?.search_context || {}) };
   const tagEditMutationClaim = claimTagEditViewMutation(album, editedPaths, updates);
   settleTagEditorSessionMutationClaim();
   const optimisticUpdatedAlbums = buildOptimisticUpdatedAlbumsFromEdits(album, updates);
@@ -836,6 +837,7 @@ async function confirmManualTagEdit() {
       originalAlbum: album,
       originatingViewStateRevision,
       originatingViewRequestUrl,
+      originatingSearchContext,
       tagEditMutationClaim,
       tagEdits: authoritativeTagEdits,
       preserveAbsoluteScroll: true,

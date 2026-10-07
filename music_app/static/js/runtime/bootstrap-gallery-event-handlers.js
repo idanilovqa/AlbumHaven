@@ -990,7 +990,17 @@ function releasePendingGallerySearchSuspensions() {
 
 function scheduleGallerySearchCommit(nextQuery, options = {}) {
   const normalizedQuery = updateGallerySearchDraftQuery(nextQuery);
-  const committedQuery = String(state.view?.query || '');
+  let committedQuery = String(state.view?.query || '');
+  const pendingQuery = state.busy
+    && String(state.ui.activeViewRequestUrl || '').startsWith('/view-data?')
+    && String(state.ui.activeViewRequestUrl).match(/(?:[?&])q=([^&]*)/);
+  if (pendingQuery) {
+    try {
+      committedQuery = decodeURIComponent(pendingQuery[1].replace(/\+/g, ' '));
+    } catch (_error) {
+      // Invalid request encoding cannot supersede the applied query.
+    }
+  }
   const retriesFailedSearch = Boolean(
     options.immediate
     && state.ui?.failedGallerySearch?.query === normalizedQuery
@@ -1049,6 +1059,11 @@ function revealArtistTreeForSearch() {
 function handleGalleryBootstrapSearchSubmit(event) {
   event.preventDefault();
   if (typeof handleMobileSearchSubmit === 'function' && handleMobileSearchSubmit()) return;
+  if (state.ui.artistsDrawerOpen
+    && typeof usesMobilePageLayout === 'function' && usesMobilePageLayout()
+    && typeof closeArtistsDrawer === 'function') {
+    closeArtistsDrawer({ restoreFocus: false });
+  }
   const input = document.getElementById('search-input');
   const nextQuery = input?.value || '';
   const mobileArtistsButton = document?.querySelector?.('.mobile-artists-mode-button');
@@ -1158,6 +1173,9 @@ function commitGallerySearchQuery(nextQuery, options = {}) {
       !String(state.view.query || '').trim()
       && effectiveSelectedArtist === String(state.view.selected_artist || '').trim()
     ) {
+      if (state.busy && /(?:[?&])q=[^&]+/.test(String(state.ui.activeViewRequestUrl || ''))) {
+        state.ui.activeViewRequestController?.abort();
+      }
       state.ui.pendingSearchClearOnBlur = false;
       releaseAlbumDetailPrewarmSearchSuspension(
         Number(state.ui.albumDetailPrewarmSearchGeneration || 0),
@@ -1294,10 +1312,9 @@ function commitGallerySearchQuery(nextQuery, options = {}) {
     payloadTier: 'search_preview',
   });
   const hydrationUrl = buildApiUrl(next);
-  state.view = { ...state.view, query: normalizedQuery };
-  let activeSearchStage = retriesHydration ? 'hydration' : 'preview';
-  const handleSearchFailure = () => {
+  const handleSearchFailure = (error) => {
     if (state.ui.gallerySearchGeneration !== searchGeneration) return;
+    const activeSearchStage = error?.gallerySearchStage || 'hydration';
     const previewFailed = activeSearchStage === 'preview';
     state.ui.failedGallerySearch = {
       query: normalizedQuery,
@@ -1311,43 +1328,22 @@ function commitGallerySearchQuery(nextQuery, options = {}) {
       showToast(
         previewFailed
           ? 'Search preview failed. Retry the search.'
-          : 'Search preview loaded, but full search results failed to load. Retry the search.',
+          : 'Full search results failed to load. Retry the search.',
         'error',
         4800,
         { errorKey: `gallery-search-${activeSearchStage}-failed` },
       );
     }
   };
-  const runHydration = () => Promise.resolve(fetchAndRender(hydrationUrl, true, {
-    preserveScroll: true,
+  const request = fetchAndRender(hydrationUrl, true, {
+    preserveScroll: String(previousView.query || '') === normalizedQuery,
+    restartIfSameUrl: true,
     skipPendingViewTransition: true,
     shouldApplyResponse: () => state.ui.gallerySearchGeneration === searchGeneration,
-  }));
-  if (retriesHydration) {
-    void runHydration().then(
-      resumeCoverLoads,
-      (error) => {
-        resumeCoverLoads();
-        throw error;
-      },
-    ).catch(handleSearchFailure);
-    return;
-  }
-  const previewRequest = fetchAndRender(previewUrl, true, {
-    shouldApplyResponse: () => false,
-    preserveMountedGallery: true,
+    ...(retriesHydration ? {} : { searchPreviewUrl: previewUrl }),
   });
-  const previewRequestId = state.ui.activeViewRequestId;
-  const previewViewRevision = state.ui.viewStateRevision;
-  void Promise.resolve(previewRequest).then(
-    () => {
-      resumeCoverLoads();
-      if (state.ui.gallerySearchGeneration !== searchGeneration) return false;
-      if (state.ui.activeViewRequestId !== previewRequestId
-        || state.ui.viewStateRevision !== previewViewRevision) return false;
-      activeSearchStage = 'hydration';
-      return runHydration();
-    },
+  void Promise.resolve(request).then(
+    resumeCoverLoads,
     (error) => {
       resumeCoverLoads();
       throw error;

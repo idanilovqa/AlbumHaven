@@ -10,6 +10,153 @@ const galleryEventHandlersPath = path.join(path.dirname(helperPath), 'bootstrap-
 const galleryEventHandlersSource = fs.readFileSync(galleryEventHandlersPath, 'utf8');
 const tagMutationSource = fs.readFileSync(path.join(path.dirname(helperPath), 'utility-list-builders.js'), 'utf8');
 
+function createSearchOwnerContext() {
+  const fixture = createContext();
+  const { context } = fixture;
+  context.window = { location: { pathname: '/', search: '' } };
+  context.state.gallery = {};
+  vm.runInContext(galleryEventHandlersSource, context, { filename: galleryEventHandlersPath });
+  context.clearPendingSelectedArtistReconcile = () => {};
+  context.clearPendingGallerySearchCommit = () => {};
+  context.updateGallerySearchDraftQuery = query => (context.state.ui.searchDraftQuery = query);
+  context.withActiveGallerySources = view => ({ ...view });
+  context.deepCloneJson = value => JSON.parse(JSON.stringify(value));
+  context.buildApiUrl = (view, options = {}) => '/view-data?q=' + encodeURIComponent(view.query || '')
+    + (options.payloadTier ? '&payload_tier=' + options.payloadTier : '');
+  context.state.view = { ...context.state.view, query: '', selected_artist: '' };
+  return fixture;
+}
+
+for (const equivalentTopology of [false, true]) {
+test(`new search resets the viewport only when full results apply (equivalent topology: ${equivalentTopology})`, async () => {
+  const { context, calls, pendingRequests, runtimeRenderView } = createSearchOwnerContext();
+  const previousGroups = [{ artist: 'Neal Morse', albums: [{ key: 'neal::old', name: 'Old' }] }];
+  const nextGroups = equivalentTopology
+    ? previousGroups
+    : [{ artist: 'Transatlantic', albums: [{ key: 'transatlantic::new', name: 'New' }] }];
+  context.state.view = {
+    ...context.state.view, query: 'Neal Morse', selected_artist: 'Neal Morse',
+    artist_groups: previousGroups, primary_artist_groups: previousGroups, family_artist_groups: [],
+  };
+  const previousView = context.state.view;
+  const renders = [];
+  context.renderView = runtimeRenderView;
+  context.renderArtistGroups = options => renders.push(options);
+  context.commitGallerySearchQuery('transatlantic');
+  assert.equal(pendingRequests.length, 2);
+  assert.equal(context.state.view, previousView);
+  assert.equal(context.state.ui.pendingViewTransition, undefined);
+  assert.equal(renders.length, 0, 'pending search must keep the existing viewport');
+  pendingRequests[1].resolveWith({ query: 'transatlantic', payload_tier: 'search_preview', artist_groups: [] });
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(calls.applyViewPayload.length, 0);
+  assert.equal(renders.length, 0, 'preview must not reset the existing viewport');
+  pendingRequests[0].resolveWith({
+    query: 'transatlantic', selected_artist: nextGroups[0].artist, payload_tier: 'full',
+    artist_groups: nextGroups, primary_artist_groups: nextGroups, family_artist_groups: [],
+  });
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(renders.length, 1, 'the completed new query must reach the viewport renderer');
+  assert.equal(renders[0].preserveScroll, false, 'new results must start at the primary artist');
+  assert.equal(context.state.view.payload_tier, 'full');
+});
+}
+
+for (const initialContext of ['root', 'requested_artist', 'mobile_utility']) {
+test(`repeated Enter while search is pending preserves the active result owner (${initialContext})`, async () => {
+  const { context, calls, pendingRequests } = createSearchOwnerContext();
+  let mobilePageActive = false;
+  let mobileNavigations = 0;
+  context.hasActiveMobilePage = () => mobilePageActive;
+  context.prepareMobileGallerySearch = () => {
+    if (mobilePageActive) mobileNavigations += 1;
+    mobilePageActive = false;
+    return true;
+  };
+  if (initialContext === 'requested_artist') {
+    context.state.view.selected_artist = 'The Neal Morse Band';
+    context.state.view.search_context = { selected_artist_source: 'requested_artist' };
+  }
+  context.scheduleGallerySearchCommit('Devin', { immediate: true });
+  assert.equal(pendingRequests.length, 2);
+  mobilePageActive = initialContext === 'mobile_utility';
+  context.scheduleGallerySearchCommit('Devin', { immediate: true });
+  assert.equal(pendingRequests.length, initialContext === 'root' ? 2 : 4);
+  assert.equal(pendingRequests[0].options.signal.aborted, initialContext !== 'root');
+  assert.equal(pendingRequests[1].options.signal.aborted, initialContext !== 'root');
+  pendingRequests.at(-2).resolveWith({ query: 'Devin', artist_groups: [], payload_tier: 'full' });
+  pendingRequests.at(-1).resolveWith({ query: 'Devin', artist_groups: [], payload_tier: 'search_preview' });
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(context.state.view.query, 'Devin');
+  assert.equal(calls.applyViewPayload.length, 1);
+  assert.equal(mobilePageActive, false);
+  assert.equal(mobileNavigations, initialContext === 'mobile_utility' ? 1 : 0);
+});
+}
+
+test('empty Enter during a pending search cancels both requests and retains the root view', async () => {
+  const { context, calls, pendingRequests } = createSearchOwnerContext();
+  const rootView = context.state.view;
+  context.scheduleGallerySearchCommit('Devin', { immediate: true });
+  assert.equal(pendingRequests.length, 2);
+  context.scheduleGallerySearchCommit('', { immediate: true });
+  assert.equal(pendingRequests[0].options.signal.aborted, true);
+  assert.equal(pendingRequests[1].options.signal.aborted, true);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(context.state.view, rootView);
+  assert.equal(calls.applyViewPayload.length, 0);
+});
+
+test('search preview and full requests share one owner and apply only the complete payload', async () => {
+  const { context, calls, pendingRequests } = createContext();
+  const request = context.fetchAndRender('/view-data?q=Devin', true, {
+    searchPreviewUrl: '/view-data?q=Devin&payload_tier=search_preview',
+    preserveScroll: true,
+  });
+  assert.equal(pendingRequests.length, 2, 'both reads must start without waiting for the preview');
+  assert.equal(pendingRequests[0].options.signal, pendingRequests[1].options.signal);
+  assert.equal(context.state.ui.activeViewRequestId, 1);
+  pendingRequests[0].resolveWith({ query: 'Devin', artist_groups: [], payload_tier: 'full' });
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(calls.applyViewPayload.length, 0, 'both responses must validate before applying');
+  pendingRequests[1].resolveWith({ query: 'Devin', artist_groups: [], payload_tier: 'search_preview' });
+  assert.equal(await request, true);
+  assert.equal(calls.applyViewPayload.length, 1);
+  assert.equal(context.state.view.payload_tier, 'full');
+});
+
+test('superseding a search aborts its preview and full requests together', async () => {
+  const { context, calls, pendingRequests } = createContext();
+  const obsolete = context.fetchAndRender('/view-data?q=Devin', true, {
+    searchPreviewUrl: '/view-data?q=Devin&payload_tier=search_preview',
+  });
+  assert.equal(pendingRequests.length, 2);
+  const current = context.fetchAndRender('/view-data?q=Neal', true);
+  assert.equal(pendingRequests[0].options.signal.aborted, true);
+  assert.equal(pendingRequests[1].options.signal.aborted, true);
+  assert.equal(await obsolete, false);
+  pendingRequests[2].resolveWith({ query: 'Neal', artist_groups: [] });
+  assert.equal(await current, true);
+  assert.equal(calls.applyViewPayload.length, 1);
+  assert.equal(context.state.view.query, 'Neal');
+});
+
+for (const failedIndex of [0, 1]) {
+  test(`failed search ${failedIndex === 0 ? 'full' : 'preview'} aborts its companion and preserves the view`, async () => {
+    const { context, calls, pendingRequests } = createContext();
+    const previousView = context.state.view;
+    const request = context.fetchAndRender('/view-data?q=Devin', true, {
+      searchPreviewUrl: '/view-data?q=Devin&payload_tier=search_preview',
+    });
+    assert.equal(pendingRequests.length, 2);
+    pendingRequests[failedIndex].rejectWith(new Error('search failed'));
+    await assert.rejects(request, /search failed/);
+    assert.equal(pendingRequests[1 - failedIndex].options.signal.aborted, true);
+    assert.equal(context.state.view, previousView);
+    assert.equal(calls.applyViewPayload.length, 0);
+  });
+}
+
 test('a deferred gallery refresh cannot overwrite a newer optimistic tag mutation', async () => {
   const { context, calls, pendingRequests } = createContext();
   vm.runInContext(tagMutationSource, context);
@@ -5938,6 +6085,111 @@ test('pollStatus does not duplicate a prior error when a new scan generation is 
   assert.deepEqual(calls.prependUtilityLogHistoryEntries, []);
 });
 
+test('a superseded status 401 cannot redirect a newer successful session read', async () => {
+  const { context, pendingRequests } = createContext();
+  const navigations = [];
+  context.window = { location: { assign: url => navigations.push(url) } };
+  context.scheduleBrowserTimeout = () => {};
+  const stale = context.pollStatus();
+  const current = context.pollStatus();
+  pendingRequests[1].resolveWith({ scan_in_progress: false });
+  await current;
+  pendingRequests[0].resolveWith({ status: 401, responseOk: false });
+  await stale;
+  assert.deepEqual(navigations, []);
+});
+
+test('a superseded gallery 401 cannot redirect a newer successful navigation', async () => {
+  const { context, pendingRequests } = createContext();
+  const navigations = [];
+  context.window = { location: { assign: url => navigations.push(url) } };
+  const stale = context.fetchAndRender('/view-data?artist=Old', false);
+  context.state.ui.activeViewRequestController.abort = () => {};
+  const current = context.fetchAndRender('/view-data?artist=Current', false);
+  pendingRequests[1].resolveWith({ selected_artist: 'Current', artist_groups: [] });
+  assert.equal(await current, true);
+  pendingRequests[0].resolveWith({ status: 401, responseOk: false });
+  assert.equal(await stale, false);
+  assert.deepEqual(navigations, []);
+});
+
+for (const status of [401, 503]) {
+test(`search failure ${status} retains the gallery and redirects only an expired session`, async () => {
+  const { context, calls, pendingRequests } = createSearchOwnerContext();
+  const navigations = [];
+  context.window.location.assign = url => navigations.push(url);
+  const previousView = context.state.view;
+  context.commitGallerySearchQuery('Neal Morse');
+  pendingRequests[0].resolveWith({ status, responseOk: false, detail: 'Request failed' });
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(context.state.view, previousView);
+  assert.equal(calls.applyViewPayload.length, 0);
+  assert.equal(calls.renderView.length, 0);
+  assert.deepEqual(navigations, status === 401 ? ['/login'] : []);
+});
+}
+
+test('pollStatus preserves valid status when the server returns malformed JSON', async () => {
+  const { context, calls } = createContext();
+  context.state.status = { total_albums: 42, allowed_actions: { 'library.loops.create': true } };
+  context.scheduleBrowserTimeout = () => {};
+  context.fetch = async () => ({
+    ok: true,
+    status: 200,
+    json: async () => { throw new SyntaxError('Unexpected token <'); },
+  });
+  const previousStatus = context.state.status;
+  const previousView = context.state.view;
+  await context.pollStatus();
+  assert.equal(context.state.status, previousStatus);
+  assert.equal(context.state.view, previousView);
+  assert.equal(calls.updateStatusIndicator.length, 0);
+  assert.equal(calls.renderLibraryLoader.length, 0);
+});
+
+for (const failure of [
+  { status: 401, responseOk: false, detail: 'Authentication required' },
+  { status: 503, responseOk: false, error: 'Unavailable' },
+  { status: 200, ok: false, error: 'Unavailable' },
+]) {
+test(`pollStatus preserves valid status and gallery on error ${failure.status}/${failure.ok}`, async () => {
+  const { context, calls, pendingRequests } = createContext();
+  context.state.status = { total_albums: 42, allowed_actions: { 'library.loops.create': true } };
+  const navigations = [];
+  context.window = { location: { assign: url => navigations.push(url) } };
+  context.scheduleBrowserTimeout = () => {};
+  const previousStatus = context.state.status;
+  const previousView = context.state.view;
+  const pending = context.pollStatus();
+  pendingRequests[0].resolveWith(failure);
+  await pending;
+  assert.equal(context.state.status, previousStatus);
+  assert.equal(context.state.view, previousView);
+  assert.equal(calls.updateStatusIndicator.length, 0);
+  assert.equal(calls.renderLibraryLoader.length, 0);
+  assert.deepEqual(navigations, failure.status === 401 ? ['/login'] : []);
+});
+}
+
+test('startup hydration redirects an expired session without applying an error as gallery data', async () => {
+  const { context, calls, pendingRequests, artistGroups } = createContext();
+  const navigations = [];
+  context.window = { location: { assign: url => navigations.push(url) } };
+  artistGroups.innerHTML = '';
+  context.state.view = { ...context.state.view, artist_groups: [], album_count: 0 };
+  context.state.awaitingInitialDataRefresh = true;
+  const pending = context.fetchAndRender('/view-data', false, {
+    startupRefresh: true,
+    startupHydrationTier: 'full',
+  });
+  const rejected = assert.rejects(pending, /Sign in/);
+  pendingRequests[0].resolveWith({ status: 401, responseOk: false, detail: 'Authentication required' });
+  await rejected;
+  assert.deepEqual(navigations, ['/login']);
+  assert.equal(calls.applyViewPayload.length, 0);
+  assert.equal(artistGroups.innerHTML, '');
+});
+
 test('pollStatus schedules its next poll without creating browser history', async () => {
   const { context, pendingRequests } = createContext();
   const scheduledTimeouts = [];
@@ -6103,3 +6355,227 @@ test('search from Scan Page refreshes committed chrome while retaining an equiva
   assert.equal(artistGroups.innerHTML, galleryMarkup);
   assert.equal(artistGroups.querySelector('.album-card'), retainedCard);
 });
+
+test('restoring a cached root view schedules bounded viewport filling without a foreground request', () => {
+  const { context, calls, runtimeRenderView, pendingRequests } = createContext();
+  context.state.view = { ...context.state.view, surface_request: 'albums', query: '', selected_artist: '', gallery_page: { has_more: true, next_cursor: 'next', revision: 'r1' } };
+  let pageChecks = 0;
+  context.loadNextRootGalleryPage = () => { pageChecks += 1; };
+  runtimeRenderView({ preserveScroll: true });
+  calls.animationFrames.splice(0).forEach(frame => frame());
+  assert.equal(pageChecks, 0, "viewport geometry must wait for the write frame");
+  calls.animationFrames.splice(0).forEach(frame => frame());
+  assert.equal(pageChecks, 1);
+  assert.equal(pendingRequests.length, 0);
+});
+
+
+function boundedRootRefreshFixture() {
+  const fixture = createContext();
+  fixture.context.URL = URL;
+  fixture.context.URLSearchParams = URLSearchParams;
+  fixture.context.window = { location: { href: 'http://localhost/' } };
+  fixture.context.state.view = {
+    ...fixture.context.state.view,
+    surface_request: 'albums',
+    artist_groups: [{ artist: 'A', albums: Array.from({ length: 108 }, (_, i) => ({ key: `old-${i}` })) }],
+    album_count: 400,
+    gallery_page: { revision: 'old', next_cursor: 'old-108', has_more: true, page_size: 50 },
+  };
+  fixture.previousView = fixture.context.state.view;
+  fixture.start = (options = {}) => fixture.context.fetchAndRender(
+    '/view-data?surface=albums&gallery_page_size=50', false,
+    { preserveScroll: true, preserveAbsoluteScroll: true, ...options },
+  );
+  return fixture;
+}
+
+function boundedRootRefreshPage(start, length = 50, revision = 'fresh', hasMore = true) {
+  return {
+    query: '', selected_artist: '', surface_request: 'albums',
+    artist_groups: [{ artist: 'A', albums: Array.from({ length }, (_, i) => ({ key: `${revision}-${start + i}` })) }],
+    album_count: 300,
+    artist_count: 1,
+    artists_sidebar: [{ artist: 'A', count: 300 }],
+    gallery_page: { revision, next_cursor: hasMore ? `${revision}-${start + length}` : null, has_more: hasMore, page_size: 50 },
+  };
+}
+
+async function resolveBoundedRootRefreshPage(fixture, index, payload) {
+  assert.ok(fixture.pendingRequests[index], `expected bounded page request ${index}`);
+  fixture.pendingRequests[index].resolveWith(payload);
+  await new Promise(resolve => setImmediate(resolve));
+}
+
+function assertBoundedRootRefreshUnapplied(fixture) {
+  assert.equal(fixture.context.state.view, fixture.previousView);
+  assert.equal(fixture.calls.applyViewPayload.length, 0, 'partial replacement must never reach application state');
+  assert.equal(fixture.calls.renderView.length, 0, 'partial replacement must never reach the renderer');
+}
+
+test('bounded root refresh reconstructs loaded coverage atomically with fresh albums and totals', async () => {
+  const f = boundedRootRefreshFixture();
+  const request = f.start();
+  await resolveBoundedRootRefreshPage(f, 0, boundedRootRefreshPage(0));
+  assertBoundedRootRefreshUnapplied(f);
+  assert.equal(f.pendingRequests.length, 2);
+  await resolveBoundedRootRefreshPage(f, 1, boundedRootRefreshPage(50));
+  assertBoundedRootRefreshUnapplied(f);
+  await resolveBoundedRootRefreshPage(f, 2, boundedRootRefreshPage(100));
+  assert.equal(await request, true);
+  assert.equal(f.pendingRequests.length, 3, 'stop after covering the previous108 albums');
+  for (const item of f.pendingRequests.slice(1)) {
+    const url = new URL(item.url, 'http://localhost');
+    assert.equal(url.searchParams.get('gallery_page_size'), '50');
+    assert.ok(url.searchParams.get('gallery_cursor'));
+    assert.equal(item.options.signal, f.pendingRequests[0].options.signal);
+  }
+  assert.equal(f.calls.applyViewPayload.length, 1);
+  assert.equal(f.calls.renderView.length, 1);
+  assert.equal(f.calls.renderView[0].preserveAbsoluteScroll, true);
+  assert.equal(f.context.state.view.album_count, 300);
+  const albums = f.context.state.view.artist_groups.flatMap(group => group.albums);
+  assert.equal(albums.length, 150);
+  assert.equal(new Set(albums.map(album => album.key)).size, 150);
+  assert.ok(albums.every(album => album.key.startsWith('fresh-')), 'deleted/changed old rows must not be merged back');
+  assert.equal(f.context.state.view.gallery_page.next_cursor, 'fresh-150');
+});
+
+test('bounded root refresh accepts authoritative terminal shrink without fetching the whole catalog', async () => {
+  const f = boundedRootRefreshFixture();
+  const request = f.start();
+  await resolveBoundedRootRefreshPage(f, 0, boundedRootRefreshPage(0, 12, 'fresh', false));
+  assert.equal(await request, true);
+  assert.equal(f.pendingRequests.length, 1);
+  assert.equal(f.context.state.view.artist_groups[0].albums.length, 12);
+});
+
+for (const mode of ['normal navigation', 'search', 'selected artist']) {
+  test(`bounded root refresh leaves ${mode} single-page behavior unchanged`, async () => {
+    const f = boundedRootRefreshFixture();
+    let request;
+    if (mode === 'normal navigation') request = f.start({ preserveScroll: false, preserveAbsoluteScroll: false });
+    else {
+      const key = mode === 'search' ? 'query' : 'selected_artist';
+      f.context.state.view[key] = 'Devin';
+      request = f.context.fetchAndRender(`/view-data?${key === 'query' ? 'q' : 'artist'}=Devin`, false, { preserveScroll: true });
+    }
+    await resolveBoundedRootRefreshPage(f, 0, boundedRootRefreshPage(0));
+    assert.equal(await request, true);
+    assert.equal(f.pendingRequests.length, 1);
+  });
+}
+
+for (const change of ['navigation', 'mutation', 'guard']) {
+  test(`bounded root refresh discards incomplete coverage after ${change} supersession`, async () => {
+    const f = boundedRootRefreshFixture();
+    let ownsMutation = true;
+    const request = f.start({ shouldApplyResponse: () => ownsMutation });
+    await resolveBoundedRootRefreshPage(f, 0, boundedRootRefreshPage(0));
+    assertBoundedRootRefreshUnapplied(f);
+    assert.equal(f.pendingRequests.length, 2);
+    if (change === 'navigation') f.context.claimLocalViewStateNavigation();
+    if (change === 'mutation') f.context.state.ui.tagEditOptimisticMutationRevision = 1;
+    if (change === 'guard') ownsMutation = false;
+    await resolveBoundedRootRefreshPage(f, 1, boundedRootRefreshPage(50));
+    assert.equal(await request, false);
+    assertBoundedRootRefreshUnapplied(f);
+    assert.equal(f.pendingRequests.length, 2);
+  });
+}
+
+for (const failure of ['http', 'repeated cursor']) {
+  test(`bounded root refresh retains the mounted window on ${failure}`, async () => {
+    const f = boundedRootRefreshFixture();
+    const request = assert.rejects(f.start(), /Unavailable|repeated cursor/);
+    await resolveBoundedRootRefreshPage(f, 0, boundedRootRefreshPage(0));
+    assertBoundedRootRefreshUnapplied(f);
+    const response = failure === 'http'
+      ? { status: 503, responseOk: false, error: 'Unavailable' }
+      : boundedRootRefreshPage(0);
+    await resolveBoundedRootRefreshPage(f, 1, response);
+    await request;
+    assertBoundedRootRefreshUnapplied(f);
+    assert.equal(f.pendingRequests.length, 2);
+  });
+}
+
+for (const stale of ['409', 'revision mismatch']) {
+  for (const restartFails of [false, true]) {
+    test(`bounded root refresh restarts ${stale} once and ${restartFails ? 'retains old window after repeated staleness' : 'applies only the replacement revision'}`, async () => {
+      const f = boundedRootRefreshFixture();
+      const pending = f.start();
+      const request = restartFails ? assert.rejects(pending, /changed again/) : pending;
+      await resolveBoundedRootRefreshPage(f, 0, boundedRootRefreshPage(0));
+      const stalePayload = stale === '409'
+        ? { status: 409, responseOk: false, restart_required: true }
+        : boundedRootRefreshPage(50, 50, 'changed');
+      await resolveBoundedRootRefreshPage(f, 1, stalePayload);
+      assertBoundedRootRefreshUnapplied(f);
+      assert.equal(f.pendingRequests.length, 3);
+      const restartUrl = new URL(f.pendingRequests[2].url, 'http://localhost');
+      assert.equal(restartUrl.searchParams.has('gallery_cursor'), false);
+      assert.equal(restartUrl.searchParams.has('omit_sidebar'), false);
+      await resolveBoundedRootRefreshPage(f, 2, boundedRootRefreshPage(0, 50, 'replacement'));
+      await resolveBoundedRootRefreshPage(f, 3, restartFails ? stalePayload : boundedRootRefreshPage(50, 50, 'replacement'));
+      if (restartFails) {
+        await request;
+        assertBoundedRootRefreshUnapplied(f);
+        assert.equal(f.pendingRequests.length, 4, 'never start a third snapshot');
+      } else {
+        assertBoundedRootRefreshUnapplied(f);
+        await resolveBoundedRootRefreshPage(f, 4, boundedRootRefreshPage(100, 50, 'replacement'));
+        assert.equal(await request, true);
+        assert.equal(f.calls.applyViewPayload.length, 1);
+        assert.ok(f.context.state.view.artist_groups[0].albums.every(album => album.key.startsWith('replacement-')));
+      }
+    });
+  }
+}
+
+
+for (const presentation of ['gallery_display=list', 'gallery_scale_percent=80']) {
+  test(`bounded root refresh preserves loaded coverage across ${presentation}`, async () => {
+    const f = boundedRootRefreshFixture();
+    f.context.state.view.gallery_scope = 'all';
+    f.context.state.view.visible_library_categories = ['main_library'];
+    f.context.state.view.gallery_page_scope = { gallery_scope: 'all', visible_library_categories: ['main_library'] };
+    const request = f.context.fetchAndRender(
+      `/view-data?surface=albums&gallery_scope=all&category=main_library&gallery_page_size=50&${presentation}`,
+      false, { preserveScroll: true, preserveAbsoluteScroll: true },
+    );
+    await resolveBoundedRootRefreshPage(f, 0, boundedRootRefreshPage(0));
+    assertBoundedRootRefreshUnapplied(f);
+    await resolveBoundedRootRefreshPage(f, 1, boundedRootRefreshPage(50));
+    assertBoundedRootRefreshUnapplied(f);
+    await resolveBoundedRootRefreshPage(f, 2, boundedRootRefreshPage(100));
+    assert.equal(await request, true);
+    assert.equal(f.context.state.view.artist_groups[0].albums.length, 150);
+    for (const item of f.pendingRequests) {
+      const url = new URL(item.url, 'http://localhost');
+      const [key, value] = presentation.split('=');
+      assert.equal(url.searchParams.get(key), value, 'continuations retain requested presentation');
+      assert.equal(url.searchParams.get('gallery_scope'), 'all');
+      assert.deepEqual(url.searchParams.getAll('category'), ['main_library']);
+    }
+  });
+}
+
+for (const change of ['category', 'scope', 'startup']) {
+  test(`bounded root refresh keeps changed ${change} single-page loading`, async () => {
+    const f = boundedRootRefreshFixture();
+    f.context.state.view.gallery_scope = 'all';
+    f.context.state.view.visible_library_categories = ['main_library'];
+    f.context.state.view.gallery_page_scope = { gallery_scope: 'all', visible_library_categories: ['main_library'] };
+    const scope = change === 'scope' ? 'main' : 'all';
+    const category = change === 'category' ? 'hoard' : 'main_library';
+    const request = f.context.fetchAndRender(
+      `/view-data?surface=albums&gallery_scope=${scope}&category=${category}&gallery_page_size=50`,
+      false, { preserveScroll: true, preserveAbsoluteScroll: true, ...(change === 'startup' ? { startupRefresh: true } : {}) },
+    );
+    await resolveBoundedRootRefreshPage(f, 0, boundedRootRefreshPage(0));
+    assert.equal(await request, true);
+    assert.equal(f.pendingRequests.length, 1);
+    assert.equal(f.context.state.view.artist_groups[0].albums.length, 50);
+  });
+}

@@ -245,6 +245,36 @@ def init_state(app) -> None:
     }
 
 
+def hydrate_runtime_scan_metadata_on_startup(app) -> None:
+    adapter = select_scan_cache_adapter(app.config)
+    last_scan = adapter.load_last_scan(library_root_cache_identity(app.config))
+    with _CACHE_LOCK:
+        # A scan that completed during the metadata read owns its newer timestamp.
+        if not app.library_state.get("last_scan"):
+            app.library_state["last_scan"] = last_scan
+
+
+def recover_runtime_library_persistence_on_startup(app) -> None:
+    """Restore durable startup invariants without hydrating the gallery."""
+    from music_app.services.tag_edit_recovery import (
+        reconcile_unfinished_tag_edit_intents_on_startup,
+    )
+
+    reconcile_unfinished_tag_edit_intents_on_startup(app)
+    _migrate_startup_album_exclusions(app)
+
+
+def _migrate_startup_album_exclusions(app) -> None:
+    migration_result = migrate_legacy_album_exclusions(app.config)
+    if migration_result["migrated_album_count"]:
+        app.logger.info(
+            "Legacy album exclusions migrated albums=%s removed_rules=%s created_rules=%s",
+            migration_result["migrated_album_count"],
+            migration_result["removed_legacy_rule_count"],
+            migration_result["created_album_rule_count"],
+        )
+
+
 def hydrate_runtime_library_state_on_startup(app) -> bool:
     from music_app.services.tag_edit_recovery import (
         reconcile_unfinished_tag_edit_intents_on_startup,
@@ -263,19 +293,12 @@ def hydrate_runtime_library_state_on_startup(app) -> bool:
             logger=app.logger,
         )
     if hydrated:
-        migration_result = migrate_legacy_album_exclusions(app.config)
+        _migrate_startup_album_exclusions(app)
         app.logger.info(
             "Startup scan-cache hydration completed files=%s albums=%s",
             len(app.library_state.get("file_cache") or {}),
             len(app.library_state.get("albums") or []),
         )
-        if migration_result["migrated_album_count"]:
-            app.logger.info(
-                "Legacy album exclusions migrated albums=%s removed_rules=%s created_rules=%s",
-                migration_result["migrated_album_count"],
-                migration_result["removed_legacy_rule_count"],
-                migration_result["created_album_rule_count"],
-            )
     elif app.library_state.get("last_error"):
         app.logger.warning(
             "Startup scan-cache hydration did not load a snapshot: %s",
@@ -431,6 +454,8 @@ def refresh_relation_views_for_state(
     expected_inventory_mutation_revision: int | None = None,
     publication_state: dict[str, object] | None = None,
 ) -> None:
+    if config.get("SHARED_LIBRARY_BROWSE_ONLY") is True:
+        raise RuntimeError("Shared browsing cannot rebuild library relations")
     guarded_live_repair = (
         expected_scan_generation is not None
         and publication_state is None
@@ -906,6 +931,8 @@ def start_background_refresh_for_state(
     scan_mode: str = "background",
     accepted_state_updates: Mapping[str, object] | None = None,
 ) -> bool:
+    if config.get("SHARED_LIBRARY_BROWSE_ONLY") is True:
+        raise RuntimeError("Shared browsing cannot start a library scan")
     with _CACHE_LOCK:
         if library_state.get("scan_in_progress"):
             return False

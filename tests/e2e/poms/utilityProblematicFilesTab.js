@@ -158,6 +158,21 @@ export class UtilityProblematicFilesTab extends BasePage {
     return '.utility-list-item-meta';
   }
 
+  get listItemSubtitleSelector() {
+    return '.utility-list-item-subtitle';
+  }
+
+  get listItemYearSelector() {
+    return '.utility-list-item-year';
+  }
+
+  async readListItemMeta(item) {
+    // parity-check: allow-read-only-measurement-evaluate -- read artist and always-visible year as distinct semantic fields
+    return item.evaluate((element, selectors) => selectors
+      .map(selector => String(element.querySelector(selector)?.textContent || '').trim())
+      .filter(Boolean).join(' · '), [this.listItemSubtitleSelector, this.listItemYearSelector]);
+  }
+
   get listItemIssuesSelector() {
     return '.utility-list-item-issues';
   }

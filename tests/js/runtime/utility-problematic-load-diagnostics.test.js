@@ -1584,3 +1584,55 @@ test('Log History entry stops when its tab owner rejects a newly revoked transit
   assert.equal(h.context.state.utility.activeTab, 'appearance');
   assert.deepEqual(h.events, [['confirm']]);
 });
+
+
+for (const outcome of ['response', 'error']) {
+  test(`invalidated problematic summary ${outcome} releases its owner and gives waiting callers one fresh read`, async () => {
+    const oldResponse = createDeferred();
+    const currentResponse = createDeferred();
+    let requests = 0;
+    const { context, calls } = loadHelper({
+      fetch() {
+        requests += 1;
+        return requests === 1 ? oldResponse.promise : currentResponse.promise;
+      },
+    });
+    const original = context.loadProblematicFiles(true);
+    context.state.utility.problematicSummaryRequestToken += 1;
+    context.state.utility.loaded = false;
+    const navigation = context.loadProblematicFiles(true, { render: false });
+    const concurrent = context.loadProblematicFiles(true, { render: false });
+    if (outcome === 'error') oldResponse.reject(new Error('obsolete failed read'));
+    else oldResponse.resolve({ ok: true, status: 200, json: async () => ({ items: [{ key: 'obsolete', name: 'Old', detail_loaded: false }] }) });
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(await original, null);
+    assert.equal(requests, 2, 'waiting navigation must fetch current data exactly once');
+    assert.equal(context.state.utility.loading, true, 'fresh request retains loading ownership');
+    assert.equal(context.state.utility.problematicFiles.length, 0, 'obsolete response never commits');
+    currentResponse.resolve({ ok: true, status: 200, json: async () => ({ items: [{ key: 'restored', name: 'Restored album', detail_loaded: false }] }) });
+    const results = await Promise.all([navigation, concurrent]);
+    assert.deepEqual(calls.consoleErrors, [], 'valid fresh summary must not fail payload validation');
+    assert.deepEqual(calls.toasts, []);
+    for (const result of results) {
+      assert.deepEqual(Array.from(result, item => item.key), ['restored']);
+    }
+    assert.equal(context.state.utility.loaded, true);
+    assert.equal(context.state.utility.loading, false);
+    assert.equal(context.state.utility.loadPromise, null);
+    assert.equal(requests, 2);
+  });
+}
+
+test('invalidated problematic summary finalizer never clears a newer promise owner', async () => {
+  const response = createDeferred();
+  const { context } = loadHelper({ fetch: () => response.promise });
+  const original = context.loadProblematicFiles(true);
+  const replacement = Promise.resolve(['replacement']);
+  context.state.utility.problematicSummaryRequestToken += 1;
+  context.state.utility.loadPromise = replacement;
+  context.state.utility.loading = true;
+  response.resolve({ ok: true, status: 200, json: async () => ({ items: [] }) });
+  assert.equal(await original, null);
+  assert.equal(context.state.utility.loadPromise, replacement);
+  assert.equal(context.state.utility.loading, true);
+});

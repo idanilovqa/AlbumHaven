@@ -12,11 +12,22 @@ if (typeof initCompactPlayer === 'function') initCompactPlayer();
 if (typeof initPlaybackOwnershipCoordinator === 'function') {
   initPlaybackOwnershipCoordinator();
 }
+let idlePlaybackPreparationCancelled = false;
 if (typeof prepareStreamingPlaybackEngine === 'function'
     && (!window.AlbumHavenCapabilities || window.AlbumHavenCapabilities.allows('library.media.read'))) {
-  void prepareStreamingPlaybackEngine().catch((error) => {
-    console.error('[AlbumHaven][Playback] Failed to prepare streaming playback.', error);
-  });
+  const prepareIdlePlayback = () => {
+    if (idlePlaybackPreparationCancelled) return;
+    void prepareStreamingPlaybackEngine().catch((error) => {
+      console.error('[AlbumHaven][Playback] Failed to prepare streaming playback.', error);
+    });
+  };
+  // AudioContext creation can synchronously open the device. Keep that work out
+  // of initial rendering; an early play action still awaits engine preparation.
+  if (typeof window.requestIdleCallback === 'function') {
+    window.requestIdleCallback(prepareIdlePlayback, { timeout: 1000 });
+  } else {
+    scheduleBrowserTimeout(prepareIdlePlayback, 0);
+  }
 }
 const bootstrapSearchParams = new URL(window.location.href).searchParams;
 const galleryDisplayPreferenceResolutionOptions = {
@@ -84,7 +95,8 @@ const startupHydrationTier = String(startupHydration.tier || 'full');
 const shellMainContentKind = String(
   state.view?.shell_layout?.slots?.main_content?.content_kind || '',
 ).trim();
-const shouldStartImmediateHydration = shellMainContentKind === 'discovery_center_page'
+const hasPagedRootInitialView = typeof isPagedRootGallery === 'function' && isPagedRootGallery();
+const shouldStartImmediateHydration = hasPagedRootInitialView || shellMainContentKind === 'discovery_center_page'
   ? false
   : shouldRunImmediateStartupHydration(state.view, bootstrap);
 let embeddedStartupViewPatch = startupHydration?.embeddedViewPatch && typeof startupHydration.embeddedViewPatch === 'object'
@@ -133,13 +145,20 @@ if (shouldTreatStartupPreviewAsVisibleReady) {
   renderView();
 }
 if (typeof initGalleryMain === 'function') initGalleryMain();
+if (hasPagedRootInitialView) {
+  scheduleBrowserAnimationFrame(() => {
+    scheduleBrowserAnimationFrame(() => { void loadNextRootGalleryPage(); });
+  });
+}
 if (typeof initMobileNavigation === 'function') initMobileNavigation();
 if (typeof syncMobileHome === 'function') syncMobileHome();
 startupMetrics.markInitialRender(state.view);
 const hasAuthoritativeServerRenderedInitialView = Boolean(
-  !bootstrap.partialView
-  && !startupHydrationRequired
-  && !state.view?.initial_view_partial
+  hasPagedRootInitialView || (
+    !bootstrap.partialView
+    && !startupHydrationRequired
+    && !state.view?.initial_view_partial
+  )
 );
 if (
   !shouldStartImmediateHydration
@@ -387,6 +406,7 @@ document.addEventListener('pointerdown', reconcileLoopEditSessionExpiry, true);
 document.addEventListener('keydown', reconcileLoopEditSessionExpiry, true);
 let unloadStreamingCleanupPromise = null;
 function cleanupStreamingPlaybackForUnload() {
+  idlePlaybackPreparationCancelled = true;
   if (unloadStreamingCleanupPromise) return unloadStreamingCleanupPromise;
   if (typeof stopStreamingPlayback !== 'function') {
     unloadStreamingCleanupPromise = Promise.resolve();

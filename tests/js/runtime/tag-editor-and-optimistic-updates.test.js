@@ -1466,6 +1466,7 @@ test('queued tag edit retains its initial optimistic render until the save-task 
       });
     },
   });
+  context.state.view.search_context = { selected_artist_source: 'auto_top_match', artist_name_match_artists: [] };
   context.state.tagEditor = { album, tracks: album.tracks, values: {} };
   context.openTagEditConfirmModal();
   galleryScroll.scrollTop = 9592;
@@ -1482,6 +1483,7 @@ test('queued tag edit retains its initial optimistic render until the save-task 
     'the optimistic album must be navigable while the edit request is still pending',
   );
   assert.strictEqual(pendingOptimisticEntries[0].optimisticAlbums[0], optimisticAlbum);
+  context.state.view.search_context = { selected_artist_source: 'requested_artist' };
   releaseResponse();
   await confirmation;
 
@@ -1504,6 +1506,7 @@ test('queued tag edit retains its initial optimistic render until the save-task 
   );
   assert.deepEqual(eventSequence, ['render', 'watch']);
   assert.equal(watchedTasks[0].options.originatingViewRequestUrl, '/api/library?selected_artist=DDT');
+  assert.equal(watchedTasks[0].options.originatingSearchContext.selected_artist_source, 'auto_top_match');
 });
 
 test('pending problematic navigation ownership includes only directly edited track paths', () => {

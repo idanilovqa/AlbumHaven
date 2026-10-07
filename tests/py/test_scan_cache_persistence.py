@@ -3102,3 +3102,26 @@ def test_postgres_scan_cache_rating_seed_failure_rolls_back_and_propagates(monke
     assert connection.exit_exc_type is RuntimeError
     assert connection.commit_calls == 0
     assert any("jsonb_build_object('scan_cache'" in sql for sql, _params in connection.executed)
+
+
+@pytest.mark.parametrize("stored_root,expected", [("fixture-root", 1609459200.0), ("other-root", 0.0)])
+def test_load_last_scan_reads_only_root_bound_timestamp_metadata(stored_root, expected):
+    from contextlib import nullcontext
+    from music_app.services.scan_cache_persistence import PostgresScanCacheAdapter
+
+    statements = []
+
+    def execute(sql, parameters=None):
+        statements.append(sql)
+        return FakeCursor([{"library_root_identity": stored_root, "last_scan": 1609459200}])
+
+    adapter = PostgresScanCacheAdapter(
+        {"ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://test/isolated"},
+        connect=lambda _url: nullcontext(SimpleNamespace(execute=execute)),
+    )
+    assert adapter.load_last_scan("fixture-root") == expected
+    assert len(statements) == 1
+    assert "'last_scan'" in statements[0]
+    assert "'library_root_identity'" in statements[0]
+    assert "as scan_cache" not in statements[0].lower()
+    assert "file_entries" not in statements[0].lower()

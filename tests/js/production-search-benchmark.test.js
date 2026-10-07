@@ -214,7 +214,7 @@ test('production search journey blocks forbidden requests before navigation', ()
   assert.doesNotMatch(spec, /viewStateRevision/u);
   assert.doesNotMatch(spec, /waitForGalleryReady/u);
   assert.ok(spec.indexOf('waitForVisible') < spec.indexOf('waitForStatusResult'));
-  assert.ok(spec.indexOf('waitForStatusResult') < spec.indexOf('measureSyntheticSearchPreviewFirstVisible'));
+  assert.ok(spec.indexOf('waitForStatusResult') < spec.indexOf('measureSearchPreviewFirstVisible'));
 });
 
 test('production search submit and generation seams avoid the debounce race', () => {
@@ -233,7 +233,7 @@ test('production search submit and generation seams avoid the debounce race', ()
 test('production search captures the expected card paint before Playwright polling', () => {
   const galleryActions = read('tests/e2e/actions/galleryActions.js');
   const galleryPage = read('tests/e2e/poms/galleryPage.js');
-  const method = /async measureSyntheticSearchPreviewFirstVisible[\s\S]*?\n  \}/u
+  const method = /async measureSearchPreviewFirstVisible[\s\S]*?\n  \}/u
     .exec(galleryActions)?.[0] || '';
   const observerStart = method.indexOf('startSearchPreviewFirstVisibleObservation');
   const submission = method.indexOf('submitPreparedQueryWithEnter');
@@ -411,7 +411,7 @@ test('paired search calibration has isolated identical synthetic cases and one o
   assert.match(spec, /query: 'Neal Morse', expectedArtist: 'Neal Morse'/u);
   assert.match(spec, /for \(const scenario of SEARCHES\)/u);
   assert.match(spec, /galleryActions\.goto\('\/\?surface=albums'\)/u);
-  assert.match(spec, /\{ expectedArtist: scenario\.expectedArtist, timeout: 120000 \}/u);
+  assert.match(spec, /\{\s*expectedArtist: scenario\.expectedArtist,\s*expectedAlbumKeys: syntheticSearchInventory\[scenario\.query\],\s*timeout: 120000,?\s*\}/u);
   assert.match(spec, /performanceTimingBudget.*syntheticFirstVisibleMs/u);
   assert.doesNotMatch(
     artistFamilySpec,
@@ -446,11 +446,11 @@ test('retained production search artifacts exclude payloads and full artist arra
   assert.match(galleryActions, /fullHydrationGeneration/u);
   assert.match(
     galleryActions,
-    /fullHydrationGeneration\.renderGeneration > previewGeneration\.renderGeneration/u,
+    /fullHydrationGeneration\.renderGeneration >= previewGeneration\.renderGeneration/u,
   );
   assert.match(galleryActions, /payloadTier !== 'search_preview'/u);
   assert.match(galleryActions, /performance\.getEntriesByName/u);
-  assert.match(galleryActions, /requestAnimationFrame/u);
+  assert.match(read('tests/e2e/poms/galleryPage.js'), /requestAnimationFrame/u);
   assert.match(spec, /readProductionSearchReadiness/u);
   assert.match(spec, /readProductionSearchDatabaseAttestation/u);
   assert.doesNotMatch(
@@ -461,5 +461,148 @@ test('retained production search artifacts exclude payloads and full artist arra
   assert.doesNotMatch(spec, /const EXPECTED_DATABASE_IDENTITY_SHA256/u);
   assert.doesNotMatch(spec, /const EXPECTED_DATABASE_IDENTITY_PROOF/u);
   assert.ok(spec.indexOf(perCaseAttestation) > spec.indexOf('await galleryActions.waitForGalleryReady'));
-  assert.ok(spec.indexOf(perCaseAttestation) < spec.indexOf('measureSyntheticSearchPreviewFirstVisible'));
+  assert.ok(spec.indexOf(perCaseAttestation) < spec.indexOf('measureSearchPreviewFirstVisible'));
+});
+
+
+test('search timing requires every full-result album at the measured paint', async () => {
+  const { isCompleteSearchPaint } = await import(
+    pathToFileURL(path.join(root, 'tests/e2e/actions/galleryActions.js')).href
+  );
+  const payload = {
+    query: 'neal morse', payload_tier: 'full',
+    artist_groups: [{ artist: 'Neal Morse', albums: [{ key: 'one' }, { key: 'two' }] }],
+  };
+  const paint = {
+    query: 'neal morse', payloadTier: 'full', partial: false, albumKeys: ['one', 'two'],
+  };
+  assert.equal(isCompleteSearchPaint(payload, paint), true);
+  assert.equal(isCompleteSearchPaint(payload, { ...paint, albumKeys: ['one'] }), false);
+  assert.equal(isCompleteSearchPaint(payload, { ...paint, albumKeys: [] }), false);
+  assert.equal(isCompleteSearchPaint(payload, { ...paint, albumKeys: ['one', 'other'] }), false);
+  assert.equal(isCompleteSearchPaint(payload, { ...paint, payloadTier: 'search_preview' }), false);
+  assert.equal(isCompleteSearchPaint(payload, { ...paint, partial: true }), false);
+  assert.equal(isCompleteSearchPaint(payload, { ...paint, query: 'Devin' }), false);
+});
+
+
+test('synthetic completeness rejects a truncated full response even when its painted inventory agrees', async () => {
+  const { isCompleteSearchPaint } = await import(
+    pathToFileURL(path.join(root, 'tests/e2e/actions/galleryActions.js')).href
+  );
+  const seededKeys = Array.from({ length: 13 }, (_, index) => `seed-album-${String(index).padStart(2, '0')}`);
+  const payload = {
+    query: 'Neal Morse', payload_tier: 'full',
+    primary_artist_groups: [{ artist: 'Neal Morse', albums: seededKeys.slice(0, 7).map(key => ({ key })) }],
+    family_artist_groups: [{ artist: 'Declared fixture family', albums: seededKeys.slice(7).map(key => ({ key })) }],
+  };
+  const paint = { query: 'Neal Morse', payloadTier: 'full', partial: false, albumKeys: seededKeys };
+  assert.equal(isCompleteSearchPaint(payload, paint, seededKeys), true);
+  const truncated = { ...payload, family_artist_groups: [{ artist: 'Declared fixture family', albums: [{ key: seededKeys[7] }] }] };
+  assert.equal(isCompleteSearchPaint(truncated, { ...paint, albumKeys: seededKeys.slice(0, 8) }, seededKeys), false,
+    'Response/DOM agreement cannot substitute for the independently seeded full inventory');
+  assert.equal(isCompleteSearchPaint(payload, paint, []), false, 'An empty seed oracle must fail closed');
+});
+
+test('search paint observer excludes cards clipped outside the gallery scroll viewport', async () => {
+  const vm = require('node:vm');
+  const { GalleryPage } = await import(pathToFileURL(path.join(root, 'tests/e2e/poms/galleryPage.js')).href);
+  class Element {}
+  const frames = [];
+  let cardLeft = 10;
+  const card = Object.assign(new Element(), {
+    querySelector: () => ({ textContent: 'Seed Album' }),
+    getBoundingClientRect: () => ({ left: cardLeft, right: cardLeft + 200, top: 100, bottom: 300, width: 200, height: 200 }),
+    checkVisibility: () => true,
+  });
+  const section = { querySelector: () => ({ textContent: 'Neal Morse' }), querySelectorAll: () => [card] };
+  const gallery = Object.assign(new Element(), { querySelectorAll: () => [section] });
+  const scroll = Object.assign(new Element(), {
+    getBoundingClientRect: () => ({ left: 300, right: 1000, top: 50, bottom: 700, width: 700, height: 650 }),
+  });
+  const context = {
+    HTMLElement: Element, URL, location: { href: 'https://example.test/?q=Neal%20Morse' },
+    innerWidth: 1200, innerHeight: 800,
+    document: { querySelector: selector => selector === '#artist-groups' ? gallery : selector === '#albums-scroll' ? scroll : null },
+    getComputedStyle: () => ({ display: 'block', visibility: 'visible' }),
+    performance: { now: () => 100 },
+    requestAnimationFrame: callback => { frames.push(callback); return frames.length; },
+    setTimeout: () => 1, clearTimeout: () => {},
+    MutationObserver: class { observe() {} disconnect() {} takeRecords() {} },
+    __ALBUM_HAVEN_VIRTUAL_GRID__: { latestRender: { renderGeneration: 1 } },
+    state: { view: { query: 'Neal Morse', payload_tier: 'full', artist_groups: [{ albums: [{ key: 'seed' }] }] } },
+  };
+  const observation = await GalleryPage.prototype.startSearchPreviewFirstVisibleObservation.call({
+    albumCardWithinSectionSelector: '.album-card', artistHeadingWithinSectionSelector: '.artist-name', artistSectionSelector: '.artist-section',
+    albumCard: { titleButtonSelector: '.album-title-button', singleArtistContextSelector: '#context' },
+    page: { evaluateHandle: async (callback, settings) => {
+      const value = vm.runInNewContext(`(${callback})`, context)(settings);
+      return { evaluate: async (readValue, argument) => readValue(value, argument), dispose: async () => {} };
+    } },
+  }, 'Neal Morse');
+  try {
+    await observation.arm();
+    cardLeft = 400;
+    context.__ALBUM_HAVEN_VIRTUAL_GRID__.latestRender.renderGeneration = 2;
+    const resultPromise = observation.readExpectedPaint({ artist: 'Neal Morse', album: 'Seed Album' });
+    for (let frame = 0; frame < 3; frame += 1) {
+      const callbacks = frames.splice(0);
+      callbacks.forEach(callback => callback());
+    }
+    const result = await resultPromise;
+    assert.equal(result.initialVisibleCardCount, 0, 'A card under the sidebar is not inside the gallery viewport');
+  } finally {
+    await observation.dispose();
+  }
+});
+
+
+test('synthetic measurement refuses an absent or invalid seed oracle before browser work', async () => {
+  const { GalleryActions } = await import(pathToFileURL(path.join(root, 'tests/e2e/actions/galleryActions.js')).href);
+  let calls = 0;
+  const action = { measureSearchPreviewFirstVisible: async () => { calls += 1; return 'measured'; } };
+  for (const expectedAlbumKeys of [undefined, [], [''], [null]]) {
+    await assert.rejects(GalleryActions.prototype.measureSyntheticSearchPreviewFirstVisible.call(
+      action, {}, 'Neal Morse', { expectedAlbumKeys },
+    ), /independently seeded album inventory/);
+  }
+  assert.equal(calls, 0);
+  assert.equal(await GalleryActions.prototype.measureSyntheticSearchPreviewFirstVisible.call(
+    action, {}, 'Neal Morse', { expectedAlbumKeys: ['seed-key'] },
+  ), 'measured');
+  assert.equal(calls, 1);
+});
+
+test('synthetic search setup reads one independent seeded batch and rejects incomplete mappings', async () => {
+  const { loadSyntheticSearchInventory } = await import(pathToFileURL(path.join(root, 'tests/e2e/helpers/syntheticSearchInventory.js')).href);
+  const manifest = { manifestVersion: 1, profiles: { 'synthetic-large-library': {
+    schemaVersion: 1, namedScenarioAssertions: {
+      nealMorseFamily: { artists: ['Neal Morse', 'Related Neal'] },
+      devinTownsendFamily: { familyArtists: ['Devin Townsend', 'Related Devin'] },
+    },
+  } } };
+  const rows = [
+    { artist: 'Neal Morse', key: 'neal-one', fixtureKey: 'seed-neal-one' },
+    { artist: 'Neal Morse', key: 'neal-two', fixtureKey: 'seed-neal-two' },
+    { artist: 'Related Neal', key: 'neal-family', fixtureKey: 'seed-neal-family' },
+    { artist: 'Devin Townsend', key: 'devin-one', fixtureKey: 'seed-devin' },
+    { artist: 'Related Devin', key: 'devin-family', fixtureKey: 'seed-devin-family' },
+  ];
+  const env = { ALBUM_HAVEN_FIXTURE_PROFILE: 'synthetic-large-library', ALBUM_HAVEN_FIXTURE_ROOT: '/isolated-fixture' };
+  const options = { env, read: async () => JSON.stringify(manifest) };
+  let calls = 0;
+  const inventory = await loadSyntheticSearchInventory({ ...options, query: async artists => {
+    calls += 1;
+    assert.deepEqual(new Set(artists), new Set(rows.map(row => row.artist)));
+    return [...rows, rows[0]];
+  } });
+  assert.equal(calls, 1);
+  assert.deepEqual(inventory, { Devin: ['devin-family', 'devin-one'], 'Neal Morse': ['neal-family', 'neal-one', 'neal-two'] });
+  for (const invalidRows of [[], rows.slice(1, 4), [...rows, { ...rows[0], key: 'conflicting-key' }], [...rows, { ...rows[0], artist: 'Unexpected' }], [{ ...rows[0], fixtureKey: '' }]]) {
+    await assert.rejects(loadSyntheticSearchInventory({ ...options, query: async () => invalidRows }), /inventory|mapping/);
+  }
+  await assert.rejects(loadSyntheticSearchInventory({ ...options, env: {}, query: async () => rows }), /requires/);
+  await assert.rejects(loadSyntheticSearchInventory({ ...options, read: async () => JSON.stringify({ ...manifest, profiles: {} }), query: async () => rows }), /manifest/);
+  const missingAssertions = { manifestVersion: 1, profiles: { 'synthetic-large-library': { schemaVersion: 1 } } };
+  await assert.rejects(loadSyntheticSearchInventory({ ...options, read: async () => JSON.stringify(missingAssertions), query: async () => rows }), /assertions/);
 });

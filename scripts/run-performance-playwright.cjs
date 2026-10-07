@@ -479,9 +479,10 @@ PERFORMANCE_TARGETS['paired-search-calibration'] = {
   coverageDescription: 'Isolated synthetic paired-search timing evidence for production correlation.',
   specPath: 'tests/e2e/syntheticLargeLibrary/searchPreviewPairedCalibration.spec.js',
   aliasNames: ['paired-search-calibration'],
+  grep: 'FTC-GALLERY-STARTUP-005U',
   casePatterns: [
-    'FTC-GALLERY-STARTUP-005U synthetic paired search calibration Devin submit to first expected album visible',
-    'FTC-GALLERY-STARTUP-005U synthetic paired search calibration Neal Morse submit to first expected album visible',
+    'Devin submit to first expected album visible',
+    'Neal Morse submit to first expected album visible',
   ],
   reportId: 'pairedSearchCalibrationLocal',
   measurementExpected: true,

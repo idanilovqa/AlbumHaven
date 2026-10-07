@@ -74,7 +74,7 @@ test.describe(`${CASE_ID} production-backed read-only search`, () => {
         { timeout: 120000 },
       );
 
-      const result = await galleryActions.measureSyntheticSearchPreviewFirstVisible(
+      const result = await galleryActions.measureSearchPreviewFirstVisible(
         searchToolbarActions,
         scenario.query,
         { expectedArtist: scenario.expectedArtist, timeout: 120000 },

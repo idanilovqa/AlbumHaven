@@ -42,7 +42,12 @@ export function hasSettledVirtualGalleryRender(args = {}) {
   const reachedRequestedBoundary = expectedDirection > 0
     ? gallery.scrollTop >= maxScrollTop - 2
     : gallery.scrollTop <= 2;
-  if (!hasRequestedMovement && !reachedRequestedBoundary) return false;
+  const hasCommittedExtentGrowth = args.allowExtentExpansion === true
+    && expectedDirection > 0
+    && Number.isFinite(args.previousMaxScrollTop)
+    && maxScrollTop > args.previousMaxScrollTop + 2
+    && Math.abs(movement) <= 1;
+  if (!hasRequestedMovement && !reachedRequestedBoundary && !hasCommittedExtentGrowth) return false;
   const diagnostics = globalThis.__ALBUM_HAVEN_VIRTUAL_GRID__;
   const latestScroll = diagnostics?.latestScroll;
   const latestRender = diagnostics?.latestRender;
@@ -493,6 +498,8 @@ export class GalleryPage extends BasePage {
         normalize(new URL(location.href).searchParams.get('q')) === settings.expectedQuery
       );
       const readVisibleCards = () => {
+        const scrollRect = document.querySelector('#albums-scroll')?.getBoundingClientRect();
+        if (!scrollRect || scrollRect.width <= 0 || scrollRect.height <= 0) return [];
         const sections = Array.from(gallery.querySelectorAll(settings.artistSectionSelector));
         const contextArtist = normalize(document.querySelector(settings.singleArtistContextSelector)
           ?.querySelector('[data-gallery-context-name]')?.textContent);
@@ -513,8 +520,13 @@ export class GalleryPage extends BasePage {
               && rect.bottom > 0
               && rect.left < innerWidth
               && rect.top < innerHeight
+              && rect.right > scrollRect.left
+              && rect.left < scrollRect.right
+              && rect.bottom > scrollRect.top
+              && rect.top < scrollRect.bottom
               && style.display !== 'none'
               && style.visibility !== 'hidden'
+              && card.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true })
             );
             return visible ? [{ album, artist, key: cardKey(artist, album) }] : [];
           });
@@ -527,6 +539,13 @@ export class GalleryPage extends BasePage {
         observer.disconnect();
         expectedWaiter.resolve(timing);
         expectedWaiter = null;
+      };
+      let initialVisibleCardCount = 0;
+      let minimumVisibleCardCount = 0;
+      const observeGalleryContinuity = () => {
+        if (!armed || disposed) return;
+        minimumVisibleCardCount = Math.min(minimumVisibleCardCount, readVisibleCards().length);
+        requestAnimationFrame(observeGalleryContinuity);
       };
       const schedulePaintConfirmation = () => {
         if (!armed || disposed || framePending) return;
@@ -547,10 +566,23 @@ export class GalleryPage extends BasePage {
               || currentRenderGeneration() <= baselineRenderGeneration
             ) return;
             const paintedAtMs = performance.now();
+            const view = typeof state === 'undefined' ? null : state.view;
+            const result = {
+              query: String(view?.query || '').trim(),
+              payloadTier: String(view?.payload_tier || 'full'),
+              partial: Boolean(view?.initial_view_partial),
+              albumKeys: [...new Set(['artist_groups', 'primary_artist_groups', 'family_artist_groups']
+                .flatMap(field => Array.isArray(view?.[field]) ? view[field] : [])
+                .flatMap(group => group.albums || [])
+                .map(album => String(album.key || '').trim()).filter(Boolean))].sort(),
+            };
             const stillVisible = new Set(readVisibleCards().map((card) => card.key));
             for (const candidate of candidates) {
               if (!stillVisible.has(candidate.key) || confirmedPaints.has(candidate.key)) continue;
-              confirmedPaints.set(candidate.key, { domReadyAtMs, paintedAtMs });
+              confirmedPaints.set(candidate.key, {
+                domReadyAtMs, paintedAtMs, result,
+                initialVisibleCardCount, minimumVisibleCardCount,
+              });
             }
             finishExpected();
           });
@@ -570,6 +602,9 @@ export class GalleryPage extends BasePage {
           confirmedPaints.clear();
           baselineRenderGeneration = currentRenderGeneration();
           armed = true;
+          initialVisibleCardCount = readVisibleCards().length;
+          minimumVisibleCardCount = initialVisibleCardCount;
+          requestAnimationFrame(observeGalleryContinuity);
           return performance.now();
         },
         dispose() {
@@ -919,14 +954,36 @@ export class GalleryPage extends BasePage {
   }
 
   async waitForGalleryScrollMovement(previousScrollTop, direction, options = {}) {
-    await this.waitForPageCondition(hasSettledVirtualGalleryRender, {
-      timeout: options.timeout || 5000,
-    }, {
-      expectedDirection: Number(direction || 1),
-      galleryScrollSelector: this.galleryScrollSelector,
-      priorPosition: Number(previousScrollTop || 0),
-      targetScrollTop: options.targetScrollTop,
-    });
+    const deadline = options.deadline ?? Date.now() + (options.timeout || 5000);
+    let previousMaxScrollTop = options.previousMaxScrollTop;
+    const allowExtentExpansion = typeof options.onExtentExpanded === 'function';
+    while (true) {
+      const remaining = deadline - Date.now();
+      if (remaining <= 0) throw new Error('Gallery scroll movement exceeded its original deadline.');
+      await this.waitForPageCondition(hasSettledVirtualGalleryRender, {
+        timeout: remaining,
+      }, {
+        expectedDirection: Number(direction || 1),
+        galleryScrollSelector: this.galleryScrollSelector,
+        priorPosition: Number(previousScrollTop || 0),
+        targetScrollTop: options.targetScrollTop,
+        previousMaxScrollTop,
+        allowExtentExpansion,
+      });
+      if (!allowExtentExpansion) return;
+      // parity-check: allow-read-only-measurement-evaluate -- inspect committed extent; native input is the only scroll mutation.
+      const geometry = await this.galleryScroll.evaluate(element => ({
+        scrollTop: element.scrollTop,
+        maxScrollTop: Math.max(0, element.scrollHeight - element.clientHeight),
+      }));
+      if (Number(direction || 1) <= 0
+        || Math.abs(geometry.scrollTop - previousScrollTop) > 1
+        || geometry.maxScrollTop <= previousMaxScrollTop + 2
+        || geometry.scrollTop >= geometry.maxScrollTop - 2) return;
+      previousMaxScrollTop = geometry.maxScrollTop;
+      if (Date.now() >= deadline) throw new Error('Gallery scroll movement exceeded its original deadline.');
+      await options.onExtentExpanded();
+    }
   }
 
   async waitForVirtualGalleryMeasurementSettled(options = {}) {

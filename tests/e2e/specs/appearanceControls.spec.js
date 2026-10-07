@@ -660,6 +660,7 @@ test(`${CASE_ID} applies every Appearance control family to real UI and preserve
     await expect(searchToolbarActions.searchToolbar.recentSearchPopover).toBeVisible();
     await expect(searchToolbarActions.searchToolbar.recentSearchOptions.first()).toBeVisible();
     await searchToolbarActions.searchToolbar.input.press('Escape');
+    await searchToolbarActions.searchToolbar.input.press('Enter');
     await searchToolbarActions.waitForQuery('Neal');
   });
 

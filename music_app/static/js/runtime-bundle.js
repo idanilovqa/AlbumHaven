@@ -1335,6 +1335,12 @@ function normalizeViewPayload(payload, fallbackView = null) {
     ...(selectedArtistFamilyDisplayMode ? { selected_artist_family_display_mode: selectedArtistFamilyDisplayMode } : {}),
     ...(playbackContext ? { playback_context: playbackContext } : {}),
   };
+  // A replacement search/artist payload must not inherit a root page cursor.
+  if (isPlaylistSurface || normalizedView.query || normalizedView.selected_artist
+    || (Array.isArray(source.artist_groups) && !Object.prototype.hasOwnProperty.call(source, 'gallery_page'))) {
+    delete normalizedView.gallery_page;
+    delete normalizedView.gallery_page_scope;
+  }
   if (isPlaylistSurface) {
     delete normalizedView.artist_family_filters;
     delete normalizedView.artist_page;
@@ -1649,6 +1655,9 @@ function compactCurrentViewForIdle() {
 }
 
 function applyViewPayload(payload, options = {}) {
+  if (!options.rootGalleryContinuation && typeof cancelRootGalleryPageRequest === 'function') {
+    cancelRootGalleryPageRequest();
+  }
   const mountedPreviousView = isRuntimePlainObject(state.view) ? state.view : {};
   const previousView = normalizeViewPayload(state.view);
   const sidebarReconciledPayload = options.preserveSidebarState
@@ -1697,6 +1706,15 @@ function applyViewPayload(payload, options = {}) {
       ? nextView.loaded_library_categories
       : previousView.non_album_library_categories || nextView.loaded_library_categories)
   )];
+  if (nextView.gallery_page && !options.rootGalleryContinuation && !nextPayload?.gallery_page_scope) {
+    // Source hydration may retain the navigation URL. Continuations must follow
+    // the actual loaded page scope, not those retained browser parameters.
+    nextView.gallery_page_scope = {
+      gallery_scope: normalizedNextView.gallery_scope,
+      visible_library_categories: [...normalizedNextView.visible_library_categories],
+      preserve_sidebar: options.preserveSidebarState === true,
+    };
+  }
   if (options.preserveGalleryBrowseLocationState === true) {
     nextView.gallery_scope = previousView.gallery_scope;
     nextView.visible_library_categories = [...previousView.visible_library_categories];
@@ -2050,6 +2068,12 @@ function buildApiUrl(view, options = {}) {
   });
   if (view.primary_filter_active) params.set('primary_filter', '1');
   appendSearchFilterParams(params, view.search_filters);
+  if (resolvedSurface === 'albums' && !view.query && !view.selected_artist
+    && !options.payloadTier && !options.rootSidebar
+    && !['genre', 'mood', 'style', 'duration_min', 'duration_max', 'related_artist', 'primary_filter']
+      .some(key => params.has(key))) {
+    params.set('gallery_page_size', '50');
+  }
   if (options.omitSidebar) params.set('omit_sidebar', '1');
   if (options.rootSidebar) params.set('root_sidebar', '1');
   if (String(options.payloadTier || '').trim()) {
@@ -3326,7 +3350,7 @@ function placeFloatingNotifications() {
     };
     const position = findClearNotificationPosition(size, preferred, viewport, obstacles);
     if (!position) {
-      if (!entry.presented) node.setAttribute('data-notification-deferred', '');
+      node.setAttribute('data-notification-deferred', '');
       continue;
     }
     for (const [key, value] of Object.entries(position)) {
@@ -3652,6 +3676,14 @@ function resolveSidebarArtistCount(view = {}, sidebarArtists = []) {
   return sidebarArtists.length;
 }
 
+function usesCanonicalSidebarArtistOrder(view = {}, options = {}) {
+  const selectedArtist = resolveSidebarSelectedArtist(view, options);
+  const allArtistsActive = Object.prototype.hasOwnProperty.call(options, 'allArtistsActiveOverride')
+    ? Boolean(options.allArtistsActiveOverride)
+    : Boolean(resolveSidebarSurface(view) === 'albums' && (view.all_artists_active || (!view.query && !selectedArtist)));
+  return allArtistsActive && !view.query && !selectedArtist;
+}
+
 function buildSidebarHtml(view = {}, sidebarArtists = [], options = {}) {
   const activeSurface = resolveSidebarSurface(view);
   const showAllArtistsLink = Object.prototype.hasOwnProperty.call(options, 'showAllArtistsOverride')
@@ -3668,7 +3700,8 @@ function buildSidebarHtml(view = {}, sidebarArtists = [], options = {}) {
     label: 'All artists', href: '/?surface=albums', key: 'all-artists', count: artistCount,
     selected: allArtistsActive, attributes: { 'data-nav': '1', 'data-sidebar-all-artists': '1' },
   }) : '';
-  const displayedSidebarArtists = [...sidebarArtists].sort((left, right) => {
+  const displayedSidebarArtists = [...sidebarArtists];
+  if (!usesCanonicalSidebarArtistOrder(view, options)) displayedSidebarArtists.sort((left, right) => {
     const leftLabel = String(left?.artist_display || left?.artist || '');
     const rightLabel = String(right?.artist_display || right?.artist || '');
     return leftLabel.localeCompare(rightLabel, 'en', { numeric: true, sensitivity: 'base' });
@@ -3696,7 +3729,8 @@ function buildSidebarStructureSignature(sidebarArtists = [], options = {}) {
     String(item?.artist_display || item?.artist || ''),
     String(item?.count ?? ''),
   ].join('\u001f')).join('\u001e');
-  return `${showAllArtistsLink}\u001d${artistSignature}`;
+  const artistOrder = usesCanonicalSidebarArtistOrder(options.view || {}, options) ? 'canonical' : 'natural';
+  return `${showAllArtistsLink}\u001d${artistOrder}\u001d${artistSignature}`;
 }
 
 function applySidebarSelectionMarkup(container, options = {}) {
@@ -5958,7 +5992,9 @@ function getGalleryFamilyPanelModel() {
   });
 }
 
-function closeGalleryMainSurface(returnFocus = true) {
+const galleryMainSurfaceCloseCallbacks = new WeakMap();
+
+function closeGalleryMainSurface(returnFocus = true, { immediate = false } = {}) {
   const active = galleryMainSurfaceController?.current?.();
   if (!active) return false;
   const slidingPanel = active.surface.matches?.('.artist-family-panel, .mobile-settings-drawer') === true;
@@ -5973,14 +6009,25 @@ function closeGalleryMainSurface(returnFocus = true) {
   active.anchor?.setAttribute?.('aria-expanded', 'false');
   if (typeof clearTriggerAnchor === 'function') clearTriggerAnchor(active.surface);
   const closed = galleryMainSurfaceController.close(active.key === 'search-suggestions' ? false : returnFocus);
-  if (!slidingPanel || window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) {
+  if (immediate || !slidingPanel || window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) {
     active.surface.hidden = true;
   } else {
+    let finished = false;
+    let timeout;
+    const cancel = () => {
+      finished = true;
+      active.surface.removeEventListener?.('transitionend', finish);
+      window.clearTimeout?.(timeout);
+      galleryMainSurfaceCloseCallbacks.delete(active.surface);
+    };
     const finish = () => {
+      if (finished) return;
+      cancel();
       if (!active.surface.classList?.contains?.('is-open')) active.surface.hidden = true;
     };
+    galleryMainSurfaceCloseCallbacks.set(active.surface, cancel);
     active.surface.addEventListener?.('transitionend', finish, { once: true });
-    window.setTimeout?.(finish, 260);
+    timeout = window.setTimeout?.(finish, 260);
   }
   return closed;
 }
@@ -6003,7 +6050,8 @@ function openGalleryMainSurface(key, anchor, surface, align = 'right') {
     closeGalleryMainSurface(true);
     return false;
   }
-  if (previous) closeGalleryMainSurface(false);
+  if (previous) closeGalleryMainSurface(false, { immediate: true });
+  galleryMainSurfaceCloseCallbacks.get(surface)?.();
   if (typeof activateTriggerSurface === 'function') activateTriggerSurface(surface, () => {
     if (galleryMainSurfaceController.current()?.surface === surface) closeGalleryMainSurface(false);
   }, { anchor });
@@ -9719,7 +9767,13 @@ function splitArtistGroupForDisplay(group) {
     ),
     display_artist_key: canonicalArtist || String(group?.artist_display || ''),
   };
-  if (!canonicalArtist || !albums.length || getCombineSimilarArtistsPreference(canonicalArtist)) {
+  // Root membership belongs to the canonical sidebar/page inventory. Raw album
+  // credits must not split its headings when a later page adds another credit.
+  const canonicalRoot = typeof resolveViewSurface === 'function'
+    && resolveViewSurface(state.view) === 'albums'
+    && !String(state.view?.query || '').trim()
+    && !String(state.view?.selected_artist || '').trim();
+  if (canonicalRoot || !canonicalArtist || !albums.length || getCombineSimilarArtistsPreference(canonicalArtist)) {
     return [defaultGroup];
   }
 
@@ -13781,6 +13835,141 @@ function formatLogHistoryTimestamp(value) {
 
 // BEGIN js/runtime/gallery-refresh-and-status.js
 
+// Root browsing has authoritative navigation and totals but only a bounded page
+// of albums. Continuations never own the foreground/search request slot.
+let rootGalleryPageRequest = null;
+
+function isPagedRootGallery(view = state.view) {
+  const surface = typeof resolveViewSurface === 'function'
+    ? resolveViewSurface(view)
+    : String(view?.surface?.active || view?.surface_request || 'albums');
+  return Boolean(view?.gallery_page
+    && !String(view.query || '').trim()
+    && !String(view.selected_artist || '').trim()
+    && surface === 'albums');
+}
+
+function cancelRootGalleryPageRequest() {
+  rootGalleryPageRequest?.controller.abort();
+  rootGalleryPageRequest = null;
+}
+
+function mergeRootGalleryPageGroups(existing, incoming) {
+  const groups = (existing || []).map(group => ({ ...group, albums: [...(group.albums || [])] }));
+  const byArtist = new Map(groups.map(group => [String(group.display_artist_key || group.artist || ''), group]));
+  for (const incomingGroup of incoming || []) {
+    const artistKey = String(incomingGroup.display_artist_key || incomingGroup.artist || '');
+    let group = byArtist.get(artistKey);
+    if (!group) {
+      group = { ...incomingGroup, albums: [] };
+      groups.push(group);
+      byArtist.set(artistKey, group);
+    }
+    const identities = new Set(group.albums.map(album => String(album.key || '')));
+    for (const album of incomingGroup.albums || []) {
+      const identity = String(album.key || '');
+      if (!identity || identities.has(identity)) continue;
+      identities.add(identity);
+      group.albums.push(album);
+    }
+  }
+  return groups;
+}
+
+function buildRootGalleryPageUrl(view) {
+  return buildApiUrl({ ...view, ...(view.gallery_page_scope || {}) });
+}
+
+async function loadNextRootGalleryPage() {
+  const view = state.view;
+  const page = view?.gallery_page;
+  const scroll = document.getElementById('albums-scroll');
+  if (!isPagedRootGallery(view) || !page.has_more || !page.next_cursor
+    || rootGalleryPageRequest || state.busy || hasPendingSidebarNavigation()
+    || !scroll || scroll.clientHeight <= 0
+    || scroll.scrollHeight - scroll.scrollTop - scroll.clientHeight > 2 * scroll.clientHeight) return false;
+  const request = {
+    controller: new AbortController(),
+    viewRevision: readViewStateRevision(),
+    url: buildRootGalleryPageUrl(view),
+    cursor: page.next_cursor,
+    revision: page.revision,
+  };
+  rootGalleryPageRequest = request;
+  const ownsResponse = () => rootGalleryPageRequest === request
+    && !request.controller.signal.aborted
+    && readViewStateRevision() === request.viewRevision
+    && isPagedRootGallery()
+    && buildRootGalleryPageUrl(state.view) === request.url
+    && state.view.gallery_page.next_cursor === request.cursor
+    && state.view.gallery_page.revision === request.revision;
+  const url = new URL(request.url, window.location.href);
+  url.searchParams.set('gallery_page_size', '50');
+  url.searchParams.set('gallery_cursor', request.cursor);
+  url.searchParams.set('omit_sidebar', '1');
+  try {
+    let response = await fetch(`${url.pathname}${url.search}`, {
+      headers: { Accept: 'application/json' }, signal: request.controller.signal,
+    });
+    let restarted = false;
+    if (response.status === 409) {
+      const conflict = await response.json();
+      if (!ownsResponse() || conflict?.restart_required !== true) return false;
+      // Catalog changes invalidate the cursor. Replace atomically with one fresh
+      // bounded page; keep the old cards visible until that response arrives.
+      url.searchParams.delete('gallery_cursor');
+      url.searchParams.delete('omit_sidebar');
+      response = await fetch(`${url.pathname}${url.search}`, {
+        headers: { Accept: 'application/json' }, signal: request.controller.signal,
+      });
+      restarted = true;
+    }
+    const data = await readGalleryResponse(response, ownsResponse);
+    if (!ownsResponse()) return false;
+    if (!data.gallery_page || !data.gallery_page.revision
+      || (!restarted && data.gallery_page.revision !== request.revision)
+      || (data.gallery_page.has_more && (!data.gallery_page.next_cursor
+        || (!restarted && data.gallery_page.next_cursor === request.cursor)))
+      || !Array.isArray(data.artist_groups)) return false;
+    const artistGroups = restarted
+      ? data.artist_groups
+      : mergeRootGalleryPageGroups(state.view.artist_groups, data.artist_groups);
+    applyViewPayload({
+      ...state.view,
+      ...(restarted ? {
+        ...data,
+        gallery_page_scope: {
+          ...(state.view.gallery_page_scope || {}),
+          gallery_scope: data.gallery_scope,
+          visible_library_categories: data.visible_library_categories,
+        },
+      } : {}),
+      artist_groups: artistGroups,
+      gallery_page: data.gallery_page,
+      initial_view_partial: false,
+    }, {
+      trackSidebarReveal: false,
+      preserveSidebarState: !restarted || state.view.gallery_page_scope?.preserve_sidebar === true,
+      preserveGalleryBrowseLocationState: true,
+      rootGalleryContinuation: true,
+    });
+    const renderOptions = { preserveScroll: true, preserveMountedGalleryChildren: true };
+    if (restarted) renderView(renderOptions);
+    else renderArtistGroups(renderOptions);
+    // Fill only the visible buffer, including a short initial page. Rechecking
+    // geometry after rendering prevents an idle timer from draining the library.
+    scheduleBrowserAnimationFrame(() => { void loadNextRootGalleryPage(); });
+    return true;
+  } catch (error) {
+    if (ownsResponse() && error?.name !== 'AbortError') {
+      showToast('Unable to load more albums. Scroll to retry.', 'error', 3200);
+    }
+    return false;
+  } finally {
+    if (rootGalleryPageRequest === request) rootGalleryPageRequest = null;
+  }
+}
+
 const STARTUP_FOLLOWUP_RETRY_DELAY_MS = 100;
 const STARTUP_FOLLOWUP_VISIBLE_READY_DELAY_MS = 350;
 const STARTUP_FOLLOWUP_MAX_AGE_MS = 1000;
@@ -14303,6 +14492,11 @@ function renderView(options = {}) {
   scheduleSidebarRender();
   if (typeof syncMobileHome === 'function') syncMobileHome();
   if (typeof syncMobileGalleryControls === 'function') syncMobileGalleryControls();
+  if (isPagedRootGallery()) {
+    scheduleBrowserAnimationFrame(() => {
+      scheduleBrowserAnimationFrame(() => { void loadNextRootGalleryPage(); });
+    });
+  }
 }
 
 function hasEquivalentGalleryRenderTopology(retainedGroups, canonicalGroups) {
@@ -14451,7 +14645,85 @@ function dispatchStartupHydrationFollowup(followup, delayMs = 0) {
   Promise.resolve().then(runDispatch);
 }
 
+async function readGalleryResponse(response, ownsResponse) {
+  if (response.status === 401) {
+    if (ownsResponse()) window.location.assign('/login');
+    throw new Error('Sign in again to continue.');
+  }
+  const data = await response.json();
+  if (!response.ok || data?.ok === false) {
+    throw new Error(data?.error || `View request failed: ${response.status}`);
+  }
+  return data;
+}
+
+function rootGalleryRefreshCoverage(apiUrl, options) {
+  if (!options.preserveScroll || options.startupRefresh || !isPagedRootGallery()) return 0;
+  const url = new URL(apiUrl, 'http://localhost');
+  if (url.pathname !== '/view-data' || url.searchParams.get('surface') !== 'albums'
+    || !url.searchParams.has('gallery_page_size')
+    || ['q', 'artist', 'genre', 'mood', 'style', 'duration_min', 'duration_max',
+      'related_artist', 'primary_filter', 'gallery_cursor', 'payload_tier', 'root_sidebar']
+      .some(key => url.searchParams.has(key))) return 0;
+  const scope = state.view.gallery_page_scope || state.view;
+  if (String(scope.gallery_scope || '') !== String(url.searchParams.get('gallery_scope') || '')) return 0;
+  const categories = [...(scope.visible_library_categories || [])].sort();
+  const requestedCategories = url.searchParams.getAll('category').sort();
+  if (JSON.stringify(categories) !== JSON.stringify(requestedCategories)) return 0;
+  return (state.view.artist_groups || []).reduce((count, group) => count + (group.albums || []).length, 0);
+}
+
+async function collectRootGalleryRefresh(data, apiUrl, coverage, controller, ownsResponse) {
+  let payload = data;
+  let restarted = false;
+  const cursors = new Set();
+  let remainingPages = Math.ceil(coverage / 50);
+  while (ownsResponse()) {
+    const page = payload?.gallery_page;
+    const count = (payload?.artist_groups || []).reduce((sum, group) => sum + (group.albums || []).length, 0);
+    if (!page?.has_more || count >= coverage) return payload;
+    const cursor = String(page.next_cursor || '');
+    if (!cursor || cursors.has(cursor) || remainingPages-- <= 0) {
+      throw new Error('Root gallery refresh did not advance within its loaded coverage.');
+    }
+    cursors.add(cursor);
+    const url = new URL(apiUrl, 'http://localhost');
+    url.searchParams.set('gallery_page_size', '50');
+    url.searchParams.set('gallery_cursor', cursor);
+    url.searchParams.set('omit_sidebar', '1');
+    const response = await fetch(`${url.pathname}${url.search}`, {
+      headers: { Accept: 'application/json' }, signal: controller?.signal,
+    });
+    if (!ownsResponse()) return null;
+    const next = response.status === 409 ? null : await readGalleryResponse(response, ownsResponse);
+    if (!ownsResponse()) return null;
+    if (response.status === 409 || String(next?.gallery_page?.revision || '') !== String(page.revision || '')) {
+      if (restarted) throw new Error('Root gallery changed again while refreshing loaded albums.');
+      restarted = true;
+      cursors.clear();
+      remainingPages = Math.ceil(coverage / 50);
+      url.searchParams.delete('gallery_cursor');
+      url.searchParams.delete('omit_sidebar');
+      const restartResponse = await fetch(`${url.pathname}${url.search}`, {
+        headers: { Accept: 'application/json' }, signal: controller?.signal,
+      });
+      payload = await readGalleryResponse(restartResponse, ownsResponse);
+      continue;
+    }
+    if (next.gallery_page.has_more && cursors.has(String(next.gallery_page.next_cursor || ''))) {
+      throw new Error('Root gallery refresh returned a repeated cursor.');
+    }
+    payload = {
+      ...payload,
+      artist_groups: mergeRootGalleryPageGroups(payload.artist_groups, next.artist_groups),
+      gallery_page: next.gallery_page,
+    };
+  }
+  return null;
+}
+
 async function fetchAndRender(url, push = true, options = {}) {
+  cancelRootGalleryPageRequest();
   const requestOptions = (options && typeof options === 'object') ? options : {};
   const albumDetailPrewarmSearchGeneration = state.ui?.albumDetailPrewarmSearchSuspended
     ? Number(state.ui.albumDetailPrewarmSearchGeneration || 0)
@@ -14465,6 +14737,7 @@ async function fetchAndRender(url, push = true, options = {}) {
   const apiUrl = url.startsWith('/view-data') || url.startsWith('/home-data')
     ? url
     : buildApiUrl(parseBrowserUrlState(url));
+  const rootRefreshCoverage = rootGalleryRefreshCoverage(apiUrl, requestOptions);
   const encodedCommittedQuery = String(
     apiUrl.match(/(?:[?&])q=([^&]*)/)?.[1] || ''
   ).replace(/\+/g, ' ');
@@ -14583,13 +14856,42 @@ async function fetchAndRender(url, push = true, options = {}) {
     markStartupFollowup('fetch_started', requestOptions, {
       endpoint: apiUrl,
     });
-    const response = await fetch(apiUrl, {
-      headers: { Accept: 'application/json' },
-      signal: controller?.signal,
-    });
-    const data = await response.json();
-    if (!response.ok || data?.ok === false) {
-      throw new Error(data?.error || `View request failed: ${response.status}`);
+    let response;
+    let data;
+    if (requestOptions.searchPreviewUrl) {
+      [{ response, data }] = await Promise.all([apiUrl, requestOptions.searchPreviewUrl].map(async (requestUrl, index) => {
+        try {
+          const response = await fetch(requestUrl, {
+            headers: { Accept: 'application/json' },
+            signal: controller?.signal,
+          });
+          const data = await readGalleryResponse(response, () => requestOwnsCurrentViewState(requestId, requestViewStateRevision));
+          return { response, data };
+        } catch (error) {
+          error.gallerySearchStage = index === 1 ? 'preview' : 'hydration';
+          controller?.abort();
+          throw error;
+        }
+      }));
+    } else {
+      response = await fetch(apiUrl, {
+        headers: { Accept: 'application/json' },
+        signal: controller?.signal,
+      });
+      data = await readGalleryResponse(response, () => requestOwnsCurrentViewState(requestId, requestViewStateRevision));
+    }
+    if (rootRefreshCoverage > 0) {
+      const ownsRefresh = () => {
+        if (!requestOwnsCurrentViewState(requestId, requestViewStateRevision)
+          || requestTagEditMutationRevision !== Number(state.ui.tagEditOptimisticMutationRevision || 0)) return false;
+        try {
+          return typeof requestOptions.shouldApplyResponse !== 'function' || requestOptions.shouldApplyResponse(data) === true;
+        } catch (_error) {
+          return false;
+        }
+      };
+      data = await collectRootGalleryRefresh(data, apiUrl, rootRefreshCoverage, controller, ownsRefresh);
+      if (!data || !ownsRefresh()) return false;
     }
     markStartupFollowup('payload_received', requestOptions, {
       endpoint: apiUrl,
@@ -14676,6 +14978,7 @@ async function fetchAndRender(url, push = true, options = {}) {
     );
     const preserveMountedGallery = Boolean(
       retainedCommittedSearchGallery
+      && requestOptions.preserveScroll !== false
       && hasMountedGalleryContent
       && hasEquivalentGalleryRenderTopology(
         retainedCommittedSearchGallery,
@@ -14934,6 +15237,7 @@ async function triggerLibraryRefresh(fullRescan = false) {
   }
 }
 function claimLocalViewStateNavigation() {
+  cancelRootGalleryPageRequest();
   state.ui.viewStateRevision = Number(state.ui.viewStateRevision || 0) + 1;
   state.ui.pendingViewRequest = null;
   state.ui.pendingViewTransition = false;
@@ -15311,7 +15615,7 @@ async function pollStatus() {
       return;
     }
     const response = await fetch('/status');
-    const data = await response.json();
+    const data = await readGalleryResponse(response, ownsStatus);
     if (!ownsStatus()) return;
     updateStatusIndicator(data);
     const normalizedStatus = state.status;
@@ -18657,8 +18961,32 @@ async function watchSaveTask(taskId, context = {}) {
             && !mutationWasSuperseded()
           ) {
             try {
+              let refreshView = state.view;
+              const originSearch = context.originatingSearchContext;
+              const originalOwner = String(originalAlbum?.album_artist || '').trim().toLowerCase();
+              const splitAlbums = Array.isArray(context.optimisticAlbums) ? context.optimisticAlbums : [];
+              const restoresAllSearchResults = Boolean(
+                canReconcileOriginView()
+                && structuralTagEditRequiresMountedGalleryChildReplacement
+                && originSearch?.selected_artist_source === 'auto_top_match'
+                && !(originSearch.artist_name_match_artists || []).length
+                && originalOwner
+                && splitAlbums.some(album => String(album?.album_artist || '').trim().toLowerCase() === originalOwner)
+                && splitAlbums.some(album => {
+                  const owner = String(album?.album_artist || '').trim().toLowerCase();
+                  return owner && owner !== originalOwner;
+                })
+                && originatingViewRequestUrl
+                && String(state.view.query || '').trim()
+                && parseBrowserUrlState(originatingViewRequestUrl).query === state.view.query
+                && !state.view.primary_filter_active
+                && !(state.view.related_filter_artists || []).length
+              );
+              if (restoresAllSearchResults) {
+                refreshView = { ...state.view, selected_artist: '', all_artists_active: true };
+              }
               viewRefreshed = await fetchAndRender(
-                buildApiUrl(state.view),
+                buildApiUrl(refreshView),
                 false,
                 {
                   ...currentViewRenderOptions(),
@@ -18670,6 +18998,11 @@ async function watchSaveTask(taskId, context = {}) {
                   shouldApplyResponse: () => !mutationWasSuperseded(),
                 },
               );
+              if (viewRefreshed && restoresAllSearchResults && canReconcileOriginView()) {
+                window.history.replaceState(
+                  { ...window.history.state, ...state.view }, '', buildUrl(state.view),
+                );
+              }
               if (viewRefreshed && finalizedAlbums.length) {
                 modalUpdatedAlbums = enrichFinalizedAlbumsWithCanonicalVisibleProjections(
                   finalizedAlbums,
@@ -19482,7 +19815,7 @@ function getVisibleProblemSuggestions(album = getSelectedProblematicAlbum()) {
 function getApplicableProblemSuggestions() {
   const visible = getVisibleProblemSuggestions();
   const selections = state.utility.proposalSelections || {};
-  return Object.values(selections).some(Boolean) ? visible.filter(proposal => selections[proposal.id]) : visible;
+  return visible.filter(proposal => selections[proposal.id]);
 }
 
 function toggleProblemSuggestion(id, { selected } = {}) {
@@ -19517,7 +19850,7 @@ function syncProblemSuggestionSelection() {
   const apply = document.querySelector?.('[data-apply-problem-suggestions]');
   if (apply) {
     const label = apply.querySelector?.('.ui-button__content') || apply;
-    label.textContent = Object.values(state.utility.proposalSelections || {}).some(Boolean) ? 'Apply' : 'Apply All';
+    label.textContent = Object.values(state.utility.proposalSelections || {}).some(Boolean) ? 'Apply selected edits' : 'Select edits to apply';
     ButtonComponent.setDisabled(apply, !getSelectedProblematicAlbum()?.allowed_actions?.['library.files.edit_tags'] || !getApplicableProblemSuggestions().length || Boolean(state.utility.proposalApplyBusy));
   }
 }
@@ -23358,7 +23691,15 @@ async function loadProblematicFiles(force = false, options = {}) {
   const navigationOwnsRendering = () => Boolean(
     state.utility.problematicNavigationActiveToken,
   );
-  if (state.utility.loading) return state.utility.loadPromise;
+  if (state.utility.loading) {
+    const pendingLoad = state.utility.loadPromise;
+    const result = await pendingLoad;
+    if (pendingLoad && !state.utility.loaded
+      && pendingLoad.problematicSummaryRequestToken !== Number(state.utility.problematicSummaryRequestToken || 0)) {
+      return loadProblematicFiles(force, options);
+    }
+    return result;
+  }
   if (state.utility.loaded && !force) {
     if (shouldRender && !navigationOwnsRendering()) renderUtilityModalContent();
     return;
@@ -23367,7 +23708,8 @@ async function loadProblematicFiles(force = false, options = {}) {
   const requestToken = Number(state.utility.problematicSummaryRequestToken || 0) + 1;
   state.utility.problematicSummaryRequestToken = requestToken;
   if (shouldRender && !navigationOwnsRendering()) renderUtilityModalContent();
-  state.utility.loadPromise = (async () => {
+  let requestPromise = null;
+  requestPromise = (async () => {
     const startedAt = getProblematicUtilityNow();
     let requestMs = 0;
     let parseMs = 0;
@@ -23419,9 +23761,13 @@ async function loadProblematicFiles(force = false, options = {}) {
       return null;
     } finally {
       const stillOwner = Number(state.utility.problematicSummaryRequestToken || 0) === requestToken;
-      if (stillOwner) {
+      // A mutation can invalidate payload ownership while this request still
+      // owns the loading slot. Release that slot without touching a newer load.
+      if (state.utility.loadPromise === requestPromise) {
         state.utility.loading = false;
         state.utility.loadPromise = null;
+      }
+      if (stillOwner) {
         const renderStartedAt = getProblematicUtilityNow();
         if (shouldRender && !navigationOwnsRendering()) {
           renderUtilityModalContent();
@@ -23443,7 +23789,9 @@ async function loadProblematicFiles(force = false, options = {}) {
       }
     }
   })();
-  return state.utility.loadPromise;
+  requestPromise.problematicSummaryRequestToken = requestToken;
+  state.utility.loadPromise = requestPromise;
+  return requestPromise;
 }
 
 async function loadProblematicAlbumDetail(albumKey, force = false, options = {}) {
@@ -28734,6 +29082,7 @@ async function confirmManualTagEdit() {
   const originatingViewRequestUrl = typeof buildApiUrl === 'function'
     ? String(buildApiUrl(state.view) || '').trim()
     : '';
+  const originatingSearchContext = { ...(state.view?.search_context || {}) };
   const tagEditMutationClaim = claimTagEditViewMutation(album, editedPaths, updates);
   settleTagEditorSessionMutationClaim();
   const optimisticUpdatedAlbums = buildOptimisticUpdatedAlbumsFromEdits(album, updates);
@@ -28847,6 +29196,7 @@ async function confirmManualTagEdit() {
       originalAlbum: album,
       originatingViewStateRevision,
       originatingViewRequestUrl,
+      originatingSearchContext,
       tagEditMutationClaim,
       tagEdits: authoritativeTagEdits,
       preserveAbsoluteScroll: true,
@@ -33307,6 +33657,11 @@ class VirtualArtistGrid {
   restoreScrollAnchor(anchor) {
     if (!this.scrollEl || !anchor) return;
     this.scrollEl.scrollLeft = Number(anchor.scrollLeft || 0);
+    // At the root, hydration must preserve the top rather than follow a preview card.
+    if (Number(anchor.scrollTop || 0) <= 0) {
+      this.scrollEl.scrollTop = 0;
+      return;
+    }
     const albumKey = String(anchor.albumKey || '');
     if (albumKey) {
       const sectionOccurrenceKey = String(anchor.sectionOccurrenceKey || '');
@@ -33839,6 +34194,8 @@ class VirtualArtistGrid {
       this._absoluteScrollRestore,
     );
     const isOwnedStabilizationScroll = this.isPendingStabilizationScroll();
+    if (!isOwnedStabilizationScroll && !ownsPendingAbsoluteRestore
+      && typeof loadNextRootGalleryPage === 'function') void loadNextRootGalleryPage();
     if (!isOwnedStabilizationScroll && ownsPendingAbsoluteRestore) {
       this.scrollEl.scrollLeft = this._absoluteScrollRestore.scrollLeft;
       this.scrollEl.scrollTop = this._absoluteScrollRestore.scrollTop;
@@ -34359,6 +34716,8 @@ class VirtualArtistGrid {
   }
 
   patchRenderedSections(records, options = {}) {
+    // An uninitialized model must not clear the server-rendered startup preview.
+    if (this._renderGeneration === 0 && !records.length) return;
     if (
       !this.containerEl
       || typeof this.containerEl.appendChild !== 'function'
@@ -39150,7 +39509,17 @@ function releasePendingGallerySearchSuspensions() {
 
 function scheduleGallerySearchCommit(nextQuery, options = {}) {
   const normalizedQuery = updateGallerySearchDraftQuery(nextQuery);
-  const committedQuery = String(state.view?.query || '');
+  let committedQuery = String(state.view?.query || '');
+  const pendingQuery = state.busy
+    && String(state.ui.activeViewRequestUrl || '').startsWith('/view-data?')
+    && String(state.ui.activeViewRequestUrl).match(/(?:[?&])q=([^&]*)/);
+  if (pendingQuery) {
+    try {
+      committedQuery = decodeURIComponent(pendingQuery[1].replace(/\+/g, ' '));
+    } catch (_error) {
+      // Invalid request encoding cannot supersede the applied query.
+    }
+  }
   const retriesFailedSearch = Boolean(
     options.immediate
     && state.ui?.failedGallerySearch?.query === normalizedQuery
@@ -39209,6 +39578,11 @@ function revealArtistTreeForSearch() {
 function handleGalleryBootstrapSearchSubmit(event) {
   event.preventDefault();
   if (typeof handleMobileSearchSubmit === 'function' && handleMobileSearchSubmit()) return;
+  if (state.ui.artistsDrawerOpen
+    && typeof usesMobilePageLayout === 'function' && usesMobilePageLayout()
+    && typeof closeArtistsDrawer === 'function') {
+    closeArtistsDrawer({ restoreFocus: false });
+  }
   const input = document.getElementById('search-input');
   const nextQuery = input?.value || '';
   const mobileArtistsButton = document?.querySelector?.('.mobile-artists-mode-button');
@@ -39318,6 +39692,9 @@ function commitGallerySearchQuery(nextQuery, options = {}) {
       !String(state.view.query || '').trim()
       && effectiveSelectedArtist === String(state.view.selected_artist || '').trim()
     ) {
+      if (state.busy && /(?:[?&])q=[^&]+/.test(String(state.ui.activeViewRequestUrl || ''))) {
+        state.ui.activeViewRequestController?.abort();
+      }
       state.ui.pendingSearchClearOnBlur = false;
       releaseAlbumDetailPrewarmSearchSuspension(
         Number(state.ui.albumDetailPrewarmSearchGeneration || 0),
@@ -39454,10 +39831,9 @@ function commitGallerySearchQuery(nextQuery, options = {}) {
     payloadTier: 'search_preview',
   });
   const hydrationUrl = buildApiUrl(next);
-  state.view = { ...state.view, query: normalizedQuery };
-  let activeSearchStage = retriesHydration ? 'hydration' : 'preview';
-  const handleSearchFailure = () => {
+  const handleSearchFailure = (error) => {
     if (state.ui.gallerySearchGeneration !== searchGeneration) return;
+    const activeSearchStage = error?.gallerySearchStage || 'hydration';
     const previewFailed = activeSearchStage === 'preview';
     state.ui.failedGallerySearch = {
       query: normalizedQuery,
@@ -39471,43 +39847,22 @@ function commitGallerySearchQuery(nextQuery, options = {}) {
       showToast(
         previewFailed
           ? 'Search preview failed. Retry the search.'
-          : 'Search preview loaded, but full search results failed to load. Retry the search.',
+          : 'Full search results failed to load. Retry the search.',
         'error',
         4800,
         { errorKey: `gallery-search-${activeSearchStage}-failed` },
       );
     }
   };
-  const runHydration = () => Promise.resolve(fetchAndRender(hydrationUrl, true, {
-    preserveScroll: true,
+  const request = fetchAndRender(hydrationUrl, true, {
+    preserveScroll: String(previousView.query || '') === normalizedQuery,
+    restartIfSameUrl: true,
     skipPendingViewTransition: true,
     shouldApplyResponse: () => state.ui.gallerySearchGeneration === searchGeneration,
-  }));
-  if (retriesHydration) {
-    void runHydration().then(
-      resumeCoverLoads,
-      (error) => {
-        resumeCoverLoads();
-        throw error;
-      },
-    ).catch(handleSearchFailure);
-    return;
-  }
-  const previewRequest = fetchAndRender(previewUrl, true, {
-    shouldApplyResponse: () => false,
-    preserveMountedGallery: true,
+    ...(retriesHydration ? {} : { searchPreviewUrl: previewUrl }),
   });
-  const previewRequestId = state.ui.activeViewRequestId;
-  const previewViewRevision = state.ui.viewStateRevision;
-  void Promise.resolve(previewRequest).then(
-    () => {
-      resumeCoverLoads();
-      if (state.ui.gallerySearchGeneration !== searchGeneration) return false;
-      if (state.ui.activeViewRequestId !== previewRequestId
-        || state.ui.viewStateRevision !== previewViewRevision) return false;
-      activeSearchStage = 'hydration';
-      return runHydration();
-    },
+  void Promise.resolve(request).then(
+    resumeCoverLoads,
     (error) => {
       resumeCoverLoads();
       throw error;
@@ -41378,11 +41733,22 @@ if (typeof initCompactPlayer === 'function') initCompactPlayer();
 if (typeof initPlaybackOwnershipCoordinator === 'function') {
   initPlaybackOwnershipCoordinator();
 }
+let idlePlaybackPreparationCancelled = false;
 if (typeof prepareStreamingPlaybackEngine === 'function'
     && (!window.AlbumHavenCapabilities || window.AlbumHavenCapabilities.allows('library.media.read'))) {
-  void prepareStreamingPlaybackEngine().catch((error) => {
-    console.error('[AlbumHaven][Playback] Failed to prepare streaming playback.', error);
-  });
+  const prepareIdlePlayback = () => {
+    if (idlePlaybackPreparationCancelled) return;
+    void prepareStreamingPlaybackEngine().catch((error) => {
+      console.error('[AlbumHaven][Playback] Failed to prepare streaming playback.', error);
+    });
+  };
+  // AudioContext creation can synchronously open the device. Keep that work out
+  // of initial rendering; an early play action still awaits engine preparation.
+  if (typeof window.requestIdleCallback === 'function') {
+    window.requestIdleCallback(prepareIdlePlayback, { timeout: 1000 });
+  } else {
+    scheduleBrowserTimeout(prepareIdlePlayback, 0);
+  }
 }
 const bootstrapSearchParams = new URL(window.location.href).searchParams;
 const galleryDisplayPreferenceResolutionOptions = {
@@ -41450,7 +41816,8 @@ const startupHydrationTier = String(startupHydration.tier || 'full');
 const shellMainContentKind = String(
   state.view?.shell_layout?.slots?.main_content?.content_kind || '',
 ).trim();
-const shouldStartImmediateHydration = shellMainContentKind === 'discovery_center_page'
+const hasPagedRootInitialView = typeof isPagedRootGallery === 'function' && isPagedRootGallery();
+const shouldStartImmediateHydration = hasPagedRootInitialView || shellMainContentKind === 'discovery_center_page'
   ? false
   : shouldRunImmediateStartupHydration(state.view, bootstrap);
 let embeddedStartupViewPatch = startupHydration?.embeddedViewPatch && typeof startupHydration.embeddedViewPatch === 'object'
@@ -41499,13 +41866,20 @@ if (shouldTreatStartupPreviewAsVisibleReady) {
   renderView();
 }
 if (typeof initGalleryMain === 'function') initGalleryMain();
+if (hasPagedRootInitialView) {
+  scheduleBrowserAnimationFrame(() => {
+    scheduleBrowserAnimationFrame(() => { void loadNextRootGalleryPage(); });
+  });
+}
 if (typeof initMobileNavigation === 'function') initMobileNavigation();
 if (typeof syncMobileHome === 'function') syncMobileHome();
 startupMetrics.markInitialRender(state.view);
 const hasAuthoritativeServerRenderedInitialView = Boolean(
-  !bootstrap.partialView
-  && !startupHydrationRequired
-  && !state.view?.initial_view_partial
+  hasPagedRootInitialView || (
+    !bootstrap.partialView
+    && !startupHydrationRequired
+    && !state.view?.initial_view_partial
+  )
 );
 if (
   !shouldStartImmediateHydration
@@ -41753,6 +42127,7 @@ document.addEventListener('pointerdown', reconcileLoopEditSessionExpiry, true);
 document.addEventListener('keydown', reconcileLoopEditSessionExpiry, true);
 let unloadStreamingCleanupPromise = null;
 function cleanupStreamingPlaybackForUnload() {
+  idlePlaybackPreparationCancelled = true;
   if (unloadStreamingCleanupPromise) return unloadStreamingCleanupPromise;
   if (typeof stopStreamingPlayback !== 'function') {
     unloadStreamingCleanupPromise = Promise.resolve();

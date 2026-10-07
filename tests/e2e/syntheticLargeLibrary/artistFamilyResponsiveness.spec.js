@@ -811,7 +811,7 @@ test.describe(`${CASE_ID} synthetic-large artist family responsiveness`, () => {
     const clearSearchReadyMs = await stepLogger.step('Clear the search and wait for the full tree to return while keeping Neal Morse selected', async () => (
       measureActionTime(
         async () => {
-          await searchToolbarActions.clearSearch();
+          await searchToolbarActions.clearSearch({ submitWithEnter: true });
         },
         async () => {
           await searchToolbarActions.waitForQuery('', { timeout: 60000 });

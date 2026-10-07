@@ -60,6 +60,8 @@ def _start_library_warmup(
     ensure_relations,
     start_refresh,
     prewarm_postgres,
+    hydrate_metadata=None,
+    recover_persistence=None,
 ):
     stop_requested = threading.Event()
     database_url = str(
@@ -78,6 +80,19 @@ def _start_library_warmup(
                     prewarm_postgres(database_url)
                 except Exception:
                     runtime.logger.exception("Postgres connection pool prewarm failed.")
+                if stop_requested.is_set():
+                    return
+                if recover_persistence is not None:
+                    recover_persistence(runtime)
+                if stop_requested.is_set():
+                    return
+                if hydrate_metadata is not None:
+                    try:
+                        hydrate_metadata(runtime)
+                    except InterruptedError:
+                        raise
+                    except Exception:
+                        runtime.logger.exception("Postgres scan timestamp hydration failed.")
                 if stop_requested.is_set():
                     return
                 ensure_relations(runtime, cancel_requested=stop_requested)
@@ -384,6 +399,8 @@ def create_asgi_app():
     from music_app.services.state import (
         ensure_runtime_relation_projection_ready,
         hydrate_runtime_library_state_on_startup,
+        hydrate_runtime_scan_metadata_on_startup,
+        recover_runtime_library_persistence_on_startup,
         invalidate_targeted_library_projections,
         start_background_refresh_for_state,
     )
@@ -392,6 +409,8 @@ def create_asgi_app():
 
     @asynccontextmanager
     async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
+        for template_name in _app.state.templates.env.list_templates():
+            _app.state.templates.env.get_template(template_name)
         from music_app.services.log_history import resolve_media_host_history_scope
         host_scope = resolve_media_host_history_scope(runtime.config)
         _app.state.media_host_library_id = host_scope.library_id if host_scope is not None else None
@@ -406,6 +425,8 @@ def create_asgi_app():
             ensure_runtime_relation_projection_ready,
             start_background_refresh_for_state,
             prewarm_connection_pool,
+            hydrate_metadata=hydrate_runtime_scan_metadata_on_startup,
+            recover_persistence=recover_runtime_library_persistence_on_startup,
         )
         lastfm_started = False
         welcome_worker = None
@@ -415,6 +436,7 @@ def create_asgi_app():
         runtime.library_watch_service = None
 
         async def shutdown_resources() -> None:
+            _app.state.library_warmup_thread.request_stop()
             runtime.config.pop("_LIBRARY_WATCH_MANUAL_RECOVERY_CALLBACK", None)
             shutdown_errors: list[tuple[str, BaseException]] = []
             shutdown_stages = (

@@ -1714,3 +1714,31 @@ def test_app_js_loads_generated_runtime_bundle_after_bootstrap_payload_setup():
         "selection-accent.js",
         "unfolding-action-button.js",
     }
+
+
+def test_paged_startup_preserves_complete_sidebar_and_contiguous_page():
+    groups = [{"artist": f"Artist {i}", "albums": [{"key": f"album-{i}", "tracks": [{"title": "Track"}]}]} for i in range(8)]
+    sidebar = [{"artist": f"Artist {i}", "count": 1} for i in range(51)]
+    page = {"next_cursor": "next", "has_more": True, "revision": "revision", "page_size": 8}
+    preview = startup_bootstrap.build_initial_view_preview({
+        "artist_groups": groups, "primary_artist_groups": groups, "family_artist_groups": [],
+        "artists_sidebar": sidebar, "artist_count": 51, "album_count": 123,
+        "gallery_page": page, "initial_view_partial": False,
+    })
+    assert preview["artists_sidebar"] == sidebar
+    assert len(preview["artist_groups"]) == len(preview["primary_artist_groups"]) == 8
+    assert preview["artist_count"] == 51 and preview["album_count"] == 123
+    assert preview["gallery_page"] == page
+    assert preview["initial_view_partial"] is False
+    assert preview["artist_groups"][0]["albums"][0]["tracks"] == []
+    assert preview["artist_groups"][0]["albums"][0]["track_count_preview"] == 1
+
+
+def test_paged_startup_sidebar_markup_is_bounded_without_truncating_metadata():
+    sidebar = [{"artist": f"Artist {i:03}", "count": 1} for i in range(51)]
+    view = {"artists_sidebar": sidebar, "artist_count": 51, "surface": {"active": "albums"}, "gallery_page": {"has_more": True}}
+    markup = str(startup_bootstrap.build_startup_sidebar_html(view))
+    assert markup.count('data-sidebar-artist=') == 40
+    assert 'Artist 039' in markup and 'Artist 040' not in markup
+    assert len(view["artists_sidebar"]) == 51
+    assert '>51<' in markup

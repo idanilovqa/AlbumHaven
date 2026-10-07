@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
+from contextlib import nullcontext
 from copy import deepcopy
 import logging
 from pathlib import Path
@@ -1248,18 +1250,19 @@ def test_refresh_library_state_does_not_run_mbid_follow_up_for_skip_failure_or_c
         "last_error": None,
         "relation_views": {"artists": []},
     })
-    scan_state.refresh_library_state(
-        library_state,
-        config=runtime_config,
-        logger=runtime_logger,
-        force=True,
-        cache_lock=scan_state.Lock(),
-        scan_music_incremental=lambda **kwargs: (_ for _ in ()).throw(RuntimeError("scan failed")),
-        refresh_relation_views=lambda *, seed_missing_album_ratings=False: None,
-        start_manual_cover_refresh=lambda *, force_search=False: {"started": True},
-        start_background_cover_refresh=lambda: None,
-        queue_mbid_assertion_follow_up=lambda *args, **kwargs: hook_calls.append("failure"),
-    )
+    with pytest.raises(RuntimeError, match="scan failed"):
+        scan_state.refresh_library_state(
+            library_state,
+            config=runtime_config,
+            logger=runtime_logger,
+            force=True,
+            cache_lock=scan_state.Lock(),
+            scan_music_incremental=lambda **kwargs: (_ for _ in ()).throw(RuntimeError("scan failed")),
+            refresh_relation_views=lambda *, seed_missing_album_ratings=False: None,
+            start_manual_cover_refresh=lambda *, force_search=False: {"started": True},
+            start_background_cover_refresh=lambda: None,
+            queue_mbid_assertion_follow_up=lambda *args, **kwargs: hook_calls.append("failure"),
+        )
 
     library_state.update({
         "file_cache": {},
@@ -1911,17 +1914,18 @@ def test_failed_relation_publication_keeps_prior_live_scan_state(
         assert library_state["albums"] == [old_album]
         return new_file_cache, 55.0
 
-    scan_state.refresh_library_state(
-        library_state,
-        config=runtime_config,
-        logger=runtime_logger,
-        force=True,
-        cache_lock=scan_state.Lock(),
-        scan_music_incremental=scan_with_partial_publication,
-        refresh_relation_views=reject_publication,
-        start_manual_cover_refresh=lambda *, force_search=False: {"started": True},
-        start_background_cover_refresh=lambda: None,
-    )
+    with pytest.raises(RuntimeError, match="database publication failed"):
+        scan_state.refresh_library_state(
+            library_state,
+            config=runtime_config,
+            logger=runtime_logger,
+            force=True,
+            cache_lock=scan_state.Lock(),
+            scan_music_incremental=scan_with_partial_publication,
+            refresh_relation_views=reject_publication,
+            start_manual_cover_refresh=lambda *, force_search=False: {"started": True},
+            start_background_cover_refresh=lambda: None,
+        )
 
     assert library_state["file_cache"] is old_file_cache
     assert library_state["albums"] == [old_album]
@@ -2040,17 +2044,18 @@ def test_obsolete_scan_exception_does_not_overwrite_newer_generation_error(
         library_state["last_error"] = "newer scan failed"
         raise RuntimeError("obsolete scan failed")
 
-    scan_state.refresh_library_state(
-        library_state,
-        config=runtime_config,
-        logger=runtime_logger,
-        force=True,
-        cache_lock=scan_state.Lock(),
-        scan_music_incremental=fail_after_new_generation_starts,
-        refresh_relation_views=lambda **_kwargs: None,
-        start_manual_cover_refresh=lambda *, force_search=False: {"started": True},
-        start_background_cover_refresh=lambda: None,
-    )
+    with pytest.raises(RuntimeError, match="obsolete scan failed"):
+        scan_state.refresh_library_state(
+            library_state,
+            config=runtime_config,
+            logger=runtime_logger,
+            force=True,
+            cache_lock=scan_state.Lock(),
+            scan_music_incremental=fail_after_new_generation_starts,
+            refresh_relation_views=lambda **_kwargs: None,
+            start_manual_cover_refresh=lambda *, force_search=False: {"started": True},
+            start_background_cover_refresh=lambda: None,
+        )
 
     assert library_state["scan_generation"] == 2
     assert library_state["last_error"] == "newer scan failed"
@@ -2136,19 +2141,20 @@ def test_unsuccessful_scan_never_publishes_rating_seed_intent(
     def fail_scan(**_kwargs):
         raise scan_result
 
-    scan_state.refresh_library_state(
-        library_state,
-        config=runtime_config,
-        logger=runtime_logger,
-        force=True,
-        cache_lock=scan_state.Lock(),
-        scan_music_incremental=fail_scan,
-        refresh_relation_views=lambda *, seed_missing_album_ratings=False, expected_scan_generation=None: (
-            publication_intents.append(seed_missing_album_ratings)
-        ),
-        start_manual_cover_refresh=lambda *, force_search=False: {"started": True},
-        start_background_cover_refresh=lambda: None,
-    )
+    with pytest.raises(RuntimeError, match="scan failed") if type(scan_result) is RuntimeError else nullcontext():
+        scan_state.refresh_library_state(
+            library_state,
+            config=runtime_config,
+            logger=runtime_logger,
+            force=True,
+            cache_lock=scan_state.Lock(),
+            scan_music_incremental=fail_scan,
+            refresh_relation_views=lambda *, seed_missing_album_ratings=False, expected_scan_generation=None: (
+                publication_intents.append(seed_missing_album_ratings)
+            ),
+            start_manual_cover_refresh=lambda *, force_search=False: {"started": True},
+            start_background_cover_refresh=lambda: None,
+        )
 
     assert publication_intents == []
 
@@ -2293,3 +2299,127 @@ def test_fresh_snapshot_hydration_rebuilds_relations_without_rating_seed_intent(
     )
 
     assert publication_intents == [False]
+
+
+@pytest.mark.parametrize("failure_stage", ["scan", "relation"])
+@pytest.mark.parametrize("superseded", [False, True], ids=["current", "superseded"])
+def test_scan_future_propagates_failure_without_overwriting_newer_state(
+    runtime_config, runtime_logger, library_state, monkeypatch, failure_stage, superseded,
+):
+    failure = RuntimeError("scan operation persistence failed")
+    followups = []
+    newer_state = {}
+    library_state.update(file_cache={}, albums=[], last_scan=0.0, scan_generation=0)
+    _install_scan_cache_adapter(monkeypatch)
+    monkeypatch.setattr(scan_state, "load_separate_release_keys", lambda _cfg: set())
+    monkeypatch.setattr(scan_state, "build_albums_from_file_cache", lambda *_args: [])
+    monkeypatch.setattr(scan_state, "log_app_event", lambda *_args, **_kwargs: None)
+
+    def fail():
+        if superseded:
+            library_state.update(
+                scan_generation=2, scan_in_progress=True, scan_phase="discovering",
+                scan_mode="manual_full_rescan", scan_outcome="running",
+                scan_current_path="Newer/Album", last_error="newer status",
+                scan_committed_generation=2,
+                active_scan_preview_state={"scan_generation": 2, "publication_state": {}},
+            )
+            newer_state.update(library_state)
+        raise failure
+
+    def scan(**_kwargs):
+        if failure_stage == "scan":
+            fail()
+        return {}, 55.0
+
+    def publish(**_kwargs):
+        assert failure_stage == "relation"
+        fail()
+
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        future = executor.submit(
+            scan_state.refresh_library_state, library_state,
+            config=runtime_config, logger=runtime_logger, force=True,
+            cache_lock=scan_state.Lock(), scan_music_incremental=scan,
+            refresh_relation_views=publish,
+            start_manual_cover_refresh=lambda **_kwargs: followups.append("manual"),
+            start_background_cover_refresh=lambda: followups.append("background"),
+            queue_mbid_assertion_follow_up=lambda *_args, **_kwargs: followups.append("mbid"),
+        )
+        with pytest.raises(RuntimeError, match="scan operation persistence failed") as caught:
+            future.result(timeout=5)
+    assert caught.value is failure
+    assert future.exception() is failure
+    assert followups == []
+    if superseded:
+        assert library_state == newer_state
+        assert library_state["active_scan_preview_state"] is newer_state["active_scan_preview_state"]
+    else:
+        assert library_state["last_error"] == str(failure)
+        assert library_state["scan_outcome"] == "failed"
+        assert library_state["scan_in_progress"] is False
+        assert library_state["scan_phase"] == "idle"
+        assert library_state["scan_mode"] == "idle"
+        assert library_state["scan_current_path"] == ""
+        assert "active_scan_preview_state" not in library_state
+        assert "scan_committed_generation" not in library_state
+
+
+@pytest.mark.parametrize("cancellation", [scan_state.ScanCancelled, scan_state.ScanCachePublicationSuperseded])
+def test_scan_future_cancellation_remains_normal(
+    runtime_config, runtime_logger, library_state, monkeypatch, cancellation,
+):
+    followups = []
+    library_state.update(file_cache={}, albums=[], last_scan=0.0)
+    _install_scan_cache_adapter(monkeypatch)
+    monkeypatch.setattr(scan_state, "load_separate_release_keys", lambda _cfg: set())
+    monkeypatch.setattr(scan_state, "log_app_event", lambda *_args, **_kwargs: None)
+
+    def cancel(**_kwargs):
+        raise cancellation("cancelled")
+
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        future = executor.submit(
+            scan_state.refresh_library_state, library_state,
+            config=runtime_config, logger=runtime_logger, force=True,
+            cache_lock=scan_state.Lock(), scan_music_incremental=cancel,
+            refresh_relation_views=lambda **_kwargs: followups.append("relations"),
+            start_manual_cover_refresh=lambda **_kwargs: followups.append("manual"),
+            start_background_cover_refresh=lambda: followups.append("background"),
+            queue_mbid_assertion_follow_up=lambda *_args, **_kwargs: followups.append("mbid"),
+        )
+        assert future.result(timeout=5) is None
+    assert future.exception() is None
+    assert followups == []
+    assert library_state["scan_outcome"] == "cancelled"
+    assert library_state["scan_in_progress"] is False
+    assert "active_scan_preview_state" not in library_state
+
+
+def test_scan_watcher_health_failure_remains_best_effort(
+    runtime_config, runtime_logger, library_state, monkeypatch,
+):
+    followups = []
+    library_state.update(file_cache={}, albums=[], last_scan=0.0, scan_mode="manual_full_rescan")
+    _install_scan_cache_adapter(monkeypatch)
+    monkeypatch.setattr(scan_state, "load_separate_release_keys", lambda _cfg: set())
+    monkeypatch.setattr(scan_state, "build_albums_from_file_cache", lambda *_args: [])
+    monkeypatch.setattr(scan_state, "log_app_event", lambda *_args, **_kwargs: None)
+
+    def fail_health(**_kwargs):
+        followups.append("health")
+        raise RuntimeError("watcher health failed")
+
+    scan_state.refresh_library_state(
+        library_state, config=runtime_config, logger=runtime_logger, force=True,
+        cache_lock=scan_state.Lock(), scan_music_incremental=lambda **_kwargs: ({}, 55.0),
+        refresh_relation_views=lambda **_kwargs: None,
+        start_manual_cover_refresh=lambda **_kwargs: followups.append("manual"),
+        start_background_cover_refresh=lambda: followups.append("background"),
+        queue_mbid_assertion_follow_up=lambda *_args, **_kwargs: followups.append("mbid"),
+        recover_library_watch_health=fail_health,
+    )
+    assert followups == ["health", "background", "mbid"]
+    assert library_state["scan_outcome"] == "completed"
+    assert library_state["scan_in_progress"] is False
+    assert library_state["last_error"] is None

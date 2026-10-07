@@ -485,6 +485,7 @@ def refresh_library_state(
                  history_scope=history_scope)
                 library_state["last_error"] = str(exc)
                 library_state["scan_outcome"] = "failed"
+        raise
     finally:
         with cache_lock:
             _clear_matching_scan_preview(

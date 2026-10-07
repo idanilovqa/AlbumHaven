@@ -686,3 +686,19 @@ scoped reviews found no validated findings. No tests were rerun for this commit.
 Scan failure propagation and accepted-child/whole-operation coordination remain
 pending. This scoped commit does not enable UI scans or shared writers, deploy a
 build, start a cover pass, complete CI, or close COORD/release/acceptance gates.
+
+## October 6 scan worker failure propagation
+
+Genuine scan execution and publication errors now propagate after guarded failure
+reporting. Handled cancellation/supersession, stale-generation protection, cleanup
+and best-effort hooks remain unchanged. This supersedes only the pending scan
+propagation statement above.
+
+Retained evidence in `C:/temp/pr22-local-1855858`: the
+`scan-worker-propagation-red-v1` selection recorded 8 failed and 5 passed in
+4.03 seconds, native exit 1; `scan-worker-propagation-green-v1` recorded the
+complete scan-state file: 43 passed in 10.17 seconds, native exit 0. The root
+verified both results; two scoped reviews found no findings. No tests were rerun
+for this commit. Cover-runtime 48-case and scan-state 43-case local proof does
+not establish accepted-child/whole-operation durability, shared-writer integration,
+UI activation, deployment, full CI success or completion of any COORD/release gate.

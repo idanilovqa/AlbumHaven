@@ -174,11 +174,11 @@ for (const elapsedMs of [350, 550]) {
         searchToolbarActions: { waitForVisible: async () => {} },
         galleryActions: {
           goto: async () => {}, waitForGalleryReady: async () => {},
-          measureSyntheticSearchPreviewFirstVisible: async (_toolbar, query, options) => {
+          measureSyntheticSearchFirstVisible: async (_toolbar, query, options) => {
             assert.deepEqual(Array.from(options.expectedAlbumKeys || []), syntheticSearchInventory[query],
               'The benchmark must supply the independent seeded inventory before measuring');
             return {
-              elapsedMs, directPreviewMatch: true,
+              elapsedMs, directSearchMatch: true,
               generationBefore: { requestGeneration: 1, renderGeneration: 1 },
               generationAfter: { requestGeneration: 2, renderGeneration: 2 },
             };

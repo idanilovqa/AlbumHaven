@@ -2,12 +2,18 @@
 
 ## 0.9.49 - 2026-10-07
 
+- Kept notifications clear of transparent waveform seek controls so pointer
+  interaction remains available.
 - Improved authenticated startup with bounded initial gallery loading, accurate
   global artist and album totals, and the complete artist sidebar.
 - Kept artist ordering stable after search and clearing, expanded folder-derived
   artist families, and prevented stale search responses from replacing newer views.
 - Replaced previous gallery results with a compact Searching indicator while a
   submitted search is pending.
+- Removed the redundant search-preview request so complete search results no
+  longer wait for a second response; retained Searching feedback and timing limits.
+- Unified selection, search, and scan loading indicators through the same compact
+  spinner component.
 - Added persistent album-adjacent cover previews, throttled preview backfill,
   and full-size artwork preloading when album details open.
 - Displayed linked album editions immediately using the shared tabs on desktop

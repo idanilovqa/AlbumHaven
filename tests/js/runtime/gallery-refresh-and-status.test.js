@@ -43,16 +43,11 @@ test(`new search resets the viewport only when full results apply (equivalent to
   context.renderView = runtimeRenderView;
   context.renderArtistGroups = options => renders.push(options);
   context.commitGallerySearchQuery('transatlantic');
-  assert.equal(pendingRequests.length, 2);
+  assert.equal(pendingRequests.length, 1);
   assert.equal(context.state.view, previousView);
   assert.equal(context.state.ui.pendingViewTransition, true);
   assert.equal(context.state.ui.pendingGallerySearch, true);
   assert.equal(renders.length, 0, 'pending search must keep the existing viewport');
-  pendingRequests[1].resolveWith({ query: 'transatlantic', payload_tier: 'search_preview', artist_groups: [] });
-  await new Promise(resolve => setImmediate(resolve));
-  assert.equal(calls.applyViewPayload.length, 0);
-  assert.equal(renders.length, 0, 'preview must not reset the existing viewport');
-  assert.equal(context.state.ui.pendingGallerySearch, true, 'preview must not dismiss Searching');
   pendingRequests[0].resolveWith({
     query: 'transatlantic', selected_artist: nextGroups[0].artist, payload_tier: 'full',
     artist_groups: nextGroups, primary_artist_groups: nextGroups, family_artist_groups: [],
@@ -81,14 +76,12 @@ test(`repeated Enter while search is pending preserves the active result owner (
     context.state.view.search_context = { selected_artist_source: 'requested_artist' };
   }
   context.scheduleGallerySearchCommit('Devin', { immediate: true });
-  assert.equal(pendingRequests.length, 2);
+  assert.equal(pendingRequests.length, 1);
   mobilePageActive = initialContext === 'mobile_utility';
   context.scheduleGallerySearchCommit('Devin', { immediate: true });
-  assert.equal(pendingRequests.length, initialContext === 'root' ? 2 : 4);
+  assert.equal(pendingRequests.length, initialContext === 'root' ? 1 : 2);
   assert.equal(pendingRequests[0].options.signal.aborted, initialContext !== 'root');
-  assert.equal(pendingRequests[1].options.signal.aborted, initialContext !== 'root');
-  pendingRequests.at(-2).resolveWith({ query: 'Devin', artist_groups: [], payload_tier: 'full' });
-  pendingRequests.at(-1).resolveWith({ query: 'Devin', artist_groups: [], payload_tier: 'search_preview' });
+  pendingRequests.at(-1).resolveWith({ query: 'Devin', artist_groups: [], payload_tier: 'full' });
   await new Promise(resolve => setImmediate(resolve));
   assert.equal(context.state.view.query, 'Devin');
   assert.equal(calls.applyViewPayload.length, 1);
@@ -97,68 +90,54 @@ test(`repeated Enter while search is pending preserves the active result owner (
 });
 }
 
-test('empty Enter during a pending search cancels both requests and retains the root view', async () => {
+test('empty Enter during a pending search cancels the request and retains the root view', async () => {
   const { context, calls, pendingRequests } = createSearchOwnerContext();
   const rootView = context.state.view;
   context.scheduleGallerySearchCommit('Devin', { immediate: true });
-  assert.equal(pendingRequests.length, 2);
+  assert.equal(pendingRequests.length, 1);
   context.scheduleGallerySearchCommit('', { immediate: true });
   assert.equal(pendingRequests[0].options.signal.aborted, true);
-  assert.equal(pendingRequests[1].options.signal.aborted, true);
   await new Promise(resolve => setImmediate(resolve));
   assert.equal(context.state.view, rootView);
   assert.equal(calls.applyViewPayload.length, 0);
 });
 
-test('search preview and full requests share one owner and apply only the complete payload', async () => {
-  const { context, calls, pendingRequests } = createContext();
-  const request = context.fetchAndRender('/view-data?q=Devin', true, {
-    searchPreviewUrl: '/view-data?q=Devin&payload_tier=search_preview',
-    preserveScroll: true,
-  });
-  assert.equal(pendingRequests.length, 2, 'both reads must start without waiting for the preview');
-  assert.equal(pendingRequests[0].options.signal, pendingRequests[1].options.signal);
+test('search uses one request and applies its complete payload', async () => {
+  const { context, calls, pendingRequests } = createSearchOwnerContext();
+  context.commitGallerySearchQuery('Devin');
+  assert.equal(pendingRequests.length, 1);
+  assert.equal(pendingRequests[0].url, '/view-data?q=Devin');
   assert.equal(context.state.ui.activeViewRequestId, 1);
+  assert.equal(calls.applyViewPayload.length, 0);
   pendingRequests[0].resolveWith({ query: 'Devin', artist_groups: [], payload_tier: 'full' });
   await new Promise(resolve => setImmediate(resolve));
-  assert.equal(calls.applyViewPayload.length, 0, 'both responses must validate before applying');
-  pendingRequests[1].resolveWith({ query: 'Devin', artist_groups: [], payload_tier: 'search_preview' });
-  assert.equal(await request, true);
   assert.equal(calls.applyViewPayload.length, 1);
   assert.equal(context.state.view.payload_tier, 'full');
 });
 
-test('superseding a search aborts its preview and full requests together', async () => {
+test('superseding a search aborts its request', async () => {
   const { context, calls, pendingRequests } = createContext();
-  const obsolete = context.fetchAndRender('/view-data?q=Devin', true, {
-    searchPreviewUrl: '/view-data?q=Devin&payload_tier=search_preview',
-  });
-  assert.equal(pendingRequests.length, 2);
+  const obsolete = context.fetchAndRender('/view-data?q=Devin', true);
+  assert.equal(pendingRequests.length, 1);
   const current = context.fetchAndRender('/view-data?q=Neal', true);
   assert.equal(pendingRequests[0].options.signal.aborted, true);
-  assert.equal(pendingRequests[1].options.signal.aborted, true);
   assert.equal(await obsolete, false);
-  pendingRequests[2].resolveWith({ query: 'Neal', artist_groups: [] });
+  pendingRequests[1].resolveWith({ query: 'Neal', artist_groups: [] });
   assert.equal(await current, true);
   assert.equal(calls.applyViewPayload.length, 1);
   assert.equal(context.state.view.query, 'Neal');
 });
 
-for (const failedIndex of [0, 1]) {
-  test(`failed search ${failedIndex === 0 ? 'full' : 'preview'} aborts its companion and preserves the view`, async () => {
-    const { context, calls, pendingRequests } = createContext();
-    const previousView = context.state.view;
-    const request = context.fetchAndRender('/view-data?q=Devin', true, {
-      searchPreviewUrl: '/view-data?q=Devin&payload_tier=search_preview',
-    });
-    assert.equal(pendingRequests.length, 2);
-    pendingRequests[failedIndex].rejectWith(new Error('search failed'));
-    await assert.rejects(request, /search failed/);
-    assert.equal(pendingRequests[1 - failedIndex].options.signal.aborted, true);
-    assert.equal(context.state.view, previousView);
-    assert.equal(calls.applyViewPayload.length, 0);
-  });
-}
+test('failed search preserves the view', async () => {
+  const { context, calls, pendingRequests } = createContext();
+  const previousView = context.state.view;
+  const request = context.fetchAndRender('/view-data?q=Devin', true);
+  assert.equal(pendingRequests.length, 1);
+  pendingRequests[0].rejectWith(new Error('search failed'));
+  await assert.rejects(request, /search failed/);
+  assert.equal(context.state.view, previousView);
+  assert.equal(calls.applyViewPayload.length, 0);
+});
 
 test('a deferred gallery refresh cannot overwrite a newer optimistic tag mutation', async () => {
   const { context, calls, pendingRequests } = createContext();

@@ -134,6 +134,16 @@ def playback_app(tmp_path, monkeypatch):
         "music_app.services.runtime_shutdown.request_runtime_shutdown",
         lambda _runtime: None,
     )
+    # This fixture owns playback lifecycle behavior, not background database I/O.
+    # Keep the real backfill thread lifecycle, but give it no covers to process.
+    monkeypatch.setattr(
+        "music_app.services.cover_preview_backfill.CoverPreviewBackfill._load_cover_paths",
+        lambda _self: [],
+    )
+    monkeypatch.setattr(
+        "music_app.services.postgres_connections.prewarm_connection_pool",
+        lambda _database_url: None,
+    )
     app = create_test_asgi_app(tmp_path, monkeypatch)
     app.state.config["ALBUM_HAVEN_APP_DATABASE_URL"] = (
         "postgresql://album_haven_app@localhost/app"

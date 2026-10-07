@@ -1156,11 +1156,6 @@ function commitGallerySearchQuery(nextQuery, options = {}) {
   const normalizedQuery = String(nextQuery || '');
   const searchGeneration = Number(state.ui.gallerySearchGeneration || 0) + 1;
   state.ui.gallerySearchGeneration = searchGeneration;
-  const failedSearch = state.ui?.failedGallerySearch;
-  const failedSearchStage = failedSearch?.query === normalizedQuery
-    ? String(failedSearch.stage || '')
-    : '';
-  const retriesHydration = failedSearchStage === 'hydration';
   state.ui.failedGallerySearch = null;
   updateGallerySearchDraftQuery(normalizedQuery);
   if (options.recordRecentSearch === true) {
@@ -1307,15 +1302,10 @@ function commitGallerySearchQuery(nextQuery, options = {}) {
       virtualGrid.resumeSelectedArtistCoverLoadsAfterUserAction(coverLoadSuspensionToken);
     }
   };
-  const previewUrl = buildApiUrl(next, {
-    omitSidebar: true,
-    payloadTier: 'search_preview',
-  });
   const hydrationUrl = buildApiUrl(next);
   const handleSearchFailure = (error) => {
     if (state.ui.gallerySearchGeneration !== searchGeneration) return;
-    const activeSearchStage = error?.gallerySearchStage || 'hydration';
-    const previewFailed = activeSearchStage === 'preview';
+    const activeSearchStage = 'hydration';
     state.ui.failedGallerySearch = {
       query: normalizedQuery,
       stage: activeSearchStage,
@@ -1326,9 +1316,7 @@ function commitGallerySearchQuery(nextQuery, options = {}) {
     }
     if (typeof showToast === 'function') {
       showToast(
-        previewFailed
-          ? 'Search preview failed. Retry the search.'
-          : 'Full search results failed to load. Retry the search.',
+        'Full search results failed to load. Retry the search.',
         'error',
         4800,
         { errorKey: `gallery-search-${activeSearchStage}-failed` },
@@ -1341,7 +1329,6 @@ function commitGallerySearchQuery(nextQuery, options = {}) {
     skipPendingViewTransition: true,
     showSearchProgress: true,
     shouldApplyResponse: () => state.ui.gallerySearchGeneration === searchGeneration,
-    ...(retriesHydration ? {} : { searchPreviewUrl: previewUrl }),
   });
   void Promise.resolve(request).then(
     resumeCoverLoads,

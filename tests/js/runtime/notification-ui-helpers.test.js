@@ -808,8 +808,8 @@ test('persistent warnings can use a readable narrow gap beside dense interactive
     'placement must not shrink below the readable action width');
 });
 
-for (const reflowHeight of [230, 650]) {
-  test(`notification reflow measures its actual ${reflowHeight}px height and remains bounded`, () => {
+for (const opacity of ['1', '0']) for (const reflowHeight of [230, 650]) {
+  test(`notification reflow measures its actual ${reflowHeight}px height around opacity ${opacity} controls and remains bounded`, () => {
     const { context } = createContext();
     const styles = new Map(), attributes = new Set(), callbacks = [], widths = [];
     let shown = 0;
@@ -841,7 +841,7 @@ for (const reflowHeight of [230, 650]) {
     });
     Object.assign(context, {
       requestAnimationFrame(callback) { callbacks.push(callback); return callbacks.length; }, cancelAnimationFrame() {},
-      getComputedStyle: () => ({ visibility: 'visible', opacity: '1', paddingLeft: '12px', paddingRight: '12px', borderLeftWidth: '0px', borderRightWidth: '0px' }),
+      getComputedStyle: () => ({ visibility: 'visible', opacity, paddingLeft: '12px', paddingRight: '12px', borderLeftWidth: '0px', borderRightWidth: '0px' }),
       MutationObserver: class { observe() {} disconnect() {} },
       ResizeObserver: class { observe() {} unobserve() {} disconnect() {} },
     });

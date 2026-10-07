@@ -68,7 +68,8 @@ function placeFloatingNotifications() {
   document.querySelectorAll(selector).forEach(node => {
     if (isNotification(node) || node.matches(':disabled') || node.closest('[inert], [hidden], [aria-hidden="true"], [aria-disabled="true"]')) return;
     const style = getComputedStyle(node), rect = node.getBoundingClientRect();
-    if (style.visibility !== 'visible' || Number(style.opacity) === 0 || !rect.width || !rect.height) return;
+    // Transparent range inputs still receive pointer input over their waveform canvas.
+    if (style.visibility !== 'visible' || !rect.width || !rect.height) return;
     const left = Math.max(viewport.left, rect.left), right = Math.min(viewport.right, rect.right);
     const top = Math.max(viewport.top, rect.top), bottom = Math.min(viewport.bottom, rect.bottom);
     if (right <= left || bottom <= top) return;

@@ -3331,7 +3331,8 @@ function placeFloatingNotifications() {
   document.querySelectorAll(selector).forEach(node => {
     if (isNotification(node) || node.matches(':disabled') || node.closest('[inert], [hidden], [aria-hidden="true"], [aria-disabled="true"]')) return;
     const style = getComputedStyle(node), rect = node.getBoundingClientRect();
-    if (style.visibility !== 'visible' || Number(style.opacity) === 0 || !rect.width || !rect.height) return;
+    // Transparent range inputs still receive pointer input over their waveform canvas.
+    if (style.visibility !== 'visible' || !rect.width || !rect.height) return;
     const left = Math.max(viewport.left, rect.left), right = Math.min(viewport.right, rect.right);
     const top = Math.max(viewport.top, rect.top), bottom = Math.min(viewport.bottom, rect.bottom);
     if (right <= left || bottom <= top) return;
@@ -14903,30 +14904,11 @@ async function fetchAndRender(url, push = true, options = {}) {
     markStartupFollowup('fetch_started', requestOptions, {
       endpoint: apiUrl,
     });
-    let response;
-    let data;
-    if (requestOptions.searchPreviewUrl) {
-      [{ response, data }] = await Promise.all([apiUrl, requestOptions.searchPreviewUrl].map(async (requestUrl, index) => {
-        try {
-          const response = await fetch(requestUrl, {
-            headers: { Accept: 'application/json' },
-            signal: controller?.signal,
-          });
-          const data = await readGalleryResponse(response, () => requestOwnsCurrentViewState(requestId, requestViewStateRevision));
-          return { response, data };
-        } catch (error) {
-          error.gallerySearchStage = index === 1 ? 'preview' : 'hydration';
-          controller?.abort();
-          throw error;
-        }
-      }));
-    } else {
-      response = await fetch(apiUrl, {
-        headers: { Accept: 'application/json' },
-        signal: controller?.signal,
-      });
-      data = await readGalleryResponse(response, () => requestOwnsCurrentViewState(requestId, requestViewStateRevision));
-    }
+    const response = await fetch(apiUrl, {
+      headers: { Accept: 'application/json' },
+      signal: controller?.signal,
+    });
+    let data = await readGalleryResponse(response, () => requestOwnsCurrentViewState(requestId, requestViewStateRevision));
     if (rootRefreshCoverage > 0) {
       const ownsRefresh = () => {
         if (!requestOwnsCurrentViewState(requestId, requestViewStateRevision)
@@ -39815,11 +39797,6 @@ function commitGallerySearchQuery(nextQuery, options = {}) {
   const normalizedQuery = String(nextQuery || '');
   const searchGeneration = Number(state.ui.gallerySearchGeneration || 0) + 1;
   state.ui.gallerySearchGeneration = searchGeneration;
-  const failedSearch = state.ui?.failedGallerySearch;
-  const failedSearchStage = failedSearch?.query === normalizedQuery
-    ? String(failedSearch.stage || '')
-    : '';
-  const retriesHydration = failedSearchStage === 'hydration';
   state.ui.failedGallerySearch = null;
   updateGallerySearchDraftQuery(normalizedQuery);
   if (options.recordRecentSearch === true) {
@@ -39966,15 +39943,10 @@ function commitGallerySearchQuery(nextQuery, options = {}) {
       virtualGrid.resumeSelectedArtistCoverLoadsAfterUserAction(coverLoadSuspensionToken);
     }
   };
-  const previewUrl = buildApiUrl(next, {
-    omitSidebar: true,
-    payloadTier: 'search_preview',
-  });
   const hydrationUrl = buildApiUrl(next);
   const handleSearchFailure = (error) => {
     if (state.ui.gallerySearchGeneration !== searchGeneration) return;
-    const activeSearchStage = error?.gallerySearchStage || 'hydration';
-    const previewFailed = activeSearchStage === 'preview';
+    const activeSearchStage = 'hydration';
     state.ui.failedGallerySearch = {
       query: normalizedQuery,
       stage: activeSearchStage,
@@ -39985,9 +39957,7 @@ function commitGallerySearchQuery(nextQuery, options = {}) {
     }
     if (typeof showToast === 'function') {
       showToast(
-        previewFailed
-          ? 'Search preview failed. Retry the search.'
-          : 'Full search results failed to load. Retry the search.',
+        'Full search results failed to load. Retry the search.',
         'error',
         4800,
         { errorKey: `gallery-search-${activeSearchStage}-failed` },
@@ -40000,7 +39970,6 @@ function commitGallerySearchQuery(nextQuery, options = {}) {
     skipPendingViewTransition: true,
     showSearchProgress: true,
     shouldApplyResponse: () => state.ui.gallerySearchGeneration === searchGeneration,
-    ...(retriesHydration ? {} : { searchPreviewUrl: previewUrl }),
   });
   void Promise.resolve(request).then(
     resumeCoverLoads,

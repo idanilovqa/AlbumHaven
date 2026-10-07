@@ -69,13 +69,13 @@ export function isCompleteSearchPaint(payload, paint, seededAlbumKeys) {
     && JSON.stringify(paint.albumKeys) === JSON.stringify(expectedKeys);
 }
 
-export function resolveSearchPreviewExpectedCard(payload, expectedQuery, expectedArtist = '') {
+export function resolveSearchExpectedCard(payload, expectedQuery, expectedArtist = '') {
   const query = String(expectedQuery || '').trim();
   const artistName = String(expectedArtist || '').trim();
   const payloadQuery = String(payload?.query || '').trim();
-  const payloadTier = String(payload?.payload_tier || '').trim();
-  if (payloadQuery !== query || payloadTier !== 'search_preview') {
-    throw new Error(`Expected an exact search_preview payload for query "${query}".`);
+  const payloadTier = String(payload?.payload_tier || 'full').trim();
+  if (payloadQuery !== query || payloadTier !== 'full') {
+    throw new Error(`Expected an exact full payload for query "${query}".`);
   }
   const groups = [
     ...(Array.isArray(payload?.primary_artist_groups) ? payload.primary_artist_groups : []),
@@ -88,7 +88,7 @@ export function resolveSearchPreviewExpectedCard(payload, expectedQuery, expecte
     if (artist && album && (!artistName || artist === artistName)) return { album, artist };
   }
   throw new Error(
-    `The exact search_preview payload for query "${query}" had no expected card for "${artistName}".`,
+    `The exact full payload for query "${query}" had no expected card for "${artistName}".`,
   );
 }
 
@@ -1166,37 +1166,28 @@ export class GalleryActions {
     await this.galleryPage.albumCard.detailsButtonByArtistAndAlbum(artistName, albumName).click();
   }
 
-  async measureSyntheticSearchPreviewFirstVisible(searchToolbarActions, query, options = {}) {
+  async measureSyntheticSearchFirstVisible(searchToolbarActions, query, options = {}) {
     if (!Array.isArray(options.expectedAlbumKeys) || options.expectedAlbumKeys.length === 0
         || options.expectedAlbumKeys.some(key => typeof key !== 'string' || !key.trim())) {
       throw new Error('Synthetic search requires a nonempty independently seeded album inventory.');
     }
-    return this.measureSearchPreviewFirstVisible(searchToolbarActions, query, options);
+    return this.measureSearchFirstVisible(searchToolbarActions, query, options);
   }
 
-  async measureSearchPreviewFirstVisible(searchToolbarActions, query, options = {}) {
+  async measureSearchFirstVisible(searchToolbarActions, query, options = {}) {
     const expectedQuery = String(query || '').trim();
     const expectedArtist = String(options.expectedArtist || '').trim();
     const timeout = Number(options.timeout || 120000);
     const generationBefore = await this.galleryPage.readViewGenerationState();
     const firstVisibleObservation = await this.galleryPage
-      .startSearchPreviewFirstVisibleObservation(expectedQuery, { timeout });
+      .startSearchFirstVisibleObservation(expectedQuery, { timeout });
     try {
     const responsePromise = this.galleryPage.page.waitForResponse((response) => {
       if (response.request().method() !== 'GET' || !response.ok()) return false;
       const url = new URL(response.url());
       return url.pathname === '/view-data'
         && String(url.searchParams.get('q') || '').trim() === expectedQuery
-        && String(url.searchParams.get('payload_tier') || '').trim() === 'search_preview';
-    }, { timeout });
-    const fullHydrationResponsePromise = this.galleryPage.page.waitForResponse((response) => {
-      if (response.request().method() !== 'GET' || !response.ok()) return false;
-      const url = new URL(response.url());
-      const payloadTier = String(url.searchParams.get('payload_tier') || '').trim();
-      return url.pathname === '/view-data'
-        && String(url.searchParams.get('q') || '').trim() === expectedQuery
-        && payloadTier !== 'search_preview'
-        && payloadTier !== 'sidebar';
+        && String(url.searchParams.get('payload_tier') || 'full').trim() === 'full';
     }, { timeout });
     let submittedAtMs = 0;
     await searchToolbarActions.submitPreparedQueryWithEnter(expectedQuery, {
@@ -1206,22 +1197,22 @@ export class GalleryActions {
     });
     const response = await responsePromise;
     const payload = await response.json();
-    const expectedCard = resolveSearchPreviewExpectedCard(payload, expectedQuery, expectedArtist);
+    const expectedCard = resolveSearchExpectedCard(payload, expectedQuery, expectedArtist);
     const directMatches = Array.isArray(payload?.search_context?.result_groups?.direct_matches)
       ? payload.search_context.result_groups.direct_matches
       : [];
     if (!directMatches.some((artist) => String(artist || '').trim() === expectedCard.artist)) {
-      throw new Error(`Expected a direct search-preview match for "${expectedCard.artist}".`);
+      throw new Error(`Expected a direct search match for "${expectedCard.artist}".`);
     }
-    const previewFirstVisibleTiming = await firstVisibleObservation.readExpectedPaint(expectedCard);
-    if (previewFirstVisibleTiming.initialVisibleCardCount > 0) {
-      expect(
-        previewFirstVisibleTiming.minimumVisibleCardCount,
-        'A populated gallery must remain visible until complete search results paint.',
-      ).toBeGreaterThan(0);
-    }
-    const previewDomReadyAtMs = previewFirstVisibleTiming.domReadyAtMs;
-    const previewPaintAtMs = previewFirstVisibleTiming.paintedAtMs;
+    const firstVisibleTiming = await firstVisibleObservation.readExpectedPaint(expectedCard);
+    expect(firstVisibleTiming.pendingSearch.samples,
+      'Submitted search must expose its pending state before results paint.').toBeGreaterThan(0);
+    expect(firstVisibleTiming.pendingSearch.visiblePreviousCards,
+      'Pending search must hide the previous gallery.').toBe(0);
+    expect(firstVisibleTiming.pendingSearch.missingSearchLoader,
+      'Pending search must show the Searching loader.').toBe(0);
+    const domReadyAtMs = firstVisibleTiming.domReadyAtMs;
+    const paintAtMs = firstVisibleTiming.paintedAtMs;
     let generationAfter = null;
     await expect.poll(async () => {
       generationAfter = await this.galleryPage.readViewGenerationState();
@@ -1236,61 +1227,43 @@ export class GalleryActions {
       timeout,
     });
     // parity-check: allow-read-only-measurement-evaluate -- browser resource, DOM-ready, and next-paint timestamps
-    const previewTiming = await this.galleryPage.page.evaluate(({ minimumStartMs, url }) => {
+    const responseTiming = await this.galleryPage.page.evaluate(({ minimumStartMs, url }) => {
       const entries = performance.getEntriesByName(url)
         .filter((entry) => entry.entryType === 'resource' && entry.startTime >= minimumStartMs)
         .sort((left, right) => right.startTime - left.startTime);
       const entry = entries[0];
       if (!entry || !(entry.responseEnd >= entry.startTime)) {
-        throw new Error('Search preview resource timing is unavailable.');
+        throw new Error('Search resource timing is unavailable.');
       }
       return {
         durationMs: entry.duration,
         responseEndAtMs: entry.responseEnd,
       };
     }, { minimumStartMs: submittedAtMs, url: response.url() });
-    const previewGeneration = generationAfter;
-
-    const fullHydrationResponse = await fullHydrationResponsePromise;
-    const fullHydrationPayload = await fullHydrationResponse.json();
-    if (
-      String(fullHydrationPayload?.query || '').trim() !== expectedQuery
-      || String(fullHydrationPayload?.payload_tier || 'full').trim() !== 'full'
-    ) {
-      throw new Error(`Expected an exact full hydration payload for query "${expectedQuery}".`);
-    }
-    expect(isCompleteSearchPaint(fullHydrationPayload, previewFirstVisibleTiming.result, options.expectedAlbumKeys),
+    expect(isCompleteSearchPaint(payload, firstVisibleTiming.result, options.expectedAlbumKeys),
       'The first visible search paint must contain the complete full-result album inventory.').toBe(true);
-    let fullHydrationGeneration = null;
     await expect.poll(async () => {
-      fullHydrationGeneration = await this.galleryPage.readViewGenerationState();
+      generationAfter = await this.galleryPage.readViewGenerationState();
       return Boolean(
-        fullHydrationGeneration.requestGeneration >= previewGeneration.requestGeneration
-        && fullHydrationGeneration.renderGeneration >= previewGeneration.renderGeneration
-        && fullHydrationGeneration.query === expectedQuery
-        && fullHydrationGeneration.settled
+        generationAfter.requestGeneration > generationBefore.requestGeneration
+        && generationAfter.renderGeneration > generationBefore.renderGeneration
+        && generationAfter.query === expectedQuery
+        && generationAfter.settled
       );
     }, { timeout }).toBe(true);
-    await this.waitForFirstAlbumVisibleUnderHeading(expectedCard.artist, {
-      album: expectedCard.album,
-      timeout,
-    });
     // The observer captured this paint in-browser; Node polling must not add to it.
-    const fullHydrationPaintAtMs = previewPaintAtMs;
-    const completedAtMs = fullHydrationPaintAtMs;
+    const completedAtMs = paintAtMs;
     return {
       completedAtMs,
       elapsedMs: Math.max(0, completedAtMs - submittedAtMs),
       expectedCard,
-      directPreviewMatch: true,
-      fullHydrationGeneration,
-      fullHydrationPaintAtMs,
+      directSearchMatch: true,
       generationAfter,
       generationBefore,
-      previewDomReadyAtMs,
-      previewPaintAtMs,
-      previewResponseEndAtMs: previewTiming.responseEndAtMs,
-      responseDurationMs: previewTiming.durationMs,
+      domReadyAtMs,
+      paintAtMs,
+      responseEndAtMs: responseTiming.responseEndAtMs,
+      responseDurationMs: responseTiming.durationMs,
       responseUrl: response.url(),
       submittedAtMs,
     };

@@ -290,7 +290,8 @@ def test_live_artist_search_projection_requires_matching_stale_authority(
     repository = PostgresLibraryBrowseRepository(
         {"ALBUM_HAVEN_APP_DATABASE_URL": runtime_url}
     )
-    assert repository._load_projected_artist_match("Devin") == expected
+    with isolatedPostgres._connect(runtime_url) as connection:
+        assert repository._artist_search_projection_is_authoritative(connection=connection) is bool(expected)
 
 
 def _drop_application_schemas(setup_url: str) -> None:

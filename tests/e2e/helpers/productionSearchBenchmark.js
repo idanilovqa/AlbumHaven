@@ -35,7 +35,7 @@ export function isProductionSearchHostTelemetryRequest({
   return isCloudflareBeacon || isSameOriginRum;
 }
 
-export function hasDirectSearchPreviewArtist(payload, expectedArtist) {
+export function hasDirectSearchArtist(payload, expectedArtist) {
   const artist = String(expectedArtist || '').trim();
   const directMatches = Array.isArray(payload?.search_context?.result_groups?.direct_matches)
     ? payload.search_context.result_groups.direct_matches
@@ -43,7 +43,7 @@ export function hasDirectSearchPreviewArtist(payload, expectedArtist) {
   return directMatches.some((entry) => String(entry || '').trim() === artist);
 }
 
-export function expectedAlbumFromSearchPreview(payload, expectedArtist) {
+export function expectedAlbumFromSearch(payload, expectedArtist) {
   const artist = String(expectedArtist || '').trim();
   const groups = [
     ...(Array.isArray(payload?.primary_artist_groups) ? payload.primary_artist_groups : []),
@@ -106,10 +106,9 @@ export function unavailableTiming() {
 export function calculateProductionSearchPhaseDurations(boundaries = {}) {
   const orderedNames = [
     'submittedAtMs',
-    'previewResponseEndAtMs',
-    'previewDomReadyAtMs',
-    'previewPaintAtMs',
-    'fullHydrationPaintAtMs',
+    'responseEndAtMs',
+    'domReadyAtMs',
+    'paintAtMs',
   ];
   const orderedValues = orderedNames.map((name) => Number(boundaries[name]));
   const valid = orderedValues.every((value) => Number.isFinite(value) && value >= 0);
@@ -121,16 +120,14 @@ export function calculateProductionSearchPhaseDurations(boundaries = {}) {
   }
   const [
     submittedAtMs,
-    previewResponseEndAtMs,
-    previewDomReadyAtMs,
-    previewPaintAtMs,
-    fullHydrationPaintAtMs,
+    responseEndAtMs,
+    domReadyAtMs,
+    paintAtMs,
   ] = orderedValues;
   return {
-    browserProcessingMs: previewDomReadyAtMs - previewResponseEndAtMs,
-    fullHydrationMs: fullHydrationPaintAtMs - submittedAtMs,
-    renderMs: previewPaintAtMs - previewDomReadyAtMs,
-    responseToFirstVisibleMs: previewPaintAtMs - previewResponseEndAtMs,
-    submitToFirstVisibleMs: previewPaintAtMs - submittedAtMs,
+    browserProcessingMs: domReadyAtMs - responseEndAtMs,
+    renderMs: paintAtMs - domReadyAtMs,
+    responseToFirstVisibleMs: paintAtMs - responseEndAtMs,
+    submitToFirstVisibleMs: paintAtMs - submittedAtMs,
   };
 }

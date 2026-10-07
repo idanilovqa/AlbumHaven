@@ -475,7 +475,7 @@ export class GalleryPage extends BasePage {
     };
   }
 
-  async startSearchPreviewFirstVisibleObservation(expectedQuery, options = {}) {
+  async startSearchFirstVisibleObservation(expectedQuery, options = {}) {
     const observationHandle = await this.page.evaluateHandle((settings) => {
       const gallery = document.querySelector('#artist-groups');
       if (!(gallery instanceof HTMLElement)) {
@@ -542,11 +542,21 @@ export class GalleryPage extends BasePage {
         expectedWaiter = null;
       };
       let initialVisibleCardCount = 0;
-      let minimumVisibleCardCount = 0;
-      const observeGalleryContinuity = () => {
+      const pendingSearch = { samples: 0, visiblePreviousCards: 0, missingSearchLoader: 0 };
+      const observePendingSearch = () => {
         if (!armed || disposed) return;
-        minimumVisibleCardCount = Math.min(minimumVisibleCardCount, readVisibleCards().length);
-        requestAnimationFrame(observeGalleryContinuity);
+        const visibleCardCount = readVisibleCards().length;
+        if (typeof state !== 'undefined' && state.ui?.pendingGallerySearch) {
+          pendingSearch.samples += 1;
+          pendingSearch.visiblePreviousCards += visibleCardCount;
+          const loader = document.querySelector('#library-loader');
+          if (!loader?.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true })
+              || !loader.classList.contains('is-searching')
+              || document.querySelector('#library-loader-title')?.textContent !== 'Searching') {
+            pendingSearch.missingSearchLoader += 1;
+          }
+        }
+        requestAnimationFrame(observePendingSearch);
       };
       const schedulePaintConfirmation = () => {
         if (!armed || disposed || framePending) return;
@@ -582,7 +592,8 @@ export class GalleryPage extends BasePage {
               if (!stillVisible.has(candidate.key) || confirmedPaints.has(candidate.key)) continue;
               confirmedPaints.set(candidate.key, {
                 domReadyAtMs, paintedAtMs, result,
-                initialVisibleCardCount, minimumVisibleCardCount,
+                initialVisibleCardCount,
+                pendingSearch: { ...pendingSearch },
               });
             }
             finishExpected();
@@ -604,8 +615,7 @@ export class GalleryPage extends BasePage {
           baselineRenderGeneration = currentRenderGeneration();
           armed = true;
           initialVisibleCardCount = readVisibleCards().length;
-          minimumVisibleCardCount = initialVisibleCardCount;
-          requestAnimationFrame(observeGalleryContinuity);
+          requestAnimationFrame(observePendingSearch);
           return performance.now();
         },
         dispose() {
@@ -649,7 +659,7 @@ export class GalleryPage extends BasePage {
     return {
       // parity-check: allow-read-only-measurement-evaluate -- arm the browser-local search paint observer
       arm: () => observationHandle.evaluate((observation) => observation.arm()),
-      // parity-check: allow-read-only-measurement-evaluate -- read the first browser-confirmed paint for the canonical preview card
+      // parity-check: allow-read-only-measurement-evaluate -- read the first browser-confirmed paint for the canonical complete-result card
       readExpectedPaint: (expectedCard) => observationHandle.evaluate(
         (observation, expected) => observation.readExpectedPaint(expected),
         expectedCard,

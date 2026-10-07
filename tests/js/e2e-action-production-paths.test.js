@@ -2303,14 +2303,14 @@ test('album cover readiness polls one atomic shared-card image checkpoint', () =
   assert.match(checkpointSource, /renderedSrc/);
 });
 
-test('search-preview expected card comes from the exact response payload', async () => {
-  const { resolveSearchPreviewExpectedCard } = await import(pathToFileURL(
+test('complete search expected card comes from the exact response payload', async () => {
+  const { resolveSearchExpectedCard } = await import(pathToFileURL(
     path.join(repoRoot, 'tests/e2e/actions/galleryActions.js'),
   ).href);
 
-  assert.deepEqual(resolveSearchPreviewExpectedCard({
+  assert.deepEqual(resolveSearchExpectedCard({
     query: 'Neal Morse',
-    payload_tier: 'search_preview',
+    payload_tier: 'full',
     primary_artist_groups: [{
       artist: 'Neal Morse',
       albums: [{ name: 'Sola Scriptura' }],
@@ -2320,8 +2320,8 @@ test('search-preview expected card comes from the exact response payload', async
     artist: 'Neal Morse',
   });
   assert.throws(
-    () => resolveSearchPreviewExpectedCard({ query: 'Other', artist_groups: [] }, 'Neal Morse'),
-    /exact search_preview payload/i,
+    () => resolveSearchExpectedCard({ query: 'Other', artist_groups: [] }, 'Neal Morse'),
+    /exact full payload/i,
   );
 });
 

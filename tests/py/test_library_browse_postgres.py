@@ -2782,10 +2782,8 @@ def _assert_search_reloads_snapshot_when_ready_runtime_relation_maps_are_stale(
 
     assert projection_loads == [connection]
     assert payload["selected_artist"] == "Current Canonical"
-    assert len(prewarm_requests) == (0 if payload_tier == "search_preview" else 1)
-    expected_artists = ["Current Canonical"]
-    if payload_tier != "search_preview":
-        expected_artists.append("Current Sibling")
+    assert len(prewarm_requests) == 1
+    expected_artists = ["Current Canonical", "Current Sibling"]
     assert [group["artist"] for group in payload["artist_groups"]] == expected_artists
     assert "Old Canonical" not in json.dumps(payload)
 
@@ -3663,29 +3661,6 @@ def test_non_exact_search_preview_aggregates_many_credits_at_album_grain():
     } == {"Original Album Artist"}
 
 
-def test_missing_artist_search_projection_table_falls_back_without_undefined_table():
-    import psycopg
-
-    from music_app.services.library_browse_postgres import PostgresLibraryBrowseRepository
-
-    class Connection:
-        def execute(self, sql, params=None):
-            del params
-            if "library.local_artist_search_projection" in str(sql):
-                raise psycopg.errors.UndefinedTable(
-                    'relation "library.local_artist_search_projection" does not exist'
-                )
-            return _InventoryCursor()
-
-    repository = PostgresLibraryBrowseRepository(
-        {"ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://album_haven_app@localhost/app"},
-        connect=lambda _database_url: Connection(),
-    )
-
-    assert repository._load_projected_artist_match(
-        "Unmigrated Artist",
-        connection=Connection(),
-    ) == ""
 
 
 def test_root_startup_preview_caps_album_ids_before_track_rollups():
@@ -5655,7 +5630,8 @@ def test_postgres_selected_artist_query_context_rebuilds_filtered_family_sidebar
     assert search_calls == ["neal morse"]
 
 
-def test_postgres_search_preview_limits_primary_albums_and_defers_family_work(monkeypatch):
+@pytest.mark.parametrize("payload_tier", ["full", "search_preview"])
+def test_legacy_search_preview_returns_all_primary_and_family_albums(monkeypatch, payload_tier):
     from music_app.services import library_browse_postgres as browse_module
 
     primary_rows = [
@@ -5689,12 +5665,12 @@ def test_postgres_search_preview_limits_primary_albums_and_defers_family_work(mo
     monkeypatch.setattr(
         repository,
         "_load_non_album_entries",
-        lambda **_kwargs: pytest.fail("search preview loaded non-album inventory"),
+        lambda **_kwargs: [],
     )
     monkeypatch.setattr(
         repository,
         "_load_artist_preview_rows",
-        lambda *_args, **_kwargs: pytest.fail("search preview loaded family albums"),
+        lambda *_args, **_kwargs: [_browse_album_row(artist="The Neal Morse Band", album_id=99, album_key="family", title="Family Album")],
     )
 
     payload = repository.build_selected_artist_payload(
@@ -5702,7 +5678,7 @@ def test_postgres_search_preview_limits_primary_albums_and_defers_family_work(mo
             "surface": "albums",
             "q": "Neal Morse",
             "artist": "Neal Morse",
-            "payload_tier": "search_preview",
+            "payload_tier": payload_tier,
             "omit_sidebar": "1",
         },
         _relation_alias_maps={
@@ -5714,13 +5690,13 @@ def test_postgres_search_preview_limits_primary_albums_and_defers_family_work(mo
         _connection=_NoopSearchSnapshotConnection(),
     )
 
-    assert payload["payload_tier"] == "search_preview"
-    assert len(payload["primary_artist_groups"][0]["albums"]) == 8
-    assert payload["family_artist_groups"] == []
+    assert payload["payload_tier"] == "full"
+    assert len(payload["primary_artist_groups"][0]["albums"]) == 12
+    assert [group["artist"] for group in payload["family_artist_groups"]] == ["The Neal Morse Band"]
     assert payload["non_album_tracks"] == []
 
 
-def test_postgres_non_exact_search_preview_limits_top_match_and_defers_family_work(monkeypatch):
+def test_legacy_non_exact_search_preview_returns_complete_results(monkeypatch):
     from music_app.services import library_browse_postgres as browse_module
 
     search_rows = [
@@ -5740,9 +5716,7 @@ def test_postgres_non_exact_search_preview_limits_top_match_and_defers_family_wo
     monkeypatch.setattr(
         browse_module,
         "_selected_artist_family_context_from_state",
-        lambda *_args, **_kwargs: pytest.fail(
-            "search preview loaded selected-artist family projection"
-        ),
+        lambda *_args, **_kwargs: {"family_artists": [], **alias_maps},
     )
     connection = _NoopSearchSnapshotConnection()
     repository = browse_module.PostgresLibraryBrowseRepository(
@@ -5771,17 +5745,17 @@ def test_postgres_non_exact_search_preview_limits_top_match_and_defers_family_wo
     monkeypatch.setattr(
         repository,
         "_load_artist_preview_rows",
-        lambda *_args, **_kwargs: pytest.fail("search preview loaded family albums"),
+        lambda *_args, **_kwargs: [],
     )
     monkeypatch.setattr(
         repository,
         "_load_non_album_entries",
-        lambda **_kwargs: pytest.fail("search preview loaded non-album inventory"),
+        lambda **_kwargs: [],
     )
     monkeypatch.setattr(
         repository,
         "queue_settings_projection_prewarm",
-        lambda: pytest.fail("search preview queued settings projection prewarm"),
+        lambda: None,
     )
 
     payload = repository.build_search_payload(
@@ -5800,13 +5774,13 @@ def test_postgres_non_exact_search_preview_limits_top_match_and_defers_family_wo
         },
     )
 
-    assert payload["payload_tier"] == "search_preview"
+    assert payload["payload_tier"] == "full"
     assert payload["selected_artist"] == "Devin Townsend"
-    assert len(payload["primary_artist_groups"][0]["albums"]) == 8
+    assert len(payload["primary_artist_groups"][0]["albums"]) == 12
     assert payload["family_artist_groups"] == []
     assert payload["non_album_tracks"] == []
-    assert projection_loads == []
-    assert search_loads == [False]
+    assert projection_loads == [connection]
+    assert search_loads == [True]
 
 
 @pytest.mark.parametrize(
@@ -5835,9 +5809,7 @@ def test_postgres_search_preview_uses_ready_projection_then_selected_artist_prev
     monkeypatch.setattr(
         browse_module,
         "_selected_artist_family_context_from_state",
-        lambda *_args, **_kwargs: pytest.fail(
-            "exact search preview loaded selected-artist family projection"
-        ),
+        lambda *_args, **_kwargs: {"family_artists": [], "alias_to_canonical": {query: canonical_artist}, "canonical_to_aliases": {canonical_artist: [query, canonical_artist]}},
     )
     repository = browse_module.PostgresLibraryBrowseRepository(
         {"ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://album_haven_app@localhost/app"},
@@ -5847,12 +5819,7 @@ def test_postgres_search_preview_uses_ready_projection_then_selected_artist_prev
     monkeypatch.setattr(
         repository,
         "_load_relation_alias_maps",
-        lambda **_kwargs: pytest.fail("search preview loaded relation alias projection"),
-    )
-    monkeypatch.setattr(
-        repository,
-        "_load_projected_artist_match",
-        lambda *_args, **_kwargs: canonical_artist,
+        lambda **_kwargs: {"alias_to_canonical": {query: canonical_artist}, "canonical_to_aliases": {canonical_artist: [query, canonical_artist]}, "projection_stale_reason": ""},
     )
     monkeypatch.setattr(
         repository,
@@ -5862,7 +5829,7 @@ def test_postgres_search_preview_uses_ready_projection_then_selected_artist_prev
     monkeypatch.setattr(
         repository,
         "_load_search_rows",
-        lambda *_args, **_kwargs: pytest.fail("exact search preview issued broad search query"),
+        lambda *_args, **_kwargs: primary_rows,
     )
     monkeypatch.setattr(
         repository,
@@ -5887,12 +5854,12 @@ def test_postgres_search_preview_uses_ready_projection_then_selected_artist_prev
         library_state={},
     )
 
-    assert payload["payload_tier"] == "search_preview"
+    assert payload["payload_tier"] == "full"
     assert payload["selected_artist"] == canonical_artist
-    assert len(payload["primary_artist_groups"][0]["albums"]) == 8
+    assert len(payload["primary_artist_groups"][0]["albums"]) == 12
 
 
-def test_postgres_search_preview_rebuilds_alias_scope_live_when_projection_not_ready(
+def test_legacy_search_preview_preserves_partial_results_when_projection_not_ready(
     monkeypatch,
 ):
     from music_app.services import library_browse_postgres as browse_module
@@ -5902,24 +5869,19 @@ def test_postgres_search_preview_rebuilds_alias_scope_live_when_projection_not_r
         connect=lambda _database_url: _NoopSearchSnapshotConnection(),
         album_ratings_service=_EmptyAlbumRatingsService(),
     )
-    monkeypatch.setattr(repository, "_load_projected_artist_match", lambda *_a, **_k: "")
     monkeypatch.setattr(
         repository,
         "_load_live_relation_alias_maps",
-        lambda **_kwargs: {
-            "alias_to_canonical": {"Devin": "Devin Townsend"},
-            "canonical_to_aliases": {"Devin Townsend": ["Devin", "Devin Townsend"]},
-            "projection_stale_reason": "live_fallback",
-        },
+        lambda **_kwargs: pytest.fail("partial search must not rebuild global aliases"),
     )
     monkeypatch.setattr(
         repository,
         "_load_exact_artist_match",
-        lambda *_a, **_k: pytest.fail("live aliases should resolve before raw artist fallback"),
+        lambda *_a, **_k: "",
     )
     monkeypatch.setattr(
         repository,
-        "_load_selected_artist_preview_rows",
+        "_load_search_rows",
         lambda *_a, **_k: [
             _browse_album_row(
                 artist="Devin Townsend",
@@ -5958,7 +5920,6 @@ def test_current_projected_partial_search_preview_skips_live_alias_rebuild(monke
         connect=lambda _database_url: connection,
         album_ratings_service=_EmptyAlbumRatingsService(),
     )
-    monkeypatch.setattr(repository, "_load_projected_artist_match", lambda *_a, **_k: "")
     monkeypatch.setattr(
         repository,
         "_artist_search_projection_is_authoritative",
@@ -6038,7 +5999,6 @@ def test_matching_stale_projection_search_skips_live_alias_rebuild(
         connect=lambda _database_url: connection,
         album_ratings_service=_EmptyAlbumRatingsService(),
     )
-    monkeypatch.setattr(repository, "_load_projected_artist_match", lambda *_a, **_k: "")
     monkeypatch.setattr(
         repository,
         "_load_relation_alias_maps",
@@ -6117,36 +6077,6 @@ def test_matching_stale_projection_search_skips_live_alias_rebuild(
     assert [group["artist"] for group in payload["artist_groups"]] == [artist]
 
 
-def test_projected_artist_match_requires_current_ready_metadata():
-    from music_app.services.library_browse_postgres import PostgresLibraryBrowseRepository
-
-    executed = []
-
-    class Cursor:
-        def fetchone(self):
-            return {"artist_name": "Devin Townsend"}
-
-    class Connection:
-        def execute(self, sql, params=None):
-            executed.append((" ".join(str(sql).split()), dict(params or {})))
-            return Cursor()
-
-    repository = PostgresLibraryBrowseRepository(
-        {"ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://album_haven_app@localhost/app"},
-        connect=lambda _database_url: None,
-    )
-
-    assert (
-        repository._load_projected_artist_match(" Devin ", connection=Connection())
-        == "Devin Townsend"
-    )
-    sql, params = executed[0]
-    assert "library.local_artist_search_projection" in sql
-    assert "relation_projection" in sql
-    assert "source_fingerprint" in sql
-    assert "built_from_fingerprint" in sql
-    assert params["artist_key"] == "devin"
-    assert params["builder_version"]
 
 
 def test_artist_search_projection_authority_uses_current_database_metadata():
@@ -6196,20 +6126,6 @@ def test_exact_projected_alias_preview_expands_complete_projected_artist_scope(m
         repository,
         "_load_live_relation_alias_maps",
         lambda **_kwargs: pytest.fail("ready projected preview loaded live alias maps"),
-    )
-    monkeypatch.setattr(
-        repository,
-        "_load_projected_artist_match",
-        lambda *_args, **_kwargs: "Morse Portnoy George",
-    )
-    monkeypatch.setattr(
-        repository,
-        "_load_projected_artist_scope",
-        lambda *_args, **_kwargs: [
-            "morse portnoy george",
-            "morse, portnoy & george",
-        ],
-        raising=False,
     )
     monkeypatch.setattr(
         repository,
@@ -6284,19 +6200,6 @@ def test_exact_projected_alias_preview_accepts_alias_only_category_match(monkeyp
     )
     monkeypatch.setattr(
         repository,
-        "_load_projected_artist_match",
-        lambda *_args, **_kwargs: "Morse Portnoy George",
-    )
-    monkeypatch.setattr(
-        repository,
-        "_load_projected_artist_scope",
-        lambda *_args, **_kwargs: [
-            "morse portnoy george",
-            "morse, portnoy & george",
-        ],
-    )
-    monkeypatch.setattr(
-        repository,
         "_load_selected_artist_preview_rows",
         lambda *_args, **_kwargs: [
             _browse_album_row(
@@ -6343,45 +6246,6 @@ def test_exact_projected_alias_preview_accepts_alias_only_category_match(monkeyp
     ] == ["alias-only-category-match"]
 
 
-def test_projected_artist_scope_uses_current_projection_inside_caller_snapshot():
-    from music_app.services.library_browse_postgres import PostgresLibraryBrowseRepository
-
-    executed = []
-
-    class Cursor:
-        def fetchall(self):
-            return [
-                {"artist_key": "morse portnoy george"},
-                {"artist_key": "morse, portnoy & george"},
-            ]
-
-    class Connection:
-        def execute(self, sql, params=None):
-            executed.append((" ".join(str(sql).split()), dict(params or {})))
-            return Cursor()
-
-    repository = PostgresLibraryBrowseRepository(
-        {"ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://album_haven_app@localhost/app"},
-        connect=lambda _database_url: None,
-    )
-    connection = Connection()
-
-    artist_scope = repository._load_projected_artist_scope(
-        "Morse Portnoy George",
-        connection=connection,
-    )
-
-    assert artist_scope == [
-        "morse portnoy george",
-        "morse, portnoy & george",
-    ]
-    sql, params = executed[0]
-    assert "library.local_artist_search_projection" in sql
-    assert "relation_projection" in sql
-    assert "source_fingerprint" in sql
-    assert "built_from_fingerprint" in sql
-    assert params["canonical_artist_name"] == "Morse Portnoy George"
-    assert params["builder_version"]
 
 
 def test_root_startup_preview_applies_eligible_file_predicate_before_candidate_limit():

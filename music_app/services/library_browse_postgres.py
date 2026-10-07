@@ -127,17 +127,6 @@ class _SearchPreviewRows(list[object]):
         ]
 
 
-def _deferred_search_family_context(
-    alias_to_canonical: Mapping[str, object],
-    canonical_to_aliases: Mapping[str, object],
-) -> dict[str, object]:
-    return {
-        "family_artists": [],
-        "relation_views": {},
-        "alias_to_canonical": alias_to_canonical,
-        "canonical_to_aliases": canonical_to_aliases,
-    }
-
 
 def invalidate_postgres_utility_projection_cache(
     *,
@@ -723,10 +712,7 @@ class PostgresLibraryBrowseRepository:
         view_state = _root_sidebar_view_state(query_params)
         query = str((query_params or {}).get("q") or "").strip()
         requested_artist = str((query_params or {}).get("artist") or "").strip()
-        search_preview_requested = (
-            str((query_params or {}).get("payload_tier") or "").strip().casefold()
-            == "search_preview"
-        )
+
         relation_alias_maps = dict(
             _relation_alias_maps
             or self._load_relation_alias_maps(connection=_connection)
@@ -769,7 +755,7 @@ class PostgresLibraryBrowseRepository:
                 view_state,
                 alias_to_canonical=alias_to_canonical,
                 canonical_to_aliases=canonical_to_aliases,
-                include_missing=not search_preview_requested,
+                include_missing=True,
                 connection=_connection,
             )
             if _search_missing_album_rows is None:
@@ -781,17 +767,13 @@ class PostgresLibraryBrowseRepository:
                     loaded_search_rows,
                     selected_artist_alias_to_canonical,
                 )
-        family_context = (
-            _deferred_search_family_context(alias_to_canonical, canonical_to_aliases)
-            if search_preview_requested
-            else _selected_artist_family_context_from_state(
-                selected_artist,
-                config=self._config,
-                connect=self._connect,
-                alias_to_canonical=alias_to_canonical,
-                canonical_to_aliases=canonical_to_aliases,
-                connection=_connection,
-            )
+        family_context = _selected_artist_family_context_from_state(
+            selected_artist,
+            config=self._config,
+            connect=self._connect,
+            alias_to_canonical=alias_to_canonical,
+            canonical_to_aliases=canonical_to_aliases,
+            connection=_connection,
         )
         selected_scope_keys = {
             local_inventory_identity_key(artist) for artist in selected_artist_scope
@@ -836,11 +818,7 @@ class PostgresLibraryBrowseRepository:
                 else self._load_selected_artist_preview_rows(
                     selected_artist_scope,
                     view_state,
-                    album_limit=(
-                        _SEARCH_PREVIEW_ALBUM_LIMIT
-                        if search_preview_requested
-                        else None
-                    ),
+                    album_limit=None,
                     connection=_connection,
                 )
             )
@@ -860,8 +838,7 @@ class PostgresLibraryBrowseRepository:
             if use_preview_albums and not hydrate_query_primary_albums
             else _selected_artist_album_payloads(rows, artist_display)
         )
-        if search_preview_requested:
-            albums = albums[:_SEARCH_PREVIEW_ALBUM_LIMIT]
+
         selected_artist_keys = {
             _artist_display_dedupe_key(artist)
             for artist in selected_artist_scope
@@ -899,7 +876,7 @@ class PostgresLibraryBrowseRepository:
             family_context["alias_to_canonical"],
             family_context["canonical_to_aliases"],
         )
-        non_album_entries = [] if search_preview_requested else self._load_non_album_entries(
+        non_album_entries = self._load_non_album_entries(
             view_state=view_state,
             alias_to_canonical=family_context["alias_to_canonical"],
             canonical_to_aliases=family_context["canonical_to_aliases"],
@@ -911,7 +888,7 @@ class PostgresLibraryBrowseRepository:
             non_album_entries,
             config=self._config,
         )
-        family_preview_rows = [] if search_preview_requested else (
+        family_preview_rows = (
             self._load_artist_preview_rows(
                 [
                     artist
@@ -1048,7 +1025,7 @@ class PostgresLibraryBrowseRepository:
                             view_state,
                             alias_to_canonical=alias_to_canonical,
                             canonical_to_aliases=canonical_to_aliases,
-                            include_missing=not search_preview_requested,
+                            include_missing=True,
                             connection=_connection,
                         ),
                         alias_to_canonical,
@@ -1138,9 +1115,7 @@ class PostgresLibraryBrowseRepository:
             "popularity_browse": build_popularity_browse_payload(viewer_opinion_preferences={}),
             "selected_artist_family_display_mode": _selected_artist_family_display_mode(query_params),
             "artist_page": artist_page,
-            "payload_tier": (
-                "search_preview" if search_preview_requested else "full"
-            ),
+            "payload_tier": "full",
             "persistence_backend": PERSISTENCE_BACKEND_POSTGRES,
             "persistence_seam": _LIBRARY_BROWSE_SEAM_ID,
             "view_data_source": _SOURCE_TELEMETRY,
@@ -1205,8 +1180,7 @@ class PostgresLibraryBrowseRepository:
                 else artist_groups if artist_groups else [*primary_artist_groups, *family_artist_groups]
             ),
         )
-        if not search_preview_requested:
-            self.queue_settings_projection_prewarm()
+        self.queue_settings_projection_prewarm()
         return payload
 
     def build_album_detail_payload(
@@ -1413,32 +1387,18 @@ class PostgresLibraryBrowseRepository:
         query = str(params.get("q") or "").strip()
         requested_all_artists = _request_flag(params.get("all_artists"))
         omit_sidebar = _request_flag(params.get("omit_sidebar"))
-        search_preview_requested = (
-            str(params.get("payload_tier") or "").strip().casefold()
-            == "search_preview"
-        )
-        live_exact_preview = search_preview_requested and omit_sidebar
-        relation_alias_maps = (
-            {
-                "alias_to_canonical": {},
-                "canonical_to_aliases": {},
-                "projection_stale_reason": "preview_deferred",
-            }
-            if live_exact_preview
-            else self._load_relation_alias_maps(connection=connection)
-        )
+
+        relation_alias_maps = self._load_relation_alias_maps(connection=connection)
         alias_to_canonical = relation_alias_maps["alias_to_canonical"]
         canonical_to_aliases = relation_alias_maps["canonical_to_aliases"]
         search_rows: _SearchPreviewRows | None = None
         canonical_search_rows: list[object] | None = None
         selected_artist_preview_rows: list[object] | None = None
-        projected_artist_scope: list[str] = []
         exact_artist_match = ""
         if query and not requested_all_artists:
             projected_artist_match = ""
             if (
-                not live_exact_preview
-                and relation_alias_maps.get("projection_stale_reason")
+                relation_alias_maps.get("projection_stale_reason")
                 == "projection_not_ready"
                 and self._artist_search_projection_is_authoritative(
                     connection=connection,
@@ -1451,48 +1411,9 @@ class PostgresLibraryBrowseRepository:
                     "projection_stale_reason": "",
                 }
             projection_is_authoritative = (
-                not live_exact_preview
-                and relation_alias_maps.get("projection_stale_reason") == ""
+                relation_alias_maps.get("projection_stale_reason") == ""
             )
-            if live_exact_preview:
-                projected_artist_match = self._load_projected_artist_match(
-                    query,
-                    connection=connection,
-                )
-                if not projected_artist_match:
-                    projection_is_authoritative = (
-                        self._artist_search_projection_is_authoritative(
-                            connection=connection,
-                        )
-                    )
-                if projected_artist_match:
-                    projected_artist_scope = self._load_projected_artist_scope(
-                        projected_artist_match,
-                        connection=connection,
-                    )
-                    if projected_artist_scope:
-                        relation_alias_maps["primary_alias_to_canonical"] = {
-                            artist_key: projected_artist_match
-                            for artist_key in projected_artist_scope
-                        }
-                        relation_alias_maps["canonical_to_aliases"] = {
-                            projected_artist_match: projected_artist_scope
-                        }
-                        canonical_to_aliases = relation_alias_maps[
-                            "canonical_to_aliases"
-                        ]
-                if not projected_artist_match and not projection_is_authoritative:
-                    relation_alias_maps = self._load_live_relation_alias_maps(
-                        connection=connection
-                    )
-                    alias_to_canonical = relation_alias_maps["alias_to_canonical"]
-                    canonical_to_aliases = relation_alias_maps["canonical_to_aliases"]
-                    projected_artist_match = _exact_projected_artist_match(
-                        query,
-                        alias_to_canonical,
-                        canonical_to_aliases,
-                    )
-            elif not relation_alias_maps.get("projection_stale_reason"):
+            if not relation_alias_maps.get("projection_stale_reason"):
                 projected_artist_match = _exact_projected_artist_match(
                     query,
                     alias_to_canonical,
@@ -1503,44 +1424,29 @@ class PostgresLibraryBrowseRepository:
                 )
             exact_artist_match = projected_artist_match
             if exact_artist_match and _multi_values(params, "category"):
-                if search_preview_requested and omit_sidebar:
-                    selected_artist_preview_rows = (
-                    self._load_selected_artist_preview_rows(
-                        projected_artist_scope or [exact_artist_match],
-                        view_state,
-                            album_limit=_SEARCH_PREVIEW_ALBUM_LIMIT,
-                            connection=connection,
-                        )
-                    )
-                else:
-                    search_rows = self._load_search_rows(
-                        query,
-                        view_state,
-                        alias_to_canonical=alias_to_canonical,
-                        canonical_to_aliases=canonical_to_aliases,
-                        include_missing=not search_preview_requested,
-                        connection=connection,
-                    )
-                    canonical_search_rows = _canonicalize_artist_rows(
-                        search_rows,
-                        alias_to_canonical,
-                    )
+                search_rows = self._load_search_rows(
+                    query,
+                    view_state,
+                    alias_to_canonical=alias_to_canonical,
+                    canonical_to_aliases=canonical_to_aliases,
+                    include_missing=True,
+                    connection=connection,
+                )
+                canonical_search_rows = _canonicalize_artist_rows(
+                    search_rows,
+                    alias_to_canonical,
+                )
                 exact_artist_keys = {
                     local_inventory_identity_key(artist)
-                    for artist in (projected_artist_scope or [exact_artist_match])
+                    for artist in [exact_artist_match]
                     if local_inventory_identity_key(artist)
                 }
-                category_rows = (
-                    selected_artist_preview_rows
-                    if selected_artist_preview_rows is not None
-                    else canonical_search_rows
-                )
                 if not any(
                     local_inventory_identity_key(
                         str(_row_mapping(row).get("artist_name") or "")
                     )
                     in exact_artist_keys
-                    for row in category_rows
+                    for row in canonical_search_rows
                 ):
                     exact_artist_match = ""
             if (
@@ -1553,7 +1459,7 @@ class PostgresLibraryBrowseRepository:
                     view_state,
                     connection=connection,
                 )
-                if exact_artist_match and not live_exact_preview:
+                if exact_artist_match:
                     relation_alias_maps = self._load_live_relation_alias_maps(
                         connection=connection
                     )
@@ -1561,9 +1467,7 @@ class PostgresLibraryBrowseRepository:
                     canonical_to_aliases = relation_alias_maps["canonical_to_aliases"]
         if exact_artist_match:
             sidebar_artist_groups = []
-            search_missing_album_rows: list[object] | None = (
-                [] if search_preview_requested and omit_sidebar else None
-            )
+            search_missing_album_rows: list[object] | None = None
             if not omit_sidebar:
                 exact_artist_scope = _expanded_artist_names(
                     exact_artist_match,
@@ -1577,7 +1481,7 @@ class PostgresLibraryBrowseRepository:
                             view_state,
                             alias_to_canonical=alias_to_canonical,
                             canonical_to_aliases=canonical_to_aliases,
-                            include_missing=not search_preview_requested,
+                            include_missing=True,
                             connection=connection,
                         )
                         if any(character.isalnum() for character in query)
@@ -1684,7 +1588,7 @@ class PostgresLibraryBrowseRepository:
                 view_state,
                 alias_to_canonical=alias_to_canonical,
                 canonical_to_aliases=canonical_to_aliases,
-                include_missing=not search_preview_requested,
+                include_missing=True,
                 connection=connection,
             )
         rows = (
@@ -1714,10 +1618,7 @@ class PostgresLibraryBrowseRepository:
             priority="interactive",
         )
         selected_artist = "" if requested_all_artists else _top_search_selected_artist(artist_groups, query=query)
-        family_context = _deferred_search_family_context(
-            alias_to_canonical,
-            canonical_to_aliases,
-        ) if selected_artist and search_preview_requested else _selected_artist_family_context_from_state(
+        family_context = _selected_artist_family_context_from_state(
             selected_artist,
             config=self._config,
             connect=self._connect,
@@ -1741,7 +1642,7 @@ class PostgresLibraryBrowseRepository:
                 connection=connection,
                 family_only=True,
             )
-            if selected_artist and family_artists and not search_preview_requested
+            if selected_artist and family_artists
             else []
         )
         primary_artist_groups = (
@@ -1754,22 +1655,7 @@ class PostgresLibraryBrowseRepository:
             if selected_artist and not requested_all_artists
             else []
         )
-        if search_preview_requested:
-            remaining_preview_albums = _SEARCH_PREVIEW_ALBUM_LIMIT
-            limited_primary_artist_groups: list[dict[str, object]] = []
-            for group in primary_artist_groups:
-                group_albums = list(group.get("albums") or [])
-                limited_albums = group_albums[:remaining_preview_albums]
-                if not limited_albums:
-                    continue
-                limited_primary_artist_groups.append({
-                    **group,
-                    "albums": limited_albums,
-                })
-                remaining_preview_albums -= len(limited_albums)
-                if remaining_preview_albums <= 0:
-                    break
-            primary_artist_groups = limited_primary_artist_groups
+
         family_artist_groups = (
             _selected_artist_family_groups_from_preview_rows(
                 family_artists,
@@ -1777,11 +1663,7 @@ class PostgresLibraryBrowseRepository:
                 alias_to_canonical=family_context["alias_to_canonical"],
                 canonical_to_aliases=family_context["canonical_to_aliases"],
             )
-            if (
-                selected_artist
-                and not requested_all_artists
-                and not search_preview_requested
-            )
+            if selected_artist and not requested_all_artists
             else []
         )
         selected_artist_family_filters = (
@@ -1824,7 +1706,7 @@ class PostgresLibraryBrowseRepository:
                 if str(group.get("artist") or "").strip()
             ]
         )
-        non_album_entries = [] if search_preview_requested else self._load_non_album_entries(
+        non_album_entries = self._load_non_album_entries(
             view_state=view_state,
             alias_to_canonical=(
                 family_context["alias_to_canonical"]
@@ -1938,9 +1820,7 @@ class PostgresLibraryBrowseRepository:
                 {"selected_artist_family_display_mode": _selected_artist_family_display_mode(query_params)}
                 if selected_artist else {}
             ),
-            "payload_tier": (
-                "search_preview" if search_preview_requested else "full"
-            ),
+            "payload_tier": "full",
             "persistence_backend": PERSISTENCE_BACKEND_POSTGRES,
             "persistence_seam": _LIBRARY_BROWSE_SEAM_ID,
             "view_data_source": _SOURCE_TELEMETRY,
@@ -1964,8 +1844,7 @@ class PostgresLibraryBrowseRepository:
             self._config,
             rendered_artist_groups if selected_artist and not requested_all_artists else artist_groups,
         )
-        if not search_preview_requested:
-            self.queue_settings_projection_prewarm()
+        self.queue_settings_projection_prewarm()
         return payload
 
     def build_problematic_files_payload(self) -> dict[str, object]:
@@ -2574,48 +2453,6 @@ class PostgresLibraryBrowseRepository:
             )
             return _SearchPreviewRows(cursor.fetchall())
 
-    def _load_projected_artist_match(
-        self,
-        query: str,
-        *,
-        connection: Any | None = None,
-    ) -> str:
-        from music_app.services.relation_projection_postgres import (
-            RELATION_PROJECTION_BUILDER_VERSION,
-        )
-
-        normalized_key = local_inventory_identity_key(query)
-        if not normalized_key:
-            return ""
-        params = {
-            "artist_key": normalized_key,
-            "builder_version": RELATION_PROJECTION_BUILDER_VERSION,
-        }
-        def load_row(active_connection: Any) -> object | None:
-            transaction = getattr(active_connection, "transaction", None)
-            if callable(transaction):
-                with transaction():
-                    cursor = active_connection.execute(
-                        _projected_artist_match_sql(), params
-                    )
-                    return cursor.fetchone() if hasattr(cursor, "fetchone") else None
-            cursor = active_connection.execute(_projected_artist_match_sql(), params)
-            return cursor.fetchone() if hasattr(cursor, "fetchone") else None
-
-        try:
-            if connection is not None:
-                row = load_row(connection)
-            else:
-                with self._connect_to_database() as owned_connection:
-                    row = load_row(owned_connection)
-        except Exception as exc:
-            if psycopg is not None and isinstance(
-                exc,
-                psycopg.errors.UndefinedTable,
-            ):
-                return ""
-            raise
-        return str(_row_mapping(row).get("artist_name") or "").strip() if row else ""
 
     def _artist_search_projection_is_authoritative(
         self,
@@ -2633,35 +2470,6 @@ class PostgresLibraryBrowseRepository:
         row = cursor.fetchone() if hasattr(cursor, "fetchone") else None
         return _row_mapping(row).get("projection_authoritative") is True
 
-    def _load_projected_artist_scope(
-        self,
-        canonical_artist_name: str,
-        *,
-        connection: Any | None = None,
-    ) -> list[str]:
-        canonical_name = str(canonical_artist_name or "").strip()
-        if not canonical_name:
-            return []
-        from music_app.services.relation_projection_postgres import (
-            RELATION_PROJECTION_BUILDER_VERSION,
-        )
-
-        params = {
-            "canonical_artist_name": canonical_name,
-            "builder_version": RELATION_PROJECTION_BUILDER_VERSION,
-        }
-        if connection is not None:
-            cursor = connection.execute(_projected_artist_scope_sql(), params)
-            rows = cursor.fetchall()
-        else:
-            with self._connect_to_database() as owned_connection:
-                cursor = owned_connection.execute(_projected_artist_scope_sql(), params)
-                rows = cursor.fetchall()
-        return [
-            artist_key
-            for row in rows
-            if (artist_key := str(_row_mapping(row).get("artist_key") or "").strip())
-        ]
 
     def _load_exact_artist_match(
         self,
@@ -7301,78 +7109,8 @@ def _artist_search_projection_authority_sql() -> str:
     """
 
 
-def _projected_artist_match_sql() -> str:
-    return """
-        with bootstrap_context as (
-          select
-            library.libraries.id as library_id,
-            library.libraries.metadata #>>
-              '{scan_cache,relation_projection,status}' as projection_status,
-            library.libraries.metadata #>>
-              '{scan_cache,relation_projection,builder_version}' as builder_version,
-            library.libraries.metadata #>>
-              '{scan_cache,relation_projection,source_fingerprint}' as source_fingerprint,
-            library.libraries.metadata #>>
-              '{scan_cache,relation_projection,built_from_fingerprint}' as built_from_fingerprint
-          from app.bootstrap_owners
-          join library.libraries
-            on library.libraries.owner_account_id = app.bootstrap_owners.account_id
-           and library.libraries.name = 'Local Library'
-           and library.libraries.library_kind = 'local'
-          where app.bootstrap_owners.owner_key = 'local-bootstrap-owner'
-          limit 1
-        )
-        select
-          library.local_artist_search_projection.canonical_artist_name as artist_name
-        from library.local_artist_search_projection
-        join bootstrap_context
-          on bootstrap_context.library_id =
-             library.local_artist_search_projection.library_id
-        where library.local_artist_search_projection.normalized_artist_key =
-              %(artist_key)s
-          and bootstrap_context.projection_status in ('ready', 'stale')
-          and bootstrap_context.builder_version = %(builder_version)s
-          and bootstrap_context.source_fingerprint <> ''
-          and bootstrap_context.source_fingerprint =
-              bootstrap_context.built_from_fingerprint
-          and library.local_artist_search_projection.builder_version =
-              bootstrap_context.builder_version
-          and library.local_artist_search_projection.source_fingerprint =
-              bootstrap_context.source_fingerprint
-        limit 1;
-    """
 
 
-def _projected_artist_scope_sql() -> str:
-    return """
-with bootstrap_context as (
-    select
-        library.libraries.id as library_id,
-        library.libraries.metadata #>> '{scan_cache,relation_projection,status}' as projection_status,
-        library.libraries.metadata #>> '{scan_cache,relation_projection,builder_version}' as builder_version,
-        library.libraries.metadata #>> '{scan_cache,relation_projection,source_fingerprint}' as source_fingerprint,
-        library.libraries.metadata #>> '{scan_cache,relation_projection,built_from_fingerprint}' as built_from_fingerprint
-    from app.bootstrap_owners
-    join library.libraries
-      on library.libraries.owner_account_id = app.bootstrap_owners.account_id
-     and library.libraries.name = 'Local Library'
-     and library.libraries.library_kind = 'local'
-    where app.bootstrap_owners.owner_key = 'local-bootstrap-owner'
-    limit 1
-)
-select library.local_artist_search_projection.normalized_artist_key as artist_key
-from library.local_artist_search_projection
-join bootstrap_context
-  on bootstrap_context.library_id = library.local_artist_search_projection.library_id
-where library.local_artist_search_projection.canonical_artist_name = %(canonical_artist_name)s
-  and bootstrap_context.projection_status in ('ready', 'stale')
-  and bootstrap_context.builder_version = %(builder_version)s
-  and bootstrap_context.source_fingerprint <> ''
-  and bootstrap_context.source_fingerprint = bootstrap_context.built_from_fingerprint
-  and library.local_artist_search_projection.builder_version = bootstrap_context.builder_version
-  and library.local_artist_search_projection.source_fingerprint = bootstrap_context.source_fingerprint
-order by library.local_artist_search_projection.normalized_artist_key;
-"""
 
 
 def _exact_artist_match_sql() -> str:

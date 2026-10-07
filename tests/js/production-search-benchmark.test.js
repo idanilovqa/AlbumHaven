@@ -214,7 +214,7 @@ test('production search journey blocks forbidden requests before navigation', ()
   assert.doesNotMatch(spec, /viewStateRevision/u);
   assert.doesNotMatch(spec, /waitForGalleryReady/u);
   assert.ok(spec.indexOf('waitForVisible') < spec.indexOf('waitForStatusResult'));
-  assert.ok(spec.indexOf('waitForStatusResult') < spec.indexOf('measureSearchPreviewFirstVisible'));
+  assert.ok(spec.indexOf('waitForStatusResult') < spec.indexOf('measureSearchFirstVisible'));
 });
 
 test('production search submit and generation seams avoid the debounce race', () => {
@@ -233,23 +233,23 @@ test('production search submit and generation seams avoid the debounce race', ()
 test('production search captures the expected card paint before Playwright polling', () => {
   const galleryActions = read('tests/e2e/actions/galleryActions.js');
   const galleryPage = read('tests/e2e/poms/galleryPage.js');
-  const method = /async measureSearchPreviewFirstVisible[\s\S]*?\n  \}/u
+  const method = /async measureSearchFirstVisible[\s\S]*?\n  \}/u
     .exec(galleryActions)?.[0] || '';
-  const observerStart = method.indexOf('startSearchPreviewFirstVisibleObservation');
+  const observerStart = method.indexOf('startSearchFirstVisibleObservation');
   const submission = method.indexOf('submitPreparedQueryWithEnter');
-  const expectedCardResolution = method.indexOf('resolveSearchPreviewExpectedCard');
+  const expectedCardResolution = method.indexOf('resolveSearchExpectedCard');
   const capturedTimingRead = method.indexOf('readExpectedPaint(expectedCard)');
   const generationPolling = method.indexOf('expect.poll');
 
   assert.ok(observerStart >= 0 && observerStart < submission,
     'the read-only browser observer must be installed before search submission');
   assert.ok(expectedCardResolution >= 0 && expectedCardResolution < capturedTimingRead,
-    'the exact preview card must come from the parsed payload before its captured timing is read');
+    'the exact complete-result card must come from the parsed payload before its captured timing is read');
   assert.ok(capturedTimingRead >= 0 && capturedTimingRead < generationPolling,
     'the browser-captured first paint must not wait for Playwright generation polling');
-  assert.doesNotMatch(method, /previewPaintAtMs\s*=\s*await[\s\S]{0,160}?\.evaluate/u);
-  assert.match(galleryPage, /startSearchPreviewFirstVisibleObservation[\s\S]*MutationObserver/u);
-  assert.match(galleryPage, /startSearchPreviewFirstVisibleObservation[\s\S]*requestAnimationFrame[\s\S]*requestAnimationFrame/u);
+  assert.doesNotMatch(method, /paintAtMs\s*=\s*await[\s\S]{0,160}?\.evaluate/u);
+  assert.match(galleryPage, /startSearchFirstVisibleObservation[\s\S]*MutationObserver/u);
+  assert.match(galleryPage, /startSearchFirstVisibleObservation[\s\S]*requestAnimationFrame[\s\S]*requestAnimationFrame/u);
   assert.match(galleryPage, /renderGeneration[\s\S]*baselineRenderGeneration/u);
 });
 
@@ -288,30 +288,27 @@ test('production search budgets, readiness, and sanitized timings are exact', as
     search_context: { result_groups: { direct_matches: ['Devin Townsend'] } },
     artist_groups: [{ artist: 'Devin Townsend', albums: [{ name: 'Expected album' }] }],
   };
-  assert.equal(helpers.hasDirectSearchPreviewArtist(payload, 'Devin Townsend'), true);
-  assert.equal(helpers.expectedAlbumFromSearchPreview(payload, 'Devin Townsend'), 'Expected album');
+  assert.equal(helpers.hasDirectSearchArtist(payload, 'Devin Townsend'), true);
+  assert.equal(helpers.expectedAlbumFromSearch(payload, 'Devin Townsend'), 'Expected album');
   assert.deepEqual(helpers.unavailableTiming(), { availability: 'unavailable', valueMs: null });
   assert.deepEqual(helpers.availableTiming(null), { availability: 'unavailable', valueMs: null });
   assert.deepEqual(helpers.availableTiming(undefined), { availability: 'unavailable', valueMs: null });
   assert.deepEqual(helpers.calculateProductionSearchPhaseDurations({
     submittedAtMs: 100,
-    previewResponseEndAtMs: 350,
-    previewDomReadyAtMs: 410,
-    previewPaintAtMs: 425,
-    fullHydrationPaintAtMs: 700,
+    responseEndAtMs: 350,
+    domReadyAtMs: 410,
+    paintAtMs: 425,
   }), {
     browserProcessingMs: 60,
-    fullHydrationMs: 600,
     renderMs: 15,
     responseToFirstVisibleMs: 75,
     submitToFirstVisibleMs: 325,
   });
   assert.throws(() => helpers.calculateProductionSearchPhaseDurations({
     submittedAtMs: 100,
-    previewResponseEndAtMs: 350,
-    previewDomReadyAtMs: 340,
-    previewPaintAtMs: 425,
-    fullHydrationPaintAtMs: 700,
+    responseEndAtMs: 350,
+    domReadyAtMs: 340,
+    paintAtMs: 425,
   }), /monotonic/u);
   const expectedDatabaseIdentityProof = {
     scheme: 'hmac-sha256-v1',
@@ -435,20 +432,15 @@ test('retained production search artifacts exclude payloads and full artist arra
   const spec = read('tests/e2e/productionRealData/searchFirstVisible.spec.js');
   const galleryActions = read('tests/e2e/actions/galleryActions.js');
   const attachmentStart = spec.indexOf('const metrics =');
-  const attachmentEnd = spec.indexOf('expect(result.directPreviewMatch');
+  const attachmentEnd = spec.indexOf('expect(result.directSearchMatch');
   const metricsSource = spec.slice(attachmentStart, attachmentEnd);
   assert.doesNotMatch(metricsSource, /payload|expectedCard|artist_groups|direct_matches/u);
   assert.match(metricsSource, /browserProcessing:\s*availableTiming\(phaseDurations\.browserProcessingMs\)/u);
-  assert.match(metricsSource, /fullHydration:\s*availableTiming\(phaseDurations\.fullHydrationMs\)/u);
   assert.match(metricsSource, /render:\s*availableTiming\(phaseDurations\.renderMs\)/u);
-  assert.match(galleryActions, /previewResponseEndAtMs/u);
-  assert.match(galleryActions, /fullHydrationPaintAtMs/u);
-  assert.match(galleryActions, /fullHydrationGeneration/u);
-  assert.match(
-    galleryActions,
-    /fullHydrationGeneration\.renderGeneration >= previewGeneration\.renderGeneration/u,
-  );
-  assert.match(galleryActions, /payloadTier !== 'search_preview'/u);
+  assert.match(galleryActions, /responseEndAtMs/u);
+  assert.match(galleryActions, /paintAtMs/u);
+  assert.match(galleryActions, /generationAfter\.renderGeneration > generationBefore\.renderGeneration/u);
+  assert.match(galleryActions, /payloadTier !== 'full'/u);
   assert.match(galleryActions, /performance\.getEntriesByName/u);
   assert.match(read('tests/e2e/poms/galleryPage.js'), /requestAnimationFrame/u);
   assert.match(spec, /readProductionSearchReadiness/u);
@@ -461,7 +453,7 @@ test('retained production search artifacts exclude payloads and full artist arra
   assert.doesNotMatch(spec, /const EXPECTED_DATABASE_IDENTITY_SHA256/u);
   assert.doesNotMatch(spec, /const EXPECTED_DATABASE_IDENTITY_PROOF/u);
   assert.ok(spec.indexOf(perCaseAttestation) > spec.indexOf('await galleryActions.waitForGalleryReady'));
-  assert.ok(spec.indexOf(perCaseAttestation) < spec.indexOf('measureSearchPreviewFirstVisible'));
+  assert.ok(spec.indexOf(perCaseAttestation) < spec.indexOf('measureSearchFirstVisible'));
 });
 
 
@@ -532,7 +524,7 @@ test('search paint observer excludes cards clipped outside the gallery scroll vi
     __ALBUM_HAVEN_VIRTUAL_GRID__: { latestRender: { renderGeneration: 1 } },
     state: { view: { query: 'Neal Morse', payload_tier: 'full', artist_groups: [{ albums: [{ key: 'seed' }] }] } },
   };
-  const observation = await GalleryPage.prototype.startSearchPreviewFirstVisibleObservation.call({
+  const observation = await GalleryPage.prototype.startSearchFirstVisibleObservation.call({
     albumCardWithinSectionSelector: '.album-card', artistHeadingWithinSectionSelector: '.artist-name', artistSectionSelector: '.artist-section',
     albumCard: { titleButtonSelector: '.album-title-button', singleArtistContextSelector: '#context' },
     page: { evaluateHandle: async (callback, settings) => {
@@ -560,14 +552,14 @@ test('search paint observer excludes cards clipped outside the gallery scroll vi
 test('synthetic measurement refuses an absent or invalid seed oracle before browser work', async () => {
   const { GalleryActions } = await import(pathToFileURL(path.join(root, 'tests/e2e/actions/galleryActions.js')).href);
   let calls = 0;
-  const action = { measureSearchPreviewFirstVisible: async () => { calls += 1; return 'measured'; } };
+  const action = { measureSearchFirstVisible: async () => { calls += 1; return 'measured'; } };
   for (const expectedAlbumKeys of [undefined, [], [''], [null]]) {
-    await assert.rejects(GalleryActions.prototype.measureSyntheticSearchPreviewFirstVisible.call(
+    await assert.rejects(GalleryActions.prototype.measureSyntheticSearchFirstVisible.call(
       action, {}, 'Neal Morse', { expectedAlbumKeys },
     ), /independently seeded album inventory/);
   }
   assert.equal(calls, 0);
-  assert.equal(await GalleryActions.prototype.measureSyntheticSearchPreviewFirstVisible.call(
+  assert.equal(await GalleryActions.prototype.measureSyntheticSearchFirstVisible.call(
     action, {}, 'Neal Morse', { expectedAlbumKeys: ['seed-key'] },
   ), 'measured');
   assert.equal(calls, 1);

@@ -1022,30 +1022,11 @@ async function fetchAndRender(url, push = true, options = {}) {
     markStartupFollowup('fetch_started', requestOptions, {
       endpoint: apiUrl,
     });
-    let response;
-    let data;
-    if (requestOptions.searchPreviewUrl) {
-      [{ response, data }] = await Promise.all([apiUrl, requestOptions.searchPreviewUrl].map(async (requestUrl, index) => {
-        try {
-          const response = await fetch(requestUrl, {
-            headers: { Accept: 'application/json' },
-            signal: controller?.signal,
-          });
-          const data = await readGalleryResponse(response, () => requestOwnsCurrentViewState(requestId, requestViewStateRevision));
-          return { response, data };
-        } catch (error) {
-          error.gallerySearchStage = index === 1 ? 'preview' : 'hydration';
-          controller?.abort();
-          throw error;
-        }
-      }));
-    } else {
-      response = await fetch(apiUrl, {
-        headers: { Accept: 'application/json' },
-        signal: controller?.signal,
-      });
-      data = await readGalleryResponse(response, () => requestOwnsCurrentViewState(requestId, requestViewStateRevision));
-    }
+    const response = await fetch(apiUrl, {
+      headers: { Accept: 'application/json' },
+      signal: controller?.signal,
+    });
+    let data = await readGalleryResponse(response, () => requestOwnsCurrentViewState(requestId, requestViewStateRevision));
     if (rootRefreshCoverage > 0) {
       const ownsRefresh = () => {
         if (!requestOwnsCurrentViewState(requestId, requestViewStateRevision)

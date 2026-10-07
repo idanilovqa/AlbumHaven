@@ -219,7 +219,14 @@ def refresh_library_state(
         previous_album_keys = album_key_snapshot(library_state.get("albums", []))
         previous_albums = list(library_state.get("albums") or [])
         last_scan = float(library_state.get("last_scan") or 0.0)
-        relation_views_missing = not library_state.get("relation_views", {}).get("artists")
+        projection_explicitly_stale = (
+            library_state.get("relation_projection_ready") is False
+            and library_state.get("relation_projection_rebuild_reason") != "not_checked"
+        )
+        relations_need_refresh = (
+            not library_state.get("relation_views", {}).get("artists")
+            or projection_explicitly_stale
+        )
         if _can_skip_scan_with_cache(last_scan, existing_cache):
             library_state["separate_release_keys"] = scan_separate_release_keys
             library_state["scan_in_progress"] = False
@@ -228,7 +235,7 @@ def refresh_library_state(
             library_state["scan_mode"] = "idle"
             library_state["scan_outcome"] = "completed"
             log_app_event(cfg, logger, "Library indexing skipped", level="info", reason="cache_fresh")
-            should_refresh_relations = relation_views_missing
+            should_refresh_relations = relations_need_refresh
             skip_scan = True
             ignore_existing_cache = False
         else:
@@ -241,7 +248,10 @@ def refresh_library_state(
 
     if skip_scan:
         if should_refresh_relations:
-            refresh_relation_views()
+            try:
+                refresh_relation_views(expected_scan_generation=scan_generation)
+            except ScanCancelled:
+                return
         if queue_problematic_albums_prewarm is not None and library_state.get("albums") and library_state.get("file_cache"):
             queue_problematic_albums_prewarm()
         if queue_utility_rules_prewarm is not None and library_state.get("albums") and library_state.get("file_cache"):
@@ -308,7 +318,10 @@ def refresh_library_state(
             )
         if not generation_is_current:
             return
-        if disk_relation_views.get("artists"):
+        if (
+            disk_relation_views.get("artists")
+            and not projection_explicitly_stale
+        ):
             relations_refreshed_from_disk = True
         else:
             try:
@@ -337,8 +350,11 @@ def refresh_library_state(
             level="info",
             reason="cache_fresh_on_disk",
         )
-        if relation_views_missing and not relations_refreshed_from_disk:
-            refresh_relation_views()
+        if relations_need_refresh and not relations_refreshed_from_disk:
+            try:
+                refresh_relation_views(expected_scan_generation=scan_generation)
+            except ScanCancelled:
+                return
         if queue_problematic_albums_prewarm is not None and library_state.get("albums") and library_state.get("file_cache"):
             queue_problematic_albums_prewarm()
         if queue_utility_rules_prewarm is not None and library_state.get("albums") and library_state.get("file_cache"):

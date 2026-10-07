@@ -21,7 +21,7 @@ test.describe(`${CASE_ID} synthetic paired search calibration`, () => {
       await searchToolbarActions.waitForVisible({ timeout: 120000 });
       await galleryActions.waitForGalleryReady({ timeout: 120000 });
 
-      const result = await galleryActions.measureSyntheticSearchPreviewFirstVisible(
+      const result = await galleryActions.measureSyntheticSearchFirstVisible(
         searchToolbarActions,
         scenario.query,
         {
@@ -31,7 +31,7 @@ test.describe(`${CASE_ID} synthetic paired search calibration`, () => {
         },
       );
 
-      expect(result.directPreviewMatch, `${scenario.query} must be a direct search-preview match.`)
+      expect(result.directSearchMatch, `${scenario.query} must be a direct search match.`)
         .toBe(true);
       expect(result.generationAfter.requestGeneration)
         .toBeGreaterThan(result.generationBefore.requestGeneration);

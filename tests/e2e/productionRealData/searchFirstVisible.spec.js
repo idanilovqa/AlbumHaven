@@ -74,7 +74,7 @@ test.describe(`${CASE_ID} production-backed read-only search`, () => {
         { timeout: 120000 },
       );
 
-      const result = await galleryActions.measureSearchPreviewFirstVisible(
+      const result = await galleryActions.measureSearchFirstVisible(
         searchToolbarActions,
         scenario.query,
         { expectedArtist: scenario.expectedArtist, timeout: 120000 },
@@ -91,14 +91,13 @@ test.describe(`${CASE_ID} production-backed read-only search`, () => {
         timing: {
           api: availableTiming(result.responseDurationMs),
           browserProcessing: availableTiming(phaseDurations.browserProcessingMs),
-          fullHydration: availableTiming(phaseDurations.fullHydrationMs),
           render: availableTiming(phaseDurations.renderMs),
           responseToFirstVisible: availableTiming(phaseDurations.responseToFirstVisibleMs),
           submitToFirstVisible: availableTiming(phaseDurations.submitToFirstVisibleMs),
         },
       };
 
-      expect(result.directPreviewMatch, `${scenario.query} must be a direct search-preview match.`)
+      expect(result.directSearchMatch, `${scenario.query} must be a direct search match.`)
         .toBe(true);
       expect(result.generationAfter.requestGeneration)
         .toBeGreaterThan(result.generationBefore.requestGeneration);

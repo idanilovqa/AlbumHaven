@@ -60,6 +60,99 @@
 
 ## Progress
 
+### October 6 arrivals workflow and manual-move decisions
+
+The owner wants no dedicated New Arrivals page for now. Browse through the
+existing gallery: `Sources` -> `New Arrivals` only -> `All Artists`. The dedicated
+page, automatic moves and bulk moves remain deferred.
+
+The confirmed manual-move dialog direction is a compact album-art row, an arrow,
+and the destination Main Library or Hoard exact path, with manual confirmation
+before changes. Preserve path-read permissions and server-computed destination
+validation. Prefer an existing artist folder; suggest a new artist destination
+under an existing broad genre/family folder within the approved layout rules.
+
+The owner requested configurable hierarchical versus flat layout. Applying it
+only to future moves, without automatic reorganization of existing files, remains
+a proposal awaiting approval. The owner confirmed sibling artist folders within
+the shared family folder, never nesting inside a related band's own album folder.
+The album right-click menu must include `Move`, opening the same destination
+picker and confirmation flow. Move is owner-only in both frontend and server
+authorization, superseding the October 4 allowance for explicit non-owner grants.
+Require server-verified library ownership alongside existing move/view checks;
+non-owner administrator presets or explicit grants cannot bypass that restriction.
+The private `library-roots-and-arrivals-plan.md` owns these decisions and the
+existing move/layout safety rules. Deployment and client limits remain unchanged;
+the owner-only restriction narrows Move authority. Technical design, exact mockup, automated-test proposal and owner
+manual acceptance gates remain open. No implementation, file move, checklist
+completion or release follows from this documentation update.
+
+### October 6 missing source-indicator repair intake
+
+The owner reported missing Hoard and New Arrivals icons/colors after the sandbox
+handoff. The compact root-album builder omits stored `root_provenance`; ordinary
+nonduplicate cards therefore lose the source summary consumed by the existing
+indicators. Repair scope: preserve the stored public provenance/category summary
+at that payload boundary, retaining mixed-source and year-specific semantics.
+No query, cache, performance architecture or visual-design change belongs here.
+Rollback is the source-only payload change; existing permissions and path privacy
+remain unchanged. This supports FTC-LIBROOTS-003/003C without completing their E2E gates.
+
+Focused Hoard, New Arrivals and mixed-source regressions reproduced five assertion
+failures with one passing year-provenance control (353 deselected, 8.17s); the
+numeric pytest exit was unavailable. The two-field payload repair then passed all
+six selected cases (353 deselected, 1.53s, exit 0), and related checks passed 18
+cases (341 deselected, 1.35s, exit 0). The verifier confirmed no owned or global
+test process remained. Two independent narrow review passes found no remaining
+finding; the test author's additional review does not count as independent test
+review. No SQL, cache or performance change belongs to this repair.
+
+A read-only shared-database aggregate found stored primary categories for 9,188
+Hoard, 143 New Arrivals and 5,206 Main albums, with 172 absent primaries. These are
+stored metadata counts, not active-display counts. Live owner manual acceptance,
+full CI and release gates remain open. Existing checklists are unchanged; this
+checkpoint does not claim a successful deployment.
+
+Startup follow-up: `build_initial_view_preview` also omitted the source summary
+while slimming albums. Six regressions failed at missing provenance (exit 1;
+private evidence `source-indicators-startup-red-v1.log`). The startup serializer
+now copies a dictionary provenance summary and preserves the category, including
+the public-safe preference-stripping path. Tracks and duplicate-source details
+remain slimmed; no paths or queries were added. Exact focused GREEN passed all
+six cases in 6.98s, exit 0; evidence:
+`C:/temp/pr22-local-1855858/source-indicators-startup-green-v1-exact.log`.
+Two narrow review passes found no substantive findings, including privacy and
+compatibility checks. Related startup checks subsequently passed 10 cases in
+5.10s, exit 0; evidence:
+`C:/temp/pr22-local-1855858/source-indicators-startup-green-v1-related.log`.
+These results do not establish
+a completed deployment: the new sandbox server is still hydrating at this
+checkpoint. Owner manual acceptance, full CI and release gates remain open;
+no checklist or delivery checkpoint closes from this focused evidence.
+
+### October 6 current checkpoint
+
+The running-pass and review-server notes below are historical. The latest cover
+retry stopped with a worker error; its audit verified current outcomes for 235
+recorded terminal jobs and decoded all 61 downloaded images. That audit does not
+prove completion of the remaining queue. Normal authenticated sandbox3 browsing
+now uses the owner-approved shared data without a library copy; no new cover pass
+is running at this checkpoint. Operational identities and handoff evidence remain
+in the private deployment record.
+
+Preparation reuse and completed-job progress accounting have focused verification.
+The earlier unrun-counter checkpoint is historical: implementation and focused
+RED/GREEN verification are complete. The counter measures accepted terminal
+search results, not durable persistence. Gallery-performance work has transferred
+to another chat and is outside this chat's scope; its acceptance gate remains open.
+Remaining work includes the complete CI failure batch and the retry with visible
+progress. The owner approved cross-instance single-writer coordination using the
+shared production database/media with production browsing online. Concrete safe
+ownership and recovery design remain pending; composition is unimplemented and
+prospective safety tests are unrun. Retry verification gates remain open.
+Follow `../../plans/2026-10-04-cover-timeout-retry-investigation.md` for the cover
+repair checkpoint. Manual acceptance, full green CI and release remain open.
+
 Initial implementation is in this worktree. Red-first duplicate regressions covered
 unknown and conflicting metadata, cross-edition and separated-year copies,
 source-specific queues, and real PostgreSQL candidate/Problematic Files reads.

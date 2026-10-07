@@ -53,3 +53,26 @@ const newScan = context.buildLoaderStatusLines({
   covers_phase: 'finished', covers_outcome: 'completed', covers_total: 100, covers_processed: 100,
 });
 assert.ok(newScan.every(line => !line.detail.includes('100 of 100')));
+
+require('node:test')('cover detail uses completed jobs while legacy queue progress remains compatible', () => {
+  const status = { covers_in_progress: true, covers_phase: 'fetching', covers_processed: 100,
+    covers_total: 100, covers_completed: 25, covers_downloaded: 12 };
+  assert.match(context.buildLoaderStatusLines(status)[0].detail, /25 of 100 albums checked \(25%\)/);
+  assert.doesNotMatch(context.buildLoaderStatusLines(status)[0].detail, /100 of 100/);
+  assert.match(context.buildLoaderStatusLines({ ...status, covers_completed: 0 })[0].detail,
+    /0 of 100 albums checked \(0%\)/);
+  const { covers_completed, ...legacy } = status;
+  assert.match(context.buildLoaderStatusLines(legacy)[0].detail, /100 of 100 albums checked \(100%\)/);
+});
+
+require('node:test')('deferred and terminal partial cover results never display queue completion', () => {
+  const status = { covers_phase: 'fetching', covers_in_progress: true,
+    covers_processed: 2, covers_completed: 1, covers_total: 2 };
+  assert.match(context.buildLoaderStatusLines(status)[0].detail, /1 of 2 albums checked \(50%\)/);
+  for (const outcome of ['failed', 'cancelled']) {
+    const detail = context.buildLoaderStatusLines({ ...status, covers_phase: 'finished',
+      covers_in_progress: false, covers_outcome: outcome })[0].detail;
+    assert.match(detail, /1 of 2 albums checked \(50%\)/);
+    assert.doesNotMatch(detail, /ETA|100%/);
+  }
+});

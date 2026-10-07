@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
+
 import pytest
 import threading
 
@@ -356,11 +358,12 @@ def test_run_manual_cover_refresh_worker_preserves_completed_progress_on_failure
         "covers_current_folder": "Artist/Album",
     }
 
-    cover_refresh_runtime.run_manual_cover_refresh_worker(
-        force_search=False,
-        get_state=lambda: library_state,
-        refresh_unsuccessful_cover_artwork=lambda **kwargs: (_ for _ in ()).throw(RuntimeError("boom")),
-    )
+    with pytest.raises(RuntimeError, match="boom"):
+        cover_refresh_runtime.run_manual_cover_refresh_worker(
+            force_search=False,
+            get_state=lambda: library_state,
+            refresh_unsuccessful_cover_artwork=lambda **kwargs: (_ for _ in ()).throw(RuntimeError("boom")),
+        )
 
     assert library_state["last_error"] == "boom"
     assert library_state["covers_in_progress"] is False
@@ -369,6 +372,161 @@ def test_run_manual_cover_refresh_worker_preserves_completed_progress_on_failure
     assert library_state["covers_downloaded"] == 3
     assert library_state["covers_outcome"] == "failed"
     assert library_state["covers_current_folder"] == ""
+
+
+@pytest.fixture(params=["background", "manual", "prepared"])
+def cover_worker_runner(request):
+    state = {
+        "covers_in_progress": True, "cover_generation": 3, "scan_generation": 4,
+        "covers_processed": 5, "covers_completed": 4, "covers_total": 7,
+        "covers_downloaded": 3, "covers_current_folder": "Artist/Album",
+        "covers_outcome": "running", "covers_finished_monotonic": None,
+    }
+    current = [state]
+    prepared = None
+    if request.param == "prepared":
+        prepared = (cover_refresh_runtime.CoverRefreshContext(
+            library_state=state, file_cache={}, separate_release_keys=set(),
+            cover_cache=None, image_extensions={".jpg"}, user_agent="AlbumHavenTests/1.0",
+            scan_generation=4, cover_generation=3,
+        ), [{"folder": "Artist/Album"}])
+
+    def submit(executor, callback):
+        if request.param == "background":
+            runner = cover_refresh_runtime.build_background_cover_refresh_runner(
+                get_state=lambda: current[0], refresh_cover_artwork=callback,
+            )
+            return executor.submit(runner)
+        runner = cover_refresh_runtime.build_manual_cover_refresh_runner(
+            get_state=lambda: current[0], refresh_unsuccessful_cover_artwork=callback,
+            cache_lock=threading.Lock(),
+        )
+        return executor.submit(runner, True, prepared)
+
+    return state, current, prepared, submit, request.param
+
+
+@pytest.mark.parametrize("transition", ["unchanged", "replacement", "cover_generation", "scan_generation"])
+def test_cover_worker_future_preserves_failure_and_owned_progress(cover_worker_runner, transition):
+    state, current, _prepared, submit, _mode = cover_worker_runner
+    failure = RuntimeError("provider outcome persistence acknowledgement lost")
+    expected = {}
+
+    def fail(**_kwargs):
+        if transition == "replacement":
+            current[0] = dict(state)
+        elif transition != "unchanged":
+            current[0][transition] += 1
+        if transition != "unchanged":
+            current[0].update(
+                covers_completed=11, covers_processed=12, covers_total=20,
+                covers_downloaded=9, covers_current_folder="Newer/Album",
+                covers_outcome="running", last_error="newer diagnostic",
+            )
+        expected.update(current[0])
+        raise failure
+
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        future = submit(executor, fail)
+        with pytest.raises(RuntimeError, match="provider outcome persistence acknowledgement lost") as caught:
+            future.result(timeout=5)
+
+    assert caught.value is failure
+    assert future.exception() is failure
+    if transition == "unchanged":
+        finished = current[0]["covers_finished_monotonic"]
+        assert isinstance(finished, (int, float))
+        expected.update(
+            last_error=str(failure), covers_in_progress=False,
+            covers_outcome="failed", covers_current_folder="",
+            covers_finished_monotonic=finished,
+        )
+    assert current[0] == expected, "a stale worker must not alter any newer progress field"
+
+
+def test_cover_worker_future_preserves_success_contract(cover_worker_runner):
+    state, current, prepared, submit, mode = cover_worker_runner
+    baseline = dict(state)
+    calls = []
+
+    def complete(**kwargs):
+        calls.append(kwargs)
+        return {"processed": 1}
+
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        future = submit(executor, complete)
+        assert future.result(timeout=5) is None
+
+    expected_kwargs = {} if mode == "background" else {"force_search": True}
+    if prepared is not None:
+        expected_kwargs["prepared"] = prepared
+    assert calls == [expected_kwargs]
+    assert current[0] == baseline
+
+
+@pytest.mark.parametrize("entrypoint", ["worker", "request"])
+def test_background_worker_lock_covers_capture_and_failure_not_callback(entrypoint):
+    cache_lock = threading.Lock()
+    reads = []
+    writes = []
+
+    class ObservedState(dict):
+        def get(self, key, default=None):
+            if key in {"cover_generation", "scan_generation"}:
+                reads.append(cache_lock.locked())
+            return super().get(key, default)
+
+        def __setitem__(self, key, value):
+            if key in {"last_error", "covers_outcome", "covers_finished_monotonic"}:
+                writes.append(cache_lock.locked())
+            return super().__setitem__(key, value)
+
+    state = ObservedState(cover_generation=3, scan_generation=4, covers_in_progress=False)
+    failure = RuntimeError("guarded background failure")
+
+    def fail():
+        assert cache_lock.acquire(blocking=False), "callback must execute outside cache_lock"
+        cache_lock.release()
+        raise failure
+
+    if entrypoint == "worker":
+        def runner():
+            cover_refresh_runtime.run_background_cover_refresh_worker(
+                get_state=lambda: state, refresh_cover_artwork=fail, cache_lock=cache_lock,
+            )
+    else:
+        submitted = []
+        cover_refresh_runtime.start_background_cover_refresh_request(
+            get_state=lambda: state, refresh_cover_artwork=fail, cache_lock=cache_lock,
+            submit_cover_job=lambda callback: submitted.append(callback),
+        )
+        assert len(submitted) == 1
+        runner = submitted[0]
+    reads.clear()
+    writes.clear()
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        with pytest.raises(RuntimeError, match="guarded background failure") as caught:
+            executor.submit(runner).result(timeout=5)
+    assert caught.value is failure
+    assert reads == [True, True, True, True], "capture and ownership recheck must hold cache_lock"
+    assert writes and all(writes), "failure status updates must share the ownership-check lock"
+    assert not cache_lock.locked()
+
+
+def test_background_worker_lock_is_forwarded_by_normal_state_wiring(monkeypatch, runtime_config, logger):
+    from music_app.services import state as state_module
+
+    observed = []
+    monkeypatch.setattr(
+        state_module, "refresh_library_state",
+        lambda _state, **kwargs: kwargs["start_background_cover_refresh"](),
+    )
+    monkeypatch.setattr(
+        state_module, "start_background_cover_refresh_request",
+        lambda **kwargs: observed.append(kwargs.get("cache_lock")),
+    )
+    state_module.refresh_library_for_state({}, runtime_config, logger)
+    assert observed == [state_module._CACHE_LOCK]
 
 
 def test_refresh_cover_artwork_request_runs_background_jobs_with_runtime_context(runtime_config, logger):
@@ -383,6 +541,7 @@ def test_refresh_cover_artwork_request_runs_background_jobs_with_runtime_context
         }],
         "separate_release_keys": {"release-1"},
         "scan_generation": 12,
+        "cover_generation": 7,
     }
 
     cover_refresh_runtime.refresh_cover_artwork_request(
@@ -418,7 +577,7 @@ def test_refresh_cover_artwork_request_runs_background_jobs_with_runtime_context
     assert selected[0]["user_owned_track_paths"] == {"track-1"}
     assert len(executed) == 1
     assert executed[0]["scan_generation"] == 12
-    assert executed[0]["cover_generation"] is None
+    assert executed[0]["cover_generation"] == 7
     assert executed[0]["config"] is runtime_config
     assert executed[0]["logger"] is logger
     assert executed[0]["negative_cache_ttl_seconds"] == 321.0

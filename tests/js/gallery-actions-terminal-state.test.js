@@ -159,6 +159,21 @@ function settledSnapshot(overrides = {}) {
   };
 }
 
+test('album absence waits for complete canonical scope rather than a settled partial page', async () => {
+  const { GalleryActions } = await import(galleryActionsUrl);
+  let reads = 0;
+  const actions = new GalleryActions({
+    async readAlbumTargetState() {
+      reads += 1;
+      return settledSnapshot({ canonicalScopeComplete: reads > 1 });
+    },
+  });
+  await actions.expectAlbumAbsentFromSettledGallery({
+    artist: 'Neal Morse', album: 'Joseph: Part One - The Dreamer', query: 'Joseph',
+  });
+  assert.ok(reads > 1, 'unseen on a partial page is not proven absent from the canonical scope');
+});
+
 test('gallery target classification keeps every unsettled production state retryable', async () => {
   const { classifyGalleryAlbumTargetState } = await import(galleryActionsUrl);
   const retryableCases = [

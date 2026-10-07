@@ -300,6 +300,17 @@ test('resolveLibraryScanPhaseStates keeps reached work bright and terminal state
   });
 });
 
+test('terminal cover stage uses completed jobs with absent-field legacy fallback', () => {
+  const { resolveLibraryScanPhaseStates } = loadHelpers();
+  for (const outcome of ['failed', 'cancelled']) {
+    const status = { scan_outcome: outcome, covers_processed: 10, covers_total: 10 };
+    assert.equal(resolveLibraryScanPhaseStates({ ...status, covers_completed: 0 }).covers, 'future');
+    assert.equal(resolveLibraryScanPhaseStates({ ...status, covers_completed: 3 }).covers, 'future');
+    assert.equal(resolveLibraryScanPhaseStates({ ...status, covers_completed: 10 }).covers, 'complete');
+    assert.equal(resolveLibraryScanPhaseStates(status).covers, 'complete');
+  }
+});
+
 test('renderLibraryLoader keeps the scan title through finalizing, cover, and relation work', () => {
   for (const status of [
     { scan_in_progress: true, scan_phase: 'finalizing' },

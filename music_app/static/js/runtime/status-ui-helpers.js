@@ -42,9 +42,9 @@ function buildStatusIndicatorTitleParts(data = {}) {
   }
   if (data.covers_in_progress) {
     if (!progressText.value) {
-      progressText.value = `${Number(data.covers_processed || 0)} / ${Number(data.covers_total || 0)}`;
+      progressText.value = `${Number(data.covers_completed ?? data.covers_processed ?? 0)} / ${Number(data.covers_total || 0)}`;
     }
-    parts.push(`Updating cover art: ${Number(data.covers_processed || 0)} / ${Number(data.covers_total || 0)} covers updated`);
+    parts.push(`Updating cover art: ${Number(data.covers_completed ?? data.covers_processed ?? 0)} / ${Number(data.covers_total || 0)} cover searches completed`);
     parts.push(`Downloaded covers: ${Number(data.covers_downloaded || 0)}`);
     if (data.covers_current_folder) {
       parts.push(`Current album folder: ${data.covers_current_folder}`);

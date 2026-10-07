@@ -358,6 +358,7 @@ const DEFAULT_STATUS_STATE = Object.freeze({
   relations_source: 'local',
   covers_in_progress: false,
   covers_processed: 0,
+  covers_completed: 0,
   covers_total: 0,
   covers_downloaded: 0,
   covers_current_folder: '',
@@ -1436,6 +1437,7 @@ function normalizeStatusPayload(payload, fallbackStatus = null) {
     relations_source: normalizeRuntimeString(source.relations_source, base.relations_source),
     covers_in_progress: normalizeRuntimeBoolean(source.covers_in_progress, base.covers_in_progress),
     covers_processed: normalizeRuntimeNumber(source.covers_processed, base.covers_processed),
+    covers_completed: normalizeRuntimeNumber(source.covers_completed, normalizeRuntimeNumber(source.covers_processed, base.covers_processed)),
     covers_total: normalizeRuntimeNumber(source.covers_total, base.covers_total),
     covers_downloaded: normalizeRuntimeNumber(source.covers_downloaded, base.covers_downloaded),
     covers_current_folder: normalizeRuntimeString(source.covers_current_folder, base.covers_current_folder),
@@ -2908,7 +2910,7 @@ function buildLoaderStatusLines(data, options = {}) {
 function buildCoverProgressDetail(data, currentAlbum = '') {
   if (data.status_connection_lost) return 'Progress unavailable — reconnecting. Last reported counts may be outdated.';
   const total = Number(data.covers_total);
-  const processed = Number(data.covers_processed);
+  const processed = Number(data.covers_completed ?? data.covers_processed);
   const known = Number.isFinite(total) && total > 0 && Number.isFinite(processed) && processed >= 0;
   const parts = [data.covers_phase === 'preparing' ? 'Preparing cover search' : known
     ? `${processed} of ${total} albums checked (${Math.min(100, Math.round(processed / total * 100))}%)`
@@ -2978,9 +2980,9 @@ function buildStatusIndicatorTitleParts(data = {}) {
   }
   if (data.covers_in_progress) {
     if (!progressText.value) {
-      progressText.value = `${Number(data.covers_processed || 0)} / ${Number(data.covers_total || 0)}`;
+      progressText.value = `${Number(data.covers_completed ?? data.covers_processed ?? 0)} / ${Number(data.covers_total || 0)}`;
     }
-    parts.push(`Updating cover art: ${Number(data.covers_processed || 0)} / ${Number(data.covers_total || 0)} covers updated`);
+    parts.push(`Updating cover art: ${Number(data.covers_completed ?? data.covers_processed ?? 0)} / ${Number(data.covers_total || 0)} cover searches completed`);
     parts.push(`Downloaded covers: ${Number(data.covers_downloaded || 0)}`);
     if (data.covers_current_folder) {
       parts.push(`Current album folder: ${data.covers_current_folder}`);
@@ -5126,7 +5128,7 @@ function resolveLibraryScanPhaseStates(data = {}) {
   if (['cancelled', 'failed'].includes(outcome)) {
     if (Number(data.scan_total || 0) > 0 || Number(data.scan_processed || 0) > 0) states.discover = 'complete';
     if (Number(data.scan_total || 0) > 0 && Number(data.scan_processed || 0) >= Number(data.scan_total || 0)) states.metadata = 'complete';
-    if (Number(data.covers_total || 0) > 0 && Number(data.covers_processed || 0) >= Number(data.covers_total || 0)) states.covers = 'complete';
+    if (Number(data.covers_total || 0) > 0 && Number(data.covers_completed ?? data.covers_processed ?? 0) >= Number(data.covers_total || 0)) states.covers = 'complete';
     if (Number(data.relations_total || 0) > 0 && Number(data.relations_processed || 0) >= Number(data.relations_total || 0)) states.relations = 'complete';
   }
   return states;
@@ -23924,6 +23926,7 @@ async function fetchUnsuccessfulAlbumCovers() {
     startStatusIndicatorImmediately({
       covers_in_progress: true,
       covers_processed: 0,
+      covers_completed: 0,
       covers_total: 0,
       covers_downloaded: 0,
       covers_current_folder: '',
@@ -23961,6 +23964,7 @@ async function fetchUnsuccessfulAlbumCovers() {
         scan_total: Number(state.status?.scan_total || 0),
         covers_in_progress: false,
         covers_processed: 0,
+        covers_completed: 0,
         covers_total: 0,
         covers_downloaded: 0,
         covers_current_folder: '',
@@ -23974,6 +23978,7 @@ async function fetchUnsuccessfulAlbumCovers() {
       ...state.status,
       covers_in_progress: true,
       covers_processed: 0,
+      covers_completed: 0,
       covers_total: Number(data.queued_count || 0),
       covers_downloaded: 0,
       covers_current_folder: String(data.current_folder || ''),
@@ -41447,6 +41452,7 @@ updateStatusIndicator({
   relations_source: 'local',
   covers_in_progress: Boolean(bootstrap.coversInProgress),
   covers_processed: 0,
+  covers_completed: 0,
   covers_total: 0,
   covers_downloaded: 0,
   last_scan_display: bootstrap.lastScanDisplay || ''

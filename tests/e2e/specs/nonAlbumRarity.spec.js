@@ -590,6 +590,11 @@ test('FTC-NON-ALBUM-014 clears Album durably and refreshes Problematic Files', {
     });
 
     await stepLogger.step('Clear Album and Exception through Problematic Files and refresh the retained source album', async () => {
+      expect((await utilityProblematicFilesActions.readDetectedTrackRows())
+        .map((track) => track.filename).sort()).toEqual([
+        RARITY_TRACK_FILENAME,
+        SIBLING_TRACK_FILENAME,
+      ].sort());
       await utilityProblematicFilesActions.openTagEditor();
       await tagEditorActions.waitForOpen({ expectedTrackCount: 2 });
       await tagEditorActions.selectTrackByFilename(RARITY_TRACK_FILENAME);
@@ -599,15 +604,30 @@ test('FTC-NON-ALBUM-014 clears Album durably and refreshes Problematic Files', {
       await tagEditorActions.applyAndWaitForSavedFiles({
         savedNotificationDelivery: 'status-page',
         beforeSavedNotification: async () => {
-          await utilityProblematicFilesActions.openTagEditor();
-          await tagEditorActions.waitForOpen({ expectedTrackCount: 1 });
-          expect((await tagEditorActions.readSummary()).trackFilenames).toEqual([
+          expect((await utilityProblematicFilesActions.readDetectedTrackRows())
+            .map((track) => track.filename)).toEqual([
             SIBLING_TRACK_FILENAME,
           ]);
-          await tagEditorActions.close();
           await settingsModalAppBarActions.closeSettings({ timeout: 10000 });
         },
       });
+      await settingsModalAppBarActions.openSettings();
+      await utilityProblematicFilesActions.waitForReady({ requirePopulated: true });
+      const sourceItem = await utilityProblematicFilesActions.revealListItemByIdentity({
+        title: RARITY_ALBUM,
+        meta: `${RARITY_ARTIST} · ${RARITY_YEAR}`,
+      });
+      const sourceItems = await utilityProblematicFilesActions.readVisibleListItems();
+      const sourceIndex = sourceItems.findIndex((item) => item.key === sourceItem.key);
+      expect(sourceIndex).toBeGreaterThanOrEqual(0);
+      await utilityProblematicFilesActions.selectListItemByIndex(sourceIndex);
+      await utilityProblematicFilesActions.openTagEditor();
+      await tagEditorActions.waitForOpen({ expectedTrackCount: 1 });
+      expect((await tagEditorActions.readSummary()).trackFilenames).toEqual([
+        SIBLING_TRACK_FILENAME,
+      ]);
+      await tagEditorActions.close();
+      await settingsModalAppBarActions.closeSettings({ timeout: 10000 });
     });
 
     await stepLogger.step('Persist a blank physical Album tag and expose that blank when reopened', async () => {

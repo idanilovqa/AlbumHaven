@@ -968,51 +968,72 @@ def test_postgres_cover_selection_accepts_full_album_update_from_partial_track_m
 
 
 @pytest.mark.parametrize(
-    ("album_rows_updated", "track_file_rows_updated"),
-    [(0, 0), (1, 1), (2, 2)],
+    "counts",
+    [
+        pytest.param((2, 2, 1, 2, 0, 0), id="no-updates"),
+        pytest.param((2, 2, 1, 2, 1, 1), id="partial-file-update"),
+        pytest.param((2, 2, 1, 2, 2, 2), id="multiple-album-updates"),
+        pytest.param((1, 1, 1, 2, 1, 2), id="input-path-count"),
+        pytest.param((2, 1, 1, 2, 1, 2), id="resolved-path-count"),
+        pytest.param((2, 2, 0, 2, 1, 2), id="selected-album-count"),
+        pytest.param((2, 2, 1, 2, 0, 2), id="album-rows-updated"),
+        pytest.param((2, 2, 1, 1, 1, 1), id="album-track-file-count"),
+        pytest.param((2, 2, 1, 2, 1, 0), id="track-file-rows-updated"),
+    ],
 )
-def test_postgres_cover_selection_count_mismatch_raises_inside_transaction_context(
+@pytest.mark.parametrize("linked_remote", [False, True], ids=["local", "remote"])
+def test_postgres_cover_selection_guard_failure_reports_safe_counts(
     monkeypatch,
-    album_rows_updated,
-    track_file_rows_updated,
+    counts,
+    linked_remote,
 ):
     from music_app.services import scan_cache_persistence
     from music_app.services.scan_cache_persistence import PostgresScanCacheAdapter
+
+    result_counts = dict(zip((
+        "input_path_count", "resolved_path_count", "selected_album_count",
+        "album_track_file_count", "album_rows_updated", "track_file_rows_updated",
+    ), counts, strict=True))
 
     class MismatchConnection(FakeConnection):
         def execute(self, sql, params=None):
             cursor = super().execute(sql, params)
             if "updated_albums" in _normalized_sql(sql):
-                return FakeCursor(
-                    [{
-                        "input_path_count": 2,
-                        "resolved_path_count": 2,
-                        "selected_album_count": 1,
-                        "album_track_file_count": 2,
-                        "album_rows_updated": album_rows_updated,
-                        "track_file_rows_updated": track_file_rows_updated,
-                    }]
-                )
+                return FakeCursor([result_counts])
             return cursor
 
     monkeypatch.setattr(scan_cache_persistence, "Jsonb", None)
     connection = MismatchConnection()
+    database_url = "postgresql://private-user:private-password@example/private-library"
+    track_paths = {"C:/Private Music/one.mp3", "C:/Private Music/two.mp3"}
+    cover_path = Path("C:/Private Music/cover.jpg")
+    remote_url = "https://private.example/cover.jpg?token=private-token"
+    cover_revision = "private-cover-hash"
     adapter = PostgresScanCacheAdapter(
-        {"ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://example"},
+        {"ALBUM_HAVEN_APP_DATABASE_URL": database_url},
         connect=lambda _url: connection,
     )
 
     with pytest.raises(
         RuntimeError,
         match="complete selected album inventory",
-    ):
+    ) as raised:
         adapter.persist_cover_selection(
-            track_paths={"C:/Generated/Album/one.mp3", "C:/Generated/Album/two.mp3"},
-            selected_cover_path=Path("C:/Generated/Album/cover.jpg"),
-            cover_revision="revision-123",
+            track_paths=track_paths,
+            selected_cover_path=None if linked_remote else cover_path,
+            remote_cover_url=remote_url if linked_remote else None,
+            cover_revision=cover_revision,
+            commit_guard=lambda _commit: pytest.fail("Failed inventory must not commit"),
         )
 
     assert connection.exit_exc_type is RuntimeError
+    assert connection.commit_calls == 0
+    message = str(raised.value)
+    for private_value in (*track_paths, str(cover_path), remote_url, cover_revision, database_url,
+                          "private-user", "private-password", "private-token"):
+        assert private_value not in message
+    for name, value in {"expected_path_count": len(track_paths), **result_counts}.items():
+        assert re.search(rf"\b{re.escape(name)}={value}\b", message), message
 
 
 def test_cover_selection_success_cannot_be_overwritten_by_an_already_started_scan_publication(

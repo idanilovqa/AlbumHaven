@@ -1797,6 +1797,7 @@ export class GalleryActions {
       return {
         settled: !snapshot.busy && !snapshot.activeLoader && !snapshot.pendingViewTransition
           && !snapshot.startupHydrating && snapshot.canonicalApplied
+          && snapshot.canonicalScopeComplete === true
           && snapshot.inputQuery === snapshot.expectedQuery
           && snapshot.locationQuery === snapshot.expectedQuery,
         canonicalMatch: snapshot.canonicalMatch,

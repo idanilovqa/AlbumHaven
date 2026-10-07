@@ -696,6 +696,13 @@ class PostgresScanCacheAdapter:
             ):
                 raise RuntimeError(
                     "Targeted cover persistence did not update the complete selected album inventory."
+                    f" expected_path_count={len(normalized_track_paths)}"
+                    f" input_path_count={input_path_count}"
+                    f" resolved_path_count={resolved_path_count}"
+                    f" selected_album_count={selected_album_count}"
+                    f" album_track_file_count={album_track_file_count}"
+                    f" album_rows_updated={album_rows_updated}"
+                    f" track_file_rows_updated={track_file_rows_updated}"
                 )
             if commit_guard is not None:
                 commit_guard(connection.commit)

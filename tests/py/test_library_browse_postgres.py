@@ -1491,7 +1491,10 @@ def test_postgres_library_browse_builds_root_album_browse_payload_from_rows(all_
     assert "artists" not in broadcast_album
     assert "release_date" not in broadcast_album
     assert broadcast_album["edition"] is None
-    assert "root_provenance" not in broadcast_album
+    assert broadcast_album["root_provenance"] == {
+        "primary_category": "main_library",
+        "categories": ["main_library", "new_arrivals"],
+    }
     assert "total_duration_seconds" not in broadcast_album
     assert "tracks" not in broadcast_album
     assert "open_directory_paths" not in broadcast_album
@@ -9505,6 +9508,71 @@ def _semantic_problematic_release_rows(
     return rows
 
 
+def test_album_details_preserve_persisted_base_and_year_split_identities(monkeypatch):
+    from music_app.services.library_browse_postgres import PostgresLibraryBrowseRepository
+
+    base = "product artist::studio records"
+    split = f"{base}::year::2014"
+    base_rows = _semantic_problematic_release_rows(
+        list(range(1, 18)), album_id=501, album_key=base,
+        year=2004, separate_release_keys=[base],
+    )
+    split_rows = _semantic_problematic_release_rows(
+        [18], album_id=502, album_key=split,
+        year=2014, separate_release_keys=[base],
+    )
+    repository = PostgresLibraryBrowseRepository({})
+    loaded = []
+
+    def load_rows(key):
+        loaded.append(key)
+        return {base: base_rows, split: split_rows}.get(key, [])
+
+    monkeypatch.setattr(repository, "_load_missing_album_rows", lambda **_kwargs: [])
+    monkeypatch.setattr(repository, "_load_album_detail_rows", load_rows)
+    monkeypatch.setattr(repository, "_attach_duplicate_sources", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(repository, "_apply_private_album_rating_overlays", lambda *_args, **_kwargs: None)
+
+    for key, album_id, rows in [(base, 501, base_rows), (split, 502, split_rows)]:
+        loaded.clear()
+        payload = repository.build_album_detail_payload(key)
+        assert payload is not None, "every persisted gallery identity must open its own album details"
+        assert loaded == [key], "a durable year-suffixed identity must be resolved before legacy fallback"
+        assert payload["key"] == key
+        assert payload["album_id"] == album_id
+        assert payload["track_count_preview"] == len(rows)
+        assert {track["path"] for track in payload["track_rows"]} == {
+            row["file_private_path"] for row in rows
+        }
+
+
+def test_album_details_keep_legacy_virtual_year_resolution_isolated(monkeypatch):
+    from music_app.services.library_browse_postgres import PostgresLibraryBrowseRepository
+
+    base = "product artist::studio records"
+    older = _semantic_problematic_release_rows(
+        [1, 2], album_id=501, album_key=base,
+        year=2004, separate_release_keys=[base],
+    )
+    newer = _semantic_problematic_release_rows(
+        [3], album_id=501, album_key=base,
+        year=2014, separate_release_keys=[base],
+    )
+    repository = PostgresLibraryBrowseRepository({})
+    monkeypatch.setattr(repository, "_load_missing_album_rows", lambda **_kwargs: [])
+    monkeypatch.setattr(repository, "_load_album_detail_rows", lambda key: older + newer if key == base else [])
+    monkeypatch.setattr(repository, "_attach_duplicate_sources", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(repository, "_apply_private_album_rating_overlays", lambda *_args, **_kwargs: None)
+
+    payload = repository.build_album_detail_payload(f"{base}::year::2014")
+    assert payload is not None
+    assert payload["key"] == f"{base}::year::2014"
+    assert payload["track_count_preview"] == 1
+    assert [track["path"] for track in payload["track_rows"]] == [newer[0]["file_private_path"]]
+    assert repository.build_album_detail_payload(f"{base}::year::2015") is None
+    assert repository.build_album_detail_payload(base) is None, "an ambiguous virtual base cannot select the first year"
+
+
 def test_problematic_projection_keeps_explicit_separate_release_years_distinct():
     from music_app.services.library_browse_postgres import (
         _problematic_album_projection_payloads,
@@ -11788,6 +11856,45 @@ def test_private_album_rating_overlay_keeps_gallery_summary_in_sync():
         album["gallery_list_block"]["summary"]["album_preference"]
         is not album["album_preference"]
     )
+
+
+@pytest.mark.parametrize("categories", [("hoard",), ("new_arrivals",), ("hoard", "new_arrivals")])
+def test_root_album_browse_nonduplicate_retains_source_provenance(categories):
+    from music_app.services.library_browse_postgres import (
+        _duplicate_provenance_for_projected_album,
+        _root_album_browse_album_payloads,
+    )
+    from music_app.services.library_roots import (
+        build_root_provenance_payload,
+        summarize_root_provenance_payloads,
+    )
+
+    provenance = summarize_root_provenance_payloads([
+        build_root_provenance_payload(f"root-{category}", category)
+        for category in categories
+    ])
+    row = _browse_album_row(
+        artist="Source Artist", album_id=104, album_key="source-album",
+        title="Source Album",
+    )
+    row["album_metadata"] = {
+        **dict(row["album_metadata"]),
+        "root_provenance": provenance,
+        "library_root_category": provenance["primary_category"],
+    }
+
+    album = _root_album_browse_album_payloads([row], "Source Artist")[0]
+
+    assert album.get("root_provenance") == provenance
+    assert album.get("library_root_category") == provenance["primary_category"]
+    # Nonduplicate enrichment has only per-year provenance; the ordinary card
+    # must retain its persisted summary without borrowing another year's roots.
+    assert _duplicate_provenance_for_projected_album(album, {
+        "duplicate_sources": [],
+        "_root_provenance_by_year": {1999: {"categories": ["main_library"]}},
+    }) == provenance
+    assert "tracks" not in album
+    assert "open_directory_paths" not in album
 
 
 def test_root_album_browse_payload_deduplicates_repeated_composite_album_artist_credit():

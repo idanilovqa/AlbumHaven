@@ -29,6 +29,7 @@ test('bootstrap init prepares streaming and observes preparation rejection witho
   const preparationFailure = new Error('worklet preparation rejected');
   const observedErrors = [];
   let initialLoaderState = null;
+  let initialStatus = null;
   const context = {
     window: {
       location: { href: 'http://localhost:5000/' },
@@ -91,7 +92,7 @@ test('bootstrap init prepares streaming and observes preparation rejection witho
       markInitialRender() {},
     },
     renderView() {},
-    updateStatusIndicator() {},
+    updateStatusIndicator(data) { initialStatus = data; },
     renderLibraryLoader(data) {
       initialLoaderState = data;
     },
@@ -166,6 +167,7 @@ test('bootstrap init prepares streaming and observes preparation rejection witho
   await new Promise((resolve) => setImmediate(resolve));
 
   assert.equal(calls.initPlaybackOwnershipCoordinator, 1);
+  assert.equal(initialStatus.covers_completed, 0);
   assert.equal(calls.prepareStreamingPlaybackEngine, 1);
   assert.equal(observedErrors.length, 1);
   assert.equal(observedErrors[0].includes(preparationFailure), true);

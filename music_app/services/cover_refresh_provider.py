@@ -1133,14 +1133,12 @@ def ensure_best_cover_for_folder(
     if not raw_bytes:
         detail["reason"] = "candidate_download_failed"
         detail["elapsed_ms"] = round((time.perf_counter() - fetch_started_at) * 1000, 2)
-        cache.set(cache_key, {"updated_at": now, "missing": True})
         return local_cover, False, detail
 
     decoded = decode_image_func(raw_bytes)
     if decoded is None:
         detail["reason"] = "candidate_decode_failed"
         detail["elapsed_ms"] = round((time.perf_counter() - fetch_started_at) * 1000, 2)
-        cache.set(cache_key, {"updated_at": now, "missing": True})
         return local_cover, False, detail
 
     img, width, height = decoded

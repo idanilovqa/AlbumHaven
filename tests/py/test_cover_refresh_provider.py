@@ -692,6 +692,77 @@ def test_timed_out_automatic_lookup_is_not_negative_cached(tmp_path):
     assert cache.get(detail["cache_key"]) is None
 
 
+@pytest.mark.parametrize("failure_reason", ["candidate_download_failed", "candidate_decode_failed"])
+@pytest.mark.parametrize("expired_negative", [False, True])
+@pytest.mark.parametrize("user_cover", [False, True])
+def test_candidate_transfer_failure_keeps_normal_search_retryable(
+    tmp_path, failure_reason, expired_negative, user_cover,
+):
+    from music_app.services.cover_provider_cache import cover_query_key
+
+    folder = tmp_path / "Artist" / "Album"
+    folder.mkdir(parents=True)
+    selected_cover = folder / "cover.png" if user_cover else None
+    if selected_cover:
+        image = pytest.importorskip("PIL.Image")
+        image.new("RGB", (300, 300), "blue").save(selected_cover)
+    original_artwork = selected_cover.read_bytes() if selected_cover else None
+    cache = CoverSearchCache(tmp_path / "lookup.json")
+    cache_key = cover_query_key("Artist", "Album", None, 2001)
+    baseline = {"updated_at": 1.0, "missing": True} if expired_negative else None
+    if baseline:
+        cache.set(cache_key, baseline)
+    searches = []
+    downloads = []
+    candidate = CoverCandidate(source="apple", url="https://images.example/cover.png",
+                               width=1600, height=1600, score=0.99)
+
+    def search(*_args, **_kwargs):
+        searches.append(True)
+        return (candidate if len(searches) == 1 else None), [
+            {"resolver": "_search_apple", "status": "matched" if len(searches) == 1 else "no_candidate"},
+        ]
+
+    def download(*_args, **_kwargs):
+        downloads.append(True)
+        return None if failure_reason == "candidate_download_failed" else b"invalid-image"
+
+    def lookup():
+        return cover_refresh_provider.ensure_best_cover_for_folder(
+            folder, "Artist", "Album", None, 2001, {".png"}, cache, "AlbumHavenTests/1.0",
+            negative_cache_ttl_seconds=60,
+            cover_selection_origin="user" if user_cover else "automatic",
+            reject_if_user_controlled=user_cover,
+            selected_cover_path=str(selected_cover) if selected_cover else None,
+            search_remote_cover_func=search, http_get_bytes_func=download,
+            decode_image_func=lambda _raw: None,
+            write_cover_func=lambda *_args, **_kwargs: pytest.fail("Failed candidate must not replace artwork"),
+            automatic_write_guard=lambda *_args, **_kwargs: pytest.fail("Failed candidate must not promote a selection"),
+        )
+
+    selected, downloaded, detail = lookup()
+    assert (selected, downloaded) == (selected_cover, False)
+    assert detail["reason"] == failure_reason
+    assert searches == [True] and downloads == [True]
+    assert cache.get(cache_key) == baseline
+    selected, downloaded, detail = lookup()
+    assert (selected, downloaded) == (selected_cover, False)
+    assert detail["reason"] == "remote_search_returned_no_candidate"
+    assert searches == [True, True] and downloads == [True]
+    genuine_negative = cache.get(cache_key)
+    assert genuine_negative["missing"] is True
+    assert genuine_negative["updated_at"] > 1.0
+    selected, downloaded, detail = lookup()
+    assert (selected, downloaded) == (selected_cover, False)
+    assert detail["reason"] == "negative_cache_ttl_active"
+    assert searches == [True, True] and downloads == [True]
+    assert cache.get(cache_key) == genuine_negative
+    if selected_cover:
+        assert selected_cover.read_bytes() == original_artwork
+    else:
+        assert list(folder.iterdir()) == []
+
+
 def test_failed_automatic_lookup_is_not_negative_cached(tmp_path):
     folder = tmp_path / "Artist" / "Album"
     folder.mkdir(parents=True)

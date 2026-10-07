@@ -106,7 +106,7 @@ function buildLoaderStatusLines(data, options = {}) {
 function buildCoverProgressDetail(data, currentAlbum = '') {
   if (data.status_connection_lost) return 'Progress unavailable — reconnecting. Last reported counts may be outdated.';
   const total = Number(data.covers_total);
-  const processed = Number(data.covers_processed);
+  const processed = Number(data.covers_completed ?? data.covers_processed);
   const known = Number.isFinite(total) && total > 0 && Number.isFinite(processed) && processed >= 0;
   const parts = [data.covers_phase === 'preparing' ? 'Preparing cover search' : known
     ? `${processed} of ${total} albums checked (${Math.min(100, Math.round(processed / total * 100))}%)`

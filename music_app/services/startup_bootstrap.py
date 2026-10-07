@@ -102,6 +102,7 @@ def _build_initial_album_preview(album: dict[str, object], *, public_safe: bool 
     )
     cover_path = str(source_album.get("cover_path") or "").strip()
     cover_preview_url = build_startup_cover_url(source_album) if cover_path else ""
+    root_provenance = source_album.get("root_provenance")
     return {
         "key": source_album.get("key"),
         **build_album_page_seam(source_album.get("key")),
@@ -122,6 +123,8 @@ def _build_initial_album_preview(album: dict[str, object], *, public_safe: bool 
         "year": source_album.get("year"),
         "release_date": source_album.get("release_date"),
         "edition": source_album.get("edition"),
+        "root_provenance": dict(root_provenance) if isinstance(root_provenance, dict) else {},
+        "library_root_category": source_album.get("library_root_category"),
         "album_rating": source_album.get("album_rating"),
         "album_preference": source_album.get("album_preference"),
         "top_viewer_overlay": source_album.get("top_viewer_overlay"),

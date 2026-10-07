@@ -96,3 +96,44 @@ def test_cancellation_is_not_completion():
     assert cancel_cover_refresh(lambda: state)
     assert state["covers_outcome"] == "cancelled"
     assert state["covers_processed"] == 3
+
+
+def test_cover_progress_eta_uses_completed_results_not_queue_position():
+    status = build_cover_progress_status({
+        "covers_in_progress": True,
+        "covers_started_monotonic": 100.0,
+        "covers_execution_started_monotonic": 160.0,
+        "covers_processed": 100,
+        "covers_completed": 25,
+        "covers_total": 100,
+    }, now=280.0)
+    assert status["covers_estimated_remaining_seconds"] == 360.0
+
+
+def test_cover_progress_has_no_eta_before_first_completed_result():
+    status = build_cover_progress_status({
+        "covers_in_progress": True,
+        "covers_execution_started_monotonic": 160.0,
+        "covers_processed": 1,
+        "covers_completed": 0,
+        "covers_total": 100,
+    }, now=280.0)
+    assert status["covers_estimated_remaining_seconds"] is None
+
+
+def test_new_cover_run_resets_completed_results():
+    state = {"covers_processed": 10, "covers_completed": 7, "covers_total": 10}
+    _reset_cover_refresh_progress(state, in_progress=True)
+    assert state["covers_completed"] == 0
+
+
+@pytest.mark.parametrize("fails", [False, True])
+def test_terminal_failure_or_cancellation_preserves_completed_results(fails):
+    state = {"covers_in_progress": True, "cover_generation": 1,
+             "covers_processed": 10, "covers_completed": 3, "covers_total": 10}
+    if fails:
+        _handle_cover_refresh_failure(state, RuntimeError("failed"))
+    else:
+        assert cancel_cover_refresh(lambda: state)
+    assert state["covers_completed"] == 3
+    assert state["covers_processed"] == 10

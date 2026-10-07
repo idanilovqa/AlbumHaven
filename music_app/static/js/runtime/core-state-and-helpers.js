@@ -566,7 +566,7 @@ function resolveLibraryScanPhaseStates(data = {}) {
   if (['cancelled', 'failed'].includes(outcome)) {
     if (Number(data.scan_total || 0) > 0 || Number(data.scan_processed || 0) > 0) states.discover = 'complete';
     if (Number(data.scan_total || 0) > 0 && Number(data.scan_processed || 0) >= Number(data.scan_total || 0)) states.metadata = 'complete';
-    if (Number(data.covers_total || 0) > 0 && Number(data.covers_processed || 0) >= Number(data.covers_total || 0)) states.covers = 'complete';
+    if (Number(data.covers_total || 0) > 0 && Number(data.covers_completed ?? data.covers_processed ?? 0) >= Number(data.covers_total || 0)) states.covers = 'complete';
     if (Number(data.relations_total || 0) > 0 && Number(data.relations_processed || 0) >= Number(data.relations_total || 0)) states.relations = 'complete';
   }
   return states;

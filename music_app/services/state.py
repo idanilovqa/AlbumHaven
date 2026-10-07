@@ -236,6 +236,7 @@ def init_state(app) -> None:
         "hydrate_in_progress": False,
         "covers_in_progress": False,
         "covers_processed": 0,
+        "covers_completed": 0,
         "covers_total": 0,
         "covers_downloaded": 0,
         "covers_current_folder": "",

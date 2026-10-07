@@ -355,6 +355,57 @@ no tests; the corrected existing-file command supplied the evidence above.
 Only the two implementation checkboxes are complete; no numeric progress counter
 exists. Operational audit and retry remain pending, recorded in private OPERATION.md.
 
+## October 6 current-status reconciliation
+
+This checkpoint supersedes earlier operational statements that no retry or
+deployment had occurred. The historical evidence and unchecked gates above remain
+unchanged. The October 5 retry ended with `worker_failed` and a `RuntimeError`:
+235 recorded search/download results, including 61 downloads. The last progress
+snapshot contained 232 results; queue position 664 does not measure completion.
+The executor did not finish its selected queue, and no fresh retry has started.
+
+The bounded read-only audit checked current database targets for those 235
+results, including six multi-album targets, and decoded all 61 downloaded images
+without failure. One apparent mismatch came from a two-disc album selecting its
+second downloaded image album-wide. The album-scoped follow-up found no membership,
+staleness, path or revision mismatch; scan-validation path differences invalidate
+cache reuse without overriding the canonical selection. Lookup inspection covered
+11,513 entries, including 1,681 negative entries. These checks establish scoped
+current-state consistency and readable media. They do not establish historical
+write attribution, final persistence for the original pass, or queue completion.
+
+Source repairs now reject recovery across known distinct album IDs and log safe
+stage/counter diagnostics before propagating genuine persistence errors. Focused
+recovery verification passed 33 cases. The historical failure's exact guard
+predicate remains unattributed; current consistency does not prove its cause.
+
+The operator closed the terminal maintenance service and deployed the feature
+worktree with uncommitted repairs to sandbox3 for shared browsing. No cover pass
+is active. Local and public login checks returned the expected page, and
+unauthenticated bootstrap checks returned 401. Authenticated gallery/search and
+owner manual acceptance remain open. Production remains unchanged. This sandbox
+handoff is a manual-test deployment, not a verified release or production promotion.
+
+Counter regressions now specify additive `covers_completed`: one accepted terminal
+result per selected physical-folder job, including download, failure and skip.
+Deferred first attempts count zero; final settlement counts once. The denominator
+remains selected jobs, while legacy `covers_processed` retains queue-position
+semantics. Python and JavaScript tests cover explicit zero, legacy fallback,
+out-of-order results and stale ownership. The earlier syntax-only checkpoint is
+historical: implementation and focused RED/GREEN verification are complete,
+including the background cover-generation guard and completed-search tooltip.
+This counter measures accepted terminal search results, not durable persistence.
+Browsing-enabled maintenance composition remains unimplemented; its prospective
+safety tests are unrun, and composition approval and fresh-retry gates remain open.
+
+Before another pass, record its exact authorized selection and recheck exclusive
+writer ownership against current services, canonical selections and manual-cover
+protection. Normal unsuccessful-cover selection is not the historical diagnostic
+allowlist. Complete the remaining focused repairs and review, then require the
+full native CI pipeline and applicable E2E/manual gates. Root-gallery performance
+still fails its unchanged acceptance ceiling. No completion checkmark, release
+authorization or fresh operational retry follows from this reconciliation.
+
 ## Approved cross-instance writer ownership (October 6)
 
 The owner approved shared production Postgres/media across branch hostnames,
@@ -438,3 +489,181 @@ additional test execution occurred. This closes COORD-F1/F2 only. COORD-F3's
 required full native CI and separate merge/publish checkpoint remain open; there
 was no new commit or push during focused verification. The foundation remains unused, and every COORD-I
 integration, acceptance, rollout and activation gate remains open.
+
+### COORD-I: complete writer integration and safe activation
+
+Outcome: one accepted operation owns all of its media/catalog mutations while
+other instances continue browsing. Depends on COORD-F and the complete writer
+inventory below. This vertical slice must not expose a partially protected path.
+
+- [ ] COORD-I1: Acquire before snapshot preparation or file effects in scan
+  admission, cover refresh/lookup, cover selection/fetch/delete/link, tag edits,
+  structural moves/repairs, root import/change/removal and catalog mutations.
+  Trace shared services as well as routes; keep existing permission checks.
+- [ ] COORD-I2: Cover startup tag-intent recovery, legacy exclusion migration,
+  relation-projection readiness/rebuild, automatic/cold scans, watcher and targeted
+  reconciliation. Defer background work while busy; do not drop required repairs.
+- [ ] COORD-I3: Carry the same token through executor children and scan-to-cover
+  followups. Release only after all workers and commit/rollback finish. A local
+  cancellation flag, HTTP completion or `shutdown(wait=False)` is insufficient.
+  Reject competing writes as busy without blocking read-only browsing.
+- [ ] COORD-I4: Preserve publication transaction locks, generation checks and
+  local folder guards. Never hold the inventory-publication advisory key on an
+  owner connection while a child connection needs that same key.
+- [ ] COORD-I5: Prove crash recovery against exact host/PID/start identity and all
+  owned descendants. Heartbeats are diagnostic only. If death/quiescence cannot
+  be proved, keep the record active. Reconcile filesystem/tag intents before an
+  operator-authorized token-conditional release; do not expose blanket unlock.
+- [ ] COORD-I6: Test two instances, startup/background writers, chained workers,
+  disconnect, cancellation with surviving children, crash recovery and browsing
+  during contention. Complete owner manual acceptance and applicable E2E gates.
+- [ ] COORD-I7: Release coordinated production through normal review/full CI/
+  merge/publish/deployment verification before enabling sandbox writers. Verify
+  older branches are browse-only with startup/background writes suppressed.
+  Reconcile deployment-runbook shared-browse guidance with this approved model.
+- [ ] COORD-I8: Verify the published build and current service ownership, then
+  separately record the exact authorized retry selection and manual-cover guards.
+
+Old production does not participate in this protocol. Installing the foundation
+or protecting only sandbox routes cannot exclude its background writers. During
+rollback, disable new writer admission and prove the current operation quiescent
+before restoring an uncoordinated build; keep other shared writers disabled.
+Retain active rows on uncertainty. No foundation checkpoint authorizes production
+promotion, cross-instance media writes or a fresh cover pass. No existing
+operational checkbox is closed by this design; this plan has no numeric counter.
+
+### COORD-I lifecycle intake: source inspection only (October 6)
+
+Read-only lifecycle intake is complete for the release conditions below. This is
+source-inspection evidence, not implemented coordination or verified runtime
+safety. Existing COORD-I acceptance and rollout gates remain open.
+
+A finished Future is not sufficient release evidence: save-task finalizers and
+cover workers can catch failures and return normally. Integration must distinguish
+worker settlement from durable operation success. Release only after every
+accepted child has settled and persistence/publication is confirmed, or required
+compensation is proven complete. HTTP completion, cancellation flags and
+`runtime_shutdown` using `shutdown(wait=False)` do not establish settlement.
+
+Carry the same ownership token through scan-to-cover followups, save-task
+finalizers, the move executor and targeted reconciliation. The parent remains
+responsible for all accepted descendants; a child must not independently release
+the operation's slot merely because its own Future finished.
+
+Retain ownership on lost commit acknowledgement, uncertain rollback, journal
+failure, partial filesystem mutation, outstanding children or publication
+failure. These states require outcome reconciliation and the approved explicit
+recovery process, not automatic takeover or unconditional release in a completion
+callback. Preserve existing transaction, generation and filesystem guards.
+
+No implementation, tests, database/media operations or service changes were
+performed for this intake. It does not authorize activation, production rollout,
+a fresh cover pass or closure of any checklist item.
+
+### COORD-I cover admission map (October 6, implementation pending)
+
+Source inspection identifies the following boundaries for COORD-I1/I3. The
+implementation must protect service callers as well as authenticated routes.
+
+| Entry | Existing service boundary | Required ownership handoff |
+| --- | --- | --- |
+| Bulk UI `/utilities/fetch-covers-unsuccessful` in `api_wave_d_asgi_routes.py` | `cover_refresh_runtime.start_manual_cover_refresh_request` / `start_manual_cover_refresh` | Claim before snapshot preparation; carry ownership with the prepared context and submitted worker. |
+| Single-album UI `/utilities/fetch-cover` | `state.refresh_cover_artwork_for_track_paths_for_state` / `cover_refresh_runtime.refresh_cover_artwork_for_track_paths_request` | Apply the same claim before planning or file effects. |
+| Background cover work | `cover_refresh_runtime.start_background_cover_refresh_request` / `start_background_cover_refresh` | Inherit an existing scan token or claim before accepting work. |
+| Direct refresh callers | `cover_refresh_runtime.refresh_cover_artwork_request` / `refresh_unsuccessful_cover_artwork_request` | Require the ownership context even without an HTTP request. |
+| Scan-to-cover followup | `state.refresh_library_for_state` and `scan_state.refresh_library_state` callbacks | Retain the scan token through queued cover work; do not release and reacquire between phases. |
+
+Current admission functions discard submitted Futures. The background/manual
+worker wrappers catch exceptions and update status, so a successful Future alone
+cannot authorize release. Track accepted work and propagate its durable result.
+Release with the matching token only after child settlement, required provider
+outcome persistence, cache/publication commit, and proven recovery or rollback.
+Cancellation currently changes a local generation; it must not release ownership
+while accepted children remain. Preparation or submission rejection permits
+release only after proving that no accepted work or uncertain effect remains.
+Retain the active row after uncertain commits or incomplete compensation.
+
+Focused acceptance must cover two-instance contention; direct, single, bulk and
+background entrypoints; scan-to-cover continuity; preparation/submission failure;
+empty queues and persisted no-candidate success; accepted-child persistence
+failure; cancellation/disconnect with surviving children; wrong-token release;
+uncertain commit retention; and browsing during contention. Extend the existing
+state, cover-runtime/API and ownership-repository tests. These are pending cases,
+not executed safety evidence.
+
+Cover wiring alone cannot activate shared writes. Other cover mutation routes
+(`local-select`, `local-delete`, `pasted-image-save`, `save-remote`, `add-remote`),
+lookup workers, tags, moves, repairs, roots, catalog changes, watcher work,
+startup recovery, scans and relation rebuilds remain in the COORD-I inventory.
+Keep `SHARED_LIBRARY_BROWSE_ONLY` protections until that inventory, coordinated
+production rollout and compatibility checks pass. This intake changes no
+permission model, deployment state, rollback rule or COORD checklist status.
+
+Manual Move design belongs to the private
+`docs/future-feature-plans/library-roots-and-arrivals-plan.md` and the app's
+`docs/superpowers/plans/2026-09-23-multi-root-libraries.md`. Those plans record the
+owner-only frontend/server restriction and right-click entry. This cover intake
+does not implement Move or waive its design, mockup and acceptance gates.
+
+
+## October 6 accepted-outcome drain and mixed-folder verification
+
+This checkpoint supersedes the earlier bare-raise and unrun accepted-result
+notes for these scoped repairs. The executor now retains the first mandatory
+provider-outcome persistence exception, attempts persistence for accepted parallel
+and deferred results, stops new sequential admission and deferred provider retries,
+and raises before final cache/publication completion. Drain-only handling avoids
+new selection recovery. Candidate snapshots retain their best-effort contract.
+
+Mixed physical folders with multiple positive canonical album IDs now receive one
+explicit `mixed_album_folder` terminal result before candidate initialization or
+provider dispatch. Their existing artwork and track selections remain unchanged.
+A review found that the local rejection also set the run-wide publication-conflict
+flag, suppressing valid clearing for an unrelated album. The failing regression
+proved that missing snapshot; the repair separates local rejection from genuine
+concurrent-selection conflicts without relaxing the existing publication guards.
+
+Retained evidence under `C:/temp/pr22-local-1855858`:
+
+- `cover-outcome-settlement-red-v2`: 3 failed, 2 passed; accepted sibling outcome
+  attempts were missing. The drain repair then passed all 5 selected cases.
+- `cover-mixed-folder-red-v1`: 1 failed, 1 passed; mixed identity reached the
+  provider. `cover-mixed-folder-green-v1`: both cases passed after the guard.
+- `cover-mixed-folder-related-red-v1`: 8 passed, 1 failed at independent snapshot
+  publication. `cover-mixed-folder-related-green-v1`: 9 passed in 2.43 seconds.
+- `cover-outcome-settlement-green-v4`: all 5 provider-settlement cases passed
+  against the combined source in 2.81 seconds, 134 deselected.
+
+Each prefix retains stdout, stderr and native exit evidence. The root verified
+expected RED exit 1, GREEN exit 0, stderr and exact owned-process cleanup. Drain
+review pass 1 found no finding; author/root review found the cross-job issue above
+and required its RED/fix/GREEN cycle. The combined independent pass 2 found no
+remaining validated finding. These scoped results do not establish whole-branch
+acceptance.
+
+Failure statistics and outer worker-wrapper propagation still need reconciliation;
+finished Futures alone do not prove durable success. COORD integration/activation,
+verified operational retry, deployment of these repairs, owner manual acceptance,
+remaining CI repairs and the full pipeline remain open. No tests, source changes,
+service/database/media actions, push or cover pass occurred while recording this
+checkpoint.
+
+## October 6 owner-requested checkpoint and pause
+
+The owner requested committing pending work and pausing. This is an unfinished
+checkpoint, not a verified release. Retained focused evidence records observer
+83/83 GREEN and cover outcome reporting 7/7 GREEN, with native exit 0 and owned
+process cleanup. Subsequent wrapper propagation tests produced 13 failures and
+3 passes before the source repair. Original-exception propagation and identity,
+cover-generation and scan-generation guards are implemented but not yet verified.
+
+Independent review identified the background check/write locking gap. Three new
+lock regressions are authored but unrun; lock wiring is NOT implemented. The
+19-case wrapper selection remains pending. No further tests were run for this
+checkpoint. Preserve these failing/unverified states when resuming; do not claim
+the wrapper or whole-operation lifecycle complete.
+
+The unchanged native family E2E rerun, full CI, deployment of current repairs,
+owner acceptance, authorized cover retry, and all COORD integration/activation
+gates remain open. No push, deployment, new cover pass, or gate waiver accompanies
+this checkpoint commit.

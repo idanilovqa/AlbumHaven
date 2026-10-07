@@ -449,6 +449,7 @@ def _build_status_payload_from_state(library_state: dict[str, object]) -> dict[s
         },
         "covers_in_progress": bool(library_state.get("covers_in_progress")),
         "covers_processed": int(library_state.get("covers_processed") or 0),
+        "covers_completed": int(library_state.get("covers_completed", library_state.get("covers_processed")) or 0),
         "covers_total": int(library_state.get("covers_total") or 0),
         "covers_downloaded": int(library_state.get("covers_downloaded") or 0),
         "covers_current_folder": library_state.get("covers_current_folder") or "",

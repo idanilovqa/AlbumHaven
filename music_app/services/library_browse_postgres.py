@@ -1029,7 +1029,12 @@ class PostgresLibraryBrowseRepository:
         )
         if missing_albums:
             return _missing_album_detail_payload(missing_albums[0])
-        rows = self._load_album_detail_rows(re.sub(r"::year::\d{4}$", "", normalized_album_key))
+        rows = self._load_album_detail_rows(normalized_album_key)
+        has_persisted_identity = bool(rows)
+        if not rows:
+            base_album_key = re.sub(r"::year::\d{4}$", "", normalized_album_key)
+            if base_album_key != normalized_album_key:
+                rows = self._load_album_detail_rows(base_album_key)
         if not rows:
             return None
         first_row_payload = _row_mapping(rows[0])
@@ -1040,6 +1045,11 @@ class PostgresLibraryBrowseRepository:
             or ""
         ).strip()
         albums = _selected_artist_album_payloads(rows, artist_display)
+        if has_persisted_identity and len(albums) == 1:
+            # A single persisted release keeps the identity advertised by the gallery.
+            # Multiple virtual years still require an exact projected-key match.
+            albums[0]["key"] = normalized_album_key
+            albums[0]["album_ref"] = normalized_album_key
         detail_album = next(
             (
                 album
@@ -5590,6 +5600,8 @@ def _root_album_browse_album_payloads(
             ),
             "year": row_payload.get("album_release_year"),
             "edition": metadata.get("edition"),
+            "root_provenance": dict(_row_json_mapping(metadata.get("root_provenance"))),
+            "library_root_category": metadata.get("library_root_category"),
             "track_count_preview": _coerce_int(row_payload.get("track_count")),
             "total_duration_display": format_duration(duration_seconds),
             "preview_only": True,

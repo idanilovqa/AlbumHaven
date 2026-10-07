@@ -66,6 +66,12 @@ def _recover_existing_cover_selection(
         return False, False
     if not paths or len(entries) != len(paths):
         return False, True
+    album_ids = {
+        entry["album_id"] for entry in entries.values()
+        if type(entry.get("album_id")) is int and entry["album_id"] > 0
+    }
+    if len(album_ids) > 1:
+        return False, True
     if not selected.is_relative_to(folder) or not selected.is_file():
         return False, True
     if any(not Path(path).resolve().is_relative_to(folder) for path in paths):
@@ -395,6 +401,7 @@ def run_cover_jobs(
     downloaded_count = 0
     downloaded_paths: list[str] = []
     job_results: list[dict[str, object]] = []
+    provider_outcome_error: Exception | None = None
     deferred_jobs = []
     miss_reasons = {
         "remote_search_returned_no_candidate",
@@ -422,7 +429,17 @@ def run_cover_jobs(
         for job in jobs if job.get("selected_cover_path")
     }
 
+    mixed_folder_jobs = {
+        id(job) for job in jobs
+        if len({
+            entry["album_id"] for path in job.get("track_paths") or []
+            if isinstance(entry := file_cache.get(str(path)), dict)
+            and type(entry.get("album_id")) is int and entry["album_id"] > 0
+        }) > 1
+    }
     for job in jobs:
+        if id(job) in mixed_folder_jobs:
+            continue
         album_id = job.get("album_id")
         try:
             repository = AlbumCoverCandidateSnapshotRepository(config)
@@ -504,8 +521,87 @@ def run_cover_jobs(
                 exc,
             )
 
+    def persist_job_provider_outcomes(job, detail):
+        nonlocal provider_outcome_error
+        if not config or job.get("album_id") is None:
+            return
+        provider_outcomes = {}
+        for trace_item in detail.get("resolver_trace") or []:
+            if not isinstance(trace_item, Mapping):
+                continue
+            provider = str(trace_item.get("resolver") or "").strip("_").lower()
+            status = str(trace_item.get("status") or "").lower()
+            reason = str(trace_item.get("reason") or "").lower()
+            if not provider:
+                continue
+            provider_outcomes[provider] = {
+                "category": "recovered" if status == "matched" else ("no_candidate" if status == "no_candidate" else ("timeout" if "timeout" in reason else (
+                    "rate_limit_quota" if "quota" in reason or "429" in reason else "server_network"
+                ))),
+                "http_status": trace_item.get("http_status"),
+                "retry_at": trace_item.get("retry_at"),
+            }
+        if provider_outcomes:
+            try:
+                persist_cover_provider_outcomes(
+                    config, album_id=job.get("album_id"),
+                    album_key=job.get("album_key"), outcomes=provider_outcomes,
+                )
+            except Exception as exc:
+                logger.warning(
+                    "Automatic provider outcome persistence failed album_id=%s error=%r",
+                    job.get("album_id"), exc,
+                )
+                if provider_outcome_error is None:
+                    provider_outcome_error = exc
+
+    def record_job_outcome(index, job, cover_path, downloaded, detail):
+        nonlocal failed, skipped, downloaded_count
+        cover_value = str(cover_path) if cover_path else None
+        has_cover = bool(cover_value)
+        reason = str(detail.get("reason") or "")
+        detail.update(downloaded=downloaded, has_cover=has_cover, cover_path=cover_value)
+        job_results.append(detail)
+        if reason == "remote_provider_group_disabled":
+            terminal_category = "skipped"
+            skipped += 1
+        elif downloaded:
+            terminal_category = "downloaded"
+            downloaded_count += 1
+            written_path = str(detail.get("written_path") or cover_value or "").strip()
+            if written_path:
+                downloaded_paths.append(written_path)
+        elif not has_cover:
+            terminal_category = "failed"
+            failed += 1
+        else:
+            terminal_category = "skipped"
+            skipped += 1
+        with cache_lock:
+            if owns_progress():
+                library_state["covers_completed"] = int(library_state.get("covers_completed") or 0) + 1
+                if terminal_category == "downloaded":
+                    library_state["covers_downloaded"] = int(library_state.get("covers_downloaded") or 0) + 1
+                library_state["covers_current_folder"] = str(job["folder"])
+                # Queue position includes jobs deferred before their terminal result.
+                library_state["covers_processed"] = max(
+                    int(library_state.get("covers_processed") or 0), index,
+                )
+        log_app_event(
+            config, logger if callable(getattr(logger, "log", None)) else _LOGGER,
+            "Cover fetch outcome", level="info",
+            album_id=job.get("album_id"), artist=str(job.get("artist") or ""),
+            album=str(job.get("album") or ""), folder=str(job["folder"]),
+            reason=reason, terminal_category=terminal_category,
+            downloaded=downloaded, has_cover=has_cover, force_search=force_search,
+            elapsed_ms=float(detail.get("elapsed_ms") or 0.0),
+            resolver_trace=detail.get("resolver_trace") or [],
+            provider_outcome_persistence_uncertain=provider_outcome_error is not None,
+            **{key: detail[key] for key in ("spotify_retry_deferred", "spotify_retry_at", "spotify_retry_attempted") if key in detail},
+        )
+
     def apply_job_result(index: int, job: dict[str, object], cover_path: Path | None, downloaded: bool, detail: dict[str, object]) -> None:
-        nonlocal changed, failed, skipped, downloaded_count, selection_conflict, needs_snapshot
+        nonlocal changed, selection_conflict, needs_snapshot
         folder = job["folder"]
         artist = str(job.get("artist") or "")
         album = str(job.get("album") or "")
@@ -513,7 +609,9 @@ def run_cover_jobs(
             cover_path and not downloaded and job.get("selected_cover_path")
             and Path(str(job["selected_cover_path"])) == Path(cover_path)
         )
-        selection_changed = False
+        selection_changed = bool(detail.get("selection_conflict"))
+        if selection_changed and id(job) not in mixed_folder_jobs:
+            selection_conflict = True
         if retained_selection:
             paths = {str(path) for path in job.get("track_paths") or []}
             current_entries = get_state().get("file_cache") or {}
@@ -546,37 +644,10 @@ def run_cover_jobs(
         detail["downloaded"] = downloaded
         detail["has_cover"] = has_cover
         detail["cover_path"] = cover_value
-        job_results.append(detail)
-        if config and job.get("album_id") is not None:
-            provider_outcomes = {}
-            for trace_item in detail.get("resolver_trace") or []:
-                if not isinstance(trace_item, Mapping):
-                    continue
-                provider = str(trace_item.get("resolver") or "").strip("_").lower()
-                status = str(trace_item.get("status") or "").lower()
-                reason = str(trace_item.get("reason") or "").lower()
-                if not provider:
-                    continue
-                provider_outcomes[provider] = {
-                    "category": "recovered" if status == "matched" else ("no_candidate" if status == "no_candidate" else ("timeout" if "timeout" in reason else (
-                        "rate_limit_quota" if "quota" in reason or "429" in reason else "server_network"
-                    ))),
-                    "http_status": trace_item.get("http_status"),
-                    "retry_at": trace_item.get("retry_at"),
-                }
-            if provider_outcomes:
-                try:
-                    persist_cover_provider_outcomes(
-                        config,
-                        album_id=job.get("album_id"),
-                        album_key=job.get("album_key"),
-                        outcomes=provider_outcomes,
-                    )
-                except Exception as exc:
-                    logger.warning(
-                        "Automatic provider outcome persistence failed album_id=%s error=%r",
-                        job.get("album_id"), exc,
-                    )
+        persist_job_provider_outcomes(job, detail)
+        if provider_outcome_error is not None:
+            record_job_outcome(index, job, cover_path, downloaded, detail)
+            return
 
         logger.verbose(
             "Cover fetch processed artist=%r album=%r folder=%r downloaded=%s has_cover=%s",
@@ -588,21 +659,7 @@ def run_cover_jobs(
         )
 
         reason = str(detail.get("reason") or "")
-        if reason == "remote_provider_group_disabled":
-            terminal_category = "skipped"
-            skipped += 1
-        elif downloaded:
-            terminal_category = "downloaded"
-            downloaded_count += 1
-            with cache_lock:
-                if owns_progress():
-                    library_state["covers_downloaded"] = int(library_state.get("covers_downloaded") or 0) + 1
-            written_path = str(detail.get("written_path") or cover_value or "").strip()
-            if written_path:
-                downloaded_paths.append(written_path)
-        elif not has_cover:
-            terminal_category = "failed"
-            failed += 1
+        if not downloaded and not has_cover and reason != "remote_provider_group_disabled":
             if reason in miss_reasons and callable(getattr(logger, "log", None)):
                 log_app_event(
                     config,
@@ -618,10 +675,6 @@ def run_cover_jobs(
                     elapsed_ms=detail.get("elapsed_ms"),
                     resolver_trace=detail.get("resolver_trace"),
                 )
-        else:
-            terminal_category = "skipped"
-            skipped += 1
-
         elapsed_ms = float(detail.get("elapsed_ms") or 0.0)
         if (
             elapsed_ms >= _SLOW_COVER_FETCH_LOG_THRESHOLD_MS
@@ -645,12 +698,30 @@ def run_cover_jobs(
 
         recovering_selection = bool(cover_path and not downloaded and not retained_selection)
         if recovering_selection:
-            recovered, conflict = _recover_existing_cover_selection(
-                config=config, job=job, cover_path=Path(cover_path),
-                file_cache=file_cache, get_state=get_state, library_state=library_state,
-                cache_lock=cache_lock, scan_generation=scan_generation,
-                cover_generation=cover_generation,
-            )
+            try:
+                recovered, conflict = _recover_existing_cover_selection(
+                    config=config, job=job, cover_path=Path(cover_path),
+                    file_cache=file_cache, get_state=get_state, library_state=library_state,
+                    cache_lock=cache_lock, scan_generation=scan_generation,
+                    cover_generation=cover_generation,
+                )
+            except Exception as exc:
+                origin = exc.__traceback__
+                while origin.tb_next is not None:
+                    origin = origin.tb_next
+                log_app_event(
+                    config, logger if callable(getattr(logger, "log", None)) else _LOGGER,
+                    "Cover selection recovery failed", level="error",
+                    stage="recover_existing_cover_selection",
+                    queue_index=index, queue_total=len(jobs),
+                    error_type=type(exc).__name__,
+                    origin_frame={
+                        "module": Path(origin.tb_frame.f_code.co_filename).name,
+                        "function": origin.tb_frame.f_code.co_name,
+                        "line": origin.tb_lineno,
+                    },
+                )
+                raise
             changed = changed or recovered
             selection_conflict = selection_conflict or conflict
             if conflict:
@@ -724,33 +795,7 @@ def run_cover_jobs(
                 )
                 changed = True
 
-        log_app_event(
-            config, logger if callable(getattr(logger, "log", None)) else _LOGGER,
-            "Cover fetch outcome",
-            level="info",
-            album_id=job.get("album_id"),
-            artist=artist,
-            album=album,
-            folder=str(folder),
-            reason=str(detail.get("reason") or ""),
-            terminal_category=terminal_category,
-            downloaded=downloaded,
-            has_cover=has_cover,
-            force_search=force_search,
-            elapsed_ms=elapsed_ms,
-            resolver_trace=detail.get("resolver_trace") or [],
-            **{key: detail[key] for key in ("spotify_retry_deferred", "spotify_retry_at", "spotify_retry_attempted") if key in detail},
-        )
-        with cache_lock:
-            if owns_progress():
-                library_state["covers_current_folder"] = str(folder)
-                # Progress is queue position, not terminal-result count.  Jobs
-                # deferred during a provider cooldown are intentionally absent
-                # from job_results until their retry phase, so using its length
-                # makes the UI under-report while the queue is advancing.
-                library_state["covers_processed"] = max(
-                    int(library_state.get("covers_processed") or 0), index
-                )
+        record_job_outcome(index, job, cover_path, downloaded, detail)
         # Image selections are committed by the guarded writer per album. Keep
         # lookup outcomes durable too, without republishing the entire inventory.
         if index % 25 == 0:
@@ -758,6 +803,11 @@ def run_cover_jobs(
         flush_log_handlers_debounced(logger, min_interval_seconds=2.0)
 
     def finish_or_defer(index, job, cover_path, downloaded, detail):
+        if provider_outcome_error is not None:
+            settle_candidate_publisher(job, detail)
+            persist_job_provider_outcomes(job, detail)
+            record_job_outcome(index, job, cover_path, downloaded, detail)
+            return
         cooldowns = [item for item in detail.get("resolver_trace") or []
                      if item.get("resolver") == "_search_spotify" and item.get("reason") == "spotify_cooldown"]
         if not downloaded and cooldowns and detail.get("reason") in {"remote_search_failed", "remote_search_timed_out"}:
@@ -767,6 +817,13 @@ def run_cover_jobs(
         apply_job_result(index, job, cover_path, downloaded, detail)
 
     effective_job_workers = max(1, min(int(job_workers or 1), len(jobs) or 1))
+    for index, job in enumerate(jobs, start=1):
+        if id(job) in mixed_folder_jobs:
+            apply_job_result(index, job, None, False, {
+                "reason": "mixed_album_folder",
+                "selection_conflict": True,
+                "resolver_trace": [],
+            })
     if effective_job_workers > 1:
         for index, job in enumerate(jobs, start=1):
             logger.verbose(
@@ -797,6 +854,7 @@ def run_cover_jobs(
                     candidate_callback=candidate_callbacks.get(id(job)),
                 ): (index, job)
                 for index, job in enumerate(jobs, start=1)
+                if id(job) not in mixed_folder_jobs
             }
             for future in as_completed(future_map):
                 _index, job = future_map[future]
@@ -828,6 +886,8 @@ def run_cover_jobs(
                 finish_or_defer(_index, job, cover_path, downloaded, detail)
     else:
         for index, job in enumerate(jobs, start=1):
+            if id(job) in mixed_folder_jobs:
+                continue
             current_state = get_state()
             if scan_generation is not None and (
                 current_state.get("scan_in_progress")
@@ -892,8 +952,15 @@ def run_cover_jobs(
                 candidate_callback=candidate_callbacks.get(id(job)),
             )
             finish_or_defer(index, job, cover_path, downloaded, detail)
+            if provider_outcome_error is not None:
+                break
 
     for index, job, cover_path, detail in deferred_jobs:
+        if provider_outcome_error is not None:
+            settle_candidate_publisher(job, detail)
+            persist_job_provider_outcomes(job, detail)
+            record_job_outcome(index, job, cover_path, False, detail)
+            continue
         retry_at = cover_provider_spotify.spotify_cooldown_until()
         downloaded = False
         if retry_at <= time.time() and owns_progress() and not get_state().get("scan_in_progress"):
@@ -916,6 +983,9 @@ def run_cover_jobs(
             detail["spotify_retry_at"] = retry_at
         settle_candidate_publisher(job, detail)
         apply_job_result(index, job, cover_path, downloaded, detail)
+
+    if provider_outcome_error is not None:
+        raise provider_outcome_error
 
     cover_cache.save()
     flush_log_handlers(logger)

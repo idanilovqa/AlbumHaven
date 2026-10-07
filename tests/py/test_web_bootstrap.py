@@ -956,6 +956,38 @@ def test_build_initial_view_preview_preserves_explicit_partial_flag():
     assert preview["initial_view_partial"] is True
 
 
+@pytest.mark.parametrize("public_safe", [False, True])
+@pytest.mark.parametrize("category", ["hoard", "new_arrivals", "main_library"])
+def test_build_initial_view_preview_preserves_library_source_summary(category, public_safe):
+    provenance = {
+        "primary_category": category,
+        "categories": [category],
+        "root_ids": ["source-root"],
+    }
+    preview = startup_bootstrap.build_initial_view_preview(
+        {
+            "artist_groups": [{
+                "artist": "Source Artist",
+                "albums": [{
+                    "key": "source-album",
+                    "name": "Source Album",
+                    "root_provenance": provenance,
+                    "library_root_category": category,
+                    "tracks": [{"title": "Track"}],
+                }],
+            }],
+        },
+        public_safe=public_safe,
+    )
+
+    album = preview["artist_groups"][0]["albums"][0]
+    assert album.get("root_provenance") == provenance
+    assert album.get("library_root_category") == category
+    assert album["tracks"] == []
+    assert album["track_count_preview"] == 1
+    assert "open_directory_paths" not in album
+
+
 def test_build_initial_view_preview_preserves_compact_album_track_count():
     preview = startup_bootstrap.build_initial_view_preview(
         {

@@ -64,7 +64,7 @@ def build_cover_progress_status(library_state: dict[str, object], *, now=None) -
     execution = library_state.get("covers_execution_started_monotonic")
     finished = library_state.get("covers_finished_monotonic")
     elapsed = max(0.0, (finished or now) - started) if started is not None else None
-    processed = int(library_state.get("covers_processed") or 0)
+    processed = int(library_state.get("covers_completed", library_state.get("covers_processed")) or 0)
     total = int(library_state.get("covers_total") or 0)
     remaining = None
     if library_state.get("covers_in_progress") and execution is not None and processed > 0 and total >= processed:
@@ -90,6 +90,7 @@ def _reset_cover_refresh_progress(library_state: dict[str, object], *, in_progre
     library_state["covers_in_progress"] = in_progress
     library_state["covers_outcome"] = "running" if in_progress else "cancelled"
     library_state["covers_processed"] = 0
+    library_state["covers_completed"] = 0
     library_state["covers_total"] = 0
     library_state["covers_downloaded"] = 0
     library_state["covers_current_folder"] = ""
@@ -124,6 +125,7 @@ def _start_cover_refresh_progress(
     library_state["covers_in_progress"] = True
     library_state["covers_outcome"] = "running"
     library_state["covers_processed"] = 0
+    library_state["covers_completed"] = 0
     library_state["covers_total"] = queued_count
     library_state["covers_downloaded"] = 0
     library_state["covers_current_folder"] = current_folder
@@ -258,7 +260,7 @@ def execute_cover_refresh_request(
             user_agent=context.user_agent,
             cover_cache=context.cover_cache,
             scan_generation=context.scan_generation if mode == "background" else None,
-            cover_generation=context.cover_generation if mode != "background" else None,
+            cover_generation=context.cover_generation,
             force_search=force_search,
             allow_apple_web_fallback=allow_apple_web_fallback,
             allow_apple_web_fallback_when_has_cover=allow_apple_web_fallback_when_has_cover,
@@ -291,10 +293,20 @@ def run_background_cover_refresh_worker(
     get_state: StateGetter,
     refresh_cover_artwork: RefreshRunner,
 ) -> None:
+    library_state = get_state()
+    cover_generation = int(library_state.get("cover_generation") or 0)
+    scan_generation = int(library_state.get("scan_generation") or 0)
     try:
         refresh_cover_artwork()
     except Exception as exc:
-        _handle_cover_refresh_failure(get_state(), exc)
+        current = get_state()
+        if (
+            current is library_state
+            and int(current.get("cover_generation") or 0) == cover_generation
+            and int(current.get("scan_generation") or 0) == scan_generation
+        ):
+            _handle_cover_refresh_failure(current, exc)
+        raise
 
 
 def run_manual_cover_refresh_worker(
@@ -305,6 +317,16 @@ def run_manual_cover_refresh_worker(
     prepared: PreparedCoverRefresh | None = None,
     cache_lock=None,
 ) -> None:
+    with cache_lock if cache_lock is not None else nullcontext():
+        library_state = prepared[0].library_state if prepared is not None else get_state()
+        cover_generation = (
+            prepared[0].cover_generation if prepared is not None
+            else int(library_state.get("cover_generation") or 0)
+        )
+        scan_generation = (
+            prepared[0].scan_generation if prepared is not None
+            else int(library_state.get("scan_generation") or 0)
+        )
     try:
         if prepared is None:
             refresh_unsuccessful_cover_artwork(force_search=force_search)
@@ -313,11 +335,13 @@ def run_manual_cover_refresh_worker(
     except Exception as exc:
         with cache_lock if cache_lock is not None else nullcontext():
             current = get_state()
-            if prepared is None or (
-                current is prepared[0].library_state
-                and int(current.get("cover_generation") or 0) == prepared[0].cover_generation
+            if (
+                current is library_state
+                and int(current.get("cover_generation") or 0) == cover_generation
+                and int(current.get("scan_generation") or 0) == scan_generation
             ):
                 _handle_cover_refresh_failure(current, exc)
+        raise
 
 
 def build_cover_jobs_for_snapshot(

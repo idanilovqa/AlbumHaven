@@ -489,6 +489,7 @@ async function fetchUnsuccessfulAlbumCovers() {
     startStatusIndicatorImmediately({
       covers_in_progress: true,
       covers_processed: 0,
+      covers_completed: 0,
       covers_total: 0,
       covers_downloaded: 0,
       covers_current_folder: '',
@@ -526,6 +527,7 @@ async function fetchUnsuccessfulAlbumCovers() {
         scan_total: Number(state.status?.scan_total || 0),
         covers_in_progress: false,
         covers_processed: 0,
+        covers_completed: 0,
         covers_total: 0,
         covers_downloaded: 0,
         covers_current_folder: '',
@@ -539,6 +541,7 @@ async function fetchUnsuccessfulAlbumCovers() {
       ...state.status,
       covers_in_progress: true,
       covers_processed: 0,
+      covers_completed: 0,
       covers_total: Number(data.queued_count || 0),
       covers_downloaded: 0,
       covers_current_folder: String(data.current_folder || ''),

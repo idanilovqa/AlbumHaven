@@ -351,6 +351,7 @@
       console.error('[AlbumHaven] Failed to load bootstrap payload.', error);
       assignBootstrapPayload(null);
       pushStartupMark('bootstrap_payload_failed');
+      window.AlbumHavenStartupProgress?.fail();
     }
   };
 
@@ -375,6 +376,7 @@
     } catch (error) {
       console.error('[AlbumHaven] Failed to load runtime bundle.', error);
       pushStartupMark('runtime_bundle_failed');
+      window.AlbumHavenStartupProgress?.fail();
     }
   };
 

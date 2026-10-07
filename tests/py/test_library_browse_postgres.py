@@ -6109,7 +6109,7 @@ def test_artist_search_projection_authority_uses_current_database_metadata():
     assert params["builder_version"]
 
 
-def test_exact_projected_alias_preview_expands_complete_projected_artist_scope(monkeypatch):
+def test_exact_projected_alias_search_expands_complete_projected_artist_scope(monkeypatch):
     from music_app.services import library_browse_postgres as browse_module
 
     repository = browse_module.PostgresLibraryBrowseRepository(
@@ -6120,12 +6120,18 @@ def test_exact_projected_alias_preview_expands_complete_projected_artist_scope(m
     monkeypatch.setattr(
         repository,
         "_load_relation_alias_maps",
-        lambda **_kwargs: pytest.fail("ready projected preview loaded the broad alias maps"),
+        lambda **_kwargs: {
+            "alias_to_canonical": {"Morse, Portnoy & George": "Morse Portnoy George"},
+            "canonical_to_aliases": {
+                "Morse Portnoy George": ["Morse Portnoy George", "Morse, Portnoy & George"],
+            },
+            "projection_stale_reason": "",
+        },
     )
     monkeypatch.setattr(
         repository,
         "_load_live_relation_alias_maps",
-        lambda **_kwargs: pytest.fail("ready projected preview loaded live alias maps"),
+        lambda **_kwargs: pytest.fail("ready projected search loaded live alias maps"),
     )
     monkeypatch.setattr(
         repository,
@@ -6134,29 +6140,35 @@ def test_exact_projected_alias_preview_expands_complete_projected_artist_scope(m
     )
     selected_scopes = []
 
+    complete_rows = [
+        _browse_album_row(
+            artist="Morse Portnoy George",
+            album_id=1,
+            album_key="canonical-owned",
+            title="Canonical Owned",
+        ),
+        _browse_album_row(
+            artist="Morse, Portnoy & George",
+            album_id=2,
+            album_key="alias-owned",
+            title="Alias Owned",
+        ),
+    ]
+
     def load_selected_preview(selected_artists, *_args, **_kwargs):
         selected_scopes.append(list(selected_artists))
-        return [
-            _browse_album_row(
-                artist="Morse Portnoy George",
-                album_id=1,
-                album_key="canonical-owned",
-                title="Canonical Owned",
-            ),
-            _browse_album_row(
-                artist="Morse, Portnoy & George",
-                album_id=2,
-                album_key="alias-owned",
-                title="Alias Owned",
-            ),
-        ]
+        return complete_rows
 
     monkeypatch.setattr(
         repository,
         "_load_selected_artist_preview_rows",
         load_selected_preview,
     )
-    monkeypatch.setattr(repository, "_load_search_rows", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(
+        repository,
+        "_load_search_rows",
+        lambda *_args, **_kwargs: _partitioned_search_rows(complete_rows),
+    )
     monkeypatch.setattr(
         repository._inventory_repository,
         "load_support_state",
@@ -6173,15 +6185,14 @@ def test_exact_projected_alias_preview_expands_complete_projected_artist_scope(m
             "surface": "albums",
             "q": "Morse, Portnoy & George",
             "category": ["main_library"],
-            "payload_tier": "search_preview",
             "omit_sidebar": "1",
         },
         library_state={},
     )
 
     assert selected_scopes == [[
-        "morse portnoy george",
-        "morse, portnoy & george",
+        "Morse Portnoy George",
+        "Morse, Portnoy & George",
     ]]
     assert {
         album["key"]
@@ -6190,7 +6201,7 @@ def test_exact_projected_alias_preview_expands_complete_projected_artist_scope(m
     } == {"canonical-owned", "alias-owned"}
 
 
-def test_exact_projected_alias_preview_accepts_alias_only_category_match(monkeypatch):
+def test_exact_projected_alias_search_accepts_alias_only_category_match(monkeypatch):
     from music_app.services import library_browse_postgres as browse_module
 
     repository = browse_module.PostgresLibraryBrowseRepository(
@@ -6198,22 +6209,33 @@ def test_exact_projected_alias_preview_accepts_alias_only_category_match(monkeyp
         connect=lambda _database_url: _NoopSearchSnapshotConnection(),
         album_ratings_service=_EmptyAlbumRatingsService(),
     )
+    alias_row = _browse_album_row(
+        artist="Morse, Portnoy & George",
+        album_id=2,
+        album_key="alias-only-category-match",
+        title="Alias Only Category Match",
+    )
+    alias_row["file_library_root_category"] = "hoard"
+    monkeypatch.setattr(
+        repository,
+        "_load_relation_alias_maps",
+        lambda **_kwargs: {
+            "alias_to_canonical": {"Morse, Portnoy & George": "Morse Portnoy George"},
+            "canonical_to_aliases": {
+                "Morse Portnoy George": ["Morse Portnoy George", "Morse, Portnoy & George"],
+            },
+            "projection_stale_reason": "",
+        },
+    )
     monkeypatch.setattr(
         repository,
         "_load_selected_artist_preview_rows",
-        lambda *_args, **_kwargs: [
-            _browse_album_row(
-                artist="Morse, Portnoy & George",
-                album_id=2,
-                album_key="alias-only-category-match",
-                title="Alias Only Category Match",
-            )
-        ],
+        lambda *_args, **_kwargs: [alias_row],
     )
     monkeypatch.setattr(
         repository,
         "_load_search_rows",
-        lambda *_args, **_kwargs: _partitioned_search_rows(),
+        lambda *_args, **_kwargs: _partitioned_search_rows([alias_row]),
     )
     monkeypatch.setattr(repository, "_load_non_album_entries", lambda **_kwargs: [])
     monkeypatch.setattr(
@@ -6232,7 +6254,6 @@ def test_exact_projected_alias_preview_accepts_alias_only_category_match(monkeyp
             "surface": "albums",
             "q": "Morse, Portnoy & George",
             "category": ["hoard"],
-            "payload_tier": "search_preview",
             "omit_sidebar": "1",
         },
         library_state={},

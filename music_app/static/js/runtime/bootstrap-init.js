@@ -163,7 +163,6 @@ const hasAuthoritativeServerRenderedInitialView = Boolean(
 if (
   !shouldStartImmediateHydration
   && hasAuthoritativeServerRenderedInitialView
-  && !isEffectivelyEmptyView(state.view)
   && typeof startupMetrics?.completeInitialRefresh === 'function'
 ) {
   const completeServerRenderedInitialRefresh = () => {

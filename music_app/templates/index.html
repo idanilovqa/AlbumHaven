@@ -51,8 +51,11 @@
   <script src="{{ url_for('static', filename='js/client-layout-bootstrap.js') }}?v={{ runtime_asset_version }}"></script>
   <script>AlbumHavenClientLayoutBootstrap.capture({ defaultCollapsed: {{ (shell_rail.default_collapsed | default(false)) | tojson }} });</script>
   <link rel="stylesheet" href="{{ url_for('static', filename='css/mobile-layout.css') }}?v={{ runtime_asset_version }}">
+  <link rel="stylesheet" href="/static/css/startup-progress.css?v={{ runtime_asset_version | default(app_version | default('')) }}">
 </head>
 <body>
+  {% set startup_progress_initial = 50 %}
+  {% include "components/startup-progress.html" %}
   {% set shell_app_bar = shell_slots.app_bar if shell_slots and shell_slots.app_bar else {} %}
   {% set shell_header_surfaces = shell_app_bar.header_surfaces if shell_app_bar and shell_app_bar.header_surfaces else {} %}
   {% set shell_notifications_surface = shell_header_surfaces.notifications if shell_header_surfaces and shell_header_surfaces.notifications else {} %}

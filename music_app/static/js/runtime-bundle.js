@@ -288,6 +288,7 @@ const startupMetrics = (() => {
     markOnce,
     schedulePaintMark,
     markInitialRender(view = {}) {
+      window.AlbumHavenStartupProgress?.show(75);
       markOnce('runtime_boot_complete', {
         query: String(view.query || ''),
         selectedArtist: String(view.selected_artist || ''),
@@ -310,6 +311,7 @@ const startupMetrics = (() => {
     completeVisibleInitialRefresh(view = {}, detail = {}) {
       if (bootState.initialVisibleRefreshCompleted) return;
       bootState.initialVisibleRefreshCompleted = true;
+      window.AlbumHavenStartupProgress?.finish();
       const extraDetail = detail && typeof detail === 'object' ? detail : {};
       schedulePaintMark('initial_visible_refresh_complete', () => ({
         artistCount: Number(view.artist_count || 0),
@@ -15098,6 +15100,7 @@ async function fetchAndRender(url, push = true, options = {}) {
       return false;
     }
     clearStartupHydrationFollowup();
+    if (requestOptions.startupRefresh) window.AlbumHavenStartupProgress?.fail();
     if (typeof clearPendingSidebarSelection === 'function') {
       clearPendingSidebarSelection();
       renderSidebar();
@@ -42010,7 +42013,6 @@ const hasAuthoritativeServerRenderedInitialView = Boolean(
 if (
   !shouldStartImmediateHydration
   && hasAuthoritativeServerRenderedInitialView
-  && !isEffectivelyEmptyView(state.view)
   && typeof startupMetrics?.completeInitialRefresh === 'function'
 ) {
   const completeServerRenderedInitialRefresh = () => {

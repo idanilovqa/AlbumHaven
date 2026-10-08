@@ -340,6 +340,15 @@ def ensure_runtime_relation_projection_ready(
     library_state["relation_projection_duration_ms"] = float(
         result.get("duration_ms") or 0.0
     )
+    if (result.get("ready") and not app.config.get("SHARED_LIBRARY_BROWSE_ONLY")
+            and str(app.config.get("ALBUM_HAVEN_APP_DATABASE_URL") or "").strip()):
+        from music_app.services.gallery_projection_postgres import ensure_gallery_projection_ready
+        try:
+            ensure_gallery_projection_ready(app.config, cancel_requested=cancel_requested)
+        except InterruptedError:
+            raise
+        except Exception:
+            app.logger.exception("Gallery summary preparation failed; computed browse remains available")
     return result
 
 def scan_percent_for_state(library_state: dict[str, object]) -> int:

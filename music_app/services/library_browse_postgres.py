@@ -506,6 +506,13 @@ class PostgresLibraryBrowseRepository:
     ) -> dict[str, object]:
         view_state = _root_sidebar_view_state(query_params)
         paged = (query_params or {}).get("gallery_page_size") is not None
+        if paged:
+            _root_gallery_page_size(query_params or {})
+        from music_app.services.gallery_projection_postgres import (
+            gallery_projection_context, load_gallery_projection_page, queue_gallery_projection_snapshot,
+        )
+        projection_context = None
+        prepared_snapshot = None
         gallery_page = None
         non_album_entries = []
         configured_root_paths = ()
@@ -514,9 +521,21 @@ class PostgresLibraryBrowseRepository:
             connection.execute(
                 "SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY"
             )
-            relation_alias_maps = self._load_relation_alias_maps(
-                connection=connection,
-            )
+            projection_context = gallery_projection_context(connection) if paged else None
+            cached_page = load_gallery_projection_page(
+                connection, view_state, query_params or {}, context=projection_context,
+            ) if projection_context else None
+            if cached_page is None:
+                relation_alias_maps = self._load_relation_alias_maps(connection=connection)
+            else:
+                # The source-generation check already binds this alias publication.
+                cursor = connection.execute(_relation_alias_maps_sql())
+                rows = [cursor.fetchone()] if callable(getattr(cursor, "fetchone", None)) else cursor.fetchall()
+                alias_row = _row_mapping(rows[0]) if rows else {}
+                relation_alias_maps = {
+                    "alias_to_canonical": _row_json_mapping(alias_row.get("alias_to_canonical")),
+                    "canonical_to_aliases": _row_json_mapping(alias_row.get("canonical_to_aliases")),
+                }
             root_alias_to_canonical = (
                 {}
                 if relation_alias_maps.get("projection_stale_reason")
@@ -528,12 +547,22 @@ class PostgresLibraryBrowseRepository:
                 connection=connection,
             )
             if paged:
-                membership = list(connection.execute(
-                    _root_gallery_membership_sql(), _root_sidebar_params(view_state)).fetchall())
-                missing = _missing_album_projection_payloads(
-                    self._load_missing_album_rows(connection=connection), view_state=view_state)
-                page, artists_sidebar, album_count, gallery_page = _root_gallery_page_selection(
-                    membership, missing, root_alias_to_canonical, view_state, query_params or {})
+                if cached_page is None:
+                    membership = list(connection.execute(
+                        _root_gallery_membership_sql(), _root_sidebar_params(view_state)).fetchall())
+                    missing = _missing_album_projection_payloads(
+                        self._load_missing_album_rows(connection=connection), view_state=view_state)
+                    prepared_snapshot = _prepare_root_gallery_snapshot(
+                        membership, missing, root_alias_to_canonical, view_state)
+                    cached_page = _select_root_gallery_snapshot_page(prepared_snapshot, query_params or {})
+                page, artists_sidebar, album_count, gallery_page = cached_page
+                missing_keys = list({str(row["missing_album_key"]) for row in page if row.get("missing_album_key")})
+                missing_by_key = {album["key"]: album for album in _missing_album_projection_payloads(
+                    self._load_missing_album_rows(album_keys=missing_keys, connection=connection), view_state=view_state
+                )} if missing_keys else {}
+                for occurrence in page:
+                    if occurrence.get("missing_album_key"):
+                        occurrence["missing_album"] = missing_by_key.get(occurrence["missing_album_key"])
                 album_ids = list({row["album_id"] for row in page if row.get("album_id") is not None})
                 preview_rows = _canonicalize_artist_rows(list(connection.execute(
                     _root_gallery_page_rows_sql(), {**_root_sidebar_params(view_state), "gallery_album_ids": album_ids}
@@ -609,6 +638,10 @@ class PostgresLibraryBrowseRepository:
                 close = getattr(connection, "close", None)
                 if callable(close):
                     close()
+
+        if prepared_snapshot is not None and projection_context and not relation_alias_maps.get("projection_stale_reason"):
+            queue_gallery_projection_snapshot(
+                self._config, projection_context, view_state, prepared_snapshot, connect=self._connect)
 
         if not paged:
             artists_sidebar = [
@@ -2396,15 +2429,18 @@ class PostgresLibraryBrowseRepository:
         album_key: str | None = None,
         *,
         artist_names: list[str] | None = None,
+        album_keys: list[str] | None = None,
         connection: Any | None = None,
     ) -> list[object]:
         params = {"album_key": str(album_key or "").strip() or None}
+        if album_keys is not None:
+            params["album_keys"] = album_keys
         if artist_names is not None:
             params["artist_keys"] = [local_inventory_identity_key(artist) for artist in artist_names]
 
         def load_rows(active_connection: Any) -> list[object]:
             return list(active_connection.execute(
-                _missing_albums_sql(scoped_artists=artist_names is not None), params,
+                _missing_albums_sql(scoped_artists=artist_names is not None, scoped_albums=album_keys is not None), params,
             ).fetchall())
 
         if connection is not None:
@@ -2945,11 +2981,17 @@ def _root_gallery_page_selection(
     params: Mapping[str, object],
     *, revision_namespace: str = "",
 ) -> tuple[list[dict[str, object]], list[dict[str, object]], int, dict[str, object]]:
-    """Select a bounded page from lightweight membership, not hydrated albums."""
-    raw_size = str(params.get("gallery_page_size", "50"))
-    if not raw_size.isdecimal() or not 1 <= int(raw_size) <= 100:
-        raise ValueError("Invalid gallery page size.")
-    size = int(raw_size)
+    _root_gallery_page_size(params)
+    return _select_root_gallery_snapshot_page(_prepare_root_gallery_snapshot(
+        rows, missing_albums, aliases, view_state, revision_namespace=revision_namespace), params)
+
+
+def _prepare_root_gallery_snapshot(
+    rows: Iterable[object], missing_albums: list[dict[str, object]],
+    aliases: Mapping[str, object], view_state: Mapping[str, object],
+    *, revision_namespace: str = "",
+) -> dict[str, object]:
+    """Prepare the existing complete canonical membership and content revision."""
     occurrences = {}
     candidates = []
     missing_keys = {str(item.get("key") or item.get("album_ref") or "") for item in missing_albums}
@@ -3005,6 +3047,27 @@ def _root_gallery_page_selection(
         for row in ordered]], sort_keys=True, ensure_ascii=False, default=str).encode()).hexdigest()
     if revision_namespace:
         revision = hashlib.sha256(f"{revision_namespace}:{revision}".encode()).hexdigest()
+    sidebar = {}
+    for row in ordered:
+        identity = row["artist_id"]
+        if identity not in sidebar:
+            sidebar[identity] = dict(artist=row["artist_name"],
+                artist_display=_artist_tree_display_value(row["artist_name"]), count=0)
+        sidebar[identity]["count"] += 1
+    return {"ordered": ordered, "sidebar": list(sidebar.values()),
+            "album_count": len({row["album_key"] for row in ordered}),
+            "occurrence_count": len(ordered), "revision": revision}
+
+
+def _root_gallery_page_size(params: Mapping[str, object]) -> int:
+    raw_size = str(params.get("gallery_page_size", "50"))
+    if not raw_size.isdecimal() or not 1 <= int(raw_size) <= 100:
+        raise ValueError("Invalid gallery page size.")
+    return int(raw_size)
+
+
+def _root_gallery_page_bounds(params: Mapping[str, object], revision: str, count: int) -> tuple[int, int]:
+    size = _root_gallery_page_size(params)
     offset = 0
     cursor = params.get("gallery_cursor")
     if cursor:
@@ -3017,25 +3080,29 @@ def _root_gallery_page_selection(
             if token[1] != revision:
                 raise ValueError("Gallery changed; restart required.")
             offset = token[2]
-            if not 0 <= offset <= len(ordered):
+            if not 0 <= offset <= count:
                 raise ValueError
         except (ValueError, TypeError, binascii.Error, UnicodeError) as error:
             if "restart" in str(error):
                 raise
             raise ValueError("Invalid gallery cursor.") from error
-    page = ordered[offset:offset + size]
-    end = offset + len(page)
-    has_more = end < len(ordered)
+    return size, offset
+
+
+def _root_gallery_page_metadata(revision: str, count: int, size: int, offset: int, length: int) -> dict[str, object]:
+    end = offset + length
+    has_more = end < count
     next_cursor = base64.urlsafe_b64encode(json.dumps([1, revision, end]).encode()).decode().rstrip("=") if has_more else None
-    sidebar = {}
-    for row in ordered:
-        identity = row["artist_id"]
-        if identity not in sidebar:
-            sidebar[identity] = dict(artist=row["artist_name"],
-                artist_display=_artist_tree_display_value(row["artist_name"]), count=0)
-        sidebar[identity]["count"] += 1
-    return page, list(sidebar.values()), len({row["album_key"] for row in ordered}), {
-        "next_cursor": next_cursor, "has_more": has_more, "revision": revision, "page_size": size}
+    return {"next_cursor": next_cursor, "has_more": has_more, "revision": revision, "page_size": size}
+
+
+def _select_root_gallery_snapshot_page(snapshot: Mapping[str, object], params: Mapping[str, object]):
+    ordered = snapshot["ordered"]
+    size, offset = _root_gallery_page_bounds(params, snapshot["revision"], len(ordered))
+    page = ordered[offset:offset + size]
+    return page, snapshot["sidebar"], snapshot["album_count"], _root_gallery_page_metadata(
+        snapshot["revision"], len(ordered), size, offset, len(page))
+
 
 def _root_sidebar_aggregate(
     rows: Iterable[object],
@@ -8355,7 +8422,7 @@ def _mojibake_candidate_fields_sql(text_expressions: Iterable[str]) -> str:
     ) + "\n        )"
 
 
-def _missing_albums_sql(*, scoped_artists: bool = False) -> str:
+def _missing_albums_sql(*, scoped_artists: bool = False, scoped_albums: bool = False) -> str:
     artist_scope = """
             and exists (
               select 1 from library.local_artists candidate_artist
@@ -8463,7 +8530,9 @@ def _missing_albums_sql(*, scoped_artists: bool = False) -> str:
           ''
         ))) not in (__NON_ALBUM_EXCEPTION_VALUES__)
         order by library.local_albums.album_key, library.local_tracks.id;
-    """.replace("__ARTIST_SCOPE__", artist_scope).replace(
+    """.replace("__ARTIST_SCOPE__", artist_scope + (
+        " and library.local_albums.album_key = any(%(album_keys)s::text[])" if scoped_albums else ""
+    )).replace(
         "__NON_ALBUM_EXCEPTION_VALUES__", _NON_ALBUM_EXCEPTION_SQL_VALUES,
     )
 

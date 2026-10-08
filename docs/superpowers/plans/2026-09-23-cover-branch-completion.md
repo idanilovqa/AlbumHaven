@@ -1,5 +1,78 @@
 # Cover branch completion
 
+### ROOT01–ROOT05 durable gallery summary delivery (0.9.49)
+
+Owner approved including accurate Postgres-owned counts, ordered membership and revision invalidation in 0.9.49. Outcome: ready root requests read the complete lightweight sidebar/totals and an indexed bounded occurrence page without re-evaluating every file or hashing every occurrence. Store exact canonical ordering and the existing content hash; retain eight initial album occurrences, fifty ordinary continuation occurrences (1–100), complete sidebar, category/featured/missing/loose-track semantics and current cursor `[1, revision, offset]`. Reuse the current SQL and Python selector as the semantic oracle, existing bounded album hydration, and account-private rating overlays. No new search behavior or timing budget.
+
+Prerequisites: cover-only/rating/presentation writes must not invalidate membership; every membership/order mutation must invalidate within its database transaction, including full/targeted scans, stale files, structural and ordering tag edits, exception saves/deletes/intent recovery, artist/featured/alias changes, missing removal and consumed category provenance. Current relation fingerprint and inventory revision are not complete gallery authorities. Use a dedicated per-library source generation and statement-level dependency invalidation compatible with older supported writers; avoid one generation update per file. Scope summary by resolved library and normalized root filters, never cursor-supplied access. Publish generation, exact sidebar/totals/hash and occurrence rows atomically after locked source-generation recheck; stale-to-stale mutations supersede builders.
+
+Lifecycle: proactively prepare supported root scopes through the existing startup projection-readiness lifecycle. Browsing reads a ready same-snapshot summary or falls back to the current accurate computed path; it never serves stale counts or launches repeated expensive request-time rebuilds. Shared read-only port 5004 does not apply migrations or build shared derived data implicitly; maintenance remains separately coordinated. Transient scan pages retain their existing scan-generation namespace. Failed/cancelled publication leaves accurate fallback available. Cover/ratings continue live hydration and do not change cursor content revisions.
+
+Acceptance and delivery checkpoint: add failing focused guards and oracle-equivalence cases first; use uniquely owned isolated Postgres for transaction rollback, every mutation dependency, neutral cover writes, superseded publication, account/library/category scope and cursor compatibility across computed/ready paths. Preserve exact full sidebar and hydration bounds. Complete focused tests, two independent full-diff reviews, then unchanged native ROOT006/startup/search verification and the complete existing CI repair flow. Root owns test-lane scheduling, live deployment and final release gates; no migration or data write against shared/production during implementation. Reversible expansion: new derived objects retain source data; old readers ignore them, and rollback restores computed reads before removing derived objects. The prepared source design is `.tmp/gallery-summary-design.md`; this entry owns approved scope and acceptance.
+
+#### Implemented summary contract and focused evidence — 2026-10-07
+
+Migration `0086` adds derived per-library generations, scope headers, and ordered
+occurrences. Scope identity preserves category order. Readiness requires matching
+source generation and builder version; old schemas and stale summaries use the
+unchanged computed selector. Database statement triggers cover older writers and
+coalesce invalidation within a transaction. Publication rejects source-writing
+transactions and superseded generations. No source records are replaced.
+
+Startup prepares the default and new-arrivals scopes. Successful full-scan and
+queued-update publication schedules refresh through the existing cache executor.
+Concurrent refresh requests retain one trailing refresh; captured summaries retain
+only the latest pending generation per library/scope. Other category orders publish
+their accurate computed snapshot after browse. Shared read-only configuration never
+builds or publishes a summary. Ready pages hydrate at most the requested occurrence
+count, with one bounded query for distinct missing-album keys.
+
+Final focused evidence: 66 gallery, pagination, and cache lifecycle checks passed
+in 2.39 seconds. Five isolated PostgreSQL browse checks passed in 56.36 seconds
+with no skips, including default/new-arrivals scope, all 15 ordered category
+combinations, 8/50 page parity, interoperable cursors, cover neutrality, bounded
+missing-album hydration, and the exact migration 0082 missing-removal case.
+The earlier category-permutation run used an ignored parameter and is not
+category coverage; the final run supplies `category` and asserts normalized
+scope identity. Fourteen isolated mutation checks passed in 89.21 seconds,
+covering eight source-update boundaries, exception/file deletion, stale-to-stale
+invalidation, rollback/savepoints, superseded publication, snapshot isolation,
+and read-only grants/runtime behavior. Invalidation uses epoch-safe `xid8` to
+coalesce once per source-writing transaction; publication from that same writer
+is rejected. Two final full resulting-diff review passes found no validated
+remaining issue. Disposable databases, roles, and owned test processes were
+removed. These are focused proofs, not complete CI or a real-data ready-path timing.
+Fresh native synthetic verification passed all four cases: 005S root-gallery
+visible readiness at 2792 ms; 005T app-open readiness at 1963 ms and sidebar
+hydration at 25 ms; 005U Devin at 456.4 ms (grace-used) and Neal Morse at
+375.9 ms (target-met). Search retains its 400 ms target and 500 ms hard ceiling.
+The shared fixture was loaded once; the disposable database, three roles, and
+owned application/browser/test trees exited after the sequential run. Evidence:
+`.tmp/gallery-summary-native-performance.log` and retained metrics group
+`paired-search-calibration-1791421048207`. Complete native CI remains mandatory.
+The shared 5004 database still lacks migration `0086`; its computed fallback remains
+accurate. Native acceptance remains the existing 005S root browse, 005T app-open,
+005U paired complete-search, and functional root pagination cases; budgets are
+unchanged. Migration `0085` and `0086` supplement the earlier historical 0081–0084
+migration inventory below. Final release and authorized writable readiness setup
+must precede real-data summary timing.
+
+### ROOT01 existing exception-index candidate — 2026-10-07
+
+Outcome: avoid reading every active file's metadata during root membership eligibility by reusing the existing active-file covering index and scanned-exception partial index. Materialize the exact stored-exception candidate file identities and values; retain the existing override CASE and join candidates by both track ID and unique file path. This changes only root membership's stored-metadata lookup, without DDL, cache, API, forced planner settings, or threshold changes. Preserve MATERIALIZED shared eligibility, lowest-ID track override, explicit NULL clearing, path override without an exception key suppressing track fallback, stale-file handling, featured occurrences, category filters, missing albums, complete sidebar/totals, ordering and revision hashing.
+
+Acceptance: first prove the indexed-candidate guard fails; use isolated existing fixtures for exact old/new rows and independent expected memberships including all override precedence and duplicate-file cases; compare real-data digests for every category in one read-only snapshot, ABBA timings and unchanged EXPLAIN settings. Keep only a consistent measured improvement. Reuse root paging/eligibility coverage and retain unchanged native startup/ROOT006 acceptance. Rollback removes this root-only candidate and its focused tests together. Commit/push remains within the complete repair batch after review and verification; no restart or publication in this experiment.
+
+Candidate rejected after measurement: two focused guards failed before implementation, then 24 related checks passed. Real-data exact membership digests matched for all/main/hoard/new-arrivals in one read-only snapshot. The plan used the existing exception index for three rows and active covering index for 159545 rows, reducing file-read blocks from 49870 to 7049 (4960 visibility heap fetches). Despite that intended mechanism and faster EXPLAIN (1046 to 830 ms), normal ABBA wall times did not improve consistently: all baseline 2276/1162 versus candidate 2817/1358 ms; new-arrivals 1208/1401 versus 1652/1466 ms; main and hoard varied or improved. Therefore source and candidate-only tests were removed. Prepared isolated override/duplicate-file cases were retained privately but not executed because rejection removed the need to create a database. Evidence: `.tmp/root-indexed-exceptions-{red,focused,measure}.log`, `.tmp/root-indexed-exceptions-measure.json`, and `.tmp/root-indexed-exceptions-candidate.patch`. No DDL, shared-data write, planner override, budget change, or deployment occurred. This records an unsuccessful optimization attempt, not a startup fix.
+
+### ROOT01 album-grain membership candidate — 2026-10-07
+
+Outcome: reduce the materialized eligibility intermediate in bounded root startup while preserving exact full membership, sidebar, totals, ordering, and cursor revision. Current normal-server evidence attributes 1.19–1.26 seconds to root membership SQL. Reuse the existing eligibility SQL builder with an explicit album-only projection, following the album-grain form already used by the older startup query; retain MATERIALIZED, active-file and override predicates, featured-artist ownership, category filters, missing albums, loose tracks, and page-bounded hydration. No cache, schema, endpoint, permission, or acceptance-budget change.
+
+Prerequisites and acceptance: prove the album-grain guard fails first; compare exact old/new membership rows in isolated semantic cases and a single read-only real-data snapshot; retain all root-pagination cases and unchanged ROOT006/startup contracts. Measure old/new query plans and reject the candidate if it does not improve the measured path. No product implementation before red proof. This is a candidate, not a performance success claim. Rollback restores the root eligibility projection and its focused guard together. Commit/push remains part of the current complete CI-repair batch after focused verification and review; no separate release or deployment is authorized by this entry.
+
+Candidate rejected: the guard first failed against track-grain materialization; the candidate passed 24 focused checks. Read-only repeatable-read comparison preserved exact row digests for all 17003 memberships and each category. ABBA measurements did not establish a consistent improvement: all-category baseline 850/1682 ms versus candidate 1138/1342 ms; main-library 1209/863 versus 1219/1089 ms; new-arrivals 539/839 versus 958/952 ms; hoard 655/652 versus 566/549 ms. A faster candidate EXPLAIN (627 versus 809 ms) does not override those mixed normal executions. Source and candidate-only tests were removed; the prepared isolated test was not run because rejection made further fixture setup unnecessary. Private evidence: `.tmp/root-album-grain-measure.json`, `.tmp/root-album-grain-measure.log`, `.tmp/root-album-grain-focused.log`. No database writes, deployment, or budget change occurred. Existing membership SQL remains authoritative; this investigation does not close startup latency or the intermittent search spike.
+
 ## October 5 continuation evidence
 
 Cover display previews now use shared album-adjacent storage at

@@ -6,6 +6,9 @@
   interaction remains available.
 - Improved authenticated startup with bounded initial gallery loading, accurate
   global artist and album totals, and the complete artist sidebar.
+- Added a PostgreSQL gallery summary with transaction-based invalidation, stable
+  ordering and cursors, bounded page hydration, and an accurate fallback when
+  the summary is absent or stale.
 - Kept artist ordering stable after search and clearing, expanded folder-derived
   artist families, and prevented stale search responses from replacing newer views.
 - Replaced previous gallery results with a compact Searching indicator while a

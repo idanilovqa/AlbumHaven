@@ -15,6 +15,19 @@ function harness() {
   return window.NavigationTree;
 }
 
+test('disabled navigation has no activatable link and native buttons retain disabled semantics', () => {
+  const tree = harness();
+  const disabledLink = tree.renderItem({label: 'Unavailable playlist', href: '/?playlist=private', disabled: true});
+  assert.doesNotMatch(disabledLink, /href=/);
+  assert.match(disabledLink, /aria-disabled="true"/);
+  assert.match(disabledLink, /tabindex="-1"/);
+  const disabledAction = tree.renderItem({label: 'Unavailable playlist', action: true, disabled: true});
+  assert.match(disabledAction, /^<button /);
+  assert.match(disabledAction, / disabled(?: |>|=)/);
+  assert.match(disabledAction, /aria-disabled="true"/);
+  assert.match(tree.renderItem({label: 'Available', href: '/?playlist=open', disabled: 'true'}), /href=/);
+});
+
 function observedElement(attributes = {}, classNames = [], children = {}) {
   const attrs = new Map(Object.entries(attributes));
   const classes = new Set(classNames);

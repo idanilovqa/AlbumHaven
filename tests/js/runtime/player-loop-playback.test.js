@@ -322,6 +322,15 @@ test('never-played player hides its timestamp until a track is available', () =>
   assert.equal(time.textContent, '3 / 60');
 });
 
+test('optional track paint notification cannot interrupt the native player update', () => {
+  const {context} = loadHelper();
+  assert.doesNotThrow(() => context.updatePlayerUi(), 'an absent React track module remains optional');
+  let notifications = 0;
+  context.window.AlbumHavenTrackPlayback = {sync() {notifications++; throw new Error('Paint failed');}};
+  assert.doesNotThrow(() => context.updatePlayerUi());
+  assert.equal(notifications, 1);
+});
+
 test('visible play control and global Space dispatch pause and resume through the streaming engine', async () => {
   const calls = [];
   const snapshot = {

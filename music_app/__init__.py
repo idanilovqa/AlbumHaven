@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from contextlib import asynccontextmanager
 from inspect import isawaitable
 import logging
@@ -29,6 +30,119 @@ class _BoundedExecutorAdmission:
 
     def shutdown(self, **kwargs) -> None:
         self._executor.shutdown(**kwargs)
+
+
+class _LibraryWarmupHandle:
+    def __init__(self, worker: threading.Thread, stop_requested: threading.Event) -> None:
+        self._worker = worker
+        self._stop_requested = stop_requested
+
+    @property
+    def daemon(self) -> bool:
+        return self._worker.daemon
+
+    def request_stop(self) -> None:
+        self._stop_requested.set()
+
+    async def stop(self, *, timeout_seconds: float = 30.0) -> None:
+        self.request_stop()
+        await asyncio.to_thread(self._worker.join, timeout_seconds)
+        if self._worker.is_alive():
+            raise TimeoutError(
+                "Library background warm-up did not stop within "
+                f"{timeout_seconds:g} seconds."
+            )
+
+
+def _start_library_warmup(
+    runtime,
+    hydrate,
+    ensure_relations,
+    start_refresh,
+    prewarm_postgres,
+    hydrate_metadata=None,
+    recover_persistence=None,
+):
+    stop_requested = threading.Event()
+    database_url = str(
+        runtime.config.get("ALBUM_HAVEN_APP_DATABASE_URL") or ""
+    ).strip()
+    postgres_authoritative = bool(database_url)
+    if postgres_authoritative:
+        runtime.logger.info(
+            "Startup scan-cache hydration deferred; Postgres browse remains authoritative."
+        )
+
+    def warm_library_state() -> None:
+        try:
+            if postgres_authoritative:
+                try:
+                    prewarm_postgres(database_url)
+                except Exception:
+                    runtime.logger.exception("Postgres connection pool prewarm failed.")
+                if stop_requested.is_set():
+                    return
+                if recover_persistence is not None:
+                    recover_persistence(runtime)
+                if stop_requested.is_set():
+                    return
+                if hydrate_metadata is not None:
+                    try:
+                        hydrate_metadata(runtime)
+                    except InterruptedError:
+                        raise
+                    except Exception:
+                        runtime.logger.exception("Postgres scan timestamp hydration failed.")
+                if stop_requested.is_set():
+                    return
+                ensure_relations(runtime, cancel_requested=stop_requested)
+                return
+            hydrated = hydrate(runtime)
+            if stop_requested.is_set():
+                return
+            library_state = runtime.library_state
+            if (
+                hydrated
+                and library_state.get("scan_metadata_repair_required")
+                and not library_state.get("scan_in_progress")
+            ):
+                if stop_requested.is_set():
+                    return
+                start_refresh(
+                    library_state,
+                    runtime.config,
+                    runtime.logger,
+                    force=True,
+                    scan_mode="background",
+                )
+            if (
+                not hydrated
+                and not library_state.get("last_error")
+                and not library_state.get("albums")
+                and not library_state.get("file_cache")
+                and not library_state.get("scan_in_progress")
+                and library_state.get("cold_scan_handoff_status") == "idle"
+            ):
+                if stop_requested.is_set():
+                    return
+                with runtime.cold_scan_handoff_lock:
+                    if stop_requested.is_set():
+                        return
+                    library_state["cold_scan_pending"] = True
+                    library_state["cold_scan_handoff_status"] = "pending"
+                    library_state["cold_scan_handoff_error"] = ""
+        except InterruptedError:
+            return
+        except Exception:
+            runtime.logger.exception("Library background warm-up failed.")
+
+    worker = threading.Thread(
+        target=warm_library_state,
+        name="albumhaven-library-warmup",
+        daemon=True,
+    )
+    worker.start()
+    return _LibraryWarmupHandle(worker, stop_requested)
 
 
 def _stop_library_watch_runtime(
@@ -190,23 +304,45 @@ def _configure_asgi_app(app, runtime) -> None:
     app.state.templates = Jinja2Templates(directory=str(template_dir))
     app.state.runtime_asset_version = _runtime_asset_version()
     app.state.auth_service_lock = threading.Lock()
+    app.state.database_identity_status = None
+    app.state.database_identity_status_lock = threading.Lock()
     install_private_route_boundary(app)
-    immutable_runtime_asset_paths = {
-        "/static/app.js",
-        "/static/js/runtime-bundle.js",
+    immutable_nested_javascript_paths = {
         "/static/js/audio-worklets/gapless-playback-processor.js",
+        "/static/js/runtime/alert-components.js",
     }
+
+    def is_versioned_live_asset(path: str) -> bool:
+        if path == "/static/app.js" or path.startswith("/static/css/"):
+            return True
+        if path in immutable_nested_javascript_paths:
+            return True
+        if not path.startswith("/static/js/"):
+            return False
+        return "/" not in path.removeprefix("/static/js/")
 
     @app.middleware("http")
     async def require_runtime_javascript_revalidation(request, call_next):
+        if not request.url.path.startswith("/static/"):
+            cover_preview_backfill = getattr(
+                app.state,
+                "cover_preview_backfill",
+                None,
+            )
+            if cover_preview_backfill is not None:
+                cover_preview_backfill.note_foreground_activity()
         response = await call_next(request)
         path = request.url.path
-        if path == "/static/app.js" or path.startswith("/static/js/"):
+        if (
+            path == "/static/app.js"
+            or path.startswith("/static/js/")
+            or path.startswith("/static/css/")
+        ):
             requested_versions = request.query_params.getlist("v")
             runtime_asset_version = app.state.runtime_asset_version
             if (
                 response.status_code == 200
-                and path in immutable_runtime_asset_paths
+                and is_versioned_live_asset(path)
                 and runtime_asset_version != "missing"
                 and requested_versions == [runtime_asset_version]
             ):
@@ -240,6 +376,7 @@ def create_asgi_app():
 
     from config import APP_NAME, APP_VERSION
     from music_app.services.lastfm_retry import start_lastfm_retry_worker, stop_lastfm_retry_worker
+    from music_app.services.cover_preview_backfill import CoverPreviewBackfill
     from music_app.services.auth_welcome_worker import start_welcome_retry_worker
     from music_app.services.library_reconciliation import (
         LibraryWatchService,
@@ -258,9 +395,12 @@ def create_asgi_app():
         TargetedLibraryReconciler,
     )
     from music_app.services.runtime_shutdown import request_runtime_shutdown
+    from music_app.services.postgres_connections import prewarm_connection_pool
     from music_app.services.state import (
         ensure_runtime_relation_projection_ready,
         hydrate_runtime_library_state_on_startup,
+        hydrate_runtime_scan_metadata_on_startup,
+        recover_runtime_library_persistence_on_startup,
         invalidate_targeted_library_projections,
         start_background_refresh_for_state,
     )
@@ -269,36 +409,25 @@ def create_asgi_app():
 
     @asynccontextmanager
     async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
-        hydrated = hydrate_runtime_library_state_on_startup(runtime)
+        for template_name in _app.state.templates.env.list_templates():
+            _app.state.templates.env.get_template(template_name)
         from music_app.services.log_history import resolve_media_host_history_scope
         host_scope = resolve_media_host_history_scope(runtime.config)
         _app.state.media_host_library_id = host_scope.library_id if host_scope is not None else None
-        ensure_runtime_relation_projection_ready(runtime)
-        library_state = runtime.library_state
-        if (
-            hydrated
-            and library_state.get("scan_metadata_repair_required")
-            and not library_state.get("scan_in_progress")
-        ):
-            start_background_refresh_for_state(
-                library_state,
-                runtime.config,
-                runtime.logger,
-                force=True,
-                scan_mode="background",
-            )
-        if (
-            not hydrated
-            and not library_state.get("last_error")
-            and not library_state.get("albums")
-            and not library_state.get("file_cache")
-            and not library_state.get("scan_in_progress")
-            and library_state.get("cold_scan_handoff_status") == "idle"
-        ):
-            with runtime.cold_scan_handoff_lock:
-                library_state["cold_scan_pending"] = True
-                library_state["cold_scan_handoff_status"] = "pending"
-                library_state["cold_scan_handoff_error"] = ""
+        _app.state.cover_preview_backfill = CoverPreviewBackfill(
+            runtime.config,
+            logger=runtime.logger,
+        )
+        _app.state.cover_preview_backfill.start()
+        _app.state.library_warmup_thread = _start_library_warmup(
+            runtime,
+            hydrate_runtime_library_state_on_startup,
+            ensure_runtime_relation_projection_ready,
+            start_background_refresh_for_state,
+            prewarm_connection_pool,
+            hydrate_metadata=hydrate_runtime_scan_metadata_on_startup,
+            recover_persistence=recover_runtime_library_persistence_on_startup,
+        )
         lastfm_started = False
         welcome_worker = None
         targeted_executor = None
@@ -307,9 +436,18 @@ def create_asgi_app():
         runtime.library_watch_service = None
 
         async def shutdown_resources() -> None:
+            _app.state.library_warmup_thread.request_stop()
             runtime.config.pop("_LIBRARY_WATCH_MANUAL_RECOVERY_CALLBACK", None)
             shutdown_errors: list[tuple[str, BaseException]] = []
             shutdown_stages = (
+                (
+                    "cover preview backfill",
+                    _app.state.cover_preview_backfill.stop,
+                ),
+                (
+                    "library warmup",
+                    _app.state.library_warmup_thread.stop,
+                ),
                 (
                     "welcome mail retry worker",
                     lambda: welcome_worker.stop() if welcome_worker is not None else None,

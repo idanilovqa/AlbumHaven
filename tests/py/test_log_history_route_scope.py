@@ -1,3 +1,4 @@
+import threading
 """Task 6 authenticated route boundaries; no production implementation yet."""
 import asyncio
 import copy
@@ -18,7 +19,7 @@ def request(config=None, library=9):
     payload={'query':{'text':'Album','event_ids':['event-a']},'snapshot':'captured','library_id':88,'account_id':99}
     async def body(): return payload
     return SimpleNamespace(actor=actor(library),json=body,query_params=QueryParams('text=Album&sources=scan&sources=edit&library_id=88&account_id=99&snapshot=captured&page_size=500'),headers={},
-        state=SimpleNamespace(),app=SimpleNamespace(state=SimpleNamespace(config=config or {'untouched':'original'})))
+        state=SimpleNamespace(),app=SimpleNamespace(state=SimpleNamespace(config=config or {'untouched':'original'},database_identity_status_lock=threading.Lock(),database_identity_status=None)))
 
 @pytest.fixture
 def scoped(monkeypatch):

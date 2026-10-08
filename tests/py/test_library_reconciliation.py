@@ -855,3 +855,64 @@ def test_active_track_file_upsert_clears_prior_stale_timestamp():
 
     assert "scan_cache,stale_marked_at" in sql
     assert "#-" in sql
+
+
+@pytest.mark.parametrize("event_type", ["created", "modified", "deleted", "moved"])
+@pytest.mark.parametrize("is_directory", [False, True])
+def test_derived_cover_preview_events_do_not_enter_reconciliation(tmp_path, event_type, is_directory):
+    from music_app.services.library_watch import publish_watchdog_event
+    root = tmp_path / "Music"
+    source = root / "Album" / ".album-haven" / "cover_variants" / "ab" / "image.jpg.tmp"
+    destination = source.with_suffix("")
+    events = []
+    publish_watchdog_event(
+        SimpleNamespace(event_type=event_type, src_path=str(source), dest_path=str(destination), is_directory=is_directory),
+        roots=[{"id": "main", "path": str(root)}], publish=events.append, clock=lambda: 1.0,
+    )
+    assert events == []
+
+
+@pytest.mark.parametrize("relative", ["Album/track.flac", "Album/cover.jpg", "Album/.album-haven/track.flac", "Album/cover_variants/track.flac"])
+def test_source_files_outside_derived_cover_storage_still_publish(tmp_path, relative):
+    from music_app.services.library_watch import publish_watchdog_event
+    root = tmp_path / "Music"
+    events = []
+    publish_watchdog_event(
+        SimpleNamespace(event_type="modified", src_path=str(root / relative), is_directory=False),
+        roots=[{"id": "main", "path": str(root)}], publish=events.append, clock=lambda: 1.0,
+    )
+    assert len(events) == 1
+
+
+@pytest.mark.parametrize("leaving_derived", [False, True])
+@pytest.mark.parametrize("is_directory", [False, True])
+def test_moves_crossing_derived_cover_storage_preserve_user_endpoint(tmp_path, leaving_derived, is_directory):
+    from music_app.services.library_watch import LibraryEventKind, publish_watchdog_event
+    root = tmp_path / "Music"
+    derived = root / "Album/.album-haven/cover_variants/ab/item"
+    user = root / "Album/track.flac"
+    source, destination = (derived, user) if leaving_derived else (user, derived)
+    events = []
+    publish_watchdog_event(
+        SimpleNamespace(event_type="moved", src_path=str(source), dest_path=str(destination), is_directory=is_directory),
+        roots=[{"id": "main", "path": str(root)}], publish=events.append, clock=lambda: 1.0,
+    )
+    assert len(events) == 1
+    assert events[0].kind is (LibraryEventKind.CREATED if leaving_derived else LibraryEventKind.DELETED)
+    assert events[0].path == user.resolve()
+    assert events[0].destination is None
+    assert events[0].is_directory is is_directory
+
+
+@pytest.mark.parametrize("event_type", ["deleted", "moved"])
+def test_derived_cover_storage_case_matches_native_path_semantics(tmp_path, event_type):
+    from music_app.services.library_watch import publish_watchdog_event
+    root = tmp_path / "Music"
+    source = root / "Album/.ALBUM-HAVEN/Cover_Variants/ab/image.jpg.tmp"
+    destination = source.with_suffix("")
+    events = []
+    publish_watchdog_event(
+        SimpleNamespace(event_type=event_type, src_path=str(source), dest_path=str(destination), is_directory=False),
+        roots=[{"id": "main", "path": str(root)}], publish=events.append, clock=lambda: 1.0,
+    )
+    assert len(events) == (0 if Path("A") == Path("a") else 1)

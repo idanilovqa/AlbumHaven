@@ -415,22 +415,35 @@ def test_build_track_rows_requires_a_distinct_primary_and_terminal_guest_for_pla
     assert rows[0]["secondary_artist"] == track_artist
 
 
-def test_build_track_rows_omits_album_artist_from_featured_track_artist_credit():
+@pytest.mark.parametrize(
+    ("album_artist", "track_artist", "expected_credit"),
+    [
+        ("Artist Alpha", "Artist Alpha feat. Guest", "feat. Guest"),
+        (
+            "Леонид Агутин",
+            "Леонид Агутин feat «Отпетые Мошеннники»",
+            "feat. «Отпетые Мошеннники»",
+        ),
+    ],
+)
+def test_build_track_rows_omits_album_artist_from_featured_track_artist_credit(
+    album_artist, track_artist, expected_credit
+):
     track = SimpleNamespace(
         path=r"C:\Music\Artist Alpha\Signals\01 Signal.flac",
         title="Signal",
         track_number=1,
         disc_number=1,
         disc_number_raw="1",
-        artist="Artist Alpha feat. Guest",
-        album_artist="Artist Alpha",
+        artist=track_artist,
+        album_artist=album_artist,
         duration_seconds=245,
     )
 
     rows = build_track_rows([track])
 
     assert rows[0]["title"] == "Signal"
-    assert rows[0]["secondary_artist"] == "feat. Guest"
+    assert rows[0]["secondary_artist"] == expected_credit
 
 
 def test_build_track_rows_deduplicates_featured_artist_already_present_in_track_credit():

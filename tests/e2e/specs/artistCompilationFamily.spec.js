@@ -295,18 +295,18 @@ test('FTC-ARTIST-FAMILY-016 reuses complete virtualized family data for no-query
   await stepLogger.step('Open the complete unfiltered ordinary family with viewport virtualization', async () => {
     await galleryActions.goto('/?surface=albums');
     await galleryActions.waitForGalleryReady();
-    await navigationPanelActions.selectSidebarArtistByName(CONTROL_LEAD);
-    await navigationPanelActions.waitForSidebarSelection(CONTROL_LEAD);
-    await artistFamilyActions.waitForViewReady(CONTROL_LEAD);
+    await navigationPanelActions.selectSidebarArtistByName('The Flower Kings');
+    await navigationPanelActions.waitForSidebarSelection('The Flower Kings');
+    await artistFamilyActions.waitForViewReady('The Flower Kings');
     await artistFamilyActions.expand();
-    await artistFamilyActions.waitForPrimaryChipActive(CONTROL_LEAD);
+    await artistFamilyActions.waitForPrimaryChipActive('The Flower Kings');
     initialHeadings = await galleryActions.readArtistHeadings();
-    expect(initialHeadings[0]).toBe(CONTROL_LEAD);
+    expect(initialHeadings[0]).toBe('The Flower Kings');
   });
 
   await stepLogger.step('Promote another family member locally without a loading transition', async () => {
     const transition = await navigationPanelActions
-      .selectMountedFamilyArtistAndObserveTransition(CONTROL_PARTNER);
+      .selectMountedFamilyArtistAndObserveTransition('Agents Of Mercy');
 
     expect(transition.viewDataRequests).toEqual([]);
     expect(transition.loadingScreenActivated).toBe(false);
@@ -319,38 +319,56 @@ test('FTC-ARTIST-FAMILY-016 reuses complete virtualized family data for no-query
     expect(transition.activeViewRequestUrl).toBe('');
     expect(transition.query).toBe('');
     expect(transition.locationHasQuery).toBe(false);
-    expect(transition.locationArtist).toBe(CONTROL_PARTNER);
-    expect(transition.selectedArtist).toBe(CONTROL_PARTNER);
-    expect(transition.primaryGroupNames).toEqual([CONTROL_PARTNER]);
+    expect(transition.locationArtist).toBe('Agents Of Mercy');
+    expect(transition.selectedArtist).toBe('Agents Of Mercy');
+    expect(transition.primaryGroupNames).toEqual(['Agents Of Mercy']);
     expect([...transition.familyGroupNames].sort()).toEqual(
-      [CONTROL_LEAD, CONTROL_OWNER].sort(),
+      ['The Flower Kings', 'Roine Stolt'].sort(),
     );
-    expect(transition.visibleGroupNames[0]).toBe(CONTROL_PARTNER);
+    expect(transition.visibleGroupNames[0]).toBe('Agents Of Mercy');
     expect(transition.visibleGroupNames).not.toEqual(initialHeadings);
   });
 
   await stepLogger.step('Keep the rearranged primary and virtualized family albums reachable', async () => {
-    await navigationPanelActions.waitForSidebarSelection(CONTROL_PARTNER);
-    await artistFamilyActions.waitForPrimaryChipActive(CONTROL_PARTNER);
+    await navigationPanelActions.waitForSidebarSelection('Agents Of Mercy');
+    await artistFamilyActions.waitForPrimaryChipActive('Agents Of Mercy');
     await galleryActions.waitForAlbumVisibleUnderHeading(
-      CONTROL_PARTNER,
-      CONTROL_PARTNER_SOLO,
+      'Agents Of Mercy',
+      'Functional Fixture Album 329',
     );
     await galleryActions.scrollToAlbumUnderHeading(
-      CONTROL_LEAD,
-      CONTROL_LEAD_SOLO,
+      'The Flower Kings',
+      'Functional Fixture Album 325',
     );
     await galleryActions.waitForAlbumVisibleUnderHeading(
-      CONTROL_LEAD,
-      CONTROL_LEAD_SOLO,
+      'The Flower Kings',
+      'Functional Fixture Album 325',
     );
     await galleryActions.scrollToAlbumUnderHeading(
-      CONTROL_OWNER,
-      CONTROL_SHARED_ALBUM,
+      'Roine Stolt',
+      'Functional Fixture Album 338',
     );
     await galleryActions.waitForAlbumVisibleUnderHeading(
-      CONTROL_OWNER,
-      CONTROL_SHARED_ALBUM,
+      'Roine Stolt',
+      'Functional Fixture Album 338',
     );
+  });
+  await stepLogger.step('Fetch authoritative membership when a mounted member lacks shared albums', async () => {
+    await galleryActions.goto('/?surface=albums');
+    await galleryActions.waitForGalleryReady();
+    await navigationPanelActions.selectSidebarArtistByName(CONTROL_LEAD);
+    await navigationPanelActions.waitForSidebarSelection(CONTROL_LEAD);
+    await artistFamilyActions.waitForViewReady(CONTROL_LEAD);
+    await artistFamilyActions.expand();
+    const transition = await navigationPanelActions
+      .selectMountedFamilyArtistAndObserveTransition(CONTROL_PARTNER);
+    expect(transition.viewDataRequests).toHaveLength(1);
+    expect(new URL(transition.viewDataRequests[0]).searchParams.get('artist')).toBe(CONTROL_PARTNER);
+    expect(transition.selectedArtist).toBe(CONTROL_PARTNER);
+    expect(transition.primaryGroupNames).toEqual([CONTROL_PARTNER]);
+    for (const album of ['Mulan', CONTROL_SHARED_ALBUM]) {
+      await galleryActions.scrollToAlbumUnderHeading(CONTROL_PARTNER, album);
+      await galleryActions.waitForAlbumVisibleUnderHeading(CONTROL_PARTNER, album);
+    }
   });
 });

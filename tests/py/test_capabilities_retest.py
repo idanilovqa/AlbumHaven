@@ -161,3 +161,70 @@ def test_pool_reuses_transport_but_returns_a_separate_checkout_for_each_request(
     assert len(pools[0].checkouts) == 2
     postgres_connections.close_pools()
     assert all(pool.closed for pool in pools)
+
+
+def test_pool_isolates_browse_capacity_from_authentication(monkeypatch):
+    pools = []
+
+    class FakePool:
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+            self.closed = False
+            pools.append(self)
+
+        def connection(self):
+            return object()
+
+        def close(self):
+            self.closed = True
+
+    postgres_connections.close_pools()
+    monkeypatch.setattr(postgres_connections, "ConnectionPool", FakePool)
+
+    auth_checkout = postgres_connections.pooled_connection("postgresql://shared")
+    browse_checkout = postgres_connections.pooled_connection(
+        "postgresql://shared",
+        workload="browse",
+    )
+
+    assert auth_checkout is not browse_checkout
+    assert len(pools) == 2
+    assert all(pool.kwargs["max_size"] == 4 for pool in pools)
+    postgres_connections.close_pools()
+
+
+def test_pool_prewarm_opens_and_returns_default_and_browse_connections(monkeypatch):
+    events = []
+    pools = []
+
+    class FakeCheckout:
+        def __enter__(self):
+            events.append("acquired")
+            return object()
+
+        def __exit__(self, *_args):
+            events.append("returned")
+            return False
+
+    class FakePool:
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+            self.closed = False
+            pools.append(self)
+
+        def connection(self):
+            return FakeCheckout()
+
+        def close(self):
+            self.closed = True
+
+    postgres_connections.close_pools()
+    monkeypatch.setattr(postgres_connections, "ConnectionPool", FakePool)
+    prewarm = getattr(postgres_connections, "prewarm_connection_pool", None)
+
+    assert callable(prewarm), "shared Postgres connection pools need an explicit prewarm boundary"
+    prewarm("postgresql://prewarm")
+
+    assert len(pools) == 2
+    assert events == ["acquired", "returned", "acquired", "returned"]
+    postgres_connections.close_pools()

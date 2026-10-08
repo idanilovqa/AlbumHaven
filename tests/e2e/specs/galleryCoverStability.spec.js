@@ -159,6 +159,7 @@ test('FTC-COVERS-015 shows the exact Joseph 2023 cover decoded in the card, moda
   const coverTraffic = observeExactCoverTraffic(page);
   let lightboxSources;
   let unavailableCover;
+  let fullCoverUrl;
   await stepLogger.step('Find the exact Neal Morse Joseph album through normal search', async () => {
     await galleryActions.goto('/?surface=albums');
     await galleryActions.waitForGalleryReady();
@@ -168,33 +169,36 @@ test('FTC-COVERS-015 shows the exact Joseph 2023 cover decoded in the card, moda
     const checkpoint = await readDecodedImageCheckpoint(galleryActions.albumCoverByName(ALBUM));
     expectJosephFixtureCheckpoint(expect, checkpoint);
     expectAlbumCardCoverPresentationReady(expect, checkpoint);
+    fullCoverUrl = new URL(checkpoint.productionSrc || checkpoint.src, page.url());
+    fullCoverUrl.searchParams.delete('size');
   });
 
-  await stepLogger.step('Open its normal album modal and verify the decoded non-placeholder cover', async () => {
-    await galleryActions.clickAlbumDetailsByArtistAndAlbum(ARTIST, ALBUM);
-    const summary = await trackModalActions.waitForLoadedSummary();
-    expect(summary.title).toContain(`${ARTIST} • ${ALBUM}`);
-    expect(summary.title).toContain(YEAR);
-    expect(summary.coverLoaded).toBe(true);
-    expect(summary.coverPlaceholderVisible).toBe(false);
-    lightboxSources = await trackModalActions.readCoverLightboxSources();
-    const previewUrl = new URL(lightboxSources.preview, page.url()).href;
-    expect(new URL(previewUrl).searchParams.get('size')).toBe('480');
-    expect(new URL(lightboxSources.full, page.url()).searchParams.get('size')).toBeNull();
-    const modalCover = await trackModalActions.waitForDetailedCoverImageCheckpoint();
-    expect(modalCover.complete).toBe(true);
-    expect(modalCover.naturalWidth).toBe(480);
-    expect(modalCover.naturalHeight).toBe(480);
-    expect(modalCover.currentSrc.startsWith('blob:')).toBe(true);
-    expect(modalCover.currentSrc).not.toBe(previewUrl);
-    expect(new URL(modalCover.productionSrc, page.url()).href).toBe(previewUrl);
-    const previewResponse = await coverTraffic.waitForResponse(previewUrl);
-    expectJosephCoverRouteResponse(expect, previewResponse);
-  });
+  // Make the original unavailable before opening the modal starts its full-art preload.
+  unavailableCover = temporarilyMakeJosephCoverUnavailable(fullCoverUrl.href, page.url());
+  try {
+    await stepLogger.step('Open its normal album modal and verify the decoded non-placeholder cover', async () => {
+      await galleryActions.clickAlbumDetailsByArtistAndAlbum(ARTIST, ALBUM);
+      const summary = await trackModalActions.waitForLoadedSummary();
+      expect(summary.title).toContain(`${ARTIST} • ${ALBUM}`);
+      expect(summary.title).toContain(YEAR);
+      expect(summary.coverLoaded).toBe(true);
+      expect(summary.coverPlaceholderVisible).toBe(false);
+      lightboxSources = await trackModalActions.readCoverLightboxSources();
+      const previewUrl = new URL(lightboxSources.preview, page.url()).href;
+      expect(new URL(previewUrl).searchParams.get('size')).toBe('480');
+      expect(new URL(lightboxSources.full, page.url()).searchParams.get('size')).toBeNull();
+      const modalCover = await trackModalActions.waitForDetailedCoverImageCheckpoint();
+      expect(modalCover.complete).toBe(true);
+      expect(modalCover.naturalWidth).toBe(480);
+      expect(modalCover.naturalHeight).toBe(480);
+      expect(modalCover.currentSrc.startsWith('blob:')).toBe(true);
+      expect(modalCover.currentSrc).not.toBe(previewUrl);
+      expect(new URL(modalCover.productionSrc, page.url()).href).toBe(previewUrl);
+      const previewResponse = await coverTraffic.waitForResponse(previewUrl);
+      expectJosephCoverRouteResponse(expect, previewResponse);
+    });
 
-  await stepLogger.step('Fall back to the real 480 preview when the test-owned full source is unavailable', async () => {
-    unavailableCover = temporarilyMakeJosephCoverUnavailable(lightboxSources.full, page.url());
-    try {
+    await stepLogger.step('Fall back to the real 480 preview when the test-owned full source is unavailable', async () => {
       await trackModalActions.openCoverLightbox();
       const failedFullResponse = await coverTraffic.waitForResponse(
         new URL(lightboxSources.full, page.url()).href,
@@ -206,10 +210,10 @@ test('FTC-COVERS-015 shows the exact Joseph 2023 cover decoded in the card, moda
       expect(new URL(fallbackCheckpoint.src, page.url()).href).toBe(
         new URL(lightboxSources.preview, page.url()).href,
       );
-    } finally {
-      unavailableCover.restore();
-    }
-  });
+    });
+  } finally {
+    unavailableCover.restore();
+  }
 
   await stepLogger.step('Reopen through real controls and decode the restored 1200 source with exact zoom detail', async () => {
     await trackModalActions.closeCoverLightbox();

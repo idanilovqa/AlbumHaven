@@ -19,7 +19,7 @@ const { EXPECTED } = require('../../scripts/ci/write-foundation-version-manifest
 const FIXTURE_RELEASE = 'fixtures-v1.0.25';
 const FIXTURE_MANIFEST_SHA256 = 'e56a515ff4073fa1c0e7e2b9a91a5217259344415c71de0b068af3615eb09e60';
 const EXPECTED_SHARDS = [
-  { shard: 'synthetic-large-library', fixtureProfile: 'synthetic-large-library', fixtureMode: 'preloaded-release', harness: 'managed-app', basePort: '4173', targets: 'idle-memory,all-artists,artist-family,search-all-artists,utility-rules,selected-artist,search-browse,root-album-browse,app-open-all-artists,rules-focused' },
+  { shard: 'synthetic-large-library', fixtureProfile: 'synthetic-large-library', fixtureMode: 'preloaded-release', harness: 'managed-app', basePort: '4173', targets: 'idle-memory,all-artists,artist-family,search-all-artists,utility-rules,selected-artist,search-browse,root-album-browse,app-open-all-artists,rules-focused,paired-search-calibration' },
   { shard: 'utility-problematic-files', fixtureProfile: 'utility-problematic-files', fixtureMode: 'preloaded-release', harness: 'managed-app', basePort: '4253', targets: 'utility-problematic-files,problematic-files-focused' },
   { shard: 'playback-media', fixtureProfile: 'playback-media', fixtureMode: 'generated-isolated', harness: 'managed-app', basePort: '4213', targets: 'playback-start,gapless-playback' },
   { shard: 'scan-library', fixtureProfile: 'scan-library', fixtureMode: 'generated-isolated', harness: 'scan', basePort: '4293', targets: 'scan-cold,scan-cached,scan-add-album,scan-metadata,scan-page,scan-health,scan-error' },
@@ -40,16 +40,16 @@ function stepContaining(job, marker) {
   return step;
 }
 
-test('approved registry keeps 21 independently schedulable targets and 28 cases', () => {
-  assert.equal(contract.targets.length, 21);
-  assert.equal(contract.targets.flatMap((target) => target.cases).length, 28);
+test('approved registry keeps 22 independently schedulable targets and 30 cases', () => {
+  assert.equal(contract.targets.length, 22);
+  assert.equal(contract.targets.flatMap((target) => target.cases).length, 30);
   assert.deepEqual(
     contract.targets.filter((target) => target.defaultMember).map((target) => target.name),
     contract.targets.map((target) => target.name),
   );
   for (const target of contract.targets) {
     assert.equal(target.workers, 1, target.name);
-    assert.equal(target.blocking, false, target.name);
+    assert.equal(target.blocking, target.name === 'paired-search-calibration', target.name);
   }
 });
 
@@ -58,13 +58,13 @@ test('performance validator and shard runner exist', () => {
   assert.equal(fs.existsSync(shardRunnerPath), true, 'Missing scripts/ci/run-performance-shard.ps1');
 });
 
-test('workflow has four selectable fixture-profile runners owning all 21 targets once', () => {
+test('workflow has four selectable fixture-profile runners owning all 22 targets once', () => {
   const job = performanceJobSource();
   const rows = validator.parseStaticPerformanceMatrix(workflow);
   assert.deepEqual(rows, EXPECTED_SHARDS);
   const owned = rows.flatMap((row) => row.targets.split(','));
-  assert.equal(owned.length, 21);
-  assert.equal(new Set(owned).size, 21);
+  assert.equal(owned.length, 22);
+  assert.equal(new Set(owned).size, 22);
   assert.deepEqual(new Set(owned), new Set(contract.targets.map((target) => target.name)));
   assert.match(job, /shard:\s*\$\{\{\s*fromJSON\(needs\.review_scope\.outputs\.performance_shards_json\)\s*\}\}/);
   assert.match(job, /resolve-ci-shard\.cjs performance \$\{\{\s*matrix\.shard\s*\}\}/);
@@ -76,7 +76,7 @@ test('workflow has four selectable fixture-profile runners owning all 21 targets
     rows.map((row) => row.fixtureProfile),
     ['synthetic-large-library', 'utility-problematic-files', 'playback-media', 'scan-library'],
   );
-  assert.equal(rows[0].targets.split(',').length, 10, 'synthetic-large-library must own all ten compatible targets');
+  assert.equal(rows[0].targets.split(',').length, 11, 'synthetic-large-library must own all ten compatible targets');
   assert.doesNotMatch(job, /timeout-minutes:/, 'a multi-target shard must not squeeze later targets into a shared wall-clock budget');
 });
 
@@ -97,7 +97,7 @@ test('validator accepts selectable shards and rejects routing and case drift', (
 
   const missingCaseContract = structuredClone(contract);
   missingCaseContract.targets[0].cases.pop();
-  assert.match(validator.validateWorkflowContract(workflow, missingCaseContract, runnerModule, testDataMatrix).join('\n'), /28 cases/);
+  assert.match(validator.validateWorkflowContract(workflow, missingCaseContract, runnerModule, testDataMatrix).join('\n'), /30 cases/);
 
   const paidCampaign = structuredClone(contract);
   paidCampaign.calibrationPolicy.separateCampaignRequired = true;
@@ -206,7 +206,7 @@ test('each target retains individual result, diagnostics, and foundation artifac
   }
 });
 
-test('functional shards and all-21 authenticated target artifacts remain present without report jobs', () => {
+test('functional shards and all-22 authenticated target artifacts remain present without report jobs', () => {
   assert.match(workflow, /^\s{2}e2e_functional:/m);
   assert.match(workflow, /validate-functional-shards\.cjs @arguments/);
   assert.match(workflow, /name:\s*performance-result-\$\{\{\s*steps\.shard\.outputs\.target10\s*\}\}/);

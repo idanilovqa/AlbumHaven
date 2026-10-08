@@ -51,6 +51,47 @@ export function evaluateMountedAlbumWindowTransition({
   };
 }
 
+export function isCompleteSearchPaint(payload, paint, seededAlbumKeys) {
+  const groups = ['artist_groups', 'primary_artist_groups', 'family_artist_groups']
+    .flatMap(field => Array.isArray(payload?.[field]) ? payload[field] : []);
+  const expectedKeys = [...new Set(groups.flatMap(group => group.albums || [])
+    .map(album => String(album.key || '').trim()).filter(Boolean))].sort();
+  const seededKeys = seededAlbumKeys === undefined ? null
+    : [...new Set((Array.isArray(seededAlbumKeys) ? seededAlbumKeys : [])
+      .map(key => String(key || '').trim()).filter(Boolean))].sort();
+  return expectedKeys.length > 0
+    && (seededKeys === null || (seededKeys.length > 0
+      && JSON.stringify(expectedKeys) === JSON.stringify(seededKeys)))
+    && String(payload?.payload_tier || 'full') === 'full'
+    && paint?.payloadTier === 'full'
+    && paint.partial === false
+    && String(paint.query || '').trim() === String(payload.query || '').trim()
+    && JSON.stringify(paint.albumKeys) === JSON.stringify(expectedKeys);
+}
+
+export function resolveSearchExpectedCard(payload, expectedQuery, expectedArtist = '') {
+  const query = String(expectedQuery || '').trim();
+  const artistName = String(expectedArtist || '').trim();
+  const payloadQuery = String(payload?.query || '').trim();
+  const payloadTier = String(payload?.payload_tier || 'full').trim();
+  if (payloadQuery !== query || payloadTier !== 'full') {
+    throw new Error(`Expected an exact full payload for query "${query}".`);
+  }
+  const groups = [
+    ...(Array.isArray(payload?.primary_artist_groups) ? payload.primary_artist_groups : []),
+    ...(Array.isArray(payload?.family_artist_groups) ? payload.family_artist_groups : []),
+    ...(Array.isArray(payload?.artist_groups) ? payload.artist_groups : []),
+  ];
+  for (const group of groups) {
+    const artist = String(group?.artist_display || group?.artist || '').trim();
+    const album = String(group?.albums?.[0]?.name || group?.albums?.[0]?.title || '').trim();
+    if (artist && album && (!artistName || artist === artistName)) return { album, artist };
+  }
+  throw new Error(
+    `The exact full payload for query "${query}" had no expected card for "${artistName}".`,
+  );
+}
+
 export function readVisibleGalleryCoverReadiness(selectors) {
   const toRect = (rect) => ({
     left: Number(rect.left || 0),
@@ -231,6 +272,7 @@ export function classifyGalleryAlbumTargetState(snapshot = {}) {
     [String(snapshot.canonicalQuery || '').trim() !== expectedQuery, 'canonical query mismatch'],
     [Boolean(snapshot.startupHydrating), 'startup hydration'],
     [snapshot.canonicalApplied === false, 'canonical result not applied'],
+    [Boolean(snapshot.canonicalMatch) && snapshot.canonicalReadyMatch === false, 'canonical membership awaiting applied evidence'],
     [Boolean(snapshot.canonicalMatch) && !snapshot.attachedMatch, 'canonical match awaiting virtual attachment'],
   ];
   const retryable = retryableChecks.find(([matches]) => matches);
@@ -239,6 +281,9 @@ export function classifyGalleryAlbumTargetState(snapshot = {}) {
   }
   if (snapshot.canonicalMatch && snapshot.attachedMatch) {
     return { status: 'ready', reason: 'expected album attached' };
+  }
+  if (snapshot.canonicalInventoryComplete === false) {
+    return { status: 'retryable', reason: 'incomplete canonical inventory' };
   }
 
   const observedState = { ...snapshot };
@@ -765,7 +810,7 @@ export class GalleryActions {
         });
         retryRequiresScrollReset = false;
       }
-      const generationBefore = this.galleryPage.readViewGenerationState();
+      const generationBefore = await this.galleryPage.readViewGenerationState();
       if (!generationBefore.settled) {
         lastGeneration = { before: generationBefore, after: null };
         await new Promise((resolve) => setTimeout(resolve, 25));
@@ -789,7 +834,7 @@ export class GalleryActions {
           });
         }
       }
-      const generationAfter = this.galleryPage.readViewGenerationState();
+      const generationAfter = await this.galleryPage.readViewGenerationState();
       lastGeneration = { before: generationBefore, after: generationAfter };
       if (
         generationBefore.revision !== generationAfter.revision
@@ -856,7 +901,7 @@ export class GalleryActions {
 
   async waitForAlbumVisibleUnderHeading(artistName, albumName, options = {}) {
     const timeout = Number(options.timeout || 30000);
-    const deadline = Date.now() + timeout;
+    const deadline = options.deadline ?? Date.now() + timeout;
     let lastSnapshot = null;
     while (Date.now() <= deadline) {
       lastSnapshot = await this.galleryPage.readAlbumTargetState({
@@ -866,12 +911,14 @@ export class GalleryActions {
       });
       const classification = classifyGalleryAlbumTargetState(lastSnapshot);
       if (classification.status === 'ready') return;
-      if (classification.reason === 'canonical match awaiting virtual attachment') {
+      if (['canonical match awaiting virtual attachment', 'incomplete canonical inventory'].includes(classification.reason)) {
         await this.scrollToAlbumUnderHeading(artistName, albumName, {
           ...options,
           waitAtBoundary: true,
           timeout: Math.max(1, deadline - Date.now()),
+          deadline,
         });
+        if (classification.reason === 'incomplete canonical inventory') continue;
         return;
       }
       await new Promise((resolve) => setTimeout(resolve, 25));
@@ -882,54 +929,59 @@ export class GalleryActions {
     );
   }
 
+  async readStatusPayload() {
+    return this.galleryPage.readStatusPayload();
+  }
+
+  async waitForStatusResult(resolveStatus, options = {}) {
+    let resolvedResult = null;
+    let lastError = null;
+    try {
+      await expect.poll(async () => {
+        try {
+          resolvedResult = await resolveStatus(await this.readStatusPayload());
+          lastError = null;
+          return true;
+        } catch (error) {
+          lastError = error;
+          return false;
+        }
+      }, {
+        intervals: options.intervals || [250, 500, 1000],
+        timeout: Number(options.timeout || 30000),
+      }).toBe(true);
+    } catch (error) {
+      throw lastError || error;
+    }
+    return resolvedResult;
+  }
+
+  async waitForFirstAlbumVisibleUnderHeading(artistName, options = {}) {
+    const albumName = String(options.album || '').trim();
+    const card = albumName
+      ? this.galleryPage.albumCard.cardByArtistAndAlbum(artistName, albumName).first()
+      : this.galleryPage.firstAlbumCardByArtistName(artistName);
+    await expect(card).toBeVisible({
+      timeout: Number(options.timeout || 30000),
+    });
+  }
+
   async waitForAlbumCoverReadyUnderHeading(artistName, albumName, options = {}) {
     await this.waitForAlbumVisibleUnderHeading(artistName, albumName, options);
-    const coverImage = this.galleryPage.albumCard
-      .cardByArtistAndAlbum(artistName, albumName, { visible: true })
-      .locator(this.galleryPage.albumCard.coverImageWithinCardSelector)
-      .first();
-    await this.galleryPage.waitForPageCondition((selectors) => {
-      const sections = Array.from(document.querySelectorAll(selectors.artistSectionSelector));
-      const contextName = document.querySelector(selectors.singleArtistContextSelector)
-        ?.querySelector(selectors.singleArtistContextNameSelector)?.textContent?.trim();
-      const section = sections.find((candidate) => String(
-        candidate.querySelector(selectors.artistHeadingSelector)?.textContent || '',
-      ).trim() === selectors.artistName)
-        || (sections.length === 1 && !sections[0].querySelector(selectors.artistHeadingSelector)
-          && contextName === selectors.artistName ? sections[0] : null);
-      if (!(section instanceof HTMLElement)) return false;
-      const card = Array.from(section.querySelectorAll(selectors.albumCardSelector))
-        .find((candidate) => String(
-          candidate.querySelector(selectors.albumTitleSelector)?.textContent || '',
-        ).trim() === selectors.albumName);
-      if (!(card instanceof HTMLElement)) return false;
-      const image = card.querySelector(selectors.coverImageSelector);
-      return image instanceof HTMLImageElement
-        && image.complete
-        && image.naturalWidth > 0
-        && String(image.getAttribute('data-production-cover-src') || '').trim() !== '';
+    let readyImage = null;
+    await expect.poll(async () => {
+      const checkpoint = await this.galleryPage.albumCard
+        .readCoverImageReadinessByArtistAndAlbum(artistName, albumName);
+      if (checkpoint.ready) readyImage = checkpoint;
+      return checkpoint.ready;
     }, {
       timeout: options.timeout || 30000,
-    }, {
-      artistSectionSelector: this.galleryPage.artistSectionSelector,
-      singleArtistContextSelector: this.galleryPage.albumCard.singleArtistContextSelector,
-      singleArtistContextNameSelector: this.galleryPage.albumCard.singleArtistContextNameSelector,
-      artistHeadingSelector: this.galleryPage.artistHeadingWithinSectionSelector,
-      albumCardSelector: this.galleryPage.albumCardWithinSectionSelector,
-      albumTitleSelector: this.galleryPage.albumTitleButtonWithinSectionSelector,
-      coverImageSelector: this.galleryPage.albumCard.coverImageWithinCardSelector,
-      artistName,
-      albumName,
-    });
-    return {
-      productionSrc: String(
-        await coverImage.getAttribute('data-production-cover-src') || '',
-      ).trim(),
-      renderedSrc: String(await coverImage.getAttribute('src') || '').trim(),
-    };
+    }).toBe(true);
+    return readyImage;
   }
 
   async scrollToAlbumUnderHeading(artistName, albumName, options = {}) {
+    const traversalDeadline = options.deadline ?? (options.timeout ? Date.now() + Number(options.timeout) : Infinity);
     const maxScrollActions = options.maxAttempts === undefined
       ? null
       : Math.max(1, Math.floor(Number(options.maxAttempts) || 1));
@@ -938,7 +990,29 @@ export class GalleryActions {
     let scrollActions = 0;
     let waitedAtBoundary = false;
     const year = String(options.year || '').trim();
-    const reconcileBoundary = async (boundaryDirection) => {
+    const scrollAndWait = async (scrollState, scrollDirection) => {
+      const deadline = Math.min(traversalDeadline, Date.now() + 5000);
+      const wheel = async () => {
+        if (maxScrollActions !== null && scrollActions >= maxScrollActions) {
+          throw new Error('Gallery traversal exhausted its native scroll action limit.');
+        }
+        await this.scrollGalleryBy(scrollDirection * Math.max(240, Math.round(scrollState.clientHeight * 0.75)), {
+          timeout: Math.max(1, deadline - Date.now()),
+        });
+        scrollActions += 1;
+      };
+      await wheel();
+      await this.galleryPage.waitForGalleryScrollMovement(scrollState.scrollTop, scrollDirection, {
+        deadline,
+        previousMaxScrollTop: scrollState.maxScrollTop,
+        onExtentExpanded: wheel,
+      });
+    };
+    const reconcileBoundary = async (boundaryDirection, scrollState) => {
+      if (boundaryDirection > 0 && scrollState.hasMore) {
+        await this.galleryPage.waitForRootGalleryBoundaryProgress(scrollState, { deadline: traversalDeadline });
+        return true;
+      }
       if (options.waitAtBoundary !== true || waitedAtBoundary) return false;
       waitedAtBoundary = true;
       const targetState = await this.galleryPage.readAlbumTargetState({
@@ -954,10 +1028,14 @@ export class GalleryActions {
         direction = -boundaryDirection;
         return true;
       }
-      await this.waitForAlbumVisibleUnderHeading(artistName, albumName, options);
+      await this.waitForAlbumVisibleUnderHeading(artistName, albumName, {
+        ...options,
+        deadline: Number.isFinite(traversalDeadline) ? traversalDeadline : undefined,
+      });
       return true;
     };
     while (true) {
+      if (Date.now() >= traversalDeadline) throw new Error('Gallery traversal exceeded its original deadline.');
       const section = this.galleryPage.sectionByArtistHeading(artistName);
       const target = year
         ? this.galleryPage.albumCard.cardByIdentity(artistName, albumName, year).first()
@@ -976,18 +1054,11 @@ export class GalleryActions {
             ? scrollState.scrollTop >= scrollState.maxScrollTop - 2
             : scrollState.scrollTop <= 2;
           if (reachedBoundary) {
-            if (await reconcileBoundary(targetDirection)) continue;
+            if (await reconcileBoundary(targetDirection, scrollState)) continue;
             break;
           }
           if (maxScrollActions !== null && scrollActions >= maxScrollActions) break;
-          await this.scrollGalleryBy(
-            targetDirection * Math.max(240, Math.round(scrollState.clientHeight * 0.75)),
-          );
-          await this.galleryPage.waitForGalleryScrollMovement(
-            scrollState.scrollTop,
-            targetDirection,
-          );
-          scrollActions += 1;
+          await scrollAndWait(scrollState, targetDirection);
           lastViewportState = await this.readAlbumGalleryViewportState(
             artistName,
             albumName,
@@ -1002,13 +1073,11 @@ export class GalleryActions {
         ? scrollState.scrollTop >= scrollState.maxScrollTop - 2
         : scrollState.scrollTop <= 2;
       if (reachedBoundary) {
-        if (await reconcileBoundary(direction)) continue;
+        if (await reconcileBoundary(direction, scrollState)) continue;
         break;
       }
       if (maxScrollActions !== null && scrollActions >= maxScrollActions) break;
-      await this.scrollGalleryBy(direction * Math.max(240, Math.round(scrollState.clientHeight * 0.75)));
-      await this.galleryPage.waitForGalleryScrollMovement(scrollState.scrollTop, direction);
-      scrollActions += 1;
+      await scrollAndWait(scrollState, direction);
     }
     if (lastViewportState?.attached && !lastViewportState.intersects) {
       throw new Error(
@@ -1095,6 +1164,112 @@ export class GalleryActions {
 
   async clickAlbumDetailsByArtistAndAlbum(artistName, albumName) {
     await this.galleryPage.albumCard.detailsButtonByArtistAndAlbum(artistName, albumName).click();
+  }
+
+  async measureSyntheticSearchFirstVisible(searchToolbarActions, query, options = {}) {
+    if (!Array.isArray(options.expectedAlbumKeys) || options.expectedAlbumKeys.length === 0
+        || options.expectedAlbumKeys.some(key => typeof key !== 'string' || !key.trim())) {
+      throw new Error('Synthetic search requires a nonempty independently seeded album inventory.');
+    }
+    return this.measureSearchFirstVisible(searchToolbarActions, query, options);
+  }
+
+  async measureSearchFirstVisible(searchToolbarActions, query, options = {}) {
+    const expectedQuery = String(query || '').trim();
+    const expectedArtist = String(options.expectedArtist || '').trim();
+    const timeout = Number(options.timeout || 120000);
+    const generationBefore = await this.galleryPage.readViewGenerationState();
+    const firstVisibleObservation = await this.galleryPage
+      .startSearchFirstVisibleObservation(expectedQuery, { timeout });
+    try {
+    const responsePromise = this.galleryPage.page.waitForResponse((response) => {
+      if (response.request().method() !== 'GET' || !response.ok()) return false;
+      const url = new URL(response.url());
+      return url.pathname === '/view-data'
+        && String(url.searchParams.get('q') || '').trim() === expectedQuery
+        && String(url.searchParams.get('payload_tier') || 'full').trim() === 'full';
+    }, { timeout });
+    let submittedAtMs = 0;
+    await searchToolbarActions.submitPreparedQueryWithEnter(expectedQuery, {
+      recordSubmissionBoundary: async () => {
+        submittedAtMs = await firstVisibleObservation.arm();
+      },
+    });
+    const response = await responsePromise;
+    const payload = await response.json();
+    const expectedCard = resolveSearchExpectedCard(payload, expectedQuery, expectedArtist);
+    const directMatches = Array.isArray(payload?.search_context?.result_groups?.direct_matches)
+      ? payload.search_context.result_groups.direct_matches
+      : [];
+    if (!directMatches.some((artist) => String(artist || '').trim() === expectedCard.artist)) {
+      throw new Error(`Expected a direct search match for "${expectedCard.artist}".`);
+    }
+    const firstVisibleTiming = await firstVisibleObservation.readExpectedPaint(expectedCard);
+    expect(firstVisibleTiming.pendingSearch.samples,
+      'Submitted search must expose its pending state before results paint.').toBeGreaterThan(0);
+    expect(firstVisibleTiming.pendingSearch.visiblePreviousCards,
+      'Pending search must hide the previous gallery.').toBe(0);
+    expect(firstVisibleTiming.pendingSearch.missingSearchLoader,
+      'Pending search must show the Searching loader.').toBe(0);
+    const domReadyAtMs = firstVisibleTiming.domReadyAtMs;
+    const paintAtMs = firstVisibleTiming.paintedAtMs;
+    let generationAfter = null;
+    await expect.poll(async () => {
+      generationAfter = await this.galleryPage.readViewGenerationState();
+      return Boolean(
+        generationAfter.requestGeneration > generationBefore.requestGeneration
+        && generationAfter.renderGeneration > generationBefore.renderGeneration
+        && generationAfter.query === expectedQuery
+      );
+    }, { timeout }).toBe(true);
+    await this.waitForFirstAlbumVisibleUnderHeading(expectedCard.artist, {
+      album: expectedCard.album,
+      timeout,
+    });
+    // parity-check: allow-read-only-measurement-evaluate -- browser resource, DOM-ready, and next-paint timestamps
+    const responseTiming = await this.galleryPage.page.evaluate(({ minimumStartMs, url }) => {
+      const entries = performance.getEntriesByName(url)
+        .filter((entry) => entry.entryType === 'resource' && entry.startTime >= minimumStartMs)
+        .sort((left, right) => right.startTime - left.startTime);
+      const entry = entries[0];
+      if (!entry || !(entry.responseEnd >= entry.startTime)) {
+        throw new Error('Search resource timing is unavailable.');
+      }
+      return {
+        durationMs: entry.duration,
+        responseEndAtMs: entry.responseEnd,
+      };
+    }, { minimumStartMs: submittedAtMs, url: response.url() });
+    expect(isCompleteSearchPaint(payload, firstVisibleTiming.result, options.expectedAlbumKeys),
+      'The first visible search paint must contain the complete full-result album inventory.').toBe(true);
+    await expect.poll(async () => {
+      generationAfter = await this.galleryPage.readViewGenerationState();
+      return Boolean(
+        generationAfter.requestGeneration > generationBefore.requestGeneration
+        && generationAfter.renderGeneration > generationBefore.renderGeneration
+        && generationAfter.query === expectedQuery
+        && generationAfter.settled
+      );
+    }, { timeout }).toBe(true);
+    // The observer captured this paint in-browser; Node polling must not add to it.
+    const completedAtMs = paintAtMs;
+    return {
+      completedAtMs,
+      elapsedMs: Math.max(0, completedAtMs - submittedAtMs),
+      expectedCard,
+      directSearchMatch: true,
+      generationAfter,
+      generationBefore,
+      domReadyAtMs,
+      paintAtMs,
+      responseEndAtMs: responseTiming.responseEndAtMs,
+      responseDurationMs: responseTiming.durationMs,
+      responseUrl: response.url(),
+      submittedAtMs,
+    };
+    } finally {
+      await firstVisibleObservation.dispose();
+    }
   }
 
   async readVisibleAlbumLabelsByName(albumName) {
@@ -1532,18 +1707,20 @@ export class GalleryActions {
     });
   }
 
-  async scrollGalleryBy(deltaY) {
+  async scrollGalleryBy(deltaY, options = {}) {
     if (!Number.isFinite(deltaY) || Math.abs(deltaY) < 1) return;
-    await this.galleryPage.galleryScroll.hover();
+    await this.galleryPage.galleryScroll.hover(options);
     await this.galleryPage.page.mouse.wheel(0, deltaY);
   }
 
   async readGalleryScrollState() {
-    // parity-check: allow-read-only-measurement-evaluate gallery scroll metrics only
+    // parity-check: allow-read-only-measurement-evaluate -- read gallery geometry and the actual loaded-page boundary without changing application state
     return this.galleryPage.galleryScroll.evaluate((galleryScroll) => ({
       scrollTop: galleryScroll.scrollTop,
       clientHeight: galleryScroll.clientHeight,
       maxScrollTop: Math.max(0, galleryScroll.scrollHeight - galleryScroll.clientHeight),
+      hasMore: Boolean(state.view?.gallery_page?.has_more),
+      pageCursor: String(state.view?.gallery_page?.next_cursor || ''),
     }));
   }
 
@@ -1735,13 +1912,32 @@ export class GalleryActions {
   }
 
   async expectAlbumAbsentFromSettledGallery(expected) {
+    const deadline = Date.now() + 30000;
     await expect.poll(async () => {
       const snapshot = await this.galleryPage.readAlbumTargetState(expected);
+      const settled = !snapshot.busy && !snapshot.activeLoader && !snapshot.pendingViewTransition
+        && !snapshot.startupHydrating && snapshot.canonicalApplied
+        && snapshot.inputQuery === snapshot.expectedQuery
+        && snapshot.locationQuery === snapshot.expectedQuery;
+      if (settled && snapshot.canonicalInventoryComplete === false) {
+        const scroll = await this.readGalleryScrollState();
+        if (scroll.hasMore && Date.now() < deadline) {
+          if (scroll.scrollTop >= scroll.maxScrollTop - 2) {
+            await this.galleryPage.waitForRootGalleryBoundaryProgress(scroll, { deadline });
+          } else {
+            const stepDeadline = Math.min(deadline, Date.now() + 5000);
+            const wheel = () => this.scrollGalleryBy(scroll.maxScrollTop - scroll.scrollTop, {
+              timeout: Math.max(1, stepDeadline - Date.now()),
+            });
+            await wheel();
+            await this.galleryPage.waitForGalleryScrollMovement(scroll.scrollTop, 1, {
+              deadline: stepDeadline, previousMaxScrollTop: scroll.maxScrollTop, onExtentExpanded: wheel,
+            });
+          }
+        }
+      }
       return {
-        settled: !snapshot.busy && !snapshot.activeLoader && !snapshot.pendingViewTransition
-          && !snapshot.startupHydrating && snapshot.canonicalApplied
-          && snapshot.inputQuery === snapshot.expectedQuery
-          && snapshot.locationQuery === snapshot.expectedQuery,
+        settled: settled && snapshot.canonicalInventoryComplete,
         canonicalMatch: snapshot.canonicalMatch,
         attachedMatch: snapshot.attachedMatch,
       };

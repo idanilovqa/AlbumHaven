@@ -191,14 +191,37 @@ function proposalContext() {
   ];
   context.state.utility.problematicFiles[0].suggested_edits = proposals;
   context.state.utility.proposalSelections = {};
+  context.document = { querySelectorAll: () => proposals.map(proposal => ({
+    getAttribute: () => proposal.id, disabled: false,
+  })) };
   return context;
 }
 
-test('P09 Apply All targets only the eligible visible suggestions', () => {
+test('P09 suggested edits require explicit selection even when eligible suggestions are visible', () => {
   const context = proposalContext();
   assert.equal(typeof context.getApplicableProblemSuggestions, 'function');
   context.state.utility.selectedProblemFilters = ['Missing year'];
-  assert.deepEqual(Array.from(context.getApplicableProblemSuggestions(), item => item.id), ['year-1', 'year-2']);
+  assert.deepEqual(Array.from(context.getApplicableProblemSuggestions()), []);
+});
+
+test('P09 selection refresh disables Apply again after the last suggestion is deselected', () => {
+  const context = proposalContext();
+  context.state.utility.problematicFiles[0].allowed_actions = { 'library.files.edit_tags': true };
+  const label = { textContent: '' };
+  const apply = { disabled: false, querySelector: () => label };
+  context.document = { querySelectorAll: () => [], querySelector: () => apply };
+  context.ButtonComponent = { setDisabled: (button, disabled) => { button.disabled = disabled; } };
+  context.syncProblemSuggestionSelection();
+  assert.equal(apply.disabled, true);
+  assert.equal(label.textContent, 'Apply');
+  context.toggleProblemSuggestion('year-1');
+  context.syncProblemSuggestionSelection();
+  assert.equal(apply.disabled, false);
+  assert.equal(label.textContent, 'Apply');
+  context.toggleProblemSuggestion('year-1');
+  context.syncProblemSuggestionSelection();
+  assert.equal(apply.disabled, true);
+  assert.equal(label.textContent, 'Apply');
 });
 
 test('P09 explicit selection never falls back to Apply All when its proposals are hidden', () => {
@@ -222,12 +245,23 @@ test('P07 suggestion toggle preserves independent problem selections', () => {
   assert.deepEqual(context.state.utility.problemExclusionSelections, { 'problem-year-1': true });
 });
 
-test('P07 dragging Year suggestions across Artist cannot select the other field', () => {
+test('P07 dragging suggestions selects every intervening field and supports reverse deselection', () => {
   const context = proposalContext();
   assert.equal(typeof context.extendProblemSuggestionRange, 'function');
-  context.extendProblemSuggestionRange('year', 0, 2);
-  assert.deepEqual(Object.keys(context.state.utility.proposalSelections), ['year-1', 'year-2']);
+  context.extendProblemSuggestionRange(0, 2);
+  assert.deepEqual(Object.keys(context.state.utility.proposalSelections), ['year-1', 'artist-1', 'year-2']);
+  context.extendProblemSuggestionRange(2, 0, false);
+  assert.deepEqual(Object.keys(context.state.utility.proposalSelections), []);
   assert.deepEqual(context.state.utility.problemExclusionSelections, {});
+});
+
+test('P07 suggestion ranges skip disabled rendered labels', () => {
+  const context = proposalContext();
+  const buttons = context.document.querySelectorAll();
+  buttons[1].disabled = true;
+  context.document.querySelectorAll = () => buttons;
+  context.extendProblemSuggestionRange(0, 1);
+  assert.deepEqual(Object.keys(context.state.utility.proposalSelections), ['year-1', 'year-2']);
 });
 
 test('P05 labels show exact current and corrected values without replacing source casing', () => {
@@ -258,6 +292,35 @@ function detailContext() {
     track_problem_rows: [{ path: 'track-1', filename: 'First.flac', reasons: ['Missing year', 'Missing cover art'], ignorable_reasons: [{ row_key: 'year-problem', reason: 'Missing year' }] }],
   });
   return { context, album };
+}
+
+for (const initiallySelected of [false, true]) {
+  test(`P07 drag follows rendered track order including proposal-only rows when selected=${initiallySelected}`, () => {
+    const { context, album } = detailContext();
+    album.allowed_actions = { 'library.files.edit_tags': true };
+    // Raw proposals A,B,C render B,C,A because A has no detected-problem row.
+    album.suggested_edits = [
+      { id: 'A', path: 'proposal-only', field: 'year', reason: 'Missing year', corrected: 2008 },
+      { id: 'B', path: 'track-1', field: 'artist', reason: 'Encoding problem', corrected: 'Artist' },
+      { id: 'C', path: 'track-2', field: 'title', reason: 'Encoding problem', corrected: 'Title' },
+    ];
+    album.track_problem_rows.push({ path: 'track-2', reasons: ['Encoding problem'] });
+    const html = context.buildProblematicAlbumDetail(album);
+    const ids = Array.from(html.matchAll(/data-problem-suggestion-id="([^"]+)"/g), match => match[1]);
+    assert.deepEqual(ids, ['B', 'C', 'A']);
+    const buttons = ids.map(id => ({ disabled: false, getAttribute: () => id }));
+    context.document = { querySelectorAll: () => buttons };
+    context.syncProblemSuggestionSelection = () => {};
+    context.state.utility.proposalSelections = initiallySelected ? { B: true, C: true, A: true } : {};
+    vm.runInContext(readRuntime('bootstrap-utility-event-handlers'), context);
+    const event = id => ({ button: 0, preventDefault() {}, target: {
+      closest: selector => selector === '[data-problem-suggestion-id]' ? buttons.find(button => button.getAttribute() === id) : null,
+    } });
+    context.handleUtilityBootstrapMouseDown(event('C'));
+    context.handleUtilityBootstrapMouseOver(event('A'));
+    assert.deepEqual(Object.keys(context.state.utility.proposalSelections).sort(), initiallySelected ? ['B'] : ['A', 'C']);
+    assert.equal(Boolean(context.state.utility.proposalSelections.B), initiallySelected, 'a preceding visual row is outside the drag range');
+  });
 }
 
 for (const hasSuggestions of [true, false]) {
@@ -309,6 +372,14 @@ function confirmationContext() {
   };
   return { context, modal, requests };
 }
+
+test('P09 opening Apply without selected suggestions cannot open confirmation', () => {
+  const { context, modal, requests } = confirmationContext();
+  context.openProblemSuggestionsConfirm();
+  assert.equal(modal.overlay.hidden, true);
+  assert.equal(context.state.utility.pendingProblemSuggestions, undefined);
+  assert.deepEqual(requests, []);
+});
 
 test('P09 opening Apply confirms exact values and makes no request before acceptance', () => {
   const { context, modal, requests } = confirmationContext();
@@ -438,7 +509,10 @@ for (const action of ['exclusion', 'suggestion']) {
     album.allowed_actions = { [permission]: true };
     const sync = action === 'exclusion' ? context.syncProblemExclusionSelection : context.syncProblemSuggestionSelection;
     if (action === 'exclusion') context.state.utility.problemExclusionSelections = { 'year-problem': true };
-    else album.suggested_edits = [{ id: 'year-suggestion', field: 'year', original: null, corrected: 2008 }];
+    else {
+      album.suggested_edits = [{ id: 'year-suggestion', field: 'year', original: null, corrected: 2008 }];
+      context.state.utility.proposalSelections = { 'year-suggestion': true };
+    }
     sync();
     assert.equal(button.disabled, false, 'authorized selection enables the native button');
     assert.notEqual(button.getAttribute('aria-disabled'), 'true', 'accessible state must not keep the enabled button inert');

@@ -328,7 +328,26 @@ test.describe(`${CASE_ID} synthetic-large artist family responsiveness`, () => {
       timingMs: searchAutoSelectionMs,
     });
 
-    const searchRuntimeSnapshot = await stepLogger.step('Capture the Neal Morse runtime snapshot right after search auto-selection', async () => {
+    const searchGalleryReadyMs = await stepLogger.step(
+      'Wait for the complete Neal Morse family gallery after auto-selection',
+      async () => measureActionTime(
+        async () => {},
+        async () => {
+          await artistFamilyActions.waitForViewReady(EXPECTED_FAMILY.primary, {
+            timeout: 120000,
+            queryValue: SEARCH_QUERY,
+          });
+          await artistFamilyActions.waitForVisible({ timeout: 120000 });
+          await galleryActions.waitForAlbumVisibleUnderHeading(
+            EXPECTED_FAMILY.resonance,
+            RESONANCE_ALBUM,
+            { timeout: 120000 },
+          );
+        },
+      ),
+    );
+
+    await stepLogger.step('Capture the Neal Morse runtime snapshot after timed search readiness', async () => {
       const runtimeView = await readRuntimeView(page);
       const snapshot = {
         selectedArtist: String(runtimeView?.selected_artist || ''),
@@ -344,18 +363,6 @@ test.describe(`${CASE_ID} synthetic-large artist family responsiveness`, () => {
       return snapshot;
     });
 
-    const searchGalleryReadyMs = await stepLogger.step('Wait for the Neal Morse family gallery to render after search', async () => (
-      measureActionTime(
-        async () => {},
-        async () => {
-          await artistFamilyActions.waitForViewReady(EXPECTED_FAMILY.primary, {
-            timeout: 120000,
-            queryValue: SEARCH_QUERY,
-          });
-          await artistFamilyActions.waitForVisible({ timeout: 120000 });
-        },
-      )
-    ));
     await artistFamilyLocalReport.recordTimingCheckpoint({
       key: 'search-gallery-ready',
       label: 'Search-loaded Neal Morse family gallery ready',
@@ -804,7 +811,7 @@ test.describe(`${CASE_ID} synthetic-large artist family responsiveness`, () => {
     const clearSearchReadyMs = await stepLogger.step('Clear the search and wait for the full tree to return while keeping Neal Morse selected', async () => (
       measureActionTime(
         async () => {
-          await searchToolbarActions.clearSearch();
+          await searchToolbarActions.clearSearch({ submitWithEnter: true });
         },
         async () => {
           await searchToolbarActions.waitForQuery('', { timeout: 60000 });

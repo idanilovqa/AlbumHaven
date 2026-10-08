@@ -159,42 +159,69 @@ def collaboration_alias_of(value: object, base: object) -> bool:
     return _starts_with_collaboration_marker(remainder)
 
 
-def album_matches_group_artist(
+_ALBUM_MEMBERSHIP_CACHE_SENTINEL = "\0album-membership"
+
+
+def _album_group_membership_snapshot(
     album,
-    artist: str,
     alias_to_canonical: dict[str, str],
-) -> bool:
-    """Return whether an album belongs to the requested group artist."""
-    target = str(artist or "").strip()
-    if not target:
-        return False
-    target_dedupe_key = artist_display_dedupe_key(target)
+) -> tuple[frozenset[str], tuple[tuple[str, str], ...]]:
+    direct_keys: set[str] = set()
     raw_album_artist = str(getattr(album, "album_artist", "") or "").strip()
-    if raw_album_artist and artist_display_dedupe_key(raw_album_artist) == target_dedupe_key:
-        return True
+    if raw_album_artist:
+        direct_keys.add(artist_display_dedupe_key(raw_album_artist))
     if is_shared_artist_album(album) and not is_various_album(album):
         shared_artist = shared_album_display_artist(album, alias_to_canonical)
-        if shared_artist and artist_display_dedupe_key(shared_artist) == target_dedupe_key:
-            return True
+        if shared_artist:
+            direct_keys.add(artist_display_dedupe_key(shared_artist))
 
     raw_members = list(getattr(album, "artists", []) or [])
     if not raw_members and getattr(album, "album_artist", None):
         raw_members = [getattr(album, "album_artist")]
-    normalized_members = [str(member or "").strip() for member in raw_members if str(member or "").strip()]
-    if any(artist_display_dedupe_key(member) == target_dedupe_key for member in normalized_members):
-        return True
+    normalized_members = [
+        str(member or "").strip()
+        for member in raw_members
+        if str(member or "").strip()
+    ]
+    direct_keys.update(artist_display_dedupe_key(member) for member in normalized_members)
+    canonical_members = tuple(
+        (member, str(alias_to_canonical.get(member, member) or "").strip())
+        for member in normalized_members
+    )
+    return frozenset(direct_keys), canonical_members
 
+
+def _album_group_membership_snapshot_matches(
+    snapshot: tuple[frozenset[str], tuple[tuple[str, str], ...]],
+    artist: str,
+) -> bool:
+    target = str(artist or "").strip()
+    if not target:
+        return False
+    direct_keys, canonical_members = snapshot
+    if artist_display_dedupe_key(target) in direct_keys:
+        return True
     if _contains_collaboration_marker(target):
         return False
-
-    for member in normalized_members:
-        canonical_member = str(alias_to_canonical.get(member, member) or "").strip()
+    for member, canonical_member in canonical_members:
         if canonical_member != target:
             continue
         if member != target and collaboration_alias_of(member, target):
             continue
         return True
     return False
+
+
+def album_matches_group_artist(
+    album,
+    artist: str,
+    alias_to_canonical: dict[str, str],
+) -> bool:
+    """Return whether an album belongs to the requested group artist."""
+    return _album_group_membership_snapshot_matches(
+        _album_group_membership_snapshot(album, alias_to_canonical),
+        artist,
+    )
 
 
 def album_group_match_cache_key(album, artist: str) -> tuple[str, str]:
@@ -209,16 +236,21 @@ def cached_album_matches_group_artist(
     album,
     artist: str,
     alias_to_canonical: dict[str, str],
-    match_cache: dict[tuple[str, str], bool] | None = None,
+    match_cache: dict[tuple[str, str], object] | None = None,
 ) -> bool:
     """Memoize album group matching when a cache dictionary is supplied."""
     if match_cache is None:
         return album_matches_group_artist(album, artist, alias_to_canonical)
     cache_key = album_group_match_cache_key(album, artist)
     cached = match_cache.get(cache_key)
-    if cached is not None:
+    if isinstance(cached, bool):
         return cached
-    matched = album_matches_group_artist(album, artist, alias_to_canonical)
+    snapshot_key = (cache_key[0], _ALBUM_MEMBERSHIP_CACHE_SENTINEL)
+    snapshot = match_cache.get(snapshot_key)
+    if not isinstance(snapshot, tuple):
+        snapshot = _album_group_membership_snapshot(album, alias_to_canonical)
+        match_cache[snapshot_key] = snapshot
+    matched = _album_group_membership_snapshot_matches(snapshot, artist)
     match_cache[cache_key] = matched
     return matched
 

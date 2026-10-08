@@ -1192,6 +1192,33 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
+      - name: Upload performance foundation 11 foundation-versions-performance-${{ steps.shard.outputs.target11 }}
+        if: ${{ always() && steps.shard.outputs.target11 != 'none' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: foundation-versions-performance-${{ steps.shard.outputs.target11 }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}\album-haven-performance-foundations\foundation-version-manifest-performance-${{ steps.shard.outputs.target11 }}.json
+          if-no-files-found: error
+          retention-days: 14
+      - name: Upload performance result 11 performance-result-${{ steps.shard.outputs.target11 }}
+        if: ${{ always() && steps.shard.outputs.target11 != 'none' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: performance-result-${{ steps.shard.outputs.target11 }}-${{ github.run_attempt }}
+          path: test-results/playwright-performance-targets/${{ steps.shard.outputs.target11 }}
+          if-no-files-found: error
+          retention-days: 14
+      - name: Upload performance diagnostics 11 performance-diagnostics-${{ steps.shard.outputs.target11 }}
+        if: ${{ failure() && !cancelled() && steps.shard.outputs.target11 != 'none' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: performance-diagnostics-${{ steps.shard.outputs.target11 }}-${{ github.run_attempt }}
+          path: |
+            test-results/playwright-performance-targets/${{ steps.shard.outputs.target11 }}
+            test-results/playwright-artifacts
+          if-no-files-found: error
+          retention-days: 7
+
   review_scope:
     name: PR Review Scope
     runs-on: ubuntu-latest

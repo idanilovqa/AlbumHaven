@@ -1,3 +1,4 @@
+import threading
 """Task 6 async route availability and bounded storage failures."""
 import asyncio
 import json
@@ -16,7 +17,7 @@ def route_context(monkeypatch):
     lock=Lock()
     async def scope(_request,**_kwargs):return SimpleNamespace(account_id=7,library_id=9)
     async def body():return {'query':{}}
-    request=SimpleNamespace(json=body,query_params=QueryParams(),state=SimpleNamespace(),app=SimpleNamespace(state=SimpleNamespace(cold_scan_handoff_lock=lock)))
+    request=SimpleNamespace(json=body,query_params=QueryParams(),state=SimpleNamespace(),app=SimpleNamespace(state=SimpleNamespace(cold_scan_handoff_lock=lock,database_identity_status_lock=threading.Lock(),database_identity_status=None)))
     monkeypatch.setattr(routes,'history_scope_for_request',scope)
     monkeypatch.setattr(routes,'_app_config',lambda _request:{})
     monkeypatch.setattr(routes,'_library_state',lambda _request:{})

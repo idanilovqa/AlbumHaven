@@ -34,9 +34,9 @@
   <link rel="stylesheet" href="{{ url_for('static', filename='css/date-range-picker.css') }}?v={{ runtime_asset_version }}">
   {% include "partials/navigation-tree-assets.html" %}
   <script src="/static/js/surface-dismissal.js?v={{ runtime_asset_version | default(app_version) }}" defer></script>
-  <script src="/static/js/account.js" defer></script>
-  <script src="/static/js/admin-members.js" defer></script>
-  <script src="/static/js/settings-navigation.js" defer></script>
+  <script src="/static/js/account.js?v={{ runtime_asset_version }}" defer></script>
+  <script src="/static/js/admin-members.js?v={{ runtime_asset_version }}" defer></script>
+  <script src="/static/js/settings-navigation.js?v={{ runtime_asset_version }}" defer></script>
   <script>window.__ALBUM_HAVEN_RUNTIME_ASSET_VERSION__ = {{ runtime_asset_version | tojson }};</script>
   <script src="{{ url_for('static', filename='app.js') }}?v={{ runtime_asset_version }}" defer></script>
   {% if bootstrap_payload %}<script src="{{ url_for('static', filename='js/runtime-bundle.js') }}?v={{ runtime_asset_version }}" defer></script>{% endif %}
@@ -51,8 +51,11 @@
   <script src="{{ url_for('static', filename='js/client-layout-bootstrap.js') }}?v={{ runtime_asset_version }}"></script>
   <script>AlbumHavenClientLayoutBootstrap.capture({ defaultCollapsed: {{ (shell_rail.default_collapsed | default(false)) | tojson }} });</script>
   <link rel="stylesheet" href="{{ url_for('static', filename='css/mobile-layout.css') }}?v={{ runtime_asset_version }}">
+  <link rel="stylesheet" href="/static/css/startup-progress.css?v={{ runtime_asset_version | default(app_version | default('')) }}">
 </head>
 <body>
+  {% set startup_progress_initial = 50 %}
+  {% include "components/startup-progress.html" %}
   {% set shell_app_bar = shell_slots.app_bar if shell_slots and shell_slots.app_bar else {} %}
   {% set shell_header_surfaces = shell_app_bar.header_surfaces if shell_app_bar and shell_app_bar.header_surfaces else {} %}
   {% set shell_notifications_surface = shell_header_surfaces.notifications if shell_header_surfaces and shell_header_surfaces.notifications else {} %}

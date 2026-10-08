@@ -27,6 +27,12 @@ MISSING_ALBUM_REMOVAL_FUNCTION_MIGRATION = (
 MISSING_ALBUM_REMOVAL_SNAPSHOT_MIGRATION = (
     MIGRATIONS_DIR / "0063_replace_missing_album_removal_lock_snapshot.sql"
 )
+MISSING_ALBUM_RELATION_PRESERVATION_MIGRATION = (
+    MIGRATIONS_DIR / "0082_preserve_relations_for_missing_album_removal.sql"
+)
+ARTIST_SEARCH_PROJECTION_MIGRATION = (
+    MIGRATIONS_DIR / "0084_create_local_artist_search_projection.sql"
+)
 READONLY_ACCOUNT_PRIVILEGES_MIGRATION = (
     MIGRATIONS_DIR / "0062_narrow_readonly_account_privileges.sql"
 )
@@ -432,7 +438,7 @@ def test_postgres_migration_filenames_are_zero_padded_sql_and_lexically_ordered(
 
     assert all(re.fullmatch(r"\d{4}_[a-z0-9_]+\.sql", name) for name in migration_names)
     assert migration_numbers == list(range(1, len(migration_numbers) + 1))
-    assert migration_names[-41:] == [
+    assert migration_names[-47:] == [
         "0040_repair_ignored_repairs_delete_grant.sql",
         "0041_create_local_album_cover_candidate_snapshots.sql",
         "0042_track_distinct_cover_improvement_alerts.sql",
@@ -474,7 +480,91 @@ def test_postgres_migration_filenames_are_zero_padded_sql_and_lexically_ordered(
         "0078_add_compact_player_motion_and_floating_edge.sql",
         "0079_docked_compact_player_regular_style.sql",
         "0080_user_client_layout_preferences.sql",
+        "0081_grant_move_policy_settings_delete.sql",
+        "0082_preserve_relations_for_missing_album_removal.sql",
+        "0083_add_album_raw_artist_search_index.sql",
+        "0084_create_local_artist_search_projection.sql",
+        "0085_add_stale_track_file_candidate_index.sql",
+        "0086_create_root_gallery_projection.sql",
     ]
+
+
+def test_album_raw_artist_search_index_matches_search_preview_expression():
+    sql = _normalized_sql(
+        (MIGRATIONS_DIR / "0083_add_album_raw_artist_search_index.sql").read_text(
+            encoding="utf-8"
+        )
+    )
+
+    assert "create index concurrently" in sql
+    assert "local_albums_normalized_raw_artists_trgm_idx" in sql
+    assert "lower(btrim(coalesce(metadata ->> 'artists', '')))" in sql
+    assert "gin_trgm_ops" in sql
+
+
+def test_album_raw_artist_search_index_verifier_checks_the_complete_definition():
+    sql = _normalized_sql(
+        (
+            REPO_ROOT
+            / "scripts"
+            / "postgres"
+            / "verify_0083_album_raw_artist_index.sql"
+        ).read_text(encoding="utf-8")
+    )
+
+    assert "index_namespace.nspname = 'library'" in sql
+    assert "index_relation.relname = 'local_albums_normalized_raw_artists_trgm_idx'" in sql
+    assert "index_state.table_schema = 'library'" in sql
+    assert "index_state.table_name = 'local_albums'" in sql
+    assert "index_state.access_method_name = 'gin'" in sql
+    assert "not index_state.indisunique" in sql
+    assert "not index_state.indisprimary" in sql
+    assert "index_state.indisvalid" in sql
+    assert "index_state.indisready" in sql
+    assert "index_state.indnatts = 1" in sql
+    assert "index_state.indnkeyatts = 1" in sql
+    assert "index_state.indkey::text = '0'" in sql
+    assert "index_state.indpred is null" in sql
+    assert "index_state.operator_schema = 'library'" in sql
+    assert "index_state.operator_class_name = 'gin_trgm_ops'" in sql
+    assert "lower(btrim(coalesce(metadata->>''artists'','''')))" in sql
+    assert "then 'ready'" in sql
+    assert "then 'missing'" in sql
+    assert "else 'mismatched'" in sql
+
+
+def test_artist_search_projection_migration_is_keyed_and_runtime_read_only():
+    sql = _normalized_sql(
+        ARTIST_SEARCH_PROJECTION_MIGRATION.read_text(encoding="utf-8")
+    )
+
+    assert "create table if not exists library.local_artist_search_projection" in sql
+    assert "primary key (library_id, normalized_artist_key)" in sql
+    assert (
+        "create index if not exists local_artist_search_projection_canonical_scope_idx "
+        "on library.local_artist_search_projection ( "
+        "library_id, canonical_artist_name, normalized_artist_key )"
+    ) in sql
+    assert "canonical_artist_name text not null" in sql
+    assert "builder_version text not null" in sql
+    assert "source_fingerprint text not null" in sql
+    assert (
+        "revoke insert, update, delete on table library.local_artist_search_projection "
+        "from album_haven_app"
+    ) in sql
+    assert (
+        "grant select on table library.local_artist_search_projection to album_haven_app"
+    ) in sql
+    assert "security definer" in sql
+    assert "set search_path = pg_catalog" in sql
+    assert "revoke all on function library.replace_local_artist_search_projection" in sql
+    assert "grant execute on function library.replace_local_artist_search_projection" in sql
+    assert "pg_column_size(projection_rows)" in sql
+    assert "octet_length(rows.normalized_artist_key)" in sql
+    assert "octet_length(rows.canonical_artist_name)" in sql
+    assert "projection_source_fingerprint !~ '^[0-9a-f]{64}$'" in sql
+    assert "'nan'::double precision" in sql
+    assert "'infinity'::double precision" in sql
 
 
 def test_docked_compact_player_regular_style_migration_is_additive_and_default_off():
@@ -594,6 +684,7 @@ def test_player_aware_outline_migration_validates_every_nested_appearance_value(
 @pytest.mark.parametrize("migration_path", [
     MISSING_ALBUM_REMOVAL_FUNCTION_MIGRATION,
     MISSING_ALBUM_REMOVAL_SNAPSHOT_MIGRATION,
+    MISSING_ALBUM_RELATION_PRESERVATION_MIGRATION,
 ])
 def test_missing_album_removal_uses_a_bounded_security_definer_capability(migration_path):
     assert migration_path.exists()
@@ -636,9 +727,37 @@ def test_missing_album_removal_fails_closed_for_watcher_health_and_stales_relati
     assert "to_jsonb('stale'::text)" in sql
 
 
-def test_missing_album_removal_takes_a_fresh_snapshot_after_publication_lock():
-    assert MISSING_ALBUM_REMOVAL_SNAPSHOT_MIGRATION.exists()
-    sql = _normalized_sql(MISSING_ALBUM_REMOVAL_SNAPSHOT_MIGRATION.read_text(encoding="utf-8"))
+def test_missing_album_removal_preserves_projection_built_from_active_files():
+    assert MISSING_ALBUM_RELATION_PRESERVATION_MIGRATION.exists()
+    sql = _normalized_sql(
+        MISSING_ALBUM_RELATION_PRESERVATION_MIGRATION.read_text(encoding="utf-8")
+    )
+
+    assert "library.local_track_files.scan_cache_stale is false" in sql
+    assert "delete from library.local_track_files" in sql
+    assert "'{scan_cache,relation_projection,status}'" not in sql
+    assert "to_jsonb('stale'::text)" not in sql
+    assert "'{inventory_mutation_revision}'" in sql
+
+
+def test_relation_preserving_missing_album_removal_keeps_lock_and_watcher_health_guards():
+    sql = _normalized_sql(
+        MISSING_ALBUM_RELATION_PRESERVATION_MIGRATION.read_text(encoding="utf-8")
+    )
+    assert "library_watch_health" in sql
+    assert "root_id" in sql
+    assert "album_state.unhealthy_root_count = 0" in sql
+    assert "'{scan_cache,relation_projection,status}'" not in sql
+    assert "to_jsonb('stale'::text)" not in sql
+
+
+@pytest.mark.parametrize("migration_path", [
+    MISSING_ALBUM_REMOVAL_SNAPSHOT_MIGRATION,
+    MISSING_ALBUM_RELATION_PRESERVATION_MIGRATION,
+])
+def test_missing_album_removal_takes_a_fresh_snapshot_after_publication_lock(migration_path):
+    assert migration_path.exists()
+    sql = _normalized_sql(migration_path.read_text(encoding="utf-8"))
     assert "language sql volatile security definer" in sql
     body = sql.split("as $function$", 1)[1].split("$function$", 1)[0].strip()
     lock_statement, inventory_statement = body.split(";", 1)
@@ -2868,3 +2987,11 @@ def test_tag_edit_intents_migration_creates_recoverable_least_privilege_journal(
     assert "grant select on table library.tag_edit_intents to album_haven_readonly" not in sql
     assert "grant delete" not in sql
     assert "grant all" not in sql
+
+
+def test_missing_album_candidate_index_matches_generated_stale_predicate():
+    sql = _normalized_sql((MIGRATIONS_DIR / "0085_add_stale_track_file_candidate_index.sql").read_text(encoding="utf-8"))
+    assert "create index if not exists local_track_files_stale_track_id_idx" in sql
+    assert "on library.local_track_files (track_id) where scan_cache_stale is true" in sql
+    assert "update " not in sql and "delete " not in sql
+    assert "grant " not in sql

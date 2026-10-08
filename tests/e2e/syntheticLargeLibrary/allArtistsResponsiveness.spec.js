@@ -536,7 +536,10 @@ test.describe(`${SEARCH_CASE_ID} synthetic-large responsiveness`, () => {
         expect.arrayContaining(SEARCH_EXPECTED.familyMembers),
       );
       defaultArtistHeadings = await galleryActions.readArtistHeadings();
-      expect(defaultArtistHeadings).toEqual([SEARCH_EXPECTED.primary]);
+      // The synthetic fixture's ariaFamily contract includes every named family artist.
+      expect([...defaultArtistHeadings].sort()).toEqual(
+        [...SEARCH_EXPECTED.familyMembers, SEARCH_EXPECTED.helavisa].sort(),
+      );
       await artistFamilyActions.selectOnlyChipByName(SEARCH_EXPECTED.filterArtist);
       await galleryActions.waitForOnlyArtistHeadings([SEARCH_EXPECTED.filterArtist], {
         timeout: 60000,
@@ -553,7 +556,7 @@ test.describe(`${SEARCH_CASE_ID} synthetic-large responsiveness`, () => {
         minimumDecodedCovers: 1,
       });
 
-      const transition = await searchToolbarActions.clearSearchAndObserveStableGallery();
+      const transition = await searchToolbarActions.clearSearchAndObserveStableGallery({ submitWithEnter: true });
       expect(transition).toEqual(expect.objectContaining({
         cardContentChanged: false,
         cardNodesChanged: false,

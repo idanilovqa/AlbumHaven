@@ -113,7 +113,11 @@ test('shared search hides the native clear glyph and tag selects use a centered 
 test('noneditable UI suppresses the caret while real editors preserve it', () => {
   const css = fs.readFileSync(path.join(repoRoot, 'music_app', 'static', 'css', 'base.css'), 'utf8');
   assert.match(css, /body\s*\{[^}]*caret-color:\s*transparent/s);
-  assert.match(css, /input,\s*textarea,\s*select,\s*\[contenteditable="true"\]\s*\{[^}]*caret-color:\s*auto/s);
+  assert.match(css, /:root \*\s*\{\s*caret-color:\s*transparent !important/);
+  assert.match(css, /input\[type="password"\][^{}]*textarea\):focus:not\(:read-only\)/);
+  assert.match(css, /\[contenteditable="true"\]:focus[^{}]*\{[^}]*caret-color:\s*auto !important/s);
+  assert.match(css, /\[contenteditable="plaintext-only"\]:focus[^{}]*\{[^}]*caret-color:\s*auto !important/s);
+  assert.doesNotMatch(css, /\bselect\b[^{}]*\{[^}]*caret-color:\s*auto/s);
 });
 
 test('utility searches keep shared actions mounted and synchronize Clear after tab rendering', () => {

@@ -4,12 +4,13 @@ const path = require('node:path');
 const vm = require('node:vm');
 const test = require('node:test');
 
-function harness() {
+function harness(documentOverrides = {}) {
   const source = path.join(__dirname, '../../../music_app/static/js/navigation-tree.js');
   assert.ok(fs.existsSync(source), 'NavigationTree shared component must exist');
   const templatePath = path.join(__dirname, '../../../music_app/templates/components/navigation-tree-item.html');
   assert.ok(fs.existsSync(templatePath), 'server and client must share the canonical row template');
   const document = { getElementById: () => ({textContent: fs.readFileSync(templatePath, 'utf8')}) };
+  Object.assign(document, documentOverrides);
   const window = {document};
   vm.runInNewContext(fs.readFileSync(source, 'utf8'), {window, document, console});
   return window.NavigationTree;
@@ -115,7 +116,7 @@ test('shared row escapes labels and preserves selected links and counts', () => 
 
 test('panel rows retain descriptive metadata without an artwork column',()=>{
   const html=harness().renderItem({variant:'panel',action:true,label:'Loop created',subtitle:'Album Haven',year:'Sep 9, 10:42'});
-  assert.match(html,/utility-list-item-meta[^>]*>Album Haven · Sep 9, 10:42/);
+  assert.match(html,/utility-list-item-meta[^>]*>[\s\S]*utility-list-item-subtitle[^>]*>Album Haven<\/span>[\s\S]*utility-list-item-year[^>]*>Sep 9, 10:42<\/span>/);
   assert.doesNotMatch(html,/navigation-tree-artwork/);
 });
 
@@ -201,4 +202,61 @@ test('Appearance navigation uses the compact shared rows in approved order and d
   assert.equal(elements.list.innerHTML.includes('utility-list-item-meta'),false);
   const coreState = fs.readFileSync(path.join(__dirname, '../../../music_app/static/js/runtime/core-state-and-helpers.js'), 'utf8');
   assert.match(coreState, /appearanceKey:\s*'backgrounds'/);
+});
+
+test('retained navigation metadata keeps subtitle and year structure through updates', () => {
+  const createElement = () => {
+    let text = '';
+    const node = {
+      className: '', children: [], parentNode: null,
+      get firstChild() { return this.children[0] || null; },
+      insertBefore(child, reference) {
+        child.parentNode = this;
+        const index = this.children.indexOf(reference);
+        this.children.splice(index < 0 ? this.children.length : index, 0, child);
+        return child;
+      },
+      get textContent() { return text + this.children.map(child => child.textContent).join(''); },
+      set textContent(value) { text = String(value); this.children = []; },
+      querySelector(selector) { return this.children.find(child => `.${child.className}` === selector) || null; },
+      appendChild(child) { child.parentNode = this; this.children.push(child); return child; },
+      remove() { this.parentNode.children = this.parentNode.children.filter(child => child !== this); },
+    };
+    return node;
+  };
+  const tree = harness({ createElement });
+  const meta = createElement();
+  const subtitle = createElement();
+  subtitle.className = 'utility-list-item-subtitle';
+  subtitle.textContent = 'E2E Rarity Artist';
+  const year = createElement();
+  year.className = 'utility-list-item-year';
+  year.textContent = '2026';
+  meta.appendChild(subtitle);
+  meta.appendChild(year);
+  const row = observedElement({}, [], { '.utility-list-item-meta': meta });
+
+  tree.updateItem(row, { subtitle: 'E2E Rarity Artist', year: '2026' });
+  assert.equal(meta.children.length, 2);
+  assert.equal(meta.children[0], subtitle, 'An unchanged update must preserve the artist span');
+  assert.equal(meta.children[1], year, 'An unchanged update must preserve the year span');
+  assert.equal(meta.textContent, 'E2E Rarity Artist2026');
+  tree.updateItem(row, { subtitle: 'Changed Artist', year: '2027' });
+  assert.equal(subtitle.textContent, 'Changed Artist');
+  assert.equal(year.textContent, '2027');
+  assert.deepEqual(meta.children, [subtitle, year]);
+  tree.updateItem(row, { subtitle: 'Changed Artist' });
+  assert.deepEqual(meta.children, [subtitle], 'Absent year must remove its span');
+  tree.updateItem(row, { subtitle: 'Changed Artist', year: '2028' });
+  assert.equal(meta.children[0], subtitle);
+  assert.equal(meta.children[1].className, 'utility-list-item-year');
+  assert.equal(meta.children[1].textContent, '2028');
+  tree.updateItem(row, { year: '2028' });
+  assert.equal(meta.children.length, 1);
+  const retainedYear = meta.children[0];
+  tree.updateItem(row, { subtitle: 'Restored Artist', year: '2028' });
+  assert.equal(meta.children[0].className, 'utility-list-item-subtitle');
+  assert.equal(meta.children[1], retainedYear, 'Restoring the artist must keep year last');
+  tree.updateItem(row, {});
+  assert.equal(meta.children.length, 0);
 });

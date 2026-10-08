@@ -24,6 +24,7 @@ function getUtilityLogHistoryController() {
     },
     onAccepted: ({ query, items, page, navigationOnly, publishNavigation }) => {
       if (state.utility !== owner) return;
+      if (!navigationOnly && page.snapshot) owner.logHistoryLoaded = true;
       if (!navigationOnly) owner.allowedActions = { ...(owner.allowedActions || {}),
         'library.logs.read': page.allowed_actions?.['library.logs.read'] === true,
         'library.logs.export': page.allowed_actions?.['library.logs.export'] === true };
@@ -42,7 +43,6 @@ function getUtilityLogHistoryController() {
       owner.logHistoryLoading = value.loading;
       owner.logHistoryRevision = value.revision;
       owner.selectedLogHistoryId = value.selectedEventId;
-      if (value.snapshot) owner.logHistoryLoaded = true;
       const nextPresentation = [value.query, value.snapshot, value.items, value.selectedEventId, value.temporaryRowId, value.loading, value.error, value.stale, value.refreshRequired, value.periodLabel, owner.logHistory, owner.allowedActions];
       if (presentation && presentation.every((item, index) => item === nextPresentation[index])) return;
       presentation = nextPresentation;

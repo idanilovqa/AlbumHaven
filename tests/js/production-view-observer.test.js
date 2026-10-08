@@ -139,6 +139,24 @@ test('DOM evidence stability rejects attachment and applied-artist changes durin
   ), true);
 });
 
+test('a concurrent search preview cannot replace the observed complete payload', async () => {
+  const { ProductionViewObserver } = await import(observerUrl);
+  const page = new FakePage();
+  const observer = new ProductionViewObserver(page, page);
+  const fullRequest = request('http://127.0.0.1/view-data?q=Neal');
+  const previewRequest = request('http://127.0.0.1/view-data?q=Neal&payload_tier=search_preview');
+  page.emit('request', fullRequest);
+  page.emit('request', previewRequest);
+  page.emit('response', response(fullRequest, { payload_tier: 'full', query: 'Neal' }));
+  page.emit('requestfinished', fullRequest);
+  page.emit('response', response(previewRequest, { payload_tier: 'search_preview', query: 'Neal' }));
+  page.emit('requestfinished', previewRequest);
+  await flushPromises();
+  assert.equal(observer.read().latestFullPayload?.payload_tier, 'full');
+  assert.equal(observer.read().latestFullPayloadError, null);
+  assert.equal(observer.read().activeRequestCount, 0);
+});
+
 test('production view observer ignores sidebar payloads and retains the latest full request payload', async () => {
   const { ProductionViewObserver } = await import(observerUrl);
   const page = new FakePage();
@@ -910,3 +928,195 @@ for (const status of [204, 205]) {
     assert.match(observer.read().latestFullPayloadError, /Request failed/);
   });
 }
+
+
+test('root continuation permits SSR telemetry but replacement requests do not', async () => {
+  const { ProductionViewObserver } = await import(observerUrl);
+  const { GalleryPage } = await import(pathToFileURL(path.join(__dirname, '..', 'e2e', 'poms', 'galleryPage.js')).href);
+  const page = new FakePage();
+  const observer = new ProductionViewObserver(page, page);
+  const payload = { payload_tier: 'gallery_page', query: '', gallery_page: { revision: 'r1', has_more: true } };
+  const owner = { productionViewObserver: observer, page: { url: () => 'http://127.0.0.1/?surface=albums' },
+    readProductionBootstrapPayload: async () => ({ initial_view: payload }) };
+  page.emit('request', request('http://127.0.0.1/view-data?surface=albums&gallery_cursor=next'));
+  assert.equal(observer.read().onlyRootContinuationsPending, true);
+  assert.equal(await GalleryPage.prototype.readLatestProductionViewPayload.call(owner), payload);
+  owner.page.url = () => 'http://127.0.0.1/?q=Devin';
+  await assert.rejects(() => GalleryPage.prototype.readLatestProductionViewPayload.call(owner), /observed production view/);
+  owner.page.url = () => 'http://127.0.0.1/?surface=albums';
+  page.emit('request', request('http://127.0.0.1/view-data?q=Devin'));
+  assert.equal(observer.read().onlyRootContinuationsPending, false);
+  await assert.rejects(() => GalleryPage.prototype.readLatestProductionViewPayload.call(owner), /observed production view/);
+});
+
+test('unfinished replacement body blocks SSR fallback during a later root continuation', async () => {
+  const { ProductionViewObserver } = await import(observerUrl);
+  const page = new FakePage();
+  const observer = new ProductionViewObserver(page, page);
+  const search = request('http://127.0.0.1/view-data?q=Devin');
+  let finishBody;
+  const body = new Promise(resolve => { finishBody = resolve; });
+  page.emit('request', search);
+  page.emit('response', response(search, null, { json: () => body }));
+  page.emit('requestfinished', search);
+  page.emit('request', request('http://127.0.0.1/view-data?gallery_cursor=next'));
+  assert.equal(observer.read().pendingPayloadReadCount, 1);
+  assert.equal(observer.read().onlyRootContinuationsPending, false);
+  finishBody({ payload_tier: 'full', query: 'Devin' });
+  await body;
+});
+
+test('accumulated root evidence rejects stale page revision and scope', async () => {
+  const { matchesAccumulatedRootProjection, readCanonicalAlbumTargetEvidence } = await import(observerUrl);
+  const payload = { payload_tier: 'gallery_page', query: '', selected_artist: '', gallery_scope: 'all',
+    visible_library_categories: ['main_library'], gallery_page: { revision: 'r1', next_cursor: null, has_more: false },
+    artist_groups: [{ artist: 'Last', albums: [{ name: 'Last album' }] }] };
+  const projection = { ...payload, surface: 'albums', artist_groups: [
+    { artist: 'First', albums: [{ name: 'Earlier album' }] }, ...payload.artist_groups] };
+  assert.equal(matchesAccumulatedRootProjection(payload, projection), true);
+  const target = { artist: 'First', album: 'Earlier album' };
+  assert.equal(readCanonicalAlbumTargetEvidence({ latestFullPayload: payload }, target).canonicalMatch, false);
+  assert.equal(readCanonicalAlbumTargetEvidence({ latestFullPayload: { ...payload, artist_groups: projection.artist_groups } }, target).canonicalMatch, true);
+  for (const changed of [{ query: 'Devin' }, { selected_artist: 'First' }, { surface: 'playlists' },
+    { gallery_scope: 'changed' }, { visible_library_categories: ['hoard'] }, { busy: true }, { pendingViewTransition: true },
+    { gallery_page: { ...payload.gallery_page, revision: 'r2' } },
+    { gallery_page: { ...payload.gallery_page, next_cursor: 'other' } },
+    { gallery_page: { ...payload.gallery_page, has_more: true } },
+  ]) assert.equal(matchesAccumulatedRootProjection(payload, { ...projection, ...changed }), false, JSON.stringify(changed));
+});
+
+test('local sidebar membership uses applied scope without inheriting old search completeness', async () => {
+  const { readAppliedAlbumTargetEvidence } = await import(observerUrl);
+  const groups = [{ artist: 'Morse Portnoy George', albums: [{ name: 'Cover to Cover' }] }];
+  const payload = { payload_tier: 'full', query: 'Morse, Portnoy & George', artist_groups: groups };
+  const applied = { query: '', selected_artist: 'Morse Portnoy George', locationQuery: '', locationArtist: 'Morse Portnoy George', surface: 'albums', artist_groups: groups };
+  const evidence = readAppliedAlbumTargetEvidence({ latestFullPayload: payload }, applied, null,
+    { artist: 'Morse Portnoy George', album: 'Cover to Cover' });
+  assert.equal(evidence.canonicalMatch, true);
+  assert.equal(evidence.canonicalQuery, '');
+  assert.equal(evidence.canonicalInventoryComplete, false);
+  const root = readAppliedAlbumTargetEvidence({ latestFullPayload: payload }, { ...applied, selected_artist: '' }, null,
+    { artist: 'Missing', album: 'Missing' });
+  assert.equal(root.canonicalInventoryComplete, false);
+});
+
+test('restored exhausted root requires its existing bootstrap revision and scope', async () => {
+  const { readAppliedAlbumTargetEvidence } = await import(observerUrl);
+  const bootstrap = { payload_tier: 'gallery_page', query: '', selected_artist: '', gallery_scope: 'all',
+    visible_library_categories: ['main_library'], gallery_page: { revision: 'root1', has_more: true, next_cursor: 'first' },
+    artist_groups: [{ artist: 'First', albums: [{ name: 'First album' }] }] };
+  const applied = { ...bootstrap, surface: 'albums', gallery_page: { revision: 'root1', has_more: false, next_cursor: null } };
+  const observation = { latestFullPayload: { payload_tier: 'full', query: 'old search', artist_groups: [] } };
+  const expected = { artist: 'Missing', album: 'Missing' };
+  assert.equal(readAppliedAlbumTargetEvidence(observation, applied, bootstrap, expected).canonicalInventoryComplete, true);
+  for (const changed of [{ gallery_scope: 'changed' }, { visible_library_categories: ['hoard'] },
+    { gallery_page: { ...applied.gallery_page, revision: 'different' } }]) {
+    assert.equal(readAppliedAlbumTargetEvidence(observation, { ...applied, ...changed }, bootstrap, expected).canonicalInventoryComplete, false);
+  }
+});
+
+test('positive server or applied evidence blocks absence even when the other side omits the target', async () => {
+  const { readAppliedAlbumTargetEvidence } = await import(observerUrl);
+  const groups = [{ artist: 'Artist', albums: [{ name: 'Album', key: 'album' }] }];
+  const expected = { artist: 'Artist', album: 'Album' };
+  for (const [server, applied] of [[groups, []], [[], groups]]) {
+    const evidence = readAppliedAlbumTargetEvidence({ latestFullPayload: { payload_tier: 'full', artist_groups: server } },
+      { surface: 'albums', artist_groups: applied }, null, expected);
+    assert.equal(evidence.canonicalInventoryComplete, true);
+    assert.equal(evidence.canonicalMatch, true);
+    assert.equal(evidence.canonicalReadyMatch, false);
+  }
+  const anchor = { payload_tier: 'gallery_page', artist_groups: groups, gallery_page: { revision: 'root', has_more: false } };
+  const root = readAppliedAlbumTargetEvidence({ latestFullPayload: anchor }, { ...anchor, surface: 'albums', artist_groups: [] }, null, expected);
+  assert.equal(root.canonicalMatch, true);
+  assert.equal(root.canonicalReadyMatch, false);
+});
+
+test('local selection evidence rejects a new query, changed filters, and unsupported surfaces', async () => {
+  const { readAppliedAlbumTargetEvidence } = await import(observerUrl);
+  const groups = [{ artist: 'Artist', albums: [{ name: 'Album' }] }];
+  const payload = { payload_tier: 'full', query: 'Neal', artist_groups: groups };
+  const applied = { query: 'Neal', surface: 'albums', artist_groups: groups };
+  for (const changed of [{ query: 'Devin' }, { gallery_scope: 'new_arrivals' },
+    { visible_library_categories: ['hoard'] }, { surface: 'playlists' },
+    { query: '', selected_artist: 'Artist', locationArtist: 'Other' }]) {
+    const evidence = readAppliedAlbumTargetEvidence({ latestFullPayload: payload }, { ...applied, ...changed }, null,
+      { artist: 'Artist', album: 'Album' });
+    assert.equal(evidence.canonicalReadyMatch, false, JSON.stringify(changed));
+    assert.equal(evidence.canonicalInventoryComplete, false);
+  }
+});
+
+test('scoped family completeness requires the existing pure product authority and complete source identities', async () => {
+  const { readAppliedAlbumTargetEvidence } = await import(observerUrl);
+  const groups = [{ artist: 'Lead', albums: [{ name: 'Album', key: 'one' }] },
+    { artist: 'Partner', albums: [{ name: 'Partner album', key: 'two' }] }];
+  const payload = { payload_tier: 'full', query: 'Lead', artist_groups: groups };
+  const applied = { query: '', selected_artist: 'Partner', locationQuery: '', locationArtist: 'Partner',
+    surface: 'albums', artist_groups: groups, authoritativeMountedFamily: true };
+  const expected = { artist: 'Guest', album: 'Foreign' };
+  assert.equal(readAppliedAlbumTargetEvidence({ latestFullPayload: payload }, applied, null, expected).canonicalInventoryComplete, true);
+  const narrower = readAppliedAlbumTargetEvidence({ latestFullPayload: payload }, { ...applied, artist_groups: groups.slice(1) }, null,
+    { artist: 'Lead', album: 'Album' });
+  assert.equal(narrower.canonicalInventoryComplete, true);
+  assert.equal(narrower.canonicalMatch, false, 'Unrelated old source groups are not members of the certified current family');
+  for (const changed of [{ authoritativeMountedFamily: false }, { artist_groups: [{ artist: 'Partner', albums: [] }] },
+    { selected_artist: '', locationArtist: '' }, { gallery_scope: 'changed' }]) {
+    assert.equal(readAppliedAlbumTargetEvidence({ latestFullPayload: payload }, { ...applied, ...changed }, null, expected).canonicalInventoryComplete, false);
+  }
+});
+
+test('same-query Partner-to-Lead reparenting retains the complete authoritative family', async () => {
+  const { readAppliedAlbumTargetEvidence } = await import(observerUrl);
+  const groups = ['Control Signal Partner', 'Control Signal Lead'].map(artist => ({ artist,
+    albums: Array.from({ length: 12 }, (_, index) => ({ name: `Album ${index}`, key: `${artist}:${index}` })) }));
+  const payload = { payload_tier: 'full', query: 'Control Signal Partner', selected_artist: 'Control Signal Partner',
+    gallery_scope: 'all', visible_library_categories: ['main_library', 'new_arrivals', 'hoard'], artist_groups: groups };
+  const applied = { ...payload, selected_artist: 'Control Signal Lead', surface: 'albums',
+    locationQuery: payload.query, locationArtist: 'Control Signal Lead', authoritativeMountedFamily: true,
+    artist_groups: [...groups].reverse() };
+  assert.equal(readAppliedAlbumTargetEvidence({ latestFullPayload: payload }, applied, null,
+    { artist: 'Control Signal Partner', album: 'Guest-only foreign album' }).canonicalInventoryComplete, true);
+  const { GalleryPage } = await import(pathToFileURL(path.join(__dirname, '..', 'e2e', 'poms', 'galleryPage.js')).href);
+  const vm = require('node:vm');
+  const snapshot = await GalleryPage.prototype.readAppliedGalleryProjection.call({ page: {
+    evaluate: fn => vm.runInNewContext(`(${fn.toString()})()`, { state: { view: applied, ui: {} },
+      buildOptimisticSidebarArtistSelectionGroups: () => ({ skipFetch: true }), URL,
+      window: { location: { href: 'http://127.0.0.1/?q=Control%20Signal%20Partner&artist=Control%20Signal%20Lead' } } }),
+  } });
+  assert.equal(snapshot.authoritativeMountedFamily, true);
+});
+
+test('bounded gallery pages expose browse telemetry without claiming a complete inventory', async () => {
+  const { ProductionViewObserver, hasCompleteCanonicalAlbumInventory } = await import(observerUrl);
+  const page = new FakePage();
+  const observer = new ProductionViewObserver(page, page);
+  const pageRequest = request('http://127.0.0.1/view-data?gallery_page_size=50&gallery_cursor=next');
+  const payload = { payload_tier: 'gallery_page', persistence_backend: 'postgres', gallery_page: { has_more: true } };
+  page.emit('request', pageRequest);
+  page.emit('response', response(pageRequest, payload));
+  page.emit('requestfinished', pageRequest);
+  const observation = await observer.readLatestFullPayloadWhenSettled();
+  assert.equal(observation.latestFullPayloadError, null);
+  assert.deepEqual(observation.latestFullPayload, payload);
+  assert.equal(hasCompleteCanonicalAlbumInventory(payload), false);
+  assert.equal(hasCompleteCanonicalAlbumInventory({ ...payload, gallery_page: { has_more: false } }), false,
+    'even the final page alone cannot prove absence from earlier pages');
+  assert.equal(hasCompleteCanonicalAlbumInventory({ payload_tier: 'full' }), true);
+  assert.equal(hasCompleteCanonicalAlbumInventory(null), false);
+});
+
+test('browse telemetry accepts the actual SSR first-paint payload without a redundant full request', async () => {
+  const { GalleryPage } = await import(pathToFileURL(path.join(__dirname, '..', 'e2e', 'poms', 'galleryPage.js')).href);
+  const payload = { payload_tier: 'gallery_page', persistence_backend: 'postgres', artist_count: 6045, album_count: 14674 };
+  const owner = {
+    productionViewObserver: { readLatestFullPayloadWhenSettled: async () => ({ latestFullPayload: null, latestFullPayloadError: null, activeRequestCount: 0, pendingPayloadReadCount: 0 }) },
+    readProductionBootstrapPayload: async () => ({ startup_payload: { first_paint_view: payload } }),
+  };
+  assert.equal(await GalleryPage.prototype.readLatestProductionViewPayload.call(owner), payload);
+  owner.productionViewObserver.readLatestFullPayloadWhenSettled = async () => ({ latestFullPayload: null, latestFullPayloadError: null, activeRequestCount: 1, pendingPayloadReadCount: 0 });
+  await assert.rejects(() => GalleryPage.prototype.readLatestProductionViewPayload.call(owner), /Expected an observed production view/);
+  owner.productionViewObserver.readLatestFullPayloadWhenSettled = async () => ({ latestFullPayload: null, latestFullPayloadError: null, activeRequestCount: 0, pendingPayloadReadCount: 0 });
+  owner.readProductionBootstrapPayload = async () => null;
+  await assert.rejects(() => GalleryPage.prototype.readLatestProductionViewPayload.call(owner), /Expected an observed production view/);
+});

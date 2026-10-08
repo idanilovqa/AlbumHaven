@@ -767,6 +767,9 @@ test('a near-end seek waits for its promised queued successor instead of stoppin
     [...sequence(1, 64), ...Array(64).fill(0)],
     [...sequence(1, 64).map((value) => -value), ...Array(64).fill(0)],
   );
+  assert.equal(fixture.events('underrun').length, 1);
+  assert.equal(fixture.events('underrun')[0].missingFrames, 64);
+  assert.equal(fixture.events('underrun')[0].renderedFrame, 64);
   assert.equal(fixture.events('ended').length, 0);
   assert.equal(fixture.processor.playing, true);
 

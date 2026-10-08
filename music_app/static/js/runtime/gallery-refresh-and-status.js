@@ -1,3 +1,138 @@
+// Root browsing has authoritative navigation and totals but only a bounded page
+// of albums. Continuations never own the foreground/search request slot.
+let rootGalleryPageRequest = null;
+
+function isPagedRootGallery(view = state.view) {
+  const surface = typeof resolveViewSurface === 'function'
+    ? resolveViewSurface(view)
+    : String(view?.surface?.active || view?.surface_request || 'albums');
+  return Boolean(view?.gallery_page
+    && !String(view.query || '').trim()
+    && !String(view.selected_artist || '').trim()
+    && surface === 'albums');
+}
+
+function cancelRootGalleryPageRequest() {
+  rootGalleryPageRequest?.controller.abort();
+  rootGalleryPageRequest = null;
+}
+
+function mergeRootGalleryPageGroups(existing, incoming) {
+  const groups = (existing || []).map(group => ({ ...group, albums: [...(group.albums || [])] }));
+  const byArtist = new Map(groups.map(group => [String(group.display_artist_key || group.artist || ''), group]));
+  for (const incomingGroup of incoming || []) {
+    const artistKey = String(incomingGroup.display_artist_key || incomingGroup.artist || '');
+    let group = byArtist.get(artistKey);
+    if (!group) {
+      group = { ...incomingGroup, albums: [] };
+      groups.push(group);
+      byArtist.set(artistKey, group);
+    }
+    const identities = new Set(group.albums.map(album => String(album.key || '')));
+    for (const album of incomingGroup.albums || []) {
+      const identity = String(album.key || '');
+      if (!identity || identities.has(identity)) continue;
+      identities.add(identity);
+      group.albums.push(album);
+    }
+  }
+  return groups;
+}
+
+function buildRootGalleryPageUrl(view) {
+  return buildApiUrl({ ...view, ...(view.gallery_page_scope || {}) });
+}
+
+async function loadNextRootGalleryPage() {
+  const view = state.view;
+  const page = view?.gallery_page;
+  const scroll = document.getElementById('albums-scroll');
+  if (!isPagedRootGallery(view) || !page.has_more || !page.next_cursor
+    || rootGalleryPageRequest || state.busy || hasPendingSidebarNavigation()
+    || !scroll || scroll.clientHeight <= 0
+    || scroll.scrollHeight - scroll.scrollTop - scroll.clientHeight > 2 * scroll.clientHeight) return false;
+  const request = {
+    controller: new AbortController(),
+    viewRevision: readViewStateRevision(),
+    url: buildRootGalleryPageUrl(view),
+    cursor: page.next_cursor,
+    revision: page.revision,
+  };
+  rootGalleryPageRequest = request;
+  const ownsResponse = () => rootGalleryPageRequest === request
+    && !request.controller.signal.aborted
+    && readViewStateRevision() === request.viewRevision
+    && isPagedRootGallery()
+    && buildRootGalleryPageUrl(state.view) === request.url
+    && state.view.gallery_page.next_cursor === request.cursor
+    && state.view.gallery_page.revision === request.revision;
+  const url = new URL(request.url, window.location.href);
+  url.searchParams.set('gallery_page_size', '50');
+  url.searchParams.set('gallery_cursor', request.cursor);
+  url.searchParams.set('omit_sidebar', '1');
+  try {
+    let response = await fetch(`${url.pathname}${url.search}`, {
+      headers: { Accept: 'application/json' }, signal: request.controller.signal,
+    });
+    let restarted = false;
+    if (response.status === 409) {
+      const conflict = await response.json();
+      if (!ownsResponse() || conflict?.restart_required !== true) return false;
+      // Catalog changes invalidate the cursor. Replace atomically with one fresh
+      // bounded page; keep the old cards visible until that response arrives.
+      url.searchParams.delete('gallery_cursor');
+      url.searchParams.delete('omit_sidebar');
+      response = await fetch(`${url.pathname}${url.search}`, {
+        headers: { Accept: 'application/json' }, signal: request.controller.signal,
+      });
+      restarted = true;
+    }
+    const data = await readGalleryResponse(response, ownsResponse);
+    if (!ownsResponse()) return false;
+    if (!data.gallery_page || !data.gallery_page.revision
+      || (!restarted && data.gallery_page.revision !== request.revision)
+      || (data.gallery_page.has_more && (!data.gallery_page.next_cursor
+        || (!restarted && data.gallery_page.next_cursor === request.cursor)))
+      || !Array.isArray(data.artist_groups)) return false;
+    const artistGroups = restarted
+      ? data.artist_groups
+      : mergeRootGalleryPageGroups(state.view.artist_groups, data.artist_groups);
+    applyViewPayload({
+      ...state.view,
+      ...(restarted ? {
+        ...data,
+        gallery_page_scope: {
+          ...(state.view.gallery_page_scope || {}),
+          gallery_scope: data.gallery_scope,
+          visible_library_categories: data.visible_library_categories,
+        },
+      } : {}),
+      artist_groups: artistGroups,
+      gallery_page: data.gallery_page,
+      initial_view_partial: false,
+    }, {
+      trackSidebarReveal: false,
+      preserveSidebarState: !restarted || state.view.gallery_page_scope?.preserve_sidebar === true,
+      preserveGalleryBrowseLocationState: true,
+      rootGalleryContinuation: true,
+    });
+    const renderOptions = { preserveScroll: true, preserveMountedGalleryChildren: true };
+    if (restarted) renderView(renderOptions);
+    else renderArtistGroups(renderOptions);
+    // Fill only the visible buffer, including a short initial page. Rechecking
+    // geometry after rendering prevents an idle timer from draining the library.
+    scheduleBrowserAnimationFrame(() => { void loadNextRootGalleryPage(); });
+    return true;
+  } catch (error) {
+    if (ownsResponse() && error?.name !== 'AbortError') {
+      showToast('Unable to load more albums. Scroll to retry.', 'error', 3200);
+    }
+    return false;
+  } finally {
+    if (rootGalleryPageRequest === request) rootGalleryPageRequest = null;
+  }
+}
+
 const STARTUP_FOLLOWUP_RETRY_DELAY_MS = 100;
 const STARTUP_FOLLOWUP_VISIBLE_READY_DELAY_MS = 350;
 const STARTUP_FOLLOWUP_MAX_AGE_MS = 1000;
@@ -92,7 +227,8 @@ function shouldAutoRefreshViewAfterCoverCompletion() {
   return false;
 }
 
-function beginPendingViewTransition(requestId) {
+function beginPendingViewTransition(requestId, options = {}) {
+  state.ui.pendingGallerySearch = options.showSearchProgress === true;
   state.ui.pendingViewTransition = true;
   state.ui.pendingViewTransitionRequestId = Number(requestId || 0);
   // Keep the current gallery mounted while the replacement payload is loading.
@@ -113,9 +249,11 @@ function finishPendingViewTransition(requestId, options = {}) {
   ) {
     return false;
   }
+  const wasSearching = state.ui.pendingGallerySearch === true;
   state.ui.pendingViewTransition = false;
+  state.ui.pendingGallerySearch = false;
   state.ui.pendingViewTransitionRequestId = 0;
-  if (options.restoreCurrentGallery === true) {
+  if (wasSearching || options.restoreCurrentGallery === true) {
     renderLibraryLoader({
       ...(state.status || {}),
       transition_in_progress: false,
@@ -520,6 +658,11 @@ function renderView(options = {}) {
   scheduleSidebarRender();
   if (typeof syncMobileHome === 'function') syncMobileHome();
   if (typeof syncMobileGalleryControls === 'function') syncMobileGalleryControls();
+  if (isPagedRootGallery()) {
+    scheduleBrowserAnimationFrame(() => {
+      scheduleBrowserAnimationFrame(() => { void loadNextRootGalleryPage(); });
+    });
+  }
 }
 
 function hasEquivalentGalleryRenderTopology(retainedGroups, canonicalGroups) {
@@ -668,7 +811,85 @@ function dispatchStartupHydrationFollowup(followup, delayMs = 0) {
   Promise.resolve().then(runDispatch);
 }
 
+async function readGalleryResponse(response, ownsResponse) {
+  if (response.status === 401) {
+    if (ownsResponse()) window.location.assign('/login');
+    throw new Error('Sign in again to continue.');
+  }
+  const data = await response.json();
+  if (!response.ok || data?.ok === false) {
+    throw new Error(data?.error || `View request failed: ${response.status}`);
+  }
+  return data;
+}
+
+function rootGalleryRefreshCoverage(apiUrl, options) {
+  if (!options.preserveScroll || options.startupRefresh || !isPagedRootGallery()) return 0;
+  const url = new URL(apiUrl, 'http://localhost');
+  if (url.pathname !== '/view-data' || url.searchParams.get('surface') !== 'albums'
+    || !url.searchParams.has('gallery_page_size')
+    || ['q', 'artist', 'genre', 'mood', 'style', 'duration_min', 'duration_max',
+      'related_artist', 'primary_filter', 'gallery_cursor', 'payload_tier', 'root_sidebar']
+      .some(key => url.searchParams.has(key))) return 0;
+  const scope = state.view.gallery_page_scope || state.view;
+  if (String(scope.gallery_scope || '') !== String(url.searchParams.get('gallery_scope') || '')) return 0;
+  const categories = [...(scope.visible_library_categories || [])].sort();
+  const requestedCategories = url.searchParams.getAll('category').sort();
+  if (JSON.stringify(categories) !== JSON.stringify(requestedCategories)) return 0;
+  return (state.view.artist_groups || []).reduce((count, group) => count + (group.albums || []).length, 0);
+}
+
+async function collectRootGalleryRefresh(data, apiUrl, coverage, controller, ownsResponse) {
+  let payload = data;
+  let restarted = false;
+  const cursors = new Set();
+  let remainingPages = Math.ceil(coverage / 50);
+  while (ownsResponse()) {
+    const page = payload?.gallery_page;
+    const count = (payload?.artist_groups || []).reduce((sum, group) => sum + (group.albums || []).length, 0);
+    if (!page?.has_more || count >= coverage) return payload;
+    const cursor = String(page.next_cursor || '');
+    if (!cursor || cursors.has(cursor) || remainingPages-- <= 0) {
+      throw new Error('Root gallery refresh did not advance within its loaded coverage.');
+    }
+    cursors.add(cursor);
+    const url = new URL(apiUrl, 'http://localhost');
+    url.searchParams.set('gallery_page_size', '50');
+    url.searchParams.set('gallery_cursor', cursor);
+    url.searchParams.set('omit_sidebar', '1');
+    const response = await fetch(`${url.pathname}${url.search}`, {
+      headers: { Accept: 'application/json' }, signal: controller?.signal,
+    });
+    if (!ownsResponse()) return null;
+    const next = response.status === 409 ? null : await readGalleryResponse(response, ownsResponse);
+    if (!ownsResponse()) return null;
+    if (response.status === 409 || String(next?.gallery_page?.revision || '') !== String(page.revision || '')) {
+      if (restarted) throw new Error('Root gallery changed again while refreshing loaded albums.');
+      restarted = true;
+      cursors.clear();
+      remainingPages = Math.ceil(coverage / 50);
+      url.searchParams.delete('gallery_cursor');
+      url.searchParams.delete('omit_sidebar');
+      const restartResponse = await fetch(`${url.pathname}${url.search}`, {
+        headers: { Accept: 'application/json' }, signal: controller?.signal,
+      });
+      payload = await readGalleryResponse(restartResponse, ownsResponse);
+      continue;
+    }
+    if (next.gallery_page.has_more && cursors.has(String(next.gallery_page.next_cursor || ''))) {
+      throw new Error('Root gallery refresh returned a repeated cursor.');
+    }
+    payload = {
+      ...payload,
+      artist_groups: mergeRootGalleryPageGroups(payload.artist_groups, next.artist_groups),
+      gallery_page: next.gallery_page,
+    };
+  }
+  return null;
+}
+
 async function fetchAndRender(url, push = true, options = {}) {
+  cancelRootGalleryPageRequest();
   const requestOptions = (options && typeof options === 'object') ? options : {};
   const albumDetailPrewarmSearchGeneration = state.ui?.albumDetailPrewarmSearchSuspended
     ? Number(state.ui.albumDetailPrewarmSearchGeneration || 0)
@@ -682,6 +903,7 @@ async function fetchAndRender(url, push = true, options = {}) {
   const apiUrl = url.startsWith('/view-data') || url.startsWith('/home-data')
     ? url
     : buildApiUrl(parseBrowserUrlState(url));
+  const rootRefreshCoverage = rootGalleryRefreshCoverage(apiUrl, requestOptions);
   const encodedCommittedQuery = String(
     apiUrl.match(/(?:[?&])q=([^&]*)/)?.[1] || ''
   ).replace(/\+/g, ' ');
@@ -786,9 +1008,9 @@ async function fetchAndRender(url, push = true, options = {}) {
   if (!retainsMountedSelectedViewState) {
     renderRelated();
   }
-  if (state.ui.pendingViewTransition
+  if (requestOptions.showSearchProgress || state.ui.pendingViewTransition
     || (!requestOptions.preserveScroll && requestOptions.skipPendingViewTransition !== true)) {
-    beginPendingViewTransition(requestId);
+    beginPendingViewTransition(requestId, requestOptions);
   }
   if (!requestOptions.preserveScanPage && !state.ui.scanPageReturnContext) {
     state.ui.forceScanPageVisible = false;
@@ -804,7 +1026,20 @@ async function fetchAndRender(url, push = true, options = {}) {
       headers: { Accept: 'application/json' },
       signal: controller?.signal,
     });
-    const data = await response.json();
+    let data = await readGalleryResponse(response, () => requestOwnsCurrentViewState(requestId, requestViewStateRevision));
+    if (rootRefreshCoverage > 0) {
+      const ownsRefresh = () => {
+        if (!requestOwnsCurrentViewState(requestId, requestViewStateRevision)
+          || requestTagEditMutationRevision !== Number(state.ui.tagEditOptimisticMutationRevision || 0)) return false;
+        try {
+          return typeof requestOptions.shouldApplyResponse !== 'function' || requestOptions.shouldApplyResponse(data) === true;
+        } catch (_error) {
+          return false;
+        }
+      };
+      data = await collectRootGalleryRefresh(data, apiUrl, rootRefreshCoverage, controller, ownsRefresh);
+      if (!data || !ownsRefresh()) return false;
+    }
     markStartupFollowup('payload_received', requestOptions, {
       endpoint: apiUrl,
       artistCount: Number(data?.artist_count || 0),
@@ -890,6 +1125,7 @@ async function fetchAndRender(url, push = true, options = {}) {
     );
     const preserveMountedGallery = Boolean(
       retainedCommittedSearchGallery
+      && requestOptions.preserveScroll !== false
       && hasMountedGalleryContent
       && hasEquivalentGalleryRenderTopology(
         retainedCommittedSearchGallery,
@@ -980,6 +1216,7 @@ async function fetchAndRender(url, push = true, options = {}) {
       return false;
     }
     clearStartupHydrationFollowup();
+    if (requestOptions.startupRefresh) window.AlbumHavenStartupProgress?.fail();
     if (typeof clearPendingSidebarSelection === 'function') {
       clearPendingSidebarSelection();
       renderSidebar();
@@ -1073,6 +1310,14 @@ async function fetchAndRender(url, push = true, options = {}) {
         resumePlayerWaveformPeakLoadsAfterForegroundView(waveformPeakLoadSuspension),
       ).catch(() => {});
     }
+    if (
+      !state.busy
+      && !state.ui.pendingViewRequest
+      && !state.ui.scanPageReturnContext
+      && !state.ui.forceScanPageVisible
+    ) {
+      resumeScanPageGalleryCoverLoads();
+    }
   }
 }
 
@@ -1140,6 +1385,7 @@ async function triggerLibraryRefresh(fullRescan = false) {
   }
 }
 function claimLocalViewStateNavigation() {
+  cancelRootGalleryPageRequest();
   state.ui.viewStateRevision = Number(state.ui.viewStateRevision || 0) + 1;
   state.ui.pendingViewRequest = null;
   state.ui.pendingViewTransition = false;
@@ -1206,7 +1452,6 @@ function abandonScanPageForNavigation(options = {}) {
   state.ui.scanPageReturnContext = null;
   state.ui.forceScanPageVisible = false;
   if (typeof unmountLibraryStatusBar === 'function') unmountLibraryStatusBar();
-  resumeScanPageGalleryCoverLoads();
   if (options.clearSelection === true) {
     state.view = {
       ...state.view,
@@ -1518,7 +1763,7 @@ async function pollStatus() {
       return;
     }
     const response = await fetch('/status');
-    const data = await response.json();
+    const data = await readGalleryResponse(response, ownsStatus);
     if (!ownsStatus()) return;
     updateStatusIndicator(data);
     const normalizedStatus = state.status;
@@ -1543,7 +1788,7 @@ async function pollStatus() {
       try {
         // An earlier in-flight summary cannot satisfy a later status change.
         // Failed/superseded loads return null; keep the change pending for the next poll.
-        const refreshedItems = await loadProblematicFiles(true);
+        const refreshedItems = await loadProblematicFiles(true, { preserveSelectedDetail: true });
         if (!ownsStatus()) return;
         if (state.utility === utility && Array.isArray(refreshedItems)) {
           utility.problematicStatusSyncedRevision = requestedRefreshRevision;

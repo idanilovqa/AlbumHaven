@@ -12,6 +12,10 @@
 .gallery-bar__actions { flex: 0 0 auto; display: flex; align-items: center; gap: 8px; --gallery-toolbar-button-background: var(--appearance-main-surface, var(--panel)); }
 .gallery-bar__actions :is(.gallery-view-cluster, .gallery-view-choice) { background: var(--gallery-toolbar-button-background); }
 .gallery-action-button { width: 34px; height: 34px; padding: 0; border: 1px solid var(--border); border-radius: 8px; background: var(--gallery-toolbar-button-background, var(--appearance-main-surface, var(--panel))); color: var(--text); cursor: pointer; }
+@media (min-width: 901px) {
+  .gallery-bar__actions { --gallery-toolbar-button-background: var(--appearance-control, var(--panel)); }
+  .gallery-action-button { background: var(--gallery-toolbar-button-background, var(--appearance-control, var(--panel))); }
+}
 .gallery-view-choice:not(:disabled):not([aria-disabled='true']) { cursor: pointer; }
 .gallery-action-button svg, .gallery-view-choice svg, #gallery-sources-button svg { width: 17px; height: 17px; fill: none; stroke: currentColor; stroke-width: 1.8; }
 .gallery-action-button:hover { background: var(--appearance-item-action-hover-background, var(--appearance-hover, var(--panel))); border-color: var(--appearance-item-action-hover-border, var(--border)); color: var(--text); }

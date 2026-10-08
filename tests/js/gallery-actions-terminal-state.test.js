@@ -184,12 +184,35 @@ test('gallery target classification treats the explicit settled empty UI as term
 
 test('gallery target state uses the current search input for local transitions that reuse a response payload', async () => {
   const { GalleryPage } = await import(galleryPageUrl);
-  const targetStateSource = GalleryPage.prototype.readAlbumTargetState.toString();
-  assert.match(
-    targetStateSource,
-    /inputQuery = await input\.count\(\) \? await input\.inputValue\(\) : ''[\s\S]*canonicalQuery = String\(inputQuery \|\| ''\)\.trim\(\)/,
-  );
-  assert.doesNotMatch(targetStateSource, /runtimeQuery|state\?\.view\?\.query/);
+  const groups = [{ artist: 'Neal Morse', albums: [{ name: 'Joseph', key: 'joseph' }] }];
+  const observation = {
+    stateRevision: 1, activeRequestCount: 0, pendingPayloadReadCount: 0,
+    latestFullPayload: { query: 'Joseph', artist_groups: groups },
+  };
+  const projection = {
+    surface: 'albums', query: '', selected_artist: 'Neal Morse',
+    locationQuery: '', locationArtist: 'Neal Morse', artist_groups: groups,
+  };
+  let inputQuery = '';
+  const owner = {
+    productionViewObserver: { read: () => observation },
+    page: { url: () => 'http://localhost/?artist=Neal+Morse', locator: () => ({
+      count: async () => 1, inputValue: async () => inputQuery,
+    }) },
+    readAppliedGalleryProjection: async () => projection,
+    albumCard: { detailsButtonByArtistAndAlbum: () => ({ count: async () => 1 }) },
+    libraryLoader: { isVisible: async () => false },
+    artistHeadings: { allTextContents: async () => ['Neal Morse'] },
+  };
+  const expected = { artist: 'Neal Morse', album: 'Joseph' };
+  const cleared = await GalleryPage.prototype.readAlbumTargetState.call(owner, expected);
+  assert.equal(cleared.expectedQuery, '');
+  assert.equal(cleared.canonicalQuery, '');
+  assert.equal(cleared.canonicalReadyMatch, true);
+  inputQuery = 'unsubmitted draft';
+  const draft = await GalleryPage.prototype.readAlbumTargetState.call(owner, expected);
+  assert.equal(draft.expectedQuery, 'unsubmitted draft');
+  assert.equal(draft.canonicalQuery, '', 'typing cannot change the applied query evidence');
 });
 
 test('artist-tree reflow checkpoint only observes runtime view and scroll state', async () => {

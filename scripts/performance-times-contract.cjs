@@ -6,6 +6,7 @@ const DEFAULT_CONTRACT_PATH = path.join(__dirname, '..', 'tests', 'ci', 'perform
 const CONTRACT_NAMES = new Set(['local', 'ci']);
 const MIN_GRACE_MS = 200;
 const MAX_GRACE_MS = 400;
+const SYNTHETIC_SEARCH_METRIC_ID = 'search-preview.syntheticFirstVisibleMs';
 const METRIC_ID_ALIASES = Object.freeze({
   'artist-family.treeCosmicSelectionMs': 'artist-family-local-managed-chrome.treeCosmicSelectionMs',
 });
@@ -28,7 +29,7 @@ function validateTriplet(metricId, contractName, value) {
     value.hardCeilingMs,
     `${metricId}.${contractName}.hardCeilingMs`,
   );
-  if (graceMs < MIN_GRACE_MS || (graceMs > MAX_GRACE_MS
+  if (graceMs < (metricId === SYNTHETIC_SEARCH_METRIC_ID ? 100 : MIN_GRACE_MS) || (graceMs > MAX_GRACE_MS
     && !isTemporaryColdProblematicApiException(metricId, targetMs, graceMs, hardCeilingMs))) {
     throw new Error(`${metricId}.${contractName} grace must be between 200 and 400 ms.`);
   }

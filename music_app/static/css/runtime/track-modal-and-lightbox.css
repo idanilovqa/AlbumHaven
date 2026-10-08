@@ -63,6 +63,8 @@
   padding: 10px 16px 0;
 }
 .track-modal-tabs[hidden] { display: none; }
+.track-modal-tabs > .in-page-tabs { width: 100%; overflow-x: auto; }
+.track-modal-tabs > .in-page-tabs > [role="tab"] { flex: 0 0 auto; }
 .track-modal-tab-wrap {
   position: relative;
   display: inline-flex;

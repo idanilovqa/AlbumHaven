@@ -55,10 +55,6 @@ function renderTrackModalLoadingState(album) {
     els.duplicateTabs.hidden = true;
     els.duplicateTabs.innerHTML = '';
   }
-  if (els.tabs) {
-    els.tabs.hidden = true;
-    els.tabs.innerHTML = '';
-  }
   els.list.innerHTML = '<li class="track-modal-loading-row">Loading album details...</li>';
   if (els.footer) {
     els.footer.hidden = true;
@@ -111,14 +107,19 @@ function clearTrackModalRenderedState() {
   }
 }
 
-function openTrackModalShell(album) {
+function openTrackModalShell(album, releaseSet = getAlbumReleaseSet(album)) {
   if (typeof presentMobileAlbumPage === 'function') presentMobileAlbumPage(album);
   const els = getTrackModalElements();
   if (!els.overlay || !album) return;
-  state.modalReleases = [album];
-  state.modalReleaseIndex = 0;
+  state.modalReleases = Array.isArray(releaseSet?.releases) && releaseSet.releases.length
+    ? releaseSet.releases
+    : [album];
+  state.modalReleaseIndex = Number.isInteger(releaseSet?.selectedIndex)
+    ? Math.max(0, Math.min(releaseSet.selectedIndex, state.modalReleases.length - 1))
+    : 0;
   hideVersionContextMenu();
   renderTrackModalLoadingState(album);
+  if (typeof renderTrackModalTabs === 'function') renderTrackModalTabs(els);
   els.overlay.hidden = false;
   document.body.classList.add('modal-open');
 }
@@ -529,10 +530,27 @@ function queueVisibleTrackModalAlbumDetailsPrewarm(containerEl, scrollEl, limit 
   });
 }
 
+let trackModalArtworkPreload = null;
+
+function preloadTrackModalArtwork(album) {
+  if (typeof Image !== 'function' || typeof buildAlbumLightboxCoverUrl !== 'function') return;
+  const source = buildAlbumLightboxCoverUrl(album);
+  if (!source || trackModalArtworkPreload?.source === source) return;
+  const image = new Image();
+  trackModalArtworkPreload = { source, image };
+  image.fetchPriority = 'low';
+  image.decoding = 'async';
+  image.onerror = () => {
+    if (trackModalArtworkPreload?.image === image) trackModalArtworkPreload = null;
+  };
+  image.src = source;
+}
+
 function openTrackModal(album, options = {}) {
   if (album && typeof presentMobileAlbumPage === 'function') presentMobileAlbumPage(album);
   const els = getTrackModalElements();
   if (!els.overlay || !album) return;
+  preloadTrackModalArtwork(album);
   if (options.foreground && document.getElementById('utility-modal')?.hidden === false) {
     els.overlay.classList.add('is-above-settings');
   }
@@ -545,7 +563,7 @@ function openTrackModal(album, options = {}) {
     const albumKey = getAlbumRequestKey(albumWithPlaybackContext);
     const loadToken = invalidatePendingTrackModalLoad();
     state.ui.pendingTrackModalLoadAlbumKey = albumKey;
-    openTrackModalShell(albumWithPlaybackContext);
+    openTrackModalShell(albumWithPlaybackContext, options.releaseSet);
     const coverLoadSuspensionToken = suspendGalleryCoverLoadsForTrackModal();
     const detailsPromise = loadTrackModalAlbumDetails(albumKey);
     detailsPromise.then((hydratedAlbum) => {
@@ -683,11 +701,54 @@ function getTrackModalLightboxSourceAlbumKey(button) {
 }
 
 let imageLightboxReturnFocus = null;
+let imageLightboxHistoryOpen = false;
+let imageLightboxHistoryClosing = false;
+
+function handleImageLightboxPopState() {
+  if (!imageLightboxHistoryOpen) return false;
+  imageLightboxHistoryOpen = false;
+  imageLightboxHistoryClosing = false;
+  closeImageLightbox();
+  return true;
+}
+
+function bindLightboxSwipe(overlay) {
+  if (overlay.dataset.swipeBound === '1') return;
+  overlay.dataset.swipeBound = '1';
+  let start = null;
+  overlay.addEventListener('touchstart', event => {
+    start = !overlay.hidden && typeof usesMobilePageLayout === 'function'
+      && usesMobilePageLayout() && state.lightbox.zoom <= 1 && event.touches.length === 1
+      ? { x: event.touches[0].clientX, y: event.touches[0].clientY } : null;
+  }, { passive: true });
+  overlay.addEventListener('touchmove', event => {
+    if (event.touches.length !== 1 || state.lightbox.zoom > 1) start = null;
+  }, { passive: true });
+  overlay.addEventListener('touchcancel', () => { start = null; }, { passive: true });
+  overlay.addEventListener('touchend', event => {
+    const origin = start;
+    start = null;
+    if (!origin || overlay.hidden || state.lightbox.zoom > 1 || event.touches.length) return;
+    const end = event.changedTouches[0];
+    const dx = end.clientX - origin.x;
+    const dy = end.clientY - origin.y;
+    if (Math.abs(dx) < 48 || Math.abs(dx) < Math.abs(dy) * 1.5) return;
+    event.preventDefault();
+    stepLightbox(dx < 0 ? 1 : -1);
+  }, { passive: false });
+}
 
 function openImageLightbox(src, alt, options = {}) {
   const els = getLightboxElements();
   if (!els.overlay || !els.image || !src) return;
   if (els.overlay.hidden) imageLightboxReturnFocus = document.activeElement;
+  if (els.overlay.hidden && typeof usesMobilePageLayout === 'function' && usesMobilePageLayout()
+      && typeof window !== 'undefined' && window.history?.pushState) {
+    window.history.pushState({ ...window.history.state, imageLightbox: true }, '');
+    imageLightboxHistoryOpen = true;
+    imageLightboxHistoryClosing = false;
+  }
+  bindLightboxSwipe(els.overlay);
   bindOverlayPointerOrigin(els.overlay);
   state.lightbox.sourceAlbumKey = String(options.sourceAlbumKey || '');
   state.lightbox.items = Array.isArray(options.items) ? options.items.filter(Boolean) : [];
@@ -725,6 +786,13 @@ function openImageLightbox(src, alt, options = {}) {
 }
 
 function closeImageLightbox() {
+  if (imageLightboxHistoryOpen) {
+    if (!imageLightboxHistoryClosing) {
+      imageLightboxHistoryClosing = true;
+      window.history.back();
+    }
+    return;
+  }
   const els = getLightboxElements();
   if (!els.overlay || !els.image) return;
   els.overlay.hidden = true;

@@ -490,7 +490,41 @@
       "targetMs": null,
       "graceMs": null,
       "ceilingMs": null,
-      "cases": [{"config":"playwright.scan-performance.config.cjs","project":"scan-performance","test":"tests/e2e/scanPerformance/scanPerformance.spec.js","case":"isolated scan performance benchmarks › FTC-OPS-003F acknowledges a naturally unavailable library root without hiding recovery status"}]
+      "cases": [
+        {
+          "config": "playwright.scan-performance.config.cjs",
+          "project": "scan-performance",
+          "test": "tests/e2e/scanPerformance/scanPerformance.spec.js",
+          "case": "isolated scan performance benchmarks › FTC-OPS-003F acknowledges a naturally unavailable library root without hiding recovery status"
+        }
+      ]
+    },
+    {
+      "name": "paired-search-calibration",
+      "fixtureProfile": "synthetic-large-library",
+      "fixtureMode": "preloaded-release",
+      "runnerClass": "synthetic",
+      "workers": 1,
+      "defaultMember": true,
+      "calibrationState": "approved",
+      "blocking": true,
+      "targetMs": 400,
+      "graceMs": 100,
+      "ceilingMs": 500,
+      "cases": [
+        {
+          "config": "playwright.synthetic-large-library.config.cjs",
+          "project": "synthetic-large-library",
+          "test": "tests/e2e/syntheticLargeLibrary/searchPreviewPairedCalibration.spec.js",
+          "case": "FTC-GALLERY-STARTUP-005U synthetic paired search calibration › Devin submit to first expected album visible"
+        },
+        {
+          "config": "playwright.synthetic-large-library.config.cjs",
+          "project": "synthetic-large-library",
+          "test": "tests/e2e/syntheticLargeLibrary/searchPreviewPairedCalibration.spec.js",
+          "case": "FTC-GALLERY-STARTUP-005U synthetic paired search calibration › Neal Morse submit to first expected album visible"
+        }
+      ]
     },
     {
       "name": "scan-error",
@@ -505,7 +539,14 @@
       "targetMs": null,
       "graceMs": null,
       "ceilingMs": null,
-      "cases": [{"config":"playwright.scan-performance.config.cjs","project":"scan-performance","test":"tests/e2e/scanPerformance/scanPerformance.spec.js","case":"isolated scan performance benchmarks › FTC-OPS-003G failed scan publication retains the library and recovers after permissions return"}]
+      "cases": [
+        {
+          "config": "playwright.scan-performance.config.cjs",
+          "project": "scan-performance",
+          "test": "tests/e2e/scanPerformance/scanPerformance.spec.js",
+          "case": "isolated scan performance benchmarks › FTC-OPS-003G failed scan publication retains the library and recovers after permissions return"
+        }
+      ]
     }
   ]
 }

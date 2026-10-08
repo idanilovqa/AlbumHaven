@@ -935,6 +935,8 @@ border-radius: 8px;
 pointer-events: none;
 }
 .player-timeline {
+  touch-action: none;
+  -webkit-tap-highlight-color: transparent;
 position: absolute;
 left: 0;
 right: 0;
@@ -1167,11 +1169,12 @@ overflow: visible;
 .loop-edit-actions[hidden] { display: none; }
 .loop-edit-actions[data-loop-action-engaged="true"] { opacity: 1; pointer-events: auto; }
 .loop-edit-action-pod {
-position: relative;
-display: flex;
-align-items: center;
-width: 34px;
-height: 46px;
+  position: relative;
+  display: flex;
+  align-items: center;
+  width: 34px;
+  flex-shrink: 0;
+  height: 46px;
 border: 0;
 border-radius: 0 24px 24px 0;
 padding: 0;

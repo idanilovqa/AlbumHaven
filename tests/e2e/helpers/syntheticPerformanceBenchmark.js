@@ -498,11 +498,11 @@ export const ARTIST_FAMILY_LOCAL_BENCHMARK = defineBenchmark({
   id: 'artist-family-local-managed-chrome',
   version: '2026-06-05-managed-chrome-neal-morse-clear-search-root-restore',
   caseId: 'FTC-SEARCH-NAV-005A',
-  description: 'Managed local real-data Chrome benchmark ceilings for the Neal Morse artist-family responsiveness and memory guard.',
+  description: 'Managed local synthetic-data Chrome benchmark ceilings for correlated Neal Morse artist-family responsiveness and memory evidence.',
   sampleWindow: {
     collectedOn: '2026-06-05',
     browser: 'chrome',
-    mode: 'managed local real-data app',
+    mode: 'managed local synthetic correlated app',
     sampleSize: 1,
   },
   expectations: [
@@ -711,7 +711,7 @@ export const ARTIST_FAMILY_LOCAL_BENCHMARK = defineBenchmark({
       checkpointKey: 'peak-idle-memory',
       metricPath: 'peakIdleMemoryBytes',
       units: 'bytes',
-      description: 'Peak idle memory across the artist-family browsing cycle should stay within the current real-data budget.',
+      description: 'Peak idle memory across the artist-family browsing cycle should stay within the current synthetic-data budget.',
       observedBaseline: 35651584,
       observedRange: { min: 0, max: 35651584 },
       maxAllowed: 40 * MEGABYTE,

@@ -76,6 +76,26 @@ test('multi-artist sections keep their own exact headings independently of Galle
   assert.deepEqual(cards.sectionByArtistHeading('Neal').nodes, []);
 });
 
+test('single-card artist lookup forwards visible-card ownership to the shared locator', async () => {
+  const { AlbumCard } = await load();
+  const cards = new AlbumCard(locatorPage());
+  const calls = [];
+  const expectedCard = {};
+  cards.cardsByArtistAndAlbum = (artistName, albumName, options) => {
+    calls.push({ artistName, albumName, options });
+    return { first: () => expectedCard };
+  };
+
+  const card = cards.cardByArtistAndAlbum('Neal Morse', 'Sola Scriptura', { visible: true });
+
+  assert.equal(card, expectedCard);
+  assert.deepEqual(calls, [{
+    artistName: 'Neal Morse',
+    albumName: 'Sola Scriptura',
+    options: { visible: true },
+  }]);
+});
+
 async function observeGalleryCount({ heading = null, contextName = 'Northlight', sectionCount = 1 } = {}) {
   const { GalleryPage } = await import(pathToFileURL(path.resolve(__dirname, '../e2e/poms/galleryPage.js')).href);
   const vm = require('node:vm');

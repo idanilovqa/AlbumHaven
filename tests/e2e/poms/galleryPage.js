@@ -6,7 +6,8 @@ import {
   getProductionViewObserver,
   hasAppliedCanonicalArtistSurface,
   hasStableDomEvidence,
-  readCanonicalAlbumTargetEvidence,
+  matchesAccumulatedRootProjection,
+  readAppliedAlbumTargetEvidence,
 } from '../helpers/productionViewObserver.js';
 
 function exactNormalizedText(value) {
@@ -42,7 +43,12 @@ export function hasSettledVirtualGalleryRender(args = {}) {
   const reachedRequestedBoundary = expectedDirection > 0
     ? gallery.scrollTop >= maxScrollTop - 2
     : gallery.scrollTop <= 2;
-  if (!hasRequestedMovement && !reachedRequestedBoundary) return false;
+  const hasCommittedExtentGrowth = args.allowExtentExpansion === true
+    && expectedDirection > 0
+    && Number.isFinite(args.previousMaxScrollTop)
+    && maxScrollTop > args.previousMaxScrollTop + 2
+    && Math.abs(movement) <= 1;
+  if (!hasRequestedMovement && !reachedRequestedBoundary && !hasCommittedExtentGrowth) return false;
   const diagnostics = globalThis.__ALBUM_HAVEN_VIRTUAL_GRID__;
   const latestScroll = diagnostics?.latestScroll;
   const latestRender = diagnostics?.latestRender;
@@ -448,12 +454,223 @@ export class GalleryPage extends BasePage {
     };
   }
 
-  readViewGenerationState() {
+  async readViewGenerationState() {
     const observation = this.productionViewObserver.read();
+    // parity-check: allow-read-only-measurement-evaluate -- correlate production request and render generations
+    const browserState = await this.page.evaluate(() => ({
+      nowMs: performance.now(),
+      query: new URL(location.href).searchParams.get('q') || '',
+      renderGeneration: Number(
+        globalThis.__ALBUM_HAVEN_VIRTUAL_GRID__?.latestRender?.renderGeneration || 0,
+      ),
+    }));
     return {
+      nowMs: browserState.nowMs,
+      query: browserState.query,
+      renderGeneration: browserState.renderGeneration,
+      requestGeneration: Number(observation.requestGeneration || 0),
       revision: Number(observation.stateRevision || 0),
       settled: Number(observation.activeRequestCount || 0) === 0
         && Number(observation.pendingPayloadReadCount || 0) === 0,
+    };
+  }
+
+  async startSearchFirstVisibleObservation(expectedQuery, options = {}) {
+    const observationHandle = await this.page.evaluateHandle((settings) => {
+      const gallery = document.querySelector('#artist-groups');
+      if (!(gallery instanceof HTMLElement)) {
+        throw new Error('Search first-visible observation requires the mounted gallery.');
+      }
+      const normalize = (value) => String(value || '').replace(/\s+/gu, ' ').trim();
+      const currentRenderGeneration = () => Number(
+        globalThis.__ALBUM_HAVEN_VIRTUAL_GRID__?.latestRender?.renderGeneration || 0,
+      );
+      let baselineRenderGeneration = currentRenderGeneration();
+      let armed = false;
+      let disposed = false;
+      let framePending = false;
+      let expectedKey = '';
+      let expectedWaiter = null;
+      let expectedTimer = 0;
+      const confirmedPaints = new Map();
+
+      const cardKey = (artist, album) => `${normalize(artist)}\u0000${normalize(album)}`;
+      const queryMatches = () => (
+        normalize(new URL(location.href).searchParams.get('q')) === settings.expectedQuery
+      );
+      const readVisibleCards = () => {
+        const scrollRect = document.querySelector('#albums-scroll')?.getBoundingClientRect();
+        if (!scrollRect || scrollRect.width <= 0 || scrollRect.height <= 0) return [];
+        const sections = Array.from(gallery.querySelectorAll(settings.artistSectionSelector));
+        const contextArtist = normalize(document.querySelector(settings.singleArtistContextSelector)
+          ?.querySelector('[data-gallery-context-name]')?.textContent);
+        return sections.flatMap((section) => {
+          const artist = normalize(
+            section.querySelector(settings.artistHeadingSelector)?.textContent,
+          ) || (sections.length === 1 ? contextArtist : '');
+          if (!artist) return [];
+          return Array.from(section.querySelectorAll(settings.albumCardSelector)).flatMap((card) => {
+            const album = normalize(card.querySelector(settings.albumTitleSelector)?.textContent);
+            const rect = card.getBoundingClientRect();
+            const style = getComputedStyle(card);
+            const visible = Boolean(
+              album
+              && rect.width > 0
+              && rect.height > 0
+              && rect.right > 0
+              && rect.bottom > 0
+              && rect.left < innerWidth
+              && rect.top < innerHeight
+              && rect.right > scrollRect.left
+              && rect.left < scrollRect.right
+              && rect.bottom > scrollRect.top
+              && rect.top < scrollRect.bottom
+              && style.display !== 'none'
+              && style.visibility !== 'hidden'
+              && card.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true })
+            );
+            return visible ? [{ album, artist, key: cardKey(artist, album) }] : [];
+          });
+        });
+      };
+      const finishExpected = () => {
+        const timing = confirmedPaints.get(expectedKey);
+        if (!timing || !expectedWaiter) return;
+        clearTimeout(expectedTimer);
+        observer.disconnect();
+        expectedWaiter.resolve(timing);
+        expectedWaiter = null;
+      };
+      let initialVisibleCardCount = 0;
+      const pendingSearch = { samples: 0, visiblePreviousCards: 0, missingSearchLoader: 0 };
+      const observePendingSearch = () => {
+        if (!armed || disposed) return;
+        const visibleCardCount = readVisibleCards().length;
+        if (typeof state !== 'undefined' && state.ui?.pendingGallerySearch) {
+          pendingSearch.samples += 1;
+          pendingSearch.visiblePreviousCards += visibleCardCount;
+          const loader = document.querySelector('#library-loader');
+          if (!loader?.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true })
+              || !loader.classList.contains('is-searching')
+              || document.querySelector('#library-loader-title')?.textContent !== 'Searching') {
+            pendingSearch.missingSearchLoader += 1;
+          }
+        }
+        requestAnimationFrame(observePendingSearch);
+      };
+      const schedulePaintConfirmation = () => {
+        if (!armed || disposed || framePending) return;
+        framePending = true;
+        requestAnimationFrame(() => {
+          framePending = false;
+          if (
+            disposed
+            || !queryMatches()
+            || currentRenderGeneration() <= baselineRenderGeneration
+          ) return;
+          const domReadyAtMs = performance.now();
+          const candidates = readVisibleCards();
+          requestAnimationFrame(() => {
+            if (
+              disposed
+              || !queryMatches()
+              || currentRenderGeneration() <= baselineRenderGeneration
+            ) return;
+            const paintedAtMs = performance.now();
+            const view = typeof state === 'undefined' ? null : state.view;
+            const result = {
+              query: String(view?.query || '').trim(),
+              payloadTier: String(view?.payload_tier || 'full'),
+              partial: Boolean(view?.initial_view_partial),
+              albumKeys: [...new Set(['artist_groups', 'primary_artist_groups', 'family_artist_groups']
+                .flatMap(field => Array.isArray(view?.[field]) ? view[field] : [])
+                .flatMap(group => group.albums || [])
+                .map(album => String(album.key || '').trim()).filter(Boolean))].sort(),
+            };
+            const stillVisible = new Set(readVisibleCards().map((card) => card.key));
+            for (const candidate of candidates) {
+              if (!stillVisible.has(candidate.key) || confirmedPaints.has(candidate.key)) continue;
+              confirmedPaints.set(candidate.key, {
+                domReadyAtMs, paintedAtMs, result,
+                initialVisibleCardCount,
+                pendingSearch: { ...pendingSearch },
+              });
+            }
+            finishExpected();
+          });
+        });
+      };
+      const observer = new MutationObserver(schedulePaintConfirmation);
+      observer.observe(gallery, {
+        attributes: true,
+        childList: true,
+        characterData: true,
+        subtree: true,
+      });
+
+      return {
+        arm() {
+          observer.takeRecords();
+          confirmedPaints.clear();
+          baselineRenderGeneration = currentRenderGeneration();
+          armed = true;
+          initialVisibleCardCount = readVisibleCards().length;
+          requestAnimationFrame(observePendingSearch);
+          return performance.now();
+        },
+        dispose() {
+          disposed = true;
+          clearTimeout(expectedTimer);
+          observer.disconnect();
+        },
+        readExpectedPaint(expected) {
+          expectedKey = cardKey(expected.artist, expected.album);
+          if (!expectedKey.replace('\u0000', '')) {
+            throw new Error('Search first-visible observation requires an expected artist and album.');
+          }
+          const timing = confirmedPaints.get(expectedKey);
+          if (timing) {
+            observer.disconnect();
+            return timing;
+          }
+          schedulePaintConfirmation();
+          return new Promise((resolve, reject) => {
+            expectedWaiter = { reject, resolve };
+            expectedTimer = setTimeout(() => {
+              observer.disconnect();
+              expectedWaiter = null;
+              reject(new Error(
+                `Expected search card was not confirmed painted within ${settings.timeout} ms.`,
+              ));
+            }, settings.timeout);
+          });
+        },
+      };
+    }, {
+      albumCardSelector: this.albumCardWithinSectionSelector,
+      albumTitleSelector: this.albumCard.titleButtonSelector,
+      artistHeadingSelector: this.artistHeadingWithinSectionSelector,
+      artistSectionSelector: this.artistSectionSelector,
+      expectedQuery: String(expectedQuery || '').trim(),
+      singleArtistContextSelector: this.albumCard.singleArtistContextSelector,
+      timeout: Number(options.timeout || 120000),
+    });
+    let disposed = false;
+    return {
+      // parity-check: allow-read-only-measurement-evaluate -- arm the browser-local search paint observer
+      arm: () => observationHandle.evaluate((observation) => observation.arm()),
+      // parity-check: allow-read-only-measurement-evaluate -- read the first browser-confirmed paint for the canonical complete-result card
+      readExpectedPaint: (expectedCard) => observationHandle.evaluate(
+        (observation, expected) => observation.readExpectedPaint(expected),
+        expectedCard,
+      ),
+      dispose: async () => {
+        if (disposed) return;
+        disposed = true;
+        // parity-check: allow-read-only-measurement-evaluate -- disconnect the browser-local measurement observer
+        await observationHandle.evaluate((observation) => observation.dispose());
+        await observationHandle.dispose();
+      },
     };
   }
 
@@ -525,6 +742,34 @@ export class GalleryPage extends BasePage {
     );
   }
 
+  async readAppliedGalleryProjection() {
+    // parity-check: allow-read-only-measurement-evaluate -- inspect the applied production projection and pure family-reuse diagnostic without fetching or mutating it
+    return this.page.evaluate(() => {
+      const view = state.view || {};
+      return {
+        artist_groups: view.artist_groups,
+        primary_artist_groups: view.primary_artist_groups,
+        family_artist_groups: view.family_artist_groups,
+        gallery_page: view.gallery_page,
+        query: view.query,
+        selected_artist: view.selected_artist,
+        gallery_scope: view.gallery_scope,
+        visible_library_categories: view.visible_library_categories,
+        related_filter_artists: view.related_filter_artists,
+        primary_filter_active: view.primary_filter_active,
+        busy: Boolean(state.busy),
+        pendingViewTransition: Boolean(state.ui?.pendingViewTransition),
+        viewRevision: Number(state.ui?.viewStateRevision || 0),
+        surface: typeof resolveViewSurface === 'function' ? resolveViewSurface(view) : String(view.surface_request || 'albums'),
+        locationQuery: new URL(window.location.href).searchParams.get('q') || '',
+        locationArtist: new URL(window.location.href).searchParams.get('artist') || '',
+        authoritativeMountedFamily: Boolean(view.selected_artist)
+          && typeof buildOptimisticSidebarArtistSelectionGroups === 'function'
+          && buildOptimisticSidebarArtistSelectionGroups(view.selected_artist)?.skipFetch === true,
+      };
+    });
+  }
+
   async readStatusPayload() {
     const response = await authenticatedPageGet(this.page, '/status');
     if (!response.ok()) {
@@ -538,10 +783,18 @@ export class GalleryPage extends BasePage {
     if (observation.latestFullPayloadError) {
       throw new Error(`Production view observation failed: ${observation.latestFullPayloadError}`);
     }
-    if (!observation.latestFullPayload) {
-      throw new Error('Expected an observed production view response before reading browse telemetry.');
+    if (observation.latestFullPayload) return observation.latestFullPayload;
+    const idle = observation.activeRequestCount === 0 && observation.pendingPayloadReadCount === 0;
+    const location = observation.onlyRootContinuationsPending ? new URL(this.page.url()) : null;
+    const rootContinuation = location && !['q', 'artist', 'playlist'].some(key => location.searchParams.get(key))
+      && (!location.searchParams.get('surface') || location.searchParams.get('surface') === 'albums');
+    if (idle || rootContinuation) {
+      const bootstrap = await this.readProductionBootstrapPayload();
+      const payload = bootstrap?.startup_payload?.first_paint_view || bootstrap?.initial_view;
+      if (payload && ['full', 'gallery_page'].includes(String(payload.payload_tier || 'full'))
+          && (idle || (payload.gallery_page && !payload.query && !payload.selected_artist))) return payload;
     }
-    return observation.latestFullPayload;
+    throw new Error('Expected an observed production view response or settled SSR payload before reading browse telemetry.');
   }
 
   async readAlbumTargetState(expected = {}) {
@@ -560,19 +813,24 @@ export class GalleryPage extends BasePage {
       || null;
     const input = this.page.locator('#search-input');
     const inputQuery = await input.count() ? await input.inputValue() : '';
-    const canonicalQuery = String(inputQuery || '').trim();
     const expectedQuery = expected.query === undefined
-      ? canonicalQuery
+      ? String(inputQuery || '').trim()
       : String(expected.query || '').trim();
     const expectedArtist = String(expected.artist || '').trim();
     const expectedAlbum = String(expected.album || '').trim();
-    const canonicalEvidence = readCanonicalAlbumTargetEvidence({
+    const projection = await this.readAppliedGalleryProjection();
+    const targetLocation = new URL(this.page.url());
+    const rootLocation = !['q', 'artist', 'playlist'].some(key => targetLocation.searchParams.get(key));
+    const rootBootstrap = projection.gallery_page && rootLocation && !matchesAccumulatedRootProjection(payload, projection)
+      ? await this.readProductionBootstrapPayload() : null;
+    const canonicalEvidence = readAppliedAlbumTargetEvidence({
       ...initialObservation,
       latestFullPayload: payload,
-    }, {
+    }, projection, rootLocation ? rootBootstrap?.startup_payload?.first_paint_view || rootBootstrap?.initial_view : null, {
       album: expectedAlbum,
       artist: expectedArtist,
     });
+    const canonicalQuery = canonicalEvidence.canonicalQuery;
     const initialAttachedMatch = await this.albumCard
       .detailsButtonByArtistAndAlbum(expectedArtist, expectedAlbum)
       .count() > 0;
@@ -607,12 +865,18 @@ export class GalleryPage extends BasePage {
     if (finalObservation.latestFullPayloadError) {
       throw new Error(`Production view observation failed: ${finalObservation.latestFullPayloadError}`);
     }
-    const observationChanged = finalObservation.stateRevision !== initialObservation.stateRevision;
+    const finalProjection = await this.readAppliedGalleryProjection();
+    const observationChanged = finalObservation.stateRevision !== initialObservation.stateRevision
+      || finalProjection.viewRevision !== projection.viewRevision
+      || finalProjection.query !== projection.query
+      || finalProjection.selected_artist !== projection.selected_artist;
     const domChanged = !hasStableDomEvidence(
       { attachedArtists, attachedMatch: initialAttachedMatch },
       { attachedArtists: finalAttachedArtists, attachedMatch: finalAttachedMatch },
     );
     const busy = initiallyBusy
+      || projection.busy || projection.pendingViewTransition
+      || finalProjection.busy || finalProjection.pendingViewTransition
       || finalObservation.activeRequestCount > 0
       || finalObservation.pendingPayloadReadCount > 0
       || observationChanged
@@ -633,7 +897,9 @@ export class GalleryPage extends BasePage {
       attachedMatch: finalAttachedMatch,
       busy,
       canonicalApplied,
+      canonicalInventoryComplete: canonicalEvidence.canonicalInventoryComplete,
       canonicalMatch: canonicalEvidence.canonicalMatch,
+      canonicalReadyMatch: canonicalEvidence.canonicalReadyMatch,
       canonicalSource: canonicalEvidence.canonicalSource,
       canonicalQuery,
       expectedAlbum,
@@ -747,15 +1013,55 @@ export class GalleryPage extends BasePage {
     });
   }
 
-  async waitForGalleryScrollMovement(previousScrollTop, direction, options = {}) {
-    await this.waitForPageCondition(hasSettledVirtualGalleryRender, {
-      timeout: options.timeout || 5000,
-    }, {
-      expectedDirection: Number(direction || 1),
+  async waitForRootGalleryBoundaryProgress(previous, options = {}) {
+    const timeout = Math.min(5000, (options.deadline ?? Date.now() + 5000) - Date.now());
+    if (timeout <= 0) throw new Error('Root gallery boundary exceeded its original deadline.');
+    await this.waitForPageCondition(({ galleryScrollSelector, previousMaxScrollTop, cursor }) => {
+      const gallery = document.querySelector(galleryScrollSelector);
+      const page = state.view?.gallery_page;
+      return Boolean(gallery) && (
+        Math.max(0, gallery.scrollHeight - gallery.clientHeight) > previousMaxScrollTop + 2
+        || !page?.has_more
+        || String(page.next_cursor || '') !== cursor
+      );
+    }, { timeout }, {
       galleryScrollSelector: this.galleryScrollSelector,
-      priorPosition: Number(previousScrollTop || 0),
-      targetScrollTop: options.targetScrollTop,
+      previousMaxScrollTop: previous.maxScrollTop,
+      cursor: previous.pageCursor,
     });
+  }
+
+  async waitForGalleryScrollMovement(previousScrollTop, direction, options = {}) {
+    const deadline = options.deadline ?? Date.now() + (options.timeout || 5000);
+    let previousMaxScrollTop = options.previousMaxScrollTop;
+    const allowExtentExpansion = typeof options.onExtentExpanded === 'function';
+    while (true) {
+      const remaining = deadline - Date.now();
+      if (remaining <= 0) throw new Error('Gallery scroll movement exceeded its original deadline.');
+      await this.waitForPageCondition(hasSettledVirtualGalleryRender, {
+        timeout: remaining,
+      }, {
+        expectedDirection: Number(direction || 1),
+        galleryScrollSelector: this.galleryScrollSelector,
+        priorPosition: Number(previousScrollTop || 0),
+        targetScrollTop: options.targetScrollTop,
+        previousMaxScrollTop,
+        allowExtentExpansion,
+      });
+      if (!allowExtentExpansion) return;
+      // parity-check: allow-read-only-measurement-evaluate -- inspect committed extent; native input is the only scroll mutation.
+      const geometry = await this.galleryScroll.evaluate(element => ({
+        scrollTop: element.scrollTop,
+        maxScrollTop: Math.max(0, element.scrollHeight - element.clientHeight),
+      }));
+      if (Number(direction || 1) <= 0
+        || Math.abs(geometry.scrollTop - previousScrollTop) > 1
+        || geometry.maxScrollTop <= previousMaxScrollTop + 2
+        || geometry.scrollTop >= geometry.maxScrollTop - 2) return;
+      previousMaxScrollTop = geometry.maxScrollTop;
+      if (Date.now() >= deadline) throw new Error('Gallery scroll movement exceeded its original deadline.');
+      await options.onExtentExpanded();
+    }
   }
 
   async waitForVirtualGalleryMeasurementSettled(options = {}) {

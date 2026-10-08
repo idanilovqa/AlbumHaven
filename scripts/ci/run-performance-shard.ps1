@@ -19,8 +19,8 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $targetNames = @($Targets.Split(',') | ForEach-Object { $_.Trim() } | Where-Object { $_ })
-if ($targetNames.Count -lt 1 -or $targetNames.Count -gt 10) {
-    throw 'Performance profile runner must own between one and ten targets.'
+if ($targetNames.Count -lt 1 -or $targetNames.Count -gt 11) {
+    throw 'Performance profile runner must own between one and eleven targets.'
 }
 if ((@($targetNames | Select-Object -Unique)).Count -ne $targetNames.Count) {
     throw 'Performance shard target list contains a duplicate.'
@@ -67,6 +67,24 @@ function Set-ClearedRuntimeSelectors {
         'PLAYWRIGHT_REAL_APP_URL'
     )) {
         Set-Item -LiteralPath "Env:$key" -Value ' '
+    }
+}
+
+function Import-DatabaseEnvironmentExports([string]$Path) {
+    $requiredNames = @('PGPASSFILE', 'DATABASE_MIGRATOR_URL', 'DATABASE_APP_URL')
+    $exports = @{}
+    foreach ($line in (Get-Content -LiteralPath $Path)) {
+        $separator = $line.IndexOf('=')
+        if ($separator -le 0) { continue }
+        $name = $line.Substring(0, $separator)
+        if ($name -notin $requiredNames) { continue }
+        $exports[$name] = $line.Substring($separator + 1)
+    }
+    foreach ($name in $requiredNames) {
+        if (-not $exports.ContainsKey($name) -or [string]::IsNullOrWhiteSpace($exports[$name])) {
+            throw "PostgreSQL provisioning did not export $name."
+        }
+        Set-Item -LiteralPath "Env:$name" -Value $exports[$name]
     }
 }
 
@@ -164,6 +182,7 @@ try {
         PythonPath = $PythonPath
     }
     & $bootstrap @provisionArguments -SkipFixtureLoad
+    Import-DatabaseEnvironmentExports -Path $GithubEnv
 
     $env:PGPASSWORD = $null
     $env:PLAYWRIGHT_PYTHON = $PythonPath

@@ -15,7 +15,7 @@ from music_app.services.gallery_display import (
 from music_app.services.gallery_scope import normalize_visible_categories
 from music_app.services.library import strip_private_album_preference_overlays
 from music_app.services.navigation_tree import render_navigation_tree_item
-from music_app.services.page_resource_seams import build_album_page_seam
+from music_app.services.page_resource_seams import build_album_ref_seam
 from music_app.services.persistence_selection import select_runtime_persistence_adapter
 from music_app.services.playlist_read_seams import resolve_active_view_surface
 
@@ -54,21 +54,23 @@ def build_initial_view_preview(payload: dict[str, object], *, public_safe: bool 
     family_groups = list(payload.get("family_artist_groups") or []) if isinstance(payload, dict) else []
     sidebar = list(payload.get("artists_sidebar") or []) if isinstance(payload, dict) else []
     existing_partial = bool(payload.get("initial_view_partial")) if isinstance(payload, dict) else False
+    paged = isinstance(preview.get("gallery_page"), dict)
+    group_limit = max(len(artist_groups), len(primary_groups) + len(family_groups)) if paged else _INITIAL_VIEW_GROUP_LIMIT
 
     preview["artist_groups"] = [
         _build_initial_artist_group_preview(group, public_safe=public_safe)
-        for group in artist_groups[:_INITIAL_VIEW_GROUP_LIMIT]
+        for group in artist_groups[:group_limit]
     ]
     preview["primary_artist_groups"] = [
         _build_initial_artist_group_preview(group, public_safe=public_safe)
-        for group in primary_groups[:_INITIAL_VIEW_GROUP_LIMIT]
+        for group in primary_groups[:group_limit]
     ]
-    remaining_slots = max(0, _INITIAL_VIEW_GROUP_LIMIT - len(preview["primary_artist_groups"]))
+    remaining_slots = max(0, group_limit - len(preview["primary_artist_groups"]))
     preview["family_artist_groups"] = [
         _build_initial_artist_group_preview(group, public_safe=public_safe)
         for group in family_groups[:remaining_slots]
     ]
-    preview["artists_sidebar"] = sidebar[:_INITIAL_VIEW_SIDEBAR_LIMIT]
+    preview["artists_sidebar"] = sidebar if paged else sidebar[:_INITIAL_VIEW_SIDEBAR_LIMIT]
     preview["initial_view_partial"] = bool(
         existing_partial
         or len(artist_groups) > len(preview["artist_groups"])
@@ -79,6 +81,8 @@ def build_initial_view_preview(payload: dict[str, object], *, public_safe: bool 
         or _preview_groups_are_slimmed(primary_groups)
         or _preview_groups_are_slimmed(family_groups)
     )
+    if paged:
+        preview["initial_view_partial"] = False
     return preview
 
 
@@ -104,7 +108,7 @@ def _build_initial_album_preview(album: dict[str, object], *, public_safe: bool 
     cover_preview_url = build_startup_cover_url(source_album) if cover_path else ""
     return {
         "key": source_album.get("key"),
-        **build_album_page_seam(source_album.get("key")),
+        **build_album_ref_seam(source_album.get("key")),
         "name": source_album.get("name"),
         "album_artist": source_album.get("album_artist"),
         "artists": list(source_album.get("artists") or []),
@@ -256,7 +260,8 @@ def build_startup_sidebar_html(view: dict[str, object]) -> Markup:
             selected=all_artists_active, count=explicit_artist_count,
             attributes={"data-nav": "1", "data-sidebar-all-artists": "1"},
         ))
-    for item in sidebar:
+    visible_sidebar = sidebar[:_INITIAL_VIEW_SIDEBAR_LIMIT] if isinstance(view.get("gallery_page"), dict) else sidebar
+    for item in visible_sidebar:
         if not isinstance(item, dict):
             continue
         artist = str(item.get("artist") or "").strip()

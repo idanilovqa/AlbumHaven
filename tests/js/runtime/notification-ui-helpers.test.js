@@ -209,8 +209,9 @@ test('notification owner ignores occluded background controls, retries deferred 
   occupied = true;
   resizes();
   callbacks.shift()();
-  assert.equal(attributes.has('data-notification-deferred'), false,
-    'a notification that was already presented must retain its last visible placement');
+  assert.equal(attributes.has('data-notification-deferred'), true,
+    'a persistent warning must defer when a new editor leaves no space, rather than intercept its controls');
+  assert.equal(node.isConnected, true, 'deferring must retain the warning for later presentation');
   occupied = false;
   intrinsicWidth = 358;
   context.window.visualViewport = { offsetLeft: 50, offsetTop: 0, width: 195, height: 200 };
@@ -219,6 +220,7 @@ test('notification owner ignores occluded background controls, retries deferred 
   assert.equal(styles.get('--notification-available-width'), '179px');
   assert.equal(node.offsetWidth, 179, 'the host must apply the visual width before reading notification geometry');
   assert.equal(attributes.has('data-notification-deferred'), false);
+  assert.equal(shown, 1, 'the warning must reappear without restarting notification delivery');
   assert.match(baseLayoutSource, /#toast-layer > \.toast\.floating-notification-positioned\s*\{[^}]*min-width:\s*0/u);
   context.unregisterFloatingNotification(node);
   assert.equal(disconnected, 2);
@@ -789,3 +791,72 @@ test('a replacement failure notice clears an earlier permitted Log History actio
   assert.equal(logHistoryLink.dataset.logHistoryEntryId, '');
   assert.equal(alertClasses.has('has-log-history-link'), false);
 });
+
+test('persistent warnings can use a readable narrow gap beside dense interactive content', () => {
+  const { context } = createContext();
+  const viewport = { left: 0, top: 0, right: 1000, bottom: 800 };
+  const obstacles = [
+    { left: 240, top: 0, right: 1000, bottom: 800 },
+    { left: 0, top: 0, right: 240, bottom: 200 },
+  ];
+  const preferred = { left: 624, top: 668 };
+  assert.equal(context.findClearNotificationPosition({ width: 360, height: 120 }, preferred, viewport, obstacles), null);
+  const fitted = context.findClearNotificationPosition({ width: 360, height: 120, minWidth: 164 }, preferred, viewport, obstacles);
+  assert.ok(fitted, 'a persistent warning should reflow into available space without covering controls');
+  assert.equal(fitted.width, 224);
+  assert.equal(context.findClearNotificationPosition({ width: 360, height: 120, minWidth: 225 }, preferred, viewport, obstacles), null,
+    'placement must not shrink below the readable action width');
+});
+
+for (const opacity of ['1', '0']) for (const reflowHeight of [230, 650]) {
+  test(`notification reflow measures its actual ${reflowHeight}px height around opacity ${opacity} controls and remains bounded`, () => {
+    const { context } = createContext();
+    const styles = new Map(), attributes = new Set(), callbacks = [], widths = [];
+    let shown = 0;
+    const boxes = [
+      { left: 240, top: 0, right: 1000, bottom: 800, width: 760, height: 800 },
+      { left: 0, top: 0, right: 240, bottom: 200, width: 240, height: 200 },
+    ];
+    const controls = boxes.map(rect => ({ matches: () => false, closest: () => null,
+      contains(other) { return other === this; }, getBoundingClientRect: () => rect }));
+    const action = { offsetWidth: 140 }, alert = {};
+    const node = { isConnected: true, hidden: false,
+      get offsetWidth() { return Math.min(360, parseFloat(styles.get('--notification-available-width')) || 360); },
+      get offsetHeight() { return this.offsetWidth < 360 ? reflowHeight : 120; },
+      getBoundingClientRect() { return { width: this.offsetWidth, height: this.offsetHeight }; },
+      contains: other => other === node || other === action || other === alert,
+      querySelector: selector => selector === '.on-page-alert' ? alert : null,
+      querySelectorAll: selector => selector === '.on-page-alert__actions .ui-button' ? [action] : [],
+      classList: { add() {}, remove() {} },
+      setAttribute: key => attributes.add(key), removeAttribute: key => attributes.delete(key),
+      style: { getPropertyValue: key => styles.get(key), setProperty(key, value) {
+        styles.set(key, value); if (key === '--notification-available-width') widths.push(value);
+      } },
+    };
+    Object.assign(context.window, { innerWidth: 1000, innerHeight: 800, addEventListener() {}, removeEventListener() {} });
+    Object.assign(context.document, { body: {}, documentElement: {}, addEventListener() {}, removeEventListener() {},
+      querySelectorAll: () => controls,
+      elementsFromPoint: (x, y) => controls.filter(control => { const rect = control.getBoundingClientRect();
+        return x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom; }),
+    });
+    Object.assign(context, {
+      requestAnimationFrame(callback) { callbacks.push(callback); return callbacks.length; }, cancelAnimationFrame() {},
+      getComputedStyle: () => ({ visibility: 'visible', opacity, paddingLeft: '12px', paddingRight: '12px', borderLeftWidth: '0px', borderRightWidth: '0px' }),
+      MutationObserver: class { observe() {} disconnect() {} },
+      ResizeObserver: class { observe() {} unobserve() {} disconnect() {} },
+    });
+    context.registerFloatingNotification(node, { origin: 'bottom-right', onPlaced: () => { shown += 1; } });
+    callbacks.shift()();
+    assert.deepEqual(widths, ['984px', '224px'], 'natural width plus one reflow attempt only');
+    assert.equal(attributes.has('data-notification-deferred'), reflowHeight === 650);
+    assert.equal(shown, reflowHeight === 650 ? 0 : 1);
+    if (reflowHeight === 230) {
+      const left = parseFloat(styles.get('--notification-left')), top = parseFloat(styles.get('--notification-top'));
+      assert.ok(boxes.every(rect => left + node.offsetWidth <= rect.left - 8 || left >= rect.right + 8
+        || top + node.offsetHeight <= rect.top - 8 || top >= rect.bottom + 8));
+      context.placeFloatingNotifications();
+      assert.equal(shown, 1, 'reflow must not restart the warning lifecycle');
+    }
+    context.unregisterFloatingNotification(node);
+  });
+}

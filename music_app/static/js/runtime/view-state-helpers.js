@@ -170,6 +170,12 @@ function buildApiUrl(view, options = {}) {
   });
   if (view.primary_filter_active) params.set('primary_filter', '1');
   appendSearchFilterParams(params, view.search_filters);
+  if (resolvedSurface === 'albums' && !view.query && !view.selected_artist
+    && !options.payloadTier && !options.rootSidebar
+    && !['genre', 'mood', 'style', 'duration_min', 'duration_max', 'related_artist', 'primary_filter']
+      .some(key => params.has(key))) {
+    params.set('gallery_page_size', '50');
+  }
   if (options.omitSidebar) params.set('omit_sidebar', '1');
   if (options.rootSidebar) params.set('root_sidebar', '1');
   if (String(options.payloadTier || '').trim()) {

@@ -10,7 +10,7 @@ const source = fs.readFileSync(sourcePath, 'utf8');
 const css = fs.readFileSync(
   path.join(repoRoot, 'music_app', 'static', 'css', 'runtime', 'cover-lookup-modal.css'),
   'utf8',
-);
+).replaceAll('\r\n', '\n');
 
 function cssRule(selector, stylesheet = css) {
   const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');

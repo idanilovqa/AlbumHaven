@@ -140,3 +140,30 @@ export async function queryPersistedAlbumTrackMetadata(
   if (!Array.isArray(rows)) throw new Error('The isolated Postgres track query returned a non-array payload.');
   return rows;
 }
+export async function queryPersistedSyntheticSearchInventory(
+  artists,
+  { env = process.env, execFileAsync = execFileAsyncDefault, platform = process.platform } = {},
+) {
+  if (!Array.isArray(artists) || !artists.length
+      || artists.some(artist => typeof artist !== 'string' || !artist.trim())) {
+    throw new Error('Synthetic search requires declared fixture artists.');
+  }
+  const { databaseTarget, password } = resolveIsolatedE2ESetupConnection(
+    env.ALBUM_HAVEN_FAKE_E2E_SETUP_DATABASE_URL,
+  );
+  const childEnv = { ...env, PGCLIENTENCODING: 'UTF8' };
+  delete childEnv.PGDATABASE;
+  if (password) childEnv.PGPASSWORD = password;
+  const { stdout } = await executePsql({
+    args: [
+      '--no-psqlrc', '--quiet', '--tuples-only', '--no-align',
+      `--dbname=${databaseTarget}`, '--set=ON_ERROR_STOP=1',
+      `--variable=artists_b64=${Buffer.from(JSON.stringify(artists), 'utf8').toString('base64')}`,
+      `--file=${fileURLToPath(new URL('./postgresSyntheticSearchInventoryQuery.sql', import.meta.url))}`,
+    ],
+    env: childEnv, execFileAsync, platform,
+  });
+  const rows = JSON.parse(String(stdout || '').trim());
+  if (!Array.isArray(rows)) throw new Error('Synthetic search inventory must be an array.');
+  return rows;
+}

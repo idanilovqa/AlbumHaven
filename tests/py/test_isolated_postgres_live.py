@@ -345,6 +345,72 @@ def _dedicated_database_urls_or_skip(monkeypatch: pytest.MonkeyPatch) -> tuple[s
     return setup_url, runtime_url
 
 
+@pytest.mark.parametrize(
+    ("status", "built_from_fingerprint", "expected"),
+    [
+        ("ready", "a" * 64, "Devin Townsend"),
+        ("stale", "a" * 64, "Devin Townsend"),
+        ("stale", "b" * 64, ""),
+        ("stale", "", ""),
+    ],
+)
+def test_live_artist_search_projection_requires_matching_stale_authority(
+    monkeypatch, status, built_from_fingerprint, expected
+):
+    """Artist lookup may reuse stale data only when its authority still matches."""
+    setup_url, runtime_url = _dedicated_database_urls_or_skip(monkeypatch)
+    isolatedPostgres.prepare_isolated_database(setup_url, runtime_url)
+    fingerprint = "a" * 64
+    builder_version = "local-relation-builder-v10"
+    with isolatedPostgres._connect(setup_url) as connection:
+        library_id = connection.execute(
+            """
+            select library.libraries.id
+            from library.libraries
+            join app.bootstrap_owners
+              on app.bootstrap_owners.account_id = library.libraries.owner_account_id
+            where app.bootstrap_owners.owner_key = 'local-bootstrap-owner'
+              and library.libraries.name = 'Local Library'
+            """
+        ).fetchone()["id"]
+        connection.execute(
+            """
+            insert into library.local_artist_search_projection
+              (library_id, normalized_artist_key, canonical_artist_name,
+               builder_version, source_fingerprint, relations_last_built)
+            values (%s, 'devin', 'Devin Townsend', %s, %s, extract(epoch from now()))
+            on conflict (library_id, normalized_artist_key) do update set
+              canonical_artist_name = excluded.canonical_artist_name,
+              builder_version = excluded.builder_version,
+              source_fingerprint = excluded.source_fingerprint
+            """,
+            (library_id, builder_version, fingerprint),
+        )
+        connection.execute(
+            """
+            update library.libraries
+            set metadata = jsonb_set(
+              jsonb_set(coalesce(metadata, '{}'::jsonb), '{scan_cache}', coalesce(metadata -> 'scan_cache', '{}'::jsonb)),
+              '{scan_cache,relation_projection}',
+              jsonb_build_object(
+                'status', %s::text,
+                'builder_version', %s::text,
+                'source_fingerprint', %s::text,
+                'built_from_fingerprint', %s::text
+              ), true)
+            where id = %s
+            """,
+            (status, builder_version, fingerprint, built_from_fingerprint, library_id),
+        )
+    from music_app.services.library_browse_postgres import PostgresLibraryBrowseRepository
+
+    repository = PostgresLibraryBrowseRepository(
+        {"ALBUM_HAVEN_APP_DATABASE_URL": runtime_url}
+    )
+    with isolatedPostgres._connect(runtime_url) as connection:
+        assert repository._artist_search_projection_is_authoritative(connection=connection) is bool(expected)
+
+
 def _drop_application_schemas(setup_url: str) -> None:
     with isolatedPostgres._connect(setup_url) as connection:
         isolatedPostgres._assert_connected_role(connection, isolatedPostgres.SETUP_ROLE)
@@ -2522,6 +2588,23 @@ def test_live_partial_album_split_clones_album_state_and_moves_only_selected_tra
                     "album_key": source_album["album_key"],
                 },
             )
+            connection.execute(
+                """
+                with scan_guest as (
+                  insert into library.local_artists (
+                    library_id, artist_key, name, sort_name
+                  ) values (
+                    %(library_id)s, 'scan only guest', 'Scan Only Guest', 'Scan Only Guest'
+                  ) returning id
+                )
+                insert into library.local_album_featured_artists (
+                  library_id, album_id, artist_id, featured_kind, metadata
+                ) select %(library_id)s, %(album_id)s, id, 'featured_member',
+                         '{"source":"runtime_scan_cache"}'::jsonb
+                  from scan_guest
+                """,
+                {"library_id": source_album["library_id"], "album_id": source_album["id"]},
+            )
             before_tracks = connection.execute(
                 """
                 select
@@ -2610,6 +2693,16 @@ def test_live_partial_album_split_clones_album_state_and_moves_only_selected_tra
                 order by library.local_albums.title
                 """
             ).fetchall()
+            scan_only_memberships = connection.execute(
+                """
+                select album.title
+                from library.local_album_featured_artists credit
+                join library.local_albums album on album.id = credit.album_id
+                join library.local_artists artist on artist.id = credit.artist_id
+                where artist.artist_key = 'scan only guest'
+                order by album.title
+                """
+            ).fetchall()
 
         assert len(albums) == 2
         albums_by_title = {str(row["title"]): dict(row) for row in albums}
@@ -2643,6 +2736,7 @@ def test_live_partial_album_split_clones_album_state_and_moves_only_selected_tra
             ("Source Album", "Split Guest", "featured_member"),
         ]
         assert all(row["metadata"]["source"] == "owner" for row in featured)
+        assert [row["title"] for row in scan_only_memberships] == ["Source Album"]
 
         destination_cover_path = (
             music_dir / "Split Artist" / "Destination Album" / "destination-cover.jpg"
@@ -3806,12 +3900,14 @@ def test_live_phase6_browse_queries_use_bounded_production_plans_and_search_inde
                 "query_like": "%joseph%",
                 "category_count": 0,
                 "visible_categories": [],
+                "include_missing": True,
+                "search_artist_keys": ["joseph search probe"],
             }
             search_before_plan = connection.execute(
                 "explain (analyze, buffers, format json) " + _search_preview_sql(),
                 production_params,
             ).fetchone()["QUERY PLAN"]
-            assert int(search_before_plan[0]["Plan"]["Actual Rows"]) == 2
+            assert int(search_before_plan[0]["Plan"]["Actual Rows"]) == 1
 
             connection.execute(migration_sql)
             connection.execute(migration_sql)
@@ -3837,7 +3933,7 @@ def test_live_phase6_browse_queries_use_bounded_production_plans_and_search_inde
                     180,
                     750.0,
                 ),
-                "normalized_search": (_search_preview_sql(), production_params, 2, 250.0),
+                "normalized_search": (_search_preview_sql(), production_params, 1, 250.0),
                 "problematic_files": (
                     _problematic_files_sql(candidate_summary=True),
                     {
@@ -3983,8 +4079,10 @@ def test_live_phase6_browse_queries_use_bounded_production_plans_and_search_inde
         expected_rows = load_rows()
         assert [row["artist_name"] for row in expected_rows] == [
             "Joseph Search Probe",
-            "Plain Featured Artist",
         ]
+        assert {credit["artist_name"] for credit in expected_rows[0]["album_featured_artists"]} == {
+            "Joseph Search Probe", "Plain Featured Artist"
+        }
         assert {row["album_title"] for row in expected_rows} == {"Joseph Search Album"}
         assert {row["track_count"] for row in expected_rows} == {1}
         assert {row["total_duration_seconds"] for row in expected_rows} == {245}
@@ -5792,3 +5890,26 @@ def test_live_appearance_fixture_restores_exact_row_or_absence_and_rolls_back(mo
                 assert [item for item in after if item["row"]["account_id"] != account_id or item["row"]["client_profile"] != "desktop"] == [item for item in before if item["row"]["account_id"] != account_id or item["row"]["client_profile"] != "desktop"]
     finally:
         isolatedPostgres.reset_application_tables(setup_url)
+
+
+@pytest.mark.parametrize("disconnect", [False, True], ids=["release", "session-disconnect"])
+def test_live_tag_edit_lease_excludes_recovery_across_connections(watcher_repair_inventory, disconnect):
+    from music_app.services.tag_edit_intents_postgres import PostgresTagEditIntentRepository
+    repository = PostgresTagEditIntentRepository(watcher_repair_inventory.config)
+    lease = repository.intent_lease()
+    try:
+        intent_id = lease.prepare_intent(library_root_identity="lease-test-root", changes=[{"path": "isolated-track.flac", "old_values": {"title": "Old"}, "requested_values": {"title": "New"}}])
+        with repository.claim_unfinished_intent(intent_id, library_root_identity="lease-test-root") as claimed:
+            assert claimed is None
+        if disconnect:
+            lease._connection.close()
+        lease.release()
+        with repository.claim_unfinished_intent(intent_id, library_root_identity="lease-test-root") as claimed:
+            assert claimed["id"] == intent_id
+            with repository.claim_unfinished_intent(intent_id, library_root_identity="lease-test-root") as competing:
+                assert competing is None
+            repository.mark_terminal(intent_id, status="completed")
+        with repository.claim_unfinished_intent(intent_id, library_root_identity="lease-test-root") as claimed:
+            assert claimed is None
+    finally:
+        lease.release()

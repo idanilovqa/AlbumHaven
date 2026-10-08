@@ -92,7 +92,7 @@ def test_live_source_migration_is_idempotent_and_constraint_rejects_invalid_json
 
     setup, runtime = database
     account_id, repository = account
-    migration = Path(__file__).resolve().parents[2] / "migrations/postgres/0082_library_source_indicators.sql"
+    migration = Path(__file__).resolve().parents[2] / "migrations/postgres/0087_library_source_indicators.sql"
     for _ in range(2):
         with isolatedPostgres._connect(setup) as connection:
             connection.execute(migration.read_text(encoding="utf-8"))

@@ -478,7 +478,16 @@ export const test = base.extend({
     }
   }, { auto: true }],
 
-  requestInterceptionGuard: [async ({ page, context }, use) => {
+  requestInterceptionGuardEnabled: [true, { option: true }],
+  requestInterceptionGuard: [async ({
+    page,
+    context,
+    requestInterceptionGuardEnabled,
+  }, use) => {
+    if (!requestInterceptionGuardEnabled) {
+      await use();
+      return;
+    }
     const restoreInterceptionGuard = installContextRequestInterceptionGuard(context);
     try {
       await use();

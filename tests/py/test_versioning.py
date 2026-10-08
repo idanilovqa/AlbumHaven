@@ -150,7 +150,8 @@ def test_read_changelog_section_raises_when_version_heading_missing(tmp_path: Pa
 def test_index_exposes_release_meta_tag(asgi_app, monkeypatch):
     from music_app.routes import web_asgi
 
-    def fake_build_postgres_root_startup_view(*, config, query_args):
+    def fake_build_postgres_root_startup_view(*, config, query_args, library_state=None):
+        del library_state
         initial_view = web_asgi._build_empty_initial_view(
             config=config,
             query_raw=str(query_args.get("q") or "").strip(),

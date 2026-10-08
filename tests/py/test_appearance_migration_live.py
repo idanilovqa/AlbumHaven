@@ -29,9 +29,8 @@ def test_live_legacy_selection_accent_survives_aggregate_upgrade(
     }}
     try:
         _drop_application_schemas(setup_url)
+        isolatedPostgres.apply_migrations(setup_url, legacy)
         with isolatedPostgres._connect(setup_url) as connection:
-            for path in legacy:
-                connection.execute(path.read_text(encoding="utf-8"))
             account_id = connection.execute("""
                 insert into app.accounts (display_name, account_kind,
                     username_display, username_normalized,
@@ -53,9 +52,7 @@ def test_live_legacy_selection_accent_survives_aggregate_upgrade(
                         (account_id, client_profile, main_surface_color, compact_player_style)
                     values (%s, %s, '#123456', 'floating')
                 """, (account_id, existing_profile))
-        with isolatedPostgres._connect(setup_url) as connection:
-            for path in upgrade:
-                connection.execute(path.read_text(encoding="utf-8"))
+        isolatedPostgres.apply_migrations(setup_url, upgrade)
         with isolatedPostgres._connect(setup_url) as connection:
             row = connection.execute("""select * from app.user_appearance_preferences
                 where account_id = %s and client_profile = 'desktop'""", (account_id,)).fetchone()

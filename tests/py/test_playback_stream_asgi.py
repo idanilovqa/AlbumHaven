@@ -144,6 +144,16 @@ def playback_app(tmp_path, monkeypatch, request):
         "music_app.services.runtime_shutdown.request_runtime_shutdown",
         lambda _runtime: None,
     )
+    # This fixture owns playback lifecycle behavior, not background database I/O.
+    # Keep the real backfill thread lifecycle, but give it no covers to process.
+    monkeypatch.setattr(
+        "music_app.services.cover_preview_backfill.CoverPreviewBackfill._load_cover_paths",
+        lambda _self: [],
+    )
+    monkeypatch.setattr(
+        "music_app.services.postgres_connections.prewarm_connection_pool",
+        lambda _database_url: None,
+    )
     app = create_test_asgi_app(tmp_path, monkeypatch)
     app.state.config["ALBUM_HAVEN_APP_DATABASE_URL"] = (
         "postgresql://album_haven_app@localhost/app"
@@ -492,7 +502,7 @@ def test_waveform_route_returns_scoped_saved_loop_cache_hit_without_rebuilding(
             "file_size_bytes": saved_loop_path.stat().st_size,
             "modified_at_ns": saved_loop_path.stat().st_mtime_ns,
             "sample_count": 280,
-            "analyzer_version": "waveform-peaks-v2",
+            "analyzer_version": "waveform-peaks-v3",
         }
     ]
 

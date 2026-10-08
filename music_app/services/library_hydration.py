@@ -404,6 +404,11 @@ def hydrate_library_state_from_disk(
         library_state["separate_release_keys"] = set()
         return True
 
+    original_relation_roots = {
+        path: (entry.get("library_root_id"), entry.get("library_root_category"))
+        for path, entry in file_cache.items()
+        if isinstance(entry, dict)
+    } if validate_cache and scan_cache_adapter.backend == PERSISTENCE_BACKEND_POSTGRES else {}
     if validate_cache:
         sanitized_file_cache, changed_entries = sanitize_hydrated_file_cache(
             file_cache,
@@ -420,27 +425,49 @@ def hydrate_library_state_from_disk(
                 apply_exception_override(entry, exception_overrides)
 
     saved_sanitized_snapshot = False
-    if validate_cache and len(sanitized_file_cache) != len(file_cache):
-        if scan_cache_adapter.backend == PERSISTENCE_BACKEND_POSTGRES:
-            scan_cache_adapter.save_snapshot(
-                config["CACHE_PATH"],
-                sanitized_file_cache,
-                root_identity,
-                disk_last_scan,
-                relation_views=relation_views,
-                relations_last_built=relations_last_built,
+    if (
+        validate_cache
+        and scan_cache_adapter.backend == PERSISTENCE_BACKEND_POSTGRES
+        and (len(sanitized_file_cache) != len(file_cache) or changed_entries)
+    ):
+        relations_changed = (
+            len(sanitized_file_cache) != len(file_cache)
+            or any(
+                (entry.get("library_root_id"), entry.get("library_root_category"))
+                != original_relation_roots.get(path)
+                for path, entry in changed_entries.items()
             )
-            saved_sanitized_snapshot = True
-        else:
-            save_cache_to_disk_for_config(
-                config,
-                config["CACHE_PATH"],
-                sanitized_file_cache,
-                root_identity,
-                disk_last_scan,
-                relation_views=relation_views,
-                relations_last_built=relations_last_built,
-            )
+        )
+        snapshot_options = {}
+        if ensure_relations and relations_changed:
+            snapshot_options["rebuild_relation_projection"] = True
+        committed_relations = scan_cache_adapter.save_snapshot(
+            config["CACHE_PATH"],
+            sanitized_file_cache,
+            root_identity,
+            disk_last_scan,
+            relation_views=relation_views,
+            relations_last_built=relations_last_built,
+            **snapshot_options,
+        )
+        saved_sanitized_snapshot = True
+        if relations_changed:
+            library_state["relation_projection_ready"] = False
+            library_state["relation_projection_rebuild_reason"] = "hydration_inventory_changed"
+        if ensure_relations and relations_changed and isinstance(committed_relations, dict):
+            relation_views = committed_relations["relation_views"]
+            relations_last_built = committed_relations["relations_last_built"]
+            library_state["relation_projection_ready"] = True
+    elif validate_cache and len(sanitized_file_cache) != len(file_cache):
+        save_cache_to_disk_for_config(
+            config,
+            config["CACHE_PATH"],
+            sanitized_file_cache,
+            root_identity,
+            disk_last_scan,
+            relation_views=relation_views,
+            relations_last_built=relations_last_built,
+        )
 
     library_state["file_cache"] = sanitized_file_cache
     library_state["scan_metadata_repair_required"] = any(
@@ -456,20 +483,7 @@ def hydrate_library_state_from_disk(
         sanitized_file_cache,
         set(library_state.get("separate_release_keys") or set()),
     )
-    if (
-        changed_entries
-        and scan_cache_adapter.backend == PERSISTENCE_BACKEND_POSTGRES
-        and not saved_sanitized_snapshot
-    ):
-        scan_cache_adapter.save_snapshot(
-            config["CACHE_PATH"],
-            sanitized_file_cache,
-            root_identity,
-            disk_last_scan,
-            relation_views=relation_views,
-            relations_last_built=relations_last_built,
-        )
-    elif changed_entries:
+    if changed_entries and not saved_sanitized_snapshot:
         schedule_cache_updates_save_for_config(config, config["CACHE_PATH"], changed_entries)
     if ensure_relations and ensure_relation_views is not None and _relations_missing(library_state):
         ensure_relation_views(library_state, config)

@@ -209,7 +209,7 @@ test('active Problems row exposes independent title and artist/year metadata', a
   const actions = new Actions({
     activeListItem: activeItem,
     titleForListItem: item => { assert.equal(item, activeItem); return { textContent: async () => '  Album  ' }; },
-    metaForListItem: item => { assert.equal(item, activeItem); return { textContent: async () => '  Artist · 2009  ' }; },
+    readListItemMeta: async item => { assert.equal(item, activeItem); return 'Artist · 2009'; },
   });
   const result = await actions.readActiveListItem();
   assert.equal(result.key, 'album-1');

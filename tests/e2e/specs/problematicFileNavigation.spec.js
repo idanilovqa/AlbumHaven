@@ -427,12 +427,15 @@ test('FTC-UTIL-PROBLEMS-001 scopes exclusions with optimistic persistence and re
     const suggestionAlbumReasons = await utilityProblematicFilesActions.readAlbumProblemReasons();
     expect(suggestionAlbumReasons.length).toBeGreaterThan(0);
     await utilityProblematicFilesActions.selectAlbumProblem(suggestionAlbumReasons[0]);
-    expect(await utilityProblematicFilesActions.readSuggestedEditsApplyEnabled()).toBe(true);
+    expect(await utilityProblematicFilesActions.readSuggestedEditsApplyEnabled()).toBe(false);
     const exclusionsBeforeProposal = await utilityProblematicFilesActions.readSelectedProblemInstances();
     expect(exclusionsBeforeProposal).toEqual(expect.arrayContaining([
       expect.objectContaining({ scope: 'album', reason: suggestionAlbumReasons[0] }),
     ]));
     expect(await utilityProblematicFilesActions.chooseFirstSuggestedEditWithoutApplying()).toEqual(exclusionsBeforeProposal);
+    expect(await utilityProblematicFilesActions.readSuggestedEditsApplyEnabled()).toBe(true);
+    expect(await utilityProblematicFilesActions.chooseFirstSuggestedEditWithoutApplying()).toEqual(exclusionsBeforeProposal);
+    expect(await utilityProblematicFilesActions.readSuggestedEditsApplyEnabled()).toBe(false);
 
     await utilityProblematicFilesActions.search(ALBUM);
     await utilityProblematicFilesActions.waitForSearchResults(ALBUM);

@@ -32,6 +32,13 @@
             {
               "config": "playwright.config.js",
               "project": "functional",
+              "test": "tests/e2e/specs/searchSessionRecovery.spec.js",
+              "case": "FTC-PERMISSIONS-007 returns a populated gallery to sign-in after native logout in another tab",
+              "area": "gallery-search"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
               "test": "tests/e2e/specs/artistTreePersistence.spec.js",
               "case": "FTC-ARTIST-TREE-002 preserves collapsed and expanded preferences after reload",
               "area": "gallery-search"
@@ -274,7 +281,7 @@
               "config": "playwright.config.js",
               "project": "functional",
               "test": "tests/e2e/specs/searchTreeCorrectness.spec.js",
-              "case": "FTC-SEARCH-NAV-002, FTC-SEARCH-NAV-003, and FTC-SEARCH-NAV-026 keep one-family search narrow, alphabetical, and selected through full-tree restoration",
+              "case": "FTC-SEARCH-NAV-002, FTC-SEARCH-NAV-003, and FTC-SEARCH-NAV-026 keep one-family search narrow, gallery-ordered, and selected through full-tree restoration",
               "area": "gallery-search"
             },
             {
@@ -345,6 +352,13 @@
               "project": "functional",
               "test": "tests/e2e/specs/galleryInteractionRegressions.spec.js",
               "case": "FTC-GALLERY-031 preserves startup totals, search suggestions, covers and hover-year interactions",
+              "area": "gallery-search"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/rootGalleryPagination.spec.js",
+              "case": "FTC-GALLERY-STARTUP-006 preserves authoritative root metadata and mounted cards across a native page continuation",
               "area": "gallery-search"
             },
             {
@@ -936,7 +950,6 @@
               "case": "FTC-PLAYER-019 / FTC-PLAYER-020 / FTC-PLAYER-021 / FTC-PLAYER-022 switches expanded, docked, and floating player views without sharing runner state",
               "area": "playback"
             },
-
             {
               "config": "playwright.config.js",
               "project": "functional",

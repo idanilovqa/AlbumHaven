@@ -68,7 +68,12 @@ function syncArtistsDrawerVisibility() {
     rail.classList.toggle('is-mobile-drawer-open', isOpen);
     rail.setAttribute('aria-hidden', isDrawerVisible && !isOpen ? 'true' : 'false');
     rail.inert = isDrawerVisible && !isOpen;
-    document.getElementById('mobile-library-button')?.setAttribute('aria-expanded', String(isOpen));
+    const mobileLibraryButton = document.getElementById('mobile-library-button');
+    mobileLibraryButton?.setAttribute('aria-expanded', String(isOpen));
+    if (isOpen) {
+      mobileLibraryButton?.removeAttribute('data-search-results');
+      mobileLibraryButton?.removeAttribute('aria-description');
+    }
   }
 
   if (isArtistsDrawerElement(backdrop)) {

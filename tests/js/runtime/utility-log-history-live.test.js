@@ -194,3 +194,20 @@ test('entering empty Log History clears another tab navigation exactly once', ()
   h.context.reconcileUtilityLogHistoryTree({ list, count: {} }, {});
   assert.equal(clears, 1);
 });
+
+
+test('explicit log-history invalidation survives a status revision before reopening the tab', async () => {
+  const h = setup();
+  await h.context.loadUtilityLogHistory();
+  assert.equal(h.context.state.utility.logHistoryLoaded, true);
+  h.context.state.utility.activeTab = 'integrations';
+  h.context.state.utility.logHistoryLoaded = false;
+  await h.context.syncUtilityLogHistoryRevision('5');
+  assert.equal(h.context.state.utility.logHistoryLoaded, false,
+    'an old captured snapshot must not undo explicit invalidation');
+  const before = h.calls.length;
+  h.context.state.utility.activeTab = 'log-history';
+  await h.context.loadUtilityLogHistory(!h.context.state.utility.logHistoryLoaded);
+  assert.equal(h.calls.length, before + 1, 'reopening loads the newly persisted outcome');
+  assert.equal(h.context.state.utility.logHistoryLoaded, true);
+});

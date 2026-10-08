@@ -9,8 +9,12 @@
   <link rel="stylesheet" href="/static/css/scrollbar.css">
   <script src="/static/js/login.js" defer></script>
   <link rel="stylesheet" href="/static/css/runtime/alert-components.css">
+  <link rel="stylesheet" href="/static/css/startup-progress.css?v={{ runtime_asset_version | default(app_version | default('')) }}">
+  <link rel="stylesheet" href="/static/css/button-component.css">
 </head>
 <body>
+  {% set startup_progress_initial = 0 %}
+  {% include "components/startup-progress.html" %}
   <main class="login-glow">
     <form class="login-form" method="post" action="/login" aria-label="Album Haven sign in">
       <img class="login-mark" src="/static/images/album-haven-cloud-vinyl.png" alt="Album Haven">

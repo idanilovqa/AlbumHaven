@@ -1,6 +1,6 @@
 # Cover Look Up and Remaining Shared UI Implementation Plan
 
-> **For agentic workers:** Use the executing-plans skill to implement this plan task by task. Checkboxes track delivery. This document authorizes no merge, release or deployment.
+> **For agentic workers:** Use the executing-plans skill to implement this plan task by task. Checkboxes track delivery. This plan alone grants no merge, release or deployment authority. The owner's later 0.9.49 release instruction supersedes historical pause/unmerged restrictions; current authority, CI repair evidence and remaining gates are recorded in [Cover branch completion](2026-09-23-cover-branch-completion.md#current-release-authority-and-repair-checkpoint--2026-10-07).
 
 **Date:** 2026-09-10
 

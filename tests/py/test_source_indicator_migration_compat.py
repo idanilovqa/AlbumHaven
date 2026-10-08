@@ -7,7 +7,7 @@ from scripts.migration_compat import source_indicator_ledger
 
 ROOT = Path(__file__).resolve().parents[2]
 OLD = '0080_library_source_indicators.sql'
-NEW = '0082_library_source_indicators.sql'
+NEW = '0087_library_source_indicators.sql'
 CHECKSUM = 'e1a292e50a08e4043d2ce3ceda13b87ad90462deb898590c147bab492a01b5e1'
 
 

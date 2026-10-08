@@ -943,6 +943,178 @@ def test_live_postgres_explicit_separate_release_consolidates_same_year_identity
         isolatedPostgres.reset_application_tables(_ISOLATED_SETUP_DATABASE_URL)
 
 
+@pytest.mark.parametrize("existing_destination", [False, True])
+@pytest.mark.parametrize("changed_field", ["album", "year"])
+@pytest.mark.parametrize("selected_has_guest", [False, True])
+def test_live_postgres_structural_split_persists_projected_owner_without_rewriting_credits(
+    existing_destination, changed_field, selected_has_guest,
+):
+    database_url = _isolated_runtime_database_url_or_skip()
+    if not _ISOLATED_SETUP_DATABASE_URL:
+        pytest.skip("Isolated setup is required for the structural owner contract.")
+    isolatedPostgres.prepare_isolated_database(_ISOLATED_SETUP_DATABASE_URL, database_url)
+    from music_app.services.library_browse_postgres import PostgresLibraryBrowseRepository
+    from music_app.services.scan_cache_persistence import (
+        PostgresScanCacheAdapter,
+        _structural_destination_album_projection,
+    )
+
+    token = uuid4().hex
+    solo = f"Solo Voice {token}"
+    source_title = f"Mixed Credits {token}"
+    _, entries, _ = _entries()
+    previous = {}
+    for index, entry in enumerate(entries.values()):
+        path = f"C:/__structural_owner__/{token}/{index + 1}.flac"
+        previous[path] = {
+            **entry, "path": path, "album": source_title,
+            "album_artist": "Various Artists", "artist": solo if index == 0 else f"Other Voice {token}",
+            "title": "Clean Signal (feat. Featured Voice)" if index == 0 else "Other Signal",
+            "year": 2026, "release_date": "2026", "cover_path": "", "cover_revision": "",
+        }
+    selected_path = next(iter(previous))
+    if selected_has_guest:
+        previous[selected_path]["album_artist"] = solo
+        previous[selected_path]["artist"] = f"{solo} feat. Featured Voice"
+    updated = {
+        selected_path: {
+            **previous[selected_path],
+            **({"album": f"Split Credits {token}"} if changed_field == "album"
+               else {"year": 2030, "release_date": "2030"}),
+        },
+    }
+    connection = psycopg.connect(database_url)
+    try:
+        proxy = _CommitSuppressingConnection(connection)
+        config = {"ALBUM_HAVEN_APP_DATABASE_URL": database_url}
+        adapter = PostgresScanCacheAdapter(config, connect=lambda _url: proxy)
+        projection = _structural_destination_album_projection(
+            adapter._build_albums, updated, frozenset({changed_field}), set(),
+        )
+        assert projection.album_artist == solo
+        library_id = connection.execute(
+            """select libraries.id from app.bootstrap_owners owners
+               join library.libraries libraries on libraries.owner_account_id=owners.account_id
+               where owners.owner_key='local-bootstrap-owner'
+                 and libraries.name='Local Library' and libraries.library_kind='local'"""
+        ).fetchone()[0]
+        source_artist = connection.execute(
+            """insert into library.local_artists(library_id,artist_key,name,metadata)
+               values(%s,%s,%s,'{}'::jsonb) returning id""",
+            (library_id, f"mixed-owner-{token}", "Various Artists"),
+        ).fetchone()[0]
+        source_metadata = {
+            "album_artist": "Various Artists", "artists": ["Various Artists"],
+            "is_compilation": True, "owner_note": token, "release_date": "2026",
+        }
+        source_id = connection.execute(
+            """insert into library.local_albums
+               (library_id,artist_id,album_key,title,release_year,metadata)
+               values(%s,%s,%s,%s,2026,%s::jsonb) returning id""",
+            (library_id, source_artist, f"mixed-source-{token}", source_title, json.dumps(source_metadata)),
+        ).fetchone()[0]
+        source_credits = {("Various Artists", "owner"),
+                          (solo, "featured_track_artist"),
+                          (f"Other Voice {token}", "featured_member")}
+        if selected_has_guest:
+            source_credits.add(("Featured Voice", "featured_track_artist"))
+        for name, kind in source_credits:
+            artist_id = source_artist if name == "Various Artists" else connection.execute(
+                """insert into library.local_artists(library_id,artist_key,name,metadata)
+                   values(%s,%s,%s,'{}'::jsonb)
+                   on conflict(library_id,artist_key) do update set name=excluded.name returning id""",
+                (library_id, name.casefold(), name),
+            ).fetchone()[0]
+            connection.execute(
+                """insert into library.local_album_featured_artists
+                   (library_id,album_id,artist_id,featured_kind,metadata)
+                   values(%s,%s,%s,%s,'{"source":"runtime_scan_cache"}'::jsonb)""",
+                (library_id, source_id, artist_id, kind),
+            )
+        existing_id = None
+        if existing_destination:
+            destination_artist = connection.execute(
+                """insert into library.local_artists(library_id,artist_key,name,metadata)
+                   values(%s,%s,%s,'{}'::jsonb)
+                   on conflict(library_id,artist_key) do update set name=excluded.name returning id""",
+                (library_id, solo.casefold(), solo),
+            ).fetchone()[0]
+            existing_id = connection.execute(
+                """insert into library.local_albums
+                   (library_id,artist_id,album_key,title,release_year,metadata)
+                   values(%s,%s,%s,%s,%s,%s::jsonb) returning id""",
+                (library_id, destination_artist, projection.key, projection.name, projection.year,
+                 json.dumps({"album_artist": solo, "artists": [solo], "owner_note": "destination"})),
+            ).fetchone()[0]
+        track_ids = []
+        for index, (path, entry) in enumerate(previous.items()):
+            track_id = connection.execute(
+                """insert into library.local_tracks
+                   (library_id,album_id,artist_id,track_key,title,track_number,metadata)
+                   values(%s,%s,%s,%s,%s,%s,%s::jsonb) returning id""",
+                (library_id, source_id, source_artist, f"split-track-{token}-{index}",
+                 entry["title"], index + 1, json.dumps({"artist": entry["artist"], "album": source_title})),
+            ).fetchone()[0]
+            track_ids.append(track_id)
+            connection.execute(
+                """insert into library.local_track_files(track_id,private_path,metadata)
+                   values(%s,%s,jsonb_build_object('scan_cache',jsonb_build_object(
+                     'source','scan_cache','stale',false,'file_entry',%s::jsonb)))""",
+                (track_id, path, json.dumps(entry)),
+            )
+        result = adapter.persist_structural_tag_edit(
+            changed_paths={selected_path}, previous_file_entries=previous,
+            updated_file_entries=updated, changed_field_names={changed_field},
+            commit_guard=lambda _commit: None,
+        )
+        destination = connection.execute(
+            """select albums.id,artists.name,albums.metadata,albums.release_year
+               from library.local_albums albums
+               join library.local_artists artists on artists.id=albums.artist_id
+               where albums.id=%s""", (result["destination_album_id"],),
+        ).fetchone()
+        assert destination[1] == solo
+        assert destination[2]["album_artist"] == solo
+        assert destination[3] == (2030 if changed_field == "year" else 2026)
+        if existing_destination:
+            assert destination[0] == existing_id
+            assert destination[2]["owner_note"] == "destination"
+        else:
+            assert destination[2]["owner_note"] == token
+        source_after = connection.execute(
+            "select artist_id,metadata,release_year from library.local_albums where id=%s", (source_id,),
+        ).fetchone()
+        assert source_after == (source_artist, source_metadata, 2026)
+        credits_sql = """select artists.name,credits.featured_kind
+                         from library.local_album_featured_artists credits
+                         join library.local_artists artists on artists.id=credits.artist_id
+                         where credits.album_id=%s"""
+        assert set(connection.execute(credits_sql, (source_id,)).fetchall()) == source_credits
+        if not existing_destination:
+            expected_credits = {(solo, "owner"), (solo, "featured_track_artist")}
+            if selected_has_guest:
+                expected_credits.add(("Featured Voice", "featured_track_artist"))
+            assert set(connection.execute(credits_sql, (destination[0],)).fetchall()) == expected_credits
+            assert destination[2]["featured_artists"] == (["Featured Voice"] if selected_has_guest else [])
+        persisted = connection.execute(
+            """select private_path,metadata #> '{scan_cache,file_entry}'
+               from library.local_track_files where track_id=any(%s)""", (track_ids,),
+        ).fetchall()
+        for path, entry in persisted:
+            expected = updated.get(path, previous[path])
+            for field in ("artist", "album_artist", "title", "album", "year", "release_date"):
+                assert entry[field] == expected[field]
+        repository = PostgresLibraryBrowseRepository(config, connect=lambda _url: proxy)
+        details = repository.build_album_detail_payload(projection.key)
+        assert details["track_rows"][0]["secondary_artist"] == "feat. Featured Voice"
+        assert connection.execute(
+            "select album_id from library.local_tracks where id=%s", (track_ids[1],),
+        ).fetchone()[0] == source_id
+    finally:
+        connection.rollback()
+        connection.close()
+
+
 def test_live_postgres_blank_album_restore_preserves_mixed_track_identity_and_atomicity():
     database_url = _isolated_runtime_database_url_or_skip()
     if not _ISOLATED_SETUP_DATABASE_URL:

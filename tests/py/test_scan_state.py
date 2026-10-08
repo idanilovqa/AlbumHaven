@@ -2301,6 +2301,7 @@ def test_fresh_snapshot_hydration_rebuilds_relations_without_rating_seed_intent(
     assert publication_intents == [False]
 
 
+
 @pytest.mark.parametrize("failure_stage", ["scan", "relation"])
 @pytest.mark.parametrize("superseded", [False, True], ids=["current", "superseded"])
 def test_scan_future_propagates_failure_without_overwriting_newer_state(
@@ -2423,3 +2424,76 @@ def test_scan_watcher_health_failure_remains_best_effort(
     assert library_state["scan_outcome"] == "completed"
     assert library_state["scan_in_progress"] is False
     assert library_state["last_error"] is None
+
+@pytest.mark.parametrize("projection_ready", [False, True])
+@pytest.mark.parametrize("from_disk", [False, True])
+def test_cache_fresh_scan_repairs_explicitly_stale_populated_projection(
+    runtime_config, runtime_logger, monkeypatch, projection_ready, from_disk,
+):
+    now = scan_state.time.time()
+    files = {"track-1": {"album": "Album"}}
+    views = {"artists": ["Artist"]}
+    state = {"file_cache": {} if from_disk else files, "albums": [],
+             "last_scan": 0.0 if from_disk else now, "relation_views": views,
+             "relation_projection_ready": projection_ready, "scan_generation": 0,
+             "scan_in_progress": True, "scan_mode": "background"}
+    _install_scan_cache_adapter(monkeypatch, FakeScanCacheAdapter(
+        file_cache=files, last_scan=now, relation_views=views,
+    ))
+    monkeypatch.setattr(scan_state, "load_separate_release_keys", lambda _cfg: set())
+    monkeypatch.setattr(scan_state, "build_albums_from_file_cache", lambda *_args: [])
+    calls = []
+    def refresh(**kwargs):
+        calls.append(kwargs)
+        state["relation_projection_ready"] = True
+    scan_state.refresh_library_state(
+        state, config=runtime_config, logger=runtime_logger, force=False,
+        cache_lock=scan_state.Lock(),
+        scan_music_incremental=lambda **_kwargs: pytest.fail("fresh cache must not rescan media"),
+        refresh_relation_views=refresh,
+        start_manual_cover_refresh=lambda **_kwargs: None,
+        start_background_cover_refresh=lambda: None,
+    )
+    assert len(calls) == (0 if projection_ready else 1)
+    assert state["relation_projection_ready"] is True
+    assert state["scan_outcome"] == "completed"
+
+
+@pytest.mark.parametrize("from_disk", [False, True])
+def test_cache_fresh_projection_repair_cannot_publish_after_new_scan(
+    runtime_config, runtime_logger, monkeypatch, from_disk,
+):
+    now = scan_state.time.time()
+    files = {"track-1": {"album": "Album"}}
+    albums = [SimpleNamespace(key="album")]
+    views = {"artists": ["Artist"]}
+    state = {"file_cache": {} if from_disk else files, "albums": albums,
+             "last_scan": 0.0 if from_disk else now, "relation_views": views,
+             "relation_projection_ready": False, "scan_generation": 0,
+             "scan_in_progress": True, "scan_mode": "background"}
+    _install_scan_cache_adapter(monkeypatch, FakeScanCacheAdapter(
+        file_cache=files, last_scan=now, relation_views=views,
+    ))
+    monkeypatch.setattr(scan_state, "load_separate_release_keys", lambda _cfg: set())
+    monkeypatch.setattr(scan_state, "build_albums_from_file_cache", lambda *_args: albums)
+    calls = []
+    def refresh(**kwargs):
+        assert kwargs == {"expected_scan_generation": 1}
+        calls.append(kwargs)
+        state.update(scan_generation=2, scan_in_progress=True, scan_outcome="running")
+        raise scan_state.ScanCancelled("New scan superseded projection repair")
+    scan_state.refresh_library_state(
+        state, config=runtime_config, logger=runtime_logger, force=False,
+        cache_lock=scan_state.Lock(),
+        scan_music_incremental=lambda **_kwargs: pytest.fail("fresh cache must not rescan media"),
+        refresh_relation_views=refresh,
+        start_manual_cover_refresh=lambda **_kwargs: None,
+        start_background_cover_refresh=lambda: None,
+        queue_problematic_albums_prewarm=lambda: pytest.fail("superseded repair must stop"),
+        queue_utility_rules_prewarm=lambda: pytest.fail("superseded repair must stop"),
+    )
+    assert len(calls) == 1
+    assert state["scan_generation"] == 2
+    assert state["scan_in_progress"] is True
+    assert state["scan_outcome"] == "running"
+    assert state["relation_projection_ready"] is False

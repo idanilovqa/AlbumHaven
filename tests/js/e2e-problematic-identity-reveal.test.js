@@ -146,7 +146,7 @@ test('navigation render oracle counts root replacements without treating nested 
 test('continuity observer exposes mutations on the same retained snapshot', async () => {
   const { UtilityProblematicFilesActions } = await import(actionsUrl);
   const row = key => ({ getAttribute: () => key, textContent: key,
-    querySelector: () => ({ textContent: key }) });
+    querySelector: selector => ({ textContent: selector === '.year' ? '2026' : key }) });
   const previous = row('previous'), active = row('active');
   const items = [previous, active];
   class Element {}
@@ -156,7 +156,7 @@ test('continuity observer exposes mutations on the same retained snapshot', asyn
     waitForSearchProjection: async (_term, options) => assert.equal(options.requireSettledRange, true),
     activeListItem: { count: async () => 1, scrollIntoViewIfNeeded: async () => {} },
     sidebarListSelector: '#list', activeListItemSelector: '#active', listItemSelector: '.row',
-    listItemTitleSelector: '.title', listItemMetaSelector: '.meta',
+    listItemTitleSelector: '.title', listItemMetaSelector: '.meta', listItemSubtitleSelector: '.subtitle', listItemYearSelector: '.year',
     page: { evaluateHandle: async (callback, selectors) => {
       const snapshot = require('node:vm').runInNewContext(`(${callback.toString()})(selectors)`, {
         selectors, HTMLElement: Element,
@@ -166,7 +166,8 @@ test('continuity observer exposes mutations on the same retained snapshot', asyn
       return { evaluate: async fn => fn(snapshot) };
     } },
   } };
-  await UtilityProblematicFilesActions.prototype.prepareSelectedMutationContinuity.call(owner);
+  const continuity = await UtilityProblematicFilesActions.prototype.prepareSelectedMutationContinuity.call(owner);
+  assert.equal(continuity.previousMeta, 'previous · 2026');
   assert.equal(await owner.mutationObservation.evaluate(snapshot => snapshot.listMutations), 0);
   capture();
   assert.equal(await owner.mutationObservation.evaluate(snapshot => snapshot.listMutations), 1);
@@ -213,4 +214,88 @@ test('exact navigation evidence rejects missing replacements and transient wrong
     [record, { ...record, detailRender: false, detailRenderCount: 0, activeKey: 'wrong' }],
     [record, { ...record, detailRender: false, detailRenderCount: 0, detailTitle: 'Wrong album' }],
   ]) assert.throws(() => expectProblematicNavigationRecords(records, 'chosen', 'Chosen album'));
+});
+
+test('Problematic list identity joins separate subtitle and year fields without reading concatenated parent text', async () => {
+  const { UtilityProblematicFilesActions } = await import(actionsUrl);
+  const { UtilityProblematicFilesTab } = await import('../e2e/poms/utilityProblematicFilesTab.js');
+  for (const year of ['2026', '']) {
+    const fields = { title: 'Target', subtitle: 'Exact artist', year, meta: `Exact artist${year}`, issues: 'Missing cover' };
+    const element = { getAttribute: () => 'key', querySelector: selector => fields[selector] ? { textContent: fields[selector] } : null };
+    const tab = {
+      listItemTitleSelector: 'title', listItemMetaSelector: 'meta', listItemSubtitleSelector: 'subtitle', listItemYearSelector: 'year', listItemIssuesSelector: 'issues',
+      listItems: { evaluateAll: async (read, selectors) => read([element], selectors) },
+      activeListItem: { getAttribute: async () => 'key', evaluate: async (read, selectors) => read(element, selectors) },
+      titleForListItem: () => ({ textContent: async () => fields.title }),
+      metaForListItem: () => ({ textContent: async () => fields.meta }),
+      readListItemMeta: UtilityProblematicFilesTab.prototype.readListItemMeta,
+    };
+    const actions = new UtilityProblematicFilesActions(tab);
+    const expected = ['Exact artist', year].filter(Boolean).join(' · ');
+    assert.equal((await actions.readVisibleListItems())[0].meta, expected);
+    assert.equal((await actions.readActiveListItem()).meta, expected);
+  }
+});
+
+for (const method of ['waitForReady', 'waitForSelectedDetailSelection']) {
+  test(method + ' rejects cached detail while a summary refresh is pending', async () => {
+    const { UtilityProblematicFilesActions } = await import(actionsUrl);
+    let predicate, selectors;
+    const tab = {
+      listItemSelector: '#row', activeListItemSelector: '#active',
+      detailTitleSelector: '#title', listEmptyStateSelector: '#empty',
+      waitForPageCondition: async (callback, _options, expected) => {
+        predicate = callback;
+        selectors = expected;
+      },
+    };
+    const owner = { utilityProblematicFilesTab: tab };
+    const args = method === 'waitForReady'
+      ? { requirePopulated: true }
+      : { expectedKey: 'album-key', expectedTitle: 'Album' };
+    await UtilityProblematicFilesActions.prototype[method].call(owner, args);
+    const state = { utility: { loading: true, selectedProblematicKey: 'album-key' } };
+    const node = { offsetWidth: 1, textContent: 'Album', getAttribute: () => 'album-key' };
+    const context = {
+      state, selectors,
+      document: { querySelector: selector => selector === '#empty' ? null : node },
+      getSelectedProblematicAlbum: () => ({ key: 'album-key', detail_loaded: true }),
+    };
+    const ready = () => require('node:vm').runInNewContext(
+      '(' + predicate.toString() + ')(selectors)', context,
+    );
+    assert.equal(ready(), false, 'cached rows cannot establish refreshed readiness');
+    state.utility.loading = false;
+    assert.equal(ready(), true, 'settled matching detail remains ready');
+  });
+}
+test('detected track rows are read atomically across a concurrent detail refresh', async () => {
+  const { UtilityProblematicFilesActions } = await import(actionsUrl);
+  const { UtilityProblematicFilesTab } = await import(pathToFileURL(
+    path.resolve(__dirname, '../e2e/poms/utilityProblematicFilesTab.js'),
+  ).href);
+  const expected = Array.from({ length: 3 }, (_, index) => ({
+    filename: `${index + 1}.mp3`, path: `C:/fixture/${index + 1}.mp3`,
+    reasons: ['Missing track number'],
+  }));
+  let refreshed = false;
+  const nodes = expected.map(item => ({
+    getAttribute: () => item.path,
+    querySelectorAll: () => [{ textContent: ' Missing track number ' }],
+  }));
+  const owner = { utilityProblematicFilesTab: {
+    readDetectedTrackRows: UtilityProblematicFilesTab.prototype.readDetectedTrackRows,
+    detailTrackRows: {
+      count: async () => refreshed ? 0 : nodes.length,
+      nth: index => ({ getAttribute: async () => { refreshed = true; return expected[index].path; } }),
+      evaluateAll: async (read, arg) => {
+        const result = read(nodes, arg);
+        refreshed = true;
+        return result;
+      },
+    },
+    reasonsForTrackRow: () => ({ allTextContents: async () => ['Missing track number'] }),
+  } };
+  const result = await UtilityProblematicFilesActions.prototype.readDetectedTrackRows.call(owner);
+  assert.deepEqual(result, expected);
 });

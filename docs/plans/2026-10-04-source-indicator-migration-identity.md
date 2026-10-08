@@ -3,7 +3,7 @@
 Outcome: restore strict sequential numbering without replaying an already applied
 source-indicator migration or modifying historical ledger rows or timestamps.
 
-- Scope: canonical `0082_library_source_indicators.sql`, isolated/demo readers,
+- Scope: canonical `0087_library_source_indicators.sql`, isolated/demo readers,
   sandbox deployment controller, focused compatibility tests, migration docs.
 - Prerequisites: known origin/main ends at0080 client-layout; this branch owns0081.
   Owner approved checksum-bound compatibility and deployment tooling changes.

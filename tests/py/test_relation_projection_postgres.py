@@ -1,11 +1,74 @@
 from __future__ import annotations
 
 from copy import deepcopy
+from threading import Event, Thread
 
 import pytest
 
 from music_app.services import artist_family_postgres, relation_projection_postgres as projection
 from music_app.services.library_inventory_postgres import local_inventory_identity_key
+
+
+def test_relation_projection_cancels_active_source_query_without_persisting_failure():
+    cancel_requested = Event()
+    source_started = Event()
+    source_cancelled = Event()
+    errors = []
+    connections = []
+
+    class ReadyCheckConnection:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, _exc_type, _exc, _traceback):
+            return False
+
+        def execute(self, _sql, _params=None):
+            return _Cursor([{}])
+
+    class BlockingSourceConnection:
+        def execute(self, _sql, _params=None):
+            source_started.set()
+            assert source_cancelled.wait(timeout=5)
+            raise RuntimeError("query cancelled")
+
+        def cancel(self):
+            source_cancelled.set()
+
+        def close(self):
+            return None
+
+    def connect(_database_url):
+        connection = (
+            ReadyCheckConnection()
+            if not connections
+            else BlockingSourceConnection()
+        )
+        connections.append(connection)
+        return connection
+
+    def ensure_ready():
+        try:
+            projection.ensure_relation_projection_ready(
+                _config(),
+                connect=connect,
+                cancel_requested=cancel_requested,
+            )
+        except BaseException as exc:
+            errors.append(exc)
+
+    worker = Thread(target=ensure_ready, daemon=True)
+    worker.start()
+    assert source_started.wait(timeout=2)
+
+    cancel_requested.set()
+    worker.join(timeout=2)
+
+    assert not worker.is_alive()
+    assert source_cancelled.is_set()
+    assert len(connections) == 2
+    assert len(errors) == 1
+    assert isinstance(errors[0], InterruptedError)
 
 
 class _Cursor:
@@ -26,6 +89,7 @@ class _ProjectionDatabase:
         scan_cache=None,
         source_rows=None,
         family_links=None,
+        search_projection=None,
         valid_artist_keys=None,
         before_failure_merge=None,
         before_advisory_lock=None,
@@ -35,6 +99,7 @@ class _ProjectionDatabase:
         self.scan_cache = deepcopy(scan_cache or {})
         self.source_rows = list(source_rows or [])
         self.family_links = deepcopy(family_links or [])
+        self.search_projection = deepcopy(search_projection or [])
         self.valid_artist_keys = set(
             valid_artist_keys
             or {
@@ -59,6 +124,7 @@ class _ProjectionConnection:
         self.database = database
         self.scan_cache = deepcopy(database.scan_cache)
         self.family_links = deepcopy(database.family_links)
+        self.search_projection = deepcopy(database.search_projection)
 
     def __enter__(self):
         return self
@@ -67,6 +133,7 @@ class _ProjectionConnection:
         if exc_type is None:
             self.database.scan_cache = self.scan_cache
             self.database.family_links = self.family_links
+            self.database.search_projection = self.search_projection
             self.database.events.append("commit")
         else:
             self.database.events.append("rollback")
@@ -85,10 +152,34 @@ class _ProjectionConnection:
             self.database.events.append("advisory_lock")
             return _Cursor([{}])
         if "metadata -> 'scan_cache' as scan_cache" in sql:
-            return _Cursor([{"scan_cache": deepcopy(self.scan_cache)}])
+            return _Cursor([{
+                "scan_cache": deepcopy(self.scan_cache),
+                "artist_search_projection": deepcopy(self.search_projection),
+            }])
+        if "relation_views" in sql and projection.RELATION_PROJECTION_METADATA_KEY in sql:
+            return _Cursor([{
+                "relation_views": deepcopy(self.scan_cache.get("relation_views")),
+                projection.RELATION_PROJECTION_METADATA_KEY: deepcopy(
+                    self.scan_cache.get(projection.RELATION_PROJECTION_METADATA_KEY)
+                ),
+                "relations_last_built": self.scan_cache.get("relations_last_built"),
+                "artist_search_projection": deepcopy(self.search_projection),
+            }])
         if "owner_artist_id" in sql and "track_file_id" in sql:
             self.database.events.append("source_load")
             return _Cursor(self.database.source_rows)
+        if "replace_local_artist_search_projection" in sql:
+            self.search_projection = [
+                {
+                    **deepcopy(row),
+                    "builder_version": params["builder_version"],
+                    "source_fingerprint": params["source_fingerprint"],
+                    "relations_last_built": params["relations_last_built"],
+                }
+                for row in _unwrap_json(params["rows"])
+            ]
+            self.database.events.append("search_projection_replace")
+            return _Cursor([{"replacement_row_count": len(self.search_projection)}])
         if "replacement_row_count" in sql:
             rows = _unwrap_json(params["rows"])
             resolved_count = sum(
@@ -413,6 +504,15 @@ def test_ensure_relation_projection_ready_rebuilds_missing_projection_and_persis
     assert metadata["status"] == "ready"
     assert metadata["source_fingerprint"] == metadata["built_from_fingerprint"]
     assert metadata["builder_version"] == projection.RELATION_PROJECTION_BUILDER_VERSION
+    assert {
+        (row["normalized_artist_key"], row["canonical_artist_name"])
+        for row in database.search_projection
+    } >= {
+        ("morse portnoy george", "Morse Portnoy George"),
+        ("morse, portnoy & george", "Morse Portnoy George"),
+    }
+
+
     assert result["builder_version"] == projection.RELATION_PROJECTION_BUILDER_VERSION
     assert result["source_row_count"] == len(_morse_rows())
     assert set(result["phase_timings_ms"]) == {
@@ -420,6 +520,7 @@ def test_ensure_relation_projection_ready_rebuilds_missing_projection_and_persis
         "fingerprint",
         "pure_build",
         "family_link_replacement",
+        "search_projection_replacement",
         "snapshot_publication",
     }
     assert all(value >= 0 for value in result["phase_timings_ms"].values())
@@ -434,6 +535,95 @@ def test_ensure_relation_projection_ready_rebuilds_missing_projection_and_persis
         assert phase in rendered_log
     for private_value in ("C:/Music", "MPG A", "MPG B", "song.mp3"):
         assert private_value not in rendered_log
+
+
+def test_healthy_relation_snapshot_rebuilds_missing_artist_search_projection(monkeypatch):
+    monkeypatch.setattr(projection, "Jsonb", None)
+    rows = _morse_rows()
+    source_fingerprint = projection.relation_source_fingerprint(rows)
+    relation_views = _complete_relation_views()
+    relation_views["alias_to_canonical"] = {
+        "Morse, Portnoy & George": "Morse Portnoy George",
+    }
+    relation_views["canonical_to_aliases"] = {
+        "Morse Portnoy George": [
+            "Morse Portnoy George",
+            "Morse, Portnoy & George",
+        ],
+    }
+    database = _ProjectionDatabase(
+        scan_cache={
+            "relation_views": relation_views,
+            "relations_last_built": 123.0,
+            projection.RELATION_PROJECTION_METADATA_KEY:
+                projection.build_ready_relation_projection_metadata(
+                    source_fingerprint,
+                    reason="existing_ready_projection",
+                    duration_ms=1,
+                ),
+        },
+        source_rows=rows,
+        search_projection=[],
+    )
+
+    result = projection.ensure_relation_projection_ready(
+        _config(),
+        connect=database.connect,
+    )
+
+    assert result["ready"] is True
+    assert result["startup_rebuilt"] is True
+    assert result["rebuild_reason"] == "missing_artist_search_projection"
+    assert {
+        row["normalized_artist_key"]: row["canonical_artist_name"]
+        for row in database.search_projection
+    } == {
+        "morse portnoy george": "Morse Portnoy George",
+        "morse, portnoy & george": "Morse Portnoy George",
+    }
+
+
+def test_artist_search_projection_readiness_validates_publication_metadata():
+    relation_views = _complete_relation_views()
+    relation_views["alias_to_canonical"] = {"Alias": "Canonical"}
+    relation_views["canonical_to_aliases"] = {"Canonical": ["Alias"]}
+    metadata = projection.build_ready_relation_projection_metadata(
+        "current-source",
+        reason="scan_publication",
+        duration_ms=1,
+    )
+    scan_cache = {
+        "relation_views": relation_views,
+        "relations_last_built": 123.0,
+        projection.RELATION_PROJECTION_METADATA_KEY: metadata,
+        projection._ARTIST_SEARCH_PROJECTION_ROWS_KEY: [
+            {
+                "normalized_artist_key": "alias",
+                "canonical_artist_name": "Canonical",
+                "builder_version": projection.RELATION_PROJECTION_BUILDER_VERSION,
+                "source_fingerprint": "current-source",
+                "relations_last_built": 123.0,
+            },
+            {
+                "normalized_artist_key": "canonical",
+                "canonical_artist_name": "Canonical",
+                "builder_version": projection.RELATION_PROJECTION_BUILDER_VERSION,
+                "source_fingerprint": "current-source",
+                "relations_last_built": 123.0,
+            },
+        ],
+    }
+
+    assert projection.artist_search_projection_stale_reason(scan_cache) == ""
+
+    scan_cache[projection._ARTIST_SEARCH_PROJECTION_ROWS_KEY][0][
+        "source_fingerprint"
+    ] = "stale-source"
+
+    assert (
+        projection.artist_search_projection_stale_reason(scan_cache)
+        == "artist_search_projection_changed"
+    )
 
 
 def test_v2_rebuild_atomically_replaces_projection_links_before_ready_and_preserves_manual(monkeypatch):
@@ -473,6 +663,9 @@ def test_v2_rebuild_atomically_replaces_projection_links_before_ready_and_preser
     assert database.family_links[-1]["artist_key"] == "morse portnoy george"
     assert database.family_links[-1]["family_artist_key"] == "morse, portnoy & george"
     assert database.events.index("family_replace") < database.events.index("scan_cache_save")
+    assert database.events.index("search_projection_replace") < database.events.index(
+        "scan_cache_save"
+    )
     assert database.scan_cache[projection.RELATION_PROJECTION_METADATA_KEY]["status"] == "ready"
 
 
@@ -656,6 +849,12 @@ def test_scan_cache_write_failure_rolls_back_replaced_links_and_never_commits_re
     database = _ProjectionDatabase(
         source_rows=_morse_rows(),
         family_links=original_links,
+        search_projection=[
+            {
+                "normalized_artist_key": "old alias",
+                "canonical_artist_name": "Old Artist",
+            }
+        ],
         fail_on_scan_cache_save=True,
     )
 
@@ -663,6 +862,12 @@ def test_scan_cache_write_failure_rolls_back_replaced_links_and_never_commits_re
         projection.ensure_relation_projection_ready(_config(), connect=database.connect)
 
     assert database.family_links == original_links
+    assert database.search_projection == [
+        {
+            "normalized_artist_key": "old alias",
+            "canonical_artist_name": "Old Artist",
+        }
+    ]
     assert database.scan_cache[projection.RELATION_PROJECTION_METADATA_KEY]["status"] == "failed"
     assert "rollback" in database.events
 
@@ -795,28 +1000,62 @@ def test_unchanged_stale_scan_fingerprint_rebuilds_current_sources_instead_of_re
     assert database.events.count("source_load") == 1
 
 
-def test_ensure_relation_projection_ready_healthy_fast_path_does_not_load_sources_or_builder(monkeypatch):
+def test_ensure_relation_projection_ready_healthy_fast_path_loads_only_projection_fields(monkeypatch):
     fingerprint = projection.relation_source_fingerprint(_morse_rows())
-    relation_views = projection.build_relation_views_from_postgres_rows(_config(), _morse_rows())
-    scan_cache = {
-        "relation_views": relation_views,
-        projection.RELATION_PROJECTION_METADATA_KEY: projection.build_ready_relation_projection_metadata(
-            fingerprint,
-            reason="scan_publication",
-            duration_ms=1,
-        ),
-    }
-    database = _ProjectionDatabase(scan_cache=scan_cache, source_rows=_morse_rows())
+    relation_views = _complete_relation_views()
+    metadata = projection.build_ready_relation_projection_metadata(
+        fingerprint,
+        reason="scan_publication",
+        duration_ms=7,
+        source_row_count=2,
+        phase_timings_ms={"source_load": 3},
+    )
+    database = _ProjectionDatabase(
+        scan_cache={
+            "file_cache": {"must-not-be-loaded": {"path": "C:/Music/song.flac"}},
+            "relation_views": relation_views,
+            projection.RELATION_PROJECTION_METADATA_KEY: metadata,
+        },
+        source_rows=_morse_rows(),
+    )
+
+    class ProjectionFieldsOnlyConnection(_ProjectionConnection):
+        def execute(self, sql, params=None):
+            self.database.executed.append((sql, params))
+            if "metadata -> 'scan_cache' as scan_cache" in sql:
+                pytest.fail("healthy fast path loaded the full scan_cache JSON")
+            if "relation_views" in sql and projection.RELATION_PROJECTION_METADATA_KEY in sql:
+                return _Cursor(
+                    [
+                            {
+                                "relation_views": deepcopy(self.scan_cache["relation_views"]),
+                                projection.RELATION_PROJECTION_METADATA_KEY: deepcopy(
+                                    self.scan_cache[projection.RELATION_PROJECTION_METADATA_KEY]
+                                ),
+                                "relations_last_built": None,
+                                "artist_search_projection": [],
+                            }
+                    ]
+                )
+            raise AssertionError(f"Unexpected SQL: {sql}")
+
     monkeypatch.setattr(
         projection,
         "build_relation_views_from_postgres_rows",
         lambda *_args, **_kwargs: pytest.fail("healthy fast path invoked the relation builder"),
     )
 
-    result = projection.ensure_relation_projection_ready(_config(), connect=database.connect)
+    result = projection.ensure_relation_projection_ready(
+        _config(),
+        connect=lambda _database_url: ProjectionFieldsOnlyConnection(database),
+    )
 
+    assert result["ready"] is True
     assert result["startup_rebuilt"] is False
     assert result["rebuild_reason"] == "healthy"
+    assert result["relation_views"] == relation_views
+    assert result["source_row_count"] == 2
+    assert result["phase_timings_ms"] == {"source_load": 3.0}
     assert not any("owner_artist_id" in sql for sql, _params in database.executed)
 
 

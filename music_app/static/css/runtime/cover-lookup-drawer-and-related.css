@@ -494,10 +494,10 @@
   display: none;
 }
 .library-loader-spinner {
-  width: 56px;
-  height: 56px;
+  width: 28px;
+  height: 28px;
   border-radius: 999px;
-  border: 4px solid rgba(156,163,175,0.22);
+  border: 3px solid rgba(156,163,175,0.22);
   border-top-color: var(--accent);
   animation: spin 0.8s linear infinite;
 }
@@ -557,11 +557,6 @@
   grid-template-columns: minmax(0, 1.2fr) minmax(280px, 0.8fr);
 }
 .library-loader.is-scan-page .library-status-state { align-items: stretch; }
-.library-loader.is-scan-page .library-loader-spinner {
-  width: 28px;
-  height: 28px;
-  border-width: 3px;
-}
 .library-health[hidden] { display: none; }
 .library-loader-title {
   margin: 0;
@@ -644,3 +639,11 @@
     grid-template-columns: 1fr;
   }
 }
+
+/* Submitted searches replace the old results with a compact loading state. */
+.library-loader.is-searching {
+  min-height: 0;
+  background: #000;
+}
+.library-loader.is-searching .library-status-workspace > :not(.library-status-state),
+.library-loader.is-searching .library-status-state > :not(.library-loader-state-heading) { display: none; }

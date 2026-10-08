@@ -65,10 +65,23 @@ function Get-MigrationContract {
     $paths = @(Get-ChildItem -LiteralPath $migrationRoot -Filter '*.sql' -File | Sort-Object Name)
     if ($paths.Count -eq 0) { throw 'No PostgreSQL migrations were found.' }
     return @($paths | ForEach-Object {
+        $isNontransactional = $_.Name -ceq '0083_add_album_raw_artist_search_index.sql'
+        $arguments = @('-w', '-v', 'ON_ERROR_STOP=1')
+        if (-not $isNontransactional) { $arguments += '-1' }
+        $arguments += @('-f', $_.Name)
+        $requiredValidIndexes = @()
+        $indexDefinitionVerifier = $null
+        if ($isNontransactional) {
+            $requiredValidIndexes = @('library.local_albums_normalized_raw_artists_trgm_idx')
+            $indexDefinitionVerifier = 'scripts\postgres\verify_0083_album_raw_artist_index.sql'
+        }
         [ordered]@{
             name = $_.Name
             sha256 = (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
-            arguments = @('-w', '-v', 'ON_ERROR_STOP=1', '-1', '--single-transaction', '-f', $_.Name)
+            transactional = -not $isNontransactional
+            arguments = $arguments
+            requiredValidIndexes = $requiredValidIndexes
+            indexDefinitionVerifier = $indexDefinitionVerifier
             recordChecksumAfterSuccess = $true
         }
     })
@@ -160,6 +173,49 @@ function Invoke-Checked([string]$Executable, [string[]]$Arguments) {
 function Invoke-PsqlText([string]$Psql, [string]$Role, [string]$Database, [string]$Sql) {
     $Sql | & $Psql -X -w -v ON_ERROR_STOP=1 -h $HostName -p $Port -U $Role -d $Database
     if ($LASTEXITCODE -ne 0) { throw 'PostgreSQL command failed.' }
+}
+
+function Get-MigrationIndexState(
+    [string]$Psql,
+    [string]$Role,
+    [string]$Database,
+    [string]$VerifierRelativePath
+) {
+    if ($VerifierRelativePath -cne 'scripts\postgres\verify_0083_album_raw_artist_index.sql') {
+        throw "Invalid migration index verifier: $VerifierRelativePath"
+    }
+    $root = [IO.Path]::GetFullPath($RepositoryRoot)
+    $verifierPath = [IO.Path]::GetFullPath((Join-Path $root $VerifierRelativePath))
+    if (
+        -not (Test-Path -LiteralPath $verifierPath -PathType Leaf)
+    ) {
+        throw 'The 0083 index-definition verifier is missing or unsafe.'
+    }
+    $verifierSql = Get-Content -LiteralPath $verifierPath -Raw
+    $state = (& $Psql -X -w -v ON_ERROR_STOP=1 -h $HostName -p $Port -U $Role -d $Database -tAc $verifierSql 2>&1 | Out-String).Trim()
+    if ($LASTEXITCODE -ne 0) { throw 'Could not inspect the 0083 index definition.' }
+    if ($state -cnotin @('missing', 'ready', 'mismatched')) {
+        throw "The 0083 index-definition verifier returned an invalid state: $state"
+    }
+    return $state
+}
+
+function Remove-InvalidMigrationIndexes(
+    [string]$Psql,
+    [string]$Role,
+    [string]$Database,
+    [string[]]$IndexNames,
+    [string]$VerifierRelativePath
+) {
+    foreach ($indexName in $IndexNames) {
+        if ($indexName -cnotmatch '^[a-z_][a-z0-9_]*\.[a-z_][a-z0-9_]*$') {
+            throw "Invalid migration index name: $indexName"
+        }
+        $indexState = Get-MigrationIndexState $Psql $Role $Database $VerifierRelativePath
+        if ($indexState -ceq 'mismatched') {
+            Invoke-PsqlText $Psql $Role $Database "drop index concurrently if exists $indexName;"
+        }
+    }
 }
 
 function New-Secret {
@@ -281,7 +337,31 @@ commit;
     $migrationRoot = Join-Path $RepositoryRoot 'migrations\postgres'
     foreach ($migration in $Contract.migrations) {
         $path = Join-Path $migrationRoot $migration.name
-        Invoke-Checked $psql @('-X', '-w', '-v', 'ON_ERROR_STOP=1', '-1', '-h', $HostName, '-p', "$Port", '-U', $names.Roles.migrator, '-d', $names.Database, '-f', $path)
+        $migrationArguments = @('-X', '-w', '-v', 'ON_ERROR_STOP=1')
+        if ($migration.transactional) { $migrationArguments += '-1' }
+        $migrationArguments += @('-h', $HostName, '-p', "$Port", '-U', $names.Roles.migrator, '-d', $names.Database, '-f', $path)
+        $attemptLimit = if ($migration.requiredValidIndexes.Count -gt 0) { 2 } else { 1 }
+        for ($attempt = 1; $attempt -le $attemptLimit; $attempt++) {
+            try {
+                if ($migration.requiredValidIndexes.Count -gt 0) {
+                    Remove-InvalidMigrationIndexes $psql $names.Roles.migrator $names.Database $migration.requiredValidIndexes $migration.indexDefinitionVerifier
+                }
+                Invoke-Checked $psql $migrationArguments
+                foreach ($indexName in $migration.requiredValidIndexes) {
+                    $indexState = Get-MigrationIndexState $psql $names.Roles.migrator $names.Database $migration.indexDefinitionVerifier
+                    if ($indexState -cne 'ready') {
+                        throw "Migration $($migration.name) left a nonconforming index: $indexName"
+                    }
+                }
+                break
+            } catch {
+                if ($migration.requiredValidIndexes.Count -gt 0) {
+                    Remove-InvalidMigrationIndexes $psql $names.Roles.migrator $names.Database $migration.requiredValidIndexes $migration.indexDefinitionVerifier
+                }
+                if ($attempt -lt $attemptLimit) { continue }
+                throw
+            }
+        }
         $ledgerSql = "insert into ops.schema_migrations (migration_name, checksum) values ('$($migration.name)', '$($migration.sha256)') on conflict (migration_name) do update set checksum=excluded.checksum, applied_at=now();"
         Invoke-PsqlText $psql $names.Roles.migrator $names.Database $ledgerSql
     }

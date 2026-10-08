@@ -615,6 +615,7 @@ async def _render_admin(request: Request, template: str, **context) -> Response:
         request,
         template,
         {"request": request, "csrf_token": csrf_token,
+         "runtime_asset_version": getattr(request.app.state, "runtime_asset_version", ""),
          **await load_appearance_context(request), **context},
     )
     response.headers["Cache-Control"] = "no-store, max-age=0"

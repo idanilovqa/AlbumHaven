@@ -115,8 +115,8 @@ def test_migration_and_ledger_insert_roll_back_together(migration_store):
 
 
 @pytest.mark.parametrize('source_name,applied_name', [
-    ('0082_library_source_indicators.sql', '0080_library_source_indicators.sql'),
-    ('0080_library_source_indicators.sql', '0082_library_source_indicators.sql'),
+        ('0087_library_source_indicators.sql', '0080_library_source_indicators.sql'),
+        ('0080_library_source_indicators.sql', '0087_library_source_indicators.sql'),
 ])
 def test_source_indicator_rename_skips_sql_and_preserves_ledger(migration_store, source_name, applied_name):
     connection, first, second = migration_store

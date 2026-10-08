@@ -2252,7 +2252,7 @@ test('run-final cancels tests-complete grace but lets late webServer output and 
   assert.equal(settled, false);
   assert.equal(
     timerHarness.timers.some((timer) => (
-      timer.delay === 15000 && timer !== grace && timer.cleared === false
+      timer.delay === 45000 && timer !== grace && timer.cleared === false
     )),
     false,
   );
@@ -2274,7 +2274,6 @@ test('run-final cancels tests-complete grace but lets late webServer output and 
 test('tests-complete cleanup starts a bounded wait for authenticated run-final', async () => {
   const child = createFakeChildProcess(4242, { autoCloseOnExit: false });
   const timerHarness = createTimerHarness();
-  let mockedNowMs = 0;
   const runPromise = _private.runPlaywrightProcess(
     ['test', '-c', 'playwright.performance.config.cjs'],
     {},
@@ -2293,22 +2292,18 @@ test('tests-complete cleanup starts a bounded wait for authenticated run-final',
   child.stdout.emit('data', Buffer.from(testsComplete));
   const cleanupGrace = timerHarness.timers.find((timer) => timer.delay === 15000);
   assert.ok(cleanupGrace);
-  mockedNowMs += cleanupGrace.delay + 1;
   await cleanupGrace.fn();
   await Promise.resolve();
-  assert.equal(mockedNowMs, 15001);
   const finalResultTimer = timerHarness.timers.find((timer) => (
-    timer.delay === 15000 && timer !== cleanupGrace
+    timer.delay === 45000 && timer !== cleanupGrace
   ));
   assert.ok(finalResultTimer, 'cleanup completion must bound the wait for run-final');
 
-  mockedNowMs += 16000;
   child.stdout.emit('data', Buffer.from(`${PASS_FINAL_RESULT}\n`));
   await Promise.resolve();
   await Promise.resolve();
-  assert.equal(mockedNowMs, 31001, 'run-final arrived more than 15 seconds after tests-complete');
   const closeTimer = timerHarness.timers.find((timer) => (
-    timer.delay === 15000 && timer !== cleanupGrace && timer !== finalResultTimer
+    timer.delay === 45000 && timer !== cleanupGrace && timer !== finalResultTimer
   ));
   assert.ok(closeTimer, 'authenticated run-final must start the bounded child-close timer');
   assert.equal(cleanupGrace.cleared, true);
@@ -2441,11 +2436,11 @@ for (const snapshotFailure of [false, true]) test(`tests-complete without run-fi
   await Promise.resolve();
   assert.deepEqual(stopped, [shellRoot.pid], 'launch-root teardown must precede the run-final deadline');
   const finalResultTimer = timerHarness.timers.find((timer) => (
-    timer.delay === 15000 && timer !== cleanupGrace && timer.cleared === false
+    timer.delay === 45000 && timer !== cleanupGrace && timer.cleared === false
   ));
   assert.ok(finalResultTimer, 'expected a short deadline instead of the 600-second run timeout');
 
-  elapsedClock = 31000;
+  elapsedClock = 61000;
   await finalResultTimer.fn();
   const result = await runPromise;
   const diagnosticIndex = lifecycleEvents.findIndex(event => event.text?.startsWith('[playwright-wrapper-finalization-diagnostic] '));
@@ -2454,7 +2449,7 @@ for (const snapshotFailure of [false, true]) test(`tests-complete without run-fi
   const diagnostic = JSON.parse(lifecycleEvents[diagnosticIndex].text.split('] ')[1]);
   assert.equal(diagnostic.reason, 'missing-run-final');
   assert.equal(diagnostic.phase, 'tests-complete');
-  assert.equal(diagnostic.elapsedMs, 30000);
+  assert.equal(diagnostic.elapsedMs, 60000);
   assert.deepEqual(snapshotOptions.at(-1), { timeoutMs: 5000 });
   assert.deepEqual(diagnostic.processes.find(owner => owner.pid === child.pid), {
     pid: child.pid, parentPid: process.pid, executable: 'node', role: 'playwright-cli', liveness: snapshotFailure ? 'unknown' : 'alive',
@@ -2836,14 +2831,14 @@ test('runPlaywrightProcess bounds a module-load no-tests failure that never clos
   assert.ok(failureGraceTimer, 'expected a prompt terminal startup-failure grace timer');
   assert.equal(failureGraceTimer.delay, 1000);
   assert.equal(
-    timerHarness.timers.some((timer) => timer.delay === 15000),
+    timerHarness.timers.some((timer) => timer.delay === 45000),
     false,
     'the longer close timer must wait until terminal-failure cleanup finishes',
   );
   await failureGraceTimer.fn();
   await Promise.resolve();
   await Promise.resolve();
-  const finalizationTimer = timerHarness.timers.find((timer) => timer.delay === 15000);
+  const finalizationTimer = timerHarness.timers.find((timer) => timer.delay === 45000);
   assert.ok(finalizationTimer, 'expected bounded finalization after owned-port cleanup');
   await finalizationTimer.fn();
   const result = await runPromise;

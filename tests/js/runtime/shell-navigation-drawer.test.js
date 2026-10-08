@@ -401,3 +401,16 @@ for (const pendingArtist of ['', 'Latest Artist']) {
     propertyName: '--compact-rail-width' });
   assert.equal(renders, pendingArtist ? 1 : 0);
 }
+
+{
+  const { context } = loadHelper({ isMobile: true });
+  const opener = createElement();
+  opener.setAttribute('data-search-results', 'true');
+  opener.setAttribute('aria-description', 'Search results available in Artists');
+  const originalGetElementById = context.document.getElementById.bind(context.document);
+  context.document.getElementById = id => id === 'mobile-library-button' ? opener : originalGetElementById(id);
+  context.openArtistsDrawer();
+  assert.equal(opener.getAttribute('aria-expanded'), 'true');
+  assert.equal(opener.getAttribute('data-search-results'), null);
+  assert.equal(opener.getAttribute('aria-description'), null);
+}

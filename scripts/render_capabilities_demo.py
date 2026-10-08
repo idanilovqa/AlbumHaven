@@ -19,6 +19,11 @@ ROOT = Path(__file__).resolve().parents[1]
 DEMO_ROOT = Path('/tmp/albumhaven-capabilities-demo')
 MARKER = 'albumhaven-capabilities-demo-v1'
 LOCK_ID = 748241095829
+NONTRANSACTIONAL_MIGRATION = '0083_add_album_raw_artist_search_index.sql'
+NONTRANSACTIONAL_INDEX = 'library.local_albums_normalized_raw_artists_trgm_idx'
+NONTRANSACTIONAL_INDEX_VERIFIER = Path(
+    'scripts/postgres/verify_0083_album_raw_artist_index.sql'
+)
 ACCOUNTS = (
     ('demo.admin', ('admin',), (), True),
     ('demo.owner', ('owner',), (), True),
@@ -31,6 +36,30 @@ ACCOUNTS = (
     ('demo.disabled', ('listener',), (), False),
     ('demo.nocapabilities', (), (), True),
 )
+
+
+def _nontransactional_index_verifier_sql() -> str:
+    root = ROOT.resolve()
+    path = (root / NONTRANSACTIONAL_INDEX_VERIFIER).resolve()
+    if not path.is_relative_to(root) or not path.is_file():
+        raise RuntimeError('The 0083 index-definition verifier is missing or unsafe.')
+    return path.read_text(encoding='utf-8')
+
+
+def _nontransactional_index_state(connection) -> str:
+    row = connection.execute(_nontransactional_index_verifier_sql()).fetchone()
+    state = str(row[0]) if row else ''
+    if state not in {'missing', 'ready', 'mismatched'}:
+        raise RuntimeError('The 0083 index-definition verifier returned an invalid state.')
+    return state
+
+
+def _drop_mismatched_nontransactional_index(connection) -> str:
+    state = _nontransactional_index_state(connection)
+    if state == 'mismatched':
+        connection.execute(f'drop index concurrently if exists {NONTRANSACTIONAL_INDEX}')
+        return 'missing'
+    return state
 
 
 def configure(runtime_url: str) -> None:
@@ -97,8 +126,16 @@ def migrate(connection) -> None:
     if not files:
         raise RuntimeError('Migrations are missing.')
     ledger = connection.execute("select to_regclass('ops.schema_migrations')").fetchone()[0]
-    applied = dict(connection.execute('select migration_name, checksum from ops.schema_migrations').fetchall()) if ledger else {}
     checksums = {path.name: hashlib.sha256(path.read_bytes()).hexdigest() for path in files}
+    if not ledger:
+        bootstrap = files[0]
+        with connection.transaction():
+            connection.execute(bootstrap.read_text(encoding='utf-8'))
+            connection.execute(
+                'insert into ops.schema_migrations (migration_name,checksum) values (%s,%s)',
+                (bootstrap.name, hashlib.sha256(bootstrap.read_bytes()).hexdigest()),
+            )
+    applied = dict(connection.execute('select migration_name, checksum from ops.schema_migrations').fetchall())
     applied = source_indicator_ledger(applied, checksums)
     if set(applied) - checksums.keys():
         raise RuntimeError('Applied migrations are absent from this source checkout')
@@ -109,8 +146,32 @@ def migrate(connection) -> None:
                 raise ValueError('Migration checksum changed: ' + path.name)
             continue
         print('Capabilities demo migration: ' + path.name, flush=True)
-        connection.execute(path.read_text(encoding='utf-8'))
-        connection.execute('insert into ops.schema_migrations (migration_name,checksum) values (%s,%s)', (path.name, checksum))
+        migration_sql = path.read_text(encoding='utf-8')
+        if path.name == NONTRANSACTIONAL_MIGRATION:
+            _drop_mismatched_nontransactional_index(connection)
+            try:
+                connection.execute(migration_sql)
+                state = _nontransactional_index_state(connection)
+                if state != 'ready':
+                    raise RuntimeError(
+                        f'Migration {path.name} left a nonconforming index: '
+                        f'{NONTRANSACTIONAL_INDEX}'
+                    )
+            except Exception:
+                _drop_mismatched_nontransactional_index(connection)
+                raise
+            with connection.transaction():
+                connection.execute(
+                    'insert into ops.schema_migrations (migration_name,checksum) values (%s,%s)',
+                    (path.name, checksum),
+                )
+        else:
+            with connection.transaction():
+                connection.execute(migration_sql)
+                connection.execute(
+                    'insert into ops.schema_migrations (migration_name,checksum) values (%s,%s)',
+                    (path.name, checksum),
+                )
 
 
 def generate_media() -> dict[str, dict]:
@@ -202,7 +263,8 @@ def prepare() -> None:
                     elif any(existing):
                         raise ValueError('Refusing an overprivileged existing application role.')
                 connection.execute(sql.SQL('alter role album_haven_app login password {}').format(sql.Literal(app_password)))
-                migrate(connection)
+            migrate(connection)
+            with connection.transaction():
                 if first:
                     marker = Jsonb({'deployment':MARKER})
                     owner = connection.execute("insert into app.accounts (display_name,account_kind,username_display,username_normalized,contact_email,contact_email_normalized,metadata) values ('Rendref','bootstrap_owner','Rendref','rendref','capabilities-recovery@example.test','capabilities-recovery@example.test',%s) returning id", (marker,)).fetchone()[0]

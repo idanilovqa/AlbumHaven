@@ -164,7 +164,6 @@ test('performance runner mirrors the reviewed target inventory and approved fixt
     assert.equal(runnerTarget.specPath, contractTarget.cases[0].test, name);
   }
 });
-
 test('every discovered performance case has reviewed ownership selected by its runner target', () => {
   const discoveredCases = new Set(
     testDataMatrix

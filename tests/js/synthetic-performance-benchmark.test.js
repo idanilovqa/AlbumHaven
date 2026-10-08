@@ -335,6 +335,21 @@ test('benchmark validation payload keeps retained threshold overlay fields for s
   assert.equal(searchAutoSelection.allowedText, '24400 ms');
 });
 
+test('artist-family benchmark labels its synthetic correlated evidence without real-data claims', async () => {
+  const { ARTIST_FAMILY_LOCAL_BENCHMARK } = await import('../../tests/e2e/helpers/syntheticPerformanceBenchmark.js');
+
+  assert.match(ARTIST_FAMILY_LOCAL_BENCHMARK.description, /synthetic/i);
+  assert.match(ARTIST_FAMILY_LOCAL_BENCHMARK.description, /correlated/i);
+  assert.doesNotMatch(ARTIST_FAMILY_LOCAL_BENCHMARK.description, /real[- ]data/i);
+  assert.match(ARTIST_FAMILY_LOCAL_BENCHMARK.sampleWindow.mode, /synthetic/i);
+  assert.match(ARTIST_FAMILY_LOCAL_BENCHMARK.sampleWindow.mode, /correlated/i);
+  assert.doesNotMatch(ARTIST_FAMILY_LOCAL_BENCHMARK.sampleWindow.mode, /real[- ]data/i);
+  assert.doesNotMatch(
+    ARTIST_FAMILY_LOCAL_BENCHMARK.expectations.map((expectation) => expectation.description).join('\n'),
+    /real[- ]data/i,
+  );
+});
+
 test('app-open all-artists benchmark keeps the approved 2100 ms target separate from its 400 ms grace', async () => {
   const {
     buildBenchmarkValidationPayload,

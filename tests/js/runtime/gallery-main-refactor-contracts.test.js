@@ -68,7 +68,7 @@ test('connected triggers leave the edge adjoining their surface unpainted', () =
   );
 });
 
-test('Gallery toolbar buttons use the surrounding main surface', () => {
+test('Gallery toolbar buttons keep the main surface on mobile and use the control surface on desktop', () => {
   assert.match(
     galleryMainCssSource,
     /\.gallery-bar__actions\s*\{[^}]*--gallery-toolbar-button-background:\s*var\(--appearance-main-surface,\s*var\(--panel\)\)/,
@@ -76,6 +76,10 @@ test('Gallery toolbar buttons use the surrounding main surface', () => {
   assert.match(
     galleryMainCssSource,
     /\.gallery-action-button\s*\{[^}]*background:\s*var\(--gallery-toolbar-button-background,\s*var\(--appearance-main-surface,\s*var\(--panel\)\)\)/,
+  );
+  assert.match(
+    galleryMainCssSource,
+    /@media \(min-width: 901px\)\s*\{[\s\S]*?\.gallery-bar__actions\s*\{[^}]*--gallery-toolbar-button-background:\s*var\(--appearance-control,\s*var\(--panel\)\)[^}]*\}[\s\S]*?\.gallery-action-button\s*\{[^}]*background:\s*var\(--gallery-toolbar-button-background,\s*var\(--appearance-control,\s*var\(--panel\)\)\)[^}]*\}/,
   );
   assert.match(
     galleryMainCssSource,
@@ -1636,4 +1640,73 @@ test('retained gallery chrome leaves unchanged Artist Family DOM untouched and s
   context.updateGalleryMainControls();
   assert.equal(combine.disabled, true, 'no selected artist disables the family switch');
   assert.equal(checkedAttributes['aria-checked'], 'false');
+});
+
+
+function animatedFamilySurfaceRuntime() {
+  const timers = new Map();
+  let nextTimer = 0, hiddenWrites = 0, hidden = false;
+  const listeners = new Map();
+  const classes = new Set(['is-open']);
+  const panel = {
+    get hidden() { return hidden; },
+    set hidden(value) { hiddenWrites++; hidden = value; },
+    matches: selector => selector.includes('.artist-family-panel'),
+    classList: { add: name => classes.add(name), remove: name => classes.delete(name), contains: name => classes.has(name) },
+    setAttribute() {},
+    addEventListener(type, fn) { listeners.set(type, fn); },
+    removeEventListener(type, fn) { if (listeners.get(type) === fn) listeners.delete(type); },
+  };
+  const anchor = { setAttribute() {}, focus() {} };
+  const context = loadRuntime({ state: { view: {}, ui: {} }, window: {
+    matchMedia: () => ({ matches: false }),
+    setTimeout(fn) { const id = ++nextTimer; timers.set(id, fn); return id; },
+    clearTimeout(id) { timers.delete(id); },
+  }, document: { getElementById: () => null } });
+  context.focusGalleryMainSurface = () => {};
+  context.positionArtistFamilyPanelEnvelope = () => {};
+  context.panel = panel; context.anchor = anchor;
+  vm.runInContext("galleryMainSurfaceController = createAnchoredSurfaceController(); galleryMainSurfaceController.activate({ key: 'artist-family', surface: panel, anchor });", context);
+  return { context, panel, anchor, timers, listeners, hiddenWrites: () => hiddenWrites };
+}
+
+test('surface replacement finishes the departing family drawer before search suggestions activate', () => {
+  const run = animatedFamilySurfaceRuntime();
+  const suggestions = { matches: () => false, hidden: true, setAttribute() {}, classList: { add() {} } };
+  run.context.openGalleryMainSurface('search-suggestions', run.anchor, suggestions);
+  assert.equal(run.panel.hidden, true);
+  assert.equal(suggestions.hidden, false);
+  assert.equal(run.timers.size, 0);
+  assert.equal(run.listeners.size, 0);
+  assert.equal(run.hiddenWrites(), 1);
+});
+
+for (const completion of ['transitionend', 'timeout']) {
+  test(`animated family dismissal completes once through ${completion}`, () => {
+    const run = animatedFamilySurfaceRuntime();
+    run.context.closeGalleryMainSurface(false);
+    assert.equal(run.panel.hidden, false, 'ordinary dismissal retains its closing animation');
+    const transition = run.listeners.get('transitionend');
+    const timeout = [...run.timers.values()][0];
+    if (completion === 'transitionend') transition(); else timeout();
+    assert.equal(run.panel.hidden, true);
+    assert.equal(run.timers.size, 0);
+    assert.equal(run.listeners.size, 0);
+    transition(); timeout();
+    assert.equal(run.hiddenWrites(), 1, 'already queued callbacks must not mutate a finished drawer');
+  });
+}
+
+test('reopening a family drawer cancels the earlier closing callbacks', () => {
+  const run = animatedFamilySurfaceRuntime();
+  run.context.closeGalleryMainSurface(false);
+  const staleFinish = [...run.timers.values()][0];
+  run.context.openGalleryMainSurface('artist-family', run.anchor, run.panel);
+  assert.equal(run.timers.size, 0);
+  assert.equal(run.listeners.size, 0);
+  run.context.closeGalleryMainSurface(false);
+  const writes = run.hiddenWrites();
+  staleFinish();
+  assert.equal(run.panel.hidden, false, 'a stale close cannot finish the new animation');
+  assert.equal(run.hiddenWrites(), writes);
 });

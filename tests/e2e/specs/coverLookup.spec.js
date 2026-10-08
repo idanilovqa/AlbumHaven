@@ -168,7 +168,7 @@ test('FTC-COVERS-022 cover gallery loading starts before the task list responds'
     await coverLookupActions.waitForModalResultsReady();
     const candidates = await coverLookupActions.readRemoteCandidateSummaries();
     appleCandidate = candidates.find(
-      (candidate) => candidate.source.toLocaleLowerCase() === 'apple music',
+      (candidate) => candidate.source === 'Apple Music',
     );
     expect(appleCandidate?.id).toBeTruthy();
     await coverLookupActions.waitForCandidateImageFixtureBlocked();
@@ -677,7 +677,7 @@ test('FTC-COVERS-019 Spotify stays linked while a downloadable provider reopens 
       (candidate) => candidate.source.toLocaleLowerCase() === 'spotify',
     );
     appleCandidate = candidates.find(
-      (candidate) => candidate.source.toLocaleLowerCase() === 'apple music',
+      (candidate) => candidate.source === 'Apple Music',
     );
     expect(spotifyCandidate?.id).toBeTruthy();
     expect(appleCandidate?.id).toBeTruthy();

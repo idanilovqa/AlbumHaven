@@ -267,7 +267,7 @@ def test_windows_case_variants_keep_global_and_targeted_folder_context_equal(phy
 @pytest.mark.parametrize("physical_catalog", ["explain"], indirect=True)
 def test_physical_parent_migration_rejects_wrong_existing_index(physical_catalog):
     connection, _, _ = physical_catalog
-    migration = (Path(__file__).resolve().parents[2] / "migrations/postgres/0083_add_active_physical_parent_index.sql").read_text()
+    migration = (Path(__file__).resolve().parents[2] / "migrations/postgres/0088_add_active_physical_parent_index.sql").read_text()
     connection.execute(migration)
     connection.execute("DROP INDEX library.local_track_files_active_physical_parent_idx")
     connection.execute("CREATE INDEX local_track_files_active_physical_parent_idx ON library.local_track_files (private_path)")

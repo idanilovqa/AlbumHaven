@@ -36,7 +36,9 @@ from music_app.services.page_resource_seams import (
 )
 from music_app.services.album_details import build_album_detail_payload
 from music_app.services.album_ratings_postgres import PostgresAlbumRatingsService
-from music_app.services.library_browse_postgres import PostgresLibraryBrowseRepository
+from music_app.services.library_browse_postgres import (
+    PostgresLibraryBrowseRepository, build_transient_root_gallery_page,
+)
 from music_app.services.library_watch_health import LibraryWatchHealthService
 from music_app.services.library_warning_dismissals import PostgresLibraryWarningDismissals, warning_token
 from music_app.routes.bounded_json import read_bounded_json_object, JSONBodyTooLarge
@@ -54,6 +56,7 @@ from music_app.services.view_payloads import (
     project_missing_album_actions,
 )
 from music_app.services.client_surfaces import resolve_client_surface_class
+from music_app.services.database_identity import load_database_identity_status
 from config import PERSISTENCE_BACKEND_POSTGRES
 
 router = APIRouter()
@@ -187,6 +190,33 @@ def _app_logger(request: Request):
 
 def _library_state(request: Request) -> dict[str, object]:
     return request.app.state.library_state
+
+
+def _load_application_database_identity_status(request: Request) -> dict[str, object]:
+    with request.app.state.database_identity_status_lock:
+        cached = request.app.state.database_identity_status
+        expires_at = getattr(request.app.state, "database_identity_expires_at", 0.0)
+        if isinstance(cached, Mapping) and time.monotonic() < expires_at:
+            return dict(cached)
+        auth_policy_config = getattr(request.app.state, "auth_policy_config", None)
+        identity_hmac_config = (
+            auth_policy_config.get("hmac")
+            if isinstance(auth_policy_config, Mapping)
+            else None
+        )
+        loaded = load_database_identity_status(
+            _app_config(request),
+            hmac_config=(
+                identity_hmac_config
+                if isinstance(identity_hmac_config, Mapping)
+                else None
+            ),
+        )
+        status = dict(loaded) if isinstance(loaded, Mapping) else {"ready": False}
+        if status.get("ready") is True:
+            request.app.state.database_identity_status = status
+            request.app.state.database_identity_expires_at = time.monotonic() + 60.0
+        return dict(status)
 
 
 class _AsgiQueryArgs:
@@ -394,6 +424,20 @@ async def status(request: Request) -> JSONResponse:
             )
         except Exception:
             logging.getLogger(__name__).warning('Operational history revision is unavailable')
+    payload["database_identity"] = await run_in_threadpool(
+        _load_application_database_identity_status,
+        request,
+    )
+    identity = payload["database_identity"]
+    if (
+        not payload["scan_in_progress"]
+        and not library_state.get("scan_generation")
+        and not library_state.get("albums")
+        and not library_state.get("file_cache")
+        and identity.get("ready")
+    ):
+        # Deferred startup has no runtime inventory; reuse the scoped durable count.
+        payload["album_total"] = identity.get("catalog_album_count", payload["album_total"])
     payload["allowed_actions"] = allowed_actions_for_request(request, ("library.loops.create",)).as_payload()
     return JSONResponse(payload)
 
@@ -463,26 +507,64 @@ def _build_status_payload_from_state(library_state: dict[str, object]) -> dict[s
     }
 
 
+def _transient_scan_view_response(
+    request: Request, browse_state: Mapping[str, object], page_params: Mapping[str, object] | None = None
+) -> JSONResponse:
+    request_started_at = time.perf_counter()
+    payload = build_view_payload(
+        query_args=_AsgiQueryArgs(request.query_params),
+        config=_app_config(request),
+        logger=_app_logger(request),
+        library_state=browse_state,
+        client_surface_class=_client_surface_class_from_asgi(request),
+    )
+    if page_params is not None:
+        payload = build_transient_root_gallery_page(
+            payload, page_params, scan_generation=int(browse_state.get("scan_generation") or 0)
+        )
+    _apply_transient_scan_album_rating_overlays(
+        request,
+        _transient_view_album_payloads(payload),
+    )
+    _log_view_data_request_from_asgi(request, payload, request_started_at)
+    _project_missing_album_actions_for_request(request, payload)
+    return JSONResponse(payload)
+
+
 @router.get("/view-data")
 def view_data(request: Request) -> JSONResponse:
     library_state = _library_state(request)
     browse_state = resolve_active_scan_browse_state(library_state)
-    if _should_use_transient_scan_browse_state(library_state, browse_state):
-        request_started_at = time.perf_counter()
-        payload = build_view_payload(
-            query_args=_AsgiQueryArgs(request.query_params),
-            config=_app_config(request),
-            logger=_app_logger(request),
-            library_state=browse_state,
-            client_surface_class=_client_surface_class_from_asgi(request),
-        )
-        _apply_transient_scan_album_rating_overlays(
-            request,
-            _transient_view_album_payloads(payload),
-        )
-        _log_view_data_request_from_asgi(request, payload, request_started_at)
+    if "gallery_page_size" in request.query_params or "gallery_cursor" in request.query_params:
+        params = dict(request.query_params)
+        params.pop("gallery_page_size", None)
+        params.pop("gallery_cursor", None)
+        if (str(request.query_params.get("q") or "").strip()
+                or str(request.query_params.get("artist") or "").strip()
+                or str(request.query_params.get("surface") or "albums").casefold() not in {"albums", "library"}
+                or str(request.query_params.get("payload_tier") or "").casefold() not in {"", "full"}):
+            return JSONResponse({"ok": False, "error": "Gallery paging requires the library root."}, status_code=400)
+        # Existing route selection still validates the remaining browse parameters.
+        allowed = {"surface", "payload_tier", "gallery_scope", "gallery_display", "gallery_display_mode",
+                   "gallery_scale_percent", "category", "omit_sidebar", "all_artists", "q", "artist"}
+        if set(params) - allowed:
+            return JSONResponse({"ok": False, "error": "Invalid gallery paging parameters."}, status_code=400)
+        from starlette.datastructures import QueryParams
+        page_params = QueryParams([*request.query_params.multi_items(), *([] if "gallery_page_size" in request.query_params else [("gallery_page_size", "50")])])
+        try:
+            if _should_use_transient_scan_browse_state(library_state, browse_state):
+                return _transient_scan_view_response(request, browse_state, page_params)
+            payload = PostgresLibraryBrowseRepository(_app_config(request)).build_root_startup_preview_payload(
+                query_params=page_params, library_state=library_state)
+        except ValueError as error:
+            restart = "restart required" in str(error)
+            return JSONResponse({"ok": False, "error": str(error), "restart_required": restart},
+                                status_code=409 if restart else 400)
         _project_missing_album_actions_for_request(request, payload)
         return JSONResponse(payload)
+
+    if _should_use_transient_scan_browse_state(library_state, browse_state):
+        return _transient_scan_view_response(request, browse_state)
 
     if _is_postgres_root_sidebar_request(request):
         payload = PostgresLibraryBrowseRepository(_app_config(request)).build_root_sidebar_payload(
@@ -640,6 +722,7 @@ def _unsupported_postgres_selected_artist_browse_response(request: Request) -> J
 def _is_postgres_album_search_request(request: Request) -> bool:
     allowed_search_params = {
         "q",
+        "payload_tier",
         "surface",
         "all_artists",
         "gallery_scope",
@@ -653,6 +736,9 @@ def _is_postgres_album_search_request(request: Request) -> bool:
         return False
     query = str(request.query_params.get("q") or "").strip()
     if not query or _query_requires_file_backed_search_semantics(query):
+        return False
+    payload_tier = str(request.query_params.get("payload_tier") or "").strip().casefold()
+    if payload_tier not in {"", "search_preview", "full"}:
         return False
     if str(request.query_params.get("surface") or "").strip().casefold() != "albums":
         return False

@@ -7,7 +7,7 @@ from pathlib import Path
 import re
 import threading
 from types import SimpleNamespace
-from urllib.parse import quote
+from urllib.parse import parse_qs, quote, urlsplit
 
 import pytest
 from music_app.services import startup_bootstrap
@@ -117,7 +117,13 @@ def _extract_bootstrap_payload_from_shell(body: bytes) -> dict[str, object]:
 
 
 def _configure_selected_postgres_empty_root_bootstrap(monkeypatch, web_asgi) -> None:
-    def fake_build_postgres_root_startup_view(*, config, query_args):
+    def fake_build_postgres_root_startup_view(
+        *,
+        config,
+        query_args,
+        library_state=None,
+    ):
+        del library_state
         initial_view = web_asgi._build_empty_initial_view(
             config=config,
             query_raw=str(query_args.get("q") or "").strip(),
@@ -138,6 +144,30 @@ def _configure_selected_postgres_empty_root_bootstrap(monkeypatch, web_asgi) -> 
         "_build_postgres_root_startup_view",
         fake_build_postgres_root_startup_view,
     )
+
+
+@pytest.mark.parametrize("path", ["/", "/bootstrap-data"])
+@pytest.mark.parametrize("all_artists", ["1", "true", "0", ""])
+def test_asgi_search_reload_preserves_all_artists_hydration(app, monkeypatch, path, all_artists):
+    from music_app.routes import web_asgi
+
+    _configure_selected_postgres_empty_root_bootstrap(monkeypatch, web_asgi)
+    asgi_app = _make_asgi_app(app)
+    status, _headers, body = _run_asgi_request(
+        asgi_app,
+        "GET",
+        path,
+        query={"surface": "albums", "q": "Featured Signal Collection", "all_artists": all_artists},
+    )
+
+    assert status == 200
+    payload = _decode_json(body) if path == "/bootstrap-data" else _extract_bootstrap_payload_from_shell(body)
+    hydration = payload["bootstrap"]["startupHydration"]
+    assert hydration["required"] is True
+    params = parse_qs(urlsplit(hydration["endpoint"]).query)
+    assert params["q"] == ["Featured Signal Collection"]
+    assert params.get("artist") is None
+    assert params.get("all_artists") == (["1"] if all_artists in {"1", "true"} else None)
 
 
 def test_asgi_web_routes_register_natively(asgi_app):
@@ -237,6 +267,15 @@ def test_asgi_index_and_news_render_current_template_shell(app, monkeypatch):
         web_asgi,
         "PostgresLibraryBrowseRepository",
         lambda _config: SimpleNamespace(
+            build_root_startup_preview_payload=lambda **_kwargs: {
+                "artists_sidebar": [],
+                "artist_groups": [],
+                "artist_count": 0,
+                "album_count": 0,
+                "selected_artist": "",
+                "payload_tier": "sidebar",
+                "gallery_display_mode": "covers",
+            },
             build_root_sidebar_payload=lambda **_kwargs: {
                 "artists_sidebar": [{"artist": "Broadcast", "artist_display": "Broadcast", "count": 1}],
                 "artist_count": 1,
@@ -476,7 +515,7 @@ def test_asgi_index_claims_pending_cold_scan_and_starts_after_response_without_b
 
     assert status == 200
     assert second_status == 200
-    assert b'id="library-loader" hidden' not in body
+    assert not re.search(rb'<section\b(?=[^>]*\bid="library-loader")(?=[^>]*\bhidden\b)[^>]*>', body)
     assert b"Waiting for the first albums to become available..." in body
     assert b'<div class="albums-scroll" id="albums-scroll" hidden>' in body
     payload = _extract_bootstrap_payload_from_shell(body)
@@ -501,6 +540,45 @@ def test_asgi_index_claims_pending_cold_scan_and_starts_after_response_without_b
             "scan_mode": "background",
         }
     ]
+
+
+def test_asgi_index_does_not_cold_scan_when_a_filter_hides_existing_inventory(
+    monkeypatch,
+):
+    from music_app.routes import web_asgi
+
+    _configure_selected_postgres_empty_root_bootstrap(monkeypatch, web_asgi)
+    refresh_calls = []
+    monkeypatch.setattr(
+        web_asgi.state_service,
+        "start_background_refresh_for_state",
+        lambda *args, **kwargs: refresh_calls.append((args, kwargs)),
+    )
+    asgi_app = _make_asgi_app()
+    library_state = asgi_app.state.library_state
+    library_state.update(
+        {
+            "albums": [{"key": "existing-album"}],
+            "file_cache": {
+                "C:/Music/Existing Artist/Existing Album/01 Existing.mp3": {}
+            },
+            "scan_in_progress": False,
+            "cold_scan_pending": False,
+            "cold_scan_handoff_status": "idle",
+        }
+    )
+
+    status, _headers, _body = _run_asgi_request(
+        asgi_app,
+        "GET",
+        "/",
+        query={"category": "hoard"},
+    )
+
+    assert status == 200
+    assert refresh_calls == []
+    assert library_state["cold_scan_pending"] is False
+    assert library_state["cold_scan_handoff_status"] == "idle"
 
 
 @pytest.mark.parametrize(
@@ -1596,3 +1674,36 @@ def _authorize_loop_fixture(monkeypatch):
         library_relationships=(SimpleNamespace(library_id=9, membership_role="owner", is_primary_owner=True),))
     async def resolve_actor(_request): return actor
     monkeypatch.setattr(current_actor_asgi, "current_actor_from_request", resolve_actor)
+
+
+def test_root_startup_requests_bounded_first_page_and_preserves_filters(monkeypatch):
+    from music_app.routes import web_asgi
+    from starlette.datastructures import QueryParams
+    captured = {}
+    def build(**kwargs):
+        captured.update(kwargs)
+        return {"artist_groups": [], "artists_sidebar": [], "gallery_page": {"has_more": False}}
+    monkeypatch.setattr(web_asgi, "PostgresLibraryBrowseRepository", lambda _config: SimpleNamespace(build_root_startup_preview_payload=build))
+    web_asgi._build_postgres_root_startup_view(
+        config={}, query_args=QueryParams("category=local&category=missing&gallery_cursor=old&gallery_page_size=100"), library_state={},
+    )
+    params = captured["query_params"]
+    assert params.get("gallery_page_size") == "8"
+    assert params.get("gallery_cursor") is None
+    assert params.getlist("category") == ["local", "missing"]
+
+
+def test_explicit_home_startup_keeps_legacy_hydration(monkeypatch):
+    from music_app.routes import web_asgi
+    from starlette.datastructures import QueryParams
+    captured = {}
+    def build(**kwargs):
+        captured.update(kwargs)
+        return {"artist_groups": [], "artists_sidebar": [], "initial_view_partial": True}
+    monkeypatch.setattr(web_asgi, "PostgresLibraryBrowseRepository", lambda _config: SimpleNamespace(build_root_startup_preview_payload=build))
+    initial, _, _ = web_asgi._build_postgres_root_startup_view(
+        config={}, query_args=QueryParams("surface=home&category=local"), library_state={},
+    )
+    assert captured["query_params"].get("gallery_page_size") is None
+    assert captured["query_params"].get("surface") == "home"
+    assert initial["initial_view_partial"] is True

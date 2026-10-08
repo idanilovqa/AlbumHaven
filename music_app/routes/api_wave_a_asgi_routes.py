@@ -386,10 +386,11 @@ def _bridge_queue_finalize_save_task(**kwargs: Any) -> None:
     scoped_postgres_exception_only = bool(
         kwargs.get("scoped_postgres_exception_only")
     )
+    changed_paths = set(kwargs.get("changed_paths") or ())
     scoped_exception_values = {
         normalize_exception_value(entry.get("exception_type"))
-        for entry in dict(kwargs.get("updated_file_cache") or {}).values()
-        if isinstance(entry, Mapping)
+        for path, entry in dict(kwargs.get("updated_file_cache") or {}).items()
+        if path in changed_paths and isinstance(entry, Mapping)
     }
     clears_scoped_exception = (
         scoped_postgres_exception_only
@@ -862,6 +863,25 @@ def _selected_postgres_media_write_response(value: ResponseValue) -> ResponseVal
     return response
 
 
+class _EditTagsReservation:
+    """Transfer both owners through the existing finalizer release boundary."""
+
+    def __init__(self, intent_lease, structural_reservation):
+        self._intent_lease = intent_lease
+        self._structural_reservation = structural_reservation
+        self._released = False
+
+    def release(self):
+        if self._released:
+            return
+        self._released = True
+        try:
+            self._intent_lease.release()
+        finally:
+            if self._structural_reservation is not None:
+                self._structural_reservation.release()
+
+
 async def _run_edit_tags_handler_with_reservation(
     handler_options: Mapping[str, object],
     structural_tag_edit_reservation: object | None,
@@ -1180,8 +1200,17 @@ def _postgres_exception_only_edit_state(
     request_state = dict(_library_state(request))
     runtime_file_cache = dict(request_state.get("file_cache", {}) or {})
     repository = PostgresLibraryBrowseRepository(_app_config(request))
+    inventory_paths = set(requested_paths)
+    if _has_edit_tags_media_write_fields(payload):
+        # Blank Album inference needs sibling evidence from the selected albums.
+        for album in repository.build_album_payloads_by_track_paths(requested_paths):
+            inventory_paths.update(
+                str(track.get("path") or "").strip()
+                for track in album.get("tracks", [])
+                if str(track.get("path") or "").strip()
+            )
     selected_file_entries = repository.build_track_file_entries_by_paths(
-        requested_paths
+        inventory_paths
     )
     unresolved_paths = requested_paths - set(selected_file_entries)
     if unresolved_paths:
@@ -1672,15 +1701,24 @@ async def utilities_edit_tags(request: Request) -> JSONResponse:
         request,
         payload,
     )
-    if postgres_exception_only:
+    needs_postgres_edit_state = postgres_exception_only or (
+        _is_selected_postgres_library_browse_request(request)
+        and _has_edit_tags_media_write_fields(payload)
+    )
+    if needs_postgres_edit_state:
+        get_state = lambda: dict(library_state)
+    if needs_postgres_edit_state and "proposal_ids" not in payload:
         try:
-            postgres_edit_state = _postgres_exception_only_edit_state(request, payload)
+            postgres_edit_state = await run_in_threadpool(
+                _postgres_exception_only_edit_state, request, payload
+            )
         except ValueError as exc:
             return _json_response(({"ok": False, "error": str(exc)}, 400))
         get_state = lambda: postgres_edit_state
     build_affected_album_dicts = _edit_tags_affected_album_dicts_builder(request, payload)
     if _is_selected_postgres_library_browse_request(request) and _has_edit_tags_media_write_fields(payload):
         build_affected_album_dicts = _empty_affected_album_dicts
+    intent_lease = PostgresTagEditIntentRepository(config).intent_lease()
     handler_options = {
         "album": album,
         "updates": updates,
@@ -1717,7 +1755,7 @@ async def utilities_edit_tags(request: Request) -> JSONResponse:
         if postgres_targeted_structural_edit
         else None,
         "prepare_tag_edit_intent": (
-            lambda *, changes: PostgresTagEditIntentRepository(config).prepare_intent(
+            lambda *, changes: intent_lease.prepare_intent(
                 library_root_identity=library_root_cache_identity(config),
                 changes=changes,
             )
@@ -1770,6 +1808,10 @@ async def utilities_edit_tags(request: Request) -> JSONResponse:
             eligible_ids = {row["id"] for row in (detail or {}).get("suggested_edits", [])}
             if not set(payload["proposal_ids"]).issubset(eligible_ids):
                 raise ValueError("Suggestions are no longer eligible")
+            # Reject stale or out-of-scope proposals before hydrating edit inventory.
+            # The handler invokes this validation while holding the edit reservation.
+            if needs_postgres_edit_state:
+                st.update(_postgres_exception_only_edit_state(request, payload))
             previous_entries = st.get("file_cache") or {}
             st["file_cache"] = {**previous_entries, **{
                 path: {**(previous_entries.get(path) or {}), **entry}
@@ -1787,7 +1829,7 @@ async def utilities_edit_tags(request: Request) -> JSONResponse:
     )
     result = await _run_edit_tags_handler_with_reservation(
         handler_options,
-        structural_tag_edit_reservation,
+        _EditTagsReservation(intent_lease, structural_tag_edit_reservation),
     )
     result = _authoritative_edit_tags_response(
         result,

@@ -98,6 +98,9 @@ class FakeConnection:
             return FakeCursor([{"library_watch_health": {}}])
         if "metadata -> 'scan_cache'" in sql:
             return FakeCursor(self._snapshot_rows)
+        if "replace_local_artist_search_projection" in sql:
+            rows = getattr(params["rows"], "obj", params["rows"])
+            return FakeCursor([{"replacement_row_count": len(rows)}])
         if "local_track_files.metadata #> '{scan_cache,file_entry}'" in sql:
             return FakeCursor(self._file_rows)
         return FakeCursor()
@@ -1969,10 +1972,32 @@ def test_explicit_scan_publishes_family_links_before_compilation_aware_ready_met
         published_relation_timestamps.append(relations_last_built)
         events.append("family_replace")
 
+    published_search_metadata = []
+
+    def replace_search_projection(
+        active_connection,
+        payload,
+        *,
+        metadata,
+        relations_last_built,
+    ):
+        assert active_connection is connection
+        assert payload["artists"] == relation_views["artists"]
+        assert payload["folder_related"] == relation_views["folder_related"]
+        assert relations_last_built == published_relation_timestamps[0]
+        published_search_metadata.append(dict(metadata))
+        events.append("search_replace")
+
     monkeypatch.setattr(
         scan_cache_persistence,
         "replace_artist_family_projection_in_transaction",
         replace_family_projection,
+    )
+    monkeypatch.setattr(
+        scan_cache_persistence,
+        "replace_artist_search_projection_in_transaction",
+        replace_search_projection,
+        raising=False,
     )
     monkeypatch.setattr(
         scan_cache_persistence,
@@ -2006,7 +2031,7 @@ def test_explicit_scan_publishes_family_links_before_compilation_aware_ready_met
         rebuild_relation_projection=True,
     )
 
-    assert events == ["family_replace", "scan_cache_save"]
+    assert events == ["family_replace", "search_replace", "scan_cache_save"]
     snapshot_params = next(
         params
         for sql, params in connection.executed
@@ -2025,6 +2050,108 @@ def test_explicit_scan_publishes_family_links_before_compilation_aware_ready_met
     assert snapshot_params["scan_cache"]["relation_projection"]["builder_version"] == (
         scan_cache_persistence.RELATION_PROJECTION_BUILDER_VERSION
     )
+    assert published_search_metadata == [
+        snapshot_params["scan_cache"]["relation_projection"]
+    ]
+
+
+def test_structural_relation_publication_replaces_search_projection_before_ready_snapshot(
+    monkeypatch,
+):
+    from music_app.services import scan_cache_persistence
+
+    monkeypatch.setattr(scan_cache_persistence, "Jsonb", None)
+    connection = FakeConnection(snapshot_rows=[{"scan_cache": {"last_scan": 9.0}}])
+    events = []
+    relation_views = {
+        "artists": ["Neal Morse", "The Neal Morse Band"],
+        "artists_sidebar": ["Neal Morse"],
+        "family_to_artists": {
+            "Neal Morse": ["Neal Morse", "The Neal Morse Band"],
+        },
+        "folder_related": {},
+        "sidebar_families": ["Neal Morse"],
+        "alias_to_canonical": {"The Neal Morse Band": "Neal Morse"},
+        "canonical_to_aliases": {"Neal Morse": ["The Neal Morse Band"]},
+    }
+    published_timestamp = []
+    published_search_metadata = []
+
+    def replace_family_projection(active_connection, payload, *, relations_last_built):
+        assert active_connection is connection
+        assert payload["artists"] == relation_views["artists"]
+        assert payload["alias_to_canonical"] == relation_views["alias_to_canonical"]
+        published_timestamp.append(relations_last_built)
+        events.append("family_replace")
+
+    def replace_search_projection(
+        active_connection,
+        payload,
+        *,
+        metadata,
+        relations_last_built,
+    ):
+        assert active_connection is connection
+        assert payload["artists"] == relation_views["artists"]
+        assert payload["alias_to_canonical"] == relation_views["alias_to_canonical"]
+        assert relations_last_built == published_timestamp[0]
+        published_search_metadata.append(dict(metadata))
+        events.append("search_replace")
+
+    monkeypatch.setattr(
+        scan_cache_persistence,
+        "build_relation_views_from_postgres_rows",
+        lambda _config, _rows: relation_views,
+    )
+    monkeypatch.setattr(
+        scan_cache_persistence,
+        "relation_source_fingerprint",
+        lambda _rows: "f" * 64,
+    )
+    monkeypatch.setattr(
+        scan_cache_persistence,
+        "replace_artist_family_projection_in_transaction",
+        replace_family_projection,
+    )
+    monkeypatch.setattr(
+        scan_cache_persistence,
+        "replace_artist_search_projection_in_transaction",
+        replace_search_projection,
+        raising=False,
+    )
+    original_execute = connection.execute
+
+    def execute(sql, params=None):
+        if "jsonb_build_object('scan_cache'" in sql:
+            events.append("scan_cache_save")
+        return original_execute(sql, params)
+
+    connection.execute = execute
+
+    result = scan_cache_persistence._commit_structural_relation_projection(
+        connection,
+        {},
+    )
+
+    assert events == ["family_replace", "search_replace", "scan_cache_save"]
+    snapshot = next(
+        params["scan_cache"]
+        for sql, params in connection.executed
+        if "jsonb_build_object('scan_cache'" in sql
+    )
+    metadata = snapshot["relation_projection"]
+    assert result["relation_views"]["artists"] == relation_views["artists"]
+    assert result["relation_views"]["alias_to_canonical"] == (
+        relation_views["alias_to_canonical"]
+    )
+    assert result["relations_last_built"] == published_timestamp[0]
+    assert metadata["status"] == "ready"
+    assert metadata["builder_version"] == (
+        scan_cache_persistence.RELATION_PROJECTION_BUILDER_VERSION
+    )
+    assert metadata["source_fingerprint"] == "f" * 64
+    assert metadata["built_from_fingerprint"] == "f" * 64
+    assert published_search_metadata == [metadata]
 
 
 def test_unrebuilt_projection_with_changed_fingerprint_stays_stale_and_preserves_provenance(
@@ -3284,3 +3411,26 @@ def test_postgres_scan_cache_rating_seed_failure_rolls_back_and_propagates(monke
     assert connection.exit_exc_type is RuntimeError
     assert connection.commit_calls == 0
     assert any("jsonb_build_object('scan_cache'" in sql for sql, _params in connection.executed)
+
+
+@pytest.mark.parametrize("stored_root,expected", [("fixture-root", 1609459200.0), ("other-root", 0.0)])
+def test_load_last_scan_reads_only_root_bound_timestamp_metadata(stored_root, expected):
+    from contextlib import nullcontext
+    from music_app.services.scan_cache_persistence import PostgresScanCacheAdapter
+
+    statements = []
+
+    def execute(sql, parameters=None):
+        statements.append(sql)
+        return FakeCursor([{"library_root_identity": stored_root, "last_scan": 1609459200}])
+
+    adapter = PostgresScanCacheAdapter(
+        {"ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://test/isolated"},
+        connect=lambda _url: nullcontext(SimpleNamespace(execute=execute)),
+    )
+    assert adapter.load_last_scan("fixture-root") == expected
+    assert len(statements) == 1
+    assert "'last_scan'" in statements[0]
+    assert "'library_root_identity'" in statements[0]
+    assert "as scan_cache" not in statements[0].lower()
+    assert "file_entries" not in statements[0].lower()

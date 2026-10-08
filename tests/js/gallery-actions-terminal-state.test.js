@@ -76,7 +76,18 @@ test('gallery target state does not resurrect bootstrap authority after a view r
   const page = Object.create(GalleryPage.prototype);
   page.productionViewObserver = { read: () => ({ allowBootstrapFallback: false, activeRequestCount: 0, pendingPayloadReadCount: 0, stateRevision: 1 }) };
   page.readProductionBootstrapPayload = async () => assert.fail('Old bootstrap must not become fresh authority');
-  page.page = { locator: () => ({ count: async () => 0 }), url: () => 'http://localhost/' };
+  page.page = {
+    locator: () => ({ count: async () => 0 }),
+    url: () => 'http://localhost/',
+    evaluate: async () => ({
+      artist_groups: [], primary_artist_groups: [], family_artist_groups: [],
+      gallery_page: null, query: '', selected_artist: '', gallery_scope: 'all',
+      visible_library_categories: [], related_filter_artists: [],
+      primary_filter_active: false, busy: false, pendingViewTransition: false,
+      viewRevision: 1, surface: 'albums', locationQuery: '', locationArtist: '',
+      authoritativeMountedFamily: false,
+    }),
+  };
   page.albumCard = { detailsButtonByArtistAndAlbum: () => ({ count: async () => 0 }) };
   page.libraryLoader = { isVisible: async () => false };
   page.artistHeadings = { allTextContents: async () => [] };
@@ -253,7 +264,7 @@ test('gallery target classification rejects an attached DOM match without canoni
 test('gallery boundary waits for advertised continuation before reversing', async () => {
   const { GalleryActions } = await import(galleryActionsUrl);
   let scrollTop = 720;
-  let reads = 0;
+  let continued = false;
   const movements = [];
   const target = { count: async () => Number(scrollTop === 960) };
   const actions = new GalleryActions({
@@ -261,12 +272,16 @@ test('gallery boundary waits for advertised continuation before reversing', asyn
     async waitForGalleryScrollMovement(previous, direction) {
       assert.equal(Math.sign(scrollTop - previous), direction);
     },
+    async waitForRootGalleryBoundaryProgress(previous) {
+      assert.equal(previous.pageCursor, 'next-page');
+      continued = true;
+    },
   });
   actions.readGalleryScrollState = async () => {
-    const continued = reads++ > 0;
     return {
       scrollTop, clientHeight: 320, maxScrollTop: continued ? 960 : 720,
-      pagination: { busy: false, page: { offset: continued ? 18 : 12, next_offset: continued ? null : 18 } },
+      hasMore: !continued,
+      pageCursor: continued ? '' : 'next-page',
     };
   };
   actions.scrollGalleryBy = async (delta) => { movements.push(delta); scrollTop += delta; };
@@ -281,15 +296,19 @@ test('stalled gallery continuation fails within the supplied timeout without rev
   const { GalleryActions } = await import(galleryActionsUrl);
   const actions = new GalleryActions({
     sectionByArtistHeading: () => ({ getByRole: () => ({ first: () => ({ count: async () => 0 }) }) }),
+    async waitForRootGalleryBoundaryProgress() {
+      throw new Error('Expected root gallery continuation to settle before reversing scroll direction');
+    },
   });
   actions.readGalleryScrollState = async () => ({
     scrollTop: 720, clientHeight: 320, maxScrollTop: 720,
-    pagination: { busy: false, page: { offset: 12, next_offset: 18 } },
+    hasMore: true,
+    pageCursor: 'next-page',
   });
   actions.scrollGalleryBy = async () => assert.fail('Must not reverse while another page is advertised');
   await assert.rejects(
     actions.scrollToAlbumUnderHeading('E2E Rarity Artist', 'Fixture', { timeout: 25 }),
-    /Expected advertised gallery continuation to settle/,
+    /Expected root gallery continuation to settle/,
   );
 });
 
@@ -415,12 +434,35 @@ test('gallery target classification treats the explicit settled empty UI as term
 
 test('gallery target state uses the current search input for local transitions that reuse a response payload', async () => {
   const { GalleryPage } = await import(galleryPageUrl);
-  const targetStateSource = GalleryPage.prototype.readAlbumTargetState.toString();
-  assert.match(
-    targetStateSource,
-    /inputQuery = await input\.count\(\) \? await input\.inputValue\(\) : ''[\s\S]*canonicalQuery = String\(inputQuery \|\| ''\)\.trim\(\)/,
-  );
-  assert.doesNotMatch(targetStateSource, /runtimeQuery|state\?\.view\?\.query/);
+  const groups = [{ artist: 'Neal Morse', albums: [{ name: 'Joseph', key: 'joseph' }] }];
+  const observation = {
+    stateRevision: 1, activeRequestCount: 0, pendingPayloadReadCount: 0,
+    latestFullPayload: { query: 'Joseph', artist_groups: groups },
+  };
+  const projection = {
+    surface: 'albums', query: '', selected_artist: 'Neal Morse',
+    locationQuery: '', locationArtist: 'Neal Morse', artist_groups: groups,
+  };
+  let inputQuery = '';
+  const owner = {
+    productionViewObserver: { read: () => observation },
+    page: { url: () => 'http://localhost/?artist=Neal+Morse', locator: () => ({
+      count: async () => 1, inputValue: async () => inputQuery,
+    }) },
+    readAppliedGalleryProjection: async () => projection,
+    albumCard: { detailsButtonByArtistAndAlbum: () => ({ count: async () => 1 }) },
+    libraryLoader: { isVisible: async () => false },
+    artistHeadings: { allTextContents: async () => ['Neal Morse'] },
+  };
+  const expected = { artist: 'Neal Morse', album: 'Joseph' };
+  const cleared = await GalleryPage.prototype.readAlbumTargetState.call(owner, expected);
+  assert.equal(cleared.expectedQuery, '');
+  assert.equal(cleared.canonicalQuery, '');
+  assert.equal(cleared.canonicalReadyMatch, true);
+  inputQuery = 'unsubmitted draft';
+  const draft = await GalleryPage.prototype.readAlbumTargetState.call(owner, expected);
+  assert.equal(draft.expectedQuery, 'unsubmitted draft');
+  assert.equal(draft.canonicalQuery, '', 'typing cannot change the applied query evidence');
 });
 
 test('artist-tree reflow checkpoint only observes runtime view and scroll state', async () => {

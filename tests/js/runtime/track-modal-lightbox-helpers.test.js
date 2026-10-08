@@ -441,6 +441,28 @@ async function flushMicrotasks() {
   await new Promise((resolve) => setImmediate(resolve));
 }
 
+test('opening Album Details preloads full artwork once without waiting and retries failed loads', () => {
+  const { context, trackModal } = loadHelper();
+  const images = [];
+  context.Image = class { constructor() { images.push(this); } };
+  context.buildAlbumLightboxCoverUrl = album => album.fullCover || '';
+  const album = { key: 'alpha', name: 'Alpha', tracks: [], fullCover: '/cover/full?revision=1' };
+  context.openTrackModal(album);
+  assert.equal(trackModal.hidden, false);
+  assert.equal(images.length, 1);
+  assert.equal(images[0].src, album.fullCover);
+  assert.equal(images[0].fetchPriority, 'low');
+  context.openTrackModal(album);
+  assert.equal(images.length, 1);
+  images[0].onerror();
+  context.openTrackModal(album);
+  assert.equal(images.length, 2);
+  context.openTrackModal({ ...album, fullCover: '/cover/full?revision=2' });
+  assert.equal(images.length, 3);
+  context.openTrackModal({ ...album, fullCover: '' });
+  assert.equal(images.length, 3);
+});
+
 test('player Album Details takes foreground without closing Settings or its draft', () => {
   const { context, trackModal, utilityModal, documentListeners } = loadHelper({ utilityLoaded: true });
   const draft = { title: 'Unsaved appearance' };
@@ -527,6 +549,48 @@ function lightboxFocusHarness() {
   };
   return { ...result, close, next, trigger, keydown };
 }
+
+test('mobile artwork owns one history entry and Back closes only the lightbox', () => {
+  const { context, lightboxOverlay } = lightboxFocusHarness();
+  context.usesMobilePageLayout = () => true;
+  const parent = { mobilePages: [{ kind: 'album', albumKey: 'album-a' }] };
+  const history = { state: parent, pushes: 0, backs: 0,
+    pushState(value) { this.state = value; this.pushes += 1; },
+    back() { this.backs += 1; },
+  };
+  context.window = { history };
+  context.openImageLightbox('/cover.png', 'Cover');
+  assert.equal(history.pushes, 1);
+  assert.deepEqual(history.state.mobilePages, parent.mobilePages);
+  context.openImageLightbox('/other.png', 'Other');
+  assert.equal(history.pushes, 1);
+  context.closeImageLightbox();
+  assert.equal(history.backs, 1);
+  history.state = parent;
+  assert.equal(context.handleImageLightboxPopState(), true);
+  assert.equal(lightboxOverlay.hidden, true);
+  assert.equal(history.backs, 1);
+  assert.equal(context.handleImageLightboxPopState(), false);
+});
+
+test('mobile artwork swipe changes albums once and ignores vertical, pinch and zoom gestures', () => {
+  const { context, lightboxOverlay } = lightboxFocusHarness();
+  context.usesMobilePageLayout = () => true;
+  context.openImageLightbox('/cover.png', 'Cover');
+  const swipe = (start, end, zoom = 1) => {
+    context.state.lightbox.zoom = zoom;
+    lightboxOverlay.dispatchEvent('touchstart', { touches: start });
+    lightboxOverlay.dispatchEvent('touchend', { touches: [], changedTouches: [end] });
+  };
+  const point = (clientX, clientY) => ({ clientX, clientY });
+  swipe([point(200, 100)], point(100, 105));
+  swipe([point(100, 100)], point(200, 105));
+  swipe([point(100, 100)], point(105, 200));
+  swipe([point(100, 100)], point(110, 100));
+  swipe([point(100, 100), point(200, 100)], point(200, 100));
+  swipe([point(100, 100)], point(200, 100), 2);
+  assert.deepEqual(context.stepLightboxCalls, [1, -1]);
+});
 
 test('S05 opening artwork focuses lightbox Close and closing restores its original trigger', () => {
   const { context, close, trigger } = lightboxFocusHarness();
@@ -713,6 +777,18 @@ test('revision reload preserves a speculative detail request promoted to foregro
   assert.equal(responses[1].requestOptions.signal.aborted, false);
   responses[1].resolve({ ok: true, status: 200, json: async () => ({ ok: true, album }) });
   assert.equal(await foreground, album);
+});
+
+test('opening a preview album renders all known edition tabs before details resolve', () => {
+  const album = { key: 'alpha', name: 'Album', preview_only: true, tracks: [] };
+  const { context } = loadHelper({ onFetchAlbumDetails: () => new Promise(() => {}) });
+  let rendered = [];
+  context.renderTrackModalTabs = () => {
+    rendered = Array.from(context.state.modalReleases, release => release.key);
+  };
+  context.openTrackModal(album);
+  assert.deepEqual(rendered, ['alpha', 'beta']);
+  assert.deepEqual(context.renderTrackModalReleaseCalls, []);
 });
 
 async function run() {
@@ -2379,3 +2455,34 @@ test('switching a preview edition hydrates tracks without reordering or relabeli
   assert.equal(context.state.modalReleaseIndex, 1);
   assert.equal(context.renderTrackModalReleaseAlbums.at(-1).tracks[0].path, 'edition-track');
 });
+
+for (const interruption of ['cancel', 'pinch', 'zoom', 'close', 'remaining-touch', 'desktop']) {
+  test(`mobile artwork swipe does not navigate after ${interruption}`, () => {
+    const { context, lightboxOverlay } = lightboxFocusHarness();
+    context.usesMobilePageLayout = () => interruption !== 'desktop';
+    context.openImageLightbox('/cover.png', 'Cover');
+    const point = (x, y) => ({ clientX: x, clientY: y });
+    lightboxOverlay.dispatchEvent('touchstart', { touches: [point(200, 100)] });
+    if (interruption === 'cancel') lightboxOverlay.dispatchEvent('touchcancel', {});
+    if (interruption === 'pinch') {
+      lightboxOverlay.dispatchEvent('touchmove', { touches: [point(180, 100), point(240, 100)] });
+      lightboxOverlay.dispatchEvent('touchmove', { touches: [point(150, 100)] });
+    }
+    if (interruption === 'zoom') {
+      context.state.lightbox.zoom = 2;
+      lightboxOverlay.dispatchEvent('touchmove', { touches: [point(150, 100)] });
+      context.state.lightbox.zoom = 1;
+    }
+    if (interruption === 'close') context.closeImageLightbox();
+    let prevented = 0;
+    const end = {
+      touches: interruption === 'remaining-touch' ? [point(240, 100)] : [],
+      changedTouches: [point(80, 100)],
+      preventDefault() { prevented += 1; },
+    };
+    lightboxOverlay.dispatchEvent('touchend', end);
+    lightboxOverlay.dispatchEvent('touchend', { ...end, touches: [] });
+    assert.deepEqual(context.stepLightboxCalls, []);
+    assert.equal(prevented, 0, 'rejected gestures retain native scrolling');
+  });
+}

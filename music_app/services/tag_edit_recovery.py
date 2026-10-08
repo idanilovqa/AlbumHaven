@@ -175,50 +175,49 @@ def _app_owned_override(values: dict[str, object]) -> object:
 
 
 def reconcile_unfinished_tag_edit_intents_on_startup(runtime: object) -> dict[str, int]:
-    """Reconcile the local library journal before normal state hydration."""
+    """Recover only journals whose owning writer session has released its lease."""
+    from music_app.services.library_roots import library_root_cache_identity
+    from music_app.services.scan_cache_persistence import select_scan_cache_adapter
+    from music_app.services.tag_edit_intents_postgres import PostgresTagEditIntentRepository
+
+    config = getattr(runtime, "config")
+    repository = PostgresTagEditIntentRepository(config)
+    root_identity = library_root_cache_identity(config)
+    summary = {"completed": 0, "rolled_back": 0, "reconciled_external": 0, "failed": 0}
+    file_cache = None
+    for candidate in repository.load_unfinished_intents(library_root_identity=root_identity):
+        with repository.claim_unfinished_intent(
+            str(candidate["id"]), library_root_identity=root_identity,
+        ) as claimed:
+            if claimed is None:
+                continue
+            if file_cache is None:
+                adapter = select_scan_cache_adapter(config)
+                file_cache, _last_scan, _relations, _relations_at, error = adapter.load_snapshot(
+                    config["CACHE_PATH"], root_identity,
+                )
+                if error:
+                    raise RuntimeError(f"Could not load Postgres inventory for tag edit recovery: {error}")
+            result = _reconcile_claimed_tag_edit_intent(runtime, repository, claimed, file_cache)
+            for key in summary:
+                summary[key] += result[key]
+    return summary
+
+
+def _reconcile_claimed_tag_edit_intent(runtime, repository, claimed_intent, file_cache):
     from music_app.services.cache import (
         persist_structural_tag_edit_for_config,
         save_cache_updates_to_disk_for_config,
     )
-    from music_app.services.library_roots import (
-        library_root_cache_identity,
-        resolve_configured_media_path,
-    )
+    from music_app.services.library_roots import resolve_configured_media_path
     from music_app.services.metadata import (
         apply_text_repairs_to_file,
         read_editable_tag_values,
         read_metadata_for_file,
     )
-    from music_app.services.scan_cache_persistence import select_scan_cache_adapter
-    from music_app.services.tag_edit_intents_postgres import (
-        PostgresTagEditIntentRepository,
-    )
 
     config = getattr(runtime, "config")
     logger = getattr(runtime, "logger")
-    repository = PostgresTagEditIntentRepository(config)
-    root_identity = library_root_cache_identity(config)
-    intents = repository.load_unfinished_intents(
-        library_root_identity=root_identity,
-    )
-    if not intents:
-        return {
-            "completed": 0,
-            "rolled_back": 0,
-            "reconciled_external": 0,
-            "failed": 0,
-        }
-
-    adapter = select_scan_cache_adapter(config)
-    file_cache, _last_scan, _relations, _relations_at, error = adapter.load_snapshot(
-        config["CACHE_PATH"],
-        root_identity,
-    )
-    if error:
-        raise RuntimeError(
-            f"Could not load Postgres inventory for tag edit recovery: {error}"
-        )
-
     def resolve_recovery_path(raw_path: str) -> Path:
         resolved = resolve_configured_media_path(config, raw_path)
         if resolved is None:
@@ -231,7 +230,7 @@ def reconcile_unfinished_tag_edit_intents_on_startup(runtime: object) -> dict[st
     resolved_recovery_paths: dict[str, Path] = {}
     recoverable_intents: list[dict[str, object]] = []
     preflight_failures = 0
-    for intent in intents:
+    for intent in [claimed_intent]:
         intent_id = str(intent.get("id") or "").strip()
         try:
             for change in _normalized_changes(intent.get("changes")):

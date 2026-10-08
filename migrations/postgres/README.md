@@ -15,7 +15,7 @@ selection provenance retains manual protection. Never reset all user-cover
 ownership flags as a repair shortcut; guard each replacement against concurrent
 manual selections.
 
-`0083_add_active_physical_parent_index.sql` adds a nonunique partial expression
+`0088_add_active_physical_parent_index.sql` adds a nonunique partial expression
 index for active files grouped by root and normalized immediate parent. It
 changes no catalog rows or media. Existing large databases should prebuild the
 same exact index with `CREATE INDEX CONCURRENTLY` in autocommit before ordinary
@@ -26,7 +26,7 @@ only the exact invalid index before retry. Application rollback can retain this
 additive index; optional later removal uses `DROP INDEX CONCURRENTLY` after
 checking rollout dependencies. Do not rewrite migration ledger history.
 
-`0082_library_source_indicators.sql` is the byte-identical canonical name for
+`0087_library_source_indicators.sql` is the byte-identical canonical name for
 the historical `0080_library_source_indicators.sql` collision. The only accepted
 alias checksum is `e1a292e50a08e4043d2ce3ceda13b87ad90462deb898590c147bab492a01b5e1`.
 Isolated/demo migration readers resolve this alias in memory, without replaying
@@ -133,6 +133,24 @@ Use lowercase, zero-padded filenames and apply them in lexical order:
 0065_native_player_component_provenance.sql
 0066_allow_appearance_panel_outline.sql
 0067_add_scanned_exception_candidate_index.sql
+0068_scoped_saved_loop_orders.sql
+0069_scoped_operational_log_versions.sql
+0070_appearance_loop_control_style.sql
+0071_allow_harbor_mint_appearance_palette.sql
+0072_measured_local_listen_sessions.sql
+0073_preserve_measured_listen_history.sql
+0074_create_saved_loop_waveform_peaks.sql
+0075_appearance_device_sections.sql
+0076_docked_compact_player_behavior.sql
+0077_allow_parchment_pine_appearance_palette.sql
+0078_add_compact_player_motion_and_floating_edge.sql
+0079_docked_compact_player_regular_style.sql
+0080_user_client_layout_preferences.sql
+0081_grant_move_policy_settings_delete.sql
+0082_preserve_relations_for_missing_album_removal.sql
+0083_add_album_raw_artist_search_index.sql
+0084_create_local_artist_search_projection.sql
+0085_add_stale_track_file_candidate_index.sql
 ```
 
 Section 3 owns the first baseline schema migration. Do not add future-feature reservation schemas here. Phase 6 migration files should stay current-stack scoped and target app-owned durable data for `album_haven_core`.
@@ -197,9 +215,40 @@ Section 3 owns the first baseline schema migration. Do not add future-feature re
 
 `0064_grant_library_membership_delete.sql` grants the application role `DELETE` only on `library.library_memberships` so the existing authorized access-removal transaction can complete. Other runtime and readonly privileges are unchanged.
 
+`0081_grant_move_policy_settings_delete.sql` grants the application role the scoped `DELETE` privilege required when root-setting saves replace move-policy rows in one transaction.
+
+`0082_preserve_relations_for_missing_album_removal.sql` replaces the bounded missing-album removal function without marking the relation projection stale. The function deletes only track files already marked stale, while relation sources include only active files, so the active relation projection remains valid. The inventory mutation revision still advances atomically.
+
+`0083_add_album_raw_artist_search_index.sql` adds the concurrent trigram index used to prefilter raw album-artist arrays before exact JSON element matching.
+
+`0084_create_local_artist_search_projection.sql` adds the library-scoped,
+normalized exact-artist lookup published atomically with relation readiness.
+Its B-tree covers the library-and-canonical-name scope lookup in normalized-key
+order. The runtime role can read the table and invoke only the bounded
+replacement function; it has no direct table-write privileges.
+
+`0081` through `0088` are unreleased branch migrations. Their presence in a
+working checkout or sandbox does not establish that a deployment ledger has
+recorded them. Release rollout must apply and checksum them in lexical order
+before starting the matching application version. Run `0083` outside an
+explicit transaction because it uses `CREATE INDEX CONCURRENTLY`; record its
+ledger entry only after PostgreSQL reports the index valid. Apply `0084`
+transactionally, then let normal relation readiness publish the first matching
+artist-search projection. Migrations `0087` and `0088` add library-source
+indicator storage and the active physical-parent lookup index respectively.
+
+Rollback is migration-specific. Revoke the `0081` delete grant only after the
+root-setting writer is rolled back. Restore the `0063` missing-album function to
+undo `0082`; confirmed deletions are not reversible, and restoring `0063`
+intentionally makes subsequent removals mark relation data stale. Drop the
+`0083` index concurrently; search stays correct on the slower scan path. Roll
+back the projection-reading application code before dropping the `0084`
+function and table, preventing a relation-ready process from querying an absent
+table. Keep the live-SQL fallback for absent, stale, or incompatible projection
+readiness throughout rollout and rollback.
+
 Set `PGPASSFILE` when passwordless local automation is required. Keep migration SQL idempotent and review query plans for index-sensitive changes.
 
-`0081_grant_move_policy_settings_delete.sql` grants the application role `DELETE`
-only on `library.move_policy_settings`. Root-setting saves replace move-policy
-rows transactionally; upgraded databases that omitted the broader `0020` grant
-need this narrow permission. Readonly privileges remain unchanged.
+Migration `0085_add_stale_track_file_candidate_index.sql` indexes the generated stale-file predicate used by missing-album discovery. It avoids scanning every active file when the stale set is empty or small. The partial index is maintained by PostgreSQL as files become stale or return; it changes no rows, result semantics, or privileges. Older application versions remain compatible. Rollback removes only this index through a subsequent migration.
+
+This ordinary transactional index build allows reads but temporarily blocks writes to the track-file table. Apply it during a controlled migration window before starting application writers.

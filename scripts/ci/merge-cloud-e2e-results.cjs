@@ -41,8 +41,8 @@ function buildExpectedCloudE2EInventory({
   if (coverageOnlyTargets.length !== 3 || coverageOnlyTargets[0] !== 'scan-page' || coverageOnlyTargets[1] !== 'scan-health' || coverageOnlyTargets[2] !== 'scan-error') {
     throw new Error('cloud E2E inventory must declare only scan-page, scan-health, and scan-error as coverage-only');
   }
-  if (functional.length !== 4 || performance.length !== 21) {
-    throw new Error(`cloud E2E inventory mismatch: expected 4 functional and 21 performance, got ${functional.length} and ${performance.length}`);
+  if (functional.length !== 4 || performance.length !== 22) {
+    throw new Error(`cloud E2E inventory mismatch: expected 4 functional and 22 performance, got ${functional.length} and ${performance.length}`);
   }
   const ids = [...functional, ...performance].map((entry) => entry.childId);
   const names = [...functional, ...performance].map((entry) => entry.artifactName);

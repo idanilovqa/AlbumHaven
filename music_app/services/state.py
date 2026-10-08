@@ -247,6 +247,36 @@ def init_state(app) -> None:
     }
 
 
+def hydrate_runtime_scan_metadata_on_startup(app) -> None:
+    adapter = select_scan_cache_adapter(app.config)
+    last_scan = adapter.load_last_scan(library_root_cache_identity(app.config))
+    with _CACHE_LOCK:
+        # A scan that completed during the metadata read owns its newer timestamp.
+        if not app.library_state.get("last_scan"):
+            app.library_state["last_scan"] = last_scan
+
+
+def recover_runtime_library_persistence_on_startup(app) -> None:
+    """Restore durable startup invariants without hydrating the gallery."""
+    from music_app.services.tag_edit_recovery import (
+        reconcile_unfinished_tag_edit_intents_on_startup,
+    )
+
+    reconcile_unfinished_tag_edit_intents_on_startup(app)
+    _migrate_startup_album_exclusions(app)
+
+
+def _migrate_startup_album_exclusions(app) -> None:
+    migration_result = migrate_legacy_album_exclusions(app.config)
+    if migration_result["migrated_album_count"]:
+        app.logger.info(
+            "Legacy album exclusions migrated albums=%s removed_rules=%s created_rules=%s",
+            migration_result["migrated_album_count"],
+            migration_result["removed_legacy_rule_count"],
+            migration_result["created_album_rule_count"],
+        )
+
+
 def hydrate_runtime_library_state_on_startup(app) -> bool:
     from music_app.services.tag_edit_recovery import (
         reconcile_unfinished_tag_edit_intents_on_startup,
@@ -265,19 +295,12 @@ def hydrate_runtime_library_state_on_startup(app) -> bool:
             logger=app.logger,
         )
     if hydrated:
-        migration_result = migrate_legacy_album_exclusions(app.config)
+        _migrate_startup_album_exclusions(app)
         app.logger.info(
             "Startup scan-cache hydration completed files=%s albums=%s",
             len(app.library_state.get("file_cache") or {}),
             len(app.library_state.get("albums") or []),
         )
-        if migration_result["migrated_album_count"]:
-            app.logger.info(
-                "Legacy album exclusions migrated albums=%s removed_rules=%s created_rules=%s",
-                migration_result["migrated_album_count"],
-                migration_result["removed_legacy_rule_count"],
-                migration_result["created_album_rule_count"],
-            )
     elif app.library_state.get("last_error"):
         app.logger.warning(
             "Startup scan-cache hydration did not load a snapshot: %s",
@@ -286,11 +309,21 @@ def hydrate_runtime_library_state_on_startup(app) -> bool:
     return hydrated
 
 
-def ensure_runtime_relation_projection_ready(app) -> dict[str, object]:
+def ensure_runtime_relation_projection_ready(
+    app,
+    *,
+    cancel_requested=None,
+) -> dict[str, object]:
     library_state = app.library_state
     library_state["relation_projection_ready"] = False
     try:
-        result = ensure_relation_projection_ready(app.config, logger=app.logger)
+        result = ensure_relation_projection_ready(
+            app.config,
+            logger=app.logger,
+            cancel_requested=cancel_requested,
+        )
+    except InterruptedError:
+        raise
     except Exception as exc:
         library_state["last_error"] = str(exc)
         library_state["relation_projection_rebuild_reason"] = "startup_rebuild_failed"
@@ -309,6 +342,15 @@ def ensure_runtime_relation_projection_ready(app) -> dict[str, object]:
     library_state["relation_projection_duration_ms"] = float(
         result.get("duration_ms") or 0.0
     )
+    if (result.get("ready") and not app.config.get("SHARED_LIBRARY_BROWSE_ONLY")
+            and str(app.config.get("ALBUM_HAVEN_APP_DATABASE_URL") or "").strip()):
+        from music_app.services.gallery_projection_postgres import ensure_gallery_projection_ready
+        try:
+            ensure_gallery_projection_ready(app.config, cancel_requested=cancel_requested)
+        except InterruptedError:
+            raise
+        except Exception:
+            app.logger.exception("Gallery summary preparation failed; computed browse remains available")
     return result
 
 def scan_percent_for_state(library_state: dict[str, object]) -> int:

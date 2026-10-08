@@ -327,13 +327,19 @@ def save_cache_to_disk_for_config(
             for root_id in observed_library_root_ids
             if str(root_id).strip()
         }
-    return _select_runtime_scan_cache_adapter(config).save_snapshot(
+    adapter = _select_runtime_scan_cache_adapter(config)
+    result = adapter.save_snapshot(
         cache_path,
         file_cache,
         root_identity,
         last_scan,
         **snapshot_options,
     )
+    from music_app.services.scan_cache_persistence import PostgresScanCacheAdapter
+    if isinstance(adapter, PostgresScanCacheAdapter):
+        from music_app.services.gallery_projection_postgres import schedule_gallery_projection_refresh
+        schedule_gallery_projection_refresh(config, connect=adapter._connect)
+    return result
 
 
 def save_cache_updates_to_disk_for_config(
@@ -711,6 +717,13 @@ def schedule_cache_updates_save_for_config(
         **save_options,
     )
     future.add_done_callback(_log_cache_update_failure)
+    from music_app.services.scan_cache_persistence import PostgresScanCacheAdapter
+    if isinstance(adapter, PostgresScanCacheAdapter):
+        def refresh_gallery_after_publication(completed):
+            if not completed.cancelled() and completed.exception() is None:
+                from music_app.services.gallery_projection_postgres import schedule_gallery_projection_refresh
+                schedule_gallery_projection_refresh(config, connect=adapter._connect)
+        future.add_done_callback(refresh_gallery_after_publication)
     return future
 
 

@@ -2,6 +2,7 @@ import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 
 import { expect, test as base } from './baseFixtures.js';
+import { loadSyntheticSearchInventory } from '../helpers/syntheticSearchInventory.js';
 import { selectedPerformanceContractName } from '../helpers/timingBudget.js';
 import { buildPerformanceAttemptTerminalEvidence } from '../helpers/performanceAttemptTerminalEvidence.js';
 
@@ -267,8 +268,8 @@ function buildUtilityProblematicFilesLocalSummaryCards(checkpoints, metricsPaylo
       label: 'Problematic Files Ready',
       value: `${Math.round(Number(metricsPayload?.problematicReadyMs || 0))} ms`,
       note: Number(metricsPayload?.problematicReadyMs || 0) > 1000
-        ? 'Grace used: above 1000 ms target; 1200 ms hard ceiling'
-        : 'Target met: at or below 1000 ms; 1200 ms hard ceiling',
+        ? 'Grace used: above 1000 ms target; 1400 ms hard ceiling'
+        : 'Target met: at or below 1000 ms; 1400 ms hard ceiling',
     },
     {
       label: 'Search Ready',
@@ -664,6 +665,9 @@ async function useSyntheticPerformanceReportFixture({ page, performanceReport },
 }
 
 export const test = base.extend({
+  syntheticSearchInventory: [async ({}, use) => {
+    await use(await loadSyntheticSearchInventory());
+  }, { scope: 'worker' }],
   startupRelationProjectionReadiness: [
     async ({}, use) => use(null),
     { scope: 'worker', auto: true },

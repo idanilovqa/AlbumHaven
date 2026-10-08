@@ -891,6 +891,25 @@ test(`scroll anchoring restores the captured trigger for ${scenario}`, () => {
 });
 }
 
+test('scroll anchoring keeps the gallery at the top when startup hydration moves the first card', () => {
+  const { context, scrollEl } = createRuntimeContext();
+  const virtualGrid = vm.runInContext('virtualGrid', context);
+  const sectionKey = 'artist:all:Startup Artist:0';
+  context.__albumTitleButtons = [context.createAlbumTitleButton(
+    'startup-album', { top: 40, bottom: 340 }, sectionKey,
+  )];
+  scrollEl.scrollTop = 0;
+  const anchor = virtualGrid.captureScrollAnchor();
+
+  // Full hydration can insert artist sections ahead of the preview's first card.
+  context.__albumTitleButtons = [context.createAlbumTitleButton(
+    'startup-album', { top: 329, bottom: 629 }, sectionKey,
+  )];
+  virtualGrid.restoreScrollAnchor(anchor);
+
+  assert.equal(scrollEl.scrollTop, 0, 'Startup must retain the root position, not follow the preview card');
+});
+
 test('scroll anchoring follows the same visible album when a scan changes its request key', () => {
   const { context, scrollEl } = createRuntimeContext();
   const virtualGrid = vm.runInContext('virtualGrid', context);
@@ -3645,6 +3664,52 @@ test('deferred pointer render retains the scroll frame owner across a render gen
   assert.equal(virtualGrid.albumCardNodeCache.size, 48, 'decoded detached-card retention must stay bounded');
   assert.equal(virtualGrid.albumCardNodeCache.has('decoded-0'), false, 'the oldest decoded card should be evicted first');
 
+  const createCachedCard = (key, decoded) => {
+    const image = new context.HTMLImageElement();
+    image.complete = decoded;
+    image.naturalWidth = decoded ? 480 : 0;
+    if (!decoded) {
+      image.setAttribute('data-cover-visual-state', 'pending');
+      image.setAttribute('data-gallery-cover-loading', '1');
+    }
+    return {
+      getAttribute(name) {
+        if (name === 'data-gallery-card-key') return key;
+        if (name === 'data-gallery-card-render-key') return 'same-render';
+        return '';
+      },
+      querySelector(selector) {
+        return selector === '.cover img' || selector === 'img[data-production-cover-src]'
+          ? image
+          : null;
+      },
+    };
+  };
+  const decodedCards = Array.from(
+    { length: 10 },
+    (_value, index) => createCachedCard(`decoded-priority-${index}`, true),
+  );
+  virtualGrid.albumCardNodeCache.clear();
+  virtualGrid.rememberRenderedAlbumCards({ querySelectorAll() { return decodedCards; } });
+  const pendingCards = Array.from(
+    { length: 48 },
+    (_value, index) => createCachedCard(`pending-deep-${index}`, false),
+  );
+  virtualGrid.rememberRenderedAlbumCards({ querySelectorAll() { return pendingCards; } });
+  assert.equal(virtualGrid.albumCardNodeCache.size, 48, 'mixed detached-card retention must stay bounded');
+  decodedCards.forEach((_card, index) => {
+    assert.equal(
+      virtualGrid.albumCardNodeCache.has(`decoded-priority-${index}`),
+      true,
+      'queued deep-window placeholders must not evict a decoded navigation return window',
+    );
+  });
+  assert.equal(
+    virtualGrid.albumCardNodeCache.has('pending-deep-0'),
+    false,
+    'the oldest pending node should yield before a decoded node',
+  );
+
   const inFlightImage = new context.HTMLImageElement();
   inFlightImage.complete = false;
   inFlightImage.naturalWidth = 0;
@@ -4364,3 +4429,23 @@ for (const mobile of [true, false]) {
     assert.ok(grid.cardTrackWidth > 200, `expected a readable card, received ${grid.cardTrackWidth}px`);
   });
 }
+
+test('startup preview cards survive layout events until an authoritative virtual model takes ownership', () => {
+  const { context, containerEl } = createRuntimeContext();
+  const virtualGrid = vm.runInContext('virtualGrid', context);
+  const preview = virtualGrid.createRenderedSectionNode({
+    key: 'startup-preview',
+    html: '<section data-startup-preview-section="1"><section class="album-card" data-startup-preview-card="1">Album</section></section>',
+  });
+  containerEl.appendChild(preview);
+  assert.equal(virtualGrid._renderGeneration, 0);
+
+  virtualGrid.onArtistTreeSettled();
+  assert.equal(containerEl.children[0], preview, 'Opening Artist Tree must retain the server-rendered preview');
+  virtualGrid.onResize();
+  assert.equal(containerEl.children[0], preview, 'Resizing before hydration must retain the same preview nodes');
+
+  virtualGrid.setGroups([], [], []);
+  assert.ok(virtualGrid._renderGeneration > 0);
+  assert.equal(containerEl.children.length, 0, 'An authoritative empty result must clear the old preview');
+});

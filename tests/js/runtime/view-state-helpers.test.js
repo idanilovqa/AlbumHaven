@@ -2,6 +2,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
+const test = require('node:test');
 const ButtonComponent = require('../../../music_app/static/js/button-component.js');
 const test = require('node:test');
 
@@ -1435,3 +1436,69 @@ test('rootFullPayload requests full root albums without changing other browse UR
     assert.equal(scanPage.hidden, true);
   }
 }
+
+{
+  const context = loadHelpers();
+  const names = ['#2', '#4', '& Co', '(Sandy) Alex G', '-', '...And Oceans',
+    '10 Years', '2Cellos', '[Stömb]', 'A', 'a', 'Élan', '«Отпетые Мошенники»', '東京'];
+  const artists = names.map(artist => ({ artist, artist_display: artist, count: 1 }));
+  const rootView = { surface: { active: 'albums' }, selected_artist: '', query: '', all_artists_active: true };
+  assert.equal(
+    context.buildSidebarStructureSignature(artists, { view: rootView }),
+    context.buildSidebarStructureSignature(artists, { view: { ...rootView, selected_artist: '#2', all_artists_active: false } }),
+    'Selection changes must not rebuild an unchanged authoritative artist order',
+  );
+  for (const initial_view_partial of [false, true]) {
+    const html = context.buildSidebarHtml({
+      surface: { active: 'albums' }, selected_artist: '', query: '',
+      all_artists_active: true, initial_view_partial,
+      artist_groups: artists.slice(0, initial_view_partial ? 6 : artists.length),
+    }, artists);
+    const positions = names.map(name => html.indexOf(`data-sidebar-artist="${name.replace(/&/g, '&amp;')}"`));
+    assert.ok(positions.every(position => position >= 0));
+    assert.deepEqual(positions, [...positions].sort((left, right) => left - right),
+      'All artists must keep the canonical gallery order, including during startup preview');
+    assert.deepEqual(artists.map(item => item.artist), names, 'Rendering must not mutate the payload');
+  }
+}
+
+{
+  const { buildApiUrl } = loadHelpers();
+  const root = { surface_request: 'albums', query: '', selected_artist: '' };
+  assert.equal(new URL(buildApiUrl(root), 'https://localhost').searchParams.get('gallery_page_size'), '50');
+  for (const scoped of [{ ...root, query: 'Neal Morse' }, { ...root, selected_artist: 'Neal Morse' }]) {
+    assert.equal(new URL(buildApiUrl(scoped), 'https://localhost').searchParams.has('gallery_page_size'), false);
+  }
+}
+
+{
+  const { buildApiUrl } = loadHelpers();
+  for (const extra of [{ search_filters: { genre: ['Rock'] } }, { search_filters: { duration: { min_seconds: 0 } } }, { related_filter_artists: ['Family'] }, { primary_filter_active: true }]) {
+    const url = new URL(buildApiUrl({ surface_request: 'albums', ...extra }), 'https://localhost');
+    assert.equal(url.searchParams.has('gallery_page_size'), false, 'unsupported root filters keep their full-result API');
+  }
+}
+
+{
+  const { buildApiUrl } = loadHelpers();
+  const url = new URL(buildApiUrl({ surface_request: 'albums' }, { omitSidebar: true }), 'https://localhost');
+  assert.equal(url.searchParams.get('gallery_page_size'), '50', 'All artists must request a bounded page even when reusing sidebar state');
+}
+test('artist sidebar preserves server order through selection, search, and clear', () => {
+  const context = loadHelpers();
+  const names = ['#2', '#4', '& Co', '(Sandy) Alex G', '-', '...And Oceans', '10cc', '[Stömb]', '«Отпетые Мошенники»'];
+  const artists = names.map(artist => ({ artist, artist_display: artist, count: 1 }));
+  const root = { surface: { active: 'albums' }, query: '', selected_artist: '', all_artists_active: true };
+  const selected = { ...root, selected_artist: names.at(-1), all_artists_active: false };
+  const search = { ...selected, query: 'отпетые' };
+  for (const [view, sourceNames] of [[root, names], [selected, names], [search, [names.at(-1), ...names.slice(0, -1)]], [{ ...search, query: '' }, names]]) {
+    const source = sourceNames.map(artist => artists.find(item => item.artist === artist));
+    const html = context.buildSidebarHtml(view, source);
+    const positions = sourceNames.map(name => html.indexOf(`data-sidebar-artist="${name.replace(/&/g, '&amp;')}"`));
+    assert.ok(positions.every(position => position >= 0));
+    assert.deepEqual(positions, [...positions].sort((left, right) => left - right), `Server order must survive query=${view.query} selected=${view.selected_artist}`);
+    assert.equal((html.match(/artist-link active/g) || []).length, 1);
+    if (view.selected_artist) assert.match(html, /aria-current="true"/);
+    assert.deepEqual(source.map(item => item.artist), sourceNames);
+  }
+});

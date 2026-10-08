@@ -157,52 +157,42 @@ def local_log_history_items(app, scoped_history_runtime):
 
 @pytest.fixture()
 def track_preferences_postgres_runtime(app, monkeypatch):
-    from music_app.services.track_preferences import normalize_track_preferences_store
+    def unexpected_connection(*args, **kwargs):
+        raise AssertionError("Fake track preference caller fixture must not open a database connection")
 
     class FakePostgresTrackPreferencesStore:
-        payload = {"version": 1, "actors": {}}
+        preferences = {}
 
         def __init__(self, config):
             self.config = config
 
-        def load_store(self):
-            return deepcopy(type(self).payload)
+        def resolve_track(self, track_ref, *, account_id, library_id):
+            assert (account_id, library_id) == (1, 1)
+            overlay = self.preferences.get(track_ref, {"rating": None, "love_tier": "off"})
+            return {"track_id": 1, "track_ref": track_ref, "track_key": track_ref,
+                    "preference_id": 1 if track_ref in self.preferences else None,
+                    "preference_key": track_ref, "is_active_path": True, **overlay}
 
-        def load_track_preferences(self, track_refs):
-            store = self.load_store()
-            actor_payload = (
-                (store.get("actors") or {}).get("local")
-                if isinstance(store.get("actors"), dict)
-                else None
-            )
-            track_preferences = (
-                actor_payload.get("track_preferences")
-                if isinstance(actor_payload, dict) and isinstance(actor_payload.get("track_preferences"), dict)
-                else {}
-            )
-            return {
-                track_ref: deepcopy(track_preferences.get(track_ref, {}))
-                for track_ref in track_refs
-                if track_ref in track_preferences
-            }
+        def load_track_preferences(self, track_refs, *, account_id, library_id):
+            return {ref: self.resolve_track(ref, account_id=account_id, library_id=library_id)
+                    for ref in track_refs}
 
-        def save_store(self, raw_payload):
-            type(self).payload = normalize_track_preferences_store(raw_payload)
-            return deepcopy(type(self).payload)
+        def patch_preference(self, track_ref, patch, *, account_id, library_id, expected_track_id):
+            assert expected_track_id == 1
+            current = self.resolve_track(track_ref, account_id=account_id, library_id=library_id)
+            if patch:
+                self.preferences[track_ref] = {key: patch.get(key, current[key]) for key in ("rating", "love_tier")}
+            return self.resolve_track(track_ref, account_id=account_id, library_id=library_id)
 
-    FakePostgresTrackPreferencesStore.payload = {"version": 1, "actors": {}}
+    FakePostgresTrackPreferencesStore.preferences = {}
     app.config.update(
         ALBUM_HAVEN_APP_DATABASE_URL="postgresql://album_haven_app@localhost/app",
-        PERSISTENCE_BACKENDS={
-            **dict(app.config.get("PERSISTENCE_BACKENDS") or {}),
-            "track_preferences": "postgres",
-        },
+        PERSISTENCE_BACKENDS={**dict(app.config.get("PERSISTENCE_BACKENDS") or {}), "track_preferences": "postgres"},
     )
     monkeypatch.setattr("music_app.services.track_preferences_postgres.psycopg", object())
-    monkeypatch.setattr(
-        "music_app.services.track_preferences.PostgresTrackPreferencesStore",
-        FakePostgresTrackPreferencesStore,
-    )
+    monkeypatch.setattr("music_app.services.track_preferences_postgres._connect", unexpected_connection)
+    monkeypatch.setattr("music_app.services.track_preferences.PostgresTrackPreferencesStore", FakePostgresTrackPreferencesStore)
+    monkeypatch.setattr("music_app.routes.api_wave_b_asgi_routes.PostgresTrackPreferencesStore", FakePostgresTrackPreferencesStore)
     monkeypatch.setattr("music_app.services.track_stats.load_listen_history", lambda config: [])
     return FakePostgresTrackPreferencesStore
 
@@ -1949,7 +1939,8 @@ def test_asgi_track_preferences_write_persists_in_selected_postgres_store_withou
     assert status == 200
     assert _decode_json(body) == {
         "ok": True,
-        "actor_id": "local",
+        "actor_id": "1",
+        "library_id": 1,
         "track_ref": track_ref,
         "track_preference": {
             "rating": 5,
@@ -1961,18 +1952,8 @@ def test_asgi_track_preferences_write_persists_in_selected_postgres_store_withou
             },
         },
     }
-    assert track_preferences_postgres_runtime.payload == {
-        "version": 1,
-        "actors": {
-            "local": {
-                "track_preferences": {
-                    track_ref: {
-                        "rating": 5,
-                        "love_tier": "obsessed",
-                    },
-                },
-            },
-        },
+    assert track_preferences_postgres_runtime.preferences == {
+        track_ref: {"rating": 5, "love_tier": "obsessed"}
     }
     assert not (Path(app.config["DATA_DIR"]) / "track_preferences.json").exists()
 
@@ -2001,7 +1982,7 @@ def test_asgi_track_preferences_write_ignores_stale_json_when_postgres_selected(
 
     assert status == 200
     assert _decode_json(body)["track_ref"] == track_ref
-    assert track_preferences_postgres_runtime.payload["actors"]["local"]["track_preferences"] == {
+    assert track_preferences_postgres_runtime.preferences == {
         track_ref: {"rating": 5, "love_tier": "obsessed"}
     }
     assert stale_path.exists()
@@ -2082,12 +2063,14 @@ def test_asgi_track_preferences_write_rehydrates_album_detail_track_rows(
             assert config is app.config
             self.config = config
 
-        def build_album_detail_payload(self, album_key, *, client_surface_class=None):
+        def build_album_detail_payload(self, album_key, *, client_surface_class=None, **taste_scope):
             return build_album_detail_payload(
                 album_key,
                 client_surface_class=client_surface_class,
                 config=self.config,
                 library_state=app.library_state,
+                inventory_library_id=1,
+                **taste_scope,
             )
 
     monkeypatch.setattr(
@@ -2157,7 +2140,7 @@ def test_asgi_track_preferences_write_preserves_validation_errors(
     assert _decode_json(body) == {"ok": False, "error": expected_error}
 
 
-def test_asgi_track_preferences_write_explicit_clear_removes_store_entry(
+def test_asgi_track_preferences_write_explicit_clear_retains_neutral_preference(
     app,
     track_preferences_postgres_runtime,
 ):
@@ -2182,7 +2165,7 @@ def test_asgi_track_preferences_write_explicit_clear_removes_store_entry(
     payload = _decode_json(clear_body)
     assert payload["track_preference"]["rating"] is None
     assert payload["track_preference"]["love_tier"] == "off"
-    assert track_preferences_postgres_runtime.payload["actors"]["local"]["track_preferences"] == {}
+    assert track_preferences_postgres_runtime.preferences == {track_ref: {"rating": None, "love_tier": "off"}}
     assert not (Path(app.config["DATA_DIR"]) / "track_preferences.json").exists()
 
 
@@ -2221,7 +2204,7 @@ def test_asgi_track_preferences_write_partial_updates_preserve_saved_fields(
     love_payload = _decode_json(love_body)
     assert love_payload["track_preference"]["rating"] == 2
     assert love_payload["track_preference"]["love_tier"] == "obsessed"
-    assert track_preferences_postgres_runtime.payload["actors"]["local"]["track_preferences"][track_ref] == {
+    assert track_preferences_postgres_runtime.preferences[track_ref] == {
         "rating": 2,
         "love_tier": "obsessed",
     }

@@ -356,8 +356,10 @@ test('openTagEditor orders a copied track list by disc, track number, and natura
     tracks: originalTracks,
   };
   const overlay = { hidden: true };
+  const applyButton = { disabled: false };
   const boundOverlays = [];
   let renderCount = 0;
+  const scheduledFrames = [];
   const context = loadHelper([album], {
     bindOverlayPointerOrigin(candidate) {
       boundOverlays.push(candidate);
@@ -370,7 +372,7 @@ test('openTagEditor orders a copied track list by disc, track number, and natura
       },
     },
     getTagEditorElements() {
-      return { overlay };
+      return { overlay, applyButton };
     },
     getTagEditorTracks() {
       return originalTracks;
@@ -381,12 +383,25 @@ test('openTagEditor orders a copied track list by disc, track number, and natura
     renderTagEditor() {
       renderCount += 1;
     },
+    scheduleBrowserAnimationFrame(callback) {
+      scheduledFrames.push(callback);
+      return scheduledFrames.length;
+    },
     showRepairAlert(message) {
       throw new Error(message);
     },
   });
 
   context.openTagEditor(album, { tracksMode: 'all' });
+
+  assert.equal(overlay.hidden, false);
+  assert.equal(applyButton.disabled, true);
+  assert.equal(renderCount, 0);
+  assert.equal(scheduledFrames.length, 1);
+  scheduledFrames.shift()();
+  assert.equal(renderCount, 0);
+  assert.equal(scheduledFrames.length, 1);
+  scheduledFrames.shift()();
 
   assert.deepEqual(
     Array.from(context.state.tagEditor.tracks, (track) => track.key),

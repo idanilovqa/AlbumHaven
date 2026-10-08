@@ -22455,6 +22455,11 @@ function renderUtilityModalContent(options = {}) {
     els.detail?.setAttribute('aria-labelledby', selectedTab.id);
   }
   syncUtilityTabAlignment(els);
+  if (options.shellOnly === true) {
+    if (typeof updateSearchClearAction === 'function') updateSearchClearAction(els.search);
+    if (typeof syncMobileUtilityContext === 'function') syncMobileUtilityContext();
+    return;
+  }
   if (activeTab === 'rules') {
     renderUtilityRules();
   } else if (activeTab === 'loops') {
@@ -28735,6 +28740,22 @@ function settleTagEditorSessionMutationClaim(tagEditor = state.tagEditor) {
   settleTagEditViewMutation(claim);
 }
 
+function scheduleTagEditorRenderAfterPaint(tagEditor, els) {
+  const render = () => {
+    if (state.tagEditor !== tagEditor || !els.overlay || els.overlay.hidden) return;
+    renderTagEditor();
+    syncTagEditorAutoNumberControls();
+    if (els.list) els.list.hidden = false;
+    if (els.form) els.form.hidden = false;
+    els.overlay.removeAttribute?.('aria-busy');
+  };
+  if (typeof scheduleBrowserAnimationFrame !== 'function') {
+    render();
+    return;
+  }
+  scheduleBrowserAnimationFrame(() => scheduleBrowserAnimationFrame(render));
+}
+
 function openTagEditor(album, options = {}) {
   if (typeof isMobileClient === 'function' && isMobileClient()) return false;
   const els = getTagEditorElements();
@@ -28752,7 +28773,7 @@ function openTagEditor(album, options = {}) {
     values[path] = getTrackTagInitialValues(track, album);
   });
   settleTagEditorSessionMutationClaim();
-  state.tagEditor = {
+  const tagEditor = {
     album,
     tracks,
     selectedPaths: [String(tracks[0].path || '')].filter(Boolean),
@@ -28768,10 +28789,14 @@ function openTagEditor(album, options = {}) {
     autoNumberAppliedSelectionSignature: '',
     autoNumberTrackNumberSnapshots: {},
   };
+  state.tagEditor = tagEditor;
+  if (els.list) els.list.hidden = true;
+  if (els.form) els.form.hidden = true;
+  if (els.applyButton) els.applyButton.disabled = true;
+  els.overlay.setAttribute?.('aria-busy', 'true');
   els.overlay.hidden = false;
   document.body.classList.add('modal-open');
-  renderTagEditor();
-  syncTagEditorAutoNumberControls();
+  scheduleTagEditorRenderAfterPaint(tagEditor, els);
 }
 
 function autoNumberSelectedTagEditorTracks() {
@@ -37273,6 +37298,13 @@ function attachRepairConfirmEvents() {
 
 // BEGIN js/runtime/bootstrap-utility-event-handlers.js
 
+function waitForUtilityTabPaint() {
+  if (typeof scheduleBrowserAnimationFrame !== 'function') return Promise.resolve();
+  return new Promise((resolve) => {
+    scheduleBrowserAnimationFrame(() => scheduleBrowserAnimationFrame(resolve));
+  });
+}
+
 async function handleUtilityBootstrapClick(event) {
   const removeMissingAlbumButton = event.target.closest('#utility-modal [data-remove-missing-album="1"]');
   if (removeMissingAlbumButton) {
@@ -37334,6 +37366,9 @@ async function handleUtilityBootstrapClick(event) {
     const nextUtilityTab = utilityTabButton.getAttribute('data-utility-tab') || 'problematic-files';
     if (nextUtilityTab === state.utility.activeTab) return;
     setUtilityActiveTab(nextUtilityTab);
+    if (state.utility.activeTab !== nextUtilityTab) return;
+    renderUtilityModalContent({ shellOnly: true });
+    await waitForUtilityTabPaint();
     if (state.utility.activeTab !== nextUtilityTab) return;
     if (state.utility.activeTab === 'rules') {
       loadUtilityRules(!state.utility.rulesLoaded);

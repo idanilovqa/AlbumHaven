@@ -1,3 +1,10 @@
+function waitForUtilityTabPaint() {
+  if (typeof scheduleBrowserAnimationFrame !== 'function') return Promise.resolve();
+  return new Promise((resolve) => {
+    scheduleBrowserAnimationFrame(() => scheduleBrowserAnimationFrame(resolve));
+  });
+}
+
 async function handleUtilityBootstrapClick(event) {
   const removeMissingAlbumButton = event.target.closest('#utility-modal [data-remove-missing-album="1"]');
   if (removeMissingAlbumButton) {
@@ -59,6 +66,9 @@ async function handleUtilityBootstrapClick(event) {
     const nextUtilityTab = utilityTabButton.getAttribute('data-utility-tab') || 'problematic-files';
     if (nextUtilityTab === state.utility.activeTab) return;
     setUtilityActiveTab(nextUtilityTab);
+    if (state.utility.activeTab !== nextUtilityTab) return;
+    renderUtilityModalContent({ shellOnly: true });
+    await waitForUtilityTabPaint();
     if (state.utility.activeTab !== nextUtilityTab) return;
     if (state.utility.activeTab === 'rules') {
       loadUtilityRules(!state.utility.rulesLoaded);

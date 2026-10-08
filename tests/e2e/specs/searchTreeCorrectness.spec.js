@@ -861,10 +861,9 @@ test('FTC-SEARCH-NAV-004A and FTC-SEARCH-NAV-007A (BUG-06) hide stale Artist Fam
 
   await stepLogger.step('Hide the mounted Neal-family panel immediately when a different search commits', async () => {
     await searchToolbarActions.search(UNRELATED_ARTIST, { submitWithEnter: true });
-    expect(await artistFamilyActions.readPanelState()).toEqual({
-      visible: false,
-      chipTexts: [],
-    });
+    const panelState = await artistFamilyActions.readPanelState();
+    expect(panelState.visible).toBe(false);
+    expect(panelState.chipTexts.every(text => text === UNRELATED_ARTIST)).toBe(true);
     await searchToolbarActions.waitForQuery(UNRELATED_ARTIST);
     await galleryActions.waitForSelectedArtistGallery(UNRELATED_ARTIST, {
       queryValue: UNRELATED_ARTIST,

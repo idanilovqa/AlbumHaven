@@ -63,6 +63,9 @@ def build_home_payload(*, app, query_args, **kwargs):
     kwargs.setdefault("logger", app.logger)
     kwargs.setdefault("library_state", app.library_state)
     kwargs.setdefault("query_args", query_args)
+    kwargs.setdefault("account_id", 41)
+    kwargs.setdefault("library_id", 73)
+    kwargs.setdefault("allowed_actions_for_album", lambda _album: AllowedActions(("library.browse.read", "library.media.read")))
     return _build_home_payload(**kwargs)
 
 
@@ -96,12 +99,50 @@ def test_view_payloads_source_uses_asgi_runtime_carrier_without_direct_flask_imp
     assert all(pattern not in source for pattern in forbidden)
 
 
-def _use_listen_history_read_seam(monkeypatch, items):
+def _use_listen_history_read_seam(monkeypatch, items, app):
+    from music_app.services.listen_history_postgres import PostgresListenHistoryAdapter
+    from music_app.services.gallery_playback_context import album_can_play_in_gallery_context
+
     seeded_items = [dict(item) for item in items]
-    monkeypatch.setattr(
-        "music_app.services.recent_listen_read_seams.load_listen_history",
-        lambda _config: [dict(item) for item in seeded_items],
-    )
+
+    def load_recent(_self, *, account_id, library_id, window_start, window_end):
+        assert (account_id, library_id) == (41, 73)
+        return [
+            {
+                "id": index, "account_id": 41, "library_id": 73,
+                "track_id": None, "album_id": None,
+                "track_key": item.get("track_ref") or item.get("path"),
+                "played_at": datetime.fromisoformat(item["recorded_at"]),
+                "source_family": "runtime_listen_history_adapter",
+                "measurement_version": None, "measured_listened_seconds": None,
+                "finalized": None, "metadata": {"source_payload": dict(item)},
+            }
+            for index, item in enumerate(seeded_items, 1)
+        ]
+
+    def album_candidates(_self, *, library_id, legacy_track_refs):
+        assert library_id == 73
+        def value(item, key, default=None):
+            return item.get(key, default) if isinstance(item, dict) else getattr(item, key, default)
+        return [
+            {
+                "id": index, "key": value(album, "key"), "name": value(album, "name"),
+                "album_artist": value(album, "album_artist"),
+                "album_track_count": len(value(album, "tracks", [])),
+                "total_duration_seconds": value(album, "total_duration_seconds"),
+                "can_play": album_can_play_in_gallery_context(album),
+                "legacy_track_refs": {
+                    ref: index * 1000 + track_index
+                    for track_index, track in enumerate(value(album, "tracks", []), 1)
+                    for ref in (value(track, "path"), value(track, "track_ref"))
+                    if ref and ref in legacy_track_refs
+                },
+            }
+            for index, album in enumerate(app.library_state.get("albums", []), 1)
+        ]
+
+    monkeypatch.setattr(PostgresListenHistoryAdapter, "load_recent_items", load_recent, raising=False)
+    monkeypatch.setattr(PostgresListenHistoryAdapter, "load_recent_album_candidates", album_candidates, raising=False)
     monkeypatch.setattr(
         "music_app.services.track_stats.load_listen_history",
         lambda _config: [dict(item) for item in seeded_items],
@@ -245,8 +286,17 @@ def _stub_ignored_version_keys(monkeypatch):
 
 @pytest.fixture(autouse=True)
 def _stub_recent_listen_runtime_seams(monkeypatch):
-    monkeypatch.setattr("music_app.services.recent_listen_read_seams.get_lastfm_user_timezone", lambda _config: "")
-    monkeypatch.setattr("music_app.services.recent_listen_read_seams.load_listen_history", lambda _config: [])
+    # These are view-unit repository fixtures; real SQL coverage lives in the
+    # scoped Postgres tests. Individual Home cases replace them with owned data.
+    from music_app.services.listen_history_postgres import PostgresListenHistoryAdapter
+
+    monkeypatch.setattr(
+        "music_app.services.listen_history._listen_history_adapter",
+        lambda config: PostgresListenHistoryAdapter(config),
+    )
+    monkeypatch.setattr("music_app.services.recent_listen_read_seams.get_lastfm_user_timezone", lambda _config, *, account_id: "UTC")
+    monkeypatch.setattr(PostgresListenHistoryAdapter, "load_recent_items", lambda _self, **_kwargs: [])
+    monkeypatch.setattr(PostgresListenHistoryAdapter, "load_recent_album_candidates", lambda _self, **_kwargs: [])
     monkeypatch.setattr("music_app.services.track_stats.load_listen_history", lambda _config: [])
 
 
@@ -966,6 +1016,36 @@ def test_build_home_payload_requires_explicit_state_without_flask_context(app):
             config=dict(app.config),
             logger=app.logger,
         )
+
+
+def test_private_home_requires_scope_before_building_any_payload(app, monkeypatch):
+    def forbidden(**_kwargs):
+        raise AssertionError("Unscoped private Home must not build the shell or read history")
+
+    monkeypatch.setattr(view_payloads_module, "build_view_payload", forbidden)
+    with pytest.raises(ValueError):
+        _build_home_payload(config=app.config, library_state=app.library_state)
+
+
+@pytest.mark.parametrize("surface", ["public_home", "news"])
+def test_home_public_and_news_shells_do_not_load_private_listening(app, monkeypatch, surface):
+    def forbidden(*_args, **_kwargs):
+        raise AssertionError("This shell must not read private Home history")
+
+    monkeypatch.setattr(view_payloads_module, "build_recent_listen_payloads", forbidden)
+    if surface == "public_home":
+        payload = _build_home_payload(
+            public_safe=True, config=app.config, library_state=app.library_state,
+            query_args=_query_args_from_url("/"),
+        )
+    else:
+        payload = view_payloads_module.build_news_payload(
+            config=app.config, library_state=app.library_state,
+            query_args=_query_args_from_url("/news"),
+        )
+        assert payload["shell_layout"]["slots"]["main_content"]["surface_ref"] == "news"
+    assert payload.get("recent_local_albums", []) == []
+    assert payload.get("recent_not_local_albums", []) == []
 
 
 def test_build_view_payload_uses_explicit_config_inside_flask_context(app):
@@ -2074,6 +2154,7 @@ def test_build_home_payload_adds_recent_local_album_rows_from_listen_history_rea
                 "source_provenance": {"kind": "local_playback", "provider": "album_haven"},
             },
         ],
+        app,
     )
 
     st = app.library_state
@@ -2116,9 +2197,12 @@ def test_build_home_payload_adds_recent_local_album_rows_from_listen_history_rea
             "listened_track_count": 2,
             "album_track_count": 2,
             "listened_duration_seconds": 540.0,
+            "listen_event_count": 2,
+            "listened_duration_by_source": {"runtime_listen_history_adapter": 540.0},
+            "time_provenance": ["legacy_recorded_at"],
             "album_duration_seconds": 540,
-            "completion_state": "full",
-            "sitting_state": "one_sitting",
+            "completion_state": None,
+            "sitting_state": None,
             "last_listened_at": (now - timedelta(minutes=3)).isoformat(),
             "allowed_actions": {
                 "can_open_album": True,
@@ -2147,6 +2231,7 @@ def test_build_home_payload_counts_identity_matched_imported_local_album_tracks(
                 "source_provenance": {"kind": "lastfm_import", "provider": "lastfm"},
             },
         ],
+        app,
     )
 
     st = app.library_state
@@ -2181,7 +2266,7 @@ def test_build_home_payload_counts_identity_matched_imported_local_album_tracks(
     assert payload["recent_not_local_albums"] == []
     assert payload["recent_local_albums"][0]["album_ref"] == "mono-1"
     assert payload["recent_local_albums"][0]["listened_track_count"] == 1
-    assert payload["recent_local_albums"][0]["completion_state"] == "partial"
+    assert payload["recent_local_albums"][0]["completion_state"] is None
 
 
 def test_build_home_payload_recent_fallback_uses_shared_artist_identity_without_accepting_collaborations(
@@ -2226,6 +2311,7 @@ def test_build_home_payload_recent_fallback_uses_shared_artist_identity_without_
                 "source_provenance": {"kind": "lastfm_import", "provider": "lastfm"},
             },
         ],
+        app,
     )
 
     app.library_state["albums"] = [
@@ -2283,6 +2369,7 @@ def test_build_home_payload_recent_fallback_keeps_shared_identity_ambiguity_unma
                 "source_provenance": {"kind": "lastfm_import", "provider": "lastfm"},
             }
         ],
+        app,
     )
 
     def local_album(key, artist):
@@ -2345,6 +2432,7 @@ def test_build_home_payload_keeps_unmatched_external_recent_rows_separate_and_co
                 "remote_cover_thumbnail_url": "https://images.example/stereolab-thumb.jpg",
             },
         ],
+        app,
     )
 
     st = app.library_state
@@ -2368,9 +2456,12 @@ def test_build_home_payload_keeps_unmatched_external_recent_rows_separate_and_co
             "listened_track_count": 1,
             "album_track_count": None,
             "listened_duration_seconds": 245.0,
+            "listen_event_count": 1,
+            "listened_duration_by_source": {"runtime_listen_history_adapter": 245.0},
+            "time_provenance": ["legacy_recorded_at"],
             "album_duration_seconds": None,
             "completion_state": None,
-            "sitting_state": "one_sitting",
+            "sitting_state": None,
             "last_listened_at": (now - timedelta(hours=1, minutes=55)).isoformat(),
             "remote_cover_url": "https://images.example/stereolab-full.jpg",
             "remote_cover_thumbnail_url": "https://images.example/stereolab-thumb.jpg",
@@ -2416,6 +2507,7 @@ def test_build_home_payload_public_safe_omits_private_recent_listen_rows(app, mo
                 "source_provenance": {"kind": "lastfm_import", "provider": "lastfm"},
             },
         ],
+        app,
     )
 
     st = app.library_state

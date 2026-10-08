@@ -1685,7 +1685,9 @@ async function confirmMissingAlbumRemoval(album, options = {}) {
         if (refreshedAlbum && !modal.overlay.hidden
           && loadToken === state.ui.pendingTrackModalLoadToken
           && getTrackModalAlbumRequestKey(getCurrentTrackModalAlbum()) === albumKey) {
-          openTrackModal(refreshedAlbum, { coverLightboxGallery: state.ui.trackModalCoverLightboxGallery });
+          openTrackModal(refreshedAlbum, { coverLightboxGallery: state.ui.trackModalCoverLightboxGallery,
+            presentationRestrictions: typeof getTrackModalPresentationRestrictions === 'function' ? getTrackModalPresentationRestrictions() : undefined,
+            sourcePageOwner: typeof getTrackModalSourcePageOwner === 'function' ? getTrackModalSourcePageOwner() : undefined });
         }
       }
       const conflictMessage = String(
@@ -1728,6 +1730,7 @@ async function confirmMissingAlbumRemoval(album, options = {}) {
 }
 
 function renderTrackModalRelease(album) {
+  if (typeof reconcileTrackModalSelectionAlbum === 'function') reconcileTrackModalSelectionAlbum(album);
   let els = getTrackModalElements();
   if (!els.overlay || !album) return;
   const renderAlbumArtbox = typeof buildAlbumArtboxHtml === 'function'
@@ -1838,6 +1841,7 @@ function renderTrackModalRelease(album) {
     const remoteCoverUrlRaw = String(album?.remote_cover_thumbnail_url || album?.remote_cover_url || '').trim();
     const localCoverPath = escapeHtml(localCoverPathRaw);
     const remoteCoverUrl = escapeHtml(remoteCoverUrlRaw);
+    const artworkAllowed = typeof canViewTrackModalArtwork !== 'function' || canViewTrackModalArtwork();
     const lightboxGalleryAttribute = state.ui?.trackModalCoverLightboxGallery === false
       ? ''
       : ' data-lightbox-gallery="visible"';
@@ -1846,7 +1850,7 @@ function renderTrackModalRelease(album) {
       ${renderAlbumArtbox({
         state: 'ready',
         label: `Album cover for ${album.name}`,
-        coverHtml: `<button class="track-modal-cover-button" type="button" data-open-lightbox="1" data-cover-src="${escapeHtml(lightboxSrc)}" data-cover-preview-src="${escapeHtml(coverSrc)}" data-cover-alt="${escapeHtml(`Album cover for ${album.name}`)}" data-album-key="${albumKey}"${lightboxGalleryAttribute}><span class="track-modal-cover-image-slot"></span></button>`,
+        coverHtml: `<button class="track-modal-cover-button" type="button"${artworkAllowed ? ' data-open-lightbox="1"' : ' disabled aria-disabled="true"'} data-cover-src="${escapeHtml(lightboxSrc)}" data-cover-preview-src="${escapeHtml(coverSrc)}" data-cover-alt="${escapeHtml(`Album cover for ${album.name}`)}" data-album-key="${albumKey}"${lightboxGalleryAttribute}><span class="track-modal-cover-image-slot"></span></button>`,
         overlayHtml: coverToolsHtml,
       })}
       ${coverSourceBadge}
@@ -1892,7 +1896,7 @@ function renderTrackModalRelease(album) {
         && typeof loadGalleryCoverPreviewImage === 'function'
       ) {
         const ownsCurrentModalCover = () => {
-          if (els.overlay.hidden || !modalCoverImage.isConnected) return false;
+          if (!(typeof isTrackModalContentVisible === 'function' ? isTrackModalContentVisible() : !els.overlay.hidden) || !modalCoverImage.isConnected) return false;
           if (els.cover.querySelector('.track-modal-cover-visual img') !== modalCoverImage) return false;
           const currentAlbum = state.modalReleases[state.modalReleaseIndex] || null;
           return getTrackModalAlbumRequestKey(currentAlbum) === resolvedAlbumKey;
@@ -1976,6 +1980,7 @@ function renderTrackModalRelease(album) {
     els.footer.hidden = true;
   }
   renderTrackModalTabs(els);
+  if (typeof decorateTrackModalSelection === 'function') decorateTrackModalSelection();
   refreshTrackModalPlaybackState();
   if (typeof attachSharedPlayer === 'function') attachSharedPlayer();
 }
@@ -2348,14 +2353,17 @@ function getNextQueuedTrack() {
 }
 
 function refreshTrackModalPlaybackState() {
-  const trackModal = document.getElementById('track-modal');
-  if (!trackModal || trackModal.hidden) return;
+  const trackModal = typeof getTrackModalContentRoot === 'function' ? getTrackModalContentRoot() : document.getElementById('track-modal');
+  if (!trackModal || (typeof isTrackModalContentVisible === 'function' ? !isTrackModalContentVisible() : trackModal.hidden)) return;
   const playback = getPlayerPlaybackSnapshot();
   const currentTrackPath = String(state.player.current?.path || '');
   const activeCurrent = formatTrackDuration(Math.floor(playback.currentTime || 0)) || '0:00';
   const activeDuration = formatTrackDuration(playback.duration) || '0:00';
 
-  document.querySelectorAll('#track-modal [data-track-row-path]').forEach((row) => {
+  const selection = typeof getTrackModalSelectionLease === 'function' ? getTrackModalSelectionLease() : null;
+  const rows = selection ? selection.dialog.querySelectorAll('[data-track-row-path]')
+    : document.querySelectorAll('#track-modal [data-track-row-path]');
+  rows.forEach((row) => {
     const rowPath = String(row.getAttribute('data-track-row-path') || '');
     const isCurrentTrack = currentTrackPath && currentTrackPath === rowPath;
     const isActivelyPlaying = isCurrentTrack && !playback.paused && !playback.ended;

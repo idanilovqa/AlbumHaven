@@ -357,6 +357,7 @@ function hideGalleryOptionsMenu() {
 }
 
 function openNonAlbumModal() {
+  if (typeof deferAppFormPageReplacement === 'function' && deferAppFormPageReplacement(openNonAlbumModal)) return;
   const els = getNonAlbumModalElements();
   if (!els.overlay || !els.table) return;
   bindOverlayPointerOrigin(els.overlay);
@@ -582,11 +583,12 @@ async function openAlbumInExplorer(album) {
 }
 
 function getTrackModalElements() {
+  const selected = typeof getTrackModalSelectionLease === 'function' ? getTrackModalSelectionLease() : null;
   return {
     overlay: document.getElementById('track-modal'),
-    header: typeof document.querySelector === 'function'
+    header: selected?.dialog?.querySelector('.track-modal-header') || (typeof document.querySelector === 'function'
       ? document.querySelector('#track-modal > .track-modal-dialog > .track-modal-header')
-      : null,
+      : null),
     title: document.getElementById('track-modal-title'),
     subtitle: document.getElementById('track-modal-subtitle'),
     cover: document.getElementById('track-modal-cover'),

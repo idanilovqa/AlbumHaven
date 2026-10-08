@@ -57,6 +57,20 @@ function mountRecent() {
 function ready(env, data = payload(), selectedAlbumRef = null) {
   env.recent.update({ status: 'ready', payload: data, selectedAlbumRef });
 }
+
+test('Recent display choices reuse native card identity and preserve controlled grants', () => {
+  const env = mountRecent(), data = payload();
+  env.recent.update({status: 'ready', payload: data, displayMode: 'cards'});
+  const original = cards(env.element)[0];
+  for (const mode of ['list', 'covers', 'cards']) {
+    env.recent.update({status: 'ready', payload: data, displayMode: mode});
+    assert.equal(cards(env.element)[0], original);
+    assert.equal(original.getAttribute('data-gallery-display'), mode);
+    assert.equal(env.element.querySelector('.home-recent__rows').dataset.homeDisplay, mode);
+    assert.equal(intentButtons(original, 'play').length, 1);
+    assert.equal(original.querySelector('[data-open-tracklist]'), null);
+  }
+});
 function intentButtons(root, intent) {
   return root.querySelectorAll(`[data-gallery-card-intent="${intent}"]`);
 }
@@ -275,6 +289,7 @@ test('server action gates reject denied, external, malformed and truthy-but-not-
   const badLocal = [
     localRow({ album_ref: 'denied', allowed_actions: { can_open_album: false, can_play_album: true } }),
     localRow({ album_ref: 'truthy', allowed_actions: { can_open_album: 'true', can_play_album: 1 } }),
+    localRow({ album_ref: 'inherited', allowed_actions: Object.create({ can_open_album: true, can_play_album: true }) }),
     localRow({ album_ref: 'unmatched', local_match_state: 'not_local' }),
     localRow({ album_ref: 'unknown-kind', row_kind: 'unknown' }),
     localRow({ album_ref: '' }), localRow({ album_ref: null }),
@@ -284,6 +299,84 @@ test('server action gates reject denied, external, malformed and truthy-but-not-
   assertNoNativeHooks(env.element);
   for (const row of cards(env.recent.body)) env.click(row);
   assert.deepEqual(env.intents, []);
+});
+
+test('custom detail selection uses the native card without authorizing Open or Play', () => {
+  const env = mountRecent(), row = localRow({allowed_actions: {can_view_details: true, can_open_album: false, can_play_album: true}});
+  let outerClicks = 0;
+  env.document.body.addEventListener('click', () => {outerClicks++;});
+  for (const displayMode of ['list', 'cards', 'covers']) {
+    env.recent.update({status: 'ready', payload: payload([row], []), selectionMode: 'details', displayMode, selectedAlbumRef: row.album_ref});
+    const select = controlFor(env.recent.body, 'select', row.album_ref), card = select.closest('.album-card');
+    assert.equal(card.getAttribute('data-gallery-display'), displayMode);
+    assert.equal(select.tagName, 'BUTTON'); assert.equal(select.getAttribute('aria-pressed'), 'true');
+    assert.equal(intentButtons(card, 'open').length, 0); assert.equal(intentButtons(card, 'play').length, 0);
+    assertNoNativeHooks(card);
+    env.click(select.querySelector('svg, span') || select);
+    assert.deepEqual(env.intents.splice(0), [['SelectAlbum', [row.album_ref]]]);
+    // Even a forged current-card intent cannot turn the detail grant into
+    // browsing or playback authority at the delegated activation boundary.
+    for (const intent of ['open', 'play']) {
+      const forged = env.document.createElement('button');
+      forged.setAttribute('data-gallery-card-intent', intent); forged.setAttribute('data-gallery-card-ref', row.album_ref);
+      card.append(forged); env.click(forged); forged.remove();
+    }
+    assert.deepEqual(env.intents, []);
+  }
+  assert.equal(outerClicks, 0); assert.deepEqual(env.forbiddenCalls, []);
+});
+
+test('custom selection requires its own exact grant while native Open and Play remain independent', () => {
+  const env = mountRecent(), nativeGrants = {can_open_album: true, can_play_album: true};
+  const grants = [nativeGrants, {...nativeGrants, can_view_details: false}, {...nativeGrants, can_view_details: 'true'},
+    Object.assign(Object.create({can_view_details: true}), nativeGrants),
+    {can_view_details: true, can_open_album: true, can_play_album: false},
+    Object.assign(Object.create({can_open_album: true, can_play_album: true}), {can_view_details: true})];
+  const rows = grants.map((allowed_actions, index) => localRow({album_ref: `album:grant-${index}`, allowed_actions}));
+  env.recent.update({status: 'ready', payload: payload(rows, []), selectionMode: 'details'});
+  for (let index = 0; index < rows.length; index++) {
+    const ref = rows[index].album_ref, card = cards(env.recent.body)[index];
+    assert.equal(intentButtons(card, 'select').length, index >= 4 ? 1 : 0, `detail selection grant ${index}`);
+    assert.equal(intentButtons(card, 'open').length, index < 5 ? 1 : 0, `native Open grant ${index}`);
+    assert.equal(intentButtons(card, 'play').length, index < 4 ? 1 : 0, `native Play grant ${index}`);
+    for (const [intent, callback] of albumIntents) {
+      const control = intentButtons(card, intent)[0];
+      if (control) {env.click(control); assert.deepEqual(env.intents.splice(0), [[callback, [ref]]]);}
+      else {
+        const forged = env.document.createElement('button');
+        forged.setAttribute('data-gallery-card-intent', intent); forged.setAttribute('data-gallery-card-ref', ref);
+        card.append(forged); env.click(forged); forged.remove(); assert.deepEqual(env.intents, []);
+      }
+    }
+  }
+});
+
+test('detail selection rejects external, ambiguous and malformed identities despite supplied detail grants', () => {
+  const env = mountRecent(), allowed_actions = {can_view_details: true};
+  const rows = [localRow({album_ref: 'duplicate', allowed_actions}), localRow({album_ref: 'duplicate', allowed_actions}),
+    localRow({album_ref: '', allowed_actions}), localRow({album_ref: 'unmatched', local_match_state: 'not_local', allowed_actions})];
+  env.recent.update({status: 'ready', payload: payload(rows, [externalRow({album_ref: 'external', allowed_actions})]), selectionMode: 'details'});
+  assert.equal(env.recent.body.querySelectorAll('[data-gallery-card-intent]').length, 0);
+  assertNoNativeHooks(env.recent.body);
+});
+
+test('changing the detail reader mode or row grant immediately retires former Select controls', () => {
+  const row = localRow({allowed_actions: {can_view_details: true, can_open_album: false, can_play_album: false}});
+  for (const change of ['reader removed', 'grant denied', 'grant inherited', 'loading', 'denied']) {
+    const env = mountRecent();
+    env.recent.update({status: 'ready', payload: payload([row], []), selectionMode: 'details'});
+    const previous = controlFor(env.recent.body, 'select', row.album_ref), card = previous.closest('.album-card');
+    const nextRow = change === 'grant denied' ? {...row, allowed_actions: {can_view_details: false}}
+      : change === 'grant inherited' ? {...row, allowed_actions: Object.create({can_view_details: true})} : row;
+    env.recent.update({status: ['loading', 'denied'].includes(change) ? change : 'ready',
+      payload: payload([nextRow], []), selectionMode: change === 'reader removed' ? 'native' : 'details'});
+    assert.equal(intentButtons(env.recent.body, 'select').length, 0, change);
+    // Reinsert the old control into its actual keyed card so a detached-node
+    // check alone cannot pass the current-mode/current-grant assertion.
+    card.append(previous); if (!env.recent.body.contains(card)) env.recent.body.append(card);
+    env.click(previous); assert.deepEqual(env.intents, [], change);
+    env.recent.dispose();
+  }
 });
 
 test('open permission does not imply PLAY and stale references lose authority on every current-state replacement', () => {

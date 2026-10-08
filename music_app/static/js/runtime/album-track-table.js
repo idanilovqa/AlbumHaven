@@ -15,32 +15,34 @@ function buildAlbumTrackPlayButtonHtml(track = {}) {
 }
 
 function buildAlbumTrackTableRow(track = {}, index = 0, config = {}) {
-  const trackPath = String(track.path || '');
+  const readOnly = config.readOnly === true;
+  const trackPath = readOnly ? '' : String(track.path || '');
   const classes = ['album-track-table__row'];
-  if (track.isCurrent) classes.push('album-track-table__row--current');
-  if (track.isPlaying) classes.push('album-track-table__row--playing');
+  if (track.availability === 'missing') classes.push('album-track-table__row--missing');
+  if (!readOnly && track.isCurrent) classes.push('album-track-table__row--current');
+  if (!readOnly && track.isPlaying) classes.push('album-track-table__row--playing');
   if (track.isSearchMatch) classes.push('album-track-table__row--search-match');
-  if (track.isPlaying && config.playingAnimation !== false) classes.push('album-track-table__row--animated');
+  if (!readOnly && track.isPlaying && config.playingAnimation !== false) classes.push('album-track-table__row--animated');
   const secondary = String(track.secondaryArtist || track.secondary_artist || '').trim();
   const titleHtml = `<span class="album-track-table__title">${escapeHtml(track.title || '')}${secondary ? `<span class="album-track-table__secondary">${escapeHtml(secondary)}</span>` : ''}</span>`;
-  const problemHtml = track.isProblematic
+  const problemHtml = !readOnly && track.isProblematic
     ? `<button class="track-problem-link" type="button" data-open-track-problematic="1" data-track-path="${escapeHtml(trackPath)}" title="Open this track in Problematic Files" aria-label="Open this track in Problematic Files">!</button>`
     : '';
-  const displayPath = String(track.displayPath || track.display_path || trackPath).trim();
+  const displayPath = readOnly ? '' : String(track.displayPath || track.display_path || trackPath).trim();
   return {
-    key: trackPath || `${index + 1}`,
+    key: readOnly ? String(track.id || index + 1) : trackPath || `${index + 1}`,
     className: classes.join(' '),
-    dataAttributes: {
+    dataAttributes: readOnly ? {} : {
       'track-row-path': trackPath,
       'track-search-match': track.isSearchMatch ? 'true' : '',
       'track-playing': track.isPlaying ? 'true' : '',
     },
     cells: {
-      number: { content: `<span class="album-track-table__number-play"><span class="album-track-table__number">${escapeHtml(track.trackNumber || track.track_number || index + 1)}</span>${buildAlbumTrackPlayButtonHtml(track)}</span>` },
+      number: { content: `<span class="album-track-table__number-play"><span class="album-track-table__number">${escapeHtml(track.trackNumber || track.track_number || index + 1)}</span>${readOnly ? '' : buildAlbumTrackPlayButtonHtml(track)}</span>` },
       title: { content: titleHtml },
       path: { content: `<span class="album-track-table__path" title="${escapeHtml(displayPath)}">${escapeHtml(displayPath)}</span>` },
       problem: { content: problemHtml },
-      duration: { content: `<span class="track-duration" data-track-duration-path="${escapeHtml(trackPath)}" data-original-duration="${escapeHtml(track.originalDuration || track.duration || '')}">${escapeHtml(track.duration || '')}</span>` },
+      duration: { content: `<span class="track-duration" ${readOnly ? '' : `data-track-duration-path="${escapeHtml(trackPath)}" data-original-duration="${escapeHtml(track.originalDuration || track.duration || '')}"`}>${escapeHtml(track.duration || '')}</span>` },
     },
   };
 }

@@ -14,8 +14,13 @@ function parseCurrentBrowserUrlState() {
   return parseBrowserUrlState(getBrowserLocationHref());
 }
 
-function pushBrowserViewState(view, stateSnapshot = view) {
+function pushBrowserViewState(view, stateSnapshot = view, retainedPlaylistDraft = null) {
   const settingsNavigation = window.AlbumHavenSettingsNavigation?.instance;
+  const marker = retainedPlaylistDraft || settingsNavigation?.retainedPlaylistDraft?.();
+  if (marker) {
+    if (!settingsNavigation?.isPlaylistDraftCurrent?.(marker)) return false;
+    stateSnapshot = {playlistDraft: {token: marker.token, scopeKey: marker.scopeKey}};
+  }
   if (settingsNavigation?.pushLibraryHistory) {
     settingsNavigation.pushLibraryHistory(buildUrl(view), stateSnapshot);
   } else {

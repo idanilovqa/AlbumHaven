@@ -7,42 +7,147 @@ function getBrowserDialogTarget() {
 }
 
 let activeAppFormDialog = null;
+let appFormSequence = 0;
+function appFormScopeIdentity() {
+  const shell = document.getElementById('app-shell'), home = document.getElementById('mobile-home');
+  return JSON.stringify([shell?.dataset?.nativeAccountId ?? home?.dataset?.homeAccountId ?? '',
+    shell?.dataset?.nativeLibraryId ?? home?.dataset?.homeLibraryId ?? '']);
+}
+function getActiveAppFormPage() {
+  return activeAppFormDialog?.pageId && activeAppFormDialog.isActive() ? activeAppFormDialog : null;
+}
 function showAppFormDialog(options = {}) {
+  if (typeof isMobileFormReturning === 'function' && isMobileFormReturning()) return Promise.resolve(null);
   if (activeAppFormDialog) {
-    if (options.anchor && activeAppFormDialog.anchor === options.anchor) activeAppFormDialog.close?.();
-    return activeAppFormDialog?.promise || Promise.resolve(null);
+    const active = activeAppFormDialog;
+    if (options.anchor && active.anchor === options.anchor) active.dismiss('cancel');
+    return active.promise;
   }
   const get = name => document.getElementById(`app-form-${name}`);
   const modal = get('modal'), title = get('title'), content = get('content'), error = get('error'), cancel = get('cancel'), submit = get('submit');
   if (!modal || !title || !content || !error || !cancel || !submit) return Promise.resolve(null);
   const previousFocus = document.activeElement;
+  // Parent ownership belongs here, alongside native dismissal and focus. A
+  // request form can retain the one drawer without another overlay or trap.
+  const parentSurface = options.parentSurface === '#cover-lookup-drawer'
+    ? document.getElementById('cover-lookup-drawer') : null;
+  const parent = parentSurface && !parentSurface.hidden ? parentSurface : null;
+  const parentInert = parent?.inert;
+  const previousLayer = modal.style.zIndex;
+  const containParentClick = event => event.stopPropagation();
   const anchor = options.anchor;
+  const contentOwnsFooter = options.contentOwnsFooter === true;
+  const footer = contentOwnsFooter ? cancel.closest?.('.confirm-modal-actions') : null;
+  const footerHidden = footer?.hidden;
+  const contentTabIndex = contentOwnsFooter ? content.getAttribute('tabindex') : null;
   const anchoredPanel = anchor ? modal.querySelector('.confirm-modal-dialog') : null;
   const listeners = [];
-  let positionObserver = null;
+  let positionObserver = null, focusObserver = null;
   const listen = (node, name, handler) => { node.addEventListener(name, handler); listeners.push([node, name, handler]); };
   let resolve; const promise = new Promise(done => { resolve = done; });
-  const owner = { promise, anchor }; activeAppFormDialog = owner;
-  let submitEnabled = options.submitEnabled !== false, submitting = false;
-  const syncSubmit = () => { if (activeAppFormDialog === owner) submit.disabled = submitting || !submitEnabled; };
+  const pageId = typeof options.pageId === 'string' && options.pageId.trim() ? options.pageId : null;
+  const sequence = ++appFormSequence, scope = appFormScopeIdentity();
+  const token = `app-form-${Date.now().toString(36)}-${sequence}-${Math.random().toString(36).slice(2)}`;
+  const owner = { promise, anchor, pageId, token, title: options.title || 'Settings' }; activeAppFormDialog = owner;
+  const guarded = typeof options.beforeDismiss === 'function';
+  const contentInert = content.inert;
+  let submitEnabled = options.submitEnabled !== false, submitting = false, finishing = false, dismissal = null;
+  const syncSubmit = () => {
+    if (activeAppFormDialog !== owner) return;
+    submit.disabled = submitting || Boolean(dismissal) || !submitEnabled;
+    cancel.disabled = Boolean(dismissal) || (guarded && submitting);
+    if (guarded) content.inert = Boolean(dismissal) || contentInert;
+  };
   const controls = { setSubmitEnabled(value) {
     if (activeAppFormDialog !== owner) return;
     submitEnabled = Boolean(value); syncSubmit();
-  } };
-  const finish = value => {
-    if (activeAppFormDialog !== owner) return;
+  }, close: (value, closeOptions = {}) => guarded && closeOptions.force !== true
+    ? requestDismiss(closeOptions.reason || 'cancel', closeOptions, value)
+    : finish(value ?? null, closeOptions), dismiss: (reason, closeOptions) => requestDismiss(reason, closeOptions) };
+  const finish = (value, {restoreFocus = true, updateHistory = true, returnToParent = true} = {}) => {
+    if (activeAppFormDialog !== owner || finishing) return false;
+    finishing = true;
+    modal.hidden = true;
     listeners.forEach(([node, name, handler]) => node.removeEventListener(name, handler));
     positionObserver?.disconnect();
-    options.onClose?.(content);
-    if (anchoredPanel) { clearTriggerAnchor(anchoredPanel); anchoredPanel.removeAttribute('style'); anchoredPanel.setAttribute('aria-modal', 'true'); modal.classList.remove('app-form-anchored'); }
-    modal.classList?.remove('app-form-reading'); submit.hidden = false;
-    modal.hidden = true; content.innerHTML = ''; activeAppFormDialog = null;
-    resolve(value); previousFocus?.focus?.({ preventScroll: true });
+    focusObserver?.disconnect();
+    let navigation = null, completion;
+    const settled = (returned = true) => {
+      const current = returned !== false && owner.isCurrentContext();
+      try { options.onAfterClose?.(content, {restoreFocus, returnToParent, current}); }
+      finally {
+        resolve(current ? value : null);
+        if (restoreFocus && current && owner.isCurrentContext() && !activeAppFormDialog) {
+          const available = node => Boolean(node) && node.isConnected !== false && !node.disabled
+            && node.getAttribute?.('aria-disabled') !== 'true' && !node.closest?.('[hidden], [inert]');
+          const fallback = options.returnFocus?.() || (parent ? document.querySelector?.('#cover-lookup-drawer [data-close-cover-lookup-drawer]') : null);
+          const target = available(previousFocus) ? previousFocus : available(fallback) ? fallback
+            : parent ? document.getElementById('cover-lookup-drawer-button') : null;
+          if (available(target)) target?.focus?.({preventScroll: true});
+        }
+      }
+      return current;
+    };
+    try {
+      if (activeAppConfirmDialog?.formOwner === owner) activeAppConfirmDialog.cancel({restoreFocus: false});
+      if (pageId && typeof retireMobileAppFormPage === 'function') {
+        navigation = retireMobileAppFormPage(owner.token, {restoreFocus, updateHistory, returnToParent, isCurrent: owner.isCurrentContext});
+      }
+      options.onClose?.(content, {restoreFocus});
+    }
+    finally {
+      if (contentOwnsFooter) {
+        if (footer) footer.hidden = footerHidden;
+        if (contentTabIndex === null) content.removeAttribute('tabindex');
+        else content.setAttribute('tabindex', contentTabIndex);
+        cancel.hidden = false;
+      }
+      if (anchoredPanel) { clearTriggerAnchor(anchoredPanel); anchoredPanel.removeAttribute('style'); anchoredPanel.setAttribute('aria-modal', 'true'); modal.classList.remove('app-form-anchored'); }
+      modal.classList?.remove('app-form-reading'); submit.hidden = false;
+      content.inert = contentInert; cancel.disabled = false;
+      content.innerHTML = ''; activeAppFormDialog = null;
+      modal.style.zIndex = previousLayer;
+      if (parent) {
+        parent.inert = parentInert;
+        // A content action may close before the click reaches this modal. Keep
+        // containment through that event so the drawer does not close as an
+        // unrelated outside click, then release only this form's listener.
+        window.setTimeout(() => modal.removeEventListener('click', containParentClick), 0);
+        if (!returnToParent && owner.isCurrentContext() && typeof closeNotificationDrawer === 'function') closeNotificationDrawer();
+      }
+      completion = navigation ? Promise.resolve(navigation).then(settled) : settled();
+    }
+    return completion;
   };
-  owner.close = () => finish(null);
+  const requestDismiss = (reason = 'cancel', closeOptions = {}, value = null) => {
+    if (activeAppFormDialog !== owner || finishing || (guarded && submitting)) return Promise.resolve(false);
+    if (dismissal) return dismissal;
+    if (!guarded) return Promise.resolve(finish(value ?? null, closeOptions));
+    const dismissFocus = document.activeElement;
+    // Defer the callback until the shared pending token is installed. Reentrant
+    // clicks, Back and Escape all await this exact decision.
+    dismissal = Promise.resolve().then(() => owner.isActive() && owner.isCurrentContext() ? options.beforeDismiss(reason) : false)
+      .catch(() => false).then(accepted => {
+      if (owner.isActive() && !owner.isCurrentContext()) {
+        finish(null, {restoreFocus: false, returnToParent: false}); return false;
+      }
+      if (activeAppFormDialog !== owner || finishing || accepted !== true) return false;
+      return finish(value ?? null, closeOptions);
+    }).finally(() => {
+      dismissal = null; syncSubmit();
+      if (activeAppFormDialog === owner && !activeAppConfirmDialog && dismissFocus?.isConnected !== false
+        && !dismissFocus?.closest?.('[hidden], [inert]')) dismissFocus?.focus?.({preventScroll: true});
+    });
+    syncSubmit();
+    return dismissal;
+  };
+  owner.close = controls.close;
+  owner.dismiss = controls.dismiss;
+  owner.isActive = () => activeAppFormDialog === owner && !finishing;
+  owner.isCurrentContext = () => appFormSequence === sequence && appFormScopeIdentity() === scope;
   const apply = async event => {
     event?.preventDefault?.();
-    if (submit.disabled || options.mode === 'reading') return;
+    if (submit.disabled || dismissal || options.mode === 'reading') return;
     submitting = true; syncSubmit(); error.textContent = '';
     try { const result = await options.onSubmit?.(content); if (activeAppFormDialog === owner) finish(result ?? true); }
     catch (failure) { if (activeAppFormDialog === owner) error.textContent = failure.message || 'Unable to apply changes.'; }
@@ -50,9 +155,17 @@ function showAppFormDialog(options = {}) {
   };
   title.textContent = options.title || 'Settings'; content.innerHTML = options.contentHtml || ''; error.textContent = '';
   submit.textContent = options.submitLabel || 'Apply'; syncSubmit(); cancel.textContent = options.cancelLabel || 'Cancel';
-  submit.hidden = options.mode === 'reading'; cancel.hidden = false;
+  submit.hidden = contentOwnsFooter || options.mode === 'reading'; cancel.hidden = contentOwnsFooter;
+  if (footer) footer.hidden = true;
+  if (contentOwnsFooter) content.setAttribute('tabindex', '-1');
   if (options.mode === 'reading') { cancel.textContent = 'Close'; modal.classList?.add('app-form-reading'); }
   modal.hidden = false; modal.style.zIndex = '125';
+  if (parent) {
+    const layer = typeof getComputedStyle === 'function' ? Number(getComputedStyle(parent).zIndex) : 135;
+    modal.style.zIndex = String(Math.max(125, Number.isFinite(layer) ? layer : 135) + 1);
+    parent.inert = true;
+    modal.addEventListener('click', containParentClick);
+  }
   modal.querySelector?.('.confirm-modal-dialog')?.removeAttribute('hidden');
   if (anchoredPanel) {
     const boundaryElement = anchor.closest?.('.utility-modal-dialog');
@@ -79,10 +192,10 @@ function showAppFormDialog(options = {}) {
       syncTriggerAnchor(anchoredPanel, anchor);
     };
     modal.classList.add('app-form-anchored'); anchoredPanel.setAttribute('aria-modal', 'false');
-    if (typeof activateTriggerSurface === 'function') activateTriggerSurface(anchoredPanel, () => finish(null));
+    if (typeof activateTriggerSurface === 'function') activateTriggerSurface(anchoredPanel, () => requestDismiss('replace'));
     position();
     listen(document, 'pointerdown', event => {
-      if (!anchoredPanel.contains(event.target) && !anchor.contains(event.target)) finish(null);
+      if (!anchoredPanel.contains(event.target) && !anchor.contains(event.target)) requestDismiss('overlay');
     });
     if (typeof window.addEventListener === 'function') listen(window, 'resize', position);
     if (window.visualViewport?.addEventListener) listen(window.visualViewport, 'resize', position);
@@ -93,19 +206,58 @@ function showAppFormDialog(options = {}) {
     }
   }
   if (typeof bindOverlayPointerOrigin === 'function') bindOverlayPointerOrigin(modal);
-  listen(cancel, 'click', () => finish(null)); listen(submit, 'click', apply);
+  listen(cancel, 'click', () => requestDismiss('cancel')); listen(submit, 'click', apply);
+  const contentControls = () => [...content.querySelectorAll('input, button, textarea, select, a[href], [tabindex="0"]')]
+    .filter(node => !node.disabled && !node.hidden && node.type !== 'hidden'
+      && !node.closest?.('[hidden], [inert]') && (!node.getClientRects || node.getClientRects().length));
   listen(modal, 'keydown', event => {
-    if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); finish(null); return; }
+    if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); return requestDismiss('escape'); }
     if (event.key !== 'Tab') return;
-    const controls = [...content.querySelectorAll('input, button, textarea, [tabindex="0"]'), cancel, submit].filter(node => !node.disabled && !node.hidden);
+    if (modal.classList?.contains?.('is-mobile-page')) return;
+    const controls = contentOwnsFooter ? contentControls()
+      : [...content.querySelectorAll('input, button, textarea, [tabindex="0"]'), cancel, submit].filter(node => !node.disabled && !node.hidden);
+    if (contentOwnsFooter && (!controls.length || !controls.includes(document.activeElement))) {
+      event.preventDefault(); (event.shiftKey ? controls[controls.length - 1] || content : controls[0] || content).focus(); return;
+    }
     const first = controls[0], last = controls[controls.length - 1];
     if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); }
     else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
   });
-  listen(modal, 'click', event => { if (typeof overlayClickStartedOnOverlay === 'function' && overlayClickStartedOnOverlay(modal, event)) finish(null); });
-  options.onMount?.(content, controls);
-  (content.querySelectorAll('input, button, textarea, [tabindex="0"]')[0] || cancel).focus();
+  listen(modal, 'click', event => {
+    if (parent) event.stopPropagation();
+    if (!modal.classList?.contains?.('is-mobile-page') && typeof overlayClickStartedOnOverlay === 'function'
+      && overlayClickStartedOnOverlay(modal, event)) return requestDismiss('overlay');
+  });
+  try {
+    if (pageId && typeof presentMobileAppFormPage === 'function') presentMobileAppFormPage(owner);
+    options.onMount?.(content, controls);
+  } catch (error) { finish(null, {returnToParent: Boolean(parent)}); throw error; }
+  if (activeAppFormDialog !== owner) return promise;
+  if (contentOwnsFooter) {
+    const focusContent = () => (contentControls()[0] || content).focus();
+    focusContent();
+    // React portals may commit after onMount returns. The native owner transfers
+    // initial focus when controls arrive, without stealing it after interaction.
+    if (typeof MutationObserver === 'function') {
+      focusObserver = new MutationObserver(() => {
+        if (activeAppFormDialog === owner && document.activeElement === content) focusContent();
+      });
+      focusObserver.observe(content, {childList: true, subtree: true});
+    }
+  } else (content.querySelectorAll('input, button, textarea, [tabindex="0"]')[0] || cancel).focus();
   return promise;
+}
+
+function openReactFormDialog({title, pageId, beforeDismiss, onMount, onClose, parentSurface, returnFocus, contentOwnsFooter = true} = {}, isAvailable = () => true) {
+  if (!isAvailable() || typeof showAppFormDialog !== 'function' || activeAppFormDialog) throw new Error('The form dialog is unavailable.');
+  let controls, host;
+  const close = (value, options) => controls?.close(value, options);
+  const promise = showAppFormDialog({title, pageId, beforeDismiss, parentSurface, returnFocus, mode: 'reading', contentOwnsFooter: contentOwnsFooter === true,
+    onMount(content, owner) {controls = owner; host = document.createElement('div'); content.appendChild(host); onMount?.(host, close);},
+    onAfterClose(_content, closeOptions) {onClose?.(host, closeOptions);},
+  });
+  if (!controls) throw new Error('The form dialog is unavailable.');
+  return Object.freeze({promise, close, dismiss: (reason, options) => controls?.dismiss(reason, options)});
 }
 
 function showBrowserAlert(message) {
@@ -147,14 +299,16 @@ function showAppConfirmDialog(options = {}) {
   };
   let resolveDialog;
   const promise = new Promise(resolve => { resolveDialog = resolve; });
-  activeAppConfirmDialog = { promise };
-  const finish = accepted => {
+  const formOwner = activeAppFormDialog;
+  activeAppConfirmDialog = { promise, formOwner, cancel: options => finish(false, options) };
+  const finish = (accepted, {restoreFocus = true} = {}) => {
     if (activeAppConfirmDialog?.promise !== promise) return;
     listeners.forEach(([element, name, handler]) => element?.removeEventListener?.(name, handler));
     modal.hidden = true;
     activeAppConfirmDialog = null;
     resolveDialog(Boolean(accepted));
-    previousFocus?.focus?.();
+    if (restoreFocus && (!formOwner || activeAppFormDialog === formOwner)
+      && previousFocus?.isConnected !== false && !previousFocus?.closest?.('[hidden], [inert]')) previousFocus?.focus?.();
   };
   const handleKeydown = event => {
     if (event?.key === 'Escape') {

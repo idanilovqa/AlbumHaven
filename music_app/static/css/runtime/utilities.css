@@ -1958,10 +1958,10 @@
   box-shadow: none;
 }
 .utility-detected-table .utility-problem-suggestion[aria-pressed="true"] {
-  border-color: var(--appearance-primary-button, var(--accent));
-  background: color-mix(in srgb, var(--appearance-primary-button, var(--accent)) 48%, var(--appearance-panel-background, var(--panel)));
-  color: var(--appearance-primary-button-ink, var(--text));
-  box-shadow: 0 0 0 1px var(--appearance-primary-button, var(--accent)),
-    inset 0 0 12px color-mix(in srgb, var(--appearance-primary-button, var(--accent)) 35%, transparent),
-    0 0 12px color-mix(in srgb, var(--appearance-primary-button, var(--accent)) 45%, transparent);
+  border-color: #0b5f31;
+  background: #15803d;
+  color: #fff;
+  box-shadow: 0 0 0 2px #22c55e,
+    inset 0 0 0 1px color-mix(in srgb, #fff 22%, transparent),
+    0 0 14px color-mix(in srgb, #22c55e 55%, transparent);
 }

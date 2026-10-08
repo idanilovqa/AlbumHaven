@@ -114,6 +114,17 @@ test('AlertLabel interaction states retain the gallery alert severity color fami
   assert.doesNotMatch(labelRules, /--appearance-interaction-outline/);
 });
 
+test('selected Suggested Edit labels use a saturated green state', () => {
+  const css = fs.readFileSync(
+    path.join(repoRoot, 'music_app', 'static', 'css', 'runtime', 'utilities.css'),
+    'utf8',
+  );
+  const selectedRule = css.match(/\.utility-detected-table \.utility-problem-suggestion\[aria-pressed="true"\]\s*\{[^}]*\}/s)?.[0] || '';
+  assert.match(selectedRule, /background:\s*#15803d/);
+  assert.match(selectedRule, /color:\s*#fff/);
+  assert.match(selectedRule, /0 0 0 2px #22c55e/);
+});
+
 test('standalone alert exports escape text and attribute values without runtime globals', () => {
   const css = fs.readFileSync(path.join(repoRoot, 'music_app/static/css/runtime/alert-components.css'), 'utf8');
   assert.match(css, /\.on-page-alert\[hidden\]\s*\{\s*display:\s*none;/);

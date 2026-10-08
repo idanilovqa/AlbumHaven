@@ -14,7 +14,8 @@ for (const width of [390, 1280]) {
     await page.addStyleTag({ path: path.join(root, 'music_app/static/css/startup-progress.css') });
     await page.addScriptTag({ path: path.join(root, 'music_app/static/js/startup-progress.js') });
     const overlay = page.locator('[data-startup-progress]');
-    await expect(overlay).toHaveText('Just a sec', { useInnerText: true });
+    await expect(overlay).toContainText('Just a sec');
+    await expect(overlay.locator('[data-startup-percent]')).toHaveText('50%');
     await expect(page.getByRole('progressbar')).toHaveAttribute('aria-valuenow', '50');
     const colors = await page.evaluate(() => {
       const fill = document.querySelector('.progress-fill');
@@ -31,6 +32,8 @@ for (const width of [390, 1280]) {
     expect(colors.fill).toBe(colors.player);
     expect(colors.heading).toBe(colors.ink);
     expect(colors.glow).not.toBe('none');
+    const meterWidth = await overlay.locator('.startup-progress-meter').evaluate(element => element.getBoundingClientRect().width);
+    expect(meterWidth).toBe(width === 390 ? 342 : 560);
     await page.screenshot({ path: testInfo.outputPath(`startup-progress-${width}.png`) });
     await page.evaluate(() => window.AlbumHavenStartupProgress.finish());
     await expect(overlay).toBeHidden();

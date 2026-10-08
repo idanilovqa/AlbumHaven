@@ -75,7 +75,10 @@ async function handleUtilityBootstrapClick(event) {
       const navigationToken = {};
       state.utility.problematicNavigationActiveToken = navigationToken;
       try {
-        await loadProblematicFiles(!state.utility.loaded, { render: false });
+        await loadProblematicFiles(!state.utility.loaded, {
+          render: false,
+          renderInitialPage: true,
+        });
       } finally {
         if (state.utility.problematicNavigationActiveToken === navigationToken) {
           state.utility.problematicNavigationActiveToken = null;
@@ -128,6 +131,8 @@ async function handleUtilityBootstrapClick(event) {
   const problemFilterOption = event.target.closest('[data-problem-filter-value]');
   if (problemFilterOption) {
     event.preventDefault();
+    if (state.utility.problematicFilesComplete === false
+        && !(await waitForProblematicFilesComplete())) return;
     const value = problemFilterOption.getAttribute('data-problem-filter-value') || '';
     if (value) {
       const selected = state.utility.selectedProblemFilters || [];
@@ -148,6 +153,8 @@ async function handleUtilityBootstrapClick(event) {
   const removeProblemFilter = event.target.closest('[data-remove-problem-filter]');
   if (removeProblemFilter) {
     event.preventDefault();
+    if (state.utility.problematicFilesComplete === false
+        && !(await waitForProblematicFilesComplete())) return;
     const value = removeProblemFilter.getAttribute('data-remove-problem-filter') || '';
     const nextSelectedFilters = (state.utility.selectedProblemFilters || []).filter((reason) => reason !== value);
     state.utility.selectedProblemFilters = nextSelectedFilters;
@@ -1147,7 +1154,7 @@ function handleUtilityBootstrapMouseDown(event) {
     const index = visible.findIndex(item => item.id === id);
     if (index < 0) return;
     const selected = !state.utility.proposalSelections?.[id];
-    state.utility.proposalDrag = { startIndex: index, selected };
+    state.utility.proposalDrag = { lastIndex: index, selected };
     state.utility.proposalSuppressClick = true;
     toggleProblemSuggestion(id, { selected });
     suggestion.focus?.();
@@ -1323,8 +1330,16 @@ function handleUtilityBootstrapMouseOver(event) {
     const drag = state.utility.proposalDrag;
     const visible = getDraggableProblemSuggestions();
     const index = visible.findIndex(item => item.id === suggestion?.getAttribute('data-problem-suggestion-id'));
-    if (index >= 0) {
-      extendProblemSuggestionRange(drag.startIndex, index, drag.selected);
+    if (index >= 0 && index !== drag.lastIndex) {
+      const from = Math.min(drag.lastIndex, index);
+      const to = Math.max(drag.lastIndex, index);
+      const selections = { ...(state.utility.proposalSelections || {}) };
+      visible.slice(from, to + 1).forEach((item) => {
+        if (drag.selected) selections[item.id] = true;
+        else delete selections[item.id];
+      });
+      state.utility.proposalSelections = selections;
+      drag.lastIndex = index;
       syncProblemSuggestionSelection();
     }
     return;

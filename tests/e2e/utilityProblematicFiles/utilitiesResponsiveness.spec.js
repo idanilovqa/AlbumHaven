@@ -71,10 +71,13 @@ test.describe(`${PROBLEMATIC_CASE_ID} utility-problematic-files responsiveness`,
         }, 'Expected the cold Problematic Files API response body to contain valid JSON.').not.toThrow();
         expectPostgresLibraryBrowseTelemetry(coldPayload);
         expect(Array.isArray(coldPayload.items), 'Expected the cold Problematic Files payload to expose summary items.').toBe(true);
-        expect(coldPayload.projection_cache_status, 'Expected the timed API request to rebuild the projection.').toBe('rebuilt');
+        expect(coldPayload.projection_cache_status, 'Expected the timed API request to be SQL-bounded.').toBe('bounded');
+        expect(coldPayload.complete).toBe(false);
+        expect(coldPayload.items).toHaveLength(50);
+        const completePayload = await networkEvidence.completeSummaryResponse.json();
         expect(
           evaluateProblematicFilesDatasetContract(
-            coldPayload,
+            completePayload,
             UTILITY_PROBLEMATIC_FILES_LOCAL_BENCHMARK.datasetContract,
           ),
         ).toEqual([]);
@@ -125,7 +128,7 @@ test.describe(`${PROBLEMATIC_CASE_ID} utility-problematic-files responsiveness`,
           },
         );
         const timingMs = networkEvidence.readyMs;
-        problematicFilesPayload = await networkEvidence.summaryResponse.json();
+        problematicFilesPayload = await networkEvidence.completeSummaryResponse.json();
         initialDetailRequestCount = networkEvidence.detailRequestCount;
         await utilityProblematicFilesLocalReport.recordTimingCheckpoint({
           key: 'problematic-files-ready',

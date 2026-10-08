@@ -121,9 +121,14 @@ export async function measureProblematicFilesSettingsOpenWithNetworkEvidence(
     const timeout = Number(options.timeout || 120000);
     const preemptionBefore = await readGalleryCoverPreemptionSnapshot(page);
     const viewPreemptionBefore = await readStartupViewPreemptionSnapshot(page);
-    const summaryResponsePromise = page.waitForResponse((response) => (
-      new URL(response.url()).pathname === summaryPathname
-    ), { timeout });
+    const summaryResponsePromise = page.waitForResponse((response) => {
+      const url = new URL(response.url());
+      return url.pathname === summaryPathname && url.searchParams.has('limit');
+    }, { timeout });
+    const completeSummaryResponsePromise = page.waitForResponse((response) => {
+      const url = new URL(response.url());
+      return url.pathname === summaryPathname && !url.searchParams.has('limit');
+    }, { timeout });
     const readyPromise = options.utilityTabBarActions
       ? measureProblematicFilesOpen(
         settingsModalAppBarActions,
@@ -136,8 +141,8 @@ export async function measureProblematicFilesSettingsOpenWithNetworkEvidence(
         utilityProblematicFilesActions,
         { ...options, timeout },
       );
-    const [readyResult, summaryResponseResult] = await Promise.allSettled(
-      [readyPromise, summaryResponsePromise],
+    const [readyResult, summaryResponseResult, completeSummaryResponseResult] = await Promise.allSettled(
+      [readyPromise, summaryResponsePromise, completeSummaryResponsePromise],
     );
     if (readyResult.status === 'rejected') {
       throw readyResult.reason;
@@ -145,11 +150,15 @@ export async function measureProblematicFilesSettingsOpenWithNetworkEvidence(
     if (summaryResponseResult.status === 'rejected') {
       throw summaryResponseResult.reason;
     }
+    if (completeSummaryResponseResult.status === 'rejected') {
+      throw completeSummaryResponseResult.reason;
+    }
     const preemptionAfter = await readGalleryCoverPreemptionSnapshot(page);
     const viewPreemptionAfter = await readStartupViewPreemptionSnapshot(page);
     return {
       readyMs: readyResult.value,
       summaryResponse: summaryResponseResult.value,
+      completeSummaryResponse: completeSummaryResponseResult.value,
       detailRequestCount: detailRequests.length,
       coverPreemptionWindow: {
         sequenceBefore: preemptionBefore.sequence,

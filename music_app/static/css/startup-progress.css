@@ -8,8 +8,12 @@
 }
 .startup-progress[hidden], .startup-progress [hidden] { display: none; }
 .startup-progress h1 { margin: 0; font-size: 1.5rem; font-weight: 500; }
+.startup-progress-meter {
+  display: grid; grid-template-columns: minmax(0, 1fr) 4ch; align-items: center;
+  gap: 14px; width: min(560px, calc(100vw - 48px));
+}
 .startup-progress .progress-bar {
-  width: min(320px, 100%); height: 10px; border-radius: 999px;
+  width: 100%; height: 12px; border-radius: 999px;
   background: var(--appearance-player, var(--login-surface));
   border: 1px solid color-mix(in srgb, var(--appearance-play, var(--login-green)) 40%, transparent);
   box-shadow: 0 0 24px color-mix(in srgb, var(--appearance-play, var(--login-green)) 30%, transparent);
@@ -19,6 +23,7 @@
   height: 100%; width: 0%; border-radius: inherit;
   background: var(--appearance-play, var(--login-green));
   box-shadow: 0 0 12px var(--appearance-waveform-fill, var(--appearance-play, var(--login-green)));
-  transition: width 0.25s ease;
+  will-change: width;
 }
+.startup-progress [data-startup-percent] { font-variant-numeric: tabular-nums; text-align: right; }
 @media (prefers-reduced-motion: reduce) { .startup-progress .progress-fill { transition: none; } }

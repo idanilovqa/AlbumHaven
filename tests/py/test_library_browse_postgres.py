@@ -10292,6 +10292,26 @@ def test_problematic_files_cold_path_separates_candidate_discovery_from_indexed_
     assert "library.local_track_files.metadata #> '{scan_cache,file_entry}'" not in selected_rows_sql
 
 
+def test_problematic_candidate_page_sql_orders_and_limits_ids_before_row_hydration():
+    from music_app.services.library_browse_postgres import _problematic_files_sql
+
+    page_sql = " ".join(
+        _problematic_files_sql(
+            candidate_summary=True,
+            candidate_ids_page=True,
+        ).split()
+    ).lower()
+
+    assert "count(*) over () as total_candidate_count" in page_sql
+    assert "join library.local_albums" in page_sql
+    assert "left join library.local_artists" in page_sql
+    assert "order by lower(coalesce(library.local_albums.title, ''))" in page_sql
+    assert "lower(coalesce(nullif(library.local_albums.metadata ->> 'album_artist', '')" in page_sql
+    assert "coalesce(library.local_albums.release_year::text, '')" in page_sql
+    assert "lower(coalesce(library.local_albums.album_key, ''))" in page_sql
+    assert page_sql.endswith("limit %(limit)s::integer;")
+
+
 def test_problematic_candidate_sql_conservatively_overincludes_only_strong_encoding_signals():
     from music_app.services.library_browse_postgres import _problematic_files_sql
 
@@ -12049,6 +12069,89 @@ def test_problematic_files_summary_embeds_only_the_first_sorted_album_detail():
     assert "track_problem_rows" not in remaining_summary
     assert "repair_preview_rows" not in remaining_summary
     assert "problematic_track_paths" not in remaining_summary
+
+
+def test_problematic_files_page_builds_only_bounded_candidate_rows():
+    from music_app.services.library_browse_postgres import PostgresLibraryBrowseRepository
+
+    rows = []
+    for index in range(1, 4):
+        row = _normal_problematic_product_row(
+            album_key=f"album-{index}",
+            album_title=f"Album {index}",
+        )
+        row.update({
+            "album_id": index,
+            "track_id": 500 + index,
+            "track_key": f"track-{index}",
+        })
+        rows.append(row)
+
+    repository = PostgresLibraryBrowseRepository(
+        {"ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://album_haven_app@localhost/app"},
+        connect=lambda _database_url: _ProblematicSnapshotConnectionStub(),
+    )
+    requested_limits = []
+    requested_album_ids = []
+
+    def load_candidate_ids(*, connection, limit):
+        assert connection is not None
+        requested_limits.append(limit)
+        return [1, 2, 3], 706
+
+    def load_rows(album_key=None, *, candidate_summary=True, connection=None, album_ids=None):
+        assert album_key is None
+        assert candidate_summary is True
+        assert connection is not None
+        requested_album_ids.append(list(album_ids or []))
+        return [row for row in rows if row["album_id"] in set(album_ids or [])]
+
+    repository._load_problematic_candidate_ids = load_candidate_ids
+    repository._load_problematic_file_rows = load_rows
+    repository._get_cached_utility_projection = lambda _kind: None
+    repository._build_problematic_files_payload_uncached = lambda: (_ for _ in ()).throw(
+        AssertionError("bounded page must not build the complete projection")
+    )
+
+    payload = repository.build_problematic_files_page(limit=2)
+
+    assert requested_limits == [2]
+    assert requested_album_ids == [[1, 2]]
+    assert [item["key"] for item in payload["items"]] == ["album-1", "album-2"]
+    assert payload["count"] == 2
+    assert payload["total_candidate_count"] == 706
+    assert payload["complete"] is False
+    assert payload["initial_detail"]["key"] == "album-1"
+
+
+def test_problematic_files_page_reuses_complete_projection_cache_before_querying():
+    from music_app.services.library_browse_postgres import PostgresLibraryBrowseRepository
+
+    repository = PostgresLibraryBrowseRepository(
+        {"ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://album_haven_app@localhost/app"},
+        connect=lambda _database_url: (_ for _ in ()).throw(
+            AssertionError("a warm bounded page must not query Postgres")
+        ),
+    )
+    repository._get_cached_utility_projection = lambda kind: {
+        "count": 3,
+        "items": [
+            {"key": "album-1", "detail_loaded": False},
+            {"key": "album-2", "detail_loaded": False},
+            {"key": "album-3", "detail_loaded": False},
+        ],
+        "initial_detail": {"key": "album-1", "detail_loaded": True},
+        "projection_cache_status": "hit",
+    } if kind == "problematic-files" else None
+
+    payload = repository.build_problematic_files_page(limit=2)
+
+    assert [item["key"] for item in payload["items"]] == ["album-1", "album-2"]
+    assert payload["count"] == 2
+    assert payload["total_candidate_count"] == 3
+    assert payload["complete"] is False
+    assert payload["projection_cache_status"] == "bounded"
+    assert payload["initial_detail"]["key"] == "album-1"
 
 
 def test_problematic_files_summary_and_initial_detail_share_one_repeatable_read_snapshot():

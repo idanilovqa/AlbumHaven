@@ -113,6 +113,10 @@ const expectedRuntimeOrder = [
   'mobile-navigation.js',
   'in-page-tabs.js',
   'mobile-home.js',
+  'track-actions.js',
+  'resource-selection.js',
+  'home-friends-bridge.js',
+  'playlists-react-bridge.js',
   'bootstrap-event-handlers.js',
   'bootstrap-init.js',
 ];

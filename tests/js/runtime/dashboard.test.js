@@ -77,6 +77,7 @@ test('Dashboard keeps supplied native header/body owners and adds native accessi
     assert.equal(button.tagName, 'BUTTON');
     assert.equal(button.getAttribute('type'), 'button');
     assert.equal(button.classList.contains('action-button'), true, 'native ActionButton owns sizing');
+    assert.equal(button.classList.contains('action-button--bare'), true, 'header sizing shares bare native action chrome');
     assert.equal(button.classList.contains('ui-button'), true);
     assert.equal(Boolean(button.getAttribute('aria-label')), true);
     assert.equal(widget.header.querySelectorAll('.album-details-header__primary').length, 1, 'native header content remains');

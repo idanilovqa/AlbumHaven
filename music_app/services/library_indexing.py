@@ -49,6 +49,56 @@ _SCAN_COOPERATIVE_YIELD_SECONDS = 0.001
 _SCAN_COVER_MISSING = object()
 _SCAN_FILE_ERROR_PATH_LIMIT = 1024
 _SCAN_FILE_ERROR_MESSAGE_LIMIT = 1000
+_SCAN_STAGE_TIMINGS_KEY = "scan_stage_timings"
+
+
+def reset_scan_stage_timings(library_state: dict[str, object]) -> None:
+    library_state[_SCAN_STAGE_TIMINGS_KEY] = {}
+
+
+def start_scan_stage(
+    library_state: dict[str, object], stage: str, *, now: float | None = None,
+) -> None:
+    started_at = time.monotonic() if now is None else now
+    timings = library_state.setdefault(_SCAN_STAGE_TIMINGS_KEY, {})
+    if not isinstance(timings, dict):
+        timings = {}
+        library_state[_SCAN_STAGE_TIMINGS_KEY] = timings
+    timings[stage] = {"started_monotonic": started_at, "elapsed_seconds": 0.0}
+
+
+def finish_scan_stage(
+    library_state: dict[str, object], stage: str, *, now: float | None = None,
+) -> None:
+    timings = library_state.get(_SCAN_STAGE_TIMINGS_KEY)
+    timing = timings.get(stage) if isinstance(timings, dict) else None
+    if not isinstance(timing, dict) or "finished_monotonic" in timing:
+        return
+    finished_at = time.monotonic() if now is None else now
+    timing["finished_monotonic"] = finished_at
+    timing["elapsed_seconds"] = max(
+        0.0, finished_at - float(timing.get("started_monotonic") or finished_at),
+    )
+
+
+def resolve_scan_stage_elapsed_seconds(
+    library_state: dict[str, object], *, now: float | None = None,
+) -> dict[str, float]:
+    current_time = time.monotonic() if now is None else now
+    timings = library_state.get(_SCAN_STAGE_TIMINGS_KEY)
+    if not isinstance(timings, dict):
+        return {}
+    elapsed: dict[str, float] = {}
+    for stage, timing in timings.items():
+        if not isinstance(timing, dict):
+            continue
+        started_at = float(timing.get("started_monotonic") or current_time)
+        finished_at = timing.get("finished_monotonic")
+        elapsed[str(stage)] = max(
+            0.0,
+            (float(finished_at) if finished_at is not None else current_time) - started_at,
+        )
+    return elapsed
 
 
 def _cooperative_scan_yield(processed: int) -> None:
@@ -629,6 +679,7 @@ def scan_library_file_cache(
     record_file_error: Callable[..., None] | None = None,
 ) -> tuple[dict[str, dict[str, object]], float]:
     publication_target = publication_state if publication_state is not None else library_state
+    start_scan_stage(library_state, "discover")
     all_file_stats, album_folders_total, total_bytes = _discover_music_files_with_stats(
         library_state,
         roots=roots,
@@ -636,6 +687,8 @@ def scan_library_file_cache(
         expected_scan_generation=expected_scan_generation,
         record_file_error=record_file_error,
     )
+    finish_scan_stage(library_state, "discover")
+    start_scan_stage(library_state, "metadata")
     updated_file_cache: dict[str, dict[str, object]] = {}
 
     library_state["scan_phase"] = "indexing"
@@ -786,5 +839,6 @@ def scan_library_file_cache(
     library_state["scan_estimated_remaining_seconds"] = 0.0
     library_state["scan_bytes_processed"] = total_bytes
     library_state["scan_album_folders_processed"] = album_folders_total
+    finish_scan_stage(library_state, "metadata")
     _publish_partial_scan_albums(publication_target, updated_file_cache)
     return updated_file_cache, last_scan

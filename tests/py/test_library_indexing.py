@@ -817,6 +817,22 @@ def test_incremental_scan_reuses_unchanged_persisted_cover_validation(tmp_path: 
     assert updated_entry["cover_validation_size"] == cover_stat.st_size
 
 
+def test_scan_stage_elapsed_seconds_freezes_completed_stages():
+    library_state = {}
+
+    library_indexing.reset_scan_stage_timings(library_state)
+    library_indexing.start_scan_stage(library_state, "discover", now=10.0)
+
+    assert library_indexing.resolve_scan_stage_elapsed_seconds(
+        library_state, now=12.5,
+    ) == {"discover": 2.5}
+
+    library_indexing.finish_scan_stage(library_state, "discover", now=14.0)
+    assert library_indexing.resolve_scan_stage_elapsed_seconds(
+        library_state, now=99.0,
+    ) == {"discover": 4.0}
+
+
 def test_scan_library_file_cache_tracks_eta_and_album_folder_progress(tmp_path: Path, monkeypatch):
     first_album = tmp_path / "Artist" / "Album"
     second_album = tmp_path / "Artist" / "Other Album" / "Disc 1"

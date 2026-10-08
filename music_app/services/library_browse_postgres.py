@@ -626,6 +626,7 @@ class PostgresLibraryBrowseRepository:
             projection_context = gallery_projection_context(connection) if paged else None
             cached_page = load_gallery_projection_page(
                 connection, view_state, query_params or {}, context=projection_context,
+                allow_stale=bool((library_state or {}).get("scan_in_progress")),
             ) if projection_context else None
             if cached_page is None:
                 relation_alias_maps = self._load_relation_alias_maps(connection=connection)
@@ -3208,6 +3209,14 @@ def _root_gallery_page_selection(
         rows, missing_albums, aliases, view_state, revision_namespace=revision_namespace), params)
 
 
+def _has_album_title_identity(album_key: object) -> bool:
+    key = str(album_key or "").strip()
+    if not key:
+        return False
+    parts = key.split("::")
+    return len(parts) < 2 or bool(parts[1].strip())
+
+
 def _prepare_root_gallery_snapshot(
     rows: Iterable[object], missing_albums: list[dict[str, object]],
     aliases: Mapping[str, object], view_state: Mapping[str, object],
@@ -3223,7 +3232,7 @@ def _prepare_root_gallery_snapshot(
     for source in rows:
         row = dict(_row_mapping(source))
         key = str(row.get("album_key") or "")
-        if not key or key in missing_keys:
+        if not _has_album_title_identity(key) or key in missing_keys:
             continue
         source_artist = str(row.get("artist_name") or "").strip()
         if source_artist not in canonical_names:
@@ -3550,7 +3559,7 @@ def _duplicate_inventory_fingerprint(connection: Any) -> dict[str, object]:
     # Transaction-start timestamps can commit out of order. Compare every root
     # and override row version so an unchanged maximum cannot hide a late edit.
     row = connection.execute("""
-        select libraries.id as library_id, libraries.updated_at,
+        select libraries.id as library_id,
           libraries.metadata ->> 'inventory_mutation_revision' as inventory_revision,
           jsonb_agg(jsonb_build_array(roots.id, roots.xmin::text, roots.updated_at) order by roots.id)
             filter (where roots.id is not null) as root_versions,
@@ -3570,7 +3579,7 @@ def _duplicate_inventory_fingerprint(connection: Any) -> dict[str, object]:
     if not payload.get("library_id") or not payload.get("observed_at"):
         return {}
     return {"fingerprint": tuple(payload.get(key) for key in (
-        "library_id", "updated_at", "inventory_revision", "root_versions", "root_count", "override_versions", "override_count",
+        "library_id", "inventory_revision", "root_versions", "root_count", "override_versions", "override_count",
     )), "observed_at": payload["observed_at"]}
 
 
@@ -6481,7 +6490,7 @@ def _root_album_browse_album_payloads(
         row_payload = _row_mapping(row)
         album_id = row_payload.get("album_id")
         album_key = str(row_payload.get("album_key") or "").strip()
-        if album_id is None and not album_key:
+        if not _has_album_title_identity(album_key):
             continue
         album_identity = album_id if album_id is not None else album_key
         matched_artist = (

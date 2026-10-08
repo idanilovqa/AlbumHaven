@@ -14,6 +14,14 @@ function formatDurationCompact(totalSeconds) {
 }
 
 
+function scanStageElapsedDetail(data = {}, stage = '') {
+  const elapsed = stage === 'covers'
+    ? Number(data.covers_elapsed_seconds)
+    : Number(data.scan_stage_elapsed_seconds?.[stage]);
+  return Number.isFinite(elapsed) ? `elapsed ${formatDurationCompact(elapsed)}` : '';
+}
+
+
 function buildScanEstimateParts(data = {}) {
   const parts = [];
   const remainingSeconds = Number(data.scan_estimated_remaining_seconds || 0);

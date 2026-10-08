@@ -405,7 +405,7 @@ def _track_to_dict(track: Track) -> dict[str, object]:
         "edition": track.edition,
         "album_rating": int(track.album_rating or 0),
         "exception_type": track.exception_type,
-        "custom_collection_name": track.custom_collection_name,
+        "custom_collection_name": getattr(track, "custom_collection_name", ""),
         "cover_path": str(track.cover_path) if track.cover_path else None,
         "cover_revision": getattr(track, "cover_revision", None),
         "local_cover_width": getattr(track, "local_cover_width", None),

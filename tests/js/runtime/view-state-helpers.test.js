@@ -4,7 +4,6 @@ const path = require('node:path');
 const vm = require('node:vm');
 const test = require('node:test');
 const ButtonComponent = require('../../../music_app/static/js/button-component.js');
-const test = require('node:test');
 
 const navigationItemTemplate = fs.readFileSync(path.join(__dirname, '../../../music_app/templates/components/navigation-tree-item.html'), 'utf8');
 const helperPaths = [
@@ -1501,4 +1500,16 @@ test('artist sidebar preserves server order through selection, search, and clear
     if (view.selected_artist) assert.match(html, /aria-current="true"/);
     assert.deepEqual(source.map(item => item.artist), sourceNames);
   }
+});
+test('scan stage elapsed detail uses independent stage and cover timers', () => {
+  const { scanStageElapsedDetail } = loadHelpers();
+
+  assert.equal(scanStageElapsedDetail({
+    scan_stage_elapsed_seconds: { discover: 7, metadata: 125 },
+  }, 'discover'), 'elapsed 7s');
+  assert.equal(scanStageElapsedDetail({
+    scan_stage_elapsed_seconds: { discover: 7, metadata: 125 },
+  }, 'metadata'), 'elapsed 2m 05s');
+  assert.equal(scanStageElapsedDetail({ covers_elapsed_seconds: 3661 }, 'covers'), 'elapsed 1h 01m');
+  assert.equal(scanStageElapsedDetail({}, 'relations'), '');
 });

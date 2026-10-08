@@ -771,8 +771,16 @@ function renderLibraryLoader(data = {}, options = {}) {
         detail = buildCoverProgressDetail(data);
       } else if (stage === 'relations' && data.relations_in_progress) {
         detail = `${Number(data.relations_processed || 0)} of ${Number(data.relations_total || 0)} artists`;
-      } else if (['discover', 'metadata'].includes(stage) && data.scan_in_progress) {
-        detail = buildScanEstimateParts(data).join(' · ');
+      } else if (stage === 'discover' && data.scan_in_progress && stateName === 'current') {
+        detail = `${Number(data.scan_total || 0)} files found`;
+      } else if (stage === 'metadata' && data.scan_in_progress && stateName === 'current') {
+        detail = buildScanEstimateParts(data)
+          .filter(part => !part.startsWith('elapsed '))
+          .join(' · ');
+      }
+      const stageElapsed = scanStageElapsedDetail(data, stage);
+      if (stageElapsed && !detail.includes('elapsed ')) {
+        detail = [detail, stageElapsed].filter(Boolean).join(' · ');
       }
       let subprogress = item.querySelector?.('[data-stage-progress]');
       if (!subprogress && detail && typeof document.createElement === 'function') {

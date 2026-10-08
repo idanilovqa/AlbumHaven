@@ -4936,3 +4936,22 @@ def test_cold_scan_gallery_pages_use_published_snapshot_with_bounded_continuatio
     assert len(snapshot["albums"]) == 5
     assert snapshot["albums"][0]["tracks"] == [{"title": "Unloaded detail"}]
     assert snapshot["albums"][1]["tracks"] == []
+def test_status_payload_reports_each_scan_stage_elapsed_time(monkeypatch):
+    from music_app.routes.api_read_asgi_routes import _build_status_payload_from_state
+    from music_app.services import library_indexing
+
+    monkeypatch.setattr(library_indexing.time, "monotonic", lambda: 25.0)
+    payload = _build_status_payload_from_state({
+        "scan_stage_timings": {
+            "discover": {
+                "started_monotonic": 10.0,
+                "finished_monotonic": 14.0,
+            },
+            "metadata": {"started_monotonic": 15.0},
+        },
+    })
+
+    assert payload["scan_stage_elapsed_seconds"] == {
+        "discover": 4.0,
+        "metadata": 10.0,
+    }

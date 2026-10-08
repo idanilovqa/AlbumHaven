@@ -4176,6 +4176,27 @@ def test_root_album_browse_payload_exposes_normalized_cover_selection_origin(
     assert albums[0]["cover_selection_origin"] == expected_origin
 
 
+def test_root_album_browse_payload_excludes_blank_album_identity():
+    from music_app.services.library_browse_postgres import (
+        _root_album_browse_album_payloads,
+    )
+
+    albums = _root_album_browse_album_payloads(
+        [{
+            "album_id": 41,
+            "album_key": "various artists::",
+            "album_title": "Unknown Album",
+            "album_release_year": 1989,
+            "album_metadata": {"album_artist": "Various Artists"},
+            "track_count": 34,
+            "total_duration_seconds": 7560,
+        }],
+        "#2",
+    )
+
+    assert albums == []
+
+
 @pytest.mark.parametrize("search_kind", ["automatic", "manual"])
 def test_root_album_browse_payload_keeps_unseen_cover_improvement_across_search_kinds(
     search_kind,
@@ -10564,13 +10585,13 @@ def test_duplicate_compact_candidates_keep_conflicting_album_rows_for_container_
     assert _duplicate_candidate_ids_from_index(_duplicate_candidate_index_from_rows(rows), ["1"]) == [1, 2]
 
 
-@pytest.mark.parametrize("changed_field", range(7))
+@pytest.mark.parametrize("changed_field", range(6))
 def test_duplicate_identity_cache_reuses_only_same_library_inventory_fingerprint(monkeypatch, changed_field):
     import music_app.services.library_browse_postgres as browse
 
     repository = browse.PostgresLibraryBrowseRepository({"ALBUM_HAVEN_APP_DATABASE_URL": "duplicate-cache-test"})
     browse.invalidate_postgres_utility_projection_cache()
-    state = {"fingerprint": (1, 1, 1, 1, 1, 1, 1), "observed_at": 1}
+    state = {"fingerprint": (1, 1, 1, 1, 1, 1), "observed_at": 1}
     monkeypatch.setattr(browse, "_duplicate_inventory_fingerprint", lambda connection: dict(state))
 
     class Connection:
@@ -10744,6 +10765,43 @@ def test_inventory_fingerprint_reads_ordered_mvcc_versions_not_only_max_timestam
     assert "overrides.xmin::text" in connection.sql
     assert "order by roots.id" in connection.sql
     assert "order by overrides.id" in connection.sql
+
+
+def test_duplicate_inventory_fingerprint_ignores_cover_only_library_timestamp_changes(
+    monkeypatch, default_empty_inventory_fingerprint,
+):
+    import music_app.services.library_browse_postgres as browse
+
+    monkeypatch.setattr(
+        browse,
+        "_duplicate_inventory_fingerprint",
+        default_empty_inventory_fingerprint,
+    )
+
+    fingerprint_row = {
+        "library_id": 1,
+        "updated_at": 1,
+        "inventory_revision": "7",
+        "root_versions": [],
+        "root_count": 0,
+        "override_versions": [],
+        "override_count": 0,
+        "observed_at": 10,
+    }
+
+    class Connection:
+        def execute(self, sql, params):
+            return self
+
+        def fetchone(self):
+            return dict(fingerprint_row)
+
+    connection = Connection()
+    before = browse._duplicate_inventory_fingerprint(connection)
+    fingerprint_row.update(updated_at=2, observed_at=11)
+    after = browse._duplicate_inventory_fingerprint(connection)
+
+    assert after["fingerprint"] == before["fingerprint"]
 
 
 def test_duplicate_absence_cache_skips_full_rows_preserves_year_provenance_and_invalidates(monkeypatch):

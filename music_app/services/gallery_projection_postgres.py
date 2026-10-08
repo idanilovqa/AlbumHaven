@@ -8,7 +8,7 @@ from threading import Lock
 
 from psycopg.types.json import Jsonb
 
-BUILDER_VERSION = "root-gallery-v1"
+BUILDER_VERSION = "root-gallery-v2"
 _LOGGER = logging.getLogger(__name__)
 _PENDING = {}
 _PENDING_LOCK = Lock()
@@ -65,7 +65,18 @@ def _ready_header(connection, context, view_state):
     """, {**context, "scope_key": gallery_projection_scope_key(view_state), "builder_version": BUILDER_VERSION}))
 
 
-def load_gallery_projection_page(connection, view_state, params, *, context=None):
+def _latest_compatible_header(connection, context, view_state):
+    return _first(connection.execute("""
+        select source_generation, revision, sidebar, album_count, occurrence_count
+        from library.gallery_projection_snapshots
+        where library_id = %(library_id)s and scope_key = %(scope_key)s
+          and builder_version = %(builder_version)s
+        order by source_generation desc
+        limit 1
+    """, {**context, "scope_key": gallery_projection_scope_key(view_state), "builder_version": BUILDER_VERSION}))
+
+
+def load_gallery_projection_page(connection, view_state, params, *, context=None, allow_stale=False):
     from music_app.services.library_browse_postgres import (
         _root_gallery_page_bounds, _root_gallery_page_metadata,
     )
@@ -73,6 +84,10 @@ def load_gallery_projection_page(connection, view_state, params, *, context=None
     if not context:
         return None
     header = _ready_header(connection, context, view_state)
+    stale = False
+    if not header and allow_stale:
+        header = _latest_compatible_header(connection, context, view_state)
+        stale = header is not None
     if not header:
         return None
     count = int(header["occurrence_count"])
@@ -87,8 +102,13 @@ def load_gallery_projection_page(connection, view_state, params, *, context=None
     page = [dict(row["payload"]) for row in rows]
     if len(page) != min(size, count - offset):
         return None
-    return page, header["sidebar"], int(header["album_count"]), _root_gallery_page_metadata(
-        header["revision"], count, size, offset, len(page))
+    metadata = _root_gallery_page_metadata(header["revision"], count, size, offset, len(page))
+    if stale:
+        metadata.update({
+            "projection_stale": True,
+            "source_generation": int(header["source_generation"]),
+        })
+    return page, header["sidebar"], int(header["album_count"]), metadata
 
 
 def publish_gallery_projection(config, context, view_state, snapshot, *, connect=None):

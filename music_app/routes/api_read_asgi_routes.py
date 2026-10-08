@@ -36,6 +36,7 @@ from music_app.services.page_resource_seams import (
 )
 from music_app.services.album_details import build_album_detail_payload
 from music_app.services.album_ratings_postgres import PostgresAlbumRatingsService
+from music_app.services.library_indexing import resolve_scan_stage_elapsed_seconds
 from music_app.services.library_browse_postgres import (
     PostgresLibraryBrowseRepository, build_transient_root_gallery_page,
 )
@@ -467,6 +468,7 @@ def _build_status_payload_from_state(library_state: dict[str, object]) -> dict[s
         ),
         "scan_current_path": library_state.get("scan_current_path") or "",
         "scan_elapsed_seconds": float(library_state.get("scan_elapsed_seconds") or 0.0),
+        "scan_stage_elapsed_seconds": resolve_scan_stage_elapsed_seconds(library_state),
         "scan_estimated_remaining_seconds": float(library_state.get("scan_estimated_remaining_seconds") or 0.0),
         "scan_files_per_second": float(library_state.get("scan_files_per_second") or 0.0),
         "scan_album_folders_processed": int(library_state.get("scan_album_folders_processed") or 0),

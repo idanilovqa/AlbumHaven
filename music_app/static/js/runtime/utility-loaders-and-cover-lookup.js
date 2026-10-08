@@ -1585,6 +1585,7 @@ function getTrackTagInitialValues(track, album) {
     track_number: String(track?.track_number ?? ''),
     disc_number: String(track?.disc_number ?? ''),
     exception_type: String(track?.exception_type || ''),
+    custom_collection_name: String(track?.custom_collection_name || ''),
     edition: String(track?.edition || album?.edition || ''),
     album_rating: String(track?.album_rating ?? album?.album_rating ?? ''),
   };
@@ -1631,7 +1632,11 @@ function applyTagEditsToNonAlbumView(album, updates) {
   Object.entries(updates || {}).forEach(([path, edits]) => {
     const hasAlbumEdit = Object.prototype.hasOwnProperty.call(edits || {}, 'album');
     const hasExceptionEdit = Object.prototype.hasOwnProperty.call(edits || {}, 'exception_type');
-    if (!hasAlbumEdit && !hasExceptionEdit) return;
+    const hasCollectionNameEdit = Object.prototype.hasOwnProperty.call(
+      edits || {},
+      'custom_collection_name',
+    );
+    if (!hasAlbumEdit && !hasExceptionEdit && !hasCollectionNameEdit) return;
     const normalizedPath = String(path || '');
     if (!normalizedPath) return;
     const track = tracksByPath.get(normalizedPath) || nextByPath.get(normalizedPath) || {};
@@ -1657,6 +1662,9 @@ function applyTagEditsToNonAlbumView(album, updates) {
       title: String(edits.title || track?.title || 'Unknown track'),
       album: albumName,
       exception_type: exceptionType,
+      custom_collection_name: hasCollectionNameEdit
+        ? String(edits.custom_collection_name || '').trim()
+        : String(track?.custom_collection_name || '').trim(),
       reason_label: exceptionType,
       display_path: String(track?.display_path || normalizedPath),
     });
@@ -1729,6 +1737,40 @@ function getTagEditorPendingIconMarkup() {
     </span>`;
 }
 
+function getLibraryExceptionTypeChoices() {
+  const values = ['Interview', 'Non-album rarity', 'Custom Collection'];
+  const seen = new Set(values.map((value) => value.toLocaleLowerCase()));
+  (Array.isArray(state.view?.non_album_tracks) ? state.view.non_album_tracks : []).forEach((track) => {
+    const value = String(track?.exception_type || '').trim();
+    const key = value.toLocaleLowerCase();
+    if (!value || seen.has(key)) return;
+    seen.add(key);
+    values.push(value);
+  });
+  return values;
+}
+
+function syncTagEditorCollectionFields(selectedPaths = getSelectedTagEditorPaths(state.tagEditor.tracks || [])) {
+  const form = getTagEditorElements().form;
+  if (!form) return true;
+  const exceptionInput = form.querySelector('[data-tag-field="exception_type"]');
+  const collectionInput = form.querySelector('[data-tag-field="custom_collection_name"]');
+  const collectionField = form.querySelector('[data-custom-collection-name-field]');
+  const list = document.getElementById('tag-editor-exception-types');
+  if (list) {
+    list.innerHTML = getLibraryExceptionTypeChoices()
+      .map((value) => `<option value="${escapeHtml(value)}"></option>`)
+      .join('');
+  }
+  const isCollection = String(exceptionInput?.value || '').trim() === 'Custom Collection';
+  if (collectionField) collectionField.hidden = !isCollection;
+  if (collectionInput) collectionInput.disabled = !isCollection || selectedPaths.length === 0;
+  if (!isCollection) return true;
+  return selectedPaths.every((path) => (
+    String(state.tagEditor.values?.[path]?.custom_collection_name || '').trim()
+  ));
+}
+
 function syncTagEditorPendingChanges() {
   const els = getTagEditorElements();
   const pending = buildChangedTagEditorUpdates(
@@ -1742,7 +1784,8 @@ function syncTagEditorPendingChanges() {
     els.albumInput.removeAttribute('aria-describedby');
   }
   if (els.applyButton) {
-    els.applyButton.disabled = pendingPaths.size === 0;
+    els.applyButton.disabled = pendingPaths.size === 0
+      || !syncTagEditorCollectionFields();
   }
   els.list?.querySelectorAll('[data-tag-editor-track]').forEach((button) => {
     const path = String(button.getAttribute('data-tag-editor-track') || '');
@@ -2191,5 +2234,6 @@ function renderTagEditor(options = {}) {
     input.value = displayValue.value;
     input.placeholder = displayValue.mixed ? 'Mixed values' : '';
   });
+  syncTagEditorCollectionFields(selectedPaths);
   syncTagEditorPendingChanges();
 }

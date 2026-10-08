@@ -835,6 +835,13 @@
               "config": "playwright.config.js",
               "project": "functional",
               "test": "tests/e2e/specs/nonAlbumRarity.spec.js",
+              "case": "FTC-NON-ALBUM-016 keeps named Custom Collections out of Gallery and in library-wide Loose Tracks",
+              "area": "tag-edit"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/nonAlbumRarity.spec.js",
               "case": "FTC-NON-ALBUM-011 permits a nonempty Album rename from post-rarity Problematic Files",
               "area": "album-details"
             },

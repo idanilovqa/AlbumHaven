@@ -20,7 +20,7 @@ const EXPECTED_SHARD_COUNTS = new Map([
   ['gallery-search-visual', 47],
   ['cover-providers', 24],
   ['metadata-mutations', 14],
-  ['playback-utilities', 40],
+  ['playback-utilities', 41],
 ]);
 const EXPECTED_SHARD_DISPLAY_NAMES = new Map([
   ['gallery-search-visual', 'Gallery, Search & Visual'],
@@ -110,7 +110,7 @@ function functionalJobSource() {
   return { workflow, job: workflow.slice(start, end) };
 }
 
-test('functional shard contract pins the approved four-way 125-case assignment', () => {
+test('functional shard contract pins the approved four-way 126-case assignment', () => {
   const contract = readJson(shardContractPath);
   assert.equal(contract.browser, 'chrome');
   assert.equal(contract.workersPerInvocation, 1);
@@ -124,7 +124,7 @@ test('functional shard contract pins the approved four-way 125-case assignment',
     assert.ok(shard.invocations.length > 0, `${shard.name} must not be empty`);
     assert.ok(shard.suitePrerequisites.length > 0, `${shard.name} must declare prerequisites`);
   }
-  assert.equal(total, 125);
+  assert.equal(total, 126);
   for (const ownedCase of ownedCases(contract)) {
     assert.match(ownedCase.area, /^[a-z]+(?:-[a-z]+)*$/, ownedCase.case);
   }
@@ -888,11 +888,12 @@ validatorTest('playback restores three wave baselines and isolates conflicting e
     ],
   );
   const lateNonAlbumInvocations = groupInvocations('late-non-album-mutations');
-  assert.deepEqual(lateNonAlbumInvocations.map((invocation) => invocation.cases.length), [1, 1, 1, 1, 1]);
+  assert.deepEqual(lateNonAlbumInvocations.map((invocation) => invocation.cases.length), [1, 1, 1, 1, 1, 1]);
   assert.deepEqual(
     lateNonAlbumInvocations.flatMap((invocation) => invocation.cases.map(({ case: name }) => name)),
     [
       'FTC-NON-ALBUM-012 renders exception groups as the approved compact track table',
+      'FTC-NON-ALBUM-016 keeps named Custom Collections out of Gallery and in library-wide Loose Tracks',
       'FTC-NON-ALBUM-011 permits a nonempty Album rename from post-rarity Problematic Files',
       'FTC-NON-ALBUM-014 clears Album durably and refreshes Problematic Files',
       'FTC-TAGS-004 and FTC-NON-ALBUM-014 preserve rapid Album and Exception edits across gallery transitions',
@@ -925,7 +926,7 @@ validatorTest('all four shards use explicit effect-compatible wave budgets', () 
     ['gallery-search-visual', { cases: 47, waves: [1, 2] }],
     ['cover-providers', { cases: 24, waves: [1, 2] }],
     ['metadata-mutations', { cases: 14, waves: [1, 2, 3] }],
-    ['playback-utilities', { cases: 40, waves: [1, 2, 3, 4] }],
+    ['playback-utilities', { cases: 41, waves: [1, 2, 3, 4] }],
   ]);
   const matrixByCase = new Map(matrix.map((row) => [row.case, row]));
 

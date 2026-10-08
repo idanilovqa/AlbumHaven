@@ -156,7 +156,7 @@ function closeVersionPickerModal() {
   }
 }
 
-function getVisibleNonAlbumTracks() {
+function getVisibleNonAlbumTracks(options = {}) {
   const view = state.view;
   const mainState = state.gallery?.mainState;
   if (mainState) {
@@ -166,8 +166,12 @@ function getVisibleNonAlbumTracks() {
       || ['main_library', 'new_arrivals', 'hoard'];
     if (!activeSources.length || !gallerySourceScopesEqual(activeSources, payloadSources)) return [];
   }
-  const tracks = Array.isArray(view.non_album_tracks) ? view.non_album_tracks : [];
-  const selectedArtist = String(view.selected_artist || '').trim();
+  const tracks = options.libraryWide && Array.isArray(view.library_non_album_tracks)
+    ? view.library_non_album_tracks
+    : Array.isArray(view.non_album_tracks) ? view.non_album_tracks : [];
+  const selectedArtist = options.libraryWide
+    ? ''
+    : String(view.selected_artist || '').trim();
   if (!selectedArtist) return tracks;
   const artistKey = (value) => String(value || '').trim().toLocaleLowerCase();
   const artists = new Set([
@@ -239,25 +243,50 @@ function buildNonAlbumTrackRowsMarkup(items, startingIndex) {
       displayPath: displayPath || trackPath,
       isCurrent: isCurrentTrack,
       isPlaying: isActivelyPlaying,
-      isProblematic: Boolean(problematicAlbum),
+      isProblematic: Boolean(problematicAlbum || item.is_problematic),
     };
   });
 }
 
 function buildNonAlbumTrackSectionsMarkup(items) {
+  const exceptionType = (item) => String(
+    Object.prototype.hasOwnProperty.call(item || {}, 'exception_type')
+      ? item.exception_type
+      : item?.reason_label || '',
+  ).trim();
+  const knownTypes = new Set(['Non-album rarity', 'Interview', '']);
+  const dynamicDefinitions = [];
+  const seenDynamicKeys = new Set();
+  items.forEach((item) => {
+    const type = exceptionType(item);
+    if (knownTypes.has(type)) return;
+    const collectionName = type === 'Custom Collection'
+      ? String(item?.custom_collection_name || '').trim()
+      : '';
+    const key = `${type}\u0000${collectionName}`;
+    if (seenDynamicKeys.has(key)) return;
+    seenDynamicKeys.add(key);
+    dynamicDefinitions.push({
+      key: `custom-${dynamicDefinitions.length + 1}`,
+      title: collectionName ? `${type} — ${collectionName}` : type,
+      exceptionType: type,
+      collectionName,
+    });
+  });
   const sectionDefinitions = [
     { key: 'non-album-rarity', title: 'Non-album rarity', exceptionType: 'Non-album rarity' },
     { key: 'interview', title: 'Interviews', exceptionType: 'Interview' },
+    ...dynamicDefinitions,
     { key: 'other', title: 'Other', exceptionType: '' },
   ];
   let runningIndex = 0;
   const groups = sectionDefinitions.map((section) => {
     const sectionItems = items.filter((item) => (
-      String(
-        Object.prototype.hasOwnProperty.call(item || {}, 'exception_type')
-          ? item.exception_type
-          : item.reason_label || '',
-      ).trim() === section.exceptionType
+      exceptionType(item) === section.exceptionType
+      && (
+        section.collectionName === undefined
+        || String(item?.custom_collection_name || '').trim() === section.collectionName
+      )
     ));
     if (!sectionItems.length) return null;
     const tracks = buildNonAlbumTrackRowsMarkup(sectionItems, runningIndex);
@@ -269,6 +298,7 @@ function buildNonAlbumTrackSectionsMarkup(items) {
     groups,
     showPath: true,
     forceGroupLabels: true,
+    collapsibleGroups: true,
     ariaLabel: 'Loose tracks',
     idPrefix: 'loose-track-table',
     totalLength: formatAlbumDuration(totalSeconds),
@@ -356,14 +386,16 @@ function hideGalleryOptionsMenu() {
   if (typeof galleryMainSurfaceController !== 'undefined' && galleryMainSurfaceController?.isOpen?.('sources')) closeGalleryMainSurface(false);
 }
 
-function openNonAlbumModal() {
+function openNonAlbumModal(options = {}) {
   const els = getNonAlbumModalElements();
   if (!els.overlay || !els.table) return;
   bindOverlayPointerOrigin(els.overlay);
-  const looseTracks = getVisibleNonAlbumTracks();
-  const subtitle = state.view.selected_artist
+  const libraryWide = options.libraryWide === true;
+  state.ui.nonAlbumLibraryWide = libraryWide;
+  const looseTracks = getVisibleNonAlbumTracks({ libraryWide });
+  const subtitle = !libraryWide && state.view.selected_artist
     ? `Non-album tracks found in ${state.view.selected_artist} and family artist folders.`
-    : 'Non-album tracks found in the artist folders currently displayed.';
+    : 'Non-album tracks found in the selected library sources.';
   if (els.header) {
     els.header.innerHTML = buildAlbumDetailsHeaderHtml({
       variant: 'copy',
@@ -378,6 +410,12 @@ function openNonAlbumModal() {
   els.table.innerHTML = looseTracks.length
     ? buildNonAlbumTrackSectionsMarkup(looseTracks)
     : '<div class="utility-empty-state">No non-album tracks found in this view.</div>';
+  els.table.querySelectorAll?.('.album-track-table__disc--collapsible').forEach((details) => {
+    const summary = details.querySelector?.('summary');
+    const syncExpanded = () => summary?.setAttribute('aria-expanded', details.open ? 'true' : 'false');
+    syncExpanded();
+    details.addEventListener?.('toggle', syncExpanded);
+  });
   els.overlay.hidden = false;
   document.body.classList.add('modal-open');
   attachSharedPlayer();
@@ -385,7 +423,9 @@ function openNonAlbumModal() {
 
 function openNonAlbumTagEditor() {
   if (typeof isMobileClient === 'function' && isMobileClient()) return;
-  const tracks = getVisibleNonAlbumTracks();
+  const tracks = getVisibleNonAlbumTracks({
+    libraryWide: state.ui?.nonAlbumLibraryWide === true,
+  });
   if (!tracks.length) {
     showRepairAlert('No tracks to edit.', 'error');
     return;

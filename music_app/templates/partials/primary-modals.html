@@ -61,11 +61,8 @@
           <label>Year<input type="text" data-tag-field="year"></label>
           <label>Track Number<input type="text" data-tag-field="track_number"></label>
           <label>Disc Number<input type="text" data-tag-field="disc_number"></label>
-          <label>Exception<select data-tag-field="exception_type">
-            <option value="">None</option>
-            <option value="Interview">Interview</option>
-            <option value="Non-album rarity">Non-album rarity</option>
-          </select></label>
+          <label>Exception<input type="text" data-tag-field="exception_type" list="tag-editor-exception-types" autocomplete="off" placeholder="None"><datalist id="tag-editor-exception-types"><option value="Interview"></option><option value="Non-album rarity"></option><option value="Custom Collection"></option></datalist></label>
+          <label data-custom-collection-name-field hidden>Custom Collection name<input type="text" data-tag-field="custom_collection_name" autocomplete="off" placeholder="e.g. Road trip"></label>
           <label>Edition<input type="text" data-tag-field="edition"></label>
           <label>Album Rating<input type="text" data-tag-field="album_rating"></label>
         </form>

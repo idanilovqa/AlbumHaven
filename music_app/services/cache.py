@@ -34,6 +34,8 @@ _MISSING_CACHE_FIELD = object()
 def _cache_rebase_comparison_value(key: str, value: object) -> object:
     if key == "exception_type" and value is not _MISSING_CACHE_FIELD:
         return normalize_exception_value(value)
+    if key == "custom_collection_name" and value is not _MISSING_CACHE_FIELD:
+        return str(value or "").strip()
     if key in {"year", "track_number", "disc_number"} and value is not _MISSING_CACHE_FIELD:
         return str(value or "").strip()
     return value
@@ -69,6 +71,7 @@ def serialize_file_entry(entry: dict[str, object]) -> dict[str, object]:
         "edition": entry.get("edition"), "album_rating": entry.get("album_rating"),
         "library_root_id": entry.get("library_root_id"), "library_root_category": entry.get("library_root_category"),
         "exception_type": entry.get("exception_type"),
+        "custom_collection_name": entry.get("custom_collection_name"),
     }
     if "metadata_schema_version" in entry:
         serialized["metadata_schema_version"] = entry.get("metadata_schema_version")
@@ -96,6 +99,7 @@ def deserialize_file_entry(entry: dict[str, object]) -> dict[str, object]:
         "year": entry.get("year"), "edition": entry.get("edition"), "album_rating": entry.get("album_rating"),
         "library_root_id": entry.get("library_root_id"), "library_root_category": entry.get("library_root_category"),
         "exception_type": entry.get("exception_type"),
+        "custom_collection_name": entry.get("custom_collection_name"),
     }
     if "release_date" in entry:
         deserialized["release_date"] = entry.get("release_date")

@@ -40,6 +40,9 @@ export class TagEditorActions {
         .filter(Boolean),
       activeTrackCount: await this.tagEditor.activeTrackButtons.count(),
       exceptionType: String(await this.tagEditor.exceptionSelect.inputValue() || ''),
+      customCollectionName: String(
+        await this.tagEditor.customCollectionNameInput.inputValue() || '',
+      ),
       alertText: String(alertMessages[0] || '').trim(),
     };
   }
@@ -506,13 +509,28 @@ export class TagEditorActions {
   }
 
   async setException(exceptionType) {
-    await this.tagEditor.exceptionSelect.selectOption({ label: exceptionType });
+    await this.tagEditor.exceptionSelect.fill(exceptionType);
+    await this.tagEditor.exceptionSelect.blur();
     await expect(this.tagEditor.exceptionSelect).toHaveValue(exceptionType);
   }
 
   async clearException() {
-    await this.tagEditor.exceptionSelect.selectOption({ label: 'None' });
+    await this.tagEditor.exceptionSelect.fill('');
+    await this.tagEditor.exceptionSelect.blur();
     await expect(this.tagEditor.exceptionSelect).toHaveValue('');
+  }
+
+  async setCustomCollectionName(collectionName) {
+    await expect(this.tagEditor.customCollectionNameInput).toBeVisible();
+    await this.tagEditor.customCollectionNameInput.fill(collectionName);
+    await this.tagEditor.customCollectionNameInput.blur();
+    await expect(this.tagEditor.customCollectionNameInput).toHaveValue(collectionName);
+  }
+
+  async expectApplyDisabledForMissingCollectionName() {
+    await expect(this.tagEditor.customCollectionNameInput).toBeVisible();
+    await expect(this.tagEditor.customCollectionNameInput).toHaveValue('');
+    await expect(this.tagEditor.applyButton).toBeDisabled();
   }
 
   async expectNonAlbumRarityConfirmationThenCancel() {

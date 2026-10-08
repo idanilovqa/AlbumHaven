@@ -14,6 +14,9 @@ export class ArtistPageSettings extends BasePage {
     this.familyPanel = page.locator('#artist-family-panel');
     this.combineSimilarArtistsButton = page.locator(this.combineSimilarArtistsButtonSelector);
     this.nonAlbumTracksButton = page.locator(this.nonAlbumTracksButtonSelector);
+    this.libraryWideNonAlbumTracksButton = page.locator(
+      '[data-open-non-album-tracks="1"][data-library-wide="1"]',
+    );
     this.nonAlbumTracksModal = page.locator(this.nonAlbumTracksModalSelector);
     this.nonAlbumTrackRows = page.locator(this.nonAlbumTrackRowSelector);
     this.nonAlbumTrackTitles = page.locator(this.nonAlbumTrackTitleSelector);
@@ -102,6 +105,12 @@ export class ArtistPageSettings extends BasePage {
 
   nonAlbumTrackRowByPath(trackPath) {
     return this.nonAlbumTracksModal.locator(`[data-track-row-path=${JSON.stringify(String(trackPath))}]`);
+  }
+
+  nonAlbumSectionByTitle(title) {
+    return this.nonAlbumTracksModal
+      .locator('details.album-track-table__disc--collapsible')
+      .filter({ has: this.page.getByText(title, { exact: true }) });
   }
 
   nonAlbumTrackCellByTitle(trackTitle) {

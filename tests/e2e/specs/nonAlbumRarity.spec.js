@@ -30,7 +30,6 @@ test('FTC-NON-ALBUM-013 keeps a strongly inferred blank-Album track in Other and
   appBarActions,
   artistPageSettingsActions,
   galleryActions,
-  navigationPanelActions,
   page,
   stepLogger,
   tagEditorActions,
@@ -420,6 +419,112 @@ test('FTC-NON-ALBUM-012 renders exception groups as the approved compact track t
       await tagEditorActions.selectAllTracks();
       await tagEditorActions.clearException();
       await tagEditorActions.applyAndWaitForSavedFiles({ savedNotificationDelivery: 'status-page' });
+    }
+  }
+});
+
+test('FTC-NON-ALBUM-016 keeps named Custom Collections out of Gallery and in library-wide Loose Tracks', { tag: '@area:tag-edit' }, async ({
+  artistPageSettingsActions,
+  galleryActions,
+  navigationPanelActions,
+  page,
+  searchToolbarActions,
+  stepLogger,
+  tagEditorActions,
+  trackModalActions,
+}) => {
+  const collectionName = 'Road trip archive';
+  let fixtureMutated = false;
+  let fixtureRestored = false;
+
+  const restoreFixture = async () => {
+    await galleryActions.goto(`/?surface=albums&artist=${encodeURIComponent(RARITY_ARTIST)}`);
+    await galleryActions.waitForGalleryReady();
+    await artistPageSettingsActions.openNonAlbumTracks(2);
+    await artistPageSettingsActions.openNonAlbumTracksInTagEditor();
+    await tagEditorActions.waitForOpen({ expectedTrackCount: 2 });
+    await tagEditorActions.selectAllTracks();
+    await tagEditorActions.setAlbumName(RARITY_ALBUM);
+    await tagEditorActions.clearException();
+    await tagEditorActions.applyAndWaitForSavedFiles({ savedNotificationDelivery: 'status-page' });
+    fixtureRestored = true;
+  };
+
+  try {
+    await stepLogger.step('Require a name before assigning the whole folder to a Custom Collection', async () => {
+      await galleryActions.goto('/?surface=albums');
+      await galleryActions.waitForGalleryReady();
+      await searchToolbarActions.search(RARITY_ALBUM, { submitWithEnter: true });
+      await searchToolbarActions.waitForQuery(RARITY_ALBUM);
+      await galleryActions.waitForAlbumVisibleUnderHeading(RARITY_ARTIST, RARITY_ALBUM);
+      await galleryActions.selectAlbumDetailsByIdentity({
+        artist: RARITY_ARTIST,
+        album: RARITY_ALBUM,
+        year: RARITY_YEAR,
+      });
+      await trackModalActions.waitForInteractiveSummary();
+      await trackModalActions.openTagEditor();
+      await tagEditorActions.waitForOpen({ expectedTrackCount: 2 });
+      await tagEditorActions.selectTrackByFilename(RARITY_TRACK_FILENAME);
+      await tagEditorActions.clearAlbumName();
+      await tagEditorActions.selectAllTracks();
+      await tagEditorActions.setException('Custom Collection');
+      await tagEditorActions.expectApplyDisabledForMissingCollectionName();
+      await tagEditorActions.setCustomCollectionName(collectionName);
+      await tagEditorActions.applyAndWaitForSavedFiles({
+        savedNotificationDelivery: 'status-page',
+        beforeSavedNotification: () => trackModalActions.close(),
+      });
+      fixtureMutated = true;
+    });
+
+    await stepLogger.step('Hide the source album and expose the collection from another artist through the app bar', async () => {
+      await searchToolbarActions.clearSearch({ submitWithEnter: true });
+      await searchToolbarActions.waitForQuery('');
+      await galleryActions.waitForGalleryReady();
+      await galleryActions.expectAlbumAbsentFromSettledGallery({
+        artist: RARITY_ARTIST,
+        album: RARITY_ALBUM,
+      });
+
+      await galleryActions.goto(`/?surface=albums&artist=${encodeURIComponent(INFERRED_ARTIST)}`);
+      await galleryActions.waitForGalleryReady();
+      await galleryActions.waitForSelectedArtistGallery(INFERRED_ARTIST);
+      await artistPageSettingsActions.openLibraryWideNonAlbumTracks();
+      await expect(artistPageSettingsActions.artistPageSettings.nonAlbumTrackRowByTitle(RARITY_TRACK_TITLE)).toHaveCount(1);
+      await expect(artistPageSettingsActions.artistPageSettings.nonAlbumTrackRowByTitle(SIBLING_TRACK_TITLE)).toHaveCount(1);
+      await expect(artistPageSettingsActions.artistPageSettings.nonAlbumTrackTable).toHaveCount(1);
+      await artistPageSettingsActions.expectCollapsibleNonAlbumSection(
+        `Custom Collection — ${collectionName}`,
+        [RARITY_TRACK_TITLE, SIBLING_TRACK_TITLE],
+      );
+      await expect(
+        artistPageSettingsActions.artistPageSettings.problemButtonForNonAlbumTrack(RARITY_TRACK_TITLE),
+      ).toBeVisible();
+    });
+
+    await stepLogger.step('Preserve the app-owned collection metadata after reload', async () => {
+      await artistPageSettingsActions.closeNonAlbumTracks();
+      await page.reload({ waitUntil: 'domcontentloaded' });
+      await galleryActions.waitForGalleryReady();
+      await artistPageSettingsActions.openLibraryWideNonAlbumTracks();
+      await artistPageSettingsActions.expectCollapsibleNonAlbumSection(
+        `Custom Collection — ${collectionName}`,
+        [RARITY_TRACK_TITLE, SIBLING_TRACK_TITLE],
+      );
+    });
+
+    await stepLogger.step('Clear the exception and restore normal Gallery membership', async () => {
+      await artistPageSettingsActions.closeNonAlbumTracks();
+      await restoreFixture();
+      await galleryActions.goto(`/?surface=albums&artist=${encodeURIComponent(RARITY_ARTIST)}`);
+      await galleryActions.waitForGalleryReady();
+      await galleryActions.waitForAlbumVisibleUnderHeading(RARITY_ARTIST, RARITY_ALBUM);
+    });
+  } finally {
+    if (fixtureMutated && !fixtureRestored) {
+      await tagEditorActions.dismissTopmostOverlayWithEscape();
+      await restoreFixture();
     }
   }
 });

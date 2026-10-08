@@ -615,6 +615,36 @@ def test_queued_cache_update_accepts_already_committed_empty_exception_value():
     assert rebased[track_path]["exception_type"] == ""
 
 
+def test_queued_cache_update_accepts_already_committed_empty_collection_name():
+    track_path = "C:/Music/song.mp3"
+
+    rebased = cache_module._rebase_non_cover_cache_entry_changes(
+        baseline_file_cache={
+            track_path: {
+                "path": track_path,
+                "exception_type": "Custom Collection",
+                "custom_collection_name": "Road trip",
+            }
+        },
+        changed_entries={
+            track_path: {
+                "path": track_path,
+                "exception_type": "",
+                "custom_collection_name": "",
+            }
+        },
+        latest_file_cache={
+            track_path: {
+                "path": track_path,
+                "exception_type": None,
+                "custom_collection_name": None,
+            }
+        },
+    )
+
+    assert rebased[track_path]["custom_collection_name"] == ""
+
+
 def test_queued_cache_update_accepts_already_committed_numeric_year_value():
     track_path = "C:/Music/song.mp3"
 

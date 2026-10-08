@@ -342,6 +342,13 @@ function closeTagEditor() {
 function openTagEditConfirmModal() {
   const els = getTagEditConfirmElements();
   if (!els.overlay) return;
+  if (
+    typeof syncTagEditorCollectionFields === 'function'
+    && !syncTagEditorCollectionFields()
+  ) {
+    showRepairAlert('Custom Collection name is required.', 'error');
+    return;
+  }
   const album = state.tagEditor.album;
   const updates = buildChangedTagEditorUpdates(
     album,

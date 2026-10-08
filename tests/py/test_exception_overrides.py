@@ -125,6 +125,42 @@ def test_set_track_exception_overrides_upserts_one_batch(monkeypatch):
     }]
 
 
+def test_custom_collection_override_keeps_app_owned_name_in_same_json_payload(monkeypatch):
+    from music_app.services import exception_overrides as exception_overrides_module
+
+    config = _selected_postgres_rule_state_config()
+    _enable_fake_rule_state_driver(monkeypatch)
+    upsert_calls = []
+
+    class FakeExceptionOverridesAdapter:
+        def __init__(self, adapter_config):
+            assert adapter_config == config
+
+        def upsert_exception_overrides(self, overrides):
+            upsert_calls.append(dict(overrides))
+
+    monkeypatch.setattr(
+        exception_overrides_module,
+        "RuleStatePostgresAdapter",
+        FakeExceptionOverridesAdapter,
+    )
+
+    normalized = set_track_exception_overrides(config, {
+        "C:/Music/mix.mp3": {
+            "exception_type": "custom collection",
+            "custom_collection_name": " Road trip ",
+        },
+    })
+
+    assert normalized == {"C:/Music/mix.mp3": "Custom Collection"}
+    assert upsert_calls == [{
+        "C:/Music/mix.mp3": {
+            "exception_type": "Custom Collection",
+            "custom_collection_name": "Road trip",
+        },
+    }]
+
+
 def test_concurrent_exception_override_updates_preserve_both_paths(monkeypatch):
     from music_app.services import exception_overrides as exception_overrides_module
 

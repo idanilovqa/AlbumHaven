@@ -1578,6 +1578,36 @@
     "config": "playwright.config.js",
     "project": "functional",
     "test": "tests/e2e/specs/nonAlbumRarity.spec.js",
+    "case": "FTC-NON-ALBUM-016 keeps named Custom Collections out of Gallery and in library-wide Loose Tracks",
+    "profile": "functional-core",
+    "setupScope": "isolated",
+    "stateMode": "owned-mutation",
+    "setupGroup": "late-non-album-mutations",
+    "appProcessScope": "isolated",
+    "appProcessOrder": "after-shared",
+    "executionWave": 2,
+    "databaseScenarios": [
+      "non-album:custom-collections"
+    ],
+    "filesystemScenarios": [
+      "media-copy:non-album-custom-collections"
+    ],
+    "expectedContracts": [
+      "library-scoped-custom-collection",
+      "library-wide-loose-tracks",
+      "gallery-exclusion",
+      "problematic-files-retention"
+    ],
+    "mutationOwnership": {
+      "databaseIdentity": "case:non-album-custom-collections",
+      "filesystemCopy": "media/cases/non-album-custom-collections"
+    },
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.config.js",
+    "project": "functional",
+    "test": "tests/e2e/specs/nonAlbumRarity.spec.js",
     "case": "FTC-NON-ALBUM-011 permits a nonempty Album rename from post-rarity Problematic Files",
     "profile": "functional-core",
     "setupScope": "isolated",

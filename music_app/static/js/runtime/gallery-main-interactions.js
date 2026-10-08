@@ -443,7 +443,9 @@ function updateGalleryMainControls() {
     button.disabled = !preferenceArtist;
   });
   document.querySelectorAll('[data-open-non-album-tracks]').forEach((button) => {
-    const enabled = getVisibleNonAlbumTracks().length > 0;
+    const enabled = getVisibleNonAlbumTracks({
+      libraryWide: button.dataset.libraryWide === '1',
+    }).length > 0;
     button.disabled = !enabled;
     button.setAttribute('aria-disabled', enabled ? 'false' : 'true');
   });
@@ -717,7 +719,9 @@ function handleGalleryMainClick(event) {
   const nonAlbum = event.target.closest?.('[data-open-non-album-tracks]');
   if (nonAlbum) {
     event.preventDefault();
-    if (!nonAlbum.disabled && nonAlbum.getAttribute('aria-disabled') !== 'true') openNonAlbumModal();
+    if (!nonAlbum.disabled && nonAlbum.getAttribute('aria-disabled') !== 'true') {
+      openNonAlbumModal({ libraryWide: nonAlbum.dataset.libraryWide === '1' });
+    }
     return true;
   }
   if (event.target.closest?.('[data-gallery-customize-preview]')) { event.preventDefault(); return true; }

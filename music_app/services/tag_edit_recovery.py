@@ -35,7 +35,9 @@ def reconcile_tag_edit_intents(
                 path = change["path"]
                 old_values = change["old_values"]
                 requested_values = change["requested_values"]
-                physical_fields = set(requested_values).difference({"exception_type"})
+                physical_fields = set(requested_values).difference(
+                    {"exception_type", "custom_collection_name"}
+                )
                 actual_values = (
                     {
                         field: _text(value)
@@ -93,9 +95,12 @@ def reconcile_tag_edit_intents(
                     restore_physical_values(path, values)
 
             exception_updates = {
-                change["path"]: _text(change[exception_source]["exception_type"])
+                change["path"]: _app_owned_override(change[exception_source])
                 for change in changes
-                if "exception_type" in change[exception_source]
+                if any(
+                    field in change[exception_source]
+                    for field in ("exception_type", "custom_collection_name")
+                )
             }
             persist_resolution(
                 intent=intent,
@@ -149,7 +154,7 @@ def _physical_values(
         str(change["path"]): {
             field: _text(value)
             for field, value in dict(change[value_key]).items()
-            if field != "exception_type"
+            if field not in {"exception_type", "custom_collection_name"}
         }
         for change in changes
     }
@@ -157,6 +162,16 @@ def _physical_values(
 
 def _text(value: object) -> str:
     return str(value or "").strip()
+
+
+def _app_owned_override(values: dict[str, object]) -> object:
+    exception_type = _text(values.get("exception_type"))
+    if "custom_collection_name" not in values:
+        return exception_type
+    return {
+        "exception_type": exception_type,
+        "custom_collection_name": _text(values.get("custom_collection_name")),
+    }
 
 
 def reconcile_unfinished_tag_edit_intents_on_startup(runtime: object) -> dict[str, int]:
@@ -232,7 +247,7 @@ def reconcile_unfinished_tag_edit_intents_on_startup(runtime: object) -> dict[st
         *,
         intent: dict[str, object],
         resolved_values: dict[str, dict[str, str]],
-        exception_updates: dict[str, str],
+        exception_updates: dict[str, object],
         status: str,
         last_error: str | None,
     ) -> None:
@@ -255,7 +270,15 @@ def reconcile_unfinished_tag_edit_intents_on_startup(runtime: object) -> dict[st
             else:
                 resolved_entry = dict(baseline_entry)
             if path in exception_updates:
-                resolved_entry["exception_type"] = exception_updates[path] or None
+                override = exception_updates[path]
+                if isinstance(override, dict):
+                    resolved_entry["exception_type"] = override.get("exception_type") or None
+                    resolved_entry["custom_collection_name"] = (
+                        override.get("custom_collection_name") or None
+                    )
+                else:
+                    resolved_entry["exception_type"] = override or None
+                    resolved_entry["custom_collection_name"] = None
             changed_entries[path] = resolved_entry
 
         repository_hook = lambda connection: repository.complete_in_transaction(

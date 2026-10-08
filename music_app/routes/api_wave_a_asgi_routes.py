@@ -183,7 +183,14 @@ async def confirm_missing_album_removal(request: Request, album_key: str) -> JSO
     return JSONResponse({"ok": True, **result})
 
 _EDIT_WRITE_WORKERS = 2
-_STRUCTURAL_EDIT_FIELDS = {"album", "album_artist", "year", "edition", "exception_type"}
+_STRUCTURAL_EDIT_FIELDS = {
+    "album",
+    "album_artist",
+    "year",
+    "edition",
+    "exception_type",
+    "custom_collection_name",
+}
 _RELATION_PROJECTION_EDIT_FIELDS = {"album_artist", "artist"}
 _MEDIA_TAG_EDIT_FIELDS = {
     "artist",
@@ -1146,7 +1153,11 @@ def _is_postgres_edit_tags_exception_only_response_request(
     for raw_edits in updates.values():
         if not isinstance(raw_edits, Mapping):
             return False
-        if len(raw_edits) != 1 or next(iter(raw_edits.keys())) != "exception_type":
+        field_names = {str(field or "") for field in raw_edits}
+        if not field_names or not field_names <= {
+            "exception_type",
+            "custom_collection_name",
+        }:
             return False
 
     config = _app_config(request)

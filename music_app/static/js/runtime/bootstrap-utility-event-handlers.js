@@ -973,7 +973,13 @@ function handleUtilityBootstrapInput(event) {
       ...(state.tagEditor.values[path] || {}),
       [field]: input.value,
     };
+    if (field === 'exception_type' && String(input.value || '').trim() !== 'Custom Collection') {
+      state.tagEditor.values[path].custom_collection_name = '';
+    }
   });
+  if (field === 'exception_type' && typeof syncTagEditorCollectionFields === 'function') {
+    syncTagEditorCollectionFields(selectedPaths);
+  }
   syncTagEditorPendingChanges();
 }
 

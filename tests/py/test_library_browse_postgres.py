@@ -491,7 +491,9 @@ def test_inventory_backed_root_sidebar_uses_visible_non_album_candidate_scope(
     assert [track["title"] for track in payload["non_album_tracks"]] == [
         "Persisted Rarity"
     ]
-    assert payload["non_album_exception_values"] == ["Interview", "Non-album rarity"]
+    assert payload["non_album_exception_values"] == [
+        "Custom Collection", "Interview", "Non-album rarity",
+    ]
     assert [kind for kind, _sql, _params in inventory["queries"]] == [
         "support",
         "candidates",
@@ -531,6 +533,7 @@ def test_inventory_backed_loose_track_reopen_honors_explicit_empty_exception_ove
     payload = repository.build_root_sidebar_payload()
 
     assert payload["non_album_tracks"][0]["exception_type"] == ""
+    assert payload["non_album_tracks"][0].get("custom_collection_name", "") == ""
     assert payload["non_album_tracks"][0]["reason_label"] == "Unmarked"
 
 
@@ -583,7 +586,9 @@ def test_inventory_backed_root_full_and_non_album_detail_preserve_raw_rows_and_e
     assert payload["artists_sidebar"] == []
     assert payload["ignored_version_keys"] == ["ignored-release"]
     assert payload["manual_version_links"] == {"child-release": "parent-release"}
-    assert payload["non_album_exception_values"] == ["Interview", "Non-album rarity"]
+    assert payload["non_album_exception_values"] == [
+        "Custom Collection", "Interview", "Non-album rarity",
+    ]
     assert [track["title"] for track in payload["non_album_tracks"]] == [
         "Alpha Raw Title",
         "Zulu Raw Title",
@@ -1275,6 +1280,7 @@ def test_postgres_root_counts_preserve_alias_deduplication_and_category_filters(
 def test_postgres_root_sidebar_reads_one_repeatable_read_snapshot_and_rolls_it_back(
     monkeypatch, default_empty_missing_album_projection, default_empty_inventory_fingerprint,
 ):
+    from music_app.services import library_browse_postgres as browse_module
     from music_app.services.library_browse_postgres import PostgresLibraryBrowseRepository
 
     monkeypatch.setattr(
@@ -1375,8 +1381,17 @@ def test_postgres_root_sidebar_reads_one_repeatable_read_snapshot_and_rolls_it_b
     identity_reads = [(command, params) for command, params in connection.commands if "files.scan_file_album as album" in command]
     assert len(identity_reads) == 1
     assert identity_reads[0][1] == {}
-    assert "separate_release_rollup" in connection.commands[6][0]
-    assert connection.commands[6][1] == {"album_ids": []}
+    duplicate_source_reads = [
+        command
+        for command in connection.commands
+        if command[0]
+        == browse_module._problematic_files_sql(
+            duplicate_candidates=True,
+            duplicate_sources_only=True,
+        )
+    ]
+    assert len(duplicate_source_reads) == 1
+    assert duplicate_source_reads[0][1] == {"album_ids": []}
     assert connection.rollback_count == 1
     assert connection.close_count == 1
     assert payload["artists_sidebar"] == [
@@ -1563,7 +1578,9 @@ def test_postgres_library_browse_builds_root_album_browse_payload_from_rows(all_
     assert payload["ignored_version_keys"] == []
     assert payload["manual_version_links"] == {}
     assert payload["non_album_tracks"] == []
-    assert payload["non_album_exception_values"] == ["Interview", "Non-album rarity"]
+    assert payload["non_album_exception_values"] == [
+        "Custom Collection", "Interview", "Non-album rarity",
+    ]
     assert payload["viewer_opinion_preferences"]["preference_scope"] == "viewer_scoped"
     assert payload["popularity_browse"]["read_seam"]["source_kind"] == "lastfm_popularity_projection"
     assert [item["artist"] for item in payload["artists_sidebar"]] == ["Broadcast", "Stereolab"]
@@ -1764,9 +1781,10 @@ def test_postgres_root_album_browse_payload_can_omit_sidebar():
     assert "artists_sidebar" not in payload
 
 
-def test_postgres_library_browse_builds_selected_artist_payload_from_direct_membership_rows():
+def test_postgres_library_browse_builds_selected_artist_payload_from_direct_membership_rows(monkeypatch):
     from music_app.services.library_browse_postgres import PostgresLibraryBrowseRepository
 
+    _stub_windows_media_root(monkeypatch)
     executed: list[object] = []
 
     class FakeCursor:
@@ -1878,6 +1896,26 @@ def test_postgres_library_browse_builds_selected_artist_payload_from_direct_memb
         },
         connect=lambda _database_url: FakeConnection(),
     )
+    monkeypatch.setattr(
+        repository,
+        "_load_non_album_entries",
+        lambda *, include_library_wide=False, **_kwargs: (
+            ([], [{
+                "path": r"D:\Music\Other Artist\Loose\01.flac",
+                "artist": "Other Artist",
+                "album_artist": "Other Artist",
+                "album": "",
+                "title": "Library-wide loose track",
+                "track_number": 1,
+                "duration_seconds": 90,
+                "library_root_category": "main_library",
+                "exception_type": "Custom Collection",
+                "custom_collection_name": "Road trip",
+            }])
+            if include_library_wide
+            else []
+        ),
+    )
 
     payload = repository.build_selected_artist_payload(
         query_params={
@@ -1911,6 +1949,8 @@ def test_postgres_library_browse_builds_selected_artist_payload_from_direct_memb
     assert payload["primary_filter_active"] is False
     assert payload["family_artist_groups"] == []
     assert payload["non_album_tracks"] == []
+    assert payload["library_non_album_tracks"][0]["title"] == "Library-wide loose track"
+    assert payload["library_non_album_tracks"][0]["custom_collection_name"] == "Road trip"
     assert payload["listen_through_scope_candidates"]["artist"]["artist_ref"] == "Broadcast"
     assert payload["listen_through_scope_candidates"]["artist_family"]["selected_artist_ref"] == "Broadcast"
     assert payload["playback_context"] == {
@@ -3040,7 +3080,7 @@ def test_root_startup_payload_preserves_override_precedence_for_both_eligibility
     assert compact_sql.count("and path_override.id is null") == 2
     assert compact_sql.count("when path_override.override_payload ? 'exception_type'") == 2
     assert compact_sql.count("when track_override.override_payload ? 'exception_type'") == 2
-    assert compact_sql.count("not in ('interview', 'non album rarity', 'non-album rarity')") == 2
+    assert compact_sql.count("in ('', 'none', 'null')") == 2
 
 
 def test_root_startup_payload_keeps_canonical_ranking_and_one_snapshot_json_result():
@@ -7567,7 +7607,7 @@ def test_postgres_album_payloads_by_track_paths_applies_separate_release_split_t
     ]
 
 
-def test_postgres_album_payloads_by_track_paths_overlays_exception_override_file_entry():
+def test_postgres_album_payloads_by_track_paths_excludes_any_custom_exception_type():
     from music_app.services.library_browse_postgres import PostgresLibraryBrowseRepository
 
     requested_path = r"D:\Music\Exception Artist\Exception Album\01.flac"
@@ -7606,12 +7646,12 @@ def test_postgres_album_payloads_by_track_paths_overlays_exception_override_file
 
     payload = repository.build_album_payloads_by_track_paths({requested_path})
 
-    assert payload[0]["tracks"][0]["exception_type"] == "Postgres override"
+    assert payload == []
     sql = str(executed[0])
     compact_sql = " ".join(sql.split())
     assert "library.exception_overrides" in sql
     assert "left join lateral" in compact_sql
-    assert "override_payload ->> 'exception_type'" in sql
+    assert "coalesce(exception_override.override_payload, '{}'::jsonb)" in sql
     assert "library.exception_overrides.track_key = library.local_track_files.private_path" in compact_sql
     assert "library.exception_overrides.track_id = library.local_tracks.id" in compact_sql
     assert (
@@ -7733,7 +7773,7 @@ def test_postgres_album_payloads_by_track_paths_excludes_exception_track_and_kee
     compact_sql = " ".join(sql.split())
     assert "library.exception_overrides" in sql
     assert "left join lateral" in compact_sql
-    assert "override_payload ->> 'exception_type'" in sql
+    assert "coalesce(exception_override.override_payload, '{}'::jsonb)" in sql
     assert "library.exception_overrides.track_key = library.local_track_files.private_path" in compact_sql
     assert "library.exception_overrides.track_id = library.local_tracks.id" in compact_sql
     assert (
@@ -12407,6 +12447,10 @@ def test_postgres_search_batch_loads_private_album_rating_overlays(monkeypatch):
                 str(sql).startswith("SET TRANSACTION")
                 or "select distinct albums.id as album_id" in str(sql)
                 or sql == browse_module._problematic_files_sql(duplicate_candidates=True)
+                or sql == browse_module._problematic_files_sql(
+                    duplicate_candidates=True,
+                    duplicate_sources_only=True,
+                )
             )
             return _InventoryCursor()
 
@@ -12507,9 +12551,8 @@ def test_root_startup_gallery_and_search_sql_exclude_persisted_non_album_raritie
     for surface, sql in surfaces.items():
         compact_sql = " ".join(sql.lower().split())
         assert "library.exception_overrides" in compact_sql, surface
-        assert "non-album rarity" in compact_sql, surface
+        assert "in ('', 'none', 'null')" in compact_sql, surface
         assert "library.local_track_files.private_path" in compact_sql, surface
-        assert "not in ('interview', 'non album rarity', 'non-album rarity')" in compact_sql, surface
 
 
 @pytest.fixture

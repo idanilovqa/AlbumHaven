@@ -19,6 +19,10 @@ const coreStateAndHelpersSource = fs.readFileSync(
   path.join(runtimeRoot, 'core-state-and-helpers.js'),
   'utf8',
 );
+const galleryMainInteractionsSource = fs.readFileSync(
+  path.join(runtimeRoot, 'gallery-main-interactions.js'),
+  'utf8',
+);
 const galleryMainCssSource = fs.readFileSync(
   path.join(__dirname, '..', '..', '..', 'music_app', 'static', 'css', 'gallery-main.css'),
   'utf8',
@@ -403,6 +407,10 @@ test('the live Album types menu starts with unavailable loose tracks disabled', 
   assert.match(
     indexTemplateSource,
     /data-open-non-album-tracks="1"[^>]*disabled[^>]*aria-disabled="true"/,
+  );
+  assert.match(
+    galleryMainInteractionsSource,
+    /getVisibleNonAlbumTracks\(\{\s*libraryWide: button\.dataset\.libraryWide === '1',\s*\}\)/,
   );
   const context = loadRuntime();
   const hasGalleryNonAlbumTracks = requireContract(context, 'hasGalleryNonAlbumTracks');

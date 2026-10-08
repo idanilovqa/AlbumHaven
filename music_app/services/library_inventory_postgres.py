@@ -3,7 +3,6 @@ from __future__ import annotations
 from collections.abc import Callable, Iterable, Mapping
 from typing import Any
 
-from music_app.services.metadata import NON_ALBUM_EXCEPTION_VALUES
 from music_app.services.album_local_membership import local_album_membership_ctes_sql
 
 try:  # pragma: no cover - exercised only when the optional runtime driver exists.
@@ -200,8 +199,7 @@ def _non_album_candidates_sql(*, unassigned_only: bool = False) -> str:
       ''
     )"""
     effective_non_album_predicate = _non_album_value_predicate_sql(effective_album)
-    exception_sql_values = ", ".join("'" + value.replace("'", "''") + "'" for value in sorted(NON_ALBUM_EXCEPTION_VALUES))
-    scanned_exception_predicate = f"lower(btrim(coalesce(library.local_track_files.metadata #>> '{{scan_cache,file_entry,exception_type}}', ''))) in ({exception_sql_values})"
+    scanned_exception_predicate = "lower(btrim(coalesce(library.local_track_files.metadata #>> '{scan_cache,file_entry,exception_type}', ''))) not in ('', 'none', 'null')"
     return f"""
         with bootstrap_context as (
           {_bootstrap_context_sql()}
@@ -371,6 +369,8 @@ def _non_album_candidates_sql(*, unassigned_only: bool = False) -> str:
           exception_override.track_key as exception_override_track_key,
           exception_override.override_payload as exception_override_payload,
           exception_override.exception_type,
+            exception_override.override_payload ->> 'custom_collection_name'
+                as custom_collection_name,
           coalesce(
             exception_override.override_payload ? 'exception_type',
             false

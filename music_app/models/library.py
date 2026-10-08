@@ -17,6 +17,7 @@ class Track:
     edition: str | None = None
     album_rating: int | None = None
     exception_type: str | None = None
+    custom_collection_name: str | None = None
     cover_path: Path | None = None
     cover_revision: str | None = None
     local_cover_width: int | None = None

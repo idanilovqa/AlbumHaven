@@ -351,6 +351,40 @@ test('non-album artist scope retains folder matches and canonical album artists'
   assert.deepEqual(Array.from(context.getVisibleNonAlbumTracks()), tracks.slice(0, 2));
 });
 
+test('library-wide Loose Tracks bypasses selected artist while artist menu retains its scope', () => {
+  const { context } = loadHelper();
+  const tracks = [
+    { path: 'C:/Music/A/a.mp3', artist: 'A', exception_type: 'Custom Collection' },
+    { path: 'C:/Music/B/b.mp3', artist: 'B', exception_type: 'Random songs' },
+  ];
+ context.state.view = {
+   selected_artist: 'A',
+   non_album_tracks: [tracks[0]],
+   library_non_album_tracks: tracks,
+ };
+  assert.deepEqual(Array.from(context.getVisibleNonAlbumTracks()), [tracks[0]]);
+  assert.deepEqual(Array.from(context.getVisibleNonAlbumTracks({ libraryWide: true })), tracks);
+});
+
+test('custom exceptions and named collections render collapsible subsections in the shared track table', () => {
+  const { context } = loadHelper();
+  const items = [
+    { path: 'C:/Music/Mix/a.mp3', display_path: 'Mix/a.mp3', title: 'Song A', exception_type: 'Custom Collection', custom_collection_name: 'Road trip', is_problematic: true },
+    { path: 'C:/Music/Other/b.mp3', display_path: 'Other/b.mp3', title: 'Song B', exception_type: 'Custom Collection', custom_collection_name: 'Quiet evening' },
+    { path: 'C:/Music/Random/c.mp3', display_path: 'Random/c.mp3', title: 'Song C', exception_type: 'Random songs' },
+  ];
+  const markup = context.buildNonAlbumTrackSectionsMarkup(items);
+  assert.equal((markup.match(/class="album-track-table"/g) || []).length, 1);
+  for (const label of ['Custom Collection', 'Road trip', 'Quiet evening', 'Random songs']) {
+    assert.ok(markup.includes(label), `missing subsection ${label}`);
+  }
+  for (const track of items) assert.ok(markup.includes(track.path), `missing track ${track.path}`);
+  assert.match(markup, /aria-expanded="(?:true|false)"/);
+  assert.match(markup, /data-cdt-column="problem"/);
+  assert.match(markup, /aria-label="Open this track in Problematic Files"/);
+  assert.doesNotMatch(markup, /collection-pill|collection-panel/);
+});
+
 test('non-album artist scope expands only aliases of the displayed family', () => {
   const { context } = loadHelper();
   const tracks = [

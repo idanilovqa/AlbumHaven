@@ -306,9 +306,26 @@ def build_non_album_track_list(
             "track_number": entry.get("track_number"),
             "disc_number": entry.get("disc_number"),
             "exception_type": exception_type or "",
+            **(
+                {"custom_collection_name": str(entry.get("custom_collection_name") or "").strip()}
+                if str(entry.get("custom_collection_name") or "").strip()
+                else {}
+            ),
+            **(
+                {"library_category": str(
+                    entry.get("library_root_category") or entry.get("library_category") or ""
+                ).strip()}
+                if str(entry.get("library_root_category") or entry.get("library_category") or "").strip()
+                else {}
+            ),
             "edition": str(entry.get("edition") or ""),
             "album_rating": entry.get("album_rating"),
             "reason_label": exception_type or entry.get("local_album_membership_problem") or "Unmarked",
+            "is_problematic": bool(
+                entry.get("local_album_membership_problem")
+                or not has_meaningful_album_name(album_value)
+                or is_loose_track_album_value(album_value)
+            ),
             **({"local_album_membership_problem": entry["local_album_membership_problem"]}
                if entry.get("local_album_membership_problem") else {}),
             "display_path": _display_path(path, root_paths),

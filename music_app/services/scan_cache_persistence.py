@@ -68,6 +68,8 @@ _ALBUM_COVER_METADATA_FIELDS = (
 _TARGETED_STRUCTURAL_EDIT_FIELD_SETS = {
     frozenset({"album"}),
     frozenset({"exception_type"}),
+    frozenset({"custom_collection_name"}),
+    frozenset({"exception_type", "custom_collection_name"}),
     frozenset({"year"}),
 }
 _TARGETED_INVENTORY_EDIT_FIELDS = frozenset(
@@ -1090,8 +1092,9 @@ class PostgresScanCacheAdapter:
             str(entry.get("album") or "").strip()
             for entry in updated_entries.values()
         }
-        exception_only_edit = normalized_changed_fields == frozenset(
-            {"exception_type"}
+        exception_only_edit = bool(normalized_changed_fields) and (
+            normalized_changed_fields
+            <= frozenset({"exception_type", "custom_collection_name"})
         )
         updated_exception_states = {
             bool(normalize_exception_value(entry.get("exception_type")))
@@ -1367,8 +1370,9 @@ class PostgresScanCacheAdapter:
             str(entry.get("album") or "").strip()
             for entry in previous_entries.values()
         }
-        exception_only_edit = normalized_changed_fields == frozenset(
-            {"exception_type"}
+        exception_only_edit = bool(normalized_changed_fields) and (
+            normalized_changed_fields
+            <= frozenset({"exception_type", "custom_collection_name"})
         )
         updated_exception_states = {
             bool(normalize_exception_value(entry.get("exception_type")))

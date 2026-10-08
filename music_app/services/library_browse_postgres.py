@@ -79,12 +79,6 @@ except ImportError:  # pragma: no cover - keeps the module importable without ps
     dict_row = None
 
 
-# SQL uses the same accepted labels and aliases as normalize_exception_value.
-_NON_ALBUM_EXCEPTION_SQL_VALUES = ", ".join(
-    "'" + value.replace("'", "''") + "'"
-    for value in sorted(NON_ALBUM_EXCEPTION_VALUES)
-)
-
 _APP_DATABASE_URL_KEY = "ALBUM_HAVEN_APP_DATABASE_URL"
 _UTILITY_PROJECTION_PREWARM_CONFIG_KEY = "ALBUM_HAVEN_UTILITY_PROJECTION_PREWARM_ENABLED"
 _LIBRARY_BROWSE_SEAM_ID = "library_browse"
@@ -311,7 +305,8 @@ class PostgresLibraryBrowseRepository:
         visible_artist_names: Iterable[object] = (),
         query: object = "",
         connection: Any | None = None,
-    ) -> list[dict[str, object]]:
+        include_library_wide: bool = False,
+    ) -> list[dict[str, object]] | tuple[list[dict[str, object]], list[dict[str, object]]]:
         kind = "non-album-candidates"
         fingerprint = _duplicate_inventory_fingerprint(connection) if connection is not None else {}
         cached = self._get_cached_utility_projection(kind) if fingerprint else None
@@ -327,7 +322,7 @@ class PostgresLibraryBrowseRepository:
             _cache_compact_inventory_payload(connection, self, kind, fingerprint, {
                 "track_ids": sorted({_coerce_int(row.get("track_id")) for row in rows} - {0}),
             }, generation)
-        return _non_album_entries_from_inventory_candidates(
+        scoped_entries = _non_album_entries_from_inventory_candidates(
             rows,
             visible_library_categories=list(
                 view_state.get("visible_library_categories") or []
@@ -336,6 +331,16 @@ class PostgresLibraryBrowseRepository:
             canonical_to_aliases=canonical_to_aliases,
             visible_artist_names=visible_artist_names,
             query=query,
+        )
+        if not include_library_wide:
+            return scoped_entries
+        return scoped_entries, _non_album_entries_from_inventory_candidates(
+            rows,
+            visible_library_categories=list(
+                view_state.get("visible_library_categories") or []
+            ),
+            alias_to_canonical=alias_to_canonical,
+            canonical_to_aliases=canonical_to_aliases,
         )
 
     def build_root_counts_payload(
@@ -729,16 +734,26 @@ class PostgresLibraryBrowseRepository:
             family_context["alias_to_canonical"],
             family_context["canonical_to_aliases"],
         )
-        non_album_entries = self._load_non_album_entries(
+        loaded_non_album_entries = self._load_non_album_entries(
             view_state=view_state,
             alias_to_canonical=family_context["alias_to_canonical"],
             canonical_to_aliases=family_context["canonical_to_aliases"],
             visible_artist_names=full_family_artist_scope,
             query=query,
             connection=_connection,
+            include_library_wide=True,
         )
+        if isinstance(loaded_non_album_entries, tuple):
+            non_album_entries, library_non_album_entries = loaded_non_album_entries
+        else:
+            non_album_entries = loaded_non_album_entries
+            library_non_album_entries = loaded_non_album_entries
         non_album_tracks = build_non_album_track_list(
             non_album_entries,
+            config=self._config,
+        )
+        library_non_album_tracks = build_non_album_track_list(
+            library_non_album_entries,
             config=self._config,
         )
         family_preview_rows = self._load_artist_preview_rows(
@@ -938,6 +953,7 @@ class PostgresLibraryBrowseRepository:
             "ignored_version_keys": support_state["ignored_version_keys"],
             "manual_version_links": support_state["manual_version_links"],
             "non_album_tracks": non_album_tracks,
+            "library_non_album_tracks": library_non_album_tracks,
             "non_album_exception_values": sorted(set(NON_ALBUM_EXCEPTION_VALUES.values())),
             "listen_through_scope_candidates": _selected_artist_listen_through_scope_candidates(
                 selected_artist=artist_display,
@@ -1850,6 +1866,14 @@ class PostgresLibraryBrowseRepository:
                         if "exception_type" in row_payload
                         else file_entry.get("exception_type")
                     ),
+                    "custom_collection_name": str(
+                        (
+                            row_payload.get("custom_collection_name")
+                            if "custom_collection_name" in row_payload
+                            else file_entry.get("custom_collection_name")
+                        )
+                        or ""
+                    ).strip(),
                 }
             )
             entries[path] = file_entry
@@ -2530,6 +2554,17 @@ def _non_album_entry_from_inventory_candidate(row: object) -> dict[str, object]:
                 file_entry.get("exception_type"),
             )
         ),
+        "custom_collection_name": str(
+            (
+                payload.get("custom_collection_name")
+                if payload.get("exception_override_present") is True
+                else _first_inventory_value(
+                    payload.get("custom_collection_name"),
+                    file_entry.get("custom_collection_name"),
+                )
+            )
+            or ""
+        ).strip(),
     })
     entry["raw_artist"] = entry.get("artist")
     entry["raw_album_artist"] = entry.get("album_artist")
@@ -2821,7 +2856,7 @@ def _annotate_album_payload_problematic_tracks(
         str(row_payload.get("file_private_path") or "").strip()
         for row in rows
         if (row_payload := _row_mapping(row))
-        and _effective_row_exception_type(row_payload) in NON_ALBUM_EXCEPTION_VALUES.values()
+        and bool(_effective_row_exception_type(row_payload))
         and str(row_payload.get("file_private_path") or "").strip()
     }
     problematic_track_paths = {
@@ -3914,7 +3949,7 @@ def _track_order_issues(album: Mapping[str, object]) -> list[dict[str, object]]:
     for track in album.get("tracks") or []:
         if not isinstance(track, Mapping):
             continue
-        if normalize_exception_value(track.get("exception_type")) in NON_ALBUM_EXCEPTION_VALUES.values():
+        if normalize_exception_value(track.get("exception_type")):
             continue
         path = str(track.get("path") or "")
         file_entry = file_entries_by_path.get(path, {})
@@ -5530,7 +5565,7 @@ def _selected_artist_album_payloads(rows: list[object], artist_display: str) -> 
                 or file_entry.get("local_album_membership_problem")):
             continue
         exception_type = _effective_row_exception_type(row_payload)
-        if exception_type in NON_ALBUM_EXCEPTION_VALUES.values():
+        if exception_type:
             continue
         album_identity, album_key, album_year = _row_album_identity(row_payload, artist_display)
         if not album_identity:
@@ -6089,7 +6124,7 @@ def _eligible_album_tracks_cte_sql(
               else source_file_classification.exception_type
             end,
             ''
-          ))) not in ({_NON_ALBUM_EXCEPTION_SQL_VALUES})
+          ))) in ('', 'none', 'null')
           and coalesce(source_file_classification.local_album_membership_problem, '') = ''
           group by
             library.local_tracks.library_id,
@@ -6209,6 +6244,7 @@ def _selected_artist_sql() -> str:
           library.local_track_files.library_root_id as file_library_root_id,
           library.local_track_files.metadata ->> 'library_root_category' as file_library_root_category,
           exception_override.override_payload ->> 'exception_type' as exception_type,
+          exception_override.override_payload ->> 'custom_collection_name' as custom_collection_name,
           coalesce(
             exception_override.override_payload ? 'exception_type',
             false
@@ -6372,6 +6408,7 @@ def _album_detail_sql() -> str:
           library.local_track_files.library_root_id as file_library_root_id,
           library.local_track_files.metadata ->> 'library_root_category' as file_library_root_category,
           exception_override.override_payload ->> 'exception_type' as exception_type,
+          exception_override.override_payload ->> 'custom_collection_name' as custom_collection_name,
           coalesce(
             exception_override.override_payload ? 'exception_type',
             false
@@ -6582,7 +6619,7 @@ def _root_startup_payload_sql(artist_limit: int, *, artist_offset: int = 0) -> s
               else source_file_classification.exception_type
             end,
             ''
-          ))) not in ({_NON_ALBUM_EXCEPTION_SQL_VALUES})
+          ))) in ('', 'none', 'null')
           and coalesce(source_file_classification.local_album_membership_problem, '') = ''
         ),
         artist_album_rows as materialized (
@@ -6718,7 +6755,7 @@ def _root_startup_payload_sql(artist_limit: int, *, artist_offset: int = 0) -> s
               else source_file_classification.exception_type
             end,
             ''
-          ))) not in ({_NON_ALBUM_EXCEPTION_SQL_VALUES})
+          ))) in ('', 'none', 'null')
           and coalesce(source_file_classification.local_album_membership_problem, '') = ''
           group by
             library.local_tracks.library_id,
@@ -7326,14 +7363,7 @@ def _album_rows_by_track_paths_sql() -> str:
             library.local_track_files.metadata #> '{scan_cache,file_entry}',
             '{}'::jsonb
           ) ||
-          case
-            when exception_override.override_payload ? 'exception_type'
-            then jsonb_build_object(
-              'exception_type',
-              exception_override.override_payload ->> 'exception_type'
-            )
-            else '{}'::jsonb
-          end as file_entry,
+          coalesce(exception_override.override_payload, '{}'::jsonb) as file_entry,
           coalesce(
             ignored_repair_rollup.ignored_repair_keys,
             array[]::text[]
@@ -7561,11 +7591,9 @@ def _missing_albums_sql(*, scoped_artists: bool = False) -> str:
                then exception_override.override_payload ->> 'exception_type'
                else library.local_track_files.metadata #>> '{scan_cache,file_entry,exception_type}' end,
           ''
-        ))) not in (__NON_ALBUM_EXCEPTION_VALUES__)
+        ))) in ('', 'none', 'null')
         order by library.local_albums.album_key, library.local_tracks.id;
-    """.replace("__ARTIST_SCOPE__", artist_scope).replace(
-        "__NON_ALBUM_EXCEPTION_VALUES__", _NON_ALBUM_EXCEPTION_SQL_VALUES,
-    )
+    """.replace("__ARTIST_SCOPE__", artist_scope)
 
 
 def _physical_album_container_sql(path_expression: str) -> str:
@@ -8010,6 +8038,7 @@ def _problematic_files_sql(
             library.local_track_files.scan_file_track_number as file_track_number,
             library.local_track_files.scan_file_text_mojibake_candidate as file_text_mojibake_candidate,
             exception_override.override_payload ->> 'exception_type' as exception_type,
+            exception_override.override_payload ->> 'custom_collection_name' as custom_collection_name,
             coalesce(
               exception_override.override_payload ? 'exception_type',
               false
@@ -8072,6 +8101,7 @@ def _problematic_files_sql(
             library.local_track_files.metadata,
             library.local_track_files.scan_file_text_mojibake_candidate as file_text_mojibake_candidate,
             exception_override.override_payload ->> 'exception_type' as exception_type,
+            exception_override.override_payload ->> 'custom_collection_name' as custom_collection_name,
             coalesce(
               exception_override.override_payload ? 'exception_type',
               false

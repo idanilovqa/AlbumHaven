@@ -6151,7 +6151,9 @@ function updateGalleryMainControls() {
     button.disabled = !preferenceArtist;
   });
   document.querySelectorAll('[data-open-non-album-tracks]').forEach((button) => {
-    const enabled = getVisibleNonAlbumTracks().length > 0;
+    const enabled = getVisibleNonAlbumTracks({
+      libraryWide: button.dataset.libraryWide === '1',
+    }).length > 0;
     button.disabled = !enabled;
     button.setAttribute('aria-disabled', enabled ? 'false' : 'true');
   });
@@ -6425,7 +6427,9 @@ function handleGalleryMainClick(event) {
   const nonAlbum = event.target.closest?.('[data-open-non-album-tracks]');
   if (nonAlbum) {
     event.preventDefault();
-    if (!nonAlbum.disabled && nonAlbum.getAttribute('aria-disabled') !== 'true') openNonAlbumModal();
+    if (!nonAlbum.disabled && nonAlbum.getAttribute('aria-disabled') !== 'true') {
+      openNonAlbumModal({ libraryWide: nonAlbum.dataset.libraryWide === '1' });
+    }
     return true;
   }
   if (event.target.closest?.('[data-gallery-customize-preview]')) { event.preventDefault(); return true; }
@@ -10332,7 +10336,7 @@ function closeVersionPickerModal() {
   }
 }
 
-function getVisibleNonAlbumTracks() {
+function getVisibleNonAlbumTracks(options = {}) {
   const view = state.view;
   const mainState = state.gallery?.mainState;
   if (mainState) {
@@ -10342,8 +10346,12 @@ function getVisibleNonAlbumTracks() {
       || ['main_library', 'new_arrivals', 'hoard'];
     if (!activeSources.length || !gallerySourceScopesEqual(activeSources, payloadSources)) return [];
   }
-  const tracks = Array.isArray(view.non_album_tracks) ? view.non_album_tracks : [];
-  const selectedArtist = String(view.selected_artist || '').trim();
+  const tracks = options.libraryWide && Array.isArray(view.library_non_album_tracks)
+    ? view.library_non_album_tracks
+    : Array.isArray(view.non_album_tracks) ? view.non_album_tracks : [];
+  const selectedArtist = options.libraryWide
+    ? ''
+    : String(view.selected_artist || '').trim();
   if (!selectedArtist) return tracks;
   const artistKey = (value) => String(value || '').trim().toLocaleLowerCase();
   const artists = new Set([
@@ -10415,25 +10423,50 @@ function buildNonAlbumTrackRowsMarkup(items, startingIndex) {
       displayPath: displayPath || trackPath,
       isCurrent: isCurrentTrack,
       isPlaying: isActivelyPlaying,
-      isProblematic: Boolean(problematicAlbum),
+      isProblematic: Boolean(problematicAlbum || item.is_problematic),
     };
   });
 }
 
 function buildNonAlbumTrackSectionsMarkup(items) {
+  const exceptionType = (item) => String(
+    Object.prototype.hasOwnProperty.call(item || {}, 'exception_type')
+      ? item.exception_type
+      : item?.reason_label || '',
+  ).trim();
+  const knownTypes = new Set(['Non-album rarity', 'Interview', '']);
+  const dynamicDefinitions = [];
+  const seenDynamicKeys = new Set();
+  items.forEach((item) => {
+    const type = exceptionType(item);
+    if (knownTypes.has(type)) return;
+    const collectionName = type === 'Custom Collection'
+      ? String(item?.custom_collection_name || '').trim()
+      : '';
+    const key = `${type}\u0000${collectionName}`;
+    if (seenDynamicKeys.has(key)) return;
+    seenDynamicKeys.add(key);
+    dynamicDefinitions.push({
+      key: `custom-${dynamicDefinitions.length + 1}`,
+      title: collectionName ? `${type} — ${collectionName}` : type,
+      exceptionType: type,
+      collectionName,
+    });
+  });
   const sectionDefinitions = [
     { key: 'non-album-rarity', title: 'Non-album rarity', exceptionType: 'Non-album rarity' },
     { key: 'interview', title: 'Interviews', exceptionType: 'Interview' },
+    ...dynamicDefinitions,
     { key: 'other', title: 'Other', exceptionType: '' },
   ];
   let runningIndex = 0;
   const groups = sectionDefinitions.map((section) => {
     const sectionItems = items.filter((item) => (
-      String(
-        Object.prototype.hasOwnProperty.call(item || {}, 'exception_type')
-          ? item.exception_type
-          : item.reason_label || '',
-      ).trim() === section.exceptionType
+      exceptionType(item) === section.exceptionType
+      && (
+        section.collectionName === undefined
+        || String(item?.custom_collection_name || '').trim() === section.collectionName
+      )
     ));
     if (!sectionItems.length) return null;
     const tracks = buildNonAlbumTrackRowsMarkup(sectionItems, runningIndex);
@@ -10445,6 +10478,7 @@ function buildNonAlbumTrackSectionsMarkup(items) {
     groups,
     showPath: true,
     forceGroupLabels: true,
+    collapsibleGroups: true,
     ariaLabel: 'Loose tracks',
     idPrefix: 'loose-track-table',
     totalLength: formatAlbumDuration(totalSeconds),
@@ -10532,14 +10566,16 @@ function hideGalleryOptionsMenu() {
   if (typeof galleryMainSurfaceController !== 'undefined' && galleryMainSurfaceController?.isOpen?.('sources')) closeGalleryMainSurface(false);
 }
 
-function openNonAlbumModal() {
+function openNonAlbumModal(options = {}) {
   const els = getNonAlbumModalElements();
   if (!els.overlay || !els.table) return;
   bindOverlayPointerOrigin(els.overlay);
-  const looseTracks = getVisibleNonAlbumTracks();
-  const subtitle = state.view.selected_artist
+  const libraryWide = options.libraryWide === true;
+  state.ui.nonAlbumLibraryWide = libraryWide;
+  const looseTracks = getVisibleNonAlbumTracks({ libraryWide });
+  const subtitle = !libraryWide && state.view.selected_artist
     ? `Non-album tracks found in ${state.view.selected_artist} and family artist folders.`
-    : 'Non-album tracks found in the artist folders currently displayed.';
+    : 'Non-album tracks found in the selected library sources.';
   if (els.header) {
     els.header.innerHTML = buildAlbumDetailsHeaderHtml({
       variant: 'copy',
@@ -10554,6 +10590,12 @@ function openNonAlbumModal() {
   els.table.innerHTML = looseTracks.length
     ? buildNonAlbumTrackSectionsMarkup(looseTracks)
     : '<div class="utility-empty-state">No non-album tracks found in this view.</div>';
+  els.table.querySelectorAll?.('.album-track-table__disc--collapsible').forEach((details) => {
+    const summary = details.querySelector?.('summary');
+    const syncExpanded = () => summary?.setAttribute('aria-expanded', details.open ? 'true' : 'false');
+    syncExpanded();
+    details.addEventListener?.('toggle', syncExpanded);
+  });
   els.overlay.hidden = false;
   document.body.classList.add('modal-open');
   attachSharedPlayer();
@@ -10561,7 +10603,9 @@ function openNonAlbumModal() {
 
 function openNonAlbumTagEditor() {
   if (typeof isMobileClient === 'function' && isMobileClient()) return;
-  const tracks = getVisibleNonAlbumTracks();
+  const tracks = getVisibleNonAlbumTracks({
+    libraryWide: state.ui?.nonAlbumLibraryWide === true,
+  });
   if (!tracks.length) {
     showRepairAlert('No tracks to edit.', 'error');
     return;
@@ -16615,6 +16659,7 @@ function buildAlbumTrackTableHtml(config = {}) {
   const groups = Array.isArray(config.groups) ? config.groups : [];
   const showPath = Boolean(config.showPath);
   const forceGroupLabels = Boolean(config.forceGroupLabels);
+  const collapsibleGroups = Boolean(config.collapsibleGroups);
   const ariaLabel = String(config.ariaLabel || 'Album tracks').trim() || 'Album tracks';
   const idPrefix = String(config.idPrefix || 'album-track-table').trim() || 'album-track-table';
   const multiDisc = Boolean(config.multiDisc) || groups.length > 1;
@@ -16647,6 +16692,9 @@ function buildAlbumTrackTableHtml(config = {}) {
       overflow: 'none',
       mobile: 'preserve',
     });
+    if (collapsibleGroups && showLabel) {
+      return `<details class="album-track-table__disc album-track-table__disc--collapsible" open><summary class="album-track-table__disc-heading" aria-expanded="true">${escapeHtml(label)}</summary>${table}</details>`;
+    }
     const heading = showLabel
       ? `<h4 class="album-track-table__disc-heading">${escapeHtml(label)}</h4>`
       : '';
@@ -25092,6 +25140,7 @@ function getTrackTagInitialValues(track, album) {
     track_number: String(track?.track_number ?? ''),
     disc_number: String(track?.disc_number ?? ''),
     exception_type: String(track?.exception_type || ''),
+    custom_collection_name: String(track?.custom_collection_name || ''),
     edition: String(track?.edition || album?.edition || ''),
     album_rating: String(track?.album_rating ?? album?.album_rating ?? ''),
   };
@@ -25138,7 +25187,11 @@ function applyTagEditsToNonAlbumView(album, updates) {
   Object.entries(updates || {}).forEach(([path, edits]) => {
     const hasAlbumEdit = Object.prototype.hasOwnProperty.call(edits || {}, 'album');
     const hasExceptionEdit = Object.prototype.hasOwnProperty.call(edits || {}, 'exception_type');
-    if (!hasAlbumEdit && !hasExceptionEdit) return;
+    const hasCollectionNameEdit = Object.prototype.hasOwnProperty.call(
+      edits || {},
+      'custom_collection_name',
+    );
+    if (!hasAlbumEdit && !hasExceptionEdit && !hasCollectionNameEdit) return;
     const normalizedPath = String(path || '');
     if (!normalizedPath) return;
     const track = tracksByPath.get(normalizedPath) || nextByPath.get(normalizedPath) || {};
@@ -25164,6 +25217,9 @@ function applyTagEditsToNonAlbumView(album, updates) {
       title: String(edits.title || track?.title || 'Unknown track'),
       album: albumName,
       exception_type: exceptionType,
+      custom_collection_name: hasCollectionNameEdit
+        ? String(edits.custom_collection_name || '').trim()
+        : String(track?.custom_collection_name || '').trim(),
       reason_label: exceptionType,
       display_path: String(track?.display_path || normalizedPath),
     });
@@ -25236,6 +25292,40 @@ function getTagEditorPendingIconMarkup() {
     </span>`;
 }
 
+function getLibraryExceptionTypeChoices() {
+  const values = ['Interview', 'Non-album rarity', 'Custom Collection'];
+  const seen = new Set(values.map((value) => value.toLocaleLowerCase()));
+  (Array.isArray(state.view?.non_album_tracks) ? state.view.non_album_tracks : []).forEach((track) => {
+    const value = String(track?.exception_type || '').trim();
+    const key = value.toLocaleLowerCase();
+    if (!value || seen.has(key)) return;
+    seen.add(key);
+    values.push(value);
+  });
+  return values;
+}
+
+function syncTagEditorCollectionFields(selectedPaths = getSelectedTagEditorPaths(state.tagEditor.tracks || [])) {
+  const form = getTagEditorElements().form;
+  if (!form) return true;
+  const exceptionInput = form.querySelector('[data-tag-field="exception_type"]');
+  const collectionInput = form.querySelector('[data-tag-field="custom_collection_name"]');
+  const collectionField = form.querySelector('[data-custom-collection-name-field]');
+  const list = document.getElementById('tag-editor-exception-types');
+  if (list) {
+    list.innerHTML = getLibraryExceptionTypeChoices()
+      .map((value) => `<option value="${escapeHtml(value)}"></option>`)
+      .join('');
+  }
+  const isCollection = String(exceptionInput?.value || '').trim() === 'Custom Collection';
+  if (collectionField) collectionField.hidden = !isCollection;
+  if (collectionInput) collectionInput.disabled = !isCollection || selectedPaths.length === 0;
+  if (!isCollection) return true;
+  return selectedPaths.every((path) => (
+    String(state.tagEditor.values?.[path]?.custom_collection_name || '').trim()
+  ));
+}
+
 function syncTagEditorPendingChanges() {
   const els = getTagEditorElements();
   const pending = buildChangedTagEditorUpdates(
@@ -25249,7 +25339,8 @@ function syncTagEditorPendingChanges() {
     els.albumInput.removeAttribute('aria-describedby');
   }
   if (els.applyButton) {
-    els.applyButton.disabled = pendingPaths.size === 0;
+    els.applyButton.disabled = pendingPaths.size === 0
+      || !syncTagEditorCollectionFields();
   }
   els.list?.querySelectorAll('[data-tag-editor-track]').forEach((button) => {
     const path = String(button.getAttribute('data-tag-editor-track') || '');
@@ -25698,6 +25789,7 @@ function renderTagEditor(options = {}) {
     input.value = displayValue.value;
     input.placeholder = displayValue.mixed ? 'Mixed values' : '';
   });
+  syncTagEditorCollectionFields(selectedPaths);
   syncTagEditorPendingChanges();
 }
 
@@ -28522,6 +28614,13 @@ function closeTagEditor() {
 function openTagEditConfirmModal() {
   const els = getTagEditConfirmElements();
   if (!els.overlay) return;
+  if (
+    typeof syncTagEditorCollectionFields === 'function'
+    && !syncTagEditorCollectionFields()
+  ) {
+    showRepairAlert('Custom Collection name is required.', 'error');
+    return;
+  }
   const album = state.tagEditor.album;
   const updates = buildChangedTagEditorUpdates(
     album,
@@ -37840,7 +37939,13 @@ function handleUtilityBootstrapInput(event) {
       ...(state.tagEditor.values[path] || {}),
       [field]: input.value,
     };
+    if (field === 'exception_type' && String(input.value || '').trim() !== 'Custom Collection') {
+      state.tagEditor.values[path].custom_collection_name = '';
+    }
   });
+  if (field === 'exception_type' && typeof syncTagEditorCollectionFields === 'function') {
+    syncTagEditorCollectionFields(selectedPaths);
+  }
   syncTagEditorPendingChanges();
 }
 

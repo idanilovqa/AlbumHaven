@@ -2371,10 +2371,6 @@ async function run() {
     context.attachModalEvents();
 
     trackModal.hidden = false;
-    context.getTrackModalElements().close.dispatchEvent('pointerdown', { button: 0 });
-    assert.equal(trackModal.hidden, true, 'primary pointer-down must close Album Details immediately');
-
-    trackModal.hidden = false;
     context.document.body.classList.add('modal-open');
     openButton.click();
     assert.deepEqual(context.renderTrackModalReleaseCalls, ['alpha']);

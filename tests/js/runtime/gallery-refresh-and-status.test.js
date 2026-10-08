@@ -139,6 +139,29 @@ test('failed search preserves the view', async () => {
   assert.equal(calls.applyViewPayload.length, 0);
 });
 
+test('ordinary gallery refresh works without a browser host or optional draft navigation services', async () => {
+  for (const browserHost of [undefined, {}]) {
+    const {context, calls, pendingRequests} = createContext();
+    // Main's general fixture supplies startup progress; this case explicitly
+    // exercises the same owner without that optional browser host.
+    delete context.window;
+    assert.equal(typeof context.window, 'undefined', 'the isolated gallery owner does not require window');
+    if (browserHost) context.window = browserHost;
+    const refresh = context.fetchAndRender('/view-data', false, {preserveScroll: true});
+    assert.equal(pendingRequests.length, 1);
+    pendingRequests[0].resolveWith({artist_groups: []});
+    assert.equal(await refresh, true);
+    assert.equal(calls.applyViewPayload.length, 1);
+  }
+});
+
+test('a retained draft request without its native owner fails closed before transport', async () => {
+  const {context, pendingRequests} = createContext();
+  assert.equal(await context.fetchAndRender('/view-data', false,
+    {retainedPlaylistDraft: {token: 'expired:draft', scopeKey: 'expired:scope'}}), false);
+  assert.equal(pendingRequests.length, 0);
+});
+
 test('a deferred gallery refresh cannot overwrite a newer optimistic tag mutation', async () => {
   const { context, calls, pendingRequests } = createContext();
   vm.runInContext(tagMutationSource, context);
@@ -6583,4 +6606,18 @@ test('search progress belongs to the latest request and clears on failure', asyn
   await assert.rejects(second, /search failed/);
   assert.equal(context.state.ui.pendingGallerySearch, false);
   assert.equal(context.state.ui.pendingViewTransition, false);
+});
+
+test('a deferred form navigation leaves the current root page request untouched until the native owner admits it', async () => {
+  const {context, pendingRequests} = createContext();
+  let cancels = 0, resume;
+  context.cancelRootGalleryPageRequest = () => {cancels++;};
+  context.deferAppFormPageReplacement = callback => {resume = callback; return Promise.resolve(false);};
+  assert.equal(await context.fetchAndRender('/view-data', true), false);
+  assert.equal(cancels, 0); assert.equal(pendingRequests.length, 0);
+  context.deferAppFormPageReplacement = () => false;
+  const admitted = resume();
+  assert.equal(cancels, 1); assert.equal(pendingRequests.length, 1);
+  pendingRequests[0].resolveWith({artist_groups: []});
+  assert.equal(await admitted, true);
 });

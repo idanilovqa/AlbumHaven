@@ -21,28 +21,21 @@ test('deliberate pinch steps through 1/2/3 columns in both directions without ji
   assert.equal(columns(1, 100), 1);
 });
 
-test('a mobile row tap toggles current playback, a second tap restarts, and child actions are independent', () => {
-  let now = 1000, toggles = 0;
-  const restarts = [];
-  const button = { click: () => toggles++ };
-  const row = { dataset: { trackPlaying: 'true' }, ownerDocument: { getSelection: () => null }, querySelector: () => button };
-  const event = { detail: 1, currentTarget: row, target: { closest: () => null }, preventDefault() {} };
-  const api = load('album-track-table.js', ['handleAlbumTrackRowClick', 'handleAlbumTrackRowDoubleClick'], {
-    Date: { now: () => now }, usesMobilePageLayout: () => true,
-    activateSharedTrackButton: (target, options) => restarts.push([target, options.restart]),
-  });
-  api.handleAlbumTrackRowClick(event);
-  assert.equal(toggles, 1);
-  now += 120;
-  api.handleAlbumTrackRowClick(event);
-  assert.deepEqual(restarts, [[button, true]]);
-  api.handleAlbumTrackRowDoubleClick(event);
-  assert.equal(restarts.length, 1, 'native dblclick must not cause a third playback action');
-  now += 1000;
-  api.handleAlbumTrackRowClick(event);
-  assert.equal(toggles, 2);
-  api.handleAlbumTrackRowClick({ ...event, target: { closest: () => button } });
-  assert.equal(toggles, 2);
+test('click counts without touch evidence never time playback and preserve current-player paint', async t => {
+  const {bindPlaytableSelection} = await import('../../../music_app/static/js/playtables/selection.mjs');
+  const env = require('./native-home-harness.cjs').createNativeHomeRuntime(), doc = env.document;
+  const host = doc.createElement('section'); doc.body.appendChild(host);
+  host.innerHTML = '<div data-cdt-row-key="row" data-track-playing="true" aria-current="true" class="album-track-table__row--playing">Playing track</div>';
+  const row = host.firstElementChild, instance = {}; let plays = 0;
+  const owner = bindPlaytableSelection(host, {sourceAdapter: {snapshot: () => ({scopeKey: 'mobile', instance,
+    rows: [{rowKey: 'row', readable: true, selectable: true}]})}, onPlay: () => plays++});
+  t.after(() => {owner.dispose(); host.remove();});
+  for (const detail of [1, 1, 2]) {
+    const event = new env.context.Event('click'); event.detail = detail; row.dispatchEvent(event);
+  }
+  assert.equal(plays, 0); assert.equal(row.getAttribute('aria-selected'), 'true');
+  assert.equal(row.getAttribute('aria-current'), 'true'); assert.equal(row.classList.contains('album-track-table__row--playing'), true);
+  row.dispatchEvent(new env.context.Event('dblclick')); assert.equal(plays, 1);
 });
 
 test('Follow mode rejects every appearance mutation until explicit Custom and preserves desktop values', () => {

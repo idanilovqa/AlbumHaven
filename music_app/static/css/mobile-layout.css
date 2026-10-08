@@ -40,6 +40,13 @@
   border: 0; border-radius: 0; box-shadow: none; margin: 0; overflow: visible; background: transparent;
 }
 .is-mobile-page :is([data-close-non-album-modal], [data-close-track-modal], #track-modal-close, #utility-modal-close, [data-close-cover-lookup-modal]) { display: none !important; }
+/* Opt-in forms transfer their existing host into the shared page outlet. */
+#app-form-modal.is-mobile-page > .confirm-modal-dialog {
+  width: 100%; max-width: none; min-width: 0; max-height: none; min-height: 100%;
+  border: 0; border-radius: 0; box-shadow: none; margin: 0; background: transparent;
+}
+#app-form-modal.is-mobile-page #app-form-title { display: none; }
+#app-form-modal.is-mobile-page #app-form-content { overflow: visible; }
 .mobile-home { overflow: auto; min-height: 0; flex: 1; padding: 0 2px 20px; }
 .mobile-home #mobile-library-button { justify-content: flex-start; }
 .mobile-home-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 14px; }

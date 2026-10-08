@@ -1,0 +1,11 @@
+/* Placement only; native Button, Choice, form fields and OnPageAlert retain
+   their approved surfaces, disabled states and keyboard focus treatment. */
+.home-history-navigation { display: flex; flex-direction: column; gap: 8px; min-width: 0; padding-block: 10px; }
+.home-history-navigation__summary { margin: 0; overflow-wrap: anywhere; }
+.home-history-navigation__controls { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; min-width: 0; }
+.home-history-navigation__choice .ui-choice__trigger.ui-button { height: auto; }
+.home-history-navigation__choice .ui-button__content { white-space: normal; overflow-wrap: anywhere; }
+.tag-editor-form.home-history-navigation__jump { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 0; padding: 0; }
+.home-history-navigation__jump label { display: flex; flex-direction: row; align-items: center; gap: 8px; }
+.home-history-navigation__jump input { width: 9ch; }
+.home-history-navigation__status { display: flex; flex-direction: column; align-items: flex-start; gap: 8px; }

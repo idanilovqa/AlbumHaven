@@ -1,0 +1,12 @@
+/* Activity composition; native table, card and button owners retain their paint. */
+.home-activity { min-width: 0; }
+.home-activity__controls { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-bottom: 12px; }
+.home-activity__cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(145px, 1fr)); gap: 12px; }
+.home-activity__card { min-width: 0; }
+.home-activity__card[data-selected="true"] { outline: 2px solid var(--appearance-selection-accent, var(--accent)); outline-offset: 2px; border-radius: 8px; }
+.home-activity__cards--artists .album-artbox { border-radius: 50%; }
+.home-activity__selection { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--border); }
+.home-activity__selection > header { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.home-activity__selection h3 { margin: 0; }
+.home-activity__selection dl { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 6px 12px; }
+.home-activity__selection dd { margin: 0; }

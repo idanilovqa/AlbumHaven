@@ -178,3 +178,19 @@
 .album-track-table [role="columnheader"][data-cdt-column="number"] { width: 28px; text-align: center; }
 
 .album-track-table .compact-data-table { color: var(--appearance-ink, var(--text)); }
+
+/* Confirmed missing inventory changes only the fill; native selection, focus,
+   current-track outlines and playing spectra keep their existing owners. */
+.album-track-table .album-track-table__row--missing {
+  background: color-mix(in srgb, var(--appearance-error, var(--danger, #ef5350)) 13%, var(--appearance-table-surface, var(--panel))) !important;
+}
+.album-track-table .album-track-table__row--missing:is(:hover, :focus-within, [aria-selected="true"]) {
+  background: color-mix(in srgb, var(--appearance-error, var(--danger, #ef5350)) 19%, var(--appearance-table-surface, var(--panel))) !important;
+}
+
+/* Read-only metrics reuse native icon/rating artwork and table typography. */
+.album-track-table__metric { font-variant-numeric: tabular-nums; white-space: nowrap; }
+.album-track-table__love { display: inline-flex; align-items: center; justify-content: center; min-width: 24px; min-height: 20px; overflow: visible; }
+.album-track-table__rating { min-width: 0; width: 100%; max-width: 112px; }
+.album-track-table__rating .rating-row { --rating-star-interval-count: 5; column-gap: 5px; }
+.album-track-table__rating .rating-row::after { content: '5/5'; }

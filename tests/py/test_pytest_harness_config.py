@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
+import runpy
 import shutil
 import subprocess
 import sys
@@ -18,6 +19,24 @@ REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 PROBE_PATH = REPOSITORY_ROOT / "tests" / "py" / "_pytest_harness_probe.py"
 PROBE_PREFIX = "PYTEST_HARNESS_PROBE="
 PYTEST_ROOT_ENV = "ALBUM_HAVEN_PYTEST_ROOT"
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows extended path syntax")
+def test_path_ownership_normalizes_windows_extended_prefixes():
+    is_path_within = runpy.run_path(str(PROBE_PATH))["_is_path_within"]
+
+    assert is_path_within(
+        Path(r"\\?\D:\album-haven\pytest-root\appdata"),
+        Path(r"D:\album-haven\pytest-root"),
+    )
+    assert is_path_within(
+        Path(r"\\?\UNC\server\share\pytest-root\appdata"),
+        Path(r"\\server\share\pytest-root"),
+    )
+    assert not is_path_within(
+        Path(r"\\?\UNC\server\share\pytest-root-sibling\appdata"),
+        Path(r"\\server\share\pytest-root"),
+    )
 
 
 def _probe_command(*, basetemp: Path | None = None) -> list[str]:

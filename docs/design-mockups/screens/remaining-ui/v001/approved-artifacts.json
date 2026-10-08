@@ -5,7 +5,7 @@
   "approvedBy": "user",
   "approvalQuote": "Okay, all mocks approved. Write the implementation plan with all the proper references and describing all the use cases that came up in this chat",
   "scope": "Final remaining-ui/v001 visual artifacts and review corrections. Full-page.html approves only Artist Tree compacting and gallery reflow; preserve the actual main app look, chrome, gallery presentation and player.",
-  "implementationPlan": "../../../../superpowers/plans/2026-09-10-cover-look-up-and-remaining-ui-implementation.md",
+  "implementationPlan": "album-haven-internal private owner record",
   "hashAlgorithm": "SHA256",
   "artifacts": {
     "appearance/appearance-0.html": "3a8e7ec6580eae95317b3377d39523df24f0e32b9a445b8a84a85093bf8432cf",

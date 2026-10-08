@@ -39,7 +39,7 @@ The local MusicBrainz mirror remains a separate database behind the MusicBrainz
 web service. Development uses:
 
 ```text
-http://localhost:5000/ws/2/
+http://localhost:5050/ws/2/
 ```
 
 `MUSICBRAINZ_BASE_URL` remains environment-configurable and normalized with a
@@ -392,13 +392,15 @@ processing observes configured concurrency and request-rate limits.
 
 ## Delivery Boundary
 
-MI-01 and the MI-02 backend/compatibility projection form one independently useful
+MI-01 and the MI-02 backend/compatibility projection form one shared technical
 foundation: normalized identities, durable local matches, jobs, retries, and
-explainable Problematic Files reasons. The implementation plan may split this
-foundation into reviewable migrations and vertical slices, but every published
-slice must have a tested compatibility contract and must not expose a broken user
-journey.
+explainable Problematic Files reasons. The approved implementation plan publishes
+that foundation only inside complete user-visible artist and local-release
+deliveries. Migrations, repositories, workers, and APIs are internal tasks rather
+than standalone publication units.
 
 Country and genre display, missing-genre activation, release-type UI, Customize,
 relationship-driven Artist Family, family cards, remote-only related artists, and
-family weighting remain outside this spec.
+family weighting remain outside this spec. Their delivery-specific design addenda
+must be approved before implementation; grouping them with this foundation in a
+vertical delivery does not extend this spec's design authority.

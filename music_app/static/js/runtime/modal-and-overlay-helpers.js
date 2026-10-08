@@ -204,8 +204,9 @@ function getNonAlbumMenuLabel() {
   return state.view.selected_artist ? 'Non-album tracks' : 'Loose tracks';
 }
 
-function buildNonAlbumTrackRowsMarkup(items, startingIndex) {
+function buildNonAlbumTrackRowsMarkup(items, startingIndex, privateRows = []) {
   return items.map((item, offset) => {
+    privateRows.push({...item, track_ref: Object.hasOwn(item, 'track_ref') ? item.track_ref : item.path});
     const rowIndex = startingIndex + offset + 1;
     const duration = formatTrackDuration(item.duration_seconds);
     const trackPath = String(item.path || '');
@@ -245,6 +246,7 @@ function buildNonAlbumTrackRowsMarkup(items, startingIndex) {
 }
 
 function buildNonAlbumTrackSectionsMarkup(items) {
+  const privateRows = [], sourceView = state.view;
   const sectionDefinitions = [
     { key: 'non-album-rarity', title: 'Non-album rarity', exceptionType: 'Non-album rarity' },
     { key: 'interview', title: 'Interviews', exceptionType: 'Interview' },
@@ -260,13 +262,19 @@ function buildNonAlbumTrackSectionsMarkup(items) {
       ).trim() === section.exceptionType
     ));
     if (!sectionItems.length) return null;
-    const tracks = buildNonAlbumTrackRowsMarkup(sectionItems, runningIndex);
+    const tracks = buildNonAlbumTrackRowsMarkup(sectionItems, runningIndex, privateRows);
     runningIndex += sectionItems.length;
     return { discLabel: section.title, sectionKey: section.key, tracks };
   }).filter(Boolean);
   const totalSeconds = items.reduce((sum, item) => sum + (Number(item?.duration_seconds) || 0), 0);
+  if (typeof NativePlaytables !== 'undefined') NativePlaytables.prepare('loose-tracks', sourceView, groups, privateRows, () => {
+    const overlay = document.getElementById('non-album-modal');
+    const retained = typeof mobilePageState !== 'undefined' && mobilePageState.pages.some(page => page.kind === 'non-album');
+    return Boolean(overlay?.isConnected && (!overlay.hidden || retained) && state.view === sourceView);
+  });
   return buildAlbumTrackTableHtml({
     groups,
+    selection: 'multiple', sectionActions: true,
     showPath: true,
     forceGroupLabels: true,
     ariaLabel: 'Loose tracks',
@@ -357,6 +365,7 @@ function hideGalleryOptionsMenu() {
 }
 
 function openNonAlbumModal() {
+  if (typeof deferAppFormPageReplacement === 'function' && deferAppFormPageReplacement(openNonAlbumModal)) return;
   const els = getNonAlbumModalElements();
   if (!els.overlay || !els.table) return;
   bindOverlayPointerOrigin(els.overlay);
@@ -380,6 +389,10 @@ function openNonAlbumModal() {
     : '<div class="utility-empty-state">No non-album tracks found in this view.</div>';
   els.overlay.hidden = false;
   document.body.classList.add('modal-open');
+  if (typeof NativePlaytables !== 'undefined') {
+    if (looseTracks.length) NativePlaytables.mount('loose-tracks', els.table);
+    else NativePlaytables.retire('loose-tracks');
+  }
   attachSharedPlayer();
 }
 
@@ -547,6 +560,7 @@ function overlayClickStartedOnOverlay(overlay, event) {
 
 function closeNonAlbumModal() {
   if (typeof dismissMobilePage === 'function' && dismissMobilePage('non-album')) return;
+  if (typeof NativePlaytables !== 'undefined') NativePlaytables.retire('loose-tracks');
   const els = getNonAlbumModalElements();
   if (!els.overlay) return;
   els.overlay.hidden = true;
@@ -582,11 +596,12 @@ async function openAlbumInExplorer(album) {
 }
 
 function getTrackModalElements() {
+  const selected = typeof getTrackModalSelectionLease === 'function' ? getTrackModalSelectionLease() : null;
   return {
     overlay: document.getElementById('track-modal'),
-    header: typeof document.querySelector === 'function'
+    header: selected?.dialog?.querySelector('.track-modal-header') || (typeof document.querySelector === 'function'
       ? document.querySelector('#track-modal > .track-modal-dialog > .track-modal-header')
-      : null,
+      : null),
     title: document.getElementById('track-modal-title'),
     subtitle: document.getElementById('track-modal-subtitle'),
     cover: document.getElementById('track-modal-cover'),

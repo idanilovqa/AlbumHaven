@@ -114,15 +114,19 @@ test('AlertLabel interaction states retain the gallery alert severity color fami
   assert.doesNotMatch(labelRules, /--appearance-interaction-outline/);
 });
 
-test('selected Suggested Edit labels use a saturated green state', () => {
+test('Suggested Edit labels use a neutral idle edge and saturated green selected state', () => {
   const css = fs.readFileSync(
     path.join(repoRoot, 'music_app', 'static', 'css', 'runtime', 'utilities.css'),
     'utf8',
   );
-  const selectedRule = css.match(/\.utility-detected-table \.utility-problem-suggestion\[aria-pressed="true"\]\s*\{[^}]*\}/s)?.[0] || '';
-  assert.match(selectedRule, /background:\s*#15803d/);
-  assert.match(selectedRule, /color:\s*#fff/);
-  assert.match(selectedRule, /0 0 0 2px #22c55e/);
+  const idleRule = css.match(/\.utility-detected-table \.utility-problem-suggestion:not\(\[aria-pressed="true"\]\)\s*\{[^}]*\}/s)?.[0] || '';
+  assert.match(idleRule, /border-color:\s*var\(--appearance-line, var\(--border\)\)/);
+  assert.match(idleRule, /background:\s*color-mix\([^;]*var\(--alert-tint/);
+  const selectedRule = css.match(/#utility-modal \.utility-detected-table \.utility-problem-suggestion\[aria-pressed="true"\]\s*\{[^}]*\}/s)?.[0] || '';
+  assert.match(selectedRule, /background:\s*#15803d !important/);
+  assert.match(selectedRule, /border-color:\s*#0b5f31 !important/);
+  assert.match(selectedRule, /color:\s*#fff !important/);
+  assert.match(selectedRule, /box-shadow:\s*0 0 0 2px #22c55e[^;]*!important/);
 });
 
 test('standalone alert exports escape text and attribute values without runtime globals', () => {

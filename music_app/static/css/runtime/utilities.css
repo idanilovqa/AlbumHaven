@@ -1952,16 +1952,16 @@
 }
 /* Suggested edits are toggles: neutral until selected, explicit when active. */
 .utility-detected-table .utility-problem-suggestion:not([aria-pressed="true"]) {
-  border-color: color-mix(in srgb, var(--alert-edge, var(--accent)) 78%, var(--appearance-line, var(--border)));
+  border-color: var(--appearance-line, var(--border));
   background: color-mix(in srgb, var(--alert-tint, var(--panel)) 42%, var(--appearance-panel-background, var(--panel)));
   color: var(--alert-ink, var(--text));
   box-shadow: none;
 }
-.utility-detected-table .utility-problem-suggestion[aria-pressed="true"] {
-  border-color: #0b5f31;
-  background: #15803d;
-  color: #fff;
+#utility-modal .utility-detected-table .utility-problem-suggestion[aria-pressed="true"] {
+  border-color: #0b5f31 !important;
+  background: #15803d !important;
+  color: #fff !important;
   box-shadow: 0 0 0 2px #22c55e,
     inset 0 0 0 1px color-mix(in srgb, #fff 22%, transparent),
-    0 0 14px color-mix(in srgb, #22c55e 55%, transparent);
+    0 0 14px color-mix(in srgb, #22c55e 55%, transparent) !important;
 }

@@ -82,6 +82,10 @@ const RUNTIME_SCRIPT_PATHS = [
   'js/runtime/mobile-navigation.js',
   'js/runtime/in-page-tabs.js',
   'js/runtime/mobile-home.js',
+  'js/runtime/track-actions.js',
+  'js/runtime/resource-selection.js',
+  'js/runtime/home-friends-bridge.js',
+  'js/runtime/playlists-react-bridge.js',
   'js/runtime/bootstrap-event-handlers.js',
   'js/runtime/bootstrap-init.js',
 ];
@@ -109,6 +113,7 @@ function writeRuntimeBundle() {
 
 if (require.main === module) {
   writeRuntimeBundle();
+  require('./build-home-friends.cjs').buildHomeFriendsBundle();
   console.log(`Wrote ${path.relative(repoRoot, outputPath)} from ${RUNTIME_SCRIPT_PATHS.length} runtime modules.`);
 }
 

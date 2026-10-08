@@ -6,6 +6,19 @@ const vm = require('node:vm');
 
 const repoRoot = path.join(__dirname, '..', '..', '..');
 
+test('read-only track projections cannot expose media paths or native actions', () => {
+  const context = loadTrackTable();
+  const track = {id: 'display-row', path: '/private/library/song.flac', displayPath: '/private/display.flac',
+    title: '<Projected track>', track_number: 2, duration: '3:41', isPlaying: true, isCurrent: true, isProblematic: true};
+  const row = context.buildAlbumTrackTableRow(track, 0, {readOnly: true});
+  const html = context.buildAlbumTrackTableHtml({readOnly: true, showPath: true, groups: [{tracks: [track]}]});
+  assert.equal(row.key, 'display-row');
+  assert.deepEqual(Object.keys(row.dataAttributes), []);
+  assert.match(html, /&lt;Projected track&gt;/);
+  assert.match(html, /3:41/);
+  assert.doesNotMatch(html, /\/private\/|data-track-path|data-track-row-path|data-track-duration-path|play-track-button|data-open-track-problematic|__row--playing|__row--current/);
+});
+
 function loadTrackTable() {
   const context = {
     escapeHtml: (value) => String(value ?? '').replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;').replaceAll('"', '&quot;'),
@@ -21,6 +34,39 @@ function loadTrackTable() {
   }
   return context;
 }
+
+test('only normalized confirmed-missing rows receive additive shared missing state', () => {
+  const context = loadTrackTable();
+  const track = { path: 'missing.flac', title: 'Missing track', availability: 'missing', isCurrent: true, isPlaying: true, isSearchMatch: true };
+  const row = context.buildAlbumTrackTableRow(track);
+  for (const state of ['missing', 'current', 'playing', 'search-match', 'animated']) {
+    assert.ok(row.className.split(' ').includes(`album-track-table__row--${state}`));
+  }
+  assert.equal(row.dataAttributes['track-row-path'], 'missing.flac');
+  assert.equal(row.dataAttributes['track-playing'], 'true');
+  for (const availability of ['available', 'unknown', 'ambiguous', 'unresolved', 'confirmed-missing', '', undefined, null, { state: 'missing' }]) {
+    assert.doesNotMatch(context.buildAlbumTrackTableRow({ ...track, availability }).className, /__row--missing/);
+  }
+  const projection = context.buildAlbumTrackTableRow(track, 0, { readOnly: true });
+  assert.match(projection.className, /__row--missing/);
+  assert.doesNotMatch(projection.className, /__row--(?:current|playing|animated)/);
+  assert.deepEqual(Object.keys(projection.dataAttributes), []);
+  assert.doesNotMatch(projection.cells.number.content, /play-track-button/);
+  const html = context.buildAlbumTrackTableHtml({ groups: [{ tracks: [track, { ...track, path: 'unknown.flac', availability: 'unknown' }] }] });
+  assert.equal((html.match(/album-track-table__row--missing/g) || []).length, 1);
+});
+
+test('missing-row tint uses the error theme while retaining native interaction and playback layers', () => {
+  const css = fs.readFileSync(path.join(repoRoot, 'music_app', 'static', 'css', 'runtime', 'album-track-table.css'), 'utf8');
+  const missingRules = [...css.matchAll(/\.album-track-table \.album-track-table__row--missing([^{}]*)\{([^}]+)\}/g)];
+  assert.equal(missingRules.length, 2);
+  assert.match(missingRules[0][2], /var\(--appearance-error, var\(--danger, #[a-f\d]+\)\) 13%, var\(--appearance-table-surface, var\(--panel\)\)/);
+  assert.match(missingRules[1][1], /:is\(:hover, :focus-within, \[aria-selected="true"\]\)/);
+  assert.match(missingRules[1][2], /19%/);
+  for (const [, , declarations] of missingRules) {
+    assert.match(declarations.trim(), /^background: [^;]+;$/);
+  }
+});
 
 test('AlbumTrackTable changes only the inner Play and Pause glyphs to centered shared SVGs', () => {
   const context = loadTrackTable();

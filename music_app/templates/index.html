@@ -1,4 +1,5 @@
 <!doctype html>
+{% set home_actor = request.state.current_actor if request.state.current_actor is defined else none %}
 {% set shell_layout = bootstrap_payload.initial_view.shell_layout if bootstrap_payload and bootstrap_payload.initial_view and bootstrap_payload.initial_view.shell_layout else {} %}
 {% set shell_slots = shell_layout.slots if shell_layout and shell_layout.slots else {} %}
 {% set shell_rail = shell_slots.navigation_rail if shell_slots and shell_slots.navigation_rail else {} %}
@@ -33,6 +34,17 @@
   <link rel="stylesheet" href="{{ url_for('static', filename='css/search-input.css') }}?v={{ runtime_asset_version }}">
   <link rel="stylesheet" href="{{ url_for('static', filename='css/scrollbar.css') }}?v={{ runtime_asset_version }}">
   <link rel="stylesheet" href="{{ url_for('static', filename='css/date-range-picker.css') }}?v={{ runtime_asset_version }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/runtime/home-friends.css') }}?v={{ runtime_asset_version }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/runtime/home-profile.css') }}?v={{ runtime_asset_version }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/runtime/home-activity.css') }}?v={{ runtime_asset_version }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/runtime/home-comparison.css') }}?v={{ runtime_asset_version }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/runtime/home-detail-projection.css') }}?v={{ runtime_asset_version }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/runtime/home-friend-profile.css') }}?v={{ runtime_asset_version }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/runtime/playlists-react.css') }}?v={{ runtime_asset_version }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/runtime/playlists-creation.css') }}?v={{ runtime_asset_version }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/runtime/playlists-draft.css') }}?v={{ runtime_asset_version }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/choice-component.css') }}?v={{ runtime_asset_version }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/runtime/home-history-navigation.css') }}?v={{ runtime_asset_version }}">
   {% include "partials/navigation-tree-assets.html" %}
   <script src="/static/js/surface-dismissal.js?v={{ runtime_asset_version | default(app_version) }}" defer></script>
   <script src="/static/js/account.js" defer></script>
@@ -41,6 +53,7 @@
   <script>window.__ALBUM_HAVEN_RUNTIME_ASSET_VERSION__ = {{ runtime_asset_version | tojson }};</script>
   <script src="{{ url_for('static', filename='app.js') }}?v={{ runtime_asset_version }}" defer></script>
   {% if bootstrap_payload %}<script src="{{ url_for('static', filename='js/runtime-bundle.js') }}?v={{ runtime_asset_version }}" defer></script>{% endif %}
+  <script src="{{ url_for('static', filename='js/home-friends-bundle.js') }}?v={{ runtime_asset_version }}" defer></script>
   {% include "partials/appearance-bootstrap.html" %}
   <style>
     html[data-client-layout-pending="true"] body { visibility: hidden; }
@@ -65,9 +78,10 @@
   {% set discovery_center_page = bootstrap_payload.initial_view.discovery_center if bootstrap_payload and bootstrap_payload.initial_view and bootstrap_payload.initial_view.discovery_center else {} %}
   {% from "partials/app-bar.html" import app_bar with context %}
   {% from "partials/search-input.html" import search_input %}
+  <template id="native-search-field-template">{{ search_input("native-search-template-input", name="", placeholder="", label="Search", button_type="button") }}</template>
   {% from "partials/button.html" import ui_button, action_button %}
   {% from "partials/playback-control-cluster.html" import playback_control_cluster %}
-  <div class="layout shell-layout" id="app-shell" data-shell-kind="{{ shell_layout.kind or 'shared_media_shell' }}">
+  <div class="layout shell-layout" id="app-shell" data-native-account-id="{{ home_actor.account_id if home_actor and home_actor.is_authenticated else '' }}" data-native-library-id="{{ home_actor.current_library_id if home_actor and home_actor.is_authenticated and home_actor.current_library_id is not none else '' }}" data-shell-kind="{{ shell_layout.kind or 'shared_media_shell' }}">
     {% call app_bar("library") %}
         <form class="toolbar-left" id="search-form" method="get" action="/" data-shell-horizontal-align="gallery-body">
           {{ search_input("search-input", value=query, suggestions_id="recent-search-popover") }}
@@ -128,6 +142,8 @@
 
 
 
+      <section class="mobile-home gallery-scrollbar" id="mobile-home" data-account-name="{{ current_account_name|default('') }}" data-home-account-id="{{ home_actor.account_id if home_actor and home_actor.is_authenticated else '' }}" data-home-library-id="{{ home_actor.current_library_id if home_actor and home_actor.is_authenticated and home_actor.current_library_id is not none else '' }}" aria-label="Home" hidden><div id="home-friends-root"></div></section>
+      <section id="playlists-root" aria-label="Playlists" hidden></section>
       {% if shell_main.content_kind == 'discovery_center_page' and discovery_center_page %}
       <section class="discovery-center-page" id="discovery-center-page" data-discovery-center-page-kind="{{ discovery_center_page.page_kind or 'discovery_center' }}" data-discovery-center-active-tab="{{ discovery_center_page.active_tab or 'inbox' }}" data-discovery-center-active-source="{{ discovery_center_page.active_source or 'all' }}">
         <header class="discovery-center-page-header">
@@ -226,7 +242,7 @@
       </section>
 
 
-      <section class="mobile-home gallery-scrollbar" id="mobile-home" data-account-name="{{ current_account_name|default('') }}" aria-label="Recent" hidden></section>
+
       <div class="albums-scroll" id="albums-scroll" {% if show_initial_library_loader %}hidden{% endif %}>
         <div class="albums-viewport" id="albums-viewport" data-shell-horizontal-align="gallery-body">
           <div class="gallery-focus-glow" id="gallery-focus-glow" hidden aria-hidden="true"></div>

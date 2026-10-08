@@ -322,6 +322,15 @@ test('never-played player hides its timestamp until a track is available', () =>
   assert.equal(time.textContent, '3 / 60');
 });
 
+test('optional track paint notification cannot interrupt the native player update', () => {
+  const {context} = loadHelper();
+  assert.doesNotThrow(() => context.updatePlayerUi(), 'an absent React track module remains optional');
+  let notifications = 0;
+  context.window.AlbumHavenTrackPlayback = {sync() {notifications++; throw new Error('Paint failed');}};
+  assert.doesNotThrow(() => context.updatePlayerUi());
+  assert.equal(notifications, 1);
+});
+
 test('visible play control and global Space dispatch pause and resume through the streaming engine', async () => {
   const calls = [];
   const snapshot = {
@@ -3176,24 +3185,21 @@ for (const deleteAllowed of [true, false]) {
   });
 }
 
-function loadCapabilityTrackRow(actions) {
+async function loadCapabilityTrackRow(actions, t) {
+  const {bindPlaytableSelection} = await import('../../../music_app/static/js/playtables/selection.mjs');
+  const native = require('./native-home-harness.cjs').createNativeHomeRuntime(), document = native.document;
+  document.readyState = 'loading';
   const effects = [];
-  const button = new FakeElement({ tagName: 'BUTTON', classNames: ['album-track-table__play'], attributes: {
-    'data-src': '/track?path=song.flac', 'data-track-path': 'song.flac', 'data-track-title': 'Song',
-  } });
-  const row = new FakeElement();
+  const host = document.createElement('section'); document.body.appendChild(host);
+  host.innerHTML = '<div class="album-track-table__row" data-cdt-row-key="song-occurrence" tabindex="0">Song'
+    + '<button type="button" class="play-track-button album-track-table__play" data-src="/track?path=song.flac" data-track-path="song.flac" data-track-title="Song">Play</button></div>';
+  const row = host.firstElementChild, button = row.querySelector('button');
   const album = { name: 'Album' };
-  const document = {
-    readyState: 'loading', addEventListener() {}, getSelection: () => null,
-    querySelectorAll: selector => selector === '.play-track-button' ? [button] : [],
-    getElementById: id => id === 'capability-bootstrap' ? { textContent: JSON.stringify({
-      allowed_actions: actions, denied_selectors: ['.play-track-button', '.global-player'],
-    }) } : id === 'track-modal' ? { hidden: false } : null,
-  };
-  row.ownerDocument = document;
-  row.querySelector = () => button;
-  button.closest = selector => selector === '.album-track-table__row' ? row : null;
-  button.click = () => button.dispatch('click', { isTrusted: false });
+  const modal = document.createElement('div'); modal.id = 'track-modal'; document.body.appendChild(modal);
+  const bootstrap = document.createElement('script'); bootstrap.id = 'capability-bootstrap';
+  bootstrap.textContent = JSON.stringify({allowed_actions: actions,
+    denied_selectors: actions?.['library.media.read'] === true ? [] : ['.play-track-button', '.global-player']});
+  document.body.appendChild(bootstrap);
   const { context, audio, timeline } = loadHelper({ document,
     canStartPlaybackInThisTab: () => { effects.push('ownership'); return true; },
     startStreamingTrack: async () => { effects.push('stream'); return { role: 'current' }; },
@@ -3215,22 +3221,38 @@ function loadCapabilityTrackRow(actions) {
   context.triggerAlbumTrackPlayActivation = target => { effects.push('animation'); animate(target); };
   context.updatePlayerUi = () => effects.push('render');
   context.attachSharedPlayer();
-  const click = detail => row.dispatch('click', {
-    detail, target: { closest: () => null }, currentTarget: row, preventDefault() {},
+  const instance = {};
+  const selection = bindPlaytableSelection(host, {
+    sourceAdapter: {snapshot: () => ({scopeKey: 'media-capability-fixture', instance,
+      rows: [{rowKey: 'song-occurrence', readable: true, selectable: true}]})},
+    onPlay: (_rowKey, event, options) => context.activateSharedTrackButton(button,
+      {restart: options?.restart === true, focusTimeline: event.isTrusted !== false}),
   });
-  return { context, effects, audio, timeline, click, button };
+  t.after(() => {selection.dispose(); host.remove(); modal.remove(); bootstrap.remove();});
+  const emit = (target, type, properties = {}) => {
+    const event = new native.context.Event(type);
+    Object.assign(event, {detail: 1, isTrusted: false}, properties); target.dispatchEvent(event); return event;
+  };
+  const tap = timeStamp => {
+    const pointer = {pointerType: 'touch', pointerId: 1, isPrimary: true, clientX: 20, clientY: 20};
+    emit(row, 'pointerdown', {...pointer, timeStamp});
+    emit(row, 'pointerup', {...pointer, timeStamp: timeStamp + 10});
+    emit(row, 'click', {timeStamp: timeStamp + 11});
+  };
+  return { context, effects, audio, timeline, tap, button, row,
+    play: () => emit(button, 'click'), doubleClick: timeStamp => emit(row, 'dblclick', {detail: 2, timeStamp}) };
 }
 
 for (const actions of [{ 'library.media.read': false }, {}]) {
-  test(`denied mobile track clicks and direct restart have no playback effects (${Object.keys(actions).length ? 'denied' : 'missing grant'})`, async () => {
-    const f = loadCapabilityTrackRow(actions);
+  test(`denied mobile track gestures and direct restart have no playback effects (${Object.keys(actions).length ? 'denied' : 'missing grant'})`, async t => {
+    const f = await loadCapabilityTrackRow(actions, t);
     const before = JSON.stringify(f.context.state.player);
     const queue = f.context.state.player.playbackQueue;
-    f.click(1);
-    f.click(2);
+    f.tap(100); f.tap(230); f.doubleClick(245); f.play();
     f.context.activateSharedTrackButton(f.button, { restart: true, focusTimeline: true });
     await new Promise(resolve => setImmediate(resolve));
     assert.deepEqual(f.effects, []);
+    assert.equal(f.row.getAttribute('aria-selected'), 'true', 'readable row selection does not grant media access');
     assert.equal(JSON.stringify(f.context.state.player), before);
     assert.strictEqual(f.context.state.player.playbackQueue, queue);
     assert.equal(f.audio.playCalls, 0);
@@ -3239,13 +3261,18 @@ for (const actions of [{ 'library.media.read': false }, {}]) {
 }
 
 for (const actions of [{ 'library.media.read': true }, undefined]) {
-  test(`mobile track click resumes and double-tap restarts through shared playback (${actions ? 'allowed' : 'legacy'})`, async () => {
-    const f = loadCapabilityTrackRow(actions);
-    f.click(1);
+  test(`mobile row selection, explicit resume and deliberate double-tap use shared playback (${actions ? 'allowed' : 'legacy'})`, async t => {
+    const f = await loadCapabilityTrackRow(actions, t);
+    const queue = f.context.state.player.playbackQueue;
+    f.tap(100);
+    assert.equal(f.row.getAttribute('aria-selected'), 'true'); assert.deepEqual(f.effects, []);
+    assert.equal(f.audio.playCalls, 0, 'a single row tap selects without playing');
+    assert.strictEqual(f.context.state.player.playbackQueue, queue);
+    f.play();
     await new Promise(resolve => setImmediate(resolve));
-    assert.equal(f.audio.playCalls, 1, 'ordinary click resumes the loaded current track');
+    assert.equal(f.audio.playCalls, 1, 'explicit Play resumes the loaded current track');
     assert.equal(f.effects.includes('stream'), false);
-    f.click(2);
+    f.tap(1000); f.tap(1130); f.doubleClick(1145);
     await new Promise(resolve => setImmediate(resolve));
     assert.equal(f.effects.filter(effect => effect === 'stream').length, 1);
     assert.equal(f.effects.filter(effect => effect === 'queue').length, 1);

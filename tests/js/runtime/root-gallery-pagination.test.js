@@ -93,3 +93,50 @@ test('continuation uses the loaded source scope rather than retained browser sco
   assert.match(f.pending[0].url, /gallery_scope=all&category=hoard/);
   f.pending[0].resolve(page([])); await result;
 });
+
+function retainNativeAlbumSource(f) {
+  const nativeSource = fs.readFileSync(path.resolve(__dirname, '../../../music_app/static/js/runtime/playtable-source.js'), 'utf8');
+  const token = {};
+  f.context.TrackActionsRuntime = {scope: () => ({actor: 'synthetic-actor', library: 'synthetic-library', token})};
+  Object.assign(f.context.window, {addEventListener() {}, removeEventListener() {},
+    AlbumHavenPlaylistRuntime: {snapshot: () => ({scopeKey: 'synthetic-scope'})}});
+  vm.runInContext(nativeSource, f.context);
+  const native = vm.runInContext('NativePlaytables', f.context);
+  const album = {key: 'retained-album'}, groups = [{tracks: [{}]}];
+  f.state.modalReleases = [album]; f.state.modalReleaseIndex = 0;
+  const owner = native.prepare('album-tracks', album, groups, [{track_ref: '/synthetic/retained-track'}],
+    () => f.state.modalReleases[0] === album);
+  return {native, adapter: owner.source, rowKey: groups[0].tracks[0].rowKey,
+    close() {f.state.modalReleases = []; native.retire('album-tracks');}};
+}
+test('an in-flight root continuation cannot retire an opened native Album source; release resumes root paging', async () => {
+  const f = fixture(), original = f.state.view, pending = f.context.loadNextRootGalleryPage();
+  const child = retainNativeAlbumSource(f);
+  assert.equal(child.native.hasActiveSource(), true);
+  f.pending[0].resolve(page([{artist: 'Later', albums: [{key: 'later'}]}]));
+  assert.equal(await pending, false); assert.equal(f.state.view, original);
+  assert.equal(child.adapter.resolveRows([child.rowKey]).rows[0].track_ref, '/synthetic/retained-track');
+  assert.equal(await f.context.loadNextRootGalleryPage(), false); assert.equal(f.pending.length, 1);
+  child.close(); for (const callback of f.timers.splice(0)) callback();
+  assert.equal(f.pending.length, 2, 'release rechecks the current root buffer');
+  f.pending[1].resolve(page([{artist: 'Later', albums: [{key: 'later'}]}]));
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(f.state.view.artist_groups.at(-1).artist, 'Later');
+});
+for (const openedAt of ['conflict', 'restart']) test(`native child source rejects a root revision restart opened at ${openedAt}`, async () => {
+  const f = fixture(), original = f.state.view;
+  f.context.fetch = (url, options) => new Promise(resolve => f.pending.push({url, options, resolve}));
+  f.context.renderView = options => f.renders.push(options);
+  const pending = f.context.loadNextRootGalleryPage();
+  let child;
+  if (openedAt === 'conflict') child = retainNativeAlbumSource(f);
+  f.pending[0].resolve({status: 409, ok: false, json: async () => ({restart_required: true})});
+  if (openedAt === 'restart') {
+    await new Promise(resolve => setImmediate(resolve)); assert.equal(f.pending.length, 2);
+    child = retainNativeAlbumSource(f);
+    f.pending[1].resolve({status: 200, ok: true, json: async () => page([], {gallery_page: {revision: 'r2', has_more: false, next_cursor: null}})});
+  }
+  assert.equal(await pending, false); assert.equal(f.state.view, original); assert.equal(f.renders.length, 0);
+  assert.ok(child.adapter.resolveRows([child.rowKey]), 'same native source still authorizes table selection/actions');
+  child.close();
+});

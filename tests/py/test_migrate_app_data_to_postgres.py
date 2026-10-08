@@ -4120,13 +4120,13 @@ def test_duplicate_idless_listen_history_rows_preserve_multiplicity(tmp_path: Pa
     assert listen_summary["target_count"] == 2
 
 
-def test_track_preferences_live_write_is_backfilled_with_same_normalized_overlay(
+def test_track_preferences_artifact_overlay_is_backfilled_with_same_normalized_values(
     tmp_path: Path,
 ):
     module = _load_script_module()
     data_dir = _minimal_data_dir(tmp_path)
     preference_payload = {"rating": "5", "love_tier": "obsessed"}
-    live_result = normalize_track_preference_overlay(preference_payload)
+    artifact_result = normalize_track_preference_overlay(preference_payload)
     _write_json(
         data_dir / "track_preferences.json",
         {
@@ -4153,8 +4153,8 @@ def test_track_preferences_live_write_is_backfilled_with_same_normalized_overlay
         if "integration.lastfm_loved_tracks" in str(operation["sql"]).lower()
     ]
     assert track_operation["params"][1:3] == [
-        live_result["rating"],
-        live_result["love_tier"],
+        artifact_result["rating"],
+        artifact_result["love_tier"],
     ]
     assert track_operation["params"][3] == {
         "source": "phase_6_json_file_backfill",

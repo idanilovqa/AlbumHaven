@@ -1,0 +1,24 @@
+/* Choice composes Button and AnchoredMenu; surface and interaction colors stay
+   with those owners. Consumers own placement, never dropdown presentation. */
+.ui-choice { display: inline-flex; flex-direction: column; gap: 4px; max-width: 100%; min-width: 0; }
+.ui-choice__label { color: var(--muted); font-size: .76rem; }
+.ui-choice__control { display: inline-flex; max-width: 100%; min-width: 0; }
+.ui-choice__trigger.ui-button { box-sizing: border-box; justify-content: space-between; gap: 8px; min-width: 0; max-width: 100%; min-height: 26px; padding: 5px 8px; font-size: .76rem; }
+.ui-choice__trigger .ui-button__content { display: block; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.ui-choice__chevron { display: block; width: 16px; height: 16px; flex: none; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
+/* Page and widget headers can opt into bare chrome. The shared Button still
+   owns hover, pressed and focus treatment; AnchoredMenu owns an open trigger. */
+:root .ui-choice__trigger.ui-choice__trigger--header:not(.trigger-anchor-open):not(.app-bar *) { border-color: transparent; }
+:root .ui-choice__trigger.ui-choice__trigger--header:not(.trigger-anchor-open):not(.app-bar *):not(:hover):not(:active) { background: transparent; }
+:root .ui-choice__trigger.trigger-anchor-open { border-width: 1px !important; border-bottom-width: 1px !important; }
+:root .settings-foobar-format-menu[data-choice-width]:not([hidden]) { display: grid; }
+:root .settings-foobar-format-menu[data-choice-width] { grid-template-columns: minmax(0, 1fr); box-sizing: border-box; min-width: 0; overflow-x: hidden; overflow-y: auto; }
+:root .settings-foobar-format-menu[data-choice-width] .gallery-menu-action { box-sizing: border-box; width: auto; min-width: 0; max-width: 100%; white-space: normal; }
+:root .settings-foobar-format-menu[data-choice-density="compact"] .gallery-menu-action { min-height: 32px; padding: 7px 10px; font-size: .8rem; }
+:root .settings-foobar-format-menu[data-choice-width] .ui-button__content { display: block; min-width: 0; max-width: 100%; white-space: normal; overflow-wrap: anywhere; text-align: start; line-height: 1.25; }
+@media (max-width: 900px) {
+  .ui-choice__trigger.ui-button { min-height: 30px; height: 30px; padding: 4px 8px; gap: 6px; }
+}
+@media (pointer: coarse) {
+  :root .settings-foobar-format-menu[data-choice-width] .gallery-menu-action { min-height: 44px; padding-block: 10px; }
+}

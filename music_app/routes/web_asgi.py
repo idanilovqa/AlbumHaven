@@ -185,6 +185,7 @@ def _runtime_asset_version(asset_paths: tuple[Path, ...] | None = None) -> str:
         asset_paths = (
             static_root / "app.js",
             static_root / "js" / "runtime-bundle.js",
+            static_root / "js" / "home-friends-bundle.js",
             static_root / "js" / "navigation-tree.js",
             static_root / "js" / "audio-worklets" / "gapless-playback-processor.js",
             *runtime_stylesheets,
